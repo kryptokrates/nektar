@@ -11,8 +11,16 @@ const names = tools.map(t => t.name)
 console.log(`gateway tools (${names.length}): ${names.join(', ')}`)
 for (const n of ['remember', 'recall', 'prove']) if (!names.includes(n)) { console.error(`✖ ${n} missing`); process.exit(1) }
 const call = async (name, args) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text)
-await call('remember', { shard: 'smoke', data: 'gateway works', source: 'smoke' })
+const w = await call('remember', { shard: 'smoke', data: `gateway works ${new Date().toISOString()}`, source: 'smoke' })
 const a = await call('anchor', { shard: 'smoke' })
-console.log(`anchored ${a?.txid?.slice(0, 16)}…`)
-console.log(`prove: ${JSON.stringify((await call('prove', { shard: 'smoke', seq: 0 })).result)}`)
+console.log(`remembered seq=${w.seq}; anchored n=${a?.n} ${a?.txid?.slice(0, 16)}…  (seq/n > 0 ⇒ state persisted from an earlier session)`)
+// on regtest the confirmer mines + attaches the BUMP asynchronously: poll (bounded)
+let proof
+for (let t = 0; t < 30; t++) {
+  proof = (await call('prove', { shard: 'smoke', seq: 0 })).result
+  if (proof.ok || proof.reason !== 'NotMined') break
+  await new Promise(r => setTimeout(r, 2000))
+}
+console.log(`prove: ${JSON.stringify(proof)}`)
+if (!proof.ok) process.exit(1)
 await client.close()

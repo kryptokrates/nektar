@@ -1,0 +1,49 @@
+name: mamem-regtest
+title: mamem on Teranode regtest (persistent)
+type: server
+image: mamem:local
+description: >-
+  mamem against a local Teranode regtest stack (pnpm stack:up). Records,
+  anchor heads, replay-protection state, funding reserve and keys persist in
+  the mamem-regtest-data volume; restarts continue the same shard chains.
+longLived: true
+volumes:
+  - mamem-regtest-data:/data
+secrets:
+  - name: mamem-regtest.fund_wif
+    env: MAMEM_FUND_WIF
+    example: <regtest miner WIF>
+    description: Fee-paying key (regtest miner key, mamem/.env MAMEM_REGTEST_WIF)
+  - name: mamem-regtest.rpc_pass
+    env: MAMEM_RPC_PASS
+    example: <rpc_pass>
+    description: Teranode RPC/asset password (infra/teranode-quickstart/.env rpc_pass)
+env:
+  - name: MAMEM_NETWORK
+    value: regtest
+  - name: MAMEM_RPC_URL
+    value: http://host.docker.internal:9292/
+  - name: MAMEM_PROPAGATION_URL
+    value: http://host.docker.internal:8833/tx
+  - name: MAMEM_ASSET_URL
+    value: http://host.docker.internal:8090/api/v1
+  - name: MAMEM_RPC_USER
+    value: '{{mamem-regtest.rpc_user}}'
+  - name: MAMEM_AUTOMINE
+    value: '{{mamem-regtest.automine}}'
+  - name: MAMEM_MODEL_ID
+    value: '{{mamem-regtest.model_id}}'
+config:
+  - name: mamem-regtest
+    description: Teranode regtest connection
+    type: object
+    properties:
+      rpc_user:
+        type: string
+        description: Teranode RPC user (quickstart default "teranode")
+      automine:
+        type: string
+        description: '"1" mines a block when anchors wait for confirmation (regtest only)'
+      model_id:
+        type: string
+        description: Exact model identity bound into answer receipts

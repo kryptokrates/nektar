@@ -25,14 +25,39 @@ const messages = [
   { role: 'user', content: question }
 ]
 const known = new Set(tools.map(t => t.name))
-for (let round = 0; round < 8; round++) {
+// streamed completion: headers arrive at once (slow CPU models no longer hit
+// fetch's header timeout); content + tool_call deltas are assembled here
+async function complete () {
   const res = await fetch(`${LLM}/chat/completions`, {
     method: 'POST', headers: { 'content-type': 'application/json', ...(process.env.MAMEM_LLM_KEY ? { authorization: `Bearer ${process.env.MAMEM_LLM_KEY}` } : {}) },
-    body: JSON.stringify({ model: MODEL, messages, tools: fnTools, temperature: 0, max_tokens: Number(process.env.MAMEM_CHAT_MAX_TOKENS ?? 512) }),
-    signal: AbortSignal.timeout(Number(process.env.MAMEM_CHAT_TIMEOUT_MS ?? 600_000)) // CPU inference of 8B models is slow
+    body: JSON.stringify({ model: MODEL, messages, tools: fnTools, temperature: 0, stream: true, max_tokens: Number(process.env.MAMEM_CHAT_MAX_TOKENS ?? 512) }),
+    signal: AbortSignal.timeout(Number(process.env.MAMEM_CHAT_TIMEOUT_MS ?? 900_000))
   })
   if (!res.ok) throw new Error(`model endpoint ${LLM}: HTTP ${res.status} ${await res.text()}`)
-  const msg = (await res.json()).choices[0].message
+  const msg = { role: 'assistant', content: '', tool_calls: [] }
+  let buf = ''
+  const dec = new TextDecoder()
+  for await (const chunk of res.body) {
+    buf += dec.decode(chunk, { stream: true })
+    let i
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1)
+      if (!line.startsWith('data:') || line === 'data: [DONE]') continue
+      const d = JSON.parse(line.slice(5)).choices?.[0]?.delta ?? {}
+      if (d.content) { msg.content += d.content; process.stderr.write('.') }
+      for (const tc of d.tool_calls ?? []) {
+        const t = (msg.tool_calls[tc.index ?? 0] ??= { id: tc.id ?? `call_${tc.index ?? 0}`, type: 'function', function: { name: '', arguments: '' } })
+        if (tc.id) t.id = tc.id
+        if (tc.function?.name) t.function.name += tc.function.name
+        if (tc.function?.arguments) t.function.arguments += tc.function.arguments
+      }
+    }
+  }
+  if (!msg.tool_calls.length) delete msg.tool_calls
+  return msg
+}
+for (let round = 0; round < 8; round++) {
+  const msg = await complete()
   messages.push(msg)
   if (!msg.tool_calls?.length) { console.log(`\n${MODEL}: ${String(msg.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim()}`); break }
   for (const tc of msg.tool_calls) {

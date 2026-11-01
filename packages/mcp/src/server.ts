@@ -11,9 +11,9 @@ export const TOOLS = [
       type: 'object',
       properties: {
         shard: { type: 'string' },
-        data: { type: 'string' },
-        level: { type: 'number' },
-        source: { type: 'string' }
+        data: { type: 'string', description: 'the fact to store, verbatim' },
+        level: { type: 'number', description: 'confidentiality level; omit (0 = public) unless the user asks for restricted access — level > 0 records need a ZK clearance to read' },
+        source: { type: 'string', description: 'where the fact comes from (document, URL, person)' }
       },
       required: ['shard', 'data']
     }
@@ -23,7 +23,7 @@ export const TOOLS = [
     description: 'Recall fragments for a shard; decrypts when the agent seed is held. Returns an answer receipt.',
     inputSchema: {
       type: 'object',
-      properties: { shard: { type: 'string' }, seq: { type: 'number' } },
+      properties: { shard: { type: 'string', description: 'memory namespace' }, seq: { type: 'number', description: 'one record (the seq returned by remember); omit to recall the whole shard' } },
       required: ['shard']
     }
   },
@@ -130,8 +130,15 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
   switch (name) {
     case 'remember':
       return mem.remember(args.shard, args.data, { source: args.source }, args.level ?? 0)
-    case 'recall':
-      return mem.recall(args.shard, { seq: args.seq })
+    case 'recall': {
+      const r = await mem.recall(args.shard, { seq: args.seq })
+      // tell the model how to recover from a wrong seq instead of an empty answer
+      if (args.seq !== undefined && r.items.length === 0) {
+        const seqs = (await mem.records(args.shard)).map(x => x.seq)
+        return { ...r, hint: seqs.length ? `no record with seq ${args.seq} in shard "${args.shard}"; existing seqs: ${seqs.join(', ')} — or omit seq to recall all` : `shard "${args.shard}" is empty` }
+      }
+      return r
+    }
     case 'prove':
       return mem.prove(args.shard, args.seq)
     case 'anchor':

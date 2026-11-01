@@ -32,6 +32,22 @@ pnpm mcp:smoke                                # remember → anchor → prove TH
 - The server runs **long-lived** in a sandboxed container (`--security-opt no-new-privileges`, 1 CPU, 2 GB), with data in the `mamem-data` volume.
 - The default backend is the offline mock chain, which needs zero setup. For a real chain, see §5.
 
+### Docker + real chain (regtest)
+
+```sh
+pnpm stack:up                              # Teranode regtest
+pnpm mcp:install --regtest claude-desktop  # profile "mamem_regtest"
+MAMEM_PROFILE=mamem_regtest pnpm mcp:smoke
+```
+
+- The funding WIF and RPC password are read from the gitignored `.env` files and stored in the **Docker MCP keychain** (`docker mcp secret set`, via stdin, never printed).
+- The container reaches Teranode via `host.docker.internal`.
+- Data lives in the `mamem-regtest-data` volume.
+- Verified:
+  - session 1: `remembered seq=0`, anchored n=0, `prove ok` against real headers;
+  - session 2 (a new gateway, new container): `remembered seq=1; anchored n=1`, `prove ok`. The shard chain continued from the persisted head.
+- It has its own profile because the tool names match the mock server's.
+
 ## 2. Direct stdio (no Docker)
 
 ```json
@@ -51,11 +67,18 @@ MAMEM_LLM_URL=http://localhost:11434/v1 MAMEM_LLM_MODEL=qwen3 pnpm chat "…"   
 
 - `chat.mjs` runs the mamem MCP server and gives the model the core tools (`MAMEM_CHAT_TOOLS=all` for every tool), using the server's instructions as the system prompt.
 - Tool calls are validated: unknown tool names and invalid JSON go back to the model as errors.
-- **Measured on this machine (CPU-only DMR, llama.cpp `latest-cpu`):**
-  - `ai/qwen3` 8B: the first token did not arrive within Node's 5-minute HTTP header timeout, so it is unusable on this CPU.
-  - `ai/qwen3:0.6B`: answers in seconds, but writes pseudo-tool tags into its text instead of making real tool calls, so it is too small for reliable tool use.
-  - `ai/qwen3.8-flash-next:q8_0` downloads, but this llama.cpp build rejects it with `unknown model architecture: 'qwen4exp'`. It needs a newer Model Runner engine (Docker Desktop update).
-- Use a GPU or a ≥4B tool-calling model for practical speed.
+- `chat.mjs` streams responses, so slow CPU models don't hit fetch's header timeout.
+- **Measured on this machine (CPU only; Docker Desktop 4.97, llama.cpp `b9879-cpu`):**
+
+| Model | Result |
+|---|---|
+| **`ai/qwen3:4b-instruct-2507` (2.3 GB) — recommended** | real tool calls: `remember` → `recall`, then an answer that cites shard/seq and states the truth caveat, in **~15 s** |
+| `ai/qwen3` 8B | too slow on this CPU (no first token after several minutes) |
+| `ai/qwen3:0.6B` | fast; with streaming it makes real `remember` calls, but answers poorly |
+| `ai/qwen3.8-flash-next:q8_0` | still rejected even by llama.cpp `b9879`: `unknown model architecture: 'qwen4exp'` (an experimental architecture not yet in llama.cpp) |
+
+- **Port check.** Docker Desktop's Model Runner must be reachable over TCP: `docker desktop enable model-runner --tcp=12435`. On this machine port 12434 belonged to a separate runner inside WSL with an older model store, which made newly pulled models "not found". Use `MAMEM_LLM_URL=http://localhost:12435/engines/v1`.
+- **Robustness for small models.** The tool schemas describe every parameter (e.g. `level`: omit unless restricted). `recall` with a wrong `seq` returns a hint listing the existing seqs, so the model can correct itself.
 
 ## 4. Custom apps: HTTP
 

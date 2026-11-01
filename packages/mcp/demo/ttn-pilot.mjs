@@ -1,70 +1,100 @@
-// TTN pilot (RUN ONLY AFTER FUNDING — broadcasts real TTN test coins).
-//   MAMEM_DATA_DIR=.ttn-pilot MAMEM_KEY_PASSPHRASE=… MAMEM_NETWORK=ttn pnpm ttn:pilot
-// remember→anchor→BUMP→prove→append→rotate→restart-no-fork; explorer links.
+// Live test-network pilot (BROADCASTS test coins): MAMEM_NETWORK=testnet|ttn
+//   MAMEM_DATA_DIR=… MAMEM_KEY_PASSPHRASE(_FILE)=… [MAMEM_FUND_TXIDS=…] pnpm ttn:pilot
+// genesis anchor → BUMP → SPV prove vs live headers → append → rotate →
+// restart (no fork) → STARK membership vs the live anchor; explorer links + fees.
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { PrivateKey } from '@bsv/sdk'
 import { configFromEnv, openRuntime } from '../dist/src/runtime.js'
 
 let failures = 0
 const check = (ok, name) => { console.log(`${ok ? '✔' : '✖'} ${name}`); if (!ok) failures++ }
+const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 const env = {
   ...process.env,
-  MAMEM_NETWORK: 'ttn',
-  MAMEM_DATA_DIR: process.env.MAMEM_DATA_DIR ?? mkdtempSync(path.join(tmpdir(), 'mamem-ttn-')),
-  MAMEM_BATCH: process.env.MAMEM_BATCH ?? '4',
-  MAMEM_CONFIRM_MS: process.env.MAMEM_CONFIRM_MS ?? '30000'
+  MAMEM_NETWORK: process.env.MAMEM_NETWORK === 'testnet' ? 'testnet' : 'ttn', // never main here
+  MAMEM_DATA_DIR: process.env.MAMEM_DATA_DIR ?? mkdtempSync(path.join(tmpdir(), 'mamem-live-')),
+  MAMEM_BATCH: process.env.MAMEM_BATCH ?? '8', // pilot closes batches explicitly
+  MAMEM_CONFIRM_MS: process.env.MAMEM_CONFIRM_MS ?? '20000'
 }
-if (!env.MAMEM_KEY_PASSPHRASE && !env.MAMEM_KEY_PASSPHRASE_FILE) {
-  console.error('MAMEM_KEY_PASSPHRASE (or _FILE) required — keys are encrypted at rest on live nets')
-  process.exit(1)
-}
+if (!env.MAMEM_KEY_PASSPHRASE && !env.MAMEM_KEY_PASSPHRASE_FILE) { console.error('MAMEM_KEY_PASSPHRASE (or _FILE) required'); process.exit(1) }
 const cfg = configFromEnv(env)
-const rt = await openRuntime(cfg)
-const link = txid => `https://woc-ttn.bsvblockchain.tech/tx/${txid}`
+const link = txid => `${env.MAMEM_NETWORK === 'testnet' ? 'https://test.whatsonchain.com' : 'https://woc-ttn.bsvblockchain.tech'}/tx/${txid}`
+const shard = process.env.MAMEM_PILOT_SHARD ?? `pilot-${Date.now().toString(36)}`
+
+/** poll prove() until the anchor of `seq` carries a BUMP verified against live headers */
+async function waitProven (rt, seq, maxMin = 25) {
+  const deadline = Date.now() + maxMin * 60_000
+  let r
+  while (Date.now() < deadline) {
+    r = (await rt.mem.prove(shard, seq)).result
+    if (r.ok) return r
+    process.stdout.write(`  … seq ${seq}: ${r.reason ?? 'pending'} (waiting for a block)\n`)
+    await sleep(30_000)
+  }
+  return r
+}
+
+let rt = await openRuntime(cfg)
 try {
   const w = await rt.ops.wallet()
-  console.log(`fee address: ${w.address} — balance ${w.balanceSats} sats (${w.utxos} utxos)`)
-  if (w.balanceSats < 3000) { console.error(`fund ${w.address} — need ≥3000 sats for the pilot (anchor + append + rotate)`); process.exit(2) }
+  console.log(`network ${env.MAMEM_NETWORK} · fee address ${w.address} · balance ${w.balanceSats} sats (${w.utxos} utxos) · caps ${JSON.stringify(w.caps)}`)
+  if (w.balanceSats < 3000) { console.error(`fund ${w.address} (≥3000 sats)`); process.exit(2) }
 
-  const shard = 'ttn-pilot'
-  for (let i = 0; i < 4; i++) await rt.mem.remember(shard, `pilot record ${i}`)
-  const head = await rt.mem.anchor(shard) // genesis
-  check(!!head, `genesis anchor broadcast`)
-  const txid0 = head?.tx?.id?.('hex') ?? head?.txid
-  console.log(`  genesis tx: ${link(txid0)}`)
+  // 1. genesis anchor
+  for (let i = 0; i < 3; i++) await rt.mem.remember(shard, `pilot record ${i} @ ${new Date().toISOString()}`, { source: 'pilot' })
+  const a0 = await rt.mem.anchorShard(shard)
+  check(!!a0?.txid, `genesis anchor broadcast n=${a0?.n}`)
+  console.log(`  ${link(a0?.txid)}`)
 
-  // wait for the BUMP
-  const deadline = Date.now() + 20 * 60 * 1000
-  let provable = false
-  while (Date.now() < deadline && !provable) {
-    await new Promise(r => setTimeout(r, 30_000))
-    const p = await rt.mem.prove(shard, 0)
-    provable = p?.result === 'ok'
-  }
-  const pr = await rt.mem.prove(shard, 0)
-  check(pr?.result === 'ok', `seq 0 provable against TTN headers (${pr?.result})`)
+  // 2. SPV proof against live headers
+  const p0 = await waitProven(rt, 0)
+  check(p0?.ok === true, `seq 0 proven: leaf → R → anchor → BUMP → live headers (${p0?.ok ? 'ok' : p0?.reason})`)
 
-  for (let i = 4; i < 8; i++) await rt.mem.remember(shard, `pilot record ${i}`)
-  const head2 = await rt.mem.anchor(shard)
-  const txid1 = head2?.tx?.id?.('hex') ?? head2?.txid
-  check(!!head2, `append anchor broadcast`)
-  console.log(`  append tx: ${link(txid1)}`)
+  // 3. append (spends the genesis head)
+  for (let i = 3; i < 6; i++) await rt.mem.remember(shard, `pilot record ${i}`, { source: 'pilot' })
+  const a1 = await rt.mem.anchorShard(shard)
+  check(a1?.n === 1, `append anchor n=${a1?.n} spends the head`)
+  console.log(`  ${link(a1?.txid)}`)
 
-  const rot = await rt.mem.rotateShard(shard)
-  const txid2 = rot?.tx?.id?.('hex') ?? rot?.txid
-  check(!!rot, `owner rotation broadcast`)
-  console.log(`  rotate tx: ${link(txid2)}`)
+  // 4. owner rotation
+  const rot = await rt.mem.rotateShard(shard, PrivateKey.fromRandom())
+  check(!!rot?.txid, 'owner rotation broadcast')
+  console.log(`  ${link(rot?.txid)}`)
 
+  // 5. restart on the same data dir → continue the persisted head (no fork)
   await rt.close()
-  // restart on the same dir — next anchor must spend the persisted head, not fork
-  const rt2 = await openRuntime(cfg)
-  const head3 = await rt2.mem.anchor(shard)
-  check(!!head3, `post-restart anchor spends persisted head (no fork)`)
-  console.log(`  post-restart tx: ${link(head3?.tx?.id?.('hex') ?? head3?.txid)}`)
-  console.log(`costs: ${JSON.stringify(rt2.ops.costs().map(c => ({ txid: c.txid.slice(0, 12), bytes: c.bytes, fee: c.fee })))}`)
-  await rt2.close()
+  await sleep(1000)
+  rt = await openRuntime(cfg)
+  for (let i = 6; i < 8; i++) await rt.mem.remember(shard, `pilot record ${i} after restart`, { source: 'pilot' })
+  const a2 = await rt.mem.anchorShard(shard)
+  check(a2?.n === 2, `after restart: anchor n=${a2?.n} spends the persisted (rotated) head`)
+  console.log(`  ${link(a2?.txid)}`)
+
+  // 6. STARK membership (Wright §13) against the live genesis anchor
+  if (process.env.MAMEM_PILOT_STARK !== '0') {
+    const q = rt.mem.issueZkQuery('pilot-auditor')
+    const { bytes, ms } = await rt.mem.proveMembership(shard, 1, q.queryId)
+    const vm = await rt.mem.verifyMembership(shard, 1, bytes)
+    check(vm.ok === true, `STARK membership (${bytes.length} B, ${ms} ms) verifies against the live SHA-256 anchor (${vm.reason ?? 'ok'})`)
+  }
+
+  // 7. later anchors: the broadcaster's 200/202 is the acceptance signal; the
+  // BUMP is attached in the background once mined (MAMEM_PILOT_WAIT_ALL=1 waits)
+  if (process.env.MAMEM_PILOT_WAIT_ALL === '1') {
+    const p2 = await waitProven(rt, 6)
+    check(p2?.ok === true, `post-restart seq 6 proven against live headers (${p2?.ok ? 'ok' : p2?.reason})`)
+  } else {
+    check(rt.ops.costs().some(c => c.txid === a2?.txid), 'post-restart anchor accepted by the broadcaster (200) — proof follows on mining')
+  }
+
+  const costs = rt.ops.costs()
+  console.log('costs:')
+  for (const c of costs) console.log(`  ${c.txid}  ${c.bytes} B  ${c.fee} sats  ${link(c.txid)}`)
+  const w2 = await rt.ops.wallet()
+  console.log(`spent today ${w2.spentTodaySats} sats · balance ${w2.balanceSats} sats`)
 } finally { await rt.close().catch(() => {}) }
 if (failures) { console.error(`${failures} check(s) failed`); process.exit(1) }
-console.log('ttn pilot PASS')
+console.log('LIVE PILOT PASS')

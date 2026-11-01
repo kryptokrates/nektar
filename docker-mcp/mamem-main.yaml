@@ -3,7 +3,7 @@ title: mamem on BSV MAINNET (real funds — capped)
 type: server
 image: mamem:local
 description: >-
-  mamem on BSV mainnet via GorillaPool ARC + WhatsOnChain. Anchor fees are paid
+  mamem on BSV mainnet via BSV Broadcaster (GorillaPool) + WhatsOnChain. Anchor fees are paid
   by a dedicated operator fee key (generated on first start; its address is
   printed to stderr — fund it deliberately). All broadcasts pass a SpendGuard:
   per-tx fee cap, per-day spend cap, min broadcast interval, persisted ledger.

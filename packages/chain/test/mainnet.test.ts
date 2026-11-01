@@ -179,7 +179,13 @@ test('SpendGuard: caps, interval, unknown input, ledger persistence', async () =
   assert.match((await g3.broadcast(mkTx())).description!, /daily cap/)
 
   // interval
-  const g4 = new SpendGuard(okBroadcast, resolve, { ledgerFile: path.join(dir, 'l2.json'), minIntervalMs: 60_000 })
+  const g4 = new SpendGuard(okBroadcast, resolve, { ledgerFile: path.join(dir, 'l2.json'), minIntervalMs: 60_000, refuseOnInterval: true })
   assert.equal((await g4.broadcast(mkTx())).status, 'success')
   assert.match((await g4.broadcast(mkTx())).description!, /min interval/)
+  // default: the interval delays instead of refusing
+  const g5 = new SpendGuard(okBroadcast, resolve, { ledgerFile: path.join(dir, 'l3.json'), minIntervalMs: 300 })
+  assert.equal((await g5.broadcast(mkTx())).status, 'success')
+  const t0 = Date.now()
+  assert.equal((await g5.broadcast(mkTx())).status, 'success')
+  assert.ok(Date.now() - t0 >= 250, 'second broadcast waited out the interval')
 })

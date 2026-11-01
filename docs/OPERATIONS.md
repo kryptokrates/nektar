@@ -108,7 +108,12 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
      ```
      Without the confirm flag, or without a passphrase, it refuses to start. Keys (`keys.json`, `fee.key.json`) are scrypt + AES-GCM encrypted, and plaintext keys are refused.
   2. Send a small float to the address printed on stderr (`GET /v1/wallet` shows it too). UTXOs are discovered via WhatsOnChain.
-  3. Broadcasting goes to GorillaPool ARC, falling back to WhatsOnChain only on network/5xx errors. The fee rate is `max(100 sat/kB, ARC policy)`. Headers and SPV come from WhatsOnChain; BUMPs from ARC, else the WoC TSC proof. Finality depth is 6.
+  3. Broadcasting goes to **BSV Broadcaster** (the ARC successor, formerly Arcade), GorillaPool instance `arcade.gorillapool.io`:
+     - `POST /tx`; Extended Format when every parent is known, raw otherwise;
+     - falls back to WhatsOnChain only on network/5xx errors;
+     - fee rate `max(100 sat/kB, broadcaster policy)`;
+     - headers and SPV from WhatsOnChain; BUMPs from the broadcaster, else the WoC TSC proof; finality depth 6;
+     - a 200/202 means accepted. The anchor chain continues immediately, and the BUMP is attached in the background once the transaction is mined.
   4. Hard caps, enforced before every broadcast and fail-closed:
      - `MAMEM_MAX_FEE_SATS_PER_TX` (1000)
      - `MAMEM_MAX_SPEND_SATS_PER_DAY` (20000)

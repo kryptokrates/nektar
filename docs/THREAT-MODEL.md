@@ -48,7 +48,7 @@ flowchart LR
 - **Mainnet MVP hot fee key**: the operator fee key is online, so compromise of the host means losing the float.
   - Mitigations: a small float; per-tx, per-day and interval caps enforced before broadcast and fail-closed on unresolvable input values or a negative fee; keys encrypted at rest; a low-balance alert.
   - Not in the MVP: user-owned BRC-100 funding, HSM/KMS, and an external audit. Use the MVP for non-sensitive, low-value data only.
-- **Third-party mainnet services**: GorillaPool ARC and WhatsOnChain can be unavailable or lie about status.
+- **Third-party mainnet services**: BSV Broadcaster (GorillaPool) and WhatsOnChain can be unavailable or lie about status; a 200/202 means "accepted", not "mined".
   - Proofs are still SPV-verified against headers, so a lying service can delay but not forge.
   - Headers come from one provider (WoC). Cross-checking a second header source is future work.
 - **ZK implementation trust (ADR-020)**: the membership STARK has no trusted setup, and it is proven over the same SHA-256 root that is anchored, so there is no tree-equality gap any more. Residual risks:

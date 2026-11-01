@@ -6,7 +6,7 @@ import { Transaction, MerklePath } from '@bsv/sdk'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 
 export interface MainnetConfig {
-  arcUrl?: string // GorillaPool ARC base (no trailing slash)
+  arcUrl?: string // BSV Broadcaster (ex-Arcade) or classic ARC base (no trailing slash)
   arcApiKey?: string
   wocUrl?: string // WhatsOnChain base (no trailing slash)
   wocApiKey?: string
@@ -14,7 +14,8 @@ export interface MainnetConfig {
 }
 
 const def = (c?: MainnetConfig) => ({
-  arcUrl: c?.arcUrl ?? 'https://arc.gorillapool.io',
+  // BSV Broadcaster (formerly Arcade; the ARC successor) — GorillaPool instance
+  arcUrl: c?.arcUrl ?? 'https://arcade.gorillapool.io',
   wocUrl: c?.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main',
   fetch: c?.fetchImpl ?? fetch,
   arcApiKey: c?.arcApiKey,
@@ -29,6 +30,9 @@ const req = async (c: ReturnType<typeof def>, url: string, init: RequestInit = {
 const j = async (r: Response): Promise<any> => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return await r.json() }
 
 // --- ARC broadcaster ---------------------------------------------------------
+const txPaths = new Map<string, string>() // arcUrl → '/v1/tx' (ARC) | '/tx' (Arcade)
+// BSV Broadcaster / Arcade hosts serve /tx; classic ARC /v1/tx (still learned on 404)
+const txPathFor = (arcUrl: string) => txPaths.get(arcUrl) ?? (/arcade|broadcaster/.test(arcUrl) ? '/tx' : '/v1/tx')
 export class ArcBroadcaster implements Broadcaster {
   private cfg
   constructor (c?: MainnetConfig) { this.cfg = def(c) }
@@ -37,7 +41,14 @@ export class ArcBroadcaster implements Broadcaster {
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }
     if (this.cfg.arcApiKey) headers.Authorization = `Bearer ${this.cfg.arcApiKey}`
     try {
-      const r = await req(this.cfg, `${arcUrl}/v1/tx`, { method: 'POST', headers, body: new Uint8Array(tx.toBinary()) })
+      // classic ARC: /v1/tx; BSVA Arcade: /tx (404 on /v1/tx) — learn once per URL
+      // Extended Format when every input carries its source tx (Arcade requires it
+      // for unconfirmed parents); plain raw otherwise
+      const ef = tx.inputs.every(i => i.sourceTransaction !== undefined)
+      const payload = new Uint8Array(ef ? tx.toEF() : tx.toBinary())
+      const post = (p: string) => req(this.cfg, `${arcUrl}${p}`, { method: 'POST', headers, body: payload })
+      let r = await post(txPathFor(arcUrl))
+      if (r.status === 404 && txPathFor(arcUrl) === '/v1/tx') { txPaths.set(arcUrl, '/tx'); r = await post('/tx') }
       if (r.status >= 500) throw new Error(`ARC ${r.status}`) // → WoC fallback
       const body = await r.json().catch(() => ({}))
       const st = String(body.txStatus ?? '').toUpperCase()
@@ -144,7 +155,11 @@ export async function merklePathMainnet (cfg: MainnetConfig | undefined, txid: s
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.arcApiKey) h.Authorization = `Bearer ${c.arcApiKey}`
-  const ar = await req(c, `${c.arcUrl}/v1/tx/${txid}`, { headers: h })
+  let ar = await req(c, `${c.arcUrl}${txPathFor(c.arcUrl)}/${txid}`, { headers: h })
+  if (ar.status === 404 && txPathFor(c.arcUrl) === '/v1/tx') {
+    const alt = await req(c, `${c.arcUrl}/tx/${txid}`, { headers: h })
+    if (alt.status !== 404 || (await alt.clone().text()).includes('transaction not found')) { txPaths.set(c.arcUrl, '/tx'); ar = alt }
+  }
   if (ar.ok) {
     const b = await ar.json()
     if (b.merklePath) {
@@ -169,14 +184,23 @@ export async function merklePathMainnet (cfg: MainnetConfig | undefined, txid: s
   return { merklePath: tscToMerklePath(tsc, txid, height), status: 'mined' }
 }
 
+/** GET with 429/5xx backoff (WoC rate-limits ~3 req/s); throws on a final non-2xx */
+async function getOk (c: ReturnType<typeof def>, url: string, headers: Record<string, string>): Promise<Response> {
+  for (let i = 0; ; i++) {
+    const r = await req(c, url, { headers })
+    if (r.ok) return r
+    if ((r.status === 429 || r.status >= 500) && i < 4) { await new Promise(res => setTimeout(res, 800 * 2 ** i)); continue }
+    throw new Error(`${url.split('/').slice(-3).join('/')}: HTTP ${r.status}`)
+  }
+}
+
 // --- funding import by txid (address indexes can be unavailable, e.g. WoC-TTN) ---
 /** fetch a funding tx and return its P2PKH outputs locked to `pkhHex` */
 export async function importFundingTx (cfg: MainnetConfig | undefined, txid: string, pkhHex: string): Promise<FundingOut[]> {
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey
-  const r = await req(c, `${c.wocUrl}/tx/${txid}/hex`, { headers: h })
-  if (!r.ok) throw new Error(`funding tx ${txid}: HTTP ${r.status}`)
+  const r = await getOk(c, `${c.wocUrl}/tx/${txid}/hex`, h)
   const tx = Transaction.fromHex((await r.text()).trim())
   const want = `76a914${pkhHex}88ac`
   return tx.outputs.flatMap((o, vout) => o.lockingScript.toHex() === want ? [{ tx, vout, satoshis: o.satoshis ?? 0 }] : [])
@@ -187,10 +211,13 @@ export async function discoverUtxos (cfg: MainnetConfig | undefined, address: st
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey
-  const list = await j(await req(c, `${c.wocUrl}/address/${address}/unspent`, { headers: h }))
+  const list = await (await getOk(c, `${c.wocUrl}/address/${address}/unspent`, h)).json()
   const out: FundingOut[] = []
   for (const u of list) {
-    const hex = await (await req(c, `${c.wocUrl}/tx/${u.tx_hash}/hex`, { headers: h })).text()
+    await new Promise(res => setTimeout(res, 350))
+    // a just-broadcast tx may not be served as hex yet (404): skip it this round
+    const hex = await getOk(c, `${c.wocUrl}/tx/${u.tx_hash}/hex`, h).then(r => r.text()).catch(() => null)
+    if (hex === null) continue
     out.push({ tx: Transaction.fromHex(hex.trim()), vout: u.tx_pos, satoshis: u.value })
   }
   return out

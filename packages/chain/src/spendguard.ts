@@ -12,6 +12,7 @@ export interface SpendGuardOpts {
   minIntervalMs?: number // ms — refuse a broadcast sooner than this after the last
   ledgerFile?: string // persisted day ledger + cost record (atomic write)
   unlimited?: boolean // regtest/mock default: caps off unless env set
+  refuseOnInterval?: boolean // default false: wait out the interval instead of refusing
 }
 
 export interface CostRecord { txid: string, bytes: number, fee: number, at: string }
@@ -22,9 +23,11 @@ export class SpendGuard implements Broadcaster {
   private ledger: Ledger
   private ledgerFile?: string
   private unlimited: boolean
+  private refuseOnInterval: boolean
 
   constructor (private inner: Broadcaster, private valueOf: (txid: string, vout: number) => number | undefined, opts: SpendGuardOpts = {}) {
     this.unlimited = opts.unlimited ?? false
+    this.refuseOnInterval = opts.refuseOnInterval ?? false
     this.opts = {
       maxFeePerTx: opts.maxFeePerTx ?? Number.MAX_SAFE_INTEGER,
       maxPerDay: opts.maxPerDay ?? Number.MAX_SAFE_INTEGER,
@@ -63,12 +66,17 @@ export class SpendGuard implements Broadcaster {
       if (fee > this.opts.maxFeePerTx) return this.refuse(`fee ${fee} sats > maxFeePerTx ${this.opts.maxFeePerTx}`)
       if (this.ledger.day !== this.day()) { this.ledger.day = this.day(); this.ledger.spentSats = 0 }
       if (this.ledger.spentSats + fee > this.opts.maxPerDay) return this.refuse(`daily cap: ${this.ledger.spentSats}+${fee} > ${this.opts.maxPerDay}`)
-      if (now - this.ledger.lastBroadcastAt < this.opts.minIntervalMs) return this.refuse(`min interval ${this.opts.minIntervalMs}ms not elapsed`)
+      const wait = this.opts.minIntervalMs - (now - this.ledger.lastBroadcastAt)
+      if (wait > 0) {
+        // rate limit = delay, not failure (bounded by minIntervalMs); opt out → refuse
+        if (this.refuseOnInterval) return this.refuse(`min interval ${this.opts.minIntervalMs}ms not elapsed`)
+        await new Promise(r => setTimeout(r, wait))
+      }
     }
     const res = await this.inner.broadcast(tx)
     if (res.status === 'success') {
       this.ledger.spentSats += fee
-      this.ledger.lastBroadcastAt = now
+      this.ledger.lastBroadcastAt = Date.now()
       this.ledger.records.push({ txid: tx.id('hex'), bytes: tx.toBinary().length, fee, at: new Date(now).toISOString() })
       this.save()
     }

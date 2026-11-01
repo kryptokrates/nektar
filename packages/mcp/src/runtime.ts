@@ -40,7 +40,7 @@ export function configFromEnv (env = process.env): RuntimeConfig {
   const dataDir = env.MAMEM_DATA_DIR ?? join(process.cwd(), '.mamem')
   const secret = (k: string) => env[k] ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
   const cfg: RuntimeConfig = { network, dataDir, modelId: env.MAMEM_MODEL_ID, batchLeaves: Number(env.MAMEM_BATCH ?? 4), autoMine: env.MAMEM_AUTOMINE === '1', confirmEveryMs: Number(env.MAMEM_CONFIRM_MS ?? 5000), clearanceAuthorities: (env.MAMEM_CLEARANCE_AUTHORITIES ?? '').split(',').map(s => s.trim()).filter(Boolean) }
-  if (network === 'regtest' || network === 'testnet') {
+  if (network === 'regtest') {
     const fundWif = secret('MAMEM_FUND_WIF') ?? secret('MAMEM_REGTEST_WIF')
     const rpcPass = secret('MAMEM_RPC_PASS')
     if (!fundWif || !rpcPass) throw new Error(`${network}: MAMEM_FUND_WIF (or _FILE) and MAMEM_RPC_PASS (or _FILE) are required`)
@@ -53,20 +53,24 @@ export function configFromEnv (env = process.env): RuntimeConfig {
       assetUrl: env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
     }
   }
-  if (network === 'main' || network === 'ttn') {
+  if (network === 'main' || network === 'ttn' || network === 'testnet') {
     if (network === 'main' && env.MAMEM_MAINNET_CONFIRM !== 'I_UNDERSTAND') {
       throw new Error('mainnet mode spends REAL BSV. Refusing to start. Set MAMEM_MAINNET_CONFIRM=I_UNDERSTAND to proceed.')
     }
-    const ttn = network === 'ttn'
+    // "ttn" below = any test network (testnet encoding, test coins, low fee floor)
+    const ttn = network !== 'main'
+    const urls = network === 'testnet'
+      ? { arc: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', woc: 'https://api.whatsonchain.com/v1/bsv/test' }
+      : network === 'ttn' ? { arc: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech', woc: 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test' } : undefined
     cfg.confirmEveryMs = Number(env.MAMEM_CONFIRM_MS ?? (ttn ? 30_000 : 60_000))
     cfg.main = {
       fundWif: secret('MAMEM_FUND_WIF'),
       passphrase: secret('MAMEM_KEY_PASSPHRASE'),
       // TTN defaults: Arcade + WoC-TTN endpoints (probed live); main keeps the
       // built-in GorillaPool/WoC defaults when env vars are unset
-      arcUrl: env.MAMEM_ARC_URL ?? (ttn ? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech' : undefined),
+      arcUrl: env.MAMEM_ARC_URL ?? urls?.arc,
       arcApiKey: secret('MAMEM_ARC_API_KEY'),
-      wocUrl: env.MAMEM_WOC_URL ?? (ttn ? 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test' : undefined),
+      wocUrl: env.MAMEM_WOC_URL ?? urls?.woc,
       wocApiKey: secret('MAMEM_WOC_API_KEY'),
       // fee floor: 100 sat/kB main (GorillaPool policy), 1 sat/kB TTN (its
       // Arcade policy is 0 — a zero fee rate would produce free-of-fee txs
@@ -119,7 +123,6 @@ export interface Runtime {
 }
 
 export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
-  if (cfg.network === 'testnet') throw new Error('testnet: not enabled — configure an ARC/Arcade endpoint and approve testnet funding first')
   const base: MamemMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities }
   if (cfg.network === 'mock') {
     const chain = new MockChain(); chain.verifyScripts = true
@@ -132,7 +135,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     const t = setInterval(() => { for (const { shard, txid } of mem.unprovenAnchors()) { const mp = chain.merklePathOf(txid); if (mp) mem.attachProof(shard, txid, mp) } }, 1000); t.unref()
     return { mem, network: 'mock', close: async () => { clearInterval(t) } }
   }
-  if (cfg.network === 'main' || cfg.network === 'ttn') {
+  if (cfg.network === 'main' || cfg.network === 'ttn' || cfg.network === 'testnet') {
     return await openLiveRuntime(cfg, cfg.network, base)
   }
   const rc = cfg.regtest!
@@ -251,9 +254,9 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
 /** Shared live path for `main` (BSV mainnet) and `ttn` (Teranode Test Net —
  * test coins, same code). Net-dependent bits: address prefix (0x6f testnet
  * for ttn, mainnet for main), fee floor (100 vs 1 sat/kB), labels. */
-async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn', base: MamemMemoryOptions): Promise<Runtime> {
+async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testnet', base: MamemMemoryOptions): Promise<Runtime> {
   const mc = cfg.main!
-  const ttn = net === 'ttn'
+  const ttn = net !== 'main' // any test network: testnet encoding, 1 sat/kB floor
   mkdirSync(cfg.dataDir, { recursive: true })
   const pass = mc.passphrase
   if (!pass) throw new KeystoreError(`${net} requires MAMEM_KEY_PASSPHRASE (or _FILE) for keys at rest`)
@@ -291,6 +294,13 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn', base: M
   const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve() }
   const chain = {
     broadcast: async (tx: Transaction) => {
+      // attach parent txs so the broadcaster can send Extended Format (Arcade
+      // cannot resolve unconfirmed parents from raw txs)
+      for (const inp of tx.inputs) {
+        if (inp.sourceTransaction || !inp.sourceTXID) continue
+        const p = reserve.utxos.find(u => u.tx.id('hex') === inp.sourceTXID)?.tx ?? guardedBroadcasts.get(inp.sourceTXID) ?? memRef?.anchorTx(inp.sourceTXID)
+        if (p) inp.sourceTransaction = p as Transaction
+      }
       const r = await spendGuard.broadcast(tx)
       if (r.status === 'success') {
         guardedBroadcasts.set(tx.id('hex'), tx)

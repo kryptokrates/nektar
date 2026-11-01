@@ -1,0 +1,6 @@
+{
+  "imageId": "99f25ea91f5d3616f37a986b85f72125b7ea19bbfb1edb61ca291653bdb06b9a",
+  "program": "tools/stark/methods/guest (mamem-membership)",
+  "toolchain": { "risc0-zkvm": "3.0.3", "cargo-risczero": "3.0.3", "rust-host": "1.94", "rust-guest": "risc0 1.97" },
+  "statement": "leaf ∈ double-SHA-256 batch tree (core/merkle.ts) with root R; journal = (version=1, R, size, queryId)"
+}

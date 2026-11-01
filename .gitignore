@@ -4,6 +4,9 @@ node_modules/
 *.sqlite*
 .state.json
 .state/
+tools/stark/target/
+tools/stark/verifier-wasm/target/
+tools/stark/vectors.jsonl
 spikes/.state.json
 dist/
 tsconfig.tsbuildinfo

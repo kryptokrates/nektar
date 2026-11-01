@@ -10,7 +10,7 @@ import { dsha256, utf8, toHex } from '@mamem/core'
 import { MockChain, MockFunder } from '@mamem/chain'
 import { decodeMamemAnchor } from '@mamem/contracts'
 import { verifyFragment } from '@mamem/verify'
-import { decodeZkMem, encodeZkMem, ZkCodecError, BN254_R } from '@mamem/zk'
+import { decodeZkMem, encodeZkMem, ZkCodecError, BN254_R, encodeZkm2, decodeZkm2, ZkmCodecError, verifyZkm2 } from '@mamem/zk'
 import { parseProgram, ParseError } from '@mamem/datalog'
 import { issueDisclosure, verifyDisclosure, fieldPath, fieldRoot, randSalt } from '@mamem/identity'
 import { AutomatonChain, decodeMamemAutomaton } from '@mamem/automaton'
@@ -95,6 +95,23 @@ test('fuzz: L_ZKMem codec throws only ZkCodecError and round-trips what it accep
       assert.ok(d.root < BN254_R && d.nullifier < BN254_R && d.queryId < BN254_R)
       assert.deepEqual(encodeZkMem(d), m, 'accepted bytes re-encode identically (canonical)')
     } catch (e) { assert.ok(e instanceof ZkCodecError, `untyped error: ${String(e)}`) }
+  }
+})
+
+test('fuzz: L_ZKMem v2 codec + STARK verifier never throw and never accept a mutation', async () => {
+  const { readFileSync } = await import('node:fs')
+  const fx = JSON.parse(readFileSync(new URL('../../../zk/test/fixtures/zkm2-n5i4.json', import.meta.url), 'utf8'))
+  const H = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
+  const valid = encodeZkm2({ imageId: H(fx.imageId), root: H(fx.journal.root), size: fx.journal.size, queryId: H(fx.journal.queryId), receipt: H(fx.receipt) })
+  assert.ok(verifyZkm2(valid).ok, 'fixture verifies')
+  for (let i = 0; i < Math.ceil(N / 3); i++) {
+    const m = mutate(valid)
+    try {
+      const d = decodeZkm2(m)
+      assert.deepEqual(encodeZkm2(d), m, 'accepted bytes re-encode identically (canonical)')
+    } catch (e) { assert.ok(e instanceof ZkmCodecError, `untyped error: ${String(e)}`) }
+    const v = verifyZkm2(m) // must return, never throw
+    if (v.ok) assert.deepEqual(m, valid, `mutation ${i} accepted as a different proof`)
   }
 })
 

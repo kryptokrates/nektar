@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { PrivateKey, MerklePath, type Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, parseLegacyBlock, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, SpendGuard, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, parseLegacyBlock, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, SpendGuard, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
 import { KnexShardStore, type ShardStore } from '@mamem/log'
 import { MamemMemory, type MamemMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -326,13 +326,18 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn', base: M
     for (const [s, k] of shardKeys) if (keys.shardKeys[s] !== k.toHex()) { keys.shardKeys[s] = k.toHex(); changed = true }
     if (changed) save()
   }
+  const addIfNew = (u: { tx: Transaction, vout: number }) => {
+    if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some(x => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout)) reserve.addOwned(u.tx, u.vout)
+  }
+  // MAMEM_FUND_TXIDS: funding txs to import directly (no address index needed)
+  const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
+  for (const txid of (process.env.MAMEM_FUND_TXIDS ?? '').split(',').map(s => s.trim()).filter(Boolean)) {
+    try { for (const u of await importFundingTx(mc, txid, pkhHex)) addIfNew(u) } catch (e) { process.stderr.write(`mamem ${net}: funding import ${txid}: ${(e as Error).message}\n`) }
+  }
   const topUp = async () => {
-    for (const u of await discoverUtxos(mc, fundAddress)) {
-      if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some(x => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout)) {
-        reserve.addOwned(u.tx, u.vout)
-      }
-    }
-    if (reserve.utxos.length === 0) process.stderr.write(`mamem ${net}: reserve empty — send coins to ${fundAddress}\n`)
+    // address discovery is best-effort (WoC-TTN's address index returns 500)
+    try { for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u) } catch (e) { process.stderr.write(`mamem ${net}: UTXO discovery unavailable (${(e as Error).message}) — set MAMEM_FUND_TXIDS=<funding txid>\n`) }
+    if (reserve.utxos.length === 0) process.stderr.write(`mamem ${net}: reserve empty — send coins to ${fundAddress} and set MAMEM_FUND_TXIDS\n`)
   }
   await topUp()
   let busy = false

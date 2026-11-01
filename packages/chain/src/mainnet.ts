@@ -169,6 +169,19 @@ export async function merklePathMainnet (cfg: MainnetConfig | undefined, txid: s
   return { merklePath: tscToMerklePath(tsc, txid, height), status: 'mined' }
 }
 
+// --- funding import by txid (address indexes can be unavailable, e.g. WoC-TTN) ---
+/** fetch a funding tx and return its P2PKH outputs locked to `pkhHex` */
+export async function importFundingTx (cfg: MainnetConfig | undefined, txid: string, pkhHex: string): Promise<FundingOut[]> {
+  const c = def(cfg)
+  const h: Record<string, string> = {}
+  if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey
+  const r = await req(c, `${c.wocUrl}/tx/${txid}/hex`, { headers: h })
+  if (!r.ok) throw new Error(`funding tx ${txid}: HTTP ${r.status}`)
+  const tx = Transaction.fromHex((await r.text()).trim())
+  const want = `76a914${pkhHex}88ac`
+  return tx.outputs.flatMap((o, vout) => o.lockingScript.toHex() === want ? [{ tx, vout, satoshis: o.satoshis ?? 0 }] : [])
+}
+
 // --- UTXO discovery -----------------------------------------------------------
 export async function discoverUtxos (cfg: MainnetConfig | undefined, address: string): Promise<FundingOut[]> {
   const c = def(cfg)

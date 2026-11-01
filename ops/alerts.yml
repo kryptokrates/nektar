@@ -29,3 +29,16 @@ groups:
         for: 10m
         labels: { severity: info }
         annotations: { summary: "elevated withheld reads (policy, clearance, finality) — check for probing" }
+      - alert: MamemFeeBalanceLow
+        expr: mamem_fee_balance_sats < 5000
+        for: 30m
+        labels: { severity: warning }
+        annotations: { summary: "operator fee key below ~5 anchors of runway — top up the printed address" }
+      - alert: MamemSpendCapHit
+        expr: increase(mamem_spend_refused_total[15m]) > 0
+        labels: { severity: warning }
+        annotations: { summary: "SpendGuard refused a broadcast ({{ $labels.reason }}) — cap or interval hit" }
+      - alert: MamemBroadcastFailures
+        expr: increase(mamem_anchor_failures_total[10m]) > 2
+        labels: { severity: critical }
+        annotations: { summary: "repeated broadcast failures — check ARC/WoC reachability and fee balance" }

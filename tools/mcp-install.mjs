@@ -53,7 +53,22 @@ if (args.includes('--regtest')) {
   run(['mcp', 'profile', 'config', RP, '--set', `mamem-regtest.rpc_user=${qs.rpc_user ?? 'teranode'}`, '--set', 'mamem-regtest.automine=1', '--set', `mamem-regtest.model_id=${process.env.MAMEM_MODEL_ID ?? 'unspecified'}`])
   console.log(`profile "${RP}": mamem on regtest (secrets in the Docker MCP keychain; Teranode via host.docker.internal)`)
 }
-const target = args.includes('--regtest') ? `${PROFILE}_regtest` : PROFILE
+if (args.includes('--main')) {
+  // MAINNET — real BSV. Only registers the profile; secrets + the explicit
+  // MAMEM_MAINNET_CONFIRM config are operator actions, never defaults.
+  const MP = `${PROFILE}_main`
+  const myaml = staged('mamem-main.yaml')
+  if (!out(['mcp', 'profile', 'list']).split(/\s+/).includes(MP)) run(['mcp', 'profile', 'create', '--name', MP, '--id', MP])
+  if (/\bmamem-main\b/.test(out(['mcp', 'profile', 'server', 'ls', '--filter', `profile=${MP}`]))) run(['mcp', 'profile', 'server', 'remove', MP, '--name', 'mamem-main'])
+  run(['mcp', 'profile', 'server', 'add', MP, '--server', `file://${myaml}`])
+  console.log(`profile "${MP}": mamem on MAINNET.`)
+  console.log(`  required next steps (operator):`)
+  console.log(`    docker mcp secret set mamem-main.key_passphrase`)
+  console.log(`    docker mcp profile config ${MP} --set mamem-main.mainnet_confirm=I_UNDERSTAND`)
+  console.log(`    (optional) docker mcp secret set mamem-main.arc_api_key / mamem-main.fund_wif`)
+  console.log(`  the fee-key address is printed to stderr on first start — fund it deliberately.`)
+}
+const target = args.includes('--regtest') ? `${PROFILE}_regtest` : args.includes('--main') ? `${PROFILE}_main` : PROFILE
 for (const client of args.filter(a => !a.startsWith('--'))) run(['mcp', 'client', 'connect', client, '--profile', target])
 console.log(`\nmamem is in Docker MCP profile "${PROFILE}".`)
 console.log(`Any client: command "docker", args ["mcp","gateway","run","--profile","${PROFILE}"]`)

@@ -1,0 +1,45 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { writeKeyFile, readKeyFile, isEncrypted, KeystoreError } from '../src/keystore.js'
+import { configFromEnv } from '../src/runtime.js'
+
+test('keystore: round trip / wrong passphrase / tampered ct', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'ks-'))
+  const f = path.join(dir, 'k.json')
+  writeKeyFile(f, '{"wif":"L5"}', 'hunter2')
+  assert.ok(isEncrypted(readFileSync(f, 'utf8')), 'file is encrypted on disk')
+  assert.equal(readKeyFile(f, 'hunter2', true), '{"wif":"L5"}')
+  assert.throws(() => readKeyFile(f, 'wrong', true), KeystoreError)
+  const tampered = JSON.parse(readFileSync(f, 'utf8')); tampered.ct = '00' + tampered.ct.slice(2)
+  const tf = path.join(dir, 't.json'); writeFileSync(tf, JSON.stringify(tampered))
+  assert.throws(() => readKeyFile(tf, 'hunter2', true), KeystoreError)
+  // plaintext file refused when encryption is required
+  const pf = path.join(dir, 'p.json'); writeFileSync(pf, '{"a":1}')
+  assert.throws(() => readKeyFile(pf, 'hunter2', true), /plaintext/)
+})
+
+const env = (e: Record<string, string>) => ({ MAMEM_DATA_DIR: mkdtempSync(path.join(tmpdir(), 'rt-')), ...e }) as NodeJS.ProcessEnv
+
+test('runtime main gate: confirm flag required', () => {
+  assert.throws(() => configFromEnv(env({ MAMEM_NETWORK: 'main', MAMEM_KEY_PASSPHRASE: 'x' })), /I_UNDERSTAND/)
+  const cfg = configFromEnv(env({ MAMEM_NETWORK: 'main', MAMEM_KEY_PASSPHRASE: 'x', MAMEM_MAINNET_CONFIRM: 'I_UNDERSTAND' }))
+  assert.equal(cfg.main?.maxFeePerTx, 1000)
+  assert.equal(cfg.main?.maxSpendPerDay, 20_000)
+  assert.equal(cfg.main?.minBroadcastIntervalMs, 10_000)
+  assert.equal(cfg.confirmEveryMs, 60_000)
+})
+
+test('runtime main: refuses without passphrase / with plaintext keys.json', async () => {
+  const { openRuntime } = await import('../src/runtime.js')
+  const base = { MAMEM_NETWORK: 'main', MAMEM_MAINNET_CONFIRM: 'I_UNDERSTAND' }
+  // no passphrase
+  const c1 = configFromEnv(env(base))
+  await assert.rejects(openRuntime(c1), /MAMEM_KEY_PASSPHRASE/)
+  // plaintext keys.json refuses startup on main
+  const c2 = configFromEnv(env({ ...base, MAMEM_KEY_PASSPHRASE: 'pw' }))
+  writeFileSync(path.join(c2.dataDir, 'keys.json'), JSON.stringify({ agentSeed: 'x', logKey: 'y', shardKeys: {} }))
+  await assert.rejects(openRuntime(c2), /plaintext/)
+})

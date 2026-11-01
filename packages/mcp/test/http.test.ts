@@ -34,7 +34,7 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
     assert.match(metrics, /^mamem_promise_violations 0$/m)
     // every implemented route prefix is documented, and vice versa
     const documented = Object.keys(OPENAPI.paths).sort()
-    assert.deepEqual(documented, ['/mcp', '/v1/checkpoint/{shard}', '/v1/health', '/v1/metrics', '/v1/openapi.json', '/v1/proof/{shard}/{seq}', '/v1/tools', '/v1/tools/{name}'])
+    assert.deepEqual(documented, ['/mcp', '/v1/checkpoint/{shard}', '/v1/costs', '/v1/health', '/v1/metrics', '/v1/openapi.json', '/v1/proof/{shard}/{seq}', '/v1/tools', '/v1/tools/{name}', '/v1/wallet'])
     assert.equal(((await (await fetch(`${base}/openapi.json`)).json()) as { openapi: string }).openapi, '3.1.0')
   } finally { srv.close() }
 })

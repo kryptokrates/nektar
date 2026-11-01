@@ -30,6 +30,9 @@ export interface MamemMemoryOptions {
   agentSeed?: PrivateKey // enables encryption when set
   maxLevel?: number // highest access level this seed may hold
   burstLimit?: number
+  /** fee rate for anchor txs in sats per KB (runar-sdk fee = ceil(size*rate/1000));
+   *  default 1 (mock/regtest); mainnet uses ~100 (ARC policy) */
+  feeRateSatPerKb?: number
   batchPolicy?: import('@mamem/log').ClosePolicy
   overlay?: MamemOverlay // if set, anchors are also submitted to tm_mamem
   modelId?: string // stamped into receipts
@@ -142,7 +145,7 @@ export class MamemMemory {
 
   private anchorChain (shard: string): AnchorChain {
     if (!this.anchors.has(shard)) {
-      this.anchors.set(shard, new AnchorChain(shard, this.shardKey(shard), this.funder, this.fundKey, this.chain, { burstLimit: this.opts.burstLimit }))
+      this.anchors.set(shard, new AnchorChain(shard, this.shardKey(shard), this.funder, this.fundKey, this.chain, { burstLimit: this.opts.burstLimit, feeRateSatPerKb: this.opts.feeRateSatPerKb }))
     }
     return this.anchors.get(shard)!
   }

@@ -12,7 +12,7 @@ const rt = await openRuntime(configFromEnv())
 process.stderr.write(`mamem: network=${rt.network}\n`)
 const port = process.env.MAMEM_HTTP_PORT
 if (port) {
-  createHttpApi(rt.mem).listen(Number(port), process.env.MAMEM_HTTP_HOST ?? '127.0.0.1', () => process.stderr.write(`mamem: HTTP + MCP on :${port} (/v1, /mcp)\n`))
+  createHttpApi(rt.mem, rt.ops).listen(Number(port), process.env.MAMEM_HTTP_HOST ?? '127.0.0.1', () => process.stderr.write(`mamem: HTTP + MCP on :${port} (/v1, /mcp)\n`))
 }
 let stopping = false
 const stop = async () => { if (stopping) return; stopping = true; await rt.close().catch(() => {}); process.exit(0) }

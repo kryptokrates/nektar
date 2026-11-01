@@ -19,7 +19,7 @@ export interface Head {
   data: AnchorData & { ownerPkh?: Bytes }
 }
 export interface AnchorResult { tx: Transaction, head: Head }
-export interface AnchorOptions { burstLimit?: number, rotationHorizon?: number }
+export interface AnchorOptions { burstLimit?: number, rotationHorizon?: number, feeRateSatPerKb?: number }
 
 // Spent outpoints and spendable change are tracked PER FUNDER, not per
 // provider: several AnchorChains (one per shard) share one funder, and each
@@ -136,7 +136,8 @@ export class MamemProvider implements Provider {
   taken = new Map<string, Transaction>()
   async getContractUtxo (_scriptHash: string): Promise<RUTXO | null> { return null }
   getNetwork (): 'testnet' { return 'testnet' }
-  async getFeeRate (): Promise<number> { return 1 }
+  feeRate = 1 // sats per KB, per runar-sdk fee computation
+  async getFeeRate (): Promise<number> { return this.feeRate }
 }
 
 export class AnchorChain {
@@ -169,6 +170,7 @@ export class AnchorChain {
     // funders, and distinct shards get distinct owners (distinct shard ids).
     this.signer = new LocalSigner(fundKey.toHex())
     this.provider = new MamemProvider(broadcaster, funder)
+    if (opts.feeRateSatPerKb !== undefined) this.provider.feeRate = opts.feeRateSatPerKb
     const rec = (tx: Transaction) => { this.ownAttempts.add(tx.id('hex')); this.txById.set(tx.id('hex'), tx) }
     this.provider.onAttempt = rec
     this.provider.onSuccess = rec

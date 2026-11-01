@@ -362,3 +362,29 @@
 - SEC-006: `pnpm sbom` → CycloneDX 1.5 `sbom.cdx.json`.
 - Removed stray `packages/packages/` and `failed-tx.hex`. `dangerouslyAllowAllBuilds`
   left in place by owner decision.
+
+## Mainnet MVP (network=main)
+- `ArcBroadcaster` (GorillaPool ARC POST /v1/tx octet-stream; WoC /tx/raw
+  fallback ONLY on network error/5xx — never on policy rejection),
+  `WocTracker` (350 ms spacing, 429 backoff, header cache),
+  `merklePathMainnet` (ARC BUMP hex → TSC fallback via `tscToMerklePath`),
+  `discoverUtxos` (WoC unspent + raw tx). All read-only except broadcast.
+- `SpendGuard`: per-tx fee cap, UTC-day spend cap, min interval; FAILS CLOSED
+  when an input value is unresolvable; atomic ledger persist; cost records.
+- `feeRateSatPerKb` option on AnchorChain/MamemMemory (default 1 unchanged);
+  main uses max(env, ARC policy) — measured 100 sat/kB live.
+- Keys at rest: scrypt(N=2^15,r=8,p=1,maxmem=256MB)+AES-256-GCM
+  (`keystore.ts`); on main keys.json + fee.key.json MUST be encrypted,
+  plaintext/missing passphrase refuses startup. Regtest/mock encrypt only
+  when a passphrase is set.
+- Runtime `main` mode requires `MAMEM_MAINNET_CONFIRM=I_UNDERSTAND`; operator
+  fee key (MAMEM_FUND_WIF or generated fee.key.json) pays all anchors — its
+  address is printed to stderr for funding. `testnet` stays refused.
+- Ops surface: `GET /v1/wallet`, `GET /v1/costs`, metrics
+  mamem_fee_sats_total / mamem_spend_refused_total{reason} /
+  mamem_fee_balance_sats; alert rules in ops/alerts.yml.
+- Docker MCP profile docker-mcp/mamem-main.yaml + `mcp-install --main`
+  (profile mamem_main; confirm flag is operator-set config, never baked in).
+- MEASURED on regtest @ 100 sat/kB (fee = bytes × 0.1 sat, 1-input fund):
+  genesis 1143 B / 115 sats, append 3315 B / 332 sats, rotate 2904 B / 291 sats
+  → fits the 1000-sat per-tx cap.

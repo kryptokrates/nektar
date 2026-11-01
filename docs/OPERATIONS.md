@@ -99,6 +99,24 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
 - `.state/` (treasury, reserve) must be backed up per environment; it holds funded outpoints.
 - Shard stores: `MemoryShardStore` is in-process. For persistence use the file/sqlite stores (`packages/log`) and back them up with the overlay sqlite files. The anchored roots let you detect any restore that lost or altered records.
 - Revocations, the challenge registry and issued ZK membership queries persist via `FileSecurityStore` in the runtime (`MAMEM_DATA_DIR`). The in-process demo server keeps them in memory.
+- **Mainnet (MVP) runbook.** The operator pays all anchor fees from a capped fee key; readers and verifiers pay nothing.
+  1. Start:
+     ```sh
+     MAMEM_NETWORK=main MAMEM_MAINNET_CONFIRM=I_UNDERSTAND \
+     MAMEM_KEY_PASSPHRASE_FILE=/run/secrets/pass MAMEM_DATA_DIR=/data \
+     node packages/mcp/dist/src/bin.js --http 8080
+     ```
+     Without the confirm flag, or without a passphrase, it refuses to start. Keys (`keys.json`, `fee.key.json`) are scrypt + AES-GCM encrypted, and plaintext keys are refused.
+  2. Send a small float to the address printed on stderr (`GET /v1/wallet` shows it too). UTXOs are discovered via WhatsOnChain.
+  3. Broadcasting goes to GorillaPool ARC, falling back to WhatsOnChain only on network/5xx errors. The fee rate is `max(100 sat/kB, ARC policy)`. Headers and SPV come from WhatsOnChain; BUMPs from ARC, else the WoC TSC proof. Finality depth is 6.
+  4. Hard caps, enforced before every broadcast and fail-closed:
+     - `MAMEM_MAX_FEE_SATS_PER_TX` (1000)
+     - `MAMEM_MAX_SPEND_SATS_PER_DAY` (20000)
+     - `MAMEM_MIN_BROADCAST_INTERVAL_MS` (10000)
+  5. Measured at 100 sat/kB: genesis 1,143 B / 115 sats, append 3,315 B / 332 sats, rotate 2,904 B / 291 sats.
+  6. Monitor `GET /v1/wallet` (balance, runway), `GET /v1/costs`, and the alerts `MamemFeeBalanceLow`, `MamemSpendCapHit` and `MamemBroadcastFailures`.
+  7. Back up `MAMEM_DATA_DIR` (keys, state, reserve, spend ledger, records) **and** the passphrase. Losing either loses the shard ownership keys.
+  8. Smoke without spending: `pnpm main:readonly`.
 - ZK proving:
   - **The mamem Docker image ships the prover** (`/usr/local/bin/mamem-stark` + `r0vm`, `MAMEM_STARK_PROVER` preset). Its build stage fails if the rebuilt program id differs from the pinned one.
   - Outside Docker, use the `mamem-stark-build` image (`pnpm stark:image` + `pnpm stark:build`) or point `MAMEM_STARK_PROVER` at a native binary.

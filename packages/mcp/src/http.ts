@@ -33,7 +33,9 @@ export const OPENAPI = {
     },
     '/v1/checkpoint/{shard}': {
       get: { summary: 'latest signed checkpoint of the shard (LOG-007)', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'checkpoint + log pubkey' }, 404: { description: 'no anchor yet' } } }
-    }
+    },
+    '/v1/wallet': { get: { summary: 'fee wallet: address, balance, spend caps, runway (main only)', responses: { 200: { description: 'wallet ops' }, 404: { description: 'ops not enabled' } } } },
+    '/v1/costs': { get: { summary: 'broadcast cost ledger entries (main only)', responses: { 200: { description: 'cost records' }, 404: { description: 'ops not enabled' } } } }
   }
 } as const
 
@@ -44,7 +46,7 @@ async function body (req: IncomingMessage): Promise<unknown> {
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
 }
 
-export function createHttpApi (mem: MamemMemory): Server {
+export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<unknown>, costs: () => unknown }): Server {
   // MCP Streamable HTTP: one transport + McpServer per session (mcp-session-id)
   const sessions = new Map<string, import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport>()
   const mcp = async (req: IncomingMessage, res: import('node:http').ServerResponse) => {
@@ -83,6 +85,12 @@ export function createHttpApi (mem: MamemMemory): Server {
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'checkpoint' && p.length === 3) {
         const cp = mem.checkpoints(decodeURIComponent(p[2]!)).at(-1)
         return cp ? send(200, { checkpoint: cp, logPublicKey: mem.logPublicKey() }) : send(404, { error: 'no checkpoint' })
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/wallet') {
+        return ops ? send(200, await ops.wallet()) : send(404, { error: 'ops not enabled (main only)' })
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/costs') {
+        return ops ? send(200, { costs: ops.costs() }) : send(404, { error: 'ops not enabled (main only)' })
       }
       return send(404, { error: 'not found' })
     } catch (e) { if (!res.headersSent) send(500, { error: (e as Error).message }) }

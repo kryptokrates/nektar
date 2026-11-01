@@ -77,6 +77,9 @@ MAMEM_LLM_URL=http://localhost:11434/v1 MAMEM_LLM_MODEL=qwen3 pnpm chat "…"   
 | `ai/qwen3:0.6B` | fast; with streaming it makes real `remember` calls, but answers poorly |
 | `ai/qwen3.8-flash-next:q8_0` | still rejected even by llama.cpp `b9879`: `unknown model architecture: 'qwen4exp'` (an experimental architecture not yet in llama.cpp) |
 
+- **OpenAI.** Run `MAMEM_LLM_PROVIDER=openai pnpm chat "…"`. The default model is `gpt-4.1-mini`; override it with `MAMEM_LLM_MODEL`. The key is read from `OPENAI_API_KEY` in the environment or in the gitignored `mamem/.env`, never from the command line.
+  - Verified run (about 9 s): `remember` ×2 → `recall` seq 0 → `prove` seq 0.
+  - The model answered "45 Nm, shard manual seq 0". It reported correctly that the record was committed but **not yet anchored** (the batch hadn't closed), and added the truth caveat.
 - **Port check.** Docker Desktop's Model Runner must be reachable over TCP: `docker desktop enable model-runner --tcp=12435`. On this machine port 12434 belonged to a separate runner inside WSL with an older model store, which made newly pulled models "not found". Use `MAMEM_LLM_URL=http://localhost:12435/engines/v1`.
 - **Robustness for small models.** The tool schemas describe every parameter (e.g. `level`: omit unless restricted). `recall` with a wrong `seq` returns a hint listing the existing seqs, so the model can correct itself.
 

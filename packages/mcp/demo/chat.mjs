@@ -9,8 +9,15 @@ import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
-const LLM = process.env.MAMEM_LLM_URL ?? 'http://localhost:12434/engines/v1'
-const MODEL = process.env.MAMEM_LLM_MODEL ?? 'ai/qwen3'
+// MAMEM_LLM_PROVIDER=openai → api.openai.com with OPENAI_API_KEY (env or the
+// gitignored mamem/.env — read here so the key never appears on a command line)
+import { readFileSync, existsSync } from 'node:fs'
+const dotenv = (() => { const p = fileURLToPath(new URL('../../../.env', import.meta.url)); return existsSync(p) ? Object.fromEntries(readFileSync(p, 'utf8').split(/\r?\n/).map(l => l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean).map(m => [m[1], m[2].trim()])) : {} })()
+const OPENAI = process.env.MAMEM_LLM_PROVIDER === 'openai'
+const LLM = process.env.MAMEM_LLM_URL ?? (OPENAI ? 'https://api.openai.com/v1' : 'http://localhost:12434/engines/v1')
+const MODEL = process.env.MAMEM_LLM_MODEL ?? (OPENAI ? 'gpt-4.1-mini' : 'ai/qwen3')
+const KEY = process.env.MAMEM_LLM_KEY ?? (OPENAI ? process.env.OPENAI_API_KEY ?? dotenv.OPENAI_API_KEY : undefined)
+if (OPENAI && !KEY) throw new Error('MAMEM_LLM_PROVIDER=openai: set OPENAI_API_KEY (env or mamem/.env)')
 const question = process.argv.slice(2).join(' ') || 'Remember on shard "manual" that drain port 4 needs 45Nm (source: manual rev1). Then tell me the torque for port 4, citing the record.'
 
 const bin = fileURLToPath(new URL('../dist/src/bin.js', import.meta.url))
@@ -29,11 +36,11 @@ const known = new Set(tools.map(t => t.name))
 // fetch's header timeout); content + tool_call deltas are assembled here
 async function complete () {
   const res = await fetch(`${LLM}/chat/completions`, {
-    method: 'POST', headers: { 'content-type': 'application/json', ...(process.env.MAMEM_LLM_KEY ? { authorization: `Bearer ${process.env.MAMEM_LLM_KEY}` } : {}) },
-    body: JSON.stringify({ model: MODEL, messages, tools: fnTools, temperature: 0, stream: true, max_tokens: Number(process.env.MAMEM_CHAT_MAX_TOKENS ?? 512) }),
+    method: 'POST', headers: { 'content-type': 'application/json', ...(KEY ? { authorization: `Bearer ${KEY}` } : {}) },
+    body: JSON.stringify({ model: MODEL, messages, tools: fnTools, temperature: 0, stream: true, ...(OPENAI ? { max_completion_tokens: Number(process.env.MAMEM_CHAT_MAX_TOKENS ?? 800) } : { max_tokens: Number(process.env.MAMEM_CHAT_MAX_TOKENS ?? 512) }) }),
     signal: AbortSignal.timeout(Number(process.env.MAMEM_CHAT_TIMEOUT_MS ?? 900_000))
   })
-  if (!res.ok) throw new Error(`model endpoint ${LLM}: HTTP ${res.status} ${await res.text()}`)
+  if (!res.ok) throw new Error(`model endpoint ${LLM}: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`)
   const msg = { role: 'assistant', content: '', tool_calls: [] }
   let buf = ''
   const dec = new TextDecoder()

@@ -21,11 +21,21 @@ item. Approved plan; every phase lands with tests + regtest e2e + docs + commit.
   (image ID, journal = R, size, queryId). The receipt is already ZK — leaf/index/path
   never exist in the guest. The outer non-ZK STARK then asserts "a valid ZK proof
   exists for these public values" — and Rúnar ships an SP1 FRI verifier for Script.
-- **Gate S1.1:** compile the Rúnar SP1 FRI verifier, measure script bytes + cost on
-  regtest. If beyond policy (≈500 KB script, 10 MB tx on GorillaPool) or unreasonable,
-  the fallback is an OP_FALSE RETURN commitment sha256(receipt) — §13 allows off-chain.
-- Deliverables: `tools/sp1-verify-guest/`, `packages/zk/src/stark/onchain.ts`,
-  MCP tool `verifyMembershipOnChain`, optional MamemAnchor v4 `verifyZk`.
+- **Gate S1.1 result (measured in icellan/runar, commit 513aa3d):** the SP1 FRI
+  verifier is Go-tier-only by Rúnar project policy and validated on BSV regtest:
+  PoC locking script 248.6 KB / spend 3.6 KB; production 6.32 MB / spend 285 KB,
+  both deployed + spent under Chronicle defaults. Fee at 100 sat/kB ≈ 25k sats
+  (PoC) to ~648k sats (production) one-time per verifier UTXO. **Decision:** the
+  full SP1-wrap pipeline needs runar-go + the SP1 toolchain — schedule as its own
+  phase; ship the cheap §13 path first (below).
+- Deliverables (two stages):
+  - **S1a (cheap, now):** OP_FALSE RETURN output carrying `sha256(receipt)` in the
+    same tx as an attestation spend — the STARK's existence + binding is anchored
+    on-chain; off-chain WASM verify stays authoritative. `attestMembership`
+    MCP tool + `onchain.ts`.
+  - **S1b (full, deferred phase):** `tools/sp1-verify-guest/` (risc0 receipt
+    verify inside SP1), runar-go FRI verifier contract, `verifyMembershipOnChain`
+    on an SP1 STARK — the real on-chain path, once the Go tier is integrated.
 - Tests: fixed receipt → SP1 → on-chain verify; mutated journal / foreign image rejected.
 
 ## 2. ZK derivation attestations (§14)

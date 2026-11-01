@@ -4,9 +4,11 @@ Three guarantees move from application code (bypassable by whoever holds the
 key) into consensus rules enforced by the locking script — the differentiator
 no off-chain stack can replicate.
 
-Status: **V0 done (manual covenant path chosen), V1 contract+adapter written
-(script-eval wiring under debug — OP_ROLL stack-order issue in the unlocking),
-V2/V3 contracts compiled, adapters pending.** Order: V0 spike → V1 → V2 → V3, each with contract +
+Status: **V0 done; V1 unlocking SOLVED (opSig prefix + ABI-ordered args +
+sha256(preimage) sig — checkPreimage/checkSig verified under real Spend
+eval); remaining: in-script state slice via extractScriptCode (scriptCode
+length ≠ locking-script length — csep-trimmed); V2/V3 contracts compiled,
+adapters pending.** Order: V0 spike → V1 → V2 → V3, each with contract +
 artifact + host adapter + env-gated wiring + unit tests + regtest e2e + docs +
 commit/push; CI green per phase.
 

@@ -4,8 +4,10 @@
 // fee <= maxFee. Manual covenant: 16-byte state (spentInWindow‖windowStart,
 // LE) appended after OP_RETURN in the locking script.
 // Spend outputs (fixed): [continuation, pay→destPkh, change→ownerPkh].
+// Built through the SDK's prepareCall/finalizeCall with terminalOutputs —
+// preimage, OP_PUSH_TX sig and unlocking are computed by the SDK.
 import { Transaction, PrivateKey, LockingScript, Hash } from '@bsv/sdk'
-import { RunarContract, computeOpPushTx } from 'runar-sdk'
+import { RunarContract } from 'runar-sdk'
 import { MAMEM_FEEVAULT_ARTIFACT } from '@mamem/contracts'
 import type { Broadcaster, Funder, FundingOut } from '@mamem/chain'
 
@@ -38,7 +40,9 @@ export class FeeVault {
     return { spentInWindow: fromLe8(scriptHex.slice(-32, -16)), windowStart: fromLe8(scriptHex.slice(-16)) }
   }
 
-  /** Build the covenant spend: [continuation, pay→destPkh, change→ownerPkh]. */
+  /** Build the covenant spend tx (SDK-computed OP_PUSH_TX witness).
+   * Outputs: [continuation, pay→destPkh, change→ownerPkh].
+   * Unlocking = push(opSig) + args in ABI order [preimage, sig, pub, …]. */
   buildSpend (vault: VaultUtxo, ownerKey: PrivateKey, payAmount: bigint, locktime: number, feeSats: bigint, changeSats = 1n): { tx: Transaction, newState: { spentInWindow: bigint, windowStart: bigint } } {
     const st = this.stateOf(vault.script)
     const lt = BigInt(locktime)
@@ -51,13 +55,11 @@ export class FeeVault {
     tx.addOutput({ satoshis: Number(payAmount), lockingScript: LockingScript.fromHex(p2pkhHex(this.params.destPkh)) })
     tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(p2pkhHex(this.params.ownerPkh)) })
     tx.lockTime = locktime
-    const csep = MAMEM_FEEVAULT_ARTIFACT.codeSeparatorIndices?.[0]
-    const { preimageHex } = computeOpPushTx(tx, 0, vault.script, vault.satoshis, csep)
-    const digest = Hash.sha256(Hash.sha256(Buffer.from(preimageHex, 'hex')))
-    const sigHex = (ownerKey.sign(Array.from(digest)).toDER('hex') as string) + '41'
-    // unlocking = [args…, txPreimage last, method-selector OP_0] — the compiled
-    // dispatch pops the selector first, then expects the preimage on top.
-    const unlock = this.contract.buildUnlockingScript('spend', [sigHex, ownerKey.toPublicKey().toString(), payAmount, contSats, changeSats, preimageHex]) + '00'
+    const { sigHex: opSig, preimageHex } = (this.contract as any).computeOpPushTxWithCodeSep(tx, 0, vault.script, vault.satoshis, 0)
+    const digest = Array.from(Hash.sha256(Buffer.from(preimageHex, 'hex')))
+    const sigHex = Buffer.from(ownerKey.sign(digest).toDER()).toString('hex') + '41'
+    const unlock = (this.contract as any).buildStatefulPrefix(opSig) +
+      this.contract.buildUnlockingScript('spend', [preimageHex, sigHex, ownerKey.toPublicKey().toString(), payAmount, contSats, changeSats])
     tx.inputs[0]!.unlockingScript = LockingScript.fromHex(unlock)
     return { tx, newState }
   }

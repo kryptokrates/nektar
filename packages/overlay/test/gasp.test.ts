@@ -11,7 +11,8 @@ import { GASP } from '@bsv/gasp'
 // OverlayGASPStorage is not exported from the package root; import the file
 // directly (same class Engine.syncGASPWithPeer uses for its local storage).
 // @ts-ignore deep import
-import { OverlayGASPStorage } from '../../../../node_modules/@bsv/overlay/dist/esm/src/GASP/OverlayGASPStorage.js'
+// package subpath export "./*.ts" → dist/esm/src/*.js (no hoisting-dependent relative path)
+import { OverlayGASPStorage } from '@bsv/overlay/GASP/OverlayGASPStorage.ts'
 
 // A GASPRemote whose "transport" is a direct call into the peer engine's
 // provideForeignSyncResponse / provideForeignGASPNode — the same methods the

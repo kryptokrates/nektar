@@ -16,6 +16,8 @@ for (const pkg of readdirSync(root)) {
   const files = ['src', 'test', 'scripts', 'demo'].flatMap(d => { try { return walk(join(root, pkg, d)) } catch { return [] } })
   const used = new Map()
   for (const f of files) {
+    // relative paths into node_modules only work by accident of hoisting
+    for (const m of readFileSync(f, 'utf8').matchAll(/(?:from\s+|import\s*\(\s*)['"](\.[^'"]*node_modules[^'"]*)['"]/g)) { console.log(`✖ ${pj.name}: ${f.slice(root.length)} imports through node_modules (${m[1]}) — use the package's exports`); missing++ }
     for (const m of readFileSync(f, 'utf8').matchAll(/(?:from\s+|import\s*\(\s*|import\s+)['"]([^'"./][^'"]*)['"]/g)) {
       const spec = m[1]
       if (spec.startsWith('node:') || builtins.has(spec)) continue

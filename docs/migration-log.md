@@ -482,3 +482,40 @@
   subset-integration (real MamemAnchor on mock chain: other batch's R, wrong
   size, foreign shard, non-canonical, unmined, SPV-invalid, tampered,
   truncated — each refused; flag-off 'disabled').
+
+## GOAL-v6 S4 — OWL 2 RL/QL → Datalog (§9, "tractable reasoning")
+- `graph/owlrl.ts`: a typed axiom list (JSON-serialisable — no RDF/XML parsing)
+  → L_pol. Rule-shaped axioms emit per-axiom rules `owlrl:<kind>#<i>`
+  (`#<i>:<n>` for multi-rule axioms; i = index in the committed set — a stable
+  τ). Data-shaped axioms emit EDB facts over inst / t / subclass / subprop /
+  same / diff / neg_t / disjoint. A fixed `owlrl:*` library covers schema
+  closure (cax-sco + prp-spo transitive materialisation), equality
+  (eq-sym/trans/rep-cls/rep-subj/rep-obj) and inconsistency markers
+  (negative assertion, same+diff, self-diff, disjointWith → `conflict()`, the
+  marker a verifier rejects — mirrors the AORG `neg_` convention).
+- RL coverage: cax-sco, cax-eqc1/2, cax-dw, prp-spo1 (+ transitive closure),
+  prp-spo2 (propertyChain, general k ≥ 2), prp-eqp1/2, prp-dom, prp-rng,
+  prp-inv1/2, prp-symp, prp-trp, prp-adp, eq-sym/trans/rep (subject, object,
+  class-instance), eq-diff. Deferred (module header): class expressions,
+  functional/inverse-functional, keys, irreflexive/asymmetric/reflexive,
+  eq-ref/eq-rep-p, datatypes, Thing/Nothing. Full OWL 2 DL stays out of
+  scope (undecidable) — the paper asks for the tractable profiles only.
+- `commitOntology(axioms)`: axioms + compiled rules + compiled EDB facts are
+  all nodes of ONE PolicyDAG (layer 'owlrl'); `ont.root` anchors like the
+  POL-004 policy root — a `dagroot:<root>` record or `anchoredPolicyRoot`
+  works unchanged, and `opts.policyDag = ont.dag` makes
+  proveDerivation/verifyDerivation attest OWL derivations byte-identically
+  (axiom EDB premises are committed fact nodes → `committedIndex`). Per-axiom
+  anchoring keeps the v4 `axiom:<owlAxiomHash>` 'law'-shard flow; `entail`
+  filters axioms by the anchored predicate BEFORE compiling (foreign = void
+  ab initio, same as `ontologyEntails`). `NodeKind` gains 'axiom' for the
+  committed axiom canonicals.
+- `entail(axioms, facts, query, anchored?)` returns the derived closure, the
+  §14 `derivationPath` for the query, a `conflict` flag and used/rejected
+  axiom accounting; a base-fact goal returns path=null (attest the fact node).
+- Honest gap: mcp `proveDerivation`'s permit/deny conflict check does not see
+  OWL `conflict()` — OWL consumers check `entail().conflict` or query
+  `conflict()` (documented in the module header).
+- Tests: `graph/test/owlrl.test.ts` — 5 tests (profile primitives over a mini
+  vocabulary; contradiction → conflict; anchored-only entailment with foreign
+  rejection; deterministic committed root; §14-ready path). graph 14/14 green.

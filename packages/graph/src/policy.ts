@@ -9,7 +9,7 @@ import { Datalog, type Rule, type Fact, type Literal } from '@mamem/datalog'
 export class PolicyError extends Error {}
 
 export interface PolicyLayer { name: string, rules: Rule[], /** rule ids superseded by this layer (v′ ≻ v) */ overrides?: string[] }
-export type NodeKind = 'rule' | 'fact'
+export type NodeKind = 'rule' | 'fact' | 'axiom' // 'axiom' nodes: committed OWL axiom canonicals (graph/owlrl)
 export interface PolicyNode {
   kind: NodeKind
   h: string

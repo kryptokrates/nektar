@@ -10,7 +10,7 @@ import { dsha256, utf8, toHex } from '@mamem/core'
 import { MockChain, MockFunder } from '@mamem/chain'
 import { decodeMamemAnchor } from '@mamem/contracts'
 import { verifyFragment } from '@mamem/verify'
-import { encodeZkm2, decodeZkm2, ZkmCodecError, verifyZkm2 } from '@mamem/zk'
+import { encodeZkm2, decodeZkm2, ZkmCodecError, verifyZkm2, encodeZkder, decodeZkder, ZkdCodecError, verifyZkder } from '@mamem/zk'
 import { parseProgram, ParseError } from '@mamem/datalog'
 import { issueDisclosure, verifyDisclosure, fieldPath, fieldRoot, randSalt } from '@mamem/identity'
 import { AutomatonChain, decodeMamemAutomaton } from '@mamem/automaton'
@@ -99,6 +99,23 @@ test('fuzz: L_ZKMem v2 codec + STARK verifier never throw and never accept a mut
       assert.deepEqual(encodeZkm2(d), m, 'accepted bytes re-encode identically (canonical)')
     } catch (e) { assert.ok(e instanceof ZkmCodecError, `untyped error: ${String(e)}`) }
     const v = verifyZkm2(m) // must return, never throw
+    if (v.ok) assert.deepEqual(m, valid, `mutation ${i} accepted as a different proof`)
+  }
+})
+
+test('fuzz: L_ZKDer v3 codec + STARK verifier never throw and never accept a mutation', async () => {
+  const { readFileSync } = await import('node:fs')
+  const fx = JSON.parse(readFileSync(new URL('../../../zk/test/fixtures/zkder-permit.json', import.meta.url), 'utf8'))
+  const H = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
+  const valid = encodeZkder({ imageId: H(fx.imageId), policyRoot: H(fx.journal.policyRoot), conclusionHash: H(fx.journal.conclusionHash), queryId: H(fx.journal.queryId), receipt: H(fx.receipt) })
+  assert.ok(verifyZkder(valid).ok, 'fixture verifies')
+  for (let i = 0; i < Math.ceil(N / 3); i++) {
+    const m = mutate(valid)
+    try {
+      const d = decodeZkder(m)
+      assert.deepEqual(encodeZkder(d), m, 'accepted bytes re-encode identically (canonical)')
+    } catch (e) { assert.ok(e instanceof ZkdCodecError, `untyped error: ${String(e)}`) }
+    const v = verifyZkder(m) // must return, never throw
     if (v.ok) assert.deepEqual(m, valid, `mutation ${i} accepted as a different proof`)
   }
 })

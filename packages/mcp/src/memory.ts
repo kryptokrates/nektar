@@ -22,7 +22,7 @@ import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, ty
 import { deriveFragmentKey, deriveLevelKey, encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@mamem/crypto'
 import type { Broadcaster, ChainTracker, Funder } from '@mamem/chain'
 import * as idbind from '@mamem/identity'
-import { proveMembershipStark, verifyMembershipAnchoredStark, starkQueryId } from '@mamem/zk'
+import { proveMembershipStark, verifyMembershipAnchoredStark, starkQueryId, proveDerivationStark, verifyDerivationBound } from '@mamem/zk'
 
 export interface MamemMemoryOptions {
   signingKey?: PrivateKey
@@ -289,6 +289,75 @@ export class MamemMemory {
     const res = await verifyMembershipAnchoredStark(bytes, anchorTx, this.chain, { consume: this.consumeZkQuery },
       { shard: shardId, isCanonical: (txid: string) => tail.some(l => l.txid === txid) })
     return { ok: res.ok, reason: res.reason, anchorTxid: res.anchorTxid, statement: 'proves some record is in this anchored batch (ZK-STARK, no trusted setup) — not which one, not its content, not truth' }
+  }
+
+  /** the policy root the verifier trusts: the configured anchored root when it
+   *  equals the recomputed DAG root (same rule as recall's POL-016 gate), else
+   *  an anchored `dagroot:<root>` record in `shard` matching the recomputed root. */
+  private async expectedPolicyRoot (shard: string): Promise<string | undefined> {
+    const dag = this.opts.policyDag
+    if (!dag) return undefined
+    const recomputed = toHex(dag.policyRoot())
+    if (this.opts.anchoredPolicyRoot !== undefined) return this.opts.anchoredPolicyRoot === recomputed ? recomputed : undefined
+    const hit = (await this.store.all(shard)).find(r => r.anchorTxid !== undefined && Buffer.from(r.fragment.d).toString('utf8') === `dagroot:${recomputed}`)
+    return hit ? recomputed : undefined
+  }
+
+  /** Wright §14 holder side: a ZK-STARK that the prover knows a committed
+   *  derivation path to `query.pred(query.args)` under the anchored policy DAG
+   *  — every step applies a rule node Merkle-proven against the policy root.
+   *  The instance supplies `fragment(<shard>/<seq>)` facts from its own store
+   *  (same as recall); caller EDB facts are private context premises.
+   *  Reveals neither the path nor any fact; journal = (policyRoot, conclusionHash, queryId). */
+  async proveDerivation (shard: string, query: { pred: string, args: string[], edb?: import('@mamem/datalog').Fact[] }, queryIdHex: string): Promise<{ bytes: Uint8Array, ms: number }> {
+    if (!/^[0-9a-f]{64}$/.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
+    const dag = this.opts.policyDag
+    if (!dag) throw new Error('no policy DAG configured on this instance')
+    const { derivationPath, nodeHash } = await import('@mamem/datalog')
+    const edb = [
+      ...(await this.store.all(shard)).map(r => ({ pred: 'fragment', args: [`${shard}/${r.seq}`] })),
+      ...(query.edb ?? [])
+    ]
+    const { facts, conflicts } = dag.evaluate(edb)
+    if (conflicts.length > 0) throw new Error(`policy conflict on ${conflicts[0]!.claim} — no derivation attestation`)
+    const path = derivationPath(facts, query.pred, query.args)
+    if (!path) throw new Error(`${query.pred}(${query.args.join(',')}) not entailed by the policy DAG over this EDB`)
+    // snapshot the committed node set — the anchored root covers exactly this list
+    const nodeHs = [...dag.nodes.keys()]
+    const nodeBytes = nodeHs.map(h => new Uint8Array(Buffer.from(h, 'hex')))
+    const layerOf = (ruleId: string) => dag.layers.find(l => l.rules.some(r => r.id === ruleId))?.name
+    const steps = path.steps.map(s => {
+      const rule = dag.rules.find(r => r.id === s.ruleId)
+      const tau = dag.ruleNode.get(s.ruleId)
+      if (!rule || !tau || layerOf(s.ruleId) === undefined) throw new Error(`step rule ${s.ruleId} is not a committed DAG rule`)
+      const ruleIndex = nodeHs.indexOf(tau)
+      return {
+        rule: { id: rule.id, layer: layerOf(s.ruleId)!, head: rule.head, body: rule.body },
+        ruleIndex,
+        ruleSiblings: merkleProof(nodeBytes, ruleIndex).siblings.map(sib => toHex(sib)),
+        inputs: s.inputs.map(i => {
+          if (i.fromStep !== null) return { fact: i.fact, fromStep: i.fromStep }
+          const h = toHex(nodeHash(i.fact))
+          const ci = nodeHs.indexOf(h)
+          return ci >= 0
+            ? { fact: i.fact, fromStep: null, committedIndex: ci, committedSiblings: merkleProof(nodeBytes, ci).siblings.map(sib => toHex(sib)) }
+            : { fact: i.fact, fromStep: null }
+        }),
+        output: s.output
+      }
+    })
+    const { bytes, ms } = await proveDerivationStark({ nodeCount: nodeHs.length, policyRoot: dag.policyRoot(), queryId: fromHex(queryIdHex), steps })
+    return { bytes, ms }
+  }
+
+  /** verifier side: the proven policyRoot must be this verifier's anchored
+   *  policy DAG root and the queryId one it issued (single use). */
+  async verifyDerivation (shard: string, bytes: Uint8Array): Promise<{ ok: boolean, reason?: string, policyRoot?: string, conclusionHash?: string, statement: string }> {
+    const statement = 'proves a committed derivation path under the anchored policy DAG (ZK-STARK, no trusted setup) — not which conclusion, not the premises, not truth'
+    const expected = await this.expectedPolicyRoot(shard)
+    if (!expected) return { ok: false, reason: 'no anchored policy DAG root (policyDag unset, root mismatch, or dagroot record not anchored)', statement }
+    const res = verifyDerivationBound(bytes, { consume: this.consumeZkQuery }, expected)
+    return { ok: res.ok, reason: res.reason, policyRoot: res.journal?.policyRoot, conclusionHash: res.journal?.conclusionHash, statement }
   }
 
   /**

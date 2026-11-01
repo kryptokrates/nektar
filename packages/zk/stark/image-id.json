@@ -1,6 +1,14 @@
 {
   "imageId": "99f25ea91f5d3616f37a986b85f72125b7ea19bbfb1edb61ca291653bdb06b9a",
   "program": "tools/stark/methods/guest (mamem-membership)",
-  "toolchain": { "risc0-zkvm": "3.0.3", "cargo-risczero": "3.0.3", "rust-host": "1.94", "rust-guest": "risc0 1.97" },
-  "statement": "leaf ∈ double-SHA-256 batch tree (core/merkle.ts) with root R; journal = (version=1, R, size, queryId)"
+  "datalogImageId": "78203c9eec5df65efc32486ada4d31ea428738a133a1bce00e5b9af2104a08af",
+  "datalogProgram": "tools/stark/methods/guest-datalog (mamem-datalog)",
+  "toolchain": {
+    "risc0-zkvm": "3.0.3",
+    "cargo-risczero": "3.0.3",
+    "rust-host": "1.94",
+    "rust-guest": "risc0 1.97"
+  },
+  "statement": "leaf ∈ double-SHA-256 batch tree (core/merkle.ts) with root R; journal = (version=1, R, size, queryId)",
+  "datalogStatement": "§14 committed derivation path under the anchored policy DAG root: every step applies a rule node Merkle-proven against policyRoot, premises chain to earlier outputs / committed fact nodes / private context facts; journal = (version=1, policyRoot, conclusionHash, queryId)"
 }

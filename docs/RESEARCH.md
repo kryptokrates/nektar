@@ -21,7 +21,7 @@ What mamem took from each source, and how: **reused** (code or vectors), **adopt
 | §18 | Formal verification | **implemented**: TLA+ model of AORG invariants, TLC-checked, with a mutant that is caught. Cedar level isolation proved with SymCC. | `docs/formal`, `tools/cedar-symcc` |
 | §19 | Identity, rotation, revocation; fragments bound to their signing epoch | **implemented**: rotation certs, SMT revocation (cross-checked against the Rust crate), custody; epoch-bound authorship (`verifyAuthorship`, `MamemMemory.authorship`) | `identity` |
 | App. E | Access-policy-driven keys | **implemented**: Cedar ∧ DAG ∧ ZK clearance gate before decryption | `mcp/memory.recall` |
-| — | ZK derivation attestation (POL-011) | **deferred**: needs a Datalog-in-circuit design | — |
+| §14 | ZK derivation attestation (POL-011) | **implemented**: a second RISC Zero guest replays the committed path — each step's rule τ is a DAG node Merkle-proven against the anchored policy root, each premise is an earlier step's output, a committed fact node or a private context leaf; journal = (policyRoot, conclusionHash, queryId). Negated premises and uncommitted-premises truth are not attested. | `tools/stark/methods/guest-datalog`, `datalog/path`, `zk/stark/datalog` |
 
 ## Craig Wright: *Singular Grit* essays (design pressure, not code)
 

@@ -70,6 +70,28 @@ export const TOOLS = [
     }
   },
   {
+    name: 'proveDerivation',
+    description: 'Holder side (Wright §14): ZK-STARK that a committed derivation path to pred(args) exists under the anchored policy DAG — each step applies a rule node Merkle-proven against the policy root. Bound to a verifier-issued queryId → L_ZKDer v3 hex. Reveals neither the path nor any fact.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        shard: { type: 'string', description: 'supplies the instance fragment(<shard>/<seq>) EDB facts' },
+        query: { type: 'object', description: '{pred, args, edb?} — the conclusion to prove entailed; edb facts are private context premises' },
+        queryId: { type: 'string', description: '32-byte hex from the verifier\'s zkQuery' }
+      },
+      required: ['shard', 'query', 'queryId']
+    }
+  },
+  {
+    name: 'verifyDerivation',
+    description: 'Verifier side: verify an L_ZKDer v3 proof — pinned derivation program, STARK valid, proven policyRoot == this verifier\'s anchored policy DAG root, queryId issued here and unused. Proves a derivation exists: not which conclusion, not the premises, not truth.',
+    inputSchema: {
+      type: 'object',
+      properties: { shard: { type: 'string', description: 'shard carrying the anchored dagroot:<root> record (unless anchoredPolicyRoot is configured)' }, bytes: { type: 'string' } },
+      required: ['shard', 'bytes']
+    }
+  },
+  {
     name: 'rotate',
     description: 'Rotate a shard\'s owner key on-chain; emits a matching rotation cert leaf.',
     inputSchema: {
@@ -164,6 +186,15 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     case 'verifyMembership': {
       const { Buffer } = await import('node:buffer')
       return mem.verifyMembership(args.shard, args.seq, new Uint8Array(Buffer.from(args.bytes, 'hex')))
+    }
+    case 'proveDerivation': {
+      const { Buffer } = await import('node:buffer')
+      const { bytes, ms } = await mem.proveDerivation(args.shard, args.query, args.queryId)
+      return { lzkder: Buffer.from(bytes).toString('hex'), bytes: bytes.length, proveMs: ms, statement: 'ZK-STARK: a derivation path to the conclusion exists under the anchored policy DAG; reveals no rule, premise or fact' }
+    }
+    case 'verifyDerivation': {
+      const { Buffer } = await import('node:buffer')
+      return mem.verifyDerivation(args.shard, new Uint8Array(Buffer.from(args.bytes, 'hex')))
     }
     case 'rotate': {
       const { PrivateKey } = await import('@bsv/sdk')

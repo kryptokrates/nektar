@@ -31,6 +31,8 @@ flowchart LR
 | Encryption | **I**nfo disclosure: plaintext level>0 served | ZK gate applies to every level>0 record, plaintext or encrypted; decryption only after verifyFragment | `memory.test` plaintext gate, KEY-008 |
 | Encryption | **D**ata loss: dedup collision | hdp binds the plaintext before it is dropped (an earlier bug deduplicated distinct encrypted records) | regression test |
 | ZK membership | **S**poofing: proof over the prover's own anchor or a foreign program; **R**eplay | proven R/size must equal an SPV-verified anchor of the verifier's own shard on its canonical chain; program id pinned; queryId issued by the verifier, single use, persisted | `zk-integration`, `stark-verify`, fuzz |
+| ZK derivation (§14) | **S**poofing: path under an unanchored/foreign policy, wrong rule, skipped or reordered step; **R**eplay | every step's rule is a DAG node Merkle-proven against the proven policyRoot; the guest re-checks rule application and step chaining; policyRoot must equal the verifier's anchored DAG root; program id pinned; queryId single use (shared registry) | `stark-derivation`, `zk-derivation`, guest vectors, fuzz |
+| ZK derivation (§14) | **E**levation: fabricated premises | premises marked as context (EDB) leaves are private and uncommitted — the attestation proves faithful rule application under the anchored rules, not premise truth; premises can optionally be committed DAG fact nodes for full binding | honest statement in `verifyDerivation`, PROOFS.md |
 | Automaton | **E**levation: off-δ transition, halt outside F, stale-state read | δ and F Merkle paths in-contract; every method continues state | `automaton.test`, regtest rejection |
 | Disclosure | replay / scope creep | verifier-named, expiring, signed envelope; wrapped value authenticated | disclosure tests + fuzz |
 | Ingest | **S**poofing: forged source attribution | originator signature over (d, p\σ) verified before encryption; `requireSignedProvenance` | TC-70 |
@@ -51,9 +53,10 @@ flowchart LR
 - **Third-party mainnet services**: BSV Broadcaster (GorillaPool) and WhatsOnChain can be unavailable or lie about status; a 200/202 means "accepted", not "mined".
   - Proofs are still SPV-verified against headers, so a lying service can delay but not forge.
   - Headers come from one provider (WoC). Cross-checking a second header source is future work.
-- **ZK implementation trust (ADR-020)**: the membership STARK has no trusted setup, and it is proven over the same SHA-256 root that is anchored, so there is no tree-equality gap any more. Residual risks:
+- **ZK implementation trust (ADR-020)**: the membership and derivation STARKs have no trusted setup, and they are proven over the same double-SHA-256 structures that are anchored, so there is no tree-equality gap any more. Residual risks:
   - a bug in the RISC Zero 3.0.3 prover or verifier;
-  - a wrong pinned program id. It is rebuilt reproducibly, and `reproduce` checks it against a committed real receipt.
+  - a wrong pinned program id. They are rebuilt reproducibly, and `reproduce` checks both against committed real receipts.
+- **ZK derivation premises are private context by default**: a §14 attestation proves the path is well-formed under rules committed in the anchored DAG; context (EDB) premises are uncommitted. When full binding is required, premises must be committed DAG fact nodes — the guest supports both modes.
 - **Prover sees the witness**: proving runs locally (Docker). Outsourcing proving would hand the leaf and path to the prover.
 - **Proof size and latency**: about 224 KB and 35–50 s to prove on CPU; DoS via expensive verification is bounded by a max receipt size and cheap pre-checks.
 - **Clearance authority honesty** is assumed (trust is by configuration).

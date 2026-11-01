@@ -3,3 +3,4 @@
 export * from './parse.js'
 export * from './engine.js'
 export * from './lint.js'
+export * from './path.js'

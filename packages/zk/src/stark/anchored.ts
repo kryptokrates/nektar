@@ -14,11 +14,17 @@ export function starkQueryId (q: StarkQuery): Uint8Array {
   return dsha256(Buffer.concat([utf8('mamem:zkq:v2'), q.nonce, utf8(q.verifierId)]))
 }
 
-/** combined Π = (membership, ZKAccess) over ONE verifier query (§13 dual
- *  commitment): the access transcript must carry this query's id and nonce. */
-export function verifyCombinedStark (q: StarkQuery, accessTranscript: { queryId: string, nonce: Uint8Array }): boolean {
+/** combined Π = (membership, ZKAccess [, §14 derivation]) over ONE verifier
+ *  query (§13/§14 shared commitment): the access transcript — and, when given,
+ *  the derivation journal — must carry this query's id and nonce. */
+export function verifyCombinedStark (
+  q: StarkQuery,
+  accessTranscript: { queryId: string, nonce: Uint8Array },
+  derivationJournal?: { queryId: string }
+): boolean {
   return accessTranscript.queryId === Buffer.from(starkQueryId(q)).toString('hex') &&
-    Buffer.from(accessTranscript.nonce).equals(Buffer.from(q.nonce))
+    Buffer.from(accessTranscript.nonce).equals(Buffer.from(q.nonce)) &&
+    (derivationJournal === undefined || derivationJournal.queryId === Buffer.from(starkQueryId(q)).toString('hex'))
 }
 
 /** single-use query registry (persisted by the caller) */

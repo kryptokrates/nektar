@@ -406,3 +406,42 @@
   `verify(txid, tracker)` PASS at height 38876.
 - `docker-mcp/mamem-ttn.yaml` + `mcp-install --ttn` (profile `mamem_ttn`);
   `pnpm ttn:readonly` live smoke; `pnpm ttn:pilot` (funded, not yet run).
+
+## GOAL-v6 S2 — ZK derivation attestations (§14, POL-011)
+- `@mamem/datalog` `path.ts`: §14 committed path — h_i = dsha256(`fact:`-canonical
+  fact), edge e = dsha256(h_in‖…‖τ‖h_out) over raw 32-byte hashes, τ = the
+  rule's POL-003 DAG node hash. `derivationPath` emits topologically ordered
+  steps (fromStep links premises to their producer step); negated premises are
+  refused (not ZK-provable pointwise).
+- Guest `tools/stark/methods/guest-datalog` (mamem-datalog): replays the path —
+  recomputes canonical rule serialisation (byte-identical to graph
+  ruleCanonical, incl. JSON.stringify escaping), Merkle-proves τ against
+  policyRoot with the same dsha256 fold + odd self-pairing as the batch tree,
+  re-checks rule application (positive-body rules only), step chaining and
+  optional committed fact-node premises. Journal = (version=1, policyRoot,
+  conclusionHash, queryId) = 388 B of u32-word stream.
+- image-id.json gains `datalogImageId` (78203c9e…); membership id unchanged.
+  `pnpm stark:build` builds both guests + the WASM verifier, which now
+  discriminates the two journal shapes by byte length (264 vs 388 — the
+  deserializer does NOT check trailing bytes; earlier length bug caught by
+  vectors: a 388 B journal mis-decoded as membership).
+- Wire codec `L_ZKDer v3` ('ZKD3'‖ver‖imageId‖policyRoot‖conclusionHash‖
+  queryId‖receipt), strict parse; `proveDerivationStark` (`prove-der` host
+  command), `verifyZkder`, `verifyDerivationBound` (anchored root + single-use
+  queryId). `verifyCombinedStark` gained an optional derivation-journal leg —
+  one issued queryId can bind membership + clearance + derivation.
+- MamemMemory: `proveDerivation(shard, {pred,args,edb?}, queryId)` injects the
+  instance's `fragment(shard/seq)` EDB (same as recall) and walks the DAG's
+  canonical provenance; `verifyDerivation(shard, bytes)` requires the
+  configured anchoredPolicyRoot (matching the recomputed DAG root, same rule
+  as POL-016) or an anchored `dagroot:<root>` record in `shard`. MCP tools
+  `proveDerivation`/`verifyDerivation` (tool count 13 → 15).
+- Vectors: `gen-vectors-datalog.mjs` + `run-vectors-der.sh`
+  (`pnpm stark:datalog-vectors`) — 4 valid paths (1–3 steps + committed-leaf)
+  and 14 negatives (wrong rule/root/conclusion, reordered, skipped, premise
+  swap, negation, uncommitted rule, bad index, self-ref, inconsistent binding,
+  empty path): 18/18. Committed real receipt fixture `zkder-permit.json`
+  (219 KB, prove 96–131 s CPU, WASM verify 38–108 ms).
+- Honest gap: context (EDB) premises are uncommitted by default — the
+  attestation proves faithful rule application, not premise truth; committed
+  fact-node premises give full binding (documented in PROOFS/THREAT-MODEL).

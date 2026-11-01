@@ -18,13 +18,18 @@ const { join } = await import('node:path')
 const catDir = join(homedir(), '.docker', 'mcp', 'catalogs', 'mamem')
 mkdirSync(catDir, { recursive: true })
 const staged = name => { const dst = join(catDir, name); copyFileSync(fileURLToPath(new URL(`../docker-mcp/${name}`, import.meta.url)), dst); return dst }
-const yaml = staged('mamem.yaml')
+// --ghcr: use the published image (ghcr.io/nedzof/mamem:latest), no local build
+const GHCR = process.argv.includes('--ghcr')
+const yaml = staged(GHCR ? 'mamem.ghcr.yaml' : 'mamem.yaml')
 
 try { out(['mcp', 'version']) } catch { console.error('Docker MCP Toolkit not found — enable it in Docker Desktop (Settings → Beta features / MCP Toolkit), Docker Desktop ≥ 4.62.'); process.exit(1) }
-run(['build', '-t', 'mamem:local', fileURLToPath(new URL('..', import.meta.url))])
+if (GHCR) run(['pull', 'ghcr.io/nedzof/mamem:latest'])
+else run(['build', '-t', 'mamem:local', fileURLToPath(new URL('..', import.meta.url))])
 if (!out(['mcp', 'profile', 'list']).split(/\s+/).includes(PROFILE)) run(['mcp', 'profile', 'create', '--name', PROFILE])
 const listed = out(['mcp', 'profile', 'server', 'ls', '--filter', `profile=${PROFILE}`])
-if (!/\bmamem\b/.test(listed)) run(['mcp', 'profile', 'server', 'add', PROFILE, '--server', `file://${yaml}`])
+// re-register so the profile snapshot matches the chosen image (local vs GHCR)
+if (/\bmamem\b/.test(listed)) run(['mcp', 'profile', 'server', 'remove', PROFILE, '--name', 'mamem'])
+run(['mcp', 'profile', 'server', 'add', PROFILE, '--server', `file://${yaml}`])
 const args = process.argv.slice(2)
 if (args.includes('--regtest')) {
   // secrets from the gitignored env files → Docker MCP keychain via stdin (never printed)

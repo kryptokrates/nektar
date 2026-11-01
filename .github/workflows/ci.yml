@@ -1,0 +1,52 @@
+name: ci
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: pnpm
+        run: corepack enable && corepack prepare pnpm@12.16.1 --activate
+      - name: pnpm store cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - run: pnpm install --frozen-lockfile
+      - name: build
+        run: pnpm -r build
+        timeout-minutes: 10
+      - name: every import is declared
+        run: pnpm check:deps
+      - name: unit · contract · integration · fuzz
+        run: pnpm -r test
+        timeout-minutes: 10
+      - name: reproduce (vectors + pinned vkey)
+        run: pnpm reproduce
+      - name: offline e2e (mock chain, full-paper scenario)
+        run: pnpm e2e
+        timeout-minutes: 5
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: build image (clean-checkout gate)
+        run: docker build -t mamem:ci .
+      - name: smoke — scripted MCP session inside the image
+        run: docker run --rm --entrypoint node mamem:ci packages/mcp/demo/client.mjs
+        timeout-minutes: 3

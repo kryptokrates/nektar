@@ -17,6 +17,20 @@ flowchart LR
   reason --> anchor
 ```
 
+[![ci](https://github.com/nedzof/merkle-automaton/actions/workflows/ci.yml/badge.svg)](https://github.com/nedzof/merkle-automaton/actions/workflows/ci.yml) · License: [Apache-2.0](LICENSE)
+
+## Install without cloning (Docker Desktop with MCP Toolkit)
+
+```sh
+mkdir -p ~/.docker/mcp/catalogs/mamem
+curl -fsSL https://raw.githubusercontent.com/nedzof/merkle-automaton/master/docker-mcp/mamem.ghcr.yaml -o ~/.docker/mcp/catalogs/mamem/mamem.ghcr.yaml
+docker mcp profile create --name mamem
+docker mcp profile server add mamem --server file://$HOME/.docker/mcp/catalogs/mamem/mamem.ghcr.yaml
+docker mcp client connect claude-desktop --profile mamem     # or cursor, vscode, claude-code, lmstudio, …
+```
+
+The image is `ghcr.io/nedzof/mamem` (`latest` = last release, `edge` = master).
+
 ## Use it from your AI (Claude, Cursor, VS Code, local models…)
 
 ```sh

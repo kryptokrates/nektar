@@ -41,6 +41,13 @@
 - **Add an automaton.** Write the `AutomatonDef` (≤16 transitions, deterministic, F non-empty), then call `AutomatonChain.deploy`; steps are δ-checked on-chain.
 - **Add a topic manager or lookup service.** Follow `overlay/src/tm.ts`: decode with the byte-authenticated decoder and admit successors only.
 
+## CI and releases
+
+- `.github/workflows/ci.yml` runs on every push and PR. It builds, runs `check:deps`, all unit/contract/integration/fuzz tests, `reproduce` and the offline e2e, plus a Docker clean build with an in-image MCP session.
+- `.github/workflows/release.yml` pushes `ghcr.io/nedzof/mamem`: `edge` on master; `<version>` and `latest` on `v*` tags. Each push is smoke-tested.
+- These stay manual because they need local infrastructure: `MAMEM_NETWORK=regtest pnpm e2e`, `pnpm e2e:mcp`, `pnpm formal`, `pnpm cedar:symcc`, `pnpm smt:vectors`, `pnpm curve:vectors`.
+- To release: bump versions, then `git tag v0.x.y && git push --tags`.
+
 ## Test conventions
 
 - `node:test` + `node:assert/strict`. Each package has `test/*.test.ts`, compiled to `dist/test`.

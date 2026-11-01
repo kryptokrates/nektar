@@ -13,7 +13,7 @@ What mamem took from each source, and how: **reused** (code or vectors), **adopt
 | §9 | Memory as law: DL-Lite/OWL2 axioms anchored; jurisdiction-named regulatory graphs; precedent as entailment | **implemented** as axioms compiled to Datalog; entailment only from anchored axioms; `Jurisdictions.permissible`, `validByPrecedent`. There is no full OWL2 reasoner, only the DL-Lite core (class/subclass/property) plus rules. | `graph/ontology` |
 | §11 | Append-only reasoning graph (AORG) | **implemented**: acyclic, justified, consistent, traceable, anchored, bi-temporal refinement | `graph` |
 | §12 | Consensus time; temporal operators □_t, ◇_(t1,t2), φ →_Δt ψ; causal closure | **implemented**: existence-by block time, temporal operators, SLA/deadline obligations, causal closure. Multi-chain clock aggregation is not built (single BSV chain). | `reasoning.timeBounds`, `reasoning/temporal` |
-| §13 | ZK membership, chained roots | **implemented**: Poseidon companion tree + Groth16, verified off-chain against the SPV-verified anchor | `zk` |
+| §13 | ZK membership, chained roots | **implemented as specified** (ADR-020): π = ZKMerkleProve(h_j, R_n, P_j) over the **same** double-SHA-256 tree whose root is anchored (H = SHA-256); non-interactive via Fiat–Shamir; only public parameters (pinned program id), **no trusted setup**. A RISC Zero ZK-STARK, verified off-chain (WASM) against the SPV-verified anchor. Superseded: Poseidon companion tree + Groth16 (an equality gap and a ceremony) | `zk` |
 | §14 | Policy DAG (stratified Datalog) | **implemented**: L_pol, semi-naive evaluation with canonical provenance, layers/overrides, conflict localisation, Merkle-proven derivations | `datalog`, `graph/policy` |
 | §15 | Failure modes: contradiction, revision | **implemented**: refinement + correction loop | `graph`, `reasoning.onRevision` |
 | §16 | Audit/liability bundle | **implemented**, verified offline with headers and the verifier's own policy | `reasoning.verifyAuditBundle` |
@@ -27,7 +27,7 @@ What mamem took from each source, and how: **reused** (code or vectors), **adopt
 
 - **Truth Is Expensive. Bullshit Scales.** Adopted as a rule throughout: every receipt says that inclusion ≠ truth, and the origin-falsehood test (SEC-007) proves that a recorded lie stays a lie.
 - **The Graph Tax.** Adopted: agents call memory tools directly (MCP). There are no supervisor chains or agent graphs (AGT-010).
-- **The Competent Verifier Problem.** Adopted: verifiers use *their own* authoritative policy DAG, pinned vkey and pinned clearance authorities, never the prover's copy (AGT-009). `verifyAuditBundle` refuses a policy path when it holds no DAG.
+- **The Competent Verifier Problem.** Adopted: verifiers use *their own* authoritative policy DAG, pinned STARK program id and pinned clearance authorities, never the prover's copy (AGT-009). `verifyAuditBundle` refuses a policy path when it holds no DAG.
 - **The Memory Hole Meets the Audit Trail.** Adopted: append-only storage, refinement instead of deletion, existence-by-time semantics, and crypto-shredding as the only erasure (LEG-006).
 - The other technical essays reviewed (state machines in Script, UTXO-native design, SPV) back the head-UTXO and Rúnar-contract choices.
 
@@ -71,7 +71,9 @@ What mamem took from each source, and how: **reused** (code or vectors), **adopt
 | Rúnar 0.4.6 | All contracts (`MamemAnchor`, `MamemAutomaton`). There is no hand-written script. Two miscompile patterns were found and avoided (see migration-log). |
 | Rúnar EC ops (runar.build "Recursive contracts & ZK") | Evaluated for an on-chain Schnorr PoK gate. The compiled script was **883 KB, over the 100 KB rule**, so it was excluded from production. |
 | sCrypt ZoKrates / Germouty Groth16-in-Script | Evaluated: on-chain Groth16 needs BN254 pairings, which Rúnar lacks, and the scripts are MB-scale. Verification therefore stays off-chain against the anchored root (ZKM-012 deferred). |
-| circom2 / snarkjs / circomlibjs | Groth16 membership circuit, local multi-contributor ceremony. |
+| RISC Zero zkVM 3.0.3 (succinct receipts) | **Adopted** for §13 membership: a transparent ZK-STARK over the SHA-256 Merkle path; prove ≈35–50 s on CPU, 224 KB, WASM verify 37–83 ms (measured, ADR-020). |
+| SP1 (Succinct, Plonky3) | **Evaluated, rejected:** the BSV stack's STARK (Rúnar ships an SP1 FRI verifier, BSVM verifies SP1 on-chain), but Succinct's security model states that individual SP1 STARK proofs are **not zero-knowledge**; only the Groth16/PLONK wrap is, which needs a trusted setup. Revisit if SP1 adds ZK STARKs, which would also enable on-chain verification via Rúnar. |
+| circom2 / snarkjs / circomlibjs | **Removed** (were Groth16 + Poseidon companion tree, local ceremony); superseded by ADR-020. |
 | Cedar (WASM) + `cedar-policy-symcc` 0.8 + cvc5 1.3.1 | Runtime authorization; **symbolic proof** of level isolation (POL-015). |
 | TLA+ (TLC 2.19) | AGT-008 model checking via Docker. |
 
@@ -80,5 +82,5 @@ What mamem took from each source, and how: **reused** (code or vectors), **adopt
 - A full Trillian fork. **Rejected**: the UTXO chain subsumes its fork-freedom role.
 - Per-memory on-chain transactions. **Rejected**: one Rúnar spend per batch of up to 65,536 leaves.
 - Hand-written Bitcoin Script. **Rejected** (project rule): Rúnar only.
-- On-chain Groth16 and the on-chain Schnorr gate. **Deferred** on script-size grounds; the measurements are recorded.
+- On-chain ZK verification. **Deferred:** a Groth16 verifier and the Schnorr gate are too large for script, and no Rúnar verifier exists for RISC Zero receipts. §13 allows off-chain verification against the anchored root ("on-chain if necessary").
 - Proof sharding (patented format). **Deferred** pending a licence position.

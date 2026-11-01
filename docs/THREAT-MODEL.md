@@ -30,7 +30,7 @@ flowchart LR
 | Policy DAG | **T**ampering: caller facts or root | EDB only from verified caller/proof; DAG root must equal the anchored root | `graph-anchor.test` POL-016a-c |
 | Encryption | **I**nfo disclosure: plaintext level>0 served | ZK gate applies to every level>0 record, plaintext or encrypted; decryption only after verifyFragment | `memory.test` plaintext gate, KEY-008 |
 | Encryption | **D**ata loss: dedup collision | hdp binds the plaintext before it is dropped (an earlier bug deduplicated distinct encrypted records) | regression test |
-| ZK membership | **S**poofing: proof over the prover's own anchor | expected shard from the verifier's chain; canonical-chain check; vkey pinned; nullifier store | `zk-integration` |
+| ZK membership | **S**poofing: proof over the prover's own anchor or a foreign program; **R**eplay | proven R/size must equal an SPV-verified anchor of the verifier's own shard on its canonical chain; program id pinned; queryId issued by the verifier, single use, persisted | `zk-integration`, `stark-verify`, fuzz |
 | Automaton | **E**levation: off-δ transition, halt outside F, stale-state read | δ and F Merkle paths in-contract; every method continues state | `automaton.test`, regtest rejection |
 | Disclosure | replay / scope creep | verifier-named, expiring, signed envelope; wrapped value authenticated | disclosure tests + fuzz |
 | Ingest | **S**poofing: forged source attribution | originator signature over (d, p\σ) verified before encryption; `requireSignedProvenance` | TC-70 |
@@ -45,11 +45,14 @@ flowchart LR
 ## Residual risks
 
 - **Origin falsehood**: by design, out of scope for cryptography (labelled everywhere).
-- **Groth16 setup**: local 2-contributor dev ceremony only. Production needs a public ceremony.
-- **Poseidon ↔ SHA tree equality** is not enforced on-chain; the writer computes both. A malicious writer could anchor a Poseidon root over different leaves. Membership proofs then prove membership in *that* root only. Mitigation: verifiers recompute the companion root when they hold the leaves.
+- **ZK implementation trust (ADR-020)**: the membership STARK has no trusted setup, and it is proven over the same SHA-256 root that is anchored, so there is no tree-equality gap any more. Residual risks:
+  - a bug in the RISC Zero 3.0.3 prover or verifier;
+  - a wrong pinned program id. It is rebuilt reproducibly, and `reproduce` checks it against a committed real receipt.
+- **Prover sees the witness**: proving runs locally (Docker). Outsourcing proving would hand the leaf and path to the prover.
+- **Proof size and latency**: about 224 KB and 35–50 s to prove on CPU; DoS via expensive verification is bounded by a max receipt size and cheap pre-checks.
 - **Clearance authority honesty** is assumed (trust is by configuration).
 - **Challenge TTL**: a nonce can be reused by the same caller within 5 minutes on the same instance. ZK transcripts are single-use.
-- **Security-state persistence**: challenges, used ZK transcripts, nullifiers and revocations persist through `securityStore` (`FileSecurityStore`, atomic replace) and survive a restart (TC-73). Without a configured store they are in-memory, as in the demo server.
+- **Security-state persistence**: challenges, used ZK transcripts, issued ZK membership queries and revocations persist through `securityStore` (`FileSecurityStore`, atomic replace) and survive a restart (TC-73). Without a configured store they are in-memory, as in the demo server.
 - **Ingest signatures** are enforced only when `requireSignedProvenance` is set or a `sourcePub` is supplied. Unsigned agent notes remain possible by configuration.
 - **Finality** is a policy parameter (`finalityDepth`). Reads that matter should use `requireFinal`.
 - **No external audit / pen test yet** (SEC-004/005): required before mainnet.

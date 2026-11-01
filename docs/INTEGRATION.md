@@ -107,7 +107,7 @@ OpenAI/Anthropic function-calling apps can call `/v1/tools/{name}` directly.
 - the server resumes each shard from its persisted head;
 - the next anchor spends exactly that UTXO, so there is no fork;
 - a confirmer attaches BUMPs to every unproven anchor;
-- replay protection (challenges, ZK transcripts, nullifiers, revocations) persists.
+- replay protection (challenges, ZK transcripts, issued ZK queries, revocations) persists.
 
 ## Agent identity and ZK clearance (level > 0 records)
 
@@ -134,7 +134,7 @@ The model never handles keys or proofs. The **harness** does, using the client k
 
 The real MCP server process, driven by the SDK client exactly like an AI client. It covers:
 - Rúnar anchoring, plus SPV `prove` against real headers;
-- **Groth16 membership** (389 B proof) against the SPV-checked anchor, with nullifier replay and tampered proofs rejected;
+- **STARK membership** (Wright §13; 224 KB RISC Zero receipt, ~35–50 s on CPU) against the SPV-checked SHA-256 anchor, via `zkQuery` → `proveMembership` → `verifyMembership`; replayed and tampered proofs rejected;
 - **Bulletproof clearance** with all the negatives above;
 - a restart on the same data dir: the next anchor spends the persisted head, replay is still rejected, and a stored credential still works.
 

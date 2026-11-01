@@ -288,6 +288,30 @@
   `qwen4exp` architecture (needs a newer DMR engine). On CPU, 8B qwen3 takes minutes
   per turn; 0.6B emits pseudo tool tags instead of tool calls.
 
+## ZK refactor to Wright §13: one SHA-256 tree, transparent ZK-STARK (ADR-020)
+- Researched the BSV stack: Rúnar ships an SP1 FRI verifier (Go tier) and BSVM
+  verifies SP1 STARKs on-chain, but Succinct's security model says individual
+  SP1 STARK proofs are NOT zero-knowledge (only their Groth16/PLONK wrap is,
+  which needs a trusted setup). That gate failed, so RISC Zero 3.0.3 succinct
+  receipts (documented ZK-STARK) were chosen.
+- Guest `tools/stark/methods/guest`: double-SHA Merkle fold == core/merkle.ts
+  (odd self-pair enforced). 561/561 positions of sizes 1..33 match; 5 attack
+  cases refused. Toolchain in Docker (rust 1.94 host, risc0 guest toolchain).
+- Measured on a real Teranode anchor: prove 34.9–41 s (CPU, Docker), 224 KB
+  succinct receipt, WASM verify 37–83 ms in native Node; proven root == anchored R.
+- Pitfalls: rust 1.88 too old for risc0 3.0 deps; wasm-bindgen nodejs output is
+  CJS inside an ESM package (fixed with stark/package.json {type: commonjs});
+  verify with a container per call costs ~0.9 s (hence WASM).
+- Removed: Poseidon companion tree, Groth16 prover/verifier, circom circuit,
+  ceremony + artifacts, nullifier store, snarkjs/circomlib/circom2 deps,
+  `pnpm zk:ceremony`, `contracts/decode.test.mjs` (stale v1 scratch file).
+- MamemAnchor **v3**: state = owner|n|size|R|Rp|tag|ownerPkh; `append(sig, pub, R, size)`.
+  The v3 decoder refuses v2 layouts. vectors/core.json: the empty anchor field was dropped
+  (FIELD_COUNT 8 → 7). Old v2 regtest chains are not continued.
+- Replay protection: a verifier-issued single-use queryId (`zkQuery` MCP tool,
+  persisted in FileSecurityStore as zkQueries) replaces the nullifier.
+- `pnpm reproduce` now pins the program id against a committed real receipt.
+
 ## Agent-level E2E with anchoring + ZK through MCP
 - Wire format (`identity/wire.ts`) for clearance presentations/credentials; MCP
   recall/authorize accept identity + zk; runtime MAMEM_CLEARANCE_AUTHORITIES;

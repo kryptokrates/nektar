@@ -23,7 +23,7 @@
 | `verify` | proof bundles, `verifyFragment` |
 | `crypto` | per-fragment HKDF keys, AES-256-GCM, level keyspaces, shredding |
 | `identity` | bindings, challenges, rotation certs, SMT (TS ≡ Rust), custody, disclosure, ZK clearance |
-| `zk` | Poseidon companion tree, Groth16 membership circuit + artifacts, L_ZKMem codec, nullifiers |
+| `zk` | Wright §13 membership: L_ZKMem v2 codec, WASM STARK verifier (`stark/`), RISC Zero prover adapter, anchored verifier with issued single-use queryIds. Guest + host + WASM sources live in `tools/stark/` (`pnpm stark:image`, `pnpm stark:build`, `pnpm stark:vectors`) |
 | `datalog` | L_pol parser, linter, stratified semi-naive engine with canonical provenance |
 | `graph` | AORG, GraphAnchor, PolicyDAG (layers, conflicts, derivation proofs), instancing/delegation |
 | `policy` | Cedar authorize, canonical policy sets, receipts |

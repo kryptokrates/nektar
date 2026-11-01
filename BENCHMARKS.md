@@ -5,25 +5,25 @@ Offline mock chain with **full Teranode-faithful script evaluation** of every co
 
 | operation | n | latency | throughput |
 |---|---|---|---|
-| remember (append, unanchored) | 2000 | 3.196 ms/op | 312.9 op/s |
-| anchor append (1 Rúnar spend, script-evaluated) | 30 | 58.359 ms/op | 17.1 op/s |
-| verifyFragment (leaf→R→anchor→BUMP→headers) | 50 | 0.191 ms/op | 5245.3 op/s |
-| ZK membership prove (Groth16, depth 16) | 3 | 953.251 ms/op | 1.0 op/s |
-| ZK membership verify (incl. SPV of the anchor) | 3 | 16.734 ms/op | 59.8 op/s |
-| ZK clearance prove (Bulletproof, 8-bit) | 5 | 152.334 ms/op | 6.6 op/s |
-| ZK clearance verify (Bulletproof, 8-bit) | 5 | 118.610 ms/op | 8.4 op/s |
-| Cedar authorize (WASM) | 200 | 0.628 ms/op | 1591.6 op/s |
-| Datalog evaluate (2 rules, 601 EDB facts) | 50 | 44.460 ms/op | 22.5 op/s |
-| automaton step (Rúnar, δ Merkle path, script-evaluated) | 10 | 38.262 ms/op | 26.1 op/s |
+| remember (append, unanchored) | 2000 | 3.470 ms/op | 288.2 op/s |
+| anchor append (1 Rúnar spend, script-evaluated) | 30 | 55.622 ms/op | 18.0 op/s |
+| verifyFragment (leaf→R→anchor→BUMP→headers) | 50 | 0.194 ms/op | 5154.1 op/s |
+| ZK membership prove (STARK, 16-leaf batch, CPU, Docker prover) | 1 | 49840.824 ms/op | 0.0 op/s |
+| ZK membership verify (WASM STARK + SPV of the anchor) | 1 | 85.072 ms/op | 11.8 op/s |
+| ZK clearance prove (Bulletproof, 8-bit) | 5 | 152.058 ms/op | 6.6 op/s |
+| ZK clearance verify (Bulletproof, 8-bit) | 5 | 113.225 ms/op | 8.8 op/s |
+| Cedar authorize (WASM) | 200 | 0.621 ms/op | 1611.1 op/s |
+| Datalog evaluate (2 rules, 601 EDB facts) | 50 | 37.233 ms/op | 26.9 op/s |
+| automaton step (Rúnar, δ Merkle path, script-evaluated) | 10 | 39.760 ms/op | 25.2 op/s |
 
 | size / count | value |
 |---|---|
-| proof bundle JSON size (16-leaf batch) | 6009 B |
-| anchor atomic BEEF size | 1438 B |
-| L_ZKMem proof size | 389 B |
+| proof bundle JSON size (16-leaf batch) | 5260 B |
+| anchor atomic BEEF size | 1224 B |
+| L_ZKMem v2 proof size (succinct receipt) | 223863 B |
 | Datalog derived facts per run | 10751 |
 | automaton locking script | 1007 B |
-| automaton step tx | 4077 B, fee 5 sat (runar fee rate setting 1) |
+| automaton step tx | 4076 B, fee 5 sat (runar fee rate setting 1) |
 
 Notes
 - The anchor append cost is per **batch**, not per record: one Rúnar spend anchors up to 65,536 leaves (ZK companion-tree bound), so per-record on-chain cost falls linearly with batch size.

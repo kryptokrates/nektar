@@ -32,7 +32,7 @@ Credentials: `infra/teranode-quickstart/.env` (`rpc_pass`) and `mamem/.env` (`MA
 pnpm -r build                      # all packages (contracts recompile the Rúnar artifacts)
 pnpm check:deps                    # every import is a declared dependency
 pnpm -r test                       # unit · contract · integration · fuzz (≤10 s per test)
-pnpm reproduce                     # vectors/core.json identical; Poseidon root + vkey hash pinned
+pnpm reproduce                     # vectors/core.json identical; pinned STARK program id verifies the committed real receipt
 pnpm e2e                           # offline story + v2 + P10/P14/v4 + full-paper scenario (~11 s)
 MAMEM_NETWORK=regtest pnpm e2e     # same on Teranode (~2 min; run 3× for sign-off)
 pnpm formal                        # TLC model check of the AORG invariants (+ mutant caught)
@@ -98,4 +98,5 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
 
 - `.state/` (treasury, reserve) must be backed up per environment; it holds funded outpoints.
 - Shard stores: `MemoryShardStore` is in-process. For persistence use the file/sqlite stores (`packages/log`) and back them up with the overlay sqlite files. The anchored roots let you detect any restore that lost or altered records.
-- Revocation SMT, challenge registry and nullifier stores are in-memory in the demo server. Persist them in production (see THREAT-MODEL residual risks).
+- Revocations, the challenge registry and issued ZK membership queries persist via `FileSecurityStore` in the runtime (`MAMEM_DATA_DIR`). The in-process demo server keeps them in memory.
+- ZK proving needs the `mamem-stark-build` image (`pnpm stark:image`, ~4.6 GB) and the cargo target volume (`pnpm stark:build`), or `MAMEM_STARK_PROVER` pointing at a native `mamem-stark` binary. Verification needs neither (WASM in Node).

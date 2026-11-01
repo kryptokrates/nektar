@@ -37,7 +37,11 @@ jobs:
       - name: reproduce (vectors + pinned vkey)
         run: pnpm reproduce
       - name: offline e2e (mock chain, full-paper scenario)
+        # STARK proving needs the RISC Zero prover image (pnpm stark:image, 4.6 GB);
+        # CI verifies real receipts via WASM in the unit tests + reproduce instead.
         run: pnpm e2e
+        env:
+          MAMEM_E2E_STARK: '0'
         timeout-minutes: 5
 
   docker:

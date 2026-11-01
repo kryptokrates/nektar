@@ -22,7 +22,7 @@ flowchart TB
   subgraph L4["L4 Identity & ZK"]
     ID["bindings · challenges · rotation certs · SMT revocation · custody"]
     ZKA["ZK clearance (Bulletproofs)"]
-    ZKM["ZK membership (Groth16 / Poseidon)"]
+    ZKM["ZK membership (STARK over the anchored SHA-256 root)"]
   end
   subgraph L3["L3 Crypto"]
     CR["per-fragment HKDF keys · AES-256-GCM · level keyspaces · disclosure wraps"]
@@ -93,8 +93,8 @@ sequenceDiagram
   M->>L: append(fragment) — dedup by hdp
   L-->>A: signed inclusion promise (seq, leaf)
   Note over L: batch closes (count policy, ≤ 65,536 leaves)
-  M->>M: R = Merkle(leaves) · poseidonRoot = Poseidon(leafCommit)
-  M->>C: anchor(size, R, poseidonRoot)
+  M->>M: R = dsha256-Merkle(leaves)
+  M->>C: anchor(size, R)
   C->>C: fresh contract from decoded head · sign append
   C->>T: tx spends head UTXO → new head (n+1, R' = H(tag‖R'‖R‖size))
   T-->>C: accepted (script-evaluated) · later mined → BUMP
@@ -130,7 +130,7 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
   [*] --> Head0: deploy (genesis, n=0, owner pk0)
-  Head0 --> HeadN: append(sig_owner, R, size, poseidonRoot) — n+1, R' chained
+  Head0 --> HeadN: append(sig_owner, R, size) — n+1, R' chained
   HeadN --> HeadN: append — spends the head UTXO (no fork possible)
   HeadN --> HeadN: rotate(sig_owner, newOwnerPkh) — n, R, R' unchanged
   note right of HeadN
@@ -171,13 +171,13 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  q["ZkQuery {nonce, verifierId}"] --> qid["queryId = H(tag‖nonce‖verifierId) mod r"]
-  subgraph holder["holder (secrets: blinding, level, opening)"]
-    mem["Groth16: leaf = Poseidon(hi, lo, blinding) ∈ Poseidon root<br/>nullifier = Poseidon(blinding, queryId)"]
+  q["verifier issues zkQuery {nonce, verifierId}"] --> qid["queryId = dsha256(tag‖nonce‖verifierId) — single use"]
+  subgraph holder["holder (secrets: leaf, index, path, level, opening)"]
+    mem["ZK-STARK (RISC Zero): dsha256-Merkle(leaf, index, path) = R_n<br/>journal = (R_n, size, queryId) — no trusted setup"]
     clr["Bulletproof: level − required ≥ 0 on C = ℓG + rH<br/>(C signed by a trusted authority, bound to holder pk)"]
   end
   qid --> mem & clr
-  mem --> v1["verifyMembershipAnchored: expected shard · canonical chain · SPV · vkey pinned · nullifier unused"]
+  mem --> v1["verifyMembershipAnchoredStark: pinned program · R_n/size = SPV-verified anchor of our shard · canonical chain · queryId issued + unused"]
   clr --> v2["verifyClearance: trusted authority · holder = verified caller · transcript scope · single use"]
   v1 & v2 --> comb["verifyCombined: same nonce, same queryId"]
 ```
@@ -218,7 +218,7 @@ classDiagram
   class Fragment { d: bytes (plaintext, dropped when encrypted) p: Provenance hdp = H(d‖p) E: AES-GCM ciphertext }
   class Provenance { source time signature modelId }
   class LogRecord { shard seq leaf hdp level batchIndex leafIndex anchorTxid }
-  class AnchorState { genesisOwner n size R Rp poseidonRoot tagRprime ownerPkh }
+  class AnchorState { genesisOwner n size R Rp tagRprime ownerPkh }
   class ProofBundle { shard n size leaf leafIndex path anchor chainTail anchorBEEF }
   class Vertex { kind phi sigma t context h }
   class Edge { from to rule e = H(from‖to‖rule) }
@@ -273,7 +273,7 @@ flowchart LR
   fin --> rd["recall(requireFinal)"]
   cp --> api["/v1/checkpoint/{shard}"]
   a --> api2["/v1/proof/{shard}/{seq}"]
-  sec[("securityStore: challenges · transcripts · nullifiers · revocations")] --- rd
+  sec[("securityStore: challenges · transcripts · issued ZK queries · revocations")] --- rd
 ```
 
 ## 14. Test and release pipeline

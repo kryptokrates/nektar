@@ -17,6 +17,12 @@ export const MAMEM_ANCHOR_ARTIFACT = require('../../MamemAnchor.json')
  *  deployed stays decodable and spendable */
 export const MAMEM_ANCHOR_V3_ARTIFACT = require('../../MamemAnchorV3.json')
 export const MAMEM_AUTOMATON_ARTIFACT = require('../../MamemAutomaton.json')
+/** GOAL-v7 V1: covenant spend guard — caps as consensus rules. */
+export const MAMEM_FEEVAULT_ARTIFACT = require('../../MamemFeeVault.json')
+/** GOAL-v7 V2: unforkable sequential checkpoint chain + time-locked bond. */
+export const MAMEM_CHECKPOINTBOND_ARTIFACT = require('../../MamemCheckpointBond.json')
+/** GOAL-v7 V3: atomic payment-for-disclosure escrow. */
+export const DISCLOSURESALE_ARTIFACT = require('../../DisclosureSale.json')
 
 /** ANC-006 Metanet flag: the first push of the anchor output's data payload */
 export { META_FLAG } from '@mamem/core'

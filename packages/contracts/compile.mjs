@@ -1,6 +1,6 @@
 import {compile} from "runar-compiler";
 import fs from "node:fs";
-for (const name of ["MamemAnchor","MamemAutomaton","MamemAutomatonZk"]) {
+for (const name of ["MamemAnchor","MamemAutomaton","MamemAutomatonZk","MamemFeeVault","MamemCheckpointBond","DisclosureSale"]) {
   const r=compile(fs.readFileSync(`src/${name}.runar.ts`,"utf8"));
   if(!r.success){console.error(name,JSON.stringify(r.diagnostics));process.exit(1)}
   const out=JSON.stringify(r.artifact,(k,v)=>typeof v==="bigint"?v.toString():v,2);

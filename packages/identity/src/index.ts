@@ -96,6 +96,26 @@ export function verifyCertChain (genesisPub: string, certs: RotationCert[], opts
 export function keyValidAt (cert: RotationCert, useTime: number): boolean {
   return useTime < cert.issuedAt + cert.horizon
 }
+/** §19 epoch binding: the key of `epoch` (0 = genesis) in a verified rotation
+ *  chain and its signing window [from, until): a key may sign from the moment
+ *  it was certified until its successor's deprecation horizon expires. */
+export function epochKey (genesisPub: string, certs: RotationCert[], epoch: number): { pub: string, from: number, until: number } | null {
+  const sorted = [...certs].sort((a, b) => a.index - b.index)
+  if (!verifyCertChain(genesisPub, sorted) || epoch < 0 || epoch > sorted.length) return null
+  const pub = epoch === 0 ? genesisPub : sorted[epoch - 1]!.pubkey
+  const from = epoch === 0 ? -Infinity : sorted[epoch - 1]!.issuedAt
+  const until = sorted[epoch] ? sorted[epoch]!.issuedAt + sorted[epoch]!.horizon : Infinity
+  return { pub, from, until }
+}
+/** authorship survives rotation: signer must equal the epoch key and the
+ *  write time must fall inside that key's signing window */
+export function verifyAuthorship (signerPub: string, epoch: number, writtenAt: number, genesisPub: string, certs: RotationCert[]): { ok: boolean, reason?: string } {
+  const k = epochKey(genesisPub, certs, epoch)
+  if (!k) return { ok: false, reason: 'rotation chain invalid or epoch out of range' }
+  if (k.pub !== signerPub) return { ok: false, reason: `signer is not the epoch-${epoch} key` }
+  if (writtenAt < k.from || writtenAt >= k.until) return { ok: false, reason: `written at ${writtenAt} outside epoch-${epoch} window` }
+  return { ok: true }
+}
 export * from "./smt.js"
 export * from "./custody.js"
 export * from "./disclosure.js"

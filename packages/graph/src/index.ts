@@ -7,6 +7,7 @@
 export * from './policy.js'
 export * from './instance.js'
 export * from './anchor.js'
+export * from './ontology.js'
 import { dsha256, utf8 } from '@mamem/core'
 import { Datalog, type Fact, type Literal, type Rule } from '@mamem/datalog'
 

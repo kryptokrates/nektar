@@ -5,11 +5,13 @@
 import { PrivateKey } from '@bsv/sdk'
 import {
   utf8, fromHex, toHex, sha256, eq, hash160,
-  computeLeaf, merkleRoot, merkleProof, identityHash,
+  computeLeaf, merkleRoot, merkleProof, identityHash, diff, apply, encodeDelta, decodeDelta,
   type Fragment, type Bytes, type Provenance
 } from '@mamem/core'
 import { BatchLog, MemoryShardStore, verifyProvenance, signCheckpoint, PromiseMonitor, type ShardStore, type LogRecord, type Checkpoint } from '@mamem/log'
 import { Metrics } from './metrics.js'
+
+const DELTA_PREFIX = 'delta:'
 
 /** write refused at ingest (COM-003) */
 export class IngestError extends Error {}
@@ -294,7 +296,39 @@ export class MamemMemory {
    * remember: encrypt (if agentSeed configured) → append (dedup) → promise.
    * If the batch threshold is reached, closes the batch and anchors it.
    */
-  async remember (shard: string, d: string, prov?: Partial<Provenance> & { sourcePub?: string }, level = 0): Promise<RememberResult> {
+  /** §8: store a revision as Δ against `baseSeq` (base must be readable as plaintext) */
+  async revise (shard: string, baseSeq: number, newText: string, prov?: Partial<Provenance> & { sourcePub?: string, epoch?: number }, level = 0): Promise<RememberResult> {
+    const base = await this.materialize(shard, baseSeq, { requireProof: false })
+    return await this.remember(shard, `${DELTA_PREFIX}${baseSeq}:${encodeDelta(diff(base, newText))}`, prov, level)
+  }
+  /** §8: rebuild version `seq` by applying Δs along its chain; with
+   *  requireProof every link (base and each Δ record) must verify first */
+  async materialize (shard: string, seq: number, opts: { requireProof?: boolean } = {}): Promise<string> {
+    const recs = await this.store.all(shard)
+    const text = async (s: number): Promise<string> => {
+      const r = recs.find(x => x.seq === s)
+      if (!r) throw new Error(`materialize: no record ${shard}/${s}`)
+      if (opts.requireProof !== false) {
+        const pr = await this.prove(shard, s)
+        if (!pr.result.ok) throw new Error(`materialize: ${shard}/${s} not provable (${(pr.result as { reason?: string }).reason})`)
+      }
+      if (r.fragment.E && r.fragment.E.length) throw new Error('materialize: encrypted record — read through recall')
+      const d = Buffer.from(r.fragment.d).toString('utf8')
+      if (!d.startsWith(DELTA_PREFIX)) return d
+      const m = /^delta:(\d+):([\s\S]*)$/.exec(d)!
+      if (Number(m[1]) >= s) throw new Error('materialize: delta must reference an earlier record')
+      return apply(await text(Number(m[1])), decodeDelta(m[2]!))
+    }
+    return await text(seq)
+  }
+  /** §19: was record seq written by the key of its recorded epoch, inside that key's window? */
+  async authorship (shard: string, seq: number, genesisPub: string, certs: import('@mamem/identity').RotationCert[]) {
+    const r = (await this.store.all(shard)).find(x => x.seq === seq)
+    if (!r?.authorPub || r.authorEpoch === undefined) return { ok: false, reason: 'record carries no verified author epoch' }
+    return idbind.verifyAuthorship(r.authorPub, r.authorEpoch, r.fragment.p.time, genesisPub, certs)
+  }
+
+  async remember (shard: string, d: string, prov?: Partial<Provenance> & { sourcePub?: string, epoch?: number }, level = 0): Promise<RememberResult> {
     const p: Provenance = {
       source: prov?.source ?? 'agent',
       time: prov?.time ?? Math.floor(Date.now() / 1000),
@@ -331,6 +365,7 @@ export class MamemMemory {
     const { rec, promise, duplicate } = await this.log.remember(shard, fragment)
     if (!duplicate) this.promises.push({ shard, seq: rec.seq, issuedAt: Date.now() })
     rec.level = level // persist the write level for the Cedar/ZK read gate
+    if (prov?.sourcePub !== undefined) { rec.authorPub = prov.sourcePub; rec.authorEpoch = prov.epoch ?? 0 }
     const out: RememberResult = {
       shard, seq: rec.seq, leaf: toHex(rec.leaf), hdp: toHex(rec.hdp), duplicate,
       promise: { seq: rec.seq, leaf: promise.leaf, signature: promise.signature }

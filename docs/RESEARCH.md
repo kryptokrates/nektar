@@ -9,16 +9,17 @@ What mamem took from each source, and how: **reused** (code or vectors), **adopt
 | §4 | Merkle Automaton (Q, Σ, δ, q0, F, O) | **implemented**. Light mode: anchored transition leaves. Full mode: the Rúnar `MamemAutomaton` enforces δ by a depth-4 Merkle path and q∈F by a second path. | `packages/automaton`, `contracts/src/MamemAutomaton.runar.ts` |
 | §5 | K_i = (d, p, H(d‖p), E(d)); VerifyFragment | **implemented**: leaf → R_n → anchor tx → BUMP → headers | `core`, `verify` |
 | §6–7 | ECDH + HKDF per-fragment keys, level lattice | **implemented**: BRC-42-style derivation, AES-256-GCM, disjoint level keyspaces | `crypto` |
-| §8 | Append-only log, refinement not overwrite | **implemented** | `log`, `graph` |
+| §8 | Append-only log, refinement not overwrite; Δ-encoded knowledge transitions (Apply/Diff invertible); lineage proofs | **implemented**. Revisions are stored as Δ; `materialize` rebuilds any version from proven links. | `log`, `graph`, `core/delta`, `MamemMemory.revise/materialize` |
+| §9 | Memory as law: DL-Lite/OWL2 axioms anchored; jurisdiction-named regulatory graphs; precedent as entailment | **implemented** as axioms compiled to Datalog; entailment only from anchored axioms; `Jurisdictions.permissible`, `validByPrecedent`. There is no full OWL2 reasoner, only the DL-Lite core (class/subclass/property) plus rules. | `graph/ontology` |
 | §11 | Append-only reasoning graph (AORG) | **implemented**: acyclic, justified, consistent, traceable, anchored, bi-temporal refinement | `graph` |
-| §12 | Consensus time | **implemented** as *existence-by* the block time (never "created at") | `reasoning.timeBounds` |
+| §12 | Consensus time; temporal operators □_t, ◇_(t1,t2), φ →_Δt ψ; causal closure | **implemented**: existence-by block time, temporal operators, SLA/deadline obligations, causal closure. Multi-chain clock aggregation is not built (single BSV chain). | `reasoning.timeBounds`, `reasoning/temporal` |
 | §13 | ZK membership, chained roots | **implemented**: Poseidon companion tree + Groth16, verified off-chain against the SPV-verified anchor | `zk` |
 | §14 | Policy DAG (stratified Datalog) | **implemented**: L_pol, semi-naive evaluation with canonical provenance, layers/overrides, conflict localisation, Merkle-proven derivations | `datalog`, `graph/policy` |
 | §15 | Failure modes: contradiction, revision | **implemented**: refinement + correction loop | `graph`, `reasoning.onRevision` |
 | §16 | Audit/liability bundle | **implemented**, verified offline with headers and the verifier's own policy | `reasoning.verifyAuditBundle` |
 | §17 | Instancing and delegation | **implemented** | `graph/instance` |
 | §18 | Formal verification | **implemented**: TLA+ model of AORG invariants, TLC-checked, with a mutant that is caught. Cedar level isolation proved with SymCC. | `docs/formal`, `tools/cedar-symcc` |
-| §19 | Identity, rotation, revocation | **implemented**: rotation certs, SMT revocation (cross-checked against the Rust crate), custody | `identity` |
+| §19 | Identity, rotation, revocation; fragments bound to their signing epoch | **implemented**: rotation certs, SMT revocation (cross-checked against the Rust crate), custody; epoch-bound authorship (`verifyAuthorship`, `MamemMemory.authorship`) | `identity` |
 | App. E | Access-policy-driven keys | **implemented**: Cedar ∧ DAG ∧ ZK clearance gate before decryption | `mcp/memory.recall` |
 | — | ZK derivation attestation (POL-011) | **deferred**: needs a Datalog-in-circuit design | — |
 

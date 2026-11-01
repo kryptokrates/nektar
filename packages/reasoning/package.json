@@ -18,7 +18,9 @@
     "@mamem/graph": "workspace:*"
   },
   "devDependencies": {
-    "@mamem/mcp": "workspace:*"
+    "@mamem/mcp": "workspace:*",
+    "@mamem/log": "workspace:*",
+    "@mamem/identity": "workspace:*"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"

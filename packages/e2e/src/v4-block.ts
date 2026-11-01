@@ -10,7 +10,9 @@ import { utf8 } from '@mamem/core'
 import type { Broadcaster, ChainTracker, Funder } from '@mamem/chain'
 import { MamemMemory, FileSecurityStore, createHttpApi } from '@mamem/mcp'
 import { signProvenance, verifyCheckpoint } from '@mamem/log'
-import { signBinding, answerChallenge, issueClearance, proveAccess } from '@mamem/identity'
+import { signBinding, answerChallenge, issueClearance, proveAccess, makeRotationCert } from '@mamem/identity'
+import { axiomHash, ontologyEntails, type Axiom } from '@mamem/graph'
+import { timeBounds, eventually, causalClosure } from '@mamem/reasoning'
 
 export interface V4Env {
   chain: Broadcaster & ChainTracker
@@ -72,5 +74,25 @@ export async function runV4Block ({ chain, funder, fundKey, settle, mineMore, ch
     check(proof.result.ok && verifyCheckpoint(served.checkpoint!, served.logPublicKey) && /mamem_anchors_total 1/.test(metrics) && /mamem_promise_violations 0/.test(metrics),
       L('HTTP API serves a verifying proof, a verifying checkpoint and live metrics'))
   } finally { srv.close() }
-  return { v4anchor: mem.tailLink('v4')!.txid }
+  // GOAL-v5 paper gaps on real anchors: §8 Δ revisions, §19 epoch authorship,
+  // §12 temporal checks on consensus time, §9 anchored ontology entailment
+  const m5 = new MamemMemory(chain, funder, fundKey, { batchPolicy: { maxLeaves: 4 } })
+  await m5.remember('law', 'Manual rev1: torque 45Nm')
+  await m5.revise('law', 0, 'Manual rev2: torque 55Nm')
+  const ax: Axiom[] = [{ kind: 'SubClassOf', sub: 'Cryptographer', sup: 'Scientist' }, { kind: 'ClassAssertion', cls: 'Cryptographer', ind: 'alice' }]
+  for (const a of ax) await m5.remember('law', `axiom:${axiomHash(a)}`)
+  await settle(m5, ['law'])
+  check(await m5.materialize('law', 1) === 'Manual rev2: torque 55Nm' && Buffer.from((await m5.records('law'))[1]!.fragment.d).toString().startsWith('delta:0:'), L('§8 revision stored as Δ and materialised from proven links'))
+  const anchoredAxioms = new Set<string>()
+  for (const r of await m5.records('law')) {
+    const d = Buffer.from(r.fragment.d).toString()
+    if (d.startsWith('axiom:') && (await m5.prove('law', r.seq)).result.ok) anchoredAxioms.add(d.slice(6))
+  }
+  check(ontologyEntails(ax, { pred: 'instance', args: ['alice', 'scientist'] }, h => anchoredAxioms.has(h)).entailed, L('§9 entailment only from anchored axioms'))
+  const tb = await timeBounds(m5.anchorTx(m5.tailLink('law')!.txid)!, chain)
+  const facts = [{ phi: 'revised(manual)', t: tb.notAfter }]
+  check(eventually(facts, 'revised(manual)', tb.notAfter - 1, tb.notAfter) && !causalClosure([{ conclusion: 'pre-dated', t: tb.notAfter - 1, cites: facts }]).ok, L('§12 temporal check + causal closure on consensus time'))
+  const k1 = PrivateKey.fromRandom(); const cert = { ...makeRotationCert(src, k1.toPublicKey().toString(), P.time - 10, 3600), index: 1 }
+  check((await mem.authorship('v4', 0, srcPub, [cert])).ok, L('§19 authorship of an epoch-0 write survives a later rotation'))
+  return { v4anchor: mem.tailLink('v4')!.txid, v5anchor: m5.tailLink('law')!.txid }
 }

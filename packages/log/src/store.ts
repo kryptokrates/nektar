@@ -15,6 +15,8 @@ export interface LogRecord {
   batchIndex?: number // n of the batch it was committed into
   leafIndex?: number // position within the batch
   anchorTxid?: string
+  authorPub?: string // §19: verified originator key …
+  authorEpoch?: number // … and its rotation epoch at write time
 }
 
 export interface ShardStore {

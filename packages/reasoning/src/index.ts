@@ -16,6 +16,8 @@ import { verifyFragment, type ProofBundle } from '@mamem/verify'
 import { verifyDerivation, type PolicyDAG } from '@mamem/graph'
 import type { ChainTracker } from '@mamem/chain'
 
+export * from './temporal.js'
+
 export const TRUTH_NOTE = 'Proofs show a cited record was committed, is unaltered and existed by its block time; they do not show the record is true.'
 
 /** canonical JSON: sorted keys, no whitespace — the only form that is hashed */

@@ -47,7 +47,7 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
     ['queryId never issued', v(proofBytes(), good, issued()), /queryId/],
     ['tampered receipt', (() => { const b = proofBytes(); b[b.length - 5000] ^= 1; return v(b) })(), /stark/],
     ['truncated bytes', v(proofBytes().slice(0, 500)), /codec/],
-    ['foreign program id', (() => { const b = proofBytes(); b[5] ^= 1; return v(b) })(), /pinned/]
+    ['foreign program id', (() => { const b = proofBytes(); b[6] ^= 1; return v(b) })(), /pinned/]
   ]
   for (const [name, p, re] of cases) {
     const r = await p

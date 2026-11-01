@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { RunarContract, MockProvider, LocalSigner } from 'runar-sdk'
-import { contractRp, TAG_RPRIME } from '../src/index.js'
+import { contractRp, TAG_RPRIME, META_FLAG_HEX } from '../src/index.js'
 import { hash160 } from '@mamem/core'
 import { Buffer } from 'node:buffer'
 
@@ -20,7 +20,7 @@ function setup (n = 0n, size = 10n) {
   const prov = new MockProvider('testnet')
   return signer.getPublicKey().then(pk => {
     prov.addUtxo('1Q1pE5vPGEEMqRcVRMbtBK842Y6Pzo6nK9', { txid: 'ab'.repeat(32), outputIndex: 0, satoshis: 1e6, script: '' })
-    const c = new RunarContract(artifact, [pk, pkh(pk), n, size, '11'.repeat(32), '22'.repeat(32), Buffer.from(TAG_RPRIME).toString('hex')])
+    const c = new RunarContract(artifact, [pk, pkh(pk), META_FLAG_HEX, n, size, '11'.repeat(32), '22'.repeat(32), Buffer.from(TAG_RPRIME).toString('hex')])
     c.connect(prov, signer)
     return c
   })

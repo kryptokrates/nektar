@@ -207,7 +207,7 @@ test('every AnchorChain tx produces a BEEF with all inputs resolved', async () =
   }
 })
 
-test('MamemAnchor v3: state is exactly (owner, n, size, R, R\', tag, ownerPkh) — no ZK companion field', async () => {
+test('MamemAnchor v3 + ANC-006: META flag leads the data payload; flag-absent stays decodable', async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const f = new MockFunder(); f.topup(6); for (const u of (f as any).utxos) chain.registerParent(u.tx)
   const ac = new AnchorChain('v3', f.keyPair, f, f.keyPair, chain)
@@ -215,11 +215,29 @@ test('MamemAnchor v3: state is exactly (owner, n, size, R, R\', tag, ownerPkh) �
   await ac.anchor(2, dsha256(utf8('batch2'))) // append passes script verification
   const d = decodeMamemAnchor(ac.getHead()!.tx.outputs[0]!.lockingScript.toHex())!
   assert.ok(d, 'v3 anchor decodes')
-  assert.deepEqual(Object.keys(d).sort(), ['R', 'Rp', 'n', 'ownerPkh', 'ownerPub', 'shard', 'size', 'tag'])
+  assert.deepEqual(Object.keys(d).sort(), ['R', 'Rp', 'metanet', 'n', 'ownerPkh', 'ownerPub', 'shard', 'size', 'tag'])
+  assert.equal(d.metanet, true, 'new anchors carry the META flag push')
   assert.equal(d.n, 1); assert.equal(d.size, 2)
   assert.equal(Buffer.from(d.R).toString('hex'), Buffer.from(dsha256(utf8('batch2'))).toString('hex'))
-  // a v2-shaped state (extra length-prefixed 32-byte field after R') is not a v3 anchor
   const hex = ac.getHead()!.tx.outputs[0]!.lockingScript.toHex()
-  const at = hex.lastIndexOf('6a') + 2 + 226 // after owner|n|size|R|Rp
+  // the flag is a real push — <0x04> 'META' — directly after OP_RETURN
+  assert.equal(hex.slice(hex.lastIndexOf('6a'), hex.lastIndexOf('6a') + 12), '6a044d455441')
+  // a pre-flag (v3, flag-absent) anchor built by the legacy artifact still
+  // decodes byte-for-byte (metanet=false)
+  const { RunarContract } = await import('runar-sdk')
+  const { MAMEM_ANCHOR_V3_ARTIFACT, META_FLAG_HEX } = await import('@mamem/contracts')
+  const { PrivateKey } = await import('@bsv/sdk')
+  const { hash160, toHex } = await import('@mamem/core')
+  const pk = PrivateKey.fromRandom().toPublicKey().toString()
+  const legacy = new RunarContract(MAMEM_ANCHOR_V3_ARTIFACT, [pk, toHex(hash160(Uint8Array.from(Buffer.from(pk, 'hex')))), 0n, 3n, '11'.repeat(32), '22'.repeat(32), toHex((await import('@mamem/core')).TAG_RPRIME)]).getLockingScript()
+  const ld = decodeMamemAnchor(legacy)!
+  assert.ok(ld, 'flag-absent v3 anchor decodes')
+  assert.equal(ld.metanet, false)
+  assert.equal(ld.n, 0); assert.equal(ld.size, 3)
+  // and a WRONG flag byte is refused (byte-auth: rebuild ≠ script)
+  const wrong = legacy.slice(0, legacy.lastIndexOf('6a')) + '6a' + '0444454144' + legacy.slice(legacy.lastIndexOf('6a') + 2)
+  assert.equal(decodeMamemAnchor(wrong), null, 'a non-META leading push is not a valid flag')
+  // a v2-shaped state (extra length-prefixed 32-byte field after R') is not a v3 anchor
+  const at = hex.lastIndexOf('6a') + 2 + 10 + 226 // after flag|owner|n|size|R|Rp
   assert.equal(decodeMamemAnchor(hex.slice(0, at) + '20' + '42'.repeat(32) + hex.slice(at)), null, 'v2 layout refused')
 })

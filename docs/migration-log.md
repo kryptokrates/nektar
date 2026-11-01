@@ -519,3 +519,13 @@
 - Tests: `graph/test/owlrl.test.ts` — 5 tests (profile primitives over a mini
   vocabulary; contradiction → conflict; anchored-only entailment with foreign
   rejection; deterministic committed root; §14-ready path). graph 14/14 green.
+
+## GOAL-v6 batch: S3 temporal aggregation, S1a on-chain commitment, S6.1–S6.4
+
+- **S3 (§12 multi-chain consensus time).** `chain/temporal.ts`: `TemporalSource[]` + `TemporalSources` (a ChainTracker whose header TIMES are the weighted median across sources — lower weighted median, so a skewed-high source can never push time up; roots/heights stay strictly on the primary BSV tracker). `MAMEM_TEMPORAL_SOURCES=bsv[,btc]` (default `bsv`) wired in runtime `chain.headerAtHeight`; BTC = a second `WocTracker` on `/v1/btc/main` (`MAMEM_BTC_WOC_URL` override). Single source = bit-identical.
+- **S1a (§13 cheap on-chain commitment).** `mcp/onchain.ts`: `OP_FALSE OP_RETURN <'mamem:attest:v1'> <sha256(proof)>` data output in a fee-key-funded P2PKH tx (0-sat output + change; NOT a shard anchor). `attestMembership(shard,seq,queryId)` proves + anchors; `verifyAttestation(txid,bytes)` matches the commitment (local txs only — chain fetch by txid remains an ops gap). Mock chain supports the data tx (only inputs are script-evaluated).
+- **S6.1 (recall verify bug).** Plaintext items now run `prove`→`verifyFragment` before being served (parity with encrypted items; no decrypt step). Any SPV failure → per-item `unverifiable`+reason AND receipt `checkResult: 'unverifiable'` — anchor presence alone no longer earns `verified`. Behaviour change: unanchored/unmined plaintext is now withheld (previously served).
+- **S6.2 (ANC-006 Metanet flag).** `MamemAnchor` gains a `metaFlag` state field serialised FIRST — the data payload begins `04 4d455441`. `decodeMamemAnchor` accepts flag-present (new artifact) and flag-absent (`MamemAnchorV3.json`, the pre-flag artifact kept for decode + `freshContract` rehydration). `DecodedAnchor.metanet` reports the layout. `anchorFields` schema + vectors/core.json regenerated.
+- **S6.3 (GEN-007 algorithm id).** L_ZKMem v2 / L_ZKDer v3 / L_ZKDis v2: version byte 1→2 inserts `algorithm` at index 5 (`ALG_SHA256D=0x01`). Decode accepts rev 1 (implied sha256d) and rev 2 (enforced); encode emits rev 2 and refuses foreign ids.
+- **S6.4 (KEY-010).** No change — binding-equivalence to H(s‖p‖o‖l) documented in `crypto/keys.ts` (seed=key path, path=ψ‖ρ‖π in keyID, owner='self' counterparty, level=level key + ctx.l). Altering the tuple would orphan every existing ciphertext.
+- Tests: chain temporal.test (6), mcp attestation.test (3) + S6.1 regression, anchor flag test, zk codec rev-2 + rev-1 tests; e2e mock PASS; reproduce gate green (vectors regenerated).

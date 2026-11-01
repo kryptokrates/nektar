@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { RunarContract, MockProvider, LocalSigner } from 'runar-sdk'
-import { decodeMamemAnchor, isValidAnchor, contractRp, TAG_RPRIME } from '../src/index.js'
+import { decodeMamemAnchor, isValidAnchor, contractRp, TAG_RPRIME, META_FLAG_HEX } from '../src/index.js'
 import { chainRp, hash160 } from '@mamem/core'
 
 const art = JSON.parse(readFileSync(path.join(fileURLToPath(import.meta.url), '..', '..', '..', 'MamemAnchor.json'), 'utf8'))
@@ -16,7 +16,7 @@ test('isValidAnchor: deployed anchor decodes with TAG_RPRIME', async () => {
   prov.addUtxo(await signer.getAddress(), { txid: 'ab'.repeat(32), outputIndex: 0, satoshis: 1e6, script: '' })
   const tag = Buffer.from(TAG_RPRIME).toString('hex')
   const Rp0 = contractRp(new Uint8Array(32), Uint8Array.from({ length: 32 }, () => 0x11), 10)
-  const c = new RunarContract(art, [pk, Buffer.from(hash160(Uint8Array.from(Buffer.from(pk, 'hex')))).toString('hex'), 0n, 10n, '11'.repeat(32), Buffer.from(Rp0).toString('hex'), tag])
+  const c = new RunarContract(art, [pk, Buffer.from(hash160(Uint8Array.from(Buffer.from(pk, 'hex')))).toString('hex'), META_FLAG_HEX, 0n, 10n, '11'.repeat(32), Buffer.from(Rp0).toString('hex'), tag])
   c.connect(prov, signer)
   await c.deploy({ satoshis: 1 })
   const d = decodeMamemAnchor(c.getLockingScript())

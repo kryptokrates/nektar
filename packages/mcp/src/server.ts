@@ -113,6 +113,24 @@ export const TOOLS = [
     }
   },
   {
+    name: 'attestMembership',
+    description: '§13 cheap on-chain commitment: produce the L_ZKMem v2 STARK membership proof AND anchor sha256(proof) in an OP_FALSE OP_RETURN data tx funded by the fee key (a timestamped commitment, not a shard anchor; off-chain verification stays authoritative).',
+    inputSchema: {
+      type: 'object',
+      properties: { shard: { type: 'string' }, seq: { type: 'number' }, queryId: { type: 'string', description: '32-byte hex from the verifier\'s zkQuery' } },
+      required: ['shard', 'seq', 'queryId']
+    }
+  },
+  {
+    name: 'verifyAttestation',
+    description: 'Verifier side: fetch the attestation tx, extract the OP_RETURN commitment and check it equals sha256(supplied proof bytes). Only attestations broadcast by this instance are resolvable.',
+    inputSchema: {
+      type: 'object',
+      properties: { txid: { type: 'string' }, bytes: { type: 'string', description: 'L_ZKMem v2 hex — the proof whose sha256 should be committed on-chain' } },
+      required: ['txid', 'bytes']
+    }
+  },
+  {
     name: 'rotate',
     description: 'Rotate a shard\'s owner key on-chain; emits a matching rotation cert leaf.',
     inputSchema: {
@@ -207,6 +225,15 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     case 'verifyMembership': {
       const { Buffer } = await import('node:buffer')
       return mem.verifyMembership(args.shard, args.seq, new Uint8Array(Buffer.from(args.bytes, 'hex')))
+    }
+    case 'attestMembership': {
+      const { Buffer } = await import('node:buffer')
+      const { bytes, ms, txid, commitment } = await mem.attestMembership(args.shard, args.seq, args.queryId)
+      return { lzkmem: Buffer.from(bytes).toString('hex'), bytes: bytes.length, proveMs: ms, txid, commitment, statement: 'OP_FALSE OP_RETURN sha256(proof) anchored on-chain: a timestamped commitment to the STARK\'s existence; the WASM verifier stays authoritative — this is not an anchor and proves nothing about truth' }
+    }
+    case 'verifyAttestation': {
+      const { Buffer } = await import('node:buffer')
+      return mem.verifyAttestation(args.txid, new Uint8Array(Buffer.from(args.bytes, 'hex')))
     }
     case 'proveSubset': {
       const { Buffer } = await import('node:buffer')

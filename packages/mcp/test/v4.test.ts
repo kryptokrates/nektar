@@ -75,6 +75,7 @@ test('persistence: challenges, used ZK transcripts and revocations survive a res
   const cred = issueClearance(authority, 2n, pub)
   const transcript = { queryId: 'q', fragmentId: 's/0', nonce: new Uint8Array(32).fill(5) }
   const zk = { commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, transcript)!, transcript, requiredLevel: 1n }
+  a.chain.mine(1); a.mem.confirmAnchor('s', a.mem.tailLink('s')!.txid) // S6.1: plaintext is served only after SPV verify
   assert.equal((await a.mem.recall('s', { seq: 0, identity, zk })).items[0]!.text, 'secret')
   const revoked = PrivateKey.fromRandom().toPublicKey().toString()
   a.mem.revoke(revoked)

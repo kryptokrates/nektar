@@ -17,7 +17,7 @@ test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resourc
     assert.equal(client.getServerVersion()?.name, 'mamem')
     assert.match(client.getInstructions() ?? '', /recall/)
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 17)
+    assert.equal(tools.length, 19)
     const by = new Map(tools.map(t => [t.name, t]))
     assert.equal(by.get('recall')!.annotations?.readOnlyHint, true)
     assert.equal(by.get('revoke')!.annotations?.destructiveHint, true)

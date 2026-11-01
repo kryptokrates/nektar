@@ -29,10 +29,10 @@ item. Approved plan; every phase lands with tests + regtest e2e + docs + commit.
   full SP1-wrap pipeline needs runar-go + the SP1 toolchain — schedule as its own
   phase; ship the cheap §13 path first (below).
 - Deliverables (two stages):
-  - **S1a (cheap, now):** OP_FALSE RETURN output carrying `sha256(receipt)` in the
-    same tx as an attestation spend — the STARK's existence + binding is anchored
-    on-chain; off-chain WASM verify stays authoritative. `attestMembership`
-    MCP tool + `onchain.ts`.
+  - **S1a (cheap, shipped):** OP_FALSE RETURN output carrying `sha256(proof)`
+    in a fee-key-funded data-output tx — the STARK's existence + binding is
+    anchored on-chain; off-chain WASM verify stays authoritative.
+    `attestMembership` / `verifyAttestation` MCP tools + `mcp/onchain.ts`.
   - **S1b (full, deferred phase):** `tools/sp1-verify-guest/` (risc0 receipt
     verify inside SP1), runar-go FRI verifier contract, `verifyMembershipOnChain`
     on an SP1 STARK — the real on-chain path, once the Go tier is integrated.
@@ -58,11 +58,16 @@ policy DAG root — "zero-knowledge derivation attestations where required".
 T_C*(i) = f(T_C1(i₁),…,T_Cm(iₘ)) — "in cases where multiple blockchains are consulted":
 weighted median or quorum over external chains to resolve disputed clocks.
 
-- `TemporalSource[]`: BSV (WoC) + optional BTC via the same WoC API shape
-  (`/v1/btc/main`) — no new deps. `consensusTime` = weighted median; single source =
-  today's behaviour, bit-identical.
-- Config `MAMEM_TEMPORAL_SOURCES=bsv[,btc]`; regtest uses mock sources.
-- Tests: skewed source → median wins; single-source parity; read-only BTC smoke.
+- **Shipped.** `TemporalSource[]` in `chain/temporal.ts`: BSV (WoC/RPC/mock)
+  + optional BTC via the same WoC API shape (`/v1/btc/main`) — no new deps.
+  `consensusTime` = weighted median (`medianTime`/`weightedMedianTime`, lower
+  weighted median — a skewed-high source can never push time up); single
+  source = today's behaviour, bit-identical.
+- Config `MAMEM_TEMPORAL_SOURCES=bsv[,btc]` (default `bsv`) wired in the
+  runtime `chain` facade — `headerAtHeight` returns the primary header with
+  the median time; merkle roots/heights stay strictly on BSV.
+- Tests (`chain/test/temporal.test.ts`): skewed source → median wins;
+  single-source parity; read-only BTC smoke via stub fetch.
 
 ## 4. OWL 2 coverage (§9 — "DL-Lite and OWL 2, which support tractable reasoning")
 
@@ -110,10 +115,10 @@ Paper coverage that the traceability matrix shows as ◐/⏸, ordered cheap→ha
 
 | # | Item (spec id) | Paper § | Work |
 |---|---|---|---|
-| S6.1 | `recall` verifies only encrypted records (self-found bug) | VER | Full SPV verify for plaintext items too, or mark receipt `checkResult` honestly. **Fix immediately.** |
-| S6.2 | ANC-006 Metanet flag | App. D | Add the `0x4D455441` ("META") flag byte to the anchor schema (versioned, v3 decodes both). |
-| S6.3 | GEN-007 per-structure algorithm ID | §6 | Add a `algorithm` byte to L_* codec headers (v3 codecs), defaulting to current hashes/suites. |
-| S6.4 | KEY-010 privilege-scoped triple hash H(s‖p‖o‖l) | §7/App. A | Encode level+owner+shard in the KDF context explicitly (one tagged hash) — evaluate vs current derivation; implement if compatible. |
+| S6.1 | `recall` verifies only encrypted records (self-found bug) | VER | **Done.** Plaintext items now run the same `prove`→`verifyFragment` path as encrypted ones (verify only, no decrypt); failures are withheld with per-item `unverifiable`+reason and flip `checkResult` to `unverifiable`. Regression test: anchored plaintext → verified; removed BUMP → unverifiable (`mcp/test/memory.test.ts`). |
+| S6.2 | ANC-006 Metanet flag | App. D | **Done.** `0x4D455441` ("META") is the first push of the anchor output's OP_RETURN data payload (`metaFlag` state field, serialised first). `decodeMamemAnchor` accepts flag-present (current artifact) AND flag-absent (`MamemAnchorV3.json`, kept) — existing anchors stay decodable; `freshContract` rehydrates the artifact matching the head's layout. |
+| S6.3 | GEN-007 per-structure algorithm ID | §6 | **Done.** L_ZKMem v2 / L_ZKDer v3 / L_ZKDis v2 carry an `algorithm` byte (rev byte 1→2): `0x01` = sha256d suite. Decoders accept rev 1 (suite implied) and rev 2 (id enforced); emitters produce rev 2 only. |
+| S6.4 | KEY-010 privilege-scoped triple hash H(s‖p‖o‖l) | §7/App. A | **Done — binding equivalent, no format change.** Evaluated: seed = agentSeed/level key (private input), path = ψ‖ρ‖π in the canonical keyID, owner = BRC-42 'self' counterparty (holder's own level key), level = level key + ctx.l (bound twice). Changing the tuple would orphan every ciphertext; equivalence documented in `crypto/keys.ts`. |
 | S6.5 | DIS-005 / COM-008 chunked files | App. A/C | Optional: record-type `chunked` — split payloads >64 KB into content-addressed fragments, each a leaf; manifest record references the chunk leaves. Only if needed. |
 | S6.6 | ANC-009/010 witness redundancy | App. D | Optional: mirror anchor roots into a second output (OP_RETURN sidecar) so one anchor chain isn't a single point of loss. Rekor-style witness stays deferred. |
 | S6.7 | LOG-010..013 | App. D | Deferred: pre-ordered mode, quota protocol, Trillian adapter — schema variants, not core. |
@@ -122,7 +127,7 @@ Paper coverage that the traceability matrix shows as ◐/⏸, ordered cheap→ha
 | S6.10 | AUT-010 fuzzy automaton | §15 extension | Defer — extension, not core. |
 | S6.11 | KEY-016/017 TEE/HSM + PQ keys | hardening | Defer — post-MVP hardening options. |
 
-S6.1–S6.4 implement now; S6.5–S6.11 stay documented as deliberate deferrals with reasons.
+S6.1–S6.4 implemented (see table); S6.5–S6.11 stay documented as deliberate deferrals with reasons.
 
 ## 7. Ops/engineering gaps (not paper items — tracked, not in GOAL-v6 scope)
 

@@ -8,7 +8,7 @@ import { RunarContract, LocalSigner } from 'runar-sdk'
 import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 // default burstLimit=100: measured 100 unconfirmed contract anchors on
 // regtest with no limit (see spikes/depth-contract.mjs); conservative default.
-import { MAMEM_ANCHOR_ARTIFACT, contractRp, decodeMamemAnchor, TAG_RPRIME } from '@mamem/contracts'
+import { MAMEM_ANCHOR_ARTIFACT, MAMEM_ANCHOR_V3_ARTIFACT, META_FLAG_HEX, contractRp, decodeMamemAnchor, TAG_RPRIME } from '@mamem/contracts'
 const TAG_HEX = toHex(TAG_RPRIME)
 import { PROTOCOL_ID, dsha256, utf8, toHex, fromHex, expectedRp, type AnchorData, type Bytes } from '@mamem/core'
 import type { Broadcaster, BroadcastResult, Funder } from '@mamem/chain'
@@ -291,7 +291,8 @@ export class AnchorChain {
     if (!cur) {
       // genesis: deploy with n=0, Rp = contractRp(0, R, size)
       const Rp = contractRp(new Uint8Array(32), R, size)
-      this.contract = new RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkhOf(pub), 0n, BigInt(size), toHex(R), toHex(Rp), TAG_HEX])
+      // ANC-006: new anchors carry the META flag as the state payload's first push
+      this.contract = new RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkhOf(pub), META_FLAG_HEX, 0n, BigInt(size), toHex(R), toHex(Rp), TAG_HEX])
       this.contract.connect(this.provider, this.signer)
       const d = await this.contract.deploy({ satoshis: 1 })
       const tx = this.provider.lastTx!
@@ -365,7 +366,13 @@ export class AnchorChain {
     const script = cur.tx.outputs[cur.vout]!.lockingScript.toHex()
     const dec = decodeMamemAnchor(script)
     if (!dec) throw new Error('freshContract: head output is not an authentic anchor')
-    const c = new RunarContract(MAMEM_ANCHOR_ARTIFACT, [dec.ownerPub, toHex(dec.ownerPkh), BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), TAG_HEX])
+    // ANC-006: flagged heads rehydrate the flagged artifact; pre-flag (v3)
+    // heads keep their flag-absent layout — a fork of formats is impossible
+    // because the contract itself serializes its continuation
+    const c = new RunarContract(dec.metanet ? MAMEM_ANCHOR_ARTIFACT : MAMEM_ANCHOR_V3_ARTIFACT,
+      dec.metanet
+        ? [dec.ownerPub, toHex(dec.ownerPkh), META_FLAG_HEX, BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), TAG_HEX]
+        : [dec.ownerPub, toHex(dec.ownerPkh), BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), TAG_HEX])
     c.connect(this.provider, this.signer)
     c['currentUtxo'] = { txid: cur.tx.id('hex'), outputIndex: cur.vout, satoshis: cur.tx.outputs[cur.vout]!.satoshis!, script }
     return c

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, MerklePath, LockingScript, UnlockingScript, ScriptEvaluationError } from '@bsv/sdk'
-import { MAMEM_ANCHOR_ARTIFACT, TAG_RPRIME, decodeMamemAnchor } from '@mamem/contracts'
+import { MAMEM_ANCHOR_ARTIFACT, TAG_RPRIME, META_FLAG_HEX, decodeMamemAnchor } from '@mamem/contracts'
 import { RunarContract } from 'runar-sdk'
 import { chainRp, GENESIS_PREV_RP, dsha256, utf8, shardIdFromPubkey, hash160, toHex, type Bytes, type AnchorData } from '@mamem/core'
 import knexPkg from 'knex'
@@ -21,7 +21,7 @@ const sidOf = (k: PrivateKey) => toHex(hash160(Uint8Array.from(Buffer.from(pubOf
 interface BuiltTx { tx: Transaction, data: AnchorData }
 
 const contractScript = (pub: string, n: number, size: number, R: Bytes, Rp: Bytes, tag = TAG_HEX, pkh?: string) =>
-  new RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkh ?? toHex(hash160(Uint8Array.from(Buffer.from(pub, 'hex')))), BigInt(n), BigInt(size), toHex(R), toHex(Rp), tag]).getLockingScript()
+  new RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkh ?? toHex(hash160(Uint8Array.from(Buffer.from(pub, 'hex')))), META_FLAG_HEX, BigInt(n), BigInt(size), toHex(R), toHex(Rp), tag]).getLockingScript()
 
 // dummy unlock for hand-built spends: addInput ignores a plain
 // unlockingScript, so use a template returning an OP_1 script

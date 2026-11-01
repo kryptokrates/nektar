@@ -8,7 +8,10 @@ import { TAG_RPRIME } from './domain.js'
 export const PROTO = 'mamem'
 export const VERSION = 1
 export const PROTOCOL_ID: [number, string] = [1, 'mamem']
-export const FIELD_COUNT = 7
+export const FIELD_COUNT = 8
+/** ANC-006 (GOAL-v6 S6.2): the Metanet flag 0x4D455441 ("META") — the first
+ *  push of the anchor output's data payload (the OP_RETURN state suffix) */
+export const META_FLAG: Bytes = Uint8Array.from([0x4d, 0x45, 0x54, 0x41])
 
 export interface AnchorData {
   shard: string
@@ -26,6 +29,7 @@ export const GENESIS_PREV_RP: Bytes = ZERO32
 
 export function anchorFields (a: AnchorData): number[][] {
   return [
+    [...META_FLAG], // ANC-006: Metanet flag is the first push of the data payload
     [...utf8(PROTO)],
     [VERSION],
     [...utf8(a.shard)],

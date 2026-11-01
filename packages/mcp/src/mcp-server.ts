@@ -15,7 +15,7 @@ export const INSTRUCTIONS = [
   'Proofs establish that something was RECORDED and has not been altered — never that it is true. Say so when it matters.'
 ].join(' ')
 
-const READ_ONLY = new Set(['recall', 'prove', 'verifyMembership', 'proveMembership', 'proveSubset', 'verifySubset'])
+const READ_ONLY = new Set(['recall', 'prove', 'verifyMembership', 'proveMembership', 'proveSubset', 'verifySubset', 'verifyDerivation', 'verifyAttestation'])
 const DESTRUCTIVE = new Set(['rotate', 'revoke'])
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))

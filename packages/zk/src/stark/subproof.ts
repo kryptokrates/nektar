@@ -23,8 +23,12 @@ import { buildTree, hashNode, eq, heightForLeafCount, type MerkleTree } from '@m
 export const SHARD_LEAVES = 64
 export const SHARD_DEPTH = 6 // log2(SHARD_LEAVES): leafIndex >> 6 = shardIndex
 export const ZKS2_MAGIC = Uint8Array.from([0x5a, 0x4b, 0x53, 0x32]) // "ZKS2"
-export const ZKS2_VERSION = 1
-const HEADER = 4 + 1 + 32 + 4 + 4
+export const ZKS2_VERSION = 2 // rev 2: GEN-007 algorithm id byte
+/** GEN-007: 0x01 = the sha256d suite (defined once in codec.ts) */
+export { ALG_SHA256D } from './codec.js'
+import { ALG_SHA256D } from './codec.js'
+const HEADER_V1 = 4 + 1 + 32 + 4 + 4
+const HEADER = HEADER_V1 + 1 // + algorithm byte
 
 export class ZksCodecError extends Error {}
 
@@ -38,6 +42,8 @@ export interface ShardProof {
   leaves: SubsetLeaf[]
 }
 export interface ZkSubsetProof {
+  /** GEN-007 algorithm suite id (sha256d); rev-1 wires imply it */
+  algorithm?: number
   batchRoot: Uint8Array // R_n claimed for the anchored batch
   size: number // anchored batch leaf count
   shards: ShardProof[] // strictly ascending shardIndex
@@ -115,10 +121,12 @@ export function buildSubsetProof (leaves: Uint8Array[], indices: number[]): ZkSu
     leaves: groups.get(shardIndex)!.map(i => ({ index: i, hash: leaves[i]!, subpath: subpathFromTree(tree, i, subLen) }))
   }))
   const topPath = topProofWalk(size, shardIndices, (level, sib) => tree.levels[level]![sib]!)
-  return { batchRoot: tree.root, size, shards, topPath }
+  return { algorithm: ALG_SHA256D, batchRoot: tree.root, size, shards, topPath }
 }
 
 export function encodeZkdis (p: ZkSubsetProof): Uint8Array {
+  const alg = p.algorithm ?? ALG_SHA256D
+  if (alg !== ALG_SHA256D) throw new ZksCodecError(`unsupported algorithm ${alg}`)
   if (p.batchRoot.length !== 32) throw new ZksCodecError('batchRoot must be 32 bytes')
   if (!Number.isInteger(p.size) || p.size < 1 || p.size > 0xffffffff) throw new ZksCodecError('size out of range')
   const subLen = Math.min(SHARD_DEPTH, heightForLeafCount(p.size))
@@ -151,7 +159,7 @@ export function encodeZkdis (p: ZkSubsetProof): Uint8Array {
   const out = new Uint8Array(total)
   let o = 0
   const put = (b: Uint8Array) => { out.set(b, o); o += b.length }
-  put(ZKS2_MAGIC); put(Uint8Array.of(ZKS2_VERSION)); put(p.batchRoot); put(u32(p.size)); put(u32(p.shards.length))
+  put(ZKS2_MAGIC); put(Uint8Array.of(ZKS2_VERSION)); put(Uint8Array.of(alg)); put(p.batchRoot); put(u32(p.size)); put(u32(p.shards.length))
   for (const sh of p.shards) {
     put(u32(sh.shardIndex)); put(u16(sh.leaves.length))
     for (const l of sh.leaves) {
@@ -165,17 +173,22 @@ export function encodeZkdis (p: ZkSubsetProof): Uint8Array {
 }
 
 export function decodeZkdis (b: Uint8Array): ZkSubsetProof {
-  if (b.length < HEADER + 4) throw new ZksCodecError('truncated header')
+  if (b.length < HEADER_V1 + 4) throw new ZksCodecError('truncated header')
   for (let i = 0; i < 4; i++) if (b[i] !== ZKS2_MAGIC[i]) throw new ZksCodecError('bad magic (not L_ZKDis v2)')
-  if (b[4] !== ZKS2_VERSION) throw new ZksCodecError(`unsupported version ${b[4]}`)
+  const ver = b[4]!
+  if (ver !== 1 && ver !== ZKS2_VERSION) throw new ZksCodecError(`unsupported version ${ver}`)
+  const off = ver === 1 ? 0 : 1 // rev 2 inserts the algorithm byte at index 5
+  const alg = ver === 1 ? ALG_SHA256D : b[5]!
+  if (alg !== ALG_SHA256D) throw new ZksCodecError(`unsupported algorithm ${alg}`)
+  const header = HEADER_V1 + off
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength)
-  const size = dv.getUint32(37, true)
+  const size = dv.getUint32(37 + off, true)
   if (size < 1) throw new ZksCodecError('size must be >= 1')
-  const numShards = dv.getUint32(41, true)
+  const numShards = dv.getUint32(41 + off, true)
   if (numShards < 1) throw new ZksCodecError('numShards must be >= 1')
   const subLen = Math.min(SHARD_DEPTH, heightForLeafCount(size))
   const maxShard = (size - 1) >>> SHARD_DEPTH
-  let o = HEADER
+  let o = header
   const need = (n: number, what: string) => { if (o + n > b.length) throw new ZksCodecError(`truncated ${what}`) }
   const shards: ShardProof[] = []
   let prevShard = -1
@@ -214,7 +227,7 @@ export function decodeZkdis (b: Uint8Array): ZkSubsetProof {
   const topPath: Uint8Array[] = []
   for (let k = 0; k < topLen; k++) { topPath.push(b.slice(o, o + 32)); o += 32 }
   if (o !== b.length) throw new ZksCodecError('trailing bytes')
-  return { batchRoot: b.slice(5, 37), size, shards, topPath }
+  return { algorithm: alg, batchRoot: b.slice(5 + off, 37 + off), size, shards, topPath }
 }
 
 export type SubsetVerdict = { ok: true, root: Uint8Array, indices: number[] } | { ok: false, reason: string }

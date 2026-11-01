@@ -273,6 +273,59 @@ export class MamemMemory {
     return { bytes, ms }
   }
 
+  // ── GOAL-v6 S1a (§13 "on-chain if necessary"): cheap receipt commitments —
+  // OP_FALSE OP_RETURN sha256(proof) in a fee-key-funded data tx. Not an
+  // anchor: no shard state, no contract. Off-chain WASM verify stays
+  // authoritative; the chain only timestamps the commitment.
+  private attestationTxs = new Map<string, import('@bsv/sdk').Transaction>()
+  /** one funding outpoint from the fee reserve (MockFunder.take / ReserveFunder.takeReserve / peeked utxo) */
+  private async takeFunding (satoshis: number): Promise<import('@mamem/chain').FundingOut> {
+    const f = this.funder as any
+    if (typeof f.take === 'function') return await f.take(satoshis)
+    if (typeof f.takeReserve === 'function') { const u = await f.takeReserve(); if (u) return u }
+    const u = (f.utxos ?? []).find((u: { satoshis?: number }) => (u.satoshis ?? 0) >= satoshis)
+    if (!u) throw new Error('no funding UTXO available for the attestation tx')
+    return u
+  }
+
+  /** anchor sha256(proofBytes) in an OP_FALSE OP_RETURN data tx funded by the
+   *  fee key (~1 sat of fee at regtest rates). Returns the txid + commitment. */
+  async anchorAttestation (proofBytes: Uint8Array): Promise<{ txid: string, commitment: string }> {
+    const { buildAttestationTx, attestationCommitment } = await import('./onchain.js')
+    const commitment = attestationCommitment(proofBytes)
+    const f = await this.takeFunding(5_000)
+    const { tx, changeVout } = await buildAttestationTx(f, this.fundKey, commitment, this.opts.feeRateSatPerKb ?? 1)
+    const r = await this.chain.broadcast(tx)
+    if (r.status !== 'success') throw new Error(`attestation broadcast failed: ${r.description}`)
+    this.attestationTxs.set(tx.id('hex'), tx)
+    ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
+    ;(this.funder as any).addOwned?.(tx, changeVout)
+    this.metrics.inc('mamem_anchors_total', {}, 1, 'anchors broadcast')
+    return { txid: tx.id('hex'), commitment: toHex(commitment) }
+  }
+
+  /** holder side (§13/S1a): produce the STARK membership proof AND anchor its
+   *  commitment on-chain. The queryId stays unconsumed — the verifier's own
+   *  verifyMembership call still succeeds (single use is its privilege). */
+  async attestMembership (shard: string, seq: number, queryIdHex: string): Promise<{ bytes: Uint8Array, ms: number, txid: string, commitment: string }> {
+    const { bytes, ms } = await this.proveMembership(shard, seq, queryIdHex)
+    const a = await this.anchorAttestation(bytes)
+    return { bytes, ms, ...a }
+  }
+
+  /** verifier side: fetch the attestation tx, extract the OP_RETURN hash and
+   *  check it equals sha256(supplied proof bytes). Only txs broadcast by THIS
+   *  instance are resolvable (chain fetch by txid is an ops gap, CHN-*). */
+  async verifyAttestation (txid: string, proofBytes: Uint8Array): Promise<{ ok: boolean, reason?: string, commitment?: string, vout?: number }> {
+    const { attestationsOf, attestationCommitment } = await import('./onchain.js')
+    const tx = this.attestationTxs.get(txid) ?? this.anchorTxs.get(txid)
+    if (!tx) return { ok: false, reason: 'attestation tx unknown to this instance' }
+    const want = toHex(attestationCommitment(proofBytes))
+    const hit = attestationsOf(tx).find(a => toHex(a.commitment) === want)
+    if (!hit) return { ok: false, reason: 'no attestation output carries sha256(proof)' }
+    return { ok: true, commitment: want, vout: hit.vout }
+  }
+
   /** verifier side: the proof's root must be the R of an SPV-verified anchor of
    *  THIS shard on its canonical chain, and the queryId one we issued (single use). */
   async verifyMembership (shard: string, seq: number, bytes: Uint8Array): Promise<{ ok: boolean, reason?: string, anchorTxid?: string, statement: string }> {
@@ -791,6 +844,9 @@ export class MamemMemory {
     }
     const out: AnswerReceipt['fragmentRefs'] = []
     const texts: Array<{ seq: number, state: string, text?: string, unverifiable?: boolean, reason?: string, zk?: string }> = []
+    // S6.1: any item whose SPV verification fails flips the whole receipt to
+    // 'unverifiable' — anchor presence alone never earns 'verified'
+    let verifyFailed = false
     for (const r of items) {
       const ref = { shard, seq: r.seq, hdp: toHex(r.hdp), anchorTxid: r.anchorTxid }
       out.push(ref)
@@ -822,6 +878,7 @@ export class MamemMemory {
         if (!result.ok) {
           item.unverifiable = true
           item.reason = `verify: ${(result as any).reason}`
+          verifyFailed = true
         } else if (this.opts.agentSeed) {
           try {
             const buf = Buffer.from(r.fragment.E)
@@ -862,13 +919,23 @@ export class MamemMemory {
           item.reason = 'no agent seed held'
         }
       } else {
-        item.text = r.fragment.d.length ? Buffer.from(r.fragment.d).toString('utf8') : undefined
+        // S6.1: plaintext items run the SAME SPV verification as encrypted
+        // ones (verify only — there is no decrypt step). An unanchored or
+        // failed record is withheld and marked, never served as verified.
+        const { result } = await this.prove(shard, r.seq)
+        if (!result.ok) {
+          item.unverifiable = true
+          item.reason = `verify: ${(result as any).reason}`
+          verifyFailed = true
+        } else {
+          item.text = r.fragment.d.length ? Buffer.from(r.fragment.d).toString('utf8') : undefined
+        }
       }
       if (item.unverifiable) this.metrics.inc('mamem_rejected_reads_total', { reason: (item.reason ?? 'unknown').split(/[:\d]/)[0]!.trim() }, 1, 'records withheld from a read, by reason')
       texts.push(item)
     }
     const answer = texts.map(i => i.text ?? '[unverifiable]').join('\n')
-    const verified = out.length === 0 || out.every(r => r.anchorTxid)
+    const verified = out.length === 0 || (out.every(r => r.anchorTxid) && !verifyFailed)
     return {
       items: texts,
       receipt: {

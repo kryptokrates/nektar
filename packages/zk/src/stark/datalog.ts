@@ -11,13 +11,19 @@ import { spawn } from 'node:child_process'
 import { StarkProverError } from './prove.js'
 
 export const ZKD3_MAGIC = Uint8Array.from([0x5a, 0x4b, 0x44, 0x33]) // "ZKD3"
-export const ZKD3_VERSION = 1
+export const ZKD3_VERSION = 2 // rev 2: GEN-007 algorithm id byte
+/** GEN-007: 0x01 = the sha256d suite (defined once in codec.ts) */
+export { ALG_SHA256D } from './codec.js'
+import { ALG_SHA256D } from './codec.js'
 export const ZKD3_MAX_RECEIPT = 1_500_000 // succinct receipts are ~224 KB; bound the parser
-const HEADER = 4 + 1 + 32 + 32 + 32 + 32 + 4
+const HEADER_V1 = 4 + 1 + 32 + 32 + 32 + 32 + 4
+const HEADER = HEADER_V1 + 1 // + algorithm byte
 
 export class ZkdCodecError extends Error {}
 
 export interface ZkDerivationProof {
+  /** GEN-007 algorithm suite id (sha256d); rev-1 wires imply it */
+  algorithm?: number
   imageId: Uint8Array // pinned guest-datalog program identity
   policyRoot: Uint8Array // the anchored policy-DAG root (rule + fact nodes)
   conclusionHash: Uint8Array // h_k = dsha256(serialise(conclusion)) — the fact itself stays private
@@ -28,24 +34,32 @@ export interface ZkDerivationProof {
 const u32 = (v: number) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b }
 
 export function encodeZkder (p: ZkDerivationProof): Uint8Array {
+  const alg = p.algorithm ?? ALG_SHA256D
+  if (alg !== ALG_SHA256D) throw new ZkdCodecError(`unsupported algorithm ${alg}`)
   for (const [k, v] of [['imageId', p.imageId], ['policyRoot', p.policyRoot], ['conclusionHash', p.conclusionHash], ['queryId', p.queryId]] as const) if (v.length !== 32) throw new ZkdCodecError(`${k} must be 32 bytes`)
   if (p.receipt.length === 0 || p.receipt.length > ZKD3_MAX_RECEIPT) throw new ZkdCodecError('receipt length out of range')
   const out = new Uint8Array(HEADER + p.receipt.length)
   let o = 0
   const put = (b: Uint8Array) => { out.set(b, o); o += b.length }
-  put(ZKD3_MAGIC); put(Uint8Array.of(ZKD3_VERSION)); put(p.imageId); put(p.policyRoot); put(p.conclusionHash); put(p.queryId); put(u32(p.receipt.length)); put(p.receipt)
+  put(ZKD3_MAGIC); put(Uint8Array.of(ZKD3_VERSION)); put(Uint8Array.of(alg)); put(p.imageId); put(p.policyRoot); put(p.conclusionHash); put(p.queryId); put(u32(p.receipt.length)); put(p.receipt)
   return out
 }
 
 export function decodeZkder (b: Uint8Array): ZkDerivationProof {
-  if (b.length < HEADER) throw new ZkdCodecError('truncated header')
+  if (b.length < HEADER_V1) throw new ZkdCodecError('truncated header')
   for (let i = 0; i < 4; i++) if (b[i] !== ZKD3_MAGIC[i]) throw new ZkdCodecError('bad magic (not L_ZKDer v3)')
-  if (b[4] !== ZKD3_VERSION) throw new ZkdCodecError(`unsupported version ${b[4]}`)
+  const ver = b[4]!
+  if (ver !== 1 && ver !== ZKD3_VERSION) throw new ZkdCodecError(`unsupported version ${ver}`)
+  const off = ver === 1 ? 0 : 1 // rev 2 inserts the algorithm byte at index 5
+  const alg = ver === 1 ? ALG_SHA256D : b[5]!
+  if (alg !== ALG_SHA256D) throw new ZkdCodecError(`unsupported algorithm ${alg}`)
+  const header = HEADER_V1 + off
+  if (b.length < header) throw new ZkdCodecError('truncated header')
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength)
-  const len = dv.getUint32(HEADER - 4, true)
+  const len = dv.getUint32(header - 4, true)
   if (len === 0 || len > ZKD3_MAX_RECEIPT) throw new ZkdCodecError('receipt length out of range')
-  if (b.length !== HEADER + len) throw new ZkdCodecError(b.length < HEADER + len ? 'truncated receipt' : 'trailing bytes')
-  return { imageId: b.slice(5, 37), policyRoot: b.slice(37, 69), conclusionHash: b.slice(69, 101), queryId: b.slice(101, 133), receipt: b.slice(HEADER) }
+  if (b.length !== header + len) throw new ZkdCodecError(b.length < header + len ? 'truncated receipt' : 'trailing bytes')
+  return { algorithm: alg, imageId: b.slice(5 + off, 37 + off), policyRoot: b.slice(37 + off, 69 + off), conclusionHash: b.slice(69 + off, 101 + off), queryId: b.slice(101 + off, 133 + off), receipt: b.slice(header) }
 }
 
 // ── verification (off-chain WASM risc0 verifier; pure: bytes → journal) ──

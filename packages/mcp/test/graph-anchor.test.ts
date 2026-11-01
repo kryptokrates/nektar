@@ -47,6 +47,7 @@ permit(P, read, 's/0') :- member(P, verified).`).rules }])
   const mem = new MamemMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 10 }, policyDag: dag })
   await mem.remember('s', 'permitted fragment', {}, 0)
   await mem.remember('s', 'withheld fragment', {}, 0)
+  await mem.anchorShard('s'); chain.mine(1) // S6.1: plaintext is served only after SPV verify
   const caller = PrivateKey.fromRandom()
   const nonce = mem.issueChallenge()
   const identity = {

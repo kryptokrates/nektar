@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { PrivateKey, MerklePath, type Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, parseLegacyBlock, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, SpendGuard, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, parseLegacyBlock, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
 import { KnexShardStore, type ShardStore } from '@mamem/log'
 import { MamemMemory, type MamemMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -33,13 +33,37 @@ export interface RuntimeConfig {
   confirmEveryMs?: number
   /** pubkeys trusted to issue clearance credentials (level>0 reads) */
   clearanceAuthorities?: string[]
+  /** GOAL-v6 S3 (§12): header/time sources for consensus time, in priority
+   *  order — sources[0] is authoritative for hashes/heights. Default ['bsv']:
+   *  single-source, bit-identical to the old behaviour. 'btc' adds a
+   *  read-only WhatsOnChain BTC tracker whose block times vote in the
+   *  weighted median. */
+  temporalSources?: string[]
+}
+
+/** parse MAMEM_TEMPORAL_SOURCES=bsv[,btc] (default bsv); unknown names are fatal */
+export function temporalSourceNames (env = process.env): string[] {
+  const names = (env.MAMEM_TEMPORAL_SOURCES ?? 'bsv').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+  for (const n of names) if (n !== 'bsv' && n !== 'btc') throw new Error(`unknown temporal source "${n}" (supported: bsv,btc)`)
+  return names.length === 0 ? ['bsv'] : names
+}
+
+/** TemporalSources over the primary tracker + optional BTC WoC tracker (read-only).
+ *  `MAMEM_BTC_WOC_URL` overrides the BTC endpoint (tests point it at a stub). */
+export function temporalSourcesFor (names: string[], primary: ChainTracker, opts: { wocApiKey?: string, fetchImpl?: typeof fetch } = {}): TemporalSources {
+  const sources: TemporalSource[] = [{ name: 'bsv', tracker: primary }]
+  for (const n of names) {
+    if (n === 'bsv') continue
+    if (n === 'btc') sources.push({ name: 'btc', tracker: new WocTracker({ wocUrl: process.env.MAMEM_BTC_WOC_URL ?? 'https://api.whatsonchain.com/v1/btc/main', wocApiKey: opts.wocApiKey, fetchImpl: opts.fetchImpl }) })
+  }
+  return new TemporalSources(sources)
 }
 
 export function configFromEnv (env = process.env): RuntimeConfig {
   const network = (env.MAMEM_NETWORK ?? 'mock') as RuntimeConfig['network']
   const dataDir = env.MAMEM_DATA_DIR ?? join(process.cwd(), '.mamem')
   const secret = (k: string) => env[k] ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
-  const cfg: RuntimeConfig = { network, dataDir, modelId: env.MAMEM_MODEL_ID, batchLeaves: Number(env.MAMEM_BATCH ?? 4), autoMine: env.MAMEM_AUTOMINE === '1', confirmEveryMs: Number(env.MAMEM_CONFIRM_MS ?? 5000), clearanceAuthorities: (env.MAMEM_CLEARANCE_AUTHORITIES ?? '').split(',').map(s => s.trim()).filter(Boolean) }
+  const cfg: RuntimeConfig = { network, dataDir, modelId: env.MAMEM_MODEL_ID, batchLeaves: Number(env.MAMEM_BATCH ?? 4), autoMine: env.MAMEM_AUTOMINE === '1', confirmEveryMs: Number(env.MAMEM_CONFIRM_MS ?? 5000), clearanceAuthorities: (env.MAMEM_CLEARANCE_AUTHORITIES ?? '').split(',').map(s => s.trim()).filter(Boolean), temporalSources: temporalSourceNames(env) }
   if (network === 'regtest') {
     const fundWif = secret('MAMEM_FUND_WIF') ?? secret('MAMEM_REGTEST_WIF')
     const rpcPass = secret('MAMEM_RPC_PASS')
@@ -175,11 +199,14 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     if (s) await mineOne()
   }
   const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve() }
+  const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker)
   const chain = {
     broadcast: (tx: Transaction) => broadcaster.broadcast(tx),
     currentHeight: () => tracker.currentHeight(),
     isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
-    headerAtHeight: (h: number) => tracker.headerAtHeight(h),
+    // §12: header TIMES are the weighted median across temporal sources;
+    // single-source (default) is bit-identical to the raw tracker
+    headerAtHeight: (h: number) => temporal.headerAtHeight(h),
     tipHeight: async () => Math.max(lastMined, await tracker.currentHeight())
   }
   const knexMod = (await import('knex')).default
@@ -292,6 +319,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const floor = ttn ? 1 : 100
   const feeRate = Math.max(mc.feeRateSatPerKb ?? floor, await fetchArcFeeRate(mc).catch(() => floor))
   const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve() }
+  const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker, { wocApiKey: mc.wocApiKey, fetchImpl: mc.fetchImpl })
   const chain = {
     broadcast: async (tx: Transaction) => {
       // attach parent txs so the broadcaster can send Extended Format (Arcade
@@ -312,7 +340,9 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     },
     currentHeight: () => tracker.currentHeight(),
     isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
-    headerAtHeight: (h: number) => tracker.headerAtHeight(h),
+    // §12: header TIMES are the weighted median across temporal sources;
+    // single-source (default) is bit-identical to the raw tracker
+    headerAtHeight: (h: number) => temporal.headerAtHeight(h),
     tipHeight: () => tracker.currentHeight()
   }
   const knexMod = (await import('knex')).default

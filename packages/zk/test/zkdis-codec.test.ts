@@ -27,6 +27,16 @@ test('subset proof verifies: single leaf, runs, across the shard boundary, all l
   }
 })
 
+test('ZKS2 codec (GEN-007): rev-2 carries the algorithm id; rev-1 still decodes', () => {
+  const ok = encodeZkdis(proofOf(70, [1, 63, 64]))
+  assert.equal(ok[4], 2)
+  assert.equal(ok[5], 0x01)
+  const v1 = Uint8Array.from([...ok.slice(0, 4), 1, ...ok.slice(6)])
+  const d = decodeZkdis(v1)
+  assert.equal(d.algorithm, 0x01)
+  assert.equal(d.size, 70)
+})
+
 test('structure: shard split at depth 6; the shared top path is deduplicated', () => {
   // 70 leaves → two shards; proving {63,64} covers both, so the level-6
   // siblings are the other shard's root (already known): topPath is EMPTY.
@@ -60,13 +70,14 @@ test('ZKS2 codec: every malformed input is refused with ZksCodecError', () => {
     ['truncated header', ok.slice(0, 30)],
     ['bad magic', mut(b => { b[0] = 0; return b })],
     ['zkm2 magic', mut(b => { b[3] = 0x4d; return b })],
-    ['unknown version', mut(b => { b[4] = 2; return b })],
-    ['size 0', mut(b => { b.fill(0, 37, 41); return b })],
-    ['numShards 0', mut(b => { b.fill(0, 41, 45); return b })],
-    ['shardIndex out of range', mut(b => { new DataView(b.buffer).setUint32(45, 9, true); return b })],
-    ['leafIndex in wrong shard', mut(b => { new DataView(b.buffer).setUint32(51, 65, true); return b })],
-    ['subpathLen wrong', mut(b => { b[87] = 5; return b })],
-    ['non-canonical leaf order', mut(b => { const e0 = b.slice(51, 51 + ENTRY), e1 = b.slice(51 + ENTRY, 51 + 2 * ENTRY); b.set(e1, 51); b.set(e0, 51 + ENTRY); return b })],
+    ['unknown version', mut(b => { b[4] = 3; return b })],
+    ['unknown algorithm', mut(b => { b[5] = 0x7f; return b })],
+    ['size 0', mut(b => { b.fill(0, 38, 42); return b })],
+    ['numShards 0', mut(b => { b.fill(0, 42, 46); return b })],
+    ['shardIndex out of range', mut(b => { new DataView(b.buffer).setUint32(46, 9, true); return b })],
+    ['leafIndex in wrong shard', mut(b => { new DataView(b.buffer).setUint32(52, 65, true); return b })],
+    ['subpathLen wrong', mut(b => { b[88] = 5; return b })],
+    ['non-canonical leaf order', mut(b => { const e0 = b.slice(52, 52 + ENTRY), e1 = b.slice(52 + ENTRY, 52 + 2 * ENTRY); b.set(e1, 52); b.set(e0, 52 + ENTRY); return b })],
     ['topPathLen +1', mut(b => { new DataView(b.buffer).setUint32(b.length - 4, 1, true); return b })],
     ['truncated proof', ok.slice(0, ok.length - 1)],
     ['trailing bytes', Uint8Array.from([...ok, 0])]

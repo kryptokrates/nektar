@@ -3,6 +3,25 @@
 // protocolID [2,'mamem']; key = SHA-256(BRC-42 shared secret) → AES-256-GCM.
 // AAD binds H(d) and the full context — a ciphertext cannot be transplanted
 // to another fragment, context, or level.
+//
+// KEY-010 / GOAL-v6 S6.4 (paper §7/App.A triple hash H(s‖p‖o‖l)): the
+// derivation context must bind seed, path, owner and level. Evaluation of
+// THIS construction shows every element is already bound, so the context is
+// NOT changed (changing it would make every existing ciphertext
+// undecryptable — the equivalence is documented here instead):
+//   seed (s)  — the private input: agentSeed S_A, or a level key derived
+//               under it (deriveLevelKey).
+//   path (p)  — ctx ψ‖ρ‖π (shard‖record‖fragment position) is inside the
+//               canonical keyID, which is the BRC-42 invoice the child key
+//               is derived under.
+//   owner (o) — the BRC-42 'self' counterparty: derivation is against the
+//               holder's own level key, so the holder identity is bound by
+//               the key path itself (two holders' level keys differ →
+//               disjoint keyspaces per principal).
+//   level (l) — bound twice: the level key K_l (deriveLevelKey(seed,l))
+//               AND ctx.l in the keyID; cross-level transplant fails GCM.
+// This is binding-equivalent to H(s‖p‖o‖l): no element can be swapped
+// without changing the derived key.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { PrivateKey, PublicKey, KeyDeriver } from '@bsv/sdk'
 import { sha256, concat, utf8, toHex, type Bytes } from '@mamem/core'

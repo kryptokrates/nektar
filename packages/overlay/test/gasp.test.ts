@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, LockingScript } from '@bsv/sdk'
-import { MAMEM_ANCHOR_ARTIFACT, TAG_RPRIME } from '@mamem/contracts'
+import { MAMEM_ANCHOR_ARTIFACT, TAG_RPRIME, META_FLAG_HEX } from '@mamem/contracts'
 import { RunarContract } from 'runar-sdk'
 import { chainRp, GENESIS_PREV_RP, dsha256, utf8, hash160, toHex } from '@mamem/core'
 import { MockChain, MockFunder } from '@mamem/chain'
@@ -123,7 +123,7 @@ test('GASP sync: forged chain pushed through sync is rejected (tm still applies)
   const atkPkh = toHex(hash160(Uint8Array.from(Buffer.from(attacker.toPublicKey().toString(), 'hex'))))
   const R = dsha256(utf8('forged'))
   const lock = LockingScript.fromHex(new RunarContract(MAMEM_ANCHOR_ARTIFACT, [
-    victimPub, atkPkh, 0n, 1n, Buffer.from(R).toString('hex'),
+    victimPub, atkPkh, META_FLAG_HEX, 0n, 1n, Buffer.from(R).toString('hex'),
     Buffer.from(chainRp(GENESIS_PREV_RP, R, 1)).toString('hex'), Buffer.from(TAG_RPRIME).toString('hex')
   ]).getLockingScript())
   forged.addOutput({ lockingScript: lock, satoshis: 1 })

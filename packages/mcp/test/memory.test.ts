@@ -34,12 +34,23 @@ test('mcp memory: remember → anchor → prove (verified)', async () => {
 })
 
 test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', async () => {
-  const { mem } = setup()
+  const { mem, settle } = setup()
   await mem.remember('s', 'fact one')
   const { items, receipt } = await mem.recall('s')
-  assert.equal(items[0]!.text, 'fact one')
+  // S6.1: an unanchored PLAINTEXT record is withheld like an encrypted one —
+  // it never earned 'verified' from anchor presence alone, and now it is not
+  // served at all until SPV verification passes
+  assert.equal(items[0]!.text, undefined)
+  assert.equal(items[0]!.unverifiable, true)
+  assert.match(items[0]!.reason!, /verify: NotAnchored/)
   assert.equal(receipt.checkResult, 'unverifiable') // not anchored yet
   assert.equal(receipt.modelId, 'test-model-1')
+  // once anchored and mined the same plaintext record is served + verified
+  await mem.anchorShard('s'); settle('s')
+  const after = await mem.recall('s')
+  assert.equal(after.items[0]!.text, 'fact one')
+  assert.equal(after.items[0]!.unverifiable, undefined)
+  assert.equal(after.receipt.checkResult, 'verified')
   const seed = PrivateKey.fromRandom()
   const enc = setup({ agentSeed: seed, maxLevel: 1 })
   await enc.mem.remember('s', 'classified fact')
@@ -52,6 +63,26 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
   const rec3 = await enc2.mem.recall('s')
   assert.equal(rec3.items[0]!.text, undefined)
   assert.equal(rec3.items[0]!.unverifiable, true)
+})
+
+test('S6.1 regression: plaintext items are SPV-verified like encrypted ones (broken anchor → unverifiable)', async () => {
+  const { mem, settle } = setup()
+  await mem.remember('s', 'fact one'); await mem.remember('s', 'fact two') // anchored batch of 2
+  settle('s')
+  const good = await mem.recall('s')
+  assert.equal(good.receipt.checkResult, 'verified', 'unencrypted anchored records verify')
+  assert.deepEqual(good.items.map(i => i.text), ['fact one', 'fact two'])
+  // break the anchor: the BUMP disappears → every returned record is marked
+  // unverifiable with a reason, none is served, the receipt is honest
+  const txid = mem.tailLink('s')!.txid
+  ;(mem as any).anchorTxs.get(txid)!.merklePath = undefined
+  const bad = await mem.recall('s')
+  assert.equal(bad.receipt.checkResult, 'unverifiable')
+  for (const i of bad.items) {
+    assert.equal(i.unverifiable, true)
+    assert.equal(i.text, undefined)
+    assert.match(i.reason!, /^verify: /)
+  }
 })
 
 test('regression: encrypted records with identical provenance are NOT deduplicated (hdp binds plaintext)', async () => {
@@ -125,8 +156,9 @@ when { resource.level <= principal.level };
 `)
   const authority = PrivateKey.fromRandom()
   const base = { policy: { policyText: ps.text, anchoredPolicySetHash: ps.hash }, clearanceAuthorities: [authority.toPublicKey().toString()] }
-  const { mem } = setup(base)
+  const { mem, settle } = setup(base)
   await mem.remember('s', 'fact two', undefined, 2)
+  await mem.anchorShard('s'); settle('s') // S6.1: plaintext is served only after SPV verify
   const { key, identity } = callerOf(mem)
   assert.equal((await mem.recall('s', { identity })).receipt.cedar, 'deny', 'verified identity, no proven level → DENY')
   // a nonce the caller chose (not issued by the instance) authenticates nothing

@@ -93,11 +93,50 @@ Selective proof of existence via a data reveal path over a hierarchical structur
 
 ## Order & gates
 
-1. S1.1 on-chain verifier spike (measured gate → decides §13 path)
+1. S1.1 on-chain verifier spike (measured gate → decides §13 path) — **done; S1a/S1b split**
 2. S2 Datalog guest (unlocks §14, feeds S1)
 3. S5 proof sharding
 4. S4 OWL 2 RL
 5. S3 temporal aggregation
+6. S6 small paper gaps (below)
+7. S7 `recall` verification fix (below)
 
 Each: unit tests → fuzz → regtest e2e → RESEARCH/PROOFS/THREAT-MODEL/test-spec/
 migration-log → commit → CI green.
+
+## 6. S6 — remaining paper-level gaps (small, batched)
+
+Paper coverage that the traceability matrix shows as ◐/⏸, ordered cheap→hard:
+
+| # | Item (spec id) | Paper § | Work |
+|---|---|---|---|
+| S6.1 | `recall` verifies only encrypted records (self-found bug) | VER | Full SPV verify for plaintext items too, or mark receipt `checkResult` honestly. **Fix immediately.** |
+| S6.2 | ANC-006 Metanet flag | App. D | Add the `0x4D455441` ("META") flag byte to the anchor schema (versioned, v3 decodes both). |
+| S6.3 | GEN-007 per-structure algorithm ID | §6 | Add a `algorithm` byte to L_* codec headers (v3 codecs), defaulting to current hashes/suites. |
+| S6.4 | KEY-010 privilege-scoped triple hash H(s‖p‖o‖l) | §7/App. A | Encode level+owner+shard in the KDF context explicitly (one tagged hash) — evaluate vs current derivation; implement if compatible. |
+| S6.5 | DIS-005 / COM-008 chunked files | App. A/C | Optional: record-type `chunked` — split payloads >64 KB into content-addressed fragments, each a leaf; manifest record references the chunk leaves. Only if needed. |
+| S6.6 | ANC-009/010 witness redundancy | App. D | Optional: mirror anchor roots into a second output (OP_RETURN sidecar) so one anchor chain isn't a single point of loss. Rekor-style witness stays deferred. |
+| S6.7 | LOG-010..013 | App. D | Deferred: pre-ordered mode, quota protocol, Trillian adapter — schema variants, not core. |
+| S6.8 | ZKA-005 ZK set-membership variant | §13 | Optional §13 variant; defer unless needed. |
+| S6.9 | ZKM-013 Plonk path | §13 | Paper lists Plonk as an option, not a requirement; defer. |
+| S6.10 | AUT-010 fuzzy automaton | §15 extension | Defer — extension, not core. |
+| S6.11 | KEY-016/017 TEE/HSM + PQ keys | hardening | Defer — post-MVP hardening options. |
+
+S6.1–S6.4 implement now; S6.5–S6.11 stay documented as deliberate deferrals with reasons.
+
+## 7. Ops/engineering gaps (not paper items — tracked, not in GOAL-v6 scope)
+
+- **SEC-002/004/005/006:** constant-time audit, external security audit + pen test
+  (required before real mainnet), signed releases.
+- **CHN-001** own PoW/difficulty validation of headers; **CHN-009** multi-endpoint
+  broadcast failover; **VER-007** gossip/split-view monitor.
+- **STO-001/002/004:** content-addressed proofstore, tested backup/restore, source mirroring.
+- **API-001/002:** gRPC, Go/Python client SDKs. **OPS-004..006:** public monitor, metering.
+- **TST-007:** node-outage chaos tests.
+
+## 8. Definition of done (v6)
+
+- S1a, S2, S3, S4, S5 implemented, unit+fuzz+regtest-tested, documented.
+- S6.1–S6.4 fixed; S6.5–S6.11 marked deferred-with-reason in the test spec.
+- `pnpm reproduce`, `pnpm e2e`, regtest e2e (3×), `e2e:mcp` all green on the final tree.
+- Test-spec matrix updated: every remaining ◐/⏸ has either an implementation or a documented deferral.

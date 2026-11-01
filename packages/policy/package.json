@@ -1,0 +1,26 @@
+{
+  "name": "@mamem/policy",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test --test-timeout=60000 dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@cedar-policy/cedar-wasm": "^4.14.0",
+    "@mamem/core": "workspace:*",
+    "@mamem/log": "workspace:*",
+    "@mamem/identity": "workspace:*"
+  },
+  "peerDependencies": {
+    "@bsv/sdk": "4.0.1"
+  },
+  "devDependencies": {
+    "@mamem/chain": "workspace:*",
+    "@mamem/anchor": "workspace:*"
+  }
+}

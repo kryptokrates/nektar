@@ -1,0 +1,6 @@
+export * from './store.js'
+export { KnexShardStore } from './knex-store.js'
+export { BatchLog } from './batchlog.js'
+export type { InclusionPromise, Batch, ClosePolicy } from './batchlog.js'
+export * from './provenance.js'
+export * from './checkpoint.js'

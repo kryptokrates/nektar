@@ -1,0 +1,26 @@
+{
+  "name": "mamem",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "reproduce": "node packages/core/dist/test/vectors.js && node packages/zk/dist/test/vectors.js",
+    "e2e": "node packages/e2e/dist/src/e2e.js",
+    "bench": "node packages/e2e/dist/src/bench.js",
+    "zk:ceremony": "node packages/zk/scripts/ceremony.mjs",
+    "formal": "node docs/formal/run.mjs",
+    "check:deps": "node tools/check-deps.mjs",
+    "sbom": "node tools/sbom.mjs",
+    "curve:vectors": "docker run --rm -v \"$PWD/..:/w\" -w /w/mamem/tools/curve-vectors -e CARGO_TARGET_DIR=/tmp/t rust:1-slim cargo run -q",
+    "cedar:symcc": "docker run --rm -v \"$PWD/tools/cedar-symcc:/w\" -w /w -e CARGO_TARGET_DIR=/tmp/t rust:1-slim sh run.sh",
+    "smt:vectors": "docker run --rm -v \"$PWD/..:/w\" -w /w/mamem/tools/smt-vectors -e CARGO_TARGET_DIR=/tmp/t rust:1-slim cargo run -q",
+    "stack:up": "cd infra/teranode-quickstart && ./start.sh",
+    "stack:down": "cd infra/teranode-quickstart && ./stop.sh"
+  },
+  "devDependencies": {
+    "@bsv/sdk": "4.0.1",
+    "@types/node": "24.19.2",
+    "typescript": "5.6.3"
+  }
+}

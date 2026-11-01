@@ -1,0 +1,35 @@
+# What each proof proves — and what it does not (DOC-003)
+
+**Ground rule (SEC-007, VER-009).** No proof in mamem establishes that a statement is *true*. Proofs establish **inclusion**, **integrity**, **ordering**, **authorization** and **existence by a time**. A lie written correctly is preserved, proven as recorded, and stays a lie. The offline e2e ("origin falsehood") enforces this as a test.
+
+| Proof | Proves | Does NOT prove | Verifier needs | Code |
+|---|---|---|---|---|
+| **Inclusion promise** | the log signer accepted record (shard, seq, leaf) | that it will ever be anchored (monitors check fulfilment) | signer pubkey | `log.verifyPromise` |
+| **Originator signature (COM-003)** | the holder of `sourcePub` signed exactly (d, source, time, modelId) | that the source is who it claims to be in the world (key↔identity is a binding question) or that d is true | source pubkey | `log/provenance`, `MamemMemory.remember` |
+| **Signed checkpoint (LOG-007)** | the log key states shard X held N leaves up to batch n with root R / R′ in anchor tx T | anything the anchor itself doesn't — it is a signed, portable summary; the anchor remains the authority | log pubkey (+ anchor for authority) | `log/checkpoint` |
+| **Promise monitor (LOG-005)** | a promised record was (or was not) covered by a valid checkpoint within the merge delay | that the log is honest beyond what it signed | promises + checkpoints + log pubkey | `PromiseMonitor` |
+| **Finality status (CHN-006)** | the anchor has ≥ `finalityDepth` confirmations at the observed tip | that no deeper reorg will happen; depth is a risk parameter | headers / tip | `MamemMemory.anchorStatus` |
+| **Proof bundle / `verifyFragment`** | leaf ∈ batch R_n; R_n is in anchor n of the shard; the anchor tx is in a block whose header is in the validated chain; R' chain genesis → n is consistent | content truth; that the source still exists (STO-004); who wrote it beyond the provenance signature | block headers only | `verify` |
+| **Head-UTXO succession** | no two different histories of a shard can both be valid on-chain; every successor was signed by the then-current owner | that the owner key was not stolen (see revocation) | headers + tx chain | `contracts/MamemAnchor`, `overlay/tm_mamem` |
+| **Consensus time (`timeBounds`)** | the record existed **no later than** the block time of its anchor | when it was created or observed; header times are miner-set within consensus bounds (MTP reported) | headers | `reasoning.timeBounds` |
+| **Rotation certificate chain** | pkⁱ was authorized by pkⁱ⁻¹ … back to pk⁰; old signatures stay valid for their epoch | that the old key was not compromised before rotating | genesis pubkey, cert log anchor | `identity` |
+| **SMT revocation (inclusion / non-inclusion)** | key K is / is not in the revocation registry whose root R was anchored | freshness beyond the anchored root (stale roots are rejected against the latest anchor) | root + anchor | `identity/smt` (TS ≡ Rust `idattr-smt`) |
+| **ZK clearance (Bulletproof)** | the *holder* of a credential issued by a *trusted* authority has level ≥ ℓ, for *this* query/fragment transcript, once | the actual level; anything about the authority's honesty | trusted authority pubkeys, verified caller | `identity/zkaccess`, `MamemMemory.verifyClearance` |
+| **ZK membership (Groth16)** | some leaf committed in the anchored Poseidon companion root of *this* shard's canonical chain is known to the prover; the nullifier is fresh | which leaf; its content; truth. The Poseidon tree is built from the same leaves as the SHA tree by the writer — anyone with the leaves can recompute it, but the SHA anchor alone does not force equality | pinned vkey, SPV-verified anchor, expected shard | `zk.verifyMembershipAnchored` |
+| **Cedar decision** | the instance's anchored policy set allows (principal, action, resource) | that the policy is sensible — see SymCC | anchored policy hash | `policy` |
+| **Cedar SymCC (POL-015)** | for *every* typed request, an allowed read/disclose has resource.level ≤ principal.level | properties not encoded in the spec; correctness of the schema typing assumption | cvc5 + schema | `tools/cedar-symcc` |
+| **Policy-DAG derivation** | `permit(P,A,R)` follows from the stated facts under the anchored rule set, each node Merkle-proven against the policy root | that the EDB facts are true — they come only from verified identity / proven clearance | the verifier's OWN DAG (AGT-009) | `graph/policy.verifyDerivation` |
+| **AORG vertex** | the reasoning step was recorded, justified by a catalogue rule from its premises, consistent with its ancestors, anchored | that the premises are true; refinement means newer evidence, not certainty | anchors | `graph` |
+| **Automaton step (full mode)** | the owner moved the state machine along a transition in the committed δ; halting only from F | that the step's output (outHash) is correct | headers + contract | `automaton`, `contracts/MamemAutomaton` |
+| **Grounding report** | each kept claim is a quote of, or Datalog-entailed by, a VERIFIED cited fragment | that the fragments are true; semantic equivalence of free text beyond quote/entailment | fragments + rules | `reasoning.ground` |
+| **Answer receipt** | answer ‖ refs ‖ check ‖ model id ‖ time ‖ grounding hash were committed (and anchored) | that the model produced it honestly beyond its identity claim (weights hash / provider release) | anchor | `reasoning.commitReceipt` |
+| **Audit bundle** | output → fragments → signers → policy path → anchors is consistent and verifiable offline | truth; completeness of evidence (authenticity ≠ completeness) | headers + own DAG | `reasoning.verifyAuditBundle` |
+| **Disclosure envelope** | the owner revealed field i (value, salt) of a committed record to the named verifier, valid until expiry | that the verifier will not leak it | owner pubkey, field root | `identity/disclosure` |
+| **TLA+ model (AGT-008)** | in the bounded model (≤4 vertices), the AORG invariants hold; a mutant allowing sealed edits is caught | anything about the TypeScript code itself (model ≠ implementation) | TLC | `docs/formal` |
+
+## Cryptographic assumptions (honest labelling, ZKA-006)
+
+- ECDSA / Schnorr / Pedersen / Bulletproofs: discrete log on secp256k1, Fiat-Shamir in the random-oracle model. **No post-quantum claim.**
+- Groth16: knowledge-of-exponent assumptions on BN254 plus an honest participant in the phase-2 ceremony (local dev ceremony with 2 contributions; the transcript hash is anchored). **A production deployment needs a public multi-party ceremony.**
+- SHA-256 / double-SHA-256 collision resistance; Poseidon (circomlib parameters) for the companion tree.
+- AES-256-GCM with unique 96-bit nonces per key; one key per fragment.

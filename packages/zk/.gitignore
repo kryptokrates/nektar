@@ -1,0 +1,4 @@
+build/
+circuits/*.ptau
+circuits/*.r1cs
+circuits/pot14_*

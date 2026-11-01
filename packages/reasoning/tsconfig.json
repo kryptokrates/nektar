@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  },
+  "include": ["src", "test"],
+  "exclude": ["dist"],
+  "references": [{ "path": "../core" }, { "path": "../chain" }, { "path": "../datalog" }, { "path": "../verify" }, { "path": "../graph" }, { "path": "../mcp" }]
+}

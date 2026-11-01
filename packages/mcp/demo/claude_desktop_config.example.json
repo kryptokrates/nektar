@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mamem": {
+      "command": "node",
+      "args": ["C:/Users/nedzo/Documents/Devin/mamem/packages/mcp/dist/src/bin.js"],
+      "env": { "MAMEM_MODEL_ID": "anthropic:claude (set the exact release id)", "MAMEM_BATCH": "4" }
+    }
+  }
+}

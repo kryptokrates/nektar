@@ -1,0 +1,150 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { PrivateKey } from '@bsv/sdk'
+import { MockChain, MockFunder, type ChainTracker } from '@mamem/chain'
+import { MamemMemory } from '@mamem/mcp'
+import { parseProgram } from '@mamem/datalog'
+import { PolicyDAG } from '@mamem/graph'
+import {
+  ground, modelIdentity, commitReceipt, CitationIndex, onRevision, timeBounds,
+  buildAuditBundle, verifyAuditBundle, hashOf, type FragmentFetch, type Claim
+} from '../src/index.js'
+
+const RULES = parseProgram(`@id r-spec
+spec(S, V) :- requires(P, V), applies(S, P).`).rules
+
+/** one anchored manual batch [requires(torque,45), applies(port4,torque)] + helpers */
+async function world () {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const funder = new MockFunder(); funder.topup(20); for (const t of funder.parents) chain.registerParent(t)
+  const sk = PrivateKey.fromRandom()
+  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, signingKey: sk })
+  const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
+  const r0 = await mem.remember('manual', 'requires(torque, 45).')
+  const r1 = await mem.remember('manual', 'applies(port4, torque).')
+  settle('manual')
+  const fetch: FragmentFetch = async ref => {
+    const rec = (await mem.records(ref.shard)).find(r => r.seq === ref.seq)
+    if (!rec) return { verified: false }
+    return { verified: (await mem.prove(ref.shard, ref.seq)).result.ok === true, text: new TextDecoder().decode(rec.fragment.d) }
+  }
+  return { chain, mem, sk, settle, fetch, promises: [r0.promise, r1.promise] }
+}
+const m = (seq: number) => ({ shard: 'manual', seq })
+
+test('AGT-003 grounding: quote, entailed, uncited, unverifiable, not-entailed; flag vs remove', async () => {
+  const w = await world()
+  await w.mem.remember('manual', 'requires(torque, 99).') // pending — never anchored
+  const claims: Claim[] = [
+    { text: 'requires(torque,   45)', cites: [m(0)] },
+    { text: 'port 4 is torqued to 45', literal: 'spec(port4, 45)', cites: [m(0), m(1)] },
+    { text: 'the pump is blue', cites: [] },
+    { text: 'requires(torque, 99)', cites: [m(2)] },
+    { text: 'port 4 is torqued to 99', literal: 'spec(port4, 99)', cites: [m(0), m(1)] }
+  ]
+  const r = await ground(claims, w.fetch, { rules: RULES })
+  assert.deepEqual(r.claims.map(c => c.reason), ['grounded:quote', 'grounded:entailed', 'uncited', 'citation-unverifiable', 'not-entailed'])
+  assert.equal(r.kept.length, 5, 'flag mode keeps all claims')
+  assert.equal(r.flagged.length, 3)
+  const rm = await ground(claims, w.fetch, { rules: RULES, mode: 'remove' })
+  assert.deepEqual(rm.kept.map(c => c.text), [claims[0]!.text, claims[1]!.text], 'remove mode drops ungrounded claims')
+  assert.equal((await ground(claims, w.fetch, { rules: RULES })).reportHash, r.reportHash, 'report hash deterministic')
+  assert.notEqual(rm.reportHash, r.reportHash)
+})
+
+test('AGT-011/012 model identity + committed, anchored receipt', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mamem-'))
+  const wp = join(dir, 'weights.gguf'); writeFileSync(wp, Buffer.alloc(3 * 65536 + 17, 7))
+  const local = await modelIdentity({ kind: 'local', weightsPath: wp, name: 'qwen-test' })
+  assert.deepEqual(local, { kind: 'local', weightsSha256: createHash('sha256').update(Buffer.alloc(3 * 65536 + 17, 7)).digest('hex'), name: 'qwen-test' })
+  await assert.rejects(() => modelIdentity({ kind: 'api', provider: 'anthropic', release: '' }), /provider \+ release/)
+  const api = await modelIdentity({ kind: 'api', provider: 'anthropic', release: 'claude-x-2026-01-01' })
+  const w = await world()
+  const base = { answer: 'torque 45', fragmentRefs: [m(0)], checkResult: 'verified' as const, modelId: api, timestamp: 1_700_000_000 }
+  const a = await commitReceipt(base)
+  assert.equal(a.receiptHash, (await commitReceipt({ ...base })).receiptHash, 'deterministic')
+  assert.notEqual(a.receiptHash, (await commitReceipt({ ...base, modelId: local })).receiptHash, 'model identity is bound')
+  assert.match(a.receipt.truthNote, /do not show the record is true/)
+  const anchored = await commitReceipt(base, w.mem)
+  w.settle('__receipts__')
+  assert.ok(anchored.anchor?.txid, 'receipt anchored')
+  assert.equal((await w.mem.prove('__receipts__', anchored.anchor!.seq)).result.ok, true)
+})
+
+test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction anchored', async () => {
+  const w = await world()
+  const idx = new CitationIndex(join(mkdtempSync(join(tmpdir(), 'mamem-')), 'cit.json'))
+  const claims: Claim[] = [
+    { text: 'port 4 is torqued to 45', literal: 'spec(port4, 45)', cites: [m(0), m(1)] },
+    { text: 'applies(port4, torque)', cites: [m(1)] }
+  ]
+  idx.add({ receiptHash: 'r1', claims })
+  idx.add({ receiptHash: 'r2', claims: [claims[1]!] })
+  assert.deepEqual(idx.citing(m(0)).map(a => a.receiptHash), ['r1'])
+  assert.deepEqual(idx.citing(m(1)).map(a => a.receiptHash).sort(), ['r1', 'r2'])
+  // the manual is revised: torque is now 55
+  await w.mem.remember('manual', 'requires(torque, 55).')
+  await w.mem.remember('manual', 'note(revision, 2).')
+  w.settle('manual')
+  const older = await w.mem.prove('manual', 0)
+  assert.equal(older.result.ok, true, `older batch still provable after a newer anchor: ${JSON.stringify(older.result)}`)
+  const corr = await onRevision(idx, m(0), m(2), w.fetch, { rules: RULES, mem: w.mem })
+  assert.equal(corr.length, 1)
+  assert.equal(corr[0]!.stillGrounded, false)
+  assert.deepEqual(corr[0]!.withdrawn, ['port 4 is torqued to 45'])
+  w.settle('__corrections__')
+  assert.equal((await w.mem.prove('__corrections__', corr[0]!.anchor!.seq)).result.ok, true, 'correction anchored + provable')
+  assert.equal(new CitationIndex(idx['file']).citing(m(1)).length, 2, 'index persists')
+})
+
+test('AGT-005 consensus time: existence-by the block time; unmined/forged refused', async () => {
+  const w = await world()
+  const tx = w.mem.anchorTx(w.mem.tailLink('manual')!.txid)!
+  const tb = await timeBounds(tx, w.chain)
+  const hdr = await w.chain.headerAtHeight(tb.blockHeight)
+  assert.equal(tb.notAfter, hdr!.time)
+  assert.ok(tb.mtp <= tb.notAfter)
+  assert.match(tb.statement, /no later than/)
+  const lying = { currentHeight: async () => await w.chain.currentHeight(), headerAtHeight: async (h: number) => await w.chain.headerAtHeight(h), isValidRootForHeight: async () => false } as unknown as ChainTracker
+  await assert.rejects(() => timeBounds(tx, lying), /does not verify/)
+  const { Transaction } = await import('@bsv/sdk')
+  await assert.rejects(() => timeBounds(Transaction.fromHex(tx.toHex()), w.chain), /not mined/)
+})
+
+test('AGT-007 audit bundle verifies offline; 4 tamper cases rejected with reasons', async () => {
+  const w = await world()
+  await w.mem.remember('manual', 'requires(torque, 55).'); await w.mem.remember('manual', 'z.')
+  w.settle('manual')
+  const b0 = (await w.mem.prove('manual', 0)).bundle!
+  const b1 = (await w.mem.prove('manual', 1)).bundle!
+  const b2 = (await w.mem.prove('manual', 2)).bundle!
+  const dag = new PolicyDAG([{ name: 'org', rules: parseProgram(`@id pol
+permit(P, read, R) :- member(P, verified), fragment(R).`).rules }])
+  const edb = [{ pred: 'member', args: ['agent-b', 'verified'] }, { pred: 'fragment', args: ['manual-0'] }]
+  const derivation = dag.query(edb, 'permit', ['agent-b', 'read', 'manual-0'])!
+  const { receipt } = await commitReceipt({ answer: 'port 4: 45', fragmentRefs: [m(0), m(1)], checkResult: 'verified', modelId: { kind: 'api', provider: 'p', release: 'r1' }, timestamp: 1 })
+  const pub = w.sk.toPublicKey().toString()
+  const bundle = buildAuditBundle({
+    receipt,
+    fragments: [{ ref: m(0), bundle: b0 }, { ref: m(1), bundle: b1 }],
+    signers: [{ ref: m(0), pubkey: pub, promise: w.promises[0]! }, { ref: m(1), pubkey: pub, promise: w.promises[1]! }],
+    policy: { edb, derivation }
+  })
+  const json = JSON.parse(JSON.stringify(bundle)) // offline: travels as plain JSON
+  assert.deepEqual(await verifyAuditBundle(json, w.chain, { dag }), { ok: true, reasons: [] })
+  const clone = () => JSON.parse(JSON.stringify(bundle))
+  const t1 = clone(); t1.receipt.answer = 'port 4: 99'
+  assert.deepEqual((await verifyAuditBundle(t1, w.chain, { dag })).reasons, ['receipt hash mismatch'])
+  const t2 = clone(); t2.fragments[0].bundle = JSON.parse(JSON.stringify(b2))
+  assert.ok((await verifyAuditBundle(t2, w.chain, { dag })).reasons.some(r => /signer promise does not bind fragment manual\/0/.test(r)), 'swapped fragment')
+  const t3 = clone(); t3.policy.edb = [{ pred: 'member', args: ['agent-c', 'verified'] }, edb[1]]
+  assert.ok((await verifyAuditBundle(t3, w.chain, { dag })).reasons.some(r => r.startsWith('policy derivation:')), 'forged derivation')
+  const badHeaders = { ...w.chain, currentHeight: () => w.chain.currentHeight(), headerAtHeight: async (h: number) => await w.chain.headerAtHeight(h), isValidRootForHeight: async () => false } as unknown as ChainTracker
+  assert.ok((await verifyAuditBundle(clone(), badHeaders, { dag })).reasons.some(r => /fragment manual\/0: (BEEFInvalid|NotMined)/.test(r)), 'wrong headers')
+  assert.ok((await verifyAuditBundle(clone(), w.chain)).reasons.includes('policy derivation present but verifier holds no authoritative policy DAG'))
+  assert.equal(hashOf(receipt), bundle.receiptHash)
+})

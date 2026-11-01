@@ -1,0 +1,19 @@
+{
+  "name": "@mamem/chain",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test --test-timeout=60000 dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@mamem/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@bsv/sdk": "4.0.1"
+  }
+}

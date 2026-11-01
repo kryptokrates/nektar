@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+.env
+.state
+spikes
+infra
+docs/formal/.tools
+packages/zk/build
+packages/zk/circuits/*.ptau
+**/*.db
+**/*.sqlite*
+failed-tx.hex

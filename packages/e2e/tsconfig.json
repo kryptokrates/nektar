@@ -1,0 +1,50 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../chain"
+    },
+    {
+      "path": "../log"
+    },
+    {
+      "path": "../anchor"
+    },
+    {
+      "path": "../overlay"
+    },
+    {
+      "path": "../verify"
+    },
+    {
+      "path": "../crypto"
+    },
+    {
+      "path": "../mcp"
+    },
+    {
+      "path": "../contracts"
+    },
+    {
+      "path": "../identity"
+    },
+    {
+      "path": "../policy"
+    },
+    {
+      "path": "../automaton"
+    },
+    {
+      "path": "../reasoning"
+    }
+  ]
+}

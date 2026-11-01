@@ -1,0 +1,29 @@
+{
+  "name": "@mamem/overlay",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test --test-timeout=60000 dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@bsv/overlay": "2.7.0",
+    "@mamem/anchor": "workspace:*",
+    "@mamem/chain": "workspace:*",
+    "@mamem/contracts": "workspace:*",
+    "@mamem/core": "workspace:*",
+    "knex": "^3.1.0",
+    "runar-sdk": "^0.4.6",
+    "sqlite3": "^5.1.7"
+  },
+  "peerDependencies": {
+    "@bsv/sdk": "4.0.1"
+  },
+  "devDependencies": {
+    "@bsv/gasp": "1.3.10"
+  }
+}

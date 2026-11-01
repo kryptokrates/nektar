@@ -1,0 +1,31 @@
+# OPS-003 Prometheus alert rules for mamem (scrape /v1/metrics).
+groups:
+  - name: mamem
+    rules:
+      - alert: MamemAnchorFailure
+        expr: increase(mamem_anchor_failures_total[10m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "anchor broadcast failed on shard {{ $labels.shard }}" }
+      - alert: MamemPromiseViolation
+        expr: mamem_promise_violations > 0
+        labels: { severity: critical }
+        annotations: { summary: "inclusion promises past the max merge delay without a signed checkpoint (LOG-005)" }
+      - alert: MamemAnchorLag
+        expr: mamem_anchor_lag_ms > 300000
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "oldest uncheckpointed promise older than 5 minutes" }
+      - alert: MamemUnconfirmedAnchors
+        expr: mamem_unconfirmed_anchors > 50
+        for: 15m
+        labels: { severity: warning }
+        annotations: { summary: "many anchors without a BUMP — mining stalled or reorg in progress" }
+      - alert: MamemReorgSuspected
+        expr: delta(mamem_unconfirmed_anchors[5m]) > 10
+        labels: { severity: warning }
+        annotations: { summary: "unconfirmed anchors jumped — possible reorg (CHN-002 re-anchors automatically)" }
+      - alert: MamemReadRejectionsSpike
+        expr: sum(rate(mamem_rejected_reads_total[5m])) > 1
+        for: 10m
+        labels: { severity: info }
+        annotations: { summary: "elevated withheld reads (policy, clearance, finality) — check for probing" }

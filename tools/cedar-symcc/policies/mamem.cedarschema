@@ -1,0 +1,11 @@
+// Typed form of packages/policy MAMEM_SCHEMA for symbolic analysis: principals
+// carry the `level` attribute the runtime supplies (the WASM evaluator runs
+// schema-less; symcc needs the types).
+entity User { level: Long };
+entity Agent { level: Long };
+entity Fragment { level: Long, shard: String, class: String };
+action read     appliesTo { principal: [Agent, User], resource: [Fragment] };
+action write    appliesTo { principal: [Agent, User], resource: [Fragment] };
+action disclose appliesTo { principal: [Agent, User], resource: [Fragment] };
+action rotate   appliesTo { principal: [Agent, User], resource: [Fragment] };
+action revoke   appliesTo { principal: [Agent, User], resource: [Fragment] };

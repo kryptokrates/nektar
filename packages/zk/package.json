@@ -1,0 +1,33 @@
+{
+  "name": "@mamem/zk",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test --test-timeout=60000 dist/test/*.test.js",
+    "ceremony": "node dist/ceremony.js"
+  },
+  "dependencies": {
+    "@mamem/core": "workspace:*",
+    "@mamem/crypto": "workspace:*",
+    "@mamem/contracts": "workspace:*",
+    "@mamem/identity": "workspace:*",
+    "circomlibjs": "^0.1.7",
+    "snarkjs": "^0.7.6"
+  },
+  "peerDependencies": {
+    "@bsv/sdk": "4.0.1"
+  },
+  "devDependencies": {
+    "@mamem/chain": "workspace:*",
+    "@mamem/anchor": "workspace:*",
+    "@mamem/verify": "workspace:*",
+    "@mamem/log": "workspace:*",
+    "circom2": "^0.2.23",
+    "circomlib": "^2.0.5"
+  }
+}

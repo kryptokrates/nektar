@@ -1,0 +1,12 @@
+[package]
+name = "curve-vectors"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# standalone: not part of the triple-entry-evidence-bsv workspace
+[workspace]
+
+[dependencies]
+tee-bsvcurve = { path = "../../../triple-entry-evidence-bsv/crates/bsvcurve" }
+hex = "0.4"

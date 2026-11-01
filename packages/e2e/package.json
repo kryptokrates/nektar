@@ -1,0 +1,33 @@
+{
+  "name": "@mamem/e2e",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/src/e2e.js",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node dist/src/e2e.js"
+  },
+  "dependencies": {
+    "@mamem/core": "workspace:*",
+    "@mamem/chain": "workspace:*",
+    "@mamem/log": "workspace:*",
+    "@mamem/anchor": "workspace:*",
+    "@mamem/overlay": "workspace:*",
+    "@mamem/verify": "workspace:*",
+    "@mamem/crypto": "workspace:*",
+    "@mamem/mcp": "workspace:*",
+    "knex": "^3.1.0",
+    "sqlite3": "^5.1.7",
+    "@mamem/contracts": "workspace:*",
+    "@mamem/identity": "workspace:*",
+    "@mamem/policy": "workspace:*",
+    "@mamem/graph": "workspace:*",
+    "@mamem/datalog": "workspace:*",
+    "@mamem/zk": "workspace:*",
+    "@mamem/automaton": "workspace:*",
+    "@mamem/reasoning": "workspace:*"
+  },
+  "peerDependencies": {
+    "@bsv/sdk": "4.0.1"
+  }
+}

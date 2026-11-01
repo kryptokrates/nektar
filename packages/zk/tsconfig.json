@@ -1,0 +1,39 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  },
+  "include": [
+    "src",
+    "test"
+  ],
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../log"
+    },
+    {
+      "path": "../identity"
+    },
+    {
+      "path": "../chain"
+    },
+    {
+      "path": "../anchor"
+    },
+    {
+      "path": "../contracts"
+    },
+    {
+      "path": "../verify"
+    },
+    {
+      "path": "../crypto"
+    }
+  ],
+  "exclude": [
+    "dist"
+  ]
+}

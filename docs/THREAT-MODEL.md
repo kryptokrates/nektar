@@ -1,0 +1,56 @@
+# Threat model (SEC-001)
+
+Scope: the mamem packages, the MCP server, the regtest stack integration. STRIDE per component; §5/§13 adversaries from the paper (a malicious writer, a malicious prover, a malicious verifier, a network adversary, a key thief).
+
+## Trust boundaries
+
+```mermaid
+flowchart LR
+  agent["agent / LLM (untrusted input)"] -->|MCP JSON-RPC| svc["MamemMemory (trusted instance config)"]
+  reader["reader (untrusted)"] -->|identity + ZK presentations| svc
+  svc -->|tx| bsv[("BSV / Teranode (consensus-trusted)")]
+  verifier["third-party verifier (trusts only headers + own policy)"] -->|bundles| bsv
+  authority["clearance authority (trusted by config)"] -->|signed credentials| reader
+```
+
+## STRIDE
+
+| Component | Threat | Mitigation | Test |
+|---|---|---|---|
+| Anchor chain | **T**ampering: a forked or rewritten history | head UTXO single-spend; Rúnar checks n+1, R' chaining, owner sig; overlay admits successors only | contracts/anchor/overlay tests, fuzz decoder |
+| Anchor chain | **S**poofing: shard squatting via forged genesis | shard id = hash160(genesisOwner); expected shard pinned by the verifier | `tm.test`, `zk-integration` (shard mismatch) |
+| Proof bundles | **T**ampering: leaf, path, BEEF, tail | full recomputation; leaf-count binding; tail must end at the proven anchor | verify tests, fuzz (120 mutations) |
+| Regtest broadcast | **D**oS / ambiguity: TX_MISSING_PARENT, timeouts | identical re-broadcast with backoff; own-attempt adoption; fail-fast dry funding | anchor retry tests |
+| Confirmations | **T**ampering by BUMP mix-up | each tx keeps only its own BUMP (regression: a descendant's BUMP was assigned to ancestors) | `anchorchain.test` regression |
+| Identity | **S**poofing: replayed or self-chosen challenge | nonces issued by the instance, 5-min TTL; binding must match the answering pubkey; separate challenge domain tag | `memory.test` Cedar/ZKA tests |
+| ZK clearance | **E**levation: self-issued, borrowed, replayed or mis-scoped credential | trusted authorities pinned; credential bound to the holder pubkey; transcript scoped to shard/seq; single use; level from proof only | `memory.test` ZKA gate (7 negatives) |
+| ZK clearance | **I**nformation disclosure: level revealed | public commitment carries no level or blinding (the earlier version leaked both) | `identity.test` key-set assertion |
+| Cedar | **E**levation: caller-supplied policy or level | instance-level policy; hash recomputed vs anchored; principal level = PROVEN level only (closed a bypass where a forged proof's requiredLevel raised the Cedar level) | `memory.test` forged-proof case |
+| Cedar | policy bug | SymCC proof of level isolation over all typed requests; a mutant is refuted | `pnpm cedar:symcc`, `policy.test` POL-015 |
+| Policy DAG | **T**ampering: caller facts or root | EDB only from verified caller/proof; DAG root must equal the anchored root | `graph-anchor.test` POL-016a-c |
+| Encryption | **I**nfo disclosure: plaintext level>0 served | ZK gate applies to every level>0 record, plaintext or encrypted; decryption only after verifyFragment | `memory.test` plaintext gate, KEY-008 |
+| Encryption | **D**ata loss: dedup collision | hdp binds the plaintext before it is dropped (an earlier bug deduplicated distinct encrypted records) | regression test |
+| ZK membership | **S**poofing: proof over the prover's own anchor | expected shard from the verifier's chain; canonical-chain check; vkey pinned; nullifier store | `zk-integration` |
+| Automaton | **E**levation: off-δ transition, halt outside F, stale-state read | δ and F Merkle paths in-contract; every method continues state | `automaton.test`, regtest rejection |
+| Disclosure | replay / scope creep | verifier-named, expiring, signed envelope; wrapped value authenticated | disclosure tests + fuzz |
+| Ingest | **S**poofing: forged source attribution | originator signature over (d, p\σ) verified before encryption; `requireSignedProvenance` | TC-70 |
+| Log | **R**epudiation of a promise | signed checkpoints + promise monitor + alert | TC-71 |
+| Restart | replay after restart | persisted security state | TC-73 |
+| HTTP API | input abuse | 1 MB body limit; same verified-identity / clearance gates as MCP; public routes are read-only proofs | TC-74 |
+| Decoders | **D**oS / confusion by malformed input | typed errors only; byte-authenticated decoders | `packages/fuzz` |
+| Supply chain | malicious dependency | pinned versions (≥7 days old), lockfile, single `@bsv/sdk`, `check:deps`; ⚠ `dangerouslyAllowAllBuilds: true` in `pnpm-workspace.yaml` allows every install script — review before production | `pnpm check:deps`, Docker clean build |
+| Secrets | leakage via repo | `.env`, `.state/` gitignored; RPC creds from env only | `git check-ignore` |
+| Repudiation | writer denies a record | signed provenance, signed inclusion promises, anchored receipts | audit bundle |
+
+## Residual risks
+
+- **Origin falsehood**: by design, out of scope for cryptography (labelled everywhere).
+- **Groth16 setup**: local 2-contributor dev ceremony only. Production needs a public ceremony.
+- **Poseidon ↔ SHA tree equality** is not enforced on-chain; the writer computes both. A malicious writer could anchor a Poseidon root over different leaves. Membership proofs then prove membership in *that* root only. Mitigation: verifiers recompute the companion root when they hold the leaves.
+- **Clearance authority honesty** is assumed (trust is by configuration).
+- **Challenge TTL**: a nonce can be reused by the same caller within 5 minutes on the same instance. ZK transcripts are single-use.
+- **Security-state persistence**: challenges, used ZK transcripts, nullifiers and revocations persist through `securityStore` (`FileSecurityStore`, atomic replace) and survive a restart (TC-73). Without a configured store they are in-memory, as in the demo server.
+- **Ingest signatures** are enforced only when `requireSignedProvenance` is set or a `sourcePub` is supplied. Unsigned agent notes remain possible by configuration.
+- **Finality** is a policy parameter (`finalityDepth`). Reads that matter should use `requireFinal`.
+- **No external audit / pen test yet** (SEC-004/005): required before mainnet.
+- **Key-compromise playbook** (SEC-008): rotate (on-chain) → revoke old key (SMT root anchored) → re-encrypt future writes under new seeds. Records already written stay readable to the old seed holder; crypto-shredding the old seed is the only remedy.

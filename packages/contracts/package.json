@@ -1,0 +1,24 @@
+{
+  "name": "@mamem/contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "scripts": {
+    "build": "tsc -b && node compile.mjs",
+    "test": "node --test --test-timeout=60000 dist/test/*.test.js",
+    "compile:contract": "node compile.mjs"
+  },
+  "dependencies": {
+    "@bsv/sdk": "4.0.1",
+    "@mamem/core": "workspace:*",
+    "runar-lang": "0.4.6",
+    "runar-sdk": "^0.4.6"
+  },
+  "peerDependencies": {
+    "@bsv/sdk": "4.0.1"
+  },
+  "devDependencies": {
+    "runar-compiler": "^0.4.6",
+    "typescript": "^5.4.0"
+  }
+}

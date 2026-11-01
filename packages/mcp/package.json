@@ -1,0 +1,35 @@
+{
+  "name": "@mamem/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "bin": {
+    "mamem-mcp": "./dist/src/bin.js"
+  },
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test --test-timeout=60000 dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@mamem/anchor": "workspace:*",
+    "@mamem/automaton": "workspace:*",
+    "@mamem/chain": "workspace:*",
+    "@mamem/contracts": "workspace:*",
+    "@mamem/core": "workspace:*",
+    "@mamem/crypto": "workspace:*",
+    "@mamem/datalog": "workspace:*",
+    "@mamem/graph": "workspace:*",
+    "@mamem/identity": "workspace:*",
+    "@mamem/log": "workspace:*",
+    "@mamem/overlay": "workspace:*",
+    "@mamem/policy": "workspace:*",
+    "@mamem/verify": "workspace:*",
+    "@mamem/zk": "workspace:*"
+  },
+  "devDependencies": {
+    "@bsv/sdk": "4.0.1"
+  }
+}

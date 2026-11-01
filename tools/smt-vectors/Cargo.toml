@@ -1,0 +1,13 @@
+[package]
+name = "smt-vectors"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# standalone: not part of the identity-attribution workspace
+[workspace]
+
+[dependencies]
+idattr-smt = { path = "../../../identity-attribution/crates/idattr-smt" }
+sha2 = "0.10"
+hex = "0.4"

@@ -1,0 +1,17 @@
+# mamem services. The Teranode regtest stack is separate (pnpm stack:up).
+#   docker compose run --rm -i mamem-mcp   → MCP over stdio (attach an MCP client)
+#   docker compose run --rm demo           → scripted agent session (smoke test)
+services:
+  mamem-mcp:
+    build: .
+    image: mamem:local
+    stdin_open: true
+    environment:
+      MAMEM_MODEL_ID: ${MAMEM_MODEL_ID:-unspecified}
+  demo:
+    image: mamem:local
+    depends_on: [mamem-mcp]
+    entrypoint: ["node", "packages/mcp/demo/client.mjs"]
+    environment:
+      MAMEM_LLM_URL: ${MAMEM_LLM_URL:-}
+      MAMEM_LLM_MODEL: ${MAMEM_LLM_MODEL:-}

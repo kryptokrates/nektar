@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  },
+  "include": ["src", "test"],
+  "exclude": ["dist"],
+  "references": [{ "path": "../core" }, { "path": "../datalog" }, { "path": "../identity" }, { "path": "../log" }]
+}

@@ -1,0 +1,12 @@
+[package]
+name = "cedar-symcc-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+cedar-policy = "=4.14.0"
+cedar-policy-symcc = "=0.8.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util"] }

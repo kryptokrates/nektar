@@ -1,0 +1,25 @@
+{
+  "name": "@mamem/fuzz",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test --test-timeout=60000 dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@mamem/core": "workspace:*",
+    "@mamem/chain": "workspace:*",
+    "@mamem/contracts": "workspace:*",
+    "@mamem/verify": "workspace:*",
+    "@mamem/zk": "workspace:*",
+    "@mamem/datalog": "workspace:*",
+    "@mamem/identity": "workspace:*",
+    "@mamem/automaton": "workspace:*",
+    "@mamem/mcp": "workspace:*",
+    "runar-sdk": "^0.4.6"
+  },
+  "peerDependencies": {
+    "@bsv/sdk": "4.0.1"
+  }
+}

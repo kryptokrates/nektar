@@ -9,7 +9,7 @@
 import {
   SmartContract,
   assert, checkSig, checkPreimage, extractOutputHash, extractAmount, extractLocktime,
-  sha256, hash160, hash256, cat, len, num2bin,
+  sha256, hash160, hash256, cat, len, num2bin, toByteString,
   type PubKey, type Sig, type SigHashPreimage, type Sha256, type ByteString
 } from 'runar-lang'
 
@@ -30,7 +30,7 @@ export class DisclosureSale extends SmartContract {
   }
 
   private p2pkh (pkh: ByteString): ByteString {
-    return cat(num2bin(0x76a9n, 2n), cat(pkh, num2bin(0x88acn, 2n)))
+    return cat(toByteString('76a914'), cat(pkh, toByteString('88ac')))
   }
 
   private out (sats: bigint, script: ByteString): ByteString {

@@ -51,10 +51,13 @@ export class FeeVault {
     tx.addOutput({ satoshis: Number(payAmount), lockingScript: LockingScript.fromHex(p2pkhHex(this.params.destPkh)) })
     tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(p2pkhHex(this.params.ownerPkh)) })
     tx.lockTime = locktime
-    const { preimageHex } = computeOpPushTx(tx, 0, vault.script, vault.satoshis)
+    const csep = MAMEM_FEEVAULT_ARTIFACT.codeSeparatorIndices?.[0]
+    const { preimageHex } = computeOpPushTx(tx, 0, vault.script, vault.satoshis, csep)
     const digest = Hash.sha256(Hash.sha256(Buffer.from(preimageHex, 'hex')))
     const sigHex = (ownerKey.sign(Array.from(digest)).toDER('hex') as string) + '41'
-    const unlock = this.contract.buildUnlockingScript('spend', [preimageHex, sigHex, ownerKey.toPublicKey().toString(), payAmount, contSats, changeSats])
+    // unlocking = [args…, txPreimage last, method-selector OP_0] — the compiled
+    // dispatch pops the selector first, then expects the preimage on top.
+    const unlock = this.contract.buildUnlockingScript('spend', [sigHex, ownerKey.toPublicKey().toString(), payAmount, contSats, changeSats, preimageHex]) + '00'
     tx.inputs[0]!.unlockingScript = LockingScript.fromHex(unlock)
     return { tx, newState }
   }

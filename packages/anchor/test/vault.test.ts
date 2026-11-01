@@ -10,9 +10,9 @@ import { hash160 } from '@mamem/core'
 import { FeeVault, type VaultUtxo } from '../src/vault.js'
 
 const owner = PrivateKey.fromRandom()
-const ownerPkh = Buffer.from(hash160(owner.toPublicKey().toHash())).toString('hex')
+const ownerPkh = Buffer.from(hash160(new Uint8Array(Buffer.from(owner.toPublicKey().toString(),'hex')))).toString('hex')
 const dest = PrivateKey.fromRandom()
-const destPkh = Buffer.from(hash160(dest.toPublicKey().toHash())).toString('hex')
+const destPkh = Buffer.from(hash160(new Uint8Array(Buffer.from(dest.toPublicKey().toString(),'hex')))).toString('hex')
 const params = { destPkh, ownerPkh, perTxCap: 1_000n, windowCap: 3_000n, windowBlocks: 5n, maxFee: 10n }
 
 function setup () {
@@ -44,7 +44,7 @@ test.skip('V1 vault: valid spend accepted; over-cap, wrong outputs and wrong sig
   assert.notEqual((await chain.broadcast(wrong.tx)).status, 'success', 'non-owner sig must be rejected')
   // tampered outputs: pay to a different address than destPkh
   const evil = vault.buildSpend(utxo, owner, 500n, 1, 5n)
-  evil.tx.outputs[1]!.lockingScript = LockingScript.fromHex(`76a914${Buffer.from(hash160(PrivateKey.fromRandom().toPublicKey().toHash())).toString('hex')}88ac`)
+  evil.tx.outputs[1]!.lockingScript = LockingScript.fromHex(`76a914${Buffer.from(hash160(new Uint8Array(Buffer.from(PrivateKey.fromRandom().toPublicKey().toString(),'hex')))).toString('hex')}88ac`)
   assert.notEqual((await chain.broadcast(evil.tx)).status, 'success', 'payment to non-destPkh must be rejected')
 })
 

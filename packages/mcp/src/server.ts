@@ -70,6 +70,27 @@ export const TOOLS = [
     }
   },
   {
+    name: 'proveSubset',
+    description: 'Holder side (DIS-002 proof sharding): selective proof of existence for a SUBSET of one batch\'s records — per-leaf shard subpaths over the same anchored tree (64-leaf subtrees) + one shared top multiproof → L_ZKDis v2 hex. Reveals leaf positions + hashes, not contents. Gated by MAMEM_PROOF_SHARDING (default on).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        shard: { type: 'string' },
+        seqs: { type: 'array', items: { type: 'number' }, description: 'record seqs to disclose — all must belong to the SAME anchored batch' }
+      },
+      required: ['shard', 'seqs']
+    }
+  },
+  {
+    name: 'verifySubset',
+    description: 'Verifier side: verify an L_ZKDis v2 subset proof — strict canonical codec, every disclosed leaf folds to its shard root, the shard roots fold through the shared multiproof to R of an SPV-verified anchor of this shard on its canonical chain, anchored size. Proves the listed leaf hashes are in the batch: not their content, not truth.',
+    inputSchema: {
+      type: 'object',
+      properties: { shard: { type: 'string' }, bytes: { type: 'string', description: 'L_ZKDis v2 hex from proveSubset' } },
+      required: ['shard', 'bytes']
+    }
+  },
+  {
     name: 'proveDerivation',
     description: 'Holder side (Wright §14): ZK-STARK that a committed derivation path to pred(args) exists under the anchored policy DAG — each step applies a rule node Merkle-proven against the policy root. Bound to a verifier-issued queryId → L_ZKDer v3 hex. Reveals neither the path nor any fact.',
     inputSchema: {
@@ -186,6 +207,16 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     case 'verifyMembership': {
       const { Buffer } = await import('node:buffer')
       return mem.verifyMembership(args.shard, args.seq, new Uint8Array(Buffer.from(args.bytes, 'hex')))
+    }
+    case 'proveSubset': {
+      const { Buffer } = await import('node:buffer')
+      const r = await mem.proveSubset(args.shard, args.seqs)
+      if (!r.ok) return { ok: false, reason: r.reason }
+      return { lzkdis: Buffer.from(r.bytes).toString('hex'), bytes: r.bytes.length, batch: r.batchIndex, size: r.size, indices: r.indices, statement: 'subset inclusion proof: the listed leaf hashes are in this anchored batch (per-shard subpaths + shared top path); reveals positions and leaf hashes, not record contents' }
+    }
+    case 'verifySubset': {
+      const { Buffer } = await import('node:buffer')
+      return mem.verifySubset(args.shard, new Uint8Array(Buffer.from(args.bytes, 'hex')))
     }
     case 'proveDerivation': {
       const { Buffer } = await import('node:buffer')

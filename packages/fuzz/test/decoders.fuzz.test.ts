@@ -10,7 +10,7 @@ import { dsha256, utf8, toHex } from '@mamem/core'
 import { MockChain, MockFunder } from '@mamem/chain'
 import { decodeMamemAnchor } from '@mamem/contracts'
 import { verifyFragment } from '@mamem/verify'
-import { encodeZkm2, decodeZkm2, ZkmCodecError, verifyZkm2, encodeZkder, decodeZkder, ZkdCodecError, verifyZkder } from '@mamem/zk'
+import { encodeZkm2, decodeZkm2, ZkmCodecError, verifyZkm2, encodeZkder, decodeZkder, ZkdCodecError, verifyZkder, buildSubsetProof, encodeZkdis, decodeZkdis, ZksCodecError, verifyZkdis } from '@mamem/zk'
 import { parseProgram, ParseError } from '@mamem/datalog'
 import { issueDisclosure, verifyDisclosure, fieldPath, fieldRoot, randSalt } from '@mamem/identity'
 import { AutomatonChain, decodeMamemAutomaton } from '@mamem/automaton'
@@ -116,6 +116,21 @@ test('fuzz: L_ZKDer v3 codec + STARK verifier never throw and never accept a mut
       assert.deepEqual(encodeZkder(d), m, 'accepted bytes re-encode identically (canonical)')
     } catch (e) { assert.ok(e instanceof ZkdCodecError, `untyped error: ${String(e)}`) }
     const v = verifyZkder(m) // must return, never throw
+    if (v.ok) assert.deepEqual(m, valid, `mutation ${i} accepted as a different proof`)
+  }
+})
+
+test('fuzz: L_ZKDis v2 codec + subset verifier never throw and never accept a mutation', async () => {
+  const leaves = Array.from({ length: 70 }, (_, i) => dsha256(utf8(`fz-${i}`)))
+  const valid = encodeZkdis(buildSubsetProof(leaves, [1, 63, 64, 69]))
+  assert.ok(verifyZkdis(valid).ok, 'valid subset proof verifies')
+  for (let i = 0; i < Math.ceil(N / 3); i++) {
+    const m = mutate(valid)
+    try {
+      const d = decodeZkdis(m)
+      assert.deepEqual(encodeZkdis(d), m, 'accepted bytes re-encode identically (canonical)')
+    } catch (e) { assert.ok(e instanceof ZksCodecError, `untyped error: ${String(e)}`) }
+    const v = verifyZkdis(m) // must return, never throw
     if (v.ok) assert.deepEqual(m, valid, `mutation ${i} accepted as a different proof`)
   }
 })

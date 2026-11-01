@@ -22,6 +22,7 @@ What mamem took from each source, and how: **reused** (code or vectors), **adopt
 | §19 | Identity, rotation, revocation; fragments bound to their signing epoch | **implemented**: rotation certs, SMT revocation (cross-checked against the Rust crate), custody; epoch-bound authorship (`verifyAuthorship`, `MamemMemory.authorship`) | `identity` |
 | App. E | Access-policy-driven keys | **implemented**: Cedar ∧ DAG ∧ ZK clearance gate before decryption | `mcp/memory.recall` |
 | §14 | ZK derivation attestation (POL-011) | **implemented**: a second RISC Zero guest replays the committed path — each step's rule τ is a DAG node Merkle-proven against the anchored policy root, each premise is an earlier step's output, a committed fact node or a private context leaf; journal = (policyRoot, conclusionHash, queryId). Negated premises and uncommitted-premises truth are not attested. | `tools/stark/methods/guest-datalog`, `datalog/path`, `zk/stark/datalog` |
+| §13/DIS | Selective proof of existence / proof sharding (DIS-002) | **implemented** behind `MAMEM_PROOF_SHARDING` (default on): the batch tree's own level-6 nodes are 64-leaf shard roots; a subset proof carries a ≤6-level subpath per disclosed leaf plus ONE deduplicated level-6→root multiproof, encoded L_ZKDis v2 and verified against the SPV-checked anchor. No root-format or anchor change. | `zk/stark/subproof`, `MamemMemory.proveSubset/verifySubset` |
 
 ## Craig Wright: *Singular Grit* essays (design pressure, not code)
 
@@ -34,7 +35,8 @@ What mamem took from each source, and how: **reused** (code or vectors), **adopt
 ## Wright / nChain patents and Metanet
 
 - **US10652014B2 (HD keys / common secrets).** Technical overlap with BRC-42 derivation is noted. Licence position: see `v2-legal-notes.md` (LEG-001).
-- **WO 2022/100946 (Merkle Proof Entity) and WO 2025/119666 (selective verification).** **Rejected** for implementation: standard BEEF/BUMP proofs are used and the proof-sharding format is avoided (DIS-002 deferred).
+- **US 12,730,827 B2 (proof sharding / selective verification — the granted member of the WO 2025/119666 filing family, granted to nChain 2026-09-08).** **Implemented** (GOAL-v6 S5) under the Open BSV pledge — nChain/BSVA grants free use of its patent portfolio on BSV only (revocable; BSV + testnets), and mamem is BSV-only by construction. Kept behind `MAMEM_PROOF_SHARDING` (default on; `0` disables the tools as an operator opt-out) — see NOTICE.
+- **WO 2022/100946 (Merkle Proof Entity).** **Rejected** for implementation: standard BEEF/BUMP proofs are used (filing marked Ceased).
 - **Metanet.** **Adopted** as an export format: graph heads have a Metanet-compatible JSON head. No new tx type (AOR-011).
 - **Bitcoin Script FSM writings (2019).** **Adopted**: transition table without nested IFs, using a committed table and a membership path (AUT-007).
 
@@ -83,4 +85,4 @@ What mamem took from each source, and how: **reused** (code or vectors), **adopt
 - Per-memory on-chain transactions. **Rejected**: one Rúnar spend per batch of up to 65,536 leaves.
 - Hand-written Bitcoin Script. **Rejected** (project rule): Rúnar only.
 - On-chain ZK verification. **Deferred:** a Groth16 verifier and the Schnorr gate are too large for script, and no Rúnar verifier exists for RISC Zero receipts. §13 allows off-chain verification against the anchored root ("on-chain if necessary").
-- Proof sharding (patented format). **Deferred** pending a licence position.
+- Proof sharding. **Implemented** behind `MAMEM_PROOF_SHARDING` under the Open BSV pledge (US 12,730,827 B2 — BSV only; NOTICE).

@@ -163,6 +163,6 @@ The real MCP server process, driven by the SDK client exactly like an AI client.
 
 ## What the model sees
 
-- **Tools:** remember, recall, prove, anchor, proveMembership, verifyMembership, rotate, revoke, disclose, challenge, authorize, automaton. Annotations: read-only for recall, prove and the ZK verifiers; destructive for rotate and revoke.
+- **Tools:** remember, recall, prove, anchor, zkQuery, proveMembership, verifyMembership, proveSubset, verifySubset, proveDerivation, verifyDerivation, rotate, revoke, disclose, challenge, authorize, automaton. Annotations: read-only for recall, prove and the ZK/subset provers and verifiers; destructive for rotate and revoke.
 - **Prompts:** `grounded-answer` (recall → answer only from verified items → cite), `remember-with-source`, `audit-answer`.
 - **Every answer receipt states:** inclusion and integrity are verified; the truth of the content is **not** established.

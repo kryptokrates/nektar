@@ -22,7 +22,7 @@ import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, ty
 import { deriveFragmentKey, deriveLevelKey, encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@mamem/crypto'
 import type { Broadcaster, ChainTracker, Funder } from '@mamem/chain'
 import * as idbind from '@mamem/identity'
-import { proveMembershipStark, verifyMembershipAnchoredStark, starkQueryId, proveDerivationStark, verifyDerivationBound } from '@mamem/zk'
+import { proveMembershipStark, verifyMembershipAnchoredStark, starkQueryId, proveDerivationStark, verifyDerivationBound, buildSubsetProof, encodeZkdis, decodeZkdis, verifySubsetAnchored } from '@mamem/zk'
 
 export interface MamemMemoryOptions {
   signingKey?: PrivateKey
@@ -289,6 +289,58 @@ export class MamemMemory {
     const res = await verifyMembershipAnchoredStark(bytes, anchorTx, this.chain, { consume: this.consumeZkQuery },
       { shard: shardId, isCanonical: (txid: string) => tail.some(l => l.txid === txid) })
     return { ok: res.ok, reason: res.reason, anchorTxid: res.anchorTxid, statement: 'proves some record is in this anchored batch (ZK-STARK, no trusted setup) — not which one, not its content, not truth' }
+  }
+
+  /** GOAL-v6 S5 proof sharding (DIS-002; US 12,730,827 B2 under the Open BSV
+   *  pledge — BSV only, see NOTICE): default ON, `MAMEM_PROOF_SHARDING=0`
+   *  opts out for patent-cautious operators → 'disabled'. */
+  private proofShardingOn (): boolean { return process.env.MAMEM_PROOF_SHARDING !== '0' }
+
+  /** holder side: a selective inclusion proof for a SUBSET of one batch's
+   *  records — per-leaf shard subpaths (K=64-leaf subtrees of the same
+   *  anchored tree) plus one shared level-6→root multiproof, encoded as
+   *  L_ZKDis v2. The anchored root is untouched; the proof reveals positions
+   *  and leaf hashes, never record contents. */
+  async proveSubset (shard: string, seqs: number[]): Promise<{ ok: true, bytes: Uint8Array, batchIndex: number, size: number, indices: number[] } | { ok: false, reason: string }> {
+    if (!this.proofShardingOn()) return { ok: false, reason: 'disabled' }
+    if (!Array.isArray(seqs) || seqs.length === 0 || !seqs.every(s => Number.isInteger(s) && s >= 0)) return { ok: false, reason: 'seqs must be a non-empty list of record seqs' }
+    if (new Set(seqs).size !== seqs.length) return { ok: false, reason: 'duplicate seqs' }
+    const recs = await this.store.all(shard)
+    const found = new Map<number, LogRecord>()
+    for (const r of recs) if (seqs.includes(r.seq)) found.set(r.seq, r)
+    const missing = seqs.filter(s => !found.has(s))
+    if (missing.length > 0) return { ok: false, reason: `no record(s) seq ${missing.join(',')}` }
+    const batchIndex = found.get(seqs[0]!)!.batchIndex
+    if (batchIndex === undefined) return { ok: false, reason: 'not batched' }
+    if (![...found.values()].every(r => r.batchIndex === batchIndex)) return { ok: false, reason: 'seqs span multiple batches — one subset proof covers one batch' }
+    const batch = recs.filter(r => r.batchIndex === batchIndex).sort((a, b) => (a.leafIndex ?? 0) - (b.leafIndex ?? 0))
+    const leaves = batch.map(r => r.leaf)
+    const indices = seqs.map(s => batch.findIndex(r => r.seq === s))
+    const proof = buildSubsetProof(leaves, indices)
+    return { ok: true, bytes: encodeZkdis(proof), batchIndex, size: leaves.length, indices: [...indices].sort((a, b) => a - b) }
+  }
+
+  /** verifier side: the proof's claimed batch root locates OUR anchored link
+   *  with that R — then the same shard/canonical/SPV checks as
+   *  verifyMembership, and the multiproof must fold to the anchored R. */
+  async verifySubset (shard: string, bytes: Uint8Array): Promise<{ ok: boolean, reason?: string, anchorTxid?: string, size?: number, indices?: number[], seqs?: number[], statement: string }> {
+    const statement = 'proves the listed leaf hashes sit at the listed positions in this anchored batch (selective subset disclosure; record contents stay private) — not truth'
+    if (!this.proofShardingOn()) return { ok: false, reason: 'disabled', statement }
+    let hdr
+    try { hdr = decodeZkdis(bytes) } catch (e) { return { ok: false, reason: `codec: ${(e as Error).message}`, statement } }
+    const rootHex = toHex(hdr.batchRoot)
+    const tail = this.tails.get(shard) ?? []
+    const link = tail.find(l => l.R === rootHex)
+    const anchorTx = link ? this.anchorTxs.get(link.txid) : undefined
+    if (!link || !anchorTx) return { ok: false, reason: 'no anchor of this shard commits that batch root', statement }
+    // expected shard = THIS instance's shard id — never read from the anchor
+    const shardId = this.anchors.get(shard)?.getShardId()
+    if (!shardId) return { ok: false, reason: 'unknown shard', statement }
+    const res = await verifySubsetAnchored(bytes, anchorTx, this.chain,
+      { shard: shardId, isCanonical: (txid: string) => tail.some(l => l.txid === txid) })
+    const batch = (await this.store.all(shard)).filter(r => r.batchIndex === link.n)
+    const seqs = res.indices?.map(i => batch.find(r => (r.leafIndex ?? 0) === i)?.seq ?? i)
+    return { ok: res.ok, reason: res.reason, anchorTxid: res.anchorTxid, size: res.size, indices: res.indices, seqs, statement }
   }
 
   /** the policy root the verifier trusts: the configured anchored root when it

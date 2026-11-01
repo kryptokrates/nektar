@@ -445,3 +445,40 @@
 - Honest gap: context (EDB) premises are uncommitted by default — the
   attestation proves faithful rule application, not premise truth; committed
   fact-node premises give full binding (documented in PROOFS/THREAT-MODEL).
+
+## GOAL-v6 S5 — proof sharding (DIS-002, US 12,730,827 B2)
+- Licence position: nChain US 12,730,827 B2 (data-reveal path over a
+  hierarchical structure) granted 2026-09-08; the Open BSV pledge grants free
+  use on BSV (+testnets) only — mamem is BSV-only, so the feature ships
+  default-ON behind `MAMEM_PROOF_SHARDING` (`0` → tools return 'disabled').
+  NOTICE records the grant + pledge; v2-legal-notes updated (the WO
+  2025/119666 filing family).
+- Design (a): VIRTUAL sharding over the existing anchored tree — shard j is
+  the tree's own level-6 node covering leaves [64j, min(64j+64, size)); NO
+  change to anchor/contract/root format, works on every existing anchored
+  batch. Each disclosed leaf's standard Merkle path splits at depth 6 into a
+  per-leaf subpath (min(6, height) siblings, odd self-pairs included) plus
+  ONE shared top multiproof deduplicated across the proven shard set (an
+  active sibling pair contributes its counterpart shard root, not a stored
+  hash — a two-shard proof needs 0 top siblings).
+- `zk/stark/subproof.ts`: `buildSubsetProof` (sorted/deduped indices →
+  per-shard subpaths + shared top walk over the built tree), strict L_ZKDis
+  v2 codec 'ZKS2' (magic‖ver‖batchRoot‖size‖numShards‖per shard{shardIndex,
+  numLeaves, leaf{index,hash,subpathLen,subpath}}‖topPathLen‖topPath —
+  canonical order + exact sibling counts enforced in decode, `ZksCodecError`
+  only), `verifyZkdis`/`verifySubsetProof` (per-leaf fold → one shard root,
+  top fold → claimed batchRoot). `verifySubsetAnchored` mirrors
+  verifyMembershipAnchoredStark: valid anchor of the EXPECTED shard →
+  canonical → mined → BUMP→headers → header R/size → reconstruction.
+- `MamemMemory.proveSubset(shard, seqs)` (one batch only; maps seq→leafIndex
+  by batch order) and `verifySubset(shard, bytes)` — the claimed root locates
+  OUR tail link with that R, then the anchored path; result carries `seqs`
+  (the verifier recovers which records were disclosed). MCP tools
+  `proveSubset`/`verifySubset` (15 → 17 tools).
+- Tests: zkdis-codec unit (round-trips; {1},{1,2,3},{63,64},{all}; sizes
+  1/5/40/64/65/70/128/200; every malformed input ZksCodecError; disagreement/
+  wrong-root/missing-sibling negatives; 300-mutation seeded walk), fuzz entry
+  (canonical re-encode, no untyped errors, no mutation accepted),
+  subset-integration (real MamemAnchor on mock chain: other batch's R, wrong
+  size, foreign shard, non-canonical, unmined, SPV-invalid, tampered,
+  truncated — each refused; flag-off 'disabled').

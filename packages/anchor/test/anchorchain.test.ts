@@ -207,21 +207,19 @@ test('every AnchorChain tx produces a BEEF with all inputs resolved', async () =
   }
 })
 
-test('P10: append with 32-byte poseidonRoot passes script verification; wrong length fails', async () => {
+test('MamemAnchor v3: state is exactly (owner, n, size, R, R\', tag, ownerPkh) — no ZK companion field', async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const f = new MockFunder(); f.topup(6); for (const u of (f as any).utxos) chain.registerParent(u.tx)
-  const ac = new AnchorChain('p10', f.keyPair, f, f.keyPair, chain)
-  const R = dsha256(utf8('batch'))
-  const pr = new Uint8Array(32); pr[0] = 0x42
-  await ac.anchor(1, R, pr) // genesis deploy carries poseidonRoot
-  const head0 = ac.getHead()!.tx
-  const d0 = decodeMamemAnchor(head0.outputs[0]!.lockingScript.toHex())
-  assert.equal(d0 && Buffer.from(d0.poseidonRoot ?? new Uint8Array(0)).toString('hex'), Buffer.from(pr).toString('hex'), 'genesis poseidonRoot written')
-  const pr2 = new Uint8Array(32); pr2[0] = 0x77
-  await ac.anchor(1, dsha256(utf8('batch2')), pr2)
-  const d1 = decodeMamemAnchor(ac.getHead()!.tx.outputs[0]!.lockingScript.toHex())
-  assert.equal(d1 && Buffer.from(d1.poseidonRoot ?? new Uint8Array(0)).toString('hex'), Buffer.from(pr2).toString('hex'), 'append poseidonRoot written')
-  // wrong lengths (31B and 33B) must fail script verification
-  await assert.rejects(() => ac.anchor(1, dsha256(utf8('batch3')), new Uint8Array(31)), /SCRIPT|assert|evaluat|invalid/i, '31-byte poseidonRoot rejected')
-  await assert.rejects(() => ac.anchor(1, dsha256(utf8('batch4')), new Uint8Array(33)), /SCRIPT|assert|evaluat|invalid/i, '33-byte poseidonRoot rejected')
+  const ac = new AnchorChain('v3', f.keyPair, f, f.keyPair, chain)
+  await ac.anchor(3, dsha256(utf8('batch')))
+  await ac.anchor(2, dsha256(utf8('batch2'))) // append passes script verification
+  const d = decodeMamemAnchor(ac.getHead()!.tx.outputs[0]!.lockingScript.toHex())!
+  assert.ok(d, 'v3 anchor decodes')
+  assert.deepEqual(Object.keys(d).sort(), ['R', 'Rp', 'n', 'ownerPkh', 'ownerPub', 'shard', 'size', 'tag'])
+  assert.equal(d.n, 1); assert.equal(d.size, 2)
+  assert.equal(Buffer.from(d.R).toString('hex'), Buffer.from(dsha256(utf8('batch2'))).toString('hex'))
+  // a v2-shaped state (extra length-prefixed 32-byte field after R') is not a v3 anchor
+  const hex = ac.getHead()!.tx.outputs[0]!.lockingScript.toHex()
+  const at = hex.lastIndexOf('6a') + 2 + 226 // after owner|n|size|R|Rp
+  assert.equal(decodeMamemAnchor(hex.slice(0, at) + '20' + '42'.repeat(32) + hex.slice(at)), null, 'v2 layout refused')
 })

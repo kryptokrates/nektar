@@ -1,6 +1,6 @@
 // Anchor field codec + chained root. Anchor = PushDrop output with fields
 //   [proto="mamem", version=u8, shard utf8, n u64le, size u64le,
-//    R_n 32B, R'_n 32B, poseidonRoot reserved-empty]
+//    R_n 32B, R'_n 32B]  (v3: no ZK companion root — ADR-020)
 // R'_n = H(TAG_RPRIME | R'_{n-1} | R_n | size_le8), R'_-1 = 0^32.
 import { dsha256, concat, utf8, u64le, eq, ZERO32, type Bytes } from './hash.js'
 import { TAG_RPRIME } from './domain.js'
@@ -8,7 +8,7 @@ import { TAG_RPRIME } from './domain.js'
 export const PROTO = 'mamem'
 export const VERSION = 1
 export const PROTOCOL_ID: [number, string] = [1, 'mamem']
-export const FIELD_COUNT = 8
+export const FIELD_COUNT = 7
 
 export interface AnchorData {
   shard: string
@@ -16,7 +16,6 @@ export interface AnchorData {
   size: number
   R: Bytes
   Rp: Bytes
-  poseidonRoot?: Bytes // reserved; must be empty or 32B for now
 }
 
 export function chainRp (prevRp: Bytes, R: Bytes, size: number): Bytes {
@@ -33,8 +32,7 @@ export function anchorFields (a: AnchorData): number[][] {
     [...u64le(a.n)],
     [...u64le(a.size)],
     [...a.R],
-    [...a.Rp],
-    [...(a.poseidonRoot ?? new Uint8Array(0))]
+    [...a.Rp]
   ]
 }
 

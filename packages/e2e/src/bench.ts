@@ -10,7 +10,6 @@ import { authorize } from '@mamem/policy'
 import { Datalog, parseProgram } from '@mamem/datalog'
 import { issueClearance, proveAccess, verifyAccess } from '@mamem/identity'
 import { MAMEM_AUTOMATON_ARTIFACT } from '@mamem/automaton'
-import { shutdownZk } from '@mamem/zk'
 import { automatonCosts } from './automaton-costs.js'
 
 const rows: string[][] = []
@@ -49,12 +48,12 @@ function world (utxos: number, maxLeaves: number) {
   fact('proof bundle JSON size (16-leaf batch)', `${JSON.stringify(bundle).length} B`)
   fact('anchor atomic BEEF size', `${bundle!.anchorBEEF.length} B`)
   await time('verifyFragment (leaf→R→anchor→BUMP→headers)', 50, () => verifyFragment(bundle!, chain))
-  // 4. ZK membership (Groth16)
-  const q = (i: number) => ({ nonce: new Uint8Array(16).fill(i + 1), verifierId: 'bench' })
+  // 4. ZK membership (Wright §13): RISC Zero ZK-STARK over the anchored SHA-256 tree
+  const qs = [mem.issueZkQuery('bench')]
   const proofs: Uint8Array[] = []
-  await time('ZK membership prove (Groth16, depth 16)', 3, async i => { proofs.push(await mem.proveMembership('s', 5, q(i), mem.zkArtifactsDir())) })
-  fact('L_ZKMem proof size', `${proofs[0]!.length} B`)
-  await time('ZK membership verify (incl. SPV of the anchor)', 3, i => mem.verifyMembership('s', 5, proofs[i]!, q(i)))
+  await time('ZK membership prove (STARK, 16-leaf batch, CPU, Docker prover)', 1, async () => { proofs.push((await mem.proveMembership('s', 5, qs[0]!.queryId)).bytes) })
+  fact('L_ZKMem v2 proof size (succinct receipt)', `${proofs[0]!.length} B`)
+  await time('ZK membership verify (WASM STARK + SPV of the anchor)', 1, () => mem.verifyMembership('s', 5, proofs[0]!))
 }
 // 5. ZK clearance (Bulletproofs, 8-bit)
 {
@@ -94,7 +93,6 @@ member(P, verified) :- bound(P).`)
   fact('automaton locking script', `${c.scriptBytes} B`)
   fact('automaton step tx', `${c.txBytes} B, fee ${c.feeSats} sat (runar fee rate setting 1)`)
 }
-await shutdownZk()
 
 const md = `# mamem benchmarks (measured)
 

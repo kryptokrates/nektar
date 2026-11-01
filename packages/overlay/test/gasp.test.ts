@@ -124,7 +124,7 @@ test('GASP sync: forged chain pushed through sync is rejected (tm still applies)
   const R = dsha256(utf8('forged'))
   const lock = LockingScript.fromHex(new RunarContract(MAMEM_ANCHOR_ARTIFACT, [
     victimPub, atkPkh, 0n, 1n, Buffer.from(R).toString('hex'),
-    Buffer.from(chainRp(GENESIS_PREV_RP, R, 1)).toString('hex'), '', Buffer.from(TAG_RPRIME).toString('hex')
+    Buffer.from(chainRp(GENESIS_PREV_RP, R, 1)).toString('hex'), Buffer.from(TAG_RPRIME).toString('hex')
   ]).getLockingScript())
   forged.addOutput({ lockingScript: lock, satoshis: 1 })
   forged.addOutput({ lockingScript: new P2PKH().lock(attacker.toPublicKey().toAddress([0x6f])), change: true })

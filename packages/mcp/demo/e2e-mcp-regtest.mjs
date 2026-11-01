@@ -56,18 +56,19 @@ check(!!a0?.txid, `anchored batch n=${a0?.n} on Teranode: ${a0?.txid}`)
 const proven = await until(async () => (await call('prove', { shard: S, seq: 0 })).result.ok)
 check(proven === true, 'prove seq 0: leaf → R → Rúnar anchor → BUMP → real Teranode headers')
 
-// ZK membership (Groth16 over the anchored Poseidon root)
-const q = { nonce: randomBytes(32).toString('hex'), verifierId: 'e2e-auditor' }
+// ZK membership (Wright §13): ZK-STARK over the SAME SHA-256 tree that is anchored
+const q = await call('zkQuery', { verifierId: 'e2e-auditor' })
 const t0 = Date.now()
-const zkm = await call('proveMembership', { shard: S, seq: 1, ...q })
+const zkm = await call('proveMembership', { shard: S, seq: 1, queryId: q.queryId })
 const proveMs = Date.now() - t0
-const vm = await call('verifyMembership', { shard: S, seq: 1, bytes: zkm.lzkmem, ...q })
-check(vm.ok === true, `ZK membership: Groth16 proof (${zkm.lzkmem.length / 2} B, ${proveMs} ms) verifies against the SPV-checked anchor ${vm.anchorTxid?.slice(0, 12)}…`)
-const vmReplay = await call('verifyMembership', { shard: S, seq: 1, bytes: zkm.lzkmem, ...q })
-check(vmReplay.ok === false && /nullifier/i.test(vmReplay.reason ?? ''), `ZK membership replay rejected (${vmReplay.reason})`)
-const tampered = zkm.lzkmem.slice(0, -2) + (zkm.lzkmem.endsWith('00') ? '01' : '00')
-const vmBad = await call('verifyMembership', { shard: S, seq: 1, bytes: tampered, nonce: randomBytes(32).toString('hex'), verifierId: 'e2e-auditor' }).catch(e => ({ ok: false, reason: e.message }))
-check(vmBad.ok === false, `tampered / re-targeted membership proof rejected (${String(vmBad.reason).slice(0, 60)})`)
+const vm = await call('verifyMembership', { shard: S, seq: 1, bytes: zkm.lzkmem })
+check(vm.ok === true, `ZK membership: STARK proof (${zkm.lzkmem.length / 2} B, ${proveMs} ms) verifies against the SPV-checked SHA-256 anchor ${vm.anchorTxid?.slice(0, 12)}…`)
+const vmReplay = await call('verifyMembership', { shard: S, seq: 1, bytes: zkm.lzkmem })
+check(vmReplay.ok === false && /queryId/i.test(vmReplay.reason ?? ''), `ZK membership replay rejected (${vmReplay.reason})`)
+const mid = zkm.lzkmem.length - 8000
+const tampered = zkm.lzkmem.slice(0, mid) + (zkm.lzkmem[mid] === '0' ? '1' : '0') + zkm.lzkmem.slice(mid + 1)
+const vmBad = await call('verifyMembership', { shard: S, seq: 1, bytes: tampered }).catch(e => ({ ok: false, reason: e.message }))
+check(vmBad.ok === false, `tampered membership proof rejected (${String(vmBad.reason).slice(0, 60)})`)
 
 // ZK clearance (Bulletproof range proof; identity via server-issued challenge)
 const wallet = new ClientWallet()

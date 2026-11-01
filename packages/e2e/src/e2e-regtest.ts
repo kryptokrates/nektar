@@ -390,9 +390,9 @@ console.log('— v2 scenario (regtest) —')
   console.log(`  TXIDS rotate=${ROT_TXID} revoke=${REV_TXID} disclose=${DIS_TXID}`)
 
   // --- P10: ZK membership on a live-anchored regtest batch + transcript leaf ---
-  console.log('— P10 zk membership (regtest) —')
-  try {
-    const zkArt = new URL('../../../zk/artifacts', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+  console.log('— P10 zk membership (regtest, STARK) —')
+  if (process.env.MAMEM_E2E_STARK === '0') console.log('  (skipped: MAMEM_E2E_STARK=0)')
+  else try {
     await vm.remember('zkm', 'p10 regtest frag 0', {}, 1)
     await vm.remember('zkm', 'p10 regtest frag 1', {}, 1)
     const za = await vm.anchorShard('zkm')
@@ -408,22 +408,13 @@ console.log('— v2 scenario (regtest) —')
         else await new Promise(r => setTimeout(r, 1500))
       }
     }
-    const Q = { nonce: new Uint8Array(16).fill(9), verifierId: 'regtest-verifier' }
-    const lzkmem = await vm.proveMembership('zkm', 0, Q, zkArt)
-    const res = await vm.verifyMembership('zkm', 0, lzkmem, Q)
-    check(res.ok === true, `regtest: membership proof verifies vs live anchor (${res.reason ?? 'ok'})`)
-    const replay = await vm.verifyMembership('zkm', 0, lzkmem, Q)
-    check(replay.ok === false, 'regtest: nullifier replay rejected')
-    // ceremony transcript hash anchored as a leaf on a system shard
-    const { readFileSync } = await import('node:fs')
-    const { createHash } = await import('node:crypto')
-    const thash = createHash('sha256').update(readFileSync(`${zkArt}/ceremony-transcript.json`, 'utf8')).digest('hex')
-    await vm.remember('__system__', `ceremony:${thash}`)
-    const ct = await vm.anchorShard('__system__')
-    await mineOne()
-    const CT_TXID = ct?.txid ?? 'unknown'
-    check(CT_TXID !== 'unknown', `regtest: ceremony transcript anchored txid=${String(CT_TXID).slice(0, 12)}…`)
-    console.log(`  TXIDS zkm-anchor=${ZKM_TXID} ceremony-anchor=${CT_TXID}`)
+    const q = vm.issueZkQuery('regtest-verifier')
+    const { bytes, ms } = await vm.proveMembership('zkm', 1, q.queryId)
+    const res = await vm.verifyMembership('zkm', 1, bytes)
+    check(res.ok === true, `regtest: STARK membership (${bytes.length} B, ${ms} ms) verifies vs the live SHA-256 anchor (${res.reason ?? 'ok'})`)
+    const replay = await vm.verifyMembership('zkm', 1, bytes)
+    check(replay.ok === false, `regtest: replay rejected (${replay.reason})`)
+    console.log(`  TXIDS zkm-anchor=${ZKM_TXID}`)
   } catch (e) {
     check(false, `regtest P10 zk block: ${String((e as Error).message).slice(0, 160)}`)
   }
@@ -568,6 +559,5 @@ console.log('— v4 production block (regtest) —')
 }
 
 await ov.knex.destroy()
-const { shutdownZk } = await import('@mamem/zk'); await shutdownZk()
 console.log(failures === 0 ? '\nREGTEST E2E PASS' : `\nREGTEST E2E FAIL: ${failures} checks failed`)
 process.exit(failures === 0 ? 0 : 1)

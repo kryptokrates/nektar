@@ -26,61 +26,52 @@ export function isValidAnchor (d: Pick<DecodedAnchor,'tag'>): boolean {
 }
 
 /**
- * Decode a MamemAnchor locking script. Authenticated byte-for-byte: parse
- * the state suffix after OP_RETURN (n|size|R|Rp|poseidon|len|tag|len|pkh),
- * then rebuild the EXPECTED script via runar for every pubkey candidate in
- * the code and require exact equality. Anything else returns null.
+ * Decode a MamemAnchor v3 locking script. Authenticated byte-for-byte: parse
+ * the state suffix after OP_RETURN (owner|n|size|R|Rp|len|tag|len|pkh), then
+ * rebuild the EXPECTED script via runar and require exact equality. Anything
+ * else (including v2 anchors with a poseidonRoot field) returns null.
  */
 export function decodeMamemAnchor (scriptHex: string): DecodedAnchor | null {
   const hex = scriptHex.startsWith('0x') ? scriptHex.slice(2) : scriptHex
   // 1. state suffix: the last OP_RETURN whose suffix parses and ends the
-  // script — layout: genesisOwner(33B)|n|size|R|Rp|poseidon|len|tag|len|pkh
+  // script — layout: genesisOwner(33B)|n(8)|size(8)|R(32)|Rp(32)|tagLen|tag|pkhLen|pkh
   let state: string | null = null
   for (let p = hex.length - 2; p >= 0; p -= 2) {
     if (hex.slice(p, p + 2) !== '6a') continue
     const cand = hex.slice(p + 2)
-    if (cand.length < 232) continue
+    if (cand.length < 230) continue
     if (!/^0[23]/.test(cand.slice(0, 66))) continue
-    // poseidonRoot is a length-prefixed field: '00' empty or '20'+32B —
-    // tagLen sits at 228 + prLen*2 either way.
-    const prLen = parseInt(cand.slice(226, 228), 16)
-    if (prLen !== 0 && prLen !== 32) continue
-    const tagLenOff = 228 + prLen * 2
-    const tagLen = parseInt(cand.slice(tagLenOff, tagLenOff + 2), 16)
+    const tagLen = parseInt(cand.slice(226, 228), 16)
     if (!isFinite(tagLen)) continue
-    const pkhOff = tagLenOff + 2 + tagLen * 2
+    const pkhOff = 228 + tagLen * 2
     const pkhLen = parseInt(cand.slice(pkhOff, pkhOff + 2), 16)
     if (!isFinite(pkhLen) || pkhOff + 2 + pkhLen * 2 !== cand.length) continue
     state = cand
     break
   }
   if (state === null) return null
-  // length-prefixed layout after Rp: prLen|poseidonRoot|tagLen|tag|pkhLen|pkh
   const ownerPub = state.slice(0, 66)
   const n = Number(readLe8(state.slice(66, 82)))
   const size = Number(readLe8(state.slice(82, 98)))
   const R = fromHex(state.slice(98, 162))
   const Rp = fromHex(state.slice(162, 226))
-  const prLen = parseInt(state.slice(226, 228), 16)
-  const poseidonRoot = fromHex(state.slice(228, 228 + prLen * 2))
-  const tagLenOff = 228 + prLen * 2
-  const tagLen = parseInt(state.slice(tagLenOff, tagLenOff + 2), 16)
-  const tag = fromHex(state.slice(tagLenOff + 2, tagLenOff + 2 + tagLen * 2))
-  const pkhOff = tagLenOff + 2 + tagLen * 2
+  const tagLen = parseInt(state.slice(226, 228), 16)
+  const tag = fromHex(state.slice(228, 228 + tagLen * 2))
+  const pkhOff = 228 + tagLen * 2
   const pkhLen = parseInt(state.slice(pkhOff, pkhOff + 2), 16)
   const ownerPkh = fromHex(state.slice(pkhOff + 2, pkhOff + 2 + pkhLen * 2))
   // 2. byte-auth: rebuild the expected script and require exact equality
   try {
-    const expected = buildScript(ownerPub, toHex(ownerPkh), BigInt(n), BigInt(size), state.slice(98, 162), state.slice(162, 226), state.slice(228, 228 + prLen * 2), state.slice(tagLenOff + 2, tagLenOff + 2 + tagLen * 2))
+    const expected = buildScript(ownerPub, toHex(ownerPkh), BigInt(n), BigInt(size), state.slice(98, 162), state.slice(162, 226), state.slice(228, 228 + tagLen * 2))
     if (expected !== hex) return null
   } catch { return null }
-  return { shard: toHex(hash160(fromHex(ownerPub))), n, size, R, Rp, poseidonRoot, tag, ownerPub, ownerPkh }
+  return { shard: toHex(hash160(fromHex(ownerPub))), n, size, R, Rp, tag, ownerPub, ownerPkh }
 }
 
 let RC: any = null
-function buildScript (pub: string, pkh: string, n: bigint, size: bigint, R: string, Rp: string, poseidon: string, tag: string): string {
+function buildScript (pub: string, pkh: string, n: bigint, size: bigint, R: string, Rp: string, tag: string): string {
   if (!RC) RC = require('runar-sdk')
-  const c = new RC.RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkh, n, size, R, Rp, poseidon, tag])
+  const c = new RC.RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkh, n, size, R, Rp, tag])
   return c.getLockingScript()
 }
 function readLe8 (hex8bytes: string): bigint {

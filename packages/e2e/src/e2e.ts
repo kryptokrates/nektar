@@ -262,36 +262,27 @@ console.log('— v2 scenario —')
   check(badD.ok === false, 'auditor envelope fails after expiry')
 }
 
-// --- P10: ZK membership on an anchored batch + ceremony transcript leaf ---
-console.log('— P10 ZK membership —')
-try {
-  const zkArt = new URL('../../../zk/artifacts', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
-  const vm = mem // reuse the shared memory instance (agentSeed set? poseidonRoot computed regardless)
-  await vm.remember('zkm', 'p10 frag 0', {}, 1)
-  await vm.remember('zkm', 'p10 frag 1', {}, 1)
-  await vm.remember('zkm', 'p10 frag 2', {}, 1)
-  await vm.remember('zkm', 'p10 frag 3', {}, 1) // batch of ≥4 → anchored
-  await vm.anchorShard('zkm'); chain.mine(1)
-  const head = vm.anchorHead('zkm')
-  check(!!head, 'zkm batch anchored')
-  const { verifyMembershipAnchored, MemoryNullifierStore } = await import('@mamem/zk')
-  const Q = { nonce: new Uint8Array(16).fill(7), verifierId: 'e2e-verifier' }
-  const lzkmem = await vm.proveMembership('zkm', 0, Q, zkArt)
-  const res = await vm.verifyMembership('zkm', 0, lzkmem, Q)
-  check(res.ok === true, `membership proof verifies vs anchored root (${res.reason ?? 'ok'})`)
-  const resBad = await vm.verifyMembership('zkm', 0, lzkmem, { nonce: Q.nonce, verifierId: 'other-verifier' })
-  check(resBad.ok === false, 'wrong queryId verifier rejected')
-  const replay = await vm.verifyMembership('zkm', 0, lzkmem, Q)
-  check(replay.ok === false, 'nullifier replay rejected')
-  // ceremony transcript anchored as a leaf on a system shard
-  const { readFileSync } = await import('node:fs')
-  const { createHash } = await import('node:crypto')
-  const transcriptHash = createHash('sha256').update(readFileSync(`${zkArt}/ceremony-transcript.json`, 'utf8')).digest('hex')
-  await vm.remember('__system__', `ceremony:${transcriptHash}`)
-  const ct = await vm.anchorShard('__system__'); chain.mine(1)
-  check(!!ct, `ceremony transcript anchored (${ct?.txid?.slice(0, 12) ?? 'no'}…)`)
-  const zkAnchorTx = head ? head.tx.id('hex') : 'none'
-  console.log(`  TXIDS zkm-anchor=${zkAnchorTx} ceremony-anchor=${ct?.txid ?? 'none'}`)
+// --- P10: ZK membership (Wright §13): STARK over the anchored SHA-256 tree ---
+// Proving needs the RISC Zero prover (Docker image mamem-stark-build, ~50 s);
+// MAMEM_E2E_STARK=0 skips it (the verifier is covered by unit tests either way).
+console.log('— P10 ZK membership (STARK) —')
+if (process.env.MAMEM_E2E_STARK === '0') console.log('  (skipped: MAMEM_E2E_STARK=0)')
+else try {
+  const vm = mem
+  for (const d of ['p10 frag 0', 'p10 frag 1', 'p10 frag 2', 'p10 frag 3']) await vm.remember('zkm', d, {}, 1) // batch of 4 → anchored
+  chain.mine(1)
+  const link = vm.tailLink('zkm')
+  check(!!link, 'zkm batch anchored')
+  vm.confirmAnchor('zkm', link!.txid)
+  const q = vm.issueZkQuery('e2e-verifier')
+  const { bytes, ms } = await vm.proveMembership('zkm', 2, q.queryId)
+  const res = await vm.verifyMembership('zkm', 2, bytes)
+  check(res.ok === true, `STARK membership (${bytes.length} B, ${ms} ms) verifies vs the anchored SHA-256 root (${res.reason ?? 'ok'})`)
+  const replay = await vm.verifyMembership('zkm', 2, bytes)
+  check(replay.ok === false, `replay with the consumed queryId rejected (${replay.reason})`)
+  const forged = bytes.slice(); forged[forged.length - 4000] ^= 1
+  check((await vm.verifyMembership('zkm', 2, forged)).ok === false, 'tampered receipt rejected')
+  console.log(`  TXIDS zkm-anchor=${link!.txid}`)
 } catch (e) {
   check(false, `P10 zk block: ${String((e as Error).message).slice(0, 140)}`)
 }
@@ -419,7 +410,6 @@ try {
 } catch (e) {
   check(false, `v4 block: ${e instanceof Error ? e.stack?.split('\n').slice(0, 3).join(' | ') : e}`)
 }
-const { shutdownZk } = await import('@mamem/zk'); await shutdownZk()
 
 console.log(failures === 0 ? '\nE2E PASS' : `\nE2E FAIL: ${failures} checks failed`)
 console.log(`  [pre-destroy total: ${Date.now()-_t0}ms]`)

@@ -47,21 +47,26 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: { shard: { type: 'string' } }, required: ['shard'] }
   },
   {
+    name: 'zkQuery',
+    description: 'Verifier side: issue a single-use ZK membership query (queryId) that a holder must bind into its proof.',
+    inputSchema: { type: 'object', properties: { verifierId: { type: 'string', description: 'who verifies (bound into the queryId)' } }, required: ['verifierId'] }
+  },
+  {
     name: 'proveMembership',
-    description: 'Holder side: build a Groth16 membership proof for a committed fragment → L_ZKMem hex.',
+    description: 'Holder side: ZK-STARK (transparent, no trusted setup) that a committed record is in the SHA-256 batch tree anchored on BSV, bound to a verifier-issued queryId → L_ZKMem v2 hex. Takes ~35-50 s on CPU.',
     inputSchema: {
       type: 'object',
-      properties: { shard: { type: 'string' }, seq: { type: 'number' }, nonce: { type: 'string' }, verifierId: { type: 'string' } },
-      required: ['shard', 'seq', 'nonce', 'verifierId']
+      properties: { shard: { type: 'string' }, seq: { type: 'number' }, queryId: { type: 'string', description: '32-byte hex from the verifier\'s zkQuery' } },
+      required: ['shard', 'seq', 'queryId']
     }
   },
   {
     name: 'verifyMembership',
-    description: 'Verifier side: verify an L_ZKMem proof against a live-anchored batch (SPV + Groth16 + nullifier dedup).',
+    description: 'Verifier side: verify an L_ZKMem v2 proof — pinned program, STARK valid, proven root == R of an SPV-verified anchor of this shard on its canonical chain, queryId issued here and unused. Proves membership only: not which record, not content, not truth.',
     inputSchema: {
       type: 'object',
-      properties: { shard: { type: 'string' }, seq: { type: 'number' }, bytes: { type: 'string' }, nonce: { type: 'string' }, verifierId: { type: 'string' } },
-      required: ['shard', 'seq', 'bytes', 'nonce', 'verifierId']
+      properties: { shard: { type: 'string' }, seq: { type: 'number', description: 'locates the batch anchor (the proof itself does not reveal the record)' }, bytes: { type: 'string' } },
+      required: ['shard', 'seq', 'bytes']
     }
   },
   {
@@ -149,15 +154,16 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       return mem.prove(args.shard, args.seq)
     case 'anchor':
       return mem.anchorShard(args.shard)
+    case 'zkQuery':
+      return { ...mem.issueZkQuery(args.verifierId), statement: 'single use, expires in 10 minutes; the holder binds queryId into its STARK' }
     case 'proveMembership': {
       const { Buffer } = await import('node:buffer')
-      const bytes = await mem.proveMembership(args.shard, args.seq, { nonce: new Uint8Array(Buffer.from(args.nonce, 'hex')), verifierId: args.verifierId }, mem.zkArtifactsDir())
-      return { lzkmem: Buffer.from(bytes).toString('hex'), statement: 'membership proof for a batch-anchored fragment' }
+      const { bytes, ms } = await mem.proveMembership(args.shard, args.seq, args.queryId)
+      return { lzkmem: Buffer.from(bytes).toString('hex'), bytes: bytes.length, proveMs: ms, statement: 'ZK-STARK: some record is in the anchored SHA-256 batch tree; reveals no leaf, index or path' }
     }
     case 'verifyMembership': {
       const { Buffer } = await import('node:buffer')
-      const res = await mem.verifyMembership(args.shard, args.seq, new Uint8Array(Buffer.from(args.bytes, 'hex')), { nonce: new Uint8Array(Buffer.from(args.nonce, 'hex')), verifierId: args.verifierId })
-      return res
+      return mem.verifyMembership(args.shard, args.seq, new Uint8Array(Buffer.from(args.bytes, 'hex')))
     }
     case 'rotate': {
       const { PrivateKey } = await import('@bsv/sdk')

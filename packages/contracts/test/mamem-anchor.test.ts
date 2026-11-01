@@ -20,7 +20,7 @@ function setup (n = 0n, size = 10n) {
   const prov = new MockProvider('testnet')
   return signer.getPublicKey().then(pk => {
     prov.addUtxo('1Q1pE5vPGEEMqRcVRMbtBK842Y6Pzo6nK9', { txid: 'ab'.repeat(32), outputIndex: 0, satoshis: 1e6, script: '' })
-    const c = new RunarContract(artifact, [pk, pkh(pk), n, size, '11'.repeat(32), '22'.repeat(32), '', Buffer.from(TAG_RPRIME).toString('hex')])
+    const c = new RunarContract(artifact, [pk, pkh(pk), n, size, '11'.repeat(32), '22'.repeat(32), Buffer.from(TAG_RPRIME).toString('hex')])
     c.connect(prov, signer)
     return c
   })
@@ -32,7 +32,7 @@ test('contract: genesisOwner carried unchanged across append and rotate', async 
   const pk = await signer.getPublicKey()
   const lock0 = c.getLockingScript()
   assert.ok(lock0.includes(pk), 'genesisOwner in state suffix')
-  await c.call('append', ['00'.repeat(72), pk, '33'.repeat(32), 20n, ''])
+  await c.call('append', ['00'.repeat(72), pk, '33'.repeat(32), 20n])
   const lock1 = c.getLockingScript()
   assert.ok(lock1.includes(pk), 'genesisOwner unchanged after append')
   const pkh = (x: string) => Buffer.from(hash160(Uint8Array.from(Buffer.from(x, 'hex')))).toString('hex')
@@ -51,7 +51,7 @@ test('contract: deploy + append produces n+1 and correct R\'', async () => {
   const c = await setup()
   await c.deploy({ satoshis: 1 })
   const pk = await signer.getPublicKey()
-  const r = await c.call('append', ['00'.repeat(72), pk, '33'.repeat(32), 20n, ''])
+  const r = await c.call('append', ['00'.repeat(72), pk, '33'.repeat(32), 20n])
   assert.ok(r.txid)
   const st: any = c.state
   assert.equal(BigInt(st.n), 1n)

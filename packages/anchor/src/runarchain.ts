@@ -206,12 +206,12 @@ export class AnchorChain {
     return head
   }
 
-  async anchor (size: number, R: Bytes, poseidonRoot: Bytes = new Uint8Array(0)): Promise<AnchorResult> {
+  async anchor (size: number, R: Bytes): Promise<AnchorResult> {
     const limit = this.opts.burstLimit ?? 100
     if (this.pendingHeads.length >= limit) {
       throw new Error(`anchor back-pressure: unconfirmed depth ${this.pendingHeads.length} >= burstLimit ${limit}`)
     }
-    return await this.withRetry(async () => await this.anchorOnce(size, R, poseidonRoot))
+    return await this.withRetry(async () => await this.anchorOnce(size, R))
   }
 
   /** Accept a tx as the new head: mark its inputs spent / change spendable,
@@ -280,7 +280,7 @@ export class AnchorChain {
   private ownAttempts = new Set<string>()
   private isOwnAttempt (txid: string): boolean { return this.ownAttempts.has(txid) }
 
-  private async anchorOnce (size: number, R: Bytes, poseidonRoot: Bytes = new Uint8Array(0)): Promise<AnchorResult> {
+  private async anchorOnce (size: number, R: Bytes): Promise<AnchorResult> {
     // fail fast on dry funding — never build or broadcast a contract-only tx
     const funding = await this.provider.getUtxos(await this.signer.getAddress())
     if (funding.length === 0) throw new Error('reserve dry: no funding UTXO available')
@@ -289,7 +289,7 @@ export class AnchorChain {
     if (!cur) {
       // genesis: deploy with n=0, Rp = contractRp(0, R, size)
       const Rp = contractRp(new Uint8Array(32), R, size)
-      this.contract = new RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkhOf(pub), 0n, BigInt(size), toHex(R), toHex(Rp), toHex(poseidonRoot), TAG_HEX])
+      this.contract = new RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkhOf(pub), 0n, BigInt(size), toHex(R), toHex(Rp), TAG_HEX])
       this.contract.connect(this.provider, this.signer)
       const d = await this.contract.deploy({ satoshis: 1 })
       const tx = this.provider.lastTx!
@@ -304,7 +304,7 @@ export class AnchorChain {
     // it advanced. Head state comes only from decoding the broadcast tx's
     // continuation output, never recomputed.
     const contract = await this.freshContract(cur)
-    const prep = await contract.prepareCall('append', [null, pub, toHex(R), BigInt(size), toHex(poseidonRoot)])
+    const prep = await contract.prepareCall('append', [null, pub, toHex(R), BigInt(size)])
     const digest = Array.from(Buffer.from(prep.sighash, 'hex'))
     const der = Buffer.from(this.shardKey.sign(digest).toDER()).toString('hex') + '41'
     const sigMap: Record<number, string> = {}
@@ -363,7 +363,7 @@ export class AnchorChain {
     const script = cur.tx.outputs[cur.vout]!.lockingScript.toHex()
     const dec = decodeMamemAnchor(script)
     if (!dec) throw new Error('freshContract: head output is not an authentic anchor')
-    const c = new RunarContract(MAMEM_ANCHOR_ARTIFACT, [dec.ownerPub, toHex(dec.ownerPkh), BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), toHex(dec.poseidonRoot ?? new Uint8Array(0)), TAG_HEX])
+    const c = new RunarContract(MAMEM_ANCHOR_ARTIFACT, [dec.ownerPub, toHex(dec.ownerPkh), BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), TAG_HEX])
     c.connect(this.provider, this.signer)
     c['currentUtxo'] = { txid: cur.tx.id('hex'), outputIndex: cur.vout, satoshis: cur.tx.outputs[cur.vout]!.satoshis!, script }
     return c

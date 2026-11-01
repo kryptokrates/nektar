@@ -7,10 +7,9 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "reproduce": "node packages/core/dist/test/vectors.js && node packages/zk/dist/test/vectors.js",
+    "reproduce": "node packages/core/dist/test/vectors.js && node packages/zk/dist/test/pin.js",
     "e2e": "node packages/e2e/dist/src/e2e.js",
     "bench": "node packages/e2e/dist/src/bench.js",
-    "zk:ceremony": "node packages/zk/scripts/ceremony.mjs",
     "formal": "node docs/formal/run.mjs",
     "check:deps": "node tools/check-deps.mjs",
     "sbom": "node tools/sbom.mjs",

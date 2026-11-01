@@ -2,3 +2,4 @@
 export * from './codec.js'
 export * from './verify.js'
 export * from './prove.js'
+export * from './anchored.js'

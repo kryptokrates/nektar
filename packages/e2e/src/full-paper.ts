@@ -9,7 +9,7 @@ import { canonicalizePolicySet } from '@mamem/policy'
 import { parseProgram } from '@mamem/datalog'
 import { AORGraph, GraphAnchor, PolicyDAG } from '@mamem/graph'
 import { signBinding, answerChallenge, issueClearance, proveAccess, deriveKey, issueDisclosure, verifyDisclosure, fieldRoot, fieldPath, randSalt } from '@mamem/identity'
-import { queryIdOf, verifyCombined, type ZkQuery } from '@mamem/zk'
+import { verifyCombinedStark, type StarkQuery } from '@mamem/zk'
 import { ground, commitReceipt, CitationIndex, onRevision, timeBounds, buildAuditBundle, verifyAuditBundle, modelIdentity, type FragmentFetch, type Claim } from '@mamem/reasoning'
 
 export interface PaperEnv {
@@ -53,13 +53,14 @@ permit(P, read, F) :- member(P, verified), level(P, L), fragment(F).`).rules }])
   // ── reader B: verified identity + ZK clearance + ZK membership ───────────
   const B = PrivateKey.fromRandom(); const pubB = B.toPublicKey().toString()
   const credB = issueClearance(authority, 3n, pubB)
-  let round = 0
   const asB = (seq: number) => {
     const nonce = mem.issueChallenge()
-    const q: ZkQuery = { nonce: dsha256(utf8(`${label}-q-${round++}`)), verifierId: 'mamem-service' }
-    const transcript = { queryId: queryIdOf(q).toString(), fragmentId: `manual/${seq}`, nonce: q.nonce }
+    // ONE verifier-issued query feeds both proofs (§13 dual commitment)
+    const zq = mem.issueZkQuery('mamem-service')
+    const q: StarkQuery = { nonce: Uint8Array.from(Buffer.from(zq.nonce, 'hex')), verifierId: zq.verifierId }
+    const transcript = { queryId: zq.queryId, fragmentId: `manual/${seq}`, nonce: q.nonce }
     return {
-      q, transcript,
+      q, queryId: zq.queryId, transcript,
       identity: { pubkey: pubB, binding: signBinding(B, 'agent-b', '00'.repeat(32), 0), challengeNonce: nonce, challengeSig: answerChallenge(B, nonce) },
       zk: { commitment: credB.commitment, proof: proveAccess(credB, 2n, 8, transcript)!, transcript, requiredLevel: 2n }
     }
@@ -68,9 +69,12 @@ permit(P, read, F) :- member(P, verified), level(P, L), fragment(F).`).rules }])
   const rB = await mem.recall('manual', { seq: 0, identity: b0.identity, zk: b0.zk })
   check(rB.items[0]?.text === 'requires(torque, 45).' && rB.receipt.zkaccess === 'verified' && rB.receipt.cedar === 'allow' && rB.receipt.dag?.state === 'dag-allow',
     L('B: ZK clearance ≥2 + Cedar ALLOW + Datalog-derived permit → decrypted level-2 record'))
-  const zkm = await mem.proveMembership('manual', 0, b0.q, mem.zkArtifactsDir())
-  const vm = await mem.verifyMembership('manual', 0, zkm, b0.q)
-  check(vm.ok && verifyCombined(b0.q, b0.transcript), L(`ZK membership (Groth16) against the SPV-verified anchor + one shared query Π=(membership, access) (${vm.reason ?? 'ok'})`))
+  if (process.env.MAMEM_E2E_STARK === '0') console.log('  (STARK membership skipped: MAMEM_E2E_STARK=0)')
+  else {
+    const { bytes } = await mem.proveMembership('manual', 0, b0.queryId)
+    const vm = await mem.verifyMembership('manual', 0, bytes)
+    check(vm.ok && verifyCombinedStark(b0.q, b0.transcript), L(`ZK membership (STARK) against the SPV-verified SHA-256 anchor + one shared query Π=(membership, access) (${vm.reason ?? 'ok'})`))
+  }
   // reader C: verified identity, no clearance → nothing
   const C = PrivateKey.fromRandom(); const cn = mem.issueChallenge()
   const rC = await mem.recall('manual', { seq: 0, identity: { pubkey: C.toPublicKey().toString(), binding: signBinding(C, 'agent-c', '00'.repeat(32), 0), challengeNonce: cn, challengeSig: answerChallenge(C, cn) } })

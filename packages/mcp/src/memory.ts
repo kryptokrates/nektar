@@ -22,12 +22,7 @@ import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, ty
 import { deriveFragmentKey, deriveLevelKey, encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@mamem/crypto'
 import type { Broadcaster, ChainTracker, Funder } from '@mamem/chain'
 import * as idbind from '@mamem/identity'
-import {
-  poseidon, PoseidonTree, leafCommit, blindingOf, proveMembership as zkProve,
-  loadArtifacts, type ZkQuery
-} from '@mamem/zk'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { proveMembershipStark, verifyMembershipAnchoredStark, starkQueryId } from '@mamem/zk'
 
 export interface MamemMemoryOptions {
   signingKey?: PrivateKey
@@ -59,7 +54,7 @@ export interface MamemMemoryOptions {
   finalityDepth?: number
   /** LOG-005: maximum merge delay for inclusion promises (default 10 min) */
   maxMergeDelayMs?: number
-  /** persistence for challenges, ZK transcripts, nullifiers, revocations
+  /** persistence for challenges, ZK transcripts, issued ZK queries, revocations
    *  (default: in-memory, lost on restart) */
   securityStore?: SecurityStateStore
   /** persistence for anchor heads/tails/checkpoints (restart-safe, no fork) */
@@ -77,7 +72,7 @@ export interface MemoryStateStore { load: () => PersistedMemoryState | undefined
 
 /** pluggable persistence for replay-protection state (see securitystore.ts) */
 export interface SecurityStateStore {
-  load: () => { challenges: Array<[string, number]>, zkSeen: string[], nullifiers: Record<string, string[]>, revocations: string[] }
+  load: () => { challenges: Array<[string, number]>, zkSeen: string[], zkQueries: Array<[string, number]>, revocations: string[] }
   save: (s: ReturnType<SecurityStateStore['load']>) => void
 }
 
@@ -203,13 +198,14 @@ export class MamemMemory {
   }
   isRevoked (pubHex: string): boolean { return this.revocations.has(idbind.deriveKey(fromHex(pubHex))) }
 
-  // ── persisted replay-protection state (challenges, transcripts, nullifiers, revocations)
-  private nullifiers = new Map<string, Set<string>>()
+  // ── persisted replay-protection state (challenges, transcripts, issued ZK queries, revocations)
+  /** ZK membership queries issued by THIS verifier: queryId hex → expiry (single use) */
+  private zkQueries = new Map<string, number>()
   private persistSecurityState (): void {
     this.opts.securityStore?.save({
       challenges: [...this.challenges].filter(([, exp]) => exp >= Date.now()),
       zkSeen: [...this.zkSeen],
-      nullifiers: Object.fromEntries([...this.nullifiers].map(([s, set]) => [s, [...set]])),
+      zkQueries: [...this.zkQueries].filter(([, exp]) => exp >= Date.now()),
       revocations: [...this.revokedPubs]
     })
   }
@@ -218,17 +214,24 @@ export class MamemMemory {
     if (!s) return
     for (const [n, exp] of s.challenges) this.challenges.set(n, exp)
     for (const k of s.zkSeen) this.zkSeen.add(k)
-    for (const [shard, list] of Object.entries(s.nullifiers)) this.nullifiers.set(shard, new Set(list))
+    for (const [q, exp] of s.zkQueries ?? []) this.zkQueries.set(q, exp)
     for (const pub of s.revocations) { this.revocations.insert(idbind.deriveKey(fromHex(pub)), sha256(utf8('revoked'))); this.revokedPubs.push(pub) }
   }
-  private nullifierStore (shard: string): import('@mamem/zk').NullifierStore {
-    if (!this.nullifiers.has(shard)) this.nullifiers.set(shard, new Set())
-    const set = this.nullifiers.get(shard)!
-    return {
-      has: n => set.has(n.toString()),
-      add: n => { if (set.has(n.toString())) throw new Error('nullifier replay'); set.add(n.toString()); this.persistSecurityState() },
-      seen: () => set.size
-    }
+  /** verifier side: issue a single-use ZK membership query (default 10 min).
+   *  queryId = dsha256('mamem:zkq:v2' ‖ nonce ‖ verifierId); the prover binds it into the STARK journal. */
+  issueZkQuery (verifierId: string, ttlMs = 600_000): { nonce: string, verifierId: string, queryId: string } {
+    const nonce = idbind.issueChallenge()
+    const queryId = toHex(starkQueryId({ nonce: fromHex(nonce), verifierId }))
+    this.zkQueries.set(queryId, Date.now() + ttlMs)
+    this.persistSecurityState()
+    return { nonce, verifierId, queryId }
+  }
+  private consumeZkQuery = (queryIdHex: string): boolean => {
+    const exp = this.zkQueries.get(queryIdHex)
+    if (exp === undefined || exp < Date.now()) return false
+    this.zkQueries.delete(queryIdHex)
+    this.persistSecurityState()
+    return true
   }
 
   // ── P14 full-mode automata (AUT-005): one Rúnar MamemAutomaton UTXO per id,
@@ -251,73 +254,38 @@ export class MamemMemory {
     return { t: 'mamem', psi: shard, rho: 'rec', pi: String(seq), l: level }
   }
 
-  /** stable fragment id used for blinding derivation (only the owner can derive) */
-  private fragmentIdOf (shard: string, seq: number): string { return `${shard}#${seq}` }
-
-  /** companion Poseidon tree over the batch leaves (same order), committed as
-   *  leafCommit(hi,lo,blinding) — blinding is owner-derived per fragment, so
-   *  only the owner (the batch builder) can build this tree. */
-  private poseidonTrees = new Map<string, { root: bigint, tree: PoseidonTree, indexOfSeq: Map<number, number> }>()
-  private async poseidonTreeFor (shard: string, batchIndex: number): Promise<{ root: bigint, tree: PoseidonTree, indexOfSeq: Map<number, number> }> {
-    const key = `${shard}#${batchIndex}`
-    if (this.poseidonTrees.has(key)) return this.poseidonTrees.get(key)!
-    const recs = (await this.store.all(shard)).filter(r => r.batchIndex === batchIndex)
-      .sort((a, b) => (a.leafIndex ?? 0) - (b.leafIndex ?? 0))
-    const p = await poseidon()
-    const commits = recs.map(r => leafCommit(p, r.leaf, blindingOf(this.shardKey(shard), this.fragmentIdOf(shard, r.seq))))
-    const tree = new PoseidonTree(p, commits)
-    const indexOfSeq = new Map(recs.map((r, i) => [r.seq, i]))
-    const entry = { root: tree.root(), tree, indexOfSeq }
-    this.poseidonTrees.set(key, entry)
-    return entry
-  }
-  private async poseidonRootFor (shard: string, batch: { n: number, records: Array<{ seq: number, leaf: Bytes }>, leaves: Bytes[] }): Promise<Bytes> {
-    const p = await poseidon()
-    const commits = batch.records.map(r => leafCommit(p, r.leaf, blindingOf(this.shardKey(shard), this.fragmentIdOf(shard, r.seq))))
-    const tree = new PoseidonTree(p, commits)
-    const root = tree.root()
-    // seed the batch cache so prove() can reuse it
-    const indexOfSeq = new Map(batch.records.map((r, i) => [r.seq, i]))
-    this.poseidonTrees.set(`${shard}#${batch.n}`, { root, tree, indexOfSeq })
-    const out = new Uint8Array(32)
-    let x = root
-    for (let i = 31; i >= 0; i--) { out[i] = Number(x & 0xffn); x >>= 8n }
-    return out // big-endian field encoding
-  }
-
-  /** L_ZKMem bytes for a committed fragment (holder side) */
-  async proveMembership (shard: string, seq: number, query: ZkQuery, artifactsDir: string): Promise<Uint8Array> {
-    const rec = (await this.store.all(shard)).find(r => r.seq === seq)
+  /** Wright §13 holder side: π ⊢ leaf ∈ the SAME double-SHA-256 batch tree whose
+   *  root R_n is anchored on BSV, bound to a verifier-issued queryId. ZK-STARK
+   *  (RISC Zero succinct receipt): reveals neither the leaf, its index nor the path. */
+  async proveMembership (shard: string, seq: number, queryIdHex: string): Promise<{ bytes: Uint8Array, ms: number }> {
+    if (!/^[0-9a-f]{64}$/.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
+    const recs = await this.store.all(shard)
+    const rec = recs.find(r => r.seq === seq)
     if (!rec || rec.batchIndex === undefined) throw new Error('fragment not batched')
-    const { tree, indexOfSeq } = await this.poseidonTreeFor(shard, rec.batchIndex)
-    const index = indexOfSeq.get(seq)!
-    const blinding = blindingOf(this.shardKey(shard), this.fragmentIdOf(shard, seq))
-    const artifacts = loadArtifacts(artifactsDir)
-    const { vkeyHashOf } = await import('@mamem/zk')
-    return zkProve({ leaf32: rec.leaf, blinding, index, tree, query, artifacts, vkeyHash: vkeyHashOf(artifacts.vkey) })
-  }
-  zkArtifactsDir (): string {
-    // packages/zk/artifacts — resolved relative to this package's dist/src
-    return join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'zk', 'artifacts')
+    const batch = recs.filter(r => r.batchIndex === rec.batchIndex).sort((a, b) => (a.leafIndex ?? 0) - (b.leafIndex ?? 0))
+    const leaves = batch.map(r => r.leaf)
+    const index = batch.findIndex(r => r.seq === seq)
+    const { siblings } = merkleProof(leaves, index)
+    const { bytes, ms } = await proveMembershipStark({ leaf: rec.leaf, index, size: leaves.length, siblings, queryId: fromHex(queryIdHex) })
+    return { bytes, ms }
   }
 
-  /** verifier side: SPV-check the batch's anchor, then verify the membership proof */
-  async verifyMembership (shard: string, seq: number, bytes: Uint8Array, query: ZkQuery): Promise<{ ok: boolean, reason?: string, anchorTxid?: string, statement: string }> {
-    const { verifyMembershipAnchored } = await import('@mamem/zk')
+  /** verifier side: the proof's root must be the R of an SPV-verified anchor of
+   *  THIS shard on its canonical chain, and the queryId one we issued (single use). */
+  async verifyMembership (shard: string, seq: number, bytes: Uint8Array): Promise<{ ok: boolean, reason?: string, anchorTxid?: string, statement: string }> {
     const rec = (await this.store.all(shard)).find(r => r.seq === seq)
     if (!rec || rec.batchIndex === undefined) return { ok: false, reason: 'not batched', statement: 'no anchor' }
     const link = (this.tails.get(shard) ?? []).find(l => l.n === rec.batchIndex)
     const anchorTx = link ? this.anchorTxs.get(link.txid) : undefined
     if (!anchorTx) return { ok: false, reason: 'anchor tx not found', statement: 'no anchor' }
     const tail = this.tails.get(shard) ?? []
-    const canonical = (txid: string) => tail.some(l => l.txid === txid)
     // expected shard = THIS instance's shard id (hash160 of the genesis owner,
     // from our own anchor chain) — never read from the anchor being verified
     const shardId = this.anchors.get(shard)?.getShardId()
     if (!shardId) return { ok: false, reason: 'unknown shard', statement: 'no anchor' }
-    const res = await verifyMembershipAnchored(bytes, anchorTx, this.chain, query, `${this.zkArtifactsDir()}/vkey.json`, this.nullifierStore(shard),
-      { shard: shardId, isCanonical: canonical })
-    return { ...res, statement: 'proves membership in an anchored batch — not truth, reveals no leaf' }
+    const res = await verifyMembershipAnchoredStark(bytes, anchorTx, this.chain, { consume: this.consumeZkQuery },
+      { shard: shardId, isCanonical: (txid: string) => tail.some(l => l.txid === txid) })
+    return { ok: res.ok, reason: res.reason, anchorTxid: res.anchorTxid, statement: 'proves some record is in this anchored batch (ZK-STARK, no trusted setup) — not which one, not its content, not truth' }
   }
 
   /**
@@ -412,9 +380,8 @@ export class MamemMemory {
   async anchorShard (shard: string): Promise<{ txid: string, n: number } | null> {
     const batch = await this.log.closeBatch(shard)
     if (!batch) return null
-    const poseidonRoot = await this.poseidonRootFor(shard, batch)
     let res
-    try { res = await this.anchorChain(shard).anchor(batch.size, batch.R, poseidonRoot) } catch (e) {
+    try { res = await this.anchorChain(shard).anchor(batch.size, batch.R) } catch (e) {
       this.metrics.inc('mamem_anchor_failures_total', { shard }, 1, 'anchor broadcasts that failed')
       throw e
     }

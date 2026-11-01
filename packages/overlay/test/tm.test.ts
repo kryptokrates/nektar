@@ -21,7 +21,7 @@ const sidOf = (k: PrivateKey) => toHex(hash160(Uint8Array.from(Buffer.from(pubOf
 interface BuiltTx { tx: Transaction, data: AnchorData }
 
 const contractScript = (pub: string, n: number, size: number, R: Bytes, Rp: Bytes, tag = TAG_HEX, pkh?: string) =>
-  new RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkh ?? toHex(hash160(Uint8Array.from(Buffer.from(pub, 'hex')))), BigInt(n), BigInt(size), toHex(R), toHex(Rp), '', tag]).getLockingScript()
+  new RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkh ?? toHex(hash160(Uint8Array.from(Buffer.from(pub, 'hex')))), BigInt(n), BigInt(size), toHex(R), toHex(Rp), tag]).getLockingScript()
 
 // dummy unlock for hand-built spends: addInput ignores a plain
 // unlockingScript, so use a template returning an OP_1 script

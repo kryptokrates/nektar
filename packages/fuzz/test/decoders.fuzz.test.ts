@@ -10,7 +10,7 @@ import { dsha256, utf8, toHex } from '@mamem/core'
 import { MockChain, MockFunder } from '@mamem/chain'
 import { decodeMamemAnchor } from '@mamem/contracts'
 import { verifyFragment } from '@mamem/verify'
-import { decodeZkMem, encodeZkMem, ZkCodecError, BN254_R, encodeZkm2, decodeZkm2, ZkmCodecError, verifyZkm2 } from '@mamem/zk'
+import { encodeZkm2, decodeZkm2, ZkmCodecError, verifyZkm2 } from '@mamem/zk'
 import { parseProgram, ParseError } from '@mamem/datalog'
 import { issueDisclosure, verifyDisclosure, fieldPath, fieldRoot, randSalt } from '@mamem/identity'
 import { AutomatonChain, decodeMamemAutomaton } from '@mamem/automaton'
@@ -83,18 +83,6 @@ test('fuzz: proof bundle verifier never throws, never accepts a mutated bundle',
     if (JSON.stringify(b) === JSON.stringify(bundle)) continue
     const r = await verifyFragment(b, chain)
     assert.equal(r.ok, false, `mutation ${i} accepted`)
-  }
-})
-
-test('fuzz: L_ZKMem codec throws only ZkCodecError and round-trips what it accepts', () => {
-  const valid = encodeZkMem({ vkeyHash: dsha256(utf8('vk')), root: 5n, nullifier: 7n, queryId: 9n, pi_a: [1n, 2n], pi_b: [[3n, 4n], [5n, 6n]], pi_c: [7n, 8n] })
-  for (let i = 0; i < N * 3; i++) {
-    const m = mutate(valid)
-    try {
-      const d = decodeZkMem(m)
-      assert.ok(d.root < BN254_R && d.nullifier < BN254_R && d.queryId < BN254_R)
-      assert.deepEqual(encodeZkMem(d), m, 'accepted bytes re-encode identically (canonical)')
-    } catch (e) { assert.ok(e instanceof ZkCodecError, `untyped error: ${String(e)}`) }
   }
 })
 

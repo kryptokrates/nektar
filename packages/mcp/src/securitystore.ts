@@ -1,5 +1,5 @@
-// File-backed SecurityStateStore: challenges, used ZK transcripts, nullifiers
-// and revocations survive a restart (replay stays rejected). Atomic replace.
+// File-backed SecurityStateStore: challenges, used ZK transcripts, issued ZK
+// queries and revocations survive a restart (replay stays rejected). Atomic replace.
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { SecurityStateStore, MemoryStateStore, PersistedMemoryState } from './memory.js'
@@ -17,12 +17,12 @@ export class FileStateStore implements MemoryStateStore {
 }
 
 type State = ReturnType<SecurityStateStore['load']>
-const EMPTY: State = { challenges: [], zkSeen: [], nullifiers: {}, revocations: [] }
+const EMPTY: State = { challenges: [], zkSeen: [], zkQueries: [], revocations: [] }
 
 export class FileSecurityStore implements SecurityStateStore {
   constructor (private file: string) {}
   load (): State {
-    if (!existsSync(this.file)) return { ...EMPTY, nullifiers: {} }
+    if (!existsSync(this.file)) return { ...EMPTY }
     return { ...EMPTY, ...JSON.parse(readFileSync(this.file, 'utf8')) as Partial<State> }
   }
   save (s: State): void {

@@ -12,25 +12,7 @@
       "path": "../core"
     },
     {
-      "path": "../log"
-    },
-    {
-      "path": "../identity"
-    },
-    {
-      "path": "../chain"
-    },
-    {
-      "path": "../anchor"
-    },
-    {
       "path": "../contracts"
-    },
-    {
-      "path": "../verify"
-    },
-    {
-      "path": "../crypto"
     }
   ],
   "exclude": [

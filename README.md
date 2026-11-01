@@ -25,7 +25,7 @@ pnpm mcp:install claude-desktop cursor   # Docker Desktop MCP Toolkit: one insta
 pnpm chat "What torque does drain port 4 need?"   # local model via Docker Model Runner
 ```
 
-See **[docs/INTEGRATION.md](docs/INTEGRATION.md)** for every client, the HTTP/Streamable-HTTP endpoint and the persistent regtest backend.
+Verified: Devin CLI and the SDK client through the Docker MCP Gateway, plus the persistent runtime on live regtest including a restart. See **[docs/INTEGRATION.md](docs/INTEGRATION.md)** for every client, the HTTP/Streamable-HTTP endpoint and the persistent regtest backend.
 
 ## Quick start
 

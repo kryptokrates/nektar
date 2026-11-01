@@ -83,6 +83,18 @@ OpenAI/Anthropic function-calling apps can call `/v1/tools/{name}` directly.
 - a confirmer attaches BUMPs to every unproven anchor;
 - replay protection (challenges, ZK transcripts, nullifiers, revocations) persists.
 
+## Verified end to end
+
+- **Devin CLI as the MCP client, through the Docker MCP Gateway.** Config `.devin/mcp_config.local.json` → `docker mcp gateway run --profile mamem`. Results:
+  - 12 mamem tools listed next to the gateway's own;
+  - `remember` ×3 (one record at level 2), then `anchor`;
+  - `recall` returns the two level-0 records and **withholds** the level-2 one (`zkaccess required`, no plaintext and no ciphertext);
+  - the receipt cites shard/seq/anchor and carries the truth note;
+  - `prove` returns `{ok:true}` for a real record and `NotFound` for one that doesn't exist.
+- `pnpm mcp:smoke`: the SDK client through the same gateway (remember → anchor → prove).
+- `packages/mcp/demo/regtest-runtime.mjs`: the production runtime on live Teranode regtest (anchor → confirmer BUMP → prove), then a restart that resumes the persisted head with no fork.
+- Duplicates: a record's identity is H(d‖p), and provenance includes the write time, so storing the same sentence later creates a **new** record. Only an identical (data, source, time, model) write is deduplicated.
+
 ## What the model sees
 
 - **Tools:** remember, recall, prove, anchor, proveMembership, verifyMembership, rotate, revoke, disclose, challenge, authorize, automaton. Annotations: read-only for recall, prove and the ZK verifiers; destructive for rotate and revoke.

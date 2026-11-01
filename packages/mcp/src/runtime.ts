@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { PrivateKey, MerklePath, type Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathFor, bootstrapReserve, type RegtestConfig } from '@mamem/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, parseLegacyBlock, bootstrapReserve, type RegtestConfig } from '@mamem/chain'
 import { KnexShardStore, type ShardStore } from '@mamem/log'
 import { MamemMemory, type MamemMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -22,13 +22,15 @@ export interface RuntimeConfig {
   /** regtest only: mine a block when anchors wait for confirmation */
   autoMine?: boolean
   confirmEveryMs?: number
+  /** pubkeys trusted to issue clearance credentials (level>0 reads) */
+  clearanceAuthorities?: string[]
 }
 
 export function configFromEnv (env = process.env): RuntimeConfig {
   const network = (env.MAMEM_NETWORK ?? 'mock') as RuntimeConfig['network']
   const dataDir = env.MAMEM_DATA_DIR ?? join(process.cwd(), '.mamem')
   const secret = (k: string) => env[k] ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
-  const cfg: RuntimeConfig = { network, dataDir, modelId: env.MAMEM_MODEL_ID, batchLeaves: Number(env.MAMEM_BATCH ?? 4), autoMine: env.MAMEM_AUTOMINE === '1', confirmEveryMs: Number(env.MAMEM_CONFIRM_MS ?? 5000) }
+  const cfg: RuntimeConfig = { network, dataDir, modelId: env.MAMEM_MODEL_ID, batchLeaves: Number(env.MAMEM_BATCH ?? 4), autoMine: env.MAMEM_AUTOMINE === '1', confirmEveryMs: Number(env.MAMEM_CONFIRM_MS ?? 5000), clearanceAuthorities: (env.MAMEM_CLEARANCE_AUTHORITIES ?? '').split(',').map(s => s.trim()).filter(Boolean) }
   if (network !== 'mock') {
     const fundWif = secret('MAMEM_FUND_WIF') ?? secret('MAMEM_REGTEST_WIF')
     const rpcPass = secret('MAMEM_RPC_PASS')
@@ -61,7 +63,7 @@ export interface Runtime { mem: MamemMemory, close: () => Promise<void>, network
 
 export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   if (cfg.network === 'testnet') throw new Error('testnet: not enabled — configure an ARC/Arcade endpoint and approve testnet funding first')
-  const base: MamemMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified' }
+  const base: MamemMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities }
   if (cfg.network === 'mock') {
     const chain = new MockChain(); chain.verifyScripts = true
     const funder = new MockFunder(); funder.topup(Number(process.env.MAMEM_DEMO_UTXOS ?? 200))
@@ -75,6 +77,16 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   }
   const rc = cfg.regtest!
   mkdirSync(cfg.dataDir, { recursive: true })
+  // single writer per data dir: a live heartbeat from another instance refuses startup
+  const lockFile = join(cfg.dataDir, 'instance.lock')
+  const me = `${process.pid}@${(await import('node:os')).hostname()}`
+  if (existsSync(lockFile)) {
+    const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string, beat: number }
+    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${cfg.dataDir} is in use by another mamem instance (${l.owner}); stop it first`)
+  }
+  const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
+  beat()
+  const beatTimer = setInterval(beat, 5_000); beatTimer.unref()
   const { keys, save } = loadKeys(cfg.dataDir)
   const fundKey = PrivateKey.fromWif(rc.fundWif)
   const tracker = new TeranodeRPCTracker(rc)
@@ -115,6 +127,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   const mem = new MamemMemory(chain as never, funder as never, fundKey, {
     ...base,
     agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,
+    maxLevel: Number(process.env.MAMEM_MAX_LEVEL ?? 3),
     securityStore: new FileSecurityStore(join(cfg.dataDir, 'security.json')),
     stateStore: new FileStateStore(join(cfg.dataDir, 'state.json')),
     finalityDepth: 1
@@ -127,21 +140,50 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   }
   // confirmer: BUMPs for every unproven anchor; optional auto-mine; timed flush
   let busy = false
+  let scannedTo = 0
+  const minedAt = new Map<string, number>(); const firstSeen = new Map<string, number>(); const abandoned = new Set<string>()
   const tick = async () => {
     if (busy) return
     busy = true
     try {
       persistKeys()
       await mem.flushDue()
-      const waiting = mem.unprovenAnchors()
+      const waiting = mem.unprovenAnchors().filter(w => !abandoned.has(w.txid))
       if (waiting.length && cfg.autoMine) await mineOne()
-      for (const { shard, txid } of waiting) {
-        const mp = await merklePathFor(rc, txid, tracker).catch(() => null)
-        if (mp) mem.attachProof(shard, txid, new MerklePath(mp.blockHeight, mp.path))
+      // index each block ONCE (txid → height); never rescan per anchor
+      const tip = Math.max(lastMined, await tracker.currentHeight())
+      if (scannedTo === 0) scannedTo = Math.max(0, tip - 50)
+      for (let h = scannedTo + 1, n = 0; h <= tip && n < 25; h++, n++) {
+        const hdr = await tracker.headerAtHeight(h)
+        if (!hdr) break
+        const res = await fetch(`${rc.assetUrl}/block_legacy/${hdr.hash}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(20_000) })
+        if (!res.ok) break
+        for (const t of parseLegacyBlock(new Uint8Array(await res.arrayBuffer())).txids) minedAt.set(t, h)
+        scannedTo = h
       }
+      let attached = 0
+      for (const { shard, txid } of waiting) {
+        const h = minedAt.get(txid)
+        if (h === undefined) {
+          const seen = firstSeen.get(txid) ?? tip; firstSeen.set(txid, seen)
+          // never mined within 100 blocks (e.g. replaced by a conflicting spend): stop waiting
+          if (scannedTo - seen > 100) { abandoned.add(txid); process.stderr.write(`mamem confirmer: anchor ${txid} not mined after 100 blocks — abandoned (check for a conflicting spend)\n`) }
+          continue
+        }
+        const mp = await merklePathAtHeight(rc, txid, tracker, h)
+        if (mp) { mem.attachProof(shard, txid, new MerklePath(mp.blockHeight, mp.path)); attached++ }
+      }
+      if (waiting.length) process.stderr.write(`mamem confirmer: waiting=${waiting.length} attached=${attached} scanned=${scannedTo}/${tip}\n`)
       persistKeys()
     } catch (e) { process.stderr.write(`mamem confirmer: ${(e as Error).message}\n`) } finally { busy = false }
   }
   const timer = setInterval(() => { void tick() }, cfg.confirmEveryMs ?? 5000); timer.unref()
-  return { mem, network: 'regtest', close: async () => { clearInterval(timer); await tick(); await knex.destroy() } }
+  return {
+    mem, network: 'regtest',
+    close: async () => {
+      clearInterval(timer); clearInterval(beatTimer)
+      await tick(); await knex.destroy()
+      try { (await import('node:fs')).rmSync(lockFile) } catch { /* already gone */ }
+    }
+  }
 }

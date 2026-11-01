@@ -371,6 +371,8 @@ export class MamemMemory {
     } else if (this.opts.requireSignedProvenance) {
       throw new IngestError('unsigned provenance refused')
     }
+    // an encrypted write above the held levels could never be decrypted again
+    if (this.opts.agentSeed && level > (this.opts.maxLevel ?? 0)) throw new IngestError(`level ${level} exceeds this instance's maxLevel ${this.opts.maxLevel ?? 0}`)
     this.touched.add(shard)
     // provisional seq for ctx = next seq (identity hash is checked inside remember)
     const seqGuess = await this.store.nextSeq(shard)
@@ -514,6 +516,8 @@ export class MamemMemory {
     if (!caller) return { ok: false, reason: 'clearance needs a verified caller identity' }
     const trusted = this.opts.clearanceAuthorities
     if (!trusted?.length) return { ok: false, reason: 'no trusted clearance authority configured' }
+    if (!trusted.includes(zk.commitment.pub)) return { ok: false, reason: 'clearance issued by an untrusted authority' }
+    if (zk.commitment.holder !== caller.pubkey) return { ok: false, reason: 'clearance holder is not the verified caller' }
     if (zk.transcript.fragmentId !== scope) return { ok: false, reason: `transcript scope ${zk.transcript.fragmentId} != ${scope}` }
     const seen = `${zk.transcript.queryId}|${toHex(zk.transcript.nonce)}`
     if (this.zkSeen.has(seen)) return { ok: false, reason: 'clearance transcript replayed' }

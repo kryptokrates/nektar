@@ -95,11 +95,11 @@ test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-us
   // self-issued clearance (untrusted authority) → refused
   const self = issueClearance(key, 9n, identity.pubkey)
   const untrusted = await read({ commitment: self.commitment, proof: proveAccess(self, 2n, 8, tr('s/0', 4))!, transcript: tr('s/0', 4), requiredLevel: 2n })
-  assert.match(untrusted.reason!, /clearance proof invalid/)
+  assert.match(untrusted.reason!, /untrusted authority/)
   // someone else's credential presented by this caller → refused (holder-bound)
   const other = issueClearance(authority, 3n, PrivateKey.fromRandom().toPublicKey().toString())
   const stolen = await read({ commitment: other.commitment, proof: proveAccess(other, 2n, 8, tr('s/0', 5))!, transcript: tr('s/0', 5), requiredLevel: 2n })
-  assert.match(stolen.reason!, /clearance proof invalid/)
+  assert.match(stolen.reason!, /holder is not the verified caller/)
   // no verified identity → refused even with a valid proof
   const anon = await read({ commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('s/0', 6))!, transcript: tr('s/0', 6), requiredLevel: 2n }, { ...identity, challengeNonce: issueChallenge(), challengeSig: answerChallenge(key, issueChallenge()) })
   assert.match(anon.reason!, /verified caller identity/)

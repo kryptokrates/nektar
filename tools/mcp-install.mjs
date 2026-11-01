@@ -41,7 +41,10 @@ if (args.includes('--regtest')) {
   const RP = `${PROFILE}_regtest` // profile IDs are slugs (no "-")
   const ryaml = staged('mamem-regtest.yaml')
   if (!out(['mcp', 'profile', 'list']).split(/\s+/).includes(RP)) run(['mcp', 'profile', 'create', '--name', RP, '--id', RP])
-  if (!/\bmamem-regtest\b/.test(out(['mcp', 'profile', 'server', 'ls', '--filter', `profile=${RP}`]))) run(['mcp', 'profile', 'server', 'add', RP, '--server', `file://${ryaml}`])
+  // re-register so profile snapshots always reflect the current server definition
+  if (/\bmamem-regtest\b/.test(out(['mcp', 'profile', 'server', 'ls', '--filter', `profile=${RP}`]))) run(['mcp', 'profile', 'server', 'remove', RP, '--name', 'mamem-regtest'])
+  run(['mcp', 'profile', 'server', 'add', RP, '--server', `file://${ryaml}`])
+  if (process.env.MAMEM_CLEARANCE_AUTHORITIES) run(['mcp', 'profile', 'config', RP, '--set', `mamem-regtest.clearance_authorities=${process.env.MAMEM_CLEARANCE_AUTHORITIES}`])
   run(['mcp', 'profile', 'config', RP, '--set', `mamem-regtest.rpc_user=${qs.rpc_user ?? 'teranode'}`, '--set', 'mamem-regtest.automine=1', '--set', `mamem-regtest.model_id=${process.env.MAMEM_MODEL_ID ?? 'unspecified'}`])
   console.log(`profile "${RP}": mamem on regtest (secrets in the Docker MCP keychain; Teranode via host.docker.internal)`)
 }

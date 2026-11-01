@@ -19,7 +19,8 @@ export class TeranodeBroadcaster implements Broadcaster {
     const res = await fetch(this.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
-      body: Buffer.from(tx.toHex(), 'hex')
+      body: Buffer.from(tx.toHex(), 'hex'),
+      signal: AbortSignal.timeout(30_000)
     })
     const text = await res.text()
     if (!res.ok) return { status: 'error', description: `${res.status}: ${text}` }
@@ -39,7 +40,8 @@ export class TeranodeRPCTracker implements ChainTracker {
         'Content-Type': 'application/json',
         Authorization: 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
       },
-      body: JSON.stringify({ jsonrpc: '1.0', id: ++this.rpcId, method, params })
+      body: JSON.stringify({ jsonrpc: '1.0', id: ++this.rpcId, method, params }),
+      signal: AbortSignal.timeout(15_000)
     })
     const j = await res.json()
     if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
@@ -84,7 +86,8 @@ export function regtestStackFromEnv (): { tracker: ChainTracker, broadcaster: Br
 // --- asset API helpers (basic auth = rpc creds) ---
 async function assetGet (cfg: RegtestConfig, path: string, binary = true): Promise<Response | null> {
   const res = await fetch(`${cfg.assetUrl}/${path}`, {
-    headers: { Authorization: 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64') }
+    headers: { Authorization: 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64') },
+    signal: AbortSignal.timeout(20_000)
   })
   if (!res.ok) return null
   return res
@@ -309,7 +312,7 @@ export async function bootstrapReserve (cfg: RegtestConfig, key: PrivateKey, res
     for (let k = 0; k < n; k++) tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: per })
     tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: sats - n * per - 1000 })
     await tx.sign()
-    const known = await fetch(`${cfg.assetUrl}/tx/${tx.id('hex')}`, { headers: { Authorization: auth } })
+    const known = await fetch(`${cfg.assetUrl}/tx/${tx.id('hex')}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(15_000) })
     if (known.ok) return null
     const r = await new TeranodeBroadcaster(cfg.propagationUrl).broadcast(tx)
     return r.status === 'success' ? tx : null
@@ -329,7 +332,7 @@ export async function bootstrapReserve (cfg: RegtestConfig, key: PrivateKey, res
   let tried = 0
   for (let h = 1; h <= tip - 101 && tried < (opts.maxCandidates ?? 200); h++) {
     const hash = await rpc('getblockhash', h) as string
-    const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`)
+    const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`, { signal: AbortSignal.timeout(20_000) })
     if (!res.ok) continue
     const cb = Transaction.fromHex(Buffer.from(parseLegacyBlock(new Uint8Array(await res.arrayBuffer())).txs[0]!).toString('hex'))
     for (const [v, o] of cb.outputs.entries()) {

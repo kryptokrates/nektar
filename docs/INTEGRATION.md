@@ -109,6 +109,46 @@ OpenAI/Anthropic function-calling apps can call `/v1/tools/{name}` directly.
 - a confirmer attaches BUMPs to every unproven anchor;
 - replay protection (challenges, ZK transcripts, nullifiers, revocations) persists.
 
+## Agent identity and ZK clearance (level > 0 records)
+
+The model never handles keys or proofs. The **harness** does, using the client kit (`ClientWallet`, `ClearanceAuthority` in `@mamem/mcp`):
+
+1. The server trusts the authorities listed in `MAMEM_CLEARANCE_AUTHORITIES` (Docker config `clearance_authorities`).
+2. The authority issues a holder-bound credential to the wallet's pubkey.
+3. Per read, the wallet:
+   - calls the `challenge` tool and signs the nonce, which proves the caller identity;
+   - builds a single-use Bulletproof scoped to `shard/seq`, which proves level ≥ required without revealing the level;
+   - sends both as `recall({ shard, seq, identity, zk })`. The wire format is JSON: bigint as a decimal string, bytes as hex.
+4. `chat.mjs` with `MAMEM_CHAT_CLEARANCE=<level>` does this transparently whenever a recall comes back `zkaccess required`.
+
+**Rejected, each with a specific reason:**
+- no clearance;
+- a replayed presentation (persisted across restarts);
+- a self-issued or untrusted authority;
+- a credential presented by another caller;
+- a transcript scoped to another record;
+- a level below the requirement;
+- malformed wire data.
+
+## Agent-level E2E on local Teranode (`pnpm e2e:mcp`)
+
+The real MCP server process, driven by the SDK client exactly like an AI client. It covers:
+- Rúnar anchoring, plus SPV `prove` against real headers;
+- **Groth16 membership** (389 B proof) against the SPV-checked anchor, with nullifier replay and tampered proofs rejected;
+- **Bulletproof clearance** with all the negatives above;
+- a restart on the same data dir: the next anchor spends the persisted head, replay is still rejected, and a stored credential still works.
+
+16/16 checks, **3 consecutive passes** over stdio. The same flow through the **Docker MCP Gateway** (`MAMEM_E2E_GATEWAY=mamem_regtest`) also passes 16/16; Groth16 proving takes about 6 s in the 1-CPU container, against 1.5 s natively.
+
+**Model-driven run (OpenAI `gpt-4.1-mini`, regtest, harness clearance level 3):**
+- `remember` ×2 (one at level 2) → `anchor` → `recall` (the harness attached ZK clearance → `verified`) → `prove` ×2;
+- the answer cited both seqs, the anchor txid and the truth caveat.
+
+**Operational lessons:**
+- **The server exits when its stdio client disconnects.** Before this fix, leaked `docker run -i` containers kept auto-mining and writing to the same volume.
+- **One writer per data dir.** The runtime refuses to start when a live heartbeat lock is present.
+- **All Teranode calls have timeouts.** The confirmer indexes each block once (txid → height) and abandons anchors that are not mined within 100 blocks, which happens after a conflicting spend.
+
 ## Verified end to end
 
 - **Devin CLI as the MCP client, through the Docker MCP Gateway.** Config `.devin/mcp_config.local.json` → `docker mcp gateway run --profile mamem`. Results:

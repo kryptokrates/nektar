@@ -20,9 +20,30 @@ const KEY = process.env.MAMEM_LLM_KEY ?? (OPENAI ? process.env.OPENAI_API_KEY ??
 if (OPENAI && !KEY) throw new Error('MAMEM_LLM_PROVIDER=openai: set OPENAI_API_KEY (env or mamem/.env)')
 const question = process.argv.slice(2).join(' ') || 'Remember on shard "manual" that drain port 4 needs 45Nm (source: manual rev1). Then tell me the torque for port 4, citing the record.'
 
+// MAMEM_CHAT_CLEARANCE=<level>: the HARNESS holds a wallet + a demo clearance
+// authority (trusted by the spawned server) and transparently attaches identity
+// + a Bulletproof clearance to recall — the model never sees keys or proofs.
+const { ClientWallet, ClearanceAuthority } = await import('../dist/src/index.js')
+const CLEAR = process.env.MAMEM_CHAT_CLEARANCE ? BigInt(process.env.MAMEM_CHAT_CLEARANCE) : undefined
+const authority = CLEAR !== undefined ? new ClearanceAuthority() : undefined
+const wallet = CLEAR !== undefined ? new ClientWallet() : undefined
+const cred = CLEAR !== undefined ? authority.issue(wallet.pubkey, CLEAR) : undefined
+
 const bin = fileURLToPath(new URL('../dist/src/bin.js', import.meta.url))
 const client = new Client({ name: 'mamem-chat', version: '1.0.0' })
-await client.connect(new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env, MAMEM_MODEL_ID: `${MODEL}@${new URL(LLM).host}` }, stderr: 'inherit' }))
+await client.connect(new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env, MAMEM_MODEL_ID: `${MODEL}@${new URL(LLM).host}`, ...(authority ? { MAMEM_CLEARANCE_AUTHORITIES: authority.pubkey } : {}) }, stderr: 'inherit' }))
+const rawCall = async (name, args) => { const r = await client.callTool({ name, arguments: args }, undefined, { timeout: 180_000 }); return r.isError ? { error: r.content[0].text } : JSON.parse(r.content[0].text) }
+/** recall with harness clearance: retry withheld level>0 items one by one with identity + proof */
+async function callWithClearance (name, args) {
+  const out = await rawCall(name, args)
+  if (name !== 'recall' || !wallet || out.error || !out.items) return out
+  for (const [i, it] of out.items.entries()) {
+    if (!/zkaccess required/.test(it.reason ?? '')) continue
+    const r = await rawCall('recall', { shard: args.shard, seq: it.seq, identity: await wallet.identify(rawCall), zk: wallet.presentClearance(cred, args.shard, it.seq, CLEAR) })
+    if (r.items?.[0]?.text !== undefined) { out.items[i] = { ...r.items[0], clearedBy: 'harness wallet (ZK clearance)' }; console.log(`  ↳ harness: ZK clearance (level ≥ ${CLEAR}) attached for ${args.shard}/${it.seq} → ${r.items[0].zk}`) }
+  }
+  return out
+}
 // small local models do better with few tools: default to the core memory set
 const wanted = new Set((process.env.MAMEM_CHAT_TOOLS ?? 'remember,recall,prove,anchor').split(','))
 const tools = (await client.listTools()).tools.filter(t => wanted.has('all') || wanted.has(t.name))
@@ -73,7 +94,7 @@ for (let round = 0; round < 8; round++) {
     else {
       let args = {}
       try { args = JSON.parse(tc.function.arguments || '{}') } catch { out = { error: 'arguments were not valid JSON' } }
-      if (!out) { const r = await client.callTool({ name: tc.function.name, arguments: args }); out = r.isError ? { error: r.content[0].text } : JSON.parse(r.content[0].text) }
+      if (!out) out = (await callWithClearance(tc.function.name, args)) ?? { result: null, note: 'nothing pending (batch already anchored)' }
     }
     console.log(`→ ${tc.function.name}(${tc.function.arguments}) ${out.error ? `✖ ${out.error}` : '✔'}`)
     messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(out) })

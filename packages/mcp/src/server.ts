@@ -23,7 +23,12 @@ export const TOOLS = [
     description: 'Recall fragments for a shard; decrypts when the agent seed is held. Returns an answer receipt.',
     inputSchema: {
       type: 'object',
-      properties: { shard: { type: 'string', description: 'memory namespace' }, seq: { type: 'number', description: 'one record (the seq returned by remember); omit to recall the whole shard' } },
+      properties: {
+        shard: { type: 'string', description: 'memory namespace' },
+        seq: { type: 'number', description: 'one record (the seq returned by remember); omit to recall the whole shard' },
+        identity: { type: 'object', description: 'verified caller (supplied by the client wallet, not the model): {pubkey, binding, challengeNonce, challengeSig} answering a nonce from the challenge tool' },
+        zk: { type: 'object', description: 'clearance presentation for level>0 records (client wallet): {commitment, proof, transcript:{queryId,fragmentId,nonce(hex)}, requiredLevel(decimal string)}' }
+      },
       required: ['shard']
     }
   },
@@ -131,7 +136,8 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     case 'remember':
       return mem.remember(args.shard, args.data, { source: args.source }, args.level ?? 0)
     case 'recall': {
-      const r = await mem.recall(args.shard, { seq: args.seq })
+      const { decodePresentation } = await import('@mamem/identity')
+      const r = await mem.recall(args.shard, { seq: args.seq, identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk) })
       // tell the model how to recover from a wrong seq instead of an empty answer
       if (args.seq !== undefined && r.items.length === 0) {
         const seqs = (await mem.records(args.shard)).map(x => x.seq)
@@ -184,7 +190,10 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       return { verified: r.ok, reason: r.reason ?? null, receipt: { decision: r.ok ? 'allow' : 'deny', action: 'disclose' } }
     }
     case 'authorize':
-      return { receipt: { ...(await mem.authorizeAction(args.action, { identity: args.identity, zk: args.zk, resource: args.resource })), action: args.action } }
+    {
+      const { decodePresentation } = await import('@mamem/identity')
+      return { receipt: { ...(await mem.authorizeAction(args.action, { identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk), resource: args.resource })), action: args.action } }
+    }
     case 'challenge':
       return { nonce: mem.issueChallenge(), statement: 'sign with answerChallenge(key, nonce) within 5 minutes; nonces from anywhere else are refused' }
     default:

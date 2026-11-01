@@ -288,6 +288,24 @@
   `qwen4exp` architecture (needs a newer DMR engine). On CPU, 8B qwen3 takes minutes
   per turn; 0.6B emits pseudo tool tags instead of tool calls.
 
+## Agent-level E2E with anchoring + ZK through MCP
+- Wire format (`identity/wire.ts`) for clearance presentations/credentials; MCP
+  recall/authorize accept identity + zk; runtime MAMEM_CLEARANCE_AUTHORITIES;
+  client kit (ClientWallet, ClearanceAuthority); chat harness clearance.
+- Specific clearance reasons (untrusted authority / holder ≠ caller) instead of
+  a generic "proof invalid".
+- BUG FIXED: the regtest runtime held only the level-0 key (maxLevel unset), so
+  level-2 writes were accepted but undecryptable → maxLevel (default 3) and
+  writes above maxLevel are refused.
+- BUG FIXED: the stdio server never exited when its client went away → leaked
+  `docker run -i` gateway containers (6 found, auto-mining, sharing one volume,
+  racing on state). Exit on stdin end/close; heartbeat lock per data dir.
+- BUG FIXED: Teranode fetches had no timeouts → one hung request froze the
+  confirmer forever. All fetches bounded; confirmer indexes blocks once and
+  abandons anchors not mined within 100 blocks (e.g. double-spent by a racer).
+- `pnpm e2e:mcp`: 16 checks on live regtest via the real server, 3/3 green;
+  Docker-gateway variant 16/16; OpenAI model-driven run with ZK clearance.
+
 ## Local models + Docker regtest profile
 - Docker Desktop 4.97 (llama.cpp b9879-cpu): ai/qwen3.8-flash-next still fails
   (`qwen4exp` not in llama.cpp). ai/qwen3:4b-instruct-2507 does real tool calls

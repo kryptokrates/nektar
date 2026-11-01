@@ -33,6 +33,8 @@ env:
     value: '{{mamem-regtest.automine}}'
   - name: MAMEM_MODEL_ID
     value: '{{mamem-regtest.model_id}}'
+  - name: MAMEM_CLEARANCE_AUTHORITIES
+    value: '{{mamem-regtest.clearance_authorities}}'
 config:
   - name: mamem-regtest
     description: Teranode regtest connection
@@ -47,3 +49,6 @@ config:
       model_id:
         type: string
         description: Exact model identity bound into answer receipts
+      clearance_authorities:
+        type: string
+        description: Comma-separated pubkeys trusted to issue clearance credentials (level > 0 reads)

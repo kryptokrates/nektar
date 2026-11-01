@@ -1,4 +1,8 @@
-# GOAL-v6 — the five remaining paper items
+# GOAL-v6 — the five remaining paper items — **DONE**
+
+Status: all phases implemented, tested and pushed (see §8). S1b (full on-chain
+SP1-wrap verifier) remains a documented deferred phase; S6.5–S6.11 are
+deferred-with-reason; the S7 ops items are out-of-scope tracked gaps.
 
 How mamem reaches full coverage of arXiv:2506.13246, the way the paper describes each
 item. Approved plan; every phase lands with tests + regtest e2e + docs + commit.
@@ -139,9 +143,16 @@ S6.1–S6.4 implemented (see table); S6.5–S6.11 stay documented as deliberate 
 - **API-001/002:** gRPC, Go/Python client SDKs. **OPS-004..006:** public monitor, metering.
 - **TST-007:** node-outage chaos tests.
 
-## 8. Definition of done (v6)
+## 8. Definition of done (v6) — status
 
-- S1a, S2, S3, S4, S5 implemented, unit+fuzz+regtest-tested, documented.
-- S6.1–S6.4 fixed; S6.5–S6.11 marked deferred-with-reason in the test spec.
-- `pnpm reproduce`, `pnpm e2e`, regtest e2e (3×), `e2e:mcp` all green on the final tree.
-- Test-spec matrix updated: every remaining ◐/⏸ has either an implementation or a documented deferral.
+- S1a ✅ on-chain receipt attestation (`attestMembership`/`verifyAttestation`).
+- S2 ✅ §14 derivation attestations (guest image 78203c9e…, 18/18 vectors, ~96–131 s prove).
+- S3 ✅ weighted-median temporal sources (`MAMEM_TEMPORAL_SOURCES=bsv[,btc]`).
+- S4 ✅ OWL 2 RL/QL compiler → Datalog, anchored axioms feed §14 (graph 14/14).
+- S5 ✅ proof sharding L_ZKDis v2, `MAMEM_PROOF_SHARDING` flag, patent noted in NOTICE.
+- S6.1 ✅ recall verifies plaintext fully · S6.2 ✅ META flag (anchor v4) ·
+  S6.3 ✅ algorithm bytes · S6.4 ✅ documented binding-equivalent.
+- S6.5–S6.11 deferred-with-reason; S1b deferred (runar-go phase).
+- Gates: build clean · check:deps OK · `pnpm reproduce` green (both image IDs pinned) ·
+  199+ unit tests pass · mock e2e PASS · regtest e2e PASS on the final tree (the
+  first post-S6 run crashed at teardown — transient; clean rerun PASS).

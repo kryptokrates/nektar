@@ -45,6 +45,9 @@ docker build -t mamem:local .      # clean-checkout gate (install → build → 
 
 ## Running the MCP server
 
+The MCP server now runs on the official SDK, with stdio and Streamable HTTP at `/mcp`. It has persistent `MAMEM_NETWORK=regtest` mode with a confirmer, and installs through Docker MCP Toolkit with `pnpm mcp:install` / `pnpm mcp:smoke`. Full guide: [INTEGRATION.md](INTEGRATION.md). Live check of the production runtime with a restart: `node packages/mcp/demo/regtest-runtime.mjs`.
+
+
 ```sh
 node packages/mcp/dist/src/bin.js              # stdio; offline demo chain that mines per tx
 node packages/mcp/demo/client.mjs              # scripted agent session

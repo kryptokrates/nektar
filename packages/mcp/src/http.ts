@@ -1,6 +1,7 @@
 // API-001: minimal versioned HTTP API (node:http, no framework). Same tools
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
 import { createServer, type IncomingMessage, type Server } from 'node:http'
+import { randomUUID } from 'node:crypto'
 import type { MamemMemory } from './memory.js'
 import { TOOLS, callTool } from './server.js'
 
@@ -10,6 +11,11 @@ export const OPENAPI = {
   openapi: '3.1.0',
   info: { title: 'mamem API', version: '1.0.0', description: 'Verifiable encrypted agent memory on BSV. Proofs establish inclusion, integrity and existence-by-time — never truth.' },
   paths: {
+    '/mcp': {
+      post: { summary: 'MCP Streamable HTTP (JSON-RPC; initialize creates a session, mcp-session-id header thereafter)', responses: { 200: { description: 'JSON or SSE stream' } } },
+      get: { summary: 'MCP server-to-client SSE stream for a session', responses: { 200: { description: 'SSE' } } },
+      delete: { summary: 'end an MCP session', responses: { 200: { description: 'closed' } } }
+    },
     '/v1/health': { get: { summary: 'liveness', responses: { 200: { description: 'ok' } } } },
     '/v1/openapi.json': { get: { summary: 'this document', responses: { 200: { description: 'OpenAPI 3.1' } } } },
     '/v1/metrics': { get: { summary: 'Prometheus metrics (text/plain 0.0.4)', responses: { 200: { description: 'metrics' } } } },
@@ -39,11 +45,29 @@ async function body (req: IncomingMessage): Promise<unknown> {
 }
 
 export function createHttpApi (mem: MamemMemory): Server {
-  return createServer(async (req, res) => {
+  // MCP Streamable HTTP: one transport + McpServer per session (mcp-session-id)
+  const sessions = new Map<string, import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport>()
+  const mcp = async (req: IncomingMessage, res: import('node:http').ServerResponse) => {
+    const { StreamableHTTPServerTransport } = await import('@modelcontextprotocol/sdk/server/streamableHttp.js')
+    const { createMcpServer } = await import('./mcp-server.js')
+    const sid = req.headers['mcp-session-id']
+    const parsed = req.method === 'POST' ? await body(req) : undefined
+    let transport = typeof sid === 'string' ? sessions.get(sid) : undefined
+    if (!transport) {
+      if (req.method !== 'POST' || typeof sid === 'string') { res.writeHead(404, { 'content-type': 'application/json' }); res.end(json({ jsonrpc: '2.0', error: { code: -32001, message: 'unknown MCP session' }, id: null })); return }
+      const t: import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID(), onsessioninitialized: id => { sessions.set(id, t) } })
+      t.onclose = () => { if (t.sessionId) sessions.delete(t.sessionId) }
+      await createMcpServer(mem).connect(t)
+      transport = t
+    }
+    await transport.handleRequest(req, res, parsed)
+  }
+  const server = createServer(async (req, res) => {
     const send = (code: number, v: unknown, type = 'application/json') => { res.writeHead(code, { 'content-type': type }); res.end(typeof v === 'string' ? v : json(v)) }
     const url = new URL(req.url ?? '/', 'http://x')
     const p = url.pathname.split('/').filter(Boolean)
     try {
+      if (url.pathname === '/mcp') return await mcp(req, res)
       if (req.method === 'GET' && url.pathname === '/v1/health') return send(200, { ok: true })
       if (req.method === 'GET' && url.pathname === '/v1/openapi.json') return send(200, OPENAPI)
       if (req.method === 'GET' && url.pathname === '/v1/metrics') return send(200, mem.metrics.render(), 'text/plain; version=0.0.4')
@@ -61,6 +85,8 @@ export function createHttpApi (mem: MamemMemory): Server {
         return cp ? send(200, { checkpoint: cp, logPublicKey: mem.logPublicKey() }) : send(404, { error: 'no checkpoint' })
       }
       return send(404, { error: 'not found' })
-    } catch (e) { return send(500, { error: (e as Error).message }) }
+    } catch (e) { if (!res.headersSent) send(500, { error: (e as Error).message }) }
   })
+  server.on('close', () => { for (const t of sessions.values()) void t.close() })
+  return server
 }

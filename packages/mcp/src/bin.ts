@@ -1,24 +1,20 @@
 #!/usr/bin/env node
-// mamem MCP server (stdio). Offline demo mode: a MockChain with Teranode-
-// faithful script evaluation that mines a block after every accepted tx, so
-// anchors are immediately provable. Live regtest wiring lives in
-// packages/e2e/src/e2e-regtest.ts (funding/treasury needs the running stack).
-import { MockChain, MockFunder } from '@mamem/chain'
-import type { Transaction } from '@bsv/sdk'
-import { MamemMemory } from './memory.js'
+// mamem MCP server.
+//   stdio (default):      node dist/src/bin.js
+//   Streamable HTTP+REST:  MAMEM_HTTP_PORT=8080 node dist/src/bin.js
+// Backend via MAMEM_NETWORK=mock (default, offline, zero setup) | regtest
+// (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
+import { openRuntime, configFromEnv } from './runtime.js'
 import { serveStdio } from './server.js'
+import { createHttpApi } from './http.js'
 
-const chain = new MockChain(); chain.verifyScripts = true
-const funder = new MockFunder(); funder.topup(Number(process.env.MAMEM_DEMO_UTXOS ?? 200))
-for (const t of funder.parents) chain.registerParent(t)
-const broadcast = chain.broadcast.bind(chain)
-chain.broadcast = async (tx: Transaction) => {
-  const r = await broadcast(tx)
-  if (r.status === 'success') chain.mine(1)
-  return r
+const rt = await openRuntime(configFromEnv())
+process.stderr.write(`mamem: network=${rt.network}\n`)
+const port = process.env.MAMEM_HTTP_PORT
+if (port) {
+  createHttpApi(rt.mem).listen(Number(port), process.env.MAMEM_HTTP_HOST ?? '127.0.0.1', () => process.stderr.write(`mamem: HTTP + MCP on :${port} (/v1, /mcp)\n`))
+} else {
+  await serveStdio(rt.mem)
 }
-const mem = new MamemMemory(chain, funder, funder.keyPair, {
-  batchPolicy: { maxLeaves: Number(process.env.MAMEM_BATCH ?? 4) },
-  modelId: process.env.MAMEM_MODEL_ID ?? 'unspecified'
-})
-serveStdio(mem)
+const stop = async () => { await rt.close(); process.exit(0) }
+process.on('SIGINT', () => { void stop() }); process.on('SIGTERM', () => { void stop() })

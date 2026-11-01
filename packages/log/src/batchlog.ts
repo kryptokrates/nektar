@@ -49,7 +49,7 @@ export class BatchLog {
    * twice returns the existing record. Returns the record + an inclusion
    * promise signed immediately (inclusion happens at next batch close).
    */
-  async remember (shard: string, fragment: Fragment): Promise<{ rec: LogRecord, promise: InclusionPromise, duplicate: boolean }> {
+  async remember (shard: string, fragment: Fragment, meta: Partial<Pick<LogRecord, 'level' | 'authorPub' | 'authorEpoch'>> = {}): Promise<{ rec: LogRecord, promise: InclusionPromise, duplicate: boolean }> {
     const idh = identityHash(fragment)
     const idHex = toHex(idh)
     const existing = await this.store.byIdentity(shard, idHex)
@@ -62,7 +62,9 @@ export class BatchLog {
       leaf: computeLeaf(fragment),
       hdp: idh,
       fragment,
-      state: 'committed'
+      state: 'committed',
+      // persisted WITH the record (a store-backed record cannot be mutated afterwards)
+      ...meta
     }
     await this.store.append(rec)
     if (!this.firstPendingAt.has(shard)) this.firstPendingAt.set(shard, this.now())

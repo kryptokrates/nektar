@@ -60,6 +60,8 @@ export class MamemProvider implements Provider {
   }
   private recent = new Map<string, Transaction>()
   recentOf (txid: string): Transaction | undefined { return this.recent.get(txid) }
+  /** make a known tx resolvable as a parent (e.g. a head restored after restart) */
+  rememberTx (tx: Transaction): void { this.recent.set(tx.id('hex'), tx) }
   async getRawTransaction (txid: string): Promise<string> {
     if (this.lastTx && this.lastTx.id('hex') === txid) return this.lastTx.toHex()
     return this.recent.get(txid)?.toHex() ?? ''
@@ -186,6 +188,23 @@ export class AnchorChain {
   private ownerPub (): string { return this.shardKey.toPublicKey().toString() }
 
   getHead (): Head | undefined { return this.pendingHeads.at(-1) ?? this.head }
+
+  /** Restart: rehydrate from a persisted head tx (with its ancestry/BUMP via
+   *  BEEF). The tx must decode as an authentic anchor of THIS owner; the next
+   *  append spends exactly this UTXO — no new genesis, no fork. */
+  resume (headTx: Transaction, opts: { confirmed: boolean, certs?: import('@mamem/identity').RotationCert[] }): Head {
+    if (this.getHead()) throw new Error('resume: chain already has a head')
+    const dec = decodeMamemAnchor(headTx.outputs[0]!.lockingScript.toHex())
+    if (!dec) throw new Error('resume: head tx output 0 is not an authentic MamemAnchor')
+    if (toHex(dec.ownerPkh) !== toHexPub160(this.ownerPub())) throw new Error('resume: head owner is not this shard key')
+    const head: Head = { tx: headTx, vout: 0, data: { shard: dec.shard, n: dec.n, size: dec.size, R: dec.R, Rp: dec.Rp, ownerPkh: dec.ownerPkh } }
+    if (opts.confirmed) this.head = head
+    else this.pendingHeads.push(head)
+    this.register(headTx)
+    this.provider.rememberTx(headTx)
+    if (opts.certs) this.rotationCerts.push(...opts.certs)
+    return head
+  }
 
   async anchor (size: number, R: Bytes, poseidonRoot: Bytes = new Uint8Array(0)): Promise<AnchorResult> {
     const limit = this.opts.burstLimit ?? 100

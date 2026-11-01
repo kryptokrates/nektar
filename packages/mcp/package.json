@@ -27,7 +27,11 @@
     "@mamem/overlay": "workspace:*",
     "@mamem/policy": "workspace:*",
     "@mamem/verify": "workspace:*",
-    "@mamem/zk": "workspace:*"
+    "@mamem/zk": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "knex": "^3.3.0",
+    "sqlite3": "^5.1.7",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@bsv/sdk": "4.0.1"

@@ -1,0 +1,13 @@
+name: mamem
+title: mamem — verifiable agent memory (BSV)
+type: server
+image: mamem:local
+# stateful server: keep one container per gateway session, data in a named volume
+longLived: true
+volumes:
+  - mamem-data:/data
+description: >-
+  Encrypted, provenance-bearing agent memory whose history is anchored on BSV.
+  Tools: remember, recall, prove, anchor, ZK membership/clearance, rotate,
+  revoke, disclose, authorize, automaton. Proofs show what was recorded and
+  unaltered — never that it is true.

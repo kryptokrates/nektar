@@ -266,6 +266,28 @@
 - POL-011 (ZK derivation attestation) deferred.
 - Docker image + compose; health = scripted MCP session.
 
+## Operationalisation: MCP for every client
+- Official MCP SDK 1.32.2 (zod 3.25.76): stdio + Streamable HTTP (`/mcp`,
+  sessions), 12 tools with annotations (served from the existing JSON Schemas
+  via low-level handlers), 2 resource templates, 3 prompts, server instructions.
+  Gotcha: `structuredContent` must be an object (null/array results text-only).
+- `openRuntime`: mock | regtest (testnet refused until configured). regtest =
+  sqlite records (level/author metadata now stored WITH the record — the old
+  post-append mutation was lost by the knex store, i.e. a level gate bypass on
+  persistent stores), anchor state (heads/tails/checkpoints/certs/BEEFs),
+  security state, reserve + treasury, keys (0600) in MAMEM_DATA_DIR; confirmer
+  (`unprovenAnchors`/`attachProof`), optional auto-mine, timed flushDue.
+- `AnchorChain.resume(headTx)`: restart continues the same shard (no fork).
+- Regtest funding gotcha: recent coinbases are tiny (5–79 sat after halvings);
+  `bootstrapReserve` splits a persisted treasury or an early ≥0.1-coin coinbase.
+- Docker MCP Toolkit: `docker-mcp/mamem.yaml` (longLived — the gateway otherwise
+  starts a fresh container per call and state is lost; volume mamem-data:/data);
+  `pnpm mcp:install`, `pnpm mcp:smoke` (remember → anchor → prove through the gateway).
+- Docker Model Runner: `pnpm chat` (OpenAI-compatible loop + MCP client).
+  ai/qwen3.8-flash-next:q8_0 fails to load: llama.cpp latest-cpu lacks the
+  `qwen4exp` architecture (needs a newer DMR engine). On CPU, 8B qwen3 takes minutes
+  per turn; 0.6B emits pseudo tool tags instead of tool calls.
+
 ## GOAL-v4 production readiness
 - COM-003 ingest signatures (`provenanceDigest`, `signProvenance/verifyProvenance`,
   `requireSignedProvenance`), verified before encryption drops d.

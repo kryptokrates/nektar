@@ -1,33 +1,42 @@
-// AGT-002 integration: the real stdio JSON-RPC server, spawned as a process.
+// AGT-002 integration: the real MCP server process over stdio, driven by the
+// OFFICIAL MCP SDK client (protocol negotiation, tools, resources, prompts).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
-test('mcp stdio server: initialize → tools/list → remember/anchor/prove/recall over JSON-RPC', async () => {
+const text = (r: unknown) => JSON.parse(((r as { content: Array<{ text: string }> }).content[0]!).text)
+
+test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 30_000 }, async () => {
   const bin = fileURLToPath(new URL('../src/bin.js', import.meta.url))
-  const srv = spawn(process.execPath, [bin], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, MAMEM_MODEL_ID: 'stdio-test', MAMEM_DEMO_UTXOS: '20' } })
-  const pending = new Map<number, (m: any) => void>()
-  createInterface({ input: srv.stdout! }).on('line', l => { const m = JSON.parse(l); pending.get(m.id)?.(m); pending.delete(m.id) })
-  let id = 0
-  const rpc = (method: string, params: unknown) => new Promise<any>((resolve, reject) => {
-    const n = ++id
-    const t = setTimeout(() => reject(new Error(`${method} timed out`)), 8000)
-    pending.set(n, m => { clearTimeout(t); m.error ? reject(new Error(m.error.message)) : resolve(m.result) })
-    srv.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id: n, method, params }) + '\n')
-  })
-  const call = async (name: string, args: unknown) => JSON.parse((await rpc('tools/call', { name, arguments: args })).content[0].text)
+  const transport = new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env as Record<string, string>, MAMEM_NETWORK: 'mock', MAMEM_MODEL_ID: 'stdio-test', MAMEM_DEMO_UTXOS: '20', MAMEM_BATCH: '2' }, stderr: 'ignore' })
+  const client = new Client({ name: 'mamem-test', version: '1.0.0' })
+  await client.connect(transport)
   try {
-    assert.equal((await rpc('initialize', {})).serverInfo.name, 'mamem')
-    const names = (await rpc('tools/list', {})).tools.map((t: { name: string }) => t.name)
-    for (const n of ['remember', 'recall', 'prove', 'anchor', 'automaton', 'proveMembership']) assert.ok(names.includes(n), n)
-    await call('remember', { shard: 'm', data: 'torque 45Nm' })
-    await call('anchor', { shard: 'm' })
-    assert.deepEqual((await call('prove', { shard: 'm', seq: 0 })).result, { ok: true })
-    const r = await call('recall', { shard: 'm', seq: 0 })
-    assert.equal(r.items[0].text, 'torque 45Nm')
-    assert.equal(r.receipt.modelId, 'stdio-test')
-    await assert.rejects(() => rpc('tools/call', { name: 'nope', arguments: {} }), /unknown tool nope/)
-  } finally { srv.kill() }
+    assert.equal(client.getServerVersion()?.name, 'mamem')
+    assert.match(client.getInstructions() ?? '', /recall/)
+    const { tools } = await client.listTools()
+    assert.equal(tools.length, 12)
+    const by = new Map(tools.map(t => [t.name, t]))
+    assert.equal(by.get('recall')!.annotations?.readOnlyHint, true)
+    assert.equal(by.get('revoke')!.annotations?.destructiveHint, true)
+    assert.equal(by.get('remember')!.annotations?.readOnlyHint, false)
+    await client.callTool({ name: 'remember', arguments: { shard: 'm', data: 'torque 45Nm' } })
+    const r2 = text(await client.callTool({ name: 'remember', arguments: { shard: 'm', data: 'belt 10h' } }))
+    assert.ok(r2.anchored, 'batch of 2 anchored')
+    assert.deepEqual(text(await client.callTool({ name: 'prove', arguments: { shard: 'm', seq: 0 } })).result, { ok: true })
+    const rec = text(await client.callTool({ name: 'recall', arguments: { shard: 'm', seq: 0 } }))
+    assert.equal(rec.items[0].text, 'torque 45Nm'); assert.equal(rec.receipt.modelId, 'stdio-test')
+    const bad = await client.callTool({ name: 'nope', arguments: {} })
+    assert.equal(bad.isError, true)
+    const cp = await client.readResource({ uri: 'mamem://checkpoint/m' })
+    assert.ok(JSON.parse((cp.contents[0] as { text: string }).text).checkpoint.sig)
+    const rr = JSON.parse(((await client.readResource({ uri: 'mamem://record/m/0' })).contents[0] as { text: string }).text)
+    assert.deepEqual(rr.proof, { ok: true })
+    const { prompts } = await client.listPrompts()
+    assert.deepEqual(prompts.map(p => p.name).sort(), ['audit-answer', 'grounded-answer', 'remember-with-source'])
+    const gp = await client.getPrompt({ name: 'grounded-answer', arguments: { question: 'What torque for port 4?', shard: 'm' } })
+    assert.match((gp.messages[0]!.content as { text: string }).text, /recall/)
+  } finally { await client.close() }
 })

@@ -9,7 +9,7 @@ import type { LogRecord, ShardStore } from './store.js'
 const TABLE = 'mamem_log'
 
 export class KnexShardStore implements ShardStore {
-  constructor (private knex: Knex) {}
+  constructor (private knex: Knex<any, any>) {}
 
   async init (): Promise<void> {
     const exists = await this.knex.schema.hasTable(TABLE)
@@ -24,9 +24,12 @@ export class KnexShardStore implements ShardStore {
         t.integer('batch_index')
         t.integer('leaf_index')
         t.string('anchor_txid')
+        t.text('meta_json')
         t.primary(['shard', 'seq'])
         t.unique(['shard', 'hdp'])
       })
+    } else if (!(await this.knex.schema.hasColumn(TABLE, 'meta_json'))) {
+      await this.knex.schema.alterTable(TABLE, t => { t.text('meta_json') })
     }
   }
 
@@ -38,7 +41,8 @@ export class KnexShardStore implements ShardStore {
       state: r.state,
       batch_index: r.batchIndex ?? null,
       leaf_index: r.leafIndex ?? null,
-      anchor_txid: r.anchorTxid ?? null
+      anchor_txid: r.anchorTxid ?? null,
+      meta_json: JSON.stringify({ level: r.level, authorPub: r.authorPub, authorEpoch: r.authorEpoch })
     }
   }
 
@@ -50,7 +54,8 @@ export class KnexShardStore implements ShardStore {
       state: row.state,
       batchIndex: row.batch_index ?? undefined,
       leafIndex: row.leaf_index ?? undefined,
-      anchorTxid: row.anchor_txid ?? undefined
+      anchorTxid: row.anchor_txid ?? undefined,
+      ...(row.meta_json ? JSON.parse(row.meta_json) as Pick<LogRecord, 'level' | 'authorPub' | 'authorEpoch'> : {})
     }
   }
 

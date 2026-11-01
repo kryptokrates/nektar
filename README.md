@@ -17,6 +17,16 @@ flowchart LR
   reason --> anchor
 ```
 
+## Use it from your AI (Claude, Cursor, VS Code, local models…)
+
+```sh
+pnpm install && pnpm -r build
+pnpm mcp:install claude-desktop cursor   # Docker Desktop MCP Toolkit: one install, any client
+pnpm chat "What torque does drain port 4 need?"   # local model via Docker Model Runner
+```
+
+See **[docs/INTEGRATION.md](docs/INTEGRATION.md)** for every client, the HTTP/Streamable-HTTP endpoint and the persistent regtest backend.
+
 ## Quick start
 
 ```sh
@@ -33,6 +43,7 @@ Additional gates: `pnpm formal` (TLA+/TLC), `pnpm cedar:symcc` (Cedar SymCC + cv
 
 | Doc | Contents |
 |---|---|
+| [docs/INTEGRATION.md](docs/INTEGRATION.md) | MCP server for Claude/Cursor/VS Code/local models, Docker MCP Toolkit, HTTP, runtime modes |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | layers, packages, sequence and state diagrams (Mermaid), ADRs |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | research & inspirations: reused / adopted / rejected, per source |
 | [docs/PROOFS.md](docs/PROOFS.md) | what each proof proves and does not prove |

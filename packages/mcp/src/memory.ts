@@ -2,7 +2,7 @@
 // Wires log (append/batch) → anchor (head UTXO per shard) → overlay (submit)
 // → verify (proof bundles) → crypto (BRC-42/AES-GCM), all behind the chain
 // interfaces so it runs identically on the mock chain and regtest.
-import { PrivateKey } from '@bsv/sdk'
+import { PrivateKey, Transaction } from '@bsv/sdk'
 import {
   utf8, fromHex, toHex, sha256, eq, hash160,
   computeLeaf, merkleRoot, merkleProof, identityHash, diff, apply, encodeDelta, decodeDelta,
@@ -62,7 +62,18 @@ export interface MamemMemoryOptions {
   /** persistence for challenges, ZK transcripts, nullifiers, revocations
    *  (default: in-memory, lost on restart) */
   securityStore?: SecurityStateStore
+  /** persistence for anchor heads/tails/checkpoints (restart-safe, no fork) */
+  stateStore?: MemoryStateStore
 }
+
+/** persisted anchor state: per shard the head, the succession, checkpoints,
+ *  rotation certs and every anchor tx as atomic BEEF (with BUMP once mined) */
+export interface PersistedMemoryState {
+  version: 1
+  shards: Record<string, { headTxid: string, confirmed: boolean, tails: AnchorLink[], checkpoints: Checkpoint[], certs: import('@mamem/identity').RotationCert[], anchors: Record<string, string> }>
+  promises: Array<{ shard: string, seq: number, issuedAt: number }>
+}
+export interface MemoryStateStore { load: () => PersistedMemoryState | undefined, save: (s: PersistedMemoryState) => void }
 
 /** pluggable persistence for replay-protection state (see securitystore.ts) */
 export interface SecurityStateStore {
@@ -122,6 +133,7 @@ export class MamemMemory {
     this.logKey = opts.signingKey ?? PrivateKey.fromRandom()
     this.log = new BatchLog(store, this.logKey, opts.batchPolicy ?? { maxLeaves: 16 })
     this.restoreSecurityState()
+    this.restoreState()
   }
   private logKey: PrivateKey
   /** the log signing key's pubkey (verifies promises and checkpoints) */
@@ -148,6 +160,20 @@ export class MamemMemory {
   async records (shard: string) { return await this.store.all(shard) }
   /** the shard's latest anchor link (tail of the on-chain succession) */
   tailLink (shard: string) { return this.tails.get(shard)?.at(-1) }
+  /** anchors still waiting for their BUMP */
+  unprovenAnchors (): Array<{ shard: string, txid: string }> {
+    return this.shards().flatMap(s => (this.tails.get(s) ?? []).filter(l => !this.anchorTxs.get(l.txid)?.merklePath).map(l => ({ shard: s, txid: l.txid })))
+  }
+  /** attach a BUMP to an anchor (must prove THIS txid) and mark the chain confirmed */
+  attachProof (shard: string, txid: string, mp: import('@bsv/sdk').MerklePath): void {
+    const tx = this.anchorTxs.get(txid)
+    if (!tx) throw new Error(`attachProof: unknown anchor ${txid}`)
+    if (!mp.path[0]?.some(n => n.txid === true && n.hash === txid)) throw new Error('attachProof: BUMP does not contain this txid')
+    tx.merklePath = mp
+    this.confirmAnchor(shard, txid)
+  }
+  /** shards this instance has written or anchored */
+  shards (): string[] { return [...new Set([...this.anchors.keys(), ...this.touched])] }
   /** every anchor link of the shard, genesis first (read-only copy) */
   anchorLinks (shard: string): AnchorLink[] { return [...(this.tails.get(shard) ?? [])] }
 
@@ -157,6 +183,8 @@ export class MamemMemory {
     if (!ac) throw new Error(`no anchor for shard ${shard}`)
     const r = await ac.rotate(newKey)
     this.opts.shardKeys?.set(shard, newKey)
+    this.anchorTxs.set(r.tx.id('hex'), r.tx)
+    this.persistState()
     return { txid: r.tx.id('hex'), n: r.head.data.n }
   }
 
@@ -362,10 +390,11 @@ export class MamemMemory {
       fragment.hdp = identityHash(fragment)
       fragment.d = new Uint8Array(0) // plaintext is not retained with E
     }
-    const { rec, promise, duplicate } = await this.log.remember(shard, fragment)
+    // level (Cedar/ZK read gate) and author epoch are stored WITH the record
+    const { rec, promise, duplicate } = await this.log.remember(shard, fragment, {
+      level, ...(prov?.sourcePub !== undefined ? { authorPub: prov.sourcePub, authorEpoch: prov.epoch ?? 0 } : {})
+    })
     if (!duplicate) this.promises.push({ shard, seq: rec.seq, issuedAt: Date.now() })
-    rec.level = level // persist the write level for the Cedar/ZK read gate
-    if (prov?.sourcePub !== undefined) { rec.authorPub = prov.sourcePub; rec.authorEpoch = prov.epoch ?? 0 }
     const out: RememberResult = {
       shard, seq: rec.seq, leaf: toHex(rec.leaf), hdp: toHex(rec.hdp), duplicate,
       promise: { seq: rec.seq, leaf: promise.leaf, signature: promise.signature }
@@ -405,6 +434,7 @@ export class MamemMemory {
       root: link.R, chainedRoot: link.Rp, time: Date.now(), anchorTxid: txid
     }))
     this.cps.set(shard, cps)
+    this.persistState()
     if (this.opts.overlay) {
       await this.opts.overlay.engine.submit({ beef: this.anchorChain(shard).beefOf(res.tx), topics: ['tm_mamem'] }, undefined, 'current-tx')
     }
@@ -516,14 +546,49 @@ export class MamemMemory {
 
   /** Mark anchor txs mined (drive from broadcaster status events). */
   confirmAnchor (shard: string, txid: string): void {
-    const h = this.anchors.get(shard)?.getHead()
-    if (h && h.tx.id('hex') === txid) {
-      this.anchors.get(shard)!.confirm(txid, h.tx.merklePath)
-    } else {
-      // confirm any pending head matching txid
-      const ac = this.anchors.get(shard)
-      if (ac) ac.confirm(txid, (ac as any).pendingHeads?.find?.((p: any) => p.tx.id('hex') === txid)?.tx?.merklePath)
+    const ac = this.anchors.get(shard)
+    if (!ac) return
+    ac.confirm(txid, this.anchorTxs.get(txid)?.merklePath)
+    this.persistState()
+  }
+
+  // ── persisted anchor state (restart without forking the shard) ───────────
+  private persistState (): void {
+    const st = this.opts.stateStore
+    if (!st) return
+    const shards: PersistedMemoryState['shards'] = {}
+    for (const [shard, ac] of this.anchors) {
+      const head = ac.getHead()
+      if (!head) continue
+      const anchors: Record<string, string> = {}
+      for (const l of this.tails.get(shard) ?? []) {
+        const tx = this.anchorTxs.get(l.txid)
+        if (tx) anchors[l.txid] = Buffer.from(ac.beefOf(tx, true)).toString('hex')
+      }
+      // the head may be a rotate spend that adds no tail link
+      anchors[head.tx.id('hex')] = Buffer.from(ac.beefOf(head.tx, true)).toString('hex')
+      shards[shard] = {
+        headTxid: head.tx.id('hex'), confirmed: !!head.tx.merklePath, tails: this.tails.get(shard) ?? [],
+        checkpoints: this.cps.get(shard) ?? [], certs: [...ac.rotationCerts], anchors
+      }
     }
+    st.save({ version: 1, shards, promises: this.promises })
+  }
+  private restoreState (): void {
+    const s = this.opts.stateStore?.load()
+    if (!s) return
+    for (const [shard, p] of Object.entries(s.shards)) {
+      for (const [txid, hex] of Object.entries(p.anchors)) {
+        const tx = Transaction.fromAtomicBEEF(Array.from(Buffer.from(hex, 'hex')))
+        if (tx.id('hex') !== txid) throw new Error(`restore: anchor ${txid} BEEF mismatch`)
+        this.anchorTxs.set(txid, tx)
+      }
+      const headTx = this.anchorTxs.get(p.headTxid)
+      if (!headTx) throw new Error(`restore: head ${p.headTxid} of shard ${shard} missing`)
+      this.anchorChain(shard).resume(headTx, { confirmed: p.confirmed, certs: p.certs })
+      this.tails.set(shard, p.tails); this.cps.set(shard, p.checkpoints); this.touched.add(shard)
+    }
+    this.promises.push(...s.promises)
   }
 
   /**

@@ -128,6 +128,10 @@ export class MockChain implements ChainTracker, Broadcaster {
   private emit (ev: TxStatusEvent): void { for (const cb of this.statusCbs) cb(ev) }
 
   /** mine up to `count` blocks, including all mempool txs in the first block */
+  private bumps = new Map<string, MerklePath>()
+  /** the BUMP of a mined tx by txid (like a node's merkle-proof API) */
+  merklePathOf (txid: string): MerklePath | undefined { return this.minedTxs.has(txid) ? this.bumps.get(txid) : undefined }
+
   mine (count = 1): BlockHeader[] {
     const out: BlockHeader[] = []
     for (let b = 0; b < count; b++) {
@@ -149,6 +153,7 @@ export class MockChain implements ChainTracker, Broadcaster {
         const tx = this.mempool.get(txid)!
         tx.merklePath = buildBump(txids, i, this.height)
         this.minedTxs.set(txid, { height: this.height })
+        this.bumps.set(txid, tx.merklePath)
         this.emit({ txid, status: 'mined', blockHeight: this.height, merklePath: tx.merklePath })
       })
       this.mempool.clear()

@@ -290,6 +290,58 @@ export class ReserveFunder {
   }
 }
 
+/** Fund a reserve on regtest: spend ONE candidate (persisted treasury first,
+ *  else an early mature coinbase ≥ 0.1 coin to our key) into `outputs` fresh
+ *  outputs + a new treasury output. A split the node already knows came from
+ *  an earlier run (its outputs are likely spent) and is skipped. Returns the
+ *  split tx or null. Bounded: ≤ maxCandidates coinbases are tried. */
+export async function bootstrapReserve (cfg: RegtestConfig, key: PrivateKey, reserve: ReserveFunder, rpc: (m: string, ...p: unknown[]) => Promise<any>, opts: { treasuryFile: string, outputs?: number, maxCandidates?: number }): Promise<Transaction | null> {
+  const { P2PKH } = await import('@bsv/sdk')
+  const addr = key.toPublicKey().toAddress([0x6f])
+  const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
+  const n = opts.outputs ?? 60
+  const split = async (parent: Transaction, vout: number): Promise<Transaction | null> => {
+    const sats = parent.outputs[vout]!.satoshis ?? 0
+    if (sats < 1e6) return null
+    const tx = new Transaction()
+    tx.addInput({ sourceTransaction: parent, sourceOutputIndex: vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
+    const per = Math.min(50_000, Math.floor((sats - 2000) / (n + 1)))
+    for (let k = 0; k < n; k++) tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: per })
+    tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: sats - n * per - 1000 })
+    await tx.sign()
+    const known = await fetch(`${cfg.assetUrl}/tx/${tx.id('hex')}`, { headers: { Authorization: auth } })
+    if (known.ok) return null
+    const r = await new TeranodeBroadcaster(cfg.propagationUrl).broadcast(tx)
+    return r.status === 'success' ? tx : null
+  }
+  const accept = (tx: Transaction): Transaction => {
+    for (let k = 0; k < n; k++) reserve.addOwned(tx, k)
+    mkdirSync(dirname(opts.treasuryFile), { recursive: true })
+    writeFileSync(opts.treasuryFile, JSON.stringify({ treasury: { txid: tx.id('hex'), vout: n, txHex: tx.toHex() } }))
+    return tx
+  }
+  if (existsSync(opts.treasuryFile)) {
+    const t = JSON.parse(readFileSync(opts.treasuryFile, 'utf8')) as { treasury?: { vout: number, txHex: string } }
+    if (t.treasury) { const s = await split(Transaction.fromHex(t.treasury.txHex), t.treasury.vout); if (s) return accept(s) }
+  }
+  const want = Buffer.from(key.toPublicKey().toHash()).toString('hex')
+  const tip = (await rpc('getblockchaininfo') as { blocks: number }).blocks
+  let tried = 0
+  for (let h = 1; h <= tip - 101 && tried < (opts.maxCandidates ?? 200); h++) {
+    const hash = await rpc('getblockhash', h) as string
+    const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`)
+    if (!res.ok) continue
+    const cb = Transaction.fromHex(Buffer.from(parseLegacyBlock(new Uint8Array(await res.arrayBuffer())).txs[0]!).toString('hex'))
+    for (const [v, o] of cb.outputs.entries()) {
+      if (!o.lockingScript.toHex().includes(want) || (o.satoshis ?? 0) < 1e7) continue
+      tried++
+      const s = await split(cb, v)
+      if (s) return accept(s)
+    }
+  }
+  return null
+}
+
 /** MerklePath for a txid at a known block height. */
 export async function merklePathAtHeight (cfg: RegtestConfig, txid: string, tracker: TeranodeRPCTracker, height: number): Promise<MerklePathResult | null> {
   const hdr = await tracker.headerAtHeight(height)

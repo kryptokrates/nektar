@@ -1,6 +1,5 @@
-// Minimal MCP server over stdio JSON-RPC (initialize / tools/list / tools/call).
-// No external MCP dependency — the protocol subset we need is ~80 lines.
-import { createInterface } from 'node:readline'
+// Tool definitions (JSON Schema) + their single implementation (callTool),
+// shared by the MCP server (mcp-server.ts, official SDK) and the HTTP API.
 import { sha256, utf8 } from '@mamem/core'
 import type { MamemMemory } from './memory.js'
 
@@ -186,27 +185,9 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
   }
 }
 
-/** stdio JSON-RPC loop (newline-delimited JSON). */
-export function serveStdio (mem: MamemMemory): void {
-  const rl = createInterface({ input: process.stdin })
-  const send = (o: unknown) => process.stdout.write(JSON.stringify(o) + '\n')
-  rl.on('line', async (line) => {
-    let msg: any
-    try { msg = JSON.parse(line) } catch { return }
-    const { id, method, params } = msg
-    try {
-      if (method === 'initialize') {
-        send({ jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'mamem', version: '0.1.0' } } })
-      } else if (method === 'tools/list') {
-        send({ jsonrpc: '2.0', id, result: { tools: TOOLS } })
-      } else if (method === 'tools/call') {
-        const result = await callTool(mem, params.name, params.arguments ?? {})
-        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(result) }] } })
-      } else if (id !== undefined) {
-        send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found' } })
-      }
-    } catch (e) {
-      send({ jsonrpc: '2.0', id, error: { code: -32000, message: (e as Error).message } })
-    }
-  })
+/** MCP over stdio (official SDK) */
+export async function serveStdio (mem: MamemMemory): Promise<void> {
+  const { createMcpServer } = await import('./mcp-server.js')
+  const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js')
+  await createMcpServer(mem).connect(new StdioServerTransport())
 }

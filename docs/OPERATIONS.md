@@ -99,4 +99,7 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
 - `.state/` (treasury, reserve) must be backed up per environment; it holds funded outpoints.
 - Shard stores: `MemoryShardStore` is in-process. For persistence use the file/sqlite stores (`packages/log`) and back them up with the overlay sqlite files. The anchored roots let you detect any restore that lost or altered records.
 - Revocations, the challenge registry and issued ZK membership queries persist via `FileSecurityStore` in the runtime (`MAMEM_DATA_DIR`). The in-process demo server keeps them in memory.
-- ZK proving needs the `mamem-stark-build` image (`pnpm stark:image`, ~4.6 GB) and the cargo target volume (`pnpm stark:build`), or `MAMEM_STARK_PROVER` pointing at a native `mamem-stark` binary. Verification needs neither (WASM in Node).
+- ZK proving:
+  - **The mamem Docker image ships the prover** (`/usr/local/bin/mamem-stark` + `r0vm`, `MAMEM_STARK_PROVER` preset). Its build stage fails if the rebuilt program id differs from the pinned one.
+  - Outside Docker, use the `mamem-stark-build` image (`pnpm stark:image` + `pnpm stark:build`) or point `MAMEM_STARK_PROVER` at a native binary.
+  - Verification needs none of this (WASM in Node).

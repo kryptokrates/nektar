@@ -3,5 +3,5 @@
 FROM rust:1.94-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 ENV RISC0_HOME=/opt/risc0 PATH=/opt/risc0/bin:/root/.risc0/bin:$PATH
-RUN curl -fsSL https://risczero.com/install | bash && /root/.risc0/bin/rzup install rust && /root/.risc0/bin/rzup install cargo-risczero 3.0.3 && /root/.risc0/bin/rzup install r0vm 3.0.3
+RUN curl -fsSL https://risczero.com/install | bash && /root/.risc0/bin/rzup install rust 1.97.0 && /root/.risc0/bin/rzup install cargo-risczero 3.0.3 && /root/.risc0/bin/rzup install r0vm 3.0.3
 WORKDIR /work

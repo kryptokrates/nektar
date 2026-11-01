@@ -5,8 +5,9 @@
 spikes
 infra
 docs/formal/.tools
-packages/zk/build
-packages/zk/circuits/*.ptau
+tools/stark/target
+tools/stark/verifier-wasm/target
+tools/stark/vectors.jsonl
 **/*.db
 **/*.sqlite*
 failed-tx.hex

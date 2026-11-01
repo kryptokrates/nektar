@@ -35,7 +35,8 @@ async function connect () {
     : new StdioClientTransport({ command: process.execPath, args: [bin], env: serverEnv, stderr: 'ignore' })
   await client.connect(transport)
   const call = async (name, args) => {
-    const r = await client.callTool({ name, arguments: args }, undefined, { timeout: 120_000 })
+    // STARK proving inside a 1-CPU gateway container can take minutes
+    const r = await client.callTool({ name, arguments: args }, undefined, { timeout: name === 'proveMembership' ? 600_000 : 120_000 })
     if (r.isError) throw new Error(`${name}: ${r.content[0]?.text}`)
     return JSON.parse(r.content[0].text)
   }

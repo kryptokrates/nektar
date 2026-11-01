@@ -15,7 +15,7 @@ import { FileSecurityStore, FileStateStore } from './securitystore.js'
 import { readKeyFile, writeKeyFile, passphraseFromEnv, KeystoreError } from './keystore.js'
 
 export interface RuntimeConfig {
-  network: 'mock' | 'regtest' | 'testnet' | 'main'
+  network: 'mock' | 'regtest' | 'testnet' | 'main' | 'ttn'
   dataDir: string
   regtest?: RegtestConfig & { fundWif: string }
   main?: MainnetConfig & {
@@ -53,19 +53,25 @@ export function configFromEnv (env = process.env): RuntimeConfig {
       assetUrl: env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
     }
   }
-  if (network === 'main') {
-    if (env.MAMEM_MAINNET_CONFIRM !== 'I_UNDERSTAND') {
+  if (network === 'main' || network === 'ttn') {
+    if (network === 'main' && env.MAMEM_MAINNET_CONFIRM !== 'I_UNDERSTAND') {
       throw new Error('mainnet mode spends REAL BSV. Refusing to start. Set MAMEM_MAINNET_CONFIRM=I_UNDERSTAND to proceed.')
     }
-    cfg.confirmEveryMs = Number(env.MAMEM_CONFIRM_MS ?? 60_000)
+    const ttn = network === 'ttn'
+    cfg.confirmEveryMs = Number(env.MAMEM_CONFIRM_MS ?? (ttn ? 30_000 : 60_000))
     cfg.main = {
       fundWif: secret('MAMEM_FUND_WIF'),
       passphrase: secret('MAMEM_KEY_PASSPHRASE'),
-      arcUrl: env.MAMEM_ARC_URL,
+      // TTN defaults: Arcade + WoC-TTN endpoints (probed live); main keeps the
+      // built-in GorillaPool/WoC defaults when env vars are unset
+      arcUrl: env.MAMEM_ARC_URL ?? (ttn ? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech' : undefined),
       arcApiKey: secret('MAMEM_ARC_API_KEY'),
-      wocUrl: env.MAMEM_WOC_URL,
+      wocUrl: env.MAMEM_WOC_URL ?? (ttn ? 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test' : undefined),
       wocApiKey: secret('MAMEM_WOC_API_KEY'),
-      feeRateSatPerKb: env.MAMEM_FEE_RATE_SAT_PER_KB ? Number(env.MAMEM_FEE_RATE_SAT_PER_KB) : undefined,
+      // fee floor: 100 sat/kB main (GorillaPool policy), 1 sat/kB TTN (its
+      // Arcade policy is 0 — a zero fee rate would produce free-of-fee txs
+      // miners may reject; keep ≥1)
+      feeRateSatPerKb: env.MAMEM_FEE_RATE_SAT_PER_KB ? Number(env.MAMEM_FEE_RATE_SAT_PER_KB) : (ttn ? 1 : undefined),
       maxFeePerTx: Number(env.MAMEM_MAX_FEE_SATS_PER_TX ?? 1000),
       maxSpendPerDay: Number(env.MAMEM_MAX_SPEND_SATS_PER_DAY ?? 20_000),
       minBroadcastIntervalMs: Number(env.MAMEM_MIN_BROADCAST_INTERVAL_MS ?? 10_000)
@@ -126,129 +132,8 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     const t = setInterval(() => { for (const { shard, txid } of mem.unprovenAnchors()) { const mp = chain.merklePathOf(txid); if (mp) mem.attachProof(shard, txid, mp) } }, 1000); t.unref()
     return { mem, network: 'mock', close: async () => { clearInterval(t) } }
   }
-  if (cfg.network === 'main') {
-    const mc = cfg.main!
-    mkdirSync(cfg.dataDir, { recursive: true })
-    const pass = mc.passphrase
-    if (!pass) throw new KeystoreError('mainnet requires MAMEM_KEY_PASSPHRASE (or _FILE) for keys at rest')
-    // single-writer lock (same as regtest)
-    const lockFile = join(cfg.dataDir, 'instance.lock')
-    const me = `${process.pid}@${(await import('node:os')).hostname()}`
-    if (existsSync(lockFile)) {
-      const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string, beat: number }
-      if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${cfg.dataDir} is in use by another mamem instance (${l.owner}); stop it first`)
-    }
-    const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
-    beat()
-    const beatTimer = setInterval(beat, 5_000); beatTimer.unref()
-
-    const { keys, save } = loadKeys(cfg.dataDir, pass, true)
-    const fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, true)
-    const fundAddress = fundKey.toPublicKey().toAddress()
-    process.stderr.write(`mamem mainnet: operator fee key ${fundAddress} — fund this address to enable anchoring\n`)
-
-    const tracker = new WocTracker(mc)
-    const rawBroadcaster = new ArcBroadcaster(mc)
-    const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))
-    let memRef: MamemMemory | undefined // hoisted for the guard's valueOf
-    const guardedBroadcasts = new Map<string, Transaction>()
-    const valueOf = (txid: string, vout: number): number | undefined =>
-      reserve.utxos.find(u => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
-      guardedBroadcasts.get(txid)?.outputs[vout]?.satoshis ??
-      memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
-    const spendGuard = new SpendGuard(rawBroadcaster, valueOf, {
-      maxFeePerTx: mc.maxFeePerTx, maxPerDay: mc.maxSpendPerDay,
-      minIntervalMs: mc.minBroadcastIntervalMs, ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
-    })
-    const feeRate = Math.max(mc.feeRateSatPerKb ?? 100, await fetchArcFeeRate(mc).catch(() => 100))
-    const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve() }
-    const chain = {
-      broadcast: async (tx: Transaction) => {
-        const r = await spendGuard.broadcast(tx)
-        if (r.status === 'success') {
-          guardedBroadcasts.set(tx.id('hex'), tx)
-          memRef?.metrics.inc('mamem_fee_sats_total', {}, spendGuard.costs().at(-1)?.fee ?? 0, 'total anchor fee spend (sats)')
-        } else if (r.description?.startsWith('SpendGuard refused')) {
-          memRef?.metrics.inc('mamem_spend_refused_total', { reason: r.description.split(': ')[1]?.split(' ')[0] ?? 'unknown' }, 1, 'broadcasts refused by SpendGuard')
-        }
-        return r
-      },
-      currentHeight: () => tracker.currentHeight(),
-      isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
-      headerAtHeight: (h: number) => tracker.headerAtHeight(h),
-      tipHeight: () => tracker.currentHeight()
-    }
-    const knexMod = (await import('knex')).default
-    const knex = knexMod({ client: 'sqlite3', connection: { filename: join(cfg.dataDir, 'records.sqlite') }, useNullAsDefault: true })
-    const store: ShardStore = new KnexShardStore(knex)
-    await store.init?.()
-    const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
-    const mem = new MamemMemory(chain as never, funder as never, fundKey, {
-      ...base,
-      agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,
-      maxLevel: Number(process.env.MAMEM_MAX_LEVEL ?? 3),
-      feeRateSatPerKb: feeRate,
-      securityStore: new FileSecurityStore(join(cfg.dataDir, 'security.json')),
-      stateStore: new FileStateStore(join(cfg.dataDir, 'state.json')),
-      finalityDepth: Number(process.env.MAMEM_FINALITY_DEPTH ?? 6)
-    }, store)
-    memRef = mem
-    mem.metrics.gauge('mamem_fee_balance_sats', () => reserve.utxos.reduce((s, u) => s + u.satoshis, 0), 'operator fee-key balance (sats)')
-    const persistKeys = () => {
-      let changed = false
-      for (const [s, k] of shardKeys) if (keys.shardKeys[s] !== k.toHex()) { keys.shardKeys[s] = k.toHex(); changed = true }
-      if (changed) save()
-    }
-    // reserve top-up: import fee-address UTXOs discovered via WoC
-    const topUp = async () => {
-      for (const u of await discoverUtxos(mc, fundAddress)) {
-        if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some(x => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout)) {
-          reserve.addOwned(u.tx, u.vout)
-        }
-      }
-      if (reserve.utxos.length === 0) process.stderr.write(`mamem mainnet: reserve empty — send BSV to ${fundAddress}\n`)
-    }
-    await topUp()
-    // confirmer: attach BUMPs for unproven anchors via ARC/WoC
-    let busy = false
-    const tick = async () => {
-      if (busy) return
-      busy = true
-      try {
-        persistKeys()
-        await mem.flushDue()
-        for (const { shard, txid } of mem.unprovenAnchors()) {
-          const mp = await merklePathMainnet(mc, txid)
-          if (mp) mem.attachProof(shard, txid, mp.merklePath)
-        }
-        await topUp()
-        persistKeys()
-      } catch (e) { process.stderr.write(`mamem confirmer(main): ${(e as Error).message}\n`) } finally { busy = false }
-    }
-    const timer = setInterval(() => { void tick() }, cfg.confirmEveryMs ?? 60_000); timer.unref()
-    const ops = {
-      wallet: async () => {
-        const balanceSats = reserve.utxos.reduce((s, u) => s + u.satoshis, 0)
-        const costs = spendGuard.costs()
-        const avg = costs.length ? Math.round(costs.reduce((s, c) => s + c.fee, 0) / costs.length) : 0
-        return {
-          address: fundAddress, balanceSats, utxos: reserve.utxos.length,
-          spentTodaySats: spendGuard.spentToday(),
-          caps: { maxFeePerTx: mc.maxFeePerTx!, maxPerDay: mc.maxSpendPerDay!, minIntervalMs: mc.minBroadcastIntervalMs! },
-          avgFeePerAnchorSats: avg,
-          runwayAnchors: avg > 0 ? Math.floor(balanceSats / avg) : null
-        }
-      },
-      costs: () => spendGuard.costs()
-    }
-    return {
-      mem, network: 'main', ops,
-      close: async () => {
-        clearInterval(timer); clearInterval(beatTimer)
-        await tick(); await knex.destroy()
-        try { (await import('node:fs')).rmSync(lockFile) } catch { /* already gone */ }
-      }
-    }
+  if (cfg.network === 'main' || cfg.network === 'ttn') {
+    return await openLiveRuntime(cfg, cfg.network, base)
   }
   const rc = cfg.regtest!
   mkdirSync(cfg.dataDir, { recursive: true })
@@ -355,6 +240,134 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   const timer = setInterval(() => { void tick() }, cfg.confirmEveryMs ?? 5000); timer.unref()
   return {
     mem, network: 'regtest',
+    close: async () => {
+      clearInterval(timer); clearInterval(beatTimer)
+      await tick(); await knex.destroy()
+      try { (await import('node:fs')).rmSync(lockFile) } catch { /* already gone */ }
+    }
+  }
+}
+
+/** Shared live path for `main` (BSV mainnet) and `ttn` (Teranode Test Net —
+ * test coins, same code). Net-dependent bits: address prefix (0x6f testnet
+ * for ttn, mainnet for main), fee floor (100 vs 1 sat/kB), labels. */
+async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn', base: MamemMemoryOptions): Promise<Runtime> {
+  const mc = cfg.main!
+  const ttn = net === 'ttn'
+  mkdirSync(cfg.dataDir, { recursive: true })
+  const pass = mc.passphrase
+  if (!pass) throw new KeystoreError(`${net} requires MAMEM_KEY_PASSPHRASE (or _FILE) for keys at rest`)
+  const lockFile = join(cfg.dataDir, 'instance.lock')
+  const me = `${process.pid}@${(await import('node:os')).hostname()}`
+  if (existsSync(lockFile)) {
+    const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string, beat: number }
+    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${cfg.dataDir} is in use by another mamem instance (${l.owner}); stop it first`)
+  }
+  const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
+  beat()
+  const beatTimer = setInterval(beat, 5_000); beatTimer.unref()
+
+  const { keys, save } = loadKeys(cfg.dataDir, pass, true)
+  const fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, true)
+  // TTN uses testnet encoding (prefix byte 0x6f → 'm'/'n' addresses); main '1…'
+  const fundAddress = fundKey.toPublicKey().toAddress(ttn ? [0x6f] : undefined)
+  process.stderr.write(`mamem ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring\n`)
+
+  const tracker = new WocTracker(mc)
+  const rawBroadcaster = new ArcBroadcaster(mc)
+  const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))
+  let memRef: MamemMemory | undefined
+  const guardedBroadcasts = new Map<string, Transaction>()
+  const valueOf = (txid: string, vout: number): number | undefined =>
+    reserve.utxos.find(u => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
+    guardedBroadcasts.get(txid)?.outputs[vout]?.satoshis ??
+    memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
+  const spendGuard = new SpendGuard(rawBroadcaster, valueOf, {
+    maxFeePerTx: mc.maxFeePerTx, maxPerDay: mc.maxSpendPerDay,
+    minIntervalMs: mc.minBroadcastIntervalMs, ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
+  })
+  const floor = ttn ? 1 : 100
+  const feeRate = Math.max(mc.feeRateSatPerKb ?? floor, await fetchArcFeeRate(mc).catch(() => floor))
+  const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve() }
+  const chain = {
+    broadcast: async (tx: Transaction) => {
+      const r = await spendGuard.broadcast(tx)
+      if (r.status === 'success') {
+        guardedBroadcasts.set(tx.id('hex'), tx)
+        memRef?.metrics.inc('mamem_fee_sats_total', {}, spendGuard.costs().at(-1)?.fee ?? 0, 'total anchor fee spend (sats)')
+      } else if (r.description?.startsWith('SpendGuard refused')) {
+        memRef?.metrics.inc('mamem_spend_refused_total', { reason: r.description.split(': ')[1]?.split(' ')[0] ?? 'unknown' }, 1, 'broadcasts refused by SpendGuard')
+      }
+      return r
+    },
+    currentHeight: () => tracker.currentHeight(),
+    isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
+    headerAtHeight: (h: number) => tracker.headerAtHeight(h),
+    tipHeight: () => tracker.currentHeight()
+  }
+  const knexMod = (await import('knex')).default
+  const knex = knexMod({ client: 'sqlite3', connection: { filename: join(cfg.dataDir, 'records.sqlite') }, useNullAsDefault: true })
+  const store: ShardStore = new KnexShardStore(knex)
+  await store.init?.()
+  const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
+  const mem = new MamemMemory(chain as never, funder as never, fundKey, {
+    ...base,
+    agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,
+    maxLevel: Number(process.env.MAMEM_MAX_LEVEL ?? 3),
+    feeRateSatPerKb: feeRate,
+    securityStore: new FileSecurityStore(join(cfg.dataDir, 'security.json')),
+    stateStore: new FileStateStore(join(cfg.dataDir, 'state.json')),
+    finalityDepth: Number(process.env.MAMEM_FINALITY_DEPTH ?? 6)
+  }, store)
+  memRef = mem
+  mem.metrics.gauge('mamem_fee_balance_sats', () => reserve.utxos.reduce((s, u) => s + u.satoshis, 0), 'operator fee-key balance (sats)')
+  const persistKeys = () => {
+    let changed = false
+    for (const [s, k] of shardKeys) if (keys.shardKeys[s] !== k.toHex()) { keys.shardKeys[s] = k.toHex(); changed = true }
+    if (changed) save()
+  }
+  const topUp = async () => {
+    for (const u of await discoverUtxos(mc, fundAddress)) {
+      if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some(x => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout)) {
+        reserve.addOwned(u.tx, u.vout)
+      }
+    }
+    if (reserve.utxos.length === 0) process.stderr.write(`mamem ${net}: reserve empty — send coins to ${fundAddress}\n`)
+  }
+  await topUp()
+  let busy = false
+  const tick = async () => {
+    if (busy) return
+    busy = true
+    try {
+      persistKeys()
+      await mem.flushDue()
+      for (const { shard, txid } of mem.unprovenAnchors()) {
+        const mp = await merklePathMainnet(mc, txid)
+        if (mp) mem.attachProof(shard, txid, mp.merklePath)
+      }
+      await topUp()
+      persistKeys()
+    } catch (e) { process.stderr.write(`mamem confirmer(${net}): ${(e as Error).message}\n`) } finally { busy = false }
+  }
+  const timer = setInterval(() => { void tick() }, cfg.confirmEveryMs ?? (ttn ? 30_000 : 60_000)); timer.unref()
+  const ops = {
+    wallet: async () => {
+      const balanceSats = reserve.utxos.reduce((s, u) => s + u.satoshis, 0)
+      const costs = spendGuard.costs()
+      const avg = costs.length ? Math.round(costs.reduce((s, c) => s + c.fee, 0) / costs.length) : 0
+      return {
+        address: fundAddress, balanceSats, utxos: reserve.utxos.length,
+        spentTodaySats: spendGuard.spentToday(),
+        caps: { maxFeePerTx: mc.maxFeePerTx!, maxPerDay: mc.maxSpendPerDay!, minIntervalMs: mc.minBroadcastIntervalMs! },
+        avgFeePerAnchorSats: avg,
+        runwayAnchors: avg > 0 ? Math.floor(balanceSats / avg) : null
+      }
+    },
+    costs: () => spendGuard.costs()
+  }
+  return {
+    mem, network: net, ops,
     close: async () => {
       clearInterval(timer); clearInterval(beatTimer)
       await tick(); await knex.destroy()

@@ -16,6 +16,8 @@
     "mcp:install": "node tools/mcp-install.mjs",
     "mcp:smoke": "node packages/mcp/demo/gateway-smoke.mjs",
     "main:readonly": "node packages/mcp/demo/mainnet-readonly.mjs",
+    "ttn:readonly": "node packages/mcp/demo/ttn-readonly.mjs",
+    "ttn:pilot": "node packages/mcp/demo/ttn-pilot.mjs",
     "e2e:mcp": "node packages/mcp/demo/e2e-mcp-regtest.mjs",
     "stark:image": "docker build -t mamem-stark-build -f tools/stark/Dockerfile.build tools/stark",
     "stark:build": "node tools/stark/build.mjs",

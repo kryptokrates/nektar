@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { writeKeyFile, readKeyFile, isEncrypted, KeystoreError } from '../src/keystore.js'
 import { configFromEnv } from '../src/runtime.js'
+import { PrivateKey, P2PKH } from '@bsv/sdk'
 
 test('keystore: round trip / wrong passphrase / tampered ct', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'ks-'))
@@ -30,6 +31,22 @@ test('runtime main gate: confirm flag required', () => {
   assert.equal(cfg.main?.maxSpendPerDay, 20_000)
   assert.equal(cfg.main?.minBroadcastIntervalMs, 10_000)
   assert.equal(cfg.confirmEveryMs, 60_000)
+})
+
+test('runtime ttn: no confirm flag required; testnet-encoded fee address', () => {
+  const cfg = configFromEnv(env({ MAMEM_NETWORK: 'ttn', MAMEM_KEY_PASSPHRASE: 'x' }))
+  assert.equal(cfg.main?.arcUrl, 'https://arcade-v2-ttn-us-1.bsvblockchain.tech')
+  assert.equal(cfg.main?.wocUrl, 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test')
+  assert.equal(cfg.main?.feeRateSatPerKb, 1)
+  assert.equal(cfg.confirmEveryMs, 30_000)
+  // ttn address encodes with testnet prefix (m/n…), mainnet with 1…
+  const k = PrivateKey.fromRandom()
+  assert.match(k.toPublicKey().toAddress([0x6f]), /^[mn]/)
+  assert.match(k.toPublicKey().toAddress(), /^1/)
+  // change scripts lock to the fee key's PKH regardless of address encoding
+  const s1 = new P2PKH().lock(k.toPublicKey().toAddress())
+  const s2 = new P2PKH().lock(k.toPublicKey().toAddress([0x6f]))
+  assert.equal(s1.toHex(), s2.toHex(), 'PKH lock is encoding-independent')
 })
 
 test('runtime main: refuses without passphrase / with plaintext keys.json', async () => {

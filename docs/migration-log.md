@@ -388,3 +388,21 @@
 - MEASURED on regtest @ 100 sat/kB (fee = bytes × 0.1 sat, 1-input fund):
   genesis 1143 B / 115 sats, append 3315 B / 332 sats, rotate 2904 B / 291 sats
   → fits the 1000-sat per-tx cap.
+
+## TTN (Teranode Test Net) — network=ttn
+- One live path `openLiveRuntime(cfg, net)` for `main` + `ttn`: Arcade
+  broadcaster + WoC tracker + SpendGuard + encrypted keys + ReserveFunder
+  top-up via `discoverUtxos`; `testnet` still refused.
+- TTN specifics: no `MAMEM_MAINNET_CONFIRM`; fee floor 1 sat/kB (Arcade
+  policy is `miningFee {satoshis:0}` — zero-fee txs are never sent);
+  testnet encoding (`toAddress([0x6f])` → `m…`/`n…`); finality 6;
+  confirmEveryMs 30000.
+- FINDING: Arcade only knows submitted txs — `/v1/tx/{txid}` 404s for a
+  chain-mined coinbase; the WoC TSC fallback is the working merkle-path path
+  on TTN. FINDING: TSC `nodes` is `null` on single-tx blocks (most of TTN) —
+  `tscToMerklePath` treats it as `[]` with a coinbase-shaped path.
+- VERIFIED read-only: Arcade policy 0 sat/kB, WoC tip 38877, header at
+  tip-1 `isValidRootForHeight` true, real coinbase TSC→MerklePath
+  `verify(txid, tracker)` PASS at height 38876.
+- `docker-mcp/mamem-ttn.yaml` + `mcp-install --ttn` (profile `mamem_ttn`);
+  `pnpm ttn:readonly` live smoke; `pnpm ttn:pilot` (funded, not yet run).

@@ -116,16 +116,19 @@ export class WocTracker implements ChainTracker {
 // --- merkle paths -------------------------------------------------------------
 /** TSC proof JSON → SDK MerklePath. nodes['*'] = duplicate of the neighbour
  *  (odd leaf self-pair). Pure + exported for tests. */
-export function tscToMerklePath (tsc: { index: number, txOrId: string, target: string, nodes: string[] }, txid: string, blockHeight: number): MerklePath {
+export function tscToMerklePath (tsc: { index: number, txOrId: string, target: string, nodes: (string | null)[] | null }, txid: string, blockHeight: number): MerklePath {
   // SDK MerklePath rows: each level lists the working node (level 0 = the txid
   // leaf) plus its sibling; '*' in TSC = odd-leaf self-pair → duplicate.
-  let idx = tsc.index
+  // TSC `nodes` may be null entirely (single-tx block — common on TTN):
+  // offset 0 leaf alone is the whole path.
+  const nodes = tsc.nodes ?? []
+  let idx = nodes.length === 0 ? 0 : tsc.index
   const path: { offset: number, hash?: string, txid?: boolean, duplicate?: boolean }[][] = []
-  for (let lvl = 0; lvl < tsc.nodes.length; lvl++) {
+  for (let lvl = 0; lvl < nodes.length; lvl++) {
     const row: { offset: number, hash?: string, txid?: boolean, duplicate?: boolean }[] = []
     if (lvl === 0) row.push({ offset: idx, hash: txid, txid: true })
-    const raw = tsc.nodes[lvl]!
-    if (raw === '*') row.push({ offset: idx % 2 === 0 ? idx + 1 : idx - 1, duplicate: true })
+    const raw = nodes[lvl]!
+    if (raw === '*' || raw === null) row.push({ offset: idx % 2 === 0 ? idx + 1 : idx - 1, duplicate: true })
     else row.push({ offset: idx % 2 === 0 ? idx + 1 : idx - 1, hash: raw })
     path.push(row)
     idx = Math.floor(idx / 2)

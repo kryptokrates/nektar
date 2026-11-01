@@ -117,6 +117,13 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   6. Monitor `GET /v1/wallet` (balance, runway), `GET /v1/costs`, and the alerts `MamemFeeBalanceLow`, `MamemSpendCapHit` and `MamemBroadcastFailures`.
   7. Back up `MAMEM_DATA_DIR` (keys, state, reserve, spend ledger, records) **and** the passphrase. Losing either loses the shard ownership keys.
   8. Smoke without spending: `pnpm main:readonly`.
+- TTN (Teranode Test Net — test coins, `MAMEM_NETWORK=ttn`):
+  - Endpoints: Arcade (ARC-compatible) `https://arcade-v2-ttn-us-1.bsvblockchain.tech`, WoC-TTN `https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` (`openLiveRuntime`) — SpendGuard caps, encrypted keys, WoC merkle paths.
+  - Differences from main: **no** `MAMEM_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (Arcade policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); no broadcast fallback beyond WoC `/tx/raw`; confirm interval 30 s.
+  - No faucet on TTN — coins come from the community/bsv.dev testcoin channel. The fee-key address is printed to stderr at startup.
+  - Read-only smoke (no spend): `pnpm ttn:readonly` — Arcade policy, WoC tip, header root check, and a real merkle path for a recent coinbase verified with `merklePath.verify(txid, tracker)`.
+  - Funded pilot: `MAMEM_DATA_DIR=.ttn-pilot MAMEM_KEY_PASSPHRASE=… MAMEM_NETWORK=ttn pnpm ttn:pilot` — remember→anchor→BUMP→prove→append→rotate→restart-no-fork, with explorer links and per-tx fees from `ops.costs()`.
+  - Docker MCP profile: `pnpm mcp:install --ttn` registers `mamem_ttn`.
 - ZK proving:
   - **The mamem Docker image ships the prover** (`/usr/local/bin/mamem-stark` + `r0vm`, `MAMEM_STARK_PROVER` preset). Its build stage fails if the rebuilt program id differs from the pinned one.
   - Outside Docker, use the `mamem-stark-build` image (`pnpm stark:image` + `pnpm stark:build`) or point `MAMEM_STARK_PROVER` at a native binary.

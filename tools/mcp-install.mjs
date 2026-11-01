@@ -11,7 +11,14 @@ import { fileURLToPath } from 'node:url'
 const run = (args, opts = {}) => execFileSync('docker', args, { stdio: 'inherit', ...opts })
 const out = args => execFileSync('docker', args, { encoding: 'utf8' })
 const PROFILE = process.env.MAMEM_PROFILE ?? 'mamem'
-const yaml = fileURLToPath(new URL('../docker-mcp/mamem.yaml', import.meta.url))
+// Docker Desktop ≥ 4.97 only accepts file:// servers inside ~/.docker/mcp/catalogs
+const { mkdirSync, copyFileSync } = await import('node:fs')
+const { homedir } = await import('node:os')
+const { join } = await import('node:path')
+const catDir = join(homedir(), '.docker', 'mcp', 'catalogs', 'mamem')
+mkdirSync(catDir, { recursive: true })
+const staged = name => { const dst = join(catDir, name); copyFileSync(fileURLToPath(new URL(`../docker-mcp/${name}`, import.meta.url)), dst); return dst }
+const yaml = staged('mamem.yaml')
 
 try { out(['mcp', 'version']) } catch { console.error('Docker MCP Toolkit not found — enable it in Docker Desktop (Settings → Beta features / MCP Toolkit), Docker Desktop ≥ 4.62.'); process.exit(1) }
 run(['build', '-t', 'mamem:local', fileURLToPath(new URL('..', import.meta.url))])
@@ -32,7 +39,7 @@ if (args.includes('--regtest')) {
   execFileSync('docker', ['mcp', 'secret', 'set', 'mamem-regtest.rpc_pass'], { input: pass, stdio: ['pipe', 'ignore', 'inherit'] })
   // own profile: the regtest server exposes the same tool names as the mock one
   const RP = `${PROFILE}_regtest` // profile IDs are slugs (no "-")
-  const ryaml = fileURLToPath(new URL('../docker-mcp/mamem-regtest.yaml', import.meta.url))
+  const ryaml = staged('mamem-regtest.yaml')
   if (!out(['mcp', 'profile', 'list']).split(/\s+/).includes(RP)) run(['mcp', 'profile', 'create', '--name', RP, '--id', RP])
   if (!/\bmamem-regtest\b/.test(out(['mcp', 'profile', 'server', 'ls', '--filter', `profile=${RP}`]))) run(['mcp', 'profile', 'server', 'add', RP, '--server', `file://${ryaml}`])
   run(['mcp', 'profile', 'config', RP, '--set', `mamem-regtest.rpc_user=${qs.rpc_user ?? 'teranode'}`, '--set', 'mamem-regtest.automine=1', '--set', `mamem-regtest.model_id=${process.env.MAMEM_MODEL_ID ?? 'unspecified'}`])

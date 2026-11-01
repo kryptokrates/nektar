@@ -42,8 +42,8 @@ config:
         type: string
         description: Teranode RPC user (quickstart default "teranode")
       automine:
-        type: string
-        description: '"1" mines a block when anchors wait for confirmation (regtest only)'
+        type: integer
+        description: 1 = mine a block when anchors wait for confirmation (regtest only), 0 = off
       model_id:
         type: string
         description: Exact model identity bound into answer receipts

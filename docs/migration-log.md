@@ -288,6 +288,19 @@
   `qwen4exp` architecture (needs a newer DMR engine). On CPU, 8B qwen3 takes minutes
   per turn; 0.6B emits pseudo tool tags instead of tool calls.
 
+## Local models + Docker regtest profile
+- Docker Desktop 4.97 (llama.cpp b9879-cpu): ai/qwen3.8-flash-next still fails
+  (`qwen4exp` not in llama.cpp). ai/qwen3:4b-instruct-2507 does real tool calls
+  (~15 s per question on CPU). Port 12434 was held by a separate WSL runner with
+  an old model store → DMR enabled on 12435.
+- chat.mjs streams (no header timeout); tool schemas describe parameters;
+  recall returns a hint for a wrong seq.
+- Docker profile `mamem_regtest`: secrets in the Docker MCP keychain, Teranode via
+  host.docker.internal, volume mamem-regtest-data. Gotchas: profile IDs are
+  slugs (`-` → `_`); config `1` validates as integer; Docker ≥ 4.97 accepts
+  file:// servers only inside ~/.docker/mcp/catalogs (installer copies them).
+- Verified across a Docker Desktop restart: regtest shard continued (seq=2, n=2).
+
 ## GOAL-v4 production readiness
 - COM-003 ingest signatures (`provenanceDigest`, `signProvenance/verifyProvenance`,
   `requireSignedProvenance`), verified before encryption drops d.

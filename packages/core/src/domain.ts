@@ -14,3 +14,7 @@ export const TAG_PROMISE = utf8('mamem:promise:v1')
 export const TAG_PROV_SIG = utf8('mamem:provsig:v1')
 /** signed log checkpoint (log_id, size, root, chained_root, n, time) — LOG-007 */
 export const TAG_CHECKPOINT = utf8('mamem:checkpoint:v1')
+/** §18 terminal commitment: agent signature over H(answer‖trace‖τ) */
+export const TAG_RECEIPT_SIG = utf8('mamem:rcptsig:v1')
+/** §16 delegation map entry: sub-decision signed by the delegating agent */
+export const TAG_DELEGATION = utf8('mamem:delegation:v1')

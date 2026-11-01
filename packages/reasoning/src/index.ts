@@ -9,8 +9,8 @@
 // Proofs establish inclusion + integrity + existence-by-time — never truth.
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { PublicKey, Signature, type Transaction } from '@bsv/sdk'
-import { dsha256, utf8, toHex, fromHex, concat, TAG_PROMISE } from '@mamem/core'
+import { PublicKey, Signature, PrivateKey, type Transaction } from '@bsv/sdk'
+import { dsha256, utf8, toHex, fromHex, concat, TAG_PROMISE, TAG_DELEGATION } from '@mamem/core'
 import { Datalog, parseLiteral, parseProgram, ParseError, type Fact, type Rule } from '@mamem/datalog'
 import { verifyFragment, type ProofBundle } from '@mamem/verify'
 import { verifyDerivation, type PolicyDAG } from '@mamem/graph'
@@ -93,6 +93,28 @@ export interface Receipt {
   timestamp: number
   groundingReportHash?: string
   truthNote: string
+  /** §16 delegation map μ_i: sub-decisions asserted by delegating agents.
+   *  signature = Sign_delegator(H(TAG_DELEGATION‖delegator‖decision‖answer)) */
+  delegations?: Array<{ delegator: string, decision: string, signature: string }>
+}
+
+/** §16: delegating agent A′ signs authorship over a sub-decision bound to the answer */
+export function makeDelegation (key: PrivateKey, decision: string, answer: string): { delegator: string, decision: string, signature: string } {
+  const delegator = key.toPublicKey().toString()
+  const msg = dsha256(concat(TAG_DELEGATION, utf8(delegator), utf8(decision), utf8(answer)))
+  return { delegator, decision, signature: key.sign([...msg]).toDER('hex') as string }
+}
+
+/** verify every entry of a receipt's delegation map against its stated delegator */
+export function verifyReceiptDelegations (receipt: Pick<Receipt, 'answer' | 'delegations'>): { ok: boolean, reasons: string[] } {
+  const reasons: string[] = []
+  for (const d of receipt.delegations ?? []) {
+    const msg = dsha256(concat(TAG_DELEGATION, utf8(d.delegator), utf8(d.decision), utf8(receipt.answer)))
+    let ok = false
+    try { ok = PublicKey.fromString(d.delegator).verify([...msg], Signature.fromDER(d.signature, 'hex')) } catch (e) { reasons.push(`delegation for "${d.decision.slice(0, 32)}": malformed key/signature (${(e as Error).message})`); continue }
+    if (!ok) reasons.push(`delegation for "${d.decision.slice(0, 32)}": signature does not bind decision+answer to the delegator`)
+  }
+  return { ok: reasons.length === 0, reasons }
 }
 /** structural seam onto MamemMemory (no package cycle) */
 export interface AnchorMem {
@@ -232,6 +254,7 @@ export async function verifyAuditBundle (b: AuditBundle, tracker: ChainTracker, 
     try { ok = PublicKey.fromString(s.pubkey).verify([...msg], Signature.fromDER(p.signature, 'hex')) } catch (e) { reasons.push(`signer ${refKey(s.ref)}: malformed key/signature (${(e as Error).message})`); continue }
     if (!ok) reasons.push(`signer ${refKey(s.ref)}: inclusion-promise signature invalid`)
   }
+  if (b.receipt.delegations?.length) reasons.push(...verifyReceiptDelegations(b.receipt).reasons)
   if (b.policy) {
     if (!opts.dag) reasons.push('policy derivation present but verifier holds no authoritative policy DAG')
     else {

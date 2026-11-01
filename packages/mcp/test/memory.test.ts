@@ -96,6 +96,42 @@ test('regression: encrypted records with identical provenance are NOT deduplicat
   assert.equal((await mem.remember('e', 'second secret', prov)).duplicate, true, 'a true duplicate is still deduplicated')
 })
 
+test('§15 modality: committed into H(d‖p) and the provenance signature; invalid kind refused', async () => {
+  const { mem } = setup()
+  const prov = { source: 's', time: 1_700_000_000 }
+  const plain = await mem.remember('m', 'rule text', prov)
+  const modal = await mem.remember('m', 'rule text', { ...prov, modality: { kind: 'temporal' as const, qualifier: 'as of Block 105432, Reg X includes Clause Y' } })
+  assert.notEqual(plain.hdp, modal.hdp, 'modality changes the provenance binding hash')
+  // the originator signature binds the modality too — tampering invalidates it
+  const { signProvenance, verifyProvenance } = await import('@mamem/log')
+  const key = PrivateKey.fromRandom()
+  const d = new TextEncoder().encode('x')
+  const p = signProvenance(key, d, { source: 's', time: 1, signature: new Uint8Array(0), modelId: 'm', modality: { kind: 'deontic', qualifier: 'obligatory under Reg X' } })
+  assert.ok(verifyProvenance(key.toPublicKey().toString(), d, p))
+  assert.ok(!verifyProvenance(key.toPublicKey().toString(), d, { ...p, modality: { kind: 'deontic', qualifier: 'forbidden under Reg X' } }), 'tampered qualifier fails')
+  assert.ok(!verifyProvenance(key.toPublicKey().toString(), d, { ...p, modality: undefined }), 'stripped modality fails')
+  // invalid kinds are refused at ingest
+  await assert.rejects(() => mem.remember('m', 'y', { modality: { kind: 'bogus', qualifier: 'q' } as any }), /modality must be/)
+  await assert.rejects(() => mem.remember('m', 'y', { modality: { kind: 'deontic', qualifier: '' } as any }), /modality must be/)
+  // the MCP remember tool passes modality through
+  const viaTool = await callTool(mem, 'remember', { shard: 'm', data: 'rule text', modality: { kind: 'epistemic', qualifier: 'believed at t=5' } })
+  assert.notEqual(viaTool.hdp, plain.hdp)
+})
+
+test('§18 terminal commitment: every receipt is signed; tampering breaks verification', async () => {
+  const { mem, settle } = setup()
+  await mem.remember('s', 'fact one')
+  await mem.anchorShard('s'); settle('s')
+  const { receipt } = await mem.recall('s')
+  assert.ok(receipt.signature && receipt.signerPub && receipt.timestamp, 'receipt carries σ, signer and τ')
+  const { verifyAnswerReceipt } = await import('../src/memory.js')
+  assert.deepEqual(verifyAnswerReceipt(receipt), { ok: true })
+  assert.equal(verifyAnswerReceipt({ ...receipt, answer: receipt.answer + ' (edited)' }).ok, false, 'edited answer fails')
+  assert.equal(verifyAnswerReceipt({ ...receipt, checkResult: 'verified' as const, fragmentRefs: [] }).ok, false, 'edited trace fails')
+  assert.equal(verifyAnswerReceipt({ ...receipt, signature: undefined }).ok, false, 'unsigned fails')
+  assert.equal(verifyAnswerReceipt({ ...receipt, signature: 'zz' }).ok, false, 'malformed fails')
+})
+
 test('mcp memory: tools dispatch + prove NotAnchored is honest', async () => {
   const { mem } = setup()
   const rr = await callTool(mem, 'remember', { shard: 'x', data: 'via tool' })

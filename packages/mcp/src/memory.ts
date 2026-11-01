@@ -2,10 +2,11 @@
 // Wires log (append/batch) → anchor (head UTXO per shard) → overlay (submit)
 // → verify (proof bundles) → crypto (BRC-42/AES-GCM), all behind the chain
 // interfaces so it runs identically on the mock chain and regtest.
-import { PrivateKey, Transaction } from '@bsv/sdk'
+import { PrivateKey, PublicKey, Signature, Transaction } from '@bsv/sdk'
 import {
-  utf8, fromHex, toHex, sha256, eq, hash160,
+  utf8, fromHex, toHex, sha256, dsha256, concat, field, eq, hash160,
   computeLeaf, merkleRoot, merkleProof, identityHash, diff, apply, encodeDelta, decodeDelta,
+  TAG_RECEIPT_SIG,
   type Fragment, type Bytes, type Provenance
 } from '@mamem/core'
 import { BatchLog, MemoryShardStore, verifyProvenance, signCheckpoint, PromiseMonitor, type ShardStore, type LogRecord, type Checkpoint } from '@mamem/log'
@@ -113,6 +114,43 @@ export interface AnswerReceipt {
   /** POL-016: when a policy DAG gates the read — its anchored root, the
    * derivation hash and the dag decision summary. */
   dag?: { policyRoot: string, derivationHash?: string, state: string }
+  /** §18 terminal commitment: τ, the log signer's pubkey, and
+   *  σ = Sign_logKey(receiptDigest(this)) over output+trace+time. */
+  timestamp?: number
+  signerPub?: string
+  signature?: string
+}
+
+/** §18: the signed receipt digest — every receipt field except signature.
+ *  Explicit field order (no JSON ambiguity): answer, each ref
+ *  (shard,seq,hdp,txid), checkResult, truthNote, modelId, zkaccess, cedar,
+ *  dag triple, timestamp. */
+export function receiptDigest (r: Omit<AnswerReceipt, 'signature' | 'signerPub'>): Bytes {
+  const refs = r.fragmentRefs.map(f => concat(utf8(f.shard), utf8(String(f.seq)), utf8(f.hdp), utf8(f.anchorTxid ?? '')))
+  const dagBytes = r.dag ? concat(utf8(r.dag.policyRoot), utf8(r.dag.derivationHash ?? ''), utf8(r.dag.state)) : new Uint8Array(0)
+  const t = Buffer.alloc(8); t.writeBigUInt64LE(BigInt(r.timestamp ?? 0))
+  return dsha256(concat(
+    TAG_RECEIPT_SIG,
+    field(utf8(r.answer)),
+    field(concat(...refs)),
+    field(utf8(r.checkResult)),
+    field(utf8(r.truthNote)),
+    field(utf8(r.modelId)),
+    field(utf8(r.zkaccess ?? '')),
+    field(utf8(r.cedar ?? '')),
+    field(dagBytes),
+    Uint8Array.from(t)
+  ))
+}
+
+/** verify a receipt's terminal signature against its embedded signerPub */
+export function verifyAnswerReceipt (r: AnswerReceipt): { ok: boolean, reason?: string } {
+  if (!r.signature || !r.signerPub) return { ok: false, reason: 'unsigned receipt' }
+  const { signature, signerPub, ...unsigned } = r
+  try {
+    const ok = PublicKey.fromString(signerPub).verify([...receiptDigest(unsigned)], Signature.fromDER(signature, 'hex'))
+    return ok ? { ok: true } : { ok: false, reason: 'signature does not bind this receipt to the signer' }
+  } catch (e) { return { ok: false, reason: `malformed signature: ${(e as Error).message}` } }
 }
 
 export class MamemMemory {
@@ -507,6 +545,12 @@ export class MamemMemory {
       time: prov?.time ?? Math.floor(Date.now() / 1000),
       signature: prov?.signature ?? new Uint8Array(0),
       modelId: prov?.modelId ?? this.opts.modelId ?? 'unknown'
+    }
+    if (prov?.modality !== undefined) {
+      if (!['deontic', 'epistemic', 'temporal'].includes(prov.modality.kind) || typeof prov.modality.qualifier !== 'string' || prov.modality.qualifier.length === 0) {
+        throw new IngestError('modality must be {kind: deontic|epistemic|temporal, qualifier: string}')
+      }
+      p.modality = prov.modality
     }
     const fragment: Fragment = { d: utf8(d), p }
     // COM-003: the originator signature is checked against the PLAINTEXT,
@@ -936,19 +980,24 @@ export class MamemMemory {
     }
     const answer = texts.map(i => i.text ?? '[unverifiable]').join('\n')
     const verified = out.length === 0 || (out.every(r => r.anchorTxid) && !verifyFailed)
-    return {
-      items: texts,
-      receipt: {
-        answer,
-        fragmentRefs: out,
-        checkResult: verified ? 'verified' : 'unverifiable',
-        truthNote: 'inclusion and anchor-chain integrity verified; the TRUTH of the recorded statements is NOT established — a lie, once written, is preserved and marked',
-        modelId: this.opts.modelId ?? 'unknown',
-        zkaccess: zkState,
-        cedar: cedarState,
-        dag: dagState && dagPolicyRoot ? { policyRoot: dagPolicyRoot, derivationHash: dagDerivationHash, state: dagState } : undefined
-      }
+    const unsigned: Omit<AnswerReceipt, 'signature' | 'signerPub'> = {
+      answer,
+      fragmentRefs: out,
+      checkResult: verified ? 'verified' : 'unverifiable',
+      truthNote: 'inclusion and anchor-chain integrity verified; the TRUTH of the recorded statements is NOT established — a lie, once written, is preserved and marked',
+      modelId: this.opts.modelId ?? 'unknown',
+      zkaccess: zkState,
+      cedar: cedarState,
+      dag: dagState && dagPolicyRoot ? { policyRoot: dagPolicyRoot, derivationHash: dagDerivationHash, state: dagState } : undefined,
+      timestamp: Date.now()
     }
+    // §18 terminal commitment: σ = Sign_logKey(H(answer‖trace‖τ))
+    const receipt: AnswerReceipt = {
+      ...unsigned,
+      signerPub: this.logKey.toPublicKey().toString(),
+      signature: this.logKey.sign([...receiptDigest(unsigned)]).toDER('hex') as string
+    }
+    return { items: texts, receipt }
   }
 
   /**

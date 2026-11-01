@@ -153,6 +153,12 @@ S6.1–S6.4 implemented (see table); S6.5–S6.11 stay documented as deliberate 
 - S6.1 ✅ recall verifies plaintext fully · S6.2 ✅ META flag (anchor v4) ·
   S6.3 ✅ algorithm bytes · S6.4 ✅ documented binding-equivalent.
 - S6.5–S6.11 deferred-with-reason; S1b deferred (runar-go phase).
+- S9 ✅ paper-rescan residuals: §15 `provenance.modality` (deontic/epistemic/temporal
+  qualifier committed into H(d‖p), trailing-optional serialization → old hashes
+  unchanged), §18 signed answer receipts (`receiptDigest` + `verifyAnswerReceipt`,
+  σ over output‖trace‖τ by the log signer), §16 `Receipt.delegations` map +
+  `makeDelegation`/`verifyReceiptDelegations` wired into `verifyAuditBundle`.
+  Pre-commit consistency (§11/§15) was already enforced in `AORGraph.append`.
 - Gates: build clean · check:deps OK · `pnpm reproduce` green (both image IDs pinned) ·
   199+ unit tests pass · mock e2e PASS · regtest e2e PASS on the final tree (the
   first post-S6 run crashed at teardown — transient; clean rerun PASS).

@@ -10,6 +10,10 @@ export interface Provenance {
   time: number // unix seconds
   signature: Bytes // may be empty
   modelId: string
+  /** §15 modality: an explicit deontic/epistemic/temporal qualifier
+   *  ("as of Block 105432, Reg X includes Clause Y"), committed into H(d‖p)
+   *  and into the originator signature digest. */
+  modality?: { kind: 'deontic' | 'epistemic' | 'temporal', qualifier: string }
 }
 
 export interface Fragment {
@@ -30,11 +34,14 @@ export function field (b: Bytes): Bytes {
 }
 
 export function serializeProvenance (p: Provenance): Bytes {
+  // modality is a TRAILING optional field: fragments without it serialize
+  // byte-identically to the pre-modality layout, so existing hashes stand.
   return concat(
     field(utf8(p.source)),
     u64le(p.time),
     field(p.signature),
-    field(utf8(p.modelId))
+    field(utf8(p.modelId)),
+    ...(p.modality ? [field(utf8(JSON.stringify(p.modality)))] : [])
   )
 }
 

@@ -110,3 +110,24 @@ test('§9 memory as law: anchored DL entailment, jurisdiction graphs, precedent'
   const unanchoredPrecedent = new Set(precedent.slice(1).map(axiomHash))
   assert.equal(validByPrecedent(precedent, 'case_2026_03', h => unanchoredPrecedent.has(h)).entailed, false, 'precedent must itself be anchored')
 })
+
+test('§16 delegation map: sub-decisions signed by delegating agents; tampering fails', async () => {
+  const { makeDelegation, verifyReceiptDelegations, commitReceipt } = await import('../src/index.js')
+  const sub = PrivateKey.fromRandom()
+  const answer = 'approved transfer of EUR 500'
+  const receipt = {
+    answer, fragmentRefs: [], checkResult: 'verified' as const,
+    modelId: { kind: 'local' as const, weightsSha256: 'ab'.repeat(32), name: 'm' },
+    timestamp: 1_700_000_000,
+    delegations: [makeDelegation(sub, 'compliance check passed', answer)]
+  }
+  assert.deepEqual(verifyReceiptDelegations(receipt), { ok: true, reasons: [] })
+  // a delegation over a different decision or answer fails
+  assert.equal(verifyReceiptDelegations({ ...receipt, answer: 'approved transfer of EUR 500000' }).ok, false, 'delegation does not carry to a different answer')
+  const forged = { ...receipt, delegations: [{ delegator: PrivateKey.fromRandom().toPublicKey().toString(), decision: 'compliance check passed', signature: receipt.delegations[0]!.signature }] }
+  assert.equal(verifyReceiptDelegations(forged).ok, false, 'sig moved to another delegator fails')
+  // commitReceipt anchors the receipt (with its delegation map) into __receipts__
+  const { mem } = world()
+  const { receiptHash } = await commitReceipt(receipt, mem)
+  assert.equal(receiptHash.length, 64)
+})

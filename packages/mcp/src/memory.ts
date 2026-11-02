@@ -198,6 +198,21 @@ export class MamemMemory {
   async broadcastTx (tx: import('@bsv/sdk').Transaction): Promise<import('@mamem/chain').BroadcastResult> { return await this.chain.broadcast(tx) }
   /** the operator fee key — covenant hosts need it as owner/buyer key */
   operatorKey (): PrivateKey { return this.fundKey }
+  /** funding outs for covenant hosts (escrow deposits, covenant inputs) —
+   *  callers markSpent/addOwned after a successful broadcast like
+   *  anchorAttestation does. */
+  async fundingOuts (satoshis: number): Promise<import('@mamem/chain').FundingOut[]> {
+    const u = await this.takeFunding(satoshis)
+    return [u]
+  }
+  /** return a tx output to the reserve as owned (change/escrow outs) */
+  addOwnedOut (tx: import('@bsv/sdk').Transaction, vout: number): void {
+    ;(this.funder as any).addOwned?.(tx, vout)
+  }
+  /** mark a spent input against the reserve after broadcast */
+  markSpentOut (txid: string, vout: number): void {
+    ;(this.funder as any).markSpent?.(txid, vout)
+  }
   /** current chain height for locktime-gated covenant calls */
   async chainHeight (): Promise<number> { return this.chain.tipHeight ? await this.chain.tipHeight() : await this.chain.currentHeight() }
   /** the shard's latest anchor link (tail of the on-chain succession) */

@@ -1,12 +1,15 @@
-// DisclosureSale — GOAL-v7 V3: atomic payment-for-disclosure escrow.
-// buy() reveals `wrapped` on-chain in the SAME tx that pays the seller —
-// payment and disclosure settle atomically, no escrow party needed.
-// `wrapped` is a DisclosureEnvelope ciphertext (BRC-42 to the buyer), so
-// on-chain exposure is safe; or plaintext {field,salt,path} for paid
-// public disclosure. Stateless terminal contract: both methods spend the
-// listing UTXO once, so it cannot be double-sold.
-//   buy:    outputs = [pay→sellerPkh (price), change→buyerPkh]
-//   refund: outputs = [pay→sellerPkh], seller-signed, locktime-gated
+// DisclosureSale — GOAL-v7 V3: atomic payment-for-disclosure escrow,
+// the BIP-199 HTLC shape adapted to a covenant-pinned output set.
+// The BUYER funds the escrow; `buy` reveals `wrapped` on-chain in the
+// SAME tx that pays the seller — payment and disclosure settle atomically.
+// If the seller never reveals, the DEPOSITOR (buyer) reclaims the escrow
+// after `refundAfter` — the seller can never take a deposit without
+// revealing. `wrapped` is a DisclosureEnvelope ciphertext (BRC-42 to the
+// buyer), so on-chain exposure is safe; or plaintext {field,salt,path}
+// for paid public disclosure. Stateless terminal contract: both methods
+// spend the escrow once.
+//   buy:    outputs = [pay→sellerPkh (price), change→depositorPkh]
+//   refund: outputs = [pay→depositorPkh], depositor-signed, locktime-gated
 import {
   SmartContract,
   assert, checkSig, checkPreimage, extractOutputHash, extractAmount, extractLocktime,
@@ -20,14 +23,16 @@ export class DisclosureSale extends SmartContract {
   readonly hWrapped: Sha256
   readonly refundAfter: bigint
   readonly maxFee: bigint
+  readonly depositorPkh: ByteString
 
-  constructor (sellerPkh: ByteString, price: bigint, hWrapped: Sha256, refundAfter: bigint, maxFee: bigint) {
+  constructor (sellerPkh: ByteString, price: bigint, hWrapped: Sha256, refundAfter: bigint, maxFee: bigint, depositorPkh: ByteString) {
     super()
     this.sellerPkh = sellerPkh
     this.price = price
     this.hWrapped = hWrapped
     this.refundAfter = refundAfter
     this.maxFee = maxFee
+    this.depositorPkh = depositorPkh
   }
 
   private p2pkh (pkh: ByteString): ByteString {
@@ -44,22 +49,26 @@ export class DisclosureSale extends SmartContract {
     return cat(num2bin(sats, 8n), cat(slB, script))
   }
 
-  /** the spend itself reveals `wrapped` — bound to the committed sha256. */
-  public buy (wrapped: ByteString, buyerPkh: ByteString, changeSats: bigint, txPreimage: SigHashPreimage) {
+  /** the spend itself reveals `wrapped` — bound to the committed sha256.
+   *  Change is pinned to the DEPOSITOR (post-reveal mempool snipers can't
+   *  redirect it) and the fee is bounded (the deposit can't be burned). */
+  public buy (wrapped: ByteString, changeSats: bigint, txPreimage: SigHashPreimage) {
     assert(checkPreimage(txPreimage))
     assert(sha256(wrapped) === this.hWrapped)
+    assert(extractAmount(txPreimage) - this.price - changeSats <= this.maxFee)
     assert(hash256(cat(
       this.out(this.price, this.p2pkh(this.sellerPkh)),
-      this.out(changeSats, this.p2pkh(buyerPkh)))) === extractOutputHash(txPreimage))
+      this.out(changeSats, this.p2pkh(this.depositorPkh)))) === extractOutputHash(txPreimage))
   }
 
-  /** seller reclaims an unsold listing after the deadline. */
+  /** the DEPOSITOR reclaims an unrevealed escrow after the deadline —
+   *  BIP-199 refund leg: the seller can never take the deposit. */
   public refund (sig: Sig, pubKey: PubKey, changeSats: bigint, txPreimage: SigHashPreimage) {
     assert(checkPreimage(txPreimage))
-    assert(hash160(pubKey) === this.sellerPkh)
+    assert(hash160(pubKey) === this.depositorPkh)
     assert(checkSig(sig, pubKey))
     assert(extractLocktime(txPreimage) >= this.refundAfter)
     assert(extractAmount(txPreimage) - changeSats <= this.maxFee)
-    assert(hash256(this.out(changeSats, this.p2pkh(this.sellerPkh))) === extractOutputHash(txPreimage))
+    assert(hash256(this.out(changeSats, this.p2pkh(this.depositorPkh))) === extractOutputHash(txPreimage))
   }
 }

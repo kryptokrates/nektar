@@ -1,62 +1,102 @@
-// Host adapter for the V3 DisclosureSale covenant (GOAL-v7).
-// Stateless terminal contract: buy() reveals `wrapped` in the same tx that
-// pays the seller; refund() returns the listing after refundAfter.
-import { PrivateKey, Transaction, LockingScript, UnlockingScript, Hash } from '@bsv/sdk'
+// Host adapter for the V3 DisclosureSale covenant (GOAL-v7, BIP-199 shape).
+// Stateless terminal contract: the BUYER funds the escrow utxo; `buy`
+// reveals `wrapped` in the same tx that pays the seller (the seller
+// completes unilaterally — no signature needed, the preimage is the
+// claim credential); `refund` returns the deposit to the DEPOSITOR
+// (buyer) after refundAfter. The seller can never take a deposit
+// without revealing.
+import { PrivateKey, Transaction, LockingScript, UnlockingScript, Hash, P2PKH } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, buildP2PKHScript } from 'runar-sdk'
 import { DISCLOSURESALE_ARTIFACT } from '@mamem/contracts'
 
+/** The seller's published offer — depositorPkh is added by each buyer
+ *  when they self-build the escrow script. */
 export interface SaleConfig {
-  sellerPkh: string   // 20B hex — paid on buy / refunded to on refund
+  sellerPkh: string   // 20B hex — paid on buy
   price: bigint       // sats paid to seller on buy
   hWrapped: string    // sha256(wrapped) — 32B hex
-  refundAfter: bigint // locktime gate for refund
+  refundAfter: bigint // locktime gate for depositor refund
   maxFee: bigint
 }
+
+/** cfg + the buyer's pkh — the full escrow instance. */
+export interface EscrowConfig extends SaleConfig { depositorPkh: string }
 
 export interface SaleUtxo { txid: string, vout: number, satoshis: number, script: string }
 
 export class DisclosureSaleHost {
   private contract: RunarContract
-  constructor (private cfg: SaleConfig) {
+  constructor (private cfg: EscrowConfig) {
     this.contract = new RunarContract(DISCLOSURESALE_ARTIFACT, [
-      cfg.sellerPkh, cfg.price, cfg.hWrapped, cfg.refundAfter, cfg.maxFee
+      cfg.sellerPkh, cfg.price, cfg.hWrapped, cfg.refundAfter, cfg.maxFee, cfg.depositorPkh
     ])
   }
 
-  get params (): SaleConfig { return this.cfg }
+  get params (): EscrowConfig { return this.cfg }
 
-  /** the listing's locking script (stateless — no state suffix) */
+  /** the escrow's locking script (stateless — no state suffix) */
   lockingScript (): string {
     return this.contract.getLockingScript()
   }
 
-  /** buy: reveal `wrapped` (preimage arg) — outputs [price→seller, change→buyer].
-   *  The caller funds the tx (listing utxo may cover it all in tests). */
-  buildBuy (utxo: SaleUtxo, wrapped: string, buyerPkh: string, changeSats: bigint): { tx: Transaction } {
+  /** buyer-side: the escrow script for a seller offer + my pkh — no seller
+   *  involvement needed, the offer's fields are all public. */
+  static escrowScript (cfg: SaleConfig, depositorPkh: string): string {
+    return new DisclosureSaleHost({ ...cfg, depositorPkh }).lockingScript()
+  }
+
+  /** buyer-side: fund the escrow — signed P2PKH inputs paying `amount`
+   *  into the escrow script, change back to the depositor. The deposit
+   *  should be price + maxFee + a small change margin (the covenant
+   *  bounds the buy fee anyway). */
+  async buildEscrow (fundingUtxos: Array<{ tx: Transaction, vout: number, satoshis: number }>, buyerKey: PrivateKey, amount: number, changeTo?: string): Promise<{ tx: Transaction, utxo: SaleUtxo }> {
+    const tx = new Transaction()
+    let total = 0
+    const p2pkh = new P2PKH()
+    for (const u of fundingUtxos) {
+      tx.addInput({
+        sourceTransaction: u.tx, sourceOutputIndex: u.vout,
+        unlockingScriptTemplate: p2pkh.unlock(buyerKey)
+      })
+      total += u.satoshis
+    }
+    tx.addOutput({ satoshis: amount, lockingScript: LockingScript.fromHex(this.lockingScript()) })
+    const depositorPkh = changeTo ?? this.cfg.depositorPkh
+    const change = total - amount - 250 // ~feerate headroom for the funding tx itself
+    if (change < 0) throw new Error(`buildEscrow: funding utxos ${total} < amount ${amount} + fee`)
+    if (change > 0) tx.addOutput({ satoshis: change, lockingScript: LockingScript.fromHex(buildP2PKHScript(depositorPkh)) })
+    await tx.sign()
+    return { tx, utxo: { txid: tx.id('hex'), vout: 0, satoshis: amount, script: this.lockingScript() } }
+  }
+
+  /** seller-side: reveal `wrapped` — outputs [price→seller, change→depositor].
+   *  The preimage arg is the claim credential; anyone may broadcast it. */
+  buildBuy (utxo: SaleUtxo, wrapped: string, changeSats: bigint): { tx: Transaction } {
     const tx = new Transaction()
     tx.addInput({
       sourceTXID: utxo.txid, sourceOutputIndex: utxo.vout,
       unlockingScript: new UnlockingScript(), sequence: 0xfffffffe
     })
     tx.addOutput({ satoshis: Number(this.cfg.price), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.sellerPkh)) })
-    tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(buildP2PKHScript(buyerPkh)) })
+    tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.depositorPkh)) })
 
     const c = this.contract as any
     const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, 0)
     const unlock = c.buildStatefulPrefix(opSig) +
-      this.contract.buildUnlockingScript('buy', [wrapped, buyerPkh, changeSats, preimageHex])
+      this.contract.buildUnlockingScript('buy', [wrapped, changeSats, preimageHex])
     tx.inputs[0]!.unlockingScript = UnlockingScript.fromHex(unlock)
     return { tx }
   }
 
-  /** refund: seller-signed, locktime-gated — output [change→seller]. */
-  buildRefund (utxo: SaleUtxo, sellerKey: PrivateKey, lockTime: number, changeSats: bigint): { tx: Transaction } {
+  /** depositor-side: reclaim the escrow after refundAfter — depositor
+   *  signed, locktime-gated, output [change→depositor]. */
+  buildRefund (utxo: SaleUtxo, depositorKey: PrivateKey, lockTime: number, changeSats: bigint): { tx: Transaction } {
     const tx = new Transaction()
     tx.addInput({
       sourceTXID: utxo.txid, sourceOutputIndex: utxo.vout,
       unlockingScript: new UnlockingScript(), sequence: 0xfffffffe
     })
-    tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.sellerPkh)) })
+    tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.depositorPkh)) })
     tx.lockTime = lockTime
 
     const c = this.contract as any
@@ -65,9 +105,9 @@ export class DisclosureSaleHost {
       ? c.getSubscriptForSigning(utxo.script, 1)
       : utxo.script
     const sigPre = computeOpPushTx(tx, 0, sigSub, utxo.satoshis).preimageHex
-    const sig = Buffer.from(sellerKey.sign(Array.from(Hash.sha256(Buffer.from(sigPre, 'hex')))).toDER()).toString('hex') + '41'
+    const sig = Buffer.from(depositorKey.sign(Array.from(Hash.sha256(Buffer.from(sigPre, 'hex')))).toDER()).toString('hex') + '41'
     const unlock = c.buildStatefulPrefix(opSig) +
-      this.contract.buildUnlockingScript('refund', [sig, sellerKey.toPublicKey().toString(), changeSats, preimageHex])
+      this.contract.buildUnlockingScript('refund', [sig, depositorKey.toPublicKey().toString(), changeSats, preimageHex])
     tx.inputs[0]!.unlockingScript = UnlockingScript.fromHex(unlock)
     return { tx }
   }

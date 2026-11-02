@@ -77,11 +77,12 @@ export function parsePushes (scriptHex: string): Bytes[] {
 }
 
 /** Extract the buy() args from a spending tx's input-0 unlocking script.
- *  Frame: opSig ‖ wrapped ‖ buyerPkh ‖ changeSats ‖ preimage ‖ 00-selector. */
-export function parseBuyArgs (unlockingHex: string): { wrapped: Bytes, buyerPkh: Bytes } {
+ *  Frame: opSig ‖ wrapped ‖ changeSats ‖ preimage ‖ 00-selector —
+ *  the buyer/depositor pkh is pinned in the escrow script, not the args. */
+export function parseBuyArgs (unlockingHex: string): { wrapped: Bytes, changeSats: Bytes } {
   const p = parsePushes(unlockingHex)
   if (p.length < 5 || !p[1] || !p[2]) throw new Error(`parseBuyArgs: expected ≥5 pushes, got ${p.length}`)
-  return { wrapped: p[1]!, buyerPkh: p[2]! }
+  return { wrapped: p[1]!, changeSats: p[2]! }
 }
 
 /** Fetch `wrapped` from a buy transaction (input 0 must be the listing spend). */

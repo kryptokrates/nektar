@@ -18,17 +18,21 @@ auto-change slot) — commit×2, early close refused, release-height close
 accepted on regtest. V3 `DisclosureSale` (stateless terminal, explicit
 txPreimage, preimage-last ABI order, fully-inlined out() asserts —
 runar 0.4.6 ANF dead-codes the second out() in nested `cat(a,b)` and leaks
-locals otherwise) — buy reveals wrapped + pays seller, wrong wrapped refused,
-early refund refused, deadline refund accepted on regtest. E2E:
-`packages/e2e/src/e2e-covenants-regtest.ts` (12 checks, PASS).
+locals otherwise) — **redesigned as a BIP-199 buyer-funded escrow**: the
+buyer deposits into `DisclosureSale(cfg, depositorPkh)`; `buy` reveals
+wrapped + pays the seller exactly `price` + returns change to the depositor;
+`refund` is depositor-signed and locktime-gated. Wrong wrapped refused,
+early refund refused, deadline depositor refund accepted on regtest. E2E:
+`packages/e2e/src/e2e-covenants-regtest.ts` (13 checks, PASS).
 
 **Integration (done):** `MAMEM_FEE_VAULT` wires the live
 (testnet/mainnet) anchor-funding path through the V1 covenant —
 `runtime.ts` deploys/rolls the vault and `takeReserve` mints capped
 funding outs on demand (SpendGuard stays in front; pool entries that
 were not minted by the vault are never served for anchoring).
-`MAMEM_PAID_DISCLOSURE` gates three MCP tools — `saleOffer` /
-`saleBuy` / `saleClaim` — in the tool list (SDK `ListTools` and HTTP
+`MAMEM_PAID_DISCLOSURE` gates six MCP tools — `saleOffer` /
+`saleOfferMemory` / `saleEscrow` / `saleComplete` / `saleRefund` /
+`saleClaim` — in the tool list (SDK `ListTools` and HTTP
 `/v1/tools` both honour the gate) *and* in `callTool` itself. The
 envelope/claim layer lives in `packages/identity/src/sale.ts`
 (`offerDisclosure`, `claimDisclosure`, `parseBuyArgs`) — identity keeps
@@ -146,26 +150,54 @@ baseline). Closes VER-007's on-chain side.
 Host: `packages/anchor/src/bond.ts`; regtest-validated (commit×2,
 early-close refused TX_INVALID, release close accepted).
 
-## V3 — DisclosureSale (atomic paid disclosure)
+## V3 — DisclosureSale (atomic paid disclosure, BIP-199 escrow)
 
 `packages/contracts/src/DisclosureSale.runar.ts` — SmartContract.
+The flow maps BIP-199's HTLC shape onto a covenant: the **buyer funds**
+the escrow (the seller can't take a deposit without revealing — the
+refund direction is the depositor's, not the seller's).
 
 Immutable params: `sellerPkh`, `price`, `hWrapped` (sha256),
-`refundAfter`, `maxFee`.
+`refundAfter`, `maxFee`, `depositorPkh` — the buyer appends their own
+`depositorPkh` to the seller's public cfg when they self-build the
+escrow script, so no seller interaction is needed to deposit.
 
-`buy(wrapped, buyerPkh, changeSats, txPreimage)`: `sha256(wrapped) ==
-hWrapped` — the spend itself reveals the payload on-chain, bound to the
-committed hash. Outputs: `price` → `sellerPkh`, `changeSats` → `buyerPkh`,
-enforced via `hash256(outs) === extractOutputHash`.
+`buy(wrapped, changeSats, txPreimage)`: `sha256(wrapped) == hWrapped` —
+the spend itself reveals the payload on-chain, bound to the committed
+hash. Outputs: `price` → `sellerPkh`, `changeSats` → `depositorPkh`
+(pinned in the contract — the buyer argument was removed so change can
+never be rerouted), and `extractAmount - price - changeSats <= maxFee`
+(the completer cannot burn the deposit as fee). The seller completes
+unilaterally — the preimage is the claim credential.
 `refund(sig, pubKey, changeSats, txPreimage)`: `hash160(pubKey) ==
-sellerPkh` + `checkSig` + `extractLocktime >= refundAfter` +
-`extractAmount - changeSats <= maxFee`.
+depositorPkh` + `checkSig` + `extractLocktime >= refundAfter` +
+`extractAmount - changeSats <= maxFee` + change → `depositorPkh`.
+
+Flow (two agents, no trusted third party):
+1. seller `saleOffer` — wraps `wrapped` (BRC-42 to the buyer, or
+   plaintext `{field,salt,path}` for public sales) → cfg + wrapped.
+2. buyer `saleEscrow` — completes cfg with own `depositorPkh`, funds the
+   escrow from the operator key (`buildEscrow` — signed P2PKH inputs).
+3. seller `saleComplete` — `buildBuy` reveals wrapped; the same tx pays
+   `price` to the seller and returns change to the depositor.
+4. buyer `saleClaim` — reads `wrapped` back out of the buy tx's
+   unlocking script, verifies `sha256`, unwraps.
+5. If the seller ghosts, `saleRefund` — depositor-signed, only valid at
+   or after `refundAfter`.
 
 `wrapped` is the existing `DisclosureEnvelope.wrapped` (BRC-42 ciphertext to
 the buyer) — on-chain exposure is safe; or plaintext `{field,salt,path}` for
 paid *public* disclosure.
 
+Memory-bound payloads: `saleOfferMemory` sells a stored record — the
+payload is the record's canonical `serializeFragment` bytes and the tool
+returns a `commitment {leaf, anchorTxid, hdp}` the buyer checks before
+funding; `saleClaim` recomputes `computeLeaf(parseFragment(payload))`
+against the committed leaf (the ZKCP "verify before paying" concept
+mapped onto the anchored Merkle root).
+
 Host: `packages/anchor/src/sale.ts` (`DisclosureSaleHost`) —
+`escrowScript` (buyer self-builds), `buildEscrow` (async, signs funding),
 `buildBuy`/`buildRefund` via SDK `computeOpPushTxWithCodeSep` +
 `buildStatefulPrefix` + `buildUnlockingScript` (no hand-assembled script).
 Regtest-validated in `e2e-covenants-regtest.ts`.
@@ -174,8 +206,8 @@ Envelope/claim layer: `packages/identity/src/sale.ts` —
 `offerDisclosure` (BRC-42 `wrapFor` → `sha256` commitment → covenant
 cfg), `claimDisclosure` (parse the buy unlocking script → verify
 `sha256(wrapped) == hWrapped` → `unwrapFor` private or pass plaintext
-public). MCP tools `saleOffer`/`saleBuy`/`saleClaim` ship behind
-`MAMEM_PAID_DISCLOSURE` (gated in the listing AND the dispatcher).
+public). MCP tools ship behind `MAMEM_PAID_DISCLOSURE` (gated in the
+listing AND the dispatcher).
 
 ## Gates per phase
 

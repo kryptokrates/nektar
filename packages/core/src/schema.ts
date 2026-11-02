@@ -55,6 +55,49 @@ export function provenanceDigest (d: Bytes, p: Provenance): Bytes {
   return dsha256(concat(TAG_PROV_SIG, field(d), serializeProvenance({ ...p, signature: new Uint8Array(0) })))
 }
 
+/** inverse of field(): read a u32le-prefixed blob. */
+function takeField (b: Bytes, off: number): { v: Bytes, next: number } {
+  if (off + 4 > b.length) throw new Error('parse: truncated field header')
+  const len = (b[off]! | (b[off + 1]! << 8) | (b[off + 2]! << 16) | (b[off + 3]! << 24)) >>> 0
+  if (off + 4 + len > b.length) throw new Error('parse: truncated field body')
+  return { v: b.slice(off + 4, off + 4 + len), next: off + 4 + len }
+}
+
+/** inverse of serializeProvenance — source|time|sig|modelId[|modality]. */
+export function parseProvenance (b: Bytes): Provenance {
+  const src = takeField(b, 0)
+  if (src.next + 8 > b.length) throw new Error('parse: truncated time')
+  const tb = b.slice(src.next, src.next + 8)
+  let time = 0n
+  for (let i = 7; i >= 0; i--) time = (time << 8n) | BigInt(tb[i]!)
+  const sig = takeField(b, src.next + 8)
+  const mid = takeField(b, sig.next)
+  const p: Provenance = {
+    source: new TextDecoder().decode(src.v), time: Number(time),
+    signature: sig.v, modelId: new TextDecoder().decode(mid.v)
+  }
+  if (mid.next < b.length) {
+    const mod = takeField(b, mid.next)
+    if (mod.next !== b.length) throw new Error('parse: trailing bytes')
+    p.modality = JSON.parse(new TextDecoder().decode(mod.v))
+  }
+  return p
+}
+
+/** inverse of serializeFragment — d|prov|hdp|E. */
+export function parseFragment (b: Bytes): Fragment {
+  const d = takeField(b, 0)
+  const pv = takeField(b, d.next)
+  const hd = takeField(b, pv.next)
+  const ev = takeField(b, hd.next)
+  if (ev.next !== b.length) throw new Error('parse: trailing bytes')
+  return {
+    d: d.v, p: parseProvenance(pv.v),
+    ...(hd.v.length ? { hdp: hd.v } : {}),
+    ...(ev.v.length ? { E: ev.v } : {})
+  }
+}
+
 /** H(d|p) — provenance binding hash */
 export function hdp (f: Pick<Fragment, 'd' | 'p'>): Bytes {
   return sha256(concat(TAG_PROV, f.d, serializeProvenance(f.p)))

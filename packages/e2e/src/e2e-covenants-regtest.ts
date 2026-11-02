@@ -49,7 +49,7 @@ const addr = key.toPublicKey().toAddress([0x6f])
 const mineOne = async () => { await rpc('generatetoaddress', 1, addr) }
 const opPkh = Buffer.from(key.toPublicKey().toHash()).toString('hex')
 
-async function fundTo (script: string, sats: number): Promise<{ txid: string, vout: number, satoshis: number, script: string }> {
+async function fundTo (script: string, sats: number): Promise<{ txid: string, vout: number, satoshis: number, script: string, parent?: Transaction }> {
   const fundUtxo = await reserve.takeReserve()
   if (!fundUtxo) throw new Error('no funding utxo')
   const tx = new Transaction()
@@ -61,7 +61,7 @@ async function fundTo (script: string, sats: number): Promise<{ txid: string, vo
   const res = await broadcaster.broadcast(tx)
   if (res.status !== 'success') throw new Error(`funding refused: ${res.description}`)
   reserve.markSpent(fundUtxo.tx.id('hex'), fundUtxo.vout)
-  return { txid: tx.id('hex'), vout: 0, satoshis: sats, script }
+  return { txid: tx.id('hex'), vout: 0, satoshis: sats, script, parent: tx }
 }
 
 // --- funding reserve ------------------------------------------------------
@@ -113,44 +113,58 @@ const rOk = await broadcaster.broadcast(ok.tx)
 check(rOk.status === 'success', `V2 close at release accepted — ${rOk.description?.slice(0, 60) ?? 'ok'}`)
 await mineOne()
 
-// ============================ V3: DisclosureSale ==========================
+// ============================ V3: DisclosureSale (BIP-199 escrow) ==========
+// Buyer-funded escrow: the buyer self-builds the script from the seller's
+// public cfg + their own depositorPkh. The seller completes by revealing
+// `wrapped`; the depositor refunds after the deadline if the seller ghosts.
 const WRAPPED = Buffer.from('disclosure-envelope-payload').toString('hex')
 const H_WRAPPED = Buffer.from(Hash.sha256(Buffer.from(WRAPPED, 'hex'))).toString('hex')
 const buyer = PrivateKey.fromRandom()
 const buyerPkh = Buffer.from(buyer.toPublicKey().toHash()).toString('hex')
-const saleDeadline = (await tracker.currentHeight()) + 2
+const saleDeadline = (await tracker.currentHeight()) + 3
 const sale = new DisclosureSaleHost({
   sellerPkh: opPkh, price: 3_000n, hWrapped: H_WRAPPED,
-  refundAfter: BigInt(saleDeadline), maxFee: 10n
+  refundAfter: BigInt(saleDeadline), maxFee: 10n, depositorPkh: buyerPkh
 })
 
-// listing 1 → buy reveals wrapped
-let saleUtxo = await fundTo(sale.lockingScript(), 5_000)
-check(true, `V3 listing funded (${saleUtxo.txid.slice(0, 12)}…)`)
+async function fundEscrow (amount = 5_000) {
+  const buyerFunds = await fundTo(buildP2PKHScript(buyerPkh), 20_000)
+  const esc = await sale.buildEscrow(
+    [{ tx: buyerFunds.parent!, vout: buyerFunds.vout, satoshis: buyerFunds.satoshis }],
+    buyer, amount)
+  const r = await broadcaster.broadcast(esc.tx)
+  if (r.status !== 'success') throw new Error(`escrow funding refused: ${r.description}`)
+  return esc.utxo
+}
+
+// escrow 1 → seller reveals wrapped and is paid exactly price
+let saleUtxo = await fundEscrow()
+check(true, `V3 buyer-funded escrow (${saleUtxo.txid.slice(0, 12)}…)`)
 await mineOne()
-const buyTx = sale.buildBuy(saleUtxo, WRAPPED, buyerPkh, 1_990n) // fee = 10
+const buyTx = sale.buildBuy(saleUtxo, WRAPPED, 1_990n) // fee = 10
 const rBuy = await broadcaster.broadcast(buyTx.tx)
 check(rBuy.status === 'success', `V3 buy accepted (seller paid 3000, wrapped revealed) — ${rBuy.description?.slice(0, 50) ?? 'ok'}`)
 if (rBuy.status === 'success') {
   check(buyTx.tx.outputs[0]!.satoshis === 3_000, 'V3 seller output = exact price')
+  check(buyTx.tx.outputs[1]!.lockingScript.toHex() === buildP2PKHScript(buyerPkh), 'V3 change pinned to depositor')
 }
 await mineOne()
 
-// listing 2 → wrong wrapped refused; early refund refused; then real refund
-saleUtxo = await fundTo(sale.lockingScript(), 5_000)
+// escrow 2 → wrong wrapped refused; early refund refused; depositor refund accepted
+saleUtxo = await fundEscrow()
 await mineOne()
-const bad = sale.buildBuy(saleUtxo, Buffer.from('decoy-payload').toString('hex'), buyerPkh, 1_990n)
+const bad = sale.buildBuy(saleUtxo, Buffer.from('decoy-payload').toString('hex'), 1_990n)
 const rBad = await broadcaster.broadcast(bad.tx)
 check(rBad.status !== 'success', `V3 wrong wrapped refused (${rBad.description?.slice(0, 50) ?? 'refused'})`)
 
-const earlyRefund = sale.buildRefund(saleUtxo, key, saleDeadline - 1, 4_990n)
+const earlyRefund = sale.buildRefund(saleUtxo, buyer, saleDeadline - 1, 4_990n)
 const rER = await broadcaster.broadcast(earlyRefund.tx)
 check(rER.status !== 'success', `V3 refund before deadline refused (${rER.description?.slice(0, 50) ?? 'refused'})`)
 
 while ((await tracker.currentHeight()) < saleDeadline) await mineOne()
-const refund = sale.buildRefund(saleUtxo, key, saleDeadline, 4_990n) // fee = 10
+const refund = sale.buildRefund(saleUtxo, buyer, saleDeadline, 4_990n) // fee = 10
 const rRef = await broadcaster.broadcast(refund.tx)
-check(rRef.status === 'success', `V3 refund at deadline accepted — ${rRef.description?.slice(0, 60) ?? 'ok'}`)
+check(rRef.status === 'success', `V3 depositor refund at deadline accepted — ${rRef.description?.slice(0, 60) ?? 'ok'}`)
 
 console.log(failures === 0 ? 'V2+V3 covenant regtest E2E: PASS' : `V2+V3 covenant regtest E2E: ${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

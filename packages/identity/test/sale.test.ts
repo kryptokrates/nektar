@@ -14,17 +14,18 @@ const sellerPub = seller.toPublicKey().toString()
 const buyerPub = buyer.toPublicKey().toString()
 const VALUE = new TextEncoder().encode('{"field":"role","salt":"ab12","value":"admin"}')
 
-/** fake the buy tx's unlocking pushes: opSig‖wrapped‖pkh‖change‖pre‖00 */
-function fakeBuyUnlock (wrapped: Uint8Array, pkh: Uint8Array): string {
+/** fake the buy tx's unlocking pushes: opSig‖wrapped‖change‖pre‖00
+ *  (depositorPkh is pinned in the escrow script, not an arg) */
+function fakeBuyUnlock (wrapped: Uint8Array): string {
   const push = (b: Uint8Array) => b.length === 0 ? '00' : (b.length <= 0x4b ? b.length.toString(16).padStart(2, '0') : '4c' + b.length.toString(16).padStart(2, '0')) + toHex(b)
-  return push(new Uint8Array(71)) + push(wrapped) + push(pkh) + push(new Uint8Array([0xa0, 0x0f])) + push(new Uint8Array(181)) + '00'
+  return push(new Uint8Array(71)) + push(wrapped) + push(new Uint8Array([0xa0, 0x0f])) + push(new Uint8Array(181)) + '00'
 }
 
 test('sale: offer→wrap→claim roundtrip (private BRC-42)', () => {
   const { wrapped, hWrapped } = wrapSaleValue(seller, buyerPub, VALUE)
   assert.equal(hWrapped, toHex(sha256(wrapped)))
   // parse the unlock pushes back out
-  const unlockHex = fakeBuyUnlock(wrapped, new Uint8Array(20))
+  const unlockHex = fakeBuyUnlock(wrapped)
   const args = parseBuyArgs(unlockHex)
   assert.deepEqual([...args.wrapped], [...wrapped])
   const tx = new Transaction()
@@ -37,7 +38,7 @@ test('sale: offer→wrap→claim roundtrip (private BRC-42)', () => {
 test('sale: public disclosure unwraps as-is; tampered hWrapped rejected', () => {
   const { wrapped, hWrapped } = plainSaleValue(VALUE)
   const tx = new Transaction()
-  tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(fakeBuyUnlock(wrapped, new Uint8Array(20))) })
+  tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(fakeBuyUnlock(wrapped)) })
   const r = claimDisclosure(tx, { hWrapped })
   assert.equal(r.mode, 'public')
   assert.deepEqual([...r.value], [...VALUE])
@@ -54,7 +55,7 @@ test('sale: offerDisclosure produces a valid covenant cfg + committed wrapped', 
   assert.equal(offer.cfg.price, 3_000n)
   // wrapped round-trips through the claim path (the real-tx variant lives in
   // @mamem/anchor's sale.test.ts — anchor already depends on this package)
-  const unlockHex = fakeBuyUnlock(fromHexForTest(offer.wrapped), new Uint8Array(20))
+  const unlockHex = fakeBuyUnlock(fromHexForTest(offer.wrapped))
   const tx = new Transaction()
   tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(unlockHex) })
   const r = claimDisclosure(tx, { hWrapped: offer.cfg.hWrapped, buyerKey: buyer, sellerPub })

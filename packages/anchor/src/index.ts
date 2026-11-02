@@ -5,6 +5,6 @@ export type { VaultConfig, VaultParams, VaultUtxo } from './vault.js'
 export { CheckpointBond } from './bond.js'
 export type { BondConfig, BondUtxo, BondState } from './bond.js'
 export { DisclosureSaleHost } from './sale.js'
-export type { SaleConfig, SaleUtxo } from './sale.js'
+export type { SaleConfig, EscrowConfig, SaleUtxo } from './sale.js'
 // SDK primitive used by covenant-host callers (keeps runar-sdk out of consumers' dep lists)
 export { buildP2PKHScript } from 'runar-sdk'

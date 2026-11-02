@@ -200,7 +200,7 @@ export const TOOLS = [
   ,
   {
     name: 'saleOffer',
-    description: 'V3 DisclosureSale (GOAL-v7): wrap a value to a buyer pubkey (BRC-42) and produce the covenant listing config {sellerPkh,price,hWrapped,refundAfter,maxFee} + committed wrapped hex. Requires MAMEM_PAID_DISCLOSURE.',
+    description: 'V3 DisclosureSale (GOAL-v7, BIP-199 escrow): wrap a value to a buyer pubkey (BRC-42) and produce the seller offer {sellerPkh,price,hWrapped,refundAfter,maxFee} + committed wrapped hex. The BUYER then funds the escrow via saleEscrow. Requires MAMEM_PAID_DISCLOSURE.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -212,13 +212,38 @@ export const TOOLS = [
     }
   },
   {
-    name: 'saleBuy',
-    description: 'V3 DisclosureSale: spend a listing utxo via buy() — reveals `wrapped` on-chain in the same tx that pays the seller exactly `price`; change goes to the operator key. Requires MAMEM_PAID_DISCLOSURE.',
+    name: 'saleOfferMemory',
+    description: 'V3 DisclosureSale: sell one memory record — the payload is the record\'s canonical serialized fragment; the buyer recomputes its leaf and checks it against the anchored batch (commitment returned for a pre-funding check). Requires MAMEM_PAID_DISCLOSURE.',
     inputSchema: {
       type: 'object',
       properties: {
-        cfg: { type: 'object', description: 'the cfg returned by saleOffer' },
-        utxo: { type: 'object', description: '{txid, vout, satoshis, script} of the funded listing' },
+        shard: { type: 'string' }, seq: { type: 'number' },
+        price: { type: 'number' }, refundAfter: { type: 'number' }, maxFee: { type: 'number' },
+        buyerPub: { type: 'string', description: 'recipient pubkey — omit for public disclosure' }
+      },
+      required: ['shard', 'seq', 'price', 'refundAfter', 'maxFee']
+    }
+  },
+  {
+    name: 'saleEscrow',
+    description: 'V3 DisclosureSale (buyer side): fund the escrow for a seller\'s cfg — deposits `amount` sats into DisclosureSale(cfg, depositorPkh=me) from the operator key. Requires MAMEM_PAID_DISCLOSURE.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cfg: { type: 'object', description: 'the seller cfg returned by saleOffer' },
+        amount: { type: 'number', description: 'escrow deposit — should be price + maxFee + change margin' }
+      },
+      required: ['cfg', 'amount']
+    }
+  },
+  {
+    name: 'saleComplete',
+    description: 'V3 DisclosureSale (seller side): complete a sale on a buyer-funded escrow — spend it via buy() revealing `wrapped` on-chain; the same tx pays the seller exactly `price` and returns change to the depositor. Requires MAMEM_PAID_DISCLOSURE.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cfg: { type: 'object', description: 'the full escrow cfg (offer fields + depositorPkh from the escrow announcement)' },
+        utxo: { type: 'object', description: '{txid, vout, satoshis, script} of the funded escrow' },
         wrapped: { type: 'string', description: 'the committed wrapped hex (sha256(wrapped) must equal cfg.hWrapped)' },
         changeSats: { type: 'number' }
       },
@@ -226,20 +251,33 @@ export const TOOLS = [
     }
   },
   {
+    name: 'saleRefund',
+    description: 'V3 DisclosureSale (buyer side): reclaim an unrevealed escrow after cfg.refundAfter — depositor-signed, locktime-gated. Requires MAMEM_PAID_DISCLOSURE.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cfg: { type: 'object' }, utxo: { type: 'object' },
+        lockTime: { type: 'number' }, changeSats: { type: 'number' }
+      },
+      required: ['cfg', 'utxo', 'lockTime', 'changeSats']
+    }
+  },
+  {
     name: 'saleClaim',
-    description: 'V3 DisclosureSale: extract `wrapped` from a buy tx, verify sha256(wrapped)==hWrapped, unwrap to the operator key (private) or return the public value. Requires MAMEM_PAID_DISCLOSURE.',
+    description: 'V3 DisclosureSale (buyer side): extract `wrapped` from a buy tx, verify sha256(wrapped)==hWrapped, unwrap to the operator key (private) or return the public value; for memory payloads also verifies the leaf commitment when `commitment` is given. Requires MAMEM_PAID_DISCLOSURE.',
     inputSchema: {
       type: 'object',
       properties: {
         txHex: { type: 'string' }, hWrapped: { type: 'string' },
-        sellerPub: { type: 'string', description: 'needed to unwrap private (BRC-42) payloads' }
+        sellerPub: { type: 'string', description: 'needed to unwrap private (BRC-42) payloads' },
+        commitment: { type: 'object', description: 'optional {leaf, anchorTxid} from saleOfferMemory — verifies the bought bytes hash to the anchored leaf' }
       },
       required: ['txHex', 'hWrapped']
     }
   }
 ] as const
 
-const PAID_SALE_TOOLS = new Set(['saleOffer', 'saleBuy', 'saleClaim'])
+const PAID_SALE_TOOLS = new Set(['saleOffer', 'saleOfferMemory', 'saleEscrow', 'saleComplete', 'saleRefund', 'saleClaim'])
 const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.MAMEM_PAID_DISCLOSURE ?? '')
 /** tools visible to clients right now — paid-disclosure tools are gated by env */
 export const visibleTools = () => TOOLS.filter(t => !PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled())
@@ -261,24 +299,83 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       // JSON-RPC cannot carry BigInt — cfg crosses the wire as plain numbers
       return { cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) }, wrapped: r.wrapped }
     }
-    case 'saleBuy': {
+    case 'saleOfferMemory': {
+      const { offerDisclosure } = await import('@mamem/identity')
+      const { serializeFragment, computeLeaf, toHex } = await import('@mamem/core')
+      const rec = (await mem.records(args.shard)).find(r => r.seq === args.seq)
+      if (!rec) throw new Error(`no record seq ${args.seq} in shard "${args.shard}"`)
+      if (rec.fragment.E && rec.fragment.E.length && !rec.fragment.d.length) {
+        throw new Error('encrypted records need the fragment-key channel — deferred; sell plaintext records')
+      }
+      const payload = serializeFragment(rec.fragment)
+      const r = offerDisclosure({
+        sellerKey: mem.operatorKey(), value: payload,
+        price: BigInt(args.price), refundAfter: BigInt(args.refundAfter), maxFee: BigInt(args.maxFee),
+        buyerPub: args.buyerPub
+      })
+      return {
+        cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) },
+        wrapped: r.wrapped,
+        commitment: {
+          leaf: toHex(rec.leaf ?? computeLeaf(rec.fragment)), anchorTxid: rec.anchorTxid ?? null,
+          hdp: toHex(rec.hdp), shard: args.shard, seq: args.seq
+        }
+      }
+    }
+    case 'saleEscrow': {
+      const { DisclosureSaleHost } = await import('@mamem/anchor')
+      const depositorPkh = Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
+      const host = new DisclosureSaleHost({
+        ...args.cfg, depositorPkh,
+        price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
+      })
+      const funding = await mem.fundingOuts(args.amount + 500)
+      const { tx, utxo } = await host.buildEscrow(funding, mem.operatorKey(), args.amount)
+      const r = await mem.broadcastTx(tx)
+      if (r.status !== 'success') return { accepted: false, reason: r.description }
+      for (const inp of funding) mem.markSpentOut(inp.tx.id('hex'), inp.vout)
+      if (tx.outputs[1]) mem.addOwnedOut(tx, 1) // the escrow change out
+      return { accepted: true, txid: tx.id('hex'), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh } }
+    }
+    case 'saleComplete': {
       const { DisclosureSaleHost } = await import('@mamem/anchor')
       const host = new DisclosureSaleHost({
         ...args.cfg,
         price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
       })
-      const buyerPkh = Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
-      const { tx } = host.buildBuy(args.utxo, args.wrapped, buyerPkh, BigInt(args.changeSats))
+      const { tx } = host.buildBuy(args.utxo, args.wrapped, BigInt(args.changeSats))
       const r = await mem.broadcastTx(tx)
       if (r.status !== 'success') return { accepted: false, reason: r.description }
       return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0]!.satoshis }
+    }
+    case 'saleRefund': {
+      const { DisclosureSaleHost } = await import('@mamem/anchor')
+      const host = new DisclosureSaleHost({
+        ...args.cfg,
+        price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
+      })
+      const { tx } = host.buildRefund(args.utxo, mem.operatorKey(), args.lockTime, BigInt(args.changeSats))
+      const r = await mem.broadcastTx(tx)
+      if (r.status !== 'success') return { accepted: false, reason: r.description }
+      return { accepted: true, txid: tx.id('hex'), refundSats: tx.outputs[0]!.satoshis }
     }
     case 'saleClaim': {
       const { Transaction } = await import('@bsv/sdk')
       const { claimDisclosure } = await import('@mamem/identity')
       const tx = Transaction.fromHex(args.txHex)
       const r = claimDisclosure(tx, { hWrapped: args.hWrapped, buyerKey: mem.operatorKey(), sellerPub: args.sellerPub })
-      return { mode: r.mode, valueHex: Buffer.from(r.value).toString('hex') }
+      const out: any = { mode: r.mode, valueHex: Buffer.from(r.value).toString('hex') }
+      // memory-bound payload? verify the bought bytes hash to the anchored leaf
+      if (args.commitment?.leaf) {
+        const { parseFragment, computeLeaf, toHex } = await import('@mamem/core')
+        try {
+          const frag = parseFragment(r.value)
+          out.verified = toHex(computeLeaf(frag)) === args.commitment.leaf
+          if (out.verified && args.commitment.anchorTxid) out.anchorTxid = args.commitment.anchorTxid
+          if (!out.verified) out.reason = 'computeLeaf(payload) != committed leaf'
+        } catch (e) { out.verified = false; out.reason = `payload is not a serialized fragment: ${(e as Error).message}` }
+      }
+      return out
     }
     case 'remember':
       return mem.remember(args.shard, args.data, { source: args.source, modality: args.modality }, args.level ?? 0)

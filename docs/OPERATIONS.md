@@ -136,19 +136,37 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   6. Monitor `GET /v1/wallet` (balance, runway), `GET /v1/costs`, and the alerts `MamemFeeBalanceLow`, `MamemSpendCapHit` and `MamemBroadcastFailures`.
   7. Back up `MAMEM_DATA_DIR` (keys, state, reserve, spend ledger, records) **and** the passphrase. Losing either loses the shard ownership keys.
   8. Smoke without spending: `pnpm main:readonly`.
-- **Paid disclosure (GOAL-v7 V3, opt-in):** `MAMEM_PAID_DISCLOSURE=1`
-  exposes `saleOffer`/`saleBuy`/`saleClaim` (SDK tool list and HTTP
-  `/v1/tools` both honour the gate; the dispatcher refuses the calls when
-  unset). `saleOffer` wraps a value to a buyer pubkey (BRC-42; omit
-  `buyerPub` for public plaintext) and returns the covenant cfg +
-  committed `wrapped`. The seller funds the listing by paying to
-  `DisclosureSaleHost(cfg).lockingScript()`. `saleBuy` spends it
-  atomically — `wrapped` is revealed on-chain in the same tx that pays
-  the seller exactly `price`. `saleClaim` re-parses that buy tx,
-  re-checks `sha256(wrapped)==hWrapped` and unwraps to the operator key.
+- **Paid disclosure (GOAL-v7 V3, opt-in, BIP-199 escrow):**
+  `MAMEM_PAID_DISCLOSURE=1` exposes `saleOffer`/`saleOfferMemory`/
+  `saleEscrow`/`saleComplete`/`saleRefund`/`saleClaim` (SDK tool list and
+  HTTP `/v1/tools` both honour the gate; the dispatcher refuses the calls
+  when unset). The escrow is **buyer-funded** — the seller can never
+  take a deposit without revealing:
+  1. `saleOffer` (seller): wraps a value to a buyer pubkey (BRC-42; omit
+     `buyerPub` for public plaintext) and returns the covenant cfg +
+     committed `wrapped`. `saleOfferMemory` is the memory-bound variant —
+     the payload is the record's canonical `serializeFragment` bytes and
+     the returned `commitment {leaf, anchorTxid, hdp}` lets the buyer
+     verify inclusion before funding.
+  2. `saleEscrow` (buyer): completes the cfg with its own `depositorPkh`
+     and funds `DisclosureSaleHost(cfg).lockingScript()` from the
+     operator key. Deposit should be `price + maxFee + change margin`.
+  3. `saleComplete` (seller): spends the escrow via `buy` — `wrapped` is
+     revealed on-chain in the same tx that pays the seller exactly
+     `price` and returns change to the depositor. The covenant pins the
+     change destination and bounds the fee (`maxFee`), so the completer
+     cannot reroute or burn the deposit.
+  4. `saleClaim` (buyer): re-parses that buy tx, re-checks
+     `sha256(wrapped)==hWrapped` and unwraps to the operator key. For
+     memory payloads it also recomputes
+     `computeLeaf(parseFragment(payload))` against the committed leaf.
+  5. `saleRefund` (buyer): if the seller never completes, the depositor
+     reclaims the escrow after `refundAfter` — depositor-signed,
+     locktime-gated.
   Threat note: `wrapped` is public on-chain — private mode relies on
   BRC-42 ECDH confidentiality; the covenant binds payment↔reveal but
-  cannot prevent the buyer reselling the plaintext afterwards.
+  cannot prevent the buyer reselling the plaintext afterwards, nor a
+  third party front-running a *public* payload they saw in the mempool.
 - TTN (Teranode Test Net — test coins, `MAMEM_NETWORK=ttn`):
   - Endpoints: Arcade (ARC-compatible) `https://arcade-v2-ttn-us-1.bsvblockchain.tech`, WoC-TTN `https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` (`openLiveRuntime`) — SpendGuard caps, encrypted keys, WoC merkle paths.
   - Differences from main: **no** `MAMEM_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (Arcade policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); no broadcast fallback beyond WoC `/tx/raw`; confirm interval 30 s.

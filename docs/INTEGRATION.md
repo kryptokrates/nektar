@@ -36,6 +36,7 @@ pnpm mcp:smoke                                # remember → anchor → prove TH
 
 ```sh
 pnpm stack:up                              # Teranode regtest
+node packages/mcp/dist/src/init.js --network=regtest   # wallet: key → .env, funding check
 pnpm mcp:install --regtest claude-desktop  # profile "mamem_regtest"
 MAMEM_PROFILE=mamem_regtest pnpm mcp:smoke
 ```

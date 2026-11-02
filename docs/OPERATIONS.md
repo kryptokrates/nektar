@@ -18,7 +18,9 @@ pnpm stack:down
 | asset API | 8090 (basic auth = RPC creds) | `/api/v1/block_legacy/:hash` for BUMPs |
 | RPC | 9292 | headers (`getblockheader`), mining (`generatetoaddress`) |
 
-Credentials: `infra/teranode-quickstart/.env` (`rpc_pass`) and `mamem/.env` (`MAMEM_WIF`). Both are gitignored and loaded automatically by the regtest e2e.
+Credentials: `infra/teranode-quickstart/.env` (`rpc_pass`) and `mamem/.env` (`MAMEM_REGTEST_WIF`). Both are gitignored and loaded automatically by the regtest e2e.
+
+Bootstrap the operator wallet with `node packages/mcp/dist/src/init.js` — it writes `MAMEM_REGTEST_WIF` to `.env` (never prints it) and shows the regtest address. `--network=regtest` additionally verifies reserve funding on the running stack and prints the exact `generatetoaddress` funding command if empty; `--force` rotates (old-key UTXOs do not follow — rotate only on a quiet chain); `MAMEM_ENV_FILE` overrides the target env file.
 
 ## Funding (treasury chain)
 

@@ -125,6 +125,33 @@ The image is `ghcr.io/nedzof/mamem` (`latest` = release, `edge` = master).
 See **[docs/INTEGRATION.md](docs/INTEGRATION.md)** for every client option
 and the persistent backend modes.
 
+### The wallet question (operator-only — AI users never touch this)
+
+The AI client pays nothing and holds no keys. Whoever runs the MCP server
+is the wallet holder; anchoring costs fractions of a cent per write-batch.
+One command sets it up:
+
+```sh
+node packages/mcp/dist/src/init.js                  # → new key in gitignored .env,
+                                                    #   only the ADDRESS is printed
+node packages/mcp/dist/src/init.js --network=regtest
+                                                    # → also checks reserve funding;
+                                                    #   if empty, prints the exact
+                                                    #   generatetoaddress command to run
+```
+
+Then serve — stdio for local clients, HTTP for remote ones:
+
+```sh
+MAMEM_NETWORK=regtest node packages/mcp/dist/src/bin.js   # stdio MCP
+MAMEM_HTTP_PORT=8080  node packages/mcp/dist/src/bin.js   # + REST /v1, MCP /mcp, OpenAPI
+```
+
+Rotation is `init.js --force` — destructive: UTXOs of the old key do **not**
+follow to the new one, so rotate only on a quiet chain. Set `MAMEM_ENV_FILE`
+to target a different env file. `--network` rejects everything that isn't
+`regtest` — mainnet is not wired.
+
 ---
 
 ## For the pedants — the precise version

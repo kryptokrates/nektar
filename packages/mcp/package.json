@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./dist/src/index.js",
   "bin": {
-    "mamem-mcp": "./dist/src/bin.js"
+    "mamem-mcp": "./dist/src/bin.js",
+    "mamem-init": "./dist/src/init.js"
   },
   "exports": {
     ".": "./dist/src/index.js"

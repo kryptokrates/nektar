@@ -22,11 +22,17 @@ services:
       "--reserve", "/data/watcher-reserve.json"]
     volumes:
       - mamem-data:/data
+      # Teranode quickstart creds, read-only (watcher maps rpc_user/rpc_pass)
+      - ./infra/teranode-quickstart/.env:/run/teranode-quickstart.env:ro
+    env_file:
+      - path: .env          # repo root — carries MAMEM_REGTEST_WIF (gitignored)
+        required: false
     environment:
       MAMEM_REGTEST_WIF: ${MAMEM_REGTEST_WIF:-}
       MAMEM_RPC_URL: ${MAMEM_RPC_URL:-http://host.docker.internal:9292/}
       MAMEM_RPC_USER: ${MAMEM_RPC_USER:-teranode}
       MAMEM_RPC_PASS: ${MAMEM_RPC_PASS:-}
+      MAMEM_QS_ENV: /run/teranode-quickstart.env
       MAMEM_PROPAGATION_URL: ${MAMEM_PROPAGATION_URL:-http://host.docker.internal:8833/tx}
       MAMEM_ASSET_URL: ${MAMEM_ASSET_URL:-http://host.docker.internal:8090/api/v1}
   demo:

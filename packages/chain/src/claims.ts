@@ -136,11 +136,19 @@ export async function callTerminal (c: any, method: string, args: any[], outputs
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-export interface ClaimEntry { txid: string, vout: number }
+export interface ClaimEntry { txid: string, vout: number, spent?: boolean }
 export const loadClaims = (file: string): ClaimEntry[] => { try { return JSON.parse(readFileSync(file, 'utf8')) } catch { return [] } }
 export function registerClaim (file: string, e: ClaimEntry): void {
   const list = loadClaims(file)
   if (!list.some(x => x.txid === e.txid && x.vout === e.vout)) { list.push(e); mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify(list, null, 1)) }
+}
+// The outpoint is consumed (by our challenge or any spend). The claim's
+// continuation UTXO gets a new txid the registry cannot follow without a
+// tx-index — marking spent just stops retrying the dead outpoint.
+export function markClaimSpent (file: string, txid: string, vout: number): void {
+  const list = loadClaims(file)
+  const e = list.find(x => x.txid === txid && x.vout === vout)
+  if (e && !e.spent) { e.spent = true; writeFileSync(file, JSON.stringify(list, null, 1)) }
 }
 export const proofFile = (dir: string, receiptHash: string): string => join(dir, `${receiptHash}.bin`)
 export function storeProof (dir: string, receiptHash: string, bytes: Uint8Array): string {

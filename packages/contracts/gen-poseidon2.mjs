@@ -44,22 +44,22 @@ const set = (i,e) => L.push(`    ${v(i)} = (${e})${M}`)
 function emitMExt () {
   for (let b=0;b<6;b++){
     const i=b*4
-    L.push(`    const b${b}t0 = (${v(i)} + ${v(i+1)})${M}`)
-    L.push(`    const b${b}t1 = (${v(i+2)} + ${v(i+3)})${M}`)
-    L.push(`    const b${b}t2 = (2n * ${v(i+1)} + b${b}t1)${M}`)
-    L.push(`    const b${b}t3 = (2n * ${v(i+3)} + b${b}t0)${M}`)
-    L.push(`    const b${b}t4 = (4n * b${b}t1 + b${b}t3)${M}`)
-    L.push(`    const b${b}t5 = (4n * b${b}t0 + b${b}t2)${M}`)
-    L.push(`    const b${b}o0 = (b${b}t3 + b${b}t5)${M}`)
-    L.push(`    const b${b}o1 = b${b}t5`)
-    L.push(`    const b${b}o2 = (b${b}t2 + b${b}t4)${M}`)
-    L.push(`    const b${b}o3 = b${b}t4`)
+    L.push(`    b${b}t0 = (${v(i)} + ${v(i+1)})${M}`)
+    L.push(`    b${b}t1 = (${v(i+2)} + ${v(i+3)})${M}`)
+    L.push(`    b${b}t2 = (2n * ${v(i+1)} + b${b}t1)${M}`)
+    L.push(`    b${b}t3 = (2n * ${v(i+3)} + b${b}t0)${M}`)
+    L.push(`    b${b}t4 = (4n * b${b}t1 + b${b}t3)${M}`)
+    L.push(`    b${b}t5 = (4n * b${b}t0 + b${b}t2)${M}`)
+    L.push(`    b${b}o0 = (b${b}t3 + b${b}t5)${M}`)
+    L.push(`    b${b}o1 = b${b}t5`)
+    L.push(`    b${b}o2 = (b${b}t2 + b${b}t4)${M}`)
+    L.push(`    b${b}o3 = b${b}t4`)
   }
   // tmp sums + final accumulation — do explicitly per cell to dodge arrays:
   // recompute: tmp_j = sum over b of o_j ; s_i = s_i + tmp_{i%4}
   // emit tmp sums first then assign
   for(let j=0;j<4;j++){
-    L.push(`    const mtmp${j} = (${[0,1,2,3,4,5].map(b=>`b${b}o${j}`).join(' + ')})${M}`)
+    L.push(`    mtmp${j} = (${[0,1,2,3,4,5].map(b=>`b${b}o${j}`).join(' + ')})${M}`)
   }
   for(let i=0;i<C;i++){
     const b=Math.floor(i/4), j=i%4
@@ -67,7 +67,7 @@ function emitMExt () {
   }
 }
 function emitMInt () {
-  L.push(`    const msum = (${v(0)} + ${[...Array(23)].map((_,i)=>v(i+1)).join(' + ')})${M}`)
+  L.push(`    msum = (${v(0)} + ${[...Array(23)].map((_,i)=>v(i+1)).join(' + ')})${M}`)
   for (let i=0;i<C;i++) set(i, `msum + 0x${di[i].toString(16)}n * ${v(i)}`)
 }
 function emitSbox (i) {
@@ -87,7 +87,9 @@ L.push(``)
 L.push(`export class Poseidon2Probe extends SmartContract {`)
 L.push(`  constructor () { super() }`)
 L.push(`  public mix (${args}, ${expArgs}) {`)
-L.push(`    let qt = 0n; let wt = 0n; let zt = 0n`)
+L.push(`    let qt = 0n; let wt = 0n; let zt = 0n; let msum = 0n`)
+for (let b=0;b<6;b++) L.push(`    let ${[...Array(6)].map((_,t)=>`b${b}t${t}`).concat([...Array(4)].map((_,o)=>`b${b}o${o}`)).join(' = 0n; let ')} = 0n`)
+L.push(`    let mtmp0 = 0n; let mtmp1 = 0n; let mtmp2 = 0n; let mtmp3 = 0n`)
 for (let i=0;i<C;i++) L.push(`    let ${v(i)} = x${i}`)
 emitMExt()
 for (let r=0;r<HF;r++){ for(let i=0;i<C;i++) set(i,`${v(i)} + 0x${rc[r*C+i].toString(16)}n`); emitSboxAll(); emitMExt() }

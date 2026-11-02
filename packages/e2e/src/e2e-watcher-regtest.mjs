@@ -85,7 +85,15 @@ check(v.ok && v.journal.root !== LIE, `fixture verifies; claim's journalRoot is 
 // seed the watcher registry, run the daemon once
 const CLAIMS = fileURLToPath(new URL('../../../.state/watcher-claims.json', import.meta.url))
 writeFileSync(CLAIMS, JSON.stringify([{ txid: claimOp.txid, vout: claimOp.outputIndex }]))
+// MAMEM_SEED_ONLY=1: stop after seeding — used to hand the claim to an
+// already-running daemon (e.g. the docker-compose watcher service) instead
+// of spawning a one-shot watcher here.
+if (process.env.MAMEM_SEED_ONLY) { console.log('seeded only (MAMEM_SEED_ONLY)'); process.exit(failures ? 1 : 0) }
 const out = execFileSync('node', ['../../watcher/src/watcher.mjs', '--once', '--claims', CLAIMS, '--proof-dir', PROOFS], { cwd: new URL('.', import.meta.url), encoding: 'utf8', timeout: 120000 })
 console.log(out.trim())
 check(/challenge/i.test(out) || /FRAUD/i.test(out), 'watcher detected fraud and broadcast challenge')
+// second pass: the challenged outpoint must NOT be retried — the watcher
+// marks it spent in the registry instead of spamming doomed broadcasts.
+const out2 = execFileSync('node', ['../../watcher/src/watcher.mjs', '--once', '--claims', CLAIMS, '--proof-dir', PROOFS], { cwd: new URL('.', import.meta.url), encoding: 'utf8', timeout: 120000 })
+check(!/challenge broadcast/i.test(out2), 'second pass: spent outpoint skipped (no double challenge)')
 process.exit(failures ? 1 : 0)

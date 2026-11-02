@@ -532,6 +532,44 @@ export class MamemMemory {
     }
     return await text(seq)
   }
+  /** §19 read-side author check: returns a deny reason or undefined.
+   *  Enforces (a) operator-local revocation of the author pubkey and
+   *  (b) epoch-window authorship against the shard's owner cert chain —
+   *  when the record's author is on the shard's own chain. */
+  private async authorGuard (shard: string, r: LogRecord): Promise<string | undefined> {
+    if (r.authorPub && this.isRevoked(r.authorPub)) return 'revoked key'
+    if (r.authorPub && r.authorEpoch !== undefined) {
+      const ac = await this.authorChain(shard)
+      // epoch-window authorship is enforceable only when the author is on the
+      // SHARD'S owner chain (a rotated-out or forged-epoch own write is
+      // withheld). Foreign authors carry no cert chain — their originator σ
+      // still binds them; there is nothing to check an epoch claim against.
+      const chainKeys = ac ? new Set([ac.genesisPub, ...ac.certs.map(c => c.pubkey)]) : null
+      if (chainKeys?.has(r.authorPub)) {
+        const a = idbind.verifyAuthorship(r.authorPub, r.authorEpoch, r.fragment.p.time, ac.genesisPub, ac.certs)
+        if (!a.ok) return `authorship: ${a.reason}`
+      }
+    }
+    return undefined
+  }
+
+  /** resolve the shard's owner cert chain: genesis pub from the genesis
+   *  anchor's decoded ownerPub + live rotation certs. Cached per shard. */
+  private authorChainCache = new Map<string, { genesisPub: string, certs: import('@mamem/identity').RotationCert[] } | null>()
+  private async authorChain (shard: string): Promise<{ genesisPub: string, certs: import('@mamem/identity').RotationCert[] } | null> {
+    if (this.authorChainCache.has(shard)) return this.authorChainCache.get(shard)!
+    let out: { genesisPub: string, certs: import('@mamem/identity').RotationCert[] } | null = null
+    const genesis = (this.tails.get(shard) ?? []).find(l => l.n === 0)
+    const gtx = genesis ? this.anchorTxs.get(genesis.txid) : undefined
+    if (gtx) {
+      const { decodeMamemAnchor } = await import('@mamem/contracts')
+      const dec = decodeMamemAnchor(gtx.outputs[0]!.lockingScript.toHex())
+      if (dec) out = { genesisPub: dec.ownerPub, certs: [...this.anchorChain(shard).rotationCerts] }
+    }
+    this.authorChainCache.set(shard, out)
+    return out
+  }
+
   /** §19: was record seq written by the key of its recorded epoch, inside that key's window? */
   async authorship (shard: string, seq: number, genesisPub: string, certs: import('@mamem/identity').RotationCert[]) {
     const r = (await this.store.all(shard)).find(x => x.seq === seq)
@@ -898,6 +936,10 @@ export class MamemMemory {
       if (opts?.zk) item.zk = zkOk ? 'verified' : 'rejected'
       const level = BigInt(r.level ?? 0)
       const fin = opts?.requireFinal ? await this.anchorStatus(shard, r.seq) : undefined
+      // §19 author guard: revocation + epoch-window authorship, evaluated once
+      // per record before the serve guards. Operator-local revocation only —
+      // third-party revocation proofs need an anchored root (deferred).
+      const authorDeny = r.authorPub ? await this.authorGuard(shard, r) : undefined
       if (fin && fin.state !== 'final') {
         item.unverifiable = true
         item.reason = `not final: ${fin.confirmations}/${fin.depth} confirmations`
@@ -916,6 +958,9 @@ export class MamemMemory {
         // Cedar: DENY or a policy-hash mismatch — never serve anything
         item.unverifiable = true
         item.reason = `cedar ${cedarState}`
+      } else if (authorDeny) {
+        item.unverifiable = true
+        item.reason = authorDeny
       } else if (r.fragment.E && r.fragment.E.length > 0) {
         // KEY-008: decrypt ONLY after verifyFragment succeeds for this record.
         const { result } = await this.prove(shard, r.seq)
@@ -947,7 +992,14 @@ export class MamemMemory {
                   item.zk = 'rejected'
                   zkState = 'rejected'
                 } else {
-                  item.text = Buffer.from(pt).toString('utf8')
+                  // COM-003 strict audit: re-verify the originator signature
+                  // over the DECRYPTED plaintext (it was bound at ingest).
+                  if (r.authorPub && r.fragment.p.signature?.length && !verifyProvenance(r.authorPub, pt, r.fragment.p)) {
+                    item.unverifiable = true
+                    item.reason = 'provenance sig invalid post-decrypt'
+                  } else {
+                    item.text = Buffer.from(pt).toString('utf8')
+                  }
                 }
                 shredKey(fragmentKey)
                 break

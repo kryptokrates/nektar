@@ -234,9 +234,15 @@ export function buildAuditBundle (a: Omit<AuditBundle, 'version' | 'receiptHash'
 
 /** Fully offline: needs block headers (tracker) and, when a policy decided,
  *  the verifier's OWN authoritative policy DAG (AGT-009) — never the bundle's. */
-export async function verifyAuditBundle (b: AuditBundle, tracker: ChainTracker, opts: { dag?: PolicyDAG } = {}): Promise<{ ok: boolean, reasons: string[] }> {
+export async function verifyAuditBundle (b: AuditBundle, tracker: ChainTracker, opts: { dag?: PolicyDAG, isRevoked?: (pubkeyHex: string) => boolean } = {}): Promise<{ ok: boolean, reasons: string[] }> {
   const reasons: string[] = []
   if (hashOf(b.receipt) !== b.receiptHash) reasons.push('receipt hash mismatch')
+  // §19: when the verifier holds a revocation checker, revoked signers/delegators
+  // fail the bundle — operator-local revocation only until an anchored
+  // revocation root exists (documented gap, not third-party-enforceable).
+  const revoked = opts.isRevoked ?? (() => false)
+  for (const s of b.signers) if (revoked(s.pubkey)) reasons.push(`signer ${refKey(s.ref)}: key revoked`)
+  for (const d of b.receipt.delegations ?? []) if (revoked(d.delegator)) reasons.push(`delegation for "${d.decision.slice(0, 32)}": delegator key revoked`)
   const cited = new Set(b.receipt.fragmentRefs.map(refKey))
   const bundled = new Set(b.fragments.map(f => refKey(f.ref)))
   for (const k of cited) if (!bundled.has(k)) reasons.push(`no proof bundle for cited fragment ${k}`)

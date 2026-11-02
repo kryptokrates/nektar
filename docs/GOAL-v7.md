@@ -1,16 +1,47 @@
-# GOAL-v7 — On-Chain Enforcement (Rúnar Covenants)
+# GOAL-v7 — On-Chain Enforcement (Rúnar Covenants) + Verification Hardening
 
-Three guarantees move from application code (bypassable by whoever holds the
-key) into consensus rules enforced by the locking script — the differentiator
-no off-chain stack can replicate.
+Scope: (A) close the read-path verification gaps so an agent's memory is
+checked as described — revocation, epoch-window authorship, provenance
+re-verify, standalone auditor; (B) move three guarantees from application
+code (bypassable by whoever holds the key) into consensus rules enforced by
+the locking script — the differentiator no off-chain stack can replicate;
+(C) document the honest deferrals that application-level verification cannot
+close.
 
-Status: **V0 done; V1 unlocking SOLVED (opSig prefix + ABI-ordered args +
+Status: **Phase A done (implemented + tested, this session); B in flight —
+V0 done; V1 unlocking SOLVED (opSig prefix + ABI-ordered args +
 sha256(preimage) sig — checkPreimage/checkSig verified under real Spend
-eval); remaining: in-script state slice via extractScriptCode (scriptCode
-length ≠ locking-script length — csep-trimmed); V2/V3 contracts compiled,
-adapters pending.** Order: V0 spike → V1 → V2 → V3, each with contract +
-artifact + host adapter + env-gated wiring + unit tests + regtest e2e + docs +
-commit/push; CI green per phase.
+eval); codeSha-state pattern added (scriptCode is csep-trimmed → 48B state =
+codeSha‖spent‖windowStart + codePrefix arg pins the code); remaining: the
+`hash256(outs) === extractOutputHash` assert (bisected — checkPreimage/
+checkSig/caps/state all pass; out() serialization byte-diff left); V2/V3
+contracts compiled, adapters pending.** Order: A → B (V1 → V2 → V3) → C.
+
+## Phase A — Read-path verification hardening (done)
+
+Four gaps that kept the paper's verification from being fully enforced on the
+read path — all closed this session:
+
+- **Revocation consulted** — `recall` now withholds a record whose
+  `authorPub` is revoked (`'revoked key'`), via `authorGuard`.
+- **Epoch-window authorship enforced** — `verifyAuthorship` runs when the
+  record's author is on the shard's own owner cert chain (genesis `ownerPub`
+  + `rotationCerts`). A rotated-out or forged-epoch own write is withheld.
+  Foreign authors carry no chain — their originator σ still binds them; the
+  epoch claim is simply not checkable, so no false rejection.
+- **Provenance re-verified** — post-decrypt, `verifyProvenance(authorPub,
+  pt, p)` re-checks the originator σ over the plaintext (it was bound at
+  ingest; now also checked on the way out).
+- **Audit-side revocation** — `verifyAuditBundle` takes `opts.isRevoked`
+  and fails revoked signer-promise / delegator keys.
+- **Standalone auditor** — `tools/verify-bundle.mjs` verifies a ProofBundle
+  or AuditBundle against a header chain (`--headers` file or `--rpc`)
+  without the agent runtime — the operationalisation hook for third-party
+  auditors.
+
+Files: `packages/mcp/src/memory.ts`, `packages/reasoning/src/index.ts`,
+`packages/mcp/test/memory.test.ts`, `tools/verify-bundle.mjs`. Tests: 13/13
+mcp green incl. the revoked-author withhold case.
 
 ## Feasibility baseline (measured, not assumed)
 
@@ -47,26 +78,39 @@ deployed+spent on regtest.
 
 ## V1 — MamemFeeVault (spend caps as consensus)
 
-`packages/contracts/src/MamemFeeVault.runar.ts` — StatefulSmartContract.
+`packages/contracts/src/MamemFeeVault.runar.ts` — **stateless `SmartContract`
+with an explicit `txPreimage` + manual output construction** (not
+StatefulSmartContract: the compiler's `addOutput` machinery emits an
+auto-change output whose destination the contract cannot read — a leak for
+strict enforcement).
 
 Immutable params: `destPkh` (the only payable address — the anchor-funding
 P2PKH wallet; anchors then consume plain P2PKH UTXOs through the existing
 `Funder`, so MamemAnchor needs **no change**), `ownerPkh`, `perTxCap`,
 `windowCap`, `windowBlocks`, `maxFee`.
-Mutable state: `{spentInWindow, windowStart}`.
 
-`spend(sig, pubKey, payAmount)`:
-- `hash160(pubKey)==ownerPkh` + `checkSig` (operator-initiated only).
+State (48 B suffix after `OP_RETURN`): `codeSha(32) ‖ spentInWindow(8) ‖
+windowStart(8)`. `extractScriptCode` returns a **csep-trimmed** scriptCode
+(`P ‖ 0x6a ‖ state` where `P` = code after the last executed separator), so
+the contract cannot rebuild the full locking script from the suffix alone —
+it takes `codePrefix` as a method arg and pins the code via
+`sha256(codePrefix ‖ P) === codeSha` (codeSha is stored *in* the state, so
+there is no hash-in-own-code fixpoint).
+
+`spend(txPreimage, sig, pubKey, codePrefix, payAmount, contSats, changeSats)`:
+- `checkPreimage` + `hash160(pubKey)==ownerPkh` + `checkSig` (operator only).
 - Window roll via `extractLocktime`: `lt >= windowStart+windowBlocks` resets
-  `{spentInWindow=payAmount, windowStart=lt}`, else `spentInWindow+=payAmount`;
-  assert `spentInWindow <= windowCap`; assert `payAmount <= perTxCap`.
-- Outputs: vault-continuation (remaining funds) + P2PKH payment to
-  `destPkh` (the compiler change output IS the payment).
-- Fee cap: `extractAmount(preimage) - continuationSats - payAmount <= maxFee`.
+  `{spent=payAmount, windowStart=lt}`, else `spent+=payAmount`;
+  assert `spent <= windowCap`; assert `payAmount <= perTxCap`.
+- Outputs built by hand: continuation (rebuilt code + new state) + payment
+  to `destPkh` + change to `ownerPkh`; `hash256(outs) ===
+  extractOutputHash(preimage)` makes it consensus.
+- Fee cap: `extractAmount - contSats - payAmount - changeSats <= maxFee`.
 
-Host: `packages/chain/src/vault-funder.ts` — `VaultFunder implements Funder`
-spends the vault to mint capped funding UTXOs. `SpendGuard` stays in front
-(defense in depth). Env `MAMEM_FEE_VAULT`; testnet/main only.
+Host: `packages/anchor/src/vault.ts` — `FeeVault`/`VaultFunder` spends the
+vault to mint capped funding UTXOs (SDK `computeOpPushTx` + `buildStatefulPrefix`
+for the preimage-sig prefix). `SpendGuard` stays in front (defense in depth).
+Env `MAMEM_FEE_VAULT`; testnet/main only.
 
 ## V2 — MamemCheckpointBond (unforkable checkpoint chain)
 
@@ -107,6 +151,27 @@ verify envelope end-to-end). MCP tools behind `MAMEM_PAID_DISCLOSURE`.
 
 compile artifact < standard script limits · contract unit tests incl.
 negatives (wrong dest, over-cap, non-owner, early close, underpayment,
-wrong reveal) · regtest e2e deploy+spend · no mainnet/testnet broadcast
-without explicit approval · docs (PROOFS / THREAT-MODEL / OPERATIONS /
-test-spec rows).
+wrong reveal, forged codePrefix) · regtest e2e deploy+spend · no
+mainnet/testnet broadcast without explicit approval · docs (PROOFS /
+THREAT-MODEL / OPERATIONS / test-spec rows).
+
+## Phase C — honest deferrals (documented, not claimed)
+
+What application-level verification cannot close:
+
+- **Header trust** — SPV verifies BUMP→header inclusion but not PoW/work;
+  the header source (RPC / headers file) is trusted. Recorded in
+  THREAT-MODEL.
+- **No anchored revocation root** — revocation is operator-local
+  (in-memory / shard); a third-party verifier cannot chain-verify it.
+  Follow-up candidate: revocation root inside a covenant state (V4-style).
+- **Completeness gap** — inclusion proves *this* record was anchored, not
+  that no shadow memory exists; closing that needs TEE / model-execution
+  attestation (S6.11 deferred).
+- **Truth vs. inclusion** — a verified record proves it was written and
+  anchored, not that the statement is true; a lie, once written, is
+  preserved and marked.
+
+Verification-distinction matrix to be kept current in `docs/PROOFS.md`:
+data-integrity · provenance · inclusion/finality · authorization ·
+confidentiality · derivation · model-id — vs. *factual truth*.

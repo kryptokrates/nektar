@@ -250,3 +250,20 @@ test('mcp tool: automaton deploy → step → halt; off-δ step refused; honest 
   assert.equal(h.halted, true)
   assert.equal((await callTool(mem, 'automaton', { op: 'state', id: 'doc' })).txid, h.txid)
 })
+
+test('§19 read-path: revoked author key withholds the record at recall', async () => {
+  const { mem, settle } = setup()
+  const author = PrivateKey.fromRandom()
+  const { signProvenance } = await import('@mamem/log')
+  const p0 = { source: 'agent', time: Math.floor(Date.now() / 1000), signature: new Uint8Array(0), modelId: 't' }
+  const signed = signProvenance(author, new Uint8Array(Buffer.from('killed key test', 'utf8')), p0)
+  await mem.remember('s', 'killed key test', { ...signed, sourcePub: author.toPublicKey().toString(), epoch: 0 })
+  await mem.remember('s', 'filler record')
+  settle('s')
+  const ok = await mem.recall('s')
+  assert.equal(ok.items[0]!.unverifiable, undefined, 'served before revoke')
+  mem.revoke(author.toPublicKey().toString())
+  const bad = await mem.recall('s')
+  assert.equal(bad.items[0]!.unverifiable, true, 'revoked author record withheld')
+  assert.match(bad.items[0]!.reason!, /revoked key/)
+})

@@ -8,14 +8,19 @@ the locking script — the differentiator no off-chain stack can replicate;
 (C) document the honest deferrals that application-level verification cannot
 close.
 
-Status: **Phase A done (implemented + tested, this session); B in flight —
-V0 done; V1 unlocking SOLVED (opSig prefix + ABI-ordered args +
-sha256(preimage) sig — checkPreimage/checkSig verified under real Spend
-eval); codeSha-state pattern added (scriptCode is csep-trimmed → 48B state =
-codeSha‖spent‖windowStart + codePrefix arg pins the code); remaining: the
-`hash256(outs) === extractOutputHash` assert (bisected — checkPreimage/
-checkSig/caps/state all pass; out() serialization byte-diff left); V2/V3
-contracts compiled, adapters pending.** Order: A → B (V1 → V2 → V3) → C.
+Status: **DONE — Phase A (read-path hardening) committed; all three
+covenants implemented in Rúnar, green under real script eval AND live
+Teranode regtest.** V1 `MamemFeeVault` (stateful, opSig-prefix unlocking,
+host-computed window transition asserted on-chain) — funded, spent,
+continuation spent, over-cap refused (TX_INVALID) on regtest. V2
+`MamemCheckpointBond` (stateful {n,lastRoot}, uniform-frame pad args +
+auto-change slot) — commit×2, early close refused, release-height close
+accepted on regtest. V3 `DisclosureSale` (stateless terminal, explicit
+txPreimage, preimage-last ABI order, fully-inlined out() asserts —
+runar 0.4.6 ANF dead-codes the second out() in nested `cat(a,b)` and leaks
+locals otherwise) — buy reveals wrapped + pays seller, wrong wrapped refused,
+early refund refused, deadline refund accepted on regtest. E2E:
+`packages/e2e/src/e2e-covenants-regtest.ts` (12 checks, PASS).
 
 ## Phase A — Read-path verification hardening (done)
 
@@ -59,58 +64,55 @@ mcp green incl. the revoked-author withhold case.
   evidence. Upstream request filed/documented; script-level secp256k1 is
   possible but ~hundreds of KB and stays deferred.
 
-## V0 — Compiler spike (gate)
+## V0 — Compiler spike (findings, all verified in shipped code)
 
-Verify before the contracts:
-
-1. Whether method bodies may reference the implicit `_changePKH`,
-   `_changeAmount`, `_newAmount` params (decides V1's payment mechanism:
-   compiler change output = the payment).
-2. Whether a stateless `SmartContract` accepts a declared
-   `SigHashPreimage` param + `checkPreimage` (decides V3's mechanism;
-   fallback: stateful with dummy state).
-3. `nLocktime`/`extractLocktime` semantics on regtest (sequence
-   < 0xffffffff on the spending input).
-4. Compile-size sanity: each contract well under the standard script limit.
-
-Deliverable: `spikes/v7/` mini-contract compiled and (if mechanics hold)
-deployed+spent on regtest.
+1. `_changePKH`/`_changeAmount`/`_newAmount` are **not body-visible** —
+   the auto-change output is unbound ⇒ V1 bounds `leftover+change` instead
+   of constraining the destination (see V1).
+2. Stateless `SmartContract` **does** accept a declared `SigHashPreimage`
+   param + `checkPreimage` — V3 uses it (preimage-last ABI order; the
+   `OP_5 OP_ROLL` preamble pulls the opSig from a fixed frame depth).
+3. `extractLocktime` returns `nLocktime`; spendable on regtest with
+   input `sequence < 0xffffffff` (0xfffffffe used throughout).
+4. Sizes: V1 ~0.5 KB, V2 ~0.6 KB, V3 ~0.35 KB — far under limits.
+5. ANF caveats hit during bring-up: (a) conditional state mutation
+   miscompiles → host passes transition witnesses (V1); (b) nested
+   `cat(out0, out1)` dead-codes the second build and named locals leak
+   onto the stack → terminal outs are fully inlined into the assert (V3);
+   (c) multi-method terminal methods get the uniform injected frame —
+   pad args + auto-change output required even when the ABI omits them (V2).
 
 ## V1 — MamemFeeVault (spend caps as consensus)
 
-`packages/contracts/src/MamemFeeVault.runar.ts` — **stateless `SmartContract`
-with an explicit `txPreimage` + manual output construction** (not
-StatefulSmartContract: the compiler's `addOutput` machinery emits an
-auto-change output whose destination the contract cannot read — a leak for
-strict enforcement).
+`packages/contracts/src/MamemFeeVault.runar.ts` — **idiomatic
+`StatefulSmartContract`** (as shipped; the earlier stateless+`codeSha`-pin
+sketch was abandoned — the stateful path verifies under real script eval).
 
-Immutable params: `destPkh` (the only payable address — the anchor-funding
-P2PKH wallet; anchors then consume plain P2PKH UTXOs through the existing
-`Funder`, so MamemAnchor needs **no change**), `ownerPkh`, `perTxCap`,
-`windowCap`, `windowBlocks`, `maxFee`.
+Props: `destPkh` (the only payable address), `ownerPkh`, `perTxCap`,
+`windowCap`, `windowBlocks`, `maxFee` + mutable `{spentInWindow, windowStart}`
+(state after OP_RETURN, serialized via SDK `serializeState`).
 
-State (48 B suffix after `OP_RETURN`): `codeSha(32) ‖ spentInWindow(8) ‖
-windowStart(8)`. `extractScriptCode` returns a **csep-trimmed** scriptCode
-(`P ‖ 0x6a ‖ state` where `P` = code after the last executed separator), so
-the contract cannot rebuild the full locking script from the suffix alone —
-it takes `codePrefix` as a method arg and pins the code via
-`sha256(codePrefix ‖ P) === codeSha` (codeSha is stored *in* the state, so
-there is no hash-in-own-code fixpoint).
-
-`spend(txPreimage, sig, pubKey, codePrefix, payAmount, contSats, changeSats)`:
+`spend(sig, pubKey, payAmount, contSats, newSpent, newStart, _changePKH,
+_changeAmount, txPreimage)`:
 - `checkPreimage` + `hash160(pubKey)==ownerPkh` + `checkSig` (operator only).
-- Window roll via `extractLocktime`: `lt >= windowStart+windowBlocks` resets
-  `{spent=payAmount, windowStart=lt}`, else `spent+=payAmount`;
-  assert `spent <= windowCap`; assert `payAmount <= perTxCap`.
-- Outputs built by hand: continuation (rebuilt code + new state) + payment
-  to `destPkh` + change to `ownerPkh`; `hash256(outs) ===
-  extractOutputHash(preimage)` makes it consensus.
-- Fee cap: `extractAmount - contSats - payAmount - changeSats <= maxFee`.
+- The window roll is **computed on-chain but expressed host-side**: runar
+  0.4.6's ANF pass miscompiles conditional state mutation, so the host
+  passes `newSpent`/`newStart`; the contract asserts the transition
+  unconditionally (`lt >= windowStart+windowBlocks ⇒ newSpent==payAmount ∧
+  newStart==lt`, else `newSpent==spentInWindow+payAmount ∧ newStart==windowStart`)
+  — the transition rule itself is still consensus-checked.
+- `newSpent <= windowCap`, `payAmount <= perTxCap`.
+- `addOutput` continuation (new state) + `addRawOutput` payment to `destPkh`
+  + SDK auto-change; `extractAmount(txPreimage) - contSats - payAmount <=
+  maxFee + 1` bounds leftover+change — the unreachable-change leak is
+  closed by bounding, since `_changePKH` isn't body-visible (V0 finding).
 
-Host: `packages/anchor/src/vault.ts` — `FeeVault`/`VaultFunder` spends the
-vault to mint capped funding UTXOs (SDK `computeOpPushTx` + `buildStatefulPrefix`
-for the preimage-sig prefix). `SpendGuard` stays in front (defense in depth).
-Env `MAMEM_FEE_VAULT`; testnet/main only.
+Host: `packages/anchor/src/vault.ts` — `FeeVault`/`VaultFunder` (SDK
+`computeOpPushTxWithCodeSep` + `buildStatefulPrefix(opSig, true)` — the
+`_changePKH` method frame needs the code-part witness push).
+`SpendGuard` stays in front (defense in depth). Env `MAMEM_FEE_VAULT`.
+Regtest-validated in `e2e-vault-regtest.ts` (fund → spend → continuation
+spend accepted; over-cap refused TX_INVALID).
 
 ## V2 — MamemCheckpointBond (unforkable checkpoint chain)
 
@@ -118,34 +120,43 @@ Env `MAMEM_FEE_VAULT`; testnet/main only.
 
 Immutable params: `operatorPkh`, `bondReleaseHeight`, `minBond`.
 Mutable state: `{n, lastRoot}` — the checkpoint chain lives IN the script:
-`commit(sig, pubKey, newRoot)` continues `{n+1, newRoot}` only — conflicting
-on-chain checkpoints are impossible by construction (stronger than detection).
-`close(sig, pubKey)` returns the bond to `operatorPkh` once
-`extractLocktime >= bondReleaseHeight`.
+`commit(sig, pubKey, newRoot, _newAmount, _changePKH, _changeAmount,
+txPreimage)` continues `{n+1, newRoot}` only — conflicting on-chain
+checkpoints are impossible by construction (stronger than detection).
+`close(sig, pubKey, payoutSats, _changePKH, _changeAmount, txPreimage)`
+returns the bond to `operatorPkh` once `extractLocktime >=
+bondReleaseHeight`, fee-bounded. Both carry the uniform injected frame +
+1-sat auto-change output (V0 finding c).
 
 Documented limit: punitive slashing needs `checkDataSig` — deferred (see
 baseline). Closes VER-007's on-chain side.
+Host: `packages/anchor/src/bond.ts`; regtest-validated (commit×2,
+early-close refused TX_INVALID, release close accepted).
 
 ## V3 — DisclosureSale (atomic paid disclosure)
 
 `packages/contracts/src/DisclosureSale.runar.ts` — SmartContract.
 
-Immutable params: `sellerPkh`, `price`, `hWrapped` (sha256), 
-`refundAfterHeight`, optional `buyerPkh`.
+Immutable params: `sellerPkh`, `price`, `hWrapped` (sha256),
+`refundAfter`, `maxFee`.
 
-`buy(wrapped, ... )`: `sha256(wrapped) == hWrapped` — the spend itself
-reveals the payload on-chain, bound to the committed hash. Outputs:
-`>= price` → `sellerPkh`; change → buyer. If `buyerPkh` set, the funding
-input's key must hash to it (`checkSig`). `refund(sig)`: seller + locktime
-past `refundAfterHeight`.
+`buy(wrapped, buyerPkh, changeSats, txPreimage)`: `sha256(wrapped) ==
+hWrapped` — the spend itself reveals the payload on-chain, bound to the
+committed hash. Outputs: `price` → `sellerPkh`, `changeSats` → `buyerPkh`,
+enforced via `hash256(outs) === extractOutputHash`.
+`refund(sig, pubKey, changeSats, txPreimage)`: `hash160(pubKey) ==
+sellerPkh` + `checkSig` + `extractLocktime >= refundAfter` +
+`extractAmount - changeSats <= maxFee`.
 
 `wrapped` is the existing `DisclosureEnvelope.wrapped` (BRC-42 ciphertext to
 the buyer) — on-chain exposure is safe; or plaintext `{field,salt,path}` for
 paid *public* disclosure.
 
-Host: `packages/identity/src/sale.ts` — `offerDisclosure` /
-`buyDisclosure` / `claimDisclosure` (fetch wrapped from the tx, decrypt,
-verify envelope end-to-end). MCP tools behind `MAMEM_PAID_DISCLOSURE`.
+Host: `packages/anchor/src/sale.ts` (`DisclosureSaleHost`) —
+`buildBuy`/`buildRefund` via SDK `computeOpPushTxWithCodeSep` +
+`buildStatefulPrefix` + `buildUnlockingScript` (no hand-assembled script).
+Regtest-validated in `e2e-covenants-regtest.ts`. MCP tools behind
+`MAMEM_PAID_DISCLOSURE` remain a follow-up (adapter is ready).
 
 ## Gates per phase
 

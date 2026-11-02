@@ -47,4 +47,10 @@ test('V3 sale: refund gated by locktime + seller sig', async () => {
   const ok = sale.buildRefund(utxo, seller, 100, 9_990n)
   const r = await chain.broadcast(ok.tx)
   assert.equal(r.status, 'success', `refund at height accepted: ${(r as any).description ?? ''}`)
+  // fee bound: changeSats below input-maxFee → fee > maxFee → covenant rejects
+  const greedy = sale.buildRefund(utxo, seller, 100, 9_000n)
+  assert.notEqual((await chain.broadcast(greedy.tx)).status, 'success', 'refund with fee > maxFee must be rejected')
+  // wrong wrapped: buy with a payload that doesn't match hWrapped
+  const badBuy = sale.buildBuy(utxo, Buffer.from('decoy').toString('hex'), buyerPkh, 4_000n)
+  assert.notEqual((await chain.broadcast(badBuy.tx)).status, 'success', 'wrong wrapped must be rejected')
 })

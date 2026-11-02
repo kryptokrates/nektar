@@ -35,6 +35,8 @@ pnpm -r test                       # unit · contract · integration · fuzz (�
 pnpm reproduce                     # vectors/core.json identical; pinned STARK program id verifies the committed real receipt
 pnpm e2e                           # offline story + v2 + P10/P14/v4 + full-paper scenario (~11 s)
 MAMEM_NETWORK=regtest pnpm e2e     # same on Teranode (~2 min; run 3× for sign-off)
+node packages/e2e/dist/src/e2e-vault-regtest.js      # V1 FeeVault covenant on Teranode (fund→spend→continuation, over-cap refused)
+node packages/e2e/dist/src/e2e-covenants-regtest.js  # V2 CheckpointBond + V3 DisclosureSale covenants on Teranode
 pnpm formal                        # TLC model check of the AORG invariants (+ mutant caught)
 pnpm cedar:symcc                   # SymCC + cvc5 proof of level isolation (+ mutant refuted)
 pnpm smt:vectors > vectors/smt-rust.json   # regenerate the Rust SMT oracle vectors

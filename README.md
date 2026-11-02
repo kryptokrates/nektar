@@ -8,42 +8,25 @@ License: [Apache-2.0](LICENSE) · [![ci](https://github.com/nedzof/merkle-automa
 
 ---
 
-## The two-minute version
+## What it does, in plain words
 
-Think of the AI's memory as a lab notebook:
+Your AI writes memories to an encrypted log on its own machine. Every so
+often it stamps a Merkle root of that log into one BSV transaction — and
+each stamp *spends the previous stamp*, so the whole history is one chain
+that cannot be forked or quietly rewritten. When the AI shows you a memory
+it also hands you a receipt: leaf → root → the on-chain stamp → proof it
+was allowed to tell you. You verify that receipt **offline, with zero
+trust in whoever ran the machine**.
 
-- **Every page is encrypted** and appended to a local log. Writing is cheap —
-  no chain involved.
-- **Every so often we stamp the notebook**: hash the whole batch and put the
-  stamp (a Merkle root) into one transaction on BSV. From then on, pages can't
-  be torn out or swapped — the stamp wouldn't match. Each anchor also *spends*
-  the previous anchor, so the history is a single chain that can't fork.
-- **When the AI answers, it hands over a receipt**: "this came from record 47,
-  here's the path from it to the stamped root, the root is inside block X (check
-  the real headers yourself), and here's proof I was allowed to tell you."
-  You can verify all of that offline. No API key, no permission, no trust.
-
-On top of that sits the **claim layer** — the part that's actually new:
-
-- The AI can prove, mathematically, that a memory really is inside a stamped
-  notebook (a RISC Zero STARK — a zero-knowledge proof).
-- Verifying a whole STARK inside Bitcoin Script would cost **$40–150 per
-  check**. Nobody pays that. So we do the optimistic version instead:
-
-  1. The prover posts a claim on-chain: *"my proof verifies"* — plus a bond.
-     Cost: fractions of a cent, one transaction.
-  2. A **watcher** bot re-checks the proof off-chain (free, milliseconds).
-     If the claim is a lie, the watcher posts a counter-bond and *challenges*.
-  3. A dispute narrows "your 14-million-step proof is wrong" down to **one
-     single step** in ~5 rounds. That step is judged by a small on-chain
-     contract. Loser pays. ~10 cents, only ever paid by a liar.
-  4. Because lying always loses the bond, rational provers don't lie — the
-     expensive check exists only as a threat and almost never runs.
-  5. An unchallenged claim **settles** and mints a tiny on-chain "verdict"
-     token. A sale contract can require that verdict: **pay-iff-proven**.
-
-That's it. A bail-bond system for proofs: cheap because honesty is
-incentivized, safe because the blockchain is the referee when it matters.
+On top sits a zero-knowledge layer: a RISC Zero STARK mathematically
+proves a memory is inside the sealed log. Checking a STARK inside Bitcoin
+Script costs $40–150, so instead the prover posts a small **bonded claim**
+("my proof verifies"), a watcher bot re-checks for free and challenges
+lies, and any dispute narrows the fraud to one single step judged by a
+tiny on-chain contract — loser pays ~10 cents. The expensive check exists
+only as a threat and almost never runs. Honest claims settle into an
+on-chain "verdict" token that other contracts can require:
+**pay-iff-proven**.
 
 ## The one assumption (read this)
 
@@ -65,7 +48,30 @@ per use. For high-stakes one-off finality it can be revisited.
   authorization, existence-by-time* — never that a memory's content is true.
   Garbage in, cryptographically-sealed garbage out.
 - **Not mainnet-ready.** Everything below is proven on a local Teranode
-  regtest network with real transactions. Mainnet pilot is the next milestone.
+  regtest network and on public testnet with real transactions. Mainnet
+  pilot is the next milestone.
+
+## What this enables that doesn't exist today
+
+- **Auditable AI.** "What did the model know, and when?" — a regulator or
+  customer can check it years later against the chain, with no access to
+  your servers. Today every audit trail is a mutable database and a
+  promise.
+- **Agents that trust strangers.** Two agents owned by *different people*
+  can share memory; each reader verifies inclusion and authorization
+  itself — a shared source of truth with no trusted host in the middle.
+- **Selling verified answers.** An agent sells access to one specific
+  memory; the buyer's payment only releases if the math checks out —
+  atomic pay-iff-proven, no escrow company, no disputes.
+- **Zero-knowledge clearance.** Prove "a record exists that satisfies
+  policy P" or "I hold a clearance signed by authority Y" *without
+  revealing the record* — access control that leaks nothing.
+- **Court-grade evidence.** A sealed, timestamped chain beats screenshots
+  of logs for insurance, compliance, IP priority, and "the AI never told
+  me that" disputes.
+- **Model/data integrity.** Anchor model and dataset digests so "which
+  weights produced this answer" is provable — the missing half of AI
+  accountability.
 
 ## Architecture in one picture
 
@@ -308,6 +314,41 @@ contents** — trust still comes from proof bundles, not from the
 directory. Ads can also ride on-chain (`POST /overlay/submit` with a
 `tm_presence` BEEF) for permanence, but the off-chain signed ad is the
 common path.
+
+### 3c. Hand this checklist to a friend (Claude Code)
+
+**Fastest — connect to your hosted agent** (needs the bearer token
+from you):
+
+```sh
+claude mcp add --transport http mamem http://<your-host>:8080/mcp \
+  --header "Authorization: Bearer <shared token>"
+```
+
+Then they just ask Claude to `remember` / `anchor` / `recall` / `prove`.
+
+**Full — run their own agent + discover each other:**
+
+```sh
+git clone https://github.com/nedzof/merkle-automaton.git && cd merkle-automaton
+pnpm install && pnpm -r build
+export MAMEM_NETWORK=testnet MAMEM_KEY_PASSPHRASE='<pick one>' MAMEM_DATA_DIR=$PWD/.mamem-testnet
+node packages/mcp/dist/src/bin.js           # note the printed fee address, Ctrl+C
+# fund the address (faucet.bananablocks.com), then internalize by txid:
+MAMEM_FUND_TXIDS=<txid> node packages/mcp/dist/src/bin.js
+claude mcp add mamem --scope user \
+  --env MAMEM_NETWORK=testnet --env MAMEM_KEY_PASSPHRASE=<pw> \
+  --env MAMEM_DATA_DIR=<abs>/.mamem-testnet \
+  -- node <abs>/packages/mcp/dist/src/bin.js
+# announce + discover on the rendezvous:
+MAMEM_AGENT_WIF=<their key wif> MAMEM_AGENT_ENDPOINT=http://<their-host>:8080/mcp \
+  MAMEM_AGENT_SHARDS=manual,tnet MAMEM_OVERLAY_URL=http://<rendezvous>:8090 \
+  pnpm rendezvous:announce
+curl http://<rendezvous>:8090/directory?shard=tnet   # find your endpoint
+```
+
+Option 1 writes into *your* memory under *your* key. Option 2 gives them
+their own provable memory and anchor chain — the real topology.
 
 ### 4. First conversation
 

@@ -392,17 +392,26 @@ per-op cost.
   finalizes only if *zero* independent observers challenge within the
   window — 1-of-N honesty, the standard BitVM trustless model. Watchers
   are permissionless; the bond makes lying a losing bet either way.
+  ✅ **Deployed**: `packages/watcher` (`mamem-watcher`) polls a claims
+  registry, re-verifies each open claim's RISC Zero receipt off-chain
+  via `verifyZkm2`, cross-checks committed journal fields, and
+  broadcasts `challenge` on any mismatch — proven end-to-end on live
+  Teranode (`e2e-watcher-regtest.mjs`: fraudulent claim challenged and
+  mempool-accepted). Chain-tip tracking past the deployment outpoint
+  still needs a tx-index — registry entries are watched while they are
+  the known tip.
 - Full-validity mode (zero assumptions, ~10⁴ txs) is Stage 2 — real
-  and measured, deferred only because economics reserve it for
-  high-value finalities.
-- `settle`'s anchor binding ✅: `settle` pins `anchorOutpoint` as
-  input1 (`prevouts` check; '' = unanchored single-input) and
-  `MamemAnchor.witnessSettle` re-emits the verdict output with **its
-  own R** at the journalRoot field — `hashOutputs` only validates if
-  `journalRoot == anchor.R`. Interpreter-green (`anchored-settle` 303
-  ops, `anchor-witness` 188 ops). Consumes the anchor UTXO (terminal);
-  a continuing variant needs the claim to also emit the anchor
-  continuation output.
+  and measured, **explicitly skipped**: the optimistic path's economics
+  make it unnecessary for this deployment's threat model.
+- `settle`'s anchor binding ✅ **continuing variant**: bound claims use
+  `settleAnchored`, which enumerates `[anchorCont, verdict, payout]`;
+  `MamemAnchor.witnessSettle` re-emits **its own continuation** first
+  (same state — the anchor survives for future appends) plus the
+  verdict built with its own `R` — `hashOutputs` only validates if
+  `journalRoot == anchor.R`. Unanchored `settle` asserts
+  `anchorOutpoint == ''`. Live on Teranode regtest (4-output anchored
+  settle, mempool-accepted); interpreter `anchored-settle` 333 ops,
+  `anchor-witness` 264 ops.
 - Leaf stage-script template binding: the co-spend pins the stage
   *outpoint*; binding the expected script template on-chain needs the
   generic RC-in-state stage variant (Stage 2) — per-round baked
@@ -432,8 +441,13 @@ per-op cost.
   verdict's own `authorize` inside the gated sale tx); regtest e2e ✅
   ALL PASS (`e2e-claim-regtest.mjs` — settle with verdict emission,
   challenge, reveal, bisect×2 to leaf, proveStage co-spend **with a
-  real `Poseidon2Stage` UTXO as the leaf**, both timeouts, all accepted
-  by Teranode mempool).
+  real `Poseidon2Stage` UTXO as the leaf**, both timeouts, **anchored
+  `settleAnchored` co-spend with a real `MamemAnchor` UTXO** — anchor
+  continuation + `journalRoot == anchor.R` consensus-enforced — all
+  accepted by Teranode mempool). Watcher ✅ ALL PASS
+  (`e2e-watcher-regtest.mjs` — daemon detects a fraudulent claim's
+  journal mismatch and its `challenge` is mempool-accepted on live
+  Teranode).
 - Stage 2: per-stage vectors + `zkm2-n5i4` fixture e2e on MockChain +
   regtest; real-sats cost table.
 - Repo gates unchanged: `pnpm -r build`, `check-deps`, `pnpm -r test`,

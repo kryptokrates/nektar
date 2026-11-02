@@ -334,9 +334,12 @@ per-op cost.
 
 ### Stage 1 — optimistic claim contract (the shippable artifact)
 
-- `MamemZkClaim` covenant: claim+bond state, `settle` (deadline +
-  anchor binding + queryId burn), `challenge`, `reveal`/bisect,
-  `proveStage` leaf.
+- `MamemZkClaim` covenant ✅ **interpreter-green (10/10 spends)**:
+  `settle` (deadline + verdict OP_RETURN binding receiptHash‖journalRoot‖
+  queryId + bond return, 222 ops), `challenge` (306), `reveal` (294),
+  `bisect` (352, arithmetic-select midpoint — see §4.5 note), `proveStage`
+  leaf (225, real `hashPrevouts`+outpoint co-spend pin), `claimTimeout`/
+  `slashTimeout` (218). Canonical eval: `packages/contracts/claim-lifecycle.mjs`.
 - `Poseidon2Stage` family — 29 round-variants (constants baked) —
   already compiling+VALID; wire `proveStage` to reference the disputed
   variant.
@@ -344,6 +347,12 @@ per-op cost.
   (nLockTime), bond amounts, who-watch duty documented.
 - Consumer hooks: `DisclosureSale`/`MamemCheckpointBond` read a settled
   claim UTXO as their proof gate — **pay-iff-claimed-and-unchallenged**.
+- Known SDK gap (callers, not consensus): terminal methods need the
+  `[codePart][opSig][args][changePKH][changeAmount][preimage][selector]`
+  unlock layout + trailing 0-sat change output; `call()` doesn't emit it
+  (callers patch `prepareCall` or hand-build, as the eval does). And the
+  terminal path can't add co-spend inputs — `proveStage` txs must be
+  built manually.
 
 ### Stage 2 — full-validity mode (the upgrade)
 
@@ -380,14 +389,24 @@ per-op cost.
   gate, every existing ZK test stay green by construction.
 - V2 signature-equivocation slashing stays blocked (no
   `OP_CHECKSIGFROMSTACK`) — unrelated to this work.
+- **runar 0.4.6 compiler traps** (found the hard way, worked around in
+  `MamemZkClaim`): `readonly` ctor slots shift `codeSeparatorIndex` and
+  break state deser → keep config in state; `readonly` fields break
+  inside method math → bake literals; statement-level `if { this.x = }`
+  and self-referential ternaries (`this.x = c ? v : this.x`) silently
+  drop state writes → use arithmetic selection (`x + s·(y−x)`); temps
+  referenced inside ternary branches get lost in the stack schedule
+  ("t31 not found") → keep ternary branches to literals/locals only;
+  `hashPrevouts` is sha256**d** → `hash256`, not `sha256`.
 
 ## 8. Verification
 
 - Stage 0 ✅ done: @bsv/sdk `Spend` interpreter (consensus semantics —
   stronger than MockChain ANF), `isRelaxed` Chronicle rules; measured
   ops/bytes per component and per covenant stage.
-- Stage 1: `MamemZkClaim` regtest e2e — settle happy path, challenge
-  timeout, bisect-to-leaf with a real disputed `Poseidon2Stage` spend.
+- Stage 1: interpreter lifecycle ✅ 10/10 (`claim-lifecycle.mjs`);
+  regtest e2e still open — settle happy path, challenge timeout,
+  bisect-to-leaf with a real disputed `Poseidon2Stage` spend.
 - Stage 2: per-stage vectors + `zkm2-n5i4` fixture e2e on MockChain +
   regtest; real-sats cost table.
 - Repo gates unchanged: `pnpm -r build`, `check-deps`, `pnpm -r test`,

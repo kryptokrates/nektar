@@ -45,24 +45,21 @@ export class DisclosureSale extends SmartContract {
   }
 
   /** the spend itself reveals `wrapped` — bound to the committed sha256. */
-  public buy (txPreimage: SigHashPreimage, wrapped: ByteString, buyerPkh: ByteString, changeSats: bigint) {
+  public buy (wrapped: ByteString, buyerPkh: ByteString, changeSats: bigint, txPreimage: SigHashPreimage) {
     assert(checkPreimage(txPreimage))
     assert(sha256(wrapped) === this.hWrapped)
-    const outs = cat(
+    assert(hash256(cat(
       this.out(this.price, this.p2pkh(this.sellerPkh)),
-      this.out(changeSats, this.p2pkh(buyerPkh)))
-    assert(hash256(outs) === extractOutputHash(txPreimage))
+      this.out(changeSats, this.p2pkh(buyerPkh)))) === extractOutputHash(txPreimage))
   }
 
   /** seller reclaims an unsold listing after the deadline. */
-  public refund (txPreimage: SigHashPreimage, sig: Sig, pubKey: PubKey, changeSats: bigint) {
+  public refund (sig: Sig, pubKey: PubKey, changeSats: bigint, txPreimage: SigHashPreimage) {
     assert(checkPreimage(txPreimage))
     assert(hash160(pubKey) === this.sellerPkh)
     assert(checkSig(sig, pubKey))
     assert(extractLocktime(txPreimage) >= this.refundAfter)
-    const fee = extractAmount(txPreimage) - changeSats
-    assert(fee <= this.maxFee)
-    const outs = this.out(changeSats, this.p2pkh(this.sellerPkh))
-    assert(hash256(outs) === extractOutputHash(txPreimage))
+    assert(extractAmount(txPreimage) - changeSats <= this.maxFee)
+    assert(hash256(this.out(changeSats, this.p2pkh(this.sellerPkh))) === extractOutputHash(txPreimage))
   }
 }

@@ -144,13 +144,20 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   take a deposit without revealing:
   1. `saleOffer` (seller): wraps a value to a buyer pubkey (BRC-42; omit
      `buyerPub` for public plaintext) and returns the covenant cfg +
-     committed `wrapped`. `saleOfferMemory` is the memory-bound variant —
-     the payload is the record's canonical `serializeFragment` bytes and
-     the returned `commitment {leaf, anchorTxid, hdp}` lets the buyer
-     verify inclusion before funding.
-  2. `saleEscrow` (buyer): completes the cfg with its own `depositorPkh`
-     and funds `DisclosureSaleHost(cfg).lockingScript()` from the
-     operator key. Deposit should be `price + maxFee + change margin`.
+     committed `wrapped` + `sellerPub`/`offerSig` — the seller's signed
+     offer attestation (§16/17 delegation signature; the buyer verifies
+     it before funding). `saleOfferMemory` is the memory-bound variant —
+     plaintext records sell `serializeFragment` bytes (`mode:"fragment"`);
+     **encrypted records sell the fragment key** (`mode:"key"` — the §7
+     decryption capability + ciphertext + provenance). The returned
+     `commitment {leaf, hdp, anchorTxid, authorPub, level, batchR, proof}`
+     carries the inclusion evidence π_i.
+  2. `saleEscrow` (buyer): pass `offer {sellerPub, offerSig, commitment}`
+     to verify the signed offer (refuses MITM-swapped cfgs) and the
+     leaf's inclusion path before funding; then completes the cfg with
+     its own `depositorPkh` and funds
+     `DisclosureSaleHost(cfg).lockingScript()` from the operator key.
+     Deposit should be `price + maxFee + change margin`.
   3. `saleComplete` (seller): spends the escrow via `buy` — `wrapped` is
      revealed on-chain in the same tx that pays the seller exactly
      `price` and returns change to the depositor. The covenant pins the
@@ -158,8 +165,11 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
      cannot reroute or burn the deposit.
   4. `saleClaim` (buyer): re-parses that buy tx, re-checks
      `sha256(wrapped)==hWrapped` and unwraps to the operator key. For
-     memory payloads it also recomputes
-     `computeLeaf(parseFragment(payload))` against the committed leaf.
+     `mode:"fragment"` it recomputes `computeLeaf(parseFragment(payload))`;
+     for `mode:"key"` it decrypts with the sold key and recomputes
+     `computeLeaf({d,p,hdp,E})`. Both verify the leaf against the
+     commitment and check the provenance σ (`authorVerified`) when the
+     record carries an author key + signature.
   5. `saleRefund` (buyer): if the seller never completes, the depositor
      reclaims the escrow after `refundAfter` — depositor-signed,
      locktime-gated.

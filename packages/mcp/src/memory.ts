@@ -205,6 +205,15 @@ export class MamemMemory {
     const u = await this.takeFunding(satoshis)
     return [u]
   }
+  /** §7 key-sale (GOAL-v7 V3): re-derive the fragment key for an encrypted
+   *  record — the decryption capability being sold. Caller must ensure the
+   *  record's level is within this instance's maxLevel. */
+  async fragmentKeyFor (rec: import('@mamem/log').LogRecord): Promise<Uint8Array> {
+    if (!this.opts.agentSeed) throw new Error('fragmentKeyFor: instance has no agentSeed (encryption disabled)')
+    const level = rec.level ?? 0
+    const { fragmentKey } = deriveFragmentKey(deriveLevelKey(this.opts.agentSeed, level), this.ctx(rec.shard, rec.seq, level))
+    return fragmentKey
+  }
   /** return a tx output to the reserve as owned (change/escrow outs) */
   addOwnedOut (tx: import('@bsv/sdk').Transaction, vout: number): void {
     ;(this.funder as any).addOwned?.(tx, vout)

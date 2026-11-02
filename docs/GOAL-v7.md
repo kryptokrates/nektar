@@ -174,14 +174,21 @@ depositorPkh` + `checkSig` + `extractLocktime >= refundAfter` +
 `extractAmount - changeSats <= maxFee` + change → `depositorPkh`.
 
 Flow (two agents, no trusted third party):
-1. seller `saleOffer` — wraps `wrapped` (BRC-42 to the buyer, or
-   plaintext `{field,salt,path}` for public sales) → cfg + wrapped.
-2. buyer `saleEscrow` — completes cfg with own `depositorPkh`, funds the
-   escrow from the operator key (`buildEscrow` — signed P2PKH inputs).
+1. seller `saleOffer`/`saleOfferMemory` — wraps `wrapped` (BRC-42 to the
+   buyer, or plaintext `{field,salt,path}` for public sales) → cfg +
+   wrapped + **`offerSig`** — the §16/§17 delegation signature
+   `σ_seller = Sign(H(cfg‖buyerPub‖leaf))` giving the buyer a
+   non-repudiable "this seller offered this commitment" attestation.
+2. buyer `saleEscrow` — verifies `offerSig` (refuses MITM-substituted
+   cfgs) and, when the commitment carries it, the leaf's inclusion path
+   (`reconstructRoot == batchR`) BEFORE funding; then completes cfg with
+   own `depositorPkh` and funds the escrow (`buildEscrow`).
 3. seller `saleComplete` — `buildBuy` reveals wrapped; the same tx pays
    `price` to the seller and returns change to the depositor.
 4. buyer `saleClaim` — reads `wrapped` back out of the buy tx's
-   unlocking script, verifies `sha256`, unwraps.
+   unlocking script, verifies `sha256`, unwraps, and for memory
+   payloads recomputes `computeLeaf` + verifies the provenance σ
+   (`authorVerified`) against the recorded `authorPub`.
 5. If the seller ghosts, `saleRefund` — depositor-signed, only valid at
    or after `refundAfter`.
 
@@ -189,12 +196,16 @@ Flow (two agents, no trusted third party):
 the buyer) — on-chain exposure is safe; or plaintext `{field,salt,path}` for
 paid *public* disclosure.
 
-Memory-bound payloads: `saleOfferMemory` sells a stored record — the
-payload is the record's canonical `serializeFragment` bytes and the tool
-returns a `commitment {leaf, anchorTxid, hdp}` the buyer checks before
-funding; `saleClaim` recomputes `computeLeaf(parseFragment(payload))`
-against the committed leaf (the ZKCP "verify before paying" concept
-mapped onto the anchored Merkle root).
+Memory-bound payloads (paper `f_i = {c_i, H(d_i), π_i}` shape):
+`saleOfferMemory` has two modes — a *plaintext* record sells its
+canonical `serializeFragment` bytes (`mode: "fragment"`); an *encrypted*
+record sells its **fragment key** (`mode: "key"`) — the §7 decryption
+capability `K_sym` — plus the stored ciphertext `E` and provenance, so
+the buyer's claim path is exactly the paper's: unwrap →
+`decryptFragment` → rebuild `{d, p, hdp, E}` → `computeLeaf` == the
+anchored leaf. The commitment carries `{leaf, hdp, anchorTxid,
+authorPub, level, batchR, proof:{path, leafIndex, n, size}}` — the
+inclusion evidence π_i the buyer checks pre-funding.
 
 Host: `packages/anchor/src/sale.ts` (`DisclosureSaleHost`) —
 `escrowScript` (buyer self-builds), `buildEscrow` (async, signs funding),
@@ -233,6 +244,19 @@ What application-level verification cannot close:
 - **Truth vs. inclusion** — a verified record proves it was written and
   anchored, not that the statement is true; a lie, once written, is
   preserved and marked.
+- **Anchor σ_n lives in the input, not the payload** — Appendix D's
+  schema carries `σ_n = Sign_skA(R_n‖t_n)` as an OP_RETURN field. Our
+  anchor binds authorship through the *covenant input's* owner signature
+  (consensus-enforced — the anchor cannot exist without it, which is a
+  strictly stronger binding) but a verifier reading only the output
+  cannot extract σ without resolving the spend. Divergence by design;
+  authorship is still verifiable from the tx's input script.
+- **Offer signature, not offer covenant** — `offerSig` covers cfg+leaf
+  off-chain (§16/17 delegation pattern); an on-chain commitment of the
+  offer itself would need a second covenant. A MITM can still *forward*
+  a valid offer to a third buyer (they'd just be a relay — the signed
+  offer doesn't name the depositor; the buyer binds `depositorPkh` at
+  escrow time, so relaying is harmless).
 
 Verification-distinction matrix to be kept current in `docs/PROOFS.md`:
 data-integrity · provenance · inclusion/finality · authorization ·

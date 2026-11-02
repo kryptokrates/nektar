@@ -226,12 +226,13 @@ export const TOOLS = [
   },
   {
     name: 'saleEscrow',
-    description: 'V3 DisclosureSale (buyer side): fund the escrow for a seller\'s cfg — deposits `amount` sats into DisclosureSale(cfg, depositorPkh=me) from the operator key. Requires MAMEM_PAID_DISCLOSURE.',
+    description: 'V3 DisclosureSale (buyer side): fund the escrow for a seller\'s cfg — deposits `amount` sats into DisclosureSale(cfg, depositorPkh=me) from the operator key. Pass `offer` (saleOffer result + commitment) to verify the seller\'s signed offer and the leaf\'s inclusion path BEFORE funding. Requires MAMEM_PAID_DISCLOSURE.',
     inputSchema: {
       type: 'object',
       properties: {
         cfg: { type: 'object', description: 'the seller cfg returned by saleOffer' },
-        amount: { type: 'number', description: 'escrow deposit — should be price + maxFee + change margin' }
+        amount: { type: 'number', description: 'escrow deposit — should be price + maxFee + change margin' },
+        offer: { type: 'object', description: 'optional {sellerPub, offerSig, commitment} — verified pre-funding (sig + leaf path)' }
       },
       required: ['cfg', 'amount']
     }
@@ -270,7 +271,8 @@ export const TOOLS = [
       properties: {
         txHex: { type: 'string' }, hWrapped: { type: 'string' },
         sellerPub: { type: 'string', description: 'needed to unwrap private (BRC-42) payloads' },
-        commitment: { type: 'object', description: 'optional {leaf, anchorTxid} from saleOfferMemory — verifies the bought bytes hash to the anchored leaf' }
+        offerMode: { type: 'string', description: '"key" for encrypted-record key sales, "fragment" or omit for plaintext fragment sales' },
+        commitment: { type: 'object', description: 'optional {leaf, hdp, authorPub, anchorTxid} from saleOfferMemory — verifies leaf inclusion + provenance σ' }
       },
       required: ['txHex', 'hWrapped']
     }
@@ -297,33 +299,70 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         buyerPub: args.buyerPub
       })
       // JSON-RPC cannot carry BigInt — cfg crosses the wire as plain numbers
-      return { cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) }, wrapped: r.wrapped }
+      return {
+        cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) },
+        wrapped: r.wrapped, sellerPub: r.sellerPub, offerSig: r.offerSig
+      }
     }
     case 'saleOfferMemory': {
-      const { offerDisclosure } = await import('@mamem/identity')
+      const { offerDisclosure, encodeKeySale } = await import('@mamem/identity')
       const { serializeFragment, computeLeaf, toHex } = await import('@mamem/core')
       const rec = (await mem.records(args.shard)).find(r => r.seq === args.seq)
       if (!rec) throw new Error(`no record seq ${args.seq} in shard "${args.shard}"`)
+      // Paper f_i = {c_i, H(d_i), π_i}: an encrypted record is sold as its
+      // FRAGMENT KEY (the §7 decryption capability) + ciphertext + provenance;
+      // a plaintext record is sold as its canonical serialized fragment.
+      let payload: Uint8Array
+      let mode: 'key' | 'fragment'
       if (rec.fragment.E && rec.fragment.E.length && !rec.fragment.d.length) {
-        throw new Error('encrypted records need the fragment-key channel — deferred; sell plaintext records')
+        payload = encodeKeySale(await mem.fragmentKeyFor(rec), rec.fragment.E, rec.fragment.p)
+        mode = 'key'
+      } else {
+        payload = serializeFragment(rec.fragment)
+        mode = 'fragment'
       }
-      const payload = serializeFragment(rec.fragment)
+      const leafHex = toHex(rec.leaf ?? computeLeaf(rec.fragment))
+      // π_i — the record's inclusion proof — goes into the commitment so the
+      // buyer verifies leaf∈anchored-batch BEFORE funding (ZKCP verify-before-pay).
+      const { bundle } = await mem.prove(args.shard, args.seq)
       const r = offerDisclosure({
         sellerKey: mem.operatorKey(), value: payload,
         price: BigInt(args.price), refundAfter: BigInt(args.refundAfter), maxFee: BigInt(args.maxFee),
-        buyerPub: args.buyerPub
+        buyerPub: args.buyerPub, leaf: leafHex
       })
       return {
         cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) },
-        wrapped: r.wrapped,
+        wrapped: r.wrapped, sellerPub: r.sellerPub, offerSig: r.offerSig, mode,
         commitment: {
-          leaf: toHex(rec.leaf ?? computeLeaf(rec.fragment)), anchorTxid: rec.anchorTxid ?? null,
-          hdp: toHex(rec.hdp), shard: args.shard, seq: args.seq
+          leaf: leafHex, anchorTxid: rec.anchorTxid ?? null,
+          hdp: toHex(rec.hdp), shard: args.shard, seq: args.seq,
+          authorPub: rec.authorPub ?? null, level: rec.level ?? 0,
+          batchR: bundle?.anchor.R ?? null,
+          proof: bundle ? { path: bundle.path, leafIndex: bundle.leafIndex, n: bundle.n, size: bundle.size } : null
         }
       }
     }
     case 'saleEscrow': {
       const { DisclosureSaleHost } = await import('@mamem/anchor')
+      // §16/17 delegation-sig check: refuse to fund an escrow for a cfg the
+      // seller never signed — blocks MITM cfg-swap griefing (deposit lockup).
+      if (args.offer) {
+        const { verifyOfferSig } = await import('@mamem/identity')
+        const { reconstructRoot, toHex: th, fromHex: fh } = await import('@mamem/core')
+        const buyerPub = mem.operatorKey().toPublicKey().toString()
+        const leaf = args.offer.commitment?.leaf ?? ''
+        if (!verifyOfferSig(
+          { cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig },
+          buyerPub, leaf
+        )) throw new Error('saleEscrow: offerSig does not verify — cfg may have been substituted')
+        // π_i pre-funding check: if the commitment carries a path, the leaf
+        // must rebuild the committed batch root — catch a bogus leaf early.
+        const proof = args.offer.commitment?.proof
+        if (proof?.path && args.offer.commitment?.batchR) {
+          const root = reconstructRoot(fh(leaf), { index: proof.leafIndex, siblings: proof.path.map((h: string) => fh(h)) })
+          if (th(root) !== args.offer.commitment.batchR) throw new Error('saleEscrow: leaf path does not reach the committed batch root')
+        }
+      }
       const depositorPkh = Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
       const host = new DisclosureSaleHost({
         ...args.cfg, depositorPkh,
@@ -367,13 +406,34 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       const out: any = { mode: r.mode, valueHex: Buffer.from(r.value).toString('hex') }
       // memory-bound payload? verify the bought bytes hash to the anchored leaf
       if (args.commitment?.leaf) {
-        const { parseFragment, computeLeaf, toHex } = await import('@mamem/core')
+        const { parseFragment, computeLeaf, toHex, fromHex } = await import('@mamem/core')
         try {
-          const frag = parseFragment(r.value)
-          out.verified = toHex(computeLeaf(frag)) === args.commitment.leaf
+          if (args.offerMode === 'key') {
+            // key-sale: payload carries the fragment key — decrypt E, rebuild
+            // the fragment, then the same leaf check proves inclusion.
+            const { claimKeySale } = await import('@mamem/identity')
+            const { verifyProvenance } = await import('@mamem/log')
+            const { d, p, E } = claimKeySale(r.value)
+            const frag = { d, p, hdp: args.commitment.hdp ? fromHex(args.commitment.hdp) : undefined, E }
+            out.verified = toHex(computeLeaf(frag as any)) === args.commitment.leaf
+            if (out.verified && args.commitment.authorPub && p.signature.length) {
+              out.authorVerified = verifyProvenance(args.commitment.authorPub, d, p)
+            }
+            out.valueHex = Buffer.from(d).toString('hex')
+            out.decrypted = true
+          } else {
+            const frag = parseFragment(r.value)
+            out.verified = toHex(computeLeaf(frag)) === args.commitment.leaf
+            // §16/19: a bought memory must carry verifiable authorship —
+            // check the provenance σ against the recorded author key.
+            if (out.verified && args.commitment.authorPub && frag.p.signature.length) {
+              const { verifyProvenance } = await import('@mamem/log')
+              out.authorVerified = verifyProvenance(args.commitment.authorPub, frag.d, frag.p)
+            }
+          }
           if (out.verified && args.commitment.anchorTxid) out.anchorTxid = args.commitment.anchorTxid
           if (!out.verified) out.reason = 'computeLeaf(payload) != committed leaf'
-        } catch (e) { out.verified = false; out.reason = `payload is not a serialized fragment: ${(e as Error).message}` }
+        } catch (e) { out.verified = false; out.reason = `payload verification failed: ${(e as Error).message}` }
       }
       return out
     }

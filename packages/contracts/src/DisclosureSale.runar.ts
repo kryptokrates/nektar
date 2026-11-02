@@ -13,6 +13,7 @@
 import {
   SmartContract,
   assert, checkSig, checkPreimage, extractOutputHash, extractAmount, extractLocktime,
+  extractHashPrevouts, extractOutpoint,
   sha256, hash160, hash256, cat, len, num2bin, toByteString,
   type PubKey, type Sig, type SigHashPreimage, type Sha256, type ByteString
 } from 'runar-lang'
@@ -24,8 +25,9 @@ export class DisclosureSale extends SmartContract {
   readonly refundAfter: bigint
   readonly maxFee: bigint
   readonly depositorPkh: ByteString
+  readonly verdictOutpoint: ByteString
 
-  constructor (sellerPkh: ByteString, price: bigint, hWrapped: Sha256, refundAfter: bigint, maxFee: bigint, depositorPkh: ByteString) {
+  constructor (sellerPkh: ByteString, price: bigint, hWrapped: Sha256, refundAfter: bigint, maxFee: bigint, depositorPkh: ByteString, verdictOutpoint: ByteString) {
     super()
     this.sellerPkh = sellerPkh
     this.price = price
@@ -33,6 +35,7 @@ export class DisclosureSale extends SmartContract {
     this.refundAfter = refundAfter
     this.maxFee = maxFee
     this.depositorPkh = depositorPkh
+    this.verdictOutpoint = verdictOutpoint
   }
 
   private p2pkh (pkh: ByteString): ByteString {
@@ -55,6 +58,23 @@ export class DisclosureSale extends SmartContract {
   public buy (wrapped: ByteString, changeSats: bigint, txPreimage: SigHashPreimage) {
     assert(checkPreimage(txPreimage))
     assert(sha256(wrapped) === this.hWrapped)
+    assert(extractAmount(txPreimage) - this.price - changeSats <= this.maxFee)
+    assert(hash256(cat(
+      this.out(this.price, this.p2pkh(this.sellerPkh)),
+      this.out(changeSats, this.p2pkh(this.depositorPkh)))) === extractOutputHash(txPreimage))
+  }
+
+  /** GOAL-v9 consumer hook: same atomic buy, but GATED on a settled
+   *  claim — input1 must be the ClaimVerdict UTXO the depositor
+   *  committed at escrow-deploy (`verdictOutpoint` baked at construction,
+   *  i.e. the sale is created after the claim settles). The verdict's
+   *  own script then enforces the payee payout — pay-iff-settled. */
+  public buyGated (wrapped: ByteString, changeSats: bigint, prevouts: ByteString, txPreimage: SigHashPreimage) {
+    assert(checkPreimage(txPreimage))
+    assert(sha256(wrapped) === this.hWrapped)
+    // exactly two inputs, input1 = the committed verdict UTXO
+    assert(hash256(prevouts) === extractHashPrevouts(txPreimage))
+    assert(prevouts === cat(extractOutpoint(txPreimage), this.verdictOutpoint))
     assert(extractAmount(txPreimage) - this.price - changeSats <= this.maxFee)
     assert(hash256(cat(
       this.out(this.price, this.p2pkh(this.sellerPkh)),

@@ -2,6 +2,8 @@ import { RunarContract, MockProvider, LocalSigner } from 'runar-sdk'
 import { readFileSync } from 'node:fs'
 const { Spend, Transaction, Hash, Transaction: BsvTransaction, LockingScript, UnlockingScript } = await import('@bsv/sdk')
 const art = JSON.parse(readFileSync('MamemZkClaim.json', 'utf8'))
+const vArt = JSON.parse(readFileSync('ClaimVerdict.json', 'utf8'))
+const VCR = vArt.script // ClaimVerdict codePart, baked into claim state
 const prover = new LocalSigner('11'.repeat(32)); const challenger = new LocalSigner('22'.repeat(32))
 const pk = await prover.getPublicKey(); const cpk = await challenger.getPublicKey()
 const pkh = x => Buffer.from(Hash.hash160(Buffer.from(x,'hex'))).toString('hex')
@@ -38,11 +40,11 @@ const evalSpend = (prov,tag,idx=0,srcIdx=1)=>{
 const newProv = ()=>{const p=new MockProvider('testnet');p.addUtxo('1Q1pE5vPGEEMqRcVRMbtBK842Y6Pzo6nK9',{txid:'ab'.repeat(32),outputIndex:0,satoshis:1e6,script:''});return p}
 const deploy = async (prov,opts={})=>{
   const {deadline=1000n,window=100n,stages=4n}=opts
-  const ctor=[0n,RH,JR,10n,QID,5000n,deadline,0n,Z,0n,stages,Z,pkh(pk),1000n,window,stages]
+  const ctor=[0n,RH,JR,10n,QID,5000n,deadline,0n,Z,0n,stages,Z,pkh(pk),1000n,window,stages,VCR]
   const c=new RunarContract(art,ctor);c.connect(prov,prover);await c.deploy({satoshis:5000})
   return c
 }
-const st0 = (over={})=>({status:0n,receiptHash:RH,journalRoot:JR,journalSize:10n,queryId:QID,bondSats:5000n,deadline:1000n,responseDeadline:0n,challengerPkh:Z,bisectLo:0n,bisectHi:4n,midCommit:Z,proverPkh:pkh(pk),maxFee:1000n,window:100n,stages:4n,...over})
+const st0 = (over={})=>({status:0n,receiptHash:RH,journalRoot:JR,journalSize:10n,queryId:QID,bondSats:5000n,deadline:1000n,responseDeadline:0n,challengerPkh:Z,bisectLo:0n,bisectHi:4n,midCommit:Z,proverPkh:pkh(pk),maxFee:1000n,window:100n,stages:4n,verdictCode:VCR,...over})
 const pkh_addr = await prover.getAddress(); const cpk_addr = await challenger.getAddress()
 const fund = (prov,who,amt=6000)=>prov.addUtxo(who===prover?pkh_addr:cpk_addr,{txid:Math.random().toString(16).slice(2).padEnd(64,'0').slice(0,64),outputIndex:0,satoshis:amt,script:''})
 
@@ -68,11 +70,22 @@ const callTerminal = async (c, method, args, prov, signer, outputs, changePkh) =
 // ── 1. settle (happy path): deadline=0 so locktime 0 passes ──
 {
   const prov=newProv()
-  const ctor=[0n,RH,JR,10n,QID,5000n,0n,0n,Z,0n,4n,Z,pkh(pk),1000n,100n,4n]
+  const ctor=[0n,RH,JR,10n,QID,5000n,0n,0n,Z,0n,4n,Z,pkh(pk),1000n,100n,4n,VCR]
   const c=new RunarContract(art,ctor);c.connect(prov,prover);await c.deploy({satoshis:5000})
-  const verdict='6a'+RH+JR+QID
-  await callTerminal(c,'settle',[null,pk,4990n],prov,prover,[{scriptHex:verdict,satoshis:1},{scriptHex:p2pkhScript(pkh(pk)),satoshis:4990}],pkh(pk))
+  // ClaimVerdict UTXO: codePart + 6a + len-prefixed {receiptHash, journalRoot, queryId, payeePkh}
+  const { serializeState } = await import('runar-sdk')
+  const vstate = serializeState(vArt.stateFields, { receiptHash: RH, journalRoot: JR, queryId: QID, payeePkh: pkh(pk) })
+  const verdict = VCR + '6a' + vstate
+  await callTerminal(c,'settle',[null,pk,4980n,10n],prov,prover,[{scriptHex:verdict,satoshis:10},{scriptHex:p2pkhScript(pkh(pk)),satoshis:4980}],pkh(pk))
   evalSpend(prov,'settle')
+  // the emitted verdict UTXO is a real ClaimVerdict — its authorize must also spend
+  {
+    const vtx = Transaction.fromHex(prov.getBroadcastedTxs().at(-1))
+    const vc = new RunarContract(vArt, [RH, JR, QID, pkh(pk)])
+    vc.currentUtxo = { txid: vtx.id('hex'), outputIndex: 0, satoshis: 10, script: verdict }
+    await callTerminal(vc, 'authorize', [9n], prov, prover, [{ scriptHex: p2pkhScript(pkh(pk)), satoshis: 9 }], pkh(pk))
+    evalSpend(prov, 'verdict-authorize')
+  }
 }
 // ── 2. challenge + reveal + bisect + proveStage ──
 {
@@ -175,5 +188,65 @@ const callTerminal = async (c, method, args, prov, signer, outputs, changePkh) =
   await c.call('reveal',[null,pk,MID],prov,prover,{newState:st0({status:2n,challengerPkh:pkh(cpk),responseDeadline:0n,midCommit:MID,window:0n})})
   await callTerminal(c,'slashTimeout',[null,cpk,4990n],prov,challenger,[{scriptHex:p2pkhScript(pkh(cpk)),satoshis:4990}],pkh(cpk))
   evalSpend(prov,'slashTimeout',0,1)
+}
+// ── 5. consumer hook: DisclosureSale.buyGated on a settled verdict ──
+// settle emits the ClaimVerdict UTXO → depositor deploys a sale gated on
+// its outpoint → buyGated requires [sale, verdict] inputs; the verdict's
+// authorize enforces the payee payout. Both scripts execute.
+{
+  const prov=newProv()
+  const { serializeState } = await import('runar-sdk')
+  const ctor=[0n,RH,JR,10n,QID,5000n,0n,0n,Z,0n,4n,Z,pkh(pk),1000n,100n,4n,VCR]
+  const c=new RunarContract(art,ctor);c.connect(prov,prover);await c.deploy({satoshis:5000})
+  const vstate = serializeState(vArt.stateFields, { receiptHash: RH, journalRoot: JR, queryId: QID, payeePkh: pkh(pk) })
+  const verdict = VCR + '6a' + vstate
+  await callTerminal(c,'settle',[null,pk,4980n,10n],prov,prover,[{scriptHex:verdict,satoshis:10},{scriptHex:p2pkhScript(pkh(pk)),satoshis:4980}],pkh(pk))
+  const vtx = Transaction.fromHex(prov.getBroadcastedTxs().at(-1))
+  const vUtxo = { txid: vtx.id('hex'), outputIndex: 0, satoshis: 10, script: verdict }
+  const vOp = Buffer.concat([Buffer.from(vUtxo.txid,'hex').reverse(),Buffer.from([0,0,0,0])]).toString('hex')
+
+  // deploy the gated sale (depositor=buyer; seller=prover whose claim settled)
+  const sArt = JSON.parse(readFileSync('DisclosureSale.json','utf8'))
+  const WRAPPED = 'f1'.repeat(64)
+  const hw = Buffer.from(Hash.sha256(Buffer.from(WRAPPED,'hex'))).toString('hex')
+  const saleCtor = [pkh(pk), 3000n, hw, 0n, 1000n, pkh(cpk), vOp]
+  const sale = new RunarContract(sArt, saleCtor)
+  fund(prov, challenger)
+  sale.connect(prov, challenger); await sale.deploy({ satoshis: 4000 })
+  const sUtxo = sale.currentUtxo
+  const sOp = Buffer.concat([Buffer.from(sUtxo.txid,'hex').reverse(),Buffer.from([0,0,0,0])]).toString('hex')
+  const prevouts = sOp + vOp
+
+  const tx = new BsvTransaction()
+  tx.addInput({ sourceTXID: sUtxo.txid, sourceOutputIndex: sUtxo.outputIndex, unlockingScript: UnlockingScript.fromHex('00'), sequence: 0xffffffff })
+  tx.addInput({ sourceTXID: vUtxo.txid, sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex('00'), sequence: 0xffffffff })
+  tx.addOutput({ satoshis: 3000, lockingScript: LockingScript.fromHex(p2pkhScript(pkh(pk))) })   // pay seller (verdict payee)
+  tx.addOutput({ satoshis: 900, lockingScript: LockingScript.fromHex(p2pkhScript(pkh(cpk))) }) // change → depositor
+  // sale leg: [wrapped][changeSats][prevouts][preimage][sel=buyGated]
+  const sPub = sArt.abi.methods.filter(m => m.isPublic)
+  const sIdx = sPub.findIndex(m => m.name === 'buyGated')
+  const { sigHex: sSig, preimageHex: sPre } = sale.computeOpPushTxWithCodeSep(tx, 0, sUtxo.script, sUtxo.satoshis, sIdx)
+  tx.inputs[0].unlockingScript = UnlockingScript.fromHex(
+    encPush(sSig) + sale.buildUnlockingScript('buyGated', [WRAPPED, 900n, prevouts, sPre]))
+  // verdict leg: [codePart][opSig][paySats][changePKH][changeAmt][preimage][sel=authorize]
+  const vc = new RunarContract(vArt, [RH, JR, QID, pkh(pk)])
+  const vPub = vArt.abi.methods.filter(m => m.isPublic)
+  const vIdx = vPub.findIndex(m => m.name === 'authorize')
+  const { sigHex: vSig2, preimageHex: vPre2 } = vc.computeOpPushTxWithCodeSep(tx, 1, vUtxo.script, vUtxo.satoshis, vIdx)
+  // single-method contract → no selector push (SDK emits 6 items exactly)
+  tx.inputs[1].unlockingScript = UnlockingScript.fromHex(
+    vc.buildStatefulPrefix(vSig2, true) + encArg(3000n) + encPush(pkh(cpk)) + encNum(900n) + encPush(vPre2))
+  await prov.broadcast(tx)
+  evalSpend(prov, 'buyGated', 0, 1)
+  // verdict input executes too — enforces payee payout under consensus
+  {
+    const st = Transaction.fromHex(prov.getBroadcastedTxs().at(-1))
+    const sp = new Spend({ sourceTXID: vUtxo.txid, sourceOutputIndex: 0, sourceSatoshis: 10,
+      lockingScript: LockingScript.fromHex(vUtxo.script), transactionVersion: st.version,
+      otherInputs: st.inputs.filter((_, i) => i !== 1), outputs: st.outputs, inputIndex: 1,
+      unlockingScript: st.inputs[1].unlockingScript, inputSequence: 0xffffffff,
+      lockTime: 0, isRelaxed: true })
+    try { sp.validate(); console.log('verdict-in-sale VALID ops:', sp.executedOpCount); PASS++ } catch (e) { console.log('verdict-in-sale FAIL:', e.message.slice(0, 80)); FAILS.push('verdict-in-sale') }
+  }
 }
 console.log(`\n=== ${PASS} passed, ${FAILS.length} failed: ${FAILS.join(',')}`)

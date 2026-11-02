@@ -334,12 +334,14 @@ per-op cost.
 
 ### Stage 1 — optimistic claim contract (the shippable artifact)
 
-- `MamemZkClaim` covenant ✅ **interpreter-green (10/10 spends)**:
-  `settle` (deadline + verdict OP_RETURN binding receiptHash‖journalRoot‖
-  queryId + bond return, 222 ops), `challenge` (306), `reveal` (294),
-  `bisect` (352, arithmetic-select midpoint — see §4.5 note), `proveStage`
-  leaf (225, real `hashPrevouts`+outpoint co-spend pin), `claimTimeout`/
-  `slashTimeout` (218). Canonical eval: `packages/contracts/claim-lifecycle.mjs`.
+- `MamemZkClaim` covenant ✅ **interpreter-green (14/14 spends)**:
+  `settle` (deadline + `ClaimVerdict` covenant output + bond return,
+  277 ops), `challenge` (346), `reveal` (334), `bisect` (392,
+  arithmetic-select midpoint — see §4.5 note), `proveStage` leaf (270,
+  real `hashPrevouts`+outpoint co-spend pin + real stage UTXO),
+  `claimTimeout`/`slashTimeout` (239), `verdict-authorize` (112),
+  `buyGated` (95), `verdict-in-sale` (112). Canonical eval:
+  `packages/contracts/claim-lifecycle.mjs`.
 - `Poseidon2Stage` family — 29 round-variants (constants baked) —
   now co-spendable: `fullStep`/`partialStep` take `(postSats,
   postScript)` and emit `addRawOutput` after their `addOutput`
@@ -348,8 +350,13 @@ per-op cost.
   (VALID 1,373 ops input-side; claim side 249 ops).
 - Bisection protocol spec: state-commitment format, response windows
   (nLockTime), bond amounts, who-watch duty documented.
-- Consumer hooks: `DisclosureSale`/`MamemCheckpointBond` read a settled
-  claim UTXO as their proof gate — **pay-iff-claimed-and-unchallenged**.
+- Consumer hooks ✅: `settle` emits a `ClaimVerdict` covenant UTXO
+  (state = receiptHash ‖ journalRoot ‖ queryId ‖ payeePkh, 297B
+  codePart baked into claim state). `DisclosureSale.buyGated` pins the
+  committed verdict outpoint as input1 (`hash256(prevouts) ==
+  hashPrevouts` + exact two-input pin) — pay-iff-settled; the verdict's
+  own `authorize` enforces the payee payout inside the same tx.
+  Interpreter-green 14/14 incl. `verdict-in-sale`.
 - Known SDK gap (callers, not consensus): terminal methods need the
   `[codePart][opSig][args][changePKH][changeAmount][preimage][selector]`
   unlock layout + trailing 0-sat change output; `call()` doesn't emit it
@@ -407,13 +414,14 @@ per-op cost.
 - Stage 0 ✅ done: @bsv/sdk `Spend` interpreter (consensus semantics —
   stronger than MockChain ANF), `isRelaxed` Chronicle rules; measured
   ops/bytes per component and per covenant stage.
-- Stage 1: interpreter lifecycle ✅ 11/11 (`claim-lifecycle.mjs`);
-  regtest e2e ✅ ALL PASS (`e2e-claim-regtest.mjs` — settle, challenge,
-  reveal, bisect×2 to leaf, proveStage co-spend **with a real
-  `Poseidon2Stage` UTXO as the leaf** — both contracts' scripts execute
-  under consensus in the same tx, shared `[stageCont, payout, change]`
-  output enumeration — plus both timeouts, all accepted by Teranode
-  mempool). Remaining: consumer hooks.
+- Stage 1: interpreter lifecycle ✅ 14/14 (`claim-lifecycle.mjs` —
+  full dispute lifecycle + `settle` emitting the `ClaimVerdict`
+  covenant + `verdict-authorize` + `DisclosureSale.buyGated` and the
+  verdict's own `authorize` inside the gated sale tx); regtest e2e ✅
+  ALL PASS (`e2e-claim-regtest.mjs` — settle with verdict emission,
+  challenge, reveal, bisect×2 to leaf, proveStage co-spend **with a
+  real `Poseidon2Stage` UTXO as the leaf**, both timeouts, all accepted
+  by Teranode mempool).
 - Stage 2: per-stage vectors + `zkm2-n5i4` fixture e2e on MockChain +
   regtest; real-sats cost table.
 - Repo gates unchanged: `pnpm -r build`, `check-deps`, `pnpm -r test`,

@@ -1,0 +1,846 @@
+{
+  "version": "runar-v0.4.6",
+  "compilerVersion": "0.4.6",
+  "contractName": "ClaimVerdict",
+  "abi": {
+    "constructor": {
+      "params": [
+        {
+          "name": "receiptHash",
+          "type": "ByteString"
+        },
+        {
+          "name": "journalRoot",
+          "type": "ByteString"
+        },
+        {
+          "name": "queryId",
+          "type": "ByteString"
+        },
+        {
+          "name": "payeePkh",
+          "type": "ByteString"
+        }
+      ]
+    },
+    "methods": [
+      {
+        "name": "authorize",
+        "params": [
+          {
+            "name": "paySats",
+            "type": "bigint"
+          },
+          {
+            "name": "txPreimage",
+            "type": "SigHashPreimage"
+          }
+        ],
+        "isPublic": true,
+        "isTerminal": true
+      }
+    ]
+  },
+  "script": "76ab557a210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ad697601687f7782012c947f758258947f75517f7c7601007e8102fd009f63756775527f77685579827751947f77517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f686875577951a269577a0376a91452790288ac7e7e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e577a577a041976a9147b7e0288ac7e7c58807c7e7eaa557a820128947f7701207f75877777777777",
+  "asm": "OP_DUP OP_CODESEPARATOR OP_5 OP_ROLL <0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798> OP_CHECKSIGVERIFY OP_VERIFY OP_DUP <68> OP_SPLIT OP_NIP OP_SIZE <2c> OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP OP_DUP <00> OP_CAT OP_BIN2NUM <fd00> OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_5 OP_PICK OP_SIZE OP_NIP OP_1 OP_SUB OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_DROP OP_7 OP_PICK OP_1 OP_GREATERTHANOREQUAL OP_VERIFY OP_7 OP_ROLL <76a914> OP_2 OP_PICK <88ac> OP_CAT OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_7 OP_ROLL OP_7 OP_ROLL <1976a914> OP_ROT OP_CAT <88ac> OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_CAT OP_HASH256 OP_5 OP_ROLL OP_SIZE <28> OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP",
+  "buildTimestamp": "2026-11-02T16:02:04.523Z",
+  "sourceMap": {
+    "mappings": [
+      {
+        "opcodeIndex": 163,
+        "sourceFile": "contract.ts",
+        "line": 38,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 164,
+        "sourceFile": "contract.ts",
+        "line": 38,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 165,
+        "sourceFile": "contract.ts",
+        "line": 38,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 166,
+        "sourceFile": "contract.ts",
+        "line": 38,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 167,
+        "sourceFile": "contract.ts",
+        "line": 38,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 168,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 169,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 170,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 171,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 172,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 173,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 174,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 175,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 176,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 177,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 178,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 179,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 180,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 181,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 182,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 183,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 184,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 185,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 186,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 187,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 188,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 189,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 190,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 191,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 192,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 193,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 194,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 195,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 196,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 197,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 198,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 199,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 200,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 201,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 202,
+        "sourceFile": "contract.ts",
+        "line": 39,
+        "column": 4
+      }
+    ]
+  },
+  "stateFields": [
+    {
+      "name": "receiptHash",
+      "type": "ByteString",
+      "index": 0
+    },
+    {
+      "name": "journalRoot",
+      "type": "ByteString",
+      "index": 1
+    },
+    {
+      "name": "queryId",
+      "type": "ByteString",
+      "index": 2
+    },
+    {
+      "name": "payeePkh",
+      "type": "ByteString",
+      "index": 3
+    }
+  ],
+  "anf": {
+    "contractName": "ClaimVerdict",
+    "properties": [
+      {
+        "name": "receiptHash",
+        "type": "ByteString",
+        "readonly": false
+      },
+      {
+        "name": "journalRoot",
+        "type": "ByteString",
+        "readonly": false
+      },
+      {
+        "name": "queryId",
+        "type": "ByteString",
+        "readonly": false
+      },
+      {
+        "name": "payeePkh",
+        "type": "ByteString",
+        "readonly": false
+      }
+    ],
+    "methods": [
+      {
+        "name": "constructor",
+        "params": [
+          {
+            "name": "receiptHash",
+            "type": "ByteString"
+          },
+          {
+            "name": "journalRoot",
+            "type": "ByteString"
+          },
+          {
+            "name": "queryId",
+            "type": "ByteString"
+          },
+          {
+            "name": "payeePkh",
+            "type": "ByteString"
+          }
+        ],
+        "body": [
+          {
+            "name": "t0",
+            "value": {
+              "kind": "load_prop",
+              "name": "receiptHash"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 26,
+              "column": 4
+            }
+          },
+          {
+            "name": "t1",
+            "value": {
+              "kind": "load_prop",
+              "name": "journalRoot"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 26,
+              "column": 4
+            }
+          },
+          {
+            "name": "t2",
+            "value": {
+              "kind": "load_prop",
+              "name": "queryId"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 26,
+              "column": 4
+            }
+          },
+          {
+            "name": "t3",
+            "value": {
+              "kind": "load_prop",
+              "name": "payeePkh"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 26,
+              "column": 4
+            }
+          },
+          {
+            "name": "t4",
+            "value": {
+              "kind": "call",
+              "func": "super",
+              "args": [
+                "t0",
+                "t1",
+                "t2",
+                "t3"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 26,
+              "column": 4
+            }
+          },
+          {
+            "name": "t5",
+            "value": {
+              "kind": "load_prop",
+              "name": "receiptHash"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 27,
+              "column": 4
+            }
+          },
+          {
+            "name": "t6",
+            "value": {
+              "kind": "update_prop",
+              "name": "receiptHash",
+              "value": "t5"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 27,
+              "column": 4
+            }
+          },
+          {
+            "name": "t7",
+            "value": {
+              "kind": "load_prop",
+              "name": "journalRoot"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 28,
+              "column": 4
+            }
+          },
+          {
+            "name": "t8",
+            "value": {
+              "kind": "update_prop",
+              "name": "journalRoot",
+              "value": "t7"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 28,
+              "column": 4
+            }
+          },
+          {
+            "name": "t9",
+            "value": {
+              "kind": "load_prop",
+              "name": "queryId"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 29,
+              "column": 4
+            }
+          },
+          {
+            "name": "t10",
+            "value": {
+              "kind": "update_prop",
+              "name": "queryId",
+              "value": "t9"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 29,
+              "column": 4
+            }
+          },
+          {
+            "name": "t11",
+            "value": {
+              "kind": "load_prop",
+              "name": "payeePkh"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 30,
+              "column": 4
+            }
+          },
+          {
+            "name": "t12",
+            "value": {
+              "kind": "update_prop",
+              "name": "payeePkh",
+              "value": "t11"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 30,
+              "column": 4
+            }
+          }
+        ],
+        "isPublic": false
+      },
+      {
+        "name": "authorize",
+        "params": [
+          {
+            "name": "paySats",
+            "type": "bigint"
+          },
+          {
+            "name": "_changePKH",
+            "type": "Ripemd160"
+          },
+          {
+            "name": "_changeAmount",
+            "type": "bigint"
+          },
+          {
+            "name": "txPreimage",
+            "type": "SigHashPreimage"
+          }
+        ],
+        "body": [
+          {
+            "name": "t0",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t1",
+            "value": {
+              "kind": "check_preimage",
+              "preimage": "t0"
+            }
+          },
+          {
+            "name": "t2",
+            "value": {
+              "kind": "assert",
+              "value": "t1"
+            }
+          },
+          {
+            "name": "t3",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t4",
+            "value": {
+              "kind": "deserialize_state",
+              "preimage": "t3"
+            }
+          },
+          {
+            "name": "t5",
+            "value": {
+              "kind": "load_param",
+              "name": "paySats"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 38,
+              "column": 4
+            }
+          },
+          {
+            "name": "t6",
+            "value": {
+              "kind": "load_const",
+              "value": "1"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 38,
+              "column": 4
+            }
+          },
+          {
+            "name": "t7",
+            "value": {
+              "kind": "bin_op",
+              "op": ">=",
+              "left": "t5",
+              "right": "t6"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 38,
+              "column": 4
+            }
+          },
+          {
+            "name": "t8",
+            "value": {
+              "kind": "assert",
+              "value": "t7"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 38,
+              "column": 4
+            }
+          },
+          {
+            "name": "t9",
+            "value": {
+              "kind": "load_param",
+              "name": "paySats"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 39,
+              "column": 4
+            }
+          },
+          {
+            "name": "t10",
+            "value": {
+              "kind": "load_const",
+              "value": "76a914"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 39,
+              "column": 4
+            }
+          },
+          {
+            "name": "t11",
+            "value": {
+              "kind": "call",
+              "func": "toByteString",
+              "args": [
+                "t10"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 39,
+              "column": 4
+            }
+          },
+          {
+            "name": "t12",
+            "value": {
+              "kind": "load_prop",
+              "name": "payeePkh"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 39,
+              "column": 4
+            }
+          },
+          {
+            "name": "t13",
+            "value": {
+              "kind": "load_const",
+              "value": "88ac"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 39,
+              "column": 4
+            }
+          },
+          {
+            "name": "t14",
+            "value": {
+              "kind": "call",
+              "func": "toByteString",
+              "args": [
+                "t13"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 39,
+              "column": 4
+            }
+          },
+          {
+            "name": "t15",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t12",
+                "t14"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 39,
+              "column": 4
+            }
+          },
+          {
+            "name": "t16",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t11",
+                "t15"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 39,
+              "column": 4
+            }
+          },
+          {
+            "name": "t17",
+            "value": {
+              "kind": "add_raw_output",
+              "satoshis": "t9",
+              "scriptBytes": "t16"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 39,
+              "column": 4
+            }
+          },
+          {
+            "name": "t18",
+            "value": {
+              "kind": "load_param",
+              "name": "_changePKH"
+            }
+          },
+          {
+            "name": "t19",
+            "value": {
+              "kind": "load_param",
+              "name": "_changeAmount"
+            }
+          },
+          {
+            "name": "t20",
+            "value": {
+              "kind": "call",
+              "func": "buildChangeOutput",
+              "args": [
+                "t18",
+                "t19"
+              ]
+            }
+          },
+          {
+            "name": "t21",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t17",
+                "t20"
+              ]
+            }
+          },
+          {
+            "name": "t22",
+            "value": {
+              "kind": "call",
+              "func": "hash256",
+              "args": [
+                "t21"
+              ]
+            }
+          },
+          {
+            "name": "t23",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t24",
+            "value": {
+              "kind": "call",
+              "func": "extractOutputHash",
+              "args": [
+                "t23"
+              ]
+            }
+          },
+          {
+            "name": "t25",
+            "value": {
+              "kind": "bin_op",
+              "op": "===",
+              "left": "t22",
+              "right": "t24",
+              "result_type": "bytes"
+            }
+          },
+          {
+            "name": "t26",
+            "value": {
+              "kind": "assert",
+              "value": "t25"
+            }
+          }
+        ],
+        "isPublic": true
+      }
+    ]
+  },
+  "codeSeparatorIndex": 1,
+  "codeSeparatorIndices": [
+    1
+  ]
+}

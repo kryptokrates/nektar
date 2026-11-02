@@ -18,7 +18,7 @@
 //   the co-spend requirement itself is already enforced by Script).
 import {
   StatefulSmartContract,
-  assert, checkSig, hash160, hash256, cat, toByteString,
+  assert, checkSig, hash160, hash256, cat, toByteString, len, num2bin,
   extractLocktime, extractAmount, extractHashPrevouts, extractOutpoint,
   type Sig, type PubKey, type ByteString, type Sha256
 } from 'runar-lang'
@@ -45,9 +45,10 @@ export class MamemZkClaim extends StatefulSmartContract {
   maxFee: bigint
   window: bigint             // response window per bisection step
   stages: bigint             // stage count of the verified program
+  verdictCode: ByteString    // ClaimVerdict artifact codePart — settle emits it
 
-  constructor (status: bigint, receiptHash: Sha256, journalRoot: ByteString, journalSize: bigint, queryId: ByteString, bondSats: bigint, deadline: bigint, responseDeadline: bigint, challengerPkh: ByteString, bisectLo: bigint, bisectHi: bigint, midCommit: Sha256, proverPkh: ByteString, maxFee: bigint, window: bigint, stages: bigint) {
-    super(status, receiptHash, journalRoot, journalSize, queryId, bondSats, deadline, responseDeadline, challengerPkh, bisectLo, bisectHi, midCommit, proverPkh, maxFee, window, stages)
+  constructor (status: bigint, receiptHash: Sha256, journalRoot: ByteString, journalSize: bigint, queryId: ByteString, bondSats: bigint, deadline: bigint, responseDeadline: bigint, challengerPkh: ByteString, bisectLo: bigint, bisectHi: bigint, midCommit: Sha256, proverPkh: ByteString, maxFee: bigint, window: bigint, stages: bigint, verdictCode: ByteString) {
+    super(status, receiptHash, journalRoot, journalSize, queryId, bondSats, deadline, responseDeadline, challengerPkh, bisectLo, bisectHi, midCommit, proverPkh, maxFee, window, stages, verdictCode)
     this.status = status
     this.receiptHash = receiptHash
     this.journalRoot = journalRoot
@@ -64,18 +65,25 @@ export class MamemZkClaim extends StatefulSmartContract {
     this.maxFee = maxFee
     this.window = window
     this.stages = stages
+    this.verdictCode = verdictCode
   }
 
-  /** HAPPY PATH: window expired unchallenged → verdict + bond back.
-   *  Verdict output binds (receiptHash ‖ journalRoot ‖ queryId) on-chain
-   *  — consumers reference the settled claim spend. */
-  public settle (sig: Sig, pubKey: PubKey, payoutSats: bigint) {
+  /** HAPPY PATH: window expired unchallenged → ClaimVerdict covenant +
+   *  bond back. Output[0] is a ClaimVerdict UTXO (verdictCode ‖ 6a ‖
+   *  len-prefixed state) — consumers pin its outpoint as their input1;
+   *  its own script enforces the payee payout when spent. */
+  public settle (sig: Sig, pubKey: PubKey, payoutSats: bigint, verdictSats: bigint) {
     assert(hash160(pubKey) === this.proverPkh)
     assert(checkSig(sig, pubKey))
     assert(this.status === 0n)
     assert(extractLocktime(this.txPreimage) >= this.deadline)
-    this.addRawOutput(1n, cat(toByteString('6a'), cat(this.receiptHash, cat(this.journalRoot, this.queryId))))
-    assert(extractAmount(this.txPreimage) - payoutSats <= this.maxFee + 1n)
+    const e1 = cat(num2bin(len(this.proverPkh), 1n), this.proverPkh)
+    const e2 = cat(num2bin(len(this.queryId), 1n), this.queryId)
+    const e3 = cat(num2bin(len(this.journalRoot), 1n), this.journalRoot)
+    const e4 = cat(num2bin(len(this.receiptHash), 1n), this.receiptHash)
+    const vstate = cat(e4, cat(e3, cat(e2, e1)))
+    this.addRawOutput(verdictSats, cat(this.verdictCode, cat(toByteString('6a'), vstate)))
+    assert(extractAmount(this.txPreimage) - payoutSats - verdictSats <= this.maxFee + 1n)
     this.addRawOutput(payoutSats, cat(toByteString('76a914'), cat(this.proverPkh, toByteString('88ac'))))
   }
 
@@ -91,7 +99,7 @@ export class MamemZkClaim extends StatefulSmartContract {
     this.bisectLo = 0n
     this.bisectHi = this.stages
     this.responseDeadline = extractLocktime(this.txPreimage) + this.window
-    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages)
+    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages, this.verdictCode)
   }
 
   /** prover posts the midpoint state commitment for the current range. */
@@ -102,7 +110,7 @@ export class MamemZkClaim extends StatefulSmartContract {
     assert(this.bisectHi - this.bisectLo > 1n)
     this.status = 2n
     this.midCommit = mid
-    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages)
+    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages, this.verdictCode)
   }
 
   /** challenger picks the divergent half after a reveal. */
@@ -124,7 +132,7 @@ export class MamemZkClaim extends StatefulSmartContract {
     this.status = rem > 1n ? 1n : 2n
     this.midCommit = '0000000000000000000000000000000000000000000000000000000000000000' as Sha256
     this.responseDeadline = extractLocktime(this.txPreimage) + this.window
-    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages)
+    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages, this.verdictCode)
   }
 
   /** LEAF: prover proves the single disputed stage by co-spending the

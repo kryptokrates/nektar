@@ -21,7 +21,7 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
     assert.equal((await fetch(`${base}/checkpoint/none`)).status, 404)
     chain.mine(1); mem.confirmAnchor('m', mem.tailLink('m')!.txid)
     const pr = await (await fetch(`${base}/proof/m/0`)).json() as { result: { ok: boolean }, bundle: unknown }
-    assert.deepEqual(pr.result, { ok: true }); assert.ok(pr.bundle)
+    assert.deepEqual(pr.result, { ok: true, settled: true, anchorState: 'mined' }); assert.ok(pr.bundle)
     const cp = await (await fetch(`${base}/checkpoint/m`)).json() as { checkpoint: Parameters<typeof verifyCheckpoint>[0], logPublicKey: string }
     assert.ok(verifyCheckpoint(cp.checkpoint, cp.logPublicKey), 'served checkpoint verifies')
     assert.equal((await post('nope', {})).status, 404)

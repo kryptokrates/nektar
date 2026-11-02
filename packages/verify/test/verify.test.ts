@@ -36,7 +36,7 @@ async function scenario () {
 test('verify: valid bundle verifies offline against headers', async () => {
   const { chain, bundle } = await scenario()
   const res = await verifyFragment(bundle, chain)
-  assert.deepEqual(res, { ok: true })
+  assert.deepEqual(res, { ok: true, settled: true, anchorState: 'mined' })
 })
 
 test('verify: tampered leaf rejected', async () => {
@@ -55,7 +55,7 @@ test('verify: broken anchor chain detected', async () => {
   assert.equal((res as any).reason, 'ChainInconsistent')
 })
 
-test('verify: unmined anchor fails SPV', async () => {
+test('verify: unmined anchor still verifies locally (settled=false)', async () => {
   const { bundle } = await scenario()
   // strip the BUMP inside the beef: rebuild tx without merklePath
   const { Transaction } = await import('@bsv/sdk')
@@ -63,8 +63,11 @@ test('verify: unmined anchor fails SPV', async () => {
   tx.merklePath = undefined as any
   bundle.anchorBEEF = tx.toAtomicBEEF()
   const res = await verifyFragment(bundle, new MockChain())
-  assert.equal(res.ok, false)
-  assert.equal((res as any).reason, 'NotMined')
+  // mining is settlement, not validity: leaf path + anchor fields + chain
+  // consistency all verify without a BUMP — the result reports unsettled
+  assert.equal(res.ok, true)
+  assert.equal((res as any).settled, false)
+  assert.equal((res as any).anchorState, 'broadcast')
 })
 
 // --- leaf-count binding (ADR-002) + tail authentication negatives ---

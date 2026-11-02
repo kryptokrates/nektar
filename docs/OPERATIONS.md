@@ -120,7 +120,7 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
 | `reserve dry: no funding UTXO available` | treasury exhausted | re-run (the treasury re-splits) or delete `.state/treasury.json` to re-bootstrap |
 | `script[serializedBytes] is not a function` | two `@bsv/sdk` versions in the graph | `pnpm why @bsv/sdk` must show one version; keep the `overrides` in `pnpm-workspace.yaml` |
 | `SCRIPT_INVALID … OP_EQUALVERIFY` on a new Rúnar method | runar 0.4.6 miscompiles (see migration-log) | distinct `const`s instead of reassigned `let`; every method continues state |
-| Verification `NotMined` for an older anchor | missing BUMP for that specific tx | attach each anchor's own BUMP (never a descendant's) |
+| Record proof reports `settled:false` / `anchorState:'broadcast'` | anchor broadcast but no BUMP attached yet | normal at 0-conf — the record is *anchored* (locally verified); `settled` upgrades when the confirmer attaches the BUMP. A `NotMined`/`BEEFInvalid` result from the STARK-anchored verifiers still means a genuinely missing or bogus BUMP |
 | finality stuck at 1 confirmation on regtest | `getblockchaininfo.blocks` lags `generatetoaddress` | the tracker's `tipHeight` uses the mined header height |
 | Long-running command | a bug, not slowness | stop, inspect, fix; never extend timeouts |
 

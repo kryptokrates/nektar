@@ -39,9 +39,14 @@ test('§8 delta: revisions stored as Δ; every version materialises from proven 
   assert.ok(stored.slice(1, 5).every(s => s.startsWith('delta:')), 'revisions are deltas, not full copies')
   assert.ok(stored[4]!.length < versions[4]!.length + 16)
   for (let i = 0; i < versions.length; i++) assert.equal(await mem.materialize('man', i), versions[i], `version ${i}`)
-  await mem.remember('man', 'unanchored base')
-  await mem.revise('man', 6, 'unanchored base v2')
-  await assert.rejects(() => mem.materialize('man', 7), /not provable/, 'unproven link refused')
+  // 0-conf semantics: the auto-anchored (broadcast, unmined) batch IS provable
+  // locally — mining is settlement, not validity — so the links materialize
+  await mem.remember('man', 'broadcast base')
+  await mem.revise('man', 6, 'broadcast base v2')
+  assert.equal(await mem.materialize('man', 7), 'broadcast base v2', 'unmined-but-anchored link is provable')
+  // a genuinely unanchored record (batch open, nothing broadcast) still refuses
+  await mem.remember('man', 'pending base')
+  await assert.rejects(() => mem.materialize('man', 8), /not provable/, 'unproven link refused')
 })
 
 test('§12 temporal: □_t, ◇_(t1,t2), obligations with deadlines, causal closure', () => {

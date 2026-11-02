@@ -17,7 +17,15 @@ export interface SaleConfig {
   hWrapped: string    // sha256(wrapped) — 32B hex
   refundAfter: bigint // locktime gate for depositor refund
   maxFee: bigint
+  /** 36B hex outpoint of the ClaimVerdict UTXO — binds the escrow to a
+   *  settled claim (buyGated only). Plain buy/refund escrows use the
+   *  null-outpoint sentinel; the field is baked into the locking script
+   *  either way, so every reconstruction must default identically. */
+  verdictOutpoint?: string
 }
+
+/** null outpoint (txid all-zero, vout 0) — sentinel for ungated escrows */
+export const NULL_VERDICT_OUTPOINT = '00'.repeat(36)
 
 /** cfg + the buyer's pkh — the full escrow instance. */
 export interface EscrowConfig extends SaleConfig { depositorPkh: string }
@@ -28,7 +36,8 @@ export class DisclosureSaleHost {
   private contract: RunarContract
   constructor (private cfg: EscrowConfig) {
     this.contract = new RunarContract(DISCLOSURESALE_ARTIFACT, [
-      cfg.sellerPkh, cfg.price, cfg.hWrapped, cfg.refundAfter, cfg.maxFee, cfg.depositorPkh
+      cfg.sellerPkh, cfg.price, cfg.hWrapped, cfg.refundAfter, cfg.maxFee, cfg.depositorPkh,
+      cfg.verdictOutpoint ?? NULL_VERDICT_OUTPOINT
     ])
   }
 
@@ -100,9 +109,12 @@ export class DisclosureSaleHost {
     tx.lockTime = lockTime
 
     const c = this.contract as any
-    const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, 1)
+    // codeSeparator index = refund's position among PUBLIC methods (claims.ts
+    // convention) — buyGated was inserted later, shifting refund to index 2
+    const rIdx = DISCLOSURESALE_ARTIFACT.abi.methods.filter((m: any) => m.isPublic).findIndex((m: any) => m.name === 'refund')
+    const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, rIdx)
     const sigSub = c.getSubscriptForSigning
-      ? c.getSubscriptForSigning(utxo.script, 1)
+      ? c.getSubscriptForSigning(utxo.script, rIdx)
       : utxo.script
     const sigPre = computeOpPushTx(tx, 0, sigSub, utxo.satoshis).preimageHex
     const sig = Buffer.from(depositorKey.sign(Array.from(Hash.sha256(Buffer.from(sigPre, 'hex')))).toDER()).toString('hex') + '41'

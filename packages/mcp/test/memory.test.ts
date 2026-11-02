@@ -30,7 +30,7 @@ test('mcp memory: remember → anchor → prove (verified)', async () => {
   settle('manual')
   const { bundle, result } = await mem.prove('manual', 0)
   assert.ok(bundle)
-  assert.deepEqual(result, { ok: true })
+  assert.deepEqual(result, { ok: true, settled: true, anchorState: 'mined' })
 })
 
 test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', async () => {
@@ -72,10 +72,15 @@ test('S6.1 regression: plaintext items are SPV-verified like encrypted ones (bro
   const good = await mem.recall('s')
   assert.equal(good.receipt.checkResult, 'verified', 'unencrypted anchored records verify')
   assert.deepEqual(good.items.map(i => i.text), ['fact one', 'fact two'])
-  // break the anchor: the BUMP disappears → every returned record is marked
-  // unverifiable with a reason, none is served, the receipt is honest
+  // 0-conf semantics: BUMP absent means broadcast, NOT broken — records still
+  // verify locally (leaf path + anchor fields + chain consistency all check)
   const txid = mem.tailLink('s')!.txid
   ;(mem as any).anchorTxs.get(txid)!.merklePath = undefined
+  const bcast = await mem.recall('s')
+  assert.equal(bcast.receipt.checkResult, 'verified', 'unmined anchor still verifies locally')
+  // a genuinely broken anchor (tx gone / BEEF unusable) still fails: every
+  // returned record is marked unverifiable with a reason, none is served
+  ;(mem as any).anchorTxs.delete(txid)
   const bad = await mem.recall('s')
   assert.equal(bad.receipt.checkResult, 'unverifiable')
   for (const i of bad.items) {

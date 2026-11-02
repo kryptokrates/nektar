@@ -32,7 +32,7 @@ export interface ProofBundle {
 }
 
 export type VerifyResult =
-  | { ok: true }
+  | { ok: true, settled: boolean, anchorState: 'broadcast' | 'mined' }
   | { ok: false, reason: 'LeafPathMismatch' | 'AnchorFieldMismatch' | 'BEEFInvalid' | 'NotMined' | 'ChainInconsistent' | 'BadBundle', detail?: string }
 
 /** Build a bundle from a BatchLog record + anchor head + ls history. */
@@ -99,10 +99,18 @@ export async function verifyFragment (bundle: ProofBundle, tracker: ChainTracker
   }
   if (!eq(data.R, recomputedR)) return { ok: false, reason: 'LeafPathMismatch', detail: 'recomputed R_n != anchor R_n' }
 
-  // 3) SPV: BUMP → headers
-  if (!anchorTx.merklePath) return { ok: false, reason: 'NotMined' }
-  const mined = await anchorTx.merklePath.verify(anchorTx.id('hex'), tracker as any)
-  if (!mined) return { ok: false, reason: 'BEEFInvalid', detail: 'BUMP root not in header chain' }
+  // 3) SPV: BUMP → headers. Mining is settlement, not validity — a broadcast
+  // anchor is already anchored, so a missing BUMP does NOT fail verification;
+  // it downgrades the result to settled:false. A PRESENT-but-invalid BUMP is a
+  // real failure (the bundle claims mining it cannot prove).
+  let settled = false
+  let anchorState: 'broadcast' | 'mined' = 'broadcast'
+  if (anchorTx.merklePath) {
+    const mined = await anchorTx.merklePath.verify(anchorTx.id('hex'), tracker as any)
+    if (!mined) return { ok: false, reason: 'BEEFInvalid', detail: 'BUMP root not in header chain' }
+    settled = true
+    anchorState = 'mined'
+  }
 
   // 4) anchor-chain consistency over chainTail
   const tail = bundle.chainTail.slice().sort((a, b) => a.n - b.n)
@@ -126,5 +134,5 @@ export async function verifyFragment (bundle: ProofBundle, tracker: ChainTracker
       return { ok: false, reason: 'ChainInconsistent', detail: `R' link broken at n=${i}` }
     }
   }
-  return { ok: true }
+  return { ok: true, settled, anchorState }
 }

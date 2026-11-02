@@ -441,6 +441,24 @@ importers:
         specifier: ^0.4.6
         version: 0.4.6
 
+  packages/watcher:
+    dependencies:
+      '@bsv/sdk':
+        specifier: 4.0.1
+        version: 4.0.1
+      '@mamem/anchor':
+        specifier: workspace:*
+        version: link:../anchor
+      '@mamem/chain':
+        specifier: workspace:*
+        version: link:../chain
+      '@mamem/zk':
+        specifier: workspace:*
+        version: link:../zk
+      runar-sdk:
+        specifier: 0.4.6
+        version: 0.4.6
+
   packages/zk:
     dependencies:
       '@bsv/sdk':

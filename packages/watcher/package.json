@@ -1,0 +1,19 @@
+{
+  "name": "@mamem/watcher",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": { "mamem-watcher": "./src/watcher.mjs" },
+  "scripts": {
+    "test": "node src/watcher.mjs --once --claims .state/watcher-claims.json"
+  },
+  "dependencies": {
+    "@mamem/anchor": "workspace:*",
+    "@mamem/chain": "workspace:*",
+    "@mamem/zk": "workspace:*",
+    "runar-sdk": "0.4.6"
+  },
+  "peerDependencies": {
+    "@bsv/sdk": "4.0.1"
+  }
+}

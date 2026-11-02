@@ -188,3 +188,29 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
   const badProof = { ...base(), revocations: [{ pubkey: pub, seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: rev.leaf, bundle: { ...rev.bundle!, leaf: 'ff'.repeat(32) } }] }
   assert.ok((await verifyAuditBundle(badProof, w.chain)).reasons.some(r => /inclusion proof failed/.test(r)))
 })
+
+test('GOAL-v8 D4: anchored rotation chain — third party replays pk(0)→pk(i) from chain data', async () => {
+  const { verifyAnchoredRotationChain } = await import('../src/index.js')
+  const w = await world()
+  const k1 = PrivateKey.fromRandom()
+  await w.mem.rotateShard('manual', k1)
+  w.settle('__identity__')
+  const proof = await w.mem.rotationChainProof('manual')
+  assert.ok(proof && proof.certs.length === 1, 'one anchored cert')
+  assert.equal(proof.certs[0]!.cert.pubkey, k1.toPublicKey().toString())
+  assert.ok(proof.certs[0]!.anchored, 'cert is SPV-verifiably anchored')
+  const v = await verifyAnchoredRotationChain(proof, w.chain)
+  assert.deepEqual(v.reasons, [])
+  assert.equal(v.activePub, k1.toPublicKey().toString(), 'verified chain resolves the rotated key')
+  // negative: a cert swapped for an unanchored record breaks the chain link
+  const forged = {
+    genesisPub: proof.genesisPub,
+    certs: [{ ...proof.certs[0]!, cert: { ...proof.certs[0]!.cert, pubkey: PrivateKey.fromRandom().toPublicKey().toString() } }]
+  }
+  const vf = await verifyAnchoredRotationChain(forged, w.chain)
+  assert.ok(!vf.ok && vf.reasons.some(r => /payload mismatch|do not link/.test(r)), `forged cert refused: ${vf.reasons.join('; ')}`)
+  // negative: dropping the bundle leaves the cert unprovable
+  const noBundle = { genesisPub: proof.genesisPub, certs: [{ ...proof.certs[0]!, bundle: undefined }] }
+  const vn = await verifyAnchoredRotationChain(noBundle, w.chain)
+  assert.ok(!vn.ok && vn.reasons.some(r => /no inclusion bundle|do not link/.test(r)))
+})

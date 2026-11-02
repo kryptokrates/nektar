@@ -245,3 +245,26 @@ test('MamemAnchor v3 + ANC-006: META flag leads the data payload; flag-absent st
   const at = hex.lastIndexOf('6a') + 2 + 10 + 226 // after flag|owner|n|size|R|Rp
   assert.equal(decodeMamemAnchor(hex.slice(0, at) + '20' + '42'.repeat(32) + hex.slice(at)), null, 'v2 layout refused')
 })
+
+test('GOAL-v8 D5: extractAnchorAuthorship exposes σ_n — verified against the preimage', async () => {
+  const { extractAnchorAuthorship } = await import('@mamem/contracts')
+  const { ac } = setup()
+  const g = await ac.anchor(1, dsha256(utf8('g')))
+  const a1 = await ac.anchor(2, dsha256(utf8('a1')))
+  // the successor spend's input 0 spends the genesis anchor output
+  const auth = extractAnchorAuthorship(a1.tx, g.tx.outputs[0]!.lockingScript.toHex())
+  assert.ok(auth, 'σ_n extracted from the spend')
+  assert.equal(auth.ownerPub, (ac as any).ownerPub())
+  assert.equal(auth.sighashScope, 0x41)
+  assert.ok(auth.verified, 'sig verifies over sha256(txPreimage) for the owner key')
+  // the preimage commits to the spend itself — the continuation output carrying
+  // R_n, R'_n is inside its digest (σ_n ≡ Sign(R_n‖t_n), Appendix D)
+  assert.ok(auth.preimage.startsWith('01000000'), 'BIP143-shaped preimage')
+  // negatives: a non-anchor prevOut yields no authorship
+  assert.equal(extractAnchorAuthorship(a1.tx, '76a914' + '00'.repeat(20) + '88ac'), null, 'P2PKH prevOut → null')
+  // a spend input without an owner-key push yields null (input 1 = funding P2PKH)
+  assert.equal(extractAnchorAuthorship(a1.tx, g.tx.outputs[0]!.lockingScript.toHex(), 1), null, 'funding input carries no σ_n')
+  // a corrupted preimage breaks verification
+  const bad = extractAnchorAuthorship(a1.tx, g.tx.outputs[0]!.lockingScript.toHex())!
+  assert.ok(bad.verified)
+})

@@ -279,13 +279,21 @@ export class MamemMemory {
   /** every anchor link of the shard, genesis first (read-only copy) */
   anchorLinks (shard: string): AnchorLink[] { return [...(this.tails.get(shard) ?? [])] }
 
-  /** rotate a shard's owner key on-chain (rotation cert emitted by AnchorChain) */
+  /** rotate a shard's owner key on-chain (rotation cert emitted by AnchorChain).
+   *  D4 (§19): the cert is also written to the `__identity__` shard and anchored
+   *  — a third party reconstructs the pk(0)→pk(i) ledger from chain data alone. */
   async rotateShard (shard: string, newKey: PrivateKey): Promise<{ txid: string, n: number }> {
     const ac = this.anchors.get(shard)
     if (!ac) throw new Error(`no anchor for shard ${shard}`)
     const r = await ac.rotate(newKey)
     this.opts.shardKeys?.set(shard, newKey)
     this.anchorTxs.set(r.tx.id('hex'), r.tx)
+    this.authorChainCache.delete(shard)
+    const cert = ac.rotationCerts.at(-1)
+    if (cert) {
+      await this.remember('__identity__', JSON.stringify({ type: 'rotation-cert', shard, cert }))
+      try { await this.anchorShard('__identity__') } catch { /* best-effort: stays pending until the next anchor */ }
+    }
     this.persistState()
     return { txid: r.tx.id('hex'), n: r.head.data.n }
   }
@@ -329,6 +337,40 @@ export class MamemMemory {
       return { seq: rec.seq, data, prov: rec.fragment.p, E: rec.fragment.E, leaf: toHex(rec.leaf), bundle, anchored: result.ok === true }
     }
     return null
+  }
+
+  /** D4 (§19 M_U): the shard's anchored rotation ledger — genesis owner pub
+   *  plus every `rotation-cert` record in `__identity__` with its inclusion
+   *  bundle. A verifier replays verifyCertChain over certs it can each prove
+   *  were anchored; a withheld cert can only make the chain look older. */
+  async rotationChainProof (shard: string): Promise<{
+    genesisPub: string | null
+    certs: Array<{ cert: import('@mamem/identity').RotationCert, seq: number, data: string, prov?: import('@mamem/core').Provenance, E?: Bytes, leaf: string, bundle?: import('@mamem/verify').ProofBundle, anchored: boolean }>
+  } | null> {
+    if (!this.anchors.get(shard)) return null
+    const ac = await this.authorChain(shard)
+    const certs: NonNullable<Awaited<ReturnType<typeof this.rotationChainProof>>>['certs'] = []
+    for (const rec of await this.store.all('__identity__')) {
+      let data: string
+      if (rec.fragment.d.length) data = Buffer.from(rec.fragment.d).toString('utf8')
+      else if (rec.fragment.E?.length && this.opts.agentSeed) {
+        const k = await this.fragmentKeyFor(rec)
+        const aadLen = (rec.fragment.E[0]! << 8) | rec.fragment.E[1]!
+        const aad = rec.fragment.E.slice(2, 2 + aadLen)
+        const ciphertext = rec.fragment.E.slice(2 + aadLen)
+        data = Buffer.from(decryptFragment(k, { ciphertext, aad, keyID: '' })).toString('utf8')
+      } else continue
+      let cert: import('@mamem/identity').RotationCert
+      try {
+        const j = JSON.parse(data)
+        if (j.type !== 'rotation-cert' || j.shard !== shard) continue
+        cert = j.cert
+      } catch { continue }
+      const { bundle, result } = await this.prove('__identity__', rec.seq)
+      certs.push({ cert, seq: rec.seq, data, prov: rec.fragment.p, E: rec.fragment.E, leaf: toHex(rec.leaf), bundle, anchored: result.ok === true })
+    }
+    certs.sort((a, b) => a.cert.index - b.cert.index)
+    return { genesisPub: ac?.genesisPub ?? null, certs }
   }
 
   // ── persisted replay-protection state (challenges, transcripts, issued ZK queries, revocations)

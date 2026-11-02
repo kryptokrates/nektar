@@ -15,6 +15,7 @@
     "@mamem/core": "workspace:*",
     "@mamem/chain": "workspace:*",
     "@mamem/datalog": "workspace:*",
+    "@mamem/identity": "workspace:*",
     "@mamem/verify": "workspace:*",
     "@mamem/graph": "workspace:*"
   },

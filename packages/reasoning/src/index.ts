@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { PublicKey, Signature, PrivateKey, type Transaction } from '@bsv/sdk'
 import { dsha256, utf8, toHex, fromHex, concat, computeLeaf, TAG_PROMISE, TAG_DELEGATION } from '@mamem/core'
+import { verifyCertChain, type RotationCert } from '@mamem/identity'
 import { Datalog, parseLiteral, parseProgram, ParseError, type Fact, type Rule } from '@mamem/datalog'
 import { verifyFragment, type ProofBundle } from '@mamem/verify'
 import { verifyDerivation, type PolicyDAG } from '@mamem/graph'
@@ -298,4 +299,39 @@ export async function verifyAuditBundle (b: AuditBundle, tracker: ChainTracker, 
     }
   }
   return { ok: reasons.length === 0, reasons }
+}
+
+/** D4 (§19 M_U): verify an anchored rotation ledger. Each cert's record must
+ *  recompute its proven leaf (text→leaf binding, like D8) and be SPV-verifiably
+ *  anchored; the surviving certs must then link genesis→latest via
+ *  verifyCertChain. A withheld cert only makes the chain look OLDER — the
+ *  activePub is a lower bound, never a forgery. */
+export async function verifyAnchoredRotationChain (
+  proof: {
+    genesisPub: string | null
+    certs: Array<{ cert: RotationCert, seq: number, data: string, prov?: import('@mamem/core').Provenance, E?: Uint8Array, leaf: string, bundle?: ProofBundle, anchored: boolean }>
+  },
+  tracker: ChainTracker
+): Promise<{ ok: boolean, activePub: string | null, reasons: string[] }> {
+  const reasons: string[] = []
+  if (!proof.genesisPub) reasons.push('no genesis owner resolved')
+  const certs: RotationCert[] = []
+  for (const c of proof.certs) {
+    try {
+      if (toHex(computeLeaf({ d: utf8(c.data), p: c.prov!, E: c.E })) !== c.leaf) { reasons.push(`cert seq ${c.seq}: data does not recompute the proven leaf`); continue }
+      const j = JSON.parse(c.data)
+      if (j.type !== 'rotation-cert' || j.cert?.sig !== c.cert.sig || j.cert?.pubkey !== c.cert.pubkey) { reasons.push(`cert seq ${c.seq}: record payload mismatch`); continue }
+    } catch { reasons.push(`cert seq ${c.seq}: malformed evidence`); continue }
+    if (!c.bundle) { reasons.push(`cert seq ${c.seq}: no inclusion bundle`); continue }
+    const v = await verifyFragment(c.bundle, tracker)
+    if (!v.ok) { reasons.push(`cert seq ${c.seq}: inclusion proof failed (${(v as { reason?: string }).reason ?? 'unknown'})`); continue }
+    certs.push(c.cert)
+  }
+  let activePub: string | null = null
+  if (proof.genesisPub) {
+    const chain = verifyCertChain(proof.genesisPub, certs)
+    if (!chain) reasons.push('anchored certs do not link genesis→latest (bad signature or a gap in the chain)')
+    else activePub = chain.activePub
+  }
+  return { ok: reasons.length === 0, activePub, reasons }
 }

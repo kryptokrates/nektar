@@ -330,7 +330,9 @@ export class AnchorChain {
     const res = await this.withRetry(async () => await this.rotateOnce(newKey))
     // emit the matching rotation certificate (IDN-002..005): C(i) signed by
     // the old key binding pk(i-1)→pk(i), indexed by this shard's cert chain
-    this.rotationCerts.push(makeRotationCert(oldKey, newPub, Math.floor(Date.now() / 1000), this.opts.rotationHorizon ?? 86_400))
+    const cert = makeRotationCert(oldKey, newPub, Math.floor(Date.now() / 1000), this.opts.rotationHorizon ?? 86_400)
+    cert.index = this.rotationCerts.length
+    this.rotationCerts.push(cert)
     // switch the owner key only after the rotate is accepted (the funding
     // signer is the fund key and does not change)
     this.shardKey = newKey

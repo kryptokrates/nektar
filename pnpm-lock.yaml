@@ -406,13 +406,13 @@ importers:
       '@mamem/graph':
         specifier: workspace:*
         version: link:../graph
+      '@mamem/identity':
+        specifier: workspace:*
+        version: link:../identity
       '@mamem/verify':
         specifier: workspace:*
         version: link:../verify
     devDependencies:
-      '@mamem/identity':
-        specifier: workspace:*
-        version: link:../identity
       '@mamem/log':
         specifier: workspace:*
         version: link:../log

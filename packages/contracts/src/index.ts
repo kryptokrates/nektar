@@ -95,6 +95,62 @@ export function decodeMamemAnchor (scriptHex: string): DecodedAnchor | null {
   return { shard: toHex(hash160(fromHex(ownerPub))), n, size, R, Rp, tag, ownerPub, ownerPkh, metanet }
 }
 
+/** Appendix D σ_n: the anchor-authorship signature as a discrete artifact.
+ *  The covenant enforces `checkSig(sig, ownerPub)` inside `append`/`rotate` —
+ *  the sig is over sha256(txPreimage), and the preimage commits to the entire
+ *  spend (including the continuation output carrying R_n, R'_n, n+1, t_n's
+ *  funding), so `Sign_owner(preimage)` ≡ the paper's `Sign(R_n‖t_n)`: the new
+ *  state cannot exist without this signature, and it is now extractable from
+ *  the spend tx alone — no covenant internals required. */
+export interface AnchorAuthorship {
+  ownerPub: string          // the owner key that authorized this state transition
+  sig: string               // DER + sighash-scope byte, as pushed by the spend
+  sighashScope: number      // trailing byte of sig (0x41 = ALL|FORKID)
+  preimage: string          // the txPreimage chunk the signature commits to
+  inputIndex: number        // which input spent the anchor UTXO
+  verified: boolean         // sig verifies over sha256(preimage) for ownerPub
+}
+/** Extract + verify σ_n from an anchor spend. `spentAnchorScript` is the
+ *  locking script of the anchor UTXO being spent (decoded to recover ownerPkh
+ *  and prove the input really spends a MamemAnchor). Returns null when the
+ *  input doesn't carry a recognizable owner sig/pubKey pair. */
+export function extractAnchorAuthorship (
+  spendTx: { inputs: Array<{ unlockingScript?: { chunks: Array<{ op: number, data?: number[] | Uint8Array }> } }> },
+  spentAnchorScript: string,
+  inputIndex = 0
+): AnchorAuthorship | null {
+  const dec = decodeMamemAnchor(spentAnchorScript)
+  if (!dec) return null
+  const chunks = spendTx.inputs[inputIndex]?.unlockingScript?.chunks
+  if (!chunks || chunks.length < 3) return null
+  const push = (i: number): Uint8Array | null => {
+    const d = chunks[i]?.data
+    return d ? Uint8Array.from(d) : null
+  }
+  // txPreimage = the last data push before the trailing method-index chunk
+  const pre = push(chunks.length - 2)
+  if (!pre || pre.length < 100) return null
+  const digest = sha256(pre)
+  const pkhHex = toHex(dec.ownerPkh)
+  for (let i = 1; i < chunks.length; i++) {
+    const d = push(i)
+    if (!d || d.length !== 33 || (d[0] !== 2 && d[0] !== 3)) continue
+    if (toHex(hash160(d)) !== pkhHex) continue
+    const sigD = push(i - 1)
+    if (!sigD || sigD.length < 70 || sigD.length > 73 || sigD[0] !== 0x30) return null
+    const scope = sigD[sigD.length - 1]!
+    const der = toHex(sigD.slice(0, -1))
+    let verified = false
+    try {
+      // dynamic require (peer dep): sha256+secp256k1 verify via @bsv/sdk
+      const { PublicKey, Signature } = require('@bsv/sdk')
+      verified = PublicKey.fromString(toHex(d)).verify(Array.from(digest), Signature.fromDER(der, 'hex'))
+    } catch { verified = false }
+    return { ownerPub: toHex(d), sig: toHex(sigD), sighashScope: scope, preimage: toHex(pre), inputIndex, verified }
+  }
+  return null
+}
+
 let RC: any = null
 function buildScript (pub: string, pkh: string, n: bigint, size: bigint, R: string, Rp: string, tag: string, metanet = true): string {
   if (!RC) RC = require('runar-sdk')

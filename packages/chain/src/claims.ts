@@ -3,26 +3,11 @@
 // Scripts and the MCP server call these; nothing here knows about e2e
 // tests or MCP — deps are a runar-sdk-compatible provider + signer.
 import { Transaction, LockingScript, UnlockingScript } from '@bsv/sdk'
-import { RunarContract, serializeState, deserializeState } from 'runar-sdk'
+import { RunarContract, serializeState, deserializeState, buildP2PKHScript } from 'runar-sdk'
 
 export interface Utxo { txid: string, outputIndex: number, satoshis: number, script: string }
 
-const encPush = (h: string): string => {
-  const l = h.length / 2
-  if (l === 0) return '00'; if (l <= 75) return l.toString(16).padStart(2, '0') + h
-  if (l <= 0xff) return '4c' + l.toString(16).padStart(2, '0') + h
-  return '4d' + (l & 0xff).toString(16).padStart(2, '0') + ((l >> 8) & 0xff).toString(16).padStart(2, '0') + h
-}
-const encNum = (n: bigint): string => {
-  if (n === 0n) return '00'
-  if (n >= 1n && n <= 16n) return (0x50 + Number(n)).toString(16)
-  const b: number[] = []; let v = n
-  while (v > 0n) { b.push(Number(v & 0xffn)); v >>= 8n }
-  if (b[b.length - 1] & 0x80) b.push(0)
-  return encPush(b.map(x => x.toString(16).padStart(2, '0')).join(''))
-}
-const encArg = (v: bigint | string): string => typeof v === 'bigint' ? encNum(v) : encPush(v)
-export const p2pkh = (pkh: string): string => '76a914' + pkh + '88ac'
+export const p2pkh = (pkh: string): string => buildP2PKHScript(pkh)
 
 export const outpointOf = (u: { txid: string, outputIndex: number }): string =>
   Buffer.concat([Buffer.from(u.txid, 'hex').reverse(), Buffer.from([u.outputIndex, 0, 0, 0])]).toString('hex')
@@ -72,16 +57,18 @@ export async function buildAnchoredSettleTx (opts: {
   const { sigHex: opSig, preimageHex: pre } = c.computeOpPushTxWithCodeSep(tx, 0, cUtxo.script, cUtxo.satoshis, mIdx)
   const sigSub = c.getSubscriptForSigning(cUtxo.script, mIdx)
   const userSig = await signer.sign(tx.toHex(), 0, sigSub, cUtxo.satoshis)
+  // runar arg encoding: explicit params, implicit change pair (_changePKH,
+  // _changeAmount), txPreimage — buildUnlockingScript appends the selector
   tx.inputs[0].unlockingScript = UnlockingScript.fromHex(
-    c.buildStatefulPrefix(opSig, true) + encArg(userSig) + encArg(pubKey) + encArg(prevouts) + encArg(BigInt(opts.anchorSats)) + encPush(aUtxo.script) + encArg(BigInt(opts.payoutSats)) + encArg(BigInt(opts.verdictSats)) +
-    encPush(payeePkh) + encNum(0n) + encPush(pre) + encNum(BigInt(mIdx)))
+    c.buildStatefulPrefix(opSig, true) +
+    c.buildUnlockingScript('settleAnchored', [userSig, pubKey, prevouts, BigInt(opts.anchorSats), aUtxo.script, BigInt(opts.payoutSats), BigInt(opts.verdictSats), payeePkh, 0n, pre]))
   const aIdx = aArt.abi.methods.filter((m: any) => m.isPublic).findIndex((m: any) => m.name === 'witnessSettle')
   const { sigHex: aSig, preimageHex: aPre } = a.computeOpPushTxWithCodeSep(tx, 1, aUtxo.script, aUtxo.satoshis, aIdx)
   const aSub = a.getSubscriptForSigning(aUtxo.script, aIdx)
   const aUserSig = await signer.sign(tx.toHex(), 1, aSub, aUtxo.satoshis)
   tx.inputs[1].unlockingScript = UnlockingScript.fromHex(
-    a.buildStatefulPrefix(aSig, true) + encArg(aUserSig) + encArg(pubKey) + encArg(opts.receiptHash) + encArg(opts.queryId) + encArg(payeePkh) + encArg(opts.verdictCode) + encArg(BigInt(opts.verdictSats)) + encArg(BigInt(opts.payoutSats)) + encArg(payeePkh) +
-    encPush(payeePkh) + encNum(0n) + encPush(aPre) + encNum(BigInt(aIdx)))
+    a.buildStatefulPrefix(aSig, true) +
+    a.buildUnlockingScript('witnessSettle', [aUserSig, pubKey, opts.receiptHash, opts.queryId, payeePkh, opts.verdictCode, BigInt(opts.verdictSats), BigInt(opts.payoutSats), payeePkh, payeePkh, 0n, aPre]))
   return tx
 }
 
@@ -103,13 +90,14 @@ export async function buildBuyGatedTx (opts: {
   tx.addOutput({ satoshis: opts.changeSats, lockingScript: LockingScript.fromHex(p2pkh(opts.changePkh)) })
   const sIdx = sArt.abi.methods.filter((m: any) => m.isPublic).findIndex((m: any) => m.name === 'buyGated')
   const { sigHex: sSig, preimageHex: sPre } = sale.computeOpPushTxWithCodeSep(tx, 0, sUtxo.script, sUtxo.satoshis, sIdx)
-  const saleUnlock = encPush(sSig) + sale.buildUnlockingScript('buyGated', [opts.wrapped, BigInt(opts.changeSats), prevouts, sPre])
+  // opSig is the implicit first push; the rest are ABI-encoded args
+  const saleUnlock = sale.buildUnlockingScript('buyGated', [sSig, opts.wrapped, BigInt(opts.changeSats), prevouts, sPre])
   if (saleUnlock.length % 2) throw new Error(`sale unlock odd hex (${saleUnlock.length}): sSig=${sSig.length} sPre=${sPre.length} prevouts=${prevouts.length} wrapped=${opts.wrapped.length}`)
   tx.inputs[0].unlockingScript = UnlockingScript.fromHex(saleUnlock)
   const vIdx = vArt.abi.methods.filter((m: any) => m.isPublic).findIndex((m: any) => m.name === 'authorize')
   const { sigHex: vSig, preimageHex: vPre } = vc.computeOpPushTxWithCodeSep(tx, 1, vUtxo.script, vUtxo.satoshis, vIdx)
-  // single-method contract → no selector push
-  const vUnlock = vc.buildStatefulPrefix(vSig, true) + encArg(BigInt(opts.saleSats)) + encPush(opts.changePkh) + encNum(BigInt(opts.changeSats)) + encPush(vPre)
+  // single-method contract → buildUnlockingScript adds no selector push
+  const vUnlock = vc.buildStatefulPrefix(vSig, true) + vc.buildUnlockingScript('authorize', [BigInt(opts.saleSats), opts.changePkh, BigInt(opts.changeSats), vPre])
   if (vUnlock.length % 2) throw new Error(`verdict unlock odd hex (${vUnlock.length}): vSig=${vSig.length} vPre=${vPre.length} changePkh=${opts.changePkh.length}`)
   tx.inputs[1].unlockingScript = UnlockingScript.fromHex(vUnlock)
   return tx

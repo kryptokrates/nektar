@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { PrivateKey, MerklePath, type Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
 import { KnexShardStore, type ShardStore } from '@mamem/log'
 import { MamemMemory, type MamemMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -341,6 +341,22 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     maxFeePerTx: mc.maxFeePerTx, maxPerDay: mc.maxSpendPerDay,
     minIntervalMs: mc.minBroadcastIntervalMs, ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
   })
+  // optional p2p eyes: MAMEM_P2P_PEERS='ip:port,...' — first-hand inv stream
+  // watching our reserve outpoints (spend events by ANYONE) and the fee-key
+  // script (unannounced funding). No index: watched set only, rest is dropped.
+  const p2pPeers = (process.env.MAMEM_P2P_PEERS ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  if (p2pPeers.length) {
+    const fundPkhScript = `76a914${Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')}88ac`
+    const p2p = new P2PListener({
+      peers: p2pPeers, fetchAll: true, maxTxFetchPerSec: 200,
+      outpoints: new Set(reserve.utxos.map(u => `${u.tx.id('hex')}:${u.vout}`)),
+      scripts: new Set([fundPkhScript])
+    })
+    p2p.on('spend', (t, v, by) => { if (!reserve.isSpent(t, v)) { reserve.markSpent(t, v); process.stderr.write(`mamem p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`) } })
+    p2p.on('pay', (t, v, s) => process.stderr.write(`mamem p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v} (import via MAMEM_FUND_TXIDS=${t})\n`))
+    p2p.on('peer', (a, up) => process.stderr.write(`mamem p2p: peer ${a} ${up ? 'connected' : 'down'}\n`))
+    p2p.connect()
+  }
   const floor = ttn ? 1 : 100
   const feeRate = Math.max(mc.feeRateSatPerKb ?? floor, await fetchArcFeeRate(mc).catch(() => floor))
   const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve() }

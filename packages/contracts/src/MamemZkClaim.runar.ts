@@ -79,11 +79,11 @@ export class MamemZkClaim extends StatefulSmartContract {
     assert(checkSig(sig, pubKey))
     assert(this.status === 0n)
     assert(extractLocktime(this.txPreimage) >= this.deadline)
-    // prevouts pin: input1 (if anchored) must be the committed anchor UTXO —
-    // '' anchorOutpoint → single-input settle. The anchor's witnessSettle
-    // then enforces journalRoot == anchor.R inside the same tx.
+    // unanchored settle only — bound claims must use settleAnchored so the
+    // anchor witness can co-sign its continuation output.
+    assert(len(this.anchorOutpoint) === 0n)
     assert(hash256(prevouts) === extractHashPrevouts(this.txPreimage))
-    assert(prevouts === cat(extractOutpoint(this.txPreimage), this.anchorOutpoint))
+    assert(prevouts === extractOutpoint(this.txPreimage))
     const e1 = cat(num2bin(len(this.proverPkh), 1n), this.proverPkh)
     const e2 = cat(num2bin(len(this.queryId), 1n), this.queryId)
     const e3 = cat(num2bin(len(this.journalRoot), 1n), this.journalRoot)
@@ -91,6 +91,31 @@ export class MamemZkClaim extends StatefulSmartContract {
     const vstate = cat(e4, cat(e3, cat(e2, e1)))
     this.addRawOutput(verdictSats, cat(this.verdictCode, cat(toByteString('6a'), vstate)))
     assert(extractAmount(this.txPreimage) - payoutSats - verdictSats <= this.maxFee + 1n)
+    this.addRawOutput(payoutSats, cat(toByteString('76a914'), cat(this.proverPkh, toByteString('88ac'))))
+  }
+
+  /** Anchored settle: input1 must be the committed anchor UTXO, whose
+   *  witnessSettle re-emits [anchorCont, verdict, payout] in the same tx —
+   *  we enumerate the identical list (4-output shared enumeration incl.
+   *  change) so journalRoot == anchor.R is consensus-enforced AND the
+   *  anchor survives for future appends. anchorScript is the anchor's own
+   *  locking script (its witness side enforces the exact state). */
+  public settleAnchored (sig: Sig, pubKey: PubKey, prevouts: ByteString, anchorSats: bigint, anchorScript: ByteString, payoutSats: bigint, verdictSats: bigint) {
+    assert(hash160(pubKey) === this.proverPkh)
+    assert(checkSig(sig, pubKey))
+    assert(this.status === 0n)
+    assert(extractLocktime(this.txPreimage) >= this.deadline)
+    assert(len(this.anchorOutpoint) === 36n)
+    assert(hash256(prevouts) === extractHashPrevouts(this.txPreimage))
+    assert(prevouts === cat(extractOutpoint(this.txPreimage), this.anchorOutpoint))
+    this.addRawOutput(anchorSats, anchorScript)
+    const e1 = cat(num2bin(len(this.proverPkh), 1n), this.proverPkh)
+    const e2 = cat(num2bin(len(this.queryId), 1n), this.queryId)
+    const e3 = cat(num2bin(len(this.journalRoot), 1n), this.journalRoot)
+    const e4 = cat(num2bin(len(this.receiptHash), 1n), this.receiptHash)
+    const vstate = cat(e4, cat(e3, cat(e2, e1)))
+    this.addRawOutput(verdictSats, cat(this.verdictCode, cat(toByteString('6a'), vstate)))
+    assert(extractAmount(this.txPreimage) - payoutSats - verdictSats - anchorSats <= this.maxFee + 1n)
     this.addRawOutput(payoutSats, cat(toByteString('76a914'), cat(this.proverPkh, toByteString('88ac'))))
   }
 

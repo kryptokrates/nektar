@@ -58,12 +58,12 @@ export class MamemAnchor extends StatefulSmartContract {
     this.addOutput(1n, this.metaFlag, this.genesisOwner, this.n, this.size, this.R, this.Rp, this.tagRprime, newOwnerPkh)
   }
 
-  /** §4.5 anchor witness: co-spent as input1 of MamemZkClaim.settle.
-   *  Re-emits the settle tx's [verdict, payout] outputs, constructing the
-   *  ClaimVerdict script with THIS.R embedded at the journalRoot field —
-   *  hashOutputs only validates if the emitted verdict carries our root.
-   *  Consumes the anchor UTXO (terminal) — a continuing variant would need
-   *  the claim to also enumerate the anchor continuation output. */
+  /** §4.5 anchor witness: co-spent as input1 of MamemZkClaim.settleAnchored.
+   *  Re-emits OUR continuation first (same state — witnessing preserves the
+   *  anchor for future appends/rotates), then the settle tx's [verdict,
+   *  payout] outputs, constructing the ClaimVerdict script with THIS.R
+   *  embedded at the journalRoot field — hashOutputs only validates if the
+   *  emitted verdict carries our root (journalRoot == anchor.R). */
   public witnessSettle (sig: Sig, pubKey: PubKey, receiptHash: ByteString, queryId: ByteString, payeePkh: ByteString, verdictCode: ByteString, verdictSats: bigint, payoutSats: bigint, payoutPkh: ByteString) {
     assert(hash160(pubKey) == this.ownerPkh)
     assert(checkSig(sig, pubKey))
@@ -72,6 +72,7 @@ export class MamemAnchor extends StatefulSmartContract {
     const e3 = cat(num2bin(len(this.R), 1n), this.R)
     const e4 = cat(num2bin(len(receiptHash), 1n), receiptHash)
     const vstate = cat(e4, cat(e3, cat(e2, e1)))
+    this.addOutput(1n, this.metaFlag, this.genesisOwner, this.n, this.size, this.R, this.Rp, this.tagRprime, this.ownerPkh)
     this.addRawOutput(verdictSats, cat(verdictCode, cat(toByteString('6a'), vstate)))
     this.addRawOutput(payoutSats, cat(toByteString('76a914'), cat(payoutPkh, toByteString('88ac'))))
   }

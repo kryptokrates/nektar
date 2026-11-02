@@ -270,21 +270,24 @@ const callTerminal = async (c, method, args, prov, signer, outputs, changePkh) =
   const prevouts=cOp+aOp
   const vstate=serializeState(vArt.stateFields,{receiptHash:RH,journalRoot:JR,queryId:QID,payeePkh:pkh(pk)})
   const verdict=VCR+'6a'+vstate
-  // manual 2-input settle: [claim, anchor] → [verdict, payout, change]
+  // manual 2-input settleAnchored: [claim, anchor] → [anchorCont, verdict, payout, change]
   const tx=new BsvTransaction()
   tx.addInput({sourceTXID:cUtxo.txid,sourceOutputIndex:cUtxo.outputIndex,unlockingScript:UnlockingScript.fromHex('00'),sequence:0xffffffff})
   tx.addInput({sourceTXID:aUtxo.txid,sourceOutputIndex:aUtxo.outputIndex,unlockingScript:UnlockingScript.fromHex('00'),sequence:0xffffffff})
+  tx.addOutput({satoshis:1,lockingScript:LockingScript.fromHex(aUtxo.script)})
   tx.addOutput({satoshis:10,lockingScript:LockingScript.fromHex(verdict)})
   tx.addOutput({satoshis:4980,lockingScript:LockingScript.fromHex(p2pkhScript(pkh(pk)))})
   tx.addOutput({satoshis:0,lockingScript:LockingScript.fromHex(p2pkhScript(pkh(pk)))})
-  const mIdx=art.abi.methods.filter(m=>m.isPublic).findIndex(m=>m.name==='settle')
+  const mIdx=art.abi.methods.filter(m=>m.isPublic).findIndex(m=>m.name==='settleAnchored')
   const {sigHex:opSig,preimageHex:pre}=c.computeOpPushTxWithCodeSep(tx,0,cUtxo.script,cUtxo.satoshis,mIdx)
   const sigSub=c.getSubscriptForSigning(cUtxo.script,mIdx)
   const userSig=await prover.sign(tx.toHex(),0,sigSub,cUtxo.satoshis)
   tx.inputs[0].unlockingScript=UnlockingScript.fromHex(
-    c.buildStatefulPrefix(opSig,true)+encArg(userSig)+encArg(pk)+encArg(prevouts)+encArg(4980n)+encArg(10n)
+    c.buildStatefulPrefix(opSig,true)+encArg(userSig)+encArg(pk)+encArg(prevouts)+encArg(1n)+encPush(aUtxo.script)+encArg(4980n)+encArg(10n)
     +encPush(pkh(pk))+encNum(0n)+encPush(pre)+encNum(BigInt(mIdx)))
-  // anchor leg: witnessSettle(sig,pk,rh,qid,payeePkh,vcode,vsats,psats,ppkh) + change + preimage + sel
+  // anchor leg: witnessSettle is now a CONTINUATION method — it re-emits its
+  // own state as output0 (anchor survives), then verdict+payout. Unlock gets
+  // implicit _changePKH/_changeAmount like other continuation calls.
   const aPub=aArt.abi.methods.filter(m=>m.isPublic)
   const aIdx=aPub.findIndex(m=>m.name==='witnessSettle')
   const {sigHex:aSig,preimageHex:aPre}=a.computeOpPushTxWithCodeSep(tx,1,aUtxo.script,aUtxo.satoshis,aIdx)

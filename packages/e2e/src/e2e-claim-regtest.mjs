@@ -260,15 +260,16 @@ try {
   const tx = new BsvTransaction()
   tx.addInput({ sourceTXID: cUtxo.txid, sourceOutputIndex: cUtxo.outputIndex, unlockingScript: UnlockingScript.fromHex('00'), sequence: 0xffffffff })
   tx.addInput({ sourceTXID: aUtxo.txid, sourceOutputIndex: aUtxo.outputIndex, unlockingScript: UnlockingScript.fromHex('00'), sequence: 0xffffffff })
+  tx.addOutput({ satoshis: 1, lockingScript: LockingScript.fromHex(aUtxo.script) }) // anchor continuation — survives for future appends
   tx.addOutput({ satoshis: 10, lockingScript: LockingScript.fromHex(verdict) })
   tx.addOutput({ satoshis: 4980, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
   tx.addOutput({ satoshis: 0, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
-  const mIdx = art.abi.methods.filter(m => m.isPublic).findIndex(m => m.name === 'settle')
+  const mIdx = art.abi.methods.filter(m => m.isPublic).findIndex(m => m.name === 'settleAnchored')
   const { sigHex: opSig, preimageHex: pre } = c.computeOpPushTxWithCodeSep(tx, 0, cUtxo.script, cUtxo.satoshis, mIdx)
   const sigSub = c.getSubscriptForSigning(cUtxo.script, mIdx)
   const userSig = await signer.sign(tx.toHex(), 0, sigSub, cUtxo.satoshis)
   tx.inputs[0].unlockingScript = UnlockingScript.fromHex(
-    c.buildStatefulPrefix(opSig, true) + encArg(userSig) + encArg(pubKeyHex) + encArg(prevouts) + encArg(4980n) + encArg(10n)
+    c.buildStatefulPrefix(opSig, true) + encArg(userSig) + encArg(pubKeyHex) + encArg(prevouts) + encArg(1n) + encPush(aUtxo.script) + encArg(4980n) + encArg(10n)
     + encPush(opPkh) + encNum(0n) + encPush(pre) + encNum(BigInt(mIdx)))
   const aIdx = aArt.abi.methods.filter(m => m.isPublic).findIndex(m => m.name === 'witnessSettle')
   const { sigHex: aSig, preimageHex: aPre } = a.computeOpPushTxWithCodeSep(tx, 1, aUtxo.script, aUtxo.satoshis, aIdx)

@@ -144,18 +144,25 @@
             "type": "ByteString"
           },
           {
+            "name": "_changePKH",
+            "type": "Ripemd160"
+          },
+          {
+            "name": "_changeAmount",
+            "type": "bigint"
+          },
+          {
             "name": "txPreimage",
             "type": "SigHashPreimage"
           }
         ],
-        "isPublic": true,
-        "isTerminal": true
+        "isPublic": true
       }
     ]
   },
-  "script": "76009c637576ab587a210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ad697601687f7782012c947f758258947f75517f7c7601007e8102fd009f63756775527f77685879827756947f77517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f686801217f587f7c817c587f7c817c01207f01207f517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868755d79a978885e7a5e7aad7853795e795e7958807e7e7eaa515979597959798b607a01117a58795879011479016a7e577a8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e567a7e557a58807e547a58807e537a7e547a7e7b8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e7c8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5b7a5b7a041976a9147b7e0288ac7e7c58807c7e7eaa597a820128947f7701207f75877777777777777777776776519c637576ab577a210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ad697601687f7782012c947f758258947f75517f7c7601007e8102fd009f63756775527f77685779827702ea01947f77517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f686801217f587f7c817c587f7c817c01207f01207f517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868755c79a978885d7a5d7aad51587958795879587958795879587901137a011479016a7e587a8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e577a7e567a58807e557a58807e547a7e537a7e7b8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e7c8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5b7a5b7a041976a9147b7e0288ac7e7c58807c7e7eaa597a820128947f7701207f758777777777777777777767529d76ab5d7a210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ad697601687f7782012c947f758258947f75517f7c7601007e8102fd009f63756775527f77685d79827702c103947f77517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f686801217f587f7c817c587f7c817c01207f01207f517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f686875011279a9788801137a01137aad5f7982775180607a7e60798277518001117a7e55798277518056797e0112798277518001137a7e7b537a7e7b7c7e7e5e7a5f7a016a537a7e7e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5d7a0376a9145e7a0288ac7e7e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5c7a5c7a041976a9147b7e0288ac7e7c58807c7e7b7b7e7c7eaa597a820128947f7701207f75877777777777777777776868",
-  "asm": "OP_DUP OP_0 OP_NUMEQUAL OP_IF OP_DROP OP_DUP OP_CODESEPARATOR OP_8 OP_ROLL <0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798> OP_CHECKSIGVERIFY OP_VERIFY OP_DUP <68> OP_SPLIT OP_NIP OP_SIZE <2c> OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP OP_DUP <00> OP_CAT OP_BIN2NUM <fd00> OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_8 OP_PICK OP_SIZE OP_NIP OP_6 OP_SUB OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF <21> OP_SPLIT OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP <20> OP_SPLIT <20> OP_SPLIT OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_DROP OP_13 OP_PICK OP_HASH160 OP_OVER OP_EQUALVERIFY OP_14 OP_ROLL OP_14 OP_ROLL OP_CHECKSIGVERIFY OP_OVER OP_3 OP_PICK OP_14 OP_PICK OP_14 OP_PICK OP_8 OP_NUM2BIN OP_CAT OP_CAT OP_CAT OP_HASH256 OP_1 OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_1ADD OP_16 OP_ROLL <11> OP_ROLL OP_8 OP_PICK OP_8 OP_PICK <14> OP_PICK <6a> OP_CAT OP_7 OP_ROLL OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_6 OP_ROLL OP_CAT OP_5 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_4 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_3 OP_ROLL OP_CAT OP_4 OP_ROLL OP_CAT OP_ROT OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_SWAP OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_11 OP_ROLL OP_11 OP_ROLL <1976a914> OP_ROT OP_CAT <88ac> OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_CAT OP_HASH256 OP_9 OP_ROLL OP_SIZE <28> OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_ELSE OP_DUP OP_1 OP_NUMEQUAL OP_IF OP_DROP OP_DUP OP_CODESEPARATOR OP_7 OP_ROLL <0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798> OP_CHECKSIGVERIFY OP_VERIFY OP_DUP <68> OP_SPLIT OP_NIP OP_SIZE <2c> OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP OP_DUP <00> OP_CAT OP_BIN2NUM <fd00> OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_7 OP_PICK OP_SIZE OP_NIP <ea01> OP_SUB OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF <21> OP_SPLIT OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP <20> OP_SPLIT <20> OP_SPLIT OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_DROP OP_12 OP_PICK OP_HASH160 OP_OVER OP_EQUALVERIFY OP_13 OP_ROLL OP_13 OP_ROLL OP_CHECKSIGVERIFY OP_1 OP_8 OP_PICK OP_8 OP_PICK OP_8 OP_PICK OP_8 OP_PICK OP_8 OP_PICK OP_8 OP_PICK OP_8 OP_PICK <13> OP_ROLL <14> OP_PICK <6a> OP_CAT OP_8 OP_ROLL OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_7 OP_ROLL OP_CAT OP_6 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_5 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_4 OP_ROLL OP_CAT OP_3 OP_ROLL OP_CAT OP_ROT OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_SWAP OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_11 OP_ROLL OP_11 OP_ROLL <1976a914> OP_ROT OP_CAT <88ac> OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_CAT OP_HASH256 OP_9 OP_ROLL OP_SIZE <28> OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_ELSE OP_2 OP_NUMEQUALVERIFY OP_DUP OP_CODESEPARATOR OP_13 OP_ROLL <0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798> OP_CHECKSIGVERIFY OP_VERIFY OP_DUP <68> OP_SPLIT OP_NIP OP_SIZE <2c> OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP OP_DUP <00> OP_CAT OP_BIN2NUM <fd00> OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_13 OP_PICK OP_SIZE OP_NIP <c103> OP_SUB OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF <21> OP_SPLIT OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP <20> OP_SPLIT <20> OP_SPLIT OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_DROP <12> OP_PICK OP_HASH160 OP_OVER OP_EQUALVERIFY <13> OP_ROLL <13> OP_ROLL OP_CHECKSIGVERIFY OP_15 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_16 OP_ROLL OP_CAT OP_16 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN <11> OP_ROLL OP_CAT OP_5 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_6 OP_PICK OP_CAT <12> OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN <13> OP_ROLL OP_CAT OP_ROT OP_3 OP_ROLL OP_CAT OP_ROT OP_SWAP OP_CAT OP_CAT OP_14 OP_ROLL OP_15 OP_ROLL <6a> OP_3 OP_ROLL OP_CAT OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_13 OP_ROLL <76a914> OP_14 OP_ROLL <88ac> OP_CAT OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_12 OP_ROLL OP_12 OP_ROLL <1976a914> OP_ROT OP_CAT <88ac> OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_ROT OP_ROT OP_CAT OP_SWAP OP_CAT OP_HASH256 OP_9 OP_ROLL OP_SIZE <28> OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_ENDIF OP_ENDIF",
-  "buildTimestamp": "2026-11-02T16:12:33.276Z",
+  "script": "76009c637576ab587a210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ad697601687f7782012c947f758258947f75517f7c7601007e8102fd009f63756775527f77685879827756947f77517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f686801217f587f7c817c587f7c817c01207f01207f517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868755d79a978885e7a5e7aad7853795e795e7958807e7e7eaa515979597959798b607a01117a58795879011479016a7e577a8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e567a7e557a58807e547a58807e537a7e547a7e7b8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e7c8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5b7a5b7a041976a9147b7e0288ac7e7c58807c7e7eaa597a820128947f7701207f75877777777777777777776776519c637576ab577a210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ad697601687f7782012c947f758258947f75517f7c7601007e8102fd009f63756775527f77685779827702ea01947f77517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f686801217f587f7c817c587f7c817c01207f01207f517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868755c79a978885d7a5d7aad51587958795879587958795879587901137a011479016a7e587a8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e577a7e567a58807e557a58807e547a7e537a7e7b8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e7c8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5b7a5b7a041976a9147b7e0288ac7e7c58807c7e7eaa597a820128947f7701207f758777777777777777777767529d76ab5d7a210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ad697601687f7782012c947f758258947f75517f7c7601007e8102fd009f63756775527f77685d79827702c103947f77517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f686801217f587f7c817c587f7c817c01207f01207f517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f6868517f7c8176014c9f637f6776014d9c6375527f7c817f6775517f7c817f686875011279a9788801137a01137aad5f7982775180607a7e60798277518001117a7e55798277518056797e0112798277518001137a7e7b537a7e7b7c7e7e5159795979597959795979597959795979011979016a7e587a8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e577a7e567a58807e557a58807e547a7e537a7e7b8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e7c8276014c9f635280517f757c7e67760200019f635280517f75014c7c7e7c7e675480527f75014d7c7e7c7e68687e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5f7a607a016a547a7e7e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5e7a0376a9145f7a0288ac7e7e827602fd009f635280517f75675480527f7501fd7c7e687c7e7c58807c7e5d7a5d7a041976a9147b7e0288ac7e7c58807c7e537a537a7e7b7e7c7eaa597a820128947f7701207f75877777777777777777776868",
+  "asm": "OP_DUP OP_0 OP_NUMEQUAL OP_IF OP_DROP OP_DUP OP_CODESEPARATOR OP_8 OP_ROLL <0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798> OP_CHECKSIGVERIFY OP_VERIFY OP_DUP <68> OP_SPLIT OP_NIP OP_SIZE <2c> OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP OP_DUP <00> OP_CAT OP_BIN2NUM <fd00> OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_8 OP_PICK OP_SIZE OP_NIP OP_6 OP_SUB OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF <21> OP_SPLIT OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP <20> OP_SPLIT <20> OP_SPLIT OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_DROP OP_13 OP_PICK OP_HASH160 OP_OVER OP_EQUALVERIFY OP_14 OP_ROLL OP_14 OP_ROLL OP_CHECKSIGVERIFY OP_OVER OP_3 OP_PICK OP_14 OP_PICK OP_14 OP_PICK OP_8 OP_NUM2BIN OP_CAT OP_CAT OP_CAT OP_HASH256 OP_1 OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_1ADD OP_16 OP_ROLL <11> OP_ROLL OP_8 OP_PICK OP_8 OP_PICK <14> OP_PICK <6a> OP_CAT OP_7 OP_ROLL OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_6 OP_ROLL OP_CAT OP_5 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_4 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_3 OP_ROLL OP_CAT OP_4 OP_ROLL OP_CAT OP_ROT OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_SWAP OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_11 OP_ROLL OP_11 OP_ROLL <1976a914> OP_ROT OP_CAT <88ac> OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_CAT OP_HASH256 OP_9 OP_ROLL OP_SIZE <28> OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_ELSE OP_DUP OP_1 OP_NUMEQUAL OP_IF OP_DROP OP_DUP OP_CODESEPARATOR OP_7 OP_ROLL <0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798> OP_CHECKSIGVERIFY OP_VERIFY OP_DUP <68> OP_SPLIT OP_NIP OP_SIZE <2c> OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP OP_DUP <00> OP_CAT OP_BIN2NUM <fd00> OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_7 OP_PICK OP_SIZE OP_NIP <ea01> OP_SUB OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF <21> OP_SPLIT OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP <20> OP_SPLIT <20> OP_SPLIT OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_DROP OP_12 OP_PICK OP_HASH160 OP_OVER OP_EQUALVERIFY OP_13 OP_ROLL OP_13 OP_ROLL OP_CHECKSIGVERIFY OP_1 OP_8 OP_PICK OP_8 OP_PICK OP_8 OP_PICK OP_8 OP_PICK OP_8 OP_PICK OP_8 OP_PICK OP_8 OP_PICK <13> OP_ROLL <14> OP_PICK <6a> OP_CAT OP_8 OP_ROLL OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_7 OP_ROLL OP_CAT OP_6 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_5 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_4 OP_ROLL OP_CAT OP_3 OP_ROLL OP_CAT OP_ROT OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_SWAP OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_11 OP_ROLL OP_11 OP_ROLL <1976a914> OP_ROT OP_CAT <88ac> OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_CAT OP_HASH256 OP_9 OP_ROLL OP_SIZE <28> OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_ELSE OP_2 OP_NUMEQUALVERIFY OP_DUP OP_CODESEPARATOR OP_13 OP_ROLL <0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798> OP_CHECKSIGVERIFY OP_VERIFY OP_DUP <68> OP_SPLIT OP_NIP OP_SIZE <2c> OP_SUB OP_SPLIT OP_DROP OP_SIZE OP_8 OP_SUB OP_SPLIT OP_DROP OP_1 OP_SPLIT OP_SWAP OP_DUP <00> OP_CAT OP_BIN2NUM <fd00> OP_LESSTHAN OP_IF OP_DROP OP_ELSE OP_DROP OP_2 OP_SPLIT OP_NIP OP_ENDIF OP_13 OP_PICK OP_SIZE OP_NIP <c103> OP_SUB OP_SPLIT OP_NIP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF <21> OP_SPLIT OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP OP_8 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SWAP <20> OP_SPLIT <20> OP_SPLIT OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_DUP <4c> OP_LESSTHAN OP_IF OP_SPLIT OP_ELSE OP_DUP <4d> OP_NUMEQUAL OP_IF OP_DROP OP_2 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ELSE OP_DROP OP_1 OP_SPLIT OP_SWAP OP_BIN2NUM OP_SPLIT OP_ENDIF OP_ENDIF OP_DROP <12> OP_PICK OP_HASH160 OP_OVER OP_EQUALVERIFY <13> OP_ROLL <13> OP_ROLL OP_CHECKSIGVERIFY OP_15 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_16 OP_ROLL OP_CAT OP_16 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN <11> OP_ROLL OP_CAT OP_5 OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN OP_6 OP_PICK OP_CAT <12> OP_PICK OP_SIZE OP_NIP OP_1 OP_NUM2BIN <13> OP_ROLL OP_CAT OP_ROT OP_3 OP_ROLL OP_CAT OP_ROT OP_SWAP OP_CAT OP_CAT OP_1 OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK OP_9 OP_PICK <19> OP_PICK <6a> OP_CAT OP_8 OP_ROLL OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_7 OP_ROLL OP_CAT OP_6 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_5 OP_ROLL OP_8 OP_NUM2BIN OP_CAT OP_4 OP_ROLL OP_CAT OP_3 OP_ROLL OP_CAT OP_ROT OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_SWAP OP_SIZE OP_DUP <4c> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_SWAP OP_CAT OP_ELSE OP_DUP <0001> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP <4c> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <4d> OP_SWAP OP_CAT OP_SWAP OP_CAT OP_ENDIF OP_ENDIF OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_15 OP_ROLL OP_16 OP_ROLL <6a> OP_4 OP_ROLL OP_CAT OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_14 OP_ROLL <76a914> OP_15 OP_ROLL <88ac> OP_CAT OP_CAT OP_SIZE OP_DUP <fd00> OP_LESSTHAN OP_IF OP_2 OP_NUM2BIN OP_1 OP_SPLIT OP_DROP OP_ELSE OP_4 OP_NUM2BIN OP_2 OP_SPLIT OP_DROP <fd> OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_13 OP_ROLL OP_13 OP_ROLL <1976a914> OP_ROT OP_CAT <88ac> OP_CAT OP_SWAP OP_8 OP_NUM2BIN OP_SWAP OP_CAT OP_3 OP_ROLL OP_3 OP_ROLL OP_CAT OP_ROT OP_CAT OP_SWAP OP_CAT OP_HASH256 OP_9 OP_ROLL OP_SIZE <28> OP_SUB OP_SPLIT OP_NIP <20> OP_SPLIT OP_DROP OP_EQUAL OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_NIP OP_ENDIF OP_ENDIF",
+  "buildTimestamp": "2026-11-02T16:31:56.129Z",
   "sourceMap": {
     "mappings": [
       {
@@ -3179,211 +3186,1375 @@
       {
         "opcodeIndex": 1046,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1047,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1048,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1049,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1050,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1051,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1052,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1053,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1054,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1055,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1056,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1057,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1058,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1059,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1060,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1061,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1062,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1063,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1064,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1065,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1066,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1067,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1068,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1069,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1070,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1071,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1072,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1073,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1074,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1075,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1076,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1077,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1078,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1079,
         "sourceFile": "contract.ts",
-        "line": 76,
+        "line": 75,
         "column": 4
       },
       {
         "opcodeIndex": 1080,
         "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1081,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1082,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1083,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1084,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1085,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1086,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1087,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1088,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1089,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1090,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1091,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1092,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1093,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1094,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1095,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1096,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1097,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1098,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1099,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1100,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1101,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1102,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1103,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1104,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1105,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1106,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1107,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1108,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1109,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1110,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1111,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1112,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1113,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1114,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1115,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1116,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1117,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1118,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1119,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1120,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1121,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1122,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1123,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1124,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1125,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1126,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1127,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1128,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1129,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1130,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1131,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1132,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1133,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1134,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1135,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1136,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1137,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1138,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1139,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1140,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1141,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1142,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1143,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1144,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1145,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1146,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1147,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1148,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1149,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1150,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1151,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1152,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1153,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1154,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1155,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1156,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1157,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1158,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1159,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1160,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1161,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1162,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1163,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1164,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1165,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1166,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1167,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1168,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1169,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1170,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1171,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1172,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1173,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1174,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1175,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1176,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1177,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1178,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1179,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1180,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1181,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1182,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1183,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1184,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1185,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1186,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1187,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1188,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1189,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1190,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1191,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1192,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1193,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1194,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1195,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1196,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1197,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1198,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1199,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1200,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1201,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1202,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1203,
+        "sourceFile": "contract.ts",
+        "line": 75,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1204,
+        "sourceFile": "contract.ts",
         "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1205,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1206,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1207,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1208,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1209,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1210,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1211,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1212,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1213,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1214,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1215,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1216,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1217,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1218,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1219,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1220,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1221,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1222,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1223,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1224,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1225,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1226,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1227,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1228,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1229,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1230,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1231,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1232,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1233,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1234,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1235,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1236,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1237,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1238,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1239,
+        "sourceFile": "contract.ts",
+        "line": 76,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1240,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1241,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1242,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1243,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1244,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1245,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1246,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1247,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1248,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1249,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1250,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1251,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1252,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1253,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1254,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1255,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1256,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1257,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1258,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1259,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1260,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1261,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1262,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1263,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1264,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1265,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1266,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1267,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1268,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1269,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1270,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1271,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1272,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1273,
+        "sourceFile": "contract.ts",
+        "line": 77,
+        "column": 4
+      },
+      {
+        "opcodeIndex": 1274,
+        "sourceFile": "contract.ts",
+        "line": 77,
         "column": 4
       }
     ]
@@ -5443,8 +6614,8 @@
           {
             "name": "t41",
             "value": {
-              "kind": "load_param",
-              "name": "verdictSats"
+              "kind": "load_const",
+              "value": "1"
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5455,8 +6626,8 @@
           {
             "name": "t42",
             "value": {
-              "kind": "load_param",
-              "name": "verdictCode"
+              "kind": "load_prop",
+              "name": "metaFlag"
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5467,8 +6638,8 @@
           {
             "name": "t43",
             "value": {
-              "kind": "load_const",
-              "value": "6a"
+              "kind": "load_prop",
+              "name": "genesisOwner"
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5479,11 +6650,8 @@
           {
             "name": "t44",
             "value": {
-              "kind": "call",
-              "func": "toByteString",
-              "args": [
-                "t43"
-              ]
+              "kind": "load_prop",
+              "name": "n"
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5494,12 +6662,8 @@
           {
             "name": "t45",
             "value": {
-              "kind": "call",
-              "func": "cat",
-              "args": [
-                "t44",
-                "vstate"
-              ]
+              "kind": "load_prop",
+              "name": "size"
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5510,12 +6674,8 @@
           {
             "name": "t46",
             "value": {
-              "kind": "call",
-              "func": "cat",
-              "args": [
-                "t42",
-                "t45"
-              ]
+              "kind": "load_prop",
+              "name": "R"
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5526,9 +6686,8 @@
           {
             "name": "t47",
             "value": {
-              "kind": "add_raw_output",
-              "satoshis": "t41",
-              "scriptBytes": "t46"
+              "kind": "load_prop",
+              "name": "Rp"
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5539,39 +6698,47 @@
           {
             "name": "t48",
             "value": {
-              "kind": "load_param",
-              "name": "payoutSats"
+              "kind": "load_prop",
+              "name": "tagRprime"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 76,
+              "line": 75,
               "column": 4
             }
           },
           {
             "name": "t49",
             "value": {
-              "kind": "load_const",
-              "value": "76a914"
+              "kind": "load_prop",
+              "name": "ownerPkh"
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 76,
+              "line": 75,
               "column": 4
             }
           },
           {
             "name": "t50",
             "value": {
-              "kind": "call",
-              "func": "toByteString",
-              "args": [
+              "kind": "add_output",
+              "satoshis": "t41",
+              "stateValues": [
+                "t42",
+                "t43",
+                "t44",
+                "t45",
+                "t46",
+                "t47",
+                "t48",
                 "t49"
-              ]
+              ],
+              "preimage": ""
             },
             "sourceLoc": {
               "file": "contract.ts",
-              "line": 76,
+              "line": 75,
               "column": 4
             }
           },
@@ -5579,7 +6746,7 @@
             "name": "t51",
             "value": {
               "kind": "load_param",
-              "name": "payoutPkh"
+              "name": "verdictSats"
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5590,8 +6757,8 @@
           {
             "name": "t52",
             "value": {
-              "kind": "load_const",
-              "value": "88ac"
+              "kind": "load_param",
+              "name": "verdictCode"
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5602,11 +6769,8 @@
           {
             "name": "t53",
             "value": {
-              "kind": "call",
-              "func": "toByteString",
-              "args": [
-                "t52"
-              ]
+              "kind": "load_const",
+              "value": "6a"
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5618,9 +6782,8 @@
             "name": "t54",
             "value": {
               "kind": "call",
-              "func": "cat",
+              "func": "toByteString",
               "args": [
-                "t51",
                 "t53"
               ]
             },
@@ -5636,8 +6799,8 @@
               "kind": "call",
               "func": "cat",
               "args": [
-                "t50",
-                "t54"
+                "t54",
+                "vstate"
               ]
             },
             "sourceLoc": {
@@ -5649,9 +6812,12 @@
           {
             "name": "t56",
             "value": {
-              "kind": "add_raw_output",
-              "satoshis": "t48",
-              "scriptBytes": "t55"
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t52",
+                "t55"
+              ]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -5662,92 +6828,239 @@
           {
             "name": "t57",
             "value": {
-              "kind": "load_param",
-              "name": "_changePKH"
+              "kind": "add_raw_output",
+              "satoshis": "t51",
+              "scriptBytes": "t56"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 76,
+              "column": 4
             }
           },
           {
             "name": "t58",
             "value": {
               "kind": "load_param",
-              "name": "_changeAmount"
+              "name": "payoutSats"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 77,
+              "column": 4
             }
           },
           {
             "name": "t59",
             "value": {
-              "kind": "call",
-              "func": "buildChangeOutput",
-              "args": [
-                "t57",
-                "t58"
-              ]
+              "kind": "load_const",
+              "value": "76a914"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 77,
+              "column": 4
             }
           },
           {
             "name": "t60",
             "value": {
               "kind": "call",
-              "func": "cat",
+              "func": "toByteString",
               "args": [
-                "t47",
-                "t56"
+                "t59"
               ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 77,
+              "column": 4
             }
           },
           {
             "name": "t61",
             "value": {
-              "kind": "call",
-              "func": "cat",
-              "args": [
-                "t60",
-                "t59"
-              ]
+              "kind": "load_param",
+              "name": "payoutPkh"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 77,
+              "column": 4
             }
           },
           {
             "name": "t62",
             "value": {
-              "kind": "call",
-              "func": "hash256",
-              "args": [
-                "t61"
-              ]
+              "kind": "load_const",
+              "value": "88ac"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 77,
+              "column": 4
             }
           },
           {
             "name": "t63",
             "value": {
-              "kind": "load_param",
-              "name": "txPreimage"
+              "kind": "call",
+              "func": "toByteString",
+              "args": [
+                "t62"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 77,
+              "column": 4
             }
           },
           {
             "name": "t64",
             "value": {
               "kind": "call",
-              "func": "extractOutputHash",
+              "func": "cat",
               "args": [
+                "t61",
                 "t63"
               ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 77,
+              "column": 4
             }
           },
           {
             "name": "t65",
             "value": {
-              "kind": "bin_op",
-              "op": "===",
-              "left": "t62",
-              "right": "t64",
-              "result_type": "bytes"
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t60",
+                "t64"
+              ]
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 77,
+              "column": 4
             }
           },
           {
             "name": "t66",
             "value": {
+              "kind": "add_raw_output",
+              "satoshis": "t58",
+              "scriptBytes": "t65"
+            },
+            "sourceLoc": {
+              "file": "contract.ts",
+              "line": 77,
+              "column": 4
+            }
+          },
+          {
+            "name": "t67",
+            "value": {
+              "kind": "load_param",
+              "name": "_changePKH"
+            }
+          },
+          {
+            "name": "t68",
+            "value": {
+              "kind": "load_param",
+              "name": "_changeAmount"
+            }
+          },
+          {
+            "name": "t69",
+            "value": {
+              "kind": "call",
+              "func": "buildChangeOutput",
+              "args": [
+                "t67",
+                "t68"
+              ]
+            }
+          },
+          {
+            "name": "t70",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t50",
+                "t57"
+              ]
+            }
+          },
+          {
+            "name": "t71",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t70",
+                "t66"
+              ]
+            }
+          },
+          {
+            "name": "t72",
+            "value": {
+              "kind": "call",
+              "func": "cat",
+              "args": [
+                "t71",
+                "t69"
+              ]
+            }
+          },
+          {
+            "name": "t73",
+            "value": {
+              "kind": "call",
+              "func": "hash256",
+              "args": [
+                "t72"
+              ]
+            }
+          },
+          {
+            "name": "t74",
+            "value": {
+              "kind": "load_param",
+              "name": "txPreimage"
+            }
+          },
+          {
+            "name": "t75",
+            "value": {
+              "kind": "call",
+              "func": "extractOutputHash",
+              "args": [
+                "t74"
+              ]
+            }
+          },
+          {
+            "name": "t76",
+            "value": {
+              "kind": "bin_op",
+              "op": "===",
+              "left": "t73",
+              "right": "t75",
+              "result_type": "bytes"
+            }
+          },
+          {
+            "name": "t77",
+            "value": {
               "kind": "assert",
-              "value": "t65"
+              "value": "t76"
             }
           }
         ],

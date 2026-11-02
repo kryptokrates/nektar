@@ -341,8 +341,11 @@ per-op cost.
   leaf (225, real `hashPrevouts`+outpoint co-spend pin), `claimTimeout`/
   `slashTimeout` (218). Canonical eval: `packages/contracts/claim-lifecycle.mjs`.
 - `Poseidon2Stage` family — 29 round-variants (constants baked) —
-  already compiling+VALID; wire `proveStage` to reference the disputed
-  variant.
+  now co-spendable: `fullStep`/`partialStep` take `(postSats,
+  postScript)` and emit `addRawOutput` after their `addOutput`
+  continuation, so a real stage UTXO is spent inside the `proveStage`
+  tx and its script is the consensus judge of the disputed round
+  (VALID 1,373 ops input-side; claim side 249 ops).
 - Bisection protocol spec: state-commitment format, response windows
   (nLockTime), bond amounts, who-watch duty documented.
 - Consumer hooks: `DisclosureSale`/`MamemCheckpointBond` read a settled
@@ -404,9 +407,13 @@ per-op cost.
 - Stage 0 ✅ done: @bsv/sdk `Spend` interpreter (consensus semantics —
   stronger than MockChain ANF), `isRelaxed` Chronicle rules; measured
   ops/bytes per component and per covenant stage.
-- Stage 1: interpreter lifecycle ✅ 10/10 (`claim-lifecycle.mjs`);
-  regtest e2e still open — settle happy path, challenge timeout,
-  bisect-to-leaf with a real disputed `Poseidon2Stage` spend.
+- Stage 1: interpreter lifecycle ✅ 11/11 (`claim-lifecycle.mjs`);
+  regtest e2e ✅ ALL PASS (`e2e-claim-regtest.mjs` — settle, challenge,
+  reveal, bisect×2 to leaf, proveStage co-spend **with a real
+  `Poseidon2Stage` UTXO as the leaf** — both contracts' scripts execute
+  under consensus in the same tx, shared `[stageCont, payout, change]`
+  output enumeration — plus both timeouts, all accepted by Teranode
+  mempool). Remaining: consumer hooks.
 - Stage 2: per-stage vectors + `zkm2-n5i4` fixture e2e on MockChain +
   regtest; real-sats cost table.
 - Repo gates unchanged: `pnpm -r build`, `check-deps`, `pnpm -r test`,

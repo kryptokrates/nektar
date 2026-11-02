@@ -1,7 +1,7 @@
 // Poseidon2Stage — GOAL-v9 Stage 0d: ONE round of poseidon2_mix as a
 // stateful covenant step. 24 cells + round live in the UTXO (never the
 // stack). Round constants are constructor-baked per stage instance.
-import { StatefulSmartContract, assert } from 'runar-lang'
+import { StatefulSmartContract, assert, type ByteString } from 'runar-lang'
 export class Poseidon2Stage extends StatefulSmartContract {
   s0: bigint
   s1: bigint
@@ -56,7 +56,10 @@ export class Poseidon2Stage extends StatefulSmartContract {
     this.s23 = s23
     this.round = round
   }
-  public fullStep () {
+  // postSats/postScript: extra output emitted AFTER our continuation — for
+  // co-spend txs where the claim covenant's payout shares the output list
+  // (both contracts must enumerate the same full outputs for hashOutputs).
+  public fullStep (postSats: bigint, postScript: ByteString) {
     let qt = 0n; let wt = 0n; let zt = 0n
     let ls0 = this.s0
     let ls1 = this.s1
@@ -315,8 +318,9 @@ export class Poseidon2Stage extends StatefulSmartContract {
     this.s22 = ls22
     this.s23 = ls23
     this.addOutput(1n, ls0, ls1, ls2, ls3, ls4, ls5, ls6, ls7, ls8, ls9, ls10, ls11, ls12, ls13, ls14, ls15, ls16, ls17, ls18, ls19, ls20, ls21, ls22, ls23, this.round + 1n)
+    this.addRawOutput(postSats, postScript)
   }
-  public partialStep () {
+  public partialStep (postSats: bigint, postScript: ByteString) {
     let qt = 0n; let wt = 0n; let zt = 0n
     let ls0 = this.s0
     let ls1 = this.s1
@@ -397,5 +401,6 @@ export class Poseidon2Stage extends StatefulSmartContract {
     this.s22 = ls22
     this.s23 = ls23
     this.addOutput(1n, ls0, ls1, ls2, ls3, ls4, ls5, ls6, ls7, ls8, ls9, ls10, ls11, ls12, ls13, ls14, ls15, ls16, ls17, ls18, ls19, ls20, ls21, ls22, ls23, this.round + 1n)
+    this.addRawOutput(postSats, postScript)
   }
 }

@@ -37,7 +37,7 @@ const stateRefs=[...Array(C)].map((_,i)=>`this.s${i}`).join(', ')
 L.push(`// Poseidon2Stage — GOAL-v9 Stage 0d: ONE round of poseidon2_mix as a`)
 L.push(`// stateful covenant step. 24 cells + round live in the UTXO (never the`)
 L.push(`// stack). Round constants are constructor-baked per stage instance.`)
-L.push(`import { StatefulSmartContract, assert } from 'runar-lang'`)
+L.push(`import { StatefulSmartContract, assert, type ByteString } from 'runar-lang'`)
 L.push(`export class Poseidon2Stage extends StatefulSmartContract {`)
 for(let i=0;i<C;i++)L.push(`  s${i}: bigint`)
 L.push(`  round: bigint`)
@@ -49,7 +49,10 @@ L.push(`  }`)
 // methods compute into plain locals l0..l23 (ANF-friendly), then write
 // this.sX back once — the stateful covenant emits continuation state.
 function emitMethod (name, kind) {
-  L.push(`  public ${name} () {`)
+  // postSats/postScript: extra output emitted AFTER the continuation so the
+  // stage can co-spend inside MamemZkClaim.proveStage txs (both contracts
+  // must enumerate the same full output list for the hashOutputs check).
+  L.push(`  public ${name} (postSats: bigint, postScript: ByteString) {`)
   L.push(`    let qt = 0n; let wt = 0n; let zt = 0n`)
   for (let i=0;i<C;i++) L.push(`    let ls${i} = this.s${i}`)
   if (kind === 'full') {
@@ -63,6 +66,7 @@ function emitMethod (name, kind) {
   for (let i=0;i<C;i++) L.push(`    this.s${i} = ls${i}`)
   const outs = [...Array(C)].map((_,i)=>`ls${i}`).join(', ')
   L.push(`    this.addOutput(1n, ${outs}, this.round + 1n)`)
+  L.push(`    this.addRawOutput(postSats, postScript)`)
   L.push(`  }`)
 }
 emitMethod('fullStep', 'full')

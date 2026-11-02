@@ -95,17 +95,30 @@ const callTerminal = async (c, method, args, prov, signer, outputs, changePkh) =
   fund(prov,challenger)
   await c.call('bisect',[null,cpk,1n],prov,challenger,{newState:st0({status:2n,challengerPkh:pkh(cpk),responseDeadline:100n,bisectLo:3n,bisectHi:4n})})
   evalSpend(prov,'bisect2',0,1)
-  // proveStage: manual 2-input tx — [claim UTXO, stage UTXO]; terminal unlock layout
+  // proveStage: real Poseidon2Stage UTXO co-spend — [claim UTXO, stage UTXO].
+  // Outputs = [stageCont(1sat), payout(4990), shared change(0)] — the stage's
+  // addOutput emits its continuation @out0; its addRawOutput(post) re-emits
+  // our payout; both contracts enumerate the same full output list.
   {
+    const { computeNewState, serializeState } = await import('runar-sdk')
+    const stageArt = JSON.parse(readFileSync('Poseidon2Stage.json','utf8'))
+    const stIn = Object.fromEntries([...Array(24)].map((_,i)=>[`s${i}`,BigInt(i)])); stIn.round = 0n
+    const sc = new RunarContract(stageArt, [...[...Array(24)].map((_,i)=>BigInt(i)), 0n])
+    sc.connect(prov, prover); await sc.deploy({satoshis:1})
+    const stageUtxo = sc.currentUtxo
+    const postScript = p2pkhScript(pkh(pk))
+    const stOut = computeNewState(stageArt.anf, 'fullStep', stIn, {postSats:4990n, postScript})
+    const stageContScript = stageArt.script + '6a' + serializeState(stageArt.stateFields, stOut)
+
     const claimUtxo = c.currentUtxo
-    const stageUtxo={txid:'ef'.repeat(32),outputIndex:0,satoshis:2000,script:p2pkhScript(pkh(pk))}
     const ourOp = Buffer.concat([Buffer.from(claimUtxo.txid,'hex').reverse(),Buffer.from([0,0,0,0])]).toString('hex')
     const stageOp = Buffer.concat([Buffer.from(stageUtxo.txid,'hex').reverse(),Buffer.from([0,0,0,0])]).toString('hex')
     const prevouts = ourOp+stageOp
     const tx = new BsvTransaction()
     tx.addInput({sourceTXID:claimUtxo.txid,sourceOutputIndex:claimUtxo.outputIndex,unlockingScript:UnlockingScript.fromHex('00'),sequence:0xffffffff})
-    tx.addInput({sourceTXID:stageUtxo.txid,sourceOutputIndex:0,unlockingScript:UnlockingScript.fromHex('00'),sequence:0xffffffff})
-    tx.addOutput({satoshis:4990,lockingScript:LockingScript.fromHex(p2pkhScript(pkh(pk)))})
+    tx.addInput({sourceTXID:stageUtxo.txid,sourceOutputIndex:stageUtxo.outputIndex,unlockingScript:UnlockingScript.fromHex('00'),sequence:0xffffffff})
+    tx.addOutput({satoshis:1,lockingScript:LockingScript.fromHex(stageContScript)})
+    tx.addOutput({satoshis:4990,lockingScript:LockingScript.fromHex(postScript)})
     tx.addOutput({satoshis:0,lockingScript:LockingScript.fromHex(p2pkhScript(pkh(pk)))})
     const pubMethods = c.artifact.abi.methods.filter(m=>m.isPublic)
     const mIdx = pubMethods.findIndex(m=>m.name==='proveStage')
@@ -113,15 +126,32 @@ const callTerminal = async (c, method, args, prov, signer, outputs, changePkh) =
     const sigSub = c.getSubscriptForSigning(claimUtxo.script, mIdx)
     const userSig = await prover.sign(tx.toHex(), 0, sigSub, claimUtxo.satoshis)
     const unlock = c.buildStatefulPrefix(opSig, true)
-      + encArg(userSig)+encArg(pk)+encArg(prevouts)+encArg(stageOp)+encArg(4990n)
+      + encArg(userSig)+encArg(pk)+encArg(prevouts)+encArg(stageOp)+encArg(4990n)+encArg(1n)+encArg(stageContScript)
       + encPush(pkh(pk))+encNum(0n)
       + encPush(preimage)+encNum(BigInt(mIdx))
     tx.inputs[0].unlockingScript = UnlockingScript.fromHex(unlock)
-    const stageSig = await prover.sign(tx.toHex(), 1, stageUtxo.script, stageUtxo.satoshis)
-    tx.inputs[1].unlockingScript = UnlockingScript.fromHex(encPush(stageSig)+encPush(pk))
+    // stage leg: continuation unlock [codePart][opSig][postSats][postScript][changePKH][changeAmt][preimage][sel=fullStep]
+    const sPub = stageArt.abi.methods.filter(m=>m.isPublic)
+    const sIdx = sPub.findIndex(m=>m.name==='fullStep')
+    const {sigHex:opSig2, preimageHex:preimage2} = sc.computeOpPushTxWithCodeSep(tx, 1, stageUtxo.script, stageUtxo.satoshis, sIdx)
+    tx.inputs[1].unlockingScript = UnlockingScript.fromHex(
+      sc.buildStatefulPrefix(opSig2, true)
+      + encArg(4990n)+encArg(postScript)
+      + encPush(pkh(pk))+encNum(0n)
+      + encPush(preimage2)+encNum(BigInt(sIdx)))
     await prov.broadcast(tx)
     c.currentUtxo = null
-    evalSpend(prov,'proveStage',0,1)
+    evalSpend(prov,'proveStage',0,2)
+    // also validate the stage's own input — its script judges the round under consensus
+    {
+      const st=Transaction.fromHex(prov.getBroadcastedTxs().at(-1))
+      const sp=new Spend({sourceTXID:stageUtxo.txid,sourceOutputIndex:stageUtxo.outputIndex,sourceSatoshis:stageUtxo.satoshis,
+        lockingScript:LockingScript.fromHex(stageUtxo.script),transactionVersion:st.version,
+        otherInputs:st.inputs.filter((_,i)=>i!==1),outputs:st.outputs,inputIndex:1,
+        unlockingScript:st.inputs[1].unlockingScript,inputSequence:st.inputs[1].sequence??0xffffffff,
+        lockTime:st.lockTime??0,isRelaxed:true})
+      try{sp.validate();console.log('stage-input VALID ops:',sp.executedOpCount);PASS++}catch(e){console.log('stage-input FAIL:',e.message.slice(0,80));FAILS.push('stage-input')}
+    }
   }
 }
 // ── 3. claimTimeout (challenger silent; window=0 → responseDeadline=0) ──

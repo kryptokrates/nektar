@@ -132,14 +132,19 @@ export class MamemZkClaim extends StatefulSmartContract {
    *  sha256(prevouts) == hashPrevouts(preimage) AND prevouts ==
    *  ourOutpoint ‖ stageOutpoint. The stage contract's script itself
    *  checks the disputed transition under consensus. */
-  public proveStage (sig: Sig, pubKey: PubKey, prevouts: ByteString, stageOutpoint: ByteString, payoutSats: bigint) {
+  public proveStage (sig: Sig, pubKey: PubKey, prevouts: ByteString, stageOutpoint: ByteString, payoutSats: bigint, stageSats: bigint, stageOutScript: ByteString) {
     assert(hash160(pubKey) === this.proverPkh)
     assert(checkSig(sig, pubKey))
     assert(this.status === 2n)
     assert(this.bisectHi - this.bisectLo <= 1n)
     assert(hash256(prevouts) === extractHashPrevouts(this.txPreimage))
     assert(prevouts === cat(extractOutpoint(this.txPreimage), stageOutpoint))
-    assert(extractAmount(this.txPreimage) - payoutSats <= this.maxFee + 1n)
+    assert(extractAmount(this.txPreimage) - payoutSats <= this.maxFee + 1n + stageSats)
+    // The stage's continuation output goes FIRST (its addOutput emits @out0);
+    // the stage's own addRawOutput(postSats, postScript) must re-emit our
+    // payout as its post-output so both contracts enumerate the same tx
+    // outputs for the hashOutputs check.
+    this.addRawOutput(stageSats, stageOutScript)
     this.addRawOutput(payoutSats, cat(toByteString('76a914'), cat(this.proverPkh, toByteString('88ac'))))
   }
 

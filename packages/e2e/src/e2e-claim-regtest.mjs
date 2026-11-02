@@ -7,7 +7,7 @@ import { PrivateKey, Transaction, LockingScript, P2PKH, Hash, Transaction as Bsv
 import { buildP2PKHScript } from 'runar-sdk'
 import { MamemProvider } from '@mamem/anchor'
 import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve } from '@mamem/chain'
-import { RunarContract, LocalSigner } from 'runar-sdk'
+import { RunarContract, LocalSigner, computeNewState, serializeState } from 'runar-sdk'
 import { existsSync, readFileSync } from 'node:fs'
 
 let failures = 0
@@ -129,20 +129,32 @@ try {
   check(!!rv2.txid, `reveal2 (${rv2.txid?.slice(0, 12)}…)`)
   const b2 = await c.call('bisect', [null, pubKeyHex, 0n], provider, signer, { newState: st0({ status: 2n, challengerPkh: opPkh, responseDeadline: 0n, window: 0n, bisectLo: 2n, bisectHi: 3n }) })
   check(!!b2.txid, `bisect [2,4]→[2,3] leaf (${b2.txid?.slice(0, 12)}…)`)
-  // proveStage: manual 2-input tx — [claim, stage stand-in P2PKH]
+  // proveStage: REAL Poseidon2Stage co-spend — [claim, stage UTXO].
+  // Stage UTXO carries round-0 state (cells 0..23); the co-spend tx outputs
+  // [stageCont(1sat), payout(4990), sharedChange(1sat)] — the stage's
+  // addOutput emits its continuation @out0; its addRawOutput(post) re-emits
+  // our payout so both contracts enumerate the same full output list.
   {
     const claimUtxo = c.currentUtxo
+    const stageArt = JSON.parse(readFileSync(new URL('../../contracts/Poseidon2Stage.json', import.meta.url), 'utf8'))
+    const stIn = Object.fromEntries([...Array(24)].map((_, i) => [`s${i}`, BigInt(i)])); stIn.round = 0n
+    const stageScript = stageArt.script + '6a' + serializeState(stageArt.stateFields, stIn)
+    const postScript = p2pkh(opPkh)
+    const stOut = computeNewState(stageArt.anf, 'fullStep', stIn, { postSats: 4990n, postScript })
+    const stageContScript = stageArt.script + '6a' + serializeState(stageArt.stateFields, stOut)
+
+    // fund the stage UTXO (200 sats — 1-sat continuation is hardcoded inside)
     const stageFund = await reserve.takeReserve()
     const stageTx = new Transaction()
     stageTx.addInput({ sourceTransaction: stageFund.tx, sourceOutputIndex: stageFund.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
-    stageTx.addOutput({ satoshis: 2000, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
-    const sc = stageFund.satoshis - 2000 - 100
-    if (sc > 0) stageTx.addOutput({ satoshis: sc, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
+    stageTx.addOutput({ satoshis: 200, lockingScript: LockingScript.fromHex(stageScript) })
+    const scChange = stageFund.satoshis - 200 - 200
+    if (scChange > 0) stageTx.addOutput({ satoshis: scChange, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
     await stageTx.sign()
     const br = await broadcaster.broadcast(stageTx)
     if (br.status !== 'success') throw new Error('stage fund refused: ' + br.description)
     provider.markAccepted(stageTx) // book-keep: input spent + change owned
-    const stageUtxo = { txid: stageTx.id('hex'), outputIndex: 0, satoshis: 2000, script: p2pkh(opPkh), parent: stageTx }
+    const stageUtxo = { txid: stageTx.id('hex'), outputIndex: 0, satoshis: 200, script: stageScript }
 
     const ourOp = Buffer.concat([Buffer.from(claimUtxo.txid, 'hex').reverse(), Buffer.from([0, 0, 0, 0])]).toString('hex')
     const stageOp = Buffer.concat([Buffer.from(stageUtxo.txid, 'hex').reverse(), Buffer.from([0, 0, 0, 0])]).toString('hex')
@@ -150,7 +162,8 @@ try {
     const tx = new BsvTransaction()
     tx.addInput({ sourceTXID: claimUtxo.txid, sourceOutputIndex: claimUtxo.outputIndex, unlockingScript: UnlockingScript.fromHex('00'), sequence: 0xffffffff })
     tx.addInput({ sourceTXID: stageUtxo.txid, sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex('00'), sequence: 0xffffffff })
-    tx.addOutput({ satoshis: 4990, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
+    tx.addOutput({ satoshis: 1, lockingScript: LockingScript.fromHex(stageContScript) })
+    tx.addOutput({ satoshis: 4990, lockingScript: LockingScript.fromHex(postScript) })
     tx.addOutput({ satoshis: 1, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
     const pubMethods = c.artifact.abi.methods.filter(m => m.isPublic)
     const mIdx = pubMethods.findIndex(m => m.name === 'proveStage')
@@ -158,15 +171,22 @@ try {
     const sigSub = c.getSubscriptForSigning(claimUtxo.script, mIdx)
     const userSig = await signer.sign(tx.toHex(), 0, sigSub, claimUtxo.satoshis)
     const unlock = c.buildStatefulPrefix(opSig, true)
-      + encArg(userSig) + encArg(pubKeyHex) + encArg(prevouts) + encArg(stageOp) + encArg(4990n)
+      + encArg(userSig) + encArg(pubKeyHex) + encArg(prevouts) + encArg(stageOp) + encArg(4990n) + encArg(1n) + encArg(stageContScript)
       + encPush(opPkh) + encNum(1n)
       + encPush(preimage) + encNum(BigInt(mIdx))
     tx.inputs[0].unlockingScript = UnlockingScript.fromHex(unlock)
-    // manual P2PKH for input1 — tx.sign() would need sourceTransaction on input0 too
-    const stageSig = await signer.sign(tx.toHex(), 1, stageUtxo.script, stageUtxo.satoshis)
-    tx.inputs[1].unlockingScript = UnlockingScript.fromHex(encPush(stageSig) + encPush(pubKeyHex))
+    // stage leg: [codePart][opSig][postSats][postScript][changePKH][changeAmt][preimage][sel=fullStep]
+    const sContract = new RunarContract(stageArt, [...[...Array(24)].map((_, i) => BigInt(i)), 0n])
+    const sPub = stageArt.abi.methods.filter(m => m.isPublic)
+    const sIdx = sPub.findIndex(m => m.name === 'fullStep')
+    const { sigHex: opSig2, preimageHex: preimage2 } = sContract.computeOpPushTxWithCodeSep(tx, 1, stageUtxo.script, stageUtxo.satoshis, sIdx)
+    tx.inputs[1].unlockingScript = UnlockingScript.fromHex(
+      sContract.buildStatefulPrefix(opSig2, true)
+      + encArg(4990n) + encArg(postScript)
+      + encPush(opPkh) + encNum(1n)
+      + encPush(preimage2) + encNum(BigInt(sIdx)))
     const pr = await broadcaster.broadcast(tx)
-    check(pr.status === 'success', `proveStage leaf co-spend (${tx.id('hex').slice(0, 12)}…${pr.status !== 'success' ? ' ' + pr.description?.slice(0, 60) : ''})`)
+    check(pr.status === 'success', `proveStage REAL stage co-spend (${tx.id('hex').slice(0, 12)}…${pr.status !== 'success' ? ' ' + pr.description?.slice(0, 60) : ''})`)
   }
 } catch (e) { check(false, `dispute path: ${e.message.slice(0, 90)}`) }
 

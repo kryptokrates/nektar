@@ -8,6 +8,9 @@
 //                                               local Teranode stack; prints
 //                                               the exact funding command if
 //                                               unfunded
+//   --fund-txid=<txid>                         → import outputs paying our key
+//                                               from a known funding tx —
+//                                               tracked-set model, no index
 //   --force                                    → rotate an existing key (old
 //                                               funds stay with the old key)
 //   MAMEM_ENV_FILE=/path/to/.env               → target a different env file
@@ -109,7 +112,23 @@ if (network === 'regtest') {
     const stateFile = fileURLToPath(new URL('../../../../.state/init-reserve.json', import.meta.url))
     const treasuryFile = fileURLToPath(new URL('../../../../.state/init-treasury.json', import.meta.url))
     const reserve = new ReserveFunder(key, stateFile)
-    if (!fresh) await reserve.scanCoinbases(cfg, rpc, Math.max(1, tip - 400), tip - 101)
+    // --fund-txid=<txid>: tracked-set funding import — the operator made a
+    // transaction paying our address from any funded wallet and hands us the
+    // txid. We fetch just that tx (getrawtransaction) and record the outputs
+    // paying our key. No address index, no scanning.
+    const fundTxid = ARGV('fund-txid')
+    if (fundTxid) {
+      const { Transaction } = await import('@bsv/sdk')
+      const hex = await rpc('getrawtransaction', fundTxid) as string
+      const tx = Transaction.fromHex(hex)
+      const want = `76a914${Buffer.from(key.toPublicKey().toHash()).toString('hex')}88ac`
+      let imported = 0
+      for (const [vout, o] of tx.outputs.entries()) {
+        if (o.lockingScript.toHex() === want && !reserve.isSpent(fundTxid, vout)) { reserve.addOwned(tx, vout); imported++ }
+      }
+      console.log(`  funding : imported ${imported} output(s) paying our key from ${fundTxid.slice(0, 16)}…`)
+    }
+    if (!fresh && !fundTxid) await reserve.scanCoinbases(cfg, rpc, Math.max(1, tip - 400), tip - 101)
     if (reserve.utxos.length > 0) {
       console.log(`  reserve : funded — ${reserve.utxos.length} mature coinbase output(s) found`)
     } else if (existsSync(treasuryFile)) {
@@ -118,7 +137,11 @@ if (network === 'regtest') {
       const tx = await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile, outputs: 16, maxCandidates: 0 })
       console.log(tx ? `  reserve : funded — split tx ${tx.id('hex').slice(0, 16)}… (+${reserve.utxos.length} outputs)` : '  reserve : treasury present but already spent — fund manually')
     } else {
-      console.log('  reserve : unfunded — fund it, then rerun --regtest:')
+      console.log('  reserve : unfunded — two ways to fund (no scanning):')
+      console.log('    a) send a tx to our address from any funded wallet, then:')
+      console.log(`         node dist/src/init.js --network=regtest --fund-txid=<txid>`)
+      console.log(`       address: ${key.toPublicKey().toAddress([0x6f])}`)
+      console.log('    b) mine blocks containing fee-paying txs to our key, then rerun --regtest:')
       console.log(`            curl -u <rpc_user>:<rpc_pass> -d '{"method":"generatetoaddress","params":[101,"${key.toPublicKey().toAddress([0x6f])}"]}' ${cfg.rpcUrl}`)
     }
   } catch (e) {

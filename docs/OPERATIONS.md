@@ -28,6 +28,32 @@ Bootstrap the operator wallet with `node packages/mcp/dist/src/init.js` — it w
 - If the treasury is missing, it is bootstrapped from an early coinbase.
 - The **funding key is separate from every owner key**: shards and automata have their own owner keys, and one funder pays fees.
 
+### Tracked-set model (no indexer dependency)
+
+Mamem deliberately does **not** scan the chain or query address indexes —
+both scale with total network volume. Instead it only ever spends outpoints
+it already knows: outputs **it created** (splits, change — recorded at
+construction) or outputs **handed to it** (`MAMEM_FUND_TXIDS=<txid>` /
+`hex:<rawtx>`, `init.js --fund-txid=<txid>`). This is the SPV model the BSV
+Association's own SPV Wallet specifies: counterparties exchange transactions
+directly (BEEF/BRC-62, BUMP/BRC-74), verifiable against block headers —
+global address indexes are explicitly excluded for scale reasons.
+
+Per-network primitives, all O(1) per known outpoint/txid:
+
+| need | regtest (Teranode) | mainnet |
+|---|---|---|
+| tx mined? | `asset /merkle_proof/<txid>` (404 = pending) | BSV Broadcaster `GET /tx/<txid>` → `merklePath` (BRC-74 BUMP) |
+| outpoint spent? | `asset /utxo/<txid>?vout=N` (binary record; 0x01 = spent + spending txid) — wired into `takeReserve` | our ledger: we're the only spender — a spend is spent iff *our* spend tx mined (broadcaster status) |
+| funding | `init --fund-txid` → `getrawtransaction` → record outputs paying our key | `MAMEM_FUND_TXIDS=<txid>` or `hex:<rawtx>` (fully offline) |
+
+`MAMEM_INDEXER_DISCOVERY=1` re-enables WoC address-index lookup as an opt-in
+convenience — off by default. Broadcasting is the one unavoidable external
+service (public BSV Broadcaster endpoints are no-key: `arcade-*-1.bsvblockchain.tech`,
+`arcade.gorillapool.io`); running your own Teranode (e.g. a Hetzner box) makes
+the regtest path *literally* the self-sovereign mainnet path — same endpoints,
+same code.
+
 ## Gates (run in this order; each has a short, bounded runtime)
 
 ```sh

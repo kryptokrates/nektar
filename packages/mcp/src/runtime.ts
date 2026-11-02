@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { PrivateKey, MerklePath, type Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
 import { KnexShardStore, type ShardStore } from '@mamem/log'
 import { MamemMemory, type MamemMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -207,7 +207,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     if (!s && reserve.utxos.length === 0) throw new Error('regtest: could not fund the reserve (no unspent treasury or early coinbase for the fund key)')
     if (s) await mineOne()
   }
-  const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve() }
+  const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve(async (t, v) => (await utxoStatus(rc, t, v)) === 'spent') }
   const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker)
   const chain = {
     broadcast: async (tx: Transaction) => {
@@ -460,8 +460,13 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     try { for (const u of await importFundingTx(mc, txid, pkhHex)) addIfNew(u) } catch (e) { process.stderr.write(`mamem ${net}: funding import ${txid}: ${(e as Error).message}\n`) }
   }
   const topUp = async () => {
-    // address discovery is best-effort (WoC-TTN's address index returns 500)
-    try { for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u) } catch (e) { process.stderr.write(`mamem ${net}: UTXO discovery unavailable (${(e as Error).message}) — set MAMEM_FUND_TXIDS=<funding txid>\n`) }
+    // tracked-set model: we spend only what we made or were handed. Address-
+    // index discovery (WoC) is OPT-IN — MAMEM_INDEXER_DISCOVERY=1 — because it
+    // creates an indexer dependency that doesn't scale. The default funding
+    // path is MAMEM_FUND_TXIDS=<txid|hex:rawtx> (import above).
+    if (process.env.MAMEM_INDEXER_DISCOVERY === '1') {
+      try { for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u) } catch (e) { process.stderr.write(`mamem ${net}: UTXO discovery unavailable (${(e as Error).message}) — set MAMEM_FUND_TXIDS=<funding txid>\n`) }
+    }
     if (reserve.utxos.length === 0) process.stderr.write(`mamem ${net}: reserve empty — send coins to ${fundAddress} and set MAMEM_FUND_TXIDS\n`)
   }
   await topUp()

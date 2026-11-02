@@ -259,10 +259,17 @@ export class ReserveFunder {
   /** Peek at the next unspent candidate — NON-destructive. runar calls
    * getUtxos multiple times per anchor; consuming on hand-out leaked entries
    * through failed broadcasts and drained the pool mid-burst. Entries are
-   * marked spent only when their tx actually broadcasts (markSpent). */
-  async takeReserve (): Promise<{ tx: Transaction, vout: number, satoshis: number } | null> {
-    const u = this.utxos.find(x => !this.spent.has(this.op(x.tx.id('hex'), x.vout)))
-    return u ?? null
+   * marked spent only when their tx actually broadcasts (markSpent).
+   * `spendCheck` (optional) is an O(1) chain lookup: when it reports a
+   * candidate definitively spent it is pruned and the next is tried —
+   * 'unknown' results are kept (pending txs may lag the UTXO store). */
+  async takeReserve (spendCheck?: (txid: string, vout: number) => Promise<boolean>): Promise<{ tx: Transaction, vout: number, satoshis: number } | null> {
+    while (true) {
+      const u = this.utxos.find(x => !this.spent.has(this.op(x.tx.id('hex'), x.vout)))
+      if (!u) return null
+      if (spendCheck && await spendCheck(u.tx.id('hex'), u.vout)) { this.markSpent(u.tx.id('hex'), u.vout); continue }
+      return u
+    }
   }
 
   /** Scan generated block coinbases for outputs to our key; add mature ones. */
@@ -343,6 +350,18 @@ export async function bootstrapReserve (cfg: RegtestConfig, key: PrivateKey, res
     }
   }
   return null
+}
+
+/** O(1) UTXO spend-status via the asset store — the endpoint answers for a
+ *  known outpoint, so no scanning or address index is involved. Response is
+ *  binary: unspent → all-zero record; spent → 0x01 followed by the spending
+ *  txid (and block data). 404 → the store doesn't know the outpoint
+ *  (pending tx lag or pruned record) — reported as 'unknown', never spent. */
+export async function utxoStatus (cfg: RegtestConfig, txid: string, vout: number): Promise<'unspent' | 'spent' | 'unknown'> {
+  const res = await assetGet(cfg, `utxo/${txid}?vout=${vout}`)
+  if (!res) return 'unknown'
+  const b = new Uint8Array(await res.arrayBuffer())
+  return b[0] === 1 ? 'spent' : 'unspent'
 }
 
 /** MerklePath for a txid at a known block height. */

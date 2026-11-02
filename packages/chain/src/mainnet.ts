@@ -196,12 +196,18 @@ async function getOk (c: ReturnType<typeof def>, url: string, headers: Record<st
 
 // --- funding import by txid (address indexes can be unavailable, e.g. WoC-TTN) ---
 /** fetch a funding tx and return its P2PKH outputs locked to `pkhHex` */
-export async function importFundingTx (cfg: MainnetConfig | undefined, txid: string, pkhHex: string): Promise<FundingOut[]> {
+export async function importFundingTx (cfg: MainnetConfig | undefined, ref: string, pkhHex: string): Promise<FundingOut[]> {
+  // 'hex:<rawtx>' = fully offline import — the operator hands us the funding
+  // transaction itself, no network fetch and no index involved.
+  if (ref.startsWith('hex:')) return fundingOutputs(Transaction.fromHex(ref.slice(4)), pkhHex)
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey
-  const r = await getOk(c, `${c.wocUrl}/tx/${txid}/hex`, h)
-  const tx = Transaction.fromHex((await r.text()).trim())
+  const r = await getOk(c, `${c.wocUrl}/tx/${ref}/hex`, h)
+  return fundingOutputs(Transaction.fromHex((await r.text()).trim()), pkhHex)
+}
+
+function fundingOutputs (tx: Transaction, pkhHex: string): FundingOut[] {
   const want = `76a914${pkhHex}88ac`
   return tx.outputs.flatMap((o, vout) => o.lockingScript.toHex() === want ? [{ tx, vout, satoshis: o.satoshis ?? 0 }] : [])
 }

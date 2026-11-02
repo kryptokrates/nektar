@@ -8,10 +8,23 @@ ambitious sentence (§18): *"the entire validation protocol is
 executable on-chain if necessary, or via zero-knowledge circuits for
 privacy-preserving attestation."*
 
-Status: **PLAN — staged spikes first; nothing built yet.** This document
-is the single reference: what we want, why, the evidence it is feasible,
-the exact component connections, the stage plan, and the honest
-remaining unknowns.
+Status: **Stage 0 COMPLETE (2026-11-02) — the mechanism is proven under
+the real Script interpreter; architecture = optimistic-first.**
+
+The economics constraint (sub-cent, on-the-fly) made the primary path
+clear: **optimistic verification (BitVM-style)** — a claim+bond UTXO
+settles in ~2 txs in the honest case; the full on-chain verification
+machinery exists as the *dispute backstop* that punishes a lying prover.
+Full-validity mode (every permutation checked by consensus, ~10⁴ txs)
+remains the documented upgrade for high-value finalities — same stage
+primitive, same covenant interface.
+
+**Gate decision:** no trusted setup — Groth16-wrap rejected; the prover
+uses the existing transparent RISC Zero STARK receipts unchanged.
+
+This document is the single reference: what we want, why, the evidence
+it is feasible, the exact component connections, the stage plan, and
+the honest remaining unknowns.
 
 ---
 
@@ -50,14 +63,18 @@ The paper's exact target:
 - §18: the validation protocol "executable on-chain … via
   zero-knowledge circuits" — endorsing exactly this construction.
 
-**Constraint from the user: trustless.** Groth16-wrapping (1 tx, ~500 KB
-script, proven on BSV mainnet July 2024) is rejected because it
-re-introduces a trusted setup — the ceremony our transparent-STARK
-design exists to avoid. The path is therefore the **multi-transaction
-STARK verifier**: the proof verified across covenant-chained
-transactions, each checking one stage — the architecture StarkWare /
-Bitcoin Wildlife Sanctuary demonstrated on Signet (July 2024, ~74 txs,
-~790 KB, Circle-STARK).
+**Constraint from the user: trustless + sub-cent + on-the-fly.**
+Groth16-wrapping (1 tx, ~500 KB script, proven on BSV mainnet July
+2024) is rejected for its trusted setup. Full multi-transaction STARK
+verification (the BWS architecture, ~74 txs/~790 KB on Signet) is
+*measured-feasible* here (~10⁴ txs naive — Stage 0) but cannot meet
+the economics: consensus executes every op, so it costs what it costs.
+**The path that satisfies all three constraints is the optimistic
+model (§4.5):** the claim+bond covenant settles the honest case in ~2
+txs for fractions of a cent, while a bisection game — whose leaf is the
+very same `Poseidon2Stage` covenant proven in Stage 0 — makes lying
+provable and punishable. No trusted party at any point; the full
+validity chain remains as the upgrade for high-value finalities.
 
 ## 2. Why we do it — the concrete gap
 
@@ -160,10 +177,59 @@ flowchart TB
 | `packages/zk` (codec, `verifyZkm2`) | ✅ | The WASM verifier stays **authoritative off-chain** — dual-verifier, never a fork. On-chain verify is additive. |
 | `MamemAnchor`/`AnchorChain` | ✅ | Supplies the anchor head whose `R_n`/`size` the terminal stage must match. The verifier chain *references* it; does not consume it. |
 | `zkQueries` / `issueZkQuery` | ✅ (GOAL-v8/Π work) | queryIds already carry `{nonce, verifierId}` — the on-chain state carries the queryId through stages; the terminal tx burns it on-chain. |
-| `MamemZkVerifier` chain | 🆕 **the artifact** | A UTXO chain like `AnchorChain` where on-chain state = transcript accumulator + stage counter + commitments; each spend = one stage's unrolled Script. |
+| `MamemZkClaim` covenant | 🆕 **primary artifact** | The optimistic claim+bond UTXO (§4.5): settle-after-deadline happy path, challenge/bisection dispute path, `Poseidon2Stage` leaf proof. ~2 txs ≈ fractions of a cent. |
+| `MamemZkVerifier` chain | 🆕 (full-validity mode) | The A-mode artifact: every permutation consensus-checked across ~10⁴ covenant txs. Same stage primitive; deferred to the high-value-finality upgrade. |
 | Stage-emitter | 🆕 | TS generator producing the unrolled per-stage scripts (sCrypt-style emitted code), driven by a stage decomposition table. |
 | `verifyCombined` / Π | ✅ | Off-chain Π stays; **Stage 3** adds the on-chain ZKAccess leg (Bulletproof verifier in Script — EC ops proven feasible by the Groth16 work). |
 | `DisclosureSale`, `MamemCheckpointBond` | ✅ (V2/V3) | **Consumers**: gain "release/pay iff valid-proof-attached" script conditions — the actual reason this matters. |
+
+### 4.5 The optimistic path — the economics-viable architecture (PRIMARY)
+
+Full consensus-verification of a STARK can never be sub-cent — miners
+must execute the ops. The optimistic model is the **only** trustless
+structure that meets the economics: pay for the honest case, make lying
+more expensive than it gains.
+
+```mermaid
+flowchart TB
+    P["Prover"] -->|"tx₁: MamemZkClaim UTXO<br/>{receiptHash, bond, deadline, prover}"| CLM[("claim + bond<br/>~2KB")]
+    CLM -->|"happy path — nobody challenges<br/>tx₂ settles after deadline"| OK["verdict accepted:<br/>consumers spend vs claim"]
+    CLM -->|"anyone, before deadline:<br/>challenge UTXO + own bond"| CHG["bisection game<br/>(off-chain negotiation,<br/>on-chain commitments)"]
+    CHG -->|"~log₂(29)≈5 rounds:<br/>prover reveals mid-state,<br/>challenger picks divergent half"| LEAF["leaf dispute = ONE stage<br/>= Poseidon2Stage covenant<br/>(proven: 1353 ops VALID)"]
+    LEAF -->|"stage checks claimed<br/>state transition"| VERD{"state transition<br/>valid?"}
+    VERD -->|"no — prover lied"| SLASH["prover bond → challenger<br/>claim void"]
+    VERD -->|"yes — claim holds"| SETTLE["claim stands,<br/>challenger bond → prover"]
+```
+
+**Claim format** (`MamemZkClaim` covenant, new contract):
+- state = `{receiptHash, journalRoot, journalSize, queryId, bondSats,
+  proverPkh, deadline}` — a commitment to "this receipt verifies against
+  this anchor", not the receipt itself (bytes stay off-chain).
+- `settle(preimage, anchorTx)` — spendable by the consumer once
+  `locktime ≥ deadline`: asserts `journalRoot == decodeMamemAnchor(
+  anchorTx).R` on-chain (the App-C binding), burns `queryId`, releases
+  the verdict UTXO the consumer's covenant references.
+- `challenge(challengerPkh)` — anyone before deadline: converts the
+  claim UTXO into a dispute UTXO carrying both bonds.
+- `reveal(midState)` / bisect methods — the game: prover posts
+  intermediate Poseidon2-state commitments; each response halves the
+  disputed round range; ~5 rounds isolate ONE disputed stage.
+- `proveStage(stageIdx, inState, outState)` — the leaf: a
+  `Poseidon2Stage`-family covenant checks that `outState` really
+  follows from `inState` for that round — **the exact contract proven
+  in Stage 0d**. Prover-can't-prove → challenger sweeps both bonds
+  after timeout; challenger-is-wrong → prover keeps claim + both bonds.
+
+**Why 1-of-N honesty is still trustless:** no designated verifier —
+*any* third party (the buyer, a watcher service, a random node) can be
+the challenger. A false claim can only finalize if literally every
+independent observer stays silent for the whole window. The prover
+also carries the bond: lying loses money by construction, so the
+challenge path is a deterrent that honest economics never triggers.
+
+**Honest costs:** happy path ≈ 2 txs ≈ ~3–4KB ≈ **fractions of a cent,
+seconds.** Dispute path ≈ 5 bisection txs + 1 stage tx ≈ ~$0.10,
+borne by the liar.
 
 ### What a stage tx must satisfy
 
@@ -266,22 +332,28 @@ per-op cost.
   ceremony, or a SHA-256-only STARK variant) — decided with real
   numbers, not guesses.
 
-### Stage 1 — architecture
+### Stage 1 — optimistic claim contract (the shippable artifact)
 
-- Stage-decomposition table for the succinct receipt.
-- `MamemZkVerifier` covenant chain: state = `{stage, transcriptHash,
-  commitments}`; generalized `AnchorChain` driver (`ZkVerifierChain`).
-- Terminal-stage anchor binding: anchor head read as witness, decoded
-  on-chain, `journal.root == R_n` enforced by Script.
-- Tx-batching per stage up to policy limits.
+- `MamemZkClaim` covenant: claim+bond state, `settle` (deadline +
+  anchor binding + queryId burn), `challenge`, `reveal`/bisect,
+  `proveStage` leaf.
+- `Poseidon2Stage` family — 29 round-variants (constants baked) —
+  already compiling+VALID; wire `proveStage` to reference the disputed
+  variant.
+- Bisection protocol spec: state-commitment format, response windows
+  (nLockTime), bond amounts, who-watch duty documented.
+- Consumer hooks: `DisclosureSale`/`MamemCheckpointBond` read a settled
+  claim UTXO as their proof gate — **pay-iff-claimed-and-unchallenged**.
 
-### Stage 2 — the artifact
+### Stage 2 — full-validity mode (the upgrade)
 
-- Script-emitter (TS) generating unrolled stage scripts.
-- `ZkVerifierChain` driver + per-stage contracts.
-- Regtest vectors per stage; full e2e on the committed fixture
-  `zkm2-n5i4.json` — its journal `(root, size, queryId)` must verify
-  on-chain; TTN cost measurement.
+- Stage-decomposition table for the whole succinct receipt → ordered
+  `MamemZkVerifier` covenant chain (~10⁴ txs naive, ~10²–10³ optimized:
+  RC-in-state generic stage, deferred mods, shared paths).
+- Terminal stage: `journal.root == R_n`, `size == anchor.size`, queryId
+  burned — same interface as the settled claim, so consumers swap
+  modes by config, not by code.
+- Regtest vectors per stage; e2e on `zkm2-n5i4.json`; TTN cost table.
 
 ### Stage 3 — Π completeness + consumers
 
@@ -297,7 +369,13 @@ per-op cost.
 - Groth16-wrap is the *documented alternative*, not built unless the
   Stage-0 gate fails — transparent STARK is the requirement.
 - ZKAccess-on-chain is Stage 3 — its own artifact (Bulletproof ≠ FRI).
-- Optimistic/fraud-proof verification: different trust model; out.
+- The optimistic model's one assumption, stated honestly: a false claim
+  finalizes only if *zero* independent observers challenge within the
+  window — 1-of-N honesty, the standard BitVM trustless model. Watchers
+  are permissionless; the bond makes lying a losing bet either way.
+- Full-validity mode (zero assumptions, ~10⁴ txs) is Stage 2 — real
+  and measured, deferred only because economics reserve it for
+  high-value finalities.
 - No guest or receipt-format changes — pinned image ids, the reproduce
   gate, every existing ZK test stay green by construction.
 - V2 signature-equivocation slashing stays blocked (no
@@ -305,7 +383,11 @@ per-op cost.
 
 ## 8. Verification
 
-- Stage 0: MockChain `verifyScripts` + regtest script-eval measurements.
+- Stage 0 ✅ done: @bsv/sdk `Spend` interpreter (consensus semantics —
+  stronger than MockChain ANF), `isRelaxed` Chronicle rules; measured
+  ops/bytes per component and per covenant stage.
+- Stage 1: `MamemZkClaim` regtest e2e — settle happy path, challenge
+  timeout, bisect-to-leaf with a real disputed `Poseidon2Stage` spend.
 - Stage 2: per-stage vectors + `zkm2-n5i4` fixture e2e on MockChain +
   regtest; real-sats cost table.
 - Repo gates unchanged: `pnpm -r build`, `check-deps`, `pnpm -r test`,

@@ -77,6 +77,23 @@ export const TOOLS = [
     }
   },
   {
+    name: 'verifyCombined',
+    description: 'Verifier side (Wright §13 Π_j = (π_j, ZKAccess)): verify the DUAL commitment as one object — the L_ZKMem membership STARK, the ZKAccess clearance and (optionally) an L_ZKDer derivation STARK must all carry the SAME verifier-issued queryId and the clearance transcript must carry the issued nonce. Rejects proofs paired with an unrelated clearance.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        shard: { type: 'string' },
+        seq: { type: 'number', description: 'locates the batch anchor (the proof itself does not reveal the record)' },
+        bytes: { type: 'string', description: 'L_ZKMem v2 hex from proveMembership' },
+        zk: { type: 'object', description: 'clearance presentation bound to the same queryId — {commitment, proof, transcript:{queryId,fragmentId,nonce(hex)}, requiredLevel}' },
+        scope: { type: 'string', description: 'transcript fragmentId to enforce (default shard/seq)' },
+        derivationBytes: { type: 'string', description: 'optional L_ZKDer v3 hex bound to the same queryId' },
+        callerPubkey: { type: 'string', description: 'optional: require the clearance holder to be this pubkey (else artifact-validity only)' }
+      },
+      required: ['shard', 'seq', 'bytes', 'zk']
+    }
+  },
+  {
     name: 'proveSubset',
     description: 'Holder side (DIS-002 proof sharding): selective proof of existence for a SUBSET of one batch\'s records — per-leaf shard subpaths over the same anchored tree (64-leaf subtrees) + one shared top multiproof → L_ZKDis v2 hex. Reveals leaf positions + hashes, not contents. Gated by MAMEM_PROOF_SHARDING (default on).',
     inputSchema: {
@@ -480,6 +497,15 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     case 'verifyMembership': {
       const { Buffer } = await import('node:buffer')
       return mem.verifyMembership(args.shard, args.seq, new Uint8Array(Buffer.from(args.bytes, 'hex')))
+    }
+    case 'verifyCombined': {
+      const { Buffer } = await import('node:buffer')
+      const { decodePresentation } = await import('@mamem/identity')
+      return mem.verifyCombined(args.shard, args.seq, new Uint8Array(Buffer.from(args.bytes, 'hex')), decodePresentation(args.zk), {
+        scope: args.scope,
+        derivationBytes: args.derivationBytes === undefined ? undefined : new Uint8Array(Buffer.from(args.derivationBytes, 'hex')),
+        callerPubkey: args.callerPubkey
+      })
     }
     case 'attestMembership': {
       const { Buffer } = await import('node:buffer')

@@ -23,7 +23,7 @@ import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, ty
 import { deriveFragmentKey, deriveLevelKey, encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@mamem/crypto'
 import type { Broadcaster, ChainTracker, Funder } from '@mamem/chain'
 import * as idbind from '@mamem/identity'
-import { proveMembershipStark, verifyMembershipAnchoredStark, starkQueryId, proveDerivationStark, verifyDerivationBound, buildSubsetProof, encodeZkdis, decodeZkdis, verifySubsetAnchored } from '@mamem/zk'
+import { proveMembershipStark, verifyMembershipAnchoredStark, starkQueryId, proveDerivationStark, verifyDerivationBound, buildSubsetProof, encodeZkdis, decodeZkdis, verifySubsetAnchored, decodeZkm2, decodeZkder, verifyCombinedStark } from '@mamem/zk'
 
 export interface MamemMemoryOptions {
   signingKey?: PrivateKey
@@ -80,7 +80,10 @@ export interface MemoryStateStore { load: () => PersistedMemoryState | undefined
 
 /** pluggable persistence for replay-protection state (see securitystore.ts) */
 export interface SecurityStateStore {
-  load: () => { challenges: Array<[string, number]>, zkSeen: string[], zkQueries: Array<[string, number]>, revocations: string[] }
+  // zkQueries rows are [queryId, expiry, nonce?, verifierId?] — the two extra
+  // fields (v2) let verifyCombined reconstruct the StarkQuery for the §13 Π
+  // binding; legacy 2-field rows still consume but can't serve a combined proof.
+  load: () => { challenges: Array<[string, number]>, zkSeen: string[], zkQueries: Array<[string, number] | [string, number, string, string]>, revocations: string[] }
   save: (s: ReturnType<SecurityStateStore['load']>) => void
 }
 
@@ -387,13 +390,14 @@ export class MamemMemory {
   }
 
   // ── persisted replay-protection state (challenges, transcripts, issued ZK queries, revocations)
-  /** ZK membership queries issued by THIS verifier: queryId hex → expiry (single use) */
-  private zkQueries = new Map<string, number>()
+  /** ZK queries issued by THIS verifier: queryId hex → {nonce, verifierId, expiry} (single use).
+   *  nonce+verifierId let verifyCombined rebuild the StarkQuery for the Π binding. */
+  private zkQueries = new Map<string, { nonce: string, verifierId: string, expiry: number }>()
   private persistSecurityState (): void {
     this.opts.securityStore?.save({
       challenges: [...this.challenges].filter(([, exp]) => exp >= Date.now()),
       zkSeen: [...this.zkSeen],
-      zkQueries: [...this.zkQueries].filter(([, exp]) => exp >= Date.now()),
+      zkQueries: [...this.zkQueries].filter(([, e]) => e.expiry >= Date.now()).map(([q, e]) => [q, e.expiry, e.nonce, e.verifierId]),
       revocations: [...this.revokedPubs]
     })
   }
@@ -402,7 +406,7 @@ export class MamemMemory {
     if (!s) return
     for (const [n, exp] of s.challenges) this.challenges.set(n, exp)
     for (const k of s.zkSeen) this.zkSeen.add(k)
-    for (const [q, exp] of s.zkQueries ?? []) this.zkQueries.set(q, exp)
+    for (const row of s.zkQueries ?? []) this.zkQueries.set(row[0], { expiry: row[1], nonce: row[2] ?? '', verifierId: row[3] ?? '' })
     for (const pub of s.revocations) { this.revocations.insert(idbind.deriveKey(fromHex(pub)), sha256(utf8('revoked'))); this.revokedPubs.push(pub) }
   }
   /** verifier side: issue a single-use ZK membership query (default 10 min).
@@ -410,16 +414,23 @@ export class MamemMemory {
   issueZkQuery (verifierId: string, ttlMs = 600_000): { nonce: string, verifierId: string, queryId: string } {
     const nonce = idbind.issueChallenge()
     const queryId = toHex(starkQueryId({ nonce: fromHex(nonce), verifierId }))
-    this.zkQueries.set(queryId, Date.now() + ttlMs)
+    this.zkQueries.set(queryId, { nonce, verifierId, expiry: Date.now() + ttlMs })
     this.persistSecurityState()
     return { nonce, verifierId, queryId }
   }
   private consumeZkQuery = (queryIdHex: string): boolean => {
-    const exp = this.zkQueries.get(queryIdHex)
-    if (exp === undefined || exp < Date.now()) return false
+    const e = this.zkQueries.get(queryIdHex)
+    if (e === undefined || e.expiry < Date.now()) return false
     this.zkQueries.delete(queryIdHex)
     this.persistSecurityState()
     return true
+  }
+  /** issued-and-fresh query WITHOUT consuming it — verifyCombined checks the
+   *  §13 Π binding first, consumes once at the end (single use stays). */
+  private peekZkQuery (queryIdHex: string): { nonce: string, verifierId: string } | undefined {
+    const e = this.zkQueries.get(queryIdHex)
+    if (e === undefined || e.expiry < Date.now() || e.nonce === '' || e.verifierId === '') return undefined
+    return { nonce: e.nonce, verifierId: e.verifierId }
   }
 
   // ── P14 full-mode automata (AUT-005): one Rúnar MamemAutomaton UTXO per id,
@@ -527,6 +538,59 @@ export class MamemMemory {
     const res = await verifyMembershipAnchoredStark(bytes, anchorTx, this.chain, { consume: this.consumeZkQuery },
       { shard: shardId, isCanonical: (txid: string) => tail.some(l => l.txid === txid) })
     return { ok: res.ok, reason: res.reason, anchorTxid: res.anchorTxid, statement: 'proves some record is in this anchored batch (ZK-STARK, no trusted setup) — not which one, not its content, not truth' }
+  }
+
+  /** verifier side (§13 Π_j = (π_j, ZKAccess(ℓ_q ≥ ℓ_j))): the dual commitment
+   *  as ONE verifiable object — the L_ZKMem membership STARK, the ZKAccess
+   *  clearance and (optionally) a §14 derivation STARK must all carry the SAME
+   *  verifier-issued query: transcript.queryId == each STARK journal's queryId
+   *  and transcript.nonce == the nonce this verifier issued with it. That is
+   *  exactly `verifyCombinedStark`; the individual verifiers then run with the
+   *  consume delegated to one final consumeZkQuery (issued-ness + single use
+   *  are checked here, artifact validity there). */
+  async verifyCombined (shard: string, seq: number, membershipBytes: Uint8Array, zk: ZkClearance, opts?: { scope?: string, derivationBytes?: Uint8Array, callerPubkey?: string }): Promise<{ ok: boolean, reason?: string, anchorTxid?: string, statement: string }> {
+    const statement = 'Π_j = (π_j, ZKAccess): some record is in this anchored batch AND the clearance bound to the same verifier query proves level ≥ required — reveals no leaf, index, path, level or credential; not which record, not truth'
+    const rec = (await this.store.all(shard)).find(r => r.seq === seq)
+    if (!rec || rec.batchIndex === undefined) return { ok: false, reason: 'not batched', statement }
+    const tail = this.tails.get(shard) ?? []
+    const link = tail.find(l => l.n === rec.batchIndex)
+    const anchorTx = link ? this.anchorTxs.get(link.txid) : undefined
+    if (!anchorTx) return { ok: false, reason: 'anchor tx not found', statement }
+    const shardId = this.anchors.get(shard)?.getShardId()
+    if (!shardId) return { ok: false, reason: 'unknown shard', statement }
+    const scope = opts?.scope ?? `${shard}/${seq}`
+    // cheap header reads first — verify re-checks header == journal byte for byte
+    let mHdr
+    try { mHdr = decodeZkm2(membershipBytes) } catch (e) { return { ok: false, reason: `codec: ${(e as Error).message}`, statement } }
+    const queryIdHex = toHex(mHdr.queryId)
+    let dHdr
+    if (opts?.derivationBytes !== undefined) {
+      try { dHdr = decodeZkder(opts.derivationBytes) } catch (e) { return { ok: false, reason: `codec: ${(e as Error).message}`, statement } }
+    }
+    const issued = this.peekZkQuery(queryIdHex)
+    if (!issued) return { ok: false, reason: 'proof queryId was not issued by this verifier (or expired)', statement }
+    // the stored query MUST recompute to the proof's queryId — binds the
+    // registry row to THIS proof; without it an inconsistent row could satisfy
+    // the Π check against a different query
+    if (toHex(starkQueryId({ nonce: fromHex(issued.nonce), verifierId: issued.verifierId })) !== queryIdHex) {
+      return { ok: false, reason: 'issued query does not recompute to the proof queryId', statement }
+    }
+    if (!verifyCombinedStark({ nonce: fromHex(issued.nonce), verifierId: issued.verifierId }, zk.transcript, dHdr ? { queryId: toHex(dHdr.queryId) } : undefined)) {
+      return { ok: false, reason: 'Π binding failed: clearance or derivation is not bound to the same verifier query as the membership proof', statement }
+    }
+    const res = await verifyMembershipAnchoredStark(membershipBytes, anchorTx, this.chain, { consume: () => true },
+      { shard: shardId, isCanonical: (txid: string) => tail.some(l => l.txid === txid) })
+    if (!res.ok) return { ok: false, reason: res.reason, statement }
+    if (opts?.derivationBytes !== undefined) {
+      const policyRoot = await this.expectedPolicyRoot(shard)
+      if (!policyRoot) return { ok: false, reason: 'no anchored policy root configured', statement }
+      const dv = verifyDerivationBound(opts.derivationBytes, { consume: () => true }, policyRoot)
+      if (!dv.ok) return { ok: false, reason: `derivation: ${dv.reason}`, statement }
+    }
+    const clear = this.verifyClearance({ pubkey: opts?.callerPubkey ?? zk.commitment.holder }, zk, scope)
+    if (!clear.ok) return { ok: false, reason: `clearance: ${clear.reason}`, statement }
+    if (!this.consumeZkQuery(queryIdHex)) return { ok: false, reason: 'queryId expired or consumed mid-verify', statement }
+    return { ok: true, anchorTxid: res.anchorTxid, statement }
   }
 
   /** GOAL-v6 S5 proof sharding (DIS-002; US 12,730,827 B2 under the Open BSV

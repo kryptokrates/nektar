@@ -5,12 +5,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { PrivateKey } from '@bsv/sdk'
 import { MockChain, MockFunder } from '@mamem/chain'
 import { AnchorChain } from '@mamem/anchor'
 import { decodeMamemAnchor } from '@mamem/contracts'
 import { fromHex, dsha256, utf8 } from '@mamem/core'
+import { issueClearance, proveAccess } from '@mamem/identity'
 import { encodeZkm2, verifyMembershipAnchoredStark, type QueryRegistry } from '@mamem/zk'
-import { MamemMemory } from '../src/index.js'
+import { MamemMemory, type ZkClearance } from '../src/index.js'
 
 const fx = JSON.parse(readFileSync(new URL('../../../zk/test/fixtures/zkm2-n5i4.json', import.meta.url), 'utf8'))
 const proofBytes = () => encodeZkm2({ imageId: fromHex(fx.imageId), root: fromHex(fx.journal.root), size: fx.journal.size, queryId: fromHex(fx.journal.queryId), receipt: fromHex(fx.receipt) })
@@ -23,7 +25,7 @@ async function anchoredBatch (R: Uint8Array, size: number, mine = true) {
   await ac.anchor(size, R)
   const tx = ac.getHead()!.tx
   if (mine) { chain.mine(1); ac.confirm(tx.id('hex'), chain.merklePathOf(tx.id('hex'))) }
-  return { chain, tx, shard: decodeMamemAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
+  return { chain, tx, ac, shard: decodeMamemAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
 }
 
 test('STARK membership verifies against a real anchor whose R is the proven root', async () => {
@@ -85,4 +87,77 @@ test('end-to-end: MamemMemory proves (RISC Zero) and verifies its own anchored b
   assert.ok(ok.ok, JSON.stringify(ok))
   const replay = await mem.verifyMembership('s', 1, bytes)
   assert.equal(replay.ok, false, 'replay rejected (query consumed)')
+})
+
+/** mem whose 's' shard has ONE anchored batch committing the fixture's R — the
+ *  record is a stub (verifyCombined only reads seq/batchIndex); the anchor is
+ *  real (MamemAnchor tx on the mock chain, mined). */
+async function memWithFixtureAnchor () {
+  const { chain, tx, ac } = await anchoredBatch(fromHex(fx.journal.root), 5)
+  const authority = PrivateKey.fromRandom()
+  const f = new MockFunder(); f.topup(2)
+  const mem = new MamemMemory(chain, f, f.keyPair, { clearanceAuthorities: [authority.toPublicKey().toString()] })
+  ;(mem as any).anchors.set('s', ac)
+  ;(mem as any).anchorTxs.set(tx.id('hex'), tx)
+  ;(mem as any).tails.set('s', [{ txid: tx.id('hex'), outputIndex: 0, n: 0, size: 5, R: fx.journal.root, Rp: '00'.repeat(32) }])
+  ;(mem as any).store = { all: async () => [{ seq: 4, batchIndex: 0, leaf: new Uint8Array(32), leafIndex: 4 }] }
+  const zk = (queryId: string, nonce: Uint8Array): ZkClearance => ({ commitment: {} as any, proof: {} as any, requiredLevel: 0n, transcript: { queryId, fragmentId: 's/4', nonce } })
+  return { mem, authority, zk }
+}
+
+test('§13 combined Π: the Π binding rejects proofs paired with an unrelated clearance', async () => {
+  const { mem, zk } = await memWithFixtureAnchor()
+  const bytes = proofBytes() // bound to the fixture's journal queryId
+  // 1. proof queryId was never issued here
+  let r = await mem.verifyCombined('s', 4, bytes, zk(fx.journal.queryId, new Uint8Array(32)))
+  assert.equal(r.ok, false)
+  assert.match(String(r.reason), /not issued by this verifier/)
+  // 2. an inconsistent registry row (nonce/verifierId do not recompute to the key)
+  ;(mem as any).zkQueries.set(fx.journal.queryId, { nonce: 'ab'.repeat(32), verifierId: 'auditor', expiry: Date.now() + 60_000 })
+  r = await mem.verifyCombined('s', 4, bytes, zk(fx.journal.queryId, fromHex('ab'.repeat(32))))
+  assert.equal(r.ok, false)
+  assert.match(String(r.reason), /recompute to the proof queryId/)
+  // 3. a real issued query but a transcript bound to a DIFFERENT query → Π binding fails
+  const q0 = mem.issueZkQuery('auditor')
+  const b2 = proofBytes()
+  b2.set(fromHex(q0.queryId), 74) // v2 header: queryId at offset 74 (header≠journal fails later at the STARK check)
+  r = await mem.verifyCombined('s', 4, b2, zk('ff'.repeat(32), fromHex(q0.nonce)))
+  assert.equal(r.ok, false)
+  assert.match(String(r.reason), /Π binding/)
+  // 4. transcript bound to the right queryId but a wrong nonce → Π binding fails
+  r = await mem.verifyCombined('s', 4, b2, zk(q0.queryId, new Uint8Array(32).fill(9)))
+  assert.equal(r.ok, false)
+  assert.match(String(r.reason), /Π binding/)
+  // 5. fully paired (queryId + nonce) → binding passes, falls through to the STARK check
+  //    which rejects the header≠journal forgery — the pairing itself was accepted
+  r = await mem.verifyCombined('s', 4, b2, zk(q0.queryId, fromHex(q0.nonce)))
+  assert.equal(r.ok, false)
+  assert.match(String(r.reason), /header does not match|stark/)
+})
+
+test('end-to-end §13 Π: membership STARK + ZKAccess clearance under ONE verifier query', { skip: process.env.MAMEM_STARK_PROVE !== '1' }, async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const f = new MockFunder(); f.topup(20); for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const authority = PrivateKey.fromRandom()
+  const mem = new MamemMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 3 }, clearanceAuthorities: [authority.toPublicKey().toString()] })
+  for (const d of ['a', 'b', 'c']) await mem.remember('s', d, {}, 0)
+  chain.mine(1); mem.confirmAnchor('s', mem.tailLink('s')!.txid)
+  const q = mem.issueZkQuery('auditor')
+  const holder = PrivateKey.fromRandom().toPublicKey().toString()
+  const cred = issueClearance(authority, 5n, holder)
+  const transcript = { queryId: q.queryId, fragmentId: 's/1', nonce: fromHex(q.nonce) }
+  const zk = { commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, transcript)!, transcript, requiredLevel: 2n }
+  const { bytes } = await mem.proveMembership('s', 1, q.queryId)
+  const ok = await mem.verifyCombined('s', 1, bytes, zk)
+  assert.ok(ok.ok, JSON.stringify(ok))
+  // the same Π replays for nothing: the query was consumed
+  const replay = await mem.verifyCombined('s', 1, bytes, zk)
+  assert.equal(replay.ok, false)
+  // a clearance bound to a different query can never pair with this STARK
+  const q2 = mem.issueZkQuery('auditor')
+  const t2 = { queryId: q2.queryId, fragmentId: 's/1', nonce: fromHex(q2.nonce) }
+  const cred2 = issueClearance(authority, 5n, holder)
+  const zk2 = { commitment: cred2.commitment, proof: proveAccess(cred2, 2n, 8, t2)!, transcript: t2, requiredLevel: 2n }
+  const mm = await mem.verifyCombined('s', 1, bytes, zk2)
+  assert.equal(mm.ok, false)
 })

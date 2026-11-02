@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { merkleRoot, dsha256, utf8, toHex } from '@mamem/core'
-import { encodeZkm2, verifyZkm2, PINNED_IMAGE_ID } from '../src/stark/index.js'
+import { encodeZkm2, verifyZkm2, PINNED_IMAGE_ID, starkQueryId, verifyCombinedStark } from '../src/stark/index.js'
 
 const fx = JSON.parse(readFileSync(new URL('../../test/fixtures/zkm2-n5i4.json', import.meta.url), 'utf8'))
 const H = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
@@ -34,4 +34,15 @@ test('STARK verify NEGATIVES: tampered receipt, header≠journal, foreign/unpinn
   const truncated = encodeZkm2(base()).slice(0, 2000)
   const r = verifyZkm2(truncated)
   assert.ok(!r.ok && /codec/.test(r.reason), 'truncated bytes → codec error, never a throw')
+})
+
+test('§13 Π binding (verifyCombinedStark): access transcript and derivation journal must share the issued query', () => {
+  const q = { nonce: H('ab'.repeat(32)), verifierId: 'auditor-1' }
+  const qid = toHex(starkQueryId(q))
+  const okT = { queryId: qid, nonce: q.nonce }
+  assert.equal(verifyCombinedStark(q, okT), true, 'paired transcript accepted')
+  assert.equal(verifyCombinedStark(q, { ...okT, queryId: 'ff'.repeat(32) }), false, 'transcript on a different query')
+  assert.equal(verifyCombinedStark(q, { ...okT, nonce: H('cd'.repeat(32)) }), false, 'transcript with a different nonce')
+  assert.equal(verifyCombinedStark(q, okT, { queryId: qid }), true, 'derivation under the same query accepted')
+  assert.equal(verifyCombinedStark(q, okT, { queryId: 'ee'.repeat(32) }), false, 'derivation on a different query')
 })

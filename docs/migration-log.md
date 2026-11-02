@@ -543,3 +543,12 @@
 - **D9/D10.** `SaleOffer.expiresAt` inside `offerDigest` (signature-scheme change: old offers fail verification by design); `verifyOfferSig` + `saleEscrow` refuse expired offers; `saleEscrow` refuses `refundAfter ≤ currentHeight + margin` before funding.
 - Remaining deferrals (unchanged, in GOAL-v8): completeness/TEE, truth≠inclusion, OWL-DL, on-chain ZK verify, PoW header trust, V2 slashing, escrow boundary cases, `ctx.t`=tenant, lazy `π_i`, header-time `t_n`, non-deterministic LLM output, `__access__` completeness.
 - Tests: TC-106..TC-114 (memory/reasoning/anchor/identity suites) — all negative paths covered.
+
+## §13 Π binding — combined (membership, ZKAccess[, derivation]) under one verifier query
+
+Strict ZK re-scan found `verifyCombinedStark` (the §13 `Π_j = (π_j, ZKAccess(ℓ_q ≥ ℓ_j))` shared-query binding) existed but was dead code: membership STARKs and access clearances were verified in separate paths, so nothing proved the two artefacts were issued for the same query.
+
+- `zkQueries` rows now persist `[queryId, expiry, nonce, verifierId]` (v2, backward-compatible with legacy 2-field rows — those consume normally but cannot serve a combined proof).
+- `MamemMemory.verifyCombined(shard, seq, membershipBytes, zk, {scope?, derivationBytes?, callerPubkey?})` is the verifier-side Π object: (1) the stored issued query must recompute to the membership journal's queryId, (2) `verifyCombinedStark` requires the clearance transcript — and an optional L_ZKDer derivation journal — to carry the SAME queryId and the issued nonce, (3) membership/derivation artifact checks run with consume delegated to one final `consumeZkQuery` (single use for the whole Π), (4) `verifyClearance` burns the transcript.
+- New MCP tool `verifyCombined` (tool count 19 → 20).
+- Tests: `stark-verify` Π-binding unit (TC-115), `zk-integration` combined-Π negatives incl. inconsistent registry rows (TC-116), `MAMEM_STARK_PROVE=1` e2e (TC-117).

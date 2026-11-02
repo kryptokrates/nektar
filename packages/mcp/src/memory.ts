@@ -206,6 +206,9 @@ export function verifyAnswerReceipt (r: AnswerReceipt): { ok: boolean, reason?: 
 }
 
 export class MamemMemory {
+  /** optimistic-claim surface (regtest/main runtimes attach a ClaimService) */
+  claims: any
+  attachClaims (c: any): void { this.claims = c }
   private log: BatchLog
   private anchors = new Map<string, AnchorChain>()
   private tails = new Map<string, AnchorLink[]>()

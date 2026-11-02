@@ -296,6 +296,29 @@ export const TOOLS = [
       },
       required: ['txHex', 'hWrapped']
     }
+  },
+  {
+    name: 'claimDeploy',
+    description: 'Optimistic-claim layer (§4.5): deploy a MamemZkClaim covenant bound to an L_ZKMem proof bundle — the journal root/size/queryId are committed on-chain behind the prover\'s bond. Registered for the watcher, which re-verifies the RISC Zero receipt off-chain and auto-challenges fraud. Regtest only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lzkmem: { type: 'string', description: 'L_ZKMem v2 hex from proveMembership' },
+        bondSats: { type: 'number' }, deadline: { type: 'number', description: 'locktime when the claim becomes settleable; 0 = immediately' },
+        anchorOutpoint: { type: 'string', description: '36-byte anchor outpoint hex to bind journalRoot == anchor.R; omit for unanchored' }
+      },
+      required: ['lzkmem']
+    }
+  },
+  {
+    name: 'claimStatus',
+    description: 'Read a deployed claim\'s covenant state: open | challenged | revealed | bisecting, deadline, journalRoot, bond.',
+    inputSchema: { type: 'object', properties: { txid: { type: 'string' }, vout: { type: 'number' } }, required: ['txid'] }
+  },
+  {
+    name: 'claimSettle',
+    description: 'Settle an open claim after its deadline: emits the ClaimVerdict UTXO (spendable proof of acceptance) + bond payout. Unanchored claims only — anchored claims settle via the anchor co-spend.',
+    inputSchema: { type: 'object', properties: { txid: { type: 'string' }, vout: { type: 'number' }, payoutSats: { type: 'number' }, verdictSats: { type: 'number' } }, required: ['txid'] }
   }
 ] as const
 
@@ -572,6 +595,19 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     }
     case 'challenge':
       return { nonce: mem.issueChallenge(), statement: 'sign with answerChallenge(key, nonce) within 5 minutes; nonces from anywhere else are refused' }
+    case 'claimDeploy': {
+      if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
+      const { Buffer } = await import('node:buffer')
+      return await mem.claims.deploy(Buffer.from(args.lzkmem, 'hex').toString('hex'), { bondSats: args.bondSats, deadline: args.deadline, anchorOutpoint: args.anchorOutpoint })
+    }
+    case 'claimStatus': {
+      if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
+      return await mem.claims.status(args.txid, args.vout ?? 0)
+    }
+    case 'claimSettle': {
+      if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
+      return await mem.claims.settle(args.txid, args.vout ?? 0, args.payoutSats ?? 4980, args.verdictSats ?? 10)
+    }
     default:
       throw new Error(`unknown tool ${name}`)
   }

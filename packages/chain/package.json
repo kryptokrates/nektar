@@ -12,7 +12,8 @@
     "test": "node --test --test-timeout=60000 dist/test/*.test.js"
   },
   "dependencies": {
-    "@mamem/core": "workspace:*"
+    "@mamem/core": "workspace:*",
+    "runar-sdk": "0.4.6"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"

@@ -15,6 +15,7 @@ import { RunarContract, LocalSigner, deserializeState } from 'runar-sdk'
 import { MamemProvider } from '@mamem/anchor'
 import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve } from '@mamem/chain'
 import { verifyZkm2 } from '@mamem/zk'
+import { loadClaims, proofFile } from '@mamem/chain'
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 
 const ARG = (k, d = null) => { const i = process.argv.indexOf('--' + k); return i >= 0 ? process.argv[i + 1] : d }
@@ -76,14 +77,12 @@ if (reserve.utxos.length < 2) {
 // Seeded by deployments (the e2e writes entries); the watcher tracks the
 // tip per entry while it stays unspent (chain-tracking beyond the tip
 // needs a tx-index — documented gap, see GOAL-v9). ──
-const loadClaims = () => { try { return JSON.parse(readFileSync(cfg.claimsFile, 'utf8')) } catch { return [] } }
-
 // deserialize the claim's state tail (codePart ‖ '6a' ‖ fields)
 const readClaimState = scriptHex => {
   const tail = scriptHex.slice(art.script.length + 2) // skip '6a'
   return deserializeState(art.stateFields, tail)
 }
-const proofFileFor = receiptHash => `${cfg.proofDir}/${receiptHash}.bin`
+const proofFileFor = receiptHash => proofFile(cfg.proofDir, receiptHash)
 
 async function checkClaim (entry) {
   const { txid, vout } = entry
@@ -92,9 +91,9 @@ async function checkClaim (entry) {
   const out = tx.outputs[vout]
   if (!out) return console.log(`  ${txid.slice(0, 8)}:${vout} — no such output`)
   const script = out.lockingScript.toHex()
-  if (!script.startsWith(art.script)) return // not our claim anymore (spent/foreign)
+  if (!script.startsWith(art.script)) { if (process.env.MAMEM_WATCH_DEBUG) console.log(`  ${txid.slice(0, 8)}:${vout} — not a MamemZkClaim script`); return }
   const st = readClaimState(script)
-  if (st.status !== 0n) return // already disputed or terminal — not our job
+  if (st.status !== 0n) { if (process.env.MAMEM_WATCH_DEBUG) console.log(`  ${txid.slice(0, 8)}:${vout} — status=${st.status}, skipping`); return }
   // deadline check: nLockTime is time-or-height; treat < 500M as height
   const tip = await rpc('getblockchaininfo').then(b => b.blocks).catch(() => 0)
   const open = st.deadline < 500000000n ? tip < Number(st.deadline) : Math.floor(Date.now() / 1000) < Number(st.deadline)
@@ -122,7 +121,8 @@ async function checkClaim (entry) {
 }
 
 async function tick () {
-  const claims = loadClaims()
+  const claims = loadClaims(cfg.claimsFile)
+  if (process.env.MAMEM_WATCH_DEBUG) console.log(`  tick: ${claims.length} registry entries`)
   for (const e of claims) {
     try { await checkClaim(e) } catch (err) { console.log(`  ${e.txid?.slice(0, 8)}:${e.vout} — error: ${err.message.slice(0, 200)}`) }
   }

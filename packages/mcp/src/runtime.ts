@@ -13,6 +13,7 @@ import { KnexShardStore, type ShardStore } from '@mamem/log'
 import { MamemMemory, type MamemMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
 import { readKeyFile, writeKeyFile, passphraseFromEnv, KeystoreError } from './keystore.js'
+import { fileURLToPath } from 'node:url'
 
 export interface RuntimeConfig {
   network: 'mock' | 'regtest' | 'testnet' | 'main' | 'ttn'
@@ -177,7 +178,15 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   const { keys, save } = loadKeys(cfg.dataDir, passphraseFromEnv())
   const fundKey = PrivateKey.fromWif(rc.fundWif)
   const tracker = new TeranodeRPCTracker(rc)
-  const broadcaster = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), () => 0, { unlimited: true })
+  // input-value resolver for the guard's fee check — same closure as the
+  // live runtime: reserve entries, guarded broadcasts, anchor txs (fail-closed)
+  let memRef: MamemMemory | undefined
+  const guardedBroadcasts = new Map<string, Transaction>()
+  const valueOf = (txid: string, vout: number): number | undefined =>
+    reserve.utxos.find(u => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
+    guardedBroadcasts.get(txid)?.outputs[vout]?.satoshis ??
+    memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
+  const broadcaster = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), valueOf, { unlimited: true })
   const auth = 'Basic ' + Buffer.from(`${rc.rpcUser}:${rc.rpcPass}`).toString('base64')
   const rpc = async (method: string, ...params: unknown[]): Promise<any> => {
     const r = await fetch(rc.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }), signal: AbortSignal.timeout(15_000) })
@@ -201,7 +210,11 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve() }
   const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker)
   const chain = {
-    broadcast: (tx: Transaction) => broadcaster.broadcast(tx),
+    broadcast: async (tx: Transaction) => {
+      const r = await broadcaster.broadcast(tx)
+      if (r.status === 'success') guardedBroadcasts.set(tx.id('hex'), tx)
+      return r
+    },
     currentHeight: () => tracker.currentHeight(),
     isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
     // §12: header TIMES are the weighted median across temporal sources;
@@ -222,6 +235,17 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     stateStore: new FileStateStore(join(cfg.dataDir, 'state.json')),
     finalityDepth: 1
   }, store)
+  memRef = mem
+  // optimistic-claim surface: provider + signer over the regtest funder,
+  // claims registry + proof store in the data dir (the watcher shares it)
+  {
+    const { ClaimService } = await import('./claims.js')
+    const contractsDir = fileURLToPath(new URL('../../../contracts', import.meta.url))
+    mem.attachClaims(new ClaimService(mem, {
+      dataDir: cfg.dataDir, contractsDir,
+      fetchTx: async (txid: string) => await rpc('getrawtransaction', txid).catch(() => undefined)
+    }))
+  }
   // persist newly generated shard keys (rotation replaces the entry)
   const persistKeys = () => {
     let changed = false

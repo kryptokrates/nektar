@@ -32,7 +32,8 @@
     "@modelcontextprotocol/sdk": "1.32.2",
     "knex": "^3.3.0",
     "sqlite3": "^5.1.7",
-    "zod": "3.25.76"
+    "zod": "3.25.76",
+    "runar-sdk": "0.4.6"
   },
   "devDependencies": {
     "@bsv/sdk": "4.0.1"

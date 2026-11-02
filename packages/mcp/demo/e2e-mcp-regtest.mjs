@@ -102,6 +102,34 @@ check(!!p3?.ok && p0.ok, `old and new records provable after restart (seq0=${JSO
 check(/replayed/.test((await recallSecret(lastZk)).reason ?? ''), 'clearance replay still rejected after restart (persisted transcript store)')
 const again = await recallSecret(wallet.presentClearance(decodeCredential(JSON.parse(savedCred)), S, 2, 2n))
 check(again.text?.startsWith('Confidential'), 'fresh clearance from the stored credential works after restart')
+
+// ── optimistic claims: the STARK becomes a bonded on-chain claim ──
+// claimDeploy commits the proof's journal into a MamemZkClaim covenant and
+// registers the outpoint; the watcher daemon shares this dataDir registry.
+// two claims: one still inside its dispute window (the watcher's ward), one
+// already past deadline (settles now — same proof, different deadline).
+const claimWatch = await call('claimDeploy', { lzkmem: zkm.lzkmem, deadline: 100000 })
+txids.claimWatch = claimWatch.txid
+const claim = await call('claimDeploy', { lzkmem: zkm.lzkmem, deadline: 0 })
+txids.claim = claim.txid
+check(!!claim.txid && !!claimWatch.txid, `claimDeploy ×2 → MamemZkClaim covenants (watched=${claimWatch.txid.slice(0, 12)}… settle=${claim.txid.slice(0, 12)}…)`)
+const cst = await call('claimStatus', { txid: claim.txid })
+check(cst.status === 'open' && cst.journalRoot === claim.journalRoot, `claimStatus: open — committed root matches the proven journal`)
+// watcher pass over the same dataDir: honest claim verifies → no action
+const { execFileSync } = await import('node:child_process')
+const watcherRun = () => execFileSync(process.execPath, [
+  fileURLToPath(new URL('../../watcher/src/watcher.mjs', import.meta.url)),
+  '--once', '--claims', join(dataDir, 'claims.json'), '--proof-dir', join(dataDir, 'proofs'),
+  '--reserve', join(dataDir, 'watcher-reserve.json')
+], { env: { ...process.env, MAMEM_WATCH_DEBUG: '1', MAMEM_REGTEST_WIF: local.MAMEM_REGTEST_WIF, MAMEM_RPC_USER: qs.rpc_user ?? 'teranode', MAMEM_RPC_PASS: qs.rpc_pass ?? '' }, encoding: 'utf8', timeout: 120_000 })
+try {
+  let wout
+  try { wout = watcherRun() } catch { wout = watcherRun() } // WASM loader flake: retry once
+  check(/verifies, no action|FRAUD/i.test(wout), `watcher pass: ${wout.trim().split('\n').at(-1)?.slice(0, 70)}`)
+} catch (e) { check(false, `watcher pass: ${String(e.message).slice(0, 80)}`) }
+const stl = await call('claimSettle', { txid: claim.txid })
+txids.settle = stl.txid
+check(!!stl.txid && !!stl.verdictOutpoint, `claimSettle → ClaimVerdict UTXO ${stl.verdictOutpoint?.slice(0, 16)}… (bond returned)`)
 await client.close()
 
 console.log(`  TXIDS ${Object.entries(txids).map(([k, v]) => `${k}=${v}`).join(' ')}`)

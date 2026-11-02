@@ -113,7 +113,35 @@ try {
   const r = await callTerminal(c, 'settle', [null, pubKeyHex, 4978n, 10n], [
     { scriptHex: verdict, satoshis: 10 }, { scriptHex: p2pkh(opPkh), satoshis: 4978 }], 1n)
   check(!!r.txid, `settle broadcast (${r.txid?.slice(0, 12)}…)`)
-} catch (e) { check(false, `settle: ${e.message.slice(0, 90)}`) }
+
+  // ── 1b. consumer gate: gated DisclosureSale spends [sale, verdict] live ──
+  const vUtxo = { txid: r.txid, outputIndex: 0, satoshis: 10, script: verdict }
+  const vOp = Buffer.concat([Buffer.from(vUtxo.txid, 'hex').reverse(), Buffer.from([0, 0, 0, 0])]).toString('hex')
+  const sArt = JSON.parse(readFileSync(new URL('../../contracts/DisclosureSale.json', import.meta.url), 'utf8'))
+  const WRAPPED = 'f1'.repeat(64)
+  const hw = Buffer.from(Hash.sha256(Buffer.from(WRAPPED, 'hex'))).toString('hex')
+  const sale = new RunarContract(sArt, [opPkh, 3000n, hw, 0n, 1000n, opPkh, vOp])
+  sale.connect(provider, signer); await sale.deploy({ satoshis: 4000 })
+  const sUtxo = sale.currentUtxo
+  const sOp = Buffer.concat([Buffer.from(sUtxo.txid, 'hex').reverse(), Buffer.from([0, 0, 0, 0])]).toString('hex')
+  const prevouts = sOp + vOp
+  const btx = new BsvTransaction()
+  btx.addInput({ sourceTXID: sUtxo.txid, sourceOutputIndex: sUtxo.outputIndex, unlockingScript: UnlockingScript.fromHex('00'), sequence: 0xffffffff })
+  btx.addInput({ sourceTXID: vUtxo.txid, sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex('00'), sequence: 0xffffffff })
+  btx.addOutput({ satoshis: 3000, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
+  btx.addOutput({ satoshis: 900, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
+  const sIdx = sArt.abi.methods.filter(m => m.isPublic).findIndex(m => m.name === 'buyGated')
+  const { sigHex: sSig, preimageHex: sPre } = sale.computeOpPushTxWithCodeSep(btx, 0, sUtxo.script, sUtxo.satoshis, sIdx)
+  btx.inputs[0].unlockingScript = UnlockingScript.fromHex(encPush(sSig) + sale.buildUnlockingScript('buyGated', [WRAPPED, 900n, prevouts, sPre]))
+  const vc = new RunarContract(vArt, [RH, JR, QID, opPkh])
+  const vIdx = vArt.abi.methods.filter(m => m.isPublic).findIndex(m => m.name === 'authorize')
+  const { sigHex: vSig2, preimageHex: vPre2 } = vc.computeOpPushTxWithCodeSep(btx, 1, vUtxo.script, vUtxo.satoshis, vIdx)
+  // single-method contract → no selector push
+  btx.inputs[1].unlockingScript = UnlockingScript.fromHex(
+    vc.buildStatefulPrefix(vSig2, true) + encArg(3000n) + encPush(opPkh) + encNum(900n) + encPush(vPre2))
+  const br2 = await broadcaster.broadcast(btx)
+  check(br2.status === 'success', `buyGated + verdict co-spend (${btx.id('hex').slice(0, 12)}…${br2.status !== 'success' ? ' ' + br2.description?.slice(0, 60) : ''})`)
+} catch (e) { check(false, `settle+gated sale: ${e.message.slice(0, 90)}`) }
 
 // ── 2. dispute lifecycle: challenge → reveal → bisect → proveStage ──
 console.log('── dispute: challenge → reveal → bisect → bisect → proveStage ──')

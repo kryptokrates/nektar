@@ -154,6 +154,96 @@ to target a different env file. `--network` rejects everything that isn't
 
 ---
 
+## Running your own instance — a 10-minute setup for your agent
+
+This is the path a friend would follow (and the same steps an agent like
+Claude Code can execute for you). It runs against **public testnet** —
+no Docker, no node, no indexers: the broadcaster, header source and tx
+fetch are all public endpoints.
+
+```sh
+git clone https://github.com/nedzof/merkle-automaton.git && cd merkle-automaton
+pnpm install && pnpm -r build          # needs Node ≥ 22 + pnpm (corepack enable)
+```
+
+### 1. Create the operator wallet
+
+```sh
+export MAMEM_NETWORK=testnet
+export MAMEM_KEY_PASSPHRASE='<pick a passphrase — it encrypts keys at rest>'
+export MAMEM_DATA_DIR=$PWD/.mamem-testnet
+
+node packages/mcp/dist/src/bin.js    # prints to stderr, e.g.:
+# mamem testnet: operator fee key mnKcrZMcyb… — fund this address to enable anchoring
+```
+
+On first start the server generates `fee.key.json` inside `MAMEM_DATA_DIR`
+(passphrase-encrypted, chmod 600, gitignored) and prints the testnet address.
+Leave it running or stop after copying the address — funding works either way.
+
+### 2. Fund it — and "internalize the UTXO"
+
+Send test coins to the printed address — easiest is the faucet:
+**https://faucet.bananablocks.com** → paste address → captcha → you get a
+**txid**. A friend with any tBSV wallet works just as well.
+
+Now tell the server about that one tx:
+
+```sh
+MAMEM_FUND_TXIDS=<txid> node packages/mcp/dist/src/bin.js
+```
+
+That **is** the internalization — and the deliberate design: mamem never
+scans the chain or queries an address index. Its UTXO view is a *tracked
+set*: outputs it created itself, plus outputs you hand it explicitly by txid
+(or `hex:<rawtx>` fully offline). It fetches just that one transaction,
+records the outputs paying its key into `reserve.json`, done. You only pass
+each funding txid **once** — the reserve persists, and every output the
+server creates later is recorded at construction. If you run the optional
+p2p listener it even prints `import via MAMEM_FUND_TXIDS=<txid>` when it
+sees a fresh payment hit your key.
+
+The same flow on mainnet is `MAMEM_NETWORK=main` + a real send +
+`MAMEM_MAINNET_CONFIRM=I_UNDERSTAND` (hard gate — real money). Spend caps
+apply by default: `MAMEM_MAX_FEE_SATS_PER_TX=1000`,
+`MAMEM_MAX_SPEND_SATS_PER_DAY=20000`.
+
+### 3. Point your agent at it
+
+**Claude Code** (stdio):
+
+```sh
+claude mcp add mamem --scope user \
+  --env MAMEM_NETWORK=testnet \
+  --env MAMEM_KEY_PASSPHRASE='<same passphrase>' \
+  --env MAMEM_DATA_DIR=<absolute path>/.mamem-testnet \
+  -- node <absolute path>/packages/mcp/dist/src/bin.js
+```
+
+**Claude Desktop / Cursor / Windsurf**: same command shape in their MCP
+config — `node <abs path>/packages/mcp/dist/src/bin.js` with the three env
+vars. `MAMEM_HTTP_PORT=8080` instead gives a Streamable-HTTP server at
+`/mcp` plus a REST surface (`/v1/*`, OpenAPI at `/openapi.json`) for remote
+or non-MCP clients.
+
+### 4. First conversation
+
+Ask your agent to `remember` something, `anchor`, then `recall` +
+`prove`. The first `prove` will typically return
+`{ok:true, settled:false, anchorState:'broadcast'}` — that is *anchored*:
+locally verified against the transaction itself, not yet mined. Mining
+is settlement, not validity — the receipt upgrades to
+`anchorState:'mined'` on its own when a block lands (the confirmer
+attaches the BUMP in the background). `requireFinal` is there for callers
+that genuinely want to wait.
+
+Regtest instead (full local Teranode, no public endpoints):
+`docker compose -f infra/teranode-quickstart/compose.yml up -d`, then
+`node packages/mcp/dist/src/init.js --network=regtest` — it checks reserve
+funding and prints the exact `generatetoaddress` command if unfunded.
+
+---
+
 ## For the pedants — the precise version
 
 Everything above, stated exactly.

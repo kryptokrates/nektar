@@ -98,6 +98,8 @@ export interface RememberResult {
   duplicate: boolean
   promise: { seq: number, leaf: string, signature: string }
   anchored?: { txid: string, n: number }
+  /** the effective level applied — ≥ the requested level, raised by premiseRefs */
+  level?: number
 }
 
 export interface AnswerReceipt {
@@ -302,6 +304,32 @@ export class MamemMemory {
     return root
   }
   isRevoked (pubHex: string): boolean { return this.revocations.has(idbind.deriveKey(fromHex(pubHex))) }
+
+  /** §19 third-party revocation proof: the `__revocation__` shard record for
+   *  `revoke:<pub>` plus its SPV-verifiable inclusion bundle — an external
+   *  verifier can check "key X was revoked" against chain data alone rather
+   *  than trusting an operator's local revocation list. Returns the record's
+   *  plaintext `data`, its `prov` and `E` so the verifier can recompute
+   *  `leaf = computeLeaf({d,p,E})` and bind the TEXT to the proven leaf —
+   *  an inclusion proof for a DIFFERENT record is not evidence. */
+  async revocationProof (pubHex: string): Promise<{ seq: number, data: string, prov?: import('@mamem/core').Provenance, E?: Bytes, leaf: string, bundle?: import('@mamem/verify').ProofBundle, anchored: boolean } | null> {
+    for (const rec of await this.store.all('__revocation__')) {
+      let data: string
+      if (rec.fragment.d.length) data = Buffer.from(rec.fragment.d).toString('utf8')
+      else if (rec.fragment.E?.length && this.opts.agentSeed) {
+        // encrypted deployment — the operator holds the seed; decrypt to read
+        const k = await this.fragmentKeyFor(rec)
+        const aadLen = (rec.fragment.E[0]! << 8) | rec.fragment.E[1]!
+        const aad = rec.fragment.E.slice(2, 2 + aadLen)
+        const ciphertext = rec.fragment.E.slice(2 + aadLen)
+        data = Buffer.from(decryptFragment(k, { ciphertext, aad, keyID: '' })).toString('utf8')
+      } else continue
+      if (!data.startsWith(`revoke:${pubHex}`)) continue
+      const { bundle, result } = await this.prove('__revocation__', rec.seq)
+      return { seq: rec.seq, data, prov: rec.fragment.p, E: rec.fragment.E, leaf: toHex(rec.leaf), bundle, anchored: result.ok === true }
+    }
+    return null
+  }
 
   // ── persisted replay-protection state (challenges, transcripts, issued ZK queries, revocations)
   /** ZK membership queries issued by THIS verifier: queryId hex → expiry (single use) */
@@ -571,10 +599,11 @@ export class MamemMemory {
    * remember: encrypt (if agentSeed configured) → append (dedup) → promise.
    * If the batch threshold is reached, closes the batch and anchors it.
    */
-  /** §8: store a revision as Δ against `baseSeq` (base must be readable as plaintext) */
+  /** §8: store a revision as Δ against `baseSeq` (base must be readable as plaintext).
+   *  The delta is derived from the base — App E floors its level at the base's. */
   async revise (shard: string, baseSeq: number, newText: string, prov?: Partial<Provenance> & { sourcePub?: string, epoch?: number }, level = 0): Promise<RememberResult> {
     const base = await this.materialize(shard, baseSeq, { requireProof: false })
-    return await this.remember(shard, `${DELTA_PREFIX}${baseSeq}:${encodeDelta(diff(base, newText))}`, prov, level)
+    return await this.remember(shard, `${DELTA_PREFIX}${baseSeq}:${encodeDelta(diff(base, newText))}`, prov, level, { premiseRefs: [{ shard, seq: baseSeq }] })
   }
   /** §8: rebuild version `seq` by applying Δs along its chain; with
    *  requireProof every link (base and each Δ record) must verify first */
@@ -641,7 +670,23 @@ export class MamemMemory {
     return idbind.verifyAuthorship(r.authorPub, r.authorEpoch, r.fragment.p.time, genesisPub, certs)
   }
 
-  async remember (shard: string, d: string, prov?: Partial<Provenance> & { sourcePub?: string, epoch?: number }, level = 0): Promise<RememberResult> {
+  /** App E traversal constraint: a record derived from cited premises may not
+   *  fall below their maximum access level — `premiseRefs` floors the new
+   *  record's level at max(cited levels), so a conclusion can't leak into a
+   *  lower-clearance read than its most-sensitive input. */
+  async premiseLevelFloor (premiseRefs: Array<{ shard: string, seq: number }>): Promise<number> {
+    let floor = 0
+    for (const r of premiseRefs) {
+      const rec = (await this.store.all(r.shard)).find(x => x.seq === r.seq)
+      if (rec !== undefined && (rec.level ?? 0) > floor) floor = rec.level ?? 0
+    }
+    return floor
+  }
+
+  async remember (shard: string, d: string, prov?: Partial<Provenance> & { sourcePub?: string, epoch?: number }, level = 0, opts?: { premiseRefs?: Array<{ shard: string, seq: number }> }): Promise<RememberResult> {
+    // App E: derived content inherits the max level of its premises — the
+    // caller may ask for higher, never lower.
+    if (opts?.premiseRefs?.length) level = Math.max(level, await this.premiseLevelFloor(opts.premiseRefs))
     const p: Provenance = {
       source: prov?.source ?? 'agent',
       time: prov?.time ?? Math.floor(Date.now() / 1000),
@@ -689,7 +734,7 @@ export class MamemMemory {
     })
     if (!duplicate) this.promises.push({ shard, seq: rec.seq, issuedAt: Date.now() })
     const out: RememberResult = {
-      shard, seq: rec.seq, leaf: toHex(rec.leaf), hdp: toHex(rec.hdp), duplicate,
+      shard, seq: rec.seq, leaf: toHex(rec.leaf), hdp: toHex(rec.hdp), duplicate, level,
       promise: { seq: rec.seq, leaf: promise.leaf, signature: promise.signature }
     }
     if (await this.log.shouldClose(shard)) {

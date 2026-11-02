@@ -148,3 +148,43 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules }])
   assert.ok((await verifyAuditBundle(clone(), w.chain)).reasons.includes('policy derivation present but verifier holds no authoritative policy DAG'))
   assert.equal(hashOf(receipt), bundle.receiptHash)
 })
+
+test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRevoked needed', async () => {
+  const w = await world()
+  const b0 = (await w.mem.prove('manual', 0)).bundle!
+  const b1 = (await w.mem.prove('manual', 1)).bundle!
+  const { receipt } = await commitReceipt({ answer: 'port 4: 45', fragmentRefs: [m(0), m(1)], checkResult: 'verified', modelId: { kind: 'api', provider: 'p', release: 'r1' }, timestamp: 1 })
+  const pub = w.sk.toPublicKey().toString()
+  // revoke the signer's key — the __revocation__ record + its anchor are the
+  // third-party-verifiable evidence (revocationProof exposes them)
+  w.mem.revoke(pub)
+  const rr = await w.mem.remember('__revocation__', `revoke:${pub}:root=aa`)
+  await w.mem.anchorShard('__revocation__'); w.settle('__revocation__')
+  const rev = await w.mem.revocationProof(pub)
+  assert.ok(rev && rev.anchored && rev.bundle, 'revocation record is anchored + provable')
+  assert.equal(rev.seq, rr.seq)
+  assert.ok(rev.data.startsWith(`revoke:${pub}`))
+  const base = () => buildAuditBundle({
+    receipt,
+    fragments: [{ ref: m(0), bundle: b0 }, { ref: m(1), bundle: b1 }],
+    signers: [{ ref: m(0), pubkey: pub, promise: w.promises[0]! }, { ref: m(1), pubkey: pub, promise: w.promises[1]! }]
+  })
+  // without the carried evidence and without a local checker the bundle verifies
+  // (the verifier simply has no revocation source)
+  assert.equal((await verifyAuditBundle(base(), w.chain)).ok, true)
+  // with the anchored revocation record the signer is convicted even though the
+  // verifier holds no isRevoked view — chain data alone convicts
+  const withRev = { ...base(), revocations: [{ pubkey: pub, seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: rev.leaf, bundle: rev.bundle! }] }
+  const vr = await verifyAuditBundle(withRev, w.chain)
+  assert.ok(vr.reasons.some(r => /key revoked \(anchored\)/.test(r)), `anchored revocation convicts: ${vr.reasons.join('; ')}`)
+  // a record that does not name the revoked pubkey is rejected as evidence
+  const wrongKey = { ...base(), revocations: [{ pubkey: PrivateKey.fromRandom().toPublicKey().toString(), seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: rev.leaf, bundle: rev.bundle! }] }
+  assert.ok((await verifyAuditBundle(wrongKey, w.chain)).reasons.some(r => /does not bind this pubkey/.test(r)))
+  // an inclusion proof for a DIFFERENT record is not evidence — the leaf
+  // recompute (data→leaf) fails before the SPV check is even reached
+  const badBundle = { ...base(), revocations: [{ pubkey: pub, seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: b1.leaf, bundle: b1 }] }
+  assert.ok((await verifyAuditBundle(badBundle, w.chain)).reasons.some(r => /does not recompute the proven leaf/.test(r)))
+  // and a genuinely wrong proof (leaf matches but bundle fails) is refused too
+  const badProof = { ...base(), revocations: [{ pubkey: pub, seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: rev.leaf, bundle: { ...rev.bundle!, leaf: 'ff'.repeat(32) } }] }
+  assert.ok((await verifyAuditBundle(badProof, w.chain)).reasons.some(r => /inclusion proof failed/.test(r)))
+})

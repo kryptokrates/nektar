@@ -10,7 +10,7 @@
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { PublicKey, Signature, PrivateKey, type Transaction } from '@bsv/sdk'
-import { dsha256, utf8, toHex, fromHex, concat, TAG_PROMISE, TAG_DELEGATION } from '@mamem/core'
+import { dsha256, utf8, toHex, fromHex, concat, computeLeaf, TAG_PROMISE, TAG_DELEGATION } from '@mamem/core'
 import { Datalog, parseLiteral, parseProgram, ParseError, type Fact, type Rule } from '@mamem/datalog'
 import { verifyFragment, type ProofBundle } from '@mamem/verify'
 import { verifyDerivation, type PolicyDAG } from '@mamem/graph'
@@ -218,6 +218,12 @@ export interface AuditBundle {
   fragments: Array<{ ref: FragmentRef, bundle: ProofBundle }>
   /** inclusion promises (TAG_PROMISE‖shard‖seq_be32‖leaf) by the log signer */
   signers: Array<{ ref: FragmentRef, pubkey: string, promise: { seq: number, leaf: string, signature: string } }>
+  /** §19: anchored revocation evidence — `__revocation__` shard records with
+   *  their inclusion bundles, so a third party verifies "key X was revoked"
+   *  against chain data, not an operator's opaque local list. `data`/`prov`/`E`
+   *  let the verifier recompute `leaf = computeLeaf({d,p,E})` — the evidence
+   *  binds the revocation TEXT to the proven leaf, not just any inclusion. */
+  revocations?: Array<{ pubkey: string, seq: number, data: string, prov?: import('@mamem/core').Provenance, E?: Uint8Array, leaf: string, bundle: ProofBundle }>
   /** JSON-portable: Merkle siblings travel as hex */
   policy?: { edb: Fact[], derivation: PortableDerivation }
 }
@@ -237,12 +243,34 @@ export function buildAuditBundle (a: Omit<AuditBundle, 'version' | 'receiptHash'
 export async function verifyAuditBundle (b: AuditBundle, tracker: ChainTracker, opts: { dag?: PolicyDAG, isRevoked?: (pubkeyHex: string) => boolean } = {}): Promise<{ ok: boolean, reasons: string[] }> {
   const reasons: string[] = []
   if (hashOf(b.receipt) !== b.receiptHash) reasons.push('receipt hash mismatch')
-  // §19: when the verifier holds a revocation checker, revoked signers/delegators
-  // fail the bundle — operator-local revocation only until an anchored
-  // revocation root exists (documented gap, not third-party-enforceable).
+  // §19: revoked signers/delegators fail the bundle. Two conviction paths —
+  // the verifier's local isRevoked (operator view) AND anchored revocation
+  // records carried in the bundle itself (third-party-verifiable: the
+  // `__revocation__` record must verify against the chain to count).
   const revoked = opts.isRevoked ?? (() => false)
-  for (const s of b.signers) if (revoked(s.pubkey)) reasons.push(`signer ${refKey(s.ref)}: key revoked`)
-  for (const d of b.receipt.delegations ?? []) if (revoked(d.delegator)) reasons.push(`delegation for "${d.decision.slice(0, 32)}": delegator key revoked`)
+  const anchoredRevoked = new Set<string>()
+  for (const r of b.revocations ?? []) {
+    // 1. the revocation TEXT must recompute the proven leaf — an inclusion
+    //    proof for a different record is not evidence
+    try {
+      const recomputed = toHex(computeLeaf({ d: utf8(r.data), p: r.prov!, E: r.E }))
+      if (recomputed !== r.leaf) { reasons.push(`revocation record for ${r.pubkey.slice(0, 16)}…: data does not recompute the proven leaf`); continue }
+    } catch { reasons.push(`revocation record for ${r.pubkey.slice(0, 16)}…: malformed provenance`); continue }
+    // 2. that leaf must be SPV-verifiably anchored
+    const v = await verifyFragment(r.bundle, tracker)
+    if (!v.ok) { reasons.push(`revocation record for ${r.pubkey.slice(0, 16)}…: inclusion proof failed (${(v as { reason?: string }).reason ?? 'unknown'})`); continue }
+    // 3. the record must name THIS pubkey
+    if (!r.data.startsWith(`revoke:${r.pubkey}`)) { reasons.push(`revocation record for ${r.pubkey.slice(0, 16)}…: record does not bind this pubkey`); continue }
+    anchoredRevoked.add(r.pubkey)
+  }
+  for (const s of b.signers) {
+    if (anchoredRevoked.has(s.pubkey)) reasons.push(`signer ${refKey(s.ref)}: key revoked (anchored)`)
+    else if (revoked(s.pubkey)) reasons.push(`signer ${refKey(s.ref)}: key revoked (unanchored local view)`)
+  }
+  for (const d of b.receipt.delegations ?? []) {
+    if (anchoredRevoked.has(d.delegator)) reasons.push(`delegation for "${d.decision.slice(0, 32)}": delegator key revoked (anchored)`)
+    else if (revoked(d.delegator)) reasons.push(`delegation for "${d.decision.slice(0, 32)}": delegator key revoked (unanchored local view)`)
+  }
   const cited = new Set(b.receipt.fragmentRefs.map(refKey))
   const bundled = new Set(b.fragments.map(f => refKey(f.ref)))
   for (const k of cited) if (!bundled.has(k)) reasons.push(`no proof bundle for cited fragment ${k}`)

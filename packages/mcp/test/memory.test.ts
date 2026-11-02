@@ -319,3 +319,35 @@ test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-ver
   const dec = decodePresentation(receipt.zk!)
   assert.equal(dec.requiredLevel, 2n)
 })
+
+test('GOAL-v8 D2: App E level floor — derived content cannot fall below its premises', async () => {
+  const seed = PrivateKey.fromRandom()
+  const { mem, settle } = setup({ agentSeed: seed, maxLevel: 5 })
+  // a level-5 premise
+  const p = await mem.remember('vault', 'classified premise', undefined, 5)
+  assert.equal(p.level, 5)
+  await mem.anchorShard('vault'); settle('vault')
+  // a caller asking for level 0 with a level-5 premise is FLOORED, not served low
+  const derived = await mem.remember('vault', 'conclusion drawn from the premise', undefined, 0, { premiseRefs: [{ shard: 'vault', seq: p.seq }] })
+  assert.equal(derived.level, 5, 'App E: the floor raises the stored level to the max premise level')
+  // an explicit higher level is honoured (floor is a minimum, not a clamp)
+  const higher = await mem.remember('vault', 'more sensitive conclusion', undefined, 3, { premiseRefs: [{ shard: 'vault', seq: p.seq }] })
+  assert.equal(higher.level, 5, 'level 3 request still floored to the premise\'s 5')
+  // no premiseRefs → no floor (existing behaviour unchanged)
+  const plain = await mem.remember('vault', 'fresh public fact', undefined, 0)
+  assert.equal(plain.level, 0)
+  // the floor applies via the remember tool too
+  const viaTool = await callTool(mem, 'remember', { shard: 'vault', data: 'tool-derived fact', level: 0, premiseRefs: [{ shard: 'vault', seq: p.seq }] })
+  assert.equal(viaTool.level, 5, 'tool path floors identically')
+  // a low-clearance reader cannot read the floored (derived) record
+  await mem.anchorShard('vault'); settle('vault')
+  const { identity } = callerOf(mem)
+  const low = await mem.recall('vault', { seq: derived.seq, identity })
+  assert.equal(low.items[0]!.text, undefined, 'derived record at floored level is not served to a level-0 reader')
+  // §8 revise() inherits the base's level automatically — a delta can't downgrade
+  // (a plaintext instance: revise materialises the base, which needs plaintext)
+  const plain2 = setup()
+  const base5 = await plain2.mem.remember('v', 'classified premise', undefined, 5)
+  const revised = await plain2.mem.revise('v', base5.seq, 'classified premise v2')
+  assert.equal(revised.level, 5, 'a revision of a level-5 base lands at level 5, not 0')
+})

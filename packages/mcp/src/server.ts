@@ -13,6 +13,7 @@ export const TOOLS = [
         shard: { type: 'string' },
         data: { type: 'string', description: 'the fact to store, verbatim' },
         level: { type: 'number', description: 'confidentiality level; omit (0 = public) unless the user asks for restricted access — level > 0 records need a ZK clearance to read' },
+        premiseRefs: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] }, description: '§AppE: records this fact is derived from — the new level is floored at their max so derived content cannot leak downward' },
         source: { type: 'string', description: 'where the fact comes from (document, URL, person)' },
         modality: {
           type: 'object',
@@ -454,7 +455,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       return out
     }
     case 'remember':
-      return mem.remember(args.shard, args.data, { source: args.source, modality: args.modality }, args.level ?? 0)
+      return mem.remember(args.shard, args.data, { source: args.source, modality: args.modality }, args.level ?? 0, { premiseRefs: args.premiseRefs })
     case 'recall': {
       const { decodePresentation } = await import('@mamem/identity')
       const r = await mem.recall(args.shard, { seq: args.seq, identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk) })

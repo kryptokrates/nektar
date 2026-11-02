@@ -194,20 +194,38 @@ budget — Stage 0 measures the real numbers):
 | Query checks | each DEEP query = dSHA-256 Merkle path | `OP_SHA256` chain — cheap per query, ~dozens of queries |
 | Terminal | `journal.root == anchored R_n`, `size == anchor.size`, burn queryId | anchor-script decode (exists) + compares |
 
-**The decisive unknown (0b):** how much of the transcript hash is
-Poseidon2 vs SHA-256. SHA-256 is one opcode per hash — the whole
-hash budget is small. Poseidon2 is a 24-round×state-width unrolled
-bignum permutation — if the transcript is Poseidon2-heavy, it
-dominates the artifact and may force either a hash-light custom STARK
-variant or a fallback decision. **Stage 0b resolves this before any
-large artifact is written.**
+**Stage 0b — RESOLVED (audit done, 2026-11-02):** the wasm symbols in
+`packages/zk/stark/verifier_bg.wasm` are unambiguous — the R0 3.0.3
+succinct transcript runs on **Poseidon2 over BabyBear**
+(`Poseidon2Rng as risc0_zkp::core::hash::Rng<BabyBear>` — Fiat-Shamir;
+`Poseidon2HashFn` — in-proof Merkle commitments). `Sha256HashFn`
+appears only at the receipt seal/journal layer — native `OP_SHA256`,
+cheap. risc0-zkp 3.0.5 parameters: `QUERIES = 50`, `FRI_FOLD = 16`,
+`INV_RATE = 4`, `FRI_MIN_DEGREE = 256`, BabyBear ext-degree 4.
+Estimated Poseidon2 budget: ~50 queries × ~10–16 path levels +
+~10² transcript absorptions ≈ **~10³ permutations**; at ~2–4k
+unrolled ops per permutation ≈ 3–8 M ops total — byte-heavy but
+structurally the BWS design, and Poseidon2 is *field-native*
+(friendlier to bignum Script than their byte-oriented Blake2s).
+The artifact is large, not infeasible — Stage 0a/0c measure the real
+per-op cost.
 
 ## 6. Execution — staged, with go/no-go gates
 
 ### Stage 0 — feasibility spike (regtest only)
 
-- **0a field-op cost:** Rúnar contract doing `mulmod` over BabyBear via
-  `OP_MUL` + Chronicle shift-reduce → measured bytes/opcodes per op.
+- **0a field-op cost — MEASURED (2026-11-02, real interpreter):**
+  `packages/contracts/src/BabyBearProbe.runar.ts` compiled to a
+  **126-byte** locking script covering three methods; evaluated under the
+  @bsv/sdk `Spend` interpreter (consensus semantics, not MockChain
+  ANF): `mulmod` = **11 executed ops** (incl. edge `(p−1)² mod p = 1`),
+  `sbox7` (x⁷ — the Poseidon2-BabyBear S-box, 4 chained mulmods) =
+  **25 ops**, `mdsRow` (16 muls + 15 adds + mod) = **47 ops**. Wrong
+  results correctly rejected. **Finding: BabyBear field arithmetic is
+  ~2–6 ops per op — native `OP_MOD` removes the shift-fold entirely; no
+  Chronicle opcodes were even needed for the arithmetic itself.** The
+  verifier's cost is therefore op-COUNT (code unrolling volume), not
+  per-op cost.
 - **0b transcript-hash audit:** exactly which hash the R0 3.0.3
   succinct transcript uses and invocation counts (risc0 `zkp`/`core`
   source, our WASM symbols, receipt structure).

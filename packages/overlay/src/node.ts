@@ -6,10 +6,12 @@ import type { Knex } from 'knex'
 import type { Broadcaster, ChainTracker } from '@mamem/chain'
 import { createTmMamem } from './tm.js'
 import { createLsMamem } from './ls.js'
+import { createTmPresence, createLsPresence } from './presence.js'
 
 export interface MamemOverlay {
   engine: Engine
   ls: ReturnType<typeof createLsMamem>
+  lsPresence: ReturnType<typeof createLsPresence>
   tm: ReturnType<typeof createTmMamem>
   knex: Knex
 }
@@ -26,13 +28,15 @@ export async function createMamemOverlay (
   const ls = createLsMamem(kx)
   await ls.init()
   const tm = createTmMamem(ls)
+  const lsPresence = createLsPresence(kx)
+  await lsPresence.init()
   const engine = new Engine(
-    { tm_mamem: tm },
-    { ls_mamem: ls },
+    { tm_mamem: tm, tm_presence: createTmPresence() },
+    { ls_mamem: ls, ls_presence: lsPresence },
     new KnexStorage(kx),
     chainTracker as any,
     undefined, undefined, undefined,
     broadcaster as any
   )
-  return { engine, ls, tm, knex: kx }
+  return { engine, ls, lsPresence, tm, knex: kx }
 }

@@ -266,6 +266,49 @@ transactions. "Finding" an agent = knowing its **endpoint**. Three ways:
    offline against public block headers. No credentials, no session —
    that's the point of the receipts.
 
+### 3b. Finding each other — the rendezvous directory
+
+For *multiple* agents that don't know each other's endpoints there's a
+shared rendezvous: an overlay node running the `tm_presence` topic
+manager + `ls_presence` lookup (packages/overlay). Each agent publishes a
+signed "I'm here" ad `{pub, endpoint, shards, ts, exp?}` — the signature
+is by the agent's own key (ideally the same key that anchors its chain),
+so nobody can forge or hijack someone else's endpoint. Latest ad wins;
+expired ads disappear.
+
+Host it on any always-on box:
+
+```sh
+MAMEM_OVERLAY_HOST=0.0.0.0 MAMEM_OVERLAY_PORT=8090 \
+MAMEM_OVERLAY_DIR=/var/lib/mamem-overlay MAMEM_NETWORK=testnet \
+pnpm rendezvous            # serves on :8090, sqlite-persisted
+```
+
+Then each agent announces (no UTXO needed — the signature is the auth):
+
+```sh
+MAMEM_AGENT_WIF=<identity wif> \
+MAMEM_AGENT_ENDPOINT=http://<your-public-host>:8080/mcp \
+MAMEM_AGENT_SHARDS=manual,tnet MAMEM_AGENT_TTL_MS=86400000 \
+MAMEM_OVERLAY_URL=http://<rendezvous-host>:8090 \
+pnpm rendezvous:announce
+```
+
+And any agent (or human) discovers peers:
+
+```sh
+curl http://<rendezvous-host>:8090/directory?shard=tnet   # who serves shard tnet
+curl http://<rendezvous-host>:8090/directory?all=1        # the whole directory
+```
+
+Flow: announce → find a peer's endpoint+pubkey → connect to its MCP
+(bearer token if it has one) → verify its receipts against the pubkey
+yourself. **The directory finds peers; it never vouches for their
+contents** — trust still comes from proof bundles, not from the
+directory. Ads can also ride on-chain (`POST /overlay/submit` with a
+`tm_presence` BEEF) for permanence, but the off-chain signed ad is the
+common path.
+
 ### 4. First conversation
 
 Ask your agent to `remember` something, `anchor`, then `recall` +

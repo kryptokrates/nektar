@@ -14,6 +14,8 @@
     "check:deps": "node tools/check-deps.mjs",
     "sbom": "node tools/sbom.mjs",
     "mcp:install": "node tools/mcp-install.mjs",
+    "rendezvous": "node packages/overlay/serve.mjs",
+    "rendezvous:announce": "node packages/overlay/announce.mjs",
     "mcp:smoke": "node packages/mcp/demo/gateway-smoke.mjs",
     "main:readonly": "node packages/mcp/demo/mainnet-readonly.mjs",
     "ttn:readonly": "node packages/mcp/demo/ttn-readonly.mjs",

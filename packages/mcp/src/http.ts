@@ -68,6 +68,14 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
     const send = (code: number, v: unknown, type = 'application/json') => { res.writeHead(code, { 'content-type': type }); res.end(typeof v === 'string' ? v : json(v)) }
     const url = new URL(req.url ?? '/', 'http://x')
     const p = url.pathname.split('/').filter(Boolean)
+    // MAMEM_HTTP_TOKEN: when set, everything except /v1/health requires a
+    // bearer token — the gate that makes a public bind (0.0.0.0 / a hosted
+    // box) safe. Unset = localhost-trusted behaviour (the default bind is
+    // 127.0.0.1 anyway).
+    const tok = process.env.MAMEM_HTTP_TOKEN
+    if (tok && url.pathname !== '/v1/health' && req.headers.authorization !== `Bearer ${tok}`) {
+      return send(401, { error: 'unauthorized' })
+    }
     try {
       if (url.pathname === '/mcp') return await mcp(req, res)
       if (req.method === 'GET' && url.pathname === '/v1/health') return send(200, { ok: true })

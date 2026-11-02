@@ -226,6 +226,46 @@ vars. `MAMEM_HTTP_PORT=8080` instead gives a Streamable-HTTP server at
 `/mcp` plus a REST surface (`/v1/*`, OpenAPI at `/openapi.json`) for remote
 or non-MCP clients.
 
+### Sharing one instance instead — "how does my friend find my agent?"
+
+First the honest note: your agent isn't *findable on-chain* — by design.
+There's no global index of who's running what; anchors are just ordinary
+transactions. "Finding" an agent = knowing its **endpoint**. Three ways:
+
+1. **He doesn't need yours — he runs his own** (the setup above). Each
+   operator gets their own memory, wallet and anchor chain. This is the
+   default and the recommended topology.
+2. **You host it for him.** Run the server on a reachable host (e.g. your
+   Hetzner box), bound publicly **with the token gate**:
+
+   ```sh
+   MAMEM_HTTP_HOST=0.0.0.0 MAMEM_HTTP_PORT=8080 MAMEM_HTTP_TOKEN=<shared secret> \
+     MAMEM_NETWORK=testnet MAMEM_KEY_PASSPHRASE=<pw> MAMEM_DATA_DIR=<dir> \
+     node packages/mcp/dist/src/bin.js
+   ```
+
+   and he connects remotely:
+
+   ```sh
+   claude mcp add --transport http mamem http://<your-host>:8080/mcp \
+     --header "Authorization: Bearer <shared secret>"
+   ```
+
+   `MAMEM_HTTP_TOKEN` gates everything except `/v1/health` — without it the
+   port is fully open (anyone could write into your memory and spend your
+   fee wallet; the per-tx/daily caps still apply, but don't expose it bare).
+   The token is read at request time, so it can't leak via `/v1` responses.
+   Over the open internet put TLS in front (Caddy/nginx) — a bearer over
+   plain HTTP is sniffable; for a private deployment Tailscale/a tunnel is
+   cleaner than a public bind at all. Hosted connectors (claude.ai,
+   ChatGPT remote MCP) additionally require OAuth 2.1 — not wired yet;
+   Claude Code's `--transport http` doesn't.
+3. **Verify-only, no access needed.** If he just wants to *check* your
+   agent's memory rather than write to it: `GET /v1/proof/{shard}/{seq}`
+   hands over the full proof bundle, and `verifyFragment` validates it
+   offline against public block headers. No credentials, no session —
+   that's the point of the receipts.
+
 ### 4. First conversation
 
 Ask your agent to `remember` something, `anchor`, then `recall` +

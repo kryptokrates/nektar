@@ -38,3 +38,23 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
     assert.equal(((await (await fetch(`${base}/openapi.json`)).json()) as { openapi: string }).openapi, '3.1.0')
   } finally { srv.close() }
 })
+
+test('HTTP API: MAMEM_HTTP_TOKEN gates every route except /v1/health', async () => {
+  process.env.MAMEM_HTTP_TOKEN = 't0ken-xyz'
+  try {
+    const chain = new MockChain(); chain.verifyScripts = true
+    const funder = new MockFunder(); funder.topup(4); for (const t of funder.parents) chain.registerParent(t)
+    const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
+    const srv = createHttpApi(mem).listen(0)
+    await new Promise(r => srv.once('listening', r))
+    const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`
+    const authed = { headers: { authorization: 'Bearer t0ken-xyz' } }
+    try {
+      assert.equal((await fetch(`${base}/v1/tools`)).status, 401)
+      assert.equal((await fetch(`${base}/v1/tools`, authed)).status, 200)
+      assert.equal((await fetch(`${base}/mcp`, { method: 'POST' })).status, 401)
+      assert.equal((await fetch(`${base}/v1/health`)).status, 200, 'health stays public for monitors')
+      assert.equal((await fetch(`${base}/v1/proof/m/0`, { headers: { authorization: 'Bearer wrong' } })).status, 401)
+    } finally { srv.close() }
+  } finally { delete process.env.MAMEM_HTTP_TOKEN }
+})

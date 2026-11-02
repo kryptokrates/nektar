@@ -173,10 +173,35 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   5. `saleRefund` (buyer): if the seller never completes, the depositor
      reclaims the escrow after `refundAfter` — depositor-signed,
      locktime-gated.
+  GOAL-v8 additions: offers carry `expiresAt` (inside the signature —
+  expired offers are refused at verification AND before escrow funding),
+  and `saleEscrow` refuses a `refundAfter` that isn't safely in the
+  future (`> currentHeight + margin`) before any deposit is made.
   Threat note: `wrapped` is public on-chain — private mode relies on
   BRC-42 ECDH confidentiality; the covenant binds payment↔reveal but
   cannot prevent the buyer reselling the plaintext afterwards, nor a
   third party front-running a *public* payload they saw in the mempool.
+- **Access audit log (GOAL-v8 D6, opt-in):** `MAMEM_ACCESS_LOG=1`
+  appends timestamped `{event:'decrypt'|'traverse', shard, seq, caller}`
+  records to the `__access__` shard, which anchors like any other shard.
+  **Off by default** — the log is plaintext and records who read what;
+  enable only where that tradeoff is acceptable. `logAccess()` is the
+  public entry for callers that traverse outside `memory` (graph walks).
+- **Anchored identity ledger (GOAL-v8 D4):** every `rotate` now also
+  writes the `RotationCert` to the `__identity__` shard and anchors it.
+  `rotationChainProof(shard)` returns the genesis owner + per-cert
+  inclusion evidence; `verifyAnchoredRotationChain` (reasoning)
+  replays the chain for third parties — no state-dir trust needed.
+- **Anchor authorship σ_n (GOAL-v8 D5):**
+  `extractAnchorAuthorship(spendTx, spentAnchorScript)` (contracts)
+  pulls `{ownerPub, sig, preimage}` out of an anchor spend and verifies
+  `sig` over `sha256(preimage)` — the discrete Appendix-D artifact.
+- **Derived-content level floor (GOAL-v8 D2):** `remember` accepts
+  `premiseRefs` — the stored level is floored at `max(cited levels)`.
+  `revise` inherits the base's level automatically.
+- **Receipt model binding (GOAL-v8 D7):** configure
+  `model:{id, params, weightsHash}` on the instance; receipts carry it
+  (plus per-call `modelParams`) inside the signed digest.
 - TTN (Teranode Test Net — test coins, `MAMEM_NETWORK=ttn`):
   - Endpoints: Arcade (ARC-compatible) `https://arcade-v2-ttn-us-1.bsvblockchain.tech`, WoC-TTN `https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` (`openLiveRuntime`) — SpendGuard caps, encrypted keys, WoC merkle paths.
   - Differences from main: **no** `MAMEM_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (Arcade policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); no broadcast fallback beyond WoC `/tx/raw`; confirm interval 30 s.

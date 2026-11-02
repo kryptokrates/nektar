@@ -249,8 +249,18 @@ per-op cost.
   hand-scheduled Script) is significant — the gate hinges on whether the
   engineering+cost budget justifies it vs. Groth16-wrap (1 tx, trusted
   setup).
-- **0d covenant shim cost:** per-stage preimage/state-carry overhead;
-  OTDA vs BIP143 for the preimage glue.
+- **0d covenant shim — MEASURED (2026-11-02, real interpreter):**
+  `Poseidon2Stage` (StatefulSmartContract, 24-cell UTXO state +
+  `addOutput` continuation + sighash-preimage covenant + round constants
+  baked as per-stage literals): `fullStep` **VALID — 1,353 ops, spend tx
+  14.5KB**; `partialStep` **VALID — 598 ops, spend tx 11.4KB** under
+  @bsv/sdk `Spend` (isRelaxed). The covenant wrapper costs ~400 ops /
+  ~9–11KB over the bare round math — the atomic chain primitive works
+  end-to-end. Refined footprint: ~29 stages/perm ≈ ~360KB/perm at this
+  naive shape → order 10⁴ txs / ~300MB per verify at ~10³ perms —
+  **expensive but structurally proven**; big reductions available
+  (single-method stage variants ~2×, RC-in-state generic stage ~5×,
+  deferred mods ~1.5×, permutation sharing across queries).
 - **GATE:** total estimated footprint + stage count. If Poseidon2-bound
   and infeasible → documented fallback (Groth16-wrap with R0's public
   ceremony, or a SHA-256-only STARK variant) — decided with real

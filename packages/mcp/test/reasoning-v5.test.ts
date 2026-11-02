@@ -7,7 +7,7 @@ import { diff, apply, revert, decodeDelta, encodeDelta, DeltaError, utf8 } from 
 import { MockChain, MockFunder } from '@mamem/chain'
 import { signProvenance } from '@mamem/log'
 import { makeRotationCert, verifyAuthorship } from '@mamem/identity'
-import { always, eventually, obligation, causalClosure, type TimedFact } from '../src/index.js'
+import { always, eventually, obligation, causalClosure, type TimedFact } from '@mamem/reasoning'
 import { axiomHash, ontologyEntails, Jurisdictions, validByPrecedent, type Axiom } from '@mamem/graph'
 import { MamemMemory } from '@mamem/mcp'
 
@@ -117,7 +117,7 @@ test('§9 memory as law: anchored DL entailment, jurisdiction graphs, precedent'
 })
 
 test('§16 delegation map: sub-decisions signed by delegating agents; tampering fails', async () => {
-  const { makeDelegation, verifyReceiptDelegations, commitReceipt } = await import('../src/index.js')
+  const { makeDelegation, verifyReceiptDelegations, commitReceipt } = await import('@mamem/reasoning')
   const sub = PrivateKey.fromRandom()
   const answer = 'approved transfer of EUR 500'
   const receipt = {

@@ -10,7 +10,9 @@ import { visibleTools, callTool } from './server.js'
 export const INSTRUCTIONS = [
   'mamem is verifiable, encrypted agent memory anchored on BSV.',
   'Before answering a factual question, call `recall` (or use the `grounded-answer` prompt) and answer only from items whose check is verified.',
+  'For a verifiable answer, pass your draft claims to `groundedAnswer`: every claim must cite a verified fragment and be quoted or entailed — ungrounded text is stripped and an answer receipt is anchored.',
   'When the user states a fact worth keeping, call `remember` with its source.',
+  'Call `modelManifest` once per session to anchor which model you are; receipts then carry that declared identity.',
   'Cite the shard/seq and anchor txid you relied on; `prove` returns the proof.',
   'Proofs establish that something was RECORDED and has not been altered — never that it is true. Say so when it matters.'
 ].join(' ')

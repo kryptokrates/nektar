@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test --test-timeout=60000 dist/test/*.test.js"
+    "test": "node -e \"console.log('reasoning bridge suite lives in packages/mcp/test (cycle-safe home)')\""
   },
   "dependencies": {
     "@mamem/core": "workspace:*",
@@ -20,7 +20,6 @@
     "@mamem/graph": "workspace:*"
   },
   "devDependencies": {
-    "@mamem/mcp": "workspace:*",
     "@mamem/log": "workspace:*",
     "@mamem/identity": "workspace:*"
   },

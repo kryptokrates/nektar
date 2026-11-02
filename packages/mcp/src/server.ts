@@ -342,6 +342,59 @@ export const TOOLS = [
       },
       required: ['saleTxid', 'verdictOutpoint', 'wrapped', 'priceSats']
     }
+  },
+  {
+    name: 'modelManifest',
+    description: 'AGT-011: declare + anchor which model this instance runs — local weights sha256 or API provider+release. Anchored on __model__ and bound into subsequent receipts. DECLARED, not proven: says which model the operator says answered, not that the inference ran those weights.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', description: '"local" or "api"' },
+        weightsPath: { type: 'string', description: 'local: path to the weights file (hashed)' },
+        name: { type: 'string' },
+        provider: { type: 'string', description: 'api: e.g. openai' },
+        release: { type: 'string', description: 'api: e.g. gpt-5.2-2026-10' }
+      },
+      required: ['kind']
+    }
+  },
+  {
+    name: 'groundedAnswer',
+    description: 'Wright §8 (∀φ∈Rq ∃Ki: VerifyFragment(Ki)∧φ⊢di): takes the caller\'s draft claims, checks every cite resolves to a VERIFIED fragment and the claim is quoted or Datalog-entailed, STRIPS everything that fails, then anchors an answer receipt. Ungrounded statements are removed — the receipt is the per-answer proof, not an optional add-on.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        claims: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              text: { type: 'string' },
+              literal: { type: 'string', description: 'optional Datalog literal for entailment checking' },
+              cites: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] } }
+            },
+            required: ['text', 'cites']
+          }
+        },
+        mode: { type: 'string', description: '"remove" (default — strip ungrounded) or "flag"' }
+      },
+      required: ['claims']
+    }
+  },
+  {
+    name: 'commitReceipt',
+    description: 'AGT-012: commit an answer receipt {answer, fragmentRefs, checkResult} — hashed and anchored on __receipts__. Anchored "what I said" — proves the answer was committed, not that it is true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        answer: { type: 'string' },
+        fragmentRefs: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] } },
+        checkResult: { type: 'string', description: 'verified | unverifiable | failed' },
+        model: { type: 'object', description: 'optional ModelIdentity override; defaults to the manifest set by modelManifest' },
+        groundingReportHash: { type: 'string' }
+      },
+      required: ['answer', 'fragmentRefs', 'checkResult']
+    }
   }
 ] as const
 
@@ -638,6 +691,41 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     case 'saleBuyGated': {
       if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
       return await mem.claims.buyGated(args.saleTxid, args.verdictOutpoint, args.wrapped, args.priceSats, args.changeSats ?? 900)
+    }
+    case 'modelManifest':
+      return mem.modelManifest(args)
+    case 'groundedAnswer': {
+      const { ground, commitReceipt } = await import('@mamem/reasoning')
+      const fetch: import('@mamem/reasoning').FragmentFetch = async (ref) => {
+        const r = await mem.recall(ref.shard, { seq: ref.seq })
+        const it = r.items[0]
+        return { verified: !!it && !it.unverifiable, text: it?.text }
+      }
+      const report = await ground(args.claims, fetch, { mode: args.mode === 'flag' ? 'flag' : 'remove' })
+      const answer = report.kept.map(c => c.text).join(' ')
+      if (report.kept.length === 0) {
+        return { answer: '', committed: false, kept: [], flagged: report.flagged, grounding: report, checkResult: 'failed', note: 'no claim survived grounding — nothing committed (an underivable answer is invalid by construction)' }
+      }
+      const { receipt, receiptHash, anchor } = await commitReceipt({
+        answer,
+        fragmentRefs: args.claims.flatMap((c: any) => c.cites ?? []),
+        checkResult: 'verified',
+        timestamp: Date.now(),
+        modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
+        groundingReportHash: report.reportHash
+      }, mem)
+      return { answer, committed: true, kept: report.kept, flagged: report.flagged, grounding: report, receipt, receiptHash, anchor, checkResult: 'verified' }
+    }
+    case 'commitReceipt': {
+      const { commitReceipt } = await import('@mamem/reasoning')
+      return await commitReceipt({
+        answer: args.answer,
+        fragmentRefs: args.fragmentRefs ?? [],
+        checkResult: args.checkResult,
+        timestamp: Date.now(),
+        modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
+        groundingReportHash: args.groundingReportHash
+      }, mem)
     }
     default:
       throw new Error(`unknown tool ${name}`)

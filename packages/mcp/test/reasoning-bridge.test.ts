@@ -12,7 +12,7 @@ import { PolicyDAG } from '@mamem/graph'
 import {
   ground, modelIdentity, commitReceipt, CitationIndex, onRevision, timeBounds,
   buildAuditBundle, verifyAuditBundle, hashOf, type FragmentFetch, type Claim
-} from '../src/index.js'
+} from '@mamem/reasoning'
 
 const RULES = parseProgram(`@id r-spec
 spec(S, V) :- requires(P, V), applies(S, P).`).rules
@@ -190,7 +190,7 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
 })
 
 test('GOAL-v8 D4: anchored rotation chain — third party replays pk(0)→pk(i) from chain data', async () => {
-  const { verifyAnchoredRotationChain } = await import('../src/index.js')
+  const { verifyAnchoredRotationChain } = await import('@mamem/reasoning')
   const w = await world()
   const k1 = PrivateKey.fromRandom()
   await w.mem.rotateShard('manual', k1)

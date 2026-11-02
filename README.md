@@ -131,6 +131,10 @@ peers; it never vouches for them** — trust comes from the receipts.
   pilot. No security audit.
 - Proofs cover *inclusion, ordering, authorization, existence-by-time* —
   never that a memory's content is **true**.
+- **Per-answer receipts**: `groundedAnswer` strips every claim that isn't
+  entailed by a verified fragment and anchors an answer receipt (Wright
+  §8). "Which model answered" is a *declared* manifest (`modelManifest`),
+  not a proof of inference — that needs zkML/TEE, deliberately not built.
 
 ## Documentation
 

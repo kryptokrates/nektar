@@ -417,3 +417,30 @@ test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash',
   assert.equal(r2.receipt.model, undefined)
   assert.ok(verifyAnswerReceipt(r2.receipt).ok, 'modelless receipts still verify')
 })
+
+test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest declares', async () => {
+  const { mem, settle } = setup()
+  await mem.remember('manual', 'drain port 4 torque 45Nm')
+  await mem.remember('manual', 'inspect belt every 10h')
+  settle('manual')
+  const r = await callTool(mem, 'groundedAnswer', { claims: [
+    { text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] },
+    { text: 'the moon is cheese', cites: [{ shard: 'manual', seq: 1 }] },
+    { text: 'unsourced claim', cites: [] }
+  ] })
+  assert.equal(r.committed, true)
+  assert.equal(r.answer, 'drain port 4 torque 45Nm')
+  assert.equal(r.kept.length, 1)
+  assert.deepEqual(r.flagged.map((f: any) => f.reason).sort(), ['not-entailed', 'uncited'])
+  assert.equal(r.receipt.modelId.provider, 'undeclared')
+  assert.ok(r.receiptHash)
+  assert.equal(r.anchor.shard, '__receipts__')
+
+  const m = await callTool(mem, 'modelManifest', { kind: 'api', provider: 'openai', release: 'gpt-x' })
+  assert.equal(m.modelId.provider, 'openai')
+  assert.equal(m.anchor.shard, '__model__')
+
+  const r2 = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'nope', cites: [{ shard: 'manual', seq: 0 }] }] })
+  assert.equal(r2.committed, false)
+  assert.equal(r2.checkResult, 'failed')
+})

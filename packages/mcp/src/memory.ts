@@ -209,6 +209,19 @@ export class MamemMemory {
   /** optimistic-claim surface (regtest/main runtimes attach a ClaimService) */
   claims: any
   attachClaims (c: any): void { this.claims = c }
+  /** AGT-011 declared model identity — set by modelManifest; receipts reference it.
+   *  DECLARED, not proven: an anchored manifest says which model the operator
+   *  says answered, not that the inference ran those weights (needs zkML/TEE).
+   *  (Distinct from opts.modelId — the string stamped into AnswerReceipts.) */
+  declaredModel?: import('@mamem/reasoning').ModelIdentity
+  /** anchor a model manifest on the __model__ shard and bind it to receipts. */
+  async modelManifest (m: Parameters<typeof import('@mamem/reasoning').modelIdentity>[0]) {
+    const { modelIdentity } = await import('@mamem/reasoning')
+    this.declaredModel = await modelIdentity(m)
+    const { seq } = await this.remember('__model__', JSON.stringify({ type: 'model-manifest', ...this.declaredModel }))
+    const a = await this.anchorShard('__model__')
+    return { modelId: this.declaredModel, anchor: { shard: '__model__', seq, txid: a?.txid }, note: 'declared model identity — anchored and bound into subsequent receipts; not a proof of inference' }
+  }
   private log: BatchLog
   private anchors = new Map<string, AnchorChain>()
   private tails = new Map<string, AnchorLink[]>()

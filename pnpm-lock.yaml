@@ -310,6 +310,9 @@ importers:
       '@mamem/policy':
         specifier: workspace:*
         version: link:../policy
+      '@mamem/reasoning':
+        specifier: workspace:*
+        version: link:../reasoning
       '@mamem/verify':
         specifier: workspace:*
         version: link:../verify
@@ -422,9 +425,6 @@ importers:
       '@mamem/log':
         specifier: workspace:*
         version: link:../log
-      '@mamem/mcp':
-        specifier: workspace:*
-        version: link:../mcp
 
   packages/verify:
     dependencies:

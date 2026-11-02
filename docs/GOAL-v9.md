@@ -403,6 +403,14 @@ per-op cost.
 - Full-validity mode (zero assumptions, ~10⁴ txs) is Stage 2 — real
   and measured, **explicitly skipped**: the optimistic path's economics
   make it unnecessary for this deployment's threat model.
+- Paper-gap re-scan (2506.13246v1): the remaining unbuilt items are the
+  `LZKMem` cross-domain proof *interchange grammar* (our proof bundles are
+  portable JSON but there's no documented wire spec between domains) and
+  the *layered policy graphs* `{G1..Gn}` with `Φ` domain inheritance —
+  a single policy layer exists today. Both deferred, not contradicted.
+  Per-answer grounding (§8 `∀φ⊢di`) is wired: `groundedAnswer` strips
+  underivable claims and anchors a receipt; "which model" is a declared
+  manifest, not an inference proof.
 - `settle`'s anchor binding ✅ **continuing variant**: bound claims use
   `settleAnchored`, which enumerates `[anchorCont, verdict, payout]`;
   `MamemAnchor.witnessSettle` re-emits **its own continuation** first

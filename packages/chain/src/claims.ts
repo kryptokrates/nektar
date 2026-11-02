@@ -9,7 +9,9 @@ export interface Utxo { txid: string, outputIndex: number, satoshis: number, scr
 
 const encPush = (h: string): string => {
   const l = h.length / 2
-  return (l < 76 ? l.toString(16).padStart(2, '0') : '4c' + l.toString(16).padStart(2, '0')) + h
+  if (l === 0) return '00'; if (l <= 75) return l.toString(16).padStart(2, '0') + h
+  if (l <= 0xff) return '4c' + l.toString(16).padStart(2, '0') + h
+  return '4d' + (l & 0xff).toString(16).padStart(2, '0') + ((l >> 8) & 0xff).toString(16).padStart(2, '0') + h
 }
 const encNum = (n: bigint): string => {
   if (n === 0n) return '00'
@@ -101,12 +103,15 @@ export async function buildBuyGatedTx (opts: {
   tx.addOutput({ satoshis: opts.changeSats, lockingScript: LockingScript.fromHex(p2pkh(opts.changePkh)) })
   const sIdx = sArt.abi.methods.filter((m: any) => m.isPublic).findIndex((m: any) => m.name === 'buyGated')
   const { sigHex: sSig, preimageHex: sPre } = sale.computeOpPushTxWithCodeSep(tx, 0, sUtxo.script, sUtxo.satoshis, sIdx)
-  tx.inputs[0].unlockingScript = UnlockingScript.fromHex(encPush(sSig) + sale.buildUnlockingScript('buyGated', [opts.wrapped, BigInt(opts.changeSats), prevouts, sPre]))
+  const saleUnlock = encPush(sSig) + sale.buildUnlockingScript('buyGated', [opts.wrapped, BigInt(opts.changeSats), prevouts, sPre])
+  if (saleUnlock.length % 2) throw new Error(`sale unlock odd hex (${saleUnlock.length}): sSig=${sSig.length} sPre=${sPre.length} prevouts=${prevouts.length} wrapped=${opts.wrapped.length}`)
+  tx.inputs[0].unlockingScript = UnlockingScript.fromHex(saleUnlock)
   const vIdx = vArt.abi.methods.filter((m: any) => m.isPublic).findIndex((m: any) => m.name === 'authorize')
   const { sigHex: vSig, preimageHex: vPre } = vc.computeOpPushTxWithCodeSep(tx, 1, vUtxo.script, vUtxo.satoshis, vIdx)
   // single-method contract → no selector push
-  tx.inputs[1].unlockingScript = UnlockingScript.fromHex(
-    vc.buildStatefulPrefix(vSig, true) + encArg(BigInt(opts.saleSats)) + encPush(opts.changePkh) + encNum(BigInt(opts.changeSats)) + encPush(vPre))
+  const vUnlock = vc.buildStatefulPrefix(vSig, true) + encArg(BigInt(opts.saleSats)) + encPush(opts.changePkh) + encNum(BigInt(opts.changeSats)) + encPush(vPre)
+  if (vUnlock.length % 2) throw new Error(`verdict unlock odd hex (${vUnlock.length}): vSig=${vSig.length} vPre=${vPre.length} changePkh=${opts.changePkh.length}`)
+  tx.inputs[1].unlockingScript = UnlockingScript.fromHex(vUnlock)
   return tx
 }
 

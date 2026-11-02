@@ -91,4 +91,47 @@ export class ClaimService {
     const r = await callTerminal(c, 'settle', [null, this.pubKeyHex, outpointOf(cUtxo), BigInt(payoutSats), BigInt(verdictSats)], [{ scriptHex: verdict, satoshis: verdictSats }, { scriptHex: p2pkh(state.proverPkh), satoshis: payoutSats }], state.proverPkh, this.signer, 0n)
     return { txid: r.txid, verdictOutpoint: outpointOf({ txid: r.txid, outputIndex: 0 }), statement: 'settled — the ClaimVerdict UTXO is the spendable proof of acceptance' }
   }
+
+  /** deploy a DisclosureSale bound to a settled verdict — the sale can only
+   *  be bought by spending BOTH inputs (pay-iff-settled, atomic). */
+  async deploySale (verdictOutpoint: string, priceSats: number, wrappedHex: string) {
+    const { RunarContract } = await import('runar-sdk')
+    const hw = Buffer.from(Hash.sha256(Buffer.from(wrappedHex, 'hex'))).toString('hex')
+    const sale = new RunarContract(this.sArt, [this.pkh, BigInt(priceSats), hw, 0n, 1000n, this.pkh, verdictOutpoint])
+    sale.connect(this.provider, this.signer)
+    await sale.deploy({ satoshis: priceSats + 1000 })
+    const u = (sale as any).currentUtxo
+    return { txid: u.txid, vout: u.outputIndex, statement: 'sale deployed — only unlockable in a tx that also spends the bound verdict' }
+  }
+
+  /** execute the gated buy: [sale, verdict] → [payment to payee, change].
+   *  Both covenant legs enforce the identical output list — consensus
+   *  refuses the buy without the verdict. */
+  async buyGated (saleTxid: string, verdictOutpoint: string, wrappedHex: string, priceSats: number, changeSats = 900) {
+    const { RunarContract } = await import('runar-sdk')
+    const { buildBuyGatedTx } = await import('@mamem/chain')
+    const op = Buffer.from(verdictOutpoint, 'hex')
+    const vTxid = Buffer.from(op.subarray(0, 32)).reverse().toString('hex')
+    const vVout = op[32]
+    const sRaw = await this.deps.fetchTx(saleTxid)
+    const vRaw = await this.deps.fetchTx(vTxid)
+    if (!sRaw || !vRaw) throw new Error('sale or verdict tx not found')
+    const sTx = Transaction.fromHex(sRaw), vTx = Transaction.fromHex(vRaw)
+    const saleUtxo = { txid: saleTxid, outputIndex: 0, satoshis: sTx.outputs[0]!.satoshis!, script: sTx.outputs[0]!.lockingScript.toHex() }
+    const verdictUtxo = { txid: vTxid, outputIndex: vVout, satoshis: vTx.outputs[vVout]!.satoshis!, script: vTx.outputs[vVout]!.lockingScript.toHex() }
+    const hw = Buffer.from(Hash.sha256(Buffer.from(wrappedHex, 'hex'))).toString('hex')
+    const sale = new RunarContract(this.sArt, [this.pkh, BigInt(priceSats), hw, 0n, 1000n, this.pkh, verdictOutpoint])
+    // verdict ctor = its state fields (deserialize the deployed script tail)
+    const { deserializeState } = await import('runar-sdk')
+    const vState = deserializeState(this.vArt.stateFields, verdictUtxo.script.slice(this.vArt.script.length + 2))
+    const verdict = new RunarContract(this.vArt, [vState.receiptHash, vState.journalRoot, vState.queryId, vState.payeePkh])
+    let tx
+    try {
+      tx = await buildBuyGatedTx({ saleArt: this.sArt, sale, saleUtxo, verdictArt: this.vArt, verdict, verdictUtxo, wrapped: wrappedHex, saleSats: priceSats, changeSats, changePkh: this.pkh })
+    } catch (e) { throw new Error(`buyGated build: ${(e as Error).message} (saleUtxo.script=${saleUtxo.script.length / 2}B verdictUtxo.script=${verdictUtxo.script.length / 2}B)`) }
+    const r = await this.mem.broadcastTx(tx)
+    if (r.status !== 'success') throw new Error(`buyGated: ${r.description?.slice(0, 120)}`)
+    this.provider.markAccepted(tx)
+    return { txid: tx.id('hex'), statement: 'gated buy executed — the verdict was consumed atomically with the payment' }
+  }
 }

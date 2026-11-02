@@ -319,6 +319,29 @@ export const TOOLS = [
     name: 'claimSettle',
     description: 'Settle an open claim after its deadline: emits the ClaimVerdict UTXO (spendable proof of acceptance) + bond payout. Unanchored claims only — anchored claims settle via the anchor co-spend.',
     inputSchema: { type: 'object', properties: { txid: { type: 'string' }, vout: { type: 'number' }, payoutSats: { type: 'number' }, verdictSats: { type: 'number' } }, required: ['txid'] }
+  },
+  {
+    name: 'saleDeployGated',
+    description: 'Deploy a DisclosureSale bound to a settled ClaimVerdict — the price can only be paid by a tx that also consumes the verdict (atomic pay-iff-settled). Regtest only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        verdictOutpoint: { type: 'string', description: '36-byte outpoint hex from claimSettle' },
+        priceSats: { type: 'number' }, wrapped: { type: 'string', description: 'payload to reveal on buy (hex)' }
+      },
+      required: ['verdictOutpoint', 'priceSats', 'wrapped']
+    }
+  },
+  {
+    name: 'saleBuyGated',
+    description: 'Execute the gated buy: spends [sale, verdict] → pays the verdict\'s payee atomically. Consensus refuses without the verdict input.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        saleTxid: { type: 'string' }, verdictOutpoint: { type: 'string' }, wrapped: { type: 'string' }, priceSats: { type: 'number' }, changeSats: { type: 'number' }
+      },
+      required: ['saleTxid', 'verdictOutpoint', 'wrapped', 'priceSats']
+    }
   }
 ] as const
 
@@ -607,6 +630,14 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     case 'claimSettle': {
       if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
       return await mem.claims.settle(args.txid, args.vout ?? 0, args.payoutSats ?? 4980, args.verdictSats ?? 10)
+    }
+    case 'saleDeployGated': {
+      if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
+      return await mem.claims.deploySale(args.verdictOutpoint, args.priceSats, args.wrapped)
+    }
+    case 'saleBuyGated': {
+      if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
+      return await mem.claims.buyGated(args.saleTxid, args.verdictOutpoint, args.wrapped, args.priceSats, args.changeSats ?? 900)
     }
     default:
       throw new Error(`unknown tool ${name}`)

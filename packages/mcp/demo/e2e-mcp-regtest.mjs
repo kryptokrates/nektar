@@ -130,6 +130,13 @@ try {
 const stl = await call('claimSettle', { txid: claim.txid })
 txids.settle = stl.txid
 check(!!stl.txid && !!stl.verdictOutpoint, `claimSettle → ClaimVerdict UTXO ${stl.verdictOutpoint?.slice(0, 16)}… (bond returned)`)
+// pay-iff-settled: the verdict UTXO is the atomic unlock for a sale
+const WRAPPED = 'f1'.repeat(64)
+const sale = await call('saleDeployGated', { verdictOutpoint: stl.verdictOutpoint, priceSats: 3000, wrapped: WRAPPED })
+txids.sale = sale.txid
+const buy = await call('saleBuyGated', { saleTxid: sale.txid, verdictOutpoint: stl.verdictOutpoint, wrapped: WRAPPED, priceSats: 3000 })
+txids.buyGated = buy.txid
+check(!!buy.txid, `saleBuyGated — payment consumed the verdict atomically (${buy.txid?.slice(0, 12)}…)`)
 await client.close()
 
 console.log(`  TXIDS ${Object.entries(txids).map(([k, v]) => `${k}=${v}`).join(' ')}`)

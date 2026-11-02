@@ -552,3 +552,7 @@ Strict ZK re-scan found `verifyCombinedStark` (the §13 `Π_j = (π_j, ZKAccess(
 - `MamemMemory.verifyCombined(shard, seq, membershipBytes, zk, {scope?, derivationBytes?, callerPubkey?})` is the verifier-side Π object: (1) the stored issued query must recompute to the membership journal's queryId, (2) `verifyCombinedStark` requires the clearance transcript — and an optional L_ZKDer derivation journal — to carry the SAME queryId and the issued nonce, (3) membership/derivation artifact checks run with consume delegated to one final `consumeZkQuery` (single use for the whole Π), (4) `verifyClearance` burns the transcript.
 - New MCP tool `verifyCombined` (tool count 19 → 20).
 - Tests: `stark-verify` Π-binding unit (TC-115), `zk-integration` combined-Π negatives incl. inconsistent registry rows (TC-116), `MAMEM_STARK_PROVE=1` e2e (TC-117).
+
+## GOAL-v9 — on-chain trustless verification (design doc)
+
+`docs/GOAL-v9.md` — make the chain verify §13 `π_j` (RISC Zero STARK) inside Script: multi-tx covenant-chained verifier (StarkWare/BWS model — portable to BSV which has OP_CAT natively), trustless = no trusted setup (Groth16-wrap documented as fallback only). Staged plan with go/no-go spikes: Stage 0 measures field-op cost, the R0 transcript-hash question (SHA-256 cheap vs Poseidon2 dominant), one FRI query round, and the covenant shim; Stage 3 adds the on-chain ZKAccess leg + escrow "pay-iff-proven" consumers. Dual-verifier design — the on-chain path consumes the same L_ZKMem bytes as the WASM verifier; pinned image ids unchanged.

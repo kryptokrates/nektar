@@ -1,0 +1,267 @@
+# GOAL-v9 — On-Chain Trustless Verification: §13 π Verified Inside Bitcoin Script
+
+Scope: take the paper's §13 ZK inclusion proof `π_j` — today verified
+**off-chain** by the WASM RISC Zero verifier — and make the **blockchain
+itself** verify it, on BSV mainnet-compatible rules, with **no trusted
+setup**. This is the last unimplemented reading of the paper's most
+ambitious sentence (§18): *"the entire validation protocol is
+executable on-chain if necessary, or via zero-knowledge circuits for
+privacy-preserving attestation."*
+
+Status: **PLAN — staged spikes first; nothing built yet.** This document
+is the single reference: what we want, why, the evidence it is feasible,
+the exact component connections, the stage plan, and the honest
+remaining unknowns.
+
+---
+
+## 1. What we want to achieve
+
+Today the system is *anchored* but not *consensus-verified*:
+
+- A write becomes a leaf in a Merkle batch; a `MamemAnchor` covenant
+  spends the shard's UTXO head and commits the new root `R_n`.
+  **Consensus enforces the anchor** — nobody can fork the shard chain.
+- A ZK proof `π_j` (RISC Zero succinct receipt, ~224 KB) proves *"some
+  leaf sits in the tree under that anchored `R_n`"* — but **only
+  software running the WASM verifier can check it**. The chain sees the
+  anchor; it never sees the proof.
+- A verifier must trust our verifier *code* and *that it ran*. The proof
+  is cryptographically unforgeable, but its verification is a
+  client-side computation — invisible to the ledger.
+
+**GOAL-v9 makes the ledger the verifier.** The Script VM itself checks
+the STARK: every miner validates `π_j` the same way they validate a
+signature. The verdict is not "our server says valid" — it is "the
+consensus of the network accepted the proof." That is the difference
+between a proof system and a *trustless* proof system, and it is what
+lets **money be gated by a proof**: an escrow that releases payment
+only when a valid `Π_j` accompanies the claim, enforced by Script, not
+by any party's software.
+
+The paper's exact target:
+
+- §13: `Π_j = (π_j, ZKAccess(ℓ_q ≥ ℓ_j))` — a *dual* commitment:
+  existence of the fragment AND legitimacy of access, over one verifier
+  challenge.
+- App. C: the proof verifies *"against the blockchain-anchored root
+  `R_n = Root(M_n)` embedded in transaction `T_n`"* — the on-chain check
+  must bind the proven journal root to the shard's anchor, on-chain.
+- §18: the validation protocol "executable on-chain … via
+  zero-knowledge circuits" — endorsing exactly this construction.
+
+**Constraint from the user: trustless.** Groth16-wrapping (1 tx, ~500 KB
+script, proven on BSV mainnet July 2024) is rejected because it
+re-introduces a trusted setup — the ceremony our transparent-STARK
+design exists to avoid. The path is therefore the **multi-transaction
+STARK verifier**: the proof verified across covenant-chained
+transactions, each checking one stage — the architecture StarkWare /
+Bitcoin Wildlife Sanctuary demonstrated on Signet (July 2024, ~74 txs,
+~790 KB, Circle-STARK).
+
+## 2. Why we do it — the concrete gap
+
+Three places in the system where "trust our verifier" is currently the
+load-bearing assumption, and what on-chain verification upgrades:
+
+| Surface | Today (off-chain verify) | With on-chain verify |
+|---|---|---|
+| **DisclosureSale escrow** | Payment releases on key-reveal only; "proof was valid" is asserted by software | The covenant can require *proof validity itself*: **pay-iff-proven**, enforced by consensus |
+| **Checkpoint bonds (V2)** | Bond guarantees an anchored checkpoint exists; correctness is a verifier-side check | Bond can be conditioned on a *valid derivation proof* — slashing-for-bad-math becomes scriptable (computation fraud IS Script-checkable; signature equivocation is not — §5.4) |
+| **Third-party / light verifier** | Must run our WASM verifier + trust it ran | Reads the tx: "the chain accepted this proof" is ground truth for anyone who trusts consensus |
+
+And the philosophical one, which is the paper's own framing: *"the agent
+becomes not a vault of secrets but a structure of proofs"* — those
+proofs should terminate in the same consensus substrate the anchors do,
+not in a runtime dependency.
+
+## 3. Why it is feasible on BSV — the evidence
+
+This is not speculative. Every primitive needed exists on BSV mainnet
+**today**, and the two hardest precedents are already demonstrated:
+
+### Prior art
+
+- **Groth16 verified on BSV mainnet, 19 July 2024** (Zhang, Barbacovi,
+  Larraia, Germouty — ESORICS 2024). BLS12-381 pairing verifier:
+  480 KB locking + 40 KB unlocking script, inside default ~500 KB
+  script policy. sCrypt separately did BN256 on testnet (~1.2 MB after
+  ZkBaguette's optimization). Pairings are not a precompile — they are
+  hand-built Miller loops on big-number Script arithmetic.
+- **STARK verified on Bitcoin Signet, 12 July 2024** (StarkWare /
+  Bitcoin Wildlife Sanctuary): a Circle-STARK verifier split across
+  ~74 OP_CAT-covenant-chained transactions, ~790 KB total, real
+  transactions in real blocks. BTC lacks OP_CAT (soft-fork pending);
+  **BSV has OP_CAT natively** — the design ports directly.
+- **Our own precedent:** `MamemAnchor` is already a covenant-chained
+  UTXO state machine — a Script-verified state transition per spend.
+  The verifier chain is the same pattern with a richer state.
+
+### The opcode inventory (Genesis 2020 + Chronicle 2026-04-07, live)
+
+| Capability | Since | Why the verifier needs it |
+|---|---|---|
+| `OP_MUL`, `OP_CAT`, `OP_SPLIT` | Genesis | big-number field ops; witness encoding |
+| `OP_LSHIFTNUM`/`OP_RSHIFTNUM`, `OP_2MUL`/`OP_2DIV` | **Chronicle** | modular reduction of the STARK field (BabyBear `p = 2^31−2^27+1`) is shift+add — the per-op cost driver |
+| `OP_SUBSTR`/`OP_LEFT`/`OP_RIGHT` | **Chronicle** | Merkle decommitment byte-slicing |
+| `SIGHASH_CHRONICLE` (0x20) → OTDA | **Chronicle** | simpler sighash preimage for the covenant glue, mixable per-input with BIP143 |
+| Functional opcodes in unlocking scripts (v>1) | **Chronicle** | the proof-carrying spend can compute; lock script stays a checker |
+| Unbounded script size, unbounded ops, 32 MB numbers | Genesis→Chronicle | the only real constraint is tx bytes + miner policy, not expressiveness |
+| `OP_SHA256`/`OP_HASH256` | always | the Merkle fold (our tree is dSHA-256 — native opcode) |
+
+### What stays missing (honest)
+
+- **No `OP_CHECKSIGFROMSTACK`/`OP_CHECKDATASIG`** — arbitrary-message
+  signature checks remain impossible → V2 punitive slashing for
+  *off-chain* equivocation stays blocked. On-chain equivocation is
+  already impossible by UTXO uniqueness. Unaffected by this work.
+- **No loops** — everything fully unrolled; that is *why* the design
+  spans ~N chained txs rather than one script. The chain is the loop.
+- **No new hash opcodes** — SHA-256/HASH256 only. The RISC Zero
+  transcript hash (Poseidon2 where present) must be hand-unrolled in
+  bignum Script — the dominant artifact cost and Stage 0's decisive
+  measurement.
+
+## 4. The architecture — components and their connections
+
+```mermaid
+flowchart TB
+    subgraph holder["Holder side (proving, off-chain — unchanged)"]
+        MEM[("memory store<br/>records → leaves")]
+        PROV["tools/stark prover<br/>RISC Zero guest<br/>(pinned image id)"]
+        MEM -->|leaf,index,siblings| PROV
+        PROV -->|"L_ZKMem v2 bytes (~224KB)"| STX
+    end
+
+    subgraph chain["NEW: MamemZkVerifier covenant chain (on-chain)"]
+        S1["stage tx₁<br/>commit + parse journal<br/>state₁"]
+        S2["stage tx₂<br/>Fiat-Shamir challenges<br/>state₂"]
+        SD["stage tx…<br/>DEEP-ALI + FRI rounds<br/>(field ops, folds)"]
+        SQ["stage tx…<br/>query Merkle checks<br/>(dSHA-256 paths)"]
+        ST["terminal tx<br/>journal.root == anchor.R ?<br/>emit verdict"]
+        S1 --> S2 --> SD --> SQ --> ST
+    end
+
+    subgraph anchors["EXISTING: MamemAnchor shard chain"]
+        AH[("anchor head UTXO<br/>state: owner ‖ n ‖ size ‖ R_n ‖ R′ ‖ tag ‖ pkh")]
+    end
+
+    Q[("zkQueries registry<br/>verifier-issued, single-use")]
+    ST -->|"journal.queryId burned on-chain"| Q
+    AH -->|"R_n + size read as witness"| ST
+    STX["stage decomposition<br/>(witness planner)"] -->|"witness w_i per stage"| S1
+```
+
+### Component connections — who touches what
+
+| Component | Exists? | Role in GOAL-v9 |
+|---|---|---|
+| `tools/stark` (R0 guests + host) | ✅ | Produces the receipt bytes — **unchanged**. The on-chain verifier consumes the identical `L_ZKMem v2` wire format; pinned image ids untouched. |
+| `packages/zk` (codec, `verifyZkm2`) | ✅ | The WASM verifier stays **authoritative off-chain** — dual-verifier, never a fork. On-chain verify is additive. |
+| `MamemAnchor`/`AnchorChain` | ✅ | Supplies the anchor head whose `R_n`/`size` the terminal stage must match. The verifier chain *references* it; does not consume it. |
+| `zkQueries` / `issueZkQuery` | ✅ (GOAL-v8/Π work) | queryIds already carry `{nonce, verifierId}` — the on-chain state carries the queryId through stages; the terminal tx burns it on-chain. |
+| `MamemZkVerifier` chain | 🆕 **the artifact** | A UTXO chain like `AnchorChain` where on-chain state = transcript accumulator + stage counter + commitments; each spend = one stage's unrolled Script. |
+| Stage-emitter | 🆕 | TS generator producing the unrolled per-stage scripts (sCrypt-style emitted code), driven by a stage decomposition table. |
+| `verifyCombined` / Π | ✅ | Off-chain Π stays; **Stage 3** adds the on-chain ZKAccess leg (Bulletproof verifier in Script — EC ops proven feasible by the Groth16 work). |
+| `DisclosureSale`, `MamemCheckpointBond` | ✅ (V2/V3) | **Consumers**: gain "release/pay iff valid-proof-attached" script conditions — the actual reason this matters. |
+
+### What a stage tx must satisfy
+
+Each stage's locking script checks four things (the `MamemAnchor`
+pattern generalized):
+
+1. **Continuity** — I spend state UTXO_{i−1} whose stage counter is
+   `i−1` and whose transcript hash matches; my output emits state_i.
+2. **Work** — the stage's claimed computation actually ran on witness
+   `w_i`: the unrolled field ops/folds/hash-checks of *this* stage only.
+3. **Commitment** — `w_i` is bound to the real receipt: earlier stages
+   commit a hash of the receipt fields; later stages open them.
+4. **Termination** — the last stage checks `journal.root ==
+   decodeMamemAnchor(anchorTx).R` and `journal.size == anchor.size`,
+   burning `queryId` into the emitted state.
+
+## 5. Inside the artifact — what Script must actually compute
+
+A RISC Zero 3.0.3 succinct-receipt verify decomposes (approximate stage
+budget — Stage 0 measures the real numbers):
+
+| Stage | Work | Script cost driver |
+|---|---|---|
+| Parse + journal | read `(version, root, size, queryId)`; check image id | trivial — byte compares |
+| Commit phases | hash the proof's commitment fields into the transcript | **hash opcode coverage** — SHA-256 native; Poseidon2 = hand-unrolled bignum permutation (~thousands of ops per invocation) |
+| Fiat-Shamir | derive challenges from transcript | same hash question |
+| DEEP-ALI + FRI rounds | field arithmetic: BabyBear mul/add/reduce per round | Chronicle shifts+OP_MUL — ~tens of ops per field op × hundreds |
+| Query checks | each DEEP query = dSHA-256 Merkle path | `OP_SHA256` chain — cheap per query, ~dozens of queries |
+| Terminal | `journal.root == anchored R_n`, `size == anchor.size`, burn queryId | anchor-script decode (exists) + compares |
+
+**The decisive unknown (0b):** how much of the transcript hash is
+Poseidon2 vs SHA-256. SHA-256 is one opcode per hash — the whole
+hash budget is small. Poseidon2 is a 24-round×state-width unrolled
+bignum permutation — if the transcript is Poseidon2-heavy, it
+dominates the artifact and may force either a hash-light custom STARK
+variant or a fallback decision. **Stage 0b resolves this before any
+large artifact is written.**
+
+## 6. Execution — staged, with go/no-go gates
+
+### Stage 0 — feasibility spike (regtest only)
+
+- **0a field-op cost:** Rúnar contract doing `mulmod` over BabyBear via
+  `OP_MUL` + Chronicle shift-reduce → measured bytes/opcodes per op.
+- **0b transcript-hash audit:** exactly which hash the R0 3.0.3
+  succinct transcript uses and invocation counts (risc0 `zkp`/`core`
+  source, our WASM symbols, receipt structure).
+- **0c one FRI query round end-to-end:** Merkle path check + one field
+  fold in a real covenant on MockChain/regtest → extrapolate to the
+  stage count of a real receipt.
+- **0d covenant shim cost:** per-stage preimage/state-carry overhead;
+  OTDA vs BIP143 for the preimage glue.
+- **GATE:** total estimated footprint + stage count. If Poseidon2-bound
+  and infeasible → documented fallback (Groth16-wrap with R0's public
+  ceremony, or a SHA-256-only STARK variant) — decided with real
+  numbers, not guesses.
+
+### Stage 1 — architecture
+
+- Stage-decomposition table for the succinct receipt.
+- `MamemZkVerifier` covenant chain: state = `{stage, transcriptHash,
+  commitments}`; generalized `AnchorChain` driver (`ZkVerifierChain`).
+- Terminal-stage anchor binding: anchor head read as witness, decoded
+  on-chain, `journal.root == R_n` enforced by Script.
+- Tx-batching per stage up to policy limits.
+
+### Stage 2 — the artifact
+
+- Script-emitter (TS) generating unrolled stage scripts.
+- `ZkVerifierChain` driver + per-stage contracts.
+- Regtest vectors per stage; full e2e on the committed fixture
+  `zkm2-n5i4.json` — its journal `(root, size, queryId)` must verify
+  on-chain; TTN cost measurement.
+
+### Stage 3 — Π completeness + consumers
+
+- `verifyCombinedOnchain`: the full §13 Π — STARK leg on-chain +
+  ZKAccess Bulletproof verifier in Script (separate spike; EC point
+  ops proven feasible by the Groth16 Script work).
+- Consumer hooks: `DisclosureSale` pay-iff-proven;
+  `MamemCheckpointBond` proof-gated release.
+- Docs: PROOFS.md on-chain row, THREAT-MODEL update, README.
+
+## 7. Honest deferrals / non-goals
+
+- Groth16-wrap is the *documented alternative*, not built unless the
+  Stage-0 gate fails — transparent STARK is the requirement.
+- ZKAccess-on-chain is Stage 3 — its own artifact (Bulletproof ≠ FRI).
+- Optimistic/fraud-proof verification: different trust model; out.
+- No guest or receipt-format changes — pinned image ids, the reproduce
+  gate, every existing ZK test stay green by construction.
+- V2 signature-equivocation slashing stays blocked (no
+  `OP_CHECKSIGFROMSTACK`) — unrelated to this work.
+
+## 8. Verification
+
+- Stage 0: MockChain `verifyScripts` + regtest script-eval measurements.
+- Stage 2: per-stage vectors + `zkm2-n5i4` fixture e2e on MockChain +
+  regtest; real-sats cost table.
+- Repo gates unchanged: `pnpm -r build`, `check-deps`, `pnpm -r test`,
+  e2e, `pnpm reproduce`.

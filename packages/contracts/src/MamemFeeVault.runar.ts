@@ -1,4 +1,4 @@
-import { StatefulSmartContract, assert, hash160, checkSig, toByteString, cat, type Sig, type PubKey, type ByteString, extractLocktime, extractAmount } from 'runar-lang'
+import { StatefulSmartContract, assert, hash160, checkSig, cat, toByteString, type Sig, type PubKey, type ByteString, extractLocktime, extractAmount } from 'runar-lang'
 
 // Covenant-enforced fee vault (idiomatic StatefulSmartContract):
 // every spend may pay at most `payAmount` to `destPkh`, subject to
@@ -30,6 +30,13 @@ export class MamemFeeVault extends StatefulSmartContract {
     this.windowStart = 0n
   }
 
+  private p2pkh (pkh: ByteString): ByteString {
+    // this.buildP2PKH is declared in runar-lang but not compilable in 0.4.6
+    // (DSL whitelist: addOutput/addRawOutput/getStateScript only) — a private
+    // contract method with cat() builtins is the in-DSL equivalent.
+    return cat(toByteString('76a914'), cat(pkh, toByteString('88ac')))
+  }
+
   public spend (sig: Sig, pubKey: PubKey, payAmount: bigint, newSpent: bigint, newStart: bigint, contSats: bigint) {
     assert(hash160(pubKey) === this.ownerPkh)
     assert(checkSig(sig, pubKey))
@@ -43,6 +50,6 @@ export class MamemFeeVault extends StatefulSmartContract {
     assert(payAmount <= this.perTxCap)
     assert(extractAmount(this.txPreimage) - contSats - payAmount <= this.maxFee + 1n)
     this.addOutput(contSats, this.destPkh, this.ownerPkh, this.perTxCap, this.windowCap, this.windowBlocks, this.maxFee, this.spentInWindow, this.windowStart)
-    this.addRawOutput(payAmount, cat(toByteString('76a914'), cat(this.destPkh, toByteString('88ac'))))
+    this.addRawOutput(payAmount, this.p2pkh(this.destPkh))
   }
 }

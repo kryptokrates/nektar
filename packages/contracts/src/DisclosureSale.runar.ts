@@ -3,7 +3,8 @@
 // payment and disclosure settle atomically, no escrow party needed.
 // `wrapped` is a DisclosureEnvelope ciphertext (BRC-42 to the buyer), so
 // on-chain exposure is safe; or plaintext {field,salt,path} for paid
-// public disclosure. Manual covenant: no state — terminal spends only.
+// public disclosure. Stateless terminal contract: both methods spend the
+// listing UTXO once, so it cannot be double-sold.
 //   buy:    outputs = [pay→sellerPkh (price), change→buyerPkh]
 //   refund: outputs = [pay→sellerPkh], seller-signed, locktime-gated
 import {
@@ -30,13 +31,16 @@ export class DisclosureSale extends SmartContract {
   }
 
   private p2pkh (pkh: ByteString): ByteString {
+    // see MamemFeeVault — buildP2PKH is declared but not compilable in 0.4.6
     return cat(toByteString('76a914'), cat(pkh, toByteString('88ac')))
   }
 
   private out (sats: bigint, script: ByteString): ByteString {
-    // output serialization = value(8LE) + varint(scriptLen) + script
+    // tx output envelope = value(8LE) + varint(scriptLen) + script — the
+    // serialization hashOutputs commits to (runar-lang has no output-builder
+    // builtin for stateless contracts in 0.4.6).
     const sl = len(script)
-    const slB = sl < 253n ? num2bin(sl, 1n) : cat(toByteString('fd'), num2bin(sl, 2n))
+    const slB = sl < 253n ? num2bin(sl, 1n) : cat(num2bin(253n, 1n), num2bin(sl, 2n))
     return cat(num2bin(sats, 8n), cat(slB, script))
   }
 
@@ -44,7 +48,9 @@ export class DisclosureSale extends SmartContract {
   public buy (txPreimage: SigHashPreimage, wrapped: ByteString, buyerPkh: ByteString, changeSats: bigint) {
     assert(checkPreimage(txPreimage))
     assert(sha256(wrapped) === this.hWrapped)
-    const outs = cat(this.out(this.price, this.p2pkh(this.sellerPkh)), this.out(changeSats, this.p2pkh(buyerPkh)))
+    const outs = cat(
+      this.out(this.price, this.p2pkh(this.sellerPkh)),
+      this.out(changeSats, this.p2pkh(buyerPkh)))
     assert(hash256(outs) === extractOutputHash(txPreimage))
   }
 

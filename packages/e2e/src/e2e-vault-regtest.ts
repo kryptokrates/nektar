@@ -3,6 +3,7 @@
 // negative: over-cap spend must be REFUSED by the node (real Teranode script
 // evaluation, not the mock interpreter).
 import { PrivateKey, Transaction, LockingScript, P2PKH } from '@bsv/sdk'
+import { buildP2PKHScript } from 'runar-sdk'
 import { FeeVault } from '@mamem/anchor'
 import {
   TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve,
@@ -73,7 +74,7 @@ fundTx.addInput({ sourceTransaction: fundUtxo.tx, sourceOutputIndex: fundUtxo.vo
 const FUND_SATS = 10_000
 fundTx.addOutput({ satoshis: FUND_SATS, lockingScript: LockingScript.fromHex(vault.lockingScript()) })
 const changeSats = fundUtxo.satoshis - FUND_SATS - 100
-if (changeSats > 546) fundTx.addOutput({ satoshis: changeSats, lockingScript: new P2PKH().lock(addr) })
+if (changeSats > 546) fundTx.addOutput({ satoshis: changeSats, lockingScript: LockingScript.fromHex(buildP2PKHScript(ownerPkh)) })
 await fundTx.sign()
 const fundRes = await broadcaster.broadcast(fundTx)
 check(fundRes.status === 'success', `vault funding tx broadcast (${fundTx.id('hex').slice(0, 12)}…) — ${fundRes.description ?? 'ok'}`)

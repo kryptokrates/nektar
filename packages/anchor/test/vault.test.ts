@@ -3,6 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, LockingScript } from '@bsv/sdk'
+import { buildP2PKHScript } from 'runar-sdk'
 import { MockChain } from '@mamem/chain'
 import { FeeVault, type VaultUtxo } from '../src/vault.js'
 
@@ -41,7 +42,7 @@ test('V1 vault: valid spend accepted; over-cap, wrong outputs and wrong sig all 
   assert.notEqual((await chain.broadcast(wrong.tx)).status, 'success', 'non-owner sig must be rejected')
   // tampered outputs: pay to a different address than destPkh
   const evil = vault.buildSpend(utxo, owner, 500n, 1)
-  evil.tx.outputs[1]!.lockingScript = LockingScript.fromHex(`76a914${Buffer.from(PrivateKey.fromRandom().toPublicKey().toHash()).toString('hex')}88ac`)
+  evil.tx.outputs[1]!.lockingScript = LockingScript.fromHex(buildP2PKHScript(Buffer.from(PrivateKey.fromRandom().toPublicKey().toHash()).toString('hex')))
   assert.notEqual((await chain.broadcast(evil.tx)).status, 'success', 'payment to non-destPkh must be rejected')
   // tampered continuation: keep the old state (spentInWindow reset fraud)
   const stale = vault.buildSpend(utxo, owner, 500n, 1)

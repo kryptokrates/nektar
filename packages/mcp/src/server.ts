@@ -197,14 +197,89 @@ export const TOOLS = [
       required: ['op', 'id']
     }
   }
+  ,
+  {
+    name: 'saleOffer',
+    description: 'V3 DisclosureSale (GOAL-v7): wrap a value to a buyer pubkey (BRC-42) and produce the covenant listing config {sellerPkh,price,hWrapped,refundAfter,maxFee} + committed wrapped hex. Requires MAMEM_PAID_DISCLOSURE.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        value: { type: 'string', description: 'hex payload (envelope wrapped bytes or a {field,salt,path} JSON)' },
+        price: { type: 'number' }, refundAfter: { type: 'number' }, maxFee: { type: 'number' },
+        buyerPub: { type: 'string', description: 'recipient pubkey — omit for public disclosure' }
+      },
+      required: ['value', 'price', 'refundAfter', 'maxFee']
+    }
+  },
+  {
+    name: 'saleBuy',
+    description: 'V3 DisclosureSale: spend a listing utxo via buy() — reveals `wrapped` on-chain in the same tx that pays the seller exactly `price`; change goes to the operator key. Requires MAMEM_PAID_DISCLOSURE.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cfg: { type: 'object', description: 'the cfg returned by saleOffer' },
+        utxo: { type: 'object', description: '{txid, vout, satoshis, script} of the funded listing' },
+        wrapped: { type: 'string', description: 'the committed wrapped hex (sha256(wrapped) must equal cfg.hWrapped)' },
+        changeSats: { type: 'number' }
+      },
+      required: ['cfg', 'utxo', 'wrapped', 'changeSats']
+    }
+  },
+  {
+    name: 'saleClaim',
+    description: 'V3 DisclosureSale: extract `wrapped` from a buy tx, verify sha256(wrapped)==hWrapped, unwrap to the operator key (private) or return the public value. Requires MAMEM_PAID_DISCLOSURE.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        txHex: { type: 'string' }, hWrapped: { type: 'string' },
+        sellerPub: { type: 'string', description: 'needed to unwrap private (BRC-42) payloads' }
+      },
+      required: ['txHex', 'hWrapped']
+    }
+  }
 ] as const
+
+const PAID_SALE_TOOLS = new Set(['saleOffer', 'saleBuy', 'saleClaim'])
+const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.MAMEM_PAID_DISCLOSURE ?? '')
+/** tools visible to clients right now — paid-disclosure tools are gated by env */
+export const visibleTools = () => TOOLS.filter(t => !PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled())
 
 const AUTOMATON_NOTE = 'On-chain proof that the transition (q, σ, q′) is in the committed δ and was authorized by the owner; it says nothing about whether the output content is true.'
 const automatonView = (h: import('@mamem/automaton').AutomatonHead) =>
   ({ txid: h.tx.id('hex'), q: h.state.q, n: h.state.n, halted: h.state.halted, deltaRoot: h.state.deltaRoot, statement: AUTOMATON_NOTE })
 
 export async function callTool (mem: MamemMemory, name: string, args: any): Promise<any> {
+  if (PAID_SALE_TOOLS.has(name) && !paidSaleEnabled()) throw new Error(`${name}: paid disclosure is disabled — set MAMEM_PAID_DISCLOSURE=1`)
   switch (name) {
+    case 'saleOffer': {
+      const { offerDisclosure } = await import('@mamem/identity')
+      const r = offerDisclosure({
+        sellerKey: mem.operatorKey(), value: new Uint8Array(Buffer.from(args.value, 'hex')),
+        price: BigInt(args.price), refundAfter: BigInt(args.refundAfter), maxFee: BigInt(args.maxFee),
+        buyerPub: args.buyerPub
+      })
+      // JSON-RPC cannot carry BigInt — cfg crosses the wire as plain numbers
+      return { cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) }, wrapped: r.wrapped }
+    }
+    case 'saleBuy': {
+      const { DisclosureSaleHost } = await import('@mamem/anchor')
+      const host = new DisclosureSaleHost({
+        ...args.cfg,
+        price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
+      })
+      const buyerPkh = Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
+      const { tx } = host.buildBuy(args.utxo, args.wrapped, buyerPkh, BigInt(args.changeSats))
+      const r = await mem.broadcastTx(tx)
+      if (r.status !== 'success') return { accepted: false, reason: r.description }
+      return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0]!.satoshis }
+    }
+    case 'saleClaim': {
+      const { Transaction } = await import('@bsv/sdk')
+      const { claimDisclosure } = await import('@mamem/identity')
+      const tx = Transaction.fromHex(args.txHex)
+      const r = claimDisclosure(tx, { hWrapped: args.hWrapped, buyerKey: mem.operatorKey(), sellerPub: args.sellerPub })
+      return { mode: r.mode, valueHex: Buffer.from(r.value).toString('hex') }
+    }
     case 'remember':
       return mem.remember(args.shard, args.data, { source: args.source, modality: args.modality }, args.level ?? 0)
     case 'recall': {

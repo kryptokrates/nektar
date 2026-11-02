@@ -194,6 +194,12 @@ export class MamemMemory {
   anchorTx (txid: string) { return this.anchorTxs.get(txid) }
   /** the shard's log records (read view — used by prove/disclose tests) */
   async records (shard: string) { return await this.store.all(shard) }
+  /** broadcast a fully-signed tx through the instance's broadcaster (SpendGuard stays in front) — covenant host tools only */
+  async broadcastTx (tx: import('@bsv/sdk').Transaction): Promise<import('@mamem/chain').BroadcastResult> { return await this.chain.broadcast(tx) }
+  /** the operator fee key — covenant hosts need it as owner/buyer key */
+  operatorKey (): PrivateKey { return this.fundKey }
+  /** current chain height for locktime-gated covenant calls */
+  async chainHeight (): Promise<number> { return this.chain.tipHeight ? await this.chain.tipHeight() : await this.chain.currentHeight() }
   /** the shard's latest anchor link (tail of the on-chain succession) */
   tailLink (shard: string) { return this.tails.get(shard)?.at(-1) }
   /** anchors still waiting for their BUMP */

@@ -220,8 +220,12 @@ test('MamemAnchor v3 + ANC-006: META flag leads the data payload; flag-absent st
   assert.equal(d.n, 1); assert.equal(d.size, 2)
   assert.equal(Buffer.from(d.R).toString('hex'), Buffer.from(dsha256(utf8('batch2'))).toString('hex'))
   const hex = ac.getHead()!.tx.outputs[0]!.lockingScript.toHex()
-  // the flag is a real push — <0x04> 'META' — directly after OP_RETURN
-  assert.equal(hex.slice(hex.lastIndexOf('6a'), hex.lastIndexOf('6a') + 12), '6a044d455441')
+  // the flag is a real push — <0x04> 'META' — directly after the state
+  // OP_RETURN. Match the full sequence: a bare lastIndexOf('6a') is flaky —
+  // byte 0x6a can appear inside the state's pubkey/hash fields that follow.
+  const flagAt = hex.lastIndexOf('6a044d455441')
+  assert.ok(flagAt >= 0, 'META flag push directly after OP_RETURN')
+  assert.equal(hex.slice(flagAt, flagAt + 12), '6a044d455441')
   // a pre-flag (v3, flag-absent) anchor built by the legacy artifact still
   // decodes byte-for-byte (metanet=false)
   const { RunarContract } = await import('runar-sdk')

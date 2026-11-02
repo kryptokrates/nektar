@@ -119,6 +119,7 @@ export function verifyAuthorship (signerPub: string, epoch: number, writtenAt: n
 export * from "./smt.js"
 export * from "./custody.js"
 export * from "./disclosure.js"
+export * from "./sale.js"
 export * from "./zkaccess.js"
 export * from "./wire.js"
 export type { RangeProofBP } from "./bp.js"

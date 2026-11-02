@@ -3,7 +3,7 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import type { MamemMemory } from './memory.js'
-import { TOOLS, callTool } from './server.js'
+import { TOOLS, visibleTools, callTool } from './server.js'
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
 
@@ -73,9 +73,9 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
       if (req.method === 'GET' && url.pathname === '/v1/health') return send(200, { ok: true })
       if (req.method === 'GET' && url.pathname === '/v1/openapi.json') return send(200, OPENAPI)
       if (req.method === 'GET' && url.pathname === '/v1/metrics') return send(200, mem.metrics.render(), 'text/plain; version=0.0.4')
-      if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: TOOLS })
+      if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: visibleTools() })
       if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
-        if (!TOOLS.some(t => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
+        if (!visibleTools().some(t => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
         try { return send(200, await callTool(mem, p[2]!, await body(req))) } catch (e) { return send(400, { error: (e as Error).message }) }
       }
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'proof' && p.length === 4) {

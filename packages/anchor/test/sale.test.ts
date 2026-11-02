@@ -54,3 +54,15 @@ test('V3 sale: refund gated by locktime + seller sig', async () => {
   const badBuy = sale.buildBuy(utxo, Buffer.from('decoy').toString('hex'), buyerPkh, 4_000n)
   assert.notEqual((await chain.broadcast(badBuy.tx)).status, 'success', 'wrong wrapped must be rejected')
 })
+
+test('V3 sale: claimDisclosure reads wrapped back from the real covenant buy tx', async () => {
+  const { chain, sale, parent, utxo } = setup()
+  chain.registerParent(parent)
+  const good = sale.buildBuy(utxo, WRAPPED, buyerPkh, 4_000n)
+  // parseBuyArgs/claimDisclosure (identity layer) on the covenant's real arg frame
+  const { claimDisclosure } = await import('@mamem/identity')
+  const r = claimDisclosure(good.tx, { hWrapped: H_WRAPPED })
+  assert.equal(r.mode, 'public')
+  assert.equal(Buffer.from(r.wrapped).toString('hex'), WRAPPED)
+  assert.throws(() => claimDisclosure(good.tx, { hWrapped: 'ff'.repeat(32) }), /does not match/)
+})

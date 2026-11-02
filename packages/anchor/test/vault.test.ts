@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, LockingScript } from '@bsv/sdk'
 import { buildP2PKHScript } from 'runar-sdk'
 import { MockChain } from '@mamem/chain'
-import { FeeVault, type VaultUtxo } from '../src/vault.js'
+import { FeeVault, VaultFunder, type VaultUtxo } from '../src/vault.js'
 
 const owner = PrivateKey.fromRandom()
 const ownerPkh = Buffer.from(owner.toPublicKey().toHash()).toString('hex')
@@ -68,4 +68,23 @@ test('V1 vault: rolling window — 4th payment in the same window rejected, roll
   // after the window rolls (locktime >= start+blocks) a new payment is fine
   const rolled = vault.buildSpend(cur, owner, 500n, 10)
   assert.equal((await chain.broadcast(rolled.tx)).status, 'success', 'rolled window must allow spending again')
+})
+
+test('V1 VaultFunder: take() mints a capped funding out through the covenant; over-cap refused', async () => {
+  const { chain, vault, parent, utxo } = setup()
+  chain.registerParent(parent)
+  let cur = utxo
+  // same shape the MAMEM_FEE_VAULT runtime path drives: current() yields the
+  // live vault utxo, height() the locktime for the window logic
+  const funder = new VaultFunder(vault, owner, chain, async () => cur, async () => 1, 2n)
+  assert.equal(await funder.address(), destPkh)
+  const out = await funder.take(400)
+  assert.equal(out.vout, 1)
+  assert.equal(out.satoshis, 402, 'take() pays satoshis+fee into the funding out')
+  assert.equal(out.tx.outputs[1]!.lockingScript.toHex(), buildP2PKHScript(destPkh), 'minted out pays destPkh')
+  cur = { txid: out.tx.id('hex'), vout: 0, satoshis: out.tx.outputs[0]!.satoshis!, script: out.tx.outputs[0]!.lockingScript.toHex() }
+  chain.registerParent(out.tx)
+  // a take above perTxCap is refused by node script eval — take() throws and
+  // the vault utxo is not advanced (the failed tx is never broadcast-mined)
+  await assert.rejects(() => funder.take(5_000), /refused|fail/)
 })

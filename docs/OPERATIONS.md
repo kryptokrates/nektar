@@ -120,10 +120,35 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
      - `MAMEM_MAX_FEE_SATS_PER_TX` (1000)
      - `MAMEM_MAX_SPEND_SATS_PER_DAY` (20000)
      - `MAMEM_MIN_BROADCAST_INTERVAL_MS` (10000)
+  4b. **Consensus-enforced caps (GOAL-v7 V1, optional):** `MAMEM_FEE_VAULT`
+     routes anchor funding through the `MamemFeeVault` covenant — caps are
+     enforced by node script eval, not just the local SpendGuard. Value is
+     inline JSON or `@/path/to.json`:
+     `{"perTxCap":1000,"windowCap":20000,"windowBlocks":144,"maxFee":10,"fundSats":500,"vaultSats":50000}`.
+     On first start it deploys the vault (one tx, `vaultSats` locked) from the
+     reserve; each anchor then mints a `fundSats`-capped P2PKH funding out.
+     The vault utxo + minted outs persist in `MAMEM_DATA_DIR/vault-utxo.json`
+     (back it up with `.state/`). A covenant spend that violates per-tx /
+     rolling-window / fee caps is refused by the network (TX_INVALID) —
+     independent of local config. Reserve outs the vault did not mint are
+     never used for anchoring while this is set.
   5. Measured at 100 sat/kB: genesis 1,143 B / 115 sats, append 3,315 B / 332 sats, rotate 2,904 B / 291 sats.
   6. Monitor `GET /v1/wallet` (balance, runway), `GET /v1/costs`, and the alerts `MamemFeeBalanceLow`, `MamemSpendCapHit` and `MamemBroadcastFailures`.
   7. Back up `MAMEM_DATA_DIR` (keys, state, reserve, spend ledger, records) **and** the passphrase. Losing either loses the shard ownership keys.
   8. Smoke without spending: `pnpm main:readonly`.
+- **Paid disclosure (GOAL-v7 V3, opt-in):** `MAMEM_PAID_DISCLOSURE=1`
+  exposes `saleOffer`/`saleBuy`/`saleClaim` (SDK tool list and HTTP
+  `/v1/tools` both honour the gate; the dispatcher refuses the calls when
+  unset). `saleOffer` wraps a value to a buyer pubkey (BRC-42; omit
+  `buyerPub` for public plaintext) and returns the covenant cfg +
+  committed `wrapped`. The seller funds the listing by paying to
+  `DisclosureSaleHost(cfg).lockingScript()`. `saleBuy` spends it
+  atomically — `wrapped` is revealed on-chain in the same tx that pays
+  the seller exactly `price`. `saleClaim` re-parses that buy tx,
+  re-checks `sha256(wrapped)==hWrapped` and unwraps to the operator key.
+  Threat note: `wrapped` is public on-chain — private mode relies on
+  BRC-42 ECDH confidentiality; the covenant binds payment↔reveal but
+  cannot prevent the buyer reselling the plaintext afterwards.
 - TTN (Teranode Test Net — test coins, `MAMEM_NETWORK=ttn`):
   - Endpoints: Arcade (ARC-compatible) `https://arcade-v2-ttn-us-1.bsvblockchain.tech`, WoC-TTN `https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` (`openLiveRuntime`) — SpendGuard caps, encrypted keys, WoC merkle paths.
   - Differences from main: **no** `MAMEM_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (Arcade policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); no broadcast fallback beyond WoC `/tx/raw`; confirm interval 30 s.

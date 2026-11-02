@@ -22,6 +22,19 @@ locals otherwise) — buy reveals wrapped + pays seller, wrong wrapped refused,
 early refund refused, deadline refund accepted on regtest. E2E:
 `packages/e2e/src/e2e-covenants-regtest.ts` (12 checks, PASS).
 
+**Integration (done):** `MAMEM_FEE_VAULT` wires the live
+(testnet/mainnet) anchor-funding path through the V1 covenant —
+`runtime.ts` deploys/rolls the vault and `takeReserve` mints capped
+funding outs on demand (SpendGuard stays in front; pool entries that
+were not minted by the vault are never served for anchoring).
+`MAMEM_PAID_DISCLOSURE` gates three MCP tools — `saleOffer` /
+`saleBuy` / `saleClaim` — in the tool list (SDK `ListTools` and HTTP
+`/v1/tools` both honour the gate) *and* in `callTool` itself. The
+envelope/claim layer lives in `packages/identity/src/sale.ts`
+(`offerDisclosure`, `claimDisclosure`, `parseBuyArgs`) — identity keeps
+its dependency direction (no `@mamem/anchor` import); the real-tx
+claim roundtrip test sits in `packages/anchor/test/sale.test.ts`.
+
 ## Phase A — Read-path verification hardening (done)
 
 Four gaps that kept the paper's verification from being fully enforced on the
@@ -155,8 +168,14 @@ paid *public* disclosure.
 Host: `packages/anchor/src/sale.ts` (`DisclosureSaleHost`) —
 `buildBuy`/`buildRefund` via SDK `computeOpPushTxWithCodeSep` +
 `buildStatefulPrefix` + `buildUnlockingScript` (no hand-assembled script).
-Regtest-validated in `e2e-covenants-regtest.ts`. MCP tools behind
-`MAMEM_PAID_DISCLOSURE` remain a follow-up (adapter is ready).
+Regtest-validated in `e2e-covenants-regtest.ts`.
+
+Envelope/claim layer: `packages/identity/src/sale.ts` —
+`offerDisclosure` (BRC-42 `wrapFor` → `sha256` commitment → covenant
+cfg), `claimDisclosure` (parse the buy unlocking script → verify
+`sha256(wrapped) == hWrapped` → `unwrapFor` private or pass plaintext
+public). MCP tools `saleOffer`/`saleBuy`/`saleClaim` ship behind
+`MAMEM_PAID_DISCLOSURE` (gated in the listing AND the dispatcher).
 
 ## Gates per phase
 

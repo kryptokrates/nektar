@@ -5,7 +5,7 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import type { MamemMemory } from './memory.js'
-import { TOOLS, callTool } from './server.js'
+import { visibleTools, callTool } from './server.js'
 
 export const INSTRUCTIONS = [
   'mamem is verifiable, encrypted agent memory anchored on BSV.',
@@ -24,7 +24,7 @@ export function createMcpServer (mem: MamemMemory): McpServer {
   const server = new McpServer({ name: 'mamem', version: '0.2.0' }, { instructions: INSTRUCTIONS, capabilities: { tools: {}, resources: {}, prompts: {} } })
   const low = server.server
   low.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS.map(t => ({
+    tools: visibleTools().map(t => ({
       ...t,
       annotations: { readOnlyHint: READ_ONLY.has(t.name), destructiveHint: DESTRUCTIVE.has(t.name), idempotentHint: t.name === 'prove', openWorldHint: false }
     }))

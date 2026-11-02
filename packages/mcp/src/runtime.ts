@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { PrivateKey, MerklePath, type Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, parseLegacyBlock, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
 import { KnexShardStore, type ShardStore } from '@mamem/log'
 import { MamemMemory, type MamemMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -252,10 +252,12 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     for (const [s, k] of shardKeys) if (keys.shardKeys[s] !== k.toHex()) { keys.shardKeys[s] = k.toHex(); changed = true }
     if (changed) save()
   }
-  // confirmer: BUMPs for every unproven anchor; optional auto-mine; timed flush
+  // confirmer: BUMPs for every unproven anchor; optional auto-mine; timed flush.
+  // Height discovery is O(1) per tx: Teranode's asset API serves a merkle
+  // proof only once a tx is sealed in a subtree (404 = unknown or pending),
+  // so there is no block walk. The BUMP itself is still built from the block.
   let busy = false
-  let scannedTo = 0
-  const minedAt = new Map<string, number>(); const firstSeen = new Map<string, number>(); const abandoned = new Set<string>()
+  const firstSeen = new Map<string, number>(); const abandoned = new Set<string>()
   const tick = async () => {
     if (busy) return
     busy = true
@@ -264,30 +266,23 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
       await mem.flushDue()
       const waiting = mem.unprovenAnchors().filter(w => !abandoned.has(w.txid))
       if (waiting.length && cfg.autoMine) await mineOne()
-      // index each block ONCE (txid → height); never rescan per anchor
       const tip = Math.max(lastMined, await tracker.currentHeight())
-      if (scannedTo === 0) scannedTo = Math.max(0, tip - 50)
-      for (let h = scannedTo + 1, n = 0; h <= tip && n < 25; h++, n++) {
-        const hdr = await tracker.headerAtHeight(h)
-        if (!hdr) break
-        const res = await fetch(`${rc.assetUrl}/block_legacy/${hdr.hash}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(20_000) })
-        if (!res.ok) break
-        for (const t of parseLegacyBlock(new Uint8Array(await res.arrayBuffer())).txids) minedAt.set(t, h)
-        scannedTo = h
-      }
       let attached = 0
       for (const { shard, txid } of waiting) {
-        const h = minedAt.get(txid)
-        if (h === undefined) {
+        const res = await fetch(`${rc.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(10_000) }).catch(() => null)
+        if (res === null || res.status >= 500) continue
+        if (res.status === 404) {
           const seen = firstSeen.get(txid) ?? tip; firstSeen.set(txid, seen)
           // never mined within 100 blocks (e.g. replaced by a conflicting spend): stop waiting
-          if (scannedTo - seen > 100) { abandoned.add(txid); process.stderr.write(`mamem confirmer: anchor ${txid} not mined after 100 blocks — abandoned (check for a conflicting spend)\n`) }
+          if (tip - seen > 100) { abandoned.add(txid); process.stderr.write(`mamem confirmer: anchor ${txid} not mined after 100 blocks — abandoned (check for a conflicting spend)\n`) }
           continue
         }
-        const mp = await merklePathAtHeight(rc, txid, tracker, h)
+        const buf = Buffer.from(await res.arrayBuffer())
+        const h = buf.length >= 3 && buf[0] === 0xfd ? buf.readUInt16LE(1) : undefined
+        const mp = h !== undefined ? await merklePathAtHeight(rc, txid, tracker, h) : null
         if (mp) { mem.attachProof(shard, txid, new MerklePath(mp.blockHeight, mp.path)); attached++ }
       }
-      if (waiting.length) process.stderr.write(`mamem confirmer: waiting=${waiting.length} attached=${attached} scanned=${scannedTo}/${tip}\n`)
+      if (waiting.length) process.stderr.write(`mamem confirmer: waiting=${waiting.length} attached=${attached} tip=${tip}\n`)
       persistKeys()
     } catch (e) { process.stderr.write(`mamem confirmer: ${(e as Error).message}\n`) } finally { busy = false }
   }

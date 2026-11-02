@@ -92,6 +92,10 @@ if (network === 'regtest') {
     propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
     assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
   }
+  // make the operator .env self-sufficient for the MCP server: map the
+  // quickstart creds into MAMEM_RPC_* if they aren't set already.
+  if (qs.rpc_user && env.MAMEM_RPC_USER === undefined) { upsertEnv(ENV_PATH, 'MAMEM_RPC_USER', qs.rpc_user); env.MAMEM_RPC_USER = qs.rpc_user }
+  if (qs.rpc_pass && env.MAMEM_RPC_PASS === undefined) { upsertEnv(ENV_PATH, 'MAMEM_RPC_PASS', qs.rpc_pass); env.MAMEM_RPC_PASS = qs.rpc_pass }
   const { ReserveFunder, bootstrapReserve } = await import('@mamem/chain')
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
   const rpc = async (method: string, ...params: unknown[]): Promise<any> => {

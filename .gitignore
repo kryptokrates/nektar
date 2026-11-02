@@ -4,6 +4,8 @@ node_modules/
 *.sqlite*
 .state.json
 .state/
+.mamem
+.mamem.*
 tools/stark/target/
 tools/stark/verifier-wasm/target/
 tools/stark/vectors.jsonl

@@ -184,3 +184,55 @@ test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape)
     delete process.env.MAMEM_PAID_DISCLOSURE
   }
 })
+
+test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before funding', async () => {
+  process.env.MAMEM_PAID_DISCLOSURE = '1'
+  try {
+    const { chain, seller, buyer } = setup()
+    chain.mine(5) // push the mock tip to height 5
+    const buyerPub = buyer.operatorKey().toPublicKey().toString()
+    // D9 — offer expiry is inside the signed digest and enforced at escrow time
+    const expired = await callTool(seller, 'saleOffer', {
+      value: 'aa', price: 100, refundAfter: 1_000_000, maxFee: 10, buyerPub, expiresAt: 3
+    })
+    assert.equal(expired.expiresAt, 3)
+    await assert.rejects(
+      () => callTool(buyer, 'saleEscrow', {
+        cfg: expired.cfg, amount: 2_000,
+        offer: { sellerPub: expired.sellerPub, offerSig: expired.offerSig, expiresAt: expired.expiresAt }
+      }),
+      /offer expired/, 'a lapsed offer cannot be funded')
+    // a fresh horizon is accepted AND the expiry is inside the signature
+    const fresh = await callTool(seller, 'saleOffer', {
+      value: 'aa', price: 100, refundAfter: 1_000_000, maxFee: 10, buyerPub, expiresAt: 50
+    })
+    const esc = await callTool(buyer, 'saleEscrow', {
+      cfg: fresh.cfg, amount: 2_000,
+      offer: { sellerPub: fresh.sellerPub, offerSig: fresh.offerSig, expiresAt: fresh.expiresAt }
+    })
+    assert.equal(esc.accepted, true)
+    // tampering with the expiry after signing breaks offerSig (it is digest-bound)
+    await assert.rejects(
+      () => callTool(buyer, 'saleEscrow', {
+        cfg: fresh.cfg, amount: 2_000,
+        offer: { sellerPub: fresh.sellerPub, offerSig: fresh.offerSig, expiresAt: 9999 }
+      }),
+      /offerSig does not verify/, 'a substituted expiry invalidates the signed offer')
+    // D10 — a refundAfter that is already past makes the escrow instantly refundable
+    const stale = await callTool(seller, 'saleOffer', {
+      value: 'aa', price: 100, refundAfter: 0, maxFee: 10, buyerPub
+    })
+    await assert.rejects(
+      () => callTool(buyer, 'saleEscrow', { cfg: stale.cfg, amount: 2_000 }),
+      /refundAfter is not in the future/, 'a past locktime is refused at funding')
+    // a timestamp-based deadline in the past is refused the same way
+    const pastTs = await callTool(seller, 'saleOffer', {
+      value: 'aa', price: 100, refundAfter: 1_000_000_000, maxFee: 10, buyerPub // 2001-09-09
+    })
+    await assert.rejects(
+      () => callTool(buyer, 'saleEscrow', { cfg: pastTs.cfg, amount: 2_000 }),
+      /refundAfter is not in the future/)
+  } finally {
+    delete process.env.MAMEM_PAID_DISCLOSURE
+  }
+})

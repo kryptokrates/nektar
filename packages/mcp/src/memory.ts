@@ -114,6 +114,16 @@ export interface AnswerReceipt {
   /** POL-016: when a policy DAG gates the read — its anchored root, the
    * derivation hash and the dag decision summary. */
   dag?: { policyRoot: string, derivationHash?: string, state: string }
+  /** §16 delegation map μ_i: sub-decisions asserted by delegating agents.
+   *  signature = Sign_delegator(H(TAG_DELEGATION‖delegator‖decision‖answer)).
+   *  Bound inside the signed receipt digest so the map cannot be added to or
+   *  stripped after the fact — a delegation is part of the anchored claim. */
+  delegations?: Array<{ delegator: string, decision: string, signature: string }>
+  /** §13 Π_j: the ZKAccess artifact itself (wire form of the clearance
+   *  presentation the read was gated on), bound into the digest. `zkaccess` is
+   *  the server's verdict; `zk` lets a third party RE-VERIFY the proof via
+   *  verifyReceiptZk — not just trust the flag. */
+  zk?: import('@mamem/identity').ClearancePresentationWire
   /** §18 terminal commitment: τ, the log signer's pubkey, and
    *  σ = Sign_logKey(receiptDigest(this)) over output+trace+time. */
   timestamp?: number
@@ -121,13 +131,24 @@ export interface AnswerReceipt {
   signature?: string
 }
 
+/** recursive canonical JSON (sorted keys) — same scheme as reasoning/canonicalJson
+ *  so digest bindings are stable across verifiers. */
+function canonicalJson (v: unknown): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v)
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`
+  return `{${Object.keys(v as Record<string, unknown>).sort()
+    .map(k => `${JSON.stringify(k)}:${canonicalJson((v as Record<string, unknown>)[k])}`).join(',')}}`
+}
+
 /** §18: the signed receipt digest — every receipt field except signature.
  *  Explicit field order (no JSON ambiguity): answer, each ref
  *  (shard,seq,hdp,txid), checkResult, truthNote, modelId, zkaccess, cedar,
- *  dag triple, timestamp. */
+ *  dag triple, delegation map, zk artifact, timestamp. */
 export function receiptDigest (r: Omit<AnswerReceipt, 'signature' | 'signerPub'>): Bytes {
   const refs = r.fragmentRefs.map(f => concat(utf8(f.shard), utf8(String(f.seq)), utf8(f.hdp), utf8(f.anchorTxid ?? '')))
   const dagBytes = r.dag ? concat(utf8(r.dag.policyRoot), utf8(r.dag.derivationHash ?? ''), utf8(r.dag.state)) : new Uint8Array(0)
+  const delBytes = concat(...(r.delegations ?? []).map(d => concat(utf8(d.delegator), utf8(d.decision), utf8(d.signature))))
+  const zkBytes = r.zk ? utf8(canonicalJson(r.zk)) : new Uint8Array(0)
   const t = Buffer.alloc(8); t.writeBigUInt64LE(BigInt(r.timestamp ?? 0))
   return dsha256(concat(
     TAG_RECEIPT_SIG,
@@ -139,8 +160,21 @@ export function receiptDigest (r: Omit<AnswerReceipt, 'signature' | 'signerPub'>
     field(utf8(r.zkaccess ?? '')),
     field(utf8(r.cedar ?? '')),
     field(dagBytes),
+    field(delBytes),
+    field(zkBytes),
     Uint8Array.from(t)
   ))
+}
+
+/** §13: re-verify the receipt's ZKAccess artifact — the Π_j a third party
+ *  checks rather than trusting the `zkaccess` flag. Fails when the artifact is
+ *  absent (nothing to re-verify), malformed, or the proof doesn't hold. */
+export function verifyReceiptZk (r: Pick<AnswerReceipt, 'zk'>, opts?: { trustedAuthorities?: string[], holder?: string }): { ok: boolean, reason?: string } {
+  if (!r.zk) return { ok: false, reason: 'no zk artifact on receipt' }
+  let p: import('@mamem/identity').ClearancePresentation
+  try { p = idbind.decodePresentation(r.zk) } catch (e) { return { ok: false, reason: `malformed zk artifact: ${(e as Error).message}` } }
+  return idbind.verifyAccess(p.commitment, p.requiredLevel, p.proof, p.transcript, { trustedAuthorities: opts?.trustedAuthorities, holder: opts?.holder })
+    ? { ok: true } : { ok: false, reason: 'clearance proof does not verify' }
 }
 
 /** verify a receipt's terminal signature against its embedded signerPub */
@@ -867,6 +901,10 @@ export class MamemMemory {
     identity?: CallerIdentity
     /** CHN-006: withhold records whose anchor has fewer than finalityDepth confirmations */
     requireFinal?: boolean
+    /** §16 delegation map: sub-decisions the caller asserts were made by other
+     * agents (each = makeDelegation(key, decision, answer)). Bound into the
+     * signed receipt so the map is anchored, not post-hoc. */
+    delegations?: Array<{ delegator: string, decision: string, signature: string }>
   }): Promise<{ items: Array<{ seq: number, state: string, text?: string, unverifiable?: boolean, reason?: string, zk?: string }>, receipt: AnswerReceipt }> {
     const all = await this.store.all(shard)
     const items = (opts?.seq !== undefined ? all.filter(r => r.seq === opts.seq) : all)
@@ -1069,8 +1107,10 @@ export class MamemMemory {
       truthNote: 'inclusion and anchor-chain integrity verified; the TRUTH of the recorded statements is NOT established — a lie, once written, is preserved and marked',
       modelId: this.opts.modelId ?? 'unknown',
       zkaccess: zkState,
+      zk: opts?.zk ? idbind.encodePresentation({ commitment: opts.zk.commitment, proof: opts.zk.proof, transcript: opts.zk.transcript, requiredLevel: opts.zk.requiredLevel }) : undefined,
       cedar: cedarState,
       dag: dagState && dagPolicyRoot ? { policyRoot: dagPolicyRoot, derivationHash: dagDerivationHash, state: dagState } : undefined,
+      delegations: opts?.delegations,
       timestamp: Date.now()
     }
     // §18 terminal commitment: σ = Sign_logKey(H(answer‖trace‖τ))

@@ -36,19 +36,23 @@ export interface SaleOffer {
   wrapped: string
   /** seller pubkey (the buyer verifies offerSig against it) */
   sellerPub: string
-  /** §16/17 delegation signature: σ_seller = Sign(H(cfg‖commitment‖buyerPub))
+  /** §19 horizon: block height at which this offer lapses — the signed offer
+   *  cannot be funded once the chain tip reaches it. 0/absent = no expiry. */
+  expiresAt?: bigint
+  /** §16/17 delegation signature: σ_seller = Sign(H(cfg‖commitment‖buyerPub‖expiresAt))
    *  — a non-repudiable "this seller offered this commitment to this buyer"
    *  attestation the buyer checks BEFORE funding the escrow. */
   offerSig: string
 }
 
 /** canonical bytes the offer signature covers — every field a MITM could swap. */
-function offerDigest (cfg: { sellerPkh: string, price: bigint | number, hWrapped: string, refundAfter: bigint | number, maxFee: bigint | number }, buyerPub: string, leaf: string): Bytes {
+function offerDigest (cfg: { sellerPkh: string, price: bigint | number, hWrapped: string, refundAfter: bigint | number, maxFee: bigint | number }, buyerPub: string, leaf: string, expiresAt: bigint | number = 0): Bytes {
   const u64 = (n: bigint | number) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return new Uint8Array(b) }
   return sha256(concat(
     fromHex(cfg.sellerPkh), fromHex(cfg.hWrapped),
     u64(cfg.price), u64(cfg.refundAfter), u64(cfg.maxFee),
-    fromHex(buyerPub || '00'), fromHex(leaf || '00'.repeat(32))
+    fromHex(buyerPub || '00'), fromHex(leaf || '00'.repeat(32)),
+    u64(expiresAt)
   ))
 }
 
@@ -65,6 +69,8 @@ export function offerDisclosure (params: {
   buyerPub?: string
   /** anchored leaf this payload commits to (empty = unbound sale) */
   leaf?: string
+  /** §19 horizon: block height at which the offer lapses (0 = no expiry) */
+  expiresAt?: bigint
 }): SaleOffer {
   const { wrapped, hWrapped } = params.buyerPub
     ? wrapSaleValue(params.sellerKey, params.buyerPub, params.value)
@@ -72,16 +78,17 @@ export function offerDisclosure (params: {
   const sellerPub = params.sellerKey.toPublicKey().toString()
   const sellerPkh = toHex(new Uint8Array(params.sellerKey.toPublicKey().toHash() as number[]))
   const cfg = { sellerPkh, price: params.price, hWrapped, refundAfter: params.refundAfter, maxFee: params.maxFee }
-  const digest = offerDigest(cfg, params.buyerPub ?? '', params.leaf ?? '')
+  const expiresAt = params.expiresAt ?? 0n
+  const digest = offerDigest(cfg, params.buyerPub ?? '', params.leaf ?? '', expiresAt)
   const offerSig = params.sellerKey.sign(Array.from(Hash.sha256(Buffer.from(digest)))).toDER('hex') as string
-  return { cfg, wrapped: toHex(wrapped), sellerPub, offerSig }
+  return { cfg, wrapped: toHex(wrapped), sellerPub, expiresAt, offerSig }
 }
 
 /** Buyer-side: verify the seller's offer attestation before funding the
- *  escrow — refuses MITM-substituted cfgs. */
-export function verifyOfferSig (offer: { cfg: SaleOffer['cfg'], sellerPub: string, offerSig: string }, buyerPub = '', leaf = ''): boolean {
+ *  escrow — refuses MITM-substituted cfgs AND tampered expiry horizons. */
+export function verifyOfferSig (offer: { cfg: SaleOffer['cfg'], sellerPub: string, offerSig: string, expiresAt?: bigint | number }, buyerPub = '', leaf = ''): boolean {
   try {
-    const digest = offerDigest(offer.cfg, buyerPub, leaf)
+    const digest = offerDigest(offer.cfg, buyerPub, leaf, offer.expiresAt ?? 0)
     const sig = Signature.fromDER(Array.from(Buffer.from(offer.offerSig, 'hex')))
     return PublicKey.fromString(offer.sellerPub).verify(Array.from(Hash.sha256(Buffer.from(digest))), sig)
   } catch { return false }

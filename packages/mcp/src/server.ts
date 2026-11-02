@@ -206,7 +206,8 @@ export const TOOLS = [
       properties: {
         value: { type: 'string', description: 'hex payload (envelope wrapped bytes or a {field,salt,path} JSON)' },
         price: { type: 'number' }, refundAfter: { type: 'number' }, maxFee: { type: 'number' },
-        buyerPub: { type: 'string', description: 'recipient pubkey — omit for public disclosure' }
+        buyerPub: { type: 'string', description: 'recipient pubkey — omit for public disclosure' },
+        expiresAt: { type: 'number', description: 'optional block height at which the signed offer lapses' }
       },
       required: ['value', 'price', 'refundAfter', 'maxFee']
     }
@@ -219,7 +220,8 @@ export const TOOLS = [
       properties: {
         shard: { type: 'string' }, seq: { type: 'number' },
         price: { type: 'number' }, refundAfter: { type: 'number' }, maxFee: { type: 'number' },
-        buyerPub: { type: 'string', description: 'recipient pubkey — omit for public disclosure' }
+        buyerPub: { type: 'string', description: 'recipient pubkey — omit for public disclosure' },
+        expiresAt: { type: 'number', description: 'optional block height at which the signed offer lapses' }
       },
       required: ['shard', 'seq', 'price', 'refundAfter', 'maxFee']
     }
@@ -296,12 +298,12 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       const r = offerDisclosure({
         sellerKey: mem.operatorKey(), value: new Uint8Array(Buffer.from(args.value, 'hex')),
         price: BigInt(args.price), refundAfter: BigInt(args.refundAfter), maxFee: BigInt(args.maxFee),
-        buyerPub: args.buyerPub
+        buyerPub: args.buyerPub, expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined
       })
       // JSON-RPC cannot carry BigInt — cfg crosses the wire as plain numbers
       return {
         cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) },
-        wrapped: r.wrapped, sellerPub: r.sellerPub, offerSig: r.offerSig
+        wrapped: r.wrapped, sellerPub: r.sellerPub, expiresAt: Number(r.expiresAt ?? 0n), offerSig: r.offerSig
       }
     }
     case 'saleOfferMemory': {
@@ -328,11 +330,12 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       const r = offerDisclosure({
         sellerKey: mem.operatorKey(), value: payload,
         price: BigInt(args.price), refundAfter: BigInt(args.refundAfter), maxFee: BigInt(args.maxFee),
-        buyerPub: args.buyerPub, leaf: leafHex
+        buyerPub: args.buyerPub, leaf: leafHex,
+        expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined
       })
       return {
         cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) },
-        wrapped: r.wrapped, sellerPub: r.sellerPub, offerSig: r.offerSig, mode,
+        wrapped: r.wrapped, sellerPub: r.sellerPub, expiresAt: Number(r.expiresAt ?? 0n), offerSig: r.offerSig, mode,
         commitment: {
           leaf: leafHex, anchorTxid: rec.anchorTxid ?? null,
           hdp: toHex(rec.hdp), shard: args.shard, seq: args.seq,
@@ -352,7 +355,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         const buyerPub = mem.operatorKey().toPublicKey().toString()
         const leaf = args.offer.commitment?.leaf ?? ''
         if (!verifyOfferSig(
-          { cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig },
+          { cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig, expiresAt: args.offer.expiresAt },
           buyerPub, leaf
         )) throw new Error('saleEscrow: offerSig does not verify — cfg may have been substituted')
         // π_i pre-funding check: if the commitment carries a path, the leaf
@@ -362,6 +365,19 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
           const root = reconstructRoot(fh(leaf), { index: proof.leafIndex, siblings: proof.path.map((h: string) => fh(h)) })
           if (th(root) !== args.offer.commitment.batchR) throw new Error('saleEscrow: leaf path does not reach the committed batch root')
         }
+        // §19 horizon: refuse to fund an offer that has lapsed — a signed
+        // offer is only good until expiresAt (0 = no expiry).
+        const exp = BigInt(args.offer.expiresAt ?? 0)
+        if (exp > 0n && BigInt(await mem.chainHeight()) >= exp) throw new Error(`saleEscrow: offer expired at height ${exp}`)
+      }
+      // §19 sanity: the escrow must not be instantly refundable — refundAfter
+      // is a locktime gate (height < 500M ⇒ block height, else timestamp).
+      {
+        const ra = BigInt(args.cfg.refundAfter)
+        const future = ra < 500_000_000n
+          ? ra > BigInt(await mem.chainHeight())
+          : ra > BigInt(Math.floor(Date.now() / 1000))
+        if (!future) throw new Error('saleEscrow: cfg.refundAfter is not in the future — the escrow would be instantly refundable')
       }
       const depositorPkh = Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
       const host = new DisclosureSaleHost({

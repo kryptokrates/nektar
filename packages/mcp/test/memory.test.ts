@@ -267,3 +267,55 @@ test('§19 read-path: revoked author key withholds the record at recall', async 
   assert.equal(bad.items[0]!.unverifiable, true, 'revoked author record withheld')
   assert.match(bad.items[0]!.reason!, /revoked key/)
 })
+
+test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-hoc edits break verification', async () => {
+  const { mem, settle } = setup()
+  const { dsha256, utf8, concat, TAG_DELEGATION } = await import('@mamem/core')
+  const { verifyAnswerReceipt } = await import('../src/memory.js')
+  await mem.remember('s', 'service manual fact')
+  await mem.anchorShard('s'); settle('s')
+  // the caller's delegation map is supplied at recall time and bound by σ
+  const sub = PrivateKey.fromRandom()
+  const mkDel = (answer: string) => {
+    const delegator = sub.toPublicKey().toString()
+    const msg = dsha256(concat(TAG_DELEGATION, utf8(delegator), utf8('torque sign-off'), utf8(answer)))
+    return { delegator, decision: 'torque sign-off', signature: sub.sign([...msg]).toDER('hex') as string }
+  }
+  const { receipt } = await mem.recall('s', { delegations: [mkDel('service manual fact')] })
+  assert.ok(receipt.delegations?.length === 1)
+  assert.deepEqual(verifyAnswerReceipt(receipt), { ok: true })
+  // §16: the map is anchored — tampered delegator, swapped decision, stripped
+  // entry, and appended entry ALL break the terminal signature
+  assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [{ ...receipt.delegations[0]!, delegator: PrivateKey.fromRandom().toPublicKey().toString() }] }).ok, false, 'delegator swapped')
+  assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [{ ...receipt.delegations[0]!, decision: 'other decision' }] }).ok, false, 'decision swapped')
+  assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [] }).ok, false, 'map stripped')
+  assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [...receipt.delegations, receipt.delegations[0]!] }).ok, false, 'entry appended')
+})
+
+test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-verifies Π, not the flag', async () => {
+  const authority = PrivateKey.fromRandom()
+  const { mem, settle } = setup({ agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPublicKey().toString()] })
+  const { verifyReceiptZk } = await import('../src/memory.js')
+  const { decodePresentation } = await import('@mamem/identity')
+  await mem.remember('s', 'classified fact', undefined, 2)
+  await mem.anchorShard('s'); settle('s')
+  const { identity } = callerOf(mem)
+  const cred = issueClearance(authority, 3n, identity.pubkey)
+  const zk: ZkClearance = { commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('s/0', 11))!, transcript: tr('s/0', 11), requiredLevel: 2n }
+  const { receipt } = await mem.recall('s', { seq: 0, zk, identity })
+  // the artifact is present and re-verifiable by a third party — the flag alone
+  // would only attest the server's own verdict
+  assert.ok(receipt.zk, 'receipt carries the presentation artifact')
+  assert.equal(receipt.zkaccess, 'verified')
+  assert.deepEqual(verifyReceiptZk(receipt, { trustedAuthorities: [authority.toPublicKey().toString()], holder: identity.pubkey }), { ok: true })
+  // tampered artifact fails; stripped artifact is honest (nothing to verify)
+  const tampered = { ...receipt, zk: { ...receipt.zk!, requiredLevel: '99' } }
+  assert.equal(verifyReceiptZk(tampered, { trustedAuthorities: [authority.toPublicKey().toString()], holder: identity.pubkey }).ok, false)
+  assert.equal(verifyReceiptZk({ zk: undefined }, {}).ok, false)
+  // the artifact is digest-bound — swapping it breaks the receipt signature
+  const { verifyAnswerReceipt } = await import('../src/memory.js')
+  assert.equal(verifyAnswerReceipt(tampered as any).ok, false, 'swapped artifact breaks σ')
+  // decoded artifact roundtrips through the wire codec
+  const dec = decodePresentation(receipt.zk!)
+  assert.equal(dec.requiredLevel, 2n)
+})

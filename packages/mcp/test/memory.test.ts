@@ -351,3 +351,64 @@ test('GOAL-v8 D2: App E level floor — derived content cannot fall below its pr
   const revised = await plain2.mem.revise('v', base5.seq, 'classified premise v2')
   assert.equal(revised.level, 5, 'a revision of a level-5 base lands at level 5, not 0')
 })
+
+test('GOAL-v8 D6: MAMEM_ACCESS_LOG — timestamped per-decrypt/traverse audit records', async () => {
+  const seed = PrivateKey.fromRandom()
+  // disabled by default: no __access__ records at all
+  delete process.env.MAMEM_ACCESS_LOG
+  const off = setup({ agentSeed: seed, maxLevel: 1 })
+  await off.mem.remember('s', 'classified', undefined, 1)
+  await off.mem.anchorShard('s'); off.settle('s')
+  await off.mem.recall('s')
+  assert.equal((await off.mem.records('__access__')).length, 0, 'no audit records when the flag is off')
+  // enabled: every decrypt + delta traverse is recorded with a timestamp
+  process.env.MAMEM_ACCESS_LOG = '1'
+  try {
+    const authority = PrivateKey.fromRandom()
+    const on = setup({ agentSeed: seed, maxLevel: 1, clearanceAuthorities: [authority.toPublicKey().toString()] })
+    await on.mem.remember('s', 'classified', undefined, 1)
+    await on.mem.anchorShard('s'); on.settle('s')
+    const { identity } = callerOf(on.mem)
+    const cred = issueClearance(authority, 1n, identity.pubkey)
+    const zk: ZkClearance = { commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, tr('s/0', 5))!, transcript: tr('s/0', 5), requiredLevel: 1n }
+    const served = await on.mem.recall('s', { seq: 0, zk, identity })
+    assert.equal(served.items[0]!.text, 'classified', 'cleared read serves the record')
+    const logs = (await on.mem.records('__access__')).map(r => JSON.parse(Buffer.from(r.fragment.d).toString('utf8')))
+    const dec = logs.find(l => l.event === 'decrypt')
+    assert.ok(dec, 'a decrypt event was logged')
+    assert.equal(dec.shard, 's'); assert.equal(dec.seq, 0); assert.equal(dec.level, 1)
+    assert.equal(dec.caller, identity.pubkey, 'the verified caller is recorded')
+    assert.ok(typeof dec.at === 'number' && dec.at > 0, 'timestamped')
+    // traverse: materialising a delta chain logs each hop
+    const p2 = setup()
+    const base = await p2.mem.remember('d', 'v1 text')
+    await p2.mem.revise('d', base.seq, 'v2 text')
+    await p2.mem.materialize('d', base.seq + 1, { requireProof: false })
+    const tlogs = (await p2.mem.records('__access__')).map(r => JSON.parse(Buffer.from(r.fragment.d).toString('utf8')))
+    const tv = tlogs.find(l => l.event === 'traverse')
+    assert.ok(tv, 'a delta traverse event was logged')
+    assert.equal(tv.seq, 1); assert.equal(tv.follows, 0); assert.ok(tv.at > 0)
+  } finally { delete process.env.MAMEM_ACCESS_LOG }
+})
+
+test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash', async () => {
+  const weightsHash = 'ab'.repeat(32)
+  const { mem, settle } = setup({ model: { id: 'qwen-local-7b', params: { temperature: 0 }, weightsHash } })
+  await mem.remember('s', 'a fact')
+  await mem.anchorShard('s'); settle('s')
+  const { receipt } = await mem.recall('s', { modelParams: { seed: 42 } })
+  assert.equal(receipt.model?.id, 'qwen-local-7b')
+  assert.equal(receipt.model?.weightsHash, weightsHash)
+  assert.deepEqual(receipt.model?.params, { temperature: 0, seed: 42 }, 'operator params merged with per-call params')
+  // the model block is inside the signed digest — tampering breaks verification
+  const { verifyAnswerReceipt } = await import('../src/memory.js')
+  assert.ok(verifyAnswerReceipt(receipt).ok)
+  const tampered = { ...receipt, model: { ...receipt.model!, weightsHash: 'cd'.repeat(32) } }
+  assert.ok(!verifyAnswerReceipt(tampered).ok, 'a forged weightsHash invalidates the signature')
+  // receipts without a configured model still verify (empty-safe digest)
+  const plain = setup()
+  await plain.mem.remember('s', 'x')
+  const r2 = await plain.mem.recall('s')
+  assert.equal(r2.receipt.model, undefined)
+  assert.ok(verifyAnswerReceipt(r2.receipt).ok, 'modelless receipts still verify')
+})

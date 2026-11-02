@@ -37,6 +37,10 @@ export interface MamemMemoryOptions {
   batchPolicy?: import('@mamem/log').ClosePolicy
   overlay?: MamemOverlay // if set, anchors are also submitted to tm_mamem
   modelId?: string // stamped into receipts
+  /** §16/§18: stronger ℱ binding — the operator-declared model identity
+   *  stamped into every receipt: invocation params (temperature, seed…) and,
+   *  for local models, a hash of the weights file. */
+  model?: { id?: string, params?: Record<string, unknown>, weightsHash?: string }
   /** Instance-level Cedar enforcement (POL-010/013): when set, EVERY recall and
    * disclose MUST pass Cedar ALLOW against this policy, and the policy text
    * must hash to `anchoredPolicySetHash` (decoded from the anchored policy-set
@@ -116,6 +120,13 @@ export interface AnswerReceipt {
   /** POL-016: when a policy DAG gates the read — its anchored root, the
    * derivation hash and the dag decision summary. */
   dag?: { policyRoot: string, derivationHash?: string, state: string }
+  /** §16/§18 model binding: which ℱ produced the answer. `id` is the declared
+   *  model identifier (mirrors modelId), `params` the invocation parameters a
+   *  re-runner needs (temperature, seed, ctx size…), `weightsHash` commits the
+   *  local model's weights so a receipt names the exact artifact. An LLM is
+   *  not provably deterministic — this binds the receipt to the strongest
+   *  reproducible identity the stack can offer. */
+  model?: { id: string, params?: Record<string, unknown>, weightsHash?: string }
   /** §16 delegation map μ_i: sub-decisions asserted by delegating agents.
    *  signature = Sign_delegator(H(TAG_DELEGATION‖delegator‖decision‖answer)).
    *  Bound inside the signed receipt digest so the map cannot be added to or
@@ -151,6 +162,7 @@ export function receiptDigest (r: Omit<AnswerReceipt, 'signature' | 'signerPub'>
   const dagBytes = r.dag ? concat(utf8(r.dag.policyRoot), utf8(r.dag.derivationHash ?? ''), utf8(r.dag.state)) : new Uint8Array(0)
   const delBytes = concat(...(r.delegations ?? []).map(d => concat(utf8(d.delegator), utf8(d.decision), utf8(d.signature))))
   const zkBytes = r.zk ? utf8(canonicalJson(r.zk)) : new Uint8Array(0)
+  const modelBytes = r.model ? utf8(canonicalJson(r.model)) : new Uint8Array(0)
   const t = Buffer.alloc(8); t.writeBigUInt64LE(BigInt(r.timestamp ?? 0))
   return dsha256(concat(
     TAG_RECEIPT_SIG,
@@ -164,6 +176,7 @@ export function receiptDigest (r: Omit<AnswerReceipt, 'signature' | 'signerPub'>
     field(dagBytes),
     field(delBytes),
     field(zkBytes),
+    field(modelBytes),
     Uint8Array.from(t)
   ))
 }
@@ -663,6 +676,7 @@ export class MamemMemory {
       if (!d.startsWith(DELTA_PREFIX)) return d
       const m = /^delta:(\d+):([\s\S]*)$/.exec(d)!
       if (Number(m[1]) >= s) throw new Error('materialize: delta must reference an earlier record')
+      await this.logAccess({ event: 'traverse', shard, seq: s, follows: Number(m[1]) })
       return apply(await text(Number(m[1])), decodeDelta(m[2]!))
     }
     return await text(seq)
@@ -710,6 +724,23 @@ export class MamemMemory {
     const r = (await this.store.all(shard)).find(x => x.seq === seq)
     if (!r?.authorPub || r.authorEpoch === undefined) return { ok: false, reason: 'record carries no verified author epoch' }
     return idbind.verifyAuthorship(r.authorPub, r.authorEpoch, r.fragment.p.time, genesisPub, certs)
+  }
+
+  /** D6 (App E auditability): optional per-access log — decrypt/traverse events
+   *  appended to `__access__` as timestamped records that join the batch flow
+   *  and anchor with everything else. OFF by default (`MAMEM_ACCESS_LOG=1`)
+   *  because a readable log of who-read-what leaks the access pattern itself —
+   *  enable only where that tradeoff is acceptable. Writes bypass the public
+   *  `remember` (no auto-anchor mid-read) and never break a read on failure. */
+  private accessLogEnabled (): boolean { return process.env.MAMEM_ACCESS_LOG === '1' }
+  async logAccess (entry: Record<string, unknown>): Promise<void> {
+    if (!this.accessLogEnabled()) return
+    try {
+      await this.log.remember('__access__', {
+        d: utf8(JSON.stringify({ type: 'access', at: Date.now(), ...entry })),
+        p: { source: 'access-log', time: Math.floor(Date.now() / 1000), signature: new Uint8Array(0), modelId: this.opts.modelId ?? 'unknown' }
+      })
+    } catch { /* audit writes are best-effort — never break a read */ }
   }
 
   /** App E traversal constraint: a record derived from cited premises may not
@@ -992,6 +1023,9 @@ export class MamemMemory {
      * agents (each = makeDelegation(key, decision, answer)). Bound into the
      * signed receipt so the map is anchored, not post-hoc. */
     delegations?: Array<{ delegator: string, decision: string, signature: string }>
+    /** per-call invocation params merged into receipt.model.params (the
+     * caller knows temperature/seed; the operator owns id + weightsHash) */
+    modelParams?: Record<string, unknown>
   }): Promise<{ items: Array<{ seq: number, state: string, text?: string, unverifiable?: boolean, reason?: string, zk?: string }>, receipt: AnswerReceipt }> {
     const all = await this.store.all(shard)
     const items = (opts?.seq !== undefined ? all.filter(r => r.seq === opts.seq) : all)
@@ -1154,6 +1188,7 @@ export class MamemMemory {
                     item.reason = 'provenance sig invalid post-decrypt'
                   } else {
                     item.text = Buffer.from(pt).toString('utf8')
+                    await this.logAccess({ event: 'decrypt', shard, seq: r.seq, level: l, caller: opts?.identity?.pubkey })
                   }
                 }
                 shredKey(fragmentKey)
@@ -1192,7 +1227,10 @@ export class MamemMemory {
       fragmentRefs: out,
       checkResult: verified ? 'verified' : 'unverifiable',
       truthNote: 'inclusion and anchor-chain integrity verified; the TRUTH of the recorded statements is NOT established — a lie, once written, is preserved and marked',
-      modelId: this.opts.modelId ?? 'unknown',
+      modelId: this.opts.model?.id ?? this.opts.modelId ?? 'unknown',
+      model: this.opts.model || opts?.modelParams
+        ? { id: this.opts.model?.id ?? this.opts.modelId ?? 'unknown', params: { ...this.opts.model?.params, ...opts?.modelParams }, weightsHash: this.opts.model?.weightsHash }
+        : undefined,
       zkaccess: zkState,
       zk: opts?.zk ? idbind.encodePresentation({ commitment: opts.zk.commitment, proof: opts.zk.proof, transcript: opts.zk.transcript, requiredLevel: opts.zk.requiredLevel }) : undefined,
       cedar: cedarState,

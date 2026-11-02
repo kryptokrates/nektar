@@ -395,6 +395,15 @@ per-op cost.
 - Full-validity mode (zero assumptions, ~10⁴ txs) is Stage 2 — real
   and measured, deferred only because economics reserve it for
   high-value finalities.
+- `settle`'s anchor binding (`journalRoot == MamemAnchor.R` on-chain):
+  the anchor's state isn't reachable from the claim's preimage — needs
+  an anchor-side witness method co-spent in the settle tx (same
+  shared-outputs pattern as the stage/verdict co-spends). Deferred —
+  the verdict binds the claim's own committed fields today.
+- Leaf stage-script template binding: the co-spend pins the stage
+  *outpoint*; binding the expected script template on-chain needs the
+  generic RC-in-state stage variant (Stage 2) — per-round baked
+  constants make template reconstruction in-claim impractical.
 - No guest or receipt-format changes — pinned image ids, the reproduce
   gate, every existing ZK test stay green by construction.
 - V2 signature-equivocation slashing stays blocked (no

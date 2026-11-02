@@ -34,8 +34,9 @@ export class DisclosureSale extends SmartContract {
   }
 
   private out (sats: bigint, script: ByteString): ByteString {
+    // output serialization = value(8LE) + varint(scriptLen) + script
     const sl = len(script)
-    const slB = sl < 253n ? num2bin(sl, 1n) : cat(num2bin(0xfdn, 1n), num2bin(sl, 2n))
+    const slB = sl < 253n ? num2bin(sl, 1n) : cat(toByteString('fd'), num2bin(sl, 2n))
     return cat(num2bin(sats, 8n), cat(slB, script))
   }
 

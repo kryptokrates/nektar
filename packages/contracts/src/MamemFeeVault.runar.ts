@@ -1,84 +1,48 @@
-// MamemFeeVault — spend caps enforced by the locking script itself (V1,
-// GOAL-v7). Unlike the app-level SpendGuard, these limits are consensus
-// rules: no code path (and no stolen-but-signing key) can spend the vault
-// anywhere except `destPkh`, above `perTxCap`, above the rolling window cap
-// (per `windowBlocks` via nLocktime), or with a fee above `maxFee`.
-//
-// Manual covenant (OP_PUSH_TX): the contract takes txPreimage as an explicit
-// param and verifies ALL outputs by hand — the compiler's auto change output
-// can't be constrained, so we don't use StatefulSmartContract machinery.
-// Mutable state = 16 bytes appended after OP_RETURN inside the locking
-// script: spentInWindow(8LE) ‖ windowStart(8LE), read via scriptCode.
-//   Outputs (exactly three, order fixed):
-//     [0] self-continuation  contSats → this script with updated state
-//     [1] payment            payAmount → P2PKH(destPkh)
-//     [2] change             changeSats → P2PKH(ownerPkh)  (operator only)
-import {
-  SmartContract,
-  assert, checkSig, checkPreimage, extractOutputHash, extractScriptCode,
-  extractAmount, extractLocktime,
-  sha256, hash160, hash256, cat, substr, len, num2bin, bin2num, toByteString,
-  type PubKey, type Sig, type SigHashPreimage, type Sha256, type ByteString
-} from 'runar-lang'
+import { StatefulSmartContract, assert, hash160, checkSig, toByteString, cat, type Sig, type PubKey, type ByteString, extractLocktime, extractAmount } from 'runar-lang'
 
-export class MamemFeeVault extends SmartContract {
-  readonly destPkh: ByteString
-  readonly ownerPkh: ByteString
-  readonly perTxCap: bigint
-  readonly windowCap: bigint
-  readonly windowBlocks: bigint
-  readonly maxFee: bigint
+// Covenant-enforced fee vault (idiomatic StatefulSmartContract):
+// every spend may pay at most `payAmount` to `destPkh`, subject to
+// per-tx and rolling-window caps, keeping the remainder in the contract.
+// The window transition is supplied as (newSpent, newStart) and validated
+// unconditionally — ANF state inference requires straight-line mutation.
+// The residual (real change + miner fee) is bounded by maxFee + 1 sat:
+// the injected change output's destination is caller-set, so we bound its
+// AMOUNT — change-leakage beyond maxFee+1 sat is consensus-impossible.
+export class MamemFeeVault extends StatefulSmartContract {
+  destPkh: ByteString // 20B hash160 of the only payable address
+  ownerPkh: ByteString
+  perTxCap: bigint
+  windowCap: bigint
+  windowBlocks: bigint
+  maxFee: bigint
+  spentInWindow: bigint
+  windowStart: bigint
 
   constructor (destPkh: ByteString, ownerPkh: ByteString, perTxCap: bigint, windowCap: bigint, windowBlocks: bigint, maxFee: bigint) {
-    super()
+    super(destPkh, ownerPkh, perTxCap, windowCap, windowBlocks, maxFee)
     this.destPkh = destPkh
     this.ownerPkh = ownerPkh
     this.perTxCap = perTxCap
     this.windowCap = windowCap
     this.windowBlocks = windowBlocks
     this.maxFee = maxFee
+    this.spentInWindow = 0n
+    this.windowStart = 0n
   }
 
-  private p2pkh (pkh: ByteString): ByteString {
-    return cat(toByteString('76a914'), cat(pkh, toByteString('88ac')))
-  }
-
-  private out (sats: bigint, script: ByteString): ByteString {
-    const sl = len(script)
-    const slB = sl < 253n ? num2bin(sl, 1n) : cat(num2bin(0xfdn, 1n), num2bin(sl, 2n))
-    return cat(num2bin(sats, 8n), cat(slB, script))
-  }
-
-  public spend (txPreimage: SigHashPreimage, sig: Sig, pubKey: PubKey,
-    payAmount: bigint, contSats: bigint, changeSats: bigint) {
-    assert(checkPreimage(txPreimage))
+  public spend (sig: Sig, pubKey: PubKey, payAmount: bigint, newSpent: bigint, newStart: bigint, contSats: bigint) {
     assert(hash160(pubKey) === this.ownerPkh)
     assert(checkSig(sig, pubKey))
-
-    // mutable state = last 16 bytes of scriptCode: spent(8)‖windowStart(8)
-    const code = extractScriptCode(txPreimage)
-    const cl = len(code)
-    const spentInWindow = bin2num(substr(code, cl - 16n, 8n))
-    const windowStart = bin2num(substr(code, cl - 8n, 8n))
-
-    const lt = extractLocktime(txPreimage)
-    let newSpent = spentInWindow + payAmount
-    let newStart = windowStart
-    if (lt >= windowStart + this.windowBlocks) {
-      newSpent = payAmount
-      newStart = lt
-    }
-    assert(newSpent <= this.windowCap)
+    const lt = extractLocktime(this.txPreimage)
+    const expired = lt >= this.windowStart + this.windowBlocks
+    assert((expired && newSpent === payAmount && newStart === lt) ||
+      (!expired && newSpent === this.spentInWindow + payAmount && newStart === this.windowStart))
+    this.spentInWindow = newSpent
+    this.windowStart = newStart
+    assert(this.spentInWindow <= this.windowCap)
     assert(payAmount <= this.perTxCap)
-
-    const fee = extractAmount(txPreimage) - payAmount - contSats - changeSats
-    assert(fee <= this.maxFee)
-
-    const newCode = cat(substr(code, 0n, cl - 16n), cat(num2bin(newSpent, 8n), num2bin(newStart, 8n)))
-    const outs = cat(
-      this.out(contSats, newCode),
-      cat(this.out(payAmount, this.p2pkh(this.destPkh)), this.out(changeSats, this.p2pkh(this.ownerPkh)))
-    )
-    assert(hash256(outs) === extractOutputHash(txPreimage))
+    assert(extractAmount(this.txPreimage) - contSats - payAmount <= this.maxFee + 1n)
+    this.addOutput(contSats, this.destPkh, this.ownerPkh, this.perTxCap, this.windowCap, this.windowBlocks, this.maxFee, this.spentInWindow, this.windowStart)
+    this.addRawOutput(payAmount, cat(toByteString('76a914'), cat(this.destPkh, toByteString('88ac'))))
   }
 }

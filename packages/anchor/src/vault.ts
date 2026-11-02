@@ -1,67 +1,106 @@
-// FeeVault — GOAL-v7 V1 host adapter for the MamemFeeVault covenant.
-// Caps are consensus rules inside the locking script: payments only to
-// `destPkh`, <= perTxCap, <= rolling windowCap per windowBlocks (nLocktime),
-// fee <= maxFee. Manual covenant: 16-byte state (spentInWindow‖windowStart,
-// LE) appended after OP_RETURN in the locking script.
-// Spend outputs (fixed): [continuation, pay→destPkh, change→ownerPkh].
-// Built through the SDK's prepareCall/finalizeCall with terminalOutputs —
-// preimage, OP_PUSH_TX sig and unlocking are computed by the SDK.
-import { Transaction, PrivateKey, LockingScript, Hash } from '@bsv/sdk'
-import { RunarContract } from 'runar-sdk'
-import { MAMEM_FEEVAULT_ARTIFACT } from '@mamem/contracts'
+// Host adapter for the V1 MamemFeeVault covenant (GOAL-v7).
+// The contract is a StatefulSmartContract: mutable props carry the window
+// state; the SDK serializes state / builds scripts / computes the
+// OP_PUSH_TX preimage — no hand-assembled script bytes here.
+import { PrivateKey, Transaction, LockingScript, UnlockingScript, Hash } from '@bsv/sdk'
+import {
+  RunarContract, computeOpPushTx, serializeState,
+  extractStateFromScript, buildP2PKHScript
+} from 'runar-sdk'
 import type { Broadcaster, Funder, FundingOut } from '@mamem/chain'
+import { MAMEM_FEEVAULT_ARTIFACT } from '@mamem/contracts'
 
-export interface VaultParams {
-  destPkh: string // 20B hex — sole payable address (anchor-funding wallet)
-  ownerPkh: string // 20B hex — operator pubkey hash (spend auth)
+/** GOAL-v7 name kept for compatibility. */
+export type VaultParams = VaultConfig
+
+export interface VaultConfig {
+  destPkh: string    // 20B hex — the only payable address (anchor funding wallet)
+  ownerPkh: string   // 20B hex — operator key
   perTxCap: bigint
   windowCap: bigint
   windowBlocks: bigint
   maxFee: bigint
 }
+
 export interface VaultUtxo { txid: string, vout: number, satoshis: number, script: string }
 
-const le8 = (n: bigint | number): string => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b.toString('hex') }
-const fromLe8 = (hex: string): bigint => Buffer.from(hex, 'hex').readBigUInt64LE(0)
-const p2pkhHex = (pkh: string): string => `76a914${pkh}88ac`
-
 export class FeeVault {
-  readonly params: VaultParams
   private contract: RunarContract
-  constructor (params: VaultParams) {
-    this.params = params
-    this.contract = new RunarContract(MAMEM_FEEVAULT_ARTIFACT, [params.destPkh, params.ownerPkh, params.perTxCap, params.windowCap, params.windowBlocks, params.maxFee])
-  }
-  /** vault locking script = contract code + OP_RETURN + 16B state */
-  lockingScript (spentInWindow = 0n, windowStart = 0n): string {
-    return this.contract.getLockingScript() + '6a' + le8(spentInWindow) + le8(windowStart)
-  }
-  stateOf (scriptHex: string): { spentInWindow: bigint, windowStart: bigint } {
-    return { spentInWindow: fromLe8(scriptHex.slice(-32, -16)), windowStart: fromLe8(scriptHex.slice(-16)) }
+  constructor (private cfg: VaultConfig) {
+    this.contract = new RunarContract(MAMEM_FEEVAULT_ARTIFACT, [
+      cfg.destPkh, cfg.ownerPkh, cfg.perTxCap, cfg.windowCap,
+      cfg.windowBlocks, cfg.maxFee
+    ])
   }
 
-  /** Build the covenant spend tx (SDK-computed OP_PUSH_TX witness).
-   * Outputs: [continuation, pay→destPkh, change→ownerPkh].
-   * Unlocking = push(opSig) + args in ABI order [preimage, sig, pub, …]. */
-  buildSpend (vault: VaultUtxo, ownerKey: PrivateKey, payAmount: bigint, locktime: number, feeSats: bigint, changeSats = 1n): { tx: Transaction, newState: { spentInWindow: bigint, windowStart: bigint } } {
-    const st = this.stateOf(vault.script)
-    const lt = BigInt(locktime)
-    const rolled = lt >= st.windowStart + this.params.windowBlocks
-    const newState = { spentInWindow: rolled ? payAmount : st.spentInWindow + payAmount, windowStart: rolled ? lt : st.windowStart }
-    const contSats = BigInt(vault.satoshis) - payAmount - changeSats - feeSats
+  get params (): VaultConfig { return this.cfg }
+
+  /** vault locking script = code part + OP_RETURN + serialized state */
+  lockingScript (spentInWindow = 0n, windowStart = 0n): string {
+    return (this.contract as any).getCodePartHex() + '6a' + this.stateHex(spentInWindow, windowStart)
+  }
+
+  private stateHex (spentInWindow: bigint, windowStart: bigint): string {
+    const c = this.cfg
+    return serializeState(MAMEM_FEEVAULT_ARTIFACT.stateFields!, {
+      destPkh: c.destPkh, ownerPkh: c.ownerPkh, perTxCap: c.perTxCap,
+      windowCap: c.windowCap, windowBlocks: c.windowBlocks, maxFee: c.maxFee,
+      spentInWindow, windowStart
+    })
+  }
+
+  /** read {spentInWindow, windowStart} back out of a vault script */
+  stateOf (script: string): { spentInWindow: bigint, windowStart: bigint } {
+    const d = extractStateFromScript(MAMEM_FEEVAULT_ARTIFACT, script) as any
+    if (!d) throw new Error('vault: not a stateful vault script')
+    return { spentInWindow: BigInt(d.spentInWindow), windowStart: BigInt(d.windowStart) }
+  }
+
+  /** build a vault spend tx: payment → destPkh, continuation, change → ownerPkh.
+   *  Returns { tx } — the caller broadcasts it (MockChain or regtest). */
+  buildSpend (utxo: VaultUtxo, ownerKey: PrivateKey, payAmount: bigint, lockTime: number, fee = 1n): { tx: Transaction } {
+    const cur = this.stateOf(utxo.script)
+    const lt = BigInt(lockTime)
+    const [newSpent, newStart] = lt >= cur.windowStart + this.cfg.windowBlocks
+      ? [payAmount, lt] : [cur.spentInWindow + payAmount, cur.windowStart]
+
+    // continuation script = code part + serialized new state
+    const contScript = (this.contract as any).getCodePartHex() + '6a' + this.stateHex(newSpent, newStart)
+
+    const ownerPkhScript = buildP2PKHScript(this.cfg.ownerPkh) // pkh-based script
+    const destScript = buildP2PKHScript(this.cfg.destPkh)
+    const contSats = BigInt(utxo.satoshis) - payAmount - fee - 1n // 1 sat to change
+    const changeSats = 1n
+
     const tx = new Transaction()
-    tx.addInput({ sourceTXID: vault.txid, sourceOutputIndex: vault.vout, unlockingScript: new LockingScript(), sequence: 0xfffffffe })
-    tx.addOutput({ satoshis: Number(contSats), lockingScript: LockingScript.fromHex(this.lockingScript(newState.spentInWindow, newState.windowStart)) })
-    tx.addOutput({ satoshis: Number(payAmount), lockingScript: LockingScript.fromHex(p2pkhHex(this.params.destPkh)) })
-    tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(p2pkhHex(this.params.ownerPkh)) })
-    tx.lockTime = locktime
-    const { sigHex: opSig, preimageHex } = (this.contract as any).computeOpPushTxWithCodeSep(tx, 0, vault.script, vault.satoshis, 0)
-    const digest = Array.from(Hash.sha256(Buffer.from(preimageHex, 'hex')))
-    const sigHex = Buffer.from(ownerKey.sign(digest).toDER()).toString('hex') + '41'
-    const unlock = (this.contract as any).buildStatefulPrefix(opSig) +
-      this.contract.buildUnlockingScript('spend', [preimageHex, sigHex, ownerKey.toPublicKey().toString(), payAmount, contSats, changeSats])
-    tx.inputs[0]!.unlockingScript = LockingScript.fromHex(unlock)
-    return { tx, newState }
+    tx.addInput({
+      sourceTXID: utxo.txid, sourceOutputIndex: utxo.vout,
+      unlockingScript: new UnlockingScript(), sequence: 0xfffffffe
+    })
+    tx.addOutput({ satoshis: Number(contSats), lockingScript: LockingScript.fromHex(contScript) })
+    tx.addOutput({ satoshis: Number(payAmount), lockingScript: LockingScript.fromHex(destScript) })
+    tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(ownerPkhScript) })
+    tx.lockTime = lockTime
+
+    const c = this.contract as any
+    const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep
+      ? c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, 0)
+      : computeOpPushTx(tx, 0, utxo.script, utxo.satoshis, MAMEM_FEEVAULT_ARTIFACT.codeSeparatorIndices?.[0] ?? 0)
+    // user sig: checkSig runs after OP_CODESEPARATOR → sign over the trimmed subscript
+    const sigSub = c.getSubscriptForSigning
+      ? c.getSubscriptForSigning(utxo.script, 0)
+      : utxo.script
+    const sigPreimage = computeOpPushTx(tx, 0, sigSub, utxo.satoshis).preimageHex
+    const sig = Buffer.from(ownerKey.sign(Array.from(Hash.sha256(Buffer.from(sigPreimage, 'hex')))).toDER()).toString('hex') + '41'
+    // needsCodePart=true: this method is non-terminal stateful with _changePKH —
+    // the SDK pushes the code part as a witness item before the opSig.
+    const unlock = c.buildStatefulPrefix(opSig, true) +
+      this.contract.buildUnlockingScript('spend', [
+        sig, ownerKey.toPublicKey().toString(), payAmount, newSpent, newStart, contSats,
+        this.cfg.ownerPkh, changeSats, preimageHex
+      ])
+    tx.inputs[0]!.unlockingScript = UnlockingScript.fromHex(unlock)
+    return { tx }
   }
 }
 

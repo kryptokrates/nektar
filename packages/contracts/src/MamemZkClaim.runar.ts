@@ -46,9 +46,10 @@ export class MamemZkClaim extends StatefulSmartContract {
   window: bigint             // response window per bisection step
   stages: bigint             // stage count of the verified program
   verdictCode: ByteString    // ClaimVerdict artifact codePart — settle emits it
+  anchorOutpoint: ByteString // '' = unanchored; else the 36B anchor UTXO outpoint
 
-  constructor (status: bigint, receiptHash: Sha256, journalRoot: ByteString, journalSize: bigint, queryId: ByteString, bondSats: bigint, deadline: bigint, responseDeadline: bigint, challengerPkh: ByteString, bisectLo: bigint, bisectHi: bigint, midCommit: Sha256, proverPkh: ByteString, maxFee: bigint, window: bigint, stages: bigint, verdictCode: ByteString) {
-    super(status, receiptHash, journalRoot, journalSize, queryId, bondSats, deadline, responseDeadline, challengerPkh, bisectLo, bisectHi, midCommit, proverPkh, maxFee, window, stages, verdictCode)
+  constructor (status: bigint, receiptHash: Sha256, journalRoot: ByteString, journalSize: bigint, queryId: ByteString, bondSats: bigint, deadline: bigint, responseDeadline: bigint, challengerPkh: ByteString, bisectLo: bigint, bisectHi: bigint, midCommit: Sha256, proverPkh: ByteString, maxFee: bigint, window: bigint, stages: bigint, verdictCode: ByteString, anchorOutpoint: ByteString) {
+    super(status, receiptHash, journalRoot, journalSize, queryId, bondSats, deadline, responseDeadline, challengerPkh, bisectLo, bisectHi, midCommit, proverPkh, maxFee, window, stages, verdictCode, anchorOutpoint)
     this.status = status
     this.receiptHash = receiptHash
     this.journalRoot = journalRoot
@@ -66,17 +67,23 @@ export class MamemZkClaim extends StatefulSmartContract {
     this.window = window
     this.stages = stages
     this.verdictCode = verdictCode
+    this.anchorOutpoint = anchorOutpoint
   }
 
   /** HAPPY PATH: window expired unchallenged → ClaimVerdict covenant +
    *  bond back. Output[0] is a ClaimVerdict UTXO (verdictCode ‖ 6a ‖
    *  len-prefixed state) — consumers pin its outpoint as their input1;
    *  its own script enforces the payee payout when spent. */
-  public settle (sig: Sig, pubKey: PubKey, payoutSats: bigint, verdictSats: bigint) {
+  public settle (sig: Sig, pubKey: PubKey, prevouts: ByteString, payoutSats: bigint, verdictSats: bigint) {
     assert(hash160(pubKey) === this.proverPkh)
     assert(checkSig(sig, pubKey))
     assert(this.status === 0n)
     assert(extractLocktime(this.txPreimage) >= this.deadline)
+    // prevouts pin: input1 (if anchored) must be the committed anchor UTXO —
+    // '' anchorOutpoint → single-input settle. The anchor's witnessSettle
+    // then enforces journalRoot == anchor.R inside the same tx.
+    assert(hash256(prevouts) === extractHashPrevouts(this.txPreimage))
+    assert(prevouts === cat(extractOutpoint(this.txPreimage), this.anchorOutpoint))
     const e1 = cat(num2bin(len(this.proverPkh), 1n), this.proverPkh)
     const e2 = cat(num2bin(len(this.queryId), 1n), this.queryId)
     const e3 = cat(num2bin(len(this.journalRoot), 1n), this.journalRoot)
@@ -99,7 +106,7 @@ export class MamemZkClaim extends StatefulSmartContract {
     this.bisectLo = 0n
     this.bisectHi = this.stages
     this.responseDeadline = extractLocktime(this.txPreimage) + this.window
-    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages, this.verdictCode)
+    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages, this.verdictCode, this.anchorOutpoint)
   }
 
   /** prover posts the midpoint state commitment for the current range. */
@@ -110,7 +117,7 @@ export class MamemZkClaim extends StatefulSmartContract {
     assert(this.bisectHi - this.bisectLo > 1n)
     this.status = 2n
     this.midCommit = mid
-    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages, this.verdictCode)
+    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages, this.verdictCode, this.anchorOutpoint)
   }
 
   /** challenger picks the divergent half after a reveal. */
@@ -132,7 +139,7 @@ export class MamemZkClaim extends StatefulSmartContract {
     this.status = rem > 1n ? 1n : 2n
     this.midCommit = '0000000000000000000000000000000000000000000000000000000000000000' as Sha256
     this.responseDeadline = extractLocktime(this.txPreimage) + this.window
-    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages, this.verdictCode)
+    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages, this.verdictCode, this.anchorOutpoint)
   }
 
   /** LEAF: prover proves the single disputed stage by co-spending the

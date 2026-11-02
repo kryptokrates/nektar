@@ -69,14 +69,15 @@ const VCR = vArt.script
 const Z = '00'.repeat(32)
 const RH = 'aa'.repeat(32), JR = 'bb'.repeat(32), QID = 'cc'.repeat(32)
 const p2pkh = p => '76a914' + p + '88ac'
-const st0 = (over = {}) => ({ status: 0n, receiptHash: RH, journalRoot: JR, journalSize: 10n, queryId: QID, bondSats: 5000n, deadline: 1000n, responseDeadline: 0n, challengerPkh: Z, bisectLo: 0n, bisectHi: 4n, midCommit: Z, proverPkh: opPkh, maxFee: 1000n, window: 100n, stages: 4n, verdictCode: VCR, ...over })
-const ctorFor = (deadline, window, stages = 4n) => [0n, RH, JR, 10n, QID, 5000n, deadline, 0n, Z, 0n, stages, Z, opPkh, 1000n, window, stages, VCR]
+const st0 = (over = {}) => ({ status: 0n, receiptHash: RH, journalRoot: JR, journalSize: 10n, queryId: QID, bondSats: 5000n, deadline: 1000n, responseDeadline: 0n, challengerPkh: Z, bisectLo: 0n, bisectHi: 4n, midCommit: Z, proverPkh: opPkh, maxFee: 1000n, window: 100n, stages: 4n, verdictCode: VCR, anchorOutpoint: '', ...over })
+const ctorFor = (deadline, window, stages = 4n) => [0n, RH, JR, 10n, QID, 5000n, deadline, 0n, Z, 0n, stages, Z, opPkh, 1000n, window, stages, VCR, '']
 const deployClaim = async (deadline, window) => {
   const c = new RunarContract(art, ctorFor(deadline, window))
   c.connect(provider, signer)
   const d = await c.deploy({ satoshis: 5000 })
   return c
 }
+const ourPrevouts = c => { const u = c.currentUtxo; return Buffer.concat([Buffer.from(u.txid, 'hex').reverse(), Buffer.from([0,0,0,0])]).toString('hex') }
 const encPush = h => { const l = h.length / 2
   if (l === 0) return '00'; if (l <= 75) return l.toString(16).padStart(2, '0') + h
   if (l <= 0xff) return '4c' + l.toString(16).padStart(2, '0') + h
@@ -110,7 +111,7 @@ console.log('── settle happy path ──')
 try {
   const c = await deployClaim(0n, 100n)
   const verdict = VCR + '6a' + serializeState(vArt.stateFields, { receiptHash: RH, journalRoot: JR, queryId: QID, payeePkh: opPkh })
-  const r = await callTerminal(c, 'settle', [null, pubKeyHex, 4978n, 10n], [
+  const r = await callTerminal(c, 'settle', [null, pubKeyHex, ourPrevouts(c), 4978n, 10n], [
     { scriptHex: verdict, satoshis: 10 }, { scriptHex: p2pkh(opPkh), satoshis: 4978 }], 1n)
   check(!!r.txid, `settle broadcast (${r.txid?.slice(0, 12)}…)`)
 

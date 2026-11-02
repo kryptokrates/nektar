@@ -395,11 +395,14 @@ per-op cost.
 - Full-validity mode (zero assumptions, ~10⁴ txs) is Stage 2 — real
   and measured, deferred only because economics reserve it for
   high-value finalities.
-- `settle`'s anchor binding (`journalRoot == MamemAnchor.R` on-chain):
-  the anchor's state isn't reachable from the claim's preimage — needs
-  an anchor-side witness method co-spent in the settle tx (same
-  shared-outputs pattern as the stage/verdict co-spends). Deferred —
-  the verdict binds the claim's own committed fields today.
+- `settle`'s anchor binding ✅: `settle` pins `anchorOutpoint` as
+  input1 (`prevouts` check; '' = unanchored single-input) and
+  `MamemAnchor.witnessSettle` re-emits the verdict output with **its
+  own R** at the journalRoot field — `hashOutputs` only validates if
+  `journalRoot == anchor.R`. Interpreter-green (`anchored-settle` 303
+  ops, `anchor-witness` 188 ops). Consumes the anchor UTXO (terminal);
+  a continuing variant needs the claim to also emit the anchor
+  continuation output.
 - Leaf stage-script template binding: the co-spend pins the stage
   *outpoint*; binding the expected script template on-chain needs the
   generic RC-in-state stage variant (Stage 2) — per-round baked

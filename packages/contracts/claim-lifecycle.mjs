@@ -26,6 +26,7 @@ const encNum = n => { if(n===0n)return '00'; if(n>=1n&&n<=16n)return (0x50+Numbe
   return encPush(b.map(x=>x.toString(16).padStart(2,'0')).join('')) }
 const encArg = v => typeof v==='bigint'?encNum(v):encPush(v)
 
+const ourPrevouts = c=>{const u=c.currentUtxo;return Buffer.concat([Buffer.from(u.txid,'hex').reverse(),Buffer.from([0,0,0,0])]).toString('hex')}
 const evalSpend = (prov,tag,idx=0,srcIdx=1)=>{
   const hx=prov.getBroadcastedTxs()
   const st=Transaction.fromHex(hx.at(-1)); const dp=Transaction.fromHex(hx.at(-1-srcIdx))
@@ -40,11 +41,11 @@ const evalSpend = (prov,tag,idx=0,srcIdx=1)=>{
 const newProv = ()=>{const p=new MockProvider('testnet');p.addUtxo('1Q1pE5vPGEEMqRcVRMbtBK842Y6Pzo6nK9',{txid:'ab'.repeat(32),outputIndex:0,satoshis:1e6,script:''});return p}
 const deploy = async (prov,opts={})=>{
   const {deadline=1000n,window=100n,stages=4n}=opts
-  const ctor=[0n,RH,JR,10n,QID,5000n,deadline,0n,Z,0n,stages,Z,pkh(pk),1000n,window,stages,VCR]
+  const ctor=[0n,RH,JR,10n,QID,5000n,deadline,0n,Z,0n,stages,Z,pkh(pk),1000n,window,stages,VCR,'']
   const c=new RunarContract(art,ctor);c.connect(prov,prover);await c.deploy({satoshis:5000})
   return c
 }
-const st0 = (over={})=>({status:0n,receiptHash:RH,journalRoot:JR,journalSize:10n,queryId:QID,bondSats:5000n,deadline:1000n,responseDeadline:0n,challengerPkh:Z,bisectLo:0n,bisectHi:4n,midCommit:Z,proverPkh:pkh(pk),maxFee:1000n,window:100n,stages:4n,verdictCode:VCR,...over})
+const st0 = (over={})=>({status:0n,receiptHash:RH,journalRoot:JR,journalSize:10n,queryId:QID,bondSats:5000n,deadline:1000n,responseDeadline:0n,challengerPkh:Z,bisectLo:0n,bisectHi:4n,midCommit:Z,proverPkh:pkh(pk),maxFee:1000n,window:100n,stages:4n,verdictCode:VCR,anchorOutpoint:'',...over})
 const pkh_addr = await prover.getAddress(); const cpk_addr = await challenger.getAddress()
 const fund = (prov,who,amt=6000)=>prov.addUtxo(who===prover?pkh_addr:cpk_addr,{txid:Math.random().toString(16).slice(2).padEnd(64,'0').slice(0,64),outputIndex:0,satoshis:amt,script:''})
 
@@ -70,13 +71,13 @@ const callTerminal = async (c, method, args, prov, signer, outputs, changePkh) =
 // ── 1. settle (happy path): deadline=0 so locktime 0 passes ──
 {
   const prov=newProv()
-  const ctor=[0n,RH,JR,10n,QID,5000n,0n,0n,Z,0n,4n,Z,pkh(pk),1000n,100n,4n,VCR]
+  const ctor=[0n,RH,JR,10n,QID,5000n,0n,0n,Z,0n,4n,Z,pkh(pk),1000n,100n,4n,VCR,'']
   const c=new RunarContract(art,ctor);c.connect(prov,prover);await c.deploy({satoshis:5000})
   // ClaimVerdict UTXO: codePart + 6a + len-prefixed {receiptHash, journalRoot, queryId, payeePkh}
   const { serializeState } = await import('runar-sdk')
   const vstate = serializeState(vArt.stateFields, { receiptHash: RH, journalRoot: JR, queryId: QID, payeePkh: pkh(pk) })
   const verdict = VCR + '6a' + vstate
-  await callTerminal(c,'settle',[null,pk,4980n,10n],prov,prover,[{scriptHex:verdict,satoshis:10},{scriptHex:p2pkhScript(pkh(pk)),satoshis:4980}],pkh(pk))
+  await callTerminal(c,'settle',[null,pk,ourPrevouts(c),4980n,10n],prov,prover,[{scriptHex:verdict,satoshis:10},{scriptHex:p2pkhScript(pkh(pk)),satoshis:4980}],pkh(pk))
   evalSpend(prov,'settle')
   // the emitted verdict UTXO is a real ClaimVerdict — its authorize must also spend
   {
@@ -196,11 +197,11 @@ const callTerminal = async (c, method, args, prov, signer, outputs, changePkh) =
 {
   const prov=newProv()
   const { serializeState } = await import('runar-sdk')
-  const ctor=[0n,RH,JR,10n,QID,5000n,0n,0n,Z,0n,4n,Z,pkh(pk),1000n,100n,4n,VCR]
+  const ctor=[0n,RH,JR,10n,QID,5000n,0n,0n,Z,0n,4n,Z,pkh(pk),1000n,100n,4n,VCR,'']
   const c=new RunarContract(art,ctor);c.connect(prov,prover);await c.deploy({satoshis:5000})
   const vstate = serializeState(vArt.stateFields, { receiptHash: RH, journalRoot: JR, queryId: QID, payeePkh: pkh(pk) })
   const verdict = VCR + '6a' + vstate
-  await callTerminal(c,'settle',[null,pk,4980n,10n],prov,prover,[{scriptHex:verdict,satoshis:10},{scriptHex:p2pkhScript(pkh(pk)),satoshis:4980}],pkh(pk))
+  await callTerminal(c,'settle',[null,pk,ourPrevouts(c),4980n,10n],prov,prover,[{scriptHex:verdict,satoshis:10},{scriptHex:p2pkhScript(pkh(pk)),satoshis:4980}],pkh(pk))
   const vtx = Transaction.fromHex(prov.getBroadcastedTxs().at(-1))
   const vUtxo = { txid: vtx.id('hex'), outputIndex: 0, satoshis: 10, script: verdict }
   const vOp = Buffer.concat([Buffer.from(vUtxo.txid,'hex').reverse(),Buffer.from([0,0,0,0])]).toString('hex')
@@ -247,6 +248,63 @@ const callTerminal = async (c, method, args, prov, signer, outputs, changePkh) =
       unlockingScript: st.inputs[1].unlockingScript, inputSequence: 0xffffffff,
       lockTime: 0, isRelaxed: true })
     try { sp.validate(); console.log('verdict-in-sale VALID ops:', sp.executedOpCount); PASS++ } catch (e) { console.log('verdict-in-sale FAIL:', e.message.slice(0, 80)); FAILS.push('verdict-in-sale') }
+  }
+}
+// ── 6. anchored settle: claim bound to a MamemAnchor UTXO ──
+// The anchor's witnessSettle re-emits the verdict with its OWN R — the
+// tx only validates if claim.journalRoot == anchor.R (§4.5 binding).
+{
+  const prov=newProv()
+  const { serializeState } = await import('runar-sdk')
+  const aArt = JSON.parse(readFileSync('MamemAnchor.json','utf8'))
+  // anchor state: owner=prover, n=0,size=10,R=JR,Rp=Z — journalRoot must equal R
+  const aCtor=[pk,pkh(pk),'4d455441',0n,10n,JR,'22'.repeat(32),Buffer.from('RPRIME').toString('hex')]
+  const a=new RunarContract(aArt,aCtor);a.connect(prov,prover);await a.deploy({satoshis:1})
+  const aUtxo=a.currentUtxo
+  const aOp=Buffer.concat([Buffer.from(aUtxo.txid,'hex').reverse(),Buffer.from([0,0,0,0])]).toString('hex')
+  // claim bound to that anchor
+  const ctor=[0n,RH,JR,10n,QID,5000n,0n,0n,Z,0n,4n,Z,pkh(pk),1000n,100n,4n,VCR,aOp]
+  const c=new RunarContract(art,ctor);c.connect(prov,prover);await c.deploy({satoshis:5000})
+  const cUtxo=c.currentUtxo
+  const cOp=Buffer.concat([Buffer.from(cUtxo.txid,'hex').reverse(),Buffer.from([0,0,0,0])]).toString('hex')
+  const prevouts=cOp+aOp
+  const vstate=serializeState(vArt.stateFields,{receiptHash:RH,journalRoot:JR,queryId:QID,payeePkh:pkh(pk)})
+  const verdict=VCR+'6a'+vstate
+  // manual 2-input settle: [claim, anchor] → [verdict, payout, change]
+  const tx=new BsvTransaction()
+  tx.addInput({sourceTXID:cUtxo.txid,sourceOutputIndex:cUtxo.outputIndex,unlockingScript:UnlockingScript.fromHex('00'),sequence:0xffffffff})
+  tx.addInput({sourceTXID:aUtxo.txid,sourceOutputIndex:aUtxo.outputIndex,unlockingScript:UnlockingScript.fromHex('00'),sequence:0xffffffff})
+  tx.addOutput({satoshis:10,lockingScript:LockingScript.fromHex(verdict)})
+  tx.addOutput({satoshis:4980,lockingScript:LockingScript.fromHex(p2pkhScript(pkh(pk)))})
+  tx.addOutput({satoshis:0,lockingScript:LockingScript.fromHex(p2pkhScript(pkh(pk)))})
+  const mIdx=art.abi.methods.filter(m=>m.isPublic).findIndex(m=>m.name==='settle')
+  const {sigHex:opSig,preimageHex:pre}=c.computeOpPushTxWithCodeSep(tx,0,cUtxo.script,cUtxo.satoshis,mIdx)
+  const sigSub=c.getSubscriptForSigning(cUtxo.script,mIdx)
+  const userSig=await prover.sign(tx.toHex(),0,sigSub,cUtxo.satoshis)
+  tx.inputs[0].unlockingScript=UnlockingScript.fromHex(
+    c.buildStatefulPrefix(opSig,true)+encArg(userSig)+encArg(pk)+encArg(prevouts)+encArg(4980n)+encArg(10n)
+    +encPush(pkh(pk))+encNum(0n)+encPush(pre)+encNum(BigInt(mIdx)))
+  // anchor leg: witnessSettle(sig,pk,rh,qid,payeePkh,vcode,vsats,psats,ppkh) + change + preimage + sel
+  const aPub=aArt.abi.methods.filter(m=>m.isPublic)
+  const aIdx=aPub.findIndex(m=>m.name==='witnessSettle')
+  const {sigHex:aSig,preimageHex:aPre}=a.computeOpPushTxWithCodeSep(tx,1,aUtxo.script,aUtxo.satoshis,aIdx)
+  const aSub=a.getSubscriptForSigning(aUtxo.script,aIdx)
+  const aUserSig=await prover.sign(tx.toHex(),1,aSub,aUtxo.satoshis)
+  tx.inputs[1].unlockingScript=UnlockingScript.fromHex(
+    a.buildStatefulPrefix(aSig,true)
+    +encArg(aUserSig)+encArg(pk)+encArg(RH)+encArg(QID)+encArg(pkh(pk))+encArg(VCR)+encArg(10n)+encArg(4980n)+encArg(pkh(pk))
+    +encPush(pkh(pk))+encNum(0n)+encPush(aPre)+encNum(BigInt(aIdx)))
+  await prov.broadcast(tx)
+  evalSpend(prov,'anchored-settle',0,1)
+  // anchor input executes too
+  {
+    const st=Transaction.fromHex(prov.getBroadcastedTxs().at(-1))
+    const sp=new Spend({sourceTXID:aUtxo.txid,sourceOutputIndex:0,sourceSatoshis:1,
+      lockingScript:LockingScript.fromHex(aUtxo.script),transactionVersion:st.version,
+      otherInputs:st.inputs.filter((_,i)=>i!==1),outputs:st.outputs,inputIndex:1,
+      unlockingScript:st.inputs[1].unlockingScript,inputSequence:0xffffffff,
+      lockTime:0,isRelaxed:true})
+    try{sp.validate();console.log('anchor-witness VALID ops:',sp.executedOpCount);PASS++}catch(e){console.log('anchor-witness FAIL:',e.message.slice(0,80));FAILS.push('anchor-witness')}
   }
 }
 console.log(`\n=== ${PASS} passed, ${FAILS.length} failed: ${FAILS.join(',')}`)

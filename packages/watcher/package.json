@@ -5,7 +5,7 @@
   "type": "module",
   "bin": { "mamem-watcher": "./src/watcher.mjs" },
   "scripts": {
-    "test": "node src/watcher.mjs --once --claims .state/watcher-claims.json"
+    "test": "node test/run.mjs"
   },
   "dependencies": {
     "@mamem/anchor": "workspace:*",

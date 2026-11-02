@@ -69,7 +69,7 @@ test(`fuzz: MamemAnchor decoder is byte-authenticated (seed ${SEED}, n ${N})`, a
 test('fuzz: proof bundle verifier never throws, never accepts a mutated bundle', async () => {
   const { chain, mem } = await anchoredWorld()
   const { bundle } = await mem.prove('f', 0)
-  assert.deepEqual(await verifyFragment(bundle!, chain), { ok: true })
+  assert.deepEqual(await verifyFragment(bundle!, chain), { ok: true, settled: true, anchorState: 'mined' })
   for (let i = 0; i < Math.min(N, 120); i++) {
     const b = JSON.parse(JSON.stringify(bundle))
     switch (int(6)) {
@@ -82,7 +82,10 @@ test('fuzz: proof bundle verifier never throws, never accepts a mutated bundle',
     }
     if (JSON.stringify(b) === JSON.stringify(bundle)) continue
     const r = await verifyFragment(b, chain)
-    assert.equal(r.ok, false, `mutation ${i} accepted`)
+    // a mutation may only survive as a DOWNGRADE — stripping the BUMP turns
+    // mined into broadcast, which is a weaker claim, not acceptance. A mutated
+    // bundle must never verify as fully settled.
+    assert.ok(!(r.ok === true && r.settled === true), `mutation ${i} accepted as settled`)
   }
 })
 

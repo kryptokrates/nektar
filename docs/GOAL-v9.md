@@ -229,9 +229,26 @@ per-op cost.
 - **0b transcript-hash audit:** exactly which hash the R0 3.0.3
   succinct transcript uses and invocation counts (risc0 `zkp`/`core`
   source, our WASM symbols, receipt structure).
-- **0c one FRI query round end-to-end:** Merkle path check + one field
-  fold in a real covenant on MockChain/regtest → extrapolate to the
-  stage count of a real receipt.
+- **0c Poseidon2 component costs — MEASURED (2026-11-02, real
+  interpreter):** risc0-zkp 3.0.5 `poseidon2_mix` confirmed from source:
+  CELLS=24, 8 full + 21 partial rounds, x⁷ sbox, M_ext/M_int diffusion.
+  Generated `packages/contracts/src/Poseidon2Blocks.runar.ts` (6,262B
+  for 5 methods) and evaluated via @bsv/sdk `Spend` (`isRelaxed` —
+  Chronicle rules; runar txs are v1 so clean-stack must be relaxed, real
+  deployment needs v>1):
+  `mExt`=440 ops ×9, `fullRound`=930 ops ×8, `partialRound`=290 ops ×21
+  → **≈14k executed ops per permutation**; peak stack ≤490B per
+  component. Two hard findings: (1) a naive single-method permutation
+  hits stack depth **2338 > compiler limit 800** — the 24-cell state
+  *cannot live on the Script stack*, it must live in the UTXO chain
+  (per-round/per-component stage granularity — this is the multi-tx
+  design forced, not optional); (2) at ~10³ permutations per verify ≈
+  **~14M ops / ~15–20MB of bytecode → order 10³–10⁴ covenant txs**
+  (~29 stages/perm). Feasible mechanically but ~100× the BWS footprint;
+  optimization headroom (deferred mod-reductions, shared path data,
+  hand-scheduled Script) is significant — the gate hinges on whether the
+  engineering+cost budget justifies it vs. Groth16-wrap (1 tx, trusted
+  setup).
 - **0d covenant shim cost:** per-stage preimage/state-carry overhead;
   OTDA vs BIP143 for the preimage glue.
 - **GATE:** total estimated footprint + stage count. If Poseidon2-bound

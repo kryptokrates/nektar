@@ -545,7 +545,7 @@ export class MamemMemory {
       // withheld). Foreign authors carry no cert chain — their originator σ
       // still binds them; there is nothing to check an epoch claim against.
       const chainKeys = ac ? new Set([ac.genesisPub, ...ac.certs.map(c => c.pubkey)]) : null
-      if (chainKeys?.has(r.authorPub)) {
+      if (ac && chainKeys?.has(r.authorPub)) {
         const a = idbind.verifyAuthorship(r.authorPub, r.authorEpoch, r.fragment.p.time, ac.genesisPub, ac.certs)
         if (!a.ok) return `authorship: ${a.reason}`
       }

@@ -2,7 +2,7 @@
 // discovery, merkle paths) + the ARC broadcaster. NO spend happens here:
 // ArcBroadcaster is the only write path and it is wrapped by SpendGuard in
 // the runtime before any tx reaches it.
-import { Transaction, MerklePath } from '@bsv/sdk'
+import { Transaction, MerklePath, Hash } from '@bsv/sdk'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 
 export interface MainnetConfig {
@@ -10,6 +10,7 @@ export interface MainnetConfig {
   arcApiKey?: string
   wocUrl?: string // WhatsOnChain base (no trailing slash)
   wocApiKey?: string
+  chaintracksUrl?: string // chaintracks base incl. /v1|/v2 — header source for BUMP verification
   fetchImpl?: typeof fetch // injectable — tests pass a recorded stub
 }
 
@@ -121,6 +122,78 @@ export class WocTracker implements ChainTracker {
   async isValidRootForHeight (root: string, height: number, signal?: AbortSignal): Promise<boolean> {
     const h = await this.headerAtHeight(height)
     return h?.merkleRoot === root
+  }
+}
+
+// --- Chaintracks header source (public, no key — PoW-verifiable data) --------
+/** Chaintracks serves the longest-chain block headers — the ONLY global chain
+ *  data SPV verification needs, and self-authenticating via proof-of-work, so
+ *  this is not an indexer dependency. v2 (`/chaintracks/v2`) returns bare JSON
+ *  headers; v1 (`/chaintracks/v1`) wraps values and serves 80-byte hex.
+ *  `fallback` (e.g. WocTracker) is tried only when chaintracks itself fails. */
+export class ChaintracksTracker implements ChainTracker {
+  private headers = new Map<number, BlockHeader>()
+  private base: string
+  private readonly v1: boolean
+  private cfg: ReturnType<typeof def>
+  constructor (c?: MainnetConfig, base?: string, private fallback?: ChainTracker) {
+    this.cfg = def(c)
+    this.base = (base ?? `${this.cfg.arcUrl}/chaintracks/v2`).replace(/\/$/, '')
+    this.v1 = this.base.endsWith('/v1')
+  }
+
+  private async j (path: string): Promise<any> {
+    const r = await req(this.cfg, `${this.base}${path}`, {}, 15_000)
+    if (!r.ok) throw new Error(`chaintracks ${path}: HTTP ${r.status}`)
+    return await r.json()
+  }
+
+  async currentHeight (): Promise<number> {
+    try {
+      if (this.v1) { const j = await this.j('/getPresentHeight'); return j.value }
+      return (await this.j('/height')).height
+    } catch (e) {
+      if (this.fallback) return await this.fallback.currentHeight()
+      throw e
+    }
+  }
+  async tipHeight (): Promise<number> { return await this.currentHeight() }
+
+  async headerAtHeight (height: number): Promise<BlockHeader | undefined> {
+    const hit = this.headers.get(height); if (hit) return hit
+    let h: BlockHeader | undefined
+    try {
+      if (this.v1) {
+        const j = await this.j(`/findHeaderHexForHeight?height=${height}`)
+        if (j.value) h = parseHeaderHex(j.value, height)
+      } else {
+        const b = await this.j(`/header/height/${height}`)
+        if (b?.merkleRoot) {
+          h = { height: b.height ?? height, hash: b.hash ?? '', prevHash: b.previousHash ?? '', merkleRoot: b.merkleRoot, time: b.time ?? 0, bits: b.bits ?? 0, nonce: b.nonce ?? 0 }
+        }
+      }
+    } catch { /* fall through to fallback */ }
+    if (!h && this.fallback) h = await this.fallback.headerAtHeight(height)
+    if (h) this.headers.set(height, h)
+    return h
+  }
+
+  async isValidRootForHeight (root: string, height: number, signal?: AbortSignal): Promise<boolean> {
+    const h = await this.headerAtHeight(height)
+    return h?.merkleRoot === root
+  }
+}
+
+/** parse an 80-byte block header (hex) — v1 serves headers serialized. */
+export function parseHeaderHex (hex: string, height: number): BlockHeader {
+  const b = Buffer.from(hex.trim(), 'hex')
+  if (b.length !== 80) throw new Error(`header hex is ${b.length}B, want 80`)
+  const hash = Buffer.from(Hash.hash256([...b])).reverse().toString('hex')
+  return {
+    height, hash,
+    prevHash: b.slice(4, 36).reverse().toString('hex'),
+    merkleRoot: b.slice(36, 68).reverse().toString('hex'),
+    time: b.readUInt32LE(68), bits: b.readUInt32LE(72), nonce: b.readUInt32LE(76)
   }
 }
 

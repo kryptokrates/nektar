@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { PrivateKey, MerklePath, type Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
 import { KnexShardStore, type ShardStore } from '@mamem/log'
 import { MamemMemory, type MamemMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -97,6 +97,7 @@ export function configFromEnv (env = process.env): RuntimeConfig {
       arcApiKey: secret('MAMEM_ARC_API_KEY'),
       wocUrl: env.MAMEM_WOC_URL ?? urls?.woc,
       wocApiKey: secret('MAMEM_WOC_API_KEY'),
+      chaintracksUrl: env.MAMEM_CHAINTRACKS_URL,
       // fee floor: 100 sat/kB main (GorillaPool policy), 1 sat/kB TTN (its
       // Arcade policy is 0 — a zero fee rate would produce free-of-fee txs
       // miners may reject; keep ≥1)
@@ -322,7 +323,12 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const fundAddress = fundKey.toPublicKey().toAddress(ttn ? [0x6f] : undefined)
   process.stderr.write(`mamem ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring\n`)
 
-  const tracker = new WocTracker(mc)
+  // headers via Chaintracks (public, no key, PoW-verifiable — the only global
+  // data SPV needs); WoC stays as fallback. GorillaPool's arcade doesn't mount
+  // the chaintracks listener, so mainnet uses the association arcade that does.
+  const tracker = new ChaintracksTracker(mc,
+    mc.chaintracksUrl ?? (ttn ? `${mc.arcUrl}/chaintracks/v1` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'),
+    new WocTracker(mc))
   const rawBroadcaster = new ArcBroadcaster(mc)
   const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))
   let memRef: MamemMemory | undefined

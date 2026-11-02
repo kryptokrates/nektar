@@ -70,9 +70,9 @@ const Z = '00'.repeat(32)
 const RH = 'aa'.repeat(32), JR = 'bb'.repeat(32), QID = 'cc'.repeat(32)
 const p2pkh = p => '76a914' + p + '88ac'
 const st0 = (over = {}) => ({ status: 0n, receiptHash: RH, journalRoot: JR, journalSize: 10n, queryId: QID, bondSats: 5000n, deadline: 1000n, responseDeadline: 0n, challengerPkh: Z, bisectLo: 0n, bisectHi: 4n, midCommit: Z, proverPkh: opPkh, maxFee: 1000n, window: 100n, stages: 4n, verdictCode: VCR, anchorOutpoint: '', ...over })
-const ctorFor = (deadline, window, stages = 4n) => [0n, RH, JR, 10n, QID, 5000n, deadline, 0n, Z, 0n, stages, Z, opPkh, 1000n, window, stages, VCR, '']
-const deployClaim = async (deadline, window) => {
-  const c = new RunarContract(art, ctorFor(deadline, window))
+const ctorFor = (deadline, window, stages = 4n, anchorOutpoint = '') => [0n, RH, JR, 10n, QID, 5000n, deadline, 0n, Z, 0n, stages, Z, opPkh, 1000n, window, stages, VCR, anchorOutpoint]
+const deployClaim = async (deadline, window, anchorOutpoint = '') => {
+  const c = new RunarContract(art, ctorFor(deadline, window, 4n, anchorOutpoint))
   c.connect(provider, signer)
   const d = await c.deploy({ satoshis: 5000 })
   return c
@@ -240,6 +240,47 @@ try {
   const r = await callTerminal(c, 'slashTimeout', [null, pubKeyHex, 4990n], [{ scriptHex: p2pkh(opPkh), satoshis: 4990 }], 1n)
   check(!!r.txid, `slashTimeout (${r.txid?.slice(0, 12)}…)`)
 } catch (e) { check(false, `slashTimeout: ${e.message.slice(0, 90)}`) }
+
+// ── 5. anchored settle: real MamemAnchor + bound claim ────────────
+// Claim.journalRoot must equal anchor.R — enforced by the anchor's
+// witnessSettle re-emitting the verdict with its own R (§4.5 binding).
+console.log('── anchored settle ──')
+try {
+  const aArt = JSON.parse(readFileSync(new URL('../../contracts/MamemAnchor.json', import.meta.url), 'utf8'))
+  const a = new RunarContract(aArt, [pubKeyHex, opPkh, '4d455441', 0n, 10n, JR, '22'.repeat(32), Buffer.from('RPRIME').toString('hex')])
+  a.connect(provider, signer)
+  await a.deploy({ satoshis: 1 })
+  const aUtxo = a.currentUtxo
+  const aOp = Buffer.concat([Buffer.from(aUtxo.txid, 'hex').reverse(), Buffer.from([0, 0, 0, 0])]).toString('hex')
+  const c = await deployClaim(0n, 0n, aOp) // deadline=0 → settle window already open
+  const cUtxo = c.currentUtxo
+  const cOp = Buffer.concat([Buffer.from(cUtxo.txid, 'hex').reverse(), Buffer.from([0, 0, 0, 0])]).toString('hex')
+  const prevouts = cOp + aOp
+  const verdict = VCR + '6a' + serializeState(vArt.stateFields, { receiptHash: RH, journalRoot: JR, queryId: QID, payeePkh: opPkh })
+  const tx = new BsvTransaction()
+  tx.addInput({ sourceTXID: cUtxo.txid, sourceOutputIndex: cUtxo.outputIndex, unlockingScript: UnlockingScript.fromHex('00'), sequence: 0xffffffff })
+  tx.addInput({ sourceTXID: aUtxo.txid, sourceOutputIndex: aUtxo.outputIndex, unlockingScript: UnlockingScript.fromHex('00'), sequence: 0xffffffff })
+  tx.addOutput({ satoshis: 10, lockingScript: LockingScript.fromHex(verdict) })
+  tx.addOutput({ satoshis: 4980, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
+  tx.addOutput({ satoshis: 0, lockingScript: LockingScript.fromHex(p2pkh(opPkh)) })
+  const mIdx = art.abi.methods.filter(m => m.isPublic).findIndex(m => m.name === 'settle')
+  const { sigHex: opSig, preimageHex: pre } = c.computeOpPushTxWithCodeSep(tx, 0, cUtxo.script, cUtxo.satoshis, mIdx)
+  const sigSub = c.getSubscriptForSigning(cUtxo.script, mIdx)
+  const userSig = await signer.sign(tx.toHex(), 0, sigSub, cUtxo.satoshis)
+  tx.inputs[0].unlockingScript = UnlockingScript.fromHex(
+    c.buildStatefulPrefix(opSig, true) + encArg(userSig) + encArg(pubKeyHex) + encArg(prevouts) + encArg(4980n) + encArg(10n)
+    + encPush(opPkh) + encNum(0n) + encPush(pre) + encNum(BigInt(mIdx)))
+  const aIdx = aArt.abi.methods.filter(m => m.isPublic).findIndex(m => m.name === 'witnessSettle')
+  const { sigHex: aSig, preimageHex: aPre } = a.computeOpPushTxWithCodeSep(tx, 1, aUtxo.script, aUtxo.satoshis, aIdx)
+  const aSub = a.getSubscriptForSigning(aUtxo.script, aIdx)
+  const aUserSig = await signer.sign(tx.toHex(), 1, aSub, aUtxo.satoshis)
+  tx.inputs[1].unlockingScript = UnlockingScript.fromHex(
+    a.buildStatefulPrefix(aSig, true) + encArg(aUserSig) + encArg(pubKeyHex) + encArg(RH) + encArg(QID) + encArg(opPkh) + encArg(VCR) + encArg(10n) + encArg(4980n) + encArg(opPkh)
+    + encPush(opPkh) + encNum(0n) + encPush(aPre) + encNum(BigInt(aIdx)))
+  const abr = await broadcaster.broadcast(tx)
+  provider.markAccepted(tx)
+  check(abr.status === 'success', `anchored settle (${abr.txid?.slice(0, 12)}… — journalRoot==anchor.R consensus-enforced)`)
+} catch (e) { check(false, `anchored settle: ${e.message.slice(0, 90)}`) }
 
 await mineOne()
 console.log(`\n${failures === 0 ? 'ALL PASS' : failures + ' FAILURES'} — claim lifecycle on regtest`)

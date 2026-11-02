@@ -35,6 +35,14 @@ test('V3 sale: buy reveals wrapped and pays seller atomically; wrong preimage re
   // a different preimage fails sha256(wrapped) === hWrapped
   const bad = sale.buildBuy(utxo, Buffer.from('wrong-payload').toString('hex'), buyerPkh, 4_000n)
   assert.notEqual((await chain.broadcast(bad.tx)).status, 'success', 'wrong wrapped must be rejected')
+  // underpayment: tamper the seller output below `price` → hash256(outs) ≠ preimage outputs
+  const under = sale.buildBuy(utxo, WRAPPED, buyerPkh, 4_000n)
+  under.tx.outputs[0]!.satoshis = 4_999
+  assert.notEqual((await chain.broadcast(under.tx)).status, 'success', 'underpayment must be rejected')
+  // rerouted payment: seller output pointed at the buyer's address
+  const reroute = sale.buildBuy(utxo, WRAPPED, buyerPkh, 4_000n)
+  reroute.tx.outputs[0]!.lockingScript = reroute.tx.outputs[1]!.lockingScript
+  assert.notEqual((await chain.broadcast(reroute.tx)).status, 'success', 'payment to non-seller must be rejected')
 })
 
 test('V3 sale: refund gated by locktime + seller sig', async () => {

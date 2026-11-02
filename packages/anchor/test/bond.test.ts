@@ -44,6 +44,12 @@ test('V2 bond: commit chain continues n→n+1 with lastRoot; wrong signer reject
   // fee above maxFee — the leftover bound must reject it
   const hiFee = bond.buildCommit(u2, operator, R2, 500n)
   assert.notEqual((await chain.broadcast(hiFee.tx)).status, 'success', 'fee > maxFee must be rejected')
+  // forged continuation: output 0 keeps the sats but swaps in a foreign
+  // script — the out-hash assert binds code+state, so consensus rejects
+  const { buildP2PKHScript } = await import('runar-sdk')
+  const forged = bond.buildCommit(u2, operator, R2)
+  forged.tx.outputs[0]!.lockingScript = LockingScript.fromHex(buildP2PKHScript(operatorPkh))
+  assert.notEqual((await chain.broadcast(forged.tx)).status, 'success', 'foreign continuation script must be rejected')
 })
 
 test('V2 bond: close gated by release height', async () => {

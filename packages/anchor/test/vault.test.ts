@@ -48,6 +48,11 @@ test('V1 vault: valid spend accepted; over-cap, wrong outputs and wrong sig all 
   const stale = vault.buildSpend(utxo, owner, 500n, 1)
   stale.tx.outputs[0]!.lockingScript = LockingScript.fromHex(vault.lockingScript(0n, 0n))
   assert.notEqual((await chain.broadcast(stale.tx)).status, 'success', 'stale-state continuation must be rejected')
+  // forged continuation code: output 0 is a foreign script, not the vault's
+  // code part — the covenant's output-hash assert binds code AND state
+  const forged = vault.buildSpend(utxo, owner, 500n, 1)
+  forged.tx.outputs[0]!.lockingScript = LockingScript.fromHex(buildP2PKHScript(ownerPkh))
+  assert.notEqual((await chain.broadcast(forged.tx)).status, 'success', 'foreign continuation script must be rejected')
 })
 
 test('V1 vault: rolling window — 4th payment in the same window rejected, rolls after windowBlocks', async () => {

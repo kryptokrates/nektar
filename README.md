@@ -2,7 +2,7 @@
 
 Verifiable, encrypted, provenance-bearing agent memory: a BSV-native implementation of Wright's *Merkle Automaton* (arXiv:2506.13246).
 
-Writes are cheap off-chain appends. One Rúnar contract spend anchors a whole batch, and each shard's history is a single UTXO chain that cannot fork. Reads are released only after identity, ZK clearance, Cedar and policy-DAG checks *and* an SPV proof. Every answer carries a receipt. Every verification ends in the BSV header chain.
+Writes are cheap off-chain appends. One Rúnar contract spend anchors a whole batch, and each shard's history is a single UTXO chain that cannot fork. Reads are released only after identity, ZK clearance, Cedar and policy-DAG checks *and* an SPV proof. Every answer carries a receipt — with the delegation map, the re-verifiable ZK artifact and the model identity (`{id, params, weightsHash}`) inside the signature. Rotation certs, revocations and (opt-in) access events are anchored in their own `__identity__` / `__revocation__` / `__access__` shards, so a third party replays them from chain data alone. Derived content is floored at its premises' access level; signed sale offers expire; every verification ends in the BSV header chain.
 
 > **Proofs establish inclusion, integrity, ordering, authorization and existence by a time — never truth.** See [docs/PROOFS.md](docs/PROOFS.md).
 
@@ -57,6 +57,7 @@ Additional gates: `pnpm formal` (TLA+/TLC), `pnpm cedar:symcc` (Cedar SymCC + cv
 
 | Doc | Contents |
 |---|---|
+| [docs/GOAL-v8.md](docs/GOAL-v8.md) | current goal: strict paper re-scan closure — the 10 divergences fixed (D1–D10), verified-aligned sections, honest deferrals |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | MCP server for Claude/Cursor/VS Code/local models, Docker MCP Toolkit, HTTP, runtime modes |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | layers, packages, sequence and state diagrams (Mermaid), ADRs |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | research & inspirations: reused / adopted / rejected, per source |

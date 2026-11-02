@@ -18,13 +18,17 @@
 //   the co-spend requirement itself is already enforced by Script).
 import {
   StatefulSmartContract,
-  assert, checkSig, hash160, sha256, cat, toByteString,
+  assert, checkSig, hash160, hash256, cat, toByteString,
   extractLocktime, extractAmount, extractHashPrevouts, extractOutpoint,
   type Sig, type PubKey, type ByteString, type Sha256
 } from 'runar-lang'
 
 export class MamemZkClaim extends StatefulSmartContract {
-  // mutable state (addOutput arg order must match declaration order)
+  // state (addOutput arg order must match declaration order).
+  // NOTE: proverPkh/maxFee/window/stages are protocol constants kept in
+  // state — never assigned after construction. `readonly` constructor
+  // slots splice args into the code section, which shifts the emitted
+  // codeSeparatorIndex and breaks state deserialization in 0.4.6.
   status: bigint
   receiptHash: Sha256
   journalRoot: ByteString
@@ -37,14 +41,13 @@ export class MamemZkClaim extends StatefulSmartContract {
   bisectLo: bigint
   bisectHi: bigint
   midCommit: Sha256
-  // constants (constructor-baked, not part of state)
-  readonly proverPkh: ByteString
-  readonly maxFee: bigint
-  readonly window: bigint      // response window per bisection step
-  readonly stages: bigint      // stage count of the verified program
+  proverPkh: ByteString
+  maxFee: bigint
+  window: bigint             // response window per bisection step
+  stages: bigint             // stage count of the verified program
 
   constructor (status: bigint, receiptHash: Sha256, journalRoot: ByteString, journalSize: bigint, queryId: ByteString, bondSats: bigint, deadline: bigint, responseDeadline: bigint, challengerPkh: ByteString, bisectLo: bigint, bisectHi: bigint, midCommit: Sha256, proverPkh: ByteString, maxFee: bigint, window: bigint, stages: bigint) {
-    super(status, receiptHash, journalRoot, journalSize, queryId, bondSats, deadline, responseDeadline, challengerPkh, bisectLo, bisectHi, midCommit)
+    super(status, receiptHash, journalRoot, journalSize, queryId, bondSats, deadline, responseDeadline, challengerPkh, bisectLo, bisectHi, midCommit, proverPkh, maxFee, window, stages)
     this.status = status
     this.receiptHash = receiptHash
     this.journalRoot = journalRoot
@@ -63,11 +66,6 @@ export class MamemZkClaim extends StatefulSmartContract {
     this.stages = stages
   }
 
-  private p2pkh (pkh: ByteString): ByteString {
-    // see MamemCheckpointBond — buildP2PKH is declared but not compilable in 0.4.6
-    return cat(toByteString('76a914'), cat(pkh, toByteString('88ac')))
-  }
-
   /** HAPPY PATH: window expired unchallenged → verdict + bond back.
    *  Verdict output binds (receiptHash ‖ journalRoot ‖ queryId) on-chain
    *  — consumers reference the settled claim spend. */
@@ -78,7 +76,7 @@ export class MamemZkClaim extends StatefulSmartContract {
     assert(extractLocktime(this.txPreimage) >= this.deadline)
     this.addRawOutput(1n, cat(toByteString('6a'), cat(this.receiptHash, cat(this.journalRoot, this.queryId))))
     assert(extractAmount(this.txPreimage) - payoutSats <= this.maxFee + 1n)
-    this.addRawOutput(payoutSats, this.p2pkh(this.proverPkh))
+    this.addRawOutput(payoutSats, cat(toByteString('76a914'), cat(this.proverPkh, toByteString('88ac'))))
   }
 
   /** ANYONE challenges before the deadline (sig proves they control the
@@ -93,7 +91,7 @@ export class MamemZkClaim extends StatefulSmartContract {
     this.bisectLo = 0n
     this.bisectHi = this.stages
     this.responseDeadline = extractLocktime(this.txPreimage) + this.window
-    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit)
+    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages)
   }
 
   /** prover posts the midpoint state commitment for the current range. */
@@ -104,7 +102,7 @@ export class MamemZkClaim extends StatefulSmartContract {
     assert(this.bisectHi - this.bisectLo > 1n)
     this.status = 2n
     this.midCommit = mid
-    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit)
+    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages)
   }
 
   /** challenger picks the divergent half after a reveal. */
@@ -113,12 +111,20 @@ export class MamemZkClaim extends StatefulSmartContract {
     assert(checkSig(sig, pubKey))
     assert(this.status === 2n)
     assert(this.midCommit !== toByteString('0000000000000000000000000000000000000000000000000000000000000000'))
-    const mid = (this.bisectLo + this.bisectHi) / 2n
-    if (takeUpper === 1n) { this.bisectLo = mid } else { this.bisectHi = mid }
+    // NOTE: temps referenced inside ternary branches are dropped by the
+    // 0.4.6 stack scheduler ("t31 not found") — use pure arithmetic
+    // selection instead (takeUpper ∈ {0,1}: x + s·(y−x)).
+    assert(takeUpper === 0n || takeUpper === 1n)
+    const lo0 = this.bisectLo
+    const hi0 = this.bisectHi
+    const mid = (lo0 + hi0) / 2n
+    const rem = (mid - lo0) + takeUpper * (hi0 + lo0 - 2n * mid)
+    this.bisectLo = lo0 + takeUpper * (mid - lo0)
+    this.bisectHi = mid + takeUpper * (hi0 - mid)
+    this.status = rem > 1n ? 1n : 2n
     this.midCommit = '0000000000000000000000000000000000000000000000000000000000000000' as Sha256
     this.responseDeadline = extractLocktime(this.txPreimage) + this.window
-    this.status = this.bisectHi - this.bisectLo > 1n ? 1n : 2n
-    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit)
+    this.addOutput(this.bondSats, this.status, this.receiptHash, this.journalRoot, this.journalSize, this.queryId, this.bondSats, this.deadline, this.responseDeadline, this.challengerPkh, this.bisectLo, this.bisectHi, this.midCommit, this.proverPkh, this.maxFee, this.window, this.stages)
   }
 
   /** LEAF: prover proves the single disputed stage by co-spending the
@@ -131,10 +137,10 @@ export class MamemZkClaim extends StatefulSmartContract {
     assert(checkSig(sig, pubKey))
     assert(this.status === 2n)
     assert(this.bisectHi - this.bisectLo <= 1n)
-    assert(sha256(prevouts) === extractHashPrevouts(this.txPreimage))
+    assert(hash256(prevouts) === extractHashPrevouts(this.txPreimage))
     assert(prevouts === cat(extractOutpoint(this.txPreimage), stageOutpoint))
     assert(extractAmount(this.txPreimage) - payoutSats <= this.maxFee + 1n)
-    this.addRawOutput(payoutSats, this.p2pkh(this.proverPkh))
+    this.addRawOutput(payoutSats, cat(toByteString('76a914'), cat(this.proverPkh, toByteString('88ac'))))
   }
 
   /** challenger went silent mid-game → prover sweeps. */
@@ -144,7 +150,7 @@ export class MamemZkClaim extends StatefulSmartContract {
     assert(this.status === 1n)
     assert(extractLocktime(this.txPreimage) >= this.responseDeadline)
     assert(extractAmount(this.txPreimage) - payoutSats <= this.maxFee + 1n)
-    this.addRawOutput(payoutSats, this.p2pkh(this.proverPkh))
+    this.addRawOutput(payoutSats, cat(toByteString('76a914'), cat(this.proverPkh, toByteString('88ac'))))
   }
 
   /** prover went silent mid-game → challenger sweeps BOTH bonds. */
@@ -154,6 +160,6 @@ export class MamemZkClaim extends StatefulSmartContract {
     assert(this.status === 2n)
     assert(extractLocktime(this.txPreimage) >= this.responseDeadline)
     assert(extractAmount(this.txPreimage) - payoutSats <= this.maxFee + 1n)
-    this.addRawOutput(payoutSats, this.p2pkh(this.challengerPkh))
+    this.addRawOutput(payoutSats, cat(toByteString('76a914'), cat(this.challengerPkh, toByteString('88ac'))))
   }
 }

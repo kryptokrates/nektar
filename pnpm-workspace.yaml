@@ -7,6 +7,9 @@ packages:
 overrides:
   'runar-sdk>@bsv/sdk': 4.0.1
   'runar-lang>@bsv/sdk': 4.0.1
+  # audit: transitive build-tool chain (sqlite3>node-gyp) — patched floors only
+  'tar': '>=7.5.21'
+  'minimatch': '>=11.0.1'
 
 onlyBuiltDependencies:
   - sqlite3

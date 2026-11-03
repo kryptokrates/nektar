@@ -13,10 +13,7 @@
   },
   "dependencies": {
     "@mamem/core": "workspace:*",
-    "@mamem/chain": "workspace:*",
-    "@mamem/datalog": "workspace:*",
-    "@mamem/identity": "workspace:*",
-    "@mamem/log": "workspace:*"
+    "@mamem/datalog": "workspace:*"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "tools/**/*.mjs",
+        "integrations/**/*.{js,mjs}",
+        "circuits/**/*.mjs",
+        "docs/**/*.mjs"
+      ],
+      "ignore": ["spikes/**"]
+    },
+    "packages/mcp": {
+      "entry": ["src/payclient.ts", "demo/**/*.{ts,mts,mjs}"]
+    },
+    "packages/e2e": {
+      "entry": ["src/**/*.{ts,mts,mjs}"]
+    },
+    "packages/contracts": {
+      "entry": ["*.mjs", "src/*.runar.ts", "mini-stage.runar.ts"]
+    },
+    "packages/zk": {
+      "ignoreUnresolved": ["stark/verifier\\.js$"],
+      "ignore": ["stark/verifier*.{js,d.ts}", "stark/*.wasm*"]
+    },
+    "packages/overlay": {
+      "entry": ["*.mjs"]
+    },
+    "packages/anchor": {
+      "entry": ["*.mjs"]
+    }
+  },
+  "ignoreExportsUsedInFile": true,
+  "rules": {
+    "exports": "off",
+    "types": "off"
+  }
+}

@@ -14,7 +14,6 @@
     "@mamem/chain": "workspace:*",
     "@mamem/contracts": "workspace:*",
     "@mamem/core": "workspace:*",
-    "@mamem/crypto": "workspace:*",
     "@mamem/datalog": "workspace:*",
     "@mamem/graph": "workspace:*",
     "@mamem/identity": "workspace:*",
@@ -25,9 +24,7 @@
     "@mamem/reasoning": "workspace:*",
     "@mamem/verify": "workspace:*",
     "@mamem/zk": "workspace:*",
-    "knex": "^3.1.0",
-    "runar-sdk": "0.4.6",
-    "sqlite3": "^5.1.7"
+    "runar-sdk": "0.4.6"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"

@@ -15,8 +15,7 @@
     "@mamem/core": "workspace:*",
     "@mamem/chain": "workspace:*",
     "@mamem/anchor": "workspace:*",
-    "@mamem/contracts": "workspace:*",
-    "runar-sdk": "^0.4.6"
+    "@mamem/contracts": "workspace:*"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"

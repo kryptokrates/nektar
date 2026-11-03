@@ -44,7 +44,10 @@ jobs:
               fi
             done
             [ -d /opt/nektar/.mamem ] && mv /opt/nektar/.mamem /opt/nektar/.nektar || true
-            [ -f /opt/nektar/.env ] && sed -i "s/MAMEM_/NEKTAR_/g" /opt/nektar/.env || true
+            # env files: rename var names + paths only (never blind-replace inside values)
+            for e in /etc/nektar*.env /opt/nektar/.env; do
+              [ -f "$e" ] && sed -i "s/^MAMEM_/NEKTAR_/g; s|/opt/mamem|/opt/nektar|g; s|/var/lib/mamem|/var/lib/nektar|g; s|/etc/mamem|/etc/nektar|g" "$e" || true
+            done
             for u in /etc/systemd/system/mamem-*.service /etc/systemd/system/nektar-*.service; do
               [ -f "$u" ] || continue
               sed -i "s|/opt/mamem|/opt/nektar|g; s|/var/lib/mamem|/var/lib/nektar|g; s|/etc/mamem|/etc/nektar|g; s/MAMEM_/NEKTAR_/g; s/mamem/nektar/g" "$u"

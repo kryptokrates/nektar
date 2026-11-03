@@ -907,9 +907,5 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
   }
 }
 
-/** MCP over stdio (official SDK) */
-export async function serveStdio (mem: MamemMemory): Promise<void> {
-  const { createMcpServer } = await import('./mcp-server.js')
-  const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js')
-  await createMcpServer(mem).connect(new StdioServerTransport())
-}
+/** MCP over stdio lives in mcp-server.ts (it owns the SDK wiring — server.ts
+ *  stays dependency-free of it; bin.ts + index.ts import from there) */

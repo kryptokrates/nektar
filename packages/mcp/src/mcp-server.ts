@@ -79,3 +79,10 @@ export function createMcpServer (mem: MamemMemory): McpServer {
     }))
   return server
 }
+
+/** MCP over stdio (official SDK) — the entry bin.ts uses. Lives here (not
+ *  server.ts) so the tool layer never imports the transport layer. */
+export async function serveStdio (mem: import('./memory.js').MamemMemory): Promise<void> {
+  const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js')
+  await createMcpServer(mem).connect(new StdioServerTransport())
+}

@@ -5,7 +5,7 @@
 // Backend via MAMEM_NETWORK=mock (default, offline, zero setup) | regtest
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
 import { openRuntime, configFromEnv } from './runtime.js'
-import { serveStdio } from './server.js'
+import { serveStdio } from './mcp-server.js'
 import { createHttpApi } from './http.js'
 
 const rt = await openRuntime(configFromEnv())

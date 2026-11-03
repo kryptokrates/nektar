@@ -12,6 +12,7 @@
     "bench": "node packages/e2e/dist/src/bench.js",
     "formal": "node docs/formal/run.mjs",
     "check:deps": "node tools/check-deps.mjs",
+    "check:cruise": "depcruise packages --config .dependency-cruiser.cjs",
     "sbom": "node tools/sbom.mjs",
     "mcp:install": "node tools/mcp-install.mjs",
     "rendezvous": "node packages/overlay/serve.mjs",
@@ -35,6 +36,7 @@
   "devDependencies": {
     "@bsv/sdk": "4.0.1",
     "@types/node": "24.19.2",
+    "dependency-cruiser": "^18.7.1",
     "typescript": "5.6.3"
   },
   "engines": {

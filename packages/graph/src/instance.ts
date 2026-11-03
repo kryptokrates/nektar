@@ -2,7 +2,14 @@
 // per-node Merkle proof against an anchored root, delegation signature
 // σ_A′ = Sign(H(G′root‖Ψ‖τ)), partial entailment under a rule subset.
 import { dsha256, utf8, merkleRoot, merkleProof } from '@mamem/core'
-import { AORGraph, Vertex } from './index.js'
+/** Structural minimum of AORGraph this module needs — declared here (never
+ *  imported from the barrel) so instance.ts has no edge back into index.ts
+ *  and the package stays acyclic. AORGraph satisfies this shape. */
+export interface GraphLike {
+  instance: (psi: string[]) => Set<string>
+  edges: Iterable<{ from: string, to: string }>
+  vertices: Map<string, { kind: string, phi: string }>
+}
 import { PrivateKey, PublicKey, Signature } from '@bsv/sdk'
 import { Datalog, type Fact, type Rule } from '@mamem/datalog'
 
@@ -13,7 +20,7 @@ export interface Instance {
 }
 
 /** INS-002/003: select nodes with C_i ∩ Ψ ≠ ∅, closed under derivability */
-export function instanceOf (g: AORGraph, psi: string[]): Instance {
+export function instanceOf (g: GraphLike, psi: string[]): Instance {
   const members = g.instance(psi) // AORG.instance already includes ancestor closure
   const hs = [...members].sort().map(h => new Uint8Array(Buffer.from(h, 'hex')))
   const root = hs.length === 0 ? dsha256(utf8('empty-instance')) : merkleRoot(hs)
@@ -47,7 +54,7 @@ export function verifyDelegation (pub: PublicKey, inst: Instance, expiry: number
  * a member is itself a member), delegation valid + unexpired, and the signed
  * root recomputes from the member set. */
 export function verifyInstance (
-  g: AORGraph,
+  g: GraphLike,
   inst: Instance,
   anchored: Map<string, { anchorTxid?: string }>, // h → GraphAnchor ref
   delegation: { pub: PublicKey, expiry: number, sig: string },
@@ -78,7 +85,7 @@ export function verifyInstance (
  * datalog engine over the instance's fact vertices using ONLY rules in R_q.
  * A goal derivable under the full R but not under R_q is reported not
  * entailed, with the derivation when entailed. */
-export function entails (g: AORGraph, inst: Instance, goal: string, rulesSubset: Set<string>, catalogue: Rule[]): { entailed: boolean, derivation: string[] } {
+export function entails (g: GraphLike, inst: Instance, goal: string, rulesSubset: Set<string>, catalogue: Rule[]): { entailed: boolean, derivation: string[] } {
   const facts: Fact[] = [...inst.members].flatMap(h => {
     const v = g.vertices.get(h)
     if (!v || v.kind === 'derived' || v.kind === 'refinement') return []

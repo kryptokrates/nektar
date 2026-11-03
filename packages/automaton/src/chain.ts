@@ -9,7 +9,7 @@ import { MAMEM_AUTOMATON_ARTIFACT } from '@mamem/contracts'
 import { MamemProvider } from '@mamem/anchor'
 import { hash160, toHex, fromHex } from '@mamem/core'
 import type { Broadcaster, Funder } from '@mamem/chain'
-import { AutomatonError, deltaTable, deltaPath, finalTable, finalPath, type AutomatonDef, type FinalTable } from './index.js'
+import { AutomatonError, deltaTable, deltaPath, finalTable, finalPath, type AutomatonDef, type FinalTable } from './core.js'
 
 export interface DecodedAutomaton { q: number, deltaRoot: string, ownerPkh: string, n: number, lastOut: string, finalRoot: string, halted: boolean }
 export interface AutomatonHead { tx: Transaction, vout: number, state: DecodedAutomaton }

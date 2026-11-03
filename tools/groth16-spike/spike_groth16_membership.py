@@ -10,14 +10,14 @@ is publicly readable in the locking script itself (consumers of a claim or
 verdict can fetch the verifier tx and check which statement it binds).
 
 Run from zkscript checkout:
-    .venv312/Scripts/python <mamem>/tools/groth16-spike/spike_groth16_membership.py <path>/zkscript <mamem>
+    .venv312/Scripts/python <nektar>/tools/groth16-spike/spike_groth16_membership.py <path>/zkscript <nektar>
 """
 import json
 import sys
 from pathlib import Path
 
 ZKSCRIPT = Path(sys.argv[1]).resolve()
-MAMEM = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else Path("../..").resolve()
+NEKTAR = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else Path("../..").resolve()
 sys.path.insert(0, str(ZKSCRIPT))
 
 from elliptic_curves.instantiations.bls12_381.bls12_381 import (
@@ -33,7 +33,7 @@ from src.zkscript.script_types.unlocking_keys.groth16 import Groth16UnlockingKey
 from src.zkscript.util.utility_scripts import nums_to_script
 
 OUT = Path(__file__).resolve().parent / "out"
-CIRCUIT = MAMEM / "circuits" / "membership"
+CIRCUIT = NEKTAR / "circuits" / "membership"
 
 proof = ProofBls12381.deserialise(json.load(open(CIRCUIT / "proof_le/proof.json"))["proof"])
 vk = VerifyingKeyBls12381.deserialise(json.load(open(CIRCUIT / "proof_le/verifying_key.json"))["verifying_key"])
@@ -113,7 +113,7 @@ print(f"tx_engine evaluate (membership proof): {'PASS' if ok else 'FAIL'}")
 (OUT / "unlock.hex").write_text(ub.hex())
 (OUT / "meta-membership.json").write_text(json.dumps({
     "curve": "bls12_381",
-    "circuit": "mamem sha256d membership, depth 4 (16-leaf), root baked as constant",
+    "circuit": "nektar sha256d membership, depth 4 (16-leaf), root baked as constant",
     "root": params["root"], "index": index,
     "lock_bytes": len(lb), "unlock_bytes": len(ub),
     "push_only": pushes_only, "engine_ok": ok,

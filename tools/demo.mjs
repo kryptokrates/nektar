@@ -9,10 +9,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const PORT = Number(process.env.MAMEM_DEMO_PORT ?? 18090)
+const PORT = Number(process.env.NEKTAR_DEMO_PORT ?? 18090)
 const base = `http://127.0.0.1:${PORT}`
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const dir = mkdtempSync(join(tmpdir(), 'mamem-demo-'))
+const dir = mkdtempSync(join(tmpdir(), 'nektar-demo-'))
 
 const post = async (tool, args) => {
   const r = await fetch(`${base}/v1/tools/${tool}`, {
@@ -24,9 +24,9 @@ const post = async (tool, args) => {
   return j
 }
 
-console.log('mamem demo — mock network (offline, auto-mined), nothing is spent\n')
+console.log('nektar demo — mock network (offline, auto-mined), nothing is spent\n')
 const child = spawn(process.execPath, [join(root, 'packages/mcp/dist/src/bin.js')], {
-  env: { ...process.env, MAMEM_NETWORK: 'mock', MAMEM_HTTP_PORT: String(PORT), MAMEM_DATA_DIR: dir },
+  env: { ...process.env, NEKTAR_NETWORK: 'mock', NEKTAR_HTTP_PORT: String(PORT), NEKTAR_DATA_DIR: dir },
   stdio: ['ignore', 'pipe', 'inherit']
 })
 child.stdout.resume() // keep the child's logs out of the demo output
@@ -36,13 +36,13 @@ try {
     await new Promise(r => setTimeout(r, 250))
     if (i === 79) throw new Error('instance did not come up — is the build current? (pnpm -r build)')
   }
-  await post('remember', { shard: 'guide', data: 'mamem anchors encrypted, provenance-signed agent memory on BSV' })
+  await post('remember', { shard: 'guide', data: 'nektar anchors encrypted, provenance-signed agent memory on BSV' })
   await post('remember', { shard: 'guide', data: 'every grounded answer commits a receipt anyone can verify' })
   await post('anchor', { shard: 'guide' })
   await new Promise(r => setTimeout(r, 1500)) // mock BUMP attach tick is 1s
 
   const r = await post('groundedAnswer', { claims: [
-    { text: 'mamem anchors encrypted, provenance-signed agent memory on BSV', cites: [{ shard: 'guide', seq: 0 }] },
+    { text: 'nektar anchors encrypted, provenance-signed agent memory on BSV', cites: [{ shard: 'guide', seq: 0 }] },
     { text: 'and it reads minds', cites: [] } // ungrounded — watch it get stripped
   ] })
 

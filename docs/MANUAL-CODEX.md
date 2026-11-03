@@ -1,4 +1,4 @@
-# mamem for Codex — the complete manual
+# nektar for Codex — the complete manual
 
 You're connecting your agent to a memory it **cannot silently rewrite**,
 answers that arrive **pruned to what provable records support**, and a
@@ -30,7 +30,7 @@ public testnet (real transactions, test coins).
 
 ## What you get here instead
 
-| | today | with mamem |
+| | today | with nektar |
 |---|---|---|
 | **Memory** | mutable, vendor-held | append-only log; every batch anchors a Merkle root on-chain — edits break the proofs |
 | **Answers** | asserted | `groundedAnswer` strips every claim it can't derive from verified fragments — the answer is *pruned* to what records support |
@@ -58,7 +58,7 @@ that it's *true*. Model identity is *declared*, not zkML-proven.
 ### A — Watch + verify (zero setup)
 
 Open this on your phone:
-`http://167.233.174.91:8080/v1/verify?r=mamemr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
+`http://167.233.174.91:8080/v1/verify?r=nektarr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
 
 That's a real paid-answer receipt minted on the live box: the committed
 answer, the cited records, the `paid` check naming the settlement tx.
@@ -70,14 +70,14 @@ Ask me (the operator) for the **bearer token** — it gates `/mcp`, which
 is the only thing that isn't public. In `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.mamem]
+[mcp_servers.nektar]
 url = "http://167.233.174.91:8080/mcp"
-bearer_token_env_var = "MAMEM_HTTP_TOKEN"
+bearer_token_env_var = "NEKTAR_HTTP_TOKEN"
 ```
 
 ```sh
-setx MAMEM_HTTP_TOKEN <token>     # Windows: persists to your user env
-# or: export MAMEM_HTTP_TOKEN=<token>  (per-shell)
+setx NEKTAR_HTTP_TOKEN <token>     # Windows: persists to your user env
+# or: export NEKTAR_HTTP_TOKEN=<token>  (per-shell)
 ```
 
 Codex picks up `AGENTS.md` from the project root automatically — this
@@ -124,40 +124,40 @@ One tx pays for exactly one call — invoice-tagged, replay-protected.
 ### D — Your own instance (offline, zero funds)
 
 ```sh
-git clone https://github.com/nedzof/merkle-automaton && cd merkle-automaton
+git clone https://github.com/nedzof/nektar && cd merkle-automaton
 pnpm install && pnpm -r build
 ```
 
 `~/.codex/config.toml` (HTTP mode — also gives you `/v1/verify`):
 
 ```toml
-[mcp_servers.mamem]
+[mcp_servers.nektar]
 url = "http://localhost:8080/mcp"
 ```
 
 ```sh
-MAMEM_HTTP_PORT=8080 MAMEM_NETWORK=mock node packages/mcp/dist/src/bin.js
+NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=mock node packages/mcp/dist/src/bin.js
 ```
 
 Or pure stdio (no port, Codex spawns it):
 
 ```toml
-[mcp_servers.mamem]
+[mcp_servers.nektar]
 command = "node"
 args = ["<abs path>/packages/mcp/dist/src/bin.js"]
-env = { MAMEM_NETWORK = "mock" }
+env = { NEKTAR_NETWORK = "mock" }
 ```
 
 `mock` is fully offline — the simulated chain auto-mines, receipts mint
 and verify, anchors exist on the mock ledger (honest caveat: they
-aren't on a public chain). `MAMEM_NETWORK=regtest` upgrades to a local
+aren't on a public chain). `NEKTAR_NETWORK=regtest` upgrades to a local
 Teranode; `ttn` to the public testnet.
 
 ## The receipt auto-check (optional, local runs)
 
 Codex `notify` fires on each completed turn —
 `integrations/codex/verify-notify.mjs` greps the last message for
-`mamemr1.` tokens, verifies each against `/v1/verify`, and appends to
+`nektarr1.` tokens, verifies each against `/v1/verify`, and appends to
 `codex-receipts.log`. It's fire-and-forget (it can flag failures, not
 block the turn — honest boundary vs Claude Code's Stop hook). Setup:
 `integrations/codex/README.md` + `config-snippet.toml`.
@@ -183,7 +183,7 @@ Full list: `tools/list` over `/mcp`, or `GET /v1/tools` on the box.
 ## Honest boundaries — say these too
 
 - **Testnet.** Real consensus, real txs, test coins. Mainnet is the
-  same code path, gated (`MAMEM_MAINNET_CONFIRM` + spend caps).
+  same code path, gated (`NEKTAR_MAINNET_CONFIRM` + spend caps).
 - **"Accepted" ≠ "mined".** A payment shows `RECEIVED` then mines in a
   block; chained unconfirmed spends get parked (`PENDING_RETRY`) —
   spend confirmed utxos.

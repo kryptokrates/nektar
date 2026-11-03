@@ -4,11 +4,11 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
-import type { MamemMemory } from './memory.js'
+import type { NektarMemory } from './memory.js'
 import { visibleTools, callTool } from './server.js'
 
 export const INSTRUCTIONS = [
-  'mamem is verifiable, encrypted agent memory anchored on BSV.',
+  'nektar is verifiable, encrypted agent memory anchored on BSV.',
   'Before answering a factual question, call `recall` (or use the `grounded-answer` prompt) and answer only from items whose check is verified.',
   'For a verifiable answer, pass your draft claims to `groundedAnswer`: every claim must cite a verified fragment and be quoted or entailed — ungrounded text is stripped and an answer receipt is anchored.',
   'When `groundedAnswer`/`commitReceipt` returns receiptToken, end the answer with a one-line footer `receipt: <receiptToken>` and the `verify:` URL — anyone can scan it at /v1/verify to check the answer was committed and derivable.',
@@ -23,8 +23,8 @@ const DESTRUCTIVE = new Set(['rotate', 'revoke'])
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
 
-export function createMcpServer (mem: MamemMemory, ops?: import('./server.js').ToolCtx['ops']): McpServer {
-  const server = new McpServer({ name: 'mamem', version: '0.2.0' }, { instructions: INSTRUCTIONS, capabilities: { tools: {}, resources: {}, prompts: {} } })
+export function createMcpServer (mem: NektarMemory, ops?: import('./server.js').ToolCtx['ops']): McpServer {
+  const server = new McpServer({ name: 'nektar', version: '0.2.0' }, { instructions: INSTRUCTIONS, capabilities: { tools: {}, resources: {}, prompts: {} } })
   const low = server.server
   low.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: visibleTools().map(t => ({
@@ -45,7 +45,7 @@ export function createMcpServer (mem: MamemMemory, ops?: import('./server.js').T
     }
   })
 
-  server.registerResource('record', new ResourceTemplate('mamem://record/{shard}/{seq}', { list: undefined }),
+  server.registerResource('record', new ResourceTemplate('nektar://record/{shard}/{seq}', { list: undefined }),
     { title: 'Record proof status', description: 'Verification result and anchor of one record (no plaintext)', mimeType: 'application/json' },
     async (uri, { shard, seq }) => {
       const s = String(shard); const n = Number(seq)
@@ -54,7 +54,7 @@ export function createMcpServer (mem: MamemMemory, ops?: import('./server.js').T
       const pr = await mem.prove(s, n)
       return { contents: [{ uri: uri.href, mimeType: 'application/json', text: json({ shard: s, seq: n, state: rec.state, level: rec.level ?? 0, anchorTxid: rec.anchorTxid ?? null, proof: pr.result, status: await mem.anchorStatus(s, n) }) }] }
     })
-  server.registerResource('checkpoint', new ResourceTemplate('mamem://checkpoint/{shard}', { list: undefined }),
+  server.registerResource('checkpoint', new ResourceTemplate('nektar://checkpoint/{shard}', { list: undefined }),
     { title: 'Latest signed checkpoint', description: 'LOG-007 checkpoint + log public key', mimeType: 'application/json' },
     async (uri, { shard }) => {
       const cp = mem.checkpoints(String(shard)).at(-1)
@@ -82,7 +82,7 @@ export function createMcpServer (mem: MamemMemory, ops?: import('./server.js').T
 
 /** MCP over stdio (official SDK) — the entry bin.ts uses. Lives here (not
  *  server.ts) so the tool layer never imports the transport layer. */
-export async function serveStdio (mem: import('./memory.js').MamemMemory, ops?: import('./server.js').ToolCtx['ops']): Promise<void> {
+export async function serveStdio (mem: import('./memory.js').NektarMemory, ops?: import('./server.js').ToolCtx['ops']): Promise<void> {
   const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js')
   await createMcpServer(mem, ops).connect(new StdioServerTransport())
 }

@@ -9,7 +9,7 @@ import { openRuntime, configFromEnv } from '../../packages/mcp/dist/src/index.js
 import { proveMembershipStark, verifyZkm2 } from '../../packages/zk/dist/src/stark/index.js'
 const env = p => existsSync(p) ? Object.fromEntries(readFileSync(p, 'utf8').split(/\r?\n/).map(l => l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean).map(m => [m[1], m[2].trim()])) : {}
 const local = env('.env'); const qs = env('infra/teranode-quickstart/.env')
-const rt = await openRuntime(configFromEnv({ MAMEM_NETWORK: 'regtest', MAMEM_DATA_DIR: mkdtempSync(join(tmpdir(), 'stark-')), MAMEM_FUND_WIF: local.MAMEM_REGTEST_WIF, MAMEM_RPC_PASS: qs.rpc_pass, MAMEM_RPC_USER: qs.rpc_user, MAMEM_AUTOMINE: '1', MAMEM_CONFIRM_MS: '1500' }))
+const rt = await openRuntime(configFromEnv({ NEKTAR_NETWORK: 'regtest', NEKTAR_DATA_DIR: mkdtempSync(join(tmpdir(), 'stark-')), NEKTAR_FUND_WIF: local.NEKTAR_REGTEST_WIF, NEKTAR_RPC_PASS: qs.rpc_pass, NEKTAR_RPC_USER: qs.rpc_user, NEKTAR_AUTOMINE: '1', NEKTAR_CONFIRM_MS: '1500' }))
 const S = `stark-${randomBytes(3).toString('hex')}`
 for (const d of ['alpha fact', 'beta fact', 'gamma fact']) await rt.mem.remember(S, d, { source: 'spike' })
 const a = await rt.mem.anchorShard(S)

@@ -17,12 +17,12 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { AIINF_DEMO, demoAttestation, type InferenceAttestation } from '@mamem/zk'
-import type { MamemMemory } from './memory.js'
+import { AIINF_DEMO, demoAttestation, type InferenceAttestation } from '@nektar/zk'
+import type { NektarMemory } from './memory.js'
 
 /** emitted verifier artifacts — dev-local output of spike_groth16_aiinf.py
  *  (gitignored; the shipped proof is nChain's, the setup is dev-grade) */
-const ARTIFACT_DIR = () => process.env.MAMEM_GROTH16_OUT ?? fileURLToPath(new URL('../../../../tools/groth16-spike/out/', import.meta.url))
+const ARTIFACT_DIR = () => process.env.NEKTAR_GROTH16_OUT ?? fileURLToPath(new URL('../../../../tools/groth16-spike/out/', import.meta.url))
 
 export interface AttestInferenceResult {
   attestation: InferenceAttestation
@@ -32,7 +32,7 @@ export interface AttestInferenceResult {
   note?: string
 }
 
-export async function attestInference (mem: MamemMemory, args: { input?: number[], output?: number, onchain?: boolean } = {}): Promise<AttestInferenceResult> {
+export async function attestInference (mem: NektarMemory, args: { input?: number[], output?: number, onchain?: boolean } = {}): Promise<AttestInferenceResult> {
   const att = demoAttestation(args.input ?? AIINF_DEMO.input, args.output ?? AIINF_DEMO.output)
 
   const dir = ARTIFACT_DIR()

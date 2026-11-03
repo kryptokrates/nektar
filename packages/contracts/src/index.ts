@@ -1,37 +1,37 @@
-// @mamem/contracts — Rúnar MamemAnchor artifact + state codec.
-// The compiled artifact is committed (packages/contracts/MamemAnchor.json);
+// @nektar/contracts — Rúnar NektarAnchor artifact + state codec.
+// The compiled artifact is committed (packages/contracts/NektarAnchor.json);
 // `pnpm compile:contract` regenerates it and must produce identical bytes
 // (covered by the reproduce gate).
 //
 // ANC-006 / GOAL-v6 S6.2 (Metanet flag): v3 anchors gain an OPTIONAL leading
 // flag — the state payload's first push may be 0x4D455441 ("META"). New
 // deployments emit it (metaFlag state field); flag-absent anchors produced by
-// the pre-flag artifact (MamemAnchorV3.json) stay decodable byte-for-byte.
+// the pre-flag artifact (NektarAnchorV3.json) stay decodable byte-for-byte.
 import { createRequire } from 'node:module'
-import type { AnchorData, Bytes } from '@mamem/core'
-import { sha256, dsha256, utf8, toHex, fromHex, chainRp, TAG_RPRIME as TAG_RPRIME_BYTES, hash160, META_FLAG } from '@mamem/core'
+import type { AnchorData, Bytes } from '@nektar/core'
+import { sha256, dsha256, utf8, toHex, fromHex, chainRp, TAG_RPRIME as TAG_RPRIME_BYTES, hash160, META_FLAG } from '@nektar/core'
 
 const require = createRequire(import.meta.url)
-export const MAMEM_ANCHOR_ARTIFACT = require('../../MamemAnchor.json')
+export const NEKTAR_ANCHOR_ARTIFACT = require('../../NektarAnchor.json')
 /** the pre-flag (v3, flag-absent) artifact — kept so every anchor ever
  *  deployed stays decodable and spendable */
-export const MAMEM_ANCHOR_V3_ARTIFACT = require('../../MamemAnchorV3.json')
-export const MAMEM_AUTOMATON_ARTIFACT = require('../../MamemAutomaton.json')
+export const NEKTAR_ANCHOR_V3_ARTIFACT = require('../../NektarAnchorV3.json')
+export const NEKTAR_AUTOMATON_ARTIFACT = require('../../NektarAutomaton.json')
 /** GOAL-v7 V1: covenant spend guard — caps as consensus rules. */
-export const MAMEM_FEEVAULT_ARTIFACT = require('../../MamemFeeVault.json')
+export const NEKTAR_FEEVAULT_ARTIFACT = require('../../NektarFeeVault.json')
 /** GOAL-v7 V2: unforkable sequential checkpoint chain + time-locked bond. */
-export const MAMEM_CHECKPOINTBOND_ARTIFACT = require('../../MamemCheckpointBond.json')
+export const NEKTAR_CHECKPOINTBOND_ARTIFACT = require('../../NektarCheckpointBond.json')
 /** GOAL-v7 V3: atomic payment-for-disclosure escrow. */
 export const DISCLOSURESALE_ARTIFACT = require('../../DisclosureSale.json')
 
 /** ANC-006 Metanet flag: the first push of the anchor output's data payload */
-export { META_FLAG } from '@mamem/core'
+export { META_FLAG } from '@nektar/core'
 export const META_FLAG_HEX = '4d455441' // toHex(META_FLAG)
 /** wire form: a 4-byte push — <0x04> 'META' — leading the OP_RETURN state */
 const META_PUSH_HEX = `04${META_FLAG_HEX}`
 
-// 'mamem-rprime' — same domain tag the contract pushes into R' computations.
-export { TAG_RPRIME } from '@mamem/core'
+// 'nektar-rprime' — same domain tag the contract pushes into R' computations.
+export { TAG_RPRIME } from '@nektar/core'
 
 /** R' computation identical to the contract's hash256(tag‖Rp‖R‖size_le8). */
 // Contract R' computation: contract's hash256(tag‖Rp‖R‖size_le8) ==
@@ -46,14 +46,14 @@ export function isValidAnchor (d: Pick<DecodedAnchor,'tag'>): boolean {
 }
 
 /**
- * Decode a MamemAnchor v3 locking script. Authenticated byte-for-byte: parse
+ * Decode a NektarAnchor v3 locking script. Authenticated byte-for-byte: parse
  * the state suffix after OP_RETURN ([flag?] owner|n|size|R|Rp|len|tag|len|pkh),
  * then rebuild the EXPECTED script via runar — flagged against the current
  * artifact, flag-absent against the pre-flag artifact — and require exact
  * equality. Anything else (including v2 anchors with a poseidonRoot field)
  * returns null.
  */
-export function decodeMamemAnchor (scriptHex: string): DecodedAnchor | null {
+export function decodeNektarAnchor (scriptHex: string): DecodedAnchor | null {
   const hex = scriptHex.startsWith('0x') ? scriptHex.slice(2) : scriptHex
   // 1. state suffix: the last OP_RETURN whose suffix parses and ends the
   // script — layout: [flag(4B)?] genesisOwner(33B)|n(8)|size(8)|R(32)|Rp(32)|tagLen|tag|pkhLen|pkh
@@ -112,14 +112,14 @@ export interface AnchorAuthorship {
 }
 /** Extract + verify σ_n from an anchor spend. `spentAnchorScript` is the
  *  locking script of the anchor UTXO being spent (decoded to recover ownerPkh
- *  and prove the input really spends a MamemAnchor). Returns null when the
+ *  and prove the input really spends a NektarAnchor). Returns null when the
  *  input doesn't carry a recognizable owner sig/pubKey pair. */
 export function extractAnchorAuthorship (
   spendTx: { inputs: Array<{ unlockingScript?: { chunks: Array<{ op: number, data?: number[] | Uint8Array }> } }> },
   spentAnchorScript: string,
   inputIndex = 0
 ): AnchorAuthorship | null {
-  const dec = decodeMamemAnchor(spentAnchorScript)
+  const dec = decodeNektarAnchor(spentAnchorScript)
   if (!dec) return null
   const chunks = spendTx.inputs[inputIndex]?.unlockingScript?.chunks
   if (!chunks || chunks.length < 3) return null
@@ -155,7 +155,7 @@ let RC: any = null
 function buildScript (pub: string, pkh: string, n: bigint, size: bigint, R: string, Rp: string, tag: string, metanet = true): string {
   if (!RC) RC = require('runar-sdk')
   const args = metanet ? [pub, pkh, META_FLAG_HEX, n, size, R, Rp, tag] : [pub, pkh, n, size, R, Rp, tag]
-  const c = new RC.RunarContract(metanet ? MAMEM_ANCHOR_ARTIFACT : MAMEM_ANCHOR_V3_ARTIFACT, args)
+  const c = new RC.RunarContract(metanet ? NEKTAR_ANCHOR_ARTIFACT : NEKTAR_ANCHOR_V3_ARTIFACT, args)
   return c.getLockingScript()
 }
 function readLe8 (hex8bytes: string): bigint {

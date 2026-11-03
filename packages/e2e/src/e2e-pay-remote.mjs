@@ -1,19 +1,19 @@
-// Remote paid-flow e2e — drives a DEPLOYED mamem HTTP server end-to-end over
+// Remote paid-flow e2e — drives a DEPLOYED nektar HTTP server end-to-end over
 // the public wire: MCP tools/call → 402 invoice → locally-signed settlement
 // tx (payer WIF, BEEF) → paid call → receipt commits the txid → public
 // /v1/verify → the payment tx resolvable on the real network.
 //   node packages/e2e/src/e2e-pay-remote.mjs
-// env: MAMEM_REMOTE_URL (default http://167.233.174.91:8080),
-//      MAMEM_HTTP_TOKEN (bearer), MAMEM_FUND_WIF or the ttn-data keystore +
-//      MAMEM_KEY_PASSPHRASE for the payer, MAMEM_ARC_URL for the visibility check.
+// env: NEKTAR_REMOTE_URL (default http://167.233.174.91:8080),
+//      NEKTAR_HTTP_TOKEN (bearer), NEKTAR_FUND_WIF or the ttn-data keystore +
+//      NEKTAR_KEY_PASSPHRASE for the payer, NEKTAR_ARC_URL for the visibility check.
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { readFileSync, existsSync } from 'node:fs'
 import { buildPaymentTx } from '../../mcp/dist/src/payclient.js'
 import { readKeyFile } from '../../mcp/dist/src/keystore.js'
 
-const BASE = process.env.MAMEM_REMOTE_URL ?? 'http://167.233.174.91:8080'
-const TOKEN = process.env.MAMEM_HTTP_TOKEN ?? ''
-const ARC = process.env.MAMEM_ARC_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
+const BASE = process.env.NEKTAR_REMOTE_URL ?? 'http://167.233.174.91:8080'
+const TOKEN = process.env.NEKTAR_HTTP_TOKEN ?? ''
+const ARC = process.env.NEKTAR_ARC_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
 const check = (ok, label) => { console.log(` ${ok ? '✔' : '✗ FAIL'} ${label}`); if (!ok) process.exit(1) }
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -51,8 +51,8 @@ check(!!x402, 'x402 discovery catalog served')
 if (x402) { console.log(` network=${x402.network} scheme=${x402.scheme} priced=${x402.resources.map(r => r.url).join(',')}`); check(!/mock/.test(x402.network), 'server is NOT on mock — real network required for honest settlement') }
 
 // ── 1) payer = the local ttn fund key's spendable utxo (a real public tx spends it)
-const pass = process.env.MAMEM_KEY_PASSPHRASE ?? readFileSync('.state/ttn-passphrase', 'utf8').trim()
-const wif = process.env.MAMEM_FUND_WIF ?? JSON.parse(readKeyFile('.state/ttn-data/fee.key.json', pass, true)).wif
+const pass = process.env.NEKTAR_KEY_PASSPHRASE ?? readFileSync('.state/ttn-passphrase', 'utf8').trim()
+const wif = process.env.NEKTAR_FUND_WIF ?? JSON.parse(readKeyFile('.state/ttn-data/fee.key.json', pass, true)).wif
 const payer = PrivateKey.fromWif(wif)
 const res = JSON.parse(readFileSync('.state/ttn-data/reserve.json', 'utf8'))
 const spent = new Set(res.spent ?? [])

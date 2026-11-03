@@ -3,18 +3,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { diff, apply, revert, decodeDelta, encodeDelta, DeltaError, utf8 } from '@mamem/core'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { signProvenance } from '@mamem/log'
-import { makeRotationCert, verifyAuthorship } from '@mamem/identity'
-import { always, eventually, obligation, causalClosure, type TimedFact } from '@mamem/reasoning'
-import { axiomHash, ontologyEntails, Jurisdictions, validByPrecedent, type Axiom } from '@mamem/graph'
-import { MamemMemory } from '@mamem/mcp'
+import { diff, apply, revert, decodeDelta, encodeDelta, DeltaError, utf8 } from '@nektar/core'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { signProvenance } from '@nektar/log'
+import { makeRotationCert, verifyAuthorship } from '@nektar/identity'
+import { always, eventually, obligation, causalClosure, type TimedFact } from '@nektar/reasoning'
+import { axiomHash, ontologyEntails, Jurisdictions, validByPrecedent, type Axiom } from '@nektar/graph'
+import { NektarMemory } from '@nektar/mcp'
 
 function world () {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(20); for (const t of funder.parents) chain.registerParent(t)
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const settle = (s: string) => { chain.mine(1); const l = mem.tailLink(s); if (l) mem.confirmAnchor(s, l.txid) }
   return { mem, settle }
 }
@@ -76,7 +76,7 @@ test('§19 epoch binding: authorship survives rotation; wrong epoch / after expi
   assert.match(verifyAuthorship(g, 1, 1500, g, certs).reason!, /not the epoch-1 key/)
   assert.deepEqual(verifyAuthorship(k1.toPublicKey().toString(), 1, 1500, g, certs), { ok: true })
   assert.match(verifyAuthorship(k1.toPublicKey().toString(), 1, 900, g, certs).reason!, /outside/, 'before certification')
-  // through MamemMemory: a signed write keeps its epoch and verifies after later rotations
+  // through NektarMemory: a signed write keeps its epoch and verifies after later rotations
   const { mem } = world()
   const p = signProvenance(k1, utf8('epoch-1 statement'), { source: 'op', time: 1500, signature: new Uint8Array(0), modelId: 'm' })
   await mem.remember('a', 'epoch-1 statement', { ...p, sourcePub: k1.toPublicKey().toString(), epoch: 1 })
@@ -117,7 +117,7 @@ test('§9 memory as law: anchored DL entailment, jurisdiction graphs, precedent'
 })
 
 test('§16 delegation map: sub-decisions signed by delegating agents; tampering fails', async () => {
-  const { makeDelegation, verifyReceiptDelegations, commitReceipt } = await import('@mamem/reasoning')
+  const { makeDelegation, verifyReceiptDelegations, commitReceipt } = await import('@nektar/reasoning')
   const sub = PrivateKey.fromRandom()
   const answer = 'approved transfer of EUR 500'
   const receipt = {

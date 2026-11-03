@@ -1,4 +1,4 @@
-// mamem membership circuit — "I know leaf L, index i and a sha256d Merkle
+// nektar membership circuit — "I know leaf L, index i and a sha256d Merkle
 // path such that fold(L, path, i) == R", where R is BAKED as a circuit
 // constant: the verifying key itself commits to the statement. A verifier
 // UTXO carrying this vk is spendable only by a valid proof *for this R* —

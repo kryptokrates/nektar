@@ -1,11 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { dsha256, utf8 } from '@mamem/core'
-import { MockChain, MockFunder } from '@mamem/chain'
+import { dsha256, utf8 } from '@nektar/core'
+import { MockChain, MockFunder } from '@nektar/chain'
 import { AnchorChain } from '../src/runarchain.js'
-import { Smt, verifyProof } from '@mamem/identity'
-import { verifyCertChain, makeRotationCert, type RotationCert } from '@mamem/identity'
+import { Smt, verifyProof } from '@nektar/identity'
+import { verifyCertChain, makeRotationCert, type RotationCert } from '@nektar/identity'
 
 test('smt revocation: anchored root verifies a status proof; stale root fails', async () => {
   const chain = new MockChain()
@@ -39,8 +39,8 @@ test('rotated anchor chain verifies alongside the cert chain', async () => {
   assert.equal(r?.activePub, newKey.toPublicKey().toString())
 })
 
-import { BatchLog, MemoryShardStore } from '@mamem/log'
-import { reconstructRoot } from '@mamem/core'
+import { BatchLog, MemoryShardStore } from '@nektar/log'
+import { reconstructRoot } from '@nektar/core'
 
 test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusion', async () => {
   const chain = new MockChain()
@@ -67,7 +67,7 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
   assert.equal(verifyCertChain(k0.toPublicKey().toString(), [cert, { ...outsider, index: 1 }], { inclusionCheck: inLog }), null)
 })
 
-import { issueDisclosure, fieldRoot, fieldPath, randSalt, fieldsCommitment, type FieldCommitment } from '@mamem/identity'
+import { issueDisclosure, fieldRoot, fieldPath, randSalt, fieldsCommitment, type FieldCommitment } from '@nektar/identity'
 
 test('DIS-006: disclosure event logged as a leaf and anchored', async () => {
   const chain = new MockChain()

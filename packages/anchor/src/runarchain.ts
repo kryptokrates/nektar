@@ -1,17 +1,17 @@
-// AnchorChain v2 — one mamem anchor UTXO per shard, enforced by the Rúnar
-// stateful contract `MamemAnchor` (packages/contracts). No hand-written
+// AnchorChain v2 — one nektar anchor UTXO per shard, enforced by the Rúnar
+// stateful contract `NektarAnchor` (packages/contracts). No hand-written
 // script: locking/unlocking is built by runar-sdk; funding inputs use the
 // SDK P2PKH template (plain fee funding is allowed).
-import { makeRotationCert } from "@mamem/identity"
+import { makeRotationCert } from "@nektar/identity"
 import { Transaction, PrivateKey, LockingScript, P2PKH } from '@bsv/sdk'
 import { RunarContract, LocalSigner } from 'runar-sdk'
 import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 // default burstLimit=100: measured 100 unconfirmed contract anchors on
 // regtest with no limit (see spikes/depth-contract.mjs); conservative default.
-import { MAMEM_ANCHOR_ARTIFACT, MAMEM_ANCHOR_V3_ARTIFACT, META_FLAG_HEX, contractRp, decodeMamemAnchor, TAG_RPRIME } from '@mamem/contracts'
+import { NEKTAR_ANCHOR_ARTIFACT, NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX, contractRp, decodeNektarAnchor, TAG_RPRIME } from '@nektar/contracts'
 const TAG_HEX = toHex(TAG_RPRIME)
-import { PROTOCOL_ID, dsha256, utf8, toHex, fromHex, expectedRp, type AnchorData, type Bytes } from '@mamem/core'
-import type { Broadcaster, BroadcastResult, Funder } from '@mamem/chain'
+import { PROTOCOL_ID, dsha256, utf8, toHex, fromHex, expectedRp, type AnchorData, type Bytes } from '@nektar/core'
+import type { Broadcaster, BroadcastResult, Funder } from '@nektar/chain'
 
 export interface Head {
   tx: Transaction
@@ -33,7 +33,7 @@ function bookFor (funder: object): FunderBook {
 }
 
 /** runar-sdk Provider backed by our Broadcaster/Funder (+ optional utxo feed). */
-export class MamemProvider implements Provider {
+export class NektarProvider implements Provider {
   network: 'testnet' = 'testnet'
   lastTx?: Transaction
   constructor (
@@ -145,12 +145,12 @@ export class AnchorChain {
   shardKey: PrivateKey // changes on rotate()
   private fundKey: PrivateKey
   private signer: LocalSigner
-  private provider: MamemProvider
+  private provider: NektarProvider
   private contract?: RunarContract
   private head?: Head
   private pendingHeads: Head[] = []
   private txById = new Map<string, Transaction>()
-  readonly rotationCerts: import("@mamem/identity").RotationCert[] = []
+  readonly rotationCerts: import("@nektar/identity").RotationCert[] = []
 
   constructor (
     shard: string,
@@ -169,7 +169,7 @@ export class AnchorChain {
     // key via prepareCall/finalizeCall. Shards therefore don't need their own
     // funders, and distinct shards get distinct owners (distinct shard ids).
     this.signer = new LocalSigner(fundKey.toHex())
-    this.provider = new MamemProvider(broadcaster, funder)
+    this.provider = new NektarProvider(broadcaster, funder)
     if (opts.feeRateSatPerKb !== undefined) this.provider.feeRate = opts.feeRateSatPerKb
     const rec = (tx: Transaction) => { this.ownAttempts.add(tx.id('hex')); this.txById.set(tx.id('hex'), tx) }
     this.provider.onAttempt = rec
@@ -194,10 +194,10 @@ export class AnchorChain {
   /** Restart: rehydrate from a persisted head tx (with its ancestry/BUMP via
    *  BEEF). The tx must decode as an authentic anchor of THIS owner; the next
    *  append spends exactly this UTXO — no new genesis, no fork. */
-  resume (headTx: Transaction, opts: { confirmed: boolean, certs?: import('@mamem/identity').RotationCert[] }): Head {
+  resume (headTx: Transaction, opts: { confirmed: boolean, certs?: import('@nektar/identity').RotationCert[] }): Head {
     if (this.getHead()) throw new Error('resume: chain already has a head')
-    const dec = decodeMamemAnchor(headTx.outputs[0]!.lockingScript.toHex())
-    if (!dec) throw new Error('resume: head tx output 0 is not an authentic MamemAnchor')
+    const dec = decodeNektarAnchor(headTx.outputs[0]!.lockingScript.toHex())
+    if (!dec) throw new Error('resume: head tx output 0 is not an authentic NektarAnchor')
     if (toHex(dec.ownerPkh) !== toHexPub160(this.ownerPub())) throw new Error('resume: head owner is not this shard key')
     const head: Head = { tx: headTx, vout: 0, data: { shard: dec.shard, n: dec.n, size: dec.size, R: dec.R, Rp: dec.Rp, ownerPkh: dec.ownerPkh } }
     if (opts.confirmed) this.head = head
@@ -222,7 +222,7 @@ export class AnchorChain {
   private acceptHead (tx: Transaction): AnchorResult {
     this.provider.markAccepted(tx)
     this.register(tx)
-    const dec = decodeMamemAnchor(tx.outputs[0]!.lockingScript.toHex())
+    const dec = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
     if (!dec) throw new Error('accepted tx: continuation output did not decode')
     const head: Head = { tx, vout: 0, data: { shard: dec.shard, n: dec.n, size: dec.size, R: dec.R, Rp: dec.Rp, ownerPkh: dec.ownerPkh } }
     this.pendingHeads.push(head)
@@ -292,12 +292,12 @@ export class AnchorChain {
       // genesis: deploy with n=0, Rp = contractRp(0, R, size)
       const Rp = contractRp(new Uint8Array(32), R, size)
       // ANC-006: new anchors carry the META flag as the state payload's first push
-      this.contract = new RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkhOf(pub), META_FLAG_HEX, 0n, BigInt(size), toHex(R), toHex(Rp), TAG_HEX])
+      this.contract = new RunarContract(NEKTAR_ANCHOR_ARTIFACT, [pub, pkhOf(pub), META_FLAG_HEX, 0n, BigInt(size), toHex(R), toHex(Rp), TAG_HEX])
       this.contract.connect(this.provider, this.signer)
       const d = await this.contract.deploy({ satoshis: 1 })
       const tx = this.provider.lastTx!
       this.register(tx)
-      const gdec = decodeMamemAnchor(tx.outputs[0]!.lockingScript.toHex())
+      const gdec = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
       const head: Head = { tx, vout: 0, data: gdec ? { shard: gdec.shard, n: gdec.n, size: gdec.size, R: gdec.R, Rp: gdec.Rp } : { shard: toHexPub160(pub), n: 0, size, R, Rp } }
       this.pendingHeads.push(head)
       return { tx, head }
@@ -315,7 +315,7 @@ export class AnchorChain {
     await contract.finalizeCall(prep, sigMap)
     const tx = this.provider.lastTx!
     this.register(tx)
-    const decoded = decodeMamemAnchor(tx.outputs[0]!.lockingScript.toHex())
+    const decoded = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
     if (!decoded) throw new Error('anchor: continuation output did not decode')
     const head: Head = { tx, vout: 0, data: { shard: decoded.shard, n: decoded.n, size: decoded.size, R: decoded.R, Rp: decoded.Rp, ownerPkh: decoded.ownerPkh } }
     this.pendingHeads.push(head)
@@ -355,7 +355,7 @@ export class AnchorChain {
     await contract.finalizeCall(prep, sigMap)
     const tx = this.provider.lastTx!
     this.register(tx)
-    const decoded = decodeMamemAnchor(tx.outputs[0]!.lockingScript.toHex())
+    const decoded = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
     if (!decoded) throw new Error('rotate: continuation output did not decode')
     const head: Head = { tx, vout: 0, data: { shard: decoded.shard, n: decoded.n, size: decoded.size, R: decoded.R, Rp: decoded.Rp, ownerPkh: decoded.ownerPkh } }
     this.pendingHeads.push(head)
@@ -366,12 +366,12 @@ export class AnchorChain {
     // every field comes from the decoded on-chain head (genesisOwner and
     // ownerPkh included) — never from local key state
     const script = cur.tx.outputs[cur.vout]!.lockingScript.toHex()
-    const dec = decodeMamemAnchor(script)
+    const dec = decodeNektarAnchor(script)
     if (!dec) throw new Error('freshContract: head output is not an authentic anchor')
     // ANC-006: flagged heads rehydrate the flagged artifact; pre-flag (v3)
     // heads keep their flag-absent layout — a fork of formats is impossible
     // because the contract itself serializes its continuation
-    const c = new RunarContract(dec.metanet ? MAMEM_ANCHOR_ARTIFACT : MAMEM_ANCHOR_V3_ARTIFACT,
+    const c = new RunarContract(dec.metanet ? NEKTAR_ANCHOR_ARTIFACT : NEKTAR_ANCHOR_V3_ARTIFACT,
       dec.metanet
         ? [dec.ownerPub, toHex(dec.ownerPkh), META_FLAG_HEX, BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), TAG_HEX]
         : [dec.ownerPub, toHex(dec.ownerPkh), BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), TAG_HEX])
@@ -461,7 +461,7 @@ function toHexPub160 (pub: string): string {
   return toHexPub160Impl(pub)
 }
 const pkhOf = toHexPub160
-import { hash160 } from '@mamem/core'
+import { hash160 } from '@nektar/core'
 function toHexPub160Impl (pub: string): string {
   return toHex(hash160(Uint8Array.from(Buffer.from(pub, 'hex'))))
 }

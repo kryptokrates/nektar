@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knex from 'knex'
 import { PrivateKey } from '@bsv/sdk'
-import { utf8, fromHex, eq } from '@mamem/core'
+import { utf8, fromHex, eq } from '@nektar/core'
 import { MemoryShardStore } from '../src/store.js'
 import { KnexShardStore } from '../src/knex-store.js'
 import { BatchLog } from '../src/batchlog.js'
@@ -35,7 +35,7 @@ for (const [name, makeStore] of [
     assert.equal(batch.n, 0)
     assert.equal(batch.size, 2)
     const proof = log.batchProof(batch, 1)
-    const { verifyProof } = await import('@mamem/core')
+    const { verifyProof } = await import('@nektar/core')
     assert.equal(verifyProof(batch.leaves[1]!, proof, batch.R), true)
 
     await log.markAnchored('s1', batch.n, 'aa'.repeat(32))

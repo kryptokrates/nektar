@@ -5,11 +5,11 @@
 // to ONE verifier, signed by the owner, with an expiry; the value can be
 // encrypted to the verifier via BRC-42 ECDH (multi-recipient key wrapping).
 import { PrivateKey, PublicKey, Signature, Point, BigNumber } from '@bsv/sdk'
-import { sha256, dsha256, concat, utf8, fromHex, type Bytes } from '@mamem/core'
-import { merkleRoot, merkleProof, reconstructRoot, type MerkleProof } from '@mamem/core'
+import { sha256, dsha256, concat, utf8, fromHex, type Bytes } from '@nektar/core'
+import { merkleRoot, merkleProof, reconstructRoot, type MerkleProof } from '@nektar/core'
 
-export const TAG_FIELD = utf8('mamem:field:v1')
-export const TAG_ENV = utf8('mamem:disclosure:v1')
+export const TAG_FIELD = utf8('nektar:field:v1')
+export const TAG_ENV = utf8('nektar:disclosure:v1')
 
 // --- DIS-001: per-field commitments -----------------------------------------
 export interface FieldCommitment { name: string, value: Bytes, salt: Bytes }
@@ -48,7 +48,7 @@ export function issueDisclosure (owner: PrivateKey, fields: FieldCommitment[], i
 }
 /** fragment content commits the field count WITH the root — a path with the
  * wrong index or length can't be substituted. */
-export const TAG_FIELDS = utf8('mamem:fields:v1')
+export const TAG_FIELDS = utf8('nektar:fields:v1')
 export function fieldsCommitment (fields: FieldCommitment[]): Bytes {
   const n4 = new Uint8Array(4); new DataView(n4.buffer).setUint32(0, fields.length, true)
   return sha256(concat(TAG_FIELDS, n4, fieldRoot(fields)))
@@ -76,9 +76,9 @@ export function verifyDisclosure (e: DisclosureEnvelope, ownerPub: string, verif
     ? { ok: true } : { ok: false, reason: 'field-path' }
 }
 /** verifyDisclosure + the anchored fragment check: `verifyAnchor` (injected —
- * @mamem/verify's verifyFragment) must confirm the fragment leaf is anchored
+ * @nektar/verify's verifyFragment) must confirm the fragment leaf is anchored
  * and committed to (fieldCount, fieldRoot) before the envelope is trusted.
- * Dependency-injected to keep @mamem/identity free of the verify→anchor cycle. */
+ * Dependency-injected to keep @nektar/identity free of the verify→anchor cycle. */
 export async function verifyDisclosureAnchored (
   e: DisclosureEnvelope, ownerPub: string, verifierPub: string,
   fieldCount: number, fieldRoot: Bytes, siblings: Bytes[], atTime: number,

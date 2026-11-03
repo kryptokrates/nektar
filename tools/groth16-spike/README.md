@@ -7,7 +7,7 @@ consensus — no watcher, no challenge window.
 ## What ran — V1: OUR circuit + validity claim (live regtest)
 
 1. **`circuits/membership/`** — arkworks Groth16 over BLS12-381 proving
-   **sha256d-Merkle membership** in a 16-leaf tree built with mamem's own
+   **sha256d-Merkle membership** in a 16-leaf tree built with nektar's own
    `dsha256` fold. Statement: "leaf ∈ root `eda3ef76…` at index 5"; the
    root is baked as a **circuit constant** so the verifying key commits
    to the statement. Dev trusted setup + prove inside a Linux rust
@@ -25,7 +25,7 @@ consensus — no watcher, no challenge window.
    `1d2a0a48…` + proof spend `a1d9ec35…` accepted, tampered unlock
    rejected, mined h8486.
 5. **`e2e-grothclaim-regtest.mjs`** — the **validity claim**:
-   `MamemGrothClaim.settleValid` pins the verifier UTXO as co-spent
+   `NektarGrothClaim.settleValid` pins the verifier UTXO as co-spent
    input1 (hashPrevouts, same pattern as `proveStage`). The claim's
    `ClaimVerdict` output can only exist if the proof verifies under
    consensus — claim-only spend and tampered-proof settle both rejected,
@@ -87,17 +87,17 @@ cd zkscript && python -m venv .venv312   # Python 3.12 REQUIRED (3.11 fails)
 .venv312/Scripts/pip install -r requirements.txt
 
 # circuit (Linux — no MSVC linker on this Windows host):
-node <mamem>/circuits/membership/gen-params.mjs            # tree + witnesses
-docker run --rm -v <mamem>/circuits/membership:/w -w /w rust:1-slim \
+node <nektar>/circuits/membership/gen-params.mjs            # tree + witnesses
+docker run --rm -v <nektar>/circuits/membership:/w -w /w rust:1-slim \
   sh -c 'apt-get update -qq && apt-get install -yqq pkg-config libssl-dev >/dev/null && cargo run --release'
 
 # artifacts + scripts:
-.venv312/Scripts/python <mamem>/tools/groth16-spike/be2le.py <mamem>/circuits/membership
-.venv312/Scripts/python <mamem>/tools/groth16-spike/spike_groth16_membership.py <path>/zkscript <mamem>
+.venv312/Scripts/python <nektar>/tools/groth16-spike/be2le.py <nektar>/circuits/membership
+.venv312/Scripts/python <nektar>/tools/groth16-spike/spike_groth16_membership.py <path>/zkscript <nektar>
 
-# live regtest (needs running Teranode stack + MAMEM_REGTEST_WIF):
-node <mamem>/packages/e2e/src/e2e-groth16-regtest.mjs      # verifier deploy+spend
-node <mamem>/packages/e2e/src/e2e-grothclaim-regtest.mjs   # validity claim settle
+# live regtest (needs running Teranode stack + NEKTAR_REGTEST_WIF):
+node <nektar>/packages/e2e/src/e2e-groth16-regtest.mjs      # verifier deploy+spend
+node <nektar>/packages/e2e/src/e2e-grothclaim-regtest.mjs   # validity claim settle
 ```
 
 Artifacts land in `out/` and `circuits/membership/proof*/` (gitignored;

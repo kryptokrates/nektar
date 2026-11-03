@@ -1,13 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { AnchorChain } from '@mamem/anchor'
-import { BatchLog, MemoryShardStore } from '@mamem/log'
-import { dsha256, utf8 } from '@mamem/core'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { AnchorChain } from '@nektar/anchor'
+import { BatchLog, MemoryShardStore } from '@nektar/log'
+import { dsha256, utf8 } from '@nektar/core'
 import {
   canonicalizePolicySet, parseCheck, authorize, proveLevelIsolation,
-  makeReceipt, receiptMatchesAnchor, MAMEM_SCHEMA
+  makeReceipt, receiptMatchesAnchor, NEKTAR_SCHEMA
 } from '../src/index.js'
 
 const POLICY = `

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { sha256, utf8, eq, toHex } from '@mamem/core'
+import { sha256, utf8, eq, toHex } from '@nektar/core'
 import { canonicalKeyID, deriveFragmentKey, encryptFragment, decryptFragment, shredKey, deriveLevelKey, grantLevels } from '../src/keys.js'
 
 const seed = PrivateKey.fromRandom()

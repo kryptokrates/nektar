@@ -8,7 +8,7 @@
 // the PRIMARY source's header with `time` replaced by the cross-chain
 // weighted median; every non-time function (merkle roots, heights, reorgs)
 // stays strictly on the primary BSV chain — SPV correctness never mixes
-// chains. Wiring: MAMEM_TEMPORAL_SOURCES=bsv[,btc] (packages/mcp runtime).
+// chains. Wiring: NEKTAR_TEMPORAL_SOURCES=bsv[,btc] (packages/mcp runtime).
 import type { BlockHeader, ChainTracker } from './interfaces.js'
 
 /** a named header/height source; weight defaults to 1 */

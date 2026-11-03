@@ -1,12 +1,12 @@
-// mamem anchor helpers (Phase-0 spike). Anchor = PushDrop output with fields
-// [proto="mamem", version=u8, shard utf8, n u64le, size u64le, R_n 32B, R'_n 32B]
-// locked to a shard key via BRC-42 (protocolID [1,'mamem'], keyID = shard).
+// nektar anchor helpers (Phase-0 spike). Anchor = PushDrop output with fields
+// [proto="nektar", version=u8, shard utf8, n u64le, size u64le, R_n 32B, R'_n 32B]
+// locked to a shard key via BRC-42 (protocolID [1,'nektar'], keyID = shard).
 import { createHash } from 'node:crypto'
 import { Transaction, PushDrop, ProtoWallet, PrivateKey, Script } from '@bsv/sdk'
 
-export const PROTO = 'mamem'
+export const PROTO = 'nektar'
 export const VERSION = 1
-export const PROTOCOL_ID = [1, 'mamem']
+export const PROTOCOL_ID = [1, 'nektar']
 export const ZERO32 = new Uint8Array(32)
 
 export function dsha256 (b) {

@@ -8,7 +8,7 @@ import { createRequire } from 'node:module'
 const require2 = createRequire(import.meta.url)
 const { TeranodeRPCTracker, merklePathFor } = require2('../packages/chain/dist/src/regtest.js')
 const { verifyFragment, buildProofBundle } = require2('../packages/verify/dist/src/bundle.js')
-const { decodeMamemAnchor } = require2('../packages/contracts/dist/src/index.js')
+const { decodeNektarAnchor } = require2('../packages/contracts/dist/src/index.js')
 
 const state = loadState()
 const txid = state.liveContractTxids[0] // genesis anchor (size=1, n=0)
@@ -17,7 +17,7 @@ const tracker = new TeranodeRPCTracker(cfg)
 
 const hex = await rpc('getrawtransaction', txid)
 const tx = Transaction.fromHex(hex)
-const d = decodeMamemAnchor(tx.outputs[0].lockingScript.toHex())
+const d = decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())
 if (!d) throw new Error('anchor did not decode')
 console.log(`anchor n=${d.n} size=${d.size} shard=${d.shard.slice(0, 12)}…`)
 

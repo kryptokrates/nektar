@@ -7,9 +7,9 @@ import {
   type RotationCert
 } from '../src/index.js'
 import { Smt, hashLeaf, hashNode, emptyRoot, emptySubtree, verifyProof, SMT_DEPTH, EMPTY_LEAF } from '../src/smt.js'
-import { BatchLog, MemoryShardStore } from '@mamem/log'
-import { reconstructRoot } from '@mamem/core'
-import { concat, dsha256, utf8 } from '@mamem/core'
+import { BatchLog, MemoryShardStore } from '@nektar/log'
+import { reconstructRoot } from '@nektar/core'
+import { concat, dsha256, utf8 } from '@nektar/core'
 const k0 = PrivateKey.fromRandom(), k1 = PrivateKey.fromRandom(), k2 = PrivateKey.fromRandom()
 
 test('identity: binding signs + verifies; tampered fails', () => {
@@ -294,7 +294,7 @@ import {
   fieldLeaf, fieldRoot, fieldPath, randSalt, issueDisclosure, verifyDisclosure,
   wrapFor, unwrapFor, wrapMulti, unwrapMulti
 } from '../src/disclosure.js'
-import { merkleRoot } from '@mamem/core'
+import { merkleRoot } from '@nektar/core'
 
 test('disclosure: field commitments + envelope verify; negatives all fail', () => {
   const owner = PrivateKey.fromRandom(), verifier = PrivateKey.fromRandom(), wrong = PrivateKey.fromRandom()

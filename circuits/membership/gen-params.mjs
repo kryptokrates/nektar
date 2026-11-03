@@ -1,4 +1,4 @@
-// gen-params.mjs — build a 16-leaf mamem-style Merkle tree (leaf=dsha256(item),
+// gen-params.mjs — build a 16-leaf nektar-style Merkle tree (leaf=dsha256(item),
 // node=dsha256(L||R) — same fold as packages/core/src/merkle.ts) and emit
 // parameters.json for the circuit: root (baked constant), one leaf, its
 // 4-deep path, index.

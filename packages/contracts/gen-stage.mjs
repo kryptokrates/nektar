@@ -50,7 +50,7 @@ L.push(`  }`)
 // this.sX back once — the stateful covenant emits continuation state.
 function emitMethod (name, kind) {
   // postSats/postScript: extra output emitted AFTER the continuation so the
-  // stage can co-spend inside MamemZkClaim.proveStage txs (both contracts
+  // stage can co-spend inside NektarZkClaim.proveStage txs (both contracts
   // must enumerate the same full output list for the hashOutputs check).
   L.push(`  public ${name} (postSats: bigint, postScript: ByteString) {`)
   L.push(`    let qt = 0n; let wt = 0n; let zt = 0n`)

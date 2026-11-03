@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, Transaction, UnlockingScript } from '@bsv/sdk'
-import { toHex, sha256 } from '@mamem/core'
+import { toHex, sha256 } from '@nektar/core'
 import {
   offerDisclosure, wrapSaleValue, plainSaleValue,
   parseBuyArgs, claimDisclosure
@@ -54,7 +54,7 @@ test('sale: offerDisclosure produces a valid covenant cfg + committed wrapped', 
   assert.equal(offer.cfg.sellerPkh.length, 40)
   assert.equal(offer.cfg.price, 3_000n)
   // wrapped round-trips through the claim path (the real-tx variant lives in
-  // @mamem/anchor's sale.test.ts — anchor already depends on this package)
+  // @nektar/anchor's sale.test.ts — anchor already depends on this package)
   const unlockHex = fakeBuyUnlock(fromHexForTest(offer.wrapped))
   const tx = new Transaction()
   tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(unlockHex) })

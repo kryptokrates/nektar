@@ -6,7 +6,7 @@
 // ./bp.js — log-rounds, Fiat–Shamir, no trusted setup. Off-chain verify only;
 // never a consensus cost.
 import { PrivateKey, PublicKey, Signature, Point, BigNumber, Curve } from '@bsv/sdk'
-import { dsha256, concat, utf8, type Bytes } from '@mamem/core'
+import { dsha256, concat, utf8, type Bytes } from '@nektar/core'
 import { proveRangeBP, verifyRangeBP, type RangeProofBP, BP_H } from './bp.js'
 
 const curve = new Curve()
@@ -34,7 +34,7 @@ const subG = (p: Point) => p.add(negP(G))
 // --- transcript ---------------------------------------------------------------
 export interface ZkTranscript { queryId: string, fragmentId: string, nonce: Bytes }
 export function transcriptLabel (t: ZkTranscript, extra: string): string {
-  return `mamem/zkaccess/${t.queryId}/${t.fragmentId}/${Buffer.from(t.nonce).toString('hex')}/${extra}`
+  return `nektar/zkaccess/${t.queryId}/${t.fragmentId}/${Buffer.from(t.nonce).toString('hex')}/${extra}`
 }
 function challenge (label: string, pts: Point[]): bigint {
   return mod(BigInt('0x' + Buffer.from(dsha256(concat(utf8(label), ...pts.map(p => Buffer.from(p.encode(true)) as Uint8Array)))).toString('hex')))
@@ -119,7 +119,7 @@ export interface ClearanceCommitment { pub: string, holder: string, hex: string,
 /** HOLDER secret: the commitment plus its opening (level, blinding). */
 export interface ClearanceCredential { commitment: ClearanceCommitment, level: bigint, blinding: string }
 const clearanceDigest = (hex: string, holder: string) =>
-  Array.from(dsha256(concat(utf8('mamem/zkaccess/commit/v2/'), Buffer.from(hex, 'hex') as Uint8Array, Buffer.from(holder, 'hex') as Uint8Array)))
+  Array.from(dsha256(concat(utf8('nektar/zkaccess/commit/v2/'), Buffer.from(hex, 'hex') as Uint8Array, Buffer.from(holder, 'hex') as Uint8Array)))
 /** authority signs C = ℓ·G + r·H bound to the holder's pubkey. */
 export function issueClearance (authority: PrivateKey, level: bigint, holderPub: string): ClearanceCredential {
   const blind = rand()

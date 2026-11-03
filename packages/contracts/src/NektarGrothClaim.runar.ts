@@ -1,5 +1,5 @@
-// MamemGrothClaim — GOAL-v9 §0e: VALIDITY-rail claim covenant.
-// Unlike MamemZkClaim (optimistic: bond + watcher window + bisection), this
+// NektarGrothClaim — GOAL-v9 §0e: VALIDITY-rail claim covenant.
+// Unlike NektarZkClaim (optimistic: bond + watcher window + bisection), this
 // claim can ONLY settle by co-spending a pinned Groth16-verifier UTXO in
 // the same tx. The verifier's locking script is the nChain-zkscript
 // generated Groth16 verifier — when input1 executes, the proof is checked
@@ -7,7 +7,7 @@
 // Watcher-free: settlement validity does not depend on anyone being awake.
 //
 //   settleValid pins prevouts == ourOutpoint ‖ verifierOutpoint via
-//   hashPrevouts (same technique as MamemZkClaim.proveStage), so input1 IS
+//   hashPrevouts (same technique as NektarZkClaim.proveStage), so input1 IS
 //   the committed verifier UTXO and nothing else can be smuggled in.
 //
 // Statement binding: the verifier's locking script carries a doc-push
@@ -24,7 +24,7 @@ import {
   type Sig, type PubKey, type ByteString, type Sha256
 } from 'runar-lang'
 
-export class MamemGrothClaim extends StatefulSmartContract {
+export class NektarGrothClaim extends StatefulSmartContract {
   receiptHash: Sha256         // sha256 of the certified statement payload
   journalRoot: ByteString     // semantic statement (mirrors verifier doc-push)
   journalSize: bigint

@@ -1,11 +1,11 @@
 // ai_inference Groth16 verifier deploy+spend on PUBLIC BSV testnet.
 // Same txs as e2e-grothinf-regtest.mjs, pointed at the live network:
-//   broadcast:  BSVA Arcade testnet (MAMEM_ARC_URL overridable)
-//   discovery:  WhatsOnChain testnet index (MAMEM_WOC_URL overridable)
+//   broadcast:  BSVA Arcade testnet (NEKTAR_ARC_URL overridable)
+//   discovery:  WhatsOnChain testnet index (NEKTAR_WOC_URL overridable)
 //
-// Funding: MAMEM_FUND_WIF wins; otherwise the encrypted ttn-data keystore
+// Funding: NEKTAR_FUND_WIF wins; otherwise the encrypted ttn-data keystore
 //   (.state/ttn-data/fee.key.json + .state/ttn-passphrase, or
-//   MAMEM_KEY_PASSPHRASE) — the key must hold a testnet UTXO.
+//   NEKTAR_KEY_PASSPHRASE) — the key must hold a testnet UTXO.
 //
 // Unlike regtest we CANNOT mine: after broadcast we poll WoC for block
 // inclusion and report honestly — RECEIVED on the testnet mempool is a
@@ -13,7 +13,7 @@
 //
 // Run: node packages/e2e/src/e2e-grothinf-testnet.mjs
 import { PrivateKey, Transaction, LockingScript, UnlockingScript, P2PKH } from '@bsv/sdk'
-import { ArcBroadcaster, WocTracker, discoverUtxos, fetchArcFeeRate } from '@mamem/chain'
+import { ArcBroadcaster, WocTracker, discoverUtxos, fetchArcFeeRate } from '@nektar/chain'
 import { readKeyFile } from '../../mcp/dist/src/keystore.js'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -28,21 +28,21 @@ const check = (cond, name) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${name}`)
 
 // --- config ----------------------------------------------------------------
 const cfg = {
-  arcUrl: process.env.MAMEM_ARC_URL ?? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech',
-  wocUrl: process.env.MAMEM_WOC_URL ?? 'https://api.whatsonchain.com/v1/bsv/test',
-  arcApiKey: process.env.MAMEM_ARC_API_KEY,
-  wocApiKey: process.env.MAMEM_WOC_API_KEY
+  arcUrl: process.env.NEKTAR_ARC_URL ?? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech',
+  wocUrl: process.env.NEKTAR_WOC_URL ?? 'https://api.whatsonchain.com/v1/bsv/test',
+  arcApiKey: process.env.NEKTAR_ARC_API_KEY,
+  wocApiKey: process.env.NEKTAR_WOC_API_KEY
 }
 const broadcaster = new ArcBroadcaster(cfg)
 const tracker = new WocTracker(cfg)
 
 // --- key -------------------------------------------------------------------
 function loadWif () {
-  if (process.env.MAMEM_FUND_WIF) return process.env.MAMEM_FUND_WIF
-  const pass = process.env.MAMEM_KEY_PASSPHRASE
+  if (process.env.NEKTAR_FUND_WIF) return process.env.NEKTAR_FUND_WIF
+  const pass = process.env.NEKTAR_KEY_PASSPHRASE
     ?? (existsSync('.state/ttn-passphrase') ? readFileSync('.state/ttn-passphrase', 'utf8').trim() : undefined)
-  const keyFile = process.env.MAMEM_FEE_KEY_FILE ?? '.state/ttn-data/fee.key.json'
-  if (!existsSync(keyFile)) throw new Error(`no MAMEM_FUND_WIF and no key file at ${keyFile}`)
+  const keyFile = process.env.NEKTAR_FEE_KEY_FILE ?? '.state/ttn-data/fee.key.json'
+  if (!existsSync(keyFile)) throw new Error(`no NEKTAR_FUND_WIF and no key file at ${keyFile}`)
   return JSON.parse(readKeyFile(keyFile, pass, true)).wif
 }
 const key = PrivateKey.fromWif(loadWif())
@@ -114,7 +114,7 @@ if (b2.ok) {
 
 // --- settlement status (public testnet: we poll, we cannot mine) ------------
 if (b1.ok) {
-  const deadline = Date.now() + Number(process.env.MAMEM_CONFIRM_WAIT_MS ?? 120_000)
+  const deadline = Date.now() + Number(process.env.NEKTAR_CONFIRM_WAIT_MS ?? 120_000)
   let s1 = 'in mempool (unconfirmed)'
   while (Date.now() < deadline) {
     s1 = await wocStatus(b1.txid)

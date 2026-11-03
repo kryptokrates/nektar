@@ -1,9 +1,9 @@
-// GOAL-v7 V2: the MamemCheckpointBond covenant under real script eval
+// GOAL-v7 V2: the NektarCheckpointBond covenant under real script eval
 // (MockChain verifyScripts runs the actual locking script via SDK Spend).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, LockingScript } from '@bsv/sdk'
-import { MockChain } from '@mamem/chain'
+import { MockChain } from '@nektar/chain'
 import { CheckpointBond, type BondUtxo } from '../src/bond.js'
 
 const operator = PrivateKey.fromRandom()

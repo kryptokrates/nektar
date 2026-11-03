@@ -1,15 +1,15 @@
 // DIS-002 proof sharding (GOAL-v6 S5): L_ZKDis v2 subset proofs checked
-// against real MamemAnchor transactions on the mock chain — every check of
-// verifySubsetAnchored — plus MamemMemory.proveSubset/verifySubset end to end
-// and the MAMEM_PROOF_SHARDING opt-out.
+// against real NektarAnchor transactions on the mock chain — every check of
+// verifySubsetAnchored — plus NektarMemory.proveSubset/verifySubset end to end
+// and the NEKTAR_PROOF_SHARDING opt-out.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { AnchorChain } from '@mamem/anchor'
-import { decodeMamemAnchor } from '@mamem/contracts'
-import { dsha256, utf8, merkleRoot } from '@mamem/core'
-import { buildSubsetProof, encodeZkdis, verifySubsetAnchored } from '@mamem/zk'
-import { MamemMemory, callTool } from '../src/index.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { AnchorChain } from '@nektar/anchor'
+import { decodeNektarAnchor } from '@nektar/contracts'
+import { dsha256, utf8, merkleRoot } from '@nektar/core'
+import { buildSubsetProof, encodeZkdis, verifySubsetAnchored } from '@nektar/zk'
+import { NektarMemory, callTool } from '../src/index.js'
 
 const leaves = (n: number) => Array.from({ length: n }, (_, i) => dsha256(utf8(`rec-${i}`)))
 const subsetBytes = (n: number, idx: number[]) => encodeZkdis(buildSubsetProof(leaves(n), idx))
@@ -21,7 +21,7 @@ async function anchoredBatch (R: Uint8Array, size: number, mine = true) {
   await ac.anchor(size, R)
   const tx = ac.getHead()!.tx
   if (mine) { chain.mine(1); ac.confirm(tx.id('hex'), chain.merklePathOf(tx.id('hex'))) }
-  return { chain, tx, shard: decodeMamemAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
+  return { chain, tx, shard: decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
 }
 
 test('subset proof verifies against a real anchor whose R is the batch root (records across the shard boundary)', async () => {
@@ -53,10 +53,10 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
   }
 })
 
-test('MamemMemory: proveSubset + verifySubset over its own anchored batch; MAMEM_PROOF_SHARDING=0 → disabled', async () => {
+test('NektarMemory: proveSubset + verifySubset over its own anchored batch; NEKTAR_PROOF_SHARDING=0 → disabled', async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const f = new MockFunder(); f.topup(20); for (const u of (f as any).utxos) chain.registerParent(u.tx)
-  const mem = new MamemMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 100 } })
+  const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 100 } })
   for (let i = 0; i < 70; i++) await mem.remember('s', `rec-${i}`)
   await mem.anchorShard('s')
   chain.mine(1); mem.confirmAnchor('s', mem.tailLink('s')!.txid)
@@ -85,11 +85,11 @@ test('MamemMemory: proveSubset + verifySubset over its own anchored batch; MAMEM
   const foreign = subsetBytes(5, [1])
   assert.match(String((await mem.verifySubset('s', foreign)).reason), /no anchor|not the anchored/)
   // flag off → 'disabled' (the patent opt-out for cautious operators)
-  process.env.MAMEM_PROOF_SHARDING = '0'
+  process.env.NEKTAR_PROOF_SHARDING = '0'
   try {
     const off1 = await mem.proveSubset('s', [0]); assert.equal(off1.ok, false); if (!off1.ok) assert.equal(off1.reason, 'disabled')
     assert.equal((await mem.verifySubset('s', sub.bytes)).reason, 'disabled')
     assert.equal((await callTool(mem, 'proveSubset', { shard: 's', seqs: [0] })).reason, 'disabled')
     assert.equal((await callTool(mem, 'verifySubset', { shard: 's', bytes: 'aa' })).reason, 'disabled')
-  } finally { delete process.env.MAMEM_PROOF_SHARDING }
+  } finally { delete process.env.NEKTAR_PROOF_SHARDING }
 })

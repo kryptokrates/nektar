@@ -1,6 +1,6 @@
 // Read-only mainnet smoke: ARC policy fee rate, WoC tip + header check.
 // NEVER broadcasts — this script only issues GETs.
-import { fetchArcFeeRate, WocTracker } from '@mamem/chain'
+import { fetchArcFeeRate, WocTracker } from '@nektar/chain'
 
 const fee = await fetchArcFeeRate()
 console.log(`ARC policy miningFee → ${fee} sat/kB`)

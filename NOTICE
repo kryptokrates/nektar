@@ -1,4 +1,4 @@
-mamem — verifiable, encrypted agent memory on BSV (Merkle Automaton)
+nektar — verifiable, encrypted agent memory on BSV (Merkle Automaton)
 Copyright 2026 nedzof and contributors
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
@@ -13,9 +13,9 @@ Proof sharding (selective proof of existence, DIS-002): this product
 implements a mechanism claimed by nChain's US 12,730,827 B2 patent (granted
 2026-09-08) under the Open BSV pledge — nChain/BSVA's grant of free use of
 its patent portfolio on BSV (including its testnets), revocable for
-non-BSV use. mamem is BSV-only by construction. Operators who do not rely
+non-BSV use. nektar is BSV-only by construction. Operators who do not rely
 on the pledge can disable the feature entirely with
-MAMEM_PROOF_SHARDING=0 (the proveSubset/verifySubset tools then return
+NEKTAR_PROOF_SHARDING=0 (the proveSubset/verifySubset tools then return
 'disabled').
 
 Third-party components are listed in sbom.cdx.json (CycloneDX) with their

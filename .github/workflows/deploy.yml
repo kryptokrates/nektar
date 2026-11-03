@@ -24,12 +24,12 @@ jobs:
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" '
             set -e
-            cd /opt/mamem
-            git fetch https://github.com/nedzof/merkle-automaton.git master
+            cd /opt/nektar
+            git fetch https://github.com/nedzof/nektar.git master
             git reset --hard FETCH_HEAD
             pnpm install --frozen-lockfile
             pnpm -r build
-            systemctl restart mamem-http mamem-rendezvous mamem-watch
+            systemctl restart nektar-http nektar-rendezvous nektar-watch
             sleep 3
-            systemctl is-active mamem-http mamem-rendezvous mamem-watch
+            systemctl is-active nektar-http nektar-rendezvous nektar-watch
           '

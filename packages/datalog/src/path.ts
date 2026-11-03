@@ -3,7 +3,7 @@
 // is the applied rule's policy-DAG node hash (POL-003 serialisation, byte-
 // identical to graph/policy.ts ruleCanonical and to the derivation guest's
 // reconstruction). The path emitted here is exactly what the ZK guest replays.
-import { dsha256, utf8, concat, type Bytes } from '@mamem/core'
+import { dsha256, utf8, concat, type Bytes } from '@nektar/core'
 import type { Fact } from './parse.js'
 import type { DerivedFact } from './engine.js'
 

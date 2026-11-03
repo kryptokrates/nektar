@@ -4,14 +4,14 @@
 // sha256(wrapped) == hWrapped. This module is the OFF-CHAIN side: wrapping
 // the value to the buyer (BRC-42 ECDH — on-chain exposure is safe), parsing
 // the revealed `wrapped` out of the buy tx, unwrapping and verifying it.
-// Tx building/broadcast stays in @mamem/anchor's DisclosureSaleHost — this
-// package must not import @mamem/anchor (anchor already depends on us).
+// Tx building/broadcast stays in @nektar/anchor's DisclosureSaleHost — this
+// package must not import @nektar/anchor (anchor already depends on us).
 import { PrivateKey, PublicKey, Signature, Transaction, Hash } from '@bsv/sdk'
-import { sha256, concat, toHex, fromHex, type Bytes } from '@mamem/core'
+import { sha256, concat, toHex, fromHex, type Bytes } from '@nektar/core'
 import { wrapFor, unwrapFor, type WrappedKey } from './disclosure.js'
 
 /** fixed wrap context — binds the ECDH pad to the sale channel. */
-export const SALE_CTX = 'mamem:sale:v1'
+export const SALE_CTX = 'nektar:sale:v1'
 
 // --- seller side ----------------------------------------------------------
 
@@ -135,17 +135,17 @@ export function parseBuyWrapped (tx: Transaction): Bytes {
 // Selling an encrypted record means handing over the FRAGMENT KEY (the
 // §7 decryption capability) plus the ciphertext + provenance — the buyer
 // recomputes computeLeaf({d,p,hdp,E}) against the anchored leaf.
-import { serializeProvenance, parseProvenance } from '@mamem/core'
-import { decryptFragment } from '@mamem/crypto'
+import { serializeProvenance, parseProvenance } from '@nektar/core'
+import { decryptFragment } from '@nektar/crypto'
 
 /** encode {fragmentKey‖E‖serializeProvenance(p)} with u32le length frames. */
-export function encodeKeySale (fragmentKey: Bytes, E: Bytes, p: import('@mamem/core').Provenance): Bytes {
+export function encodeKeySale (fragmentKey: Bytes, E: Bytes, p: import('@nektar/core').Provenance): Bytes {
   const field = (b: Bytes) => { const l = Buffer.alloc(4); l.writeUInt32LE(b.length); return concat(new Uint8Array(l), b) }
   return concat(field(fragmentKey), field(E), field(serializeProvenance(p)))
 }
 
 /** decode a key-sale payload back into its parts. */
-export function decodeKeySale (b: Bytes): { fragmentKey: Bytes, E: Bytes, p: import('@mamem/core').Provenance } {
+export function decodeKeySale (b: Bytes): { fragmentKey: Bytes, E: Bytes, p: import('@nektar/core').Provenance } {
   const take = (off: number) => {
     if (off + 4 > b.length) throw new Error('keySale: truncated')
     const len = (b[off]! | (b[off + 1]! << 8) | (b[off + 2]! << 16) | (b[off + 3]! << 24)) >>> 0
@@ -161,7 +161,7 @@ export function decodeKeySale (b: Bytes): { fragmentKey: Bytes, E: Bytes, p: imp
 /** Buyer-side: decrypt a key-sale payload → the fragment. E carries
  *  [aadLen‖aad] inline (see memory.ts encrypt path), so no context is
  *  needed — returns {d, p, E} for the caller's leaf/provenance checks. */
-export function claimKeySale (payload: Bytes): { d: Bytes, p: import('@mamem/core').Provenance, E: Bytes } {
+export function claimKeySale (payload: Bytes): { d: Bytes, p: import('@nektar/core').Provenance, E: Bytes } {
   const { fragmentKey, E, p } = decodeKeySale(payload)
   const aadLen = (E[0]! << 8) | E[1]!
   const aad = E.slice(2, 2 + aadLen)

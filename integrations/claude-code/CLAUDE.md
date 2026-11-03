@@ -1,4 +1,4 @@
-# mamem receipts (snippet — merge into your project CLAUDE.md)
+# nektar receipts (snippet — merge into your project CLAUDE.md)
 
 When answering a factual question that could come from memory:
 
@@ -8,7 +8,7 @@ When answering a factual question that could come from memory:
 3. Always end the answer with the receipt footer the tool returns:
 
    ```
-   receipt: mamemr1.<token>
+   receipt: nektarr1.<token>
    verify: <verifyUrl>
    ```
 

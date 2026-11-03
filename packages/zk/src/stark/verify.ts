@@ -8,7 +8,7 @@ import { decodeZkm2, ZkmCodecError, type ZkMembershipProof } from './codec.js'
 const require = createRequire(import.meta.url)
 const wasm = require('../../../stark/verifier.js') as { verify: (receipt: Uint8Array, imageId: Uint8Array) => string }
 
-/** the guest program identity mamem trusts (built reproducibly by `pnpm stark:build`) */
+/** the guest program identity nektar trusts (built reproducibly by `pnpm stark:build`) */
 export const PINNED_IMAGE_ID: string = JSON.parse(readFileSync(fileURLToPath(new URL('../../../stark/image-id.json', import.meta.url)), 'utf8')).imageId
 
 export interface Journal { version: number, root: string, size: number, queryId: string }
@@ -21,7 +21,7 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 export function verifyZkm2 (bytes: Uint8Array, pinnedImageId = PINNED_IMAGE_ID): StarkVerdict {
   let p: ZkMembershipProof
   try { p = decodeZkm2(bytes) } catch (e) { return { ok: false, reason: e instanceof ZkmCodecError ? `codec: ${e.message}` : 'codec error' } }
-  if (hex(p.imageId) !== pinnedImageId) return { ok: false, reason: 'image id is not the pinned mamem membership program' }
+  if (hex(p.imageId) !== pinnedImageId) return { ok: false, reason: 'image id is not the pinned nektar membership program' }
   const r = JSON.parse(wasm.verify(p.receipt, p.imageId)) as { ok: boolean, journal?: Journal, error?: string }
   if (!r.ok || !r.journal) return { ok: false, reason: `stark: ${r.error ?? 'invalid'}` }
   const j = r.journal

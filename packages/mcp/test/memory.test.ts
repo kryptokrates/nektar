@@ -1,22 +1,22 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { canonicalizePolicySet } from '@mamem/policy'
-import { signBinding, answerChallenge, issueChallenge, issueClearance, proveAccess, type ZkTranscript } from '@mamem/identity'
-import { MamemMemory, type MamemMemoryOptions, type ZkClearance } from '../src/memory.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { canonicalizePolicySet } from '@nektar/policy'
+import { signBinding, answerChallenge, issueChallenge, issueClearance, proveAccess, type ZkTranscript } from '@nektar/identity'
+import { NektarMemory, type NektarMemoryOptions, type ZkClearance } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 
-function setup (opts: MamemMemoryOptions = {}) {
+function setup (opts: NektarMemoryOptions = {}) {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(50)
   for (const t of funder.parents) chain.registerParent(t)
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
   const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
   return { chain, funder, mem, settle }
 }
 /** a caller that answers a challenge issued by `mem` (the verifier) */
-function callerOf (mem: MamemMemory, key = PrivateKey.fromRandom()) {
+function callerOf (mem: NektarMemory, key = PrivateKey.fromRandom()) {
   const nonce = mem.issueChallenge()
   return { key, identity: { pubkey: key.toPublicKey().toString(), binding: signBinding(key, 'agent', '00'.repeat(32), 0), challengeNonce: nonce, challengeSig: answerChallenge(key, nonce) } }
 }
@@ -108,7 +108,7 @@ test('§15 modality: committed into H(d‖p) and the provenance signature; inval
   const modal = await mem.remember('m', 'rule text', { ...prov, modality: { kind: 'temporal' as const, qualifier: 'as of Block 105432, Reg X includes Clause Y' } })
   assert.notEqual(plain.hdp, modal.hdp, 'modality changes the provenance binding hash')
   // the originator signature binds the modality too — tampering invalidates it
-  const { signProvenance, verifyProvenance } = await import('@mamem/log')
+  const { signProvenance, verifyProvenance } = await import('@nektar/log')
   const key = PrivateKey.fromRandom()
   const d = new TextEncoder().encode('x')
   const p = signProvenance(key, d, { source: 's', time: 1, signature: new Uint8Array(0), modelId: 'm', modality: { kind: 'deontic', qualifier: 'obligatory under Reg X' } })
@@ -230,7 +230,7 @@ test('mcp tools: challenge / rotate / revoke / authorize receipts (incl. DENY)',
   const revoked = PrivateKey.fromRandom().toPublicKey().toString()
   const rev = await callTool(mem, 'revoke', { pkHex: revoked })
   assert.ok(rev.revoked === true && rev.smtRoot.length === 64, 'revoke returns smtRoot')
-  const { deriveKey } = await import('@mamem/identity')
+  const { deriveKey } = await import('@nektar/identity')
   assert.ok(mem.revocations.has(deriveKey(Buffer.from(revoked, 'hex'))), 'SMT keyed by derive_key(pubkey)')
   await assert.rejects(() => callTool(mem, 'revoke', { pkHex: 'aa' }), /33-byte/)
   assert.equal((await callTool(mem, 'authorize', { action: 'read' })).receipt.decision, 'deny', 'unverified principal')
@@ -259,7 +259,7 @@ test('mcp tool: automaton deploy → step → halt; off-δ step refused; honest 
 test('§19 read-path: revoked author key withholds the record at recall', async () => {
   const { mem, settle } = setup()
   const author = PrivateKey.fromRandom()
-  const { signProvenance } = await import('@mamem/log')
+  const { signProvenance } = await import('@nektar/log')
   const p0 = { source: 'agent', time: Math.floor(Date.now() / 1000), signature: new Uint8Array(0), modelId: 't' }
   const signed = signProvenance(author, new Uint8Array(Buffer.from('killed key test', 'utf8')), p0)
   await mem.remember('s', 'killed key test', { ...signed, sourcePub: author.toPublicKey().toString(), epoch: 0 })
@@ -275,7 +275,7 @@ test('§19 read-path: revoked author key withholds the record at recall', async 
 
 test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-hoc edits break verification', async () => {
   const { mem, settle } = setup()
-  const { dsha256, utf8, concat, TAG_DELEGATION } = await import('@mamem/core')
+  const { dsha256, utf8, concat, TAG_DELEGATION } = await import('@nektar/core')
   const { verifyAnswerReceipt } = await import('../src/memory.js')
   await mem.remember('s', 'service manual fact')
   await mem.anchorShard('s'); settle('s')
@@ -301,7 +301,7 @@ test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-ver
   const authority = PrivateKey.fromRandom()
   const { mem, settle } = setup({ agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPublicKey().toString()] })
   const { verifyReceiptZk } = await import('../src/memory.js')
-  const { decodePresentation } = await import('@mamem/identity')
+  const { decodePresentation } = await import('@nektar/identity')
   await mem.remember('s', 'classified fact', undefined, 2)
   await mem.anchorShard('s'); settle('s')
   const { identity } = callerOf(mem)
@@ -357,17 +357,17 @@ test('GOAL-v8 D2: App E level floor — derived content cannot fall below its pr
   assert.equal(revised.level, 5, 'a revision of a level-5 base lands at level 5, not 0')
 })
 
-test('GOAL-v8 D6: MAMEM_ACCESS_LOG — timestamped per-decrypt/traverse audit records', async () => {
+test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit records', async () => {
   const seed = PrivateKey.fromRandom()
   // disabled by default: no __access__ records at all
-  delete process.env.MAMEM_ACCESS_LOG
+  delete process.env.NEKTAR_ACCESS_LOG
   const off = setup({ agentSeed: seed, maxLevel: 1 })
   await off.mem.remember('s', 'classified', undefined, 1)
   await off.mem.anchorShard('s'); off.settle('s')
   await off.mem.recall('s')
   assert.equal((await off.mem.records('__access__')).length, 0, 'no audit records when the flag is off')
   // enabled: every decrypt + delta traverse is recorded with a timestamp
-  process.env.MAMEM_ACCESS_LOG = '1'
+  process.env.NEKTAR_ACCESS_LOG = '1'
   try {
     const authority = PrivateKey.fromRandom()
     const on = setup({ agentSeed: seed, maxLevel: 1, clearanceAuthorities: [authority.toPublicKey().toString()] })
@@ -393,7 +393,7 @@ test('GOAL-v8 D6: MAMEM_ACCESS_LOG — timestamped per-decrypt/traverse audit re
     const tv = tlogs.find(l => l.event === 'traverse')
     assert.ok(tv, 'a delta traverse event was logged')
     assert.equal(tv.seq, 1); assert.equal(tv.follows, 0); assert.ok(tv.at > 0)
-  } finally { delete process.env.MAMEM_ACCESS_LOG }
+  } finally { delete process.env.NEKTAR_ACCESS_LOG }
 })
 
 test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash', async () => {
@@ -454,7 +454,7 @@ test('verifyReceipt: token → found/hash/provenance/anchored/fragments; unknown
     { text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] }
   ] })
   assert.equal(r.committed, true)
-  assert.ok(r.receiptToken.startsWith('mamemr1.'), 'token emitted')
+  assert.ok(r.receiptToken.startsWith('nektarr1.'), 'token emitted')
   assert.ok(r.verifyUrl.includes('/v1/verify?r='), 'verifyUrl emitted')
   settle('__receipts__')
 
@@ -471,10 +471,10 @@ test('verifyReceipt: token → found/hash/provenance/anchored/fragments; unknown
   assert.equal(v2.ok, true)
 
   // well-formed token, unknown receipt → 'found' fails
-  const v3 = await callTool(mem, 'verifyReceipt', { token: 'mamemr1.' + Buffer.alloc(32, 9).toString('base64url') })
+  const v3 = await callTool(mem, 'verifyReceipt', { token: 'nektarr1.' + Buffer.alloc(32, 9).toString('base64url') })
   assert.equal(v3.ok, false)
   assert.equal(v3.checks[0].name, 'found')
 
   // malformed token → error
-  await assert.rejects(callTool(mem, 'verifyReceipt', { token: 'mamemr1.too-short' }))
+  await assert.rejects(callTool(mem, 'verifyReceipt', { token: 'nektarr1.too-short' }))
 })

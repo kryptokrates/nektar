@@ -1,18 +1,18 @@
 // verifyMembershipAnchoredStark — production verifier (Wright §13 + App. C):
-// the proven root MUST be the R_n of a real, SPV-verified mamem anchor of the
+// the proven root MUST be the R_n of a real, SPV-verified nektar anchor of the
 // EXPECTED shard on its canonical chain, and the queryId MUST be one this
 // verifier issued and has not seen before. Order: cheap checks first.
 import type { Transaction } from '@bsv/sdk'
-import { dsha256, utf8 } from '@mamem/core'
-import { decodeMamemAnchor, isValidAnchor } from '@mamem/contracts'
+import { dsha256, utf8 } from '@nektar/core'
+import { decodeNektarAnchor, isValidAnchor } from '@nektar/contracts'
 import { verifyZkm2, PINNED_IMAGE_ID } from './verify.js'
 import { decodeZkm2 } from './codec.js'
 import { decodeZkdis, verifySubsetProof } from './subproof.js'
 
-/** verifier challenge: queryId = dsha256('mamem:zkq:v2' ‖ nonce ‖ verifierId) (32 bytes, no field reduction) */
+/** verifier challenge: queryId = dsha256('nektar:zkq:v2' ‖ nonce ‖ verifierId) (32 bytes, no field reduction) */
 export interface StarkQuery { nonce: Uint8Array, verifierId: string }
 export function starkQueryId (q: StarkQuery): Uint8Array {
-  return dsha256(Buffer.concat([utf8('mamem:zkq:v2'), q.nonce, utf8(q.verifierId)]))
+  return dsha256(Buffer.concat([utf8('nektar:zkq:v2'), q.nonce, utf8(q.verifierId)]))
 }
 
 /** combined Π = (membership, ZKAccess [, §14 derivation]) over ONE verifier
@@ -49,8 +49,8 @@ export async function verifyMembershipAnchoredStark (
   pinnedImageId = PINNED_IMAGE_ID
 ): Promise<StarkVerifyResult> {
   const txid = anchorTx.id('hex')
-  const data = decodeMamemAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
-  if (!data || !isValidAnchor(data)) return { ok: false, reason: 'anchor tx output 0 is not a mamem anchor' }
+  const data = decodeNektarAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
+  if (!data || !isValidAnchor(data)) return { ok: false, reason: 'anchor tx output 0 is not a nektar anchor' }
   if (data.shard !== expected.shard) return { ok: false, reason: 'anchor belongs to another shard' }
   if (expected.isCanonical && !(await expected.isCanonical(txid))) return { ok: false, reason: 'anchor not on the canonical shard chain' }
   if (!anchorTx.merklePath) return { ok: false, reason: 'NotMined' }
@@ -72,7 +72,7 @@ export interface SubsetVerifyResult { ok: boolean, reason?: string, anchorTxid?:
 
 /** DIS-002 verifier (GOAL-v6 S5): an L_ZKDis v2 subset proof is accepted iff
  *  its claimed batch root and size equal R_n/size of a real, SPV-verified
- *  mamem anchor of the EXPECTED shard on its canonical chain, and every
+ *  nektar anchor of the EXPECTED shard on its canonical chain, and every
  *  disclosed leaf folds through its shard subpath + the shared top multiproof
  *  to that root. No query binding — the proof reveals positions and leaf
  *  hashes; binding the disclosed records to a question is the caller's. */
@@ -83,8 +83,8 @@ export async function verifySubsetAnchored (
   expected: StarkExpectation
 ): Promise<SubsetVerifyResult> {
   const txid = anchorTx.id('hex')
-  const data = decodeMamemAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
-  if (!data || !isValidAnchor(data)) return { ok: false, reason: 'anchor tx output 0 is not a mamem anchor' }
+  const data = decodeNektarAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
+  if (!data || !isValidAnchor(data)) return { ok: false, reason: 'anchor tx output 0 is not a nektar anchor' }
   if (data.shard !== expected.shard) return { ok: false, reason: 'anchor belongs to another shard' }
   if (expected.isCanonical && !(await expected.isCanonical(txid))) return { ok: false, reason: 'anchor not on the canonical shard chain' }
   if (!anchorTx.merklePath) return { ok: false, reason: 'NotMined' }

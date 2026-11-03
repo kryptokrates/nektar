@@ -1,18 +1,18 @@
 // Wright §13 membership, verifier side: the committed REAL RISC Zero receipt
-// (leaf 4 of a 5-leaf core/merkle.ts batch) is checked against real MamemAnchor
+// (leaf 4 of a 5-leaf core/merkle.ts batch) is checked against real NektarAnchor
 // transactions on the mock chain — every check of verifyMembershipAnchoredStark.
-// MAMEM_STARK_PROVE=1 additionally proves end-to-end through MamemMemory (~50 s).
+// NEKTAR_STARK_PROVE=1 additionally proves end-to-end through NektarMemory (~50 s).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { AnchorChain } from '@mamem/anchor'
-import { decodeMamemAnchor } from '@mamem/contracts'
-import { fromHex, dsha256, utf8 } from '@mamem/core'
-import { issueClearance, proveAccess } from '@mamem/identity'
-import { encodeZkm2, verifyMembershipAnchoredStark, type QueryRegistry } from '@mamem/zk'
-import { MamemMemory, type ZkClearance } from '../src/index.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { AnchorChain } from '@nektar/anchor'
+import { decodeNektarAnchor } from '@nektar/contracts'
+import { fromHex, dsha256, utf8 } from '@nektar/core'
+import { issueClearance, proveAccess } from '@nektar/identity'
+import { encodeZkm2, verifyMembershipAnchoredStark, type QueryRegistry } from '@nektar/zk'
+import { NektarMemory, type ZkClearance } from '../src/index.js'
 
 const fx = JSON.parse(readFileSync(new URL('../../../zk/test/fixtures/zkm2-n5i4.json', import.meta.url), 'utf8'))
 const proofBytes = () => encodeZkm2({ imageId: fromHex(fx.imageId), root: fromHex(fx.journal.root), size: fx.journal.size, queryId: fromHex(fx.journal.queryId), receipt: fromHex(fx.receipt) })
@@ -25,7 +25,7 @@ async function anchoredBatch (R: Uint8Array, size: number, mine = true) {
   await ac.anchor(size, R)
   const tx = ac.getHead()!.tx
   if (mine) { chain.mine(1); ac.confirm(tx.id('hex'), chain.merklePathOf(tx.id('hex'))) }
-  return { chain, tx, ac, shard: decodeMamemAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
+  return { chain, tx, ac, shard: decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
 }
 
 test('STARK membership verifies against a real anchor whose R is the proven root', async () => {
@@ -62,23 +62,23 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
   assert.match(String((await v(proofBytes(), good, reg)).reason), /already used|not issued/)
 })
 
-test('MamemMemory: issued ZK queries are single use and survive a restart (persisted)', async () => {
+test('NektarMemory: issued ZK queries are single use and survive a restart (persisted)', async () => {
   let saved: any
   const store = { load: () => saved, save: (s: any) => { saved = JSON.parse(JSON.stringify(s)) } }
   const chain = new MockChain(); const f = new MockFunder(); f.topup(2)
-  const m1 = new MamemMemory(chain, f, f.keyPair, { securityStore: store })
+  const m1 = new NektarMemory(chain, f, f.keyPair, { securityStore: store })
   const q = m1.issueZkQuery('auditor')
   assert.match(q.queryId, /^[0-9a-f]{64}$/)
   assert.ok(saved.zkQueries.some(([id]: [string]) => id === q.queryId), 'persisted')
-  const m2 = new MamemMemory(chain, f, f.keyPair, { securityStore: store })
+  const m2 = new NektarMemory(chain, f, f.keyPair, { securityStore: store })
   assert.equal((m2 as any).consumeZkQuery(q.queryId), true, 'issued query restored after restart')
   assert.equal((m2 as any).consumeZkQuery(q.queryId), false, 'single use')
 })
 
-test('end-to-end: MamemMemory proves (RISC Zero) and verifies its own anchored batch', { skip: process.env.MAMEM_STARK_PROVE !== '1' }, async () => {
+test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own anchored batch', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const f = new MockFunder(); f.topup(20); for (const u of (f as any).utxos) chain.registerParent(u.tx)
-  const mem = new MamemMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 3 } })
+  const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 3 } })
   for (const d of ['a', 'b', 'c']) await mem.remember('s', d, {}, 0)
   chain.mine(1); mem.confirmAnchor('s', mem.tailLink('s')!.txid)
   const q = mem.issueZkQuery('auditor')
@@ -91,12 +91,12 @@ test('end-to-end: MamemMemory proves (RISC Zero) and verifies its own anchored b
 
 /** mem whose 's' shard has ONE anchored batch committing the fixture's R — the
  *  record is a stub (verifyCombined only reads seq/batchIndex); the anchor is
- *  real (MamemAnchor tx on the mock chain, mined). */
+ *  real (NektarAnchor tx on the mock chain, mined). */
 async function memWithFixtureAnchor () {
   const { chain, tx, ac } = await anchoredBatch(fromHex(fx.journal.root), 5)
   const authority = PrivateKey.fromRandom()
   const f = new MockFunder(); f.topup(2)
-  const mem = new MamemMemory(chain, f, f.keyPair, { clearanceAuthorities: [authority.toPublicKey().toString()] })
+  const mem = new NektarMemory(chain, f, f.keyPair, { clearanceAuthorities: [authority.toPublicKey().toString()] })
   ;(mem as any).anchors.set('s', ac)
   ;(mem as any).anchorTxs.set(tx.id('hex'), tx)
   ;(mem as any).tails.set('s', [{ txid: tx.id('hex'), outputIndex: 0, n: 0, size: 5, R: fx.journal.root, Rp: '00'.repeat(32) }])
@@ -135,11 +135,11 @@ test('§13 combined Π: the Π binding rejects proofs paired with an unrelated c
   assert.match(String(r.reason), /header does not match|stark/)
 })
 
-test('end-to-end §13 Π: membership STARK + ZKAccess clearance under ONE verifier query', { skip: process.env.MAMEM_STARK_PROVE !== '1' }, async () => {
+test('end-to-end §13 Π: membership STARK + ZKAccess clearance under ONE verifier query', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const f = new MockFunder(); f.topup(20); for (const u of (f as any).utxos) chain.registerParent(u.tx)
   const authority = PrivateKey.fromRandom()
-  const mem = new MamemMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 3 }, clearanceAuthorities: [authority.toPublicKey().toString()] })
+  const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 3 }, clearanceAuthorities: [authority.toPublicKey().toString()] })
   for (const d of ['a', 'b', 'c']) await mem.remember('s', d, {}, 0)
   chain.mine(1); mem.confirmAnchor('s', mem.tailLink('s')!.txid)
   const q = mem.issueZkQuery('auditor')

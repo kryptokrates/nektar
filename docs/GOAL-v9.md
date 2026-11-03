@@ -32,7 +32,7 @@ the honest remaining unknowns.
 
 Today the system is *anchored* but not *consensus-verified*:
 
-- A write becomes a leaf in a Merkle batch; a `MamemAnchor` covenant
+- A write becomes a leaf in a Merkle batch; a `NektarAnchor` covenant
   spends the shard's UTXO head and commits the new root `R_n`.
   **Consensus enforces the anchor** — nobody can fork the shard chain.
 - A ZK proof `π_j` (RISC Zero succinct receipt, ~224 KB) proves *"some
@@ -110,7 +110,7 @@ This is not speculative. Every primitive needed exists on BSV mainnet
   ~74 OP_CAT-covenant-chained transactions, ~790 KB total, real
   transactions in real blocks. BTC lacks OP_CAT (soft-fork pending);
   **BSV has OP_CAT natively** — the design ports directly.
-- **Our own precedent:** `MamemAnchor` is already a covenant-chained
+- **Our own precedent:** `NektarAnchor` is already a covenant-chained
   UTXO state machine — a Script-verified state transition per spend.
   The verifier chain is the same pattern with a richer state.
 
@@ -150,7 +150,7 @@ flowchart TB
         PROV -->|"L_ZKMem v2 bytes (~224KB)"| STX
     end
 
-    subgraph chain["NEW: MamemZkVerifier covenant chain (on-chain)"]
+    subgraph chain["NEW: NektarZkVerifier covenant chain (on-chain)"]
         S1["stage tx₁<br/>commit + parse journal<br/>state₁"]
         S2["stage tx₂<br/>Fiat-Shamir challenges<br/>state₂"]
         SD["stage tx…<br/>DEEP-ALI + FRI rounds<br/>(field ops, folds)"]
@@ -159,7 +159,7 @@ flowchart TB
         S1 --> S2 --> SD --> SQ --> ST
     end
 
-    subgraph anchors["EXISTING: MamemAnchor shard chain"]
+    subgraph anchors["EXISTING: NektarAnchor shard chain"]
         AH[("anchor head UTXO<br/>state: owner ‖ n ‖ size ‖ R_n ‖ R′ ‖ tag ‖ pkh")]
     end
 
@@ -175,13 +175,13 @@ flowchart TB
 |---|---|---|
 | `tools/stark` (R0 guests + host) | ✅ | Produces the receipt bytes — **unchanged**. The on-chain verifier consumes the identical `L_ZKMem v2` wire format; pinned image ids untouched. |
 | `packages/zk` (codec, `verifyZkm2`) | ✅ | The WASM verifier stays **authoritative off-chain** — dual-verifier, never a fork. On-chain verify is additive. |
-| `MamemAnchor`/`AnchorChain` | ✅ | Supplies the anchor head whose `R_n`/`size` the terminal stage must match. The verifier chain *references* it; does not consume it. |
+| `NektarAnchor`/`AnchorChain` | ✅ | Supplies the anchor head whose `R_n`/`size` the terminal stage must match. The verifier chain *references* it; does not consume it. |
 | `zkQueries` / `issueZkQuery` | ✅ (GOAL-v8/Π work) | queryIds already carry `{nonce, verifierId}` — the on-chain state carries the queryId through stages; the terminal tx burns it on-chain. |
-| `MamemZkClaim` covenant | 🆕 **primary artifact** | The optimistic claim+bond UTXO (§4.5): settle-after-deadline happy path, challenge/bisection dispute path, `Poseidon2Stage` leaf proof. ~2 txs ≈ fractions of a cent. |
-| `MamemZkVerifier` chain | 🆕 (full-validity mode) | The A-mode artifact: every permutation consensus-checked across ~10⁴ covenant txs. Same stage primitive; deferred to the high-value-finality upgrade. |
+| `NektarZkClaim` covenant | 🆕 **primary artifact** | The optimistic claim+bond UTXO (§4.5): settle-after-deadline happy path, challenge/bisection dispute path, `Poseidon2Stage` leaf proof. ~2 txs ≈ fractions of a cent. |
+| `NektarZkVerifier` chain | 🆕 (full-validity mode) | The A-mode artifact: every permutation consensus-checked across ~10⁴ covenant txs. Same stage primitive; deferred to the high-value-finality upgrade. |
 | Stage-emitter | 🆕 | TS generator producing the unrolled per-stage scripts (sCrypt-style emitted code), driven by a stage decomposition table. |
 | `verifyCombined` / Π | ✅ | Off-chain Π stays; **Stage 3** adds the on-chain ZKAccess leg (Bulletproof verifier in Script — EC ops proven feasible by the Groth16 work). |
-| `DisclosureSale`, `MamemCheckpointBond` | ✅ (V2/V3) | **Consumers**: gain "release/pay iff valid-proof-attached" script conditions — the actual reason this matters. |
+| `DisclosureSale`, `NektarCheckpointBond` | ✅ (V2/V3) | **Consumers**: gain "release/pay iff valid-proof-attached" script conditions — the actual reason this matters. |
 
 ### 4.5 The optimistic path — the economics-viable architecture (PRIMARY)
 
@@ -192,7 +192,7 @@ more expensive than it gains.
 
 ```mermaid
 flowchart TB
-    P["Prover"] -->|"tx₁: MamemZkClaim UTXO<br/>{receiptHash, bond, deadline, prover}"| CLM[("claim + bond<br/>~2KB")]
+    P["Prover"] -->|"tx₁: NektarZkClaim UTXO<br/>{receiptHash, bond, deadline, prover}"| CLM[("claim + bond<br/>~2KB")]
     CLM -->|"happy path — nobody challenges<br/>tx₂ settles after deadline"| OK["verdict accepted:<br/>consumers spend vs claim"]
     CLM -->|"anyone, before deadline:<br/>challenge UTXO + own bond"| CHG["bisection game<br/>(off-chain negotiation,<br/>on-chain commitments)"]
     CHG -->|"~log₂(29)≈5 rounds:<br/>prover reveals mid-state,<br/>challenger picks divergent half"| LEAF["leaf dispute = ONE stage<br/>= Poseidon2Stage covenant<br/>(proven: 1353 ops VALID)"]
@@ -201,12 +201,12 @@ flowchart TB
     VERD -->|"yes — claim holds"| SETTLE["claim stands,<br/>challenger bond → prover"]
 ```
 
-**Claim format** (`MamemZkClaim` covenant, new contract):
+**Claim format** (`NektarZkClaim` covenant, new contract):
 - state = `{receiptHash, journalRoot, journalSize, queryId, bondSats,
   proverPkh, deadline}` — a commitment to "this receipt verifies against
   this anchor", not the receipt itself (bytes stay off-chain).
 - `settle(preimage, anchorTx)` — spendable by the consumer once
-  `locktime ≥ deadline`: asserts `journalRoot == decodeMamemAnchor(
+  `locktime ≥ deadline`: asserts `journalRoot == decodeNektarAnchor(
   anchorTx).R` on-chain (the App-C binding), burns `queryId`, releases
   the verdict UTXO the consumer's covenant references.
 - `challenge(challengerPkh)` — anyone before deadline: converts the
@@ -233,7 +233,7 @@ borne by the liar.
 
 ### What a stage tx must satisfy
 
-Each stage's locking script checks four things (the `MamemAnchor`
+Each stage's locking script checks four things (the `NektarAnchor`
 pattern generalized):
 
 1. **Continuity** — I spend state UTXO_{i−1} whose stage counter is
@@ -243,7 +243,7 @@ pattern generalized):
 3. **Commitment** — `w_i` is bound to the real receipt: earlier stages
    commit a hash of the receipt fields; later stages open them.
 4. **Termination** — the last stage checks `journal.root ==
-   decodeMamemAnchor(anchorTx).R` and `journal.size == anchor.size`,
+   decodeNektarAnchor(anchorTx).R` and `journal.size == anchor.size`,
    burning `queryId` into the emitted state.
 
 ## 5. Inside the artifact — what Script must actually compute
@@ -343,7 +343,7 @@ per-op cost.
   variant emits operators and is unspendable as-is.
 - **0e.1 OUR circuit — DONE on live regtest:** `circuits/membership/`
   (arkworks Groth16 over BLS12-381) proves **sha256d-Merkle membership**
-  in a 16-leaf tree built with mamem's own fold — statement "leaf ∈ root
+  in a 16-leaf tree built with nektar's own fold — statement "leaf ∈ root
   `eda3ef76…` at index 5", root baked as a circuit constant so the vk
   commits to it. Dev trusted setup + prove inside a Linux rust container;
   `be2le.py` converts arkworks' big-endian field serialization to the
@@ -353,7 +353,7 @@ per-op cost.
   tx_engine PASS; live: deploy `1d2a0a48…`, proof spend `a1d9ec35…`
   accepted, tamper rejected, mined h8486.
 - **0e.2 VALIDITY claim covenant — DONE on live regtest:**
-  `MamemGrothClaim` (one-shot) `settleValid` pins `prevouts == our‖
+  `NektarGrothClaim` (one-shot) `settleValid` pins `prevouts == our‖
   verifierOutpoint` via hashPrevouts (same pattern as `proveStage`) →
   input1 IS the committed verifier UTXO, whose Groth16 script runs under
   consensus; outputs [ClaimVerdict @out0, payout @out1]. e2e
@@ -375,7 +375,7 @@ per-op cost.
 
 ### Stage 1 — optimistic claim contract (the shippable artifact)
 
-- `MamemZkClaim` covenant ✅ **interpreter-green (14/14 spends)**:
+- `NektarZkClaim` covenant ✅ **interpreter-green (14/14 spends)**:
   `settle` (deadline + `ClaimVerdict` covenant output + bond return,
   277 ops), `challenge` (346), `reveal` (334), `bisect` (392,
   arithmetic-select midpoint — see §4.5 note), `proveStage` leaf (270,
@@ -408,7 +408,7 @@ per-op cost.
 ### Stage 2 — full-validity mode (the upgrade)
 
 - Stage-decomposition table for the whole succinct receipt → ordered
-  `MamemZkVerifier` covenant chain (~10⁴ txs naive, ~10²–10³ optimized:
+  `NektarZkVerifier` covenant chain (~10⁴ txs naive, ~10²–10³ optimized:
   RC-in-state generic stage, deferred mods, shared paths).
 - Terminal stage: `journal.root == R_n`, `size == anchor.size`, queryId
   burned — same interface as the settled claim, so consumers swap
@@ -421,7 +421,7 @@ per-op cost.
   ZKAccess Bulletproof verifier in Script (separate spike; EC point
   ops proven feasible by the Groth16 Script work).
 - Consumer hooks: `DisclosureSale` pay-iff-proven;
-  `MamemCheckpointBond` proof-gated release.
+  `NektarCheckpointBond` proof-gated release.
 - Docs: PROOFS.md on-chain row, THREAT-MODEL update, README.
 
 ## 7. Honest deferrals / non-goals
@@ -438,7 +438,7 @@ per-op cost.
   finalizes only if *zero* independent observers challenge within the
   window — 1-of-N honesty, the standard BitVM trustless model. Watchers
   are permissionless; the bond makes lying a losing bet either way.
-  ✅ **Deployed**: `packages/watcher` (`mamem-watcher`) polls a claims
+  ✅ **Deployed**: `packages/watcher` (`nektar-watcher`) polls a claims
   registry, re-verifies each open claim's RISC Zero receipt off-chain
   via `verifyZkm2`, cross-checks committed journal fields, and
   broadcasts `challenge` on any mismatch — proven end-to-end on live
@@ -459,7 +459,7 @@ per-op cost.
   manifest, not an inference proof.
 - `settle`'s anchor binding ✅ **continuing variant**: bound claims use
   `settleAnchored`, which enumerates `[anchorCont, verdict, payout]`;
-  `MamemAnchor.witnessSettle` re-emits **its own continuation** first
+  `NektarAnchor.witnessSettle` re-emits **its own continuation** first
   (same state — the anchor survives for future appends) plus the
   verdict built with its own `R` — `hashOutputs` only validates if
   `journalRoot == anchor.R`. Unanchored `settle` asserts
@@ -475,7 +475,7 @@ per-op cost.
 - V2 signature-equivocation slashing stays blocked (no
   `OP_CHECKSIGFROMSTACK`) — unrelated to this work.
 - **runar 0.4.6 compiler traps** (found the hard way, worked around in
-  `MamemZkClaim`): `readonly` ctor slots shift `codeSeparatorIndex` and
+  `NektarZkClaim`): `readonly` ctor slots shift `codeSeparatorIndex` and
   break state deser → keep config in state; `readonly` fields break
   inside method math → bake literals; statement-level `if { this.x = }`
   and self-referential ternaries (`this.x = c ? v : this.x`) silently
@@ -496,7 +496,7 @@ per-op cost.
   ALL PASS (`e2e-claim-regtest.mjs` — settle with verdict emission,
   challenge, reveal, bisect×2 to leaf, proveStage co-spend **with a
   real `Poseidon2Stage` UTXO as the leaf**, both timeouts, **anchored
-  `settleAnchored` co-spend with a real `MamemAnchor` UTXO** — anchor
+  `settleAnchored` co-spend with a real `NektarAnchor` UTXO** — anchor
   continuation + `journalRoot == anchor.R` consensus-enforced — all
   accepted by Teranode mempool). Watcher ✅ ALL PASS
   (`e2e-watcher-regtest.mjs` — daemon detects a fraudulent claim's

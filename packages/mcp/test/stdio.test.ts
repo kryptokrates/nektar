@@ -10,11 +10,11 @@ const text = (r: unknown) => JSON.parse(((r as { content: Array<{ text: string }
 
 test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 30_000 }, async () => {
   const bin = fileURLToPath(new URL('../src/bin.js', import.meta.url))
-  const transport = new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env as Record<string, string>, MAMEM_NETWORK: 'mock', MAMEM_MODEL_ID: 'stdio-test', MAMEM_DEMO_UTXOS: '20', MAMEM_BATCH: '2' }, stderr: 'ignore' })
-  const client = new Client({ name: 'mamem-test', version: '1.0.0' })
+  const transport = new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env as Record<string, string>, NEKTAR_NETWORK: 'mock', NEKTAR_MODEL_ID: 'stdio-test', NEKTAR_DEMO_UTXOS: '20', NEKTAR_BATCH: '2' }, stderr: 'ignore' })
+  const client = new Client({ name: 'nektar-test', version: '1.0.0' })
   await client.connect(transport)
   try {
-    assert.equal(client.getServerVersion()?.name, 'mamem')
+    assert.equal(client.getServerVersion()?.name, 'nektar')
     assert.match(client.getInstructions() ?? '', /recall/)
     const { tools } = await client.listTools()
     assert.equal(tools.length, 32)
@@ -30,9 +30,9 @@ test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resourc
     assert.equal(rec.items[0].text, 'torque 45Nm'); assert.equal(rec.receipt.modelId, 'stdio-test')
     const bad = await client.callTool({ name: 'nope', arguments: {} })
     assert.equal(bad.isError, true)
-    const cp = await client.readResource({ uri: 'mamem://checkpoint/m' })
+    const cp = await client.readResource({ uri: 'nektar://checkpoint/m' })
     assert.ok(JSON.parse((cp.contents[0] as { text: string }).text).checkpoint.sig)
-    const rr = JSON.parse(((await client.readResource({ uri: 'mamem://record/m/0' })).contents[0] as { text: string }).text)
+    const rr = JSON.parse(((await client.readResource({ uri: 'nektar://record/m/0' })).contents[0] as { text: string }).text)
     assert.deepEqual(rr.proof, { ok: true, settled: true, anchorState: 'mined' })
     const { prompts } = await client.listPrompts()
     assert.deepEqual(prompts.map(p => p.name).sort(), ['audit-answer', 'grounded-answer', 'remember-with-source'])

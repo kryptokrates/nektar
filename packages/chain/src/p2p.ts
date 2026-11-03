@@ -67,7 +67,7 @@ function netaddr (ip = '0.0.0.0', port = 0): Buffer {
 }
 
 function versionPayload (selfPort = 0): Buffer {
-  const ua = Buffer.from('/mamem:0.1.0/')
+  const ua = Buffer.from('/nektar:0.1.0/')
   return Buffer.concat([
     (() => { const b = Buffer.alloc(4); b.writeInt32LE(70015); return b })(), // version
     (() => { const b = Buffer.alloc(8); b.writeBigUInt64LE(1n); return b })(), // services: NODE_NETWORK (peers deprioritize getdata for leaf clients)

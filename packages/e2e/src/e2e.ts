@@ -2,19 +2,19 @@
 //   write → anchor → verify → correction → linked superseding record
 // plus: 2 parallel shards, a 1,000-anchor burst, and two overlay engines that
 // both admit the same anchor chain.
-// Reduced live-regtest variant: set MAMEM_NETWORK=regtest to run
+// Reduced live-regtest variant: set NEKTAR_NETWORK=regtest to run
 // e2e-regtest.ts (fresh funding + real tracker + real headers) instead.
-if (process.env.MAMEM_NETWORK === 'regtest') {
+if (process.env.NEKTAR_NETWORK === 'regtest') {
   await import('./e2e-regtest.js')
   process.exit(0)
 }
 import { PrivateKey } from '@bsv/sdk'
-import { utf8, toHex, dsha256, hash160 } from '@mamem/core'
+import { utf8, toHex, dsha256, hash160 } from '@nektar/core'
 const dsha256utf8 = (s: string) => dsha256(utf8(s))
-import { MockChain, MockFunder } from '@mamem/chain'
-import { MamemMemory } from '@mamem/mcp'
-import { createMamemOverlay } from '@mamem/overlay'
-import { verifyFragment } from '@mamem/verify'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { NektarMemory } from '@nektar/mcp'
+import { createNektarOverlay } from '@nektar/overlay'
+import { verifyFragment } from '@nektar/verify'
 
 let failures = 0
 const check = (cond: boolean, name: string) => {
@@ -32,9 +32,9 @@ for (const u of (funder as any).utxos as Array<{ tx: import('@bsv/sdk').Transact
 chain.mine(1)
 
 // --- scenario: maintenance manual, 2 shards ---
-// each shard gets its own owner key (MamemMemory default); funding inputs are
+// each shard gets its own owner key (NektarMemory default); funding inputs are
 // signed by the fund key, so shards share one funder but never a shard id
-const mem = new MamemMemory(chain, funder, funder.keyPair, {
+const mem = new NektarMemory(chain, funder, funder.keyPair, {
   batchPolicy: { maxLeaves: 2 }, modelId: 'e2e-model-1'
 })
 
@@ -74,8 +74,8 @@ check(rT.ok === true, 'second shard verifies independently')
 // --- overlay: two engines admit the same chain ---
 lap('parallel shards')
 console.log('— two overlay engines —')
-const ov1 = await createMamemOverlay(chain, chain)
-const ov2 = await createMamemOverlay(chain, chain)
+const ov1 = await createNektarOverlay(chain, chain)
+const ov2 = await createNektarOverlay(chain, chain)
 const manualHead = (mem as any).anchors.get('manual')
 for (const h of [manualHead.getHead(), ...(manualHead as any).pendingHeads ?? []].filter(Boolean)) {
   // replay the anchor chain into both engines in order
@@ -90,12 +90,12 @@ for (const [shard, tail] of tails) {
     // full replay into engine1; engine2 replays the 'manual' shard only —
     // admitting a head without its ancestors fails previousCoins, so the
     // agreement check needs the whole primary tail
-    const s1 = await ov1.engine.submit({ beef: acFor.beefOf(tx), topics: ['tm_mamem'] }, undefined, 'current-tx')
-    if ((s1.tm_mamem?.outputsToAdmit?.length ?? 0) !== 1) console.log(`  engine1 reject ${shard} n=${link.n}:`, JSON.stringify(s1.tm_mamem).slice(0,200))
-    check((s1.tm_mamem?.outputsToAdmit?.length ?? 0) === 1, `engine1 admits ${shard} n=${link.n}`)
+    const s1 = await ov1.engine.submit({ beef: acFor.beefOf(tx), topics: ['tm_nektar'] }, undefined, 'current-tx')
+    if ((s1.tm_nektar?.outputsToAdmit?.length ?? 0) !== 1) console.log(`  engine1 reject ${shard} n=${link.n}:`, JSON.stringify(s1.tm_nektar).slice(0,200))
+    check((s1.tm_nektar?.outputsToAdmit?.length ?? 0) === 1, `engine1 admits ${shard} n=${link.n}`)
     if (shard === 'manual') {
-      const s2 = await ov2.engine.submit({ beef: acFor.beefOf(tx), topics: ['tm_mamem'] }, undefined, 'current-tx')
-      check((s2.tm_mamem?.outputsToAdmit?.length ?? 0) === 1, `engine2 admits ${shard} n=${link.n}`)
+      const s2 = await ov2.engine.submit({ beef: acFor.beefOf(tx), topics: ['tm_nektar'] }, undefined, 'current-tx')
+      check((s2.tm_nektar?.outputsToAdmit?.length ?? 0) === 1, `engine2 admits ${shard} n=${link.n}`)
     }
   }
 }
@@ -141,7 +141,7 @@ lap('burst+rotate')
 bChain.mine(1)
 
 // AnchorChain import for the burst
-import { AnchorChain } from '@mamem/anchor'
+import { AnchorChain } from '@nektar/anchor'
 function AnchorChainBurst (shard: string, c: MockChain, f: MockFunder, k: PrivateKey) {
   return new AnchorChain(shard, k, f, k, c)
 }
@@ -153,7 +153,7 @@ console.log('— reorg —')
   const rc = new MockChain(); rc.verifyScripts = true; const rf = new MockFunder(); rf.topup(10)
   for (const u of (rf as any).utxos as Array<{ tx: import('@bsv/sdk').Transaction }>) { rc.mempool.set(u.tx.id('hex'), u.tx); rc.registerParent(u.tx) }
   rc.mine(1)
-  const rm = new MamemMemory(rc, rf, rf.keyPair, { batchPolicy: { maxLeaves: 1 } })
+  const rm = new NektarMemory(rc, rf, rf.keyPair, { batchPolicy: { maxLeaves: 1 } })
   await rm.remember('reorg', 'to be reorged')
   await rm.anchorShard('reorg')
   rc.mine(1)
@@ -177,7 +177,7 @@ console.log('— reorg —')
 lap('reorg')
 console.log('— origin-falsehood —')
 {
-  const fm = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 } })
+  const fm = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 } })
   const w = await fm.remember('falsity', 'the sky is green (deliberately false)')
   await fm.anchorShard('falsity')
   chain.mine(1)
@@ -197,11 +197,11 @@ console.log('— v2 scenario —')
   const vf = new MockFunder(); vf.topup(12)
   for (const u of (vf as any).utxos) vc.registerParent(u.tx)
   const B = PrivateKey.fromRandom(); const pubB = B.toPublicKey().toString()
-  const { canonicalizePolicySet } = await import('@mamem/policy')
-  const { signBinding, issueChallenge, answerChallenge, issueClearance, proveAccess, Smt, issueDisclosure, verifyDisclosureAnchored, fieldsCommitment, fieldPath, fieldRoot } = await import('@mamem/identity') as any
+  const { canonicalizePolicySet } = await import('@nektar/policy')
+  const { signBinding, issueChallenge, answerChallenge, issueClearance, proveAccess, Smt, issueDisclosure, verifyDisclosureAnchored, fieldsCommitment, fieldPath, fieldRoot } = await import('@nektar/identity') as any
   const policyText = `permit(principal == Agent::"${toHex(hash160(Buffer.from(pubB, 'hex')))}", action, resource);`
   const ps = canonicalizePolicySet('v2', policyText)
-  const vm = new MamemMemory(vc, vf, vf.keyPair, {
+  const vm = new NektarMemory(vc, vf, vf.keyPair, {
     batchPolicy: { maxLeaves: 1 },
     shardKeys: new Map([['v2', vf.keyPair]]),
     policy: { policyText, anchoredPolicySetHash: ps.hash },
@@ -238,7 +238,7 @@ console.log('— v2 scenario —')
   vc.mine(1)
   check(Number(rot.head.data.n) === 0, `rotate keeps state n=${rot.head.data.n}`)
   // earlier zk proof still verifies against the same commitment/transcript
-  check((await import('@mamem/identity')).verifyAccess(iss.commitment, 2n, proof, tr) === true, 'ZK proof still verifies after rotate')
+  check((await import('@nektar/identity')).verifyAccess(iss.commitment, 2n, proof, tr) === true, 'ZK proof still verifies after rotate')
   // revoke the OLD key in the SMT, anchor the root, non-revocation for new key
   const smt = new Smt()
   const kOld = dsha256(Buffer.from(vf.keyPair.toPublicKey().toString()))
@@ -246,7 +246,7 @@ console.log('— v2 scenario —')
   const rootRev = smt.root()
   await vm.remember('__rev__', `root:${Buffer.from(rootRev).toString('hex')}`); const ra = await vm.anchorShard('__rev__').catch((e: any) => { console.log('  rev anchor:', String(e?.message??e).slice(0,120)); return null }); vc.mine(1)
   check(ra !== null || ((vm as any).tails.get('__rev__')?.length ?? 0) > 0, 'revocation root anchored')
-  const { proveNonInclusion, verifyProof: verifySmtProof } = await import('@mamem/identity') as any
+  const { proveNonInclusion, verifyProof: verifySmtProof } = await import('@nektar/identity') as any
   const nip = smt.prove(dsha256(Buffer.from(newOwner.toPublicKey().toString())))
   check(verifySmtProof(nip, { present: false }, rootRev) === true, 'new key non-inclusion verifies vs anchored root')
   // auditor disclosure envelope: verify anchored, then fails after expiry
@@ -263,10 +263,10 @@ console.log('— v2 scenario —')
 }
 
 // --- P10: ZK membership (Wright §13): STARK over the anchored SHA-256 tree ---
-// Proving needs the RISC Zero prover (Docker image mamem-stark-build, ~50 s);
-// MAMEM_E2E_STARK=0 skips it (the verifier is covered by unit tests either way).
+// Proving needs the RISC Zero prover (Docker image nektar-stark-build, ~50 s);
+// NEKTAR_E2E_STARK=0 skips it (the verifier is covered by unit tests either way).
 console.log('— P10 ZK membership (STARK) —')
-if (process.env.MAMEM_E2E_STARK === '0') console.log('  (skipped: MAMEM_E2E_STARK=0)')
+if (process.env.NEKTAR_E2E_STARK === '0') console.log('  (skipped: NEKTAR_E2E_STARK=0)')
 else try {
   const vm = mem
   for (const d of ['p10 frag 0', 'p10 frag 1', 'p10 frag 2', 'p10 frag 3']) await vm.remember('zkm', d, {}, 1) // batch of 4 → anchored
@@ -290,8 +290,8 @@ else try {
 // — v4 AORG + policy DAG + instancing —
 console.log('— v4 AORG / policy DAG / instancing —')
 try {
-  const { AORGraph, GraphAnchor, PolicyDAG, instanceOf, memberProof, delegate, verifyDelegation, verifyInstance } = await import('@mamem/graph')
-  const { parseProgram } = await import('@mamem/datalog')
+  const { AORGraph, GraphAnchor, PolicyDAG, instanceOf, memberProof, delegate, verifyDelegation, verifyInstance } = await import('@nektar/graph')
+  const { parseProgram } = await import('@nektar/datalog')
   const cat = parseProgram(`@id r-spec
 spec(S, V) :- requires(P, V), applies(S, P).`).rules
   const g = new AORGraph(cat)
@@ -318,17 +318,17 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
   const pAnchor = await mem.anchorShard('__policy__'); chain.mine(1)
   const GRAPH_TXID = graphTxid; const POL_TXID = pAnchor?.txid ?? 'n/a'
   console.log(`  TXIDS graph-anchor=${GRAPH_TXID} policy-root-anchor=${POL_TXID}`)
-  // derivation-ALLOW + conflict-DENY through MamemMemory DAG gate
+  // derivation-ALLOW + conflict-DENY through NektarMemory DAG gate
   const f2 = new MockFunder(); f2.topup(4); for (const u of (f2 as any).utxos) chain.registerParent(u.tx)
-  const memDag = new MamemMemory(chain, f2, f2.keyPair, { batchPolicy: { maxLeaves: 10 }, policyDag: dag, anchoredPolicyRoot: proot })
+  const memDag = new NektarMemory(chain, f2, f2.keyPair, { batchPolicy: { maxLeaves: 10 }, policyDag: dag, anchoredPolicyRoot: proot })
   await memDag.remember('docs', 'spec sheet', {}, 0)
   const denyNoId = await memDag.recall('docs')
   check((denyNoId.receipt.dag?.state ?? '').startsWith('dag-deny'), 'DAG deny without verified principal')
   const dagConflict = new PolicyDAG([{ name: 'org', rules: [...pRules, ...parseProgram(`@id pd
 deny(P, read, R) :- member(P, verified), fragment(R).`).rules] }])
-  const memConf = new MamemMemory(chain, f2, f2.keyPair, { batchPolicy: { maxLeaves: 10 }, policyDag: dagConflict })
+  const memConf = new NektarMemory(chain, f2, f2.keyPair, { batchPolicy: { maxLeaves: 10 }, policyDag: dagConflict })
   await memConf.remember('docs', 'x', {}, 0)
-  const { signBinding, issueChallenge, answerChallenge } = await import('@mamem/identity')
+  const { signBinding, issueChallenge, answerChallenge } = await import('@nektar/identity')
   const ck = PrivateKey.fromRandom(); const cNonce = memConf.issueChallenge()
   const denyConf = await memConf.recall('docs', { identity: { pubkey: ck.toPublicKey().toString(), binding: signBinding(ck, 'conflict-agent', ''.repeat(64), 0), challengeNonce: cNonce, challengeSig: answerChallenge(ck, cNonce) } })
   check(/conflict/.test(denyConf.receipt.dag?.state ?? ''), 'conflict DENY via DAG gate')
@@ -348,12 +348,12 @@ deny(P, read, R) :- member(P, verified), fragment(R).`).rules] }])
 // — P14 Merkle Automaton: full mode (Rúnar) + light mode (anchored trace) —
 console.log('— P14 Merkle Automaton —')
 try {
-  const { Automaton, verifyTrace, MAMEM_AUTOMATON_ARTIFACT } = await import('@mamem/automaton')
+  const { Automaton, verifyTrace, NEKTAR_AUTOMATON_ARTIFACT } = await import('@nektar/automaton')
   const { automatonCosts } = await import('./automaton-costs.js')
   const def = { Q: ['draft', 'review', 'published'], Sigma: ['submit', 'approve'], delta: [[0, 0, 1], [1, 1, 2]] as [number, number, number][], q0: 0, F: [2], O: ['ok'] }
   const out = toHex(dsha256utf8('manual rev 2 published'))
   const f3 = new MockFunder(); f3.topup(8); for (const t of f3.parents) chain.registerParent(t)
-  const am = new MamemMemory(chain, f3, f3.keyPair, { batchPolicy: { maxLeaves: 2 } })
+  const am = new NektarMemory(chain, f3, f3.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const d = await am.automatonDeploy('manual-lifecycle', def)
   const ac = am.automaton('manual-lifecycle')
   const s1 = await ac.step(0, 1, out)
@@ -365,7 +365,7 @@ try {
   const s2 = await ac.step(1, 2, out)
   const h = await ac.halt()
   check(h.state.halted && h.state.q === 2 && h.state.n === 3, 'automaton: draft→review→published, halted on-chain')
-  const costs = automatonCosts(MAMEM_AUTOMATON_ARTIFACT, s2.tx)
+  const costs = automatonCosts(NEKTAR_AUTOMATON_ARTIFACT, s2.tx)
   console.log(`  AUT-009 lockingScript=${costs.scriptBytes}B stepTx=${costs.txBytes}B fee=${costs.feeSats}sat`)
   console.log(`  TXIDS automaton-deploy=${d.tx.id('hex')} step1=${s1.tx.id('hex')} step2=${s2.tx.id('hex')} halt=${h.tx.id('hex')}`)
   // light mode: transition events are anchored leaves; the trace verifies

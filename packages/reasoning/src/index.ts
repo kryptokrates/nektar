@@ -1,4 +1,4 @@
-// @mamem/reasoning — P15 agent-side reasoning over verified memory:
+// @nektar/reasoning — P15 agent-side reasoning over verified memory:
 //   ground()           AGT-003  every claim must be entailed by a VERIFIED cited fragment
 //   modelIdentity()    AGT-011  local weights hash / API provider release
 //   commitReceipt()    AGT-012  answer ‖ refs ‖ check ‖ model ‖ time ‖ grounding, committed
@@ -10,12 +10,12 @@
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { PublicKey, Signature, PrivateKey, type Transaction } from '@bsv/sdk'
-import { dsha256, utf8, toHex, fromHex, concat, computeLeaf, TAG_PROMISE, TAG_DELEGATION } from '@mamem/core'
-import { verifyCertChain, type RotationCert } from '@mamem/identity'
-import { Datalog, parseLiteral, parseProgram, ParseError, type Fact, type Rule } from '@mamem/datalog'
-import { verifyFragment, type ProofBundle } from '@mamem/verify'
-import { verifyDerivation, type PolicyDAG } from '@mamem/graph'
-import type { ChainTracker } from '@mamem/chain'
+import { dsha256, utf8, toHex, fromHex, concat, computeLeaf, TAG_PROMISE, TAG_DELEGATION } from '@nektar/core'
+import { verifyCertChain, type RotationCert } from '@nektar/identity'
+import { Datalog, parseLiteral, parseProgram, ParseError, type Fact, type Rule } from '@nektar/datalog'
+import { verifyFragment, type ProofBundle } from '@nektar/verify'
+import { verifyDerivation, type PolicyDAG } from '@nektar/graph'
+import type { ChainTracker } from '@nektar/chain'
 
 export * from './temporal.js'
 
@@ -103,7 +103,7 @@ export interface Receipt {
   /** §16 delegation map μ_i: sub-decisions asserted by delegating agents.
    *  signature = Sign_delegator(H(TAG_DELEGATION‖delegator‖decision‖answer)) */
   delegations?: Array<{ delegator: string, decision: string, signature: string }>
-  /** paid mode (MAMEM_PAYMENTS): the payment tx that settled this call — the
+  /** paid mode (NEKTAR_PAYMENTS): the payment tx that settled this call — the
    *  receipt commits the txid, so the "signed usage receipt" names what paid
    *  for it; anyone can audit tx → (pays payTo ≥ amount) ∧ OP_RETURN tag. */
   payment?: { txid: string, amountSats: number, payTo: string, invoiceId: string }
@@ -133,7 +133,7 @@ export function verifyReceiptDelegations (receipt: Pick<Receipt, 'answer' | 'del
   }
   return { ok: reasons.length === 0, reasons }
 }
-/** structural seam onto MamemMemory (no package cycle) */
+/** structural seam onto NektarMemory (no package cycle) */
 export interface AnchorMem {
   remember: (shard: string, data: string) => Promise<{ seq: number }>
   anchorShard: (shard: string) => Promise<{ txid: string, n: number } | null>
@@ -245,7 +245,7 @@ export interface AuditBundle {
    *  against chain data, not an operator's opaque local list. `data`/`prov`/`E`
    *  let the verifier recompute `leaf = computeLeaf({d,p,E})` — the evidence
    *  binds the revocation TEXT to the proven leaf, not just any inclusion. */
-  revocations?: Array<{ pubkey: string, seq: number, data: string, prov?: import('@mamem/core').Provenance, E?: Uint8Array, leaf: string, bundle: ProofBundle }>
+  revocations?: Array<{ pubkey: string, seq: number, data: string, prov?: import('@nektar/core').Provenance, E?: Uint8Array, leaf: string, bundle: ProofBundle }>
   /** JSON-portable: Merkle siblings travel as hex */
   policy?: { edb: Fact[], derivation: PortableDerivation }
 }
@@ -330,7 +330,7 @@ export async function verifyAuditBundle (b: AuditBundle, tracker: ChainTracker, 
 export async function verifyAnchoredRotationChain (
   proof: {
     genesisPub: string | null
-    certs: Array<{ cert: RotationCert, seq: number, data: string, prov?: import('@mamem/core').Provenance, E?: Uint8Array, leaf: string, bundle?: ProofBundle, anchored: boolean }>
+    certs: Array<{ cert: RotationCert, seq: number, data: string, prov?: import('@nektar/core').Provenance, E?: Uint8Array, leaf: string, bundle?: ProofBundle, anchored: boolean }>
   },
   tracker: ChainTracker
 ): Promise<{ ok: boolean, activePub: string | null, reasons: string[] }> {

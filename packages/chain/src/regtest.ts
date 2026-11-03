@@ -1,6 +1,6 @@
 // Real regtest adapters — Teranode propagation /tx for broadcast and
 // Teranode JSON-RPC for headers. Compiled but only exercised on a live stack
-// (MAMEM_NETWORK=regtest). No tests depend on these.
+// (NEKTAR_NETWORK=regtest). No tests depend on these.
 import { Transaction } from '@bsv/sdk'
 import * as nodeCrypto from 'node:crypto'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker } from './interfaces.js'
@@ -74,11 +74,11 @@ export class TeranodeRPCTracker implements ChainTracker {
 
 export function regtestStackFromEnv (): { tracker: ChainTracker, broadcaster: Broadcaster } {
   const cfg: RegtestConfig = {
-    rpcUrl: process.env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-    rpcUser: process.env.MAMEM_RPC_USER ?? 'teranode',
-    rpcPass: process.env.MAMEM_RPC_PASS ?? '',
-    propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-    assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
+    rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+    rpcUser: process.env.NEKTAR_RPC_USER ?? 'teranode',
+    rpcPass: process.env.NEKTAR_RPC_PASS ?? '',
+    propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+    assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
   }
   return { tracker: new TeranodeRPCTracker(cfg), broadcaster: new TeranodeBroadcaster(cfg.propagationUrl) }
 }

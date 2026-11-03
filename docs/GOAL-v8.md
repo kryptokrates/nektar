@@ -11,7 +11,7 @@ anchor suite green.**
 
 ## Verified-aligned (unchanged — evidence, not claims)
 
-- §3/§4 automaton + transition-ledger anchoring — `MamemAnchor` covenant
+- §3/§4 automaton + transition-ledger anchoring — `NektarAnchor` covenant
 - §5 `K_i=(d,p,H(d‖p),E)` fragment model — `packages/core` Fragment
 - §6 ECDH+HKDF — BRC-42 `wrapFor`/`unwrapFor`
 - §7 `K_sym,i^l = HKDF(K_U,A ∥ t‖ψ‖ρ‖π‖l)` — `canonicalKeyID` field-exact
@@ -77,7 +77,7 @@ anchor suite green.**
 
 ## Phase D — audit + model binding (D6, D7)
 
-- **D6 — opt-in access audit trail.** `MAMEM_ACCESS_LOG=1` appends
+- **D6 — opt-in access audit trail.** `NEKTAR_ACCESS_LOG=1` appends
   timestamped `{type:'access', event:'decrypt'|'traverse', shard, seq,
   caller}` records to `__access__` via `log.remember` (no mid-read
   anchor; best-effort). Off by default — a readable who-read-what log
@@ -100,7 +100,7 @@ anchor suite green.**
   trailing `opts.premiseRefs`; existing calls unaffected.
 - `AuditBundle.revocations` entries need `{data, prov, E, leaf}` —
   produced by `revocationProof`, not hand-built.
-- Reasoning now runtime-depends on `@mamem/identity` (was dev-only).
+- Reasoning now runtime-depends on `@nektar/identity` (was dev-only).
 
 ## Honest deferrals that REMAIN (documented, not claimed)
 

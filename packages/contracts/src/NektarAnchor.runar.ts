@@ -1,11 +1,11 @@
-// MamemAnchor — stateful Rúnar contract enforcing the mamem successor rule
+// NektarAnchor — stateful Rúnar contract enforcing the nektar successor rule
 // on-chain (OP_PUSH_TX continuation), v3: the state carries ONLY Wright's
 // commitments (n, size, R_n, R'_n) plus ownership — no ZK companion root.
 // ZK membership is proven over R_n itself (ADR-020, STARK over SHA-256).
 //   shard = hash160(genesisOwner) — immutable, embedded in code.
 //   ANC-006 (GOAL-v6 S6.2): the state payload's FIRST push is the Metanet
 //   flag 0x4D455441 ("META"). Flagged scripts decode alongside flag-absent
-//   v3 anchors (decodeMamemAnchor accepts both artifacts).
+//   v3 anchors (decodeNektarAnchor accepts both artifacts).
 //   append(sig, pubKey, newR, newSize):
 //     hash160(pubKey) == ownerPkh AND checkSig(sig, pubKey) AND continuation
 //     carries n+1, size=newSize, R=newR, Rp' = hash256(TAG‖Rp‖newR‖size_le8),
@@ -18,7 +18,7 @@ import {
   type PubKey, type Sig, type Sha256, type ByteString
 } from 'runar-lang'
 
-export class MamemAnchor extends StatefulSmartContract {
+export class NektarAnchor extends StatefulSmartContract {
   // mutable state (addOutput order below must match declaration order).
   // metaFlag is the FIRST serialized push (the OP_RETURN data payload begins
   // with 0x4D455441 "META", the Metanet flag). genesisOwner is never modified
@@ -58,7 +58,7 @@ export class MamemAnchor extends StatefulSmartContract {
     this.addOutput(1n, this.metaFlag, this.genesisOwner, this.n, this.size, this.R, this.Rp, this.tagRprime, newOwnerPkh)
   }
 
-  /** §4.5 anchor witness: co-spent as input1 of MamemZkClaim.settleAnchored.
+  /** §4.5 anchor witness: co-spent as input1 of NektarZkClaim.settleAnchored.
    *  Re-emits OUR continuation first (same state — witnessing preserves the
    *  anchor for future appends/rotates), then the settle tx's [verdict,
    *  payout] outputs, constructing the ClaimVerdict script with THIS.R

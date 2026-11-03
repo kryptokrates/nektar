@@ -3,8 +3,8 @@ import { Engine, KnexStorage } from '@bsv/overlay'
 import allMigrations from '@bsv/overlay/storage/knex/all-migrations.ts'
 import { Transaction, PrivateKey, ProtoWallet, MerklePath, Script, PushDrop } from '@bsv/sdk'
 import { anchorFields, parseAnchorFields, anchorLockingScript, anchorUnlockTemplate, chainRp, dsha256, ZERO32, p2pkhLock, p2pkhUnlock } from './lib/anchor.mjs'
-import { createTmMamem } from './overlay/tm_mamem.mjs'
-import { createLsMamem } from './overlay/ls_mamem.mjs'
+import { createTmNektar } from './overlay/tm_nektar.mjs'
+import { createLsNektar } from './overlay/ls_nektar.mjs'
 
 const HEIGHT = 100
 const fundKey = PrivateKey.fromRandom()
@@ -30,13 +30,13 @@ await g.fee()
 await g.sign()
 console.log('verify:', await g.verify(chainTracker))
 console.log('parse:', parseAnchorFields(g.outputs[0].lockingScript))
-const ls = createLsMamem()
-const tm = createTmMamem(ls)
+const ls = createLsNektar()
+const tm = createTmNektar(ls)
 const beef = g.toBEEF()
 console.log('tm direct:', await tm.identifyAdmissibleOutputs(beef, []))
 const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
 for (const m of allMigrations) await m.up(kx)
-const engine = new Engine({ tm_mamem: tm }, { ls_mamem: ls }, new KnexStorage(kx), chainTracker, undefined, undefined, undefined, { broadcast: async () => ({ status: 'success' }) })
-const steak = await engine.submit({ beef, topics: ['tm_mamem'] }, undefined, 'current-tx')
+const engine = new Engine({ tm_nektar: tm }, { ls_nektar: ls }, new KnexStorage(kx), chainTracker, undefined, undefined, undefined, { broadcast: async () => ({ status: 'success' }) })
+const steak = await engine.submit({ beef, topics: ['tm_nektar'] }, undefined, 'current-tx')
 console.log('STEAK', JSON.stringify(steak))
 process.exit(0)

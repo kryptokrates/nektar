@@ -1,5 +1,5 @@
 {
-  "name": "@mamem/automaton",
+  "name": "@nektar/automaton",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -12,10 +12,10 @@
     "test": "node --test --test-timeout=60000 dist/test/*.test.js"
   },
   "dependencies": {
-    "@mamem/core": "workspace:*",
-    "@mamem/contracts": "workspace:*",
-    "@mamem/chain": "workspace:*",
-    "@mamem/anchor": "workspace:*",
+    "@nektar/core": "workspace:*",
+    "@nektar/contracts": "workspace:*",
+    "@nektar/chain": "workspace:*",
+    "@nektar/anchor": "workspace:*",
     "runar-sdk": "^0.4.6"
   },
   "peerDependencies": {

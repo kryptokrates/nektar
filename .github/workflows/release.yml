@@ -20,13 +20,13 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/mamem
+          images: ghcr.io/${{ github.repository_owner }}/nektar
           tags: |
             type=raw,value=edge,enable=${{ github.ref_type == 'branch' }}
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
           labels: |
-            org.opencontainers.image.title=mamem
+            org.opencontainers.image.title=nektar
             org.opencontainers.image.description=Verifiable, encrypted agent memory on BSV — MCP server
             org.opencontainers.image.licenses=Apache-2.0
       - uses: docker/build-push-action@v6
@@ -36,5 +36,5 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       - name: smoke the pushed image
-        run: docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/mamem:${{ steps.meta.outputs.version }} packages/mcp/demo/client.mjs
+        run: docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/nektar:${{ steps.meta.outputs.version }} packages/mcp/demo/client.mjs
         timeout-minutes: 3

@@ -3,7 +3,7 @@
 // the shard boundary (65+), partial last shards and multi-level top paths.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { dsha256, utf8, merkleRoot, buildTree } from '@mamem/core'
+import { dsha256, utf8, merkleRoot, buildTree } from '@nektar/core'
 import { buildSubsetProof, encodeZkdis, decodeZkdis, verifyZkdis, verifySubsetProof, ZksCodecError } from '../src/stark/subproof.js'
 
 const leaves = (n: number) => Array.from({ length: n }, (_, i) => dsha256(utf8(`leaf-${i}`)))

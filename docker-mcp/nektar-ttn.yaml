@@ -1,44 +1,44 @@
-name: mamem-ttn
-title: mamem on Teranode Test Net (TTN — test coins)
+name: nektar-ttn
+title: nektar on Teranode Test Net (TTN — test coins)
 type: server
-image: mamem:local
+image: nektar:local
 description: >-
-  mamem on BSV Teranode Test Net via Arcade + WoC-TTN. Anchor fees are paid by
+  nektar on BSV Teranode Test Net via Arcade + WoC-TTN. Anchor fees are paid by
   a dedicated operator fee key (generated on first start; its address is
   printed to stderr — fund it with TTN coins). All broadcasts pass a SpendGuard
   (per-tx fee cap, per-day spend cap, min interval, persisted ledger). Keys are
-  encrypted at rest (MAMEM_KEY_PASSPHRASE). TTN coins have no monetary value.
+  encrypted at rest (NEKTAR_KEY_PASSPHRASE). TTN coins have no monetary value.
 longLived: true
 volumes:
-  - mamem-ttn-data:/data
+  - nektar-ttn-data:/data
 secrets:
-  - name: mamem-ttn.key_passphrase
-    env: MAMEM_KEY_PASSPHRASE
+  - name: nektar-ttn.key_passphrase
+    env: NEKTAR_KEY_PASSPHRASE
     example: <long random passphrase>
     description: Encrypts keys.json and fee.key.json at rest (required)
-  - name: mamem-ttn.arc_api_key
-    env: MAMEM_ARC_API_KEY
+  - name: nektar-ttn.arc_api_key
+    env: NEKTAR_ARC_API_KEY
     example: <arcade api key — optional>
     description: Arcade API key (optional; public endpoints work without one)
-  - name: mamem-ttn.fund_wif
-    env: MAMEM_FUND_WIF
+  - name: nektar-ttn.fund_wif
+    env: NEKTAR_FUND_WIF
     example: <testnet WIF — optional>
     description: Operator fee key as testnet WIF. If unset, a fee.key.json key is generated.
 env:
-  - name: MAMEM_NETWORK
+  - name: NEKTAR_NETWORK
     value: ttn
-  - name: MAMEM_MAX_FEE_SATS_PER_TX
-    value: '{{mamem-ttn.max_fee_sats_per_tx}}'
-  - name: MAMEM_MAX_SPEND_SATS_PER_DAY
-    value: '{{mamem-ttn.max_spend_sats_per_day}}'
-  - name: MAMEM_MIN_BROADCAST_INTERVAL_MS
-    value: '{{mamem-ttn.min_broadcast_interval_ms}}'
-  - name: MAMEM_MODEL_ID
-    value: '{{mamem-ttn.model_id}}'
-  - name: MAMEM_CLEARANCE_AUTHORITIES
-    value: '{{mamem-ttn.clearance_authorities}}'
+  - name: NEKTAR_MAX_FEE_SATS_PER_TX
+    value: '{{nektar-ttn.max_fee_sats_per_tx}}'
+  - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
+    value: '{{nektar-ttn.max_spend_sats_per_day}}'
+  - name: NEKTAR_MIN_BROADCAST_INTERVAL_MS
+    value: '{{nektar-ttn.min_broadcast_interval_ms}}'
+  - name: NEKTAR_MODEL_ID
+    value: '{{nektar-ttn.model_id}}'
+  - name: NEKTAR_CLEARANCE_AUTHORITIES
+    value: '{{nektar-ttn.clearance_authorities}}'
 config:
-  - name: mamem-ttn
+  - name: nektar-ttn
     description: Teranode Test Net deployment — TTN test coins only
     type: object
     properties:

@@ -1,13 +1,13 @@
-// V2 MamemCheckpointBond + V3 DisclosureSale covenants — live regtest E2E
-// (MAMEM_NETWORK=regtest): deploy each contract, spend through it, and let the
+// V2 NektarCheckpointBond + V3 DisclosureSale covenants — live regtest E2E
+// (NEKTAR_NETWORK=regtest): deploy each contract, spend through it, and let the
 // node refuse the negative cases (early close / wrong wrapped / early refund).
 import { PrivateKey, Transaction, LockingScript, P2PKH, Hash } from '@bsv/sdk'
 import { buildP2PKHScript } from 'runar-sdk'
-import { CheckpointBond, DisclosureSaleHost } from '@mamem/anchor'
+import { CheckpointBond, DisclosureSaleHost } from '@nektar/anchor'
 import {
   TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve,
   type RegtestConfig
-} from '@mamem/chain'
+} from '@nektar/chain'
 import { existsSync, readFileSync } from 'node:fs'
 
 let failures = 0
@@ -24,14 +24,14 @@ function readEnv (p: URL): Record<string, string> {
 }
 const localEnv = readEnv(new URL('../../../../.env', import.meta.url))
 const qsEnv = readEnv(new URL('../../../../infra/teranode-quickstart/.env', import.meta.url))
-const WIF = process.env.MAMEM_REGTEST_WIF ?? localEnv.MAMEM_REGTEST_WIF
-if (!WIF) throw new Error('MAMEM_REGTEST_WIF missing: set it in mamem/.env')
+const WIF = process.env.NEKTAR_REGTEST_WIF ?? localEnv.NEKTAR_REGTEST_WIF
+if (!WIF) throw new Error('NEKTAR_REGTEST_WIF missing: set it in nektar/.env')
 const cfg: RegtestConfig = {
-  rpcUrl: process.env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-  rpcUser: process.env.MAMEM_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
-  rpcPass: process.env.MAMEM_RPC_PASS ?? qsEnv.rpc_pass ?? '',
-  propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-  assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
+  rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+  rpcUser: process.env.NEKTAR_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
+  rpcPass: process.env.NEKTAR_RPC_PASS ?? qsEnv.rpc_pass ?? '',
+  propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+  assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
 }
 if (!cfg.rpcPass) throw new Error('rpc_pass missing')
 const tracker = new TeranodeRPCTracker(cfg)

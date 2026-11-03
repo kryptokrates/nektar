@@ -2,7 +2,7 @@
 // step linking (fromStep), edge commitments, negation refusal.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { dsha256, utf8, concat, toHex } from '@mamem/core'
+import { dsha256, utf8, concat, toHex } from '@nektar/core'
 import { parseProgram, Datalog, derivationPath, PathError, factCanonical, nodeHash, edgeHash, stepEdge, pathDigest } from '../src/index.js'
 
 const PROG = `

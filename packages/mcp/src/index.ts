@@ -1,5 +1,5 @@
-export { MamemMemory, IngestError } from './memory.js'
-export type { MamemMemoryOptions, RememberResult, AnswerReceipt, SecurityStateStore, CallerIdentity, ZkClearance } from './memory.js'
+export { NektarMemory, IngestError } from './memory.js'
+export type { NektarMemoryOptions, RememberResult, AnswerReceipt, SecurityStateStore, CallerIdentity, ZkClearance } from './memory.js'
 export { FileSecurityStore, FileStateStore } from './securitystore.js'
 export type { MemoryStateStore, PersistedMemoryState } from './memory.js'
 export { openRuntime, configFromEnv, type RuntimeConfig, type Runtime } from './runtime.js'

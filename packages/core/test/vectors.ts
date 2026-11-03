@@ -15,7 +15,7 @@ const FILE = join(VEC_DIR, 'core.json')
 
 const frag = (i: number) => ({
   d: utf8(`deterministic fragment ${i}`),
-  p: { source: 'test-harness', time: 1700000000 + i, signature: fromHex('00'.repeat(64)), modelId: 'mamem-test-1' }
+  p: { source: 'test-harness', time: 1700000000 + i, signature: fromHex('00'.repeat(64)), modelId: 'nektar-test-1' }
 })
 
 const leaves = Array.from({ length: 9 }, (_, i) => computeLeaf(frag(i)))
@@ -25,7 +25,7 @@ const R0 = root
 const Rp0 = chainRp(GENESIS_PREV_RP, R0, leaves.length)
 
 const vectors = {
-  description: 'mamem core deterministic vectors (regenerate: pnpm reproduce --write)',
+  description: 'nektar core deterministic vectors (regenerate: pnpm reproduce --write)',
   fragments: leaves.map((l, i) => ({
     index: i,
     serialized: toHex(serializeFragment({ ...frag(i)!, hdp: hdp(frag(i)!), E: new Uint8Array(0) })),

@@ -1,9 +1,9 @@
 // Tool definitions (JSON Schema) + their single implementation (callTool),
 // shared by the MCP server (mcp-server.ts, official SDK) and the HTTP API.
-import { sha256, utf8 } from '@mamem/core'
+import { sha256, utf8 } from '@nektar/core'
 import { receiptToken } from './receipt.js'
 import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment } from './pay.js'
-import type { MamemMemory } from './memory.js'
+import type { NektarMemory } from './memory.js'
 
 /** ready-to-paste share surface for a receipt — the model drops `markdown`
  *  straight into PRs/docs; every pasted badge is a verify-page entry point */
@@ -13,9 +13,9 @@ const shareBlock = (token: string) => {
   return { token, verifyUrl, badgeUrl, markdown: `[![verified answer](${badgeUrl})](${verifyUrl})` }
 }
 
-/** public base of /v1/verify for footers/QRs — MAMEM_VERIFY_BASE for hosted
+/** public base of /v1/verify for footers/QRs — NEKTAR_VERIFY_BASE for hosted
  *  deployments (https://host or ngrok), else the local HTTP port. */
-const verifyBase = (): string => process.env.MAMEM_VERIFY_BASE ?? `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
+const verifyBase = (): string => process.env.NEKTAR_VERIFY_BASE ?? `http://localhost:${process.env.NEKTAR_HTTP_PORT ?? 8080}`
 
 export const TOOLS = [
   {
@@ -65,7 +65,7 @@ export const TOOLS = [
   },
   {
     name: 'anchor',
-    description: 'Force-close the pending batch of a shard and broadcast the anchor tx. With MAMEM_PAYMENTS=1 this costs sats — call payQuote, then pass payment.',
+    description: 'Force-close the pending batch of a shard and broadcast the anchor tx. With NEKTAR_PAYMENTS=1 this costs sats — call payQuote, then pass payment.',
     inputSchema: { type: 'object', properties: { shard: { type: 'string' }, payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } } }, required: ['shard'] }
   },
   {
@@ -110,7 +110,7 @@ export const TOOLS = [
   },
   {
     name: 'proveSubset',
-    description: 'Holder side (DIS-002 proof sharding): selective proof of existence for a SUBSET of one batch\'s records — per-leaf shard subpaths over the same anchored tree (64-leaf subtrees) + one shared top multiproof → L_ZKDis v2 hex. Reveals leaf positions + hashes, not contents. Gated by MAMEM_PROOF_SHARDING (default on).',
+    description: 'Holder side (DIS-002 proof sharding): selective proof of existence for a SUBSET of one batch\'s records — per-leaf shard subpaths over the same anchored tree (64-leaf subtrees) + one shared top multiproof → L_ZKDis v2 hex. Reveals leaf positions + hashes, not contents. Gated by NEKTAR_PROOF_SHARDING (default on).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -233,7 +233,7 @@ export const TOOLS = [
   ,
   {
     name: 'sale',
-    description: 'V3 DisclosureSale (GOAL-v7, BIP-199 escrow) — paid disclosure as one state machine. op=offer {value,price,refundAfter,maxFee,buyerPub?,expiresAt?}: seller wraps a payload (BRC-42 to buyerPub, or public) → {cfg,wrapped,sellerPub,offerSig}. op=offerMemory {shard,seq,price,refundAfter,maxFee,buyerPub?,expiresAt?}: sell one memory record — encrypted goes as its fragment key + ciphertext, plaintext as the canonical fragment; returns commitment {leaf,anchorTxid,hdp,authorPub,proof} so the buyer verifies inclusion BEFORE funding. op=escrow {cfg,amount,offer?}: buyer funds; pass offer={sellerPub,offerSig,expiresAt,commitment} for pre-funding sig + leaf-path + expiry checks. op=complete {cfg,utxo,wrapped,changeSats}: the buy tx — reveals wrapped on-chain, pays the seller price, returns change. op=refund {cfg,utxo,lockTime,changeSats}: depositor reclaim after cfg.refundAfter (locktime-gated). op=claim {txHex,hWrapped,sellerPub?,offerMode?,commitment?}: buyer extracts + verifies the payload (leaf-commitment + provenance check when commitment given). Requires MAMEM_PAID_DISCLOSURE.',
+    description: 'V3 DisclosureSale (GOAL-v7, BIP-199 escrow) — paid disclosure as one state machine. op=offer {value,price,refundAfter,maxFee,buyerPub?,expiresAt?}: seller wraps a payload (BRC-42 to buyerPub, or public) → {cfg,wrapped,sellerPub,offerSig}. op=offerMemory {shard,seq,price,refundAfter,maxFee,buyerPub?,expiresAt?}: sell one memory record — encrypted goes as its fragment key + ciphertext, plaintext as the canonical fragment; returns commitment {leaf,anchorTxid,hdp,authorPub,proof} so the buyer verifies inclusion BEFORE funding. op=escrow {cfg,amount,offer?}: buyer funds; pass offer={sellerPub,offerSig,expiresAt,commitment} for pre-funding sig + leaf-path + expiry checks. op=complete {cfg,utxo,wrapped,changeSats}: the buy tx — reveals wrapped on-chain, pays the seller price, returns change. op=refund {cfg,utxo,lockTime,changeSats}: depositor reclaim after cfg.refundAfter (locktime-gated). op=claim {txHex,hWrapped,sellerPub?,offerMode?,commitment?}: buyer extracts + verifies the payload (leaf-commitment + provenance check when commitment given). Requires NEKTAR_PAID_DISCLOSURE.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -259,7 +259,7 @@ export const TOOLS = [
   },
   {
     name: 'claim',
-    description: 'Optimistic-claim rail (§4.5) + pay-iff-proven gated sale — regtest only. op=deploy {lzkmem,bondSats?,deadline?,anchorOutpoint?}: deploy a MamemZkClaim covenant bound to an L_ZKMem bundle — journal root/size/queryId committed behind the prover\'s bond; the watcher re-verifies the RISC Zero receipt off-chain and auto-challenges fraud. op=status {txid,vout?}: claim state open|challenged|revealed|bisecting, deadline, journalRoot, bond. op=settle {txid,vout?,payoutSats?,verdictSats?}: settle an open claim after deadline → ClaimVerdict UTXO + bond payout (unanchored only — anchored claims settle via the anchor co-spend). op=deploySale {verdictOutpoint,priceSats,wrapped}: DisclosureSale bound to a settled verdict — the price pays only in a tx that also consumes it (atomic pay-iff-settled). op=buySale {saleTxid,verdictOutpoint,wrapped,priceSats,changeSats?}: spends [sale,verdict] — consensus refuses without the verdict input.',
+    description: 'Optimistic-claim rail (§4.5) + pay-iff-proven gated sale — regtest only. op=deploy {lzkmem,bondSats?,deadline?,anchorOutpoint?}: deploy a NektarZkClaim covenant bound to an L_ZKMem bundle — journal root/size/queryId committed behind the prover\'s bond; the watcher re-verifies the RISC Zero receipt off-chain and auto-challenges fraud. op=status {txid,vout?}: claim state open|challenged|revealed|bisecting, deadline, journalRoot, bond. op=settle {txid,vout?,payoutSats?,verdictSats?}: settle an open claim after deadline → ClaimVerdict UTXO + bond payout (unanchored only — anchored claims settle via the anchor co-spend). op=deploySale {verdictOutpoint,priceSats,wrapped}: DisclosureSale bound to a settled verdict — the price pays only in a tx that also consumes it (atomic pay-iff-settled). op=buySale {saleTxid,verdictOutpoint,wrapped,priceSats,changeSats?}: spends [sale,verdict] — consensus refuses without the verdict input.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -336,7 +336,7 @@ export const TOOLS = [
   },
   {
     name: 'payQuote',
-    description: 'Issue a payment invoice for a paid tool (MAMEM_PAYMENTS=1): returns the operator address, amount, and the OP_RETURN invoice tag. Pay it with a signed raw tx (output to payTo ≥ amount + OP_RETURN output carrying the tag), then retry the tool with payment:{invoiceId, transaction}. Settlement is atomic — the tx IS the payment.',
+    description: 'Issue a payment invoice for a paid tool (NEKTAR_PAYMENTS=1): returns the operator address, amount, and the OP_RETURN invoice tag. Pay it with a signed raw tx (output to payTo ≥ amount + OP_RETURN output carrying the tag), then retry the tool with payment:{invoiceId, transaction}. Settlement is atomic — the tx IS the payment.',
     inputSchema: {
       type: 'object',
       properties: { tool: { type: 'string', enum: ['anchor', 'groundedAnswer', 'commitReceipt'], description: 'the paid tool you intend to call' } },
@@ -358,11 +358,11 @@ export const TOOLS = [
   },
   {
     name: 'verifyReceipt',
-    description: 'Scan a receipt token (mamemr1.…) or receiptHash and run the traffic-light checks: the receipt exists on __receipts__, its body re-hashes, the originator signature verifies, it is anchored, and every cited fragment is anchored. Proves the answer was committed + derivable — never that it was true.',
+    description: 'Scan a receipt token (nektarr1.…) or receiptHash and run the traffic-light checks: the receipt exists on __receipts__, its body re-hashes, the originator signature verifies, it is anchored, and every cited fragment is anchored. Proves the answer was committed + derivable — never that it was true.',
     inputSchema: {
       type: 'object',
       properties: {
-        token: { type: 'string', description: 'receipt token "mamemr1.<base64url hash>"' },
+        token: { type: 'string', description: 'receipt token "nektarr1.<base64url hash>"' },
         receiptHash: { type: 'string', description: 'or the bare 64-hex receipt hash' }
       }
     }
@@ -399,7 +399,7 @@ export const TOOLS = [
         pack: { type: 'object', description: 'the ShardPack JSON returned by exportShard' },
         from: { type: 'string', description: 'operator base URL — fetches {from}/v1/pack/{shard}' },
         shard: { type: 'string', description: 'shard name when importing via {from}' },
-        packUrl: { type: 'string', description: 'full pack URL (e.g. from exportShard packUrl or /.well-known/mamem)' }
+        packUrl: { type: 'string', description: 'full pack URL (e.g. from exportShard packUrl or /.well-known/nektar)' }
       }
     }
   },
@@ -416,12 +416,12 @@ export const TOOLS = [
 const PAID_SALE_TOOLS = new Set(['sale', 'sale#offer', 'sale#offerMemory', 'sale#escrow', 'sale#complete', 'sale#refund', 'sale#claim'])
 const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'])
 const CLAIM_OPS = new Set(['deploy', 'status', 'settle', 'deploySale', 'buySale'])
-const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.MAMEM_PAID_DISCLOSURE ?? '')
+const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAID_DISCLOSURE ?? '')
 /** tools visible to clients right now — paid-disclosure tools are gated by env */
 export const visibleTools = () => TOOLS.filter(t => !PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled())
 
 const AUTOMATON_NOTE = 'On-chain proof that the transition (q, σ, q′) is in the committed δ and was authorized by the owner; it says nothing about whether the output content is true.'
-const automatonView = (h: import('@mamem/automaton').AutomatonHead) =>
+const automatonView = (h: import('@nektar/automaton').AutomatonHead) =>
   ({ txid: h.tx.id('hex'), q: h.state.q, n: h.state.n, halted: h.state.halted, deltaRoot: h.state.deltaRoot, statement: AUTOMATON_NOTE })
 
 /** live-network runtime surface handed in by the MCP/HTTP transport layer —
@@ -435,9 +435,9 @@ export interface ToolCtx {
   }
 }
 
-export async function callTool (mem: MamemMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
-  if (PAID_SALE_TOOLS.has(name) && !paidSaleEnabled()) throw new Error(`${name}: paid disclosure is disabled — set MAMEM_PAID_DISCLOSURE=1`)
-  // MAMEM_PAYMENTS=1 (BRC-166-style): anchor/groundedAnswer/commitReceipt need a
+export async function callTool (mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
+  if (PAID_SALE_TOOLS.has(name) && !paidSaleEnabled()) throw new Error(`${name}: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1`)
+  // NEKTAR_PAYMENTS=1 (BRC-166-style): anchor/groundedAnswer/commitReceipt need a
   // settled payment tx before they run — atomic, one tx per call, publicly
   // auditable. No payment → return the invoice (the 402 challenge) as data.
   let paid: import('./pay.js').PaymentRecord | undefined
@@ -450,7 +450,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
   switch (name) {
     case 'payQuote': {
       if (!PAID_TOOLS.has(String(args?.tool))) throw new Error(`payQuote: unknown or unpaid tool "${args?.tool}"`)
-      if (!paymentsEnabled()) throw new Error('payments are disabled — set MAMEM_PAYMENTS=1 (and MAMEM_OPERATOR_WIF)')
+      if (!paymentsEnabled()) throw new Error('payments are disabled — set NEKTAR_PAYMENTS=1 (and NEKTAR_OPERATOR_WIF)')
       const { invoice, required } = paymentRequired(String(args.tool))
       return { invoice: { invoiceId: invoice.invoiceId, amount: invoice.amount, payTo: invoice.payTo, lockingScriptHex: invoice.lockingScriptHex, opReturn: invoice.opReturn, expires: new Date(invoice.expires).toISOString() }, paymentRequired: required }
     }
@@ -460,7 +460,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       return await callTool(mem, `sale#${op}`, args, ctx)
     }
     case 'sale#offer': {
-      const { offerDisclosure } = await import('@mamem/identity')
+      const { offerDisclosure } = await import('@nektar/identity')
       const r = offerDisclosure({
         sellerKey: mem.operatorKey(), value: new Uint8Array(Buffer.from(args.value, 'hex')),
         price: BigInt(args.price), refundAfter: BigInt(args.refundAfter), maxFee: BigInt(args.maxFee),
@@ -473,8 +473,8 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       }
     }
     case 'sale#offerMemory': {
-      const { offerDisclosure, encodeKeySale } = await import('@mamem/identity')
-      const { serializeFragment, computeLeaf, toHex } = await import('@mamem/core')
+      const { offerDisclosure, encodeKeySale } = await import('@nektar/identity')
+      const { serializeFragment, computeLeaf, toHex } = await import('@nektar/core')
       const rec = (await mem.records(args.shard)).find(r => r.seq === args.seq)
       if (!rec) throw new Error(`no record seq ${args.seq} in shard "${args.shard}"`)
       // Paper f_i = {c_i, H(d_i), π_i}: an encrypted record is sold as its
@@ -512,12 +512,12 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       }
     }
     case 'sale#escrow': {
-      const { DisclosureSaleHost } = await import('@mamem/anchor')
+      const { DisclosureSaleHost } = await import('@nektar/anchor')
       // §16/17 delegation-sig check: refuse to fund an escrow for a cfg the
       // seller never signed — blocks MITM cfg-swap griefing (deposit lockup).
       if (args.offer) {
-        const { verifyOfferSig } = await import('@mamem/identity')
-        const { reconstructRoot, toHex: th, fromHex: fh } = await import('@mamem/core')
+        const { verifyOfferSig } = await import('@nektar/identity')
+        const { reconstructRoot, toHex: th, fromHex: fh } = await import('@nektar/core')
         const buyerPub = mem.operatorKey().toPublicKey().toString()
         const leaf = args.offer.commitment?.leaf ?? ''
         if (!verifyOfferSig(
@@ -559,7 +559,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       return { accepted: true, txid: tx.id('hex'), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh } }
     }
     case 'sale#complete': {
-      const { DisclosureSaleHost } = await import('@mamem/anchor')
+      const { DisclosureSaleHost } = await import('@nektar/anchor')
       const host = new DisclosureSaleHost({
         ...args.cfg,
         price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
@@ -570,7 +570,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0]!.satoshis }
     }
     case 'sale#refund': {
-      const { DisclosureSaleHost } = await import('@mamem/anchor')
+      const { DisclosureSaleHost } = await import('@nektar/anchor')
       const host = new DisclosureSaleHost({
         ...args.cfg,
         price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
@@ -582,19 +582,19 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
     }
     case 'sale#claim': {
       const { Transaction } = await import('@bsv/sdk')
-      const { claimDisclosure } = await import('@mamem/identity')
+      const { claimDisclosure } = await import('@nektar/identity')
       const tx = Transaction.fromHex(args.txHex)
       const r = claimDisclosure(tx, { hWrapped: args.hWrapped, buyerKey: mem.operatorKey(), sellerPub: args.sellerPub })
       const out: any = { mode: r.mode, valueHex: Buffer.from(r.value).toString('hex') }
       // memory-bound payload? verify the bought bytes hash to the anchored leaf
       if (args.commitment?.leaf) {
-        const { parseFragment, computeLeaf, toHex, fromHex } = await import('@mamem/core')
+        const { parseFragment, computeLeaf, toHex, fromHex } = await import('@nektar/core')
         try {
           if (args.offerMode === 'key') {
             // key-sale: payload carries the fragment key — decrypt E, rebuild
             // the fragment, then the same leaf check proves inclusion.
-            const { claimKeySale } = await import('@mamem/identity')
-            const { verifyProvenance } = await import('@mamem/log')
+            const { claimKeySale } = await import('@nektar/identity')
+            const { verifyProvenance } = await import('@nektar/log')
             const { d, p, E } = claimKeySale(r.value)
             const frag = { d, p, hdp: args.commitment.hdp ? fromHex(args.commitment.hdp) : undefined, E }
             out.verified = toHex(computeLeaf(frag as any)) === args.commitment.leaf
@@ -609,7 +609,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
             // §16/19: a bought memory must carry verifiable authorship —
             // check the provenance σ against the recorded author key.
             if (out.verified && args.commitment.authorPub && frag.p.signature.length) {
-              const { verifyProvenance } = await import('@mamem/log')
+              const { verifyProvenance } = await import('@nektar/log')
               out.authorVerified = verifyProvenance(args.commitment.authorPub, frag.d, frag.p)
             }
           }
@@ -626,7 +626,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       return { ...r, private: mem.shardPrivate(args.shard) || undefined }
     }
     case 'recall': {
-      const { decodePresentation } = await import('@mamem/identity')
+      const { decodePresentation } = await import('@nektar/identity')
       const r = await mem.recall(args.shard, { seq: args.seq, identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk) })
       // tell the model how to recover from a wrong seq instead of an empty answer
       if (args.seq !== undefined && r.items.length === 0) {
@@ -657,7 +657,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
     }
     case 'verifyCombined': {
       const { Buffer } = await import('node:buffer')
-      const { decodePresentation } = await import('@mamem/identity')
+      const { decodePresentation } = await import('@nektar/identity')
       return mem.verifyCombined(args.shard, args.seq, new Uint8Array(Buffer.from(args.bytes, 'hex')), decodePresentation(args.zk), {
         scope: args.scope,
         derivationBytes: args.derivationBytes === undefined ? undefined : new Uint8Array(Buffer.from(args.derivationBytes, 'hex')),
@@ -713,7 +713,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       return { revoked: true, smtRoot: Buffer.from(root).toString('hex'), anchorTxid: a?.txid ?? null, receipt: { decision: 'allow', action: 'revoke' } }
     }
     case 'disclose': {
-      const idm = await import('@mamem/identity')
+      const idm = await import('@nektar/identity')
       const verifyAnchor = async () => (await mem.prove(args.shard, args.seq)).result.ok === true
       const r = await idm.verifyDisclosureAnchored(
         args.envelope, args.ownerPub, args.verifierPub,
@@ -724,7 +724,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
     }
     case 'authorize':
     {
-      const { decodePresentation } = await import('@mamem/identity')
+      const { decodePresentation } = await import('@nektar/identity')
       return { receipt: { ...(await mem.authorizeAction(args.action, { identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk), resource: args.resource })), action: args.action } }
     }
     case 'challenge':
@@ -758,9 +758,9 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
     case 'modelManifest':
       return mem.modelManifest(args)
     case 'groundedAnswer': {
-      const { ground, commitReceipt } = await import('@mamem/reasoning')
+      const { ground, commitReceipt } = await import('@nektar/reasoning')
       const { Buffer } = await import('node:buffer')
-      const fetch: import('@mamem/reasoning').FragmentFetch = async (ref) => {
+      const fetch: import('@nektar/reasoning').FragmentFetch = async (ref) => {
         const r = await mem.recall(ref.shard, { seq: ref.seq })
         const it = r.items[0]
         return { verified: !!it && !it.unverifiable, text: it?.text }
@@ -785,7 +785,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
             bytes = new Uint8Array(Buffer.from(zk.proof, 'hex'))
           } else {
             try {
-              const q = mem.issueZkQuery('mamem:auto-cite')
+              const q = mem.issueZkQuery('nektar:auto-cite')
               bytes = (await mem.proveMembership(r.shard, r.seq, q.queryId)).bytes
             } catch { zkok = false; break }
           }
@@ -821,7 +821,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
         attestation = (await attestInference(mem, args.attestInference ?? {})).attestation
       }
       if (attestation !== undefined) {
-        const { validateAttestation } = await import('@mamem/zk')
+        const { validateAttestation } = await import('@nektar/zk')
         const v = validateAttestation(attestation)
         if (!v.ok) throw new Error(`modelAttestation rejected: ${v.reason}`)
       }
@@ -839,7 +839,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       return { answer, committed: true, kept: report.kept, flagged: report.flagged, grounding: report, receipt, receiptHash, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, share: shareBlock(token), anchor, checkResult: 'verified' }
     }
     case 'commitReceipt': {
-      const { commitReceipt } = await import('@mamem/reasoning')
+      const { commitReceipt } = await import('@nektar/reasoning')
       const { Buffer } = await import('node:buffer')
       // private shards: same fail-closed rule as groundedAnswer — a private
       // cite needs a ZK membership proof the service verifies, then commits
@@ -854,7 +854,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
         } else {
           // auto-prove: self-issue → prove → verify (same artifact, no caller choreography)
           let q: { queryId: string }
-          try { q = mem.issueZkQuery('mamem:auto-cite'); bytes = (await mem.proveMembership(r.shard, r.seq, q.queryId)).bytes } catch (e) {
+          try { q = mem.issueZkQuery('nektar:auto-cite'); bytes = (await mem.proveMembership(r.shard, r.seq, q.queryId)).bytes } catch (e) {
             throw new Error(`private cite for "${r.shard}" could not be auto-proven (${(e as Error).message}) — supply zk:{queryId,proof} to cite explicitly`)
           }
         }
@@ -869,7 +869,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
         attestation = (await attestInference(mem, args.attestInference ?? {})).attestation
       }
       if (attestation !== undefined) {
-        const { validateAttestation } = await import('@mamem/zk')
+        const { validateAttestation } = await import('@nektar/zk')
         const v = validateAttestation(attestation)
         if (!v.ok) throw new Error(`modelAttestation rejected: ${v.reason}`)
       }

@@ -1,10 +1,10 @@
-// mamem-watcher verify worker — runs the RISC Zero WASM verifier in a
+// nektar-watcher verify worker — runs the RISC Zero WASM verifier in a
 // dedicated process so a wasm abort (Rust panic → fail-fast, observed as
 // exit 0xC0000409 on Windows) kills THIS process, never the daemon.
 // Usage: node verify-worker.mjs <proof-bundle-file>
 // stdout: one JSON line, the StarkVerdict from verifyZkm2.
 import { readFileSync } from 'node:fs'
-import { verifyZkm2 } from '@mamem/zk'
+import { verifyZkm2 } from '@nektar/zk'
 
 const file = process.argv[2]
 if (!file) { console.log(JSON.stringify({ ok: false, reason: 'usage: verify-worker <file>' })); process.exit(2) }

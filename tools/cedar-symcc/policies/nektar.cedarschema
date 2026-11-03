@@ -1,4 +1,4 @@
-// Typed form of packages/policy MAMEM_SCHEMA for symbolic analysis: principals
+// Typed form of packages/policy NEKTAR_SCHEMA for symbolic analysis: principals
 // carry the `level` attribute the runtime supplies (the WASM evaluator runs
 // schema-less; symcc needs the types).
 entity User { level: Long };

@@ -13,8 +13,8 @@ import { PrivateKey } from '../lib/runar.mjs'
 import { Transaction, Spend, LockingScript } from '../lib/sdk.mjs'
 import { chainRp, utf8, toHex, hash160, fromHex } from '../../packages/core/dist/src/index.js'
 
-const art = JSON.parse(readFileSync(path.join(fileURLToPath(import.meta.url), '..', 'MamemAnchorRot.json'), 'utf8'))
-const TAG = Buffer.from(utf8('mamem:rprime:v1')).toString('hex')
+const art = JSON.parse(readFileSync(path.join(fileURLToPath(import.meta.url), '..', 'NektarAnchorRot.json'), 'utf8'))
+const TAG = Buffer.from(utf8('nektar:rprime:v1')).toString('hex')
 const pkh = (hex) => Buffer.from(hash160(fromHex(hex))).toString('hex')
 
 const deploy = async (signer) => {

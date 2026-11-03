@@ -5,11 +5,11 @@
 // verifier stays authoritative — the chain only timestamps the commitment.
 // This is NOT a new anchor: no shard state, no contract, plain P2PKH spend.
 import { Transaction, PrivateKey, P2PKH, Script, LockingScript, SatoshisPerKilobyte } from '@bsv/sdk'
-import { sha256, toHex, fromHex, utf8, type Bytes } from '@mamem/core'
-import type { FundingOut } from '@mamem/chain'
+import { sha256, toHex, fromHex, utf8, type Bytes } from '@nektar/core'
+import type { FundingOut } from '@nektar/chain'
 
 /** attestation push tag — decoders route on it; versioned by suffix */
-export const ATTEST_TAG = 'mamem:attest:v1'
+export const ATTEST_TAG = 'nektar:attest:v1'
 
 /** the commitment anchored on-chain: single SHA-256 over the proof bytes */
 export function attestationCommitment (proofBytes: Bytes): Bytes { return sha256(proofBytes) }

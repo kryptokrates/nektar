@@ -1,5 +1,5 @@
 {
-  "name": "@mamem/reasoning",
+  "name": "@nektar/reasoning",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -12,12 +12,12 @@
     "test": "node -e \"console.log('reasoning bridge suite lives in packages/mcp/test (cycle-safe home)')\""
   },
   "dependencies": {
-    "@mamem/core": "workspace:*",
-    "@mamem/chain": "workspace:*",
-    "@mamem/datalog": "workspace:*",
-    "@mamem/identity": "workspace:*",
-    "@mamem/verify": "workspace:*",
-    "@mamem/graph": "workspace:*"
+    "@nektar/core": "workspace:*",
+    "@nektar/chain": "workspace:*",
+    "@nektar/datalog": "workspace:*",
+    "@nektar/identity": "workspace:*",
+    "@nektar/verify": "workspace:*",
+    "@nektar/graph": "workspace:*"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"

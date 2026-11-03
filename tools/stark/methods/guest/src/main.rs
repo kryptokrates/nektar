@@ -1,4 +1,4 @@
-// mamem membership guest (RISC Zero). Wright §13: π ⊢ h_j ∈ M_n for the SAME
+// nektar membership guest (RISC Zero). Wright §13: π ⊢ h_j ∈ M_n for the SAME
 // double-SHA-256 batch tree whose root R_n is anchored on BSV (core/merkle.ts):
 // node = dsha256(left ‖ right), odd level self-pairs, internal byte order.
 // PRIVATE: leaf, index, siblings.  PUBLIC (journal): version, root, size, queryId.

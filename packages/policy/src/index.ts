@@ -1,11 +1,11 @@
-// @mamem/policy — Cedar authorization for mamem (POL-010, POL-013..016).
+// @nektar/policy — Cedar authorization for nektar (POL-010, POL-013..016).
 // Principals Agent/User, actions read/write/disclose/rotate/revoke, resources
 // Fragment (attrs: level/shard/class). Policy sets are canonicalized, hashed,
 // anchored via AnchorChain; every authorization decision is logged+anchored.
 import { isAuthorized, checkParsePolicySet, formatPolicies } from '@cedar-policy/cedar-wasm'
-import { dsha256, utf8, toHex, concat, type Bytes } from '@mamem/core'
+import { dsha256, utf8, toHex, concat, type Bytes } from '@nektar/core'
 
-export const MAMEM_SCHEMA = `
+export const NEKTAR_SCHEMA = `
 entity User;
 entity Agent;
 entity Fragment { level: Long, shard: String, class: String };
@@ -26,7 +26,7 @@ export function canonicalizePolicySet (name: string, text: string): PolicySet {
   const res = formatPolicies({ policyText: text } as any) as any
   const canon = res?.formatted_policy
   if (typeof canon !== 'string') throw new Error('cedar formatPolicies failed: ' + JSON.stringify(res).slice(0, 120))
-  return { name, text: canon, hash: toHex(dsha256(concat(utf8('mamem/policyset/v1'), utf8(canon)))) }
+  return { name, text: canon, hash: toHex(dsha256(concat(utf8('nektar/policyset/v1'), utf8(canon)))) }
 }
 
 export function parseCheck (text: string): { ok: boolean, errors?: string[] } {

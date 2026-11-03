@@ -5,8 +5,8 @@
 // negativeObjectAssertion → conflict, anchored-axiom entailment, §14 plug.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { toHex } from '@mamem/core'
-import { nodeHash } from '@mamem/datalog'
+import { toHex } from '@nektar/core'
+import { nodeHash } from '@nektar/datalog'
 import { commitOntology, compileOwl, entail, owlAxiomHash, type OwlAxiom } from '../src/index.js'
 
 const V: OwlAxiom[] = [

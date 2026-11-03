@@ -7,8 +7,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { MamemMemory, type MamemMemoryOptions } from '../src/memory.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
 import { _testReset, priceFor, PAID_TOOLS } from '../src/pay.js'
@@ -16,11 +16,11 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-function setup (opts: MamemMemoryOptions = {}) {
+function setup (opts: NektarMemoryOptions = {}) {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(20)
   for (const t of funder.parents) chain.registerParent(t)
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'mamem-priv-')), ...opts })
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-priv-')), ...opts })
   const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
   return { chain, mem, settle }
 }
@@ -44,14 +44,14 @@ test('private flag persists across a restart (stateStore round-trip)', async () 
   let saved: any
   const store = { load: () => saved, save: (s: any) => { saved = JSON.parse(JSON.stringify(s)) } }
   const chain = new MockChain(); const f = new MockFunder(); f.topup(2)
-  const m1 = new MamemMemory(chain, f, f.keyPair, { stateStore: store })
+  const m1 = new NektarMemory(chain, f, f.keyPair, { stateStore: store })
   m1.setShardPrivate('hr')
   assert.equal(saved.flags.hr.private, true, 'flag written to the persisted state')
-  const m2 = new MamemMemory(chain, f, f.keyPair, { stateStore: store })
+  const m2 = new NektarMemory(chain, f, f.keyPair, { stateStore: store })
   assert.equal(m2.shardPrivate('hr'), true, 'flag restored after restart')
   // an old state file without a flags field restores safely (defaults public)
   saved.flags = undefined
-  const m3 = new MamemMemory(chain, f, f.keyPair, { stateStore: store })
+  const m3 = new NektarMemory(chain, f, f.keyPair, { stateStore: store })
   assert.equal(m3.shardPrivate('hr'), false)
 })
 
@@ -81,9 +81,9 @@ test('private shards: plain merkle citations are refused (prove)', async () => {
 /** force the STARK prover absent for the duration of a test (auto-prove
  *  attempts must fail fast + fail closed, not depend on the docker image) */
 function noProver (): () => void {
-  const prev = process.env.MAMEM_STARK_PROVER
-  process.env.MAMEM_STARK_PROVER = '/nonexistent-mamem-prover'
-  return () => { prev === undefined ? delete process.env.MAMEM_STARK_PROVER : process.env.MAMEM_STARK_PROVER = prev }
+  const prev = process.env.NEKTAR_STARK_PROVER
+  process.env.NEKTAR_STARK_PROVER = '/nonexistent-nektar-prover'
+  return () => { prev === undefined ? delete process.env.NEKTAR_STARK_PROVER : process.env.NEKTAR_STARK_PROVER = prev }
 }
 
 test('private cites: groundedAnswer strips them when the proof cannot be produced — nothing leaks', async () => {
@@ -99,7 +99,7 @@ test('private cites: groundedAnswer strips them when the proof cannot be produce
 })
 
 test('private cites: AUTO-PROVE — groundedAnswer keeps a plain private cite when the prover runs', { timeout: 300_000 }, async (t) => {
-  if (!process.env.MAMEM_STARK_PROVE) { t.skip('set MAMEM_STARK_PROVE=1 to run the real STARK prover'); return }
+  if (!process.env.NEKTAR_STARK_PROVE) { t.skip('set NEKTAR_STARK_PROVE=1 to run the real STARK prover'); return }
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr'); settle('hr')
@@ -193,9 +193,9 @@ test('private cites: commitReceipt redacts the shard name the same way — and d
 
 test('zk prover tools are priced when payments are on; the verify side stays free', async (t) => {
   _testReset()
-  process.env.MAMEM_PAYMENTS = '1'
-  process.env.MAMEM_OPERATOR_WIF = PrivateKey.fromRandom().toWif([0xef])
-  t.after(() => { delete process.env.MAMEM_PAYMENTS; delete process.env.MAMEM_OPERATOR_WIF; _testReset() })
+  process.env.NEKTAR_PAYMENTS = '1'
+  process.env.NEKTAR_OPERATOR_WIF = PrivateKey.fromRandom().toWif([0xef])
+  t.after(() => { delete process.env.NEKTAR_PAYMENTS; delete process.env.NEKTAR_OPERATOR_WIF; _testReset() })
   assert.equal(priceFor('proveMembership'), 500, 'proving defaults to the ZK tier')
   assert.equal(priceFor('groundedAnswer'), 250)
   assert.equal(priceFor('anchor'), 100)
@@ -210,7 +210,7 @@ test('zk prover tools are priced when payments are on; the verify side stays fre
   }
 })
 
-test('private cites end-to-end: a REAL STARK keeps the private cite', { skip: process.env.MAMEM_STARK_PROVE !== '1' }, async () => {
+test('private cites end-to-end: a REAL STARK keeps the private cite', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async () => {
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await callTool(mem, 'remember', { shard: 'hr', data: 'headcount 12' })

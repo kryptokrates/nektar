@@ -27,7 +27,7 @@ const bom = {
   bomFormat: 'CycloneDX', specVersion: '1.5', version: 1,
   metadata: {
     timestamp: new Date().toISOString(),
-    component: { type: 'application', name: 'mamem', version: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? '0.0.0' },
+    component: { type: 'application', name: 'nektar', version: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? '0.0.0' },
     properties: [{ name: 'pnpm-lock.sha256', value: createHash('sha256').update(lock).digest('hex') }]
   },
   components: [...comps.values()].sort((a, b) => (a.name + a.version).localeCompare(b.name + b.version))

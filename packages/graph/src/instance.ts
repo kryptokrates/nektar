@@ -1,7 +1,7 @@
 // Instancing + delegation (INS-002..006): Instance(G,Ψ) selection + closure,
 // per-node Merkle proof against an anchored root, delegation signature
 // σ_A′ = Sign(H(G′root‖Ψ‖τ)), partial entailment under a rule subset.
-import { dsha256, utf8, merkleRoot, merkleProof } from '@mamem/core'
+import { dsha256, utf8, merkleRoot, merkleProof } from '@nektar/core'
 /** Structural minimum of AORGraph this module needs — declared here (never
  *  imported from the barrel) so instance.ts has no edge back into index.ts
  *  and the package stays acyclic. AORGraph satisfies this shape. */
@@ -11,7 +11,7 @@ export interface GraphLike {
   vertices: Map<string, { kind: string, phi: string }>
 }
 import { PrivateKey, PublicKey, Signature } from '@bsv/sdk'
-import { Datalog, type Fact, type Rule } from '@mamem/datalog'
+import { Datalog, type Fact, type Rule } from '@nektar/datalog'
 
 export interface Instance {
   psi: string[]

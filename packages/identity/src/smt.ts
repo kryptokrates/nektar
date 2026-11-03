@@ -1,7 +1,7 @@
 // Sparse Merkle tree — faithful TS port of idattr-smt (identity-attribution
 // crates/idattr-smt/src/lib.rs), 2^256 keyspace, depth 256, domain-tagged
 // single-SHA-256 hashing, lazy empty subtrees, compressed proofs.
-import { sha256, type Bytes } from '@mamem/core'
+import { sha256, type Bytes } from '@nektar/core'
 
 export type SmtHash = Bytes // 32 B
 export type SmtKey = Bytes  // 32 B — path from root to leaf, MSB-first

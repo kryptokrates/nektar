@@ -1,9 +1,9 @@
-// ls_mamem — LookupService for mamem anchors.
+// ls_nektar — LookupService for nektar anchors.
 // Queries: {shard} → current head; {shard,n} → anchor n; {shard,all:true} → history.
-// State is persisted in a knex table (mamem_ls_anchors) so heads survive
+// State is persisted in a knex table (nektar_ls_anchors) so heads survive
 // overlay restarts — without it a fresh n=0 genesis would fork a shard.
-import { decodeMamemAnchor, isValidAnchor } from '@mamem/contracts'
-import { toHex, utf8, type Bytes } from '@mamem/core'
+import { decodeNektarAnchor, isValidAnchor } from '@nektar/contracts'
+import { toHex, utf8, type Bytes } from '@nektar/core'
 import type { Knex } from 'knex'
 import type { LookupService, LookupFormula, OutputAdmittedByTopic, OutputSpent } from '@bsv/overlay'
 
@@ -20,14 +20,14 @@ export interface AnchorRecord {
   spent: boolean
 }
 
-export interface MamemHeads {
+export interface NektarHeads {
   getHead: (shard: string) => AnchorRecord | undefined
   getByOutpoint: (txid: string, vout: number) => AnchorRecord | undefined
 }
 
-const TABLE = 'mamem_ls_anchors'
+const TABLE = 'nektar_ls_anchors'
 
-export function createLsMamem (kx?: Knex): LookupService & MamemHeads & { init: () => Promise<void> } {
+export function createLsNektar (kx?: Knex): LookupService & NektarHeads & { init: () => Promise<void> } {
   const anchors = new Map<string, AnchorRecord[]>()
   const outpointMap = new Map<string, AnchorRecord>()
   // The Engine notifies outputSpent even for transactions the topic rejects —
@@ -102,7 +102,7 @@ export function createLsMamem (kx?: Knex): LookupService & MamemHeads & { init: 
 
     outputAdmittedByTopic: (payload: OutputAdmittedByTopic) => {
       if (payload.mode !== 'locking-script') return
-      const d0 = decodeMamemAnchor(typeof payload.lockingScript === 'string' ? payload.lockingScript : payload.lockingScript?.toHex?.() ?? '')
+      const d0 = decodeNektarAnchor(typeof payload.lockingScript === 'string' ? payload.lockingScript : payload.lockingScript?.toHex?.() ?? '')
       if (!d0 || !isValidAnchor(d0)) return
       const a = d0
       const rec: AnchorRecord = {
@@ -151,7 +151,7 @@ export function createLsMamem (kx?: Knex): LookupService & MamemHeads & { init: 
       return head ? [pub(head)] : []
     },
 
-    getDocumentation: async () => 'mamem anchor lookup: head of shard, anchor by n, anchors by shard.',
-    getMetaData: async () => ({ name: 'ls_mamem', shortDescription: 'mamem anchor lookup service' })
+    getDocumentation: async () => 'nektar anchor lookup: head of shard, anchor by n, anchors by shard.',
+    getMetaData: async () => ({ name: 'ls_nektar', shortDescription: 'nektar anchor lookup service' })
   }
 }

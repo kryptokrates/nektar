@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { sha256, utf8, toHex, fromHex } from '@mamem/core'
+import { sha256, utf8, toHex, fromHex } from '@nektar/core'
 import { Smt, deriveKey, emptyRoot, verifyProof } from '../src/index.js'
 
 const V = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../vectors/smt-rust.json', import.meta.url)), 'utf8')) as {

@@ -2,8 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert'
 import { AORGraph, PolicyDAG, verifyDerivation, instanceOf, entails, ruleCanonical } from '../src/index.js'
 import { PrivateKey } from '@bsv/sdk'
-import { parseProgram } from '@mamem/datalog'
-import { dsha256, utf8 } from '@mamem/core'
+import { parseProgram } from '@nektar/datalog'
+import { dsha256, utf8 } from '@nektar/core'
 
 const rules = () => parseProgram(`@id r1
 spec(S,V) :- requires(P,V), applies(S,P).`).rules
@@ -30,7 +30,7 @@ test('POL-006: query + verifyDerivation; tampered rule, swapped premise, other r
   assert.ok(!r3.ok && /different policy root/.test(r3.reason!), 'other root rejected')
 })
 
-// (AOR-006 GraphAnchor test lives in @mamem/mcp — it needs MamemMemory and
+// (AOR-006 GraphAnchor test lives in @nektar/mcp — it needs NektarMemory and
 // graph→mcp is not a workspace dependency)
 
 test('INS-006: partial entailment under R_q', () => {

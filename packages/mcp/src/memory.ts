@@ -1,4 +1,4 @@
-// MamemMemory — the product service the MCP server wraps.
+// NektarMemory — the product service the MCP server wraps.
 // Wires log (append/batch) → anchor (head UTXO per shard) → overlay (submit)
 // → verify (proof bundles) → crypto (BRC-42/AES-GCM), all behind the chain
 // interfaces so it runs identically on the mock chain and regtest.
@@ -11,24 +11,24 @@ import {
   computeLeaf, merkleRoot, merkleProof, identityHash, diff, apply, encodeDelta, decodeDelta,
   TAG_RECEIPT_SIG,
   type Fragment, type Bytes, type Provenance
-} from '@mamem/core'
-import { BatchLog, MemoryShardStore, verifyProvenance, signCheckpoint, PromiseMonitor, type ShardStore, type LogRecord, type Checkpoint } from '@mamem/log'
+} from '@nektar/core'
+import { BatchLog, MemoryShardStore, verifyProvenance, signCheckpoint, PromiseMonitor, type ShardStore, type LogRecord, type Checkpoint } from '@nektar/log'
 import { Metrics } from './metrics.js'
 
 const DELTA_PREFIX = 'delta:'
 
 /** write refused at ingest (COM-003) */
 export class IngestError extends Error {}
-import { AnchorChain } from '@mamem/anchor'
-import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@mamem/automaton'
-import { createMamemOverlay, type MamemOverlay } from '@mamem/overlay'
-import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@mamem/verify'
-import { deriveFragmentKey, deriveLevelKey, encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@mamem/crypto'
-import type { Broadcaster, ChainTracker, Funder } from '@mamem/chain'
-import * as idbind from '@mamem/identity'
-import { proveMembershipStark, verifyMembershipAnchoredStark, starkQueryId, proveDerivationStark, verifyDerivationBound, buildSubsetProof, encodeZkdis, decodeZkdis, verifySubsetAnchored, decodeZkm2, decodeZkder, verifyCombinedStark } from '@mamem/zk'
+import { AnchorChain } from '@nektar/anchor'
+import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
+import { createNektarOverlay, type NektarOverlay } from '@nektar/overlay'
+import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
+import { deriveFragmentKey, deriveLevelKey, encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@nektar/crypto'
+import type { Broadcaster, ChainTracker, Funder } from '@nektar/chain'
+import * as idbind from '@nektar/identity'
+import { proveMembershipStark, verifyMembershipAnchoredStark, starkQueryId, proveDerivationStark, verifyDerivationBound, buildSubsetProof, encodeZkdis, decodeZkdis, verifySubsetAnchored, decodeZkm2, decodeZkder, verifyCombinedStark } from '@nektar/zk'
 
-export interface MamemMemoryOptions {
+export interface NektarMemoryOptions {
   signingKey?: PrivateKey
   shardKeys?: Map<string, PrivateKey>
   agentSeed?: PrivateKey // enables encryption when set
@@ -37,8 +37,8 @@ export interface MamemMemoryOptions {
   /** fee rate for anchor txs in sats per KB (runar-sdk fee = ceil(size*rate/1000));
    *  default 1 (mock/regtest); mainnet uses ~100 (ARC policy) */
   feeRateSatPerKb?: number
-  batchPolicy?: import('@mamem/log').ClosePolicy
-  overlay?: MamemOverlay // if set, anchors are also submitted to tm_mamem
+  batchPolicy?: import('@nektar/log').ClosePolicy
+  overlay?: NektarOverlay // if set, anchors are also submitted to tm_nektar
   modelId?: string // stamped into receipts
   /** §16/§18: stronger ℱ binding — the operator-declared model identity
    *  stamped into every receipt: invocation params (temperature, seed…) and,
@@ -54,7 +54,7 @@ export interface MamemMemoryOptions {
    * no conflict; the receipt carries the DAG's own root + derivation hash.
    * `anchoredPolicyRoot` is the root decoded from the anchored DAG-root
    * record — recall recomputes dag.policyRoot() and DENIES on mismatch. */
-  policyDag?: import('@mamem/graph').PolicyDAG
+  policyDag?: import('@nektar/graph').PolicyDAG
   anchoredPolicyRoot?: string
   /** ZKA: authority pubkeys trusted to issue clearance. Level>0 reads are
    *  refused when unset — self-issued clearance is never accepted. */
@@ -74,7 +74,7 @@ export interface MamemMemoryOptions {
   /** persistence for anchor heads/tails/checkpoints (restart-safe, no fork) */
   stateStore?: MemoryStateStore
   /** data dir for the public proof store (proofs/<sha256>) — defaults to
-   *  MAMEM_DATA_DIR or ./.mamem; proofs committed in private cites are
+   *  NEKTAR_DATA_DIR or ./.nektar; proofs committed in private cites are
    *  served publicly for independent re-verification. */
   dataDir?: string
 }
@@ -83,7 +83,7 @@ export interface MamemMemoryOptions {
  *  rotation certs and every anchor tx as atomic BEEF (with BUMP once mined) */
 export interface PersistedMemoryState {
   version: 1
-  shards: Record<string, { headTxid: string, confirmed: boolean, tails: AnchorLink[], checkpoints: Checkpoint[], certs: import('@mamem/identity').RotationCert[], anchors: Record<string, string> }>
+  shards: Record<string, { headTxid: string, confirmed: boolean, tails: AnchorLink[], checkpoints: Checkpoint[], certs: import('@nektar/identity').RotationCert[], anchors: Record<string, string> }>
   /** proof bundles for records imported via importShard — keyed 'shard:seq';
    *  these verify against the SOURCE chain's anchors (prove() fast-path) */
   importedBundles?: Record<string, ProofBundle>
@@ -100,7 +100,7 @@ export interface MemoryStateStore { load: () => PersistedMemoryState | undefined
  *  a pack is data + proofs, never trusted statements. */
 export interface ShardPack {
   v: 1
-  kind: 'mamem-shard-pack'
+  kind: 'nektar-shard-pack'
   shard: string
   exportedAt: number
   records: Array<{
@@ -119,12 +119,12 @@ export interface SecurityStateStore {
 }
 
 /** caller identity: binding + answer to a challenge issued by this instance */
-export interface CallerIdentity { pubkey: string, binding: import('@mamem/identity').IdentityBinding, challengeNonce: string, challengeSig: string }
+export interface CallerIdentity { pubkey: string, binding: import('@nektar/identity').IdentityBinding, challengeNonce: string, challengeSig: string }
 /** clearance presentation: PUBLIC commitment + proof + scoped transcript */
 export interface ZkClearance {
-  commitment: import('@mamem/identity').ClearanceCommitment
-  proof: import('@mamem/identity').RangeProof | import('@mamem/identity').RangeProofBP
-  transcript: import('@mamem/identity').ZkTranscript
+  commitment: import('@nektar/identity').ClearanceCommitment
+  proof: import('@nektar/identity').RangeProof | import('@nektar/identity').RangeProofBP
+  transcript: import('@nektar/identity').ZkTranscript
   requiredLevel: bigint
 }
 
@@ -170,7 +170,7 @@ export interface AnswerReceipt {
    *  presentation the read was gated on), bound into the digest. `zkaccess` is
    *  the server's verdict; `zk` lets a third party RE-VERIFY the proof via
    *  verifyReceiptZk — not just trust the flag. */
-  zk?: import('@mamem/identity').ClearancePresentationWire
+  zk?: import('@nektar/identity').ClearancePresentationWire
   /** §18 terminal commitment: τ, the log signer's pubkey, and
    *  σ = Sign_logKey(receiptDigest(this)) over output+trace+time. */
   timestamp?: number
@@ -220,7 +220,7 @@ export function receiptDigest (r: Omit<AnswerReceipt, 'signature' | 'signerPub'>
  *  absent (nothing to re-verify), malformed, or the proof doesn't hold. */
 export function verifyReceiptZk (r: Pick<AnswerReceipt, 'zk'>, opts?: { trustedAuthorities?: string[], holder?: string }): { ok: boolean, reason?: string } {
   if (!r.zk) return { ok: false, reason: 'no zk artifact on receipt' }
-  let p: import('@mamem/identity').ClearancePresentation
+  let p: import('@nektar/identity').ClearancePresentation
   try { p = idbind.decodePresentation(r.zk) } catch (e) { return { ok: false, reason: `malformed zk artifact: ${(e as Error).message}` } }
   return idbind.verifyAccess(p.commitment, p.requiredLevel, p.proof, p.transcript, { trustedAuthorities: opts?.trustedAuthorities, holder: opts?.holder })
     ? { ok: true } : { ok: false, reason: 'clearance proof does not verify' }
@@ -236,7 +236,7 @@ export function verifyAnswerReceipt (r: AnswerReceipt): { ok: boolean, reason?: 
   } catch (e) { return { ok: false, reason: `malformed signature: ${(e as Error).message}` } }
 }
 
-export class MamemMemory {
+export class NektarMemory {
   /** optimistic-claim surface (regtest/main runtimes attach a ClaimService) */
   claims: any
   attachClaims (c: any): void { this.claims = c }
@@ -244,10 +244,10 @@ export class MamemMemory {
    *  DECLARED, not proven: an anchored manifest says which model the operator
    *  says answered, not that the inference ran those weights (needs zkML/TEE).
    *  (Distinct from opts.modelId — the string stamped into AnswerReceipts.) */
-  declaredModel?: import('@mamem/reasoning').ModelIdentity
+  declaredModel?: import('@nektar/reasoning').ModelIdentity
   /** anchor a model manifest on the __model__ shard and bind it to receipts. */
-  async modelManifest (m: Parameters<typeof import('@mamem/reasoning').modelIdentity>[0]) {
-    const { modelIdentity } = await import('@mamem/reasoning')
+  async modelManifest (m: Parameters<typeof import('@nektar/reasoning').modelIdentity>[0]) {
+    const { modelIdentity } = await import('@nektar/reasoning')
     this.declaredModel = await modelIdentity(m)
     const { seq } = await this.remember('__model__', JSON.stringify({ type: 'model-manifest', ...this.declaredModel }))
     const a = await this.anchorShard('__model__')
@@ -262,7 +262,7 @@ export class MamemMemory {
     private chain: ChainTracker & Broadcaster,
     private funder: Funder,
     private fundKey: PrivateKey,
-    private opts: MamemMemoryOptions = {},
+    private opts: NektarMemoryOptions = {},
     private store: ShardStore = new MemoryShardStore()
   ) {
     this.logKey = opts.signingKey ?? PrivateKey.fromRandom()
@@ -294,20 +294,20 @@ export class MamemMemory {
   /** the shard's log records (read view — used by prove/disclose tests) */
   async records (shard: string) { return await this.store.all(shard) }
   /** broadcast a fully-signed tx through the instance's broadcaster (SpendGuard stays in front) — covenant host tools only */
-  async broadcastTx (tx: import('@bsv/sdk').Transaction): Promise<import('@mamem/chain').BroadcastResult> { return await this.chain.broadcast(tx) }
+  async broadcastTx (tx: import('@bsv/sdk').Transaction): Promise<import('@nektar/chain').BroadcastResult> { return await this.chain.broadcast(tx) }
   /** the operator fee key — covenant hosts need it as owner/buyer key */
   operatorKey (): PrivateKey { return this.fundKey }
   /** funding outs for covenant hosts (escrow deposits, covenant inputs) —
    *  callers markSpent/addOwned after a successful broadcast like
    *  anchorAttestation does. */
-  async fundingOuts (satoshis: number): Promise<import('@mamem/chain').FundingOut[]> {
+  async fundingOuts (satoshis: number): Promise<import('@nektar/chain').FundingOut[]> {
     const u = await this.takeFunding(satoshis)
     return [u]
   }
   /** §7 key-sale (GOAL-v7 V3): re-derive the fragment key for an encrypted
    *  record — the decryption capability being sold. Caller must ensure the
    *  record's level is within this instance's maxLevel. */
-  async fragmentKeyFor (rec: import('@mamem/log').LogRecord): Promise<Uint8Array> {
+  async fragmentKeyFor (rec: import('@nektar/log').LogRecord): Promise<Uint8Array> {
     if (!this.opts.agentSeed) throw new Error('fragmentKeyFor: instance has no agentSeed (encryption disabled)')
     const level = rec.level ?? 0
     const { fragmentKey } = deriveFragmentKey(deriveLevelKey(this.opts.agentSeed, level), this.ctx(rec.shard, rec.seq, level))
@@ -387,7 +387,7 @@ export class MamemMemory {
    *  plaintext `data`, its `prov` and `E` so the verifier can recompute
    *  `leaf = computeLeaf({d,p,E})` and bind the TEXT to the proven leaf —
    *  an inclusion proof for a DIFFERENT record is not evidence. */
-  async revocationProof (pubHex: string): Promise<{ seq: number, data: string, prov?: import('@mamem/core').Provenance, E?: Bytes, leaf: string, bundle?: import('@mamem/verify').ProofBundle, anchored: boolean } | null> {
+  async revocationProof (pubHex: string): Promise<{ seq: number, data: string, prov?: import('@nektar/core').Provenance, E?: Bytes, leaf: string, bundle?: import('@nektar/verify').ProofBundle, anchored: boolean } | null> {
     for (const rec of await this.store.all('__revocation__')) {
       let data: string
       if (rec.fragment.d.length) data = Buffer.from(rec.fragment.d).toString('utf8')
@@ -412,7 +412,7 @@ export class MamemMemory {
    *  were anchored; a withheld cert can only make the chain look older. */
   async rotationChainProof (shard: string): Promise<{
     genesisPub: string | null
-    certs: Array<{ cert: import('@mamem/identity').RotationCert, seq: number, data: string, prov?: import('@mamem/core').Provenance, E?: Bytes, leaf: string, bundle?: import('@mamem/verify').ProofBundle, anchored: boolean }>
+    certs: Array<{ cert: import('@nektar/identity').RotationCert, seq: number, data: string, prov?: import('@nektar/core').Provenance, E?: Bytes, leaf: string, bundle?: import('@nektar/verify').ProofBundle, anchored: boolean }>
   } | null> {
     if (!this.anchors.get(shard)) return null
     const ac = await this.authorChain(shard)
@@ -427,7 +427,7 @@ export class MamemMemory {
         const ciphertext = rec.fragment.E.slice(2 + aadLen)
         data = Buffer.from(decryptFragment(k, { ciphertext, aad, keyID: '' })).toString('utf8')
       } else continue
-      let cert: import('@mamem/identity').RotationCert
+      let cert: import('@nektar/identity').RotationCert
       try {
         const j = JSON.parse(data)
         if (j.type !== 'rotation-cert' || j.shard !== shard) continue
@@ -464,7 +464,7 @@ export class MamemMemory {
     for (const pub of s.revocations) { this.revocations.insert(idbind.deriveKey(fromHex(pub)), sha256(utf8('revoked'))); this.revokedPubs.push(pub) }
   }
   /** verifier side: issue a single-use ZK membership query (default 10 min).
-   *  queryId = dsha256('mamem:zkq:v2' ‖ nonce ‖ verifierId); the prover binds it into the STARK journal. */
+   *  queryId = dsha256('nektar:zkq:v2' ‖ nonce ‖ verifierId); the prover binds it into the STARK journal. */
   issueZkQuery (verifierId: string, ttlMs = 600_000): { nonce: string, verifierId: string, queryId: string } {
     const nonce = idbind.issueChallenge()
     const queryId = toHex(starkQueryId({ nonce: fromHex(nonce), verifierId }))
@@ -491,7 +491,7 @@ export class MamemMemory {
    *  other checks held). The tombstone survives expiry + restart. */
   private zkQueryConsumed = (queryIdHex: string): boolean => this.zkQueries.get(queryIdHex)?.consumed === true
 
-  // ── P14 full-mode automata (AUT-005): one Rúnar MamemAutomaton UTXO per id,
+  // ── P14 full-mode automata (AUT-005): one Rúnar NektarAutomaton UTXO per id,
   // funded by the instance funder, owned by its own key.
   private automata = new Map<string, AutomatonChain>()
   async automatonDeploy (id: string, def: AutomatonDef, ownerKey = PrivateKey.fromRandom()): Promise<AutomatonHead> {
@@ -508,7 +508,7 @@ export class MamemMemory {
   }
 
   private ctx (shard: string, seq: number, level: number): FragmentContext {
-    return { t: 'mamem', psi: shard, rho: 'rec', pi: String(seq), l: level }
+    return { t: 'nektar', psi: shard, rho: 'rec', pi: String(seq), l: level }
   }
 
   /** Wright §13 holder side: π ⊢ leaf ∈ the SAME double-SHA-256 batch tree whose
@@ -533,7 +533,7 @@ export class MamemMemory {
   // authoritative; the chain only timestamps the commitment.
   private attestationTxs = new Map<string, import('@bsv/sdk').Transaction>()
   /** one funding outpoint from the fee reserve (MockFunder.take / ReserveFunder.takeReserve / peeked utxo) */
-  private async takeFunding (satoshis: number): Promise<import('@mamem/chain').FundingOut> {
+  private async takeFunding (satoshis: number): Promise<import('@nektar/chain').FundingOut> {
     const f = this.funder as any
     if (typeof f.take === 'function') return await f.take(satoshis)
     if (typeof f.takeReserve === 'function') { const u = await f.takeReserve(); if (u) return u }
@@ -569,7 +569,7 @@ export class MamemMemory {
     this.attestationTxs.set(tx.id('hex'), tx)
     ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
     ;(this.funder as any).addOwned?.(tx, changeVout)
-    this.metrics.inc('mamem_anchors_total', {}, 1, 'anchors broadcast')
+    this.metrics.inc('nektar_anchors_total', {}, 1, 'anchors broadcast')
     return { txid: tx.id('hex'), commitment: toHex(commitment) }
   }
 
@@ -651,7 +651,7 @@ export class MamemMemory {
    *  nothing): stored under <dataDir>/proofs/<sha256> and served publicly via
    *  GET /v1/proof/<sha256> so a verifier can re-run them without trusting us. */
   private proofDir (): string {
-    return join(this.opts.dataDir ?? process.env.MAMEM_DATA_DIR ?? join(process.cwd(), '.mamem'), 'proofs')
+    return join(this.opts.dataDir ?? process.env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar'), 'proofs')
   }
   /** store a proof artifact; returns its sha256 commitment hex */
   putProof (bytes: Uint8Array): string {
@@ -679,9 +679,9 @@ export class MamemMemory {
   async reverifyMembershipBytes (bytes: Uint8Array, anchorTxid: string): Promise<{ ok: boolean, reason?: string, anchorTxid?: string }> {
     const anchorTx = this.anchorTxs.get(anchorTxid)
     if (!anchorTx) return { ok: false, reason: 'committed anchor tx unknown to this instance' }
-    const { decodeMamemAnchor } = await import('@mamem/contracts')
-    const data = decodeMamemAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
-    if (!data) return { ok: false, reason: 'committed tx output 0 is not a mamem anchor' }
+    const { decodeNektarAnchor } = await import('@nektar/contracts')
+    const data = decodeNektarAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
+    if (!data) return { ok: false, reason: 'committed tx output 0 is not a nektar anchor' }
     const shardName = [...this.anchors.entries()].find(([, ac]) => ac.getShardId() === data.shard)?.[0]
     if (shardName === undefined) return { ok: false, reason: 'anchor shard is not one of ours' }
     const tail = this.tails.get(shardName) ?? []
@@ -744,9 +744,9 @@ export class MamemMemory {
   }
 
   /** GOAL-v6 S5 proof sharding (DIS-002; US 12,730,827 B2 under the Open BSV
-   *  pledge — BSV only, see NOTICE): default ON, `MAMEM_PROOF_SHARDING=0`
+   *  pledge — BSV only, see NOTICE): default ON, `NEKTAR_PROOF_SHARDING=0`
    *  opts out for patent-cautious operators → 'disabled'. */
-  private proofShardingOn (): boolean { return process.env.MAMEM_PROOF_SHARDING !== '0' }
+  private proofShardingOn (): boolean { return process.env.NEKTAR_PROOF_SHARDING !== '0' }
 
   /** holder side: a selective inclusion proof for a SUBSET of one batch's
    *  records — per-leaf shard subpaths (K=64-leaf subtrees of the same
@@ -813,11 +813,11 @@ export class MamemMemory {
    *  The instance supplies `fragment(<shard>/<seq>)` facts from its own store
    *  (same as recall); caller EDB facts are private context premises.
    *  Reveals neither the path nor any fact; journal = (policyRoot, conclusionHash, queryId). */
-  async proveDerivation (shard: string, query: { pred: string, args: string[], edb?: import('@mamem/datalog').Fact[] }, queryIdHex: string): Promise<{ bytes: Uint8Array, ms: number }> {
+  async proveDerivation (shard: string, query: { pred: string, args: string[], edb?: import('@nektar/datalog').Fact[] }, queryIdHex: string): Promise<{ bytes: Uint8Array, ms: number }> {
     if (!/^[0-9a-f]{64}$/.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
     const dag = this.opts.policyDag
     if (!dag) throw new Error('no policy DAG configured on this instance')
-    const { derivationPath, nodeHash } = await import('@mamem/datalog')
+    const { derivationPath, nodeHash } = await import('@nektar/datalog')
     const edb = [
       ...(await this.store.all(shard)).map(r => ({ pred: 'fragment', args: [`${shard}/${r.seq}`] })),
       ...(query.edb ?? [])
@@ -918,15 +918,15 @@ export class MamemMemory {
 
   /** resolve the shard's owner cert chain: genesis pub from the genesis
    *  anchor's decoded ownerPub + live rotation certs. Cached per shard. */
-  private authorChainCache = new Map<string, { genesisPub: string, certs: import('@mamem/identity').RotationCert[] } | null>()
-  private async authorChain (shard: string): Promise<{ genesisPub: string, certs: import('@mamem/identity').RotationCert[] } | null> {
+  private authorChainCache = new Map<string, { genesisPub: string, certs: import('@nektar/identity').RotationCert[] } | null>()
+  private async authorChain (shard: string): Promise<{ genesisPub: string, certs: import('@nektar/identity').RotationCert[] } | null> {
     if (this.authorChainCache.has(shard)) return this.authorChainCache.get(shard)!
-    let out: { genesisPub: string, certs: import('@mamem/identity').RotationCert[] } | null = null
+    let out: { genesisPub: string, certs: import('@nektar/identity').RotationCert[] } | null = null
     const genesis = (this.tails.get(shard) ?? []).find(l => l.n === 0)
     const gtx = genesis ? this.anchorTxs.get(genesis.txid) : undefined
     if (gtx) {
-      const { decodeMamemAnchor } = await import('@mamem/contracts')
-      const dec = decodeMamemAnchor(gtx.outputs[0]!.lockingScript.toHex())
+      const { decodeNektarAnchor } = await import('@nektar/contracts')
+      const dec = decodeNektarAnchor(gtx.outputs[0]!.lockingScript.toHex())
       if (dec) out = { genesisPub: dec.ownerPub, certs: [...this.anchorChain(shard).rotationCerts] }
     }
     this.authorChainCache.set(shard, out)
@@ -934,7 +934,7 @@ export class MamemMemory {
   }
 
   /** §19: was record seq written by the key of its recorded epoch, inside that key's window? */
-  async authorship (shard: string, seq: number, genesisPub: string, certs: import('@mamem/identity').RotationCert[]) {
+  async authorship (shard: string, seq: number, genesisPub: string, certs: import('@nektar/identity').RotationCert[]) {
     const r = (await this.store.all(shard)).find(x => x.seq === seq)
     if (!r?.authorPub || r.authorEpoch === undefined) return { ok: false, reason: 'record carries no verified author epoch' }
     return idbind.verifyAuthorship(r.authorPub, r.authorEpoch, r.fragment.p.time, genesisPub, certs)
@@ -942,11 +942,11 @@ export class MamemMemory {
 
   /** D6 (App E auditability): optional per-access log — decrypt/traverse events
    *  appended to `__access__` as timestamped records that join the batch flow
-   *  and anchor with everything else. OFF by default (`MAMEM_ACCESS_LOG=1`)
+   *  and anchor with everything else. OFF by default (`NEKTAR_ACCESS_LOG=1`)
    *  because a readable log of who-read-what leaks the access pattern itself —
    *  enable only where that tradeoff is acceptable. Writes bypass the public
    *  `remember` (no auto-anchor mid-read) and never break a read on failure. */
-  private accessLogEnabled (): boolean { return process.env.MAMEM_ACCESS_LOG === '1' }
+  private accessLogEnabled (): boolean { return process.env.NEKTAR_ACCESS_LOG === '1' }
   async logAccess (entry: Record<string, unknown>): Promise<void> {
     if (!this.accessLogEnabled()) return
     try {
@@ -1037,10 +1037,10 @@ export class MamemMemory {
     if (!batch) return null
     let res
     try { res = await this.anchorChain(shard).anchor(batch.size, batch.R) } catch (e) {
-      this.metrics.inc('mamem_anchor_failures_total', { shard }, 1, 'anchor broadcasts that failed')
+      this.metrics.inc('nektar_anchor_failures_total', { shard }, 1, 'anchor broadcasts that failed')
       throw e
     }
-    this.metrics.inc('mamem_anchors_total', {}, 1, 'anchors broadcast')
+    this.metrics.inc('nektar_anchors_total', {}, 1, 'anchors broadcast')
     const txid = res.tx.id('hex')
     this.anchorTxs.set(txid, res.tx)
     await this.log.markAnchored(shard, batch.n, txid)
@@ -1060,7 +1060,7 @@ export class MamemMemory {
     this.cps.set(shard, cps)
     this.persistState()
     if (this.opts.overlay) {
-      await this.opts.overlay.engine.submit({ beef: this.anchorChain(shard).beefOf(res.tx), topics: ['tm_mamem'] }, undefined, 'current-tx')
+      await this.opts.overlay.engine.submit({ beef: this.anchorChain(shard).beefOf(res.tx), topics: ['tm_nektar'] }, undefined, 'current-tx')
     }
     return { txid, n: res.head.data.n }
   }
@@ -1098,9 +1098,9 @@ export class MamemMemory {
   /** OPS-002 metrics (Prometheus text via metrics.render()) */
   readonly metrics = (() => {
     const m = new Metrics()
-    m.gauge('mamem_unconfirmed_anchors', () => [...this.tails.values()].flat().filter(l => !this.anchorTxs.get(l.txid)?.merklePath).length, 'anchors without a BUMP yet')
-    m.gauge('mamem_anchor_lag_ms', () => { const cov = this.covered(); const p = this.promises.filter(x => !cov(x)); return p.length ? Date.now() - Math.min(...p.map(x => x.issuedAt)) : 0 }, 'age of the oldest promise not yet checkpointed')
-    m.gauge('mamem_promise_violations', () => this.promiseViolations(this.opts.maxMergeDelayMs ?? 600_000).length, 'promises past the max merge delay without a checkpoint')
+    m.gauge('nektar_unconfirmed_anchors', () => [...this.tails.values()].flat().filter(l => !this.anchorTxs.get(l.txid)?.merklePath).length, 'anchors without a BUMP yet')
+    m.gauge('nektar_anchor_lag_ms', () => { const cov = this.covered(); const p = this.promises.filter(x => !cov(x)); return p.length ? Date.now() - Math.min(...p.map(x => x.issuedAt)) : 0 }, 'age of the oldest promise not yet checkpointed')
+    m.gauge('nektar_promise_violations', () => this.promiseViolations(this.opts.maxMergeDelayMs ?? 600_000).length, 'promises past the max merge delay without a checkpoint')
     return m
   })()
   private covered () {
@@ -1182,10 +1182,10 @@ export class MamemMemory {
 
   /** authorize an action for the MCP `authorize` tool with the same verified
    *  inputs recall uses (never caller-asserted ids or levels). */
-  async authorizeAction (action: import('@mamem/policy').CedarAction, args: { identity?: CallerIdentity, zk?: ZkClearance, resource?: { id?: string, attrs?: { level?: number, shard?: string, class?: string } } }) {
+  async authorizeAction (action: import('@nektar/policy').CedarAction, args: { identity?: CallerIdentity, zk?: ZkClearance, resource?: { id?: string, attrs?: { level?: number, shard?: string, class?: string } } }) {
     const pol = this.opts.policy
     if (!pol) return { policySetHash: null, decision: 'not-required' as const, action }
-    const { authorize, canonicalizePolicySet } = await import('@mamem/policy')
+    const { authorize, canonicalizePolicySet } = await import('@nektar/policy')
     const hash = canonicalizePolicySet('instance', pol.policyText).hash
     if (hash !== pol.anchoredPolicySetHash) return { policySetHash: hash, decision: 'deny' as const, reason: 'policy hash mismatch' }
     const caller = this.verifiedCaller(args.identity)
@@ -1288,7 +1288,7 @@ export class MamemMemory {
     let cedarState: 'allow' | 'deny' | 'hash-mismatch' | 'not-required' = 'not-required'
     const policy = this.opts.policy
     if (policy) {
-      const { authorize, canonicalizePolicySet } = await import('@mamem/policy')
+      const { authorize, canonicalizePolicySet } = await import('@nektar/policy')
       // hash the INSTANCE policy text ourselves — never trust a request hash
       const computed = canonicalizePolicySet('instance', policy.policyText).hash
       if (computed !== policy.anchoredPolicySetHash) {
@@ -1318,7 +1318,7 @@ export class MamemMemory {
     const dagPermit = new Map<number, boolean>() // per-fragment DAG permit
     const dag = this.opts.policyDag
     if (dag) {
-      const { Datalog } = await import('@mamem/datalog')
+      const { Datalog } = await import('@nektar/datalog')
       // mirror the v2 Cedar fix: the configured DAG must match the anchored
       // root decoded from the DAG-root record — a mismatch denies everything
       const recomputed = Buffer.from(dag.policyRoot()).toString('hex')
@@ -1460,7 +1460,7 @@ export class MamemMemory {
           item.text = r.fragment.d.length ? Buffer.from(r.fragment.d).toString('utf8') : undefined
         }
       }
-      if (item.unverifiable) this.metrics.inc('mamem_rejected_reads_total', { reason: (item.reason ?? 'unknown').split(/[:\d]/)[0]!.trim() }, 1, 'records withheld from a read, by reason')
+      if (item.unverifiable) this.metrics.inc('nektar_rejected_reads_total', { reason: (item.reason ?? 'unknown').split(/[:\d]/)[0]!.trim() }, 1, 'records withheld from a read, by reason')
       texts.push(item)
     }
     const answer = texts.map(i => i.text ?? '[unverifiable]').join('\n')
@@ -1528,7 +1528,7 @@ export class MamemMemory {
     })
     const t0 = performance.now()
     const result = await verifyFragment(bundle, this.chain)
-    this.metrics.observe('mamem_proof_latency_ms', performance.now() - t0, 'verifyFragment latency')
+    this.metrics.observe('nektar_proof_latency_ms', performance.now() - t0, 'verifyFragment latency')
     return { bundle, result }
   }
 
@@ -1565,7 +1565,7 @@ export class MamemMemory {
         ...(bundle ? { bundle } : {})
       })
     }
-    return { v: 1, kind: 'mamem-shard-pack', shard, exportedAt: Date.now(), records }
+    return { v: 1, kind: 'nektar-shard-pack', shard, exportedAt: Date.now(), records }
   }
 
   /** Import a shard pack: records re-land via remember() (byte-identical prov
@@ -1575,8 +1575,8 @@ export class MamemMemory {
    *  target shard must be empty (no mixing imported + native seqs). */
   async importShardPack (pack: unknown): Promise<{ imported: number, anchored: number, unverifiable: string[], skipped: number }> {
     const p = pack as ShardPack
-    if (p?.v !== 1 || p?.kind !== 'mamem-shard-pack' || typeof p.shard !== 'string' || !Array.isArray(p.records)) {
-      throw new Error('importShard: malformed pack — expected {v:1, kind:"mamem-shard-pack", shard, records[]}')
+    if (p?.v !== 1 || p?.kind !== 'nektar-shard-pack' || typeof p.shard !== 'string' || !Array.isArray(p.records)) {
+      throw new Error('importShard: malformed pack — expected {v:1, kind:"nektar-shard-pack", shard, records[]}')
     }
     if ((await this.store.all(p.shard)).length > 0) throw new Error(`importShard: shard "${p.shard}" already has records — import needs an empty shard`)
     let imported = 0, anchored = 0, skipped = 0
@@ -1630,11 +1630,11 @@ export class MamemMemory {
     const shards = this.shards()
     let records = 0, anchoredRecords = 0
     for (const s of shards) for (const r of await this.store.all(s)) { records++; if (r.anchorTxid !== undefined) anchoredRecords++ }
-    const prover = process.env.MAMEM_STARK_PROVER
-      ? (existsSync(process.env.MAMEM_STARK_PROVER) ? 'native binary' : 'MAMEM_STARK_PROVER set but file missing')
+    const prover = process.env.NEKTAR_STARK_PROVER
+      ? (existsSync(process.env.NEKTAR_STARK_PROVER) ? 'native binary' : 'NEKTAR_STARK_PROVER set but file missing')
       : await new Promise<string>(res => {
-        execFile('docker', ['image', 'inspect', process.env.MAMEM_STARK_IMAGE ?? 'mamem-stark-build'], { timeout: 5_000 }, e =>
-          res(e ? 'absent (set MAMEM_STARK_PROVER or build mamem-stark-build)' : 'docker image'))
+        execFile('docker', ['image', 'inspect', process.env.NEKTAR_STARK_IMAGE ?? 'nektar-stark-build'], { timeout: 5_000 }, e =>
+          res(e ? 'absent (set NEKTAR_STARK_PROVER or build nektar-stark-build)' : 'docker image'))
       })
     return {
       network: this.opts.network ?? 'main',
@@ -1645,7 +1645,7 @@ export class MamemMemory {
       unprovenAnchors: this.unprovenAnchors().length,
       importedBundles: this.importedBundles.size,
       publicPacks: (await this.publicShards()).length,
-      payments: /^(1|true|yes)$/i.test(process.env.MAMEM_PAYMENTS ?? '') ? 'on' : 'off',
+      payments: /^(1|true|yes)$/i.test(process.env.NEKTAR_PAYMENTS ?? '') ? 'on' : 'off',
       prover
     }
   }

@@ -1,9 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { dsha256, utf8, chainRp, GENESIS_PREV_RP, eq } from '@mamem/core'
-import { decodeMamemAnchor } from '@mamem/contracts'
-import { MockChain, MockFunder } from '@mamem/chain'
+import { dsha256, utf8, chainRp, GENESIS_PREV_RP, eq } from '@nektar/core'
+import { decodeNektarAnchor } from '@nektar/contracts'
+import { MockChain, MockFunder } from '@nektar/chain'
 import { AnchorChain } from '../src/index.js'
 
 const setup = (burstLimit = Infinity) => {
@@ -29,14 +29,14 @@ test('regression: confirming a descendant never gives its BUMP to earlier pendin
 test('anchor: genesis then successor spends the head UTXO', async () => {
   const { chain, ac } = setup()
   const g = await ac.anchor(10, dsha256(utf8('b0')))
-  const gd = decodeMamemAnchor(g.tx.outputs[0]!.lockingScript.toHex())
+  const gd = decodeNektarAnchor(g.tx.outputs[0]!.lockingScript.toHex())
   assert.equal(gd!.n, 0)
 
   const a1 = await ac.anchor(20, dsha256(utf8('b1')))
   // input 0 must spend genesis head outpoint
   const cIn = a1.tx.inputs.find(i => (i.sourceTXID ?? i.sourceTransaction?.id('hex')) === g.tx.id('hex'))!
   assert.equal(cIn.sourceOutputIndex, 0)
-  const a1d = decodeMamemAnchor(a1.tx.outputs[0]!.lockingScript.toHex())
+  const a1d = decodeNektarAnchor(a1.tx.outputs[0]!.lockingScript.toHex())
   assert.equal(a1d!.n, 1)
   assert.ok(eq(a1d!.Rp, chainRp(gd!.Rp, a1d!.R, 20)))
 
@@ -67,12 +67,12 @@ test('anchor: failed broadcast does not advance the head', async () => {
   assert.equal(ac.getHead()!.data.n, 1, 'head must not advance on failed broadcast')
   // retry after the drop — must produce a valid successor of n=1 (not a phantom)
   const a3 = await ac.anchor(1, R(2))
-  const d = decodeMamemAnchor(a3.tx.outputs[0]!.lockingScript.toHex())
+  const d = decodeNektarAnchor(a3.tx.outputs[0]!.lockingScript.toHex())
   assert.equal(d!.n, 2)
   const cIn = a3.tx.inputs.find(i => (i.sourceTXID ?? i.sourceTransaction?.id('hex')) === a1.tx.id('hex'))!
   assert.ok(cIn, 'successor spends the n=1 head')
   const a4 = await ac.anchor(1, R(3))
-  assert.equal(decodeMamemAnchor(a4.tx.outputs[0]!.lockingScript.toHex())!.n, 3)
+  assert.equal(decodeNektarAnchor(a4.tx.outputs[0]!.lockingScript.toHex())!.n, 3)
 })
 
 test('anchor: unconfirmed chain + burst back-pressure', async () => {
@@ -207,13 +207,13 @@ test('every AnchorChain tx produces a BEEF with all inputs resolved', async () =
   }
 })
 
-test('MamemAnchor v3 + ANC-006: META flag leads the data payload; flag-absent stays decodable', async () => {
+test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent stays decodable', async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const f = new MockFunder(); f.topup(6); for (const u of (f as any).utxos) chain.registerParent(u.tx)
   const ac = new AnchorChain('v3', f.keyPair, f, f.keyPair, chain)
   await ac.anchor(3, dsha256(utf8('batch')))
   await ac.anchor(2, dsha256(utf8('batch2'))) // append passes script verification
-  const d = decodeMamemAnchor(ac.getHead()!.tx.outputs[0]!.lockingScript.toHex())!
+  const d = decodeNektarAnchor(ac.getHead()!.tx.outputs[0]!.lockingScript.toHex())!
   assert.ok(d, 'v3 anchor decodes')
   assert.deepEqual(Object.keys(d).sort(), ['R', 'Rp', 'metanet', 'n', 'ownerPkh', 'ownerPub', 'shard', 'size', 'tag'])
   assert.equal(d.metanet, true, 'new anchors carry the META flag push')
@@ -229,25 +229,25 @@ test('MamemAnchor v3 + ANC-006: META flag leads the data payload; flag-absent st
   // a pre-flag (v3, flag-absent) anchor built by the legacy artifact still
   // decodes byte-for-byte (metanet=false)
   const { RunarContract } = await import('runar-sdk')
-  const { MAMEM_ANCHOR_V3_ARTIFACT, META_FLAG_HEX } = await import('@mamem/contracts')
+  const { NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX } = await import('@nektar/contracts')
   const { PrivateKey } = await import('@bsv/sdk')
-  const { hash160, toHex } = await import('@mamem/core')
+  const { hash160, toHex } = await import('@nektar/core')
   const pk = PrivateKey.fromRandom().toPublicKey().toString()
-  const legacy = new RunarContract(MAMEM_ANCHOR_V3_ARTIFACT, [pk, toHex(hash160(Uint8Array.from(Buffer.from(pk, 'hex')))), 0n, 3n, '11'.repeat(32), '22'.repeat(32), toHex((await import('@mamem/core')).TAG_RPRIME)]).getLockingScript()
-  const ld = decodeMamemAnchor(legacy)!
+  const legacy = new RunarContract(NEKTAR_ANCHOR_V3_ARTIFACT, [pk, toHex(hash160(Uint8Array.from(Buffer.from(pk, 'hex')))), 0n, 3n, '11'.repeat(32), '22'.repeat(32), toHex((await import('@nektar/core')).TAG_RPRIME)]).getLockingScript()
+  const ld = decodeNektarAnchor(legacy)!
   assert.ok(ld, 'flag-absent v3 anchor decodes')
   assert.equal(ld.metanet, false)
   assert.equal(ld.n, 0); assert.equal(ld.size, 3)
   // and a WRONG flag byte is refused (byte-auth: rebuild ≠ script)
   const wrong = legacy.slice(0, legacy.lastIndexOf('6a')) + '6a' + '0444454144' + legacy.slice(legacy.lastIndexOf('6a') + 2)
-  assert.equal(decodeMamemAnchor(wrong), null, 'a non-META leading push is not a valid flag')
+  assert.equal(decodeNektarAnchor(wrong), null, 'a non-META leading push is not a valid flag')
   // a v2-shaped state (extra length-prefixed 32-byte field after R') is not a v3 anchor
   const at = hex.lastIndexOf('6a') + 2 + 10 + 226 // after flag|owner|n|size|R|Rp
-  assert.equal(decodeMamemAnchor(hex.slice(0, at) + '20' + '42'.repeat(32) + hex.slice(at)), null, 'v2 layout refused')
+  assert.equal(decodeNektarAnchor(hex.slice(0, at) + '20' + '42'.repeat(32) + hex.slice(at)), null, 'v2 layout refused')
 })
 
 test('GOAL-v8 D5: extractAnchorAuthorship exposes σ_n — verified against the preimage', async () => {
-  const { extractAnchorAuthorship } = await import('@mamem/contracts')
+  const { extractAnchorAuthorship } = await import('@nektar/contracts')
   const { ac } = setup()
   const g = await ac.anchor(1, dsha256(utf8('g')))
   const a1 = await ac.anchor(2, dsha256(utf8('a1')))

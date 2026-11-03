@@ -3,9 +3,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, Script, LockingScript } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { utf8 } from '@mamem/core'
-import { MamemMemory, type MamemMemoryOptions } from '../src/memory.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { utf8 } from '@nektar/core'
+import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
 import { _testReset } from '../src/pay.js'
@@ -14,11 +14,11 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-function setup (opts: MamemMemoryOptions = {}) {
+function setup (opts: NektarMemoryOptions = {}) {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(50)
   for (const t of funder.parents) chain.registerParent(t)
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
   const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
   const payer = new MockFunder(); payer.topup(4)
   for (const t of payer.parents) chain.registerParent(t)
@@ -41,15 +41,15 @@ const OP_KEY = PrivateKey.fromRandom()
 
 test('payments: openRuntime refuses to start without a valid operator wallet', async (t) => {
   _testReset()
-  process.env.MAMEM_PAYMENTS = '1'
-  delete process.env.MAMEM_OPERATOR_WIF
-  t.after(() => { delete process.env.MAMEM_PAYMENTS; delete process.env.MAMEM_OPERATOR_WIF; _testReset() })
+  process.env.NEKTAR_PAYMENTS = '1'
+  delete process.env.NEKTAR_OPERATOR_WIF
+  t.after(() => { delete process.env.NEKTAR_PAYMENTS; delete process.env.NEKTAR_OPERATOR_WIF; _testReset() })
 
-  const dir = () => mkdtempSync(join(tmpdir(), 'mamem-pay-init-'))
-  await assert.rejects(() => openRuntime({ network: 'mock', dataDir: dir() }), /requires MAMEM_OPERATOR_WIF/, 'missing wallet → no startup')
-  process.env.MAMEM_OPERATOR_WIF = 'definitely-not-a-wif'
+  const dir = () => mkdtempSync(join(tmpdir(), 'nektar-pay-init-'))
+  await assert.rejects(() => openRuntime({ network: 'mock', dataDir: dir() }), /requires NEKTAR_OPERATOR_WIF/, 'missing wallet → no startup')
+  process.env.NEKTAR_OPERATOR_WIF = 'definitely-not-a-wif'
   await assert.rejects(() => openRuntime({ network: 'mock', dataDir: dir() }), /not a valid WIF/, 'garbage WIF → no startup')
-  process.env.MAMEM_OPERATOR_WIF = OP_KEY.toWif([0xef])
+  process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])
   const rt = await openRuntime({ network: 'mock', dataDir: dir() })
   t.after(() => rt.close())
   assert.equal(rt.network, 'mock', 'valid operator wallet → startup proceeds')
@@ -57,9 +57,9 @@ test('payments: openRuntime refuses to start without a valid operator wallet', a
 
 test('payments: gated tool 402s → signed tx settles → receipt commits the payment txid', async (t) => {
   _testReset()
-  process.env.MAMEM_PAYMENTS = '1'
-  process.env.MAMEM_OPERATOR_WIF = OP_KEY.toWif([0xef])
-  t.after(() => { delete process.env.MAMEM_PAYMENTS; delete process.env.MAMEM_OPERATOR_WIF; _testReset() })
+  process.env.NEKTAR_PAYMENTS = '1'
+  process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])
+  t.after(() => { delete process.env.NEKTAR_PAYMENTS; delete process.env.NEKTAR_OPERATOR_WIF; _testReset() })
 
   const { mem, settle, payer } = setup()
   await mem.remember('s', 'the fee is 250 sats')
@@ -70,7 +70,7 @@ test('payments: gated tool 402s → signed tx settles → receipt commits the pa
   assert.equal(denied.ok, false)
   const acc = denied.accepts[0]
   assert.equal(acc.scheme, 'exact')
-  assert.equal(acc.extra.opReturn, `mamempay:${acc.extra.invoiceId}`)
+  assert.equal(acc.extra.opReturn, `nektarpay:${acc.extra.invoiceId}`)
   assert.match(acc.extra.lockingScriptHex, /^76a914[0-9a-f]{40}88ac$/, 'P2PKH to the operator address')
 
   // 2) pay it — build + sign the settlement tx, retry with payment
@@ -103,9 +103,9 @@ test('payments: gated tool 402s → signed tx settles → receipt commits the pa
 
 test('payments: underpayment, missing tag and unknown invoice are refused', async (t) => {
   _testReset()
-  process.env.MAMEM_PAYMENTS = '1'
-  process.env.MAMEM_OPERATOR_WIF = OP_KEY.toWif([0xef])
-  t.after(() => { delete process.env.MAMEM_PAYMENTS; delete process.env.MAMEM_OPERATOR_WIF; _testReset() })
+  process.env.NEKTAR_PAYMENTS = '1'
+  process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])
+  t.after(() => { delete process.env.NEKTAR_PAYMENTS; delete process.env.NEKTAR_OPERATOR_WIF; _testReset() })
 
   const { mem, payer } = setup()
   const q = await callTool(mem, 'payQuote', { tool: 'anchor' })
@@ -124,7 +124,7 @@ test('payments: underpayment, missing tag and unknown invoice are refused', asyn
   await assert.rejects(() => callTool(mem, 'anchor', { shard: 's', payment: { invoiceId: 'deadbeef', transaction: good } }), /unknown or wrong-tool/)
 
   // payments off → tools stay free, receipts verify with paid=info
-  delete process.env.MAMEM_PAYMENTS
+  delete process.env.NEKTAR_PAYMENTS
   const free = await callTool(mem, 'payQuote', { tool: 'anchor' }).then(() => 'unreachable', (e: Error) => e.message)
   assert.match(free, /payments are disabled/)
 })

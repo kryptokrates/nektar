@@ -10,10 +10,10 @@ close.
 
 Status: **DONE — Phase A (read-path hardening) committed; all three
 covenants implemented in Rúnar, green under real script eval AND live
-Teranode regtest.** V1 `MamemFeeVault` (stateful, opSig-prefix unlocking,
+Teranode regtest.** V1 `NektarFeeVault` (stateful, opSig-prefix unlocking,
 host-computed window transition asserted on-chain) — funded, spent,
 continuation spent, over-cap refused (TX_INVALID) on regtest. V2
-`MamemCheckpointBond` (stateful {n,lastRoot}, uniform-frame pad args +
+`NektarCheckpointBond` (stateful {n,lastRoot}, uniform-frame pad args +
 auto-change slot) — commit×2, early close refused, release-height close
 accepted on regtest. V3 `DisclosureSale` (stateless terminal, explicit
 txPreimage, preimage-last ABI order, fully-inlined out() asserts —
@@ -25,18 +25,18 @@ wrapped + pays the seller exactly `price` + returns change to the depositor;
 early refund refused, deadline depositor refund accepted on regtest. E2E:
 `packages/e2e/src/e2e-covenants-regtest.ts` (13 checks, PASS).
 
-**Integration (done):** `MAMEM_FEE_VAULT` wires the live
+**Integration (done):** `NEKTAR_FEE_VAULT` wires the live
 (testnet/mainnet) anchor-funding path through the V1 covenant —
 `runtime.ts` deploys/rolls the vault and `takeReserve` mints capped
 funding outs on demand (SpendGuard stays in front; pool entries that
 were not minted by the vault are never served for anchoring).
-`MAMEM_PAID_DISCLOSURE` gates six MCP tools — `saleOffer` /
+`NEKTAR_PAID_DISCLOSURE` gates six MCP tools — `saleOffer` /
 `saleOfferMemory` / `saleEscrow` / `saleComplete` / `saleRefund` /
 `saleClaim` — in the tool list (SDK `ListTools` and HTTP
 `/v1/tools` both honour the gate) *and* in `callTool` itself. The
 envelope/claim layer lives in `packages/identity/src/sale.ts`
 (`offerDisclosure`, `claimDisclosure`, `parseBuyArgs`) — identity keeps
-its dependency direction (no `@mamem/anchor` import); the real-tx
+its dependency direction (no `@nektar/anchor` import); the real-tx
 claim roundtrip test sits in `packages/anchor/test/sale.test.ts`.
 
 ## Phase A — Read-path verification hardening (done)
@@ -99,9 +99,9 @@ mcp green incl. the revoked-author withhold case.
    (c) multi-method terminal methods get the uniform injected frame —
    pad args + auto-change output required even when the ABI omits them (V2).
 
-## V1 — MamemFeeVault (spend caps as consensus)
+## V1 — NektarFeeVault (spend caps as consensus)
 
-`packages/contracts/src/MamemFeeVault.runar.ts` — **idiomatic
+`packages/contracts/src/NektarFeeVault.runar.ts` — **idiomatic
 `StatefulSmartContract`** (as shipped; the earlier stateless+`codeSha`-pin
 sketch was abandoned — the stateful path verifies under real script eval).
 
@@ -127,13 +127,13 @@ _changeAmount, txPreimage)`:
 Host: `packages/anchor/src/vault.ts` — `FeeVault`/`VaultFunder` (SDK
 `computeOpPushTxWithCodeSep` + `buildStatefulPrefix(opSig, true)` — the
 `_changePKH` method frame needs the code-part witness push).
-`SpendGuard` stays in front (defense in depth). Env `MAMEM_FEE_VAULT`.
+`SpendGuard` stays in front (defense in depth). Env `NEKTAR_FEE_VAULT`.
 Regtest-validated in `e2e-vault-regtest.ts` (fund → spend → continuation
 spend accepted; over-cap refused TX_INVALID).
 
-## V2 — MamemCheckpointBond (unforkable checkpoint chain)
+## V2 — NektarCheckpointBond (unforkable checkpoint chain)
 
-`packages/contracts/src/MamemCheckpointBond.runar.ts` — StatefulSmartContract.
+`packages/contracts/src/NektarCheckpointBond.runar.ts` — StatefulSmartContract.
 
 Immutable params: `operatorPkh`, `bondReleaseHeight`, `minBond`.
 Mutable state: `{n, lastRoot}` — the checkpoint chain lives IN the script:
@@ -217,7 +217,7 @@ Envelope/claim layer: `packages/identity/src/sale.ts` —
 `offerDisclosure` (BRC-42 `wrapFor` → `sha256` commitment → covenant
 cfg), `claimDisclosure` (parse the buy unlocking script → verify
 `sha256(wrapped) == hWrapped` → `unwrapFor` private or pass plaintext
-public). MCP tools ship behind `MAMEM_PAID_DISCLOSURE` (gated in the
+public). MCP tools ship behind `NEKTAR_PAID_DISCLOSURE` (gated in the
 listing AND the dispatcher).
 
 ## Gates per phase

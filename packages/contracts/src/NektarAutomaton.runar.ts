@@ -1,4 +1,4 @@
-// MamemAutomaton — AUT-005 full mode. Stateful Rúnar contract holding q of a
+// NektarAutomaton — AUT-005 full mode. Stateful Rúnar contract holding q of a
 // deterministic finite automaton; each step spends the state UTXO and enforces
 // δ on-chain (AUT-007: depth-4 Merkle membership over 24B transition leaves —
 // no nested IF over the table itself).
@@ -15,7 +15,7 @@ import {
   type PubKey, type Sig, type Sha256, type ByteString
 } from 'runar-lang'
 
-export class MamemAutomaton extends StatefulSmartContract {
+export class NektarAutomaton extends StatefulSmartContract {
   q: bigint
   deltaRoot: Sha256 // Merkle root over 24B leaf entries num2bin8(from)‖num2bin8(sym)‖num2bin8(to)
   ownerPkh: ByteString // 20B = hash160(owner pubkey)

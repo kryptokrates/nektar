@@ -2,9 +2,9 @@
 // sha256(proof) in a fee-key-funded data tx (unit codec + MockChain spend).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { utf8, dsha256, toHex } from '@mamem/core'
-import { MamemMemory } from '../src/memory.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { utf8, dsha256, toHex } from '@nektar/core'
+import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { attestationScript, decodeAttestationScript, attestationsOf, attestationCommitment, ATTEST_TAG } from '../src/onchain.js'
 
@@ -15,7 +15,7 @@ function setup () {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(10)
   for (const t of funder.parents) chain.registerParent(t)
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test' })
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test' })
   return { chain, funder, mem }
 }
 

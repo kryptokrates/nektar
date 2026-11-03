@@ -14,9 +14,9 @@
 - **Gates**: verify <50 ms ✓ (48) · prove <10 s ✓ (2.6 s).
 
 ## Spike 0.2 — Rúnar automaton: **PASS (compile + valid broadcast)**
-- `MamemAutomaton.runar.ts`: state `{q, deltaRoot, ownerPkh, n}`; `step(sig,pubKey, e0..e11, from,sym,to)` — rebuilds the 4-triple table via `num2bin`+`cat`, asserts `hash256(table)==deltaRoot`, `from==q`, unrolled 4-entry membership, `addOutput` continues with `q=to`.
+- `NektarAutomaton.runar.ts`: state `{q, deltaRoot, ownerPkh, n}`; `step(sig,pubKey, e0..e11, from,sym,to)` — rebuilds the 4-triple table via `num2bin`+`cat`, asserts `hash256(table)==deltaRoot`, `from==q`, unrolled 4-entry membership, `addOutput` continues with `q=to`.
 - `slice` is **not** in Rúnar 0.4.6 — table passed as flat bigint args instead (compiled cleanly after the change).
-- Artifact `MamemAutomaton.json` written; deploys + `step` calls broadcast on `MockProvider` (valid transition `q0 -a-> q1` advanced state to q1, n+1).
+- Artifact `NektarAutomaton.json` written; deploys + `step` calls broadcast on `MockProvider` (valid transition `q0 -a-> q1` advanced state to q1, n+1).
 - Negatives designed (invalid triple, tampered table, wrong signer) — full Spend-eval of the negatives needs the production `finalizeCall` signature path (the placeholder-sig tx isn't spend-evaluable on MockProvider); production integration will reuse `packages/anchor`'s broadcast/Spend path.
 
 ## Spike 0.3 — Datalog: **PASS**

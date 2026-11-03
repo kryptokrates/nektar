@@ -1,6 +1,6 @@
 // BRC-42 fragment keys + AES-256-GCM.
 // keyID = canonical context t‖ψ‖ρ‖π‖l (tenant‖shard‖record‖fragment‖level),
-// protocolID [2,'mamem']; key = SHA-256(BRC-42 shared secret) → AES-256-GCM.
+// protocolID [2,'nektar']; key = SHA-256(BRC-42 shared secret) → AES-256-GCM.
 // AAD binds H(d) and the full context — a ciphertext cannot be transplanted
 // to another fragment, context, or level.
 //
@@ -24,7 +24,7 @@
 // without changing the derived key.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { PrivateKey, PublicKey, KeyDeriver } from '@bsv/sdk'
-import { sha256, concat, utf8, toHex, type Bytes } from '@mamem/core'
+import { sha256, concat, utf8, toHex, type Bytes } from '@nektar/core'
 
 export interface FragmentContext {
   t: string // tenant
@@ -40,7 +40,7 @@ export function canonicalKeyID (c: FragmentContext): string {
   return parts.map(p => `${p.length}:${p}`).join('|')
 }
 
-export const CRYPTO_PROTOCOL_ID: [number, string] = [2, 'mamem']
+export const CRYPTO_PROTOCOL_ID: [number, string] = [2, 'nektar']
 
 export interface FragmentKeys {
   /** the AES-256 key for this fragment */

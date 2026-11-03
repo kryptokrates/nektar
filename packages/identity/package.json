@@ -1,5 +1,5 @@
 {
-  "name": "@mamem/identity",
+  "name": "@nektar/identity",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -12,9 +12,9 @@
     "test": "node --test --test-timeout=60000 dist/test/*.test.js"
   },
   "dependencies": {
-    "@mamem/core": "workspace:*",
-    "@mamem/crypto": "workspace:*",
-    "@mamem/log": "workspace:*"
+    "@nektar/core": "workspace:*",
+    "@nektar/crypto": "workspace:*",
+    "@nektar/log": "workspace:*"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"

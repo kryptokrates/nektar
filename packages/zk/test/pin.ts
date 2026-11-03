@@ -3,7 +3,7 @@
 // the fixture batch, and the §14 derivation fixture's journal matches its
 // header. Rebuilding the guests (`pnpm stark:build`) must keep the same ids.
 import { readFileSync } from 'node:fs'
-import { merkleRoot, dsha256, utf8, toHex, fromHex } from '@mamem/core'
+import { merkleRoot, dsha256, utf8, toHex, fromHex } from '@nektar/core'
 import { encodeZkm2, verifyZkm2, PINNED_IMAGE_ID, encodeZkder, verifyZkder, PINNED_DATALOG_IMAGE_ID } from '../src/index.js'
 
 const fx = JSON.parse(readFileSync(new URL('../../test/fixtures/zkm2-n5i4.json', import.meta.url), 'utf8'))

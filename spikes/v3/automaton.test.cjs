@@ -1,11 +1,11 @@
-// Spike 0.2 — MamemAutomaton Spend-validate test.
+// Spike 0.2 — NektarAutomaton Spend-validate test.
 const test = require('node:test')
 const assert = require('node:assert')
 const { RunarContract, MockProvider, LocalSigner } = require('runar-sdk')
 const { Spend, LockingScript } = require('@bsv/sdk')
 const { createHash } = require('node:crypto')
 
-const artifact = JSON.parse(require('fs').readFileSync('MamemAutomaton.json', 'utf8'))
+const artifact = JSON.parse(require('fs').readFileSync('NektarAutomaton.json', 'utf8'))
 const signer = new LocalSigner('11'.repeat(32))
 const h160 = (pkHex) => createHash('ripemd160').update(createHash('sha256').update(Buffer.from(pkHex, 'hex')).digest()).digest('hex')
 const sha256d = (b) => createHash('sha256').update(createHash('sha256').update(b).digest()).digest('hex')

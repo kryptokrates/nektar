@@ -1,4 +1,4 @@
-// MamemZkClaim — GOAL-v9 §4.5: optimistic ZK verdict claim+bond covenant.
+// NektarZkClaim — GOAL-v9 §4.5: optimistic ZK verdict claim+bond covenant.
 // The prover locks a bond behind the claim "receiptHash verifies against
 // (journalRoot,journalSize) at queryId". Nobody challenges before
 // `deadline` → `settle` emits the verdict + returns the bond (happy
@@ -23,7 +23,7 @@ import {
   type Sig, type PubKey, type ByteString, type Sha256
 } from 'runar-lang'
 
-export class MamemZkClaim extends StatefulSmartContract {
+export class NektarZkClaim extends StatefulSmartContract {
   // state (addOutput arg order must match declaration order).
   // NOTE: proverPkh/maxFee/window/stages are protocol constants kept in
   // state — never assigned after construction. `readonly` constructor

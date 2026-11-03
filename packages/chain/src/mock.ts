@@ -2,7 +2,7 @@
 // Accepts txs via broadcast(), mines them into blocks on demand, computes real
 // BUMPs (MerklePath), tracks unconfirmed ancestor depth, and can reorg.
 import { Transaction, MerklePath, PrivateKey, P2PKH, Script } from '@bsv/sdk'
-import { dsha256, concat, toHex, type Bytes } from '@mamem/core'
+import { dsha256, concat, toHex, type Bytes } from '@nektar/core'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, Funder, FundingOut, TxStatusEvent } from './interfaces.js'
 
 const rev = (b: Bytes) => Uint8Array.from(b).reverse()

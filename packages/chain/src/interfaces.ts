@@ -1,6 +1,6 @@
 // Chain-facing interfaces — everything chain-related goes through these so the
 // whole system is testable offline on the mock chain, and swappable to Teranode
-// regtest (MAMEM_NETWORK=regtest) without code changes.
+// regtest (NEKTAR_NETWORK=regtest) without code changes.
 import type { Transaction, MerklePath } from '@bsv/sdk'
 
 export interface BlockHeader {

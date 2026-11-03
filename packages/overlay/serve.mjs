@@ -1,33 +1,33 @@
 #!/usr/bin/env node
-// mamem rendezvous — a public overlay node for agent discovery.
+// nektar rendezvous — a public overlay node for agent discovery.
 //
 //   GET  /health                       { ok, agents, uptime }
 //   GET  /directory?all=1              every live ad
 //   GET  /directory?shard=<id>         agents serving that shard
 //   GET  /directory?pub=<66hex>        one agent's ad
 //   POST /announce     {ad,sig}        off-chain signed ad — free, no UTXO
-//   POST /overlay/submit {beef,topics} on-chain path → tm_mamem / tm_presence
+//   POST /overlay/submit {beef,topics} on-chain path → tm_nektar / tm_presence
 //
 // An ad = { pub, endpoint, shards[], ts, exp? } signed by the agent's key over
 // sha256('endpoint|shards|ts|exp'). Latest-by-ts wins; expired ads are hidden.
 // The directory only finds peers — trust still comes from receipts, not us.
 //
-// env: MAMEM_OVERLAY_HOST (default 0.0.0.0)  MAMEM_OVERLAY_PORT (default 8090)
-//      MAMEM_OVERLAY_DIR  (sqlite dir, default ./.state/overlay)
-//      MAMEM_NETWORK      (testnet|ttn|main — for on-chain submits; default testnet)
-//      MAMEM_OVERLAY_TOKEN (optional bearer — gates writes if set)
+// env: NEKTAR_OVERLAY_HOST (default 0.0.0.0)  NEKTAR_OVERLAY_PORT (default 8090)
+//      NEKTAR_OVERLAY_DIR  (sqlite dir, default ./.state/overlay)
+//      NEKTAR_NETWORK      (testnet|ttn|main — for on-chain submits; default testnet)
+//      NEKTAR_OVERLAY_TOKEN (optional bearer — gates writes if set)
 import http from 'node:http'
 import path from 'node:path'
 import fs from 'node:fs'
 import knexPkg from 'knex'
-import { ArcBroadcaster, ChaintracksTracker } from '@mamem/chain'
-import { createMamemOverlay, verifyPresence } from './dist/src/index.js'
+import { ArcBroadcaster, ChaintracksTracker } from '@nektar/chain'
+import { createNektarOverlay, verifyPresence } from './dist/src/index.js'
 
-const HOST = process.env.MAMEM_OVERLAY_HOST ?? '0.0.0.0'
-const PORT = Number(process.env.MAMEM_OVERLAY_PORT ?? 8090)
-const DIR = process.env.MAMEM_OVERLAY_DIR ?? path.join(process.cwd(), '.state', 'overlay')
-const TOKEN = process.env.MAMEM_OVERLAY_TOKEN
-const NET = process.env.MAMEM_NETWORK ?? 'testnet'
+const HOST = process.env.NEKTAR_OVERLAY_HOST ?? '0.0.0.0'
+const PORT = Number(process.env.NEKTAR_OVERLAY_PORT ?? 8090)
+const DIR = process.env.NEKTAR_OVERLAY_DIR ?? path.join(process.cwd(), '.state', 'overlay')
+const TOKEN = process.env.NEKTAR_OVERLAY_TOKEN
+const NET = process.env.NEKTAR_NETWORK ?? 'testnet'
 // No WhatsOnChain anywhere: tracker = chaintracks only (no WocTracker
 // fallback); broadcaster's post-ARC fallback is pointed back at the same
 // arcade (self-referential retry — a 404 there just ends in 'broadcast failed').
@@ -39,7 +39,7 @@ const URLS = {
 const u = URLS[NET] ?? URLS.testnet
 fs.mkdirSync(DIR, { recursive: true })
 
-const overlay = await createMamemOverlay(
+const overlay = await createNektarOverlay(
   new ChaintracksTracker({ arcUrl: u.arc, wocUrl: u.arc }, u.ct),
   new ArcBroadcaster({ arcUrl: u.arc, wocUrl: u.arc }),
   knexPkg({ client: 'sqlite3', connection: { filename: path.join(DIR, 'overlay.sqlite') }, useNullAsDefault: true })
@@ -86,7 +86,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/') {
       return json(res, 200, {
-        service: 'mamem rendezvous (tm_presence/ls_presence)',
+        service: 'nektar rendezvous (tm_presence/ls_presence)',
         announce: 'POST /announce {ad:{pub,endpoint,shards,ts,exp?},sig} — sig = BSV sig over sha256("endpoint|shards|ts|exp")',
         directory: 'GET /directory?all=1 | ?shard=<id> | ?pub=<66hex>',
         onchain: 'POST /overlay/submit {beef,topics:["tm_presence"]}'

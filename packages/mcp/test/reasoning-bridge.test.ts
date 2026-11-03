@@ -5,14 +5,14 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder, type ChainTracker } from '@mamem/chain'
-import { MamemMemory } from '@mamem/mcp'
-import { parseProgram } from '@mamem/datalog'
-import { PolicyDAG } from '@mamem/graph'
+import { MockChain, MockFunder, type ChainTracker } from '@nektar/chain'
+import { NektarMemory } from '@nektar/mcp'
+import { parseProgram } from '@nektar/datalog'
+import { PolicyDAG } from '@nektar/graph'
 import {
   ground, modelIdentity, commitReceipt, CitationIndex, onRevision, timeBounds,
   buildAuditBundle, verifyAuditBundle, hashOf, type FragmentFetch, type Claim
-} from '@mamem/reasoning'
+} from '@nektar/reasoning'
 
 const RULES = parseProgram(`@id r-spec
 spec(S, V) :- requires(P, V), applies(S, P).`).rules
@@ -22,7 +22,7 @@ async function world () {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(20); for (const t of funder.parents) chain.registerParent(t)
   const sk = PrivateKey.fromRandom()
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, signingKey: sk })
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, signingKey: sk })
   const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
   const r0 = await mem.remember('manual', 'requires(torque, 45).')
   const r1 = await mem.remember('manual', 'applies(port4, torque).')
@@ -57,7 +57,7 @@ test('AGT-003 grounding: quote, entailed, uncited, unverifiable, not-entailed; f
 })
 
 test('AGT-011/012 model identity + committed, anchored receipt', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'mamem-'))
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-'))
   const wp = join(dir, 'weights.gguf'); writeFileSync(wp, Buffer.alloc(3 * 65536 + 17, 7))
   const local = await modelIdentity({ kind: 'local', weightsPath: wp, name: 'qwen-test' })
   assert.deepEqual(local, { kind: 'local', weightsSha256: createHash('sha256').update(Buffer.alloc(3 * 65536 + 17, 7)).digest('hex'), name: 'qwen-test' })
@@ -77,7 +77,7 @@ test('AGT-011/012 model identity + committed, anchored receipt', async () => {
 
 test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction anchored', async () => {
   const w = await world()
-  const idx = new CitationIndex(join(mkdtempSync(join(tmpdir(), 'mamem-')), 'cit.json'))
+  const idx = new CitationIndex(join(mkdtempSync(join(tmpdir(), 'nektar-')), 'cit.json'))
   const claims: Claim[] = [
     { text: 'port 4 is torqued to 45', literal: 'spec(port4, 45)', cites: [m(0), m(1)] },
     { text: 'applies(port4, torque)', cites: [m(1)] }
@@ -190,7 +190,7 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
 })
 
 test('GOAL-v8 D4: anchored rotation chain — third party replays pk(0)→pk(i) from chain data', async () => {
-  const { verifyAnchoredRotationChain } = await import('@mamem/reasoning')
+  const { verifyAnchoredRotationChain } = await import('@nektar/reasoning')
   const w = await world()
   const k1 = PrivateKey.fromRandom()
   await w.mem.rotateShard('manual', k1)

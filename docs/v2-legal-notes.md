@@ -27,8 +27,8 @@ Selective disclosure is implemented via **field-level commitments + disclosure e
 ## Update (GOAL-v6 S5)
 The selective-verification filing family reached grant as **US 12,730,827 B2**
 (nChain, granted 2026-09-08). nChain/BSVA's Open BSV pledge grants free use of
-its patent portfolio on BSV only (revocable; BSV + testnets). mamem is
+its patent portfolio on BSV only (revocable; BSV + testnets). nektar is
 BSV-only by construction, so proof sharding (DIS-002) is now **implemented**
-behind `MAMEM_PROOF_SHARDING` (default on; `0` = operator opt-out, tools
+behind `NEKTAR_PROOF_SHARDING` (default on; `0` = operator opt-out, tools
 return 'disabled') — see NOTICE and docs/GOAL-v6.md §5. The disclosure
 envelope path above is unaffected.

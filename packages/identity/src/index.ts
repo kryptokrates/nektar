@@ -1,4 +1,4 @@
-// @mamem/identity — UUID↔pubkey bindings, challenge-response auth, and
+// @nektar/identity — UUID↔pubkey bindings, challenge-response auth, and
 // rotation certificates (IDN-002..005, IDN-007).
 //
 // Rotation certificate: C(i) = Sign_sk(i-1)(H(TAG_ROT ‖ pk(i-1) ‖ pk(i) ‖ t_i))
@@ -7,10 +7,10 @@
 //   - signatures made inside the window remain verifiable forever
 //     (historical validation uses the signing-time t, not wall-clock time).
 import { PrivateKey, PublicKey, Signature } from '@bsv/sdk'
-import { concat, dsha256, utf8, toHex, fromHex, type Bytes } from '@mamem/core'
+import { concat, dsha256, utf8, toHex, fromHex, type Bytes } from '@nektar/core'
 
-export const TAG_ROT = utf8('mamem:rotcert:v1')
-export const TAG_IDBIND = utf8('mamem:idbind:v1')
+export const TAG_ROT = utf8('nektar:rotcert:v1')
+export const TAG_IDBIND = utf8('nektar:idbind:v1')
 
 // --- UUID↔pubkey binding ----------------------------------------------------
 export interface IdentityBinding {
@@ -39,8 +39,8 @@ export function verifyBinding (b: IdentityBinding): boolean {
 // --- challenge-response -----------------------------------------------------
 // own domain tag: a challenge answer can never be confused with a binding sig.
 // The VERIFIER issues the nonce (and must check it issued it — see
-// MamemMemory.issueChallenge); a caller-chosen nonce proves nothing.
-export const TAG_CHALLENGE = utf8('mamem:challenge:v1')
+// NektarMemory.issueChallenge); a caller-chosen nonce proves nothing.
+export const TAG_CHALLENGE = utf8('nektar:challenge:v1')
 export function issueChallenge (nonce: Uint8Array = crypto.getRandomValues(new Uint8Array(32))): string {
   return toHex(nonce)
 }

@@ -1,16 +1,16 @@
 {
-  "name": "@mamem/watcher",
+  "name": "@nektar/watcher",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
-  "bin": { "mamem-watcher": "./src/watcher.mjs" },
+  "bin": { "nektar-watcher": "./src/watcher.mjs" },
   "scripts": {
     "test": "node test/run.mjs"
   },
   "dependencies": {
-    "@mamem/anchor": "workspace:*",
-    "@mamem/chain": "workspace:*",
-    "@mamem/zk": "workspace:*",
+    "@nektar/anchor": "workspace:*",
+    "@nektar/chain": "workspace:*",
+    "@nektar/zk": "workspace:*",
     "runar-sdk": "0.4.6"
   },
   "peerDependencies": {

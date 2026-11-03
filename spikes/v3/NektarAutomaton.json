@@ -1,7 +1,7 @@
 {
   "version": "runar-v0.4.6",
   "compilerVersion": "0.4.6",
-  "contractName": "MamemAutomaton",
+  "contractName": "NektarAutomaton",
   "abi": {
     "constructor": {
       "params": [
@@ -1588,7 +1588,7 @@
     }
   ],
   "anf": {
-    "contractName": "MamemAutomaton",
+    "contractName": "NektarAutomaton",
     "properties": [
       {
         "name": "q",

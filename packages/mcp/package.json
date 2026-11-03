@@ -1,12 +1,12 @@
 {
-  "name": "@mamem/mcp",
+  "name": "@nektar/mcp",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/src/index.js",
   "bin": {
-    "mamem-mcp": "./dist/src/bin.js",
-    "mamem-init": "./dist/src/init.js"
+    "nektar-mcp": "./dist/src/bin.js",
+    "nektar-init": "./dist/src/init.js"
   },
   "exports": {
     ".": "./dist/src/index.js"
@@ -16,21 +16,21 @@
     "test": "node --test --test-timeout=60000 dist/test/*.test.js"
   },
   "dependencies": {
-    "@mamem/anchor": "workspace:*",
-    "@mamem/automaton": "workspace:*",
-    "@mamem/chain": "workspace:*",
-    "@mamem/contracts": "workspace:*",
-    "@mamem/core": "workspace:*",
-    "@mamem/crypto": "workspace:*",
-    "@mamem/datalog": "workspace:*",
-    "@mamem/graph": "workspace:*",
-    "@mamem/identity": "workspace:*",
-    "@mamem/log": "workspace:*",
-    "@mamem/overlay": "workspace:*",
-    "@mamem/policy": "workspace:*",
-    "@mamem/reasoning": "workspace:*",
-    "@mamem/verify": "workspace:*",
-    "@mamem/zk": "workspace:*",
+    "@nektar/anchor": "workspace:*",
+    "@nektar/automaton": "workspace:*",
+    "@nektar/chain": "workspace:*",
+    "@nektar/contracts": "workspace:*",
+    "@nektar/core": "workspace:*",
+    "@nektar/crypto": "workspace:*",
+    "@nektar/datalog": "workspace:*",
+    "@nektar/graph": "workspace:*",
+    "@nektar/identity": "workspace:*",
+    "@nektar/log": "workspace:*",
+    "@nektar/overlay": "workspace:*",
+    "@nektar/policy": "workspace:*",
+    "@nektar/reasoning": "workspace:*",
+    "@nektar/verify": "workspace:*",
+    "@nektar/zk": "workspace:*",
     "@modelcontextprotocol/sdk": "1.32.2",
     "knex": "^3.3.0",
     "qrcode": "1.5.4",

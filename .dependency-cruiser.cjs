@@ -52,10 +52,10 @@ module.exports = {
         couldNotResolve: true,
         // couldNotResolve deps keep the RAW specifier (../../Foo.json) — so
         // match the spec suffix, not the repo path. These are generated
-        // artifacts: compile:contract → packages/contracts/Mamem*.json and
+        // artifacts: compile:contract → packages/contracts/Nektar*.json and
         // stark:build → packages/zk/stark/verifier.js (gitignored by design)
         pathNot: [
-          '(Mamem|DisclosureSale)[A-Za-z0-9]*\\.json$',
+          '(Nektar|DisclosureSale)[A-Za-z0-9]*\\.json$',
           'stark/verifier\\.(js|wasm)$'
         ]
       }
@@ -128,6 +128,6 @@ module.exports = {
       text: { highlightFocused: true },
       err: { }
     },
-    prefix: 'https://github.com/nedzof/merkle-automaton/blob/master/'
+    prefix: 'https://github.com/nedzof/nektar/blob/master/'
   }
 }

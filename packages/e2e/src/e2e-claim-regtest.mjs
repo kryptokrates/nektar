@@ -1,12 +1,12 @@
-// GOAL-v9 Stage 1 — MamemZkClaim full lifecycle on live Teranode regtest.
+// GOAL-v9 Stage 1 — NektarZkClaim full lifecycle on live Teranode regtest.
 // Interpreter-green (claim-lifecycle.mjs, 10/10) → now through real mempool
 // policy + block acceptance. One operator key plays all roles; tx locktime
 // is always 0 so deadline=0 settles instantly and window=0 makes timeouts
 // immediately claimable (same semantics as the mock eval).
 import { PrivateKey, Transaction, LockingScript, P2PKH, Hash, Transaction as BsvTransaction, UnlockingScript } from '@bsv/sdk'
 import { buildP2PKHScript } from 'runar-sdk'
-import { MamemProvider } from '@mamem/anchor'
-import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve } from '@mamem/chain'
+import { NektarProvider } from '@nektar/anchor'
+import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve } from '@nektar/chain'
 import { RunarContract, LocalSigner, computeNewState, serializeState } from 'runar-sdk'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -24,14 +24,14 @@ function readEnv (p) {
 }
 const localEnv = { ...readEnv(new URL('../../../.env', import.meta.url)), ...readEnv(new URL('../../../../.env', import.meta.url)) }
 const qsEnv = readEnv(new URL('../../../infra/teranode-quickstart/.env', import.meta.url))
-const WIF = process.env.MAMEM_REGTEST_WIF ?? localEnv.MAMEM_REGTEST_WIF
-if (!WIF) throw new Error('MAMEM_REGTEST_WIF missing')
+const WIF = process.env.NEKTAR_REGTEST_WIF ?? localEnv.NEKTAR_REGTEST_WIF
+if (!WIF) throw new Error('NEKTAR_REGTEST_WIF missing')
 const cfg = {
-  rpcUrl: process.env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-  rpcUser: process.env.MAMEM_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
-  rpcPass: process.env.MAMEM_RPC_PASS ?? qsEnv.rpc_pass ?? '',
-  propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-  assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
+  rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+  rpcUser: process.env.NEKTAR_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
+  rpcPass: process.env.NEKTAR_RPC_PASS ?? qsEnv.rpc_pass ?? '',
+  propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+  assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
 }
 const broadcaster = new TeranodeBroadcaster(cfg.propagationUrl)
 const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
@@ -58,12 +58,12 @@ if (reserve.utxos.length < 6) {
   await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile: '.state/treasury-vault.json', outputs: 16 })
   await mineOne()
 }
-const provider = new MamemProvider(broadcaster, reserve, addr)
+const provider = new NektarProvider(broadcaster, reserve, addr)
 provider.onAttempt = tx => console.log(`  → broadcast ${tx.id('hex').slice(0, 10)} in:[${tx.inputs.map(i => (i.sourceTXID ?? i.sourceTransaction?.id('hex') ?? '?').slice(0, 8) + ':' + i.sourceOutputIndex).join(' ')}]`)
 const signer = new LocalSigner(WIF)
 const pubKeyHex = await signer.getPublicKey()
 
-const art = JSON.parse(readFileSync(new URL('../../contracts/MamemZkClaim.json', import.meta.url), 'utf8'))
+const art = JSON.parse(readFileSync(new URL('../../contracts/NektarZkClaim.json', import.meta.url), 'utf8'))
 const vArt = JSON.parse(readFileSync(new URL('../../contracts/ClaimVerdict.json', import.meta.url), 'utf8'))
 const VCR = vArt.script
 const Z = '00'.repeat(32)
@@ -241,12 +241,12 @@ try {
   check(!!r.txid, `slashTimeout (${r.txid?.slice(0, 12)}…)`)
 } catch (e) { check(false, `slashTimeout: ${e.message.slice(0, 90)}`) }
 
-// ── 5. anchored settle: real MamemAnchor + bound claim ────────────
+// ── 5. anchored settle: real NektarAnchor + bound claim ────────────
 // Claim.journalRoot must equal anchor.R — enforced by the anchor's
 // witnessSettle re-emitting the verdict with its own R (§4.5 binding).
 console.log('── anchored settle ──')
 try {
-  const aArt = JSON.parse(readFileSync(new URL('../../contracts/MamemAnchor.json', import.meta.url), 'utf8'))
+  const aArt = JSON.parse(readFileSync(new URL('../../contracts/NektarAnchor.json', import.meta.url), 'utf8'))
   const a = new RunarContract(aArt, [pubKeyHex, opPkh, '4d455441', 0n, 10n, JR, '22'.repeat(32), Buffer.from('RPRIME').toString('hex')])
   a.connect(provider, signer)
   await a.deploy({ satoshis: 1 })

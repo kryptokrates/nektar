@@ -2,8 +2,8 @@
 // Datalog. Entailment uses ONLY axioms whose anchors verify ("void ab initio"
 // otherwise). Regulatory codes are jurisdiction-named graphs; precedent is a
 // set of anchored past decisions from which a new action must be entailed.
-import { Datalog, parseProgram, type Fact, type Rule } from '@mamem/datalog'
-import { dsha256, utf8, toHex } from '@mamem/core'
+import { Datalog, parseProgram, type Fact, type Rule } from '@nektar/datalog'
+import { dsha256, utf8, toHex } from '@nektar/core'
 
 export type Axiom =
   | { kind: 'ClassAssertion', cls: string, ind: string }
@@ -11,7 +11,7 @@ export type Axiom =
   | { kind: 'ObjectPropertyAssertion', prop: string, from: string, to: string }
   | { kind: 'Rule', text: string } // L_pol rule (e.g. Permitted(A) conditions)
 
-export const axiomHash = (a: Axiom): string => toHex(dsha256(utf8(`mamem:axiom:v1|${JSON.stringify(a)}`)))
+export const axiomHash = (a: Axiom): string => toHex(dsha256(utf8(`nektar:axiom:v1|${JSON.stringify(a)}`)))
 // IRIs/names → Datalog constants: case-insensitive, lower-case, safe characters
 const lc = (s: string) => s.toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/^_/, 'x_')
 

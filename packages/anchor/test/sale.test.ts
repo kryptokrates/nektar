@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, LockingScript, UnlockingScript, P2PKH } from '@bsv/sdk'
 import { Hash } from '@bsv/sdk'
-import { MockChain } from '@mamem/chain'
+import { MockChain } from '@nektar/chain'
 import { DisclosureSaleHost, type SaleUtxo } from '../src/sale.js'
 
 const seller = PrivateKey.fromRandom()
@@ -86,7 +86,7 @@ test('V3 sale: claimDisclosure reads wrapped back from the real covenant buy tx'
   const utxo = await escrowOf(chain, host)
   const good = host.buildBuy(utxo, WRAPPED, 990n)
   // parseBuyArgs/claimDisclosure (identity layer) on the covenant's real arg frame
-  const { claimDisclosure } = await import('@mamem/identity')
+  const { claimDisclosure } = await import('@nektar/identity')
   const r = claimDisclosure(good.tx, { hWrapped: H_WRAPPED })
   assert.equal(r.mode, 'public')
   assert.equal(Buffer.from(r.wrapped).toString('hex'), WRAPPED)

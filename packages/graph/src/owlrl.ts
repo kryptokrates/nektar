@@ -30,8 +30,8 @@
 //     eq-ref/eq-rep-p (reflexive sameAs, predicate-position replacement),
 //     datatype rules (dt-*) — L_pol terms are atomic constants, no literals —
 //     and owl:Thing/owl:Nothing universals.
-import { Datalog, derivationPath, parseProgram, type DerivedFact, type DerivationPath, type Fact, type Literal, type Rule } from '@mamem/datalog'
-import { dsha256, utf8, toHex } from '@mamem/core'
+import { Datalog, derivationPath, parseProgram, type DerivedFact, type DerivationPath, type Fact, type Literal, type Rule } from '@nektar/datalog'
+import { dsha256, utf8, toHex } from '@nektar/core'
 import { PolicyDAG, factCanonical, type NodeKind } from './policy.js'
 
 export class OwlError extends Error {}
@@ -250,7 +250,7 @@ export function entail (axioms: OwlAxiom[], facts: Fact[], query: { pred: string
  * accepts it) or configure it as `anchoredPolicyRoot`. Individual axioms can
  * additionally anchor as `axiom:<owlAxiomHash>` records (the v4 'law' flow).
  *
- * §14 plug-in: pass `ont.dag` as `opts.policyDag` to MamemMemory — every
+ * §14 plug-in: pass `ont.dag` as `opts.policyDag` to NektarMemory — every
  * compiled rule is a committed rule node (τ) and every axiom-compiled EDB fact
  * is a committed fact node, so `proveDerivation`/`verifyDerivation` attest OWL
  * derivations byte-identically. An `axiom` node additionally commits each

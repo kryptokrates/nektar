@@ -1,7 +1,7 @@
 # Demo — a paid, provable AI answer in five minutes
 
-Live deployment: `http://167.233.174.91:8080` — `MAMEM_NETWORK=ttn`
-(public BSV testnet: real transactions, test coins), `MAMEM_PAYMENTS=1`.
+Live deployment: `http://167.233.174.91:8080` — `NEKTAR_NETWORK=ttn`
+(public BSV testnet: real transactions, test coins), `NEKTAR_PAYMENTS=1`.
 
 What the audience sees: an AI answers a question, pays the operator in
 real sats to get it committed, and the receipt it returns is verifiable
@@ -15,7 +15,7 @@ by anyone — no login, no trust in us.
 
 2. **Ask** — any MCP client calls `groundedAnswer`. Unpaid → the tool
    returns a **402 invoice** (x402 v2 `PaymentRequired`): amount,
-   operator address, `mamempay:<invoiceId>` tag.
+   operator address, `nektarpay:<invoiceId>` tag.
    *"HTTP 402 — reserved since 1997, finally doing its job."*
 
 3. **Pay** — the client signs a normal BSV tx with a WIF key: one
@@ -27,7 +27,7 @@ by anyone — no login, no trust in us.
 4. **Committed answer** — the service verifies the tx, broadcasts it
    through its chain broadcaster, and the receipt **commits the
    settlement txid**: the anchored "usage receipt" literally names what
-   paid for it. Answer ends with `receipt: mamemr1.…` + `verify: <url>`.
+   paid for it. Answer ends with `receipt: nektarr1.…` + `verify: <url>`.
 
 5. **Verify on a phone** — open the verify URL (browsers get the human
    page; curl gets JSON). Green `paid` line, anchored fragments, the
@@ -38,7 +38,7 @@ by anyone — no login, no trust in us.
 
 ```bash
 # scripted, against the deployed box (needs the bearer + a payer utxo):
-MAMEM_REMOTE_URL=http://167.233.174.91:8080 MAMEM_HTTP_TOKEN=<bearer> \
+NEKTAR_REMOTE_URL=http://167.233.174.91:8080 NEKTAR_HTTP_TOKEN=<bearer> \
   node packages/e2e/src/e2e-pay-remote.mjs
 
 # or live from an agent: point the MCP client at
@@ -47,13 +47,13 @@ MAMEM_REMOTE_URL=http://167.233.174.91:8080 MAMEM_HTTP_TOKEN=<bearer> \
 ```
 
 A worked example minted on 2026-11-03 (still verifiable):
-`http://167.233.174.91:8080/v1/verify?r=mamemr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
+`http://167.233.174.91:8080/v1/verify?r=nektarr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
 
 ## Honest talking points (say these out loud)
 
 - **Testnet, not mainnet.** Real consensus, real txs, test coins. The
   same code path runs on main — it's gated behind
-  `MAMEM_MAINNET_CONFIRM` and spend caps until a funded pilot.
+  `NEKTAR_MAINNET_CONFIRM` and spend caps until a funded pilot.
 - **"Accepted" isn't "mined".** A fresh payment shows `RECEIVED` at
   the broadcaster and mines with the next block. Don't call broadcast
   "on-chain" — the verify page shows confirmations honestly.
@@ -71,7 +71,7 @@ A worked example minted on 2026-11-03 (still verifiable):
 
 ## If the demo box is down
 
-`systemctl status mamem-http` on the box, or `journalctl -u
-mamem-http -n 50`. The data dir `/opt/mamem/.mamem-ttn` persists
+`systemctl status nektar-http` on the box, or `journalctl -u
+nektar-http -n 50`. The data dir `/opt/nektar/.nektar-ttn` persists
 records, anchors, keys and the reserve across restarts — a restart
 loses nothing.

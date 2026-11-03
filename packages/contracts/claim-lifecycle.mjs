@@ -1,7 +1,7 @@
 import { RunarContract, MockProvider, LocalSigner } from 'runar-sdk'
 import { readFileSync } from 'node:fs'
 const { Spend, Transaction, Hash, Transaction: BsvTransaction, LockingScript, UnlockingScript } = await import('@bsv/sdk')
-const art = JSON.parse(readFileSync('MamemZkClaim.json', 'utf8'))
+const art = JSON.parse(readFileSync('NektarZkClaim.json', 'utf8'))
 const vArt = JSON.parse(readFileSync('ClaimVerdict.json', 'utf8'))
 const VCR = vArt.script // ClaimVerdict codePart, baked into claim state
 const prover = new LocalSigner('11'.repeat(32)); const challenger = new LocalSigner('22'.repeat(32))
@@ -250,13 +250,13 @@ const callTerminal = async (c, method, args, prov, signer, outputs, changePkh) =
     try { sp.validate(); console.log('verdict-in-sale VALID ops:', sp.executedOpCount); PASS++ } catch (e) { console.log('verdict-in-sale FAIL:', e.message.slice(0, 80)); FAILS.push('verdict-in-sale') }
   }
 }
-// ── 6. anchored settle: claim bound to a MamemAnchor UTXO ──
+// ── 6. anchored settle: claim bound to a NektarAnchor UTXO ──
 // The anchor's witnessSettle re-emits the verdict with its OWN R — the
 // tx only validates if claim.journalRoot == anchor.R (§4.5 binding).
 {
   const prov=newProv()
   const { serializeState } = await import('runar-sdk')
-  const aArt = JSON.parse(readFileSync('MamemAnchor.json','utf8'))
+  const aArt = JSON.parse(readFileSync('NektarAnchor.json','utf8'))
   // anchor state: owner=prover, n=0,size=10,R=JR,Rp=Z — journalRoot must equal R
   const aCtor=[pk,pkh(pk),'4d455441',0n,10n,JR,'22'.repeat(32),Buffer.from('RPRIME').toString('hex')]
   const a=new RunarContract(aArt,aCtor);a.connect(prov,prover);await a.deploy({satoshis:1})

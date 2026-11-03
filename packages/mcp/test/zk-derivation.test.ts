@@ -1,15 +1,15 @@
 // Wright §14 ZK derivation attestation, verifier side: the committed REAL
 // RISC Zero receipt (the gen-vectors 2-step permit path) is verified through
-// MamemMemory against an anchored dagroot record on the mock chain.
-// MAMEM_STARK_PROVE=1 additionally proves end-to-end through the instance.
+// NektarMemory against an anchored dagroot record on the mock chain.
+// NEKTAR_STARK_PROVE=1 additionally proves end-to-end through the instance.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { parseProgram } from '@mamem/datalog'
-import { PolicyDAG } from '@mamem/graph'
-import { encodeZkder } from '@mamem/zk'
-import { MamemMemory, type MamemMemoryOptions, type SecurityStateStore } from '../src/index.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { parseProgram } from '@nektar/datalog'
+import { PolicyDAG } from '@nektar/graph'
+import { encodeZkder } from '@nektar/zk'
+import { NektarMemory, type NektarMemoryOptions, type SecurityStateStore } from '../src/index.js'
 
 const fx = JSON.parse(readFileSync(new URL('../../../zk/test/fixtures/zkder-permit.json', import.meta.url), 'utf8'))
 const H = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
@@ -28,10 +28,10 @@ pair(P) :- member(P, verified), member(P, verified).
 `
 const dag = () => new PolicyDAG([{ name: 'base', rules: parseProgram(PROG).rules }])
 
-async function world (opts: MamemMemoryOptions = {}) {
+async function world (opts: NektarMemoryOptions = {}) {
   const chain = new MockChain(); chain.verifyScripts = true
   const f = new MockFunder(); f.topup(4); for (const u of (f as any).utxos) chain.registerParent(u.tx)
-  const mem = new MamemMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 10 }, ...opts })
+  const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 10 }, ...opts })
   return { chain, f, mem }
 }
 
@@ -79,7 +79,7 @@ test('STARK derivation NEGATIVES: unanchored root, mismatch, unissued query', as
   assert.match(String(r3.reason), /queryId/)
 })
 
-test('end-to-end: MamemMemory proves (RISC Zero) and verifies its own derivation', { skip: process.env.MAMEM_STARK_PROVE !== '1' }, async () => {
+test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own derivation', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async () => {
   const d = dag()
   const { chain, mem } = await world({ policyDag: d })
   await mem.remember('s', 's1 data')

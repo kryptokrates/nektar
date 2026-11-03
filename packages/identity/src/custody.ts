@@ -3,7 +3,7 @@
 //  - threshold Schnorr (Lagrange-weighted partial sigs, key never assembled);
 //  - KeyCustodian lifecycle (genesis|rotation|revocation hash chain, anchorable head).
 import { PrivateKey, PublicKey, Signature, BigNumber, Curve, Point } from '@bsv/sdk'
-import { dsha256, concat, utf8, type Bytes } from '@mamem/core'
+import { dsha256, concat, utf8, type Bytes } from '@nektar/core'
 
 const N = BigInt(new Curve().n.toString())
 const mod = (a: bigint) => ((a % N) + N) % N

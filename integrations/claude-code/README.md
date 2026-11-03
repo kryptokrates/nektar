@@ -4,23 +4,23 @@ Every answer your agent gives gets a one-line receipt footer; a Stop hook
 checks it automatically on the fly — no trust, no discipline required.
 
 ```
-receipt: mamemr1.8vK3…   verify: http://localhost:8080/v1/verify?r=mamemr1.8vK3…
+receipt: nektarr1.8vK3…   verify: http://localhost:8080/v1/verify?r=nektarr1.8vK3…
 ```
 
 ## Setup (3 steps)
 
-1. **Run the mamem HTTP server** (the verify endpoint lives there):
+1. **Run the nektar HTTP server** (the verify endpoint lives there):
 
    ```sh
-   MAMEM_HTTP_PORT=8080 pnpm --filter @mamem/mcp start   # /mcp + /v1/*
-   # hosted? set MAMEM_VERIFY_BASE=https://your-host so footers/QRs point out
+   NEKTAR_HTTP_PORT=8080 pnpm --filter @nektar/mcp start   # /mcp + /v1/*
+   # hosted? set NEKTAR_VERIFY_BASE=https://your-host so footers/QRs point out
    ```
 
 2. **Register the MCP server** (Claude calls the tools):
 
    ```sh
-   claude mcp add mamem --transport http http://localhost:8080/mcp \
-     --header "Authorization: Bearer <token if MAMEM_HTTP_TOKEN set>"
+   claude mcp add nektar --transport http http://localhost:8080/mcp \
+     --header "Authorization: Bearer <token if NEKTAR_HTTP_TOKEN set>"
    # or stdio — see docs/INTEGRATION.md
    ```
 
@@ -40,7 +40,7 @@ receipt: mamemr1.8vK3…   verify: http://localhost:8080/v1/verify?r=mamemr1.8vK
 
 ## What the hook does
 
-On every Stop it scans the last assistant message for `mamemr1.` tokens and
+On every Stop it scans the last assistant message for `nektarr1.` tokens and
 GETs `/v1/verify` for each (3s timeout, max 3, fail-open if the endpoint is
 down):
 

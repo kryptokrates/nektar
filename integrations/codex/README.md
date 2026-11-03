@@ -8,22 +8,22 @@ hooks that can block.
 
 ```sh
 # 1. one server: MCP + verify endpoint on :8080
-MAMEM_HTTP_PORT=8080 MAMEM_NETWORK=mock node packages/mcp/dist/src/bin.js
+NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=mock node packages/mcp/dist/src/bin.js
 #    mock = offline zero-setup, anchors auto-mine → receipts fully verifiable
-#    regtest = real chain (needs MAMEM_REGTEST_WIF + rpc pass in .env)
+#    regtest = real chain (needs NEKTAR_REGTEST_WIF + rpc pass in .env)
 
 # 2. ~/.codex/config.toml — merge config-snippet.toml:
-#    [mcp_servers.mamem] url = "http://localhost:8080/mcp"
+#    [mcp_servers.nektar] url = "http://localhost:8080/mcp"
 #    notify = ["node", "integrations/codex/verify-notify.mjs", "--chain", "<your existing notify if any>"]
 
 # 3. run codex from the repo root so it picks up AGENTS.md (receipt rules):
-cd mamem && codex
+cd nektar && codex
 ```
 
 Ask something factual → the agent recalls, grounds the answer, and ends with:
 
 ```
-receipt: mamemr1.…   verify: http://localhost:8080/v1/verify?r=mamemr1.…
+receipt: nektarr1.…   verify: http://localhost:8080/v1/verify?r=nektarr1.…
 ```
 
 ## The three ways a receipt gets checked

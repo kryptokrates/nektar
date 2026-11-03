@@ -7,12 +7,12 @@ The circuit proves a quantized 784→16→10 MLP forward pass; its single public
 input is the field element  poseidon(input ‖ argmax_output ‖ poseidon(model)).
 The statement lives INSIDE the unlock (pushed by the spender) — the spend tx
 therefore binds the exact (input, output, model) triple on-chain, which is
-what mamem's modelAttestation cites. nChain's Poseidon parameters are toy
+what nektar's modelAttestation cites. nChain's Poseidon parameters are toy
 constants — see packages/zk/src/poseidon-toy.ts which re-derives the
 statement off-chain byte-exactly.
 
 Run from zkscript checkout:
-    .venv312/Scripts/python <mamem>/tools/groth16-spike/spike_groth16_aiinf.py <path>/zkscript
+    .venv312/Scripts/python <nektar>/tools/groth16-spike/spike_groth16_aiinf.py <path>/zkscript
 """
 import json
 import sys

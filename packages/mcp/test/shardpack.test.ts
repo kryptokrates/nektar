@@ -1,22 +1,22 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MockChain, MockFunder } from '@mamem/chain'
+import { MockChain, MockFunder } from '@nektar/chain'
 import type { AddressInfo } from 'node:net'
-import { MamemMemory, type MamemMemoryOptions } from '../src/memory.js'
+import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 
-function setup (opts: MamemMemoryOptions = {}) {
+function setup (opts: NektarMemoryOptions = {}) {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(50)
   for (const t of funder.parents) chain.registerParent(t)
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
   const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
   return { chain, funder, mem, settle }
 }
 /** second instance on the SAME network (shared MockChain) — the real case:
  *  an importer on a different network could never anchor-verify anyway */
-function peerOf (a: ReturnType<typeof setup>, opts: MamemMemoryOptions = {}) {
-  return new MamemMemory(a.chain, a.funder, a.funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
+function peerOf (a: ReturnType<typeof setup>, opts: NektarMemoryOptions = {}) {
+  return new NektarMemory(a.chain, a.funder, a.funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
 }
 
 test('shard packs: export → import re-verifies every bundle; records provable on the peer', async () => {
@@ -26,7 +26,7 @@ test('shard packs: export → import re-verifies every bundle; records provable 
   a.settle('guide')
 
   const pack = await a.mem.exportShardPack('guide')
-  assert.equal(pack.v, 1); assert.equal(pack.kind, 'mamem-shard-pack'); assert.equal(pack.shard, 'guide')
+  assert.equal(pack.v, 1); assert.equal(pack.kind, 'nektar-shard-pack'); assert.equal(pack.shard, 'guide')
   assert.equal(pack.records.length, 2)
   assert.ok(pack.records.every(r => r.bundle), 'anchored records carry their proof bundle')
   assert.ok(pack.records.every(r => typeof r.data === 'string' && typeof r.prov?.signature === 'string'))
@@ -101,13 +101,13 @@ test('groundedAnswer/commitReceipt share block: token + verifyUrl + badgeUrl + m
   settle('manual')
   const r = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] }] })
   assert.ok(r.share, 'share block present')
-  assert.ok(r.share.token.startsWith('mamemr1.'))
+  assert.ok(r.share.token.startsWith('nektarr1.'))
   assert.ok(r.share.verifyUrl.includes('/v1/verify?r='))
   assert.ok(r.share.badgeUrl.includes('/v1/badge?r='))
   assert.match(r.share.markdown, /\[!?\[?[^\]]*\]\(.*\/v1\/badge\?r=.*\)\]\(.*\/v1\/verify\?r=.*\)|\/v1\/verify\?r=/)
 })
 
-test('pack endpoint + remote import: /.well-known/mamem lists offerable shards; importShard {from,shard} pulls + re-verifies', async () => {
+test('pack endpoint + remote import: /.well-known/nektar lists offerable shards; importShard {from,shard} pulls + re-verifies', async () => {
   const { createHttpApi } = await import('../src/http.js')
   const a = setup()
   await a.mem.remember('guide', 'fact one')
@@ -119,14 +119,14 @@ test('pack endpoint + remote import: /.well-known/mamem lists offerable shards; 
   const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`
   try {
     // discovery doc: public shards only — private + __* excluded
-    const disco = await (await fetch(`${base}/.well-known/mamem`)).json()
-    assert.equal(disco.kind, 'mamem-discovery')
+    const disco = await (await fetch(`${base}/.well-known/nektar`)).json()
+    assert.equal(disco.kind, 'nektar-discovery')
     const names = (disco.publicShards as Array<{ shard: string }>).map(s => s.shard)
     assert.ok(names.includes('guide')); assert.ok(!names.includes('hr') && !names.some(n => n.startsWith('__')))
 
     // direct fetch == the tool's export (sans packUrl)
     const pack = await (await fetch(`${base}/v1/pack/guide`)).json()
-    assert.equal(pack.kind, 'mamem-shard-pack'); assert.equal(pack.records.length, 2)
+    assert.equal(pack.kind, 'nektar-shard-pack'); assert.equal(pack.records.length, 2)
     assert.equal((await fetch(`${base}/v1/pack/hr`)).status, 403)
     assert.equal((await fetch(`${base}/v1/pack/nope`)).status, 404)
 

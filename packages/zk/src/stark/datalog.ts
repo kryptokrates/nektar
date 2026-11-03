@@ -66,7 +66,7 @@ export function decodeZkder (b: Uint8Array): ZkDerivationProof {
 const require = createRequire(import.meta.url)
 const wasm = require('../../../stark/verifier.js') as { verify: (receipt: Uint8Array, imageId: Uint8Array) => string }
 
-/** the derivation program identity mamem trusts (built by `pnpm stark:build`) */
+/** the derivation program identity nektar trusts (built by `pnpm stark:build`) */
 export const PINNED_DATALOG_IMAGE_ID: string = JSON.parse(readFileSync(fileURLToPath(new URL('../../../stark/image-id.json', import.meta.url)), 'utf8')).datalogImageId
 
 export interface DerJournal { version: number, policyRoot: string, conclusionHash: string, queryId: string }
@@ -79,7 +79,7 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 export function verifyZkder (bytes: Uint8Array, pinnedImageId = PINNED_DATALOG_IMAGE_ID): DerVerdict {
   let p: ZkDerivationProof
   try { p = decodeZkder(bytes) } catch (e) { return { ok: false, reason: e instanceof ZkdCodecError ? `codec: ${e.message}` : 'codec error' } }
-  if (hex(p.imageId) !== pinnedImageId) return { ok: false, reason: 'image id is not the pinned mamem derivation program' }
+  if (hex(p.imageId) !== pinnedImageId) return { ok: false, reason: 'image id is not the pinned nektar derivation program' }
   const r = JSON.parse(wasm.verify(p.receipt, p.imageId)) as { ok: boolean, journal?: DerJournal, error?: string }
   if (!r.ok || !r.journal) return { ok: false, reason: `stark: ${r.error ?? 'invalid'}` }
   const j = r.journal
@@ -124,13 +124,13 @@ export interface ProveDerivationInput {
 const unhex = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
 
 function proverCommand (): [string, string[]] {
-  const bin = process.env.MAMEM_STARK_PROVER
+  const bin = process.env.NEKTAR_STARK_PROVER
   if (bin) return [bin, ['prove-der']]
-  return ['docker', ['run', '--rm', '-i', '-v', `${process.env.MAMEM_STARK_TARGET_VOLUME ?? 'mamem-stark-target'}:/work/target`, process.env.MAMEM_STARK_IMAGE ?? 'mamem-stark-build', '/work/target/release/mamem-stark', 'prove-der']]
+  return ['docker', ['run', '--rm', '-i', '-v', `${process.env.NEKTAR_STARK_TARGET_VOLUME ?? 'nektar-stark-target'}:/work/target`, process.env.NEKTAR_STARK_IMAGE ?? 'nektar-stark-build', '/work/target/release/nektar-stark', 'prove-der']]
 }
 
 /** prove a §14 committed derivation path and return L_ZKDer v3 bytes */
-export async function proveDerivationStark (inp: ProveDerivationInput, timeoutMs = Number(process.env.MAMEM_STARK_TIMEOUT_MS ?? 300_000)): Promise<{ bytes: Uint8Array, ms: number, policyRoot: string, conclusionHash: string }> {
+export async function proveDerivationStark (inp: ProveDerivationInput, timeoutMs = Number(process.env.NEKTAR_STARK_TIMEOUT_MS ?? 300_000)): Promise<{ bytes: Uint8Array, ms: number, policyRoot: string, conclusionHash: string }> {
   const [cmd, args] = proverCommand()
   const payload = JSON.stringify({
     nodeCount: inp.nodeCount,

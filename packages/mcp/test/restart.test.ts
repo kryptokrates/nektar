@@ -1,4 +1,4 @@
-// Restart safety: a new MamemMemory on the same persisted state continues
+// Restart safety: a new NektarMemory on the same persisted state continues
 // the SAME shard (next anchor spends the persisted head — the script-
 // evaluating, double-spend-checking MockChain rejects any fork), old records
 // stay provable, and record metadata (level gate) survives in sqlite.
@@ -9,12 +9,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory from 'knex'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { KnexShardStore } from '@mamem/log'
-import { MamemMemory, FileStateStore } from '../src/index.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { KnexShardStore } from '@nektar/log'
+import { NektarMemory, FileStateStore } from '../src/index.js'
 
 test('restart: resume from persisted head, no fork, proofs + level gate survive', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'mamem-restart-'))
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-restart-'))
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(20); for (const t of funder.parents) chain.registerParent(t)
   const knex = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'records.sqlite') }, useNullAsDefault: true })
@@ -23,13 +23,13 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
     const shardKeys = new Map([['s', PrivateKey.fromRandom()]])
     const signingKey = PrivateKey.fromRandom()
     const opts = () => ({ batchPolicy: { maxLeaves: 2 }, shardKeys, signingKey, stateStore: new FileStateStore(join(dir, 'state.json')) })
-    const a = new MamemMemory(chain, funder, funder.keyPair, opts(), store)
+    const a = new NektarMemory(chain, funder, funder.keyPair, opts(), store)
     await a.remember('s', 'public fact'); await a.remember('s', 'secret fact', {}, 2)
     chain.mine(1); a.confirmAnchor('s', a.tailLink('s')!.txid)
     await a.remember('s', 'c'); await a.remember('s', 'd') // second anchor, unconfirmed at "crash"
     const headBefore = a.anchorHead('s')!
     // restart
-    const b = new MamemMemory(chain, funder, funder.keyPair, opts(), store)
+    const b = new NektarMemory(chain, funder, funder.keyPair, opts(), store)
     assert.equal(b.anchorHead('s')!.tx.id('hex'), headBefore.tx.id('hex'), 'resumed at the persisted head')
     assert.equal(b.anchorLinks('s').length, 2); assert.equal(b.checkpoints('s').length, 2)
     await b.remember('s', 'e'); const r = await b.remember('s', 'f')

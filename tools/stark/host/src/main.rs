@@ -1,12 +1,12 @@
-// mamem-stark: prover/verifier CLI for the membership + derivation guests.
-//   mamem-stark image-id                     → hex image id (membership, pinned by mamem)
-//   mamem-stark image-id-der                 → hex image id (§14 derivation)
-//   mamem-stark prove  < {"leaf","index","size","siblings":[..],"queryId"}  → {"receipt":hex,"journal":{..},"ms":n}
-//   mamem-stark prove-der < DerIn JSON                                         → {"receipt":hex,"journal":{..},"ms":n}
-//   mamem-stark execute | execute-der                                        → run without proving
-//   mamem-stark verify < {"receipt":hex,"imageId":hex}                       → {"ok":bool,"journal":{..}|null,"error":..}
+// nektar-stark: prover/verifier CLI for the membership + derivation guests.
+//   nektar-stark image-id                     → hex image id (membership, pinned by nektar)
+//   nektar-stark image-id-der                 → hex image id (§14 derivation)
+//   nektar-stark prove  < {"leaf","index","size","siblings":[..],"queryId"}  → {"receipt":hex,"journal":{..},"ms":n}
+//   nektar-stark prove-der < DerIn JSON                                         → {"receipt":hex,"journal":{..},"ms":n}
+//   nektar-stark execute | execute-der                                        → run without proving
+//   nektar-stark verify < {"receipt":hex,"imageId":hex}                       → {"ok":bool,"journal":{..}|null,"error":..}
 // Succinct receipts only: a single ZK-STARK (composite receipts leak trace length).
-use mamem_methods::{MAMEM_MEMBERSHIP_ELF, MAMEM_MEMBERSHIP_ID, MAMEM_DATALOG_ELF, MAMEM_DATALOG_ID};
+use nektar_methods::{NEKTAR_MEMBERSHIP_ELF, NEKTAR_MEMBERSHIP_ID, NEKTAR_DATALOG_ELF, NEKTAR_DATALOG_ID};
 use risc0_zkvm::{default_prover, ExecutorEnv, ProverOpts, Receipt, Digest};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -67,8 +67,8 @@ fn b32(h: &str) -> [u8; 32] {
     assert!(v.len() == 32, "expected 32 bytes");
     let mut o = [0u8; 32]; o.copy_from_slice(&v); o
 }
-fn image_id_hex() -> String { hex::encode(Digest::from(MAMEM_MEMBERSHIP_ID).as_bytes()) }
-fn der_image_id_hex() -> String { hex::encode(Digest::from(MAMEM_DATALOG_ID).as_bytes()) }
+fn image_id_hex() -> String { hex::encode(Digest::from(NEKTAR_MEMBERSHIP_ID).as_bytes()) }
+fn der_image_id_hex() -> String { hex::encode(Digest::from(NEKTAR_DATALOG_ID).as_bytes()) }
 
 fn ginput(p: &DerIn) -> GIn {
     let conv_fact = |f: &DerFact| GFact { pred: f.pred.clone(), args: f.args.clone() };
@@ -124,7 +124,7 @@ fn main() {
         "execute-der" => {
             let p: DerIn = serde_json::from_str(&input).expect("execute-der input");
             let env = ExecutorEnv::builder().write(&ginput(&p)).unwrap().build().unwrap();
-            match risc0_zkvm::default_executor().execute(env, MAMEM_DATALOG_ELF) {
+            match risc0_zkvm::default_executor().execute(env, NEKTAR_DATALOG_ELF) {
                 Ok(s) => println!("{}", serde_json::json!({ "ok": true, "journal": journal_json_session(&s.journal) })),
                 Err(e) => println!("{}", serde_json::json!({ "ok": false, "error": e.to_string() })),
             }
@@ -133,7 +133,7 @@ fn main() {
             let p: DerIn = serde_json::from_str(&input).expect("prove-der input");
             let env = ExecutorEnv::builder().write(&ginput(&p)).unwrap().build().unwrap();
             let t = std::time::Instant::now();
-            let info = default_prover().prove_with_opts(env, MAMEM_DATALOG_ELF, &ProverOpts::succinct()).expect("prove");
+            let info = default_prover().prove_with_opts(env, NEKTAR_DATALOG_ELF, &ProverOpts::succinct()).expect("prove");
             let receipt = info.receipt;
             let bytes = bincode::serialize(&receipt).unwrap();
             println!("{}", serde_json::json!({ "receipt": hex::encode(&bytes), "journal": journal_json(&receipt), "imageId": der_image_id_hex(), "ms": t.elapsed().as_millis() as u64 }));
@@ -146,7 +146,7 @@ fn main() {
                 .write(&b32(&p.leaf)).unwrap().write(&p.index).unwrap().write(&p.size).unwrap()
                 .write(&sibs).unwrap().write(&b32(&p.query_id)).unwrap()
                 .build().unwrap();
-            match risc0_zkvm::default_executor().execute(env, MAMEM_MEMBERSHIP_ELF) {
+            match risc0_zkvm::default_executor().execute(env, NEKTAR_MEMBERSHIP_ELF) {
                 Ok(s) => {
                     let (ver, root, size, qid): (u8, [u8; 32], u32, [u8; 32]) = s.journal.decode().expect("journal");
                     println!("{}", serde_json::json!({ "ok": true, "journal": { "version": ver, "root": hex::encode(root), "size": size, "queryId": hex::encode(qid) } }))
@@ -162,7 +162,7 @@ fn main() {
                 .write(&sibs).unwrap().write(&b32(&p.query_id)).unwrap()
                 .build().unwrap();
             let t = std::time::Instant::now();
-            let info = default_prover().prove_with_opts(env, MAMEM_MEMBERSHIP_ELF, &ProverOpts::succinct()).expect("prove");
+            let info = default_prover().prove_with_opts(env, NEKTAR_MEMBERSHIP_ELF, &ProverOpts::succinct()).expect("prove");
             let receipt = info.receipt;
             let bytes = bincode::serialize(&receipt).unwrap();
             println!("{}", serde_json::json!({ "receipt": hex::encode(&bytes), "journal": journal_json(&receipt), "imageId": image_id_hex(), "ms": t.elapsed().as_millis() as u64 }));
@@ -183,6 +183,6 @@ fn main() {
                 Err(e) => println!("{}", serde_json::json!({ "ok": false, "journal": null, "error": e })),
             }
         }
-        _ => { eprintln!("usage: mamem-stark image-id | image-id-der | prove | prove-der | execute | execute-der | verify"); std::process::exit(2) }
+        _ => { eprintln!("usage: nektar-stark image-id | image-id-der | prove | prove-der | execute | execute-der | verify"); std::process::exit(2) }
     }
 }

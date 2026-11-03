@@ -1,5 +1,5 @@
 // Spike B (live): split the funded coinbase into N funding outputs, then chain
-// successive unconfirmed mamem anchors on regtest until propagation rejects.
+// successive unconfirmed nektar anchors on regtest until propagation rejects.
 import { PrivateKey, Transaction, P2PKH } from '@bsv/sdk'
 import { AnchorChain } from '../../packages/anchor/dist/src/anchorchain.js'
 import { TeranodeBroadcaster, TeranodeRPCTracker } from '../../packages/chain/dist/src/regtest.js'

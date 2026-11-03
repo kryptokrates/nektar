@@ -1,12 +1,12 @@
 # Threat model (SEC-001)
 
-Scope: the mamem packages, the MCP server, the regtest stack integration. STRIDE per component; §5/§13 adversaries from the paper (a malicious writer, a malicious prover, a malicious verifier, a network adversary, a key thief).
+Scope: the nektar packages, the MCP server, the regtest stack integration. STRIDE per component; §5/§13 adversaries from the paper (a malicious writer, a malicious prover, a malicious verifier, a network adversary, a key thief).
 
 ## Trust boundaries
 
 ```mermaid
 flowchart LR
-  agent["agent / LLM (untrusted input)"] -->|MCP JSON-RPC| svc["MamemMemory (trusted instance config)"]
+  agent["agent / LLM (untrusted input)"] -->|MCP JSON-RPC| svc["NektarMemory (trusted instance config)"]
   reader["reader (untrusted)"] -->|identity + ZK presentations| svc
   svc -->|tx| bsv[("BSV / Teranode (consensus-trusted)")]
   verifier["third-party verifier (trusts only headers + own policy)"] -->|bundles| bsv
@@ -72,7 +72,7 @@ flowchart LR
 - **Covenant residual limits**: the FeeVault's auto-change output is bounded (`leftover ≤ maxFee+1`) but not destination-pinned — an operator could route the ≤(maxFee+1) sat residual away; the CheckpointBond prevents forked checkpoints but cannot punish a false root (no `checkDataSig`); the DisclosureSale binds `sha256(wrapped)`, not the usefulness of the plaintext. The V3 escrow is buyer-funded (BIP-199 shape): the depositor pins the change destination in the contract itself, `buy` enforces `fee ≤ maxFee` so the completer cannot burn the deposit, and `refund` is depositor-signed behind `refundAfter` — the seller's only paths are "reveal + collect exactly `price`" or "buyer reclaims after the deadline". `wrapped` is publicly visible on-chain — private mode relies on BRC-42 ECDH confidentiality to the named buyer; nothing prevents a buyer from reselling the plaintext after claiming, and a *public* payload can be front-run by anyone who sees it in the mempool before the buy confirms.
 - **GOAL-v8 residuals**:
   - **Level floor covers only declared premises** — `premiseRefs` floor the new record's level at `max(cited)`, but the caller *asserts* the citation set. A writer that derives from a level-5 record without citing it can still write level-0 — the floor enforces the lattice over the declared derivation graph, not knowledge itself (same fundamental limit as the paper's; taint tracking inside the model is out of scope).
-  - **`__access__` leaks the access pattern when enabled** — the opt-in audit shard records who decrypted what when, in plaintext. Enable `MAMEM_ACCESS_LOG` only where that tradeoff is acceptable; the flag is off by default. The log is for the honest operator's auditability — a writer with process access could suppress entries, so it is not a tamper-proof monitor.
+  - **`__access__` leaks the access pattern when enabled** — the opt-in audit shard records who decrypted what when, in plaintext. Enable `NEKTAR_ACCESS_LOG` only where that tradeoff is acceptable; the flag is off by default. The log is for the honest operator's auditability — a writer with process access could suppress entries, so it is not a tamper-proof monitor.
   - **Rotation ledger completeness** — `verifyAnchoredRotationChain` proves the cert chain *as presented* links genesis→latest; an operator withholding the newest cert makes `activePub` stale but never forged (a lower bound). Completeness needs the covenant to carry cert state, which the anchor layout doesn't (documented divergence).
   - **Delegation map is caller-asserted** — D1 binds `opts.delegations` into the signed receipt, but the caller chooses which delegations to declare. An omitted delegation is invisible to the signature; each declared entry is independently verified (`verifyReceiptDelegations`).
   - **Model binding is attestation, not execution** — `receipt.model` commits `{id, params, weightsHash}` but nothing proves those params ran; the LLM output remains non-deterministic (inherent).

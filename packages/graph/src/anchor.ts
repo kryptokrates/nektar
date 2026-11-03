@@ -1,10 +1,10 @@
 // GraphAnchor (AOR-006 finality): commits graph vertices (and edges) into a
-// mamem shard via the existing remember→batch→anchor pipeline. Each vertex
+// nektar shard via the existing remember→batch→anchor pipeline. Each vertex
 // hash is stored as a fragment whose leaf commits to it; proveVertex returns
 // the leaf's position + anchor tx so the standard SPV verify path applies.
-import { hdp, eq, utf8, type Provenance } from '@mamem/core'
+import { hdp, eq, utf8, type Provenance } from '@nektar/core'
 /** structural view of the memory surface GraphAnchor needs — satisfied by
- * MamemMemory without a package dependency (avoids a workspace cycle) */
+ * NektarMemory without a package dependency (avoids a workspace cycle) */
 export interface AnchorMem {
   remember: (shard: string, d: string, prov?: { source?: string, modelId?: string }, level?: number) => Promise<{ seq: number, anchored?: { txid: string, n: number } }>
   anchorShard: (shard: string) => Promise<{ txid: string, n: number } | null>

@@ -2,7 +2,7 @@
 // to @bsv/sdk. Logarithmic inner-product argument over secp256k1, Fiat-Shamir.
 // Sound + ZK under DL in the ROM; no trusted setup; no post-quantum claim.
 import { PublicKey, Point, BigNumber, Curve } from '@bsv/sdk'
-import { dsha256, concat, utf8, type Bytes } from '@mamem/core'
+import { dsha256, concat, utf8, type Bytes } from '@nektar/core'
 
 const curve = new Curve()
 const N = BigInt(curve.n.toString())
@@ -14,10 +14,10 @@ const inv = (a: bigint): bigint => { let [t, nt, r, nr] = [0n, 1n, N, mod(a)]; w
 const rand = (): bigint => { for (;;) { const s = mod(BigInt('0x' + Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex'))); if (s !== 0n) return s } }
 
 const BP_G = curve.g
-export const BP_H = curve.g.mul(new BigNumber(BigInt('0x' + Buffer.from(dsha256(utf8('mamem/bp/H/v1'))).toString('hex')).toString()))
+export const BP_H = curve.g.mul(new BigNumber(BigInt('0x' + Buffer.from(dsha256(utf8('nektar/bp/H/v1'))).toString('hex')).toString()))
 const ptFromHex = (hex: string): Point => { const q = PublicKey.fromString(hex) as any; return new Point(q.x, q.y) }
 const ptHex = (p: Point): string => Buffer.from(p.encode(true)).toString('hex')
-const BP_U = hashToPoint('mamem/bp/U/v1')
+const BP_U = hashToPoint('nektar/bp/U/v1')
 
 function hashToPoint (label: string): Point {
   for (let c = 0; c < 100000; c++) {
@@ -60,7 +60,7 @@ function proveIP (gIn: Point[], hIn: Point[], U: Point, aIn: bigint[], bIn: bigi
     const Lj = need(addO(addO(msm(aLo, gHi), msm(bHi, hLo)), smul(cL, U)))
     const Rj = need(addO(addO(msm(aHi, gLo), msm(bLo, hHi)), smul(cR, U)))
     L.push(Lj); R.push(Rj)
-    const u = challenge(`${bind}mamem/bp/ip/${round}`, [Lj, Rj]), uInv = inv(u)
+    const u = challenge(`${bind}nektar/bp/ip/${round}`, [Lj, Rj]), uInv = inv(u)
     const gNext: Point[] = [], hNext: Point[] = [], aNext: bigint[] = [], bNext: bigint[] = []
     for (let i = 0; i < nn; i++) {
       gNext.push(need(addO(smul(uInv, gLo[i]!), smul(u, gHi[i]!))))
@@ -77,7 +77,7 @@ function verifyIP (gIn: Point[], hIn: Point[], U: Point, Pin: Point, proof: Inne
   let g = gIn.slice(), h = hIn.slice(), P: Point = Pin
   for (let round = 0; round < proof.L.length; round++) {
     const Lj = ptFromHex(proof.L[round]!), Rj = ptFromHex(proof.R[round]!)
-    const u = challenge(`${bind}mamem/bp/ip/${round}`, [Lj, Rj]), uInv = inv(u)
+    const u = challenge(`${bind}nektar/bp/ip/${round}`, [Lj, Rj]), uInv = inv(u)
     const u2 = mul(u, u), uInv2 = mul(uInv, uInv)
     const nn = g.length / 2
     const gLo = g.slice(0, nn), gHi = g.slice(nn), hLo = h.slice(0, nn), hHi = h.slice(nn)
@@ -98,8 +98,8 @@ export function proveRangeBP (value: bigint, blinding: bigint, bits: number, bin
   const v = mod(value)
   if (v >= 1n << BigInt(bits)) return null
   const n = bits
-  const gv = genVector('mamem/bp/g/v1', n)
-  const hv = genVector('mamem/bp/h/v1', n)
+  const gv = genVector('nektar/bp/g/v1', n)
+  const hv = genVector('nektar/bp/h/v1', n)
   const U = BP_U
   const commitment = mulP(BP_G, v).add(mulP(BP_H, blinding))
   const aL = Array.from({ length: n }, (_, i) => (v >> BigInt(i)) & 1n)
@@ -110,8 +110,8 @@ export function proveRangeBP (value: bigint, blinding: bigint, bits: number, bin
   const sR = Array.from({ length: n }, () => rand())
   const rho = rand()
   const S = need(addO(addO(smul(rho, BP_H), msm(sL, gv)), msm(sR, hv)))
-  const y = challenge(`${bind}mamem/bp/y`, [A, S])
-  const z = challenge(`${bind}mamem/bp/z`, [A, S])
+  const y = challenge(`${bind}nektar/bp/y`, [A, S])
+  const z = challenge(`${bind}nektar/bp/z`, [A, S])
   const yN = powers(y, n), twoN = powers(2n, n), oneN = Array.from({ length: n }, () => 1n)
   const z2 = mul(z, z)
   const l0 = aL.map(x => sub(x, z))
@@ -123,7 +123,7 @@ export function proveRangeBP (value: bigint, blinding: bigint, bits: number, bin
   const tau1 = rand(), tau2 = rand()
   const T1 = need(addO(smul(t1, BP_G), smul(tau1, BP_H)))
   const T2 = need(addO(smul(t2, BP_G), smul(tau2, BP_H)))
-  const x = challenge(`${bind}mamem/bp/x`, [T1, T2])
+  const x = challenge(`${bind}nektar/bp/x`, [T1, T2])
   const x2 = mul(x, x)
   const l = vecAdd(l0, vecScale(x, l1))
   const r = vecAdd(r0, vecScale(x, r1))
@@ -141,13 +141,13 @@ function vecScale (s: bigint, a: bigint[]) { return a.map(x => mul(s, x)) }
 export function verifyRangeBP (commitment: Point, proof: RangeProofBP, bind = ''): boolean {
   const n = proof.bits
   if (!isPow2(n) || n > 256) return false
-  const gv = genVector('mamem/bp/g/v1', n)
-  const hv = genVector('mamem/bp/h/v1', n)
+  const gv = genVector('nektar/bp/g/v1', n)
+  const hv = genVector('nektar/bp/h/v1', n)
   const U = BP_U
   const A = ptFromHex(proof.A), S = ptFromHex(proof.S), T1 = ptFromHex(proof.T1), T2 = ptFromHex(proof.T2)
-  const y = challenge(`${bind}mamem/bp/y`, [A, S])
-  const z = challenge(`${bind}mamem/bp/z`, [A, S])
-  const x = challenge(`${bind}mamem/bp/x`, [T1, T2])
+  const y = challenge(`${bind}nektar/bp/y`, [A, S])
+  const z = challenge(`${bind}nektar/bp/z`, [A, S])
+  const x = challenge(`${bind}nektar/bp/x`, [T1, T2])
   const yN = powers(y, n), twoN = powers(2n, n), oneN = Array.from({ length: n }, () => 1n)
   const z2 = mul(z, z), z3 = mul(z2, z), x2 = mul(x, x)
   const delta = sub(mul(sub(z, z2), inner(oneN, yN)), mul(z3, inner(oneN, twoN)))

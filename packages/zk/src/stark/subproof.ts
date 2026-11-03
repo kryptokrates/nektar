@@ -1,8 +1,8 @@
 // L_ZKDis v2 — selective proof of existence for a SUBSET of an anchored
 // batch's records (GOAL-v6 S5 "proof sharding"; DIS-002). nChain US 12,730,827
 // B2 (data-reveal path over a hierarchical structure) is implemented under the
-// Open BSV pledge — free use on BSV only, which is all mamem ever runs on;
-// see NOTICE. MAMEM_PROOF_SHARDING=0 opts the MCP tools out.
+// Open BSV pledge — free use on BSV only, which is all nektar ever runs on;
+// see NOTICE. NEKTAR_PROOF_SHARDING=0 opts the MCP tools out.
 //
 //   'ZKS2' ‖ ver(1) ‖ batchRoot(32) ‖ size(u32 LE) ‖ numShards(u32 LE) ‖
 //     per shard, ascending shardIndex:
@@ -18,7 +18,7 @@
 // standard Merkle path is split at depth 6: a per-leaf subpath (≤6 siblings)
 // folds the leaf up to its shard root, and ONE shared multiproof (topPath,
 // deduplicated across shards) folds every shard root up to R_n.
-import { buildTree, hashNode, eq, heightForLeafCount, type MerkleTree } from '@mamem/core'
+import { buildTree, hashNode, eq, heightForLeafCount, type MerkleTree } from '@nektar/core'
 
 export const SHARD_LEAVES = 64
 export const SHARD_DEPTH = 6 // log2(SHARD_LEAVES): leafIndex >> 6 = shardIndex

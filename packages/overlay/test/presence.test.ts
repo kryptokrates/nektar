@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, LockingScript } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { createMamemOverlay } from '../src/node.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { createNektarOverlay } from '../src/node.js'
 import { signPresence, presenceOutputScript, parsePresence, verifyPresence } from '../src/presence.js'
 
 const ad = async (key: PrivateKey, fields: { endpoint: string, shards: string[], ts: number }) =>
@@ -25,7 +25,7 @@ async function setup () {
   const utxos = (funder as any).utxos as Array<{ tx: Transaction }>
   for (const u of utxos) chain.mempool.set(u.tx.id('hex'), u.tx)
   chain.mine(1)
-  const overlay = await createMamemOverlay(chain, chain)
+  const overlay = await createNektarOverlay(chain, chain)
   const submitAd = async (tx: Transaction) =>
     overlay.engine.submit({ beef: tx.toBEEF(), topics: ['tm_presence'] }, undefined, 'current-tx')
   const look = (query: any) => overlay.engine.lookup({ service: 'ls_presence', query })

@@ -4,9 +4,9 @@
 // daemon once → the watcher must broadcast `challenge`.
 import { PrivateKey, Transaction, LockingScript, P2PKH, Hash } from '@bsv/sdk'
 import { RunarContract, LocalSigner } from 'runar-sdk'
-import { MamemProvider } from '@mamem/anchor'
-import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve } from '@mamem/chain'
-import { verifyZkm2, encodeZkm2 } from '@mamem/zk'
+import { NektarProvider } from '@nektar/anchor'
+import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve } from '@nektar/chain'
+import { verifyZkm2, encodeZkm2 } from '@nektar/zk'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
@@ -25,14 +25,14 @@ function readEnv (p) {
 }
 const localEnv = { ...readEnv(new URL('../../../.env', import.meta.url)), ...readEnv(new URL('../../../../.env', import.meta.url)) }
 const qsEnv = readEnv(new URL('../../../infra/teranode-quickstart/.env', import.meta.url))
-const WIF = process.env.MAMEM_REGTEST_WIF ?? localEnv.MAMEM_REGTEST_WIF
-if (!WIF) throw new Error('MAMEM_REGTEST_WIF missing')
+const WIF = process.env.NEKTAR_REGTEST_WIF ?? localEnv.NEKTAR_REGTEST_WIF
+if (!WIF) throw new Error('NEKTAR_REGTEST_WIF missing')
 const cfg = {
-  rpcUrl: process.env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-  rpcUser: process.env.MAMEM_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
-  rpcPass: process.env.MAMEM_RPC_PASS ?? qsEnv.rpc_pass ?? '',
-  propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-  assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
+  rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+  rpcUser: process.env.NEKTAR_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
+  rpcPass: process.env.NEKTAR_RPC_PASS ?? qsEnv.rpc_pass ?? '',
+  propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+  assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
 }
 const broadcaster = new TeranodeBroadcaster(cfg.propagationUrl)
 const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
@@ -52,12 +52,12 @@ console.log(`reserve: scanned ${scanned} mature coinbase outputs (tip ${tip})`)
 if (reserve.utxos.length < 4) {
   await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile: '.state/watcher-e2e-treasury.json', outputs: 16 })
 }
-const provider = new MamemProvider(broadcaster, reserve, addr)
+const provider = new NektarProvider(broadcaster, reserve, addr)
 const signer = new LocalSigner(WIF)
 const pubKeyHex = await signer.getPublicKey()
 const opPkh = Buffer.from(Hash.hash160(Buffer.from(pubKeyHex, 'hex'))).toString('hex')
 
-const art = JSON.parse(readFileSync(new URL('../../contracts/MamemZkClaim.json', import.meta.url), 'utf8'))
+const art = JSON.parse(readFileSync(new URL('../../contracts/NektarZkClaim.json', import.meta.url), 'utf8'))
 const vArt = JSON.parse(readFileSync(new URL('../../contracts/ClaimVerdict.json', import.meta.url), 'utf8'))
 const VCR = vArt.script
 // real RISC Zero proof bundle: encode the fixture into L_ZKMem bytes
@@ -85,10 +85,10 @@ check(v.ok && v.journal.root !== LIE, `fixture verifies; claim's journalRoot is 
 // seed the watcher registry, run the daemon once
 const CLAIMS = fileURLToPath(new URL('../../../.state/watcher-claims.json', import.meta.url))
 writeFileSync(CLAIMS, JSON.stringify([{ txid: claimOp.txid, vout: claimOp.outputIndex }]))
-// MAMEM_SEED_ONLY=1: stop after seeding — used to hand the claim to an
+// NEKTAR_SEED_ONLY=1: stop after seeding — used to hand the claim to an
 // already-running daemon (e.g. the docker-compose watcher service) instead
 // of spawning a one-shot watcher here.
-if (process.env.MAMEM_SEED_ONLY) { console.log('seeded only (MAMEM_SEED_ONLY)'); process.exit(failures ? 1 : 0) }
+if (process.env.NEKTAR_SEED_ONLY) { console.log('seeded only (NEKTAR_SEED_ONLY)'); process.exit(failures ? 1 : 0) }
 const out = execFileSync('node', ['../../watcher/src/watcher.mjs', '--once', '--claims', CLAIMS, '--proof-dir', PROOFS], { cwd: new URL('.', import.meta.url), encoding: 'utf8', timeout: 120000 })
 console.log(out.trim())
 check(/challenge/i.test(out) || /FRAUD/i.test(out), 'watcher detected fraud and broadcast challenge')

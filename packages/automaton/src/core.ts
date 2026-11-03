@@ -1,10 +1,10 @@
-// @mamem/automaton — P14 Merkle Automaton (AUT-001..008).
+// @nektar/automaton — P14 Merkle Automaton (AUT-001..008).
 // Canonical def: {Q, Σ, δ:[from,sym,to,out?], q0, F, O}; deltaRoot = Merkle
 // root over fixed 24B leaves num2bin8(from)‖num2bin8(sym)‖num2bin8(to),
 // padded to 16 with EMPTY, depth 4. States/symbols = small ints by index.
-import { dsha256, utf8, merkleRoot, merkleProof, verifyProof, type MerkleProof } from '@mamem/core'
-import { MAMEM_AUTOMATON_ARTIFACT } from '@mamem/contracts'
-export { MAMEM_AUTOMATON_ARTIFACT }
+import { dsha256, utf8, merkleRoot, merkleProof, verifyProof, type MerkleProof } from '@nektar/core'
+import { NEKTAR_AUTOMATON_ARTIFACT } from '@nektar/contracts'
+export { NEKTAR_AUTOMATON_ARTIFACT }
 
 export class AutomatonError extends Error {}
 

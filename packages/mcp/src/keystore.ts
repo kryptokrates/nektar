@@ -31,8 +31,8 @@ function dec (pass: string, blob: string): string {
 }
 
 export function passphraseFromEnv (): string | undefined {
-  if (process.env.MAMEM_KEY_PASSPHRASE) return process.env.MAMEM_KEY_PASSPHRASE
-  const f = process.env.MAMEM_KEY_PASSPHRASE_FILE
+  if (process.env.NEKTAR_KEY_PASSPHRASE) return process.env.NEKTAR_KEY_PASSPHRASE
+  const f = process.env.NEKTAR_KEY_PASSPHRASE_FILE
   if (f) return readFileSync(f, 'utf8').trim()
   return undefined
 }
@@ -44,7 +44,7 @@ export function isEncrypted (blob: string): boolean {
 export function readKeyFile (file: string, pass: string | undefined, requireEnc: boolean): string {
   const blob = readFileSync(file, 'utf8')
   if (isEncrypted(blob)) {
-    if (!pass) throw new KeystoreError(`${file} is encrypted — set MAMEM_KEY_PASSPHRASE`)
+    if (!pass) throw new KeystoreError(`${file} is encrypted — set NEKTAR_KEY_PASSPHRASE`)
     return dec(pass, blob)
   }
   if (requireEnc) throw new KeystoreError(`${file} is plaintext — mainnet requires encrypted keys at rest`)

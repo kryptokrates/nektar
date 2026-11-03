@@ -1,16 +1,16 @@
 // openRuntime: one production entry for the MCP / HTTP servers.
-//   MAMEM_NETWORK=mock     offline MockChain (mines per tx) — zero setup, in-memory
-//   MAMEM_NETWORK=regtest  Teranode regtest: persistent records (sqlite), anchor
+//   NEKTAR_NETWORK=mock     offline MockChain (mines per tx) — zero setup, in-memory
+//   NEKTAR_NETWORK=regtest  Teranode regtest: persistent records (sqlite), anchor
 //                          state, security state, funding reserve and keys in
-//                          MAMEM_DATA_DIR; a confirmer attaches BUMPs.
-//   MAMEM_NETWORK=testnet  same shape as regtest; refused until an endpoint and
+//                          NEKTAR_DATA_DIR; a confirmer attaches BUMPs.
+//   NEKTAR_NETWORK=testnet  same shape as regtest; refused until an endpoint and
 //                          funding are configured (no real funds without approval).
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { PrivateKey, MerklePath, type Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@mamem/chain'
-import { KnexShardStore, type ShardStore } from '@mamem/log'
-import { MamemMemory, type MamemMemoryOptions } from './memory.js'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
+import { KnexShardStore, type ShardStore } from '@nektar/log'
+import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
 import { readKeyFile, writeKeyFile, passphraseFromEnv, KeystoreError } from './keystore.js'
 import { fileURLToPath } from 'node:url'
@@ -21,7 +21,7 @@ export interface RuntimeConfig {
   regtest?: RegtestConfig & { fundWif: string }
   main?: MainnetConfig & {
     fundWif?: string // fee key; absent → load/generate fee.key.json
-    passphrase?: string // MAMEM_KEY_PASSPHRASE — mandatory on main
+    passphrase?: string // NEKTAR_KEY_PASSPHRASE — mandatory on main
     feeRateSatPerKb?: number // default: max(100, ARC policy)
     maxFeePerTx?: number // sats (default 1000)
     maxSpendPerDay?: number // sats (default 20000)
@@ -42,69 +42,69 @@ export interface RuntimeConfig {
   temporalSources?: string[]
 }
 
-/** parse MAMEM_TEMPORAL_SOURCES=bsv[,btc] (default bsv); unknown names are fatal */
+/** parse NEKTAR_TEMPORAL_SOURCES=bsv[,btc] (default bsv); unknown names are fatal */
 export function temporalSourceNames (env = process.env): string[] {
-  const names = (env.MAMEM_TEMPORAL_SOURCES ?? 'bsv').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+  const names = (env.NEKTAR_TEMPORAL_SOURCES ?? 'bsv').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
   for (const n of names) if (n !== 'bsv' && n !== 'btc') throw new Error(`unknown temporal source "${n}" (supported: bsv,btc)`)
   return names.length === 0 ? ['bsv'] : names
 }
 
 /** TemporalSources over the primary tracker + optional BTC WoC tracker (read-only).
- *  `MAMEM_BTC_WOC_URL` overrides the BTC endpoint (tests point it at a stub). */
+ *  `NEKTAR_BTC_WOC_URL` overrides the BTC endpoint (tests point it at a stub). */
 export function temporalSourcesFor (names: string[], primary: ChainTracker, opts: { wocApiKey?: string, fetchImpl?: typeof fetch } = {}): TemporalSources {
   const sources: TemporalSource[] = [{ name: 'bsv', tracker: primary }]
   for (const n of names) {
     if (n === 'bsv') continue
-    if (n === 'btc') sources.push({ name: 'btc', tracker: new WocTracker({ wocUrl: process.env.MAMEM_BTC_WOC_URL ?? 'https://api.whatsonchain.com/v1/btc/main', wocApiKey: opts.wocApiKey, fetchImpl: opts.fetchImpl }) })
+    if (n === 'btc') sources.push({ name: 'btc', tracker: new WocTracker({ wocUrl: process.env.NEKTAR_BTC_WOC_URL ?? 'https://api.whatsonchain.com/v1/btc/main', wocApiKey: opts.wocApiKey, fetchImpl: opts.fetchImpl }) })
   }
   return new TemporalSources(sources)
 }
 
 export function configFromEnv (env = process.env): RuntimeConfig {
-  const network = (env.MAMEM_NETWORK ?? 'mock') as RuntimeConfig['network']
-  const dataDir = env.MAMEM_DATA_DIR ?? join(process.cwd(), '.mamem')
+  const network = (env.NEKTAR_NETWORK ?? 'mock') as RuntimeConfig['network']
+  const dataDir = env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar')
   const secret = (k: string) => env[k] ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
-  const cfg: RuntimeConfig = { network, dataDir, modelId: env.MAMEM_MODEL_ID, batchLeaves: Number(env.MAMEM_BATCH ?? 4), autoMine: env.MAMEM_AUTOMINE === '1', confirmEveryMs: Number(env.MAMEM_CONFIRM_MS ?? 5000), clearanceAuthorities: (env.MAMEM_CLEARANCE_AUTHORITIES ?? '').split(',').map(s => s.trim()).filter(Boolean), temporalSources: temporalSourceNames(env) }
+  const cfg: RuntimeConfig = { network, dataDir, modelId: env.NEKTAR_MODEL_ID, batchLeaves: Number(env.NEKTAR_BATCH ?? 4), autoMine: env.NEKTAR_AUTOMINE === '1', confirmEveryMs: Number(env.NEKTAR_CONFIRM_MS ?? 5000), clearanceAuthorities: (env.NEKTAR_CLEARANCE_AUTHORITIES ?? '').split(',').map(s => s.trim()).filter(Boolean), temporalSources: temporalSourceNames(env) }
   if (network === 'regtest') {
-    const fundWif = secret('MAMEM_FUND_WIF') ?? secret('MAMEM_REGTEST_WIF')
-    const rpcPass = secret('MAMEM_RPC_PASS')
-    if (!fundWif || !rpcPass) throw new Error(`${network}: MAMEM_FUND_WIF (or _FILE) and MAMEM_RPC_PASS (or _FILE) are required`)
+    const fundWif = secret('NEKTAR_FUND_WIF') ?? secret('NEKTAR_REGTEST_WIF')
+    const rpcPass = secret('NEKTAR_RPC_PASS')
+    if (!fundWif || !rpcPass) throw new Error(`${network}: NEKTAR_FUND_WIF (or _FILE) and NEKTAR_RPC_PASS (or _FILE) are required`)
     cfg.regtest = {
       fundWif,
-      rpcUrl: env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-      rpcUser: env.MAMEM_RPC_USER ?? 'teranode',
+      rpcUrl: env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+      rpcUser: env.NEKTAR_RPC_USER ?? 'teranode',
       rpcPass,
-      propagationUrl: env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-      assetUrl: env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
+      propagationUrl: env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+      assetUrl: env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
     }
   }
   if (network === 'main' || network === 'ttn' || network === 'testnet') {
-    if (network === 'main' && env.MAMEM_MAINNET_CONFIRM !== 'I_UNDERSTAND') {
-      throw new Error('mainnet mode spends REAL BSV. Refusing to start. Set MAMEM_MAINNET_CONFIRM=I_UNDERSTAND to proceed.')
+    if (network === 'main' && env.NEKTAR_MAINNET_CONFIRM !== 'I_UNDERSTAND') {
+      throw new Error('mainnet mode spends REAL BSV. Refusing to start. Set NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND to proceed.')
     }
     // "ttn" below = any test network (testnet encoding, test coins, low fee floor)
     const ttn = network !== 'main'
     const urls = network === 'testnet'
       ? { arc: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', woc: 'https://api.whatsonchain.com/v1/bsv/test' }
       : network === 'ttn' ? { arc: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech', woc: 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test' } : undefined
-    cfg.confirmEveryMs = Number(env.MAMEM_CONFIRM_MS ?? (ttn ? 30_000 : 60_000))
+    cfg.confirmEveryMs = Number(env.NEKTAR_CONFIRM_MS ?? (ttn ? 30_000 : 60_000))
     cfg.main = {
-      fundWif: secret('MAMEM_FUND_WIF'),
-      passphrase: secret('MAMEM_KEY_PASSPHRASE'),
+      fundWif: secret('NEKTAR_FUND_WIF'),
+      passphrase: secret('NEKTAR_KEY_PASSPHRASE'),
       // TTN defaults: Arcade + WoC-TTN endpoints (probed live); main keeps the
       // built-in GorillaPool/WoC defaults when env vars are unset
-      arcUrl: env.MAMEM_ARC_URL ?? urls?.arc,
-      arcApiKey: secret('MAMEM_ARC_API_KEY'),
-      wocUrl: env.MAMEM_WOC_URL ?? urls?.woc,
-      wocApiKey: secret('MAMEM_WOC_API_KEY'),
-      chaintracksUrl: env.MAMEM_CHAINTRACKS_URL,
+      arcUrl: env.NEKTAR_ARC_URL ?? urls?.arc,
+      arcApiKey: secret('NEKTAR_ARC_API_KEY'),
+      wocUrl: env.NEKTAR_WOC_URL ?? urls?.woc,
+      wocApiKey: secret('NEKTAR_WOC_API_KEY'),
+      chaintracksUrl: env.NEKTAR_CHAINTRACKS_URL,
       // fee floor: 100 sat/kB main (GorillaPool policy), 1 sat/kB TTN (its
       // Arcade policy is 0 — a zero fee rate would produce free-of-fee txs
       // miners may reject; keep ≥1)
-      feeRateSatPerKb: env.MAMEM_FEE_RATE_SAT_PER_KB ? Number(env.MAMEM_FEE_RATE_SAT_PER_KB) : (ttn ? 1 : undefined),
-      maxFeePerTx: Number(env.MAMEM_MAX_FEE_SATS_PER_TX ?? 1000),
-      maxSpendPerDay: Number(env.MAMEM_MAX_SPEND_SATS_PER_DAY ?? 20_000),
-      minBroadcastIntervalMs: Number(env.MAMEM_MIN_BROADCAST_INTERVAL_MS ?? 10_000)
+      feeRateSatPerKb: env.NEKTAR_FEE_RATE_SAT_PER_KB ? Number(env.NEKTAR_FEE_RATE_SAT_PER_KB) : (ttn ? 1 : undefined),
+      maxFeePerTx: Number(env.NEKTAR_MAX_FEE_SATS_PER_TX ?? 1000),
+      maxSpendPerDay: Number(env.NEKTAR_MAX_SPEND_SATS_PER_DAY ?? 20_000),
+      minBroadcastIntervalMs: Number(env.NEKTAR_MIN_BROADCAST_INTERVAL_MS ?? 10_000)
     }
   }
   return cfg
@@ -123,7 +123,7 @@ function loadKeys (dataDir: string, pass: string | undefined, requireEnc = false
   return { keys, save }
 }
 
-/** operator fee key (pays all anchor fees): MAMEM_FUND_WIF wins; otherwise a
+/** operator fee key (pays all anchor fees): NEKTAR_FUND_WIF wins; otherwise a
  *  dedicated fee.key.json generated once in the data dir — encrypted on main. */
 function loadFeeKey (dataDir: string, wif: string | undefined, pass: string | undefined, requireEnc: boolean): PrivateKey {
   if (wif) return PrivateKey.fromWif(wif)
@@ -138,7 +138,7 @@ function loadFeeKey (dataDir: string, wif: string | undefined, pass: string | un
 }
 
 export interface Runtime {
-  mem: MamemMemory
+  mem: NektarMemory
   close: () => Promise<void>
   network: RuntimeConfig['network']
   /** mainnet-only ops surface for /v1/wallet + /v1/costs */
@@ -153,14 +153,14 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   // an invoice served to a missing address is a payment that can never settle.
   const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
   if (paymentsEnabled()) requireOperatorWallet()
-  const base: MamemMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities, network: cfg.network }
+  const base: NektarMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities, network: cfg.network }
   if (cfg.network === 'mock') {
     const chain = new MockChain(); chain.verifyScripts = true
-    const funder = new MockFunder(); funder.topup(Number(process.env.MAMEM_DEMO_UTXOS ?? 200))
+    const funder = new MockFunder(); funder.topup(Number(process.env.NEKTAR_DEMO_UTXOS ?? 200))
     for (const t of funder.parents) chain.registerParent(t)
     const broadcast = chain.broadcast.bind(chain)
     chain.broadcast = async (tx: Transaction) => { const r = await broadcast(tx); if (r.status === 'success') chain.mine(1); return r }
-    const mem = new MamemMemory(chain, funder, funder.keyPair, base)
+    const mem = new NektarMemory(chain, funder, funder.keyPair, base)
     // auto-mined: every anchor is immediately provable
     const t = setInterval(() => { for (const { shard, txid } of mem.unprovenAnchors()) { const mp = chain.merklePathOf(txid); if (mp) mem.attachProof(shard, txid, mp) } }, 1000); t.unref()
     return { mem, network: 'mock', close: async () => { clearInterval(t) } }
@@ -175,7 +175,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   const me = `${process.pid}@${(await import('node:os')).hostname()}`
   if (existsSync(lockFile)) {
     const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string, beat: number }
-    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${cfg.dataDir} is in use by another mamem instance (${l.owner}); stop it first`)
+    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${cfg.dataDir} is in use by another nektar instance (${l.owner}); stop it first`)
   }
   const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
   beat()
@@ -185,7 +185,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   const tracker = new TeranodeRPCTracker(rc)
   // input-value resolver for the guard's fee check — same closure as the
   // live runtime: reserve entries, guarded broadcasts, anchor txs (fail-closed)
-  let memRef: MamemMemory | undefined
+  let memRef: NektarMemory | undefined
   const guardedBroadcasts = new Map<string, Transaction>()
   const valueOf = (txid: string, vout: number): number | undefined =>
     reserve.utxos.find(u => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
@@ -232,10 +232,10 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   const store: ShardStore = new KnexShardStore(knex)
   await store.init?.()
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
-  const mem = new MamemMemory(chain as never, funder as never, fundKey, {
+  const mem = new NektarMemory(chain as never, funder as never, fundKey, {
     ...base,
     agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,
-    maxLevel: Number(process.env.MAMEM_MAX_LEVEL ?? 3),
+    maxLevel: Number(process.env.NEKTAR_MAX_LEVEL ?? 3),
     securityStore: new FileSecurityStore(join(cfg.dataDir, 'security.json')),
     stateStore: new FileStateStore(join(cfg.dataDir, 'state.json')),
     finalityDepth: 1
@@ -279,7 +279,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
         if (res.status === 404) {
           const seen = firstSeen.get(txid) ?? tip; firstSeen.set(txid, seen)
           // never mined within 100 blocks (e.g. replaced by a conflicting spend): stop waiting
-          if (tip - seen > 100) { abandoned.add(txid); process.stderr.write(`mamem confirmer: anchor ${txid} not mined after 100 blocks — abandoned (check for a conflicting spend)\n`) }
+          if (tip - seen > 100) { abandoned.add(txid); process.stderr.write(`nektar confirmer: anchor ${txid} not mined after 100 blocks — abandoned (check for a conflicting spend)\n`) }
           continue
         }
         const buf = Buffer.from(await res.arrayBuffer())
@@ -287,9 +287,9 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
         const mp = h !== undefined ? await merklePathAtHeight(rc, txid, tracker, h) : null
         if (mp) { mem.attachProof(shard, txid, new MerklePath(mp.blockHeight, mp.path)); attached++ }
       }
-      if (waiting.length) process.stderr.write(`mamem confirmer: waiting=${waiting.length} attached=${attached} tip=${tip}\n`)
+      if (waiting.length) process.stderr.write(`nektar confirmer: waiting=${waiting.length} attached=${attached} tip=${tip}\n`)
       persistKeys()
-    } catch (e) { process.stderr.write(`mamem confirmer: ${(e as Error).message}\n`) } finally { busy = false }
+    } catch (e) { process.stderr.write(`nektar confirmer: ${(e as Error).message}\n`) } finally { busy = false }
   }
   const timer = setInterval(() => { void tick() }, cfg.confirmEveryMs ?? 5000); timer.unref()
   return {
@@ -305,17 +305,17 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
 /** Shared live path for `main` (BSV mainnet) and `ttn` (Teranode Test Net —
  * test coins, same code). Net-dependent bits: address prefix (0x6f testnet
  * for ttn, mainnet for main), fee floor (100 vs 1 sat/kB), labels. */
-async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testnet', base: MamemMemoryOptions): Promise<Runtime> {
+async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testnet', base: NektarMemoryOptions): Promise<Runtime> {
   const mc = cfg.main!
   const ttn = net !== 'main' // any test network: testnet encoding, 1 sat/kB floor
   mkdirSync(cfg.dataDir, { recursive: true })
   const pass = mc.passphrase
-  if (!pass) throw new KeystoreError(`${net} requires MAMEM_KEY_PASSPHRASE (or _FILE) for keys at rest`)
+  if (!pass) throw new KeystoreError(`${net} requires NEKTAR_KEY_PASSPHRASE (or _FILE) for keys at rest`)
   const lockFile = join(cfg.dataDir, 'instance.lock')
   const me = `${process.pid}@${(await import('node:os')).hostname()}`
   if (existsSync(lockFile)) {
     const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string, beat: number }
-    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${cfg.dataDir} is in use by another mamem instance (${l.owner}); stop it first`)
+    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${cfg.dataDir} is in use by another nektar instance (${l.owner}); stop it first`)
   }
   const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
   beat()
@@ -325,7 +325,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, true)
   // TTN uses testnet encoding (prefix byte 0x6f → 'm'/'n' addresses); main '1…'
   const fundAddress = fundKey.toPublicKey().toAddress(ttn ? [0x6f] : undefined)
-  process.stderr.write(`mamem ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring\n`)
+  process.stderr.write(`nektar ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring\n`)
 
   // headers via Chaintracks (public, no key, PoW-verifiable — the only global
   // data SPV needs); WoC stays as fallback. GorillaPool's arcade doesn't mount
@@ -339,7 +339,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const addIfNew = (u: { tx: Transaction, vout: number }) => {
     if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some(x => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout)) reserve.addOwned(u.tx, u.vout)
   }
-  let memRef: MamemMemory | undefined
+  let memRef: NektarMemory | undefined
   const guardedBroadcasts = new Map<string, Transaction>()
   const valueOf = (txid: string, vout: number): number | undefined =>
     reserve.utxos.find(u => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
@@ -349,10 +349,10 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     maxFeePerTx: mc.maxFeePerTx, maxPerDay: mc.maxSpendPerDay,
     minIntervalMs: mc.minBroadcastIntervalMs, ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
   })
-  // optional p2p eyes: MAMEM_P2P_PEERS='ip:port,...' — first-hand inv stream
+  // optional p2p eyes: NEKTAR_P2P_PEERS='ip:port,...' — first-hand inv stream
   // watching our reserve outpoints (spend events by ANYONE) and the fee-key
   // script (unannounced funding). No index: watched set only, rest is dropped.
-  const p2pPeers = (process.env.MAMEM_P2P_PEERS ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  const p2pPeers = (process.env.NEKTAR_P2P_PEERS ?? '').split(',').map(s => s.trim()).filter(Boolean)
   if (p2pPeers.length) {
     const fundPkhScript = `76a914${Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')}88ac`
     const p2p = new P2PListener({
@@ -360,12 +360,12 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       outpoints: new Set(reserve.utxos.map(u => `${u.tx.id('hex')}:${u.vout}`)),
       scripts: new Set([fundPkhScript])
     })
-    p2p.on('spend', (t, v, by) => { if (!reserve.isSpent(t, v)) { reserve.markSpent(t, v); process.stderr.write(`mamem p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`) } })
+    p2p.on('spend', (t, v, by) => { if (!reserve.isSpent(t, v)) { reserve.markSpent(t, v); process.stderr.write(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`) } })
     p2p.on('pay', (t, v, s) => {
-      process.stderr.write(`mamem p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v} — importing\n`)
+      process.stderr.write(`nektar p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v} — importing\n`)
       importFundingTx(mc, t, pkhHex).then(us => { for (const u of us) addIfNew(u) }).catch(() => {})
     })
-    p2p.on('peer', (a, up) => process.stderr.write(`mamem p2p: peer ${a} ${up ? 'connected' : 'down'}\n`))
+    p2p.on('peer', (a, up) => process.stderr.write(`nektar p2p: peer ${a} ${up ? 'connected' : 'down'}\n`))
     p2p.connect()
   }
   const floor = ttn ? 1 : 100
@@ -384,9 +384,9 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       const r = await spendGuard.broadcast(tx)
       if (r.status === 'success') {
         guardedBroadcasts.set(tx.id('hex'), tx)
-        memRef?.metrics.inc('mamem_fee_sats_total', {}, spendGuard.costs().at(-1)?.fee ?? 0, 'total anchor fee spend (sats)')
+        memRef?.metrics.inc('nektar_fee_sats_total', {}, spendGuard.costs().at(-1)?.fee ?? 0, 'total anchor fee spend (sats)')
       } else if (r.description?.startsWith('SpendGuard refused')) {
-        memRef?.metrics.inc('mamem_spend_refused_total', { reason: r.description.split(': ')[1]?.split(' ')[0] ?? 'unknown' }, 1, 'broadcasts refused by SpendGuard')
+        memRef?.metrics.inc('nektar_spend_refused_total', { reason: r.description.split(': ')[1]?.split(' ')[0] ?? 'unknown' }, 1, 'broadcasts refused by SpendGuard')
       }
       return r
     },
@@ -402,30 +402,30 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const store: ShardStore = new KnexShardStore(knex)
   await store.init?.()
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
-  const mem = new MamemMemory(chain as never, funder as never, fundKey, {
+  const mem = new NektarMemory(chain as never, funder as never, fundKey, {
     ...base,
     agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,
-    maxLevel: Number(process.env.MAMEM_MAX_LEVEL ?? 3),
+    maxLevel: Number(process.env.NEKTAR_MAX_LEVEL ?? 3),
     feeRateSatPerKb: feeRate,
     securityStore: new FileSecurityStore(join(cfg.dataDir, 'security.json')),
     stateStore: new FileStateStore(join(cfg.dataDir, 'state.json')),
-    finalityDepth: Number(process.env.MAMEM_FINALITY_DEPTH ?? 6)
+    finalityDepth: Number(process.env.NEKTAR_FINALITY_DEPTH ?? 6)
   }, store)
   memRef = mem
-  mem.metrics.gauge('mamem_fee_balance_sats', () => reserve.utxos.reduce((s, u) => s + u.satoshis, 0), 'operator fee-key balance (sats)')
+  mem.metrics.gauge('nektar_fee_balance_sats', () => reserve.utxos.reduce((s, u) => s + u.satoshis, 0), 'operator fee-key balance (sats)')
   const persistKeys = () => {
     let changed = false
     for (const [s, k] of shardKeys) if (keys.shardKeys[s] !== k.toHex()) { keys.shardKeys[s] = k.toHex(); changed = true }
     if (changed) save()
   }
-  // GOAL-v7 V1 (MAMEM_FEE_VAULT, testnet/main only): mint anchor funding
-  // utxos through the MamemFeeVault covenant — per-tx/window/fee caps are
+  // GOAL-v7 V1 (NEKTAR_FEE_VAULT, testnet/main only): mint anchor funding
+  // utxos through the NektarFeeVault covenant — per-tx/window/fee caps are
   // enforced by node script eval, and SpendGuard stays in front (defense in
   // depth). Value: inline JSON or "@/path/to.json" with
   // {perTxCap,windowCap,windowBlocks,maxFee,fundSats?,vaultSats?}.
-  const vaultSpec = process.env.MAMEM_FEE_VAULT
+  const vaultSpec = process.env.NEKTAR_FEE_VAULT
   if (vaultSpec) {
-    const { FeeVault, buildP2PKHScript } = await import('@mamem/anchor')
+    const { FeeVault, buildP2PKHScript } = await import('@nektar/anchor')
     const { P2PKH, LockingScript: LScript, Transaction: Tx } = await import('@bsv/sdk')
     const vcfg = JSON.parse(vaultSpec.startsWith('@') ? readFileSync(vaultSpec.slice(1), 'utf8') : vaultSpec) as
       { perTxCap: number, windowCap: number, windowBlocks: number, maxFee: number, fundSats?: number, vaultSats?: number }
@@ -456,7 +456,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       reserve.addOwned(tx, 1)
       vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: sats, script: vault.lockingScript(0n, 0n) }
       saveVault()
-      process.stderr.write(`mamem ${net}: fee vault deployed ${tx.id('hex').slice(0, 12)}… (${sats} sats; caps ${vcfg.perTxCap}/tx, ${vcfg.windowCap}/${vcfg.windowBlocks} blocks)\n`)
+      process.stderr.write(`nektar ${net}: fee vault deployed ${tx.id('hex').slice(0, 12)}… (${sats} sats; caps ${vcfg.perTxCap}/tx, ${vcfg.windowCap}/${vcfg.windowBlocks} blocks)\n`)
     }
     const mint = async () => {
       if (!vaultUtxo) await deployVault()
@@ -482,48 +482,48 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       minting = minting.then(mint, mint)
       return await minting as { tx: Transaction, vout: number, satoshis: number }
     }
-    process.stderr.write(`mamem ${net}: MAMEM_FEE_VAULT set — anchor funding minted through the fee-vault covenant\n`)
+    process.stderr.write(`nektar ${net}: NEKTAR_FEE_VAULT set — anchor funding minted through the fee-vault covenant\n`)
   }
-  // MAMEM_FUND_TXIDS: funding txs to import directly (no address index needed)
-  for (const txid of (process.env.MAMEM_FUND_TXIDS ?? '').split(',').map(s => s.trim()).filter(Boolean)) {
-    try { for (const u of await importFundingTx(mc, txid, pkhHex)) addIfNew(u) } catch (e) { process.stderr.write(`mamem ${net}: funding import ${txid}: ${(e as Error).message}\n`) }
+  // NEKTAR_FUND_TXIDS: funding txs to import directly (no address index needed)
+  for (const txid of (process.env.NEKTAR_FUND_TXIDS ?? '').split(',').map(s => s.trim()).filter(Boolean)) {
+    try { for (const u of await importFundingTx(mc, txid, pkhHex)) addIfNew(u) } catch (e) { process.stderr.write(`nektar ${net}: funding import ${txid}: ${(e as Error).message}\n`) }
   }
   const topUp = async () => {
     // tracked-set model: we spend only what we made or were handed. Address-
-    // index discovery (WoC) is OPT-IN — MAMEM_INDEXER_DISCOVERY=1 — because it
+    // index discovery (WoC) is OPT-IN — NEKTAR_INDEXER_DISCOVERY=1 — because it
     // creates an indexer dependency that doesn't scale. The default funding
-    // path is MAMEM_FUND_TXIDS=<txid|hex:rawtx> (import above).
-    if (process.env.MAMEM_INDEXER_DISCOVERY === '1') {
-      try { for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u) } catch (e) { process.stderr.write(`mamem ${net}: UTXO discovery unavailable (${(e as Error).message}) — set MAMEM_FUND_TXIDS=<funding txid>\n`) }
+    // path is NEKTAR_FUND_TXIDS=<txid|hex:rawtx> (import above).
+    if (process.env.NEKTAR_INDEXER_DISCOVERY === '1') {
+      try { for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u) } catch (e) { process.stderr.write(`nektar ${net}: UTXO discovery unavailable (${(e as Error).message}) — set NEKTAR_FUND_TXIDS=<funding txid>\n`) }
     }
-    if (reserve.utxos.length === 0) process.stderr.write(`mamem ${net}: reserve empty — send coins to ${fundAddress} and set MAMEM_FUND_TXIDS (or MAMEM_WAIT_FUNDING=1 to hold for funds)\n`)
+    if (reserve.utxos.length === 0) process.stderr.write(`nektar ${net}: reserve empty — send coins to ${fundAddress} and set NEKTAR_FUND_TXIDS (or NEKTAR_WAIT_FUNDING=1 to hold for funds)\n`)
   }
-  // bootstrap UX (MAMEM_WAIT_FUNDING=1): QR the funding address and hold
+  // bootstrap UX (NEKTAR_WAIT_FUNDING=1): QR the funding address and hold
   // startup until a few sats land — ONCE, not per tick (the tick loop re-runs
   // topUp every confirmEveryMs and must not block). Detection during the
   // wait: indexer discovery when enabled, p2p 'pay' auto-import, or the
-  // operator setting MAMEM_FUND_TXIDS. MAMEM_WAIT_FUNDING_MS caps it (30 min).
+  // operator setting NEKTAR_FUND_TXIDS. NEKTAR_WAIT_FUNDING_MS caps it (30 min).
   const waitForFunding = async () => {
-    if (reserve.utxos.length > 0 || process.env.MAMEM_WAIT_FUNDING !== '1') return
+    if (reserve.utxos.length > 0 || process.env.NEKTAR_WAIT_FUNDING !== '1') return
     try {
       const QR = await import('qrcode')
       process.stderr.write('\n' + await QR.toString(fundAddress, { type: 'terminal', small: true }) + '\n')
     } catch { /* QR optional — the address prints either way */ }
-    process.stderr.write(`mamem ${net}: waiting for funding — send a few sats to ${fundAddress}\n`)
-    const deadline = Date.now() + Number(process.env.MAMEM_WAIT_FUNDING_MS ?? 30 * 60_000)
+    process.stderr.write(`nektar ${net}: waiting for funding — send a few sats to ${fundAddress}\n`)
+    const deadline = Date.now() + Number(process.env.NEKTAR_WAIT_FUNDING_MS ?? 30 * 60_000)
     while (reserve.utxos.length === 0 && Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 15_000))
-      for (const txid of (process.env.MAMEM_FUND_TXIDS ?? '').split(',').map(s => s.trim()).filter(Boolean)) {
+      for (const txid of (process.env.NEKTAR_FUND_TXIDS ?? '').split(',').map(s => s.trim()).filter(Boolean)) {
         try { for (const u of await importFundingTx(mc, txid, pkhHex)) addIfNew(u) } catch { /* keep polling */ }
       }
-      if (process.env.MAMEM_INDEXER_DISCOVERY === '1') {
+      if (process.env.NEKTAR_INDEXER_DISCOVERY === '1') {
         try { for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u) } catch { /* keep polling */ }
       }
     }
     if (reserve.utxos.length > 0) {
-      process.stderr.write(`mamem ${net}: funded ✓ — ${reserve.utxos.reduce((s, u) => s + u.satoshis, 0)} sats across ${reserve.utxos.length} utxo(s)\n`)
+      process.stderr.write(`nektar ${net}: funded ✓ — ${reserve.utxos.reduce((s, u) => s + u.satoshis, 0)} sats across ${reserve.utxos.length} utxo(s)\n`)
     } else {
-      process.stderr.write(`mamem ${net}: funding wait timed out — booting unfunded (anchors fail until ${fundAddress} has a utxo; use MAMEM_FUND_TXIDS)\n`)
+      process.stderr.write(`nektar ${net}: funding wait timed out — booting unfunded (anchors fail until ${fundAddress} has a utxo; use NEKTAR_FUND_TXIDS)\n`)
     }
   }
   await waitForFunding()
@@ -541,7 +541,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       }
       await topUp()
       persistKeys()
-    } catch (e) { process.stderr.write(`mamem confirmer(${net}): ${(e as Error).message}\n`) } finally { busy = false }
+    } catch (e) { process.stderr.write(`nektar confirmer(${net}): ${(e as Error).message}\n`) } finally { busy = false }
   }
   const timer = setInterval(() => { void tick() }, cfg.confirmEveryMs ?? (ttn ? 30_000 : 60_000)); timer.unref()
   const ops = {
@@ -559,7 +559,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     },
     costs: () => spendGuard.costs(),
     // fundingImport MCP tool: credit a tx paying the fee address into the
-    // reserve without a restart (same path as MAMEM_FUND_TXIDS)
+    // reserve without a restart (same path as NEKTAR_FUND_TXIDS)
     importFunding: async (txid: string) => {
       const added = await importFundingTx(mc, txid, pkhHex)
       for (const u of added) addIfNew(u)

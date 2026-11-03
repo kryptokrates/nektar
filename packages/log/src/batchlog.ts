@@ -2,8 +2,8 @@
 // closeBatch() cuts a batch (merkle root R_n) and returns leaves+proofs so the
 // anchor package can put one anchor tx on-chain per batch.
 import { PrivateKey, Signature } from '@bsv/sdk'
-import { computeLeaf, identityHash, merkleRoot, merkleProof, concat, utf8, toHex, sha256, serializeFragment, type Bytes, type Fragment } from '@mamem/core'
-import { TAG_PROMISE } from '@mamem/core'
+import { computeLeaf, identityHash, merkleRoot, merkleProof, concat, utf8, toHex, sha256, serializeFragment, type Bytes, type Fragment } from '@nektar/core'
+import { TAG_PROMISE } from '@nektar/core'
 import type { LogRecord, ShardStore } from './store.js'
 
 export interface InclusionPromise {

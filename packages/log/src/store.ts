@@ -1,6 +1,6 @@
 // Shard stores: append-only per-shard record of fragments and their lifecycle.
-import type { Bytes } from '@mamem/core'
-import type { Fragment } from '@mamem/core'
+import type { Bytes } from '@nektar/core'
+import type { Fragment } from '@nektar/core'
 
 export type LeafState = 'draft' | 'committed' | 'anchored'
 

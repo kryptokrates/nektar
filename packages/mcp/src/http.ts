@@ -2,7 +2,7 @@
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import type { MamemMemory } from './memory.js'
+import type { NektarMemory } from './memory.js'
 import { TOOLS, visibleTools, callTool } from './server.js'
 import { receiptToken } from './receipt.js'
 
@@ -10,7 +10,7 @@ const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint'
 
 export const OPENAPI = {
   openapi: '3.1.0',
-  info: { title: 'mamem API', version: '1.0.0', description: 'Verifiable encrypted agent memory on BSV. Proofs establish inclusion, integrity and existence-by-time — never truth.' },
+  info: { title: 'nektar API', version: '1.0.0', description: 'Verifiable encrypted agent memory on BSV. Proofs establish inclusion, integrity and existence-by-time — never truth.' },
   paths: {
     '/mcp': {
       post: { summary: 'MCP Streamable HTTP (JSON-RPC; initialize creates a session, mcp-session-id header thereafter)', responses: { 200: { description: 'JSON or SSE stream' } } },
@@ -38,26 +38,26 @@ export const OPENAPI = {
     '/v1/checkpoint/{shard}': {
       get: { summary: 'latest signed checkpoint of the shard (LOG-007)', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'checkpoint + log pubkey' }, 404: { description: 'no anchor yet' } } }
     },
-    '/.well-known/mamem': { get: { summary: 'capability/pack discovery doc — verify base + offerable public shards (MAMEM_PACK_SHARE=0 disables)', responses: { 200: { description: 'discovery doc' }, 404: { description: 'pack sharing disabled' } } } },
+    '/.well-known/nektar': { get: { summary: 'capability/pack discovery doc — verify base + offerable public shards (NEKTAR_PACK_SHARE=0 disables)', responses: { 200: { description: 'discovery doc' }, 404: { description: 'pack sharing disabled' } } } },
     '/v1/pack/{shard}': { get: { summary: 'serve a public shard as a portable pack (records + proof bundles) — importShard re-verifies every bundle; private/gated shards refuse', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'ShardPack JSON' }, 403: { description: 'private or level-gated' }, 404: { description: 'unknown/disabled' } } } },
     '/v1/verify': {
       get: {
         summary: 'scan a receipt token — traffic-light checks that the answer receipt exists, re-hashes, is provenance-signed + anchored, and its cited fragments are anchored. JSON by default; Accept: text/html (or ?format=html) returns a check page with a QR.',
-        parameters: [{ name: 'r', in: 'query', required: true, schema: { type: 'string', description: 'receipt token mamemr1.<base64url hash>' } }],
+        parameters: [{ name: 'r', in: 'query', required: true, schema: { type: 'string', description: 'receipt token nektarr1.<base64url hash>' } }],
         responses: { 200: { description: 'check list + ok flag' }, 400: { description: 'missing/malformed token' } }
       }
     },
     '/v1/badge': {
       get: {
         summary: 'verification label as an SVG badge — clients embed it so the verdict is always visible (green verified / red failed / grey unknown)',
-        parameters: [{ name: 'r', in: 'query', required: true, schema: { type: 'string', description: 'receipt token mamemr1.<base64url hash>' } }],
+        parameters: [{ name: 'r', in: 'query', required: true, schema: { type: 'string', description: 'receipt token nektarr1.<base64url hash>' } }],
         responses: { 200: { description: 'image/svg+xml badge' }, 400: { description: 'missing/malformed token' } }
       }
     },
     '/.well-known/x402': { get: { summary: 'payment catalog — priced tools, scheme and network (x402 discovery doc)', responses: { 200: { description: 'catalog' }, 404: { description: 'payments disabled' } } } },
     '/v1/pay/quote': {
       get: {
-        summary: 'payment invoice for a paid tool (MAMEM_PAYMENTS=1) — 402 + PAYMENT-REQUIRED header carrying an x402 v2 PaymentRequired; pay the invoice with a signed tx then retry the tool with payment:{invoiceId,transaction}',
+        summary: 'payment invoice for a paid tool (NEKTAR_PAYMENTS=1) — 402 + PAYMENT-REQUIRED header carrying an x402 v2 PaymentRequired; pay the invoice with a signed tx then retry the tool with payment:{invoiceId,transaction}',
         parameters: [{ name: 'tool', in: 'query', required: true, schema: { type: 'string', enum: ['anchor', 'groundedAnswer', 'commitReceipt'] } }],
         responses: { 402: { description: 'PaymentRequired invoice' }, 404: { description: 'payments disabled' } }
       }
@@ -74,7 +74,7 @@ async function body (req: IncomingMessage): Promise<unknown> {
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
 }
 
-export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<unknown>, costs: () => unknown, importFunding?: (txid: string) => Promise<unknown> }): Server {
+export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<unknown>, costs: () => unknown, importFunding?: (txid: string) => Promise<unknown> }): Server {
   // MCP Streamable HTTP: one transport + McpServer per session (mcp-session-id)
   const sessions = new Map<string, import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport>()
   const mcp = async (req: IncomingMessage, res: import('node:http').ServerResponse) => {
@@ -96,14 +96,14 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
     const send = (code: number, v: unknown, type = 'application/json') => { res.writeHead(code, { 'content-type': type }); res.end(typeof v === 'string' ? v : json(v)) }
     const url = new URL(req.url ?? '/', 'http://x')
     const p = url.pathname.split('/').filter(Boolean)
-    // MAMEM_HTTP_TOKEN: when set, everything except the public read-only
+    // NEKTAR_HTTP_TOKEN: when set, everything except the public read-only
     // endpoints (/v1/health, /v1/verify — a QR scan can't send headers, and
     // verification output is read-only anyway — plus /.well-known/x402,
     // which is a discovery doc agents must find unauthenticated) requires a
     // bearer token — the gate that makes a public bind safe. Unset =
     // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
-    const tok = process.env.MAMEM_HTTP_TOKEN
-    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname === '/.well-known/mamem' || url.pathname.startsWith('/v1/pack/') || url.pathname.startsWith('/v1/zkproof/')
+    const tok = process.env.NEKTAR_HTTP_TOKEN
+    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname === '/.well-known/nektar' || url.pathname.startsWith('/v1/pack/') || url.pathname.startsWith('/v1/zkproof/')
     if (tok && !publicPath && req.headers.authorization !== `Bearer ${tok}`) {
       return send(401, { error: 'unauthorized' })
     }
@@ -147,15 +147,15 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
           }
           const result = await verifyReceipt(mem, arg)
           if (url.searchParams.get('format') === 'html' || req.headers.accept?.includes('text/html')) {
-            const base = process.env.MAMEM_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
+            const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
             const q = tok ? `r=${tok}` : `s=${seq}`
-            mem.metrics.inc('mamem_verify_views_total', {}, 1, 'verify page views')
+            mem.metrics.inc('nektar_verify_views_total', {}, 1, 'verify page views')
             // viral edge: cited shards this operator offers publicly become
             // a one-line import CTA — "take the memory behind this answer"
             const offerable = new Set(await mem.publicShards().catch(() => [] as string[]))
             const cited = [...new Set(((result.receipt as { fragmentRefs?: Array<{ shard: string }> } | undefined)?.fragmentRefs ?? []).map(f => f.shard).filter(s => offerable.has(s)))]
             return send(200, await verifyPage(result, `${base}/v1/verify?${q}&format=html`,
-              { base, importShards: cited, totals: { views: mem.metrics.value('mamem_verify_views_total'), anchors: mem.metrics.value('mamem_anchors_total') },
+              { base, importShards: cited, totals: { views: mem.metrics.value('nektar_verify_views_total'), anchors: mem.metrics.value('nektar_anchors_total') },
                 operator: mem.fundingStatus().address }), 'text/html; charset=utf-8')
           }
           return send(200, result)
@@ -178,24 +178,24 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
       }
       if (req.method === 'GET' && url.pathname === '/.well-known/x402') {
         const { paymentsEnabled, PAID_TOOLS, priceFor } = await import('./pay.js')
-        if (!paymentsEnabled()) return send(404, { error: 'payments disabled (MAMEM_PAYMENTS=1)' })
-        const n = process.env.MAMEM_NETWORK ?? 'mock'
+        if (!paymentsEnabled()) return send(404, { error: 'payments disabled (NEKTAR_PAYMENTS=1)' })
+        const n = process.env.NEKTAR_NETWORK ?? 'mock'
         return send(200, {
           x402Version: 2,
           scheme: 'exact',
           network: n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:mock',
-          resources: [...PAID_TOOLS].map(t => ({ url: `tool://${t}`, description: `mamem ${t}`, priceSats: priceFor(t), payVia: `call ${t} without payment → invoice in the result, or GET /v1/pay/quote?tool=${t}` }))
+          resources: [...PAID_TOOLS].map(t => ({ url: `tool://${t}`, description: `nektar ${t}`, priceSats: priceFor(t), payVia: `call ${t} without payment → invoice in the result, or GET /v1/pay/quote?tool=${t}` }))
         })
       }
       // pack sharing: any visitor may fetch a public shard's pack + discover
       // what's offered — the viral cold-start edge (importShard re-verifies
-      // every bundle, so serving adds zero trust). MAMEM_PACK_SHARE=0 opts out.
-      if (req.method === 'GET' && url.pathname === '/.well-known/mamem') {
-        if (/^(0|false|no)$/i.test(process.env.MAMEM_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (MAMEM_PACK_SHARE=0)' })
-        const base = process.env.MAMEM_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
+      // every bundle, so serving adds zero trust). NEKTAR_PACK_SHARE=0 opts out.
+      if (req.method === 'GET' && url.pathname === '/.well-known/nektar') {
+        if (/^(0|false|no)$/i.test(process.env.NEKTAR_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
+        const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
         const pub = await mem.publicShards()
         return send(200, {
-          v: 1, kind: 'mamem-discovery', verifyBase: `${base}/v1/verify`,
+          v: 1, kind: 'nektar-discovery', verifyBase: `${base}/v1/verify`,
           publicShards: await Promise.all(pub.map(async s => ({
             shard: s, records: (await mem.records(s)).length,
             packUrl: `${base}/v1/pack/${encodeURIComponent(s)}`,
@@ -204,10 +204,10 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
         })
       }
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'pack' && p.length === 3) {
-        if (/^(0|false|no)$/i.test(process.env.MAMEM_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (MAMEM_PACK_SHARE=0)' })
+        if (/^(0|false|no)$/i.test(process.env.NEKTAR_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
         try {
           const pack = await mem.exportShardPack(decodeURIComponent(p[2]!))
-          mem.metrics.inc('mamem_packs_served_total', {}, 1, 'public shard packs served')
+          mem.metrics.inc('nektar_packs_served_total', {}, 1, 'public shard packs served')
           return send(200, pack)
         } catch (e) {
           const m = (e as Error).message
@@ -216,7 +216,7 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
       }
       if (req.method === 'GET' && url.pathname === '/v1/pay/quote') {
         const { paymentsEnabled, PAID_TOOLS, paymentRequired } = await import('./pay.js')
-        if (!paymentsEnabled()) return send(404, { error: 'payments disabled (MAMEM_PAYMENTS=1)' })
+        if (!paymentsEnabled()) return send(404, { error: 'payments disabled (NEKTAR_PAYMENTS=1)' })
         const tool = url.searchParams.get('tool') ?? 'groundedAnswer'
         if (!PAID_TOOLS.has(tool)) return send(400, { error: `not a paid tool: ${tool}` })
         const pr = paymentRequired(tool)
@@ -244,7 +244,7 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
 function badgeSvg (value: string, color: string): string {
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const lw = 52, vw = Math.max(60, value.length * 6.5 + 14)
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${lw + vw}" height="20" role="img" aria-label="mamem: ${esc(value)}"><title>mamem: ${esc(value)}</title><rect width="${lw}" height="20" fill="#555" rx="3"/><rect x="${lw}" width="${vw}" height="20" fill="${color}" rx="3"/><rect x="${lw}" width="4" height="20" fill="${color}"/><g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11"><text x="${lw / 2}" y="14">mamem</text><text x="${lw + vw / 2}" y="14">${esc(value)}</text></g></svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${lw + vw}" height="20" role="img" aria-label="nektar: ${esc(value)}"><title>nektar: ${esc(value)}</title><rect width="${lw}" height="20" fill="#555" rx="3"/><rect x="${lw}" width="${vw}" height="20" fill="${color}" rx="3"/><rect x="${lw}" width="4" height="20" fill="${color}"/><g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11"><text x="${lw / 2}" y="14">nektar</text><text x="${lw + vw / 2}" y="14">${esc(value)}</text></g></svg>`
 }
 
 async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown, anchorTxid?: string }, pageUrl: string, ctx?: { base: string, importShards: string[], totals: { views: number, anchors: number }, operator?: string }): Promise<string> {
@@ -252,7 +252,7 @@ async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<
   const QR = await import('qrcode')
   const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 180 })
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const net = process.env.MAMEM_NETWORK ?? 'mock'
+  const net = process.env.NEKTAR_NETWORK ?? 'mock'
   const netLabel = net === 'main' ? 'BSV mainnet — real coins' : net === 'ttn' ? 'BSV public testnet — real transactions, test coins' : net === 'regtest' ? 'local Teranode regtest' : 'simulated chain — demo only'
   const icon = (o: boolean | 'info' | 'skip') => o === true ? '✓' : o === false ? '✗' : '·'
   const cls = (o: boolean | 'info' | 'skip') => o === true ? 'ok' : o === false ? 'bad' : 'info'
@@ -288,7 +288,7 @@ async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<
   const explorer = net === 'main' ? 'https://whatsonchain.com' : net === 'stn' ? 'https://stn.whatsonchain.com' : net === 'ttn' || net === 'test' ? 'https://test.whatsonchain.com' : null
   const anchorUrl = explorer && r.anchorTxid ? `${explorer}/tx/${r.anchorTxid}` : null
   return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>${r.ok ? '✓ verified answer' : '✗ receipt failed'}${rec?.answer ? ` — ${esc(rec.answer.slice(0, 60))}` : ''}</title>
-<meta property="og:title" content="${r.ok ? '✓ verified answer receipt' : '✗ receipt failed verification'} — mamem">
+<meta property="og:title" content="${r.ok ? '✓ verified answer receipt' : '✗ receipt failed verification'} — nektar">
 <meta property="og:description" content="${esc(ogDesc)}">
 <meta property="og:type" content="website"><meta property="og:url" content="${esc(pageUrl)}">
 <meta name="twitter:card" content="summary">
@@ -314,13 +314,13 @@ details{margin:16px 0;color:#8b949e}summary{cursor:pointer;font-size:13px}detail
   : 'Something in this receipt did not check out — see the ✗ lines below.'}</div>
 ${rec?.answer !== undefined ? `<div class=ans>${esc(rec.answer)}</div>` : ''}
 <button class=sharebtn id=sharebtn>Share this verification</button>
-<script>document.getElementById('sharebtn').onclick=async function(){var u=${JSON.stringify(pageUrl.replace('&format=html',''))};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'verified answer — mamem',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
+<script>document.getElementById('sharebtn').onclick=async function(){var u=${JSON.stringify(pageUrl.replace('&format=html',''))};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'verified answer — nektar',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
 <img src="${qr}" alt="scan to re-verify"><div class=qrcap>scan to re-check</div>
 ${anchorUrl ? `<div class=qrcap><a href="${anchorUrl}" target=_blank rel=noopener>view the anchor transaction ↗</a></div>` : ''}
 <details${r.ok ? '' : ' open'}><summary>details · ${r.checks.filter(c => c.ok === true).length}/${r.checks.filter(c => c.ok !== 'info' && c.ok !== 'skip').length} checks</summary><div>
 <ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(title(c.name))}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
 ${meta ? `<div class=meta>${meta}</div>` : ''}
-<code class=md>${esc('git clone https://github.com/nedzof/merkle-automaton && pnpm mcp:install')}</code>
+<code class=md>${esc('git clone https://github.com/nedzof/nektar && pnpm mcp:install')}</code>
 ${badgeMd ? `<code class=md>${esc(badgeMd)}</code>` : ''}
 </div></details>
 </body></html>`

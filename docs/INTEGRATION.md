@@ -1,6 +1,6 @@
-# Using mamem from AI tools
+# Using nektar from AI tools
 
-mamem is an **MCP server**, built on the official SDK. It exposes 12 tools, resources (`mamem://record/{shard}/{seq}`, `mamem://checkpoint/{shard}`) and prompts (`grounded-answer`, `remember-with-source`, `audit-answer`). It also sends server instructions that tell the model to recall before answering, remember facts with their source, cite proofs, and never claim truth.
+nektar is an **MCP server**, built on the official SDK. It exposes 12 tools, resources (`nektar://record/{shard}/{seq}`, `nektar://checkpoint/{shard}`) and prompts (`grounded-answer`, `remember-with-source`, `audit-answer`). It also sends server instructions that tell the model to recall before answering, remember facts with their source, cite proofs, and never claim truth.
 
 ```mermaid
 flowchart LR
@@ -10,8 +10,8 @@ flowchart LR
     lm["local model (Docker Model Runner / Ollama)"]
     app["your app (HTTP / OpenAPI)"]
   end
-  gw["Docker MCP Gateway (profile: mamem)"]
-  srv["mamem MCP server (container, /data volume)"]
+  gw["Docker MCP Gateway (profile: nektar)"]
+  srv["nektar MCP server (container, /data volume)"]
   bsv[("BSV: mock | regtest")]
   cd & cu --> gw --> srv
   lm -- "chat.mjs (MCP client)" --> srv
@@ -22,14 +22,14 @@ flowchart LR
 ## 1. Recommended: Docker Desktop MCP Toolkit (one install, every client)
 
 ```sh
-pnpm mcp:install                              # build image, create profile "mamem", add the server
+pnpm mcp:install                              # build image, create profile "nektar", add the server
 pnpm mcp:install claude-desktop cursor vscode # …and connect clients
 pnpm mcp:smoke                                # remember → anchor → prove THROUGH the gateway
 ```
 
 - Supported clients for `docker mcp client connect`: claude-code, claude-desktop, cline, codex, continue, crush, cursor, gemini, goose, gordon, kiro, lmstudio, opencode, sema4, vscode, zed.
-- For any other client, configure the command `docker` with args `["mcp","gateway","run","--profile","mamem"]`.
-- The server runs **long-lived** in a sandboxed container (`--security-opt no-new-privileges`, 1 CPU, 2 GB), with data in the `mamem-data` volume.
+- For any other client, configure the command `docker` with args `["mcp","gateway","run","--profile","nektar"]`.
+- The server runs **long-lived** in a sandboxed container (`--security-opt no-new-privileges`, 1 CPU, 2 GB), with data in the `nektar-data` volume.
 - The default backend is the offline mock chain, which needs zero setup. For a real chain, see §5.
 
 ### Docker + real chain (regtest)
@@ -37,13 +37,13 @@ pnpm mcp:smoke                                # remember → anchor → prove TH
 ```sh
 pnpm stack:up                              # Teranode regtest
 node packages/mcp/dist/src/init.js --network=regtest   # wallet: key → .env, funding check
-pnpm mcp:install --regtest claude-desktop  # profile "mamem_regtest"
-MAMEM_PROFILE=mamem_regtest pnpm mcp:smoke
+pnpm mcp:install --regtest claude-desktop  # profile "nektar_regtest"
+NEKTAR_PROFILE=nektar_regtest pnpm mcp:smoke
 ```
 
 - The funding WIF and RPC password are read from the gitignored `.env` files and stored in the **Docker MCP keychain** (`docker mcp secret set`, via stdin, never printed).
 - The container reaches Teranode via `host.docker.internal`.
-- Data lives in the `mamem-regtest-data` volume.
+- Data lives in the `nektar-regtest-data` volume.
 - Verified:
   - session 1: `remembered seq=0`, anchored n=0, `prove ok` against real headers;
   - session 2 (a new gateway, new container): `remembered seq=1; anchored n=1`, `prove ok`. The shard chain continued from the persisted head.
@@ -52,15 +52,15 @@ MAMEM_PROFILE=mamem_regtest pnpm mcp:smoke
 ## 2. Direct stdio (no Docker)
 
 ```json
-{ "mcpServers": { "mamem": { "command": "node", "args": ["C:/path/to/mamem/packages/mcp/dist/src/bin.js"], "env": { "MAMEM_MODEL_ID": "claude-sonnet-4-5 (Anthropic API)" } } } }
+{ "mcpServers": { "nektar": { "command": "node", "args": ["C:/path/to/nektar/packages/mcp/dist/src/bin.js"], "env": { "NEKTAR_MODEL_ID": "claude-sonnet-4-5 (Anthropic API)" } } } }
 ```
 
-Claude Desktop: `claude_desktop_config.json`. Claude Code: `claude mcp add mamem -- node <path>/bin.js`. Cursor/Windsurf: their MCP settings, with the same command.
-Set `MAMEM_MODEL_ID` to the exact model release, because receipts bind it (AGT-011).
+Claude Desktop: `claude_desktop_config.json`. Claude Code: `claude mcp add nektar -- node <path>/bin.js`. Cursor/Windsurf: their MCP settings, with the same command.
+Set `NEKTAR_MODEL_ID` to the exact model release, because receipts bind it (AGT-011).
 
 ### Receipts that scan themselves (Claude Code)
 
-`groundedAnswer`/`commitReceipt` return `receiptToken` (`mamemr1.…`) +
+`groundedAnswer`/`commitReceipt` return `receiptToken` (`nektarr1.…`) +
 `verifyUrl`. The agent ends its answer with them; anyone hits
 `/v1/verify?r=` — JSON checks, or a page with a QR (`?format=html` or a
 browser's Accept header). A Claude Code **Stop hook** can verify every
@@ -73,10 +73,10 @@ boundary: [integrations/claude-code/README.md](../integrations/claude-code/READM
 ```sh
 docker model pull ai/qwen3            # or any tool-calling model
 pnpm chat "What torque does drain port 4 need?"
-MAMEM_LLM_URL=http://localhost:11434/v1 MAMEM_LLM_MODEL=qwen3 pnpm chat "…"   # Ollama
+NEKTAR_LLM_URL=http://localhost:11434/v1 NEKTAR_LLM_MODEL=qwen3 pnpm chat "…"   # Ollama
 ```
 
-- `chat.mjs` runs the mamem MCP server and gives the model the core tools (`MAMEM_CHAT_TOOLS=all` for every tool), using the server's instructions as the system prompt.
+- `chat.mjs` runs the nektar MCP server and gives the model the core tools (`NEKTAR_CHAT_TOOLS=all` for every tool), using the server's instructions as the system prompt.
 - Tool calls are validated: unknown tool names and invalid JSON go back to the model as errors.
 - `chat.mjs` streams responses, so slow CPU models don't hit fetch's header timeout.
 - **Measured on this machine (CPU only; Docker Desktop 4.97, llama.cpp `b9879-cpu`):**
@@ -88,15 +88,15 @@ MAMEM_LLM_URL=http://localhost:11434/v1 MAMEM_LLM_MODEL=qwen3 pnpm chat "…"   
 | `ai/qwen3:0.6B` | fast; with streaming it makes real `remember` calls, but answers poorly |
 | `ai/qwen3.8-flash-next:q8_0` | still rejected even by llama.cpp `b9879`: `unknown model architecture: 'qwen4exp'` (an experimental architecture not yet in llama.cpp) |
 
-- **OpenAI.** Run `MAMEM_LLM_PROVIDER=openai pnpm chat "…"`. The default model is `gpt-4.1-mini`; override it with `MAMEM_LLM_MODEL`. The key is read from `OPENAI_API_KEY` in the environment or in the gitignored `mamem/.env`, never from the command line.
+- **OpenAI.** Run `NEKTAR_LLM_PROVIDER=openai pnpm chat "…"`. The default model is `gpt-4.1-mini`; override it with `NEKTAR_LLM_MODEL`. The key is read from `OPENAI_API_KEY` in the environment or in the gitignored `nektar/.env`, never from the command line.
   - Verified run (about 9 s): `remember` ×2 → `recall` seq 0 → `prove` seq 0.
   - The model answered "45 Nm, shard manual seq 0". It reported correctly that the record was committed but **not yet anchored** (the batch hadn't closed), and added the truth caveat.
-- **Port check.** Docker Desktop's Model Runner must be reachable over TCP: `docker desktop enable model-runner --tcp=12435`. On this machine port 12434 belonged to a separate runner inside WSL with an older model store, which made newly pulled models "not found". Use `MAMEM_LLM_URL=http://localhost:12435/engines/v1`.
+- **Port check.** Docker Desktop's Model Runner must be reachable over TCP: `docker desktop enable model-runner --tcp=12435`. On this machine port 12434 belonged to a separate runner inside WSL with an older model store, which made newly pulled models "not found". Use `NEKTAR_LLM_URL=http://localhost:12435/engines/v1`.
 - **Robustness for small models.** The tool schemas describe every parameter (e.g. `level`: omit unless restricted). `recall` with a wrong `seq` returns a hint listing the existing seqs, so the model can correct itself.
 
 ## 4. Custom apps: HTTP
 
-`MAMEM_HTTP_PORT=8080 node packages/mcp/dist/src/bin.js` serves:
+`NEKTAR_HTTP_PORT=8080 node packages/mcp/dist/src/bin.js` serves:
 - `/mcp`: **MCP Streamable HTTP** (sessions via `mcp-session-id`; unknown sessions are refused);
 - `/v1/*`: REST (tools, public proofs, checkpoints, metrics), documented in `/v1/openapi.json`.
 
@@ -108,11 +108,11 @@ OpenAI/Anthropic function-calling apps can call `/v1/tools/{name}` directly.
 
 | env | meaning |
 |---|---|
-| `MAMEM_NETWORK` | `mock` (default) · `regtest` · `testnet` (refused until configured) |
-| `MAMEM_DATA_DIR` | records (sqlite), anchor state, security state, funding reserve, keys (0600). `/data` in the image |
-| `MAMEM_FUND_WIF` / `_FILE` | fee-paying key (regtest: the miner key) |
-| `MAMEM_RPC_PASS` / `_FILE`, `MAMEM_RPC_URL`, `MAMEM_PROPAGATION_URL`, `MAMEM_ASSET_URL` | Teranode endpoints (from a container: `http://host.docker.internal:…`) |
-| `MAMEM_AUTOMINE=1` | regtest only: mine when anchors wait |
+| `NEKTAR_NETWORK` | `mock` (default) · `regtest` · `testnet` (refused until configured) |
+| `NEKTAR_DATA_DIR` | records (sqlite), anchor state, security state, funding reserve, keys (0600). `/data` in the image |
+| `NEKTAR_FUND_WIF` / `_FILE` | fee-paying key (regtest: the miner key) |
+| `NEKTAR_RPC_PASS` / `_FILE`, `NEKTAR_RPC_URL`, `NEKTAR_PROPAGATION_URL`, `NEKTAR_ASSET_URL` | Teranode endpoints (from a container: `http://host.docker.internal:…`) |
+| `NEKTAR_AUTOMINE=1` | regtest only: mine when anchors wait |
 
 **Restart safety:**
 - the server resumes each shard from its persisted head;
@@ -122,15 +122,15 @@ OpenAI/Anthropic function-calling apps can call `/v1/tools/{name}` directly.
 
 ## Agent identity and ZK clearance (level > 0 records)
 
-The model never handles keys or proofs. The **harness** does, using the client kit (`ClientWallet`, `ClearanceAuthority` in `@mamem/mcp`):
+The model never handles keys or proofs. The **harness** does, using the client kit (`ClientWallet`, `ClearanceAuthority` in `@nektar/mcp`):
 
-1. The server trusts the authorities listed in `MAMEM_CLEARANCE_AUTHORITIES` (Docker config `clearance_authorities`).
+1. The server trusts the authorities listed in `NEKTAR_CLEARANCE_AUTHORITIES` (Docker config `clearance_authorities`).
 2. The authority issues a holder-bound credential to the wallet's pubkey.
 3. Per read, the wallet:
    - calls the `challenge` tool and signs the nonce, which proves the caller identity;
    - builds a single-use Bulletproof scoped to `shard/seq`, which proves level ≥ required without revealing the level;
    - sends both as `recall({ shard, seq, identity, zk })`. The wire format is JSON: bigint as a decimal string, bytes as hex.
-4. `chat.mjs` with `MAMEM_CHAT_CLEARANCE=<level>` does this transparently whenever a recall comes back `zkaccess required`.
+4. `chat.mjs` with `NEKTAR_CHAT_CLEARANCE=<level>` does this transparently whenever a recall comes back `zkaccess required`.
 
 **Rejected, each with a specific reason:**
 - no clearance;
@@ -149,7 +149,7 @@ The real MCP server process, driven by the SDK client exactly like an AI client.
 - **Bulletproof clearance** with all the negatives above;
 - a restart on the same data dir: the next anchor spends the persisted head, replay is still rejected, and a stored credential still works.
 
-16/16 checks, **3 consecutive passes** over stdio. The same flow through the **Docker MCP Gateway** (`MAMEM_E2E_GATEWAY=mamem_regtest`) also passes 16/16; Groth16 proving takes about 6 s in the 1-CPU container, against 1.5 s natively.
+16/16 checks, **3 consecutive passes** over stdio. The same flow through the **Docker MCP Gateway** (`NEKTAR_E2E_GATEWAY=nektar_regtest`) also passes 16/16; Groth16 proving takes about 6 s in the 1-CPU container, against 1.5 s natively.
 
 **Model-driven run (OpenAI `gpt-4.1-mini`, regtest, harness clearance level 3):**
 - `remember` ×2 (one at level 2) → `anchor` → `recall` (the harness attached ZK clearance → `verified`) → `prove` ×2;
@@ -162,8 +162,8 @@ The real MCP server process, driven by the SDK client exactly like an AI client.
 
 ## Verified end to end
 
-- **Devin CLI as the MCP client, through the Docker MCP Gateway.** Config `.devin/mcp_config.local.json` → `docker mcp gateway run --profile mamem`. Results:
-  - 12 mamem tools listed next to the gateway's own;
+- **Devin CLI as the MCP client, through the Docker MCP Gateway.** Config `.devin/mcp_config.local.json` → `docker mcp gateway run --profile nektar`. Results:
+  - 12 nektar tools listed next to the gateway's own;
   - `remember` ×3 (one record at level 2), then `anchor`;
   - `recall` returns the two level-0 records and **withholds** the level-2 one (`zkaccess required`, no plaintext and no ciphertext);
   - the receipt cites shard/seq/anchor and carries the truth note;

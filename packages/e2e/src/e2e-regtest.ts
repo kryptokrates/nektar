@@ -1,23 +1,23 @@
-// Reduced live-regtest E2E (MAMEM_NETWORK=regtest):
-// fresh coinbase → split → MamemMemory story + correction → ~20 anchors →
+// Reduced live-regtest E2E (NEKTAR_NETWORK=regtest):
+// fresh coinbase → split → NektarMemory story + correction → ~20 anchors →
 // mine → overlay admit with the real ChainTracker → verifyFragment on real
 // headers (BUMP via merklePathFor/block_legacy).
 import { PrivateKey, Transaction, MerklePath } from '@bsv/sdk'
 import { P2PKH } from '@bsv/sdk'
-import { utf8, dsha256, toHex, hash160 } from '@mamem/core'
+import { utf8, dsha256, toHex, hash160 } from '@nektar/core'
 const dsha256utf8 = (s: string) => dsha256(utf8(s))
-import { MamemMemory } from '@mamem/mcp'
-import { createMamemOverlay } from '@mamem/overlay'
-import { verifyFragment } from '@mamem/verify'
-import { AnchorChain } from '@mamem/anchor'
-import { decodeMamemAnchor } from '@mamem/contracts'
-import { TeranodeBroadcaster, TeranodeRPCTracker, merklePathFor, merklePathAtHeight, parseLegacyBlock, type RegtestConfig } from '@mamem/chain'
+import { NektarMemory } from '@nektar/mcp'
+import { createNektarOverlay } from '@nektar/overlay'
+import { verifyFragment } from '@nektar/verify'
+import { AnchorChain } from '@nektar/anchor'
+import { decodeNektarAnchor } from '@nektar/contracts'
+import { TeranodeBroadcaster, TeranodeRPCTracker, merklePathFor, merklePathAtHeight, parseLegacyBlock, type RegtestConfig } from '@nektar/chain'
 
 let failures = 0
 const check = (cond: boolean, name: string) => { console.log(`${cond ? '✔' : '✖'} ${name}`); if (!cond) failures++ }
 
-// Load secrets from gitignored env files (never printed): mamem/.env holds
-// MAMEM_REGTEST_WIF; the teranode quickstart .env holds rpc_user/rpc_pass.
+// Load secrets from gitignored env files (never printed): nektar/.env holds
+// NEKTAR_REGTEST_WIF; the teranode quickstart .env holds rpc_user/rpc_pass.
 import { existsSync, readFileSync } from 'node:fs'
 function readEnv (p: URL): Record<string, string> {
   const out: Record<string, string> = {}
@@ -30,16 +30,16 @@ function readEnv (p: URL): Record<string, string> {
 }
 const localEnv = readEnv(new URL('../../../../.env', import.meta.url))
 const qsEnv = readEnv(new URL('../../../../infra/teranode-quickstart/.env', import.meta.url))
-const WIF = process.env.MAMEM_REGTEST_WIF ?? localEnv.MAMEM_REGTEST_WIF
-if (!WIF) throw new Error('MAMEM_REGTEST_WIF missing: set it in mamem/.env')
+const WIF = process.env.NEKTAR_REGTEST_WIF ?? localEnv.NEKTAR_REGTEST_WIF
+if (!WIF) throw new Error('NEKTAR_REGTEST_WIF missing: set it in nektar/.env')
 const cfg: RegtestConfig = {
-  rpcUrl: process.env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-  rpcUser: process.env.MAMEM_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
-  rpcPass: process.env.MAMEM_RPC_PASS ?? qsEnv.rpc_pass ?? '',
-  propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-  assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
+  rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+  rpcUser: process.env.NEKTAR_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
+  rpcPass: process.env.NEKTAR_RPC_PASS ?? qsEnv.rpc_pass ?? '',
+  propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+  assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
 }
-if (!cfg.rpcPass) throw new Error('rpc_pass missing: set it in infra/teranode-quickstart/.env or MAMEM_RPC_PASS')
+if (!cfg.rpcPass) throw new Error('rpc_pass missing: set it in infra/teranode-quickstart/.env or NEKTAR_RPC_PASS')
 const tracker = new TeranodeRPCTracker(cfg)
 const broadcaster = new TeranodeBroadcaster(cfg.propagationUrl)
 const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
@@ -57,7 +57,7 @@ const addr = key.toPublicKey().toAddress([0x6f])
 // Each run splits it into ~120 fresh 50k-sat outputs + a NEW treasury output,
 // mines the split, and persists the new treasury immediately after acceptance.
 // This run's reserve is only those fresh outputs — nothing from earlier runs.
-import { ReserveFunder } from '@mamem/chain'
+import { ReserveFunder } from '@nektar/chain'
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
 // Two separate files: the treasury (the ONLY state carried across runs) and
 // the per-run reserve pool, which is recreated empty on every run so stale
@@ -154,7 +154,7 @@ const funder: any = {
 const burstPool = reserve.utxos.slice(40) // own half of the pool
 
 // real chain facade: broadcast→propagation, tracker→asset/rpc; stubs for the
-// mock-only bits MamemMemory/overlay may touch
+// mock-only bits NektarMemory/overlay may touch
 const chain: any = {
   broadcast: (tx: Transaction) => broadcaster.broadcast(tx),
   mempool: new Map(),
@@ -192,7 +192,7 @@ console.log('— story + correction —')
 // shard key = fund key: funding UTXOs are P2PKH-locked to `key`, and
 // LocalSigner signs the funding inputs with the shard key
 const shardKeys = new Map([['manual', key]])
-const mem = new MamemMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 2 }, modelId: 'reg-e2e', shardKeys })
+const mem = new NektarMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 2 }, modelId: 'reg-e2e', shardKeys })
 await mem.remember('manual', 'drain port 4 torque 45Nm')
 await mem.anchorShard('manual')
 const corr = await mem.remember('manual', 'CORRECTION: torque is 42Nm (supersedes seq 0)')
@@ -228,13 +228,13 @@ console.log('— rotate —')
 const newOwner = PrivateKey.fromRandom()
 const rot = await burst.rotate(newOwner)
 await rpc('generatetoaddress', 1, addr)
-const rotDec = decodeMamemAnchor(rot.tx.outputs[0]!.lockingScript.toHex())!
-check(rotDec.n === 19 && rotDec.shard === decodeMamemAnchor(burst.getHead()!.tx.outputs[0]!.lockingScript.toHex())!.shard,
+const rotDec = decodeNektarAnchor(rot.tx.outputs[0]!.lockingScript.toHex())!
+check(rotDec.n === 19 && rotDec.shard === decodeNektarAnchor(burst.getHead()!.tx.outputs[0]!.lockingScript.toHex())!.shard,
   `rotate broadcast+mined: n=${rotDec.n} shard stable ${rotDec.shard.slice(0, 16)}`)
 
 // --- overlay admit with the real tracker -----------------------------------
 console.log('— overlay admit —')
-const ov = await createMamemOverlay(tracker, chain)
+const ov = await createNektarOverlay(tracker, chain)
 const tails: Map<string, any[]> = (mem as any).tails
 const txs: Map<string, Transaction> = (mem as any).anchorTxs
 const prev: Record<string, string | undefined> = {}
@@ -258,8 +258,8 @@ for (const [shard, tail] of tails) {
         if (h) { const m = await merklePathAtHeight(cfg, src.id('hex'), tracker, h); if (m) src.merklePath = new MerklePath(m.blockHeight, m.path) }
       }
     }
-    const s = await ov.engine.submit({ beef: acFor.beefOf(tx), topics: ['tm_mamem'] }, undefined, 'current-tx')
-    check((s.tm_mamem?.outputsToAdmit?.length ?? 0) === 1, `engine admits ${shard} n=${link.n}`)
+    const s = await ov.engine.submit({ beef: acFor.beefOf(tx), topics: ['tm_nektar'] }, undefined, 'current-tx')
+    check((s.tm_nektar?.outputsToAdmit?.length ?? 0) === 1, `engine admits ${shard} n=${link.n}`)
     prev[shard] = link.txid
   }
 }
@@ -298,12 +298,12 @@ if (mp) {
 // --- v2 scenario on regtest -------------------------------------------------
 console.log('— v2 scenario (regtest) —')
 {
-  const { canonicalizePolicySet } = await import('@mamem/policy')
-  const { signBinding, issueChallenge, answerChallenge, issueClearance, proveAccess, verifyAccess, Smt, issueDisclosure, verifyDisclosureAnchored, fieldRoot, fieldPath } = await import('@mamem/identity')
+  const { canonicalizePolicySet } = await import('@nektar/policy')
+  const { signBinding, issueChallenge, answerChallenge, issueClearance, proveAccess, verifyAccess, Smt, issueDisclosure, verifyDisclosureAnchored, fieldRoot, fieldPath } = await import('@nektar/identity')
   const B = PrivateKey.fromRandom(); const pubB = B.toPublicKey().toString()
   const policyText = `permit(principal == Agent::"${toHex(hash160(Buffer.from(pubB, 'hex')))}", action, resource);`
   const ps = canonicalizePolicySet('v2r', policyText)
-  const vm = new MamemMemory(chain, funder as any, key, {
+  const vm = new NektarMemory(chain, funder as any, key, {
     batchPolicy: { maxLeaves: 2 }, shardKeys: new Map([['v2r', key]]),
     policy: { policyText, anchoredPolicySetHash: ps.hash }, agentSeed: key, maxLevel: 2,
     clearanceAuthorities: [key.toPublicKey().toString()]
@@ -357,7 +357,7 @@ console.log('— v2 scenario (regtest) —')
   const REV_TXID = (vm as any).tails.get('__rev__')?.at(-1)?.txid ?? ra?.txid ?? 'unknown'
   check(REV_TXID !== 'unknown', `regtest: revocation root anchored txid=${String(REV_TXID).slice(0, 12)}…`)
   const nip = smt.prove(dsha256(Buffer.from(newOwner.toPublicKey().toString())))
-  const { verifyProof: vsp } = await import('@mamem/identity')
+  const { verifyProof: vsp } = await import('@nektar/identity')
   check(vsp(nip, { present: false }, rootRev) === true, 'regtest: new key non-inclusion vs anchored root')
   // auditor envelope on the anchored 'v2r' fragment: verify, then expiry fails
   const fld = [{ name: 'secret', value: utf8('level-2 secret'), salt: new Uint8Array(32).fill(3) }]
@@ -391,7 +391,7 @@ console.log('— v2 scenario (regtest) —')
 
   // --- P10: ZK membership on a live-anchored regtest batch + transcript leaf ---
   console.log('— P10 zk membership (regtest, STARK) —')
-  if (process.env.MAMEM_E2E_STARK === '0') console.log('  (skipped: MAMEM_E2E_STARK=0)')
+  if (process.env.NEKTAR_E2E_STARK === '0') console.log('  (skipped: NEKTAR_E2E_STARK=0)')
   else try {
     await vm.remember('zkm', 'p10 regtest frag 0', {}, 1)
     await vm.remember('zkm', 'p10 regtest frag 1', {}, 1)
@@ -424,8 +424,8 @@ console.log('— v2 scenario (regtest) —')
 console.log('— v4 AORG / policy DAG (regtest) —')
 {
   try {
-    const { AORGraph, GraphAnchor, PolicyDAG, instanceOf, delegate, verifyInstance } = await import('@mamem/graph')
-    const { parseProgram } = await import('@mamem/datalog')
+    const { AORGraph, GraphAnchor, PolicyDAG, instanceOf, delegate, verifyInstance } = await import('@nektar/graph')
+    const { parseProgram } = await import('@nektar/datalog')
     const cat = parseProgram(`@id r-spec
 spec(S, V) :- requires(P, V), applies(S, P).`).rules
     const g = new AORGraph(cat)
@@ -437,7 +437,7 @@ spec(S, V) :- requires(P, V), applies(S, P).`).rules
     const rf = g.append({ kind: 'refinement', phi: 'spec(port4, 55)', t: { logPos: 5 }, context: ['manual'], sigma: [], refines: d45.h }, [e3.h, e2.h], 'r-spec')
     check(!g.currentView(6).some(v => v.phi === 'spec(port4, 45)'), 'regtest: refinement changes currentView')
     // anchor graph + policy roots on the real chain (fresh memory on the shared chain/funder)
-    const v4m = new MamemMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 10 } })
+    const v4m = new NektarMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 10 } })
     const ga = new GraphAnchor(v4m as any, 'aorg')
     for (const h of [e1.h, e2.h, e3.h, d45.h, rf.h]) await ga.record(h)
     const gtx = await ga.anchor(); await mineOne()
@@ -474,11 +474,11 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules }])
 console.log('— P14 Merkle Automaton (regtest) —')
 {
   try {
-    const { MAMEM_AUTOMATON_ARTIFACT } = await import('@mamem/automaton')
+    const { NEKTAR_AUTOMATON_ARTIFACT } = await import('@nektar/automaton')
     const { automatonCosts } = await import('./automaton-costs.js')
     const def = { Q: ['draft', 'review', 'published'], Sigma: ['submit', 'approve'], delta: [[0, 0, 1], [1, 1, 2]] as [number, number, number][], q0: 0, F: [2], O: ['ok'] }
     const out = Buffer.from(dsha256(utf8('regtest manual published'))).toString('hex')
-    const am = new MamemMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 10 } })
+    const am = new NektarMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 10 } })
     const d = await am.automatonDeploy('lifecycle', def)
     const ac = am.automaton('lifecycle')
     const s1 = await ac.step(0, 1, out)
@@ -492,7 +492,7 @@ console.log('— P14 Merkle Automaton (regtest) —')
     const h = await ac.halt()
     await mineOne()
     check(h.state.halted && h.state.q === 2, 'regtest: automaton draft→review→published, halted on-chain')
-    const c = automatonCosts(MAMEM_AUTOMATON_ARTIFACT, s2.tx)
+    const c = automatonCosts(NEKTAR_AUTOMATON_ARTIFACT, s2.tx)
     console.log(`  AUT-009 lockingScript=${c.scriptBytes}B stepTx=${c.txBytes}B fee=${c.feeSats}sat`)
     console.log(`  TXIDS automaton-deploy=${d.tx.id('hex')} step1=${s1.tx.id('hex')} step2=${s2.tx.id('hex')} halt=${h.tx.id('hex')}`)
   } catch (e) {
@@ -536,7 +536,7 @@ console.log('— v4 production block (regtest) —')
 {
   try {
     const { runV4Block } = await import('./v4-block.js')
-    const settleV4 = async (m: InstanceType<typeof MamemMemory>, shards: string[]) => {
+    const settleV4 = async (m: InstanceType<typeof NektarMemory>, shards: string[]) => {
       await mineOne()
       for (const s of shards) {
         for (const l of m.anchorLinks(s)) {

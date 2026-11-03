@@ -1,42 +1,42 @@
-name: mamem-regtest
-title: mamem on Teranode regtest (persistent)
+name: nektar-regtest
+title: nektar on Teranode regtest (persistent)
 type: server
-image: mamem:local
+image: nektar:local
 description: >-
-  mamem against a local Teranode regtest stack (pnpm stack:up). Records,
+  nektar against a local Teranode regtest stack (pnpm stack:up). Records,
   anchor heads, replay-protection state, funding reserve and keys persist in
-  the mamem-regtest-data volume; restarts continue the same shard chains.
+  the nektar-regtest-data volume; restarts continue the same shard chains.
 longLived: true
 volumes:
-  - mamem-regtest-data:/data
+  - nektar-regtest-data:/data
 secrets:
-  - name: mamem-regtest.fund_wif
-    env: MAMEM_FUND_WIF
+  - name: nektar-regtest.fund_wif
+    env: NEKTAR_FUND_WIF
     example: <regtest miner WIF>
-    description: Fee-paying key (regtest miner key, mamem/.env MAMEM_REGTEST_WIF)
-  - name: mamem-regtest.rpc_pass
-    env: MAMEM_RPC_PASS
+    description: Fee-paying key (regtest miner key, nektar/.env NEKTAR_REGTEST_WIF)
+  - name: nektar-regtest.rpc_pass
+    env: NEKTAR_RPC_PASS
     example: <rpc_pass>
     description: Teranode RPC/asset password (infra/teranode-quickstart/.env rpc_pass)
 env:
-  - name: MAMEM_NETWORK
+  - name: NEKTAR_NETWORK
     value: regtest
-  - name: MAMEM_RPC_URL
+  - name: NEKTAR_RPC_URL
     value: http://host.docker.internal:9292/
-  - name: MAMEM_PROPAGATION_URL
+  - name: NEKTAR_PROPAGATION_URL
     value: http://host.docker.internal:8833/tx
-  - name: MAMEM_ASSET_URL
+  - name: NEKTAR_ASSET_URL
     value: http://host.docker.internal:8090/api/v1
-  - name: MAMEM_RPC_USER
-    value: '{{mamem-regtest.rpc_user}}'
-  - name: MAMEM_AUTOMINE
-    value: '{{mamem-regtest.automine}}'
-  - name: MAMEM_MODEL_ID
-    value: '{{mamem-regtest.model_id}}'
-  - name: MAMEM_CLEARANCE_AUTHORITIES
-    value: '{{mamem-regtest.clearance_authorities}}'
+  - name: NEKTAR_RPC_USER
+    value: '{{nektar-regtest.rpc_user}}'
+  - name: NEKTAR_AUTOMINE
+    value: '{{nektar-regtest.automine}}'
+  - name: NEKTAR_MODEL_ID
+    value: '{{nektar-regtest.model_id}}'
+  - name: NEKTAR_CLEARANCE_AUTHORITIES
+    value: '{{nektar-regtest.clearance_authorities}}'
 config:
-  - name: mamem-regtest
+  - name: nektar-regtest
     description: Teranode regtest connection
     type: object
     properties:

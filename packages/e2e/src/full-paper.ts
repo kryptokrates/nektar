@@ -2,22 +2,22 @@
 // of arXiv:2506.13246 as implemented — run by the offline e2e (mock chain)
 // and the regtest e2e (Teranode) with the same code; only `settle` differs.
 import { PrivateKey, type Transaction } from '@bsv/sdk'
-import { dsha256, utf8, toHex, hash160 } from '@mamem/core'
-import type { Broadcaster, ChainTracker, Funder } from '@mamem/chain'
-import { MamemMemory } from '@mamem/mcp'
-import { canonicalizePolicySet } from '@mamem/policy'
-import { parseProgram } from '@mamem/datalog'
-import { AORGraph, GraphAnchor, PolicyDAG } from '@mamem/graph'
-import { signBinding, answerChallenge, issueClearance, proveAccess, deriveKey, issueDisclosure, verifyDisclosure, fieldRoot, fieldPath, randSalt } from '@mamem/identity'
-import { verifyCombinedStark, type StarkQuery } from '@mamem/zk'
-import { ground, commitReceipt, CitationIndex, onRevision, timeBounds, buildAuditBundle, verifyAuditBundle, modelIdentity, type FragmentFetch, type Claim } from '@mamem/reasoning'
+import { dsha256, utf8, toHex, hash160 } from '@nektar/core'
+import type { Broadcaster, ChainTracker, Funder } from '@nektar/chain'
+import { NektarMemory } from '@nektar/mcp'
+import { canonicalizePolicySet } from '@nektar/policy'
+import { parseProgram } from '@nektar/datalog'
+import { AORGraph, GraphAnchor, PolicyDAG } from '@nektar/graph'
+import { signBinding, answerChallenge, issueClearance, proveAccess, deriveKey, issueDisclosure, verifyDisclosure, fieldRoot, fieldPath, randSalt } from '@nektar/identity'
+import { verifyCombinedStark, type StarkQuery } from '@nektar/zk'
+import { ground, commitReceipt, CitationIndex, onRevision, timeBounds, buildAuditBundle, verifyAuditBundle, modelIdentity, type FragmentFetch, type Claim } from '@nektar/reasoning'
 
 export interface PaperEnv {
   chain: Broadcaster & ChainTracker
   funder: Funder
   fundKey: PrivateKey
   /** mine and make the latest anchor of each shard provable (BUMP + confirm) */
-  settle: (mem: MamemMemory, shards: string[]) => Promise<void>
+  settle: (mem: NektarMemory, shards: string[]) => Promise<void>
   check: (cond: boolean, name: string) => void
   label: string
 }
@@ -33,7 +33,7 @@ permit(P, read, F) :- member(P, verified), level(P, L), fragment(F).`).rules }])
   const dagRoot = toHex(dag.policyRoot())
   const signingKey = PrivateKey.fromRandom()
   const ownerKey = PrivateKey.fromRandom()
-  const mem = new MamemMemory(chain, funder, fundKey, {
+  const mem = new NektarMemory(chain, funder, fundKey, {
     agentSeed: PrivateKey.fromRandom(), maxLevel: 2, batchPolicy: { maxLeaves: 2 }, signingKey,
     shardKeys: new Map([['manual', ownerKey]]),
     policy: { policyText: cedar.text, anchoredPolicySetHash: cedar.hash },
@@ -56,7 +56,7 @@ permit(P, read, F) :- member(P, verified), level(P, L), fragment(F).`).rules }])
   const asB = (seq: number) => {
     const nonce = mem.issueChallenge()
     // ONE verifier-issued query feeds both proofs (§13 dual commitment)
-    const zq = mem.issueZkQuery('mamem-service')
+    const zq = mem.issueZkQuery('nektar-service')
     const q: StarkQuery = { nonce: Uint8Array.from(Buffer.from(zq.nonce, 'hex')), verifierId: zq.verifierId }
     const transcript = { queryId: zq.queryId, fragmentId: `manual/${seq}`, nonce: q.nonce }
     return {
@@ -69,7 +69,7 @@ permit(P, read, F) :- member(P, verified), level(P, L), fragment(F).`).rules }])
   const rB = await mem.recall('manual', { seq: 0, identity: b0.identity, zk: b0.zk })
   check(rB.items[0]?.text === 'requires(torque, 45).' && rB.receipt.zkaccess === 'verified' && rB.receipt.cedar === 'allow' && rB.receipt.dag?.state === 'dag-allow',
     L('B: ZK clearance ≥2 + Cedar ALLOW + Datalog-derived permit → decrypted level-2 record'))
-  if (process.env.MAMEM_E2E_STARK === '0') console.log('  (STARK membership skipped: MAMEM_E2E_STARK=0)')
+  if (process.env.NEKTAR_E2E_STARK === '0') console.log('  (STARK membership skipped: NEKTAR_E2E_STARK=0)')
   else {
     const { bytes } = await mem.proveMembership('manual', 0, b0.queryId)
     const vm = await mem.verifyMembership('manual', 0, bytes)

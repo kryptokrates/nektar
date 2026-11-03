@@ -39,7 +39,7 @@ export class DisclosureSale extends SmartContract {
   }
 
   private p2pkh (pkh: ByteString): ByteString {
-    // see MamemFeeVault — buildP2PKH is declared but not compilable in 0.4.6
+    // see NektarFeeVault — buildP2PKH is declared but not compilable in 0.4.6
     return cat(toByteString('76a914'), cat(pkh, toByteString('88ac')))
   }
 

@@ -4,14 +4,14 @@
 //   real consensus → receipt commits the settlement txid → /v1/verify green.
 // Run:
 //   regtest: node packages/e2e/src/e2e-pay.mjs           (local Teranode stack)
-//   ttn:     MAMEM_NETWORK=ttn node packages/e2e/src/e2e-pay.mjs  (public testnet)
+//   ttn:     NEKTAR_NETWORK=ttn node packages/e2e/src/e2e-pay.mjs  (public testnet)
 import { PrivateKey } from '@bsv/sdk'
 import { configFromEnv, openRuntime } from '../../mcp/dist/src/runtime.js'
 import { createHttpApi } from '../../mcp/dist/src/http.js'
 import { buildPaymentTx } from '../../mcp/dist/src/payclient.js'
 import { existsSync, readFileSync } from 'node:fs'
 
-const net = process.env.MAMEM_NETWORK ?? 'regtest'
+const net = process.env.NEKTAR_NETWORK ?? 'regtest'
 const check = (ok, label) => { console.log(` ${ok ? '✔' : '✗ FAIL'} ${label}`); if (!ok) process.exit(1) }
 
 // regtest connection — same env resolution as the sibling e2e scripts
@@ -28,11 +28,11 @@ const localEnv = { ...readEnvFile(new URL('../../../.env', import.meta.url)), ..
 for (const [k, v] of Object.entries(localEnv)) if (v && process.env[k] === undefined) process.env[k] = v
 const qsEnv = readEnvFile(new URL('../../../infra/teranode-quickstart/.env', import.meta.url))
 const rc = {
-  rpcUrl: process.env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-  rpcUser: process.env.MAMEM_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
-  rpcPass: process.env.MAMEM_RPC_PASS ?? qsEnv.rpc_pass ?? '',
-  propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-  assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
+  rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+  rpcUser: process.env.NEKTAR_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
+  rpcPass: process.env.NEKTAR_RPC_PASS ?? qsEnv.rpc_pass ?? '',
+  propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+  assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
 }
 const rpc = async (method, ...params) => {
   const auth = 'Basic ' + Buffer.from(`${rc.rpcUser}:${rc.rpcPass}`).toString('base64')
@@ -42,18 +42,18 @@ const rpc = async (method, ...params) => {
 
 // ── operator = a fresh key; payments settle to ITS address (never the funder)
 const opKey = PrivateKey.fromRandom()
-process.env.MAMEM_PAYMENTS = '1'
-process.env.MAMEM_OPERATOR_WIF = opKey.toWif([0xef])
+process.env.NEKTAR_PAYMENTS = '1'
+process.env.NEKTAR_OPERATOR_WIF = opKey.toWif([0xef])
 const opAddr = opKey.toPublicKey().toAddress([0x6f])
 
-// ── runtime on its own data dir (never the live server's .mamem)
-process.env.MAMEM_DATA_DIR = process.env.MAMEM_DATA_DIR ?? `.state/mamem-e2e-pay-${net}`
-process.env.MAMEM_NETWORK = net
-if (net === 'regtest' && !existsSync(`${process.env.MAMEM_DATA_DIR}/reserve.json`)) {
-  // seed the reserve from the live server's .mamem — same fund key owns them
+// ── runtime on its own data dir (never the live server's .nektar)
+process.env.NEKTAR_DATA_DIR = process.env.NEKTAR_DATA_DIR ?? `.state/nektar-e2e-pay-${net}`
+process.env.NEKTAR_NETWORK = net
+if (net === 'regtest' && !existsSync(`${process.env.NEKTAR_DATA_DIR}/reserve.json`)) {
+  // seed the reserve from the live server's .nektar — same fund key owns them
   const { mkdirSync, copyFileSync } = await import('node:fs')
-  mkdirSync(process.env.MAMEM_DATA_DIR, { recursive: true })
-  if (existsSync('.mamem/reserve.json')) copyFileSync('.mamem/reserve.json', `${process.env.MAMEM_DATA_DIR}/reserve.json`)
+  mkdirSync(process.env.NEKTAR_DATA_DIR, { recursive: true })
+  if (existsSync('.nektar/reserve.json')) copyFileSync('.nektar/reserve.json', `${process.env.NEKTAR_DATA_DIR}/reserve.json`)
 }
 const rt = await openRuntime(configFromEnv())
 const srv = createHttpApi(rt.mem).listen(0)
@@ -69,18 +69,18 @@ const payerUtxos = []
 if (net === 'regtest') {
   // fund the payer with a REAL tx: spend the fund key's treasury utxo (the
   // refillable split pool) → 50k sats to the payer; falls back to any unspent
-  // .mamem reserve entry. The payer then owns uncontested utxos.
-  const { TeranodeBroadcaster } = await import('@mamem/chain')
+  // .nektar reserve entry. The payer then owns uncontested utxos.
+  const { TeranodeBroadcaster } = await import('@nektar/chain')
   const { Transaction, P2PKH } = await import('@bsv/sdk')
-  const fundKey = PrivateKey.fromWif(process.env.MAMEM_REGTEST_WIF)
+  const fundKey = PrivateKey.fromWif(process.env.NEKTAR_REGTEST_WIF)
   const fundAddr = fundKey.toPublicKey().toAddress([0x6f])
   let srcTx, srcVout
-  const { utxoStatus } = await import('@mamem/chain')
+  const { utxoStatus } = await import('@nektar/chain')
   const usable = async (e) => e && await utxoStatus(rc, e.tx.id('hex'), e.vout) === 'unspent'
   const t = JSON.parse(readFileSync(new URL('../../../.state/treasury.json', import.meta.url), 'utf8')).treasury
   const cand = []
   if (t) cand.push({ tx: Transaction.fromHex(t.txHex), vout: t.vout })
-  const rs = JSON.parse(readFileSync(new URL('../../../.mamem/reserve.json', import.meta.url), 'utf8'))
+  const rs = JSON.parse(readFileSync(new URL('../../../.nektar/reserve.json', import.meta.url), 'utf8'))
   const spent = new Set(rs.spent ?? [])
   for (const e of (rs.entries ?? [])) if (!spent.has(`${e.txid}:${e.vout}`)) cand.push({ tx: Transaction.fromHex(e.txHex), vout: e.vout })
   for (const c of cand) if ((c.tx.outputs[c.vout]?.satoshis ?? 0) >= 20_000 && await usable(c)) { srcTx = c.tx; srcVout = c.vout; break }
@@ -102,13 +102,13 @@ if (net === 'regtest') {
   // told the entry is spent and the change is owned again, else the next
   // anchor hits UTXO_SPENT on a drained reserve.
   const { readKeyFile } = await import('../../mcp/dist/src/keystore.js')
-  const pass = process.env.MAMEM_KEY_PASSPHRASE ?? readFileSync(new URL('../../../.state/ttn-passphrase', import.meta.url), 'utf8').trim()
-  const rawKey = process.env.MAMEM_FUND_WIF ?? readKeyFile(`${process.env.MAMEM_DATA_DIR}/fee.key.json`, pass, true)
+  const pass = process.env.NEKTAR_KEY_PASSPHRASE ?? readFileSync(new URL('../../../.state/ttn-passphrase', import.meta.url), 'utf8').trim()
+  const rawKey = process.env.NEKTAR_FUND_WIF ?? readKeyFile(`${process.env.NEKTAR_DATA_DIR}/fee.key.json`, pass, true)
   const fundWif = rawKey.trim().startsWith('{') ? JSON.parse(rawKey).wif : rawKey.trim()
   const fundKey = PrivateKey.fromWif(fundWif)
   const { Transaction, P2PKH } = await import('@bsv/sdk')
   const { readFileSync } = await import('node:fs')
-  const reserve = JSON.parse(readFileSync(`${process.env.MAMEM_DATA_DIR}/reserve.json`, 'utf8'))
+  const reserve = JSON.parse(readFileSync(`${process.env.NEKTAR_DATA_DIR}/reserve.json`, 'utf8'))
   const spent = new Set(reserve.spent ?? [])
   const entry = (reserve.entries ?? []).find(e => !spent.has(`${e.txid}:${e.vout}`) && e.satoshis > 5000)
   if (!entry) throw new Error('no spendable reserve entry in ttn data dir')
@@ -155,7 +155,7 @@ if (net === 'regtest') {
   const res = await fetch(`${rc.assetUrl}/tx/${txid}`).catch(() => null)
   check(!!res?.ok, `payment tx resolvable via Teranode asset API (${res?.status ?? 'unreachable'})`)
 } else {
-  const arc = process.env.MAMEM_ARC_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
+  const arc = process.env.NEKTAR_ARC_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
   const st = await fetch(`${arc}/tx/${txid}`).then(r => r.ok ? r.json() : null).catch(() => null)
   check(!!st?.txid || !!st?.txStatus, `payment tx visible on TTN (${st?.txStatus ?? 'pending'})`)
 }

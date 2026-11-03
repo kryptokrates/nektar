@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// mamem verify-bundle — third-party auditor CLI.
+// nektar verify-bundle — third-party auditor CLI.
 // Verifies a ProofBundle or AuditBundle JSON against a header chain —
 // no agent runtime needed. Usage:
 //   node tools/verify-bundle.mjs <bundle.json> [--audit] [--headers headers.json] [--rpc <url>]

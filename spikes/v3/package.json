@@ -1,1 +1,1 @@
-{"name":"mamem-v3-spikes","private":true,"type":"module","dependencies":{"@bsv/sdk":"^4.0.1","circom2":"^0.2.23","circomlib":"^2.0.5","circomlibjs":"^0.1.7","runar-compiler":"^0.4.6","runar-sdk":"^0.4.6","snarkjs":"^0.7.6"}}
+{"name":"nektar-v3-spikes","private":true,"type":"module","dependencies":{"@bsv/sdk":"^4.0.1","circom2":"^0.2.23","circomlib":"^2.0.5","circomlibjs":"^0.1.7","runar-compiler":"^0.4.6","runar-sdk":"^0.4.6","snarkjs":"^0.7.6"}}

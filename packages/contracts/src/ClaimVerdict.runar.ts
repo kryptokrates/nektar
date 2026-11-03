@@ -1,5 +1,5 @@
 // ClaimVerdict — GOAL-v9 §4.5 consumer hook: the covenant UTXO that
-// MamemZkClaim.settle emits (output[0]). Its STATE is the settled
+// NektarZkClaim.settle emits (output[0]). Its STATE is the settled
 // verdict {receiptHash, journalRoot, queryId, payeePkh} — readable
 // on-chain by indexers and verifiable off-chain against the settle tx.
 // Consumers gate on it by pinning its outpoint as input1 (prevouts

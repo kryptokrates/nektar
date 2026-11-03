@@ -2,7 +2,7 @@ packages:
   - 'packages/*'
 
 # one @bsv/sdk for the whole graph: runar-sdk/runar-lang must build and sign
-# transactions with the same Transaction/Script classes as @mamem/* (mixing
+# transactions with the same Transaction/Script classes as @nektar/* (mixing
 # 2.8.11 and 4.0.1 objects fails with "script[serializedBytes] is not a function")
 overrides:
   'runar-sdk>@bsv/sdk': 4.0.1

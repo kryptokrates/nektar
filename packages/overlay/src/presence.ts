@@ -1,17 +1,17 @@
 // tm_presence / ls_presence — the agent-directory topic.
 // Agents "find each other" by publishing a signed OP_RETURN ad:
-//   OP_RETURN 'mamem-agent' <pub 33B> <json{endpoint,shards,ts}> <sig DER>
+//   OP_RETURN 'nektar-agent' <pub 33B> <json{endpoint,shards,ts}> <sig DER>
 // The signature binds endpoint+shards+ts to the advertiser's key — the same
 // key that owns the anchor chain, so 'who serves shard X' is answered by the
 // key that anchors X, not by whoever shouts loudest. Ads are 0-sat data
 // outputs; latest-by-ts wins per pubkey.
 import { PrivateKey, PublicKey, Signature, Script, Transaction } from '@bsv/sdk'
-import { sha256, utf8, toHex } from '@mamem/core'
+import { sha256, utf8, toHex } from '@nektar/core'
 import type { Knex } from 'knex'
 import type { TopicManager, AdmittanceInstructions, LookupService, LookupFormula, OutputAdmittedByTopic, OutputSpent } from '@bsv/overlay'
 
-const TAG = 'mamem-agent'
-const TABLE = 'mamem_ls_presence'
+const TAG = 'nektar-agent'
+const TABLE = 'nektar_ls_presence'
 
 export interface PresenceAd {
   pub: string // 33B compressed pubkey hex — the agent's identity key
@@ -94,8 +94,8 @@ export function createTmPresence (): TopicManager {
     },
     identifyNeededInputs: async () => [],
     getDocumentation: async () =>
-      "Admits OP_RETURN outputs 'mamem-agent' <pub> <payload> <sig> where sig is a valid signature by pub over sha256('endpoint|sortedShards|ts'). Stateless — no chain ordering required; latest-by-ts wins in the lookup service.",
-    getMetaData: async () => ({ name: 'tm_presence', shortDescription: 'mamem agent-directory: signed presence ads' })
+      "Admits OP_RETURN outputs 'nektar-agent' <pub> <payload> <sig> where sig is a valid signature by pub over sha256('endpoint|sortedShards|ts'). Stateless — no chain ordering required; latest-by-ts wins in the lookup service.",
+    getMetaData: async () => ({ name: 'tm_presence', shortDescription: 'nektar agent-directory: signed presence ads' })
   }
 }
 
@@ -200,7 +200,7 @@ export function createLsPresence (kx?: Knex): LookupService & { init: () => Prom
     },
 
     getDocumentation: async () =>
-      "mamem agent-directory lookup. Queries: {all:true} → latest signed ad per agent; {shard:'x'} → ads of agents serving shard x; {pub:'<66hex>'} → one agent's ad. Context = the ad JSON.",
-    getMetaData: async () => ({ name: 'ls_presence', shortDescription: 'mamem agent-directory lookup service' })
+      "nektar agent-directory lookup. Queries: {all:true} → latest signed ad per agent; {shard:'x'} → ads of agents serving shard x; {pub:'<66hex>'} → one agent's ad. Context = the ad JSON.",
+    getMetaData: async () => ({ name: 'ls_presence', shortDescription: 'nektar agent-directory lookup service' })
   }
 }

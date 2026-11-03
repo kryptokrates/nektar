@@ -1,5 +1,5 @@
 {
-  "name": "@mamem/datalog",
+  "name": "@nektar/datalog",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -12,6 +12,6 @@
     "test": "node --test --test-timeout=60000 dist/test/*.test.js"
   },
   "dependencies": {
-    "@mamem/core": "workspace:*"
+    "@nektar/core": "workspace:*"
   }
 }

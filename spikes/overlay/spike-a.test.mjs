@@ -1,4 +1,4 @@
-// SPIKE A (offline): prove tm_mamem enforces the successor rule through the
+// SPIKE A (offline): prove tm_nektar enforces the successor rule through the
 // real @bsv/overlay Engine — no chain needed. Parents are synthetic mined txs
 // carrying a MerklePath accepted by a mock ChainTracker.
 import test from 'node:test'
@@ -12,8 +12,8 @@ import {
   anchorFields, parseAnchorFields, anchorLockingScript, anchorUnlockTemplate,
   chainRp, dsha256, u64le, ZERO32, p2pkhLock, p2pkhUnlock
 } from '../lib/anchor.mjs'
-import { createTmMamem } from './tm_mamem.mjs'
-import { createLsMamem } from './ls_mamem.mjs'
+import { createTmNektar } from './tm_nektar.mjs'
+import { createLsNektar } from './ls_nektar.mjs'
 
 const HEIGHT = 100
 const fundKey = PrivateKey.fromRandom()
@@ -80,11 +80,11 @@ async function makeEngine () {
   const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   for (const m of allMigrations) await m.up(kx)
   const storage = new KnexStorage(kx)
-  const ls = createLsMamem()
-  const tm = createTmMamem(ls)
+  const ls = createLsNektar()
+  const tm = createTmNektar(ls)
   const engine = new Engine(
-    { tm_mamem: tm },
-    { ls_mamem: ls },
+    { tm_nektar: tm },
+    { ls_nektar: ls },
     storage,
     chainTracker,
     undefined, undefined, undefined,
@@ -96,11 +96,11 @@ async function makeEngine () {
 }
 
 async function submit (engine, tx) {
-  const steak = await engine.submit({ beef: tx.toBEEF(), topics: ['tm_mamem'] }, undefined, 'current-tx')
+  const steak = await engine.submit({ beef: tx.toBEEF(), topics: ['tm_nektar'] }, undefined, 'current-tx')
   return steak
 }
 const admitted = (steak) =>
-  (steak.tm_mamem?.outputsToAdmit?.length ?? 0) > 0
+  (steak.tm_nektar?.outputsToAdmit?.length ?? 0) > 0
 
 test('SPIKE A part 1: admit genesis+successor, lookups work', async (t) => {
   const { engine, ls, kx } = await makeEngine()
@@ -129,7 +129,7 @@ test('SPIKE A part 1: admit genesis+successor, lookups work', async (t) => {
 
   // 3) lookup returns current head + anchor-by-n
   const viaLookup = await engine.lookup({
-    service: 'ls_mamem',
+    service: 'ls_nektar',
     query: { shard: SHARD }
   })
   assert.equal(viaLookup.type, 'output-list')
@@ -140,7 +140,7 @@ test('SPIKE A part 1: admit genesis+successor, lookups work', async (t) => {
   assert.equal(headCtx.n, 1)
 
   const byN = await engine.lookup({
-    service: 'ls_mamem',
+    service: 'ls_nektar',
     query: { shard: SHARD, n: 0 }
   })
   assert.equal(byN.outputs.length, 1)

@@ -1,7 +1,7 @@
-// @mamem/graph — AORG (append-only reasoning graph), P11.
+// @nektar/graph — AORG (append-only reasoning graph), P11.
 // Vertex v=(kind, phi, σ, t, context, h); edges carry a rule tag, committed.
 // Enforced at append: acyclicity (premises must exist), justifiability (rule
-// derives φ via @mamem/datalog), consistency (no contradiction with ancestors
+// derives φ via @nektar/datalog), consistency (no contradiction with ancestors
 // unless refinement), traceability (derived vertices bottom out in episodes).
 // Refinements invalidate bi-temporally — nothing is ever mutated or deleted.
 export * from './policy.js'
@@ -9,8 +9,8 @@ export * from './instance.js'
 export * from './anchor.js'
 export * from './ontology.js'
 export * from './owlrl.js'
-import { dsha256, utf8 } from '@mamem/core'
-import { Datalog, type Fact, type Literal, type Rule } from '@mamem/datalog'
+import { dsha256, utf8 } from '@nektar/core'
+import { Datalog, type Fact, type Literal, type Rule } from '@nektar/datalog'
 
 export class GraphError extends Error {}
 

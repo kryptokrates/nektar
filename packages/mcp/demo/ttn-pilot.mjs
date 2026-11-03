@@ -1,5 +1,5 @@
-// Live test-network pilot (BROADCASTS test coins): MAMEM_NETWORK=testnet|ttn
-//   MAMEM_DATA_DIR=… MAMEM_KEY_PASSPHRASE(_FILE)=… [MAMEM_FUND_TXIDS=…] pnpm ttn:pilot
+// Live test-network pilot (BROADCASTS test coins): NEKTAR_NETWORK=testnet|ttn
+//   NEKTAR_DATA_DIR=… NEKTAR_KEY_PASSPHRASE(_FILE)=… [NEKTAR_FUND_TXIDS=…] pnpm ttn:pilot
 // genesis anchor → BUMP → SPV prove vs live headers → append → rotate →
 // restart (no fork) → STARK membership vs the live anchor; explorer links + fees.
 import { mkdtempSync } from 'node:fs'
@@ -14,15 +14,15 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 const env = {
   ...process.env,
-  MAMEM_NETWORK: process.env.MAMEM_NETWORK === 'testnet' ? 'testnet' : 'ttn', // never main here
-  MAMEM_DATA_DIR: process.env.MAMEM_DATA_DIR ?? mkdtempSync(path.join(tmpdir(), 'mamem-live-')),
-  MAMEM_BATCH: process.env.MAMEM_BATCH ?? '8', // pilot closes batches explicitly
-  MAMEM_CONFIRM_MS: process.env.MAMEM_CONFIRM_MS ?? '20000'
+  NEKTAR_NETWORK: process.env.NEKTAR_NETWORK === 'testnet' ? 'testnet' : 'ttn', // never main here
+  NEKTAR_DATA_DIR: process.env.NEKTAR_DATA_DIR ?? mkdtempSync(path.join(tmpdir(), 'nektar-live-')),
+  NEKTAR_BATCH: process.env.NEKTAR_BATCH ?? '8', // pilot closes batches explicitly
+  NEKTAR_CONFIRM_MS: process.env.NEKTAR_CONFIRM_MS ?? '20000'
 }
-if (!env.MAMEM_KEY_PASSPHRASE && !env.MAMEM_KEY_PASSPHRASE_FILE) { console.error('MAMEM_KEY_PASSPHRASE (or _FILE) required'); process.exit(1) }
+if (!env.NEKTAR_KEY_PASSPHRASE && !env.NEKTAR_KEY_PASSPHRASE_FILE) { console.error('NEKTAR_KEY_PASSPHRASE (or _FILE) required'); process.exit(1) }
 const cfg = configFromEnv(env)
-const link = txid => `${env.MAMEM_NETWORK === 'testnet' ? 'https://test.whatsonchain.com' : 'https://woc-ttn.bsvblockchain.tech'}/tx/${txid}`
-const shard = process.env.MAMEM_PILOT_SHARD ?? `pilot-${Date.now().toString(36)}`
+const link = txid => `${env.NEKTAR_NETWORK === 'testnet' ? 'https://test.whatsonchain.com' : 'https://woc-ttn.bsvblockchain.tech'}/tx/${txid}`
+const shard = process.env.NEKTAR_PILOT_SHARD ?? `pilot-${Date.now().toString(36)}`
 
 /** poll prove() until the anchor of `seq` carries a BUMP verified against live headers */
 async function waitProven (rt, seq, maxMin = 25) {
@@ -40,7 +40,7 @@ async function waitProven (rt, seq, maxMin = 25) {
 let rt = await openRuntime(cfg)
 try {
   const w = await rt.ops.wallet()
-  console.log(`network ${env.MAMEM_NETWORK} · fee address ${w.address} · balance ${w.balanceSats} sats (${w.utxos} utxos) · caps ${JSON.stringify(w.caps)}`)
+  console.log(`network ${env.NEKTAR_NETWORK} · fee address ${w.address} · balance ${w.balanceSats} sats (${w.utxos} utxos) · caps ${JSON.stringify(w.caps)}`)
   if (w.balanceSats < 3000) { console.error(`fund ${w.address} (≥3000 sats)`); process.exit(2) }
 
   // 1. genesis anchor
@@ -74,7 +74,7 @@ try {
   console.log(`  ${link(a2?.txid)}`)
 
   // 6. STARK membership (Wright §13) against the live genesis anchor
-  if (process.env.MAMEM_PILOT_STARK !== '0') {
+  if (process.env.NEKTAR_PILOT_STARK !== '0') {
     const q = rt.mem.issueZkQuery('pilot-auditor')
     const { bytes, ms } = await rt.mem.proveMembership(shard, 1, q.queryId)
     const vm = await rt.mem.verifyMembership(shard, 1, bytes)
@@ -82,8 +82,8 @@ try {
   }
 
   // 7. later anchors: the broadcaster's 200/202 is the acceptance signal; the
-  // BUMP is attached in the background once mined (MAMEM_PILOT_WAIT_ALL=1 waits)
-  if (process.env.MAMEM_PILOT_WAIT_ALL === '1') {
+  // BUMP is attached in the background once mined (NEKTAR_PILOT_WAIT_ALL=1 waits)
+  if (process.env.NEKTAR_PILOT_WAIT_ALL === '1') {
     const p2 = await waitProven(rt, 6)
     check(p2?.ok === true, `post-restart seq 6 proven against live headers (${p2?.ok ? 'ok' : p2?.reason})`)
   } else {

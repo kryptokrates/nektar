@@ -1,7 +1,7 @@
 // Read-only TTN smoke: Arcade policy fee, WoC tip, header check, and a real
 // merkle path for a recent coinbase txid verified against TTN headers.
 // NEVER broadcasts — GETs only.
-import { fetchArcFeeRate, WocTracker, merklePathMainnet } from '@mamem/chain'
+import { fetchArcFeeRate, WocTracker, merklePathMainnet } from '@nektar/chain'
 
 const cfg = {
   arcUrl: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',

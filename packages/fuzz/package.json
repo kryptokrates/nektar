@@ -1,5 +1,5 @@
 {
-  "name": "@mamem/fuzz",
+  "name": "@nektar/fuzz",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "private": true,
@@ -9,15 +9,15 @@
     "test": "node --test --test-timeout=60000 dist/test/*.test.js"
   },
   "dependencies": {
-    "@mamem/core": "workspace:*",
-    "@mamem/chain": "workspace:*",
-    "@mamem/contracts": "workspace:*",
-    "@mamem/verify": "workspace:*",
-    "@mamem/zk": "workspace:*",
-    "@mamem/datalog": "workspace:*",
-    "@mamem/identity": "workspace:*",
-    "@mamem/automaton": "workspace:*",
-    "@mamem/mcp": "workspace:*",
+    "@nektar/core": "workspace:*",
+    "@nektar/chain": "workspace:*",
+    "@nektar/contracts": "workspace:*",
+    "@nektar/verify": "workspace:*",
+    "@nektar/zk": "workspace:*",
+    "@nektar/datalog": "workspace:*",
+    "@nektar/identity": "workspace:*",
+    "@nektar/automaton": "workspace:*",
+    "@nektar/mcp": "workspace:*",
     "runar-sdk": "^0.4.6"
   },
   "peerDependencies": {

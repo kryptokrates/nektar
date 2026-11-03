@@ -4,16 +4,16 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey } from '@bsv/sdk'
-import { utf8 } from '@mamem/core'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { signProvenance, verifyCheckpoint, PromiseMonitor } from '@mamem/log'
-import { signBinding, answerChallenge, issueClearance, proveAccess } from '@mamem/identity'
-import { MamemMemory, IngestError, FileSecurityStore, type MamemMemoryOptions } from '../src/index.js'
+import { utf8 } from '@nektar/core'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { signProvenance, verifyCheckpoint, PromiseMonitor } from '@nektar/log'
+import { signBinding, answerChallenge, issueClearance, proveAccess } from '@nektar/identity'
+import { NektarMemory, IngestError, FileSecurityStore, type NektarMemoryOptions } from '../src/index.js'
 
-function world (opts: MamemMemoryOptions = {}, chain = new MockChain(), funder = new MockFunder()) {
+function world (opts: NektarMemoryOptions = {}, chain = new MockChain(), funder = new MockFunder()) {
   chain.verifyScripts = true
   funder.topup(20); for (const t of funder.parents) chain.registerParent(t)
-  return { chain, funder, mem: new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts }) }
+  return { chain, funder, mem: new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts }) }
 }
 const P = { source: 'doi:10.1/manual', time: 1_700_000_000, signature: new Uint8Array(0), modelId: 'm' }
 
@@ -64,7 +64,7 @@ test('CHN-006: pending → mined → final; requireFinal withholds until finalit
 })
 
 test('persistence: challenges, used ZK transcripts and revocations survive a restart', async () => {
-  const file = join(mkdtempSync(join(tmpdir(), 'mamem-sec-')), 'security.json')
+  const file = join(mkdtempSync(join(tmpdir(), 'nektar-sec-')), 'security.json')
   const authority = PrivateKey.fromRandom()
   const opts = { securityStore: new FileSecurityStore(file), clearanceAuthorities: [authority.toPublicKey().toString()] }
   const a = world(opts)
@@ -80,7 +80,7 @@ test('persistence: challenges, used ZK transcripts and revocations survive a res
   const revoked = PrivateKey.fromRandom().toPublicKey().toString()
   a.mem.revoke(revoked)
   // restart: a new instance on the same store
-  const b = new MamemMemory(a.chain, a.funder, a.funder.keyPair, { ...opts, securityStore: new FileSecurityStore(file) })
+  const b = new NektarMemory(a.chain, a.funder, a.funder.keyPair, { ...opts, securityStore: new FileSecurityStore(file) })
   assert.ok(b.verifiedCaller(identity), 'challenge issued before the restart still authenticates')
   assert.match(b.verifyClearance({ pubkey: pub }, zk, 's/0').reason!, /replayed/, 'ZK transcript replay rejected after restart')
   assert.ok(b.isRevoked(revoked) && !b.isRevoked(pub), 'revocation survives restart')

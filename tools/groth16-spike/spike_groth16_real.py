@@ -4,7 +4,7 @@ emit a PUSH-ONLY unlocking script (gradients precomputed as data — required:
 'Only non-push operators allowed in signatures' is a consensus rule on BSV).
 
 Run from zkscript checkout:
-    .venv312/Scripts/python <mamem>/tools/groth16-spike/spike_groth16_real.py <path>/zkscript
+    .venv312/Scripts/python <nektar>/tools/groth16-spike/spike_groth16_real.py <path>/zkscript
 """
 import json
 import sys

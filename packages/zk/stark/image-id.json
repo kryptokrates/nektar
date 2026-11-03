@@ -1,8 +1,8 @@
 {
   "imageId": "99f25ea91f5d3616f37a986b85f72125b7ea19bbfb1edb61ca291653bdb06b9a",
-  "program": "tools/stark/methods/guest (mamem-membership)",
+  "program": "tools/stark/methods/guest (nektar-membership)",
   "datalogImageId": "78203c9eec5df65efc32486ada4d31ea428738a133a1bce00e5b9af2104a08af",
-  "datalogProgram": "tools/stark/methods/guest-datalog (mamem-datalog)",
+  "datalogProgram": "tools/stark/methods/guest-datalog (nektar-datalog)",
   "toolchain": {
     "risc0-zkvm": "3.0.3",
     "cargo-risczero": "3.0.3",

@@ -1,4 +1,4 @@
-// mamem-init — first-run wallet bootstrap for the MCP server operator.
+// nektar-init — first-run wallet bootstrap for the MCP server operator.
 //
 //   node dist/src/init.js                     → generate a funding key, write
 //                                               it to .env (never echoed),
@@ -13,7 +13,7 @@
 //                                               tracked-set model, no index
 //   --force                                    → rotate an existing key (old
 //                                               funds stay with the old key)
-//   MAMEM_ENV_FILE=/path/to/.env               → target a different env file
+//   NEKTAR_ENV_FILE=/path/to/.env               → target a different env file
 //                                               (testing, custom layouts)
 //
 // The key never leaves the gitignored .env; only the ADDRESS is printed.
@@ -28,16 +28,16 @@ const ARGV = (k: string): string | undefined => {
   const hit = process.argv.find(a => a.startsWith(`--${k}=`))
   return hit?.slice(k.length + 3)
 }
-// MAMEM_ENV_FILE overrides the target — lets a scratch env be used for
+// NEKTAR_ENV_FILE overrides the target — lets a scratch env be used for
 // testing or non-standard layouts without touching the operator's .env.
-const ENV_PATH = process.env.MAMEM_ENV_FILE ?? fileURLToPath(new URL('../../../../.env', import.meta.url))
+const ENV_PATH = process.env.NEKTAR_ENV_FILE ?? fileURLToPath(new URL('../../../../.env', import.meta.url))
 const QS_PATH = fileURLToPath(new URL('../../../../infra/teranode-quickstart/.env', import.meta.url))
 
 // --network: only regtest is honest today — reject anything that would
 // imply mainnet readiness.
 const network = ARGV('network') ?? (ARG('regtest') ? 'regtest' : undefined)
 if (network !== undefined && network !== 'regtest') {
-  console.error(`mamem-init: unsupported --network "${network}" — only "regtest" is wired today`)
+  console.error(`nektar-init: unsupported --network "${network}" — only "regtest" is wired today`)
   process.exit(2)
 }
 
@@ -60,13 +60,13 @@ function upsertEnv (p: string, key: string, value: string): void {
 }
 
 const env = readEnv(ENV_PATH)
-const existing = process.env.MAMEM_REGTEST_WIF ?? env.MAMEM_REGTEST_WIF
+const existing = process.env.NEKTAR_REGTEST_WIF ?? env.NEKTAR_REGTEST_WIF
 let key: PrivateKey
 let fresh = false
 if (existing && !ARG('force')) {
   key = PrivateKey.fromWif(existing)
   const addr = key.toPublicKey().toAddress([0x6f])
-  console.log(`mamem-init: a funding key already exists (${addr})`)
+  console.log(`nektar-init: a funding key already exists (${addr})`)
   if (network !== 'regtest') {
     console.log('  nothing to do — use --force to rotate (existing funds stay with the old key)')
     process.exit(0)
@@ -75,9 +75,9 @@ if (existing && !ARG('force')) {
 } else {
   fresh = true
   key = PrivateKey.fromRandom()
-  upsertEnv(ENV_PATH, 'MAMEM_REGTEST_WIF', key.toWif())
+  upsertEnv(ENV_PATH, 'NEKTAR_REGTEST_WIF', key.toWif())
   const addr = key.toPublicKey().toAddress([0x6f])
-  console.log(`mamem-init: funding key generated`)
+  console.log(`nektar-init: funding key generated`)
   console.log(`  address : ${addr}`)
   console.log(`  key     : written to ${ENV_PATH} (chmod 600 — never committed, never printed)`)
   if (existing) console.log('  WARNING : rotated — UTXOs held by the previous key are not spendable by this one')
@@ -89,17 +89,17 @@ if (network === 'regtest') {
   // when the operator reuses a previously funded key.
   const qs = readEnv(QS_PATH)
   const cfg = {
-    rpcUrl: process.env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-    rpcUser: process.env.MAMEM_RPC_USER ?? qs.rpc_user ?? 'teranode',
-    rpcPass: process.env.MAMEM_RPC_PASS ?? qs.rpc_pass ?? '',
-    propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-    assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
+    rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+    rpcUser: process.env.NEKTAR_RPC_USER ?? qs.rpc_user ?? 'teranode',
+    rpcPass: process.env.NEKTAR_RPC_PASS ?? qs.rpc_pass ?? '',
+    propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+    assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
   }
   // make the operator .env self-sufficient for the MCP server: map the
-  // quickstart creds into MAMEM_RPC_* if they aren't set already.
-  if (qs.rpc_user && env.MAMEM_RPC_USER === undefined) { upsertEnv(ENV_PATH, 'MAMEM_RPC_USER', qs.rpc_user); env.MAMEM_RPC_USER = qs.rpc_user }
-  if (qs.rpc_pass && env.MAMEM_RPC_PASS === undefined) { upsertEnv(ENV_PATH, 'MAMEM_RPC_PASS', qs.rpc_pass); env.MAMEM_RPC_PASS = qs.rpc_pass }
-  const { ReserveFunder, bootstrapReserve } = await import('@mamem/chain')
+  // quickstart creds into NEKTAR_RPC_* if they aren't set already.
+  if (qs.rpc_user && env.NEKTAR_RPC_USER === undefined) { upsertEnv(ENV_PATH, 'NEKTAR_RPC_USER', qs.rpc_user); env.NEKTAR_RPC_USER = qs.rpc_user }
+  if (qs.rpc_pass && env.NEKTAR_RPC_PASS === undefined) { upsertEnv(ENV_PATH, 'NEKTAR_RPC_PASS', qs.rpc_pass); env.NEKTAR_RPC_PASS = qs.rpc_pass }
+  const { ReserveFunder, bootstrapReserve } = await import('@nektar/chain')
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
   const rpc = async (method: string, ...params: unknown[]): Promise<any> => {
     const r = await fetch(cfg.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }) })
@@ -151,5 +151,5 @@ if (network === 'regtest') {
 
 console.log('\nnext steps:')
 console.log('  plugin : pnpm mcp:install claude-desktop cursor   # any AI client via Docker MCP')
-console.log('  serve  : MAMEM_NETWORK=regtest node packages/mcp/dist/src/bin.js')
-console.log('  http   : MAMEM_HTTP_PORT=8080 …same            # REST /v1 + MCP /mcp + OpenAPI')
+console.log('  serve  : NEKTAR_NETWORK=regtest node packages/mcp/dist/src/bin.js')
+console.log('  http   : NEKTAR_HTTP_PORT=8080 …same            # REST /v1 + MCP /mcp + OpenAPI')

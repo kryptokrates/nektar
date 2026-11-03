@@ -1,5 +1,5 @@
 // CI gate: the watcher's only suite is a live --once smoke against local
-// regtest (it pays its own challenge bonds, so it needs MAMEM_REGTEST_WIF).
+// regtest (it pays its own challenge bonds, so it needs NEKTAR_REGTEST_WIF).
 // When no WIF is configured — real CI — skip cleanly instead of failing.
 import { existsSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -22,8 +22,8 @@ const local = {
   ...readEnv(join(here, '../../.env')),
   ...readEnv(join(here, '../../../.env'))
 }
-if (!process.env.MAMEM_REGTEST_WIF && !local.MAMEM_REGTEST_WIF) {
-  console.log('# SKIP MAMEM_REGTEST_WIF unset — watcher smoke needs a live regtest env')
+if (!process.env.NEKTAR_REGTEST_WIF && !local.NEKTAR_REGTEST_WIF) {
+  console.log('# SKIP NEKTAR_REGTEST_WIF unset — watcher smoke needs a live regtest env')
   process.exit(0)
 }
 const r = spawnSync(process.execPath, ['src/watcher.mjs', '--once', '--claims', '.state/watcher-claims.json'], {

@@ -1,11 +1,11 @@
-# mamem migration log
+# nektar migration log
 
 ## Round: v4 part-1 — datalog/AORG/policy-DAG/instancing (DONE)
-- `@mamem/datalog`: L_pol parser (`@id` rules, negation, hyphens/quoted terms), safety checks, stratified semi-naive eval with provenance, deterministic `derivHash`, POL-012 linter.
-- `@mamem/graph`: AORG vertices `h=dsha256(φ‖σ‖t‖context)` + committed edges; append-time acyclicity/justifiability (via datalog)/consistency/traceability; refinement invalidates bi-temporally (`currentView(t)`, nothing mutated); `instance(Ψ)` scoping + closure; Metanet head (AOR-011); `citing()` reverse-index hook (STO-005, used by P15).
-- `GraphAnchor`: vertex/edge hashes as mamem shard fragments via the existing remember→anchor pipeline (structural `AnchorMem`, no workspace cycle); `proveVertex`/`verifyVertex` for the standard verify path; tampered hash rejects.
+- `@nektar/datalog`: L_pol parser (`@id` rules, negation, hyphens/quoted terms), safety checks, stratified semi-naive eval with provenance, deterministic `derivHash`, POL-012 linter.
+- `@nektar/graph`: AORG vertices `h=dsha256(φ‖σ‖t‖context)` + committed edges; append-time acyclicity/justifiability (via datalog)/consistency/traceability; refinement invalidates bi-temporally (`currentView(t)`, nothing mutated); `instance(Ψ)` scoping + closure; Metanet head (AOR-011); `citing()` reverse-index hook (STO-005, used by P15).
+- `GraphAnchor`: vertex/edge hashes as nektar shard fragments via the existing remember→anchor pipeline (structural `AnchorMem`, no workspace cycle); `proveVertex`/`verifyVertex` for the standard verify path; tampered hash rejects.
 - Policy DAG: `h_i = dsha256(canonical rule incl. body)`, derivation + Φ(override) edges, per-node `supersedes`, conflict detection with full permit/deny paths (POL-008), `query`+`verifyDerivation` with per-node Merkle proofs (POL-006), `policyRoot` anchored (POL-004).
-- Cedar∩DAG in `MamemMemory.recall`: `opts.policyDag`+`anchoredPolicyRoot` (instance-configured; caller-supplied roots never trusted — recomputed root mismatch denies with 'policy DAG root mismatch'); per-item permit withholding; receipt gains `dag:{policyRoot, derivationHash, state}` (POL-016). EDB facts only from verified identity/ZK.
+- Cedar∩DAG in `NektarMemory.recall`: `opts.policyDag`+`anchoredPolicyRoot` (instance-configured; caller-supplied roots never trusted — recomputed root mismatch denies with 'policy DAG root mismatch'); per-item permit withholding; receipt gains `dag:{policyRoot, derivationHash, state}` (POL-016). EDB facts only from verified identity/ZK.
 - Instancing: `instanceOf` + `memberProof` (INS-002..004), `verifyInstance` (anchored members + closure + delegation + root), `delegate`/`verifyDelegation` `σ=Sign(H(root‖Ψ‖τ))` (INS-005), `entails` partial entailment under R_q (INS-006).
 - POL-011 (ZK derivation attestation) deferred — documented, not trivial.
 - e2e: offline + regtest v4 block — manual-revision refinement changes currentView; graph-root + policy-root anchors with printed txids; DAG-gate deny/conflict; third-party `verifyInstance`.
@@ -13,27 +13,27 @@
 ## Done so far
 - Regtest unblocked: propagation HTTP `POST :8833/tx` (loopback port map in compose/docker-teranode.yml); asset API + rpc basic auth (`/api/v1/tx` = EF bytes). Spike B (legacy PushDrop): 1000 unconfirmed anchors, no limit.
 - Fixed dup @bsv/sdk instances (peer dep at root) — `serializedBytes` cross-package bug.
-- `packages/contracts/src/MamemAnchor.runar.ts` → compiles → `MamemAnchor.json` (297B code/412B state).
-- `@mamem/contracts/src/index.ts`: artifact, `contractRp`=`chainRp`, `decodeMamemAnchor`, `TAG_RPRIME`.
-- `packages/anchor/src/runarchain.ts`: Rúnar AnchorChain (deploy=genesis, call('append')=successor, LocalSigner+MamemProvider) — works on MockChain (n0→n1).
+- `packages/contracts/src/NektarAnchor.runar.ts` → compiles → `NektarAnchor.json` (297B code/412B state).
+- `@nektar/contracts/src/index.ts`: artifact, `contractRp`=`chainRp`, `decodeNektarAnchor`, `TAG_RPRIME`.
+- `packages/anchor/src/runarchain.ts`: Rúnar AnchorChain (deploy=genesis, call('append')=successor, LocalSigner+NektarProvider) — works on MockChain (n0→n1).
 - Security: owner pubkey IS embedded in deployed locking script (verified includes(pk)).
 - Not done: tag in state (readonly ByteString serializes empty in runar 0.4.6 — workaround: mutable state), Spend eval harness, full swap (tm/ls/verify still PushDrop.decode — legacy path green).
 
 ## Round: tag in mutable state + Spend eval + isValidAnchor (DONE)
 - tagRprime = mutable state field, carried unchanged into continuation; serialises as `0x0f‖bytes` after poseidonRoot(0x00) in the OP_RETURN suffix.
-- TAG constant = core `utf8('mamem:rprime:v1')` (NOT 'mamem-rprime' — earlier bug).
+- TAG constant = core `utf8('nektar:rprime:v1')` (NOT 'nektar-rprime' — earlier bug).
 - super()/ctor args MUST match prop declaration order.
 - contractRp == chainRp proven on vectors (test: contracts/test/valid-anchor.test.ts).
-- decodeMamemAnchor returns {shard=hash160(owner),n,size,R,Rp,poseidonRoot,tag,ownerPub}; owner = LAST 33B 02/03 push before OP_RETURN (earlier ones are EC constants).
+- decodeNektarAnchor returns {shard=hash160(owner),n,size,R,Rp,poseidonRoot,tag,ownerPub}; owner = LAST 33B 02/03 push before OP_RETURN (earlier ones are EC constants).
 - isValidAnchor(d) checks tag==TAG_RPRIME — test green.
 - Spend eval harness works (PrepareCall→inject DER+'41'→finalizeCall→Spend.validate):
   valid append PASS; wrong-key DER sig FAIL (top-stack-false checkSig); changed tag / wrong n / wrong Rp continuations FAIL (preimage/hashOutputs check → OP_CHECKSIGVERIFY).
 - 3/3 contract tests pass. Legacy 40-test suite still green on PushDrop path.
-- NEXT: swap tm/ls/verify to decodeMamemAnchor+isValidAnchor (port 8 overlay tests to contract anchors); perf; regtest; README/spec.
+- NEXT: swap tm/ls/verify to decodeNektarAnchor+isValidAnchor (port 8 overlay tests to contract anchors); perf; regtest; README/spec.
 
 ## Round: full swap + decode auth + perf (DONE)
-- tm/ls/verify now decode via decodeMamemAnchor + isValidAnchor; overlay tests use REAL contract spends via AnchorChain (8/8 green).
-- decodeMamemAnchor authenticates code byte-for-byte: artifact.script template + ctor slot (owner pubkey @byteOffset 165) + OP_RETURN + state. Fake/P2PKH+state scripts → null.
+- tm/ls/verify now decode via decodeNektarAnchor + isValidAnchor; overlay tests use REAL contract spends via AnchorChain (8/8 green).
+- decodeNektarAnchor authenticates code byte-for-byte: artifact.script template + ctor slot (owner pubkey @byteOffset 165) + OP_RETURN + state. Fake/P2PKH+state scripts → null.
 - getHead() fix (pending beats confirmed); register() attaches source parents so BEEF is complete.
 - Perf: append ≈73ms FLAT (min69/med73/max96 over 30), hot spot = runar prepareCall (~120ms incl preimage+signing; provider calls ~0ms). Tx: genesis 712B, append 3373B.
 - e2e burst reduced 1000→300 to fit the 30s cap; E2E PASS (exit 0).
@@ -41,7 +41,7 @@
 - TODO: regtest contract e2e, README/spec updates, delete core PushDrop codec if unused.
 
 ## Round: LIVE contract chain on regtest — PROVEN
-- MamemProvider fix (production): after each broadcast, record input outpoints as spent + own small (<300B) outputs as spendable; getUtxos filters spent + includes change.
+- NektarProvider fix (production): after each broadcast, record input outpoints as spent + own small (<300B) outputs as spendable; getUtxos filters spent + includes change.
 - Self-contained live run (spikes/contract-live.mjs): fresh coinbase → 50-output split → production AnchorChain:
   split  0d062472000c6c62f11e1892f5c2a4aa9a58ce080c970dfb1503973320b93a61
   genesis c67b009ee0580d221de90f7f33ce9549873cafe56035e9fa16aeab60a771286f
@@ -59,22 +59,22 @@
 
 ## Round: productionised MerklePathProvider + full live verifyFragment — DONE
 - packages/chain/src/regtest.ts: parseLegacyBlock (80B header + 8B sizeInBytes + varint + raw txs), merkleRootOf, merklePathFor(cfg,txid,tracker) — scans last N blocks, sanity-checks computed root == header merkleroot, returns {blockHeight,path} with display-order hashes + txid leaf.
-- spikes/live-verify-fragment.mjs (LIVE): genesis anchor c67b009e… @block1656 → getrawtransaction → decodeMamemAnchor → merklePathFor → attach MerklePath → bundle → verifyFragment(TeranodeRPCTracker):
+- spikes/live-verify-fragment.mjs (LIVE): genesis anchor c67b009e… @block1656 → getrawtransaction → decodeNektarAnchor → merklePathFor → attach MerklePath → bundle → verifyFragment(TeranodeRPCTracker):
   verifyFragment: {"ok":true}
   tampered leaf : {"ok":false,"reason":"LeafPathMismatch"} ✓ correct rejection
 - LIVE chain txids: genesis c67b009ee0580d221de90f7f33ce9549873cafe56035e9fa16aeab60a771286f, appends 40c4418b/06b6022a/7f49df8f (block 1656).
-- TODO next: Spend regression test (3 appends + failed broadcast), MAMEM_NETWORK=regtest reduced e2e, parseAnchorFields delete, README/spec.
+- TODO next: Spend regression test (3 appends + failed broadcast), NEKTAR_NETWORK=regtest reduced e2e, parseAnchorFields delete, README/spec.
 
 ## Round: regtest e2e — PASS
-- packages/e2e/src/e2e-regtest.ts (MAMEM_NETWORK=regtest): fresh coinbase→50/80-out split→MamemMemory story+correction→20 contract anchors→mine→overlay admit with real tracker→verifyFragment vs real headers + burst anchor SPV — ALL PASS.
+- packages/e2e/src/e2e-regtest.ts (NEKTAR_NETWORK=regtest): fresh coinbase→50/80-out split→NektarMemory story+correction→20 contract anchors→mine→overlay admit with real tracker→verifyFragment vs real headers + burst anchor SPV — ALL PASS.
 - Fixes: shardKey=fundKey for funding sig; spendable outputs only if exact P2PKH to funderAddress; asset API indexes mined blocks ~1-2s late → retry loop on merklePathFor.
 - Regression test added: "failed broadcast does not advance the head" (3/3 anchor tests).
 
 ## Round: hang fix + all gates green
 - HANG root cause: getUtxos handed runar the whole pool (2200 entries) — it iterated all and effectively stalled. Fixed: getUtxos returns at most 10 unspent candidates (slice(0,10)); never loops.
-- e2e regtest-vs-offline split: `MAMEM_NETWORK=regtest` at top of e2e.ts → e2e-regtest.ts.
+- e2e regtest-vs-offline split: `NEKTAR_NETWORK=regtest` at top of e2e.ts → e2e-regtest.ts.
 - Burst reduced to 60 offline (~7.8s); engine2 replays manual shard only (full-tail needed for previousCoins). Offline e2e PASS in ~50s.
-- Gates: build clean; tests all green (anchor 3/3 incl failed-broadcast regression; overlay 8/8; verify 11/11; mcp 3/3; contracts 3/3; core 5; chain 3; log 2; crypto 6); reproduce OK; offline e2e PASS; MAMEM_NETWORK=regtest e2e PASS (split 6098d7a4…, burst genesis f4633689…, BUMP block 2669).
+- Gates: build clean; tests all green (anchor 3/3 incl failed-broadcast regression; overlay 8/8; verify 11/11; mcp 3/3; contracts 3/3; core 5; chain 3; log 2; crypto 6); reproduce OK; offline e2e PASS; NEKTAR_NETWORK=regtest e2e PASS (split 6098d7a4…, burst genesis f4633689…, BUMP block 2669).
 
 ## Round: perf fix + parseAnchorFields gone + docs
 - init 41s was topup(2200)+chain.mine merkle-path over 2200-tx mempool → topup(40)/topup(80): offline e2e now ~4.4s wall.
@@ -93,20 +93,20 @@
 - Design: genesisOwner readonly (stable shard), ownerPkh ByteString(20B) mutable, hash160(pubKey)==ownerPkh + checkSig. Ripemd160 not a state type in runar 0.4.6 → ByteString.
 
 ## Round: rotation contract promoted to production — DONE
-- MamemAnchorRot → packages/contracts/src/MamemAnchor.runar.ts; genesisOwner moved to MUTABLE state (never modified → shard = hash160(genesisOwner) stable; avoids the PubKey-ctor-slot hack that broke eval at OP_SPLIT PC475).
-- decodeMamemAnchor: state = genesisOwner(33B)|n|size|R|Rp|poseidon|tag|ownerPkh; byte-auth via runar rebuild equality.
-- AnchorChain: append(sig,pubKey,...); new rotate(newKey) — signer switches only after broadcast+decode. tm_mamem accepts append (n+1,chained Rp,same pkh) or rotate (same n/R/Rp,new pkh); ls stores ownerPkh.
+- NektarAnchorRot → packages/contracts/src/NektarAnchor.runar.ts; genesisOwner moved to MUTABLE state (never modified → shard = hash160(genesisOwner) stable; avoids the PubKey-ctor-slot hack that broke eval at OP_SPLIT PC475).
+- decodeNektarAnchor: state = genesisOwner(33B)|n|size|R|Rp|poseidon|tag|ownerPkh; byte-auth via runar rebuild equality.
+- AnchorChain: append(sig,pubKey,...); new rotate(newKey) — signer switches only after broadcast+decode. tm_nektar accepts append (n+1,chained Rp,same pkh) or rotate (same n/R/Rp,new pkh); ls stores ownerPkh.
 - Tests: 9/9 overlay incl rotate admitted, new-key append admitted, rotate-with-changed-n rejected. e2e adds mid-chain rotate (n stays, new key appends n+1). Gates: build clean, 46 tests green, reproduce OK, offline e2e PASS (~4s), regtest e2e PASS.
 - Gotcha: runar embeds a PubKey placeholder per ctor slot; unused readonly props aren't substituted (genesisOwner-in-code didn't work) → owner fields live in state.
 
 ## Round: ReserveFunder — regtest e2e self-funding, twice green
 - Root cause found: regtest halves the coinbase subsidy every 150 blocks; at ~height 3400 fresh coinbases pay ~149 sats. Fresh mining can never fund again.
-- ReserveFunder (packages/chain): scans early block coinbases to our P2PKH via block_legacy+parseLegacyBlock (records block heights for BUMPs), persists reserve+spent set in gitignored .state.json; take() hands out each entry once (optimistic spend); markSpent on UTXO_SPENT rejects; addOwned recycles change. MamemProvider prefers funder.take(); AnchorChain.anchor retries up to 60 UTXO_SPENT rejects marking each stale output.
+- ReserveFunder (packages/chain): scans early block coinbases to our P2PKH via block_legacy+parseLegacyBlock (records block heights for BUMPs), persists reserve+spent set in gitignored .state.json; take() hands out each entry once (optimistic spend); markSpent on UTXO_SPENT rejects; addOwned recycles change. NektarProvider prefers funder.take(); AnchorChain.anchor retries up to 60 UTXO_SPENT rejects marking each stale output.
 - Funding parents' BUMPs attached via merklePathAtHeight (known height → single block fetch; 1-tx blocks emit root-as-leaf level).
 - regtest e2e: two consecutive runs PASS — story+correction, 20-anchor burst, rotate (n=19, shard stable), overlay admit, verifyFragment real headers, SPV.
 
 ## Round: SHIP/GASP sync + tm statelessness — DONE
-- tm_mamem rewritten stateless: successors validated against the parent decoded from the BEEF or via ls.getByOutpoint when previousCoins marks it topical but the parsed parent is absent. ls head used only as fork guard. ls_mamem persists ownerPkh (pkh col) + genesisOwner (pub col) — no migration needed.
+- tm_nektar rewritten stateless: successors validated against the parent decoded from the BEEF or via ls.getByOutpoint when previousCoins marks it topical but the parsed parent is absent. ls head used only as fork guard. ls_nektar persists ownerPkh (pkh col) + genesisOwner (pub col) — no migration needed.
 - isContractInput structural (P2PKH unlock = 2 chunks); decoded-anchor seen-cache keyed by outpoint; append requires equal ownerPkh.
 - runarchain: getShardId from decoded head (stable across rotate); spent/owned tracked per-funder via WeakMap, shared across AnchorChains.
 - MockChain now Teranode-faithful: UTXO_SPENT tracking (mempool+mined, released on reorg) — GASP's conflicting-spend check was the first detector of a silent double-spend. Unit test added.
@@ -125,7 +125,7 @@
 - P7 hardening: wrapFor = HKDF-SHA256(shared, salt=rand32, info=ctx) → AES-256-GCM(AAD=ctx) — kills the two-time pad; envDigest binds wrapped+fieldCount+fieldRoot (no swap); fieldsCommitment = H(TAG_FIELDS‖count‖fieldRoot); verifyDisclosureAnchored injects verifyAnchor (avoids verify→anchor cycle); DIS-006 disclosure events logged+anchored.
 - Regtest flake root-caused: TX_MISSING_PARENT — burst broadcasts anchor N+1 before Teranode propagated N. Fixed: retryable with 250ms·attempt backoff (×10) in AnchorChain.anchor; UTXO_SPENT still marks+rebuilds.
 - zkaccess.ts (ZKA-001..006): Pedersen C = ℓ·G + r·H (H = sha256(tag)·G NUMS), authority-signed commitment, CDS'94 OR + bit-decomposition range proof over C·g^(−ℓ_j), Fiat-Shamir transcript bound to queryId‖fragmentId‖nonce. Honest label: linear sigma proof, not Bulletproof. prove ~57ms / verify ~59ms (8-bit). Negatives: lower clearance, replay nonce/query, forged sig, tampered C, wrong required level.
-- Recall gated: MamemMemory.recall(zk:{commitment,proof,transcript,requiredLevel}) — rejected proof never serves ciphertext; receipt.zkaccess records verified/rejected/not-required. Keys still enforce confidentiality independently.
+- Recall gated: NektarMemory.recall(zk:{commitment,proof,transcript,requiredLevel}) — rejected proof never serves ciphertext; receipt.zkaccess records verified/rejected/not-required. Keys still enforce confidentiality independently.
 - Gates: build clean, 76 tests green, reproduce OK, offline e2e ~3.3s, regtest e2e PASS (block 4369).
 
 ## Round: P9 Bulletproof + missing-proof gate — DONE
@@ -136,7 +136,7 @@
 - Gates: build clean, 77 tests green, reproduce OK, offline e2e, regtest e2e PASS.
 
 ## Round: P12a Cedar — DONE
-- @mamem/policy via @cedar-policy/cedar-wasm@4.14.0 (real Cedar isAuthorized/formatPolicies — no sidecar needed). Schema: principals Agent/User, actions read/write/disclose/rotate/revoke, resources Fragment{level,shard,class}.
+- @nektar/policy via @cedar-policy/cedar-wasm@4.14.0 (real Cedar isAuthorized/formatPolicies — no sidecar needed). Schema: principals Agent/User, actions read/write/disclose/rotate/revoke, resources Fragment{level,shard,class}.
 - Policy sets canonicalized via formatPolicies + hashed (TAG policyset) + anchored through AnchorChain (test proves anchoring). Decision receipts {request, policySetHash, decision, time} — receiptMatchesAnchor enforces the anchored hash (a different-policy receipt refused).
 - Level isolation: cedar-wasm has no symbolic analyzer → honest bounded exhaustive check over the schema domain (proveLevelIsolation: every level<l principal DENY on level-l fragments) — all pass.
 - Recall gated: opts.cedar{policyText,policySetHash,anchoredPolicyHash,caller} — Cedar DENY or hash-mismatch never serves (plaintext OR ciphertext); evaluates the FRAGMENT's stored level (LogRecord.level persisted at remember). Combined with ZK (level>0 proof) + key possession.
@@ -158,7 +158,7 @@
 - MCP tools added: rotate/revoke/disclose/authorize with receipts.
 - v2 e2e scenario in e2e.ts + e2e-regtest.ts (A/B/C, ZK+Cedar+identity, rotate,
   SMT revoke+non-inclusion, auditor envelope verify→expiry).
-- Crash investigation: `pnpm --filter @mamem/policy test` 20/20 clean,
+- Crash investigation: `pnpm --filter @nektar/policy test` 20/20 clean,
   `pnpm e2e` 20/20 clean — 0xC0000409 not reproduced on this codebase; the
   earlier transient abort was a wasm/native hiccup, not a code-path bug.
 - Gates: build clean, 89 tests green, reproduce OK, offline e2e PASS incl. v2
@@ -166,11 +166,11 @@
 
 ## GOAL-v3 Phase 0 — feasibility spikes (spikes/v3)
 - 0.1 ZK: circom2@0.2.23 (WASM) + snarkjs@0.7.6 + circomlibjs@0.1.7 pure-npm works; Poseidon depth-16 membership circuit (8857 wires), dev pot14+2-contrib zkey. prove 2626ms, verify 48ms, proof 725B; tampered proof/public rejected. GATES PASS.
-- 0.2 Rúnar: MamemAutomaton compiled (no `slice` in 0.4.6 → flat bigint table args); deploy+step broadcast advances q0→q1. Negatives need production Spend path.
+- 0.2 Rúnar: NektarAutomaton compiled (no `slice` in 0.4.6 → flat bigint table args); deploy+step broadcast advances q0→q1. Negatives need production Spend path.
 - 0.3 Datalog: ~146-line semi-naive evaluator w/ stratified negation (CycleError), per-fact provenance, deterministic derivHash — no suitable npm pkg.
 - rustup: winget+rustup-init both failed (no cargo) — cedar-symcc/idattr-smt cross-check blocked.
 
-## v3 / P10 ZK membership (@mamem/zk)
+## v3 / P10 ZK membership (@nektar/zk)
 - Groth16 membership over BN254: circuit membership.circom (Poseidon(3)(hi,lo,blinding)
   leaf over SHA-leaf halves + nullifier Poseidon(2)(blinding,queryId), depth 16,
   9,463 wires); dev ceremony (pot14 + 2 phase-2 contributions) → artifacts/
@@ -181,7 +181,7 @@
 - Companion PoseidonTree (circomlibjs, sparse Z_{d+1}=H(Z_d,Z_d)) built by the
   owner only — leafCommit needs owner-derived blinding ('zkblind' BRC-42 pi);
   non-owner can't build the tree, which is acceptable since the owner anchors.
-- MamemAnchor.append now takes newPoseidonRoot (assert len==32 || 0); artifact
+- NektarAnchor.append now takes newPoseidonRoot (assert len==32 || 0); artifact
   regenerated; decoder handles length-prefixed '20'+32B vs legacy '00'.
 - verifyMembershipAnchored does SPV (BUMP→headers) on the REAL anchor tx before
   Groth16 verify; plain verifyMembership is tests-only. NullifierStore dedups.
@@ -196,9 +196,9 @@
   only complete files.
 
 ## v4 / P14 Merkle Automaton
-- `MamemAutomaton` (1,007 B): δ and F Merkle-committed (depth 4, 16 entries each);
+- `NektarAutomaton` (1,007 B): δ and F Merkle-committed (depth 4, 16 entries each);
   `step` checks owner + from==q + δ path; `halt` checks the F path and continues
-  state with `halted=1`. `AutomatonChain` = production path (MamemProvider over
+  state with `halted=1`. `AutomatonChain` = production path (NektarProvider over
   Broadcaster/Funder, fresh contract per call, head byte-authenticated).
 - RUNAR 0.4.6 MISCOMPILE #1: a `let` reassigned from a private-method result
   compiles its final read as an empty push → use distinct `const`s.
@@ -208,18 +208,18 @@
 - leafEntry must be little-endian (num2bin), not BE.
 - runar MockProvider returns parents without outputs → bad sighash; tests use
   MockChain.verifyScripts as the oracle instead.
-- `MamemAutomatonZk` (on-chain Schnorr PoK via ecMulGen/ecAdd/ecMul): 883,419 B —
+- `NektarAutomatonZk` (on-chain Schnorr PoK via ecMulGen/ecAdd/ecMul): 883,419 B —
   over the 100 KB rule, excluded from production, documented-not-run.
 - AUT-009 measured: lockingScript 1,007 B, step tx ~4,076 B, fee 5 sat (rate 1).
 - AUT-010 (fuzzy FSM, ledger seed) deferred.
 - Regtest: Teranode rejects an off-F halt with TX_INVALID.
 
 ## v4 / P15 reasoning, formal model, MCP demo
-- `@mamem/reasoning`: grounding (quote / Datalog entailment from VERIFIED
+- `@nektar/reasoning`: grounding (quote / Datalog entailment from VERIFIED
   fragments), model identity (weights sha256 / provider release), committed +
   anchored receipts, citation index + correction loop, timeBounds (existence-by),
   offline audit bundles (JSON-portable derivation proofs).
-- BUG FIXED: `MamemMemory.prove` passed the whole chain tail; the verifier
+- BUG FIXED: `NektarMemory.prove` passed the whole chain tail; the verifier
   requires the tail to end at the proven anchor → older batches were unprovable.
 - TLA+ `docs/formal/AORG.tla`, TLC 2.19 in Docker: 14,701 distinct states, no
   violation; mutant (sealed edits allowed) caught violating AppendOnly.
@@ -246,7 +246,7 @@
   accepted; binding pubkey not matched; a forged proof's requiredLevel raised
   the Cedar level (bypass); plaintext level>0 records were served without
   clearance; encrypted-record proof level not compared to record level. All
-  fixed + tested (`MamemMemory.issueChallenge/verifiedCaller/verifyClearance`,
+  fixed + tested (`NektarMemory.issueChallenge/verifiedCaller/verifyClearance`,
   `clearanceAuthorities`). Principal id = hash160(pubkey).
 - BUG FIXED (data loss): encrypted records hashed hdp over the dropped plaintext
   → distinct writes with equal provenance were deduplicated away.
@@ -275,13 +275,13 @@
   sqlite records (level/author metadata now stored WITH the record — the old
   post-append mutation was lost by the knex store, i.e. a level gate bypass on
   persistent stores), anchor state (heads/tails/checkpoints/certs/BEEFs),
-  security state, reserve + treasury, keys (0600) in MAMEM_DATA_DIR; confirmer
+  security state, reserve + treasury, keys (0600) in NEKTAR_DATA_DIR; confirmer
   (`unprovenAnchors`/`attachProof`), optional auto-mine, timed flushDue.
 - `AnchorChain.resume(headTx)`: restart continues the same shard (no fork).
 - Regtest funding gotcha: recent coinbases are tiny (5–79 sat after halvings);
   `bootstrapReserve` splits a persisted treasury or an early ≥0.1-coin coinbase.
-- Docker MCP Toolkit: `docker-mcp/mamem.yaml` (longLived — the gateway otherwise
-  starts a fresh container per call and state is lost; volume mamem-data:/data);
+- Docker MCP Toolkit: `docker-mcp/nektar.yaml` (longLived — the gateway otherwise
+  starts a fresh container per call and state is lost; volume nektar-data:/data);
   `pnpm mcp:install`, `pnpm mcp:smoke` (remember → anchor → prove through the gateway).
 - Docker Model Runner: `pnpm chat` (OpenAI-compatible loop + MCP client).
   ai/qwen3.8-flash-next:q8_0 fails to load: llama.cpp latest-cpu lacks the
@@ -305,7 +305,7 @@
 - Removed: Poseidon companion tree, Groth16 prover/verifier, circom circuit,
   ceremony + artifacts, nullifier store, snarkjs/circomlib/circom2 deps,
   `pnpm zk:ceremony`, `contracts/decode.test.mjs` (stale v1 scratch file).
-- MamemAnchor **v3**: state = owner|n|size|R|Rp|tag|ownerPkh; `append(sig, pub, R, size)`.
+- NektarAnchor **v3**: state = owner|n|size|R|Rp|tag|ownerPkh; `append(sig, pub, R, size)`.
   The v3 decoder refuses v2 layouts. vectors/core.json: the empty anchor field was dropped
   (FIELD_COUNT 8 → 7). Old v2 regtest chains are not continued.
 - Replay protection: a verifier-issued single-use queryId (`zkQuery` MCP tool,
@@ -314,7 +314,7 @@
 
 ## Agent-level E2E with anchoring + ZK through MCP
 - Wire format (`identity/wire.ts`) for clearance presentations/credentials; MCP
-  recall/authorize accept identity + zk; runtime MAMEM_CLEARANCE_AUTHORITIES;
+  recall/authorize accept identity + zk; runtime NEKTAR_CLEARANCE_AUTHORITIES;
   client kit (ClientWallet, ClearanceAuthority); chat harness clearance.
 - Specific clearance reasons (untrusted authority / holder ≠ caller) instead of
   a generic "proof invalid".
@@ -337,8 +337,8 @@
   an old model store → DMR enabled on 12435.
 - chat.mjs streams (no header timeout); tool schemas describe parameters;
   recall returns a hint for a wrong seq.
-- Docker profile `mamem_regtest`: secrets in the Docker MCP keychain, Teranode via
-  host.docker.internal, volume mamem-regtest-data. Gotchas: profile IDs are
+- Docker profile `nektar_regtest`: secrets in the Docker MCP keychain, Teranode via
+  host.docker.internal, volume nektar-regtest-data. Gotchas: profile IDs are
   slugs (`-` → `_`); config `1` validates as integer; Docker ≥ 4.97 accepts
   file:// servers only inside ~/.docker/mcp/catalogs (installer copies them).
 - Verified across a Docker Desktop restart: regtest shard continued (seq=2, n=2).
@@ -371,20 +371,20 @@
   `discoverUtxos` (WoC unspent + raw tx). All read-only except broadcast.
 - `SpendGuard`: per-tx fee cap, UTC-day spend cap, min interval; FAILS CLOSED
   when an input value is unresolvable; atomic ledger persist; cost records.
-- `feeRateSatPerKb` option on AnchorChain/MamemMemory (default 1 unchanged);
+- `feeRateSatPerKb` option on AnchorChain/NektarMemory (default 1 unchanged);
   main uses max(env, ARC policy) — measured 100 sat/kB live.
 - Keys at rest: scrypt(N=2^15,r=8,p=1,maxmem=256MB)+AES-256-GCM
   (`keystore.ts`); on main keys.json + fee.key.json MUST be encrypted,
   plaintext/missing passphrase refuses startup. Regtest/mock encrypt only
   when a passphrase is set.
-- Runtime `main` mode requires `MAMEM_MAINNET_CONFIRM=I_UNDERSTAND`; operator
-  fee key (MAMEM_FUND_WIF or generated fee.key.json) pays all anchors — its
+- Runtime `main` mode requires `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND`; operator
+  fee key (NEKTAR_FUND_WIF or generated fee.key.json) pays all anchors — its
   address is printed to stderr for funding. `testnet` stays refused.
 - Ops surface: `GET /v1/wallet`, `GET /v1/costs`, metrics
-  mamem_fee_sats_total / mamem_spend_refused_total{reason} /
-  mamem_fee_balance_sats; alert rules in ops/alerts.yml.
-- Docker MCP profile docker-mcp/mamem-main.yaml + `mcp-install --main`
-  (profile mamem_main; confirm flag is operator-set config, never baked in).
+  nektar_fee_sats_total / nektar_spend_refused_total{reason} /
+  nektar_fee_balance_sats; alert rules in ops/alerts.yml.
+- Docker MCP profile docker-mcp/nektar-main.yaml + `mcp-install --main`
+  (profile nektar_main; confirm flag is operator-set config, never baked in).
 - MEASURED on regtest @ 100 sat/kB (fee = bytes × 0.1 sat, 1-input fund):
   genesis 1143 B / 115 sats, append 3315 B / 332 sats, rotate 2904 B / 291 sats
   → fits the 1000-sat per-tx cap.
@@ -393,7 +393,7 @@
 - One live path `openLiveRuntime(cfg, net)` for `main` + `ttn`: Arcade
   broadcaster + WoC tracker + SpendGuard + encrypted keys + ReserveFunder
   top-up via `discoverUtxos`; `testnet` still refused.
-- TTN specifics: no `MAMEM_MAINNET_CONFIRM`; fee floor 1 sat/kB (Arcade
+- TTN specifics: no `NEKTAR_MAINNET_CONFIRM`; fee floor 1 sat/kB (Arcade
   policy is `miningFee {satoshis:0}` — zero-fee txs are never sent);
   testnet encoding (`toAddress([0x6f])` → `m…`/`n…`); finality 6;
   confirmEveryMs 30000.
@@ -404,16 +404,16 @@
 - VERIFIED read-only: Arcade policy 0 sat/kB, WoC tip 38877, header at
   tip-1 `isValidRootForHeight` true, real coinbase TSC→MerklePath
   `verify(txid, tracker)` PASS at height 38876.
-- `docker-mcp/mamem-ttn.yaml` + `mcp-install --ttn` (profile `mamem_ttn`);
+- `docker-mcp/nektar-ttn.yaml` + `mcp-install --ttn` (profile `nektar_ttn`);
   `pnpm ttn:readonly` live smoke; `pnpm ttn:pilot` (funded, not yet run).
 
 ## GOAL-v6 S2 — ZK derivation attestations (§14, POL-011)
-- `@mamem/datalog` `path.ts`: §14 committed path — h_i = dsha256(`fact:`-canonical
+- `@nektar/datalog` `path.ts`: §14 committed path — h_i = dsha256(`fact:`-canonical
   fact), edge e = dsha256(h_in‖…‖τ‖h_out) over raw 32-byte hashes, τ = the
   rule's POL-003 DAG node hash. `derivationPath` emits topologically ordered
   steps (fromStep links premises to their producer step); negated premises are
   refused (not ZK-provable pointwise).
-- Guest `tools/stark/methods/guest-datalog` (mamem-datalog): replays the path —
+- Guest `tools/stark/methods/guest-datalog` (nektar-datalog): replays the path —
   recomputes canonical rule serialisation (byte-identical to graph
   ruleCanonical, incl. JSON.stringify escaping), Merkle-proves τ against
   policyRoot with the same dsha256 fold + odd self-pairing as the batch tree,
@@ -430,7 +430,7 @@
   command), `verifyZkder`, `verifyDerivationBound` (anchored root + single-use
   queryId). `verifyCombinedStark` gained an optional derivation-journal leg —
   one issued queryId can bind membership + clearance + derivation.
-- MamemMemory: `proveDerivation(shard, {pred,args,edb?}, queryId)` injects the
+- NektarMemory: `proveDerivation(shard, {pred,args,edb?}, queryId)` injects the
   instance's `fragment(shard/seq)` EDB (same as recall) and walks the DAG's
   canonical provenance; `verifyDerivation(shard, bytes)` requires the
   configured anchoredPolicyRoot (matching the recomputed DAG root, same rule
@@ -449,8 +449,8 @@
 ## GOAL-v6 S5 — proof sharding (DIS-002, US 12,730,827 B2)
 - Licence position: nChain US 12,730,827 B2 (data-reveal path over a
   hierarchical structure) granted 2026-09-08; the Open BSV pledge grants free
-  use on BSV (+testnets) only — mamem is BSV-only, so the feature ships
-  default-ON behind `MAMEM_PROOF_SHARDING` (`0` → tools return 'disabled').
+  use on BSV (+testnets) only — nektar is BSV-only, so the feature ships
+  default-ON behind `NEKTAR_PROOF_SHARDING` (`0` → tools return 'disabled').
   NOTICE records the grant + pledge; v2-legal-notes updated (the WO
   2025/119666 filing family).
 - Design (a): VIRTUAL sharding over the existing anchored tree — shard j is
@@ -470,7 +470,7 @@
   top fold → claimed batchRoot). `verifySubsetAnchored` mirrors
   verifyMembershipAnchoredStark: valid anchor of the EXPECTED shard →
   canonical → mined → BUMP→headers → header R/size → reconstruction.
-- `MamemMemory.proveSubset(shard, seqs)` (one batch only; maps seq→leafIndex
+- `NektarMemory.proveSubset(shard, seqs)` (one batch only; maps seq→leafIndex
   by batch order) and `verifySubset(shard, bytes)` — the claimed root locates
   OUR tail link with that R, then the anchored path; result carries `seqs`
   (the verifier recovers which records were disclosed). MCP tools
@@ -479,7 +479,7 @@
   1/5/40/64/65/70/128/200; every malformed input ZksCodecError; disagreement/
   wrong-root/missing-sibling negatives; 300-mutation seeded walk), fuzz entry
   (canonical re-encode, no untyped errors, no mutation accepted),
-  subset-integration (real MamemAnchor on mock chain: other batch's R, wrong
+  subset-integration (real NektarAnchor on mock chain: other batch's R, wrong
   size, foreign shard, non-canonical, unmined, SPV-invalid, tampered,
   truncated — each refused; flag-off 'disabled').
 
@@ -522,10 +522,10 @@
 
 ## GOAL-v6 batch: S3 temporal aggregation, S1a on-chain commitment, S6.1–S6.4
 
-- **S3 (§12 multi-chain consensus time).** `chain/temporal.ts`: `TemporalSource[]` + `TemporalSources` (a ChainTracker whose header TIMES are the weighted median across sources — lower weighted median, so a skewed-high source can never push time up; roots/heights stay strictly on the primary BSV tracker). `MAMEM_TEMPORAL_SOURCES=bsv[,btc]` (default `bsv`) wired in runtime `chain.headerAtHeight`; BTC = a second `WocTracker` on `/v1/btc/main` (`MAMEM_BTC_WOC_URL` override). Single source = bit-identical.
-- **S1a (§13 cheap on-chain commitment).** `mcp/onchain.ts`: `OP_FALSE OP_RETURN <'mamem:attest:v1'> <sha256(proof)>` data output in a fee-key-funded P2PKH tx (0-sat output + change; NOT a shard anchor). `attestMembership(shard,seq,queryId)` proves + anchors; `verifyAttestation(txid,bytes)` matches the commitment (local txs only — chain fetch by txid remains an ops gap). Mock chain supports the data tx (only inputs are script-evaluated).
+- **S3 (§12 multi-chain consensus time).** `chain/temporal.ts`: `TemporalSource[]` + `TemporalSources` (a ChainTracker whose header TIMES are the weighted median across sources — lower weighted median, so a skewed-high source can never push time up; roots/heights stay strictly on the primary BSV tracker). `NEKTAR_TEMPORAL_SOURCES=bsv[,btc]` (default `bsv`) wired in runtime `chain.headerAtHeight`; BTC = a second `WocTracker` on `/v1/btc/main` (`NEKTAR_BTC_WOC_URL` override). Single source = bit-identical.
+- **S1a (§13 cheap on-chain commitment).** `mcp/onchain.ts`: `OP_FALSE OP_RETURN <'nektar:attest:v1'> <sha256(proof)>` data output in a fee-key-funded P2PKH tx (0-sat output + change; NOT a shard anchor). `attestMembership(shard,seq,queryId)` proves + anchors; `verifyAttestation(txid,bytes)` matches the commitment (local txs only — chain fetch by txid remains an ops gap). Mock chain supports the data tx (only inputs are script-evaluated).
 - **S6.1 (recall verify bug).** Plaintext items now run `prove`→`verifyFragment` before being served (parity with encrypted items; no decrypt step). Any SPV failure → per-item `unverifiable`+reason AND receipt `checkResult: 'unverifiable'` — anchor presence alone no longer earns `verified`. Behaviour change: unanchored/unmined plaintext is now withheld (previously served).
-- **S6.2 (ANC-006 Metanet flag).** `MamemAnchor` gains a `metaFlag` state field serialised FIRST — the data payload begins `04 4d455441`. `decodeMamemAnchor` accepts flag-present (new artifact) and flag-absent (`MamemAnchorV3.json`, the pre-flag artifact kept for decode + `freshContract` rehydration). `DecodedAnchor.metanet` reports the layout. `anchorFields` schema + vectors/core.json regenerated.
+- **S6.2 (ANC-006 Metanet flag).** `NektarAnchor` gains a `metaFlag` state field serialised FIRST — the data payload begins `04 4d455441`. `decodeNektarAnchor` accepts flag-present (new artifact) and flag-absent (`NektarAnchorV3.json`, the pre-flag artifact kept for decode + `freshContract` rehydration). `DecodedAnchor.metanet` reports the layout. `anchorFields` schema + vectors/core.json regenerated.
 - **S6.3 (GEN-007 algorithm id).** L_ZKMem v2 / L_ZKDer v3 / L_ZKDis v2: version byte 1→2 inserts `algorithm` at index 5 (`ALG_SHA256D=0x01`). Decode accepts rev 1 (implied sha256d) and rev 2 (enforced); encode emits rev 2 and refuses foreign ids.
 - **S6.4 (KEY-010).** No change — binding-equivalence to H(s‖p‖o‖l) documented in `crypto/keys.ts` (seed=key path, path=ψ‖ρ‖π in keyID, owner='self' counterparty, level=level key + ctx.l). Altering the tuple would orphan every existing ciphertext.
 - Tests: chain temporal.test (6), mcp attestation.test (3) + S6.1 regression, anchor flag test, zk codec rev-2 + rev-1 tests; e2e mock PASS; reproduce gate green (vectors regenerated).
@@ -535,10 +535,10 @@
 - **D1 (§16).** `AnswerReceipt.delegations` added and bound into `receiptDigest`; `recall` takes `opts.delegations`. Previously the delegation map verified per-entry but sat OUTSIDE the terminal signature — post-hoc edits were undetectable. Digest change is empty-safe for old receipts (each receipt verifies against its own signature).
 - **D2 (App E).** `remember(shard, d, prov?, level?, opts?.premiseRefs?)` floors the stored level at `max(cited premise levels)`; `revise()` inherits the base record's level; `RememberResult.level` reports the applied level; the `remember` MCP tool exposes `premiseRefs`. Behaviour change only for calls that pass `premiseRefs`.
 - **D3 (§13).** `AnswerReceipt.zk` carries the wire-form `ClearancePresentation` (canonical-JSON bound in the digest); `verifyReceiptZk(receipt, {trustedAuthorities, holder})` re-verifies the artifact — the `zkaccess` flag is now backed evidence.
-- **D4 (§19 M_U).** `rotateShard` writes each `RotationCert` (`index` now assigned at emission — previously all 0) to `__identity__` and anchors it (best-effort). `rotationChainProof(shard)` → genesisPub + per-cert `{data,prov,E,leaf,bundle}`; `verifyAnchoredRotationChain` (reasoning, new `@mamem/identity` runtime dep) binds text→leaf→anchor and replays `verifyCertChain`. Withheld certs make the chain look older, never forged.
+- **D4 (§19 M_U).** `rotateShard` writes each `RotationCert` (`index` now assigned at emission — previously all 0) to `__identity__` and anchors it (best-effort). `rotationChainProof(shard)` → genesisPub + per-cert `{data,prov,E,leaf,bundle}`; `verifyAnchoredRotationChain` (reasoning, new `@nektar/identity` runtime dep) binds text→leaf→anchor and replays `verifyCertChain`. Withheld certs make the chain look older, never forged.
 - **D5 (App D).** `extractAnchorAuthorship(spendTx, spentAnchorScript)` (contracts) decodes the spent anchor output, locates the owner pubKey push, verifies the preceding DER sig over `sha256(txPreimage)` — σ_n is now a discrete extractable artifact (`Sign(preimage) ≡ Sign(R_n‖t_n)`). No contract change — the field stays in the input, where the covenant enforces it.
-- **D6 (App E).** `MAMEM_ACCESS_LOG=1` writes timestamped `{event, at, shard, seq, caller}` access records to `__access__` on served decrypts + delta traverses (bypasses auto-anchor via `log.remember`, best-effort, never breaks a read). OFF by default — the log itself leaks access patterns.
-- **D7 (§16/§18).** `MamemMemoryOptions.model` + `recall` `opts.modelParams` → `AnswerReceipt.model:{id,params,weightsHash}`, canonical-bound in the digest. `modelId` reports `model.id` when set.
+- **D6 (App E).** `NEKTAR_ACCESS_LOG=1` writes timestamped `{event, at, shard, seq, caller}` access records to `__access__` on served decrypts + delta traverses (bypasses auto-anchor via `log.remember`, best-effort, never breaks a read). OFF by default — the log itself leaks access patterns.
+- **D7 (§16/§18).** `NektarMemoryOptions.model` + `recall` `opts.modelParams` → `AnswerReceipt.model:{id,params,weightsHash}`, canonical-bound in the digest. `modelId` reports `model.id` when set.
 - **D8 (§19).** `revocationProof(pub)` → `{seq,data,prov,E,leaf,bundle,anchored}` (decrypts under agentSeed); `AuditBundle.revocations` entries now carry `{data,prov,E,leaf,bundle}`; `verifyAuditBundle` recomputes `computeLeaf` before convicting — an inclusion proof for a different record is rejected.
 - **D9/D10.** `SaleOffer.expiresAt` inside `offerDigest` (signature-scheme change: old offers fail verification by design); `verifyOfferSig` + `saleEscrow` refuse expired offers; `saleEscrow` refuses `refundAfter ≤ currentHeight + margin` before funding.
 - Remaining deferrals (unchanged, in GOAL-v8): completeness/TEE, truth≠inclusion, OWL-DL, on-chain ZK verify, PoW header trust, V2 slashing, escrow boundary cases, `ctx.t`=tenant, lazy `π_i`, header-time `t_n`, non-deterministic LLM output, `__access__` completeness.
@@ -549,9 +549,9 @@
 Strict ZK re-scan found `verifyCombinedStark` (the §13 `Π_j = (π_j, ZKAccess(ℓ_q ≥ ℓ_j))` shared-query binding) existed but was dead code: membership STARKs and access clearances were verified in separate paths, so nothing proved the two artefacts were issued for the same query.
 
 - `zkQueries` rows now persist `[queryId, expiry, nonce, verifierId]` (v2, backward-compatible with legacy 2-field rows — those consume normally but cannot serve a combined proof).
-- `MamemMemory.verifyCombined(shard, seq, membershipBytes, zk, {scope?, derivationBytes?, callerPubkey?})` is the verifier-side Π object: (1) the stored issued query must recompute to the membership journal's queryId, (2) `verifyCombinedStark` requires the clearance transcript — and an optional L_ZKDer derivation journal — to carry the SAME queryId and the issued nonce, (3) membership/derivation artifact checks run with consume delegated to one final `consumeZkQuery` (single use for the whole Π), (4) `verifyClearance` burns the transcript.
+- `NektarMemory.verifyCombined(shard, seq, membershipBytes, zk, {scope?, derivationBytes?, callerPubkey?})` is the verifier-side Π object: (1) the stored issued query must recompute to the membership journal's queryId, (2) `verifyCombinedStark` requires the clearance transcript — and an optional L_ZKDer derivation journal — to carry the SAME queryId and the issued nonce, (3) membership/derivation artifact checks run with consume delegated to one final `consumeZkQuery` (single use for the whole Π), (4) `verifyClearance` burns the transcript.
 - New MCP tool `verifyCombined` (tool count 19 → 20).
-- Tests: `stark-verify` Π-binding unit (TC-115), `zk-integration` combined-Π negatives incl. inconsistent registry rows (TC-116), `MAMEM_STARK_PROVE=1` e2e (TC-117).
+- Tests: `stark-verify` Π-binding unit (TC-115), `zk-integration` combined-Π negatives incl. inconsistent registry rows (TC-116), `NEKTAR_STARK_PROVE=1` e2e (TC-117).
 
 ## GOAL-v9 — on-chain trustless verification (design doc)
 

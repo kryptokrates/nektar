@@ -1,4 +1,4 @@
-# mamem MCP server image (offline demo chain; see docs/OPERATIONS.md for regtest).
+# nektar MCP server image (offline demo chain; see docs/OPERATIONS.md for regtest).
 
 # ZK prover (Wright §13 STARK): RISC Zero guest + host CLI, built reproducibly.
 # The build FAILS if the program id differs from the pinned one.
@@ -10,10 +10,10 @@ COPY tools/stark/Cargo.toml tools/stark/Cargo.lock ./
 COPY tools/stark/host ./host
 COPY tools/stark/methods ./methods
 COPY packages/zk/stark/image-id.json /pinned.json
-RUN cargo build --release -p mamem-stark \
- && id=$(./target/release/mamem-stark image-id) \
+RUN cargo build --release -p nektar-stark \
+ && id=$(./target/release/nektar-stark image-id) \
  && grep -q "\"$id\"" /pinned.json || { echo "STARK image id $id != pinned"; exit 1; } \
- && cp ./target/release/mamem-stark /usr/local/bin/ && cp "$(readlink -f "$(which r0vm)")" /usr/local/bin/r0vm
+ && cp ./target/release/nektar-stark /usr/local/bin/ && cp "$(readlink -f "$(which r0vm)")" /usr/local/bin/r0vm
 
 FROM node:24-slim AS build
 WORKDIR /app
@@ -27,15 +27,15 @@ RUN pnpm install --frozen-lockfile && pnpm -r build && pnpm reproduce
 FROM node:24-slim
 WORKDIR /app
 COPY --from=build /app /app
-COPY --from=stark /usr/local/bin/mamem-stark /usr/local/bin/r0vm /usr/local/bin/
-ENV MAMEM_STARK_PROVER=/usr/local/bin/mamem-stark
+COPY --from=stark /usr/local/bin/nektar-stark /usr/local/bin/r0vm /usr/local/bin/
+ENV NEKTAR_STARK_PROVER=/usr/local/bin/nektar-stark
 RUN mkdir -p /data && chown node:node /data
 USER node
-# MAMEM_NETWORK=mock (zero setup) | regtest (persistent in /data; needs
-# MAMEM_FUND_WIF + MAMEM_RPC_PASS, Teranode reachable via host.docker.internal)
-ENV MAMEM_MODEL_ID=unspecified MAMEM_BATCH=4 MAMEM_NETWORK=mock MAMEM_DATA_DIR=/data
+# NEKTAR_NETWORK=mock (zero setup) | regtest (persistent in /data; needs
+# NEKTAR_FUND_WIF + NEKTAR_RPC_PASS, Teranode reachable via host.docker.internal)
+ENV NEKTAR_MODEL_ID=unspecified NEKTAR_BATCH=4 NEKTAR_NETWORK=mock NEKTAR_DATA_DIR=/data
 VOLUME /data
-LABEL io.modelcontextprotocol.server.name="io.github.nedzof/mamem"
+LABEL io.modelcontextprotocol.server.name="io.github.nedzof/nektar"
 # health = a full scripted MCP session against a fresh server process
 HEALTHCHECK --interval=5m --timeout=60s CMD node packages/mcp/demo/client.mjs > /dev/null || exit 1
 ENTRYPOINT ["node", "packages/mcp/dist/src/bin.js"]

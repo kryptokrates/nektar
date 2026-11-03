@@ -7,7 +7,7 @@
 // without revealing.
 import { PrivateKey, Transaction, LockingScript, UnlockingScript, Hash, P2PKH } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, buildP2PKHScript } from 'runar-sdk'
-import { DISCLOSURESALE_ARTIFACT } from '@mamem/contracts'
+import { DISCLOSURESALE_ARTIFACT } from '@nektar/contracts'
 
 /** The seller's published offer — depositorPkh is added by each buyer
  *  when they self-build the escrow script. */

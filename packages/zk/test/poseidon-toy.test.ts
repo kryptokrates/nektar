@@ -31,7 +31,7 @@ test('rate-boundary absorb permutes mid-stream', () => {
 
 // full re-derivation from nChain's parameter files — dev-local only, runs when
 // the zkscript checkout sits alongside the repo (not on CI)
-const AIINF = process.env.MAMEM_AIINF_DIR ?? join(here, '../../../../zkscript/examples/ai_inference')
+const AIINF = process.env.NEKTAR_AIINF_DIR ?? join(here, '../../../../zkscript/examples/ai_inference')
 const P = join(AIINF, 'parameters')
 const rowsOf = (f: string): number[][] =>
   readFileSync(join(P, f), 'utf8').trim().split('\n').map(l => l.trim().split(/\s+/).map(Number))
@@ -39,7 +39,7 @@ const col0 = (f: string): number[] => rowsOf(f).map(r => r[0]!)
 
 test('modelPoseidon re-derives from parameter files', t => {
   if (!existsSync(join(P, 'weight_1.txt'))) {
-    t.skip('nChain zkscript checkout not present (set MAMEM_AIINF_DIR)')
+    t.skip('nChain zkscript checkout not present (set NEKTAR_AIINF_DIR)')
     return
   }
   const hm = modelPoseidon(rowsOf('weight_1.txt'), rowsOf('weight_2.txt'),

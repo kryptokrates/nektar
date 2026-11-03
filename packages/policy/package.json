@@ -1,5 +1,5 @@
 {
-  "name": "@mamem/policy",
+  "name": "@nektar/policy",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -13,14 +13,14 @@
   },
   "dependencies": {
     "@cedar-policy/cedar-wasm": "^4.14.0",
-    "@mamem/core": "workspace:*",
-    "@mamem/log": "workspace:*"
+    "@nektar/core": "workspace:*",
+    "@nektar/log": "workspace:*"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"
   },
   "devDependencies": {
-    "@mamem/chain": "workspace:*",
-    "@mamem/anchor": "workspace:*"
+    "@nektar/chain": "workspace:*",
+    "@nektar/anchor": "workspace:*"
   }
 }

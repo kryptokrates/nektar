@@ -5,7 +5,7 @@ Moved from the README; everything stated exactly.
 ## Sealing (writes)
 
 - Records are appended to a local encrypted log (`BatchLog`); a batch's
-  SHA-256 Merkle root `R` is committed in one spend of the **`MamemAnchor`
+  SHA-256 Merkle root `R` is committed in one spend of the **`NektarAnchor`
   Rúnar covenant**. The anchor UTXO must spend its own previous head —
   a single non-forking UTXO chain per shard. One anchor tx per batch,
   independent of batch size.
@@ -23,7 +23,7 @@ Derived content inherits the max clearance of its premises.
 
 ## Zero knowledge
 
-`@mamem/zk` wraps a RISC Zero STARK (BabyBear field, Poseidon2 sponge) that
+`@nektar/zk` wraps a RISC Zero STARK (BabyBear field, Poseidon2 sponge) that
 proves *leaf ∈ R* plus a committed `queryId` — verifying a ~224 KB receipt
 takes milliseconds, off-chain, via a wasm-bindgen Rust verifier
 (`verifyZkm2`). The guest program is pinned by `image-id.json` and built
@@ -33,11 +33,11 @@ reproducibly inside the Docker image (build fails on mismatch).
 
 | Contract | Role |
 |---|---|
-| `MamemZkClaim` | 18-field state covenant: `status, receiptHash, journalRoot, journalSize, queryId, bondSats, deadline, responseDeadline, challengerPkh, bisectLo/Hi, midCommit, proverPkh, maxFee, window, stages, verdictCode, anchorOutpoint`. Methods: `challenge → reveal → bisect → proveStage → settle/claimTimeout/slashTimeout` (8 public). |
+| `NektarZkClaim` | 18-field state covenant: `status, receiptHash, journalRoot, journalSize, queryId, bondSats, deadline, responseDeadline, challengerPkh, bisectLo/Hi, midCommit, proverPkh, maxFee, window, stages, verdictCode, anchorOutpoint`. Methods: `challenge → reveal → bisect → proveStage → settle/claimTimeout/slashTimeout` (8 public). |
 | `Poseidon2Stage` | the on-chain judge: ONE risc0-zkp 3.0.5 poseidon2 round (24-cell state, x⁷ sbox, M_ext/M_int) executed as a stateful covenant step — a dispute resolves to a single verified round. |
 | `ClaimVerdict` | minted by `settle`; `authorize` enforces payment to `payeePkh` in the same tx. |
 | `DisclosureSale` | `buyGated` pins `hash256(prevouts)` to the exact [sale, verdict] pair — the buy is consensus-impossible without spending the verdict atomically. |
-| `MamemAnchor.witnessSettle` | co-spent input of `settleAnchored`; re-emits its own continuation (anchor survives) + the identical 4-output list the claim enumerates → `journalRoot == anchor.R` is consensus-enforced. |
+| `NektarAnchor.witnessSettle` | co-spent input of `settleAnchored`; re-emits its own continuation (anchor survives) + the identical 4-output list the claim enumerates → `journalRoot == anchor.R` is consensus-enforced. |
 
 The bisection game: `stages` committed stage-hashes; `reveal`/`bisect` halve
 the disputed range each round; the terminal step replays one Poseidon2 round

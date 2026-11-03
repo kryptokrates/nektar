@@ -16,7 +16,7 @@ jobs:
     env:
       # STARK proving needs the RISC Zero prover image (pnpm stark:image, 4.6 GB);
       # CI still verifies a real committed receipt via WASM (unit tests + reproduce).
-      MAMEM_E2E_STARK: '0'
+      NEKTAR_E2E_STARK: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: build image (clean-checkout gate)
-        run: docker build -t mamem:ci .
+        run: docker build -t nektar:ci .
       - name: smoke — scripted MCP session inside the image
-        run: docker run --rm --entrypoint node mamem:ci packages/mcp/demo/client.mjs
+        run: docker run --rm --entrypoint node nektar:ci packages/mcp/demo/client.mjs
         timeout-minutes: 3

@@ -1,5 +1,5 @@
 // JSONL of executor cases for the §14 derivation guest: committed paths built
-// with @mamem/datalog + @mamem/graph (the same code memory.ts uses) plus
+// with @nektar/datalog + @nektar/graph (the same code memory.ts uses) plus
 // negatives the guest MUST refuse.
 import { merkleRoot, merkleProof, dsha256, utf8, toHex } from '../../packages/core/dist/src/index.js'
 import { parseProgram, derivationPath, nodeHash, factCanonical } from '../../packages/datalog/dist/src/index.js'

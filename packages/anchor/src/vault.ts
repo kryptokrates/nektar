@@ -1,4 +1,4 @@
-// Host adapter for the V1 MamemFeeVault covenant (GOAL-v7).
+// Host adapter for the V1 NektarFeeVault covenant (GOAL-v7).
 // The contract is a StatefulSmartContract: mutable props carry the window
 // state; the SDK serializes state / builds scripts / computes the
 // OP_PUSH_TX preimage — no hand-assembled script bytes here.
@@ -7,8 +7,8 @@ import {
   RunarContract, computeOpPushTx, serializeState,
   extractStateFromScript, buildP2PKHScript
 } from 'runar-sdk'
-import type { Broadcaster, Funder, FundingOut } from '@mamem/chain'
-import { MAMEM_FEEVAULT_ARTIFACT } from '@mamem/contracts'
+import type { Broadcaster, Funder, FundingOut } from '@nektar/chain'
+import { NEKTAR_FEEVAULT_ARTIFACT } from '@nektar/contracts'
 
 /** GOAL-v7 name kept for compatibility. */
 export type VaultParams = VaultConfig
@@ -27,7 +27,7 @@ export interface VaultUtxo { txid: string, vout: number, satoshis: number, scrip
 export class FeeVault {
   private contract: RunarContract
   constructor (private cfg: VaultConfig) {
-    this.contract = new RunarContract(MAMEM_FEEVAULT_ARTIFACT, [
+    this.contract = new RunarContract(NEKTAR_FEEVAULT_ARTIFACT, [
       cfg.destPkh, cfg.ownerPkh, cfg.perTxCap, cfg.windowCap,
       cfg.windowBlocks, cfg.maxFee
     ])
@@ -42,7 +42,7 @@ export class FeeVault {
 
   private stateHex (spentInWindow: bigint, windowStart: bigint): string {
     const c = this.cfg
-    return serializeState(MAMEM_FEEVAULT_ARTIFACT.stateFields!, {
+    return serializeState(NEKTAR_FEEVAULT_ARTIFACT.stateFields!, {
       destPkh: c.destPkh, ownerPkh: c.ownerPkh, perTxCap: c.perTxCap,
       windowCap: c.windowCap, windowBlocks: c.windowBlocks, maxFee: c.maxFee,
       spentInWindow, windowStart
@@ -51,7 +51,7 @@ export class FeeVault {
 
   /** read {spentInWindow, windowStart} back out of a vault script */
   stateOf (script: string): { spentInWindow: bigint, windowStart: bigint } {
-    const d = extractStateFromScript(MAMEM_FEEVAULT_ARTIFACT, script) as any
+    const d = extractStateFromScript(NEKTAR_FEEVAULT_ARTIFACT, script) as any
     if (!d) throw new Error('vault: not a stateful vault script')
     return { spentInWindow: BigInt(d.spentInWindow), windowStart: BigInt(d.windowStart) }
   }
@@ -85,7 +85,7 @@ export class FeeVault {
     const c = this.contract as any
     const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep
       ? c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, 0)
-      : computeOpPushTx(tx, 0, utxo.script, utxo.satoshis, MAMEM_FEEVAULT_ARTIFACT.codeSeparatorIndices?.[0] ?? 0)
+      : computeOpPushTx(tx, 0, utxo.script, utxo.satoshis, NEKTAR_FEEVAULT_ARTIFACT.codeSeparatorIndices?.[0] ?? 0)
     // user sig: checkSig runs after OP_CODESEPARATOR → sign over the trimmed subscript
     const sigSub = c.getSubscriptForSigning
       ? c.getSubscriptForSigning(utxo.script, 0)

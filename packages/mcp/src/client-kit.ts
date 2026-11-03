@@ -7,7 +7,7 @@
 //   await call('recall', { shard, seq, identity, zk })
 import { randomBytes } from 'node:crypto'
 import { PrivateKey } from '@bsv/sdk'
-import { signBinding, answerChallenge, issueClearance, proveAccess, encodePresentation, encodeCredential, decodeCredential, type ClearanceCredential, type ClearancePresentationWire } from '@mamem/identity'
+import { signBinding, answerChallenge, issueClearance, proveAccess, encodePresentation, encodeCredential, decodeCredential, type ClearanceCredential, type ClearancePresentationWire } from '@nektar/identity'
 import type { CallerIdentity } from './memory.js'
 
 export type ToolCall = (name: string, args: Record<string, unknown>) => Promise<any>
@@ -33,7 +33,7 @@ export class ClientWallet {
   }
 }
 
-/** clearance authority (trusted by the server via MAMEM_CLEARANCE_AUTHORITIES) */
+/** clearance authority (trusted by the server via NEKTAR_CLEARANCE_AUTHORITIES) */
 export class ClearanceAuthority {
   readonly key: PrivateKey
   constructor (key = PrivateKey.fromRandom()) { this.key = key }

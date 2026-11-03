@@ -1,14 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, MerklePath, LockingScript, UnlockingScript, ScriptEvaluationError } from '@bsv/sdk'
-import { MAMEM_ANCHOR_ARTIFACT, TAG_RPRIME, META_FLAG_HEX, decodeMamemAnchor } from '@mamem/contracts'
+import { NEKTAR_ANCHOR_ARTIFACT, TAG_RPRIME, META_FLAG_HEX, decodeNektarAnchor } from '@nektar/contracts'
 import { RunarContract } from 'runar-sdk'
-import { chainRp, GENESIS_PREV_RP, dsha256, utf8, shardIdFromPubkey, hash160, toHex, type Bytes, type AnchorData } from '@mamem/core'
+import { chainRp, GENESIS_PREV_RP, dsha256, utf8, shardIdFromPubkey, hash160, toHex, type Bytes, type AnchorData } from '@nektar/core'
 import knexPkg from 'knex'
 
-import { MockChain, MockFunder } from '@mamem/chain'
-import { createMamemOverlay } from '../src/node.js'
-import { AnchorChain } from '@mamem/anchor'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { createNektarOverlay } from '../src/node.js'
+import { AnchorChain } from '@nektar/anchor'
 
 const SHARD = 'shard-alpha'
 const shardKeyHex = PrivateKey.fromRandom().toHex()
@@ -21,7 +21,7 @@ const sidOf = (k: PrivateKey) => toHex(hash160(Uint8Array.from(Buffer.from(pubOf
 interface BuiltTx { tx: Transaction, data: AnchorData }
 
 const contractScript = (pub: string, n: number, size: number, R: Bytes, Rp: Bytes, tag = TAG_HEX, pkh?: string) =>
-  new RunarContract(MAMEM_ANCHOR_ARTIFACT, [pub, pkh ?? toHex(hash160(Uint8Array.from(Buffer.from(pub, 'hex')))), META_FLAG_HEX, BigInt(n), BigInt(size), toHex(R), toHex(Rp), tag]).getLockingScript()
+  new RunarContract(NEKTAR_ANCHOR_ARTIFACT, [pub, pkh ?? toHex(hash160(Uint8Array.from(Buffer.from(pub, 'hex')))), META_FLAG_HEX, BigInt(n), BigInt(size), toHex(R), toHex(Rp), tag]).getLockingScript()
 
 // dummy unlock for hand-built spends: addInput ignores a plain
 // unlockingScript, so use a template returning an OP_1 script
@@ -52,7 +52,7 @@ async function mkAnchor (
   return { tx, data }
 }
 
-const anchorData = (tx: Transaction) => decodeMamemAnchor(tx.outputs[0]!.lockingScript.toHex())!
+const anchorData = (tx: Transaction) => decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())!
 
 // give the funder's synthetic parents a mined BUMP so BEEF verification passes
 
@@ -64,24 +64,24 @@ async function setup () {
   const utxos = (funder as any).utxos as Array<{ tx: Transaction }>
   for (const u of utxos) chain.mempool.set(u.tx.id('hex'), u.tx)
   chain.mine(1)
-  const overlay = await createMamemOverlay(chain, chain)
+  const overlay = await createNektarOverlay(chain, chain)
   // NOTE: for inputs spending contract outputs the engine runs real script
   // eval — hand-built spends with empty unlocking scripts fail at eval,
-  // BEFORE tm_mamem sees them. tm-level negatives are asserted with
+  // BEFORE tm_nektar sees them. tm-level negatives are asserted with
   // rejectedSubmit(); contract-level (eval) negatives with assert.rejects.
   const submit = async (tx: Transaction) =>
-    overlay.engine.submit({ beef: tx.toBEEF(), topics: ['tm_mamem'] }, undefined, 'current-tx')
-  const admitted = (s: any) => (s.tm_mamem?.outputsToAdmit?.length ?? 0) > 0
+    overlay.engine.submit({ beef: tx.toBEEF(), topics: ['tm_nektar'] }, undefined, 'current-tx')
+  const admitted = (s: any) => (s.tm_nektar?.outputsToAdmit?.length ?? 0) > 0
   return { chain, funder, overlay, submit, admitted }
 }
 
-test('tm_mamem: admit genesis+successor, lookups work', async (t) => {
+test('tm_nektar: admit genesis+successor, lookups work', async (t) => {
   const { chain, funder, overlay, submit, admitted } = await setup()
   t.after(async () => { await overlay.knex.destroy() })
   const fk = funder.keyPair
   const R = (i: number) => dsha256(utf8(`batch-${i}`))
   const ac = new AnchorChain('s', fk, funder, fk, chain as any)
-  const g = await ac.anchor(10, R(0)); const gData = decodeMamemAnchor(g.tx.outputs[0]!.lockingScript.toHex())!
+  const g = await ac.anchor(10, R(0)); const gData = decodeNektarAnchor(g.tx.outputs[0]!.lockingScript.toHex())!
   assert.equal(admitted(await submit(g.tx)), true, 'genesis admitted')
   assert.equal(overlay.ls.getHead(sidOf(fk))!.txid, g.tx.id('hex'))
 
@@ -89,15 +89,15 @@ test('tm_mamem: admit genesis+successor, lookups work', async (t) => {
   assert.equal(admitted(await submit(a1.tx)), true, 'successor admitted')
   assert.equal(overlay.ls.getHead(sidOf(fk))!.txid, a1.tx.id('hex'))
 
-  const head = await overlay.engine.lookup({ service: 'ls_mamem', query: { shard: sidOf(fk) } })
+  const head = await overlay.engine.lookup({ service: 'ls_nektar', query: { shard: sidOf(fk) } })
   assert.equal(head.type, 'output-list')
   assert.equal(head.outputs.length, 1)
   assert.equal(Transaction.fromBEEF(head.outputs[0]!.beef).id('hex'), a1.tx.id('hex'))
-  const byN = await overlay.engine.lookup({ service: 'ls_mamem', query: { shard: sidOf(fk), n: 0 } })
+  const byN = await overlay.engine.lookup({ service: 'ls_nektar', query: { shard: sidOf(fk), n: 0 } })
   assert.equal(Transaction.fromBEEF(byN.outputs[0]!.beef).id('hex'), g.tx.id('hex'))
 })
 
-test('tm_mamem: rejection cases leave head unchanged', async (t) => {
+test('tm_nektar: rejection cases leave head unchanged', async (t) => {
   const { chain, funder, overlay, submit, admitted } = await setup()
   t.after(async () => { await overlay.knex.destroy() })
   const fk = funder.keyPair
@@ -139,7 +139,7 @@ test('tm_mamem: rejection cases leave head unchanged', async (t) => {
   assert.equal(admitted(await submit(squat.tx)), false, 'squatting genesis rejected')
 })
 
-test('tm_mamem: rotation admitted, rotate-with-changed-state rejected', async (t) => {
+test('tm_nektar: rotation admitted, rotate-with-changed-state rejected', async (t) => {
   const { chain, funder, overlay, submit, admitted } = await setup()
   t.after(async () => { await overlay.knex.destroy() })
   const fk = funder.keyPair
@@ -171,7 +171,7 @@ test('tm_mamem: rotation admitted, rotate-with-changed-state rejected', async (t
   await assert.rejects(() => submit(badRot.tx), 'rotate that changes n rejected')
 })
 
-test('tm_mamem: double-spend of head — only first successor admitted', async (t) => {
+test('tm_nektar: double-spend of head — only first successor admitted', async (t) => {
   const { chain, funder, overlay, submit, admitted } = await setup()
   t.after(async () => { await overlay.knex.destroy() })
   const fk = funder.keyPair
@@ -184,13 +184,13 @@ test('tm_mamem: double-spend of head — only first successor admitted', async (
   // a1b: a sibling successor spending the same head g — built as a real
   // contract append of the g-state (valid spend; tm must reject it because
   // the head has already moved to a1)
-  const gState = decodeMamemAnchor(g.tx.outputs[0]!.lockingScript.toHex())!
+  const gState = decodeNektarAnchor(g.tx.outputs[0]!.lockingScript.toHex())!
   const a1b = await mkAnchor(funder, fk, { n: 1, size: 3, R: R(9), Rp: chainRp(gState.Rp, R(9), 3), prevHead: { tx: g.tx, vout: 0 } })
   await assert.rejects(() => submit(a1b.tx))
   assert.equal(overlay.ls.getHead(sidOf(fk))!.txid, a1.tx.id('hex'))
 })
 
-test('tm_mamem: replayed already-admitted anchor not re-admitted', async (t) => {
+test('tm_nektar: replayed already-admitted anchor not re-admitted', async (t) => {
   const { chain, funder, overlay, submit } = await setup()
   t.after(async () => { await overlay.knex.destroy() })
   const fk = funder.keyPair
@@ -200,13 +200,13 @@ test('tm_mamem: replayed already-admitted anchor not re-admitted', async (t) => 
   let replayed = true
   try {
     const s = await submit(g.tx)
-    replayed = (s.tm_mamem?.outputsToAdmit?.length ?? 0) > 0
+    replayed = (s.tm_nektar?.outputsToAdmit?.length ?? 0) > 0
   } catch { replayed = false } // engine may throw on dup
   assert.equal(replayed, false, 'replay not admitted')
   assert.equal(overlay.ls.getHead(sidOf(fk))!.txid, headBefore)
 })
 
-test('tm_mamem: genesis with wrong tag rejected', async (t) => {
+test('tm_nektar: genesis with wrong tag rejected', async (t) => {
   const { funder, overlay, submit, admitted } = await setup()
   t.after(async () => { await overlay.knex.destroy() })
   const g = await mkAnchor(funder, funder.keyPair, {
@@ -216,7 +216,7 @@ test('tm_mamem: genesis with wrong tag rejected', async (t) => {
   assert.equal(admitted(await submit(g.tx)), false)
 })
 
-test('tm_mamem: genesis spending a topical coin (previousCoins non-empty) rejected', async (t) => {
+test('tm_nektar: genesis spending a topical coin (previousCoins non-empty) rejected', async (t) => {
   const { funder, overlay, submit, admitted } = await setup()
   t.after(async () => { await overlay.knex.destroy() })
   const fk = funder.keyPair
@@ -235,7 +235,7 @@ test('tm_mamem: genesis spending a topical coin (previousCoins non-empty) reject
   await assert.rejects(() => submit(tx))
 })
 
-test('tm_mamem: successor locked to a different pubkey rejected', async (t) => {
+test('tm_nektar: successor locked to a different pubkey rejected', async (t) => {
   const { funder, overlay, submit, admitted } = await setup()
   t.after(async () => { await overlay.knex.destroy() })
   const fk = funder.keyPair
@@ -255,7 +255,7 @@ test('tm_mamem: successor locked to a different pubkey rejected', async (t) => {
   assert.equal(overlay.ls.getHead(sidOf(fk))!.txid, g.tx.id('hex'))
 })
 
-test('ls_mamem: heads persist across engine restart (file sqlite)', async (t) => {
+test('ls_nektar: heads persist across engine restart (file sqlite)', async (t) => {
   const chain = new MockChain()
   const funder = new MockFunder(); funder.topup(50)
   for (const u of (funder as any).utxos as Array<{ tx: Transaction }>) chain.mempool.set(u.tx.id('hex'), u.tx)
@@ -263,11 +263,11 @@ test('ls_mamem: heads persist across engine restart (file sqlite)', async (t) =>
   // file-backed: use a temp file path
   const path = await import('node:path')
   const os = await import('node:os')
-  const f = path.join(os.tmpdir(), `mamem-ls-${Date.now()}.sqlite`)
+  const f = path.join(os.tmpdir(), `nektar-ls-${Date.now()}.sqlite`)
   const kx = knexPkg({ client: 'sqlite3', connection: { filename: f }, useNullAsDefault: true })
-  let overlay = await createMamemOverlay(chain, chain, kx)
-  const submit = (tx: Transaction) => overlay.engine.submit({ beef: tx.toBEEF(), topics: ['tm_mamem'] }, undefined, 'current-tx')
-  const admitted = (s: any) => (s.tm_mamem?.outputsToAdmit?.length ?? 0) > 0
+  let overlay = await createNektarOverlay(chain, chain, kx)
+  const submit = (tx: Transaction) => overlay.engine.submit({ beef: tx.toBEEF(), topics: ['tm_nektar'] }, undefined, 'current-tx')
+  const admitted = (s: any) => (s.tm_nektar?.outputsToAdmit?.length ?? 0) > 0
   const fk = funder.keyPair
   const R = (i: number) => dsha256(utf8(`rst-${i}`))
   const ac3 = new AnchorChain('s', fk, funder, fk, chain as any)
@@ -283,8 +283,8 @@ test('ls_mamem: heads persist across engine restart (file sqlite)', async (t) =>
   // simulate restart: close the first overlay's knex, open a fresh one on the same file
   await overlay.knex.destroy()
   const kx2 = knexPkg({ client: 'sqlite3', connection: { filename: f }, useNullAsDefault: true })
-  const overlay2 = await createMamemOverlay(chain, chain, kx2)
-  const submit2 = (tx: Transaction) => overlay2.engine.submit({ beef: tx.toBEEF(), topics: ['tm_mamem'] }, undefined, 'current-tx')
+  const overlay2 = await createNektarOverlay(chain, chain, kx2)
+  const submit2 = (tx: Transaction) => overlay2.engine.submit({ beef: tx.toBEEF(), topics: ['tm_nektar'] }, undefined, 'current-tx')
   assert.equal(overlay2.ls.getHead(sidOf(fk))?.txid, headBefore, 'head survives restart')
 
   const g3 = await mkAnchor(funder, fk, { n: 0, size: 1, R: R(9), Rp: chainRp(GENESIS_PREV_RP, R(9), 1) })

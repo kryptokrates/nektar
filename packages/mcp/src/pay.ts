@@ -3,32 +3,32 @@
 // carrying an OP_RETURN invoice tag, hands it over, we verify + broadcast.
 // No wallet ecosystem — anything that can sign a BSV tx can pay (a WIF is
 // enough). Settlement is publicly auditable from the tx alone: (pays payTo ≥
-// amount) ∧ (carries `mamempay:<invoiceId>`) — the receipt commits the txid.
+// amount) ∧ (carries `nektarpay:<invoiceId>`) — the receipt commits the txid.
 import { Transaction, PrivateKey, P2PKH, Beef } from '@bsv/sdk'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { utf8 } from '@mamem/core'
-import type { MamemMemory } from './memory.js'
+import { utf8 } from '@nektar/core'
+import type { NektarMemory } from './memory.js'
 
-export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(process.env.MAMEM_PAYMENTS ?? '')
+export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAYMENTS ?? '')
 
-/** tools that cost sats when MAMEM_PAYMENTS=1 */
+/** tools that cost sats when NEKTAR_PAYMENTS=1 */
 export const PAID_TOOLS = new Set(['anchor', 'groundedAnswer', 'commitReceipt', 'proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership', 'attestInference'])
 /** prover-side tools: real CPU (STARK ~35-50s) and sometimes a chain tx — priced above answers. The verify-side tools stay free: a verifier never pays to check. */
 export const PROVER_TOOLS = new Set(['proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership', 'attestInference'])
 
 const networkTag = (): string => {
-  const n = process.env.MAMEM_NETWORK ?? 'mock'
+  const n = process.env.NEKTAR_NETWORK ?? 'mock'
   return n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:mock'
 }
 
 let opAddr: string | undefined
 const operatorAddress = (): string => {
   if (opAddr === undefined) {
-    const wif = process.env.MAMEM_OPERATOR_WIF
-    if (!wif) throw new Error('MAMEM_PAYMENTS=1 needs MAMEM_OPERATOR_WIF — the WIF whose address payments settle to (never broadcast, address only is served)')
-    opAddr = PrivateKey.fromWif(wif).toPublicKey().toAddress(process.env.MAMEM_NETWORK === 'main' ? [0x00] : [0x6f])
+    const wif = process.env.NEKTAR_OPERATOR_WIF
+    if (!wif) throw new Error('NEKTAR_PAYMENTS=1 needs NEKTAR_OPERATOR_WIF — the WIF whose address payments settle to (never broadcast, address only is served)')
+    opAddr = PrivateKey.fromWif(wif).toPublicKey().toAddress(process.env.NEKTAR_NETWORK === 'main' ? [0x00] : [0x6f])
   }
   return opAddr
 }
@@ -37,13 +37,13 @@ const operatorAddress = (): string => {
  *  invoice is served — an invoice to a missing address can never settle. The
  *  WIF is used for its ADDRESS only (never signs); returns the payTo. */
 export const requireOperatorWallet = (): string => {
-  if (!process.env.MAMEM_OPERATOR_WIF) throw new Error('MAMEM_PAYMENTS=1 requires MAMEM_OPERATOR_WIF at startup — set the operator wallet WIF (payments settle to its address; the key never signs)')
-  try { return operatorAddress() } catch (e) { throw new Error(`MAMEM_OPERATOR_WIF is not a valid WIF — ${(e as Error).message}`) }
+  if (!process.env.NEKTAR_OPERATOR_WIF) throw new Error('NEKTAR_PAYMENTS=1 requires NEKTAR_OPERATOR_WIF at startup — set the operator wallet WIF (payments settle to its address; the key never signs)')
+  try { return operatorAddress() } catch (e) { throw new Error(`NEKTAR_OPERATOR_WIF is not a valid WIF — ${(e as Error).message}`) }
 }
 
-/** per-tool price: MAMEM_PRICE_<TOOL>_SATS, falling back to MAMEM_PRICE_SATS, then defaults */
+/** per-tool price: NEKTAR_PRICE_<TOOL>_SATS, falling back to NEKTAR_PRICE_SATS, then defaults */
 export const priceFor = (tool: string): number =>
-  Number(process.env[`MAMEM_PRICE_${tool.toUpperCase()}_SATS`] ?? process.env.MAMEM_PRICE_SATS ?? (tool === 'anchor' ? 100 : PROVER_TOOLS.has(tool) ? 500 : 250))
+  Number(process.env[`NEKTAR_PRICE_${tool.toUpperCase()}_SATS`] ?? process.env.NEKTAR_PRICE_SATS ?? (tool === 'anchor' ? 100 : PROVER_TOOLS.has(tool) ? 500 : 250))
 
 interface Invoice {
   invoiceId: string
@@ -60,7 +60,7 @@ const invoices = new Map<string, Invoice>()
 const INVOICE_TTL_MS = 10 * 60_000
 
 /** consumed payment txids — replay protection, persisted in the data dir */
-const payFile = (): string => join(process.env.MAMEM_DATA_DIR ?? join(process.cwd(), '.mamem'), 'payments.json')
+const payFile = (): string => join(process.env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar'), 'payments.json')
 const consumed = new Set<string>()
 let consumedLoaded = false
 const loadConsumed = (): void => {
@@ -84,7 +84,7 @@ export const issueInvoice = (tool: string): Invoice => {
     opReturn: '',
     expires: Date.now() + INVOICE_TTL_MS
   }
-  inv.opReturn = `mamempay:${inv.invoiceId}`
+  inv.opReturn = `nektarpay:${inv.invoiceId}`
   invoices.set(inv.invoiceId, inv)
   return inv
 }
@@ -95,7 +95,7 @@ export const paymentRequired = (tool: string): { invoice: Invoice, required: Rec
   const required = {
     x402Version: 2,
     error: `payment required — ${tool} costs ${invoice.amount} sats`,
-    resource: { url: `tool://${tool}`, description: `mamem ${tool}` },
+    resource: { url: `tool://${tool}`, description: `nektar ${tool}` },
     accepts: [{
       scheme: 'exact',
       network: networkTag(),
@@ -116,7 +116,7 @@ export const paymentRequired = (tool: string): { invoice: Invoice, required: Rec
 export interface PaymentRecord { txid: string, amountSats: number, payTo: string, invoiceId: string }
 
 /** verify + broadcast the caller's payment tx; returns the settlement record a receipt commits */
-export const settlePayment = async (mem: MamemMemory, tool: string, payment: { invoiceId?: string, transaction?: string }): Promise<PaymentRecord> => {
+export const settlePayment = async (mem: NektarMemory, tool: string, payment: { invoiceId?: string, transaction?: string }): Promise<PaymentRecord> => {
   const inv = invoices.get(String(payment?.invoiceId ?? ''))
   if (!inv || inv.tool !== tool) throw new Error(`unknown or wrong-tool invoiceId "${payment?.invoiceId}" — call payQuote for a fresh invoice`)
   if (Date.now() > inv.expires) { invoices.delete(inv.invoiceId); throw new Error('invoice expired — call payQuote for a fresh one') }

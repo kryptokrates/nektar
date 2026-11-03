@@ -7,9 +7,9 @@ script-generation + script-semantics mechanics WITHOUT needing a real R1CS
 prover (arkworks/snarkjs). A real circuit (membership/statement) is V1.
 
 Run from the zkscript_package checkout:
-    .venv312/Scripts/python <mamem>/tools/groth16-spike/spike_groth16.py
+    .venv312/Scripts/python <nektar>/tools/groth16-spike/spike_groth16.py
 
-Artifacts land in <mamem>/tools/groth16-spike/out/ (gitignored — generated
+Artifacts land in <nektar>/tools/groth16-spike/out/ (gitignored — generated
 scripts are Licensed Material under the nChain Research License).
 """
 import json

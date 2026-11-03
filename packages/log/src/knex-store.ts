@@ -1,12 +1,12 @@
 // KnexShardStore — Postgres (or sqlite for tests) backed shard store.
-// Table: mamem_log(shard, seq, leaf, hdp, fragment_json, state, batch_index,
+// Table: nektar_log(shard, seq, leaf, hdp, fragment_json, state, batch_index,
 // leaf_index, anchor_txid, PK(shard,seq), UNIQUE(shard,hdp))
 import type { Knex } from 'knex'
-import { fromHex, toHex, type Bytes } from '@mamem/core'
-import type { Fragment } from '@mamem/core'
+import { fromHex, toHex, type Bytes } from '@nektar/core'
+import type { Fragment } from '@nektar/core'
 import type { LogRecord, ShardStore } from './store.js'
 
-const TABLE = 'mamem_log'
+const TABLE = 'nektar_log'
 
 export class KnexShardStore implements ShardStore {
   constructor (private knex: Knex<any, any>) {}

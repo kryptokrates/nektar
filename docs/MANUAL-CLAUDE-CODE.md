@@ -1,4 +1,4 @@
-# mamem for Claude Code — the complete manual
+# nektar for Claude Code — the complete manual
 
 You're connecting your agent to a memory it **cannot silently rewrite**,
 answers that arrive **pruned to what provable records support**, and a
@@ -30,7 +30,7 @@ public testnet (real transactions, test coins).
 
 ## What you get here instead
 
-| | today | with mamem |
+| | today | with nektar |
 |---|---|---|
 | **Memory** | mutable, vendor-held | append-only log; every batch anchors a Merkle root on-chain — edits break the proofs |
 | **Answers** | asserted | `groundedAnswer` strips every claim it can't derive from verified fragments — the answer is *pruned* to what records support |
@@ -58,7 +58,7 @@ that it's *true*. Model identity is *declared*, not zkML-proven.
 ### A — Watch + verify (zero setup)
 
 Open this on your phone:
-`http://167.233.174.91:8080/v1/verify?r=mamemr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
+`http://167.233.174.91:8080/v1/verify?r=nektarr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
 
 That's a real paid-answer receipt minted on the live box: the committed
 answer, the cited records, the `paid` check naming the settlement tx.
@@ -70,7 +70,7 @@ Ask me (the operator) for the **bearer token** — it gates `/mcp`, which
 is the only thing that isn't public. Then:
 
 ```sh
-claude mcp add --transport http mamem http://167.233.174.91:8080/mcp \
+claude mcp add --transport http nektar http://167.233.174.91:8080/mcp \
   --header "Authorization: Bearer <token>"
 ```
 
@@ -79,14 +79,14 @@ memory instead of answering from weights (merge of
 `integrations/claude-code/CLAUDE.md`):
 
 ```markdown
-## mamem
+## nektar
 
 When answering a factual question that could come from memory:
 1. Call `recall` on the relevant shard(s) first.
 2. Route the final answer through `groundedAnswer` — every claim must
    cite a verified fragment; whatever can't be grounded is stripped.
 3. End the answer with the receipt footer the tool returns:
-   `receipt: mamemr1.<token>` / `verify: <url>`
+   `receipt: nektarr1.<token>` / `verify: <url>`
 4. If no receipt comes back, say the answer is ungrounded — never fake
    a footer.
 ```
@@ -131,16 +131,16 @@ One tx pays for exactly one call — invoice-tagged, replay-protected.
 ### D — Your own instance (offline, zero funds)
 
 ```sh
-git clone https://github.com/nedzof/merkle-automaton && cd merkle-automaton
+git clone https://github.com/nedzof/nektar && cd merkle-automaton
 pnpm install && pnpm -r build
-MAMEM_HTTP_PORT=8080 MAMEM_NETWORK=mock node packages/mcp/dist/src/bin.js
-claude mcp add --transport http mamem http://localhost:8080/mcp
+NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=mock node packages/mcp/dist/src/bin.js
+claude mcp add --transport http nektar http://localhost:8080/mcp
 ```
 
 `mock` is fully offline — the simulated chain auto-mines, receipts mint
 and verify, anchors exist on the mock ledger (honest caveat: they
 aren't on a public chain). Every feature works; it's the right way to
-explore before touching real coins. `MAMEM_NETWORK=regtest` upgrades to
+explore before touching real coins. `NEKTAR_NETWORK=regtest` upgrades to
 a local Teranode; `ttn` to the public testnet.
 
 ---
@@ -164,7 +164,7 @@ Full list: `tools/list` over `/mcp`, or `GET /v1/tools` on the box.
 ## Honest boundaries — say these too
 
 - **Testnet.** Real consensus, real txs, test coins. Mainnet is the
-  same code path, gated (`MAMEM_MAINNET_CONFIRM` + spend caps).
+  same code path, gated (`NEKTAR_MAINNET_CONFIRM` + spend caps).
 - **"Accepted" ≠ "mined".** A payment shows `RECEIVED` then mines in a
   block; chained unconfirmed spends get parked (`PENDING_RETRY`) —
   spend confirmed utxos.

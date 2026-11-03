@@ -1,4 +1,4 @@
-// Bisect: which call pattern fails on MamemAnchorRot?
+// Bisect: which call pattern fails on NektarAnchorRot?
 // T1 append; T2 append→append; T3 rotate→rotate; T4 rotate→append.
 // Each second call rehydrates c2 solely from the previous tx's output 0 and
 // asserts byte-identical locking script before calling.
@@ -10,8 +10,8 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const art = JSON.parse(readFileSync(path.join(fileURLToPath(import.meta.url), '..', 'MamemAnchorRot.json'), 'utf8'))
-const TAG = Buffer.from(utf8('mamem:rprime:v1')).toString('hex')
+const art = JSON.parse(readFileSync(path.join(fileURLToPath(import.meta.url), '..', 'NektarAnchorRot.json'), 'utf8'))
+const TAG = Buffer.from(utf8('nektar:rprime:v1')).toString('hex')
 const pkh = (hex) => Buffer.from(hash160(fromHex(hex))).toString('hex')
 const signer = new LocalSigner('11'.repeat(32))
 const key = PrivateKey.fromHex('11'.repeat(32))

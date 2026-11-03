@@ -1,15 +1,15 @@
 // ClaimService — the optimistic-claim layer as an operable surface.
-// Thin wrapper: business logic lives in @mamem/chain (claims.ts); this
-// binds it to a MamemMemory instance's provider/signer + the shared
+// Thin wrapper: business logic lives in @nektar/chain (claims.ts); this
+// binds it to a NektarMemory instance's provider/signer + the shared
 // data-dir registry & proof store the watcher service reads.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Transaction, Hash } from '@bsv/sdk'
-import { MamemProvider } from '@mamem/anchor'
-import { deployClaim, readClaimState, callTerminal, outpointOf, p2pkh, registerClaim, storeProof } from '@mamem/chain'
-import { verifyZkm2 } from '@mamem/zk'
+import { NektarProvider } from '@nektar/anchor'
+import { deployClaim, readClaimState, callTerminal, outpointOf, p2pkh, registerClaim, storeProof } from '@nektar/chain'
+import { verifyZkm2 } from '@nektar/zk'
 import { LocalSigner } from 'runar-sdk'
-import type { MamemMemory } from './memory.js'
+import type { NektarMemory } from './memory.js'
 
 export interface ClaimServiceDeps {
   dataDir: string
@@ -24,18 +24,18 @@ export class ClaimService {
   private vArt: any
   private aArt: any
   private sArt: any
-  private provider: MamemProvider
+  private provider: NektarProvider
   private signer: LocalSigner
   private pubKeyHex: string
   private pkh: string
 
-  constructor (private mem: MamemMemory, private deps: ClaimServiceDeps) {
-    this.cArt = loadArt(deps.contractsDir, 'MamemZkClaim')
+  constructor (private mem: NektarMemory, private deps: ClaimServiceDeps) {
+    this.cArt = loadArt(deps.contractsDir, 'NektarZkClaim')
     this.vArt = loadArt(deps.contractsDir, 'ClaimVerdict')
-    this.aArt = loadArt(deps.contractsDir, 'MamemAnchor')
+    this.aArt = loadArt(deps.contractsDir, 'NektarAnchor')
     this.sArt = loadArt(deps.contractsDir, 'DisclosureSale')
     const key = mem.operatorKey()
-    this.provider = new MamemProvider({ broadcast: (t: Transaction) => mem.broadcastTx(t) } as any, (mem as any).funder, key.toPublicKey().toAddress([0x6f]))
+    this.provider = new NektarProvider({ broadcast: (t: Transaction) => mem.broadcastTx(t) } as any, (mem as any).funder, key.toPublicKey().toAddress([0x6f]))
     this.signer = new LocalSigner(key.toWif())
     this.pubKeyHex = key.toPublicKey().toString()
     this.pkh = Buffer.from(Hash.hash160(Buffer.from(this.pubKeyHex, 'hex'))).toString('hex')
@@ -67,7 +67,7 @@ export class ClaimService {
     const out = tx.outputs[vout]
     if (!out) return { found: false, txid, reason: `no output ${vout}` }
     const script = out.lockingScript.toHex()
-    if (!script.startsWith(this.cArt.script)) return { found: false, txid, reason: 'not a MamemZkClaim output' }
+    if (!script.startsWith(this.cArt.script)) return { found: false, txid, reason: 'not a NektarZkClaim output' }
     const st = readClaimState(this.cArt, script)
     const STATUS = ['open', 'challenged', 'revealed', 'bisecting']
     return { found: true, txid, vout, satoshis: out.satoshis, status: STATUS[Number(st.status)] ?? `status=${st.status}`, deadline: Number(st.deadline), journalRoot: st.journalRoot, proverPkh: st.proverPkh }
@@ -109,7 +109,7 @@ export class ClaimService {
    *  refuses the buy without the verdict. */
   async buyGated (saleTxid: string, verdictOutpoint: string, wrappedHex: string, priceSats: number, changeSats = 900) {
     const { RunarContract } = await import('runar-sdk')
-    const { buildBuyGatedTx } = await import('@mamem/chain')
+    const { buildBuyGatedTx } = await import('@nektar/chain')
     const op = Buffer.from(verdictOutpoint, 'hex')
     const vTxid = Buffer.from(op.subarray(0, 32)).reverse().toString('hex')
     const vVout = op[32]

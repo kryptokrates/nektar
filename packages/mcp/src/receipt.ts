@@ -1,6 +1,6 @@
 // Receipt token + on-the-fly verification — the "scan this answer" surface.
 //
-// Token: `mamemr1.<base64url receiptHash>` — a ~51-char pointer a verifier
+// Token: `nektarr1.<base64url receiptHash>` — a ~51-char pointer a verifier
 // resolves against the issuer's /v1/verify endpoint (or the verifyReceipt
 // tool). The heavy data stays server-side: the __receipts__ record carries
 // `receipt:<hash>:<b64url receipt>` so the check can re-hash and inspect
@@ -10,18 +10,18 @@
 // provenance-signed by the log (recall's COM-003 check), was anchored, and
 // its cited fragments are anchored. It does NOT say the answer was true —
 // the receipt itself carries TRUTH_NOTE saying exactly that.
-import { toHex, fromHex } from '@mamem/core'
-import { hashOf } from '@mamem/reasoning'
+import { toHex, fromHex } from '@nektar/core'
+import { hashOf } from '@nektar/reasoning'
 import { paymentsEnabled } from './pay.js'
-import type { MamemMemory } from './memory.js'
+import type { NektarMemory } from './memory.js'
 
-export const RECEIPT_TOKEN_PREFIX = 'mamemr1.'
+export const RECEIPT_TOKEN_PREFIX = 'nektarr1.'
 
 export function receiptToken (receiptHashHex: string): string {
   return RECEIPT_TOKEN_PREFIX + Buffer.from(fromHex(receiptHashHex)).toString('base64url')
 }
 
-/** `mamemr1.<b64url 32B>` → hash hex; also accepts a bare 64-hex hash. */
+/** `nektarr1.<b64url 32B>` → hash hex; also accepts a bare 64-hex hash. */
 export function parseReceiptToken (tok: string): { receiptHash: string } | null {
   const t = (tok ?? '').trim()
   if (/^[0-9a-fA-F]{64}$/.test(t)) return { receiptHash: t.toLowerCase() }
@@ -48,9 +48,9 @@ export interface VerifyReceiptResult {
  *  decrypt+provenance path — records may be encrypted at rest), and run the
  *  traffic-light checks: found → body-hash → provenance → anchored → each
  *  cited fragment anchored. `ok` = every hard check passed. */
-export async function verifyReceipt (mem: MamemMemory, arg: { token?: string, receiptHash?: string }): Promise<VerifyReceiptResult> {
+export async function verifyReceipt (mem: NektarMemory, arg: { token?: string, receiptHash?: string }): Promise<VerifyReceiptResult> {
   const parsed = arg.token ? parseReceiptToken(arg.token) : (arg.receiptHash ? { receiptHash: arg.receiptHash.toLowerCase() } : null)
-  if (!parsed) throw new Error('verifyReceipt: pass token (mamemr1.…) or receiptHash (64-hex)')
+  if (!parsed) throw new Error('verifyReceipt: pass token (nektarr1.…) or receiptHash (64-hex)')
   const checks: ReceiptCheck[] = []
 
   const items = (await mem.recall('__receipts__')).items
@@ -141,7 +141,7 @@ export async function verifyReceipt (mem: MamemMemory, arg: { token?: string, re
   } else if (paymentsEnabled()) {
     checks.push({ name: 'paid', ok: false, detail: 'payments are enabled but this receipt commits no settlement txid' })
   } else {
-    checks.push({ name: 'paid', ok: 'info', detail: 'unpaid (MAMEM_PAYMENTS off)' })
+    checks.push({ name: 'paid', ok: 'info', detail: 'unpaid (NEKTAR_PAYMENTS off)' })
   }
 
   // model attestation (nChain ai_inference Groth16): four states —
@@ -154,7 +154,7 @@ export async function verifyReceipt (mem: MamemMemory, arg: { token?: string, re
   //   present + invalid     → hard fail: an attestation that doesn't re-derive is a lie
   const att = (receipt as { modelAttestation?: { modelPoseidon: string, input?: number[], output: string | number, publicStatement: string, proofCommit?: string, attestationTxid?: string, verifierTxid?: string, circuit?: string } } | undefined)?.modelAttestation
   if (att) {
-    const { validateAttestation } = await import('@mamem/zk')
+    const { validateAttestation } = await import('@nektar/zk')
     const v = att.input ? validateAttestation({ modelPoseidon: att.modelPoseidon, input: att.input, output: att.output, publicStatement: att.publicStatement }) : { ok: false, reason: 'attestation carries no input — statement not re-derivable' }
     let detail = v.ok
       ? `statement re-derived ✓ — poseidon(input‖output‖poseidon(model)) binds ${att.circuit ?? 'circuit'} (statement ${att.publicStatement.slice(0, 18)}…)`

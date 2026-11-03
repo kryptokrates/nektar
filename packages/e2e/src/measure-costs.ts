@@ -3,9 +3,9 @@
 // the brief: broadcasts regtest txs only, never mainnet.
 //   node packages/e2e/dist/src/measure-costs.js
 import { PrivateKey, Transaction, P2PKH } from '@bsv/sdk'
-import { dsha256, utf8 } from '@mamem/core'
-import { AnchorChain } from '@mamem/anchor'
-import { ReserveFunder, TeranodeBroadcaster, bootstrapReserve, type RegtestConfig } from '@mamem/chain'
+import { dsha256, utf8 } from '@nektar/core'
+import { AnchorChain } from '@nektar/anchor'
+import { ReserveFunder, TeranodeBroadcaster, bootstrapReserve, type RegtestConfig } from '@nektar/chain'
 import { existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -17,14 +17,14 @@ function readEnv (p: string): Record<string, string> {
 const root = fileURLToPath(new URL('../../../..', import.meta.url))
 const localEnv = readEnv(path.join(root, '.env'))
 const qsEnv = readEnv(path.join(root, 'infra/teranode-quickstart/.env'))
-const WIF = process.env.MAMEM_REGTEST_WIF ?? localEnv.MAMEM_REGTEST_WIF
-if (!WIF) throw new Error('MAMEM_REGTEST_WIF missing (mamem/.env)')
+const WIF = process.env.NEKTAR_REGTEST_WIF ?? localEnv.NEKTAR_REGTEST_WIF
+if (!WIF) throw new Error('NEKTAR_REGTEST_WIF missing (nektar/.env)')
 const cfg: RegtestConfig = {
-  rpcUrl: process.env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-  rpcUser: process.env.MAMEM_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
-  rpcPass: process.env.MAMEM_RPC_PASS ?? qsEnv.rpc_pass ?? '',
-  propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-  assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
+  rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+  rpcUser: process.env.NEKTAR_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
+  rpcPass: process.env.NEKTAR_RPC_PASS ?? qsEnv.rpc_pass ?? '',
+  propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+  assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
 }
 const key = PrivateKey.fromWif(WIF)
 const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
@@ -41,7 +41,7 @@ const s = await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile: '.state
 if (s) await rpc('generatetoaddress', 1, key.toPublicKey().toAddress([0x6f]))
 if (reserve.utxos.length === 0) throw new Error('reserve empty')
 
-const RATE = Number(process.env.MAMEM_FEE_RATE_SAT_PER_KB ?? 100)
+const RATE = Number(process.env.NEKTAR_FEE_RATE_SAT_PER_KB ?? 100)
 const funder = { keyPair: key, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve() }
 const chain = { broadcast: (tx: Transaction) => broadcaster.broadcast(tx), currentHeight: () => 0 as never, isValidRootForHeight: async () => true, headerAtHeight: async () => undefined as never, tipHeight: async () => 0 }
 

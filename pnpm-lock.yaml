@@ -35,19 +35,19 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/chain':
+      '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
-      '@mamem/contracts':
+      '@nektar/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
-      '@mamem/identity':
+      '@nektar/identity':
         specifier: workspace:*
         version: link:../identity
-      '@mamem/log':
+      '@nektar/log':
         specifier: workspace:*
         version: link:../log
       runar-sdk:
@@ -59,16 +59,16 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/anchor':
+      '@nektar/anchor':
         specifier: workspace:*
         version: link:../anchor
-      '@mamem/chain':
+      '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
-      '@mamem/contracts':
+      '@nektar/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
       runar-sdk:
@@ -80,7 +80,7 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
       runar-sdk:
@@ -92,7 +92,7 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
       runar-lang:
@@ -120,13 +120,13 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
 
   packages/datalog:
     dependencies:
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
 
@@ -135,49 +135,49 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/anchor':
+      '@nektar/anchor':
         specifier: workspace:*
         version: link:../anchor
-      '@mamem/automaton':
+      '@nektar/automaton':
         specifier: workspace:*
         version: link:../automaton
-      '@mamem/chain':
+      '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
-      '@mamem/contracts':
+      '@nektar/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
-      '@mamem/datalog':
+      '@nektar/datalog':
         specifier: workspace:*
         version: link:../datalog
-      '@mamem/graph':
+      '@nektar/graph':
         specifier: workspace:*
         version: link:../graph
-      '@mamem/identity':
+      '@nektar/identity':
         specifier: workspace:*
         version: link:../identity
-      '@mamem/log':
+      '@nektar/log':
         specifier: workspace:*
         version: link:../log
-      '@mamem/mcp':
+      '@nektar/mcp':
         specifier: workspace:*
         version: link:../mcp
-      '@mamem/overlay':
+      '@nektar/overlay':
         specifier: workspace:*
         version: link:../overlay
-      '@mamem/policy':
+      '@nektar/policy':
         specifier: workspace:*
         version: link:../policy
-      '@mamem/reasoning':
+      '@nektar/reasoning':
         specifier: workspace:*
         version: link:../reasoning
-      '@mamem/verify':
+      '@nektar/verify':
         specifier: workspace:*
         version: link:../verify
-      '@mamem/zk':
+      '@nektar/zk':
         specifier: workspace:*
         version: link:../zk
       runar-sdk:
@@ -189,31 +189,31 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/automaton':
+      '@nektar/automaton':
         specifier: workspace:*
         version: link:../automaton
-      '@mamem/chain':
+      '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
-      '@mamem/contracts':
+      '@nektar/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
-      '@mamem/datalog':
+      '@nektar/datalog':
         specifier: workspace:*
         version: link:../datalog
-      '@mamem/identity':
+      '@nektar/identity':
         specifier: workspace:*
         version: link:../identity
-      '@mamem/mcp':
+      '@nektar/mcp':
         specifier: workspace:*
         version: link:../mcp
-      '@mamem/verify':
+      '@nektar/verify':
         specifier: workspace:*
         version: link:../verify
-      '@mamem/zk':
+      '@nektar/zk':
         specifier: workspace:*
         version: link:../zk
       runar-sdk:
@@ -225,10 +225,10 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
-      '@mamem/datalog':
+      '@nektar/datalog':
         specifier: workspace:*
         version: link:../datalog
 
@@ -237,13 +237,13 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
-      '@mamem/crypto':
+      '@nektar/crypto':
         specifier: workspace:*
         version: link:../crypto
-      '@mamem/log':
+      '@nektar/log':
         specifier: workspace:*
         version: link:../log
 
@@ -252,7 +252,7 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
       knex:
@@ -264,54 +264,54 @@ importers:
 
   packages/mcp:
     dependencies:
-      '@mamem/anchor':
-        specifier: workspace:*
-        version: link:../anchor
-      '@mamem/automaton':
-        specifier: workspace:*
-        version: link:../automaton
-      '@mamem/chain':
-        specifier: workspace:*
-        version: link:../chain
-      '@mamem/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      '@mamem/core':
-        specifier: workspace:*
-        version: link:../core
-      '@mamem/crypto':
-        specifier: workspace:*
-        version: link:../crypto
-      '@mamem/datalog':
-        specifier: workspace:*
-        version: link:../datalog
-      '@mamem/graph':
-        specifier: workspace:*
-        version: link:../graph
-      '@mamem/identity':
-        specifier: workspace:*
-        version: link:../identity
-      '@mamem/log':
-        specifier: workspace:*
-        version: link:../log
-      '@mamem/overlay':
-        specifier: workspace:*
-        version: link:../overlay
-      '@mamem/policy':
-        specifier: workspace:*
-        version: link:../policy
-      '@mamem/reasoning':
-        specifier: workspace:*
-        version: link:../reasoning
-      '@mamem/verify':
-        specifier: workspace:*
-        version: link:../verify
-      '@mamem/zk':
-        specifier: workspace:*
-        version: link:../zk
       '@modelcontextprotocol/sdk':
         specifier: 1.32.2
         version: 1.32.2(supports-color@7.2.0)(zod@3.25.76)
+      '@nektar/anchor':
+        specifier: workspace:*
+        version: link:../anchor
+      '@nektar/automaton':
+        specifier: workspace:*
+        version: link:../automaton
+      '@nektar/chain':
+        specifier: workspace:*
+        version: link:../chain
+      '@nektar/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@nektar/core':
+        specifier: workspace:*
+        version: link:../core
+      '@nektar/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      '@nektar/datalog':
+        specifier: workspace:*
+        version: link:../datalog
+      '@nektar/graph':
+        specifier: workspace:*
+        version: link:../graph
+      '@nektar/identity':
+        specifier: workspace:*
+        version: link:../identity
+      '@nektar/log':
+        specifier: workspace:*
+        version: link:../log
+      '@nektar/overlay':
+        specifier: workspace:*
+        version: link:../overlay
+      '@nektar/policy':
+        specifier: workspace:*
+        version: link:../policy
+      '@nektar/reasoning':
+        specifier: workspace:*
+        version: link:../reasoning
+      '@nektar/verify':
+        specifier: workspace:*
+        version: link:../verify
+      '@nektar/zk':
+        specifier: workspace:*
+        version: link:../zk
       knex:
         specifier: ^3.3.0
         version: 3.3.0(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
@@ -343,16 +343,16 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/anchor':
+      '@nektar/anchor':
         specifier: workspace:*
         version: link:../anchor
-      '@mamem/chain':
+      '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
-      '@mamem/contracts':
+      '@nektar/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
       knex:
@@ -377,17 +377,17 @@ importers:
       '@cedar-policy/cedar-wasm':
         specifier: ^4.14.0
         version: 4.14.0
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
-      '@mamem/log':
+      '@nektar/log':
         specifier: workspace:*
         version: link:../log
     devDependencies:
-      '@mamem/anchor':
+      '@nektar/anchor':
         specifier: workspace:*
         version: link:../anchor
-      '@mamem/chain':
+      '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
 
@@ -396,22 +396,22 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/chain':
+      '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
-      '@mamem/datalog':
+      '@nektar/datalog':
         specifier: workspace:*
         version: link:../datalog
-      '@mamem/graph':
+      '@nektar/graph':
         specifier: workspace:*
         version: link:../graph
-      '@mamem/identity':
+      '@nektar/identity':
         specifier: workspace:*
         version: link:../identity
-      '@mamem/verify':
+      '@nektar/verify':
         specifier: workspace:*
         version: link:../verify
 
@@ -420,16 +420,16 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/anchor':
+      '@nektar/anchor':
         specifier: workspace:*
         version: link:../anchor
-      '@mamem/chain':
+      '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
-      '@mamem/contracts':
+      '@nektar/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
 
@@ -438,13 +438,13 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/anchor':
+      '@nektar/anchor':
         specifier: workspace:*
         version: link:../anchor
-      '@mamem/chain':
+      '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
-      '@mamem/zk':
+      '@nektar/zk':
         specifier: workspace:*
         version: link:../zk
       runar-sdk:
@@ -456,10 +456,10 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@mamem/contracts':
+      '@nektar/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@mamem/core':
+      '@nektar/core':
         specifier: workspace:*
         version: link:../core
 

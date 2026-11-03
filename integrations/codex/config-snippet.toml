@@ -1,9 +1,9 @@
 # merge into ~/.codex/config.toml
 
-# ── mamem MCP server (HTTP transport — same process serves /v1/verify) ──
-# start it first:  MAMEM_HTTP_PORT=8080 MAMEM_NETWORK=mock node packages/mcp/dist/src/bin.js
+# ── nektar MCP server (HTTP transport — same process serves /v1/verify) ──
+# start it first:  NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=mock node packages/mcp/dist/src/bin.js
 # (mock = offline, auto-mines anchors; regtest = persistent + real chain, needs .env keys)
-[mcp_servers.mamem]
+[mcp_servers.nektar]
 url = "http://localhost:8080/mcp"
 
 # ── turn-complete receipt check ──

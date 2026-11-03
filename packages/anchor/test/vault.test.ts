@@ -1,10 +1,10 @@
-// GOAL-v7 V1: the MamemFeeVault covenant under real script eval (MockChain
+// GOAL-v7 V1: the NektarFeeVault covenant under real script eval (MockChain
 // verifyScripts runs the actual locking script via SDK Spend).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, LockingScript } from '@bsv/sdk'
 import { buildP2PKHScript } from 'runar-sdk'
-import { MockChain } from '@mamem/chain'
+import { MockChain } from '@nektar/chain'
 import { FeeVault, VaultFunder, type VaultUtxo } from '../src/vault.js'
 
 const owner = PrivateKey.fromRandom()
@@ -79,7 +79,7 @@ test('V1 VaultFunder: take() mints a capped funding out through the covenant; ov
   const { chain, vault, parent, utxo } = setup()
   chain.registerParent(parent)
   let cur = utxo
-  // same shape the MAMEM_FEE_VAULT runtime path drives: current() yields the
+  // same shape the NEKTAR_FEE_VAULT runtime path drives: current() yields the
   // live vault utxo, height() the locktime for the window logic
   const funder = new VaultFunder(vault, owner, chain, async () => cur, async () => 1, 2n)
   assert.equal(await funder.address(), destPkh)

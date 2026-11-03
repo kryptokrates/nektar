@@ -1,5 +1,5 @@
 import { Transaction } from '@bsv/sdk'
-import { TeranodeBroadcaster } from '@mamem/chain'
+import { TeranodeBroadcaster } from '@nektar/chain'
 import { readFileSync, existsSync } from 'node:fs'
 const f = process.argv[2]
 const hex = existsSync(f) ? readFileSync(f, 'utf8').trim() : f

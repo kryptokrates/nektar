@@ -1,6 +1,6 @@
 // COM-003: originator signatures over provenance. σ = Sign_source(provenanceDigest(d, p)).
 import { PrivateKey, PublicKey, Signature } from '@bsv/sdk'
-import { provenanceDigest, type Bytes, type Provenance } from '@mamem/core'
+import { provenanceDigest, type Bytes, type Provenance } from '@nektar/core'
 
 export class ProvenanceError extends Error {}
 

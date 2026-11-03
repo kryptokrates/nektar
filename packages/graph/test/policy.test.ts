@@ -2,8 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert'
 import { AORGraph, PolicyDAG, dagAuthorize, instanceOf, memberProof, delegate, verifyDelegation } from '../src/index.js'
 import { PrivateKey } from '@bsv/sdk'
-import { parseProgram } from '@mamem/datalog'
-import { dsha256, utf8 } from '@mamem/core'
+import { parseProgram } from '@nektar/datalog'
+import { dsha256, utf8 } from '@nektar/core'
 
 const layerBase = parseProgram(`@id org-permit
 permit(P, read, F) :- member(P, org), fragment(F).

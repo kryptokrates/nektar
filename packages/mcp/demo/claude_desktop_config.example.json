@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "mamem": {
+    "nektar": {
       "command": "node",
-      "args": ["C:/Users/nedzo/Documents/Devin/mamem/packages/mcp/dist/src/bin.js"],
-      "env": { "MAMEM_MODEL_ID": "anthropic:claude (set the exact release id)", "MAMEM_BATCH": "4" }
+      "args": ["C:/Users/nedzo/Documents/Devin/nektar/packages/mcp/dist/src/bin.js"],
+      "env": { "NEKTAR_MODEL_ID": "anthropic:claude (set the exact release id)", "NEKTAR_BATCH": "4" }
     }
   }
 }

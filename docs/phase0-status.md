@@ -2,7 +2,7 @@
 
 ## Stack running (left up)
 
-- **Teranode regtest** via `bsv-blockchain/teranode-quickstart` (cloned at `mamem/infra/teranode-quickstart`), Teranode `v0.16.0` image.
+- **Teranode regtest** via `bsv-blockchain/teranode-quickstart` (cloned at `nektar/infra/teranode-quickstart`), Teranode `v0.16.0` image.
   - `network=regtest`, `COMPOSE_PROFILES=` (no p2p/legacy/monitoring/blockpersister), `listen_mode=listen_only`.
   - Services: blockchain, asset (`:8090`), propagation (`:8084`, `POST /tx` EF), rpc (`:9292`, basic auth in `.env`), subtreevalidation, blockvalidation, blockassembly, pruner, postgres, aerospike, redpanda.
   - Start: `cd infra/teranode-quickstart && ./start.sh` (then `docker exec blockchain teranode-cli setfsmstate --fsmstate CATCHINGBLOCKS` once; mining works after `generate`/`generatetoaddress` via `./rpc.sh`). Stop: `./stop.sh`.
@@ -29,7 +29,7 @@
 
 - genesis admitted; valid successor admitted and becomes head;
 - wrong `n`, wrong `R'_n`, non-head-spend, second-genesis fork: all rejected;
-- `ls_mamem` returns current head and anchor-by-n (retained history).
+- `ls_nektar` returns current head and anchor-by-n (retained history).
 
 Engine quirks found: `outputSpent` is notified even for rejected submissions (ls buffers spends until the spender is admitted); a rejected submission marks the spent topical output stale and removes it from storage (lookup hydration then returns empty — keep `ls` as the authority). `previousCoins` detection: mined parents arrive BUMP-only in the BEEF (no outputs) — tm validates against the stored head record, not the parent tx.
 

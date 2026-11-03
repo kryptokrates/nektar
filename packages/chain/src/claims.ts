@@ -1,5 +1,5 @@
 // Optimistic-claim operations — the shared business logic for
-// MamemZkClaim/MamemAnchor/ClaimVerdict/DisclosureSale covenant txs.
+// NektarZkClaim/NektarAnchor/ClaimVerdict/DisclosureSale covenant txs.
 // Scripts and the MCP server call these; nothing here knows about e2e
 // tests or MCP — deps are a runar-sdk-compatible provider + signer.
 import { Transaction, LockingScript, UnlockingScript } from '@bsv/sdk'
@@ -17,7 +17,7 @@ export function readClaimState (art: any, scriptHex: string): any {
   return deserializeState(art.stateFields, scriptHex.slice(art.script.length + 2))
 }
 
-/** deploy a MamemZkClaim with the given ctor args; returns the contract
+/** deploy a NektarZkClaim with the given ctor args; returns the contract
  *  (currentUtxo set) — caller registers claimOp() in the registry. */
 export async function deployClaim (art: any, ctorArgs: any[], provider: any, signer: any, satoshis = 5000): Promise<{ contract: any, utxo: Utxo }> {
   const c = new RunarContract(art, ctorArgs)

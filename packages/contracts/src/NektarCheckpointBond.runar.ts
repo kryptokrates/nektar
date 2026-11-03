@@ -1,6 +1,6 @@
 import { StatefulSmartContract, assert, hash160, checkSig, cat, toByteString, type Sig, type PubKey, type ByteString, extractLocktime, extractAmount } from 'runar-lang'
 
-// MamemCheckpointBond — GOAL-v7 V2 (idiomatic StatefulSmartContract):
+// NektarCheckpointBond — GOAL-v7 V2 (idiomatic StatefulSmartContract):
 // the checkpoint chain lives IN the contract state, so conflicting on-chain
 // checkpoints are impossible by construction (prevention, not detection —
 // closes VER-007's on-chain side).
@@ -10,7 +10,7 @@ import { StatefulSmartContract, assert, hash160, checkSig, cat, toByteString, ty
 // on both methods — change-leakage is a consensus-bounded no-op.
 // Punitive slashing of off-chain signed evidence needs checkDataSig — not in
 // runar-lang 0.4.6 (documented deferral, upstream request filed).
-export class MamemCheckpointBond extends StatefulSmartContract {
+export class NektarCheckpointBond extends StatefulSmartContract {
   operatorPkh: ByteString
   bondReleaseHeight: bigint
   maxFee: bigint
@@ -27,7 +27,7 @@ export class MamemCheckpointBond extends StatefulSmartContract {
   }
 
   private p2pkh (pkh: ByteString): ByteString {
-    // see MamemFeeVault — buildP2PKH is declared but not compilable in 0.4.6
+    // see NektarFeeVault — buildP2PKH is declared but not compilable in 0.4.6
     return cat(toByteString('76a914'), cat(pkh, toByteString('88ac')))
   }
 

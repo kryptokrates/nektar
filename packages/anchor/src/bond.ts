@@ -1,4 +1,4 @@
-// Host adapter for the V2 MamemCheckpointBond covenant (GOAL-v7).
+// Host adapter for the V2 NektarCheckpointBond covenant (GOAL-v7).
 // StatefulSmartContract: state {n, lastRoot} lives after OP_RETURN; the SDK
 // computes the OP_PUSH_TX preimage and the unlocking layout — no
 // hand-assembled script bytes.
@@ -7,7 +7,7 @@ import {
   RunarContract, computeOpPushTx, serializeState,
   extractStateFromScript, buildP2PKHScript
 } from 'runar-sdk'
-import { MAMEM_CHECKPOINTBOND_ARTIFACT } from '@mamem/contracts'
+import { NEKTAR_CHECKPOINTBOND_ARTIFACT } from '@nektar/contracts'
 
 export interface BondConfig {
   operatorPkh: string       // 20B hex — checkpoint writer
@@ -21,7 +21,7 @@ export interface BondState { n: bigint, lastRoot: string }
 export class CheckpointBond {
   private contract: RunarContract
   constructor (private cfg: BondConfig) {
-    this.contract = new RunarContract(MAMEM_CHECKPOINTBOND_ARTIFACT, [
+    this.contract = new RunarContract(NEKTAR_CHECKPOINTBOND_ARTIFACT, [
       cfg.operatorPkh, cfg.bondReleaseHeight, cfg.maxFee
     ])
   }
@@ -30,7 +30,7 @@ export class CheckpointBond {
 
   private stateHex (n: bigint, lastRoot: string): string {
     const c = this.cfg
-    return serializeState(MAMEM_CHECKPOINTBOND_ARTIFACT.stateFields!, {
+    return serializeState(NEKTAR_CHECKPOINTBOND_ARTIFACT.stateFields!, {
       operatorPkh: c.operatorPkh, bondReleaseHeight: c.bondReleaseHeight,
       maxFee: c.maxFee, n, lastRoot
     })
@@ -43,7 +43,7 @@ export class CheckpointBond {
 
   /** read {n, lastRoot} back out of a bond script */
   stateOf (script: string): BondState {
-    const d = extractStateFromScript(MAMEM_CHECKPOINTBOND_ARTIFACT, script) as any
+    const d = extractStateFromScript(NEKTAR_CHECKPOINTBOND_ARTIFACT, script) as any
     if (!d) throw new Error('bond: not a stateful bond script')
     return { n: BigInt(d.n), lastRoot: typeof d.lastRoot === 'string' ? d.lastRoot : Buffer.from(d.lastRoot).toString('hex') }
   }

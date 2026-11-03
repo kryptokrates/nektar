@@ -4,7 +4,7 @@
 // The monitor flags every inclusion promise that no VALID checkpoint covers
 // within the maximum merge delay (the CT SCT/MMD design).
 import { PrivateKey, PublicKey, Signature } from '@bsv/sdk'
-import { dsha256, concat, utf8, u64le, fromHex, toHex, TAG_CHECKPOINT } from '@mamem/core'
+import { dsha256, concat, utf8, u64le, fromHex, toHex, TAG_CHECKPOINT } from '@nektar/core'
 
 export interface Checkpoint {
   logId: string // shard id (hash160 of the genesis owner), hex

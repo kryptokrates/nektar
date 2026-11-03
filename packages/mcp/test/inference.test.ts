@@ -6,23 +6,23 @@
 // other (input,output) is refused before it can enter a receipt.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { MamemMemory, type MamemMemoryOptions } from '../src/memory.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
-import { AIINF_DEMO, demoAttestation, validateAttestation } from '@mamem/zk'
+import { AIINF_DEMO, demoAttestation, validateAttestation } from '@nektar/zk'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 // point the artifact lookup somewhere empty — on-chain spend is e2e's job
-process.env.MAMEM_GROTH16_OUT = '/nonexistent-mamem-aiinf'
+process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 
-function setup (opts: MamemMemoryOptions = {}) {
+function setup (opts: NektarMemoryOptions = {}) {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(20)
   for (const t of funder.parents) chain.registerParent(t)
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'mamem-inf-')), ...opts })
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-inf-')), ...opts })
   const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
   return { chain, mem, settle }
 }
@@ -60,11 +60,11 @@ test('attestInference: non-demo input refused', async () => {
 })
 
 test('attestInference: DEFAULT path anchors sha256(proof) in one small tx', { timeout: 30_000 }, async () => {
-  delete process.env.MAMEM_GROTH16_OUT
+  delete process.env.NEKTAR_GROTH16_OUT
   const { mem } = setup()
   const { existsSync } = await import('node:fs')
   const dir = new URL('../../../../tools/groth16-spike/out/', import.meta.url)
-  if (!existsSync(new URL('lock-aiinf.hex', dir))) { process.env.MAMEM_GROTH16_OUT = '/nonexistent-mamem-aiinf'; console.log('  (skipped — artifacts not emitted locally)'); return }
+  if (!existsSync(new URL('lock-aiinf.hex', dir))) { process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'; console.log('  (skipped — artifacts not emitted locally)'); return }
   const r = await callTool(mem, 'attestInference', {})
   assert.equal(r.onchain, false)
   assert.equal(r.anchored, true)
@@ -76,15 +76,15 @@ test('attestInference: DEFAULT path anchors sha256(proof) in one small tx', { ti
   assert.ok(bytes && bytes.length > 30_000, 'proof bytes in the store')
   const va = await mem.verifyAttestation(r.attestation.attestationTxid, bytes)
   assert.equal(va.ok, true)
-  process.env.MAMEM_GROTH16_OUT = '/nonexistent-mamem-aiinf'
+  process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 })
 
 test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 }, async () => {
-  delete process.env.MAMEM_GROTH16_OUT
+  delete process.env.NEKTAR_GROTH16_OUT
   const { mem, settle } = setup()
   const { existsSync } = await import('node:fs')
   const dir = new URL('../../../../tools/groth16-spike/out/', import.meta.url)
-  if (!existsSync(new URL('lock-aiinf.hex', dir))) { process.env.MAMEM_GROTH16_OUT = '/nonexistent-mamem-aiinf'; console.log('  (skipped — artifacts not emitted locally)'); return }
+  if (!existsSync(new URL('lock-aiinf.hex', dir))) { process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'; console.log('  (skipped — artifacts not emitted locally)'); return }
   const a = await callTool(mem, 'attestInference', {})
   const w = await callTool(mem, 'remember', { shard: 'facts', data: 'ml ran' })
   await mem.anchorShard('facts')
@@ -103,7 +103,7 @@ test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 
   })
   const v2 = await verifyReceipt(mem, { receiptHash: c2.receiptHash })
   assert.equal(v2.checks.find(cc => cc.name === 'model')?.ok, false)
-  process.env.MAMEM_GROTH16_OUT = '/nonexistent-mamem-aiinf'
+  process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 })
 
 test('commitReceipt auto-attests in one call; exclusive with modelAttestation', async () => {
@@ -125,11 +125,11 @@ test('commitReceipt auto-attests in one call; exclusive with modelAttestation', 
 })
 
 test('attestInference: on-chain when artifacts + funding exist (mock evaluates the 398KB verifier)', { timeout: 120_000 }, async () => {
-  delete process.env.MAMEM_GROTH16_OUT
+  delete process.env.NEKTAR_GROTH16_OUT
   const chain = new MockChain(); chain.verifyScripts = true
   const f = new MockFunder(); f.topup(5, 100_000)
   for (const t of f.parents) chain.registerParent(t)
-  const mem = new MamemMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'mamem-inf-on-')) })
+  const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-inf-on-')) })
   const { existsSync } = await import('node:fs')
   const dir = new URL('../../../../tools/groth16-spike/out/', import.meta.url)
   if (!existsSync(new URL('lock-aiinf.hex', dir))) { console.log('  (skipped — artifacts not emitted locally)'); return }
@@ -148,7 +148,7 @@ test('attestInference: on-chain when artifacts + funding exist (mock evaluates t
   const model = v.checks.find(cc => cc.name === 'model')
   assert.equal(model?.ok, true)
   assert.match(model?.detail ?? '', /consensus-checked/)
-  process.env.MAMEM_GROTH16_OUT = '/nonexistent-mamem-aiinf'
+  process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 })
 
 test('commitReceipt embeds a validated attestation; verify shows model check', async () => {

@@ -1,4 +1,4 @@
-// MamemAnchorRot — rotation via ownerPkh (Ripemd160) in mutable state:
+// NektarAnchorRot — rotation via ownerPkh (Ripemd160) in mutable state:
 // avoids PubKey-in-state serialization entirely.
 //   shard = hash160(genesisOwner) — immutable, embedded in code.
 //   append(sig, pubKey, newR, newSize):
@@ -11,7 +11,7 @@ import {
   type PubKey, type Sig, type Sha256, type ByteString
 } from 'runar-lang'
 
-export class MamemAnchorRot extends StatefulSmartContract {
+export class NektarAnchorRot extends StatefulSmartContract {
   readonly genesisOwner: PubKey
   // mutable state — addOutput arg order must match declaration order
   n: bigint

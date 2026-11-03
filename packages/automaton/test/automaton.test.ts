@@ -1,10 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { utf8, dsha256, toHex } from '@mamem/core'
-import { MockChain, MockFunder } from '@mamem/chain'
+import { utf8, dsha256, toHex } from '@nektar/core'
+import { MockChain, MockFunder } from '@nektar/chain'
 import {
-  Automaton, AutomatonError, AutomatonChain, decodeMamemAutomaton, deltaTable, deltaPath, leafEntry,
+  Automaton, AutomatonError, AutomatonChain, decodeNektarAutomaton, deltaTable, deltaPath, leafEntry,
   verifyTrace, reconcile, canonicalDef, defHash,
   type AutomatonDef
 } from '../src/index.js'
@@ -19,7 +19,7 @@ const DEF: AutomatonDef = {
 const TBL = deltaTable(DEF)
 const OUT = toHex(dsha256(utf8('out')))
 
-// production path: MamemProvider over MockChain with Teranode-faithful script
+// production path: NektarProvider over MockChain with Teranode-faithful script
 // evaluation — the chain is the oracle; owner key ≠ funding key.
 async function deployed (def = DEF) {
   const chain = new MockChain(); chain.verifyScripts = true
@@ -37,10 +37,10 @@ test('AUT-005: deploy + valid steps accepted by script evaluation; head decoded 
   assert.deepEqual([h1.state.q, h1.state.n, h1.state.lastOut], [1, 1, OUT])
   const h2 = await ac.step(1, 2, OUT)
   assert.deepEqual([h2.state.q, h2.state.n], [2, 2])
-  assert.ok(decodeMamemAutomaton(h2.tx.outputs[0]!.lockingScript.toHex()), 'continuation authenticates')
+  assert.ok(decodeNektarAutomaton(h2.tx.outputs[0]!.lockingScript.toHex()), 'continuation authenticates')
   const sh = h2.tx.outputs[0]!.lockingScript.toHex()
   const flipped = sh.slice(0, 40) + (sh.slice(40, 42) === '00' ? '01' : '00') + sh.slice(42)
-  assert.equal(decodeMamemAutomaton(flipped), null, 'tampered contract code rejected by decoder')
+  assert.equal(decodeNektarAutomaton(flipped), null, 'tampered contract code rejected by decoder')
 })
 
 test('AUT-005 negatives: wrong from / not-in-δ / tampered path / wrong signer rejected by script', async () => {

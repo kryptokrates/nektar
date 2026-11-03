@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert'
 import { AORGraph, GraphError, signMaterial } from '../src/index.js'
 import { PrivateKey } from '@bsv/sdk'
-import { parseProgram } from '@mamem/datalog'
+import { parseProgram } from '@nektar/datalog'
 
 const key1 = PrivateKey.fromRandom()
 const sig = (phi: string, t: any, ctx: string[]) => key1.sign(Array.from(signMaterial(phi, t, ctx))).toDER('hex') as string

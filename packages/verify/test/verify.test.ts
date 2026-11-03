@@ -1,9 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { dsha256, utf8, computeLeaf, merkleRoot, merkleProof, toHex } from '@mamem/core'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { AnchorChain } from '@mamem/anchor'
+import { dsha256, utf8, computeLeaf, merkleRoot, merkleProof, toHex } from '@nektar/core'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { AnchorChain } from '@nektar/anchor'
 import { buildProofBundle, verifyFragment, type AnchorLink } from '../src/bundle.js'
 
 const frag = (s: string) => ({
@@ -109,8 +109,8 @@ test('verify: odd-batch duplicate-last-leaf claim rejected', async () => {
   }
   chain2.mine(1)
   const { PrivateKey: PK } = await import('@bsv/sdk')
-  const { AnchorChain: AC } = await import('@mamem/anchor')
-  const { merkleProof: mp, merkleRoot: mr, computeLeaf: cl } = await import('@mamem/core')
+  const { AnchorChain: AC } = await import('@nektar/anchor')
+  const { merkleProof: mp, merkleRoot: mr, computeLeaf: cl } = await import('@nektar/core')
   const ac = new AC('odd', PK.fromRandom(), f2, f2.keyPair, chain2)
   const leaves = ['a', 'b', 'c'].map(s => cl({ d: utf8(s), p: { source: 'm', time: 1, signature: new Uint8Array(0), modelId: 'm' } }))
   const R = mr(leaves)
@@ -128,7 +128,7 @@ test('verify: odd-batch duplicate-last-leaf claim rejected', async () => {
 test('verify: tampered middle tail link with recomputed self-consistent tail fails', async () => {
   const { chain, bundle } = await scenario()
   // recompute Rp of last link so tail is self-consistent but differs from on-chain
-  const { chainRp: crp } = await import('@mamem/core')
+  const { chainRp: crp } = await import('@nektar/core')
   const mid = bundle.chainTail[0]!
   const fakeR = dsha256(utf8('middle'))
   mid.R = toHex(fakeR)

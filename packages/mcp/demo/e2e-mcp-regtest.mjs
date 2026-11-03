@@ -2,8 +2,8 @@
 // through the REAL MCP server process (official SDK, stdio), exactly as an AI
 // client would: anchoring, SPV proofs, ZK membership (Groth16) and ZK
 // clearance (Bulletproofs), negatives, and a restart on the same data dir.
-// Secrets: mamem/.env (MAMEM_REGTEST_WIF) + infra/teranode-quickstart/.env (rpc_pass).
-// MAMEM_E2E_GATEWAY=mamem_regtest → same flow through the Docker MCP Gateway.
+// Secrets: nektar/.env (NEKTAR_REGTEST_WIF) + infra/teranode-quickstart/.env (rpc_pass).
+// NEKTAR_E2E_GATEWAY=nektar_regtest → same flow through the Docker MCP Gateway.
 import { readFileSync, existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,22 +16,22 @@ import { ClientWallet, ClearanceAuthority, decodeCredential, encodeCredential } 
 const env = p => existsSync(p) ? Object.fromEntries(readFileSync(p, 'utf8').split(/\r?\n/).map(l => l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean).map(m => [m[1], m[2].trim()])) : {}
 const root = new URL('../../../', import.meta.url)
 const local = env(new URL('.env', root)); const qs = env(new URL('infra/teranode-quickstart/.env', root))
-const GATEWAY = process.env.MAMEM_E2E_GATEWAY
+const GATEWAY = process.env.NEKTAR_E2E_GATEWAY
 let fails = 0
 const check = (c, m) => { console.log(`${c ? '✔' : '✖'} ${m}`); if (!c) fails++ }
 const txids = {}
 
-const dataDir = mkdtempSync(join(tmpdir(), 'mamem-e2e-mcp-'))
-const authority = GATEWAY && process.env.MAMEM_E2E_AUTHORITY_HEX ? new ClearanceAuthority((await import('@bsv/sdk')).PrivateKey.fromHex(process.env.MAMEM_E2E_AUTHORITY_HEX)) : new ClearanceAuthority()
+const dataDir = mkdtempSync(join(tmpdir(), 'nektar-e2e-mcp-'))
+const authority = GATEWAY && process.env.NEKTAR_E2E_AUTHORITY_HEX ? new ClearanceAuthority((await import('@bsv/sdk')).PrivateKey.fromHex(process.env.NEKTAR_E2E_AUTHORITY_HEX)) : new ClearanceAuthority()
 const serverEnv = {
-  ...process.env, MAMEM_NETWORK: 'regtest', MAMEM_DATA_DIR: dataDir, MAMEM_FUND_WIF: local.MAMEM_REGTEST_WIF, MAMEM_RPC_PASS: qs.rpc_pass, MAMEM_RPC_USER: qs.rpc_user ?? 'teranode',
-  MAMEM_AUTOMINE: '1', MAMEM_CONFIRM_MS: '1500', MAMEM_BATCH: '4', MAMEM_CLEARANCE_AUTHORITIES: authority.pubkey, MAMEM_MODEL_ID: 'e2e-mcp-scripted'
+  ...process.env, NEKTAR_NETWORK: 'regtest', NEKTAR_DATA_DIR: dataDir, NEKTAR_FUND_WIF: local.NEKTAR_REGTEST_WIF, NEKTAR_RPC_PASS: qs.rpc_pass, NEKTAR_RPC_USER: qs.rpc_user ?? 'teranode',
+  NEKTAR_AUTOMINE: '1', NEKTAR_CONFIRM_MS: '1500', NEKTAR_BATCH: '4', NEKTAR_CLEARANCE_AUTHORITIES: authority.pubkey, NEKTAR_MODEL_ID: 'e2e-mcp-scripted'
 }
 const bin = fileURLToPath(new URL('../dist/src/bin.js', import.meta.url))
 async function connect () {
   const client = new Client({ name: 'e2e-mcp', version: '1.0.0' })
   const transport = GATEWAY
-    ? new StdioClientTransport({ command: 'docker', args: ['mcp', 'gateway', 'run', '--profile', GATEWAY, '--verbose'], env: process.env, stderr: process.env.MAMEM_E2E_STDERR ? 'inherit' : 'ignore' })
+    ? new StdioClientTransport({ command: 'docker', args: ['mcp', 'gateway', 'run', '--profile', GATEWAY, '--verbose'], env: process.env, stderr: process.env.NEKTAR_E2E_STDERR ? 'inherit' : 'ignore' })
     : new StdioClientTransport({ command: process.execPath, args: [bin], env: serverEnv, stderr: 'ignore' })
   await client.connect(transport)
   const call = async (name, args) => {
@@ -104,7 +104,7 @@ const again = await recallSecret(wallet.presentClearance(decodeCredential(JSON.p
 check(again.text?.startsWith('Confidential'), 'fresh clearance from the stored credential works after restart')
 
 // ── optimistic claims: the STARK becomes a bonded on-chain claim ──
-// claimDeploy commits the proof's journal into a MamemZkClaim covenant and
+// claimDeploy commits the proof's journal into a NektarZkClaim covenant and
 // registers the outpoint; the watcher daemon shares this dataDir registry.
 // two claims: one still inside its dispute window (the watcher's ward), one
 // already past deadline (settles now — same proof, different deadline).
@@ -112,7 +112,7 @@ const claimWatch = await call('claim', { op: 'deploy', lzkmem: zkm.lzkmem, deadl
 txids.claimWatch = claimWatch.txid
 const claim = await call('claim', { op: 'deploy', lzkmem: zkm.lzkmem, deadline: 0 })
 txids.claim = claim.txid
-check(!!claim.txid && !!claimWatch.txid, `claimDeploy ×2 → MamemZkClaim covenants (watched=${claimWatch.txid.slice(0, 12)}… settle=${claim.txid.slice(0, 12)}…)`)
+check(!!claim.txid && !!claimWatch.txid, `claimDeploy ×2 → NektarZkClaim covenants (watched=${claimWatch.txid.slice(0, 12)}… settle=${claim.txid.slice(0, 12)}…)`)
 const cst = await call('claim', { op: 'status', txid: claim.txid })
 check(cst.status === 'open' && cst.journalRoot === claim.journalRoot, `claimStatus: open — committed root matches the proven journal`)
 // watcher pass over the same dataDir: honest claim verifies → no action
@@ -121,7 +121,7 @@ const watcherRun = () => execFileSync(process.execPath, [
   fileURLToPath(new URL('../../watcher/src/watcher.mjs', import.meta.url)),
   '--once', '--claims', join(dataDir, 'claims.json'), '--proof-dir', join(dataDir, 'proofs'),
   '--reserve', join(dataDir, 'watcher-reserve.json')
-], { env: { ...process.env, MAMEM_WATCH_DEBUG: '1', MAMEM_REGTEST_WIF: local.MAMEM_REGTEST_WIF, MAMEM_RPC_USER: qs.rpc_user ?? 'teranode', MAMEM_RPC_PASS: qs.rpc_pass ?? '' }, encoding: 'utf8', timeout: 120_000 })
+], { env: { ...process.env, NEKTAR_WATCH_DEBUG: '1', NEKTAR_REGTEST_WIF: local.NEKTAR_REGTEST_WIF, NEKTAR_RPC_USER: qs.rpc_user ?? 'teranode', NEKTAR_RPC_PASS: qs.rpc_pass ?? '' }, encoding: 'utf8', timeout: 120_000 })
 try {
   let wout
   try { wout = watcherRun() } catch { wout = watcherRun() } // WASM loader flake: retry once

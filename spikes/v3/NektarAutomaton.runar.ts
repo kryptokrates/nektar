@@ -1,4 +1,4 @@
-// MamemAutomaton — spike 0.2: stateful Rúnar contract enforcing a committed
+// NektarAutomaton — spike 0.2: stateful Rúnar contract enforcing a committed
 // transition table δ on-chain. Table = 4 entries (from‖sym‖to) passed as flat
 // args and hashed in-contract (slice() isn't in Rúnar 0.4.6).
 import {
@@ -7,7 +7,7 @@ import {
   type PubKey, type Sig, type Sha256, type ByteString
 } from 'runar-lang'
 
-export class MamemAutomaton extends StatefulSmartContract {
+export class NektarAutomaton extends StatefulSmartContract {
   q: bigint
   deltaRoot: Sha256 // hash256 of the 4-triple table (num2bin8 each)
   ownerPkh: ByteString // 20B = hash160(owner pubkey)

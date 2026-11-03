@@ -5,9 +5,9 @@
 //        →(atomicBEEF + BUMP)→ block header (chainTracker)
 //   anchor-chain consistency: chainTail [anchor_0..n] re-verified link by link.
 import { Transaction } from '@bsv/sdk'
-import { decodeMamemAnchor, isValidAnchor } from '@mamem/contracts'
-import { reconstructRoot, verifyProof, chainRp, GENESIS_PREV_RP, eq, toHex, fromHex, heightForLeafCount, type Bytes, type AnchorData } from '@mamem/core'
-import type { ChainTracker } from '@mamem/chain'
+import { decodeNektarAnchor, isValidAnchor } from '@nektar/contracts'
+import { reconstructRoot, verifyProof, chainRp, GENESIS_PREV_RP, eq, toHex, fromHex, heightForLeafCount, type Bytes, type AnchorData } from '@nektar/core'
+import type { ChainTracker } from '@nektar/chain'
 
 export interface AnchorLink {
   txid: string
@@ -47,8 +47,8 @@ export function buildProofBundle (args: {
   anchorTx: Transaction
   chainTail: AnchorLink[]
 }): ProofBundle {
-  const anchorData = decodeMamemAnchor(args.anchorTx.outputs[0]!.lockingScript.toHex())
-  if (!anchorData || !isValidAnchor(anchorData)) throw new Error('anchor tx output 0 is not a mamem anchor')
+  const anchorData = decodeNektarAnchor(args.anchorTx.outputs[0]!.lockingScript.toHex())
+  if (!anchorData || !isValidAnchor(anchorData)) throw new Error('anchor tx output 0 is not a nektar anchor')
   const anchor: AnchorLink = {
     txid: args.anchorTx.id('hex'), outputIndex: 0,
     n: anchorData.n, size: anchorData.size, R: toHex(anchorData.R), Rp: toHex(anchorData.Rp)
@@ -92,8 +92,8 @@ export async function verifyFragment (bundle: ProofBundle, tracker: ChainTracker
   } catch (e) {
     return { ok: false, reason: 'BadBundle', detail: `BEEF parse: ${(e as Error).message}` }
   }
-  const data = decodeMamemAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
-  if (!data || !isValidAnchor(data)) return { ok: false, reason: 'BadBundle', detail: 'output 0 not a mamem anchor' }
+  const data = decodeNektarAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
+  if (!data || !isValidAnchor(data)) return { ok: false, reason: 'BadBundle', detail: 'output 0 not a nektar anchor' }
   if (data.shard !== bundle.shard || data.n !== bundle.n || data.size !== bundle.size) {
     return { ok: false, reason: 'AnchorFieldMismatch', detail: 'shard/n/size mismatch' }
   }

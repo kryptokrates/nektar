@@ -1,48 +1,48 @@
-name: mamem-main
-title: mamem on BSV MAINNET (real funds — capped)
+name: nektar-main
+title: nektar on BSV MAINNET (real funds — capped)
 type: server
-image: mamem:local
+image: nektar:local
 description: >-
-  mamem on BSV mainnet via BSV Broadcaster (GorillaPool) + WhatsOnChain. Anchor fees are paid
+  nektar on BSV mainnet via BSV Broadcaster (GorillaPool) + WhatsOnChain. Anchor fees are paid
   by a dedicated operator fee key (generated on first start; its address is
   printed to stderr — fund it deliberately). All broadcasts pass a SpendGuard:
   per-tx fee cap, per-day spend cap, min broadcast interval, persisted ledger.
-  Keys are encrypted at rest (MAMEM_KEY_PASSPHRASE). Records, anchor state and
-  the spend ledger persist in the mamem-main-data volume. MAMEM_MAINNET_CONFIRM
+  Keys are encrypted at rest (NEKTAR_KEY_PASSPHRASE). Records, anchor state and
+  the spend ledger persist in the nektar-main-data volume. NEKTAR_MAINNET_CONFIRM
   is required config — it is never defaulted.
 longLived: true
 volumes:
-  - mamem-main-data:/data
+  - nektar-main-data:/data
 secrets:
-  - name: mamem-main.key_passphrase
-    env: MAMEM_KEY_PASSPHRASE
+  - name: nektar-main.key_passphrase
+    env: NEKTAR_KEY_PASSPHRASE
     example: <long random passphrase>
     description: Encrypts keys.json and fee.key.json at rest (required)
-  - name: mamem-main.arc_api_key
-    env: MAMEM_ARC_API_KEY
+  - name: nektar-main.arc_api_key
+    env: NEKTAR_ARC_API_KEY
     example: <gorillapool arc api key — optional>
     description: ARC API key (public policy/broadcast works without it; a key lifts rate limits)
-  - name: mamem-main.fund_wif
-    env: MAMEM_FUND_WIF
+  - name: nektar-main.fund_wif
+    env: NEKTAR_FUND_WIF
     example: <WIF — optional>
     description: Operator fee key as WIF. If unset, a fee.key.json key is generated and its address printed.
 env:
-  - name: MAMEM_NETWORK
+  - name: NEKTAR_NETWORK
     value: main
-  - name: MAMEM_MAINNET_CONFIRM
-    value: '{{mamem-main.mainnet_confirm}}'
-  - name: MAMEM_MAX_FEE_SATS_PER_TX
-    value: '{{mamem-main.max_fee_sats_per_tx}}'
-  - name: MAMEM_MAX_SPEND_SATS_PER_DAY
-    value: '{{mamem-main.max_spend_sats_per_day}}'
-  - name: MAMEM_MIN_BROADCAST_INTERVAL_MS
-    value: '{{mamem-main.min_broadcast_interval_ms}}'
-  - name: MAMEM_MODEL_ID
-    value: '{{mamem-main.model_id}}'
-  - name: MAMEM_CLEARANCE_AUTHORITIES
-    value: '{{mamem-main.clearance_authorities}}'
+  - name: NEKTAR_MAINNET_CONFIRM
+    value: '{{nektar-main.mainnet_confirm}}'
+  - name: NEKTAR_MAX_FEE_SATS_PER_TX
+    value: '{{nektar-main.max_fee_sats_per_tx}}'
+  - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
+    value: '{{nektar-main.max_spend_sats_per_day}}'
+  - name: NEKTAR_MIN_BROADCAST_INTERVAL_MS
+    value: '{{nektar-main.min_broadcast_interval_ms}}'
+  - name: NEKTAR_MODEL_ID
+    value: '{{nektar-main.model_id}}'
+  - name: NEKTAR_CLEARANCE_AUTHORITIES
+    value: '{{nektar-main.clearance_authorities}}'
 config:
-  - name: mamem-main
+  - name: nektar-main
     description: Mainnet deployment — real BSV, read the SpendGuard caps
     type: object
     properties:

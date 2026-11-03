@@ -1,8 +1,8 @@
-// ls_mamem — LookupService for mamem anchors.
+// ls_nektar — LookupService for nektar anchors.
 // Answers: {shard} -> current head; {shard, n} -> anchor n; {shard, all:true} -> history.
 import { parseAnchorFields } from '../lib/anchor.mjs'
 
-export function createLsMamem () {
+export function createLsNektar () {
   // anchors: Map<shard, Array<{txid, outputIndex, n, size, R, Rp, spent}>>
   const anchors = new Map()
   const outpointMap = new Map() // 'txid:idx' -> record
@@ -67,8 +67,8 @@ export function createLsMamem () {
       return head ? [pub(head)] : []
     },
 
-    getDocumentation: async () => 'mamem anchor lookup: head of shard, anchor by n, anchors by shard.',
-    getMetaData: async () => ({ name: 'ls_mamem', shortDescription: 'mamem anchor lookup service' }),
+    getDocumentation: async () => 'nektar anchor lookup: head of shard, anchor by n, anchors by shard.',
+    getMetaData: async () => ({ name: 'ls_nektar', shortDescription: 'nektar anchor lookup service' }),
 
     _anchors: anchors
   }

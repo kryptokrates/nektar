@@ -1,5 +1,5 @@
 {
-  "description": "mamem core deterministic vectors (regenerate: pnpm reproduce --write)",
+  "description": "nektar core deterministic vectors (regenerate: pnpm reproduce --write)",
   "fragments": [
     {
       "index": 0,

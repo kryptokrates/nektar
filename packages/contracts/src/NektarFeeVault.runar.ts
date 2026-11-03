@@ -8,7 +8,7 @@ import { StatefulSmartContract, assert, hash160, checkSig, cat, toByteString, ty
 // The residual (real change + miner fee) is bounded by maxFee + 1 sat:
 // the injected change output's destination is caller-set, so we bound its
 // AMOUNT — change-leakage beyond maxFee+1 sat is consensus-impossible.
-export class MamemFeeVault extends StatefulSmartContract {
+export class NektarFeeVault extends StatefulSmartContract {
   destPkh: ByteString // 20B hash160 of the only payable address
   ownerPkh: ByteString
   perTxCap: bigint

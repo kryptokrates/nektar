@@ -1,7 +1,7 @@
 import { RunarContract, MockProvider, LocalSigner } from 'runar-sdk'
 import { readFileSync } from 'node:fs'
 const { Spend, Transaction, Hash, PublicKey } = await import('@bsv/sdk')
-const art = JSON.parse(readFileSync('MamemAnchor.json', 'utf8'))
+const art = JSON.parse(readFileSync('NektarAnchor.json', 'utf8'))
 const signer = new LocalSigner('11'.repeat(32))
 const prov = new MockProvider('testnet')
 const pk = await signer.getPublicKey()

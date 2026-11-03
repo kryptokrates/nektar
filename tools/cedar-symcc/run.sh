@@ -9,7 +9,7 @@ unzip -q -o cvc5.zip && export CVC5="$(find /opt/cvc5 -type f -name cvc5 | head 
 "$CVC5" --version | head -1
 cd /w && cargo build -q --release
 B=/tmp/t/release/cedar-symcc-check
-echo "== instance policy"; $B policies/mamem.cedarschema policies/instance.cedar policies/isolation-spec.cedar
+echo "== instance policy"; $B policies/nektar.cedarschema policies/instance.cedar policies/isolation-spec.cedar
 echo "== mutant policy (must be REFUTED)"
-if $B policies/mamem.cedarschema policies/mutant.cedar policies/isolation-spec.cedar; then echo "MUTANT NOT CAUGHT"; exit 1; fi
+if $B policies/nektar.cedarschema policies/mutant.cedar policies/isolation-spec.cedar; then echo "MUTANT NOT CAUGHT"; exit 1; fi
 echo "SYMCC GATE PASS"

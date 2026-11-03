@@ -20,7 +20,7 @@ export interface Fragment {
   d: Bytes // plaintext data (unencrypted form; never leaves the writer)
   p: Provenance
   hdp?: Bytes // H(d|p), computed if absent
-  E?: Bytes // ciphertext (AES-256-GCM output from @mamem/crypto); empty if plaintext mode
+  E?: Bytes // ciphertext (AES-256-GCM output from @nektar/crypto); empty if plaintext mode
 }
 
 function u32le (n: number): Bytes {

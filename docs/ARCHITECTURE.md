@@ -1,6 +1,6 @@
-# mamem architecture
+# nektar architecture
 
-mamem is a BSV-native implementation of the Merkle Automaton (arXiv:2506.13246). It is encrypted, provenance-bearing agent memory whose history is append-only and anchored. State transitions are enforced by Rúnar UTXO contracts. Everything a verifier needs ends in the BSV header chain (GEN-003).
+nektar is a BSV-native implementation of the Merkle Automaton (arXiv:2506.13246). It is encrypted, provenance-bearing agent memory whose history is append-only and anchored. State transitions are enforced by Rúnar UTXO contracts. Everything a verifier needs ends in the BSV header chain (GEN-003).
 
 ## 1. Layers
 
@@ -32,11 +32,11 @@ flowchart TB
     VER["verifyFragment (leaf→R→anchor→BUMP→headers)"]
   end
   subgraph L1["L1 Anchoring (Rúnar contracts)"]
-    ANC["MamemAnchor — one head UTXO per shard"]
-    AUT["MamemAutomaton — δ enforced on-chain"]
+    ANC["NektarAnchor — one head UTXO per shard"]
+    AUT["NektarAutomaton — δ enforced on-chain"]
   end
   subgraph L0["L0 BSV"]
-    TN["Teranode (Chronicle) · headers · BEEF/BUMP · overlay (tm_mamem / ls_mamem, GASP)"]
+    TN["Teranode (Chronicle) · headers · BEEF/BUMP · overlay (tm_nektar / ls_nektar, GASP)"]
   end
   MCP --> RS --> DAG --> AORG
   MCP --> CED
@@ -84,7 +84,7 @@ flowchart LR
 sequenceDiagram
   autonumber
   participant A as Agent
-  participant M as MamemMemory
+  participant M as NektarMemory
   participant L as BatchLog
   participant C as AnchorChain (Rúnar)
   participant T as Teranode
@@ -106,7 +106,7 @@ sequenceDiagram
 sequenceDiagram
   autonumber
   participant B as Reader B
-  participant M as MamemMemory
+  participant M as NektarMemory
   participant Z as ZK clearance verifier
   participant P as Cedar + Policy DAG
   participant V as verifyFragment
@@ -125,7 +125,7 @@ sequenceDiagram
   end
 ```
 
-## 5. Anchor contract state machine (`MamemAnchor`)
+## 5. Anchor contract state machine (`NektarAnchor`)
 
 ```mermaid
 stateDiagram-v2
@@ -139,7 +139,7 @@ stateDiagram-v2
   end note
 ```
 
-## 6. Automaton contract (`MamemAutomaton`)
+## 6. Automaton contract (`NektarAutomaton`)
 
 ```mermaid
 stateDiagram-v2
@@ -160,7 +160,7 @@ stateDiagram-v2
 flowchart LR
   pk0["owner pk⁰ (genesis)"] -- "rotation cert C¹ = Sign_pk⁰(H(pk⁰‖pk¹‖t))" --> pk1["pk¹"]
   pk1 -- "C²" --> pk2["pk²"]
-  pk1 -. "MamemAnchor.rotate (on-chain)" .-> head["anchor head ownerPkh"]
+  pk1 -. "NektarAnchor.rotate (on-chain)" .-> head["anchor head ownerPkh"]
   pk0 -- "derive_key(pk⁰)" --> smt["revocation SMT (2²⁵⁶ keys)"]
   smt -- "root anchored" --> chain[("BSV")]
   cert["cert log"] -- "anchored" --> chain
@@ -186,14 +186,14 @@ flowchart TB
 
 ```mermaid
 sequenceDiagram
-  participant H1 as overlay host 1 (tm_mamem)
+  participant H1 as overlay host 1 (tm_nektar)
   participant H2 as overlay host 2 (empty)
   H2->>H1: GASP initial request (since)
   H1-->>H2: UTXO list (shard heads)
   loop each head
     H2->>H1: request node (anchor tx + BUMP + topical ancestors)
     H1-->>H2: graph node
-    H2->>H2: tm_mamem admits only a valid successor of the known head<br/>(forged genesis / non-head spend rejected)
+    H2->>H2: tm_nektar admits only a valid successor of the known head<br/>(forged genesis / non-head spend rejected)
   end
   Note over H2: converges to host 1 heads, including rotations
 ```
@@ -238,8 +238,8 @@ classDiagram
 ```mermaid
 flowchart LR
   subgraph host["operator host"]
-    subgraph mamem["mamem (docker compose)"]
-      mcp["mamem-mcp (stdio)"]
+    subgraph nektar["nektar (docker compose)"]
+      mcp["nektar-mcp (stdio)"]
       demo["demo client (health/smoke)"]
     end
     subgraph tn["Teranode regtest (pnpm stack:up)"]
@@ -280,7 +280,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  b["pnpm -r build"] --> d["pnpm check:deps"] --> t["pnpm -r test (unit · contract · integration · fuzz)"] --> r["pnpm reproduce (vectors, vkey)"] --> e["pnpm e2e (offline, full paper)"] --> rg["MAMEM_NETWORK=regtest pnpm e2e ×3"]
+  b["pnpm -r build"] --> d["pnpm check:deps"] --> t["pnpm -r test (unit · contract · integration · fuzz)"] --> r["pnpm reproduce (vectors, vkey)"] --> e["pnpm e2e (offline, full paper)"] --> rg["NEKTAR_NETWORK=regtest pnpm e2e ×3"]
   t -.-> f["pnpm formal (TLC)"]
   t -.-> s["pnpm cedar:symcc (SymCC + cvc5)"]
   t -.-> v["pnpm smt:vectors (Rust oracle)"]
@@ -295,7 +295,7 @@ flowchart LR
 | 002 | Double-SHA-256 Merkle, odd self-pairing, leaf count committed |
 | 003 | Trillian is a design reference only; fork-freedom comes from the head UTXO |
 | 011 | Standard BSV stack (Teranode, overlay, BEEF/BUMP) replaces custom chain code |
-| 012 | One anchor UTXO per shard; every successor spends it (Rúnar `MamemAnchor`) |
+| 012 | One anchor UTXO per shard; every successor spends it (Rúnar `NektarAnchor`) |
 | 013 | Standard BEEF/BUMP proofs (no patented proof-entity formats) |
 | 014 | BRC-42-style key derivation, level as KDF namespace |
 | 015 | ~~ZK membership over a Poseidon companion tree whose root rides in the anchor~~ — **superseded by ADR-020** |
@@ -331,7 +331,7 @@ flowchart LR
 **On-chain verification:** not available for RISC Zero receipts in Rúnar, which only has an SP1 FRI verifier. Verification stays off-chain against the SPV-verified anchor, which §13 permits ("executable on-chain if necessary").
 
 **Consequences:**
-- the Poseidon tree, the Groth16 circuits and ceremony, and the anchor's `poseidonRoot` are removed (MamemAnchor v3, fresh regtest chains);
+- the Poseidon tree, the Groth16 circuits and ceremony, and the anchor's `poseidonRoot` are removed (NektarAnchor v3, fresh regtest chains);
 - the nullifier is replaced by a verifier-issued single-use queryId;
 - proofs are larger (224 KB vs 389 B, all off-chain);
 - proving is slower (≈35–50 s per proof on CPU);

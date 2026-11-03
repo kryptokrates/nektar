@@ -4,8 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { MamemMemory } from '../src/memory.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { NektarMemory } from '../src/memory.js'
 import { visibleTools, callTool } from '../src/server.js'
 
 const SALE_TOOLS = ['sale']
@@ -15,30 +15,30 @@ function setup () {
   const mk = (opts: any = {}) => {
     const funder = new MockFunder(); funder.topup(50)
     for (const t of funder.parents) chain.registerParent(t)
-    return new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
+    return new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
   }
   return { chain, seller: mk(), buyer: mk(), mk }
 }
 
-test('paid disclosure tools: hidden + refused unless MAMEM_PAID_DISCLOSURE is set', async () => {
+test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is set', async () => {
   const { seller } = setup()
-  delete process.env.MAMEM_PAID_DISCLOSURE
+  delete process.env.NEKTAR_PAID_DISCLOSURE
   const vis: string[] = visibleTools().map(t => t.name as string)
   for (const n of SALE_TOOLS) assert.ok(!vis.includes(n), `${n} must be hidden when unset`)
   await assert.rejects(
     () => callTool(seller, 'sale', { op: 'offer', value: 'aa', price: 100, refundAfter: 1, maxFee: 10 }),
     /paid disclosure is disabled/)
-  process.env.MAMEM_PAID_DISCLOSURE = '1'
+  process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const vis2: string[] = visibleTools().map(t => t.name as string)
     for (const n of SALE_TOOLS) assert.ok(vis2.includes(n), `${n} must be listed when enabled`)
   } finally {
-    delete process.env.MAMEM_PAID_DISCLOSURE
+    delete process.env.NEKTAR_PAID_DISCLOSURE
   }
 })
 
 test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claims', async () => {
-  process.env.MAMEM_PAID_DISCLOSURE = '1'
+  process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const { chain, seller, buyer } = setup()
     const buyerPub = buyer.operatorKey().toPublicKey().toString()
@@ -76,12 +76,12 @@ test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claim
       () => callTool(buyer, 'sale', { op: 'claim', txHex: tx.toHex(), hWrapped: 'ff'.repeat(32) }),
       /does not match/)
   } finally {
-    delete process.env.MAMEM_PAID_DISCLOSURE
+    delete process.env.NEKTAR_PAID_DISCLOSURE
   }
 })
 
 test('paid disclosure: depositor refunds an unrevealed escrow after deadline', async () => {
-  process.env.MAMEM_PAID_DISCLOSURE = '1'
+  process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const { seller, buyer } = setup()
     const offer = await callTool(seller, 'sale', { op: 'offer',
@@ -102,18 +102,18 @@ test('paid disclosure: depositor refunds an unrevealed escrow after deadline', a
     })
     assert.notEqual(early.accepted, true, 'early refund must be refused')
   } finally {
-    delete process.env.MAMEM_PAID_DISCLOSURE
+    delete process.env.NEKTAR_PAID_DISCLOSURE
   }
 })
 
 test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; claim verifies it + provenance σ', async () => {
-  process.env.MAMEM_PAID_DISCLOSURE = '1'
+  process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const { chain, seller, buyer } = setup()
     const sellerPub = seller.operatorKey().toPublicKey().toString()
     // §16: the sold record carries a verifiable provenance signature
-    const { signProvenance } = await import('@mamem/log')
-    const { utf8 } = await import('@mamem/core')
+    const { signProvenance } = await import('@nektar/log')
+    const { utf8 } = await import('@nektar/core')
     const p0 = { source: 'agent', time: 1_700_000_000, signature: new Uint8Array(0), modelId: 'test-model-1' }
     const signed = signProvenance(seller.operatorKey(), utf8('the sold secret fact'), p0)
     await seller.remember('vault', 'the sold secret fact',
@@ -148,12 +148,12 @@ test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; cl
     })
     assert.equal(bad.verified, false)
   } finally {
-    delete process.env.MAMEM_PAID_DISCLOSURE
+    delete process.env.NEKTAR_PAID_DISCLOSURE
   }
 })
 
 test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape); buyer decrypts + verifies', async () => {
-  process.env.MAMEM_PAID_DISCLOSURE = '1'
+  process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const { chain, mk } = setup()
     // agentSeed enables §7 encryption; maxLevel 0 keeps writes at level 0
@@ -181,12 +181,12 @@ test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape)
     assert.equal(claim.verified, true, 'decrypted fragment recomputes to the anchored leaf')
     assert.equal(Buffer.from(claim.valueHex, 'hex').toString(), 'encrypted memory for sale')
   } finally {
-    delete process.env.MAMEM_PAID_DISCLOSURE
+    delete process.env.NEKTAR_PAID_DISCLOSURE
   }
 })
 
 test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before funding', async () => {
-  process.env.MAMEM_PAID_DISCLOSURE = '1'
+  process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const { chain, seller, buyer } = setup()
     chain.mine(5) // push the mock tip to height 5
@@ -233,6 +233,6 @@ test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before 
       () => callTool(buyer, 'sale', { op: 'escrow', cfg: pastTs.cfg, amount: 2_000 }),
       /refundAfter is not in the future/)
   } finally {
-    delete process.env.MAMEM_PAID_DISCLOSURE
+    delete process.env.NEKTAR_PAID_DISCLOSURE
   }
 })

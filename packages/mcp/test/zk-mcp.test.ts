@@ -2,14 +2,14 @@
 // identity + wire-encoded clearance reach recall; every negative is refused.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { MamemMemory, callTool, ClientWallet, ClearanceAuthority } from '../src/index.js'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { NektarMemory, callTool, ClientWallet, ClearanceAuthority } from '../src/index.js'
 
 test('MCP recall with wallet identity + clearance: level-2 read only when cleared; negatives refused', async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(10); for (const t of funder.parents) chain.registerParent(t)
   const authority = new ClearanceAuthority()
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, clearanceAuthorities: [authority.pubkey] })
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, clearanceAuthorities: [authority.pubkey] })
   const call = (n: string, a: Record<string, unknown>) => callTool(mem, n, a)
   await call('remember', { shard: 'c', data: 'public fact' })
   await call('remember', { shard: 'c', data: 'secret price 12,400 EUR', level: 2 })

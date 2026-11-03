@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { utf8, toHex, dsha256 } from '@mamem/core'
+import { utf8, toHex, dsha256 } from '@nektar/core'
 import { BatchLog, MemoryShardStore, signProvenance, verifyProvenance, signCheckpoint, verifyCheckpoint, PromiseMonitor } from '../src/index.js'
 
 const prov = { source: 'doi:10.1/x', time: 1_700_000_000, signature: new Uint8Array(0), modelId: 'm' }

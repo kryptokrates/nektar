@@ -1,12 +1,12 @@
-// Scripted MCP session (official SDK client): spawns the mamem server over
+// Scripted MCP session (official SDK client): spawns the nektar server over
 // stdio and drives it the way an agent would. Health check for the Docker image.
 import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const bin = fileURLToPath(new URL('../dist/src/bin.js', import.meta.url))
-const client = new Client({ name: 'mamem-demo', version: '1.0.0' })
-await client.connect(new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env, MAMEM_MODEL_ID: 'scripted-demo' }, stderr: 'inherit' }))
+const client = new Client({ name: 'nektar-demo', version: '1.0.0' })
+await client.connect(new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env, NEKTAR_MODEL_ID: 'scripted-demo' }, stderr: 'inherit' }))
 const call = async (name, args) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text)
 
 const { tools } = await client.listTools()

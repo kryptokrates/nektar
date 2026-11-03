@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, LockingScript } from '@bsv/sdk'
-import { MAMEM_ANCHOR_ARTIFACT, TAG_RPRIME, META_FLAG_HEX } from '@mamem/contracts'
+import { NEKTAR_ANCHOR_ARTIFACT, TAG_RPRIME, META_FLAG_HEX } from '@nektar/contracts'
 import { RunarContract } from 'runar-sdk'
-import { chainRp, GENESIS_PREV_RP, dsha256, utf8, hash160, toHex } from '@mamem/core'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { createMamemOverlay } from '../src/node.js'
-import { AnchorChain } from '@mamem/anchor'
+import { chainRp, GENESIS_PREV_RP, dsha256, utf8, hash160, toHex } from '@nektar/core'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { createNektarOverlay } from '../src/node.js'
+import { AnchorChain } from '@nektar/anchor'
 import { GASP } from '@bsv/gasp'
 // OverlayGASPStorage is not exported from the package root; import the file
 // directly (same class Engine.syncGASPWithPeer uses for its local storage).
@@ -42,20 +42,20 @@ class FakeRemote {
 // The same flow Engine.syncGASPWithPeer runs, with the remote wired in-process:
 // `new GASP(storage, remote, lastInteraction, prefix, true, true).sync(peer)`
 async function syncFrom (host: any, remote: any, label: string) {
-  const gasp = new (GASP as any)(new OverlayGASPStorage('tm_mamem', host.engine), remote, 0, label, true, true)
+  const gasp = new (GASP as any)(new OverlayGASPStorage('tm_nektar', host.engine), remote, 0, label, true, true)
   await gasp.sync(label)
 }
 
 const submit = async (ov: any, tx: Transaction) =>
-  ov.engine.submit({ beef: tx.toBEEF(), topics: ['tm_mamem'] }, undefined, 'current-tx')
+  ov.engine.submit({ beef: tx.toBEEF(), topics: ['tm_nektar'] }, undefined, 'current-tx')
 
 test('GASP sync: empty host converges to host1 heads for 2 shards incl. rotate', async (t) => {
   const chain = new MockChain()
   const f1 = new MockFunder(); f1.topup(30)
   for (const u of (f1 as any).utxos as Array<{ tx: Transaction }>) chain.mempool.set(u.tx.id('hex'), u.tx)
   chain.mine(1)
-  const host1 = await createMamemOverlay(chain, chain)
-  const host2 = await createMamemOverlay(chain, chain)
+  const host1 = await createNektarOverlay(chain, chain)
+  const host2 = await createNektarOverlay(chain, chain)
   t.after(async () => { await host1.knex.destroy(); await host2.knex.destroy() })
 
   // shard A: genesis + append + rotate + post-rotate append on host1
@@ -83,20 +83,20 @@ test('GASP sync: empty host converges to host1 heads for 2 shards incl. rotate',
   for (const [name, ac] of [['A', acA], ['B', acB]] as const) {
     for (const h of [...((ac as any).pendingHeads ?? [])]) {
       const s = await submit(host1, h.tx)
-      const n = s.tm_mamem?.outputsToAdmit?.length
-      if (n !== 1) console.log(`${name} link NOT admitted: n=${h.data?.n} txid=${h.tx.id('hex').slice(0,12)} res=${JSON.stringify(s.tm_mamem)}`)
+      const n = s.tm_nektar?.outputsToAdmit?.length
+      if (n !== 1) console.log(`${name} link NOT admitted: n=${h.data?.n} txid=${h.tx.id('hex').slice(0,12)} res=${JSON.stringify(s.tm_nektar)}`)
       assert.equal(n, 1, `chain link admitted on host1: ${name} n=${h.data?.n} txid=${h.tx.id('hex').slice(0,12)}`)
     }
     if ((ac as any).head) {
       const s = await submit(host1, (ac as any).head.tx)
-      assert.equal(s.tm_mamem?.outputsToAdmit?.length, 1, 'genesis admitted on host1')
+      assert.equal(s.tm_nektar?.outputsToAdmit?.length, 1, 'genesis admitted on host1')
     }
   }
 
   const shardA = (acA as any).getShardId(), shardB = (acB as any).getShardId()
   assert.equal(host2.ls.getHead(shardA), undefined, 'host2 starts empty')
 
-  await syncFrom(host2, new DirectRemote(host1.engine, 'tm_mamem'), 'host1')
+  await syncFrom(host2, new DirectRemote(host1.engine, 'tm_nektar'), 'host1')
 
   const h1A = host1.ls.getHead(shardA), h2A = host2.ls.getHead(shardA)
   const h1B = host1.ls.getHead(shardB), h2B = host2.ls.getHead(shardB)
@@ -110,10 +110,10 @@ test('GASP sync: empty host converges to host1 heads for 2 shards incl. rotate',
 
 test('GASP sync: forged chain pushed through sync is rejected (tm still applies)', async (t) => {
   const chain = new MockChain()
-  const host2 = await createMamemOverlay(chain, chain)
+  const host2 = await createNektarOverlay(chain, chain)
   t.after(async () => { await host2.knex.destroy() })
   // forged anchor: genesis whose ownerPkh ≠ hash160(genesisOwner) — a shard
-  // squat that tm_mamem must reject even when it arrives via sync
+  // squat that tm_nektar must reject even when it arrives via sync
   const victim = PrivateKey.fromRandom(), attacker = PrivateKey.fromRandom()
   const forged = new Transaction()
   const f = new MockFunder(attacker); f.topup(5)
@@ -122,7 +122,7 @@ test('GASP sync: forged chain pushed through sync is rejected (tm still applies)
   const victimPub = victim.toPublicKey().toString()
   const atkPkh = toHex(hash160(Uint8Array.from(Buffer.from(attacker.toPublicKey().toString(), 'hex'))))
   const R = dsha256(utf8('forged'))
-  const lock = LockingScript.fromHex(new RunarContract(MAMEM_ANCHOR_ARTIFACT, [
+  const lock = LockingScript.fromHex(new RunarContract(NEKTAR_ANCHOR_ARTIFACT, [
     victimPub, atkPkh, META_FLAG_HEX, 0n, 1n, Buffer.from(R).toString('hex'),
     Buffer.from(chainRp(GENESIS_PREV_RP, R, 1)).toString('hex'), Buffer.from(TAG_RPRIME).toString('hex')
   ]).getLockingScript())

@@ -1,11 +1,11 @@
-# mamem — an AI memory it can't silently rewrite
+# <img src="logo.png" width="44" valign="middle"> nektar — an AI memory it can't silently rewrite
 
 An append-only memory for AI agents, sealed on the BSV blockchain. Anyone
 can later check *what the AI knew, when it knew it, and who was allowed to
 see it* — without trusting whoever ran the machine.
 
-[![ci](https://github.com/nedzof/merkle-automaton/actions/workflows/ci.yml/badge.svg)](https://github.com/nedzof/merkle-automaton/actions/workflows/ci.yml)
-[![release](https://github.com/nedzof/merkle-automaton/actions/workflows/release.yml/badge.svg)](https://github.com/nedzof/merkle-automaton/actions/workflows/release.yml)
+[![ci](https://github.com/nedzof/nektar/actions/workflows/ci.yml/badge.svg)](https://github.com/nedzof/nektar/actions/workflows/ci.yml)
+[![release](https://github.com/nedzof/nektar/actions/workflows/release.yml/badge.svg)](https://github.com/nedzof/nektar/actions/workflows/release.yml)
 License: [Apache-2.0](LICENSE)
 
 ## The whole idea in one picture
@@ -48,8 +48,8 @@ Watch the ungrounded claim get stripped in front of you. Then:
 - `pnpm setup:claude` / `pnpm setup:codex` — wire the receipt hooks into your agent
 - `exportShard` hands any public shard to another operator as a `packUrl`;
   `importShard {from: "<their-url>", shard: "…"}` re-verifies every bundle on
-  import — verified memory on day one. `/.well-known/mamem` lists what an
-  operator offers; `MAMEM_PACK_SHARE=0` opts out.
+  import — verified memory on day one. `/.well-known/nektar` lists what an
+  operator offers; `NEKTAR_PACK_SHARE=0` opts out.
 - `doctor` — one-call health check (funding, shards, anchors, prover)
 
 ## The walkthrough — one question, end to end
@@ -130,7 +130,7 @@ is refused, not published with a disclaimer. The surviving answer is
 anchored as a receipt. **Backed:** per-claim derivation from sealed
 memory — Wright's "no fragment may be hallucinated."
 
-→ and it returns a **scannable receipt**: `receipt: mamemr1.…` plus a
+→ and it returns a **scannable receipt**: `receipt: nektarr1.…` plus a
 `verify:` URL. Anyone hitting `/v1/verify` sees the checks run live
 (exists → re-hash → provenance → anchored → cites anchored) — the page
 carries a QR for a phone scan. A Claude Code Stop hook can verify every
@@ -212,10 +212,10 @@ get stripped — that's the safety feature, not a bug.
 ## See it live
 
 A demo instance runs on the public testnet (`167.233.174.91:8080`,
-`MAMEM_NETWORK=ttn`, payments on):
+`NEKTAR_NETWORK=ttn`, payments on):
 
 - `GET /.well-known/x402` — the priced-tool catalog, served unauthenticated
-- [a real paid-answer receipt](http://167.233.174.91:8080/v1/verify?r=mamemr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI) — human check page; the `paid` line names the settlement tx
+- [a real paid-answer receipt](http://167.233.174.91:8080/v1/verify?r=nektarr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI) — human check page; the `paid` line names the settlement tx
 - `docs/DEMO.md` — the five-minute show: 402 invoice → WIF-signed tx → receipt → phone verify
 
 ## Running it
@@ -234,11 +234,11 @@ forged.
 
 ```sh
 # host one (any always-on box):
-MAMEM_OVERLAY_HOST=0.0.0.0 MAMEM_OVERLAY_PORT=8090 pnpm rendezvous
+NEKTAR_OVERLAY_HOST=0.0.0.0 NEKTAR_OVERLAY_PORT=8090 pnpm rendezvous
 
 # announce your agent (free — no UTXO, the signature is the auth):
-MAMEM_AGENT_WIF=<key> MAMEM_AGENT_ENDPOINT=http://<you>:8080/mcp \
-  MAMEM_AGENT_SHARDS=manual,tnet MAMEM_OVERLAY_URL=http://<rendezvous>:8090 \
+NEKTAR_AGENT_WIF=<key> NEKTAR_AGENT_ENDPOINT=http://<you>:8080/mcp \
+  NEKTAR_AGENT_SHARDS=manual,tnet NEKTAR_OVERLAY_URL=http://<rendezvous>:8090 \
   pnpm rendezvous:announce
 
 # discover peers:
@@ -256,10 +256,10 @@ peers; it never vouches for them** — trust comes from the receipts.
   chains, STARK prove/verify, claims, verdicts, gated sales, rendezvous).
 - ⚠️ One liveness assumption, on the *optimistic* rail only: a false
   claim stands only if **no honest watcher** challenges it in the window.
-  The **validity rail** (`MamemGrothClaim` + in-script Groth16 verifier,
+  The **validity rail** (`NektarGrothClaim` + in-script Groth16 verifier,
   our own circuit, regtest-proven) removes it — production use still
   needs a real trusted-setup ceremony. Everything else is math.
-- ⚠️ Mainnet is gated (`MAMEM_MAINNET_CONFIRM` + spend caps), not yet a
+- ⚠️ Mainnet is gated (`NEKTAR_MAINNET_CONFIRM` + spend caps), not yet a
   pilot. No security audit.
 - Proofs cover *inclusion, ordering, authorization, existence-by-time* —
   never that a memory's content is **true**.
@@ -282,21 +282,21 @@ peers; it never vouches for them** — trust comes from the receipts.
   *which model ran*, grounding proves *what the answer derives from* —
   different questions). Dev trusted setup + nChain demo params —
   regtest-grade only.
-- **Paid service (opt-in, `MAMEM_PAYMENTS=1`)**: `anchor`,
+- **Paid service (opt-in, `NEKTAR_PAYMENTS=1`)**: `anchor`,
   `groundedAnswer` and `commitReceipt` take a per-call atomic payment —
   BRC-166-style x402 `exact`: an unpaid call returns a `402` invoice
   (`payQuote` tool / `GET /v1/pay/quote`; priced catalog at
   `/.well-known/x402`), the caller signs a tx paying the operator
-  address + carrying `OP_RETURN mamempay:<invoiceId>` (one tx binds one
+  address + carrying `OP_RETURN nektarpay:<invoiceId>` (one tx binds one
   call), retries with `payment:{invoiceId,transaction}` — we verify,
   broadcast, and the **receipt commits the settlement txid** (the
   "signed usage receipt" names what paid for it; `/v1/verify` gains a
   `paid` check). WIF-only — no wallet protocol; `payclient.ts` is the
   reference signer. Startup is fail-closed: no valid
-  `MAMEM_OPERATOR_WIF`, no boot. **Verified on real consensus** by
+  `NEKTAR_OPERATOR_WIF`, no boot. **Verified on real consensus** by
   `packages/e2e/src/e2e-pay.mjs` (regtest + ttn) and exercised live
   against the deployed demo box (`167.233.174.91:8080`, running
-  `MAMEM_NETWORK=ttn`) by `packages/e2e/src/e2e-pay-remote.mjs`:
+  `NEKTAR_NETWORK=ttn`) by `packages/e2e/src/e2e-pay-remote.mjs`:
   funding tx, settlement broadcast, receipt binding, replay rejected —
   all real public testnet transactions. See
   [docs/OPERATIONS.md](docs/OPERATIONS.md).

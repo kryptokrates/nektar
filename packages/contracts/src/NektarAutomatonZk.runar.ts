@@ -1,5 +1,5 @@
-// MamemAutomatonZk — AUT-005 + optional Schnorr-PoK delegation gate.
-// Same automaton logic as MamemAutomaton, but `stepZk` replaces the owner
+// NektarAutomatonZk — AUT-005 + optional Schnorr-PoK delegation gate.
+// Same automaton logic as NektarAutomaton, but `stepZk` replaces the owner
 // signature with a Schnorr proof of knowledge of the discrete log of the
 // committed delegate point `delegateP`:
 //   e = sha256(R ‖ delegateP ‖ num2bin8(n) ‖ num2bin8(to)) — binding the
@@ -12,7 +12,7 @@ import {
   type PubKey, type Sig, type Sha256, type ByteString, type Point
 } from 'runar-lang'
 
-export class MamemAutomatonZk extends StatefulSmartContract {
+export class NektarAutomatonZk extends StatefulSmartContract {
   q: bigint
   deltaRoot: Sha256
   ownerPkh: ByteString

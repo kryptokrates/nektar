@@ -1,4 +1,4 @@
-// mamem-watcher — the 1-of-N honest challenger in the optimistic-claim
+// nektar-watcher — the 1-of-N honest challenger in the optimistic-claim
 // security model (GOAL-v9 §4.5). Polls a claims registry, and for every
 // OPEN claim (status=0, deadline not yet passed):
 //   1. locates the L_ZKMem proof bundle in the proof store by its
@@ -12,9 +12,9 @@
 // finalizes only if zero watchers act" a deployed guarantee, not paper.
 import { PrivateKey, Transaction, LockingScript, Hash } from '@bsv/sdk'
 import { RunarContract, LocalSigner, deserializeState } from 'runar-sdk'
-import { MamemProvider } from '@mamem/anchor'
-import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve } from '@mamem/chain'
-import { loadClaims, proofFile, markClaimSpent } from '@mamem/chain'
+import { NektarProvider } from '@nektar/anchor'
+import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve } from '@nektar/chain'
+import { loadClaims, proofFile, markClaimSpent } from '@nektar/chain'
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -57,22 +57,22 @@ function readEnv (p) {
   return out
 }
 const localEnv = { ...readEnv(new URL('../../.env', import.meta.url)), ...readEnv(new URL('../../../.env', import.meta.url)) }
-// quickstart creds: repo path locally, mounted file in containers (MAMEM_QS_ENV)
-const qsEnv = readEnv(process.env.MAMEM_QS_ENV ?? new URL('../../../infra/teranode-quickstart/.env', import.meta.url))
-const WIF = process.env.MAMEM_REGTEST_WIF || localEnv.MAMEM_REGTEST_WIF
-if (!WIF) throw new Error('MAMEM_REGTEST_WIF missing (watcher pays its own challenge bonds)')
+// quickstart creds: repo path locally, mounted file in containers (NEKTAR_QS_ENV)
+const qsEnv = readEnv(process.env.NEKTAR_QS_ENV ?? new URL('../../../infra/teranode-quickstart/.env', import.meta.url))
+const WIF = process.env.NEKTAR_REGTEST_WIF || localEnv.NEKTAR_REGTEST_WIF
+if (!WIF) throw new Error('NEKTAR_REGTEST_WIF missing (watcher pays its own challenge bonds)')
 
 const cfg = {
-  rpcUrl: process.env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-  rpcUser: process.env.MAMEM_RPC_USER || qsEnv.rpc_user || 'teranode',
-  rpcPass: process.env.MAMEM_RPC_PASS || qsEnv.rpc_pass || '',
-  propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-  assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1',
+  rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+  rpcUser: process.env.NEKTAR_RPC_USER || qsEnv.rpc_user || 'teranode',
+  rpcPass: process.env.NEKTAR_RPC_PASS || qsEnv.rpc_pass || '',
+  propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+  assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1',
   claimsFile: ARG('claims', '.state/watcher-claims.json'),
   proofDir: ARG('proof-dir', '.state/proofs'),
   stateFile: ARG('reserve', '.state/watcher-reserve.json')
 }
-const art = JSON.parse(readFileSync(new URL('../../contracts/MamemZkClaim.json', import.meta.url), 'utf8'))
+const art = JSON.parse(readFileSync(new URL('../../contracts/NektarZkClaim.json', import.meta.url), 'utf8'))
 
 const broadcaster = new TeranodeBroadcaster(cfg.propagationUrl)
 const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
@@ -87,7 +87,7 @@ const rpc = async (method, ...params) => {
 const key = PrivateKey.fromWif(WIF)
 const addr = key.toPublicKey().toAddress([0x6f])
 const reserve = new ReserveFunder(key, cfg.stateFile)
-const provider = new MamemProvider(broadcaster, reserve, addr)
+const provider = new NektarProvider(broadcaster, reserve, addr)
 const signer = new LocalSigner(WIF)
 const watcherPk = await signer.getPublicKey()
 const watcherPkh = Buffer.from(Hash.hash160(Buffer.from(watcherPk, 'hex'))).toString('hex')
@@ -101,7 +101,7 @@ if (reserve.utxos.length < 2) {
   await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile: cfg.stateFile.replace('.json', '-treasury.json'), outputs: 8 })
 }
 
-// ── claim registry: [{txid, vout}] — each = a deployed MamemZkClaim UTXO.
+// ── claim registry: [{txid, vout}] — each = a deployed NektarZkClaim UTXO.
 // Seeded by deployments (the e2e writes entries); the watcher tracks the
 // tip per entry while it stays unspent (chain-tracking beyond the tip
 // needs a tx-index — documented gap, see GOAL-v9). ──
@@ -119,9 +119,9 @@ async function checkClaim (entry) {
   const out = tx.outputs[vout]
   if (!out) return console.log(`  ${txid.slice(0, 8)}:${vout} — no such output`)
   const script = out.lockingScript.toHex()
-  if (!script.startsWith(art.script)) { if (process.env.MAMEM_WATCH_DEBUG) console.log(`  ${txid.slice(0, 8)}:${vout} — not a MamemZkClaim script`); return }
+  if (!script.startsWith(art.script)) { if (process.env.NEKTAR_WATCH_DEBUG) console.log(`  ${txid.slice(0, 8)}:${vout} — not a NektarZkClaim script`); return }
   const st = readClaimState(script)
-  if (st.status !== 0n) { if (process.env.MAMEM_WATCH_DEBUG) console.log(`  ${txid.slice(0, 8)}:${vout} — status=${st.status}, skipping`); return }
+  if (st.status !== 0n) { if (process.env.NEKTAR_WATCH_DEBUG) console.log(`  ${txid.slice(0, 8)}:${vout} — status=${st.status}, skipping`); return }
   // deadline check: nLockTime is time-or-height; treat < 500M as height
   const tip = await rpc('getblockchaininfo').then(b => b.blocks).catch(() => 0)
   const open = st.deadline < 500000000n ? tip < Number(st.deadline) : Math.floor(Date.now() / 1000) < Number(st.deadline)
@@ -163,12 +163,12 @@ const inconclusiveStreaks = new Map() // txid → consecutive inconclusive verif
 
 async function tick () {
   const claims = loadClaims(cfg.claimsFile)
-  if (process.env.MAMEM_WATCH_DEBUG) console.log(`  tick: ${claims.length} registry entries`)
+  if (process.env.NEKTAR_WATCH_DEBUG) console.log(`  tick: ${claims.length} registry entries`)
   for (const e of claims) {
     if (e.spent) continue
     try { await checkClaim(e) } catch (err) { console.log(`  ${e.txid?.slice(0, 8)}:${e.vout} — error: ${err.message.slice(0, 200)}`) }
   }
 }
-console.log(`mamem-watcher up — claims: ${cfg.claimsFile}, proofs: ${cfg.proofDir}, every ${WATCH_MS}ms${ONCE ? ' (once)' : ''}`)
+console.log(`nektar-watcher up — claims: ${cfg.claimsFile}, proofs: ${cfg.proofDir}, every ${WATCH_MS}ms${ONCE ? ' (once)' : ''}`)
 await tick()
 if (!ONCE) setInterval(tick, WATCH_MS)

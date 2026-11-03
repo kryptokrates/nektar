@@ -16,13 +16,13 @@ fn main() {
         let pa = a.mul_base(); let pb = b.mul_base();
         let shared = ecdh_shared_x(&a, &pb);
         assert_eq!(shared, ecdh_shared_x(&b, &pa));
-        let salt = sha256(format!("mamem:salt:{i}").as_bytes());
+        let salt = sha256(format!("nektar:salt:{i}").as_bytes());
         let prk = hkdf_extract(&salt, &shared);
-        let okm = hkdf_expand_one_block(&prk, format!("mamem:info:{i}").as_bytes());
+        let okm = hkdf_expand_one_block(&prk, format!("nektar:info:{i}").as_bytes());
         let prehash = sha256(format!("message-{i}").as_bytes());
         let sig = ecdsa_sign_prehash(&a, &prehash);
         cases.push(format!(
-            "{{\"skA\":\"{}\",\"pubA\":\"{}\",\"skB\":\"{}\",\"pubB\":\"{}\",\"ecdhX\":\"{}\",\"salt\":\"{}\",\"prk\":\"{}\",\"info\":\"mamem:info:{i}\",\"okm\":\"{}\",\"prehash\":\"{}\",\"sigRS\":\"{}\"}}",
+            "{{\"skA\":\"{}\",\"pubA\":\"{}\",\"skB\":\"{}\",\"pubB\":\"{}\",\"ecdhX\":\"{}\",\"salt\":\"{}\",\"prk\":\"{}\",\"info\":\"nektar:info:{i}\",\"okm\":\"{}\",\"prehash\":\"{}\",\"sigRS\":\"{}\"}}",
             hex::encode(a.to_bytes()), hex::encode(pa.to_compressed()), hex::encode(b.to_bytes()), hex::encode(pb.to_compressed()),
             hex::encode(shared), hex::encode(salt), hex::encode(prk), hex::encode(okm), hex::encode(prehash), hex::encode(sig)
         ));

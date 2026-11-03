@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { merkleRoot, dsha256, utf8, toHex } from '@mamem/core'
+import { merkleRoot, dsha256, utf8, toHex } from '@nektar/core'
 import { encodeZkm2, verifyZkm2, PINNED_IMAGE_ID, starkQueryId, verifyCombinedStark } from '../src/stark/index.js'
 
 const fx = JSON.parse(readFileSync(new URL('../../test/fixtures/zkm2-n5i4.json', import.meta.url), 'utf8'))

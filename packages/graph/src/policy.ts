@@ -3,8 +3,8 @@
 // e_ij = (h_i,h_j,τ,H(h_i‖h_j‖τ)); layered graphs with override succession;
 // conflict detection with full-path localisation; derivation paths with
 // per-node Merkle proofs against the anchored policy root.
-import { dsha256, utf8, merkleRoot, merkleProof, verifyProof, type MerkleProof } from '@mamem/core'
-import { Datalog, type Rule, type Fact, type Literal } from '@mamem/datalog'
+import { dsha256, utf8, merkleRoot, merkleProof, verifyProof, type MerkleProof } from '@nektar/core'
+import { Datalog, type Rule, type Fact, type Literal } from '@nektar/datalog'
 
 export class PolicyError extends Error {}
 
@@ -186,7 +186,7 @@ export function verifyDerivation (
 }
 
 // POL-016 receipt + Cedar∩DAG authorization helper (the instance-level
-// integration in @mamem/mcp evaluates Cedar itself — this is the pure check).
+// integration in @nektar/mcp evaluates Cedar itself — this is the pure check).
 export interface DagDecision {
   decision: 'ALLOW' | 'DENY'
   reason: string

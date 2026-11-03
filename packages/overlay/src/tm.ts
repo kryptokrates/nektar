@@ -1,23 +1,23 @@
-// tm_mamem — TopicManager for mamem anchors.
+// tm_nektar — TopicManager for nektar anchors.
 // Admits a contract anchor output only if:
 //   (a) genesis: previousCoins === [] AND n === 0 AND the shard has no live
 //       head AND shard == hash160(genesisOwner) AND ownerPkh ==
 //       hash160(genesisOwner) AND valid R'_0; or
 //   (b) successor (append or rotate): spends exactly one topical input whose
-//       parent output is an authentic MamemAnchor of the same shard — append:
+//       parent output is an authentic NektarAnchor of the same shard — append:
 //       n = parent.n+1, chained R', same ownerPkh; rotate: same n/size/R/R',
 //       new ownerPkh. Parent validation is STATELESS (the parent output is
 //       decoded from the BEEF), so a fresh host validates a replayed chain
 //       correctly; the local head is used only as an extra fork guard when the
 //       shard is already known.
 import { Transaction } from '@bsv/sdk'
-import { decodeMamemAnchor, isValidAnchor, type DecodedAnchor } from '@mamem/contracts'
-import { chainRp, GENESIS_PREV_RP, eq, hash160, toHex, type AnchorData } from '@mamem/core'
+import { decodeNektarAnchor, isValidAnchor, type DecodedAnchor } from '@nektar/contracts'
+import { chainRp, GENESIS_PREV_RP, eq, hash160, toHex, type AnchorData } from '@nektar/core'
 import type { TopicManager, AdmittanceInstructions } from '@bsv/overlay'
-import type { MamemHeads } from './ls.js'
+import type { NektarHeads } from './ls.js'
 
 function decode (lockingScript: any): { data: DecodedAnchor, pub: string } | null {
-  const dec = decodeMamemAnchor(lockingScript?.toHex?.() ?? String(lockingScript))
+  const dec = decodeNektarAnchor(lockingScript?.toHex?.() ?? String(lockingScript))
   if (!dec || !isValidAnchor(dec)) return null
   return { data: dec, pub: dec.ownerPub }
 }
@@ -34,7 +34,7 @@ const isP2PKHUnlock = (i: any): boolean => {
 }
 const isContractInput = (i: any) => i.unlockingScript !== undefined && !isP2PKHUnlock(i)
 
-export function createTmMamem (sharedHeads: MamemHeads): TopicManager {
+export function createTmNektar (sharedHeads: NektarHeads): TopicManager {
   // Decoded anchor outputs of every tx this manager has parsed, keyed by
   // outpoint. Content-addressed (a txid fixes the tx's outputs), so entries
   // cannot be forged. Needed because GASP graph validation replays ancestors
@@ -111,7 +111,7 @@ export function createTmMamem (sharedHeads: MamemHeads): TopicManager {
     identifyNeededInputs: async (beef: number[]) => {
       const tx = Transaction.fromBEEF(beef)
       const d = tx.outputs.map(o => decode(o.lockingScript)).find(Boolean)
-      if (!d) throw new Error('no mamem anchor outputs')
+      if (!d) throw new Error('no nektar anchor outputs')
       // ask for the contract input's parent when it isn't already in the BEEF —
       // never a local head (a fresh host has none)
       const needed: Array<{ txid: string, outputIndex: number }> = []
@@ -126,7 +126,7 @@ export function createTmMamem (sharedHeads: MamemHeads): TopicManager {
     },
 
     getDocumentation: async () =>
-      'Admits mamem contract anchors: genesis n=0 with shard=hash160(genesisOwner), ownerPkh=hash160(genesisOwner) and valid R\'_0; else a successor spending exactly one topical parent: append n+1 with chained R\' and same ownerPkh, or rotate (same n/size/R/R\', new ownerPkh). Validation is stateless against the parent output in the BEEF; the local head is only a fork guard.',
-    getMetaData: async () => ({ name: 'tm_mamem', shortDescription: 'mamem anchor-chain topic manager' })
+      'Admits nektar contract anchors: genesis n=0 with shard=hash160(genesisOwner), ownerPkh=hash160(genesisOwner) and valid R\'_0; else a successor spending exactly one topical parent: append n+1 with chained R\' and same ownerPkh, or rotate (same n/size/R/R\', new ownerPkh). Validation is stateless against the parent output in the BEEF; the local head is only a fork guard.',
+    getMetaData: async () => ({ name: 'tm_nektar', shortDescription: 'nektar anchor-chain topic manager' })
   }
 }

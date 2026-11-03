@@ -1,4 +1,4 @@
-// WASM verifier for mamem membership receipts (Node, any OS).
+// WASM verifier for nektar membership receipts (Node, any OS).
 // verify(receipt_bincode, image_id_32) → JSON {ok, journal|error}
 // Only SUCCINCT receipts (a single ZK-STARK) are accepted.
 use risc0_zkvm::{Digest, Receipt};

@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-// Claude Code Stop hook — auto-verifies mamem receipt tokens the assistant
-// printed ("receipt: mamemr1.…").
+// Claude Code Stop hook — auto-verifies nektar receipt tokens the assistant
+// printed ("receipt: nektarr1.…").
 //
-// Stdin: {transcript_path, stop_hook_active}. Finds mamemr1. tokens in the
+// Stdin: {transcript_path, stop_hook_active}. Finds nektarr1. tokens in the
 // LAST assistant message, GETs /v1/verify for each (max 3, 3s timeout).
 //   - all pass / no token / endpoint down → quiet line, exit 0
 //   - any check FAILED → block the stop once: the failure goes back to the
 //     model so it must tell the user instead of silently stopping
 //     (stop_hook_active guard prevents a block loop)
 //
-// Env: MAMEM_VERIFY_BASE (https://host) or MAMEM_HTTP_PORT (default 8080).
+// Env: NEKTAR_VERIFY_BASE (https://host) or NEKTAR_HTTP_PORT (default 8080).
 import { readFileSync } from 'node:fs'
 
 let input = ''
@@ -32,16 +32,16 @@ for (let i = lines.length - 1; i >= 0 && !text; i--) {
     }
   } catch {}
 }
-const tokens = [...new Set(text.match(/mamemr1\.[A-Za-z0-9_-]{40,}/g) ?? [])].slice(0, 3)
+const tokens = [...new Set(text.match(/nektarr1\.[A-Za-z0-9_-]{40,}/g) ?? [])].slice(0, 3)
 if (!tokens.length) process.exit(0)
 
 // verify host: env override > the 'verify:' URL the answer printed (so the
 // hook follows whichever server minted the token) > localhost
-let base = process.env.MAMEM_VERIFY_BASE
+let base = process.env.NEKTAR_VERIFY_BASE
 if (!base) {
   try { base = new URL(text.match(/verify:\s*(https?:\/\/\S+)/i)?.[1] ?? '').origin } catch {}
 }
-base ??= `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
+base ??= `http://localhost:${process.env.NEKTAR_HTTP_PORT ?? 8080}`
 
 // drift: the receipt commits an exact answer text — if the reply doesn't
 // contain it, the receipt doesn't cover what the user was actually shown
@@ -68,7 +68,7 @@ const checkLine = (checks, receipt) => {
 
 for (const r of results) {
   const icon = r.ok === true ? '✓ VERIFIED' : r.ok === false ? '✗ FAILED' : '? UNCHECKED'
-  process.stderr.write(`mamem ${icon} ${r.token.slice(0, 24)}…${r.ok === false ? ' — ' + r.failNames.join(', ') : r.ok === null ? ' — ' + r.note : ''}\n`)
+  process.stderr.write(`nektar ${icon} ${r.token.slice(0, 24)}…${r.ok === false ? ' — ' + r.failNames.join(', ') : r.ok === null ? ' — ' + r.note : ''}\n`)
   if (r.checks?.length) process.stderr.write(`  ${checkLine(r.checks, r.receipt)}\n`)
 }
 
@@ -77,7 +77,7 @@ if (failed.length && !stop_hook_active) {
   const names = [...new Set(failed.flatMap(f => f.failNames))]
   process.stdout.write(JSON.stringify({
     decision: 'block',
-    reason: `mamem receipt verification FAILED — checks that failed: ${names.join(', ')}. Tell the user the receipt did not verify (which check failed and why that matters); do NOT claim the answer is verified.${names.includes('answer-drift') ? ' answer-drift means the printed answer is not the committed receipt text — the receipt does not cover what the user was shown.' : ''}`
+    reason: `nektar receipt verification FAILED — checks that failed: ${names.join(', ')}. Tell the user the receipt did not verify (which check failed and why that matters); do NOT claim the answer is verified.${names.includes('answer-drift') ? ' answer-drift means the printed answer is not the committed receipt text — the receipt does not cover what the user was shown.' : ''}`
   }) + '\n')
 }
 process.exit(0)

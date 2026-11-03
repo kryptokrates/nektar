@@ -22,11 +22,11 @@ test('keystore: round trip / wrong passphrase / tampered ct', () => {
   assert.throws(() => readKeyFile(pf, 'hunter2', true), /plaintext/)
 })
 
-const env = (e: Record<string, string>) => ({ MAMEM_DATA_DIR: mkdtempSync(path.join(tmpdir(), 'rt-')), ...e }) as NodeJS.ProcessEnv
+const env = (e: Record<string, string>) => ({ NEKTAR_DATA_DIR: mkdtempSync(path.join(tmpdir(), 'rt-')), ...e }) as NodeJS.ProcessEnv
 
 test('runtime main gate: confirm flag required', () => {
-  assert.throws(() => configFromEnv(env({ MAMEM_NETWORK: 'main', MAMEM_KEY_PASSPHRASE: 'x' })), /I_UNDERSTAND/)
-  const cfg = configFromEnv(env({ MAMEM_NETWORK: 'main', MAMEM_KEY_PASSPHRASE: 'x', MAMEM_MAINNET_CONFIRM: 'I_UNDERSTAND' }))
+  assert.throws(() => configFromEnv(env({ NEKTAR_NETWORK: 'main', NEKTAR_KEY_PASSPHRASE: 'x' })), /I_UNDERSTAND/)
+  const cfg = configFromEnv(env({ NEKTAR_NETWORK: 'main', NEKTAR_KEY_PASSPHRASE: 'x', NEKTAR_MAINNET_CONFIRM: 'I_UNDERSTAND' }))
   assert.equal(cfg.main?.maxFeePerTx, 1000)
   assert.equal(cfg.main?.maxSpendPerDay, 20_000)
   assert.equal(cfg.main?.minBroadcastIntervalMs, 10_000)
@@ -34,7 +34,7 @@ test('runtime main gate: confirm flag required', () => {
 })
 
 test('runtime ttn: no confirm flag required; testnet-encoded fee address', () => {
-  const cfg = configFromEnv(env({ MAMEM_NETWORK: 'ttn', MAMEM_KEY_PASSPHRASE: 'x' }))
+  const cfg = configFromEnv(env({ NEKTAR_NETWORK: 'ttn', NEKTAR_KEY_PASSPHRASE: 'x' }))
   assert.equal(cfg.main?.arcUrl, 'https://arcade-v2-ttn-us-1.bsvblockchain.tech')
   assert.equal(cfg.main?.wocUrl, 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test')
   assert.equal(cfg.main?.feeRateSatPerKb, 1)
@@ -51,12 +51,12 @@ test('runtime ttn: no confirm flag required; testnet-encoded fee address', () =>
 
 test('runtime main: refuses without passphrase / with plaintext keys.json', async () => {
   const { openRuntime } = await import('../src/runtime.js')
-  const base = { MAMEM_NETWORK: 'main', MAMEM_MAINNET_CONFIRM: 'I_UNDERSTAND' }
+  const base = { NEKTAR_NETWORK: 'main', NEKTAR_MAINNET_CONFIRM: 'I_UNDERSTAND' }
   // no passphrase
   const c1 = configFromEnv(env(base))
-  await assert.rejects(openRuntime(c1), /MAMEM_KEY_PASSPHRASE/)
+  await assert.rejects(openRuntime(c1), /NEKTAR_KEY_PASSPHRASE/)
   // plaintext keys.json refuses startup on main
-  const c2 = configFromEnv(env({ ...base, MAMEM_KEY_PASSPHRASE: 'pw' }))
+  const c2 = configFromEnv(env({ ...base, NEKTAR_KEY_PASSPHRASE: 'pw' }))
   writeFileSync(path.join(c2.dataDir, 'keys.json'), JSON.stringify({ agentSeed: 'x', logKey: 'y', shardKeys: {} }))
   await assert.rejects(openRuntime(c2), /plaintext/)
 })

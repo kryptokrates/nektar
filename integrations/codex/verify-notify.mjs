@@ -6,10 +6,10 @@
 // What it does:
 //   1. OPTIONAL CHAIN — `--chain <exe> <args…>` first invokes your existing
 //      notify command with the same payload (we don't clobber what you had)
-//   2. finds `mamemr1.` tokens in `last-assistant-message`
+//   2. finds `nektarr1.` tokens in `last-assistant-message`
 //   3. GETs /v1/verify for each (3s, max 3, fail-open)
 //   4. appends a line to `codex-receipts.log` in the cwd — `tail -f` it, or
-//      set MAMEM_NOTIFY_CMD to any command that shows the line (e.g. a toast)
+//      set NEKTAR_NOTIFY_CMD to any command that shows the line (e.g. a toast)
 //
 // HONEST BOUNDARY: codex notify is fire-and-forget — it can FLAG a failed
 // receipt but cannot block the turn the way the Claude Code hook can. The
@@ -34,15 +34,15 @@ try {
   const j = JSON.parse(payload ?? '{}')
   text = j['last-assistant-message'] ?? j.lastAssistantMessage ?? ''
 } catch { text = payload ?? '' } // some setups may pass raw text
-const tokens = [...new Set(text.match(/mamemr1\.[A-Za-z0-9_-]{40,}/g) ?? [])].slice(0, 3)
+const tokens = [...new Set(text.match(/nektarr1\.[A-Za-z0-9_-]{40,}/g) ?? [])].slice(0, 3)
 if (!tokens.length) process.exit(0)
 
 // verify host: env override > the 'verify:' URL in the message > localhost
-let base = process.env.MAMEM_VERIFY_BASE
+let base = process.env.NEKTAR_VERIFY_BASE
 if (!base) {
   try { base = new URL(text.match(/verify:\s*(https?:\/\/\S+)/i)?.[1] ?? '').origin } catch {}
 }
-base ??= `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
+base ??= `http://localhost:${process.env.NEKTAR_HTTP_PORT ?? 8080}`
 const norm = s => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
 const lines = []
 const checkLine = (checks, receipt) => {
@@ -65,10 +65,10 @@ for (const t of tokens) {
   }
 }
 const stamp = new Date().toISOString()
-try { appendFileSync('codex-receipts.log', lines.map(l => `${stamp} mamem ${l}`).join('\n') + '\n') } catch {}
+try { appendFileSync('codex-receipts.log', lines.map(l => `${stamp} nektar ${l}`).join('\n') + '\n') } catch {}
 const out = lines.join('\n')
-process.stderr.write(`mamem ${out}\n`)
-if (process.env.MAMEM_NOTIFY_CMD) {
-  try { spawn(process.env.MAMEM_NOTIFY_CMD, [out], { stdio: 'ignore', shell: true }) } catch {}
+process.stderr.write(`nektar ${out}\n`)
+if (process.env.NEKTAR_NOTIFY_CMD) {
+  try { spawn(process.env.NEKTAR_NOTIFY_CMD, [out], { stdio: 'ignore', shell: true }) } catch {}
 }
 process.exit(0)

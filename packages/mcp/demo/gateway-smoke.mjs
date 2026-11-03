@@ -1,9 +1,9 @@
-// pnpm mcp:smoke — talk to mamem THROUGH the Docker MCP Gateway (exactly what
+// pnpm mcp:smoke — talk to nektar THROUGH the Docker MCP Gateway (exactly what
 // Claude Desktop / Cursor / VS Code run) and exercise remember → prove.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
-const profile = process.env.MAMEM_PROFILE ?? 'mamem'
+const profile = process.env.NEKTAR_PROFILE ?? 'nektar'
 const client = new Client({ name: 'gateway-smoke', version: '1.0.0' })
 await client.connect(new StdioClientTransport({ command: 'docker', args: ['mcp', 'gateway', 'run', '--profile', profile], env: process.env, stderr: 'ignore' }))
 const { tools } = await client.listTools()

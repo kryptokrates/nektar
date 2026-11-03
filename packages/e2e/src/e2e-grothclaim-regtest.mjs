@@ -1,11 +1,11 @@
-// V1 — MamemGrothClaim VALIDITY settle on live Teranode regtest.
+// V1 — NektarGrothClaim VALIDITY settle on live Teranode regtest.
 // The claim can only settle by co-spending the pinned Groth16-verifier UTXO
 // in the same tx: input1's locking script IS the zkscript-generated BLS12-381
 // Groth16 verifier for OUR sha256d-membership circuit (root eda3ef76..,
 // index 5, baked as a circuit constant → the vk commits to the statement).
 //
 //   tx1: reserve → verifier UTXO (398KB lock, doc-push <root><idx> OP_2DROP)
-//   tx2: reserve → MamemGrothClaim UTXO (state pins verifierOutpoint=tx1:0)
+//   tx2: reserve → NektarGrothClaim UTXO (state pins verifierOutpoint=tx1:0)
 //   tx3: [claim, verifier] — settleValid + the Groth16 proof unlock;
 //        outputs [ClaimVerdict @out0, payout @out1, change @out2].
 //        If input1's proof verifies, the verdict exists under consensus.
@@ -16,8 +16,8 @@
 //
 // Run: node packages/e2e/src/e2e-grothclaim-regtest.mjs
 import { PrivateKey, Transaction, LockingScript, UnlockingScript, P2PKH, Hash, Transaction as BsvTransaction } from '@bsv/sdk'
-import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve, utxoStatus } from '@mamem/chain'
-import { MamemProvider } from '@mamem/anchor'
+import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve, utxoStatus } from '@nektar/chain'
+import { NektarProvider } from '@nektar/anchor'
 import { RunarContract, LocalSigner, serializeState } from 'runar-sdk'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -44,14 +44,14 @@ function readEnv (p) {
 }
 const localEnv = { ...readEnv(new URL('../../../.env', import.meta.url)), ...readEnv(new URL('../../../../.env', import.meta.url)) }
 const qsEnv = readEnv(new URL('../../../infra/teranode-quickstart/.env', import.meta.url))
-const WIF = process.env.MAMEM_REGTEST_WIF ?? localEnv.MAMEM_REGTEST_WIF
-if (!WIF) throw new Error('MAMEM_REGTEST_WIF missing')
+const WIF = process.env.NEKTAR_REGTEST_WIF ?? localEnv.NEKTAR_REGTEST_WIF
+if (!WIF) throw new Error('NEKTAR_REGTEST_WIF missing')
 const cfg = {
-  rpcUrl: process.env.MAMEM_RPC_URL ?? 'http://localhost:9292/',
-  rpcUser: process.env.MAMEM_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
-  rpcPass: process.env.MAMEM_RPC_PASS ?? qsEnv.rpc_pass ?? '',
-  propagationUrl: process.env.MAMEM_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-  assetUrl: process.env.MAMEM_ASSET_URL ?? 'http://localhost:8090/api/v1'
+  rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
+  rpcUser: process.env.NEKTAR_RPC_USER ?? qsEnv.rpc_user ?? 'teranode',
+  rpcPass: process.env.NEKTAR_RPC_PASS ?? qsEnv.rpc_pass ?? '',
+  propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
+  assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
 }
 if (!cfg.rpcPass) throw new Error('rpc_pass missing')
 const broadcaster = new TeranodeBroadcaster(cfg.propagationUrl)
@@ -102,12 +102,12 @@ check(lockHex.slice(0, 2) === '20' && lockHex.slice(2, 66) === ROOT, `verifier d
 
 // ── 2. deploy the claim, bound to tx1:0 ─────────────────────────────
 console.log('── deploy claim ──')
-const art = JSON.parse(readFileSync(new URL('../../contracts/MamemGrothClaim.json', import.meta.url), 'utf8'))
+const art = JSON.parse(readFileSync(new URL('../../contracts/NektarGrothClaim.json', import.meta.url), 'utf8'))
 const vArt = JSON.parse(readFileSync(new URL('../../contracts/ClaimVerdict.json', import.meta.url), 'utf8'))
 const VCR = vArt.script
 const QID = 'cc'.repeat(32)
 const c = new RunarContract(art, [RH, ROOT, 16n, QID, opPkh, verifierOp, 1000n, VCR])
-const mprovider = new MamemProvider(broadcaster, reserve, addr)
+const mprovider = new NektarProvider(broadcaster, reserve, addr)
 c.connect(mprovider, signer)
 await c.deploy({ satoshis: 5000 })
 const cUtxo = c.currentUtxo

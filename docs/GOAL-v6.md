@@ -4,7 +4,7 @@ Status: all phases implemented, tested and pushed (see §8). S1b (full on-chain
 SP1-wrap verifier) remains a documented deferred phase; S6.5–S6.11 are
 deferred-with-reason; the S7 ops items are out-of-scope tracked gaps.
 
-How mamem reaches full coverage of arXiv:2506.13246, the way the paper describes each
+How nektar reaches full coverage of arXiv:2506.13246, the way the paper describes each
 item. Approved plan; every phase lands with tests + regtest e2e + docs + commit.
 
 | Paper item | § | Approach |
@@ -13,7 +13,7 @@ item. Approved plan; every phase lands with tests + regtest e2e + docs + commit.
 | On-chain ZK verification | §13 | SP1 guest verifies the R0 ZK receipt → Rúnar SP1 FRI verifier on-chain (gate: script size) |
 | Multi-chain consensus time | §12 | weighted-median aggregation f(T_C1…T_Cm) over pluggable header sources (BSV + BTC) |
 | Full OWL 2 (tractable) | §9 | OWL 2 RL/QL axioms compiled to Datalog rules; anchored axioms feed §14 |
-| Proof sharding | §13/DIS | subtree-of-K-leaf proofs; behind `MAMEM_PROOF_SHARDING` (default on) |
+| Proof sharding | §13/DIS | subtree-of-K-leaf proofs; behind `NEKTAR_PROOF_SHARDING` (default on) |
 
 ## 1. On-chain ZK verification (§13 — "on-chain if necessary")
 
@@ -67,7 +67,7 @@ weighted median or quorum over external chains to resolve disputed clocks.
   `consensusTime` = weighted median (`medianTime`/`weightedMedianTime`, lower
   weighted median — a skewed-high source can never push time up); single
   source = today's behaviour, bit-identical.
-- Config `MAMEM_TEMPORAL_SOURCES=bsv[,btc]` (default `bsv`) wired in the
+- Config `NEKTAR_TEMPORAL_SOURCES=bsv[,btc]` (default `bsv`) wired in the
   runtime `chain` facade — `headerAtHeight` returns the primary header with
   the median time; merkle roots/heights stay strictly on BSV.
 - Tests (`chain/test/temporal.test.ts`): skewed source → median wins;
@@ -89,8 +89,8 @@ Full OWL 2 DL is undecidable — the paper needs the tractable profiles only.
 Selective proof of existence via a data reveal path over a hierarchical structure.
 
 - **Licence (facts):** nChain/BSVA pledge patents "for free use on BSV only" under the
-  Open BSV Licence (revocable; BSV + testnets). mamem is BSV-only by construction.
-  Implemented behind `MAMEM_PROOF_SHARDING` (default on); NOTICE documents the pledge;
+  Open BSV Licence (revocable; BSV + testnets). nektar is BSV-only by construction.
+  Implemented behind `NEKTAR_PROOF_SHARDING` (default on); NOTICE documents the pledge;
   flag = opt-out for cautious operators.
 - **Design:** batch trees shard into K=64-leaf subtrees (leaf index >> 6); batch root
   commits shard roots. A subset proof carries {shardRoot_j, subpath_j} per touched
@@ -120,7 +120,7 @@ Paper coverage that the traceability matrix shows as ◐/⏸, ordered cheap→ha
 | # | Item (spec id) | Paper § | Work |
 |---|---|---|---|
 | S6.1 | `recall` verifies only encrypted records (self-found bug) | VER | **Done.** Plaintext items now run the same `prove`→`verifyFragment` path as encrypted ones (verify only, no decrypt); failures are withheld with per-item `unverifiable`+reason and flip `checkResult` to `unverifiable`. Regression test: anchored plaintext → verified; removed BUMP → unverifiable (`mcp/test/memory.test.ts`). |
-| S6.2 | ANC-006 Metanet flag | App. D | **Done.** `0x4D455441` ("META") is the first push of the anchor output's OP_RETURN data payload (`metaFlag` state field, serialised first). `decodeMamemAnchor` accepts flag-present (current artifact) AND flag-absent (`MamemAnchorV3.json`, kept) — existing anchors stay decodable; `freshContract` rehydrates the artifact matching the head's layout. |
+| S6.2 | ANC-006 Metanet flag | App. D | **Done.** `0x4D455441` ("META") is the first push of the anchor output's OP_RETURN data payload (`metaFlag` state field, serialised first). `decodeNektarAnchor` accepts flag-present (current artifact) AND flag-absent (`NektarAnchorV3.json`, kept) — existing anchors stay decodable; `freshContract` rehydrates the artifact matching the head's layout. |
 | S6.3 | GEN-007 per-structure algorithm ID | §6 | **Done.** L_ZKMem v2 / L_ZKDer v3 / L_ZKDis v2 carry an `algorithm` byte (rev byte 1→2): `0x01` = sha256d suite. Decoders accept rev 1 (suite implied) and rev 2 (id enforced); emitters produce rev 2 only. |
 | S6.4 | KEY-010 privilege-scoped triple hash H(s‖p‖o‖l) | §7/App. A | **Done — binding equivalent, no format change.** Evaluated: seed = agentSeed/level key (private input), path = ψ‖ρ‖π in the canonical keyID, owner = BRC-42 'self' counterparty (holder's own level key), level = level key + ctx.l (bound twice). Changing the tuple would orphan every ciphertext; equivalence documented in `crypto/keys.ts`. |
 | S6.5 | DIS-005 / COM-008 chunked files | App. A/C | Optional: record-type `chunked` — split payloads >64 KB into content-addressed fragments, each a leaf; manifest record references the chunk leaves. Only if needed. |
@@ -147,9 +147,9 @@ S6.1–S6.4 implemented (see table); S6.5–S6.11 stay documented as deliberate 
 
 - S1a ✅ on-chain receipt attestation (`attestMembership`/`verifyAttestation`).
 - S2 ✅ §14 derivation attestations (guest image 78203c9e…, 18/18 vectors, ~96–131 s prove).
-- S3 ✅ weighted-median temporal sources (`MAMEM_TEMPORAL_SOURCES=bsv[,btc]`).
+- S3 ✅ weighted-median temporal sources (`NEKTAR_TEMPORAL_SOURCES=bsv[,btc]`).
 - S4 ✅ OWL 2 RL/QL compiler → Datalog, anchored axioms feed §14 (graph 14/14).
-- S5 ✅ proof sharding L_ZKDis v2, `MAMEM_PROOF_SHARDING` flag, patent noted in NOTICE.
+- S5 ✅ proof sharding L_ZKDis v2, `NEKTAR_PROOF_SHARDING` flag, patent noted in NOTICE.
 - S6.1 ✅ recall verifies plaintext fully · S6.2 ✅ META flag (anchor v4) ·
   S6.3 ✅ algorithm bytes · S6.4 ✅ documented binding-equivalent.
 - S6.5–S6.11 deferred-with-reason; S1b deferred (runar-go phase).

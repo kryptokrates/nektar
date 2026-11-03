@@ -1,4 +1,4 @@
-// Contract-level tests: deploy MamemAnchor, call append with correct and
+// Contract-level tests: deploy NektarAnchor, call append with correct and
 // incorrect args, on runar-sdk MockProvider (evaluates the real compiled
 // script — same bytes Teranode will execute).
 import { test } from 'node:test'
@@ -8,12 +8,12 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { RunarContract, MockProvider, LocalSigner } from 'runar-sdk'
 import { contractRp, TAG_RPRIME, META_FLAG_HEX } from '../src/index.js'
-import { hash160 } from '@mamem/core'
+import { hash160 } from '@nektar/core'
 import { Buffer } from 'node:buffer'
 
 const pkh = (pk: string) => Buffer.from(hash160(Uint8Array.from(Buffer.from(pk, 'hex')))).toString('hex')
 
-const artifact = JSON.parse(readFileSync(path.join(fileURLToPath(import.meta.url), '..', '..', '..', 'MamemAnchor.json'), 'utf8'))
+const artifact = JSON.parse(readFileSync(path.join(fileURLToPath(import.meta.url), '..', '..', '..', 'NektarAnchor.json'), 'utf8'))
 const signer = new LocalSigner('11'.repeat(32))
 
 function setup (n = 0n, size = 10n) {
@@ -42,8 +42,8 @@ test('contract: genesisOwner carried unchanged across append and rotate', async 
   assert.ok(lock2.includes(pk), 'genesisOwner unchanged after rotate')
   assert.ok(lock2.includes(pkh(pk2).slice(0, 20)), 'ownerPkh rotated')
   // decode keeps the same shard id across the rotate
-  const { decodeMamemAnchor } = await import('../src/index.js')
-  const d0 = decodeMamemAnchor(lock1)!, d1 = decodeMamemAnchor(lock2)!
+  const { decodeNektarAnchor } = await import('../src/index.js')
+  const d0 = decodeNektarAnchor(lock1)!, d1 = decodeNektarAnchor(lock2)!
   assert.equal(d0.shard, d1.shard, 'shard = hash160(genesisOwner) stable')
 })
 

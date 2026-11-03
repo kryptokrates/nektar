@@ -1,4 +1,4 @@
-// mamem derivation guest (RISC Zero). Wright §14: a committed derivation path
+// nektar derivation guest (RISC Zero). Wright §14: a committed derivation path
 // π = {v₀…vₖ} under the anchored policy DAG — nodes h_i = dsha256(serialise(v_i)),
 // edges e = dsha256(h_in1 ‖ … ‖ h_ink ‖ τ ‖ h_out) where τ is the applied rule,
 // itself a committed DAG node proven against the policy root with the SAME

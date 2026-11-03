@@ -2,23 +2,23 @@
 // Properties: (1) never crashes with an untyped error, (2) a mutated encoding
 // is never accepted as a different valid value (byte-authenticated decoders
 // either reject or round-trip exactly), (3) verifiers return {ok:false}.
-// Seed with MAMEM_FUZZ_SEED; iterations with MAMEM_FUZZ_N (default 300).
+// Seed with NEKTAR_FUZZ_SEED; iterations with NEKTAR_FUZZ_N (default 300).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { dsha256, utf8, toHex } from '@mamem/core'
-import { MockChain, MockFunder } from '@mamem/chain'
-import { decodeMamemAnchor } from '@mamem/contracts'
-import { verifyFragment } from '@mamem/verify'
-import { encodeZkm2, decodeZkm2, ZkmCodecError, verifyZkm2, encodeZkder, decodeZkder, ZkdCodecError, verifyZkder, buildSubsetProof, encodeZkdis, decodeZkdis, ZksCodecError, verifyZkdis } from '@mamem/zk'
-import { parseProgram, ParseError } from '@mamem/datalog'
-import { issueDisclosure, verifyDisclosure, fieldPath, fieldRoot, randSalt } from '@mamem/identity'
-import { AutomatonChain, decodeMamemAutomaton } from '@mamem/automaton'
-import { MamemMemory } from '@mamem/mcp'
+import { dsha256, utf8, toHex } from '@nektar/core'
+import { MockChain, MockFunder } from '@nektar/chain'
+import { decodeNektarAnchor } from '@nektar/contracts'
+import { verifyFragment } from '@nektar/verify'
+import { encodeZkm2, decodeZkm2, ZkmCodecError, verifyZkm2, encodeZkder, decodeZkder, ZkdCodecError, verifyZkder, buildSubsetProof, encodeZkdis, decodeZkdis, ZksCodecError, verifyZkdis } from '@nektar/zk'
+import { parseProgram, ParseError } from '@nektar/datalog'
+import { issueDisclosure, verifyDisclosure, fieldPath, fieldRoot, randSalt } from '@nektar/identity'
+import { AutomatonChain, decodeNektarAutomaton } from '@nektar/automaton'
+import { NektarMemory } from '@nektar/mcp'
 import { findLastOpReturn } from 'runar-sdk'
 
-const SEED = Number(process.env.MAMEM_FUZZ_SEED ?? 0x6d616d)
-const N = Number(process.env.MAMEM_FUZZ_N ?? 300)
+const SEED = Number(process.env.NEKTAR_FUZZ_SEED ?? 0x6d616d)
+const N = Number(process.env.NEKTAR_FUZZ_N ?? 300)
 function rng (seed: number) { let s = seed >>> 0; return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return (s >>> 0) / 2 ** 32 } }
 const R = rng(SEED)
 const int = (n: number) => Math.floor(R() * n)
@@ -40,22 +40,22 @@ const unhex = (s: string) => new Uint8Array(Buffer.from(s, 'hex'))
 async function anchoredWorld () {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(12); for (const t of funder.parents) chain.registerParent(t)
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
+  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   await mem.remember('f', 'a'); await mem.remember('f', 'b')
   chain.mine(1); mem.confirmAnchor('f', mem.tailLink('f')!.txid)
   return { chain, funder, mem }
 }
 
-test(`fuzz: MamemAnchor decoder is byte-authenticated (seed ${SEED}, n ${N})`, async () => {
+test(`fuzz: NektarAnchor decoder is byte-authenticated (seed ${SEED}, n ${N})`, async () => {
   const { mem } = await anchoredWorld()
   const script = mem.anchorTx(mem.tailLink('f')!.txid)!.outputs[0]!.lockingScript.toHex()
-  const orig = decodeMamemAnchor(script)!
+  const orig = decodeNektarAnchor(script)!
   const code = script.slice(0, findLastOpReturn(script))
   let stateOnly = 0
   for (let i = 0; i < N; i++) {
     const m = hex(mutate(unhex(script)))
     if (m === script) continue
-    const d = decodeMamemAnchor(m) // must never throw
+    const d = decodeNektarAnchor(m) // must never throw
     if (!d) continue
     // an accepted mutation can only be a well-formed DIFFERENT state under the
     // identical contract code — never altered code, never the same state
@@ -170,17 +170,17 @@ test('fuzz: disclosure envelope verifier rejects every byte-level mutation', () 
   }
 })
 
-test('fuzz: MamemAutomaton decoder is byte-authenticated', async () => {
+test('fuzz: NektarAutomaton decoder is byte-authenticated', async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(4); for (const t of funder.parents) chain.registerParent(t)
   const ac = new AutomatonChain({ Q: ['a', 'b'], Sigma: ['x'], delta: [[0, 0, 1]], q0: 0, F: [1], O: [] }, PrivateKey.fromRandom(), funder, funder.keyPair, chain)
   const script = (await ac.deploy()).tx.outputs[0]!.lockingScript.toHex()
   const code = script.slice(0, findLastOpReturn(script))
-  const orig = decodeMamemAutomaton(script)
+  const orig = decodeNektarAutomaton(script)
   for (let i = 0; i < N; i++) {
     const m = hex(mutate(unhex(script)))
     if (m === script) continue
-    const d = decodeMamemAutomaton(m)
+    const d = decodeNektarAutomaton(m)
     if (!d) continue
     assert.equal(m.slice(0, code.length), code, `mutation ${i}: code changed yet decoded`)
     assert.notDeepEqual(d, orig)

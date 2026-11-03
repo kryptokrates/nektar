@@ -1,47 +1,47 @@
-# mamem services. The Teranode regtest stack is separate (pnpm stack:up).
-#   docker compose run --rm -i mamem-mcp   → MCP over stdio (attach an MCP client)
+# nektar services. The Teranode regtest stack is separate (pnpm stack:up).
+#   docker compose run --rm -i nektar-mcp   → MCP over stdio (attach an MCP client)
 #   docker compose run --rm demo           → scripted agent session (smoke test)
 #   docker compose up watcher              → the honest challenger, watching /data
 services:
-  mamem-mcp:
+  nektar-mcp:
     build: .
-    image: mamem:local
+    image: nektar:local
     stdin_open: true
     volumes:
-      - mamem-data:/data   # claims registry + proof store shared with watcher
+      - nektar-data:/data   # claims registry + proof store shared with watcher
     environment:
-      MAMEM_MODEL_ID: ${MAMEM_MODEL_ID:-unspecified}
+      NEKTAR_MODEL_ID: ${NEKTAR_MODEL_ID:-unspecified}
   # the 1-of-N honest challenger: re-verifies each open claim's RISC Zero
   # receipt off-chain and broadcasts `challenge` on any mismatch. Watches
   # the SAME /data registry the MCP server writes via claimDeploy.
   watcher:
-    image: mamem:local
+    image: nektar:local
     entrypoint: ["node", "packages/watcher/src/watcher.mjs",
       "--claims", "/data/claims.json",
       "--proof-dir", "/data/proofs",
       "--reserve", "/data/watcher-reserve.json"]
     volumes:
-      - mamem-data:/data
+      - nektar-data:/data
       # Teranode quickstart creds, read-only (watcher maps rpc_user/rpc_pass)
       - ./infra/teranode-quickstart/.env:/run/teranode-quickstart.env:ro
     env_file:
-      - path: .env          # repo root — carries MAMEM_REGTEST_WIF (gitignored)
+      - path: .env          # repo root — carries NEKTAR_REGTEST_WIF (gitignored)
         required: false
     environment:
-      MAMEM_REGTEST_WIF: ${MAMEM_REGTEST_WIF:-}
-      MAMEM_RPC_URL: ${MAMEM_RPC_URL:-http://host.docker.internal:9292/}
-      MAMEM_RPC_USER: ${MAMEM_RPC_USER:-teranode}
-      MAMEM_RPC_PASS: ${MAMEM_RPC_PASS:-}
-      MAMEM_QS_ENV: /run/teranode-quickstart.env
-      MAMEM_PROPAGATION_URL: ${MAMEM_PROPAGATION_URL:-http://host.docker.internal:8833/tx}
-      MAMEM_ASSET_URL: ${MAMEM_ASSET_URL:-http://host.docker.internal:8090/api/v1}
+      NEKTAR_REGTEST_WIF: ${NEKTAR_REGTEST_WIF:-}
+      NEKTAR_RPC_URL: ${NEKTAR_RPC_URL:-http://host.docker.internal:9292/}
+      NEKTAR_RPC_USER: ${NEKTAR_RPC_USER:-teranode}
+      NEKTAR_RPC_PASS: ${NEKTAR_RPC_PASS:-}
+      NEKTAR_QS_ENV: /run/teranode-quickstart.env
+      NEKTAR_PROPAGATION_URL: ${NEKTAR_PROPAGATION_URL:-http://host.docker.internal:8833/tx}
+      NEKTAR_ASSET_URL: ${NEKTAR_ASSET_URL:-http://host.docker.internal:8090/api/v1}
   demo:
-    image: mamem:local
-    depends_on: [mamem-mcp]
+    image: nektar:local
+    depends_on: [nektar-mcp]
     entrypoint: ["node", "packages/mcp/demo/client.mjs"]
     environment:
-      MAMEM_LLM_URL: ${MAMEM_LLM_URL:-}
-      MAMEM_LLM_MODEL: ${MAMEM_LLM_MODEL:-}
+      NEKTAR_LLM_URL: ${NEKTAR_LLM_URL:-}
+      NEKTAR_LLM_MODEL: ${NEKTAR_LLM_MODEL:-}
 
 volumes:
-  mamem-data:
+  nektar-data:

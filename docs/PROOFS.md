@@ -2,6 +2,8 @@
 
 **Ground rule (SEC-007, VER-009).** No proof in mamem establishes that a statement is *true*. Proofs establish **inclusion**, **integrity**, **ordering**, **authorization** and **existence by a time**. A lie written correctly is preserved, proven as recorded, and stays a lie. The offline e2e ("origin falsehood") enforces this as a test.
 
+**Which proof for which job.** The Merkle+BEEF bundle is for citations — the verifier must *see the leaf* to check a claim. The STARK hides the leaf *by design* ("some leaf is in the anchored tree") — it's for privacy proofs and dispute objects, never a substitute for "check my quote."
+
 | Proof | Proves | Does NOT prove | Verifier needs | Code |
 |---|---|---|---|---|
 | **Inclusion promise** | the log signer accepted record (shard, seq, leaf) | that it will ever be anchored (monitors check fulfilment) | signer pubkey | `log.verifyPromise` |

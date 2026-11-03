@@ -53,9 +53,12 @@ prove("manual", 0)   # → proof bundle → verifyFragment()
 
 → Merkle path leaf→`R`, the anchor chain, the BEEF — verified **offline
 against public block headers**, no trust in the server that served it.
-Optionally a STARK proves "some leaf is in the anchored tree" without
-revealing which. **Backed:** the record was recorded, unaltered, before
-its block time.
+**Backed:** the record was recorded, unaltered, before its block time.
+
+*(The STARK is a different tool, not an upgrade: it hides the leaf by
+design — "some record is in the anchored tree" — so use it for privacy
+proofs and dispute objects, not for "check my quote." Citations need the
+leaf revealed.)*
 
 **5. The answer itself gets gated**
 

@@ -114,8 +114,9 @@ remain unproven — and the system says so explicitly rather than implying
 otherwise.
 
 **Still open, honestly:** proving the weights actually produced a token
-needs zkML/TEE (a research field, deliberately not built — `modelManifest`
-anchors the *declared* identity instead); agents use the gate by
+needs zkML/TEE (`modelManifest` anchors the *declared* identity instead —
+see Honest status for what already exists on BSV and the realistic path);
+agents use the gate by
 instruction, not by force; and a clever paraphrase can fail grounding and
 get stripped — that's the safety feature, not a bug.
 
@@ -182,7 +183,19 @@ peers; it never vouches for them** — trust comes from the receipts.
 - **Per-answer receipts**: `groundedAnswer` strips every claim that isn't
   entailed by a verified fragment and anchors an answer receipt (Wright
   §8). "Which model answered" is a *declared* manifest (`modelManifest`),
-  not a proof of inference — that needs zkML/TEE, deliberately not built.
+  not a proof of inference — that needs zkML/TEE. State of the art: BSV
+  already demonstrated it in miniature — nChain proved a neural-net
+  inference with Groth16 verified **on-chain on mainnet** (Oct 2024;
+  `examples/ai_inference` in `zkscript_package`) and sCrypt ran an MNIST
+  DNN *inside* Script. Frontier-LLM proving just became feasible
+  off-chain (zkLLM: LLaMA-2-13B ≈15 min; newer systems report
+  single-digit–seconds verification of 100B+ models) — but nothing
+  packages it as an on-chain verifier, and it answers a different
+  question than grounding does (zkML proves *which model ran*; grounding
+  proves *what the answer derives from*). Realistic path: small
+  self-hosted model → Groth16 circuit into our existing validity rail;
+  hosted/frontier models → off-chain proof or TEE attestation committed
+  into the receipt as an extra check line. Not built.
 
 ## Documentation
 

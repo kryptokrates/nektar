@@ -41,6 +41,13 @@ export const OPENAPI = {
         responses: { 200: { description: 'check list + ok flag' }, 400: { description: 'missing/malformed token' } }
       }
     },
+    '/v1/pay/quote': {
+      get: {
+        summary: 'payment invoice for a paid tool (MAMEM_PAYMENTS=1) — 402 + PAYMENT-REQUIRED header carrying an x402 v2 PaymentRequired; pay the invoice with a signed tx then retry the tool with payment:{invoiceId,transaction}',
+        parameters: [{ name: 'tool', in: 'query', required: true, schema: { type: 'string', enum: ['anchor', 'groundedAnswer', 'commitReceipt'] } }],
+        responses: { 402: { description: 'PaymentRequired invoice' }, 404: { description: 'payments disabled' } }
+      }
+    },
     '/v1/wallet': { get: { summary: 'fee wallet: address, balance, spend caps, runway (main only)', responses: { 200: { description: 'wallet ops' }, 404: { description: 'ops not enabled' } } } },
     '/v1/costs': { get: { summary: 'broadcast cost ledger entries (main only)', responses: { 200: { description: 'cost records' }, 404: { description: 'ops not enabled' } } } }
   }
@@ -126,6 +133,15 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
           return send(200, result)
         } catch (e) { return send(400, { error: (e as Error).message }) }
       }
+      if (req.method === 'GET' && url.pathname === '/v1/pay/quote') {
+        const { paymentsEnabled, PAID_TOOLS, paymentRequired } = await import('./pay.js')
+        if (!paymentsEnabled()) return send(404, { error: 'payments disabled (MAMEM_PAYMENTS=1)' })
+        const tool = url.searchParams.get('tool') ?? 'groundedAnswer'
+        if (!PAID_TOOLS.has(tool)) return send(400, { error: `not a paid tool: ${tool}` })
+        const pr = paymentRequired(tool)
+        res.writeHead(402, { 'content-type': 'application/json', 'PAYMENT-REQUIRED': Buffer.from(JSON.stringify(pr.required)).toString('base64') })
+        return res.end(json(pr))
+      }
       if (req.method === 'GET' && url.pathname === '/v1/wallet') {
         return ops ? send(200, await ops.wallet()) : send(404, { error: 'ops not enabled (main only)' })
       }
@@ -142,7 +158,7 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
 /** Minimal self-contained check page (no external resources — offline-safe).
  *  The QR encodes this same page URL so a phone scan re-opens the result. */
 async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown }, pageUrl: string): Promise<string> {
-  const rec = r.receipt as { answer?: string, fragmentRefs?: Array<{ shard: string, seq: number }>, checkResult?: string, modelId?: { provider?: string, release?: string } } | undefined
+  const rec = r.receipt as { answer?: string, fragmentRefs?: Array<{ shard: string, seq: number }>, checkResult?: string, modelId?: { provider?: string, release?: string }, payment?: { txid: string, amountSats: number, payTo: string } } | undefined
   const QR = await import('qrcode')
   const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 220 })
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -164,7 +180,7 @@ code{word-break:break-all;color:#79c0ff}</style></head><body>
   : 'Something in this receipt did not check out — see the ✗ lines below.'}</div>
 <code>${esc(r.receiptHash)}</code>
 ${rec?.answer !== undefined ? `<div class=ans><div class=h>committed answer — compare with what you were shown</div>${esc(rec.answer)}</div>` : ''}
-${rec ? `<div class="d" style="margin-left:0">cites ${(rec.fragmentRefs ?? []).map(f => `${esc(f.shard)}:${f.seq}`).join(', ') || '—'} · model ${esc(`${rec.modelId?.provider ?? 'undeclared'}/${rec.modelId?.release ?? 'undeclared'}`)} (declared) · checkResult ${esc(rec.checkResult ?? '?')}</div>` : ''}
+${rec ? `<div class="d" style="margin-left:0">cites ${(rec.fragmentRefs ?? []).map(f => `${esc(f.shard)}:${f.seq}`).join(', ') || '—'} · model ${esc(`${rec.modelId?.provider ?? 'undeclared'}/${rec.modelId?.release ?? 'undeclared'}`)} (declared) · checkResult ${esc(rec.checkResult ?? '?')}${rec.payment ? ` · paid ${rec.payment.amountSats} sats (tx ${esc(rec.payment.txid.slice(0, 16))}…)` : ''}</div>` : ''}
 <ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(c.name)}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
 <img src="${qr}" alt="scan to re-verify">
 <div class=note>Proves the answer was committed and is derivable from sealed, anchored records — not that it is true. Re-scan the QR to re-check.</div>

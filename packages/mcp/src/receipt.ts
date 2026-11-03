@@ -12,6 +12,7 @@
 // the receipt itself carries TRUTH_NOTE saying exactly that.
 import { toHex, fromHex } from '@mamem/core'
 import { hashOf } from '@mamem/reasoning'
+import { paymentsEnabled } from './pay.js'
 import type { MamemMemory } from './memory.js'
 
 export const RECEIPT_TOKEN_PREFIX = 'mamemr1.'
@@ -98,6 +99,17 @@ export async function verifyReceipt (mem: MamemMemory, arg: { token?: string, re
   }
   if (receipt?.groundingReportHash) checks.push({ name: 'grounding', ok: 'info', detail: `grounding report committed (${receipt.groundingReportHash.slice(0, 16)}…)` })
   if (receipt?.checkResult) checks.push({ name: 'checkResult', ok: 'info', detail: receipt.checkResult })
+
+  // paid mode: the receipt commits the settlement txid — "was this answer paid
+  // for?" is part of what a paid-service receipt claims to prove.
+  const pay = (receipt as { payment?: { txid: string, amountSats: number, payTo: string } } | undefined)?.payment
+  if (pay) {
+    checks.push({ name: 'paid', ok: true, detail: `${pay.amountSats} sats settled — tx ${pay.txid.slice(0, 20)}… pays ${pay.payTo}; auditable on the public chain` })
+  } else if (paymentsEnabled()) {
+    checks.push({ name: 'paid', ok: false, detail: 'payments are enabled but this receipt commits no settlement txid' })
+  } else {
+    checks.push({ name: 'paid', ok: 'info', detail: 'unpaid (MAMEM_PAYMENTS off)' })
+  }
 
   const ok = checks.every(c => c.ok === true || c.ok === 'info' || c.ok === 'skip')
   return { ok, receiptHash: parsed.receiptHash, checks, receipt }

@@ -2,6 +2,7 @@
 // shared by the MCP server (mcp-server.ts, official SDK) and the HTTP API.
 import { sha256, utf8 } from '@mamem/core'
 import { receiptToken } from './receipt.js'
+import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment } from './pay.js'
 import type { MamemMemory } from './memory.js'
 
 /** public base of /v1/verify for footers/QRs — MAMEM_VERIFY_BASE for hosted
@@ -55,8 +56,8 @@ export const TOOLS = [
   },
   {
     name: 'anchor',
-    description: 'Force-close the pending batch of a shard and broadcast the anchor tx.',
-    inputSchema: { type: 'object', properties: { shard: { type: 'string' } }, required: ['shard'] }
+    description: 'Force-close the pending batch of a shard and broadcast the anchor tx. With MAMEM_PAYMENTS=1 this costs sats — call payQuote, then pass payment.',
+    inputSchema: { type: 'object', properties: { shard: { type: 'string' }, payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } } }, required: ['shard'] }
   },
   {
     name: 'zkQuery',
@@ -381,7 +382,8 @@ export const TOOLS = [
             required: ['text', 'cites']
           }
         },
-        mode: { type: 'string', description: '"remove" (default — strip ungrounded) or "flag"' }
+        mode: { type: 'string', description: '"remove" (default — strip ungrounded) or "flag"' },
+        payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } }
       },
       required: ['claims']
     }
@@ -396,9 +398,19 @@ export const TOOLS = [
         fragmentRefs: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] } },
         checkResult: { type: 'string', description: 'verified | unverifiable | failed' },
         model: { type: 'object', description: 'optional ModelIdentity override; defaults to the manifest set by modelManifest' },
-        groundingReportHash: { type: 'string' }
+        groundingReportHash: { type: 'string' },
+        payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } }
       },
       required: ['answer', 'fragmentRefs', 'checkResult']
+    }
+  },
+  {
+    name: 'payQuote',
+    description: 'Issue a payment invoice for a paid tool (MAMEM_PAYMENTS=1): returns the operator address, amount, and the OP_RETURN invoice tag. Pay it with a signed raw tx (output to payTo ≥ amount + OP_RETURN output carrying the tag), then retry the tool with payment:{invoiceId, transaction}. Settlement is atomic — the tx IS the payment.',
+    inputSchema: {
+      type: 'object',
+      properties: { tool: { type: 'string', enum: ['anchor', 'groundedAnswer', 'commitReceipt'], description: 'the paid tool you intend to call' } },
+      required: ['tool']
     }
   },
   {
@@ -425,7 +437,23 @@ const automatonView = (h: import('@mamem/automaton').AutomatonHead) =>
 
 export async function callTool (mem: MamemMemory, name: string, args: any): Promise<any> {
   if (PAID_SALE_TOOLS.has(name) && !paidSaleEnabled()) throw new Error(`${name}: paid disclosure is disabled — set MAMEM_PAID_DISCLOSURE=1`)
+  // MAMEM_PAYMENTS=1 (BRC-166-style): anchor/groundedAnswer/commitReceipt need a
+  // settled payment tx before they run — atomic, one tx per call, publicly
+  // auditable. No payment → return the invoice (the 402 challenge) as data.
+  let paid: import('./pay.js').PaymentRecord | undefined
+  if (PAID_TOOLS.has(name) && paymentsEnabled()) {
+    if (typeof args?.payment?.transaction !== 'string') {
+      return { ok: false, error: `payment required — ${name} costs ${priceFor(name)} sats`, ...paymentRequired(name).required }
+    }
+    paid = await settlePayment(mem, name, args.payment)
+  }
   switch (name) {
+    case 'payQuote': {
+      if (!PAID_TOOLS.has(String(args?.tool))) throw new Error(`payQuote: unknown or unpaid tool "${args?.tool}"`)
+      if (!paymentsEnabled()) throw new Error('payments are disabled — set MAMEM_PAYMENTS=1 (and MAMEM_OPERATOR_WIF)')
+      const { invoice, required } = paymentRequired(String(args.tool))
+      return { invoice: { invoiceId: invoice.invoiceId, amount: invoice.amount, payTo: invoice.payTo, lockingScriptHex: invoice.lockingScriptHex, opReturn: invoice.opReturn, expires: new Date(invoice.expires).toISOString() }, paymentRequired: required }
+    }
     case 'saleOffer': {
       const { offerDisclosure } = await import('@mamem/identity')
       const r = offerDisclosure({
@@ -600,8 +628,10 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     }
     case 'prove':
       return mem.prove(args.shard, args.seq)
-    case 'anchor':
-      return mem.anchorShard(args.shard)
+    case 'anchor': {
+      const r = await mem.anchorShard(args.shard)
+      return paid ? { ...r, paid } : r
+    }
     case 'zkQuery':
       return { ...mem.issueZkQuery(args.verifierId), statement: 'single use, expires in 10 minutes; the holder binds queryId into its STARK' }
     case 'proveMembership': {
@@ -728,7 +758,8 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         checkResult: 'verified',
         timestamp: Date.now(),
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
-        groundingReportHash: report.reportHash
+        groundingReportHash: report.reportHash,
+        ...(paid ? { payment: paid } : {})
       }, mem)
       const token = receiptToken(receiptHash)
       return { answer, committed: true, kept: report.kept, flagged: report.flagged, grounding: report, receipt, receiptHash, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, anchor, checkResult: 'verified' }
@@ -741,7 +772,8 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         checkResult: args.checkResult,
         timestamp: Date.now(),
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
-        groundingReportHash: args.groundingReportHash
+        groundingReportHash: args.groundingReportHash,
+        ...(paid ? { payment: paid } : {})
       }, mem)
       const token = receiptToken(out.receiptHash)
       return { ...out, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}` }

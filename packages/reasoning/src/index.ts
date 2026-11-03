@@ -97,6 +97,10 @@ export interface Receipt {
   /** §16 delegation map μ_i: sub-decisions asserted by delegating agents.
    *  signature = Sign_delegator(H(TAG_DELEGATION‖delegator‖decision‖answer)) */
   delegations?: Array<{ delegator: string, decision: string, signature: string }>
+  /** paid mode (MAMEM_PAYMENTS): the payment tx that settled this call — the
+   *  receipt commits the txid, so the "signed usage receipt" names what paid
+   *  for it; anyone can audit tx → (pays payTo ≥ amount) ∧ OP_RETURN tag. */
+  payment?: { txid: string, amountSats: number, payTo: string, invoiceId: string }
 }
 
 /** §16: delegating agent A′ signs authorship over a sub-decision bound to the answer */

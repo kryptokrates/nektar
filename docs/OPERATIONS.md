@@ -209,6 +209,26 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   BRC-42 ECDH confidentiality; the covenant binds payment↔reveal but
   cannot prevent the buyer reselling the plaintext afterwards, nor a
   third party front-running a *public* payload they saw in the mempool.
+- **Paid service (opt-in, BRC-166-style atomic settlement):**
+  `MAMEM_PAYMENTS=1` + `MAMEM_OPERATOR_WIF` gates `anchor`,
+  `groundedAnswer` and `commitReceipt` behind a per-call P2PKH payment —
+  the x402 `exact` profile, no wallet ecosystem: the caller signs a whole
+  raw tx and hands it over, we verify + broadcast. Prices:
+  `MAMEM_PRICE_ANCHOR_SATS` (default 100), `MAMEM_PRICE_ANSWER_SATS` /
+  `MAMEM_PRICE_RECEIPT_SATS` (default 250), or `MAMEM_PRICE_SATS` for all.
+  Flow: unpaid call → `402`-shaped `{paymentRequired}` invoice (also
+  `GET /v1/pay/quote?tool=…` → real HTTP 402 + `PAYMENT-REQUIRED`
+  header). The caller's tx must (a) pay `lockingScriptHex`/`payTo` ≥
+  amount and (b) carry `OP_FALSE OP_RETURN mamempay:<invoiceId>` — the
+  tag binds the payment to THAT call, publicly auditable from the tx
+  alone. Retry with `payment:{invoiceId,transaction}` → the tx is
+  verified + broadcast and the **receipt commits the settlement txid** —
+  the "signed usage receipt" names what paid for it; `/v1/verify` shows a
+  `paid` check line (receipts minted before enabling payments will show
+  unpaid → failed while the flag is on). One tx pays for exactly one
+  call: consumed invoices and txids are refused (`<dataDir>/payments.json`).
+  Mock network caveat: settlement is recorded by the mock chain, not
+  consensus-validated — real payment semantics need regtest/ttn/main.
 - **Access audit log (GOAL-v8 D6, opt-in):** `MAMEM_ACCESS_LOG=1`
   appends timestamped `{event:'decrypt'|'traverse', shard, seq, caller}`
   records to the `__access__` shard, which anchors like any other shard.

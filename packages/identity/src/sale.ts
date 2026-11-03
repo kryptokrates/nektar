@@ -58,7 +58,7 @@ function offerDigest (cfg: { sellerPkh: string, price: bigint | number, hWrapped
 
 /** Build a sale listing: cfg for the covenant + the committed `wrapped` +
  *  the seller's signed offer attestation. `leaf` binds the offer to a
- *  specific anchored memory record when set (saleOfferMemory). */
+ *  specific anchored memory record when set (sale op=offerMemory). */
 export function offerDisclosure (params: {
   sellerKey: PrivateKey
   value: Bytes

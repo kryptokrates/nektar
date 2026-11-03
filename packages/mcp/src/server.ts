@@ -232,130 +232,47 @@ export const TOOLS = [
   }
   ,
   {
-    name: 'saleOffer',
-    description: 'V3 DisclosureSale (GOAL-v7, BIP-199 escrow): wrap a value to a buyer pubkey (BRC-42) and produce the seller offer {sellerPkh,price,hWrapped,refundAfter,maxFee} + committed wrapped hex. The BUYER then funds the escrow via saleEscrow. Requires MAMEM_PAID_DISCLOSURE.',
+    name: 'sale',
+    description: 'V3 DisclosureSale (GOAL-v7, BIP-199 escrow) — paid disclosure as one state machine. op=offer {value,price,refundAfter,maxFee,buyerPub?,expiresAt?}: seller wraps a payload (BRC-42 to buyerPub, or public) → {cfg,wrapped,sellerPub,offerSig}. op=offerMemory {shard,seq,price,refundAfter,maxFee,buyerPub?,expiresAt?}: sell one memory record — encrypted goes as its fragment key + ciphertext, plaintext as the canonical fragment; returns commitment {leaf,anchorTxid,hdp,authorPub,proof} so the buyer verifies inclusion BEFORE funding. op=escrow {cfg,amount,offer?}: buyer funds; pass offer={sellerPub,offerSig,expiresAt,commitment} for pre-funding sig + leaf-path + expiry checks. op=complete {cfg,utxo,wrapped,changeSats}: the buy tx — reveals wrapped on-chain, pays the seller price, returns change. op=refund {cfg,utxo,lockTime,changeSats}: depositor reclaim after cfg.refundAfter (locktime-gated). op=claim {txHex,hWrapped,sellerPub?,offerMode?,commitment?}: buyer extracts + verifies the payload (leaf-commitment + provenance check when commitment given). Requires MAMEM_PAID_DISCLOSURE.',
     inputSchema: {
       type: 'object',
       properties: {
-        value: { type: 'string', description: 'hex payload (envelope wrapped bytes or a {field,salt,path} JSON)' },
-        price: { type: 'number' }, refundAfter: { type: 'number' }, maxFee: { type: 'number' },
-        buyerPub: { type: 'string', description: 'recipient pubkey — omit for public disclosure' },
-        expiresAt: { type: 'number', description: 'optional block height at which the signed offer lapses' }
-      },
-      required: ['value', 'price', 'refundAfter', 'maxFee']
-    }
-  },
-  {
-    name: 'saleOfferMemory',
-    description: 'V3 DisclosureSale: sell one memory record — the payload is the record\'s canonical serialized fragment; the buyer recomputes its leaf and checks it against the anchored batch (commitment returned for a pre-funding check). Requires MAMEM_PAID_DISCLOSURE.',
-    inputSchema: {
-      type: 'object',
-      properties: {
+        op: { type: 'string', enum: ['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'] },
+        value: { type: 'string', description: 'offer: hex payload (envelope wrapped bytes or a {field,salt,path} JSON)' },
         shard: { type: 'string' }, seq: { type: 'number' },
         price: { type: 'number' }, refundAfter: { type: 'number' }, maxFee: { type: 'number' },
         buyerPub: { type: 'string', description: 'recipient pubkey — omit for public disclosure' },
-        expiresAt: { type: 'number', description: 'optional block height at which the signed offer lapses' }
-      },
-      required: ['shard', 'seq', 'price', 'refundAfter', 'maxFee']
-    }
-  },
-  {
-    name: 'saleEscrow',
-    description: 'V3 DisclosureSale (buyer side): fund the escrow for a seller\'s cfg — deposits `amount` sats into DisclosureSale(cfg, depositorPkh=me) from the operator key. Pass `offer` (saleOffer result + commitment) to verify the seller\'s signed offer and the leaf\'s inclusion path BEFORE funding. Requires MAMEM_PAID_DISCLOSURE.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        cfg: { type: 'object', description: 'the seller cfg returned by saleOffer' },
-        amount: { type: 'number', description: 'escrow deposit — should be price + maxFee + change margin' },
-        offer: { type: 'object', description: 'optional {sellerPub, offerSig, commitment} — verified pre-funding (sig + leaf path)' }
-      },
-      required: ['cfg', 'amount']
-    }
-  },
-  {
-    name: 'saleComplete',
-    description: 'V3 DisclosureSale (seller side): complete a sale on a buyer-funded escrow — spend it via buy() revealing `wrapped` on-chain; the same tx pays the seller exactly `price` and returns change to the depositor. Requires MAMEM_PAID_DISCLOSURE.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        cfg: { type: 'object', description: 'the full escrow cfg (offer fields + depositorPkh from the escrow announcement)' },
+        expiresAt: { type: 'number', description: 'block height at which the signed offer lapses' },
+        cfg: { type: 'object', description: 'escrow cfg (offer fields + depositorPkh)' },
+        amount: { type: 'number', description: 'escrow deposit — price + maxFee + change margin' },
+        offer: { type: 'object', description: 'escrow: {sellerPub, offerSig, expiresAt, commitment} — verified pre-funding' },
         utxo: { type: 'object', description: '{txid, vout, satoshis, script} of the funded escrow' },
-        wrapped: { type: 'string', description: 'the committed wrapped hex (sha256(wrapped) must equal cfg.hWrapped)' },
-        changeSats: { type: 'number' }
-      },
-      required: ['cfg', 'utxo', 'wrapped', 'changeSats']
-    }
-  },
-  {
-    name: 'saleRefund',
-    description: 'V3 DisclosureSale (buyer side): reclaim an unrevealed escrow after cfg.refundAfter — depositor-signed, locktime-gated. Requires MAMEM_PAID_DISCLOSURE.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        cfg: { type: 'object' }, utxo: { type: 'object' },
-        lockTime: { type: 'number' }, changeSats: { type: 'number' }
-      },
-      required: ['cfg', 'utxo', 'lockTime', 'changeSats']
-    }
-  },
-  {
-    name: 'saleClaim',
-    description: 'V3 DisclosureSale (buyer side): extract `wrapped` from a buy tx, verify sha256(wrapped)==hWrapped, unwrap to the operator key (private) or return the public value; for memory payloads also verifies the leaf commitment when `commitment` is given. Requires MAMEM_PAID_DISCLOSURE.',
-    inputSchema: {
-      type: 'object',
-      properties: {
+        wrapped: { type: 'string', description: 'committed wrapped hex (sha256(wrapped) == cfg.hWrapped)' },
+        changeSats: { type: 'number' }, lockTime: { type: 'number' },
         txHex: { type: 'string' }, hWrapped: { type: 'string' },
-        sellerPub: { type: 'string', description: 'needed to unwrap private (BRC-42) payloads' },
-        offerMode: { type: 'string', description: '"key" for encrypted-record key sales, "fragment" or omit for plaintext fragment sales' },
-        commitment: { type: 'object', description: 'optional {leaf, hdp, authorPub, anchorTxid} from saleOfferMemory — verifies leaf inclusion + provenance σ' }
+        sellerPub: { type: 'string', description: 'claim: needed to unwrap private (BRC-42) payloads' },
+        offerMode: { type: 'string', description: 'claim: "key" for encrypted-record key sales' },
+        commitment: { type: 'object', description: 'claim: {leaf,hdp,authorPub,anchorTxid} — verifies leaf inclusion + provenance σ' }
       },
-      required: ['txHex', 'hWrapped']
+      required: ['op']
     }
   },
   {
-    name: 'claimDeploy',
-    description: 'Optimistic-claim layer (§4.5): deploy a MamemZkClaim covenant bound to an L_ZKMem proof bundle — the journal root/size/queryId are committed on-chain behind the prover\'s bond. Registered for the watcher, which re-verifies the RISC Zero receipt off-chain and auto-challenges fraud. Regtest only.',
+    name: 'claim',
+    description: 'Optimistic-claim rail (§4.5) + pay-iff-proven gated sale — regtest only. op=deploy {lzkmem,bondSats?,deadline?,anchorOutpoint?}: deploy a MamemZkClaim covenant bound to an L_ZKMem bundle — journal root/size/queryId committed behind the prover\'s bond; the watcher re-verifies the RISC Zero receipt off-chain and auto-challenges fraud. op=status {txid,vout?}: claim state open|challenged|revealed|bisecting, deadline, journalRoot, bond. op=settle {txid,vout?,payoutSats?,verdictSats?}: settle an open claim after deadline → ClaimVerdict UTXO + bond payout (unanchored only — anchored claims settle via the anchor co-spend). op=deploySale {verdictOutpoint,priceSats,wrapped}: DisclosureSale bound to a settled verdict — the price pays only in a tx that also consumes it (atomic pay-iff-settled). op=buySale {saleTxid,verdictOutpoint,wrapped,priceSats,changeSats?}: spends [sale,verdict] — consensus refuses without the verdict input.',
     inputSchema: {
       type: 'object',
       properties: {
-        lzkmem: { type: 'string', description: 'L_ZKMem v2 hex from proveMembership' },
-        bondSats: { type: 'number' }, deadline: { type: 'number', description: 'locktime when the claim becomes settleable; 0 = immediately' },
-        anchorOutpoint: { type: 'string', description: '36-byte anchor outpoint hex to bind journalRoot == anchor.R; omit for unanchored' }
+        op: { type: 'string', enum: ['deploy', 'status', 'settle', 'deploySale', 'buySale'] },
+        lzkmem: { type: 'string', description: 'deploy: L_ZKMem v2 hex from proveMembership' },
+        bondSats: { type: 'number' }, deadline: { type: 'number', description: 'deploy: locktime when the claim becomes settleable; 0 = immediately' },
+        anchorOutpoint: { type: 'string', description: 'deploy: 36-byte anchor outpoint hex to bind journalRoot == anchor.R; omit for unanchored' },
+        txid: { type: 'string' }, vout: { type: 'number' }, payoutSats: { type: 'number' }, verdictSats: { type: 'number' },
+        verdictOutpoint: { type: 'string', description: '36-byte outpoint hex of the settled verdict' },
+        priceSats: { type: 'number' }, wrapped: { type: 'string', description: 'payload to reveal on buy (hex)' },
+        saleTxid: { type: 'string' }, changeSats: { type: 'number' }
       },
-      required: ['lzkmem']
-    }
-  },
-  {
-    name: 'claimStatus',
-    description: 'Read a deployed claim\'s covenant state: open | challenged | revealed | bisecting, deadline, journalRoot, bond.',
-    inputSchema: { type: 'object', properties: { txid: { type: 'string' }, vout: { type: 'number' } }, required: ['txid'] }
-  },
-  {
-    name: 'claimSettle',
-    description: 'Settle an open claim after its deadline: emits the ClaimVerdict UTXO (spendable proof of acceptance) + bond payout. Unanchored claims only — anchored claims settle via the anchor co-spend.',
-    inputSchema: { type: 'object', properties: { txid: { type: 'string' }, vout: { type: 'number' }, payoutSats: { type: 'number' }, verdictSats: { type: 'number' } }, required: ['txid'] }
-  },
-  {
-    name: 'saleDeployGated',
-    description: 'Deploy a DisclosureSale bound to a settled ClaimVerdict — the price can only be paid by a tx that also consumes the verdict (atomic pay-iff-settled). Regtest only.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        verdictOutpoint: { type: 'string', description: '36-byte outpoint hex from claimSettle' },
-        priceSats: { type: 'number' }, wrapped: { type: 'string', description: 'payload to reveal on buy (hex)' }
-      },
-      required: ['verdictOutpoint', 'priceSats', 'wrapped']
-    }
-  },
-  {
-    name: 'saleBuyGated',
-    description: 'Execute the gated buy: spends [sale, verdict] → pays the verdict\'s payee atomically. Consensus refuses without the verdict input.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        saleTxid: { type: 'string' }, verdictOutpoint: { type: 'string' }, wrapped: { type: 'string' }, priceSats: { type: 'number' }, changeSats: { type: 'number' }
-      },
-      required: ['saleTxid', 'verdictOutpoint', 'wrapped', 'priceSats']
+      required: ['op']
     }
   },
   {
@@ -489,7 +406,12 @@ export const TOOLS = [
   }
 ] as const
 
-const PAID_SALE_TOOLS = new Set(['saleOffer', 'saleOfferMemory', 'saleEscrow', 'saleComplete', 'saleRefund', 'saleClaim'])
+// consolidated state machines: op → internal case label (never listed in
+// TOOLS — reachable only through the 'sale'/'claim' dispatchers, which keep
+// the paid-disclosure gate on BOTH the tool and the resolved op)
+const PAID_SALE_TOOLS = new Set(['sale', 'sale#offer', 'sale#offerMemory', 'sale#escrow', 'sale#complete', 'sale#refund', 'sale#claim'])
+const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'])
+const CLAIM_OPS = new Set(['deploy', 'status', 'settle', 'deploySale', 'buySale'])
 const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.MAMEM_PAID_DISCLOSURE ?? '')
 /** tools visible to clients right now — paid-disclosure tools are gated by env */
 export const visibleTools = () => TOOLS.filter(t => !PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled())
@@ -528,7 +450,12 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       const { invoice, required } = paymentRequired(String(args.tool))
       return { invoice: { invoiceId: invoice.invoiceId, amount: invoice.amount, payTo: invoice.payTo, lockingScriptHex: invoice.lockingScriptHex, opReturn: invoice.opReturn, expires: new Date(invoice.expires).toISOString() }, paymentRequired: required }
     }
-    case 'saleOffer': {
+    case 'sale': {
+      const op = String(args?.op ?? '')
+      if (!SALE_OPS.has(op)) throw new Error('sale: op required — offer|offerMemory|escrow|complete|refund|claim')
+      return await callTool(mem, `sale#${op}`, args, ctx)
+    }
+    case 'sale#offer': {
       const { offerDisclosure } = await import('@mamem/identity')
       const r = offerDisclosure({
         sellerKey: mem.operatorKey(), value: new Uint8Array(Buffer.from(args.value, 'hex')),
@@ -541,7 +468,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
         wrapped: r.wrapped, sellerPub: r.sellerPub, expiresAt: Number(r.expiresAt ?? 0n), offerSig: r.offerSig
       }
     }
-    case 'saleOfferMemory': {
+    case 'sale#offerMemory': {
       const { offerDisclosure, encodeKeySale } = await import('@mamem/identity')
       const { serializeFragment, computeLeaf, toHex } = await import('@mamem/core')
       const rec = (await mem.records(args.shard)).find(r => r.seq === args.seq)
@@ -580,7 +507,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
         }
       }
     }
-    case 'saleEscrow': {
+    case 'sale#escrow': {
       const { DisclosureSaleHost } = await import('@mamem/anchor')
       // §16/17 delegation-sig check: refuse to fund an escrow for a cfg the
       // seller never signed — blocks MITM cfg-swap griefing (deposit lockup).
@@ -592,18 +519,18 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
         if (!verifyOfferSig(
           { cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig, expiresAt: args.offer.expiresAt },
           buyerPub, leaf
-        )) throw new Error('saleEscrow: offerSig does not verify — cfg may have been substituted')
+        )) throw new Error('sale op=escrow: offerSig does not verify — cfg may have been substituted')
         // π_i pre-funding check: if the commitment carries a path, the leaf
         // must rebuild the committed batch root — catch a bogus leaf early.
         const proof = args.offer.commitment?.proof
         if (proof?.path && args.offer.commitment?.batchR) {
           const root = reconstructRoot(fh(leaf), { index: proof.leafIndex, siblings: proof.path.map((h: string) => fh(h)) })
-          if (th(root) !== args.offer.commitment.batchR) throw new Error('saleEscrow: leaf path does not reach the committed batch root')
+          if (th(root) !== args.offer.commitment.batchR) throw new Error('sale op=escrow: leaf path does not reach the committed batch root')
         }
         // §19 horizon: refuse to fund an offer that has lapsed — a signed
         // offer is only good until expiresAt (0 = no expiry).
         const exp = BigInt(args.offer.expiresAt ?? 0)
-        if (exp > 0n && BigInt(await mem.chainHeight()) >= exp) throw new Error(`saleEscrow: offer expired at height ${exp}`)
+        if (exp > 0n && BigInt(await mem.chainHeight()) >= exp) throw new Error(`sale op=escrow: offer expired at height ${exp}`)
       }
       // §19 sanity: the escrow must not be instantly refundable — refundAfter
       // is a locktime gate (height < 500M ⇒ block height, else timestamp).
@@ -612,7 +539,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
         const future = ra < 500_000_000n
           ? ra > BigInt(await mem.chainHeight())
           : ra > BigInt(Math.floor(Date.now() / 1000))
-        if (!future) throw new Error('saleEscrow: cfg.refundAfter is not in the future — the escrow would be instantly refundable')
+        if (!future) throw new Error('sale op=escrow: cfg.refundAfter is not in the future — the escrow would be instantly refundable')
       }
       const depositorPkh = Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
       const host = new DisclosureSaleHost({
@@ -627,7 +554,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       if (tx.outputs[1]) mem.addOwnedOut(tx, 1) // the escrow change out
       return { accepted: true, txid: tx.id('hex'), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh } }
     }
-    case 'saleComplete': {
+    case 'sale#complete': {
       const { DisclosureSaleHost } = await import('@mamem/anchor')
       const host = new DisclosureSaleHost({
         ...args.cfg,
@@ -638,7 +565,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       if (r.status !== 'success') return { accepted: false, reason: r.description }
       return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0]!.satoshis }
     }
-    case 'saleRefund': {
+    case 'sale#refund': {
       const { DisclosureSaleHost } = await import('@mamem/anchor')
       const host = new DisclosureSaleHost({
         ...args.cfg,
@@ -649,7 +576,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       if (r.status !== 'success') return { accepted: false, reason: r.description }
       return { accepted: true, txid: tx.id('hex'), refundSats: tx.outputs[0]!.satoshis }
     }
-    case 'saleClaim': {
+    case 'sale#claim': {
       const { Transaction } = await import('@bsv/sdk')
       const { claimDisclosure } = await import('@mamem/identity')
       const tx = Transaction.fromHex(args.txHex)
@@ -798,24 +725,29 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
     }
     case 'challenge':
       return { nonce: mem.issueChallenge(), statement: 'sign with answerChallenge(key, nonce) within 5 minutes; nonces from anywhere else are refused' }
-    case 'claimDeploy': {
+    case 'claim': {
+      const op = String(args?.op ?? '')
+      if (!CLAIM_OPS.has(op)) throw new Error('claim: op required — deploy|status|settle|deploySale|buySale')
+      return await callTool(mem, `claim#${op}`, args, ctx)
+    }
+    case 'claim#deploy': {
       if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
       const { Buffer } = await import('node:buffer')
       return await mem.claims.deploy(Buffer.from(args.lzkmem, 'hex').toString('hex'), { bondSats: args.bondSats, deadline: args.deadline, anchorOutpoint: args.anchorOutpoint })
     }
-    case 'claimStatus': {
+    case 'claim#status': {
       if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
       return await mem.claims.status(args.txid, args.vout ?? 0)
     }
-    case 'claimSettle': {
+    case 'claim#settle': {
       if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
       return await mem.claims.settle(args.txid, args.vout ?? 0, args.payoutSats ?? 4980, args.verdictSats ?? 10)
     }
-    case 'saleDeployGated': {
+    case 'claim#deploySale': {
       if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
       return await mem.claims.deploySale(args.verdictOutpoint, args.priceSats, args.wrapped)
     }
-    case 'saleBuyGated': {
+    case 'claim#buySale': {
       if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
       return await mem.claims.buyGated(args.saleTxid, args.verdictOutpoint, args.wrapped, args.priceSats, args.changeSats ?? 900)
     }

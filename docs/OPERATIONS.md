@@ -173,45 +173,45 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   7. Back up `MAMEM_DATA_DIR` (keys, state, reserve, spend ledger, records) **and** the passphrase. Losing either loses the shard ownership keys.
   8. Smoke without spending: `pnpm main:readonly`.
 - **Paid disclosure (GOAL-v7 V3, opt-in, BIP-199 escrow):**
-  `MAMEM_PAID_DISCLOSURE=1` exposes `saleOffer`/`saleOfferMemory`/
-  `saleEscrow`/`saleComplete`/`saleRefund`/`saleClaim` (SDK tool list and
-  HTTP `/v1/tools` both honour the gate; the dispatcher refuses the calls
-  when unset). The escrow is **buyer-funded** — the seller can never
-  take a deposit without revealing:
-  1. `saleOffer` (seller): wraps a value to a buyer pubkey (BRC-42; omit
-     `buyerPub` for public plaintext) and returns the covenant cfg +
+  `MAMEM_PAID_DISCLOSURE=1` exposes the consolidated `sale` tool — one
+  state machine, `op: offer|offerMemory|escrow|complete|refund|claim`
+  (SDK tool list and HTTP `/v1/tools` both honour the gate; the
+  dispatcher refuses `sale` when unset). The escrow is **buyer-funded**
+  — the seller can never take a deposit without revealing:
+  1. `sale op=offer` (seller): wraps a value to a buyer pubkey (BRC-42;
+     omit `buyerPub` for public plaintext) and returns the covenant cfg +
      committed `wrapped` + `sellerPub`/`offerSig` — the seller's signed
      offer attestation (§16/17 delegation signature; the buyer verifies
-     it before funding). `saleOfferMemory` is the memory-bound variant —
+     it before funding). `op=offerMemory` is the memory-bound variant —
      plaintext records sell `serializeFragment` bytes (`mode:"fragment"`);
      **encrypted records sell the fragment key** (`mode:"key"` — the §7
      decryption capability + ciphertext + provenance). The returned
      `commitment {leaf, hdp, anchorTxid, authorPub, level, batchR, proof}`
      carries the inclusion evidence π_i.
-  2. `saleEscrow` (buyer): pass `offer {sellerPub, offerSig, commitment}`
+  2. `sale op=escrow` (buyer): pass `offer {sellerPub, offerSig, commitment}`
      to verify the signed offer (refuses MITM-swapped cfgs) and the
      leaf's inclusion path before funding; then completes the cfg with
      its own `depositorPkh` and funds
      `DisclosureSaleHost(cfg).lockingScript()` from the operator key.
      Deposit should be `price + maxFee + change margin`.
-  3. `saleComplete` (seller): spends the escrow via `buy` — `wrapped` is
+  3. `sale op=complete` (seller): spends the escrow via `buy` — `wrapped` is
      revealed on-chain in the same tx that pays the seller exactly
      `price` and returns change to the depositor. The covenant pins the
      change destination and bounds the fee (`maxFee`), so the completer
      cannot reroute or burn the deposit.
-  4. `saleClaim` (buyer): re-parses that buy tx, re-checks
+  4. `sale op=claim` (buyer): re-parses that buy tx, re-checks
      `sha256(wrapped)==hWrapped` and unwraps to the operator key. For
      `mode:"fragment"` it recomputes `computeLeaf(parseFragment(payload))`;
      for `mode:"key"` it decrypts with the sold key and recomputes
      `computeLeaf({d,p,hdp,E})`. Both verify the leaf against the
      commitment and check the provenance σ (`authorVerified`) when the
      record carries an author key + signature.
-  5. `saleRefund` (buyer): if the seller never completes, the depositor
+  5. `sale op=refund` (buyer): if the seller never completes, the depositor
      reclaims the escrow after `refundAfter` — depositor-signed,
      locktime-gated.
   GOAL-v8 additions: offers carry `expiresAt` (inside the signature —
   expired offers are refused at verification AND before escrow funding),
-  and `saleEscrow` refuses a `refundAfter` that isn't safely in the
+  and `sale op=escrow` refuses a `refundAfter` that isn't safely in the
   future (`> currentHeight + margin`) before any deposit is made.
   Threat note: `wrapped` is public on-chain — private mode relies on
   BRC-42 ECDH confidentiality; the covenant binds payment↔reveal but

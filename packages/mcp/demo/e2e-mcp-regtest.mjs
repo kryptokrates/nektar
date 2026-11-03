@@ -108,12 +108,12 @@ check(again.text?.startsWith('Confidential'), 'fresh clearance from the stored c
 // registers the outpoint; the watcher daemon shares this dataDir registry.
 // two claims: one still inside its dispute window (the watcher's ward), one
 // already past deadline (settles now — same proof, different deadline).
-const claimWatch = await call('claimDeploy', { lzkmem: zkm.lzkmem, deadline: 100000 })
+const claimWatch = await call('claim', { op: 'deploy', lzkmem: zkm.lzkmem, deadline: 100000 })
 txids.claimWatch = claimWatch.txid
-const claim = await call('claimDeploy', { lzkmem: zkm.lzkmem, deadline: 0 })
+const claim = await call('claim', { op: 'deploy', lzkmem: zkm.lzkmem, deadline: 0 })
 txids.claim = claim.txid
 check(!!claim.txid && !!claimWatch.txid, `claimDeploy ×2 → MamemZkClaim covenants (watched=${claimWatch.txid.slice(0, 12)}… settle=${claim.txid.slice(0, 12)}…)`)
-const cst = await call('claimStatus', { txid: claim.txid })
+const cst = await call('claim', { op: 'status', txid: claim.txid })
 check(cst.status === 'open' && cst.journalRoot === claim.journalRoot, `claimStatus: open — committed root matches the proven journal`)
 // watcher pass over the same dataDir: honest claim verifies → no action
 const { execFileSync } = await import('node:child_process')
@@ -127,14 +127,14 @@ try {
   try { wout = watcherRun() } catch { wout = watcherRun() } // WASM loader flake: retry once
   check(/verifies, no action|FRAUD/i.test(wout), `watcher pass: ${wout.trim().split('\n').at(-1)?.slice(0, 70)}`)
 } catch (e) { check(false, `watcher pass: ${String(e.message).slice(0, 80)}`) }
-const stl = await call('claimSettle', { txid: claim.txid })
+const stl = await call('claim', { op: 'settle', txid: claim.txid })
 txids.settle = stl.txid
 check(!!stl.txid && !!stl.verdictOutpoint, `claimSettle → ClaimVerdict UTXO ${stl.verdictOutpoint?.slice(0, 16)}… (bond returned)`)
 // pay-iff-settled: the verdict UTXO is the atomic unlock for a sale
 const WRAPPED = 'f1'.repeat(64)
-const sale = await call('saleDeployGated', { verdictOutpoint: stl.verdictOutpoint, priceSats: 3000, wrapped: WRAPPED })
+const sale = await call('claim', { op: 'deploySale', verdictOutpoint: stl.verdictOutpoint, priceSats: 3000, wrapped: WRAPPED })
 txids.sale = sale.txid
-const buy = await call('saleBuyGated', { saleTxid: sale.txid, verdictOutpoint: stl.verdictOutpoint, wrapped: WRAPPED, priceSats: 3000 })
+const buy = await call('claim', { op: 'buySale', saleTxid: sale.txid, verdictOutpoint: stl.verdictOutpoint, wrapped: WRAPPED, priceSats: 3000 })
 txids.buyGated = buy.txid
 check(!!buy.txid, `saleBuyGated — payment consumed the verdict atomically (${buy.txid?.slice(0, 12)}…)`)
 await client.close()

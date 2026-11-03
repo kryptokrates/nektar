@@ -222,9 +222,30 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   auditable, the shard name never reaches the anchored receipt.
   `/v1/verify` renders it as "Cited record — private shard
   (ZK-verified)". Fail-closed: a missing or invalid proof strips the
-  claim rather than leak the cite. This is a *privacy* policy on the
-  data, not a caller preference — and like all proofs here it attests
-  membership, never truth.
+  claim rather than leak the cite. The accepted proof becomes a public
+  artifact: committed as `proofCommit` (sha256) inside the redacted ref
+  and fetchable at `GET /v1/zkproof/<commit>` — a verifier re-runs the
+  STARK itself (`reverifyMembershipBytes` — peek mode; the committed
+  proof is already consumed, the tombstone proves it was issued and
+  used exactly once). Missing artifact → the private cite cannot be
+  marked verified. This is a *privacy* policy on the data, not a caller
+  preference — and like all proofs here it attests membership, never
+  truth.
+- **Model-execution attestation (`attestInference` tool):** nChain
+  ai_inference-style — the shipped Groth16 proof of a quantized
+  784×16×10 MLP binds the single public statement
+  `poseidon(input ‖ output ‖ poseidon(model))`, re-derivable off-chain
+  by `packages/zk/src/poseidon-toy.ts` (bit-exact). Three receipt
+  states: **declared** (modelManifest only) → **statement-attested**
+  (`modelAttestation` embedded, validated at commit — a statement that
+  does not re-derive is refused) → **consensus-verified** (`verifierTxid`
+  — the in-script verifier was deployed + spent; regtest-proven via
+  `e2e-grothinf-regtest.mjs`). Artifacts come from
+  `tools/groth16-spike/spike_groth16_aiinf.py` (emits
+  `lock-aiinf.hex`/`unlock-aiinf.hex` into `tools/groth16-spike/out/`;
+  override dir via `MAMEM_GROTH16_OUT`). Only the canned demo vector
+  has a proof — LLM inference stays declared. Dev trusted setup,
+  nChain toy params, Research License — regtest-grade, non-commercial.
 - **Paid service (opt-in, BRC-166-style atomic settlement):**
   `MAMEM_PAYMENTS=1` + `MAMEM_OPERATOR_WIF` gates `anchor`,
   `groundedAnswer`, `commitReceipt` and the prover tools
@@ -241,10 +262,11 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   `MAMEM_PRICE_GROUNDEDANSWER_SATS` / `MAMEM_PRICE_COMMITRECEIPT_SATS`
   (default 250), `MAMEM_PRICE_PROVEMEMBERSHIP_SATS` /
   `MAMEM_PRICE_PROVESUBSET_SATS` / `MAMEM_PRICE_PROVEDERIVATION_SATS` /
-  `MAMEM_PRICE_ATTESTMEMBERSHIP_SATS` (default 500 — the prover tier;
-  proving is ~50 s of CPU, `attestMembership` also spends a reserve
-  outpoint), or `MAMEM_PRICE_SATS` for all. Verifier-side tools
-  (`verifyMembership`, `verifyCombined`, `verifySubset`,
+  `MAMEM_PRICE_ATTESTMEMBERSHIP_SATS` /
+  `MAMEM_PRICE_ATTESTINFERENCE_SATS` (default 500 — the prover tier;
+  proving is ~50 s of CPU, `attestMembership`/`attestInference` also
+  spend reserve outpoints), or `MAMEM_PRICE_SATS` for all. Verifier-side
+  tools (`verifyMembership`, `verifyCombined`, `verifySubset`,
   `verifyDerivation`, `verifyAttestation`, `zkQuery`, `verifyReceipt`)
   are never gated — a verifier pays to *get* a proof, never to check one.
   Flow: unpaid call → `402`-shaped `{paymentRequired}` invoice (also

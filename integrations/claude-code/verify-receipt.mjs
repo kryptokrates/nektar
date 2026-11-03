@@ -53,15 +53,23 @@ for (const t of tokens) {
     const fails = (j.checks ?? []).filter(c => c.ok === false).map(c => c.name)
     const drift = !!j.receipt?.answer && !norm(text).includes(norm(j.receipt.answer))
     if (drift) fails.push('answer-drift')
-    results.push({ token: t, ok: j.ok === true && !drift, failNames: fails })
+    results.push({ token: t, ok: j.ok === true && !drift, failNames: fails, checks: j.checks ?? [], receipt: j.receipt })
   } catch (e) {
     results.push({ token: t, ok: null, note: `verify endpoint unreachable (${(e).message})` })
   }
 }
 
+// compact full-check summary — the user sees what verified without thinking
+// about it: "found✓ hash✓ provenance✓ anchored✓ fragments✓ model:attested paid·"
+const checkLine = (checks, receipt) => {
+  const ico = c => c.ok === true ? '✓' : c.ok === false ? '✗' : '·'
+  return (checks ?? []).map(c => `${c.name === 'model' && receipt?.modelAttestation ? `model:${receipt.modelAttestation.verifierTxid ? 'on-chain' : 'attested'}` : c.name}${ico(c)}`).join(' ')
+}
+
 for (const r of results) {
   const icon = r.ok === true ? '✓ VERIFIED' : r.ok === false ? '✗ FAILED' : '? UNCHECKED'
   process.stderr.write(`mamem ${icon} ${r.token.slice(0, 24)}…${r.ok === false ? ' — ' + r.failNames.join(', ') : r.ok === null ? ' — ' + r.note : ''}\n`)
+  if (r.checks?.length) process.stderr.write(`  ${checkLine(r.checks, r.receipt)}\n`)
 }
 
 const failed = results.filter(r => r.ok === false)

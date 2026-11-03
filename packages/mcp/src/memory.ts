@@ -2,6 +2,8 @@
 // Wires log (append/batch) → anchor (head UTXO per shard) → overlay (submit)
 // → verify (proof bundles) → crypto (BRC-42/AES-GCM), all behind the chain
 // interfaces so it runs identically on the mock chain and regtest.
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { PrivateKey, PublicKey, Signature, Transaction } from '@bsv/sdk'
 import {
   utf8, fromHex, toHex, sha256, dsha256, concat, field, eq, hash160,
@@ -67,6 +69,10 @@ export interface MamemMemoryOptions {
   securityStore?: SecurityStateStore
   /** persistence for anchor heads/tails/checkpoints (restart-safe, no fork) */
   stateStore?: MemoryStateStore
+  /** data dir for the public proof store (proofs/<sha256>) — defaults to
+   *  MAMEM_DATA_DIR or ./.mamem; proofs committed in private cites are
+   *  served publicly for independent re-verification. */
+  dataDir?: string
 }
 
 /** persisted anchor state: per shard the head, the succession, checkpoints,
@@ -87,7 +93,7 @@ export interface SecurityStateStore {
   // zkQueries rows are [queryId, expiry, nonce?, verifierId?] — the two extra
   // fields (v2) let verifyCombined reconstruct the StarkQuery for the §13 Π
   // binding; legacy 2-field rows still consume but can't serve a combined proof.
-  load: () => { challenges: Array<[string, number]>, zkSeen: string[], zkQueries: Array<[string, number] | [string, number, string, string]>, revocations: string[] }
+  load: () => { challenges: Array<[string, number]>, zkSeen: string[], zkQueries: Array<[string, number] | [string, number, string, string] | [string, number, string, string, boolean]>, revocations: string[] }
   save: (s: ReturnType<SecurityStateStore['load']>) => void
 }
 
@@ -410,14 +416,17 @@ export class MamemMemory {
   }
 
   // ── persisted replay-protection state (challenges, transcripts, issued ZK queries, revocations)
-  /** ZK queries issued by THIS verifier: queryId hex → {nonce, verifierId, expiry} (single use).
-   *  nonce+verifierId let verifyCombined rebuild the StarkQuery for the Π binding. */
-  private zkQueries = new Map<string, { nonce: string, verifierId: string, expiry: number }>()
+  /** ZK queries issued by THIS verifier: queryId hex → {nonce, verifierId, expiry, consumed} (single use).
+   *  nonce+verifierId let verifyCombined rebuild the StarkQuery for the Π binding.
+   *  `consumed` entries are kept as tombstones — the re-verify ledger. */
+  private zkQueries = new Map<string, { nonce: string, verifierId: string, expiry: number, consumed?: boolean }>()
   private persistSecurityState (): void {
     this.opts.securityStore?.save({
       challenges: [...this.challenges].filter(([, exp]) => exp >= Date.now()),
       zkSeen: [...this.zkSeen],
-      zkQueries: [...this.zkQueries].filter(([, e]) => e.expiry >= Date.now()).map(([q, e]) => [q, e.expiry, e.nonce, e.verifierId]),
+      // consumed tombstones persist past expiry — they are the re-verify
+      // ledger: a proof whose queryId was consumed IS the committed one.
+      zkQueries: [...this.zkQueries].filter(([, e]) => e.expiry >= Date.now() || e.consumed === true).map(([q, e]) => [q, e.expiry, e.nonce, e.verifierId, e.consumed === true]),
       revocations: [...this.revokedPubs]
     })
   }
@@ -426,7 +435,7 @@ export class MamemMemory {
     if (!s) return
     for (const [n, exp] of s.challenges) this.challenges.set(n, exp)
     for (const k of s.zkSeen) this.zkSeen.add(k)
-    for (const row of s.zkQueries ?? []) this.zkQueries.set(row[0], { expiry: row[1], nonce: row[2] ?? '', verifierId: row[3] ?? '' })
+    for (const row of s.zkQueries ?? []) this.zkQueries.set(row[0], { expiry: row[1], nonce: row[2] ?? '', verifierId: row[3] ?? '', consumed: row[4] === true })
     for (const pub of s.revocations) { this.revocations.insert(idbind.deriveKey(fromHex(pub)), sha256(utf8('revoked'))); this.revokedPubs.push(pub) }
   }
   /** verifier side: issue a single-use ZK membership query (default 10 min).
@@ -440,8 +449,8 @@ export class MamemMemory {
   }
   private consumeZkQuery = (queryIdHex: string): boolean => {
     const e = this.zkQueries.get(queryIdHex)
-    if (e === undefined || e.expiry < Date.now()) return false
-    this.zkQueries.delete(queryIdHex)
+    if (e === undefined || e.expiry < Date.now() || e.consumed === true) return false
+    e.consumed = true
     this.persistSecurityState()
     return true
   }
@@ -449,9 +458,13 @@ export class MamemMemory {
    *  §13 Π binding first, consumes once at the end (single use stays). */
   private peekZkQuery (queryIdHex: string): { nonce: string, verifierId: string } | undefined {
     const e = this.zkQueries.get(queryIdHex)
-    if (e === undefined || e.expiry < Date.now() || e.nonce === '' || e.verifierId === '') return undefined
+    if (e === undefined || e.expiry < Date.now() || e.consumed === true || e.nonce === '' || e.verifierId === '') return undefined
     return { nonce: e.nonce, verifierId: e.verifierId }
   }
+  /** re-verify registry: a queryId passes iff it was CONSUMED — i.e. this
+   *  exact proof already verified once (consume runs last, only after all
+   *  other checks held). The tombstone survives expiry + restart. */
+  private zkQueryConsumed = (queryIdHex: string): boolean => this.zkQueries.get(queryIdHex)?.consumed === true
 
   // ── P14 full-mode automata (AUT-005): one Rúnar MamemAutomaton UTXO per id,
   // funded by the instance funder, owned by its own key.
@@ -558,6 +571,83 @@ export class MamemMemory {
     const res = await verifyMembershipAnchoredStark(bytes, anchorTx, this.chain, { consume: this.consumeZkQuery },
       { shard: shardId, isCanonical: (txid: string) => tail.some(l => l.txid === txid) })
     return { ok: res.ok, reason: res.reason, anchorTxid: res.anchorTxid, statement: 'proves some record is in this anchored batch (ZK-STARK, no trusted setup) — not which one, not its content, not truth' }
+  }
+
+  /** any tx this instance broadcast and remembers — anchor or attestation
+   *  (model-verifier deploy/spend land in attestationTxs too) */
+  knownTx (txid: string) { return this.anchorTxs.get(txid) ?? this.attestationTxs.get(txid) }
+
+  /** deploy an in-script Groth16 verifier (lock) and spend it with the proof
+   *  (unlock) — consensus itself runs the verification. The spend txid is the
+   *  attestation a receipt cites: it exists on-chain or it doesn't. */
+  async attestInferenceOnchain (lockHex: string, unlockHex: string): Promise<{ deployTxid: string, spendTxid: string }> {
+    const { Transaction, LockingScript, UnlockingScript, P2PKH, SatoshisPerKilobyte } = await import('@bsv/sdk')
+    const LOCK_SATS = 20_000
+    const addr = this.fundKey.toPublicKey().toAddress([0x6f])
+    const f = await this.takeFunding(LOCK_SATS + 5_000)
+    const tx1 = new Transaction()
+    tx1.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(this.fundKey) })
+    tx1.addOutput({ lockingScript: LockingScript.fromHex(lockHex), satoshis: LOCK_SATS })
+    tx1.addOutput({ lockingScript: new P2PKH().lock(addr), change: true })
+    await tx1.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
+    await tx1.sign()
+    const b1 = await this.chain.broadcast(tx1)
+    if (b1.status !== 'success') throw new Error(`verifier deploy failed: ${b1.description}`)
+    ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
+    ;(this.funder as any).addOwned?.(tx1, 1)
+    this.attestationTxs.set(tx1.id('hex'), tx1)
+    const tx2 = new Transaction()
+    tx2.addInput({ sourceTransaction: tx1, sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(unlockHex) })
+    tx2.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: LOCK_SATS - 5_000 })
+    const b2 = await this.chain.broadcast(tx2)
+    if (b2.status !== 'success') throw new Error(`proof spend failed: ${b2.description}`)
+    ;(this.funder as any).addOwned?.(tx2, 0)
+    this.attestationTxs.set(tx2.id('hex'), tx2)
+    return { deployTxid: tx1.id('hex'), spendTxid: tx2.id('hex') }
+  }
+
+  // ── public proof store + private-cite re-verification ────────────────────
+  /** proofs committed inside receipts are public artifacts (a ZK proof reveals
+   *  nothing): stored under <dataDir>/proofs/<sha256> and served publicly via
+   *  GET /v1/proof/<sha256> so a verifier can re-run them without trusting us. */
+  private proofDir (): string {
+    return join(this.opts.dataDir ?? process.env.MAMEM_DATA_DIR ?? join(process.cwd(), '.mamem'), 'proofs')
+  }
+  /** store a proof artifact; returns its sha256 commitment hex */
+  putProof (bytes: Uint8Array): string {
+    const commit = toHex(sha256(bytes))
+    mkdirSync(this.proofDir(), { recursive: true })
+    writeFileSync(join(this.proofDir(), commit), Buffer.from(bytes))
+    return commit
+  }
+  /** fetch a stored proof by commitment; integrity-checked — a corrupted or
+   *  foreign file can never masquerade as the committed artifact. */
+  getProof (commitHex: string): Uint8Array | undefined {
+    try {
+      const b = readFileSync(join(this.proofDir(), commitHex))
+      const u = new Uint8Array(b)
+      return toHex(sha256(u)) === commitHex ? u : undefined
+    } catch { return undefined }
+  }
+
+  /** re-verify a committed private-cite proof WITHOUT consuming anything:
+   *  runs the full anchored STARK verification with the tombstone registry —
+   *  the queryId must already be CONSUMED, i.e. this exact proof verified
+   *  once at commit. The shard is resolved from the anchor's own script data
+   *  (private cites never carry the shard name); the cite's hdp stays
+   *  unverifiable-by-design — ZK hides which leaf it was. */
+  async reverifyMembershipBytes (bytes: Uint8Array, anchorTxid: string): Promise<{ ok: boolean, reason?: string, anchorTxid?: string }> {
+    const anchorTx = this.anchorTxs.get(anchorTxid)
+    if (!anchorTx) return { ok: false, reason: 'committed anchor tx unknown to this instance' }
+    const { decodeMamemAnchor } = await import('@mamem/contracts')
+    const data = decodeMamemAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
+    if (!data) return { ok: false, reason: 'committed tx output 0 is not a mamem anchor' }
+    const shardName = [...this.anchors.entries()].find(([, ac]) => ac.getShardId() === data.shard)?.[0]
+    if (shardName === undefined) return { ok: false, reason: 'anchor shard is not one of ours' }
+    const tail = this.tails.get(shardName) ?? []
+    const res = await verifyMembershipAnchoredStark(bytes, anchorTx, this.chain, { consume: this.zkQueryConsumed },
+      { shard: data.shard, isCanonical: (txid: string) => tail.some(l => l.txid === txid) })
+    return { ok: res.ok, reason: res.reason, anchorTxid: res.anchorTxid }
   }
 
   /** verifier side (§13 Π_j = (π_j, ZKAccess(ℓ_q ≥ ℓ_j))): the dual commitment

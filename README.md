@@ -142,8 +142,11 @@ someone's question
         ├─ cited claim "45Nm"        BACKED — derivable from a sealed record
         ├─ receipts, manifest, chain  BACKED — anchored, signed, verifiable
         ├─ the prose between cites    NOT — the gate checks claims, not style
-        ├─ "the model produced this"  DECLARED — manifest anchored; the
-        │                                    inference itself is unproven
+        ├─ "the model produced this"  DECLARED by default; ATTESTED when the
+        │                              receipt embeds a modelAttestation —
+        │                              statement re-derives off-chain, and a
+        │                              verifierTxid names the consensus-checked
+        │                              spend (demo MLP only — not LLMs)
         └─ truth of the record        NEVER — sealing proves recorded, not right
 ```
 
@@ -230,20 +233,20 @@ peers; it never vouches for them** — trust comes from the receipts.
   never that a memory's content is **true**.
 - **Per-answer receipts**: `groundedAnswer` strips every claim that isn't
   entailed by a verified fragment and anchors an answer receipt (Wright
-  §8). "Which model answered" is a *declared* manifest (`modelManifest`),
-  not a proof of inference — that needs zkML/TEE. State of the art: BSV
-  already demonstrated it in miniature — nChain proved a neural-net
-  inference with Groth16 verified **on-chain on mainnet** (Oct 2024;
-  `examples/ai_inference` in `zkscript_package`) and sCrypt ran an MNIST
-  DNN *inside* Script. Frontier-LLM proving just became feasible
-  off-chain (zkLLM: LLaMA-2-13B ≈15 min; newer systems report
-  single-digit–seconds verification of 100B+ models) — but nothing
-  packages it as an on-chain verifier, and it answers a different
-  question than grounding does (zkML proves *which model ran*; grounding
-  proves *what the answer derives from*). Realistic path: small
-  self-hosted model → Groth16 circuit into our existing validity rail;
-  hosted/frontier models → off-chain proof or TEE attestation committed
-  into the receipt as an extra check line. Not built.
+  §8). "Which model answered" has three states: **declared** (the
+  `modelManifest`, unproven) → **statement-attested** (`attestInference`
+  re-derives the Groth16 public statement
+  `poseidon(input‖output‖poseidon(model))` off-chain — a ported toy-
+  Poseidon over BLS12-381, bit-exact vs the circuit's public input) →
+  **consensus-verified** (the same call deploys the in-script verifier
+  and spends it with nChain's shipped ai_inference proof — the spend
+  txid is the on-chain attestation; regtest-proven via
+  `e2e-grothinf-regtest.mjs`, deploy `b6fe4727…`, spend `27712ae8…`).
+  Scope: only the canned 784×16×10 quantized demo MLP has a proof —
+  LLM inference stays declared (zkML/TEE would be needed; zkLLM proves
+  *which model ran*, grounding proves *what the answer derives from* —
+  different questions). Dev trusted setup + nChain demo params —
+  regtest-grade only.
 - **Paid service (opt-in, `MAMEM_PAYMENTS=1`)**: `anchor`,
   `groundedAnswer` and `commitReceipt` take a per-call atomic payment —
   BRC-166-style x402 `exact`: an unpaid call returns a `402` invoice

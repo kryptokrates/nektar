@@ -3,3 +3,5 @@
 // ZK-STARK (RISC Zero succinct receipt; Fiat–Shamir, FRI, no trusted setup),
 // verified off-chain (WASM) against the SPV-verified anchor. See ADR-020.
 export * from './stark/index.js'
+export * from './poseidon-toy.js'
+export * from './aiinf-demo.js'

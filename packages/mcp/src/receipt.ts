@@ -85,19 +85,34 @@ export async function verifyReceipt (mem: MamemMemory, arg: { token?: string, re
   })
 
   if (receipt?.fragmentRefs?.length) {
-    for (const ref of receipt.fragmentRefs as Array<{ shard?: string, seq?: number, private?: true, hdp?: string, anchorTxid?: string }>) {
+    for (const ref of receipt.fragmentRefs as Array<{ shard?: string, seq?: number, private?: true, hdp?: string, anchorTxid?: string, proofCommit?: string }>) {
       if (ref.private === true) {
-        // private shard: the cite is redacted — the re-checkable part is
-        // that the committed anchor exists and is proven; the ZK membership
-        // proof itself was verified by the service at commit time.
+        // private shard: the cite is redacted — when the receipt commits
+        // proofCommit and the proof is fetchable, the STARK is RE-RUN here:
+        // independently verifiable, not service-attested. (The hdp itself
+        // stays unverifiable by design — ZK hides which leaf it was.)
         const atx = ref.anchorTxid ? mem.anchorTx(ref.anchorTxid) : undefined
-        checks.push({
-          name: 'fragment (private)',
-          ok: !!atx?.merklePath,
-          detail: atx?.merklePath
-            ? `ZK-verified cite — shard withheld; anchor ${ref.anchorTxid!.slice(0, 16)}… proven on-chain`
-            : 'private cite — no proven anchor for the committed ref'
-        })
+        const proof = ref.proofCommit ? mem.getProof(ref.proofCommit) : undefined
+        if (proof !== undefined && ref.anchorTxid !== undefined) {
+          const rv = await mem.reverifyMembershipBytes(proof, ref.anchorTxid)
+          checks.push({
+            name: 'fragment (private)',
+            ok: rv.ok,
+            detail: rv.ok
+              ? `ZK proof re-verified — sha256 ${ref.proofCommit!.slice(0, 16)}…; shard withheld; anchor ${ref.anchorTxid.slice(0, 16)}… proven on-chain`
+              : `ZK re-verify failed: ${rv.reason} (proof ${ref.proofCommit!.slice(0, 16)}…)`
+          })
+        } else {
+          checks.push({
+            name: 'fragment (private)',
+            ok: ref.proofCommit === undefined ? !!atx?.merklePath : false,
+            detail: ref.proofCommit === undefined
+              ? (atx?.merklePath
+                ? `ZK-verified at commit — shard withheld; anchor ${ref.anchorTxid!.slice(0, 16)}… proven on-chain (no proof committed — attested only)`
+                : 'private cite — no proven anchor for the committed ref')
+              : `proof ${ref.proofCommit.slice(0, 16)}… not fetchable — cannot re-verify (committed but artifact missing)`
+          })
+        }
         continue
       }
       const f = (await mem.recall(ref.shard!, { seq: ref.seq! })).items[0]
@@ -123,6 +138,29 @@ export async function verifyReceipt (mem: MamemMemory, arg: { token?: string, re
     checks.push({ name: 'paid', ok: false, detail: 'payments are enabled but this receipt commits no settlement txid' })
   } else {
     checks.push({ name: 'paid', ok: 'info', detail: 'unpaid (MAMEM_PAYMENTS off)' })
+  }
+
+  // model attestation (nChain ai_inference Groth16): three states —
+  //   absent           → declared model only (modelId, unproven)
+  //   present + valid  → statement re-derived; verifierTxid ⇒ consensus-checked spend
+  //   present + invalid→ hard fail: an attestation that doesn't re-derive is a lie
+  const att = (receipt as { modelAttestation?: { modelPoseidon: string, input?: number[], output: string | number, publicStatement: string, verifierTxid?: string, circuit?: string } } | undefined)?.modelAttestation
+  if (att) {
+    const { validateAttestation } = await import('@mamem/zk')
+    const v = att.input ? validateAttestation({ modelPoseidon: att.modelPoseidon, input: att.input, output: att.output, publicStatement: att.publicStatement }) : { ok: false, reason: 'attestation carries no input — statement not re-derivable' }
+    let detail = v.ok
+      ? `statement re-derived ✓ — poseidon(input‖output‖poseidon(model)) binds ${att.circuit ?? 'circuit'} (statement ${att.publicStatement.slice(0, 18)}…)`
+      : `attestation INVALID: ${v.reason}`
+    if (v.ok && att.verifierTxid) {
+      detail += mem.knownTx(att.verifierTxid)
+        ? `; verifier spend ${att.verifierTxid.slice(0, 16)}… resolved — consensus-checked Groth16 verification`
+        : `; verifierTxid ${att.verifierTxid.slice(0, 16)}… claimed — not resolvable by this instance (exists on the public chain or not)`
+    } else if (v.ok) {
+      detail += '; off-chain attestation only — no verifier spend committed'
+    }
+    checks.push({ name: 'model', ok: v.ok, detail })
+  } else {
+    checks.push({ name: 'model', ok: 'info', detail: `declared model only (${(receipt as { modelId?: { provider?: string, release?: string } } | undefined)?.modelId?.provider ?? 'undeclared'}/${(receipt as { modelId?: { release?: string } } | undefined)?.modelId?.release ?? 'undeclared'}) — no execution attestation` })
   }
 
   const ok = checks.every(c => c.ok === true || c.ok === 'info' || c.ok === 'skip')

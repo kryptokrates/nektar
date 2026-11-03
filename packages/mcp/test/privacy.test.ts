@@ -12,12 +12,15 @@ import { MamemMemory, type MamemMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
 import { _testReset, priceFor, PAID_TOOLS } from '../src/pay.js'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 function setup (opts: MamemMemoryOptions = {}) {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(20)
   for (const t of funder.parents) chain.registerParent(t)
-  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
+  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'mamem-priv-')), ...opts })
   const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
   return { chain, mem, settle }
 }
@@ -92,6 +95,7 @@ test('private cites: a verified ZK proof keeps the claim; the shard name is reda
   // stub the service-side ZK verify — the STARK machinery itself is covered by
   // zk-integration.test.ts; this test covers the privacy POLICY wiring.
   const orig = mem.verifyMembership.bind(mem)
+  const origRv = mem.reverifyMembershipBytes.bind(mem)
   ;(mem as any).verifyMembership = async () => ({ ok: true, statement: 'stub' })
   const r = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'salary band E5 = 120k', cites: [{ shard: 'hr', seq: 0, zk: { queryId: 'aa'.repeat(32), proof: 'deadbeef' } }] }] })
   ;(mem as any).verifyMembership = orig
@@ -101,13 +105,30 @@ test('private cites: a verified ZK proof keeps the claim; the shard name is reda
   assert.equal(ref.shard, undefined, 'the shard name never enters the committed ref')
   assert.match(ref.hdp, /^[0-9a-f]{64}$/, 'the committed fragment hash stays')
   assert.match(ref.anchorTxid, /^[0-9a-f]{64}$/, 'the committed anchor stays')
+  assert.match(ref.proofCommit, /^[0-9a-f]{64}$/, 'the proof commitment is committed')
   assert.ok(!JSON.stringify(r.receipt).includes('"hr"'), 'the receipt never names the shard')
-  // independent verify: the private cite reports honestly
+  // the committed proof is stored + integrity-pinned by its sha256
+  assert.deepEqual([...mem.getProof(ref.proofCommit)!], [...Buffer.from('deadbeef', 'hex')], 'proof fetchable by commit')
+  // independent verify: the private cite is re-checked, not trusted
+  ;(mem as any).reverifyMembershipBytes = async () => ({ ok: true, anchorTxid: ref.anchorTxid })
   const v = await verifyReceipt(mem, { token: r.receiptToken })
   assert.equal(v.ok, true)
   const priv = v.checks.find(c => c.name === 'fragment (private)')
   assert.equal(priv!.ok, true)
-  assert.match(priv!.detail, /ZK-verified cite.*shard withheld/)
+  assert.match(priv!.detail, /ZK proof re-verified.*shard withheld/)
+  // a FAILED re-verify is reported failed — fail-closed, not a green label
+  ;(mem as any).reverifyMembershipBytes = async () => ({ ok: false, reason: 'stark invalid' })
+  const v2 = await verifyReceipt(mem, { token: r.receiptToken })
+  assert.equal(v2.ok, false)
+  assert.match(v2.checks.find(c => c.name === 'fragment (private)')!.detail, /re-verify failed: stark invalid/)
+  // a committed proof that is not fetchable fails closed too
+  ;(mem as any).reverifyMembershipBytes = origRv
+  const origGet = mem.getProof.bind(mem)
+  ;(mem as any).getProof = () => undefined
+  const v3 = await verifyReceipt(mem, { token: r.receiptToken })
+  assert.equal(v3.ok, false)
+  assert.match(v3.checks.find(c => c.name === 'fragment (private)')!.detail, /not fetchable.*cannot re-verify/)
+  ;(mem as any).getProof = origGet
 })
 
 test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', async () => {
@@ -122,14 +143,20 @@ test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', asyn
   assert.match(r.flagged[0].reason, /private shard.*ZK membership proof/i)
 })
 
-test('private cites: commitReceipt redacts the shard name the same way', async () => {
+test('private cites: commitReceipt redacts the shard name the same way — and demands the ZK proof', async () => {
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr'); settle('hr')
-  const r = await callTool(mem, 'commitReceipt', { answer: 'x', fragmentRefs: [{ shard: 'hr', seq: 0 }] })
+  // no zk → refused outright; the service never commits an unverified private cite
+  await assert.rejects(() => callTool(mem, 'commitReceipt', { answer: 'x', fragmentRefs: [{ shard: 'hr', seq: 0 }] }), /require zk/)
+  const orig = mem.verifyMembership.bind(mem)
+  ;(mem as any).verifyMembership = async () => ({ ok: true, statement: 'stub' })
+  const r = await callTool(mem, 'commitReceipt', { answer: 'x', fragmentRefs: [{ shard: 'hr', seq: 0, zk: { queryId: 'aa'.repeat(32), proof: 'deadbeef' } }] })
+  ;(mem as any).verifyMembership = orig
   const ref = r.receipt.fragmentRefs[0]
   assert.equal(ref.private, true)
   assert.equal(ref.shard, undefined)
+  assert.match(ref.proofCommit, /^[0-9a-f]{64}$/, 'the committed proof is fetchable for re-verification')
   assert.ok(!JSON.stringify(r.receipt).includes('"hr"'))
 })
 
@@ -162,6 +189,14 @@ test('private cites end-to-end: a REAL STARK keeps the private cite', { skip: pr
   const proof = Buffer.from(bytes).toString('hex')
   const r = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'salary band E5 = 120k', cites: [{ shard: 'hr', seq: 0, zk: { queryId: q.queryId, proof } }] }] })
   assert.equal(r.committed, true)
-  assert.equal(r.receipt.fragmentRefs[0].private, true)
-  assert.equal(r.receipt.fragmentRefs[0].shard, undefined)
+  const ref = r.receipt.fragmentRefs[0]
+  assert.equal(ref.private, true)
+  assert.equal(ref.shard, undefined)
+  // the REAL STARK re-runs at verifyReceipt — independently, via the tombstone
+  // ledger (the queryId was consumed at commit), not by trusting the service
+  assert.match(ref.proofCommit, /^[0-9a-f]{64}$/)
+  assert.deepEqual([...mem.getProof(ref.proofCommit)!], [...bytes], 'committed proof bytes round-trip')
+  const v = await verifyReceipt(mem, { token: r.receiptToken })
+  assert.equal(v.ok, true)
+  assert.match(v.checks.find(c => c.name === 'fragment (private)')!.detail, /ZK proof re-verified/)
 })

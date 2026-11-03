@@ -14,9 +14,9 @@ import type { MamemMemory } from './memory.js'
 export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(process.env.MAMEM_PAYMENTS ?? '')
 
 /** tools that cost sats when MAMEM_PAYMENTS=1 */
-export const PAID_TOOLS = new Set(['anchor', 'groundedAnswer', 'commitReceipt', 'proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership'])
+export const PAID_TOOLS = new Set(['anchor', 'groundedAnswer', 'commitReceipt', 'proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership', 'attestInference'])
 /** prover-side tools: real CPU (STARK ~35-50s) and sometimes a chain tx — priced above answers. The verify-side tools stay free: a verifier never pays to check. */
-export const PROVER_TOOLS = new Set(['proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership'])
+export const PROVER_TOOLS = new Set(['proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership', 'attestInference'])
 
 const networkTag = (): string => {
   const n = process.env.MAMEM_NETWORK ?? 'mock'

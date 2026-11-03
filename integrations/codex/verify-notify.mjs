@@ -45,6 +45,10 @@ if (!base) {
 base ??= `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
 const norm = s => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
 const lines = []
+const checkLine = (checks, receipt) => {
+  const ico = c => c.ok === true ? '✓' : c.ok === false ? '✗' : '·'
+  return (checks ?? []).map(c => `${c.name === 'model' && receipt?.modelAttestation ? `model:${receipt.modelAttestation.verifierTxid ? 'on-chain' : 'attested'}` : c.name}${ico(c)}`).join(' ')
+}
 for (const t of tokens) {
   try {
     const r = await fetch(`${base}/v1/verify?r=${t}`, { signal: AbortSignal.timeout(3000) })
@@ -55,6 +59,7 @@ for (const t of tokens) {
     if (j.receipt?.answer && !norm(text).includes(norm(j.receipt.answer))) fails.push('answer-drift')
     const bad = fails.length > 0 || j.ok === false
     lines.push(`${bad ? '✗ FAILED' : '✓ VERIFIED'} ${t.slice(0, 24)}…${fails.length ? ' — ' + fails.join(', ') : ''}`)
+    if (j.checks?.length) lines.push(`  ${checkLine(j.checks, j.receipt)}`)
   } catch (e) {
     lines.push(`? UNCHECKED ${t.slice(0, 24)}… — verify endpoint unreachable (${e.message})`)
   }

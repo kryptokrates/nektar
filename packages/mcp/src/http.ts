@@ -31,6 +31,9 @@ export const OPENAPI = {
     '/v1/proof/{shard}/{seq}': {
       get: { summary: 'public proof bundle + verification result for one record', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }, { name: 'seq', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: { description: 'bundle + result' } } }
     },
+    '/v1/zkproof/{commit}': {
+      get: { summary: 'a committed ZK proof artifact by sha256 — private-cite proofs are public (they reveal nothing) so verifiers re-run them', parameters: [{ name: 'commit', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'proof bytes' }, 404: { description: 'unknown/mismatched commit' } } }
+    },
     '/v1/checkpoint/{shard}': {
       get: { summary: 'latest signed checkpoint of the shard (LOG-007)', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'checkpoint + log pubkey' }, 404: { description: 'no anchor yet' } } }
     },
@@ -39,6 +42,13 @@ export const OPENAPI = {
         summary: 'scan a receipt token — traffic-light checks that the answer receipt exists, re-hashes, is provenance-signed + anchored, and its cited fragments are anchored. JSON by default; Accept: text/html (or ?format=html) returns a check page with a QR.',
         parameters: [{ name: 'r', in: 'query', required: true, schema: { type: 'string', description: 'receipt token mamemr1.<base64url hash>' } }],
         responses: { 200: { description: 'check list + ok flag' }, 400: { description: 'missing/malformed token' } }
+      }
+    },
+    '/v1/badge': {
+      get: {
+        summary: 'verification label as an SVG badge — clients embed it so the verdict is always visible (green verified / red failed / grey unknown)',
+        parameters: [{ name: 'r', in: 'query', required: true, schema: { type: 'string', description: 'receipt token mamemr1.<base64url hash>' } }],
+        responses: { 200: { description: 'image/svg+xml badge' }, 400: { description: 'missing/malformed token' } }
       }
     },
     '/.well-known/x402': { get: { summary: 'payment catalog — priced tools, scheme and network (x402 discovery doc)', responses: { 200: { description: 'catalog' }, 404: { description: 'payments disabled' } } } },
@@ -90,7 +100,7 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
     // bearer token — the gate that makes a public bind safe. Unset =
     // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
     const tok = process.env.MAMEM_HTTP_TOKEN
-    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/.well-known/x402'
+    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname.startsWith('/v1/zkproof/')
     if (tok && !publicPath && req.headers.authorization !== `Bearer ${tok}`) {
       return send(401, { error: 'unauthorized' })
     }
@@ -103,6 +113,12 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
       if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
         if (!visibleTools().some(t => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
         try { return send(200, await callTool(mem, p[2]!, await body(req))) } catch (e) { return send(400, { error: (e as Error).message }) }
+      }
+      if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'zkproof' && p.length === 3) {
+        const bytes = mem.getProof(decodeURIComponent(p[2]!))
+        if (!bytes) return send(404, { error: 'no proof artifact under that commitment' })
+        res.writeHead(200, { 'content-type': 'application/octet-stream' })
+        return res.end(Buffer.from(bytes))
       }
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'proof' && p.length === 4) {
         const r = await mem.prove(decodeURIComponent(p[2]!), Number(p[3]))
@@ -134,6 +150,21 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
           }
           return send(200, result)
         } catch (e) { return send(400, { error: (e as Error).message }) }
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/badge') {
+        const tok = url.searchParams.get('r')
+        if (!tok) return send(400, { error: 'missing ?r=<receipt token>' })
+        try {
+          const { verifyReceipt } = await import('./receipt.js')
+          const result = await verifyReceipt(mem, { token: tok })
+          const pass = (result.checks ?? []).filter(c => c.ok === true).length
+          const total = (result.checks ?? []).filter(c => c.ok !== 'info' && c.ok !== 'skip').length
+          const att = (result.receipt as { modelAttestation?: { verifierTxid?: string } } | undefined)?.modelAttestation
+          const value = result.ok ? `verified ${pass}/${total}${att?.verifierTxid ? ' · model on-chain' : att ? ' · model attested' : ''}` : 'failed'
+          return send(200, badgeSvg(value, result.ok ? '#2ea043' : '#e5534b'), 'image/svg+xml; charset=utf-8')
+        } catch {
+          return send(200, badgeSvg('unverifiable', '#6e7681'), 'image/svg+xml; charset=utf-8')
+        }
       }
       if (req.method === 'GET' && url.pathname === '/.well-known/x402') {
         const { paymentsEnabled, PAID_TOOLS, priceFor } = await import('./pay.js')
@@ -172,8 +203,15 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
  *  The QR encodes this same page URL so a phone scan re-opens the result.
  *  Written for humans: the answer leads, each check is a plain-English
  *  claim, and the raw internals stay visible as fine print for auditors. */
+/** shields-style badge — the always-visible verification label */
+function badgeSvg (value: string, color: string): string {
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const lw = 52, vw = Math.max(60, value.length * 6.5 + 14)
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${lw + vw}" height="20" role="img" aria-label="mamem: ${esc(value)}"><title>mamem: ${esc(value)}</title><rect width="${lw}" height="20" fill="#555" rx="3"/><rect x="${lw}" width="${vw}" height="20" fill="${color}" rx="3"/><rect x="${lw}" width="4" height="20" fill="${color}"/><g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11"><text x="${lw / 2}" y="14">mamem</text><text x="${lw + vw / 2}" y="14">${esc(value)}</text></g></svg>`
+}
+
 async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown }, pageUrl: string): Promise<string> {
-  const rec = r.receipt as { answer?: string, fragmentRefs?: Array<{ shard: string, seq: number }>, checkResult?: string, modelId?: { provider?: string, release?: string }, payment?: { txid: string, amountSats: number, payTo: string } } | undefined
+  const rec = r.receipt as { answer?: string, fragmentRefs?: Array<{ shard: string, seq: number }>, checkResult?: string, modelId?: { provider?: string, release?: string }, modelAttestation?: { verifierTxid?: string, publicStatement?: string }, payment?: { txid: string, amountSats: number, payTo: string } } | undefined
   const QR = await import('qrcode')
   const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 180 })
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -192,11 +230,16 @@ async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<
       : name === 'grounding' ? 'The answer traces to cited records'
       : name === 'checkResult' ? 'Grounding verdict'
       : name === 'paid' ? 'Paid for on-chain'
+      : name === 'model' ? 'Model execution'
       : name
   const cites = (rec?.fragmentRefs ?? []).map(f => `${f.shard}:${f.seq}`)
   const meta = rec ? [
     cites.length ? `built from ${cites.length} cited record${cites.length === 1 ? '' : 's'} (${esc(cites.join(', '))})` : 'no cited records',
-    `declared model: ${esc(rec.modelId?.provider ?? 'undeclared')}/${esc(rec.modelId?.release ?? 'undeclared')} (declared, not proven)`,
+    rec.modelAttestation?.verifierTxid
+      ? `model execution: consensus-verified on-chain (Groth16, ${esc(rec.modelAttestation.verifierTxid.slice(0, 12))}…)`
+      : rec.modelAttestation
+        ? `model execution: statement-attested (${esc((rec.modelAttestation.publicStatement ?? '').slice(0, 14))}… — off-chain)`
+        : `declared model: ${esc(rec.modelId?.provider ?? 'undeclared')}/${esc(rec.modelId?.release ?? 'undeclared')} (declared, not proven)`,
     rec.payment ? `paid ${rec.payment.amountSats} sats` : null
   ].filter(Boolean).join(' · ') : ''
   return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>${r.ok ? '✓ verified answer' : '✗ receipt failed'}${rec?.answer ? ` — ${esc(rec.answer.slice(0, 60))}` : ''}</title>

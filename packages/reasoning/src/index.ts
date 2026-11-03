@@ -36,8 +36,10 @@ export const hashOf = (v: unknown): string => toHex(dsha256(utf8(canonicalJson(v
 export interface FragmentRef { shard: string, seq: number }
 /** a cite whose shard name is withheld — private shards commit only the
  *  fragment hash + its anchor so a receipt proves a ZK-verified cite
- *  without leaking which shard it came from. */
-export type CommittedRef = FragmentRef | { private: true, hdp: string, anchorTxid?: string }
+ *  without leaking which shard it came from. `proofCommit` = sha256 of the
+ *  ZK proof bytes the service verified at commit — the proof itself is
+ *  fetchable at /v1/proof/<proofCommit> so a verifier can re-run it. */
+export type CommittedRef = FragmentRef | { private: true, hdp: string, anchorTxid?: string, proofCommit?: string }
 export interface Claim { text: string, literal?: string, cites: FragmentRef[] }
 export type GroundReason = 'grounded:quote' | 'grounded:entailed' | 'uncited' | 'citation-unverifiable' | 'not-entailed'
 export interface GroundedClaim extends Claim { grounded: boolean, reason: GroundReason }
@@ -105,6 +107,12 @@ export interface Receipt {
    *  receipt commits the txid, so the "signed usage receipt" names what paid
    *  for it; anyone can audit tx → (pays payTo ≥ amount) ∧ OP_RETURN tag. */
   payment?: { txid: string, amountSats: number, payTo: string, invoiceId: string }
+  /** optional model attestation: a Groth16 proof (nChain ai_inference-style,
+   *  BLS12-381) that a pinned small network ran — `publicStatement` is the
+   *  proof's single public input poseidon(input‖output‖poseidon(model));
+   *  `verifierTxid` names the on-chain verifier spend when consensus itself
+   *  checked it. NOT a claim that an LLM ran — declared-only models omit it. */
+  modelAttestation?: { modelPoseidon: string, inputCommit: string, input?: readonly number[], output: string, publicStatement: string, proofCommit?: string, verifierTxid?: string, deployTxid?: string, circuit: string, setup: string, license?: string }
 }
 
 /** §16: delegating agent A′ signs authorship over a sub-decision bound to the answer */

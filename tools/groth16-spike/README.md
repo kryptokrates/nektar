@@ -31,6 +31,37 @@ consensus — no watcher, no challenge window.
    consensus — claim-only spend and tampered-proof settle both rejected,
    valid settle `778a44dd…` emitted the verdict, mined h8489.
 
+## What ran — V2: nChain's shipped ai_inference proof (live regtest)
+
+**Model-execution attestation reusing nChain's artifacts — no new circuit.**
+
+1. **`poseidon-toy.ts`** (`packages/zk/src`) — pure-TS port of the circuit's
+   toy-Poseidon (BLS12-381 Fr; capacity-first duplex layout — the detail that
+   makes it bit-exact). Re-derives the public statement
+   `poseidon(input ‖ output ‖ poseidon(model))` — MATCHES the shipped
+   `public_inputs.json` byte-for-byte (vector test committed).
+2. **`spike_groth16_aiinf.py`** — loads nChain's `examples/ai_inference/proof/`
+   (real arkworks proof + vk of a quantized 784×16×10 MLP argmax=9), emits a
+   **398,339 B lock / 40,406 B push-only unlock**. `tx_engine.Context` → PASS.
+   Use `raw_serialize()` — `serialize()` prepends a compact-size length that
+   breaks the push-only signature rule.
+3. **`e2e-grothinf-regtest.mjs`** — live Teranode regtest: deploy
+   `b6fe4727…` + proof spend `27712ae8…` accepted **under consensus**,
+   tampered unlock rejected, mined h8506.
+4. **`attestInference` tool** — re-derives the statement, optionally deploys
+   + spends the verifier, returns a `modelAttestation` record that
+   `commitReceipt`/`groundedAnswer` embed (statement re-validated at commit;
+   the verify page and `/v1/badge` show declared → attested → on-chain).
+   Only the canned demo vector has a proof — anything else fails closed.
+
+The spend binds the exact (input, output, modelPoseidon) triple — the
+statement is *inside* the pushed unlock. Dev trusted setup + nChain toy
+params + Research License — regtest-grade, non-commercial. LLM inference
+is NOT covered (that needs zkML/TEE-scale machinery).
+
+`gen-aiinf-demo.mjs` regenerates `packages/zk/src/aiinf-demo.ts` from the
+nChain parameter files (single source of truth for the demo vector).
+
 ## Earlier passes
 
 `spike_groth16_real.py` (MNT4-753 arkworks `square_root` — real proof,

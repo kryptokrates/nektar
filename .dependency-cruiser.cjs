@@ -68,6 +68,27 @@ module.exports = {
       to: { moreThanOneDependencyType: true }
     },
     {
+      // recommended: deprecated node core modules must not be imported
+      name: 'no-deprecated-core',
+      severity: 'error',
+      comment: 'deprecated node core module — node does not deprecate lightly',
+      from: {},
+      to: {
+        dependencyTypes: ['core'],
+        path: '^(?:punycode|domain|constants|sys|_linklist|_stream_wrap)$'
+      }
+    },
+    {
+      // recommended: an npm import with no package.json entry at all —
+      // check-deps.mjs catches the same thing by source scan; this catches
+      // it through the resolved graph (redundant depth is intentional)
+      name: 'no-non-package-json',
+      severity: 'error',
+      comment: 'npm package not declared in any package.json — add it or stop importing it',
+      from: {},
+      to: { dependencyTypes: ['npm-no-pkg', 'npm-unknown'] }
+    },
+    {
       name: 'no-node_modules-traversal',
       severity: 'error',
       comment: 'import packages via their exports — a literal ../node_modules/ path only works by hoisting accident (tools/check-deps.mjs guards this too)',
@@ -90,7 +111,12 @@ module.exports = {
     }
   ],
   options: {
-    doNotFollow: { path: 'node_modules' },
+    doNotFollow: {
+      path: 'node_modules',
+      // recommended preset: also don't FOLLOW npm edges into their own
+      // dep trees — we audit our imports, not our deps' internals
+      dependencyTypes: ['npm', 'npm-dev', 'npm-optional', 'npm-peer', 'npm-bundled', 'npm-no-pkg']
+    },
     exclude: { path: '(^|/)dist/' },
     tsPreCompilationDeps: true,
     enhancedResolveOptions: {

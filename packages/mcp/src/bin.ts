@@ -20,7 +20,7 @@ let stopping = false
 const stop = async () => { if (stopping) return; stopping = true; await rt.close().catch(() => {}); process.exit(0) }
 process.on('SIGINT', () => { void stop() }); process.on('SIGTERM', () => { void stop() })
 if (!port) {
-  await serveStdio(rt.mem)
+  await serveStdio(rt.mem, rt.ops)
   // the MCP client went away → exit (otherwise `docker run -i` containers leak
   // and several instances end up sharing one data volume)
   process.stdin.on('end', () => { void stop() }); process.stdin.on('close', () => { void stop() })

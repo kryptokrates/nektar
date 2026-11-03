@@ -71,7 +71,7 @@ async function body (req: IncomingMessage): Promise<unknown> {
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
 }
 
-export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<unknown>, costs: () => unknown }): Server {
+export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<unknown>, costs: () => unknown, importFunding?: (txid: string) => Promise<unknown> }): Server {
   // MCP Streamable HTTP: one transport + McpServer per session (mcp-session-id)
   const sessions = new Map<string, import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport>()
   const mcp = async (req: IncomingMessage, res: import('node:http').ServerResponse) => {
@@ -84,7 +84,7 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
       if (req.method !== 'POST' || typeof sid === 'string') { res.writeHead(404, { 'content-type': 'application/json' }); res.end(json({ jsonrpc: '2.0', error: { code: -32001, message: 'unknown MCP session' }, id: null })); return }
       const t: import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID(), onsessioninitialized: id => { sessions.set(id, t) } })
       t.onclose = () => { if (t.sessionId) sessions.delete(t.sessionId) }
-      await createMcpServer(mem).connect(t)
+      await createMcpServer(mem, ops).connect(t)
       transport = t
     }
     await transport.handleRequest(req, res, parsed)
@@ -112,7 +112,7 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
       if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: visibleTools() })
       if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
         if (!visibleTools().some(t => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
-        try { return send(200, await callTool(mem, p[2]!, await body(req))) } catch (e) { return send(400, { error: (e as Error).message }) }
+        try { return send(200, await callTool(mem, p[2]!, await body(req), { ops })) } catch (e) { return send(400, { error: (e as Error).message }) }
       }
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'zkproof' && p.length === 3) {
         const bytes = mem.getProof(decodeURIComponent(p[2]!))

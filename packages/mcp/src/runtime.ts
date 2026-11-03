@@ -153,7 +153,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   // an invoice served to a missing address is a payment that can never settle.
   const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
   if (paymentsEnabled()) requireOperatorWallet()
-  const base: MamemMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities }
+  const base: MamemMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities, network: cfg.network }
   if (cfg.network === 'mock') {
     const chain = new MockChain(); chain.verifyScripts = true
     const funder = new MockFunder(); funder.topup(Number(process.env.MAMEM_DEMO_UTXOS ?? 200))
@@ -557,7 +557,15 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
         runwayAnchors: avg > 0 ? Math.floor(balanceSats / avg) : null
       }
     },
-    costs: () => spendGuard.costs()
+    costs: () => spendGuard.costs(),
+    // fundingImport MCP tool: credit a tx paying the fee address into the
+    // reserve without a restart (same path as MAMEM_FUND_TXIDS)
+    importFunding: async (txid: string) => {
+      const added = await importFundingTx(mc, txid, pkhHex)
+      for (const u of added) addIfNew(u)
+      const balanceSats = reserve.utxos.reduce((s, u) => s + u.satoshis, 0)
+      return { imported: added.length, utxos: reserve.utxos.length, balanceSats, address: fundAddress }
+    }
   }
   return {
     mem, network: net, ops,

@@ -23,7 +23,7 @@ const DESTRUCTIVE = new Set(['rotate', 'revoke'])
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
 
-export function createMcpServer (mem: MamemMemory): McpServer {
+export function createMcpServer (mem: MamemMemory, ops?: import('./server.js').ToolCtx['ops']): McpServer {
   const server = new McpServer({ name: 'mamem', version: '0.2.0' }, { instructions: INSTRUCTIONS, capabilities: { tools: {}, resources: {}, prompts: {} } })
   const low = server.server
   low.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -34,7 +34,7 @@ export function createMcpServer (mem: MamemMemory): McpServer {
   }))
   low.setRequestHandler(CallToolRequestSchema, async req => {
     try {
-      const result = await callTool(mem, req.params.name, (req.params.arguments ?? {}) as Record<string, any>)
+      const result = await callTool(mem, req.params.name, (req.params.arguments ?? {}) as Record<string, any>, { ops })
       const text = json(result ?? null)
       const parsed = JSON.parse(text) as unknown
       // structuredContent must be a JSON object (spec); null/arrays go as text only
@@ -82,7 +82,7 @@ export function createMcpServer (mem: MamemMemory): McpServer {
 
 /** MCP over stdio (official SDK) — the entry bin.ts uses. Lives here (not
  *  server.ts) so the tool layer never imports the transport layer. */
-export async function serveStdio (mem: import('./memory.js').MamemMemory): Promise<void> {
+export async function serveStdio (mem: import('./memory.js').MamemMemory, ops?: import('./server.js').ToolCtx['ops']): Promise<void> {
   const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js')
-  await createMcpServer(mem).connect(new StdioServerTransport())
+  await createMcpServer(mem, ops).connect(new StdioServerTransport())
 }

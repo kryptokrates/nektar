@@ -441,6 +441,20 @@ export const TOOLS = [
         receiptHash: { type: 'string', description: 'or the bare 64-hex receipt hash' }
       }
     }
+  },
+  {
+    name: 'fundingStatus',
+    description: 'Operator fee-wallet status: funding address (send a few sats here), tracked UTXOs, balance, and — on live networks — spend caps, avg fee per anchor and estimated runway. Anchoring fails when the reserve is empty.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'fundingImport',
+    description: 'Import a funding transaction paying the operator fee address (a txid, or "hex:<rawtx>" where supported) into the tracked reserve — use after sending sats to the fundingStatus address. Live networks only.',
+    inputSchema: {
+      type: 'object',
+      required: ['txid'],
+      properties: { txid: { type: 'string', description: 'funding transaction id (or hex:<rawtx>)' } }
+    }
   }
 ] as const
 
@@ -453,7 +467,18 @@ const AUTOMATON_NOTE = 'On-chain proof that the transition (q, σ, q′) is in t
 const automatonView = (h: import('@mamem/automaton').AutomatonHead) =>
   ({ txid: h.tx.id('hex'), q: h.state.q, n: h.state.n, halted: h.state.halted, deltaRoot: h.state.deltaRoot, statement: AUTOMATON_NOTE })
 
-export async function callTool (mem: MamemMemory, name: string, args: any): Promise<any> {
+/** live-network runtime surface handed in by the MCP/HTTP transport layer —
+ *  absent under stdio-less callers (tests, hooks), in which case the funding
+ *  tools fall back to mem's own reserve view */
+export interface ToolCtx {
+  ops?: {
+    wallet?: () => Promise<unknown>
+    costs?: () => unknown
+    importFunding?: (txid: string) => Promise<unknown>
+  }
+}
+
+export async function callTool (mem: MamemMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
   if (PAID_SALE_TOOLS.has(name) && !paidSaleEnabled()) throw new Error(`${name}: paid disclosure is disabled — set MAMEM_PAID_DISCLOSURE=1`)
   // MAMEM_PAYMENTS=1 (BRC-166-style): anchor/groundedAnswer/commitReceipt need a
   // settled payment tx before they run — atomic, one tx per call, publicly
@@ -901,6 +926,20 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     case 'verifyReceipt': {
       const { verifyReceipt } = await import('./receipt.js')
       return await verifyReceipt(mem, args)
+    }
+    case 'fundingStatus': {
+      // prefer the runtime's live wallet view (spend caps, runway, correct
+      // net prefix); fall back to the reserve mem tracks itself
+      if (ctx.ops?.wallet) {
+        const w = await ctx.ops.wallet() as Record<string, unknown>
+        return { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
+      }
+      return mem.fundingStatus()
+    }
+    case 'fundingImport': {
+      if (!ctx.ops?.importFunding) throw new Error('fundingImport: live network only (mock/regtest fund via the harness)')
+      if (typeof args?.txid !== 'string' || args.txid.length < 8) throw new Error('fundingImport: txid required')
+      return await ctx.ops.importFunding(args.txid)
     }
     default:
       throw new Error(`unknown tool ${name}`)

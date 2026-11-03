@@ -60,6 +60,9 @@ export interface MamemMemoryOptions {
   clearanceAuthorities?: string[]
   /** COM-003: refuse writes without a valid originator signature (sourcePub) */
   requireSignedProvenance?: boolean
+  /** network the instance runs on — used for the funding-address prefix in
+   *  fundingStatus (testnet-family → 0x6f). Optional; absent = mainnet prefix. */
+  network?: 'mock' | 'regtest' | 'testnet' | 'main' | 'ttn'
   /** CHN-006: confirmations after which an anchor counts as final (default 1) */
   finalityDepth?: number
   /** LOG-005: maximum merge delay for inclusion promises (default 10 min) */
@@ -515,6 +518,21 @@ export class MamemMemory {
     const u = (f.utxos ?? []).find((u: { satoshis?: number }) => (u.satoshis ?? 0) >= satoshis)
     if (!u) throw new Error('no funding UTXO available for the attestation tx')
     return u
+  }
+
+  /** fee-reserve status for the fundingStatus MCP tool — mem-side view only
+   *  (address + tracked UTXOs); spend caps/runway live in ops.wallet() which
+   *  the tool prefers when the runtime passes it through. */
+  fundingStatus (): { address: string, balanceSats: number, utxos: number, funded: boolean } {
+    const f = this.funder as any
+    const utxos: { satoshis?: number }[] = f.utxos ?? []
+    const prefix = this.opts.network && this.opts.network !== 'main' ? [0x6f] : undefined
+    return {
+      address: this.fundKey.toPublicKey().toAddress(prefix),
+      balanceSats: utxos.reduce((s, u) => s + (u.satoshis ?? 0), 0),
+      utxos: utxos.length,
+      funded: utxos.length > 0
+    }
   }
 
   /** anchor sha256(proofBytes) in an OP_FALSE OP_RETURN data tx funded by the

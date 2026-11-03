@@ -76,13 +76,15 @@ test('verify page: OG unfurl meta + install CTA + copyable badge markdown', asyn
     const html = await (await fetch(`${base}/v1/verify?r=${encodeURIComponent(g.share!.token)}`, { headers: { accept: 'text/html' } })).text()
     assert.match(html, /<meta property="og:title"/, 'OG title for unfurls')
     assert.match(html, /<meta property="og:description"/, 'OG description')
-    assert.match(html, /Verify your own agent/, 'install CTA converts viewers')
-    assert.match(html, /v1\/badge\?r=/, 'badge URL on the page')
-    assert.match(html, /mcp:install|git clone/, 'install command on the page')
-    // viral edge: cited public shard → import CTA + discovery link + counters
-    assert.match(html, /import this operator's public memory/, 'import CTA')
-    assert.match(html, /importShard \{from: "[^"]+", shard: "m"\}/, 'copyable import snippet for the cited shard')
-    assert.match(html, /\.well-known\/mamem/, 'discovery doc link')
-    assert.match(html, /this operator: 2 anchors · this page viewed 1×/, 'social-proof counters')
+    // minimal page: one share action, operator identity, tech inside details
+    assert.match(html, /Share this verification/, 'one-click share button')
+    assert.match(html, /navigator\.share|clipboard/, 'share/copy handler wired')
+    assert.match(html, /operator <span class=mono>/, 'operator identity visible')
+    assert.match(html, /<details/, 'checks stay behind collapsed details')
+    assert.match(html, /v1\/badge\?r=/, 'badge markdown inside details')
+    assert.match(html, /mcp:install|git clone/, 'install command inside details')
+    // the clutter stays OFF the page
+    assert.doesNotMatch(html, /importShard \{from/, 'no visible import snippets')
+    assert.doesNotMatch(html, /this operator: \d+ anchors/, 'no counters')
   } finally { srv.close() }
 })

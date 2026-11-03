@@ -155,7 +155,8 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
             const offerable = new Set(await mem.publicShards().catch(() => [] as string[]))
             const cited = [...new Set(((result.receipt as { fragmentRefs?: Array<{ shard: string }> } | undefined)?.fragmentRefs ?? []).map(f => f.shard).filter(s => offerable.has(s)))]
             return send(200, await verifyPage(result, `${base}/v1/verify?${q}&format=html`,
-              { base, importShards: cited, totals: { views: mem.metrics.value('mamem_verify_views_total'), anchors: mem.metrics.value('mamem_anchors_total') } }), 'text/html; charset=utf-8')
+              { base, importShards: cited, totals: { views: mem.metrics.value('mamem_verify_views_total'), anchors: mem.metrics.value('mamem_anchors_total') },
+                operator: mem.fundingStatus().address }), 'text/html; charset=utf-8')
           }
           return send(200, result)
         } catch (e) { return send(400, { error: (e as Error).message }) }
@@ -246,7 +247,7 @@ function badgeSvg (value: string, color: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${lw + vw}" height="20" role="img" aria-label="mamem: ${esc(value)}"><title>mamem: ${esc(value)}</title><rect width="${lw}" height="20" fill="#555" rx="3"/><rect x="${lw}" width="${vw}" height="20" fill="${color}" rx="3"/><rect x="${lw}" width="4" height="20" fill="${color}"/><g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11"><text x="${lw / 2}" y="14">mamem</text><text x="${lw + vw / 2}" y="14">${esc(value)}</text></g></svg>`
 }
 
-async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown }, pageUrl: string, ctx?: { base: string, importShards: string[], totals: { views: number, anchors: number } }): Promise<string> {
+async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown }, pageUrl: string, ctx?: { base: string, importShards: string[], totals: { views: number, anchors: number }, operator?: string }): Promise<string> {
   const rec = r.receipt as { answer?: string, fragmentRefs?: Array<{ shard: string, seq: number }>, checkResult?: string, modelId?: { provider?: string, release?: string }, modelAttestation?: { verifierTxid?: string, publicStatement?: string }, payment?: { txid: string, amountSats: number, payTo: string } } | undefined
   const QR = await import('qrcode')
   const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 180 })
@@ -290,38 +291,34 @@ async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<
 <meta property="og:type" content="website"><meta property="og:url" content="${esc(pageUrl)}">
 <meta name="twitter:card" content="summary">
 <style>body{font:15px/1.55 system-ui,sans-serif;background:#0d1117;color:#c9d1d9;max-width:600px;margin:24px auto;padding:0 16px}
-h1{font-size:19px;margin-bottom:2px}.net{color:#8b949e;font-size:12px;margin-bottom:14px}
+h1{font-size:19px;margin-bottom:2px}.net{color:#8b949e;font-size:12px;margin-bottom:14px}.mono{font-family:ui-monospace,monospace;font-size:11px;word-break:break-all}
 .badge{display:inline-block;padding:3px 12px;border-radius:5px;font-weight:700}
 .ok{background:#12331c;color:#4ade80}.bad{background:#3d1215;color:#f87171}.info{color:#8b949e}
 .lede{color:#8b949e;font-size:14px;margin:0 0 16px}
 .ans{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px 18px;margin:0 0 6px;font-size:17px;line-height:1.5}
-.anslabel{color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin:0 0 6px}
-.meta{color:#8b949e;font-size:12.5px;margin:0 0 18px}
-.fg{font:11.5px ui-monospace,monospace;color:#6e7681;word-break:break-all;margin:0 0 22px}
-h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:#8b949e;border-bottom:1px solid #30363d;padding-bottom:6px;margin:0 0 10px}
+.meta{color:#8b949e;font-size:12.5px;margin:10px 0 0}
 ul{list-style:none;padding:0}li{margin:10px 0;font-weight:600}
 .d{color:#8b949e;font-size:12.5px;font-weight:400;margin-left:22px}
 img{display:block;margin:22px auto 6px;border:6px solid #fff;border-radius:6px}
 .qrcap{text-align:center;color:#6e7681;font-size:11.5px}
-.note{color:#8b949e;font-size:12.5px;margin-top:16px;border-top:1px solid #30363d;padding-top:12px}
-.cta{margin-top:14px;border-top:1px solid #30363d;padding-top:12px;font-size:13px;color:#c9d1d9}
-.install code,.md{display:block;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 10px;margin-top:8px;font:11.5px ui-monospace,monospace;color:#7ee787;word-break:break-all}
-.md{color:#8b949e}.mdcap{color:#8b949e;font-size:11px;margin-top:10px}</style></head><body>
+.sharebtn{display:block;width:100%;margin:18px 0 4px;padding:15px;background:#1f6feb;color:#fff;border:0;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer}
+.sharebtn:hover{background:#388bfd}.sharebtn.done{background:#12331c;color:#4ade80}
+.md{display:block;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 10px;margin-top:8px;font:11.5px ui-monospace,monospace;color:#8b949e;word-break:break-all}
+details{margin:16px 0;color:#8b949e}summary{cursor:pointer;font-size:13px}details>div{margin-top:10px}</style></head><body>
 <h1>Answer receipt <span class="badge ${cls(r.ok)}">${r.ok ? 'VERIFIED' : 'FAILED'}</span></h1>
-<div class=net>${esc(netLabel)}</div>
+<div class=net>${esc(netLabel)}${ctx?.operator ? ` · operator <span class=mono>${esc(ctx.operator)}</span>` : ''}</div>
 <div class=lede>${r.ok
-  ? 'Someone asked an AI a question and this service committed the answer below to a signed, append-only log on the blockchain. This page proves the record exists, is unchanged, and every record it cites is anchored. <b>It does not prove the answer is true.</b>'
+  ? 'This answer was recorded in a signed, append-only log on the blockchain — unchanged and anchored. <b>Recorded ≠ true.</b>'
   : 'Something in this receipt did not check out — see the ✗ lines below.'}</div>
-${rec?.answer !== undefined ? `<div class=anslabel>The committed answer — compare with what you were shown</div><div class=ans>${esc(rec.answer)}</div>` : ''}
-${meta ? `<div class=meta>${meta}</div>` : ''}
-<div class=fg>fingerprint ${esc(r.receiptHash)}</div>
-<h2>What was checked</h2>
+${rec?.answer !== undefined ? `<div class=ans>${esc(rec.answer)}</div>` : ''}
+<button class=sharebtn id=sharebtn>Share this verification</button>
+<script>document.getElementById('sharebtn').onclick=async function(){var u=${JSON.stringify(pageUrl.replace('&format=html',''))};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'verified answer — mamem',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
+<img src="${qr}" alt="scan to re-verify"><div class=qrcap>scan to re-check</div>
+<details${r.ok ? '' : ' open'}><summary>details · ${r.checks.filter(c => c.ok === true).length}/${r.checks.filter(c => c.ok !== 'info' && c.ok !== 'skip').length} checks</summary><div>
 <ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(title(c.name))}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
-<img src="${qr}" alt="scan to re-verify"><div class=qrcap>re-scan to re-check this receipt</div>
-<div class=note><b>What this proves:</b> the answer was committed and is derivable from sealed, anchored records.<br><b>What it doesn't:</b> the answer could still be wrong — commitment is not truth.</div>
-<div class=cta><b>Verify your own agent's answers.</b> mamem anchors AI memory + receipts on BSV — self-hosted, receipts anyone can check like this page.<div class=install><code>git clone https://github.com/nedzof/merkle-automaton && pnpm mcp:install</code></div>
-${ctx ? `<div class=mdcap>import this operator's public memory — every pack re-verifies against the chain on import:</div>${ctx.importShards.length ? ctx.importShards.map(s => `<code class=md>${esc(`importShard {from: "${ctx.base}", shard: "${s}"}`)}</code>`).join('') : ''}<code class=md>${esc(`${ctx.base}/.well-known/mamem`)}</code>` : ''}
-${ctx?.totals ? `<div class=mdcap>this operator: ${ctx.totals.anchors} anchors · this page viewed ${ctx.totals.views}×</div>` : ''}
-${badgeMd ? `<div class=mdcap>embed this badge:</div><code class=md>${esc(badgeMd)}</code>` : ''}</div>
+${meta ? `<div class=meta>${meta}</div>` : ''}
+<code class=md>${esc('git clone https://github.com/nedzof/merkle-automaton && pnpm mcp:install')}</code>
+${badgeMd ? `<code class=md>${esc(badgeMd)}</code>` : ''}
+</div></details>
 </body></html>`
 }

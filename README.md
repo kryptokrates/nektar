@@ -8,21 +8,98 @@ see it* — without trusting whoever ran the machine.
 [![release](https://github.com/nedzof/merkle-automaton/actions/workflows/release.yml/badge.svg)](https://github.com/nedzof/merkle-automaton/actions/workflows/release.yml)
 License: [Apache-2.0](LICENSE)
 
-## What it is
+## The walkthrough — one question, end to end
 
-Your AI writes memories to an encrypted local log. Now and then it stamps
-a Merkle root of that log into one BSV transaction — and each stamp
-*spends the previous stamp*, so history is one unforkable chain. When the
-AI shows you a memory it hands you a receipt: leaf → root → on-chain
-stamp → proof it was allowed to tell you. You verify **offline, zero
-trust**.
+What actually happens when someone asks your agent
+*"what torque does drain port 4 need?"* — and exactly which parts of the
+answer are backed by cryptography versus by trust.
 
-On top: a RISC Zero STARK proves a memory is inside the sealed log.
-Verifying it inside Bitcoin Script costs $40–150, so instead the prover
-posts a small **bonded claim**, a watcher bot challenges lies for free,
-and any dispute bisects the fraud to one step judged on-chain (~10 cents,
-paid only by liars). Settled claims mint a **verdict token** — which a
-sale contract can require: **pay-iff-proven**.
+**1. Earlier — the AI learned something**
+
+```sh
+remember("drain port 4 torque 45Nm", shard="manual")
+```
+
+→ an encrypted record in the local log, provenance-signed by the log key.
+**Backed:** the record exists, is signed, and is tamper-evident.
+
+**2. The log got stamped**
+
+```sh
+anchor(shard)   # one BSV transaction commits the Merkle root R
+```
+
+→ and each anchor *spends the previous anchor* (a Rúnar covenant) — one
+unforkable chain per shard, enforced by consensus, not by the backend.
+**Backed:** the record can no longer be edited or deleted without the
+on-chain stamp breaking.
+
+**3. The AI recalls it**
+
+```sh
+recall("manual")   # → items + a signed AnswerReceipt
+```
+
+→ the record text **plus** a receipt binding
+`answer ‖ refs ‖ check ‖ model ‖ time` under the log key's signature.
+Access still goes through identity, ZK clearance, Cedar and the policy
+DAG first. **Backed:** what the AI claims to have read is committed.
+
+**4. You check the receipt yourself**
+
+```sh
+prove("manual", 0)   # → proof bundle → verifyFragment()
+```
+
+→ Merkle path leaf→`R`, the anchor chain, the BEEF — verified **offline
+against public block headers**, no trust in the server that served it.
+Optionally a STARK proves "some leaf is in the anchored tree" without
+revealing which. **Backed:** the record was recorded, unaltered, before
+its block time.
+
+**5. The answer itself gets gated**
+
+```sh
+groundedAnswer(claims=[{text:"45Nm", cites:[{shard:"manual",seq:0}]}])
+```
+
+→ every claim must cite a **verified** fragment and be a literal quote or
+Datalog-entailed. Whatever fails is **stripped** — an underivable answer
+is refused, not published with a disclaimer. The surviving answer is
+anchored as a receipt. **Backed:** per-claim derivation from sealed
+memory — Wright's "no fragment may be hallucinated."
+
+**6. If someone disputes the proof**
+
+→ the prover posts a small **bonded claim** on-chain; a watcher bot
+re-verifies the STARK off-chain for free and challenges lies; any dispute
+bisects the fraud to one Poseidon2 step judged by an on-chain contract
+(~10 cents, paid only by liars). Settled claims mint a **verdict token**
+that a sale contract can require — **pay-iff-proven**.
+
+## The honest cut — what's backed and what isn't
+
+```
+someone's question
+    └─► the AI's answer
+        ├─ cited claim "45Nm"        BACKED — derivable from a sealed record
+        ├─ receipts, manifest, chain  BACKED — anchored, signed, verifiable
+        ├─ the prose between cites    NOT — the gate checks claims, not style
+        ├─ "the model produced this"  DECLARED — manifest anchored; the
+        │                                    inference itself is unproven
+        └─ truth of the record        NEVER — sealing proves recorded, not right
+```
+
+**One sentence:** everything the AI *quotes* can be proven to come from an
+untamperable log; how it *phrases* it and whether the *record was true*
+remain unproven — and the system says so explicitly rather than implying
+otherwise.
+
+**Still open, honestly:** proving the weights actually produced a token
+needs zkML/TEE (a research field, deliberately not built — `modelManifest`
+anchors the *declared* identity instead); agents use the gate by
+instruction, not by force; and a clever paraphrase can fail grounding and
+get stripped — that's the safety feature, not a bug.
 
 ## What this enables that doesn't exist today
 

@@ -24,6 +24,29 @@ jobs:
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" '
             set -e
+            # one-time mamem → nektar migration (idempotent): dir + units + env + state
+            if [ -d /opt/mamem ] && [ ! -d /opt/nektar ]; then
+              for s in mamem-http mamem-rendezvous mamem-watch; do
+                systemctl stop "$s" 2>/dev/null || true
+                systemctl disable "$s" 2>/dev/null || true
+              done
+              mv /opt/mamem /opt/nektar
+              [ -d /opt/nektar/.mamem ] && mv /opt/nektar/.mamem /opt/nektar/.nektar || true
+              [ -f /opt/nektar/.env ] && sed -i "s/MAMEM_/NEKTAR_/g" /opt/nektar/.env || true
+              for s in http rendezvous watch; do
+                u=/etc/systemd/system/mamem-$s.service
+                if [ -f "$u" ]; then
+                  sed -i "s|/opt/mamem|/opt/nektar|g; s/MAMEM_/NEKTAR_/g; s/mamem/nektar/g" "$u"
+                  mv "$u" /etc/systemd/system/nektar-$s.service
+                  systemctl enable nektar-$s
+                fi
+              done
+              for f in /etc/nginx/conf.d/*mamem* /etc/nginx/sites-enabled/*mamem*; do
+                [ -f "$f" ] && sed -i "s|/opt/mamem|/opt/nektar|g; s/mamem/nektar/g" "$f" && mv "$f" "${f/mamem/nektar}" || true
+              done
+              systemctl daemon-reload
+              nginx -t 2>/dev/null && systemctl reload nginx || true
+            fi
             cd /opt/nektar
             git fetch https://github.com/nedzof/nektar.git master
             git reset --hard FETCH_HEAD

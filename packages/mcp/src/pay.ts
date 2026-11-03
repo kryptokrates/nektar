@@ -4,7 +4,7 @@
 // No wallet ecosystem — anything that can sign a BSV tx can pay (a WIF is
 // enough). Settlement is publicly auditable from the tx alone: (pays payTo ≥
 // amount) ∧ (carries `mamempay:<invoiceId>`) — the receipt commits the txid.
-import { Transaction, PrivateKey, P2PKH } from '@bsv/sdk'
+import { Transaction, PrivateKey, P2PKH, Beef } from '@bsv/sdk'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -118,7 +118,27 @@ export const settlePayment = async (mem: MamemMemory, tool: string, payment: { i
   let tx: Transaction
   try {
     const h = String(payment.transaction ?? '').replace(/^0x/, '')
-    tx = /^(0100beef|0101010000)/.test(h) ? Transaction.fromBEEF(Array.from(Buffer.from(h, 'hex'))) : Transaction.fromHex(h)
+    const bytes = Array.from(Buffer.from(h, 'hex'))
+    if (h.startsWith('0101010000')) {
+      tx = Transaction.fromAtomicBEEF(bytes)
+    } else if (h.startsWith('0100beef')) {
+      // BEEF carries ancestors topologically — the subject tx is last; wire
+      // each input's sourceTransaction from the bundle so SpendGuard can
+      // resolve input values and the broadcaster can emit Extended Format.
+      const beef = Beef.fromBinary(bytes)
+      const subject = beef.txs.at(-1)!
+      tx = subject.tx ?? (subject.rawTx ? Transaction.fromBinary(subject.rawTx) : undefined as never)
+      if (!tx) throw new Error('BEEF bundle has no subject transaction')
+      for (const inp of tx.inputs) {
+        if (!inp.sourceTransaction && inp.sourceTXID) {
+          const p = beef.findTxid(inp.sourceTXID)
+          const parent = p?.tx ?? (p?.rawTx ? Transaction.fromBinary(p.rawTx) : undefined)
+          if (parent) inp.sourceTransaction = parent
+        }
+      }
+    } else {
+      tx = Transaction.fromHex(h)
+    }
   } catch (e) { throw new Error(`payment.transaction is not a parseable raw/BEEF tx (${(e as Error).message.slice(0, 80)})`) }
   const tagHex = Buffer.from(utf8(inv.opReturn)).toString('hex')
   const paid = tx.outputs.some(o => o.lockingScript.toHex() === inv.lockingScriptHex && (o.satoshis ?? 0) >= inv.amount)

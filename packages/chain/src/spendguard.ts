@@ -87,7 +87,10 @@ export class SpendGuard implements Broadcaster {
     let vin = 0
     for (const inp of tx.inputs) {
       const txid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      const v = txid === undefined ? undefined : this.valueOf(txid, inp.sourceOutputIndex ?? 0)
+      // tracked store first (our own spends); a foreign tx carrying its parent
+      // (EF/BEEF) resolves from the attached source — the network validates
+      // the real value at broadcast, the fee here is ledger bookkeeping only
+      const v = txid === undefined ? undefined : (this.valueOf(txid, inp.sourceOutputIndex ?? 0) ?? inp.sourceTransaction?.outputs[inp.sourceOutputIndex ?? 0]?.satoshis)
       if (v === undefined) return undefined
       vin += v
     }

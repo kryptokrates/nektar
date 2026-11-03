@@ -41,6 +41,7 @@ export const OPENAPI = {
         responses: { 200: { description: 'check list + ok flag' }, 400: { description: 'missing/malformed token' } }
       }
     },
+    '/.well-known/x402': { get: { summary: 'payment catalog — priced tools, scheme and network (x402 discovery doc)', responses: { 200: { description: 'catalog' }, 404: { description: 'payments disabled' } } } },
     '/v1/pay/quote': {
       get: {
         summary: 'payment invoice for a paid tool (MAMEM_PAYMENTS=1) — 402 + PAYMENT-REQUIRED header carrying an x402 v2 PaymentRequired; pay the invoice with a signed tx then retry the tool with payment:{invoiceId,transaction}',
@@ -132,6 +133,17 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
           }
           return send(200, result)
         } catch (e) { return send(400, { error: (e as Error).message }) }
+      }
+      if (req.method === 'GET' && url.pathname === '/.well-known/x402') {
+        const { paymentsEnabled, PAID_TOOLS, priceFor } = await import('./pay.js')
+        if (!paymentsEnabled()) return send(404, { error: 'payments disabled (MAMEM_PAYMENTS=1)' })
+        const n = process.env.MAMEM_NETWORK ?? 'mock'
+        return send(200, {
+          x402Version: 2,
+          scheme: 'exact',
+          network: n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:mock',
+          resources: [...PAID_TOOLS].map(t => ({ url: `tool://${t}`, description: `mamem ${t}`, priceSats: priceFor(t), payVia: `call ${t} without payment → invoice in the result, or GET /v1/pay/quote?tool=${t}` }))
+        })
       }
       if (req.method === 'GET' && url.pathname === '/v1/pay/quote') {
         const { paymentsEnabled, PAID_TOOLS, paymentRequired } = await import('./pay.js')

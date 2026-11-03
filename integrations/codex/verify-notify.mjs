@@ -37,7 +37,12 @@ try {
 const tokens = [...new Set(text.match(/mamemr1\.[A-Za-z0-9_-]{40,}/g) ?? [])].slice(0, 3)
 if (!tokens.length) process.exit(0)
 
-const base = process.env.MAMEM_VERIFY_BASE ?? `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
+// verify host: env override > the 'verify:' URL in the message > localhost
+let base = process.env.MAMEM_VERIFY_BASE
+if (!base) {
+  try { base = new URL(text.match(/verify:\s*(https?:\/\/\S+)/i)?.[1] ?? '').origin } catch {}
+}
+base ??= `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
 const norm = s => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
 const lines = []
 for (const t of tokens) {

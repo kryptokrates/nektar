@@ -19,7 +19,7 @@ try { meta = JSON.parse(input || '{}') } catch {}
 const { transcript_path, stop_hook_active } = meta
 if (!transcript_path) process.exit(0)
 
-const base = process.env.MAMEM_VERIFY_BASE ?? `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
+const norm = s => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
 
 let lines = []
 try { lines = readFileSync(transcript_path, 'utf8').trim().split('\n') } catch { process.exit(0) }
@@ -35,10 +35,16 @@ for (let i = lines.length - 1; i >= 0 && !text; i--) {
 const tokens = [...new Set(text.match(/mamemr1\.[A-Za-z0-9_-]{40,}/g) ?? [])].slice(0, 3)
 if (!tokens.length) process.exit(0)
 
+// verify host: env override > the 'verify:' URL the answer printed (so the
+// hook follows whichever server minted the token) > localhost
+let base = process.env.MAMEM_VERIFY_BASE
+if (!base) {
+  try { base = new URL(text.match(/verify:\s*(https?:\/\/\S+)/i)?.[1] ?? '').origin } catch {}
+}
+base ??= `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
+
 // drift: the receipt commits an exact answer text — if the reply doesn't
 // contain it, the receipt doesn't cover what the user was actually shown
-const norm = s => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
-
 const results = []
 for (const t of tokens) {
   try {

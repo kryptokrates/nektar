@@ -1,0 +1,35 @@
+name: deploy
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+concurrency:
+  group: deploy
+permissions:
+  contents: read
+
+jobs:
+  hetzner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: pull → build → restart on the Hetzner box
+        env:
+          KEY: ${{ secrets.HETZNER_SSH_KEY }}
+          HOST: ${{ secrets.HETZNER_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" '
+            set -e
+            cd /opt/mamem
+            git fetch https://github.com/nedzof/merkle-automaton.git master
+            git reset --hard FETCH_HEAD
+            pnpm install --frozen-lockfile
+            pnpm -r build
+            systemctl restart mamem-http mamem-rendezvous mamem-watch
+            sleep 3
+            systemctl is-active mamem-http mamem-rendezvous mamem-watch
+          '

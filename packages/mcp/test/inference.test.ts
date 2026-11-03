@@ -59,6 +59,71 @@ test('attestInference: non-demo input refused', async () => {
   await assert.rejects(() => callTool(mem, 'attestInference', { input: bad }), /no proof exists/)
 })
 
+test('attestInference: DEFAULT path anchors sha256(proof) in one small tx', { timeout: 30_000 }, async () => {
+  delete process.env.MAMEM_GROTH16_OUT
+  const { mem } = setup()
+  const { existsSync } = await import('node:fs')
+  const dir = new URL('../../../../tools/groth16-spike/out/', import.meta.url)
+  if (!existsSync(new URL('lock-aiinf.hex', dir))) { process.env.MAMEM_GROTH16_OUT = '/nonexistent-mamem-aiinf'; console.log('  (skipped — artifacts not emitted locally)'); return }
+  const r = await callTool(mem, 'attestInference', {})
+  assert.equal(r.onchain, false)
+  assert.equal(r.anchored, true)
+  assert.match(r.attestation.attestationTxid ?? '', /^[0-9a-f]{64}$/)
+  assert.match(r.attestation.commitment ?? '', /^[0-9a-f]{64}$/)
+  assert.equal(r.attestation.commitment, r.attestation.proofCommit)
+  // the proof bytes are fetchable + the anchored commitment binds them
+  const bytes = mem.getProof(r.attestation.proofCommit)
+  assert.ok(bytes && bytes.length > 30_000, 'proof bytes in the store')
+  const va = await mem.verifyAttestation(r.attestation.attestationTxid, bytes)
+  assert.equal(va.ok, true)
+  process.env.MAMEM_GROTH16_OUT = '/nonexistent-mamem-aiinf'
+})
+
+test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 }, async () => {
+  delete process.env.MAMEM_GROTH16_OUT
+  const { mem, settle } = setup()
+  const { existsSync } = await import('node:fs')
+  const dir = new URL('../../../../tools/groth16-spike/out/', import.meta.url)
+  if (!existsSync(new URL('lock-aiinf.hex', dir))) { process.env.MAMEM_GROTH16_OUT = '/nonexistent-mamem-aiinf'; console.log('  (skipped — artifacts not emitted locally)'); return }
+  const a = await callTool(mem, 'attestInference', {})
+  const w = await callTool(mem, 'remember', { shard: 'facts', data: 'ml ran' })
+  await mem.anchorShard('facts')
+  const c = await callTool(mem, 'commitReceipt', {
+    answer: 'ml ran', fragmentRefs: [{ shard: 'facts', seq: w.seq }], checkResult: 'verified', modelAttestation: a.attestation
+  })
+  settle('__receipts__')
+  const v = await verifyReceipt(mem, { receiptHash: c.receiptHash })
+  const model = v.checks.find(cc => cc.name === 'model')
+  assert.equal(model?.ok, true)
+  assert.match(model?.detail ?? '', /attested\+anchored/)
+  // a receipt whose anchored commitment does NOT bind the bytes fails closed
+  const c2 = await callTool(mem, 'commitReceipt', {
+    answer: 'ml ran 2', fragmentRefs: [{ shard: 'facts', seq: w.seq }], checkResult: 'verified',
+    modelAttestation: { ...a.attestation, attestationTxid: 'f'.repeat(64) }
+  })
+  const v2 = await verifyReceipt(mem, { receiptHash: c2.receiptHash })
+  assert.equal(v2.checks.find(cc => cc.name === 'model')?.ok, false)
+  process.env.MAMEM_GROTH16_OUT = '/nonexistent-mamem-aiinf'
+})
+
+test('commitReceipt auto-attests in one call; exclusive with modelAttestation', async () => {
+  const { mem, settle } = setup()
+  const w = await callTool(mem, 'remember', { shard: 'facts', data: 'auto attest' })
+  await mem.anchorShard('facts')
+  // artifacts absent under the /nonexistent dir → statement-verified attestation still embeds
+  const r = await callTool(mem, 'commitReceipt', {
+    answer: 'auto attest', fragmentRefs: [{ shard: 'facts', seq: w.seq }], checkResult: 'verified', attestInference: {}
+  })
+  settle('__receipts__')
+  const v = await verifyReceipt(mem, { receiptHash: r.receiptHash })
+  const model = v.checks.find(c => c.name === 'model')
+  assert.equal(model?.ok, true)
+  assert.match(model?.detail ?? '', /statement re-derived/)
+  await assert.rejects(() => callTool(mem, 'commitReceipt', {
+    answer: 'x', fragmentRefs: [], checkResult: 'verified', attestInference: {}, modelAttestation: demoAttestation()
+  }), /not both/)
+})
+
 test('attestInference: on-chain when artifacts + funding exist (mock evaluates the 398KB verifier)', { timeout: 120_000 }, async () => {
   delete process.env.MAMEM_GROTH16_OUT
   const chain = new MockChain(); chain.verifyScripts = true
@@ -68,7 +133,7 @@ test('attestInference: on-chain when artifacts + funding exist (mock evaluates t
   const { existsSync } = await import('node:fs')
   const dir = new URL('../../../../tools/groth16-spike/out/', import.meta.url)
   if (!existsSync(new URL('lock-aiinf.hex', dir))) { console.log('  (skipped — artifacts not emitted locally)'); return }
-  const r = await callTool(mem, 'attestInference', {})
+  const r = await callTool(mem, 'attestInference', { onchain: true })
   assert.equal(r.onchain, true)
   assert.match(r.attestation.verifierTxid ?? '', /^[0-9a-f]{64}$/)
   assert.equal(typeof r.attestation.proofCommit, 'string')
@@ -105,7 +170,7 @@ test('commitReceipt embeds a validated attestation; verify shows model check', a
   assert.ok(model, 'model check present')
   assert.equal(model.ok, true)
   assert.match(model.detail, /statement re-derived/)
-  assert.match(model.detail, /off-chain attestation only/)
+  assert.match(model.detail, /statement-verified only/)
   assert.equal(v.ok, true)
 })
 

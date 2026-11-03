@@ -6,10 +6,13 @@
 // THAT inference ran; we cannot mint proofs for other (model,input) — the
 // demoAttestation builder fails closed on any deviation.
 //
-// Two levels:
+// Three levels (Wright §18 — "executable on-chain if necessary"):
 //   - statement-verified: the attestation record re-derives (poseidon-toy)
-//   - consensus-verified: the verifier UTXO was deployed + spent with the
-//     proof — the spend txid is the on-chain attestation
+//   - attested+anchored: sha256(proof-as-pushed) is anchored in a ~300B
+//     OP_RETURN tx (the DEFAULT — cheap, one tx); anyone can fetch the
+//     proof bytes via /v1/zkproof/<commit> and re-check both
+//   - consensus-checked: `onchain:true` deploys the ~398KB in-script
+//     verifier and spends it — the dispute/showcase rail, not the hot path
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -24,11 +27,12 @@ const ARTIFACT_DIR = () => process.env.MAMEM_GROTH16_OUT ?? fileURLToPath(new UR
 export interface AttestInferenceResult {
   attestation: InferenceAttestation
   onchain: boolean
+  anchored: boolean
   statement: string
   note?: string
 }
 
-export async function attestInference (mem: MamemMemory, args: { input?: number[], output?: number } = {}): Promise<AttestInferenceResult> {
+export async function attestInference (mem: MamemMemory, args: { input?: number[], output?: number, onchain?: boolean } = {}): Promise<AttestInferenceResult> {
   const att = demoAttestation(args.input ?? AIINF_DEMO.input, args.output ?? AIINF_DEMO.output)
 
   const dir = ARTIFACT_DIR()
@@ -38,20 +42,37 @@ export async function attestInference (mem: MamemMemory, args: { input?: number[
     return {
       attestation: att,
       onchain: false,
+      anchored: false,
       statement: att.publicStatement,
-      note: 'statement re-derived ✓ but verifier artifacts absent — emit them via tools/groth16-spike/spike_groth16_aiinf.py for the consensus-verified attestation'
+      note: 'statement re-derived ✓ but verifier artifacts absent — emit them via tools/groth16-spike/spike_groth16_aiinf.py for anchored or consensus-checked attestation'
     }
   }
   const lockHex = readFileSync(lf, 'utf8').trim()
-  const unlockHex = readFileSync(uf, 'utf8').trim()
-  att.proofCommit = createHash('sha256').update(Buffer.from(unlockHex, 'hex')).digest('hex')
+  const unlockBytes = Buffer.from(readFileSync(uf, 'utf8').trim(), 'hex')
+  att.proofCommit = createHash('sha256').update(unlockBytes).digest('hex')
+  // publish the proof bytes so /v1/zkproof/<commit> can serve them —
+  // the attestation binds these exact bytes, not a claim about them
+  mem.putProof(unlockBytes)
 
+  // dispute/showcase rail (§18 "if necessary"): consensus runs the verifier
+  if (args.onchain) {
+    try {
+      const { deployTxid, spendTxid } = await mem.attestInferenceOnchain(lockHex, unlockBytes.toString('hex'))
+      att.deployTxid = deployTxid
+      att.verifierTxid = spendTxid
+      return { attestation: att, onchain: true, anchored: true, statement: att.publicStatement }
+    } catch (e) {
+      return { attestation: att, onchain: false, anchored: false, statement: att.publicStatement, note: `on-chain spend unavailable (attestation is statement-verified only): ${(e as Error).message}` }
+    }
+  }
+
+  // normal path: anchor sha256(proof) in a small OP_RETURN attestation tx
   try {
-    const { deployTxid, spendTxid } = await mem.attestInferenceOnchain(lockHex, unlockHex)
-    att.deployTxid = deployTxid
-    att.verifierTxid = spendTxid
-    return { attestation: att, onchain: true, statement: att.publicStatement }
+    const a = await mem.anchorAttestation(unlockBytes)
+    att.attestationTxid = a.txid
+    att.commitment = a.commitment
+    return { attestation: att, onchain: false, anchored: true, statement: att.publicStatement }
   } catch (e) {
-    return { attestation: att, onchain: false, statement: att.publicStatement, note: `on-chain spend unavailable (attestation is statement-verified only): ${(e as Error).message}` }
+    return { attestation: att, onchain: false, anchored: false, statement: att.publicStatement, note: `attestation anchor unavailable (statement-verified only): ${(e as Error).message}` }
   }
 }

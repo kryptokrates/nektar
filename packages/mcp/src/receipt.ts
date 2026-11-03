@@ -140,25 +140,44 @@ export async function verifyReceipt (mem: MamemMemory, arg: { token?: string, re
     checks.push({ name: 'paid', ok: 'info', detail: 'unpaid (MAMEM_PAYMENTS off)' })
   }
 
-  // model attestation (nChain ai_inference Groth16): three states —
-  //   absent           → declared model only (modelId, unproven)
-  //   present + valid  → statement re-derived; verifierTxid ⇒ consensus-checked spend
-  //   present + invalid→ hard fail: an attestation that doesn't re-derive is a lie
-  const att = (receipt as { modelAttestation?: { modelPoseidon: string, input?: number[], output: string | number, publicStatement: string, verifierTxid?: string, circuit?: string } } | undefined)?.modelAttestation
+  // model attestation (nChain ai_inference Groth16): four states —
+  //   absent                → declared model only (modelId, unproven)
+  //   present + valid       → statement re-derived (statement-verified)
+  //   + attestationTxid     → sha256(proof) anchored in an OP_RETURN tx; the
+  //                         proof bytes are re-fetched and the commitment
+  //                         re-checked (attested+anchored)
+  //   + verifierTxid        → the in-script verifier spend (consensus-checked)
+  //   present + invalid     → hard fail: an attestation that doesn't re-derive is a lie
+  const att = (receipt as { modelAttestation?: { modelPoseidon: string, input?: number[], output: string | number, publicStatement: string, proofCommit?: string, attestationTxid?: string, verifierTxid?: string, circuit?: string } } | undefined)?.modelAttestation
   if (att) {
     const { validateAttestation } = await import('@mamem/zk')
     const v = att.input ? validateAttestation({ modelPoseidon: att.modelPoseidon, input: att.input, output: att.output, publicStatement: att.publicStatement }) : { ok: false, reason: 'attestation carries no input — statement not re-derivable' }
     let detail = v.ok
       ? `statement re-derived ✓ — poseidon(input‖output‖poseidon(model)) binds ${att.circuit ?? 'circuit'} (statement ${att.publicStatement.slice(0, 18)}…)`
       : `attestation INVALID: ${v.reason}`
+    let attOk = v.ok
     if (v.ok && att.verifierTxid) {
       detail += mem.knownTx(att.verifierTxid)
         ? `; verifier spend ${att.verifierTxid.slice(0, 16)}… resolved — consensus-checked Groth16 verification`
         : `; verifierTxid ${att.verifierTxid.slice(0, 16)}… claimed — not resolvable by this instance (exists on the public chain or not)`
+    } else if (v.ok && att.attestationTxid) {
+      // anchored commitment: fetch the exact proof bytes the attestation
+      // binds (proof store serves /v1/zkproof/<commit>) and re-check
+      const bytes = att.proofCommit ? mem.getProof(att.proofCommit) : undefined
+      if (!bytes) {
+        attOk = false
+        detail += `; attestationTxid ${att.attestationTxid.slice(0, 16)}… claimed but proof bytes unavailable (proofCommit ${att.proofCommit?.slice(0, 16) ?? 'missing'}…) — cannot re-check the anchored commitment`
+      } else {
+        const va = await mem.verifyAttestation(att.attestationTxid, bytes)
+        detail += va.ok
+          ? `; attestation ${att.attestationTxid.slice(0, 16)}… anchors sha256(proof) ✓ — attested+anchored`
+          : `; attestation ${att.attestationTxid.slice(0, 16)}… does NOT carry sha256(proof): ${va.reason}`
+        if (!va.ok) attOk = false
+      }
     } else if (v.ok) {
-      detail += '; off-chain attestation only — no verifier spend committed'
+      detail += '; statement-verified only — no on-chain commitment'
     }
-    checks.push({ name: 'model', ok: v.ok, detail })
+    checks.push({ name: 'model', ok: attOk, detail })
   } else {
     checks.push({ name: 'model', ok: 'info', detail: `declared model only (${(receipt as { modelId?: { provider?: string, release?: string } } | undefined)?.modelId?.provider ?? 'undeclared'}/${(receipt as { modelId?: { release?: string } } | undefined)?.modelId?.release ?? 'undeclared'}) — no execution attestation` })
   }

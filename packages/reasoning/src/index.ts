@@ -112,7 +112,7 @@ export interface Receipt {
    *  proof's single public input poseidon(input‖output‖poseidon(model));
    *  `verifierTxid` names the on-chain verifier spend when consensus itself
    *  checked it. NOT a claim that an LLM ran — declared-only models omit it. */
-  modelAttestation?: { modelPoseidon: string, inputCommit: string, input?: readonly number[], output: string, publicStatement: string, proofCommit?: string, verifierTxid?: string, deployTxid?: string, circuit: string, setup: string, license?: string }
+  modelAttestation?: { modelPoseidon: string, inputCommit: string, input?: readonly number[], output: string, publicStatement: string, proofCommit?: string, attestationTxid?: string, commitment?: string, verifierTxid?: string, deployTxid?: string, circuit: string, setup: string, license?: string }
 }
 
 /** §16: delegating agent A′ signs authorship over a sub-decision bound to the answer */

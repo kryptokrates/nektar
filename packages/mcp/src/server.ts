@@ -385,6 +385,7 @@ export const TOOLS = [
         },
         mode: { type: 'string', description: '"remove" (default — strip ungrounded) or "flag"' },
         modelAttestation: { type: 'object', description: 'optional inference attestation (from attestInference): the statement is re-derived before being committed' },
+        attestInference: { type: 'object', description: 'auto-attest in one call: {input?, output?, onchain?} — runs attestInference and embeds the validated modelAttestation. Mutually exclusive with modelAttestation.' },
         payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } }
       },
       required: ['claims']
@@ -401,6 +402,7 @@ export const TOOLS = [
         checkResult: { type: 'string', description: 'verified | unverifiable | failed' },
         model: { type: 'object', description: 'optional ModelIdentity override; defaults to the manifest set by modelManifest' },
         modelAttestation: { type: 'object', description: 'optional inference attestation (from attestInference): the statement is re-derived before being committed' },
+        attestInference: { type: 'object', description: 'auto-attest in one call: {input?, output?, onchain?} — runs attestInference and embeds the validated modelAttestation. Mutually exclusive with modelAttestation.' },
         groundingReportHash: { type: 'string' },
         payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } }
       },
@@ -418,12 +420,13 @@ export const TOOLS = [
   },
   {
     name: 'attestInference',
-    description: 'Model-execution attestation (nChain ai_inference-style): re-derives the Groth16 public statement poseidon(input‖output‖poseidon(model)) for the shipped 784×16×10 quantized MLP and — when verifier artifacts + a funded chain exist — deploys the in-script verifier and spends it, so consensus itself checks the proof. Returns a modelAttestation record to embed in commitReceipt/groundedAnswer. Only the canned demo vector has a proof today; LLM inference stays declared-only.',
+    description: 'Model-execution attestation (nChain ai_inference-style): re-derives the Groth16 public statement poseidon(input‖output‖poseidon(model)) for the shipped 784×16×10 quantized MLP. DEFAULT PATH: anchors sha256(proof) in a ~300B OP_RETURN attestation tx and publishes the proof at /v1/zkproof/<commit> — cheap, one tx, verifiable by anyone. onchain:true instead deploys the ~398KB in-script verifier and spends it (Wright §18 "executable on-chain if necessary" — the dispute/showcase rail, ~440KB). Returns a modelAttestation record to embed in commitReceipt/groundedAnswer. Only the canned demo vector has a proof today; LLM inference stays declared-only.',
     inputSchema: {
       type: 'object',
       properties: {
         input: { type: 'array', items: { type: 'number' }, description: '784-element input — defaults to the demo vector' },
         output: { type: 'number', description: 'expected argmax — defaults to the demo vector (9)' },
+        onchain: { type: 'boolean', description: 'true = deploy+spend the in-script verifier under consensus (the heavy rail). Default anchors sha256(proof) in a small attestation tx instead.' },
         payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } }
       }
     }
@@ -810,9 +813,15 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       // modelAttestation (from attestInference): the statement MUST re-derive
       // from (input‖output‖modelPoseidon) before it enters the anchored record —
       // fail closed, never commit an unverifiable attestation.
-      if (args.modelAttestation !== undefined) {
+      let attestation = args.modelAttestation
+      if (args.attestInference !== undefined) {
+        if (attestation !== undefined) throw new Error('pass attestInference OR modelAttestation, not both')
+        const { attestInference } = await import('./inference.js')
+        attestation = (await attestInference(mem, args.attestInference ?? {})).attestation
+      }
+      if (attestation !== undefined) {
         const { validateAttestation } = await import('@mamem/zk')
-        const v = validateAttestation(args.modelAttestation)
+        const v = validateAttestation(attestation)
         if (!v.ok) throw new Error(`modelAttestation rejected: ${v.reason}`)
       }
       const { receipt, receiptHash, anchor } = await commitReceipt({
@@ -822,7 +831,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         timestamp: Date.now(),
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
         groundingReportHash: report.reportHash,
-        ...(args.modelAttestation ? { modelAttestation: args.modelAttestation } : {}),
+        ...(attestation ? { modelAttestation: attestation } : {}),
         ...(paid ? { payment: paid } : {})
       }, mem)
       const token = receiptToken(receiptHash)
@@ -844,9 +853,15 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         if (!v.ok) throw new Error(`ZK membership proof for private cite failed: ${v.reason}`)
         refs.push({ private: true, proofCommit: mem.putProof(bytes), ...(await mem.fragmentRef(r.shard, r.seq) ?? { hdp: '' }) })
       }
-      if (args.modelAttestation !== undefined) {
+      let attestation = args.modelAttestation
+      if (args.attestInference !== undefined) {
+        if (attestation !== undefined) throw new Error('pass attestInference OR modelAttestation, not both')
+        const { attestInference } = await import('./inference.js')
+        attestation = (await attestInference(mem, args.attestInference ?? {})).attestation
+      }
+      if (attestation !== undefined) {
         const { validateAttestation } = await import('@mamem/zk')
-        const v = validateAttestation(args.modelAttestation)
+        const v = validateAttestation(attestation)
         if (!v.ok) throw new Error(`modelAttestation rejected: ${v.reason}`)
       }
       const out = await commitReceipt({
@@ -856,7 +871,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         timestamp: Date.now(),
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
         groundingReportHash: args.groundingReportHash,
-        ...(args.modelAttestation ? { modelAttestation: args.modelAttestation } : {}),
+        ...(attestation ? { modelAttestation: attestation } : {}),
         ...(paid ? { payment: paid } : {})
       }, mem)
       const token = receiptToken(out.receiptHash)

@@ -29,7 +29,9 @@ export interface InferenceAttestation {
   output: string              // the argmax the proof asserts
   publicStatement: string     // 0x-fr — the proof's single public input
   proofCommit?: string        // sha256 hex of the unlocking-script bytes (proof + statement as pushed)
-  verifierTxid?: string       // on-chain spend that ran the verifier under consensus
+  attestationTxid?: string    // ~300B OP_RETURN tx anchoring sha256(proof) — the normal path
+  commitment?: string         // the anchored commitment (= proofCommit when bound this way)
+  verifierTxid?: string       // on-chain spend that ran the verifier under consensus — the dispute/showcase rail
   deployTxid?: string         // the verifier UTXO deployment
 }
 

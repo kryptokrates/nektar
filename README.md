@@ -144,9 +144,9 @@ someone's question
         ├─ the prose between cites    NOT — the gate checks claims, not style
         ├─ "the model produced this"  DECLARED by default; ATTESTED when the
         │                              receipt embeds a modelAttestation —
-        │                              statement re-derives off-chain, and a
-        │                              verifierTxid names the consensus-checked
-        │                              spend (demo MLP only — not LLMs)
+        │                              statement re-derives + sha256(proof) is
+        │                              anchored; a verifierTxid names the
+        │                              consensus-checked spend (demo MLP only)
         └─ truth of the record        NEVER — sealing proves recorded, not right
 ```
 
@@ -238,10 +238,13 @@ peers; it never vouches for them** — trust comes from the receipts.
   re-derives the Groth16 public statement
   `poseidon(input‖output‖poseidon(model))` off-chain — a ported toy-
   Poseidon over BLS12-381, bit-exact vs the circuit's public input) →
-  **consensus-verified** (the same call deploys the in-script verifier
-  and spends it with nChain's shipped ai_inference proof — the spend
-  txid is the on-chain attestation; regtest-proven via
-  `e2e-grothinf-regtest.mjs`, deploy `b6fe4727…`, spend `27712ae8…`).
+  **attested+anchored** (the default: `sha256(proof)` lands in a ~300 B
+  OP_RETURN attestation tx; proof bytes served at `/v1/zkproof/<commit>`
+  and re-checked by `verifyReceipt`) → **consensus-verified**
+  (`onchain:true` deploys the in-script verifier and spends it — Wright
+  §18's "executable on-chain if necessary", the dispute/showcase rail;
+  regtest deploy `b6fe4727…`/spend `27712ae8…`, public testnet mined
+  h1766667).
   Scope: only the canned 784×16×10 quantized demo MLP has a proof —
   LLM inference stays declared (zkML/TEE would be needed; zkLLM proves
   *which model ran*, grounding proves *what the answer derives from* —

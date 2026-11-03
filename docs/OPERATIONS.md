@@ -238,9 +238,17 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   by `packages/zk/src/poseidon-toy.ts` (bit-exact). Three receipt
   states: **declared** (modelManifest only) → **statement-attested**
   (`modelAttestation` embedded, validated at commit — a statement that
-  does not re-derive is refused) → **consensus-verified** (`verifierTxid`
-  — the in-script verifier was deployed + spent; regtest-proven via
-  `e2e-grothinf-regtest.mjs`). Artifacts come from
+  does not re-derive is refused) → **attested+anchored** (the DEFAULT —
+  `attestInference` anchors `sha256(proof)` in a ~300 B OP_RETURN
+  attestation tx, serves the proof at `/v1/zkproof/<commit>`, and
+  `verifyReceipt` re-fetches the bytes + re-checks the anchored
+  commitment) → **consensus-verified** (`onchain:true` — the ~398 KB
+  in-script verifier is deployed + spent; Wright §18 "executable
+  on-chain if necessary", i.e. the dispute/showcase rail, ~440 KB total;
+  regtest-proven via `e2e-grothinf-regtest.mjs`, public testnet-mined via
+  `e2e-grothinf-testnet.mjs` at h1766667). `commitReceipt` and
+  `groundedAnswer` also accept `{attestInference:{…}}` to auto-attest in
+  one call. Artifacts come from
   `tools/groth16-spike/spike_groth16_aiinf.py` (emits
   `lock-aiinf.hex`/`unlock-aiinf.hex` into `tools/groth16-spike/out/`;
   override dir via `MAMEM_GROTH16_OUT`). Only the canned demo vector

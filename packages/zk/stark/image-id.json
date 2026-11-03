@@ -1,7 +1,7 @@
 {
-  "imageId": "99f25ea91f5d3616f37a986b85f72125b7ea19bbfb1edb61ca291653bdb06b9a",
+  "imageId": "03c1cd68d31759cd7aa29164a902a9fe7e03180213aecc342b4ea2e0382237f0",
   "program": "tools/stark/methods/guest (nektar-membership)",
-  "datalogImageId": "78203c9eec5df65efc32486ada4d31ea428738a133a1bce00e5b9af2104a08af",
+  "datalogImageId": "7dc4b280e61ed604c2b9d4a9ecf103aa1c3010cc990bdb467246e90d02ffba48",
   "datalogProgram": "tools/stark/methods/guest-datalog (nektar-datalog)",
   "toolchain": {
     "risc0-zkvm": "3.0.3",

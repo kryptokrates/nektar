@@ -1604,25 +1604,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mamem-methods"
-version = "0.1.0"
-dependencies = [
- "risc0-build",
-]
-
-[[package]]
-name = "mamem-stark"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "hex",
- "mamem-methods",
- "risc0-zkvm",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "maybe-async"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1682,6 +1663,25 @@ name = "multiversion_no_op"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
+
+[[package]]
+name = "nektar-methods"
+version = "0.1.0"
+dependencies = [
+ "risc0-build",
+]
+
+[[package]]
+name = "nektar-stark"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "hex",
+ "nektar-methods",
+ "risc0-zkvm",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "no_std_strings"

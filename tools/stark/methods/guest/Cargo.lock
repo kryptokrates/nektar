@@ -719,13 +719,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mamem-membership"
-version = "0.1.0"
-dependencies = [
- "risc0-zkvm",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -756,6 +749,13 @@ dependencies = [
  "log",
  "objc",
  "paste",
+]
+
+[[package]]
+name = "nektar-membership"
+version = "0.1.0"
+dependencies = [
+ "risc0-zkvm",
 ]
 
 [[package]]

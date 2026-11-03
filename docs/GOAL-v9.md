@@ -340,13 +340,31 @@ per-op cost.
   Found constraint: the unlocking script must be **push-only by
   consensus** (scriptSig ops are rejected) → `has_precomputed_gradients=
   True` puts all pairing gradients in as data; `script.py`'s default
-  variant emits operators and is unspendable as-is. Remaining for real
-  use: OUR circuit (membership/statement — SHA-256 path ≈10⁶
-  constraints demonstrated range, Poseidon2 twin-root ≈10³–10⁴; note
-  MNT4 field elements are ~95 B → fat unlocks, BLS12-381 is leaner),
-  a trusted-setup ceremony per circuit, and a claim covenant variant
-  whose settle pins the verifier UTXO as co-spent judge (same
-  hashPrevouts pattern as `proveStage`).
+  variant emits operators and is unspendable as-is.
+- **0e.1 OUR circuit — DONE on live regtest:** `circuits/membership/`
+  (arkworks Groth16 over BLS12-381) proves **sha256d-Merkle membership**
+  in a 16-leaf tree built with mamem's own fold — statement "leaf ∈ root
+  `eda3ef76…` at index 5", root baked as a circuit constant so the vk
+  commits to it. Dev trusted setup + prove inside a Linux rust container;
+  `be2le.py` converts arkworks' big-endian field serialization to the
+  little-endian layout `elliptic_curves` expects (G2 also needs limb
+  swap; `gamma_abc` carries an 8B Vec length prefix). `spike_groth16_
+  membership.py` emits **398,375 B lock / 22,225 B push-only unlock** —
+  tx_engine PASS; live: deploy `1d2a0a48…`, proof spend `a1d9ec35…`
+  accepted, tamper rejected, mined h8486.
+- **0e.2 VALIDITY claim covenant — DONE on live regtest:**
+  `MamemGrothClaim` (one-shot) `settleValid` pins `prevouts == our‖
+  verifierOutpoint` via hashPrevouts (same pattern as `proveStage`) →
+  input1 IS the committed verifier UTXO, whose Groth16 script runs under
+  consensus; outputs [ClaimVerdict @out0, payout @out1]. e2e
+  `e2e-grothclaim-regtest.mjs`: claim-only spend rejected (pin),
+  tampered-proof settle rejected (verifier script fails), valid settle
+  `778a44dd…` emitted the verdict UTXO, mined h8489. **The claim cannot
+  settle without a verified proof — watcher-free.**
+  Remaining for real use: trusted-setup **ceremony** (today: dev
+  single-party), per-circuit verifier deployment (~400KB lock), and the
+  semantic-binding caveat (claim.journalRoot ↔ verifier doc-push checked
+  off-chain at deploy; the outpoint pin is the on-chain binding).
 - **GATE:** total estimated footprint + stage count. If Poseidon2-bound
   and infeasible → documented fallback (Groth16-wrap with R0's public
   ceremony, or a SHA-256-only STARK variant) — decided with real

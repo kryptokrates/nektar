@@ -29,3 +29,8 @@ packages/zk/circuits/*.ptau
 packages/contracts/MamemAutomatonZk.json
 *.tmp
 tools/groth16-spike/out/
+# Groth16 membership circuit: cargo build dir + generated proof artifacts
+# (dev trusted setup — regenerate via tools/groth16-spike, see its README)
+circuits/membership/target/
+circuits/membership/proof/
+circuits/membership/proof_le/

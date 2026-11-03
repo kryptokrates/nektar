@@ -1,7 +1,9 @@
-// V0 spike part 2 — deploy the zkscript Groth16 verifier to live Teranode
-// regtest and spend it with the Groth16 unlocking script.
+// Groth16 verifier deploy+spend on live Teranode regtest.
+// Loads whatever verifier spike_* last generated into tools/groth16-spike/
+// out/ — currently OUR sha256d-membership circuit (root eda3ef76.., index
+// 5; ~398KB lock / ~22KB push-only unlock).
 //
-// tx1: reserve P2PKH → output0 = 430KB verifier locking script
+// tx1: reserve P2PKH → output0 = verifier locking script (~398KB)
 // tx2: spends tx1:0 — unlocking script carries the Groth16 proof; if the
 //      node accepts, the verifier ran under consensus. Negative control:
 //      a tampered unlock must be rejected.
@@ -83,7 +85,7 @@ tx1.addOutput({ lockingScript: p2pkh(), satoshis: fund.satoshis - LOCK_SATS - 25
 await tx1.sign()
 console.log(`tx1 size: ${tx1.toHex().length / 2} bytes, fee≈25000 sats`)
 const b1 = await broadcast(tx1)
-check(b1.ok, `tx1 (deploy 430KB verifier) broadcast${b1.ok ? ` ${b1.txid}` : ` — ${b1.error}`}`)
+check(b1.ok, `tx1 (deploy ${lockHex.length / 2}B verifier) broadcast${b1.ok ? ` ${b1.txid}` : ` — ${b1.error}`}`)
 if (!b1.ok) process.exit(1)
 reserve.markSpent(fund.tx.id('hex'), fund.vout)
 reserve.addOwned(tx1, 1)

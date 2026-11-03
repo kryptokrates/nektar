@@ -1,24 +1,43 @@
-# groth16-spike — V0
+# groth16-spike — V1
 
-Proof-of-mechanics for on-chain Groth16 verification (nChain ePrint
-2024/1498): the verifier lives **inside** the locking script, so the
-proof is checked by BSV consensus — no watcher, no challenge window.
+On-chain Groth16 verification (nChain ePrint 2024/1498): the verifier
+lives **inside** the locking script, so the proof is checked by BSV
+consensus — no watcher, no challenge window.
 
-## What ran
+## What ran — V1: OUR circuit + validity claim (live regtest)
 
-`spike_groth16_real.py` loads the **real arkworks Groth16 proof** shipped
-in `zkscript/examples/square_root` (circuit `w² = x mod p`, public
-statement = 64, MNT4-753) and emits push-only scripts:
+1. **`circuits/membership/`** — arkworks Groth16 over BLS12-381 proving
+   **sha256d-Merkle membership** in a 16-leaf tree built with mamem's own
+   `dsha256` fold. Statement: "leaf ∈ root `eda3ef76…` at index 5"; the
+   root is baked as a **circuit constant** so the verifying key commits
+   to the statement. Dev trusted setup + prove inside a Linux rust
+   container (`gen-params.mjs` builds the tree/witnesses).
+2. **`be2le.py`** — serialization bridge: arkworks `serialize_uncompressed`
+   writes field elements **big-endian** while nChain's `elliptic_curves`
+   deserialise expects **little-endian** (G2 points additionally swap
+   Fq2 limb order; `gamma_abc` carries an 8B Vec length prefix).
+   Converts `proof/` → `proof_le/`.
+3. **`spike_groth16_membership.py`** — emits the verifier: **398,375 B
+   lock / 22,225 B push-only unlock**. The lock is prefixed with a
+   doc-push `<root> <index> OP_2DROP` so the bound statement is readable
+   on-chain. `tx_engine.Context` → PASS.
+4. **`e2e-groth16-regtest.mjs`** — live Teranode regtest: deploy
+   `1d2a0a48…` + proof spend `a1d9ec35…` accepted, tampered unlock
+   rejected, mined h8486.
+5. **`e2e-grothclaim-regtest.mjs`** — the **validity claim**:
+   `MamemGrothClaim.settleValid` pins the verifier UTXO as co-spent
+   input1 (hashPrevouts, same pattern as `proveStage`). The claim's
+   `ClaimVerdict` output can only exist if the proof verifies under
+   consensus — claim-only spend and tampered-proof settle both rejected,
+   valid settle `778a44dd…` emitted the verdict, mined h8489.
 
-- locking script **489,234 B**, unlocking script **294,486 B** (all data
-  pushes — required, see gotcha below)
-- `tx_engine.Context` → PASS
-- `packages/e2e/src/e2e-groth16-regtest.mjs` → deploy `56c2a4…` + spend
-  `06853c…` **accepted by live Teranode regtest**, tampered unlock
-  rejected, mined height 8485. A real SNARK ran under consensus.
+## Earlier passes
 
-Earlier mechanics pass (`spike_groth16.py`, BLS12-381, synthetic
-vk/proof): 430,324 B lock / 22,629 B unlock, also deployed+spent green.
+`spike_groth16_real.py` (MNT4-753 arkworks `square_root` — real proof,
+not our statement): 489,234 B lock / 294,486 B push-only unlock, deploy
+`56c2a4…` + spend `06853c…` accepted, h8485.
+`spike_groth16.py` (BLS12-381, synthetic vk/proof): 430,324 B lock /
+22,629 B unlock, deploy `8e3728…` + spend `0952dc…`.
 
 ## Gotcha that bit us
 
@@ -35,11 +54,25 @@ unlock for push-only encoding before writing artifacts.
 git clone https://github.com/nchain-innovation/zkscript_package zkscript
 cd zkscript && python -m venv .venv312   # Python 3.12 REQUIRED (3.11 fails)
 .venv312/Scripts/pip install -r requirements.txt
-.venv312/Scripts/python <mamem>/tools/groth16-spike/spike_groth16_real.py <path>/zkscript
-node <mamem>/packages/e2e/src/e2e-groth16-regtest.mjs   # needs live regtest + MAMEM_REGTEST_WIF
+
+# circuit (Linux — no MSVC linker on this Windows host):
+node <mamem>/circuits/membership/gen-params.mjs            # tree + witnesses
+docker run --rm -v <mamem>/circuits/membership:/w -w /w rust:1-slim \
+  sh -c 'apt-get update -qq && apt-get install -yqq pkg-config libssl-dev >/dev/null && cargo run --release'
+
+# artifacts + scripts:
+.venv312/Scripts/python <mamem>/tools/groth16-spike/be2le.py <mamem>/circuits/membership
+.venv312/Scripts/python <mamem>/tools/groth16-spike/spike_groth16_membership.py <path>/zkscript <mamem>
+
+# live regtest (needs running Teranode stack + MAMEM_REGTEST_WIF):
+node <mamem>/packages/e2e/src/e2e-groth16-regtest.mjs      # verifier deploy+spend
+node <mamem>/packages/e2e/src/e2e-grothclaim-regtest.mjs   # validity claim settle
 ```
 
-Artifacts land in `out/` (gitignored).
+Artifacts land in `out/` and `circuits/membership/proof*/` (gitignored;
+the `proof/` dir is the arkworks-native output, `proof_le/` the converted
+one). The trusted setup is **dev single-party** — a production deployment
+needs a documented ceremony.
 
 ## License note
 
@@ -52,9 +85,11 @@ changes.
 
 ## What's NOT proven here
 
-- Mamem circuit — the square_root demo proof is real Groth16 from a real
-  R1CS, but not OUR statement. A membership/statement circuit needs its
-  own R1CS + trusted-setup ceremony (arkworks or snarkjs; MNT4-753
-  elements are ~95 B each so unlocks are fat — BLS12-381 is leaner).
-- Covenant wiring — a `MamemZkClaim` validity variant pinning the
-  verifier UTXO as co-spent judge is the V1 design.
+- **Trusted-setup ceremony** — today's vk/proof come from a dev
+  single-party setup; toxic-waste assumptions are honest only with a
+  documented multi-party ceremony.
+- **Statement↔verifier semantic binding** — the claim's `journalRoot`
+  mirrors the verifier's doc-push; the outpoint pin is consensus-bound
+  but the doc-push↔journalRoot equality is checked off-chain at deploy.
+- **Mainnet** — everything above is regtest; fee/policy numbers for a
+  ~400KB lock on mainnet are their own exercise.

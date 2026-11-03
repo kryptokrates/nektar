@@ -1,0 +1,21 @@
+[package]
+name = "membership"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ark-ff = "0.4.2"
+ark-groth16 = "0.4.0"
+ark-bls12-381 = "0.4.0"
+ark-r1cs-std = "0.4.0"
+ark-relations = "0.4.0"
+ark-serialize = "0.4.2"
+ark-snark = "0.4.0"
+ark-crypto-primitives = { version = "0.4.0", features = ["r1cs", "crh"] }
+rand = "0.8.5"
+rand_chacha = "0.3.1"
+serde_json = "1.0.128"
+hex = "0.4"
+
+[profile.release]
+debug = true

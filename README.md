@@ -80,6 +80,11 @@ bisects the fraud to one Poseidon2 step judged by an on-chain contract
 (~10 cents, paid only by liars). Settled claims mint a **verdict token**
 that a sale contract can require — **pay-iff-proven**.
 
+(Alternative rail, regtest-proven: a **Groth16 verifier inside the locking
+script** itself — the claim's `settleValid` must co-spend that verifier
+UTXO, so the verdict can only exist if a SNARK verifies under consensus.
+No watcher, no window — see `docs/PROOFS.md`.)
+
 ## The honest cut — what's backed and what isn't
 
 ```

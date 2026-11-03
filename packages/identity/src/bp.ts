@@ -13,13 +13,13 @@ const sub = (a: bigint, b: bigint) => mod(a - b)
 const inv = (a: bigint): bigint => { let [t, nt, r, nr] = [0n, 1n, N, mod(a)]; while (nr !== 0n) { const q = r / nr; [t, nt] = [nt, t - q * nt]; [r, nr] = [nr, r - q * nr] } return mod(t) }
 const rand = (): bigint => { for (;;) { const s = mod(BigInt('0x' + Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex'))); if (s !== 0n) return s } }
 
-export const BP_G = curve.g
+const BP_G = curve.g
 export const BP_H = curve.g.mul(new BigNumber(BigInt('0x' + Buffer.from(dsha256(utf8('mamem/bp/H/v1'))).toString('hex')).toString()))
 const ptFromHex = (hex: string): Point => { const q = PublicKey.fromString(hex) as any; return new Point(q.x, q.y) }
 const ptHex = (p: Point): string => Buffer.from(p.encode(true)).toString('hex')
-export const BP_U = hashToPoint('mamem/bp/U/v1')
+const BP_U = hashToPoint('mamem/bp/U/v1')
 
-export function hashToPoint (label: string): Point {
+function hashToPoint (label: string): Point {
   for (let c = 0; c < 100000; c++) {
     const x = dsha256(utf8(`${label}:${c}`))
     for (const prefix of [0x02, 0x03]) {
@@ -46,7 +46,7 @@ const powers = (b: bigint, n: number): bigint[] => { const o = [1n]; for (let i 
 const hadamard = (a: bigint[], b: bigint[]) => a.map((x, i) => mul(x, b[i]!))
 const isPow2 = (n: number) => n > 0 && (n & (n - 1)) === 0
 
-export interface InnerProductProof { L: string[], R: string[], a: string, b: string }
+interface InnerProductProof { L: string[], R: string[], a: string, b: string }
 export interface RangeProofBP { bits: number, A: string, S: string, T1: string, T2: string, taux: string, mu: string, tHat: string, ip: InnerProductProof }
 
 function proveIP (gIn: Point[], hIn: Point[], U: Point, aIn: bigint[], bIn: bigint[], bind = ''): InnerProductProof {

@@ -2,8 +2,9 @@
 // Pedersen clearance commitment C = ℓ·G + r·H issued by an authority (signed),
 // and a bit-decomposition range proof that the agent holds ℓ ≥ ℓ_j (proven as
 // ℓ−ℓ_j ≥ 0 over C·g^(−ℓ_j)), bound to a transcript (queryId ‖ fragmentId ‖
-// verifier nonce). Honest label: Fiat-Shamir sigma range proof, linear in bits
-// — not a logarithmic Bulletproof.
+// verifier nonce). The range proof is the real inner-product Bulletproof in
+// ./bp.js — log-rounds, Fiat–Shamir, no trusted setup. Off-chain verify only;
+// never a consensus cost.
 import { PrivateKey, PublicKey, Signature, Point, BigNumber, Curve } from '@bsv/sdk'
 import { dsha256, concat, utf8, type Bytes } from '@mamem/core'
 import { proveRangeBP, verifyRangeBP, type RangeProofBP, BP_H } from './bp.js'

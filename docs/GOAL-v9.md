@@ -327,10 +327,29 @@ per-op cost.
   **expensive but structurally proven**; big reductions available
   (single-method stage variants ~2×, RC-in-state generic stage ~5×,
   deferred mods ~1.5×, permutation sharing across queries).
+- **0e Groth16-on-chain verifier — PROVEN ON LIVE REGTEST (2026, nChain
+  ePrint 2024/1498 path):** `tools/groth16-spike/spike_groth16.py` drives
+  `nchain-innovation/zkscript` to emit a BLS12-381 Groth16 verifier as
+  Bitcoin Script — **430,324 B locking / 22,629 B unlocking** (dummy
+  CRS+proof where the pairing equation holds by construction — proves
+  script mechanics, not a real circuit). `tx_engine.Context` evaluates
+  PASS; `packages/e2e/src/e2e-groth16-regtest.mjs` then broadcast the
+  430KB deploy tx AND the proof spend to live Teranode regtest — **both
+  mempool-accepted** (deploy `8e3728…`, spend `0952dc…`), a tampered
+  unlock correctly rejected, mined at height 8483. **A Groth16 proof was
+  verified under consensus on our own stack.** Remaining for real use:
+  a real R1CS circuit (membership/statement — SHA-256 path ≈10⁶
+  constraints demonstrated range, Poseidon2 twin-root ≈10³–10⁴), a
+  trusted-setup ceremony per circuit, and a claim covenant variant whose
+  settle pins the verifier UTXO as co-spent judge (same hashPrevouts
+  pattern as `proveStage`).
 - **GATE:** total estimated footprint + stage count. If Poseidon2-bound
   and infeasible → documented fallback (Groth16-wrap with R0's public
   ceremony, or a SHA-256-only STARK variant) — decided with real
-  numbers, not guesses.
+  numbers, not guesses. **0e narrows the fallback cost:** on-chain
+  Groth16 verification itself is no longer speculative — the remaining
+  work is circuit + ceremony + covenant wiring, not new Script
+  primitives.
 
 ### Stage 1 — optimistic claim contract (the shippable artifact)
 
@@ -385,8 +404,13 @@ per-op cost.
 
 ## 7. Honest deferrals / non-goals
 
-- Groth16-wrap is the *documented alternative*, not built unless the
-  Stage-0 gate fails — transparent STARK is the requirement.
+- Groth16-wrap mechanics are now **spike-proven on regtest** (0e) —
+  the production gap is circuit+ceremony+covenant, and the nChain
+  Research License (non-commercial, generated Output is Licensed
+  Material, patents not licensed) means generated verifier artifacts
+  are dev-time only, never vendored — the claim covenant treats the
+  verifier as a pluggable co-spent artifact. Transparent STARK remains
+  the primary requirement.
 - ZKAccess-on-chain is Stage 3 — its own artifact (Bulletproof ≠ FRI).
 - The optimistic model's one assumption, stated honestly: a false claim
   finalizes only if *zero* independent observers challenge within the

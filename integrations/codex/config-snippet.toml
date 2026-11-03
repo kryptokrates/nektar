@@ -1,0 +1,16 @@
+# merge into ~/.codex/config.toml
+
+# ── mamem MCP server (HTTP transport — same process serves /v1/verify) ──
+# start it first:  MAMEM_HTTP_PORT=8080 MAMEM_NETWORK=mock node packages/mcp/dist/src/bin.js
+# (mock = offline, auto-mines anchors; regtest = persistent + real chain, needs .env keys)
+[mcp_servers.mamem]
+url = "http://localhost:8080/mcp"
+
+# ── turn-complete receipt check ──
+# Codex notify is fire-and-forget: it can flag a failed receipt in
+# codex-receipts.log but cannot block the turn. If you already have a notify
+# (e.g. computer-use), chain it — our adapter calls it first with the same
+# payload:
+#   notify = ["node", "integrations/codex/verify-notify.mjs", "--chain",
+#             "C:\\path\\to\\your\\existing-notify.exe", "turn-ended"]
+notify = ["node", "integrations/codex/verify-notify.mjs"]

@@ -32,7 +32,7 @@ for (let i = lines.length - 1; i >= 0 && !text; i--) {
     }
   } catch {}
 }
-const tokens = [...new Set(text.match(/mamemr1\.[A-Za-z0-9_-]+/g) ?? [])].slice(0, 3)
+const tokens = [...new Set(text.match(/mamemr1\.[A-Za-z0-9_-]{40,}/g) ?? [])].slice(0, 3)
 if (!tokens.length) process.exit(0)
 
 const results = []

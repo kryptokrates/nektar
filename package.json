@@ -16,6 +16,7 @@
     "check:knip": "knip",
     "sbom": "node tools/sbom.mjs",
     "mcp:install": "node tools/mcp-install.mjs",
+    "setup:claude": "node tools/setup-claude.mjs",
     "rendezvous": "node packages/overlay/serve.mjs",
     "rendezvous:announce": "node packages/overlay/announce.mjs",
     "mcp:smoke": "node packages/mcp/demo/gateway-smoke.mjs",

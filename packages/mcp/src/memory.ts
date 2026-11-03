@@ -3,6 +3,7 @@
 // → verify (proof bundles) → crypto (BRC-42/AES-GCM), all behind the chain
 // interfaces so it runs identically on the mock chain and regtest.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { PrivateKey, PublicKey, Signature, Transaction } from '@bsv/sdk'
 import {
@@ -83,6 +84,9 @@ export interface MamemMemoryOptions {
 export interface PersistedMemoryState {
   version: 1
   shards: Record<string, { headTxid: string, confirmed: boolean, tails: AnchorLink[], checkpoints: Checkpoint[], certs: import('@mamem/identity').RotationCert[], anchors: Record<string, string> }>
+  /** proof bundles for records imported via importShard — keyed 'shard:seq';
+   *  these verify against the SOURCE chain's anchors (prove() fast-path) */
+  importedBundles?: Record<string, ProofBundle>
   promises: Array<{ shard: string, seq: number, issuedAt: number }>
   /** owner-declared shard policy: `private` shards refuse plain merkle
    *  citations — records on them may only be cited via a ZK proof.
@@ -90,6 +94,20 @@ export interface PersistedMemoryState {
   flags?: Record<string, { private?: boolean }>
 }
 export interface MemoryStateStore { load: () => PersistedMemoryState | undefined, save: (s: PersistedMemoryState) => void }
+
+/** portable shard pack (exportShard/importShard): public records + the
+ *  ProofBundle of each anchored one. The importer re-runs verifyFragment —
+ *  a pack is data + proofs, never trusted statements. */
+export interface ShardPack {
+  v: 1
+  kind: 'mamem-shard-pack'
+  shard: string
+  exportedAt: number
+  records: Array<{
+    seq: number, data: string, level?: number, bundle?: ProofBundle
+    prov?: { source?: string, time?: number, signature?: string, modelId?: string, modality?: Provenance['modality'] }
+  }>
+}
 
 /** pluggable persistence for replay-protection state (see securitystore.ts) */
 export interface SecurityStateStore {
@@ -323,6 +341,10 @@ export class MamemMemory {
   shards (): string[] { return [...new Set([...this.anchors.keys(), ...this.touched])] }
   /** every anchor link of the shard, genesis first (read-only copy) */
   anchorLinks (shard: string): AnchorLink[] { return [...(this.tails.get(shard) ?? [])] }
+
+  /** bundles of pack-imported records ('shard:seq' → ProofBundle) — the only
+   *  proof path for records anchored by a DIFFERENT instance's chain */
+  private importedBundles = new Map<string, ProofBundle>()
 
   /** rotate a shard's owner key on-chain (rotation cert emitted by AnchorChain).
    *  D4 (§19): the cert is also written to the `__identity__` shard and anchored
@@ -1190,7 +1212,7 @@ export class MamemMemory {
         checkpoints: this.cps.get(shard) ?? [], certs: [...ac.rotationCerts], anchors
       }
     }
-    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags) })
+    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags), importedBundles: Object.fromEntries(this.importedBundles) })
   }
   private restoreState (): void {
     const s = this.opts.stateStore?.load()
@@ -1207,6 +1229,7 @@ export class MamemMemory {
       this.tails.set(shard, p.tails); this.cps.set(shard, p.checkpoints); this.touched.add(shard)
     }
     this.promises.push(...s.promises)
+    for (const [k, b] of Object.entries(s.importedBundles ?? {})) this.importedBundles.set(k, b)
     for (const [shard, f] of Object.entries(s.flags ?? {})) this.flags.set(shard, f)
   }
 
@@ -1462,6 +1485,10 @@ export class MamemMemory {
   async prove (shard: string, seq: number): Promise<{ bundle?: ProofBundle, result: VerifyResult | { ok: false, reason: 'NotAnchored' | 'NotFound' } }> {
     const rec = await this.store.all(shard).then(rs => rs.find(r => r.seq === seq))
     if (!rec) return { result: { ok: false, reason: 'NotFound' } }
+    // pack-imported record: its proof is the bundle the exporter shipped —
+    // verifyFragment re-checks leaf→batch→anchor→headers, zero trust needed
+    const ib = this.importedBundles.get(`${shard}:${seq}`)
+    if (ib) return { bundle: ib, result: await verifyFragment(ib, this.chain) }
     if (!rec.anchorTxid || rec.batchIndex === undefined) {
       return { result: { ok: false, reason: 'NotAnchored' } }
     }
@@ -1490,6 +1517,122 @@ export class MamemMemory {
     const result = await verifyFragment(bundle, this.chain)
     this.metrics.observe('mamem_proof_latency_ms', performance.now() - t0, 'verifyFragment latency')
     return { bundle, result }
+  }
+
+  // ── shard packs (cold-start): export public records + their proof bundles —
+  //  import re-verifies everything against the live chain, zero trust. ──────
+
+  /** Export a PUBLIC shard as a portable pack: each record's plaintext +
+   *  provenance + the ProofBundle prove() produces for anchored ones.
+   *  Private shards and level>0 records refuse — a pack must never carry
+   *  gated content. */
+  async exportShardPack (shard: string): Promise<ShardPack> {
+    if (this.shardPrivate(shard)) throw new Error(`exportShard: shard "${shard}" is private — private shards refuse export`)
+    const recs = (await this.store.all(shard)).sort((a, b) => a.seq - b.seq)
+    if (recs.length === 0) throw new Error(`exportShard: shard "${shard}" is empty or unknown`)
+    if (recs.some(r => (r.level ?? 0) > 0)) throw new Error(`exportShard: shard "${shard}" holds level>0 records — refuses export`)
+    const records: ShardPack['records'] = []
+    for (const r of recs) {
+      let bundle: ProofBundle | undefined
+      if (r.anchorTxid !== undefined && r.batchIndex !== undefined) {
+        const p = await this.prove(shard, r.seq)
+        bundle = p.bundle
+      }
+      records.push({
+        seq: r.seq,
+        data: Buffer.from(r.fragment.d).toString('utf8'),
+        prov: {
+          source: r.fragment.p.source,
+          time: r.fragment.p.time,
+          signature: Buffer.from(r.fragment.p.signature).toString('hex'),
+          modelId: r.fragment.p.modelId,
+          ...(r.fragment.p.modality ? { modality: r.fragment.p.modality } : {})
+        },
+        level: r.level ?? 0,
+        ...(bundle ? { bundle } : {})
+      })
+    }
+    return { v: 1, kind: 'mamem-shard-pack', shard, exportedAt: Date.now(), records }
+  }
+
+  /** Import a shard pack: records re-land via remember() (byte-identical prov
+   *  keeps leaves matching the source bundles), every bundle re-verifies via
+   *  verifyFragment against the live chain, and the import event itself is
+   *  recorded on __imports__ — the lineage is anchored, not asserted. The
+   *  target shard must be empty (no mixing imported + native seqs). */
+  async importShardPack (pack: unknown): Promise<{ imported: number, anchored: number, unverifiable: string[], skipped: number }> {
+    const p = pack as ShardPack
+    if (p?.v !== 1 || p?.kind !== 'mamem-shard-pack' || typeof p.shard !== 'string' || !Array.isArray(p.records)) {
+      throw new Error('importShard: malformed pack — expected {v:1, kind:"mamem-shard-pack", shard, records[]}')
+    }
+    if ((await this.store.all(p.shard)).length > 0) throw new Error(`importShard: shard "${p.shard}" already has records — import needs an empty shard`)
+    let imported = 0, anchored = 0, skipped = 0
+    const unverifiable: string[] = []
+    for (const rec of [...p.records].sort((a, b) => a.seq - b.seq)) {
+      const prov = typeof rec.prov === 'object' && rec.prov !== null ? {
+        ...(rec.prov as Record<string, unknown>),
+        signature: typeof (rec.prov as Record<string, unknown>).signature === 'string'
+          ? new Uint8Array(Buffer.from((rec.prov as Record<string, unknown>).signature as string, 'hex'))
+          : new Uint8Array(0)
+      } as Partial<Provenance> : undefined
+      const r = await this.remember(p.shard, rec.data, prov, rec.level ?? 0)
+      if (r.seq !== rec.seq) { skipped++; continue } // dedup/position drift — don't fabricate seqs
+      imported++
+      if (rec.bundle) {
+        const recLeaf = (await this.store.all(p.shard)).find(x => x.seq === r.seq)?.leaf
+        if (!recLeaf || Buffer.from(recLeaf).toString('hex') !== rec.bundle.leaf) {
+          unverifiable.push(`${p.shard}:${r.seq}: imported data does not recompute the bundle's leaf`)
+          continue
+        }
+        const v = await verifyFragment(rec.bundle, this.chain)
+        if (v.ok) { this.importedBundles.set(`${p.shard}:${r.seq}`, rec.bundle); anchored++ }
+        else unverifiable.push(`${p.shard}:${r.seq}: ${v.reason}`)
+      }
+    }
+    this.persistState()
+    await this.remember('__imports__', JSON.stringify({
+      type: 'shard-import', shard: p.shard, exportedAt: p.exportedAt,
+      imported, anchored, unverifiable: unverifiable.length, importedAt: Date.now()
+    })).catch(() => undefined) // the audit record is best-effort — never block the import
+    return { imported, anchored, unverifiable, skipped }
+  }
+
+  /** doctor: one-call health surface — funding, shard/record/anchor counts,
+   *  unproven anchors, payments, prover availability. The tool layer may
+   *  replace `funding` with the richer ops.wallet() view when present. */
+  async doctor (): Promise<{
+    network: string
+    /** mem-side reserve view by default; the server swaps in ops.wallet()
+     *  (spend caps, runway) on live networks — hence the open shape */
+    funding: Record<string, unknown>
+    shards: number
+    records: number
+    anchoredRecords: number
+    unprovenAnchors: number
+    importedBundles: number
+    payments: 'on' | 'off'
+    prover: string
+  }> {
+    const shards = this.shards()
+    let records = 0, anchoredRecords = 0
+    for (const s of shards) for (const r of await this.store.all(s)) { records++; if (r.anchorTxid !== undefined) anchoredRecords++ }
+    const prover = process.env.MAMEM_STARK_PROVER
+      ? (existsSync(process.env.MAMEM_STARK_PROVER) ? 'native binary' : 'MAMEM_STARK_PROVER set but file missing')
+      : await new Promise<string>(res => {
+        execFile('docker', ['image', 'inspect', process.env.MAMEM_STARK_IMAGE ?? 'mamem-stark-build'], { timeout: 5_000 }, e =>
+          res(e ? 'absent (set MAMEM_STARK_PROVER or build mamem-stark-build)' : 'docker image'))
+      })
+    return {
+      network: this.opts.network ?? 'main',
+      funding: this.fundingStatus(),
+      shards: shards.length,
+      records,
+      anchoredRecords,
+      unprovenAnchors: this.unprovenAnchors().length,
+      importedBundles: this.importedBundles.size,
+      payments: /^(1|true|yes)$/i.test(process.env.MAMEM_PAYMENTS ?? '') ? 'on' : 'off',
+      prover
+    }
   }
 
 }

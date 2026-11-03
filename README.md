@@ -119,6 +119,19 @@ memory — Wright's "no fragment may be hallucinated."
 carries a QR for a phone scan. A Claude Code Stop hook can verify every
 answer on the fly (`integrations/claude-code`).
 
+**Sharing + cold start.** `groundedAnswer`/`commitReceipt` also return a
+`share` block — token, verify URL, `/v1/badge` URL, ready-made Markdown
+`[![verified answer](badge)](verify)` — so the agent can paste a badge into
+a doc or PR. The HTML verify page unfurls (OG meta) and carries an install
+CTA. `exportShard` packs a **public** shard — plaintext + provenance + every
+anchor's proof bundle; `importShard` re-verifies each bundle on import
+(zero trust in the exporter — a tampered record recomputes a different leaf
+and lands in `unverifiable`) and logs the import on `__imports__`. Private
+shards and level-gated records refuse export outright. `doctor` is the
+one-call diagnostic: funding, shards, records, anchors, payments, prover.
+`pnpm setup:claude` wires the Claude Code hooks + CLAUDE.md snippet without
+clobbering existing settings.
+
 **6. If someone disputes the proof** — two rails, both on-chain
 
 **Optimistic rail (default, cheapest):** the prover posts a small

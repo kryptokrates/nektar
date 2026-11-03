@@ -5,6 +5,14 @@ import { receiptToken } from './receipt.js'
 import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment } from './pay.js'
 import type { MamemMemory } from './memory.js'
 
+/** ready-to-paste share surface for a receipt — the model drops `markdown`
+ *  straight into PRs/docs; every pasted badge is a verify-page entry point */
+const shareBlock = (token: string) => {
+  const verifyUrl = `${verifyBase()}/v1/verify?r=${token}`
+  const badgeUrl = `${verifyBase()}/v1/badge?r=${token}`
+  return { token, verifyUrl, badgeUrl, markdown: `[![verified answer](${badgeUrl})](${verifyUrl})` }
+}
+
 /** public base of /v1/verify for footers/QRs — MAMEM_VERIFY_BASE for hosted
  *  deployments (https://host or ngrok), else the local HTTP port. */
 const verifyBase = (): string => process.env.MAMEM_VERIFY_BASE ?? `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
@@ -455,6 +463,29 @@ export const TOOLS = [
       required: ['txid'],
       properties: { txid: { type: 'string', description: 'funding transaction id (or hex:<rawtx>)' } }
     }
+  },
+  {
+    name: 'exportShard',
+    description: 'Export a PUBLIC shard as a portable pack: every record\'s plaintext + provenance + its anchor proof bundle. Private shards and level>0 records refuse — a pack never carries gated content. importShard on another instance re-verifies everything.',
+    inputSchema: {
+      type: 'object',
+      required: ['shard'],
+      properties: { shard: { type: 'string' } }
+    }
+  },
+  {
+    name: 'importShard',
+    description: 'Import a shard pack (from exportShard): records re-land preserving provenance, every proof bundle re-verifies against the live chain (zero trust in the exporter), and the import event itself is recorded on __imports__. Target shard must be empty. Same network only — a regtest pack cannot anchor-verify on mainnet.',
+    inputSchema: {
+      type: 'object',
+      required: ['pack'],
+      properties: { pack: { type: 'object', description: 'the ShardPack JSON returned by exportShard' } }
+    }
+  },
+  {
+    name: 'doctor',
+    description: 'One-call diagnostic: network, funding (address, balance, utxos), shard/record/anchor counts, unproven anchors, payment and prover status. The "is everything working" check.',
+    inputSchema: { type: 'object', properties: {} }
   }
 ] as const
 
@@ -869,7 +900,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
         ...(paid ? { payment: paid } : {})
       }, mem)
       const token = receiptToken(receiptHash)
-      return { answer, committed: true, kept: report.kept, flagged: report.flagged, grounding: report, receipt, receiptHash, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, anchor, checkResult: 'verified' }
+      return { answer, committed: true, kept: report.kept, flagged: report.flagged, grounding: report, receipt, receiptHash, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, share: shareBlock(token), anchor, checkResult: 'verified' }
     }
     case 'commitReceipt': {
       const { commitReceipt } = await import('@mamem/reasoning')
@@ -917,7 +948,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
         ...(paid ? { payment: paid } : {})
       }, mem)
       const token = receiptToken(out.receiptHash)
-      return { ...out, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}` }
+      return { ...out, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, share: shareBlock(token) }
     }
     case 'attestInference': {
       const { attestInference } = await import('./inference.js')
@@ -940,6 +971,22 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
       if (!ctx.ops?.importFunding) throw new Error('fundingImport: live network only (mock/regtest fund via the harness)')
       if (typeof args?.txid !== 'string' || args.txid.length < 8) throw new Error('fundingImport: txid required')
       return await ctx.ops.importFunding(args.txid)
+    }
+    case 'exportShard': {
+      if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('exportShard: shard required')
+      return await mem.exportShardPack(args.shard)
+    }
+    case 'importShard': {
+      if (typeof args?.pack !== 'object' || args.pack === null) throw new Error('importShard: pack object required (ShardPack JSON from exportShard)')
+      return await mem.importShardPack(args.pack)
+    }
+    case 'doctor': {
+      const d = await mem.doctor()
+      if (ctx.ops?.wallet) {
+        const w = await ctx.ops.wallet() as Record<string, unknown>
+        d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
+      }
+      return d
     }
     default:
       throw new Error(`unknown tool ${name}`)

@@ -24,15 +24,19 @@ receipt: mamemr1.8vK3…   verify: http://localhost:8080/v1/verify?r=mamemr1.8vK
    # or stdio — see docs/INTEGRATION.md
    ```
 
-3. **Install the hook + instruction** (auto-check on every answer):
+3. **Install the hooks + instruction** (auto-check on every answer):
 
    ```sh
-   # merge this dir's settings.json into .claude/settings.json, and the
-   # CLAUDE.md snippet into your project CLAUDE.md
+   pnpm setup:claude            # merges hooks + CLAUDE.md, never clobbers
+   # or: node tools/setup-claude.mjs --dir <your-project> [--dry]
    ```
 
-   In this repo it is already wired — `.claude/settings.json` registers the
-   `Stop` hook `integrations/claude-code/verify-receipt.mjs`.
+   Wires two hooks into `.claude/settings.json` (absolute paths to this
+   checkout): `Stop` → `integrations/claude-code/verify-receipt.mjs` and
+   `SessionStart` → `integrations/claude-code/session-start.mjs`. The
+   SessionStart hook calls the running instance's `doctor` tool and injects
+   one line of memory context ("N records, M anchored, funded/prover status")
+   at session open — silently absent when the instance isn't up.
 
 ## What the hook does
 

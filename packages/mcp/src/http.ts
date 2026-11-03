@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import type { MamemMemory } from './memory.js'
 import { TOOLS, visibleTools, callTool } from './server.js'
+import { receiptToken } from './receipt.js'
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
 
@@ -242,7 +243,17 @@ async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<
         : `declared model: ${esc(rec.modelId?.provider ?? 'undeclared')}/${esc(rec.modelId?.release ?? 'undeclared')} (declared, not proven)`,
     rec.payment ? `paid ${rec.payment.amountSats} sats` : null
   ].filter(Boolean).join(' · ') : ''
+  const tok = r.receiptHash ? receiptToken(r.receiptHash) : null
+  const badgeUrl = tok ? `${new URL(pageUrl).origin}/v1/badge?r=${tok}` : null
+  const badgeMd = badgeUrl ? `[![verified answer](${badgeUrl})](${pageUrl.replace('&format=html', '')})` : null
+  const ogDesc = r.ok
+    ? `${r.checks.filter(c => c.ok === true).length}/${r.checks.length} checks passed — committed, unaltered, anchored, derivable. Never truth.`
+    : `receipt failed verification — ${r.checks.filter(c => c.ok === false).length} check(s) broken`
   return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>${r.ok ? '✓ verified answer' : '✗ receipt failed'}${rec?.answer ? ` — ${esc(rec.answer.slice(0, 60))}` : ''}</title>
+<meta property="og:title" content="${r.ok ? '✓ verified answer receipt' : '✗ receipt failed verification'} — mamem">
+<meta property="og:description" content="${esc(ogDesc)}">
+<meta property="og:type" content="website"><meta property="og:url" content="${esc(pageUrl)}">
+<meta name="twitter:card" content="summary">
 <style>body{font:15px/1.55 system-ui,sans-serif;background:#0d1117;color:#c9d1d9;max-width:600px;margin:24px auto;padding:0 16px}
 h1{font-size:19px;margin-bottom:2px}.net{color:#8b949e;font-size:12px;margin-bottom:14px}
 .badge{display:inline-block;padding:3px 12px;border-radius:5px;font-weight:700}
@@ -257,7 +268,10 @@ ul{list-style:none;padding:0}li{margin:10px 0;font-weight:600}
 .d{color:#8b949e;font-size:12.5px;font-weight:400;margin-left:22px}
 img{display:block;margin:22px auto 6px;border:6px solid #fff;border-radius:6px}
 .qrcap{text-align:center;color:#6e7681;font-size:11.5px}
-.note{color:#8b949e;font-size:12.5px;margin-top:16px;border-top:1px solid #30363d;padding-top:12px}</style></head><body>
+.note{color:#8b949e;font-size:12.5px;margin-top:16px;border-top:1px solid #30363d;padding-top:12px}
+.cta{margin-top:14px;border-top:1px solid #30363d;padding-top:12px;font-size:13px;color:#c9d1d9}
+.install code,.md{display:block;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 10px;margin-top:8px;font:11.5px ui-monospace,monospace;color:#7ee787;word-break:break-all}
+.md{color:#8b949e}.mdcap{color:#8b949e;font-size:11px;margin-top:10px}</style></head><body>
 <h1>Answer receipt <span class="badge ${cls(r.ok)}">${r.ok ? 'VERIFIED' : 'FAILED'}</span></h1>
 <div class=net>${esc(netLabel)}</div>
 <div class=lede>${r.ok
@@ -270,5 +284,7 @@ ${meta ? `<div class=meta>${meta}</div>` : ''}
 <ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(title(c.name))}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
 <img src="${qr}" alt="scan to re-verify"><div class=qrcap>re-scan to re-check this receipt</div>
 <div class=note><b>What this proves:</b> the answer was committed and is derivable from sealed, anchored records.<br><b>What it doesn't:</b> the answer could still be wrong — commitment is not truth.</div>
+<div class=cta><b>Verify your own agent's answers.</b> mamem anchors AI memory + receipts on BSV — self-hosted, receipts anyone can check like this page.<div class=install><code>git clone https://github.com/nedzof/merkle-automaton && pnpm mcp:install</code></div>
+${badgeMd ? `<div class=mdcap>embed this badge:</div><code class=md>${esc(badgeMd)}</code>` : ''}</div>
 </body></html>`
 }

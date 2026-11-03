@@ -58,3 +58,26 @@ test('HTTP API: MAMEM_HTTP_TOKEN gates every route except /v1/health', async () 
     } finally { srv.close() }
   } finally { delete process.env.MAMEM_HTTP_TOKEN }
 })
+
+test('verify page: OG unfurl meta + install CTA + copyable badge markdown', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const funder = new MockFunder(); funder.topup(10); for (const t of funder.parents) chain.registerParent(t)
+  const mem = new MamemMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
+  const srv = createHttpApi(mem).listen(0)
+  await new Promise(r => srv.once('listening', r))
+  const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`
+  const post = (name: string, b: unknown) => fetch(`${base}/v1/tools/${name}`, { method: 'POST', body: JSON.stringify(b), signal: AbortSignal.timeout(5000) })
+  try {
+    await post('remember', { shard: 'm', data: 'torque 45Nm' })
+    await post('remember', { shard: 'm', data: 'belt 10h' })
+    chain.mine(1); mem.confirmAnchor('m', mem.tailLink('m')!.txid)
+    const g = await (await post('groundedAnswer', { claims: [{ text: 'torque 45Nm', cites: [{ shard: 'm', seq: 0 }] }] })).json() as { share?: { token: string } }
+    chain.mine(1); mem.confirmAnchor('__receipts__', mem.tailLink('__receipts__')!.txid)
+    const html = await (await fetch(`${base}/v1/verify?r=${encodeURIComponent(g.share!.token)}`, { headers: { accept: 'text/html' } })).text()
+    assert.match(html, /<meta property="og:title"/, 'OG title for unfurls')
+    assert.match(html, /<meta property="og:description"/, 'OG description')
+    assert.match(html, /Verify your own agent/, 'install CTA converts viewers')
+    assert.match(html, /v1\/badge\?r=/, 'badge URL on the page')
+    assert.match(html, /mcp:install|git clone/, 'install command on the page')
+  } finally { srv.close() }
+})

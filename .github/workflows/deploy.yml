@@ -77,8 +77,8 @@ jobs:
                 journalctl -u "$s" -n 10 --no-pager || true
               done
               echo "=== fs scan ==="
-              ls -la /opt/ | grep -iE 'nektar|mamem|watch|http' || true
-              ls /var/lib/ /etc/ 2>/dev/null | grep -iE 'nektar|mamem' || true
+              ls -la /opt/ | grep -iE "nektar|mamem|watch|http" || true
+              ls /var/lib/ /etc/ 2>/dev/null | grep -iE "nektar|mamem" || true
               echo "=== leftover mamem units ==="
               systemctl list-units --all "*mamem*" --no-pager || true
               exit 1

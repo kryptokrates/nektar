@@ -78,14 +78,43 @@ test('private shards: plain merkle citations are refused (prove)', async () => {
   assert.ok(p.bundle || p.result?.ok, 'public shard still proves plainly')
 })
 
-test('private cites: groundedAnswer strips them without a ZK proof — nothing leaks', async () => {
+/** force the STARK prover absent for the duration of a test (auto-prove
+ *  attempts must fail fast + fail closed, not depend on the docker image) */
+function noProver (): () => void {
+  const prev = process.env.MAMEM_STARK_PROVER
+  process.env.MAMEM_STARK_PROVER = '/nonexistent-mamem-prover'
+  return () => { prev === undefined ? delete process.env.MAMEM_STARK_PROVER : process.env.MAMEM_STARK_PROVER = prev }
+}
+
+test('private cites: groundedAnswer strips them when the proof cannot be produced — nothing leaks', async () => {
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr'); settle('hr')
+  const restore = noProver()
   const r = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'salary band E5 = 120k', cites: [{ shard: 'hr', seq: 0 }] }] })
+  restore()
   assert.equal(r.committed, false, 'no surviving claim → no receipt')
   assert.equal(r.kept.length, 0)
   assert.match(r.flagged[0].reason, /private shard.*ZK membership proof/i)
+})
+
+test('private cites: AUTO-PROVE — groundedAnswer keeps a plain private cite when the prover runs', { timeout: 300_000 }, async (t) => {
+  if (!process.env.MAMEM_STARK_PROVE) { t.skip('set MAMEM_STARK_PROVE=1 to run the real STARK prover'); return }
+  const { mem, settle } = setup()
+  await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
+  await mem.anchorShard('hr'); settle('hr')
+  // no zk supplied — the service self-issues a queryId, proves, verifies, redacts
+  const r = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'salary band E5 = 120k', cites: [{ shard: 'hr', seq: 0 }] }] })
+  assert.equal(r.committed, true, `auto-proved cite should survive: ${JSON.stringify(r.flagged)}`)
+  const ref = r.receipt.fragmentRefs[0]
+  assert.equal(ref.private, true)
+  assert.equal(ref.shard, undefined, 'shard name redacted')
+  assert.match(ref.proofCommit, /^[0-9a-f]{64}$/)
+  assert.ok(!JSON.stringify(r.receipt).includes('"hr"'))
+  // and the committed proof is a REAL artifact a verifier re-runs
+  assert.ok((mem.getProof(ref.proofCommit)?.length ?? 0) > 100_000, 'real STARK receipt stored')
+  const v = await verifyReceipt(mem, { token: r.receiptToken })
+  assert.equal(v.checks.find(c => c.name === 'fragment (private)')?.ok, true)
 })
 
 test('private cites: a verified ZK proof keeps the claim; the shard name is redacted from the anchored receipt', async () => {
@@ -147,8 +176,10 @@ test('private cites: commitReceipt redacts the shard name the same way — and d
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr'); settle('hr')
-  // no zk → refused outright; the service never commits an unverified private cite
-  await assert.rejects(() => callTool(mem, 'commitReceipt', { answer: 'x', fragmentRefs: [{ shard: 'hr', seq: 0 }] }), /require zk/)
+  // no zk → auto-prove is attempted; with the prover absent it refuses (fail-closed)
+  const restore = noProver()
+  await assert.rejects(() => callTool(mem, 'commitReceipt', { answer: 'x', fragmentRefs: [{ shard: 'hr', seq: 0 }] }), /auto-proven/)
+  restore()
   const orig = mem.verifyMembership.bind(mem)
   ;(mem as any).verifyMembership = async () => ({ ok: true, statement: 'stub' })
   const r = await callTool(mem, 'commitReceipt', { answer: 'x', fragmentRefs: [{ shard: 'hr', seq: 0, zk: { queryId: 'aa'.repeat(32), proof: 'deadbeef' } }] })

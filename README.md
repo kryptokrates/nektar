@@ -91,9 +91,11 @@ leaf revealed.)*
 caller's mood: `remember(…, private:true)` marks a shard private —
 **monotone, it cannot be un-declared** and it persists across restarts.
 Public shards keep the ordinary Merkle path (instant, free). A private
-shard refuses plain citations outright, and a `groundedAnswer` cite
-survives only when it carries a ZK membership proof the service itself
-verifies (one verifier-issued `zkQuery` per cite). The committed receipt
+shard refuses plain citations outright; a bare `groundedAnswer` cite is
+**auto-proved** — the service self-issues a `zkQuery`, proves and
+verifies the membership STARK in one call (~50 s), and only then keeps
+the claim (an explicit `zk:{queryId,proof}` still works). The committed
+receipt
 then redacts the cite to `{private:true, hdp, anchorTxid}` — the shard
 name never reaches the chain. ZK proving is real compute (~50 s CPU per
 proof), so the prover tools are priced above answers when payments are

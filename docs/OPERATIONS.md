@@ -214,10 +214,12 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   — persisted in the state store, it survives restarts and can never be
   un-set (`private:false` on a private shard is refused). Public shards
   keep the ordinary Merkle+BEEF citation path. A private shard: `prove`
-  refuses outright; `groundedAnswer`/`commitReceipt` strip or require a
-  cite carrying `{zk:{queryId, proof}}` — the service runs
-  `verifyMembership` itself (single-use `zkQuery` per cite, real RISC
-  Zero STARK) and, when it passes, commits the cite **redacted** as
+  refuses outright; `groundedAnswer`/`commitReceipt` **auto-prove** a
+  bare private cite — the service self-issues a `zkQuery`, runs
+  `proveMembership` (real RISC Zero STARK, ~50 s), verifies it, and
+  commits the cite **redacted** — or, when the caller supplies
+  `{zk:{queryId, proof}}`, runs `verifyMembership` on that instead
+  (single-use `zkQuery` per cite). When it passes, the ref commits as
   `{private:true, hdp, anchorTxid}` — the fragment hash and anchor stay
   auditable, the shard name never reaches the anchored receipt.
   `/v1/verify` renders it as "Cited record — private shard

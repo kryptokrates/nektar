@@ -378,7 +378,7 @@ export const TOOLS = [
             properties: {
               text: { type: 'string' },
               literal: { type: 'string', description: 'optional Datalog literal for entailment checking' },
-              cites: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] } }
+              cites: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] }, description: 'private-shard cites are auto-proved (ZK membership) when the prover is available; may also carry explicit zk:{queryId,proof}' }
             },
             required: ['text', 'cites']
           }
@@ -398,7 +398,7 @@ export const TOOLS = [
       type: 'object',
       properties: {
         answer: { type: 'string' },
-        fragmentRefs: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] } },
+        fragmentRefs: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] }, description: 'private-shard refs are auto-proved (ZK membership) when the prover is available; explicit zk:{queryId,proof} still accepted' },
         checkResult: { type: 'string', description: 'verified | unverifiable | failed' },
         model: { type: 'object', description: 'optional ModelIdentity override; defaults to the manifest set by modelManifest' },
         modelAttestation: { type: 'object', description: 'optional inference attestation (from attestInference): the statement is re-derived before being committed' },
@@ -775,8 +775,10 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       }
       // private shards (remember …, private:true): a plain cite leaks the shard
       // name into the public receipt — the record must be cited via a ZK
-      // membership proof ({shard, seq, zk:{queryId, proof}}); without one the
-      // claim is flagged and stripped — fail-closed, the cite never leaves.
+      // membership proof. Caller may supply {zk:{queryId,proof}} from an
+      // externally-issued zkQuery; otherwise the service AUTO-PROVES (self-issue
+      // → prove → verify) — a real proof either way: a verifier re-runs it via
+      // proofCommit. Prover absent/failed → flagged and stripped — fail-closed.
       const privRefused: any[] = []
       const claimsForGround: any[] = []
       const proofCommits = new Map<string, string>() // `${shard}:${seq}` → sha256(proof)
@@ -786,8 +788,15 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         let zkok = true
         for (const r of priv) {
           const zk = r.zk ?? c.zk
-          if (typeof zk?.queryId !== 'string' || typeof zk?.proof !== 'string') { zkok = false; break }
-          const bytes = new Uint8Array(Buffer.from(zk.proof, 'hex'))
+          let bytes: Uint8Array
+          if (typeof zk?.queryId === 'string' && typeof zk?.proof === 'string') {
+            bytes = new Uint8Array(Buffer.from(zk.proof, 'hex'))
+          } else {
+            try {
+              const q = mem.issueZkQuery('mamem:auto-cite')
+              bytes = (await mem.proveMembership(r.shard, r.seq, q.queryId)).bytes
+            } catch { zkok = false; break }
+          }
           const v = await mem.verifyMembership(r.shard, r.seq, bytes)
           if (!v.ok) { zkok = false; break }
           // the proof becomes a public artifact: committed in the receipt and
@@ -798,7 +807,7 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         else privRefused.push(c)
       }
       const report = await ground(claimsForGround, fetch, { mode: args.mode === 'flag' ? 'flag' : 'remove' })
-      for (const c of privRefused) report.flagged.push({ ...c, grounded: false, reason: 'cite targets a private shard — a ZK membership proof is required (zkQuery → proveMembership, then cite {shard,seq,zk:{queryId,proof}})' })
+      for (const c of privRefused) report.flagged.push({ ...c, grounded: false, reason: 'cite targets a private shard — the ZK membership proof could not be produced (record unanchored or prover unavailable); supply {zk:{queryId,proof}} to cite explicitly' })
       const answer = report.kept.map(c => c.text).join(' ')
       if (report.kept.length === 0) {
         return { answer: '', committed: false, kept: [], flagged: report.flagged, grounding: report, checkResult: 'failed', note: 'no claim survived grounding — nothing committed (an underivable answer is invalid by construction)' }
@@ -847,8 +856,16 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       for (const r of args.fragmentRefs ?? []) {
         if (!mem.shardPrivate(r.shard)) { refs.push(r); continue }
         const zk = r.zk
-        if (typeof zk?.queryId !== 'string' || typeof zk?.proof !== 'string') throw new Error(`fragmentRefs for private shard "${r.shard}" require zk:{queryId,proof} — plain cites are refused`)
-        const bytes = new Uint8Array(Buffer.from(zk.proof, 'hex'))
+        let bytes: Uint8Array
+        if (typeof zk?.queryId === 'string' && typeof zk?.proof === 'string') {
+          bytes = new Uint8Array(Buffer.from(zk.proof, 'hex'))
+        } else {
+          // auto-prove: self-issue → prove → verify (same artifact, no caller choreography)
+          let q: { queryId: string }
+          try { q = mem.issueZkQuery('mamem:auto-cite'); bytes = (await mem.proveMembership(r.shard, r.seq, q.queryId)).bytes } catch (e) {
+            throw new Error(`private cite for "${r.shard}" could not be auto-proven (${(e as Error).message}) — supply zk:{queryId,proof} to cite explicitly`)
+          }
+        }
         const v = await mem.verifyMembership(r.shard, r.seq, bytes)
         if (!v.ok) throw new Error(`ZK membership proof for private cite failed: ${v.reason}`)
         refs.push({ private: true, proofCommit: mem.putProof(bytes), ...(await mem.fragmentRef(r.shard, r.seq) ?? { hdp: '' }) })

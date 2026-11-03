@@ -72,6 +72,12 @@ is refused, not published with a disclaimer. The surviving answer is
 anchored as a receipt. **Backed:** per-claim derivation from sealed
 memory — Wright's "no fragment may be hallucinated."
 
+→ and it returns a **scannable receipt**: `receipt: mamemr1.…` plus a
+`verify:` URL. Anyone hitting `/v1/verify` sees the checks run live
+(exists → re-hash → provenance → anchored → cites anchored) — the page
+carries a QR for a phone scan. A Claude Code Stop hook can verify every
+answer on the fly (`integrations/claude-code`).
+
 **6. If someone disputes the proof** — two rails, both on-chain
 
 **Optimistic rail (default, cheapest):** the prover posts a small

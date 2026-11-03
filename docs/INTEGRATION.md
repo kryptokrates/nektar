@@ -58,6 +58,16 @@ MAMEM_PROFILE=mamem_regtest pnpm mcp:smoke
 Claude Desktop: `claude_desktop_config.json`. Claude Code: `claude mcp add mamem -- node <path>/bin.js`. Cursor/Windsurf: their MCP settings, with the same command.
 Set `MAMEM_MODEL_ID` to the exact model release, because receipts bind it (AGT-011).
 
+### Receipts that scan themselves (Claude Code)
+
+`groundedAnswer`/`commitReceipt` return `receiptToken` (`mamemr1.…`) +
+`verifyUrl`. The agent ends its answer with them; anyone hits
+`/v1/verify?r=` — JSON checks, or a page with a QR (`?format=html` or a
+browser's Accept header). A Claude Code **Stop hook** can verify every
+answer automatically — the failure *blocks the stop* and goes back to the
+model, so an ungrounded answer can't slide by. Setup and the honest
+boundary: [integrations/claude-code/README.md](../integrations/claude-code/README.md).
+
 ## 3. Local models (Docker Model Runner, Ollama, LM Studio)
 
 ```sh

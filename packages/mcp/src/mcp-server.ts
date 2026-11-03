@@ -11,13 +11,14 @@ export const INSTRUCTIONS = [
   'mamem is verifiable, encrypted agent memory anchored on BSV.',
   'Before answering a factual question, call `recall` (or use the `grounded-answer` prompt) and answer only from items whose check is verified.',
   'For a verifiable answer, pass your draft claims to `groundedAnswer`: every claim must cite a verified fragment and be quoted or entailed — ungrounded text is stripped and an answer receipt is anchored.',
+  'When `groundedAnswer`/`commitReceipt` returns receiptToken, end the answer with a one-line footer `receipt: <receiptToken>` and the `verify:` URL — anyone can scan it at /v1/verify to check the answer was committed and derivable.',
   'When the user states a fact worth keeping, call `remember` with its source.',
   'Call `modelManifest` once per session to anchor which model you are; receipts then carry that declared identity.',
   'Cite the shard/seq and anchor txid you relied on; `prove` returns the proof.',
   'Proofs establish that something was RECORDED and has not been altered — never that it is true. Say so when it matters.'
 ].join(' ')
 
-const READ_ONLY = new Set(['recall', 'prove', 'verifyMembership', 'proveMembership', 'proveSubset', 'verifySubset', 'verifyDerivation', 'verifyAttestation'])
+const READ_ONLY = new Set(['recall', 'prove', 'verifyMembership', 'proveMembership', 'proveSubset', 'verifySubset', 'verifyDerivation', 'verifyAttestation', 'verifyReceipt'])
 const DESTRUCTIVE = new Set(['rotate', 'revoke'])
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))

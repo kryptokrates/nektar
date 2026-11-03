@@ -444,3 +444,37 @@ test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest d
   assert.equal(r2.committed, false)
   assert.equal(r2.checkResult, 'failed')
 })
+
+test('verifyReceipt: token → found/hash/provenance/anchored/fragments; unknown + malformed fail', async () => {
+  const { mem, settle } = setup()
+  await mem.remember('manual', 'drain port 4 torque 45Nm')
+  await mem.remember('manual', 'inspect belt every 10h')
+  settle('manual')
+  const r = await callTool(mem, 'groundedAnswer', { claims: [
+    { text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] }
+  ] })
+  assert.equal(r.committed, true)
+  assert.ok(r.receiptToken.startsWith('mamemr1.'), 'token emitted')
+  assert.ok(r.verifyUrl.includes('/v1/verify?r='), 'verifyUrl emitted')
+  settle('__receipts__')
+
+  const v = await callTool(mem, 'verifyReceipt', { token: r.receiptToken })
+  assert.equal(v.ok, true)
+  const byName = Object.fromEntries(v.checks.map((c: any) => [c.name, c]))
+  for (const n of ['found', 'hash', 'provenance', 'anchored', 'fragment manual:0']) {
+    assert.equal(byName[n]?.ok, true, `${n}: ${byName[n]?.detail}`)
+  }
+  assert.equal((v.receipt as any).checkResult, 'verified')
+
+  // bare 64-hex hash also accepted
+  const v2 = await callTool(mem, 'verifyReceipt', { receiptHash: r.receiptHash })
+  assert.equal(v2.ok, true)
+
+  // well-formed token, unknown receipt → 'found' fails
+  const v3 = await callTool(mem, 'verifyReceipt', { token: 'mamemr1.' + Buffer.alloc(32, 9).toString('base64url') })
+  assert.equal(v3.ok, false)
+  assert.equal(v3.checks[0].name, 'found')
+
+  // malformed token → error
+  await assert.rejects(callTool(mem, 'verifyReceipt', { token: 'mamemr1.too-short' }))
+})

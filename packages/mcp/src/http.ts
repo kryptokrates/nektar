@@ -34,6 +34,13 @@ export const OPENAPI = {
     '/v1/checkpoint/{shard}': {
       get: { summary: 'latest signed checkpoint of the shard (LOG-007)', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'checkpoint + log pubkey' }, 404: { description: 'no anchor yet' } } }
     },
+    '/v1/verify': {
+      get: {
+        summary: 'scan a receipt token — traffic-light checks that the answer receipt exists, re-hashes, is provenance-signed + anchored, and its cited fragments are anchored. JSON by default; Accept: text/html (or ?format=html) returns a check page with a QR.',
+        parameters: [{ name: 'r', in: 'query', required: true, schema: { type: 'string', description: 'receipt token mamemr1.<base64url hash>' } }],
+        responses: { 200: { description: 'check list + ok flag' }, 400: { description: 'missing/malformed token' } }
+      }
+    },
     '/v1/wallet': { get: { summary: 'fee wallet: address, balance, spend caps, runway (main only)', responses: { 200: { description: 'wallet ops' }, 404: { description: 'ops not enabled' } } } },
     '/v1/costs': { get: { summary: 'broadcast cost ledger entries (main only)', responses: { 200: { description: 'cost records' }, 404: { description: 'ops not enabled' } } } }
   }
@@ -94,6 +101,19 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
         const cp = mem.checkpoints(decodeURIComponent(p[2]!)).at(-1)
         return cp ? send(200, { checkpoint: cp, logPublicKey: mem.logPublicKey() }) : send(404, { error: 'no checkpoint' })
       }
+      if (req.method === 'GET' && url.pathname === '/v1/verify') {
+        const tok = url.searchParams.get('r')
+        if (!tok) return send(400, { error: 'missing ?r=<receipt token>' })
+        try {
+          const { verifyReceipt } = await import('./receipt.js')
+          const result = await verifyReceipt(mem, { token: tok })
+          if (url.searchParams.get('format') === 'html' || req.headers.accept?.includes('text/html')) {
+            const base = process.env.MAMEM_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
+            return send(200, await verifyPage(result, `${base}/v1/verify?r=${tok}&format=html`), 'text/html; charset=utf-8')
+          }
+          return send(200, result)
+        } catch (e) { return send(400, { error: (e as Error).message }) }
+      }
       if (req.method === 'GET' && url.pathname === '/v1/wallet') {
         return ops ? send(200, await ops.wallet()) : send(404, { error: 'ops not enabled (main only)' })
       }
@@ -105,4 +125,28 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
   })
   server.on('close', () => { for (const t of sessions.values()) void t.close() })
   return server
+}
+
+/** Minimal self-contained check page (no external resources — offline-safe).
+ *  The QR encodes this same page URL so a phone scan re-opens the result. */
+async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }> }, pageUrl: string): Promise<string> {
+  const QR = await import('qrcode')
+  const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 220 })
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const icon = (o: boolean | 'info' | 'skip') => o === true ? '✓' : o === false ? '✗' : '·'
+  const cls = (o: boolean | 'info' | 'skip') => o === true ? 'ok' : o === false ? 'bad' : 'info'
+  return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>mamem receipt</title>
+<style>body{font:15px/1.5 ui-monospace,monospace;background:#0d1117;color:#c9d1d9;max-width:560px;margin:24px auto;padding:0 16px}
+h1{font-size:18px}.badge{display:inline-block;padding:2px 10px;border-radius:4px;font-weight:700}
+.ok{background:#12331c;color:#4ade80}.bad{background:#3d1215;color:#f87171}.info{color:#8b949e}
+ul{list-style:none;padding:0}li{margin:6px 0}.d{color:#8b949e;font-size:13px;margin-left:22px}
+img{display:block;margin:20px auto;border:8px solid #fff;border-radius:6px}
+.note{color:#8b949e;font-size:12px;margin-top:18px;border-top:1px solid #30363d;padding-top:12px}
+code{word-break:break-all;color:#79c0ff}</style></head><body>
+<h1>mamem answer receipt <span class="badge ${cls(r.ok)}">${r.ok ? 'VERIFIED' : 'FAILED'}</span></h1>
+<code>${esc(r.receiptHash)}</code>
+<ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(c.name)}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
+<img src="${qr}" alt="scan to re-verify">
+<div class=note>Proves the answer was committed and is derivable from sealed, anchored records — not that it is true. Re-scan the QR to re-check.</div>
+</body></html>`
 }

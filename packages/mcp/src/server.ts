@@ -1,7 +1,12 @@
 // Tool definitions (JSON Schema) + their single implementation (callTool),
 // shared by the MCP server (mcp-server.ts, official SDK) and the HTTP API.
 import { sha256, utf8 } from '@mamem/core'
+import { receiptToken } from './receipt.js'
 import type { MamemMemory } from './memory.js'
+
+/** public base of /v1/verify for footers/QRs — MAMEM_VERIFY_BASE for hosted
+ *  deployments (https://host or ngrok), else the local HTTP port. */
+const verifyBase = (): string => process.env.MAMEM_VERIFY_BASE ?? `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
 
 export const TOOLS = [
   {
@@ -395,6 +400,17 @@ export const TOOLS = [
       },
       required: ['answer', 'fragmentRefs', 'checkResult']
     }
+  },
+  {
+    name: 'verifyReceipt',
+    description: 'Scan a receipt token (mamemr1.…) or receiptHash and run the traffic-light checks: the receipt exists on __receipts__, its body re-hashes, the originator signature verifies, it is anchored, and every cited fragment is anchored. Proves the answer was committed + derivable — never that it was true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        token: { type: 'string', description: 'receipt token "mamemr1.<base64url hash>"' },
+        receiptHash: { type: 'string', description: 'or the bare 64-hex receipt hash' }
+      }
+    }
   }
 ] as const
 
@@ -714,11 +730,12 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
         groundingReportHash: report.reportHash
       }, mem)
-      return { answer, committed: true, kept: report.kept, flagged: report.flagged, grounding: report, receipt, receiptHash, anchor, checkResult: 'verified' }
+      const token = receiptToken(receiptHash)
+      return { answer, committed: true, kept: report.kept, flagged: report.flagged, grounding: report, receipt, receiptHash, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, anchor, checkResult: 'verified' }
     }
     case 'commitReceipt': {
       const { commitReceipt } = await import('@mamem/reasoning')
-      return await commitReceipt({
+      const out = await commitReceipt({
         answer: args.answer,
         fragmentRefs: args.fragmentRefs ?? [],
         checkResult: args.checkResult,
@@ -726,6 +743,12 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
         groundingReportHash: args.groundingReportHash
       }, mem)
+      const token = receiptToken(out.receiptHash)
+      return { ...out, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}` }
+    }
+    case 'verifyReceipt': {
+      const { verifyReceipt } = await import('./receipt.js')
+      return await verifyReceipt(mem, args)
     }
     default:
       throw new Error(`unknown tool ${name}`)

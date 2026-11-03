@@ -127,7 +127,12 @@ export async function commitReceipt (r: Omit<Receipt, 'truthNote'>, mem?: Anchor
   const receipt: Receipt = { ...r, truthNote: TRUTH_NOTE }
   const receiptHash = hashOf(receipt)
   if (!mem) return { receipt, receiptHash }
-  const { seq } = await mem.remember('__receipts__', `receipt:${receiptHash}`)
+  // body carried in the record: `receipt:<hash>:<b64url receipt>` — a
+  // lookup-by-hash (/v1/verify, verifyReceipt) can then re-hash and inspect
+  // the committed payload, not just its digest. Pre-body records of the
+  // `receipt:<hash>` form still resolve (hash-only, body checks skipped).
+  const body = Buffer.from(JSON.stringify(receipt), 'utf8').toString('base64url')
+  const { seq } = await mem.remember('__receipts__', `receipt:${receiptHash}:${body}`)
   const a = await mem.anchorShard('__receipts__')
   return { receipt, receiptHash, anchor: { shard: '__receipts__', seq, txid: a?.txid } }
 }

@@ -33,11 +33,13 @@
     "@mamem/zk": "workspace:*",
     "@modelcontextprotocol/sdk": "1.32.2",
     "knex": "^3.3.0",
+    "qrcode": "1.5.4",
+    "runar-sdk": "0.4.6",
     "sqlite3": "^5.1.7",
-    "zod": "3.25.76",
-    "runar-sdk": "0.4.6"
+    "zod": "3.25.76"
   },
   "devDependencies": {
-    "@bsv/sdk": "4.0.1"
+    "@bsv/sdk": "4.0.1",
+    "@types/qrcode": "^1.5.6"
   }
 }

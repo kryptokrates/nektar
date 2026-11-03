@@ -105,13 +105,23 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
       }
       if (req.method === 'GET' && url.pathname === '/v1/verify') {
         const tok = url.searchParams.get('r')
-        if (!tok) return send(400, { error: 'missing ?r=<receipt token>' })
+        const seq = url.searchParams.get('s')
+        if (!tok && seq === null) return send(400, { error: 'missing ?r=<receipt token> or ?s=<receipt seq>' })
         try {
           const { verifyReceipt } = await import('./receipt.js')
-          const result = await verifyReceipt(mem, { token: tok })
+          let arg: { token?: string, receiptHash?: string } = { token: tok! }
+          if (!tok) {
+            // ?s=N — human-readable form: the Nth record on __receipts__
+            const rec = (await mem.recall('__receipts__', { seq: Number(seq) })).items[0]
+            const h = rec?.text?.split(':')[1]
+            if (!h) return send(404, { error: `no receipt at __receipts__ seq ${seq}` })
+            arg = { receiptHash: h }
+          }
+          const result = await verifyReceipt(mem, arg)
           if (url.searchParams.get('format') === 'html' || req.headers.accept?.includes('text/html')) {
             const base = process.env.MAMEM_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
-            return send(200, await verifyPage(result, `${base}/v1/verify?r=${tok}&format=html`), 'text/html; charset=utf-8')
+            const q = tok ? `r=${tok}` : `s=${seq}`
+            return send(200, await verifyPage(result, `${base}/v1/verify?${q}&format=html`), 'text/html; charset=utf-8')
           }
           return send(200, result)
         } catch (e) { return send(400, { error: (e as Error).message }) }
@@ -138,7 +148,7 @@ async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const icon = (o: boolean | 'info' | 'skip') => o === true ? '✓' : o === false ? '✗' : '·'
   const cls = (o: boolean | 'info' | 'skip') => o === true ? 'ok' : o === false ? 'bad' : 'info'
-  return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>mamem receipt</title>
+  return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>${r.ok ? '✓ verified answer' : '✗ receipt failed'}${rec?.answer ? ` — ${esc(rec.answer.slice(0, 60))}` : ''}</title>
 <style>body{font:15px/1.5 ui-monospace,monospace;background:#0d1117;color:#c9d1d9;max-width:560px;margin:24px auto;padding:0 16px}
 h1{font-size:18px}.badge{display:inline-block;padding:2px 10px;border-radius:4px;font-weight:700}
 .ok{background:#12331c;color:#4ade80}.bad{background:#3d1215;color:#f87171}.info{color:#8b949e}
@@ -149,6 +159,9 @@ img{display:block;margin:20px auto;border:8px solid #fff;border-radius:6px}
 .note{color:#8b949e;font-size:12px;margin-top:18px;border-top:1px solid #30363d;padding-top:12px}
 code{word-break:break-all;color:#79c0ff}</style></head><body>
 <h1>mamem answer receipt <span class="badge ${cls(r.ok)}">${r.ok ? 'VERIFIED' : 'FAILED'}</span></h1>
+<div class=d style="margin-left:0;margin-bottom:8px">${r.ok
+  ? 'This exact answer was committed to an anchored, signed log. The checks below prove it was recorded unaltered and that every cited record exists on-chain. It does <b>not</b> prove the answer is true.'
+  : 'Something in this receipt did not check out — see the ✗ lines below.'}</div>
 <code>${esc(r.receiptHash)}</code>
 ${rec?.answer !== undefined ? `<div class=ans><div class=h>committed answer — compare with what you were shown</div>${esc(rec.answer)}</div>` : ''}
 ${rec ? `<div class="d" style="margin-left:0">cites ${(rec.fragmentRefs ?? []).map(f => `${esc(f.shard)}:${f.seq}`).join(', ') || '—'} · model ${esc(`${rec.modelId?.provider ?? 'undeclared'}/${rec.modelId?.release ?? 'undeclared'}`)} (declared) · checkResult ${esc(rec.checkResult ?? '?')}</div>` : ''}

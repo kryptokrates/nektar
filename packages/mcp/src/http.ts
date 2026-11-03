@@ -169,33 +169,62 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
 }
 
 /** Minimal self-contained check page (no external resources — offline-safe).
- *  The QR encodes this same page URL so a phone scan re-opens the result. */
+ *  The QR encodes this same page URL so a phone scan re-opens the result.
+ *  Written for humans: the answer leads, each check is a plain-English
+ *  claim, and the raw internals stay visible as fine print for auditors. */
 async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown }, pageUrl: string): Promise<string> {
   const rec = r.receipt as { answer?: string, fragmentRefs?: Array<{ shard: string, seq: number }>, checkResult?: string, modelId?: { provider?: string, release?: string }, payment?: { txid: string, amountSats: number, payTo: string } } | undefined
   const QR = await import('qrcode')
-  const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 220 })
+  const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 180 })
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const net = process.env.MAMEM_NETWORK ?? 'mock'
+  const netLabel = net === 'main' ? 'BSV mainnet — real coins' : net === 'ttn' ? 'BSV public testnet — real transactions, test coins' : net === 'regtest' ? 'local Teranode regtest' : 'simulated chain — demo only'
   const icon = (o: boolean | 'info' | 'skip') => o === true ? '✓' : o === false ? '✗' : '·'
   const cls = (o: boolean | 'info' | 'skip') => o === true ? 'ok' : o === false ? 'bad' : 'info'
+  // plain-English title per check — the raw detail stays as the sub-line
+  const title = (name: string): string =>
+    name === 'found' ? 'This receipt exists in the log'
+      : name === 'hash' ? 'The record is unaltered'
+      : name === 'provenance' ? 'Signed by the service operator'
+      : name === 'anchored' ? 'Anchored on the blockchain'
+      : name.startsWith('fragment ') ? `Cited record ${name.slice(9)} exists on-chain`
+      : name === 'grounding' ? 'The answer traces to cited records'
+      : name === 'checkResult' ? 'Grounding verdict'
+      : name === 'paid' ? 'Paid for on-chain'
+      : name
+  const cites = (rec?.fragmentRefs ?? []).map(f => `${f.shard}:${f.seq}`)
+  const meta = rec ? [
+    cites.length ? `built from ${cites.length} cited record${cites.length === 1 ? '' : 's'} (${esc(cites.join(', '))})` : 'no cited records',
+    `declared model: ${esc(rec.modelId?.provider ?? 'undeclared')}/${esc(rec.modelId?.release ?? 'undeclared')} (declared, not proven)`,
+    rec.payment ? `paid ${rec.payment.amountSats} sats` : null
+  ].filter(Boolean).join(' · ') : ''
   return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>${r.ok ? '✓ verified answer' : '✗ receipt failed'}${rec?.answer ? ` — ${esc(rec.answer.slice(0, 60))}` : ''}</title>
-<style>body{font:15px/1.5 ui-monospace,monospace;background:#0d1117;color:#c9d1d9;max-width:560px;margin:24px auto;padding:0 16px}
-h1{font-size:18px}.badge{display:inline-block;padding:2px 10px;border-radius:4px;font-weight:700}
+<style>body{font:15px/1.55 system-ui,sans-serif;background:#0d1117;color:#c9d1d9;max-width:600px;margin:24px auto;padding:0 16px}
+h1{font-size:19px;margin-bottom:2px}.net{color:#8b949e;font-size:12px;margin-bottom:14px}
+.badge{display:inline-block;padding:3px 12px;border-radius:5px;font-weight:700}
 .ok{background:#12331c;color:#4ade80}.bad{background:#3d1215;color:#f87171}.info{color:#8b949e}
-ul{list-style:none;padding:0}li{margin:6px 0}.d{color:#8b949e;font-size:13px;margin-left:22px}
-img{display:block;margin:20px auto;border:8px solid #fff;border-radius:6px}
-.ans{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:10px 12px;margin:14px 0}
-.ans .h{color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-.note{color:#8b949e;font-size:12px;margin-top:18px;border-top:1px solid #30363d;padding-top:12px}
-code{word-break:break-all;color:#79c0ff}</style></head><body>
-<h1>mamem answer receipt <span class="badge ${cls(r.ok)}">${r.ok ? 'VERIFIED' : 'FAILED'}</span></h1>
-<div class=d style="margin-left:0;margin-bottom:8px">${r.ok
-  ? 'This exact answer was committed to an anchored, signed log. The checks below prove it was recorded unaltered and that every cited record exists on-chain. It does <b>not</b> prove the answer is true.'
+.lede{color:#8b949e;font-size:14px;margin:0 0 16px}
+.ans{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px 18px;margin:0 0 6px;font-size:17px;line-height:1.5}
+.anslabel{color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin:0 0 6px}
+.meta{color:#8b949e;font-size:12.5px;margin:0 0 18px}
+.fg{font:11.5px ui-monospace,monospace;color:#6e7681;word-break:break-all;margin:0 0 22px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:#8b949e;border-bottom:1px solid #30363d;padding-bottom:6px;margin:0 0 10px}
+ul{list-style:none;padding:0}li{margin:10px 0;font-weight:600}
+.d{color:#8b949e;font-size:12.5px;font-weight:400;margin-left:22px}
+img{display:block;margin:22px auto 6px;border:6px solid #fff;border-radius:6px}
+.qrcap{text-align:center;color:#6e7681;font-size:11.5px}
+.note{color:#8b949e;font-size:12.5px;margin-top:16px;border-top:1px solid #30363d;padding-top:12px}</style></head><body>
+<h1>Answer receipt <span class="badge ${cls(r.ok)}">${r.ok ? 'VERIFIED' : 'FAILED'}</span></h1>
+<div class=net>${esc(netLabel)}</div>
+<div class=lede>${r.ok
+  ? 'Someone asked an AI a question and this service committed the answer below to a signed, append-only log on the blockchain. This page proves the record exists, is unchanged, and every record it cites is anchored. <b>It does not prove the answer is true.</b>'
   : 'Something in this receipt did not check out — see the ✗ lines below.'}</div>
-<code>${esc(r.receiptHash)}</code>
-${rec?.answer !== undefined ? `<div class=ans><div class=h>committed answer — compare with what you were shown</div>${esc(rec.answer)}</div>` : ''}
-${rec ? `<div class="d" style="margin-left:0">cites ${(rec.fragmentRefs ?? []).map(f => `${esc(f.shard)}:${f.seq}`).join(', ') || '—'} · model ${esc(`${rec.modelId?.provider ?? 'undeclared'}/${rec.modelId?.release ?? 'undeclared'}`)} (declared) · checkResult ${esc(rec.checkResult ?? '?')}${rec.payment ? ` · paid ${rec.payment.amountSats} sats (tx ${esc(rec.payment.txid.slice(0, 16))}…)` : ''}</div>` : ''}
-<ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(c.name)}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
-<img src="${qr}" alt="scan to re-verify">
-<div class=note>Proves the answer was committed and is derivable from sealed, anchored records — not that it is true. Re-scan the QR to re-check.</div>
+${rec?.answer !== undefined ? `<div class=anslabel>The committed answer — compare with what you were shown</div><div class=ans>${esc(rec.answer)}</div>` : ''}
+${meta ? `<div class=meta>${meta}</div>` : ''}
+<div class=fg>fingerprint ${esc(r.receiptHash)}</div>
+<h2>What was checked</h2>
+<ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(title(c.name))}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
+<img src="${qr}" alt="scan to re-verify"><div class=qrcap>re-scan to re-check this receipt</div>
+<div class=note><b>What this proves:</b> the answer was committed and is derivable from sealed, anchored records.<br><b>What it doesn't:</b> the answer could still be wrong — commitment is not truth.</div>
 </body></html>`
 }

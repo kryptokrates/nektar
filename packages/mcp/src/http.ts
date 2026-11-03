@@ -85,11 +85,12 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
     const p = url.pathname.split('/').filter(Boolean)
     // MAMEM_HTTP_TOKEN: when set, everything except the public read-only
     // endpoints (/v1/health, /v1/verify — a QR scan can't send headers, and
-    // verification output is read-only anyway) requires a bearer token —
-    // the gate that makes a public bind safe. Unset = localhost-trusted
-    // behaviour (the default bind is 127.0.0.1 anyway).
+    // verification output is read-only anyway — plus /.well-known/x402,
+    // which is a discovery doc agents must find unauthenticated) requires a
+    // bearer token — the gate that makes a public bind safe. Unset =
+    // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
     const tok = process.env.MAMEM_HTTP_TOKEN
-    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify'
+    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/.well-known/x402'
     if (tok && !publicPath && req.headers.authorization !== `Bearer ${tok}`) {
       return send(401, { error: 'unauthorized' })
     }

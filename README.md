@@ -119,61 +119,11 @@ get stripped — that's the safety feature, not a bug.
 - **Model/data integrity** — anchor weights+dataset digests: "which model
   produced this answer" becomes provable.
 
-## Quickstart — see it work in 3 minutes
+## Running it
 
-Prereqs: Docker Desktop with the local Teranode regtest stack
-(`infra/teranode-quickstart`), Node ≥ 22, pnpm.
-
-```sh
-git clone https://github.com/nedzof/merkle-automaton.git && cd merkle-automaton
-pnpm install && pnpm -r build
-
-# the full story through the real MCP server — remember → anchor →
-# STARK prove → bonded claim → watcher → settle → verdict → gated sale:
-node packages/mcp/demo/e2e-mcp-regtest.mjs        # prints E2E MCP PASS
-
-docker compose up -d watcher                       # the honest challenger
-node packages/e2e/src/e2e-watcher-regtest.mjs      # fraud demo: a liar gets caught
-```
-
-**Don't want Docker?** The testnet path below needs no local node.
-
-## Run your own instance (public testnet, ~10 min)
-
-No Docker, no node, no indexers — public broadcaster + headers + tx fetch.
-
-```sh
-export MAMEM_NETWORK=testnet
-export MAMEM_KEY_PASSPHRASE='<pick one — encrypts keys at rest>'
-export MAMEM_DATA_DIR=$PWD/.mamem-testnet
-
-node packages/mcp/dist/src/bin.js     # prints your fee address, e.g. mnKcrZ…
-```
-
-Fund that address — [faucet.bananablocks.com](https://faucet.bananablocks.com)
-or any tBSV wallet → get a **txid** → internalize it (tracked-set wallet:
-no scanning, no address index — you hand it the funding tx once):
-
-```sh
-MAMEM_FUND_TXIDS=<txid> node packages/mcp/dist/src/bin.js
-```
-
-**Wire Claude Code:**
-
-```sh
-claude mcp add mamem --scope user \
-  --env MAMEM_NETWORK=testnet --env MAMEM_KEY_PASSPHRASE=<pw> \
-  --env MAMEM_DATA_DIR=<abs>/.mamem-testnet \
-  -- node <abs>/packages/mcp/dist/src/bin.js
-```
-
-Then just ask: *"remember X, anchor it, recall it, prove it."* The first
-`prove` returns `{ok:true, settled:false, anchorState:'broadcast'}` —
-anchored at 0-conf, upgrades to `mined` by itself.
-
-Other clients (Claude Desktop, Cursor, remote HTTP + bearer token,
-`mamem-init` zero-touch wallet, Docker MCP Toolkit, local models) →
-**[docs/INTEGRATION.md](docs/INTEGRATION.md)**.
+Setup, wallet bootstrap, funding, and every client option (Claude Code,
+Claude Desktop, Cursor, remote HTTP, Docker MCP Toolkit, local models,
+regtest Docker stack) → **[docs/INTEGRATION.md](docs/INTEGRATION.md)**.
 
 ## Find each other — the rendezvous directory
 

@@ -54,6 +54,14 @@ service (public BSV Broadcaster endpoints are no-key: `arcade-*-1.bsvblockchain.
 the regtest path *literally* the self-sovereign mainnet path — same endpoints,
 same code.
 
+**Bootstrap funding UX (live networks):** `MAMEM_WAIT_FUNDING=1` prints a
+terminal QR of the operator fee address at startup and holds boot until a
+few sats land (`MAMEM_WAIT_FUNDING_MS` caps it, default 30 min — then it
+boots unfunded with the usual warning). Detection during the wait uses
+whatever is configured: `MAMEM_FUND_TXIDS`, indexer discovery, or the p2p
+`pay` listener (which now auto-imports funding to the fee key instead of
+only logging the txid). Once: the QR never re-fires on the confirm tick.
+
 ## Gates (run in this order; each has a short, bounded runtime)
 
 ```sh

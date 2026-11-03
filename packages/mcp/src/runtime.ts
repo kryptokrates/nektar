@@ -335,6 +335,10 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     new WocTracker(mc))
   const rawBroadcaster = new ArcBroadcaster(mc)
   const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))
+  const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
+  const addIfNew = (u: { tx: Transaction, vout: number }) => {
+    if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some(x => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout)) reserve.addOwned(u.tx, u.vout)
+  }
   let memRef: MamemMemory | undefined
   const guardedBroadcasts = new Map<string, Transaction>()
   const valueOf = (txid: string, vout: number): number | undefined =>
@@ -357,7 +361,10 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       scripts: new Set([fundPkhScript])
     })
     p2p.on('spend', (t, v, by) => { if (!reserve.isSpent(t, v)) { reserve.markSpent(t, v); process.stderr.write(`mamem p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`) } })
-    p2p.on('pay', (t, v, s) => process.stderr.write(`mamem p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v} (import via MAMEM_FUND_TXIDS=${t})\n`))
+    p2p.on('pay', (t, v, s) => {
+      process.stderr.write(`mamem p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v} — importing\n`)
+      importFundingTx(mc, t, pkhHex).then(us => { for (const u of us) addIfNew(u) }).catch(() => {})
+    })
     p2p.on('peer', (a, up) => process.stderr.write(`mamem p2p: peer ${a} ${up ? 'connected' : 'down'}\n`))
     p2p.connect()
   }
@@ -411,10 +418,6 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     for (const [s, k] of shardKeys) if (keys.shardKeys[s] !== k.toHex()) { keys.shardKeys[s] = k.toHex(); changed = true }
     if (changed) save()
   }
-  const addIfNew = (u: { tx: Transaction, vout: number }) => {
-    if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some(x => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout)) reserve.addOwned(u.tx, u.vout)
-  }
-  const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
   // GOAL-v7 V1 (MAMEM_FEE_VAULT, testnet/main only): mint anchor funding
   // utxos through the MamemFeeVault covenant — per-tx/window/fee caps are
   // enforced by node script eval, and SpendGuard stays in front (defense in
@@ -493,8 +496,37 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     if (process.env.MAMEM_INDEXER_DISCOVERY === '1') {
       try { for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u) } catch (e) { process.stderr.write(`mamem ${net}: UTXO discovery unavailable (${(e as Error).message}) — set MAMEM_FUND_TXIDS=<funding txid>\n`) }
     }
-    if (reserve.utxos.length === 0) process.stderr.write(`mamem ${net}: reserve empty — send coins to ${fundAddress} and set MAMEM_FUND_TXIDS\n`)
+    if (reserve.utxos.length === 0) process.stderr.write(`mamem ${net}: reserve empty — send coins to ${fundAddress} and set MAMEM_FUND_TXIDS (or MAMEM_WAIT_FUNDING=1 to hold for funds)\n`)
   }
+  // bootstrap UX (MAMEM_WAIT_FUNDING=1): QR the funding address and hold
+  // startup until a few sats land — ONCE, not per tick (the tick loop re-runs
+  // topUp every confirmEveryMs and must not block). Detection during the
+  // wait: indexer discovery when enabled, p2p 'pay' auto-import, or the
+  // operator setting MAMEM_FUND_TXIDS. MAMEM_WAIT_FUNDING_MS caps it (30 min).
+  const waitForFunding = async () => {
+    if (reserve.utxos.length > 0 || process.env.MAMEM_WAIT_FUNDING !== '1') return
+    try {
+      const QR = await import('qrcode')
+      process.stderr.write('\n' + await QR.toString(fundAddress, { type: 'terminal', small: true }) + '\n')
+    } catch { /* QR optional — the address prints either way */ }
+    process.stderr.write(`mamem ${net}: waiting for funding — send a few sats to ${fundAddress}\n`)
+    const deadline = Date.now() + Number(process.env.MAMEM_WAIT_FUNDING_MS ?? 30 * 60_000)
+    while (reserve.utxos.length === 0 && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 15_000))
+      for (const txid of (process.env.MAMEM_FUND_TXIDS ?? '').split(',').map(s => s.trim()).filter(Boolean)) {
+        try { for (const u of await importFundingTx(mc, txid, pkhHex)) addIfNew(u) } catch { /* keep polling */ }
+      }
+      if (process.env.MAMEM_INDEXER_DISCOVERY === '1') {
+        try { for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u) } catch { /* keep polling */ }
+      }
+    }
+    if (reserve.utxos.length > 0) {
+      process.stderr.write(`mamem ${net}: funded ✓ — ${reserve.utxos.reduce((s, u) => s + u.satoshis, 0)} sats across ${reserve.utxos.length} utxo(s)\n`)
+    } else {
+      process.stderr.write(`mamem ${net}: funding wait timed out — booting unfunded (anchors fail until ${fundAddress} has a utxo; use MAMEM_FUND_TXIDS)\n`)
+    }
+  }
+  await waitForFunding()
   await topUp()
   let busy = false
   const tick = async () => {

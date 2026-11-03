@@ -213,12 +213,19 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   `MAMEM_PAYMENTS=1` + `MAMEM_OPERATOR_WIF` gates `anchor`,
   `groundedAnswer` and `commitReceipt` behind a per-call P2PKH payment —
   the x402 `exact` profile, no wallet ecosystem: the caller signs a whole
-  raw tx and hands it over, we verify + broadcast. Prices:
-  `MAMEM_PRICE_ANCHOR_SATS` (default 100), `MAMEM_PRICE_ANSWER_SATS` /
-  `MAMEM_PRICE_RECEIPT_SATS` (default 250), or `MAMEM_PRICE_SATS` for all.
+  raw tx and hands it over, we verify + broadcast. **Startup is
+  fail-closed**: `openRuntime` refuses to boot with `MAMEM_PAYMENTS=1`
+  unless `MAMEM_OPERATOR_WIF` is set and parses as a valid WIF — an
+  invoice to a missing address can never settle. The WIF is used for its
+  ADDRESS only (never signs, never leaves the box); startup logs
+  `mamem: payments on — settling to <addr>`. Prices:
+  `MAMEM_PRICE_ANCHOR_SATS` (default 100),
+  `MAMEM_PRICE_GROUNDEDANSWER_SATS` / `MAMEM_PRICE_COMMITRECEIPT_SATS`
+  (default 250), or `MAMEM_PRICE_SATS` for all.
   Flow: unpaid call → `402`-shaped `{paymentRequired}` invoice (also
   `GET /v1/pay/quote?tool=…` → real HTTP 402 + `PAYMENT-REQUIRED`
-  header). The caller's tx must (a) pay `lockingScriptHex`/`payTo` ≥
+  header; `GET /.well-known/x402` → the priced-tool catalog for
+  discovery). The caller's tx must (a) pay `lockingScriptHex`/`payTo` ≥
   amount and (b) carry `OP_FALSE OP_RETURN mamempay:<invoiceId>` — the
   tag binds the payment to THAT call, publicly auditable from the tx
   alone. Retry with `payment:{invoiceId,transaction}` → the tx is
@@ -227,6 +234,19 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   `paid` check line (receipts minted before enabling payments will show
   unpaid → failed while the flag is on). One tx pays for exactly one
   call: consumed invoices and txids are refused (`<dataDir>/payments.json`).
+  `payment.transaction` accepts raw hex **or BEEF** (AtomicBEEF too) —
+  BEEF is the right choice: funding parents travel inline, which mock
+  `verifyScripts` and Teranode Extended Format both want.
+  `payclient.ts` (`buildPaymentTx`) is the reference client: payer WIF +
+  spendable utxos in → signed BEEF hex out; any WIF-capable signer works
+  the same way.
+  Verified on real chains by `packages/e2e/src/e2e-pay.mjs`:
+  `MAMEM_NETWORK=regtest node packages/e2e/src/e2e-pay.mjs` (local
+  Teranode) and `MAMEM_NETWORK=ttn MAMEM_DATA_DIR=<funded dir>
+  MAMEM_KEY_PASSPHRASE=… node packages/e2e/src/e2e-pay.mjs` (public
+  testnet) — payer funding tx, 402 invoice, signed settlement broadcast
+  by real consensus, receipt commits the txid, `paid` check green,
+  replay rejected.
   Mock network caveat: settlement is recorded by the mock chain, not
   consensus-validated — real payment semantics need regtest/ttn/main.
 - **Access audit log (GOAL-v8 D6, opt-in):** `MAMEM_ACCESS_LOG=1`

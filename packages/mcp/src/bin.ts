@@ -10,6 +10,8 @@ import { createHttpApi } from './http.js'
 
 const rt = await openRuntime(configFromEnv())
 process.stderr.write(`mamem: network=${rt.network}\n`)
+const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
+if (paymentsEnabled()) process.stderr.write(`mamem: payments on — settling to ${requireOperatorWallet()}\n`)
 const port = process.env.MAMEM_HTTP_PORT
 if (port) {
   createHttpApi(rt.mem, rt.ops).listen(Number(port), process.env.MAMEM_HTTP_HOST ?? '127.0.0.1', () => process.stderr.write(`mamem: HTTP + MCP on :${port} (/v1, /mcp)\n`))

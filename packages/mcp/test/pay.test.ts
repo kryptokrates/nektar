@@ -9,6 +9,10 @@ import { MamemMemory, type MamemMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
 import { _testReset } from '../src/pay.js'
+import { openRuntime } from '../src/runtime.js'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 function setup (opts: MamemMemoryOptions = {}) {
   const chain = new MockChain(); chain.verifyScripts = true
@@ -34,6 +38,22 @@ async function payTx (payer: MockFunder, inv: { amount: number, lockingScriptHex
 }
 
 const OP_KEY = PrivateKey.fromRandom()
+
+test('payments: openRuntime refuses to start without a valid operator wallet', async (t) => {
+  _testReset()
+  process.env.MAMEM_PAYMENTS = '1'
+  delete process.env.MAMEM_OPERATOR_WIF
+  t.after(() => { delete process.env.MAMEM_PAYMENTS; delete process.env.MAMEM_OPERATOR_WIF; _testReset() })
+
+  const dir = () => mkdtempSync(join(tmpdir(), 'mamem-pay-init-'))
+  await assert.rejects(() => openRuntime({ network: 'mock', dataDir: dir() }), /requires MAMEM_OPERATOR_WIF/, 'missing wallet → no startup')
+  process.env.MAMEM_OPERATOR_WIF = 'definitely-not-a-wif'
+  await assert.rejects(() => openRuntime({ network: 'mock', dataDir: dir() }), /not a valid WIF/, 'garbage WIF → no startup')
+  process.env.MAMEM_OPERATOR_WIF = OP_KEY.toWif([0xef])
+  const rt = await openRuntime({ network: 'mock', dataDir: dir() })
+  t.after(() => rt.close())
+  assert.equal(rt.network, 'mock', 'valid operator wallet → startup proceeds')
+})
 
 test('payments: gated tool 402s → signed tx settles → receipt commits the payment txid', async (t) => {
   _testReset()

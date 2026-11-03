@@ -31,6 +31,14 @@ const operatorAddress = (): string => {
   return opAddr
 }
 
+/** startup check: paid tools require a valid operator wallet BEFORE the first
+ *  invoice is served — an invoice to a missing address can never settle. The
+ *  WIF is used for its ADDRESS only (never signs); returns the payTo. */
+export const requireOperatorWallet = (): string => {
+  if (!process.env.MAMEM_OPERATOR_WIF) throw new Error('MAMEM_PAYMENTS=1 requires MAMEM_OPERATOR_WIF at startup — set the operator wallet WIF (payments settle to its address; the key never signs)')
+  try { return operatorAddress() } catch (e) { throw new Error(`MAMEM_OPERATOR_WIF is not a valid WIF — ${(e as Error).message}`) }
+}
+
 /** per-tool price: MAMEM_PRICE_<TOOL>_SATS, falling back to MAMEM_PRICE_SATS, then defaults */
 export const priceFor = (tool: string): number =>
   Number(process.env[`MAMEM_PRICE_${tool.toUpperCase()}_SATS`] ?? process.env.MAMEM_PRICE_SATS ?? (tool === 'anchor' ? 100 : 250))

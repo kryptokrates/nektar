@@ -149,6 +149,10 @@ export interface Runtime {
 }
 
 export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
+  // fail fast: paid tools need a valid operator wallet BEFORE the first 402 —
+  // an invoice served to a missing address is a payment that can never settle.
+  const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
+  if (paymentsEnabled()) requireOperatorWallet()
   const base: MamemMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities }
   if (cfg.network === 'mock') {
     const chain = new MockChain(); chain.verifyScripts = true

@@ -198,11 +198,19 @@ peers; it never vouches for them** — trust comes from the receipts.
   into the receipt as an extra check line. Not built.
 - **Paid service (opt-in, `MAMEM_PAYMENTS=1`)**: `anchor`,
   `groundedAnswer` and `commitReceipt` take a per-call atomic payment —
-  BRC-166-style: the caller signs a tx paying the operator address +
-  carrying the invoice tag, we verify + broadcast, and the **receipt
-  commits the settlement txid** (the "signed usage receipt" names what
-  paid for it; `/v1/verify` gains a `paid` check). WIF-only — no wallet
-  protocol. See [docs/OPERATIONS.md](docs/OPERATIONS.md).
+  BRC-166-style x402 `exact`: an unpaid call returns a `402` invoice
+  (`payQuote` tool / `GET /v1/pay/quote`; priced catalog at
+  `/.well-known/x402`), the caller signs a tx paying the operator
+  address + carrying `OP_RETURN mamempay:<invoiceId>` (one tx binds one
+  call), retries with `payment:{invoiceId,transaction}` — we verify,
+  broadcast, and the **receipt commits the settlement txid** (the
+  "signed usage receipt" names what paid for it; `/v1/verify` gains a
+  `paid` check). WIF-only — no wallet protocol; `payclient.ts` is the
+  reference signer. Startup is fail-closed: no valid
+  `MAMEM_OPERATOR_WIF`, no boot. **Verified on real consensus** by
+  `packages/e2e/src/e2e-pay.mjs` — regtest (local Teranode) and ttn
+  (public testnet): funding tx, settlement broadcast, receipt binding,
+  replay rejected. See [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Documentation
 

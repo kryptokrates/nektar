@@ -39,6 +39,9 @@ export interface VerifyReceiptResult {
   receiptHash: string
   checks: ReceiptCheck[]
   receipt?: unknown
+  /** txid of the anchor transaction holding the receipt record — lets the
+   *  verify page link straight to the on-chain proof (block explorer). */
+  anchorTxid?: string
 }
 
 /** Decode a token, find the receipt record on __receipts__ via recall (the
@@ -76,6 +79,7 @@ export async function verifyReceipt (mem: MamemMemory, arg: { token?: string, re
   if (rec.unverifiable) return { ok: false, receiptHash: parsed.receiptHash, checks, receipt }
 
   const st = await mem.anchorStatus('__receipts__', rec.seq)
+  const anchorTxid = (await mem.records('__receipts__')).find(r => r.seq === rec.seq)?.anchorTxid
   checks.push({
     name: 'anchored',
     ok: rec.state === 'anchored',
@@ -183,5 +187,5 @@ export async function verifyReceipt (mem: MamemMemory, arg: { token?: string, re
   }
 
   const ok = checks.every(c => c.ok === true || c.ok === 'info' || c.ok === 'skip')
-  return { ok, receiptHash: parsed.receiptHash, checks, receipt }
+  return { ok, receiptHash: parsed.receiptHash, checks, receipt, anchorTxid }
 }

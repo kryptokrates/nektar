@@ -247,7 +247,7 @@ function badgeSvg (value: string, color: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${lw + vw}" height="20" role="img" aria-label="mamem: ${esc(value)}"><title>mamem: ${esc(value)}</title><rect width="${lw}" height="20" fill="#555" rx="3"/><rect x="${lw}" width="${vw}" height="20" fill="${color}" rx="3"/><rect x="${lw}" width="4" height="20" fill="${color}"/><g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11"><text x="${lw / 2}" y="14">mamem</text><text x="${lw + vw / 2}" y="14">${esc(value)}</text></g></svg>`
 }
 
-async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown }, pageUrl: string, ctx?: { base: string, importShards: string[], totals: { views: number, anchors: number }, operator?: string }): Promise<string> {
+async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown, anchorTxid?: string }, pageUrl: string, ctx?: { base: string, importShards: string[], totals: { views: number, anchors: number }, operator?: string }): Promise<string> {
   const rec = r.receipt as { answer?: string, fragmentRefs?: Array<{ shard: string, seq: number }>, checkResult?: string, modelId?: { provider?: string, release?: string }, modelAttestation?: { verifierTxid?: string, publicStatement?: string }, payment?: { txid: string, amountSats: number, payTo: string } } | undefined
   const QR = await import('qrcode')
   const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 180 })
@@ -285,6 +285,8 @@ async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<
   const ogDesc = r.ok
     ? `${r.checks.filter(c => c.ok === true).length}/${r.checks.length} checks passed — committed, unaltered, anchored, derivable. Never truth.`
     : `receipt failed verification — ${r.checks.filter(c => c.ok === false).length} check(s) broken`
+  const explorer = net === 'main' ? 'https://whatsonchain.com' : net === 'stn' ? 'https://stn.whatsonchain.com' : net === 'ttn' || net === 'test' ? 'https://test.whatsonchain.com' : null
+  const anchorUrl = explorer && r.anchorTxid ? `${explorer}/tx/${r.anchorTxid}` : null
   return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>${r.ok ? '✓ verified answer' : '✗ receipt failed'}${rec?.answer ? ` — ${esc(rec.answer.slice(0, 60))}` : ''}</title>
 <meta property="og:title" content="${r.ok ? '✓ verified answer receipt' : '✗ receipt failed verification'} — mamem">
 <meta property="og:description" content="${esc(ogDesc)}">
@@ -300,7 +302,7 @@ h1{font-size:19px;margin-bottom:2px}.net{color:#8b949e;font-size:12px;margin-bot
 ul{list-style:none;padding:0}li{margin:10px 0;font-weight:600}
 .d{color:#8b949e;font-size:12.5px;font-weight:400;margin-left:22px}
 img{display:block;margin:22px auto 6px;border:6px solid #fff;border-radius:6px}
-.qrcap{text-align:center;color:#6e7681;font-size:11.5px}
+.qrcap{text-align:center;color:#6e7681;font-size:11.5px}.qrcap a{color:#58a6ff;text-decoration:none}
 .sharebtn{display:block;width:100%;margin:18px 0 4px;padding:15px;background:#1f6feb;color:#fff;border:0;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer}
 .sharebtn:hover{background:#388bfd}.sharebtn.done{background:#12331c;color:#4ade80}
 .md{display:block;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 10px;margin-top:8px;font:11.5px ui-monospace,monospace;color:#8b949e;word-break:break-all}
@@ -314,6 +316,7 @@ ${rec?.answer !== undefined ? `<div class=ans>${esc(rec.answer)}</div>` : ''}
 <button class=sharebtn id=sharebtn>Share this verification</button>
 <script>document.getElementById('sharebtn').onclick=async function(){var u=${JSON.stringify(pageUrl.replace('&format=html',''))};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'verified answer — mamem',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
 <img src="${qr}" alt="scan to re-verify"><div class=qrcap>scan to re-check</div>
+${anchorUrl ? `<div class=qrcap><a href="${anchorUrl}" target=_blank rel=noopener>view the anchor transaction ↗</a></div>` : ''}
 <details${r.ok ? '' : ' open'}><summary>details · ${r.checks.filter(c => c.ok === true).length}/${r.checks.filter(c => c.ok !== 'info' && c.ok !== 'skip').length} checks</summary><div>
 <ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(title(c.name))}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
 ${meta ? `<div class=meta>${meta}</div>` : ''}

@@ -86,5 +86,12 @@ test('verify page: OG unfurl meta + install CTA + copyable badge markdown', asyn
     // the clutter stays OFF the page
     assert.doesNotMatch(html, /importShard \{from/, 'no visible import snippets')
     assert.doesNotMatch(html, /this operator: \d+ anchors/, 'no counters')
+    // on a real network the page links the anchor tx to a block explorer
+    const savedNet = process.env.MAMEM_NETWORK
+    process.env.MAMEM_NETWORK = 'ttn'
+    try {
+      const htmlTtn = await (await fetch(`${base}/v1/verify?r=${encodeURIComponent(g.share!.token)}`, { headers: { accept: 'text/html' } })).text()
+      assert.match(htmlTtn, /test\.whatsonchain\.com\/tx\/[0-9a-f]{64}/, 'anchor tx links to the testnet explorer')
+    } finally { if (savedNet === undefined) delete process.env.MAMEM_NETWORK; else process.env.MAMEM_NETWORK = savedNet }
   } finally { srv.close() }
 })

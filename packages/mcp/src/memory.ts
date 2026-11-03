@@ -75,6 +75,10 @@ export interface PersistedMemoryState {
   version: 1
   shards: Record<string, { headTxid: string, confirmed: boolean, tails: AnchorLink[], checkpoints: Checkpoint[], certs: import('@mamem/identity').RotationCert[], anchors: Record<string, string> }>
   promises: Array<{ shard: string, seq: number, issuedAt: number }>
+  /** owner-declared shard policy: `private` shards refuse plain merkle
+   *  citations — records on them may only be cited via a ZK proof.
+   *  Monotone: once private, a shard never goes back. */
+  flags?: Record<string, { private?: boolean }>
 }
 export interface MemoryStateStore { load: () => PersistedMemoryState | undefined, save: (s: PersistedMemoryState) => void }
 
@@ -934,6 +938,20 @@ export class MamemMemory {
   private cps = new Map<string, Checkpoint[]>()
   private touched = new Set<string>()
   private promises: Array<{ shard: string, seq: number, issuedAt: number }> = []
+  /** owner-declared shard policy — `private` shards may only be cited via ZK
+   *  proofs; the flag is monotone (public→private allowed, never back) and
+   *  persisted with the rest of the state so it survives restarts. */
+  private flags = new Map<string, { private?: boolean }>()
+  /** is this shard declared private? */
+  shardPrivate (shard: string): boolean { return this.flags.get(shard)?.private === true }
+  /** declare a shard private — monotone; once set it cannot be unset. */
+  setShardPrivate (shard: string): void { const f = this.flags.get(shard) ?? {}; f.private = true; this.flags.set(shard, f); this.persistState() }
+  /** the committed hash + anchor of a fragment — for redacted (private) cites
+   *  that carry the proof value without naming the shard. */
+  async fragmentRef (shard: string, seq: number): Promise<{ hdp: string, anchorTxid?: string } | undefined> {
+    const rec = (await this.store.all(shard)).find(r => r.seq === seq)
+    return rec ? { hdp: Buffer.from(rec.hdp).toString('hex'), anchorTxid: rec.anchorTxid } : undefined
+  }
   /** OPS-002 metrics (Prometheus text via metrics.render()) */
   readonly metrics = (() => {
     const m = new Metrics()
@@ -1064,7 +1082,7 @@ export class MamemMemory {
         checkpoints: this.cps.get(shard) ?? [], certs: [...ac.rotationCerts], anchors
       }
     }
-    st.save({ version: 1, shards, promises: this.promises })
+    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags) })
   }
   private restoreState (): void {
     const s = this.opts.stateStore?.load()
@@ -1081,6 +1099,7 @@ export class MamemMemory {
       this.tails.set(shard, p.tails); this.cps.set(shard, p.checkpoints); this.touched.add(shard)
     }
     this.promises.push(...s.promises)
+    for (const [shard, f] of Object.entries(s.flags ?? {})) this.flags.set(shard, f)
   }
 
   /**

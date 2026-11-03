@@ -85,9 +85,23 @@ export async function verifyReceipt (mem: MamemMemory, arg: { token?: string, re
   })
 
   if (receipt?.fragmentRefs?.length) {
-    for (const ref of receipt.fragmentRefs) {
-      const f = (await mem.recall(ref.shard, { seq: ref.seq })).items[0]
-      const fst = f ? await mem.anchorStatus(ref.shard, ref.seq) : undefined
+    for (const ref of receipt.fragmentRefs as Array<{ shard?: string, seq?: number, private?: true, hdp?: string, anchorTxid?: string }>) {
+      if (ref.private === true) {
+        // private shard: the cite is redacted — the re-checkable part is
+        // that the committed anchor exists and is proven; the ZK membership
+        // proof itself was verified by the service at commit time.
+        const atx = ref.anchorTxid ? mem.anchorTx(ref.anchorTxid) : undefined
+        checks.push({
+          name: 'fragment (private)',
+          ok: !!atx?.merklePath,
+          detail: atx?.merklePath
+            ? `ZK-verified cite — shard withheld; anchor ${ref.anchorTxid!.slice(0, 16)}… proven on-chain`
+            : 'private cite — no proven anchor for the committed ref'
+        })
+        continue
+      }
+      const f = (await mem.recall(ref.shard!, { seq: ref.seq! })).items[0]
+      const fst = f ? await mem.anchorStatus(ref.shard!, ref.seq!) : undefined
       checks.push({
         name: `fragment ${ref.shard}:${ref.seq}`,
         ok: !!f && !f.unverifiable && f.state === 'anchored',

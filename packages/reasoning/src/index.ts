@@ -34,6 +34,10 @@ export const hashOf = (v: unknown): string => toHex(dsha256(utf8(canonicalJson(v
 
 // ── AGT-003 grounding ─────────────────────────────────────────────────────
 export interface FragmentRef { shard: string, seq: number }
+/** a cite whose shard name is withheld — private shards commit only the
+ *  fragment hash + its anchor so a receipt proves a ZK-verified cite
+ *  without leaking which shard it came from. */
+export type CommittedRef = FragmentRef | { private: true, hdp: string, anchorTxid?: string }
 export interface Claim { text: string, literal?: string, cites: FragmentRef[] }
 export type GroundReason = 'grounded:quote' | 'grounded:entailed' | 'uncited' | 'citation-unverifiable' | 'not-entailed'
 export interface GroundedClaim extends Claim { grounded: boolean, reason: GroundReason }
@@ -41,7 +45,7 @@ export interface GroundingReport { claims: GroundedClaim[], kept: Claim[], flagg
 export type FragmentFetch = (ref: FragmentRef) => Promise<{ verified: boolean, text?: string }>
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
-const refKey = (r: FragmentRef) => `${r.shard}/${r.seq}`
+const refKey = (r: FragmentRef | CommittedRef) => 'private' in r ? `private/${r.hdp}` : `${r.shard}/${r.seq}`
 
 /** facts carried by a verified fragment: its text parsed as L_pol facts, if it is one */
 function factsOf (text: string): Fact[] {
@@ -88,7 +92,7 @@ export async function modelIdentity (m: { kind: 'local', weightsPath: string, na
 
 export interface Receipt {
   answer: string
-  fragmentRefs: FragmentRef[]
+  fragmentRefs: CommittedRef[]
   checkResult: 'verified' | 'unverifiable' | 'failed'
   modelId: ModelIdentity
   timestamp: number

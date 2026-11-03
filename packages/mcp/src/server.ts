@@ -19,6 +19,7 @@ export const TOOLS = [
         shard: { type: 'string' },
         data: { type: 'string', description: 'the fact to store, verbatim' },
         level: { type: 'number', description: 'confidentiality level; omit (0 = public) unless the user asks for restricted access — level > 0 records need a ZK clearance to read' },
+        private: { type: 'boolean', description: 'declare this shard PRIVATE (monotone — cannot be unset): records on it refuse plain merkle citations (prove/groundedAnswer fragmentRefs) and may only be cited via a ZK membership proof; the shard name is withheld from receipts' },
         premiseRefs: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] }, description: '§AppE: records this fact is derived from — the new level is floored at their max so derived content cannot leak downward' },
         source: { type: 'string', description: 'where the fact comes from (document, URL, person)' },
         modality: {
@@ -614,8 +615,12 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       }
       return out
     }
-    case 'remember':
-      return mem.remember(args.shard, args.data, { source: args.source, modality: args.modality }, args.level ?? 0, { premiseRefs: args.premiseRefs })
+    case 'remember': {
+      if (args.private === false && mem.shardPrivate(args.shard)) throw new Error(`shard "${args.shard}" is private — the flag is monotone and cannot be unset`)
+      const r = await mem.remember(args.shard, args.data, { source: args.source, modality: args.modality }, args.level ?? 0, { premiseRefs: args.premiseRefs })
+      if (args.private === true) mem.setShardPrivate(args.shard)
+      return { ...r, private: mem.shardPrivate(args.shard) || undefined }
+    }
     case 'recall': {
       const { decodePresentation } = await import('@mamem/identity')
       const r = await mem.recall(args.shard, { seq: args.seq, identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk) })
@@ -624,9 +629,12 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
         const seqs = (await mem.records(args.shard)).map(x => x.seq)
         return { ...r, hint: seqs.length ? `no record with seq ${args.seq} in shard "${args.shard}"; existing seqs: ${seqs.join(', ')} — or omit seq to recall all` : `shard "${args.shard}" is empty` }
       }
-      return r
+      return { ...r, shardPrivate: mem.shardPrivate(args.shard) || undefined }
     }
     case 'prove':
+      // fail-closed: a private shard's plain merkle citation is a leak —
+      // the same verification goal is met by proveMembership (ZK).
+      if (mem.shardPrivate(args.shard)) return { ok: false, reason: `shard "${args.shard}" is private — plain citations refused; cite via a ZK membership proof (zkQuery → proveMembership → verifyMembership)` }
       return mem.prove(args.shard, args.seq)
     case 'anchor': {
       const r = await mem.anchorShard(args.shard)
@@ -742,19 +750,47 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
       return mem.modelManifest(args)
     case 'groundedAnswer': {
       const { ground, commitReceipt } = await import('@mamem/reasoning')
+      const { Buffer } = await import('node:buffer')
       const fetch: import('@mamem/reasoning').FragmentFetch = async (ref) => {
         const r = await mem.recall(ref.shard, { seq: ref.seq })
         const it = r.items[0]
         return { verified: !!it && !it.unverifiable, text: it?.text }
       }
-      const report = await ground(args.claims, fetch, { mode: args.mode === 'flag' ? 'flag' : 'remove' })
+      // private shards (remember …, private:true): a plain cite leaks the shard
+      // name into the public receipt — the record must be cited via a ZK
+      // membership proof ({shard, seq, zk:{queryId, proof}}); without one the
+      // claim is flagged and stripped — fail-closed, the cite never leaves.
+      const privRefused: any[] = []
+      const claimsForGround: any[] = []
+      for (const c of args.claims ?? []) {
+        const priv = (c.cites ?? []).filter((r: any) => mem.shardPrivate(r.shard))
+        if (priv.length === 0) { claimsForGround.push(c); continue }
+        let zkok = true
+        for (const r of priv) {
+          const zk = r.zk ?? c.zk
+          if (typeof zk?.queryId !== 'string' || typeof zk?.proof !== 'string') { zkok = false; break }
+          const v = await mem.verifyMembership(r.shard, r.seq, new Uint8Array(Buffer.from(zk.proof, 'hex')))
+          if (!v.ok) { zkok = false; break }
+        }
+        if (zkok) claimsForGround.push(c)
+        else privRefused.push(c)
+      }
+      const report = await ground(claimsForGround, fetch, { mode: args.mode === 'flag' ? 'flag' : 'remove' })
+      for (const c of privRefused) report.flagged.push({ ...c, grounded: false, reason: 'cite targets a private shard — a ZK membership proof is required (zkQuery → proveMembership, then cite {shard,seq,zk:{queryId,proof}})' })
       const answer = report.kept.map(c => c.text).join(' ')
       if (report.kept.length === 0) {
         return { answer: '', committed: false, kept: [], flagged: report.flagged, grounding: report, checkResult: 'failed', note: 'no claim survived grounding — nothing committed (an underivable answer is invalid by construction)' }
       }
+      // the receipt commits only cites of KEPT claims — and private cites are
+      // redacted to {private, hdp, anchorTxid}: the shard name never enters
+      // the anchored record.
+      const refs: any[] = []
+      for (const c of report.kept) for (const r of c.cites ?? []) {
+        refs.push(mem.shardPrivate(r.shard) ? { private: true, ...(await mem.fragmentRef(r.shard, r.seq) ?? { hdp: '' }) } : r)
+      }
       const { receipt, receiptHash, anchor } = await commitReceipt({
         answer,
-        fragmentRefs: args.claims.flatMap((c: any) => c.cites ?? []),
+        fragmentRefs: refs,
         checkResult: 'verified',
         timestamp: Date.now(),
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
@@ -766,9 +802,15 @@ export async function callTool (mem: MamemMemory, name: string, args: any): Prom
     }
     case 'commitReceipt': {
       const { commitReceipt } = await import('@mamem/reasoning')
+      // private shards: redact cites the same way — the shard name must not
+      // reach the anchored record (see groundedAnswer).
+      const refs: any[] = []
+      for (const r of args.fragmentRefs ?? []) {
+        refs.push(mem.shardPrivate(r.shard) ? { private: true, ...(await mem.fragmentRef(r.shard, r.seq) ?? { hdp: '' }) } : r)
+      }
       const out = await commitReceipt({
         answer: args.answer,
-        fragmentRefs: args.fragmentRefs ?? [],
+        fragmentRefs: refs,
         checkResult: args.checkResult,
         timestamp: Date.now(),
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },

@@ -209,9 +209,27 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   BRC-42 ECDH confidentiality; the covenant binds payment↔reveal but
   cannot prevent the buyer reselling the plaintext afterwards, nor a
   third party front-running a *public* payload they saw in the mempool.
+- **Private shards (owner-declared, automatic proof selection):**
+  `remember(…, private:true)` sets a monotone `private` flag on the shard
+  — persisted in the state store, it survives restarts and can never be
+  un-set (`private:false` on a private shard is refused). Public shards
+  keep the ordinary Merkle+BEEF citation path. A private shard: `prove`
+  refuses outright; `groundedAnswer`/`commitReceipt` strip or require a
+  cite carrying `{zk:{queryId, proof}}` — the service runs
+  `verifyMembership` itself (single-use `zkQuery` per cite, real RISC
+  Zero STARK) and, when it passes, commits the cite **redacted** as
+  `{private:true, hdp, anchorTxid}` — the fragment hash and anchor stay
+  auditable, the shard name never reaches the anchored receipt.
+  `/v1/verify` renders it as "Cited record — private shard
+  (ZK-verified)". Fail-closed: a missing or invalid proof strips the
+  claim rather than leak the cite. This is a *privacy* policy on the
+  data, not a caller preference — and like all proofs here it attests
+  membership, never truth.
 - **Paid service (opt-in, BRC-166-style atomic settlement):**
   `MAMEM_PAYMENTS=1` + `MAMEM_OPERATOR_WIF` gates `anchor`,
-  `groundedAnswer` and `commitReceipt` behind a per-call P2PKH payment —
+  `groundedAnswer`, `commitReceipt` and the prover tools
+  (`proveMembership`, `proveSubset`, `proveDerivation`,
+  `attestMembership`) behind a per-call P2PKH payment —
   the x402 `exact` profile, no wallet ecosystem: the caller signs a whole
   raw tx and hands it over, we verify + broadcast. **Startup is
   fail-closed**: `openRuntime` refuses to boot with `MAMEM_PAYMENTS=1`
@@ -221,7 +239,14 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   `mamem: payments on — settling to <addr>`. Prices:
   `MAMEM_PRICE_ANCHOR_SATS` (default 100),
   `MAMEM_PRICE_GROUNDEDANSWER_SATS` / `MAMEM_PRICE_COMMITRECEIPT_SATS`
-  (default 250), or `MAMEM_PRICE_SATS` for all.
+  (default 250), `MAMEM_PRICE_PROVEMEMBERSHIP_SATS` /
+  `MAMEM_PRICE_PROVESUBSET_SATS` / `MAMEM_PRICE_PROVEDERIVATION_SATS` /
+  `MAMEM_PRICE_ATTESTMEMBERSHIP_SATS` (default 500 — the prover tier;
+  proving is ~50 s of CPU, `attestMembership` also spends a reserve
+  outpoint), or `MAMEM_PRICE_SATS` for all. Verifier-side tools
+  (`verifyMembership`, `verifyCombined`, `verifySubset`,
+  `verifyDerivation`, `verifyAttestation`, `zkQuery`, `verifyReceipt`)
+  are never gated — a verifier pays to *get* a proof, never to check one.
   Flow: unpaid call → `402`-shaped `{paymentRequired}` invoice (also
   `GET /v1/pay/quote?tool=…` → real HTTP 402 + `PAYMENT-REQUIRED`
   header; `GET /.well-known/x402` → the priced-tool catalog for

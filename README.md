@@ -87,6 +87,18 @@ design — "some record is in the anchored tree" — so use it for privacy
 proofs and dispute objects, not for "check my quote." Citations need the
 leaf revealed.)*
 
+**Which proof does it pick?** The *owner's declaration*, not the
+caller's mood: `remember(…, private:true)` marks a shard private —
+**monotone, it cannot be un-declared** and it persists across restarts.
+Public shards keep the ordinary Merkle path (instant, free). A private
+shard refuses plain citations outright, and a `groundedAnswer` cite
+survives only when it carries a ZK membership proof the service itself
+verifies (one verifier-issued `zkQuery` per cite). The committed receipt
+then redacts the cite to `{private:true, hdp, anchorTxid}` — the shard
+name never reaches the chain. ZK proving is real compute (~50 s CPU per
+proof), so the prover tools are priced above answers when payments are
+on; the verify side stays free — a verifier never pays to check.
+
 **5. The answer itself gets gated**
 
 ```sh

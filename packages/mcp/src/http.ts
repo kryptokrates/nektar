@@ -187,6 +187,7 @@ async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<
       : name === 'hash' ? 'The record is unaltered'
       : name === 'provenance' ? 'Signed by the service operator'
       : name === 'anchored' ? 'Anchored on the blockchain'
+      : name === 'fragment (private)' ? 'Cited record — private shard (ZK-verified)'
       : name.startsWith('fragment ') ? `Cited record ${name.slice(9)} exists on-chain`
       : name === 'grounding' ? 'The answer traces to cited records'
       : name === 'checkResult' ? 'Grounding verdict'

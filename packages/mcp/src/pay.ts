@@ -14,7 +14,9 @@ import type { MamemMemory } from './memory.js'
 export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(process.env.MAMEM_PAYMENTS ?? '')
 
 /** tools that cost sats when MAMEM_PAYMENTS=1 */
-export const PAID_TOOLS = new Set(['anchor', 'groundedAnswer', 'commitReceipt'])
+export const PAID_TOOLS = new Set(['anchor', 'groundedAnswer', 'commitReceipt', 'proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership'])
+/** prover-side tools: real CPU (STARK ~35-50s) and sometimes a chain tx — priced above answers. The verify-side tools stay free: a verifier never pays to check. */
+export const PROVER_TOOLS = new Set(['proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership'])
 
 const networkTag = (): string => {
   const n = process.env.MAMEM_NETWORK ?? 'mock'
@@ -41,7 +43,7 @@ export const requireOperatorWallet = (): string => {
 
 /** per-tool price: MAMEM_PRICE_<TOOL>_SATS, falling back to MAMEM_PRICE_SATS, then defaults */
 export const priceFor = (tool: string): number =>
-  Number(process.env[`MAMEM_PRICE_${tool.toUpperCase()}_SATS`] ?? process.env.MAMEM_PRICE_SATS ?? (tool === 'anchor' ? 100 : 250))
+  Number(process.env[`MAMEM_PRICE_${tool.toUpperCase()}_SATS`] ?? process.env.MAMEM_PRICE_SATS ?? (tool === 'anchor' ? 100 : PROVER_TOOLS.has(tool) ? 500 : 250))
 
 interface Invoice {
   invoiceId: string

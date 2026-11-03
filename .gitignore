@@ -35,3 +35,4 @@ circuits/membership/target/
 circuits/membership/proof/
 circuits/membership/proof_le/
 codex-receipts.log
+tools/curve-vectors/target/

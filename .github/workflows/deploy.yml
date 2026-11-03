@@ -70,10 +70,15 @@ jobs:
             pnpm -r build
             systemctl restart nektar-http nektar-rendezvous nektar-watch || {
               for s in nektar-http nektar-rendezvous nektar-watch; do
-                echo "=== $s ==="
+                echo "=== unit $s ==="
+                cat "/etc/systemd/system/$s.service" || true
+                echo "=== status $s ==="
                 systemctl status "$s" --no-pager -l || true
-                journalctl -u "$s" -n 25 --no-pager || true
+                journalctl -u "$s" -n 10 --no-pager || true
               done
+              echo "=== fs scan ==="
+              ls -la /opt/ | grep -iE 'nektar|mamem|watch|http' || true
+              ls /var/lib/ /etc/ 2>/dev/null | grep -iE 'nektar|mamem' || true
               echo "=== leftover mamem units ==="
               systemctl list-units --all "*mamem*" --no-pager || true
               exit 1

@@ -23,12 +23,13 @@ const mcp = async (method, params) => {
   const res = await fetch(`${BASE}/mcp`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${TOKEN}`, ...(sid ? { 'mcp-session-id': sid } : {}) },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
+    body: JSON.stringify(method.startsWith('notifications/') ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: 1, method, params })
   })
   sid = res.headers.get('mcp-session-id') ?? sid
+  if (res.status === 202) return undefined
   const text = await res.text()
-  const data = text.startsWith('data:') ? text.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5)).join('\n') : text
-  const j = JSON.parse(data)
+  const lines = text.split('\n').filter(l => l.startsWith('data:'))
+  const j = JSON.parse(lines.length ? lines.map(l => l.slice(5)).join('\n') : text)
   if (j.error) throw new Error(`${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }
@@ -39,6 +40,10 @@ const call = async (name, args) => {
 }
 
 console.log(`═══ remote paid-flow e2e → ${BASE} ═══`)
+
+// MCP Streamable HTTP session: initialize → notifications/initialized → calls
+await mcp('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'e2e-pay-remote', version: '1' } })
+await mcp('notifications/initialized', {}).catch(() => {})
 
 // ── 0) the server is on a real network (not mock) and payments are on
 const x402 = await fetch(`${BASE}/.well-known/x402`).then(r => r.ok ? r.json() : null).catch(() => null)
@@ -85,6 +90,16 @@ console.log(` invoice ${inv.extra.invoiceId} — ${inv.amount} sats → ${inv.pa
 // ── 5) sign the settlement tx locally (WIF only), retry paid
 const { hex, txid } = await buildPaymentTx({ amount: inv.amount, lockingScriptHex: inv.extra.lockingScriptHex, opReturn: inv.extra.opReturn }, payer, payerUtxos)
 const r = await call('groundedAnswer', { ...ga, payment: { invoiceId: inv.extra.invoiceId, transaction: hex } })
+// keep the local reserve honest — the spent utxo is gone, the change is ours
+if (existsSync('.state/ttn-data/reserve.json')) {
+  const { Beef } = await import('@bsv/sdk')
+  const { writeFileSync } = await import('node:fs')
+  const subj = Beef.fromBinary(Array.from(Buffer.from(hex, 'hex'))).txs.at(-1)
+  const txo = subj.tx ?? Transaction.fromBinary(subj.rawTx)
+  spent.add(`${entry.txid}:${entry.vout}`)
+  res.entries.push({ txid, vout: txo.outputs.length - 1, satoshis: txo.outputs.at(-1).satoshis, txHex: txo.toHex() })
+  writeFileSync('.state/ttn-data/reserve.json', JSON.stringify({ spent: [...spent], entries: res.entries }))
+}
 check(r.committed === true, `paid call committed — settlement tx ${txid.slice(0, 16)}… broadcast by the box`)
 check(r.receipt?.payment?.txid === txid, 'receipt commits the settlement txid')
 check(r.receipt?.payment?.payTo === inv.payTo, `payment pays the operator ${inv.payTo}`)

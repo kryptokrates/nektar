@@ -247,6 +247,15 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   testnet) — payer funding tx, 402 invoice, signed settlement broadcast
   by real consensus, receipt commits the txid, `paid` check green,
   replay rejected.
+  `packages/e2e/src/e2e-pay-remote.mjs` drives a DEPLOYED server over
+  the public wire (`MAMEM_REMOTE_URL` + `MAMEM_HTTP_TOKEN`): MCP
+  remember → auto-anchor → 402 → locally signed BEEF settlement →
+  public `/v1/verify` → tx visible via Arcade.
+  Hosted demo: the Hetzner box (`167.233.174.91:8080`) runs
+  `MAMEM_NETWORK=ttn` with a funded `fee.key.json` reserve (3M sats,
+  `MAMEM_FUND_TXIDS=hex:<rawtx>` offline import — the tx wasn't indexed
+  at the lookup endpoints yet) and `MAMEM_PAYMENTS=1`. Anchors are real
+  public testnet txs; payments settle to the operator address for real.
   Mock network caveat: settlement is recorded by the mock chain, not
   consensus-validated — real payment semantics need regtest/ttn/main.
 - **Access audit log (GOAL-v8 D6, opt-in):** `MAMEM_ACCESS_LOG=1`

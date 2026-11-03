@@ -208,9 +208,12 @@ peers; it never vouches for them** — trust comes from the receipts.
   `paid` check). WIF-only — no wallet protocol; `payclient.ts` is the
   reference signer. Startup is fail-closed: no valid
   `MAMEM_OPERATOR_WIF`, no boot. **Verified on real consensus** by
-  `packages/e2e/src/e2e-pay.mjs` — regtest (local Teranode) and ttn
-  (public testnet): funding tx, settlement broadcast, receipt binding,
-  replay rejected. See [docs/OPERATIONS.md](docs/OPERATIONS.md).
+  `packages/e2e/src/e2e-pay.mjs` (regtest + ttn) and exercised live
+  against the deployed demo box (`167.233.174.91:8080`, running
+  `MAMEM_NETWORK=ttn`) by `packages/e2e/src/e2e-pay-remote.mjs`:
+  funding tx, settlement broadcast, receipt binding, replay rejected —
+  all real public testnet transactions. See
+  [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Documentation
 

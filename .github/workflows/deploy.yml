@@ -66,6 +66,8 @@ jobs:
             git reset --hard FETCH_HEAD
             pnpm install --frozen-lockfile
             pnpm -r build
+            # public endpoint: nektar-http must bind 0.0.0.0 (default is 127.0.0.1)
+            grep -q "^NEKTAR_HTTP_HOST=" /etc/nektar-http.env 2>/dev/null || echo "NEKTAR_HTTP_HOST=0.0.0.0" >> /etc/nektar-http.env
             systemctl restart nektar-http nektar-rendezvous nektar-watch || {
               for s in nektar-http nektar-rendezvous nektar-watch; do
                 echo "=== unit $s ==="
@@ -83,4 +85,11 @@ jobs:
             }
             sleep 3
             systemctl is-active nektar-http nektar-rendezvous nektar-watch
+            echo "=== bind check ==="
+            ss -tlnp | grep -E ":(8080|8090)" || true
+            curl -sf -m 5 http://127.0.0.1:8080/.well-known/nektar && echo " ← local OK"
           '
+      - name: verify the public endpoint from outside
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+        run: curl -sf -m 10 "http://$HOST:8080/.well-known/nektar" && echo " ← public OK"

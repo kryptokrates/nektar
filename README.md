@@ -228,6 +228,9 @@ peers; it never vouches for them** — trust comes from the receipts.
 
 | Doc | Contents |
 |---|---|
+| [docs/MANUAL-CLAUDE-CODE.md](docs/MANUAL-CLAUDE-CODE.md) | the complete user manual for Claude Code — journeys, benefits, setup |
+| [docs/MANUAL-CODEX.md](docs/MANUAL-CODEX.md) | same manual for Codex |
+| [docs/DEMO.md](docs/DEMO.md) | the five-minute paid-answer demo on the live box |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | layers, packages, diagrams, ADRs |
 | [docs/CLAIMS.md](docs/CLAIMS.md) | the claim layer in full — contracts, bisection, watcher |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | every MCP client option, transports, runtime modes |

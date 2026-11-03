@@ -72,18 +72,22 @@ is refused, not published with a disclaimer. The surviving answer is
 anchored as a receipt. **Backed:** per-claim derivation from sealed
 memory — Wright's "no fragment may be hallucinated."
 
-**6. If someone disputes the proof**
+**6. If someone disputes the proof** — two rails, both on-chain
 
-→ the prover posts a small **bonded claim** on-chain; a watcher bot
-re-verifies the STARK off-chain for free and challenges lies; any dispute
-bisects the fraud to one Poseidon2 step judged by an on-chain contract
-(~10 cents, paid only by liars). Settled claims mint a **verdict token**
-that a sale contract can require — **pay-iff-proven**.
+**Optimistic rail (default, cheapest):** the prover posts a small
+**bonded claim**; a watcher bot re-verifies the STARK off-chain for free
+and challenges lies; any dispute bisects the fraud to one Poseidon2 step
+judged by an on-chain contract (~10 cents, paid only by liars).
 
-(Alternative rail, regtest-proven: a **Groth16 verifier inside the locking
-script** itself — the claim's `settleValid` must co-spend that verifier
-UTXO, so the verdict can only exist if a SNARK verifies under consensus.
-No watcher, no window — see `docs/PROOFS.md`.)
+**Validity rail (regtest-proven):** a **Groth16 verifier lives inside a
+locking script** — the claim's `settleValid` must co-spend that verifier
+UTXO in the same transaction, so the verdict *can only exist* if the
+SNARK verifies under consensus. No watcher, no window, no liveness
+assumption — miners are the judge. Already run end-to-end on our own
+sha256d-Merkle-membership circuit, root baked into the verifying key.
+
+Both rails mint the same **verdict token** on settlement — a sale
+contract can require it: **pay-iff-proven**.
 
 ## The honest cut — what's backed and what isn't
 
@@ -160,8 +164,11 @@ peers; it never vouches for them** — trust comes from the receipts.
 
 - ✅ Live on regtest + public testnet with real transactions (anchor
   chains, STARK prove/verify, claims, verdicts, gated sales, rendezvous).
-- ⚠️ One liveness assumption: a false claim stands only if **no honest
-  watcher** challenges it in the window. Everything else is math.
+- ⚠️ One liveness assumption, on the *optimistic* rail only: a false
+  claim stands only if **no honest watcher** challenges it in the window.
+  The **validity rail** (`MamemGrothClaim` + in-script Groth16 verifier,
+  our own circuit, regtest-proven) removes it — production use still
+  needs a real trusted-setup ceremony. Everything else is math.
 - ⚠️ Mainnet is gated (`MAMEM_MAINNET_CONFIRM` + spend caps), not yet a
   pilot. No security audit.
 - Proofs cover *inclusion, ordering, authorization, existence-by-time* —

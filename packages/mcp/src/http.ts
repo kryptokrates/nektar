@@ -129,7 +129,8 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
 
 /** Minimal self-contained check page (no external resources — offline-safe).
  *  The QR encodes this same page URL so a phone scan re-opens the result. */
-async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }> }, pageUrl: string): Promise<string> {
+async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown }, pageUrl: string): Promise<string> {
+  const rec = r.receipt as { answer?: string, fragmentRefs?: Array<{ shard: string, seq: number }>, checkResult?: string, modelId?: { provider?: string, release?: string } } | undefined
   const QR = await import('qrcode')
   const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 220 })
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -141,10 +142,14 @@ h1{font-size:18px}.badge{display:inline-block;padding:2px 10px;border-radius:4px
 .ok{background:#12331c;color:#4ade80}.bad{background:#3d1215;color:#f87171}.info{color:#8b949e}
 ul{list-style:none;padding:0}li{margin:6px 0}.d{color:#8b949e;font-size:13px;margin-left:22px}
 img{display:block;margin:20px auto;border:8px solid #fff;border-radius:6px}
+.ans{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:10px 12px;margin:14px 0}
+.ans .h{color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
 .note{color:#8b949e;font-size:12px;margin-top:18px;border-top:1px solid #30363d;padding-top:12px}
 code{word-break:break-all;color:#79c0ff}</style></head><body>
 <h1>mamem answer receipt <span class="badge ${cls(r.ok)}">${r.ok ? 'VERIFIED' : 'FAILED'}</span></h1>
 <code>${esc(r.receiptHash)}</code>
+${rec?.answer !== undefined ? `<div class=ans><div class=h>committed answer — compare with what you were shown</div>${esc(rec.answer)}</div>` : ''}
+${rec ? `<div class="d" style="margin-left:0">cites ${(rec.fragmentRefs ?? []).map(f => `${esc(f.shard)}:${f.seq}`).join(', ') || '—'} · model ${esc(`${rec.modelId?.provider ?? 'undeclared'}/${rec.modelId?.release ?? 'undeclared'}`)} (declared) · checkResult ${esc(rec.checkResult ?? '?')}</div>` : ''}
 <ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(c.name)}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
 <img src="${qr}" alt="scan to re-verify">
 <div class=note>Proves the answer was committed and is derivable from sealed, anchored records — not that it is true. Re-scan the QR to re-check.</div>

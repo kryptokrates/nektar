@@ -35,12 +35,19 @@ for (let i = lines.length - 1; i >= 0 && !text; i--) {
 const tokens = [...new Set(text.match(/mamemr1\.[A-Za-z0-9_-]{40,}/g) ?? [])].slice(0, 3)
 if (!tokens.length) process.exit(0)
 
+// drift: the receipt commits an exact answer text — if the reply doesn't
+// contain it, the receipt doesn't cover what the user was actually shown
+const norm = s => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+
 const results = []
 for (const t of tokens) {
   try {
     const r = await fetch(`${base}/v1/verify?r=${t}`, { signal: AbortSignal.timeout(3000) })
     const j = await r.json()
-    results.push({ token: t, ok: j.ok === true, failNames: (j.checks ?? []).filter(c => c.ok === false).map(c => c.name) })
+    const fails = (j.checks ?? []).filter(c => c.ok === false).map(c => c.name)
+    const drift = !!j.receipt?.answer && !norm(text).includes(norm(j.receipt.answer))
+    if (drift) fails.push('answer-drift')
+    results.push({ token: t, ok: j.ok === true && !drift, failNames: fails })
   } catch (e) {
     results.push({ token: t, ok: null, note: `verify endpoint unreachable (${(e).message})` })
   }
@@ -53,9 +60,10 @@ for (const r of results) {
 
 const failed = results.filter(r => r.ok === false)
 if (failed.length && !stop_hook_active) {
+  const names = [...new Set(failed.flatMap(f => f.failNames))]
   process.stdout.write(JSON.stringify({
     decision: 'block',
-    reason: `mamem receipt verification FAILED — checks that failed: ${[...new Set(failed.flatMap(f => f.failNames))].join(', ')}. Tell the user the receipt did not verify (which check failed and why that matters); do NOT claim the answer is verified.`
+    reason: `mamem receipt verification FAILED — checks that failed: ${names.join(', ')}. Tell the user the receipt did not verify (which check failed and why that matters); do NOT claim the answer is verified.${names.includes('answer-drift') ? ' answer-drift means the printed answer is not the committed receipt text — the receipt does not cover what the user was shown.' : ''}`
   }) + '\n')
 }
 process.exit(0)

@@ -38,13 +38,18 @@ const tokens = [...new Set(text.match(/mamemr1\.[A-Za-z0-9_-]{40,}/g) ?? [])].sl
 if (!tokens.length) process.exit(0)
 
 const base = process.env.MAMEM_VERIFY_BASE ?? `http://localhost:${process.env.MAMEM_HTTP_PORT ?? 8080}`
+const norm = s => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
 const lines = []
 for (const t of tokens) {
   try {
     const r = await fetch(`${base}/v1/verify?r=${t}`, { signal: AbortSignal.timeout(3000) })
     const j = await r.json()
     const fails = (j.checks ?? []).filter(c => c.ok === false).map(c => c.name)
-    lines.push(`${j.ok === true ? '✓ VERIFIED' : '✗ FAILED'} ${t.slice(0, 24)}…${fails.length ? ' — ' + fails.join(', ') : ''}`)
+    // drift: committed answer text must appear in the assistant's reply,
+    // else the receipt doesn't cover what the user was shown
+    if (j.receipt?.answer && !norm(text).includes(norm(j.receipt.answer))) fails.push('answer-drift')
+    const bad = fails.length > 0 || j.ok === false
+    lines.push(`${bad ? '✗ FAILED' : '✓ VERIFIED'} ${t.slice(0, 24)}…${fails.length ? ' — ' + fails.join(', ') : ''}`)
   } catch (e) {
     lines.push(`? UNCHECKED ${t.slice(0, 24)}… — verify endpoint unreachable (${e.message})`)
   }

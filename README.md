@@ -135,6 +135,15 @@ get stripped — that's the safety feature, not a bug.
 - **Model/data integrity** — anchor weights+dataset digests: "which model
   produced this answer" becomes provable.
 
+## See it live
+
+A demo instance runs on the public testnet (`167.233.174.91:8080`,
+`MAMEM_NETWORK=ttn`, payments on):
+
+- `GET /.well-known/x402` — the priced-tool catalog, served unauthenticated
+- [a real paid-answer receipt](http://167.233.174.91:8080/v1/verify?r=mamemr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI) — human check page; the `paid` line names the settlement tx
+- `docs/DEMO.md` — the five-minute show: 402 invoice → WIF-signed tx → receipt → phone verify
+
 ## Running it
 
 Setup, wallet bootstrap, funding, and every client option (Claude Code,

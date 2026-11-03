@@ -8,6 +8,33 @@ see it* — without trusting whoever ran the machine.
 [![release](https://github.com/nedzof/merkle-automaton/actions/workflows/release.yml/badge.svg)](https://github.com/nedzof/merkle-automaton/actions/workflows/release.yml)
 License: [Apache-2.0](LICENSE)
 
+## The whole idea in one picture
+
+```mermaid
+flowchart LR
+    U["you ask<br/>a question"] --> AI["AI answers —<br/>must cite its memory"]
+    AI --> LOG["append-only memory<br/>(can't be edited,<br/>only appended)"]
+    LOG -->|fingerprint posted<br/>to a public ledger| CHAIN[("⛓ BSV blockchain")]
+    AI --> R["receipt = answer +<br/>what it cited +<br/>the paying txid"]
+    R --> V["anyone opens the<br/>verify link — no login"]
+    CHAIN --> V
+    V --> M{"does the math<br/>still work?"}
+    M -->|"yes"| OK["committed —<br/>unchangeable"]
+    M -->|"no"| BAD["tampered —<br/>don't trust it"]
+```
+
+1. Facts go into a log that can only **grow** — nothing is ever edited.
+2. A **fingerprint** (hash) of that log is posted on-chain — like
+   notarizing a page. The chain only timestamps the fingerprint; it
+   never sees your data.
+3. When the AI answers, it must **cite notarized facts** — claims it
+   can't derive get stripped, and the answer gets a receipt.
+4. Anyone with the receipt **re-does the math**: hash matches? anchor
+   on-chain? cites inside it? Faked anything → the math fails.
+
+The blockchain is the notary — verification is the reader re-running
+the checks, not trusting us.
+
 ## The walkthrough — one question, end to end
 
 What actually happens when someone asks your agent

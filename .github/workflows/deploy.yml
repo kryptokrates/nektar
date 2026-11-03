@@ -86,8 +86,14 @@ jobs:
             sleep 3
             systemctl is-active nektar-http nektar-rendezvous nektar-watch
             echo "=== bind check ==="
-            ss -tlnp | grep -E ":(8080|8090)" || true
-            curl -sf -m 5 http://127.0.0.1:8080/.well-known/nektar && echo " ← local OK"
+            ss -tlnp | grep -E "node|MainThread|:808" || true
+            echo "=== env var names (values hidden) ==="
+            grep -oE "^[A-Z_]+" /etc/nektar-http.env 2>/dev/null || echo "no env file"
+            echo "=== http banner ==="
+            journalctl -u nektar-http -n 5 --no-pager | grep -E "nektar:|Error|error" || true
+            PORT=$(journalctl -u nektar-http -n 20 --no-pager | grep -oE "HTTP \+ MCP on :[0-9]+" | grep -oE "[0-9]+" | tail -1)
+            echo "detected port: ${PORT:-none}"
+            [ -n "$PORT" ] && curl -sf -m 5 "http://127.0.0.1:$PORT/.well-known/nektar" && echo " ← local OK"
           '
       - name: verify the public endpoint from outside
         env:

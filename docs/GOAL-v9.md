@@ -328,21 +328,25 @@ per-op cost.
   (single-method stage variants ~2×, RC-in-state generic stage ~5×,
   deferred mods ~1.5×, permutation sharing across queries).
 - **0e Groth16-on-chain verifier — PROVEN ON LIVE REGTEST (2026, nChain
-  ePrint 2024/1498 path):** `tools/groth16-spike/spike_groth16.py` drives
-  `nchain-innovation/zkscript` to emit a BLS12-381 Groth16 verifier as
-  Bitcoin Script — **430,324 B locking / 22,629 B unlocking** (dummy
-  CRS+proof where the pairing equation holds by construction — proves
-  script mechanics, not a real circuit). `tx_engine.Context` evaluates
-  PASS; `packages/e2e/src/e2e-groth16-regtest.mjs` then broadcast the
-  430KB deploy tx AND the proof spend to live Teranode regtest — **both
-  mempool-accepted** (deploy `8e3728…`, spend `0952dc…`), a tampered
-  unlock correctly rejected, mined at height 8483. **A Groth16 proof was
-  verified under consensus on our own stack.** Remaining for real use:
-  a real R1CS circuit (membership/statement — SHA-256 path ≈10⁶
-  constraints demonstrated range, Poseidon2 twin-root ≈10³–10⁴), a
-  trusted-setup ceremony per circuit, and a claim covenant variant whose
-  settle pins the verifier UTXO as co-spent judge (same hashPrevouts
-  pattern as `proveStage`).
+  ePrint 2024/1498 path):** `tools/groth16-spike/` drives
+  `nchain-innovation/zkscript` to emit Groth16 verifiers as Bitcoin
+  Script. Two passes, both deployed+spent on live Teranode regtest:
+  (a) mechanics — BLS12-381 synthetic vk/proof, 430,324 B lock /
+  22,629 B unlock (deploy `8e3728…`, spend `0952dc…`);
+  (b) **real proof — MNT4-753 arkworks `square_root` circuit**
+  (`spike_groth16_real.py`), 489,234 B lock / 294,486 B push-only
+  unlock, deploy `56c2a4…`, spend `06853c…` — a real R1CS Groth16 proof
+  verified under consensus, tampered unlock rejected, mined h8485.
+  Found constraint: the unlocking script must be **push-only by
+  consensus** (scriptSig ops are rejected) → `has_precomputed_gradients=
+  True` puts all pairing gradients in as data; `script.py`'s default
+  variant emits operators and is unspendable as-is. Remaining for real
+  use: OUR circuit (membership/statement — SHA-256 path ≈10⁶
+  constraints demonstrated range, Poseidon2 twin-root ≈10³–10⁴; note
+  MNT4 field elements are ~95 B → fat unlocks, BLS12-381 is leaner),
+  a trusted-setup ceremony per circuit, and a claim covenant variant
+  whose settle pins the verifier UTXO as co-spent judge (same
+  hashPrevouts pattern as `proveStage`).
 - **GATE:** total estimated footprint + stage count. If Poseidon2-bound
   and infeasible → documented fallback (Groth16-wrap with R0's public
   ceremony, or a SHA-256-only STARK variant) — decided with real

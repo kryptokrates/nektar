@@ -96,7 +96,7 @@ export const paymentRequired = (tool: string): { invoice: Invoice, required: Rec
         lockingScriptHex: invoice.lockingScriptHex,
         opReturn: invoice.opReturn,
         expires: new Date(invoice.expires).toISOString(),
-        howToPay: 'build + sign a tx with (1) an output paying lockingScriptHex (or payTo) ≥ amount sats and (2) an OP_FALSE OP_RETURN output carrying the ascii `opReturn`, then retry the SAME call with payment:{invoiceId, transaction:<raw tx hex>}'
+        howToPay: 'build + sign a tx with (1) an output paying lockingScriptHex (or payTo) ≥ amount sats and (2) an OP_FALSE OP_RETURN output carrying the ascii `opReturn`, then retry the SAME call with payment:{invoiceId, transaction:<raw or BEEF tx hex>} (BEEF preferred — it carries the funding parents)'
       }
     }]
   }
@@ -111,8 +111,15 @@ export const settlePayment = async (mem: MamemMemory, tool: string, payment: { i
   if (!inv || inv.tool !== tool) throw new Error(`unknown or wrong-tool invoiceId "${payment?.invoiceId}" — call payQuote for a fresh invoice`)
   if (Date.now() > inv.expires) { invoices.delete(inv.invoiceId); throw new Error('invoice expired — call payQuote for a fresh one') }
   loadConsumed()
+  // raw hex OR BEEF: BEEF carries the funding parents — needed by script
+  // validation (mock verifyScripts) and supplied to Teranode as Extended
+  // Format. Bare legacy hex is fine when the network already knows the
+  // parents (mainnet/ttn broadcasts, tests with registered parents).
   let tx: Transaction
-  try { tx = Transaction.fromHex(String(payment.transaction ?? '')) } catch (e) { throw new Error(`payment.transaction is not a parseable raw tx (${(e as Error).message.slice(0, 80)})`) }
+  try {
+    const h = String(payment.transaction ?? '').replace(/^0x/, '')
+    tx = /^(0100beef|0101010000)/.test(h) ? Transaction.fromBEEF(Array.from(Buffer.from(h, 'hex'))) : Transaction.fromHex(h)
+  } catch (e) { throw new Error(`payment.transaction is not a parseable raw/BEEF tx (${(e as Error).message.slice(0, 80)})`) }
   const tagHex = Buffer.from(utf8(inv.opReturn)).toString('hex')
   const paid = tx.outputs.some(o => o.lockingScript.toHex() === inv.lockingScriptHex && (o.satoshis ?? 0) >= inv.amount)
   const tagged = tx.outputs.some(o => { const h = o.lockingScript.toHex(); return h.startsWith('006a') && h.includes(tagHex) })

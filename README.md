@@ -35,6 +35,23 @@ flowchart LR
 The blockchain is the notary — verification is the reader re-running
 the checks, not trusting us.
 
+## See a verified answer in 60 seconds
+
+```sh
+pnpm -r build && pnpm demo
+```
+
+Boots on the mock network — **offline, zero BSV, nothing spent** — seeds
+memory, answers a grounded question, and prints a real receipt + badge.
+Watch the ungrounded claim get stripped in front of you. Then:
+
+- `pnpm setup:claude` / `pnpm setup:codex` — wire the receipt hooks into your agent
+- `exportShard` hands any public shard to another operator as a `packUrl`;
+  `importShard {from: "<their-url>", shard: "…"}` re-verifies every bundle on
+  import — verified memory on day one. `/.well-known/mamem` lists what an
+  operator offers; `MAMEM_PACK_SHARE=0` opts out.
+- `doctor` — one-call health check (funding, shards, anchors, prover)
+
 ## The walkthrough — one question, end to end
 
 What actually happens when someone asks your agent

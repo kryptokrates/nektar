@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { MockChain, MockFunder } from '@mamem/chain'
+import type { AddressInfo } from 'node:net'
 import { MamemMemory, type MamemMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 
@@ -104,4 +105,42 @@ test('groundedAnswer/commitReceipt share block: token + verifyUrl + badgeUrl + m
   assert.ok(r.share.verifyUrl.includes('/v1/verify?r='))
   assert.ok(r.share.badgeUrl.includes('/v1/badge?r='))
   assert.match(r.share.markdown, /\[!?\[?[^\]]*\]\(.*\/v1\/badge\?r=.*\)\]\(.*\/v1\/verify\?r=.*\)|\/v1\/verify\?r=/)
+})
+
+test('pack endpoint + remote import: /.well-known/mamem lists offerable shards; importShard {from,shard} pulls + re-verifies', async () => {
+  const { createHttpApi } = await import('../src/http.js')
+  const a = setup()
+  await a.mem.remember('guide', 'fact one')
+  await a.mem.remember('guide', 'fact two')
+  a.settle('guide')
+  a.mem.setShardPrivate('hr'); await a.mem.remember('hr', 'secret') // private — must not leak
+  const srv = createHttpApi(a.mem).listen(0)
+  await new Promise(r => srv.once('listening', r))
+  const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`
+  try {
+    // discovery doc: public shards only — private + __* excluded
+    const disco = await (await fetch(`${base}/.well-known/mamem`)).json()
+    assert.equal(disco.kind, 'mamem-discovery')
+    const names = (disco.publicShards as Array<{ shard: string }>).map(s => s.shard)
+    assert.ok(names.includes('guide')); assert.ok(!names.includes('hr') && !names.some(n => n.startsWith('__')))
+
+    // direct fetch == the tool's export (sans packUrl)
+    const pack = await (await fetch(`${base}/v1/pack/guide`)).json()
+    assert.equal(pack.kind, 'mamem-shard-pack'); assert.equal(pack.records.length, 2)
+    assert.equal((await fetch(`${base}/v1/pack/hr`)).status, 403)
+    assert.equal((await fetch(`${base}/v1/pack/nope`)).status, 404)
+
+    // remote import: peer pulls the pack over HTTP and re-verifies every bundle
+    const b = peerOf(a)
+    const imp = await callTool(b, 'importShard', { from: base, shard: 'guide' })
+    assert.equal(imp.imported, 2); assert.equal(imp.anchored, 2); assert.deepEqual(imp.unverifiable, [])
+
+    // exportShard hands out the shareable URL (the invite artifact)
+    const ex = await callTool(a.mem, 'exportShard', { shard: 'guide' })
+    assert.ok(ex.packUrl.endsWith('/v1/pack/guide'))
+
+    // doctor counts offerable packs
+    const d = await callTool(b, 'doctor', {})
+    assert.equal(d.publicPacks, 1) // 'guide' only — 'hr' is private, __imports__ is system
+  } finally { srv.close() }
 })

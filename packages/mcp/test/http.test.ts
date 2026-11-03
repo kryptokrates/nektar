@@ -34,7 +34,7 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
     assert.match(metrics, /^mamem_promise_violations 0$/m)
     // every implemented route prefix is documented, and vice versa
     const documented = Object.keys(OPENAPI.paths).sort()
-    assert.deepEqual(documented, ['/.well-known/x402', '/mcp', '/v1/badge', '/v1/checkpoint/{shard}', '/v1/costs', '/v1/health', '/v1/metrics', '/v1/openapi.json', '/v1/pay/quote', '/v1/proof/{shard}/{seq}', '/v1/tools', '/v1/tools/{name}', '/v1/verify', '/v1/wallet', '/v1/zkproof/{commit}'])
+    assert.deepEqual(documented, ['/.well-known/mamem', '/.well-known/x402', '/mcp', '/v1/badge', '/v1/checkpoint/{shard}', '/v1/costs', '/v1/health', '/v1/metrics', '/v1/openapi.json', '/v1/pack/{shard}', '/v1/pay/quote', '/v1/proof/{shard}/{seq}', '/v1/tools', '/v1/tools/{name}', '/v1/verify', '/v1/wallet', '/v1/zkproof/{commit}'])
     assert.equal(((await (await fetch(`${base}/openapi.json`)).json()) as { openapi: string }).openapi, '3.1.0')
   } finally { srv.close() }
 })
@@ -79,5 +79,10 @@ test('verify page: OG unfurl meta + install CTA + copyable badge markdown', asyn
     assert.match(html, /Verify your own agent/, 'install CTA converts viewers')
     assert.match(html, /v1\/badge\?r=/, 'badge URL on the page')
     assert.match(html, /mcp:install|git clone/, 'install command on the page')
+    // viral edge: cited public shard → import CTA + discovery link + counters
+    assert.match(html, /import this operator's public memory/, 'import CTA')
+    assert.match(html, /importShard \{from: "[^"]+", shard: "m"\}/, 'copyable import snippet for the cited shard')
+    assert.match(html, /\.well-known\/mamem/, 'discovery doc link')
+    assert.match(html, /this operator: 2 anchors · this page viewed 1×/, 'social-proof counters')
   } finally { srv.close() }
 })

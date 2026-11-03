@@ -38,6 +38,8 @@ export const OPENAPI = {
     '/v1/checkpoint/{shard}': {
       get: { summary: 'latest signed checkpoint of the shard (LOG-007)', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'checkpoint + log pubkey' }, 404: { description: 'no anchor yet' } } }
     },
+    '/.well-known/mamem': { get: { summary: 'capability/pack discovery doc — verify base + offerable public shards (MAMEM_PACK_SHARE=0 disables)', responses: { 200: { description: 'discovery doc' }, 404: { description: 'pack sharing disabled' } } } },
+    '/v1/pack/{shard}': { get: { summary: 'serve a public shard as a portable pack (records + proof bundles) — importShard re-verifies every bundle; private/gated shards refuse', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'ShardPack JSON' }, 403: { description: 'private or level-gated' }, 404: { description: 'unknown/disabled' } } } },
     '/v1/verify': {
       get: {
         summary: 'scan a receipt token — traffic-light checks that the answer receipt exists, re-hashes, is provenance-signed + anchored, and its cited fragments are anchored. JSON by default; Accept: text/html (or ?format=html) returns a check page with a QR.',
@@ -101,7 +103,7 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
     // bearer token — the gate that makes a public bind safe. Unset =
     // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
     const tok = process.env.MAMEM_HTTP_TOKEN
-    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname.startsWith('/v1/zkproof/')
+    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname === '/.well-known/mamem' || url.pathname.startsWith('/v1/pack/') || url.pathname.startsWith('/v1/zkproof/')
     if (tok && !publicPath && req.headers.authorization !== `Bearer ${tok}`) {
       return send(401, { error: 'unauthorized' })
     }
@@ -147,7 +149,13 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
           if (url.searchParams.get('format') === 'html' || req.headers.accept?.includes('text/html')) {
             const base = process.env.MAMEM_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
             const q = tok ? `r=${tok}` : `s=${seq}`
-            return send(200, await verifyPage(result, `${base}/v1/verify?${q}&format=html`), 'text/html; charset=utf-8')
+            mem.metrics.inc('mamem_verify_views_total', {}, 1, 'verify page views')
+            // viral edge: cited shards this operator offers publicly become
+            // a one-line import CTA — "take the memory behind this answer"
+            const offerable = new Set(await mem.publicShards().catch(() => [] as string[]))
+            const cited = [...new Set(((result.receipt as { fragmentRefs?: Array<{ shard: string }> } | undefined)?.fragmentRefs ?? []).map(f => f.shard).filter(s => offerable.has(s)))]
+            return send(200, await verifyPage(result, `${base}/v1/verify?${q}&format=html`,
+              { base, importShards: cited, totals: { views: mem.metrics.value('mamem_verify_views_total'), anchors: mem.metrics.value('mamem_anchors_total') } }), 'text/html; charset=utf-8')
           }
           return send(200, result)
         } catch (e) { return send(400, { error: (e as Error).message }) }
@@ -177,6 +185,33 @@ export function createHttpApi (mem: MamemMemory, ops?: { wallet: () => Promise<u
           network: n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:mock',
           resources: [...PAID_TOOLS].map(t => ({ url: `tool://${t}`, description: `mamem ${t}`, priceSats: priceFor(t), payVia: `call ${t} without payment → invoice in the result, or GET /v1/pay/quote?tool=${t}` }))
         })
+      }
+      // pack sharing: any visitor may fetch a public shard's pack + discover
+      // what's offered — the viral cold-start edge (importShard re-verifies
+      // every bundle, so serving adds zero trust). MAMEM_PACK_SHARE=0 opts out.
+      if (req.method === 'GET' && url.pathname === '/.well-known/mamem') {
+        if (/^(0|false|no)$/i.test(process.env.MAMEM_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (MAMEM_PACK_SHARE=0)' })
+        const base = process.env.MAMEM_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
+        const pub = await mem.publicShards()
+        return send(200, {
+          v: 1, kind: 'mamem-discovery', verifyBase: `${base}/v1/verify`,
+          publicShards: await Promise.all(pub.map(async s => ({
+            shard: s, records: (await mem.records(s)).length,
+            packUrl: `${base}/v1/pack/${encodeURIComponent(s)}`,
+            import: { tool: 'importShard', args: { from: base, shard: s } }
+          })))
+        })
+      }
+      if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'pack' && p.length === 3) {
+        if (/^(0|false|no)$/i.test(process.env.MAMEM_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (MAMEM_PACK_SHARE=0)' })
+        try {
+          const pack = await mem.exportShardPack(decodeURIComponent(p[2]!))
+          mem.metrics.inc('mamem_packs_served_total', {}, 1, 'public shard packs served')
+          return send(200, pack)
+        } catch (e) {
+          const m = (e as Error).message
+          return send(/private|level>0/.test(m) ? 403 : 404, { error: m })
+        }
       }
       if (req.method === 'GET' && url.pathname === '/v1/pay/quote') {
         const { paymentsEnabled, PAID_TOOLS, paymentRequired } = await import('./pay.js')
@@ -211,7 +246,7 @@ function badgeSvg (value: string, color: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${lw + vw}" height="20" role="img" aria-label="mamem: ${esc(value)}"><title>mamem: ${esc(value)}</title><rect width="${lw}" height="20" fill="#555" rx="3"/><rect x="${lw}" width="${vw}" height="20" fill="${color}" rx="3"/><rect x="${lw}" width="4" height="20" fill="${color}"/><g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11"><text x="${lw / 2}" y="14">mamem</text><text x="${lw + vw / 2}" y="14">${esc(value)}</text></g></svg>`
 }
 
-async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown }, pageUrl: string): Promise<string> {
+async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown }, pageUrl: string, ctx?: { base: string, importShards: string[], totals: { views: number, anchors: number } }): Promise<string> {
   const rec = r.receipt as { answer?: string, fragmentRefs?: Array<{ shard: string, seq: number }>, checkResult?: string, modelId?: { provider?: string, release?: string }, modelAttestation?: { verifierTxid?: string, publicStatement?: string }, payment?: { txid: string, amountSats: number, payTo: string } } | undefined
   const QR = await import('qrcode')
   const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 180 })
@@ -285,6 +320,8 @@ ${meta ? `<div class=meta>${meta}</div>` : ''}
 <img src="${qr}" alt="scan to re-verify"><div class=qrcap>re-scan to re-check this receipt</div>
 <div class=note><b>What this proves:</b> the answer was committed and is derivable from sealed, anchored records.<br><b>What it doesn't:</b> the answer could still be wrong — commitment is not truth.</div>
 <div class=cta><b>Verify your own agent's answers.</b> mamem anchors AI memory + receipts on BSV — self-hosted, receipts anyone can check like this page.<div class=install><code>git clone https://github.com/nedzof/merkle-automaton && pnpm mcp:install</code></div>
+${ctx ? `<div class=mdcap>import this operator's public memory — every pack re-verifies against the chain on import:</div>${ctx.importShards.length ? ctx.importShards.map(s => `<code class=md>${esc(`importShard {from: "${ctx.base}", shard: "${s}"}`)}</code>`).join('') : ''}<code class=md>${esc(`${ctx.base}/.well-known/mamem`)}</code>` : ''}
+${ctx?.totals ? `<div class=mdcap>this operator: ${ctx.totals.anchors} anchors · this page viewed ${ctx.totals.views}×</div>` : ''}
 ${badgeMd ? `<div class=mdcap>embed this badge:</div><code class=md>${esc(badgeMd)}</code>` : ''}</div>
 </body></html>`
 }

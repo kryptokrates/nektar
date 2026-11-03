@@ -217,6 +217,20 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
   BRC-42 ECDH confidentiality; the covenant binds payment↔reveal but
   cannot prevent the buyer reselling the plaintext afterwards, nor a
   third party front-running a *public* payload they saw in the mempool.
+- **Public shard packs (cold-start sharing, on by default):**
+  `GET /v1/pack/{shard}` serves a public shard's portable pack — every
+  record's plaintext + provenance + its anchor `ProofBundle`, the same
+  object `exportShard` returns plus a shareable `packUrl`.
+  `GET /.well-known/mamem` is the discovery doc: `{verifyBase,
+  publicShards:[{shard, records, packUrl, import}]}` enumerating what the
+  operator offers (private shards, `__*` system shards, and shards holding
+  level>0 records are never listed). `MAMEM_PACK_SHARE=0` disables both.
+  The importer calls `importShard {from: "<base>", shard: "<name>"}` (or
+  `{packUrl}`) — the fetched pack is parsed and **every bundle re-verifies
+  against the local chain view**; tampered or cross-network packs land in
+  `unverifiable`, never trusted, and the import event is anchored on
+  `__imports__`. Remote fetch is http(s) only — the zero-trust import path
+  makes a hostile pack a reporting entry, not a compromise.
 - **Private shards (owner-declared, automatic proof selection):**
   `remember(…, private:true)` sets a monotone `private` flag on the shard
   — persisted in the state store, it survives restarts and can never be

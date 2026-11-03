@@ -392,11 +392,15 @@ export const TOOLS = [
   },
   {
     name: 'importShard',
-    description: 'Import a shard pack (from exportShard): records re-land preserving provenance, every proof bundle re-verifies against the live chain (zero trust in the exporter), and the import event itself is recorded on __imports__. Target shard must be empty. Same network only — a regtest pack cannot anchor-verify on mainnet.',
+    description: 'Import a shard pack (from exportShard or a remote operator): records re-land preserving provenance, every proof bundle re-verifies against the live chain (zero trust in the exporter — a hostile pack yields unverifiable entries, never trusted records), and the import event itself is recorded on __imports__. Target shard must be empty. Same network only — a regtest pack cannot anchor-verify on mainnet. Give EITHER {pack} (ShardPack JSON), OR {from, shard} (an operator base URL + shard — fetches {from}/v1/pack/{shard}), OR {packUrl} (a full pack URL).',
     inputSchema: {
       type: 'object',
-      required: ['pack'],
-      properties: { pack: { type: 'object', description: 'the ShardPack JSON returned by exportShard' } }
+      properties: {
+        pack: { type: 'object', description: 'the ShardPack JSON returned by exportShard' },
+        from: { type: 'string', description: 'operator base URL — fetches {from}/v1/pack/{shard}' },
+        shard: { type: 'string', description: 'shard name when importing via {from}' },
+        packUrl: { type: 'string', description: 'full pack URL (e.g. from exportShard packUrl or /.well-known/mamem)' }
+      }
     }
   },
   {
@@ -906,11 +910,25 @@ export async function callTool (mem: MamemMemory, name: string, args: any, ctx: 
     }
     case 'exportShard': {
       if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('exportShard: shard required')
-      return await mem.exportShardPack(args.shard)
+      const pack = await mem.exportShardPack(args.shard)
+      // the serve endpoint makes the pack a shareable URL — an invite the
+      // agent can hand to another operator ('importShard from this URL')
+      return { ...pack, packUrl: `${verifyBase()}/v1/pack/${encodeURIComponent(args.shard)}` }
     }
     case 'importShard': {
-      if (typeof args?.pack !== 'object' || args.pack === null) throw new Error('importShard: pack object required (ShardPack JSON from exportShard)')
-      return await mem.importShardPack(args.pack)
+      let pack = args?.pack
+      if (pack === undefined) {
+        const url = typeof args?.packUrl === 'string' ? args.packUrl
+          : typeof args?.from === 'string' && typeof args?.shard === 'string'
+            ? `${args.from.replace(/\/+$/, '')}/v1/pack/${encodeURIComponent(args.shard)}` : undefined
+        if (!url) throw new Error('importShard: give {pack}, {from,shard}, or {packUrl}')
+        if (!/^https?:\/\//i.test(url)) throw new Error('importShard: pack URL must be http(s)')
+        const r = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+        if (!r.ok) throw new Error(`importShard: fetch ${url} → ${r.status}`)
+        pack = await r.json()
+      }
+      if (typeof pack !== 'object' || pack === null) throw new Error('importShard: pack object required (ShardPack JSON from exportShard or a pack URL)')
+      return await mem.importShardPack(pack)
     }
     case 'doctor': {
       const d = await mem.doctor()

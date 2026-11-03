@@ -1074,6 +1074,19 @@ export class MamemMemory {
   private flags = new Map<string, { private?: boolean }>()
   /** is this shard declared private? */
   shardPrivate (shard: string): boolean { return this.flags.get(shard)?.private === true }
+
+  /** shards an operator can offer as public packs — excludes private shards,
+   *  `__*` system shards, and any shard holding level>0 records (the same
+   *  gates exportShardPack enforces; listing here means "fetchable"). */
+  async publicShards (): Promise<string[]> {
+    const out: string[] = []
+    for (const s of this.shards()) {
+      if (s.startsWith('__') || this.shardPrivate(s)) continue
+      if ((await this.store.all(s)).some(r => (r.level ?? 0) > 0)) continue
+      out.push(s)
+    }
+    return out
+  }
   /** declare a shard private — monotone; once set it cannot be unset. */
   setShardPrivate (shard: string): void { const f = this.flags.get(shard) ?? {}; f.private = true; this.flags.set(shard, f); this.persistState() }
   /** the committed hash + anchor of a fragment — for redacted (private) cites
@@ -1610,6 +1623,7 @@ export class MamemMemory {
     anchoredRecords: number
     unprovenAnchors: number
     importedBundles: number
+    publicPacks: number
     payments: 'on' | 'off'
     prover: string
   }> {
@@ -1630,6 +1644,7 @@ export class MamemMemory {
       anchoredRecords,
       unprovenAnchors: this.unprovenAnchors().length,
       importedBundles: this.importedBundles.size,
+      publicPacks: (await this.publicShards()).length,
       payments: /^(1|true|yes)$/i.test(process.env.MAMEM_PAYMENTS ?? '') ? 'on' : 'off',
       prover
     }

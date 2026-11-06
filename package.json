@@ -35,12 +35,14 @@
     "cedar:symcc": "docker run --rm -v \"$PWD/tools/cedar-symcc:/w\" -w /w -e CARGO_TARGET_DIR=/tmp/t rust:1-slim sh run.sh",
     "smt:vectors": "docker run --rm -v \"$PWD/..:/w\" -w /w/nektar/tools/smt-vectors -e CARGO_TARGET_DIR=/tmp/t rust:1-slim cargo run -q",
     "stack:up": "cd infra/teranode-quickstart && ./start.sh",
-    "stack:down": "cd infra/teranode-quickstart && ./stop.sh"
+    "stack:down": "cd infra/teranode-quickstart && ./stop.sh",
+    "bundle:mcp": "node tools/bundle-mcp.mjs"
   },
   "devDependencies": {
     "@bsv/sdk": "4.0.1",
     "@types/node": "24.19.2",
     "dependency-cruiser": "^18.7.1",
+    "esbuild": "~0.25.12",
     "knip": "^6.44.1",
     "typescript": "5.6.3"
   },

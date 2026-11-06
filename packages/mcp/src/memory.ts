@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { join } from 'node:path'
-import { PrivateKey, PublicKey, Signature, Transaction, LockingScript, P2PKH } from '@bsv/sdk'
+import { PrivateKey, PublicKey, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import {
   utf8, fromHex, toHex, sha256, dsha256, concat, field, eq, hash160,
   computeLeaf, merkleRoot, merkleProof, identityHash, diff, apply, encodeDelta, decodeDelta,
@@ -506,18 +506,18 @@ export class NektarMemory {
    *  wallet. §16 audit trail: settlement IS an anchored tx — the payment
    *  receipt is publicly re-verifiable, not a server-side claim. */
   async payInvoice (inv: { invoiceId: string, amount: number, lockingScriptHex: string, opReturn: string }): Promise<{ payment: { invoiceId: string, transaction: string }, txid: string }> {
-    const fee = 2n
-    const f = await this.takeFunding(inv.amount + Number(fee) + 1)
+    const f = await this.takeFunding(inv.amount + 600)
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(this.fundKey) })
     tx.addOutput({ satoshis: inv.amount, lockingScript: LockingScript.fromHex(inv.lockingScriptHex) })
     // OP_FALSE OP_RETURN + ascii tag push — settlePayment parses '006a'+utf8(tag)
     const tagHex = Buffer.from(inv.opReturn, 'utf8').toString('hex')
     tx.addOutput({ satoshis: 0, lockingScript: LockingScript.fromHex(`006a${tagHex.length / 2 < 0x4c ? (tagHex.length / 2).toString(16).padStart(2, '0') : '4c' + (tagHex.length / 2).toString(16).padStart(2, '0')}${tagHex}`) })
-    const change = BigInt(f.satoshis) - BigInt(inv.amount) - fee
-    if (change > 0n) tx.addOutput({ satoshis: Number(change), lockingScript: LockingScript.fromHex(new P2PKH().lock(this.fundKey.toPublicKey().toAddress((this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])).toHex()) })
+    tx.addOutput({ lockingScript: new P2PKH().lock(this.fundKey.toPublicKey().toAddress((this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])), change: true })
+    await tx.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
+    await tx.sign()
     ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
-    if (change > 0n) (this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
+    ;(this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
     // Extended Format — carries the funding parent so the seller's script
     // validation and broadcaster resolve input values (mock verifyScripts).
     return { payment: { invoiceId: inv.invoiceId, transaction: tx.toHexEF() }, txid: tx.id('hex') }

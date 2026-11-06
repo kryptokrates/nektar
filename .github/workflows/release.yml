@@ -36,7 +36,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       - name: smoke the pushed image
-        run: docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/nektar:${{ github.ref_type == 'tag' && github.ref_name || 'edge' }} packages/mcp/demo/client.mjs
+        run: docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/nektar:${{ github.ref_type == 'tag' && 'latest' || 'edge' }} packages/mcp/demo/client.mjs
         timeout-minutes: 3
 
   bundle:
@@ -88,10 +88,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
         timeout-minutes: 10
-      - name: publish all @nektar/* to GitHub Packages
+      - name: publish the bundle as @nedzof/nektar-mcp on GPR
+        # GPR enforces scope=owner, so we ship one scoped package wrapping the
+        # self-contained bundle instead of the 18 @nektar/* workspace packages.
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          printf '@nektar:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > .npmrc
-          pnpm -r publish --no-git-checks
-          rm .npmrc
+          node -e "const fs=require('fs');fs.writeFileSync('dist-bundle/package.json',JSON.stringify({name:'@nedzof/nektar-mcp',version:require('./packages/mcp/package.json').version,bin:{'nektar-mcp':'./pkg/mcp/dist/nektar-mcp.mjs'},files:['pkg','stark','package.json']},null,2))"
+          printf '@nedzof:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > dist-bundle/.npmrc
+          cd dist-bundle && npm publish --userconfig .npmrc

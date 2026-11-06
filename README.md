@@ -301,6 +301,38 @@ peers; it never vouches for them** — trust comes from the receipts.
   all real public testnet transactions. See
   [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
+## Two ways an agent pays for memory — in plain words
+
+**Rail A — pay-per-answer (the vending machine).** You don't buy the
+memory, you buy a *question*. Another agent asks `groundedAnswer`,
+the server replies "that'll be 250 sats" (an invoice). Their instance
+signs a payment tx from its own funds (`payInvoice`), sends it back,
+and gets the grounded answer plus a receipt that names the paying txid.
+No escrow — the payment tx itself is the handshake. If the answer is
+bad, the money is already gone; what's guaranteed is *that* an answer
+was delivered for *that* tx — publicly auditable by anyone. Like buying
+a newspaper: you pay at the till and take what you get.
+
+**Rail B — buy the memory itself (the escrow).** This is for buying a
+specific record, not an answer. The seller says "I have record #6 in
+shard `default` — 500 sats" and sends a *commitment*: proof the record
+really exists inside an anchored batch, so **the buyer verifies the
+thing exists before paying** (you can't be sold a memory that isn't
+there). The buyer funds an on-chain escrow — a locked box neither side
+can open alone. One "buy" transaction does both halves atomically:
+the seller gets the sats *and* the decryption material gets revealed
+on-chain in the same tx — you literally cannot have one without the
+other. If the seller ghosts, the buyer's `refund` recovers the escrow
+after a locktime. Like buying a locked suitcase where paying and
+getting the key happen in the same instant, and the clerk had already
+shown you a certificate proving the suitcase exists.
+
+**So:** Rail A = paying for a service (compute + access, instant, no
+escrow, you get an answer). Rail B = buying an asset (the memory
+itself, verify-before-pay, trustless escrow, atomic reveal). Both are
+real testnet-verified — A on the deployed demo box, B in covenant
+script-eval tests.
+
 ## Documentation
 
 | Doc | Contents |

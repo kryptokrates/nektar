@@ -22,5 +22,12 @@
   "devDependencies": {
     "@nektar/chain": "workspace:*",
     "@nektar/anchor": "workspace:*"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

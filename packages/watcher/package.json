@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
-  "bin": { "nektar-watcher": "./src/watcher.mjs" },
+  "bin": {
+    "nektar-watcher": "./src/watcher.mjs"
+  },
   "scripts": {
     "test": "node test/run.mjs"
   },
@@ -15,5 +17,12 @@
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

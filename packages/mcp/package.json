@@ -13,7 +13,8 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test --test-timeout=60000 dist/test/*.test.js"
+    "test": "node --test --test-timeout=60000 dist/test/*.test.js",
+    "prepublishOnly": "pnpm -r build"
   },
   "dependencies": {
     "@nektar/anchor": "workspace:*",
@@ -41,5 +42,12 @@
   "devDependencies": {
     "@bsv/sdk": "4.0.1",
     "@types/qrcode": "^1.5.6"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

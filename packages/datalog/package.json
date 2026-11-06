@@ -13,5 +13,12 @@
   },
   "dependencies": {
     "@nektar/core": "workspace:*"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

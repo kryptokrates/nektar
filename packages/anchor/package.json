@@ -21,5 +21,12 @@
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

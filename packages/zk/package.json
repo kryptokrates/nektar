@@ -17,5 +17,13 @@
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"
+  },
+  "files": [
+    "dist",
+    "stark",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

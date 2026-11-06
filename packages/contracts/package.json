@@ -21,5 +21,13 @@
   "devDependencies": {
     "runar-compiler": "^0.4.6",
     "typescript": "^5.4.0"
+  },
+  "files": [
+    "dist",
+    "*.json",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

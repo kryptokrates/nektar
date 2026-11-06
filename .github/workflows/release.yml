@@ -4,7 +4,7 @@ on:
     branches: [master, main]
     tags: ['v*']
 permissions:
-  contents: read
+  contents: write
   packages: write
 jobs:
   image:
@@ -36,5 +36,38 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       - name: smoke the pushed image
-        run: docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/nektar:${{ steps.meta.outputs.version }} packages/mcp/demo/client.mjs
+        run: docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/nektar:${{ github.ref_type == 'tag' && github.ref_name || 'edge' }} packages/mcp/demo/client.mjs
         timeout-minutes: 3
+
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: pnpm
+        run: corepack enable && corepack prepare pnpm@12.16.1 --activate
+      - name: pnpm store cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+        timeout-minutes: 10
+      - run: node tools/bundle-mcp.mjs
+      - name: tar the self-contained bundle
+        run: tar -czf nektar-mcp-bundle.tar.gz -C dist-bundle .
+      - name: upload run artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nektar-mcp-bundle
+          path: nektar-mcp-bundle.tar.gz
+          if-no-files-found: error
+      - name: attach to the GitHub release (tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nektar-mcp-bundle.tar.gz

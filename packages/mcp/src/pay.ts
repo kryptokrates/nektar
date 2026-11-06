@@ -129,7 +129,7 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   try {
     const h = String(payment.transaction ?? '').replace(/^0x/, '')
     const bytes = Array.from(Buffer.from(h, 'hex'))
-    if (h.startsWith('0101010000')) {
+    if (h.startsWith('01010101')) {
       tx = Transaction.fromAtomicBEEF(bytes)
     } else if (h.startsWith('0100beef')) {
       // BEEF carries ancestors topologically — the subject tx is last; wire

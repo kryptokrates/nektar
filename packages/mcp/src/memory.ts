@@ -1231,6 +1231,22 @@ export class NektarMemory {
     for (const s of this.touched) {
       if (await this.log.closeReason(s)) { const a = await this.anchorShard(s); if (a) out.push({ shard: s, ...a }) }
     }
+    // §12 SLA watchdog: if no anchor renewed the bond for half an epoch,
+    // commit the current root again — a lapsed deadline makes the bond
+    // seizable by anyone, so the operator must refresh before it passes.
+    if (this.bondContract && this.bondHead) {
+      const height = await this.chain.currentHeight()
+      const s = this.bondContract.stateOf(this.bondHead.script)
+      const margin = this.bondContract.params.epochLen / 2n > 0n ? this.bondContract.params.epochLen / 2n : 1n
+      if (s.seized === 0n && BigInt(height) + margin >= s.deadline) {
+        try {
+          const c = await this.bondContract.buildCommit(this.bondHead, this.opts.bond?.ownerKey ?? this.fundKey, s.lastRoot, height, this.chain)
+          this.bondHead = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0]!.satoshis!, script: c.tx.outputs[0]!.lockingScript.toHex() }
+          this.persistState()
+          this.metrics.inc('nektar_bond_renewals_total', {}, 1, 'bond deadline renewals committed by the SLA watchdog')
+        } catch { this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed') }
+      }
+    }
     return out
   }
 

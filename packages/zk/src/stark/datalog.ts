@@ -8,6 +8,7 @@ import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
+import { proverUrl, remoteProve } from './prove.js'
 import { StarkProverError } from './prove.js'
 
 export const ZKD3_MAGIC = Uint8Array.from([0x5a, 0x4b, 0x44, 0x33]) // "ZKD3"
@@ -131,7 +132,6 @@ function proverCommand (): [string, string[]] {
 
 /** prove a §14 committed derivation path and return L_ZKDer v3 bytes */
 export async function proveDerivationStark (inp: ProveDerivationInput, timeoutMs = Number(process.env.NEKTAR_STARK_TIMEOUT_MS ?? 300_000)): Promise<{ bytes: Uint8Array, ms: number, policyRoot: string, conclusionHash: string }> {
-  const [cmd, args] = proverCommand()
   const payload = JSON.stringify({
     nodeCount: inp.nodeCount,
     policyRoot: hex(inp.policyRoot),
@@ -144,7 +144,8 @@ export async function proveDerivationStark (inp: ProveDerivationInput, timeoutMs
       output: s.output
     }))
   })
-  const out = await new Promise<string>((resolve, reject) => {
+  const out = proverUrl() ? await remoteProve(payload, 'prove-der', timeoutMs) : await new Promise<string>((resolve, reject) => {
+    const [cmd, args] = proverCommand()
     const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, MSYS_NO_PATHCONV: '1' } })
     let so = ''; let se = ''
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new StarkProverError(`prover timed out after ${timeoutMs} ms`)) }, timeoutMs)

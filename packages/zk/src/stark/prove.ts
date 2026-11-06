@@ -1,7 +1,9 @@
 // STARK prover adapter: runs the pinned RISC Zero membership program.
+//   NEKTAR_STARK_PROVER_URL=https://host     → remote prover (POST {path}, JSON in/out)
 //   NEKTAR_STARK_PROVER=/path/to/nektar-stark  → native binary (Linux image)
 //   otherwise → `docker run -i nektar-stark-build` with the cached target volume
-// Bounded by a timeout; the prover sees the private inputs (local proving only).
+// Bounded by a timeout; the prover sees the private inputs — remote proving
+// means trusting that host with witnesses (use your own prover service).
 import { spawn } from 'node:child_process'
 import { encodeZkm2 } from './codec.js'
 
@@ -17,6 +19,26 @@ export class StarkProverError extends Error {}
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const unhex = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
 
+export function proverUrl (): string | null {
+  const u = process.env.NEKTAR_STARK_PROVER_URL
+  return u ? u.replace(/\/$/, '') : null
+}
+
+/** POST a prover payload to NEKTAR_STARK_PROVER_URL/{path} — the service is a
+ *  thin shim over the same `nektar-stark` binary (JSON stdin → JSON stdout). */
+export async function remoteProve (payload: string, path: 'prove' | 'prove-der', timeoutMs: number): Promise<string> {
+  const url = `${proverUrl()}/${path}`
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  let res: Response
+  try { res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload, signal: ctrl.signal }) }
+  catch (e) { clearTimeout(timer); throw new StarkProverError(`remote prover unreachable: ${(e as Error).message}`) }
+  clearTimeout(timer)
+  const text = await res.text()
+  if (!res.ok) throw new StarkProverError(`remote prover refused (HTTP ${res.status}): ${text.slice(0, 300)}`)
+  return text
+}
+
 function proverCommand (): [string, string[]] {
   const bin = process.env.NEKTAR_STARK_PROVER
   if (bin) return [bin, ['prove']]
@@ -25,9 +47,9 @@ function proverCommand (): [string, string[]] {
 
 /** prove leaf ∈ batch(root) and return L_ZKMem v2 bytes */
 export async function proveMembershipStark (inp: ProveMembershipInput, timeoutMs = Number(process.env.NEKTAR_STARK_TIMEOUT_MS ?? 300_000)): Promise<{ bytes: Uint8Array, ms: number, root: string }> {
-  const [cmd, args] = proverCommand()
   const payload = JSON.stringify({ leaf: hex(inp.leaf), index: inp.index, size: inp.size, siblings: inp.siblings.map(hex), queryId: hex(inp.queryId) })
-  const out = await new Promise<string>((resolve, reject) => {
+  const out = proverUrl() ? await remoteProve(payload, 'prove', timeoutMs) : await new Promise<string>((resolve, reject) => {
+    const [cmd, args] = proverCommand()
     const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, MSYS_NO_PATHCONV: '1' } })
     let so = ''; let se = ''
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new StarkProverError(`prover timed out after ${timeoutMs} ms`)) }, timeoutMs)

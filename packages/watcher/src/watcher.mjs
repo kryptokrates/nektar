@@ -14,7 +14,7 @@ import { PrivateKey, Transaction, LockingScript, Hash } from '@bsv/sdk'
 import { RunarContract, LocalSigner, deserializeState } from 'runar-sdk'
 import { NektarProvider } from '@nektar/anchor'
 import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve } from '@nektar/chain'
-import { loadClaims, proofFile, markClaimSpent } from '@nektar/chain'
+import { loadClaims, proofFile, markClaimSpent, registerClaim } from '@nektar/chain'
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -149,14 +149,19 @@ async function checkClaim (entry) {
   c.connect(provider, signer)
   c.currentUtxo = { txid, outputIndex: vout, satoshis: out.satoshis, script }
   const newState = { ...st, status: 1n, challengerPkh: watcherPkh, responseDeadline: st.window, bisectLo: 0n, bisectHi: st.stages }
+  let res
   try {
-    await c.call('challenge', [null, watcherPk], provider, signer, { newState })
+    res = await c.call('challenge', [null, watcherPk], provider, signer, { newState })
     console.log(`  ✔ challenge broadcast for ${txid.slice(0, 8)}:${vout}`)
   } catch (e) {
     if (/UTXO_SPENT/.test(e.message)) { markClaimSpent(cfg.claimsFile, txid, vout); return console.log(`  ${txid.slice(0, 8)}:${vout} — outpoint already spent (likely challenged), marked`) }
     throw e
   }
   markClaimSpent(cfg.claimsFile, txid, vout) // consumed by our challenge tx
+  // continuation tracking: the challenged claim lives on as the challenge
+  // tx's output 0 — register it so the watcher keeps following the bisection
+  // game instead of losing the covenant at its first spend
+  if (res?.txid) registerClaim(cfg.claimsFile, { txid: res.txid, vout: 0 })
 }
 
 const inconclusiveStreaks = new Map() // txid → consecutive inconclusive verifications

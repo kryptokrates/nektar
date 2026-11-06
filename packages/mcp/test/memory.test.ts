@@ -273,6 +273,42 @@ test('§19 read-path: revoked author key withholds the record at recall', async 
   assert.match(bad.items[0]!.reason!, /revoked key/)
 })
 
+test('§19 CRL: embedded SMT proof makes the anchored revoke record self-convicting', async () => {
+  const { mem, settle } = setup()
+  const idm = await import('@nektar/identity')
+  const pk = PrivateKey.fromRandom().toPublicKey().toString()
+
+  const rev = await callTool(mem, 'revoke', { pkHex: pk })
+  assert.equal(rev.revoked, true)
+  settle('__revocation__')
+
+  // third-party path — the record alone convicts; no operator SMT consulted
+  const p = await callTool(mem, 'revocationProof', { pkHex: pk })
+  assert.equal(p.found, true)
+  assert.equal(p.anchored, true)
+  assert.equal(p.verified, true)
+  const entry = idm.parseRevocationRecord(p.data)!
+  assert.ok(entry && idm.verifyRevocationEntry(entry), 'record text convicts on its own')
+  assert.deepEqual(idm.deserializeSmtProof(p.smtProof).key, entry.proof!.key, 'serialized proof roundtrips')
+
+  // NEGATIVES — tampered root, foreign key, replayed proof for another pk all fail closed
+  assert.equal(idm.verifyRevocationEntry({ ...entry, root: '11'.repeat(32) }), false, 'tampered root')
+  const other = PrivateKey.fromRandom().toPublicKey().toString()
+  assert.equal(idm.verifyRevocationEntry({ pk: other, root: entry.root, proof: entry.proof }), false, 'proof does not transplant to another key')
+  assert.equal(idm.verifyRevocationEntry({ pk, root: entry.root, proof: { key: entry.proof!.key, siblings: [[1, new Uint8Array(32).fill(9)]] } }), false, 'tampered siblings')
+
+  // status answers BOTH directions against the latest anchored root
+  const st = await callTool(mem, 'revocationStatus', { pkHex: pk })
+  assert.equal(st.revoked, true); assert.equal(st.matchesCurrent, true); assert.equal(st.anchored, true)
+  assert.deepEqual(idm.verifyRevocationStatus(pk, st.root, idm.deserializeSmtProof(st.smtProof)), { ok: true, revoked: true })
+  const clean = await callTool(mem, 'revocationStatus', { pkHex: other })
+  assert.equal(clean.revoked, false); assert.equal(clean.matchesCurrent, true)
+  assert.deepEqual(idm.verifyRevocationStatus(other, clean.root, idm.deserializeSmtProof(clean.smtProof)), { ok: true, revoked: false }, 'non-membership proven against anchored root')
+
+  // never-revoked key has no CRL entry
+  assert.equal((await callTool(mem, 'revocationProof', { pkHex: other })).found, false)
+})
+
 test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-hoc edits break verification', async () => {
   const { mem, settle } = setup()
   const { dsha256, utf8, concat, TAG_DELEGATION } = await import('@nektar/core')

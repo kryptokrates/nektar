@@ -12,14 +12,14 @@ import {
   TAG_RECEIPT_SIG,
   type Fragment, type Bytes, type Provenance
 } from '@nektar/core'
-import { BatchLog, MemoryShardStore, verifyProvenance, signCheckpoint, PromiseMonitor, type ShardStore, type LogRecord, type Checkpoint } from '@nektar/log'
+import { BatchLog, MemoryShardStore, verifyProvenance, signCheckpoint, checkpointDigest, PromiseMonitor, type ShardStore, type LogRecord, type Checkpoint } from '@nektar/log'
 import { Metrics } from './metrics.js'
 
 const DELTA_PREFIX = 'delta:'
 
 /** write refused at ingest (COM-003) */
 export class IngestError extends Error {}
-import { AnchorChain } from '@nektar/anchor'
+import { AnchorChain, CheckpointBond, type BondUtxo } from '@nektar/anchor'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { createNektarOverlay, type NektarOverlay } from '@nektar/overlay'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
@@ -77,6 +77,23 @@ export interface NektarMemoryOptions {
    *  NEKTAR_DATA_DIR or ./.nektar; proofs committed in private cites are
    *  served publicly for independent re-verification. */
   dataDir?: string
+  /** §12 SLA bond: when set, a NektarCheckpointBond covenant carries an
+   *  unforkable on-chain checkpoint history — every anchor commits the
+   *  checkpoint digest, so a missing commit within the SLA window is
+   *  publicly provable (and slashable once `seize` ships). */
+  bond?: {
+    /** key that signs commit/close — defaults to the funding key */
+    ownerKey?: PrivateKey
+    /** bond size in sats (default 5_000) */
+    sats?: number
+    /** blocks after deploy when the bond may be closed (default 1008 ≈ 1 week) */
+    horizonBlocks?: number
+    /** §12 SLA window in blocks: each anchor's commit renews the seize
+     *  deadline to commitHeight + epochBlocks (default 144 ≈ 1 day). */
+    epochBlocks?: number
+    /** fee bound enforced by the covenant (default 10) */
+    maxFee?: bigint
+  }
 }
 
 /** persisted anchor state: per shard the head, the succession, checkpoints,
@@ -92,6 +109,9 @@ export interface PersistedMemoryState {
    *  citations — records on them may only be cited via a ZK proof.
    *  Monotone: once private, a shard never goes back. */
   flags?: Record<string, { private?: boolean }>
+  /** §12 SLA bond covenant head (when opts.bond set); restart-safe like the
+   *  shard heads — losing it would strand the bond UTXO. */
+  bond?: { txid: string, vout: number, satoshis: number, script: string, operatorPkh: string, releaseHeight: string, maxFee: string, epochLen?: string }
 }
 export interface MemoryStateStore { load: () => PersistedMemoryState | undefined, save: (s: PersistedMemoryState) => void }
 
@@ -387,7 +407,7 @@ export class NektarMemory {
    *  plaintext `data`, its `prov` and `E` so the verifier can recompute
    *  `leaf = computeLeaf({d,p,E})` and bind the TEXT to the proven leaf —
    *  an inclusion proof for a DIFFERENT record is not evidence. */
-  async revocationProof (pubHex: string): Promise<{ seq: number, data: string, prov?: import('@nektar/core').Provenance, E?: Bytes, leaf: string, bundle?: import('@nektar/verify').ProofBundle, anchored: boolean } | null> {
+  async revocationProof (pubHex: string): Promise<{ seq: number, data: string, prov?: import('@nektar/core').Provenance, E?: Bytes, leaf: string, bundle?: import('@nektar/verify').ProofBundle, anchored: boolean, root?: string, smtProof?: string } | null> {
     for (const rec of await this.store.all('__revocation__')) {
       let data: string
       if (rec.fragment.d.length) data = Buffer.from(rec.fragment.d).toString('utf8')
@@ -399,11 +419,86 @@ export class NektarMemory {
         const ciphertext = rec.fragment.E.slice(2 + aadLen)
         data = Buffer.from(decryptFragment(k, { ciphertext, aad, keyID: '' })).toString('utf8')
       } else continue
-      if (!data.startsWith(`revoke:${pubHex}`)) continue
+      const entry = idbind.parseRevocationRecord(data)
+      if (!entry || entry.pk.toLowerCase() !== pubHex.toLowerCase()) continue
       const { bundle, result } = await this.prove('__revocation__', rec.seq)
-      return { seq: rec.seq, data, prov: rec.fragment.p, E: rec.fragment.E, leaf: toHex(rec.leaf), bundle, anchored: result.ok === true }
+      return { seq: rec.seq, data, prov: rec.fragment.p, E: rec.fragment.E, leaf: toHex(rec.leaf), bundle, anchored: result.ok === true,
+        root: entry.root, smtProof: entry.proof ? idbind.serializeSmtProof(entry.proof) : undefined }
     }
     return null
+  }
+
+  /** §19 CRL status: is `pubHex` revoked, provable against the LATEST anchored
+   *  SMT root? The newest `revoke:` record's embedded root equals the current
+   *  SMT root only when no revoke happened after it — `matchesCurrent` says so;
+   *  a verifier recomputes via idbind.verifyRevocationStatus(pk, root, proof)
+   *  which accepts both membership (revoked) and non-membership proofs. */
+  async revocationStatus (pubHex: string): Promise<{ revoked: boolean, root: string, matchesCurrent: boolean, smtProof: string, seq?: number, anchored: boolean }> {
+    const key = idbind.revocationKey(pubHex)
+    const smtProof = idbind.serializeSmtProof(this.revocations.prove(key))
+    const current = toHex(this.revocations.root())
+    let root = '', seq: number | undefined, anchored = false
+    for (const rec of await this.store.all('__revocation__')) {
+      if (!rec.fragment.d.length) continue
+      const data = Buffer.from(rec.fragment.d).toString('utf8')
+      const entry = idbind.parseRevocationRecord(data)
+      if (!entry) continue
+      const { result } = await this.prove('__revocation__', rec.seq)
+      root = entry.root; seq = rec.seq; anchored = result.ok === true
+    }
+    return { revoked: this.revocations.has(key), root, matchesCurrent: root === current, smtProof, seq, anchored }
+  }
+
+  // ── §12 SLA bond (NektarCheckpointBond) ────────────────────────────────
+  private bondContract?: CheckpointBond
+  private bondHead?: BondUtxo
+  private bondKey (): PrivateKey { return this.opts.bond?.ownerKey ?? this.fundKey }
+
+  /** deploy the checkpoint-bond covenant: `sats` locked, releasable after
+   *  `releaseHeight` (default: current height + horizonBlocks). From then on
+   *  every anchor commits its checkpoint digest — the on-chain history is
+   *  unforkable and timestamped, so promise/SLA violations are provable by
+   *  anyone replaying the commit chain. */
+  async bondDeploy (sats = this.opts.bond?.sats ?? 5_000, releaseHeight?: bigint): Promise<{ txid: string, releaseHeight: bigint }> {
+    if (this.bondHead) throw new Error('bond already deployed')
+    const key = this.bondKey()
+    const release = releaseHeight ?? BigInt(await this.chain.currentHeight()) + BigInt(this.opts.bond?.horizonBlocks ?? 1008)
+    const pkh = key.toPublicKey().toHash()
+    const cfg = { operatorPkh: typeof pkh === 'string' ? pkh : toHex(Uint8Array.from(pkh)), bondReleaseHeight: release, maxFee: this.opts.bond?.maxFee ?? 10n, epochLen: BigInt(this.opts.bond?.epochBlocks ?? 144) }
+    this.bondContract = new CheckpointBond(cfg)
+    const fund = await this.funder.take(sats + 600)
+    const { tx, utxo } = this.bondContract.buildDeploy({ tx: fund.tx, vout: fund.vout, satoshis: fund.satoshis }, key, sats)
+    const br = await this.chain.broadcast(tx)
+    if (br.status !== 'success') { this.bondContract = undefined; throw new Error(`bond deploy broadcast failed: ${br.description ?? 'unknown'}`) }
+    this.bondHead = utxo
+    this.persistState()
+    return { txid: tx.id('hex'), releaseHeight: release }
+  }
+
+  /** current on-chain bond state + head — absent when no bond was deployed.
+   *  `deadline` is the seize threshold: if chain height reaches it without a
+   *  commit, ANYONE may take the bond (§12 deadline-slashing). */
+  bondStatus (): { n: number, lastRoot: string, headTxid: string, sats: number, releaseHeight: bigint, deadline: bigint, seized: boolean } | null {
+    if (!this.bondContract || !this.bondHead) return null
+    const s = this.bondContract.stateOf(this.bondHead.script)
+    return { n: Number(s.n), lastRoot: s.lastRoot, headTxid: this.bondHead.txid, sats: this.bondHead.satoshis, releaseHeight: this.bondContract.params.bondReleaseHeight, deadline: s.deadline, seized: s.seized === 1n }
+  }
+
+  /** seize an overdue bond — permissionless: valid only after the on-chain
+   *  deadline. Any observer can run this against a bond head they hold; the
+   *  payout goes to `payToScript` (default: this instance's operator). */
+  async bondSeize (payToScript?: string): Promise<{ txid: string } | null> {
+    if (!this.bondContract || !this.bondHead) return null
+    const height = await this.chain.currentHeight()
+    const s = this.bondContract.stateOf(this.bondHead.script)
+    if (s.seized !== 0n) throw new Error('bond already seized')
+    if (BigInt(height) < s.deadline) throw new Error(`bond not yet seizable — deadline ${s.deadline}, height ${height}`)
+    const { buildP2PKHScript } = await import('@nektar/anchor')
+    const pkh = this.bondContract.params.operatorPkh
+    const { tx } = await this.bondContract.buildSeize(this.bondHead, payToScript ?? buildP2PKHScript(pkh), height, this.chain)
+    this.bondHead = { txid: tx.id('hex'), vout: 1, satoshis: tx.outputs[1]!.satoshis!, script: tx.outputs[1]!.lockingScript.toHex() }
+    this.persistState()
+    return { txid: tx.id('hex') }
   }
 
   /** D4 (§19 M_U): the shard's anchored rotation ledger — genesis owner pub
@@ -1059,6 +1154,19 @@ export class NektarMemory {
     }))
     this.cps.set(shard, cps)
     this.persistState()
+    // §12 SLA: the bond covenant mirrors the checkpoint on-chain — lastRoot
+    // commits to the FULL signed checkpoint (digest binds logId+size+n+R+R'+
+    // time+txid), making the history unforkable and publicly replayable.
+    if (this.bondContract && this.bondHead) {
+      const cp = cps[cps.length - 1]!
+      const lastRoot = toHex(Uint8Array.from(checkpointDigest(cp)))
+      const key = this.opts.bond?.ownerKey ?? this.fundKey
+      try {
+        const c = await this.bondContract.buildCommit(this.bondHead, key, lastRoot, await this.chain.currentHeight(), this.chain)
+        this.bondHead = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0]!.satoshis!, script: c.tx.outputs[0]!.lockingScript.toHex() }
+        this.persistState()
+      } catch { this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed') }
+    }
     if (this.opts.overlay) {
       await this.opts.overlay.engine.submit({ beef: this.anchorChain(shard).beefOf(res.tx), topics: ['tm_nektar'] }, undefined, 'current-tx')
     }
@@ -1225,7 +1333,11 @@ export class NektarMemory {
         checkpoints: this.cps.get(shard) ?? [], certs: [...ac.rotationCerts], anchors
       }
     }
-    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags), importedBundles: Object.fromEntries(this.importedBundles) })
+    const bond = this.bondContract && this.bondHead ? {
+      txid: this.bondHead.txid, vout: this.bondHead.vout, satoshis: this.bondHead.satoshis, script: this.bondHead.script,
+      operatorPkh: this.bondContract.params.operatorPkh, releaseHeight: this.bondContract.params.bondReleaseHeight.toString(), maxFee: this.bondContract.params.maxFee.toString(), epochLen: this.bondContract.params.epochLen.toString()
+    } : undefined
+    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags), importedBundles: Object.fromEntries(this.importedBundles), bond })
   }
   private restoreState (): void {
     const s = this.opts.stateStore?.load()
@@ -1244,6 +1356,10 @@ export class NektarMemory {
     this.promises.push(...s.promises)
     for (const [k, b] of Object.entries(s.importedBundles ?? {})) this.importedBundles.set(k, b)
     for (const [shard, f] of Object.entries(s.flags ?? {})) this.flags.set(shard, f)
+    if (s.bond) {
+      this.bondContract = new CheckpointBond({ operatorPkh: s.bond.operatorPkh, bondReleaseHeight: BigInt(s.bond.releaseHeight), maxFee: BigInt(s.bond.maxFee), epochLen: BigInt(s.bond.epochLen ?? this.opts.bond?.epochBlocks ?? 144) })
+      this.bondHead = { txid: s.bond.txid, vout: s.bond.vout, satoshis: s.bond.satoshis, script: s.bond.script }
+    }
   }
 
   /**
@@ -1369,8 +1485,9 @@ export class NektarMemory {
       const level = BigInt(r.level ?? 0)
       const fin = opts?.requireFinal ? await this.anchorStatus(shard, r.seq) : undefined
       // §19 author guard: revocation + epoch-window authorship, evaluated once
-      // per record before the serve guards. Operator-local revocation only —
-      // third-party revocation proofs need an anchored root (deferred).
+      // per record before the serve guards. Local check uses the live SMT;
+      // third parties use revocationProof/revocationStatus — SMT membership
+      // proofs verified against roots embedded in anchored `revoke:` records.
       const authorDeny = r.authorPub ? await this.authorGuard(shard, r) : undefined
       if (fin && fin.state !== 'final') {
         item.unverifiable = true
@@ -1626,6 +1743,7 @@ export class NektarMemory {
     publicPacks: number
     payments: 'on' | 'off'
     prover: string
+    bond: { n: number, lastRoot: string, headTxid: string, sats: number, releaseHeight: string, deadline: string, seized: boolean } | null
   }> {
     const shards = this.shards()
     let records = 0, anchoredRecords = 0
@@ -1646,7 +1764,8 @@ export class NektarMemory {
       importedBundles: this.importedBundles.size,
       publicPacks: (await this.publicShards()).length,
       payments: /^(1|true|yes)$/i.test(process.env.NEKTAR_PAYMENTS ?? '') ? 'on' : 'off',
-      prover
+      prover,
+      bond: (() => { const b = this.bondStatus(); return b ? { ...b, releaseHeight: b.releaseHeight.toString(), deadline: b.deadline.toString() } : null })()
     }
   }
 

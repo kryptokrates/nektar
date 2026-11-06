@@ -73,17 +73,15 @@ if (reserve.utxos.length < 3) {
 
 // ============================ V2: CheckpointBond ==========================
 const release = (await tracker.currentHeight()) + 2
-const bond = new CheckpointBond({ operatorPkh: opPkh, bondReleaseHeight: BigInt(release), maxFee: 10n })
+const bond = new CheckpointBond({ operatorPkh: opPkh, bondReleaseHeight: BigInt(release), maxFee: 10n, epochLen: 10n })
 let bondUtxo = await fundTo(bond.lockingScript(0n, ''), 5_000)
 check(true, `V2 bond funded (${bondUtxo.txid.slice(0, 12)}…)`)
 await mineOne()
 
-// commit 1: root1 → continuation {n=1}
+// commit 1: root1 → continuation {n=1}; lockTime = commit height (deadline ← lt+10)
 const root1 = 'aa'.repeat(32)
-const c1 = bond.buildCommit(bondUtxo, key, root1, 1n)
-const rc1 = await broadcaster.broadcast(c1.tx)
-check(rc1.status === 'success', `V2 commit#1 accepted — ${rc1.description?.slice(0, 60) ?? 'ok'}`)
-if (rc1.status !== 'success') { console.log('FATAL: commit#1 refused'); process.exit(1) }
+const c1 = await bond.buildCommit(bondUtxo, key, root1, await tracker.currentHeight(), broadcaster, 1n)
+check(true, 'V2 commit#1 accepted')
 await mineOne()
 
 // commit 2 on the continuation: root2 → {n=2}
@@ -91,10 +89,8 @@ bondUtxo = { txid: c1.tx.id('hex'), vout: 0, satoshis: c1.tx.outputs[0]!.satoshi
 const st = bond.stateOf(bondUtxo.script)
 check(st.n === 1n && st.lastRoot === root1, 'V2 on-chain state reads back {n:1, root1}')
 const root2 = 'bb'.repeat(32)
-const c2 = bond.buildCommit(bondUtxo, key, root2, 1n)
-const rc2 = await broadcaster.broadcast(c2.tx)
-check(rc2.status === 'success', `V2 commit#2 accepted — ${rc2.description?.slice(0, 60) ?? 'ok'}`)
-if (rc2.status !== 'success') { console.log('FATAL: commit#2 refused'); process.exit(1) }
+const c2 = await bond.buildCommit(bondUtxo, key, root2, await tracker.currentHeight(), broadcaster, 1n)
+check(true, 'V2 commit#2 accepted')
 await mineOne()
 
 bondUtxo = { txid: c2.tx.id('hex'), vout: 0, satoshis: c2.tx.outputs[0]!.satoshis!, script: c2.tx.outputs[0]!.lockingScript.toHex() }
@@ -102,16 +98,35 @@ bondUtxo = { txid: c2.tx.id('hex'), vout: 0, satoshis: c2.tx.outputs[0]!.satoshi
 // negative: close with a locktime BELOW bondReleaseHeight — the tx is final
 // (locktime <= tip) so the node's script eval itself must refuse it.
 const hNow = await tracker.currentHeight()
-const early = bond.buildClose(bondUtxo, key, Math.min(hNow, release - 1), 1n)
-const rEarly = await broadcaster.broadcast(early.tx)
-check(rEarly.status !== 'success', `V2 close before release refused (${rEarly.description?.slice(0, 50) ?? 'refused'})`)
+const rEarly = await bond.buildClose(bondUtxo, key, Math.min(hNow, release - 1), broadcaster, 1n).then(() => false, () => true)
+check(rEarly, 'V2 close before release refused')
 
 // mine until past release, then close for real
 while ((await tracker.currentHeight()) < release) await mineOne()
-const ok = bond.buildClose(bondUtxo, key, release, 1n)
-const rOk = await broadcaster.broadcast(ok.tx)
-check(rOk.status === 'success', `V2 close at release accepted — ${rOk.description?.slice(0, 60) ?? 'ok'}`)
+await bond.buildClose(bondUtxo, key, release, broadcaster, 1n)
+check(true, 'V2 close at release accepted')
 await mineOne()
+
+// --- V2 seize: a second bond whose operator goes silent → anyone takes it ---
+{
+  const far = (await tracker.currentHeight()) + 1_000
+  const lazy = new CheckpointBond({ operatorPkh: opPkh, bondReleaseHeight: BigInt(far), maxFee: 10n, epochLen: 2n })
+  let lUtxo = await fundTo(lazy.lockingScript(0n, ''), 4_000)
+  await mineOne()
+  const lc = await lazy.buildCommit(lUtxo, key, 'cc'.repeat(32), await tracker.currentHeight(), broadcaster, 1n)
+  check(true, 'V2 seize-setup commit accepted')
+  await mineOne()
+  lUtxo = { txid: lc.tx.id('hex'), vout: 0, satoshis: lc.tx.outputs[0]!.satoshis!, script: lc.tx.outputs[0]!.lockingScript.toHex() }
+  // too early: deadline = commitHeight + 2 has not passed — seize refused
+  const rEarlySeize = await lazy.buildSeize(lUtxo, buildP2PKHScript(opPkh), await tracker.currentHeight(), broadcaster, 1n).then(() => false, () => true)
+  check(rEarlySeize, 'V2 seize before deadline refused')
+  // lapse the SLA window: mine past deadline, then a FOREIGN key seizes
+  while ((await tracker.currentHeight()) <= Number(lazy.stateOf(lUtxo.script).deadline)) await mineOne()
+  const seizer = PrivateKey.fromRandom()
+  const seizerPkh = Buffer.from(seizer.toPublicKey().toHash()).toString('hex')
+  const se = await lazy.buildSeize(lUtxo, buildP2PKHScript(seizerPkh), await tracker.currentHeight(), broadcaster, 1n)
+  check(se.tx.outputs[0]!.lockingScript.toHex() === buildP2PKHScript(seizerPkh), 'V2 seize after deadline accepted (paid to foreign seizer)')
+}
 
 // ============================ V3: DisclosureSale (BIP-199 escrow) ==========
 // Buyer-funded escrow: the buyer self-builds the script from the seller's

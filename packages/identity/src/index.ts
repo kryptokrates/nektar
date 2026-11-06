@@ -117,6 +117,7 @@ export function verifyAuthorship (signerPub: string, epoch: number, writtenAt: n
   return { ok: true }
 }
 export * from "./smt.js"
+export * from "./revocation.js"
 export * from "./custody.js"
 export * from "./disclosure.js"
 export * from "./sale.js"

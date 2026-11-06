@@ -180,11 +180,50 @@ export const TOOLS = [
   },
   {
     name: 'revoke',
-    description: 'Mark a pubkey revoked in the revocation SMT and anchor the event.',
+    description: 'Mark a pubkey revoked in the revocation SMT and anchor the event. The anchored record embeds the SMT membership proof (§19 CRL) — third-party verifiable without operator state.',
     inputSchema: {
       type: 'object',
       properties: { pkHex: { type: 'string' } },
       required: ['pkHex']
+    }
+  },
+  {
+    name: 'revocationProof',
+    description: 'Third-party §19 CRL evidence: the anchored __revocation__ record for a pubkey with its embedded SMT membership proof + SPV inclusion bundle. verified=true means the record alone convicts.',
+    inputSchema: {
+      type: 'object',
+      properties: { pkHex: { type: 'string' } },
+      required: ['pkHex']
+    }
+  },
+  {
+    name: 'revocationStatus',
+    description: 'Is a pubkey revoked? Returns the latest anchored SMT root plus a fresh proof — membership (revoked) or non-membership — verifiable via verifyRevocationStatus without trusting this operator.',
+    inputSchema: {
+      type: 'object',
+      properties: { pkHex: { type: 'string' } },
+      required: ['pkHex']
+    }
+  },
+  {
+    name: 'bondDeploy',
+    description: 'Deploy the §12 checkpoint-bond covenant: lock sats so every anchor commits its checkpoint digest to an unforkable on-chain chain. A missed commit inside the SLA window is publicly provable.',
+    inputSchema: {
+      type: 'object',
+      properties: { sats: { type: 'number' }, releaseHeight: { type: 'number' } }
+    }
+  },
+  {
+    name: 'bondStatus',
+    description: 'Checkpoint-bond state: commits so far (n), last committed checkpoint digest, head txid, locked sats, release height, seize deadline.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'bondSeize',
+    description: 'Permissionless §12 slashing: claim a checkpoint bond whose commit deadline passed. Any observer may call this — the payout goes to payToScript (default: operator).',
+    inputSchema: {
+      type: 'object',
+      properties: { payToScript: { type: 'string' } }
     }
   },
   {
@@ -706,11 +745,40 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       throw new Error(`automaton: unknown op ${args.op}`)
     }
     case 'revoke': {
-      // key = derive_key(pubkey) (idattr-smt registry convention), value = H("revoked"); persisted
+      // key = derive_key(pubkey) (idattr-smt registry convention), value = H("revoked"); persisted.
+      // The SMT membership proof is embedded in the record itself (§19 CRL):
+      // the anchored text is then a self-contained conviction — a verifier
+      // needs no operator state (idbind.verifyRevocationEntry).
+      const idm = await import('@nektar/identity')
       const root = mem.revoke(String(args.pkHex))
-      await mem.remember('__revocation__', `revoke:${args.pkHex}:root=${Buffer.from(root).toString('hex')}`)
+      const proof = mem.revocations.prove(idm.revocationKey(String(args.pkHex)))
+      await mem.remember('__revocation__', idm.makeRevocationRecord(String(args.pkHex), root, proof))
       const a = await mem.anchorShard('__revocation__')
       return { revoked: true, smtRoot: Buffer.from(root).toString('hex'), anchorTxid: a?.txid ?? null, receipt: { decision: 'allow', action: 'revoke' } }
+    }
+    case 'revocationProof': {
+      const p = await mem.revocationProof(String(args.pkHex))
+      if (!p) return { found: false, note: 'no revoke record for this pubkey on __revocation__' }
+      const idm = await import('@nektar/identity')
+      const entry = idm.parseRevocationRecord(p.data)
+      return { found: true, seq: p.seq, data: p.data, leaf: p.leaf, root: p.root, smtProof: p.smtProof, anchored: p.anchored, bundle: p.bundle,
+        verified: entry ? idm.verifyRevocationEntry(entry) : false,
+        verifier: 'verifyRevocationEntry(parseRevocationRecord(data)) binds derive_key(pk)+root; bundle anchors the record text' }
+    }
+    case 'revocationStatus': {
+      return await mem.revocationStatus(String(args.pkHex))
+    }
+    case 'bondDeploy': {
+      const r = await mem.bondDeploy(args.sats, args.releaseHeight === undefined ? undefined : BigInt(args.releaseHeight))
+      return { ...r, releaseHeight: r.releaseHeight.toString(), receipt: { decision: 'allow', action: 'bondDeploy' } }
+    }
+    case 'bondStatus': {
+      const s = mem.bondStatus()
+      return s ? { ...s, releaseHeight: s.releaseHeight.toString(), deadline: s.deadline.toString() } : { deployed: false }
+    }
+    case 'bondSeize': {
+      const r = await mem.bondSeize(args.payToScript)
+      return r ? { ...r, receipt: { decision: 'allow', action: 'bondSeize' } } : { deployed: false }
     }
     case 'disclose': {
       const idm = await import('@nektar/identity')

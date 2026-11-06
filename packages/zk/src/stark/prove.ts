@@ -30,8 +30,10 @@ export async function remoteProve (payload: string, path: 'prove' | 'prove-der',
   const url = `${proverUrl()}/${path}`
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (process.env.NEKTAR_STARK_PROVER_TOKEN) headers.Authorization = `Bearer ${process.env.NEKTAR_STARK_PROVER_TOKEN}`
   let res: Response
-  try { res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload, signal: ctrl.signal }) }
+  try { res = await fetch(url, { method: 'POST', headers, body: payload, signal: ctrl.signal }) }
   catch (e) { clearTimeout(timer); throw new StarkProverError(`remote prover unreachable: ${(e as Error).message}`) }
   clearTimeout(timer)
   const text = await res.text()

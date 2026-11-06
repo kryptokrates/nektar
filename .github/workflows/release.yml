@@ -71,3 +71,27 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: nektar-mcp-bundle.tar.gz
+
+  npm-publish:
+    # tag-triggered (v*) — bump package versions, tag, push; npm.pkg.github.com
+    # serves them via @nektar:registry in the consumer's .npmrc
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: pnpm
+        run: corepack enable && corepack prepare pnpm@12.16.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+        timeout-minutes: 10
+      - name: publish all @nektar/* to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '@nektar:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > .npmrc
+          pnpm -r publish --no-git-checks
+          rm .npmrc

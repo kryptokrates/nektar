@@ -466,7 +466,7 @@ export class NektarMemory {
     const pkh = key.toPublicKey().toHash()
     const cfg = { operatorPkh: typeof pkh === 'string' ? pkh : toHex(Uint8Array.from(pkh)), bondReleaseHeight: release, maxFee: this.opts.bond?.maxFee ?? 10n, epochLen: BigInt(this.opts.bond?.epochBlocks ?? 144) }
     this.bondContract = new CheckpointBond(cfg)
-    const fund = await this.funder.take(sats + 600)
+    const fund = await this.takeFunding(sats + 600)
     const { tx, utxo } = this.bondContract.buildDeploy({ tx: fund.tx, vout: fund.vout, satoshis: fund.satoshis }, key, sats)
     const br = await this.chain.broadcast(tx)
     if (br.status !== 'success') { this.bondContract = undefined; throw new Error(`bond deploy broadcast failed: ${br.description ?? 'unknown'}`) }
@@ -507,7 +507,7 @@ export class NektarMemory {
    *  receipt is publicly re-verifiable, not a server-side claim. */
   async payInvoice (inv: { invoiceId: string, amount: number, lockingScriptHex: string, opReturn: string }): Promise<{ payment: { invoiceId: string, transaction: string }, txid: string }> {
     const fee = 2n
-    const f = await this.funder.take(inv.amount + Number(fee) + 1)
+    const f = await this.takeFunding(inv.amount + Number(fee) + 1)
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(this.fundKey) })
     tx.addOutput({ satoshis: inv.amount, lockingScript: LockingScript.fromHex(inv.lockingScriptHex) })

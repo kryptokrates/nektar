@@ -412,6 +412,20 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: {} }
   },
   {
+    name: 'payInvoice',
+    description: 'Pay an invoice (from payQuote — buyer passes invoiceId/amount/lockingScriptHex/opReturn): builds + signs the payment tx from this instance\'s fund key — output ≥ amount to lockingScriptHex + OP_FALSE OP_RETURN tag. Returns payment:{invoiceId, transaction:<BEEF/EF hex>} ready to retry the paid call with. §16: settlement is an anchored tx — the audit trail is the receipt itself.',
+    inputSchema: {
+      type: 'object',
+      required: ['invoiceId', 'amount', 'lockingScriptHex', 'opReturn'],
+      properties: {
+        invoiceId: { type: 'string' },
+        amount: { type: 'number', description: 'sats to pay, from the invoice' },
+        lockingScriptHex: { type: 'string', description: 'payee script from the invoice' },
+        opReturn: { type: 'string', description: 'ascii invoice tag, e.g. nektarpay:<id>' }
+      }
+    }
+  },
+  {
     name: 'fundingImport',
     description: 'Import a funding transaction paying the operator fee address (a txid, or "hex:<rawtx>" where supported) into the tracked reserve — use after sending sats to the fundingStatus address. Live networks only.',
     inputSchema: {
@@ -492,6 +506,9 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       if (!paymentsEnabled()) throw new Error('payments are disabled — set NEKTAR_PAYMENTS=1 (and NEKTAR_OPERATOR_WIF)')
       const { invoice, required } = paymentRequired(String(args.tool))
       return { invoice: { invoiceId: invoice.invoiceId, amount: invoice.amount, payTo: invoice.payTo, lockingScriptHex: invoice.lockingScriptHex, opReturn: invoice.opReturn, expires: new Date(invoice.expires).toISOString() }, paymentRequired: required }
+    }
+    case 'payInvoice': {
+      return await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) })
     }
     case 'sale': {
       const op = String(args?.op ?? '')

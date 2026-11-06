@@ -516,11 +516,14 @@ export class NektarMemory {
     tx.addOutput({ lockingScript: new P2PKH().lock(this.fundKey.toPublicKey().toAddress((this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])), change: true })
     await tx.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
     await tx.sign()
-    ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
-    ;(this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
     // Extended Format — carries the funding parent so the seller's script
     // validation and broadcaster resolve input values (mock verifyScripts).
-    return { payment: { invoiceId: inv.invoiceId, transaction: tx.toHexEF() }, txid: tx.id('hex') }
+    // Serialize BEFORE marking the reserve spent — a throw here must not
+    // drain the funding UTXO.
+    const transaction = tx.toHexEF()
+    ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
+    ;(this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
+    return { payment: { invoiceId: inv.invoiceId, transaction }, txid: tx.id('hex') }
   }
 
   /** D4 (§19 M_U): the shard's anchored rotation ledger — genesis owner pub

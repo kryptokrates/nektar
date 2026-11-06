@@ -516,11 +516,12 @@ export class NektarMemory {
     tx.addOutput({ lockingScript: new P2PKH().lock(this.fundKey.toPublicKey().toAddress((this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])), change: true })
     await tx.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
     await tx.sign()
-    // Extended Format — carries the funding parent so the seller's script
-    // validation and broadcaster resolve input values (mock verifyScripts).
+    // atomic BEEF — carries the funding parent so the seller's script
+    // validation and broadcaster resolve input values (settlePayment's
+    // 0101010000 branch; "BEEF preferred" per the invoice docs).
     // Serialize BEFORE marking the reserve spent — a throw here must not
     // drain the funding UTXO.
-    const transaction = tx.toHexEF()
+    const transaction = tx.toHexAtomicBEEF()
     ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
     ;(this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
     return { payment: { invoiceId: inv.invoiceId, transaction }, txid: tx.id('hex') }

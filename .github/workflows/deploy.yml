@@ -3,6 +3,11 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      build_stark:
+        description: 'Rebuild the nektar-stark-build docker image (slow, ~30-60 min — only needed when tools/stark changes)'
+        type: boolean
+        default: false
 concurrency:
   group: deploy
 permissions:
@@ -17,6 +22,7 @@ jobs:
         env:
           KEY: ${{ secrets.HETZNER_SSH_KEY }}
           HOST: ${{ secrets.HETZNER_HOST }}
+          BUILD_STARK: ${{ inputs.build_stark }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/deploy_key
@@ -71,6 +77,29 @@ jobs:
             pnpm -r build
             # public endpoint: nektar-http must bind 0.0.0.0 (default is 127.0.0.1)
             grep -q "^NEKTAR_HTTP_HOST=" /etc/nektar-http.env 2>/dev/null || echo "NEKTAR_HTTP_HOST=0.0.0.0" >> /etc/nektar-http.env
+            # --- nektar-prover: STARK HTTP shim (loopback only + token) ---
+            if [ ! -f /etc/nektar-prover.env ]; then
+              { echo PROVER_HOST=127.0.0.1; echo PROVER_PORT=8443; echo PROVER_DOCKER=1; echo "PROVER_TOKEN=$(openssl rand -hex 24)"; } > /etc/nektar-prover.env
+              chmod 600 /etc/nektar-prover.env
+            fi
+            cat > /etc/systemd/system/nektar-prover.service <<UNIT
+[Unit]
+Description=nektar STARK prover HTTP shim
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+EnvironmentFile=/etc/nektar-prover.env
+WorkingDirectory=/opt/nektar/tools/stark
+ExecStart=/usr/local/bin/node prover-server.mjs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+            systemctl daemon-reload
+            systemctl enable --now nektar-prover
             systemctl restart nektar-http nektar-rendezvous nektar-watch || {
               for s in nektar-http nektar-rendezvous nektar-watch; do
                 echo "=== unit $s ==="
@@ -87,7 +116,7 @@ jobs:
               exit 1
             }
             sleep 3
-            systemctl is-active nektar-http nektar-rendezvous nektar-watch
+            systemctl is-active nektar-http nektar-rendezvous nektar-watch nektar-prover
             echo "=== bind check ==="
             ss -tlnp | grep -E "node|MainThread|:808" || true
             echo "=== env var names (values hidden) ==="
@@ -97,6 +126,16 @@ jobs:
             PORT=$(journalctl -u nektar-http -n 20 --no-pager | grep -oE "HTTP \+ MCP on :[0-9]+" | grep -oE "[0-9]+" | tail -1)
             echo "detected port: ${PORT:-none}"
             [ -n "$PORT" ] && curl -sf -m 5 "http://127.0.0.1:$PORT/.well-known/nektar" && echo " ← local OK"
+            echo "=== prover health ==="
+            curl -sf -m 5 http://127.0.0.1:8443/health && echo " ← prover OK"
+            echo "=== STARK build (opt-in) ==="
+            if [ "$BUILD_STARK" = "true" ]; then
+              cd /opt/nektar
+              docker build -f tools/stark/Dockerfile.build -t nektar-stark-build tools/stark
+              docker images | grep nektar-stark
+            else
+              echo "skipped (set build_stark=true on dispatch to rebuild the prover image)"
+            fi
           '
       - name: verify the public endpoint from outside
         env:

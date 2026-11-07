@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/nektar.svg" width="72" alt="nektar"/>
+  <img src="logo.png" width="96" alt="nektar"/>
 </p>
 
 # nektar — the computational data market

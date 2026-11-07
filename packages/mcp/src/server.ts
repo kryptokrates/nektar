@@ -772,7 +772,7 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       const { tx } = host.buildBuy(args.utxo, args.wrapped, BigInt(args.changeSats))
       const r = await mem.broadcastTx(tx)
       if (r.status !== 'success') return { accepted: false, reason: r.description }
-      return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0]!.satoshis }
+      return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0]!.satoshis, txHex: tx.toHex() }
     }
     case 'sale#refund': {
       const { DisclosureSaleHost } = await import('@nektar/anchor')

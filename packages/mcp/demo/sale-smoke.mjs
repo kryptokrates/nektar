@@ -50,11 +50,13 @@ try {
   } else {
     // live: the real DisclosureSale rail — offerMemory artifact → escrow →
     // buy tx (reveals wrapped on-chain, pays seller) → claim → import
-    const tip = (await (await fetch('http://localhost:8098/v1/tip')).json()).height
+    // timestamp refundAfter — net-agnostic, always in the future (the escrow
+    // treats values ≥500M as unix time, not block height)
+    const refundAfter = Math.floor(Date.now() / 1000) + 86_400
     // escrow's §16/17 sig check binds cfg+seller+buyerPub+leaf — the offer
     // must be minted FOR the buyer's operator pub; `reputation` returns it
     const buyerPub = (await tool(BUYER, 'reputation', {})).card.pub
-    const om = await tool(SELLER, 'sale', { op: 'offerMemory', shard: 'soccer', seq: 0, price: 400, refundAfter: tip + 2016, maxFee: 1000, buyerPub })
+    const om = await tool(SELLER, 'sale', { op: 'offerMemory', shard: 'soccer', seq: 0, price: 400, refundAfter, maxFee: 1000, buyerPub })
     // publish the raw artifact so the buyer can verify the offerSig + leaf path pre-funding
     await tool(SELLER, 'publishOffer', { shard: 'soccer', seq: 0, priceSats: 400, offer: om, rendezvousUrl: 'http://localhost:' + RV })
     const esc = await tool(BUYER, 'sale', { op: 'escrow', cfg: om.cfg, amount: 2_000, offer: { sellerPub: om.sellerPub, offerSig: om.offerSig, expiresAt: om.expiresAt, commitment: om.commitment } })
@@ -63,13 +65,8 @@ try {
     const comp = await tool(BUYER, 'sale', { op: 'complete', cfg: esc.escrow, utxo: esc.utxo, wrapped: om.wrapped, changeSats: 1_000 })
     if (!comp.accepted) die(`complete refused: ${comp.reason}`)
     console.log(`buyer: buy tx revealed wrapped — seller paid ${comp.sellerSats} sats (txid ${String(comp.txid ?? '').slice(0, 12)}…)`)
-    // claim needs the raw buy tx — pull it off the node
-    const qsEnv = {}
-    try { for (const l of (await import('node:fs')).readFileSync('infra/teranode-quickstart/.env', 'utf8').split(/\r?\n/)) { const i = l.indexOf('='); if (i > 0) qsEnv[l.slice(0, i).trim()] = l.slice(i + 1).trim() } } catch {}
-    const auth = 'Basic ' + Buffer.from((process.env.NEKTAR_RPC_USER || qsEnv.rpc_user || '') + ':' + (process.env.NEKTAR_RPC_PASS || qsEnv.rpc_pass || '')).toString('base64')
-    const rpc = await fetch('http://localhost:9292/', { method: 'POST', headers: { 'content-type': 'application/json', authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 's', method: 'getrawtransaction', params: [comp.txid] }) })
-    const txHex = (await rpc.json()).result
-    if (typeof txHex !== 'string') die(`getrawtransaction failed: ${JSON.stringify(txHex)}`)
+    const txHex = comp.txHex
+    if (typeof txHex !== 'string') die('complete did not return txHex')
     const claim = await tool(BUYER, 'sale', { op: 'claim', txHex, hWrapped: om.cfg.hWrapped, sellerPub: om.sellerPub, commitment: om.commitment, offerMode: om.mode })
     if (!claim.verified) die(`claim payload did not verify: ${JSON.stringify(claim).slice(0, 200)}`)
     console.log(`buyer: claim verified${claim.authorVerified ? ' + author provenance' : ''}`)

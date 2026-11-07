@@ -147,6 +147,21 @@ try {
   if (!sellerRep) die('reputation not indexed')
   console.log(`reputation: seller card → soccer:{receipts:${sellerRep.card.entries[0]?.receipts ?? 0}} — vectors, not one score`)
 
+  // want→respond: the seller answers the buyer's want with a replyTo offer
+  const sellerPub = rep.pub
+  const resp = await tool(SELLER, 'respond', { wantPub: wantEv.pub, shard: 'soccer', seq: 0, priceSats: 400, rendezvousUrl: `http://localhost:${RV}` })
+  if (!resp.ok) die('respond failed')
+  const buyerFeed = (await (await fetch(`http://localhost:${RV}/events?domains=soccer&kind=offer&since=${w2.cursor ?? feed.cursor}`)).json()).events
+  if (!buyerFeed?.some(e => e.payload?.offer?.replyTo === wantEv.pub)) die('replyTo offer not on the feed')
+  console.log(`respond: seller answered the want — offer replyTo ${wantEv.pub.slice(0, 12)}…`)
+
+  // verifyReputation: buyer recomputes the seller's card from exported packs
+  const receiptsPack = await tool(SELLER, 'exportShard', { shard: '__receipts__' })
+  const catalogPack = await tool(SELLER, 'exportShard', { shard: '__catalog__' })
+  const vr = await tool(BUYER, 'verifyReputation', { card: sellerRep.card, receiptsPack, catalogPack })
+  if (!vr.ok) die(`verifyReputation mismatch: ${JSON.stringify(vr.diffs).slice(0, 200)}`)
+  console.log(`verifyReputation: seller card recomputed — ${vr.checked} entries match`)
+
   console.log('\nOK — discover → quote → pay → receipt → shelf → prices → reputation, all on ' + NET + '')
 } catch (e) {
   die(e.message)

@@ -1970,3 +1970,33 @@ export class NektarMemory {
   }
 
 }
+
+/** neutral reputation recompute — given the seller's exported `__receipts__`
+ *  pack records and a shard→domains map (from their `__catalog__` pack), re-
+ *  derive the per-domain vectors their published card claims. The inputs are
+ *  committed records; this function re-runs the same derivation without
+ *  trusting the seller's computation. */
+export function reputationEntriesFromRecords (
+  records: Array<{ data: string }>,
+  shardDomains: Map<string, string[]>
+): Map<string, { domain: string, receipts: number, verifiedCites: number, settledSats: number, settlements: number }> {
+  const entries = new Map<string, { domain: string, receipts: number, verifiedCites: number, settledSats: number, settlements: number }>()
+  for (const rec of records) {
+    const m = rec.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
+    if (!m) continue
+    let r: any
+    try { r = JSON.parse(Buffer.from(m[1]!, 'base64url').toString('utf8')) } catch { continue }
+    const shards: string[] = [...new Set(((r.fragmentRefs ?? []) as any[]).map((f: any) => String(f?.shard ?? '')).filter(Boolean) as string[])]
+    const domains = [...new Set(shards.flatMap(s => shardDomains.get(s) ?? [s]))]
+    if (!domains.length) continue
+    const paySats = Number(r.payment?.amountSats ?? r.payment?.amount ?? 0)
+    for (const d of domains) {
+      const e = entries.get(d) ?? { domain: d, receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 }
+      e.receipts++
+      e.verifiedCites += (r.fragmentRefs ?? []).length
+      if (paySats > 0) { e.settledSats += paySats; e.settlements++ }
+      entries.set(d, e)
+    }
+  }
+  return entries
+}

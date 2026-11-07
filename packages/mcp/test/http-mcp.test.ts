@@ -17,7 +17,7 @@ test('MCP Streamable HTTP: session, tools, call, resource; unknown session rejec
   const client = new Client({ name: 'http-test', version: '1.0.0' })
   try {
     await client.connect(new StreamableHTTPClientTransport(url))
-    assert.equal((await client.listTools()).tools.length, 46)
+    assert.equal((await client.listTools()).tools.length, 48)
     await client.callTool({ name: 'remember', arguments: { shard: 'h', data: 'a' } })
     await client.callTool({ name: 'remember', arguments: { shard: 'h', data: 'b' } })
     const rr = await client.readResource({ uri: 'nektar://record/h/0' })

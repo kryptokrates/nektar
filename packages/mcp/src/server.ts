@@ -544,7 +544,23 @@ export const TOOLS = [
         leaf: { type: 'string', description: 'leaf commitment hex — buyer verify-before-pay handle' },
         hdp: { type: 'string' }, batchR: { type: 'string' },
         offer: { type: 'object', description: 'raw offerMemory artifact (cfg/wrapped/offerSig/commitment) for escrow flows' },
+        replyTo: { type: 'string', description: 'pub of the want this offer answers — demand-meets-supply matching' },
         exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
+      }
+    }
+  },
+  {
+    name: 'respond',
+    description: 'Answer a want event with a signed offer — the demand-meets-supply step: given a want (from watch/feed on your domains), publish an offer replyTo its pub so the wanter sees your quote on their feed. Needs describeShard first (manifest supplies domains + shardId).',
+    inputSchema: {
+      type: 'object',
+      required: ['wantPub', 'shard', 'seq', 'priceSats'],
+      properties: {
+        wantPub: { type: 'string', description: 'the want\'s publisher pub (from the want event)' },
+        shard: { type: 'string' }, seq: { type: 'number' }, priceSats: { type: 'number' },
+        domains: { type: 'array', items: { type: 'string' }, description: 'override manifest domains' },
+        leaf: { type: 'string' }, hdp: { type: 'string' }, batchR: { type: 'string' },
+        offer: { type: 'object' }, exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
       }
     }
   },
@@ -552,6 +568,20 @@ export const TOOLS = [
     name: 'reputation',
     description: 'Build a signed reputation card — per-domain vectors (receipts, verified cites, settled sats) computed over this instance\'s anchored history. Every input is a committed record, recomputable by anyone; it is a derivation, not a score. publish:true posts it to the rendezvous.',
     inputSchema: { type: 'object', properties: { publish: { type: 'boolean', description: 'POST the signed card to the rendezvous' }, rendezvousUrl: { type: 'string' } } }
+  },
+  {
+    name: 'verifyReputation',
+    description: 'Neutral recompute of a published reputation card — pass the card (or pub+rendezvousUrl to fetch it) plus the seller\'s exported __receipts__ and __catalog__ packs; re-derives the per-domain vectors from the committed records and reports which entries match. The card is a claim until this check passes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        card: { type: 'object', description: 'the published card {pub, entries[]} — or fetch by pub' },
+        pub: { type: 'string', description: 'fetch the card from the rendezvous by publisher pub' },
+        rendezvousUrl: { type: 'string' },
+        receiptsPack: { type: 'object', description: 'seller\'s exported __receipts__ ShardPack (exportShard output)' },
+        catalogPack: { type: 'object', description: 'seller\'s exported __catalog__ ShardPack — supplies the shard→domain map' }
+      }
+    }
   },
   {
     name: 'publishSettlement',
@@ -1215,6 +1245,7 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
         ...(args?.leaf ? { leaf: String(args.leaf) } : {}), ...(args?.hdp ? { hdp: String(args.hdp) } : {}), ...(args?.batchR ? { batchR: String(args.batchR) } : {}),
         priceSats: Math.max(0, Math.floor(Number(args?.priceSats ?? 0))),
         ...(args?.offer !== undefined ? { offer: args.offer } : {}),
+        ...(args?.replyTo !== undefined ? { replyTo: String(args.replyTo) } : {}),
         ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {})
       }
       if (!fields.domains.length) throw new Error('publishOffer: no domains — describeShard first or pass {domains}')
@@ -1223,6 +1254,30 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       const r = await fetch(`${rv}/offer`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishOffer: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
+      return { ok: true, pub: (j as any).pub, offer: signed.offer }
+    }
+    case 'respond': {
+      // want → offer replyTo — the seller's half of the match: the wanter's
+      // own watch sees "an offer answering my want" on their next pull
+      if (typeof args?.wantPub !== 'string' || !args.wantPub) throw new Error('respond: wantPub required (from the want event)')
+      const a = { ...args, replyTo: args.wantPub }
+      delete a.wantPub
+      const { signOffer } = await import('@nektar/overlay')
+      const m = await mem.shardManifest(String(a.shard)).catch(() => undefined)
+      const fields = {
+        shard: String(a.shard), seq: Number(a.seq),
+        ...(m ? { shardId: m.shardId, domains: m.domains } : { domains: (a.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32) }),
+        ...(a.leaf ? { leaf: String(a.leaf) } : {}), ...(a.hdp ? { hdp: String(a.hdp) } : {}), ...(a.batchR ? { batchR: String(a.batchR) } : {}),
+        priceSats: Math.max(0, Math.floor(Number(a.priceSats ?? 0))),
+        ...(a.offer !== undefined ? { offer: a.offer } : {}), replyTo: a.wantPub ?? a.replyTo,
+        ts: Date.now(), ...(a.exp !== undefined ? { exp: Number(a.exp) } : {})
+      }
+      if (!fields.domains.length) throw new Error('respond: no domains — describeShard first or pass {domains}')
+      const signed = signOffer(mem.operatorKey(), fields)
+      const rv = String(a.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      const r = await fetch(`${rv}/offer`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || (j as any)?.ok !== true) throw new Error(`respond: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, offer: signed.offer }
     }
     case 'reputation': {
@@ -1235,6 +1290,39 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`reputation: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, card: signed.card }
+    }
+    case 'verifyReputation': {
+      // neutral recompute: rebuild the card's vectors from the seller's own
+      // committed records and diff — the card is a claim until recomputed
+      const { reputationEntriesFromRecords } = await import('./memory.js')
+      let card = args?.card as { pub?: string, entries?: Array<{ domain: string, receipts: number, verifiedCites: number, settledSats: number, settlements: number }> } | undefined
+      if (!card && typeof args?.pub === 'string') {
+        const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+        const r = await fetch(`${rv}/reputation?pub=${encodeURIComponent(args.pub)}`, { signal: AbortSignal.timeout(15_000) })
+        const j = await r.json().catch(() => ({})) as { reputations?: Array<{ card: typeof card }> }
+        card = j.reputations?.[0]?.card
+        if (!card) throw new Error(`verifyReputation: no card for pub ${args.pub.slice(0, 12)}…`)
+      }
+      if (!card?.entries) throw new Error('verifyReputation: card required (or pub+rendezvousUrl to fetch)')
+      const receiptsPack = args?.receiptsPack as { records?: Array<{ data: string }> } | undefined
+      if (!receiptsPack?.records?.length) throw new Error('verifyReputation: receiptsPack (seller\'s exported __receipts__) required')
+      const shardDomains = new Map<string, string[]>()
+      const catalogPack = args?.catalogPack as { records?: Array<{ data: string }> } | undefined
+      for (const rec of catalogPack?.records ?? []) {
+        try { const m = JSON.parse(rec.data); if (m?.type === 'shard-manifest' && Array.isArray(m.domains)) shardDomains.set(String(m.shard), m.domains.map((d: string) => String(d).toLowerCase())) } catch { /* skip */ }
+      }
+      const recomputed = reputationEntriesFromRecords(receiptsPack.records, shardDomains)
+      const diffs: Array<{ domain: string, claimed: Record<string, number>, recomputed: Record<string, number> }> = []
+      const recMap = new Map([...recomputed.values()].map(e => [e.domain, e]))
+      for (const e of card.entries) {
+        const r = recMap.get(e.domain)
+        const claimed = { receipts: e.receipts, verifiedCites: e.verifiedCites, settledSats: e.settledSats, settlements: e.settlements }
+        const got = r ? { receipts: r.receipts, verifiedCites: r.verifiedCites, settledSats: r.settledSats, settlements: r.settlements } : { receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 }
+        if (JSON.stringify(claimed) !== JSON.stringify(got)) diffs.push({ domain: e.domain, claimed, recomputed: got })
+        recMap.delete(e.domain)
+      }
+      for (const e of recMap.values()) diffs.push({ domain: e.domain, claimed: { receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 }, recomputed: { receipts: e.receipts, verifiedCites: e.verifiedCites, settledSats: e.settledSats, settlements: e.settlements } })
+      return { ok: diffs.length === 0, pub: card.pub, checked: card.entries.length, diffs }
     }
     case 'publishSettlement': {
       const { signSettlement } = await import('@nektar/overlay')

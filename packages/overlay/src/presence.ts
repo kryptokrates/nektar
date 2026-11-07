@@ -129,13 +129,14 @@ export interface OfferAd {
   batchR?: string // anchored batch root the leaf path reaches
   priceSats: number
   domains: string[] // from the shard's manifest — feed filtering
+  replyTo?: string // pub of the want this offer answers — demand-meets-supply matching
   offer?: Record<string, unknown> // the raw DisclosureSale offer (cfg/wrapped/sellerPub/offerSig/expiresAt/commitment)
   ts: number
   exp?: number
 }
 export interface SignedOffer { offer: OfferAd, sig: string }
 
-const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}`
+const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}|${o.replyTo ?? ''}`
 const offerDigest = (o: OfferAd) => sha256(utf8(offerCanonical(o)))
 const offerKey = (o: OfferAd) => `${o.pub}:${o.shard}:${o.seq}`
 

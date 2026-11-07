@@ -98,12 +98,12 @@ const persistConsumed = (): void => {
 
 /** issue an invoice for a paid tool call — signed so the quote travels as an
  *  attributable offer (a doctored amount/payTo fails quoteSig verification) */
-export const issueInvoice = (tool: string): Invoice => {
+export const issueInvoice = (tool: string, amount?: number): Invoice => {
   const key = operatorKey()
   const inv: Invoice = {
     invoiceId: randomBytes(8).toString('hex'),
     tool,
-    amount: priceFor(tool),
+    amount: amount ?? priceFor(tool),
     payTo: opAddr!,
     lockingScriptHex: new P2PKH().lock(opAddr!).toHex(),
     opReturn: '',
@@ -118,8 +118,8 @@ export const issueInvoice = (tool: string): Invoice => {
 }
 
 /** the 402 payload — x402 v2 PaymentRequired shape carrying the invoice in accepts[].extra */
-export const paymentRequired = (tool: string): { invoice: Invoice, required: Record<string, unknown> } => {
-  const invoice = issueInvoice(tool)
+export const paymentRequired = (tool: string, amount?: number): { invoice: Invoice, required: Record<string, unknown> } => {
+  const invoice = issueInvoice(tool, amount)
   const required = {
     x402Version: 2,
     error: `payment required — ${tool} costs ${invoice.amount} sats`,

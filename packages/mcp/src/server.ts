@@ -516,6 +516,37 @@ export const TOOLS = [
         rendezvousUrl: { type: 'string', description: 'rendezvous base URL (default NEKTAR_OVERLAY_URL or http://localhost:8090)' }
       }
     }
+  },
+  {
+    name: 'importRecord',
+    description: 'Land a record purchased via sale#claim as local memory — pass the VERIFIED claim payload (data + provenance). An __imports__ audit record commits the acquisition (source shard:seq, leaf, settlement txid).',
+    inputSchema: {
+      type: 'object',
+      required: ['data'],
+      properties: {
+        data: { type: 'string', description: 'the verified claim payload' },
+        provenance: { type: 'object', description: '{sourcePub,hash,timestamp,sig} from the claim — preserved on the record' },
+        sourceShard: { type: 'string' }, sourceSeq: { type: 'number' },
+        leaf: { type: 'string' }, saleTxid: { type: 'string' },
+        shard: { type: 'string', description: 'local shard to land it on (default "bought")' }
+      }
+    }
+  },
+  {
+    name: 'publishOffer',
+    description: 'Publish a signed market listing to the rendezvous — wraps a sale offerMemory commitment so buyers watching the shard\'s domains see "record N for X sats" on the feed. Needs a manifest (describeShard) or explicit domains.',
+    inputSchema: {
+      type: 'object',
+      required: ['shard', 'seq', 'priceSats'],
+      properties: {
+        shard: { type: 'string' }, seq: { type: 'number' }, priceSats: { type: 'number' },
+        domains: { type: 'array', items: { type: 'string' }, description: 'override manifest domains' },
+        leaf: { type: 'string', description: 'leaf commitment hex — buyer verify-before-pay handle' },
+        hdp: { type: 'string' }, batchR: { type: 'string' },
+        offer: { type: 'object', description: 'raw offerMemory artifact (cfg/wrapped/offerSig/commitment) for escrow flows' },
+        exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
+      }
+    }
   }
 ] as const
 
@@ -537,6 +568,10 @@ const automatonView = (h: import('@nektar/automaton').AutomatonHead) =>
  *  absent under stdio-less callers (tests, hooks), in which case the funding
  *  tools fall back to mem's own reserve view */
 export interface ToolCtx {
+  /** true for unauthenticated external callers (HTTP without bearer); owner
+   *  channels (stdio/MCP, bearer-authed) leave it unset — priced-content
+   *  gates charge externals only */
+  external?: boolean
   ops?: {
     wallet?: () => Promise<unknown>
     costs?: () => unknown
@@ -550,11 +585,22 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
   // settled payment tx before they run — atomic, one tx per call, publicly
   // auditable. No payment → return the invoice (the 402 challenge) as data.
   let paid: import('./pay.js').PaymentRecord | undefined
-  if (PAID_TOOLS.has(name) && paymentsEnabled()) {
+  // paid content paths: a manifest's offers price recall ('answer' → read
+  // sats) and pack downloads ('pack' sats) for EXTERNAL callers. Priced
+  // shards join the PAID_TOOLS gate with the manifest's amount.
+  const pricedTool = async (): Promise<{ tool: string, amount: number } | undefined> => {
+    if (!paymentsEnabled() || !ctx.external) return undefined
+    if (name === 'recall' && args?.shard) { const p = await mem.contentPrice(String(args.shard), 'read').catch(() => 0); if (p > 0) return { tool: 'recall', amount: p } }
+    if (name === 'exportShard' && args?.shard) { const p = await mem.contentPrice(String(args.shard), 'pack').catch(() => 0); if (p > 0) return { tool: 'exportShard', amount: p } }
+    return undefined
+  }
+  const gated = paymentsEnabled() ? (PAID_TOOLS.has(name) ? { tool: name, amount: priceFor(name) } : await pricedTool()) : undefined
+  if (gated) {
     if (typeof args?.payment?.transaction !== 'string') {
-      return { ok: false, error: `payment required — ${name} costs ${priceFor(name)} sats`, ...paymentRequired(name).required }
+      const { required } = paymentRequired(gated.tool, gated.amount)
+      return { ok: false, error: `payment required — ${gated.tool} costs ${gated.amount} sats`, ...required }
     }
-    paid = await settlePayment(mem, name, args.payment)
+    paid = await settlePayment(mem, gated.tool, args.payment)
   }
   switch (name) {
     case 'payQuote': {
@@ -1118,6 +1164,11 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
         const max = args?.maxSats !== undefined ? Number(args.maxSats) : undefined
         if (max === undefined) return { needsPayment: true, demand, hint: 're-run with maxSats to authorize paying this invoice' }
         if (amount > max) throw new Error(`peerCall: ${tool} costs ${amount} sats — over maxSats ${max}`)
+        // settlement context: the invoice's network tag must match the chain
+        // this buyer actually settles on — never sign a payment on the wrong network
+        const mine = process.env.NEKTAR_NETWORK ?? 'mock'
+        const expected = mine === 'main' ? 'bsv:mainnet' : mine === 'ttn' ? 'bsv:teratestnet' : mine === 'regtest' ? 'bsv:regtest' : 'bsv:mock'
+        if (typeof acc.network === 'string' && acc.network !== expected) throw new Error(`peerCall: invoice settles on ${acc.network} but this instance runs ${mine} — refusing to sign`)
         if (extra.quoteSig !== undefined && !verifyQuoteSig({ ...extra, amount })) throw new Error('peerCall: quoteSig does not verify — the invoice may be doctored or not from this endpoint')
         const paid = await mem.payInvoice({ invoiceId: String(extra.invoiceId), amount, lockingScriptHex: String(extra.lockingScriptHex), opReturn: String(extra.opReturn) })
         res = await post({ ...(args?.args ?? {}), payment: paid.payment })
@@ -1125,6 +1176,37 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       }
       if (res.status >= 400) throw new Error(`peerCall: ${endpoint}/v1/tools/${tool} → ${res.status}: ${(res.body as any)?.error ?? res.status}`)
       return res.body
+    }
+    case 'importRecord': {
+      // land a record bought via sale#claim — caller passes the verified
+      // claimed payload; lineage (from shard:seq, leaf, settlement txid)
+      // commits on __imports__
+      if (typeof args?.data !== 'string') throw new Error('importRecord: data required (the verified claim payload)')
+      return await mem.importRecord({ data: args.data, provenance: args.provenance, sourceShard: args.sourceShard, sourceSeq: args.sourceSeq, leaf: args.leaf, saleTxid: args.saleTxid, shard: args.shard })
+    }
+    case 'publishOffer': {
+      // wrap a sale offerMemory result into a signed market listing and post
+      // it to the rendezvous — the enumerable shelf: buyers watching the
+      // shard's domains see "record N for X sats" on their next pull
+      const { signOffer } = await import('@nektar/overlay')
+      if (typeof args?.shard !== 'string') throw new Error('publishOffer: shard required')
+      if (!Number.isSafeInteger(Number(args?.seq))) throw new Error('publishOffer: seq required')
+      const m = await mem.shardManifest(args.shard).catch(() => undefined)
+      const fields = {
+        shard: args.shard, seq: Number(args.seq),
+        ...(m ? { shardId: m.shardId, domains: m.domains } : { domains: (args?.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32) }),
+        ...(args?.leaf ? { leaf: String(args.leaf) } : {}), ...(args?.hdp ? { hdp: String(args.hdp) } : {}), ...(args?.batchR ? { batchR: String(args.batchR) } : {}),
+        priceSats: Math.max(0, Math.floor(Number(args?.priceSats ?? 0))),
+        ...(args?.offer !== undefined ? { offer: args.offer } : {}),
+        ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {})
+      }
+      if (!fields.domains.length) throw new Error('publishOffer: no domains — describeShard first or pass {domains}')
+      const signed = signOffer(mem.operatorKey(), fields)
+      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      const r = await fetch(`${rv}/offer`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishOffer: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
+      return { ok: true, pub: (j as any).pub, offer: signed.offer }
     }
     case 'watch': {
       const base = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')

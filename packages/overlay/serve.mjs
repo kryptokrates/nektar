@@ -27,7 +27,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import knexPkg from 'knex'
 import { ArcBroadcaster, ChaintracksTracker } from '@nektar/chain'
-import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant } from './dist/src/index.js'
+import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer } from './dist/src/index.js'
 
 const HOST = process.env.NEKTAR_OVERLAY_HOST ?? '0.0.0.0'
 const PORT = Number(process.env.NEKTAR_OVERLAY_PORT ?? 8090)
@@ -106,6 +106,18 @@ const server = http.createServer(async (req, res) => {
       if (!want || !sig || !verifyWant(want, sig)) return json(res, 400, { error: 'invalid want or signature' })
       const ok = await overlay.lsPresence.announceWant({ want, sig })
       return json(res, ok ? 200 : 400, ok ? { ok: true, pub: want.pub } : { error: 'rejected' })
+    }
+    if (req.method === 'POST' && url.pathname === '/offer') {
+      if (!gated(req)) return json(res, 401, { error: 'unauthorized' })
+      const { offer, sig } = JSON.parse(await body(req) || '{}')
+      if (!offer || !sig || !verifyOffer(offer, sig)) return json(res, 400, { error: 'invalid offer or signature' })
+      const ok = await overlay.lsPresence.announceOffer({ offer, sig })
+      return json(res, ok ? 200 : 400, ok ? { ok: true, pub: offer.pub } : { error: 'rejected' })
+    }
+    // the live shelf: signed offers, optionally narrowed by domain tag
+    if (req.method === 'GET' && url.pathname === '/offers') {
+      const domain = url.searchParams.get('domain') ?? undefined
+      return json(res, 200, { offers: overlay.lsPresence.offersFor(domain) })
     }
     // JetStream-pull feed: consumers hold a cursor (last seen seq) and pull
     // new events, filtered by kind and domain tags. ?wait=<ms> long-polls

@@ -114,7 +114,51 @@ export function verifyWant (want: WantAd, sigHex: string): boolean {
 // Every admitted ad/catalog/want appends {seq, kind, pub, domains[], ts};
 // consumers hold a cursor and pull {since, domains, kind} — the directory
 // serves the events, it never vouches for them (sigs ride inside).
-export type EventKind = 'ad' | 'catalog' | 'want'
+// ── offers — the enumerable shelf: a signed per-record sale listing ─────
+// The DisclosureSale offer artifact published as a market object: the leaf/
+// hdp/batchR commitment lets a buyer verify inclusion BEFORE funding (the
+// same checks sale#escrow runs). Keyed per (pub, shard, seq) — a seller
+// lists many records; latest-per-key wins; expiry honoured at read.
+export interface OfferAd {
+  pub: string // seller identity key
+  shard: string // label the record lives on
+  seq: number // the record for sale
+  shardId?: string // on-chain shard id when known
+  leaf?: string // leaf commitment hex (verify-before-pay handle)
+  hdp?: string // record identity hash hex
+  batchR?: string // anchored batch root the leaf path reaches
+  priceSats: number
+  domains: string[] // from the shard's manifest — feed filtering
+  offer?: Record<string, unknown> // the raw DisclosureSale offer (cfg/wrapped/sellerPub/offerSig/expiresAt/commitment)
+  ts: number
+  exp?: number
+}
+export interface SignedOffer { offer: OfferAd, sig: string }
+
+const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}`
+const offerDigest = (o: OfferAd) => sha256(utf8(offerCanonical(o)))
+const offerKey = (o: OfferAd) => `${o.pub}:${o.shard}:${o.seq}`
+
+export function signOffer (key: PrivateKey, fields: Omit<OfferAd, 'pub'>): SignedOffer {
+  const offer: OfferAd = { ...fields, domains: [...fields.domains].sort(), pub: key.toPublicKey().toString() }
+  return { offer, sig: toHex(Uint8Array.from(key.sign(Array.from(offerDigest(offer))).toDER() as number[])) }
+}
+
+export function verifyOffer (offer: OfferAd, sigHex: string): boolean {
+  try {
+    if (typeof offer?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(offer.pub)) return false
+    if (typeof offer.shard !== 'string' || offer.shard.length === 0 || offer.shard.length > 64) return false
+    if (!Number.isSafeInteger(offer.seq) || offer.seq < 0) return false
+    if (!Number.isSafeInteger(offer.priceSats) || offer.priceSats < 0) return false
+    if (!Array.isArray(offer.domains) || offer.domains.length > 32 || !offer.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return false
+    for (const h of [offer.shardId, offer.leaf, offer.hdp, offer.batchR]) if (h !== undefined && (typeof h !== 'string' || !/^[0-9a-f]{40,64}$/i.test(h))) return false
+    if (!Number.isSafeInteger(offer.ts) || offer.ts <= 0) return false
+    if (offer.exp !== undefined && (!Number.isSafeInteger(offer.exp) || offer.exp <= Date.now())) return false
+    return PublicKey.fromString(offer.pub).verify(Array.from(offerDigest(offer)), Signature.fromDER(sigHex, 'hex'))
+  } catch { return false }
+}
+
+export type EventKind = 'ad' | 'catalog' | 'want' | 'offer'
 export interface PresenceEvent { seq: number, kind: EventKind, pub: string, domains: string[], ts: number, payload: unknown }
 
 export function signPresence (key: PrivateKey, fields: Omit<PresenceAd, 'pub'>): SignedAd {
@@ -140,6 +184,7 @@ export function presenceOutputScript ({ ad, sig }: SignedAd): string {
 
 const CAT_TAG = 'nektar-catalog'
 const WANT_TAG = 'nektar-want'
+const OFFER_TAG = 'nektar-offer'
 /** on-chain catalog — same 4-push shape as presence ads; the payload carries
  *  everything except pub (push 1) so the canonical digest rebuilds. 0-sat
  *  data outputs ride tm_presence / the object plane like any admitted tx. */
@@ -150,6 +195,10 @@ export function catalogOutputScript ({ catalog, sig }: SignedCatalog): string {
 export function wantOutputScript ({ want, sig }: SignedWant): string {
   const payload = JSON.stringify({ domains: want.domains, ...(want.question !== undefined ? { question: want.question } : {}), ...(want.maxSats !== undefined ? { maxSats: want.maxSats } : {}), ...(want.endpoint !== undefined ? { endpoint: want.endpoint } : {}), ts: want.ts, ...(want.exp !== undefined ? { exp: want.exp } : {}) })
   return Script.fromASM(`OP_RETURN ${toHex(utf8(WANT_TAG))} ${want.pub} ${toHex(utf8(payload))} ${sig}`).toHex()
+}
+export function offerOutputScript ({ offer, sig }: SignedOffer): string {
+  const payload = JSON.stringify({ shard: offer.shard, seq: offer.seq, ...(offer.shardId ? { shardId: offer.shardId } : {}), ...(offer.leaf ? { leaf: offer.leaf } : {}), ...(offer.hdp ? { hdp: offer.hdp } : {}), ...(offer.batchR ? { batchR: offer.batchR } : {}), priceSats: offer.priceSats, domains: offer.domains, ...(offer.offer ? { offer: offer.offer } : {}), ts: offer.ts, ...(offer.exp !== undefined ? { exp: offer.exp } : {}) })
+  return Script.fromASM(`OP_RETURN ${toHex(utf8(OFFER_TAG))} ${offer.pub} ${toHex(utf8(payload))} ${sig}`).toHex()
 }
 
 // The SDK's Script.chunks collapses OP_RETURN data into one chunk — decode the
@@ -211,12 +260,25 @@ export function parseWantOutput (scriptHex: string): SignedWant | null {
   } catch { return null }
 }
 
-/** any presence-topic output — ad, catalog or want */
-export type ParsedPresence = { kind: 'ad', ad: SignedAd } | { kind: 'catalog', sc: SignedCatalog } | { kind: 'want', sw: SignedWant }
+export function parseOfferOutput (scriptHex: string): SignedOffer | null {
+  try {
+    const pushes = readPushes(scriptHex)
+    if (!pushes || pushes.length !== 4) return null
+    if (pushes[0]!.toString() !== OFFER_TAG) return null
+    const pub = pushes[1]!.toString('hex')
+    const p = JSON.parse(pushes[2]!.toString())
+    const offer: OfferAd = { pub, shard: p.shard, seq: p.seq, ...(p.shardId ? { shardId: p.shardId } : {}), ...(p.leaf ? { leaf: p.leaf } : {}), ...(p.hdp ? { hdp: p.hdp } : {}), ...(p.batchR ? { batchR: p.batchR } : {}), priceSats: p.priceSats, domains: p.domains, ...(p.offer ? { offer: p.offer } : {}), ts: p.ts, ...(p.exp !== undefined ? { exp: p.exp } : {}) }
+    return { offer, sig: pushes[3]!.toString('hex') }
+  } catch { return null }
+}
+
+/** any presence-topic output — ad, catalog, want or offer */
+export type ParsedPresence = { kind: 'ad', ad: SignedAd } | { kind: 'catalog', sc: SignedCatalog } | { kind: 'want', sw: SignedWant } | { kind: 'offer', so: SignedOffer }
 export function parseAnyPresence (scriptHex: string): ParsedPresence | null {
   const ad = parsePresence(scriptHex); if (ad) return { kind: 'ad', ad }
   const sc = parseCatalogOutput(scriptHex); if (sc) return { kind: 'catalog', sc }
   const sw = parseWantOutput(scriptHex); if (sw) return { kind: 'want', sw }
+  const so = parseOfferOutput(scriptHex); if (so) return { kind: 'offer', so }
   return null
 }
 
@@ -231,7 +293,8 @@ export function createTmPresence (): TopicManager {
         if (p === null) continue
         const ok = p.kind === 'ad' ? verifyPresence(p.ad.ad, p.ad.sig)
           : p.kind === 'catalog' ? verifyCatalog(p.sc.catalog, p.sc.sig)
-          : verifyWant(p.sw.want, p.sw.sig)
+          : p.kind === 'want' ? verifyWant(p.sw.want, p.sw.sig)
+          : verifyOffer(p.so.offer, p.so.sig)
         if (ok) admit.outputsToAdmit.push(i)
       }
       return admit
@@ -251,8 +314,10 @@ export function createLsPresence (kx?: Knex): LookupService & {
   announce: (s: SignedAd) => Promise<boolean>
   announceCatalog: (sc: SignedCatalog) => Promise<boolean>
   announceWant: (sw: SignedWant) => Promise<boolean>
+  announceOffer: (so: SignedOffer) => Promise<boolean>
   catalogFor: (pub: string) => SignedCatalog | undefined
   wantFor: (pub: string) => SignedWant | undefined
+  offersFor: (domain?: string) => SignedOffer[]
   feed: (q: { since?: number, domains?: string[], kind?: EventKind, limit?: number }) => Promise<PresenceEvent[]>
 } {
   // latest ad per pub; shard → set of pubs advertising it
@@ -263,6 +328,8 @@ export function createLsPresence (kx?: Knex): LookupService & {
   const domainIndex = new Map<string, Set<string>>()
   // latest signed want per pub
   const wants = new Map<string, SignedWant>()
+  // live offers keyed pub:shard:seq (one seller lists many records)
+  const offers = new Map<string, SignedOffer>()
   // the durable event log — seq is the consumer cursor
   const events: PresenceEvent[] = []
   let nextSeq = 0
@@ -304,6 +371,12 @@ export function createLsPresence (kx?: Knex): LookupService & {
     if (!kx || !(await kx.schema.hasTable(WANTS_TABLE))) return
     const row = { pub: sw.want.pub, ts: sw.want.ts, want: JSON.stringify(sw.want), sig: sw.sig }
     await kx(WANTS_TABLE).insert(row).onConflict('pub').merge(row)
+  }
+  const OFFERS_TABLE = 'nektar_ls_offers'
+  const persistOffer = async (so: SignedOffer) => {
+    if (!kx || !(await kx.schema.hasTable(OFFERS_TABLE))) return
+    const row = { key: offerKey(so.offer), pub: so.offer.pub, ts: so.offer.ts, offer: JSON.stringify(so.offer), sig: so.sig }
+    await kx(OFFERS_TABLE).insert(row).onConflict('key').merge(row)
   }
 
   const formula = (s: Stored) => ({
@@ -372,6 +445,20 @@ export function createLsPresence (kx?: Knex): LookupService & {
         events.push({ seq: Number(r.seq), kind: r.kind as EventKind, pub: r.pub, domains: JSON.parse(r.domains), ts: Number(r.ts), payload: JSON.parse(r.payload) })
       }
       nextSeq = events.length ? events.at(-1)!.seq + 1 : 0
+      if (!(await kx.schema.hasTable(OFFERS_TABLE))) {
+        await kx.schema.createTable(OFFERS_TABLE, t => {
+          t.string('key').primary()
+          t.string('pub').notNullable()
+          t.bigInteger('ts').notNullable()
+          t.string('offer').notNullable()
+          t.string('sig').notNullable()
+        })
+      }
+      for (const r of await kx(OFFERS_TABLE).select('*')) {
+        const so: SignedOffer = { offer: JSON.parse(r.offer), sig: r.sig }
+        const prev = offers.get(r.key)
+        if (!prev || prev.offer.ts < so.offer.ts) offers.set(r.key, so)
+      }
     },
 
     outputAdmittedByTopic: (payload: OutputAdmittedByTopic) => {
@@ -402,13 +489,24 @@ export function createLsPresence (kx?: Knex): LookupService & {
         appendEvent('catalog', sc.catalog.pub, sc.catalog.shards.flatMap(e => e.domains), sc)
         return
       }
-      const sw = p.sw
-      if (!verifyWant(sw.want, sw.sig)) return
-      const prevW = wants.get(sw.want.pub)
-      if (prevW && prevW.want.ts >= sw.want.ts) return
-      wants.set(sw.want.pub, sw)
-      void persistWant(sw)
-      appendEvent('want', sw.want.pub, sw.want.domains, sw)
+      if (p.kind === 'want') {
+        const sw = p.sw
+        if (!verifyWant(sw.want, sw.sig)) return
+        const prevW = wants.get(sw.want.pub)
+        if (prevW && prevW.want.ts >= sw.want.ts) return
+        wants.set(sw.want.pub, sw)
+        void persistWant(sw)
+        appendEvent('want', sw.want.pub, sw.want.domains, sw)
+        return
+      }
+      const so = p.so
+      if (!verifyOffer(so.offer, so.sig)) return
+      const ok_ = offerKey(so.offer)
+      const prevO = offers.get(ok_)
+      if (prevO && prevO.offer.ts >= so.offer.ts) return
+      offers.set(ok_, so)
+      void persistOffer(so)
+      appendEvent('offer', so.offer.pub, so.offer.domains, so)
     },
 
     // Off-chain rendezvous: same verification, same latest-wins rule, no UTXO.
@@ -452,8 +550,20 @@ export function createLsPresence (kx?: Knex): LookupService & {
       return true
     },
 
+    announceOffer: async (so: SignedOffer) => {
+      if (!verifyOffer(so.offer, so.sig)) return false
+      const k = offerKey(so.offer)
+      const prev = offers.get(k)
+      if (prev && prev.offer.ts >= so.offer.ts) return true
+      offers.set(k, so)
+      await persistOffer(so)
+      appendEvent('offer', so.offer.pub, so.offer.domains, so)
+      return true
+    },
+
     catalogFor: (pub: string) => catalogs.get(pub)?.sc,
     wantFor: (pub: string) => wants.get(pub),
+    offersFor: (domain?: string) => [...offers.values()].filter(so => so.offer.exp === undefined || so.offer.exp > Date.now()).filter(so => domain === undefined || so.offer.domains.some(d => d.toLowerCase() === domain.toLowerCase())),
 
     // JetStream-pull view: events after `since` cursor, optionally narrowed
     // by kind and/or domain tags (a consumer subscribed to 'soccer' sees any

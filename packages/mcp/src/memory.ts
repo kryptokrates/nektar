@@ -152,6 +152,9 @@ export interface ShardManifest {
   domains: string[]
   desc?: string
   offers?: ManifestOffer[]
+  /** settlement context — the chain this seller pays/anchors on; a buyer's
+   *  peerCall refuses invoices whose network tag doesn't match. */
+  network?: string
   issuedAt: number
 }
 export const CATALOG_SHARD = '__catalog__'
@@ -1290,6 +1293,33 @@ export class NektarMemory {
     return (await this.shardCatalog()).find(m => m.shard === shard)
   }
 
+  /** the content price a manifest declares for `kind` ('pack' or 'read' via
+   *  'answer' offers) — 0 when free/undeclared. Drives the paid-content gate. */
+  async contentPrice (shard: string, kind: 'read' | 'pack'): Promise<number> {
+    const m = await this.shardManifest(shard).catch(() => undefined)
+    const match = m?.offers?.find(o => (kind === 'read' ? o.kind === 'answer' : o.kind === 'pack') && Number.isSafeInteger(o.priceSats))
+    return match?.priceSats ?? 0
+  }
+
+  /** land a purchased record locally — call AFTER the sale claim verified
+   *  it (leaf-commitment + provenance are the buyer's responsibility; this
+   *  only stores what was already checked). The record keeps the seller's
+   *  provenance fields; an __imports__ audit record commits the acquisition
+   *  (source shard:seq, leaf, settlement txid) so the lineage is anchored. */
+  async importRecord (args: { data: string, provenance?: { sourcePub?: string, hash?: string, timestamp?: number, sig?: string }, sourceShard?: string, sourceSeq?: number, leaf?: string, saleTxid?: string, shard?: string }): Promise<{ seq: number }> {
+    const shard = args.shard ?? 'bought'
+    const prov = args.provenance?.sourcePub
+      ? { hash: args.provenance.hash ?? '', timestamp: args.provenance.timestamp ?? Date.now(), sig: args.provenance.sig ?? '', sourcePub: args.provenance.sourcePub }
+      : undefined
+    const { seq } = await this.remember(shard, args.data, prov)
+    await this.remember('__imports__', JSON.stringify({
+      type: 'record-import', fromShard: args.sourceShard ?? 'unknown', fromSeq: args.sourceSeq ?? null,
+      ...(args.leaf ? { leaf: args.leaf } : {}), ...(args.saleTxid ? { saleTxid: args.saleTxid } : {}),
+      toShard: shard, seq, importedAt: Date.now()
+    })).catch(() => undefined)
+    return { seq }
+  }
+
   /** Commit a shard manifest to __catalog__ — the domain tags another agent
    *  searches by ('who knows about soccer'). The claim is anchored and
    *  timestamped like any memory: false advertising stays attributable.
@@ -1306,7 +1336,8 @@ export class NektarMemory {
       .slice(0, 64)
     const manifest: ShardManifest = {
       v: 1, type: 'shard-manifest', shard, shardId: this.shardId(shard), domains,
-      ...(desc ? { desc } : {}), ...(offers.length ? { offers } : {}), issuedAt: Date.now()
+      ...(desc ? { desc } : {}), ...(offers.length ? { offers } : {}),
+      network: process.env.NEKTAR_NETWORK ?? 'mock', issuedAt: Date.now()
     }
     const r = await this.remember(CATALOG_SHARD, JSON.stringify(manifest))
     return { manifest, seq: r.seq }

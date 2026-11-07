@@ -19,7 +19,8 @@ const SERVE = join(ROOT, 'packages/overlay/serve.mjs')
 const RV = 18099, SELLER = 18098, BUYER = 18097
 const tmp = mkdtempSync(join(tmpdir(), 'nektar-disco-'))
 const kids = []
-const env = (extra) => ({ ...process.env, NEKTAR_NETWORK: 'mock', NEKTAR_BATCH: '1', NEKTAR_DEMO_UTXOS: '20', ...extra })
+const NET = process.env.SMOKE_NETWORK ?? 'mock'
+const env = (extra) => ({ ...process.env, NEKTAR_NETWORK: NET, NEKTAR_BATCH: '1', NEKTAR_DEMO_UTXOS: '20', NEKTAR_AUTOMINE: '1', ...extra })
 const spawnKid = (file, args, e) => {
   const k = spawn(process.execPath, [file, ...args], { env: e, stdio: ['ignore', 'ignore', 'pipe'] })
   k.stderr.on('data', d => process.stderr.write(`[${args.join(' ') || file}] ${d}`))
@@ -134,7 +135,7 @@ try {
   if (!sellerRep) die('reputation not indexed')
   console.log(`reputation: seller card → soccer:{receipts:${sellerRep.card.entries[0]?.receipts ?? 0}} — vectors, not one score`)
 
-  console.log('\nOK — discover → quote → pay → receipt → shelf → prices → reputation, all on mock')
+  console.log('\nOK — discover → quote → pay → receipt → shelf → prices → reputation, all on ' + NET + '')
 } catch (e) {
   die(e.message)
 } finally {

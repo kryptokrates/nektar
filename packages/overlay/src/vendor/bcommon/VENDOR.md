@@ -4,11 +4,8 @@ Source: https://github.com/lightwebinc/bcommon `ts/` tree
 Version: 0.33.10 (Apache-2.0 — LICENSE and NOTICE preserved in this directory)
 Pinned: do not float; upstream is experimental and interfaces move.
 
-Files vendored: `cbor.ts`, `pubkey.ts`, `record.ts`, `pushdrop.ts`,
-`fieldsig.ts`, `commit.ts`, `engine-types.ts` — deterministic CBOR, the
-bstack committed-record reader, PushDrop reading + field signatures, the
-commitment codec, and the overlay engine type surface (TopicManager,
-LookupService, Output, ModuleHost contract) used by `src/host-module.ts`.
-
-Local changes: none beyond compiling under `@bsv/sdk@4.0.1` (upstream peers
-2.7.1). Imported symbol names are unchanged.
+Only `engine-types.ts` is vendored — the overlay engine type surface
+(TopicManager, LookupService, Output, ModuleHost contract) used by
+`src/host-module.ts`. The codec files (cbor/record/fieldsig/pushdrop/commit)
+were dropped as redundant: our artifacts keep their own canonical signing —
+importing theirs would duplicate, not interoperate.

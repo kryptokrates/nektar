@@ -349,7 +349,7 @@ NEKTAR_OVERLAY_HOST=0.0.0.0 NEKTAR_OVERLAY_PORT=8090 \
   the public wire (`NEKTAR_REMOTE_URL` + `NEKTAR_HTTP_TOKEN`): MCP
   remember → auto-anchor → 402 → locally signed BEEF settlement →
   public `/v1/verify` → tx visible via Arcade.
-  Hosted demo: the Hetzner box (`167.233.174.91:8080`) runs
+  Hosted demo: the Hetzner box (`nektar.run`) runs
   `NEKTAR_NETWORK=ttn` with a funded `fee.key.json` reserve (3M sats,
   `NEKTAR_FUND_TXIDS=hex:<rawtx>` offline import — the tx wasn't indexed
   at the lookup endpoints yet) and `NEKTAR_PAYMENTS=1`. Anchors are real

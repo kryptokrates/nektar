@@ -1,6 +1,6 @@
 # Demo — a paid, provable AI answer in five minutes
 
-Live deployment: `http://167.233.174.91:8080` — `NEKTAR_NETWORK=ttn`
+Live deployment: `https://nektar.run` — `NEKTAR_NETWORK=ttn`
 (public BSV testnet: real transactions, test coins), `NEKTAR_PAYMENTS=1`.
 
 What the audience sees: an AI answers a question, pays the operator in
@@ -38,16 +38,16 @@ by anyone — no login, no trust in us.
 
 ```bash
 # scripted, against the deployed box (needs the bearer + a payer utxo):
-NEKTAR_REMOTE_URL=http://167.233.174.91:8080 NEKTAR_HTTP_TOKEN=<bearer> \
+NEKTAR_REMOTE_URL=https://nektar.run NEKTAR_HTTP_TOKEN=<bearer> \
   node packages/e2e/src/e2e-pay-remote.mjs
 
 # or live from an agent: point the MCP client at
-#   http://167.233.174.91:8080/mcp  (bearer auth)
+#   https://nektar.run/mcp  (bearer auth)
 # and ask anything — the 402 → pay → receipt flow runs itself.
 ```
 
 A worked example minted on 2026-11-03 (still verifiable):
-`http://167.233.174.91:8080/v1/verify?r=nektarr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
+`https://nektar.run/v1/verify?r=nektarr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
 
 ## Honest talking points (say these out loud)
 

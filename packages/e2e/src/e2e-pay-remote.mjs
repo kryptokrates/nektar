@@ -3,7 +3,7 @@
 // tx (payer WIF, BEEF) → paid call → receipt commits the txid → public
 // /v1/verify → the payment tx resolvable on the real network.
 //   node packages/e2e/src/e2e-pay-remote.mjs
-// env: NEKTAR_REMOTE_URL (default http://167.233.174.91:8080),
+// env: NEKTAR_REMOTE_URL (default https://nektar.run),
 //      NEKTAR_HTTP_TOKEN (bearer), NEKTAR_FUND_WIF or the ttn-data keystore +
 //      NEKTAR_KEY_PASSPHRASE for the payer, NEKTAR_ARC_URL for the visibility check.
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
@@ -11,7 +11,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { buildPaymentTx } from '../../mcp/dist/src/payclient.js'
 import { readKeyFile } from '../../mcp/dist/src/keystore.js'
 
-const BASE = process.env.NEKTAR_REMOTE_URL ?? 'http://167.233.174.91:8080'
+const BASE = process.env.NEKTAR_REMOTE_URL ?? 'https://nektar.run'
 const TOKEN = process.env.NEKTAR_HTTP_TOKEN ?? ''
 const ARC = process.env.NEKTAR_ARC_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
 const check = (ok, label) => { console.log(` ${ok ? '✔' : '✗ FAIL'} ${label}`); if (!ok) process.exit(1) }

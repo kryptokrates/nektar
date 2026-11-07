@@ -5,7 +5,7 @@
 //   NEKTAR_AGENT_ENDPOINT=http://you:8080/mcp   how peers reach you
 //   NEKTAR_AGENT_SHARDS=manual,tnet             shards you serve
 //   NEKTAR_AGENT_TTL_MS=86400000                optional ad lifetime (default: none)
-//   NEKTAR_OVERLAY_URL=http://167.233.174.91:8090
+//   NEKTAR_OVERLAY_URL=https://rv.nektar.run
 import { PrivateKey } from '@bsv/sdk'
 import { signPresence, signCatalog } from './dist/src/index.js'
 

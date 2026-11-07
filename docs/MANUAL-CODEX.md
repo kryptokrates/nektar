@@ -5,7 +5,7 @@ answers that arrive **pruned to what provable records support**, and a
 receipt **anyone can check on their phone** — paid for per-call in real
 sats, with no account and no subscription.
 
-A live public instance runs at `http://167.233.174.91:8080` on the BSV
+A live public instance runs at `https://nektar.run` on the BSV
 public testnet (real transactions, test coins).
 
 ---
@@ -58,7 +58,7 @@ that it's *true*. Model identity is *declared*, not zkML-proven.
 ### A — Watch + verify (zero setup)
 
 Open this on your phone:
-`http://167.233.174.91:8080/v1/verify?r=nektarr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
+`https://nektar.run/v1/verify?r=nektarr1.MExLewq-WdZeUIWDltJ80AasW29_SzHVq6yIpB35zGI`
 
 That's a real paid-answer receipt minted on the live box: the committed
 answer, the cited records, the `paid` check naming the settlement tx.
@@ -71,7 +71,7 @@ is the only thing that isn't public. In `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.nektar]
-url = "http://167.233.174.91:8080/mcp"
+url = "https://nektar.run/mcp"
 bearer_token_env_var = "NEKTAR_HTTP_TOKEN"
 ```
 

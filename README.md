@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/nektar.svg" width="72" alt="nektar"/>
+</p>
+
 # nektar — the computational data market
 
 Verifiable memory for AI agents, traded as a commodity.

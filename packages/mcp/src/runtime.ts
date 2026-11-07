@@ -325,7 +325,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, true)
   // TTN uses testnet encoding (prefix byte 0x6f → 'm'/'n' addresses); main '1…'
   const fundAddress = fundKey.toPublicKey().toAddress(ttn ? [0x6f] : undefined)
-  process.stderr.write(`nektar ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring\n`)
+  process.stderr.write(`nektar ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)\n`)
 
   // headers via Chaintracks (public, no key, PoW-verifiable — the only global
   // data SPV needs); WoC stays as fallback. GorillaPool's arcade doesn't mount

@@ -73,3 +73,49 @@ test('exportShardPack carries the manifest as advisory metadata', async () => {
   assert.equal(pack.manifest?.shard, 'ball')
   assert.deepEqual(pack.manifest?.domains, ['soccer'])
 })
+
+test('importRecord: bought payload lands + __imports__ audit; forged provenance refused', async () => {
+  const { mem } = setup()
+  const r = await mem.importRecord({ data: 'Metz beat Lyon 2-1', sourceShard: 'ball', sourceSeq: 3, leaf: 'd'.repeat(64), saleTxid: 'e'.repeat(64) })
+  assert.equal(r.seq, 0)
+  const recs = await mem.records('bought')
+  assert.equal(recs.length, 1)
+  const audit = await mem.records('__imports__')
+  const a = JSON.parse(Buffer.from(audit[0]!.fragment.d).toString('utf8'))
+  assert.equal(a.type, 'record-import')
+  assert.equal(a.fromShard, 'ball')
+  assert.equal(a.saleTxid, 'e'.repeat(64))
+  assert.equal(a.toShard, 'bought')
+  // provenance is fail-closed: a claim signed by a key that isn't sourcePub's rejects
+  await assert.rejects(
+    () => mem.importRecord({ data: 'forged', provenance: { sourcePub: 'a'.repeat(66), hash: 'b'.repeat(64), timestamp: 1, sig: 'c'.repeat(142) } }),
+    /provenance signature invalid/
+  )
+})
+
+test('contentPrice: manifest offers drive external read/pack pricing', async () => {
+  const { mem } = setup()
+  await mem.remember('ball', 'x')
+  assert.equal(await mem.contentPrice('ball', 'read'), 0, 'no manifest → free')
+  await mem.describeShard('ball', { domains: ['soccer'], offers: [{ kind: 'answer', priceSats: 300 }, { kind: 'pack', priceSats: 2000 }] })
+  assert.equal(await mem.contentPrice('ball', 'read'), 300)
+  assert.equal(await mem.contentPrice('ball', 'pack'), 2000)
+})
+
+test('reputation: card computes per-domain vectors over anchored receipts', async () => {
+  const { mem, settle } = setup()
+  await mem.remember('ball', 'Metz beat Lyon 2-1')
+  await mem.remember('ball', 'Lyon beat Metz 0-2') // closes the 2-leaf batch → anchors
+  settle('ball')
+  await mem.describeShard('ball', { domains: ['soccer'] })
+  await callTool(mem, 'groundedAnswer', { claims: [{ text: 'Metz beat Lyon 2-1', cites: [{ shard: 'ball', seq: 0 }] }] })
+  settle('__receipts__')
+  const card = await mem.reputationCard()
+  assert.match(card.pub, /^[0-9a-f]{66}$/)
+  const soccer = card.entries.find(e => e.domain === 'soccer')
+  assert.ok(soccer, 'soccer domain present')
+  assert.ok(soccer.receipts >= 1)
+  assert.ok(soccer.verifiedCites >= 1)
+  const rt = await callTool(mem, 'reputation', {})
+  assert.match(rt.sig, /^30/)
+})

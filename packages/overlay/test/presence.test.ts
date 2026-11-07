@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, LockingScript } from '@bsv/sdk'
 import { MockChain, MockFunder } from '@nektar/chain'
 import { createNektarOverlay } from '../src/node.js'
-import { signPresence, presenceOutputScript, parsePresence, verifyPresence, signCatalog, verifyCatalog, signWant, catalogOutputScript, wantOutputScript } from '../src/presence.js'
+import { signPresence, presenceOutputScript, parsePresence, verifyPresence, signCatalog, verifyCatalog, signWant, signSettlement, signReputation, catalogOutputScript, wantOutputScript } from '../src/presence.js'
 
 const ad = async (key: PrivateKey, fields: { endpoint: string, shards: string[], ts: number }) =>
   signPresence(key, fields)
@@ -204,4 +204,59 @@ test('multi-kind outputs: catalog + want admitted on-chain via tm_presence', asy
   forged.sig = '30' + '44'.repeat(35)
   const st3 = await submitAd(await mkAdTx(funder, catalogOutputScript(forged)))
   assert.equal(st3.tm_presence?.outputsToAdmit?.length ?? 0, 0)
+})
+
+test('settlement: signed announcements index realized prices per domain/tool', async (t) => {
+  const { overlay } = await setup()
+  t.after(async () => { await overlay.knex.destroy() })
+  const ls = overlay.lsPresence as any
+  const a = PrivateKey.fromRandom()
+  const s1 = signSettlement(a, { invoiceId: 'inv-1', tool: 'groundedAnswer', sats: 250, txid: 'a'.repeat(64), domains: ['soccer'], ts: 1 })
+  assert.equal(await ls.announceSettlement(s1), true)
+  const s2 = signSettlement(a, { invoiceId: 'inv-2', tool: 'recall', sats: 100, txid: 'b'.repeat(64), domains: ['soccer'], ts: 2 })
+  assert.equal(await ls.announceSettlement(s2), true)
+
+  const p = ls.prices({ domain: 'soccer' })
+  assert.equal(p.count, 2)
+  assert.equal(p.totalSats, 350)
+  assert.equal(p.medianSats, 250)
+  const byTool = ls.prices({ domain: 'soccer', tool: 'recall' })
+  assert.equal(byTool.count, 1)
+  assert.equal(byTool.sats[0], 100)
+  assert.equal(ls.prices({ domain: 'rugby' }).count, 0)
+
+  // idempotent + forged rejected
+  assert.equal(await ls.announceSettlement(s1), true)
+  assert.equal((await ls.feed({ kind: 'settlement' })).length, 2)
+  const bad = signSettlement(a, { invoiceId: 'inv-3', tool: 'recall', sats: 1, txid: 'c'.repeat(64), domains: [], ts: 3 })
+  bad.ad.sats = 9999 // tamper after signing
+  assert.equal(await ls.announceSettlement(bad), false)
+})
+
+test('reputation: signed cards, latest-wins per pub, domain vectors, feed event', async (t) => {
+  const { overlay } = await setup()
+  t.after(async () => { await overlay.knex.destroy() })
+  const ls = overlay.lsPresence as any
+  const a = PrivateKey.fromRandom()
+  const card1 = signReputation(a, { entries: [{ domain: 'soccer', receipts: 4, settledSats: 600, settlements: 3 }], since: 100, asOf: 1000 })
+  assert.equal(await ls.announceReputation(card1), true)
+  assert.equal(ls.reputationFor(a.toPublicKey().toString()).card.entries[0].domain, 'soccer')
+
+  // stale card doesn't replace
+  const old = signReputation(a, { entries: [{ domain: 'soccer', receipts: 99 }], asOf: 500 })
+  assert.equal(await ls.announceReputation(old), true)
+  assert.equal(ls.reputationFor(a.toPublicKey().toString()).card.asOf, 1000)
+
+  // newer card wins; domain filter + feed
+  const card2 = signReputation(a, { entries: [{ domain: 'soccer', receipts: 5 }, { domain: 'law', receipts: 1 }], asOf: 2000 })
+  await ls.announceReputation(card2)
+  assert.equal(ls.reputationFor(a.toPublicKey().toString()).card.entries.length, 2)
+  assert.equal(ls.reputationsFor('law').length, 1)
+  assert.equal(ls.reputationsFor('rugby').length, 0)
+  assert.equal((await ls.feed({ kind: 'reputation' })).length, 2)
+
+  // forged card rejected
+  const bad = signReputation(a, { entries: [{ domain: 'soccer', receipts: 1 }], asOf: 3000 })
+  bad.sig = '30' + '44'.repeat(35)
+  assert.equal(await ls.announceReputation(bad), false)
 })

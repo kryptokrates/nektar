@@ -115,7 +115,26 @@ try {
   if (!wantEv) die(`watch did not deliver the want event: ${JSON.stringify(w2).slice(0, 200)}`)
   console.log(`buyer: watch{domains:soccer} delivered want event #${wantEv.seq} ("${wantEv.payload.want.question}")`)
 
-  console.log('\nOK — discover → quote → pay → answer → receipt → subscribe, all on mock')
+  // the shelf: seller publishes a signed offer; buyer sees it via /offers + feed
+  const pubOffer = await tool(SELLER, 'publishOffer', { shard: 'soccer', seq, priceSats: 400, leaf: 'f'.repeat(64), rendezvousUrl: 'http://localhost:' + RV })
+  if (!pubOffer.ok) die('publishOffer failed')
+  const shelf = await (await fetch(`http://localhost:${RV}/offers?domain=soccer`)).json()
+  if (!shelf.offers?.some(o => o.offer.shard === 'soccer' && o.offer.priceSats === 400)) die('shelf missing the offer')
+  console.log(`seller: publishOffer → shelf shows soccer:0 @ 400 sats`)
+
+  // realized prices + reputation: seller announces the settled sale + its card
+  await tool(SELLER, 'publishSettlement', { invoiceId: 'inv-smoke-1', tool: 'groundedAnswer', sats: ask.amount, txid: ask.paidTxid, domains: ['soccer'], rendezvousUrl: 'http://localhost:' + RV })
+  const prices = await (await fetch(`http://localhost:${RV}/prices?domain=soccer`)).json()
+  if (prices.count !== 1 || prices.medianSats !== ask.amount) die(`prices index wrong: ${JSON.stringify(prices).slice(0, 200)}`)
+  console.log(`prices: soccer clears at ${prices.medianSats} sats (n=${prices.count})`)
+  const rep = await tool(SELLER, 'reputation', { publish: true, rendezvousUrl: `http://localhost:${RV}` })
+  if (!rep.ok) die('reputation publish failed')
+  const rp = await (await fetch(`http://localhost:${RV}/reputation?domain=soccer`)).json()
+  const sellerRep = rp.reputations?.find(r => r.card.pub === rep.pub)
+  if (!sellerRep) die('reputation not indexed')
+  console.log(`reputation: seller card → soccer:{receipts:${sellerRep.card.entries[0]?.receipts ?? 0}} — vectors, not one score`)
+
+  console.log('\nOK — discover → quote → pay → receipt → shelf → prices → reputation, all on mock')
 } catch (e) {
   die(e.message)
 } finally {

@@ -1315,19 +1315,21 @@ export class NektarMemory {
     let since = Infinity
     for (const rec of await this.store.all('__receipts__')) {
       const data = await this.recordText(rec)
-      if (!data) continue
+      // record text is `receipt:<hash>:<b64url receipt-json>` (older rows are
+      // hash-only — skip those, the body carries the cites/payment we need)
+      const m = data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
+      if (!m) continue
       let r: any
-      try { r = JSON.parse(data) } catch { continue }
-      if (r?.type !== 'answer-receipt' && r?.type !== 'receipt') continue
-      const shards: string[] = [...new Set(((r.fragments ?? r.cites ?? []) as any[]).map((f: any) => String(f?.shard ?? '')).filter(Boolean) as string[])]
+      try { r = JSON.parse(Buffer.from(m[1]!, 'base64url').toString('utf8')) } catch { continue }
+      const shards: string[] = [...new Set(((r.fragmentRefs ?? []) as any[]).map((f: any) => String(f?.shard ?? '')).filter(Boolean) as string[])]
       const domains = [...new Set(shards.flatMap(s => shardDomains.get(s) ?? [s]))]
       if (!domains.length) continue
-      since = Math.min(since, (rec as any).t ?? Date.now())
+      since = Math.min(since, Number(r.timestamp ?? Date.now()))
       const paySats = Number(r.payment?.amountSats ?? r.payment?.amount ?? 0)
       for (const d of domains) {
         const e = entries.get(d) ?? { domain: d, receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 }
         e.receipts++
-        e.verifiedCites += Number(r.kept?.length ?? r.fragments?.length ?? 0)
+        e.verifiedCites += (r.fragmentRefs ?? []).length
         if (paySats > 0) { e.settledSats += paySats; e.settlements++ }
         entries.set(d, e)
       }

@@ -48,8 +48,8 @@ try {
   const sellerKey = PrivateKey.fromWif(sellerWif)
 
   spawnKid(SERVE, [], env({ NEKTAR_OVERLAY_PORT: String(RV), NEKTAR_OVERLAY_DIR: join(tmp, 'ov') }))
-  spawnKid(BIN, [], env({ NEKTAR_HTTP_PORT: String(SELLER), NEKTAR_DATA_DIR: join(tmp, 's'), NEKTAR_PAYMENTS: '1', NEKTAR_OPERATOR_WIF: sellerWif }))
-  spawnKid(BIN, [], env({ NEKTAR_HTTP_PORT: String(BUYER), NEKTAR_DATA_DIR: join(tmp, 'b'), NEKTAR_PAYMENTS: '1', NEKTAR_OPERATOR_WIF: buyerWif }))
+  spawnKid(BIN, [], env({ NEKTAR_HTTP_PORT: String(SELLER), NEKTAR_DATA_DIR: process.env.SMOKE_SELLER_DIR ?? join(tmp, 's'), NEKTAR_PAYMENTS: '1', NEKTAR_OPERATOR_WIF: sellerWif }))
+  spawnKid(BIN, [], env({ NEKTAR_HTTP_PORT: String(BUYER), NEKTAR_DATA_DIR: process.env.SMOKE_BUYER_DIR ?? join(tmp, 'b'), NEKTAR_PAYMENTS: '1', NEKTAR_OPERATOR_WIF: buyerWif }))
   await Promise.all([healthy(RV, '/health'), healthy(SELLER), healthy(BUYER)])
   console.log('up: rendezvous + seller + buyer')
 
@@ -59,6 +59,18 @@ try {
   if (!w.anchored) die('seller record did not anchor')
   const d = await tool(SELLER, 'describeShard', { shard: 'soccer', domains: ['soccer', 'ligue-1'], desc: 'French football results', offers: [{ kind: 'answer', priceSats: 250 }] })
   console.log(`seller: remembered + described soccer (shardId ${d.manifest.shardId.slice(0, 12)}…)`)
+
+  // live networks: anchors confirm on real block time — wait until the
+  // record's fragment actually proves before selling answers over it
+  if (NET !== 'mock') {
+    for (let i = 0; i < 40; i++) {
+      const p = await tool(SELLER, 'prove', { shard: 'soccer', seq: 0 }).catch(() => null)
+      if (p?.bundle || p?.verified || p?.anchored) break
+      await new Promise(r => setTimeout(r, 5000))
+      if (i === 39) die('record anchor never confirmed')
+    }
+    console.log('seller: soccer record anchor confirmed on ' + NET)
+  }
 
   // announce: signed presence ad + signed catalog (what announce.mjs does,
   // built here from the seller's own discovery doc)

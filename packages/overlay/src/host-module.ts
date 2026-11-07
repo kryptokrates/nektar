@@ -18,7 +18,6 @@
  * Env: NEKTAR_PRESENCE_DB — sqlite file for the durable index (in-memory if
  * unset); NEKTAR_OVERLAY_TOKEN — bearer for the mutating POSTs.
  */
-import knex from 'knex'
 import type { Knex } from 'knex'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createTmPresence, createLsPresence } from './presence.js'
@@ -66,15 +65,39 @@ const waitForSeq = async (ls: ReturnType<typeof createLsPresence>, seq: number, 
   return false
 }
 
-export default function create (host: PresenceModuleHost): Module {
+export default async function create (host: PresenceModuleHost): Promise<Module> {
   const dbFile = process.env.NEKTAR_PRESENCE_DB
-  const kx: Knex | undefined = dbFile ? knex({ client: 'sqlite3', connection: { filename: dbFile }, useNullAsDefault: true }) : undefined
+  // knex is resolved lazily — an in-memory module needs no sqlite driver,
+  // which keeps this module loadable in a container that lacks the native dep
+  const kx: Knex | undefined = dbFile ? (await import('knex')).default({ client: 'sqlite3', connection: { filename: dbFile }, useNullAsDefault: true }) : undefined
   const ls = createLsPresence(kx)
 
   // --- HTTP surface under /ls_presence/* -----------------------------------
-  host.route('/ls_presence/directory', (req, res) => {
+  const dec = (o: { context?: number[] }): any => { try { return JSON.parse(Buffer.from(o.context ?? []).toString()) } catch { return null } }
+  host.route('/ls_presence/directory', async (req, res) => {
     const u = new URL(req.url ?? '/', 'http://x')
-    json(res, 200, ls.lookup({ service: 'ls_presence', query: { domain: u.searchParams.get('domain') ?? undefined, q: u.searchParams.get('q') ?? undefined, shard: u.searchParams.get('shard') ?? undefined, pub: u.searchParams.get('pub') ?? undefined } }))
+    const dom = u.searchParams.get('domain')
+    const freetext = u.searchParams.get('q')
+    if (dom || freetext) {
+      const out = await ls.lookup({ service: 'ls_presence', query: dom ? { domain: dom } : { q: freetext } }) as Array<{ context?: number[] }>
+      const ads = (await Promise.all(out.map(async (o) => {
+        const sc = dec(o)
+        const [a] = await ls.lookup({ service: 'ls_presence', query: { pub: sc?.catalog?.pub } }) as Array<{ context?: number[] }>
+        return { sc, ad: a ? dec(a) : undefined }
+      }))).map(({ sc, ad }) => ({
+        ...(ad ?? {}), pub: sc?.catalog?.pub, endpoint: ad?.endpoint ?? sc?.catalog?.endpoint,
+        catalog: sc?.catalog, catalogSig: sc?.sig
+      })).filter((a: any) => a.pub)
+      return json(res, 200, { ads })
+    }
+    const query = u.searchParams.get('all') !== null ? { all: true }
+      : u.searchParams.get('shard') ? { shard: u.searchParams.get('shard') }
+      : u.searchParams.get('pub') ? { pub: u.searchParams.get('pub') }
+      : {}
+    const out = await ls.lookup({ service: 'ls_presence', query }) as Array<{ context?: number[], txid?: string }>
+    const ads = out.map((o) => ({ ...dec(o), txid: o.txid })).filter((a: any) => a.pub)
+      .map((a: any) => { const sc = ls.catalogFor(a.pub); return sc ? { ...a, catalog: sc.catalog, catalogSig: sc.sig } : a })
+    json(res, 200, { ads })
   })
   host.route('/ls_presence/catalogs', async (req, res) => {
     const pub = new URL(req.url ?? '/', 'http://x').searchParams.get('pub')

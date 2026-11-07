@@ -547,6 +547,23 @@ export const TOOLS = [
         exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
       }
     }
+  },
+  {
+    name: 'reputation',
+    description: 'Build a signed reputation card — per-domain vectors (receipts, verified cites, settled sats) computed over this instance\'s anchored history. Every input is a committed record, recomputable by anyone; it is a derivation, not a score. publish:true posts it to the rendezvous.',
+    inputSchema: { type: 'object', properties: { publish: { type: 'boolean', description: 'POST the signed card to the rendezvous' }, rendezvousUrl: { type: 'string' } } }
+  },
+  {
+    name: 'publishSettlement',
+    description: 'Announce a settled sale to the rendezvous — signed {invoiceId, tool, sats, txid, domains}; the realized-price feed. The txid is on-chain-checkable; the signature makes the claim attributable.',
+    inputSchema: {
+      type: 'object',
+      required: ['invoiceId', 'tool', 'sats', 'txid', 'domains'],
+      properties: {
+        invoiceId: { type: 'string' }, tool: { type: 'string' }, sats: { type: 'number' }, txid: { type: 'string' },
+        domains: { type: 'array', items: { type: 'string' } }, rendezvousUrl: { type: 'string' }
+      }
+    }
   }
 ] as const
 
@@ -1207,6 +1224,30 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishOffer: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, offer: signed.offer }
+    }
+    case 'reputation': {
+      const { signReputation } = await import('@nektar/overlay')
+      const fields = await mem.reputationCard()
+      const signed = signReputation(mem.operatorKey(), fields)
+      if (args?.publish !== true) return { card: signed.card, sig: signed.sig }
+      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      const r = await fetch(`${rv}/reputation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || (j as any)?.ok !== true) throw new Error(`reputation: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
+      return { ok: true, pub: (j as any).pub, card: signed.card }
+    }
+    case 'publishSettlement': {
+      const { signSettlement } = await import('@nektar/overlay')
+      const fields = {
+        invoiceId: String(args.invoiceId), tool: String(args.tool), sats: Math.max(0, Math.floor(Number(args.sats))),
+        txid: String(args.txid), domains: (args.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32), ts: Date.now()
+      }
+      const signed = signSettlement(mem.operatorKey(), fields)
+      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      const r = await fetch(`${rv}/settlement`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishSettlement: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
+      return { ok: true, pub: (j as any).pub, ad: signed.ad }
     }
     case 'watch': {
       const base = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')

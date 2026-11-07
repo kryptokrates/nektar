@@ -158,7 +158,68 @@ export function verifyOffer (offer: OfferAd, sigHex: string): boolean {
   } catch { return false }
 }
 
-export type EventKind = 'ad' | 'catalog' | 'want' | 'offer'
+// ── settlements — realized-price announcements (signed, txid-checkable) ──
+// The tx is already on-chain (nektarpay:<invoiceId>); the POST is the
+// signed announcement that makes realized prices indexable per domain.
+export interface SettlementAd {
+  pub: string // seller identity key
+  invoiceId: string
+  tool: string // what was bought (recall|groundedAnswer|exportShard|...)
+  sats: number
+  txid: string // settlement tx — independently checkable on-chain
+  domains: string[] // the sold content's declared domains
+  ts: number
+}
+export interface SignedSettlement { ad: SettlementAd, sig: string }
+const settlementCanonical = (s: SettlementAd) => `${s.invoiceId}|${s.tool}|${s.sats}|${s.txid}|${[...s.domains].sort().join(',')}|${s.ts}`
+const settlementDigest = (s: SettlementAd) => sha256(utf8(settlementCanonical(s)))
+export function signSettlement (key: PrivateKey, fields: Omit<SettlementAd, 'pub'>): SignedSettlement {
+  const ad: SettlementAd = { ...fields, domains: [...fields.domains].sort(), pub: key.toPublicKey().toString() }
+  return { ad, sig: toHex(Uint8Array.from(key.sign(Array.from(settlementDigest(ad))).toDER() as number[])) }
+}
+export function verifySettlement (ad: SettlementAd, sigHex: string): boolean {
+  try {
+    if (typeof ad?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(ad.pub)) return false
+    if (typeof ad.invoiceId !== 'string' || ad.invoiceId.length < 4 || ad.invoiceId.length > 64) return false
+    if (typeof ad.txid !== 'string' || !/^[0-9a-f]{64}$/i.test(ad.txid)) return false
+    if (!Number.isSafeInteger(ad.sats) || ad.sats < 0) return false
+    if (typeof ad.tool !== 'string' || ad.tool.length === 0 || ad.tool.length > 48) return false
+    if (!Array.isArray(ad.domains) || !ad.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return false
+    if (!Number.isSafeInteger(ad.ts) || ad.ts <= 0) return false
+    return PublicKey.fromString(ad.pub).verify(Array.from(settlementDigest(ad)), Signature.fromDER(sigHex, 'hex'))
+  } catch { return false }
+}
+
+// ── reputation cards — per-domain vectors over committed history ────────
+// Wright: reputation is measurable performance over time, multidimensional,
+// never one score. The card is a signed derivation over anchored records
+// (receipts, settlements, activity) — the inputs are chain-verifiable; the
+// signature just makes the published snapshot attributable.
+export interface ReputationEntry { domain: string, receipts?: number, settledSats?: number, settlements?: number, verifiedCites?: number }
+export interface ReputationCard {
+  pub: string
+  entries: ReputationEntry[]
+  shardId?: string
+  since?: number // activity window start
+  asOf: number // computed at
+}
+export interface SignedReputation { card: ReputationCard, sig: string }
+const repCanonical = (c: ReputationCard) => `${c.shardId ?? ''}|${JSON.stringify(c.entries)}|${c.since ?? ''}|${c.asOf}`
+const repDigest = (c: ReputationCard) => sha256(utf8(repCanonical(c)))
+export function signReputation (key: PrivateKey, fields: Omit<ReputationCard, 'pub'>): SignedReputation {
+  const card: ReputationCard = { ...fields, pub: key.toPublicKey().toString() }
+  return { card, sig: toHex(Uint8Array.from(key.sign(Array.from(repDigest(card))).toDER() as number[])) }
+}
+export function verifyReputationCard (card: ReputationCard, sigHex: string): boolean {
+  try {
+    if (typeof card?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(card.pub)) return false
+    if (!Array.isArray(card.entries) || card.entries.length > 256 || !card.entries.every(e => e && typeof e.domain === 'string' && DOMAIN_RE.test(e.domain))) return false
+    if (!Number.isSafeInteger(card.asOf) || card.asOf <= 0) return false
+    return PublicKey.fromString(card.pub).verify(Array.from(repDigest(card)), Signature.fromDER(sigHex, 'hex'))
+  } catch { return false }
+}
+
+export type EventKind = 'ad' | 'catalog' | 'want' | 'offer' | 'settlement' | 'reputation'
 export interface PresenceEvent { seq: number, kind: EventKind, pub: string, domains: string[], ts: number, payload: unknown }
 
 export function signPresence (key: PrivateKey, fields: Omit<PresenceAd, 'pub'>): SignedAd {
@@ -315,9 +376,14 @@ export function createLsPresence (kx?: Knex): LookupService & {
   announceCatalog: (sc: SignedCatalog) => Promise<boolean>
   announceWant: (sw: SignedWant) => Promise<boolean>
   announceOffer: (so: SignedOffer) => Promise<boolean>
+  announceSettlement: (s: SignedSettlement) => Promise<boolean>
+  announceReputation: (sr: SignedReputation) => Promise<boolean>
   catalogFor: (pub: string) => SignedCatalog | undefined
   wantFor: (pub: string) => SignedWant | undefined
   offersFor: (domain?: string) => SignedOffer[]
+  reputationFor: (pub: string) => SignedReputation | undefined
+  reputationsFor: (domain?: string) => SignedReputation[]
+  prices: (q: { domain?: string, tool?: string }) => { count: number, sats: number[], minSats: number | null, maxSats: number | null, medianSats: number | null, totalSats: number, settlements: SettlementAd[] }
   feed: (q: { since?: number, domains?: string[], kind?: EventKind, limit?: number }) => Promise<PresenceEvent[]>
 } {
   // latest ad per pub; shard → set of pubs advertising it
@@ -330,6 +396,10 @@ export function createLsPresence (kx?: Knex): LookupService & {
   const wants = new Map<string, SignedWant>()
   // live offers keyed pub:shard:seq (one seller lists many records)
   const offers = new Map<string, SignedOffer>()
+  // signed settlement announcements (append — history IS the price feed)
+  const settlements: SignedSettlement[] = []
+  // latest reputation card per pub
+  const reps = new Map<string, SignedReputation>()
   // the durable event log — seq is the consumer cursor
   const events: PresenceEvent[] = []
   let nextSeq = 0
@@ -377,6 +447,17 @@ export function createLsPresence (kx?: Knex): LookupService & {
     if (!kx || !(await kx.schema.hasTable(OFFERS_TABLE))) return
     const row = { key: offerKey(so.offer), pub: so.offer.pub, ts: so.offer.ts, offer: JSON.stringify(so.offer), sig: so.sig }
     await kx(OFFERS_TABLE).insert(row).onConflict('key').merge(row)
+  }
+  const SETTLE_TABLE = 'nektar_ls_settlements'
+  const persistSettlement = async (s: SignedSettlement) => {
+    if (!kx || !(await kx.schema.hasTable(SETTLE_TABLE))) return
+    await kx(SETTLE_TABLE).insert({ pub: s.ad.pub, invoice_id: s.ad.invoiceId, txid: s.ad.txid, tool: s.ad.tool, sats: s.ad.sats, domains: JSON.stringify(s.ad.domains), ts: s.ad.ts, ad: JSON.stringify(s.ad), sig: s.sig })
+  }
+  const REPS_TABLE = 'nektar_ls_reputation'
+  const persistRep = async (sr: SignedReputation) => {
+    if (!kx || !(await kx.schema.hasTable(REPS_TABLE))) return
+    const row = { pub: sr.card.pub, as_of: sr.card.asOf, card: JSON.stringify(sr.card), sig: sr.sig }
+    await kx(REPS_TABLE).insert(row).onConflict('pub').merge(row)
   }
 
   const formula = (s: Stored) => ({
@@ -458,6 +539,34 @@ export function createLsPresence (kx?: Knex): LookupService & {
         const so: SignedOffer = { offer: JSON.parse(r.offer), sig: r.sig }
         const prev = offers.get(r.key)
         if (!prev || prev.offer.ts < so.offer.ts) offers.set(r.key, so)
+      }
+      if (!(await kx.schema.hasTable(SETTLE_TABLE))) {
+        await kx.schema.createTable(SETTLE_TABLE, t => {
+          t.increments('id')
+          t.string('pub').notNullable()
+          t.string('invoice_id').notNullable()
+          t.string('txid').notNullable()
+          t.string('tool').notNullable()
+          t.integer('sats').notNullable()
+          t.string('domains').notNullable()
+          t.bigInteger('ts').notNullable()
+          t.string('ad').notNullable()
+          t.string('sig').notNullable()
+        })
+      }
+      for (const r of await kx(SETTLE_TABLE).select('*')) settlements.push({ ad: JSON.parse(r.ad), sig: r.sig })
+      if (!(await kx.schema.hasTable(REPS_TABLE))) {
+        await kx.schema.createTable(REPS_TABLE, t => {
+          t.string('pub').primary()
+          t.bigInteger('as_of').notNullable()
+          t.string('card').notNullable()
+          t.string('sig').notNullable()
+        })
+      }
+      for (const r of await kx(REPS_TABLE).select('*')) {
+        const sr: SignedReputation = { card: JSON.parse(r.card), sig: r.sig }
+        const prev = reps.get(r.pub)
+        if (!prev || prev.card.asOf < sr.card.asOf) reps.set(r.pub, sr)
       }
     },
 
@@ -561,9 +670,48 @@ export function createLsPresence (kx?: Knex): LookupService & {
       return true
     },
 
+    announceSettlement: async (s: SignedSettlement) => {
+      if (!verifySettlement(s.ad, s.sig)) return false
+      if (settlements.some(x => x.ad.pub === s.ad.pub && x.ad.invoiceId === s.ad.invoiceId)) return true // idempotent
+      settlements.push(s)
+      await persistSettlement(s)
+      appendEvent('settlement', s.ad.pub, s.ad.domains, s)
+      return true
+    },
+
+    announceReputation: async (sr: SignedReputation) => {
+      if (!verifyReputationCard(sr.card, sr.sig)) return false
+      const prev = reps.get(sr.card.pub)
+      if (prev && prev.card.asOf >= sr.card.asOf) return true
+      reps.set(sr.card.pub, sr)
+      await persistRep(sr)
+      appendEvent('reputation', sr.card.pub, sr.card.entries.map(e => e.domain), sr)
+      return true
+    },
+
     catalogFor: (pub: string) => catalogs.get(pub)?.sc,
     wantFor: (pub: string) => wants.get(pub),
     offersFor: (domain?: string) => [...offers.values()].filter(so => so.offer.exp === undefined || so.offer.exp > Date.now()).filter(so => domain === undefined || so.offer.domains.some(d => d.toLowerCase() === domain.toLowerCase())),
+    reputationFor: (pub: string) => reps.get(pub),
+    reputationsFor: (domain?: string) => [...reps.values()].filter(sr => domain === undefined || sr.card.entries.some(e => e.domain === domain.toLowerCase())),
+    // realized-price index: settled sales per (domain, tool) — count + sats
+    // distribution. Signed announcements; txids checkable on-chain.
+    prices: (q: { domain?: string, tool?: string }) => {
+      const dom = q.domain?.toLowerCase()
+      const rows = settlements.filter(s =>
+        (dom === undefined || s.ad.domains.some(d => d.toLowerCase() === dom)) &&
+        (q.tool === undefined || s.ad.tool === q.tool))
+      const sats = rows.map(r => r.ad.sats).sort((a, b) => a - b)
+      return {
+        count: rows.length,
+        sats,
+        minSats: sats[0] ?? null,
+        maxSats: sats.at(-1) ?? null,
+        medianSats: sats.length ? sats[Math.floor(sats.length / 2)]! : null,
+        totalSats: sats.reduce((a, b) => a + b, 0),
+        settlements: rows.map(r => r.ad)
+      }
+    },
 
     // JetStream-pull view: events after `since` cursor, optionally narrowed
     // by kind and/or domain tags (a consumer subscribed to 'soccer' sees any

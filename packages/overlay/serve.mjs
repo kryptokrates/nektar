@@ -27,7 +27,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import knexPkg from 'knex'
 import { ArcBroadcaster, ChaintracksTracker } from '@nektar/chain'
-import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer } from './dist/src/index.js'
+import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard } from './dist/src/index.js'
 
 const HOST = process.env.NEKTAR_OVERLAY_HOST ?? '0.0.0.0'
 const PORT = Number(process.env.NEKTAR_OVERLAY_PORT ?? 8090)
@@ -118,6 +118,31 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/offers') {
       const domain = url.searchParams.get('domain') ?? undefined
       return json(res, 200, { offers: overlay.lsPresence.offersFor(domain) })
+    }
+    if (req.method === 'POST' && url.pathname === '/settlement') {
+      if (!gated(req)) return json(res, 401, { error: 'unauthorized' })
+      const { ad, sig } = JSON.parse(await body(req) || '{}')
+      if (!ad || !sig || !verifySettlement(ad, sig)) return json(res, 400, { error: 'invalid settlement or signature' })
+      const ok = await overlay.lsPresence.announceSettlement({ ad, sig })
+      return json(res, ok ? 200 : 400, ok ? { ok: true, pub: ad.pub } : { error: 'rejected' })
+    }
+    if (req.method === 'POST' && url.pathname === '/reputation') {
+      if (!gated(req)) return json(res, 401, { error: 'unauthorized' })
+      const { card, sig } = JSON.parse(await body(req) || '{}')
+      if (!card || !sig || !verifyReputationCard(card, sig)) return json(res, 400, { error: 'invalid card or signature' })
+      const ok = await overlay.lsPresence.announceReputation({ card, sig })
+      return json(res, ok ? 200 : 400, ok ? { ok: true, pub: card.pub } : { error: 'rejected' })
+    }
+    // realized clearing prices — signed settlement announcements indexed
+    // per (domain, tool); the txids are independently checkable on-chain
+    if (req.method === 'GET' && url.pathname === '/prices') {
+      return json(res, 200, overlay.lsPresence.prices({ domain: url.searchParams.get('domain') ?? undefined, tool: url.searchParams.get('tool') ?? undefined }))
+    }
+    // multidimensional reputation — per-domain vectors, never one score
+    if (req.method === 'GET' && url.pathname === '/reputation') {
+      const pub = url.searchParams.get('pub'), domain = url.searchParams.get('domain') ?? undefined
+      if (pub) return json(res, 200, { reputation: overlay.lsPresence.reputationFor(pub) ?? null })
+      return json(res, 200, { reputations: overlay.lsPresence.reputationsFor(domain) })
     }
     // JetStream-pull feed: consumers hold a cursor (last seen seq) and pull
     // new events, filtered by kind and domain tags. ?wait=<ms> long-polls

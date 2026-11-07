@@ -1301,6 +1301,42 @@ export class NektarMemory {
     return match?.priceSats ?? 0
   }
 
+  /** a reputation card — the signed, per-domain derivation over this
+   *  instance's own committed history (Wright: measurable performance over
+   *  time, multidimensional, never one score). Every input is an anchored
+   *  record — receipts carry the settlement txids they committed; the card
+   *  is recomputable by anyone with the same history. */
+  async reputationCard (): Promise<{ pub: string, shardId?: string, entries: Array<{ domain: string, receipts: number, verifiedCites: number, settledSats: number, settlements: number }>, since?: number, asOf: number }> {
+    const shardDomains = new Map<string, string[]>()
+    for (const m of await this.shardCatalog()) shardDomains.set(m.shard, m.domains)
+    const entries = new Map<string, { domain: string, receipts: number, verifiedCites: number, settledSats: number, settlements: number }>()
+    const bump = (domains: string[]) => domains.map(d => entries.get(d) ?? { domain: d, receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 })
+      .forEach(e => entries.set(e.domain, e))
+    let since = Infinity
+    for (const rec of await this.store.all('__receipts__')) {
+      const data = await this.recordText(rec)
+      if (!data) continue
+      let r: any
+      try { r = JSON.parse(data) } catch { continue }
+      if (r?.type !== 'answer-receipt' && r?.type !== 'receipt') continue
+      const shards: string[] = [...new Set(((r.fragments ?? r.cites ?? []) as any[]).map((f: any) => String(f?.shard ?? '')).filter(Boolean) as string[])]
+      const domains = [...new Set(shards.flatMap(s => shardDomains.get(s) ?? [s]))]
+      if (!domains.length) continue
+      since = Math.min(since, (rec as any).t ?? Date.now())
+      const paySats = Number(r.payment?.amountSats ?? r.payment?.amount ?? 0)
+      for (const d of domains) {
+        const e = entries.get(d) ?? { domain: d, receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 }
+        e.receipts++
+        e.verifiedCites += Number(r.kept?.length ?? r.fragments?.length ?? 0)
+        if (paySats > 0) { e.settledSats += paySats; e.settlements++ }
+        entries.set(d, e)
+      }
+    }
+    const pub = this.operatorKey()?.toPublicKey().toString()
+    const shardId = (await this.shardCatalog())[0]?.shardId
+    return { pub, ...(shardId ? { shardId } : {}), entries: [...entries.values()], ...(since !== Infinity ? { since } : {}), asOf: Date.now() }
+  }
+
   /** land a purchased record locally — call AFTER the sale claim verified
    *  it (leaf-commitment + provenance are the buyer's responsibility; this
    *  only stores what was already checked). The record keeps the seller's

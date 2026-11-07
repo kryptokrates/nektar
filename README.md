@@ -6,6 +6,8 @@
 
 Verifiable memory for AI agents, traded as a commodity.
 
+Inspired by Craig Wright's [*On Immutable Memory Systems for Artificial Agents*](https://arxiv.org/abs/2506.13246) ([SingularGrit essay](https://singulargrit.substack.com/p/on-immutable-memory-systems-for-artificial)) — memory as a ledger, not a cache: append-only, cryptographically committed, enforced by protocol. nektar extends that architecture into a market — the ledger becomes tradeable.
+
 Agents that hold memory can *prove* it — every record is encrypted, provenance-signed, append-only, and anchored on BSV with a checkable chain of custody. Agents that need memory can *buy* it — by domain, by record, by answer — and verify what they bought before they pay again. Proofs do not make claims true. They make claims attributable: recorded, unaltered, derivable.
 
 ## The market loop

@@ -2,7 +2,7 @@
 // shared by the MCP server (mcp-server.ts, official SDK) and the HTTP API.
 import { sha256, utf8 } from '@nektar/core'
 import { receiptToken } from './receipt.js'
-import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment } from './pay.js'
+import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment, verifyQuoteSig } from './pay.js'
 import type { NektarMemory } from './memory.js'
 
 /** ready-to-paste share surface for a receipt — the model drops `markdown`
@@ -460,6 +460,62 @@ export const TOOLS = [
     name: 'doctor',
     description: 'One-call diagnostic: network, funding (address, balance, utxos), shard/record/anchor counts, unproven anchors, payment and prover status. The "is everything working" check.',
     inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'describeShard',
+    description: 'Commit a shard manifest to __catalog__: the domain tags other agents discover this shard by ("who knows about soccer"), a free-text description, and what is for sale. Anchored + timestamped like any memory — the claim is attributable; re-describing appends a newer manifest. Served via /.well-known/nektar and postable to a rendezvous catalog.',
+    inputSchema: {
+      type: 'object',
+      required: ['shard', 'domains'],
+      properties: {
+        shard: { type: 'string' },
+        domains: { type: 'array', items: { type: 'string' }, description: 'topic tags this shard covers, e.g. ["soccer","transfer-rumours"] — lowercase a-z0-9._-, up to 32 tags' },
+        desc: { type: 'string', description: 'one-paragraph description of the shard\'s coverage (≤560 chars)' },
+        offers: { type: 'array', items: { type: 'object', properties: { kind: { type: 'string', enum: ['answer', 'pack', 'record'] }, priceSats: { type: 'number' }, seq: { type: 'number' } }, required: ['kind'] }, description: 'saleable access modes: answer = paid groundedAnswer, pack = public shard pack, record = one record via sale escrow (seq required)' }
+      }
+    }
+  },
+  {
+    name: 'discover',
+    description: 'Find agents on a nektar rendezvous directory: query by domain tag ("who claims soccer knowledge"), shard label, or pubkey. Returns signed presence ads + catalog entries (domains, descriptions, offers, on-chain shardIds). The directory finds candidates — it never vouches; verify receipts and probe with a cheap paid call before trusting.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'domain tag to match, e.g. "soccer"' },
+        shard: { type: 'string', description: 'exact shard label' },
+        pub: { type: 'string', description: 'one agent\'s pubkey (66 hex)' },
+        rendezvousUrl: { type: 'string', description: 'rendezvous base URL (default NEKTAR_OVERLAY_URL or http://localhost:8090)' }
+      }
+    }
+  },
+  {
+    name: 'peerCall',
+    description: 'Call a tool on a REMOTE nektar instance (found via discover): POSTs {endpoint}/v1/tools/{tool} with args, and when the peer demands payment (402) verifies the signed quote, pays the invoice from this instance\'s fund key via payInvoice, and retries with payment. Pair with discover: find who claims soccer → peerCall recall → peerCall groundedAnswer. maxSats caps what a call may cost — a payment demand above it is refused.',
+    inputSchema: {
+      type: 'object',
+      required: ['endpoint', 'tool'],
+      properties: {
+        endpoint: { type: 'string', description: 'peer base URL, e.g. http://host:8080' },
+        tool: { type: 'string', description: 'tool name on the peer (recall, groundedAnswer, …)' },
+        args: { type: 'object', description: 'tool arguments to send' },
+        maxSats: { type: 'number', description: 'max sats this call may cost — payment demands above it are refused' },
+        token: { type: 'string', description: 'bearer token when the peer sets NEKTAR_HTTP_TOKEN' }
+      }
+    }
+  },
+  {
+    name: 'watch',
+    description: 'Subscribe to a rendezvous event feed (JetStream-pull): returns signed presence events — ads, catalogs, wants — after your cursor, filtered by domain tags. A catalog event says "an agent claims X"; a want event says "a buyer needs X". Re-run with the returned cursor to resume. Pair with discover/peerCall. Events are signed claims, not vouched facts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domains: { type: 'array', items: { type: 'string' }, description: 'domain tags to watch, e.g. ["soccer"] — omit for all events' },
+        kind: { type: 'string', enum: ['ad', 'catalog', 'want'], description: 'restrict to one event kind' },
+        since: { type: 'number', description: 'resume after this cursor (default: only new events from now)' },
+        wait: { type: 'number', description: 'long-poll up to N ms for new events (rendezvous caps at 30s)' },
+        rendezvousUrl: { type: 'string', description: 'rendezvous base URL (default NEKTAR_OVERLAY_URL or http://localhost:8090)' }
+      }
+    }
   }
 ] as const
 
@@ -505,7 +561,7 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       if (!PAID_TOOLS.has(String(args?.tool))) throw new Error(`payQuote: unknown or unpaid tool "${args?.tool}"`)
       if (!paymentsEnabled()) throw new Error('payments are disabled — set NEKTAR_PAYMENTS=1 (and NEKTAR_OPERATOR_WIF)')
       const { invoice, required } = paymentRequired(String(args.tool))
-      return { invoice: { invoiceId: invoice.invoiceId, amount: invoice.amount, payTo: invoice.payTo, lockingScriptHex: invoice.lockingScriptHex, opReturn: invoice.opReturn, expires: new Date(invoice.expires).toISOString() }, paymentRequired: required }
+      return { invoice: { invoiceId: invoice.invoiceId, tool: invoice.tool, amount: invoice.amount, payTo: invoice.payTo, lockingScriptHex: invoice.lockingScriptHex, opReturn: invoice.opReturn, expires: new Date(invoice.expires).toISOString(), expiresMs: invoice.expires, pub: invoice.pub, quoteSig: invoice.quoteSig }, paymentRequired: required }
     }
     case 'payInvoice': {
       return await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) })
@@ -1022,6 +1078,66 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
         d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
       }
       return d
+    }
+    case 'describeShard': {
+      if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('describeShard: shard required')
+      if (!Array.isArray(args?.domains)) throw new Error('describeShard: domains[] required — the tags peers search by')
+      return await mem.describeShard(args.shard, { domains: args.domains, desc: args.desc, offers: args.offers })
+    }
+    case 'discover': {
+      const base = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      const q = typeof args?.domain === 'string' && args.domain ? `?domain=${encodeURIComponent(args.domain)}`
+        : typeof args?.shard === 'string' && args.shard ? `?shard=${encodeURIComponent(args.shard)}`
+        : typeof args?.pub === 'string' && args.pub ? `?pub=${encodeURIComponent(args.pub)}`
+        : '?all=1'
+      const r = await fetch(`${base}/directory${q}`, { signal: AbortSignal.timeout(15_000) })
+      if (!r.ok) throw new Error(`discover: rendezvous ${base}/directory${q} → ${r.status}`)
+      const out = await r.json()
+      return { rendezvous: base, query: q.slice(1), ...out }
+    }
+    case 'peerCall': {
+      const endpoint = String(args?.endpoint ?? '').replace(/\/+$/, '')
+      if (!/^https?:\/\//i.test(endpoint)) throw new Error('peerCall: endpoint must be http(s)')
+      const tool = String(args?.tool ?? '')
+      if (!tool) throw new Error('peerCall: tool required')
+      const headers: Record<string, string> = { 'content-type': 'application/json' }
+      if (typeof args?.token === 'string' && args.token) headers.authorization = `Bearer ${args.token}`
+      const post = async (body: unknown) => {
+        const r = await fetch(`${endpoint}/v1/tools/${encodeURIComponent(tool)}`, { method: 'POST', headers, body: JSON.stringify(body ?? {}), signal: AbortSignal.timeout(120_000) })
+        const j = await r.json().catch(() => ({}))
+        return { status: r.status, body: j }
+      }
+      let res = await post(args?.args ?? {})
+      // the 402 challenge comes back in the result body (callTool returns the
+      // PaymentRequired as data) — pay and retry once
+      const acc = (res.body as any)?.accepts?.[0]
+      const demand = (res.body as any)?.ok === false && acc ? res.body : undefined
+      if (demand) {
+        const extra = acc.extra ?? {}
+        const amount = Number(acc.amount ?? 0)
+        const max = args?.maxSats !== undefined ? Number(args.maxSats) : undefined
+        if (max === undefined) return { needsPayment: true, demand, hint: 're-run with maxSats to authorize paying this invoice' }
+        if (amount > max) throw new Error(`peerCall: ${tool} costs ${amount} sats — over maxSats ${max}`)
+        if (extra.quoteSig !== undefined && !verifyQuoteSig({ ...extra, amount })) throw new Error('peerCall: quoteSig does not verify — the invoice may be doctored or not from this endpoint')
+        const paid = await mem.payInvoice({ invoiceId: String(extra.invoiceId), amount, lockingScriptHex: String(extra.lockingScriptHex), opReturn: String(extra.opReturn) })
+        res = await post({ ...(args?.args ?? {}), payment: paid.payment })
+        return { result: res.body, paidTxid: paid.txid, amount }
+      }
+      if (res.status >= 400) throw new Error(`peerCall: ${endpoint}/v1/tools/${tool} → ${res.status}: ${(res.body as any)?.error ?? res.status}`)
+      return res.body
+    }
+    case 'watch': {
+      const base = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      const qs = new URLSearchParams()
+      if (args?.since !== undefined) qs.set('since', String(args.since))
+      else qs.set('since', '0') // default: replay the current log from the start
+      if (Array.isArray(args?.domains) && args.domains.length) qs.set('domains', args.domains.join(','))
+      if (typeof args?.kind === 'string') qs.set('kind', args.kind)
+      if (args?.wait !== undefined) qs.set('wait', String(Math.min(Number(args.wait), 30_000)))
+      const r = await fetch(`${base}/events?${qs}`, { signal: AbortSignal.timeout(Number(qs.get('wait')) + 20_000) })
+      if (!r.ok) throw new Error(`watch: rendezvous ${base}/events → ${r.status}`)
+      const out = await r.json()
+      return { rendezvous: base, ...out, nextCall: { since: out.cursor } }
     }
     default:
       throw new Error(`unknown tool ${name}`)

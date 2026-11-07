@@ -194,13 +194,24 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
         if (/^(0|false|no)$/i.test(process.env.NEKTAR_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
         const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
         const pub = await mem.publicShards()
+        const catalog = await mem.shardCatalog().catch(() => [] as import('./memory.js').ShardManifest[])
         return send(200, {
-          v: 1, kind: 'nektar-discovery', verifyBase: `${base}/v1/verify`,
-          publicShards: await Promise.all(pub.map(async s => ({
-            shard: s, records: (await mem.records(s)).length,
-            packUrl: `${base}/v1/pack/${encodeURIComponent(s)}`,
-            import: { tool: 'importShard', args: { from: base, shard: s } }
-          })))
+          v: 1, kind: 'nektar-discovery', verifyBase: `${base}/v1/verify`, logPublicKey: mem.logPublicKey(),
+          publicShards: await Promise.all(pub.map(async s => {
+            const manifest = catalog.find(m => m.shard === s)
+            const head = mem.tailLink(s)
+            return {
+              shard: s,
+              shardId: manifest?.shardId,
+              records: (await mem.records(s)).length,
+              domains: manifest?.domains,
+              desc: manifest?.desc,
+              offers: manifest?.offers,
+              headTxid: head?.txid,
+              packUrl: `${base}/v1/pack/${encodeURIComponent(s)}`,
+              import: { tool: 'importShard', args: { from: base, shard: s } }
+            }
+          }))
         })
       }
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'pack' && p.length === 3) {

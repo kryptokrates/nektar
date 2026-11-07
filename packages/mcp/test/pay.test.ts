@@ -8,7 +8,7 @@ import { utf8 } from '@nektar/core'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
-import { _testReset } from '../src/pay.js'
+import { _testReset, verifyQuoteSig } from '../src/pay.js'
 import { openRuntime } from '../src/runtime.js'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -127,4 +127,24 @@ test('payments: underpayment, missing tag and unknown invoice are refused', asyn
   delete process.env.NEKTAR_PAYMENTS
   const free = await callTool(mem, 'payQuote', { tool: 'anchor' }).then(() => 'unreachable', (e: Error) => e.message)
   assert.match(free, /payments are disabled/)
+})
+
+test('payments: invoices carry a verifiable signed quote; tampering detected', async (t) => {
+  _testReset()
+  process.env.NEKTAR_PAYMENTS = '1'
+  process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])
+  t.after(() => { delete process.env.NEKTAR_PAYMENTS; delete process.env.NEKTAR_OPERATOR_WIF; _testReset() })
+
+  const { mem } = setup()
+  const q = await callTool(mem, 'payQuote', { tool: 'groundedAnswer' })
+  const inv = q.invoice
+  assert.equal(inv.pub, OP_KEY.toPublicKey().toString(), 'quote is attributable to the operator key')
+  assert.equal(verifyQuoteSig(inv), true, 'signature verifies over the canonical quote')
+  // doctored fields fail verification — a cheaper-signed quote is detectable
+  assert.equal(verifyQuoteSig({ ...inv, amount: inv.amount - 1 }), false, 'doctored amount rejected')
+  assert.equal(verifyQuoteSig({ ...inv, payTo: 'mgarbage' }), false, 'doctored payTo rejected')
+  // the same quote rides inside the 402 accepts[].extra too
+  const denied = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'x', cites: [{ shard: 's', seq: 0 }] }] })
+  const extra = denied.accepts[0].extra
+  assert.equal(verifyQuoteSig({ ...extra, amount: Number(denied.accepts[0].amount), expires: extra.expiresMs }), true, '402-carried quote verifies')
 })

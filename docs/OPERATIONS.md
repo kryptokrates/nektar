@@ -119,6 +119,25 @@ setInterval(() => mem.flushDue(), 5_000)                          // interval/by
 
 Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sbom.cdx.json`. Cross-implementation vectors: `pnpm smt:vectors`, `pnpm curve:vectors`.
 
+## Rendezvous (public overlay node)
+
+A public rendezvous (e.g. a small Hetzner VPS) is a thin, replaceable index — never a trust root. Run it stateful:
+
+```sh
+NEKTAR_OVERLAY_HOST=0.0.0.0 NEKTAR_OVERLAY_PORT=8090 \
+  NEKTAR_OVERLAY_DIR=/var/lib/nektar-overlay \
+  NEKTAR_OVERLAY_TOKEN=<bearer> \
+  NEKTAR_NETWORK=ttn \
+  node packages/overlay/serve.mjs
+```
+
+| Surface | Access |
+|---|---|
+| `GET /health`, `/directory`, `/events`, GASP routes | public read |
+| `POST /announce`, `/catalog`, `/want`, `/overlay/submit` | bearer token when `NEKTAR_OVERLAY_TOKEN` set (recommended on public binds) |
+
+`NEKTAR_OVERLAY_DIR` holds `overlay.sqlite` (ads, catalogs, wants, anchor heads, the event log) — back it up; losing it forfeits directory state and the event-cursor space consumers depend on. Announcements re-verify signatures on ingest, so a restored db contains only self-authenticating artifacts. The off-chain announce/catalog/want routes are the free path; the same artifacts are also submittable on-chain as `tm_presence` outputs, which propagate via GASP to any peer overlay hitting `/requestSyncResponse`.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

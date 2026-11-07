@@ -123,11 +123,38 @@ export interface ShardPack {
   kind: 'nektar-shard-pack'
   shard: string
   exportedAt: number
+  /** the exporter's latest committed manifest for this shard, when described —
+   *  advisory metadata about the source (importers never re-claim it) */
+  manifest?: ShardManifest
   records: Array<{
     seq: number, data: string, level?: number, bundle?: ProofBundle
     prov?: { source?: string, time?: number, signature?: string, modelId?: string, modality?: Provenance['modality'] }
   }>
 }
+
+/** a saleable access mode declared in a shard manifest: 'answer' = paid
+ *  groundedAnswer calls, 'pack' = the public shard pack, 'record' = one
+ *  record via the sale escrow (seq identifies it). priceSats is a hint —
+ *  the binding quote is the invoice issued at call time. */
+export interface ManifestOffer { kind: 'answer' | 'pack' | 'record', priceSats?: number, seq?: number }
+
+/** a shard's self-description committed to __catalog__ like any other
+ *  memory: "this shard covers these domains" is an anchored, provenance-
+ *  stamped claim — latest record wins, prior manifests stay anchored as
+ *  history. shardId binds the label to the on-chain anchor chain so a
+ *  directory answer is checkable against ls_nektar, not merely asserted. */
+export interface ShardManifest {
+  v: 1
+  type: 'shard-manifest'
+  shard: string
+  /** on-chain shard id = hash160(genesis owner pubkey) */
+  shardId: string
+  domains: string[]
+  desc?: string
+  offers?: ManifestOffer[]
+  issuedAt: number
+}
+export const CATALOG_SHARD = '__catalog__'
 
 /** pluggable persistence for replay-protection state (see securitystore.ts) */
 export interface SecurityStateStore {
@@ -1223,6 +1250,67 @@ export class NektarMemory {
   }
   /** declare a shard private — monotone; once set it cannot be unset. */
   setShardPrivate (shard: string): void { const f = this.flags.get(shard) ?? {}; f.private = true; this.flags.set(shard, f); this.persistState() }
+
+  /** the shard's on-chain id — hash160 of the genesis owner pubkey, stable
+   *  across owner rotations (the anchor head is authoritative when present).
+   *  Binds a manifest's label to the anchor chain a verifier can look up. */
+  shardId (shard: string): string { return this.anchorChain(shard).getShardId() }
+
+  /** read a record's plaintext — decrypting E via the level key when the
+   *  instance holds the seed (same path recall/disclose use). */
+  private async recordText (rec: LogRecord): Promise<string | undefined> {
+    if (rec.fragment.d.length) return Buffer.from(rec.fragment.d).toString('utf8')
+    if (rec.fragment.E?.length && this.opts.agentSeed) {
+      const k = await this.fragmentKeyFor(rec)
+      const aadLen = (rec.fragment.E[0]! << 8) | rec.fragment.E[1]!
+      const aad = rec.fragment.E.slice(2, 2 + aadLen)
+      return Buffer.from(decryptFragment(k, { ciphertext: rec.fragment.E.slice(2 + aadLen), aad, keyID: '' })).toString('utf8')
+    }
+    return undefined
+  }
+
+  /** latest committed manifest per described shard — the catalog projection
+   *  the rendezvous indexes (one entry per shard, latest record wins). */
+  async shardCatalog (): Promise<ShardManifest[]> {
+    const by = new Map<string, { m: ShardManifest, seq: number }>()
+    for (const rec of await this.store.all(CATALOG_SHARD)) {
+      const data = await this.recordText(rec)
+      if (!data) continue
+      let m: ShardManifest
+      try { m = JSON.parse(data) } catch { continue }
+      if (m?.v !== 1 || m.type !== 'shard-manifest' || typeof m.shard !== 'string') continue
+      const cur = by.get(m.shard)
+      if (!cur || rec.seq > cur.seq) by.set(m.shard, { m, seq: rec.seq })
+    }
+    return [...by.values()].map(x => x.m)
+  }
+
+  /** latest committed manifest for one shard */
+  async shardManifest (shard: string): Promise<ShardManifest | undefined> {
+    return (await this.shardCatalog()).find(m => m.shard === shard)
+  }
+
+  /** Commit a shard manifest to __catalog__ — the domain tags another agent
+   *  searches by ('who knows about soccer'). The claim is anchored and
+   *  timestamped like any memory: false advertising stays attributable.
+   *  Re-describing appends a newer manifest; the old one remains history. */
+  async describeShard (shard: string, fields: { domains: string[], desc?: string, offers?: ManifestOffer[] }): Promise<{ manifest: ShardManifest, seq: number }> {
+    if (shard.startsWith('__')) throw new Error('describeShard: system shards (__*) cannot be described')
+    if (!this.shards().includes(shard)) throw new Error(`describeShard: unknown shard "${shard}" — describe a shard this instance has written`)
+    const domains = [...new Set((fields.domains ?? []).map(d => String(d).trim().toLowerCase()).filter(d => /^[a-z0-9][a-z0-9._-]{0,47}$/.test(d)))].slice(0, 32)
+    if (domains.length === 0) throw new Error('describeShard: at least one valid domain tag required (a-z0-9._-, up to 48 chars)')
+    const desc = fields.desc !== undefined ? String(fields.desc).slice(0, 560) : undefined
+    const offers = (fields.offers ?? [])
+      .map(o => ({ kind: String(o?.kind) as ManifestOffer['kind'], ...(o?.priceSats !== undefined ? { priceSats: Math.max(0, Math.floor(Number(o.priceSats))) } : {}), ...(o?.seq !== undefined ? { seq: Math.floor(Number(o.seq)) } : {}) }))
+      .filter(o => o.kind === 'answer' || o.kind === 'pack' || o.kind === 'record')
+      .slice(0, 64)
+    const manifest: ShardManifest = {
+      v: 1, type: 'shard-manifest', shard, shardId: this.shardId(shard), domains,
+      ...(desc ? { desc } : {}), ...(offers.length ? { offers } : {}), issuedAt: Date.now()
+    }
+    const r = await this.remember(CATALOG_SHARD, JSON.stringify(manifest))
+    return { manifest, seq: r.seq }
+  }
   /** the committed hash + anchor of a fragment — for redacted (private) cites
    *  that carry the proof value without naming the shard. */
   async fragmentRef (shard: string, seq: number): Promise<{ hdp: string, anchorTxid?: string } | undefined> {
@@ -1724,7 +1812,8 @@ export class NektarMemory {
         ...(bundle ? { bundle } : {})
       })
     }
-    return { v: 1, kind: 'nektar-shard-pack', shard, exportedAt: Date.now(), records }
+    const manifest = await this.shardManifest(shard)
+    return { v: 1, kind: 'nektar-shard-pack', shard, exportedAt: Date.now(), ...(manifest ? { manifest } : {}), records }
   }
 
   /** Import a shard pack: records re-land via remember() (byte-identical prov

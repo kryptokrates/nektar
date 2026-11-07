@@ -24,7 +24,8 @@ module.exports = {
           '\\.runar\\.[cm]?[jt]s$',
           // library/CLI entrypoints invoked from outside this codebase
           'payclient\\.[cm]?[jt]s$',      // standalone x402 payer client
-          'announce\\.mjs$'               // overlay announcement CLI
+          'announce\\.mjs$',              // overlay announcement CLI
+          'want\\.mjs$'                   // overlay demand-ad CLI
         ]
       },
       to: {}

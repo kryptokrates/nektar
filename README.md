@@ -250,6 +250,60 @@ Announce → get a peer's endpoint+pubkey → connect via
 verify its receipts against that pubkey yourself. **The directory finds
 peers; it never vouches for them** — trust comes from the receipts.
 
+### Know what a shard is *about* — domain-tagged discovery
+
+Shard labels alone can't answer "who knows about soccer". `describeShard`
+commits a manifest to `__catalog__` — domain tags, a description, priced
+offers, and the shard's on-chain `shardId` — anchored like any other memory,
+so "I cover soccer" is a timestamped, attributable claim (false advertising
+stays reputation damage, not a mutable directory field).
+
+```sh
+# describe what you serve (anchored on __catalog__):
+describeShard { shard:"soccer", domains:["soccer","ligue-1"],
+                desc:"French football results",
+                offers:[{kind:"answer",priceSats:250}] }
+
+# announce the signed catalog alongside your ad (announce.mjs does it
+# automatically from /.well-known/nektar):
+GET /directory?domain=soccer    # agents claiming that domain (signed catalogs)
+GET /directory?q=transfer       # free-text over domains + descriptions
+```
+
+A buyer agent closes the loop from inside its own instance:
+`discover {domain:"soccer"}` finds candidates → `peerCall {endpoint, tool:"recall", ...}`
+reads what's offered (free) → `peerCall {tool:"groundedAnswer", maxSats:1000}`
+handles the 402: it verifies the seller's **signed quote** (invoices now carry
+`quoteSig`+`pub` — a doctored amount/payTo fails verification), pays the
+invoice, and returns the answer + receipt + settlement txid. Live walkthrough:
+`node packages/mcp/demo/discovery-smoke.mjs` (two agents + rendezvous on mock).
+
+### Get notified — the event feed (JetStream-pull)
+
+The rendezvous keeps a durable, sequenced log of every signed event —
+`ad`, `catalog`, and `want` (a buyer's signed "I need domain X" — the
+demand side). Consumers hold a cursor and pull; `wait` long-polls for
+near-real-time delivery:
+
+```sh
+GET /events?since=<cursor>&domains=soccer,ligue-1&kind=catalog&wait=25000
+
+# announce demand (sellers watching 'soccer' see it on their next pull):
+NEKTAR_WANT_DOMAINS=soccer NEKTAR_WANT_MAX_SATS=1000 \
+  NEKTAR_AGENT_WIF=<key> pnpm --filter @nektar/overlay exec node want.mjs
+
+# or from inside an agent: watch {domains:["soccer"], since:<cursor>}
+# reference consumer: node packages/mcp/demo/follow.mjs --domains soccer
+```
+
+Presence artifacts are also **submittable on-chain** — `tm_presence` admits
+`nektar-agent`/`nektar-catalog`/`nektar-want` OP_RETURN outputs (signature-
+verified at every host), so the same objects propagate via GASP today and
+ride the 1BSV overlay object plane (BRC-148/149) when it ships — transport
+is a seam, the signed artifacts don't change. The rendezvous exposes
+`/requestSyncResponse` + `/requestForeignGASPNode` so a peer engine can
+replicate `tm_nektar` directly.
+
 ## Honest status
 
 - ✅ Live on regtest + public testnet with real transactions (anchor

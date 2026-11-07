@@ -4,11 +4,11 @@
 // No wallet ecosystem — anything that can sign a BSV tx can pay (a WIF is
 // enough). Settlement is publicly auditable from the tx alone: (pays payTo ≥
 // amount) ∧ (carries `nektarpay:<invoiceId>`) — the receipt commits the txid.
-import { Transaction, PrivateKey, P2PKH, Beef } from '@bsv/sdk'
+import { Transaction, PrivateKey, PublicKey, Signature, P2PKH, Beef } from '@bsv/sdk'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { utf8 } from '@nektar/core'
+import { utf8, sha256, toHex } from '@nektar/core'
 import type { NektarMemory } from './memory.js'
 
 export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAYMENTS ?? '')
@@ -23,15 +23,18 @@ const networkTag = (): string => {
   return n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:mock'
 }
 
+let opKey: PrivateKey | undefined
 let opAddr: string | undefined
-const operatorAddress = (): string => {
-  if (opAddr === undefined) {
+const operatorKey = (): PrivateKey => {
+  if (opKey === undefined) {
     const wif = process.env.NEKTAR_OPERATOR_WIF
-    if (!wif) throw new Error('NEKTAR_PAYMENTS=1 needs NEKTAR_OPERATOR_WIF — the WIF whose address payments settle to (never broadcast, address only is served)')
-    opAddr = PrivateKey.fromWif(wif).toPublicKey().toAddress(process.env.NEKTAR_NETWORK === 'main' ? [0x00] : [0x6f])
+    if (!wif) throw new Error('NEKTAR_PAYMENTS=1 needs NEKTAR_OPERATOR_WIF — the WIF whose address payments settle to (never broadcast)')
+    opKey = PrivateKey.fromWif(wif)
+    opAddr = opKey.toPublicKey().toAddress(process.env.NEKTAR_NETWORK === 'main' ? [0x00] : [0x6f])
   }
-  return opAddr
+  return opKey
 }
+const operatorAddress = (): string => { operatorKey(); return opAddr! }
 
 /** startup check: paid tools require a valid operator wallet BEFORE the first
  *  invoice is served — an invoice to a missing address can never settle. The
@@ -54,10 +57,31 @@ interface Invoice {
   /** ascii the payment tx must carry in an OP_RETURN output — binds the tx to THIS call */
   opReturn: string
   expires: number
+  /** operator pubkey + signature over the canonical quote — the invoice is an
+   *  attributable commitment: a buyer can hold the seller to what it quoted
+   *  (and compare competing signed quotes) instead of trusting a 402 blob. */
+  pub: string
+  quoteSig: string
 }
 
 const invoices = new Map<string, Invoice>()
 const INVOICE_TTL_MS = 10 * 60_000
+
+/** canonical string the quote signature covers — anything a cheaper-signed
+ *  quote could be doctored on is inside the digest */
+const quoteCanonical = (q: { invoiceId: string, tool: string, amount: number, payTo: string, expires: number }): string =>
+  `${q.invoiceId}|${q.tool}|${q.amount}|${q.payTo}|${q.expires}|${networkTag()}`
+
+/** verify a signed quote from a 402 accepts[].extra (or a payQuote invoice) */
+export const verifyQuoteSig = (q: { invoiceId?: string, tool?: string, amount?: number | string, payTo?: string, expires?: number | string, expiresMs?: number, pub?: string, quoteSig?: string }): boolean => {
+  try {
+    if (typeof q.pub !== 'string' || typeof q.quoteSig !== 'string') return false
+    const expires = typeof q.expiresMs === 'number' ? q.expiresMs : typeof q.expires === 'number' ? q.expires : Date.parse(String(q.expires))
+    if (!Number.isSafeInteger(expires)) return false
+    const canon = quoteCanonical({ invoiceId: String(q.invoiceId), tool: String(q.tool), amount: Number(q.amount), payTo: String(q.payTo), expires })
+    return PublicKey.fromString(q.pub).verify(Array.from(sha256(utf8(canon))), Signature.fromDER(q.quoteSig, 'hex'))
+  } catch { return false }
+}
 
 /** consumed payment txids — replay protection, persisted in the data dir */
 const payFile = (): string => join(process.env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar'), 'payments.json')
@@ -72,19 +96,23 @@ const persistConsumed = (): void => {
   try { writeFileSync(payFile(), JSON.stringify({ consumed: [...consumed] })) } catch { /* data dir may be absent on read-only tests */ }
 }
 
-/** issue an invoice for a paid tool call */
+/** issue an invoice for a paid tool call — signed so the quote travels as an
+ *  attributable offer (a doctored amount/payTo fails quoteSig verification) */
 export const issueInvoice = (tool: string): Invoice => {
-  const payTo = operatorAddress()
+  const key = operatorKey()
   const inv: Invoice = {
     invoiceId: randomBytes(8).toString('hex'),
     tool,
     amount: priceFor(tool),
-    payTo,
-    lockingScriptHex: new P2PKH().lock(payTo).toHex(),
+    payTo: opAddr!,
+    lockingScriptHex: new P2PKH().lock(opAddr!).toHex(),
     opReturn: '',
-    expires: Date.now() + INVOICE_TTL_MS
+    expires: Date.now() + INVOICE_TTL_MS,
+    pub: key.toPublicKey().toString(),
+    quoteSig: ''
   }
   inv.opReturn = `nektarpay:${inv.invoiceId}`
+  inv.quoteSig = toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(quoteCanonical(inv))))).toDER() as number[]))
   invoices.set(inv.invoiceId, inv)
   return inv
 }
@@ -103,9 +131,14 @@ export const paymentRequired = (tool: string): { invoice: Invoice, required: Rec
       payTo: invoice.payTo,
       extra: {
         invoiceId: invoice.invoiceId,
+        payTo: invoice.payTo,
         lockingScriptHex: invoice.lockingScriptHex,
         opReturn: invoice.opReturn,
         expires: new Date(invoice.expires).toISOString(),
+        expiresMs: invoice.expires,
+        tool,
+        pub: invoice.pub,
+        quoteSig: invoice.quoteSig,
         howToPay: 'build + sign a tx with (1) an output paying lockingScriptHex (or payTo) ≥ amount sats and (2) an OP_FALSE OP_RETURN output carrying the ascii `opReturn`, then retry the SAME call with payment:{invoiceId, transaction:<raw or BEEF tx hex>} (BEEF preferred — it carries the funding parents)'
       }
     }]
@@ -163,4 +196,4 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   return { txid, amountSats: inv.amount, payTo: inv.payTo, invoiceId: inv.invoiceId }
 }
 
-export const _testReset = (): void => { invoices.clear(); consumed.clear(); consumedLoaded = false; opAddr = undefined }
+export const _testReset = (): void => { invoices.clear(); consumed.clear(); consumedLoaded = false; opAddr = undefined; opKey = undefined }

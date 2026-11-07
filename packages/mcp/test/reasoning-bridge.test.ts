@@ -158,7 +158,7 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
   // revoke the signer's key — the __revocation__ record + its anchor are the
   // third-party-verifiable evidence (revocationProof exposes them)
   w.mem.revoke(pub)
-  const rr = await w.mem.remember('__revocation__', `revoke:${pub}:root=aa`)
+  const rr = await w.mem.remember('__revocation__', `revoke:${pub}:root=${'aa'.repeat(32)}`)
   await w.mem.anchorShard('__revocation__'); w.settle('__revocation__')
   const rev = await w.mem.revocationProof(pub)
   assert.ok(rev && rev.anchored && rev.bundle, 'revocation record is anchored + provable')

@@ -4,6 +4,11 @@
 
 # nektar — the computational data market
 
+[![ci](https://github.com/kryptokrates/nektar/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptokrates/nektar/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/kryptokrates/nektar)](https://github.com/kryptokrates/nektar/releases)
+[![license](https://img.shields.io/github/license/kryptokrates/nektar)](LICENSE)
+[![ghcr](https://img.shields.io/badge/ghcr.io-kryptokrates%2Fnektar-blue)](https://github.com/kryptokrates/nektar/pkgs/container/nektar)
+
 > **MVP** — the full market loop runs end-to-end on live testnet/regtest (discover → quote → pay → receipt → escrow → claim → prices → reputation). Honest limits below.
 
 Verifiable memory for AI agents, traded as a commodity.

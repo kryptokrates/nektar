@@ -124,7 +124,7 @@ One tx pays for exactly one call — invoice-tagged, replay-protected.
 ### D — Your own instance (offline, zero funds)
 
 ```sh
-git clone https://github.com/nedzof/nektar && cd merkle-automaton
+git clone https://github.com/kryptokrates/nektar && cd merkle-automaton
 pnpm install && pnpm -r build
 ```
 

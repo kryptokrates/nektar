@@ -131,7 +131,7 @@ One tx pays for exactly one call — invoice-tagged, replay-protected.
 ### D — Your own instance (offline, zero funds)
 
 ```sh
-git clone https://github.com/nedzof/nektar && cd merkle-automaton
+git clone https://github.com/kryptokrates/nektar && cd merkle-automaton
 pnpm install && pnpm -r build
 NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=mock node packages/mcp/dist/src/bin.js
 claude mcp add --transport http nektar http://localhost:8080/mcp

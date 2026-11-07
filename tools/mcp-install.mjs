@@ -18,12 +18,12 @@ const { join } = await import('node:path')
 const catDir = join(homedir(), '.docker', 'mcp', 'catalogs', 'nektar')
 mkdirSync(catDir, { recursive: true })
 const staged = name => { const dst = join(catDir, name); copyFileSync(fileURLToPath(new URL(`../docker-mcp/${name}`, import.meta.url)), dst); return dst }
-// --ghcr: use the published image (ghcr.io/nedzof/nektar:latest), no local build
+// --ghcr: use the published image (ghcr.io/kryptokrates/nektar:latest), no local build
 const GHCR = process.argv.includes('--ghcr')
 const yaml = staged(GHCR ? 'nektar.ghcr.yaml' : 'nektar.yaml')
 
 try { out(['mcp', 'version']) } catch { console.error('Docker MCP Toolkit not found — enable it in Docker Desktop (Settings → Beta features / MCP Toolkit), Docker Desktop ≥ 4.62.'); process.exit(1) }
-if (GHCR) run(['pull', 'ghcr.io/nedzof/nektar:latest'])
+if (GHCR) run(['pull', 'ghcr.io/kryptokrates/nektar:latest'])
 else run(['build', '-t', 'nektar:local', fileURLToPath(new URL('..', import.meta.url))])
 if (!out(['mcp', 'profile', 'list']).split(/\s+/).includes(PROFILE)) run(['mcp', 'profile', 'create', '--name', PROFILE])
 const listed = out(['mcp', 'profile', 'server', 'ls', '--filter', `profile=${PROFILE}`])

@@ -28,7 +28,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/nedzof/nektar.git",
+    "url": "https://github.com/kryptokrates/nektar.git",
     "directory": "packages/log"
   }
 }

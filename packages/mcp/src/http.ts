@@ -331,7 +331,7 @@ ${anchorUrl ? `<div class=qrcap><a href="${anchorUrl}" target=_blank rel=noopene
 <details${r.ok ? '' : ' open'}><summary>details · ${r.checks.filter(c => c.ok === true).length}/${r.checks.filter(c => c.ok !== 'info' && c.ok !== 'skip').length} checks</summary><div>
 <ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(title(c.name))}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
 ${meta ? `<div class=meta>${meta}</div>` : ''}
-<code class=md>${esc('git clone https://github.com/nedzof/nektar && pnpm mcp:install')}</code>
+<code class=md>${esc('git clone https://github.com/kryptokrates/nektar && pnpm mcp:install')}</code>
 ${badgeMd ? `<code class=md>${esc(badgeMd)}</code>` : ''}
 </div></details>
 </body></html>`

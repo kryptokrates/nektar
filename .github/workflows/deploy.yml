@@ -71,7 +71,7 @@ jobs:
             done
             nginx -t 2>/dev/null && systemctl reload nginx || true
             cd /opt/nektar
-            git fetch https://github.com/nedzof/nektar.git master
+            git fetch https://github.com/kryptokrates/nektar.git master
             git reset --hard FETCH_HEAD
             pnpm install --frozen-lockfile
             pnpm -r build

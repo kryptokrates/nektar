@@ -1,0 +1,165 @@
+bcommon
+Copyright 2026 Lightweb Inc. (https://lightweb.net)
+
+=========================================================================
+
+bcommon is a Go library of building blocks for BSV overlay applications
+that publish and verify committed records. It provides a deterministic
+CBOR codec, RFC 6962 Merkle roots, store references and manifests, BRC-42
+key derivation under BRC-43 names with tagged PushDrop outputs, a carrier
+transaction that commits a payload without being mined, transaction
+builders with a fee loop, funding-tree state, clients for a node, an
+arcade and a BRC-100 wallet, a chain tracker over a header service, host
+sets with quorum fan-out, BRC-24 lookup, BRC-169 and BRC-180 resolution,
+a pinned-key file, and SPV verdicts. The application supplies its own
+schema, derivation, tags and wallet profile; nothing here names one.
+
+A TypeScript package under ts/, @lightwebinc/bcommon, carries the twins
+of the parts an overlay topic manager or lookup service needs: the codec,
+store references, the reader's key derivation, field signatures, the
+funding decode and the carrier check, plus the engine interfaces a module
+satisfies and helpers for its tests, and the renderer filter a web page
+runs over text someone else wrote.
+
+=========================================================================
+Third-Party Standards
+
+  BRC-9:   Simplified Payment Verification
+  BRC-22:  Overlay Network Data Synchronization
+  BRC-24:  Overlay Network Lookup Services
+  BRC-29:  Simple Authenticated BSV P2PKH Payment Protocol
+  BRC-30:  Transaction Extended Format (EF)
+  BRC-42:  BSV Key Derivation Scheme
+  BRC-43:  Security Levels, Protocol IDs, Key IDs and Counterparties
+  BRC-48:  Pay to Push Drop
+  BRC-62:  Background Evaluation Extended Format
+  BRC-67:  Simplified Payment Verification
+  BRC-68:  Publishing Trust Anchor Details at an Internet Domain
+  BRC-74:  BSV Unified Merkle Path
+  BRC-95:  Atomic BEEF
+  BRC-100: Wallet-to-Application Interface
+  BRC-169: Universal Handle Addressing and Resolution
+  BRC-180: Overlay Service Discovery at an Internet Domain
+  BSV Blockchain Standards Repository
+  https://github.com/bsv-blockchain/BRCs/
+
+  RFC 6962: Certificate Transparency (Merkle tree construction)
+  https://www.rfc-editor.org/rfc/rfc6962
+  RFC 8949: Concise Binary Object Representation (CBOR)
+  https://www.rfc-editor.org/rfc/rfc8949
+
+=========================================================================
+Third-Party Data
+
+The renderer filter's property table (sanitize/unicode-15.1.json, and
+ts/src/sanitize-table.ts, which holds the same bytes and is compiled into
+the TypeScript package) is generated from Unicode 15.1's emoji data files
+emoji-data.txt, emoji-variation-sequences.txt and emoji-sequences.txt,
+which are reproduced unmodified under third_party/unicode/15.1 with
+Unicode's licence. A binary or package built with the sanitize package or
+the TypeScript filter carries data derived from them, so this notice
+travels with it:
+
+  UNICODE LICENSE V3
+
+  COPYRIGHT AND PERMISSION NOTICE
+
+  Copyright © 1991-2026 Unicode, Inc.
+
+  NOTICE TO USER: Carefully read the following legal agreement. BY
+  DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+  SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+  TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+  DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+  Permission is hereby granted, free of charge, to any person obtaining a
+  copy of data files and any associated documentation (the "Data Files") or
+  software and any associated documentation (the "Software") to deal in the
+  Data Files or Software without restriction, including without limitation
+  the rights to use, copy, modify, merge, publish, distribute, and/or sell
+  copies of the Data Files or Software, and to permit persons to whom the
+  Data Files or Software are furnished to do so, provided that either (a)
+  this copyright and permission notice appear with all copies of the Data
+  Files or Software, or (b) this copyright and permission notice appear in
+  associated Documentation.
+
+  THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+  KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+  THIRD PARTY RIGHTS.
+
+  IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+  BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+  OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+  WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+  ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+  FILES OR SOFTWARE.
+
+  Except as contained in this notice, the name of a copyright holder shall
+  not be used in advertising or otherwise to promote the sale, use or other
+  dealings in these Data Files or Software without prior written
+  authorization of the copyright holder.
+
+=========================================================================
+Third-Party Software
+
+This product includes third-party software, distributed under the terms
+of their respective licenses. Each dependency retains its own copyright;
+this notice does not modify those licenses.
+
+  github.com/bsv-blockchain/go-sdk            Open BSV License Version 5, MIT License
+  github.com/mrz1836/go-whatsonchain           MIT License
+  github.com/pkg/errors                        BSD License
+  github.com/stretchr/testify                  MIT License
+  go.yaml.in/yaml/v3                           MIT License, Apache License 2.0
+  golang.org/x/crypto                          BSD License
+
+One DIRECT dependency, github.com/bsv-blockchain/go-sdk, is a rule this
+repository enforces in CI, and it is why the list is short. The other
+five arrive with go-sdk, whose own packages import them, and a statically
+linked binary contains them whether they were asked for directly or not.
+The list is every module reachable from this library's packages; a binary
+that imports only some of those packages may link fewer. go-sdk's license
+file carries two licenses: its own, and the MIT License under which
+Bitcoin SV 0.1.1, and the software it was based on, were released.
+
+© BSV Association,
+
+The attribution line above is reproduced verbatim as the Open BSV License
+Version 5 requires it, for github.com/bsv-blockchain/go-sdk. Note the
+version. The Go go-sdk is under Version 5, which requires that text with
+the comma inside it; the npm @bsv packages are under Version 6, which
+requires it without the comma and narrows the field of use. A reader
+carrying this notice to another repository must check which applies
+there rather than assume.
+
+Two terms of that license are worth stating in plain words, because they
+do not match the permissive licenses usually found beside it: the grant
+is made on a revocable basis, and the software it covers, together with
+anything derived from it, must only be used on the BSV Blockchains.
+Non-compliance extinguishes the license. Those terms bind the use of that
+dependency, by this library and by anything built with it. They do not
+extend to Lightweb Inc.'s own source, which is Apache-2.0 as stated in
+LICENSE.
+
+The TypeScript package under ts/ links nothing at runtime beyond its peer
+dependency @bsv/sdk, and it neither bundles nor installs that: whoever
+installs the package installs @bsv/sdk beside it, as their own copy, and
+the obligation of its license belongs to them. That license is the Open
+BSV License Version 6, whose attribution form differs from Version 5's
+above: "© BSV Association" WITHOUT the comma. The package itself carries
+no third-party code, and ts/LICENSE-THIRD-PARTY, generated from its
+production dependency tree with peers left out, lists nothing.
+
+The full text of every license above is reproduced verbatim in
+LICENSE-THIRD-PARTY, which is GENERATED from what the library's packages
+actually link rather than maintained by hand.
+
+Every one of those licenses requires its own text to reach whoever
+receives a binary, not only whoever receives source: Open BSV in
+condition 1, MIT in "all copies or substantial portions", BSD in its
+binary-redistribution clause and Apache-2.0 in section 4. Static linking
+discards every one of those files, so LICENSE-THIRD-PARTY must travel
+with any binary built from this library.
+
+=========================================================================

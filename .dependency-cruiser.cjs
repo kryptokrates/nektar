@@ -118,7 +118,7 @@ module.exports = {
       // dep trees — we audit our imports, not our deps' internals
       dependencyTypes: ['npm', 'npm-dev', 'npm-optional', 'npm-peer', 'npm-bundled', 'npm-no-pkg']
     },
-    exclude: { path: '(^|/)dist/' },
+    exclude: { path: '(^|/)dist/|(^|/)src/vendor/' },
     tsPreCompilationDeps: true,
     enhancedResolveOptions: {
       exportsFields: ['exports'],

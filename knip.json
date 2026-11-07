@@ -24,7 +24,8 @@
       "ignore": ["stark/verifier*.{js,d.ts}", "stark/*.wasm*"]
     },
     "packages/overlay": {
-      "entry": ["*.mjs"]
+      "entry": ["*.mjs", "src/host-module.ts"],
+      "ignore": ["src/vendor/**"]
     },
     "packages/anchor": {
       "entry": ["*.mjs"]

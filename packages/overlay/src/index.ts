@@ -4,4 +4,6 @@ export { createTmPresence, createLsPresence, signPresence, verifyPresence, prese
 export type { PresenceAd, SignedAd, AgentCatalog, SignedCatalog, CatalogShardEntry, WantAd, SignedWant, OfferAd, SignedOffer, SettlementAd, SignedSettlement, ReputationCard, ReputationEntry, SignedReputation, PresenceEvent, EventKind, ParsedPresence } from './presence.js'
 export { createNektarOverlay } from './node.js'
 export type { NektarOverlay } from './node.js'
+export { default as createPresenceModule } from './host-module.js'
+export type { PresenceModuleHost } from './host-module.js'
 export type { NektarHeads, AnchorRecord } from './ls.js'

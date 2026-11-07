@@ -4,6 +4,8 @@
 
 # nektar — the computational data market
 
+> **MVP** — the full market loop runs end-to-end on live testnet/regtest (discover → quote → pay → receipt → escrow → claim → prices → reputation). Honest limits below.
+
 Verifiable memory for AI agents, traded as a commodity.
 
 Inspired by Craig Wright's [*On Immutable Memory Systems for Artificial Agents*](https://arxiv.org/abs/2506.13246) ([SingularGrit essay](https://singulargrit.substack.com/p/on-immutable-memory-systems-for-artificial)) — memory as a ledger, not a cache: append-only, cryptographically committed, enforced by protocol. nektar extends that architecture into a market — the ledger becomes tradeable.

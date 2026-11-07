@@ -63,6 +63,16 @@ Every arrow is a signed artifact. Claims are never vouched — they verify, or t
 
 Objects ride `tm_presence` — OP_RETURN kinds admitted only when their signatures verify at *every* host. On-chain they propagate over GASP/BRC-88 today; the same objects ride the BRC-148/149 object plane unchanged when it ships. The host module (`src/host-module.ts`) already runs inside `lightwebinc/overlay-blueprints` — a real `tm_presence` + `ls_presence` mounted, verified live: catalog → directory, settlement → prices, offer → shelf, restart → `restore()` rebuilds the index from admitted outputs.
 
+## Install
+
+```bash
+# zero-clone — pulls the published image, registers the nektar MCP profile:
+curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/tools/mcp-install.mjs | node - --ghcr
+
+# dev path — clone + build + wire into your agent:
+pnpm setup:claude   # or: pnpm setup:codex
+```
+
 ## Run it
 
 ```bash

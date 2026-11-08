@@ -1111,7 +1111,7 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
         ...(paid ? { payment: paid } : {}),
         ...(typeof args?.caller === 'string' ? { caller: args.caller } : {}),
         ...(typeof args?.delegationId === 'string' ? { delegationId: args.delegationId } : {}),
-        ...(typeof args?.manifestId === 'string' ? { manifestId: args.manifestId } : {})
+        ...(typeof (args?.manifestId ?? process.env.NEKTAR_LAST_MANIFEST) === 'string' ? { manifestId: args?.manifestId ?? process.env.NEKTAR_LAST_MANIFEST } : {})
       }, mem)
       const token = receiptToken(receiptHash)
       return { answer, committed: true, kept: report.kept, flagged: report.flagged, grounding: report, receipt, receiptHash, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, share: shareBlock(token), anchor, checkResult: 'verified' }
@@ -1348,6 +1348,9 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
         ts: Date.now()
       }
       const signed = signAttestation(mem.operatorKey(), fields)
+      // the receipt's manifestId — the instance's latest attestation carried
+      // by default into groundedAnswer receipts
+      process.env.NEKTAR_LAST_MANIFEST = (await import('node:crypto')).createHash('sha256').update(JSON.stringify(signed.attestation)).digest('hex')
       if (args?.publish !== true) return { attestation: signed.attestation, sig: signed.sig }
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
       const r = await fetch(`${rv}/attestation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })

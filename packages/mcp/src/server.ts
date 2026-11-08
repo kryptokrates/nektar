@@ -569,8 +569,8 @@ export const TOOLS = [
     }
   },
   {
-    name: 'revoke',
-    description: 'Tombstone a delegation you issued — the grant dies publicly so peers stop honoring it. Only the grant\'s owner may revoke.',
+    name: 'revokeGrant',
+    description: 'Tombstone a delegation you issued — the grant dies publicly so peers stop honoring it, and revocation cascades to every descendant grant. Only the grant\'s owner may revoke.',
     inputSchema: {
       type: 'object',
       required: ['grantId'],
@@ -1434,9 +1434,9 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`attest: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, attestation: signed.attestation }
     }
-    case 'revoke': {
+    case 'revokeGrant': {
       // revoke a delegation — tombstone the grant so peers stop honoring it
-      if (typeof args?.grantId !== 'string' || !args.grantId) throw new Error('revoke: grantId required')
+      if (typeof args?.grantId !== 'string' || !args.grantId) throw new Error('revokeGrant: grantId required')
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
       const r = await fetch(`${rv}/delegation/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ grantId: args.grantId, pub: mem.operatorKey().toPublicKey().toString(), ts: Date.now() }), signal: AbortSignal.timeout(15_000) })
       const j = await r.json().catch(() => ({}))

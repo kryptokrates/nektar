@@ -82,6 +82,25 @@ try {
   const r = call.result ?? call
   console.log(`buyer: paid → receipt ${r.receiptToken?.slice(0, 14)}… caller ${r.receipt?.caller?.slice(0, 12)}… delegation ${r.receipt?.delegationId?.slice(0, 12)}… ${r.receipt?.manifestId ? `manifest ${r.receipt.manifestId.slice(0, 12)}…` : ''}`)
 
+  // 3-hop: grandchild ⊆ child — peerCall must walk the whole ancestor chain
+  const grandchild = await tool(BUYER, 'delegate', { grantee: scoutGrant.grant.granteePub, tools: ['peerCall', 'groundedAnswer'], domains: ['soccer'], spendCapSats: 100, ttlMs: 900_000, parent: childGrant, publish: true, rendezvousUrl: RV_URL })
+  console.log(`buyer: grandchild grant ${grandchild.grant.grantId} ⊆ ${childGrant.grant.grantId} (cap 100)`)
+  const deepCall = await tool(BUYER, 'peerCall', {
+    endpoint: `http://localhost:${S1}`, tool: 'groundedAnswer',
+    args: { claims: [{ text: SOCCER_FACT, cites: [{ shard: 'soccer', seq: 0 }] }] },
+    maxSats: 400, delegation: { grant: grandchild.grant, sig: grandchild.sig, chain: [{ grant: childGrant.grant, sig: childGrant.sig }, { grant: scoutGrant.grant, sig: scoutGrant.sig }] }
+  }).catch(e => ({ err: e.message }))
+  if (deepCall.err) die(`3-hop peerCall: ${deepCall.err}`)
+  console.log(`buyer: 3-hop chain paid → receipt ${((deepCall.result ?? deepCall).receiptToken ?? '').slice(0, 14)}…`)
+
+  // revocation cascades: killing the child tombstones the grandchild too
+  const rv = await tool(BUYER, 'revokeGrant', { grantId: childGrant.grant.grantId, rendezvousUrl: RV_URL })
+  const after = await (await fetch(`${RV_URL}/delegation`)).json()
+  const live = (after.delegations ?? []).map(d => d.grant.grantId)
+  const childDead = !live.includes(childGrant.grant.grantId) && !live.includes(grandchild.grant.grantId)
+  console.log(`buyer: revoked ${rv.grantId} — cascade ${childDead ? 'OK (child+grandchild dead)' : 'MISSED'}`)
+  if (!childDead) die('cascade revocation missed a descendant')
+
   // the swarm's ledger — everything on the rendezvous
   const dir = await (await fetch(`${RV_URL}/delegation`)).json().catch(() => ({}))
   const att = await (await fetch(`${RV_URL}/attestation`)).json().catch(() => ({}))

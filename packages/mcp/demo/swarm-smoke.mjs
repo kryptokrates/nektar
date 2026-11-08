@@ -67,11 +67,16 @@ try {
   if (resp.err) die(`respond: ${resp.err}`)
   console.log(`soccer-seller: respond offer 250 sats replyTo ${String(resp.offer?.replyTo ?? '').slice(0, 12)}…`)
 
+  // nested chain: the grantee re-delegates a SUBSET (peerCall-only, cap 250)
+  // — each link must shrink, never grow
+  const childGrant = await tool(BUYER, 'delegate', { grantee: scoutGrant.grant.granteePub, tools: ['peerCall', 'groundedAnswer'], domains: ['soccer'], spendCapSats: 250, ttlMs: 1_800_000, parent: scoutGrant, publish: true, rendezvousUrl: RV_URL })
+  console.log(`buyer: nested grant ${childGrant.grant.grantId} ⊆ ${scoutGrant.grant.grantId} (cap ${childGrant.grant.spendCapSats})`)
+
   // the buyer pays under the delegation — the call is bounded by the grant
   const call = await tool(BUYER, 'peerCall', {
     endpoint: `http://localhost:${S1}`, tool: 'groundedAnswer',
     args: { claims: [{ text: SOCCER_FACT, cites: [{ shard: 'soccer', seq: 0 }] }], caller: scoutGrant.grant.granteePub, delegationId: scoutGrant.grant.grantId },
-    maxSats: 400, delegation: scoutGrant
+    maxSats: 400, delegation: { grant: childGrant.grant, sig: childGrant.sig, parent: { grant: scoutGrant.grant, sig: scoutGrant.sig } }
   }).catch(e => ({ err: e.message }))
   if (call.err) die(`peerCall: ${call.err}`)
   const r = call.result ?? call

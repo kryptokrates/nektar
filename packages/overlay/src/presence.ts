@@ -717,14 +717,17 @@ export function createLsPresence (kx?: Knex): LookupService & {
       return true
     },
     // only the grant's owner may tombstone it — revocation kills the grant
+    // AND cascades: every descendant grant (transitive parentGrantId) dies
+    // with it — a revoked link breaks the whole chain below it
     revokeDelegation: async (r: { grantId: string, pub: string, ts: number }) => {
       const d = delegations.get(r.grantId)
       if (!d || d.grant.ownerPub !== r.pub) return false
       revoked.add(r.grantId)
+      for (const sd of delegations.values()) if (sd.grant.parentGrantId === r.grantId) revoked.add(sd.grant.grantId)
       appendEvent('revocation', r.pub, [], r)
       return true
     },
-    delegationsFor: (grantee?: string) => [...delegations.values()].filter(sd => !revoked.has(sd.grant.grantId) && sd.grant.expiresAt > Date.now()).filter(sd => grantee === undefined || sd.grant.granteePub === grantee),
+    delegationsFor: (grantee?: string) => [...delegations.values()].filter(sd => !revoked.has(sd.grant.grantId) && !revoked.has(sd.grant.parentGrantId ?? '') && sd.grant.expiresAt > Date.now()).filter(sd => grantee === undefined || sd.grant.granteePub === grantee),
     attestationsFor: (pub?: string) => [...attestations.values()].filter(sa => pub === undefined || sa.attestation.pub === pub),
 
     catalogFor: (pub: string) => catalogs.get(pub)?.sc,
@@ -827,10 +830,14 @@ export interface DelegationAd {
   spendCapSats: number // max cumulative spend under this grant
   expiresAt: number // unix ms — the grant dies on its own
   ts: number
+  /** nested chain: the grantee re-delegates a SUBSET of its own grant —
+   *  child's ownerPub == parent's granteePub, scope ⊆ parent, cap ≤ parent,
+   *  expiry ≤ parent. A chain is only as strong as its tightest link. */
+  parentGrantId?: string
 }
 export interface SignedDelegation { grant: DelegationAd, sig: string }
 
-const delegationCanonical = (g: DelegationAd) => `${g.grantId}|${g.ownerPub}|${g.granteePub}|${[...(g.scope.tools ?? [])].sort().join(',')}|${[...(g.scope.domains ?? [])].sort().join(',')}|${g.spendCapSats}|${g.expiresAt}|${g.ts}`
+const delegationCanonical = (g: DelegationAd) => `${g.grantId}|${g.ownerPub}|${g.granteePub}|${[...(g.scope.tools ?? [])].sort().join(',')}|${[...(g.scope.domains ?? [])].sort().join(',')}|${g.spendCapSats}|${g.expiresAt}|${g.ts}|${g.parentGrantId ?? ''}`
 const delegationDigest = (g: DelegationAd) => sha256(utf8(delegationCanonical(g)))
 
 export function signDelegation (key: PrivateKey, fields: Omit<DelegationAd, 'ownerPub'>): SignedDelegation {
@@ -840,6 +847,20 @@ export function signDelegation (key: PrivateKey, fields: Omit<DelegationAd, 'own
     ownerPub: key.toPublicKey().toString()
   }
   return { grant, sig: toHex(Uint8Array.from(key.sign(Array.from(delegationDigest(grant))).toDER() as number[])) }
+}
+
+/** a child grant must be a strict subset of its parent: the grantee
+ *  re-delegates only what it holds — tools/domains ⊆ parent's (an empty
+ *  parent field means unrestricted), cap/expiry ≤ parent's, and the
+ *  child's ownerPub must be the parent's granteePub. */
+export function delegationSubset (child: DelegationAd, parent: DelegationAd): boolean {
+  if (child.ownerPub !== parent.granteePub) return false
+  if (child.parentGrantId !== parent.grantId) return false
+  const sub = (a?: string[], b?: string[]) => b === undefined || a === undefined || a.every(x => b.includes(x))
+  if (!sub(child.scope?.tools, parent.scope?.tools) || !sub(child.scope?.domains, parent.scope?.domains)) return false
+  if (child.spendCapSats > parent.spendCapSats) return false
+  if (child.expiresAt > parent.expiresAt) return false
+  return true
 }
 
 export function verifyDelegation (grant: DelegationAd, sigHex: string): boolean {

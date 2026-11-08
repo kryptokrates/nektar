@@ -559,6 +559,7 @@ export const TOOLS = [
       required: ['grantee'],
       properties: {
         grantee: { type: 'string', description: '66hex pub of the agent receiving authority' },
+        parent: { type: 'object', description: 'a SignedDelegation you hold — re-delegates a SUBSET of it (nested chain); child must shrink scope/cap/expiry' },
         tools: { type: 'array', items: { type: 'string' }, description: 'tools the grant covers' },
         domains: { type: 'array', items: { type: 'string' }, description: 'domains the grant covers' },
         spendCapSats: { type: 'number', description: 'max cumulative spend under this grant' },
@@ -1272,11 +1273,28 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       // agent as grantee, cover the called tool, and stay within its spendCap
       let deleg: any | undefined
       if (args?.delegation !== undefined) {
-        const { verifyDelegation } = await import('@nektar/overlay')
+        const { verifyDelegation, delegationSubset } = await import('@nektar/overlay')
         deleg = args.delegation
         if (!verifyDelegation(deleg.grant, deleg.sig)) throw new Error('peerCall: delegation signature invalid or grant expired')
         const opPub = mem.operatorKey().toPublicKey().toString()
         if (deleg.grant.granteePub !== opPub) throw new Error('peerCall: delegation grants a different grantee — this agent is not the delegate')
+        // nested chain: the grant carries parentGrantId — the caller must
+        // supply the ancestor chain; every level must be a strict subset
+        // of its parent and valid on its own signature
+        if (deleg.grant.parentGrantId !== undefined) {
+          const chain = Array.isArray(deleg.chain) ? deleg.chain : (args?.delegation?.parent ? [{ grant: args.delegation.parent.grant, sig: args.delegation.parent.sig }] : [])
+          if (chain.length === 0) throw new Error('peerCall: nested delegation needs the ancestor chain (delegation.parent or delegation.chain)')
+          let child = deleg.grant
+          let hops = 0
+          for (const link of chain) {
+            if (!verifyDelegation(link.grant, link.sig)) throw new Error('peerCall: ancestor grant in chain is invalid or expired')
+            if (!delegationSubset(child, link.grant)) throw new Error('peerCall: chain link is not a subset of its parent — scope/cap must shrink at each hop')
+            child = link.grant
+            hops++
+            if (hops > 16) throw new Error('peerCall: delegation chain too long')
+          }
+          if (child.parentGrantId !== undefined) throw new Error('peerCall: chain does not reach a root grant')
+        }
         if (deleg.grant.scope?.tools?.length && !deleg.grant.scope.tools.includes(tool)) throw new Error(`peerCall: delegation scope does not cover tool '${tool}'`)
       }
       const post = async (body: unknown) => {
@@ -1362,17 +1380,29 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
     }
     case 'delegate': {
       // owner grants bounded authority to a grantee — Wright's liability
-      // primitive as a signed, checkable object
-      const { signDelegation } = await import('@nektar/overlay')
+      // primitive as a signed, checkable object. pass `parent` (a
+      // SignedDelegation) to re-delegate a SUBSET of a grant you hold —
+      // nested chains: the child must be a strict subset of the parent.
+      const { signDelegation, verifyDelegation, delegationSubset } = await import('@nektar/overlay')
       if (typeof args?.grantee !== 'string' || !/^[0-9a-f]{66}$/i.test(args.grantee)) throw new Error('delegate: grantee pub (66hex) required')
       const ttlMs = Number(args?.ttlMs ?? 86_400_000)
-      const fields = {
+      const fields: any = {
         grantId: (args?.grantId as string) ?? `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
         granteePub: args.grantee,
         scope: { ...(args?.tools ? { tools: (args.tools as string[]).slice(0, 64) } : {}), ...(args?.domains ? { domains: (args.domains as string[]).slice(0, 32).map(String) } : {}) },
         spendCapSats: Math.max(0, Math.floor(Number(args?.spendCapSats ?? 0))),
         expiresAt: Date.now() + ttlMs,
         ts: Date.now()
+      }
+      if (args?.parent !== undefined) {
+        const parent = args.parent
+        if (!verifyDelegation(parent.grant, parent.sig)) throw new Error('delegate: parent grant signature invalid or expired')
+        const opPub = mem.operatorKey().toPublicKey().toString()
+        if (parent.grant.granteePub !== opPub) throw new Error('delegate: you are not the parent grant\'s grantee — only the holder may re-delegate')
+        fields.parentGrantId = parent.grant.grantId
+        // construct the child grant to subset-check it before signing
+        const child = { ...fields, ownerPub: opPub }
+        if (!delegationSubset(child, parent.grant)) throw new Error('delegate: child grant is not a subset of the parent — scope/cap/expiry must shrink, never grow')
       }
       const signed = signDelegation(mem.operatorKey(), fields)
       if (args?.publish !== true) return { grant: signed.grant, sig: signed.sig }

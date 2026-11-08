@@ -551,6 +551,46 @@ export const TOOLS = [
     }
   },
   {
+    name: 'delegate',
+    description: 'Grant bounded authority to another agent (Wright\'s liability primitive): sign a DelegationAd — grantee pub, scope (tools/domains), spendCapSats, ttl — and optionally publish it to the rendezvous. A grantee calls peerCall{delegation:<grant>} and the spend is bounded by the grant; the receipt names it. Revocable via revoke.',
+    inputSchema: {
+      type: 'object',
+      required: ['grantee'],
+      properties: {
+        grantee: { type: 'string', description: '66hex pub of the agent receiving authority' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'tools the grant covers' },
+        domains: { type: 'array', items: { type: 'string' }, description: 'domains the grant covers' },
+        spendCapSats: { type: 'number', description: 'max cumulative spend under this grant' },
+        ttlMs: { type: 'number', description: 'grant lifetime ms (default 86400000)' },
+        publish: { type: 'boolean' }, rendezvousUrl: { type: 'string' }
+      }
+    }
+  },
+  {
+    name: 'revoke',
+    description: 'Tombstone a delegation you issued — the grant dies publicly so peers stop honoring it. Only the grant\'s owner may revoke.',
+    inputSchema: {
+      type: 'object',
+      required: ['grantId'],
+      properties: { grantId: { type: 'string' }, rendezvousUrl: { type: 'string' } }
+    }
+  },
+  {
+    name: 'attest',
+    description: 'Sign a model attestation — "model M answered" declared + signed (attributable, never a truth claim): modelId, weightsHash (open weights recomputable), provider, claims. publish:true posts the card to the rendezvous.',
+    inputSchema: {
+      type: 'object',
+      required: ['modelId'],
+      properties: {
+        modelId: { type: 'string' },
+        weightsHash: { type: 'string', description: 'open-weight commitment — recomputable when public' },
+        provider: { type: 'string' },
+        claims: { type: 'array', items: { type: 'string' } },
+        publish: { type: 'boolean' }, rendezvousUrl: { type: 'string' }
+      }
+    }
+  },
+  {
     name: 'respond',
     description: 'Answer a want event with a signed offer — the demand-meets-supply step: given a want (from watch/feed on your domains), publish an offer replyTo its pub so the wanter sees your quote on their feed. Needs describeShard first (manifest supplies domains + shardId).',
     inputSchema: {

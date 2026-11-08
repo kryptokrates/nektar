@@ -27,7 +27,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import knexPkg from 'knex'
 import { ArcBroadcaster, ChaintracksTracker } from '@nektar/chain'
-import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard } from './dist/src/index.js'
+import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation } from './dist/src/index.js'
 
 const HOST = process.env.NEKTAR_OVERLAY_HOST ?? '0.0.0.0'
 const PORT = Number(process.env.NEKTAR_OVERLAY_PORT ?? 8090)
@@ -143,6 +143,33 @@ const server = http.createServer(async (req, res) => {
       const pub = url.searchParams.get('pub'), domain = url.searchParams.get('domain') ?? undefined
       if (pub) return json(res, 200, { reputation: overlay.lsPresence.reputationFor(pub) ?? null })
       return json(res, 200, { reputations: overlay.lsPresence.reputationsFor(domain) })
+    }
+    if (req.method === 'POST' && url.pathname === '/delegation') {
+      if (!gated(req)) return json(res, 401, { error: 'unauthorized' })
+      const { grant, sig } = JSON.parse(await body(req) || '{}')
+      if (!grant || !sig || !verifyDelegation(grant, sig)) return json(res, 400, { error: 'invalid delegation or signature' })
+      const ok = await overlay.lsPresence.announceDelegation({ grant, sig })
+      return json(res, ok ? 200 : 400, ok ? { ok: true, grantId: grant.grantId } : { error: 'rejected' })
+    }
+    if (req.method === 'GET' && url.pathname === '/delegation') {
+      return json(res, 200, { delegations: overlay.lsPresence.delegationsFor(url.searchParams.get('grantee') ?? undefined) })
+    }
+    if (req.method === 'POST' && url.pathname === '/delegation/revoke') {
+      if (!gated(req)) return json(res, 401, { error: 'unauthorized' })
+      const { grantId, pub, ts } = JSON.parse(await body(req) || '{}')
+      if (!grantId || !pub) return json(res, 400, { error: 'grantId and pub required' })
+      const ok = await overlay.lsPresence.revokeDelegation({ grantId, pub, ts: Number(ts ?? Date.now()) })
+      return json(res, ok ? 200 : 400, ok ? { ok: true, grantId } : { error: 'not the owner or unknown grant' })
+    }
+    if (req.method === 'POST' && url.pathname === '/attestation') {
+      if (!gated(req)) return json(res, 401, { error: 'unauthorized' })
+      const { attestation, sig } = JSON.parse(await body(req) || '{}')
+      if (!attestation || !sig || !verifyAttestation(attestation, sig)) return json(res, 400, { error: 'invalid attestation or signature' })
+      const ok = await overlay.lsPresence.announceAttestation({ attestation, sig })
+      return json(res, ok ? 200 : 400, ok ? { ok: true, pub: attestation.pub } : { error: 'rejected' })
+    }
+    if (req.method === 'GET' && url.pathname === '/attestation') {
+      return json(res, 200, { attestations: overlay.lsPresence.attestationsFor(url.searchParams.get('pub') ?? undefined) })
     }
     // JetStream-pull feed: consumers hold a cursor (last seen seq) and pull
     // new events, filtered by kind and domain tags. ?wait=<ms> long-polls

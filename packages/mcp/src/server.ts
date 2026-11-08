@@ -499,7 +499,8 @@ export const TOOLS = [
         tool: { type: 'string', description: 'tool name on the peer (recall, groundedAnswer, …)' },
         args: { type: 'object', description: 'tool arguments to send' },
         maxSats: { type: 'number', description: 'max sats this call may cost — payment demands above it are refused' },
-        token: { type: 'string', description: 'bearer token when the peer sets NEKTAR_HTTP_TOKEN' }
+        token: { type: 'string', description: 'bearer token when the peer sets NEKTAR_HTTP_TOKEN' },
+        delegation: { type: 'object', description: 'the signed grant (SignedDelegation) this call acts under — scope/spendCap/ttl enforced' }
       }
     }
   },
@@ -1195,6 +1196,17 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       if (!tool) throw new Error('peerCall: tool required')
       const headers: Record<string, string> = { 'content-type': 'application/json' }
       if (typeof args?.token === 'string' && args.token) headers.authorization = `Bearer ${args.token}`
+      // acting under a signed delegation: the grant must be valid, name this
+      // agent as grantee, cover the called tool, and stay within its spendCap
+      let deleg: any | undefined
+      if (args?.delegation !== undefined) {
+        const { verifyDelegation } = await import('@nektar/overlay')
+        deleg = args.delegation
+        if (!verifyDelegation(deleg.grant, deleg.sig)) throw new Error('peerCall: delegation signature invalid or grant expired')
+        const opPub = mem.operatorKey().toPublicKey().toString()
+        if (deleg.grant.granteePub !== opPub) throw new Error('peerCall: delegation grants a different grantee — this agent is not the delegate')
+        if (deleg.grant.scope?.tools?.length && !deleg.grant.scope.tools.includes(tool)) throw new Error(`peerCall: delegation scope does not cover tool '${tool}'`)
+      }
       const post = async (body: unknown) => {
         const r = await fetch(`${endpoint}/v1/tools/${encodeURIComponent(tool)}`, { method: 'POST', headers, body: JSON.stringify(body ?? {}), signal: AbortSignal.timeout(120_000) })
         const j = await r.json().catch(() => ({}))
@@ -1208,7 +1220,10 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       if (demand) {
         const extra = acc.extra ?? {}
         const amount = Number(acc.amount ?? 0)
-        const max = args?.maxSats !== undefined ? Number(args.maxSats) : undefined
+        // a delegation's spendCap is the harder bound — the call may spend
+        // at most the grant's cap, even if maxSats is set higher
+        const cap = deleg?.grant.spendCapSats
+        const max = cap !== undefined ? Math.min(args?.maxSats !== undefined ? Number(args.maxSats) : cap, cap) : (args?.maxSats !== undefined ? Number(args.maxSats) : undefined)
         if (max === undefined) return { needsPayment: true, demand, hint: 're-run with maxSats to authorize paying this invoice' }
         if (amount > max) throw new Error(`peerCall: ${tool} costs ${amount} sats — over maxSats ${max}`)
         // settlement context: the invoice's network tag must match the chain
@@ -1255,6 +1270,56 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishOffer: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, offer: signed.offer }
+    }
+    case 'delegate': {
+      // owner grants bounded authority to a grantee — Wright's liability
+      // primitive as a signed, checkable object
+      const { signDelegation } = await import('@nektar/overlay')
+      if (typeof args?.grantee !== 'string' || !/^[0-9a-f]{66}$/i.test(args.grantee)) throw new Error('delegate: grantee pub (66hex) required')
+      const ttlMs = Number(args?.ttlMs ?? 86_400_000)
+      const fields = {
+        grantId: (args?.grantId as string) ?? `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        granteePub: args.grantee,
+        scope: { ...(args?.tools ? { tools: (args.tools as string[]).slice(0, 64) } : {}), ...(args?.domains ? { domains: (args.domains as string[]).slice(0, 32).map(String) } : {}) },
+        spendCapSats: Math.max(0, Math.floor(Number(args?.spendCapSats ?? 0))),
+        expiresAt: Date.now() + ttlMs,
+        ts: Date.now()
+      }
+      const signed = signDelegation(mem.operatorKey(), fields)
+      if (args?.publish !== true) return { grant: signed.grant, sig: signed.sig }
+      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      const r = await fetch(`${rv}/delegation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || (j as any)?.ok !== true) throw new Error(`delegate: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
+      return { ok: true, grant: signed.grant }
+    }
+    case 'attest': {
+      // "model M answered" — a signed, attributable declaration (never a truth claim)
+      const { signAttestation } = await import('@nektar/overlay')
+      if (typeof args?.modelId !== 'string' || !args.modelId) throw new Error('attest: modelId required')
+      const fields = {
+        modelId: args.modelId,
+        ...(args?.weightsHash ? { weightsHash: String(args.weightsHash) } : {}),
+        ...(args?.provider ? { provider: String(args.provider) } : {}),
+        ...(args?.claims ? { claims: (args.claims as string[]).slice(0, 64).map(String) } : {}),
+        ts: Date.now()
+      }
+      const signed = signAttestation(mem.operatorKey(), fields)
+      if (args?.publish !== true) return { attestation: signed.attestation, sig: signed.sig }
+      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      const r = await fetch(`${rv}/attestation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || (j as any)?.ok !== true) throw new Error(`attest: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
+      return { ok: true, attestation: signed.attestation }
+    }
+    case 'revoke': {
+      // revoke a delegation — tombstone the grant so peers stop honoring it
+      if (typeof args?.grantId !== 'string' || !args.grantId) throw new Error('revoke: grantId required')
+      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      const r = await fetch(`${rv}/delegation/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ grantId: args.grantId, pub: mem.operatorKey().toPublicKey().toString(), ts: Date.now() }), signal: AbortSignal.timeout(15_000) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || (j as any)?.ok !== true) throw new Error(`revoke: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
+      return { ok: true, grantId: args.grantId }
     }
     case 'respond': {
       // want → offer replyTo — the seller's half of the match: the wanter's

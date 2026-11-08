@@ -220,7 +220,7 @@ export function verifyReputationCard (card: ReputationCard, sigHex: string): boo
   } catch { return false }
 }
 
-export type EventKind = 'ad' | 'catalog' | 'want' | 'offer' | 'settlement' | 'reputation'
+export type EventKind = 'ad' | 'catalog' | 'want' | 'offer' | 'settlement' | 'reputation' | 'delegation' | 'attestation' | 'revocation'
 export interface PresenceEvent { seq: number, kind: EventKind, pub: string, domains: string[], ts: number, payload: unknown }
 
 export function signPresence (key: PrivateKey, fields: Omit<PresenceAd, 'pub'>): SignedAd {
@@ -379,6 +379,11 @@ export function createLsPresence (kx?: Knex): LookupService & {
   announceOffer: (so: SignedOffer) => Promise<boolean>
   announceSettlement: (s: SignedSettlement) => Promise<boolean>
   announceReputation: (sr: SignedReputation) => Promise<boolean>
+  announceDelegation: (sd: SignedDelegation) => Promise<boolean>
+  announceAttestation: (sa: SignedAttestation) => Promise<boolean>
+  revokeDelegation: (r: { grantId: string, pub: string, ts: number }) => Promise<boolean>
+  delegationsFor: (grantee?: string) => SignedDelegation[]
+  attestationsFor: (pub?: string) => SignedAttestation[]
   catalogFor: (pub: string) => SignedCatalog | undefined
   wantFor: (pub: string) => SignedWant | undefined
   offersFor: (domain?: string) => SignedOffer[]
@@ -401,6 +406,11 @@ export function createLsPresence (kx?: Knex): LookupService & {
   const settlements: SignedSettlement[] = []
   // latest reputation card per pub
   const reps = new Map<string, SignedReputation>()
+  // delegations keyed per grantId; a revocation tombstones the grant
+  const delegations = new Map<string, SignedDelegation>()
+  const revoked = new Set<string>()
+  // latest attestation per pub
+  const attestations = new Map<string, SignedAttestation>()
   // the durable event log — seq is the consumer cursor
   const events: PresenceEvent[] = []
   let nextSeq = 0
@@ -690,6 +700,33 @@ export function createLsPresence (kx?: Knex): LookupService & {
       return true
     },
 
+    announceDelegation: async (sd: SignedDelegation) => {
+      if (!verifyDelegation(sd.grant, sd.sig)) return false
+      const prev = delegations.get(sd.grant.grantId)
+      if (prev && prev.grant.ts >= sd.grant.ts) return true
+      delegations.set(sd.grant.grantId, sd)
+      appendEvent('delegation', sd.grant.ownerPub, sd.grant.scope.domains ?? [], sd)
+      return true
+    },
+    announceAttestation: async (sa: SignedAttestation) => {
+      if (!verifyAttestation(sa.attestation, sa.sig)) return false
+      const prev = attestations.get(sa.attestation.pub)
+      if (prev && prev.attestation.ts >= sa.attestation.ts) return true
+      attestations.set(sa.attestation.pub, sa)
+      appendEvent('attestation', sa.attestation.pub, [], sa)
+      return true
+    },
+    // only the grant's owner may tombstone it — revocation kills the grant
+    revokeDelegation: async (r: { grantId: string, pub: string, ts: number }) => {
+      const d = delegations.get(r.grantId)
+      if (!d || d.grant.ownerPub !== r.pub) return false
+      revoked.add(r.grantId)
+      appendEvent('revocation', r.pub, [], r)
+      return true
+    },
+    delegationsFor: (grantee?: string) => [...delegations.values()].filter(sd => !revoked.has(sd.grant.grantId) && sd.grant.expiresAt > Date.now()).filter(sd => grantee === undefined || sd.grant.granteePub === grantee),
+    attestationsFor: (pub?: string) => [...attestations.values()].filter(sa => pub === undefined || sa.attestation.pub === pub),
+
     catalogFor: (pub: string) => catalogs.get(pub)?.sc,
     wantFor: (pub: string) => wants.get(pub),
     offersFor: (domain?: string) => [...offers.values()].filter(so => so.offer.exp === undefined || so.offer.exp > Date.now()).filter(so => domain === undefined || so.offer.domains.some(d => d.toLowerCase() === domain.toLowerCase())),
@@ -776,4 +813,75 @@ export function createLsPresence (kx?: Knex): LookupService & {
       "nektar agent-directory lookup. Queries: {all:true} → latest signed ad per agent; {shard:'x'} → ads of agents serving shard x; {pub:'<66hex>'} → one agent's ad; {domain:'soccer'} → signed catalogs of agents claiming that domain tag; {q:'text'} → free-text match over catalog domains+descriptions. Context = the ad JSON (or the signed catalog for domain/q).",
     getMetaData: async () => ({ name: 'ls_presence', shortDescription: 'nektar agent-directory lookup service' })
   }
+}
+
+// ── attestation layer ────────────────────────────────────────────────────────
+// signed delegation — an owner grants bounded authority to a grantee (agent X
+// acts under owner Y's bounded permission: scope, spendCap, ttl). Wright's
+// liability primitive as a checkable object.
+export interface DelegationAd {
+  grantId: string // uuid/hex id of the grant
+  ownerPub: string // the owner granting authority
+  granteePub: string // the agent receiving bounded authority
+  scope: { tools?: string[], domains?: string[] } // bounded permissions
+  spendCapSats: number // max cumulative spend under this grant
+  expiresAt: number // unix ms — the grant dies on its own
+  ts: number
+}
+export interface SignedDelegation { grant: DelegationAd, sig: string }
+
+const delegationCanonical = (g: DelegationAd) => `${g.grantId}|${g.ownerPub}|${g.granteePub}|${[...(g.scope.tools ?? [])].sort().join(',')}|${[...(g.scope.domains ?? [])].sort().join(',')}|${g.spendCapSats}|${g.expiresAt}|${g.ts}`
+const delegationDigest = (g: DelegationAd) => sha256(utf8(delegationCanonical(g)))
+
+export function signDelegation (key: PrivateKey, fields: Omit<DelegationAd, 'ownerPub'>): SignedDelegation {
+  const grant: DelegationAd = {
+    ...fields,
+    scope: { tools: fields.scope.tools ? [...fields.scope.tools].sort() : undefined, domains: fields.scope.domains ? [...fields.scope.domains].sort() : undefined },
+    ownerPub: key.toPublicKey().toString()
+  }
+  return { grant, sig: toHex(Uint8Array.from(key.sign(Array.from(delegationDigest(grant))).toDER() as number[])) }
+}
+
+export function verifyDelegation (grant: DelegationAd, sigHex: string): boolean {
+  try {
+    if (typeof grant?.grantId !== 'string' || grant.grantId.length === 0 || grant.grantId.length > 128) return false
+    for (const p of [grant.ownerPub, grant.granteePub]) if (typeof p !== 'string' || !/^[0-9a-f]{66}$/i.test(p)) return false
+    if (!Number.isSafeInteger(grant.spendCapSats) || grant.spendCapSats < 0) return false
+    if (!Number.isSafeInteger(grant.expiresAt) || grant.expiresAt <= Date.now()) return false
+    if (!Number.isSafeInteger(grant.ts) || grant.ts <= 0) return false
+    for (const arr of [grant.scope?.tools, grant.scope?.domains]) if (arr !== undefined && (!Array.isArray(arr) || arr.length > 64 || !arr.every(s => typeof s === 'string' && s.length > 0 && s.length <= 64))) return false
+    return PublicKey.fromString(grant.ownerPub).verify(Array.from(delegationDigest(grant)), Signature.fromDER(sigHex, 'hex'))
+  } catch { return false }
+}
+
+// signed attestation — "model M answered" declared + signed (OpenWALDO stance:
+// attributable facts + the limits of what's verified — never a truth claim)
+export interface AttestationAd {
+  pub: string // the attesting agent
+  modelId: string // e.g. 'llama3.1-70b' — declares the model
+  weightsHash?: string // open-weight commitment — recomputable when public
+  provider?: string // where the model runs
+  claims?: string[] // what the attestation asserts
+  ts: number
+}
+export interface SignedAttestation { attestation: AttestationAd, sig: string }
+
+const attestationCanonical = (a: AttestationAd) => `${a.modelId}|${a.weightsHash ?? ''}|${a.provider ?? ''}|${[...(a.claims ?? [])].sort().join(',')}|${a.ts}`
+const attestationDigest = (a: AttestationAd) => sha256(utf8(attestationCanonical(a)))
+
+export function signAttestation (key: PrivateKey, fields: Omit<AttestationAd, 'pub'>): SignedAttestation {
+  const attestation: AttestationAd = { ...fields, pub: key.toPublicKey().toString() }
+  return { attestation, sig: toHex(Uint8Array.from(key.sign(Array.from(attestationDigest(attestation))).toDER() as number[])) }
+}
+
+export function verifyAttestation (attestation: AttestationAd, sigHex: string): boolean {
+  try {
+    if (typeof attestation?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(attestation.pub)) return false
+    if (typeof attestation.modelId !== 'string' || attestation.modelId.length === 0 || attestation.modelId.length > 128) return false
+    if (attestation.weightsHash !== undefined && (typeof attestation.weightsHash !== 'string' || !/^[0-9a-f]{40,128}$/i.test(attestation.weightsHash))) return false
+    if (attestation.provider !== undefined && (typeof attestation.provider !== 'string' || attestation.provider.length > 256)) return false
+    if (attestation.claims !== undefined && (!Array.isArray(attestation.claims) || attestation.claims.length > 64 || !attestation.claims.every(c => typeof c === 'string' && c.length <= 512))) return false
+    if (!Number.isSafeInteger(attestation.ts) || attestation.ts <= 0) return false
+    return PublicKey.fromString(attestation.pub).verify(Array.from(attestationDigest(attestation)), Signature.fromDER(sigHex, 'hex'))
+  } catch { return false }
 }

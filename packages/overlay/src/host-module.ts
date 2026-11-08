@@ -157,6 +157,24 @@ export default async function create (host: PresenceModuleHost): Promise<Module>
     const j = JSON.parse(await body(req) || '{}')
     json(res, 200, { ok: await ls.announceReputation(j), pub: j?.card?.pub })
   })
+  host.route('/ls_presence/delegation', async (req, res) => {
+    if (!gated(req)) return json(res, 403, { error: 'forbidden' })
+    const j = JSON.parse(await body(req) || '{}')
+    json(res, 200, { ok: await ls.announceDelegation(j), grantId: j?.grant?.grantId })
+  })
+  host.route('/ls_presence/delegations', (req, res) => {
+    const grantee = new URL(req.url ?? '/', 'http://x').searchParams.get('grantee')
+    json(res, 200, { delegations: ls.delegationsFor(grantee ?? undefined) })
+  })
+  host.route('/ls_presence/attestation', async (req, res) => {
+    if (!gated(req)) return json(res, 403, { error: 'forbidden' })
+    const j = JSON.parse(await body(req) || '{}')
+    json(res, 200, { ok: await ls.announceAttestation(j), pub: j?.attestation?.pub })
+  })
+  host.route('/ls_presence/attestations', (req, res) => {
+    const pub = new URL(req.url ?? '/', 'http://x').searchParams.get('pub')
+    json(res, 200, { attestations: ls.attestationsFor(pub ?? undefined) })
+  })
 
   host.onShutdown(async () => { await kx?.destroy() })
 

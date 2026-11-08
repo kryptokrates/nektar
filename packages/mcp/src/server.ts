@@ -291,7 +291,8 @@ export const TOOLS = [
         txHex: { type: 'string' }, hWrapped: { type: 'string' },
         sellerPub: { type: 'string', description: 'claim: needed to unwrap private (BRC-42) payloads' },
         offerMode: { type: 'string', description: 'claim: "key" for encrypted-record key sales' },
-        commitment: { type: 'object', description: 'claim: {leaf,hdp,authorPub,anchorTxid} — verifies leaf inclusion + provenance σ' }
+        commitment: { type: 'object', description: 'claim: {leaf,hdp,authorPub,anchorTxid} — verifies leaf inclusion + provenance σ' },
+        publishFraud: { type: 'boolean', description: 'claim: on verification failure, sign + publish an attributable fraud attestation to the rendezvous' }
       },
       required: ['op']
     }
@@ -862,6 +863,20 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
           if (out.verified && args.commitment.anchorTxid) out.anchorTxid = args.commitment.anchorTxid
           if (!out.verified) out.reason = 'computeLeaf(payload) != committed leaf'
         } catch (e) { out.verified = false; out.reason = `payload verification failed: ${(e as Error).message}` }
+      }
+      // a failed claim is an attributable fraud proof — publishFraud signs
+      // the evidence (txid + committed leaf + the mismatch) as an
+      // attestation so the market sees it; reputation feeds on it.
+      if (out.verified === false && args?.publishFraud === true) {
+        try {
+          const { signAttestation } = await import('@nektar/overlay')
+          const claims = [`fraud:sale:${tx.id('hex')}`, `hWrapped:${args.hWrapped ?? ''}`, `committedLeaf:${args?.commitment?.leaf ?? ''}`, `sellerPub:${args?.sellerPub ?? ''}`]
+          const signed = signAttestation(mem.operatorKey(), { modelId: 'fraud-claim', provider: 'nektar-claim', claims, ts: Date.now() })
+          const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+          const r = await fetch(`${rv}/attestation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+          out.fraudPublished = r.ok && (await r.json().catch(() => ({})))?.ok === true
+          out.fraudEvidence = { attestation: signed.attestation }
+        } catch (e) { out.fraudPublished = false; out.fraudReason = `publishFraud failed: ${(e as Error).message}` }
       }
       return out
     }

@@ -1068,7 +1068,10 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
         groundingReportHash: report.reportHash,
         ...(attestation ? { modelAttestation: attestation } : {}),
-        ...(paid ? { payment: paid } : {})
+        ...(paid ? { payment: paid } : {}),
+        ...(typeof args?.caller === 'string' ? { caller: args.caller } : {}),
+        ...(typeof args?.delegationId === 'string' ? { delegationId: args.delegationId } : {}),
+        ...(typeof args?.manifestId === 'string' ? { manifestId: args.manifestId } : {})
       }, mem)
       const token = receiptToken(receiptHash)
       return { answer, committed: true, kept: report.kept, flagged: report.flagged, grounding: report, receipt, receiptHash, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, share: shareBlock(token), anchor, checkResult: 'verified' }

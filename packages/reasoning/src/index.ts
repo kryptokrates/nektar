@@ -113,6 +113,15 @@ export interface Receipt {
    *  `verifierTxid` names the on-chain verifier spend when consensus itself
    *  checked it. NOT a claim that an LLM ran — declared-only models omit it. */
   modelAttestation?: { modelPoseidon: string, inputCommit: string, input?: readonly number[], output: string, publicStatement: string, proofCommit?: string, attestationTxid?: string, commitment?: string, verifierTxid?: string, deployTxid?: string, circuit: string, setup: string, license?: string }
+  /** layer-7 attestation: who asked, under which grant, which manifest.
+   *  `caller` the requesting party's pub (distinct from the answerer),
+   *  `delegationId` the signed DelegationAd grant the caller acted under,
+   *  `manifestId` the SignedAttestation the answer carries. All three are
+   *  independently verifiable objects — the receipt names them, the market
+   *  checks them. */
+  caller?: string
+  delegationId?: string
+  manifestId?: string
 }
 
 /** §16: delegating agent A′ signs authorship over a sub-decision bound to the answer */

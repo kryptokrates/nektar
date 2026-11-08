@@ -592,6 +592,20 @@ export const TOOLS = [
     }
   },
   {
+    name: 'publishWant',
+    description: 'Post a signed want to the rendezvous — the demand side: "I need X, will pay up to maxSats". Sellers watching their domains respond with offers.',
+    inputSchema: {
+      type: 'object',
+      required: ['domains'],
+      properties: {
+        domains: { type: 'array', items: { type: 'string' }, description: 'domains sought (lowercase tags)' },
+        maxSats: { type: 'number', description: 'max price offered' },
+        desc: { type: 'string', description: 'free-text want' },
+        exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
+      }
+    }
+  },
+  {
     name: 'respond',
     description: 'Answer a want event with a signed offer — the demand-meets-supply step: given a want (from watch/feed on your domains), publish an offer replyTo its pub so the wanter sees your quote on their feed. Needs describeShard first (manifest supplies domains + shardId).',
     inputSchema: {
@@ -1329,6 +1343,23 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishOffer: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, offer: signed.offer }
     }
+    case 'publishWant': {
+      const { signWant } = await import('@nektar/overlay')
+      const domains = (args?.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32)
+      if (!domains.length) throw new Error('publishWant: domains required')
+      const fields = {
+        domains,
+        ...(args?.maxSats !== undefined ? { maxSats: Math.max(0, Math.floor(Number(args.maxSats))) } : {}),
+        ...(args?.desc ? { desc: String(args.desc).slice(0, 512) } : {}),
+        ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {})
+      }
+      const signed = signWant(mem.operatorKey(), fields)
+      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      const r = await fetch(`${rv}/want`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishWant: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
+      return { ok: true, pub: (j as any).pub, want: signed.want }
+    }
     case 'delegate': {
       // owner grants bounded authority to a grantee — Wright's liability
       // primitive as a signed, checkable object
@@ -1349,7 +1380,7 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
       const r = await fetch(`${rv}/delegation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`delegate: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
-      return { ok: true, grant: signed.grant }
+      return { ok: true, grant: signed.grant, sig: signed.sig }
     }
     case 'attest': {
       // "model M answered" — a signed, attributable declaration (never a truth claim)

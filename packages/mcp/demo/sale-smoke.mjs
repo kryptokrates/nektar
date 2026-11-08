@@ -70,6 +70,15 @@ try {
     const claim = await tool(BUYER, 'sale', { op: 'claim', txHex, hWrapped: om.cfg.hWrapped, sellerPub: om.sellerPub, commitment: om.commitment, offerMode: om.mode })
     if (!claim.verified) die(`claim payload did not verify: ${JSON.stringify(claim).slice(0, 200)}`)
     console.log(`buyer: claim verified${claim.authorVerified ? ' + author provenance' : ''}`)
+    // ZKCP recourse leg: re-claim against a corrupted leaf — the check must
+    // fail and publishFraud must post the signed attestation to the rv
+    const bad = await tool(BUYER, 'sale', { op: 'claim', txHex, hWrapped: om.cfg.hWrapped, sellerPub: om.sellerPub, commitment: { ...om.commitment, leaf: 'ff'.repeat(32) }, offerMode: om.mode, publishFraud: true, rendezvousUrl: 'http://localhost:' + RV })
+    if (bad.verified !== false) die('corrupted leaf should fail verification')
+    if (bad.fraudPublished !== true) die('publishFraud did not post the attestation')
+    const att = await (await fetch(`http://localhost:${RV}/attestation`)).json()
+    const fraud = (att.attestations ?? []).find(a => a.attestation.claims?.some(c => c.startsWith('fraud:sale:')))
+    if (!fraud) die('fraud attestation absent from the rendezvous')
+    console.log(`buyer: bad-leaf claim fails → fraud attestation on rv (${fraud.attestation.claims[0].slice(0, 30)}…)`)
     const imp = await tool(BUYER, 'importRecord', { data: claim.data ?? Buffer.from(claim.valueHex ?? '', 'hex').toString(), provenance: claim.provenance, sourceShard: 'soccer', sourceSeq: 0, leaf: om.commitment.leaf, saleTxid: esc.txid })
     console.log(`buyer: importRecord → seq ${imp.seq} — purchased memory landed`)
   }

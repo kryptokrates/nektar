@@ -763,6 +763,16 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     case 'sale': {
       const op = String(args?.op ?? '')
       if (!SALE_OPS.has(op)) throw new Error('sale: op required — offer|offerMemory|escrow|complete|refund|claim')
+      // F3 — escrow funding under a grant goes through the cumulative ledger;
+      // the sale's price is the all-in debit reserved before funding
+      const gid = typeof args?.grantId === 'string' ? args.grantId : undefined
+      if (op === 'escrow' && gid && mem.budget) {
+        const actionId = `sale:escrow:${args.cfg ? JSON.stringify(args.cfg).slice(0, 60) : Date.now()}`
+        const amount = Number((args.cfg as any)?.price ?? args.amount ?? 0)
+        const r = mem.budget.reserve(gid, actionId, amount)
+        if (r === 'denied') throw new Error(`sale: grant ${gid} budget exhausted`)
+        try { const out = await callTool(mem, `sale#${op}`, args, ctx); mem.budget.commit(gid, actionId); return out } catch (e) { mem.budget.release(gid, actionId); throw e }
+      }
       return await callTool(mem, `sale#${op}`, args, ctx)
     }
     case 'sale#offer': {

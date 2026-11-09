@@ -94,10 +94,13 @@ export interface WantAd {
   /** SPV binding — the blockhash at tipHeight on the claimed chain; verifiable
    *  against real headers, so a ttn-signed artifact can't fake being mainnet */
   tip?: string
+  /** F2 producer stream — monotonic seq + predecessor hash (signature-covered) */
+  streamSeq?: number
+  prevHash?: string
 }
 export interface SignedWant { want: WantAd, sig: string, pay?: { beef?: number[] | string } }
 
-const wantCanonical = (w: WantAd) => `${[...w.domains].sort().join(',')}|${w.question ?? ''}|${w.maxSats ?? ''}|${w.endpoint ?? ''}|${w.ts}|${w.exp ?? ''}|${w.net ?? ''}|${w.tipHeight ?? ''}|${w.tip ?? ''}`
+const wantCanonical = (w: WantAd) => `${[...w.domains].sort().join(',')}|${w.question ?? ''}|${w.maxSats ?? ''}|${w.endpoint ?? ''}|${w.ts}|${w.exp ?? ''}|${w.net ?? ''}|${w.tipHeight ?? ''}|${w.tip ?? ''}|${w.streamSeq ?? ''}|${w.prevHash ?? ''}`
 const wantDigest = (w: WantAd) => sha256(utf8(wantCanonical(w)))
 
 export function signWant (key: PrivateKey, fields: Omit<WantAd, 'pub'>): SignedWant {
@@ -148,10 +151,12 @@ export interface OfferAd {
   /** SPV binding — the blockhash at tipHeight on the claimed chain; verifiable
    *  against real headers, so a ttn-signed artifact can't fake being mainnet */
   tip?: string
+  streamSeq?: number
+  prevHash?: string
 }
 export interface SignedOffer { offer: OfferAd, sig: string, pay?: { beef?: number[] | string } }
 
-const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}|${o.replyTo ?? ''}|${o.net ?? ''}|${o.tipHeight ?? ''}|${o.tip ?? ''}`
+const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}|${o.replyTo ?? ''}|${o.net ?? ''}|${o.tipHeight ?? ''}|${o.tip ?? ''}|${o.streamSeq ?? ''}|${o.prevHash ?? ''}`
 const offerDigest = (o: OfferAd) => sha256(utf8(offerCanonical(o)))
 const offerKey = (o: OfferAd) => `${o.pub}:${o.shard}:${o.seq}`
 
@@ -1041,6 +1046,9 @@ export interface DelegationAd {
   granteePub: string // the agent receiving bounded authority
   scope: { tools?: string[], domains?: string[] } // bounded permissions
   spendCapSats: number // max cumulative spend under this grant
+  /** F3 grant-v2 fields — per-call cap + explicit lifetime cap; both enforced */
+  perActionCapSats?: number
+  totalCapSats?: number
   expiresAt: number // unix ms — the grant dies on its own
   ts: number
   /** nested chain: the grantee re-delegates a SUBSET of its own grant —
@@ -1050,7 +1058,7 @@ export interface DelegationAd {
 }
 export interface SignedDelegation { grant: DelegationAd, sig: string }
 
-const delegationCanonical = (g: DelegationAd) => `${g.grantId}|${g.ownerPub}|${g.granteePub}|${[...(g.scope.tools ?? [])].sort().join(',')}|${[...(g.scope.domains ?? [])].sort().join(',')}|${g.spendCapSats}|${g.expiresAt}|${g.ts}|${g.parentGrantId ?? ''}`
+const delegationCanonical = (g: DelegationAd) => `${g.grantId}|${g.ownerPub}|${g.granteePub}|${[...(g.scope.tools ?? [])].sort().join(',')}|${[...(g.scope.domains ?? [])].sort().join(',')}|${g.spendCapSats}|${g.expiresAt}|${g.ts}|${g.parentGrantId ?? ''}|${g.perActionCapSats ?? ''}|${g.totalCapSats ?? ''}`
 const delegationDigest = (g: DelegationAd) => sha256(utf8(delegationCanonical(g)))
 
 export function signDelegation (key: PrivateKey, fields: Omit<DelegationAd, 'ownerPub'>): SignedDelegation {

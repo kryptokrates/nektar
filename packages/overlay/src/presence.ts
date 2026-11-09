@@ -103,12 +103,29 @@ export interface SignedWant { want: WantAd, sig: string, pay?: { beef?: number[]
 const wantCanonical = (w: WantAd) => `${[...w.domains].sort().join(',')}|${w.question ?? ''}|${w.maxSats ?? ''}|${w.endpoint ?? ''}|${w.ts}|${w.exp ?? ''}|${w.net ?? ''}|${w.tipHeight ?? ''}|${w.tip ?? ''}|${w.streamSeq ?? ''}|${w.prevHash ?? ''}`
 const wantDigest = (w: WantAd) => sha256(utf8(wantCanonical(w)))
 
+// per-producer stream state — signers auto-stamp streamSeq/prevHash; the rv's
+// interval commitments cover the same stream a reader detects gaps in
+const streamState = new Map<string, { seq: number, hash: string }>()
+const GENESIS_HASH = '0'.repeat(64)
+export function streamRef (pub: string, kind: string, prevHash?: string): { streamSeq: number, prevHash: string } {
+  const k = `${pub}:${kind}`
+  const s = streamState.get(k) ?? { seq: 0, hash: GENESIS_HASH }
+  streamState.set(k, { seq: s.seq + 1, hash: prevHash ?? s.hash })
+  return { streamSeq: s.seq + 1, prevHash: s.hash }
+}
+export function streamCommit (pub: string, kind: string, hash: string): void {
+  const s = streamState.get(`${pub}:${kind}`); if (s) s.hash = hash
+}
+
 export function signWant (key: PrivateKey, fields: Omit<WantAd, 'pub'>): SignedWant {
-  const want: WantAd = { ...fields, domains: [...fields.domains].sort(), pub: key.toPublicKey().toString() }
+  const pub = key.toPublicKey().toString()
+  const sr = fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'want')
+  const want: WantAd = { ...fields, ...sr, domains: [...fields.domains].sort(), pub }
   return { want, sig: toHex(Uint8Array.from(key.sign(Array.from(wantDigest(want))).toDER() as number[])) }
 }
 
 export function verifyWant (want: WantAd, sigHex: string): boolean {
+  if (want.streamSeq === undefined || want.prevHash === undefined) return false // v2: stream fields required
   try {
     if (typeof want?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(want.pub)) return false
     if (!Array.isArray(want.domains) || want.domains.length === 0 || want.domains.length > 32 || !want.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return false
@@ -161,11 +178,14 @@ const offerDigest = (o: OfferAd) => sha256(utf8(offerCanonical(o)))
 const offerKey = (o: OfferAd) => `${o.pub}:${o.shard}:${o.seq}`
 
 export function signOffer (key: PrivateKey, fields: Omit<OfferAd, 'pub'>): SignedOffer {
-  const offer: OfferAd = { ...fields, domains: [...fields.domains].sort(), pub: key.toPublicKey().toString() }
+  const pub = key.toPublicKey().toString()
+  const sr = fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'offer')
+  const offer: OfferAd = { ...fields, ...sr, domains: [...fields.domains].sort(), pub }
   return { offer, sig: toHex(Uint8Array.from(key.sign(Array.from(offerDigest(offer))).toDER() as number[])) }
 }
 
 export function verifyOffer (offer: OfferAd, sigHex: string): boolean {
+  if (offer.streamSeq === undefined || offer.prevHash === undefined) return false // v2: stream fields required
   try {
     if (typeof offer?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(offer.pub)) return false
     if (typeof offer.shard !== 'string' || offer.shard.length === 0 || offer.shard.length > 64) return false
@@ -1064,6 +1084,8 @@ const delegationDigest = (g: DelegationAd) => sha256(utf8(delegationCanonical(g)
 export function signDelegation (key: PrivateKey, fields: Omit<DelegationAd, 'ownerPub'>): SignedDelegation {
   const grant: DelegationAd = {
     ...fields,
+    perActionCapSats: fields.perActionCapSats ?? fields.spendCapSats,
+    totalCapSats: fields.totalCapSats ?? fields.spendCapSats,
     scope: { tools: fields.scope.tools ? [...fields.scope.tools].sort() : undefined, domains: fields.scope.domains ? [...fields.scope.domains].sort() : undefined },
     ownerPub: key.toPublicKey().toString()
   }
@@ -1085,6 +1107,7 @@ export function delegationSubset (child: DelegationAd, parent: DelegationAd): bo
 }
 
 export function verifyDelegation (grant: DelegationAd, sigHex: string): boolean {
+  if (grant.perActionCapSats === undefined || grant.totalCapSats === undefined) return false // v2: explicit caps required
   try {
     if (typeof grant?.grantId !== 'string' || grant.grantId.length === 0 || grant.grantId.length > 128) return false
     for (const p of [grant.ownerPub, grant.granteePub]) if (typeof p !== 'string' || !/^[0-9a-f]{66}$/i.test(p)) return false

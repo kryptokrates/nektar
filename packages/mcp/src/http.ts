@@ -123,44 +123,74 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
         const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${host}`
         // receipts — newest last N
         const rrecs = await mem.records('__receipts__').catch(() => [] as Array<{ seq: number, data?: string }>) as Array<{ seq: number, data?: string }>
-        const receipts = rrecs.slice(-10).reverse().map(r => {
+        const receiptRows = rrecs.slice(-10).reverse().map(r => {
           let amt = '', tool = ''
           const m = r.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
           if (m) { try { const j = JSON.parse(Buffer.from(m[1]!, 'base64url').toString()); amt = String(j.payment?.amountSats ?? j.payment?.amount ?? ''); tool = String(j.tool ?? j.toolName ?? '') } catch {} }
-          return `<tr><td>${r.seq}</td><td>${esc(tool)}</td><td>${amt ? esc(amt) + ' sats' : '—'}</td><td><a href="${base}/v1/verify?s=${r.seq}&format=html">verify</a></td></tr>`
+          return `<div class="row"><span class="dim">#${r.seq}</span><span>${esc(tool || 'answer')}</span><span>${amt ? esc(amt) + ' sats' : ''}</span><a class="pill" href="${base}/v1/verify?s=${r.seq}&format=html">verify ↗</a></div>`
         }).join('')
         // market — offerable shards + autorespond + fraud
         const cat = await mem.shardCatalog().catch(() => [] as Array<{ shard: string, domains: string[], offers?: Array<{ kind: string, priceSats: number }> }>)
-        const marketRows = cat.map(m => `<tr><td>${esc(m.shard)}</td><td>${esc(m.domains.join(', '))}</td><td>${esc(m.offers?.map(o => `${o.kind}@${o.priceSats}`).join(', ') ?? '—')}</td></tr>`).join('')
+        const marketRows = cat.map(m => `<div class="row"><span><b>${esc(m.shard)}</b></span><span class="dim">${esc(m.domains.join(', '))}</span><span>${esc(m.offers?.map(o => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? '')}</span></div>`).join('')
         const dataDir = (mem as unknown as { opts?: { dataDir?: string } }).opts?.dataDir ?? '.nektar'
-        let autoRow = '<tr><td colspan="3">autorespond not configured</td></tr>'
+        let autoLine = ''
         try {
           const { readFileSync, existsSync } = await import('node:fs')
           const { join } = await import('node:path')
           const st = join(dataDir, 'autorespond.state.json')
-          if (existsSync(st)) { const s = JSON.parse(readFileSync(st, 'utf8')); autoRow = `<tr><td colspan="3">autorespond: ${(s.responded ?? []).length} wants answered</td></tr>` }
+          if (existsSync(st)) { const s = JSON.parse(readFileSync(st, 'utf8')); autoLine = `<div class="row dim">autorespond — ${(s.responded ?? []).length} wants answered</div>` }
         } catch {}
-        let fraudRows = '<tr><td colspan="3">no fraud events</td></tr>'
+        let fraudRows = ''
         const rv = process.env.NEKTAR_OVERLAY_URL
         if (rv) {
           try {
             const fr = await fetch(`${rv.replace(/\/+$/, '')}/events?kind=fraud&since=-1`, { signal: AbortSignal.timeout(5000) })
             const fj = await fr.json() as { events?: Array<{ seq: number, pub: string }> }
-            if (fj.events?.length) fraudRows = fj.events.slice(-5).map(e => `<tr><td colspan="3">fraud #${e.seq} — ${esc(String(e.pub).slice(0, 16))}…</td></tr>`).join('')
-          } catch { fraudRows = '<tr><td colspan="3">rendezvous unreachable</td></tr>' }
-        } else fraudRows = '<tr><td colspan="3">no NEKTAR_OVERLAY_URL — fraud feed not configured</td></tr>'
+            if (fj.events?.length) fraudRows = fj.events.slice(-5).map(e => `<div class="row"><span class="warn">fraud</span> <span class="dim">#${e.seq} · ${esc(String(e.pub).slice(0, 16))}…</span></div>`).join('')
+          } catch {}
+        }
         const f = d.funding as Record<string, unknown>
-        const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>nektar dashboard</title>
-<style>body{background:#0d0d0d;color:#ddd;font:14px/1.5 monospace;max-width:840px;margin:2em auto;padding:0 1em}h1{color:#f5b301;font-size:1.4em}h2{color:#f5b301;font-size:1em;margin-top:2em;border-bottom:1px solid #333;padding-bottom:.3em}table{width:100%;border-collapse:collapse}td{padding:.3em .5em;border-bottom:1px solid #222}a{color:#f5b301}.dim{color:#777}code{background:#1a1a1a;padding:.1em .4em}</style></head><body>
-<h1>nektar — operator dashboard</h1>
-<p class="dim">${esc(d.network)} · pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code> · uptime ${Math.floor(process.uptime() / 60)}m · auto-refresh 30s</p>
-<h2>Money</h2>
-<p>balance <b>${esc(f.balanceSats ?? f.satoshis ?? '—')}</b> sats · funded: ${esc(f.funded ?? 'n/a')} · payments: ${esc(d.payments)} · utxos: ${esc(f.utxoCount ?? f.utxos ?? '—')}</p>
-<h2>Receipts</h2>
-<table>${receipts || '<tr><td colspan="4" class="dim">no receipts yet</td></tr>'}</table>
-<h2>Market</h2>
-<table><tr class="dim"><td>shard</td><td>domains</td><td>offers</td></tr>${marketRows || '<tr><td colspan="3" class="dim">no described shards</td></tr>'}${autoRow}${fraudRows}</table>
-<p class="dim">${d.shards} shards · ${d.records} records · ${d.anchoredRecords} anchored · ${d.unprovenAnchors} unproven · prover: ${esc(d.prover)}</p>
+        const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
+        const up = process.uptime()
+        const upStr = up > 86400 ? `${Math.floor(up / 86400)}d` : up > 3600 ? `${Math.floor(up / 3600)}h` : `${Math.floor(up / 60)}m`
+        const badge = (on: boolean, yes: string, no: string) => `<span class="badge ${on ? 'on' : 'off'}">${on ? yes : no}</span>`
+        const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>nektar — operator</title>
+<style>
+body{background:#0d0d0d;color:#eaeaea;font:14px/1.6 ui-monospace,monospace;max-width:880px;margin:0 auto;padding:48px 20px}
+header{margin-bottom:40px}h1{font-size:22px;margin:0 0 6px;font-weight:600}
+.sub{color:#888;font-size:13px}.sub code{background:#1a1a1a;padding:1px 6px;border-radius:3px;color:#bbb}
+.card{background:#161616;border:1px solid #262626;border-radius:10px;padding:20px 22px;margin-bottom:16px}
+.label{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margin-bottom:12px}
+.big{font-size:30px;color:#f5b301;font-weight:600}.big small{font-size:14px;color:#888;font-weight:400}
+.meta{color:#888;font-size:13px;margin-top:8px}
+.badge{display:inline-block;font-size:11px;padding:2px 10px;border-radius:20px;margin-left:8px}
+.badge.on{background:#1c2b1e;color:#4cc26b}.badge.off{background:#222;color:#777}
+.row{display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #1f1f1f;font-size:13px}
+.row:last-child{border-bottom:none}.row .dim{color:#777}.row b{color:#eaeaea;font-weight:600}
+.pill{margin-left:auto;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:20px;padding:2px 12px;color:#f5b301;text-decoration:none;font-size:12px}
+a{color:#f5b301;text-decoration:none}.warn{color:#e5534b}
+.empty{color:#666;font-size:13px;padding:6px 0}
+footer{margin-top:28px;color:#555;font-size:12px}
+</style></head><body>
+<header>
+<h1>nektar</h1>
+<div class="sub">${esc(d.network)} · pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code> · up ${upStr} · refresh 30s</div>
+</header>
+<div class="card">
+<div class="label">Money</div>
+<div class="big">${bal.toLocaleString()} <small>sats</small>${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'payments on', 'payments off')}</div>
+<div class="meta">${esc(f.utxoCount ?? f.utxos ?? '—')} utxos in reserve</div>
+</div>
+<div class="card">
+<div class="label">Receipts</div>
+${receiptRows || '<div class="empty">no receipts yet — your agent hasn’t answered anything</div>'}
+</div>
+<div class="card">
+<div class="label">Market</div>
+${marketRows || '<div class="empty">nothing for sale yet — describeShard a public shard to list it</div>'}
+${autoLine}${fraudRows}
+</div>
+<footer>${d.shards} shards · ${d.records} records · ${d.anchoredRecords} anchored · ${d.unprovenAnchors} unproven · prover: ${esc(d.prover)}</footer>
 </body></html>`
         return send(200, html, 'text/html; charset=utf-8')
       }

@@ -319,7 +319,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
       // confirmations arrive as events, not polls
       if (req.method === 'POST' && url.pathname === '/v1/arc-callback') {
         try {
-          const j = await body(req)
+          const j = (await body(req)) as any
           mem.metrics.inc('nektar_arc_callbacks_total', { status: String(j.txStatus ?? '?').toLowerCase() }, 1, 'ARC status callbacks received')
           mem.events.emit('arcStatus', { txid: j.txid, status: j.txStatus, detail: j.extraInfo })
           return send(200, { ok: true })

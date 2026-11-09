@@ -104,7 +104,7 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
     // bearer token — the gate that makes a public bind safe. Unset =
     // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
     const tok = process.env.NEKTAR_HTTP_TOKEN
-    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname === '/.well-known/nektar' || url.pathname.startsWith('/v1/pack/') || url.pathname.startsWith('/v1/zkproof/')
+    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname === '/.well-known/nektar' || url.pathname.startsWith('/v1/pack/') || url.pathname.startsWith('/v1/zkproof/') || url.pathname === '/v1/arc-callback'
     if (tok && !publicPath && req.headers.authorization !== `Bearer ${tok}`) {
       return send(401, { error: 'unauthorized' })
     }
@@ -313,6 +313,17 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
         } catch {
           return send(200, badgeSvg('unverifiable', '#6e7681'), 'image/svg+xml; charset=utf-8')
         }
+      }
+      // ARC tx-status callback — the broadcaster pushes SEEN_ON_NETWORK →
+      // MINED etc. for every tx we submitted with X-CallbackUrl, so anchor
+      // confirmations arrive as events, not polls
+      if (req.method === 'POST' && url.pathname === '/v1/arc-callback') {
+        try {
+          const j = JSON.parse(await body(req) || '{}')
+          mem.metrics.inc('nektar_arc_callbacks_total', { status: String(j.txStatus ?? '?').toLowerCase() }, 1, 'ARC status callbacks received')
+          mem.events.emit('arcStatus', { txid: j.txid, status: j.txStatus, detail: j.extraInfo })
+          return send(200, { ok: true })
+        } catch { return send(400, { error: 'bad callback' }) }
       }
       if (req.method === 'GET' && url.pathname === '/.well-known/x402') {
         const { paymentsEnabled, PAID_TOOLS, priceFor } = await import('./pay.js')

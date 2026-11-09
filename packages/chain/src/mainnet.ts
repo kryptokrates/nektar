@@ -8,6 +8,7 @@ import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOu
 export interface MainnetConfig {
   arcUrl?: string // BSV Broadcaster (ex-Arcade) or classic ARC base (no trailing slash)
   arcApiKey?: string
+  callbackUrl?: string // our public base — ARC pushes tx-status updates here (X-CallbackUrl)
   wocUrl?: string // WhatsOnChain base (no trailing slash)
   wocApiKey?: string
   chaintracksUrl?: string // chaintracks base incl. /v1|/v2 — header source for BUMP verification
@@ -17,6 +18,7 @@ export interface MainnetConfig {
 const def = (c?: MainnetConfig) => ({
   // BSV Broadcaster (formerly Arcade; the ARC successor) — GorillaPool instance
   arcUrl: c?.arcUrl ?? 'https://arcade.gorillapool.io',
+  callbackUrl: c?.callbackUrl ?? process.env.NEKTAR_CALLBACK_URL,
   wocUrl: c?.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main',
   fetch: c?.fetchImpl ?? fetch,
   arcApiKey: c?.arcApiKey,
@@ -41,6 +43,9 @@ export class ArcBroadcaster implements Broadcaster {
     const { arcUrl, wocUrl } = this.cfg
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }
     if (this.cfg.arcApiKey) headers.Authorization = `Bearer ${this.cfg.arcApiKey}`
+    // ARC callback — the broadcaster pushes status updates (MINED et al.) to
+    // our endpoint instead of us polling /v1/tx/{txid}
+    if (this.cfg.callbackUrl) headers['X-CallbackUrl'] = `${this.cfg.callbackUrl}/v1/arc-callback`
     try {
       // classic ARC: /v1/tx; BSVA Arcade: /tx (404 on /v1/tx) — learn once per URL
       // Extended Format when every input carries its source tx (Arcade requires it

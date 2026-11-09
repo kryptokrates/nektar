@@ -52,7 +52,13 @@ const overlay = await createNektarOverlay(
   // strict by default — only SPV-verified (net+tip-bound) artifacts land on the
   // feed; NEKTAR_OVERLAY_STRICT_NET=0 relaxes for dev/compat
   { net: NET, strictNet: process.env.NEKTAR_OVERLAY_STRICT_NET !== '0',
-    maxAgeMs: Number(process.env.NEKTAR_OVERLAY_MAX_AGE_MS ?? 86_400_000) }
+    maxAgeMs: Number(process.env.NEKTAR_OVERLAY_MAX_AGE_MS ?? 86_400_000),
+    // bstore-style: exp beyond the free window costs rateSatsPerHour per hour
+    listingFee: process.env.NEKTAR_LISTING_ADDR ? {
+      addr: process.env.NEKTAR_LISTING_ADDR,
+      rateSatsPerHour: Number(process.env.NEKTAR_LISTING_RATE_SATS_PER_HOUR ?? 10),
+      freeWindowMs: Number(process.env.NEKTAR_LISTING_FREE_WINDOW_MS ?? 3_600_000)
+    } : undefined }
 )
 setInterval(() => { const n = overlay.lsPresence.sweep?.(); if (n) console.log(`[rendezvous] sweep: ${n} expired entries evicted`) }, 300_000)
 console.log(`[rendezvous] network=${NET} db=${path.join(DIR, 'overlay.sqlite')} listening ${HOST}:${PORT}`)
@@ -66,6 +72,15 @@ const t0 = Date.now()
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'x'}`)
+    if (req.method === 'GET' && url.pathname === '/listing-fee') {
+      const lf = process.env.NEKTAR_LISTING_ADDR ? {
+        addr: process.env.NEKTAR_LISTING_ADDR,
+        rateSatsPerHour: Number(process.env.NEKTAR_LISTING_RATE_SATS_PER_HOUR ?? 10),
+        freeWindowMs: Number(process.env.NEKTAR_LISTING_FREE_WINDOW_MS ?? 3_600_000),
+        note: 'exp beyond the free window requires pay:{beef} — a tx paying rate/hour to addr'
+      } : { enabled: false, note: 'no listing fee — set NEKTAR_LISTING_ADDR to charge for exp beyond the free window' }
+      return json(res, 200, lf)
+    }
     if (req.method === 'GET' && url.pathname === '/health') {
       const dir = await overlay.lsPresence.lookup({ query: { all: true } })
       return json(res, 200, { ok: true, agents: dir.length, uptime: Math.floor((Date.now() - t0) / 1000) })

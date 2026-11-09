@@ -95,7 +95,7 @@ export interface WantAd {
    *  against real headers, so a ttn-signed artifact can't fake being mainnet */
   tip?: string
 }
-export interface SignedWant { want: WantAd, sig: string }
+export interface SignedWant { want: WantAd, sig: string, pay?: { beef?: number[] | string } }
 
 const wantCanonical = (w: WantAd) => `${[...w.domains].sort().join(',')}|${w.question ?? ''}|${w.maxSats ?? ''}|${w.endpoint ?? ''}|${w.ts}|${w.exp ?? ''}|${w.net ?? ''}|${w.tipHeight ?? ''}|${w.tip ?? ''}`
 const wantDigest = (w: WantAd) => sha256(utf8(wantCanonical(w)))
@@ -149,7 +149,7 @@ export interface OfferAd {
    *  against real headers, so a ttn-signed artifact can't fake being mainnet */
   tip?: string
 }
-export interface SignedOffer { offer: OfferAd, sig: string }
+export interface SignedOffer { offer: OfferAd, sig: string, pay?: { beef?: number[] | string } }
 
 const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}|${o.replyTo ?? ''}|${o.net ?? ''}|${o.tipHeight ?? ''}|${o.tip ?? ''}`
 const offerDigest = (o: OfferAd) => sha256(utf8(offerCanonical(o)))
@@ -386,7 +386,7 @@ export function createTmPresence (): TopicManager {
 interface Stored { ad: PresenceAd, txid: string, outputIndex: number }
 interface StoredCatalog { sc: SignedCatalog }
 
-export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: boolean, maxAgeMs?: number, tracker?: { headerAtHeight: (h: number) => Promise<{ hash: string } | undefined> } }): LookupService & {
+export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: boolean, maxAgeMs?: number, listingFee?: { addr?: string, rateSatsPerHour?: number, freeWindowMs?: number }, tracker?: { headerAtHeight: (h: number) => Promise<{ hash: string } | undefined> } }): LookupService & {
   init: () => Promise<void>
   announce: (s: SignedAd) => Promise<boolean>
   announceCatalog: (sc: SignedCatalog) => Promise<boolean>
@@ -438,6 +438,19 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   // expiry — silence kills listings: explicit exp wins, else ts + TTL (default 24h)
   const MAX_AGE_MS = opts?.maxAgeMs ?? 86_400_000
   const alive = (e: { exp?: number, ts: number }) => (e.exp ?? e.ts + MAX_AGE_MS) > Date.now()
+  // bstore-style listing fee — exp beyond the free window must be paid for:
+  // `pay:{beef}` = a tx paying rate/hour to the rv's listing address
+  const fee = opts?.listingFee
+  const paidFor = (ts: number, exp: number | undefined, pay?: { beef?: number[] | string }): boolean => {
+    if (!fee?.addr || exp === undefined || exp <= ts + (fee.freeWindowMs ?? 3_600_000)) return true // free window
+    if (!pay?.beef) return false
+    try {
+      const bytes = typeof pay.beef === 'string' ? Array.from({ length: pay.beef.length / 2 }, (_, i) => parseInt((pay.beef as string).slice(i * 2, i * 2 + 2), 16)) : pay.beef
+      const tx = Transaction.fromBEEF(bytes)
+      const want = Math.ceil((exp - ts) / 3_600_000) * (fee.rateSatsPerHour ?? 10)
+      return tx.outputs.some(o => (o.satoshis ?? 0) >= want && (o.lockingScript as unknown as { address?: () => string }).address?.() === fee.addr)
+    } catch { return false }
+  }
   let nextSeq = 0
   const appendEvent = (kind: EventKind, pub: string, domains: string[], payload: unknown) => {
     const e: PresenceEvent = { seq: nextSeq++, kind, pub, domains, ts: Date.now(), payload }
@@ -660,6 +673,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     // output txids); a newer ad (on- or off-chain) replaces it by ts.
     announce: async (s: SignedAd) => {
       if (!verifyPresence(s.ad, s.sig)) return false
+      if (!paidFor(s.ad.ts, s.ad.exp, (s as unknown as { pay?: { beef?: number[] | string } }).pay)) return false
       const prev = ads.get(s.ad.pub)
       if (prev && prev.ad.ts >= s.ad.ts) return true
       const rec: Stored = { ad: s.ad, txid: toHex(digest(s.ad)), outputIndex: 0 }
@@ -688,6 +702,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     // subscribed to its domains see it on their next cursor pull.
     announceWant: async (sw: SignedWant) => {
       if (!verifyWant(sw.want, sw.sig)) return false
+      if (!paidFor(sw.want.ts, sw.want.exp, sw.pay)) return false // exp beyond free window must be paid
       // signed net binding — reject artifacts claiming a different network
       if (opts?.net && ((sw.want.net && sw.want.net !== opts.net) || (opts.strictNet && !sw.want.net))) return false
       // SPV binding — claimed tip must match this chain's header at that height.
@@ -710,6 +725,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
 
     announceOffer: async (so: SignedOffer) => {
       if (!verifyOffer(so.offer, so.sig)) return false
+      if (!paidFor(so.offer.ts, so.offer.exp, so.pay)) return false
       if (opts?.net && ((so.offer.net && so.offer.net !== opts.net) || (opts.strictNet && !so.offer.net))) return false
       if (opts?.tracker) {
         spvCapable ??= !!(await opts.tracker.headerAtHeight(1).catch(() => undefined))

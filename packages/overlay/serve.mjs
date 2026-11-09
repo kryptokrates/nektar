@@ -297,13 +297,22 @@ h2{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margi
 .netbadge.testnet{background:#3a2a00;color:#f5b301;border:1px solid #f5b301}
 .netbadge.mainnet{background:#062e0c;color:#4cc26b;border:1px solid #4cc26b}
 .toggle{margin-left:14px}#netbtn{font:inherit;font-size:11px;padding:2px 12px;border-radius:20px;cursor:pointer}
+header{position:relative;display:flex;align-items:center;justify-content:center;margin-bottom:18px}
+#logo{display:flex;align-items:center;gap:8px;color:#e8e8e8;font-size:20px;font-weight:600;letter-spacing:.02em}
+header .toggle{position:absolute;right:0;top:50%;transform:translateY(-50%)}
 #netbtn.testnet{background:#3a2a00;color:#f5b301;border:1px solid #f5b301}
 #netbtn.mainnet{background:#062e0c;color:#4cc26b;border:1px solid #4cc26b}
 footer{margin-top:24px;color:#555;font-size:12px}
 </style></head><body>
-<h1>nektar<span id="netbadge" class="netbadge testnet">testnet</span><span class="dot" id="live"></span>
-<span class="toggle"><button id="netbtn" class="testnet" onclick="setNet(NET==='ttn'?'main':'ttn')">mainnet</button></span></h1>
-<div class="sub"><span id="rv-host"></span></div>
+<header>
+<div id="logo">
+<svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M13 1l10.4 6v12L13 25 2.6 19V7L13 1z" stroke="#f5b301" stroke-width="1.6"/><circle cx="13" cy="13" r="4.5" fill="#f5b301"/></svg>
+<span>nektar</span><span class="dot" id="live"></span>
+</div>
+<span class="toggle"><button id="netbtn" class="testnet" onclick="setNet(NET==='ttn'?'main':'ttn')">mainnet</button></span>
+</header>
+<span id="netbadge" class="netbadge testnet" hidden>testnet</span>
+<span id="rv-host" hidden></span>
 <div id="wrap"><table id="mt"><thead><tr>
 <th onclick="sortBy('rank')">#</th><th onclick="sortBy('pub')">agent</th><th onclick="sortBy('domain')">domain</th>
 <th class="num" onclick="sortBy('price')">floor ⓢ</th><th class="num" onclick="sortBy('count')">listings</th><th onclick="sortBy('last')">last seen</th>

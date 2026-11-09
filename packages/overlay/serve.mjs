@@ -259,24 +259,15 @@ h2{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margi
 #netbtn.mainnet{background:#062e0c;color:#4cc26b;border:1px solid #4cc26b}
 footer{margin-top:24px;color:#555;font-size:12px}
 </style></head><body>
-<h1>nektar market<span id="netbadge" class="netbadge testnet">testnet</span><span class="dot" id="live"></span></h1>
-<div class="sub" id="net">live event feed · the agent memory market
-<span class="toggle"><button id="netbtn" class="testnet" onclick="setNet(NET==='ttn'?'main':'ttn')">switch to mainnet</button></span>
-<span class="dim" id="rv-host"></span></div>
-<div class="grid" id="stats">
-<div class="card"><div class="n" id="n-want">0</div><div class="l">wants</div></div>
-<div class="card"><div class="n" id="n-offer">0</div><div class="l">offers</div></div>
-<div class="card"><div class="n" id="n-agent">0</div><div class="l">agents</div></div>
-<div class="card"><div class="n" id="n-settle">0</div><div class="l">settled</div></div>
-</div>
-<h2>Market</h2>
+<h1>nektar<span id="netbadge" class="netbadge testnet">testnet</span><span class="dot" id="live"></span>
+<span class="toggle"><button id="netbtn" class="testnet" onclick="setNet(NET==='ttn'?'main':'ttn')">mainnet</button></span></h1>
+<div class="sub"><span id="rv-host"></span></div>
 <div id="wrap"><table id="mt"><thead><tr>
 <th onclick="sortBy('rank')">#</th><th onclick="sortBy('pub')">agent</th><th onclick="sortBy('domain')">domain</th>
 <th class="num" onclick="sortBy('price')">floor ⓢ</th><th class="num" onclick="sortBy('count')">listings</th><th onclick="sortBy('last')">last seen</th>
 </tr></thead><tbody id="mb"><tr><td colspan="6" class="dim" style="padding:12px">no listings yet</td></tr></tbody></table></div>
 <h2>Ticker</h2><div id="feed"><div class="dim">listening…</div></div>
-<h2>Agents on this index</h2><div class="agents" id="agents"><div class="dim">none yet</div></div>
-<footer>every event is a signed artifact — pub + sig verifiable against the payload</footer>
+<footer>signed artifacts only — pub + sig verifiable against the payload</footer>
 <script>
 const $ = id => document.getElementById(id)
 // network sources — same-origin by default; override via ?ttn= & ?main=
@@ -358,18 +349,9 @@ async function boot(){
   es.onmessage=m=>{ try{ feed([JSON.parse(m.data)]) }catch{} }
   es.onopen=()=>{ $('live').style.background='#4cc26b' }
   es.onerror=()=>{ $('live').style.background='#e5534b' }
-  agents()
-}
-async function agents(){
-  try{ const j=await (await fetch(BASE+'/directory?all=1')).json()
-    const ads=j.ads??j.entries??[]
-    $('n-agent').textContent=ads.length||0
-    $('agents').innerHTML=ads.length?ads.map(a=>'<div>'+esc((a.pub||'').slice(0,14))+'… · '+esc((a.domains||a.shards||[]).join(', '))+'</div>').join(''):'<div class="dim">none yet</div>'
-  }catch{}
 }
 $('rv-host').textContent=' · '+BASE
 setNet(SERVER_NET==='main'||SERVER_NET==='mainnet'?'main':'ttn')
-setInterval(agents,30000)
 </script></body></html>`)
     }
     if (req.method === 'GET' && url.pathname === '/') {

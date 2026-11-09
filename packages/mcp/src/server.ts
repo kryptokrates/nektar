@@ -1362,7 +1362,8 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         priceSats: Math.max(0, Math.floor(Number(args?.priceSats ?? 0))),
         ...(args?.offer !== undefined ? { offer: args.offer } : {}),
         ...(args?.replyTo !== undefined ? { replyTo: String(args.replyTo) } : {}),
-        ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {})
+        ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {}),
+        net: process.env.NEKTAR_NETWORK ?? 'ttn', tipHeight: await mem.chainHeight().catch(() => undefined)
       }
       if (!fields.domains.length) throw new Error('publishOffer: no domains — describeShard first or pass {domains}')
       const signed = signOffer(mem.operatorKey(), fields)
@@ -1380,7 +1381,8 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         domains,
         ...(args?.maxSats !== undefined ? { maxSats: Math.max(0, Math.floor(Number(args.maxSats))) } : {}),
         ...(args?.desc ? { desc: String(args.desc).slice(0, 512) } : {}),
-        ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {})
+        ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {}),
+        net: process.env.NEKTAR_NETWORK ?? 'ttn', tipHeight: await mem.chainHeight().catch(() => undefined)
       }
       const signed = signWant(mem.operatorKey(), fields)
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
@@ -1468,7 +1470,8 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         ...(a.leaf ? { leaf: String(a.leaf) } : {}), ...(a.hdp ? { hdp: String(a.hdp) } : {}), ...(a.batchR ? { batchR: String(a.batchR) } : {}),
         priceSats: Math.max(0, Math.floor(Number(a.priceSats ?? 0))),
         ...(a.offer !== undefined ? { offer: a.offer } : {}), replyTo: a.wantPub ?? a.replyTo,
-        ts: Date.now(), ...(a.exp !== undefined ? { exp: Number(a.exp) } : {})
+        ts: Date.now(), ...(a.exp !== undefined ? { exp: Number(a.exp) } : {}),
+        net: process.env.NEKTAR_NETWORK ?? 'ttn', tipHeight: await mem.chainHeight().catch(() => undefined)
       }
       if (!fields.domains.length) throw new Error('respond: no domains — describeShard first or pass {domains}')
       const signed = signOffer(mem.operatorKey(), fields)

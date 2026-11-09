@@ -87,10 +87,14 @@ export interface WantAd {
   endpoint?: string // where sellers can answer back
   ts: number
   exp?: number
+  /** signed network binding — 'ttn'|'main'|etc; sig covers it (can't replay cross-net) */
+  net?: string
+  /** the publisher's chain tip height at publish — a verifiable timeline claim */
+  tipHeight?: number
 }
 export interface SignedWant { want: WantAd, sig: string }
 
-const wantCanonical = (w: WantAd) => `${[...w.domains].sort().join(',')}|${w.question ?? ''}|${w.maxSats ?? ''}|${w.endpoint ?? ''}|${w.ts}|${w.exp ?? ''}`
+const wantCanonical = (w: WantAd) => `${[...w.domains].sort().join(',')}|${w.question ?? ''}|${w.maxSats ?? ''}|${w.endpoint ?? ''}|${w.ts}|${w.exp ?? ''}|${w.net ?? ''}|${w.tipHeight ?? ''}`
 const wantDigest = (w: WantAd) => sha256(utf8(wantCanonical(w)))
 
 export function signWant (key: PrivateKey, fields: Omit<WantAd, 'pub'>): SignedWant {
@@ -134,10 +138,14 @@ export interface OfferAd {
   offer?: Record<string, unknown> // the raw DisclosureSale offer (cfg/wrapped/sellerPub/offerSig/expiresAt/commitment)
   ts: number
   exp?: number
+  /** signed network binding — 'ttn'|'main'|etc; sig covers it (can't replay cross-net) */
+  net?: string
+  /** the publisher's chain tip height at publish — a verifiable timeline claim */
+  tipHeight?: number
 }
 export interface SignedOffer { offer: OfferAd, sig: string }
 
-const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}|${o.replyTo ?? ''}`
+const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}|${o.replyTo ?? ''}|${o.net ?? ''}|${o.tipHeight ?? ''}`
 const offerDigest = (o: OfferAd) => sha256(utf8(offerCanonical(o)))
 const offerKey = (o: OfferAd) => `${o.pub}:${o.shard}:${o.seq}`
 

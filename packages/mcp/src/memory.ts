@@ -1966,8 +1966,21 @@ export class NektarMemory {
           unverifiable.push(`${p.shard}:${r.seq}: imported data does not recompute the bundle's leaf`)
           continue
         }
-        const v = await verifyFragment(rec.bundle, this.chain)
-        if (v.ok) { this.importedBundles.set(`${p.shard}:${r.seq}`, rec.bundle); anchored++ }
+        // N10 — consume the pack's evidence: if the record's own bundle anchor
+        // has no BUMP but evidence[txid] supplies one, substitute it. The
+        // importer's own header chain still decides mining — never the
+        // exporter's word.
+        let bundle = rec.bundle
+        try {
+          const btx = Transaction.fromAtomicBEEF(bundle.anchorBEEF)
+          const evtx = this.anchorTxs.get(btx.id('hex'))
+          if (!btx.merklePath && evtx?.merklePath) {
+            btx.merklePath = evtx.merklePath
+            bundle = { ...bundle, anchorBEEF: Array.from(btx.toAtomicBEEF()) }
+          }
+        } catch {}
+        const v = await verifyFragment(bundle, this.chain)
+        if (v.ok) { this.importedBundles.set(`${p.shard}:${r.seq}`, bundle); anchored++ }
         else unverifiable.push(`${p.shard}:${r.seq}: ${v.reason}`)
       }
     }

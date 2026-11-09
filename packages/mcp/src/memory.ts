@@ -11,6 +11,7 @@ import { PrivateKey, PublicKey, Signature, Transaction, LockingScript, P2PKH, Sa
 import {
   utf8, fromHex, toHex, sha256, dsha256, concat, field, eq, hash160,
   computeLeaf, merkleRoot, merkleProof, identityHash, diff, apply, encodeDelta, decodeDelta,
+  serializeFragment, parseFragment,
   TAG_RECEIPT_SIG,
   type Fragment, type Bytes, type Provenance
 } from '@nektar/core'
@@ -130,6 +131,9 @@ export interface ShardPack {
   manifest?: ShardManifest
   records: Array<{
     seq: number, data: string, level?: number, bundle?: ProofBundle
+    /** serialized fragment hex — carries E/hdp so encrypted records re-land
+     *  byte-identically and their bundle leaf re-verifies (S3) */
+    frag?: string
     prov?: { source?: string, time?: number, signature?: string, modelId?: string, modality?: Provenance['modality'] }
   }>
   /** anchorTxid → AtomicBEEF hex — the inclusion evidence for anchored records;
@@ -1900,6 +1904,11 @@ export class NektarMemory {
       records.push({
         seq: r.seq,
         data: Buffer.from(r.fragment.d).toString('utf8'),
+        // the wire form of the fragment itself — encrypted records have d=''
+        // with the payload inside E, so `data` alone can never rebuild them.
+        // Carrying the serialized fragment lets an importer re-land the record
+        // byte-identically and re-verify its leaf (S3 pack integrity).
+        frag: toHex(serializeFragment(r.fragment)),
         prov: {
           source: r.fragment.p.source,
           time: r.fragment.p.time,
@@ -1916,7 +1925,6 @@ export class NektarMemory {
     // lets any verifier check inclusion against ITS headers, offline, without
     // trusting this host. Records cite anchorTxid; evidence carries the proof.
     const evidence: Record<string, string> = {}
-    const { toHex } = await import('@nektar/core')
     for (const r of recs) {
       if (r.anchorTxid === undefined) continue
       const tx = this.anchorTxs.get(r.anchorTxid)
@@ -1957,7 +1965,16 @@ export class NektarMemory {
           ? new Uint8Array(Buffer.from((rec.prov as Record<string, unknown>).signature as string, 'hex'))
           : new Uint8Array(0)
       } as Partial<Provenance> : undefined
-      const r = await this.remember(p.shard, rec.data, prov, rec.level ?? 0)
+      let r
+      if (typeof rec.frag === 'string' && rec.frag.length > 0) {
+        // verbatim fragment — preserves E/hdp so the re-landed record's leaf
+        // recomputes exactly to the exporter's committed bundle (S3)
+        const frag = parseFragment(fromHex(rec.frag))
+        const { rec: lr } = await this.log.remember(p.shard, frag, { level: rec.level ?? 0 })
+        r = { seq: lr.seq, leaf: toHex(lr.leaf) }
+      } else {
+        r = await this.remember(p.shard, rec.data, prov, rec.level ?? 0)
+      }
       if (r.seq !== rec.seq) { skipped++; continue } // dedup/position drift — don't fabricate seqs
       imported++
       if (rec.bundle) {

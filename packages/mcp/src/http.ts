@@ -71,7 +71,7 @@ export const OPENAPI = {
 async function body (req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = []
   let size = 0
-  for await (const c of req) { size += (c as Buffer).length; if (size > 1_000_000) throw new Error('body too large'); chunks.push(c as Buffer) }
+  for await (const c of req) { size += (c as Buffer).length; if (size > 16_000_000) throw new Error('body too large'); chunks.push(c as Buffer) }
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
 }
 

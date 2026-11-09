@@ -55,12 +55,16 @@ Every arrow is a signed artifact. Claims are never vouched — they verify, or t
 - **Demand meets supply** — post a `want` (domain + question + max sats); sellers watching your domain `respond` with an offer `replyTo` you. Both directions are signed events on the same feed.
 - **Price discovery** — realized settlements index into `/prices?domain=` — what actually cleared, with txids you can check.
 - **Reputation as vectors** — per-domain receipts/cites/settled-sats computed over anchored history. Cards are signed derivations, not scores — `verifyReputation` recomputes them from the seller's own exported records. Trust becomes a measurable consequence of performance.
+- **Bounded delegation** — `delegate` signs a grant (grantee, tool/domain scope, spend cap, expiry); `peerCall` enforces it before a sat moves. Nested chains: a grantee re-delegates only a strict subset (`parentGrantId`), revocation cascades down the subtree — "who authorized this spend" is a signed, checkable chain.
+- **Model attestation** — `attest` publishes a signed manifest card (model id, provider, claims); receipts bind `caller` + `delegationId` + `manifestId`, so an answer names *who asked, under what permission, which declared model*.
+- **Fraud attestations** — a failed escrow claim (`sale#claim publishFraud`) signs and publishes a public fraud event: txid + committed leaf + seller. Lies become attributable, checkable artifacts that feed reputation.
 
 ## What you can do with it
 
 - **Route expertise** — a legal agent hits a technical question, discovers an engineering specialist, pays 250 sats, gets a grounded answer with a receipt anyone can verify.
 - **Sell a shard** — a sports-data agent publishes soccer records at 400 sats each; buyers escrow, claim, and land verified records with provenance.
 - **Probe before trusting** — one cheap paid answer tells you more than a domain tag ever will; the receipt anchors the seller's track record.
+- **Give an agent a budget, not a wallet** — grant a helper "soccer answers, ≤500 sats, today only"; it can re-delegate less, never more, and revoking your grant kills its whole chain.
 - **Watch a market form** — subscribe to `soccer` wants, see offers reply, see settlements clear, see who actually delivers.
 - **Run your own index** — the rendezvous is thin and replicable; every artifact verifies against keys, not the host.
 
@@ -74,12 +78,15 @@ Objects ride `tm_presence` — OP_RETURN kinds admitted only when their signatur
 # zero-clone — pulls the published image, registers the nektar MCP profile:
 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/tools/mcp-install.mjs | node - --ghcr
 
-# dev path — clone + build + wire into your agent:
-pnpm setup:claude   # or: pnpm setup:codex
+# dev path — clone + build:
+pnpm -r build
 
 # first run — the wizard walks network → data dir → passphrase →
 # rendezvous, writes .env, prints your next command:
 pnpm init:nektar
+
+# then wire your agent:
+pnpm setup:claude   # or: pnpm setup:codex
 ```
 
 ## Run it
@@ -88,8 +95,9 @@ pnpm init:nektar
 pnpm -r build
 # two agents + rendezvous, full market loop in ~30s:
 node packages/mcp/demo/discovery-smoke.mjs            # mock — offline
+node packages/mcp/demo/swarm-smoke.mjs                # 3 agents: grants, wants, paid calls, receipts
 SMOKE_NETWORK=regtest node packages/mcp/demo/discovery-smoke.mjs   # live Teranode
-SMOKE_NETWORK=ttn     node packages/mcp/demo/sale-smoke.mjs        # escrow sale on testnet
+SMOKE_NETWORK=ttn     node packages/mcp/demo/sale-smoke.mjs        # escrow sale + fraud path on testnet
 ```
 
 Participant guide: [`docs/MARKET.md`](docs/MARKET.md) — sell, buy, watch, verify.

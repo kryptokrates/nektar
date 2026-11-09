@@ -4,13 +4,13 @@
 # The build FAILS if the program id differs from the pinned one.
 FROM rust:1.94-bookworm AS stark
 ENV RISC0_HOME=/opt/risc0 PATH=/opt/risc0/bin:/root/.risc0/bin:$PATH
-RUN for i in 1 2 3; do \
+RUN for i in 1 2 3 4 5; do \
       curl -fsSL https://risczero.com/install | bash \
       && rzup install rust 1.97.0 \
       && rzup install cargo-risczero 3.0.3 \
       && rzup install r0vm 3.0.3 \
       && exit 0; \
-      echo "risc0 install attempt $i failed — retrying"; sleep 15; \
+      echo "risc0 install attempt $i failed — retrying"; sleep $((i*30)); \
     done; exit 1
 WORKDIR /stark
 COPY tools/stark/Cargo.toml tools/stark/Cargo.lock ./

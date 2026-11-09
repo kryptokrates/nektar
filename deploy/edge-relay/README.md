@@ -29,7 +29,11 @@ services:
   rv:
     build: ../../   # packages/overlay/serve.mjs
     environment:
-      - NEKTAR_OVERLAY_HOST=127.0.0.1
+      # bind to the container interface — 127.0.0.1 would hide it from the
+      # relay; the `edge` network keeps it private, and `expose` (not `ports`)
+      # means the host never publishes it. Enforce the boundary with a
+      # network policy / firewall rule in production.
+      - NEKTAR_OVERLAY_HOST=0.0.0.0
       - NEKTAR_OVERLAY_PORT=8090
       - NEKTAR_NETWORK=testnet
       - NEKTAR_PEERS=${NEKTAR_PEERS}

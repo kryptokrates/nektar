@@ -16,12 +16,20 @@ export class BudgetAuthority {
 
   constructor (dir: string) {
     this.file = path.join(dir, 'budget.json')
+    const revokedFile = `${this.file}.revoked`
+    try { this.revoked = new Set(JSON.parse(fs.readFileSync(revokedFile, 'utf8'))) } catch {}
     try { this.ledger = JSON.parse(fs.readFileSync(this.file, 'utf8')) } catch { this.ledger = {} }
   }
+
+  private revokedFile (): string { return `${this.file}.revoked` }
 
   /** atomic write — a torn save must never read back as an empty ledger (R2) */
   private save (): void {
     try { const tmp = `${this.file}.tmp`; fs.writeFileSync(tmp, JSON.stringify(this.ledger, null, 1)); fs.renameSync(tmp, this.file) } catch {}
+  }
+
+  private saveRevoked (): void {
+    try { const tmp = `${this.revokedFile()}.tmp`; fs.writeFileSync(tmp, JSON.stringify([...this.revoked])); fs.renameSync(tmp, this.revokedFile()) } catch {}
   }
 
   /** declare a grant's lifetime cap + its ancestor chain */
@@ -32,8 +40,8 @@ export class BudgetAuthority {
     this.save()
   }
 
-  /** mark a grant revoked — new reservations reject immediately (R2/R7) */
-  revoke (grantId: string): void { this.revoked.add(grantId) }
+  /** mark a grant revoked — new reservations reject immediately (R2/R7); persisted (N6) */
+  revoke (grantId: string): void { this.revoked.add(grantId); this.saveRevoked() }
   isRevoked (grantId: string): boolean { return this.revoked.has(grantId) }
 
   /** reserve allInSats under grantId — 'ok' reserved, 'exists' idempotent hit,
@@ -44,11 +52,18 @@ export class BudgetAuthority {
     if (!g) return 'no-cap'
     if (actionId in (g.completed ?? {})) return 'exists' // R2: completed actions replay as idempotent hits, never re-debit
     if (actionId in g.reservations) return 'exists'
-    // own + every ancestor's invariant: committed + outstanding ≤ cap (R2)
+    // own + every ancestor's invariant: committed + outstanding ≤ cap (R2/N4).
+    // The reservation is written to EVERY ancestor too, under a shared key —
+    // a sibling's pending reservation becomes visible to other children.
     const wouldBreach = (lg: GrantLedger) => lg.committed + Object.values(lg.reservations).reduce((a, b) => a + b, 0) + allInSats > lg.totalCap
     if (wouldBreach(g)) return 'denied'
-    for (const pid of g.parents ?? []) { const p = this.ledger[pid]; if (p && wouldBreach(p)) return 'denied' }
+    for (const pid of g.parents ?? []) {
+      const p = this.ledger[pid]
+      if (!p) return 'no-cap' // unknown ancestor — fail closed
+      if (this.revoked.has(pid) || wouldBreach(p)) return 'denied'
+    }
     g.reservations[actionId] = allInSats
+    for (const pid of g.parents ?? []) this.ledger[pid]!.reservations[`${grantId}:${actionId}`] = allInSats
     this.save()
     return 'ok'
   }
@@ -62,7 +77,7 @@ export class BudgetAuthority {
     delete g.reservations[actionId]
     g.committed += amt
     ;(g.completed ??= {})[actionId] = amt
-    for (const pid of g.parents ?? []) { const p = this.ledger[pid]; if (p) { p.committed += amt; ;(p.completed ??= {})[`${grantId}:${actionId}`] = amt } }
+    for (const pid of g.parents ?? []) { const p = this.ledger[pid]; if (p) { delete p.reservations[`${grantId}:${actionId}`]; p.committed += amt; ;(p.completed ??= {})[`${grantId}:${actionId}`] = amt } }
     this.save()
     return true
   }

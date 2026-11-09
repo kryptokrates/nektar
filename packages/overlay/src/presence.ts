@@ -1005,6 +1005,10 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
       if (toHex(Uint8Array.from(sha256(Uint8Array.from(Buffer.from(se.envelope.ciphertext, 'hex'))))) !== se.envelope.ciphertextHash) return false
       const key = `${se.envelope.sender}:${se.envelope.messageId}` // sender-scoped dedup
       if (envelopes.has(key)) return true
+      // N8 — the recipient stays in the signed envelope: any verifier must be
+      // able to check the signature independently, and peers re-verify relayed
+      // copies. Topic addressing hides the lookup query; hiding the recipient
+      // inside the artifact itself needs the ECDH-topic redesign.
       envelopes.set(key, se)
       appendEvent('envelope', se.envelope.sender, [], se)
       return true

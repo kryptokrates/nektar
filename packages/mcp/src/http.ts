@@ -323,16 +323,17 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           const status = String(j.txStatus ?? '?')
           mem.metrics.inc('nektar_arc_callbacks_total', { status: status.toLowerCase() }, 1, 'ARC status callbacks received')
           mem.events.emit('arcStatus', { txid: j.txid, status, detail: j.extraInfo })
-          // R12 — the callback is an unauthenticated status input, not proof.
-          // MINED triggers evidence fetch + proof attach (which validates the
-          // BUMP contains the txid against real headers); it never promotes
-          // state on the broadcaster's word alone.
+          // N9 — the callback is an unauthenticated status input, not proof.
+          // MINED only triggers evidence fetch + proof attach (which validates
+          // the BUMP contains the txid against real headers); without evidence
+          // the txid is marked callback-seen, never confirmed on the broadcaster's word.
           if (status === 'MINED' && typeof j.txid === 'string') {
             try {
               const mp = await (mem as any).chain?.merklePathOf?.(j.txid)
-              if (mp) { const shard = (mem as any).txidShard?.get?.(j.txid); if (shard) mem.attachProof(shard, j.txid, mp) }
-              else mem.confirmByTxid?.(j.txid) // seen-mined without proof — mark, don't finalize
-            } catch { mem.confirmByTxid?.(j.txid) }
+              const shard = (mem as any).txidShard?.get?.(j.txid)
+              if (mp && shard) mem.attachProof(shard, j.txid, mp)
+              // no fallback: a callback without retrievable evidence is a hint, not a confirmation
+            } catch { /* evidence fetch failed — leave unconfirmed, reconcile later */ }
           }
           return send(200, { ok: true })
         } catch { return send(400, { error: 'bad callback' }) }

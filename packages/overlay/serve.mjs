@@ -30,7 +30,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 import knexPkg from 'knex'
 import { ArcBroadcaster, ChaintracksTracker } from '@nektar/chain'
 import { PrivateKey } from '@bsv/sdk'
-import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation, signBeacon, deliveryRecord, eventEnvelope, KIND_PATTERN } from './dist/src/index.js'
+import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation, signBeacon, signInterval, deliveryRecord, eventEnvelope, KIND_PATTERN } from './dist/src/index.js'
+import { sha256 } from '@nektar/core'
 
 const HOST = process.env.NEKTAR_OVERLAY_HOST ?? '0.0.0.0'
 const PORT = Number(process.env.NEKTAR_OVERLAY_PORT ?? 8090)
@@ -73,6 +74,28 @@ const beaconNow = async () => {
   for (const peer of PEERS) fetch(`${peer}/beacon`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sb) }).catch(() => {})
 }
 if (process.env.NEKTAR_BRIDGE_INGRESS) console.log(`[rendezvous] bridge ingress=${process.env.NEKTAR_BRIDGE_INGRESS} � plane delivery expected via overlay-bridge feed`)
+// interval closer — every 10min commit the rv's own feed as a signed
+// IntervalCommit: [firstSeq..lastSeq] + merkleRoot + prevIntervalHash, so a
+// reader detects omission/reordering inside the range and repairs it from a peer
+let intervalStart = 0
+let prevIntervalHash = undefined
+const closeInterval = async () => {
+  try {
+    const events = await overlay.lsPresence.feed({ since: intervalStart, limit: 10_000 })
+    if (events.length === 0) return
+    const leaves = events.map(e => Buffer.from(sha256(new TextEncoder().encode(JSON.stringify(e.payload)))).toString('hex'))
+    const root = Buffer.from(sha256(Buffer.from(leaves.join('')))).toString('hex')
+    const last = events[events.length - 1].seq
+    const si = signInterval(SELF_KEY, { streamId: 'presence', firstSeq: events[0].seq, lastSeq: last, eventCount: events.length, merkleRoot: root, prevIntervalHash, ts: Date.now() })
+    if (await overlay.lsPresence.announceInterval(si)) {
+      prevIntervalHash = Buffer.from(sha256(new TextEncoder().encode(JSON.stringify(si.commit)))).toString('hex')
+      intervalStart = last + 0.5
+      for (const peer of PEERS) fetch(`${peer}/interval`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(si) }).catch(() => {})
+    }
+  } catch {}
+}
+setInterval(closeInterval, 10 * 60_000); setTimeout(closeInterval, 60_000)
+
 setInterval(beaconNow, 30 * 60_000); setTimeout(beaconNow, 3000)
 setInterval(() => { const n = overlay.lsPresence.sweep?.(); if (n) console.log(`[rendezvous] sweep: ${n} expired entries evicted`) }, 300_000)
 
@@ -89,7 +112,8 @@ const ingest = {
   delegation: p => overlay.lsPresence.announceDelegation(p),
   attestation: p => overlay.lsPresence.announceAttestation(p),
   beacon: p => overlay.lsPresence.announceBeacon(p),
-  revocation: p => overlay.lsPresence.revokeDelegation(p.revocation ?? p)
+  revocation: p => overlay.lsPresence.revokeDelegation(p.revocation ?? p),
+  interval: p => overlay.lsPresence.announceInterval(p.interval ? p : { commit: p, sig: p.sig })
 }
 for (const peer of PEERS) {
   const CURSOR_FILE = path.join(DIR, 'peer-cursors.json')
@@ -141,6 +165,15 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/patterns') {
       return json(res, 200, { kindToPattern: KIND_PATTERN, note: 'replyTo-offers read as messagebox; everything else maps by kind' })
+    }
+    if (req.method === 'POST' && url.pathname === '/interval') {
+      const { commit, sig } = JSON.parse(await body(req) || '{}')
+      const ok = await overlay.lsPresence.announceInterval({ commit, sig })
+      return json(res, ok ? 200 : 400, ok ? { ok: true } : { error: 'rejected' })
+    }
+    if (req.method === 'GET' && url.pathname === '/intervals') {
+      const pub = url.searchParams.get('pub')
+      return json(res, 200, { intervals: overlay.lsPresence.intervalsFor(pub ?? undefined) })
     }
     if (req.method === 'GET' && url.pathname === '/peers') {
       return json(res, 200, { peers: overlay.lsPresence.peersFor().map(sb => sb.beacon), self: SELF_PUB })

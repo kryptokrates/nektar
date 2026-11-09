@@ -687,6 +687,32 @@ export interface ToolCtx {
  *  mem.events so live surfaces (dashboard SSE) refresh instantly */
 const MUTATING_TOOLS = new Set(['remember', 'describeShard', 'publishOffer', 'publishWant', 'respond', 'peerCall', 'delegate', 'revokeGrant', 'attest', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport'])
 
+// beacon-discovered peer set — one known rv reveals the rest (GET /peers).
+// Cached 5min; publish/discover fan out across the set so no single rv is
+// a hardcoded dependency.
+const rvSetCache = new Map<string, { at: number, urls: string[] }>()
+async function rvSet (base: string): Promise<string[]> {
+  const hit = rvSetCache.get(base)
+  if (hit && Date.now() - hit.at < 300_000) return hit.urls
+  const urls = new Set([base])
+  try {
+    const j = await (await fetch(`${base}/peers`, { signal: AbortSignal.timeout(8_000) })).json()
+    for (const b of j.peers ?? []) if (typeof b?.endpoint === 'string' && /^https?:\/\//i.test(b.endpoint)) urls.add(b.endpoint.replace(/\/+$/, ''))
+  } catch {}
+  const out = [...urls]
+  rvSetCache.set(base, { at: Date.now(), urls: out })
+  return out
+}
+// post a signed artifact to base + every known peer — intake dedups by ts, so
+// fan-out is idempotent; succeed if any rv accepts
+async function postFanout (rv: string, path: string, body: unknown): Promise<Response> {
+  let last: Response | undefined
+  for (const base of await rvSet(rv)) {
+    try { const r = await fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) }); if (r.ok) last ??= r } catch {}
+  }
+  return last ?? new Response('{"error":"no rv accepted"}', { status: 502 })
+}
+
 export async function callTool (mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
   const r = await dispatchTool(mem, name, args, ctx)
   if (MUTATING_TOOLS.has(name) || name.includes('#')) mem.events.emit('change', name)
@@ -1268,10 +1294,23 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         : typeof args?.shard === 'string' && args.shard ? `?shard=${encodeURIComponent(args.shard)}`
         : typeof args?.pub === 'string' && args.pub ? `?pub=${encodeURIComponent(args.pub)}`
         : '?all=1'
-      const r = await fetch(`${base}/directory${q}`, { signal: AbortSignal.timeout(15_000) })
-      if (!r.ok) throw new Error(`discover: rendezvous ${base}/directory${q} → ${r.status}`)
-      const out = await r.json()
-      return { rendezvous: base, query: q.slice(1), ...out }
+      const merged: any = {}
+      const seenId = new Set<string>()
+      let answered = 0
+      for (const b of await rvSet(base)) {
+        try {
+          const r = await fetch(`${b}/directory${q}`, { signal: AbortSignal.timeout(15_000) })
+          if (!r.ok) continue
+          answered++
+          const out = await r.json()
+          for (const k of Object.keys(out)) {
+            if (Array.isArray(out[k])) { for (const x of out[k]) { const id = JSON.stringify(x?.ad?.pub ?? x?.catalog?.pub ?? x); if (!seenId.has(id)) { seenId.add(id); (merged[k] ??= []).push(x) } } }
+            else if (merged[k] === undefined) merged[k] = out[k]
+          }
+        } catch {}
+      }
+      if (!answered) throw new Error(`discover: no rendezvous answered`)
+      return { rendezvous: base, query: q.slice(1), ...merged }
     }
     case 'peerCall': {
       const endpoint = String(args?.endpoint ?? '').replace(/\/+$/, '')
@@ -1369,7 +1408,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (!fields.domains.length) throw new Error('publishOffer: no domains — describeShard first or pass {domains}')
       const signed = signOffer(mem.operatorKey(), fields)
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await fetch(`${rv}/offer`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const r = await postFanout(rv, '/offer', signed)
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishOffer: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, offer: signed.offer }
@@ -1388,7 +1427,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       }
       const signed = signWant(mem.operatorKey(), fields)
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await fetch(`${rv}/want`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const r = await postFanout(rv, '/want', signed)
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishWant: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, want: signed.want }
@@ -1479,7 +1518,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (!fields.domains.length) throw new Error('respond: no domains — describeShard first or pass {domains}')
       const signed = signOffer(mem.operatorKey(), fields)
       const rv = String(a.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await fetch(`${rv}/offer`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const r = await postFanout(rv, '/offer', signed)
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`respond: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, offer: signed.offer }

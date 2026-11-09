@@ -8,6 +8,7 @@
 import { PrivateKey, PublicKey, Signature, Script, Transaction } from '@bsv/sdk'
 import { sha256, utf8, toHex } from '@nektar/core'
 import type { Knex } from 'knex'
+import { EventEmitter } from 'node:events'
 import type { TopicManager, AdmittanceInstructions, LookupService, LookupFormula, OutputAdmittedByTopic, OutputSpent } from '@bsv/overlay'
 
 const TAG = 'nektar-agent'
@@ -391,6 +392,7 @@ export function createLsPresence (kx?: Knex): LookupService & {
   reputationsFor: (domain?: string) => SignedReputation[]
   prices: (q: { domain?: string, tool?: string }) => { count: number, sats: number[], minSats: number | null, maxSats: number | null, medianSats: number | null, totalSats: number, settlements: SettlementAd[] }
   feed: (q: { since?: number, domains?: string[], kind?: EventKind, limit?: number }) => Promise<PresenceEvent[]>
+  bus: EventEmitter
 } {
   // latest ad per pub; shard → set of pubs advertising it
   const ads = new Map<string, Stored>()
@@ -413,10 +415,13 @@ export function createLsPresence (kx?: Knex): LookupService & {
   const attestations = new Map<string, SignedAttestation>()
   // the durable event log — seq is the consumer cursor
   const events: PresenceEvent[] = []
+  /** push feed for live surfaces (dashboard SSE) — emits each event as it lands */
+  const bus = new EventEmitter()
   let nextSeq = 0
   const appendEvent = (kind: EventKind, pub: string, domains: string[], payload: unknown) => {
     const e: PresenceEvent = { seq: nextSeq++, kind, pub, domains, ts: Date.now(), payload }
     events.push(e)
+    bus.emit('event', e)
     if (kx) void (async () => { if (await kx.schema.hasTable(EVENTS_TABLE)) await kx(EVENTS_TABLE).insert({ seq: e.seq, kind: e.kind, pub: e.pub, domains: JSON.stringify(e.domains), ts: e.ts, payload: JSON.stringify(e.payload) }) })().catch(() => {})
     return e
   }
@@ -753,6 +758,9 @@ export function createLsPresence (kx?: Knex): LookupService & {
         settlements: rows.map(r => r.ad)
       }
     },
+
+    /** live push feed — 'event' fires per appended PresenceEvent (SSE dashboard) */
+    bus,
 
     // JetStream-pull view: events after `since` cursor, optionally narrowed
     // by kind and/or domain tags (a consumer subscribed to 'soccer' sees any

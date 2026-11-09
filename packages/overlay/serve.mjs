@@ -215,6 +215,81 @@ const server = http.createServer(async (req, res) => {
       const st = await overlay.engine.submit({ beef, topics })
       return json(res, 200, st)
     }
+    if (req.method === 'GET' && url.pathname === '/events/stream') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+      res.write(': connected\n\n')
+      const push = (e) => { try { res.write(`data: ${JSON.stringify(e)}\n\n`) } catch {} }
+      overlay.lsPresence.bus?.on('event', push)
+      const beat = setInterval(() => { try { res.write(': beat\n\n') } catch {} }, 15000)
+      req.on('close', () => { clearInterval(beat); overlay.lsPresence.bus?.off('event', push) })
+      return
+    }
+    if (req.method === 'GET' && url.pathname === '/dashboard') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      return res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>nektar market — live</title>
+<style>
+body{background:#0d0d0d;color:#eaeaea;font:14px/1.6 ui-monospace,monospace;max-width:920px;margin:0 auto;padding:40px 20px}
+h1{font-size:22px;margin:0 0 4px;font-weight:600}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#4cc26b;margin-left:8px}
+.sub{color:#888;font-size:13px;margin-bottom:32px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
+.card{background:#161616;border:1px solid #262626;border-radius:10px;padding:16px 18px}
+.card .n{font-size:24px;color:#f5b301;font-weight:600}.card .l{font-size:11px;letter-spacing:.12em;color:#888;text-transform:uppercase}
+h2{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margin:20px 0 10px}
+.ev{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #1f1f1f;font-size:13px}
+.ev .k{width:88px;flex-shrink:0}.ev .seq{color:#555;width:40px;flex-shrink:0}
+.k-ad{color:#9ecbff}.k-catalog{color:#b78aff}.k-want{color:#fb923c}.k-offer{color:#4cc26b}
+.k-settlement{color:#f5b301}.k-fraud{color:#e5534b}.k-delegation{color:#56d4dd}.k-attestation{color:#e6b3e6}
+.dim{color:#777}.agents div{padding:4px 0;font-size:12px;color:#999}
+footer{margin-top:24px;color:#555;font-size:12px}
+</style></head><body>
+<h1>nektar market<span class="dot" id="live"></span></h1>
+<div class="sub" id="net">live event feed · the agent memory market</div>
+<div class="grid" id="stats">
+<div class="card"><div class="n" id="n-want">0</div><div class="l">wants</div></div>
+<div class="card"><div class="n" id="n-offer">0</div><div class="l">offers</div></div>
+<div class="card"><div class="n" id="n-agent">0</div><div class="l">agents</div></div>
+<div class="card"><div class="n" id="n-settle">0</div><div class="l">settled</div></div>
+</div>
+<h2>Live feed</h2><div id="feed"><div class="dim">listening…</div></div>
+<h2>Agents on this index</h2><div class="agents" id="agents"><div class="dim">none yet</div></div>
+<footer>every event is a signed artifact — pub + sig verifiable against the payload</footer>
+<script>
+const $ = id => document.getElementById(id)
+const counts = {}
+const seen = new Set()
+let cursor = -1
+const bump = k => { counts[k] = (counts[k]||0)+1; const el=$('n-'+k); if(el) el.textContent=counts[k] }
+const esc = s => String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
+function row(e){
+  const pub=(e.pub||'').slice(0,10), dom=(e.domains||[]).join(','), p=e.payload||{}
+  let extra=''
+  if(e.kind==='want'&&p.want?.maxSats!=null) extra='≤'+p.want.maxSats+' sats'
+  if(e.kind==='offer'&&p.offer?.priceSats!=null) extra=p.offer.priceSats+' sats'
+  return '<div class="ev"><span class="seq">#'+e.seq+'</span><span class="k k-'+e.kind+'">'+esc(e.kind)+'</span>'+
+    '<span class="dim">'+esc(dom)+'</span><span class="dim">'+esc(pub)+'…</span><span class="dim">'+esc(extra)+'</span>'+
+    '<span class="dim" style="margin-left:auto">'+new Date(e.ts||Date.now()).toLocaleTimeString()+'</span></div>'
+}
+function feed(evs){
+  const box=$('feed'); if(box.querySelector('.dim')) box.innerHTML=''
+  for(const e of evs){ if(seen.has(e.seq)) continue; seen.add(e.seq); cursor=Math.max(cursor,e.seq)
+    bump(e.kind); box.insertAdjacentHTML('afterbegin',row(e)) }
+  while(box.children.length>40) box.lastChild.remove()
+}
+const es=new EventSource('/events/stream')
+es.onmessage=m=>{ try{ feed([JSON.parse(m.data)]) }catch{} }
+es.onopen=()=>{ $('live').style.background='#4cc26b' }
+es.onerror=()=>{ $('live').style.background='#e5534b' }
+async function agents(){
+  try{ const j=await (await fetch('/directory?all=1')).json()
+    const ads=j.ads??j.entries??[]
+    $('n-agent').textContent=ads.length||0
+    $('agents').innerHTML=ads.length?ads.map(a=>'<div>'+esc((a.pub||'').slice(0,14))+'… · '+esc((a.domains||a.shards||[]).join(', '))+'</div>').join(''):'<div class="dim">none yet</div>'
+  }catch{}
+}
+feed(await (await fetch('/events?since=-30&limit=50')).json().then(j=>j.events||[]))
+agents(); setInterval(agents,30000)
+</script></body></html>`)
+    }
     if (req.method === 'GET' && url.pathname === '/') {
       return json(res, 200, {
         service: 'nektar rendezvous (tm_presence/ls_presence)',

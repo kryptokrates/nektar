@@ -535,7 +535,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   reputationFor: (pub: string) => SignedReputation | undefined
   reputationsFor: (domain?: string) => SignedReputation[]
   prices: (q: { domain?: string, tool?: string }) => { count: number, sats: number[], minSats: number | null, maxSats: number | null, medianSats: number | null, totalSats: number, settlements: SettlementAd[] }
-  feed: (q: { since?: number, domains?: string[], kind?: EventKind, limit?: number }) => Promise<PresenceEvent[]>
+  feed: (q: { since?: number, domains?: string[], kind?: EventKind, limit?: number, pub?: string }) => Promise<PresenceEvent[]>
   announceBeacon: (sb: SignedBeacon) => Promise<boolean>
   peersFor: () => SignedBeacon[]
   announceInterval: (si: SignedInterval) => Promise<boolean>
@@ -1025,12 +1025,13 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     // JetStream-pull view: events after `since` cursor, optionally narrowed
     // by kind and/or domain tags (a consumer subscribed to 'soccer' sees any
     // event whose domains contain it).
-    feed: async (q: { since?: number, domains?: string[], kind?: EventKind, limit?: number }): Promise<PresenceEvent[]> => {
+    feed: async (q: { since?: number, domains?: string[], kind?: EventKind, limit?: number, pub?: string }): Promise<PresenceEvent[]> => {
       const since = q.since ?? -1
       const doms = q.domains?.length ? new Set(q.domains.map(d => d.toLowerCase())) : undefined
       const out: PresenceEvent[] = []
       for (const e of events) {
         if (e.seq <= since) continue
+        if (q.pub && e.pub !== q.pub) continue // source-specific subscription — 'one source, not any source'
         if (q.kind && e.kind !== q.kind) continue
         if (doms && !e.domains.some(d => doms.has(d.toLowerCase()))) continue
         out.push(e)

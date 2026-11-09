@@ -339,11 +339,12 @@ const server = http.createServer(async (req, res) => {
       const since = url.searchParams.get('since') !== null ? Number(url.searchParams.get('since')) : undefined
       const domains = url.searchParams.get('domains')?.split(',').map(s => s.trim()).filter(Boolean)
       const kind = url.searchParams.get('kind') ?? undefined
+      const pub = url.searchParams.get('pub') ?? undefined
       const limit = url.searchParams.get('limit') !== null ? Math.min(Number(url.searchParams.get('limit')), 1000) : 200
       const wait = Math.min(Number(url.searchParams.get('wait') ?? 0), 30_000)
       const deadline = Date.now() + wait
       for (;;) {
-        const events = (await overlay.lsPresence.feed({ since, domains, kind: kind ?? undefined, limit })).map(eventEnvelope)
+        const events = (await overlay.lsPresence.feed({ since, domains, kind: kind ?? undefined, pub, limit })).map(eventEnvelope)
         if (events.length || Date.now() >= deadline) {
           return json(res, 200, { events, cursor: events.length ? events.at(-1).seq : (since ?? -1) })
         }

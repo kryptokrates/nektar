@@ -331,7 +331,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   // data SPV needs); WoC stays as fallback. GorillaPool's arcade doesn't mount
   // the chaintracks listener, so mainnet uses the association arcade that does.
   const tracker = new ChaintracksTracker(mc,
-    mc.chaintracksUrl ?? (ttn ? `${mc.arcUrl}/chaintracks/v1` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'),
+    mc.chaintracksUrl ?? (ttn ? `${mc.arcUrl}/chaintracks/v2` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'),
     new WocTracker(mc))
   const rawBroadcaster = new ArcBroadcaster(mc)
   const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))

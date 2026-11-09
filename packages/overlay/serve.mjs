@@ -39,7 +39,7 @@ const NET = process.env.NEKTAR_NETWORK ?? 'testnet'
 // arcade (self-referential retry — a 404 there just ends in 'broadcast failed').
 const URLS = {
   testnet: { arc: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', ct: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v1' },
-  ttn:     { arc: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',    ct: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech/chaintracks/v1' },
+  ttn:     { arc: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',    ct: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech/chaintracks/v2' },
   main:    { arc: 'https://arcade-us-1.bsvblockchain.tech',           ct: 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2' }
 }
 const u = URLS[NET] ?? URLS.testnet

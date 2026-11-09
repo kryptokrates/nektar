@@ -36,7 +36,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       - name: smoke the pushed image
-        run: docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/nektar:${{ github.ref_type == 'tag' && 'latest' || 'edge' }} packages/mcp/demo/client.mjs
+        run: docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/nektar:${{ github.ref_type == 'tag' && 'latest' || 'edge' }} demo/client.mjs
         timeout-minutes: 3
       # the minimal rv image — overlay + core only; the fleet runs this, not the fat one
       - name: meta nektar-rv

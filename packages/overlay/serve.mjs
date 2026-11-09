@@ -25,6 +25,8 @@
 import http from 'node:http'
 import path from 'node:path'
 import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 import knexPkg from 'knex'
 import { ArcBroadcaster, ChaintracksTracker } from '@nektar/chain'
 import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation } from './dist/src/index.js'
@@ -105,6 +107,10 @@ const server = http.createServer(async (req, res) => {
         note: 'exp beyond the free window requires pay:{beef} — a tx paying rate/hour to addr'
       } : { enabled: false, note: 'no listing fee — set NEKTAR_LISTING_ADDR to charge for exp beyond the free window' }
       return json(res, 200, lf)
+    }
+    if (req.method === 'GET' && url.pathname === '/logo.png') {
+      const f = path.join(__dirname, '..', '..', 'logo.png')
+      try { const png = fs.readFileSync(f); res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400' }); return res.end(png) } catch { return res.end() }
     }
     if (req.method === 'GET' && url.pathname === '/health') {
       const dir = await overlay.lsPresence.lookup({ query: { all: true } })
@@ -298,17 +304,15 @@ h2{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margi
 .netbadge.mainnet{background:#062e0c;color:#4cc26b;border:1px solid #4cc26b}
 .toggle{margin-left:14px}#netbtn{font:inherit;font-size:11px;padding:2px 12px;border-radius:20px;cursor:pointer}
 header{position:relative;display:flex;align-items:center;justify-content:center;margin-bottom:18px}
-#logo{display:flex;align-items:center;gap:8px;color:#e8e8e8;font-size:20px;font-weight:600;letter-spacing:.02em}
+#logo{display:flex;align-items:center;gap:8px}
+#logo img{height:44px;width:auto}
 header .toggle{position:absolute;right:0;top:50%;transform:translateY(-50%)}
 #netbtn.testnet{background:#3a2a00;color:#f5b301;border:1px solid #f5b301}
 #netbtn.mainnet{background:#062e0c;color:#4cc26b;border:1px solid #4cc26b}
 footer{margin-top:24px;color:#555;font-size:12px}
 </style></head><body>
 <header>
-<div id="logo">
-<svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M13 1l10.4 6v12L13 25 2.6 19V7L13 1z" stroke="#f5b301" stroke-width="1.6"/><circle cx="13" cy="13" r="4.5" fill="#f5b301"/></svg>
-<span>nektar</span><span class="dot" id="live"></span>
-</div>
+<div id="logo"><img src="/logo.png" alt="nektar"><span class="dot" id="live"></span></div>
 <span class="toggle"><button id="netbtn" class="testnet" onclick="setNet(NET==='ttn'?'main':'ttn')">mainnet</button></span>
 </header>
 <span id="netbadge" class="netbadge testnet" hidden>testnet</span>

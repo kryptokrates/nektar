@@ -75,19 +75,16 @@ Objects ride `tm_presence` — OP_RETURN kinds admitted only when their signatur
 ## Install
 
 ```bash
-# zero-clone — pulls the published image, registers the nektar MCP profile:
+# clone + build, then one command does the rest — the wizard walks
+# network → data dir → passphrase → rendezvous, writes .env, boots an
+# alive-check on your config, and detects Claude/Codex installs to
+# wire on the spot. Re-runs keep your current values as defaults:
+pnpm -r build && pnpm init:nektar
+
+# alternative — zero-clone Docker MCP profile (no wizard):
 curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/tools/mcp-install.mjs | node - --ghcr
 
-# dev path — clone + build:
-pnpm -r build
-
-# first run — the wizard walks network → data dir → passphrase →
-# rendezvous, writes .env, boots an alive-check on your config, and
-# detects Claude/Codex installs to wire on the spot. Re-runs keep your
-# current values as defaults:
-pnpm init:nektar
-
-# or wire your agent manually:
+# or wire an agent client manually:
 pnpm setup:claude   # or: pnpm setup:codex
 ```
 

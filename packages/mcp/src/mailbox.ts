@@ -56,7 +56,7 @@ export async function collect (
     const raw = Buffer.from(e.ciphertext, 'hex')
     const w = { salt: raw.subarray(0, 32), nonce: raw.subarray(32, 44), ct: raw.subarray(44) }
     try {
-      const pt = unwrapFor(key, e.sender, w, MB_CTX)
+      const pt = unwrapFor(key, e.sender, w, MB_CTX, w.ct.length - 16) // ct−tag = plaintext len; unwrapFor defaults to 32B key length which truncates payloads
       if (toHex(Uint8Array.from(sha256(pt))) !== e.ciphertextHash) continue // tampered payload
       out.push({ messageId: e.messageId, sender: e.sender, kind: e.kind, payload: JSON.parse(Buffer.from(pt).toString('utf8')), createdAt: e.createdAt, conversationId: e.conversationId, operationId: e.operationId })
     } catch { /* not decryptable by us or corrupt — skip */ }

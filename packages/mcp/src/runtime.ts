@@ -7,7 +7,7 @@
 //                          funding are configured (no real funds without approval).
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
-import { PrivateKey, MerklePath, type Transaction } from '@bsv/sdk'
+import { PrivateKey, MerklePath, Transaction } from '@bsv/sdk'
 import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
@@ -153,7 +153,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   // an invoice served to a missing address is a payment that can never settle.
   const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
   if (paymentsEnabled()) requireOperatorWallet()
-  const base: NektarMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities, network: cfg.network }
+  const base: NektarMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities, network: cfg.network, bond: process.env.NEKTAR_BOND_EPOCH || process.env.NEKTAR_BOND_MAXFEE ? { epochBlocks: Number(process.env.NEKTAR_BOND_EPOCH ?? 144), ...(process.env.NEKTAR_BOND_MAXFEE ? { maxFee: BigInt(process.env.NEKTAR_BOND_MAXFEE) } : {}) } : undefined }
   if (cfg.network === 'mock') {
     const chain = new MockChain(); chain.verifyScripts = true
     const funder = new MockFunder(); funder.topup(Number(process.env.NEKTAR_DEMO_UTXOS ?? 200))
@@ -212,7 +212,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     if (!s && reserve.utxos.length === 0) throw new Error('regtest: could not fund the reserve (no unspent treasury or early coinbase for the fund key)')
     if (s) await mineOne()
   }
-  const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve(async (t, v) => (await utxoStatus(rc, t, v)) === 'spent') }
+  const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async (_sc?: unknown, minSats?: number) => await reserve.takeReserve(async (t, v) => (await utxoStatus(rc, t, v)) === 'spent', minSats) }
   const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker)
   const chain = {
     broadcast: async (tx: Transaction) => {
@@ -370,7 +370,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   }
   const floor = ttn ? 1 : 100
   const feeRate = Math.max(mc.feeRateSatPerKb ?? floor, await fetchArcFeeRate(mc).catch(() => floor))
-  const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async () => await reserve.takeReserve() }
+  const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async (_sc?: unknown, minSats?: number) => await reserve.takeReserve(undefined, minSats) }
   const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker, { wocApiKey: mc.wocApiKey, fetchImpl: mc.fetchImpl })
   const chain = {
     broadcast: async (tx: Transaction) => {
@@ -565,6 +565,61 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       for (const u of added) addIfNew(u)
       const balanceSats = reserve.utxos.reduce((s, u) => s + u.satoshis, 0)
       return { imported: added.length, utxos: reserve.utxos.length, balanceSats, address: fundAddress }
+    },
+    // fundingRefresh MCP tool: reconcile the reserve against chain truth.
+    //   - outputs WoC reports live at the fee address are revived (stale
+    //     spent-marks from dead unbroadcast txs cleared) or imported fresh
+    //   - entries whose parent tx ARC rejected get dropped, and any input they
+    //     consumed that is still live on-chain is revived
+    //   - entries existing on WoC but no longer unspent get marked spent
+    // Fixes the phantom-entry/dust-pick class without a restart.
+    refreshFunding: async () => {
+      const r = reserve as any
+      const op = (txid: string, vout: number) => `${txid}:${vout}`
+      const revive = (o: string, tx?: Transaction): boolean => {
+        const [txid, v] = o.split(':'); const vout = Number(v)
+        r.spent.delete(o)
+        if (r.utxos.some((u: { tx: Transaction, vout: number }) => op(u.tx.id('hex'), u.vout) === o)) return false
+        const e = (r.entries as Array<{ txid: string, vout: number, satoshis: number, txHex: string }>).find(x => op(x.txid, x.vout) === o)
+        if (e) { r.utxos.push({ tx: Transaction.fromHex(e.txHex), vout: e.vout, satoshis: e.satoshis }); return true }
+        if (tx) { reserve.addOwned(tx, vout); return true }
+        return false
+      }
+      let revived = 0, dropped = 0, marked = 0, pending = 0
+      const h: Record<string, string> = {}
+      if (mc.wocApiKey) h['woc-api-key'] = mc.wocApiKey
+      const wocBase = mc.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main'
+      let live = new Map<string, { tx: Transaction, vout: number }>()
+      try {
+        const list = await discoverUtxos(mc, fundAddress)
+        live = new Map(list.map(u => [op(u.tx.id('hex'), u.vout), u]))
+      } catch { /* discovery down — still can drop rejected entries below */ }
+      for (const [o, u] of live) { if (revive(o, u.tx)) revived++ }
+      for (const u of [...reserve.utxos]) {
+        const o = op(u.tx.id('hex'), u.vout)
+        if (live.has(o)) continue
+        const txid = u.tx.id('hex')
+        const exists = await fetch(`${wocBase}/tx/${txid}`, { headers: h }).then(x => x.ok).catch(() => false)
+        if (exists) { reserve.markSpent(txid, u.vout); marked++; continue }
+        // absent from both the unspent set and the tx index — check ARC's verdict
+        let rejected = false
+        try {
+          const st = await fetch(`${mc.arcUrl ?? 'https://arc.gorillapool.com'}/v1/tx/${txid}`).then(x => x.ok ? x.json() : null)
+          rejected = st != null && String(st.txStatus ?? st.status ?? '').includes('REJECTED')
+        } catch { /* keep */ }
+        if (!rejected) { pending++; continue }
+        // dead tx — drop the entry and revive any of its inputs still live
+        r.entries = (r.entries as any[]).filter(e => op(e.txid, e.vout) !== o)
+        r.utxos = (r.utxos as any[]).filter(x => op(x.tx.id('hex'), x.vout) !== o)
+        dropped++
+        for (const inp of u.tx.inputs) {
+          const io = op(inp.sourceTXID ?? '', inp.sourceOutputIndex ?? 0)
+          if (live.has(io) && revive(io, live.get(io)!.tx)) revived++
+        }
+      }
+      r.save?.()
+      const balanceSats = reserve.utxos.reduce((s, u) => s + u.satoshis, 0)
+      return { revived, dropped, marked, pending, utxos: reserve.utxos.length, balanceSats, address: fundAddress }
     }
   }
   return {

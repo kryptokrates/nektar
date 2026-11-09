@@ -106,7 +106,7 @@ export class CheckpointBond {
 
   /** commit: continuation {n+1, newRoot, deadline=lockTime+epochLen} + 1-sat
    *  change to operator (the covenant verifies _changePKH/_changeAmount). */
-  async buildCommit (utxo: BondUtxo, ownerKey: PrivateKey, newRoot: string, lockTime: number, broadcaster: Broadcaster, fee = 1n): Promise<{ tx: Transaction, state: BondState }> {
+  async buildCommit (utxo: BondUtxo, ownerKey: PrivateKey, newRoot: string, lockTime: number, broadcaster: Broadcaster, fee = 1n, parentTx?: Transaction): Promise<{ tx: Transaction, state: BondState }> {
     const cur = this.stateOf(utxo.script)
     const bondSats = BigInt(utxo.satoshis) - fee - 1n // residual = fee + 1-sat change ≤ maxFee+1
     const next: BondState = { n: cur.n + 1n, lastRoot: newRoot, deadline: BigInt(lockTime) + this.cfg.epochLen, seized: cur.seized }
@@ -114,7 +114,7 @@ export class CheckpointBond {
     const { tx } = await this.spend(utxo, 0, 'commit',
       ['SIG', ownerKey.toPublicKey().toString(), newRoot, bondSats, next.deadline, this.cfg.operatorPkh, 1n, 'PREIMAGE'],
       [{ satoshis: Number(bondSats), script: contScript }, { satoshis: 1, script: buildP2PKHScript(this.cfg.operatorPkh) }],
-      lockTime, broadcaster, ownerKey)
+      lockTime, broadcaster, ownerKey, parentTx)
     return { tx, state: next }
   }
 
@@ -138,7 +138,7 @@ export class CheckpointBond {
 
   /** close: terminal — whole bond (minus bounded fee) back to operator after
    *  release height. Emitted payout at vout 0, covenant change slot at vout 1. */
-  async buildClose (utxo: BondUtxo, ownerKey: PrivateKey, lockTime: number, broadcaster: Broadcaster, fee = 1n): Promise<{ tx: Transaction }> {
+  async buildClose (utxo: BondUtxo, ownerKey: PrivateKey, lockTime: number, broadcaster: Broadcaster, fee = 1n, parentTx?: Transaction): Promise<{ tx: Transaction }> {
     const payoutSats = BigInt(utxo.satoshis) - fee - 1n // residual = fee + 1-sat change ≤ maxFee+1
     const { tx } = await this.spend(utxo, 2, 'close',
       ['SIG', ownerKey.toPublicKey().toString(), payoutSats, this.cfg.operatorPkh, 1n, 'PREIMAGE'],
@@ -146,7 +146,7 @@ export class CheckpointBond {
         { satoshis: Number(payoutSats), script: buildP2PKHScript(this.cfg.operatorPkh) },
         { satoshis: 1, script: buildP2PKHScript(this.cfg.operatorPkh) }
       ],
-      lockTime, broadcaster, ownerKey)
+      lockTime, broadcaster, ownerKey, parentTx)
     return { tx }
   }
 }

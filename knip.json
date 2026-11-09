@@ -6,9 +6,11 @@
         "tools/**/*.mjs",
         "integrations/**/*.{js,mjs}",
         "circuits/**/*.mjs",
-        "docs/**/*.mjs"
+        "docs/**/*.mjs",
+        "test/**/*.mjs"
       ],
-      "ignore": ["spikes/**"]
+      "ignore": ["spikes/**", ".mod/**"],
+      "ignoreBinaries": ["ss", "awk"]
     },
     "packages/mcp": {
       "entry": ["src/payclient.ts", "demo/**/*.{ts,mts,mjs}"]

@@ -115,6 +115,10 @@ export interface PersistedMemoryState {
   /** §12 SLA bond covenant head (when opts.bond set); restart-safe like the
    *  shard heads — losing it would strand the bond UTXO. */
   bond?: { txid: string, vout: number, satoshis: number, script: string, operatorPkh: string, releaseHeight: string, maxFee: string, epochLen?: string }
+  /** raw-tx hex for recently broadcast txs (bond commits/seizes/escrows) —
+   *  lets covenant spends build preimages from a fresh parent before
+   *  indexers serve it. Bounded (last ~64). */
+  txHex?: Record<string, string>
 }
 export interface MemoryStateStore { load: () => PersistedMemoryState | undefined, save: (s: PersistedMemoryState) => void }
 
@@ -505,6 +509,9 @@ export class NektarMemory {
   // ── §12 SLA bond (NektarCheckpointBond) ────────────────────────────────
   private bondContract?: CheckpointBond
   private bondHead?: BondUtxo
+  // serializes covenant spends — two in-flight ops (manual call + background
+  // poll) racing the same parent produce one rejected double-spend
+  private bondBusy = false
   private bondKey (): PrivateKey { return this.opts.bond?.ownerKey ?? this.fundKey }
 
   /** deploy the checkpoint-bond covenant: `sats` locked, releasable after
@@ -520,14 +527,20 @@ export class NektarMemory {
     const key = this.bondKey()
     const release = releaseHeight ?? BigInt(await this.chain.currentHeight()) + BigInt(this.opts.bond?.horizonBlocks ?? 1008)
     const pkh = key.toPublicKey().toHash()
-    const cfg = { operatorPkh: typeof pkh === 'string' ? pkh : toHex(Uint8Array.from(pkh)), bondReleaseHeight: release, maxFee: this.opts.bond?.maxFee ?? 10n, epochLen: BigInt(this.opts.bond?.epochBlocks ?? 144) }
+    // mainnet's 100 sat/kB relay floor needs ~300-sat fees for a ~3KB covenant
+    // tx — the covenant's own residual bound (fee+2 ≤ maxFee+1) must allow it.
+    const mainnet = this.opts.network === 'main'
+    // mainnet's 100 sat/kB relay floor needs ~400-500-sat fees for ~4KB covenant
+    // spends — maxFee must leave headroom (residual = fee+2 ≤ maxFee+1).
+    const cfg = { operatorPkh: typeof pkh === 'string' ? pkh : toHex(Uint8Array.from(pkh)), bondReleaseHeight: release, maxFee: this.opts.bond?.maxFee ?? (mainnet ? 1500n : 10n), epochLen: BigInt(this.opts.bond?.epochBlocks ?? 144) }
     this.bondContract = new CheckpointBond(cfg)
     const fund = await this.takeFunding(sats + 600)
-    const { tx, sats: bondSats, script } = this.bondContract.buildDeploy({ tx: fund.tx, vout: fund.vout, satoshis: fund.satoshis }, key, sats)
+    const { tx, sats: bondSats, script } = this.bondContract.buildDeploy({ tx: fund.tx, vout: fund.vout, satoshis: fund.satoshis }, key, sats, mainnet ? 300n : 1n)
     await tx.sign() // P2PKH funding input — txid serialization needs the signed unlock
     const utxo = this.bondContract.deployUtxo(tx, bondSats, script)
     const br = await this.chain.broadcast(tx)
     if (br.status !== 'success') { this.bondContract = undefined; throw new Error(`bond deploy broadcast failed: ${br.description ?? 'unknown'}`) }
+    this.noteTxHex(tx.id('hex'), tx.toHex())
     this.bondHead = utxo
     this.persistState()
     return { txid: tx.id('hex'), releaseHeight: release }
@@ -559,35 +572,107 @@ export class NektarMemory {
     const contract = bond ? new CheckpointBond(bond.cfg) : this.bondContract
     const head = bond ? bond.utxo : this.bondHead
     if (!contract || !head) return null
-    const height = await this.chain.currentHeight()
-    const s = contract.stateOf(head.script)
-    if (s.seized !== 0n) throw new Error('bond already seized')
-    if (BigInt(height) < s.deadline) throw new Error(`bond not yet seizable — deadline ${s.deadline}, height ${height}`)
-    const { buildP2PKHScript } = await import('@nektar/anchor')
-    const pkh = contract.params.operatorPkh
-    // the seize spends the REAL parent — a synthetic sourceTransaction
-    // mismatches the outpoint txid in the covenant's preimage and produces
-    // an invalid unlock on-chain. Fetch the actual bond deploy tx — on the
-    // INSTANCE's own network (never a silent mainnet fallback).
+    if (this.bondBusy) throw new Error('bond op in flight')
+    this.bondBusy = true
+    try {
+      const height = await this.chain.currentHeight()
+      const s = contract.stateOf(head.script)
+      if (s.seized !== 0n) throw new Error('bond already seized')
+      if (BigInt(height) < s.deadline) throw new Error(`bond not yet seizable — deadline ${s.deadline}, height ${height}`)
+      const { buildP2PKHScript } = await import('@nektar/anchor')
+      const pkh = contract.params.operatorPkh
+      // the seize spends the REAL parent — a synthetic sourceTransaction
+      // mismatches the outpoint txid in the covenant's preimage and produces
+      // an invalid unlock on-chain. Fetch the actual bond deploy tx — on the
+      // INSTANCE's own network (never a silent mainnet fallback).
+      const parentTx = await this.fetchParentTx(head.txid)
+      // covenant bound: input − payoutSats (= fee + husk + change) ≤ maxFee+1
+      // → fee ≤ maxFee−1. Use exactly maxFee−1 so the residual equals the bound.
+      // fee: relay needs ~100sat/kB on main (~500 for a ~4KB covenant tx);
+      // the covenant bounds residual = fee+2 ≤ maxFee+1. Pick the lower of the
+      // two — 500 on main, maxFee−1 on test (where 1-sat relays pass anyway).
+      const spendFee = this.opts.network === 'main' ? 500n : BigInt(contract.params.maxFee) - 1n
+      const { tx } = await contract.buildSeize(head, payToScript ?? buildP2PKHScript(pkh), height, this.chain, spendFee, parentTx)
+      this.noteTxHex(tx.id('hex'), tx.toHex())
+      if (!bond) { // only update local state for the bond WE deployed
+        this.bondHead = { txid: tx.id('hex'), vout: 1, satoshis: tx.outputs[1]!.satoshis!, script: tx.outputs[1]!.lockingScript.toHex() }
+        this.persistState()
+      }
+      return { txid: tx.id('hex') }
+    } finally { this.bondBusy = false }
+  }
+
+  /** the covenant preimage needs the REAL parent tx — a synthetic
+   *  sourceTransaction mismatches the outpoint txid and produces an invalid
+   *  unlock on-chain. Fetch it on the instance's own network. */
+  /** raw-tx hex cache keyed by txid — persisted so a covenant spend can build
+   *  its preimage from a parent we broadcast seconds ago, before indexers
+   *  have it (WoC /hex 404s on fresh txs). Bounded to the last 64 entries. */
+  private txHexCache = new Map<string, string>()
+
+  private noteTxHex (txid: string, hex: string): void {
+    if (this.txHexCache.size > 64) this.txHexCache.delete(this.txHexCache.keys().next().value!)
+    this.txHexCache.set(txid, hex)
+  }
+
+  private async fetchParentTx (txid: string): Promise<import('@bsv/sdk').Transaction> {
     const { Transaction } = await import('@bsv/sdk')
+    const cached = this.txHexCache.get(txid)
+    if (cached) return Transaction.fromHex(cached)
     const net = this.opts.network ?? 'main'
     const wocUrl = process.env.NEKTAR_WOC_URL
       ?? (net === 'testnet' ? 'https://api.whatsonchain.com/v1/bsv/test'
         : net === 'ttn' ? 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test'
         : net === 'main' ? 'https://api.whatsonchain.com/v1/bsv/main'
         : undefined)
-    if (!wocUrl) throw new Error(`bondSeize: no tx fetch endpoint for network '${net}'`)
-    const pr = await fetch(`${wocUrl}/tx/${head.txid}/hex`)
-    if (!pr.ok) throw new Error(`bondSeize: parent tx ${head.txid} fetch failed (${pr.status})`)
-    const parentTx = Transaction.fromHex((await pr.text()).trim())
-    // covenant bound: input − payoutSats (= fee + husk + change) ≤ maxFee+1
-    // → fee ≤ maxFee−1. Use exactly maxFee−1 so the residual equals the bound.
-    const { tx } = await contract.buildSeize(head, payToScript ?? buildP2PKHScript(pkh), height, this.chain, BigInt(contract.params.maxFee) - 1n, parentTx)
-    if (!bond) { // only update local state for the bond WE deployed
-      this.bondHead = { txid: tx.id('hex'), vout: 1, satoshis: tx.outputs[1]!.satoshis!, script: tx.outputs[1]!.lockingScript.toHex() }
-      this.persistState()
+    if (!wocUrl) throw new Error(`bond parent fetch: no endpoint for network '${net}'`)
+    // fresh txs index within ~30s — retry once before giving up
+    for (let i = 0; i < 3; i++) {
+      const pr = await fetch(`${wocUrl}/tx/${txid}/hex`)
+      if (pr.ok) { const hex = (await pr.text()).trim(); this.noteTxHex(txid, hex); return Transaction.fromHex(hex) }
+      if (pr.status !== 404) throw new Error(`bond parent tx ${txid} fetch failed (${pr.status})`)
+      await new Promise(r => setTimeout(r, 10_000))
     }
-    return { txid: tx.id('hex') }
+    throw new Error(`bond parent tx ${txid} fetch failed (404 after retries)`)
+  }
+
+  /** commit a checkpoint root — keeps the bond alive past its current deadline. */
+  async bondCommit (root: string): Promise<{ txid: string, n: bigint } | null> {
+    if (!this.bondContract || !this.bondHead) return null
+    if (this.bondBusy) throw new Error('bond op in flight')
+    this.bondBusy = true
+    try {
+      const head = this.bondHead
+      const height = await this.chain.currentHeight()
+      const parentTx = await this.fetchParentTx(head.txid)
+      const commitFee = this.opts.network === 'main' ? 500n : BigInt(this.bondContract.params.maxFee) - 1n
+      const { tx, state } = await this.bondContract.buildCommit(head, this.bondKey(), root, height, this.chain, commitFee, parentTx)
+      this.noteTxHex(tx.id('hex'), tx.toHex())
+      this.bondHead = { txid: tx.id('hex'), vout: 0, satoshis: tx.outputs[0]!.satoshis!, script: tx.outputs[0]!.lockingScript.toHex() }
+      this.persistState()
+      return { txid: tx.id('hex'), n: state.n }
+    } finally { this.bondBusy = false }
+  }
+
+  /** close the bond after its release height — operator reclaims the funds. */
+  async bondClose (): Promise<{ txid: string } | null> {
+    if (!this.bondContract || !this.bondHead) return null
+    const head = this.bondHead
+    const s = this.bondContract.stateOf(head.script)
+    const height = await this.chain.currentHeight()
+    if (this.bondBusy) throw new Error('bond op in flight')
+    this.bondBusy = true
+    try {
+      if (BigInt(height) < BigInt(this.bondContract.params.bondReleaseHeight)) throw new Error(`bond not yet releasable — release ${this.bondContract.params.bondReleaseHeight}, height ${height}`)
+      const parentTx = await this.fetchParentTx(head.txid)
+      const closeFee = this.opts.network === 'main' ? 500n : BigInt(this.bondContract.params.maxFee) - 1n
+      const { tx } = await this.bondContract.buildClose(head, this.bondKey(), height, this.chain, closeFee, parentTx)
+      this.noteTxHex(tx.id('hex'), tx.toHex())
+      this.bondContract = undefined
+      this.bondHead = undefined
+      this.persistState()
+      return { txid: tx.id('hex') }
+    } finally { this.bondBusy = false }
   }
 
   /** build + sign the payment tx for an invoice (payQuote → invoice fields)
@@ -614,6 +699,35 @@ export class NektarMemory {
     ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
     ;(this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
     return { payment: { invoiceId: inv.invoiceId, transaction }, txid: tx.id('hex') }
+  }
+
+  /** one-call payment: build + sign + broadcast a plain spend to a payee
+   *  address or locking script. Unlike payInvoice (which returns a BEEF for
+   *  the payee's settlePayment), this airs the tx and returns its txid —
+   *  the way to fund another agent's fee address. */
+  async sendSats (args: { amount: number, address?: string, scriptHex?: string, opReturn?: string }): Promise<{ txid: string, paidSats: number }> {
+    const { P2PKH, LockingScript, Transaction, SatoshisPerKilobyte } = await import('@bsv/sdk')
+    if (!args.address && !args.scriptHex) throw new Error('sendSats: address or scriptHex required')
+    const script = args.scriptHex
+      ? LockingScript.fromHex(args.scriptHex)
+      : new P2PKH().lock(args.address!)
+    const f = await this.takeFunding(args.amount + 600)
+    const tx = new Transaction()
+    tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(this.fundKey) })
+    tx.addOutput({ satoshis: args.amount, lockingScript: script })
+    if (args.opReturn) {
+      const tagHex = Buffer.from(args.opReturn, 'utf8').toString('hex')
+      tx.addOutput({ satoshis: 0, lockingScript: LockingScript.fromHex(`006a${tagHex.length / 2 < 0x4c ? (tagHex.length / 2).toString(16).padStart(2, '0') : '4c' + (tagHex.length / 2).toString(16).padStart(2, '0')}${tagHex}`) })
+    }
+    tx.addOutput({ lockingScript: new P2PKH().lock(this.fundKey.toPublicKey().toAddress((this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])), change: true })
+    await tx.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
+    await tx.sign()
+    const br = await this.chain.broadcast(tx)
+    if (br.status !== 'success') throw new Error(`sendSats broadcast failed: ${br.description ?? 'unknown'}`)
+    this.noteTxHex(tx.id('hex'), tx.toHex())
+    ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
+    ;(this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
+    return { txid: tx.id('hex'), paidSats: args.amount }
   }
 
   /** D4 (§19 M_U): the shard's anchored rotation ledger — genesis owner pub
@@ -746,7 +860,7 @@ export class NektarMemory {
   private async takeFunding (satoshis: number): Promise<import('@nektar/chain').FundingOut> {
     const f = this.funder as any
     if (typeof f.take === 'function') return await f.take(satoshis)
-    if (typeof f.takeReserve === 'function') { const u = await f.takeReserve(); if (u) return u }
+    if (typeof f.takeReserve === 'function') { const u = await f.takeReserve(undefined, satoshis); if (u) return u }
     const u = (f.utxos ?? []).find((u: { satoshis?: number }) => (u.satoshis ?? 0) >= satoshis)
     if (!u) throw new Error('no funding UTXO available for the attestation tx')
     return u
@@ -1273,15 +1387,17 @@ export class NektarMemory {
     // §12 SLA: the bond covenant mirrors the checkpoint on-chain — lastRoot
     // commits to the FULL signed checkpoint (digest binds logId+size+n+R+R'+
     // time+txid), making the history unforkable and publicly replayable.
-    if (this.bondContract && this.bondHead) {
+    if (this.bondContract && this.bondHead && !this.bondBusy) {
       const cp = cps[cps.length - 1]!
       const lastRoot = toHex(Uint8Array.from(checkpointDigest(cp)))
       const key = this.opts.bond?.ownerKey ?? this.fundKey
+      this.bondBusy = true
       try {
         const c = await this.bondContract.buildCommit(this.bondHead, key, lastRoot, await this.chain.currentHeight(), this.chain)
         this.bondHead = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0]!.satoshis!, script: c.tx.outputs[0]!.lockingScript.toHex() }
         this.persistState()
       } catch { this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed') }
+      finally { this.bondBusy = false }
     }
     if (this.opts.overlay) {
       await this.opts.overlay.engine.submit({ beef: this.anchorChain(shard).beefOf(res.tx), topics: ['tm_nektar'] }, undefined, 'current-tx')
@@ -1481,13 +1597,15 @@ export class NektarMemory {
       const height = await this.chain.currentHeight()
       const s = this.bondContract.stateOf(this.bondHead.script)
       const margin = this.bondContract.params.epochLen / 2n > 0n ? this.bondContract.params.epochLen / 2n : 1n
-      if (s.seized === 0n && BigInt(height) + margin >= s.deadline) {
+      if (s.seized === 0n && !this.bondBusy && BigInt(height) + margin >= s.deadline) {
+        this.bondBusy = true
         try {
           const c = await this.bondContract.buildCommit(this.bondHead, this.opts.bond?.ownerKey ?? this.fundKey, s.lastRoot, height, this.chain)
           this.bondHead = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0]!.satoshis!, script: c.tx.outputs[0]!.lockingScript.toHex() }
           this.persistState()
           this.metrics.inc('nektar_bond_renewals_total', {}, 1, 'bond deadline renewals committed by the SLA watchdog')
         } catch { this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed') }
+        finally { this.bondBusy = false }
       }
     }
     return out
@@ -1605,7 +1723,7 @@ export class NektarMemory {
       txid: this.bondHead.txid, vout: this.bondHead.vout, satoshis: this.bondHead.satoshis, script: this.bondHead.script,
       operatorPkh: this.bondContract.params.operatorPkh, releaseHeight: this.bondContract.params.bondReleaseHeight.toString(), maxFee: this.bondContract.params.maxFee.toString(), epochLen: this.bondContract.params.epochLen.toString()
     } : undefined
-    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags), importedBundles: Object.fromEntries(this.importedBundles), bond })
+    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags), importedBundles: Object.fromEntries(this.importedBundles), bond, txHex: Object.fromEntries(this.txHexCache) } as PersistedMemoryState)
   }
   private restoreState (): void {
     const s = this.opts.stateStore?.load()
@@ -1623,6 +1741,7 @@ export class NektarMemory {
       this.tails.set(shard, p.tails); this.cps.set(shard, p.checkpoints); this.touched.add(shard)
     }
     this.promises.push(...s.promises)
+    for (const [txid, hex] of Object.entries((s.txHex ?? {}) as Record<string, string>)) this.txHexCache.set(txid, hex)
     for (const [k, b] of Object.entries(s.importedBundles ?? {})) this.importedBundles.set(k, b)
     for (const [shard, f] of Object.entries(s.flags ?? {})) this.flags.set(shard, f)
     if (s.bond) {

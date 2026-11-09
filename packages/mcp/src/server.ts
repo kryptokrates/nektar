@@ -229,6 +229,20 @@ export const TOOLS = [
     }
   },
   {
+    name: 'bondCommit',
+    description: 'Commit a checkpoint root into the bond — the covenant continuation keeps the bond alive and pushes the deadline forward by epochLen.',
+    inputSchema: {
+      type: 'object',
+      properties: { root: { type: 'string', description: '32-byte checkpoint root, hex' } },
+      required: ['root']
+    }
+  },
+  {
+    name: 'bondClose',
+    description: 'Close the bond after its release height — the operator reclaims the funds (whole bond minus a bounded fee).',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
     name: 'disclose',
     description: 'Verify an anchored disclosure envelope (signature + verifier + expiry + field path + anchor).',
     inputSchema: {
@@ -427,6 +441,25 @@ export const TOOLS = [
         opReturn: { type: 'string', description: 'ascii invoice tag, e.g. nektarpay:<id>' }
       }
     }
+  },
+  {
+    name: 'sendSats',
+    description: 'Send sats to an address or locking script — builds, signs and BROADCASTS a plain P2PKH payment from the fee reserve (unlike payInvoice, which returns an unsigned-for-settlement BEEF). Use this to fund another agent\'s fee address.',
+    inputSchema: {
+      type: 'object',
+      required: ['amount'],
+      properties: {
+        amount: { type: 'number', description: 'sats to send' },
+        address: { type: 'string', description: 'payee base58 address (alternative to scriptHex)' },
+        scriptHex: { type: 'string', description: 'payee locking script hex (alternative to address)' },
+        opReturn: { type: 'string', description: 'optional ascii OP_RETURN tag' }
+      }
+    }
+  },
+  {
+    name: 'fundingRefresh',
+    description: 'Reconcile the fee reserve against chain truth: clears spent-marks left by dead unbroadcast txs (phantom entries), marks entries actually spent on-chain, and imports new outputs discovered at the fee address. Fixes "no funding UTXO" / dust-pick / insufficient-fee failures without a restart. Live networks only.',
+    inputSchema: { type: 'object', properties: {} }
   },
   {
     name: 'fundingImport',
@@ -702,12 +735,13 @@ export interface ToolCtx {
     wallet?: () => Promise<unknown>
     costs?: () => unknown
     importFunding?: (txid: string) => Promise<unknown>
+    refreshFunding?: () => Promise<unknown>
   }
 }
 
 /** tools that change instance state — a successful call emits 'change' on
  *  mem.events so live surfaces (dashboard SSE) refresh instantly */
-const MUTATING_TOOLS = new Set(['remember', 'describeShard', 'publishOffer', 'publishWant', 'respond', 'peerCall', 'delegate', 'revokeGrant', 'attest', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport', 'sendEnvelope', 'fetchObject'])
+const MUTATING_TOOLS = new Set(['remember', 'describeShard', 'publishOffer', 'publishWant', 'respond', 'peerCall', 'delegate', 'revokeGrant', 'attest', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'bondCommit', 'bondClose', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport', 'sendEnvelope', 'fetchObject', 'sendSats', 'fundingRefresh'])
 
 // beacon-discovered peer set — one known rv reveals the rest (GET /peers).
 // Cached 5min; publish/discover fan out across the set so no single rv is
@@ -799,6 +833,9 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         try { const out = await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) }); mem.budget.commit(gid, `payInvoice:${args.invoiceId}`); return out } catch (e) { mem.budget.release(gid, `payInvoice:${args.invoiceId}`); throw e }
       }
       return await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) })
+    }
+    case 'sendSats': {
+      return await mem.sendSats({ amount: Number(args.amount), address: args.address, scriptHex: args.scriptHex, opReturn: args.opReturn })
     }
     case 'sendEnvelope': {
       const { sendEnvelope } = await import('./mailbox.js')
@@ -987,22 +1024,33 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     }
     case 'sale#complete': {
       const { DisclosureSaleHost } = await import('@nektar/anchor')
+      // depositorPkh is always the LOCAL depositor (operator key) — the offer's
+      // cfg never carries it; fill it here so callers can pass the raw offer cfg.
+      const depositorPkh = args.cfg.depositorPkh ?? Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
       const host = new DisclosureSaleHost({
-        ...args.cfg,
+        ...args.cfg, depositorPkh,
         price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
       })
-      const { tx } = host.buildBuy(args.utxo, args.wrapped, BigInt(args.changeSats))
+      // covenant bound: utxo − price − change ≤ maxFee → change ≥ utxo − price − maxFee.
+      // Default the change so the spend pays ~350 sats (≈mainnet relay for ~1.5KB),
+      // never more than the bound allows.
+      const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats)
+        : BigInt(args.utxo.satoshis) - BigInt(args.cfg.price) - BigInt(Math.min(Number(args.cfg.maxFee) - 2, 350))
+      const { tx } = host.buildBuy(args.utxo, args.wrapped, changeSats)
       const r = await mem.broadcastTx(tx)
       if (r.status !== 'success') return { accepted: false, reason: r.description }
       return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0]!.satoshis, txHex: tx.toHex() }
     }
     case 'sale#refund': {
       const { DisclosureSaleHost } = await import('@nektar/anchor')
+      const depositorPkh = args.cfg.depositorPkh ?? Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
       const host = new DisclosureSaleHost({
-        ...args.cfg,
+        ...args.cfg, depositorPkh,
         price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
       })
-      const { tx } = host.buildRefund(args.utxo, mem.operatorKey(), args.lockTime, BigInt(args.changeSats))
+      const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats)
+        : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(args.cfg.maxFee), 350))
+      const { tx } = host.buildRefund(args.utxo, mem.operatorKey(), args.lockTime ?? Number(args.cfg.refundAfter), changeSats)
       const r = await mem.broadcastTx(tx)
       if (r.status !== 'success') return { accepted: false, reason: r.description }
       return { accepted: true, txid: tx.id('hex'), refundSats: tx.outputs[0]!.satoshis }
@@ -1181,6 +1229,14 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     case 'bondSeize': {
       const r = await mem.bondSeize(args.payToScript, args.bond)
       return r ? { ...r, receipt: { decision: 'allow', action: 'bondSeize' } } : { deployed: false }
+    }
+    case 'bondCommit': {
+      const r = await mem.bondCommit(args.root)
+      return r ? { ...r, n: r.n.toString(), receipt: { decision: 'allow', action: 'bondCommit' } } : { deployed: false }
+    }
+    case 'bondClose': {
+      const r = await mem.bondClose()
+      return r ? { ...r, receipt: { decision: 'allow', action: 'bondClose' } } : { deployed: false }
     }
     case 'disclose': {
       const idm = await import('@nektar/identity')
@@ -1380,6 +1436,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (!ctx.ops?.importFunding) throw new Error('fundingImport: live network only (mock/regtest fund via the harness)')
       if (typeof args?.txid !== 'string' || args.txid.length < 8) throw new Error('fundingImport: txid required')
       return await ctx.ops.importFunding(args.txid)
+    }
+    case 'fundingRefresh': {
+      if (!ctx.ops?.refreshFunding) throw new Error('fundingRefresh: live network only')
+      return await ctx.ops.refreshFunding()
     }
     case 'exportShard': {
       if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('exportShard: shard required')

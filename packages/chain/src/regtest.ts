@@ -263,9 +263,13 @@ export class ReserveFunder {
    * `spendCheck` (optional) is an O(1) chain lookup: when it reports a
    * candidate definitively spent it is pruned and the next is tried —
    * 'unknown' results are kept (pending txs may lag the UTXO store). */
-  async takeReserve (spendCheck?: (txid: string, vout: number) => Promise<boolean>): Promise<{ tx: Transaction, vout: number, satoshis: number } | null> {
+  async takeReserve (spendCheck?: (txid: string, vout: number) => Promise<boolean>, minSats?: number): Promise<{ tx: Transaction, vout: number, satoshis: number } | null> {
     while (true) {
-      const u = this.utxos.find(x => !this.spent.has(this.op(x.tx.id('hex'), x.vout)))
+      // smallest-sufficient: skip spent entries AND entries too small for the
+      // spend — a first-fit dust pick produces negative-fee/insufficient txs
+      const u = this.utxos
+        .filter(x => !this.spent.has(this.op(x.tx.id('hex'), x.vout)) && (minSats === undefined || x.satoshis >= minSats))
+        .sort((a, b) => a.satoshis - b.satoshis)[0]
       if (!u) return null
       if (spendCheck && await spendCheck(u.tx.id('hex'), u.vout)) { this.markSpent(u.tx.id('hex'), u.vout); continue }
       return u

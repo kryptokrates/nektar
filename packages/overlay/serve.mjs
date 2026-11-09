@@ -238,6 +238,14 @@ h1{font-size:22px;margin:0 0 4px;font-weight:600}.dot{display:inline-block;width
 .card{background:#161616;border:1px solid #262626;border-radius:10px;padding:16px 18px}
 .card .n{font-size:24px;color:#f5b301;font-weight:600}.card .l{font-size:11px;letter-spacing:.12em;color:#888;text-transform:uppercase}
 h2{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margin:20px 0 10px}
+#wrap{background:#161616;border:1px solid #262626;border-radius:10px;overflow:hidden;max-height:420px;overflow-y:auto}
+#mt{width:100%;border-collapse:collapse;font-size:13px}
+#mt thead th{position:sticky;top:0;background:#1a1a1a;color:#888;font-size:11px;letter-spacing:.1em;text-transform:uppercase;text-align:left;padding:10px 14px;cursor:pointer;user-select:none}
+#mt thead th:hover{color:#f5b301}
+#mt tbody td{padding:9px 14px;border-bottom:1px solid #1f1f1f}
+#mt tbody tr:hover{background:#1c1c1c}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.dom{display:inline-block;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:0 8px;font-size:11px;color:#999;margin-right:4px}
 .ev{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #1f1f1f;font-size:13px}
 .ev .k{width:88px;flex-shrink:0}.ev .seq{color:#555;width:40px;flex-shrink:0}
 .k-ad{color:#9ecbff}.k-catalog{color:#b78aff}.k-want{color:#fb923c}.k-offer{color:#4cc26b}
@@ -261,7 +269,12 @@ footer{margin-top:24px;color:#555;font-size:12px}
 <div class="card"><div class="n" id="n-agent">0</div><div class="l">agents</div></div>
 <div class="card"><div class="n" id="n-settle">0</div><div class="l">settled</div></div>
 </div>
-<h2>Live feed</h2><div id="feed"><div class="dim">listening…</div></div>
+<h2>Market</h2>
+<div id="wrap"><table id="mt"><thead><tr>
+<th onclick="sortBy('rank')">#</th><th onclick="sortBy('pub')">agent</th><th onclick="sortBy('domain')">domain</th>
+<th class="num" onclick="sortBy('price')">floor ⓢ</th><th class="num" onclick="sortBy('count')">listings</th><th onclick="sortBy('last')">last seen</th>
+</tr></thead><tbody id="mb"><tr><td colspan="6" class="dim" style="padding:12px">no listings yet</td></tr></tbody></table></div>
+<h2>Ticker</h2><div id="feed"><div class="dim">listening…</div></div>
 <h2>Agents on this index</h2><div class="agents" id="agents"><div class="dim">none yet</div></div>
 <footer>every event is a signed artifact — pub + sig verifiable against the payload</footer>
 <script>
@@ -283,6 +296,7 @@ function setNet(n){
   $('rv-host').textContent=' · '+BASE
   const nb=$('netbadge'); nb.textContent=n==='main'?'mainnet':'testnet'; nb.className='netbadge '+(n==='main'?'mainnet':'testnet')
   $('feed').innerHTML='<div class="dim">listening…</div>'; seen.clear(); cursor=-1
+  for(const k in rows)delete rows[k]; for(const k in lastSeen)delete lastSeen[k]; renderTable()
   if(es){es.close();es=null}
   for(const k of ['want','offer','agent','settle']) $('n-'+k).textContent='0'
   for(const k in counts) delete counts[k]
@@ -290,6 +304,31 @@ function setNet(n){
 }
 const bump = k => { counts[k] = (counts[k]||0)+1; const el=$('n-'+k); if(el) el.textContent=counts[k] }
 const esc = s => String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
+// market rows — (pub|domain) → {price, count, last}
+const rows={}
+const lastSeen={}
+function upOffer(o){
+  const p=o?.offer??o; if(!p?.pub||p.priceSats==null)return
+  const doms=(p.domains&&p.domains.length?p.domains:['—'])
+  for(const d of doms){ const k=p.pub+'|'+d, r=rows[k]??(rows[k]={pub:p.pub,domain:d,price:Infinity,count:0,last:0})
+    r.price=Math.min(r.price,Number(p.priceSats)); r.count++ }
+}
+function touchPub(pub,ts){ if(pub)lastSeen[pub]=Math.max(lastSeen[pub]||0,ts||0) }
+function renderTable(){
+  const list=Object.values(rows)
+  for(const r of list)r.last=lastSeen[r.pub]||0
+  const k=sort.k,d=sort.d
+  list.sort((a,b)=>{ const va=k==='rank'?a.count*-1:k==='price'?(a.price===Infinity?1e18:a.price):k==='last'?a.last:k==='pub'?a.pub:a.domain
+    const vb=k==='rank'?b.count*-1:k==='price'?(b.price===Infinity?1e18:b.price):k==='last'?b.last:k==='pub'?b.pub:b.domain
+    return (va<vb?-1:va>vb?1:0)*d })
+  $('mb').innerHTML=list.length?list.slice(0,500).map((r,i)=>
+    '<tr><td>'+(i+1)+'</td><td>'+esc(r.pub.slice(0,12))+'…</td><td><span class="dom">'+esc(r.domain)+'</span></td>'+
+    '<td class="num">'+(r.price===Infinity?'—':r.price.toLocaleString())+'</td><td class="num">'+r.count+'</td>'+
+    '<td class="dim">'+(r.last?new Date(r.last).toLocaleTimeString():'—')+'</td></tr>').join('')
+    :'<tr><td colspan="6" class="dim" style="padding:12px">no listings yet</td></tr>'
+}
+const sort={k:'price',d:1}
+function sortBy(k){ sort.d=sort.k===k?-sort.d:1; sort.k=k; renderTable() }
 function row(e){
   const pub=(e.pub||'').slice(0,10), dom=(e.domains||[]).join(','), p=e.payload||{}
   let extra=''
@@ -299,15 +338,22 @@ function row(e){
     '<span class="dim">'+esc(dom)+'</span><span class="dim">'+esc(pub)+'…</span><span class="dim">'+esc(extra)+'</span>'+
     '<span class="dim" style="margin-left:auto">'+new Date(e.ts||Date.now()).toLocaleTimeString()+'</span></div>'
 }
+let raf=false
 function feed(evs){
   const box=$('feed'); if(box.querySelector('.dim')) box.innerHTML=''
+  let dirty=false
   for(const e of evs){ if(seen.has(e.seq)) continue; seen.add(e.seq); cursor=Math.max(cursor,e.seq)
-    bump(e.kind); box.insertAdjacentHTML('afterbegin',row(e)) }
+    bump(e.kind); box.insertAdjacentHTML('afterbegin',row(e)); touchPub(e.pub,e.ts)
+    if(e.kind==='offer'){upOffer(e.payload?.offer?{offer:e.payload.offer}:e.payload);dirty=true}
+    if(dirty&&!raf){raf=true;setTimeout(()=>{raf=false;renderTable()},300)} }
   while(box.children.length>40) box.lastChild.remove()
 }
 async function boot(){
   const j=await (await fetch(BASE+'/events?since=-30&limit=50')).json().catch(()=>({}))
   feed(j.events||[])
+  const o=await (await fetch(BASE+'/offers')).json().catch(()=>({}))
+  for(const x of o.offers||[])upOffer(x)
+  renderTable()
   es=new EventSource(BASE+'/events/stream')
   es.onmessage=m=>{ try{ feed([JSON.parse(m.data)]) }catch{} }
   es.onopen=()=>{ $('live').style.background='#4cc26b' }

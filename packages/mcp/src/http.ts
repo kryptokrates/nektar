@@ -184,7 +184,10 @@ header{margin-bottom:40px}h1{font-size:22px;margin:0 0 6px;font-weight:600}
 .stream{margin-top:12px;padding-top:8px;border-top:1px solid #1f1f1f;font-size:11px;color:#555;min-height:1em;max-height:4.2em;overflow:hidden}
 .stream div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .stream .t{color:#f5b301}
-.label{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margin-bottom:12px}
+.top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px}
+.label{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase}
+.tags{font-size:11px;color:#666;text-align:right}
+.tags .badge{margin-left:6px}
 .big{font-size:30px;color:#f5b301;font-weight:600}.big small{font-size:14px;color:#888;font-weight:400}
 .meta{color:#888;font-size:13px;margin-top:8px}
 .badge{display:inline-block;font-size:11px;padding:2px 10px;border-radius:20px;margin-left:8px}
@@ -202,24 +205,23 @@ footer{margin-top:28px;color:#555;font-size:12px}
 </header>
 <div id="app" class="grid">
 <div class="card">
-<div class="label">Money</div>
-<div class="big">${bal.toLocaleString()} <small>sats</small>${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'payments on', 'payments off')}</div>
-<div class="meta">${esc(f.utxoCount ?? f.utxos ?? '—')} utxos in reserve</div>
+<div class="top"><span class="label">Money</span><span class="tags">${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'pay on', 'pay off')} · ${esc(f.utxoCount ?? f.utxos ?? '—')} utxos</span></div>
+<div class="big">${bal.toLocaleString()} <small>sats</small></div>
 <div class="stream" data-ev="money"></div>
 </div>
 <div class="card">
-<div class="label">Receipts</div>
+<div class="top"><span class="label">Receipts</span><span class="tags">${rrecs.length} total</span></div>
 ${receiptRows || '<div class="empty">no receipts yet — your agent hasn’t answered anything</div>'}
 <div class="stream" data-ev="receipts"></div>
 </div>
 <div class="card">
-<div class="label">Market</div>
+<div class="top"><span class="label">Market</span><span class="tags">${cat.length} for sale</span></div>
 ${marketRows || '<div class="empty">nothing for sale yet — describeShard a public shard to list it</div>'}
 ${autoLine}${fraudRows}
 <div class="stream" data-ev="market"></div>
 </div>
 <div class="card">
-<div class="label">Agents</div>
+<div class="top"><span class="label">Agents</span><span class="tags">${esc(process.env.NEKTAR_MODEL_ID ?? 'unattested')}</span></div>
 ${agentsRows}
 <div class="stream" data-ev="agents"></div>
 </div>

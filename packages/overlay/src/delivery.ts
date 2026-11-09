@@ -56,9 +56,21 @@ export function beefFrame (payload: Uint8Array | number[], topic: string, opts: 
   return [...frame, ...payload]
 }
 
+// bstack pattern vocabulary — our market is their pattern family:
+// directory (who's who + what they know), audit (history), messagebox
+// (demand/answer), grant (delegated authority). Cross-impl clients map by this.
+export const KIND_PATTERN: Record<string, string> = {
+  ad: 'directory', catalog: 'directory', beacon: 'directory', offer: 'directory',
+  settlement: 'audit', revocation: 'audit',
+  want: 'messagebox', respond: 'messagebox',
+  delegation: 'grant', attestation: 'grant', reputation: 'directory'
+}
+export const kindPattern = (kind: string, payload?: unknown): string =>
+  (kind === 'offer' && (payload as any)?.offer?.replyTo) ? 'messagebox' : (KIND_PATTERN[kind] ?? 'audit')
+
 /** The JSON-level envelope for /events — seq cursor + content address, so a
  *  consumer can detect gaps (seq) AND tampering (contentId) without parsing. */
-export function eventEnvelope (e: { seq: number, kind: string, pub: string, domains: string[], ts: number, payload: unknown }): { seq: number, kind: string, pub: string, domains: string[], ts: number, payload: unknown, topicId: string, contentId: string } {
+export function eventEnvelope (e: { seq: number, kind: string, pub: string, domains: string[], ts: number, payload: unknown }): { seq: number, kind: string, pub: string, domains: string[], ts: number, payload: unknown, topicId: string, contentId: string, pattern: string } {
   const payload = utf8(JSON.stringify(e.payload))
-  return { ...e, topicId: Buffer.from(topicId('tm_presence')).toString('hex'), contentId: Buffer.from(contentId(payload)).toString('hex') }
+  return { ...e, topicId: Buffer.from(topicId('tm_presence')).toString('hex'), contentId: Buffer.from(contentId(payload)).toString('hex'), pattern: kindPattern(e.kind, e.payload) }
 }

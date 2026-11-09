@@ -30,7 +30,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 import knexPkg from 'knex'
 import { ArcBroadcaster, ChaintracksTracker } from '@nektar/chain'
 import { PrivateKey } from '@bsv/sdk'
-import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation, signBeacon, deliveryRecord, eventEnvelope } from './dist/src/index.js'
+import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation, signBeacon, deliveryRecord, eventEnvelope, KIND_PATTERN } from './dist/src/index.js'
 
 const HOST = process.env.NEKTAR_OVERLAY_HOST ?? '0.0.0.0'
 const PORT = Number(process.env.NEKTAR_OVERLAY_PORT ?? 8090)
@@ -122,6 +122,9 @@ const server = http.createServer(async (req, res) => {
       if (!ev) return json(res, 404, { error: 'no event at seq' })
       const rec = deliveryRecord('tm_presence', new TextEncoder().encode(JSON.stringify(ev.payload)))
       res.writeHead(200, { 'content-type': 'application/octet-stream' }); return res.end(Buffer.from(rec))
+    }
+    if (req.method === 'GET' && url.pathname === '/patterns') {
+      return json(res, 200, { kindToPattern: KIND_PATTERN, note: 'replyTo-offers read as messagebox; everything else maps by kind' })
     }
     if (req.method === 'GET' && url.pathname === '/peers') {
       return json(res, 200, { peers: overlay.lsPresence.peersFor().map(sb => sb.beacon), self: SELF_PUB })

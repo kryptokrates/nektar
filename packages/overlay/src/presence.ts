@@ -52,7 +52,7 @@ const stableJson = (v: unknown): string => JSON.stringify(v, (_k, x) =>
 const sigFor = <T>(key: PrivateKey, obj: T, canonical: (t: T) => string): string =>
   toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(canonical(obj))))).toDER() as number[]))
 const verifyDigest = (pubHex: string, digest: Uint8Array, sigHex: string): boolean => {
-  return verifyDigest(pubHex, digest, sigHex)
+  try { return PublicKey.fromString(pubHex).verify(Array.from(digest), Signature.fromDER(sigHex, 'hex')) } catch { return false }
 }
 
 const catalogCanonical = (c: AgentCatalog) => `${c.pub}|${c.ts}|${stableJson(c.shards)}`

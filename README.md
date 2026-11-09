@@ -76,6 +76,10 @@ curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/tools/mc
 
 # dev path — clone + build + wire into your agent:
 pnpm setup:claude   # or: pnpm setup:codex
+
+# first run — the wizard walks network → data dir → passphrase →
+# rendezvous, writes .env, prints your next command:
+pnpm init:nektar
 ```
 
 ## Run it

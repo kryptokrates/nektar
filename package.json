@@ -17,6 +17,7 @@
     "sbom": "node tools/sbom.mjs",
     "mcp:install": "node tools/mcp-install.mjs",
     "setup:claude": "node tools/setup-claude.mjs",
+    "init:nektar": "node tools/init.mjs",
     "setup:codex": "node tools/setup-codex.mjs",
     "demo": "node tools/demo.mjs",
     "rendezvous": "node packages/overlay/serve.mjs",

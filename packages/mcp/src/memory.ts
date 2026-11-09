@@ -512,15 +512,20 @@ export class NektarMemory {
    *  every anchor commits its checkpoint digest — the on-chain history is
    *  unforkable and timestamped, so promise/SLA violations are provable by
    *  anyone replaying the commit chain. */
-  async bondDeploy (sats = this.opts.bond?.sats ?? 5_000, releaseHeight?: bigint): Promise<{ txid: string, releaseHeight: bigint }> {
-    if (this.bondHead) throw new Error('bond already deployed')
+  async bondDeploy (sats = this.opts.bond?.sats ?? 5_000, releaseHeight?: bigint, force = false): Promise<{ txid: string, releaseHeight: bigint }> {
+    if (this.bondHead && !force) throw new Error('bond already deployed')
+    // force: drop the local bond state — the old bond stays on-chain and
+    // remains seizeable under its own deadline; we just stop tracking it.
+    if (force) { this.bondContract = undefined; this.bondHead = undefined }
     const key = this.bondKey()
     const release = releaseHeight ?? BigInt(await this.chain.currentHeight()) + BigInt(this.opts.bond?.horizonBlocks ?? 1008)
     const pkh = key.toPublicKey().toHash()
     const cfg = { operatorPkh: typeof pkh === 'string' ? pkh : toHex(Uint8Array.from(pkh)), bondReleaseHeight: release, maxFee: this.opts.bond?.maxFee ?? 10n, epochLen: BigInt(this.opts.bond?.epochBlocks ?? 144) }
     this.bondContract = new CheckpointBond(cfg)
     const fund = await this.takeFunding(sats + 600)
-    const { tx, utxo } = this.bondContract.buildDeploy({ tx: fund.tx, vout: fund.vout, satoshis: fund.satoshis }, key, sats)
+    const { tx, sats: bondSats, script } = this.bondContract.buildDeploy({ tx: fund.tx, vout: fund.vout, satoshis: fund.satoshis }, key, sats)
+    await tx.sign() // P2PKH funding input — txid serialization needs the signed unlock
+    const utxo = this.bondContract.deployUtxo(tx, bondSats, script)
     const br = await this.chain.broadcast(tx)
     if (br.status !== 'success') { this.bondContract = undefined; throw new Error(`bond deploy broadcast failed: ${br.description ?? 'unknown'}`) }
     this.bondHead = utxo
@@ -531,26 +536,40 @@ export class NektarMemory {
   /** current on-chain bond state + head — absent when no bond was deployed.
    *  `deadline` is the seize threshold: if chain height reaches it without a
    *  commit, ANYONE may take the bond (§12 deadline-slashing). */
-  bondStatus (): { n: number, lastRoot: string, headTxid: string, sats: number, releaseHeight: bigint, deadline: bigint, seized: boolean } | null {
+  bondStatus (): { n: number, lastRoot: string, headTxid: string, sats: number, releaseHeight: bigint, deadline: bigint, seized: boolean, cfg?: { operatorPkh: string, bondReleaseHeight: bigint, maxFee: bigint, epochLen: bigint }, utxo?: { txid: string, vout: number, satoshis: number, script: string } } | null {
     if (!this.bondContract || !this.bondHead) return null
     const s = this.bondContract.stateOf(this.bondHead.script)
-    return { n: Number(s.n), lastRoot: s.lastRoot, headTxid: this.bondHead.txid, sats: this.bondHead.satoshis, releaseHeight: this.bondContract.params.bondReleaseHeight, deadline: s.deadline, seized: s.seized === 1n }
+    return { n: Number(s.n), lastRoot: s.lastRoot, headTxid: this.bondHead.txid, sats: this.bondHead.satoshis, releaseHeight: this.bondContract.params.bondReleaseHeight, deadline: s.deadline, seized: s.seized === 1n,
+      // the observer's reconstruction kit — the bond's public constructor
+      // args + its on-chain utxo. Anyone holding these can seize after the
+      // deadline; nothing secret is revealed.
+      cfg: { operatorPkh: this.bondContract.params.operatorPkh, bondReleaseHeight: this.bondContract.params.bondReleaseHeight, maxFee: this.bondContract.params.maxFee, epochLen: this.bondContract.params.epochLen },
+      utxo: this.bondHead }
   }
 
   /** seize an overdue bond — permissionless: valid only after the on-chain
    *  deadline. Any observer can run this against a bond head they hold; the
    *  payout goes to `payToScript` (default: this instance's operator). */
-  async bondSeize (payToScript?: string): Promise<{ txid: string } | null> {
-    if (!this.bondContract || !this.bondHead) return null
+  /** seize an overdue bond — permissionless: valid only once the on-chain
+   *  deadline has passed. With `bond: {cfg, utxo}` an OBSERVER seizes a bond
+   *  it never deployed — cfg is the bond's public constructor args (posted in
+   *  the bond's own manifest/attestation), utxo is read from the chain. No
+   *  local bond state or operator key is needed. */
+  async bondSeize (payToScript?: string, bond?: { cfg: ConstructorParameters<typeof CheckpointBond>[0], utxo: BondUtxo }): Promise<{ txid: string } | null> {
+    const contract = bond ? new CheckpointBond(bond.cfg) : this.bondContract
+    const head = bond ? bond.utxo : this.bondHead
+    if (!contract || !head) return null
     const height = await this.chain.currentHeight()
-    const s = this.bondContract.stateOf(this.bondHead.script)
+    const s = contract.stateOf(head.script)
     if (s.seized !== 0n) throw new Error('bond already seized')
     if (BigInt(height) < s.deadline) throw new Error(`bond not yet seizable — deadline ${s.deadline}, height ${height}`)
     const { buildP2PKHScript } = await import('@nektar/anchor')
-    const pkh = this.bondContract.params.operatorPkh
-    const { tx } = await this.bondContract.buildSeize(this.bondHead, payToScript ?? buildP2PKHScript(pkh), height, this.chain)
-    this.bondHead = { txid: tx.id('hex'), vout: 1, satoshis: tx.outputs[1]!.satoshis!, script: tx.outputs[1]!.lockingScript.toHex() }
-    this.persistState()
+    const pkh = contract.params.operatorPkh
+    const { tx } = await contract.buildSeize(head, payToScript ?? buildP2PKHScript(pkh), height, this.chain)
+    if (!bond) { // only update local state for the bond WE deployed
+      this.bondHead = { txid: tx.id('hex'), vout: 1, satoshis: tx.outputs[1]!.satoshis!, script: tx.outputs[1]!.lockingScript.toHex() }
+      this.persistState()
+    }
     return { txid: tx.id('hex') }
   }
 

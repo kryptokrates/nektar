@@ -941,9 +941,15 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         const { reconstructRoot, toHex: th, fromHex: fh } = await import('@nektar/core')
         const buyerPub = mem.operatorKey().toPublicKey().toString()
         const leaf = args.offer.commitment?.leaf ?? ''
+        // the sig binds whatever buyerPub the seller offered to — a public
+        // offer signed with '' verifies against '', a private one against the
+        // operator's own pub. Accept either; the sig covers the choice.
         if (!verifyOfferSig(
           { cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig, expiresAt: args.offer.expiresAt },
-          buyerPub, leaf
+          args.offer.buyerPub ?? buyerPub, leaf
+        ) && !verifyOfferSig(
+          { cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig, expiresAt: args.offer.expiresAt },
+          '', leaf
         )) throw new Error('sale op=escrow: offerSig does not verify — cfg may have been substituted')
         // π_i pre-funding check: if the commitment carries a path, the leaf
         // must rebuild the committed batch root — catch a bogus leaf early.
@@ -1165,7 +1171,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       return await mem.revocationStatus(String(args.pkHex))
     }
     case 'bondDeploy': {
-      const r = await mem.bondDeploy(args.sats, args.releaseHeight === undefined ? undefined : BigInt(args.releaseHeight))
+      const r = await mem.bondDeploy(args.sats, args.releaseHeight === undefined ? undefined : BigInt(args.releaseHeight), args.force === true)
       return { ...r, releaseHeight: r.releaseHeight.toString(), receipt: { decision: 'allow', action: 'bondDeploy' } }
     }
     case 'bondStatus': {
@@ -1173,7 +1179,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       return s ? { ...s, releaseHeight: s.releaseHeight.toString(), deadline: s.deadline.toString() } : { deployed: false }
     }
     case 'bondSeize': {
-      const r = await mem.bondSeize(args.payToScript)
+      const r = await mem.bondSeize(args.payToScript, args.bond)
       return r ? { ...r, receipt: { decision: 'allow', action: 'bondSeize' } } : { deployed: false }
     }
     case 'disclose': {

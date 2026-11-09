@@ -57,14 +57,22 @@ export class CheckpointBond {
 
   /** deploy: spend a P2PKH funding utxo into the genesis bond output
    *  (n=0, empty lastRoot). Plain funding tx — not a covenant call. */
-  buildDeploy (fundUtxo: { tx: Transaction, vout: number, satoshis: number }, key: PrivateKey, sats: number, fee = 1n): { tx: Transaction, utxo: BondUtxo } {
+  /** builds the unsigned deploy tx — `utxo` is null until signed: txid()
+   *  serializes inputs and the unsigned unlock can't serialize. Sign first,
+   *  then call `deployUtxo`. */
+  buildDeploy (fundUtxo: { tx: Transaction, vout: number, satoshis: number }, key: PrivateKey, sats: number, fee = 1n): { tx: Transaction, sats: number, script: string } {
     const script = this.lockingScript(0n, '')
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: fundUtxo.tx, sourceOutputIndex: fundUtxo.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
     tx.addOutput({ satoshis: sats, lockingScript: LockingScript.fromHex(script) })
     const change = BigInt(fundUtxo.satoshis) - BigInt(sats) - fee
     if (change > 546n) tx.addOutput({ satoshis: Number(change), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.operatorPkh)) })
-    return { tx, utxo: { txid: tx.id('hex'), vout: 0, satoshis: sats, script } }
+    return { tx, sats, script }
+  }
+
+  /** the bond utxo once the deploy tx is signed */
+  deployUtxo (tx: Transaction, sats: number, script: string): BondUtxo {
+    return { txid: tx.id('hex'), vout: 0, satoshis: sats, script }
   }
 
   /** shared spend machinery: covenant preimage + opPushTx sig + user sig for the

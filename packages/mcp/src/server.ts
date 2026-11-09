@@ -562,7 +562,7 @@ export const TOOLS = [
         parent: { type: 'object', description: 'a SignedDelegation you hold — re-delegates a SUBSET of it (nested chain); child must shrink scope/cap/expiry' },
         tools: { type: 'array', items: { type: 'string' }, description: 'tools the grant covers' },
         domains: { type: 'array', items: { type: 'string' }, description: 'domains the grant covers' },
-        spendCapSats: { type: 'number', description: 'max cumulative spend under this grant' },
+        spendCapSats: { type: 'number', description: 'max spend per call under this grant (per-call cap; not cumulative)' },
         ttlMs: { type: 'number', description: 'grant lifetime ms (default 86400000)' },
         publish: { type: 'boolean' }, rendezvousUrl: { type: 'string' }
       }
@@ -1492,7 +1492,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       // revoke a delegation — tombstone the grant so peers stop honoring it
       if (typeof args?.grantId !== 'string' || !args.grantId) throw new Error('revokeGrant: grantId required')
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await fetch(`${rv}/delegation/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ grantId: args.grantId, pub: mem.operatorKey().toPublicKey().toString(), ts: Date.now() }), signal: AbortSignal.timeout(15_000) })
+      const { signRevocation } = await import('@nektar/overlay')
+      const r0 = { grantId: args.grantId, pub: mem.operatorKey().toPublicKey().toString(), ts: Date.now() }
+      const { sig } = signRevocation(mem.operatorKey(), r0)
+      const r = await fetch(`${rv}/delegation/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...r0, sig }), signal: AbortSignal.timeout(15_000) })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`revoke: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, grantId: args.grantId }

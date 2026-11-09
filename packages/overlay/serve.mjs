@@ -72,7 +72,7 @@ const beaconNow = async () => {
   await overlay.lsPresence.announceBeacon(sb).catch(() => {})
   for (const peer of PEERS) fetch(`${peer}/beacon`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sb) }).catch(() => {})
 }
-if (process.env.NEKTAR_BRIDGE_INGRESS) console.log(`[rendezvous] bridge ingress=${process.env.NEKTAR_BRIDGE_INGRESS} — plane delivery expected via overlay-bridge feed`)
+if (process.env.NEKTAR_BRIDGE_INGRESS) console.log(`[rendezvous] bridge ingress=${process.env.NEKTAR_BRIDGE_INGRESS} ï¿½ plane delivery expected via overlay-bridge feed`)
 setInterval(beaconNow, 30 * 60_000); setTimeout(beaconNow, 3000)
 setInterval(() => { const n = overlay.lsPresence.sweep?.(); if (n) console.log(`[rendezvous] sweep: ${n} expired entries evicted`) }, 300_000)
 
@@ -88,15 +88,21 @@ const ingest = {
   reputation: p => overlay.lsPresence.announceReputation(p),
   delegation: p => overlay.lsPresence.announceDelegation(p),
   attestation: p => overlay.lsPresence.announceAttestation(p),
-  beacon: p => overlay.lsPresence.announceBeacon(p)
+  beacon: p => overlay.lsPresence.announceBeacon(p),
+  revocation: p => overlay.lsPresence.revokeDelegation(p.revocation ?? p)
 }
 for (const peer of PEERS) {
-  let cur = -1
+  const CURSOR_FILE = path.join(DIR, 'peer-cursors.json')
+  const savedCursors = (() => { try { return JSON.parse(fs.readFileSync(CURSOR_FILE, 'utf8')) } catch { return {} } })()
+  const saveCursors = () => { try { fs.writeFileSync(CURSOR_FILE, JSON.stringify(savedCursors)) } catch {} }
+  setInterval(saveCursors, 30_000)
+
+  let cur = savedCursors[peer] ?? -1
   ;(async function tail () {
     for (;;) {
       try {
         const j = await (await fetch(`${peer}/events?since=${cur}&wait=30000`)).json()
-        for (const e of j.events ?? []) { cur = Math.max(cur, e.seq); try { await ingest[e.kind]?.(e.payload) } catch {} }
+        for (const e of j.events ?? []) { cur = Math.max(cur, e.seq); savedCursors[peer] = cur; try { await ingest[e.kind]?.(e.payload) } catch {} }
       } catch { await new Promise(r => setTimeout(r, 10_000)) }
     }
   })()
@@ -238,10 +244,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/delegation/revoke') {
       if (!gated(req)) return json(res, 401, { error: 'unauthorized' })
-      const { grantId, pub, ts } = JSON.parse(await body(req) || '{}')
-      if (!grantId || !pub) return json(res, 400, { error: 'grantId and pub required' })
-      const ok = await overlay.lsPresence.revokeDelegation({ grantId, pub, ts: Number(ts ?? Date.now()) })
-      return json(res, ok ? 200 : 400, ok ? { ok: true, grantId } : { error: 'not the owner or unknown grant' })
+      const { grantId, pub, ts, sig } = JSON.parse(await body(req) || '{}')
+      if (!grantId || !pub || !sig) return json(res, 400, { error: 'grantId, pub and sig required' })
+      const ok = await overlay.lsPresence.revokeDelegation({ grantId, pub, ts: Number(ts ?? Date.now()), sig })
+      return json(res, ok ? 200 : 400, ok ? { ok: true, grantId } : { error: 'not the owner, bad signature or unknown grant' })
     }
     if (req.method === 'POST' && url.pathname === '/attestation') {
       if (!gated(req)) return json(res, 401, { error: 'unauthorized' })

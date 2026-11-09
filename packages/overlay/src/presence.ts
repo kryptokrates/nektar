@@ -260,6 +260,18 @@ export function verifyBeacon (b: BeaconAd, sigHex: string): boolean {
     return PublicKey.fromString(b.pub).verify(Array.from(digestBeacon(b)), Signature.fromDER(sigHex, 'hex'))
   } catch { return false }
 }
+
+// ── revocation — an owner's signed tombstone for a grant. Relays MUST verify:
+// pub equality alone is not authentication, anyone could claim to be an owner.
+export interface RevocationAd { grantId: string, pub: string, ts: number }
+export interface SignedRevocation { revocation: RevocationAd, sig: string }
+const revCanonical = (r: RevocationAd) => `${r.grantId}|${r.pub}|${r.ts}`
+export function signRevocation (key: PrivateKey, r: RevocationAd): SignedRevocation {
+  return { revocation: { ...r, pub: key.toPublicKey().toString() }, sig: toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(revCanonical(r))))).toDER() as number[])) }
+}
+export function verifyRevocation (r: RevocationAd, sigHex: string): boolean {
+  try { return PublicKey.fromString(r.pub).verify(Array.from(sha256(utf8(revCanonical(r)))), Signature.fromDER(sigHex, 'hex')) } catch { return false }
+}
 export interface PresenceEvent { seq: number, kind: EventKind, pub: string, domains: string[], ts: number, payload: unknown }
 
 export function signPresence (key: PrivateKey, fields: Omit<PresenceAd, 'pub'>): SignedAd {
@@ -420,7 +432,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   announceReputation: (sr: SignedReputation) => Promise<boolean>
   announceDelegation: (sd: SignedDelegation) => Promise<boolean>
   announceAttestation: (sa: SignedAttestation) => Promise<boolean>
-  revokeDelegation: (r: { grantId: string, pub: string, ts: number }) => Promise<boolean>
+  revokeDelegation: (r: { grantId: string, pub: string, ts: number, sig?: string }) => Promise<boolean>
   delegationsFor: (grantee?: string) => SignedDelegation[]
   attestationsFor: (pub?: string) => SignedAttestation[]
   catalogFor: (pub: string) => SignedCatalog | undefined
@@ -812,9 +824,11 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     // only the grant's owner may tombstone it — revocation kills the grant
     // AND cascades: every descendant grant (transitive parentGrantId) dies
     // with it — a revoked link breaks the whole chain below it
-    revokeDelegation: async (r: { grantId: string, pub: string, ts: number }) => {
+    revokeDelegation: async (r: { grantId: string, pub: string, ts: number, sig?: string }) => {
       const d = delegations.get(r.grantId)
       if (!d || d.grant.ownerPub !== r.pub) return false
+      // authenticated revocation — owner-signed; unsigned requests are refused
+      if (!r.sig || !verifyRevocation(r, r.sig)) return false
       revoked.add(r.grantId)
       for (const sd of delegations.values()) if (sd.grant.parentGrantId === r.grantId) revoked.add(sd.grant.grantId)
       appendEvent('revocation', r.pub, [], r)

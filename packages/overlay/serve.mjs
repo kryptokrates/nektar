@@ -341,20 +341,20 @@ const rows={}
 const lastSeen={}
 function upOffer(o){
   const p=o?.offer??o; if(!p?.pub||p.priceSats==null)return
-  const doms=(p.domains&&p.domains.length?p.domains:['—'])
-  for(const d of doms){ const k=p.pub+'|'+d, r=rows[k]??(rows[k]={pub:p.pub,domain:d,price:Infinity,count:0,last:0})
-    r.price=Math.min(r.price,Number(p.priceSats)); r.count++ }
+  const r=rows[p.pub]??(rows[p.pub]={pub:p.pub,domains:new Set(),price:Infinity,count:0,last:0})
+  for(const d of (p.domains&&p.domains.length?p.domains:['—']))r.domains.add(d)
+  r.price=Math.min(r.price,Number(p.priceSats)); r.count++
 }
 function touchPub(pub,ts){ if(pub)lastSeen[pub]=Math.max(lastSeen[pub]||0,ts||0) }
 function renderTable(){
   const list=Object.values(rows)
   for(const r of list)r.last=lastSeen[r.pub]||0
   const k=sort.k,d=sort.d
-  list.sort((a,b)=>{ const va=k==='rank'?a.count*-1:k==='price'?(a.price===Infinity?1e18:a.price):k==='last'?a.last:k==='pub'?a.pub:a.domain
-    const vb=k==='rank'?b.count*-1:k==='price'?(b.price===Infinity?1e18:b.price):k==='last'?b.last:k==='pub'?b.pub:b.domain
+  list.sort((a,b)=>{ const va=k==='rank'?a.count*-1:k==='price'?(a.price===Infinity?1e18:a.price):k==='last'?a.last:k==='pub'?a.pub:[...a.domains].join(',')
+    const vb=k==='rank'?b.count*-1:k==='price'?(b.price===Infinity?1e18:b.price):k==='last'?b.last:k==='pub'?b.pub:[...b.domains].join(',')
     return (va<vb?-1:va>vb?1:0)*d })
   $('mb').innerHTML=list.length?list.slice(0,500).map((r,i)=>
-    '<tr><td>'+(i+1)+'</td><td>'+esc(r.pub.slice(0,12))+'…</td><td><span class="dom">'+esc(r.domain)+'</span></td>'+
+    '<tr><td>'+(i+1)+'</td><td>'+esc(r.pub.slice(0,12))+'…</td><td>'+[...r.domains].map(d=>'<span class="dom">'+esc(d)+'</span>').join('')+'</td>'+
     '<td class="num">'+(r.price===Infinity?'—':r.price.toLocaleString())+'</td><td class="num">'+r.count+'</td>'+
     '<td class="dim">'+(r.last?new Date(r.last).toLocaleTimeString():'—')+'</td></tr>').join('')
     :'<tr><td colspan="6" class="dim" style="padding:12px">no listings yet</td></tr>'

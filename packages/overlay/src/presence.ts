@@ -47,6 +47,14 @@ const stableJson = (v: unknown): string => JSON.stringify(v, (_k, x) =>
     ? Object.fromEntries(Object.keys(x as object).sort().map(k => [k, (x as Record<string, unknown>)[k]]))
     : x))
 
+// shared artifact machinery — every signed artifact does the same three ops:
+// canonical → sha256 → DER sign | verify. One impl, ~400 lines collapsed.
+const sigFor = <T>(key: PrivateKey, obj: T, canonical: (t: T) => string): string =>
+  toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(canonical(obj))))).toDER() as number[]))
+const verifyDigest = (pubHex: string, digest: Uint8Array, sigHex: string): boolean => {
+  return verifyDigest(pubHex, digest, sigHex)
+}
+
 const catalogCanonical = (c: AgentCatalog) => `${c.pub}|${c.ts}|${stableJson(c.shards)}`
 const catalogDigest = (c: AgentCatalog) => sha256(utf8(catalogCanonical(c)))
 
@@ -62,7 +70,7 @@ const validEntry = (e: CatalogShardEntry): boolean =>
 
 export function signCatalog (key: PrivateKey, fields: Omit<AgentCatalog, 'pub'>): SignedCatalog {
   const catalog: AgentCatalog = { ...fields, pub: key.toPublicKey().toString() }
-  return { catalog, sig: toHex(Uint8Array.from(key.sign(Array.from(catalogDigest(catalog))).toDER() as number[])) }
+  return { catalog, sig: sigFor(key, catalog, catalogCanonical) }
 }
 
 export function verifyCatalog (catalog: AgentCatalog, sigHex: string): boolean {
@@ -71,7 +79,7 @@ export function verifyCatalog (catalog: AgentCatalog, sigHex: string): boolean {
     if (!Number.isSafeInteger(catalog.ts) || catalog.ts <= 0) return false
     if (catalog.endpoint !== undefined && (typeof catalog.endpoint !== 'string' || !/^https?:\/\/\S{2,200}$/.test(catalog.endpoint))) return false
     if (!Array.isArray(catalog.shards) || catalog.shards.length === 0 || catalog.shards.length > 64 || !catalog.shards.every(validEntry)) return false
-    return PublicKey.fromString(catalog.pub).verify(Array.from(catalogDigest(catalog)), Signature.fromDER(sigHex, 'hex'))
+    return verifyDigest(catalog.pub, catalogDigest(catalog), sigHex)
   } catch { return false }
 }
 
@@ -121,7 +129,7 @@ export function signWant (key: PrivateKey, fields: Omit<WantAd, 'pub'>): SignedW
   const pub = key.toPublicKey().toString()
   const sr = fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'want')
   const want: WantAd = { ...fields, ...sr, domains: [...fields.domains].sort(), pub }
-  return { want, sig: toHex(Uint8Array.from(key.sign(Array.from(wantDigest(want))).toDER() as number[])) }
+  return { want, sig: sigFor(key, want, wantCanonical) }
 }
 
 export function verifyWant (want: WantAd, sigHex: string): boolean {
@@ -134,7 +142,7 @@ export function verifyWant (want: WantAd, sigHex: string): boolean {
     if (want.endpoint !== undefined && (typeof want.endpoint !== 'string' || !/^https?:\/\/\S{2,200}$/.test(want.endpoint))) return false
     if (!Number.isSafeInteger(want.ts) || want.ts <= 0) return false
     if (want.exp !== undefined && (!Number.isSafeInteger(want.exp) || want.exp <= Date.now())) return false
-    return PublicKey.fromString(want.pub).verify(Array.from(wantDigest(want)), Signature.fromDER(sigHex, 'hex'))
+    return verifyDigest(want.pub, wantDigest(want), sigHex)
   } catch { return false }
 }
 
@@ -181,7 +189,7 @@ export function signOffer (key: PrivateKey, fields: Omit<OfferAd, 'pub'>): Signe
   const pub = key.toPublicKey().toString()
   const sr = fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'offer')
   const offer: OfferAd = { ...fields, ...sr, domains: [...fields.domains].sort(), pub }
-  return { offer, sig: toHex(Uint8Array.from(key.sign(Array.from(offerDigest(offer))).toDER() as number[])) }
+  return { offer, sig: sigFor(key, offer, offerCanonical) }
 }
 
 export function verifyOffer (offer: OfferAd, sigHex: string): boolean {
@@ -195,7 +203,7 @@ export function verifyOffer (offer: OfferAd, sigHex: string): boolean {
     for (const h of [offer.shardId, offer.leaf, offer.hdp, offer.batchR]) if (h !== undefined && (typeof h !== 'string' || !/^[0-9a-f]{40,64}$/i.test(h))) return false
     if (!Number.isSafeInteger(offer.ts) || offer.ts <= 0) return false
     if (offer.exp !== undefined && (!Number.isSafeInteger(offer.exp) || offer.exp <= Date.now())) return false
-    return PublicKey.fromString(offer.pub).verify(Array.from(offerDigest(offer)), Signature.fromDER(sigHex, 'hex'))
+    return verifyDigest(offer.pub, offerDigest(offer), sigHex)
   } catch { return false }
 }
 
@@ -216,7 +224,7 @@ const settlementCanonical = (s: SettlementAd) => `${s.invoiceId}|${s.tool}|${s.s
 const settlementDigest = (s: SettlementAd) => sha256(utf8(settlementCanonical(s)))
 export function signSettlement (key: PrivateKey, fields: Omit<SettlementAd, 'pub'>): SignedSettlement {
   const ad: SettlementAd = { ...fields, domains: [...fields.domains].sort(), pub: key.toPublicKey().toString() }
-  return { ad, sig: toHex(Uint8Array.from(key.sign(Array.from(settlementDigest(ad))).toDER() as number[])) }
+  return { ad, sig: sigFor(key, ad, settlementCanonical) }
 }
 export function verifySettlement (ad: SettlementAd, sigHex: string): boolean {
   try {
@@ -227,7 +235,7 @@ export function verifySettlement (ad: SettlementAd, sigHex: string): boolean {
     if (typeof ad.tool !== 'string' || ad.tool.length === 0 || ad.tool.length > 48) return false
     if (!Array.isArray(ad.domains) || !ad.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return false
     if (!Number.isSafeInteger(ad.ts) || ad.ts <= 0) return false
-    return PublicKey.fromString(ad.pub).verify(Array.from(settlementDigest(ad)), Signature.fromDER(sigHex, 'hex'))
+    return verifyDigest(ad.pub, settlementDigest(ad), sigHex)
   } catch { return false }
 }
 
@@ -249,14 +257,14 @@ const repCanonical = (c: ReputationCard) => `${c.shardId ?? ''}|${JSON.stringify
 const repDigest = (c: ReputationCard) => sha256(utf8(repCanonical(c)))
 export function signReputation (key: PrivateKey, fields: Omit<ReputationCard, 'pub'>): SignedReputation {
   const card: ReputationCard = { ...fields, pub: key.toPublicKey().toString() }
-  return { card, sig: toHex(Uint8Array.from(key.sign(Array.from(repDigest(card))).toDER() as number[])) }
+  return { card, sig: sigFor(key, card, repCanonical) }
 }
 export function verifyReputationCard (card: ReputationCard, sigHex: string): boolean {
   try {
     if (typeof card?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(card.pub)) return false
     if (!Array.isArray(card.entries) || card.entries.length > 256 || !card.entries.every(e => e && typeof e.domain === 'string' && DOMAIN_RE.test(e.domain))) return false
     if (!Number.isSafeInteger(card.asOf) || card.asOf <= 0) return false
-    return PublicKey.fromString(card.pub).verify(Array.from(repDigest(card)), Signature.fromDER(sigHex, 'hex'))
+    return verifyDigest(card.pub, repDigest(card), sigHex)
   } catch { return false }
 }
 
@@ -280,12 +288,12 @@ export interface SignedBeacon { beacon: BeaconAd, sig: string }
 const beaconCanonical = (b: BeaconAd) => `${b.endpoint}|${[...b.topics].sort().join(',')}|${b.net ?? ''}|${b.ts}|${b.exp ?? ''}|${[...(b.lookups ?? [])].sort().join(',')}`
 export function signBeacon (key: PrivateKey, b: Omit<BeaconAd, 'pub'>): SignedBeacon {
   const beacon = { ...b, pub: key.toPublicKey().toString() } as BeaconAd
-  return { beacon, sig: toHex(Uint8Array.from(key.sign(Array.from(digestBeacon(beacon))).toDER() as number[])) }
+  return { beacon, sig: sigFor(key, beacon, beaconCanonical) }
 }
 const digestBeacon = (b: BeaconAd) => sha256(utf8(beaconCanonical(b)))
 export function verifyBeacon (b: BeaconAd, sigHex: string): boolean {
   try {
-    return PublicKey.fromString(b.pub).verify(Array.from(digestBeacon(b)), Signature.fromDER(sigHex, 'hex'))
+    return verifyDigest(b.pub, digestBeacon(b), sigHex)
   } catch { return false }
 }
 
@@ -313,10 +321,10 @@ export interface SignedInterval { commit: IntervalCommit, sig: string }
 const intervalCanonical = (c: IntervalCommit) => `${c.streamId}|${c.firstSeq}|${c.lastSeq}|${c.eventCount}|${c.merkleRoot}|${c.prevIntervalHash ?? ''}|${c.ts}`
 export function signInterval (key: PrivateKey, c: Omit<IntervalCommit, 'pub'>): SignedInterval {
   const commit = { ...c, pub: key.toPublicKey().toString() } as IntervalCommit
-  return { commit, sig: toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(intervalCanonical(commit))))).toDER() as number[])) }
+  return { commit, sig: sigFor(key, commit, intervalCanonical) }
 }
 export function verifyInterval (c: IntervalCommit, sigHex: string): boolean {
-  try { return PublicKey.fromString(c.pub).verify(Array.from(sha256(utf8(intervalCanonical(c)))), Signature.fromDER(sigHex, 'hex')) } catch { return false }
+  return verifyDigest(c.pub, sha256(utf8(intervalCanonical(c))), sigHex)
 }
 
 // ── F6 async mailbox — a signed encrypted envelope kept by the rv until the
@@ -344,23 +352,23 @@ export interface SignedEnvelope { envelope: EnvelopeAd, sig: string }
 const envCanonical = (e: EnvelopeAd) => `${e.messageId}|${e.version}|${e.sender}|${e.recipient}|${e.conversationId ?? ''}|${e.operationId ?? ''}|${e.kind}|${e.createdAt}|${e.expiresAt ?? ''}|${e.replyTo ?? ''}|${e.ciphertextHash}|${e.encryptionProfile ?? ''}|${e.topic ?? ''}`
 export function signEnvelope (key: PrivateKey, e: Omit<EnvelopeAd, 'sender' | 'version'>): SignedEnvelope {
   const envelope = { ...e, version: 1, sender: key.toPublicKey().toString() } as EnvelopeAd
-  return { envelope, sig: toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(envCanonical(envelope))))).toDER() as number[])) }
+  return { envelope, sig: sigFor(key, envelope, envCanonical) }
 }
 export function verifyEnvelope (e: EnvelopeAd, sigHex: string): boolean {
-  try { return PublicKey.fromString(e.sender).verify(Array.from(sha256(utf8(envCanonical(e)))), Signature.fromDER(sigHex, 'hex')) } catch { return false }
+  return verifyDigest(e.sender, sha256(utf8(envCanonical(e))), sigHex)
 }
 const revCanonical = (r: RevocationAd) => `${r.grantId}|${r.pub}|${r.ts}`
 export function signRevocation (key: PrivateKey, r: RevocationAd): SignedRevocation {
-  return { revocation: { ...r, pub: key.toPublicKey().toString() }, sig: toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(revCanonical(r))))).toDER() as number[])) }
+  return { revocation: { ...r, pub: key.toPublicKey().toString() }, sig: sigFor(key, r, revCanonical) }
 }
 export function verifyRevocation (r: RevocationAd, sigHex: string): boolean {
-  try { return PublicKey.fromString(r.pub).verify(Array.from(sha256(utf8(revCanonical(r)))), Signature.fromDER(sigHex, 'hex')) } catch { return false }
+  return verifyDigest(r.pub, sha256(utf8(revCanonical(r))), sigHex)
 }
 export interface PresenceEvent { seq: number, kind: EventKind, pub: string, domains: string[], ts: number, payload: unknown }
 
 export function signPresence (key: PrivateKey, fields: Omit<PresenceAd, 'pub'>): SignedAd {
   const ad: PresenceAd = { ...fields, shards: [...fields.shards].sort(), pub: key.toPublicKey().toString() }
-  return { ad, sig: toHex(Uint8Array.from(key.sign(Array.from(digest(ad))).toDER() as number[])) }
+  return { ad, sig: sigFor(key, ad, canonical) }
 }
 
 export function verifyPresence (ad: PresenceAd, sigHex: string): boolean {
@@ -370,7 +378,7 @@ export function verifyPresence (ad: PresenceAd, sigHex: string): boolean {
     if (!Array.isArray(ad.shards) || ad.shards.length > 64 || !ad.shards.every(s => typeof s === 'string' && s.length > 0 && s.length <= 64)) return false
     if (!Number.isSafeInteger(ad.ts) || ad.ts <= 0) return false
     if (ad.exp !== undefined && (!Number.isSafeInteger(ad.exp) || ad.exp <= Date.now())) return false // expired
-    return PublicKey.fromString(ad.pub).verify(Array.from(digest(ad)), Signature.fromDER(sigHex, 'hex'))
+    return verifyDigest(ad.pub, digest(ad), sigHex)
   } catch { return false }
 }
 
@@ -1092,7 +1100,7 @@ export function signDelegation (key: PrivateKey, fields: Omit<DelegationAd, 'own
     scope: { tools: fields.scope.tools ? [...fields.scope.tools].sort() : undefined, domains: fields.scope.domains ? [...fields.scope.domains].sort() : undefined },
     ownerPub: key.toPublicKey().toString()
   }
-  return { grant, sig: toHex(Uint8Array.from(key.sign(Array.from(delegationDigest(grant))).toDER() as number[])) }
+  return { grant, sig: sigFor(key, grant, delegationCanonical) }
 }
 
 /** a child grant must be a strict subset of its parent: the grantee
@@ -1118,7 +1126,7 @@ export function verifyDelegation (grant: DelegationAd, sigHex: string): boolean 
     if (!Number.isSafeInteger(grant.expiresAt) || grant.expiresAt <= Date.now()) return false
     if (!Number.isSafeInteger(grant.ts) || grant.ts <= 0) return false
     for (const arr of [grant.scope?.tools, grant.scope?.domains]) if (arr !== undefined && (!Array.isArray(arr) || arr.length > 64 || !arr.every(s => typeof s === 'string' && s.length > 0 && s.length <= 64))) return false
-    return PublicKey.fromString(grant.ownerPub).verify(Array.from(delegationDigest(grant)), Signature.fromDER(sigHex, 'hex'))
+    return verifyDigest(grant.ownerPub, delegationDigest(grant), sigHex)
   } catch { return false }
 }
 
@@ -1139,7 +1147,7 @@ const attestationDigest = (a: AttestationAd) => sha256(utf8(attestationCanonical
 
 export function signAttestation (key: PrivateKey, fields: Omit<AttestationAd, 'pub'>): SignedAttestation {
   const attestation: AttestationAd = { ...fields, pub: key.toPublicKey().toString() }
-  return { attestation, sig: toHex(Uint8Array.from(key.sign(Array.from(attestationDigest(attestation))).toDER() as number[])) }
+  return { attestation, sig: sigFor(key, attestation, attestationCanonical) }
 }
 
 export function verifyAttestation (attestation: AttestationAd, sigHex: string): boolean {
@@ -1150,6 +1158,6 @@ export function verifyAttestation (attestation: AttestationAd, sigHex: string): 
     if (attestation.provider !== undefined && (typeof attestation.provider !== 'string' || attestation.provider.length > 256)) return false
     if (attestation.claims !== undefined && (!Array.isArray(attestation.claims) || attestation.claims.length > 64 || !attestation.claims.every(c => typeof c === 'string' && c.length <= 512))) return false
     if (!Number.isSafeInteger(attestation.ts) || attestation.ts <= 0) return false
-    return PublicKey.fromString(attestation.pub).verify(Array.from(attestationDigest(attestation)), Signature.fromDER(sigHex, 'hex'))
+    return verifyDigest(attestation.pub, attestationDigest(attestation), sigHex)
   } catch { return false }
 }

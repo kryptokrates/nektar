@@ -459,8 +459,8 @@ export const TOOLS = [
   },
   {
     name: 'doctor',
-    description: 'One-call diagnostic: network, funding (address, balance, utxos), shard/record/anchor counts, unproven anchors, payment and prover status. The "is everything working" check.',
-    inputSchema: { type: 'object', properties: {} }
+    description: 'One-call diagnostic: network, funding (address, balance, utxos), shard/record/anchor counts, unproven anchors, payment and prover status. The "is everything working" check. fix:true also repairs what is safe — stale/corrupt instance.lock, missing data dir, missing VERSION marker; anything needing a spend or a judgment call is reported as refused, never attempted silently.',
+    inputSchema: { type: 'object', properties: { fix: { type: 'boolean', description: 'apply safe repairs (stale/corrupt lock, missing dir, VERSION baseline)' } } }
   },
   {
     name: 'describeShard',
@@ -1244,6 +1244,7 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
         const w = await ctx.ops.wallet() as Record<string, unknown>
         d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
       }
+      if (args?.fix) return { ...d, repair: await mem.doctorRepair() }
       return d
     }
     case 'describeShard': {

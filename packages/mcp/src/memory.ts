@@ -1969,6 +1969,33 @@ export class NektarMemory {
     }
   }
 
+  /** doctorRepair: the fix half of `doctor{fix:true}` — applies only repairs
+   *  that cannot lose state. Anything needing a spend or a judgment call is
+   *  reported as `refused` with a reason, never attempted silently. */
+  async doctorRepair (): Promise<{ fixed: string[], refused: string[] }> {
+    const fixed: string[] = [], refused: string[] = []
+    const dir = this.opts.dataDir
+    if (!dir) { refused.push('no dataDir on this instance — nothing to repair'); return { fixed, refused } }
+    const { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } = await import('node:fs')
+    if (!existsSync(dir)) { mkdirSync(dir, { recursive: true }); fixed.push(`recreated missing data dir ${dir}`) }
+    // instance.lock — refuse only when a *live* heartbeat owns it
+    const lock = (await import('node:path')).join(dir, 'instance.lock')
+    if (existsSync(lock)) {
+      let l: { owner?: string, beat?: number } | null = null
+      try { l = JSON.parse(readFileSync(lock, 'utf8')) } catch { l = null }
+      const live = l?.beat !== undefined && Date.now() - l.beat < 20_000
+      if (live) refused.push(`instance.lock held by live instance ${l?.owner} — stop it first, do not delete`)
+      else { rmSync(lock); fixed.push(l === null ? 'removed corrupt instance.lock' : `removed stale instance.lock (beat ${Math.round((Date.now() - (l?.beat ?? 0)) / 1000)}s old)`) }
+    }
+    // data-dir VERSION marker — establishes the migration baseline (v1)
+    const ver = (await import('node:path')).join(dir, 'VERSION')
+    if (!existsSync(ver)) { writeFileSync(ver, '1'); fixed.push('wrote VERSION=1 (migration baseline)') }
+    // unproven anchors need a spend — report, never fix silently
+    const unproven = this.unprovenAnchors().length
+    if (unproven > 0) refused.push(`${unproven} unproven anchor(s) — re-anchoring spends sats; handle deliberately`)
+    return { fixed, refused }
+  }
+
 }
 
 /** neutral reputation recompute — given the seller's exported `__receipts__`

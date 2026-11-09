@@ -18,6 +18,8 @@
     "mcp:install": "node tools/mcp-install.mjs",
     "setup:claude": "node tools/setup-claude.mjs",
     "init:nektar": "node tools/init.mjs",
+    "update:nektar": "node tools/update.mjs",
+    "doctor:fix": "node tools/doctor.mjs --fix",
     "setup:codex": "node tools/setup-codex.mjs",
     "demo": "node tools/demo.mjs",
     "rendezvous": "node packages/overlay/serve.mjs",

@@ -102,6 +102,8 @@ SMOKE_NETWORK=ttn     node packages/mcp/demo/sale-smoke.mjs        # escrow sale
 Participant guide: [`docs/MARKET.md`](docs/MARKET.md) — sell, buy, watch, verify.
 Ops runbook: [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
+Self-healing + upgrades: `pnpm doctor:fix` diagnoses and repairs what can't lose state (stale/corrupt `instance.lock`, missing dirs, VERSION baseline) — it works even when the instance can't boot. `pnpm update:nektar` pulls, rebuilds, and runs pending data-dir migrations (`tools/migrations.mjs` registry). Inside a running instance, `doctor{fix:true}` applies the same safe repairs via MCP.
+
 ## The honest limit
 
 A domain tag is a claim, not a fact — a seller can lie about covering soccer. The structure makes the lie attributable (committed, signed) and cheap to expose (one probe, one receipt). Proofs establish *recorded, unaltered, derivable* — never true. The market doesn't remove judgment; it prices it and makes the record of it public.

@@ -79,9 +79,11 @@ export class CheckpointBond {
    *  given method, all computed over the final lockTime-bearing tx. */
   private async spend (utxo: BondUtxo, methodIndex: number, method: string,
     args: unknown[], outputs: { satoshis: number, script: string }[],
-    lockTime: number, broadcaster: Broadcaster, ownerKey?: PrivateKey): Promise<{ tx: Transaction }> {
+    lockTime: number, broadcaster: Broadcaster, ownerKey?: PrivateKey, parentTx?: Transaction): Promise<{ tx: Transaction }> {
     const tx = new Transaction()
-    tx.addInput({ sourceTXID: utxo.txid, sourceOutputIndex: utxo.vout, unlockingScript: new UnlockingScript(), sequence: 0xfffffffe })
+    // the REAL parent tx — a synthetic one mismatches the outpoint txid in
+    // the covenant's preimage and produces an invalid unlock on-chain.
+    tx.addInput({ sourceTXID: utxo.txid, sourceTransaction: parentTx, sourceOutputIndex: utxo.vout, unlockingScript: new UnlockingScript(), sequence: 0xfffffffe })
     for (const o of outputs) tx.addOutput({ satoshis: o.satoshis, lockingScript: LockingScript.fromHex(o.script) })
     tx.lockTime = lockTime // sequence < final so consensus enforces nLockTime
     const c = this.contract as any
@@ -119,7 +121,7 @@ export class CheckpointBond {
   /** seize: permissionless — valid only once the on-chain deadline has passed.
    *  `payTo` is the seizer's locking script; the bond (minus fee, the 1-sat
    *  inert husk and the change slot) pays out there. No signature. */
-  async buildSeize (utxo: BondUtxo, payToScript: string, lockTime: number, broadcaster: Broadcaster, fee = 1n): Promise<{ tx: Transaction }> {
+  async buildSeize (utxo: BondUtxo, payToScript: string, lockTime: number, broadcaster: Broadcaster, fee = 1n, parentTx?: Transaction): Promise<{ tx: Transaction }> {
     const cur = this.stateOf(utxo.script)
     const payoutSats = BigInt(utxo.satoshis) - fee - 1n - 1n // −fee −husk −change
     const huskScript = (this.contract as any).getCodePartHex() + '6a' + this.stateHex(cur.n, cur.lastRoot, cur.deadline, 1n)
@@ -130,7 +132,7 @@ export class CheckpointBond {
         { satoshis: 1, script: huskScript },
         { satoshis: 1, script: buildP2PKHScript(this.cfg.operatorPkh) }
       ],
-      lockTime, broadcaster)
+      lockTime, broadcaster, undefined, parentTx)
     return { tx }
   }
 

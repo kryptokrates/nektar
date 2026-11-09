@@ -565,7 +565,24 @@ export class NektarMemory {
     if (BigInt(height) < s.deadline) throw new Error(`bond not yet seizable — deadline ${s.deadline}, height ${height}`)
     const { buildP2PKHScript } = await import('@nektar/anchor')
     const pkh = contract.params.operatorPkh
-    const { tx } = await contract.buildSeize(head, payToScript ?? buildP2PKHScript(pkh), height, this.chain)
+    // the seize spends the REAL parent — a synthetic sourceTransaction
+    // mismatches the outpoint txid in the covenant's preimage and produces
+    // an invalid unlock on-chain. Fetch the actual bond deploy tx — on the
+    // INSTANCE's own network (never a silent mainnet fallback).
+    const { Transaction } = await import('@bsv/sdk')
+    const net = this.opts.network ?? 'main'
+    const wocUrl = process.env.NEKTAR_WOC_URL
+      ?? (net === 'testnet' ? 'https://api.whatsonchain.com/v1/bsv/test'
+        : net === 'ttn' ? 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test'
+        : net === 'main' ? 'https://api.whatsonchain.com/v1/bsv/main'
+        : undefined)
+    if (!wocUrl) throw new Error(`bondSeize: no tx fetch endpoint for network '${net}'`)
+    const pr = await fetch(`${wocUrl}/tx/${head.txid}/hex`)
+    if (!pr.ok) throw new Error(`bondSeize: parent tx ${head.txid} fetch failed (${pr.status})`)
+    const parentTx = Transaction.fromHex((await pr.text()).trim())
+    // covenant bound: input − payoutSats (= fee + husk + change) ≤ maxFee+1
+    // → fee ≤ maxFee−1. Use exactly maxFee−1 so the residual equals the bound.
+    const { tx } = await contract.buildSeize(head, payToScript ?? buildP2PKHScript(pkh), height, this.chain, BigInt(contract.params.maxFee) - 1n, parentTx)
     if (!bond) { // only update local state for the bond WE deployed
       this.bondHead = { txid: tx.id('hex'), vout: 1, satoshis: tx.outputs[1]!.satoshis!, script: tx.outputs[1]!.lockingScript.toHex() }
       this.persistState()

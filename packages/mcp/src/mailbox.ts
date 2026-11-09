@@ -32,6 +32,8 @@ export async function sendEnvelope (
   const ciphertextHash = toHex(Uint8Array.from(sha256(plaintext)))
   const se = signEnvelope(key, {
     messageId: randomUUID(), kind: fields.kind, recipient: fields.recipient,
+    // topic-addressed — the keeper sees an opaque hash, not the recipient pub
+    topic: toHex(Uint8Array.from(sha256(utf8(`mb:${fields.recipient}`)))),
     conversationId: fields.conversationId, operationId: fields.operationId, replyTo: fields.replyTo,
     createdAt: Date.now(), expiresAt: fields.expiresAt, ciphertextHash, ciphertext, encryptionProfile: 'ecdh+aes-256-gcm'
   })
@@ -45,7 +47,8 @@ export async function collect (
   key: PrivateKey, keeperUrl: string, seen: Set<string> = new Set()
 ): Promise<CollectedMessage[]> {
   const me = key.toPublicKey().toString()
-  const r = await fetch(`${keeperUrl.replace(/\/+$/, '')}/mailbox?recipient=${encodeURIComponent(me)}`)
+  const topic = toHex(Uint8Array.from(sha256(utf8(`mb:${me}`))))
+  const r = await fetch(`${keeperUrl.replace(/\/+$/, '')}/mailbox?recipient=${encodeURIComponent(me)}&topic=${topic}`)
   const j = await r.json().catch(() => ({}))
   const out: CollectedMessage[] = []
   for (const se of j.envelopes ?? []) {

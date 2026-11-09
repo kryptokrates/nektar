@@ -336,9 +336,12 @@ export interface EnvelopeAd {
   ciphertextHash: string // sha256 of the encrypted payload — content stays opaque to the keeper
   ciphertext: string // hex — encrypted payload (AES-GCM, recipient-pub-derived)
   encryptionProfile?: string
+  /** bbox-style mailbox topic — sha256 of a shared/derived tag instead of a
+   *  recipient pubkey, so the keeper sees a subscription, not a recipient */
+  topic?: string
 }
 export interface SignedEnvelope { envelope: EnvelopeAd, sig: string }
-const envCanonical = (e: EnvelopeAd) => `${e.messageId}|${e.version}|${e.sender}|${e.recipient}|${e.conversationId ?? ''}|${e.operationId ?? ''}|${e.kind}|${e.createdAt}|${e.expiresAt ?? ''}|${e.replyTo ?? ''}|${e.ciphertextHash}|${e.encryptionProfile ?? ''}`
+const envCanonical = (e: EnvelopeAd) => `${e.messageId}|${e.version}|${e.sender}|${e.recipient}|${e.conversationId ?? ''}|${e.operationId ?? ''}|${e.kind}|${e.createdAt}|${e.expiresAt ?? ''}|${e.replyTo ?? ''}|${e.ciphertextHash}|${e.encryptionProfile ?? ''}|${e.topic ?? ''}`
 export function signEnvelope (key: PrivateKey, e: Omit<EnvelopeAd, 'sender' | 'version'>): SignedEnvelope {
   const envelope = { ...e, version: 1, sender: key.toPublicKey().toString() } as EnvelopeAd
   return { envelope, sig: toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(envCanonical(envelope))))).toDER() as number[])) }
@@ -528,7 +531,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   announceInterval: (si: SignedInterval) => Promise<boolean>
   intervalsFor: (pub?: string) => SignedInterval[]
   announceEnvelope: (se: SignedEnvelope) => Promise<boolean>
-  mailboxFor: (recipient: string) => SignedEnvelope[]
+  mailboxFor: (recipient: string, topic?: string) => SignedEnvelope[]
   /** evict expired entries from the live maps — returns how many died */
   sweep: () => number
   bus: EventEmitter
@@ -979,7 +982,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
       appendEvent('envelope', se.envelope.sender, [], se)
       return true
     },
-    mailboxFor: (recipient: string) => [...envelopes.values()].filter(se => se.envelope.recipient === recipient && alive({ ts: se.envelope.createdAt, exp: se.envelope.expiresAt })),
+    mailboxFor: (recipient: string, topic?: string) => [...envelopes.values()].filter(se => (se.envelope.recipient === recipient || se.envelope.topic === topic) && alive({ ts: se.envelope.createdAt, exp: se.envelope.expiresAt })),
 
     sweep: () => {
       let n = 0

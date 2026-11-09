@@ -189,9 +189,10 @@ const server = http.createServer(async (req, res) => {
       return obj ? json(res, 200, obj) : json(res, 404, { error: 'object not found' })
     }
     if (req.method === 'GET' && url.pathname === '/mailbox') {
-      const r = url.searchParams.get('recipient')
-      if (!r) return json(res, 400, { error: 'recipient required' })
-      return json(res, 200, { envelopes: overlay.lsPresence.mailboxFor(r) })
+      const r = url.searchParams.get('recipient') ?? ''
+      const t = url.searchParams.get('topic') ?? undefined
+      if (!r && !t) return json(res, 400, { error: 'recipient or topic required' })
+      return json(res, 200, { envelopes: overlay.lsPresence.mailboxFor(r, t) })
     }
     if (req.method === 'POST' && url.pathname === '/interval') {
       const { commit, sig } = JSON.parse(await body(req) || '{}')

@@ -52,7 +52,7 @@ const overlay = await createNektarOverlay(
 )
 console.log(`[rendezvous] network=${NET} db=${path.join(DIR, 'overlay.sqlite')} listening ${HOST}:${PORT}`)
 
-const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
+const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(obj)) }
 const body = (req) => new Promise((ok, no) => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e6) no(new Error('too large')) }); req.on('end', () => ok(d)); req.on('error', no) })
 const gated = (req) => !TOKEN || req.headers.authorization === `Bearer ${TOKEN}`
 const decode = (o) => { try { return JSON.parse(Buffer.from(o.context ?? []).toString()) } catch { return null } }
@@ -216,7 +216,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, st)
     }
     if (req.method === 'GET' && url.pathname === '/events/stream') {
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'access-control-allow-origin': '*' })
       res.write(': connected\n\n')
       const push = (e) => { try { res.write(`data: ${JSON.stringify(e)}\n\n`) } catch {} }
       overlay.lsPresence.bus?.on('event', push)
@@ -240,10 +240,14 @@ h2{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margi
 .k-ad{color:#9ecbff}.k-catalog{color:#b78aff}.k-want{color:#fb923c}.k-offer{color:#4cc26b}
 .k-settlement{color:#f5b301}.k-fraud{color:#e5534b}.k-delegation{color:#56d4dd}.k-attestation{color:#e6b3e6}
 .dim{color:#777}.agents div{padding:4px 0;font-size:12px;color:#999}
+.toggle{margin-left:14px}.toggle button{background:#1a1a1a;border:1px solid #2a2a2a;color:#888;font:inherit;font-size:11px;padding:2px 10px;border-radius:20px;cursor:pointer;margin-right:4px}
+.toggle button.on{background:#f5b301;color:#0d0d0d;border-color:#f5b301}
 footer{margin-top:24px;color:#555;font-size:12px}
 </style></head><body>
 <h1>nektar market<span class="dot" id="live"></span></h1>
-<div class="sub" id="net">live event feed · the agent memory market</div>
+<div class="sub" id="net">live event feed · the agent memory market
+<span class="toggle"><button id="t-ttn" class="on" onclick="setNet('ttn')">testnet</button><button id="t-main" onclick="setNet('main')">mainnet</button></span>
+<span class="dim" id="rv-host"></span></div>
 <div class="grid" id="stats">
 <div class="card"><div class="n" id="n-want">0</div><div class="l">wants</div></div>
 <div class="card"><div class="n" id="n-offer">0</div><div class="l">offers</div></div>
@@ -255,9 +259,23 @@ footer{margin-top:24px;color:#555;font-size:12px}
 <footer>every event is a signed artifact — pub + sig verifiable against the payload</footer>
 <script>
 const $ = id => document.getElementById(id)
+// network sources — same-origin by default; override via ?ttn= & ?main=
+const q=new URLSearchParams(location.search)
+const NETS={ttn:q.get('ttn')||location.origin,main:q.get('main')||'https://rv.nektar.run'}
+let BASE=NETS.ttn, NET='ttn', es=null
 const counts = {}
 const seen = new Set()
 let cursor = -1
+function setNet(n){
+  NET=n; BASE=NETS[n]||location.origin
+  document.querySelectorAll('.toggle button').forEach(b=>b.classList.remove('on'))
+  $('t-'+n).classList.add('on'); $('rv-host').textContent=' · '+BASE
+  $('feed').innerHTML='<div class="dim">listening…</div>'; seen.clear(); cursor=-1
+  if(es){es.close();es=null}
+  for(const k of ['want','offer','agent','settle']) $('n-'+k).textContent='0'
+  for(const k in counts) delete counts[k]
+  boot()
+}
 const bump = k => { counts[k] = (counts[k]||0)+1; const el=$('n-'+k); if(el) el.textContent=counts[k] }
 const esc = s => String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
 function row(e){
@@ -275,19 +293,24 @@ function feed(evs){
     bump(e.kind); box.insertAdjacentHTML('afterbegin',row(e)) }
   while(box.children.length>40) box.lastChild.remove()
 }
-const es=new EventSource('/events/stream')
-es.onmessage=m=>{ try{ feed([JSON.parse(m.data)]) }catch{} }
-es.onopen=()=>{ $('live').style.background='#4cc26b' }
-es.onerror=()=>{ $('live').style.background='#e5534b' }
+async function boot(){
+  const j=await (await fetch(BASE+'/events?since=-30&limit=50')).json().catch(()=>({}))
+  feed(j.events||[])
+  es=new EventSource(BASE+'/events/stream')
+  es.onmessage=m=>{ try{ feed([JSON.parse(m.data)]) }catch{} }
+  es.onopen=()=>{ $('live').style.background='#4cc26b' }
+  es.onerror=()=>{ $('live').style.background='#e5534b' }
+  agents()
+}
 async function agents(){
-  try{ const j=await (await fetch('/directory?all=1')).json()
+  try{ const j=await (await fetch(BASE+'/directory?all=1')).json()
     const ads=j.ads??j.entries??[]
     $('n-agent').textContent=ads.length||0
     $('agents').innerHTML=ads.length?ads.map(a=>'<div>'+esc((a.pub||'').slice(0,14))+'… · '+esc((a.domains||a.shards||[]).join(', '))+'</div>').join(''):'<div class="dim">none yet</div>'
   }catch{}
 }
-feed(await (await fetch('/events?since=-30&limit=50')).json().then(j=>j.events||[]))
-agents(); setInterval(agents,30000)
+$('rv-host').textContent=' · '+BASE
+boot(); setInterval(agents,30000)
 </script></body></html>`)
     }
     if (req.method === 'GET' && url.pathname === '/') {

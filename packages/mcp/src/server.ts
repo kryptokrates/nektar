@@ -509,6 +509,26 @@ export const TOOLS = [
   },
   {
     name: 'watch',
+    name: 'sendEnvelope',
+    description: 'Async encrypted exchange — send a signed envelope (request/offer/acceptance/delivery-reference) to a peer through a mailbox keeper. No public endpoint needed on either side.',
+    inputSchema: { type: 'object', properties: { recipient: { type: 'string' }, kind: { type: 'string' }, payload: { type: 'object' }, operationId: { type: 'string' }, conversationId: { type: 'string' }, keeperUrl: { type: 'string' } }, required: ['recipient', 'kind', 'payload'] }
+  },
+  {
+    name: 'collect',
+    description: 'Poll your mailbox at a keeper for signed encrypted envelopes addressed to you (deduplicated). Returns decrypted {sender, kind, payload} messages.',
+    inputSchema: { type: 'object', properties: { keeperUrl: { type: 'string' } } }
+  },
+  {
+    name: 'mailboxServe',
+    description: 'Respond to async peerCall requests — polls your mailbox for request envelopes, executes the named tool locally, and replies with a delivery-reference envelope. The "no inbound port" agent mode.',
+    inputSchema: { type: 'object', properties: { keeperUrl: { type: 'string' }, once: { type: 'boolean' }, intervalMs: { type: 'number' } } }
+  },
+  {
+    name: 'fetchObject',
+    description: 'Content-addressed retrieval — pull a signed object by its sha256 from any keeper; verify signature locally. Works when the original publisher is offline.',
+    inputSchema: { type: 'object', properties: { sha: { type: 'string' }, keeperUrl: { type: 'string' } }, required: ['sha'] }
+  },
+  {
     description: 'Subscribe to a rendezvous event feed (JetStream-pull): returns signed presence events — ads, catalogs, wants — after your cursor, filtered by domain tags. A catalog event says "an agent claims X"; a want event says "a buyer needs X". Re-run with the returned cursor to resume. Pair with discover/peerCall. Events are signed claims, not vouched facts.',
     inputSchema: {
       type: 'object',
@@ -786,6 +806,33 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const { collect } = await import('./mailbox.js')
       const keeper = String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090')
       return await collect(mem.operatorKey(), keeper, (ctx as any).mailboxSeen ??= new Set())
+    }
+    case 'mailboxServe': {
+      // the responder half of async peerCall: poll the mailbox for 'request'
+      // envelopes, execute the named tool locally, reply with the result as a
+      // 'delivery-reference' envelope — the agent needs no inbound port at all
+      const { collect, sendEnvelope } = await import('./mailbox.js')
+      const keeper = String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090')
+      const seen = (ctx as any).mailboxSeen ??= new Set()
+      const interval = Number(args?.intervalMs ?? 10_000)
+      const handled = new Set<string>()
+      const once = args?.once === true
+      const answered: Array<{ operationId?: string, tool: string }> = []
+      for (let round = 0; once ? round < 1 : true; round++) {
+        const msgs = await collect(mem.operatorKey(), keeper, seen)
+        for (const m of msgs) {
+          if (m.kind !== 'request' || handled.has(m.messageId)) continue
+          handled.add(m.messageId)
+          const req = (m.payload ?? {}) as { tool?: string, args?: unknown }
+          if (!req.tool) continue
+          let result: unknown
+          try { result = await callTool(mem, req.tool, req.args, ctx) } catch (e) { result = { error: (e as Error).message } }
+          await sendEnvelope(mem.operatorKey(), keeper, { recipient: m.sender, kind: 'delivery-reference', operationId: m.operationId, conversationId: m.conversationId, payload: { tool: req.tool, result } }).catch(() => {})
+          answered.push({ operationId: m.operationId, tool: req.tool })
+        }
+        if (!once) await new Promise(r => setTimeout(r, interval))
+      }
+      return { answered, note: once ? 'one poll round' : 'loop runs until killed' }
     }
     case 'fetchObject': {
       // hash-addressed retrieval — pull the signed object by sha256 from any
@@ -1394,10 +1441,30 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       return { rendezvous: base, query: q.slice(1), ...merged }
     }
     case 'peerCall': {
-      const endpoint = String(args?.endpoint ?? '').replace(/\/+$/, '')
-      if (!/^https?:\/\//i.test(endpoint)) throw new Error('peerCall: endpoint must be http(s)')
       const tool = String(args?.tool ?? '')
       if (!tool) throw new Error('peerCall: tool required')
+      // mailbox mode — the remote has no public endpoint; the request goes as
+      // an encrypted envelope through any keeper, the reply returns the same
+      // way. No inbound port, no synchronous IP-revealing connection.
+      if (args?.mailbox === true) {
+        const remotePub = String(args?.remotePub ?? '')
+        if (!/^[0-9a-f]{66}$/i.test(remotePub)) throw new Error('peerCall mailbox: remotePub required (66-hex pub)')
+        const { sendEnvelope, collect } = await import('./mailbox.js')
+        const keeper = String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090')
+        const operationId = crypto.randomUUID()
+        const seen = (ctx as any).mailboxSeen ??= new Set()
+        const { messageId } = await sendEnvelope(mem.operatorKey(), keeper, { recipient: remotePub, kind: 'request', operationId, conversationId: operationId, payload: { tool, args: args?.args ?? {} } })
+        const deadline = Date.now() + Number(args?.timeoutMs ?? 60_000)
+        while (Date.now() < deadline) {
+          const msgs = await collect(mem.operatorKey(), keeper, seen)
+          const reply = msgs.find(m => m.operationId === operationId && (m.kind === 'delivery-reference' || m.kind === 'acknowledgement'))
+          if (reply) return { via: 'mailbox', operationId, messageId, result: reply.payload }
+          await new Promise(r => setTimeout(r, 3_000))
+        }
+        return { via: 'mailbox', operationId, messageId, pending: true, note: 'request sent; no reply within timeout — the remote may be offline; collect later with the same operationId' }
+      }
+      const endpoint = String(args?.endpoint ?? '').replace(/\/+$/, '')
+      if (!/^https?:\/\//i.test(endpoint)) throw new Error('peerCall: endpoint must be http(s)')
       const headers: Record<string, string> = { 'content-type': 'application/json' }
       if (typeof args?.token === 'string' && args.token) headers.authorization = `Bearer ${args.token}`
       // acting under a signed delegation: the grant must be valid, name this

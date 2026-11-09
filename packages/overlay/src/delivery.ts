@@ -5,7 +5,7 @@
 import { sha256 } from '@nektar/core'
 
 const utf8 = (s: string) => new TextEncoder().encode(s)
-const dsha256 = (b: Uint8Array | number[]) => sha256(Array.from(sha256(Array.from(b))))
+const dsha256 = (b: Uint8Array | number[]) => sha256(Uint8Array.from(sha256(Uint8Array.from(b))))
 
 export const MAGIC = 0xE3E1F3E8
 export const PROTO_VER = 0x02BF

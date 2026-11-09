@@ -82,10 +82,12 @@ curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/tools/mc
 pnpm -r build
 
 # first run — the wizard walks network → data dir → passphrase →
-# rendezvous, writes .env, prints your next command:
+# rendezvous, writes .env, boots an alive-check on your config, and
+# detects Claude/Codex installs to wire on the spot. Re-runs keep your
+# current values as defaults:
 pnpm init:nektar
 
-# then wire your agent:
+# or wire your agent manually:
 pnpm setup:claude   # or: pnpm setup:codex
 ```
 

@@ -320,8 +320,12 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
       if (req.method === 'POST' && url.pathname === '/v1/arc-callback') {
         try {
           const j = (await body(req)) as any
-          mem.metrics.inc('nektar_arc_callbacks_total', { status: String(j.txStatus ?? '?').toLowerCase() }, 1, 'ARC status callbacks received')
-          mem.events.emit('arcStatus', { txid: j.txid, status: j.txStatus, detail: j.extraInfo })
+          const status = String(j.txStatus ?? '?')
+          mem.metrics.inc('nektar_arc_callbacks_total', { status: status.toLowerCase() }, 1, 'ARC status callbacks received')
+          mem.events.emit('arcStatus', { txid: j.txid, status, detail: j.extraInfo })
+          // push-driven confirmation — the broadcaster names the txid, we
+          // confirm the anchor; callers never poll for a block again
+          if (status === 'MINED' && typeof j.txid === 'string') mem.confirmByTxid?.(j.txid)
           return send(200, { ok: true })
         } catch { return send(400, { error: 'bad callback' }) }
       }

@@ -308,6 +308,7 @@ export class NektarMemory {
   private anchors = new Map<string, AnchorChain>()
   private tails = new Map<string, AnchorLink[]>()
   private anchorTxs = new Map<string, import('@bsv/sdk').Transaction>()
+  private txidShard = new Map<string, string>()
 
   constructor (
     private chain: ChainTracker & Broadcaster,
@@ -416,6 +417,7 @@ export class NektarMemory {
     const r = await ac.rotate(newKey)
     this.opts.shardKeys?.set(shard, newKey)
     this.anchorTxs.set(r.tx.id('hex'), r.tx)
+    this.txidShard.set(r.tx.id('hex'), shard)
     this.authorChainCache.delete(shard)
     const cert = ac.rotationCerts.at(-1)
     if (cert) {
@@ -1205,6 +1207,7 @@ export class NektarMemory {
     this.metrics.inc('nektar_anchors_total', {}, 1, 'anchors broadcast')
     const txid = res.tx.id('hex')
     this.anchorTxs.set(txid, res.tx)
+    this.txidShard.set(txid, shard)
     await this.log.markAnchored(shard, batch.n, txid)
     // record the link for chain tails / proofs
     const link: AnchorLink = {
@@ -1515,6 +1518,15 @@ export class NektarMemory {
     return { policySetHash: hash, decision: d.allow ? 'allow' as const : 'deny' as const, zkaccess: args.zk ? (zk.ok ? 'verified' : 'rejected') : 'not-required' }
   }
 
+  /** ARC-callback path: a MINED push names only the txid — resolve the shard
+   *  and confirm; no-op for txids we didn't anchor. Never a poll, always push. */
+  confirmByTxid (txid: string): boolean {
+    const shard = this.txidShard.get(txid)
+    if (!shard) return false
+    this.confirmAnchor(shard, txid)
+    return true
+  }
+
   /** Mark anchor txs mined (drive from broadcaster status events). */
   confirmAnchor (shard: string, txid: string): void {
     const ac = this.anchors.get(shard)
@@ -1557,6 +1569,7 @@ export class NektarMemory {
         const tx = Transaction.fromAtomicBEEF(Array.from(Buffer.from(hex, 'hex')))
         if (tx.id('hex') !== txid) throw new Error(`restore: anchor ${txid} BEEF mismatch`)
         this.anchorTxs.set(txid, tx)
+        this.txidShard.set(txid, shard)
       }
       const headTx = this.anchorTxs.get(p.headTxid)
       if (!headTx) throw new Error(`restore: head ${p.headTxid} of shard ${shard} missing`)

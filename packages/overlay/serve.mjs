@@ -68,7 +68,7 @@ const SELF_PUB = SELF_KEY.toPublicKey().toString()
 const SELF_URL = process.env.NEKTAR_RV_URL ?? `http://${HOST}:${PORT}`
 const PEERS = (process.env.NEKTAR_PEERS ?? '').split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean)
 const beaconNow = async () => {
-  const sb = signBeacon(SELF_KEY, { endpoint: SELF_URL, net: NET, topics: ['tm_presence'], ts: Date.now() })
+  const sb = signBeacon(SELF_KEY, { endpoint: SELF_URL, net: NET, topics: ['tm_presence'], lookups: ['ls_presence'], ts: Date.now() })
   await overlay.lsPresence.announceBeacon(sb).catch(() => {})
   for (const peer of PEERS) fetch(`${peer}/beacon`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sb) }).catch(() => {})
 }
@@ -129,6 +129,15 @@ const server = http.createServer(async (req, res) => {
       if (!ev) return json(res, 404, { error: 'no event at seq' })
       const rec = deliveryRecord('tm_presence', new TextEncoder().encode(JSON.stringify(ev.payload)))
       res.writeHead(200, { 'content-type': 'application/octet-stream' }); return res.end(Buffer.from(rec))
+    }
+    // BRC-180 domain manifest — declares this host's overlay services so a
+    // client resolving the domain gets the real tm_/ls_ names, no guessing
+    if (req.method === 'GET' && (url.pathname === '/.well-known/bsvalias' || url.pathname === '/.well-known/metanet')) {
+      return json(res, 200, { metanet: { overlays: { tm_nektar: SELF_URL, ls_nektar: SELF_URL, tm_presence: SELF_URL, ls_presence: SELF_URL } } })
+    }
+    if (req.method === 'GET' && url.pathname === '/ship') {
+      const sb = overlay.lsPresence.peersFor().find(x => x.beacon.pub === SELF_PUB)
+      return json(res, 200, sb ? { SHIP: sb.beacon.topics, SLAP: sb.beacon.lookups ?? [], endpoint: sb.beacon.endpoint, net: sb.beacon.net, pub: SELF_PUB } : { note: 'no beacon yet — announced ~3s after boot' })
     }
     if (req.method === 'GET' && url.pathname === '/patterns') {
       return json(res, 200, { kindToPattern: KIND_PATTERN, note: 'replyTo-offers read as messagebox; everything else maps by kind' })

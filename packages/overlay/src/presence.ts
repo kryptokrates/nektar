@@ -244,12 +244,15 @@ export interface BeaconAd {
   pub: string // the rv's identity key
   endpoint: string // https://rv.example — where its presence API lives
   net?: string // 'ttn'|'main'|etc — which chain lane it indexes
-  topics: string[] // e.g. ['tm_presence'] — what it serves
+  topics: string[] // e.g. ['tm_presence'] — what it serves (SHIP advertisement)
+  lookups?: string[] // e.g. ['ls_presence'] — lookup services it exposes (SLAP)
   ts: number
   exp?: number
 }
+// the standard-shapes accessor — a beacon rendered as a BRC-88 SHIP/SLAP ad
+export const beaconShip = (b: BeaconAd) => ({ SHIP: b.topics, SLAP: b.lookups ?? [], endpoint: b.endpoint, net: b.net, pub: b.pub })
 export interface SignedBeacon { beacon: BeaconAd, sig: string }
-const beaconCanonical = (b: BeaconAd) => `${b.endpoint}|${[...b.topics].sort().join(',')}|${b.net ?? ''}|${b.ts}|${b.exp ?? ''}`
+const beaconCanonical = (b: BeaconAd) => `${b.endpoint}|${[...b.topics].sort().join(',')}|${b.net ?? ''}|${b.ts}|${b.exp ?? ''}|${[...(b.lookups ?? [])].sort().join(',')}`
 export function signBeacon (key: PrivateKey, b: Omit<BeaconAd, 'pub'>): SignedBeacon {
   const beacon = { ...b, pub: key.toPublicKey().toString() } as BeaconAd
   return { beacon, sig: toHex(Uint8Array.from(key.sign(Array.from(digestBeacon(beacon))).toDER() as number[])) }

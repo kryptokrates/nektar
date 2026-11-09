@@ -331,7 +331,6 @@ function setNet(n){
   $('feed').innerHTML='<div class="dim">listening…</div>'; seen.clear(); cursor=-1
   for(const k in rows)delete rows[k]; for(const k in lastSeen)delete lastSeen[k]; renderTable()
   if(es){es.close();es=null}
-  for(const k of ['want','offer','agent','settle']) $('n-'+k).textContent='0'
   for(const k in counts) delete counts[k]
   boot()
 }

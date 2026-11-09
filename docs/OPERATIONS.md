@@ -88,6 +88,7 @@ The MCP server now runs on the official SDK, with stdio and Streamable HTTP at `
 
 ```sh
 node packages/mcp/dist/src/bin.js              # stdio; offline demo chain that mines per tx
+NODE_OPTIONS="--max-old-space-size=512" node packages/mcp/dist/src/bin.js  # cap the agent's heap — use on small hosts (4 GB and under); RSS is driven by heap + NEKTAR_BATCH, not the image
 node packages/mcp/demo/client.mjs              # scripted agent session
 NEKTAR_LLM_URL=http://localhost:11434/v1 NEKTAR_LLM_MODEL=qwen2.5 node packages/mcp/demo/client.mjs   # model-driven
 docker compose run --rm -i nektar-mcp           # containerised

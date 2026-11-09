@@ -51,8 +51,10 @@ const overlay = await createNektarOverlay(
   knexPkg({ client: 'sqlite3', connection: { filename: path.join(DIR, 'overlay.sqlite') }, useNullAsDefault: true }),
   // strict by default — only SPV-verified (net+tip-bound) artifacts land on the
   // feed; NEKTAR_OVERLAY_STRICT_NET=0 relaxes for dev/compat
-  { net: NET, strictNet: process.env.NEKTAR_OVERLAY_STRICT_NET !== '0' }
+  { net: NET, strictNet: process.env.NEKTAR_OVERLAY_STRICT_NET !== '0',
+    maxAgeMs: Number(process.env.NEKTAR_OVERLAY_MAX_AGE_MS ?? 86_400_000) }
 )
+setInterval(() => { const n = overlay.lsPresence.sweep?.(); if (n) console.log(`[rendezvous] sweep: ${n} expired entries evicted`) }, 300_000)
 console.log(`[rendezvous] network=${NET} db=${path.join(DIR, 'overlay.sqlite')} listening ${HOST}:${PORT}`)
 
 const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(obj)) }

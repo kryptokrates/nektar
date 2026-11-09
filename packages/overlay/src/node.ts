@@ -20,7 +20,7 @@ export async function createNektarOverlay (
   chainTracker: ChainTracker,
   broadcaster: Broadcaster,
   knexInstance?: Knex,
-  opts?: { net?: string, strictNet?: boolean }
+  opts?: { net?: string, strictNet?: boolean, maxAgeMs?: number }
 ): Promise<NektarOverlay> {
   // SPV verification for net-bound artifacts rides on the same tracker the
   // overlay engine already uses — no second header source needed

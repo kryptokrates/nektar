@@ -386,7 +386,7 @@ export function createTmPresence (): TopicManager {
 interface Stored { ad: PresenceAd, txid: string, outputIndex: number }
 interface StoredCatalog { sc: SignedCatalog }
 
-export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: boolean, tracker?: { headerAtHeight: (h: number) => Promise<{ hash: string } | undefined> } }): LookupService & {
+export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: boolean, maxAgeMs?: number, tracker?: { headerAtHeight: (h: number) => Promise<{ hash: string } | undefined> } }): LookupService & {
   init: () => Promise<void>
   announce: (s: SignedAd) => Promise<boolean>
   announceCatalog: (sc: SignedCatalog) => Promise<boolean>
@@ -406,6 +406,8 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   reputationsFor: (domain?: string) => SignedReputation[]
   prices: (q: { domain?: string, tool?: string }) => { count: number, sats: number[], minSats: number | null, maxSats: number | null, medianSats: number | null, totalSats: number, settlements: SettlementAd[] }
   feed: (q: { since?: number, domains?: string[], kind?: EventKind, limit?: number }) => Promise<PresenceEvent[]>
+  /** evict expired entries from the live maps — returns how many died */
+  sweep: () => number
   bus: EventEmitter
 } {
   // latest ad per pub; shard → set of pubs advertising it
@@ -433,6 +435,9 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   const bus = new EventEmitter()
   /** lazily probed — can the tracker resolve headers at all (genesis)? */
   let spvCapable: boolean | undefined
+  // expiry — silence kills listings: explicit exp wins, else ts + TTL (default 24h)
+  const MAX_AGE_MS = opts?.maxAgeMs ?? 86_400_000
+  const alive = (e: { exp?: number, ts: number }) => (e.exp ?? e.ts + MAX_AGE_MS) > Date.now()
   let nextSeq = 0
   const appendEvent = (kind: EventKind, pub: string, domains: string[], payload: unknown) => {
     const e: PresenceEvent = { seq: nextSeq++, kind, pub, domains, ts: Date.now(), payload }
@@ -772,8 +777,8 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     attestationsFor: (pub?: string) => [...attestations.values()].filter(sa => pub === undefined || sa.attestation.pub === pub),
 
     catalogFor: (pub: string) => catalogs.get(pub)?.sc,
-    wantFor: (pub: string) => wants.get(pub),
-    offersFor: (domain?: string) => [...offers.values()].filter(so => so.offer.exp === undefined || so.offer.exp > Date.now()).filter(so => domain === undefined || so.offer.domains.some(d => d.toLowerCase() === domain.toLowerCase())),
+    wantFor: (pub: string) => { const w = wants.get(pub); return w && alive(w.want) ? w : undefined },
+    offersFor: (domain?: string) => [...offers.values()].filter(so => alive(so.offer)).filter(so => domain === undefined || so.offer.domains.some(d => d.toLowerCase() === domain.toLowerCase())),
     reputationFor: (pub: string) => reps.get(pub),
     reputationsFor: (domain?: string) => [...reps.values()].filter(sr => domain === undefined || sr.card.entries.some(e => e.domain === domain.toLowerCase())),
     // realized-price index: settled sales per (domain, tool) — count + sats
@@ -797,6 +802,16 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
 
     /** live push feed — 'event' fires per appended PresenceEvent (SSE dashboard) */
     bus,
+
+    // expiry sweep — silence frees the maps; history stays in /events
+    sweep: () => {
+      let n = 0
+      for (const [k, v] of wants) if (!alive(v.want)) { wants.delete(k); n++ }
+      for (const [k, v] of offers) if (!alive(v.offer)) { offers.delete(k); n++ }
+      for (const [k, v] of ads) if (!alive(v.ad)) { ads.delete(k); n++ }
+      for (const [k, v] of catalogs) if (!alive(v.sc.catalog)) { catalogs.delete(k); n++ }
+      return n
+    },
 
     // JetStream-pull view: events after `since` cursor, optionally narrowed
     // by kind and/or domain tags (a consumer subscribed to 'soccer' sees any
@@ -832,7 +847,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     },
 
     lookup: async ({ query }: { query?: any }): Promise<LookupFormula> => {
-      const live = (s: Stored) => s.ad.exp === undefined || s.ad.exp > Date.now()
+      const live = (s: Stored) => alive(s.ad)
       const q = (query ?? {}) as { all?: boolean, shard?: string, pub?: string, domain?: string, q?: string }
       if (typeof q.domain === 'string') {
         // content query: domain tag → claimants' signed catalogs (context =

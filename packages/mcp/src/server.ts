@@ -712,6 +712,11 @@ const MUTATING_TOOLS = new Set(['remember', 'describeShard', 'publishOffer', 'pu
 // beacon-discovered peer set — one known rv reveals the rest (GET /peers).
 // Cached 5min; publish/discover fan out across the set so no single rv is
 // a hardcoded dependency.
+// fetch helpers — the repeated `await fetch(url, {signal: AbortSignal.timeout(ms)}).json()`
+// and `POST JSON.stringify(body)` sites collapse into two lines
+const getJson = async <T = any>(url: string, ms = 15_000): Promise<T> => (await fetch(url, { signal: AbortSignal.timeout(ms) })).json() as Promise<T>
+const postJson = async (url: string, body: unknown, ms = 15_000): Promise<Response> => postJson(url, body, ms)
+
 const rvSetCache = new Map<string, { at: number, urls: string[] }>()
 // durable peer cache — survives restart + total-outage; the last-known set
 // serves when live fetches fail (bootstrap-free operation)
@@ -727,7 +732,7 @@ async function rvSet (base: string): Promise<string[]> {
   if (hit && Date.now() - hit.at < 300_000) return hit.urls
   const urls = new Set([base])
   try {
-    const j = await (await fetch(`${base}/peers`, { signal: AbortSignal.timeout(8_000) })).json()
+    const j = await getJson(`${base}/peers`, 8_000)
     for (const b of j.peers ?? []) if (typeof b?.endpoint === 'string' && /^https?:\/\//i.test(b.endpoint)) urls.add(b.endpoint.replace(/\/+$/, ''))
   } catch {}
   for (const u of rvSetLoad(base)) urls.add(u) // persisted set seeds even when live fetch fails
@@ -742,7 +747,7 @@ async function rvSet (base: string): Promise<string[]> {
 async function postFanout (rv: string, path: string, body: unknown): Promise<Response> {
   let last: Response | undefined
   for (const base of await rvSet(rv)) {
-    try { const r = await fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) }); if (r.ok) last ??= r } catch {}
+    try { const r = await postJson(`${base}${path}`, body, 15_000); if (r.ok) last ??= r } catch {}
   }
   return last ?? new Response('{"error":"no rv accepted"}', { status: 502 })
 }
@@ -1032,7 +1037,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
           const claims = [`fraud:sale:${tx.id('hex')}`, `hWrapped:${args.hWrapped ?? ''}`, `committedLeaf:${args?.commitment?.leaf ?? ''}`, `sellerPub:${args?.sellerPub ?? ''}`]
           const signed = signAttestation(mem.operatorKey(), { modelId: 'fraud-claim', provider: 'nektar-claim', claims, ts: Date.now() })
           const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-          const r = await fetch(`${rv}/attestation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+          const r = await postJson(`${rv}/attestation`, signed, 15_000)
           out.fraudPublished = r.ok && (await r.json().catch(() => ({})))?.ok === true
           out.fraudEvidence = { attestation: signed.attestation }
         } catch (e) { out.fraudPublished = false; out.fraudReason = `publishFraud failed: ${(e as Error).message}` }
@@ -1626,7 +1631,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (mem.budget && fields.spendCapSats) mem.budget.setCap(String(fields.grantId), Number(fields.spendCapSats))
       if (args?.publish !== true) return { grant: signed.grant, sig: signed.sig }
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await fetch(`${rv}/delegation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const r = await postJson(`${rv}/delegation`, signed, 15_000)
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`delegate: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, grant: signed.grant, sig: signed.sig }
@@ -1648,7 +1653,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       process.env.NEKTAR_LAST_MANIFEST = (await import('node:crypto')).createHash('sha256').update(JSON.stringify(signed.attestation)).digest('hex')
       if (args?.publish !== true) return { attestation: signed.attestation, sig: signed.sig }
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await fetch(`${rv}/attestation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const r = await postJson(`${rv}/attestation`, signed, 15_000)
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`attest: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, attestation: signed.attestation }
@@ -1660,7 +1665,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const { signRevocation } = await import('@nektar/overlay')
       const r0 = { grantId: args.grantId, pub: mem.operatorKey().toPublicKey().toString(), ts: Date.now() }
       const { sig } = signRevocation(mem.operatorKey(), r0)
-      const r = await fetch(`${rv}/delegation/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...r0, sig }), signal: AbortSignal.timeout(15_000) })
+      const r = await postJson(`${rv}/delegation/revoke`, { ...r0, sig }, 15_000)
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`revoke: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, grantId: args.grantId }
@@ -1697,7 +1702,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const signed = signReputation(mem.operatorKey(), fields)
       if (args?.publish !== true) return { card: signed.card, sig: signed.sig }
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await fetch(`${rv}/reputation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const r = await postJson(`${rv}/reputation`, signed, 15_000)
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`reputation: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, card: signed.card }
@@ -1743,7 +1748,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       }
       const signed = signSettlement(mem.operatorKey(), fields)
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await fetch(`${rv}/settlement`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })
+      const r = await postJson(`${rv}/settlement`, signed, 15_000)
       const j = await r.json().catch(() => ({}))
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishSettlement: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, ad: signed.ad }

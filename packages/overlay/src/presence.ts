@@ -711,7 +711,8 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
         spvCapable ??= !!(await opts.tracker.headerAtHeight(1).catch(() => undefined))
         if (sw.want.tip || sw.want.tipHeight != null) {
           const h = sw.want.tipHeight != null ? await opts.tracker.headerAtHeight(sw.want.tipHeight).catch(() => undefined) : undefined
-          if (!h || h.hash !== sw.want.tip) return false
+          // soft: reject only a proven mismatch; strict: require positive verification
+          if (h ? h.hash !== sw.want.tip : opts.strictNet) return false
         } else if (opts.strictNet && spvCapable) return false
       }
       const prev = wants.get(sw.want.pub)
@@ -730,7 +731,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
         spvCapable ??= !!(await opts.tracker.headerAtHeight(1).catch(() => undefined))
         if (so.offer.tip || so.offer.tipHeight != null) {
           const h = so.offer.tipHeight != null ? await opts.tracker.headerAtHeight(so.offer.tipHeight).catch(() => undefined) : undefined
-          if (!h || h.hash !== so.offer.tip) return false
+          if (h ? h.hash !== so.offer.tip : opts.strictNet) return false
         } else if (opts.strictNet && spvCapable) return false
       }
       const k = offerKey(so.offer)

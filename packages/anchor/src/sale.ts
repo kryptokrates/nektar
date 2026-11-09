@@ -80,10 +80,19 @@ export class DisclosureSaleHost {
 
   /** seller-side: reveal `wrapped` — outputs [price→seller, change→depositor].
    *  The preimage arg is the claim credential; anyone may broadcast it. */
+  /** a minimal synthetic parent so the fee can resolve the input value —
+   *  SpendGuard fails closed on unresolved inputs, so the escrow's own
+   *  script+satoshis stand in as the source output */
+  private static sourceOf (utxo: SaleUtxo): Transaction {
+    const parent = new Transaction()
+    parent.addOutput({ satoshis: utxo.satoshis, lockingScript: LockingScript.fromHex(utxo.script) })
+    return parent
+  }
+
   buildBuy (utxo: SaleUtxo, wrapped: string, changeSats: bigint): { tx: Transaction } {
     const tx = new Transaction()
     tx.addInput({
-      sourceTXID: utxo.txid, sourceOutputIndex: utxo.vout,
+      sourceTransaction: DisclosureSaleHost.sourceOf(utxo), sourceOutputIndex: utxo.vout,
       unlockingScript: new UnlockingScript(), sequence: 0xfffffffe
     })
     tx.addOutput({ satoshis: Number(this.cfg.price), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.sellerPkh)) })
@@ -102,7 +111,7 @@ export class DisclosureSaleHost {
   buildRefund (utxo: SaleUtxo, depositorKey: PrivateKey, lockTime: number, changeSats: bigint): { tx: Transaction } {
     const tx = new Transaction()
     tx.addInput({
-      sourceTXID: utxo.txid, sourceOutputIndex: utxo.vout,
+      sourceTransaction: DisclosureSaleHost.sourceOf(utxo), sourceOutputIndex: utxo.vout,
       unlockingScript: new UnlockingScript(), sequence: 0xfffffffe
     })
     tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.depositorPkh)) })

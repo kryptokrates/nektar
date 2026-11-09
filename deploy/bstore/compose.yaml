@@ -1,0 +1,155 @@
+# nektar's bstore deployment — the full stack on one host, real network.
+# Based on lightwebinc/bstore's quickstart compose, adapted for testnet/mainnet.
+#
+# Switch networks by editing .env — BSTORE_NETWORK=test|main flips every
+# chain reference (see .env.example). One host, one provider, one gateway,
+# one MySQL; add a second provider/host by copying the service.
+
+name: nektar-bstore
+
+x-cli: &cli
+  image: ${BSTORE_IMAGE:-ghcr.io/lightwebinc/bstore:latest}
+
+services:
+  # storage host — carries ls_bstore advertisements, serves lookups
+  host:
+    image: ${BSTORE_HOST_IMAGE:-ghcr.io/lightwebinc/bstore-host:latest}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      BSTORE_BUCKETS: ${BSTORE_BUCKETS:-}
+      BSTORE_SERVED: ${BSTORE_SERVED:-}
+      BSTORE_LISTEN: 0.0.0.0:8094
+      BSTORE_PAYEE_KEY: ${BSTORE_PAYEE_KEY:-}
+      OVERLAY_KNEX_URL: mysql://overlay:${DB_PASSWORD:-nektar}@db:3306/overlay
+      OVERLAY_CHAIN_TRACKER_URL: ${BSTORE_TRACKER_URL}
+    volumes:
+      - host-state:/var/lib/bstore
+    ports:
+      - "127.0.0.1:8591:8080"
+
+  # storage provider — the bounty-taker; holds pieces against its terms
+  provider:
+    <<: *cli
+    image: ${BSTORE_PROVIDER_IMAGE:-ghcr.io/lightwebinc/bstore-provider:latest}
+    depends_on:
+      - host
+    restart: unless-stopped
+    command: ["run", "-config", "/etc/bstore/provider.json"]
+    configs:
+      - source: provider
+        target: /etc/bstore/provider.json
+    volumes:
+      - provider:/var/lib/bstore-provider
+      - certs:/certs:ro
+    ports:
+      - "127.0.0.1:8095:8095"
+
+  # throwaway CA for the provider's internal TLS (advertised URLs must be https;
+  # these certs sign the private Docker-network name — never public TLS)
+  certs:
+    <<: *cli
+    image: ${BSTORE_DEVCHAIN_IMAGE:-ghcr.io/lightwebinc/bstore-devchain:latest}
+    profiles: [setup]
+    entrypoint: ["/usr/local/bin/devchain", "certs", "-dir", "/certs", "-names", "provider"]
+    volumes:
+      - certs:/certs
+
+  # S3 gateway — the front door; write/read via the S3 API or NEKTAR_BSTORE_URL
+  gateway:
+    <<: *cli
+    depends_on:
+      - host
+      - provider
+    restart: unless-stopped
+    command: ["s3d", "run", "-config", "/etc/bstore/gateway.json"]
+    configs:
+      - source: gateway
+        target: /etc/bstore/gateway.json
+    volumes:
+      - gateway:/var/lib/bstore-s3d
+      - certs:/certs:ro
+    ports:
+      - "127.0.0.1:${BSTORE_S3_PORT:-9000}:9000"
+
+  # the CLI identity — bucket owner / reader / market participant
+  owner:
+    <<: *cli
+    profiles: [cli]
+    environment:
+      HOME: /var/lib/bstore
+      BSTORE_HOME: /var/lib/bstore
+    volumes:
+      - home:/var/lib/bstore
+      - certs:/certs:ro
+
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: overlay
+      MYSQL_USER: overlay
+      MYSQL_PASSWORD: ${DB_PASSWORD:-nektar}
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    command:
+      - --innodb-buffer-pool-size=128M
+      - --performance-schema=OFF
+    volumes:
+      - db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uoverlay -p${DB_PASSWORD:-nektar} --silent"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+
+configs:
+  provider:
+    content: |
+      {
+        "data": "/var/lib/bstore-provider",
+        "listen": "0.0.0.0:8095",
+        "tls_cert": "/certs/provider.pem",
+        "tls_key": "/certs/provider-key.pem",
+        "public_url": "https://provider:8095/store",
+        "chain": "${BSTORE_CHAIN}",
+        "settle": "${BSTORE_SETTLE}",
+        "headers": "${BSTORE_HEADERS}",
+        "hosts": ["http://host:8080"],
+        "buckets": [{"bucket": "${BSTORE_BUCKETS:-none}"}],
+        "tree_count": 8,
+        "terms": {"challenge_base": 10, "challenge_per_sample": 1, "free_c": 30, "min_bounty": ${BSTORE_MIN_BOUNTY:-1000}, "renew_per_gib_day": ${BSTORE_RENEW_PER_GIB:-250}, "renew_minimum": 300},
+        "limits": {"handshakes_per_addr_per_sec": 50, "handshake_addr_burst": 100, "challenge_burst": 20,
+                   "object_reads_per_addr_per_sec": 1000, "object_read_burst": 1000, "submits_per_addr_per_sec": 1000, "submit_burst": 2000}
+      }
+
+  gateway:
+    content: |
+      {
+        "data": "/var/lib/bstore-s3d",
+        "listen": "0.0.0.0:9000",
+        "chain": "${BSTORE_CHAIN}",
+        "settle": "${BSTORE_SETTLE}",
+        "headers": "${BSTORE_HEADERS}",
+        "hosts": ["http://host:8080"],
+        "quorum": 1,
+        "providers": ["https://provider:8095"],
+        "ca": "/certs/ca.pem",
+        "fetch_private": true,
+        "identities": ["gw"],
+        "access_keys": [{"id": "${BSTORE_S3_KEY:-nektar}", "secret": "${BSTORE_S3_SECRET:?set BSTORE_S3_SECRET in .env}", "identity": "gw"}],
+        "buckets": [{"bucket": "${BSTORE_BUCKETS:-none}", "owner": "${BSTORE_OWNER:-}", "id": "${BSTORE_ID:-}"}],
+        "bounty": {"satoshis": ${BSTORE_BOUNTY:-3000}, "t": 1, "k": 1, "retention_seconds": ${BSTORE_RETENTION:-86400}, "deadline_blocks": 600, "check_c": 30},
+        "hold_ahead": 2,
+        "piece_tree": 8,
+        "entry_tree": 8
+      }
+
+volumes:
+  certs:
+  db:
+  gateway:
+  home:
+  provider:
+  host-state:

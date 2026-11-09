@@ -155,7 +155,7 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
         const upStr = up > 86400 ? `${Math.floor(up / 86400)}d` : up > 3600 ? `${Math.floor(up / 3600)}h` : `${Math.floor(up / 60)}m`
         const badge = (on: boolean, yes: string, no: string) => `<span class="badge ${on ? 'on' : 'off'}">${on ? yes : no}</span>`
         const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>nektar — operator</title>
-<style>
+<style>body{transition:none}#live{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4cc26b;margin-left:6px;vertical-align:middle}
 body{background:#0d0d0d;color:#eaeaea;font:14px/1.6 ui-monospace,monospace;max-width:880px;margin:0 auto;padding:48px 20px}
 header{margin-bottom:40px}h1{font-size:22px;margin:0 0 6px;font-weight:600}
 .sub{color:#888;font-size:13px}.sub code{background:#1a1a1a;padding:1px 6px;border-radius:3px;color:#bbb}
@@ -173,9 +173,10 @@ a{color:#f5b301;text-decoration:none}.warn{color:#e5534b}
 footer{margin-top:28px;color:#555;font-size:12px}
 </style></head><body>
 <header>
-<h1>nektar</h1>
-<div class="sub">${esc(d.network)} · pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code> · up ${upStr} · refresh 30s</div>
+<h1>nektar<span id="live" title="live — refreshes silently every 5s"></span></h1>
+<div class="sub">${esc(d.network)} · pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code> · up ${upStr} · live</div>
 </header>
+<div id="app">
 <div class="card">
 <div class="label">Money</div>
 <div class="big">${bal.toLocaleString()} <small>sats</small>${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'payments on', 'payments off')}</div>
@@ -191,6 +192,16 @@ ${marketRows || '<div class="empty">nothing for sale yet — describeShard a pub
 ${autoLine}${fraudRows}
 </div>
 <footer>${d.shards} shards · ${d.records} records · ${d.anchoredRecords} anchored · ${d.unprovenAnchors} unproven · prover: ${esc(d.prover)}</footer>
+</div>
+<script>
+setInterval(async () => {
+  try {
+    const t = await (await fetch(location.pathname, { cache: 'no-store' })).text()
+    const m = t.match(/<div id="app">([\\s\\S]*)<\\/div>\\s*<script>/)
+    if (m) document.getElementById('app').innerHTML = m[1]
+  } catch {}
+}, 5000)
+</script>
 </body></html>`
         return send(200, html, 'text/html; charset=utf-8')
       }

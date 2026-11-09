@@ -59,6 +59,14 @@ export function beefFrame (payload: Uint8Array | number[], topic: string, opts: 
 // bstack pattern vocabulary — our market is their pattern family:
 // directory (who's who + what they know), audit (history), messagebox
 // (demand/answer), grant (delegated authority). Cross-impl clients map by this.
+// BRC-148 object-plane group — the lane a topic rides on the multicast plane.
+// Every component computes the same group from the topic alone: no registry,
+// no lookup, no state. Bits = the operator's traffic-shaping width.
+export function topicGroup (topic: string, bits = 12): number {
+  const h = new DataView(sha256(utf8(topic)).buffer).getUint32(0)
+  return 0x1000 + (h >>> (32 - bits))
+}
+
 export const KIND_PATTERN: Record<string, string> = {
   ad: 'directory', catalog: 'directory', beacon: 'directory', offer: 'directory',
   settlement: 'audit', revocation: 'audit',

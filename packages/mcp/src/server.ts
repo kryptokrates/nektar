@@ -508,7 +508,6 @@ export const TOOLS = [
     }
   },
   {
-    name: 'watch',
     name: 'sendEnvelope',
     description: 'Async encrypted exchange — send a signed envelope (request/offer/acceptance/delivery-reference) to a peer through a mailbox keeper. No public endpoint needed on either side.',
     inputSchema: { type: 'object', properties: { recipient: { type: 'string' }, kind: { type: 'string' }, payload: { type: 'object' }, operationId: { type: 'string' }, conversationId: { type: 'string' }, keeperUrl: { type: 'string' } }, required: ['recipient', 'kind', 'payload'] }
@@ -529,6 +528,7 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: { sha: { type: 'string' }, keeperUrl: { type: 'string' } }, required: ['sha'] }
   },
   {
+    name: 'watch',
     description: 'Subscribe to a rendezvous event feed (JetStream-pull): returns signed presence events — ads, catalogs, wants — after your cursor, filtered by domain tags. A catalog event says "an agent claims X"; a want event says "a buyer needs X". Re-run with the returned cursor to resume. Pair with discover/peerCall. Events are signed claims, not vouched facts.',
     inputSchema: {
       type: 'object',

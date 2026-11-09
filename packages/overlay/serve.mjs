@@ -30,7 +30,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 import knexPkg from 'knex'
 import { ArcBroadcaster, ChaintracksTracker } from '@nektar/chain'
 import { PrivateKey } from '@bsv/sdk'
-import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation, signBeacon } from './dist/src/index.js'
+import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation, signBeacon, deliveryRecord, eventEnvelope } from './dist/src/index.js'
 
 const HOST = process.env.NEKTAR_OVERLAY_HOST ?? '0.0.0.0'
 const PORT = Number(process.env.NEKTAR_OVERLAY_PORT ?? 8090)
@@ -115,6 +115,13 @@ const server = http.createServer(async (req, res) => {
       const { beacon, sig } = JSON.parse(await body(req) || '{}')
       const ok = await overlay.lsPresence.announceBeacon({ beacon, sig })
       return json(res, ok ? 200 : 400, ok ? { ok: true } : { error: 'rejected' })
+    }
+    if (req.method === 'GET' && url.pathname === '/events/delivery') {
+      const seq = Number(url.searchParams.get('seq') ?? -1)
+      const ev = (await overlay.lsPresence.feed({ since: seq - 0.5, limit: 1 })).find(e => e.seq === seq)
+      if (!ev) return json(res, 404, { error: 'no event at seq' })
+      const rec = deliveryRecord('tm_presence', new TextEncoder().encode(JSON.stringify(ev.payload)))
+      res.writeHead(200, { 'content-type': 'application/octet-stream' }); return res.end(Buffer.from(rec))
     }
     if (req.method === 'GET' && url.pathname === '/peers') {
       return json(res, 200, { peers: overlay.lsPresence.peersFor().map(sb => sb.beacon), self: SELF_PUB })
@@ -253,7 +260,7 @@ const server = http.createServer(async (req, res) => {
       const wait = Math.min(Number(url.searchParams.get('wait') ?? 0), 30_000)
       const deadline = Date.now() + wait
       for (;;) {
-        const events = await overlay.lsPresence.feed({ since, domains, kind: kind ?? undefined, limit })
+        const events = (await overlay.lsPresence.feed({ since, domains, kind: kind ?? undefined, limit })).map(eventEnvelope)
         if (events.length || Date.now() >= deadline) {
           return json(res, 200, { events, cursor: events.length ? events.at(-1).seq : (since ?? -1) })
         }

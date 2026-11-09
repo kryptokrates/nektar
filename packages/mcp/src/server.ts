@@ -683,7 +683,17 @@ export interface ToolCtx {
   }
 }
 
+/** tools that change instance state — a successful call emits 'change' on
+ *  mem.events so live surfaces (dashboard SSE) refresh instantly */
+const MUTATING_TOOLS = new Set(['remember', 'describeShard', 'publishOffer', 'publishWant', 'respond', 'peerCall', 'delegate', 'revokeGrant', 'attest', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport'])
+
 export async function callTool (mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
+  const r = await dispatchTool(mem, name, args, ctx)
+  if (MUTATING_TOOLS.has(name) || name.includes('#')) mem.events.emit('change', name)
+  return r
+}
+
+async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
   if (PAID_SALE_TOOLS.has(name) && !paidSaleEnabled()) throw new Error(`${name}: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1`)
   // NEKTAR_PAYMENTS=1 (BRC-166-style): anchor/groundedAnswer/commitReceipt need a
   // settled payment tx before they run — atomic, one tx per call, publicly

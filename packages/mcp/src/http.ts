@@ -113,6 +113,16 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
       if (req.method === 'GET' && url.pathname === '/v1/health') return send(200, { ok: true })
       if (req.method === 'GET' && url.pathname === '/v1/openapi.json') return send(200, OPENAPI)
       if (req.method === 'GET' && url.pathname === '/v1/metrics') return send(200, mem.metrics.render(), 'text/plain; version=0.0.4')
+      if (req.method === 'GET' && url.pathname === '/dashboard/events') {
+        // SSE — one line per state change; the page swaps its blocks on each
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+        res.write(': connected\n\n')
+        const push = (name: string) => { try { res.write(`data: ${name}\n\n`) } catch {} }
+        mem.events.on('change', push)
+        const beat = setInterval(() => { try { res.write(': beat\n\n') } catch {} }, 15_000)
+        req.on('close', () => { clearInterval(beat); mem.events.off('change', push) })
+        return
+      }
       if (req.method === 'GET' && url.pathname === '/dashboard') {
         // the operator audit surface — one page: identity, money, receipts,
         // market. Every block degrades to an honest empty state.
@@ -194,13 +204,17 @@ ${autoLine}${fraudRows}
 <footer>${d.shards} shards · ${d.records} records · ${d.anchoredRecords} anchored · ${d.unprovenAnchors} unproven · prover: ${esc(d.prover)}</footer>
 </div>
 <script>
-setInterval(async () => {
+const reload = async () => {
   try {
     const t = await (await fetch(location.pathname, { cache: 'no-store' })).text()
     const m = t.match(/<div id="app">([\\s\\S]*)<\\/div>\\s*<script>/)
     if (m) document.getElementById('app').innerHTML = m[1]
   } catch {}
-}, 5000)
+}
+const es = new EventSource('/dashboard/events')
+es.onmessage = () => reload()
+es.onerror = () => { document.getElementById('live').style.background = '#e5534b' }
+es.onopen = () => { document.getElementById('live').style.background = '#4cc26b' }
 </script>
 </body></html>`
         return send(200, html, 'text/html; charset=utf-8')

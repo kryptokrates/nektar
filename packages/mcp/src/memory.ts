@@ -4,6 +4,7 @@
 // interfaces so it runs identically on the mock chain and regtest.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { PrivateKey, PublicKey, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import {
@@ -321,6 +322,9 @@ export class NektarMemory {
     this.restoreState()
   }
   private logKey: PrivateKey
+  /** state-change events for live surfaces (dashboard SSE, watchers) —
+   *  emitted once per successful mutating tool call by the server layer */
+  readonly events = new EventEmitter()
   /** the log signing key's pubkey (verifies promises and checkpoints) */
   logPublicKey (): string { return this.logKey.toPublicKey().toString() }
 

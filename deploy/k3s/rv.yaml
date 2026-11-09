@@ -13,8 +13,7 @@ spec:
     spec:
       containers:
         - name: rv
-          image: ghcr.io/kryptokrates/nektar:latest
-          command: ["node", "packages/overlay/serve.mjs"]   # overrides the image ENTRYPOINT (bin.js)
+          image: ghcr.io/kryptokrates/nektar-rv:latest   # the minimal rv image — no stark, no mcp
           env:
             - { name: NEKTAR_OVERLAY_HOST, value: "0.0.0.0" }
             - { name: NEKTAR_OVERLAY_PORT, value: "8090" }

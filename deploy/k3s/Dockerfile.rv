@@ -1,6 +1,7 @@
 # minimal rv image — the overlay node only; no mcp, no stark prover
 FROM node:24-slim AS build
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY packages/overlay/package.json packages/overlay/
 COPY packages/core/package.json packages/core/

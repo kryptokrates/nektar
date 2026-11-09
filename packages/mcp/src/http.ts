@@ -329,6 +329,12 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           return send(200, { ok: true })
         } catch { return send(400, { error: 'bad callback' }) }
       }
+      // F3 budget state — the cumulative ledger's live numbers for a grant
+      if (req.method === 'GET' && url.pathname === '/v1/budget') {
+        const gid = url.searchParams.get('grantId') ?? ''
+        const s = gid ? mem.budget?.status(gid) : undefined
+        return send(200, { grantId: gid, budget: s ?? null })
+      }
       if (req.method === 'GET' && url.pathname === '/.well-known/x402') {
         const { paymentsEnabled, PAID_TOOLS, priceFor } = await import('./pay.js')
         if (!paymentsEnabled()) return send(404, { error: 'payments disabled (NEKTAR_PAYMENTS=1)' })

@@ -750,6 +750,14 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       return { invoice: { invoiceId: invoice.invoiceId, tool: invoice.tool, amount: invoice.amount, payTo: invoice.payTo, lockingScriptHex: invoice.lockingScriptHex, opReturn: invoice.opReturn, expires: new Date(invoice.expires).toISOString(), expiresMs: invoice.expires, pub: invoice.pub, quoteSig: invoice.quoteSig }, paymentRequired: required }
     }
     case 'payInvoice': {
+      // F3 — a grantId scopes this payment to the cumulative ledger; the
+      // lifetime cap enforces, not just this call's amount
+      const gid = typeof args?.grantId === 'string' ? args.grantId : undefined
+      if (gid && mem.budget) {
+        const r = mem.budget.reserve(gid, `payInvoice:${args.invoiceId}`, Number(args.amount))
+        if (r === 'denied') throw new Error(`payInvoice: grant ${gid} budget exhausted`)
+        try { const out = await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) }); mem.budget.commit(gid, `payInvoice:${args.invoiceId}`); return out } catch (e) { mem.budget.release(gid, `payInvoice:${args.invoiceId}`); throw e }
+      }
       return await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) })
     }
     case 'sale': {

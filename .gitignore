@@ -38,3 +38,4 @@ codex-receipts.log
 tools/curve-vectors/target/
 /dist-bundle/
 .tools/
+test/fixtures/swarm-keys/

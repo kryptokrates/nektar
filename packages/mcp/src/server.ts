@@ -4,6 +4,8 @@ import { sha256, utf8 } from '@nektar/core'
 import { receiptToken } from './receipt.js'
 import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment, verifyQuoteSig } from './pay.js'
 import type { NektarMemory } from './memory.js'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 
 /** ready-to-paste share surface for a receipt — the model drops `markdown`
  *  straight into PRs/docs; every pasted badge is a verify-page entry point */
@@ -685,12 +687,21 @@ export interface ToolCtx {
 
 /** tools that change instance state — a successful call emits 'change' on
  *  mem.events so live surfaces (dashboard SSE) refresh instantly */
-const MUTATING_TOOLS = new Set(['remember', 'describeShard', 'publishOffer', 'publishWant', 'respond', 'peerCall', 'delegate', 'revokeGrant', 'attest', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport'])
+const MUTATING_TOOLS = new Set(['remember', 'describeShard', 'publishOffer', 'publishWant', 'respond', 'peerCall', 'delegate', 'revokeGrant', 'attest', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport', 'sendEnvelope', 'fetchObject'])
 
 // beacon-discovered peer set — one known rv reveals the rest (GET /peers).
 // Cached 5min; publish/discover fan out across the set so no single rv is
 // a hardcoded dependency.
 const rvSetCache = new Map<string, { at: number, urls: string[] }>()
+// durable peer cache — survives restart + total-outage; the last-known set
+// serves when live fetches fail (bootstrap-free operation)
+const PEERS_FILE = () => `${process.env.NEKTAR_DATA_DIR ?? './nektar-data'}/peers.json`
+function rvSetLoad (base: string): string[] {
+  try { return JSON.parse(readFileSync(PEERS_FILE(), 'utf8'))[base] ?? [] } catch { return [] }
+}
+function rvSetSave (base: string, urls: string[]): void {
+  try { mkdirSync(dirname(PEERS_FILE()), { recursive: true }); const all = (() => { try { return JSON.parse(readFileSync(PEERS_FILE(), 'utf8')) } catch { return {} } })(); all[base] = urls; writeFileSync(PEERS_FILE(), JSON.stringify(all)) } catch {}
+}
 async function rvSet (base: string): Promise<string[]> {
   const hit = rvSetCache.get(base)
   if (hit && Date.now() - hit.at < 300_000) return hit.urls
@@ -699,8 +710,11 @@ async function rvSet (base: string): Promise<string[]> {
     const j = await (await fetch(`${base}/peers`, { signal: AbortSignal.timeout(8_000) })).json()
     for (const b of j.peers ?? []) if (typeof b?.endpoint === 'string' && /^https?:\/\//i.test(b.endpoint)) urls.add(b.endpoint.replace(/\/+$/, ''))
   } catch {}
+  for (const u of rvSetLoad(base)) urls.add(u) // persisted set seeds even when live fetch fails
+  if (urls.size === 1) urls.add(...new Set(rvSetLoad(base))) // last-known fallback
   const out = [...urls]
   rvSetCache.set(base, { at: Date.now(), urls: out })
+  rvSetSave(base, out)
   return out
 }
 // post a signed artifact to base + every known peer — intake dedups by ts, so
@@ -759,6 +773,35 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         try { const out = await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) }); mem.budget.commit(gid, `payInvoice:${args.invoiceId}`); return out } catch (e) { mem.budget.release(gid, `payInvoice:${args.invoiceId}`); throw e }
       }
       return await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) })
+    }
+    case 'sendEnvelope': {
+      const { sendEnvelope } = await import('./mailbox.js')
+      const keeper = String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090')
+      return await sendEnvelope(mem.operatorKey(), keeper, {
+        recipient: String(args.recipient), kind: String(args.kind) as any, payload: args.payload ?? {},
+        conversationId: args.conversationId, operationId: args.operationId, replyTo: args.replyTo, expiresAt: args.expiresAt
+      })
+    }
+    case 'collect': {
+      const { collect } = await import('./mailbox.js')
+      const keeper = String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090')
+      return await collect(mem.operatorKey(), keeper, (ctx as any).mailboxSeen ??= new Set())
+    }
+    case 'fetchObject': {
+      // hash-addressed retrieval — pull the signed object by sha256 from any
+      // keeper; the verifier re-checks the signature + commitment locally
+      const { sha256, toHex } = await import('@nektar/core')
+      const hash = String(args.sha)
+      for (const k of await rvSet(String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090'))) {
+        try {
+          const r = await fetch(`${k}/v1/object/${encodeURIComponent(hash)}`)
+          if (r.ok) {
+            const obj = await r.json()
+            if (toHex(Uint8Array.from(sha256(new TextEncoder().encode(JSON.stringify(obj))))) === hash) return { object: obj, sha: hash, via: k }
+          }
+        } catch {}
+      }
+      throw new Error(`fetchObject: no keeper served ${hash.slice(0, 16)}…`)
     }
     case 'sale': {
       const op = String(args?.op ?? '')
@@ -1308,6 +1351,26 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     }
     case 'discover': {
       const base = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
+      // local-matching mode — tail the bounded feed and filter locally so the
+      // rv never learns the query terms (the friend's query-privacy point)
+      if (args?.localMatch === true || process.env.NEKTAR_LOCAL_MATCH === '1') {
+        const seen = new Map<string, unknown>()
+        for (const b of await rvSet(base)) {
+          try {
+            const j = await (await fetch(`${b}/events?since=-500&limit=500`)).json()
+            for (const e of j.events ?? []) if (e.kind === 'ad' || e.kind === 'catalog') {
+              const p = e.payload?.ad ?? e.payload?.catalog ?? e.payload
+              if (!p) continue
+              const doms: string[] = [...(p.domains ?? []), ...(p.ad?.domains ?? []), ...(p.catalog?.domains ?? [])].map((d: string) => String(d).toLowerCase())
+              const matchDomain = !args?.domain || doms.includes(String(args.domain).toLowerCase())
+              const matchPub = !args?.pub || p.pub === args.pub
+              const matchShard = !args?.shard || p.shard === args.shard || p.shards?.includes(args.shard)
+              if (matchDomain && matchPub && matchShard && p.pub) seen.set(`${p.pub}:${p.shard ?? p.streamId ?? ''}`, { pub: p.pub, endpoint: p.endpoint, domains: doms, via: b })
+            }
+          } catch {}
+        }
+        return { localMatch: true, hits: [...seen.values()] }
+      }
       const q = typeof args?.domain === 'string' && args.domain ? `?domain=${encodeURIComponent(args.domain)}`
         : typeof args?.shard === 'string' && args.shard ? `?shard=${encodeURIComponent(args.shard)}`
         : typeof args?.pub === 'string' && args.pub ? `?pub=${encodeURIComponent(args.pub)}`

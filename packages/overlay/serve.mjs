@@ -116,6 +116,17 @@ const ingest = {
   interval: p => overlay.lsPresence.announceInterval(p.interval ? p : { commit: p, sig: p.sig }),
   envelope: p => overlay.lsPresence.announceEnvelope(p.envelope ? p : { envelope: p, sig: p.sig })
 }
+
+// hash-addressed object store — any signed object that flowed through is
+// retrievable by its content hash, so a surviving host serves the evidence
+// after the original publisher goes away. Bounded LRU (max 10k objects).
+const objectStore = new Map()
+const sha256hex = (s) => Buffer.from(sha256(new TextEncoder().encode(s))).toString('hex')
+const storeObject = (obj) => { if (objectStore.size > 10_000) objectStore.delete(objectStore.keys().next().value); objectStore.set(sha256hex(JSON.stringify(obj)), obj) }
+for (const kind of ['ad','catalog','want','offer','settlement','reputation','delegation','attestation','beacon','interval','envelope']) {
+  const orig = ingest[kind]
+  ingest[kind] = async (p) => { storeObject(p); return orig?.(p) }
+}
 for (const peer of PEERS) {
   const CURSOR_FILE = path.join(DIR, 'peer-cursors.json')
   const savedCursors = (() => { try { return JSON.parse(fs.readFileSync(CURSOR_FILE, 'utf8')) } catch { return {} } })()
@@ -127,7 +138,7 @@ for (const peer of PEERS) {
     for (;;) {
       try {
         const j = await (await fetch(`${peer}/events?since=${cur}&wait=30000`)).json()
-        for (const e of j.events ?? []) { cur = Math.max(cur, e.seq); savedCursors[peer] = cur; try { await ingest[e.kind]?.(e.payload) } catch {} }
+        for (const e of j.events ?? []) { cur = Math.max(cur, e.seq); savedCursors[peer] = cur; try { await ingest[e.kind]?.(e.payload); if (e.payload) objectStore.set(sha256hex(JSON.stringify(e.payload)), e.payload) } catch {} }
       } catch { await new Promise(r => setTimeout(r, 10_000)) }
     }
   })()
@@ -171,6 +182,11 @@ const server = http.createServer(async (req, res) => {
       const { envelope, sig } = JSON.parse(await body(req) || '{}')
       const ok = await overlay.lsPresence.announceEnvelope({ envelope, sig })
       return json(res, ok ? 200 : 400, ok ? { ok: true, messageId: envelope?.messageId } : { error: 'rejected' })
+    }
+    if (req.method === 'GET' && url.pathname.startsWith('/v1/object/')) {
+      const sha = url.pathname.split('/v1/object/')[1]
+      const obj = objectStore.get(sha)
+      return obj ? json(res, 200, obj) : json(res, 404, { error: 'object not found' })
     }
     if (req.method === 'GET' && url.pathname === '/mailbox') {
       const r = url.searchParams.get('recipient')

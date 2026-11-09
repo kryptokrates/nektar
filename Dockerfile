@@ -4,7 +4,14 @@
 # The build FAILS if the program id differs from the pinned one.
 FROM rust:1.94-bookworm AS stark
 ENV RISC0_HOME=/opt/risc0 PATH=/opt/risc0/bin:/root/.risc0/bin:$PATH
-RUN curl -fsSL https://risczero.com/install | bash && rzup install rust 1.97.0 && rzup install cargo-risczero 3.0.3 && rzup install r0vm 3.0.3
+RUN for i in 1 2 3; do \
+      curl -fsSL https://risczero.com/install | bash \
+      && rzup install rust 1.97.0 \
+      && rzup install cargo-risczero 3.0.3 \
+      && rzup install r0vm 3.0.3 \
+      && exit 0; \
+      echo "risc0 install attempt $i failed — retrying"; sleep 15; \
+    done; exit 1
 WORKDIR /stark
 COPY tools/stark/Cargo.toml tools/stark/Cargo.lock ./
 COPY tools/stark/host ./host
@@ -16,6 +23,12 @@ RUN cargo build --release -p nektar-stark \
  && cp ./target/release/nektar-stark /usr/local/bin/ && cp "$(readlink -f "$(which r0vm)")" /usr/local/bin/r0vm
 
 FROM node:24-slim AS build
+# sqlite3 falls back to node-gyp when prebuild-install can't fetch a binary;
+# slim has no toolchain and sqlite3's bundled node-gyp 8.x can't parse Node 24.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g node-gyp@11
+ENV npm_config_node_gyp=/usr/local/lib/node_modules/node-gyp/bin/node-gyp.js
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@12.16.1 --activate
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./

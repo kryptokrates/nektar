@@ -288,7 +288,7 @@ h2{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margi
 #mt tbody tr:hover{background:#1c1c1c}
 .num{text-align:right;font-variant-numeric:tabular-nums}
 .dom{display:inline-block;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:0 8px;font-size:11px;color:#999;margin-right:4px}
-.ev{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #1f1f1f;font-size:13px}
+.ev{display:flex;gap:12px;padding:5px 0;border-bottom:1px solid #1a1a1a;font-size:12px;opacity:.75}
 .ev .k{width:88px;flex-shrink:0}.ev .seq{color:#555;width:40px;flex-shrink:0}
 .k-ad{color:#9ecbff}.k-catalog{color:#b78aff}.k-want{color:#fb923c}.k-offer{color:#4cc26b}
 .k-settlement{color:#f5b301}.k-fraud{color:#e5534b}.k-delegation{color:#56d4dd}.k-attestation{color:#e6b3e6}
@@ -378,7 +378,7 @@ function feed(evs){
     bump(e.kind); box.insertAdjacentHTML('afterbegin',row(e)); touchPub(e.pub,e.ts)
     if(e.kind==='offer'){upOffer(e.payload?.offer?{offer:e.payload.offer}:e.payload);dirty=true}
     if(dirty&&!raf){raf=true;setTimeout(()=>{raf=false;renderTable()},300)} }
-  while(box.children.length>40) box.lastChild.remove()
+  while(box.children.length>5) box.lastChild.remove()
 }
 async function boot(){
   const j=await (await fetch(BASE+'/events?since=-30&limit=50')).json().catch(()=>({}))

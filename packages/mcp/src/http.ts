@@ -55,6 +55,7 @@ export const OPENAPI = {
       }
     },
     '/.well-known/x402': { get: { summary: 'payment catalog — priced tools, scheme and network (x402 discovery doc)', responses: { 200: { description: 'catalog' }, 404: { description: 'payments disabled' } } } },
+    '/dashboard': { get: { summary: 'operator audit surface — one HTML page: identity, money, receipts, market. Token-gated (non-public route).', responses: { 200: { description: 'text/html dashboard' } } } },
     '/v1/pay/quote': {
       get: {
         summary: 'payment invoice for a paid tool (NEKTAR_PAYMENTS=1) — 402 + PAYMENT-REQUIRED header carrying an x402 v2 PaymentRequired; pay the invoice with a signed tx then retry the tool with payment:{invoiceId,transaction}',
@@ -112,6 +113,57 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
       if (req.method === 'GET' && url.pathname === '/v1/health') return send(200, { ok: true })
       if (req.method === 'GET' && url.pathname === '/v1/openapi.json') return send(200, OPENAPI)
       if (req.method === 'GET' && url.pathname === '/v1/metrics') return send(200, mem.metrics.render(), 'text/plain; version=0.0.4')
+      if (req.method === 'GET' && url.pathname === '/dashboard') {
+        // the operator audit surface — one page: identity, money, receipts,
+        // market. Every block degrades to an honest empty state.
+        const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
+        const d = await mem.doctor()
+        if (ops?.wallet) { const w = await ops.wallet() as Record<string, unknown>; d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 } }
+        const host = req.headers.host ?? 'localhost'
+        const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${host}`
+        // receipts — newest last N
+        const rrecs = await mem.records('__receipts__').catch(() => [] as Array<{ seq: number, data?: string }>) as Array<{ seq: number, data?: string }>
+        const receipts = rrecs.slice(-10).reverse().map(r => {
+          let amt = '', tool = ''
+          const m = r.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
+          if (m) { try { const j = JSON.parse(Buffer.from(m[1]!, 'base64url').toString()); amt = String(j.payment?.amountSats ?? j.payment?.amount ?? ''); tool = String(j.tool ?? j.toolName ?? '') } catch {} }
+          return `<tr><td>${r.seq}</td><td>${esc(tool)}</td><td>${amt ? esc(amt) + ' sats' : '—'}</td><td><a href="${base}/v1/verify?s=${r.seq}&format=html">verify</a></td></tr>`
+        }).join('')
+        // market — offerable shards + autorespond + fraud
+        const cat = await mem.shardCatalog().catch(() => [] as Array<{ shard: string, domains: string[], offers?: Array<{ kind: string, priceSats: number }> }>)
+        const marketRows = cat.map(m => `<tr><td>${esc(m.shard)}</td><td>${esc(m.domains.join(', '))}</td><td>${esc(m.offers?.map(o => `${o.kind}@${o.priceSats}`).join(', ') ?? '—')}</td></tr>`).join('')
+        const dataDir = (mem as unknown as { opts?: { dataDir?: string } }).opts?.dataDir ?? '.nektar'
+        let autoRow = '<tr><td colspan="3">autorespond not configured</td></tr>'
+        try {
+          const { readFileSync, existsSync } = await import('node:fs')
+          const { join } = await import('node:path')
+          const st = join(dataDir, 'autorespond.state.json')
+          if (existsSync(st)) { const s = JSON.parse(readFileSync(st, 'utf8')); autoRow = `<tr><td colspan="3">autorespond: ${(s.responded ?? []).length} wants answered</td></tr>` }
+        } catch {}
+        let fraudRows = '<tr><td colspan="3">no fraud events</td></tr>'
+        const rv = process.env.NEKTAR_OVERLAY_URL
+        if (rv) {
+          try {
+            const fr = await fetch(`${rv.replace(/\/+$/, '')}/events?kind=fraud&since=-1`, { signal: AbortSignal.timeout(5000) })
+            const fj = await fr.json() as { events?: Array<{ seq: number, pub: string }> }
+            if (fj.events?.length) fraudRows = fj.events.slice(-5).map(e => `<tr><td colspan="3">fraud #${e.seq} — ${esc(String(e.pub).slice(0, 16))}…</td></tr>`).join('')
+          } catch { fraudRows = '<tr><td colspan="3">rendezvous unreachable</td></tr>' }
+        } else fraudRows = '<tr><td colspan="3">no NEKTAR_OVERLAY_URL — fraud feed not configured</td></tr>'
+        const f = d.funding as Record<string, unknown>
+        const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>nektar dashboard</title>
+<style>body{background:#0d0d0d;color:#ddd;font:14px/1.5 monospace;max-width:840px;margin:2em auto;padding:0 1em}h1{color:#f5b301;font-size:1.4em}h2{color:#f5b301;font-size:1em;margin-top:2em;border-bottom:1px solid #333;padding-bottom:.3em}table{width:100%;border-collapse:collapse}td{padding:.3em .5em;border-bottom:1px solid #222}a{color:#f5b301}.dim{color:#777}code{background:#1a1a1a;padding:.1em .4em}</style></head><body>
+<h1>nektar — operator dashboard</h1>
+<p class="dim">${esc(d.network)} · pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code> · uptime ${Math.floor(process.uptime() / 60)}m · auto-refresh 30s</p>
+<h2>Money</h2>
+<p>balance <b>${esc(f.balanceSats ?? f.satoshis ?? '—')}</b> sats · funded: ${esc(f.funded ?? 'n/a')} · payments: ${esc(d.payments)} · utxos: ${esc(f.utxoCount ?? f.utxos ?? '—')}</p>
+<h2>Receipts</h2>
+<table>${receipts || '<tr><td colspan="4" class="dim">no receipts yet</td></tr>'}</table>
+<h2>Market</h2>
+<table><tr class="dim"><td>shard</td><td>domains</td><td>offers</td></tr>${marketRows || '<tr><td colspan="3" class="dim">no described shards</td></tr>'}${autoRow}${fraudRows}</table>
+<p class="dim">${d.shards} shards · ${d.records} records · ${d.anchoredRecords} anchored · ${d.unprovenAnchors} unproven · prover: ${esc(d.prover)}</p>
+</body></html>`
+        return send(200, html, 'text/html; charset=utf-8')
+      }
       if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: visibleTools() })
       if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
         if (!visibleTools().some(t => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })

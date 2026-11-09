@@ -61,6 +61,31 @@ const overlay = await createNektarOverlay(
     } : undefined }
 )
 setInterval(() => { const n = overlay.lsPresence.sweep?.(); if (n) console.log(`[rendezvous] sweep: ${n} expired entries evicted`) }, 300_000)
+
+// peer-rv federation — tail each peer's event feed and re-announce the signed
+// payloads locally (intake still verifies sigs, so relayed artifacts are safe).
+// announce dedups by ts, so re-ingestion is idempotent.
+const ingest = {
+  ad: p => overlay.lsPresence.announce(p),
+  catalog: p => overlay.lsPresence.announceCatalog(p),
+  want: p => overlay.lsPresence.announceWant(p),
+  offer: p => overlay.lsPresence.announceOffer(p),
+  settlement: p => overlay.lsPresence.announceSettlement(p),
+  reputation: p => overlay.lsPresence.announceReputation(p),
+  delegation: p => overlay.lsPresence.announceDelegation(p),
+  attestation: p => overlay.lsPresence.announceAttestation(p)
+}
+for (const peer of (process.env.NEKTAR_PEERS ?? '').split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean)) {
+  let cur = -1
+  ;(async function tail () {
+    for (;;) {
+      try {
+        const j = await (await fetch(`${peer}/events?since=${cur}&wait=30000`)).json()
+        for (const e of j.events ?? []) { cur = Math.max(cur, e.seq); try { await ingest[e.kind]?.(e.payload) } catch {} }
+      } catch { await new Promise(r => setTimeout(r, 10_000)) }
+    }
+  })()
+}
 console.log(`[rendezvous] network=${NET} db=${path.join(DIR, 'overlay.sqlite')} listening ${HOST}:${PORT}`)
 
 const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(obj)) }

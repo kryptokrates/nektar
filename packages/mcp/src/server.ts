@@ -711,7 +711,7 @@ async function rvSet (base: string): Promise<string[]> {
     for (const b of j.peers ?? []) if (typeof b?.endpoint === 'string' && /^https?:\/\//i.test(b.endpoint)) urls.add(b.endpoint.replace(/\/+$/, ''))
   } catch {}
   for (const u of rvSetLoad(base)) urls.add(u) // persisted set seeds even when live fetch fails
-  if (urls.size === 1) urls.add(...new Set(rvSetLoad(base))) // last-known fallback
+  if (urls.size === 1) for (const u of rvSetLoad(base)) urls.add(u) // last-known fallback
   const out = [...urls]
   rvSetCache.set(base, { at: Date.now(), urls: out })
   rvSetSave(base, out)

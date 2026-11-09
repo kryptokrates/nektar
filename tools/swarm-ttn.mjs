@@ -13,7 +13,11 @@ const agents = []
 for (let i = 0; i < 10; i++) {
   const dir = `${BASE}/a${i}`
   fs.mkdirSync(dir, { recursive: true })
-  const rt = await openRuntime({ network: 'ttn', dataDir: dir, main: { passphrase: 'demo-only' } })
+  const rt = await openRuntime({ network: 'ttn', dataDir: dir, main: {
+    passphrase: 'demo-only',
+    arcUrl: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',
+    chaintracksUrl: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech/chaintracks/v2'
+  } })
   agents.push({ i, rt, pub: rt.mem.operatorKey().toPublicKey().encode('hex', true) })
 }
 const sellers = agents.slice(0, 5), buyers = agents.slice(5)

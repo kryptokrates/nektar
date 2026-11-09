@@ -159,6 +159,15 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
             if (fj.events?.length) fraudRows = fj.events.slice(-5).map(e => `<div class="row"><span class="warn">fraud</span> <span class="dim">#${e.seq} · ${esc(String(e.pub).slice(0, 16))}…</span></div>`).join('')
           } catch {}
         }
+        // agents panel — this agent's declared identity + discovered peers
+        let agentsRows = `<div class="row"><span><b>${esc(process.env.NEKTAR_MODEL_ID ?? 'this agent')}</b></span><span class="dim">${esc(mem.operatorKey().toPublicKey().toString().slice(0, 16))}…</span></div>`
+        if (rv) {
+          try {
+            const dr = await fetch(`${rv.replace(/\/+$/, '')}/directory`, { signal: AbortSignal.timeout(5000) })
+            const dj = await dr.json() as { ads?: Array<{ ad?: { endpoint?: string } }> }
+            agentsRows += `<div class="row"><span class="dim">peers on rendezvous</span><span>${dj.ads?.length ?? 0} discovered</span></div>`
+          } catch {}
+        }
         const f = d.funding as Record<string, unknown>
         const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
         const up = process.uptime()
@@ -169,7 +178,12 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
 body{background:#0d0d0d;color:#eaeaea;font:14px/1.6 ui-monospace,monospace;max-width:880px;margin:0 auto;padding:48px 20px}
 header{margin-bottom:40px}h1{font-size:22px;margin:0 0 6px;font-weight:600}
 .sub{color:#888;font-size:13px}.sub code{background:#1a1a1a;padding:1px 6px;border-radius:3px;color:#bbb}
-.card{background:#161616;border:1px solid #262626;border-radius:10px;padding:20px 22px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:640px){.grid{grid-template-columns:1fr}}
+.card{background:#161616;border:1px solid #262626;border-radius:10px;padding:20px 22px}
+.stream{margin-top:12px;padding-top:8px;border-top:1px solid #1f1f1f;font-size:11px;color:#555;min-height:1em;max-height:4.2em;overflow:hidden}
+.stream div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stream .t{color:#f5b301}
 .label{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margin-bottom:12px}
 .big{font-size:30px;color:#f5b301;font-weight:600}.big small{font-size:14px;color:#888;font-weight:400}
 .meta{color:#888;font-size:13px;margin-top:8px}
@@ -186,23 +200,31 @@ footer{margin-top:28px;color:#555;font-size:12px}
 <h1>nektar<span id="live" title="live — refreshes silently every 5s"></span></h1>
 <div class="sub">${esc(d.network)} · pub <code>${esc(mem.operatorKey().toPublicKey().toString().slice(0, 24))}…</code> · up ${upStr} · live</div>
 </header>
-<div id="app">
+<div id="app" class="grid">
 <div class="card">
 <div class="label">Money</div>
 <div class="big">${bal.toLocaleString()} <small>sats</small>${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'payments on', 'payments off')}</div>
 <div class="meta">${esc(f.utxoCount ?? f.utxos ?? '—')} utxos in reserve</div>
+<div class="stream" data-ev="money"></div>
 </div>
 <div class="card">
 <div class="label">Receipts</div>
 ${receiptRows || '<div class="empty">no receipts yet — your agent hasn’t answered anything</div>'}
+<div class="stream" data-ev="receipts"></div>
 </div>
 <div class="card">
 <div class="label">Market</div>
 ${marketRows || '<div class="empty">nothing for sale yet — describeShard a public shard to list it</div>'}
 ${autoLine}${fraudRows}
+<div class="stream" data-ev="market"></div>
+</div>
+<div class="card">
+<div class="label">Agents</div>
+${agentsRows}
+<div class="stream" data-ev="agents"></div>
+</div>
 </div>
 <footer>${d.shards} shards · ${d.records} records · ${d.anchoredRecords} anchored · ${d.unprovenAnchors} unproven · prover: ${esc(d.prover)}</footer>
-</div>
 <script>
 const reload = async () => {
   try {
@@ -211,8 +233,15 @@ const reload = async () => {
     if (m) document.getElementById('app').innerHTML = m[1]
   } catch {}
 }
+const PANEL = { remember: 'market', describeShard: 'market', publishOffer: 'market', publishWant: 'market', respond: 'market', groundedAnswer: 'receipts', commitReceipt: 'receipts', attestInference: 'receipts', recall: 'receipts', peerCall: 'money', payInvoice: 'money', payQuote: 'money', sale: 'money', claim: 'money', fundingImport: 'money', delegate: 'agents', revokeGrant: 'agents', attest: 'agents', importRecord: 'agents', importShard: 'agents' }
+const stamp = e => '<div><span class="t">' + new Date().toLocaleTimeString() + '</span> ' + e + '</div>'
 const es = new EventSource('/dashboard/events')
-es.onmessage = () => reload()
+es.onmessage = m => {
+  const name = m.data || 'change', panel = PANEL[name.split('#')[0]] ?? 'market'
+  const s = document.querySelector('.stream[data-ev="' + panel + '"]')
+  if (s) { s.insertAdjacentHTML('afterbegin', stamp(name)); while (s.children.length > 4) s.lastChild.remove() }
+  reload()
+}
 es.onerror = () => { document.getElementById('live').style.background = '#e5534b' }
 es.onopen = () => { document.getElementById('live').style.background = '#4cc26b' }
 </script>

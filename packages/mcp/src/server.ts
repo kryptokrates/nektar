@@ -1372,7 +1372,21 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         const expected = mine === 'main' ? 'bsv:mainnet' : mine === 'ttn' ? 'bsv:teratestnet' : mine === 'regtest' ? 'bsv:regtest' : 'bsv:mock'
         if (typeof acc.network === 'string' && acc.network !== expected) throw new Error(`peerCall: invoice settles on ${acc.network} but this instance runs ${mine} — refusing to sign`)
         if (extra.quoteSig !== undefined && !verifyQuoteSig({ ...extra, amount })) throw new Error('peerCall: quoteSig does not verify — the invoice may be doctored or not from this endpoint')
-        const paid = await mem.payInvoice({ invoiceId: String(extra.invoiceId), amount, lockingScriptHex: String(extra.lockingScriptHex), opReturn: String(extra.opReturn) })
+        // F3 budget authority — reserve before spending under a grant; the
+        // lifetime cap is the real invariant, not the per-call check above
+        const actionId = `peerCall:${tool}:${extra.invoiceId}`
+        if (deleg?.grant.grantId && mem.budget) {
+          const r = mem.budget.reserve(String(deleg.grant.grantId), actionId, amount)
+          if (r === 'denied') throw new Error(`peerCall: grant ${deleg.grant.grantId} has no budget left — ${amount} sats exceeds remaining allowance`)
+        }
+        let paid
+        try {
+          paid = await mem.payInvoice({ invoiceId: String(extra.invoiceId), amount, lockingScriptHex: String(extra.lockingScriptHex), opReturn: String(extra.opReturn) })
+        } catch (e) {
+          if (deleg?.grant.grantId && mem.budget) mem.budget.release(String(deleg.grant.grantId), actionId)
+          throw e
+        }
+        if (deleg?.grant.grantId && mem.budget) mem.budget.commit(String(deleg.grant.grantId), actionId)
         res = await post({ ...(args?.args ?? {}), payment: paid.payment })
         return { result: res.body, paidTxid: paid.txid, amount }
       }
@@ -1459,6 +1473,9 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         if (!delegationSubset(child, parent.grant)) throw new Error('delegate: child grant is not a subset of the parent — scope/cap/expiry must shrink, never grow')
       }
       const signed = signDelegation(mem.operatorKey(), fields)
+      // F3 — register the grant's lifetime cap with the budget authority so
+      // delegated spends count cumulatively, not just per call
+      if (mem.budget && fields.spendCapSats) mem.budget.setCap(String(fields.grantId), Number(fields.spendCapSats))
       if (args?.publish !== true) return { grant: signed.grant, sig: signed.sig }
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
       const r = await fetch(`${rv}/delegation`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed), signal: AbortSignal.timeout(15_000) })

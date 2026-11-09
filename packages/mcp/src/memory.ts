@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
+import { BudgetAuthority } from './budget.js'
 import { PrivateKey, PublicKey, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import {
   utf8, fromHex, toHex, sha256, dsha256, concat, field, eq, hash160,
@@ -322,10 +323,12 @@ export class NektarMemory {
   ) {
     this.logKey = opts.signingKey ?? PrivateKey.fromRandom()
     this.log = new BatchLog(store, this.logKey, opts.batchPolicy ?? { maxLeaves: 16 })
+    if (opts.dataDir) this.budget = new BudgetAuthority(opts.dataDir)
     this.restoreSecurityState()
     this.restoreState()
   }
   private logKey: PrivateKey
+  public budget?: import('./budget.js').BudgetAuthority
   /** state-change events for live surfaces (dashboard SSE, watchers) —
    *  emitted once per successful mutating tool call by the server layer */
   readonly events = new EventEmitter()

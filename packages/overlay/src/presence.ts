@@ -380,7 +380,7 @@ export function createTmPresence (): TopicManager {
 interface Stored { ad: PresenceAd, txid: string, outputIndex: number }
 interface StoredCatalog { sc: SignedCatalog }
 
-export function createLsPresence (kx?: Knex): LookupService & {
+export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: boolean }): LookupService & {
   init: () => Promise<void>
   announce: (s: SignedAd) => Promise<boolean>
   announceCatalog: (sc: SignedCatalog) => Promise<boolean>
@@ -675,6 +675,8 @@ export function createLsPresence (kx?: Knex): LookupService & {
     // subscribed to its domains see it on their next cursor pull.
     announceWant: async (sw: SignedWant) => {
       if (!verifyWant(sw.want, sw.sig)) return false
+      // signed net binding — reject artifacts claiming a different network
+      if (opts?.net && ((sw.want.net && sw.want.net !== opts.net) || (opts.strictNet && !sw.want.net))) return false
       const prev = wants.get(sw.want.pub)
       if (prev && prev.want.ts >= sw.want.ts) return true
       wants.set(sw.want.pub, sw)
@@ -685,6 +687,7 @@ export function createLsPresence (kx?: Knex): LookupService & {
 
     announceOffer: async (so: SignedOffer) => {
       if (!verifyOffer(so.offer, so.sig)) return false
+      if (opts?.net && ((so.offer.net && so.offer.net !== opts.net) || (opts.strictNet && !so.offer.net))) return false
       const k = offerKey(so.offer)
       const prev = offers.get(k)
       if (prev && prev.offer.ts >= so.offer.ts) return true

@@ -48,7 +48,8 @@ fs.mkdirSync(DIR, { recursive: true })
 const overlay = await createNektarOverlay(
   new ChaintracksTracker({ arcUrl: u.arc, wocUrl: u.arc }, u.ct),
   new ArcBroadcaster({ arcUrl: u.arc, wocUrl: u.arc }),
-  knexPkg({ client: 'sqlite3', connection: { filename: path.join(DIR, 'overlay.sqlite') }, useNullAsDefault: true })
+  knexPkg({ client: 'sqlite3', connection: { filename: path.join(DIR, 'overlay.sqlite') }, useNullAsDefault: true }),
+  { net: NET, strictNet: process.env.NEKTAR_OVERLAY_STRICT_NET === '1' }
 )
 console.log(`[rendezvous] network=${NET} db=${path.join(DIR, 'overlay.sqlite')} listening ${HOST}:${PORT}`)
 
@@ -243,13 +244,14 @@ h2{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margi
 .netbadge{font-size:11px;font-weight:600;letter-spacing:.1em;padding:3px 10px;border-radius:20px;margin-left:12px;vertical-align:middle;text-transform:uppercase}
 .netbadge.testnet{background:#3a2a00;color:#f5b301;border:1px solid #f5b301}
 .netbadge.mainnet{background:#062e0c;color:#4cc26b;border:1px solid #4cc26b}
-.toggle{margin-left:14px}.toggle button{background:#1a1a1a;border:1px solid #2a2a2a;color:#888;font:inherit;font-size:11px;padding:2px 10px;border-radius:20px;cursor:pointer;margin-right:4px}
-.toggle button.on{background:#f5b301;color:#0d0d0d;border-color:#f5b301}
+.toggle{margin-left:14px}#netbtn{font:inherit;font-size:11px;padding:2px 12px;border-radius:20px;cursor:pointer}
+#netbtn.testnet{background:#3a2a00;color:#f5b301;border:1px solid #f5b301}
+#netbtn.mainnet{background:#062e0c;color:#4cc26b;border:1px solid #4cc26b}
 footer{margin-top:24px;color:#555;font-size:12px}
 </style></head><body>
 <h1>nektar market<span id="netbadge" class="netbadge testnet">testnet</span><span class="dot" id="live"></span></h1>
 <div class="sub" id="net">live event feed · the agent memory market
-<span class="toggle"><button id="t-ttn" class="on" onclick="setNet('ttn')">testnet</button><button id="t-main" onclick="setNet('main')">mainnet</button></span>
+<span class="toggle"><button id="netbtn" class="testnet" onclick="setNet(NET==='ttn'?'main':'ttn')">switch to mainnet</button></span>
 <span class="dim" id="rv-host"></span></div>
 <div class="grid" id="stats">
 <div class="card"><div class="n" id="n-want">0</div><div class="l">wants</div></div>
@@ -272,8 +274,8 @@ const seen = new Set()
 let cursor = -1
 function setNet(n){
   NET=n; BASE=NETS[n]||location.origin
-  document.querySelectorAll('.toggle button').forEach(b=>b.classList.remove('on'))
-  $('t-'+n).classList.add('on'); $('rv-host').textContent=' · '+BASE
+  const btn=$('netbtn'); btn.textContent=n==='ttn'?'switch to mainnet':'switch to testnet'; btn.className=n==='ttn'?'testnet':'mainnet'
+  $('rv-host').textContent=' · '+BASE
   const nb=$('netbadge'); nb.textContent=n==='main'?'mainnet':'testnet'; nb.className='netbadge '+(n==='main'?'mainnet':'testnet')
   $('feed').innerHTML='<div class="dim">listening…</div>'; seen.clear(); cursor=-1
   if(es){es.close();es=null}

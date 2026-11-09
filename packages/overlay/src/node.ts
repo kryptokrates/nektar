@@ -19,7 +19,8 @@ export interface NektarOverlay {
 export async function createNektarOverlay (
   chainTracker: ChainTracker,
   broadcaster: Broadcaster,
-  knexInstance?: Knex
+  knexInstance?: Knex,
+  opts?: { net?: string, strictNet?: boolean }
 ): Promise<NektarOverlay> {
   const kx = knexInstance ?? knexPkg({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   if (!(await kx.schema.hasTable('outputs'))) {
@@ -28,7 +29,7 @@ export async function createNektarOverlay (
   const ls = createLsNektar(kx)
   await ls.init()
   const tm = createTmNektar(ls)
-  const lsPresence = createLsPresence(kx)
+  const lsPresence = createLsPresence(kx, opts)
   await lsPresence.init()
   const engine = new Engine(
     { tm_nektar: tm, tm_presence: createTmPresence() },

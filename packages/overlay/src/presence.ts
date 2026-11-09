@@ -435,6 +435,9 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   const bus = new EventEmitter()
   /** lazily probed — can the tracker resolve headers at all (genesis)? */
   let spvCapable: boolean | undefined
+  // net aliases — ttn/testnet/mock/regtest are one lane; main/mainnet/bsv the other
+  const netLane = (n?: string) => !n ? undefined : (n === 'main' || n === 'mainnet' || n === 'bsv' ? 'main' : 'test')
+  const netEq = (a?: string, b?: string) => netLane(a) === netLane(b)
   // expiry — only explicit exp expires; no implicit TTL (fee is the price of listing)
   const alive = (e: { exp?: number, ts?: number }) => e.exp === undefined || e.exp > Date.now()
   // bstore-style listing fee — exp beyond the free window must be paid for:
@@ -703,7 +706,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
       if (!verifyWant(sw.want, sw.sig)) return false
       if (!paidFor(sw.want.ts, sw.want.exp, sw.pay)) return false // exp beyond free window must be paid
       // signed net binding — reject artifacts claiming a different network
-      if (opts?.net && ((sw.want.net && sw.want.net !== opts.net) || (opts.strictNet && !sw.want.net))) return false
+      if (opts?.net && ((sw.want.net && !netEq(sw.want.net, opts.net)) || (opts.strictNet && !sw.want.net))) return false
       // SPV binding — claimed tip must match this chain's header at that height.
       // strict: reject unbound only when the tracker can actually verify
       // (genesis probe — a tracker that can't serve block 1 can't verify at all)
@@ -726,7 +729,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     announceOffer: async (so: SignedOffer) => {
       if (!verifyOffer(so.offer, so.sig)) return false
       if (!paidFor(so.offer.ts, so.offer.exp, so.pay)) return false
-      if (opts?.net && ((so.offer.net && so.offer.net !== opts.net) || (opts.strictNet && !so.offer.net))) return false
+      if (opts?.net && ((so.offer.net && !netEq(so.offer.net, opts.net)) || (opts.strictNet && !so.offer.net))) return false
       if (opts?.tracker) {
         spvCapable ??= !!(await opts.tracker.headerAtHeight(1).catch(() => undefined))
         if (so.offer.tip || so.offer.tipHeight != null) {

@@ -7,7 +7,7 @@
 //   node tools/init.mjs --yes      accept all defaults (mock, ./.nektar, no rv, stdio)
 //   node tools/init.mjs --env ttn --dir .ttn --rv https://rv.nektar.run --port 8080
 import { createInterface } from 'node:readline'
-import { existsSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -31,9 +31,19 @@ const pick = async (q, opts) => {
   return (n >= 1 && n <= opts.length) ? opts[n - 1] : (opts.find(o => o.label.toLowerCase().startsWith(line.toLowerCase())) ?? opts[0])
 }
 
+// ─── existing config → reconfigure defaults (Hermes pattern: current values
+//     ride as prompt defaults so a re-run only changes what you touch) ───────
+const envPath = join(root, '.env')
+const readEnv = p => existsSync(p)
+  ? Object.fromEntries(readFileSync(p, 'utf8').split(/\r?\n/).map(l => l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean).map(m => [m[1], m[2].trim()]))
+  : {}
+const prev = readEnv(envPath)
+const reconfigure = Boolean(prev.NEKTAR_NETWORK)
+
 console.log('\nnektar init — your agent, your keys, verifiable memory.\n')
-console.log('This walks the four decisions a fresh install needs, writes .env,')
-console.log('and prints the one command to run next. Ctrl+C to bail anytime.\n')
+console.log(reconfigure
+  ? 'Existing config found — press Enter to keep each current value.\n'
+  : 'This walks the four decisions a fresh install needs, writes .env,\nand prints the one command to run next. Ctrl+C to bail anytime.\n')
 
 // ─── 1. network ─────────────────────────────────────────────────────────────
 const networks = [
@@ -42,11 +52,11 @@ const networks = [
   { id: 'main', label: 'main — real BSV. Read docs/OPERATIONS.md first' },
   { id: 'regtest', label: 'regtest — local Teranode stack (devs)' }
 ]
-const net = arg('--env') ?? (await pick('1/4 — which network?', networks)).id
+const net = arg('--env') ?? (prev.NEKTAR_NETWORK && YES ? prev.NEKTAR_NETWORK : (await pick('1/4 — which network?', prev.NEKTAR_NETWORK ? [...networks.filter(n => n.id === prev.NEKTAR_NETWORK), ...networks.filter(n => n.id !== prev.NEKTAR_NETWORK)] : networks)).id)
 if (!networks.some(n => n.id === net)) { console.error(`unknown network "${net}"`); process.exit(2) }
 
 // ─── 2. data dir ────────────────────────────────────────────────────────────
-const defDir = net === 'mock' ? '.nektar' : `.nektar-${net}`
+const defDir = prev.NEKTAR_DATA_DIR ?? (net === 'mock' ? '.nektar' : `.nektar-${net}`)
 const dir = arg('--dir') ?? ((YES ? defDir : await ask(`2/4 — where does your agent live? (identity + memory)\n  This directory IS the agent — back it up.\n[${defDir}] > `)) || defDir)
 const dataDir = resolve(dir)
 mkdirSync(dataDir, { recursive: true })
@@ -54,21 +64,23 @@ mkdirSync(dataDir, { recursive: true })
 // ─── 3. passphrase ──────────────────────────────────────────────────────────
 let pass = arg('--passphrase')
 if (pass === undefined && !YES) {
-  pass = await askSecret(`3/4 — key passphrase (encrypts your identity at rest; unrecoverable)\n  ${net === 'main' ? 'REQUIRED on main.' : 'empty = skip (mock is fine without)'}\n> `)
-} else pass ??= ''
+  pass = await askSecret(`3/4 — key passphrase (encrypts your identity at rest; unrecoverable)\n  ${net === 'main' ? 'REQUIRED on main.' : 'empty = skip (mock is fine without)'}${prev.NEKTAR_KEY_PASSPHRASE ? ' — Enter keeps the current one' : ''}\n> `)
+  if (!pass && prev.NEKTAR_KEY_PASSPHRASE) pass = prev.NEKTAR_KEY_PASSPHRASE
+} else pass ??= prev.NEKTAR_KEY_PASSPHRASE ?? ''
 
 // ─── 4. rendezvous + port ───────────────────────────────────────────────────
 let rv = arg('--rv')
 if (rv === undefined && !YES && net !== 'mock') {
-  rv = (await pick('4/4 — join the public discovery index?', [
+  const rvOpts = [
     { id: 'https://rv.nektar.run', label: 'https://rv.nektar.run — public agents can find your offers' },
     { id: '', label: 'none — local only' }
-  ])).id
-} else rv ??= (net === 'mock' ? '' : '')
-const port = arg('--port')
+  ]
+  if (prev.NEKTAR_OVERLAY_URL) rvOpts.unshift({ id: prev.NEKTAR_OVERLAY_URL, label: `${prev.NEKTAR_OVERLAY_URL} — current` })
+  rv = (await pick('4/4 — join the public discovery index?', rvOpts)).id
+} else rv ??= prev.NEKTAR_OVERLAY_URL ?? ''
+const port = arg('--port') ?? prev.NEKTAR_HTTP_PORT
 
 // ─── write .env ─────────────────────────────────────────────────────────────
-const envPath = join(root, '.env')
 const lines = [
   `# nektar init — ${new Date().toISOString().slice(0, 10)} (${net})`,
   `NEKTAR_NETWORK=${net}`,
@@ -113,4 +125,49 @@ if (net === 'mock') {
 }
 console.log(`\nYour agent lives in ${dataDir} — that directory + its passphrase`)
 console.log('is the identity. Back it up; there is no recovery.\n')
+
+// ─── alive-check (OpenClaw: verify before you trust it) — boot the instance
+//     on a temp port with the config just written, poll health, report ───────
+const binJs = join(root, 'packages/mcp/dist/src/bin.js')
+if (existsSync(binJs) && net !== 'main') {
+  const alivePort = 18190 + Math.floor(Math.random() * 800)
+  const { spawn } = await import('node:child_process')
+  const child = spawn(process.execPath, [binJs], {
+    env: { ...process.env, NEKTAR_NETWORK: net, NEKTAR_DATA_DIR: dataDir, NEKTAR_KEY_PASSPHRASE: pass || undefined, NEKTAR_HTTP_PORT: String(alivePort), NEKTAR_OVERLAY_URL: rv || undefined },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  child.stderr.resume(); child.stdout.resume()
+  let alive = false
+  for (let i = 0; i < 60; i++) {
+    try { if ((await fetch(`http://127.0.0.1:${alivePort}/v1/health`, { signal: AbortSignal.timeout(400) })).ok) { alive = true; break } } catch {}
+    if (child.exitCode !== null) break
+    await new Promise(r => setTimeout(r, 300))
+  }
+  child.kill()
+  console.log(alive
+    ? `alive-check: instance booted on ${net} with your config — your agent is alive.\n`
+    : `alive-check: instance did NOT come up — run doctor for diagnostics.\n`)
+} else if (!existsSync(binJs)) {
+  console.log('(skipping alive-check — run pnpm -r build first)\n')
+}
+
+// ─── client detection (Hermes: find existing agent setups) ──────────────────
+const { homedir } = await import('node:os')
+const clients = [
+  { dir: join(homedir(), '.claude'), label: 'Claude Code', script: 'tools/setup-claude.mjs' },
+  { dir: join(homedir(), '.codex'), label: 'Codex CLI', script: 'tools/setup-codex.mjs' }
+].filter(c => existsSync(c.dir))
+if (clients.length) {
+  console.log(`found agent clients: ${clients.map(c => c.label).join(', ')}\n`)
+  for (const c of clients) {
+    if (!YES) {
+      const a = await ask(`wire ${c.label} into nektar now? [Y/n] > `)
+      if (a === '' || /^y/i.test(a)) {
+        const { spawnSync } = await import('node:child_process')
+        spawnSync(process.execPath, [join(root, c.script)], { stdio: 'inherit' })
+      }
+    } else console.log(`  → wire it later: node ${c.script}`)
+  }
+  console.log('')
+}
 rl.close()

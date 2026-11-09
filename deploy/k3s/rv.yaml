@@ -1,0 +1,37 @@
+# nektar rv fleet on k3s — scale to N replicas, self-discovering via beacons
+# apply: kubectl apply -f rv.yaml
+# the mesh handles discovery; k3s handles ops (restarts, upgrades, health)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nektar-rv
+spec:
+  replicas: 3          # scale to 100s with: kubectl scale deploy/nektar-rv --replicas=N
+  selector: { matchLabels: { app: nektar-rv } }
+  template:
+    metadata: { labels: { app: nektar-rv } }
+    spec:
+      containers:
+        - name: rv
+          image: ghcr.io/kryptokrates/nektar:latest
+          args: ["packages/overlay/serve.mjs"]
+          env:
+            - { name: NEKTAR_OVERLAY_HOST, value: "0.0.0.0" }
+            - { name: NEKTAR_OVERLAY_PORT, value: "8090" }
+            - { name: NEKTAR_NETWORK, value: "testnet" }
+            - { name: NEKTAR_RV_URL, value: "http://$(POD_IP):8090" }
+            - { name: NEKTAR_PEERS, value: "http://nektar-rv-0.nektar-rv:8090" }  # any stable peer seeds the mesh
+            - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }
+          ports: [{ containerPort: 8090 }]
+          readinessProbe: { httpGet: { path: /peers, port: 8090 }, periodSeconds: 10 }
+          livenessProbe:  { httpGet: { path: /peers, port: 8090 }, periodSeconds: 30 }
+          resources: { requests: { cpu: "100m", memory: "256Mi" }, limits: { memory: "1Gi" } }
+---
+# headless service — the mesh discovers pods directly, not through a VIP
+apiVersion: v1
+kind: Service
+metadata: { name: nektar-rv }
+spec:
+  clusterIP: None      # headless: DNS returns the pod IPs for beacon peer-listing
+  selector: { app: nektar-rv }
+  ports: [{ port: 8090, targetPort: 8090 }]

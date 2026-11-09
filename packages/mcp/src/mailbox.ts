@@ -29,7 +29,7 @@ export async function sendEnvelope (
   const plaintext = utf8(JSON.stringify(fields.payload))
   const wrapped = wrapFor(key, fields.recipient, plaintext, MB_CTX)
   const ciphertext = toHex(Uint8Array.from(Buffer.concat([Buffer.from(wrapped.salt), Buffer.from(wrapped.nonce), Buffer.from(wrapped.ct)])))
-  const ciphertextHash = toHex(Uint8Array.from(sha256(plaintext)))
+  const ciphertextHash = toHex(Uint8Array.from(sha256(Uint8Array.from(Buffer.from(ciphertext, 'hex'))))) // binds the ciphertext, not the plaintext — keepers can't guess-hash payloads
   const se = signEnvelope(key, {
     messageId: randomUUID(), kind: fields.kind, recipient: fields.recipient,
     // topic-addressed — the keeper sees an opaque hash, not the recipient pub
@@ -48,18 +48,18 @@ export async function collect (
 ): Promise<CollectedMessage[]> {
   const me = key.toPublicKey().toString()
   const topic = toHex(Uint8Array.from(sha256(utf8(`mb:${me}`))))
-  const r = await fetch(`${keeperUrl.replace(/\/+$/, '')}/mailbox?recipient=${encodeURIComponent(me)}&topic=${topic}`)
+  const r = await fetch(`${keeperUrl.replace(/\/+$/, '')}/mailbox?topic=${topic}`) // topic-only — the keeper sees a hash, never the recipient pub
   const j = await r.json().catch(() => ({}))
   const out: CollectedMessage[] = []
   for (const se of j.envelopes ?? []) {
     const e = se.envelope
     if (!verifyEnvelope(e, se.sig)) continue
-    if (seen.has(e.messageId)) continue
-    seen.add(e.messageId)
+    if (seen.has(`${e.sender}:${e.messageId}`)) continue
     const raw = Buffer.from(e.ciphertext, 'hex')
     const w = { salt: raw.subarray(0, 32), nonce: raw.subarray(32, 44), ct: raw.subarray(44) }
     try {
       const pt = unwrapFor(key, e.sender, w, MB_CTX, w.ct.length - 16) // ct−tag = plaintext len; unwrapFor defaults to 32B key length which truncates payloads
+      seen.add(`${e.sender}:${e.messageId}`) // dedup only after a successful decrypt — a malformed first copy doesn't suppress the retry
       if (toHex(Uint8Array.from(sha256(pt))) !== e.ciphertextHash) continue // tampered payload
       out.push({ messageId: e.messageId, sender: e.sender, kind: e.kind, payload: JSON.parse(Buffer.from(pt).toString('utf8')), createdAt: e.createdAt, conversationId: e.conversationId, operationId: e.operationId })
     } catch { /* not decryptable by us or corrupt — skip */ }

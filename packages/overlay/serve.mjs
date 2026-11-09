@@ -113,7 +113,7 @@ const ingest = {
   attestation: p => overlay.lsPresence.announceAttestation(p),
   beacon: p => overlay.lsPresence.announceBeacon(p),
   revocation: p => overlay.lsPresence.revokeDelegation(p.revocation ?? p),
-  interval: p => overlay.lsPresence.announceInterval(p.interval ? p : { commit: p, sig: p.sig }),
+  interval: p => overlay.lsPresence.announceInterval(p),
   envelope: p => overlay.lsPresence.announceEnvelope(p.envelope ? p : { envelope: p, sig: p.sig })
 }
 
@@ -138,7 +138,10 @@ for (const peer of PEERS) {
     for (;;) {
       try {
         const j = await (await fetch(`${peer}/events?since=${cur}&wait=30000`)).json()
-        for (const e of j.events ?? []) { cur = Math.max(cur, e.seq); savedCursors[peer] = cur; try { await ingest[e.kind]?.(e.payload); if (e.payload) objectStore.set(sha256hex(JSON.stringify(e.payload)), e.payload) } catch {} }
+        for (const e of j.events ?? []) {
+          // cursor advances only after successful ingest — a failed apply is retried next poll, not skipped
+          try { await ingest[e.kind]?.(e.payload); if (e.payload) objectStore.set(sha256hex(JSON.stringify(e.payload)), e.payload); cur = Math.max(cur, e.seq); savedCursors[peer] = cur } catch {}
+        }
       } catch { await new Promise(r => setTimeout(r, 10_000)) }
     }
   })()
@@ -168,7 +171,7 @@ const server = http.createServer(async (req, res) => {
     }
     // BRC-180 domain manifest — declares this host's overlay services so a
     // client resolving the domain gets the real tm_/ls_ names, no guessing
-    if (req.method === 'GET' && (url.pathname === '/.well-known/bsvalias' || url.pathname === '/.well-known/metanet')) {
+    if (req.method === 'GET' && (url.pathname === '/manifest.json' || url.pathname === '/.well-known/metanet')) {
       return json(res, 200, { metanet: { overlays: { tm_nektar: SELF_URL, ls_nektar: SELF_URL, tm_presence: SELF_URL, ls_presence: SELF_URL } } })
     }
     if (req.method === 'GET' && url.pathname === '/ship') {

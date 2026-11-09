@@ -1936,6 +1936,18 @@ export class NektarMemory {
       throw new Error('importShard: malformed pack — expected {v:1, kind:"nektar-shard-pack", shard, records[]}')
     }
     if ((await this.store.all(p.shard)).length > 0) throw new Error(`importShard: shard "${p.shard}" already has records — import needs an empty shard`)
+    // R10 — consume the evidence map: each anchor's AtomicBEEF (with BUMP once
+    // mined) lands in anchorTxs, so verifyFragment checks inclusion offline
+    // against THIS instance's headers — never the exporter's word.
+    if (p.evidence && typeof p.evidence === 'object') {
+      const { Transaction } = await import('@bsv/sdk')
+      for (const [txid, beef] of Object.entries(p.evidence)) {
+        try {
+          const tx = Transaction.fromAtomicBEEF(Array.from(Buffer.from(String(beef), 'hex')))
+          if (tx.id('hex') === txid) { this.anchorTxs.set(txid, tx); this.txidShard.set(txid, p.shard) }
+        } catch { /* malformed evidence — ignored; records still verify by own bundles */ }
+      }
+    }
     let imported = 0, anchored = 0, skipped = 0
     const unverifiable: string[] = []
     for (const rec of [...p.records].sort((a, b) => a.seq - b.seq)) {

@@ -323,9 +323,17 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           const status = String(j.txStatus ?? '?')
           mem.metrics.inc('nektar_arc_callbacks_total', { status: status.toLowerCase() }, 1, 'ARC status callbacks received')
           mem.events.emit('arcStatus', { txid: j.txid, status, detail: j.extraInfo })
-          // push-driven confirmation — the broadcaster names the txid, we
-          // confirm the anchor; callers never poll for a block again
-          if (status === 'MINED' && typeof j.txid === 'string') mem.confirmByTxid?.(j.txid)
+          // R12 — the callback is an unauthenticated status input, not proof.
+          // MINED triggers evidence fetch + proof attach (which validates the
+          // BUMP contains the txid against real headers); it never promotes
+          // state on the broadcaster's word alone.
+          if (status === 'MINED' && typeof j.txid === 'string') {
+            try {
+              const mp = await (mem as any).chain?.merklePathOf?.(j.txid)
+              if (mp) { const shard = (mem as any).txidShard?.get?.(j.txid); if (shard) mem.attachProof(shard, j.txid, mp) }
+              else mem.confirmByTxid?.(j.txid) // seen-mined without proof — mark, don't finalize
+            } catch { mem.confirmByTxid?.(j.txid) }
+          }
           return send(200, { ok: true })
         } catch { return send(400, { error: 'bad callback' }) }
       }

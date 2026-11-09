@@ -129,6 +129,7 @@ export function signWant (key: PrivateKey, fields: Omit<WantAd, 'pub'>): SignedW
   const pub = key.toPublicKey().toString()
   const sr = fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'want')
   const want: WantAd = { ...fields, ...sr, domains: [...fields.domains].sort(), pub }
+  streamCommit(pub, 'want', toHex(Uint8Array.from(wantDigest(want))))
   return { want, sig: sigFor(key, want, wantCanonical) }
 }
 
@@ -189,6 +190,7 @@ export function signOffer (key: PrivateKey, fields: Omit<OfferAd, 'pub'>): Signe
   const pub = key.toPublicKey().toString()
   const sr = fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'offer')
   const offer: OfferAd = { ...fields, ...sr, domains: [...fields.domains].sort(), pub }
+  streamCommit(pub, 'offer', toHex(Uint8Array.from(offerDigest(offer))))
   return { offer, sig: sigFor(key, offer, offerCanonical) }
 }
 
@@ -718,6 +720,19 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
         events.push({ seq: Number(r.seq), kind: r.kind as EventKind, pub: r.pub, domains: JSON.parse(r.domains), ts: Number(r.ts), payload: JSON.parse(r.payload) })
       }
       nextSeq = events.length ? events.at(-1)!.seq + 1 : 0
+      // rebuild the live indexes from restored events — a restart must see the
+      // same delegations, revocations, envelopes, intervals, and beacons the
+      // feed already knows, or a durable cursor skips material state
+      for (const ev of events) {
+        try {
+          const p = ev.payload as any
+          if (ev.kind === 'delegation' && p?.grant && verifyDelegation(p.grant, p.sig)) delegations.set(p.grant.grantId, p)
+          else if (ev.kind === 'revocation' && p?.grantId) { revoked.add(p.grantId); for (const sd of delegations.values()) if (sd.grant.parentGrantId === p.grantId) revoked.add(sd.grant.grantId) }
+          else if (ev.kind === 'envelope' && p?.envelope && verifyEnvelope(p.envelope, p.sig)) envelopes.set(`${p.envelope.sender}:${p.envelope.messageId}`, p)
+          else if (ev.kind === 'interval' && p?.commit && verifyInterval(p.commit, p.sig)) intervals.push(p)
+          else if (ev.kind === 'beacon' && p?.beacon && verifyBeacon(p.beacon, p.sig)) beacons.set(p.beacon.pub, p)
+        } catch {}
+      }
       if (!(await kx.schema.hasTable(OFFERS_TABLE))) {
         await kx.schema.createTable(OFFERS_TABLE, t => {
           t.string('key').primary()
@@ -985,12 +1000,16 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     intervalsFor: (pub?: string) => intervals.filter(si => pub === undefined || si.commit.pub === pub),
     announceEnvelope: async (se: SignedEnvelope) => {
       if (!verifyEnvelope(se.envelope, se.sig)) return false
-      if (envelopes.has(se.envelope.messageId)) return true // dedup — same message, same slot
-      envelopes.set(se.envelope.messageId, se)
+      // ciphertext must be bound — the signed ciphertextHash covers the ciphertext bytes, not the plaintext
+      const { toHex } = await import('@nektar/core')
+      if (toHex(Uint8Array.from(sha256(Uint8Array.from(Buffer.from(se.envelope.ciphertext, 'hex'))))) !== se.envelope.ciphertextHash) return false
+      const key = `${se.envelope.sender}:${se.envelope.messageId}` // sender-scoped dedup
+      if (envelopes.has(key)) return true
+      envelopes.set(key, se)
       appendEvent('envelope', se.envelope.sender, [], se)
       return true
     },
-    mailboxFor: (recipient: string, topic?: string) => [...envelopes.values()].filter(se => (se.envelope.recipient === recipient || se.envelope.topic === topic) && alive({ ts: se.envelope.createdAt, exp: se.envelope.expiresAt })),
+    mailboxFor: (recipient: string, topic?: string) => [...envelopes.values()].filter(se => (se.envelope.recipient === recipient || (topic !== undefined && se.envelope.topic === topic)) && alive({ ts: se.envelope.createdAt, exp: se.envelope.expiresAt })),
 
     sweep: () => {
       let n = 0
@@ -1114,6 +1133,9 @@ export function delegationSubset (child: DelegationAd, parent: DelegationAd): bo
   if (!sub(child.scope?.tools, parent.scope?.tools) || !sub(child.scope?.domains, parent.scope?.domains)) return false
   if (child.spendCapSats > parent.spendCapSats) return false
   if (child.expiresAt > parent.expiresAt) return false
+  // explicit v2 caps — a child cannot widen per-action or lifetime caps
+  if ((child.perActionCapSats ?? child.spendCapSats) > (parent.perActionCapSats ?? parent.spendCapSats)) return false
+  if ((child.totalCapSats ?? child.spendCapSats) > (parent.totalCapSats ?? parent.spendCapSats)) return false
   return true
 }
 

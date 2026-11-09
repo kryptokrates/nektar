@@ -794,7 +794,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const gid = typeof args?.grantId === 'string' ? args.grantId : undefined
       if (gid && mem.budget) {
         const r = mem.budget.reserve(gid, `payInvoice:${args.invoiceId}`, Number(args.amount))
-        if (r === 'denied') throw new Error(`payInvoice: grant ${gid} budget exhausted`)
+        if (r !== 'ok' && r !== 'exists') throw new Error(`payInvoice: grant ${gid} budget ${r}`)
         try { const out = await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) }); mem.budget.commit(gid, `payInvoice:${args.invoiceId}`); return out } catch (e) { mem.budget.release(gid, `payInvoice:${args.invoiceId}`); throw e }
       }
       return await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) })
@@ -823,6 +823,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const handled = new Set<string>()
       const once = args?.once === true
       const answered: Array<{ operationId?: string, tool: string }> = []
+      // remote-tool allowlist — a valid sender signature proves who sent a
+      // request, not authority over local owner/payment operations. Only
+      // read-only market tools are callable via the mailbox by default.
+      const REMOTE_OK = new Set(args?.allowTools ?? ['recall', 'describeShard', 'describeMemory', 'catalog', 'prices', 'pack', 'feed', 'watch', 'whoami'])
       for (let round = 0; once ? round < 1 : true; round++) {
         const msgs = await collect(mem.operatorKey(), keeper, seen)
         for (const m of msgs) {
@@ -830,6 +834,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
           handled.add(m.messageId)
           const req = (m.payload ?? {}) as { tool?: string, args?: unknown }
           if (!req.tool) continue
+          if (!REMOTE_OK.has(req.tool)) {
+            await sendEnvelope(mem.operatorKey(), keeper, { recipient: m.sender, kind: 'delivery-reference', operationId: m.operationId, conversationId: m.conversationId, payload: { tool: req.tool, result: { error: `remote tool '${req.tool}' is not allowed — mailbox calls are restricted to read-only tools` } } }).catch(() => {})
+            continue
+          }
           let result: unknown
           try { result = await callTool(mem, req.tool, req.args, ctx) } catch (e) { result = { error: (e as Error).message } }
           await sendEnvelope(mem.operatorKey(), keeper, { recipient: m.sender, kind: 'delivery-reference', operationId: m.operationId, conversationId: m.conversationId, payload: { tool: req.tool, result } }).catch(() => {})
@@ -865,7 +873,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         const actionId = `sale:escrow:${args.cfg ? JSON.stringify(args.cfg).slice(0, 60) : Date.now()}`
         const amount = Number((args.cfg as any)?.price ?? args.amount ?? 0)
         const r = mem.budget.reserve(gid, actionId, amount)
-        if (r === 'denied') throw new Error(`sale: grant ${gid} budget exhausted`)
+        if (r !== 'ok' && r !== 'exists') throw new Error(`sale: grant ${gid} budget ${r}`)
         try { const out = await callTool(mem, `sale#${op}`, args, ctx); mem.budget.commit(gid, actionId); return out } catch (e) { mem.budget.release(gid, actionId); throw e }
       }
       return await callTool(mem, `sale#${op}`, args, ctx)
@@ -1530,7 +1538,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         const actionId = `peerCall:${tool}:${extra.invoiceId}`
         if (deleg?.grant.grantId && mem.budget) {
           const r = mem.budget.reserve(String(deleg.grant.grantId), actionId, amount)
-          if (r === 'denied') throw new Error(`peerCall: grant ${deleg.grant.grantId} has no budget left — ${amount} sats exceeds remaining allowance`)
+          if (r !== 'ok' && r !== 'exists') throw new Error(`peerCall: grant ${deleg.grant.grantId} budget ${r} — ${amount} sats refused`) // fail closed
         }
         let paid
         try {
@@ -1628,7 +1636,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const signed = signDelegation(mem.operatorKey(), fields)
       // F3 — register the grant's lifetime cap with the budget authority so
       // delegated spends count cumulatively, not just per call
-      if (mem.budget && fields.spendCapSats) mem.budget.setCap(String(fields.grantId), Number(fields.spendCapSats))
+      if (mem.budget && fields.spendCapSats) mem.budget.setCap(String(fields.grantId), Number(fields.totalCapSats ?? fields.spendCapSats), args?.delegation?.parent ? [String(args.delegation.parent.grant?.grantId)] : [])
       if (args?.publish !== true) return { grant: signed.grant, sig: signed.sig }
       const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
       const r = await postJson(`${rv}/delegation`, signed, 15_000)

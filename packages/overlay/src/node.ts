@@ -22,6 +22,9 @@ export async function createNektarOverlay (
   knexInstance?: Knex,
   opts?: { net?: string, strictNet?: boolean }
 ): Promise<NektarOverlay> {
+  // SPV verification for net-bound artifacts rides on the same tracker the
+  // overlay engine already uses — no second header source needed
+  const spvOpts = opts ? { ...opts, tracker: chainTracker as unknown as { headerAtHeight: (h: number) => Promise<{ hash: string } | undefined> } } : undefined
   const kx = knexInstance ?? knexPkg({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   if (!(await kx.schema.hasTable('outputs'))) {
     for (const m of allMigrations as Array<{ up: (k: Knex) => Promise<void> }>) await m.up(kx)
@@ -29,7 +32,7 @@ export async function createNektarOverlay (
   const ls = createLsNektar(kx)
   await ls.init()
   const tm = createTmNektar(ls)
-  const lsPresence = createLsPresence(kx, opts)
+  const lsPresence = createLsPresence(kx, spvOpts ?? { tracker: chainTracker as unknown as { headerAtHeight: (h: number) => Promise<{ hash: string } | undefined> } })
   await lsPresence.init()
   const engine = new Engine(
     { tm_nektar: tm, tm_presence: createTmPresence() },

@@ -377,6 +377,13 @@ export class NektarMemory {
   }
   /** current chain height for locktime-gated covenant calls */
   async chainHeight (): Promise<number> { return this.chain.tipHeight ? await this.chain.tipHeight() : await this.chain.currentHeight() }
+  /** {hash,height} pair near the current tip — walks back a few blocks because
+   *  the header index lags the tip; the chain-bound identity an artifact claims */
+  async tipRef (): Promise<{ tip: string, tipHeight: number } | undefined> {
+    const h0 = await this.chainHeight()
+    for (let h = h0; h > h0 - 3 && h > 0; h--) { const hdr = await this.chain.headerAtHeight(h).catch(() => undefined); if (hdr) return { tip: hdr.hash, tipHeight: h } }
+    return undefined
+  }
   /** the shard's latest anchor link (tail of the on-chain succession) */
   tailLink (shard: string) { return this.tails.get(shard)?.at(-1) }
   /** anchors still waiting for their BUMP */

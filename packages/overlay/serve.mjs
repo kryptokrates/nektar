@@ -49,7 +49,9 @@ const overlay = await createNektarOverlay(
   new ChaintracksTracker({ arcUrl: u.arc, wocUrl: u.arc }, u.ct),
   new ArcBroadcaster({ arcUrl: u.arc, wocUrl: u.arc }),
   knexPkg({ client: 'sqlite3', connection: { filename: path.join(DIR, 'overlay.sqlite') }, useNullAsDefault: true }),
-  { net: NET, strictNet: process.env.NEKTAR_OVERLAY_STRICT_NET === '1' }
+  // strict by default — only SPV-verified (net+tip-bound) artifacts land on the
+  // feed; NEKTAR_OVERLAY_STRICT_NET=0 relaxes for dev/compat
+  { net: NET, strictNet: process.env.NEKTAR_OVERLAY_STRICT_NET !== '0' }
 )
 console.log(`[rendezvous] network=${NET} db=${path.join(DIR, 'overlay.sqlite')} listening ${HOST}:${PORT}`)
 

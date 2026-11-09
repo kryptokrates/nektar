@@ -91,10 +91,13 @@ export interface WantAd {
   net?: string
   /** the publisher's chain tip height at publish — a verifiable timeline claim */
   tipHeight?: number
+  /** SPV binding — the blockhash at tipHeight on the claimed chain; verifiable
+   *  against real headers, so a ttn-signed artifact can't fake being mainnet */
+  tip?: string
 }
 export interface SignedWant { want: WantAd, sig: string }
 
-const wantCanonical = (w: WantAd) => `${[...w.domains].sort().join(',')}|${w.question ?? ''}|${w.maxSats ?? ''}|${w.endpoint ?? ''}|${w.ts}|${w.exp ?? ''}|${w.net ?? ''}|${w.tipHeight ?? ''}`
+const wantCanonical = (w: WantAd) => `${[...w.domains].sort().join(',')}|${w.question ?? ''}|${w.maxSats ?? ''}|${w.endpoint ?? ''}|${w.ts}|${w.exp ?? ''}|${w.net ?? ''}|${w.tipHeight ?? ''}|${w.tip ?? ''}`
 const wantDigest = (w: WantAd) => sha256(utf8(wantCanonical(w)))
 
 export function signWant (key: PrivateKey, fields: Omit<WantAd, 'pub'>): SignedWant {
@@ -142,10 +145,13 @@ export interface OfferAd {
   net?: string
   /** the publisher's chain tip height at publish — a verifiable timeline claim */
   tipHeight?: number
+  /** SPV binding — the blockhash at tipHeight on the claimed chain; verifiable
+   *  against real headers, so a ttn-signed artifact can't fake being mainnet */
+  tip?: string
 }
 export interface SignedOffer { offer: OfferAd, sig: string }
 
-const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}|${o.replyTo ?? ''}|${o.net ?? ''}|${o.tipHeight ?? ''}`
+const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}|${o.replyTo ?? ''}|${o.net ?? ''}|${o.tipHeight ?? ''}|${o.tip ?? ''}`
 const offerDigest = (o: OfferAd) => sha256(utf8(offerCanonical(o)))
 const offerKey = (o: OfferAd) => `${o.pub}:${o.shard}:${o.seq}`
 
@@ -380,7 +386,7 @@ export function createTmPresence (): TopicManager {
 interface Stored { ad: PresenceAd, txid: string, outputIndex: number }
 interface StoredCatalog { sc: SignedCatalog }
 
-export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: boolean }): LookupService & {
+export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: boolean, tracker?: { headerAtHeight: (h: number) => Promise<{ hash: string } | undefined> } }): LookupService & {
   init: () => Promise<void>
   announce: (s: SignedAd) => Promise<boolean>
   announceCatalog: (sc: SignedCatalog) => Promise<boolean>
@@ -425,6 +431,8 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   const events: PresenceEvent[] = []
   /** push feed for live surfaces (dashboard SSE) — emits each event as it lands */
   const bus = new EventEmitter()
+  /** lazily probed — can the tracker resolve headers at all (genesis)? */
+  let spvCapable: boolean | undefined
   let nextSeq = 0
   const appendEvent = (kind: EventKind, pub: string, domains: string[], payload: unknown) => {
     const e: PresenceEvent = { seq: nextSeq++, kind, pub, domains, ts: Date.now(), payload }
@@ -677,6 +685,16 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
       if (!verifyWant(sw.want, sw.sig)) return false
       // signed net binding — reject artifacts claiming a different network
       if (opts?.net && ((sw.want.net && sw.want.net !== opts.net) || (opts.strictNet && !sw.want.net))) return false
+      // SPV binding — claimed tip must match this chain's header at that height.
+      // strict: reject unbound only when the tracker can actually verify
+      // (genesis probe — a tracker that can't serve block 1 can't verify at all)
+      if (opts?.tracker) {
+        spvCapable ??= !!(await opts.tracker.headerAtHeight(1).catch(() => undefined))
+        if (sw.want.tip || sw.want.tipHeight != null) {
+          const h = sw.want.tipHeight != null ? await opts.tracker.headerAtHeight(sw.want.tipHeight).catch(() => undefined) : undefined
+          if (!h || h.hash !== sw.want.tip) return false
+        } else if (opts.strictNet && spvCapable) return false
+      }
       const prev = wants.get(sw.want.pub)
       if (prev && prev.want.ts >= sw.want.ts) return true
       wants.set(sw.want.pub, sw)
@@ -688,6 +706,13 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     announceOffer: async (so: SignedOffer) => {
       if (!verifyOffer(so.offer, so.sig)) return false
       if (opts?.net && ((so.offer.net && so.offer.net !== opts.net) || (opts.strictNet && !so.offer.net))) return false
+      if (opts?.tracker) {
+        spvCapable ??= !!(await opts.tracker.headerAtHeight(1).catch(() => undefined))
+        if (so.offer.tip || so.offer.tipHeight != null) {
+          const h = so.offer.tipHeight != null ? await opts.tracker.headerAtHeight(so.offer.tipHeight).catch(() => undefined) : undefined
+          if (!h || h.hash !== so.offer.tip) return false
+        } else if (opts.strictNet && spvCapable) return false
+      }
       const k = offerKey(so.offer)
       const prev = offers.get(k)
       if (prev && prev.offer.ts >= so.offer.ts) return true

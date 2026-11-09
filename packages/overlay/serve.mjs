@@ -113,7 +113,8 @@ const ingest = {
   attestation: p => overlay.lsPresence.announceAttestation(p),
   beacon: p => overlay.lsPresence.announceBeacon(p),
   revocation: p => overlay.lsPresence.revokeDelegation(p.revocation ?? p),
-  interval: p => overlay.lsPresence.announceInterval(p.interval ? p : { commit: p, sig: p.sig })
+  interval: p => overlay.lsPresence.announceInterval(p.interval ? p : { commit: p, sig: p.sig }),
+  envelope: p => overlay.lsPresence.announceEnvelope(p.envelope ? p : { envelope: p, sig: p.sig })
 }
 for (const peer of PEERS) {
   const CURSOR_FILE = path.join(DIR, 'peer-cursors.json')
@@ -165,6 +166,16 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/patterns') {
       return json(res, 200, { kindToPattern: KIND_PATTERN, note: 'replyTo-offers read as messagebox; everything else maps by kind' })
+    }
+    if (req.method === 'POST' && url.pathname === '/mailbox') {
+      const { envelope, sig } = JSON.parse(await body(req) || '{}')
+      const ok = await overlay.lsPresence.announceEnvelope({ envelope, sig })
+      return json(res, ok ? 200 : 400, ok ? { ok: true, messageId: envelope?.messageId } : { error: 'rejected' })
+    }
+    if (req.method === 'GET' && url.pathname === '/mailbox') {
+      const r = url.searchParams.get('recipient')
+      if (!r) return json(res, 400, { error: 'recipient required' })
+      return json(res, 200, { envelopes: overlay.lsPresence.mailboxFor(r) })
     }
     if (req.method === 'POST' && url.pathname === '/interval') {
       const { commit, sig } = JSON.parse(await body(req) || '{}')

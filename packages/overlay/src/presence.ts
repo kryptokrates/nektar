@@ -235,7 +235,7 @@ export function verifyReputationCard (card: ReputationCard, sigHex: string): boo
   } catch { return false }
 }
 
-export type EventKind = 'ad' | 'catalog' | 'want' | 'offer' | 'settlement' | 'reputation' | 'delegation' | 'attestation' | 'revocation' | 'beacon'
+export type EventKind = 'ad' | 'catalog' | 'want' | 'offer' | 'settlement' | 'reputation' | 'delegation' | 'attestation' | 'revocation' | 'beacon' | 'interval' | 'envelope'
 
 // ── beacon — an rv's signed self-announcement (BRC-126 ADVERT semantics over
 // HTTPS): "I serve these topics at this endpoint on this net." Any rv or agent
@@ -268,6 +268,59 @@ export function verifyBeacon (b: BeaconAd, sigHex: string): boolean {
 // pub equality alone is not authentication, anyone could claim to be an owner.
 export interface RevocationAd { grantId: string, pub: string, ts: number }
 export interface SignedRevocation { revocation: RevocationAd, sig: string }
+
+// ── F2 producer stream — each publisher's signed sequence + predecessor link,
+// plus the interval commitment a host anchors so a reader can detect omission,
+// reordering, and alteration in a known range. Spec: producer signs sequence
+// monotonic-by-one; interval binds [first..last] + merkleRoot + prevInterval.
+export interface StreamRef { seq: number, prevHash?: string } // seq monotonic, prevHash = sha256(prev event canonical)
+export interface IntervalCommit {
+  pub: string // producer
+  streamId: string // the stream's name (e.g. 'presence')
+  firstSeq: number
+  lastSeq: number
+  eventCount: number
+  merkleRoot: string // sha256 of the leaf-set (canonical order)
+  prevIntervalHash?: string // chain back to the prior interval
+  ts: number
+}
+export interface SignedInterval { commit: IntervalCommit, sig: string }
+const intervalCanonical = (c: IntervalCommit) => `${c.streamId}|${c.firstSeq}|${c.lastSeq}|${c.eventCount}|${c.merkleRoot}|${c.prevIntervalHash ?? ''}|${c.ts}`
+export function signInterval (key: PrivateKey, c: Omit<IntervalCommit, 'pub'>): SignedInterval {
+  const commit = { ...c, pub: key.toPublicKey().toString() } as IntervalCommit
+  return { commit, sig: toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(intervalCanonical(commit))))).toDER() as number[])) }
+}
+export function verifyInterval (c: IntervalCommit, sigHex: string): boolean {
+  try { return PublicKey.fromString(c.pub).verify(Array.from(sha256(utf8(intervalCanonical(c)))), Signature.fromDER(sigHex, 'hex')) } catch { return false }
+}
+
+// ── F6 async mailbox — a signed encrypted envelope kept by the rv until the
+// recipient collects it. The keeper never sees the content: it stores the
+// envelope + ciphertextHash; delivery proof is the signature + dedup by id.
+export interface EnvelopeAd {
+  messageId: string // sender-chosen unique id — dedup key
+  version: 1
+  sender: string // sender pub
+  recipient: string // recipient pub — keeper serves to this key only
+  conversationId?: string
+  operationId?: string
+  kind: 'request' | 'offer' | 'acceptance' | 'delivery-reference' | 'acknowledgement' | 'cancellation'
+  createdAt: number
+  expiresAt?: number
+  replyTo?: string
+  ciphertextHash: string // sha256 of the encrypted payload — content stays opaque to the keeper
+  ciphertext: string // hex — encrypted payload (AES-GCM, recipient-pub-derived)
+  encryptionProfile?: string
+}
+export interface SignedEnvelope { envelope: EnvelopeAd, sig: string }
+const envCanonical = (e: EnvelopeAd) => `${e.messageId}|${e.version}|${e.sender}|${e.recipient}|${e.conversationId ?? ''}|${e.operationId ?? ''}|${e.kind}|${e.createdAt}|${e.expiresAt ?? ''}|${e.replyTo ?? ''}|${e.ciphertextHash}|${e.encryptionProfile ?? ''}`
+export function signEnvelope (key: PrivateKey, e: Omit<EnvelopeAd, 'sender' | 'version'>): SignedEnvelope {
+  const envelope = { ...e, version: 1, sender: key.toPublicKey().toString() } as EnvelopeAd
+  return { envelope, sig: toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(envCanonical(envelope))))).toDER() as number[])) }
+}
+export function verifyEnvelope (e: EnvelopeAd, sigHex: string): boolean {
+  try { return PublicKey.fromString(e.sender).verify(Array.from(sha256(utf8(envCanonical(e)))), Signature.fromDER(sigHex, 'hex')) } catch { return false }
+}
 const revCanonical = (r: RevocationAd) => `${r.grantId}|${r.pub}|${r.ts}`
 export function signRevocation (key: PrivateKey, r: RevocationAd): SignedRevocation {
   return { revocation: { ...r, pub: key.toPublicKey().toString() }, sig: toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(revCanonical(r))))).toDER() as number[])) }
@@ -447,6 +500,10 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   feed: (q: { since?: number, domains?: string[], kind?: EventKind, limit?: number }) => Promise<PresenceEvent[]>
   announceBeacon: (sb: SignedBeacon) => Promise<boolean>
   peersFor: () => SignedBeacon[]
+  announceInterval: (si: SignedInterval) => Promise<boolean>
+  intervalsFor: (pub?: string) => SignedInterval[]
+  announceEnvelope: (se: SignedEnvelope) => Promise<boolean>
+  mailboxFor: (recipient: string) => SignedEnvelope[]
   /** evict expired entries from the live maps — returns how many died */
   sweep: () => number
   bus: EventEmitter
@@ -472,6 +529,10 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   const attestations = new Map<string, SignedAttestation>()
   // live beacon ads per rv pub — the index of indexes
   const beacons = new Map<string, SignedBeacon>()
+  // producer interval commitments — the repairable-history anchors
+  const intervals: SignedInterval[] = []
+  // mailbox — envelopes keyed by messageId, dedup'd
+  const envelopes = new Map<string, SignedEnvelope>()
   // the durable event log — seq is the consumer cursor
   const events: PresenceEvent[] = []
   /** push feed for live surfaces (dashboard SSE) — emits each event as it lands */
@@ -878,9 +939,26 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
       return true
     },
     peersFor: () => [...beacons.values()].filter(sb => alive(sb.beacon)),
+    announceInterval: async (si: SignedInterval) => {
+      if (!verifyInterval(si.commit, si.sig)) return false
+      if (opts?.net && (si.commit as any).net && !netEq((si.commit as any).net, opts.net)) return false
+      intervals.push(si)
+      appendEvent('interval', si.commit.pub, [si.commit.streamId], si)
+      return true
+    },
+    intervalsFor: (pub?: string) => intervals.filter(si => pub === undefined || si.commit.pub === pub),
+    announceEnvelope: async (se: SignedEnvelope) => {
+      if (!verifyEnvelope(se.envelope, se.sig)) return false
+      if (envelopes.has(se.envelope.messageId)) return true // dedup — same message, same slot
+      envelopes.set(se.envelope.messageId, se)
+      appendEvent('envelope', se.envelope.sender, [], se)
+      return true
+    },
+    mailboxFor: (recipient: string) => [...envelopes.values()].filter(se => se.envelope.recipient === recipient && alive({ ts: se.envelope.createdAt, exp: se.envelope.expiresAt })),
 
     sweep: () => {
       let n = 0
+      for (const [k, v] of envelopes) if (!alive({ ts: v.envelope.createdAt, exp: v.envelope.expiresAt })) { envelopes.delete(k); n++ }
       for (const [k, v] of beacons) if (!alive(v.beacon)) { beacons.delete(k); n++ }
       for (const [k, v] of wants) if (!alive(v.want)) { wants.delete(k); n++ }
       for (const [k, v] of offers) if (!alive(v.offer)) { offers.delete(k); n++ }

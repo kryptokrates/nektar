@@ -131,6 +131,9 @@ export interface ShardPack {
     seq: number, data: string, level?: number, bundle?: ProofBundle
     prov?: { source?: string, time?: number, signature?: string, modelId?: string, modality?: Provenance['modality'] }
   }>
+  /** anchorTxid → AtomicBEEF hex — the inclusion evidence for anchored records;
+   *  the verifier checks these against ITS headers, not the exporter's word */
+  evidence?: Record<string, string>
 }
 
 /** a saleable access mode declared in a shard manifest: 'answer' = paid
@@ -1906,7 +1909,17 @@ export class NektarMemory {
       })
     }
     const manifest = await this.shardManifest(shard)
-    return { v: 1, kind: 'nektar-shard-pack', shard, exportedAt: Date.now(), ...(manifest ? { manifest } : {}), records }
+    // F4 portable evidence — the anchor txs' AtomicBEEF (merklePath attached)
+    // lets any verifier check inclusion against ITS headers, offline, without
+    // trusting this host. Records cite anchorTxid; evidence carries the proof.
+    const evidence: Record<string, string> = {}
+    const { toHex } = await import('@nektar/core')
+    for (const r of recs) {
+      if (r.anchorTxid === undefined) continue
+      const tx = this.anchorTxs.get(r.anchorTxid)
+      if (tx) evidence[r.anchorTxid] = toHex(Uint8Array.from(tx.toAtomicBEEF()))
+    }
+    return { v: 1, kind: 'nektar-shard-pack', shard, exportedAt: Date.now(), ...(manifest ? { manifest } : {}), records, ...(Object.keys(evidence).length ? { evidence } : {}) }
   }
 
   /** Import a shard pack: records re-land via remember() (byte-identical prov

@@ -92,7 +92,7 @@ export class DisclosureSaleHost {
   buildBuy (utxo: SaleUtxo, wrapped: string, changeSats: bigint): { tx: Transaction } {
     const tx = new Transaction()
     tx.addInput({
-      sourceTransaction: DisclosureSaleHost.sourceOf(utxo), sourceOutputIndex: utxo.vout,
+      sourceTXID: utxo.txid, sourceTransaction: DisclosureSaleHost.sourceOf(utxo), sourceOutputIndex: utxo.vout,
       unlockingScript: new UnlockingScript(), sequence: 0xfffffffe
     })
     tx.addOutput({ satoshis: Number(this.cfg.price), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.sellerPkh)) })
@@ -111,7 +111,7 @@ export class DisclosureSaleHost {
   buildRefund (utxo: SaleUtxo, depositorKey: PrivateKey, lockTime: number, changeSats: bigint): { tx: Transaction } {
     const tx = new Transaction()
     tx.addInput({
-      sourceTransaction: DisclosureSaleHost.sourceOf(utxo), sourceOutputIndex: utxo.vout,
+      sourceTXID: utxo.txid, sourceTransaction: DisclosureSaleHost.sourceOf(utxo), sourceOutputIndex: utxo.vout,
       unlockingScript: new UnlockingScript(), sequence: 0xfffffffe
     })
     tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.depositorPkh)) })

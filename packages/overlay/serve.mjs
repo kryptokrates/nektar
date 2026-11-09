@@ -72,6 +72,7 @@ const beaconNow = async () => {
   await overlay.lsPresence.announceBeacon(sb).catch(() => {})
   for (const peer of PEERS) fetch(`${peer}/beacon`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sb) }).catch(() => {})
 }
+if (process.env.NEKTAR_BRIDGE_INGRESS) console.log(`[rendezvous] bridge ingress=${process.env.NEKTAR_BRIDGE_INGRESS} — plane delivery expected via overlay-bridge feed`)
 setInterval(beaconNow, 30 * 60_000); setTimeout(beaconNow, 3000)
 setInterval(() => { const n = overlay.lsPresence.sweep?.(); if (n) console.log(`[rendezvous] sweep: ${n} expired entries evicted`) }, 300_000)
 

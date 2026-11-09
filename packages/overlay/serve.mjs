@@ -240,11 +240,14 @@ h2{font-size:11px;letter-spacing:.14em;color:#888;text-transform:uppercase;margi
 .k-ad{color:#9ecbff}.k-catalog{color:#b78aff}.k-want{color:#fb923c}.k-offer{color:#4cc26b}
 .k-settlement{color:#f5b301}.k-fraud{color:#e5534b}.k-delegation{color:#56d4dd}.k-attestation{color:#e6b3e6}
 .dim{color:#777}.agents div{padding:4px 0;font-size:12px;color:#999}
+.netbadge{font-size:11px;font-weight:600;letter-spacing:.1em;padding:3px 10px;border-radius:20px;margin-left:12px;vertical-align:middle;text-transform:uppercase}
+.netbadge.testnet{background:#3a2a00;color:#f5b301;border:1px solid #f5b301}
+.netbadge.mainnet{background:#062e0c;color:#4cc26b;border:1px solid #4cc26b}
 .toggle{margin-left:14px}.toggle button{background:#1a1a1a;border:1px solid #2a2a2a;color:#888;font:inherit;font-size:11px;padding:2px 10px;border-radius:20px;cursor:pointer;margin-right:4px}
 .toggle button.on{background:#f5b301;color:#0d0d0d;border-color:#f5b301}
 footer{margin-top:24px;color:#555;font-size:12px}
 </style></head><body>
-<h1>nektar market<span class="dot" id="live"></span></h1>
+<h1>nektar market<span id="netbadge" class="netbadge testnet">testnet</span><span class="dot" id="live"></span></h1>
 <div class="sub" id="net">live event feed · the agent memory market
 <span class="toggle"><button id="t-ttn" class="on" onclick="setNet('ttn')">testnet</button><button id="t-main" onclick="setNet('main')">mainnet</button></span>
 <span class="dim" id="rv-host"></span></div>
@@ -261,6 +264,7 @@ footer{margin-top:24px;color:#555;font-size:12px}
 const $ = id => document.getElementById(id)
 // network sources — same-origin by default; override via ?ttn= & ?main=
 const q=new URLSearchParams(location.search)
+const SERVER_NET='${process.env.NEKTAR_NETWORK ?? 'ttn'}'
 const NETS={ttn:q.get('ttn')||location.origin,main:q.get('main')||'https://rv.nektar.run'}
 let BASE=NETS.ttn, NET='ttn', es=null
 const counts = {}
@@ -270,6 +274,7 @@ function setNet(n){
   NET=n; BASE=NETS[n]||location.origin
   document.querySelectorAll('.toggle button').forEach(b=>b.classList.remove('on'))
   $('t-'+n).classList.add('on'); $('rv-host').textContent=' · '+BASE
+  const nb=$('netbadge'); nb.textContent=n==='main'?'mainnet':'testnet'; nb.className='netbadge '+(n==='main'?'mainnet':'testnet')
   $('feed').innerHTML='<div class="dim">listening…</div>'; seen.clear(); cursor=-1
   if(es){es.close();es=null}
   for(const k of ['want','offer','agent','settle']) $('n-'+k).textContent='0'
@@ -310,7 +315,8 @@ async function agents(){
   }catch{}
 }
 $('rv-host').textContent=' · '+BASE
-boot(); setInterval(agents,30000)
+setNet(SERVER_NET==='main'||SERVER_NET==='mainnet'?'main':'ttn')
+setInterval(agents,30000)
 </script></body></html>`)
     }
     if (req.method === 'GET' && url.pathname === '/') {

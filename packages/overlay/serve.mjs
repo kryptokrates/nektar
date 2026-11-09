@@ -269,7 +269,10 @@ const $ = id => document.getElementById(id)
 // network sources — same-origin by default; override via ?ttn= & ?main=
 const q=new URLSearchParams(location.search)
 const SERVER_NET='${process.env.NEKTAR_NETWORK ?? 'ttn'}'
-const NETS={ttn:q.get('ttn')||location.origin,main:q.get('main')||'https://rv.nektar.run'}
+// NETS.main defaults to null — one rv serves one network; the toggle only
+// appears when a real second source is given (?main=<other rv url>)
+const NETS={ttn:q.get('ttn')||location.origin,main:q.get('main')||null}
+if(!NETS.main||NETS.main===NETS.ttn)document.querySelector('.toggle').style.display='none'
 let BASE=NETS.ttn, NET='ttn', es=null
 const counts = {}
 const seen = new Set()

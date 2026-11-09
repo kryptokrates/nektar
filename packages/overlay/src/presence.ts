@@ -235,7 +235,31 @@ export function verifyReputationCard (card: ReputationCard, sigHex: string): boo
   } catch { return false }
 }
 
-export type EventKind = 'ad' | 'catalog' | 'want' | 'offer' | 'settlement' | 'reputation' | 'delegation' | 'attestation' | 'revocation'
+export type EventKind = 'ad' | 'catalog' | 'want' | 'offer' | 'settlement' | 'reputation' | 'delegation' | 'attestation' | 'revocation' | 'beacon'
+
+// ── beacon — an rv's signed self-announcement (BRC-126 ADVERT semantics over
+// HTTPS): "I serve these topics at this endpoint on this net." Any rv or agent
+// can hold the set, so the index itself is discoverable, not hardcoded. ──────
+export interface BeaconAd {
+  pub: string // the rv's identity key
+  endpoint: string // https://rv.example — where its presence API lives
+  net?: string // 'ttn'|'main'|etc — which chain lane it indexes
+  topics: string[] // e.g. ['tm_presence'] — what it serves
+  ts: number
+  exp?: number
+}
+export interface SignedBeacon { beacon: BeaconAd, sig: string }
+const beaconCanonical = (b: BeaconAd) => `${b.endpoint}|${[...b.topics].sort().join(',')}|${b.net ?? ''}|${b.ts}|${b.exp ?? ''}`
+export function signBeacon (key: PrivateKey, b: Omit<BeaconAd, 'pub'>): SignedBeacon {
+  const beacon = { ...b, pub: key.toPublicKey().toString() } as BeaconAd
+  return { beacon, sig: toHex(Uint8Array.from(key.sign(Array.from(digestBeacon(beacon))).toDER() as number[])) }
+}
+const digestBeacon = (b: BeaconAd) => sha256(utf8(beaconCanonical(b)))
+export function verifyBeacon (b: BeaconAd, sigHex: string): boolean {
+  try {
+    return PublicKey.fromString(b.pub).verify(Array.from(digestBeacon(b)), Signature.fromDER(sigHex, 'hex'))
+  } catch { return false }
+}
 export interface PresenceEvent { seq: number, kind: EventKind, pub: string, domains: string[], ts: number, payload: unknown }
 
 export function signPresence (key: PrivateKey, fields: Omit<PresenceAd, 'pub'>): SignedAd {
@@ -406,6 +430,8 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   reputationsFor: (domain?: string) => SignedReputation[]
   prices: (q: { domain?: string, tool?: string }) => { count: number, sats: number[], minSats: number | null, maxSats: number | null, medianSats: number | null, totalSats: number, settlements: SettlementAd[] }
   feed: (q: { since?: number, domains?: string[], kind?: EventKind, limit?: number }) => Promise<PresenceEvent[]>
+  announceBeacon: (sb: SignedBeacon) => Promise<boolean>
+  peersFor: () => SignedBeacon[]
   /** evict expired entries from the live maps — returns how many died */
   sweep: () => number
   bus: EventEmitter
@@ -429,6 +455,8 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   const revoked = new Set<string>()
   // latest attestation per pub
   const attestations = new Map<string, SignedAttestation>()
+  // live beacon ads per rv pub — the index of indexes
+  const beacons = new Map<string, SignedBeacon>()
   // the durable event log — seq is the consumer cursor
   const events: PresenceEvent[] = []
   /** push feed for live surfaces (dashboard SSE) — emits each event as it lands */
@@ -823,8 +851,20 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     bus,
 
     // expiry sweep — silence frees the maps; history stays in /events
+    announceBeacon: async (sb: SignedBeacon) => {
+      if (!verifyBeacon(sb.beacon, sb.sig)) return false
+      if (opts?.net && sb.beacon.net && !netEq(sb.beacon.net, opts.net)) return false
+      const prev = beacons.get(sb.beacon.pub)
+      if (prev && prev.beacon.ts >= sb.beacon.ts) return true
+      beacons.set(sb.beacon.pub, sb)
+      appendEvent('beacon', sb.beacon.pub, sb.beacon.topics, sb)
+      return true
+    },
+    peersFor: () => [...beacons.values()].filter(sb => alive(sb.beacon)),
+
     sweep: () => {
       let n = 0
+      for (const [k, v] of beacons) if (!alive(v.beacon)) { beacons.delete(k); n++ }
       for (const [k, v] of wants) if (!alive(v.want)) { wants.delete(k); n++ }
       for (const [k, v] of offers) if (!alive(v.offer)) { offers.delete(k); n++ }
       for (const [k, v] of ads) if (!alive(v.ad)) { ads.delete(k); n++ }

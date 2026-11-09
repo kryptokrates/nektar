@@ -1,6 +1,6 @@
 export { createTmNektar } from './tm.js'
 export { createLsNektar } from './ls.js'
-export { createTmPresence, createLsPresence, signPresence, verifyPresence, presenceOutputScript, parsePresence, signCatalog, verifyCatalog, signWant, verifyWant, signOffer, verifyOffer, signSettlement, verifySettlement, signReputation, verifyReputationCard, signDelegation, verifyDelegation, delegationSubset, signAttestation, verifyAttestation, catalogOutputScript, wantOutputScript, offerOutputScript, parseCatalogOutput, parseWantOutput, parseOfferOutput, parseAnyPresence } from './presence.js'
+export { createTmPresence, createLsPresence, signPresence, verifyPresence, presenceOutputScript, parsePresence, signCatalog, verifyCatalog, signWant, verifyWant, signOffer, verifyOffer, signSettlement, verifySettlement, signReputation, verifyReputationCard, signDelegation, verifyDelegation, delegationSubset, signAttestation, verifyAttestation, signBeacon, verifyBeacon, catalogOutputScript, wantOutputScript, offerOutputScript, parseCatalogOutput, parseWantOutput, parseOfferOutput, parseAnyPresence } from './presence.js'
 export type { PresenceAd, SignedAd, AgentCatalog, SignedCatalog, CatalogShardEntry, WantAd, SignedWant, OfferAd, SignedOffer, SettlementAd, SignedSettlement, ReputationCard, ReputationEntry, SignedReputation, DelegationAd, SignedDelegation, AttestationAd, SignedAttestation, PresenceEvent, EventKind, ParsedPresence } from './presence.js'
 export { createNektarOverlay } from './node.js'
 export type { NektarOverlay } from './node.js'

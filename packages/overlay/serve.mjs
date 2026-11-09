@@ -29,7 +29,8 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 import knexPkg from 'knex'
 import { ArcBroadcaster, ChaintracksTracker } from '@nektar/chain'
-import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation } from './dist/src/index.js'
+import { PrivateKey } from '@bsv/sdk'
+import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation, signBeacon } from './dist/src/index.js'
 
 const HOST = process.env.NEKTAR_OVERLAY_HOST ?? '0.0.0.0'
 const PORT = Number(process.env.NEKTAR_OVERLAY_PORT ?? 8090)
@@ -40,7 +41,7 @@ const NET = process.env.NEKTAR_NETWORK ?? 'testnet'
 // fallback); broadcaster's post-ARC fallback is pointed back at the same
 // arcade (self-referential retry — a 404 there just ends in 'broadcast failed').
 const URLS = {
-  testnet: { arc: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', ct: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v1' },
+  testnet: { arc: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', ct: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v2' },
   ttn:     { arc: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',    ct: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech/chaintracks/v2' },
   main:    { arc: 'https://arcade-us-1.bsvblockchain.tech',           ct: 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2' }
 }
@@ -62,6 +63,16 @@ const overlay = await createNektarOverlay(
       freeWindowMs: Number(process.env.NEKTAR_LISTING_FREE_WINDOW_MS ?? 3_600_000)
     } : undefined }
 )
+const SELF_KEY = process.env.NEKTAR_OVERLAY_WIF ? PrivateKey.fromWif(process.env.NEKTAR_OVERLAY_WIF) : PrivateKey.fromRandom()
+const SELF_PUB = SELF_KEY.toPublicKey().toString()
+const SELF_URL = process.env.NEKTAR_RV_URL ?? `http://${HOST}:${PORT}`
+const PEERS = (process.env.NEKTAR_PEERS ?? '').split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean)
+const beaconNow = async () => {
+  const sb = signBeacon(SELF_KEY, { endpoint: SELF_URL, net: NET, topics: ['tm_presence'], ts: Date.now() })
+  await overlay.lsPresence.announceBeacon(sb).catch(() => {})
+  for (const peer of PEERS) fetch(`${peer}/beacon`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sb) }).catch(() => {})
+}
+setInterval(beaconNow, 30 * 60_000); setTimeout(beaconNow, 3000)
 setInterval(() => { const n = overlay.lsPresence.sweep?.(); if (n) console.log(`[rendezvous] sweep: ${n} expired entries evicted`) }, 300_000)
 
 // peer-rv federation — tail each peer's event feed and re-announce the signed
@@ -75,9 +86,10 @@ const ingest = {
   settlement: p => overlay.lsPresence.announceSettlement(p),
   reputation: p => overlay.lsPresence.announceReputation(p),
   delegation: p => overlay.lsPresence.announceDelegation(p),
-  attestation: p => overlay.lsPresence.announceAttestation(p)
+  attestation: p => overlay.lsPresence.announceAttestation(p),
+  beacon: p => overlay.lsPresence.announceBeacon(p)
 }
-for (const peer of (process.env.NEKTAR_PEERS ?? '').split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean)) {
+for (const peer of PEERS) {
   let cur = -1
   ;(async function tail () {
     for (;;) {
@@ -99,6 +111,14 @@ const t0 = Date.now()
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'x'}`)
+    if (req.method === 'POST' && url.pathname === '/beacon') {
+      const { beacon, sig } = JSON.parse(await body(req) || '{}')
+      const ok = await overlay.lsPresence.announceBeacon({ beacon, sig })
+      return json(res, ok ? 200 : 400, ok ? { ok: true } : { error: 'rejected' })
+    }
+    if (req.method === 'GET' && url.pathname === '/peers') {
+      return json(res, 200, { peers: overlay.lsPresence.peersFor().map(sb => sb.beacon), self: SELF_PUB })
+    }
     if (req.method === 'GET' && url.pathname === '/listing-fee') {
       const lf = process.env.NEKTAR_LISTING_ADDR ? {
         addr: process.env.NEKTAR_LISTING_ADDR,

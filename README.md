@@ -104,6 +104,8 @@ Ops runbook: [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 Self-healing + upgrades: `pnpm doctor:fix` diagnoses and repairs what can't lose state (stale/corrupt `instance.lock`, missing dirs, VERSION baseline) — it works even when the instance can't boot. `pnpm update:nektar` pulls, rebuilds, and runs pending data-dir migrations (`tools/migrations.mjs` registry). Inside a running instance, `doctor{fix:true}` applies the same safe repairs via MCP.
 
+Config + always-on: `pnpm config:nektar get|set|unset|check` manages `.env` non-interactively (secrets masked, typo-guarded, warn-only validation). `pnpm service install` keeps your agent online — systemd `--user` on Linux, Startup-folder launcher on Windows, launchd on macOS — running `bin.js` plus the auto-responder (`NEKTAR_AUTORESPOND=1`) that watches the rendezvous for wants in your domains and answers with priced offers. A seller that isn't online can't sell.
+
 ## The honest limit
 
 A domain tag is a claim, not a fact — a seller can lie about covering soccer. The structure makes the lie attributable (committed, signed) and cheap to expose (one probe, one receipt). Proofs establish *recorded, unaltered, derivable* — never true. The market doesn't remove judgment; it prices it and makes the record of it public.

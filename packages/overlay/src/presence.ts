@@ -435,9 +435,8 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   const bus = new EventEmitter()
   /** lazily probed — can the tracker resolve headers at all (genesis)? */
   let spvCapable: boolean | undefined
-  // expiry — silence kills listings: explicit exp wins, else ts + TTL (default 24h)
-  const MAX_AGE_MS = opts?.maxAgeMs ?? 86_400_000
-  const alive = (e: { exp?: number, ts: number }) => (e.exp ?? e.ts + MAX_AGE_MS) > Date.now()
+  // expiry — only explicit exp expires; no implicit TTL (fee is the price of listing)
+  const alive = (e: { exp?: number }) => e.exp === undefined || e.exp > Date.now()
   // bstore-style listing fee — exp beyond the free window must be paid for:
   // `pay:{beef}` = a tx paying rate/hour to the rv's listing address
   const fee = opts?.listingFee

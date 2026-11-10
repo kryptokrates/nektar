@@ -6,7 +6,7 @@
 import { PrivateKey, Transaction, LockingScript, P2PKH, Hash, Transaction as BsvTransaction, UnlockingScript } from '@bsv/sdk'
 import { buildP2PKHScript } from 'runar-sdk'
 import { NektarProvider } from '@nektar/anchor'
-import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve } from '@nektar/chain'
+import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve, utxoStatus } from '@nektar/chain'
 import { RunarContract, LocalSigner, computeNewState, serializeState } from 'runar-sdk'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -47,13 +47,12 @@ const opPkh = Buffer.from(key.toPublicKey().toHash()).toString('hex')
 const mineOne = async () => { await rpc('generatetoaddress', 1, addr) }
 
 const reserve = new ReserveFunder(key, '.state/reserve-vault.json')
-// Teranode has no utxo-status RPC — local marks go stale across runs.
-// Purge everything, repopulate from mature coinbases (provably unspent),
-// fall back to a treasury bootstrap split.
-for (const u of [...reserve.utxos]) reserve.markSpent(u.tx.id('hex'), u.vout)
+// Reconcile local marks against the UTXO store — stale spent-marks revive,
+// really-spent entries prune — then scan for fresh mature coinbases.
+const rec = await reserve.reconcile(async (t, v) => await utxoStatus(cfg, t, v))
 const tip = (await rpc('getblockchaininfo')).blocks
 const scanned = await reserve.scanCoinbases(cfg, rpc, Math.max(1, tip - 150), tip - 101)
-console.log(`reserve: scanned ${scanned} mature coinbase outputs (tip ${tip})`)
+console.log(`reserve: ${reserve.utxos.length} live (revived ${rec.revived}, pruned ${rec.pruned}) + scanned ${scanned} mature coinbases (tip ${tip})`)
 if (reserve.utxos.length < 6) {
   await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile: '.state/treasury-vault.json', outputs: 16 })
   await mineOne()

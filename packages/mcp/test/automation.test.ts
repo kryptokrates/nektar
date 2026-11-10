@@ -30,6 +30,18 @@ test('takeReserve: smallest-sufficient pick — dust never selected for a big sp
   assert.equal(small?.satoshis, 500)
 })
 
+test('takeReserve: bare call never hands out sub-dust change entries', async () => {
+  const key = PrivateKey.fromRandom()
+  const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
+  const r = new ReserveFunder(key, file)
+  r.addOwned(mkParent(key, 1, 1), 0)      // 1-sat change output — real but unspendable alone
+  r.addOwned(mkParent(key, 5_000, 2), 0)
+  const u = await r.takeReserve()
+  assert.equal(u?.satoshis, 5_000, 'bare takeReserve skips entries below the 546 dust floor')
+  const explicit = await r.takeReserve(undefined, 1)
+  assert.equal(explicit?.satoshis, 1, 'an explicit minimum below the floor still works')
+})
+
 test('takeReserve: null when every entry is insufficient — no negative-fee tx', async () => {
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')

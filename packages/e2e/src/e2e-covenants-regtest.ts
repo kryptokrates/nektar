@@ -50,7 +50,7 @@ const mineOne = async () => { await rpc('generatetoaddress', 1, addr) }
 const opPkh = Buffer.from(key.toPublicKey().toHash()).toString('hex')
 
 async function fundTo (script: string, sats: number): Promise<{ txid: string, vout: number, satoshis: number, script: string, parent?: Transaction }> {
-  const fundUtxo = await reserve.takeReserve()
+  const fundUtxo = await reserve.takeReserve(undefined, sats + 1000)
   if (!fundUtxo) throw new Error('no funding utxo')
   const tx = new Transaction()
   tx.addInput({ sourceTransaction: fundUtxo.tx, sourceOutputIndex: fundUtxo.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })

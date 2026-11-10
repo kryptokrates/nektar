@@ -224,12 +224,11 @@ export class ReserveFunder {
       const j = JSON.parse(readFileSync(this.file, 'utf8'))
       this.spent = new Set(j.spent ?? [])
       for (const e of (j.entries ?? []) as ReserveEntry[]) {
-        if (this.spent.has(this.op(e.txid, e.vout))) continue
         try {
           const tx = Transaction.fromHex(e.txHex)
-          this.entries.push(e)
-          this.utxos.push({ tx, vout: e.vout, satoshis: e.satoshis })
+          this.entries.push(e)         // spent marks keep their record — reconcile() can revive
           if (e.height) this.heights.set(e.txid, e.height)
+          if (!this.spent.has(this.op(e.txid, e.vout))) this.utxos.push({ tx, vout: e.vout, satoshis: e.satoshis })
         } catch { /* skip unparseable */ }
       }
     } catch { /* no state file yet */ }
@@ -244,6 +243,26 @@ export class ReserveFunder {
     this.spent.add(this.op(txid, vout))
     this.utxos = this.utxos.filter(u => this.op(u.tx.id('hex'), u.vout) !== this.op(txid, vout))
     this.save()
+  }
+
+  /** Reconcile every recorded entry against a chain spend-status lookup:
+   * 'spent' → mark spent; 'unspent' → revive (a stale mark from a dead
+   * unbroadcast tx or an older blanket purge must not lose a live output);
+   * 'unknown' → left as-is (pending txs may lag the UTXO store). */
+  async reconcile (statusOf: (txid: string, vout: number) => Promise<'unspent' | 'spent' | 'unknown'>): Promise<{ revived: number, pruned: number }> {
+    let revived = 0, pruned = 0
+    for (const e of this.entries) {
+      const status = await statusOf(e.txid, e.vout)
+      const op = this.op(e.txid, e.vout)
+      if (status === 'spent' && !this.spent.has(op)) { this.spent.add(op); this.utxos = this.utxos.filter(u => this.op(u.tx.id('hex'), u.vout) !== op); pruned++ }
+      else if (status === 'unspent' && this.spent.has(op)) {
+        this.spent.delete(op)
+        this.utxos.push({ tx: Transaction.fromHex(e.txHex), vout: e.vout, satoshis: e.satoshis })
+        revived++
+      }
+    }
+    if (revived || pruned) this.save()
+    return { revived, pruned }
   }
 
   /** Record an output we created (change) as a reserve candidate. */
@@ -268,9 +287,12 @@ export class ReserveFunder {
   async takeReserve (spendCheck?: (txid: string, vout: number) => Promise<boolean>, minSats?: number): Promise<{ tx: Transaction, vout: number, satoshis: number } | null> {
     while (true) {
       // smallest-sufficient: skip spent entries AND entries too small for the
-      // spend — a first-fit dust pick produces negative-fee/insufficient txs
+      // spend — a first-fit dust pick produces negative-fee/insufficient txs.
+      // With no explicit minimum the floor is 546 sats: a sub-dust P2PKH entry
+      // (e.g. a 1-sat change output) can never fund a tx, so it is never picked.
+      const floor = minSats ?? 546
       const candidates = []
-      for (const x of this.utxos.filter(x => !this.spent.has(this.op(x.tx.id('hex'), x.vout)) && (minSats === undefined || x.satoshis >= minSats))) {
+      for (const x of this.utxos.filter(x => !this.spent.has(this.op(x.tx.id('hex'), x.vout)) && x.satoshis >= floor)) {
         if (this.leased && await this.leased(x.tx.id('hex'), x.vout)) continue
         candidates.push(x)
       }

@@ -68,10 +68,10 @@ const mineOne = () => rpc('generatetoaddress', 1, addr)
 
 // --- funding -------------------------------------------------------------
 const reserve = new ReserveFunder(key, '.state/reserve.json')
-let fund = await reserve.takeReserve(async (t, v) => (await utxoStatus(cfg, t, v)) === 'spent')
+let fund = await reserve.takeReserve(async (t, v) => (await utxoStatus(cfg, t, v)) === 'spent', 50_000)
 if (!fund) {
   await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile: '.state/treasury.json', outputs: 12 })
-  fund = await reserve.takeReserve()
+  fund = await reserve.takeReserve(undefined, 50_000)
 }
 check(!!fund, 'reserve has a spendable funding utxo')
 if (!fund) process.exit(1)

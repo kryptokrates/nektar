@@ -55,7 +55,8 @@ if (reserve.utxos.length === 0) {
   await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile: '.state/treasury-vault.json', outputs: 12 })
   await mineOne()
 }
-const fundUtxo = await reserve.takeReserve()
+const FUND_SATS = 10_000
+const fundUtxo = await reserve.takeReserve(undefined, FUND_SATS + 2000)
 check(!!fundUtxo, 'reserve has a spendable funding utxo')
 if (!fundUtxo) { console.log('FATAL: no funding utxo'); process.exit(1) }
 
@@ -71,7 +72,6 @@ const vault = new FeeVault({
 // fund tx: P2PKH utxo → vault locking script
 const fundTx = new Transaction()
 fundTx.addInput({ sourceTransaction: fundUtxo.tx, sourceOutputIndex: fundUtxo.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
-const FUND_SATS = 10_000
 fundTx.addOutput({ satoshis: FUND_SATS, lockingScript: LockingScript.fromHex(vault.lockingScript()) })
 const changeSats = fundUtxo.satoshis - FUND_SATS - 100
 if (changeSats > 546) fundTx.addOutput({ satoshis: changeSats, lockingScript: LockingScript.fromHex(buildP2PKHScript(ownerPkh)) })

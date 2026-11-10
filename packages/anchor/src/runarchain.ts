@@ -112,26 +112,27 @@ export class NektarProvider implements Provider {
     return txid
   }
   async getUtxos (address: string): Promise<RUTXO[]> {
-    // reserve funders hand out one entry per call (optimistically spent) —
-    // every stale/spent candidate is consumed at most once across all runs
-    const takeFn = (this.funder as any).takeReserve
-    if (typeof takeFn === 'function') {
-      const u = await takeFn.call(this.funder)
-      if (!u) return []
-      this.taken.set(u.tx.id('hex'), u.tx)
-      return [{ txid: u.tx.id('hex'), outputIndex: u.vout, satoshis: u.satoshis ?? u.tx.outputs[u.vout]!.satoshis!, script: u.tx.outputs[u.vout]!.lockingScript.toHex() }]
-    }
+    // hand runar the single largest live candidate — it becomes exactly one
+    // funding input. smallest-first starved on a small change output while
+    // big reserve entries sat unused; a list >1 makes runar add every entry
+    // as an input (wasteful), and change lives in BOTH the funder and the
+    // owned book, so the merge must dedupe by outpoint or the tx repeats
+    // inputs and is invalid.
     const all = (this.funder as any).utxos as Array<{ tx: Transaction, vout: number, satoshis: number }> | undefined ?? []
-    const funding = all.map(u => ({
-      txid: u.tx.id('hex'), outputIndex: u.vout,
-      satoshis: u.satoshis ?? u.tx.outputs[u.vout]!.satoshis!,
-      script: u.tx.outputs[u.vout]!.lockingScript.toHex()
-    }))
-    // only hand runar a few unspent candidates — a large pool makes it
-    // iterate every entry (slow/hang), and an empty pool must fail fast
-    const free = [...funding, ...this.owned.values()]
-      .filter(u => !this.spent.has(`${u.txid}:${u.outputIndex}`))
-    return free.slice(0, 10)
+    const byOut = new Map<string, { txid: string, outputIndex: number, satoshis: number, script: string, tx?: Transaction }>()
+    for (const u of all) {
+      byOut.set(`${u.tx.id('hex')}:${u.vout}`, {
+        txid: u.tx.id('hex'), outputIndex: u.vout,
+        satoshis: u.satoshis ?? u.tx.outputs[u.vout]!.satoshis!,
+        script: u.tx.outputs[u.vout]!.lockingScript.toHex(), tx: u.tx
+      })
+    }
+    for (const u of this.owned.values()) if (!byOut.has(`${u.txid}:${u.outputIndex}`)) byOut.set(`${u.txid}:${u.outputIndex}`, u)
+    const free = [...byOut.values()].filter(u => !this.spent.has(`${u.txid}:${u.outputIndex}`))
+    if (free.length === 0) return []
+    const u = free.reduce((a, b) => (b.satoshis > a.satoshis ? b : a))
+    if (u.tx) this.taken.set(u.txid, u.tx)
+    return [{ txid: u.txid, outputIndex: u.outputIndex, satoshis: u.satoshis, script: u.script }]
   }
   taken = new Map<string, Transaction>()
   async getContractUtxo (_scriptHash: string): Promise<RUTXO | null> { return null }

@@ -5,7 +5,7 @@
 import { PrivateKey, Transaction, LockingScript, P2PKH, Hash } from '@bsv/sdk'
 import { RunarContract, LocalSigner } from 'runar-sdk'
 import { NektarProvider } from '@nektar/anchor'
-import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve } from '@nektar/chain'
+import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve, utxoStatus } from '@nektar/chain'
 import { verifyZkm2, encodeZkm2 } from '@nektar/zk'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -45,10 +45,10 @@ const rpc = async (method, ...params) => {
 const key = PrivateKey.fromWif(WIF)
 const addr = key.toPublicKey().toAddress([0x6f])
 const reserve = new ReserveFunder(key, '.state/watcher-e2e-reserve.json')
-for (const u of [...reserve.utxos]) reserve.markSpent(u.tx.id('hex'), u.vout)
+const rec = await reserve.reconcile(async (t, v) => await utxoStatus(cfg, t, v))
 const tip = (await rpc('getblockchaininfo')).blocks
 const scanned = await reserve.scanCoinbases(cfg, rpc, Math.max(1, tip - 150), tip - 101)
-console.log(`reserve: scanned ${scanned} mature coinbase outputs (tip ${tip})`)
+console.log(`reserve: ${reserve.utxos.length} live (revived ${rec.revived}, pruned ${rec.pruned}) + scanned ${scanned} mature coinbases (tip ${tip})`)
 if (reserve.utxos.length < 4) {
   await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile: '.state/watcher-e2e-treasury.json', outputs: 16 })
 }

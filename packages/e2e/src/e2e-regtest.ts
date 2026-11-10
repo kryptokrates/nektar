@@ -149,7 +149,7 @@ const funder: any = {
   keyPair: key,
   get utxos () { return reserve.utxos },
   markSpent: (t: string, v: number) => reserve.markSpent(t, v),
-  takeReserve: () => reserve.takeReserve()
+  takeReserve: (sc?: unknown, min?: number) => reserve.takeReserve(sc as any, min)
 }
 const burstPool = reserve.utxos.slice(40) // own half of the pool
 
@@ -206,7 +206,7 @@ const bF: any = {
   keyPair: key,
   get utxos () { return reserve.utxos.slice(40) },
   markSpent: (t: string, v: number) => reserve.markSpent(t, v),
-  takeReserve: () => reserve.takeReserve()
+  takeReserve: (sc?: unknown, min?: number) => reserve.takeReserve(sc as any, min)
 }
 const burst = new AnchorChain('burst', key, bF as any, key, chain)
 const t0 = Date.now()

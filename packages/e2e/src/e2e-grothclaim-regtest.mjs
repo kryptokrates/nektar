@@ -70,10 +70,10 @@ const mineOne = async () => { await rpc('generatetoaddress', 1, addr) }
 const p2pkh = p => '76a914' + p + '88ac'
 
 const reserve = new ReserveFunder(key, '.state/reserve-vault.json')
-for (const u of [...reserve.utxos]) reserve.markSpent(u.tx.id('hex'), u.vout)
+const rec = await reserve.reconcile(async (t, v) => await utxoStatus(cfg, t, v))
 const tip0 = (await rpc('getblockchaininfo')).blocks
 const scanned = await reserve.scanCoinbases(cfg, rpc, Math.max(1, tip0 - 150), tip0 - 101)
-console.log(`reserve: scanned ${scanned} mature coinbase outputs (tip ${tip0})`)
+console.log(`reserve: ${reserve.utxos.length} live (revived ${rec.revived}, pruned ${rec.pruned}) + scanned ${scanned} mature coinbases (tip ${tip0})`)
 if (reserve.utxos.length < 6) {
   await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile: '.state/treasury-vault.json', outputs: 16 })
   await mineOne()
@@ -84,7 +84,7 @@ const pubKeyHex = await signer.getPublicKey()
 // ── 1. deploy the Groth16 verifier UTXO ─────────────────────────────
 console.log('── deploy verifier UTXO ──')
 const LOCK_SATS = 20_000
-const fund = await reserve.takeReserve()
+const fund = await reserve.takeReserve(undefined, LOCK_SATS + 30_000)
 const tx1 = new Transaction()
 tx1.addInput({ sourceTransaction: fund.tx, sourceOutputIndex: fund.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
 tx1.addOutput({ lockingScript: LockingScript.fromHex(lockHex), satoshis: LOCK_SATS })

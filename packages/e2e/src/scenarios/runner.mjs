@@ -121,7 +121,7 @@ async function S1 () {
   await kx.destroy()
   if (!verdict.ok) throw new Error(`S1 evidence failed: ${JSON.stringify(verdict.checks.filter(c => !c.ok))}`)
   const patch = parsePatch(op.data.result.text)
-  const sandbox = await evaluatePatch({ fixtureDir: join(root, 'test/fixtures/libfoo-break'), hiddenTestsDir: join(root, 'test/fixtures/libfoo-break-hidden'), allowedPaths: ['src'], testCommand: ['node', '--test', 'test/'], hiddenTestCommand: ['node', '--test', '/hidden/'], image: 'node:22-alpine', timeoutMs: 120_000, maxPatchBytes: 4096 }, patch)
+  const sandbox = await evaluatePatch({ fixtureDir: join(root, 'test/fixtures/libfoo-break'), hiddenTestsDir: join(root, 'test/fixtures/libfoo-break-hidden'), allowedPaths: ['src'], testCommand: ['node', '--test', 'test/build.test.js'], hiddenTestCommand: ['node', '--test', '/hidden/regress.test.js'], image: 'node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202', timeoutMs: 120_000, maxPatchBytes: 4096 }, patch)
   write('s1-sandbox.json', sandbox)
   log(`S1 PASS — disclosure verified; sandbox ${sandbox.outcome}${sandbox.reason ? ` (${sandbox.reason})` : ''}`)
   return { outcome: 'PASS', sandbox: sandbox.outcome }

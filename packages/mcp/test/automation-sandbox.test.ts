@@ -10,8 +10,8 @@ const root = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..'
 const spec: SandboxSpec = {
   fixtureDir: join(root, 'test', 'fixtures', 'libfoo-break'),
   hiddenTestsDir: join(root, 'test', 'fixtures', 'libfoo-break-hidden'),
-  allowedPaths: ['src'], testCommand: ['node', '--test', 'test/'], hiddenTestCommand: ['node', '--test', '/hidden/'],
-  image: 'node:22-alpine', timeoutMs: 120_000, maxPatchBytes: 4096
+  allowedPaths: ['src'], testCommand: ['node', '--test', 'test/build.test.js'], hiddenTestCommand: ['node', '--test', '/hidden/regress.test.js'],
+  image: 'node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202', timeoutMs: 120_000, maxPatchBytes: 4096
 }
 const FINDING = 'libfoo 3.0 renamed connect() to open().\n```nektar-patch\n{"edits":[{"file":"src/app.js","find":"libfoo.connect(","replace":"libfoo.open("}]}\n```'
 const good = parsePatch(FINDING)!
@@ -66,7 +66,7 @@ test('sandbox: real container run — failing build, purchased fix, passing acce
   const r = await evaluatePatch(spec, good)
   assert.equal(r.outcome, 'PASS', `${r.reason ?? ''}\n${r.patched?.outputTail ?? r.baseline?.outputTail ?? ''}`)
   assert.notEqual(r.baseline!.exitCode, 0)
-  assert.deepEqual(r.isolation, { backend: 'docker', network: 'none', image: 'node:22-alpine' })
+  assert.deepEqual(r.isolation, { backend: 'docker', network: 'none', image: 'node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202' })
 })
 
 test('ai: scripted matcher is deterministic; results outside the offered candidates are rejected', async () => {

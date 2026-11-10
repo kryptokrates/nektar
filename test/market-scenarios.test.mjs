@@ -134,7 +134,7 @@ test('S1: competing sellers across two federated hosts → autonomous purchase �
   assert.equal(verifyTradeEvidence(forged).ok, false, 'tampered evidence fails verification')
   // usefulness is a separate question: apply the purchased finding in isolation
   const patch = parsePatch(op.data.result.text)
-  const sandbox = await evaluatePatch({ fixtureDir: join(root, 'test/fixtures/libfoo-break'), hiddenTestsDir: join(root, 'test/fixtures/libfoo-break-hidden'), allowedPaths: ['src'], testCommand: ['node', '--test', 'test/'], hiddenTestCommand: ['node', '--test', '/hidden/'], image: 'node:22-alpine', timeoutMs: 120_000, maxPatchBytes: 4096 }, patch)
+  const sandbox = await evaluatePatch({ fixtureDir: join(root, 'test/fixtures/libfoo-break'), hiddenTestsDir: join(root, 'test/fixtures/libfoo-break-hidden'), allowedPaths: ['src'], testCommand: ['node', '--test', 'test/build.test.js'], hiddenTestCommand: ['node', '--test', '/hidden/regress.test.js'], image: 'node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202', timeoutMs: 120_000, maxPatchBytes: 4096 }, patch)
   if (sandbox.outcome === 'BLOCKED') { t.diagnostic(`sandbox BLOCKED — ${sandbox.reason}; purchase + verification passed, usefulness NOT evaluated`); return }
   assert.equal(sandbox.outcome, 'PASS', sandbox.reason)
   await bob.au.engine.markUsefulness(operationId, true, { sandbox: { outcome: sandbox.outcome, isolation: sandbox.isolation } })

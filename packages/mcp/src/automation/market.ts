@@ -32,6 +32,7 @@ export interface MarketDeps {
   key: PrivateKey
   network: string
   height: () => Promise<number>
+  tip?: () => Promise<{ tip: string, tipHeight: number } | undefined>
   fetchTx: (txid: string) => Promise<Transaction | undefined>
   broadcast?: (tx: Transaction) => Promise<import('../../../chain/src/interfaces.js').BroadcastResult>
   settleEscrow?: (tx: Transaction) => void
@@ -104,7 +105,8 @@ export class MarketEngine {
       if (!domains.length || !domains.every(x => p.domains.includes(x))) throw new Error('publishWant: domain outside the approved policy')
       if (!Number.isSafeInteger(input.maxSats) || input.maxSats <= 0 || input.maxSats > p.limits.perPurchaseSats) throw new Error('publishWant: maxSats outside the approved per-purchase limit')
       const now = this.now()
-      const sw = signWant(this.d.key, { domains, ...(input.question ? { question: input.question } : {}), maxSats: input.maxSats, ts: now, net: this.d.network, ...(input.wantId ? { wantId: input.wantId } : {}) })
+      const tip = await this.d.tip?.()
+      const sw = signWant(this.d.key, { domains, ...(input.question ? { question: input.question } : {}), maxSats: input.maxSats, ts: now, net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {}), ...(input.wantId ? { wantId: input.wantId } : {}) })
       const { operation, created } = await this.d.store.createOperation({ role: 'buyer', kind: 'purchase', dedupeKey: `buyer:${this.d.network}:${sw.want.wantId}`, policyHash, network: this.d.network, state: 'published', data: { want: sw, offers: {} } })
       if (created) {
         await this.d.store.transition(operation.operationId, 1, 'collecting', { cause: 'want_signed', dueAt: now + p.scoring.collectMs, outbox: [{ actionId: `${operation.operationId}:want`, kind: 'publish-want', destination: 'feed', payload: sw }] })
@@ -238,13 +240,14 @@ export class MarketEngine {
     if (!created) return
     try {
       const h = await this.d.height()
+      const tip = await this.d.tip?.()
       const offer = await this.d.call('sale#offerMemory', { shard: pick.shard, seq: pick.seq, price: pick.price, refundAfter: h + this.o.refundBlocks, maxFee: this.o.saleMaxFee, expiresAt: h + this.o.offerTtlBlocks, ...(p.disclosure.allowPublic ? {} : { buyerPub: w.pub }) })
       const c = offer.commitment
       const so = signOffer(this.d.key, {
         offerId: operation.operationId, shard: pick.shard, seq: pick.seq, shardId: pick.manifest.shardId, domains: pick.manifest.domains,
         leaf: c.leaf, hdp: c.hdp, ...(c.batchR ? { batchR: c.batchR } : {}), priceSats: pick.price,
         offer: saleQuoteWire(publicSaleQuote(offer)), wantId: w.wantId, taskHash: w.taskHash, wantRevision: w.revision, buyerPub: w.pub, replyTo: w.pub,
-        ts: this.now(), net: this.d.network
+        ts: this.now(), net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {})
       })
       await this.d.store.transition(operation.operationId, 1, 'quoted', {
         cause: 'offer_prepared', data: { offer, signedOffer: so }, dueHeight: h + this.o.refundBlocks,

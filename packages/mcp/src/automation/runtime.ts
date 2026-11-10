@@ -69,7 +69,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   }
   const engine = new MarketEngine({
     store, call: cfg.call, memory: mem as never, key, network: cfg.network,
-    height: () => mem.chainHeight(), fetchTx: txid => mem.fetchTx(txid),
+    height: () => mem.chainHeight(), tip: () => mem.tipRef(), fetchTx: txid => mem.fetchTx(txid),
     broadcast: tx => mem.broadcastTx(tx),
     settleEscrow: tx => { for (const inp of tx.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } if (tx.outputs[1]) mem.addOwnedOut(tx, 1) },
     transport, ai: cfg.ai ?? aiFromEnv(), opts: cfg.opts

@@ -170,7 +170,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     mem.ledger = ledger
     // auto-mined: every anchor is immediately provable
     const t = setInterval(() => { for (const { shard, txid } of mem.unprovenAnchors()) { const mp = chain.merklePathOf(txid); if (mp) mem.attachProof(shard, txid, mp) } }, 1000); t.unref()
-    return { mem, network: 'mock', close: async () => { clearInterval(t) } }
+    return { mem, network: 'mock', close: async () => { clearInterval(t); await ledger.close() } }
   }
   if (cfg.network === 'main' || cfg.network === 'ttn' || cfg.network === 'testnet') {
     return await openLiveRuntime(cfg, cfg.network, base)

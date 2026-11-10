@@ -94,6 +94,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
     assert.ok(!['uncertain'].includes(op.state) || op.state === 'uncertain', `seed ${seed}: ${op.state}`)
     if (op.state === 'disclosure_verified') assert.equal(budget.purchaseTodaySats, 200, `seed ${seed}: paid the wrong amount`)
     await bob.store.revokePolicy(bob.policyHash)
+    for (const kx of kxs) await kx.destroy()
   }
   t.diagnostic('20/20 seeded schedules respected budget caps and single-escrow invariant')
 })

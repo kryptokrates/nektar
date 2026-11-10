@@ -71,6 +71,8 @@ export class RevisionConflict extends Error {}
 export class AutomationStore {
   constructor (private kx: Knex, private now: () => number = Date.now) {}
 
+  async close (): Promise<void> { await this.kx.destroy() }
+
   async init (): Promise<void> {
     const mk = async (name: string, build: (t: Knex.CreateTableBuilder) => void) => {
       if (!(await this.kx.schema.hasTable(name))) await this.kx.schema.createTable(name, build)

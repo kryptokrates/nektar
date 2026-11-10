@@ -285,12 +285,42 @@ The trial report is written to `artifacts/model-trials/report.json`.
 
 ### Verification status
 
-- `pnpm -r build` and `pnpm -r test` pass (mcp 155 pass / 5 skipped; the two
+- `pnpm -r build` and `pnpm -r test` pass (mcp 156 pass / 5 skipped; the two
   former shardpack failures are fixed).
 - `pnpm scenarios -- --profile mock --scenario all` passes S1/S2/S3 as real OS
   processes; S1's sandbox step passes in a network-less container.
 - `pnpm audit` reports one high (zod <4.6.6 via the MCP SDK; a major upgrade is
   needed) and one low (`@tootallnate/once` via node-gyp).
-- Regtest/testnet lanes are not yet run: the existing local regtest chain has
-  exhausted its coinbase subsidy, so it needs a fresh local test chain before
-  the scenario runner can use it.
+- **Regtest (fresh Teranode chain, reset + re-bootstrapped treasury):**
+  `e2e-regtest` (anchors, overlay admission, header proofs, ZK membership,
+  policy DAG, delegated instance, automaton, full-paper + v4 scenarios),
+  covenant lane (CheckpointBond commit/close/seize incl. foreign seizer,
+  DisclosureSale buy/refund), claim lifecycle (challenge → reveal → bisect ×2
+  → proveStage → timeouts → anchored settle), fee vault, watcher fraud
+  challenge, and the full MCP lane (anchor, STARK + replay/tamper negatives,
+  clearance, restart persistence, claim deploy/settle, gated sale) all PASS.
+- **Testnet (Hetzner, real rendezvous + mailbox, two live instances):** the
+  autonomous purchase loop ran end to end — signed want admitted to the feed,
+  seller matched a level-0 record, signed a buyer-bound offer, buyer selected,
+  funded and broadcast the DisclosureSale escrow
+  `6282176ba7be816fab336d2b186fbeb53a383ffeb66b39f30ec4be9772dbf3a2`,
+  seller revealed + collected in
+  `630d31bc74e9fd6240c4c9cd411b8ce8f4b699e002be48ba5d4b95027ba9b951`
+  (200 sats), buyer decrypted and verified the disclosure against the anchored
+  commitment (record anchor `71136fbe…`, leaf `ad2ee57d…`). Single seller;
+  the multi-seller competing-quotes run is still open.
+  Two defects found and fixed on this lane: wants/offers now carry
+  `tip`/`tipHeight` (strictNet rvs reject unbound artifacts with 400), and
+  sellers running an `agentSeed` (encrypted-by-default) can now match wants —
+  `marketCandidates` decrypts own records for matching while the sale still
+  delivers only the fragment key.
+- **Object plane:** the bstore stack (host/provider/gateway/MySQL, testnet) is
+  deployed on the Hetzner box. The gateway identity needed a second UTXO for
+  fee inputs — funded; the host lost its MySQL connection at boot and reports
+  `ready=false` until restarted. No object-plane delivery demonstrated yet —
+  the runtime transport remains HTTPS rendezvous + encrypted mailbox.
+- Reserve/provider fixes exercised live: `takeReserve` applies a 546-sat dust
+  floor on bare calls, `reconcile` revives/prunes entries against chain truth
+  (phantom entries pruned; spent marks no longer drop records),
+  `NektarProvider.getUtxos` hands Rúnar a bounded candidate set instead of a
+  single smallest pick.

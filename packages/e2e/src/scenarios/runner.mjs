@@ -30,7 +30,7 @@ if (profile !== 'mock') { console.error(`profile ${profile} is not implemented i
 
 const dir = resume ? join(tmpdir(), `nektar-scenario-${resume}`) : mkdtempSync(join(tmpdir(), `nektar-scenario-${runId}-`))
 mkdirSync(dir, { recursive: true })
-const outDir = join(dir, 'evidence'); mkdirSync(outDir, { recursive: true })
+const outDir = process.env.NEKTAR_SCENARIO_OUT ? resolve(process.env.NEKTAR_SCENARIO_OUT) : join(dir, 'evidence'); mkdirSync(outDir, { recursive: true })
 const procs = []
 const agents = []
 const FINDING = 'libfoo 3.0 renamed connect() to open(); callers must switch.\n```nektar-patch\n{"edits":[{"file":"src/app.js","find":"libfoo.connect(","replace":"libfoo.open("}]}\n```'

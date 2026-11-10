@@ -250,3 +250,24 @@ seizure, S3 paid public disclosure read for free):
 ```sh
 pnpm -r build && node --test --test-force-exit test/market-scenarios.test.mjs
 ```
+
+### Ledger coverage and crash recovery (update)
+
+All runtime broadcasts are now recorded in the automation ledger before their
+outcome is known (bytes, parents, fee, leased inputs). `payInvoice` records an
+`exported` signed transaction and no longer adds unbroadcast change back to
+the reserve. `ReserveFunder` skips leased outpoints. Escrow funding is split
+into build → persist → submit; a restart resubmits the same bytes instead of
+escalating. A watcher observes late ARC rejections and triggers funding
+reconciliation. Policy caps still bind only the automation runtime; manual
+owner calls are recorded, not capped.
+
+### Operator surfaces
+
+- CLI: `pnpm automation approvals|approve|deny|ops|status|budget|policy ...`
+- Dashboard `/dashboard` has an Automation card with pending approvals.
+  Approving requires `NEKTAR_OPERATOR_TOKEN` (separate from the agent bearer)
+  and is disabled when that is unset. The agent bearer cannot approve.
+- `pnpm scenarios -- --profile mock --scenario all` runs S1/S2/S3 as real OS
+  processes with evidence bundles; `pnpm scenarios:verify -- <dir>` re-checks
+  the S1 bundle offline. Regtest/testnet profiles need their chain stacks.

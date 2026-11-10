@@ -105,7 +105,8 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
     // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
     const tok = process.env.NEKTAR_HTTP_TOKEN
     const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname === '/.well-known/nektar' || url.pathname.startsWith('/v1/pack/') || url.pathname.startsWith('/v1/zkproof/') || url.pathname === '/v1/arc-callback'
-    if (tok && !publicPath && req.headers.authorization !== `Bearer ${tok}`) {
+    const operatorApproval = url.pathname.startsWith('/v1/automation/approvals/') && process.env.NEKTAR_OPERATOR_TOKEN && req.headers.authorization === `Bearer ${process.env.NEKTAR_OPERATOR_TOKEN}`
+    if (tok && !publicPath && !operatorApproval && req.headers.authorization !== `Bearer ${tok}`) {
       return send(401, { error: 'unauthorized' })
     }
     try {
@@ -173,6 +174,16 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
         const up = process.uptime()
         const upStr = up > 86400 ? `${Math.floor(up / 86400)}d` : up > 3600 ? `${Math.floor(up / 3600)}h` : `${Math.floor(up / 60)}m`
         const badge = (on: boolean, yes: string, no: string) => `<span class="badge ${on ? 'on' : 'off'}">${on ? yes : no}</span>`
+        const au = mem.automation
+        const pending = au ? await au.store.approvals('pending') : []
+        const autoOps = au ? (await au.store.operations()).filter(o => o.kind !== 'enable').slice(-8).reverse() : []
+        const escJson = (v: unknown) => esc(JSON.stringify(v))
+        const automationCard = au ? `<div class="card">
+<div class="top"><span class="label">Automation</span><span class="tags">${pending.length} pending approval${pending.length === 1 ? '' : 's'}</span></div>
+${pending.length ? pending.map(a => `<div class="row"><div><b>${esc(a.reason)}</b><div class="dim">≤ ${a.maxExtraSats} sats · ${esc(a.operationId.slice(0, 8))}… · expires ${esc(new Date(a.expiresAt).toISOString())}</div></div><button class="pill" onclick="decide('${esc(a.approvalId)}',true)">approve</button><button class="pill" onclick="decide('${esc(a.approvalId)}',false)">deny</button></div>`).join('') : '<div class="empty">no pending approvals — routine trades do not prompt</div>'}
+${autoOps.map(o => `<div class="row"><span class="dim">${esc(o.role)} ${esc(o.kind)}</span><b>${esc(o.state)}</b>${o.lastError ? `<span class="warn">${esc(o.lastError)}</span>` : ''}</div>`).join('')}
+<div class="stream" data-ev="automation"></div>
+</div>` : ''
         const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>nektar — operator</title>
 <style>body{transition:none}#live{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4cc26b;margin-left:6px;vertical-align:middle}
 body{background:#0d0d0d;color:#eaeaea;font:14px/1.6 ui-monospace,monospace;max-width:880px;margin:0 auto;padding:48px 20px}
@@ -225,9 +236,18 @@ ${autoLine}${fraudRows}
 ${agentsRows}
 <div class="stream" data-ev="agents"></div>
 </div>
+${automationCard}
 </div>
 <footer>${d.shards} shards · ${d.records} records · ${d.anchoredRecords} anchored · ${d.unprovenAnchors} unproven · prover: ${esc(d.prover)}</footer>
 <script>
+const decide = async (id, approve) => {
+  const tok = sessionStorage.getItem('nektar-operator-token') ?? prompt('operator token (NEKTAR_OPERATOR_TOKEN — not the agent bearer)')
+  if (!tok) return
+  sessionStorage.setItem('nektar-operator-token', tok)
+  const r = await fetch('/v1/automation/approvals/' + id, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: JSON.stringify({ approve }) })
+  if (!r.ok) alert((await r.json()).error ?? r.status)
+  reload()
+}
 const reload = async () => {
   try {
     const t = await (await fetch(location.pathname, { cache: 'no-store' })).text()
@@ -249,6 +269,25 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
 </script>
 </body></html>`
         return send(200, html, 'text/html; charset=utf-8')
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/automation/state') {
+        const au = mem.automation
+        if (!au) return send(404, { error: 'automation not enabled' })
+        return send(200, { operations: (await au.store.operations()).map(o => ({ operationId: o.operationId, role: o.role, kind: o.kind, state: o.state, lastError: o.lastError })), approvals: await au.store.approvals('pending') })
+      }
+      if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'automation' && p[2] === 'approvals' && p.length === 4) {
+        const au = mem.automation
+        if (!au) return send(404, { error: 'automation not enabled' })
+        const operator = process.env.NEKTAR_OPERATOR_TOKEN
+        if (!operator) return send(403, { error: 'operator approvals disabled — set NEKTAR_OPERATOR_TOKEN' })
+        if (req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required (the agent bearer cannot approve)' })
+        const origin = req.headers.origin
+        if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return send(403, { error: 'bad origin' })
+        const decisionBody = await body(req).catch(() => ({})) as { approve?: boolean }
+        let r
+        try { r = await au.store.decideApproval(p[3]!, decisionBody.approve === true, 'dashboard:operator') } catch (e) { return send(400, { error: (e as Error).message }) }
+        mem.events.emit('change', 'automation')
+        return send(200, r)
       }
       if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: visibleTools() })
       if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {

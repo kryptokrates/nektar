@@ -1,0 +1,27 @@
+name: regtest
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  teranode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: pnpm
+        run: corepack enable && corepack prepare pnpm@12.16.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: start the local Teranode stack
+        run: pnpm stack:up
+        timeout-minutes: 20
+      - name: regtest e2e
+        run: node packages/e2e/src/e2e-regtest.ts
+        timeout-minutes: 20
+      - name: stop the stack
+        if: always()
+        run: pnpm stack:down

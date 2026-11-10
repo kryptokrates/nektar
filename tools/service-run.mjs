@@ -25,7 +25,7 @@ child.on('exit', c => process.exit(c ?? 0))
 const stop = () => child.kill('SIGTERM')
 process.on('SIGINT', stop); process.on('SIGTERM', stop)
 
-const autorespond = process.argv.includes('--autorespond') || /^1|true|yes$/i.test(process.env.NEKTAR_AUTORESPOND ?? '')
+const autorespond = (process.argv.includes('--autorespond') || /^1|true|yes$/i.test(process.env.NEKTAR_AUTORESPOND ?? '')) && !/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')
 const port = process.env.NEKTAR_HTTP_PORT
 if (autorespond && port) {
   // wait for health, then run the responder loop as a supervised child

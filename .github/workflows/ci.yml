@@ -43,6 +43,34 @@ jobs:
       - name: offline e2e (mock chain, full-paper scenario)
         run: pnpm e2e
         timeout-minutes: 5
+      - name: autonomous marketplace scenarios (mock chain, real processes)
+        run: pnpm scenarios -- --profile mock --scenario all
+        timeout-minutes: 10
+        env:
+          NEKTAR_SCENARIO_OUT: artifacts/market-scenarios
+      - name: marketplace evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-scenarios
+          path: artifacts/market-scenarios
+          if-no-files-found: ignore
+
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: pnpm
+        run: corepack enable && corepack prepare pnpm@12.16.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @nektar/mcp build
+      - name: isolated purchased-patch evaluation (real container, no network)
+        run: node --test --test-force-exit packages/mcp/dist/test/automation-sandbox.test.js
+        timeout-minutes: 10
 
   docker:
     runs-on: ubuntu-latest

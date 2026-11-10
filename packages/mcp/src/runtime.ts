@@ -183,9 +183,10 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   if (existsSync(lockFile)) {
     const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string, beat: number }
     if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${cfg.dataDir} is in use by another nektar instance (${l.owner}); stop it first`)
+    const { rmSync } = await import('node:fs'); rmSync(lockFile)
   }
   const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
-  beat()
+  writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
   const beatTimer = setInterval(beat, 5_000); beatTimer.unref()
   const { keys, save } = loadKeys(cfg.dataDir, passphraseFromEnv())
   const fundKey = PrivateKey.fromWif(rc.fundWif)
@@ -330,9 +331,10 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   if (existsSync(lockFile)) {
     const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string, beat: number }
     if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${cfg.dataDir} is in use by another nektar instance (${l.owner}); stop it first`)
+    const { rmSync } = await import('node:fs'); rmSync(lockFile)
   }
   const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
-  beat()
+  writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
   const beatTimer = setInterval(beat, 5_000); beatTimer.unref()
 
   const { keys, save } = loadKeys(cfg.dataDir, pass, true)

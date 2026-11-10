@@ -59,6 +59,9 @@ const newTip = (await rpc('getblockchaininfo')).blocks
 const matureTo = newTip - 101
 const coins = await coinbases(tip + 1, matureTo)
 console.log(`collected ${coins.length} mature coinbase outputs`)
+if (coins.length === 0 || coins.every(c => c.satoshis === 0)) {
+  throw new Error('this regtest chain has no spendable coinbase subsidy left (long halving history). Reset the LOCAL test chain with infra/teranode-quickstart/clean.sh --data-only, or point at a fresh regtest stack. No treasury was created.')
+}
 const batches = []
 for (let i = 0; i < coins.length; i += 100) batches.push(await combine(coins.slice(i, i + 100), `batch ${i / 100}`))
 let final = batches

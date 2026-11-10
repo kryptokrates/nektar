@@ -281,3 +281,16 @@ below the 18/20 bar, so the scripted matcher remains the default for
 deterministic runs. S1 also passes end to end with that model selected via
 `NEKTAR_AI_BASE_URL=http://127.0.0.1:11434/v1 NEKTAR_AI_MODEL=qwen2.5:7b`.
 The trial report is written to `artifacts/model-trials/report.json`.
+
+
+### Verification status
+
+- `pnpm -r build` and `pnpm -r test` pass (mcp 155 pass / 5 skipped; the two
+  former shardpack failures are fixed).
+- `pnpm scenarios -- --profile mock --scenario all` passes S1/S2/S3 as real OS
+  processes; S1's sandbox step passes in a network-less container.
+- `pnpm audit` reports one high (zod <4.6.6 via the MCP SDK; a major upgrade is
+  needed) and one low (`@tootallnate/once` via node-gyp).
+- Regtest/testnet lanes are not yet run: the existing local regtest chain has
+  exhausted its coinbase subsidy, so it needs a fresh local test chain before
+  the scenario runner can use it.

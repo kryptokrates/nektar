@@ -737,7 +737,7 @@ export const TOOLS = [
 // consolidated state machines: op → internal case label (never listed in
 // TOOLS — reachable only through the 'sale'/'claim' dispatchers, which keep
 // the paid-disclosure gate on BOTH the tool and the resolved op)
-const PAID_SALE_TOOLS = new Set(['sale', 'sale#offer', 'sale#offerMemory', 'sale#escrow', 'sale#complete', 'sale#refund', 'sale#claim'])
+const PAID_SALE_TOOLS = new Set(['sale', 'sale#offer', 'sale#offerMemory', 'sale#escrow', 'sale#escrowBuild', 'sale#complete', 'sale#refund', 'sale#claim'])
 const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'])
 const CLAIM_OPS = new Set(['deploy', 'status', 'settle', 'deploySale', 'buySale'])
 const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAID_DISCLOSURE ?? '')
@@ -809,6 +809,11 @@ async function postFanout (rv: string, path: string, body: unknown): Promise<Res
     try { const r = await postJson(`${base}${path}`, body, 15_000); if (r.ok) last ??= r } catch {}
   }
   return last ?? new Response('{"error":"no rv accepted"}', { status: 502 })
+}
+
+export function settleEscrow (mem: NektarMemory, funding: Array<{ tx: import('@bsv/sdk').Transaction, vout: number }>, tx: import('@bsv/sdk').Transaction): void {
+  for (const inp of funding) mem.markSpentOut(inp.tx.id('hex'), inp.vout)
+  if (tx.outputs[1]) mem.addOwnedOut(tx, 1)
 }
 
 export async function callTool (mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
@@ -928,7 +933,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     }
     case 'sale': {
       const op = String(args?.op ?? '')
-      if (!SALE_OPS.has(op)) throw new Error('sale: op required — offer|offerMemory|escrow|complete|refund|claim')
+      if (!SALE_OPS.has(op)) throw new Error('sale: op required — offer|offerMemory|escrow|escrowBuild|complete|refund|claim')
       // F3 — escrow funding under a grant goes through the cumulative ledger;
       // the sale's price is the all-in debit reserved before funding
       const gid = typeof args?.grantId === 'string' ? args.grantId : undefined
@@ -994,7 +999,9 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         }
       }
     }
-    case 'sale#escrow': {
+    case 'sale#escrow':
+    case 'sale#escrowBuild': {
+      const isBuild = name === 'sale#escrowBuild'
       const { DisclosureSaleHost } = await import('@nektar/anchor')
       // §16/17 delegation-sig check: refuse to fund an escrow for a cfg the
       // seller never signed — blocks MITM cfg-swap griefing (deposit lockup).
@@ -1041,10 +1048,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       })
       const funding = await mem.fundingOuts(args.amount + 500)
       const { tx, utxo } = await host.buildEscrow(funding, mem.operatorKey(), args.amount)
+      if (isBuild) return { tx, txHex: tx.toHex(), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh }, feeSats: 250 }
       const r = await mem.broadcastTx(tx)
       if (r.status !== 'success') return { accepted: false, reason: r.description }
-      for (const inp of funding) mem.markSpentOut(inp.tx.id('hex'), inp.vout)
-      if (tx.outputs[1]) mem.addOwnedOut(tx, 1) // the escrow change out
+      settleEscrow(mem, funding, tx)
       return { accepted: true, txid: tx.id('hex'), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh } }
     }
     case 'sale#complete': {

@@ -36,7 +36,7 @@ export interface InboxItem { source: string, messageId: string, artifactHash: st
 export interface OutboxItem { actionId: string, operationId: string, kind: string, destination: string, payload: unknown, attempts: number }
 export interface BudgetAmounts { purchaseSats: number, feeSats: number, lockedSats: number }
 export type BudgetResult = { ok: true, existing: boolean } | { ok: false, code: string }
-export type TxState = 'prepared' | 'submission_unknown' | 'submitted' | 'observed' | 'confirmed' | 'rejected' | 'conflicted'
+export type TxState = 'prepared' | 'exported' | 'submission_unknown' | 'submitted' | 'observed' | 'confirmed' | 'rejected' | 'conflicted'
 export interface WalletTx {
   actionId: string
   operationId: string
@@ -387,6 +387,29 @@ export class AutomationStore {
   async walletTx (q: { actionId?: string, txid?: string }): Promise<WalletTx | undefined> {
     const r = await this.kx(T.txs).where(q.actionId ? { action_id: q.actionId } : { txid: q.txid }).first()
     return r ? this.wtx(r) : undefined
+  }
+
+  async leasedOutpoint (txid: string, vout: number): Promise<boolean> {
+    const r = await this.leaseState(txid, vout)
+    return r !== undefined && r.state !== 'released'
+  }
+
+  async recordBroadcast (t: { txid: string, rawHex: string, parents: Record<string, string>, feeSats: number, outs: Array<{ txid: string, vout: number, satoshis: number }> }, actionId: string, operationId: string, kind: string): Promise<void> {
+    await this.kx.transaction(async trx => {
+      const now = this.now()
+      for (const o of t.outs) await trx(T.leases).insert({ outpoint: `${o.txid}:${o.vout}`, action_id: actionId, satoshis: o.satoshis, state: 'leased', at: now }).onConflict('outpoint').merge()
+      await trx(T.txs).insert({ action_id: actionId, operation_id: operationId, kind, txid: t.txid, raw_hex: t.rawHex, parents: JSON.stringify(t.parents), fee_sats: t.feeSats, state: 'prepared', attempts: 0, at: now }).onConflict('action_id').ignore()
+    })
+  }
+
+  async releaseUnsigned (actionId: string): Promise<boolean> {
+    return await this.kx.transaction(async trx => {
+      const r = await trx(T.txs).where({ action_id: actionId }).first()
+      if (!r || r.state !== 'prepared' || r.attempts > 0) return false
+      await trx(T.txs).where({ action_id: actionId }).update({ state: 'rejected', last_observation: JSON.stringify({ escaped: false, reason: 'never submitted' }) })
+      await trx(T.leases).where({ action_id: actionId }).update({ state: 'released' })
+      return true
+    })
   }
 
   async walletTxs (states: TxState[]): Promise<WalletTx[]> {

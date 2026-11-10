@@ -160,7 +160,14 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     for (const t of funder.parents) chain.registerParent(t)
     const broadcast = chain.broadcast.bind(chain)
     chain.broadcast = async (tx: Transaction) => { const r = await broadcast(tx); if (r.status === 'success') chain.mine(1); return r }
+    const { AutomationStore } = await import('./automation/store.js')
+    const { wrapBroadcast } = await import('./automation/ledger.js')
+    const ledger = new AutomationStore((await import('knex')).default({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true }))
+    await ledger.init()
+    const innerBroadcast = chain.broadcast.bind(chain)
+    chain.broadcast = wrapBroadcast(ledger, innerBroadcast)
     const mem = new NektarMemory(chain, funder, funder.keyPair, base)
+    mem.ledger = ledger
     // auto-mined: every anchor is immediately provable
     const t = setInterval(() => { for (const { shard, txid } of mem.unprovenAnchors()) { const mp = chain.merklePathOf(txid); if (mp) mem.attachProof(shard, txid, mp) } }, 1000); t.unref()
     return { mem, network: 'mock', close: async () => { clearInterval(t) } }
@@ -232,6 +239,12 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   const store: ShardStore = new KnexShardStore(knex)
   await store.init?.()
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
+  const { AutomationStore } = await import('./automation/store.js')
+  const { wrapBroadcast, leasePredicate } = await import('./automation/ledger.js')
+  const ledger = new AutomationStore(knex)
+  await ledger.init()
+  reserve.leased = leasePredicate(ledger)
+  chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   const mem = new NektarMemory(chain as never, funder as never, fundKey, {
     ...base,
     agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,
@@ -241,6 +254,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     finalityDepth: 1
   }, store)
   memRef = mem
+  mem.ledger = ledger
   // optimistic-claim surface: provider + signer over the regtest funder,
   // claims registry + proof store in the data dir (the watcher shares it)
   {
@@ -402,6 +416,12 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const store: ShardStore = new KnexShardStore(knex)
   await store.init?.()
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
+  const { AutomationStore } = await import('./automation/store.js')
+  const { wrapBroadcast, leasePredicate } = await import('./automation/ledger.js')
+  const ledger = new AutomationStore(knex)
+  await ledger.init()
+  reserve.leased = leasePredicate(ledger)
+  chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   const mem = new NektarMemory(chain as never, funder as never, fundKey, {
     ...base,
     agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,
@@ -412,6 +432,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     finalityDepth: Number(process.env.NEKTAR_FINALITY_DEPTH ?? 6)
   }, store)
   memRef = mem
+  mem.ledger = ledger
   mem.metrics.gauge('nektar_fee_balance_sats', () => reserve.utxos.reduce((s, u) => s + u.satoshis, 0), 'operator fee-key balance (sats)')
   const persistKeys = () => {
     let changed = false
@@ -622,10 +643,22 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       return { revived, dropped, marked, pending, utxos: reserve.utxos.length, balanceSats, address: fundAddress }
     }
   }
+  const { TransactionWatcher } = await import('./automation/ledger.js')
+  const watcher = new TransactionWatcher(ledger, async txid => {
+    try {
+      const st = await fetch(`${mc.arcUrl ?? 'https://arc.gorillapool.com'}/v1/tx/${txid}`, { signal: AbortSignal.timeout(10_000) }).then(x => x.ok ? x.json() : null)
+      const status = String(st?.txStatus ?? st?.status ?? '')
+      if (/MINED/.test(status)) return { status: 'seen', source: 'arc' }
+      if (/REJECTED/.test(status)) return { status: 'rejected', source: 'arc', reason: st?.txStatus ?? status }
+      if (/SEEN|ACCEPTED|ANNOUNCED/.test(status)) return { status: 'seen', source: 'arc' }
+    } catch { /* undecidable — retry next tick */ }
+    return undefined
+  }, async () => { await ops.refreshFunding?.().catch(() => {}) })
+  const watchTimer = setInterval(() => { void watcher.tick().catch(() => {}) }, 60_000); watchTimer.unref()
   return {
     mem, network: net, ops,
     close: async () => {
-      clearInterval(timer); clearInterval(beatTimer)
+      clearInterval(timer); clearInterval(beatTimer); clearInterval(watchTimer)
       await tick(); await knex.destroy()
       try { (await import('node:fs')).rmSync(lockFile) } catch { /* already gone */ }
     }

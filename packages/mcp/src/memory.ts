@@ -338,6 +338,7 @@ export class NektarMemory {
   private logKey: PrivateKey
   public budget?: import('./budget.js').BudgetAuthority
   public automation?: import('./automation/types.js').Automation
+  public ledger?: import('./automation/store.js').AutomationStore
   async fetchTx (txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     const local = this.anchorTxs.get(txid) ?? (this.chain as any).getTx?.(txid)
     if (local) return local
@@ -705,8 +706,12 @@ export class NektarMemory {
     // Serialize BEFORE marking the reserve spent — a throw here must not
     // drain the funding UTXO.
     const transaction = tx.toHexAtomicBEEF()
+    if (this.ledger) {
+      const txid = tx.id('hex')
+      await this.ledger.recordBroadcast({ txid, rawHex: tx.toHex(), parents: { [f.tx.id('hex')]: f.tx.toHex() }, feeSats: 0, outs: [{ txid: f.tx.id('hex'), vout: f.vout, satoshis: f.satoshis }] }, `owner:${txid}`, 'owner', 'exported-payment')
+      await this.ledger.setTxState(`owner:${txid}`, 'exported', { invoiceId: inv.invoiceId })
+    }
     ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
-    ;(this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
     return { payment: { invoiceId: inv.invoiceId, transaction }, txid: tx.id('hex') }
   }
 

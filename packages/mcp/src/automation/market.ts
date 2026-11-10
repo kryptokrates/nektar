@@ -4,6 +4,7 @@ import { verifyOfferSig, publicSaleQuote, saleQuoteWire } from '@nektar/identity
 import { DisclosureSaleHost, CheckpointBond } from '@nektar/anchor'
 import { parseFragment, fromHex } from '@nektar/core'
 import type { AutomationStore, Operation, OutboxItem } from './store.js'
+import { WalletCoordinator } from './wallet.js'
 import { decidePurchase, decideOffer, digestOf, type AutomationPolicy, type ActionContext } from './policy.js'
 import { rankOffers, type ScoreCandidate } from './scoring.js'
 import type { AIExecutor } from './ai.js'
@@ -32,6 +33,9 @@ export interface MarketDeps {
   network: string
   height: () => Promise<number>
   fetchTx: (txid: string) => Promise<Transaction | undefined>
+  broadcast?: (tx: Transaction) => Promise<import('../../../chain/src/interfaces.js').BroadcastResult>
+  settleEscrow?: (tx: Transaction) => void
+  afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
   ai: AIExecutor
   now?: () => number
@@ -59,12 +63,14 @@ export class MarketEngine {
   private now: () => number
   private me: string
   private chain: Promise<unknown> = Promise.resolve()
+  private wallet?: WalletCoordinator
   private inflight = new Set<string>()
 
   constructor (private d: MarketDeps) {
     this.o = { ...DEFAULTS, ...d.opts }
     this.now = d.now ?? Date.now
     this.me = d.key.toPublicKey().toString()
+    if (d.broadcast) this.wallet = new WalletCoordinator(d.store, { broadcast: d.broadcast })
   }
 
   get pub (): string { return this.me }
@@ -179,7 +185,7 @@ export class MarketEngine {
       for (const op of await this.d.store.operations({ notStates: TERMINAL })) {
         try { await this.advance(op, height) } catch (e) {
           const cur = await this.d.store.operation(op.operationId)
-          if (cur && cur.revision === op.revision) await this.d.store.transition(cur.operationId, cur.revision, cur.state, { cause: 'tick_error', lastError: (e as Error).message.slice(0, 500) })
+          if (cur) await this.d.store.transition(cur.operationId, cur.revision, cur.state, { cause: 'tick_error', lastError: (e as Error).message.slice(0, 500) })
         }
       }
       await this.flush()
@@ -418,7 +424,31 @@ export class MarketEngine {
     this.inflight.add(op.operationId)
     try {
       let r: any
-      try {
+      if (this.wallet && this.d.settleEscrow) {
+        let built: any
+        try { built = await this.d.call('sale#escrowBuild', { cfg: q.cfg, amount: amounts.lockedSats, offer: { sellerPub: q.sellerPub, offerSig: q.offerSig, expiresAt: q.expiresAt, commitment: s.commitment ?? (s.so.offer.leaf ? { leaf: s.so.offer.leaf } : undefined) } }) } catch (e) {
+          await this.d.store.releaseBudget(ctx.actionId)
+          await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', { cause: 'escrow_build_refused', lastError: (e as Error).message.slice(0, 500) })
+          return
+        }
+        const tx = (built.tx as Transaction | undefined) ?? Transaction.fromHex(built.txHex)
+        for (const inp of tx.inputs) {
+          if (!inp.sourceTransaction && inp.sourceTXID) inp.sourceTransaction = await this.d.fetchTx(inp.sourceTXID) as Transaction
+        }
+        await this.wallet.prepare(ctx, 'escrow', tx)
+        const st = await this.d.store.transition(funding.operationId, funding.revision, 'funding', { cause: 'escrow_prepared', data: { pendingEscrow: { cfg: built.escrow, utxo: built.utxo, feeSats: built.feeSats } } })
+        await this.d.afterPrepare?.(ctx.actionId)
+        const sub = await this.wallet.submit(ctx.actionId)
+        if (sub.state !== 'submitted' && sub.state !== 'observed' && sub.state !== 'confirmed') {
+          if (sub.state === 'rejected' && /SpendGuard refused/i.test(sub.detail ?? '')) {
+            await this.d.store.releaseBudget(ctx.actionId)
+            await this.d.store.transition(st.operationId, st.revision, 'funding_failed', { cause: 'spend_guard_refused', lastError: (sub.detail ?? '').slice(0, 500) })
+          } else await this.escalate(st, 'unresolved_payment', digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }), 0, { reason: sub.detail ?? sub.state }, 'uncertain')
+          return
+        }
+        this.d.settleEscrow(tx)
+        r = { accepted: true, txid: built.utxo.txid, utxo: built.utxo, escrow: built.escrow }
+      } else try {
         r = await this.d.call('sale#escrow', { cfg: q.cfg, amount: amounts.lockedSats, offer: { sellerPub: q.sellerPub, offerSig: q.offerSig, expiresAt: q.expiresAt, commitment: s.commitment ?? (s.so.offer.leaf ? { leaf: s.so.offer.leaf } : undefined) } })
       } catch (e) {
         await this.d.store.releaseBudget(ctx.actionId)
@@ -433,7 +463,8 @@ export class MarketEngine {
         return
       }
       await this.d.store.commitBudget(ctx.actionId)
-      await this.d.store.transition(funding.operationId, funding.revision, 'awaiting_disclosure', {
+      const cur = (await this.d.store.operation(op.operationId))!
+      await this.d.store.transition(cur.operationId, cur.revision, 'awaiting_disclosure', {
         cause: 'escrow_broadcast', data: { escrow: r.escrow, utxo: r.utxo, escrowTxid: r.txid }, dueHeight: Number(q.cfg.refundAfter),
         outbox: [{ actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo: r.utxo, depositorPkh: r.escrow.depositorPkh } }]
       })
@@ -457,7 +488,23 @@ export class MarketEngine {
         if (!p) { await this.d.store.transition(op.operationId, op.revision, 'denied', { cause: 'policy_revoked_or_expired' }); return }
         return await this.fund(op, p)
       }
-      if (op.state === 'funding' && !this.inflight.has(op.operationId)) return await this.escalate(op, 'unresolved_payment', digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }), 0, { note: 'process stopped between reserving and recording the escrow broadcast' }, 'uncertain')
+      if (op.state === 'funding' && !this.inflight.has(op.operationId)) {
+        const pending = op.data.pendingEscrow as { cfg: any, utxo: any } | undefined
+        if (pending && this.wallet && this.d.settleEscrow) {
+          const sub = await this.wallet.submit(op.data.escrowAction as string)
+          if (sub.state === 'submitted' || sub.state === 'observed' || sub.state === 'confirmed') {
+            const wtx = await this.d.store.walletTx({ actionId: op.data.escrowAction as string })
+            if (wtx) this.d.settleEscrow(Transaction.fromHex(wtx.rawHex))
+            await this.d.store.commitBudget(op.data.escrowAction as string)
+            const sel2 = op.data.selected as { key: string }
+            const so2 = (op.data.offers as Record<string, StoredOffer>)[sel2.key]!.so
+            const w2 = (op.data.want as SignedWant).want
+            await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', { cause: 'escrow_resumed_same_bytes', data: { escrow: pending.cfg, utxo: pending.utxo, escrowTxid: pending.utxo.txid }, dueHeight: Number(pending.cfg.refundAfter), outbox: [{ actionId: `${op.operationId}:accept`, kind: 'message', destination: so2.offer.pub, payload: { type: 'accept', wantId: w2.wantId, offerId: so2.offer.offerId, utxo: pending.utxo, depositorPkh: pending.cfg.depositorPkh } }] })
+            return
+          }
+        }
+        return await this.escalate(op, 'unresolved_payment', digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }), 0, { note: 'process stopped between reserving and recording the escrow broadcast' }, 'uncertain')
+      }
       if (op.state === 'awaiting_disclosure' && op.dueHeight !== undefined && height >= op.dueHeight) return await this.refund(op)
     }
     if (op.role === 'observer' && (op.state === 'watching' || op.state === 'seizing') && op.dueHeight !== undefined && height >= op.dueHeight) return await this.seize(op.state === 'seizing' ? await this.d.store.transition(op.operationId, op.revision, 'watching', { cause: 'resume_after_restart' }) : op)

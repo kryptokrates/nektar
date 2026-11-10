@@ -47,6 +47,27 @@ export class WalletCoordinator {
     return await this.store.recordPrepared({ actionId: ctx.actionId, operationId: ctx.operationId, kind, txid, rawHex: tx.toHex(), parents, feeSats })
   }
 
+  async prepareOwner (kind: string, tx: Transaction, actionId = `owner:${tx.id('hex')}`): Promise<WalletTx> {
+    const parents: Record<string, string> = {}
+    const outs: Array<{ txid: string, vout: number, satoshis: number }> = []
+    let vin = 0
+    for (const inp of tx.inputs) {
+      const txid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+      const vout = inp.sourceOutputIndex ?? 0
+      if (!txid) throw new Error('owner: input without an outpoint')
+      outs.push({ txid, vout, satoshis: inp.sourceTransaction?.outputs[vout]?.satoshis ?? 0 })
+      if (inp.sourceTransaction) { parents[txid] = inp.sourceTransaction.toHex(); vin += inp.sourceTransaction.outputs[vout]?.satoshis ?? 0 }
+    }
+    const prev = await this.store.walletTx({ actionId })
+    if (prev) return prev
+    return await this.store.recordPrepared({ actionId, operationId: 'owner', kind, txid: tx.id('hex'), rawHex: tx.toHex(), parents, feeSats: Math.max(0, vin - tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)) }).then(async w => {
+      for (const o of outs) await this.store.leaseOutpoints(actionId, [o])
+      return w
+    })
+  }
+
+  async rebuildTx (w: WalletTx): Promise<Transaction> { return this.rebuild(w) }
+
   private rebuild (w: WalletTx): Transaction {
     const tx = Transaction.fromHex(w.rawHex)
     if (tx.id('hex') !== w.txid) throw new Error(`stored bytes for ${w.actionId} do not hash to ${w.txid}`)

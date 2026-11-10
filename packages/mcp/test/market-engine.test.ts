@@ -36,6 +36,7 @@ function world (opts: { refundBlocks?: number } = {}) {
       await a.engine.ingestMessage(pub, msg)
     }
   })
+  const hooks = { afterPrepare: undefined as undefined | ((actionId: string) => void) }
   const engineFor = (mem: NektarMemory, store: AutomationStore) => new MarketEngine({
     store, memory: mem as never, key: mem.operatorKey(), network: 'mock', now,
     call: (tool, args) => callTool(mem, tool, args),
@@ -43,6 +44,9 @@ function world (opts: { refundBlocks?: number } = {}) {
     fetchTx: async txid => (chain as any).known.get(txid),
     transport: transportFor(mem.operatorKey().toPublicKey().toString()),
     ai: new ScriptedExecutor(),
+    broadcast: tx => mem.broadcastTx(tx),
+    settleEscrow: tx => { for (const inp of tx.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } if (tx.outputs[1]) mem.addOwnedOut(tx, 1) },
+    afterPrepare: id => hooks.afterPrepare?.(id),
     opts: { refundBlocks: opts.refundBlocks ?? 144 }
   })
   const policyFor = (pub: string, extra: Partial<AutomationPolicy['limits']> = {}): AutomationPolicy => ({
@@ -95,7 +99,7 @@ function world (opts: { refundBlocks?: number } = {}) {
   }
   const everyone: Agent[] = []
   const close = async () => { for (const a of everyone) await a.kx.destroy() }
-  return { chain, agents, add, seller, round, restart, close, feed, wire, advance: (ms: number) => { clock += ms } }
+  return { chain, agents, add, seller, round, restart, close, feed, wire, hooks, advance: (ms: number) => { clock += ms } }
 }
 
 test('S1 mock: three sellers quote 450/300/200, buyer scores, pays the best, verifies the disclosure — no manual tool calls', async (t) => {
@@ -220,4 +224,30 @@ test('hostile offers are rejected with reasons and never funded', async (t) => {
   assert.equal(w.feed.filter(e => e.kind === 'offer').length, 0)
   assert.equal((await c.store.operations({ role: 'seller' })).filter(o => o.kind === 'sale').length, 0, 'no preparation spent on an unaffordable want')
   assert.equal((await bob.store.budgetStatus(bob.policyHash)).runTotalSats, 0)
+})
+
+test('crash between escrow prepare and submit: restart resubmits the SAME bytes, no second escrow, no operator prompt', async (t) => {
+  const w = world()
+  t.after(w.close)
+  await w.seller('cara', 200)
+  const bob = await w.add('bob')
+  const { operationId } = await bob.engine.publishWant({ domains: ['libfoo'], question: 'connect is not a function', maxSats: 500 }, bob.policyHash)
+  await w.round(); await w.round(); w.advance(1500)
+  let crashed = false
+  w.hooks.afterPrepare = () => { crashed = true; throw new Error('simulated process death between prepare and submit') }
+  await w.round([bob])
+  assert.ok(crashed, 'the fault fired at the escrow prepare boundary')
+  let st = (await bob.engine.status(operationId))!.operation
+  assert.equal(st.state, 'funding')
+  const pending = st.data.pendingEscrow as any
+  assert.ok(pending?.utxo?.txid, 'the signed escrow was persisted before the crash')
+  const recorded = await bob.store.walletTx({ actionId: `${operationId}:escrow` })
+  assert.equal(recorded!.state, 'prepared', 'bytes persisted, never submitted')
+  w.hooks.afterPrepare = undefined
+  await w.restart(bob)
+  for (let i = 0; i < 3; i++) await w.round()
+  st = (await bob.engine.status(operationId))!.operation
+  assert.equal(st.state, 'disclosure_verified', st.lastError)
+  assert.equal((st.data.utxo as any).txid, pending.utxo.txid, 'the SAME escrow transaction was used after restart — no rebuild, no double fund')
+  assert.equal((await bob.store.approvals()).length, 0, 'no human needed for a deterministic crash')
 })

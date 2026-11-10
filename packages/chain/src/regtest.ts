@@ -251,6 +251,7 @@ export class ReserveFunder {
     const hex = tx.toHex()
     const e: ReserveEntry = { txid: tx.id('hex'), vout, satoshis: tx.outputs[vout]!.satoshis ?? 0, txHex: hex }
     if (this.spent.has(this.op(e.txid, e.vout))) return
+    if (this.utxos.some(x => this.op(x.tx.id('hex'), x.vout) === this.op(e.txid, e.vout))) return
     this.entries.push(e)
     this.utxos.push({ tx, vout: e.vout, satoshis: e.satoshis })
     this.save()
@@ -263,12 +264,17 @@ export class ReserveFunder {
    * `spendCheck` (optional) is an O(1) chain lookup: when it reports a
    * candidate definitively spent it is pruned and the next is tried —
    * 'unknown' results are kept (pending txs may lag the UTXO store). */
+  leased?: (txid: string, vout: number) => Promise<boolean>
   async takeReserve (spendCheck?: (txid: string, vout: number) => Promise<boolean>, minSats?: number): Promise<{ tx: Transaction, vout: number, satoshis: number } | null> {
     while (true) {
       // smallest-sufficient: skip spent entries AND entries too small for the
       // spend — a first-fit dust pick produces negative-fee/insufficient txs
-      const u = this.utxos
-        .filter(x => !this.spent.has(this.op(x.tx.id('hex'), x.vout)) && (minSats === undefined || x.satoshis >= minSats))
+      const candidates = []
+      for (const x of this.utxos.filter(x => !this.spent.has(this.op(x.tx.id('hex'), x.vout)) && (minSats === undefined || x.satoshis >= minSats))) {
+        if (this.leased && await this.leased(x.tx.id('hex'), x.vout)) continue
+        candidates.push(x)
+      }
+      const u = candidates
         .sort((a, b) => a.satoshis - b.satoshis)[0]
       if (!u) return null
       if (spendCheck && await spendCheck(u.tx.id('hex'), u.vout)) { this.markSpent(u.tx.id('hex'), u.vout); continue }

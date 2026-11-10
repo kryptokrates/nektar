@@ -1,0 +1,287 @@
+{
+ "model": "qwen2.5:7b",
+ "baseUrl": "http://127.0.0.1:11434/v1",
+ "trials": 20,
+ "correct": 16,
+ "outOfSet": 0,
+ "errors": 1,
+ "pass": false,
+ "results": [
+  {
+   "trial": 0,
+   "domain": "libfoo",
+   "question": "connect is not a function after the libfoo upgrade",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9900,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3977
+  },
+  {
+   "trial": 1,
+   "domain": "postgres",
+   "question": "cannot log in with md5 after upgrading postgres",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9500,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3872
+  },
+  {
+   "trial": 2,
+   "domain": "soccer",
+   "question": "where was the 2024 UCL final held",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 10000,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 4045
+  },
+  {
+   "trial": 3,
+   "domain": "semver",
+   "question": "punycode is deprecated after upgrading node",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9900,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3738
+  },
+  {
+   "trial": 4,
+   "domain": "tls",
+   "question": "handshake failure after the openssl upgrade",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9500,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3606
+  },
+  {
+   "trial": 5,
+   "domain": "rust",
+   "question": "array.into_iter behaviour changed after the edition bump",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9900,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3765
+  },
+  {
+   "trial": 6,
+   "domain": "dns",
+   "question": "dns resolves on an unexpected localhost address",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9500,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3890
+  },
+  {
+   "trial": 7,
+   "domain": "git",
+   "question": "merge conflicts look different after the git upgrade",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9900,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3667
+  },
+  {
+   "trial": 8,
+   "domain": "http",
+   "question": "fetch throws an invalid header character error",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9500,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3592
+  },
+  {
+   "trial": 9,
+   "domain": "docker",
+   "question": "container networking broke after the docker upgrade",
+   "expected": "target",
+   "got": null,
+   "relevanceBps": 0,
+   "ok": false,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3527
+  },
+  {
+   "trial": 10,
+   "domain": "json",
+   "question": "Do not know how to serialize a BigInt",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9900,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3756
+  },
+  {
+   "trial": 11,
+   "domain": "sqlite",
+   "question": "no such function jsonb after the sqlite upgrade",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9500,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3729
+  },
+  {
+   "trial": 12,
+   "domain": "time",
+   "question": "datetime.utcnow is deprecated",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9900,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3541
+  },
+  {
+   "trial": 13,
+   "domain": "path",
+   "question": "path traversal check fails on windows",
+   "expected": "target",
+   "got": null,
+   "relevanceBps": 0,
+   "ok": false,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3435
+  },
+  {
+   "trial": 14,
+   "domain": "mempool",
+   "question": "too-long-mempool-chain error",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9500,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 3558
+  },
+  {
+   "trial": 15,
+   "domain": "fees",
+   "question": "fee too low broadcast rejection",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9500,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 1452
+  },
+  {
+   "trial": 16,
+   "domain": "keys",
+   "question": "public key length mismatch",
+   "expected": "target",
+   "got": null,
+   "ok": false,
+   "error": "ai: choice is not one of the offered candidates",
+   "ms": 1398
+  },
+  {
+   "trial": 17,
+   "domain": "merkle",
+   "question": "how to prove a transaction is in a block",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 10000,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 1501
+  },
+  {
+   "trial": 18,
+   "domain": "libfoo",
+   "question": "connect is not a function after the libfoo upgrade",
+   "expected": "target",
+   "got": "target",
+   "relevanceBps": 9500,
+   "ok": true,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 1469
+  },
+  {
+   "trial": 19,
+   "domain": "postgres",
+   "question": "cannot log in with md5 after upgrading postgres",
+   "expected": "target",
+   "got": null,
+   "relevanceBps": 0,
+   "ok": false,
+   "model": {
+    "provider": "ollama",
+    "modelId": "qwen2.5:7b"
+   },
+   "ms": 1304
+  }
+ ]
+}

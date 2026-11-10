@@ -271,3 +271,13 @@ owner calls are recorded, not capped.
 - `pnpm scenarios -- --profile mock --scenario all` runs S1/S2/S3 as real OS
   processes with evidence bundles; `pnpm scenarios:verify -- <dir>` re-checks
   the S1 bundle offline. Regtest/testnet profiles need their chain stacks.
+
+### Real model evaluation
+
+`packages/e2e/src/scenarios/model-trials.mjs` runs 20 predeclared matching
+trials against a local OpenAI-compatible endpoint (Ollama). With
+`qwen2.5:7b` the current result is **16/20 correct, 1 out-of-set error** —
+below the 18/20 bar, so the scripted matcher remains the default for
+deterministic runs. S1 also passes end to end with that model selected via
+`NEKTAR_AI_BASE_URL=http://127.0.0.1:11434/v1 NEKTAR_AI_MODEL=qwen2.5:7b`.
+The trial report is written to `artifacts/model-trials/report.json`.

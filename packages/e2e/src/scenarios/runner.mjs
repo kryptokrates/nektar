@@ -66,7 +66,8 @@ async function addAgent (name, rv, { seller, publicDisclosure = false, bondEpoch
   const token = `tok-${name}`
   const url = `http://127.0.0.1:${agentPort(index)}`
   spawnNode('packages/e2e/src/scenarios/agent-process.mjs', {
-    NEKTAR_CHAIN_HUB: hub.url, NEKTAR_DATA_DIR: dataDir, NEKTAR_OVERLAY_URL: rv, NEKTAR_HTTP_PORT: String(agentPort(index)), NEKTAR_HTTP_TOKEN: token, NEKTAR_PAID_DISCLOSURE: '1', NEKTAR_AGENT_NAME: name, NEKTAR_AUTOMATION_INTERVAL_MS: '500', ...(bondEpoch ? { NEKTAR_BOND_EPOCH: String(bondEpoch) } : {})
+    NEKTAR_CHAIN_HUB: hub.url, NEKTAR_DATA_DIR: dataDir, NEKTAR_OVERLAY_URL: rv, NEKTAR_HTTP_PORT: String(agentPort(index)), NEKTAR_HTTP_TOKEN: token, NEKTAR_PAID_DISCLOSURE: '1', NEKTAR_AGENT_NAME: name, NEKTAR_AUTOMATION_INTERVAL_MS: '500', ...(bondEpoch ? { NEKTAR_BOND_EPOCH: String(bondEpoch) } : {}),
+    ...(process.env.NEKTAR_AI_BASE_URL ? { NEKTAR_AI_BASE_URL: process.env.NEKTAR_AI_BASE_URL, NEKTAR_AI_MODEL: process.env.NEKTAR_AI_MODEL ?? 'qwen2.5:7b', NEKTAR_AI_PROVIDER: 'ollama', NEKTAR_AI_EGRESS: 'local' } : {})
   }, name)
   await up(`${url}/v1/health`)
   const pub = (await (await fetch(`${url}/.well-known/nektar`)).json()).operatorPub ?? (await tool({ url, token, name }, 'reputation', {})).card?.pub
@@ -75,7 +76,7 @@ async function addAgent (name, rv, { seller, publicDisclosure = false, bondEpoch
     limits: { perPurchaseSats: 500, dailyPurchaseSats: 1500, perTxFeeSats: 600, dailyFeeSats: 3000, runTotalSats: 6000, maxLockedSats: 1200, maxUnconfirmedSats: 1200, maxUnconfirmedCount: 3 },
     scoring: { minimumScoreBps: 0, weights: { relevance: 3000, provenance: 2500, history: 1500, price: 2000, latency: 1000 }, collectMs: 8000 },
     seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 10, sellableShards: ['guide'] },
-    disclosure: { allowPublic: publicDisclosure }, ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 }, sandbox: { mode: 'sandbox-only' }
+    disclosure: { allowPublic: publicDisclosure }, ai: { providers: [process.env.NEKTAR_AI_BASE_URL ? 'ollama' : 'scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 60000 }, sandbox: { mode: 'sandbox-only' }
   }
   const pf = join(dataDir, 'policy.json'); writeFileSync(pf, JSON.stringify(policy))
   const { policyHash } = JSON.parse(execFileSync(process.execPath, [join(root, 'tools/automation.mjs'), '--data', dataDir, '--json', 'policy', 'approve', pf], { encoding: 'utf8' }))

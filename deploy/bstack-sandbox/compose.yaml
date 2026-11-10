@@ -1,0 +1,48 @@
+name: nektar-bstack-sandbox
+services:
+  chain:
+    image: ghcr.io/lightwebinc/bbox-devchain:latest
+    volumes:
+      - chain:/var/lib/devchain
+    ports:
+      - "127.0.0.1:18344:8080"
+  db:
+    image: mysql:9
+    environment:
+      MYSQL_DATABASE: overlay
+      MYSQL_USER: overlay
+      MYSQL_PASSWORD: spike
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    command: ["--innodb-buffer-pool-size=128M","--performance-schema=OFF"]
+    healthcheck:
+      test: ["CMD-SHELL","mysqladmin ping -h 127.0.0.1 -uoverlay -pspike --silent"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - db:/var/lib/mysql
+  host:
+    image: ghcr.io/lightwebinc/bbox-host:latest
+    depends_on:
+      db:
+        condition: service_healthy
+      chain:
+        condition: service_started
+    environment:
+      BBOX_OFFICES: nektar_abcdefghij
+      OVERLAY_TOPICS: tm_bbox_nektar_abcdefghij,tm_nektar_regtest_0,tm_nektar_regtest_1,tm_nektar_regtest_2,tm_nektar_regtest_3,tm_nektar_regtest_4,tm_nektar_regtest_5,tm_nektar_regtest_6,tm_nektar_regtest_7,tm_nektar_regtest_8,tm_nektar_regtest_9,tm_nektar_regtest_a,tm_nektar_regtest_b,tm_nektar_regtest_c,tm_nektar_regtest_d,tm_nektar_regtest_e,tm_nektar_regtest_f
+      OVERLAY_MODULES: /app/modules/bbox/bbox-module.js,/app/modules/nektar/nektar-module.js
+      OVERLAY_KNEX_URL: mysql://overlay:spike@db:3306/overlay
+      OVERLAY_CHAIN_TRACKER_URL: http://chain:8080
+      OVERLAY_ADMIN_TOKEN: spike-token
+      BBOX_ASSET_URL: http://chain:8080
+      NEKTAR_NETS: regtest
+    volumes:
+      - ../../packages/bstack/bundle:/app/modules/nektar:ro
+      - host-state:/var/lib/bbox
+    ports:
+      - "127.0.0.1:18091:8080"
+volumes:
+  chain: {}
+  db: {}
+  host-state: {}

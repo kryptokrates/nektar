@@ -9,28 +9,63 @@
         "docs/**/*.mjs",
         "test/**/*.mjs"
       ],
-      "ignore": ["spikes/**", ".mod/**", "test/fixtures/**"],
-      "ignoreBinaries": ["ss", "awk"]
+      "ignore": [
+        "spikes/**",
+        ".mod/**",
+        "test/fixtures/**"
+      ],
+      "ignoreBinaries": [
+        "ss",
+        "awk"
+      ]
     },
     "packages/mcp": {
-      "entry": ["src/payclient.ts", "demo/**/*.{ts,mts,mjs}"]
+      "entry": [
+        "src/payclient.ts",
+        "demo/**/*.{ts,mts,mjs}"
+      ]
     },
     "packages/e2e": {
-      "entry": ["src/**/*.{ts,mts,mjs}"]
+      "entry": [
+        "src/**/*.{ts,mts,mjs}"
+      ]
     },
     "packages/contracts": {
-      "entry": ["*.mjs", "src/*.runar.ts", "mini-stage.runar.ts"]
+      "entry": [
+        "*.mjs",
+        "src/*.runar.ts",
+        "mini-stage.runar.ts"
+      ]
     },
     "packages/zk": {
-      "ignoreUnresolved": ["stark/verifier\\.js$"],
-      "ignore": ["stark/verifier*.{js,d.ts}", "stark/*.wasm*"]
+      "ignoreUnresolved": [
+        "stark/verifier\\.js$"
+      ],
+      "ignore": [
+        "stark/verifier*.{js,d.ts}",
+        "stark/*.wasm*"
+      ]
     },
     "packages/overlay": {
-      "entry": ["*.mjs", "src/host-module.ts"],
-      "ignore": ["src/vendor/**"]
+      "entry": [
+        "*.mjs",
+        "src/host-module.ts"
+      ],
+      "ignore": [
+        "src/vendor/**"
+      ]
     },
     "packages/anchor": {
-      "entry": ["*.mjs"]
+      "entry": [
+        "*.mjs"
+      ]
+    },
+    "packages/bstack": {
+      "entry": [
+        "src/module.ts",
+        "demo/**/*.mjs",
+        "test/**/*.ts"
+      ]
     }
   },
   "ignoreExportsUsedInFile": true,

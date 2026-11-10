@@ -1,0 +1,23 @@
+{
+  "name": "@nektar/bstack",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "exports": { ".": "./dist/src/index.js" },
+  "scripts": {
+    "build": "tsc -b",
+    "bundle": "node ../../node_modules/esbuild/bin/esbuild src/module.ts --bundle --format=esm --platform=node --target=es2023 --external:@bsv/sdk --outfile=bundle/nektar-module.js",
+    "test": "node --test --test-timeout=60000 dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@lightwebinc/bcommon": "file:../../vendor/lightwebinc-bcommon-0.33.13.tgz",
+    "@nektar/chain": "workspace:*",
+    "@nektar/core": "workspace:*",
+    "@nektar/overlay": "workspace:*",
+    "knex": "^3.1.0",
+    "sqlite3": "^5.1.7"
+  },
+  "peerDependencies": { "@bsv/sdk": "4.0.1" },
+  "files": ["dist", "README.md"]
+}

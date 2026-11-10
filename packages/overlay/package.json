@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./dist/src/index.js",
   "exports": {
-    ".": "./dist/src/index.js"
+    ".": "./dist/src/index.js",
+    "./presence": "./dist/src/presence.js"
   },
   "scripts": {
     "build": "tsc -b",

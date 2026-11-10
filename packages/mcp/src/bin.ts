@@ -40,6 +40,7 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
     network: rt.network, dataDir: rt.network === 'mock' && !process.env.NEKTAR_DATA_DIR ? undefined : (process.env.NEKTAR_DATA_DIR ?? '.nektar'),
     rendezvousUrls: rvs, keeperUrl: process.env.NEKTAR_MAILBOX_URL, overlayToken: process.env.NEKTAR_OVERLAY_TOKEN,
     marketHosts: (process.env.NEKTAR_MARKET_HOSTS ?? '').split(',').map(s => s.trim()).filter(Boolean),
+    boxOffice: process.env.NEKTAR_BBOX_OFFICE ?? undefined,
     intervalMs: Number(process.env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 5000),
     call: (tool, args) => callTool(rt.mem, tool, args, { ops: rt.ops }),
     opts: rt.network === 'main' ? { saleMaxFee: 500 } : {},

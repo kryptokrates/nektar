@@ -40,13 +40,13 @@ const policyFor = (pub: string): AutomationPolicy => ({
 })
 
 interface A { mem: NektarMemory, rt: Automation, pub: string, policyHash: string, name: string }
-interface MkOpts { hosts: string[], msgs: ReturnType<typeof bus>, chain: MockChain, logs: string[], dir: string, opts?: Partial<import('../src/automation/market.js').MarketOptions> }
+interface MkOpts { hosts: string[], msgs?: ReturnType<typeof bus>, chain: MockChain, logs: string[], dir: string, opts?: Partial<import('../src/automation/market.js').MarketOptions> }
 const mkagent = async (name: string, o: MkOpts): Promise<A> => {
   const funder = new MockFunder(); funder.topup(30)
   for (const t of funder.parents) o.chain.registerParent(t)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
   const pub = mem.operatorKey().toPublicKey().toString()
-  const rt = await openAutomation(mem, { network: NET, dataDir: join(o.dir, name), rendezvousUrls: [], marketHosts: o.hosts, intervalMs: 0, call: (t2, a) => callTool(mem, t2, a), log: l => o.logs.push(`${name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, messages: o.msgs.for(pub), opts: o.opts })
+  const rt = await openAutomation(mem, { network: NET, dataDir: join(o.dir, name), rendezvousUrls: [], marketHosts: o.hosts, intervalMs: 0, call: (t2, a) => callTool(mem, t2, a), log: l => o.logs.push(`${name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, messages: o.msgs?.for(pub), opts: o.opts })
   return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name }
 }
 const sellerize = async (s: A, price: number) => {
@@ -226,15 +226,53 @@ test('bstack E: hosts down after escrow funded â€” chain advance still refunds t
     chain.mine(10)
     const refunded = await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'refunded', 30)
     const fin = await buyerOp(b)
-    const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'buyer', 'automation.sqlite') }, useNullAsDefault: true })
-    const ib = await kx('market_inbox').select('source', 'kind', 'status').where('kind', 'message')
-    await kx.destroy()
-    const kxs = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'seller', 'automation.sqlite') }, useNullAsDefault: true })
-    const sops = await kxs('market_operations').select('kind', 'state')
-    const sib = await kxs('market_inbox').select('source', 'kind', 'status', 'last_error')
-    await kxs.destroy()
-    logs.push('SALEOPS ' + JSON.stringify(sops) + ' SINBOX ' + JSON.stringify(sib))
-    assert.ok(refunded, `buyer not refunded state=${fin?.state} err=${fin?.lastError} inbox=${JSON.stringify(ib)} | ` + logs.slice(-20).join(' | '))
+    assert.ok(refunded, `buyer not refunded state=${fin?.state} err=${fin?.lastError} | ` + logs.slice(-20).join(' | '))
     await b.rt.stop()
   } finally { await h1.close() }
+})
+
+
+test('bstack F: default bbox channel — no injected bus; forged delivered ignored', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const office = 'nektar_abcdefghij'
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office })
+  const h2 = await minihost([NET], { tracker: trackerFor(chain), office })
+  try {
+    // no `msgs` -> runtime uses the default bbox channel over the overlay hosts
+    const b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    const s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    const all = [b.rt, s.rt]
+    // wait for the escrow to land so the forged 'delivered' hits the from-check
+    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 80), 'escrow never funded | ' + logs.slice(-20).join(' | '))
+    const bo0 = await buyerOp(b)
+    const sel = (bo0?.data.selected as { key: string }).key
+    const offerId = (bo0?.data.offers as Record<string, { so: { offer: { offerId: string } } }>)[sel]!.so.offer.offerId
+    const { sendBox, MemoryTreeLedger, MemoryCarrierJournal, boxFundingLock, mintTree } = await import('@nektar/bstack')
+    const { PrivateKey, Transaction, P2PKH, MerklePath } = await import('@bsv/sdk')
+    const ghost = PrivateKey.fromRandom()
+    const parent = new Transaction(); parent.addOutput({ satoshis: 100_000, lockingScript: new P2PKH().lock(ghost.toPublicKey().toAddress()) })
+    const gTree = await mintTree({ key: ghost, funding: { tx: parent, vout: 0, satoshis: 100_000 }, n: 4, satsPerOutput: 1000, lock: await boxFundingLock(ghost) })
+    gTree.merklePath = new MerklePath(1, [[{ offset: 0, hash: '00'.repeat(32) }, { offset: 1, hash: gTree.id('hex'), txid: true }]])
+    const gl = new MemoryTreeLedger(); await gl.add(gTree, 4, 'bbox'); await gl.markProven(gTree.id('hex'))
+    await sendBox({ key: ghost, ledger: gl, journal: new MemoryCarrierJournal(), hosts: [h1.url, h2.url], office, to: b.pub, body: { market: { type: 'delivered', wantId: w.wantId, offerId, txid: 'ff'.repeat(32), txHex: 'ff' } } })
+    const done = async () => {
+      const bo = await buyerOp(b); const so = (await saleOps(s))[0]
+      return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.includes(so.state)
+    }
+    assert.ok(await until(all, chain, done, 100), 'logs: ' + logs.slice(-20).join(' | '))
+    const bo = await buyerOp(b)
+    assert.equal(bo?.state, 'disclosure_verified', 'forged delivered did not derail the purchase')
+    const envs = async (name: string) => {
+      const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'automation.sqlite') }, useNullAsDefault: true })
+      const n = (await kx('bstack_carriers').where('topics', 'like', '%tm_bbox%').count('* as c').first() as { c: number }).c
+      await kx.destroy(); return Number(n)
+    }
+    assert.ok((await envs('buyer')) + (await envs('seller')) >= 3, 'quote+accept+delivered envelopes were sent')
+    for (const r of all) await r.stop()
+  } finally { await h1.close(); await h2.close() }
 })

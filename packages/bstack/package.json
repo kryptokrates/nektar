@@ -19,7 +19,8 @@
     "@nektar/core": "workspace:*",
     "@nektar/overlay": "workspace:*",
     "knex": "^3.1.0",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.1.7",
+    "@lightwebinc/bbox-host": "file:../../vendor/lightwebinc-bbox-host-0.6.7.tgz"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"

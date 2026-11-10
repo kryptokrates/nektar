@@ -25,6 +25,7 @@ export interface AutomationConfig {
   marketHosts?: string[]
   messages?: { send: (toPub: string, msg: MarketMessage) => Promise<void>, collect: () => Promise<Array<{ from: string, msg: MarketMessage }>> }
   treeSize?: number
+  boxOffice?: string
   treeLowWater?: number
   now?: () => number
 }
@@ -52,12 +53,10 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   const rvs = cfg.rendezvousUrls.map(u => u.replace(/\/+$/, ''))
   const keeper = (cfg.keeperUrl ?? rvs[0])?.replace(/\/+$/, '')
   const marketHosts = (cfg.marketHosts ?? []).map(u => u.replace(/\/+$/, ''))
-  const lanes = marketHosts.length === 0 ? undefined : {
-    mod: await import('@nektar/bstack'),
-    ledger: undefined as unknown as InstanceType<typeof import('@nektar/bstack').KnexTreeLedger>,
-    journal: undefined as unknown as InstanceType<typeof import('@nektar/bstack').KnexCarrierJournal>
-  }
-  if (lanes !== undefined) { lanes.ledger = new lanes.mod.KnexTreeLedger(kx); lanes.journal = new lanes.mod.KnexCarrierJournal(kx) }
+  const lanes = marketHosts.length === 0 ? undefined : await (async () => {
+    const mod = await import('@nektar/bstack')
+    return { mod, ledger: new mod.KnexTreeLedger(kx), journal: new mod.KnexCarrierJournal(kx) }
+  })()
   const log = cfg.log ?? (() => {})
   const post = async (path: string, body: unknown): Promise<void> => {
     let ok = false
@@ -81,7 +80,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
       else await post('/offer', so)
     },
     send: async (to: string, msg: MarketMessage) => {
-      if (cfg.messages) { await cfg.messages.send(to, msg); return }
+      if (msgs !== undefined) { await msgs.send(to, msg); return }
       if (!keeper) throw new Error('no mailbox keeper configured')
       await sendEnvelope(key, keeper, { recipient: to, kind: KIND[msg.type], payload: { market: msg }, conversationId: msg.wantId, operationId: msg.offerId, expiresAt: Date.now() + 86_400_000 })
     }
@@ -97,14 +96,29 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   const seen = new Set<string>()
   const me = key.toPublicKey().toString()
   const withheldSeen = new Set<string>()
-  const unreachableNow = new Set<string>()
+  const downNow = new Set<string>()
   const laneNotes = (r: { withheld: Array<{ host: string, txid: string }>, unreachable: string[] }): void => {
     for (const w of r.withheld) { const k2 = `${w.host}:${w.txid}`; if (!withheldSeen.has(k2)) { withheldSeen.add(k2); log(`automation: withheld ${w.host} ${w.txid}`) } }
-    for (const h of r.unreachable) { if (!unreachableNow.has(h)) log(`automation: unreachable ${h}`) }
-    for (const h of [...unreachableNow]) if (!r.unreachable.includes(h)) log(`automation: host back ${h}`)
-    for (const h of unreachableNow) unreachableNow.delete(h)
-    for (const h of r.unreachable) unreachableNow.add(h)
+    for (const h of r.unreachable) if (!downNow.has(h)) { downNow.add(h); log(`automation: unreachable ${h}`) }
+    for (const h of [...downNow]) if (!r.unreachable.includes(h)) { downNow.delete(h); log(`automation: host back ${h}`) }
   }
+  const msgs = cfg.messages ?? (lanes === undefined ? undefined : {
+    send: async (to: string, msg: MarketMessage): Promise<void> => {
+      try {
+        await lanes.mod.sendBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, office: cfg.boxOffice, to, body: { market: msg }, expiresAt: Math.floor(Date.now() / 1000) + 86400 })
+      } catch (e) { log(`automation: box: ${(e as Error).message}`); throw e }
+    },
+    collect: async (): Promise<Array<{ from: string, msg: MarketMessage }>> => {
+      try {
+        const tracker = await mem.sdkTracker()
+        const r = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker })
+        laneNotes(r)
+        const out: Array<{ from: string, msg: MarketMessage }> = []
+        for (const i of r.items) { const m = (i.body as { market?: MarketMessage }).market; if (m !== undefined && typeof m === 'object') out.push({ from: i.from, msg: m }) }
+        return out
+      } catch (e) { log(`automation: box: ${(e as Error).message}`); return [] }
+    }
+  })
   const lanePoll = async (): Promise<void> => {
     const { readWants, readOffers } = lanes!.mod
     const watch = await engine.watchList()
@@ -137,8 +151,8 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
         if (events.length) await engine.ingestEvents(source, events, String(last))
       } catch (e) { log(`automation: ${rv}: ${(e as Error).message}`) }
     }
-    if (cfg.messages) {
-      try { for (const m of await cfg.messages.collect()) await engine.ingestMessage(m.from, m.msg) } catch (e) { log(`automation: messages: ${(e as Error).message}`) }
+    if (msgs !== undefined) {
+      try { for (const m of await msgs.collect()) await engine.ingestMessage(m.from, m.msg) } catch (e) { log(`automation: messages: ${(e as Error).message}`) }
     } else if (keeper) {
       try {
         for (const m of await collect(key, keeper, seen)) {
@@ -155,8 +169,9 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     try {
       if (lanes !== undefined) {
         try {
-          await lanes.mod.ensureTrees({
-            key, ledger: lanes.ledger, lowWater: cfg.treeLowWater, size: cfg.treeSize,
+          for (const kind of ['market', 'bbox'] as const) await lanes.mod.ensureTrees({
+            key, ledger: lanes.ledger, lowWater: cfg.treeLowWater, size: cfg.treeSize, kind,
+            lock: kind === 'bbox' ? await lanes.mod.boxFundingLock(key) : undefined,
             takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0]!,
             broadcast: tx => mem.broadcastTx(tx),
             fetchTx: txid => mem.fetchTx(txid),

@@ -370,6 +370,17 @@ export class NektarMemory {
   anchorTx (txid: string) { return this.anchorTxs.get(txid) }
   /** the shard's log records (read view — used by prove/disclose tests) */
   async records (shard: string) { return await this.store.all(shard) }
+  /** plaintext candidates for marketplace matching — owner-side decrypt of own
+   *  encrypted level-0 records; the sale still delivers only the fragment key */
+  async marketCandidates (shard: string): Promise<Array<{ seq: number, text: string }>> {
+    const out: Array<{ seq: number, text: string }> = []
+    for (const r of await this.records(shard)) {
+      if ((r.level ?? 0) !== 0) continue
+      const text = await this.recordText(r).catch(() => undefined)
+      if (text?.length) out.push({ seq: r.seq, text: text.slice(0, 4000) })
+    }
+    return out
+  }
   /** broadcast a fully-signed tx through the instance's broadcaster (SpendGuard stays in front) — covenant host tools only */
   async broadcastTx (tx: import('@bsv/sdk').Transaction): Promise<import('@nektar/chain').BroadcastResult> { return await this.chain.broadcast(tx) }
   /** the operator fee key — covenant hosts need it as owner/buyer key */

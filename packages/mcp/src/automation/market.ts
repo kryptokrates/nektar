@@ -23,6 +23,7 @@ export interface MarketTransport {
 export interface MarketMemory {
   shardManifest: (shard: string) => Promise<{ shardId: string, domains: string[], offers?: Array<{ kind: string, priceSats?: number }> } | undefined>
   records: (shard: string) => Promise<Array<{ seq: number, level?: number, fragment: { d: Uint8Array } }>>
+  marketCandidates?: (shard: string) => Promise<Array<{ seq: number, text: string }>>
 }
 
 export interface MarketDeps {
@@ -228,8 +229,10 @@ export class MarketEngine {
       if (price === undefined || (w.maxSats !== undefined && price > w.maxSats)) continue
       const decision = decideOffer(p, { network: this.d.network, agentPub: this.me, domains: w.domains, shard, priceSats: price, publicDisclosure: p.disclosure.allowPublic, now: this.now() })
       if (decision.kind !== 'allow') continue
-      const candidates = (await this.d.memory.records(shard)).filter(r => (r.level ?? 0) === 0 && r.fragment.d.length > 0)
-        .map(r => ({ id: String(r.seq), text: Buffer.from(r.fragment.d).toString('utf8').slice(0, 4000) }))
+      const candidates = this.d.memory.marketCandidates !== undefined
+        ? (await this.d.memory.marketCandidates(shard)).map(r => ({ id: String(r.seq), text: r.text }))
+        : (await this.d.memory.records(shard)).filter(r => (r.level ?? 0) === 0 && r.fragment.d.length > 0)
+          .map(r => ({ id: String(r.seq), text: Buffer.from(r.fragment.d).toString('utf8').slice(0, 4000) }))
       if (!candidates.length) continue
       const res = await this.d.ai.execute({ jobId: `${w.pub}:${w.wantId}:${w.revision}:${shard}`, kind: 'match', question: w.question ?? '', domains: w.domains, candidates, maxOutputTokens: p.ai.maxOutputTokens, timeoutMs: p.ai.timeoutMs })
       if (res.stop !== 'ok' || res.choice === undefined) continue

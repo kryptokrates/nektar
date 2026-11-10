@@ -2135,7 +2135,14 @@ export class NektarMemory {
         // recomputes exactly to the exporter's committed bundle (S3)
         const frag = parseFragment(fromHex(rec.frag))
         const { rec: lr } = await this.log.remember(p.shard, frag, { level: rec.level ?? 0 })
+        this.touched.add(p.shard)
         r = { seq: lr.seq, leaf: toHex(lr.leaf) }
+        if (frag.d.length > 0 && typeof rec.data === 'string' && Buffer.from(frag.d).toString('utf8') !== rec.data) {
+          if (r.seq !== rec.seq) { skipped++; continue }
+          imported++
+          unverifiable.push(`${p.shard}:${r.seq}: pack data does not match the fragment behind the bundle's leaf`)
+          continue
+        }
       } else {
         r = await this.remember(p.shard, rec.data, prov, rec.level ?? 0)
       }

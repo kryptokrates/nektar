@@ -151,7 +151,7 @@ export class MarketEngine {
     const c = op.data.cfg as Record<string, string>
     const next = await this.d.store.transition(op.operationId, op.revision, 'seizing', { cause: 'deadline_reached' })
     try {
-      const r = await this.d.call('bondSeize', { payToScript: new P2PKH().lock(this.d.key.toPublicKey().toHash()).toHex(), bond: { cfg: { operatorPkh: c.operatorPkh, bondReleaseHeight: BigInt(c.bondReleaseHeight!), maxFee: BigInt(c.maxFee!), epochLen: BigInt(c.epochLen!) }, utxo: op.data.utxo } })
+      const r = await this.d.call('bondSeize', { payToScript: new P2PKH().lock(this.d.key.toPublicKey().toHash()).toHex(), bond: { cfg: { operatorPkh: c.operatorPkh, bondReleaseHeight: String(c.bondReleaseHeight), maxFee: String(c.maxFee), epochLen: String(c.epochLen) }, utxo: op.data.utxo } })
       await this.d.store.transition(next.operationId, next.revision, 'seized', { cause: 'seize_broadcast', data: { seizeTxid: r.txid }, dueHeight: null, evidence: { txid: r.txid } })
     } catch (e) {
       const msg = (e as Error).message

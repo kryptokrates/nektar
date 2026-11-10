@@ -42,7 +42,9 @@
     "smt:vectors": "docker run --rm -v \"$PWD/..:/w\" -w /w/nektar/tools/smt-vectors -e CARGO_TARGET_DIR=/tmp/t rust:1-slim cargo run -q",
     "stack:up": "cd infra/teranode-quickstart && ./start.sh",
     "stack:down": "cd infra/teranode-quickstart && ./stop.sh",
-    "bundle:mcp": "node tools/bundle-mcp.mjs"
+    "bundle:mcp": "node tools/bundle-mcp.mjs",
+    "scenarios": "node packages/e2e/src/scenarios/runner.mjs",
+    "scenarios:verify": "node packages/e2e/src/scenarios/verify.mjs"
   },
   "devDependencies": {
     "@bsv/sdk": "4.0.1",

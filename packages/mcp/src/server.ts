@@ -1259,7 +1259,8 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       return s ? { ...s, releaseHeight: s.releaseHeight.toString(), deadline: s.deadline.toString() } : { deployed: false }
     }
     case 'bondSeize': {
-      const r = await mem.bondSeize(args.payToScript, args.bond)
+      const bond = args.bond ? { ...args.bond, cfg: { ...args.bond.cfg, bondReleaseHeight: BigInt(args.bond.cfg.bondReleaseHeight), maxFee: BigInt(args.bond.cfg.maxFee), epochLen: BigInt(args.bond.cfg.epochLen) } } : undefined
+      const r = await mem.bondSeize(args.payToScript, bond)
       return r ? { ...r, receipt: { decision: 'allow', action: 'bondSeize' } } : { deployed: false }
     }
     case 'bondCommit': {

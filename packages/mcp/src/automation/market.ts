@@ -98,6 +98,19 @@ export class MarketEngine {
     return hash && policy ? { hash, policy } : undefined
   }
 
+  async watchList (): Promise<{ sellerDomains: string[], collecting: Array<{ wantId: string }> }> {
+    const sellerDomains: string[] = []
+    const en = await this.d.store.operationByKey('seller-enabled')
+    if (en?.state === 'enabled') {
+      const pr = await this.d.store.activePolicy(String(en.data.policyHash))
+      if (pr?.roles?.includes('seller') === true) sellerDomains.push(...(pr.domains ?? []))
+    }
+    const collecting = (await this.d.store.operations({ role: 'buyer', states: ['collecting'] }))
+      .map(o => ({ wantId: ((o.data.want as SignedWant | undefined)?.want?.wantId) ?? '' }))
+      .filter(x => x.wantId !== '')
+    return { sellerDomains, collecting }
+  }
+
   publishWant (input: { domains: string[], question?: string, maxSats: number, wantId?: string }, policyHash: string): Promise<{ wantId: string, operationId: string }> {
     return this.run(async () => {
       const p = await this.d.store.activePolicy(policyHash)

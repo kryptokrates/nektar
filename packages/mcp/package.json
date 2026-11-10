@@ -37,7 +37,8 @@
     "qrcode": "1.5.4",
     "runar-sdk": "0.4.6",
     "sqlite3": "^5.1.7",
-    "zod": "3.25.76"
+    "zod": "3.25.76",
+    "@nektar/bstack": "workspace:*"
   },
   "devDependencies": {
     "@bsv/sdk": "4.0.1",

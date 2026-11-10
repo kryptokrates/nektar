@@ -6,7 +6,7 @@ import { buildCarrier, buildSweep } from '../src/carrier.js'
 import { encodePayload, lanesFor, laneOf } from '../src/market.js'
 import { submitAll, readWants } from '../src/hosts.js'
 import { provenTree } from './helpers.js'
-import { FakeTracker, minihost } from './minihost.js'
+import { FakeTracker, minihost } from '../src/testing.js'
 
 const NET = 'regtest'
 
@@ -99,7 +99,7 @@ test('hosts: host that 200s with empty admittance is took, not admitted', async 
 
 test('hosts: evil host answering an off-query want is dropped by the reader', async () => {
   const tr = new FakeTracker()
-  const a = await minihost([NET], tr, true)
+  const a = await minihost([NET], { tracker: tr, evil: true })
   const k = PrivateKey.fromRandom()
   const { beef } = await want(k, ['storage'])
   assert.ok((await submitAll([a.url], beef, lanesFor(NET, ['storage']))).ok)

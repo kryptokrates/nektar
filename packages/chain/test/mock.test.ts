@@ -73,3 +73,19 @@ test('mock chain: UTXO_SPENT rejects double-spend, reorg releases it', async () 
   const r4 = await chain.broadcast(mk())
   assert.equal(r4.status, 'success', 'reorg releases the outpoint')
 })
+
+test('MockFunder: markSpent blocks a utxo, addOwned returns an output to the pool', async () => {
+  const f = new MockFunder()
+  f.topup(3, 10_000)
+  const a = await f.take(1_000)
+  const b = await f.take(1_000)
+  void a; void b
+  const leftover = (f as unknown as { utxos: Array<{ tx: Transaction, vout: number }> }).utxos[0]!
+  f.markSpent(leftover.tx.id('hex'), leftover.vout)
+  await assert.rejects(f.take(1), /no utxo/)
+  const t = new Transaction()
+  t.addOutput({ lockingScript: new P2PKH().lock(f.address()), satoshis: 5_000 })
+  f.addOwned(t, 0)
+  const d = await f.take(4_000)
+  assert.equal(d.tx.id('hex'), t.id('hex'))
+})

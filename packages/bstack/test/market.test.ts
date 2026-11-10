@@ -6,7 +6,7 @@ import { buildCarrier, checkCarrier } from '../src/carrier.js'
 import { encodePayload, lanesFor, laneOf } from '../src/market.js'
 import { createNektarModule } from '../src/module.js'
 import { provenTree } from './helpers.js'
-import { FakeTracker } from './minihost.js'
+import { FakeTracker } from '../src/testing.js'
 
 const NET = 'regtest'
 const mod = (t: FakeTracker) => createNektarModule({ log: () => {}, chainTracker: t as never, engine: { submit: async () => ({}) } }, [NET])

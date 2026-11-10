@@ -411,6 +411,8 @@ export class NektarMemory {
   }
   /** current chain height for locktime-gated covenant calls */
   async chainHeight (): Promise<number> { return this.chain.tipHeight ? await this.chain.tipHeight() : await this.chain.currentHeight() }
+  /** the instance's chain tracker in @bsv/sdk ChainTracker shape (bstack checkCarrier/verify) */
+  sdkTracker (): import('@bsv/sdk').ChainTracker { return this.chain as unknown as import('@bsv/sdk').ChainTracker }
   /** {hash,height} pair near the current tip — walks back a few blocks because
    *  the header index lags the tip; the chain-bound identity an artifact claims */
   async tipRef (): Promise<{ tip: string, tipHeight: number } | undefined> {

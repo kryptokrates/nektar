@@ -4,7 +4,7 @@ import { PrivateKey, Transaction } from '@bsv/sdk'
 import { buildCarrier, checkCarrier, buildSweep } from '../src/carrier.js'
 import { FUNDING_TAG } from '../src/tree.js'
 import { provenTree } from './helpers.js'
-import { FakeTracker } from './minihost.js'
+import { FakeTracker } from '../src/testing.js'
 
 const pay = new TextEncoder().encode('hello carrier')
 

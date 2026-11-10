@@ -273,6 +273,16 @@ export class MockFunder implements Funder {
     this.utxos.splice(this.utxos.indexOf(u), 1)
     return u
   }
+  /** mark an outpoint spent so take() never hands it out again */
+  markSpent (txid: string, vout: number): void {
+    const i = this.utxos.findIndex(u => u.tx.id('hex') === txid && u.vout === vout)
+    if (i >= 0) this.utxos.splice(i, 1)
+  }
+  /** return a broadcast tx's output to the pool (change/escrow outs) */
+  addOwned (tx: Transaction, vout: number): void {
+    const o = tx.outputs[vout]
+    if (o !== undefined) this.utxos.push({ tx, vout, satoshis: o.satoshis ?? 0 })
+  }
   get keyPair (): PrivateKey { return this.key }
   /** the synthetic funding parents (register them with MockChain.registerParent) */
   get parents (): Transaction[] { return this.utxos.map(u => u.tx) }

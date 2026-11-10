@@ -302,6 +302,9 @@ importers:
       '@nektar/automaton':
         specifier: workspace:*
         version: link:../automaton
+      '@nektar/bstack':
+        specifier: workspace:*
+        version: link:../bstack
       '@nektar/chain':
         specifier: workspace:*
         version: link:../chain

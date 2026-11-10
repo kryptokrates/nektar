@@ -32,12 +32,28 @@ const rt = await openRuntime(configFromEnv())
 process.stderr.write(`nektar: network=${rt.network}\n`)
 const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
 if (paymentsEnabled()) process.stderr.write(`nektar: payments on — settling to ${requireOperatorWallet()}\n`)
+if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
+  const { openAutomation } = await import('./automation/runtime.js')
+  const { callTool } = await import('./server.js')
+  const rvs = (process.env.NEKTAR_OVERLAY_URL ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  rt.mem.automation = await openAutomation(rt.mem, {
+    network: rt.network, dataDir: rt.network === 'mock' && !process.env.NEKTAR_DATA_DIR ? undefined : (process.env.NEKTAR_DATA_DIR ?? '.nektar'),
+    rendezvousUrls: rvs, keeperUrl: process.env.NEKTAR_MAILBOX_URL, overlayToken: process.env.NEKTAR_OVERLAY_TOKEN,
+    intervalMs: Number(process.env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 5000),
+    call: (tool, args) => callTool(rt.mem, tool, args, { ops: rt.ops }),
+    opts: rt.network === 'main' ? { saleMaxFee: 500 } : {},
+    log: line => process.stderr.write(`nektar: ${line}
+`)
+  })
+  process.stderr.write(`nektar: automation on — ${rvs.length} rendezvous host(s); policies and approvals via 'pnpm automation'
+`)
+}
 const port = process.env.NEKTAR_HTTP_PORT
 if (port) {
   createHttpApi(rt.mem, rt.ops).listen(Number(port), process.env.NEKTAR_HTTP_HOST ?? '127.0.0.1', () => process.stderr.write(`nektar: HTTP + MCP on :${port} (/v1, /mcp)\n`))
 }
 let stopping = false
-const stop = async () => { if (stopping) return; stopping = true; await rt.close().catch(() => {}); process.exit(0) }
+const stop = async () => { if (stopping) return; stopping = true; await rt.mem.automation?.stop().catch(() => {}); await rt.close().catch(() => {}); process.exit(0) }
 process.on('SIGINT', () => { void stop() }); process.on('SIGTERM', () => { void stop() })
 if (!port) {
   await serveStdio(rt.mem, rt.ops)

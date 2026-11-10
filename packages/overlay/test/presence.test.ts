@@ -172,9 +172,11 @@ test('events: feed replays ads/catalogs/wants by cursor + domain filter', async 
   assert.equal(wants.length, 1)
   assert.equal(ls.wantFor(b.toPublicKey().toString()).want.maxSats, 500)
 
-  // stale want doesn't append
-  const old = signWant(b, { domains: ['soccer'], ts: 2 })
-  assert.equal(await ls.announceWant(old), true) // accepted no-op
+  // exact re-announce is a no-op; a conflicting same revision is rejected
+  assert.equal(await ls.announceWant(want), true)
+  assert.equal((await ls.feed({ kind: 'want' })).length, 1)
+  const conflict = signWant(b, { domains: ['soccer'], ts: 9, wantId: want.want.wantId, revision: 1 })
+  assert.equal(await ls.announceWant(conflict), false)
   assert.equal((await ls.feed({ kind: 'want' })).length, 1)
   // invalid sig rejected
   const bad = signWant(b, { domains: ['soccer'], ts: 9 }); bad.sig = '30' + '44'.repeat(35)

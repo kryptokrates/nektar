@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "policyId": "example-buyer-seller",
+  "network": "mock",
+  "agentPub": "02REPLACE_WITH_THE_INSTANCE_OPERATOR_PUBKEY_66_HEX_CHARS_0000000000000",
+  "roles": ["buyer", "seller"],
+  "notBefore": 0,
+  "notAfter": 4102444800000,
+  "domains": ["libfoo"],
+  "limits": {
+    "perPurchaseSats": 500,
+    "dailyPurchaseSats": 2000,
+    "perTxFeeSats": 600,
+    "dailyFeeSats": 3000,
+    "runTotalSats": 10000,
+    "maxLockedSats": 1500,
+    "maxUnconfirmedSats": 1500,
+    "maxUnconfirmedCount": 3
+  },
+  "scoring": {
+    "minimumScoreBps": 5000,
+    "weights": { "relevance": 3000, "provenance": 2500, "history": 1500, "price": 2000, "latency": 1000 },
+    "collectMs": 20000
+  },
+  "seller": { "minPriceSats": 100, "maxPriceSats": 1000, "maxPreparationsPerDay": 20, "sellableShards": ["guide"] },
+  "disclosure": { "allowPublic": false },
+  "ai": { "providers": ["scripted"], "allowSensitiveEgress": false, "maxOutputTokens": 256, "timeoutMs": 20000 },
+  "sandbox": { "mode": "sandbox-only" }
+}

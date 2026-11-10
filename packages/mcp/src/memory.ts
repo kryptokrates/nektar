@@ -337,6 +337,13 @@ export class NektarMemory {
   }
   private logKey: PrivateKey
   public budget?: import('./budget.js').BudgetAuthority
+  public automation?: import('./automation/types.js').Automation
+  async fetchTx (txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
+    const local = this.anchorTxs.get(txid) ?? (this.chain as any).getTx?.(txid)
+    if (local) return local
+    if (this.opts.network === 'mock' || this.opts.network === 'regtest' || this.opts.network === undefined) return undefined
+    try { return await this.fetchParentTx(txid) } catch { return undefined }
+  }
   /** state-change events for live surfaces (dashboard SSE, watchers) —
    *  emitted once per successful mutating tool call by the server layer */
   readonly events = new EventEmitter()
@@ -619,6 +626,8 @@ export class NektarMemory {
     const { Transaction } = await import('@bsv/sdk')
     const cached = this.txHexCache.get(txid)
     if (cached) return Transaction.fromHex(cached)
+    const local = (this.chain as any).getTx?.(txid) as import('@bsv/sdk').Transaction | undefined
+    if (local) return local
     const net = this.opts.network ?? 'main'
     const wocUrl = process.env.NEKTAR_WOC_URL
       ?? (net === 'testnet' ? 'https://api.whatsonchain.com/v1/bsv/test'

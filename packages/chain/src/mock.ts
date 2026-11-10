@@ -44,6 +44,7 @@ export class MockChain implements ChainTracker, Broadcaster {
   private known = new Map<string, Transaction>()
   /** register a parent tx (e.g. a MockFunder faucet utxo) into the node view */
   registerParent (tx: Transaction): void { this.known.set(tx.id('hex'), tx) }
+  getTx (txid: string): Transaction | undefined { return this.known.get(txid) }
 
   async broadcast (tx: Transaction): Promise<BroadcastResult> {
     const txid = tx.id('hex')

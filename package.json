@@ -22,6 +22,7 @@
     "doctor:fix": "node tools/doctor.mjs --fix",
     "config:nektar": "node tools/config.mjs",
     "service": "node tools/service.mjs",
+    "automation": "node tools/automation.mjs",
     "setup:codex": "node tools/setup-codex.mjs",
     "demo": "node tools/demo.mjs",
     "rendezvous": "node packages/overlay/serve.mjs",

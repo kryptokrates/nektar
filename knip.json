@@ -9,7 +9,7 @@
         "docs/**/*.mjs",
         "test/**/*.mjs"
       ],
-      "ignore": ["spikes/**", ".mod/**"],
+      "ignore": ["spikes/**", ".mod/**", "test/fixtures/**"],
       "ignoreBinaries": ["ss", "awk"]
     },
     "packages/mcp": {

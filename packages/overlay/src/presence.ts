@@ -9,6 +9,7 @@ import { PrivateKey, PublicKey, Signature, Script, Transaction } from '@bsv/sdk'
 import { sha256, utf8, toHex } from '@nektar/core'
 import type { Knex } from 'knex'
 import { EventEmitter } from 'node:events'
+import { randomUUID } from 'node:crypto'
 import type { TopicManager, AdmittanceInstructions, LookupService, LookupFormula, OutputAdmittedByTopic, OutputSpent } from '@bsv/overlay'
 
 const TAG = 'nektar-agent'
@@ -46,6 +47,16 @@ const stableJson = (v: unknown): string => JSON.stringify(v, (_k, x) =>
   (x !== null && typeof x === 'object' && !Array.isArray(x)
     ? Object.fromEntries(Object.keys(x as object).sort().map(k => [k, (x as Record<string, unknown>)[k]]))
     : x))
+
+export const marketJson = (v: unknown): string => JSON.stringify(v, (_k, x) =>
+  typeof x === 'bigint' ? x.toString()
+  : (x !== null && typeof x === 'object' && !Array.isArray(x)
+    ? Object.fromEntries(Object.keys(x as object).sort().map(k => [k, (x as Record<string, unknown>)[k]]))
+    : x))
+
+const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const HASH64_RE = /^[0-9a-f]{64}$/i
+const numLike = (v: unknown): boolean => typeof v === 'bigint' || (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) || (typeof v === 'string' && /^[0-9]{1,20}$/.test(v))
 
 // shared artifact machinery — every signed artifact does the same three ops:
 // canonical → sha256 → DER sign | verify. One impl, ~400 lines collapsed.
@@ -89,6 +100,11 @@ export function verifyCatalog (catalog: AgentCatalog, sigHex: string): boolean {
 // key so the request is attributable; latest-per-pub wins; exp honoured.
 export interface WantAd {
   pub: string // buyer identity key
+  wantId: string
+  revision: number
+  status: 'open' | 'canceled'
+  taskHash: string
+  previousHash?: string
   domains: string[] // what it needs (same tag space as catalogs)
   question?: string // free-text what-for (leaks intent — keep generic)
   maxSats?: number // ceiling the buyer will pay per call/record
@@ -108,8 +124,31 @@ export interface WantAd {
 }
 export interface SignedWant { want: WantAd, sig: string, pay?: { beef?: number[] | string } }
 
-const wantCanonical = (w: WantAd) => `${[...w.domains].sort().join(',')}|${w.question ?? ''}|${w.maxSats ?? ''}|${w.endpoint ?? ''}|${w.ts}|${w.exp ?? ''}|${w.net ?? ''}|${w.tipHeight ?? ''}|${w.tip ?? ''}|${w.streamSeq ?? ''}|${w.prevHash ?? ''}`
+const WANT_PREFIX = 'nektar:market:want:1\n'
+const wantCanonical = (w: WantAd) => `${WANT_PREFIX}${marketJson(w)}`
 const wantDigest = (w: WantAd) => sha256(utf8(wantCanonical(w)))
+
+export const wantArtifactHash = (sw: SignedWant): string => toHex(Uint8Array.from(sha256(utf8(marketJson({ want: sw.want, sig: sw.sig })))))
+
+export const wantTaskDigest = (fields: { domains: string[], question?: string, maxSats?: number }): string =>
+  toHex(Uint8Array.from(sha256(utf8(marketJson({ domains: [...fields.domains].sort(), maxSats: fields.maxSats ?? null, question: fields.question ?? '' })))))
+
+const wantShapeError = (w: WantAd): string | null => {
+  if (typeof w?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(w.pub)) return 'bad pub'
+  if (typeof w?.wantId !== 'string' || !ARTIFACT_ID_RE.test(w.wantId)) return 'bad wantId'
+  if (!Number.isSafeInteger(w.revision) || w.revision < 1) return 'bad revision'
+  if (w.status !== 'open' && w.status !== 'canceled') return 'bad status'
+  if (typeof w.taskHash !== 'string' || !HASH64_RE.test(w.taskHash)) return 'bad taskHash'
+  if (w.previousHash !== undefined && (typeof w.previousHash !== 'string' || !HASH64_RE.test(w.previousHash))) return 'bad previousHash'
+  if (w.revision > 1 && w.previousHash === undefined) return 'revision>1 requires previousHash'
+  if (!Array.isArray(w.domains) || w.domains.length === 0 || w.domains.length > 32 || !w.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return 'bad domains'
+  if (w.question !== undefined && (typeof w.question !== 'string' || w.question.length > 560)) return 'bad question'
+  if (w.maxSats !== undefined && (!Number.isSafeInteger(w.maxSats) || w.maxSats < 0)) return 'bad maxSats'
+  if (w.endpoint !== undefined && (typeof w.endpoint !== 'string' || !/^https?:\/\/\S{2,200}$/.test(w.endpoint))) return 'bad endpoint'
+  if (!Number.isSafeInteger(w.ts) || w.ts <= 0) return 'bad ts'
+  if (w.exp !== undefined && (!Number.isSafeInteger(w.exp) || w.exp <= Date.now())) return 'expired'
+  return null
+}
 
 // per-producer stream state — signers auto-stamp streamSeq/prevHash; the rv's
 // interval commitments cover the same stream a reader detects gaps in
@@ -125,24 +164,31 @@ export function streamCommit (pub: string, kind: string, hash: string): void {
   const s = streamState.get(`${pub}:${kind}`); if (s) s.hash = hash
 }
 
-export function signWant (key: PrivateKey, fields: Omit<WantAd, 'pub'>): SignedWant {
+export type WantInput = Omit<WantAd, 'pub' | 'wantId' | 'revision' | 'status' | 'taskHash' | 'previousHash'> & Partial<Pick<WantAd, 'wantId' | 'revision' | 'status' | 'taskHash' | 'previousHash'>>
+
+export function signWant (key: PrivateKey, fields: WantInput): SignedWant {
   const pub = key.toPublicKey().toString()
+  const want: WantAd = {
+    ...fields,
+    wantId: fields.wantId ?? randomUUID(),
+    revision: fields.revision ?? 1,
+    status: fields.status ?? 'open',
+    taskHash: fields.taskHash ?? wantTaskDigest(fields),
+    domains: [...fields.domains].sort(),
+    pub
+  }
+  const err = wantShapeError(want)
+  if (err !== null) throw new Error(`signWant: ${err}`)
   const sr = fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'want')
-  const want: WantAd = { ...fields, ...sr, domains: [...fields.domains].sort(), pub }
+  Object.assign(want, sr)
   streamCommit(pub, 'want', toHex(Uint8Array.from(wantDigest(want))))
   return { want, sig: sigFor(key, want, wantCanonical) }
 }
 
 export function verifyWant (want: WantAd, sigHex: string): boolean {
+  if (wantShapeError(want) !== null) return false
   if (want.streamSeq === undefined || want.prevHash === undefined) return false // v2: stream fields required
   try {
-    if (typeof want?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(want.pub)) return false
-    if (!Array.isArray(want.domains) || want.domains.length === 0 || want.domains.length > 32 || !want.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return false
-    if (want.question !== undefined && (typeof want.question !== 'string' || want.question.length > 560)) return false
-    if (want.maxSats !== undefined && (!Number.isSafeInteger(want.maxSats) || want.maxSats < 0)) return false
-    if (want.endpoint !== undefined && (typeof want.endpoint !== 'string' || !/^https?:\/\/\S{2,200}$/.test(want.endpoint))) return false
-    if (!Number.isSafeInteger(want.ts) || want.ts <= 0) return false
-    if (want.exp !== undefined && (!Number.isSafeInteger(want.exp) || want.exp <= Date.now())) return false
     return verifyDigest(want.pub, wantDigest(want), sigHex)
   } catch { return false }
 }
@@ -158,6 +204,13 @@ export function verifyWant (want: WantAd, sigHex: string): boolean {
 // lists many records; latest-per-key wins; expiry honoured at read.
 export interface OfferAd {
   pub: string // seller identity key
+  offerId: string
+  revision: number
+  previousHash?: string
+  wantId?: string
+  taskHash?: string
+  wantRevision?: number
+  buyerPub?: string
   shard: string // label the record lives on
   seq: number // the record for sale
   shardId?: string // on-chain shard id when known
@@ -167,7 +220,7 @@ export interface OfferAd {
   priceSats: number
   domains: string[] // from the shard's manifest — feed filtering
   replyTo?: string // pub of the want this offer answers — demand-meets-supply matching
-  offer?: Record<string, unknown> // the raw DisclosureSale offer (cfg/wrapped/sellerPub/offerSig/expiresAt/commitment)
+  offer?: Record<string, unknown> // the public DisclosureSale quote (cfg/sellerPub/offerSig/expiresAt) — never `wrapped`
   ts: number
   exp?: number
   /** signed network binding — 'ttn'|'main'|etc; sig covers it (can't replay cross-net) */
@@ -182,29 +235,78 @@ export interface OfferAd {
 }
 export interface SignedOffer { offer: OfferAd, sig: string, pay?: { beef?: number[] | string } }
 
-const offerCanonical = (o: OfferAd) => `${o.shard}|${o.seq}|${o.shardId ?? ''}|${o.leaf ?? ''}|${o.hdp ?? ''}|${o.batchR ?? ''}|${o.priceSats}|${[...o.domains].sort().join(',')}|${o.ts}|${o.exp ?? ''}|${o.replyTo ?? ''}|${o.net ?? ''}|${o.tipHeight ?? ''}|${o.tip ?? ''}|${o.streamSeq ?? ''}|${o.prevHash ?? ''}`
+const OFFER_PREFIX = 'nektar:market:offer:1\n'
+const offerCanonical = (o: OfferAd) => `${OFFER_PREFIX}${marketJson(o)}`
 const offerDigest = (o: OfferAd) => sha256(utf8(offerCanonical(o)))
-const offerKey = (o: OfferAd) => `${o.pub}:${o.shard}:${o.seq}`
+const offerKey = (o: OfferAd) => `${netLane(o.net) ?? ''}:${o.pub}:${o.offerId}`
+const wantKey = (w: WantAd) => `${netLane(w.net) ?? ''}:${w.pub}:${w.wantId}`
 
-export function signOffer (key: PrivateKey, fields: Omit<OfferAd, 'pub'>): SignedOffer {
+export const offerArtifactHash = (so: SignedOffer): string => toHex(Uint8Array.from(sha256(utf8(marketJson({ offer: so.offer, sig: so.sig })))))
+
+const QUOTE_CFG_KEYS = new Set(['sellerPkh', 'price', 'hWrapped', 'refundAfter', 'maxFee'])
+const QUOTE_KEYS = new Set(['cfg', 'sellerPub', 'expiresAt', 'offerSig'])
+export const publicQuoteError = (q: unknown): string | null => {
+  if (q === null || typeof q !== 'object' || Array.isArray(q)) return 'quote is not an object'
+  const o = q as Record<string, unknown>
+  for (const k of Object.keys(o)) if (!QUOTE_KEYS.has(k)) return `unexpected quote field '${k}'`
+  const c = o.cfg
+  if (c === null || typeof c !== 'object' || Array.isArray(c)) return 'bad cfg'
+  const cfg = c as Record<string, unknown>
+  for (const k of Object.keys(cfg)) if (!QUOTE_CFG_KEYS.has(k)) return `unexpected cfg field '${k}'`
+  for (const k of QUOTE_CFG_KEYS) if (!(k in cfg)) return `missing cfg.${k}`
+  if (typeof cfg.sellerPkh !== 'string' || !/^[0-9a-f]{40}$/i.test(cfg.sellerPkh)) return 'bad sellerPkh'
+  if (typeof cfg.hWrapped !== 'string' || !HASH64_RE.test(cfg.hWrapped)) return 'bad hWrapped'
+  for (const k of ['price', 'refundAfter', 'maxFee'] as const) if (!numLike(cfg[k])) return `bad cfg.${k}`
+  if (typeof o.sellerPub !== 'string' || !/^[0-9a-f]{66}$/i.test(o.sellerPub)) return 'bad sellerPub'
+  if (typeof o.offerSig !== 'string' || !/^[0-9a-f]{20,220}$/i.test(o.offerSig)) return 'bad offerSig'
+  if (o.expiresAt !== undefined && !numLike(o.expiresAt)) return 'bad expiresAt'
+  return null
+}
+
+const offerShapeError = (o: OfferAd): string | null => {
+  if (typeof o?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(o.pub)) return 'bad pub'
+  if (typeof o?.offerId !== 'string' || !ARTIFACT_ID_RE.test(o.offerId)) return 'bad offerId'
+  if (!Number.isSafeInteger(o.revision) || o.revision < 1) return 'bad revision'
+  if (o.previousHash !== undefined && (typeof o.previousHash !== 'string' || !HASH64_RE.test(o.previousHash))) return 'bad previousHash'
+  if (o.revision > 1 && o.previousHash === undefined) return 'revision>1 requires previousHash'
+  if (o.wantId !== undefined && (typeof o.wantId !== 'string' || !ARTIFACT_ID_RE.test(o.wantId))) return 'bad wantId'
+  if (o.taskHash !== undefined && (typeof o.taskHash !== 'string' || !HASH64_RE.test(o.taskHash))) return 'bad taskHash'
+  if (o.wantRevision !== undefined && (!Number.isSafeInteger(o.wantRevision) || o.wantRevision < 1)) return 'bad wantRevision'
+  if (o.buyerPub !== undefined && (typeof o.buyerPub !== 'string' || !/^[0-9a-f]{66}$/i.test(o.buyerPub))) return 'bad buyerPub'
+  if (typeof o.shard !== 'string' || o.shard.length === 0 || o.shard.length > 64) return 'bad shard'
+  if (!Number.isSafeInteger(o.seq) || o.seq < 0) return 'bad seq'
+  if (!Number.isSafeInteger(o.priceSats) || o.priceSats < 0) return 'bad priceSats'
+  if (!Array.isArray(o.domains) || o.domains.length > 32 || !o.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return 'bad domains'
+  for (const h of [o.shardId, o.leaf, o.hdp, o.batchR]) if (h !== undefined && (typeof h !== 'string' || !/^[0-9a-f]{40,64}$/i.test(h))) return 'bad hex field'
+  if (!Number.isSafeInteger(o.ts) || o.ts <= 0) return 'bad ts'
+  if (o.exp !== undefined && (!Number.isSafeInteger(o.exp) || o.exp <= Date.now())) return 'expired'
+  if (o.offer !== undefined) { const q = publicQuoteError(o.offer); if (q !== null) return q }
+  return null
+}
+
+export type OfferInput = Omit<OfferAd, 'pub' | 'offerId' | 'revision' | 'previousHash'> & Partial<Pick<OfferAd, 'offerId' | 'revision' | 'previousHash'>>
+
+export function signOffer (key: PrivateKey, fields: OfferInput): SignedOffer {
   const pub = key.toPublicKey().toString()
+  const offer: OfferAd = {
+    ...fields,
+    offerId: fields.offerId ?? randomUUID(),
+    revision: fields.revision ?? 1,
+    domains: [...fields.domains].sort(),
+    pub
+  }
+  const err = offerShapeError(offer)
+  if (err !== null) throw new Error(`signOffer: ${err}`)
   const sr = fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'offer')
-  const offer: OfferAd = { ...fields, ...sr, domains: [...fields.domains].sort(), pub }
+  Object.assign(offer, sr)
   streamCommit(pub, 'offer', toHex(Uint8Array.from(offerDigest(offer))))
   return { offer, sig: sigFor(key, offer, offerCanonical) }
 }
 
 export function verifyOffer (offer: OfferAd, sigHex: string): boolean {
+  if (offerShapeError(offer) !== null) return false
   if (offer.streamSeq === undefined || offer.prevHash === undefined) return false // v2: stream fields required
   try {
-    if (typeof offer?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(offer.pub)) return false
-    if (typeof offer.shard !== 'string' || offer.shard.length === 0 || offer.shard.length > 64) return false
-    if (!Number.isSafeInteger(offer.seq) || offer.seq < 0) return false
-    if (!Number.isSafeInteger(offer.priceSats) || offer.priceSats < 0) return false
-    if (!Array.isArray(offer.domains) || offer.domains.length > 32 || !offer.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return false
-    for (const h of [offer.shardId, offer.leaf, offer.hdp, offer.batchR]) if (h !== undefined && (typeof h !== 'string' || !/^[0-9a-f]{40,64}$/i.test(h))) return false
-    if (!Number.isSafeInteger(offer.ts) || offer.ts <= 0) return false
-    if (offer.exp !== undefined && (!Number.isSafeInteger(offer.exp) || offer.exp <= Date.now())) return false
     return verifyDigest(offer.pub, offerDigest(offer), sigHex)
   } catch { return false }
 }
@@ -400,12 +502,12 @@ export function catalogOutputScript ({ catalog, sig }: SignedCatalog): string {
   return Script.fromASM(`OP_RETURN ${toHex(utf8(CAT_TAG))} ${catalog.pub} ${toHex(utf8(payload))} ${sig}`).toHex()
 }
 export function wantOutputScript ({ want, sig }: SignedWant): string {
-  const payload = JSON.stringify({ domains: want.domains, ...(want.question !== undefined ? { question: want.question } : {}), ...(want.maxSats !== undefined ? { maxSats: want.maxSats } : {}), ...(want.endpoint !== undefined ? { endpoint: want.endpoint } : {}), ts: want.ts, ...(want.exp !== undefined ? { exp: want.exp } : {}) })
-  return Script.fromASM(`OP_RETURN ${toHex(utf8(WANT_TAG))} ${want.pub} ${toHex(utf8(payload))} ${sig}`).toHex()
+  const { pub: _pub, ...payload } = want
+  return Script.fromASM(`OP_RETURN ${toHex(utf8(WANT_TAG))} ${want.pub} ${toHex(utf8(JSON.stringify(payload)))} ${sig}`).toHex()
 }
 export function offerOutputScript ({ offer, sig }: SignedOffer): string {
-  const payload = JSON.stringify({ shard: offer.shard, seq: offer.seq, ...(offer.shardId ? { shardId: offer.shardId } : {}), ...(offer.leaf ? { leaf: offer.leaf } : {}), ...(offer.hdp ? { hdp: offer.hdp } : {}), ...(offer.batchR ? { batchR: offer.batchR } : {}), priceSats: offer.priceSats, domains: offer.domains, ...(offer.offer ? { offer: offer.offer } : {}), ts: offer.ts, ...(offer.exp !== undefined ? { exp: offer.exp } : {}) })
-  return Script.fromASM(`OP_RETURN ${toHex(utf8(OFFER_TAG))} ${offer.pub} ${toHex(utf8(payload))} ${sig}`).toHex()
+  const { pub: _pub, ...payload } = offer
+  return Script.fromASM(`OP_RETURN ${toHex(utf8(OFFER_TAG))} ${offer.pub} ${toHex(utf8(marketJson(payload)))} ${sig}`).toHex()
 }
 
 // The SDK's Script.chunks collapses OP_RETURN data into one chunk — decode the
@@ -461,8 +563,7 @@ export function parseWantOutput (scriptHex: string): SignedWant | null {
     if (!pushes || pushes.length !== 4) return null
     if (pushes[0]!.toString() !== WANT_TAG) return null
     const pub = pushes[1]!.toString('hex')
-    const p = JSON.parse(pushes[2]!.toString())
-    const want: WantAd = { pub, domains: p.domains, ...(p.question !== undefined ? { question: p.question } : {}), ...(p.maxSats !== undefined ? { maxSats: p.maxSats } : {}), ...(p.endpoint !== undefined ? { endpoint: p.endpoint } : {}), ts: p.ts, ...(p.exp !== undefined ? { exp: p.exp } : {}) }
+    const want: WantAd = { pub, ...JSON.parse(pushes[2]!.toString()) }
     return { want, sig: pushes[3]!.toString('hex') }
   } catch { return null }
 }
@@ -473,8 +574,7 @@ export function parseOfferOutput (scriptHex: string): SignedOffer | null {
     if (!pushes || pushes.length !== 4) return null
     if (pushes[0]!.toString() !== OFFER_TAG) return null
     const pub = pushes[1]!.toString('hex')
-    const p = JSON.parse(pushes[2]!.toString())
-    const offer: OfferAd = { pub, shard: p.shard, seq: p.seq, ...(p.shardId ? { shardId: p.shardId } : {}), ...(p.leaf ? { leaf: p.leaf } : {}), ...(p.hdp ? { hdp: p.hdp } : {}), ...(p.batchR ? { batchR: p.batchR } : {}), priceSats: p.priceSats, domains: p.domains, ...(p.offer ? { offer: p.offer } : {}), ts: p.ts, ...(p.exp !== undefined ? { exp: p.exp } : {}) }
+    const offer: OfferAd = { pub, ...JSON.parse(pushes[2]!.toString()) }
     return { offer, sig: pushes[3]!.toString('hex') }
   } catch { return null }
 }
@@ -516,6 +616,10 @@ export function createTmPresence (): TopicManager {
 interface Stored { ad: PresenceAd, txid: string, outputIndex: number }
 interface StoredCatalog { sc: SignedCatalog }
 
+// net aliases — ttn/testnet/mock/regtest are one lane; main/mainnet/bsv the other
+const netLane = (n?: string) => !n ? undefined : (n === 'main' || n === 'mainnet' || n === 'bsv' ? 'main' : 'test')
+const netEq = (a?: string, b?: string) => netLane(a) === netLane(b)
+
 export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: boolean, maxAgeMs?: number, listingFee?: { addr?: string, rateSatsPerHour?: number, freeWindowMs?: number }, tracker?: { headerAtHeight: (h: number) => Promise<{ hash: string } | undefined> } }): LookupService & {
   init: () => Promise<void>
   announce: (s: SignedAd) => Promise<boolean>
@@ -530,7 +634,8 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   delegationsFor: (grantee?: string) => SignedDelegation[]
   attestationsFor: (pub?: string) => SignedAttestation[]
   catalogFor: (pub: string) => SignedCatalog | undefined
-  wantFor: (pub: string) => SignedWant | undefined
+  wantFor: (pub: string, wantId?: string) => SignedWant | undefined
+  wantsFor: (pub?: string) => SignedWant[]
   offersFor: (domain?: string) => SignedOffer[]
   reputationFor: (pub: string) => SignedReputation | undefined
   reputationsFor: (domain?: string) => SignedReputation[]
@@ -552,9 +657,9 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   // latest signed catalog per pub; domain tag → set of pubs claiming it
   const catalogs = new Map<string, StoredCatalog>()
   const domainIndex = new Map<string, Set<string>>()
-  // latest signed want per pub
+  // wants keyed net:pub:wantId — independent wants coexist; latest revision per id (canceled kept as tombstone)
   const wants = new Map<string, SignedWant>()
-  // live offers keyed pub:shard:seq (one seller lists many records)
+  // live offers keyed net:pub:offerId — latest revision per id
   const offers = new Map<string, SignedOffer>()
   // signed settlement announcements (append — history IS the price feed)
   const settlements: SignedSettlement[] = []
@@ -577,9 +682,6 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   const bus = new EventEmitter()
   /** lazily probed — can the tracker resolve headers at all (genesis)? */
   let spvCapable: boolean | undefined
-  // net aliases — ttn/testnet/mock/regtest are one lane; main/mainnet/bsv the other
-  const netLane = (n?: string) => !n ? undefined : (n === 'main' || n === 'mainnet' || n === 'bsv' ? 'main' : 'test')
-  const netEq = (a?: string, b?: string) => netLane(a) === netLane(b)
   // expiry — only explicit exp expires; no implicit TTL (fee is the price of listing)
   const alive = (e: { exp?: number, ts?: number }) => e.exp === undefined || e.exp > Date.now()
   // bstore-style listing fee — exp beyond the free window must be paid for:
@@ -605,6 +707,8 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
   }
   const EVENTS_TABLE = 'nektar_ls_events'
   const WANTS_TABLE = 'nektar_ls_wants'
+  const MARKET_WANTS_TABLE = 'nektar_ls_market_wants'
+  const MARKET_OFFERS_TABLE = 'nektar_ls_market_offers'
 
   const reindex = (pub: string, ad: PresenceAd | undefined, prev?: PresenceAd) => {
     if (prev) for (const s of prev.shards) { const set = shardIndex.get(s); set?.delete(pub); if (set && set.size === 0) shardIndex.delete(s) }
@@ -632,15 +736,15 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     await kx(CAT_TABLE).insert(row).onConflict('pub').merge(row)
   }
   const persistWant = async (sw: SignedWant) => {
-    if (!kx || !(await kx.schema.hasTable(WANTS_TABLE))) return
-    const row = { pub: sw.want.pub, ts: sw.want.ts, want: JSON.stringify(sw.want), sig: sw.sig }
-    await kx(WANTS_TABLE).insert(row).onConflict('pub').merge(row)
+    if (!kx || !(await kx.schema.hasTable(MARKET_WANTS_TABLE))) return
+    const row = { key: wantKey(sw.want), net: netLane(sw.want.net) ?? '', pub: sw.want.pub, want_id: sw.want.wantId, revision: sw.want.revision, status: sw.want.status, ts: sw.want.ts, hash: wantArtifactHash(sw), want: JSON.stringify(sw.want), sig: sw.sig }
+    await kx(MARKET_WANTS_TABLE).insert(row).onConflict('key').merge(row)
   }
   const OFFERS_TABLE = 'nektar_ls_offers'
   const persistOffer = async (so: SignedOffer) => {
-    if (!kx || !(await kx.schema.hasTable(OFFERS_TABLE))) return
-    const row = { key: offerKey(so.offer), pub: so.offer.pub, ts: so.offer.ts, offer: JSON.stringify(so.offer), sig: so.sig }
-    await kx(OFFERS_TABLE).insert(row).onConflict('key').merge(row)
+    if (!kx || !(await kx.schema.hasTable(MARKET_OFFERS_TABLE))) return
+    const row = { key: offerKey(so.offer), net: netLane(so.offer.net) ?? '', pub: so.offer.pub, offer_id: so.offer.offerId, revision: so.offer.revision, ts: so.offer.ts, hash: offerArtifactHash(so), offer: JSON.stringify(so.offer), sig: so.sig }
+    await kx(MARKET_OFFERS_TABLE).insert(row).onConflict('key').merge(row)
   }
   const SETTLE_TABLE = 'nektar_ls_settlements'
   const persistSettlement = async (s: SignedSettlement) => {
@@ -658,6 +762,62 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     txid: s.txid, outputIndex: s.outputIndex,
     context: [...utf8(JSON.stringify(s.ad))]
   })
+
+  // net + SPV binding — announce (off-chain) and on-chain admission share this
+  const netAdmits = async (a: { net?: string, tipHeight?: number, tip?: string }): Promise<boolean> => {
+    if (opts?.net && ((a.net && !netEq(a.net, opts.net)) || (opts.strictNet && !a.net))) return false
+    if (opts?.tracker) {
+      spvCapable ??= !!(await opts.tracker.headerAtHeight(1).catch(() => undefined))
+      if (a.tip || a.tipHeight != null) {
+        const h = a.tipHeight != null ? await opts.tracker.headerAtHeight(a.tipHeight).catch(() => undefined) : undefined
+        if (h ? h.hash !== a.tip : opts.strictNet) return false
+      } else if (opts.strictNet && spvCapable) return false
+    }
+    return true
+  }
+
+  // revision rules: exact duplicate → true (no event); stale revision → true
+  // (ignored); same-revision conflict or wrong predecessor → rejected; a
+  // canceled revision stays as a tombstone so the chain can't be replayed
+  const admitWant = async (sw: SignedWant, mode: 'announce' | 'chain' | 'restore'): Promise<boolean> => {
+    if (!verifyWant(sw.want, sw.sig)) return false
+    if (mode === 'announce' && !paidFor(sw.want.ts, sw.want.exp, sw.pay)) return false
+    if (mode !== 'restore' && !(await netAdmits(sw.want))) return false
+    const k = wantKey(sw.want)
+    const prev = wants.get(k)
+    if (prev) {
+      const ph = wantArtifactHash(prev)
+      const ah = wantArtifactHash(sw)
+      if (ah === ph) return true
+      if (sw.want.revision < prev.want.revision) return true
+      if (sw.want.revision === prev.want.revision) return false
+      if (sw.want.revision !== prev.want.revision + 1 || sw.want.previousHash !== ph) return false
+    } else if (sw.want.revision > 1) return false
+    wants.set(k, sw)
+    if (mode !== 'restore') await persistWant(sw)
+    if (mode !== 'restore') appendEvent('want', sw.want.pub, sw.want.domains, sw)
+    return true
+  }
+
+  const admitOffer = async (so: SignedOffer, mode: 'announce' | 'chain' | 'restore'): Promise<boolean> => {
+    if (!verifyOffer(so.offer, so.sig)) return false
+    if (mode === 'announce' && !paidFor(so.offer.ts, so.offer.exp, so.pay)) return false
+    if (mode !== 'restore' && !(await netAdmits(so.offer))) return false
+    const k = offerKey(so.offer)
+    const prev = offers.get(k)
+    if (prev) {
+      const ph = offerArtifactHash(prev)
+      const ah = offerArtifactHash(so)
+      if (ah === ph) return true
+      if (so.offer.revision < prev.offer.revision) return true
+      if (so.offer.revision === prev.offer.revision) return false
+      if (so.offer.revision !== prev.offer.revision + 1 || so.offer.previousHash !== ph) return false
+    } else if (so.offer.revision > 1) return false
+    offers.set(k, so)
+    if (mode !== 'restore') await persistOffer(so)
+    if (mode !== 'restore') appendEvent('offer', so.offer.pub, so.offer.domains, so)
+    return true
+  }
 
   return {
     admissionMode: 'locking-script',
@@ -701,10 +861,29 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
           t.string('sig').notNullable()
         })
       }
-      for (const r of await kx(WANTS_TABLE).select('*')) {
-        const sw: SignedWant = { want: JSON.parse(r.want), sig: r.sig }
-        const prev = wants.get(r.pub)
-        if (!prev || prev.want.ts < sw.want.ts) wants.set(r.pub, sw)
+      if (!(await kx.schema.hasTable(MARKET_WANTS_TABLE))) {
+        await kx.schema.createTable(MARKET_WANTS_TABLE, t => {
+          t.string('key').primary()
+          t.string('net').notNullable()
+          t.string('pub').notNullable()
+          t.string('want_id').notNullable()
+          t.integer('revision').notNullable()
+          t.string('status').notNullable()
+          t.bigInteger('ts').notNullable()
+          t.string('hash').notNullable()
+          t.string('want').notNullable()
+          t.string('sig').notNullable()
+        })
+      }
+      for (const r of await kx(MARKET_WANTS_TABLE).select('*')) {
+        try {
+          const sw: SignedWant = { want: JSON.parse(r.want), sig: r.sig }
+          if (!verifyWant(sw.want, sw.sig) || wantArtifactHash(sw) !== r.hash) continue
+          if (opts?.net && ((sw.want.net && !netEq(sw.want.net, opts.net)) || (opts.strictNet && !sw.want.net))) continue
+          const k = wantKey(sw.want)
+          const prev = wants.get(k)
+          if (!prev || prev.want.revision < sw.want.revision) wants.set(k, sw)
+        } catch {}
       }
       if (!(await kx.schema.hasTable(EVENTS_TABLE))) {
         await kx.schema.createTable(EVENTS_TABLE, t => {
@@ -742,10 +921,28 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
           t.string('sig').notNullable()
         })
       }
-      for (const r of await kx(OFFERS_TABLE).select('*')) {
-        const so: SignedOffer = { offer: JSON.parse(r.offer), sig: r.sig }
-        const prev = offers.get(r.key)
-        if (!prev || prev.offer.ts < so.offer.ts) offers.set(r.key, so)
+      if (!(await kx.schema.hasTable(MARKET_OFFERS_TABLE))) {
+        await kx.schema.createTable(MARKET_OFFERS_TABLE, t => {
+          t.string('key').primary()
+          t.string('net').notNullable()
+          t.string('pub').notNullable()
+          t.string('offer_id').notNullable()
+          t.integer('revision').notNullable()
+          t.bigInteger('ts').notNullable()
+          t.string('hash').notNullable()
+          t.string('offer').notNullable()
+          t.string('sig').notNullable()
+        })
+      }
+      for (const r of await kx(MARKET_OFFERS_TABLE).select('*')) {
+        try {
+          const so: SignedOffer = { offer: JSON.parse(r.offer), sig: r.sig }
+          if (!verifyOffer(so.offer, so.sig) || offerArtifactHash(so) !== r.hash) continue
+          if (opts?.net && ((so.offer.net && !netEq(so.offer.net, opts.net)) || (opts.strictNet && !so.offer.net))) continue
+          const k = offerKey(so.offer)
+          const prev = offers.get(k)
+          if (!prev || prev.offer.revision < so.offer.revision) offers.set(k, so)
+        } catch {}
       }
       if (!(await kx.schema.hasTable(SETTLE_TABLE))) {
         await kx.schema.createTable(SETTLE_TABLE, t => {
@@ -777,7 +974,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
       }
     },
 
-    outputAdmittedByTopic: (payload: OutputAdmittedByTopic) => {
+    outputAdmittedByTopic: async (payload: OutputAdmittedByTopic) => {
       if (payload.mode !== 'locking-script') return
       const hex = typeof payload.lockingScript === 'string' ? payload.lockingScript : payload.lockingScript?.toHex?.() ?? ''
       const p = parseAnyPresence(hex)
@@ -805,24 +1002,8 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
         appendEvent('catalog', sc.catalog.pub, sc.catalog.shards.flatMap(e => e.domains), sc)
         return
       }
-      if (p.kind === 'want') {
-        const sw = p.sw
-        if (!verifyWant(sw.want, sw.sig)) return
-        const prevW = wants.get(sw.want.pub)
-        if (prevW && prevW.want.ts >= sw.want.ts) return
-        wants.set(sw.want.pub, sw)
-        void persistWant(sw)
-        appendEvent('want', sw.want.pub, sw.want.domains, sw)
-        return
-      }
-      const so = p.so
-      if (!verifyOffer(so.offer, so.sig)) return
-      const ok_ = offerKey(so.offer)
-      const prevO = offers.get(ok_)
-      if (prevO && prevO.offer.ts >= so.offer.ts) return
-      offers.set(ok_, so)
-      void persistOffer(so)
-      appendEvent('offer', so.offer.pub, so.offer.domains, so)
+      if (p.kind === 'want') { await admitWant(p.sw, 'chain'); return }
+      await admitOffer(p.so, 'chain')
     },
 
     // Off-chain rendezvous: same verification, same latest-wins rule, no UTXO.
@@ -857,49 +1038,9 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     // Signed want — the demand side. Latest-per-pub wins; exp honoured at
     // read time. Every accepted want lands on the event log so agents
     // subscribed to its domains see it on their next cursor pull.
-    announceWant: async (sw: SignedWant) => {
-      if (!verifyWant(sw.want, sw.sig)) return false
-      if (!paidFor(sw.want.ts, sw.want.exp, sw.pay)) return false // exp beyond free window must be paid
-      // signed net binding — reject artifacts claiming a different network
-      if (opts?.net && ((sw.want.net && !netEq(sw.want.net, opts.net)) || (opts.strictNet && !sw.want.net))) return false
-      // SPV binding — claimed tip must match this chain's header at that height.
-      // strict: reject unbound only when the tracker can actually verify
-      // (genesis probe — a tracker that can't serve block 1 can't verify at all)
-      if (opts?.tracker) {
-        spvCapable ??= !!(await opts.tracker.headerAtHeight(1).catch(() => undefined))
-        if (sw.want.tip || sw.want.tipHeight != null) {
-          const h = sw.want.tipHeight != null ? await opts.tracker.headerAtHeight(sw.want.tipHeight).catch(() => undefined) : undefined
-          // soft: reject only a proven mismatch; strict: require positive verification
-          if (h ? h.hash !== sw.want.tip : opts.strictNet) return false
-        } else if (opts.strictNet && spvCapable) return false
-      }
-      const prev = wants.get(sw.want.pub)
-      if (prev && prev.want.ts >= sw.want.ts) return true
-      wants.set(sw.want.pub, sw)
-      await persistWant(sw)
-      appendEvent('want', sw.want.pub, sw.want.domains, sw)
-      return true
-    },
+    announceWant: async (sw: SignedWant) => admitWant(sw, 'announce'),
 
-    announceOffer: async (so: SignedOffer) => {
-      if (!verifyOffer(so.offer, so.sig)) return false
-      if (!paidFor(so.offer.ts, so.offer.exp, so.pay)) return false
-      if (opts?.net && ((so.offer.net && !netEq(so.offer.net, opts.net)) || (opts.strictNet && !so.offer.net))) return false
-      if (opts?.tracker) {
-        spvCapable ??= !!(await opts.tracker.headerAtHeight(1).catch(() => undefined))
-        if (so.offer.tip || so.offer.tipHeight != null) {
-          const h = so.offer.tipHeight != null ? await opts.tracker.headerAtHeight(so.offer.tipHeight).catch(() => undefined) : undefined
-          if (h ? h.hash !== so.offer.tip : opts.strictNet) return false
-        } else if (opts.strictNet && spvCapable) return false
-      }
-      const k = offerKey(so.offer)
-      const prev = offers.get(k)
-      if (prev && prev.offer.ts >= so.offer.ts) return true
-      offers.set(k, so)
-      await persistOffer(so)
-      appendEvent('offer', so.offer.pub, so.offer.domains, so)
-      return true
-    },
+    announceOffer: async (so: SignedOffer) => admitOffer(so, 'announce'),
 
     announceSettlement: async (s: SignedSettlement) => {
       if (!verifySettlement(s.ad, s.sig)) return false
@@ -953,7 +1094,17 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
     attestationsFor: (pub?: string) => [...attestations.values()].filter(sa => pub === undefined || sa.attestation.pub === pub),
 
     catalogFor: (pub: string) => catalogs.get(pub)?.sc,
-    wantFor: (pub: string) => { const w = wants.get(pub); return w && alive(w.want) ? w : undefined },
+    wantFor: (pub: string, wantId?: string) => {
+      const open = (sw: SignedWant) => sw.want.status === 'open' && alive(sw.want)
+      if (wantId !== undefined) {
+        for (const sw of wants.values()) if (sw.want.pub === pub && sw.want.wantId === wantId) return open(sw) ? sw : undefined
+        return undefined
+      }
+      const mine = [...wants.values()].filter(sw => sw.want.pub === pub && open(sw))
+      mine.sort((a, b) => b.want.ts - a.want.ts || b.want.revision - a.want.revision)
+      return mine[0]
+    },
+    wantsFor: (pub?: string) => [...wants.values()].filter(sw => (pub === undefined || sw.want.pub === pub) && sw.want.status === 'open' && alive(sw.want)),
     offersFor: (domain?: string) => [...offers.values()].filter(so => alive(so.offer)).filter(so => domain === undefined || so.offer.domains.some(d => d.toLowerCase() === domain.toLowerCase())),
     reputationFor: (pub: string) => reps.get(pub),
     reputationsFor: (domain?: string) => [...reps.values()].filter(sr => domain === undefined || sr.card.entries.some(e => e.domain === domain.toLowerCase())),
@@ -1019,7 +1170,7 @@ export function createLsPresence (kx?: Knex, opts?: { net?: string, strictNet?: 
       let n = 0
       for (const [k, v] of envelopes) if (!alive({ ts: v.envelope.createdAt, exp: v.envelope.expiresAt })) { envelopes.delete(k); n++ }
       for (const [k, v] of beacons) if (!alive(v.beacon)) { beacons.delete(k); n++ }
-      for (const [k, v] of wants) if (!alive(v.want)) { wants.delete(k); n++ }
+      for (const [k, v] of wants) if (!alive(v.want) && v.want.status !== 'canceled') { wants.delete(k); n++ }
       for (const [k, v] of offers) if (!alive(v.offer)) { offers.delete(k); n++ }
       for (const [k, v] of ads) if (!alive(v.ad)) { ads.delete(k); n++ }
       for (const [k, v] of catalogs) if (!alive(v.sc.catalog)) { catalogs.delete(k); n++ }

@@ -94,6 +94,29 @@ export function verifyOfferSig (offer: { cfg: SaleOffer['cfg'], sellerPub: strin
   } catch { return false }
 }
 
+export type SaleQuote = Omit<SaleOffer, 'wrapped'>
+
+export function publicSaleQuote (offer: SaleOffer): SaleQuote {
+  const q: SaleQuote = {
+    cfg: { sellerPkh: offer.cfg.sellerPkh, price: offer.cfg.price, hWrapped: offer.cfg.hWrapped, refundAfter: offer.cfg.refundAfter, maxFee: offer.cfg.maxFee },
+    sellerPub: offer.sellerPub,
+    offerSig: offer.offerSig
+  }
+  if (offer.expiresAt !== undefined) q.expiresAt = offer.expiresAt
+  return q
+}
+
+export function saleQuoteWire (q: SaleQuote): Record<string, unknown> {
+  const n = (v: bigint | number | string | undefined): number | string | undefined => typeof v === 'bigint' ? (v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v.toString()) : v
+  const out: Record<string, unknown> = {
+    cfg: { sellerPkh: q.cfg.sellerPkh, price: n(q.cfg.price), hWrapped: q.cfg.hWrapped, refundAfter: n(q.cfg.refundAfter), maxFee: n(q.cfg.maxFee) },
+    sellerPub: q.sellerPub,
+    offerSig: q.offerSig
+  }
+  if (q.expiresAt !== undefined) out.expiresAt = n(q.expiresAt)
+  return out
+}
+
 // --- buyer side -----------------------------------------------------------
 
 /** Minimal push-opcode reader (script pushes only — a parser, not an author). */
@@ -108,6 +131,8 @@ export function parsePushes (scriptHex: string): Bytes[] {
     else if (op === 0x4d) { len = b[i]! | (b[i + 1]! << 8); i += 2 }
     else if (op === 0) { out.push(new Uint8Array(0)); continue }
     else if (op === 0x4e) { len = b[i]! | (b[i + 1]! << 8) | (b[i + 2]! << 16) | (b[i + 3]! << 24); i += 4 }
+    else if (op === 0x4f) { out.push(Uint8Array.of(0x81)); continue }
+    else if (op >= 0x51 && op <= 0x60) { out.push(Uint8Array.of(op - 0x50)); continue }
     else throw new Error(`parsePushes: non-push opcode 0x${op.toString(16)} at ${i - 1}`)
     out.push(b.slice(i, i + len)); i += len
   }

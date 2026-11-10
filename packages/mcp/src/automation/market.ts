@@ -1,0 +1,473 @@
+import { PublicKey, Transaction, P2PKH, type PrivateKey } from '@bsv/sdk'
+import { signWant, verifyWant, signOffer, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/overlay'
+import { verifyOfferSig, publicSaleQuote, saleQuoteWire } from '@nektar/identity'
+import { DisclosureSaleHost, CheckpointBond } from '@nektar/anchor'
+import { parseFragment, fromHex } from '@nektar/core'
+import type { AutomationStore, Operation, OutboxItem } from './store.js'
+import { decidePurchase, decideOffer, digestOf, type AutomationPolicy, type ActionContext } from './policy.js'
+import { rankOffers, type ScoreCandidate } from './scoring.js'
+import type { AIExecutor } from './ai.js'
+
+export type MarketMessage =
+  | { type: 'quote', wantId: string, offerId: string, commitment: any, mode: string }
+  | { type: 'accept', wantId: string, offerId: string, utxo: { txid: string, vout: number, satoshis: number, script: string }, depositorPkh: string }
+  | { type: 'delivered', wantId: string, offerId: string, txid: string, txHex: string }
+
+export interface MarketTransport {
+  publishWant: (sw: SignedWant) => Promise<void>
+  publishOffer: (so: SignedOffer) => Promise<void>
+  send: (toPub: string, msg: MarketMessage) => Promise<void>
+}
+
+export interface MarketMemory {
+  shardManifest: (shard: string) => Promise<{ shardId: string, domains: string[], offers?: Array<{ kind: string, priceSats?: number }> } | undefined>
+  records: (shard: string) => Promise<Array<{ seq: number, level?: number, fragment: { d: Uint8Array } }>>
+}
+
+export interface MarketDeps {
+  store: AutomationStore
+  call: (tool: string, args: any) => Promise<any>
+  memory: MarketMemory
+  key: PrivateKey
+  network: string
+  height: () => Promise<number>
+  fetchTx: (txid: string) => Promise<Transaction | undefined>
+  transport: MarketTransport
+  ai: AIExecutor
+  now?: () => number
+  opts?: Partial<MarketOptions>
+}
+
+export interface MarketOptions {
+  refundBlocks: number
+  offerTtlBlocks: number
+  saleMaxFee: number
+  escrowFeeReserveSats: number
+  sellerSafetyBlocks: number
+  approvalTtlMs: number
+}
+
+const DEFAULTS: MarketOptions = { refundBlocks: 144, offerTtlBlocks: 12, saleMaxFee: 10, escrowFeeReserveSats: 500, sellerSafetyBlocks: 2, approvalTtlMs: 86_400_000 }
+const pkhOf = (pub: string) => Buffer.from(PublicKey.fromString(pub).toHash() as number[]).toString('hex')
+const CAP = /_cap$|_above_policy$|^domain_outside_policy$/
+const TERMINAL = ['expired', 'denied', 'refunded', 'useful', 'not_useful', 'disputed', 'canceled', 'declined', 'preparation_failed', 'completion_failed', 'settled', 'enabled', 'funding_failed', 'seized', 'seize_failed']
+
+interface StoredOffer { so: SignedOffer, commitment?: any, mode?: string, reject?: string }
+
+export class MarketEngine {
+  private o: MarketOptions
+  private now: () => number
+  private me: string
+  private chain: Promise<unknown> = Promise.resolve()
+  private inflight = new Set<string>()
+
+  constructor (private d: MarketDeps) {
+    this.o = { ...DEFAULTS, ...d.opts }
+    this.now = d.now ?? Date.now
+    this.me = d.key.toPublicKey().toString()
+  }
+
+  get pub (): string { return this.me }
+
+  private run<T> (fn: () => Promise<T>): Promise<T> {
+    const p = this.chain.then(fn, fn)
+    this.chain = p.catch(() => {})
+    return p
+  }
+
+  // ── owner surface ───────────────────────────────────────────────────────
+  async enableSeller (policyHash: string): Promise<void> {
+    const p = await this.d.store.activePolicy(policyHash)
+    if (!p || !p.roles.includes('seller') || p.agentPub !== this.me || p.network !== this.d.network) throw new Error('enableSeller: no active seller policy for this agent and network')
+    const { operation, created } = await this.d.store.createOperation({ role: 'seller', kind: 'enable', dedupeKey: 'seller-enabled', policyHash, network: this.d.network, state: 'enabled', data: { policyHash } })
+    if (!created && operation.data.policyHash !== policyHash) await this.d.store.transition(operation.operationId, operation.revision, 'enabled', { cause: 'seller_policy_changed', data: { policyHash } })
+  }
+
+  private async sellerPolicy (): Promise<{ hash: string, policy: AutomationPolicy } | undefined> {
+    const op = await this.d.store.operationByKey('seller-enabled')
+    const hash = op?.data.policyHash as string | undefined
+    const policy = hash ? await this.d.store.activePolicy(hash) : undefined
+    return hash && policy ? { hash, policy } : undefined
+  }
+
+  publishWant (input: { domains: string[], question?: string, maxSats: number, wantId?: string }, policyHash: string): Promise<{ wantId: string, operationId: string }> {
+    return this.run(async () => {
+      const p = await this.d.store.activePolicy(policyHash)
+      if (!p || !p.roles.includes('buyer') || p.agentPub !== this.me || p.network !== this.d.network) throw new Error('publishWant: no active buyer policy for this agent and network')
+      const domains = input.domains.map(x => String(x).toLowerCase())
+      if (!domains.length || !domains.every(x => p.domains.includes(x))) throw new Error('publishWant: domain outside the approved policy')
+      if (!Number.isSafeInteger(input.maxSats) || input.maxSats <= 0 || input.maxSats > p.limits.perPurchaseSats) throw new Error('publishWant: maxSats outside the approved per-purchase limit')
+      const now = this.now()
+      const sw = signWant(this.d.key, { domains, ...(input.question ? { question: input.question } : {}), maxSats: input.maxSats, ts: now, net: this.d.network, ...(input.wantId ? { wantId: input.wantId } : {}) })
+      const { operation, created } = await this.d.store.createOperation({ role: 'buyer', kind: 'purchase', dedupeKey: `buyer:${this.d.network}:${sw.want.wantId}`, policyHash, network: this.d.network, state: 'published', data: { want: sw, offers: {} } })
+      if (created) {
+        await this.d.store.transition(operation.operationId, 1, 'collecting', { cause: 'want_signed', dueAt: now + p.scoring.collectMs, outbox: [{ actionId: `${operation.operationId}:want`, kind: 'publish-want', destination: 'feed', payload: sw }] })
+      }
+      return { wantId: (operation.data.want as SignedWant).want.wantId, operationId: operation.operationId }
+    })
+  }
+
+  status (operationId: string): Promise<{ operation: Operation, events: Awaited<ReturnType<AutomationStore['events']>> } | undefined> {
+    return this.run(async () => {
+      const operation = await this.d.store.operation(operationId)
+      if (!operation) return undefined
+      const data = { ...operation.data }
+      if (operation.role === 'seller' && data.offer) data.offer = { ...(data.offer as object), wrapped: '[sealed]' }
+      return { operation: { ...operation, data }, events: await this.d.store.events(operationId) }
+    })
+  }
+
+  markUsefulness (operationId: string, useful: boolean, evidence: unknown): Promise<void> {
+    return this.run(async () => {
+      const op = await this.d.store.operation(operationId)
+      if (!op || op.state !== 'disclosure_verified') throw new Error('markUsefulness: operation is not awaiting evaluation')
+      await this.d.store.transition(op.operationId, op.revision, useful ? 'useful' : 'not_useful', { cause: 'sandbox_evaluation', evidence, data: { usefulness: { useful, evidence } } })
+    })
+  }
+
+  watchBond (d: { cfg: { operatorPkh: string, bondReleaseHeight: string | number | bigint, maxFee: string | number | bigint, epochLen: string | number | bigint }, txid: string, vout: number }, policyHash: string): Promise<{ operationId: string, deadline: number }> {
+    return this.run(async () => {
+      if (!(await this.d.store.activePolicy(policyHash))) throw new Error('watchBond: no active policy')
+      const tx = await this.d.fetchTx(d.txid)
+      const out = tx?.outputs[d.vout]
+      if (!tx || tx.id('hex') !== d.txid || !out) throw new Error('watchBond: bond output is not observable on this chain view')
+      const cfg = { operatorPkh: d.cfg.operatorPkh, bondReleaseHeight: BigInt(d.cfg.bondReleaseHeight), maxFee: BigInt(d.cfg.maxFee), epochLen: BigInt(d.cfg.epochLen) }
+      const utxo = { txid: d.txid, vout: d.vout, satoshis: out.satoshis ?? 0, script: out.lockingScript.toHex() }
+      const state = new CheckpointBond(cfg).stateOf(utxo.script)
+      if (state.seized !== 0n) throw new Error('watchBond: bond is already seized')
+      const deadline = Number(state.deadline)
+      const { operation } = await this.d.store.createOperation({ role: 'observer', kind: 'bond-watch', dedupeKey: `bond:${this.d.network}:${d.txid}:${d.vout}`, policyHash, network: this.d.network, state: 'watching', data: { cfg: { operatorPkh: cfg.operatorPkh, bondReleaseHeight: cfg.bondReleaseHeight.toString(), maxFee: cfg.maxFee.toString(), epochLen: cfg.epochLen.toString() }, utxo, n: Number(state.n) }, dueHeight: deadline })
+      return { operationId: operation.operationId, deadline }
+    })
+  }
+
+  private async seize (op: Operation): Promise<void> {
+    const c = op.data.cfg as Record<string, string>
+    const next = await this.d.store.transition(op.operationId, op.revision, 'seizing', { cause: 'deadline_reached' })
+    try {
+      const r = await this.d.call('bondSeize', { payToScript: new P2PKH().lock(this.d.key.toPublicKey().toHash()).toHex(), bond: { cfg: { operatorPkh: c.operatorPkh, bondReleaseHeight: BigInt(c.bondReleaseHeight!), maxFee: BigInt(c.maxFee!), epochLen: BigInt(c.epochLen!) }, utxo: op.data.utxo } })
+      await this.d.store.transition(next.operationId, next.revision, 'seized', { cause: 'seize_broadcast', data: { seizeTxid: r.txid }, dueHeight: null, evidence: { txid: r.txid } })
+    } catch (e) {
+      const msg = (e as Error).message
+      await this.d.store.transition(next.operationId, next.revision, /not yet seizable/.test(msg) ? 'watching' : 'seize_failed', { cause: 'seize_refused', lastError: msg.slice(0, 500) })
+    }
+  }
+
+  // ── inputs ──────────────────────────────────────────────────────────────
+  async ingestEvents (source: string, events: Array<{ seq: number | string, kind: string, payload: unknown }>, cursor: string): Promise<void> {
+    const items = events.filter(e => e.kind === 'want' || e.kind === 'offer').map(e => ({ messageId: String(e.seq), artifactHash: digestOf('nektar:market:inbox:1', e.payload), kind: e.kind, payload: e.payload }))
+    await this.d.store.ingest(source, items, cursor)
+  }
+
+  async ingestMessage (fromPub: string, msg: MarketMessage): Promise<void> {
+    const payload = { from: fromPub, msg }
+    const h = digestOf('nektar:market:inbox:1', payload)
+    await this.d.store.ingest(`msg:${fromPub}`, [{ messageId: h, artifactHash: h, kind: 'message', payload }], h)
+  }
+
+  tick (): Promise<void> {
+    return this.run(async () => {
+      for (const i of await this.d.store.pendingInbox()) {
+        try {
+          if (i.kind === 'want') await this.onWant(i.payload as SignedWant)
+          else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
+          else await this.onMessage((i.payload as any).from, (i.payload as any).msg)
+          await this.d.store.completeInbox(i.source, i.messageId)
+        } catch (e) { await this.d.store.failInbox(i.source, i.messageId, (e as Error).message) }
+      }
+      const height = await this.d.height()
+      for (const op of await this.d.store.operations({ notStates: TERMINAL })) {
+        try { await this.advance(op, height) } catch (e) {
+          const cur = await this.d.store.operation(op.operationId)
+          if (cur && cur.revision === op.revision) await this.d.store.transition(cur.operationId, cur.revision, cur.state, { cause: 'tick_error', lastError: (e as Error).message.slice(0, 500) })
+        }
+      }
+      await this.flush()
+    })
+  }
+
+  private async flush (): Promise<void> {
+    for (const item of await this.d.store.dueOutbox()) {
+      try { await this.deliver(item); await this.d.store.ackOutbox(item.actionId) } catch (e) { await this.d.store.retryOutbox(item.actionId, (e as Error).message) }
+    }
+  }
+
+  private async deliver (i: OutboxItem): Promise<void> {
+    if (i.kind === 'publish-want') return await this.d.transport.publishWant(i.payload as SignedWant)
+    if (i.kind === 'publish-offer') return await this.d.transport.publishOffer(i.payload as SignedOffer)
+    if (i.kind === 'message') return await this.d.transport.send(i.destination, i.payload as MarketMessage)
+    throw new Error(`unknown outbox kind ${i.kind}`)
+  }
+
+  // ── seller ──────────────────────────────────────────────────────────────
+  private async onWant (sw: SignedWant): Promise<void> {
+    const sp = await this.sellerPolicy()
+    if (!sp || !sw?.want || !verifyWant(sw.want, sw.sig)) return
+    const w = sw.want
+    if (w.pub === this.me || w.status !== 'open' || w.net !== this.d.network) return
+    if (w.exp !== undefined && w.exp <= this.now()) return
+    const p = sp.policy
+    if (p.ai.providers.length && !p.ai.providers.includes(this.d.ai.provider)) return
+    if (this.d.ai.egress === 'external' && !p.ai.allowSensitiveEgress) return
+    const dayStart = this.now() - 86_400_000
+    const today = (await this.d.store.operations({ role: 'seller' })).filter(x => x.kind === 'sale' && x.createdAt > dayStart).length
+    if (today >= p.seller.maxPreparationsPerDay) return
+    let pick: { shard: string, seq: number, price: number, manifest: NonNullable<Awaited<ReturnType<MarketMemory['shardManifest']>>>, relevanceBps: number, model: unknown } | undefined
+    for (const shard of p.seller.sellableShards) {
+      const manifest = await this.d.memory.shardManifest(shard)
+      if (!manifest || !w.domains.every(x => manifest.domains.includes(x))) continue
+      const price = manifest.offers?.find(x => x.kind === 'record')?.priceSats ?? manifest.offers?.find(x => x.kind === 'answer')?.priceSats
+      if (price === undefined || (w.maxSats !== undefined && price > w.maxSats)) continue
+      const decision = decideOffer(p, { network: this.d.network, agentPub: this.me, domains: w.domains, shard, priceSats: price, publicDisclosure: p.disclosure.allowPublic, now: this.now() })
+      if (decision.kind !== 'allow') continue
+      const candidates = (await this.d.memory.records(shard)).filter(r => (r.level ?? 0) === 0 && r.fragment.d.length > 0)
+        .map(r => ({ id: String(r.seq), text: Buffer.from(r.fragment.d).toString('utf8').slice(0, 4000) }))
+      if (!candidates.length) continue
+      const res = await this.d.ai.execute({ jobId: `${w.pub}:${w.wantId}:${w.revision}:${shard}`, kind: 'match', question: w.question ?? '', domains: w.domains, candidates, maxOutputTokens: p.ai.maxOutputTokens, timeoutMs: p.ai.timeoutMs })
+      if (res.stop !== 'ok' || res.choice === undefined) continue
+      if (!pick || res.relevanceBps > pick.relevanceBps) pick = { shard, seq: Number(res.choice), price, manifest, relevanceBps: res.relevanceBps, model: res.model }
+    }
+    if (!pick) return
+    const { operation, created } = await this.d.store.createOperation({ role: 'seller', kind: 'sale', dedupeKey: `seller:${this.d.network}:${w.pub}:${w.wantId}:${w.revision}`, policyHash: sp.hash, network: this.d.network, state: 'preparing', data: { want: sw, shard: pick.shard, seq: pick.seq, priceSats: pick.price, ai: { relevanceBps: pick.relevanceBps, model: pick.model } } })
+    if (!created) return
+    try {
+      const h = await this.d.height()
+      const offer = await this.d.call('sale#offerMemory', { shard: pick.shard, seq: pick.seq, price: pick.price, refundAfter: h + this.o.refundBlocks, maxFee: this.o.saleMaxFee, expiresAt: h + this.o.offerTtlBlocks, ...(p.disclosure.allowPublic ? {} : { buyerPub: w.pub }) })
+      const c = offer.commitment
+      const so = signOffer(this.d.key, {
+        offerId: operation.operationId, shard: pick.shard, seq: pick.seq, shardId: pick.manifest.shardId, domains: pick.manifest.domains,
+        leaf: c.leaf, hdp: c.hdp, ...(c.batchR ? { batchR: c.batchR } : {}), priceSats: pick.price,
+        offer: saleQuoteWire(publicSaleQuote(offer)), wantId: w.wantId, taskHash: w.taskHash, wantRevision: w.revision, buyerPub: w.pub, replyTo: w.pub,
+        ts: this.now(), net: this.d.network
+      })
+      await this.d.store.transition(operation.operationId, 1, 'quoted', {
+        cause: 'offer_prepared', data: { offer, signedOffer: so }, dueHeight: h + this.o.refundBlocks,
+        outbox: [
+          { actionId: `${operation.operationId}:offer`, kind: 'publish-offer', destination: 'feed', payload: so },
+          { actionId: `${operation.operationId}:quote`, kind: 'message', destination: w.pub, payload: { type: 'quote', wantId: w.wantId, offerId: operation.operationId, commitment: c, mode: offer.mode } }
+        ]
+      })
+    } catch (e) {
+      await this.d.store.transition(operation.operationId, 1, 'preparation_failed', { cause: 'preparation_error', lastError: (e as Error).message.slice(0, 500) })
+    }
+  }
+
+  private async onAccept (from: string, m: Extract<MarketMessage, { type: 'accept' }>): Promise<void> {
+    const op = await this.d.store.operation(m.offerId)
+    if (!op || op.role !== 'seller' || op.state !== 'quoted') return
+    const w = (op.data.want as SignedWant).want
+    const offer = op.data.offer as any
+    const refuse = async (reason: string) => { await this.d.store.transition(op.operationId, op.revision, 'quoted', { cause: 'accept_refused', evidence: { reason } }) }
+    if (from !== w.pub || m.wantId !== w.wantId) return
+    if (m.depositorPkh !== pkhOf(from)) return await refuse('depositor is not the buyer key')
+    const cfg = { ...offer.cfg, price: BigInt(offer.cfg.price), refundAfter: BigInt(offer.cfg.refundAfter), maxFee: BigInt(offer.cfg.maxFee) }
+    const script = DisclosureSaleHost.escrowScript(cfg, m.depositorPkh)
+    if (m.utxo?.script !== script) return await refuse('escrow script does not match the quoted terms')
+    if (!Number.isSafeInteger(m.utxo.satoshis) || m.utxo.satoshis < Number(offer.cfg.price) + 1) return await refuse('escrow is underfunded')
+    const tx = await this.d.fetchTx(m.utxo.txid)
+    const out = tx?.outputs[m.utxo.vout]
+    if (!tx || tx.id('hex') !== m.utxo.txid || !out) return await refuse('escrow transaction not observable yet')
+    if (out.lockingScript.toHex() !== script || out.satoshis !== m.utxo.satoshis) return await refuse('on-chain escrow output differs from the claimed one')
+    const h = await this.d.height()
+    if (h + this.o.sellerSafetyBlocks >= Number(offer.cfg.refundAfter)) return await refuse('too close to the refund deadline')
+    const next = await this.d.store.transition(op.operationId, op.revision, 'completing', { cause: 'escrow_verified', data: { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } } })
+    await this.complete(next)
+  }
+
+  private async complete (op: Operation): Promise<void> {
+    const e = op.data.escrow as any
+    const offer = op.data.offer as any
+    const w = (op.data.want as SignedWant).want
+    const r = await this.d.call('sale#complete', { cfg: e.cfg, utxo: e.utxo, wrapped: offer.wrapped })
+    if (r.accepted !== true) {
+      await this.d.store.transition(op.operationId, op.revision, 'completion_failed', { cause: 'completion_refused', lastError: String(r.reason ?? 'refused').slice(0, 500) })
+      return
+    }
+    await this.d.store.transition(op.operationId, op.revision, 'completion_submitted', {
+      cause: 'disclosure_broadcast', data: { completeTxid: r.txid, sellerSats: r.sellerSats },
+      outbox: [{ actionId: `${op.operationId}:delivered`, kind: 'message', destination: w.pub, payload: { type: 'delivered', wantId: w.wantId, offerId: op.operationId, txid: r.txid, txHex: r.txHex } }]
+    })
+  }
+
+  // ── buyer ───────────────────────────────────────────────────────────────
+  private offerReject (so: SignedOffer, w: SignedWant['want']): string | undefined {
+    const o = so.offer
+    if (o.buyerPub !== this.me) return 'not bound to this buyer'
+    if (o.taskHash !== w.taskHash || o.wantRevision !== w.revision) return 'task or revision mismatch'
+    if (o.net !== this.d.network) return 'wrong network'
+    if (o.exp !== undefined && o.exp <= this.now()) return 'expired'
+    if (w.maxSats !== undefined && o.priceSats > w.maxSats) return 'above the want ceiling'
+    const q = o.offer as any
+    if (!q?.cfg) return 'no signed quote'
+    if (q.sellerPub !== o.pub || Number(q.cfg.price) !== o.priceSats) return 'quote does not match the listing'
+    if (q.cfg.sellerPkh !== pkhOf(o.pub)) return 'payee is not the seller key'
+    if (Number(q.cfg.maxFee) > this.o.escrowFeeReserveSats) return 'fee bound too high'
+    const leaf = o.leaf ?? ''
+    if (!verifyOfferSig(q, this.me, leaf) && !verifyOfferSig(q, '', leaf)) return 'quote signature invalid'
+    return undefined
+  }
+
+  private async onOffer (so: SignedOffer): Promise<void> {
+    if (!so?.offer?.wantId || !verifyOffer(so.offer, so.sig)) return
+    const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${so.offer.wantId}`)
+    if (!op || op.state !== 'collecting') return
+    const offers = { ...(op.data.offers as Record<string, StoredOffer>) }
+    const key = `${so.offer.pub}:${so.offer.offerId}`
+    const prev = offers[key]
+    if (prev && prev.so.offer.revision >= so.offer.revision) return
+    if (!prev && Object.keys(offers).length >= 64) return
+    const reject = this.offerReject(so, (op.data.want as SignedWant).want)
+    offers[key] = { so, ...(reject ? { reject } : {}), ...(prev?.commitment ? { commitment: prev.commitment, mode: prev.mode } : {}) }
+    await this.d.store.transition(op.operationId, op.revision, 'collecting', { cause: reject ? 'offer_rejected' : 'offer_recorded', data: { offers }, evidence: { offerKey: key, ...(reject ? { reject } : {}) } })
+  }
+
+  private async onQuote (from: string, m: Extract<MarketMessage, { type: 'quote' }>): Promise<void> {
+    const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${m.wantId}`)
+    if (!op || op.state !== 'collecting') return
+    const offers = { ...(op.data.offers as Record<string, StoredOffer>) }
+    const key = `${from}:${m.offerId}`
+    const cur = offers[key]
+    if (!cur) throw new Error('quote arrived before its offer')
+    if (!m.commitment || m.commitment.leaf !== cur.so.offer.leaf) return
+    offers[key] = { ...cur, commitment: m.commitment, mode: m.mode }
+    await this.d.store.transition(op.operationId, op.revision, 'collecting', { cause: 'quote_attached', data: { offers } })
+  }
+
+  private async onDelivered (from: string, m: Extract<MarketMessage, { type: 'delivered' }>): Promise<void> {
+    const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${m.wantId}`)
+    if (!op || op.state !== 'awaiting_disclosure') return
+    const sel = op.data.selected as { key: string }
+    const chosen = (op.data.offers as Record<string, StoredOffer>)[sel.key]!
+    if (from !== chosen.so.offer.pub || m.offerId !== chosen.so.offer.offerId) return
+    const utxo = op.data.utxo as { txid: string, vout: number }
+    const tx = Transaction.fromHex(m.txHex)
+    if (tx.id('hex') !== m.txid || tx.inputs[0]?.sourceTXID !== utxo.txid || (tx.inputs[0]?.sourceOutputIndex ?? 0) !== utxo.vout) return
+    const q = chosen.so.offer.offer as any
+    const claim = await this.d.call('sale#claim', { txHex: m.txHex, hWrapped: q.cfg.hWrapped, sellerPub: from, offerMode: chosen.mode, ...(chosen.commitment ? { commitment: chosen.commitment } : {}) })
+    await this.d.store.settleBudget(op.data.escrowAction as string)
+    let text: string | undefined
+    try {
+      const bytes = fromHex(claim.valueHex)
+      text = Buffer.from(chosen.mode === 'fragment' ? parseFragment(bytes).d : bytes).toString('utf8')
+    } catch { /* opaque payload */ }
+    const result = { mode: claim.mode, verified: claim.verified, authorVerified: claim.authorVerified, valueHex: claim.valueHex, text, disclosureTxid: m.txid }
+    const bad = chosen.commitment ? claim.verified !== true : false
+    await this.d.store.transition(op.operationId, op.revision, bad ? 'disputed' : 'disclosure_verified', { cause: bad ? 'payload_does_not_match_commitment' : 'disclosure_verified', data: { result }, dueHeight: null, evidence: { txid: m.txid, verified: claim.verified, authorVerified: claim.authorVerified, reason: claim.reason } })
+  }
+
+  private async onMessage (from: string, m: MarketMessage): Promise<void> {
+    if (m?.type === 'quote') return await this.onQuote(from, m)
+    if (m?.type === 'accept') return await this.onAccept(from, m)
+    if (m?.type === 'delivered') return await this.onDelivered(from, m)
+  }
+
+  private async escalate (op: Operation, reason: string, actionDigest: string, maxExtraSats: number, evidence: unknown, state = 'escalated'): Promise<void> {
+    const a = await this.d.store.requestApproval({ operationId: op.operationId, reason, policyHash: op.policyHash, actionDigest, maxExtraSats, expiresAt: this.now() + this.o.approvalTtlMs, evidence })
+    await this.d.store.transition(op.operationId, op.revision, state, { cause: `needs_human:${reason}`, data: { pendingApproval: { approvalId: a.approvalId, actionDigest, reason } }, evidence })
+  }
+
+  private async select (op: Operation, height: number): Promise<void> {
+    const p = await this.d.store.activePolicy(op.policyHash)
+    if (!p) { await this.d.store.transition(op.operationId, op.revision, 'denied', { cause: 'policy_revoked_or_expired' }); return }
+    const offers = op.data.offers as Record<string, StoredOffer>
+    const cands: ScoreCandidate[] = Object.entries(offers).map(([key, s]) => {
+      const q = s.so.offer.offer as any
+      const live = !s.reject && Number(q?.expiresAt ?? 0) !== 0 ? Number(q.expiresAt) > height : !s.reject
+      const anchored = !!(s.commitment?.proof?.path && s.commitment?.batchR && s.commitment?.anchorTxid)
+      return {
+        offerKey: key, eligible: live && Number(q?.cfg?.refundAfter ?? 0) > height + this.o.sellerSafetyBlocks,
+        maxAllInSats: s.so.offer.priceSats + Number(q?.cfg?.maxFee ?? 0) + this.o.escrowFeeReserveSats,
+        features: { relevance: 10000, provenance: anchored ? 10000 : s.commitment?.leaf ? 5000 : 0, history: 5000, latency: 10000 }
+      }
+    })
+    const ranking = rankOffers(cands, { maxAllInSats: p.limits.perPurchaseSats + p.limits.perTxFeeSats, minimumScoreBps: p.scoring.minimumScoreBps, weights: p.scoring.weights })
+    const rejected = [...ranking.rejected, ...Object.entries(offers).filter(([, s]) => s.reject).map(([k, s]) => ({ offerKey: k, reason: s.reject! }))]
+    const top = ranking.ranked[0]
+    if (!top) { await this.d.store.transition(op.operationId, op.revision, 'expired', { cause: 'no_qualifying_offer', evidence: { rejected }, dueAt: null }); return }
+    const next = await this.d.store.transition(op.operationId, op.revision, 'selected', { cause: 'offer_selected', data: { selected: { key: top.offerKey, scoreBps: top.scoreBps }, ranking: { ranked: ranking.ranked, rejected } }, dueAt: null, evidence: { ranked: ranking.ranked, rejected } })
+    await this.fund(next, p)
+  }
+
+  private async fund (op: Operation, p: AutomationPolicy): Promise<void> {
+    const sel = op.data.selected as { key: string }
+    const s = (op.data.offers as Record<string, StoredOffer>)[sel.key]!
+    const q = s.so.offer.offer as any
+    const w = (op.data.want as SignedWant).want
+    const price = s.so.offer.priceSats, maxFee = Number(q.cfg.maxFee)
+    const amounts = { purchaseSats: price, feeSats: maxFee + this.o.escrowFeeReserveSats, lockedSats: price + maxFee }
+    const actionDigest = digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'escrow', offerKey: sel.key, cfg: q.cfg, amounts })
+    const approved = op.state === 'escalated' && await this.d.store.consumeApproval(op.operationId, actionDigest)
+    if (op.state === 'escalated' && !approved) {
+      const a = (await this.d.store.approvals()).find(x => x.approvalId === (op.data.pendingApproval as any)?.approvalId)
+      if (a?.status === 'denied') await this.d.store.transition(op.operationId, op.revision, 'denied', { cause: 'human_denied' })
+      else if (a && a.expiresAt <= this.now()) await this.d.store.transition(op.operationId, op.revision, 'expired', { cause: 'approval_expired' })
+      return
+    }
+    if (!approved) {
+      const decision = decidePurchase(p, { network: this.d.network, agentPub: this.me, domains: w.domains, priceSats: amounts.purchaseSats, feeSats: amounts.feeSats, lockedSats: amounts.lockedSats, now: this.now() })
+      if (decision.kind === 'deny') { await this.d.store.transition(op.operationId, op.revision, 'denied', { cause: decision.code }); return }
+      if (decision.kind === 'escalate') return await this.escalate(op, decision.code, actionDigest, amounts.purchaseSats + amounts.feeSats, { offerKey: sel.key, amounts })
+    }
+    const ctx: ActionContext = { operationId: op.operationId, actionId: `${op.operationId}:escrow`, policyHash: op.policyHash, networkId: this.d.network }
+    const b = await this.d.store.reserveBudget(ctx, amounts, approved)
+    if (!b.ok) {
+      if (CAP.test(b.code)) return await this.escalate(op, b.code, actionDigest, amounts.purchaseSats + amounts.feeSats, { offerKey: sel.key, amounts })
+      await this.d.store.transition(op.operationId, op.revision, 'denied', { cause: b.code }); return
+    }
+    const funding = await this.d.store.transition(op.operationId, op.revision, 'funding', { cause: approved ? 'human_approved' : 'policy_allowed', data: { escrowAction: ctx.actionId, amounts } })
+    this.inflight.add(op.operationId)
+    try {
+      let r: any
+      try {
+        r = await this.d.call('sale#escrow', { cfg: q.cfg, amount: amounts.lockedSats, offer: { sellerPub: q.sellerPub, offerSig: q.offerSig, expiresAt: q.expiresAt, commitment: s.commitment ?? (s.so.offer.leaf ? { leaf: s.so.offer.leaf } : undefined) } })
+      } catch (e) {
+        await this.d.store.releaseBudget(ctx.actionId)
+        await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', { cause: 'escrow_refused_before_broadcast', lastError: (e as Error).message.slice(0, 500) })
+        return
+      }
+      if (r.accepted !== true) {
+        if (/SpendGuard refused/i.test(String(r.reason))) {
+          await this.d.store.releaseBudget(ctx.actionId)
+          await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', { cause: 'spend_guard_refused', lastError: String(r.reason).slice(0, 500) })
+        } else await this.escalate(funding, 'unresolved_payment', digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }), 0, { reason: r.reason }, 'uncertain')
+        return
+      }
+      await this.d.store.commitBudget(ctx.actionId)
+      await this.d.store.transition(funding.operationId, funding.revision, 'awaiting_disclosure', {
+        cause: 'escrow_broadcast', data: { escrow: r.escrow, utxo: r.utxo, escrowTxid: r.txid }, dueHeight: Number(q.cfg.refundAfter),
+        outbox: [{ actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo: r.utxo, depositorPkh: r.escrow.depositorPkh } }]
+      })
+    } finally { this.inflight.delete(op.operationId) }
+  }
+
+  private async refund (op: Operation): Promise<void> {
+    const next = await this.d.store.transition(op.operationId, op.revision, 'refunding', { cause: 'refund_deadline_reached' })
+    const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
+    if (r.accepted === true) {
+      await this.d.store.settleBudget(op.data.escrowAction as string)
+      await this.d.store.transition(next.operationId, next.revision, 'refunded', { cause: 'refund_broadcast', data: { refundTxid: r.txid, refundSats: r.refundSats }, dueHeight: null })
+    } else await this.escalate(next, 'unresolved_settlement', digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-refund' }), 0, { reason: r.reason }, 'uncertain')
+  }
+
+  private async advance (op: Operation, height: number): Promise<void> {
+    if (op.role === 'buyer') {
+      if (op.state === 'collecting' && op.dueAt !== undefined && op.dueAt <= this.now()) return await this.select(op, height)
+      if (op.state === 'selected' || op.state === 'escalated') {
+        const p = await this.d.store.activePolicy(op.policyHash)
+        if (!p) { await this.d.store.transition(op.operationId, op.revision, 'denied', { cause: 'policy_revoked_or_expired' }); return }
+        return await this.fund(op, p)
+      }
+      if (op.state === 'funding' && !this.inflight.has(op.operationId)) return await this.escalate(op, 'unresolved_payment', digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }), 0, { note: 'process stopped between reserving and recording the escrow broadcast' }, 'uncertain')
+      if (op.state === 'awaiting_disclosure' && op.dueHeight !== undefined && height >= op.dueHeight) return await this.refund(op)
+    }
+    if (op.role === 'observer' && (op.state === 'watching' || op.state === 'seizing') && op.dueHeight !== undefined && height >= op.dueHeight) return await this.seize(op.state === 'seizing' ? await this.d.store.transition(op.operationId, op.revision, 'watching', { cause: 'resume_after_restart' }) : op)
+    if (op.role === 'seller' && op.kind === 'sale') {
+      if (op.state === 'completing') return await this.complete(op)
+      if (op.state === 'quoted' && op.dueHeight !== undefined && height >= op.dueHeight) await this.d.store.transition(op.operationId, op.revision, 'expired', { cause: 'quote_expired', dueHeight: null })
+      if (op.state === 'completion_submitted') {
+        const tx = await this.d.fetchTx(op.data.completeTxid as string)
+        if (tx?.merklePath) await this.d.store.transition(op.operationId, op.revision, 'settled', { cause: 'disclosure_proof_observed', evidence: { blockHeight: tx.merklePath.blockHeight } })
+      }
+    }
+  }
+}

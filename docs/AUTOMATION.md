@@ -180,3 +180,73 @@ Items 1–4 remove every manual intervention hit today — the first four rows
 are shipped (with the noted exceptions); 5–8 remove the hand-rolled
 scaffolding; 9–10 are polish. Regressions live in
 `packages/mcp/test/automation.test.ts`.
+
+## Autonomous marketplace — approve a policy once, then publish wants / enable offers
+
+The runtime does the trade; the operator approves the limits. Nothing here
+spends outside an approved policy, and policies/exception approvals are decided
+from the operator CLI only — the `automation` MCP/HTTP tool cannot approve.
+
+```sh
+# 1. operator, once: write limits, approve them (prints the policy hash)
+cp .devin/automation.policy.example.json my-policy.json     # set agentPub, network, caps
+pnpm automation policy approve my-policy.json
+
+# 2. run the instance with the runtime on
+NEKTAR_AUTOMATION=1 NEKTAR_PAID_DISCLOSURE=1 NEKTAR_OVERLAY_URL=https://rv-a,https://rv-b \
+  NEKTAR_HTTP_PORT=8080 node packages/mcp/dist/src/bin.js
+
+# 3. that's it — buyer side: one call; seller side: one call
+automation {op:"publishWant", policyHash, domains:["libfoo"], question:"…", maxSats:500}
+automation {op:"enableSeller", policyHash}
+
+# exceptions only
+pnpm automation approvals          # pending human decisions (exact action + max exposure)
+pnpm automation approve <id>       # or: deny <id>
+pnpm automation ops | status <operationId> | budget <policyHash> | policy revoke <hash>
+```
+
+What runs unattended: seller matches a want against its sellable shards
+(bounded AI job), prepares a buyer-bound offer, publishes the public header,
+verifies the funded escrow on-chain, reveals and collects. Buyer collects
+offers until its window closes, rejects invalid ones with reasons, scores the
+rest (relevance 30 / provenance 25 / history 15 / price 20 / latency 10),
+reserves budget, funds escrow, verifies the disclosure against the committed
+leaf, and refunds itself at the deadline if the seller never completes. An
+observer watches a bond descriptor and seizes at the on-chain deadline.
+
+Where the human is: the policy (once); anything the policy does not cover
+(price/fee/locked-capital above limits, domain outside policy, unresolved
+payment state) pauses that one operation and waits in `approvals`. Revoking a
+policy stops new work; existing escrows stay monitored and refundable.
+
+Honest boundaries:
+
+- `disclosure_verified` = the revealed bytes match the seller's commitment and
+  the seller was paid. It is not a claim that the content is true or useful —
+  usefulness is a separate `useful`/`not_useful` state set by the sandbox step.
+- A valid completed sale is not refundable because the answer disappoints.
+- Escrow/reveal acceptance is broadcast acceptance, not mined confirmation;
+  evidence bundles label it `broadcast-accepted-not-proven` until a proof exists.
+- Bond seizure demonstrates a deadline-conditioned spend of an unspent bond
+  output — not that an answer was wrong, nor that a commit was mined in time.
+- Purchased patches run only in an isolated container (no network, no
+  secrets, hidden tests outside the writable checkout). No container runtime →
+  `BLOCKED`, never a host run.
+- Transport is HTTPS rendezvous federation + encrypted mailbox. The 1BSV
+  object plane is not used by this runtime.
+- Existing owner tools (`sale`, `sendSats`, `payInvoice`, bond ops, anchors)
+  are not yet routed through the automation budget ledger; its caps bound what
+  the automation runtime itself spends. SpendGuard still fronts every broadcast.
+- A buyer process that dies between reserving budget and recording the escrow
+  broadcast resumes as `uncertain` and asks the operator — it never re-funds
+  blindly.
+
+Tests: `packages/mcp/test/{automation-scoring,automation-store,market-engine,automation-sandbox,market-publish}.test.ts`,
+`packages/overlay/test/market-protocol.test.ts`, and the integrated scenarios
+(S1 competing sellers over two federated hosts, S2 offline operator + observer
+seizure, S3 paid public disclosure read for free):
+
+```sh
+pnpm -r build && node --test --test-force-exit test/market-scenarios.test.mjs
+```

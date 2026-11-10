@@ -275,6 +275,13 @@ const server = http.createServer(async (req, res) => {
       const ok = await overlay.lsPresence.announceOffer({ offer, sig })
       return json(res, ok ? 200 : 400, ok ? { ok: true, pub: offer.pub } : { error: 'rejected' })
     }
+    // open wants — optionally narrowed to one publisher and/or one want id
+    if (req.method === 'GET' && url.pathname === '/wants') {
+      const pub = url.searchParams.get('pub')
+      const wantId = url.searchParams.get('wantId')
+      if (pub && wantId) return json(res, 200, { want: overlay.lsPresence.wantFor(pub, wantId) ?? null })
+      return json(res, 200, { wants: pub ? overlay.lsPresence.wantsFor(pub) : overlay.lsPresence.wantsFor() })
+    }
     // the live shelf: signed offers, optionally narrowed by domain tag
     if (req.method === 'GET' && url.pathname === '/offers') {
       const domain = url.searchParams.get('domain') ?? undefined

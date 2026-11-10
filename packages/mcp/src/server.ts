@@ -600,7 +600,11 @@ export const TOOLS = [
         domains: { type: 'array', items: { type: 'string' }, description: 'override manifest domains' },
         leaf: { type: 'string', description: 'leaf commitment hex — buyer verify-before-pay handle' },
         hdp: { type: 'string' }, batchR: { type: 'string' },
-        offer: { type: 'object', description: 'raw offerMemory artifact (cfg/wrapped/offerSig/commitment) for escrow flows' },
+        offer: { type: 'object', description: 'sale offerMemory artifact (cfg/wrapped/offerSig) — published as a PUBLIC quote: `wrapped` is scrubbed before signing, never leaves this instance' },
+        offerId: { type: 'string', description: 'stable offer id (default: generated uuid) — reuse for retries/revisions' },
+        revision: { type: 'number' }, previousHash: { type: 'string' },
+        wantId: { type: 'string' }, taskHash: { type: 'string' }, wantRevision: { type: 'number' },
+        buyerPub: { type: 'string', description: 'buyer pub the quote is bound to (private sale)' },
         replyTo: { type: 'string', description: 'pub of the want this offer answers — demand-meets-supply matching' },
         exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
       }
@@ -648,6 +652,19 @@ export const TOOLS = [
     }
   },
   {
+    name: 'automation',
+    description: 'Autonomous marketplace under an operator-approved policy. op=publishWant {domains, question, maxSats, policyHash} publishes a signed want and the runtime collects offers, scores them, funds escrow, verifies the disclosure and refunds on timeout without further calls. op=enableSeller {policyHash} answers matching wants from the sellable shards named in the policy. op=status {operationId} | operations | approvals | budget {policyHash} | policies are read-only. Approving policies and exceptions is operator-only (pnpm automation ...), never available here.',
+    inputSchema: {
+      type: 'object',
+      required: ['op'],
+      properties: {
+        op: { type: 'string', enum: ['publishWant', 'enableSeller', 'status', 'operations', 'approvals', 'budget', 'policies'] },
+        policyHash: { type: 'string' }, operationId: { type: 'string' },
+        domains: { type: 'array', items: { type: 'string' } }, question: { type: 'string' }, maxSats: { type: 'number' }, wantId: { type: 'string' }
+      }
+    }
+  },
+  {
     name: 'publishWant',
     description: 'Post a signed want to the rendezvous — the demand side: "I need X, will pay up to maxSats". Sellers watching their domains respond with offers.',
     inputSchema: {
@@ -656,7 +673,10 @@ export const TOOLS = [
       properties: {
         domains: { type: 'array', items: { type: 'string' }, description: 'domains sought (lowercase tags)' },
         maxSats: { type: 'number', description: 'max price offered' },
-        desc: { type: 'string', description: 'free-text want' },
+        desc: { type: 'string', description: 'free-text want — signed as the want\'s question field' },
+        wantId: { type: 'string', description: 'stable want id (default: generated uuid) — reuse the SAME id on retry; independent questions get independent ids' },
+        revision: { type: 'number' }, previousHash: { type: 'string' }, taskHash: { type: 'string' },
+        status: { type: 'string', description: "'open' | 'canceled' — cancel keeps the wantId as a tombstone" },
         exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
       }
     }
@@ -666,13 +686,18 @@ export const TOOLS = [
     description: 'Answer a want event with a signed offer — the demand-meets-supply step: given a want (from watch/feed on your domains), publish an offer replyTo its pub so the wanter sees your quote on their feed. Needs describeShard first (manifest supplies domains + shardId).',
     inputSchema: {
       type: 'object',
-      required: ['wantPub', 'shard', 'seq', 'priceSats'],
+      required: ['wantPub', 'wantId', 'taskHash', 'wantRevision', 'shard', 'seq', 'priceSats'],
       properties: {
         wantPub: { type: 'string', description: 'the want\'s publisher pub (from the want event)' },
+        wantId: { type: 'string', description: 'the want\'s stable id (from the want event)' },
+        taskHash: { type: 'string', description: 'the want\'s signed taskHash' },
+        wantRevision: { type: 'number', description: 'the want revision this offer answers' },
         shard: { type: 'string' }, seq: { type: 'number' }, priceSats: { type: 'number' },
         domains: { type: 'array', items: { type: 'string' }, description: 'override manifest domains' },
         leaf: { type: 'string' }, hdp: { type: 'string' }, batchR: { type: 'string' },
-        offer: { type: 'object' }, exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
+        offerId: { type: 'string' }, revision: { type: 'number' }, previousHash: { type: 'string' },
+        offer: { type: 'object', description: 'sale artifact — published as a public quote; `wrapped` never leaves this instance' },
+        exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
       }
     }
   },
@@ -741,7 +766,7 @@ export interface ToolCtx {
 
 /** tools that change instance state — a successful call emits 'change' on
  *  mem.events so live surfaces (dashboard SSE) refresh instantly */
-const MUTATING_TOOLS = new Set(['remember', 'describeShard', 'publishOffer', 'publishWant', 'respond', 'peerCall', 'delegate', 'revokeGrant', 'attest', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'bondCommit', 'bondClose', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport', 'sendEnvelope', 'fetchObject', 'sendSats', 'fundingRefresh'])
+const MUTATING_TOOLS = new Set(['automation', 'remember', 'describeShard', 'publishOffer', 'publishWant', 'respond', 'peerCall', 'delegate', 'revokeGrant', 'attest', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'bondCommit', 'bondClose', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport', 'sendEnvelope', 'fetchObject', 'sendSats', 'fundingRefresh'])
 
 // beacon-discovered peer set — one known rv reveals the rest (GET /peers).
 // Cached 5min; publish/discover fan out across the set so no single rv is
@@ -1637,12 +1662,30 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (typeof args?.shard !== 'string') throw new Error('publishOffer: shard required')
       if (!Number.isSafeInteger(Number(args?.seq))) throw new Error('publishOffer: seq required')
       const m = await mem.shardManifest(args.shard).catch(() => undefined)
+      const priceSats = Math.max(0, Math.floor(Number(args?.priceSats ?? 0)))
+      let quote: Record<string, unknown> | undefined
+      if (args?.offer !== undefined) {
+        const { publicSaleQuote, saleQuoteWire, verifyOfferSig } = await import('@nektar/identity')
+        const q = publicSaleQuote(args.offer as Parameters<typeof publicSaleQuote>[0])
+        const buyer = String(args?.buyerPub ?? '')
+        if (!verifyOfferSig(q, buyer, String(args?.leaf ?? ''))) throw new Error('publishOffer: offerSig does not verify — refusing to publish a doctored quote')
+        if (Number(q.cfg.price) !== priceSats) throw new Error(`publishOffer: outer priceSats ${priceSats} != quote price ${q.cfg.price}`)
+        if (q.sellerPub !== mem.operatorKey().toPublicKey().toString()) throw new Error('publishOffer: quote sellerPub is not this instance — only the seller may list it')
+        quote = saleQuoteWire(q)
+      }
       const fields = {
         shard: args.shard, seq: Number(args.seq),
         ...(m ? { shardId: m.shardId, domains: m.domains } : { domains: (args?.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32) }),
         ...(args?.leaf ? { leaf: String(args.leaf) } : {}), ...(args?.hdp ? { hdp: String(args.hdp) } : {}), ...(args?.batchR ? { batchR: String(args.batchR) } : {}),
-        priceSats: Math.max(0, Math.floor(Number(args?.priceSats ?? 0))),
-        ...(args?.offer !== undefined ? { offer: args.offer } : {}),
+        priceSats,
+        ...(quote !== undefined ? { offer: quote } : {}),
+        ...(args?.offerId !== undefined ? { offerId: String(args.offerId) } : {}),
+        ...(args?.revision !== undefined ? { revision: Number(args.revision) } : {}),
+        ...(args?.previousHash !== undefined ? { previousHash: String(args.previousHash) } : {}),
+        ...(args?.wantId !== undefined ? { wantId: String(args.wantId) } : {}),
+        ...(args?.taskHash !== undefined ? { taskHash: String(args.taskHash) } : {}),
+        ...(args?.wantRevision !== undefined ? { wantRevision: Number(args.wantRevision) } : {}),
+        ...(args?.buyerPub !== undefined ? { buyerPub: String(args.buyerPub) } : {}),
         ...(args?.replyTo !== undefined ? { replyTo: String(args.replyTo) } : {}),
         ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {}),
         net: process.env.NEKTAR_NETWORK ?? 'ttn',
@@ -1656,6 +1699,23 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishOffer: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
       return { ok: true, pub: (j as any).pub, offer: signed.offer }
     }
+    case 'automation': {
+      const au = mem.automation
+      if (!au) throw new Error('automation: not enabled — start the instance with NEKTAR_AUTOMATION=1')
+      const op = String(args?.op ?? '')
+      if (op === 'publishWant') {
+        const r = await au.engine.publishWant({ domains: (args?.domains ?? []).map(String), ...(args?.question ? { question: String(args.question).slice(0, 560) } : {}), maxSats: Number(args?.maxSats), ...(args?.wantId ? { wantId: String(args.wantId) } : {}) }, String(args?.policyHash ?? ''))
+        void au.cycle()
+        return { ok: true, ...r }
+      }
+      if (op === 'enableSeller') { await au.engine.enableSeller(String(args?.policyHash ?? '')); void au.cycle(); return { ok: true } }
+      if (op === 'status') { const st = await au.engine.status(String(args?.operationId ?? '')); if (!st) throw new Error('automation: unknown operationId'); return st }
+      if (op === 'operations') return { operations: (await au.store.operations()).map(o => ({ operationId: o.operationId, role: o.role, kind: o.kind, state: o.state, updatedAt: o.updatedAt, ...(o.lastError ? { lastError: o.lastError } : {}) })) }
+      if (op === 'approvals') return { approvals: await au.store.approvals('pending') }
+      if (op === 'budget') return await au.store.budgetStatus(String(args?.policyHash ?? ''))
+      if (op === 'policies') return { policies: await au.store.policies() }
+      throw new Error('automation: op required — publishWant|enableSeller|status|operations|approvals|budget|policies')
+    }
     case 'publishWant': {
       const { signWant } = await import('@nektar/overlay')
       const domains = (args?.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32)
@@ -1663,7 +1723,12 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const fields = {
         domains,
         ...(args?.maxSats !== undefined ? { maxSats: Math.max(0, Math.floor(Number(args.maxSats))) } : {}),
-        ...(args?.desc ? { desc: String(args.desc).slice(0, 512) } : {}),
+        ...(args?.desc ? { question: String(args.desc).slice(0, 560) } : {}),
+        ...(args?.wantId !== undefined ? { wantId: String(args.wantId) } : {}),
+        ...(args?.revision !== undefined ? { revision: Number(args.revision) } : {}),
+        ...(args?.taskHash !== undefined ? { taskHash: String(args.taskHash) } : {}),
+        ...(args?.previousHash !== undefined ? { previousHash: String(args.previousHash) } : {}),
+        ...(args?.status === 'canceled' ? { status: 'canceled' as const } : {}),
         ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {}),
         net: process.env.NEKTAR_NETWORK ?? 'ttn',
         ...(await mem.tipRef().catch(() => undefined) ?? {})
@@ -1751,16 +1816,35 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       // want → offer replyTo — the seller's half of the match: the wanter's
       // own watch sees "an offer answering my want" on their next pull
       if (typeof args?.wantPub !== 'string' || !args.wantPub) throw new Error('respond: wantPub required (from the want event)')
+      if (typeof args?.wantId !== 'string' || !args.wantId) throw new Error('respond: wantId required — answer an exact want, not a publisher')
+      if (typeof args?.taskHash !== 'string' || !/^[0-9a-f]{64}$/i.test(args.taskHash)) throw new Error('respond: taskHash required (the want\'s signed task commitment)')
+      if (!Number.isSafeInteger(Number(args?.wantRevision)) || Number(args.wantRevision) < 1) throw new Error('respond: wantRevision required — offers bind one want revision')
       const a = { ...args, replyTo: args.wantPub }
       delete a.wantPub
       const { signOffer } = await import('@nektar/overlay')
       const m = await mem.shardManifest(String(a.shard)).catch(() => undefined)
+      const priceSats = Math.max(0, Math.floor(Number(a.priceSats ?? 0)))
+      let quote: Record<string, unknown> | undefined
+      if (a.offer !== undefined) {
+        const { publicSaleQuote, saleQuoteWire, verifyOfferSig } = await import('@nektar/identity')
+        const q = publicSaleQuote(a.offer as Parameters<typeof publicSaleQuote>[0])
+        if (!verifyOfferSig(q, String(a.wantPub), String(a.leaf ?? ''))) throw new Error('respond: offerSig does not verify — refusing to publish a doctored quote')
+        if (Number(q.cfg.price) !== priceSats) throw new Error(`respond: outer priceSats ${priceSats} != quote price ${q.cfg.price}`)
+        if (q.sellerPub !== mem.operatorKey().toPublicKey().toString()) throw new Error('respond: quote sellerPub is not this instance — only the seller may list it')
+        quote = saleQuoteWire(q)
+      }
       const fields = {
         shard: String(a.shard), seq: Number(a.seq),
         ...(m ? { shardId: m.shardId, domains: m.domains } : { domains: (a.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32) }),
         ...(a.leaf ? { leaf: String(a.leaf) } : {}), ...(a.hdp ? { hdp: String(a.hdp) } : {}), ...(a.batchR ? { batchR: String(a.batchR) } : {}),
-        priceSats: Math.max(0, Math.floor(Number(a.priceSats ?? 0))),
-        ...(a.offer !== undefined ? { offer: a.offer } : {}), replyTo: a.wantPub ?? a.replyTo,
+        priceSats,
+        ...(quote !== undefined ? { offer: quote } : {}),
+        wantId: String(a.wantId), taskHash: String(a.taskHash), wantRevision: Number(a.wantRevision),
+        buyerPub: String(a.replyTo),
+        ...(a.offerId !== undefined ? { offerId: String(a.offerId) } : {}),
+        ...(a.revision !== undefined ? { revision: Number(a.revision) } : {}),
+        ...(a.previousHash !== undefined ? { previousHash: String(a.previousHash) } : {}),
+        replyTo: a.wantPub ?? a.replyTo,
         ts: Date.now(), ...(a.exp !== undefined ? { exp: Number(a.exp) } : {}),
         net: process.env.NEKTAR_NETWORK ?? 'ttn',
         ...(await mem.tipRef().catch(() => undefined) ?? {})

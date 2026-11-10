@@ -149,7 +149,7 @@ try {
 
   // want→respond: the seller answers the buyer's want with a replyTo offer
   const sellerPub = rep.pub
-  const resp = await tool(SELLER, 'respond', { wantPub: wantEv.pub, shard: 'soccer', seq: 0, priceSats: 400, rendezvousUrl: `http://localhost:${RV}` })
+  const resp = await tool(SELLER, 'respond', { wantPub: wantEv.pub, wantId: wantEv.payload.want.wantId, taskHash: wantEv.payload.want.taskHash, wantRevision: wantEv.payload.want.revision, shard: 'soccer', seq: 0, priceSats: 400, rendezvousUrl: `http://localhost:${RV}` })
   if (!resp.ok) die('respond failed')
   const buyerFeed = (await (await fetch(`http://localhost:${RV}/events?domains=soccer&kind=offer&since=${w2.cursor ?? feed.cursor}`)).json()).events
   if (!buyerFeed?.some(e => e.payload?.offer?.replyTo === wantEv.pub)) die('replyTo offer not on the feed')

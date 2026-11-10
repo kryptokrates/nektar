@@ -117,6 +117,13 @@ export default async function create (host: PresenceModuleHost): Promise<Module>
     const domain = new URL(req.url ?? '/', 'http://x').searchParams.get('domain') ?? undefined
     json(res, 200, { offers: ls.offersFor(domain ?? undefined) })
   })
+  host.route('/ls_presence/wants', (req, res) => {
+    const u = new URL(req.url ?? '/', 'http://x')
+    const pub = u.searchParams.get('pub')
+    const wantId = u.searchParams.get('wantId')
+    if (pub && wantId) return json(res, 200, { want: ls.wantFor(pub, wantId) ?? null })
+    json(res, 200, { wants: ls.wantsFor(pub ?? undefined) })
+  })
   host.route('/ls_presence/prices', (req, res) => {
     const u = new URL(req.url ?? '/', 'http://x')
     json(res, 200, ls.prices({ domain: u.searchParams.get('domain') ?? undefined, tool: u.searchParams.get('tool') ?? undefined }))

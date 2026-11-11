@@ -23,6 +23,9 @@ export interface AutomationConfig {
   treeSize?: number
   boxOffice?: string
   treeLowWater?: number
+  /** blogs deal-journal stream id (`<name>_<10 chars>`); every deal event is
+   *  appended as a signed numbered batch to tm_log_<stream> - env NEKTAR_LOG_STREAM */
+  logStream?: string
   now?: () => number
 }
 
@@ -50,6 +53,8 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     return { mod, ledger: new mod.KnexTreeLedger(kx), journal: new mod.KnexCarrierJournal(kx) }
   })()
   const log = cfg.log ?? (() => {})
+  const logStream = lanes === undefined ? undefined : (cfg.logStream ?? 'nektar_abcdefghij')
+  const logState = lanes === undefined || logStream === undefined ? undefined : new lanes.mod.KnexLogState(kx)
   const transport: MarketTransport = {
     publishWant: async (sw: SignedWant) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -71,7 +76,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     txState: txid => mem.txState(txid),
     broadcast: tx => mem.broadcastTx(tx),
     settleEscrow: tx => { for (const inp of tx.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } if (tx.outputs[1]) mem.addOwnedOut(tx, 1) },
-    transport, ai: cfg.ai ?? aiFromEnv(), opts: cfg.opts
+    transport, ai: cfg.ai ?? aiFromEnv(), opts: cfg.opts, logStream
   })
   const me = key.toPublicKey().toString()
   const withheldSeen = new Set<string>()
@@ -136,13 +141,13 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     const tracker = await mem.sdkTracker()
     const net = cfg.network
     for (const domain of watch.sellerDomains) {
-      const r = await readWants(marketHosts, { net, domain }, { tracker, net })
+      const r = await readWants(marketHosts, { net, domain }, { tracker, net, now: cfg.now?.() })
       const events = r.items.map(i => ({ seq: i.txid, kind: 'want', payload: i.payload.body }))
       if (events.length) await engine.ingestEvents(`lane:${net}:${domain}`, events, '')
       laneNotes(r)
     }
     for (const c of watch.collecting) {
-      const r = await readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: me }, { tracker, net })
+      const r = await readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: me }, { tracker, net, now: cfg.now?.() })
       const events = r.items.map(i => ({ seq: i.txid, kind: 'offer', payload: i.payload.body }))
       if (events.length) await engine.ingestEvents(`offers:${c.wantId}`, events, '')
       laneNotes(r)
@@ -177,19 +182,118 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     try {
       if (lanes !== undefined) {
         try {
-          for (const kind of ['market', 'bbox'] as const) await lanes.mod.ensureTrees({
-            key, ledger: lanes.ledger, lowWater: cfg.treeLowWater, size: cfg.treeSize, kind,
-            lock: kind === 'bbox' ? await lanes.mod.boxFundingLock(key) : undefined,
-            takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0]!,
-            broadcast: tx => mem.broadcastTx(tx),
-            fetchTx: txid => mem.fetchTx(txid),
-            onSpent: (tree) => { for (const inp of tree.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } const n = cfg.treeSize ?? 16; if (tree.outputs.length === n + 1 && (tree.outputs[n]!.satoshis ?? 0) > 0) mem.addOwnedOut(tree, n) }
-          })
+          for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : [])] as const) {
+            const r = await lanes.mod.ensureTrees({
+              key, ledger: lanes.ledger, lowWater: cfg.treeLowWater, size: cfg.treeSize, kind,
+              satsPerOutput: kind === 'log' ? 100 : undefined,
+              lock: kind === 'bbox' ? await lanes.mod.boxFundingLock(key) : kind === 'log' ? await lanes.mod.logFundingLock(key) : undefined,
+              takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0]!,
+              broadcast: tx => mem.broadcastTx(tx),
+              fetchTx: txid => mem.fetchTx(txid),
+              onSpent: (tree) => { for (const inp of tree.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } const n = cfg.treeSize ?? 16; if (tree.outputs.length === n + 1 && (tree.outputs[n]!.satoshis ?? 0) > 0) mem.addOwnedOut(tree, n) }
+            })
+            // a proven log tree's BEEF must reach tm_log before hosts can
+            // admit carriers spending it - journaled, publishes once
+            for (const txid of r.proven) {
+              const tx = await mem.fetchTx(txid)
+              if (tx !== undefined && logStream !== undefined) await lanes.mod.publishMinedLog({ journal: lanes.journal, hosts: marketHosts, stream: logStream, tx })
+            }
+          }
         } catch (e) { log(`automation: ensureTrees: ${(e as Error).message}`) }
       }
       await poll(); await engine.tick()
+      await appendLogEvents()
     } catch (e) { log(`automation: ${(e as Error).message}`) }
   }
+  // blogs deal journal: every market event becomes one line in one batch
+  const EV_CURSOR = 'log#events'
+  let logError = ''
+  const wantIdOf = (op: { data: Record<string, unknown> }): string | null =>
+    (op.data.want as SignedWant | undefined)?.want?.wantId ?? null
+  const appendLogEvents = async (): Promise<void> => {
+    if (lanes === undefined || logState === undefined || logStream === undefined) return
+    const cursor = (await logState.get(EV_CURSOR))?.seq ?? 0
+    const rows = await store.eventsAfter(cursor, 500)
+    if (rows.length === 0) { await maybeAnchor(); return }
+    const { sha256, utf8, toHex } = await import('@nektar/core')
+    const ns = new Map<string, number>()
+    const lines: string[] = []
+    let lastSeq = cursor
+    for (const r of rows) {
+      const op = await store.operation(r.operationId)
+      if (op === undefined) { lastSeq = r.seq; continue }
+      const n = (ns.get(op.operationId) ?? await store.eventCount(op.operationId, cursor)) + 1
+      ns.set(op.operationId, n)
+      const ev = r.evidence === undefined ? null : toHex(Uint8Array.from(sha256(utf8(lanes.mod.marketJson(r.evidence)))))
+      lines.push(JSON.stringify({ v: 1, op: op.operationId, want: wantIdOf(op), role: op.role, n, state: r.to, cause: r.cause, t: r.at, ev }))
+      lastSeq = r.seq
+    }
+    try {
+      if (lines.length > 0) await lanes.mod.appendLog({ key, ledger: lanes.ledger, journal: lanes.journal, state: logState, hosts: marketHosts, stream: logStream, lines, now: cfg.now })
+      // the cursor moves only after the batch reached quorum: a crash between
+      // tick and append replays the same lines on the next cycle, and the
+      // journal keeps the resubmitted carrier identical (same txid, same seq)
+      await logState.set(EV_CURSOR, { seq: lastSeq, prev: '' })
+      logError = ''
+      await maybeAnchor()
+    } catch (e) {
+      const m = (e as Error).message
+      if (m !== logError) { logError = m; log(`automation: log append: ${m.slice(0, 200)}`) }
+    }
+  }
+  // anchors never block a cycle: they run on the inflight set like pushed work
+  const maybeAnchor = async (): Promise<void> => {
+    if (lanes === undefined || logState === undefined || logStream === undefined) return
+    const work = (async () => {
+      try {
+        const r = await lanes.mod.anchorLog({
+          key, ledger: lanes.ledger, journal: lanes.journal, state: logState, hosts: marketHosts, stream: logStream,
+          broadcast: tx => mem.broadcastTx(tx), fetchTx: txid => mem.fetchTx(txid), now: cfg.now,
+          log: line => log(`automation: ${line}`)
+        })
+        if (r !== undefined) log(`automation: log anchor interval ${r.interval} ${r.txid}`)
+      } catch (e) { log(`automation: log anchor: ${(e as Error).message.slice(0, 200)}`) }
+    })()
+    inflight.add(work)
+    void work.finally(() => { inflight.delete(work) })
+  }
+
+  // deal journal view for `deals { operationId }`: own stream head + the
+  // counterparty's stream filtered to this deal. The counterparty's stream
+  // id rides its signed artifact (want.journal / offer.journal).
+  const dealJournal = async (op: import('./store.js').Operation): Promise<Record<string, unknown> | undefined> => {
+    if (lanes === undefined || logState === undefined || logStream === undefined) return undefined
+    const own = { stream: logStream, lastSeq: (await logState.get(logStream))?.seq ?? 0 }
+    const cp = op.role === 'buyer'
+      ? (() => {
+          const sel = (op.data.selected as { key?: string } | undefined)?.key
+          const so = sel !== undefined ? (op.data.offers as Record<string, { so: SignedOffer }> | undefined)?.[sel]?.so : undefined
+          return so?.offer.journal?.stream !== undefined && sel !== undefined ? { stream: so.offer.journal.stream, producer: sel.split(':')[0]! } : undefined
+        })()
+      : (() => {
+          const w = op.data.want as SignedWant | undefined
+          return w?.want.journal?.stream !== undefined ? { stream: w.want.journal.stream, producer: w.want.pub } : undefined
+        })()
+    if (cp === undefined) return { own }
+    try {
+      const r = await lanes.mod.readLog({ hosts: marketHosts, stream: cp.stream, producer: cp.producer, tracker: await mem.sdkTracker() })
+      const wantId = wantIdOf(op)
+      const entries: Array<{ seq: number, n: number, state: string, cause: string, t: number }> = []
+      for (const b of r.batches) for (const l of b.lines) {
+        try {
+          const j = JSON.parse(l) as { want?: string | null, op?: string, n?: number, state?: string, cause?: string, t?: number }
+          if (j.want === wantId && typeof j.n === 'number') entries.push({ seq: b.seq, n: j.n, state: j.state ?? '', cause: j.cause ?? '', t: j.t ?? 0 })
+        } catch { /* not a journal line */ }
+      }
+      const base = { stream: cp.stream, producer: cp.producer, gaps: r.gaps, anchoredThrough: r.anchoredThrough, entries }
+      if (entries.length === 0) return { own, counterparty: { ...base, complete: false } }
+      const lo = Math.min(...entries.map(e => e.seq))
+      const hi = Math.max(...entries.map(e => e.seq))
+      const complete = !r.gaps.some(g => g.to >= lo && g.from <= hi) && entries.every((e, i) => e.n === i + 1)
+      return { own, counterparty: { ...base, complete } }
+    } catch (e) { return { own, counterparty: { error: (e as Error).message.slice(0, 200) } } }
+  }
+
   const timer = cfg.intervalMs === 0 ? undefined : setInterval(() => { void cycle() }, cfg.intervalMs ?? 5000)
   timer?.unref()
   let stopped = false
@@ -225,8 +329,8 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     void work.finally(() => { inflight.delete(work) })
   })
   return {
-    store, engine, cycle,
-    marketSlots: async () => lanes === undefined ? { market: 0, bbox: 0 } : { market: await lanes.ledger.remaining('market'), bbox: await lanes.ledger.remaining('bbox') },
+    store, engine, cycle, logStream, dealJournal,
+    marketSlots: async () => lanes === undefined ? { market: 0, bbox: 0, log: 0 } : { market: await lanes.ledger.remaining('market'), bbox: await lanes.ledger.remaining('bbox'), log: await lanes.ledger.remaining('log') },
     stop: async () => {
       stopped = true
       if (timer) clearInterval(timer)

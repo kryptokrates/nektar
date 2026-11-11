@@ -79,7 +79,7 @@ function makeTopicManager (net: string, lane: string, tracker: ChainTracker, idx
         say('tm refuse', { lane, reason: 'exp' })
         return { outputsToAdmit: [], coinsToRetain: [] }
       }
-      if (!verifyBody(p)) {
+      if (!verifyBody(p, now())) {
         say('tm refuse', { lane, reason: 'sig' })
         return { outputsToAdmit: [], coinsToRetain: [] }
       }

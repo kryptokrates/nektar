@@ -231,6 +231,19 @@ export class AutomationStore {
     return (await this.kx(T.events).where({ operation_id: operationId }).orderBy('seq')).map(r => ({ seq: r.seq, at: Number(r.at), ...(r.from_state ? { from: r.from_state } : {}), to: r.to_state, cause: r.cause, ...(r.evidence ? { evidence: JSON.parse(r.evidence) } : {}) }))
   }
 
+  /** events newer than a global seq cursor — the deal journal reads these */
+  async eventsAfter (afterSeq: number, limit = 500): Promise<Array<{ seq: number, operationId: string, at: number, to: string, cause: string, evidence?: unknown }>> {
+    return (await this.kx(T.events).where('seq', '>', afterSeq).orderBy('seq').limit(limit))
+      .map(r => ({ seq: Number(r.seq), operationId: r.operation_id, at: Number(r.at), to: r.to_state, cause: r.cause, ...(r.evidence ? { evidence: JSON.parse(r.evidence) } : {}) }))
+  }
+
+  /** how many events an operation has at or below a global seq — the journal
+   *  line's per-operation `n` is this + its offset inside the pending batch */
+  async eventCount (operationId: string, beforeOrAtSeq: number): Promise<number> {
+    const r = await this.kx(T.events).where({ operation_id: operationId }).where('seq', '<=', beforeOrAtSeq).count('* as c').first()
+    return Number(r?.c ?? 0)
+  }
+
   // ── inbox + cursors ─────────────────────────────────────────────────────
   async cursor (source: string): Promise<string | undefined> {
     return (await this.kx(T.cursors).where({ source }).first())?.cursor

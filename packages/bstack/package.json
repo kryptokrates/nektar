@@ -14,12 +14,13 @@
     "test": "node --test --test-timeout=60000 dist/test/*.test.js"
   },
   "dependencies": {
+    "@lightwebinc/bbox-host": "file:../../vendor/lightwebinc-bbox-host-0.6.7.tgz",
     "@lightwebinc/bcommon": "file:../../vendor/lightwebinc-bcommon-0.33.13.tgz",
+    "@lightwebinc/blogs-host": "file:../../vendor/lightwebinc-blogs-host-0.6.3.tgz",
     "@nektar/chain": "workspace:*",
     "@nektar/core": "workspace:*",
     "knex": "^3.1.0",
-    "sqlite3": "^5.1.7",
-    "@lightwebinc/bbox-host": "file:../../vendor/lightwebinc-bbox-host-0.6.7.tgz"
+    "sqlite3": "^5.1.7"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"

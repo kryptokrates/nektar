@@ -7,9 +7,11 @@ export type Quorum = 'all' | 'majority' | 'one' | number
 const need = (q: Quorum | undefined, n: number): number =>
   q === 'all' ? n : q === 'one' ? 1 : typeof q === 'number' ? Math.max(1, Math.min(q, n)) : Math.ceil(n / 2)
 
-export async function submitAll (hosts: string[], beef: number[], topics: string[], opts?: { quorum?: Quorum, timeoutMs?: number }): Promise<{ ok: boolean, took: string[], admitted: string[], missed: Array<{ host: string, error: string }> }> {
+export async function submitAll (hosts: string[], beef: number[], topics: string[], opts?: { quorum?: Quorum, timeoutMs?: number, retryWaits?: number[] }): Promise<{ ok: boolean, took: string[], admitted: string[], missed: Array<{ host: string, error: string }> }> {
   const timeoutMs = opts?.timeoutMs ?? 15000
-  const waits = [1000, 2000, 4000]
+  // journaled callers pass retryWaits:[] — their own journal is the retry layer,
+  // so a dead host costs one refused fetch instead of ~7s of sleeps per cycle
+  const waits = opts?.retryWaits ?? [1000, 2000, 4000]
   const per = async (host: string): Promise<{ host: string, ok: boolean, admitted?: boolean, error?: string }> => {
     for (let t = 0; t <= waits.length; t++) {
       try {
@@ -47,7 +49,7 @@ export async function lookupAll (hosts: string[], service: string, query: unknow
 
 export interface ReadResult { items: Array<{ txid: string, payload: import('./market.js').MarketPayload }>, perHost: Record<string, string[]>, withheld: Array<{ host: string, txid: string }>, unreachable: string[] }
 
-export async function readItems (hosts: string[], service: string, query: unknown, o: { tracker: ChainTracker, net: string, accept: (p: import('./market.js').MarketPayload) => boolean }): Promise<ReadResult> {
+export async function readItems (hosts: string[], service: string, query: unknown, o: { tracker: ChainTracker, net: string, accept: (p: import('./market.js').MarketPayload) => boolean, now?: number }): Promise<ReadResult> {
   const { answers } = await lookupAll(hosts, service, query)
   const items = new Map<string, { txid: string, payload: import('./market.js').MarketPayload }>()
   const seenBy = new Map<string, Set<string>>()
@@ -65,7 +67,7 @@ export async function readItems (hosts: string[], service: string, query: unknow
           const p = decodePayload(c.payload)
           const b = p.body as { want?: { net?: string }, offer?: { net?: string } }
           const pnet = p.kind === 'want' ? b.want?.net : b.offer?.net
-          if (!verifyBody(p) || carrierLockingKey(bodyPub(p)) !== c.lockingKey || pnet !== o.net || !o.accept(p)) { seenBy.set(txid, new Set()); continue }
+          if (!verifyBody(p, o.now) || carrierLockingKey(bodyPub(p)) !== c.lockingKey || pnet !== o.net || !o.accept(p)) { seenBy.set(txid, new Set()); continue }
           items.set(txid, { txid, payload: p }); seenBy.set(txid, new Set())
         } catch { seenBy.set(txid, new Set()); continue }
       }
@@ -78,9 +80,9 @@ export async function readItems (hosts: string[], service: string, query: unknow
   return { items: [...items.values()], perHost, withheld, unreachable }
 }
 
-export const readWants = (hosts: string[], q: { net: string, domain: string, limit?: number }, o: { tracker: ChainTracker, net: string }) =>
+export const readWants = (hosts: string[], q: { net: string, domain: string, limit?: number }, o: { tracker: ChainTracker, net: string, now?: number }) =>
   readItems(hosts, 'ls_nektar', { wants: q }, { ...o, accept: (p) => p.kind === 'want' && (p.body as { want: { domains: string[] } }).want.domains.map(d => d.toLowerCase()).includes(q.domain.toLowerCase()) })
-export const readOffers = (hosts: string[], q: { net: string, wantId: string, buyerPub: string }, o: { tracker: ChainTracker, net: string }) =>
+export const readOffers = (hosts: string[], q: { net: string, wantId: string, buyerPub: string }, o: { tracker: ChainTracker, net: string, now?: number }) =>
   readItems(hosts, 'ls_nektar', { offers: q }, { ...o, accept: (p) => p.kind === 'offer' && (p.body as { offer: { wantId?: string, buyerPub?: string } }).offer.wantId === q.wantId && (p.body as { offer: { buyerPub?: string } }).offer.buyerPub === q.buyerPub })
-export const readWant = (hosts: string[], q: { net: string, pub: string, wantId: string }, o: { tracker: ChainTracker, net: string }) =>
+export const readWant = (hosts: string[], q: { net: string, pub: string, wantId: string }, o: { tracker: ChainTracker, net: string, now?: number }) =>
   readItems(hosts, 'ls_nektar', { want: q }, { ...o, accept: (p) => p.kind === 'want' && (p.body as { want: { pub: string, wantId: string } }).want.pub === q.pub && (p.body as { want: { wantId: string } }).want.wantId === q.wantId })

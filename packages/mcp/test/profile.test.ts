@@ -104,7 +104,7 @@ test('profile: an operator-only tool is refused over HTTP and MCP in agent profi
 test('profile: want refuses zero or several buyer policies; exactly one publishes', async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
-  const h = await minihost([NET], { tracker: trackerFor(chain) })
+  const h = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   let rt: Automation | undefined
   try {
     const funder = new MockFunder(); funder.topup(30)
@@ -129,8 +129,8 @@ test('profile: sell → want → deals drives a full deal; fund reports slot cou
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
   const office = 'nektar_abcdefghij'
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
   let b: A | undefined, s: A | undefined
   try {
     b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, dir })

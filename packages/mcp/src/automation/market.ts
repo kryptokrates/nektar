@@ -50,6 +50,9 @@ export interface MarketDeps {
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
   ai: AIExecutor
+  /** this agent's blogs deal-journal stream id; signed into wants/offers so
+   *  the counterparty (and anyone holding the deal) can follow the journal */
+  logStream?: string
   now?: () => number
   opts?: Partial<MarketOptions>
 }
@@ -158,7 +161,7 @@ export class MarketEngine {
       if (!Number.isSafeInteger(input.maxSats) || input.maxSats <= 0 || input.maxSats > p.limits.perPurchaseSats) throw new Error('publishWant: maxSats outside the approved per-purchase limit')
       const now = this.now()
       const tip = await this.d.tip?.()
-      const sw = signWant(this.d.key, { domains, ...(input.question ? { question: input.question } : {}), maxSats: input.maxSats, ts: now, exp: now + p.scoring.collectMs, net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {}), ...(input.wantId ? { wantId: input.wantId } : {}) })
+      const sw = signWant(this.d.key, { domains, ...(input.question ? { question: input.question } : {}), maxSats: input.maxSats, ts: now, exp: now + p.scoring.collectMs, net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {}), ...(input.wantId ? { wantId: input.wantId } : {}), ...(this.d.logStream !== undefined ? { journal: { stream: this.d.logStream } } : {}) })
       const { operation, created } = await this.d.store.createOperation({ role: 'buyer', kind: 'purchase', dedupeKey: `buyer:${this.d.network}:${sw.want.wantId}`, policyHash, network: this.d.network, state: 'published', data: { want: sw, offers: {} } })
       if (created) {
         await this.d.store.transition(operation.operationId, 1, 'collecting', { cause: 'want_signed', dueAt: now + p.scoring.collectMs, outbox: [{ actionId: `${operation.operationId}:want`, kind: 'publish-want', destination: 'feed', payload: sw }] })
@@ -269,7 +272,7 @@ export class MarketEngine {
   // ── seller ──────────────────────────────────────────────────────────────
   private async onWant (sw: SignedWant): Promise<void> {
     const sp = await this.sellerPolicy()
-    if (!sp || !sw?.want || !verifyWant(sw.want, sw.sig)) return
+    if (!sp || !sw?.want || !verifyWant(sw.want, sw.sig, { now: this.now() })) return
     const w = sw.want
     if (w.pub === this.me || w.status !== 'open' || w.net !== this.d.network) return
     if (w.exp !== undefined && w.exp <= this.now()) return
@@ -308,7 +311,7 @@ export class MarketEngine {
         offerId: operation.operationId, shard: pick.shard, seq: pick.seq, shardId: pick.manifest.shardId, domains: pick.manifest.domains,
         leaf: c.leaf, hdp: c.hdp, ...(c.batchR ? { batchR: c.batchR } : {}), priceSats: pick.price,
         offer: saleQuoteWire(publicSaleQuote(offer)), wantId: w.wantId, taskHash: w.taskHash, wantRevision: w.revision, buyerPub: w.pub, replyTo: w.pub,
-        ts: this.now(), exp: this.now() + 86_400_000, net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {})
+        ts: this.now(), exp: this.now() + 86_400_000, net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {}), ...(this.d.logStream !== undefined ? { journal: { stream: this.d.logStream } } : {})
       })
       const sellerNote: Extract<MarketMessage, { type: 'sellerNote' }> = {
         type: 'sellerNote', v: 1, wantId: w.wantId, offerId: operation.operationId, policyHash: sp.hash,
@@ -398,7 +401,7 @@ export class MarketEngine {
   }
 
   private async onOffer (so: SignedOffer): Promise<void> {
-    if (!so?.offer?.wantId || !verifyOffer(so.offer, so.sig)) return
+    if (!so?.offer?.wantId || !verifyOffer(so.offer, so.sig, { now: this.now() })) return
     const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${so.offer.wantId}`)
     if (!op || op.state !== 'collecting') return
     const offers = { ...(op.data.offers as Record<string, StoredOffer>) }

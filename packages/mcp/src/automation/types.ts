@@ -5,8 +5,13 @@ export interface Automation {
   store: AutomationStore
   engine: MarketEngine
   cycle: () => Promise<void>
-  /** free funding-tree slots per kind — { market, bbox }; zeros when no
+  /** free funding-tree slots per kind — { market, bbox, log }; zeros when no
    *  market hosts are configured */
-  marketSlots: () => Promise<{ market: number, bbox: number }>
+  marketSlots: () => Promise<{ market: number, bbox: number, log: number }>
+  /** this agent's blogs deal-journal stream id (undefined when journal off) */
+  logStream?: string
+  /** on-demand journal view for `deals { operationId }` — own head plus the
+   *  counterparty's stream filtered to this deal */
+  dealJournal?: (op: import('./store.js').Operation) => Promise<Record<string, unknown> | undefined>
   stop: () => Promise<void>
 }

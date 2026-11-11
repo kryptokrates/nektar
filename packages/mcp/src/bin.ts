@@ -40,6 +40,7 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
     network: rt.network, dataDir: rt.network === 'mock' && !process.env.NEKTAR_DATA_DIR ? undefined : (process.env.NEKTAR_DATA_DIR ?? '.nektar'),
     marketHosts: mh,
     boxOffice: process.env.NEKTAR_BBOX_OFFICE ?? undefined,
+    logStream: process.env.NEKTAR_LOG_STREAM ?? undefined,
     intervalMs: Number(process.env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 5000),
     call: (tool, args) => callTool(rt.mem, tool, args, { ops: rt.ops }),
     opts: rt.network === 'main' ? { saleMaxFee: 500 } : {},

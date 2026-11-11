@@ -41,3 +41,4 @@ tools/curve-vectors/target/
 test/fixtures/swarm-keys/
 packages/bstack/bundle/
 labs/bstack-spike/
+deploy/bstack-sandbox/modules/

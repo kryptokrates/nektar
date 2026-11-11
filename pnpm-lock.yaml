@@ -9,6 +9,7 @@ overrides:
   runar-lang>@bsv/sdk: 4.0.1
   '@lightwebinc/bcommon>@bsv/sdk': 4.0.1
   '@lightwebinc/bbox-host>@bsv/sdk': 4.0.1
+  '@lightwebinc/blogs-host>@bsv/sdk': 4.0.1
   tar: '>=7.5.21'
   minimatch: '>=11.0.1'
 
@@ -91,6 +92,9 @@ importers:
       '@lightwebinc/bcommon':
         specifier: file:../../vendor/lightwebinc-bcommon-0.33.13.tgz
         version: file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)
+      '@lightwebinc/blogs-host':
+        specifier: file:../../vendor/lightwebinc-blogs-host-0.6.3.tgz
+        version: file:vendor/lightwebinc-blogs-host-0.6.3.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1))
       '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
@@ -357,6 +361,12 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
+      '@lightwebinc/bcommon':
+        specifier: file:../../vendor/lightwebinc-bcommon-0.33.13.tgz
+        version: file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)
+      '@lightwebinc/blogs-host':
+        specifier: file:../../vendor/lightwebinc-blogs-host-0.6.3.tgz
+        version: file:vendor/lightwebinc-blogs-host-0.6.3.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1))
       '@types/qrcode':
         specifier: ^1.5.6
         version: 1.5.6
@@ -658,6 +668,13 @@ packages:
     engines: {node: '>=24 <27'}
     peerDependencies:
       '@bsv/sdk': 4.0.1
+
+  '@lightwebinc/blogs-host@file:vendor/lightwebinc-blogs-host-0.6.3.tgz':
+    resolution: {integrity: sha512-wSgWU/S7zlUAaWGguYWgfswGGE68rjyZ5ZWtGKHpVGOdzG1UJNaVj59muFNAUHD1RJnyMPSyJ0f2H2Ml4WVsEw==, tarball: file:vendor/lightwebinc-blogs-host-0.6.3.tgz}
+    version: 0.6.3
+    engines: {node: '>=24 <27'}
+    peerDependencies:
+      '@lightwebinc/bcommon': ^0.33.13
 
   '@modelcontextprotocol/sdk@1.32.2':
     resolution: {integrity: sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw==}
@@ -2235,6 +2252,11 @@ snapshots:
   '@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)':
     dependencies:
       '@bsv/sdk': 4.0.1
+
+  '@lightwebinc/blogs-host@file:vendor/lightwebinc-blogs-host-0.6.3.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1))':
+    dependencies:
+      '@bsv/sdk': 4.0.1
+      '@lightwebinc/bcommon': file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)
 
   '@modelcontextprotocol/sdk@1.32.2(supports-color@7.2.0)(zod@3.25.76)':
     dependencies:

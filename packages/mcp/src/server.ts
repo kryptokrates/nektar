@@ -1305,7 +1305,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (args?.operationId) {
         const st = await au.engine.status(String(args.operationId))
         if (!st) throw new Error(`deals: unknown operationId ${args.operationId}`)
-        return detail(st.operation, st.events)
+        const e = detail(st.operation, st.events)
+        const j = await au.dealJournal?.(st.operation)
+        if (j !== undefined) e.journal = j
+        return e
       }
       const ops = (await au.store.operations())
         .filter(o => o.kind === 'purchase' || o.kind === 'sale')

@@ -74,9 +74,13 @@ const trackerFor = (chain: MockChain) => ({
   isValidRootForHeight: (r: string, h: number) => chain.isValidRootForHeight(r, h),
   currentHeight: () => chain.currentHeight()
 })
-const count = async (dir: string, name: string, table: string): Promise<number> => {
+const countWhere = async (dir: string, name: string, table: string, col: string, val: string): Promise<number> => {
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'automation.sqlite') }, useNullAsDefault: true })
-  try { const r = await kx(table).count('* as n').first(); return Number((r as { n: number }).n) } finally { await kx.destroy() }
+  try { const r = await kx(table).count('* as n').where(col, val).first(); return Number((r as { n: number }).n) } finally { await kx.destroy() }
+}
+const countLike = async (dir: string, name: string, table: string, col: string, pat: string): Promise<number> => {
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'automation.sqlite') }, useNullAsDefault: true })
+  try { const r = await kx(table).count('* as n').where(col, 'like', pat).first(); return Number((r as { n: number }).n) } finally { await kx.destroy() }
 }
 const buyerOp = async (b: A) => (await b.rt.store.operations({ role: 'buyer' })).find(o => o.kind === 'purchase')
 const saleOps = async (s: A) => (await s.rt.store.operations({ role: 'seller' })).filter(o => o.kind === 'sale')
@@ -87,14 +91,16 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus(); const logs: string[] = []
   let h2Failed = false
-  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), failNext: () => { if (!h2Failed) { h2Failed = true; return true } return false } })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), failNext: () => { if (!h2Failed) { h2Failed = true; return true } return false } })
   try {
     const b = await mkagent('buyer', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
     const s = await mkagent('seller', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 8)
-    const slotsBefore = (await count(dir, 'buyer', 'bstack_trees')) * 16 - (await count(dir, 'buyer', 'bstack_tree_outputs'))
+    // market-kind slots only — the runtime also keeps bbox + log trees
+    const marketSlots = async () => (await countWhere(dir, 'buyer', 'bstack_trees', 'kind', 'market')) * 16 - (await countWhere(dir, 'buyer', 'bstack_tree_outputs', 'kind', 'market'))
+    const slotsBefore = await marketSlots()
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => {
       const bo = await buyerOp(b); const so = (await saleOps(s))[0]
@@ -108,9 +114,10 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
     // both hosts hold the want carrier
     const wantTxid = [...h1.txids()].filter(t => h2.has(t))
     assert.ok(wantTxid.length >= 1, `both hosts hold want; h1=${h1.txids().length} h2=${h2.txids().length}`)
-    // journal: exactly one carrier row total, exactly one slot consumed
-    assert.equal(await count(dir, 'buyer', 'bstack_carriers'), 1)
-    const slotsAfter = (await count(dir, 'buyer', 'bstack_trees')) * 16 - (await count(dir, 'buyer', 'bstack_tree_outputs'))
+    // journal: exactly one market carrier row (the want), one market slot —
+    // log-journal batches live in the same tables under tm_log topics/kind
+    assert.equal(await countLike(dir, 'buyer', 'bstack_carriers', 'topics', '%tm_nektar%'), 1)
+    const slotsAfter = await marketSlots()
     assert.equal(slotsAfter - slotsBefore, 1, 'one funding slot for the want')
     // dedupe: 5+ more cycles, still ONE sale op and ONE inbox row for the want txid
     await drive([b.rt, s.rt], chain, 5)
@@ -127,8 +134,8 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', a
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus(); const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain) })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   try {
     const b = await mkagent('buyer', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
     const sA = await mkagent('sA', { hosts: [h1.url], msgs, chain, logs, dir })
@@ -154,8 +161,8 @@ test('bstack C: withheld offer still completes via other host; withheld logged n
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus(); const logs: string[] = []
   let dropTxid = ''
-  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), drop: (txid) => txid === dropTxid })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), drop: (txid) => txid === dropTxid })
   try {
     const b = await mkagent('buyer', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
     const s = await mkagent('seller', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
@@ -184,7 +191,7 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus(); const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   try {
     const funderB = new MockFunder(); funderB.topup(30)
     for (const t of funderB.parents) chain.registerParent(t)
@@ -198,16 +205,17 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
     await drive([bRt, s.rt], chain, 8)
     await bRt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 500 }, policyHash)
     await drive([bRt, s.rt], chain, 6)
-    const carriersBefore = await count(dir, 'buyer', 'bstack_carriers')
-    const slotsBefore = (await count(dir, 'buyer', 'bstack_trees')) * 16 - (await count(dir, 'buyer', 'bstack_tree_outputs'))
+    // market-kind only — log journal batches keep accruing in the same tables
+    const carriersBefore = await countLike(dir, 'buyer', 'bstack_carriers', 'topics', '%tm_nektar%')
+    const slotsBefore = (await countWhere(dir, 'buyer', 'bstack_trees', 'kind', 'market')) * 16 - (await countWhere(dir, 'buyer', 'bstack_tree_outputs', 'kind', 'market'))
     await bRt.stop()
     bRt = await open()
     const all = [bRt, s.rt]
     assert.ok(await until(all, chain, async () => (await buyerOp({ rt: bRt } as A))?.state === 'disclosure_verified', 100), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = (await bRt.store.operations({ role: 'buyer' })).find(o => o.kind === 'purchase')
     assert.equal(bo?.state, 'disclosure_verified')
-    assert.equal(await count(dir, 'buyer', 'bstack_carriers'), carriersBefore, 'no second want carrier after restart')
-    const slotsAfter = (await count(dir, 'buyer', 'bstack_trees')) * 16 - (await count(dir, 'buyer', 'bstack_tree_outputs'))
+    assert.equal(await countLike(dir, 'buyer', 'bstack_carriers', 'topics', '%tm_nektar%'), carriersBefore, 'no second want carrier after restart')
+    const slotsAfter = (await countWhere(dir, 'buyer', 'bstack_trees', 'kind', 'market')) * 16 - (await countWhere(dir, 'buyer', 'bstack_tree_outputs', 'kind', 'market'))
     assert.equal(slotsAfter - slotsBefore, 0, 'zero funding slots consumed for the want after restart')
     for (const r of all) await r.stop()
   } finally { await h1.close() }
@@ -217,7 +225,7 @@ test('bstack E: hosts down after escrow funded — chain advance still refunds t
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus(); const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   try {
     const b = await mkagent('buyer', { hosts: [h1.url], msgs, chain, logs, dir, opts: { refundBlocks: 40 } })
     const s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir, opts: { refundBlocks: 40 } })
@@ -249,8 +257,8 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const office = 'nektar_abcdefghij'
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
   try {
     // no `msgs` -> runtime uses the default bbox channel over the overlay hosts
     const b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
@@ -294,8 +302,8 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const office = 'nektar_abcdefghij'
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
   try {
     const b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
     const s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
@@ -323,7 +331,7 @@ test('bstack H: blind seller completes via accept txHex — seller broadcasts th
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus(); const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   let b!: Awaited<ReturnType<typeof mkagent>>
   let s!: Awaited<ReturnType<typeof mkagent>>
   try {
@@ -359,7 +367,7 @@ test('bstack I: tampered accept — txHex of a different transaction → seller 
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus(); const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   let b!: Awaited<ReturnType<typeof mkagent>>
   let s!: Awaited<ReturnType<typeof mkagent>>
   try {
@@ -395,7 +403,7 @@ test('bstack J: push — a mined funding tree is proven and a cycle runs without
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   let a!: Awaited<ReturnType<typeof mkagent>>
   let kx: ReturnType<typeof knexFactory> | undefined
   try {
@@ -438,8 +446,8 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A; let s!: A; let b2!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir, opts: { refundBlocks: 40 } })
@@ -479,8 +487,8 @@ test('bstack L: buyer loses its database — delivery still completes after rest
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A; let s!: A; let b2!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
@@ -507,8 +515,8 @@ test('bstack M: no loss — one operation; the note is listed while the deal is 
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A; let s!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
@@ -531,8 +539,8 @@ test('bstack N: a note from a foreign key is ignored and still acked', async () 
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
@@ -556,8 +564,8 @@ test('bstack O: the recovery note fits the 16 KiB box content limit', async () =
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A; let s!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
@@ -619,7 +627,7 @@ test('bstack P: uncertain + escrow observable — reconcile resumes the deal wit
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A; let s!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir })
@@ -646,7 +654,7 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A; let s!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir })
@@ -674,7 +682,7 @@ test('bstack R: escrow rejected while awaiting_disclosure — late rejection fre
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A; let s!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir })
@@ -698,7 +706,7 @@ test('bstack S: disclosure rejected after completion_submitted — seller moves 
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A; let s!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir })
@@ -730,7 +738,7 @@ test('bstack T: refused refund retries on reconcile — succeeds after one refus
     const chain = new MockChain(); chain.verifyScripts = true
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
     const logs: string[] = []
-    const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+    const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
     let b!: A; let s!: A
     try {
       let left = refuse
@@ -771,8 +779,8 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A; let s!: A; let s2!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
@@ -822,8 +830,8 @@ test('bstack V: delivered collected but not yet processed — the held envelope 
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let b!: A; let s!: A; let b2!: A
   try {
     b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
@@ -858,8 +866,8 @@ test('bstack W: a sellerNote from a foreign key is ignored and still acked', asy
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
-  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
-  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
   let s!: A
   try {
     s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
@@ -880,4 +888,149 @@ test('bstack W: a sellerNote from a foreign key is ignored and still acked', asy
     assert.equal(items.filter(i => (i.body as { market?: { type?: string } }).market?.type === 'sellerNote').length, 0, 'foreign sellerNote was acked anyway')
     await s.rt.stop()
   } finally { try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+const LOG_STREAM = 'nektar_abcdefghij'
+const journalLines = async (hosts: MinihostHandle[], chain: MockChain, stream: string, producer: string) => {
+  const { readLog } = await import('@nektar/bstack')
+  return await readLog({ hosts: hosts.map(h => h.url), stream, producer, tracker: trackerFor(chain) })
+}
+const jTxid = async (dir: string, name: string, seq: number): Promise<string> => {
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'automation.sqlite') }, useNullAsDefault: true })
+  try { const r = await kx('bstack_carriers').where({ artifact_hash: `log:${LOG_STREAM}:${seq}` }).first(); return String(r.txid) } finally { await kx.destroy() }
+}
+const dealJournal = async (a: A, opId: string): Promise<Record<string, any>> => {
+  const op = await a.rt.store.operation(opId)
+  return (await a.rt.dealJournal?.(op!)) ?? {}
+}
+
+test('bstack X: a full deal journals every state on both streams — complete for the counterparty, nothing sensitive in the lines', { timeout: 300_000 }, async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.includes((await saleOps(s))[0]?.state ?? '')
+    assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    await drive([b.rt, s.rt], chain, 3) // let the journal append settle
+    const bo = (await buyerOp(b))!
+    const so = (await saleOps(s))[0]!
+
+    // the buyer sees the seller's stream for this deal: complete, with the
+    // seller-side states
+    const bj = await dealJournal(b, bo.operationId)
+    assert.equal((bj.own as { stream: string }).stream, LOG_STREAM)
+    const cp = bj.counterparty as { complete: boolean, entries: Array<{ n: number, state: string }>, gaps: unknown[] }
+    assert.equal(cp.complete, true, 'buyer sees a complete seller journal | ' + JSON.stringify(bj).slice(0, 400))
+    const cpStates = cp.entries.map(e => e.state)
+    assert.ok(cpStates.includes('quoted'), 'seller journal has quoted | ' + cpStates.join(','))
+    assert.ok(cpStates.includes('completion_submitted'), 'seller journal has completion_submitted | ' + cpStates.join(','))
+
+    // the seller sees the buyer's stream: collecting -> disclosure_verified
+    const sj = await dealJournal(s, so.operationId)
+    const scp = sj.counterparty as { complete: boolean, entries: Array<{ n: number, state: string }> }
+    assert.equal(scp.complete, true, 'seller sees a complete buyer journal | ' + JSON.stringify(sj).slice(0, 400))
+    const sStates = scp.entries.map(e => e.state)
+    for (const st of ['collecting', 'awaiting_disclosure', 'disclosure_verified']) assert.ok(sStates.includes(st), `buyer journal has ${st} | ` + sStates.join(','))
+
+    // no journal batch leaks the finding, the question or any wrapped secret:
+    // decode every tm_log carrier the hosts hold and scan its lines
+    const { Transaction } = await import('@bsv/sdk')
+    const { readPushDrop } = await import('@lightwebinc/blogs-host/dist/script.js')
+    const { decodeBatch } = await import('@lightwebinc/blogs-host/dist/index.js')
+    let checked = 0
+    for (const beef of h1.raw().concat(h2.raw())) {
+      let tx: InstanceType<typeof Transaction>
+      try { tx = Transaction.fromAtomicBEEF(beef) } catch { continue }
+      for (const o of tx.outputs) {
+        const pd = readPushDrop(new Uint8Array(o.lockingScript.toBinary()))
+        if (pd === undefined || pd.fields.length !== 2) continue
+        let b2: ReturnType<typeof decodeBatch>
+        try { b2 = decodeBatch(pd.fields[0]!) } catch { continue }
+        if (b2.stream !== LOG_STREAM || b2.content === undefined) continue
+        checked++
+        const text = new TextDecoder().decode(b2.content)
+        assert.ok(!text.includes('"wrapped"'), 'journal line mentions wrapped')
+        assert.ok(!text.includes(FINDING), 'journal line leaks the finding text')
+        assert.ok(!text.includes('libfoo 3.0 migration?'), 'journal line leaks the question')
+      }
+    }
+    assert.ok(checked >= 2, `decoded ${checked} journal batches`)
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+test('bstack Y: a journal batch dropped by every host shows the gap — complete:false', { timeout: 300_000 }, async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const dropped = new Set<string>()
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM, drop: txid => dropped.has(txid) })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM, drop: txid => dropped.has(txid) })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.includes((await saleOps(s))[0]?.state ?? '')
+    assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    await drive([b.rt, s.rt], chain, 3)
+    const bo = (await buyerOp(b))!
+
+    // find the seller batch whose lines mention this deal and drop it everywhere
+    const sj = await dealJournal(b, bo.operationId)
+    const seqs = [...new Set((sj.counterparty as { entries: Array<{ seq: number }> }).entries.map(e => e.seq))]
+    assert.ok(seqs.length >= 1, 'deal entries exist in the seller journal')
+    const mid = seqs[Math.floor(seqs.length / 2)]!
+    dropped.add(await jTxid(dir, 'seller', mid))
+    const bj = await dealJournal(b, bo.operationId)
+    const cp = bj.counterparty as { complete: boolean, gaps: Array<{ from: number, to: number }> }
+    assert.equal(cp.complete, false, 'the withheld batch breaks completeness | ' + JSON.stringify(bj).slice(0, 400))
+    assert.ok(cp.gaps.some(g => g.from <= mid && g.to >= mid), `gap at seq ${mid} listed | ` + JSON.stringify(cp.gaps))
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+test('bstack Z: restart between tick and append — events land exactly once', { timeout: 300_000 }, async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  let armed = false
+  const logOnly = (topics?: string[]) => armed && (topics ?? []).some(t => t.startsWith('tm_log_'))
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM, failNext: logOnly })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM, failNext: logOnly })
+  let b!: A; let s!: A; let b2!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    await drive([b.rt, s.rt], chain, 2) // a first batch lands, then the append stalls
+    armed = true
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    await drive([b.rt], chain, 3)
+    const stalled = await journalLines([h1, h2], chain, LOG_STREAM, b.pub)
+    const stalledLines = stalled.batches.flatMap(x => x.lines).length
+    // restart on the same database — nothing lost, the cursor just lagged
+    await b.rt.stop()
+    b2 = await respawn(b, { dir, name: 'buyer', hosts: [h1.url, h2.url], logs, chain })
+    armed = false
+    await drive([b2.rt], chain, 4)
+    const read = await journalLines([h1, h2], chain, LOG_STREAM, b.pub)
+    const all = read.batches.flatMap(x => x.lines.map(l => JSON.parse(l) as { op: string, n: number }))
+    const bo = (await buyerOp(b2))!
+    const mine = all.filter(l => l.op === bo.operationId).map(l => l.n).sort((a, z) => a - z)
+    assert.ok(mine.length > 0, 'the deal\'s events were appended after the restart')
+    assert.equal(new Set(mine).size, mine.length, `duplicate n values: ${mine.join(',')}`)
+    assert.deepEqual(mine, Array.from({ length: mine.length }, (_, i) => i + 1), 'n values contiguous from 1')
+    assert.ok(read.batches.flatMap(x => x.lines).length > stalledLines, 'the queued events caught up')
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await b2?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
 })

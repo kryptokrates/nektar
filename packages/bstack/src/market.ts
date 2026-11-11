@@ -29,9 +29,9 @@ export function lanesFor (net: string, domains: string[]): string[] {
   return d.map(x => laneOf(net, x))
 }
 
-export function verifyBody (m: MarketPayload): boolean {
+export function verifyBody (m: MarketPayload, now?: number): boolean {
   const b = m.body as { want?: unknown, offer?: unknown, sig: string }
-  return m.kind === 'want' ? verifyWant(b.want as never, b.sig) : verifyOffer(b.offer as never, b.sig)
+  return m.kind === 'want' ? verifyWant(b.want as never, b.sig, { now }) : verifyOffer(b.offer as never, b.sig, { now })
 }
 export function bodyPub (m: MarketPayload): string {
   const b = m.body as { want?: { pub: string }, offer?: { pub: string } }

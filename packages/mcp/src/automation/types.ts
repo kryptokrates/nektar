@@ -13,5 +13,7 @@ export interface Automation {
   /** on-demand journal view for `deals { operationId }` — own head plus the
    *  counterparty's stream filtered to this deal */
   dealJournal?: (op: import('./store.js').Operation) => Promise<Record<string, unknown> | undefined>
+  /** bstore/S3 object store in use (undefined = evidence/pack storage off) */
+  objectStore?: import('../objectstore.js').S3ObjectStore
   stop: () => Promise<void>
 }

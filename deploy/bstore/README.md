@@ -30,11 +30,16 @@ docker compose run --rm gateway s3d address -config /etc/bstore/gateway.json -id
 docker compose run --rm gateway s3d fund -config /etc/bstore/gateway.json -identity gw -txid <TXID>
 ```
 
-Then put the gateway behind `NEKTAR_BSTORE_URL` on the instance:
+Then point the instance's object store at the gateway (SigV4, path-style):
 
 ```bash
-NEKTAR_BSTORE_URL=http://127.0.0.1:9000
+NEKTAR_BSTORE_S3_URL=http://127.0.0.1:9000
+NEKTAR_BSTORE_BUCKET=<s3 bucket name — bstore bucket id with '-' for '_'>
+NEKTAR_BSTORE_ACCESS_KEY=nektar          # matches access_keys[0].id in gateway config
+NEKTAR_BSTORE_SECRET_KEY=<BSTORE_S3_SECRET from .env>
 ```
+
+The gateway's `bounty` config sets the put bounty (satoshis/t/k/retention) — there is no per-request bounty header. Nektar verifies every read against its own SHA-256 ref; possession proofs and settlement stay with the providers.
 
 ## Verifying
 

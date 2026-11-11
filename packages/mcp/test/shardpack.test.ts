@@ -144,3 +144,71 @@ test('pack endpoint + remote import: /.well-known/nektar lists offerable shards;
     assert.equal(d.publicPacks, 1) // 'guide' only — 'hr' is private, __imports__ is system
   } finally { srv.close() }
 })
+
+test('bstore packs: describeShard publishes the pack; .well-known carries store; importShard {store} verifies; tamper refuses', async () => {
+  const { createServer } = await import('node:http')
+  const { S3ObjectStore } = await import('../src/objectstore.js')
+  const { createHttpApi } = await import('../src/http.js')
+  // accept-any-signature fake S3 — path-style PUT/GET/HEAD (the SigV4 check
+  // lives in objectstore.test.ts)
+  const objects = new Map<string, Uint8Array>()
+  const metas = new Map<string, string>()
+  const fake = createServer((req, res) => {
+    const key = req.url!.split('/').slice(2).join('/')
+    if (req.method === 'PUT') {
+      const c: Buffer[] = []; req.on('data', x => c.push(x))
+      req.on('end', () => { objects.set(key, new Uint8Array(Buffer.concat(c))); metas.set(key, String(req.headers['x-amz-meta-sha256'] ?? '')); res.writeHead(200).end() })
+      return
+    }
+    if (req.method === 'HEAD') {
+      const o = objects.get(key)
+      if (o === undefined) { res.writeHead(404).end(); return }
+      res.writeHead(200, { 'content-length': o.length, 'x-amz-meta-sha256': metas.get(key) ?? '' }).end(); return
+    }
+    if (req.method === 'GET') {
+      const o = objects.get(key)
+      if (o === undefined) { res.writeHead(404).end(); return }
+      res.writeHead(200).end(Buffer.from(o)); return
+    }
+    res.writeHead(405).end()
+  })
+  await new Promise<void>(r => fake.listen(0, '127.0.0.1', r))
+  const s3port = (fake.address() as AddressInfo).port
+  const client = new S3ObjectStore({ endpoint: `http://127.0.0.1:${s3port}`, bucket: 'packs-mock', accessKey: 'a', secretKey: 's' })
+  const a = setup({ objectStore: client })
+  const srv = createHttpApi(a.mem).listen(0)
+  await new Promise(r => srv.once('listening', r))
+  const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`
+  try {
+    await a.mem.remember('guide', 'fact one')
+    await a.mem.remember('guide', 'fact two')
+    a.settle('guide')
+    // committing the manifest for a public shard publishes the pack
+    await a.mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'pack', priceSats: 50 }] })
+    const ref = a.mem.packStoreRef('guide')
+    assert.ok(ref !== undefined, 'pack stored after describeShard')
+    assert.equal(ref!.bucket, 'packs-mock')
+    assert.match(ref!.key, /^packs\/mock\/[0-9a-f]+\/[0-9a-f]{64}\.json$/)
+    // the discovery doc names the store ref for the shard
+    const disco = await (await fetch(`${base}/.well-known/nektar`)).json()
+    const entry = (disco.publicShards as Array<{ shard: string, store?: { key: string }, packUrl?: string }>).find(s => s.shard === 'guide')
+    assert.equal(entry?.store?.key, ref!.key, '.well-known carries the store ref')
+    assert.ok(entry?.packUrl, 'http fallback stays advertised')
+    // a peer imports through the store ref — getVerified + pack re-verification
+    const b = peerOf(a, { objectStore: client })
+    const imp = await callTool(b, 'importShard', { store: ref }) as { imported: number, anchored: number }
+    assert.equal(imp.imported, 2); assert.equal(imp.anchored, 2)
+    // a tampered object is refused by getVerified (size/digest) before it can land
+    const c = peerOf(a, { objectStore: client })
+    objects.set(ref!.key, new TextEncoder().encode('{"kind":"forged"}'))
+    await assert.rejects(callTool(c, 'importShard', { store: ref }) as Promise<unknown>, /objectstore/)
+    // and a pack that passes the digest but fails re-verification is refused too
+    const d2 = peerOf(a, { objectStore: client })
+    const pack = await a.mem.exportShardPack('guide')
+    ;(pack.records[0] as { data: string }).data = 'swapped plaintext'
+    const forged = await client.put(`packs/mock/forged/${'ab'.repeat(32)}.json`, new TextEncoder().encode(JSON.stringify(pack)))
+    const r2 = await callTool(d2, 'importShard', { store: forged }) as { imported: number, unverifiable: string[] }
+    assert.equal(r2.imported, 2, 'tampered records still land — as unverifiable, never trusted')
+    assert.ok(r2.unverifiable.length > 0)
+  } finally { fake.close(); srv.close() }
+})

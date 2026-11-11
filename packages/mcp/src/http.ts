@@ -418,6 +418,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
               offers: manifest?.offers,
               headTxid: head?.txid,
               packUrl: `${base}/v1/pack/${encodeURIComponent(s)}`,
+              ...(mem.packStoreRef(s) !== undefined ? { store: mem.packStoreRef(s) } : {}),
               import: { tool: 'importShard', args: { from: base, shard: s } }
             }
           }))
@@ -428,10 +429,6 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
         try {
           const pack = await mem.exportShardPack(decodeURIComponent(p[2]!))
           mem.metrics.inc('nektar_packs_served_total', {}, 1, 'public shard packs served')
-          // bstore mirror — durable bounty-paid retention when a gateway is set
-          if (process.env.NEKTAR_BSTORE_URL) {
-            fetch(`${process.env.NEKTAR_BSTORE_URL.replace(/\/$/, '')}/objects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(pack) }).catch(() => {})
-          }
           return send(200, pack)
         } catch (e) {
           const m = (e as Error).message

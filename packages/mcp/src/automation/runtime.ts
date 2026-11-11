@@ -6,6 +6,7 @@ import type { NektarMemory } from '../memory.js'
 import { AutomationStore } from './store.js'
 import { MarketEngine, type MarketMessage, type MarketTransport, type MarketOptions } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
+import { objectStoreFromEnv } from '../objectstore.js'
 import type { Automation } from './types.js'
 
 export type { Automation } from './types.js'
@@ -26,6 +27,9 @@ export interface AutomationConfig {
   /** blogs deal-journal stream id (`<name>_<10 chars>`); every deal event is
    *  appended as a signed numbered batch to tm_log_<stream> - env NEKTAR_LOG_STREAM */
   logStream?: string
+  /** bstore/S3 object store for deal evidence — absent = feature off.
+   *  Default: objectStoreFromEnv() (NEKTAR_BSTORE_*). */
+  objectStore?: import('../objectstore.js').S3ObjectStore
   now?: () => number
 }
 
@@ -47,6 +51,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   const store = new AutomationStore(kx)
   await store.init()
   const key = mem.operatorKey()
+  const objectStore = cfg.objectStore ?? objectStoreFromEnv()
   const marketHosts = (cfg.marketHosts ?? []).map(u => u.replace(/\/+$/, ''))
   const lanes = marketHosts.length === 0 ? undefined : await (async () => {
     const mod = await import('@nektar/bstack')
@@ -257,8 +262,43 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
         }
       }
       await poll(); await engine.tick()
+      await storeEvidence()
       await appendLogEvents()
     } catch (e) { log(`automation: ${(e as Error).message}`) }
+  }
+  // bstore evidence: once a buyer op verifies the disclosure, the redacted
+  // bundle (question + disclosure tx out, digests in) goes to the object
+  // store under a deterministic key, and a same-state 'evidence_stored'
+  // transition commits the {bucket,key,sha256,size} ref into the op — the
+  // blogs journal then anchors the ref's digest. Deterministic bytes + key
+  // make a crash-and-retry idempotent: same put, exactly one event. A store
+  // failure is logged once per distinct message and retried next cycle; it
+  // never blocks the deal. Sellers store nothing (the buyer's bundle is the
+  // record).
+  let evidenceError = ''
+  const storeEvidence = async (): Promise<void> => {
+    if (objectStore === undefined) return
+    const { collectTradeEvidence, redactTradeEvidence } = await import('./evidence.js')
+    for (const op of await store.operations({ role: 'buyer', states: ['disclosure_verified', 'useful'] })) {
+      if (op.data.evidenceRef !== undefined) continue
+      try {
+        const bundle = redactTradeEvidence(await collectTradeEvidence(store, op, txid => mem.fetchTx(txid)))
+        const bytes = new TextEncoder().encode(JSON.stringify(bundle))
+        const key = `evidence/${cfg.network}/${op.operationId}.json`
+        const digest = Buffer.from(await crypto.subtle.digest('SHA-256', bytes)).toString('hex')
+        const head = await objectStore.head(key).catch(() => undefined)
+        const ref = head?.sha256 === digest
+          ? { bucket: objectStore.bucket, key, sha256: digest, size: head.size }
+          : await objectStore.put(key, bytes, 'application/json')
+        const cur = await store.operation(op.operationId)
+        if (cur === undefined || cur.data.evidenceRef !== undefined) continue
+        await store.transition(op.operationId, cur.revision, cur.state, { cause: 'evidence_stored', data: { evidenceRef: ref }, evidence: { ref } })
+        evidenceError = ''
+      } catch (e) {
+        const m = `automation: evidence ${op.operationId}: ${(e as Error).message.slice(0, 160)}`
+        if (m !== evidenceError) { evidenceError = m; log(m) }
+      }
+    }
   }
   // blogs deal journal: every market event becomes one line in one batch
   const EV_CURSOR = 'log#events'
@@ -388,7 +428,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     void work.finally(() => { inflight.delete(work) })
   })
   return {
-    store, engine, cycle, logStream, dealJournal,
+    store, engine, cycle, logStream, dealJournal, objectStore,
     marketSlots: async () => lanes === undefined ? { market: 0, bbox: 0, log: 0, finger: 0 } : { market: await lanes.ledger.remaining('market'), bbox: await lanes.ledger.remaining('bbox'), log: await lanes.ledger.remaining('log'), finger: await lanes.ledger.remaining('finger') },
     stop: async () => {
       stopped = true

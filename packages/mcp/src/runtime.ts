@@ -156,7 +156,8 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   // an invoice served to a missing address is a payment that can never settle.
   const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
   if (paymentsEnabled()) requireOperatorWallet()
-  const base: NektarMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities, network: cfg.network, broadcasterUrl: cfg.main?.broadcasterUrl, bond: process.env.NEKTAR_BOND_EPOCH || process.env.NEKTAR_BOND_MAXFEE ? { epochBlocks: Number(process.env.NEKTAR_BOND_EPOCH ?? 144), ...(process.env.NEKTAR_BOND_MAXFEE ? { maxFee: BigInt(process.env.NEKTAR_BOND_MAXFEE) } : {}) } : undefined }
+  const { objectStoreFromEnv } = await import('./objectstore.js')
+  const base: NektarMemoryOptions = { batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 }, modelId: cfg.modelId ?? 'unspecified', clearanceAuthorities: cfg.clearanceAuthorities, network: cfg.network, broadcasterUrl: cfg.main?.broadcasterUrl, objectStore: objectStoreFromEnv(), bond: process.env.NEKTAR_BOND_EPOCH || process.env.NEKTAR_BOND_MAXFEE ? { epochBlocks: Number(process.env.NEKTAR_BOND_EPOCH ?? 144), ...(process.env.NEKTAR_BOND_MAXFEE ? { maxFee: BigInt(process.env.NEKTAR_BOND_MAXFEE) } : {}) } : undefined }
   if (cfg.network === 'mock') {
     const chain = new MockChain(); chain.verifyScripts = true
     const funder = new MockFunder(); funder.topup(Number(process.env.NEKTAR_DEMO_UTXOS ?? 200))

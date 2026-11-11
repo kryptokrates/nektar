@@ -139,6 +139,22 @@ NEKTAR_OVERLAY_HOST=0.0.0.0 NEKTAR_OVERLAY_PORT=8090 \
 
 `NEKTAR_OVERLAY_DIR` holds `overlay.sqlite` (ads, catalogs, wants, anchor heads, the event log) — back it up; losing it forfeits directory state and the event-cursor space consumers depend on. Announcements re-verify signatures on ingest, so a restored db contains only self-authenticating artifacts. The off-chain announce/catalog/want routes are the free path; the same artifacts are also submittable on-chain as `tm_presence` outputs, which propagate via GASP to any peer overlay hitting `/requestSyncResponse`.
 
+## Object storage (bstore)
+
+Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Lightweb's storage market) instead of relying on the built-in HTTP origin. Writing to bstore is Go-only (`bstore s3d`), so Nektar acts as an S3 client — SigV4, path-style — to a gateway the **deployment operator runs and pays for**. With no store configured the feature is off and nothing else changes (`/v1/pack/{shard}` remains the pack path).
+
+| Env | Meaning |
+|---|---|
+| `NEKTAR_BSTORE_S3_URL` | gateway base URL (e.g. `http://127.0.0.1:9000` for the quickstart `s3d`) |
+| `NEKTAR_BSTORE_BUCKET` | S3 bucket name — the bstore bucket id with `-` for `_` (e.g. `packs-psbqmkflww`) |
+| `NEKTAR_BSTORE_ACCESS_KEY` / `NEKTAR_BSTORE_SECRET_KEY` | SigV4 credentials — or `NEKTAR_BSTORE_SECRET_KEY_FILE` for a file-held secret |
+| `NEKTAR_BSTORE_BOUNTY_SATS` | currently inert: bstore's bounty is set in the gateway's own config (`bounty` object), not per request — docs/s3.md defines no put-time bounty header |
+
+- Buyer ops reaching `disclosure_verified` store a **redacted** evidence bundle at `evidence/<network>/<operationId>.json` (question and disclosure tx become SHA-256 digests — no plaintext or wrapped secret leaves the node) and commit the `{bucket, key, sha256, size}` ref into the op via an `evidence_stored` event, which the deal journal then anchors. `deals {operationId}` shows `evidence: {ref, stored: true}`; the operator tool `evidence {ref | operationId}` fetches and re-verifies.
+- `describeShard`/`sell` on a PUBLIC shard also PUT the shard pack at `packs/<network>/<shardId>/<sha256>.json` and publish the ref in `/.well-known/nektar` (`store` field) — `importShard {store}` fetches it.
+- **What Nektar verifies:** every read goes through `getVerified` — object size ≤ 8 MiB, optional expected size, and SHA-256 equal to the stored ref — before evidence checks or pack re-verification run. A wrong or tampered object is refused, never trusted.
+- **What Nektar does not verify or operate:** provider possession proofs (CHIRP closures), bounty races/claims, provider settlement, and gateway availability or honesty — those are the gateway's and providers' business. The gateway's ETag is not an MD5; Nektar's own SHA-256 is the only integrity check relied on.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

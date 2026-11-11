@@ -578,6 +578,17 @@ export const TOOLS = [
     description: "Funding overview: receive address, spendable balance, tracked UTXOs, free market/bbox funding-tree slots, and the single active policy's budget when there is one.",
     inputSchema: { type: 'object', properties: {} }
   },
+  {
+    name: 'evidence',
+    description: "Fetch a stored trade-evidence bundle from the bstore object store and re-verify it: {ref} ({bucket?, key, sha256, size?}) or {operationId} to resolve the operation's stored ref. Returns {ok, checks} — redacted bundles name the checks the withheld question/disclosure fields make unavailable.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'object', properties: { bucket: { type: 'string' }, key: { type: 'string' }, sha256: { type: 'string' }, size: { type: 'number' } }, required: ['key', 'sha256'] },
+        operationId: { type: 'string' }
+      }
+    }
+  },
 ] as const
 
 // consolidated state machines: op → internal case label (never listed in
@@ -1224,11 +1235,18 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     }
     case 'importShard': {
       let pack = args?.pack
+      // object-store ref — fetch through getVerified (digest-checked) before
+      // the pack's own re-verification decides what lands
+      if (pack === undefined && typeof args?.store === 'object' && args.store !== null) {
+        const r = args.store as { bucket?: string, key?: string, sha256?: string, size?: number }
+        if (typeof r.key !== 'string' || typeof r.sha256 !== 'string') throw new Error('importShard: store ref needs {key, sha256} (bucket/size optional)')
+        pack = await mem.fetchStoredPack(r as { bucket?: string, key: string, sha256: string, size?: number })
+      }
       if (pack === undefined) {
         const url = typeof args?.packUrl === 'string' ? args.packUrl
           : typeof args?.from === 'string' && typeof args?.shard === 'string'
             ? `${args.from.replace(/\/+$/, '')}/v1/pack/${encodeURIComponent(args.shard)}` : undefined
-        if (!url) throw new Error('importShard: give {pack}, {from,shard}, or {packUrl}')
+        if (!url) throw new Error('importShard: give {pack}, {from,shard}, {packUrl}, or {store}')
         if (!/^https?:\/\//i.test(url)) throw new Error('importShard: pack URL must be http(s)')
         const r = await fetch(url, { signal: AbortSignal.timeout(15_000) })
         if (!r.ok) throw new Error(`importShard: fetch ${url} → ${r.status}`)
@@ -1236,6 +1254,26 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       }
       if (typeof pack !== 'object' || pack === null) throw new Error('importShard: pack object required (ShardPack JSON from exportShard or a pack URL)')
       return await mem.importShardPack(pack)
+    }
+    case 'evidence': {
+      // stored trade-evidence bundles — operator profile only. Fetches the
+      // bundle through getVerified (digest/size checked against the ref) and
+      // runs the evidence verifier; redacted bundles report which checks the
+      // withheld question/disclosure fields make unavailable.
+      const { objectStoreFromEnv } = await import('./objectstore.js')
+      const { verifyTradeEvidence } = await import('./automation/evidence.js')
+      const st = mem.objectStore ?? mem.automation?.objectStore ?? objectStoreFromEnv()
+      if (st === undefined) throw new Error('evidence: object store is not configured (NEKTAR_BSTORE_*)')
+      let ref = args?.ref as { bucket?: string, key: string, sha256: string, size?: number } | undefined
+      if (ref === undefined && typeof args?.operationId === 'string') {
+        const au = mem.automation
+        if (!au) throw new Error('evidence: operationId lookup needs automation (NEKTAR_AUTOMATION=1)')
+        ref = (await au.store.operation(args.operationId))?.data.evidenceRef as typeof ref
+        if (ref === undefined) throw new Error(`evidence: no stored evidence for ${args.operationId}`)
+      }
+      if (ref === undefined) throw new Error('evidence: give {ref} or {operationId}')
+      const bytes = await st.getVerified(ref)
+      return verifyTradeEvidence(JSON.parse(new TextDecoder().decode(bytes)))
     }
     case 'doctor': {
       const d = await mem.doctor()
@@ -1291,6 +1329,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
           priceSats: (d.amounts as { purchaseSats?: number } | undefined)?.purchaseSats ?? d.priceSats,
           counterparty: o.role === 'seller' ? (d.want as { want?: { pub?: string } } | undefined)?.want?.pub : selKey?.split(':')[0],
           escrowTxid: d.escrowTxid, disclosureTxid: (d.result as { disclosureTxid?: string } | undefined)?.disclosureTxid, refundTxid: d.refundTxid,
+          ...(d.evidenceRef !== undefined ? { evidence: { ref: d.evidenceRef, stored: true } } : {}),
           updatedAt: o.updatedAt
         }
       }

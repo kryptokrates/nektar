@@ -238,6 +238,14 @@ Honest boundaries:
   most 7 days) and can still refund or receive the disclosure; `delivered`
   envelopes stay unacknowledged until the purchase settles, so a crash between
   collecting the envelope and processing it does not lose the disclosure.
+- Deal evidence bundles stored via the bstore object store are **redacted**:
+  the question text and the disclosure tx (which would reveal the wrapped
+  secret) are replaced by their SHA-256, and `verifyTradeEvidence` marks the
+  checks that need them unavailable. The bundle is committed to the operation
+  journal as a digest of its `{bucket, key, sha256, size}` ref
+  (`evidence_stored`), and Nektar verifies the downloaded bytes' content
+  hash — provider possession proofs, bounty races and gateway availability
+  remain the gateway's and providers' business, never claims Nektar makes.
   A seller recovers quoted sales the same way — its own `sellerNote` rebuilds
   the sale under the original operation id. Policies, budgets and operations
   that had not reached escrow/quote are not recovered.

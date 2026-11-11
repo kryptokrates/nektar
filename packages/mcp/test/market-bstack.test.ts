@@ -40,13 +40,14 @@ const policyFor = (pub: string): AutomationPolicy => ({
 })
 
 interface A { mem: NektarMemory, rt: Automation, pub: string, policyHash: string, name: string }
-interface MkOpts { hosts: string[], msgs?: ReturnType<typeof bus>, chain: MockChain, logs: string[], dir: string, opts?: Partial<import('../src/automation/market.js').MarketOptions>, call?: (tool: string, args: any) => Promise<any> }
+interface MkOpts { hosts: string[], msgs?: ReturnType<typeof bus>, chain: MockChain, logs: string[], dir: string, opts?: Partial<import('../src/automation/market.js').MarketOptions>, call?: (tool: string, args: any) => Promise<any>, objectStore?: import('../src/objectstore.js').S3ObjectStore }
 const mkagent = async (name: string, o: MkOpts): Promise<A> => {
   const funder = new MockFunder(); funder.topup(30)
   for (const t of funder.parents) o.chain.registerParent(t)
-  const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
+  const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1', objectStore: o.objectStore })
   const pub = mem.operatorKey().toPublicKey().toString()
-  const rt = await openAutomation(mem, { network: NET, dataDir: join(o.dir, name), marketHosts: o.hosts, intervalMs: 0, call: o.call ?? ((t2, a) => callTool(mem, t2, a)), log: l => o.logs.push(`${name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, messages: o.msgs?.for(pub), opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts } })
+  const rt = await openAutomation(mem, { network: NET, dataDir: join(o.dir, name), marketHosts: o.hosts, intervalMs: 0, call: o.call ?? ((t2, a) => callTool(mem, t2, a)), log: l => o.logs.push(`${name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, messages: o.msgs?.for(pub), objectStore: o.objectStore, opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts } })
+  mem.automation = rt // bin.ts does the same in production
   return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name }
 }
 const sellerize = async (s: A, price: number) => {
@@ -431,8 +432,9 @@ test('bstack J: push — a mined funding tree is proven and a cycle runs without
 
 
 // recovery-note helpers: wipe the automation dir and reopen on the SAME memory
-const respawn = async (a: A, o: { dir: string, name: string, hosts: string[], logs: string[], chain: MockChain, opts?: MkOpts['opts'] }): Promise<A> => {
-  const rt = await openAutomation(a.mem, { network: NET, dataDir: join(o.dir, o.name), marketHosts: o.hosts, intervalMs: 0, call: (t2, args) => callTool(a.mem, t2, args), log: l => o.logs.push(`${o.name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts } })
+const respawn = async (a: A, o: { dir: string, name: string, hosts: string[], logs: string[], chain: MockChain, opts?: MkOpts['opts'], objectStore?: import('../src/objectstore.js').S3ObjectStore }): Promise<A> => {
+  const rt = await openAutomation(a.mem, { network: NET, dataDir: join(o.dir, o.name), marketHosts: o.hosts, intervalMs: 0, call: (t2, args) => callTool(a.mem, t2, args), log: l => o.logs.push(`${o.name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, objectStore: o.objectStore, opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts } })
+  a.mem.automation = rt
   return { mem: a.mem, rt, pub: a.pub, policyHash: await rt.store.approvePolicy(policyFor(a.pub), 'test:operator'), name: o.name }
 }
 const OFFICE = 'nektar_abcdefghij'
@@ -1114,4 +1116,163 @@ test('bstack AC: hostile record hosts are refused by the SSRF guard', async () =
   assert.equal(fingerHostAllowed('http://ok.example.com', { allowHttp: true }), true)
   // on a mock network the guard stands down entirely — the rig's hosts ARE local
   assert.equal(fingerHostAllowed('http://127.0.0.1:18091', { allowHttp: true, allowLocal: true }), true)
+})
+
+// ── Phase 3c: bstore object storage ──────────────────────────────────────────
+
+/** accept-any-signature fake S3 (SigV4 verification lives in
+ *  objectstore.test.ts): path-style PUT/GET/HEAD, a `down` flag for
+ *  fault injection, and a put counter for the idempotence checks. */
+const fakeS3 = async () => {
+  const { createServer } = await import('node:http')
+  const objects = new Map<string, Uint8Array>()
+  const metas = new Map<string, string>()
+  const flags = { down: false, puts: 0 }
+  const server = createServer((req, res) => {
+    if (flags.down) { res.writeHead(503).end('store down'); return }
+    const key = req.url!.split('/').slice(2).join('/')
+    if (req.method === 'PUT') {
+      const c: Buffer[] = []; req.on('data', x => c.push(x))
+      req.on('end', () => { flags.puts++; objects.set(key, new Uint8Array(Buffer.concat(c))); metas.set(key, String(req.headers['x-amz-meta-sha256'] ?? '')); res.writeHead(200).end() })
+      return
+    }
+    if (req.method === 'HEAD') {
+      const o = objects.get(key)
+      if (o === undefined) { res.writeHead(404).end(); return }
+      res.writeHead(200, { 'content-length': o.length, 'x-amz-meta-sha256': metas.get(key) ?? '' }).end(); return
+    }
+    if (req.method === 'GET') {
+      const o = objects.get(key)
+      if (o === undefined) { res.writeHead(404).end(); return }
+      res.writeHead(200).end(Buffer.from(o)); return
+    }
+    res.writeHead(405).end()
+  })
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+  const port = (server.address() as { port: number }).port
+  const { S3ObjectStore } = await import('../src/objectstore.js')
+  const client = new S3ObjectStore({ endpoint: `http://127.0.0.1:${port}`, bucket: 'evidence-mock', accessKey: 'a', secretKey: 's' })
+  return { server, client, objects, flags }
+}
+
+test('bstack AD: a full deal stores redacted evidence — verified read, one event, journal line', { timeout: 300_000 }, async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const s3 = await fakeS3()
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir, objectStore: s3.client })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir, objectStore: s3.client })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.includes((await saleOps(s))[0]?.state ?? '')
+    assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    await drive([b.rt, s.rt], chain, 3)
+    const bo = (await buyerOp(b))!
+    const ref = bo.data.evidenceRef as { bucket: string, key: string, sha256: string, size: number } | undefined
+    assert.ok(ref !== undefined, 'buyer op carries evidenceRef')
+    assert.equal(ref!.key, `evidence/${NET}/${bo.operationId}.json`)
+    assert.equal(ref!.bucket, 'evidence-mock')
+    const evs = (await b.rt.store.events(bo.operationId)).filter(e => e.cause === 'evidence_stored')
+    assert.equal(evs.length, 1, 'exactly one evidence_stored event')
+    const bytes = await s3.client.getVerified(ref!)
+    const { verifyTradeEvidence } = await import('../src/automation/evidence.js')
+    const verdict = verifyTradeEvidence(JSON.parse(new TextDecoder().decode(bytes)))
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.checks))
+    // the public bundle must not leak: finding text, question text, or the
+    // disclosure tx (which reveals the wrapped secret)
+    const text = new TextDecoder().decode(bytes)
+    assert.ok(!text.includes(FINDING), 'evidence leaks the finding')
+    assert.ok(!text.includes('libfoo 3.0 migration?'), 'evidence leaks the question')
+    const disc = await b.mem.fetchTx((bo.data.result as { disclosureTxid: string }).disclosureTxid)
+    assert.ok(!text.includes(disc!.toHex()), 'evidence leaks the disclosure tx / wrapped secret')
+    // the seller stored no bundle of its own
+    assert.equal([...s3.objects.keys()].filter(k => k.startsWith('evidence/')).length, 1)
+    // the buyer's journal carries the evidence_stored line with the ref digest
+    const read = await journalLines([h1, h2], chain, LOG_STREAM, b.pub)
+    const jl = read.batches.flatMap(x => x.lines.map(l => JSON.parse(l) as { op?: string, cause?: string, ev?: string | null }))
+    const evLines = jl.filter(l => l.op === bo.operationId && l.cause === 'evidence_stored')
+    assert.equal(evLines.length, 1, 'one evidence_stored journal line')
+    assert.ok(evLines[0]!.ev !== null && evLines[0]!.ev !== undefined, 'journal line carries the ref digest')
+    // deals view surfaces it
+    const deal = await callTool(b.mem, 'deals', { operationId: bo.operationId }) as { evidence?: { stored?: boolean, ref?: { key: string } } }
+    assert.equal(deal.evidence?.stored, true)
+    assert.equal(deal.evidence?.ref?.key, ref!.key)
+    await b.rt.stop(); await s.rt.stop()
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } s3.server.close(); await h1.close(); await h2.close() }
+})
+
+test('bstack AE: store down — the deal completes; evidence lands once the store returns', { timeout: 300_000 }, async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const s3 = await fakeS3()
+  s3.flags.down = true
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir, objectStore: s3.client })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    const bo = (await buyerOp(b))!
+    assert.equal(bo.data.evidenceRef, undefined, 'store down — no ref yet, deal unaffected')
+    // the failure was reported, deduplicated to one line per distinct message
+    const evLogs = logs.filter(l => l.includes('evidence'))
+    assert.ok(evLogs.length >= 1 && evLogs.length <= 2, `bounded evidence failure log | ${evLogs.join(' | ')}`)
+    s3.flags.down = false
+    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.data.evidenceRef !== undefined, 30), 'evidence never landed | ' + logs.slice(-10).join(' | '))
+    assert.equal((await b.rt.store.events(bo.operationId)).filter(e => e.cause === 'evidence_stored').length, 1)
+    assert.equal([...s3.objects.keys()].filter(k => k.startsWith('evidence/')).length, 1)
+    await b.rt.stop(); await s.rt.stop()
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } s3.server.close(); await h1.close(); await h2.close() }
+})
+
+test('bstack AF: crash between the put and the transition — one event, one object', { timeout: 300_000 }, async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const s3 = await fakeS3()
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A; let b2!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir, objectStore: s3.client })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    // the commit after each store attempt "crashes" the agent — a cycle may
+    // re-run its passes back-to-back (tx-proof callbacks), so a one-shot throw
+    // would let the retry commit inside the same cycle. Held until the op has
+    // the object but no ref — then released before the respawn.
+    const origTransition = b.rt.store.transition.bind(b.rt.store)
+    let failCommit = true
+    b.rt.store.transition = (async (id: string, rev: number, to: string, ch: { cause?: string } & Record<string, unknown>) => {
+      if (failCommit && ch?.cause === 'evidence_stored') throw new Error('crash before commit')
+      return await origTransition(id, rev, to, ch as never)
+    }) as typeof b.rt.store.transition
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    // the window this test asserts: object exists, transition never committed
+    assert.ok(await untilBuyer(b, s, chain, async () => {
+      const bo = await buyerOp(b)
+      return bo !== undefined && (bo.state === 'disclosure_verified' || bo.state === 'useful') && [...s3.objects.keys()].some(k => k.startsWith('evidence/')) && bo.data.evidenceRef === undefined
+    }, 120), 'no object/stall | ' + logs.slice(-25).join(' | '))
+    await b.rt.stop()
+    failCommit = false
+    const putsBefore = s3.flags.puts
+    b2 = await respawn(b, { dir, name: 'buyer', hosts: [h1.url, h2.url], logs, chain, objectStore: s3.client })
+    await drive([b2.rt], chain, 4)
+    const bo = (await buyerOp(b2))!
+    assert.ok(bo.data.evidenceRef !== undefined, 'respawn completed the missing transition')
+    assert.equal((await b2.rt.store.events(bo.operationId)).filter(e => e.cause === 'evidence_stored').length, 1, 'exactly one evidence_stored event')
+    assert.equal(s3.flags.puts, putsBefore, 'the existing object was reused — no second put')
+    await s.rt.stop(); await b2.rt.stop()
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await b2?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } s3.server.close(); await h1.close(); await h2.close() }
 })

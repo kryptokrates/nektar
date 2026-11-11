@@ -57,7 +57,7 @@ services:
     volumes:
       - certs:/certs
 
-  # S3 gateway — the front door; write/read via the S3 API or NEKTAR_BSTORE_URL
+  # S3 gateway — the front door; Nektar talks SigV4 S3 to it (NEKTAR_BSTORE_S3_URL)
   gateway:
     <<: *cli
     depends_on:

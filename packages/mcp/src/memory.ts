@@ -77,6 +77,10 @@ export interface NektarMemoryOptions {
   securityStore?: SecurityStateStore
   /** persistence for anchor heads/tails/checkpoints (restart-safe, no fork) */
   stateStore?: MemoryStateStore
+  /** bstore/S3 object store: public shard packs are also PUT to the gateway
+   *  when a manifest is committed (env NEKTAR_BSTORE_*); absent = feature off
+   *  and /v1/pack/{shard} stays the only pack endpoint */
+  objectStore?: import('./objectstore.js').S3ObjectStore
   /** data dir for the public proof store (proofs/<sha256>) — defaults to
    *  NEKTAR_DATA_DIR or ./.nektar; proofs committed in private cites are
    *  served publicly for independent re-verification. */
@@ -120,6 +124,9 @@ export interface PersistedMemoryState {
    *  lets covenant spends build preimages from a fresh parent before
    *  indexers serve it. Bounded (last ~64). */
   txHex?: Record<string, string>
+  /** object-store refs of packs this instance PUT to bstore — keyed by shard;
+   *  lets /.well-known/nektar name the store location across restarts */
+  packStores?: Record<string, import('./objectstore.js').ObjectRef>
 }
 export interface MemoryStateStore { load: () => PersistedMemoryState | undefined, save: (s: PersistedMemoryState) => void }
 
@@ -1489,6 +1496,9 @@ export class NektarMemory {
    *  proofs; the flag is monotone (public→private allowed, never back) and
    *  persisted with the rest of the state so it survives restarts. */
   private flags = new Map<string, { private?: boolean }>()
+  /** bstore refs of packs this instance PUT (describeShard) — persisted in
+   *  state so /.well-known/nektar keeps naming them across restarts */
+  private packStores = new Map<string, import('./objectstore.js').ObjectRef>()
   /** is this shard declared private? */
   shardPrivate (shard: string): boolean { return this.flags.get(shard)?.private === true }
 
@@ -1593,7 +1603,33 @@ export class NektarMemory {
       network: process.env.NEKTAR_NETWORK ?? 'mock', issuedAt: Date.now()
     }
     const r = await this.remember(CATALOG_SHARD, JSON.stringify(manifest))
+    // store the pack when a bstore gateway is configured — only for shards
+    // the public-pack rule admits (not private, no level>0 records;
+    // exportShardPack enforces the same gates). Best-effort: a store
+    // failure never fails the describe, and /v1/pack stays the fallback.
+    if (this.opts.objectStore !== undefined) {
+      try {
+        const pack = await this.exportShardPack(shard)
+        const bytes = utf8(JSON.stringify(pack))
+        const sha = toHex(sha256(bytes))
+        const ref = await this.opts.objectStore.put(`packs/${manifest.network}/${this.shardId(shard)}/${sha}.json`, bytes, 'application/json')
+        this.packStores.set(shard, ref)
+        this.persistState()
+      } catch { this.metrics.inc('nektar_pack_store_errors_total') }
+    }
     return { manifest, seq: r.seq }
+  }
+  /** the configured bstore/S3 object store (undefined = feature off) */
+  get objectStore (): import('./objectstore.js').S3ObjectStore | undefined { return this.opts.objectStore }
+  /** pack-store refs this instance PUT to bstore — the `.well-known` doc
+   *  names them so importers can fetch through the store instead of HTTP. */
+  packStoreRef (shard: string): import('./objectstore.js').ObjectRef | undefined { return this.packStores.get(shard) }
+  /** fetch + verify a pack through the object store — every byte checks
+   *  against the ref's digest before importShardPack's own re-verification. */
+  async fetchStoredPack (ref: { bucket?: string, key: string, sha256: string, size?: number }): Promise<ShardPack> {
+    const st = this.opts.objectStore
+    if (st === undefined) throw new Error('object store is not configured (NEKTAR_BSTORE_*)')
+    return JSON.parse(new TextDecoder().decode(await st.getVerified(ref))) as ShardPack
   }
   /** the committed hash + anchor of a fragment — for redacted (private) cites
    *  that carry the proof value without naming the shard. */
@@ -1762,7 +1798,7 @@ export class NektarMemory {
       txid: this.bondHead.txid, vout: this.bondHead.vout, satoshis: this.bondHead.satoshis, script: this.bondHead.script,
       operatorPkh: this.bondContract.params.operatorPkh, releaseHeight: this.bondContract.params.bondReleaseHeight.toString(), maxFee: this.bondContract.params.maxFee.toString(), epochLen: this.bondContract.params.epochLen.toString()
     } : undefined
-    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags), importedBundles: Object.fromEntries(this.importedBundles), bond, txHex: Object.fromEntries(this.txHexCache) } as PersistedMemoryState)
+    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags), importedBundles: Object.fromEntries(this.importedBundles), bond, txHex: Object.fromEntries(this.txHexCache), packStores: Object.fromEntries(this.packStores) } as PersistedMemoryState)
   }
   private restoreState (): void {
     const s = this.opts.stateStore?.load()
@@ -1783,6 +1819,7 @@ export class NektarMemory {
     for (const [txid, hex] of Object.entries((s.txHex ?? {}) as Record<string, string>)) this.txHexCache.set(txid, hex)
     for (const [k, b] of Object.entries(s.importedBundles ?? {})) this.importedBundles.set(k, b)
     for (const [shard, f] of Object.entries(s.flags ?? {})) this.flags.set(shard, f)
+    for (const [shard, r] of Object.entries(s.packStores ?? {})) this.packStores.set(shard, r)
     if (s.bond) {
       this.bondContract = new CheckpointBond({ operatorPkh: s.bond.operatorPkh, bondReleaseHeight: BigInt(s.bond.releaseHeight), maxFee: BigInt(s.bond.maxFee), epochLen: BigInt(s.bond.epochLen ?? this.opts.bond?.epochBlocks ?? 144) })
       this.bondHead = { txid: s.bond.txid, vout: s.bond.vout, satoshis: s.bond.satoshis, script: s.bond.script }

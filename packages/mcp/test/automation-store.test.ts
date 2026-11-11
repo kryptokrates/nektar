@@ -81,14 +81,17 @@ test('budget: idempotent action ids, locked capital, release vs settle, revocati
   assert.deepEqual(await store.reserveBudget(ctx(hash, 'a'), { ...amt, purchaseSats: 300 }), { ok: false, code: 'action_reused_with_different_terms' })
   assert.deepEqual(await store.reserveBudget(ctx(hash, 'b'), amt), { ok: false, code: 'locked_capital_cap' })
   assert.equal(await store.commitBudget('a'), true)
-  assert.equal(await store.releaseBudget('a'), false, 'a committed (escaped) spend can never be released')
-  assert.deepEqual(await store.reserveBudget(ctx(hash, 'b'), amt), { ok: false, code: 'locked_capital_cap' })
-  now += 86_400_000
-  assert.deepEqual(await store.reserveBudget(ctx(hash, 'b'), amt), { ok: false, code: 'locked_capital_cap' }, 'day rollover does not free locked capital')
-  assert.equal(await store.settleBudget('a'), true)
-  assert.deepEqual(await store.reserveBudget(ctx(hash, 'b'), amt), { ok: true, existing: false })
+  // a committed row still releases: when the escrow tx is rejected for good
+  // the locked capital must come back — the late-rejection path relies on it
+  assert.equal(await store.releaseBudget('a'), true, 'a rejected (committed) escrow releases its locked capital')
+  assert.deepEqual(await store.reserveBudget(ctx(hash, 'b'), amt), { ok: true, existing: false }, 'released capital frees the lock')
   assert.equal(await store.releaseBudget('b'), true)
   assert.deepEqual(await store.reserveBudget(ctx(hash, 'b'), amt), { ok: false, code: 'action_released' })
+  assert.deepEqual(await store.reserveBudget(ctx(hash, 'b2'), amt), { ok: true, existing: false })
+  now += 86_400_000
+  assert.deepEqual(await store.reserveBudget(ctx(hash, 'b3'), amt), { ok: false, code: 'locked_capital_cap' }, 'day rollover does not free locked capital')
+  assert.equal(await store.settleBudget('b2'), true)
+  assert.deepEqual(await store.reserveBudget(ctx(hash, 'b3'), amt), { ok: true, existing: false })
   assert.deepEqual(await store.reserveBudget(ctx(hash, 'c'), { ...amt, purchaseSats: 501 }), { ok: false, code: 'price_above_policy' })
   assert.deepEqual(await store.reserveBudget({ ...ctx(hash, 'd'), networkId: 'main' }, amt), { ok: false, code: 'wrong_network' })
   assert.deepEqual(await store.reserveBudget(ctx('0'.repeat(64), 'e'), amt), { ok: false, code: 'unknown_policy' })

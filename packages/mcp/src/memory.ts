@@ -65,6 +65,9 @@ export interface NektarMemoryOptions {
   /** network the instance runs on — used for the funding-address prefix in
    *  fundingStatus (testnet-family → 0x6f). Optional; absent = mainnet prefix. */
   network?: 'mock' | 'regtest' | 'testnet' | 'main' | 'ttn'
+  /** BSV Broadcaster base URL (live networks) — lets txState ask the
+   *  broadcaster's /tx/{txid} verdict when the local view can't decide */
+  broadcasterUrl?: string
   /** CHN-006: confirmations after which an anchor counts as final (default 1) */
   finalityDepth?: number
   /** LOG-005: maximum merge delay for inclusion promises (default 10 min) */
@@ -336,6 +339,7 @@ export class NektarMemory {
     // deliver 'mined' proofs straight in — no confirmation polling
     this.chain.onStatus?.(ev => {
       if (ev.status === 'mined' && ev.merklePath) this.deliverTxProof(ev.txid, ev.merklePath)
+      if (ev.status === 'rejected' || ev.status === 'double-spent') this.deliverTxRejected(ev.txid)
     })
   }
   private logKey: PrivateKey
@@ -364,6 +368,38 @@ export class NektarMemory {
       if (shard) this.attachProof(shard, txid, mp)
     } catch { /* proof not for us / malformed */ }
     for (const cb of this.txProofCbs) { try { cb(txid, mp) } catch { /* listener errors are their own */ } }
+  }
+
+  private txRejected = new Set<string>()
+  private txRejectCbs: Array<(txid: string) => void> = []
+  /** subscribe to definitive transaction rejections — fed by verified
+   *  broadcaster callbacks (REJECTED / DOUBLE_SPEND_ATTEMPTED) and by chain
+   *  'rejected'/'double-spent' status events */
+  onTxRejected (cb: (txid: string) => void): void { this.txRejectCbs.push(cb) }
+  /** record a rejection the backend reported, then notify subscribers */
+  deliverTxRejected (txid: string): void {
+    this.txRejected.add(txid)
+    for (const cb of this.txRejectCbs) { try { cb(txid) } catch { /* listener errors are their own */ } }
+  }
+
+  /** what the chain view knows about a tx right now: mined (has a merkle
+   *  path), seen (known to the node), rejected (the backend explicitly said
+   *  so — REJECTED or DOUBLE_SPEND_ATTEMPTED), else unknown. On live networks
+   *  the broadcaster's /tx/{txid} verdict is the tiebreaker. */
+  async txState (txid: string): Promise<'mined' | 'seen' | 'rejected' | 'unknown'> {
+    if (this.txRejected.has(txid) || (this.chain as { isRejected?: (t: string) => boolean }).isRejected?.(txid) === true) return 'rejected'
+    const local = this.anchorTxs.get(txid) ?? (this.chain as { getTx?: (t: string) => import('@bsv/sdk').Transaction | undefined }).getTx?.(txid)
+    if (local?.merklePath !== undefined) return 'mined'
+    if (local !== undefined) return 'seen'
+    if (this.opts.network === 'mock' || this.opts.network === 'regtest' || this.opts.network === undefined) return 'unknown'
+    try {
+      const st = await fetch(`${this.opts.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) }).then(r => r.ok ? r.json() : null)
+      const status = String(st?.txStatus ?? '').toUpperCase()
+      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) { this.txRejected.add(txid); return 'rejected' }
+      if (status === 'MINED' || status === 'IMMUTABLE') return 'mined'
+      if (['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING'].includes(status)) return 'seen'
+    } catch { /* undecidable — caller retries */ }
+    return 'unknown'
   }
   /** the log signing key's pubkey (verifies promises and checkpoints) */
   logPublicKey (): string { return this.logKey.toPublicKey().toString() }

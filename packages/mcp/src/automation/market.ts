@@ -3,7 +3,7 @@ import { signWant, verifyWant, signOffer, verifyOffer, type SignedWant, type Sig
 import { verifyOfferSig, publicSaleQuote, saleQuoteWire } from '@nektar/identity'
 import { DisclosureSaleHost, CheckpointBond } from '@nektar/anchor'
 import { parseFragment, fromHex } from '@nektar/core'
-import type { AutomationStore, Operation, OutboxItem } from './store.js'
+import type { AutomationStore, InboxItem, Operation, OutboxItem } from './store.js'
 import { WalletCoordinator } from './wallet.js'
 import { decidePurchase, decideOffer, digestOf, type AutomationPolicy, type ActionContext } from './policy.js'
 import { rankOffers, type ScoreCandidate } from './scoring.js'
@@ -16,6 +16,10 @@ export type MarketMessage =
   // encrypted self-note the buyer keeps in its own inbox until the deal ends —
   // enough to rebuild the operation after losing the automation database
   | { type: 'note', v: 1, wantId: string, offerId: string, policyHash: string, want: SignedWant, offer: { so: SignedOffer, commitment?: any, mode?: string }, escrow: any, utxo: { txid: string, vout: number, satoshis: number, script: string }, escrowAction: string, amounts: { purchaseSats: number, feeSats: number, lockedSats: number } }
+  // the seller's equivalent — rebuilds the quoted sale after a database loss;
+  // signedOffer may be dropped to fit the box limit (the buyer's offer is
+  // already published — `offer.offerSig` then proves the quote came from us)
+  | { type: 'sellerNote', v: 1, wantId: string, offerId: string, policyHash: string, want: SignedWant, shard: string, seq: number, priceSats: number, offer: any, signedOffer?: SignedOffer, dueHeight: number }
 
 export interface MarketTransport {
   publishWant: (sw: SignedWant) => Promise<void>
@@ -38,6 +42,9 @@ export interface MarketDeps {
   height: () => Promise<number>
   tip?: () => Promise<{ tip: string, tipHeight: number } | undefined>
   fetchTx: (txid: string) => Promise<Transaction | undefined>
+  /** what the chain view knows about a tx — reconciles uncertain payment and
+   *  settlement states without waiting on block heights */
+  txState?: (txid: string) => Promise<'mined' | 'seen' | 'rejected' | 'unknown'>
   broadcast?: (tx: Transaction) => Promise<import('@nektar/chain').BroadcastResult>
   settleEscrow?: (tx: Transaction) => void
   afterPrepare?: (actionId: string) => void | Promise<void>
@@ -70,6 +77,13 @@ export class MarketEngine {
   private chain: Promise<unknown> = Promise.resolve()
   private wallet?: WalletCoordinator
   private inflight = new Set<string>()
+  /** per-operation reconcile throttle (engine clock, 30 s) — kept in memory:
+   *  persisting it would need an event-writing transition per check, and the
+   *  reconcile paths must not spam the event log */
+  private reconcileDue = new Map<string, number>()
+  /** pushed txids — a hint clears the throttle for the matching operation so a
+   *  rejection/observation reconciles on the very next cycle */
+  private hintedTxids = new Set<string>()
   public network: string
   get agentPub (): string { return this.me }
 
@@ -91,6 +105,21 @@ export class MarketEngine {
 
   /** resolves once every unit of work queued so far has settled */
   idle (): Promise<void> { return this.chain.then(() => undefined) }
+
+  /** a pushed transaction status (broadcaster callback / node event) — only a
+   *  hint: the next cycle runs the reconcile check immediately for operations
+   *  watching this txid, and the engine still consults txState itself */
+  hint (txid: string): void { this.hintedTxids.add(txid) }
+
+  /** true when this operation's reconcile check may run now — at most once
+   *  per 30 s of engine clock unless the watched txid was just hinted */
+  private reconcileGate (operationId: string, txid: string | undefined): boolean {
+    if (txid !== undefined && this.hintedTxids.delete(txid)) { this.reconcileDue.delete(operationId); return true }
+    const next = this.reconcileDue.get(operationId) ?? 0
+    if (next > this.now()) return false
+    this.reconcileDue.set(operationId, this.now() + 30_000)
+    return true
+  }
 
   // ── owner surface ───────────────────────────────────────────────────────
   async enableSeller (policyHash: string): Promise<void> {
@@ -198,7 +227,14 @@ export class MarketEngine {
 
   tick (): Promise<void> {
     return this.run(async () => {
-      for (const i of await this.d.store.pendingInbox()) {
+      // self-notes must restore their operation before anything else in the
+      // batch runs — a want lane event ingested ahead of the sellerNote would
+      // otherwise create a fresh sale op with the same dedupe key and the note
+      // would be deduped away
+      const inbox = await this.d.store.pendingInbox()
+      const selfNote = (i: InboxItem): boolean => i.kind === 'message' && (i.payload as { from?: string, msg?: { type?: string } }).from === this.me && ((i.payload as { msg?: { type?: string } }).msg?.type === 'note' || (i.payload as { msg?: { type?: string } }).msg?.type === 'sellerNote')
+      inbox.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
+      for (const i of inbox) {
         try {
           if (i.kind === 'want') await this.onWant(i.payload as SignedWant)
           else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
@@ -274,11 +310,17 @@ export class MarketEngine {
         offer: saleQuoteWire(publicSaleQuote(offer)), wantId: w.wantId, taskHash: w.taskHash, wantRevision: w.revision, buyerPub: w.pub, replyTo: w.pub,
         ts: this.now(), exp: this.now() + 86_400_000, net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {})
       })
+      const sellerNote: Extract<MarketMessage, { type: 'sellerNote' }> = {
+        type: 'sellerNote', v: 1, wantId: w.wantId, offerId: operation.operationId, policyHash: sp.hash,
+        want: sw, shard: pick.shard, seq: pick.seq, priceSats: pick.price, offer, signedOffer: so, dueHeight: h + this.o.refundBlocks
+      }
       await this.d.store.transition(operation.operationId, 1, 'quoted', {
         cause: 'offer_prepared', data: { offer, signedOffer: so }, dueHeight: h + this.o.refundBlocks,
         outbox: [
           { actionId: `${operation.operationId}:offer`, kind: 'publish-offer', destination: 'feed', payload: so },
-          { actionId: `${operation.operationId}:quote`, kind: 'message', destination: w.pub, payload: { type: 'quote', wantId: w.wantId, offerId: operation.operationId, commitment: c, mode: offer.mode } }
+          { actionId: `${operation.operationId}:quote`, kind: 'message', destination: w.pub, payload: { type: 'quote', wantId: w.wantId, offerId: operation.operationId, commitment: c, mode: offer.mode } },
+          // encrypted self-note — rebuilds this sale if the automation database is lost
+          { actionId: `${operation.operationId}:sellerNote`, kind: 'message', destination: this.me, payload: sellerNote }
         ]
       })
     } catch (e) {
@@ -412,9 +454,20 @@ export class MarketEngine {
     }
   }
 
-  /** the recovery note settles only when the buyer has nothing left to do on-chain */
-  async noteSettled (wantId: string): Promise<boolean> {
-    const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${wantId}`)
+  /** does a buyer purchase exist for this want (held `delivered` envelopes are
+   *  dropped only when none exists AND the envelope is old) */
+  async hasPurchase (wantId: string): Promise<boolean> {
+    return (await this.d.store.operationByKey(`buyer:${this.d.network}:${wantId}`)) !== undefined
+  }
+
+  /** a recovery note settles only when its side has nothing left to do on-chain.
+   *  Buyer notes key on wantId; seller notes key on offerId (= operationId). */
+  async noteSettled (id: string, kind: 'buyer' | 'seller' = 'buyer'): Promise<boolean> {
+    if (kind === 'seller') {
+      const op = await this.d.store.operation(id)
+      return op !== undefined && ['settled', 'expired', 'completion_failed', 'preparation_failed', 'declined', 'canceled'].includes(op.state)
+    }
+    const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${id}`)
     return op !== undefined && ['disclosure_verified', 'useful', 'not_useful', 'refunded', 'disputed'].includes(op.state)
   }
 
@@ -445,12 +498,43 @@ export class MarketEngine {
     await this.d.store.transition(operation.operationId, operation.revision, 'awaiting_disclosure', { cause: 'restored_from_note', dueHeight: Number(n.escrow.refundAfter) })
   }
 
+  /** the seller's own recovery note — rebuilds the quoted sale with its
+   *  original operationId (the buyer's accept addresses it by offerId). Only
+   *  our own key may feed it; a foreign or unsigned note is ignored. */
+  private async onSellerNote (n: Extract<MarketMessage, { type: 'sellerNote' }>): Promise<void> {
+    const sw = n?.want
+    if (!sw?.want || !verifyWant(sw.want, sw.sig, { allowExpired: true })) return
+    if (sw.want.net !== this.d.network || sw.want.wantId !== n.wantId) return
+    const leaf = n.offer?.commitment?.leaf ?? n.signedOffer?.offer.leaf ?? ''
+    if (n.signedOffer !== undefined) {
+      const so = n.signedOffer
+      if (!so?.offer || !verifyOffer(so.offer, so.sig, { allowExpired: true })) return
+      if (so.offer.pub !== this.me || so.offer.offerId !== n.offerId || so.offer.wantId !== n.wantId) return
+      if (so.offer.taskHash !== sw.want.taskHash || so.offer.wantRevision !== sw.want.revision) return
+    } else {
+      // compact variant: the published offer stays with the buyer — the quote
+      // inside `offer` still proves it was signed for this sale by our key
+      const q = n.offer
+      if (!q || q.sellerPub !== this.me || !verifyOfferSig({ cfg: q.cfg, sellerPub: q.sellerPub, offerSig: q.offerSig, expiresAt: q.expiresAt }, sw.want.pub, leaf)) return
+    }
+    if (await this.d.store.operation(n.offerId)) return
+    const dedupeKey = `seller:${this.d.network}:${sw.want.pub}:${n.wantId}:${sw.want.revision}`
+    const { operation, created } = await this.d.store.createOperation({
+      operationId: n.offerId, role: 'seller', kind: 'sale', dedupeKey, policyHash: n.policyHash, network: this.d.network, state: 'quoted',
+      data: { want: sw, shard: n.shard, seq: n.seq, priceSats: n.priceSats, offer: n.offer, signedOffer: n.signedOffer, restored: true },
+      dueHeight: n.dueHeight
+    })
+    if (!created) return
+    await this.d.store.transition(operation.operationId, operation.revision, 'quoted', { cause: 'restored_from_note' })
+  }
+
   private async onMessage (from: string, m: MarketMessage): Promise<void> {
     if (m?.type === 'quote') return await this.onQuote(from, m)
     if (m?.type === 'accept') return await this.onAccept(from, m)
     if (m?.type === 'delivered') return await this.onDelivered(from, m)
     // recovery notes are only ever handled when they came from our own key
     if (m?.type === 'note' && from === this.me) return await this.onNote(m)
+    if (m?.type === 'sellerNote' && from === this.me) return await this.onSellerNote(m)
   }
 
   private async escalate (op: Operation, reason: string, actionDigest: string, maxExtraSats: number, evidence: unknown, state = 'escalated'): Promise<void> {
@@ -571,6 +655,87 @@ export class MarketEngine {
     } else await this.escalate(next, 'unresolved_settlement', digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-refund' }), 0, { reason: r.reason }, 'uncertain')
   }
 
+  /** `uncertain` gets a machine answer before a human is needed: look at the
+   *  escrow/disclosure transaction itself instead of waiting for a height or
+   *  an operator decision. */
+  private async reconcileUncertain (op: Operation): Promise<void> {
+    const pa = op.data.pendingApproval as { approvalId?: string, reason?: string } | undefined
+    if (pa?.reason === 'unresolved_settlement') return await this.reconcileRefund(op, pa)
+    if (pa?.reason !== 'unresolved_payment') return
+    const cancel = async () => { if (pa?.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId) }
+    const pending = op.data.pendingEscrow as { cfg?: any, utxo?: { txid?: string } } | undefined
+    const actionId = op.data.escrowAction as string | undefined
+    const wtx = actionId !== undefined ? await this.d.store.walletTx({ actionId }) : undefined
+    const txid = pending?.utxo?.txid ?? wtx?.txid
+    if (txid === undefined) {
+      // stopped before the escrow was ever prepared — nothing was broadcast
+      if (actionId !== undefined) await this.d.store.releaseBudget(actionId)
+      await cancel()
+      await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_never_built' })
+      return
+    }
+    if (this.d.txState === undefined || !this.reconcileGate(op.operationId, txid)) return
+    const st = await this.d.txState(txid)
+    if (st === 'unknown') {
+      if (op.data.reconcilePing !== true) await this.d.store.transition(op.operationId, op.revision, 'uncertain', { cause: 'reconcile_pending', data: { reconcilePing: true } })
+      return
+    }
+    if (st === 'rejected') {
+      if (actionId !== undefined) await this.d.store.releaseBudget(actionId)
+      await cancel()
+      await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected' })
+      return
+    }
+    // mined | seen — the escrow is observable: commit and resume the normal path
+    const sel = op.data.selected as { key: string }
+    const s = (op.data.offers as Record<string, StoredOffer>)[sel.key]
+    if (s === undefined) return
+    const w = (op.data.want as SignedWant).want
+    let escrow: any = pending?.cfg
+    let utxo: any = pending?.utxo
+    if ((escrow === undefined || utxo === undefined) && wtx !== undefined) {
+      // the prepared-escrow record is gone but the wallet row survived — find
+      // the escrow output in the stored bytes and rebuild the cfg from the offer
+      const q = s.so.offer.offer as any
+      const depositorPkh = pkhOf(this.me)
+      const script = DisclosureSaleHost.escrowScript({ ...q.cfg, price: BigInt(q.cfg.price), refundAfter: BigInt(q.cfg.refundAfter), maxFee: BigInt(q.cfg.maxFee) }, depositorPkh)
+      const tx = Transaction.fromHex(wtx.rawHex)
+      const vout = tx.outputs.findIndex(o => o.lockingScript.toHex() === script)
+      if (vout < 0) return // cannot prove which output is the escrow — stay uncertain
+      escrow = { ...q.cfg, depositorPkh }
+      utxo = { txid, vout, satoshis: tx.outputs[vout]!.satoshis ?? 0, script }
+    }
+    if (escrow === undefined || utxo === undefined) return
+    if (wtx !== undefined) this.d.settleEscrow?.(Transaction.fromHex(wtx.rawHex))
+    if (actionId !== undefined) await this.d.store.commitBudget(actionId)
+    await cancel()
+    await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
+      cause: 'reconciled_escrow_observed',
+      data: { escrow, utxo, escrowTxid: txid },
+      dueHeight: Number(escrow.refundAfter),
+      outbox: [
+        { actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo, depositorPkh: String(escrow.depositorPkh), ...(wtx?.rawHex !== undefined ? { txHex: wtx.rawHex } : {}) } },
+        { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w.wantId, s, escrow, utxo, actionId ?? `${op.operationId}:escrow`, op.data.amounts as { purchaseSats: number, feeSats: number, lockedSats: number }) }
+      ]
+    })
+  }
+
+  /** a refused refund retries on the reconcile throttle — after five refusals
+   *  the operation stays `uncertain` for the operator */
+  private async reconcileRefund (op: Operation, pa: { approvalId?: string }): Promise<void> {
+    const tries = Number(op.data.refundTries ?? 0)
+    if (tries >= 5) return
+    if (!this.reconcileGate(op.operationId, op.data.escrowTxid as string | undefined)) return
+    const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
+    if (r.accepted === true) {
+      await this.d.store.settleBudget(op.data.escrowAction as string)
+      if (pa.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
+      await this.d.store.transition(op.operationId, op.revision, 'refunded', { cause: 'refund_broadcast', data: { refundTxid: r.txid, refundSats: r.refundSats }, dueHeight: null })
+    } else {
+      await this.d.store.transition(op.operationId, op.revision, 'uncertain', { cause: 'refund_retry_refused', data: { refundTries: tries + 1 } })
+    }
+  }
+
   private async advance (op: Operation, height: number): Promise<void> {
     if (op.role === 'buyer') {
       if (op.state === 'collecting' && op.dueAt !== undefined && op.dueAt <= this.now()) return await this.select(op, height)
@@ -600,7 +765,18 @@ export class MarketEngine {
         }
         return await this.escalate(op, 'unresolved_payment', digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }), 0, { note: 'process stopped between reserving and recording the escrow broadcast' }, 'uncertain')
       }
-      if (op.state === 'awaiting_disclosure' && op.dueHeight !== undefined && height >= op.dueHeight) return await this.refund(op)
+      if (op.state === 'uncertain') return await this.reconcileUncertain(op)
+      if (op.state === 'awaiting_disclosure') {
+        // a late rejection beats the refund path: the escrow never settled, so
+        // the locked amount never left — releaseBudget frees the committed row
+        const txid = op.data.escrowTxid as string | undefined
+        if (txid !== undefined && this.d.txState !== undefined && this.reconcileGate(op.operationId, txid) && (await this.d.txState(txid)) === 'rejected') {
+          await this.d.store.releaseBudget(op.data.escrowAction as string)
+          await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected_late', dueHeight: null })
+          return
+        }
+        if (op.dueHeight !== undefined && height >= op.dueHeight) return await this.refund(op)
+      }
     }
     if (op.role === 'observer' && (op.state === 'watching' || op.state === 'seizing') && op.dueHeight !== undefined && height >= op.dueHeight) return await this.seize(op.state === 'seizing' ? await this.d.store.transition(op.operationId, op.revision, 'watching', { cause: 'resume_after_restart' }) : op)
     if (op.role === 'seller' && op.kind === 'sale') {
@@ -609,6 +785,9 @@ export class MarketEngine {
       if (op.state === 'completion_submitted') {
         const tx = await this.d.fetchTx(op.data.completeTxid as string)
         if (tx?.merklePath) await this.d.store.transition(op.operationId, op.revision, 'settled', { cause: 'disclosure_proof_observed', evidence: { blockHeight: tx.merklePath.blockHeight } })
+        else if (this.d.txState !== undefined && this.reconcileGate(op.operationId, op.data.completeTxid as string) && (await this.d.txState(op.data.completeTxid as string)) === 'rejected') {
+          await this.d.store.transition(op.operationId, op.revision, 'completion_failed', { cause: 'disclosure_rejected_late' })
+        }
       }
     }
   }

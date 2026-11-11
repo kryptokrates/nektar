@@ -57,7 +57,7 @@ export interface Approval {
   actionDigest: string
   maxExtraSats: number
   expiresAt: number
-  status: 'pending' | 'approved' | 'denied' | 'consumed'
+  status: 'pending' | 'approved' | 'denied' | 'consumed' | 'canceled'
   evidence: unknown
   decidedBy?: string
 }
@@ -176,12 +176,12 @@ export class AutomationStore {
     }
   }
 
-  async createOperation (o: { role: Operation['role'], kind: string, dedupeKey: string, policyHash: string, network: string, state: string, data: Record<string, unknown>, dueAt?: number, dueHeight?: number }): Promise<{ operation: Operation, created: boolean }> {
+  async createOperation (o: { role: Operation['role'], kind: string, dedupeKey: string, policyHash: string, network: string, state: string, data: Record<string, unknown>, dueAt?: number, dueHeight?: number, operationId?: string }): Promise<{ operation: Operation, created: boolean }> {
     return await this.kx.transaction(async trx => {
       const prev = await trx(T.ops).where({ dedupe_key: o.dedupeKey }).first()
       if (prev) return { operation: this.op(prev), created: false }
       const now = this.now()
-      const row = { operation_id: randomUUID(), role: o.role, kind: o.kind, dedupe_key: o.dedupeKey, policy_hash: o.policyHash, network: o.network, state: o.state, revision: 1, data: canonicalJson(o.data), due_at: o.dueAt ?? null, due_height: o.dueHeight ?? null, created_at: now, updated_at: now }
+      const row = { operation_id: o.operationId ?? randomUUID(), role: o.role, kind: o.kind, dedupe_key: o.dedupeKey, policy_hash: o.policyHash, network: o.network, state: o.state, revision: 1, data: canonicalJson(o.data), due_at: o.dueAt ?? null, due_height: o.dueHeight ?? null, created_at: now, updated_at: now }
       await trx(T.ops).insert(row)
       await trx(T.events).insert({ operation_id: row.operation_id, at: now, from_state: null, to_state: o.state, cause: 'created', evidence: null })
       return { operation: this.op(row), created: true }
@@ -337,7 +337,9 @@ export class AutomationStore {
 
   commitBudget (actionId: string): Promise<boolean> { return this.moveBudget(actionId, ['reserved'], 'committed') }
   settleBudget (actionId: string): Promise<boolean> { return this.moveBudget(actionId, ['reserved', 'committed'], 'settled') }
-  releaseBudget (actionId: string): Promise<boolean> { return this.moveBudget(actionId, ['reserved'], 'released') }
+  /** frees a reservation that never settled: 'reserved' (never broadcast) or
+   *  'committed' (the broadcast was later rejected — the sats never left) */
+  releaseBudget (actionId: string): Promise<boolean> { return this.moveBudget(actionId, ['reserved', 'committed'], 'released') }
 
   async budgetStatus (hash: string): Promise<{ day: string, purchaseTodaySats: number, feeTodaySats: number, runTotalSats: number, lockedSats: number }> {
     const live = () => this.kx(T.budget).where({ policy_hash: hash }).whereNot({ state: 'released' })
@@ -465,5 +467,11 @@ export class AutomationStore {
 
   async consumeApproval (operationId: string, actionDigest: string): Promise<boolean> {
     return (await this.kx(T.approvals).where({ operation_id: operationId, action_digest: actionDigest, status: 'approved' }).where('expires_at', '>', this.now()).update({ status: 'consumed' })) >= 1
+  }
+
+  /** an escalated operation resolved on its own — the pending human decision
+   *  is no longer needed and must stop being listed as open */
+  async cancelApproval (approvalId: string): Promise<boolean> {
+    return (await this.kx(T.approvals).where({ approval_id: approvalId }).whereIn('status', ['pending', 'approved']).update({ status: 'canceled' })) >= 1
   }
 }

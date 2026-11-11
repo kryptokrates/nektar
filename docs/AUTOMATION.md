@@ -235,9 +235,18 @@ Honest boundaries:
   `BLOCKED`, never a host run.
 - A buyer that loses its automation database recovers escrowed purchases from
   an encrypted note in its own bbox inbox (kept until the deal is finished, at
-  most 7 days) and can still refund or receive the disclosure. Policies,
-  budgets and operations that had not reached escrow are not recovered;
-  seller-side operations are not recovered.
+  most 7 days) and can still refund or receive the disclosure; `delivered`
+  envelopes stay unacknowledged until the purchase settles, so a crash between
+  collecting the envelope and processing it does not lose the disclosure.
+  A seller recovers quoted sales the same way — its own `sellerNote` rebuilds
+  the sale under the original operation id. Policies, budgets and operations
+  that had not reached escrow/quote are not recovered.
+- Uncertain on-chain states reconcile automatically: the engine probes the
+  transaction state (`mined`/`seen`/`rejected`/`unknown`, pushed early by
+  broadcaster rejection callbacks) and either resumes the deal, frees the
+  budget on a rejection, or retries a refused refund. A human is still needed
+  for: `uncertain` after five refused refunds; an `unknown` transaction state
+  that never resolves; and policy or budget loss.
 - Transport is bstack carriers (wants, offers) and bbox envelopes (quote,
   accept, delivered), submitted over HTTPS to every configured overlay host
   and verified locally on read. 1BSV multicast delivery is not used yet. Read
@@ -249,11 +258,12 @@ Honest boundaries:
   are not yet routed through the automation budget ledger; its caps bound what
   the automation runtime itself spends. SpendGuard still fronts every broadcast.
 - A buyer process that dies between reserving budget and recording the escrow
-  broadcast resumes as `uncertain` and asks the operator — it never re-funds
-  blindly.
+  broadcast resumes as `uncertain`, then reconciles against the chain — it
+  resumes the deal if the escrow is observable, frees the budget if it was
+  rejected, and only asks the operator when the state never resolves.
 
-Tests: `packages/mcp/test/{automation-scoring,automation-store,market-engine,automation-sandbox,market-publish}.test.ts`,
-`packages/overlay/test/market-protocol.test.ts`, and the integrated scenarios
+Tests: `packages/mcp/test/{automation-scoring,automation-store,market-engine,automation-sandbox,market-bstack,market-faults}.test.ts`,
+`packages/bstack/test/artifacts.test.ts`, and the integrated scenarios
 (S1 competing sellers over two federated hosts, S2 offline operator + observer
 seizure, S3 paid public disclosure read for free):
 

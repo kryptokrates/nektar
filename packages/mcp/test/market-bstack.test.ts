@@ -40,13 +40,13 @@ const policyFor = (pub: string): AutomationPolicy => ({
 })
 
 interface A { mem: NektarMemory, rt: Automation, pub: string, policyHash: string, name: string }
-interface MkOpts { hosts: string[], msgs?: ReturnType<typeof bus>, chain: MockChain, logs: string[], dir: string, opts?: Partial<import('../src/automation/market.js').MarketOptions> }
+interface MkOpts { hosts: string[], msgs?: ReturnType<typeof bus>, chain: MockChain, logs: string[], dir: string, opts?: Partial<import('../src/automation/market.js').MarketOptions>, call?: (tool: string, args: any) => Promise<any> }
 const mkagent = async (name: string, o: MkOpts): Promise<A> => {
   const funder = new MockFunder(); funder.topup(30)
   for (const t of funder.parents) o.chain.registerParent(t)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
   const pub = mem.operatorKey().toPublicKey().toString()
-  const rt = await openAutomation(mem, { network: NET, dataDir: join(o.dir, name), marketHosts: o.hosts, intervalMs: 0, call: (t2, a) => callTool(mem, t2, a), log: l => o.logs.push(`${name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, messages: o.msgs?.for(pub), opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts } })
+  const rt = await openAutomation(mem, { network: NET, dataDir: join(o.dir, name), marketHosts: o.hosts, intervalMs: 0, call: o.call ?? ((t2, a) => callTool(mem, t2, a)), log: l => o.logs.push(`${name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, messages: o.msgs?.for(pub), opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts } })
   return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name }
 }
 const sellerize = async (s: A, price: number) => {
@@ -583,4 +583,301 @@ test('bstack O: the recovery note fits the 16 KiB box content limit', async () =
     assert.ok(recordBytes < 16384, `sealed envelope record is ${recordBytes} bytes — under the 16 KiB limit`)
     console.log(`    note: sealed envelope record is ${recordBytes} bytes (limit 16384)`)
   } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+// ── Phase 2: reconcile, late rejection, seller recovery ──────────────────────
+
+// the escrow covenant script for a quoted sale — used to identify (and fake a
+// transport failure on) exactly the escrow broadcast
+const escrowScriptFor = async (s: A, buyerPub: string): Promise<string | undefined> => {
+  const op = (await saleOps(s))[0]
+  const offer = op?.data.offer as { cfg?: { price: string | number, refundAfter: string | number, maxFee: string | number } } | undefined
+  if (!offer?.cfg) return undefined
+  const { DisclosureSaleHost } = await import('@nektar/anchor')
+  const { PublicKey } = await import('@bsv/sdk')
+  const depositorPkh = Buffer.from(PublicKey.fromString(buyerPub).toHash() as number[]).toString('hex')
+  const cfg = { ...offer.cfg, price: BigInt(offer.cfg.price), refundAfter: BigInt(offer.cfg.refundAfter), maxFee: BigInt(offer.cfg.maxFee) }
+  return DisclosureSaleHost.escrowScript(cfg as never, depositorPkh)
+}
+
+// broadcast that lets the escrow onto the chain but reports a transport error
+// — the wallet records submission_unknown and the op escalates to `uncertain`
+const sabotageEscrowBroadcast = (b: A, script: string): { txid: () => string | undefined } => {
+  let txid: string | undefined
+  let armed = true
+  const orig = b.mem.broadcastTx.bind(b.mem)
+  b.mem.broadcastTx = async (tx: import('@bsv/sdk').Transaction) => {
+    const hit = tx.outputs.some(o => o.lockingScript.toHex() === script)
+    const r = await orig(tx)
+    if (hit && armed) { armed = false; txid = tx.id('hex'); return { status: 'error', description: 'transport: connection reset' } }
+    return r
+  }
+  return { txid: () => txid }
+}
+
+test('bstack P: uncertain + escrow observable — reconcile resumes the deal with no operator action', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    const script = (await escrowScriptFor(s, b.pub))!
+    const sab = sabotageEscrowBroadcast(b, script)
+    const all = [b.rt, s.rt]
+    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    assert.ok(sab.txid() !== undefined, 'the sabotaged escrow broadcast happened')
+    const bo = (await buyerOp(b))!
+    const evs = await b.rt.store.events(bo.operationId)
+    assert.ok(evs.some(e => e.cause === 'needs_human:unresolved_payment'), 'went through uncertain: ' + evs.map(e => e.cause).join(','))
+    assert.ok(evs.some(e => e.cause === 'reconciled_escrow_observed'), 'reconcile observed the escrow: ' + evs.map(e => e.cause).join(','))
+    assert.equal((await b.rt.store.approvals('pending')).length, 0, 'no approval left open')
+    for (const r of all) await r.stop()
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close() }
+})
+
+test('bstack Q: uncertain + rejected escrow — budget released, approval canceled, funding_failed', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    const script = (await escrowScriptFor(s, b.pub))!
+    const sab = sabotageEscrowBroadcast(b, script)
+    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'uncertain', 80), 'never went uncertain | ' + logs.slice(-20).join(' | '))
+    const txid = sab.txid() ?? (((await buyerOp(b))!.data.pendingEscrow as { utxo: { txid: string } }).utxo.txid)
+    chain.reject(txid) // pushes 'rejected' → hint → immediate reconcile
+    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 40), 'not funding_failed | ' + logs.slice(-20).join(' | '))
+    const bo = (await buyerOp(b))!
+    const evs = await b.rt.store.events(bo.operationId)
+    assert.ok(evs.some(e => e.cause === 'escrow_rejected'), 'cause escrow_rejected: ' + evs.map(e => e.cause).join(','))
+    assert.equal((await b.rt.store.budgetStatus(b.policyHash)).lockedSats, 0, 'locked sats released')
+    assert.equal((await b.rt.store.approvals('pending')).length, 0, 'no approval left open')
+    await b.rt.stop(); await s.rt.stop()
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close() }
+})
+
+test('bstack R: escrow rejected while awaiting_disclosure — late rejection frees the budget before the refund height', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
+    const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
+    chain.reject(escrowTxid) // late rejection push — must not need the refund height
+    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 40), 'not funding_failed | ' + logs.slice(-20).join(' | '))
+    const bo = (await buyerOp(b))!
+    const evs = await b.rt.store.events(bo.operationId)
+    assert.ok(evs.some(e => e.cause === 'escrow_rejected_late'), 'cause escrow_rejected_late: ' + evs.map(e => e.cause).join(','))
+    assert.equal((await b.rt.store.budgetStatus(b.policyHash)).lockedSats, 0, 'committed reservation freed')
+    await b.rt.stop(); await s.rt.stop()
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close() }
+})
+
+test('bstack S: disclosure rejected after completion_submitted — seller moves to completion_failed', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    // check right after each seller cycle, before the disclosure tx gets mined
+    let submitted = false
+    for (let i = 0; i < 120 && !submitted; i++) {
+      clock += 500
+      await b.rt.cycle()
+      await s.rt.cycle()
+      submitted = (await saleOps(s))[0]?.state === 'completion_submitted'
+      if (!submitted) chain.mine(1)
+    }
+    assert.ok(submitted, 'never completion_submitted | ' + logs.slice(-20).join(' | '))
+    const completeTxid = (await saleOps(s))[0]!.data.completeTxid as string
+    chain.reject(completeTxid) // push → hint → reconcile → completion_failed
+    assert.ok(await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_failed', 40), 'not completion_failed | ' + logs.slice(-20).join(' | '))
+    const evs = await s.rt.store.events((await saleOps(s))[0]!.operationId)
+    assert.ok(evs.some(e => e.cause === 'disclosure_rejected_late'), 'cause disclosure_rejected_late: ' + evs.map(e => e.cause).join(','))
+    await b.rt.stop(); await s.rt.stop()
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close() }
+})
+
+test('bstack T: refused refund retries on reconcile — succeeds after one refusal; five refusals stay uncertain', async () => {
+  for (const refuse of [1, 10]) {
+    const chain = new MockChain(); chain.verifyScripts = true
+    const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+    const logs: string[] = []
+    const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+    let b!: A; let s!: A
+    try {
+      let left = refuse
+      const memRef: { mem?: NektarMemory } = {}
+      const call = (t2: string, a: any) => t2 === 'sale#refund' && left-- > 0 ? Promise.resolve({ accepted: false, reason: 'forced refusal' }) : callTool(memRef.mem!, t2, a)
+      b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir, opts: { refundBlocks: 40 }, call })
+      memRef.mem = b.mem
+      s = await mkagent('seller', { hosts: [h1.url], chain, logs, dir, opts: { refundBlocks: 40 } })
+      await sellerize(s, 200)
+      await drive([b.rt, s.rt], chain, 12)
+      await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+      assert.ok(await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
+      const refundAfter = Number(((await buyerOp(b))!.data.escrow as { refundAfter: number }).refundAfter)
+      await s.rt.stop() // seller gone — the refund deadline will hit
+      s = undefined as never
+      await h1.close()
+      while ((await b.mem.chainHeight()) < refundAfter) chain.mine(1)
+      if (refuse === 1) {
+        assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'refunded', 80), 'not refunded | ' + logs.slice(-20).join(' | '))
+        const evs = await b.rt.store.events((await buyerOp(b))!.operationId)
+        assert.ok(evs.some(e => e.cause === 'needs_human:unresolved_settlement'), 'went through unresolved_settlement: ' + evs.map(e => e.cause).join(','))
+        assert.ok(evs.some(e => e.cause === 'refund_broadcast'), 'refund broadcast on retry: ' + evs.map(e => e.cause).join(','))
+        assert.equal((await b.rt.store.approvals('pending')).length, 0, 'no open approval after auto-refund')
+      } else {
+        assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'uncertain', 60), 'never uncertain | ' + logs.slice(-20).join(' | '))
+        for (let i = 0; i < 7; i++) { clock += 31_000; await b.rt.cycle(); chain.mine(1) }
+        const op = (await buyerOp(b))!
+        assert.equal(op.state, 'uncertain', 'five refusals leave the op for the operator')
+        assert.equal(Number(op.data.refundTries), 5, 'exactly five retries were counted')
+        assert.equal((await b.rt.store.approvals('pending')).length, 1, 'exactly one open approval')
+      }
+      await b.rt.stop()
+    } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } try { await h1.close() } catch { /* already closed */ } }
+  }
+})
+
+test('bstack U: seller loses its database — the sellerNote rebuilds the quoted sale and the deal completes', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A; let s2!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    const origOp = (await saleOps(s))[0]!
+    // measure the sealed sellerNote on the wire — must fit the 12 KiB budget
+    await drive([b.rt, s.rt], chain, 2)
+    const items = (await readBuyer(s.mem.operatorKey(), [h1.url, h2.url], chain)).items
+    const note = items.find(i => (i.body as { market?: { type?: string } }).market?.type === 'sellerNote')
+    assert.ok(note, 'sellerNote is listed in the seller inbox')
+    const { Transaction } = await import('@bsv/sdk')
+    const noteTxidDisplay = note.txid.match(/../g)!.reverse().join('')
+    let recordBytes = -1
+    for (const beef of h1.raw().concat(h2.raw())) {
+      try {
+        const tx = Transaction.fromAtomicBEEF(beef)
+        if (tx.id('hex') !== noteTxidDisplay) continue
+        recordBytes = Math.max(recordBytes, ...tx.outputs.map(o => o.lockingScript.toHex().length / 2))
+      } catch { /* not the note carrier */ }
+    }
+    assert.ok(recordBytes > 0, 'sellerNote carrier found on a host')
+    console.log(`    sellerNote: sealed envelope record is ${recordBytes} bytes (budget 12288)`)
+    assert.ok(recordBytes < 12 * 1024, `sealed sellerNote is ${recordBytes} bytes — over the 12 KiB budget`)
+    // wipe the seller and respawn on the same key
+    await s.rt.stop()
+    rmSync(join(dir, 'seller'), { recursive: true, force: true })
+    s2 = await respawn(s, { dir, name: 'seller', hosts: [h1.url, h2.url], logs, chain })
+    s = undefined as never
+    await s2.rt.engine.enableSeller(s2.policyHash)
+    assert.ok(await until([b.rt, s2.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    const ops = await saleOps(s2)
+    assert.equal(ops.length, 1, 'exactly one sale operation after restore')
+    assert.equal(ops[0]!.operationId, origOp.operationId, 'restored with the original operationId')
+    assert.equal(ops[0]!.data.restored, true)
+    assert.ok(COMPLETE.includes(ops[0]!.state), `restored sale reached ${ops[0]!.state}`)
+    await drive([b.rt, s2.rt], chain, 2)
+    assert.equal((await readBuyer(s2.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'seller inbox empty after settlement')
+    for (const r of [b.rt, s2.rt]) await r.stop()
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } try { await s2?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+test('bstack V: delivered collected but not yet processed — the held envelope survives a buyer database loss', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A; let b2!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
+    // the seller delivers; the buyer's next cycle collects + holds the envelope
+    // but its tick dies before processing it — the doomed store loses the inbox row
+    assert.ok(await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_submitted', 100), 'never delivered | ' + logs.slice(-20).join(' | '))
+    const engine = b.rt.engine as unknown as { tick: () => Promise<void> }
+    const origTick = engine.tick.bind(engine)
+    let fail = true
+    engine.tick = async () => { if (fail) { fail = false; throw new Error('simulated crash after collect') } return origTick() }
+    await b.rt.cycle() // collect + ack-hold ran; tick threw
+    await b.rt.stop()
+    rmSync(join(dir, 'buyer'), { recursive: true, force: true })
+    b2 = await respawn(b, { dir, name: 'buyer', hosts: [h1.url, h2.url], logs, chain })
+    b = undefined as never
+    assert.ok(await until([b2.rt, s.rt], chain, async () => (await buyerOp(b2))?.state === 'disclosure_verified', 120), 'delivery never verified | ' + logs.slice(-25).join(' | '))
+    const bo = (await buyerOp(b2))!
+    assert.equal(bo.data.restored, true, 'the note rebuilt the purchase first')
+    assert.equal((bo.data.result as { verified?: boolean }).verified, true)
+    await drive([b2.rt, s.rt], chain, 2)
+    assert.equal((await readBuyer(b2.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'note + delivered acked once settled')
+    for (const r of [b2.rt, s.rt]) await r.stop()
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } try { await b2?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+test('bstack W: a sellerNote from a foreign key is ignored and still acked', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let s!: A
+  try {
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await drive([s.rt], chain, 4)
+    const { sendBox, MemoryTreeLedger, MemoryCarrierJournal, boxFundingLock, mintTree, signWant } = await import('@nektar/bstack')
+    const { PrivateKey, Transaction, P2PKH, MerklePath } = await import('@bsv/sdk')
+    const ghost = PrivateKey.fromRandom()
+    const parent = new Transaction(); parent.addOutput({ satoshis: 100_000, lockingScript: new P2PKH().lock(ghost.toPublicKey().toAddress()) })
+    const gTree = await mintTree({ key: ghost, funding: { tx: parent, vout: 0, satoshis: 100_000 }, n: 4, satsPerOutput: 1000, lock: await boxFundingLock(ghost) })
+    gTree.merklePath = new MerklePath(1, [[{ offset: 0, hash: '00'.repeat(32) }, { offset: 1, hash: gTree.id('hex'), txid: true }]])
+    const gl = new MemoryTreeLedger(); await gl.add(gTree, 4, 'bbox'); await gl.markProven(gTree.id('hex'))
+    const sw = signWant(ghost, { domains: ['libfoo'], maxSats: 500, ts: Date.now(), exp: Date.now() + 3_600_000, net: NET })
+    const forged = { type: 'sellerNote', v: 1, wantId: sw.want.wantId, offerId: 'fake-offer', policyHash: 'deadbeef', want: sw, shard: 'guide', seq: 1, priceSats: 200, offer: { cfg: {}, sellerPub: ghost.toPublicKey().toString() }, dueHeight: 100 }
+    await sendBox({ key: ghost, ledger: gl, journal: new MemoryCarrierJournal(), hosts: [h1.url, h2.url], office: OFFICE, to: s.pub, body: { market: forged } })
+    await drive([s.rt], chain, 4)
+    assert.equal((await saleOps(s)).length, 0, 'forged sellerNote created no sale operation')
+    const items = (await readBuyer(s.mem.operatorKey(), [h1.url, h2.url], chain)).items
+    assert.equal(items.filter(i => (i.body as { market?: { type?: string } }).market?.type === 'sellerNote').length, 0, 'foreign sellerNote was acked anyway')
+    await s.rt.stop()
+  } finally { try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
 })

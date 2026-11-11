@@ -68,6 +68,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     store, call: cfg.call, memory: mem as never, key, network: cfg.network,
     now: cfg.now,
     height: () => mem.chainHeight(), tip: () => mem.tipRef(), fetchTx: txid => mem.fetchTx(txid),
+    txState: txid => mem.txState(txid),
     broadcast: tx => mem.broadcastTx(tx),
     settleEscrow: tx => { for (const inp of tx.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } if (tx.outputs[1]) mem.addOwnedOut(tx, 1) },
     transport, ai: cfg.ai ?? aiFromEnv(), opts: cfg.opts
@@ -80,13 +81,13 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     for (const h of r.unreachable) if (!downNow.has(h)) { downNow.add(h); log(`automation: unreachable ${h}`) }
     for (const h of [...downNow]) if (!r.unreachable.includes(h)) { downNow.delete(h); log(`automation: host back ${h}`) }
   }
-  let pendingAcks: Array<{ txid: string, commitment: string, from: string, msg: MarketMessage | undefined }> = []
+  let pendingAcks: Array<{ txid: string, commitment: string, from: string, msg: MarketMessage | undefined, created: number }> = []
   let lastAckSkipped = -1
   const msgs = cfg.messages ?? (lanes === undefined ? undefined : {
     send: async (to: string, msg: MarketMessage): Promise<void> => {
       try {
         // recovery notes live as long as a deal can — everything else 24h
-        const ttl = (msg as { type?: string }).type === 'note' ? 7 * 86400 : 86400
+        const ttl = (msg as { type?: string }).type === 'note' || (msg as { type?: string }).type === 'sellerNote' ? 7 * 86400 : 86400
         await lanes.mod.sendBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, office: cfg.boxOffice, to, body: { market: msg }, expiresAt: Math.floor(Date.now() / 1000) + ttl })
       } catch (e) { log(`automation: box: ${(e as Error).message}`); throw e }
     },
@@ -95,9 +96,10 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
         const tracker = await mem.sdkTracker()
         const r = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker })
         laneNotes(r)
-        pendingAcks = r.items.map(i => ({ txid: i.txid, commitment: i.commitment, from: i.from, msg: (i.body as { market?: MarketMessage }).market }))
+        pendingAcks = r.items.map(i => ({ txid: i.txid, commitment: i.commitment, from: i.from, msg: (i.body as { market?: MarketMessage }).market, created: i.created }))
         // self-notes restore lost operations — ingest them before any other message in the batch
-        pendingAcks.sort((a, b) => Number(b.from === me && b.msg?.type === 'note') - Number(a.from === me && a.msg?.type === 'note'))
+        const selfNote = (p: { from: string, msg?: MarketMessage }) => p.from === me && (p.msg?.type === 'note' || p.msg?.type === 'sellerNote')
+        pendingAcks.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
         const out: Array<{ from: string, msg: MarketMessage }> = []
         for (const p of pendingAcks) if (p.msg !== undefined && typeof p.msg === 'object') out.push({ from: p.from, msg: p.msg })
         return out
@@ -109,6 +111,15 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
       for (const p of pendingAcks) {
         // a recovery note from our own key stays listed until its deal is over
         if (p.from === me && p.msg?.type === 'note' && typeof (p.msg as { wantId?: unknown }).wantId === 'string' && !(await engine.noteSettled((p.msg as { wantId: string }).wantId))) { held.push(p); continue }
+        if (p.from === me && p.msg?.type === 'sellerNote' && typeof (p.msg as { offerId?: unknown }).offerId === 'string' && !(await engine.noteSettled((p.msg as { offerId: string }).offerId, 'seller'))) { held.push(p); continue }
+        // `delivered` is ingested to the inbox but processed on the next tick —
+        // keep the envelope until the purchase settles so a database loss in
+        // between does not lose the disclosure; junk with no matching purchase
+        // is released once it is older than ten minutes
+        if (p.msg?.type === 'delivered' && typeof (p.msg as { wantId?: unknown }).wantId === 'string') {
+          const wantId = (p.msg as { wantId: string }).wantId
+          if (!(await engine.noteSettled(wantId)) && ((await engine.hasPurchase(wantId)) || Date.now() / 1000 - p.created < 600)) { held.push(p); continue }
+        }
         items.push({ txid: p.txid, commitment: p.commitment })
       }
       pendingAcks = held
@@ -116,7 +127,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
       try {
         const r = await lanes.mod.ackBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, office: cfg.boxOffice, items })
         if (r.skipped > 0 && r.skipped !== lastAckSkipped) { lastAckSkipped = r.skipped; log(`automation: box ack: ${r.skipped} envelope(s) skipped — no bbox funding slot`) }
-      } catch (e) { pendingAcks = pendingAcks.concat(items.map(i => ({ ...i, from: '', msg: undefined }))); log(`automation: box ack: ${(e as Error).message}`) }
+      } catch (e) { pendingAcks = pendingAcks.concat(items.map(i => ({ ...i, from: '', msg: undefined, created: 0 }))); log(`automation: box ack: ${(e as Error).message}`) }
     }
   })
   const lanePoll = async (): Promise<void> => {
@@ -196,6 +207,18 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
           if (unproven.some(u => u.txid === txid)) await lanes.ledger.markProven(txid, mp)
         }
       } catch (e) { log(`automation: txproof: ${(e as Error).message}`) }
+      engine.hint(txid)
+      if (!stopped) await cycle().catch(e => log(`automation: ${(e as Error).message}`))
+    })()
+    inflight.add(work)
+    void work.finally(() => { inflight.delete(work) })
+  })
+  // a rejection callback is only a hint: clear the reconcile throttle for the
+  // affected operation and run a cycle — the engine consults txState itself
+  mem.onTxRejected((txid: string) => {
+    if (stopped) return
+    const work = (async () => {
+      engine.hint(txid)
       if (!stopped) await cycle().catch(e => log(`automation: ${(e as Error).message}`))
     })()
     inflight.add(work)

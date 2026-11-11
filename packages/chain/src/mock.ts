@@ -136,6 +136,24 @@ export class MockChain implements ChainTracker, Broadcaster {
   /** the BUMP of a mined tx by txid (like a node's merkle-proof API) */
   merklePathOf (txid: string): MerklePath | undefined { return this.minedTxs.has(txid) ? this.bumps.get(txid) : undefined }
 
+  /** txids this node has definitively rejected (double-spend / policy) */
+  private rejectedTxs = new Set<string>()
+  isRejected (txid: string): boolean { return this.rejectedTxs.has(txid) }
+
+  /** mark a previously accepted tx as rejected — drops it from the mempool,
+   * frees the outpoints it had reserved, and pushes a 'rejected' status event
+   * (the same signal a real node sends on a double-spend attempt). */
+  reject (txid: string): boolean {
+    if (this.rejectedTxs.has(txid)) return false
+    this.rejectedTxs.add(txid)
+    this.mempool.delete(txid)
+    this.known.delete(txid)
+    for (const op of this.spentBy.get(txid) ?? []) this.spent.delete(op)
+    this.spentBy.delete(txid)
+    this.emit({ txid, status: 'rejected' })
+    return true
+  }
+
   mine (count = 1): BlockHeader[] {
     const out: BlockHeader[] = []
     for (let b = 0; b < count; b++) {

@@ -350,6 +350,9 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           const status = String(j.txStatus ?? '?')
           mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: status.toLowerCase() }, 1, 'broadcaster status callbacks received')
           mem.events.emit('broadcasterStatus', { txid: j.txid, status, detail: j.extraInfo })
+          // a definitive rejection is pushed down as a hint — the engine asks
+          // txState itself and acts only on that answer
+          if (typeof j.txid === 'string' && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status.toUpperCase())) mem.deliverTxRejected(j.txid)
           // N9 — the callback is an unauthenticated status input, not proof.
           // A carried BUMP must verify against our own tracker before it
           // counts; without one we fetch evidence; without evidence the txid

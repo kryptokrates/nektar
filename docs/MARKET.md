@@ -132,6 +132,7 @@ CLI-only and never reachable from a tool.
   configured host, withholding is undetectable.
 - Wants expire with their collect window, offers after their TTL; hosts refuse
   artifacts without an expiry or with one more than 7 days ahead.
-- Verified on mock and on a local Teranode regtest chain with two reference
-  hosts (three sellers at 450/300/200 sats, buyer takes 200). A funded run on
-  public testnet over this transport has not been done yet.
+- Verified on mock, on a local Teranode regtest chain and on public testnet,
+  each with two reference hosts (three sellers at 450/300/200 sats, buyer
+  takes 200). The testnet run used local http hosts, so host resolution over
+  bfinger was not exercised there; see [AUTOMATION](AUTOMATION.md#verification-status).

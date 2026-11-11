@@ -335,10 +335,29 @@ The trial report is written to `artifacts/model-trials/report.json`.
   `f8073ab8a179551bb3d2f10ea1ca52ab490aac2dbaf8cc501acf50e51b17b13b` (1487
   bytes, 8 sats fee) verified 33 s after the want, over 16 blocks. Each agent
   paid 346 sats once for its four funding trees. Regtest coins, not money.
-- **Testnet, current transport:** not run. The two-host testnet pair and the
-  live header shim are up, but both public faucets refuse automated claims
-  (captcha), so no instance could be funded. The run below is the last funded
-  testnet result and used the old transport.
+- **Testnet, current transport (public BSV testnet, BSV Broadcaster, two
+  reference hosts on live testnet headers, four production instances):**
+  `pnpm scenarios:real -- --net testnet` passes. Three sellers quoted
+  450/300/200 sats, the buyer took the 200-sat offer, escrow
+  `ac5d1275d7c0f626e1229c2e1cdc59914e350b0b571091dcbb0f8f02e8d497fb` (941
+  bytes, 1 sat fee) and reveal + collect
+  `660049bc6e7c59f9fa0bd6451d262f29639b2a94ab8724f1accdcc046afd8171` (1488
+  bytes, 8 sats fee), both mined at height 1768056. The buyer verified the
+  disclosure 155.8 s after the want — 120 s of that is the configured collect
+  window, 34 s from escrow broadcast to verified — with no block mined in
+  between. The seller's own state moved to `settled` only when its collect
+  transaction was proven (about 9 minutes later, pushed over the status
+  stream). Fees: 346 sats once per agent for four funding trees, 4 sats per
+  seller for two anchors, 9 sats for the deal itself. The one block wait is
+  before the deal: funding trees had to be proven once (1 to 19 minutes
+  across runs). Limits of this run: the hosts are local http loopback, so
+  bfinger records were refused (https only off regtest) and counterparties
+  reached each other through shared configured hosts; inbox cleanup was
+  therefore checked on each agent's own hosts only.
+  Two defects surfaced only on this lane and are fixed: funding-tree proofs
+  from the broadcaster flagged a neighbouring own transaction, which the bbox
+  module refuses; and a seller never left `completion_submitted` because
+  pushed proofs for market transactions were not remembered.
 - **Testnet (Hetzner, real rendezvous + mailbox, two live instances):** this ran on the previous rendezvous + mailbox transport, which has since been removed from the automation runtime. The
   autonomous purchase loop ran end to end — signed want admitted to the feed,
   seller matched a level-0 record, signed a buyer-bound offer, buyer selected,

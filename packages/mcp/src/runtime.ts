@@ -484,6 +484,15 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   }, store)
   memRef = mem
   mem.ledger = ledger
+  // restart-recovery pull for proofs that never arrived by push — a fetched
+  // BUMP counts only after its root verifies against our own headers (same
+  // trust rule as the push path; push stays primary)
+  mem.proofLookup = async txid => {
+    const r = await merklePathMainnet(mc, txid)
+    if (!r) return undefined
+    const root = r.merklePath.computeRoot(txid)
+    return await tracker.isValidRootForHeight(root, r.merklePath.blockHeight) ? r.merklePath : undefined
+  }
   mem.metrics.gauge('nektar_fee_balance_sats', () => reserve.utxos.reduce((s, u) => s + u.satoshis, 0), 'operator fee-key balance (sats)')
   // outbound-only status push: no callback URL → pull tx statuses from the
   // broadcaster's /events SSE stream into the same handler the webhook uses.

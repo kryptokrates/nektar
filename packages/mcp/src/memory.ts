@@ -355,9 +355,41 @@ export class NektarMemory {
   public ledger?: import('./automation/store.js').AutomationStore
   async fetchTx (txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     const local = this.anchorTxs.get(txid) ?? (this.chain as any).getTx?.(txid)
-    if (local) return local
+    if (local) { await this.attachKnownProof(local, txid); return local }
     if (this.opts.network === 'mock' || this.opts.network === 'regtest' || this.opts.network === undefined) return undefined
-    try { return await this.fetchParentTx(txid) } catch { return undefined }
+    try {
+      const tx = await this.fetchParentTx(txid)
+      await this.attachKnownProof(tx, txid)
+      return tx
+    } catch { return undefined }
+  }
+
+  // pushed proofs that no anchor claimed (e.g. a market tx) are remembered so
+  // fetchTx can answer "mined?" for any tx we broadcast — the live networks
+  // have no chain.getTx to attach a path for us. Bounded: 4096, oldest out.
+  private txProofs = new Map<string, import('@bsv/sdk').MerklePath>()
+  private rememberProof (txid: string, mp: import('@bsv/sdk').MerklePath): void {
+    if (this.txProofs.size >= 4096) this.txProofs.delete(this.txProofs.keys().next().value!)
+    this.txProofs.set(txid, mp)
+  }
+  /** pull fallback for proofs that never arrived by push (restart gap) —
+   *  set by the live runtime to a tracker-verified source; unset elsewhere */
+  proofLookup?: (txid: string) => Promise<import('@bsv/sdk').MerklePath | undefined>
+  private proofLookupAt = new Map<string, number>()
+
+  private async attachKnownProof (tx: import('@bsv/sdk').Transaction, txid: string): Promise<void> {
+    if (tx.merklePath !== undefined) return // never overwrite an existing path
+    let mp = this.txProofs.get(txid)
+    if (mp === undefined && this.proofLookup !== undefined) {
+      const last = this.proofLookupAt.get(txid) ?? 0
+      if (Date.now() - last > 60_000) {
+        if (this.proofLookupAt.size >= 4096) this.proofLookupAt.delete(this.proofLookupAt.keys().next().value!)
+        this.proofLookupAt.set(txid, Date.now())
+        try { mp = await this.proofLookup(txid) ?? undefined } catch { mp = undefined }
+        if (mp !== undefined) this.rememberProof(txid, mp)
+      }
+    }
+    if (mp !== undefined) tx.merklePath = mp
   }
   /** state-change events for live surfaces (dashboard SSE, watchers) —
    *  emitted once per successful mutating tool call by the server layer */
@@ -370,6 +402,7 @@ export class NektarMemory {
    *  checked against our own tracker) or produced by the chain backend
    *  itself: attach it to the anchor it belongs to, then notify subscribers */
   deliverTxProof (txid: string, mp: import('@bsv/sdk').MerklePath): void {
+    this.rememberProof(txid, mp)
     try {
       const shard = this.txidShard.get(txid)
       if (shard) this.attachProof(shard, txid, mp)

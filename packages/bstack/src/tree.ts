@@ -1,4 +1,4 @@
-import { PrivateKey, ProtoWallet, Transaction, P2PKH, type MerklePath } from '@bsv/sdk'
+import { PrivateKey, ProtoWallet, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { fundingLock, sweep as bSweep, feeFor, type Derivation, type Fees } from '@lightwebinc/bcommon'
 import type { FundingOut } from '@nektar/chain'
 import type { Knex } from 'knex'
@@ -24,6 +24,18 @@ export async function mintTree (p: { key: PrivateKey, funding: FundingOut, n: nu
   return tx
 }
 
+// A broadcaster BUMP can prove several transactions of one block at once, and
+// marks a sibling leaf as a txid when it is another of the client's own
+// transactions; hosts admit a carrier only when the proof is the funding
+// tree's path alone, with its sibling an ordinary hash.
+const ownPath = (tree: Transaction): Transaction => {
+  if (tree.merklePath === undefined) return tree
+  const txid = tree.id('hex')
+  const mp = tree.merklePath.extract([txid])
+  tree.merklePath = new MerklePath(mp.blockHeight, mp.path.map((level, i) => i !== 0 ? level : level.map(e => e.hash === txid || e.txid !== true ? e : { offset: e.offset, hash: e.hash })))
+  return tree
+}
+
 export interface TreeLedger {
   add (tree: Transaction, n: number, kind?: string): Promise<void>
   take (kind?: string): Promise<{ tree: Transaction, vout: number } | undefined>
@@ -46,7 +58,7 @@ export class MemoryTreeLedger implements TreeLedger {
       const t = this.trees.get(txid!)!
       if (!t.proven || t.kind !== kind) continue
       this.free.delete(k)
-      return { tree: t.tree, vout: Number(v) }
+      return { tree: ownPath(t.tree), vout: Number(v) }
     }
     return undefined
   }
@@ -106,7 +118,7 @@ export class KnexTreeLedger implements TreeLedger {
         const n = await trx('bstack_tree_outputs').where({ key: row.key }).del()
         if (n !== 1) return false
         const t = await trx('bstack_trees').where({ txid: row.txid }).first()
-        return { tree: Transaction.fromBEEF(JSON.parse(t.beef)), vout: row.vout }
+        return { tree: ownPath(Transaction.fromBEEF(JSON.parse(t.beef))), vout: row.vout }
       })
       if (r !== false) return r ?? undefined
     }

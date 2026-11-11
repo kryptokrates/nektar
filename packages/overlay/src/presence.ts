@@ -133,7 +133,9 @@ export const wantArtifactHash = (sw: SignedWant): string => toHex(Uint8Array.fro
 export const wantTaskDigest = (fields: { domains: string[], question?: string, maxSats?: number }): string =>
   toHex(Uint8Array.from(sha256(utf8(marketJson({ domains: [...fields.domains].sort(), maxSats: fields.maxSats ?? null, question: fields.question ?? '' })))))
 
-const wantShapeError = (w: WantAd): string | null => {
+// allowExpired: verify a signed historical artifact (evidence) — liveness is a
+// read-path concern, not a property of the signature
+const wantShapeError = (w: WantAd, allowExpired = false): string | null => {
   if (typeof w?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(w.pub)) return 'bad pub'
   if (typeof w?.wantId !== 'string' || !ARTIFACT_ID_RE.test(w.wantId)) return 'bad wantId'
   if (!Number.isSafeInteger(w.revision) || w.revision < 1) return 'bad revision'
@@ -146,7 +148,7 @@ const wantShapeError = (w: WantAd): string | null => {
   if (w.maxSats !== undefined && (!Number.isSafeInteger(w.maxSats) || w.maxSats < 0)) return 'bad maxSats'
   if (w.endpoint !== undefined && (typeof w.endpoint !== 'string' || !/^https?:\/\/\S{2,200}$/.test(w.endpoint))) return 'bad endpoint'
   if (!Number.isSafeInteger(w.ts) || w.ts <= 0) return 'bad ts'
-  if (w.exp !== undefined && (!Number.isSafeInteger(w.exp) || w.exp <= Date.now())) return 'expired'
+  if (w.exp !== undefined && (!Number.isSafeInteger(w.exp) || (!allowExpired && w.exp <= Date.now()))) return 'expired'
   return null
 }
 
@@ -185,8 +187,8 @@ export function signWant (key: PrivateKey, fields: WantInput): SignedWant {
   return { want, sig: sigFor(key, want, wantCanonical) }
 }
 
-export function verifyWant (want: WantAd, sigHex: string): boolean {
-  if (wantShapeError(want) !== null) return false
+export function verifyWant (want: WantAd, sigHex: string, opts?: { allowExpired?: boolean }): boolean {
+  if (wantShapeError(want, opts?.allowExpired ?? false) !== null) return false
   if (want.streamSeq === undefined || want.prevHash === undefined) return false // v2: stream fields required
   try {
     return verifyDigest(want.pub, wantDigest(want), sigHex)
@@ -263,7 +265,7 @@ export const publicQuoteError = (q: unknown): string | null => {
   return null
 }
 
-const offerShapeError = (o: OfferAd): string | null => {
+const offerShapeError = (o: OfferAd, allowExpired = false): string | null => {
   if (typeof o?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(o.pub)) return 'bad pub'
   if (typeof o?.offerId !== 'string' || !ARTIFACT_ID_RE.test(o.offerId)) return 'bad offerId'
   if (!Number.isSafeInteger(o.revision) || o.revision < 1) return 'bad revision'
@@ -279,7 +281,7 @@ const offerShapeError = (o: OfferAd): string | null => {
   if (!Array.isArray(o.domains) || o.domains.length > 32 || !o.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return 'bad domains'
   for (const h of [o.shardId, o.leaf, o.hdp, o.batchR]) if (h !== undefined && (typeof h !== 'string' || !/^[0-9a-f]{40,64}$/i.test(h))) return 'bad hex field'
   if (!Number.isSafeInteger(o.ts) || o.ts <= 0) return 'bad ts'
-  if (o.exp !== undefined && (!Number.isSafeInteger(o.exp) || o.exp <= Date.now())) return 'expired'
+  if (o.exp !== undefined && (!Number.isSafeInteger(o.exp) || (!allowExpired && o.exp <= Date.now()))) return 'expired'
   if (o.offer !== undefined) { const q = publicQuoteError(o.offer); if (q !== null) return q }
   return null
 }
@@ -303,8 +305,8 @@ export function signOffer (key: PrivateKey, fields: OfferInput): SignedOffer {
   return { offer, sig: sigFor(key, offer, offerCanonical) }
 }
 
-export function verifyOffer (offer: OfferAd, sigHex: string): boolean {
-  if (offerShapeError(offer) !== null) return false
+export function verifyOffer (offer: OfferAd, sigHex: string, opts?: { allowExpired?: boolean }): boolean {
+  if (offerShapeError(offer, opts?.allowExpired ?? false) !== null) return false
   if (offer.streamSeq === undefined || offer.prevHash === undefined) return false // v2: stream fields required
   try {
     return verifyDigest(offer.pub, offerDigest(offer), sigHex)

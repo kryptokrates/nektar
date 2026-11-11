@@ -235,8 +235,11 @@ Honest boundaries:
   `BLOCKED`, never a host run.
 - Transport is bstack carriers (wants, offers) and bbox envelopes (quote,
   accept, delivered), submitted over HTTPS to every configured overlay host
-  and verified locally on read. 1BSV multicast delivery is not used yet. bbox
-  receipts are not implemented: envelopes stay listed until they expire (24h).
+  and verified locally on read. 1BSV multicast delivery is not used yet. Read
+  envelopes are acknowledged with a bbox receipt and leave the inbox;
+  unacknowledged ones expire after 24h. Wants expire with their collect window
+  and offers after 24h; hosts refuse artifacts without an expiry or with one
+  more than 7 days ahead.
 - Existing owner tools (`sale`, `sendSats`, `payInvoice`, bond ops, anchors)
   are not yet routed through the automation budget ledger; its caps bound what
   the automation runtime itself spends. SpendGuard still fronts every broadcast.

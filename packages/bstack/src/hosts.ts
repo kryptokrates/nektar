@@ -20,7 +20,7 @@ export async function submitAll (hosts: string[], beef: number[], topics: string
           return { host, ok: true, admitted }
         }
         if (r.status < 500) return { host, ok: false, error: `http ${r.status}` }
-        if (t === waits.length) return { host, ok: false, error: `http ${r.status}` }
+        if (t === waits.length) return { host, ok: false, error: `http ${r.status}: ${(await r.text().catch(() => '')).slice(0, 120)}` }
       } catch (e) { if (t === waits.length) return { host, ok: false, error: (e as Error).message.slice(0, 80) } }
       await new Promise(r => setTimeout(r, waits[t]))
     }

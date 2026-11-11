@@ -1,10 +1,10 @@
 import { Hash, PrivateKey, ProtoWallet, Transaction, Utils, type ChainTracker } from '@bsv/sdk'
 import { sealEnvelope, encodePlaintext, envelopeRecord, envelopeCarrier, envelopeFundingLock } from '@lightwebinc/bbox-host/codec/send.js'
-import { decodeEnvelope, checkBox, checkOffice } from '@lightwebinc/bbox-host/codec/boxrec.js'
+import { decodeEnvelope, encodeReceipt, checkBox, checkOffice, MaxAcks } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { checkContent, verifyContentSignature } from '@lightwebinc/bbox-host/codec/content.js'
 import { JObject, parseJSON, type JValue } from '@lightwebinc/bbox-host/codec/jcs.js'
 import { admit } from '@lightwebinc/bbox-host/codec/admit.js'
-import { submitAll, lookupAll } from './hosts.js'
+import { submitAll, lookupAll, type Quorum } from './hosts.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 
@@ -60,7 +60,51 @@ export async function sendBox (p: {
   return { txid, took: r.took, admitted: r.admitted, missed: r.missed }
 }
 
-export interface BoxItem { txid: string, from: string, body: object, created: number }
+export interface BoxItem { txid: string, from: string, body: object, created: number, commitment: string }
+
+const bytewise = (a: Uint8Array, b: Uint8Array): number => {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i]! - b[i]!
+  return a.length - b.length
+}
+
+export async function ackBox (p: {
+  key: PrivateKey, ledger: TreeLedger, journal: CarrierJournal, hosts: string[], office?: string,
+  items: Array<{ txid: string, commitment: string }>, quorum?: Quorum
+}): Promise<{ receipts: string[], acked: number, resent: number, skipped: number }> {
+  const office = p.office ?? DEFAULT_OFFICE
+  checkOffice(office)
+  const topics = [`tm_bbox_${office}`]
+  const resend = new Map<string, { txid: string, beef: number[] }>()
+  const fresh: Array<{ txid: string, commitment: string }> = []
+  let resent = 0
+  for (const i of p.items) {
+    const hit = await p.journal.get(`ack:${i.txid}`)
+    if (hit !== undefined) { resent++; resend.set(hit.txid, { txid: hit.txid, beef: hit.beef }) }
+    else fresh.push(i)
+  }
+  let acked = 0, skipped = 0
+  const receipts: string[] = []
+  const w = new ProtoWallet(p.key)
+  const by = new Uint8Array(Array.from(p.key.toPublicKey().encode(true) as number[]))
+  for (let c = 0; c < fresh.length; c += MaxAcks) {
+    const chunk = fresh.slice(c, c + MaxAcks)
+    const slot = await p.ledger.take('bbox')
+    if (slot === undefined) { skipped += chunk.length; continue }
+    const acks = [...new Map(chunk.map(i => [i.commitment, new Uint8Array(Utils.toArray(i.commitment, 'hex'))])).values()].sort(bytewise)
+    const record = encodeReceipt({ office, by, acks, created: Math.floor(Date.now() / 1000), extra: [] })
+    const carrier = await envelopeCarrier(w, ORIGINATOR, record, slot.tree, slot.vout)
+    const beef = carrier.toAtomicBEEF()
+    const txid = carrier.id('hex')
+    for (const i of chunk) await p.journal.put(`ack:${i.txid}`, { txid, beef, topics })
+    resend.set(txid, { txid, beef })
+    acked += chunk.length
+  }
+  for (const r of resend.values()) {
+    const s = await submitAll(p.hosts, r.beef, topics, { quorum: p.quorum })
+    if (s.ok) receipts.push(r.txid)
+  }
+  return { receipts, acked, resent, skipped }
+}
 
 export async function readBox (p: {
   key: PrivateKey, hosts: string[], office?: string, tracker: ChainTracker, limit?: number
@@ -112,6 +156,7 @@ async function openEnvelope (beef: number[], w: ProtoWallet, office: string, me:
     txid: Utils.toHex(Array.from(adm.txid)),
     from: Utils.toHex(Array.from(env.from)),
     body: fromJ(doc.get('nektar')!) as object,
-    created: env.created
+    created: env.created,
+    commitment: Utils.toHex(Array.from(adm.carrier!.commitment))
   }
 }

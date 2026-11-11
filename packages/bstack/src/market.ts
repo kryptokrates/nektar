@@ -41,3 +41,10 @@ export function bodyDomains (m: MarketPayload): string[] {
   const b = m.body as { want?: { domains: string[] }, offer?: { domains: string[] } }
   return m.kind === 'want' ? b.want!.domains : b.offer!.domains
 }
+/** ms-epoch expiry of the signed artifact (want.exp / offer.exp); undefined when absent */
+export function bodyExp (m: MarketPayload): number | undefined {
+  const b = m.body as { want?: { exp?: number }, offer?: { exp?: number } }
+  return m.kind === 'want' ? b.want?.exp : b.offer?.exp
+}
+/** hosts refuse artifacts expiring further out than this */
+export const MAX_LIFETIME_MS = 7 * 86_400_000

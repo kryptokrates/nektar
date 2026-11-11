@@ -19,7 +19,7 @@ export interface AutomationConfig {
   opts?: Partial<MarketOptions>
   log?: (line: string) => void
   marketHosts?: string[]
-  messages?: { send: (toPub: string, msg: MarketMessage) => Promise<void>, collect: () => Promise<Array<{ from: string, msg: MarketMessage }>> }
+  messages?: { send: (toPub: string, msg: MarketMessage) => Promise<void>, collect: () => Promise<Array<{ from: string, msg: MarketMessage }>>, ack?: () => Promise<void> }
   treeSize?: number
   boxOffice?: string
   treeLowWater?: number
@@ -80,6 +80,8 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     for (const h of r.unreachable) if (!downNow.has(h)) { downNow.add(h); log(`automation: unreachable ${h}`) }
     for (const h of [...downNow]) if (!r.unreachable.includes(h)) { downNow.delete(h); log(`automation: host back ${h}`) }
   }
+  let pendingAcks: Array<{ txid: string, commitment: string }> = []
+  let lastAckSkipped = -1
   const msgs = cfg.messages ?? (lanes === undefined ? undefined : {
     send: async (to: string, msg: MarketMessage): Promise<void> => {
       try {
@@ -91,10 +93,20 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
         const tracker = await mem.sdkTracker()
         const r = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker })
         laneNotes(r)
+        pendingAcks = r.items.map(i => ({ txid: i.txid, commitment: i.commitment }))
         const out: Array<{ from: string, msg: MarketMessage }> = []
         for (const i of r.items) { const m = (i.body as { market?: MarketMessage }).market; if (m !== undefined && typeof m === 'object') out.push({ from: i.from, msg: m }) }
         return out
       } catch (e) { log(`automation: box: ${(e as Error).message}`); return [] }
+    },
+    ack: async (): Promise<void> => {
+      if (pendingAcks.length === 0) return
+      const items = pendingAcks
+      pendingAcks = []
+      try {
+        const r = await lanes.mod.ackBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, office: cfg.boxOffice, items })
+        if (r.skipped > 0 && r.skipped !== lastAckSkipped) { lastAckSkipped = r.skipped; log(`automation: box ack: ${r.skipped} envelope(s) skipped — no bbox funding slot`) }
+      } catch (e) { pendingAcks = items.concat(pendingAcks); log(`automation: box ack: ${(e as Error).message}`) }
     }
   })
   const lanePoll = async (): Promise<void> => {
@@ -118,7 +130,9 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   const poll = async (): Promise<void> => {
     if (lanes !== undefined) { try { await lanePoll() } catch (e) { log(`automation: lanes: ${(e as Error).message}`) } }
     if (msgs !== undefined) {
-      try { for (const m of await msgs.collect()) await engine.ingestMessage(m.from, m.msg) } catch (e) { log(`automation: messages: ${(e as Error).message}`) }
+      let ingested = false
+      try { for (const m of await msgs.collect()) await engine.ingestMessage(m.from, m.msg); ingested = true } catch (e) { log(`automation: messages: ${(e as Error).message}`) }
+      if (ingested && msgs.ack !== undefined) { try { await msgs.ack() } catch (e) { log(`automation: box ack: ${(e as Error).message}`) } }
     }
   }
   let busy = false

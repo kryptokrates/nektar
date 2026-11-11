@@ -89,7 +89,7 @@ after(async () => {
   try { rmSync(tmp, { recursive: true, force: true }) } catch {}
 })
 
-test('S1: competing sellers across two federated hosts → autonomous purchase → verified disclosure → sandboxed fix', async (t) => {
+test('S1: competing sellers across two independent hosts → autonomous purchase → verified disclosure → sandboxed fix', async (t) => {
   const alice = await agent('alice', [H1.url], { seller: 450 })
   const ben = await agent('ben', [H2.url], { seller: 300 })
   const cara = await agent('cara', [H2.url], { seller: 200 })

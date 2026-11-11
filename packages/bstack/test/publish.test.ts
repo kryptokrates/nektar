@@ -11,7 +11,7 @@ import { provenTree, fund, prove } from './helpers.js'
 import { FakeTracker, minihost } from '../src/testing.js'
 
 const NET = 'regtest'
-const wantPayload = (k: PrivateKey) => ({ v: 1 as const, kind: 'want' as const, body: signWant(k, { domains: ['compute'], question: 'q', net: NET, ts: Date.now() }) })
+const wantPayload = (k: PrivateKey) => ({ v: 1 as const, kind: 'want' as const, body: signWant(k, { domains: ['compute'], question: 'q', net: NET, ts: Date.now(), exp: Date.now() + 60000 }) })
 
 test('journal: round-trip', async () => {
   const j = new MemoryCarrierJournal()

@@ -11,7 +11,7 @@ import { FakeTracker, minihost } from '../src/testing.js'
 const NET = 'regtest'
 
 async function want (k: PrivateKey, domains = ['compute'], tree?: import('@bsv/sdk').Transaction, net = NET) {
-  const sw = signWant(k, { domains, question: 'q', net, ts: Date.now() })
+  const sw = signWant(k, { domains, question: 'q', net, ts: Date.now(), exp: Date.now() + 60000 })
   const t = tree ?? await provenTree(k)
   return { beef: (await buildCarrier({ key: k, payload: encodePayload({ v: 1, kind: 'want', body: sw }), slot: { tree: t, vout: 0 } })).beef, tree: t }
 }

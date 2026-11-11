@@ -120,7 +120,7 @@ export class MarketEngine {
       if (!Number.isSafeInteger(input.maxSats) || input.maxSats <= 0 || input.maxSats > p.limits.perPurchaseSats) throw new Error('publishWant: maxSats outside the approved per-purchase limit')
       const now = this.now()
       const tip = await this.d.tip?.()
-      const sw = signWant(this.d.key, { domains, ...(input.question ? { question: input.question } : {}), maxSats: input.maxSats, ts: now, net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {}), ...(input.wantId ? { wantId: input.wantId } : {}) })
+      const sw = signWant(this.d.key, { domains, ...(input.question ? { question: input.question } : {}), maxSats: input.maxSats, ts: now, exp: now + p.scoring.collectMs, net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {}), ...(input.wantId ? { wantId: input.wantId } : {}) })
       const { operation, created } = await this.d.store.createOperation({ role: 'buyer', kind: 'purchase', dedupeKey: `buyer:${this.d.network}:${sw.want.wantId}`, policyHash, network: this.d.network, state: 'published', data: { want: sw, offers: {} } })
       if (created) {
         await this.d.store.transition(operation.operationId, 1, 'collecting', { cause: 'want_signed', dueAt: now + p.scoring.collectMs, outbox: [{ actionId: `${operation.operationId}:want`, kind: 'publish-want', destination: 'feed', payload: sw }] })
@@ -263,7 +263,7 @@ export class MarketEngine {
         offerId: operation.operationId, shard: pick.shard, seq: pick.seq, shardId: pick.manifest.shardId, domains: pick.manifest.domains,
         leaf: c.leaf, hdp: c.hdp, ...(c.batchR ? { batchR: c.batchR } : {}), priceSats: pick.price,
         offer: saleQuoteWire(publicSaleQuote(offer)), wantId: w.wantId, taskHash: w.taskHash, wantRevision: w.revision, buyerPub: w.pub, replyTo: w.pub,
-        ts: this.now(), net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {})
+        ts: this.now(), exp: this.now() + 86_400_000, net: this.d.network, ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {})
       })
       await this.d.store.transition(operation.operationId, 1, 'quoted', {
         cause: 'offer_prepared', data: { offer, signedOffer: so }, dueHeight: h + this.o.refundBlocks,

@@ -17,7 +17,7 @@ import type { MarketMessage } from '../src/automation/market.js'
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
 const NET = 'mock'
-let clock = 1_800_000_000_000
+let clock = Date.now()
 
 const bus = () => {
   const boxes = new Map<string, Array<{ from: string, msg: MarketMessage }>>()
@@ -32,7 +32,7 @@ const bus = () => {
 const policyFor = (pub: string): AutomationPolicy => ({
   v: 1, policyId: 'demo', network: NET, agentPub: pub, roles: ['buyer', 'seller'], notBefore: 0, notAfter: 4_000_000_000_000, domains: ['libfoo'],
   limits: { perPurchaseSats: 500, dailyPurchaseSats: 1000, perTxFeeSats: 600, dailyFeeSats: 2000, runTotalSats: 5000, maxLockedSats: 1000, maxUnconfirmedSats: 1000, maxUnconfirmedCount: 3 },
-  scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 1000 },
+  scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 8000 },
   seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 5, sellableShards: ['guide'] },
   disclosure: { allowPublic: false },
   ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
@@ -46,7 +46,7 @@ const mkagent = async (name: string, o: MkOpts): Promise<A> => {
   for (const t of funder.parents) o.chain.registerParent(t)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
   const pub = mem.operatorKey().toPublicKey().toString()
-  const rt = await openAutomation(mem, { network: NET, dataDir: join(o.dir, name), marketHosts: o.hosts, intervalMs: 0, call: (t2, a) => callTool(mem, t2, a), log: l => o.logs.push(`${name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, messages: o.msgs?.for(pub), opts: o.opts })
+  const rt = await openAutomation(mem, { network: NET, dataDir: join(o.dir, name), marketHosts: o.hosts, intervalMs: 0, call: (t2, a) => callTool(mem, t2, a), log: l => o.logs.push(`${name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, messages: o.msgs?.for(pub), opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts } })
   return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name }
 }
 const sellerize = async (s: A, price: number) => {
@@ -178,7 +178,7 @@ test('bstack D: restart â€” journal+ledger prevent second carrier, purchase comp
     for (const t of funderB.parents) chain.registerParent(t)
     const memB = new NektarMemory(chain, funderB, funderB.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
     const pubB = memB.operatorKey().toPublicKey().toString()
-    const open = async () => await openAutomation(memB, { network: NET, dataDir: join(dir, 'buyer'), marketHosts: [h1.url], intervalMs: 0, call: (t2, a) => callTool(memB, t2, a), log: l => logs.push('B:' + l), ai: new ScriptedExecutor(), now: () => clock, messages: msgs.for(pubB) })
+    const open = async () => await openAutomation(memB, { network: NET, dataDir: join(dir, 'buyer'), marketHosts: [h1.url], intervalMs: 0, call: (t2, a) => callTool(memB, t2, a), log: l => logs.push('B:' + l), ai: new ScriptedExecutor(), now: () => clock, messages: msgs.for(pubB), opts: { offerTtlBlocks: 10000, refundBlocks: 10000 } })
     let bRt = await open()
     const policyHash = await bRt.store.approvePolicy(policyFor(pubB), 'test:operator')
     const s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir })
@@ -207,8 +207,8 @@ test('bstack E: hosts down after escrow funded â€” chain advance still refunds t
   const msgs = bus(); const logs: string[] = []
   const h1 = await minihost([NET], { tracker: trackerFor(chain) })
   try {
-    const b = await mkagent('buyer', { hosts: [h1.url], msgs, chain, logs, dir, opts: { refundBlocks: 6 } })
-    const s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir, opts: { refundBlocks: 6 } })
+    const b = await mkagent('buyer', { hosts: [h1.url], msgs, chain, logs, dir, opts: { refundBlocks: 40 } })
+    const s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir, opts: { refundBlocks: 40 } })
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 8)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 500 }, b.policyHash)
@@ -232,7 +232,7 @@ test('bstack E: hosts down after escrow funded â€” chain advance still refunds t
 })
 
 
-test('bstack F: default bbox channel — no injected bus; forged delivered ignored', async () => {
+test('bstack F: default bbox channel ï¿½ no injected bus; forged delivered ignored', async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -273,6 +273,36 @@ test('bstack F: default bbox channel — no injected bus; forged delivered ignored
       await kx.destroy(); return Number(n)
     }
     assert.ok((await envs('buyer')) + (await envs('seller')) >= 3, 'quote+accept+delivered envelopes were sent')
+    for (const r of all) await r.stop()
+  } finally { await h1.close(); await h2.close() }
+})
+
+test('bstack G: read envelopes are acked off the hosts; want+offer carry signed expiry', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const office = 'nektar_abcdefghij'
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office })
+  const h2 = await minihost([NET], { tracker: trackerFor(chain), office })
+  try {
+    const b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    const s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    const all = [b.rt, s.rt]
+    assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'no deal | ' + logs.slice(-20).join(' | '))
+    const bo = (await buyerOp(b))!
+    const sw = (bo.data.want as { want: { ts: number, exp?: number } }).want
+    assert.equal(sw.exp, sw.ts + 8000, 'want expires with its collect window')
+    const sel = (bo.data.selected as { key: string }).key
+    const so = (bo.data.offers as Record<string, { so: { offer: { exp?: number } } }>)[sel]!.so
+    assert.ok(Number.isSafeInteger(so.offer.exp), 'offer carries a signed expiry')
+    await drive(all, chain, 2)
+    const { readBox } = await import('@nektar/bstack')
+    const tracker = trackerFor(chain)
+    assert.equal((await readBox({ key: b.mem.operatorKey(), hosts: [h1.url, h2.url], office, tracker })).items.length, 0, 'buyer inbox acked empty')
+    assert.equal((await readBox({ key: s.mem.operatorKey(), hosts: [h1.url, h2.url], office, tracker })).items.length, 0, 'seller inbox acked empty')
     for (const r of all) await r.stop()
   } finally { await h1.close(); await h2.close() }
 })

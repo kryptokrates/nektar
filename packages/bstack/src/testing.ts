@@ -11,7 +11,7 @@ export class FakeTracker implements ChainTracker {
   async currentHeight (): Promise<number> { return 1 }
 }
 
-export interface MinihostOpts { tracker: ChainTracker, evil?: boolean, failNext?: () => boolean, drop?: (txid: string) => boolean, office?: string, corrupt?: boolean, port?: number }
+export interface MinihostOpts { tracker: ChainTracker, evil?: boolean, failNext?: () => boolean, drop?: (txid: string) => boolean, office?: string, corrupt?: boolean, port?: number, now?: () => number }
 export interface MinihostHandle { url: string, close: () => Promise<void>, has: (txid: string) => boolean, txids: () => string[], raw: () => number[][] }
 export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker): Promise<MinihostHandle> {
   const tracker: ChainTracker = 'tracker' in opts ? opts.tracker : opts
@@ -21,12 +21,14 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
   const office = 'office' in opts ? opts.office : undefined
   const corrupt = 'corrupt' in opts ? (opts.corrupt ?? false) : false
   const port = 'port' in opts ? opts.port : undefined
+  const now = 'now' in opts ? opts.now : undefined
   const host = { log: () => {}, chainTracker: tracker as unknown as ChainTracker, engine: { submit: async () => ({}) } }
-  const { topics, lookups } = createNektarModule(host as never, nets)
+  const { topics, lookups } = createNektarModule(host as never, nets, now !== undefined ? { now } : undefined)
   const stored = new Map<string, number[]>()
-  // ls_bbox below is a spec-shaped double: it implements only {inbox:{office,to}} and
-  // inbox-after; admission on tm_bbox_<office> runs the REAL codec admit() verdict.
-  const boxIndex = new Map<string, Array<{ txid: string, created: number, expires: number }>>()
+  // ls_bbox below is a spec-shaped double: it implements only {office,to} and
+  // inbox-after; admission on tm_bbox_<office> runs the REAL codec admit() verdict,
+  // and a recipient receipt removes its acked commitments from the inbox index.
+  const boxIndex = new Map<string, Array<{ txid: string, created: number, expires: number, commitment: string }>>()
   const srv = http.createServer(async (req, res) => {
     const chunks: Buffer[] = []
     req.on('data', c => chunks.push(c))
@@ -42,16 +44,30 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
           if (office !== undefined && t === `tm_bbox_${office}`) {
             const beefArr = Array.from(body)
             const adm = await (await import('@lightwebinc/bbox-host/codec/admit.js')).admit(new Uint8Array(beefArr), [], { office, headers: tracker })
-            if (adm.kind !== 'envelope') throw new Error(`box admit kind ${adm.kind}`)
-            const { decodeEnvelope } = await import('@lightwebinc/bbox-host/codec/boxrec.js')
-            const env = decodeEnvelope(new Uint8Array(adm.carrier!.record))
-            const txid = Utils.toHex(Array.from(adm.txid))
-            stored.set(txid, beefArr)
-            const k = Utils.toHex(Array.from(env.to))
-            if (!boxIndex.has(k)) boxIndex.set(k, [])
-            boxIndex.get(k)!.push({ txid, created: env.created, expires: env.expires })
-            admitted = admitted.concat(adm.outputs)
-            continue
+            const { decodeEnvelope, decodeReceipt } = await import('@lightwebinc/bbox-host/codec/boxrec.js')
+            if (adm.kind === 'envelope') {
+              const env = decodeEnvelope(new Uint8Array(adm.carrier!.record))
+              const txid = Utils.toHex(Array.from(adm.txid))
+              stored.set(txid, beefArr)
+              const k = Utils.toHex(Array.from(env.to))
+              if (!boxIndex.has(k)) boxIndex.set(k, [])
+              boxIndex.get(k)!.push({ txid, created: env.created, expires: env.expires, commitment: Utils.toHex(Array.from(adm.carrier!.commitment)) })
+              admitted = admitted.concat(adm.outputs)
+              continue
+            }
+            if (adm.kind === 'receipt') {
+              const rec = decodeReceipt(new Uint8Array(adm.carrier!.record))
+              const byHex = Utils.toHex(Array.from(rec.by))
+              stored.set(Utils.toHex(Array.from(adm.txid)), beefArr)
+              const list = boxIndex.get(byHex)
+              if (list !== undefined) {
+                const acks = new Set(rec.acks.map(a => Utils.toHex(Array.from(a))))
+                boxIndex.set(byHex, list.filter(e => !acks.has(e.commitment)))
+              }
+              admitted = admitted.concat(adm.outputs)
+              continue
+            }
+            throw new Error(`box admit kind ${adm.kind}`)
           }
           if (topics[t] === undefined) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: `unknown topic ${t}` })); return }
           const r = await topics[t]!.identifyAdmissibleOutputs(beef, [])

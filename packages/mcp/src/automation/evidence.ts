@@ -42,8 +42,8 @@ export function verifyTradeEvidence (e: TradeEvidence): { ok: boolean, checks: A
   const sel = e.offers.find(o => `${o.offer.pub}:${o.offer.offerId}` === e.selectedOfferKey)
   const q = sel?.offer.offer as any
   const pkh = (pub: string) => Buffer.from(PublicKey.fromString(pub).toHash() as number[]).toString('hex')
-  check('want signature', () => verifyWant(w, e.want.sig) && w.net === e.network)
-  check('every recorded offer is signed and bound to this want', () => e.offers.length > 0 && e.offers.every(o => verifyOffer(o.offer, o.sig) && o.offer.wantId === w.wantId && o.offer.taskHash === w.taskHash && o.offer.buyerPub === w.pub))
+  check('want signature', () => verifyWant(w, e.want.sig, { allowExpired: true }) && w.net === e.network)
+  check('every recorded offer is signed and bound to this want', () => e.offers.length > 0 && e.offers.every(o => verifyOffer(o.offer, o.sig, { allowExpired: true }) && o.offer.wantId === w.wantId && o.offer.taskHash === w.taskHash && o.offer.buyerPub === w.pub))
   check('selected offer exists and its quote is signed by the seller', () => !!sel && q.sellerPub === sel.offer.pub && (verifyOfferSig(q, w.pub, sel.offer.leaf ?? '') || verifyOfferSig(q, '', sel.offer.leaf ?? '')))
   check('price is within the signed want ceiling', () => sel!.offer.priceSats === Number(q.cfg.price) && (w.maxSats === undefined || sel!.offer.priceSats <= w.maxSats))
   const escrow = Transaction.fromHex(e.escrow.txHex)

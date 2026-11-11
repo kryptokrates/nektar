@@ -1,6 +1,6 @@
 import { Transaction, Script, type ChainTracker } from '@bsv/sdk'
 import { checkCarrier, checkSweep, carrierLockingKey } from './carrier.js'
-import { allLanes, decodePayload, lanesFor, verifyBody, bodyPub, bodyDomains, LS_NAME, type MarketPayload } from './market.js'
+import { allLanes, decodePayload, lanesFor, verifyBody, bodyPub, bodyDomains, bodyExp, MAX_LIFETIME_MS, LS_NAME, type MarketPayload } from './market.js'
 import { decodeFunding } from '@lightwebinc/bcommon'
 import { FUNDING_TAG } from './tree.js'
 
@@ -54,7 +54,7 @@ class LaneIndex {
   spendOutpoint (o: string): void { const t = this.byOutpoint.get(o); if (t !== undefined) this.spent(t) }
 }
 
-function makeTopicManager (net: string, lane: string, tracker: ChainTracker, idx: LaneIndex, log?: (m: string, x?: Record<string, unknown>) => void): TopicManager {
+function makeTopicManager (net: string, lane: string, tracker: ChainTracker, idx: LaneIndex, now: () => number, log?: (m: string, x?: Record<string, unknown>) => void): TopicManager {
   const say = log ?? (() => {})
   return {
     getDocumentation: async () => `nektar market lane ${lane}`,
@@ -72,6 +72,11 @@ function makeTopicManager (net: string, lane: string, tracker: ChainTracker, idx
         p = decodePayload(c.payload)
       } catch {
         say('tm refuse', { lane, reason: 'payload' })
+        return { outputsToAdmit: [], coinsToRetain: [] }
+      }
+      const exp = bodyExp(p)
+      if (exp === undefined || !Number.isSafeInteger(exp) || exp <= now() || exp > now() + MAX_LIFETIME_MS) {
+        say('tm refuse', { lane, reason: 'exp' })
         return { outputsToAdmit: [], coinsToRetain: [] }
       }
       if (!verifyBody(p)) {
@@ -102,11 +107,16 @@ function makeTopicManager (net: string, lane: string, tracker: ChainTracker, idx
   }
 }
 
-function makeLookup (nets: string[], lanes: string[], shared: Map<string, LaneIndex>, tracker: ChainTracker): LookupService {
+function makeLookup (nets: string[], lanes: string[], shared: Map<string, LaneIndex>, tracker: ChainTracker, now: () => number): LookupService {
   const idxOf = (topic: string): LaneIndex | undefined => shared.get(topic)
   const match = (f: (e: { payload: MarketPayload }) => boolean): Array<{ txid: string, outputIndex: number }> => {
     const out: Array<{ txid: string, outputIndex: number }> = []
-    for (const l of lanes) for (const [txid, e] of shared.get(l)!.entries) if (f(e)) out.push({ txid, outputIndex: 0 })
+    for (const l of lanes) {
+      const ix = shared.get(l)!
+      // retired artifacts are neither returned nor kept
+      for (const [txid, e] of ix.entries) { const exp = bodyExp(e.payload); if (exp !== undefined && exp <= now()) ix.spent(txid) }
+      for (const [txid, e] of ix.entries) if (f(e)) out.push({ txid, outputIndex: 0 })
+    }
     return out
   }
   const wantNet = (p: MarketPayload): string | undefined => {
@@ -157,12 +167,13 @@ function makeLookup (nets: string[], lanes: string[], shared: Map<string, LaneIn
   }
 }
 
-export function createNektarModule (host: Host, nets: string[]): { topics: Record<string, TopicManager>, lookups: Record<string, LookupService> } {
+export function createNektarModule (host: Host, nets: string[], opts?: { now?: () => number }): { topics: Record<string, TopicManager>, lookups: Record<string, LookupService> } {
+  const now = opts?.now ?? Date.now
   const shared = new Map<string, LaneIndex>()
   const topics: Record<string, TopicManager> = {}
-  for (const net of nets) for (const lane of allLanes(net)) { const ix = new LaneIndex(); shared.set(lane, ix); topics[lane] = makeTopicManager(net, lane, trackerOf(host), ix, host.log) }
+  for (const net of nets) for (const lane of allLanes(net)) { const ix = new LaneIndex(); shared.set(lane, ix); topics[lane] = makeTopicManager(net, lane, trackerOf(host), ix, now, host.log) }
   const lookups: Record<string, LookupService> = {}
-  lookups[LS_NAME] = makeLookup(nets, nets.flatMap(allLanes), shared, trackerOf(host))
+  lookups[LS_NAME] = makeLookup(nets, nets.flatMap(allLanes), shared, trackerOf(host), now)
   return { topics, lookups }
 }
 

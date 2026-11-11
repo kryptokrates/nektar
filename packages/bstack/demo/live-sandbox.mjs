@@ -50,7 +50,7 @@ const tj = await (await fetch(`${CHAIN}/api/v1/txmeta/${tree.id('hex')}/json`)).
 info(`tree mined: ${JSON.stringify(tj).slice(0, 160)}`)
 tree.merklePath = mkPath(tree.id('hex'), await minedHeight(tree.id('hex')))
 
-const sw = signWant(key, { domains: ['compute'], question: 'live', net: NET, ts: Date.now() })
+const sw = signWant(key, { domains: ['compute'], question: 'live', net: NET, ts: Date.now(), exp: Date.now() + 60000 })
 const { carrier, beef } = await buildCarrier({ key, payload: encodePayload({ v: 1, kind: 'want', body: sw }), slot: { tree, vout: 0 } })
 const lanes = lanesFor(NET, ['compute'])
 info(`carrier ${carrier.id('hex')} -> lanes ${lanes}`)

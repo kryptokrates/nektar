@@ -33,8 +33,8 @@ services:
       BLOGS_STREAMS: nektar_abcdefghij=open
       BLOGS_STATE_DIR: /var/lib/bbox/blogs
       BLOGS_KEEP_DAYS: 90
-      OVERLAY_TOPICS: tm_bbox_nektar_abcdefghij,tm_log_nektar_abcdefghij,tm_nektar_regtest_0,tm_nektar_regtest_1,tm_nektar_regtest_2,tm_nektar_regtest_3,tm_nektar_regtest_4,tm_nektar_regtest_5,tm_nektar_regtest_6,tm_nektar_regtest_7,tm_nektar_regtest_8,tm_nektar_regtest_9,tm_nektar_regtest_a,tm_nektar_regtest_b,tm_nektar_regtest_c,tm_nektar_regtest_d,tm_nektar_regtest_e,tm_nektar_regtest_f
-      OVERLAY_MODULES: /app/modules/bbox/bbox-module.js,/app/modules/nektar/nektar-module.js,/app/modules/blogs/blogs-module.js
+      OVERLAY_TOPICS: tm_bbox_nektar_abcdefghij,tm_log_nektar_abcdefghij,tm_finger,tm_nektar_regtest_0,tm_nektar_regtest_1,tm_nektar_regtest_2,tm_nektar_regtest_3,tm_nektar_regtest_4,tm_nektar_regtest_5,tm_nektar_regtest_6,tm_nektar_regtest_7,tm_nektar_regtest_8,tm_nektar_regtest_9,tm_nektar_regtest_a,tm_nektar_regtest_b,tm_nektar_regtest_c,tm_nektar_regtest_d,tm_nektar_regtest_e,tm_nektar_regtest_f
+      OVERLAY_MODULES: /app/modules/bbox/bbox-module.js,/app/modules/nektar/nektar-module.js,/app/modules/blogs/blogs-module.js,/app/modules/finger/finger-module.js
       OVERLAY_KNEX_URL: mysql://overlay:spike@db:3306/overlay
       OVERLAY_CHAIN_TRACKER_URL: http://chain:8080
       OVERLAY_ADMIN_TOKEN: spike-token
@@ -43,6 +43,7 @@ services:
     volumes:
       - ../../packages/bstack/bundle:/app/modules/nektar:ro
       - ./modules/blogs:/app/modules/blogs:ro
+      - ./modules/finger:/app/modules/finger:ro
       - host-state:/var/lib/bbox
     ports:
       - "127.0.0.1:18091:8080"

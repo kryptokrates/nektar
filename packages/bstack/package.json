@@ -17,6 +17,7 @@
     "@lightwebinc/bbox-host": "file:../../vendor/lightwebinc-bbox-host-0.6.7.tgz",
     "@lightwebinc/bcommon": "file:../../vendor/lightwebinc-bcommon-0.33.13.tgz",
     "@lightwebinc/blogs-host": "file:../../vendor/lightwebinc-blogs-host-0.6.3.tgz",
+    "@lightwebinc/bfinger-host": "file:../../vendor/lightwebinc-bfinger-host-0.8.4.tgz",
     "@nektar/chain": "workspace:*",
     "@nektar/core": "workspace:*",
     "knex": "^3.1.0",

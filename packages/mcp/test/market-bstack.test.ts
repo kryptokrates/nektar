@@ -1034,3 +1034,84 @@ test('bstack Z: restart between tick and append — events land exactly once', {
     assert.ok(read.batches.flatMap(x => x.lines).length > stalledLines, 'the queued events caught up')
   } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await b2?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
 })
+
+test('bstack AA: disjoint host sets — records find each other over the shared host', { timeout: 300_000 }, async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM, finger: true })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM, finger: true })
+  const h3 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM, finger: true })
+  let b!: A; let s!: A
+  try {
+    // the buyer's world is {H1,H2}, the seller's is {H2,H3} — only H2 is shared
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h2.url, h3.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    // both agents have published their own record: buyer on {H1,H2}, seller on {H2,H3}
+    const { resolveFinger } = await import('@nektar/bstack')
+    const tracker = trackerFor(chain)
+    const brec = await resolveFinger({ hosts: [h2.url], pub: b.pub, tracker, allowHttp: true })
+    assert.ok(brec !== undefined && brec.body.hosts.includes(h1.url), 'buyer record resolvable on the shared host')
+    const srec = await resolveFinger({ hosts: [h2.url], pub: s.pub, tracker, allowHttp: true })
+    assert.ok(srec !== undefined && srec.body.hosts.includes(h3.url), 'seller record resolvable on the shared host')
+
+    const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.includes((await saleOps(s))[0]?.state ?? '')
+    assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
+
+    // the seller's offer carrier reached H1 — a host it was never configured with
+    const { readOffers } = await import('@nektar/bstack')
+    const onH1 = await readOffers([h1.url], { net: NET, wantId: w.wantId, buyerPub: b.pub }, { tracker, net: NET })
+    assert.ok(onH1.items.length > 0, 'the offer carrier reached H1 via the buyer record')
+
+    // and the buyer's accept envelope reached the seller's hosts (H3 or H2):
+    // the deal completing at all proves it — the seller reads only {H2,H3} —
+    // and H3 holds a bbox carrier addressed to the seller that only the accept
+    // path could have produced (the buyer was never configured with H3)
+    assert.ok(h3.envelopes().some(e => e.to === s.pub.toLowerCase()), 'a bbox envelope for the seller reached H3 — the buyer never configured it')
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close(); await h3.close() }
+})
+
+test('bstack AB: no counterparty record — the deal completes over the shared host', { timeout: 300_000 }, async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  // no finger on either host: every resolve is a quiet miss, the configured set is the fallback
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.includes((await saleOps(s))[0]?.state ?? '')
+    assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
+    const fingerLines = logs.filter(l => /finger/i.test(l) && !/finger seq/.test(l))
+    assert.ok(fingerLines.length <= 1, `at most one finger-related log line | ${fingerLines.join(' | ')}`)
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+test('bstack AC: hostile record hosts are refused by the SSRF guard', async () => {
+  const { fingerHostAllowed } = await import('@nektar/bstack')
+  // on a real network: https only, never localhost/private/link-local literals
+  assert.equal(fingerHostAllowed('http://127.0.0.1:1'), false)
+  assert.equal(fingerHostAllowed('http://169.254.169.254'), false)
+  assert.equal(fingerHostAllowed('https://127.0.0.1'), false)
+  assert.equal(fingerHostAllowed('https://169.254.169.254'), false)
+  assert.equal(fingerHostAllowed('https://localhost'), false)
+  assert.equal(fingerHostAllowed('https://10.0.0.4'), false)
+  assert.equal(fingerHostAllowed('https://172.16.0.1'), false)
+  assert.equal(fingerHostAllowed('https://192.168.1.1'), false)
+  assert.equal(fingerHostAllowed('javascript:alert(1)'), false)
+  assert.equal(fingerHostAllowed('http://ok.example.com'), false, 'http refused off mock')
+  assert.equal(fingerHostAllowed('https://ok.example.com'), true)
+  // under allowHttp (regtest) plain http is fine — private literals still refused
+  assert.equal(fingerHostAllowed('http://127.0.0.1:18091', { allowHttp: true }), false)
+  assert.equal(fingerHostAllowed('http://ok.example.com', { allowHttp: true }), true)
+  // on a mock network the guard stands down entirely — the rig's hosts ARE local
+  assert.equal(fingerHostAllowed('http://127.0.0.1:18091', { allowHttp: true, allowLocal: true }), true)
+})

@@ -11,8 +11,8 @@ export class FakeTracker implements ChainTracker {
   async currentHeight (): Promise<number> { return 1 }
 }
 
-export interface MinihostOpts { tracker: ChainTracker, evil?: boolean, failNext?: (topics?: string[]) => boolean, drop?: (txid: string) => boolean, office?: string, corrupt?: boolean, port?: number, now?: () => number, logStream?: string }
-export interface MinihostHandle { url: string, close: () => Promise<void>, has: (txid: string) => boolean, txids: () => string[], raw: () => number[][] }
+export interface MinihostOpts { tracker: ChainTracker, evil?: boolean, failNext?: (topics?: string[]) => boolean, drop?: (txid: string) => boolean, office?: string, corrupt?: boolean, port?: number, now?: () => number, logStream?: string, finger?: boolean }
+export interface MinihostHandle { url: string, close: () => Promise<void>, has: (txid: string) => boolean, txids: () => string[], raw: () => number[][], envelopes: () => Array<{ to: string, txid: string }> }
 export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker): Promise<MinihostHandle> {
   const tracker: ChainTracker = 'tracker' in opts ? opts.tracker : opts
   const evil = 'evil' in opts ? (opts.evil ?? false) : false
@@ -20,6 +20,7 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
   const drop = 'drop' in opts ? opts.drop : undefined
   const office = 'office' in opts ? opts.office : undefined
   const logStream = 'logStream' in opts ? opts.logStream : undefined
+  const finger = 'finger' in opts ? (opts.finger ?? false) : false
   const corrupt = 'corrupt' in opts ? (opts.corrupt ?? false) : false
   const port = 'port' in opts ? opts.port : undefined
   const now = 'now' in opts ? opts.now : undefined
@@ -30,6 +31,7 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
   // inbox-after; admission on tm_bbox_<office> runs the REAL codec admit() verdict,
   // and a recipient receipt removes its acked commitments from the inbox index.
   const boxIndex = new Map<string, Array<{ txid: string, created: number, expires: number, commitment: string }>>()
+  const boxEnvelopes: Array<{ to: string, txid: string }> = []
   // ls_log below is a spec-shaped double: it implements only the three free
   // question classes (batch/interval/tree); admission on tm_log_<stream>
   // runs the REAL upstream admit() verdict with the previous coins the
@@ -37,6 +39,25 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
   const logBatches = new Map<string, Array<{ txid: string, outputIndex: number }>>()   // `${producer}|${seq}` -> carriers
   const logTokens = new Map<string, Array<{ txid: string, outputIndex: number }>>()    // `${producer}|${interval}` -> tokens
   const logCoins = new Map<string, { lockingScript: number[], satoshis: number }>()    // `txid.vout` -> coin
+  // tm_finger runs the REAL upstream admission verdict, and ls_finger is the
+  // REAL upstream join: admitted outputs and spends are fed to the vendored
+  // FingerLookupService, so {identityKey}, {identityKey,pending} and
+  // {identityKey,carrier} behave exactly as on a reference host. What this
+  // double does not implement: priced question classes, engine-side storage
+  // retention/eviction, and GASP catch-up.
+  const fingerHeld = new Set<string>()
+  let fingerTM: { identifyAdmissibleOutputs: (beef: number[], coins: number[]) => Promise<{ outputsToAdmit: number[], coinsToRetain: number[] }> } | undefined
+  let fingerLS: {
+    outputAdmittedByTopic: (p: { mode: string, atomicBEEF: number[], txid: string, outputIndex: number, topic: string }) => void
+    outputSpent: (p: { mode: string, txid: string, outputIndex: number, spendingTxid: string, topic: string }) => void
+    lookup: (q: unknown) => Promise<Array<{ txid: string, outputIndex: number }>>
+  } | undefined
+  if (finger) {
+    const mod = await import('@lightwebinc/bfinger-host/dist/index.js')
+    const mhost = { metrics: { preset: () => {}, inc: () => {}, gauge: () => {} }, log: () => {}, chainTracker: tracker }
+    fingerTM = new mod.FingerTopicManager(mhost as never) as never
+    fingerLS = new mod.FingerLookupService(mhost as never) as never
+  }
   const txOf = (txid: string): Transaction | undefined => { const b = stored.get(txid); if (b === undefined) return undefined; try { return Transaction.fromBEEF(b) } catch { try { return Transaction.fromAtomicBEEF(b) } catch { return undefined } } }
   const srv = http.createServer(async (req, res) => {
     const chunks: Buffer[] = []
@@ -61,6 +82,7 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
               const k = Utils.toHex(Array.from(env.to))
               if (!boxIndex.has(k)) boxIndex.set(k, [])
               boxIndex.get(k)!.push({ txid, created: env.created, expires: env.expires, commitment: Utils.toHex(Array.from(adm.carrier!.commitment)) })
+              boxEnvelopes.push({ to: k, txid })
               admitted = admitted.concat(adm.outputs)
               continue
             }
@@ -115,6 +137,27 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
             }
             continue
           }
+          if (finger && t === 'tm_finger') {
+            let tx: Transaction
+            try { tx = Transaction.fromAtomicBEEF(beef) } catch { tx = Transaction.fromBEEF(beef) }
+            const atomic = tx.toAtomicBEEF()
+            const txid = tx.id('hex')
+            const prevCoins = tx.inputs.filter(i => fingerHeld.has(`${i.sourceTXID ?? i.sourceTransaction?.id('hex') ?? ''}.${i.sourceOutputIndex}`)).map((_, i) => i)
+            const r = await fingerTM!.identifyAdmissibleOutputs(beef, prevCoins)
+            admitted = admitted.concat(r.outputsToAdmit)
+            stored.set(txid, beef)
+            for (const i of tx.inputs) {
+              const src = i.sourceTXID ?? i.sourceTransaction?.id('hex')
+              if (src !== undefined && fingerHeld.has(`${src}.${i.sourceOutputIndex}`)) {
+                fingerLS!.outputSpent({ mode: 'txid', txid: src, outputIndex: i.sourceOutputIndex, spendingTxid: txid, topic: 'tm_finger' })
+              }
+            }
+            for (const o of r.outputsToAdmit) {
+              fingerHeld.add(`${txid}.${o}`)
+              fingerLS!.outputAdmittedByTopic({ mode: 'whole-tx', atomicBEEF: atomic, txid, outputIndex: o, topic: 'tm_finger' })
+            }
+            continue
+          }
           if (topics[t] === undefined) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: `unknown topic ${t}` })); return }
           const r = await topics[t]!.identifyAdmissibleOutputs(beef, [])
           admitted = admitted.concat(r.outputsToAdmit)
@@ -131,6 +174,9 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
           if (names !== 'office,to' && names !== 'after,office,to') throw new Error('box double: only inbox questions')
           if (office === undefined || want.office !== office) throw new Error('box double: unknown office')
           a = (boxIndex.get(want.to) ?? []).filter(e => e.expires === 0 || e.expires > Math.floor(Date.now() / 1000)).map(e => ({ txid: e.txid, outputIndex: 0 }))
+        } else if (q.service === 'ls_finger') {
+          if (fingerLS === undefined) throw new Error('finger double: not enabled')
+          a = await fingerLS.lookup(q)
         } else if (q.service === 'ls_log') {
           const want = q.query as Record<string, unknown>
           const keys = Object.keys(want).sort().join(',')
@@ -162,6 +208,7 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
     close: async () => { await new Promise<void>(r => srv.close(() => r())) },
     has: (txid: string) => stored.has(txid),
     txids: () => [...stored.keys()],
-    raw: () => [...stored.values()]
+    raw: () => [...stored.values()],
+    envelopes: () => [...boxEnvelopes]
   }
 }

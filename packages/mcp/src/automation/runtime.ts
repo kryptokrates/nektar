@@ -55,6 +55,34 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   const log = cfg.log ?? (() => {})
   const logStream = lanes === undefined ? undefined : (cfg.logStream ?? 'nektar_abcdefghij')
   const logState = lanes === undefined || logStream === undefined ? undefined : new lanes.mod.KnexLogState(kx)
+  const fingerState = lanes === undefined ? undefined : new lanes.mod.KnexFingerState(kx)
+  // bfinger counterparty resolution: an agent publishes {hosts, office, stream,
+  // nets} signed under its identity; a counterparty resolves it lazily on the
+  // first send and unions the record's hosts over its own configured set.
+  // Positive resolutions cache 10 min, negatives 1 min. Resolved hosts are
+  // accepted only when the record names this network, and screened through
+  // fingerHostAllowed — https only off mock/regtest and never loopback,
+  // private or link-local literals (the SSRF guard for dynamic hosts).
+  const mockNet = cfg.network === 'mock' || cfg.network === 'regtest' || cfg.network.startsWith('mock')
+  const fingerCache = new Map<string, { at: number, rec?: { hosts: string[], office: string, stream: string } }>()
+  const resolveRecord = async (pub: string): Promise<{ hosts: string[], office: string, stream: string } | undefined> => {
+    if (lanes === undefined) return undefined
+    const t = cfg.now?.() ?? Date.now()
+    const c = fingerCache.get(pub)
+    if (c !== undefined && t - c.at < (c.rec === undefined ? 60_000 : 600_000)) return c.rec
+    let rec: { hosts: string[], office: string, stream: string } | undefined
+    try {
+      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: await mem.sdkTracker(), allowHttp: mockNet, now: cfg.now })
+      if (r !== undefined && (r.body.nets.length === 0 || r.body.nets.includes(cfg.network))) {
+        const hosts = r.body.hosts.filter(u => lanes.mod.fingerHostAllowed(u, { allowHttp: mockNet, allowLocal: mockNet })).slice(0, 8)
+        rec = { hosts, office: r.body.office, stream: r.body.stream }
+      }
+    } catch { /* no record (or no host serves one) — the configured set is the fallback */ }
+    fingerCache.set(pub, { at: t, rec })
+    return rec
+  }
+  const hostsFor = async (pub: string): Promise<string[]> =>
+    [...new Set([...marketHosts, ...((await resolveRecord(pub))?.hosts ?? [])])]
   const transport: MarketTransport = {
     publishWant: async (sw: SignedWant) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -62,7 +90,10 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     },
     publishOffer: async (so: SignedOffer) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
-      await lanes.mod.publishArtifact({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, net: cfg.network, payload: { v: 1, kind: 'offer', body: so } })
+      // the offer goes where the BUYER's record says it keeps its artifacts —
+      // this is also the seller's lazy resolution of the buyer
+      const hosts = so.offer.buyerPub !== undefined ? await hostsFor(so.offer.buyerPub) : marketHosts
+      await lanes.mod.publishArtifact({ key, ledger: lanes.ledger, journal: lanes.journal, hosts, net: cfg.network, payload: { v: 1, kind: 'offer', body: so } })
     },
     send: async (to: string, msg: MarketMessage) => {
       if (msgs === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -93,7 +124,10 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
       try {
         // recovery notes live as long as a deal can — everything else 24h
         const ttl = (msg as { type?: string }).type === 'note' || (msg as { type?: string }).type === 'sellerNote' ? 7 * 86400 : 86400
-        await lanes.mod.sendBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, office: cfg.boxOffice, to, body: { market: msg }, expiresAt: Math.floor(Date.now() / 1000) + ttl })
+        // the envelope rides the RECIPIENT's office and hosts (its finger
+        // record) — reading stays on our own office, configured set included
+        const rec = await resolveRecord(to)
+        await lanes.mod.sendBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: rec === undefined ? marketHosts : await hostsFor(to), office: rec?.office ?? cfg.boxOffice, to, body: { market: msg }, expiresAt: Math.floor(Date.now() / 1000) + ttl })
       } catch (e) { log(`automation: box: ${(e as Error).message}`); throw e }
     },
     collect: async (): Promise<Array<{ from: string, msg: MarketMessage }>> => {
@@ -182,11 +216,13 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     try {
       if (lanes !== undefined) {
         try {
-          for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : [])] as const) {
+          for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger'] as const) {
             const r = await lanes.mod.ensureTrees({
-              key, ledger: lanes.ledger, lowWater: cfg.treeLowWater, size: cfg.treeSize, kind,
-              satsPerOutput: kind === 'log' ? 100 : undefined,
-              lock: kind === 'bbox' ? await lanes.mod.boxFundingLock(key) : kind === 'log' ? await lanes.mod.logFundingLock(key) : undefined,
+              key, ledger: lanes.ledger, kind,
+              lowWater: kind === 'finger' ? 1 : cfg.treeLowWater,
+              size: kind === 'finger' ? 4 : cfg.treeSize,
+              satsPerOutput: kind === 'log' || kind === 'finger' ? 100 : undefined,
+              lock: kind === 'bbox' ? await lanes.mod.boxFundingLock(key) : kind === 'log' ? await lanes.mod.logFundingLock(key) : kind === 'finger' ? await lanes.mod.fingerFundingLock(key) : undefined,
               takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0]!,
               broadcast: tx => mem.broadcastTx(tx),
               fetchTx: txid => mem.fetchTx(txid),
@@ -201,6 +237,25 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
           }
         } catch (e) { log(`automation: ensureTrees: ${(e as Error).message}`) }
       }
+      // own bfinger record: (re)publishes on the current host list, no-ops
+      // when nothing changed, resubmits to any host that missed the objects
+      if (lanes !== undefined && fingerState !== undefined && logStream !== undefined) {
+        try {
+          const r = await lanes.mod.publishFinger({
+            key, state: fingerState, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts,
+            body: { v: 1, hosts: marketHosts, office: cfg.boxOffice ?? lanes.mod.officeFor(), stream: logStream, nets: [cfg.network] },
+            takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0]!,
+            broadcast: tx => mem.broadcastTx(tx), fetchTx: txid => mem.fetchTx(txid),
+            allowHttp: mockNet, now: cfg.now,
+            onSpent: (tx) => { for (const inp of tx.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } }
+          })
+          if (r.changed) log(`automation: finger seq ${r.seq} ${r.tokenTxid ?? ''}`)
+        } catch (e) {
+          // 'no funding slot' is transient while the finger tree matures — retried next cycle, not worth a line
+          if ((e as Error).message.includes('no funding slot')) return
+          const m = `automation: finger: ${(e as Error).message.slice(0, 160)}`; if (m !== fingerError) { fingerError = m; log(m) }
+        }
+      }
       await poll(); await engine.tick()
       await appendLogEvents()
     } catch (e) { log(`automation: ${(e as Error).message}`) }
@@ -208,6 +263,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   // blogs deal journal: every market event becomes one line in one batch
   const EV_CURSOR = 'log#events'
   let logError = ''
+  let fingerError = ''
   const wantIdOf = (op: { data: Record<string, unknown> }): string | null =>
     (op.data.want as SignedWant | undefined)?.want?.wantId ?? null
   const appendLogEvents = async (): Promise<void> => {
@@ -276,7 +332,10 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
         })()
     if (cp === undefined) return { own }
     try {
-      const r = await lanes.mod.readLog({ hosts: marketHosts, stream: cp.stream, producer: cp.producer, tracker: await mem.sdkTracker() })
+      // the counterparty's journal lives on ITS hosts and stream: the finger
+      // record wins over the artifact's journal.stream hint when present
+      const rec = await resolveRecord(cp.producer)
+      const r = await lanes.mod.readLog({ hosts: await hostsFor(cp.producer), stream: rec?.stream ?? cp.stream, producer: cp.producer, tracker: await mem.sdkTracker() })
       const wantId = wantIdOf(op)
       const entries: Array<{ seq: number, n: number, state: string, cause: string, t: number }> = []
       for (const b of r.batches) for (const l of b.lines) {
@@ -330,7 +389,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   })
   return {
     store, engine, cycle, logStream, dealJournal,
-    marketSlots: async () => lanes === undefined ? { market: 0, bbox: 0, log: 0 } : { market: await lanes.ledger.remaining('market'), bbox: await lanes.ledger.remaining('bbox'), log: await lanes.ledger.remaining('log') },
+    marketSlots: async () => lanes === undefined ? { market: 0, bbox: 0, log: 0, finger: 0 } : { market: await lanes.ledger.remaining('market'), bbox: await lanes.ledger.remaining('bbox'), log: await lanes.ledger.remaining('log'), finger: await lanes.ledger.remaining('finger') },
     stop: async () => {
       stopped = true
       if (timer) clearInterval(timer)

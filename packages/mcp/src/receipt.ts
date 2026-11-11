@@ -15,14 +15,14 @@ import { hashOf } from '@nektar/reasoning'
 import { paymentsEnabled } from './pay.js'
 import type { NektarMemory } from './memory.js'
 
-export const RECEIPT_TOKEN_PREFIX = 'nektarr1.'
+const RECEIPT_TOKEN_PREFIX = 'nektarr1.'
 
 export function receiptToken (receiptHashHex: string): string {
   return RECEIPT_TOKEN_PREFIX + Buffer.from(fromHex(receiptHashHex)).toString('base64url')
 }
 
 /** `nektarr1.<b64url 32B>` → hash hex; also accepts a bare 64-hex hash. */
-export function parseReceiptToken (tok: string): { receiptHash: string } | null {
+function parseReceiptToken (tok: string): { receiptHash: string } | null {
   const t = (tok ?? '').trim()
   if (/^[0-9a-fA-F]{64}$/.test(t)) return { receiptHash: t.toLowerCase() }
   if (!t.startsWith(RECEIPT_TOKEN_PREFIX)) return null
@@ -33,7 +33,7 @@ export function parseReceiptToken (tok: string): { receiptHash: string } | null 
   } catch { return null }
 }
 
-export interface ReceiptCheck { name: string, ok: boolean | 'info' | 'skip', detail: string }
+interface ReceiptCheck { name: string, ok: boolean | 'info' | 'skip', detail: string }
 export interface VerifyReceiptResult {
   ok: boolean
   receiptHash: string

@@ -1,13 +1,12 @@
 // Reduced live-regtest E2E (NEKTAR_NETWORK=regtest):
 // fresh coinbase → split → NektarMemory story + correction → ~20 anchors →
-// mine → overlay admit with the real ChainTracker → verifyFragment on real
+// mine → verifyFragment on real
 // headers (BUMP via merklePathFor/block_legacy).
 import { PrivateKey, Transaction, MerklePath } from '@bsv/sdk'
 import { P2PKH } from '@bsv/sdk'
 import { utf8, dsha256, toHex, hash160 } from '@nektar/core'
 const dsha256utf8 = (s: string) => dsha256(utf8(s))
 import { NektarMemory } from '@nektar/mcp'
-import { createNektarOverlay } from '@nektar/overlay'
 import { verifyFragment } from '@nektar/verify'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
@@ -231,38 +230,6 @@ await rpc('generatetoaddress', 1, addr)
 const rotDec = decodeNektarAnchor(rot.tx.outputs[0]!.lockingScript.toHex())!
 check(rotDec.n === 19 && rotDec.shard === decodeNektarAnchor(burst.getHead()!.tx.outputs[0]!.lockingScript.toHex())!.shard,
   `rotate broadcast+mined: n=${rotDec.n} shard stable ${rotDec.shard.slice(0, 16)}`)
-
-// --- overlay admit with the real tracker -----------------------------------
-console.log('— overlay admit —')
-const ov = await createNektarOverlay(tracker, chain)
-const tails: Map<string, any[]> = (mem as any).tails
-const txs: Map<string, Transaction> = (mem as any).anchorTxs
-const prev: Record<string, string | undefined> = {}
-for (const [shard, tail] of tails) {
-  for (const link of [...tail].sort((a, b) => a.n - b.n)) {
-    const tx = txs.get(link.txid)!
-    const acFor = (mem as any).anchors.get(shard)
-    // attach any missing parent txs (contract parents are unmined → the BEEF
-    // needs the full source, not a txid+BUMP) then BUMP the mined ones
-    const prevTxid = prev[shard]
-    for (const [ix, i] of tx.inputs.entries()) {
-      const ptxid = i.sourceTXID ?? i.sourceTransaction?.id('hex') ?? (ix === 0 ? prevTxid : undefined)
-      if (!i.sourceTransaction && ptxid) {
-        const e = (reserve as any).entries?.find?.((x: any) => x.txid === ptxid) ?? reserve.utxos.find(u => u.tx.id('hex') === ptxid)
-        i.sourceTransaction = txs.get(ptxid) ?? (acFor as any).txById?.get(ptxid) ?? (acFor as any).provider?.taken?.get(ptxid) ?? (e?.tx ?? (e?.txHex ? Transaction.fromHex(e.txHex) : undefined))
-      }
-      const src = i.sourceTransaction
-      if (!src) console.log(`  ${shard} n=${link.n} in${ix}: parent ${ptxid ?? '?'} unresolvable (txs=${!!txs.get(ptxid ?? '')}, txById=${!!(acFor as any).txById?.get(ptxid ?? '')}, taken=${!!(acFor as any).provider?.taken?.get(ptxid ?? '')}, reserve=${!!reserve.utxos.find(u => u.tx.id('hex') === ptxid)})`)
-      if (src && !src.merklePath) {
-        const h = reserve.heights.get(src.id('hex'))
-        if (h) { const m = await merklePathAtHeight(cfg, src.id('hex'), tracker, h); if (m) src.merklePath = new MerklePath(m.blockHeight, m.path) }
-      }
-    }
-    const s = await ov.engine.submit({ beef: acFor.beefOf(tx), topics: ['tm_nektar'] }, undefined, 'current-tx')
-    check((s.tm_nektar?.outputsToAdmit?.length ?? 0) === 1, `engine admits ${shard} n=${link.n}`)
-    prev[shard] = link.txid
-  }
-}
 
 // --- verifyFragment on real headers -----------------------------------------
 console.log('— verifyFragment (real headers) —')
@@ -558,6 +525,5 @@ console.log('— v4 production block (regtest) —')
   }
 }
 
-await ov.knex.destroy()
 console.log(failures === 0 ? '\nREGTEST E2E PASS' : `\nREGTEST E2E FAIL: ${failures} checks failed`)
 process.exit(failures === 0 ? 0 : 1)

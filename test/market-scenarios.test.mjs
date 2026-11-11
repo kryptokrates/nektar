@@ -55,8 +55,7 @@ async function agent (name, hosts, { seller, publicDisclosure = false, bond } = 
     await mem.remember('guide', FINDING)
     chain.mine(1)
     for (const l of mem.anchorLinks('guide')) mem.confirmAnchor('guide', l.txid)
-    await mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'record', priceSats: seller }] })
-    await callTool(mem, 'automation', { op: 'enableSeller', policyHash })
+    await callTool(mem, 'sell', { shard: 'guide', domains: ['libfoo'], priceSats: seller })
   }
   const a = { name, mem, au, pub, policyHash, dataDir }
   agents.push(a)
@@ -95,7 +94,7 @@ test('S1: competing sellers across two independent hosts → autonomous purchase
   const cara = await agent('cara', [H2.url], { seller: 200 })
   const bob = await agent('bob', [H1.url, H2.url])
   const all = [alice, ben, cara, bob]
-  const { operationId, wantId } = await callTool(bob.mem, 'automation', { op: 'publishWant', policyHash: bob.policyHash, domains: ['libfoo'], question: 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function', maxSats: 500 })
+  const { operationId, wantId } = await callTool(bob.mem, 'want', { domains: ['libfoo'], question: 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function', maxSats: 500 })
   // nothing below is a marketplace tool call — the runtimes do the rest
   const op = await until(all, async () => { const o = await stateOf(bob, operationId); return ['disclosure_verified', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed'].includes(o.state) ? o : undefined })
   assert.equal(op.state, 'disclosure_verified', JSON.stringify({ lastError: op.lastError, ranking: op.data.ranking }))
@@ -136,7 +135,7 @@ test('S3: one buyer pays for a public disclosure; a third agent reads and verifi
   const pat = await agent('pat', [H2.url], { seller: 150, publicDisclosure: true })
   const dee = await agent('dee', [H1.url, H2.url])
   const reader = await agent('reader', [H1.url, H2.url])
-  const { operationId } = await callTool(dee.mem, 'automation', { op: 'publishWant', policyHash: dee.policyHash, domains: ['libfoo'], question: 'libfoo 3.0 connect open rename', maxSats: 180 })
+  const { operationId } = await callTool(dee.mem, 'want', { domains: ['libfoo'], question: 'libfoo 3.0 connect open rename', maxSats: 180 })
   const op = await until([pat, dee], async () => { const o = await stateOf(dee, operationId); return ['disclosure_verified', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed'].includes(o.state) ? o : undefined })
   assert.equal(op.state, 'disclosure_verified', op.lastError)
   assert.equal(op.data.selected.key.split(':')[0], pat.pub, 'only the offer priced under this want\'s ceiling qualified')

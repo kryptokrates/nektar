@@ -1,6 +1,6 @@
 // Offline E2E on the mock chain — the maintenance-manual story:
 //   write → anchor → verify → correction → linked superseding record
-// plus: 2 parallel shards, a 1,000-anchor burst, and two overlay engines that
+// plus: 2 parallel shards, a 1,000-anchor burst,
 // both admit the same anchor chain.
 // Reduced live-regtest variant: set NEKTAR_NETWORK=regtest to run
 // e2e-regtest.ts (fresh funding + real tracker + real headers) instead.
@@ -13,7 +13,6 @@ import { utf8, toHex, dsha256, hash160 } from '@nektar/core'
 const dsha256utf8 = (s: string) => dsha256(utf8(s))
 import { MockChain, MockFunder } from '@nektar/chain'
 import { NektarMemory } from '@nektar/mcp'
-import { createNektarOverlay } from '@nektar/overlay'
 import { verifyFragment } from '@nektar/verify'
 
 let failures = 0
@@ -71,40 +70,7 @@ chain.mine(1)
 const { result: rT } = await mem.prove('telemetry', mem2w.seq)
 check(rT.ok === true, 'second shard verifies independently')
 
-// --- overlay: two engines admit the same chain ---
 lap('parallel shards')
-console.log('— two overlay engines —')
-const ov1 = await createNektarOverlay(chain, chain)
-const ov2 = await createNektarOverlay(chain, chain)
-const manualHead = (mem as any).anchors.get('manual')
-for (const h of [manualHead.getHead(), ...(manualHead as any).pendingHeads ?? []].filter(Boolean)) {
-  // replay the anchor chain into both engines in order
-}
-// replay full anchor history via tails
-const tails: Map<string, any[]> = (mem as any).tails
-const txs: Map<string, import('@bsv/sdk').Transaction> = (mem as any).anchorTxs
-for (const [shard, tail] of tails) {
-  for (const link of tail.sort((a: any, b: any) => a.n - b.n)) {
-    const tx = txs.get(link.txid)!
-    const acFor = (mem as any).anchors.get(shard)
-    // full replay into engine1; engine2 replays the 'manual' shard only —
-    // admitting a head without its ancestors fails previousCoins, so the
-    // agreement check needs the whole primary tail
-    const s1 = await ov1.engine.submit({ beef: acFor.beefOf(tx), topics: ['tm_nektar'] }, undefined, 'current-tx')
-    if ((s1.tm_nektar?.outputsToAdmit?.length ?? 0) !== 1) console.log(`  engine1 reject ${shard} n=${link.n}:`, JSON.stringify(s1.tm_nektar).slice(0,200))
-    check((s1.tm_nektar?.outputsToAdmit?.length ?? 0) === 1, `engine1 admits ${shard} n=${link.n}`)
-    if (shard === 'manual') {
-      const s2 = await ov2.engine.submit({ beef: acFor.beefOf(tx), topics: ['tm_nektar'] }, undefined, 'current-tx')
-      check((s2.tm_nektar?.outputsToAdmit?.length ?? 0) === 1, `engine2 admits ${shard} n=${link.n}`)
-    }
-  }
-}
-const manualId = (manualHead as any).shardId
-const h1 = ov1.ls.getHead(manualId); const h2 = ov2.ls.getHead(manualId)
-check(h1?.txid === h2?.txid && h1 !== undefined, 'both engines agree on manual head')
-
-// --- 1,000-anchor burst (unconfirmed chain) ---
-lap('overlay engines')
 console.log('— 60-anchor burst —')
 const bChain = new MockChain(); bChain.verifyScripts = true
 const bFunder = new MockFunder(); bFunder.topup(80)
@@ -413,5 +379,4 @@ try {
 
 console.log(failures === 0 ? '\nE2E PASS' : `\nE2E FAIL: ${failures} checks failed`)
 console.log(`  [pre-destroy total: ${Date.now()-_t0}ms]`)
-await ov1.knex.destroy(); await ov2.knex.destroy()
 process.exit(failures === 0 ? 0 : 1)

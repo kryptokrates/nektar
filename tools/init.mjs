@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-// tools/init.mjs — first-run wizard. Walks the 5 steps that used to live
-// across 3 docs: pick a network → where your agent lives → passphrase →
-// rendezvous → write .env → print the exact next command.
+// tools/init.mjs — first-run wizard: pick a network → where your agent
+// lives → passphrase → write .env → print the exact next command.
 //
 //   node tools/init.mjs            interactive
-//   node tools/init.mjs --yes      accept all defaults (mock, ./.nektar, no rv, stdio)
-//   node tools/init.mjs --env ttn --dir .ttn --rv https://rv.nektar.run --port 8080
+//   node tools/init.mjs --yes      accept all defaults (mock, ./.nektar, stdio)
+//   node tools/init.mjs --env ttn --dir .ttn --port 8080
 import { createInterface } from 'node:readline'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -68,16 +67,7 @@ if (pass === undefined && !YES) {
   if (!pass && prev.NEKTAR_KEY_PASSPHRASE) pass = prev.NEKTAR_KEY_PASSPHRASE
 } else pass ??= prev.NEKTAR_KEY_PASSPHRASE ?? ''
 
-// ─── 4. rendezvous + port ───────────────────────────────────────────────────
-let rv = arg('--rv')
-if (rv === undefined && !YES && net !== 'mock') {
-  const rvOpts = [
-    { id: 'https://rv.nektar.run', label: 'https://rv.nektar.run — public agents can find your offers' },
-    { id: '', label: 'none — local only' }
-  ]
-  if (prev.NEKTAR_OVERLAY_URL) rvOpts.unshift({ id: prev.NEKTAR_OVERLAY_URL, label: `${prev.NEKTAR_OVERLAY_URL} — current` })
-  rv = (await pick('4/4 — join the public discovery index?', rvOpts)).id
-} else rv ??= prev.NEKTAR_OVERLAY_URL ?? ''
+// ─── 4. port ────────────────────────────────────────────────────────────
 const port = arg('--port') ?? prev.NEKTAR_HTTP_PORT
 
 // ─── write .env ─────────────────────────────────────────────────────────────
@@ -87,7 +77,6 @@ const lines = [
   `NEKTAR_DATA_DIR=${dataDir}`
 ]
 if (pass) lines.push(`NEKTAR_KEY_PASSPHRASE=${pass}`)
-if (rv) lines.push(`NEKTAR_OVERLAY_URL=${rv}`)
 if (port) lines.push(`NEKTAR_HTTP_PORT=${port}`)
 if (net === 'ttn') lines.push(`NEKTAR_VERIFY_BASE=https://nektar.run`)
 const body = lines.join('\n') + '\n'
@@ -99,7 +88,7 @@ if (existsSync(envPath)) {
   console.log(`(existing .env backed up → ${bak})`)
   // drop only the vars init manages — bin.js takes the first occurrence, so
   // a re-init must replace those; operator vars (WIFs, tokens) stay
-  const managed = ['NEKTAR_NETWORK', 'NEKTAR_DATA_DIR', 'NEKTAR_KEY_PASSPHRASE', 'NEKTAR_OVERLAY_URL', 'NEKTAR_HTTP_PORT', 'NEKTAR_VERIFY_BASE', 'NEKTAR_MODEL_ID']
+  const managed = ['NEKTAR_NETWORK', 'NEKTAR_DATA_DIR', 'NEKTAR_KEY_PASSPHRASE', 'NEKTAR_HTTP_PORT', 'NEKTAR_VERIFY_BASE', 'NEKTAR_MODEL_ID']
   const kept = old.split(/\r?\n/).filter(l => !managed.some(k => new RegExp(`^\\s*${k}\\s*=`).test(l))).join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()
   writeFileSync(envPath, (kept ? kept + '\n\n' : '') + body)
 } else writeFileSync(envPath, body)
@@ -113,7 +102,7 @@ if (net === 'mock') {
 } else if (net === 'ttn') {
   console.log(`  node packages/mcp/dist/src/bin.js            # starts on ttn (port: ${port ?? 'stdio only'})`)
   console.log('  → call fundingStatus, send TTN coins to the address, then fundingImport <txid>')
-  console.log('  → then discover → peerCall → your first paid call on the public market')
+  console.log('  → then want → deals → your first purchase on the public market')
   console.log('  pnpm setup:claude                            # wire your agent client')
 } else if (net === 'main') {
   console.log('  MAINNET spends real BSV. Required before the server will start:')
@@ -133,7 +122,7 @@ if (existsSync(binJs) && net !== 'main') {
   const alivePort = 18190 + Math.floor(Math.random() * 800)
   const { spawn } = await import('node:child_process')
   const child = spawn(process.execPath, [binJs], {
-    env: { ...process.env, NEKTAR_NETWORK: net, NEKTAR_DATA_DIR: dataDir, NEKTAR_KEY_PASSPHRASE: pass || undefined, NEKTAR_HTTP_PORT: String(alivePort), NEKTAR_OVERLAY_URL: rv || undefined },
+    env: { ...process.env, NEKTAR_NETWORK: net, NEKTAR_DATA_DIR: dataDir, NEKTAR_KEY_PASSPHRASE: pass || undefined, NEKTAR_HTTP_PORT: String(alivePort) },
     stdio: ['ignore', 'pipe', 'pipe']
   })
   child.stderr.resume(); child.stdout.resume()

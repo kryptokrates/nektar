@@ -13,7 +13,11 @@ export class MemoryCarrierJournal implements CarrierJournal {
 
 export class KnexCarrierJournal implements CarrierJournal {
   constructor (private kx: Knex) {}
+  private ensured?: Promise<void>
   private async ensure (): Promise<void> {
+    return await (this.ensured ??= this.doEnsure().catch(e => { this.ensured = undefined; throw e }))
+  }
+  private async doEnsure (): Promise<void> {
     if (!(await this.kx.schema.hasTable('bstack_carriers'))) {
       await this.kx.schema.createTable('bstack_carriers', t => {
         t.string('artifact_hash').primary(); t.string('txid').notNullable(); t.text('beef').notNullable(); t.text('topics').notNullable(); t.bigInteger('created_at').notNullable()

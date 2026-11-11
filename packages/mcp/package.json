@@ -27,7 +27,6 @@
     "@nektar/graph": "workspace:*",
     "@nektar/identity": "workspace:*",
     "@nektar/log": "workspace:*",
-    "@nektar/overlay": "workspace:*",
     "@nektar/policy": "workspace:*",
     "@nektar/reasoning": "workspace:*",
     "@nektar/verify": "workspace:*",

@@ -65,16 +65,16 @@ async function bootHost (n) {
   throw new Error(`${url} did not start`)
 }
 
-async function addAgent (name, hosts, { seller, publicDisclosure = false, bondEpoch, index }) {
+async function addAgent (name, hosts, { seller, publicDisclosure = false, bondEpoch, index, toolProfile = 'agent' }) {
   const dataDir = join(dir, name); mkdirSync(dataDir, { recursive: true })
   const token = `tok-${name}`
   const url = `http://127.0.0.1:${agentPort(index)}`
   spawnNode('packages/e2e/src/scenarios/agent-process.mjs', {
-    NEKTAR_CHAIN_HUB: hub.url, NEKTAR_DATA_DIR: dataDir, NEKTAR_MARKET_HOSTS: hosts.join(','), NEKTAR_HTTP_PORT: String(agentPort(index)), NEKTAR_HTTP_TOKEN: token, NEKTAR_PAID_DISCLOSURE: '1', NEKTAR_AGENT_NAME: name, NEKTAR_AUTOMATION_INTERVAL_MS: '500', ...(bondEpoch ? { NEKTAR_BOND_EPOCH: String(bondEpoch) } : {}),
+    NEKTAR_CHAIN_HUB: hub.url, NEKTAR_DATA_DIR: dataDir, NEKTAR_MARKET_HOSTS: hosts.join(','), NEKTAR_HTTP_PORT: String(agentPort(index)), NEKTAR_HTTP_TOKEN: token, NEKTAR_PAID_DISCLOSURE: '1', NEKTAR_AGENT_NAME: name, NEKTAR_AUTOMATION_INTERVAL_MS: '500', NEKTAR_TOOL_PROFILE: toolProfile, ...(bondEpoch ? { NEKTAR_BOND_EPOCH: String(bondEpoch) } : {}),
     ...(process.env.NEKTAR_AI_BASE_URL ? { NEKTAR_AI_BASE_URL: process.env.NEKTAR_AI_BASE_URL, NEKTAR_AI_MODEL: process.env.NEKTAR_AI_MODEL ?? 'qwen2.5:7b', NEKTAR_AI_PROVIDER: 'ollama', NEKTAR_AI_EGRESS: 'local' } : {})
   }, name)
   await up(`${url}/v1/health`)
-  const pub = (await (await fetch(`${url}/.well-known/nektar`)).json()).operatorPub ?? (await tool({ url, token, name }, 'reputation', {})).card?.pub
+  const pub = (await (await fetch(`${url}/.well-known/nektar`)).json()).operatorPub
   const policy = {
     v: 1, policyId: `${name}-policy`, network: 'mock', agentPub: pub, roles: ['buyer', 'seller'], notBefore: 0, notAfter: 4102444800000, domains: ['libfoo'],
     limits: { perPurchaseSats: 500, dailyPurchaseSats: 1500, perTxFeeSats: 600, dailyFeeSats: 3000, runTotalSats: 6000, maxLockedSats: 1200, maxUnconfirmedSats: 1200, maxUnconfirmedCount: 3 },
@@ -89,8 +89,7 @@ async function addAgent (name, hosts, { seller, publicDisclosure = false, bondEp
   if (seller) {
     await tool(a, 'remember', { shard: 'guide', data: FINDING })
     await chain.mine(1)
-    await tool(a, 'describeShard', { shard: 'guide', domains: ['libfoo'], offers: [{ kind: 'record', priceSats: seller }] })
-    await tool(a, 'automation', { op: 'enableSeller', policyHash })
+    await tool(a, 'sell', { shard: 'guide', domains: ['libfoo'], priceSats: seller })
   }
   return a
 }
@@ -98,7 +97,7 @@ async function addAgent (name, hosts, { seller, publicDisclosure = false, bondEp
 async function waitState (a, operationId, states, ms = 120_000) {
   const end = Date.now() + ms
   for (;;) {
-    const st = (await tool(a, 'automation', { op: 'status', operationId })).operation
+    const st = await tool(a, 'deals', { operationId })
     if (states.includes(st.state)) return st
     if (Date.now() > end) throw new Error(`${a.name} ${operationId} stuck in ${st.state}: ${st.lastError ?? ''}`)
     await chain.mine(1) // funding trees and escrow only become usable once mined
@@ -114,7 +113,7 @@ async function S1 () {
   const ben = await addAgent('ben', [H2], { seller: 300, index: 2 })
   const cara = await addAgent('cara', [H2], { seller: 200, index: 3 })
   const bob = await addAgent('bob', [H1, H2], { index: 4 })
-  const { operationId } = await tool(bob, 'automation', { op: 'publishWant', policyHash: bob.policyHash, domains: ['libfoo'], question: 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function', maxSats: 500 })
+  const { operationId } = await tool(bob, 'want', { domains: ['libfoo'], question: 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function', maxSats: 500 })
   const op = await waitState(bob, operationId, ['disclosure_verified', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed'])
   if (op.state !== 'disclosure_verified') throw new Error(`S1 ended in ${op.state}: ${op.lastError ?? ''}`)
   if (op.data.selected.key.split(':')[0] !== cara.pub) throw new Error('S1 did not select the 200-sat offer')
@@ -137,8 +136,8 @@ async function S2 () {
   log('S2: operator process killed; independent observer seizes')
   const H1 = await bootHost(3)
   const H2 = await bootHost(4)
-  const alice = await addAgent('alice2', [H1], { bondEpoch: 4, index: 5 })
-  const observer = await addAgent('observer', [H2], { index: 6 })
+  const alice = await addAgent('alice2', [H1], { bondEpoch: 4, index: 5, toolProfile: 'operator' })
+  const observer = await addAgent('observer', [H2], { index: 6, toolProfile: 'operator' })
   await tool(alice, 'bondDeploy', { sats: 5000 })
   const commit = await tool(alice, 'bondCommit', { root: 'ab'.repeat(32) })
   if (commit.n !== '1') throw new Error('checkpoint did not land')
@@ -175,8 +174,8 @@ async function S3 () {
   const H2 = await bootHost(6)
   const pat = await addAgent('pat', [H2], { seller: 150, publicDisclosure: true, index: 7 })
   const dee = await addAgent('dee', [H1, H2], { index: 8 })
-  const reader = await addAgent('reader', [H1, H2], { index: 9 })
-  const { operationId } = await tool(dee, 'automation', { op: 'publishWant', policyHash: dee.policyHash, domains: ['libfoo'], question: 'libfoo 3.0 connect open rename', maxSats: 180 })
+  const reader = await addAgent('reader', [H1, H2], { index: 9, toolProfile: 'operator' })
+  const { operationId } = await tool(dee, 'want', { domains: ['libfoo'], question: 'libfoo 3.0 connect open rename', maxSats: 180 })
   const op = await waitState(dee, operationId, ['disclosure_verified', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed'])
   if (op.state !== 'disclosure_verified') throw new Error(`S3 ended in ${op.state}`)
   // pat only submits to H2 — the reader queries every host it knows

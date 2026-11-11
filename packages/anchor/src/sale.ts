@@ -25,7 +25,7 @@ export interface SaleConfig {
 }
 
 /** null outpoint (txid all-zero, vout 0) — sentinel for ungated escrows */
-export const NULL_VERDICT_OUTPOINT = '00'.repeat(36)
+const NULL_VERDICT_OUTPOINT = '00'.repeat(36)
 
 /** cfg + the buyer's pkh — the full escrow instance. */
 export interface EscrowConfig extends SaleConfig { depositorPkh: string }

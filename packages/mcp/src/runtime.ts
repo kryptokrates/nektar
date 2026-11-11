@@ -43,7 +43,7 @@ export interface RuntimeConfig {
 }
 
 /** parse NEKTAR_TEMPORAL_SOURCES=bsv[,btc] (default bsv); unknown names are fatal */
-export function temporalSourceNames (env = process.env): string[] {
+function temporalSourceNames (env = process.env): string[] {
   const names = (env.NEKTAR_TEMPORAL_SOURCES ?? 'bsv').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
   for (const n of names) if (n !== 'bsv' && n !== 'btc') throw new Error(`unknown temporal source "${n}" (supported: bsv,btc)`)
   return names.length === 0 ? ['bsv'] : names
@@ -51,7 +51,7 @@ export function temporalSourceNames (env = process.env): string[] {
 
 /** TemporalSources over the primary tracker + optional BTC WoC tracker (read-only).
  *  `NEKTAR_BTC_WOC_URL` overrides the BTC endpoint (tests point it at a stub). */
-export function temporalSourcesFor (names: string[], primary: ChainTracker, opts: { wocApiKey?: string, fetchImpl?: typeof fetch } = {}): TemporalSources {
+function temporalSourcesFor (names: string[], primary: ChainTracker, opts: { wocApiKey?: string, fetchImpl?: typeof fetch } = {}): TemporalSources {
   const sources: TemporalSource[] = [{ name: 'bsv', tracker: primary }]
   for (const n of names) {
     if (n === 'bsv') continue

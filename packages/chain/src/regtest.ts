@@ -93,20 +93,6 @@ async function assetGet (cfg: RegtestConfig, path: string, binary = true): Promi
   return res
 }
 
-/** tx status + raw tx via asset API. status: 'mined' | 'unconfirmed' | 'error' */
-export async function txStatus (cfg: RegtestConfig, txid: string): Promise<{ status: string, raw?: Uint8Array }> {
-  const res = await assetGet(cfg, `tx/${txid}`)
-  if (!res) return { status: 'error' }
-  return { status: 'unconfirmed', raw: new Uint8Array(await res.arrayBuffer()) }
-}
-
-/** block binary via asset API; returns raw block bytes */
-export async function blockBinary (cfg: RegtestConfig, hash: string): Promise<Uint8Array | null> {
-  const res = await assetGet(cfg, `block/${hash}`)
-  if (!res) return null
-  return new Uint8Array(await res.arrayBuffer())
-}
-
 // --- legacy-block parsing + MerklePathProvider --------------------------
 function readVarint (b: Uint8Array, o: number): [number, number] {
   const dv = new DataView(b.buffer, b.byteOffset)

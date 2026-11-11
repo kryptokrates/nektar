@@ -2,8 +2,8 @@
 // devchain: /rpc (getinfo, generatetoaddress, sendrawtransaction), /v1/tip, /v1/root/<h>,
 //           /api/v1/block/<hash>/json, /api/v1/txmeta/<txid>/json, /api/v1/merkle_proof/<txid>, /arcade/tx (POST EF, GET /arcade/tx/<id>)
 import { PrivateKey, P2PKH, Transaction, MerklePath } from '@bsv/sdk'
-import { signWant } from '@nektar/overlay/presence'
-import { mintTree, buildCarrier, buildSweep, encodePayload, lanesFor, submitAll, readWants, FUNDING_TAG } from '../dist/src/index.js'
+
+import { signWant, mintTree, buildCarrier, buildSweep, encodePayload, lanesFor, submitAll, readWants, FUNDING_TAG } from '../dist/src/index.js'
 import { tscMerklePath } from '@lightwebinc/bcommon'
 
 import { stripEF } from './devchain.mjs'

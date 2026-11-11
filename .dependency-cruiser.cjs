@@ -1,3 +1,4 @@
+const fs = require('node:fs')
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
   forbidden: [
@@ -10,7 +11,7 @@ module.exports = {
     },
     {
       name: 'no-orphans',
-      severity: 'warn',
+      severity: 'error',
       comment: 'every module must be reachable (bin/test entries excluded below)',
       from: {
         orphan: true,
@@ -24,17 +25,55 @@ module.exports = {
           '\\.runar\\.[cm]?[jt]s$',
           // library/CLI entrypoints invoked from outside this codebase
           'payclient\\.[cm]?[jt]s$',      // standalone x402 payer client
-          'announce\\.mjs$',              // overlay announcement CLI
-          'want\\.mjs$'                   // overlay demand-ad CLI
+          '(^|/)tools/'                   // build/dev scripts — invoked, never imported
         ]
       },
       to: {}
+    },
+    // one rule per package: a relative import may only ever stay inside its
+    // own packages/<name>/ tree — anything resolved into a DIFFERENT package
+    // dir means the specifier was ../../other-pkg/… (package-name imports of
+    // @nektar/x land in node_modules or dist/, both already excluded below)
+    ...fs.readdirSync('packages').filter(d => fs.existsSync(`packages/${d}/package.json`)).map(pkg => ({
+      name: `no-cross-package-relative-${pkg}`,
+      severity: 'error',
+      comment: 'import sibling packages by name (@nektar/x) — a relative path across packages/ breaks the layering',
+      from: { path: `^packages/${pkg}/` },
+      to: { path: `^packages/(?!${pkg}/)` }
+    })),
+    {
+      name: 'no-lower-to-upper',
+      severity: 'error',
+      comment: 'core/crypto/log/chain sit below the application layer — they must not import mcp, bstack or e2e',
+      from: { path: '^packages/(core|crypto|log|chain)/' },
+      to: { path: '^(packages/(mcp|bstack|e2e)/|node_modules/@nektar/(mcp|bstack|e2e)/)' }
+    },
+    {
+      name: 'no-bstack-to-mcp',
+      severity: 'error',
+      comment: 'bstack is a transport layer — it must not depend on the mcp application',
+      from: { path: '^packages/bstack/' },
+      to: { path: '^(packages/mcp/|node_modules/@nektar/mcp/)' }
+    },
+    {
+      name: 'no-e2e-imports',
+      severity: 'error',
+      comment: 'e2e is a test harness — only e2e itself and test files may import it',
+      from: { pathNot: '^(packages/e2e/|test/|.*/(test|demo)/)' },
+      to: { path: '^(packages/e2e/|node_modules/@nektar/e2e/)' }
+    },
+    {
+      name: 'no-src-to-demo',
+      severity: 'error',
+      comment: 'shipping code must not reach into demo/ scripts',
+      from: { path: '/src/' },
+      to: { path: '/demo/' }
     },
     {
       name: 'not-to-dev-dep',
       severity: 'error',
       comment: 'src/ must not import devDependencies (they do not ship)',
-      from: { pathNot: '(^|/)(test|scripts|demo)/' },
+      from: { pathNot: '(^|/)(test|scripts|demo|tools)/' },
       to: { dependencyTypes: ['npm-dev'] }
     },
     {
@@ -118,7 +157,7 @@ module.exports = {
       // dep trees — we audit our imports, not our deps' internals
       dependencyTypes: ['npm', 'npm-dev', 'npm-optional', 'npm-peer', 'npm-bundled', 'npm-no-pkg']
     },
-    exclude: { path: '(^|/)dist/|(^|/)src/vendor/' },
+    exclude: { path: '(^|/)dist/|(^|/)src/vendor/|(^|/)test/fixtures/' },
     tsPreCompilationDeps: true,
     enhancedResolveOptions: {
       exportsFields: ['exports'],

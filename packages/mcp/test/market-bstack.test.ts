@@ -58,6 +58,18 @@ const sellerize = async (s: A, price: number) => {
 }
 const drive = async (rts: Automation[], chain: MockChain, n = 2) => { for (let i = 0; i < n; i++) { clock += 500; for (const rt of rts) await rt.cycle(); chain.mine(1) } }
 const until = async (rts: Automation[], chain: MockChain, ok: () => Promise<boolean>, n = 60) => { for (let i = 0; i < n; i++) { await drive(rts, chain, 1); if (await ok()) return true } return false }
+// like until but checks right after the buyer's cycle, before the seller gets
+// another turn — so a test can freeze the buyer before the seller can react to
+// the accept it just flushed (a delivered the dead runtime consumes is lost)
+const untilBuyer = async (b: A, s: A, chain: MockChain, ok: () => Promise<boolean>, n = 60): Promise<boolean> => {
+  for (let i = 0; i < n; i++) {
+    clock += 500
+    await b.rt.cycle(); if (await ok()) return true
+    await s.rt.cycle(); if (await ok()) return true
+    chain.mine(1)
+  }
+  return false
+}
 const trackerFor = (chain: MockChain) => ({
   isValidRootForHeight: (r: string, h: number) => chain.isValidRootForHeight(r, h),
   currentHeight: () => chain.currentHeight()
@@ -476,7 +488,7 @@ test('bstack L: buyer loses its database — delivery still completes after rest
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
+    assert.ok(await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
     const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
     await b.rt.stop()
     rmSync(join(dir, 'buyer'), { recursive: true, force: true })
@@ -504,7 +516,7 @@ test('bstack M: no loss — one operation; the note is listed while the deal is 
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
+    assert.ok(await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
     const listed = await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)
     assert.equal(noteItems(listed.items).length, 1, 'recovery note stays listed while the deal is open')
     assert.ok(await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'no deal | ' + logs.slice(-20).join(' | '))
@@ -553,7 +565,7 @@ test('bstack O: the recovery note fits the 16 KiB box content limit', async () =
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
+    assert.ok(await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
     const items = (await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items
     const note = noteItems(items)[0]
     assert.ok(note, 'note is listed')

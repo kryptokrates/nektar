@@ -6,6 +6,8 @@ import { MockChain, MockFunder } from '@nektar/chain'
 import { verifyCheckpoint } from '@nektar/log'
 import { NektarMemory, createHttpApi, OPENAPI } from '../src/index.js'
 
+process.env.NEKTAR_TOOL_PROFILE = 'operator'
+
 test('HTTP API: tools, public proof + checkpoint, metrics move, every route documented', async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const funder = new MockFunder(); funder.topup(10); for (const t of funder.parents) chain.registerParent(t)

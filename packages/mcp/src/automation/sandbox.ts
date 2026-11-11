@@ -16,7 +16,7 @@ export interface SandboxSpec {
   maxPatchBytes: number
 }
 
-export interface RunResult { exitCode: number | null, timedOut: boolean, outputTail: string }
+interface RunResult { exitCode: number | null, timedOut: boolean, outputTail: string }
 export interface SandboxResult {
   outcome: 'PASS' | 'FAIL' | 'BLOCKED'
   reason?: string

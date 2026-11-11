@@ -1,5 +1,5 @@
 import { sha256, utf8, toHex } from '@nektar/core'
-import { marketJson, verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/overlay/presence'
+import { marketJson, verifyWant, verifyOffer, type SignedWant, type SignedOffer } from './artifacts.js'
 
 export const MAX_PAYLOAD = 16384
 export const MAX_DOMAINS = 3

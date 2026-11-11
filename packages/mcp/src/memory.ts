@@ -24,7 +24,6 @@ const DELTA_PREFIX = 'delta:'
 export class IngestError extends Error {}
 import { AnchorChain, CheckpointBond, type BondUtxo } from '@nektar/anchor'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
-import { createNektarOverlay, type NektarOverlay } from '@nektar/overlay'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import { deriveFragmentKey, deriveLevelKey, encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@nektar/crypto'
 import type { Broadcaster, ChainTracker, Funder } from '@nektar/chain'
@@ -41,7 +40,6 @@ export interface NektarMemoryOptions {
    *  default 1 (mock/regtest); mainnet uses ~100 (broadcaster policy) */
   feeRateSatPerKb?: number
   batchPolicy?: import('@nektar/log').ClosePolicy
-  overlay?: NektarOverlay // if set, anchors are also submitted to tm_nektar
   modelId?: string // stamped into receipts
   /** §16/§18: stronger ℱ binding — the operator-declared model identity
    *  stamped into every receipt: invocation params (temperature, seed…) and,
@@ -165,8 +163,8 @@ export interface ShardManifest {
   domains: string[]
   desc?: string
   offers?: ManifestOffer[]
-  /** settlement context — the chain this seller pays/anchors on; a buyer's
-   *  peerCall refuses invoices whose network tag doesn't match. */
+  /** settlement context — the chain this seller pays/anchors on; the market
+   *  refuses artifacts whose network tag doesn't match. */
   network?: string
   issuedAt: number
 }
@@ -254,7 +252,7 @@ function canonicalJson (v: unknown): string {
  *  Explicit field order (no JSON ambiguity): answer, each ref
  *  (shard,seq,hdp,txid), checkResult, truthNote, modelId, zkaccess, cedar,
  *  dag triple, delegation map, zk artifact, timestamp. */
-export function receiptDigest (r: Omit<AnswerReceipt, 'signature' | 'signerPub'>): Bytes {
+function receiptDigest (r: Omit<AnswerReceipt, 'signature' | 'signerPub'>): Bytes {
   const refs = r.fragmentRefs.map(f => concat(utf8(f.shard), utf8(String(f.seq)), utf8(f.hdp), utf8(f.anchorTxid ?? '')))
   const dagBytes = r.dag ? concat(utf8(r.dag.policyRoot), utf8(r.dag.derivationHash ?? ''), utf8(r.dag.state)) : new Uint8Array(0)
   const delBytes = concat(...(r.delegations ?? []).map(d => concat(utf8(d.delegator), utf8(d.decision), utf8(d.signature))))
@@ -1445,9 +1443,6 @@ export class NektarMemory {
       } catch { this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed') }
       finally { this.bondBusy = false }
     }
-    if (this.opts.overlay) {
-      await this.opts.overlay.engine.submit({ beef: this.anchorChain(shard).beefOf(res.tx), topics: ['tm_nektar'] }, undefined, 'current-tx')
-    }
     return { txid, n: res.head.data.n }
   }
 
@@ -1495,7 +1490,7 @@ export class NektarMemory {
   }
 
   /** latest committed manifest per described shard — the catalog projection
-   *  the rendezvous indexes (one entry per shard, latest record wins). */
+   *  the market indexes (one entry per shard, latest record wins). */
   async shardCatalog (): Promise<ShardManifest[]> {
     const by = new Map<string, { m: ShardManifest, seq: number }>()
     for (const rec of await this.store.all(CATALOG_SHARD)) {
@@ -1521,44 +1516,6 @@ export class NektarMemory {
     const m = await this.shardManifest(shard).catch(() => undefined)
     const match = m?.offers?.find(o => (kind === 'read' ? o.kind === 'answer' : o.kind === 'pack') && Number.isSafeInteger(o.priceSats))
     return match?.priceSats ?? 0
-  }
-
-  /** a reputation card — the signed, per-domain derivation over this
-   *  instance's own committed history (Wright: measurable performance over
-   *  time, multidimensional, never one score). Every input is an anchored
-   *  record — receipts carry the settlement txids they committed; the card
-   *  is recomputable by anyone with the same history. */
-  async reputationCard (): Promise<{ pub: string, shardId?: string, entries: Array<{ domain: string, receipts: number, verifiedCites: number, settledSats: number, settlements: number }>, since?: number, asOf: number }> {
-    const shardDomains = new Map<string, string[]>()
-    for (const m of await this.shardCatalog()) shardDomains.set(m.shard, m.domains)
-    const entries = new Map<string, { domain: string, receipts: number, verifiedCites: number, settledSats: number, settlements: number }>()
-    const bump = (domains: string[]) => domains.map(d => entries.get(d) ?? { domain: d, receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 })
-      .forEach(e => entries.set(e.domain, e))
-    let since = Infinity
-    for (const rec of await this.store.all('__receipts__')) {
-      const data = await this.recordText(rec)
-      // record text is `receipt:<hash>:<b64url receipt-json>` (older rows are
-      // hash-only — skip those, the body carries the cites/payment we need)
-      const m = data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
-      if (!m) continue
-      let r: any
-      try { r = JSON.parse(Buffer.from(m[1]!, 'base64url').toString('utf8')) } catch { continue }
-      const shards: string[] = [...new Set(((r.fragmentRefs ?? []) as any[]).map((f: any) => String(f?.shard ?? '')).filter(Boolean) as string[])]
-      const domains = [...new Set(shards.flatMap(s => shardDomains.get(s) ?? [s]))]
-      if (!domains.length) continue
-      since = Math.min(since, Number(r.timestamp ?? Date.now()))
-      const paySats = Number(r.payment?.amountSats ?? r.payment?.amount ?? 0)
-      for (const d of domains) {
-        const e = entries.get(d) ?? { domain: d, receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 }
-        e.receipts++
-        e.verifiedCites += (r.fragmentRefs ?? []).length
-        if (paySats > 0) { e.settledSats += paySats; e.settlements++ }
-        entries.set(d, e)
-      }
-    }
-    const pub = this.operatorKey()?.toPublicKey().toString()
-    const shardId = (await this.shardCatalog())[0]?.shardId
-    return { pub, ...(shardId ? { shardId } : {}), entries: [...entries.values()], ...(since !== Infinity ? { since } : {}), asOf: Date.now() }
   }
 
   /** land a purchased record locally — call AFTER the sale claim verified
@@ -2288,32 +2245,3 @@ export class NektarMemory {
 
 }
 
-/** neutral reputation recompute — given the seller's exported `__receipts__`
- *  pack records and a shard→domains map (from their `__catalog__` pack), re-
- *  derive the per-domain vectors their published card claims. The inputs are
- *  committed records; this function re-runs the same derivation without
- *  trusting the seller's computation. */
-export function reputationEntriesFromRecords (
-  records: Array<{ data: string }>,
-  shardDomains: Map<string, string[]>
-): Map<string, { domain: string, receipts: number, verifiedCites: number, settledSats: number, settlements: number }> {
-  const entries = new Map<string, { domain: string, receipts: number, verifiedCites: number, settledSats: number, settlements: number }>()
-  for (const rec of records) {
-    const m = rec.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
-    if (!m) continue
-    let r: any
-    try { r = JSON.parse(Buffer.from(m[1]!, 'base64url').toString('utf8')) } catch { continue }
-    const shards: string[] = [...new Set(((r.fragmentRefs ?? []) as any[]).map((f: any) => String(f?.shard ?? '')).filter(Boolean) as string[])]
-    const domains = [...new Set(shards.flatMap(s => shardDomains.get(s) ?? [s]))]
-    if (!domains.length) continue
-    const paySats = Number(r.payment?.amountSats ?? r.payment?.amount ?? 0)
-    for (const d of domains) {
-      const e = entries.get(d) ?? { domain: d, receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 }
-      e.receipts++
-      e.verifiedCites += (r.fragmentRefs ?? []).length
-      if (paySats > 0) { e.settledSats += paySats; e.settlements++ }
-      entries.set(d, e)
-    }
-  }
-  return entries
-}

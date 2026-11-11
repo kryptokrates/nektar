@@ -56,4 +56,4 @@ export function writeKeyFile (file: string, plain: string, pass: string | undefi
   try { chmodSync(file, 0o600) } catch { /* windows */ }
 }
 
-export { passphraseFromEnv as keyPassphrase }
+

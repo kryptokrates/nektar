@@ -22,6 +22,8 @@ function setup () {
 
 test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is set', async () => {
   const { seller } = setup()
+  process.env.NEKTAR_TOOL_PROFILE = 'operator'
+  try {
   delete process.env.NEKTAR_PAID_DISCLOSURE
   const vis: string[] = visibleTools().map(t => t.name as string)
   for (const n of SALE_TOOLS) assert.ok(!vis.includes(n), `${n} must be hidden when unset`)
@@ -34,6 +36,9 @@ test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is s
     for (const n of SALE_TOOLS) assert.ok(vis2.includes(n), `${n} must be listed when enabled`)
   } finally {
     delete process.env.NEKTAR_PAID_DISCLOSURE
+  }
+  } finally {
+    delete process.env.NEKTAR_TOOL_PROFILE
   }
 })
 

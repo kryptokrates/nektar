@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { signWant } from '@nektar/overlay/presence'
+import { signWant } from '../src/artifacts.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
 import { MemoryTreeLedger } from '../src/tree.js'
 import { publishArtifact } from '../src/publish.js'

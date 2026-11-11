@@ -12,7 +12,7 @@ import { MarketEngine, type MarketMessage } from '../src/automation/market.js'
 import { ScriptedExecutor } from '../src/automation/ai.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/automation/scoring.js'
 import type { AutomationPolicy } from '../src/automation/policy.js'
-import type { SignedWant, SignedOffer } from '@nektar/overlay'
+import type { SignedWant, SignedOffer } from '@nektar/bstack'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 

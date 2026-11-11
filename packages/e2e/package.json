@@ -19,7 +19,6 @@
     "@nektar/identity": "workspace:*",
     "@nektar/log": "workspace:*",
     "@nektar/mcp": "workspace:*",
-    "@nektar/overlay": "workspace:*",
     "@nektar/policy": "workspace:*",
     "@nektar/reasoning": "workspace:*",
     "@nektar/verify": "workspace:*",

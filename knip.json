@@ -11,13 +11,9 @@
       ],
       "ignore": [
         "spikes/**",
-        ".mod/**",
         "test/fixtures/**"
       ],
-      "ignoreBinaries": [
-        "ss",
-        "awk"
-      ]
+      "ignoreBinaries": []
     },
     "packages/mcp": {
       "entry": [
@@ -46,15 +42,6 @@
         "stark/*.wasm*"
       ]
     },
-    "packages/overlay": {
-      "entry": [
-        "*.mjs",
-        "src/host-module.ts"
-      ],
-      "ignore": [
-        "src/vendor/**"
-      ]
-    },
     "packages/anchor": {
       "entry": [
         "*.mjs"
@@ -68,9 +55,8 @@
       ]
     }
   },
-  "ignoreExportsUsedInFile": true,
   "rules": {
-    "exports": "off",
-    "types": "off"
+    "exports": "error",
+    "types": "error"
   }
 }

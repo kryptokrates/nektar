@@ -97,9 +97,6 @@ importers:
       '@nektar/core':
         specifier: workspace:*
         version: link:../core
-      '@nektar/overlay':
-        specifier: workspace:*
-        version: link:../overlay
       knex:
         specifier: ^3.1.0
         version: 3.3.0(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
@@ -197,9 +194,6 @@ importers:
       '@nektar/mcp':
         specifier: workspace:*
         version: link:../mcp
-      '@nektar/overlay':
-        specifier: workspace:*
-        version: link:../overlay
       '@nektar/policy':
         specifier: workspace:*
         version: link:../policy
@@ -332,9 +326,6 @@ importers:
       '@nektar/log':
         specifier: workspace:*
         version: link:../log
-      '@nektar/overlay':
-        specifier: workspace:*
-        version: link:../overlay
       '@nektar/policy':
         specifier: workspace:*
         version: link:../policy
@@ -369,40 +360,6 @@ importers:
       '@types/qrcode':
         specifier: ^1.5.6
         version: 1.5.6
-
-  packages/overlay:
-    dependencies:
-      '@bsv/overlay':
-        specifier: 2.7.0
-        version: 2.7.0(@bsv/sdk@4.0.1)(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
-      '@bsv/sdk':
-        specifier: 4.0.1
-        version: 4.0.1
-      '@nektar/anchor':
-        specifier: workspace:*
-        version: link:../anchor
-      '@nektar/chain':
-        specifier: workspace:*
-        version: link:../chain
-      '@nektar/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      '@nektar/core':
-        specifier: workspace:*
-        version: link:../core
-      knex:
-        specifier: ^3.1.0
-        version: 3.3.0(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
-      runar-sdk:
-        specifier: ^0.4.6
-        version: 0.4.6
-      sqlite3:
-        specifier: ^5.1.7
-        version: 5.1.7(bluebird@3.7.2)(supports-color@7.2.0)
-    devDependencies:
-      '@bsv/gasp':
-        specifier: 1.3.10
-        version: 1.3.10(@bsv/sdk@4.0.1)
 
   packages/policy:
     dependencies:
@@ -499,22 +456,6 @@ importers:
         version: link:../core
 
 packages:
-
-  '@bsv/gasp@1.3.10':
-    resolution: {integrity: sha512-wAUXlCiGiFzDmZrowJgKKPNbS/cLYBZKO8lO5EaFJ/7bA/bdAA0fq2lY4tEAVy/DaSopWmMANdMxpH2p5YHq+A==}
-    engines: {node: '>=22'}
-    peerDependencies:
-      '@bsv/sdk': ^2.1.6 || ^3.0.0 || ^4.0.1
-
-  '@bsv/overlay@2.7.0':
-    resolution: {integrity: sha512-GpuGQV/8Rp6JtqqH3mH3y+ngmiP/dCFZ3BHBY4Qvb1iboQzt7+5fnvwblZ66ltPVOgWbRnN7jOfIyrKufpV7CQ==}
-    engines: {node: '>=22'}
-    peerDependencies:
-      '@bsv/sdk': ^2.1.6 || ^3.0.0 || ^4.0.1
-      mongodb: ^7.5.0
-    peerDependenciesMeta:
-      mongodb:
-        optional: true
 
   '@bsv/sdk@4.0.1':
     resolution: {integrity: sha512-aLaRa38h+ck5OhqRlNiQ9oUIOuB+vSZwWzkgWlXzr/9qwK5F0pbtog5PM+1Wo2GNIzxVAEnvxYCLL5SU55cW0w==}
@@ -2174,27 +2115,6 @@ packages:
     resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
-
-  '@bsv/gasp@1.3.10(@bsv/sdk@4.0.1)':
-    dependencies:
-      '@bsv/sdk': 4.0.1
-
-  '@bsv/overlay@2.7.0(@bsv/sdk@4.0.1)(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)':
-    dependencies:
-      '@bsv/gasp': 1.3.10(@bsv/sdk@4.0.1)
-      '@bsv/sdk': 4.0.1
-      knex: 3.3.0(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
-    transitivePeerDependencies:
-      - better-sqlite3
-      - mariadb
-      - mysql
-      - mysql2
-      - pg
-      - pg-native
-      - pg-query-stream
-      - sqlite3
-      - supports-color
-      - tedious
 
   '@bsv/sdk@4.0.1': {}
 

@@ -2,7 +2,6 @@ import { Transaction } from '@bsv/sdk'
 import type { BroadcastResult } from '@nektar/chain'
 import type { AutomationStore, TxState } from './store.js'
 import { WalletCoordinator } from './wallet.js'
-import type { ActionContext } from './policy.js'
 
 export interface TxObservationInput { status: 'seen' | 'proven' | 'rejected' | 'conflicted', source: string, blockHeight?: number, reason?: string, spentBy?: string }
 
@@ -63,6 +62,3 @@ export class TransactionWatcher {
   }
 }
 
-export function ownerContext (txid: string): ActionContext {
-  return { operationId: 'owner', actionId: `owner:${txid}`, policyHash: 'owner', networkId: 'owner' }
-}

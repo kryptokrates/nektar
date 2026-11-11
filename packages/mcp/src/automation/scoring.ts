@@ -1,7 +1,7 @@
 export const SCORE_DIMENSIONS = ['relevance', 'provenance', 'history', 'price', 'latency'] as const
-export type ScoreDimension = typeof SCORE_DIMENSIONS[number]
+type ScoreDimension = typeof SCORE_DIMENSIONS[number]
 export type ScoreWeights = Record<ScoreDimension, number>
-export type OfferFeatures = Record<Exclude<ScoreDimension, 'price'>, number>
+type OfferFeatures = Record<Exclude<ScoreDimension, 'price'>, number>
 
 export const DEFAULT_SCORE_WEIGHTS: Readonly<ScoreWeights> = Object.freeze({
   relevance: 3000,
@@ -24,7 +24,7 @@ export interface ScoreCandidate {
   features: OfferFeatures
 }
 
-export interface RankedOffer {
+interface RankedOffer {
   offerKey: string
   maxAllInSats: number
   scoreBps: number
@@ -34,7 +34,7 @@ export interface RankedOffer {
   denominator: 10000
 }
 
-export type ScoreRejection = 'invalid_offer' | 'ineligible' | 'over_budget' | 'below_minimum' | 'conflicting_offer'
+type ScoreRejection = 'invalid_offer' | 'ineligible' | 'over_budget' | 'below_minimum' | 'conflicting_offer'
 
 export interface OfferRanking {
   ranked: RankedOffer[]

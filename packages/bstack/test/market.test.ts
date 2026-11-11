@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { signWant } from '@nektar/overlay/presence'
+import { signWant } from '../src/artifacts.js'
 import { buildCarrier, checkCarrier } from '../src/carrier.js'
 import { encodePayload, lanesFor, laneOf } from '../src/market.js'
 import { createNektarModule } from '../src/module.js'

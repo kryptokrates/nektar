@@ -57,7 +57,11 @@ export class MemoryTreeLedger implements TreeLedger {
 
 export class KnexTreeLedger implements TreeLedger {
   constructor (private kx: Knex) {}
+  private ensured?: Promise<void>
   private async ensure (): Promise<void> {
+    return await (this.ensured ??= this.doEnsure().catch(e => { this.ensured = undefined; throw e }))
+  }
+  private async doEnsure (): Promise<void> {
     if (await this.kx.schema.hasTable('bstack_trees') && !(await this.kx.schema.hasColumn('bstack_trees', 'kind'))) {
       await this.kx.schema.alterTable('bstack_trees', t => { t.string('kind').notNullable().defaultTo('market') })
       await this.kx.schema.alterTable('bstack_tree_outputs', t => { t.string('kind').notNullable().defaultTo('market') })

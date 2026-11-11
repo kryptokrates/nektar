@@ -34,6 +34,7 @@ export function createMcpServer (mem: NektarMemory, ops?: import('./server.js').
   }))
   low.setRequestHandler(CallToolRequestSchema, async req => {
     try {
+      if (!visibleTools().some(t => t.name === req.params.name)) throw new Error(`unknown tool ${req.params.name}`)
       const result = await callTool(mem, req.params.name, (req.params.arguments ?? {}) as Record<string, any>, { ops })
       const text = json(result ?? null)
       const parsed = JSON.parse(text) as unknown

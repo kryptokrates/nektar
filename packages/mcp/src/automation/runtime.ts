@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Knex } from 'knex'
-import type { SignedWant, SignedOffer } from '@nektar/overlay'
+import type { SignedWant, SignedOffer } from '@nektar/bstack'
 import type { NektarMemory } from '../memory.js'
 import { AutomationStore } from './store.js'
 import { MarketEngine, type MarketMessage, type MarketTransport, type MarketOptions } from './market.js'
@@ -26,7 +26,7 @@ export interface AutomationConfig {
   now?: () => number
 }
 
-export function aiFromEnv (env = process.env): AIExecutor {
+function aiFromEnv (env = process.env): AIExecutor {
   const baseUrl = env.NEKTAR_AI_BASE_URL
   if (!baseUrl) return new ScriptedExecutor()
   if (!env.NEKTAR_AI_MODEL) throw new Error('NEKTAR_AI_BASE_URL is set but NEKTAR_AI_MODEL is not')
@@ -96,6 +96,8 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
         const r = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker })
         laneNotes(r)
         pendingAcks = r.items.map(i => ({ txid: i.txid, commitment: i.commitment, from: i.from, msg: (i.body as { market?: MarketMessage }).market }))
+        // self-notes restore lost operations — ingest them before any other message in the batch
+        pendingAcks.sort((a, b) => Number(b.from === me && b.msg?.type === 'note') - Number(a.from === me && a.msg?.type === 'note'))
         const out: Array<{ from: string, msg: MarketMessage }> = []
         for (const p of pendingAcks) if (p.msg !== undefined && typeof p.msg === 'object') out.push({ from: p.from, msg: p.msg })
         return out
@@ -144,9 +146,23 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     }
   }
   let busy = false
+  let again = false
+  let running: Promise<void> | undefined
   const cycle = async (): Promise<void> => {
-    if (busy) return
+    if (busy) { again = true; await running; return }
     busy = true
+    const run = (async () => {
+      try {
+        do {
+          again = false
+          await runCycle()
+        } while (again && !stopped)
+      } finally { busy = false; if (again && !stopped) void cycle() }
+    })()
+    running = run
+    await run
+  }
+  const runCycle = async (): Promise<void> => {
     try {
       if (lanes !== undefined) {
         try {
@@ -161,7 +177,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
         } catch (e) { log(`automation: ensureTrees: ${(e as Error).message}`) }
       }
       await poll(); await engine.tick()
-    } catch (e) { log(`automation: ${(e as Error).message}`) } finally { busy = false }
+    } catch (e) { log(`automation: ${(e as Error).message}`) }
   }
   const timer = cfg.intervalMs === 0 ? undefined : setInterval(() => { void cycle() }, cfg.intervalMs ?? 5000)
   timer?.unref()
@@ -187,11 +203,13 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   })
   return {
     store, engine, cycle,
+    marketSlots: async () => lanes === undefined ? { market: 0, bbox: 0 } : { market: await lanes.ledger.remaining('market'), bbox: await lanes.ledger.remaining('bbox') },
     stop: async () => {
       stopped = true
       if (timer) clearInterval(timer)
       await Promise.allSettled([...inflight])
       while (busy) await new Promise(r => setTimeout(r, 25))
+      await engine.idle()
       await kx.destroy()
     }
   }

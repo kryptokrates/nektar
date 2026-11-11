@@ -1,5 +1,5 @@
 import { PublicKey, Transaction, P2PKH, type PrivateKey } from '@bsv/sdk'
-import { signWant, verifyWant, signOffer, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/overlay'
+import { signWant, verifyWant, signOffer, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/bstack'
 import { verifyOfferSig, publicSaleQuote, saleQuoteWire } from '@nektar/identity'
 import { DisclosureSaleHost, CheckpointBond } from '@nektar/anchor'
 import { parseFragment, fromHex } from '@nektar/core'
@@ -23,7 +23,7 @@ export interface MarketTransport {
   send: (toPub: string, msg: MarketMessage) => Promise<void>
 }
 
-export interface MarketMemory {
+interface MarketMemory {
   shardManifest: (shard: string) => Promise<{ shardId: string, domains: string[], offers?: Array<{ kind: string, priceSats?: number }> } | undefined>
   records: (shard: string) => Promise<Array<{ seq: number, level?: number, fragment: { d: Uint8Array } }>>
   marketCandidates?: (shard: string) => Promise<Array<{ seq: number, text: string }>>
@@ -38,7 +38,7 @@ export interface MarketDeps {
   height: () => Promise<number>
   tip?: () => Promise<{ tip: string, tipHeight: number } | undefined>
   fetchTx: (txid: string) => Promise<Transaction | undefined>
-  broadcast?: (tx: Transaction) => Promise<import('../../../chain/src/interfaces.js').BroadcastResult>
+  broadcast?: (tx: Transaction) => Promise<import('@nektar/chain').BroadcastResult>
   settleEscrow?: (tx: Transaction) => void
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
@@ -70,11 +70,14 @@ export class MarketEngine {
   private chain: Promise<unknown> = Promise.resolve()
   private wallet?: WalletCoordinator
   private inflight = new Set<string>()
+  public network: string
+  get agentPub (): string { return this.me }
 
   constructor (private d: MarketDeps) {
     this.o = { ...DEFAULTS, ...d.opts }
     this.now = d.now ?? Date.now
     this.me = d.key.toPublicKey().toString()
+    this.network = d.network
     if (d.broadcast) this.wallet = new WalletCoordinator(d.store, { broadcast: d.broadcast })
   }
 
@@ -85,6 +88,9 @@ export class MarketEngine {
     this.chain = p.catch(() => {})
     return p
   }
+
+  /** resolves once every unit of work queued so far has settled */
+  idle (): Promise<void> { return this.chain.then(() => undefined) }
 
   // ── owner surface ───────────────────────────────────────────────────────
   async enableSeller (policyHash: string): Promise<void> {

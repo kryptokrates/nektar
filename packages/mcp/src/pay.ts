@@ -16,7 +16,7 @@ export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(process.env
 /** tools that cost sats when NEKTAR_PAYMENTS=1 */
 export const PAID_TOOLS = new Set(['anchor', 'groundedAnswer', 'commitReceipt', 'proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership', 'attestInference'])
 /** prover-side tools: real CPU (STARK ~35-50s) and sometimes a chain tx — priced above answers. The verify-side tools stay free: a verifier never pays to check. */
-export const PROVER_TOOLS = new Set(['proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership', 'attestInference'])
+const PROVER_TOOLS = new Set(['proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership', 'attestInference'])
 
 const networkTag = (): string => {
   const n = process.env.NEKTAR_NETWORK ?? 'mock'
@@ -98,7 +98,7 @@ const persistConsumed = (): void => {
 
 /** issue an invoice for a paid tool call — signed so the quote travels as an
  *  attributable offer (a doctored amount/payTo fails quoteSig verification) */
-export const issueInvoice = (tool: string, amount?: number): Invoice => {
+const issueInvoice = (tool: string, amount?: number): Invoice => {
   const key = operatorKey()
   const inv: Invoice = {
     invoiceId: randomBytes(8).toString('hex'),

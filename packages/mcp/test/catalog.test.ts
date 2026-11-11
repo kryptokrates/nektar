@@ -102,20 +102,4 @@ test('contentPrice: manifest offers drive external read/pack pricing', async () 
   assert.equal(await mem.contentPrice('ball', 'pack'), 2000)
 })
 
-test('reputation: card computes per-domain vectors over anchored receipts', async () => {
-  const { mem, settle } = setup()
-  await mem.remember('ball', 'Metz beat Lyon 2-1')
-  await mem.remember('ball', 'Lyon beat Metz 0-2') // closes the 2-leaf batch → anchors
-  settle('ball')
-  await mem.describeShard('ball', { domains: ['soccer'] })
-  await callTool(mem, 'groundedAnswer', { claims: [{ text: 'Metz beat Lyon 2-1', cites: [{ shard: 'ball', seq: 0 }] }] })
-  settle('__receipts__')
-  const card = await mem.reputationCard()
-  assert.match(card.pub, /^[0-9a-f]{66}$/)
-  const soccer = card.entries.find(e => e.domain === 'soccer')
-  assert.ok(soccer, 'soccer domain present')
-  assert.ok(soccer.receipts >= 1)
-  assert.ok(soccer.verifiedCites >= 1)
-  const rt = await callTool(mem, 'reputation', {})
-  assert.match(rt.sig, /^30/)
-})
+

@@ -1,5 +1,5 @@
 import { Transaction, PublicKey } from '@bsv/sdk'
-import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/overlay'
+import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/bstack'
 import { verifyOfferSig, parseBuyWrapped } from '@nektar/identity'
 import { DisclosureSaleHost, buildP2PKHScript } from '@nektar/anchor'
 import { sha256, toHex } from '@nektar/core'

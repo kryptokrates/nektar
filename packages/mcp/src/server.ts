@@ -308,7 +308,6 @@ export const TOOLS = [
         sellerPub: { type: 'string', description: 'claim: needed to unwrap private (BRC-42) payloads' },
         offerMode: { type: 'string', description: 'claim: "key" for encrypted-record key sales' },
         commitment: { type: 'object', description: 'claim: {leaf,hdp,authorPub,anchorTxid} — verifies leaf inclusion + provenance σ' },
-        publishFraud: { type: 'boolean', description: 'claim: on verification failure, sign + publish an attributable fraud attestation to the rendezvous' }
       },
       required: ['op']
     }
@@ -499,7 +498,7 @@ export const TOOLS = [
   },
   {
     name: 'describeShard',
-    description: 'Commit a shard manifest to __catalog__: the domain tags other agents discover this shard by ("who knows about soccer"), a free-text description, and what is for sale. Anchored + timestamped like any memory — the claim is attributable; re-describing appends a newer manifest. Served via /.well-known/nektar and postable to a rendezvous catalog.',
+    description: 'Commit a shard manifest to __catalog__: the domain tags other agents discover this shard by ("who knows about soccer"), a free-text description, and what is for sale. Anchored + timestamped like any memory — the claim is attributable; re-describing appends a newer manifest. Served via /.well-known/nektar.',
     inputSchema: {
       type: 'object',
       required: ['shard', 'domains'],
@@ -508,69 +507,6 @@ export const TOOLS = [
         domains: { type: 'array', items: { type: 'string' }, description: 'topic tags this shard covers, e.g. ["soccer","transfer-rumours"] — lowercase a-z0-9._-, up to 32 tags' },
         desc: { type: 'string', description: 'one-paragraph description of the shard\'s coverage (≤560 chars)' },
         offers: { type: 'array', items: { type: 'object', properties: { kind: { type: 'string', enum: ['answer', 'pack', 'record'] }, priceSats: { type: 'number' }, seq: { type: 'number' } }, required: ['kind'] }, description: 'saleable access modes: answer = paid groundedAnswer, pack = public shard pack, record = one record via sale escrow (seq required)' }
-      }
-    }
-  },
-  {
-    name: 'discover',
-    description: 'Find agents on a nektar rendezvous directory: query by domain tag ("who claims soccer knowledge"), shard label, or pubkey. Returns signed presence ads + catalog entries (domains, descriptions, offers, on-chain shardIds). The directory finds candidates — it never vouches; verify receipts and probe with a cheap paid call before trusting.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        domain: { type: 'string', description: 'domain tag to match, e.g. "soccer"' },
-        shard: { type: 'string', description: 'exact shard label' },
-        pub: { type: 'string', description: 'one agent\'s pubkey (66 hex)' },
-        rendezvousUrl: { type: 'string', description: 'rendezvous base URL (default NEKTAR_OVERLAY_URL or http://localhost:8090)' }
-      }
-    }
-  },
-  {
-    name: 'peerCall',
-    description: 'Call a tool on a REMOTE nektar instance (found via discover): POSTs {endpoint}/v1/tools/{tool} with args, and when the peer demands payment (402) verifies the signed quote, pays the invoice from this instance\'s fund key via payInvoice, and retries with payment. Pair with discover: find who claims soccer → peerCall recall → peerCall groundedAnswer. maxSats caps what a call may cost — a payment demand above it is refused.',
-    inputSchema: {
-      type: 'object',
-      required: ['endpoint', 'tool'],
-      properties: {
-        endpoint: { type: 'string', description: 'peer base URL, e.g. http://host:8080' },
-        tool: { type: 'string', description: 'tool name on the peer (recall, groundedAnswer, …)' },
-        args: { type: 'object', description: 'tool arguments to send' },
-        maxSats: { type: 'number', description: 'max sats this call may cost — payment demands above it are refused' },
-        token: { type: 'string', description: 'bearer token when the peer sets NEKTAR_HTTP_TOKEN' },
-        delegation: { type: 'object', description: 'the signed grant (SignedDelegation) this call acts under — scope/spendCap/ttl enforced' }
-      }
-    }
-  },
-  {
-    name: 'sendEnvelope',
-    description: 'Async encrypted exchange — send a signed envelope (request/offer/acceptance/delivery-reference) to a peer through a mailbox keeper. No public endpoint needed on either side.',
-    inputSchema: { type: 'object', properties: { recipient: { type: 'string' }, kind: { type: 'string' }, payload: { type: 'object' }, operationId: { type: 'string' }, conversationId: { type: 'string' }, keeperUrl: { type: 'string' } }, required: ['recipient', 'kind', 'payload'] }
-  },
-  {
-    name: 'collect',
-    description: 'Poll your mailbox at a keeper for signed encrypted envelopes addressed to you (deduplicated). Returns decrypted {sender, kind, payload} messages.',
-    inputSchema: { type: 'object', properties: { keeperUrl: { type: 'string' } } }
-  },
-  {
-    name: 'mailboxServe',
-    description: 'Respond to async peerCall requests — polls your mailbox for request envelopes, executes the named tool locally, and replies with a delivery-reference envelope. The "no inbound port" agent mode.',
-    inputSchema: { type: 'object', properties: { keeperUrl: { type: 'string' }, once: { type: 'boolean' }, intervalMs: { type: 'number' } } }
-  },
-  {
-    name: 'fetchObject',
-    description: 'Content-addressed retrieval — pull a signed object by its sha256 from any keeper; verify signature locally. Works when the original publisher is offline.',
-    inputSchema: { type: 'object', properties: { sha: { type: 'string' }, keeperUrl: { type: 'string' } }, required: ['sha'] }
-  },
-  {
-    name: 'watch',
-    description: 'Subscribe to a rendezvous event feed (JetStream-pull): returns signed presence events — ads, catalogs, wants — after your cursor, filtered by domain tags. A catalog event says "an agent claims X"; a want event says "a buyer needs X". Re-run with the returned cursor to resume. Pair with discover/peerCall. Events are signed claims, not vouched facts.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        domains: { type: 'array', items: { type: 'string' }, description: 'domain tags to watch, e.g. ["soccer"] — omit for all events' },
-        kind: { type: 'string', enum: ['ad', 'catalog', 'want'], description: 'restrict to one event kind' },
-        since: { type: 'number', description: 'resume after this cursor (default: only new events from now)' },
-        wait: { type: 'number', description: 'long-poll up to N ms for new events (rendezvous caps at 30s)' },
-        rendezvousUrl: { type: 'string', description: 'rendezvous base URL (default NEKTAR_OVERLAY_URL or http://localhost:8090)' }
       }
     }
   },
@@ -590,68 +526,6 @@ export const TOOLS = [
     }
   },
   {
-    name: 'publishOffer',
-    description: 'Publish a signed market listing to the rendezvous — wraps a sale offerMemory commitment so buyers watching the shard\'s domains see "record N for X sats" on the feed. Needs a manifest (describeShard) or explicit domains.',
-    inputSchema: {
-      type: 'object',
-      required: ['shard', 'seq', 'priceSats'],
-      properties: {
-        shard: { type: 'string' }, seq: { type: 'number' }, priceSats: { type: 'number' },
-        domains: { type: 'array', items: { type: 'string' }, description: 'override manifest domains' },
-        leaf: { type: 'string', description: 'leaf commitment hex — buyer verify-before-pay handle' },
-        hdp: { type: 'string' }, batchR: { type: 'string' },
-        offer: { type: 'object', description: 'sale offerMemory artifact (cfg/wrapped/offerSig) — published as a PUBLIC quote: `wrapped` is scrubbed before signing, never leaves this instance' },
-        offerId: { type: 'string', description: 'stable offer id (default: generated uuid) — reuse for retries/revisions' },
-        revision: { type: 'number' }, previousHash: { type: 'string' },
-        wantId: { type: 'string' }, taskHash: { type: 'string' }, wantRevision: { type: 'number' },
-        buyerPub: { type: 'string', description: 'buyer pub the quote is bound to (private sale)' },
-        replyTo: { type: 'string', description: 'pub of the want this offer answers — demand-meets-supply matching' },
-        exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
-      }
-    }
-  },
-  {
-    name: 'delegate',
-    description: 'Grant bounded authority to another agent (Wright\'s liability primitive): sign a DelegationAd — grantee pub, scope (tools/domains), spendCapSats, ttl — and optionally publish it to the rendezvous. A grantee calls peerCall{delegation:<grant>} and the spend is bounded by the grant; the receipt names it. Revocable via revoke.',
-    inputSchema: {
-      type: 'object',
-      required: ['grantee'],
-      properties: {
-        grantee: { type: 'string', description: '66hex pub of the agent receiving authority' },
-        parent: { type: 'object', description: 'a SignedDelegation you hold — re-delegates a SUBSET of it (nested chain); child must shrink scope/cap/expiry' },
-        tools: { type: 'array', items: { type: 'string' }, description: 'tools the grant covers' },
-        domains: { type: 'array', items: { type: 'string' }, description: 'domains the grant covers' },
-        spendCapSats: { type: 'number', description: 'max spend per call under this grant (per-call cap; not cumulative)' },
-        ttlMs: { type: 'number', description: 'grant lifetime ms (default 86400000)' },
-        publish: { type: 'boolean' }, rendezvousUrl: { type: 'string' }
-      }
-    }
-  },
-  {
-    name: 'revokeGrant',
-    description: 'Tombstone a delegation you issued — the grant dies publicly so peers stop honoring it, and revocation cascades to every descendant grant. Only the grant\'s owner may revoke.',
-    inputSchema: {
-      type: 'object',
-      required: ['grantId'],
-      properties: { grantId: { type: 'string' }, rendezvousUrl: { type: 'string' } }
-    }
-  },
-  {
-    name: 'attest',
-    description: 'Sign a model attestation — "model M answered" declared + signed (attributable, never a truth claim): modelId, weightsHash (open weights recomputable), provider, claims. publish:true posts the card to the rendezvous.',
-    inputSchema: {
-      type: 'object',
-      required: ['modelId'],
-      properties: {
-        modelId: { type: 'string' },
-        weightsHash: { type: 'string', description: 'open-weight commitment — recomputable when public' },
-        provider: { type: 'string' },
-        claims: { type: 'array', items: { type: 'string' } },
-        publish: { type: 'boolean' }, rendezvousUrl: { type: 'string' }
-      }
-    }
-  },
-  {
     name: 'automation',
     description: 'Autonomous marketplace under an operator-approved policy. op=publishWant {domains, question, maxSats, policyHash} publishes a signed want and the runtime collects offers, scores them, funds escrow, verifies the disclosure and refunds on timeout without further calls. op=enableSeller {policyHash} answers matching wants from the sellable shards named in the policy. op=status {operationId} | operations | approvals | budget {policyHash} | policies are read-only. Approving policies and exceptions is operator-only (pnpm automation ...), never available here.',
     inputSchema: {
@@ -665,73 +539,45 @@ export const TOOLS = [
     }
   },
   {
-    name: 'publishWant',
-    description: 'Post a signed want to the rendezvous — the demand side: "I need X, will pay up to maxSats". Sellers watching their domains respond with offers.',
-    inputSchema: {
-      type: 'object',
-      required: ['domains'],
-      properties: {
-        domains: { type: 'array', items: { type: 'string' }, description: 'domains sought (lowercase tags)' },
-        maxSats: { type: 'number', description: 'max price offered' },
-        desc: { type: 'string', description: 'free-text want — signed as the want\'s question field' },
-        wantId: { type: 'string', description: 'stable want id (default: generated uuid) — reuse the SAME id on retry; independent questions get independent ids' },
-        revision: { type: 'number' }, previousHash: { type: 'string' }, taskHash: { type: 'string' },
-        status: { type: 'string', description: "'open' | 'canceled' — cancel keeps the wantId as a tombstone" },
-        exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
-      }
-    }
-  },
-  {
-    name: 'respond',
-    description: 'Answer a want event with a signed offer — the demand-meets-supply step: given a want (from watch/feed on your domains), publish an offer replyTo its pub so the wanter sees your quote on their feed. Needs describeShard first (manifest supplies domains + shardId).',
-    inputSchema: {
-      type: 'object',
-      required: ['wantPub', 'wantId', 'taskHash', 'wantRevision', 'shard', 'seq', 'priceSats'],
-      properties: {
-        wantPub: { type: 'string', description: 'the want\'s publisher pub (from the want event)' },
-        wantId: { type: 'string', description: 'the want\'s stable id (from the want event)' },
-        taskHash: { type: 'string', description: 'the want\'s signed taskHash' },
-        wantRevision: { type: 'number', description: 'the want revision this offer answers' },
-        shard: { type: 'string' }, seq: { type: 'number' }, priceSats: { type: 'number' },
-        domains: { type: 'array', items: { type: 'string' }, description: 'override manifest domains' },
-        leaf: { type: 'string' }, hdp: { type: 'string' }, batchR: { type: 'string' },
-        offerId: { type: 'string' }, revision: { type: 'number' }, previousHash: { type: 'string' },
-        offer: { type: 'object', description: 'sale artifact — published as a public quote; `wrapped` never leaves this instance' },
-        exp: { type: 'number' }, rendezvousUrl: { type: 'string' }
-      }
-    }
-  },
-  {
-    name: 'reputation',
-    description: 'Build a signed reputation card — per-domain vectors (receipts, verified cites, settled sats) computed over this instance\'s anchored history. Every input is a committed record, recomputable by anyone; it is a derivation, not a score. publish:true posts it to the rendezvous.',
-    inputSchema: { type: 'object', properties: { publish: { type: 'boolean', description: 'POST the signed card to the rendezvous' }, rendezvousUrl: { type: 'string' } } }
-  },
-  {
-    name: 'verifyReputation',
-    description: 'Neutral recompute of a published reputation card — pass the card (or pub+rendezvousUrl to fetch it) plus the seller\'s exported __receipts__ and __catalog__ packs; re-derives the per-domain vectors from the committed records and reports which entries match. The card is a claim until this check passes.',
+    name: 'want',
+    description: "Publish a signed purchase want under the agent's single active buyer policy — the engine collects offers, selects, escrows and settles autonomously.",
     inputSchema: {
       type: 'object',
       properties: {
-        card: { type: 'object', description: 'the published card {pub, entries[]} — or fetch by pub' },
-        pub: { type: 'string', description: 'fetch the card from the rendezvous by publisher pub' },
-        rendezvousUrl: { type: 'string' },
-        receiptsPack: { type: 'object', description: 'seller\'s exported __receipts__ ShardPack (exportShard output)' },
-        catalogPack: { type: 'object', description: 'seller\'s exported __catalog__ ShardPack — supplies the shard→domain map' }
-      }
+        domains: { type: 'array', items: { type: 'string' }, description: 'domain tags sellers watch' },
+        question: { type: 'string', description: 'what the buyer needs (<=560 chars)' },
+        maxSats: { type: 'number', description: 'price ceiling in sats' }
+      },
+      required: ['domains', 'maxSats']
     }
   },
   {
-    name: 'publishSettlement',
-    description: 'Announce a settled sale to the rendezvous — signed {invoiceId, tool, sats, txid, domains}; the realized-price feed. The txid is on-chain-checkable; the signature makes the claim attributable.',
+    name: 'sell',
+    description: 'List a shard for sale and enable autonomous selling: commits the manifest (describeShard with a record offer at priceSats) and arms the seller under the single active seller policy.',
     inputSchema: {
       type: 'object',
-      required: ['invoiceId', 'tool', 'sats', 'txid', 'domains'],
       properties: {
-        invoiceId: { type: 'string' }, tool: { type: 'string' }, sats: { type: 'number' }, txid: { type: 'string' },
-        domains: { type: 'array', items: { type: 'string' } }, rendezvousUrl: { type: 'string' }
-      }
+        shard: { type: 'string' },
+        domains: { type: 'array', items: { type: 'string' } },
+        priceSats: { type: 'number' },
+        desc: { type: 'string', description: 'free-text manifest description' }
+      },
+      required: ['shard', 'domains', 'priceSats']
     }
-  }
+  },
+  {
+    name: 'deals',
+    description: "List this agent's market operations (newest first, max 50) or detail one: state machine, event trail, sealed seller wraps, and the disclosed result once verified.",
+    inputSchema: {
+      type: 'object',
+      properties: { operationId: { type: 'string' } }
+    }
+  },
+  {
+    name: 'fund',
+    description: "Funding overview: receive address, spendable balance, tracked UTXOs, free market/bbox funding-tree slots, and the single active policy's budget when there is one.",
+    inputSchema: { type: 'object', properties: {} }
+  },
 ] as const
 
 // consolidated state machines: op → internal case label (never listed in
@@ -742,7 +588,9 @@ const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund'
 const CLAIM_OPS = new Set(['deploy', 'status', 'settle', 'deploySale', 'buySale'])
 const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAID_DISCLOSURE ?? '')
 /** tools visible to clients right now — paid-disclosure tools are gated by env */
-export const visibleTools = () => TOOLS.filter(t => !PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled())
+const AGENT_TOOLS = new Set(['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor'])
+const toolProfile = (): 'agent' | 'operator' => (process.env.NEKTAR_TOOL_PROFILE ?? 'agent').toLowerCase() === 'operator' ? 'operator' : 'agent'
+export const visibleTools = () => TOOLS.filter(t => (toolProfile() === 'operator' || AGENT_TOOLS.has(t.name)) && (!PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled()))
 
 const AUTOMATON_NOTE = 'On-chain proof that the transition (q, σ, q′) is in the committed δ and was authorized by the owner; it says nothing about whether the output content is true.'
 const automatonView = (h: import('@nektar/automaton').AutomatonHead) =>
@@ -766,52 +614,9 @@ export interface ToolCtx {
 
 /** tools that change instance state — a successful call emits 'change' on
  *  mem.events so live surfaces (dashboard SSE) refresh instantly */
-const MUTATING_TOOLS = new Set(['automation', 'remember', 'describeShard', 'publishOffer', 'publishWant', 'respond', 'peerCall', 'delegate', 'revokeGrant', 'attest', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'bondCommit', 'bondClose', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport', 'sendEnvelope', 'fetchObject', 'sendSats', 'fundingRefresh'])
+const MUTATING_TOOLS = new Set(['automation', 'remember', 'describeShard', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'bondCommit', 'bondClose', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport', 'sendSats', 'fundingRefresh'])
 
-// beacon-discovered peer set — one known rv reveals the rest (GET /peers).
-// Cached 5min; publish/discover fan out across the set so no single rv is
-// a hardcoded dependency.
-// fetch helpers — the repeated `await fetch(url, {signal: AbortSignal.timeout(ms)}).json()`
-// and `POST JSON.stringify(body)` sites collapse into two lines
-const getJson = async <T = any>(url: string, ms = 15_000): Promise<T> => (await fetch(url, { signal: AbortSignal.timeout(ms) })).json() as Promise<T>
-const postJson = async (url: string, body: unknown, ms = 15_000): Promise<Response> => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) })
-
-const rvSetCache = new Map<string, { at: number, urls: string[] }>()
-// durable peer cache — survives restart + total-outage; the last-known set
-// serves when live fetches fail (bootstrap-free operation)
-const PEERS_FILE = () => `${process.env.NEKTAR_DATA_DIR ?? './nektar-data'}/peers.json`
-function rvSetLoad (base: string): string[] {
-  try { return JSON.parse(readFileSync(PEERS_FILE(), 'utf8'))[base] ?? [] } catch { return [] }
-}
-function rvSetSave (base: string, urls: string[]): void {
-  try { mkdirSync(dirname(PEERS_FILE()), { recursive: true }); const all = (() => { try { return JSON.parse(readFileSync(PEERS_FILE(), 'utf8')) } catch { return {} } })(); all[base] = urls; writeFileSync(PEERS_FILE(), JSON.stringify(all)) } catch {}
-}
-async function rvSet (base: string): Promise<string[]> {
-  const hit = rvSetCache.get(base)
-  if (hit && Date.now() - hit.at < 300_000) return hit.urls
-  const urls = new Set([base])
-  try {
-    const j = await getJson(`${base}/peers`, 8_000)
-    for (const b of j.peers ?? []) if (typeof b?.endpoint === 'string' && /^https?:\/\//i.test(b.endpoint)) urls.add(b.endpoint.replace(/\/+$/, ''))
-  } catch {}
-  for (const u of rvSetLoad(base)) urls.add(u) // persisted set seeds even when live fetch fails
-  if (urls.size === 1) for (const u of rvSetLoad(base)) urls.add(u) // last-known fallback
-  const out = [...urls]
-  rvSetCache.set(base, { at: Date.now(), urls: out })
-  rvSetSave(base, out)
-  return out
-}
-// post a signed artifact to base + every known peer — intake dedups by ts, so
-// fan-out is idempotent; succeed if any rv accepts
-async function postFanout (rv: string, path: string, body: unknown): Promise<Response> {
-  let last: Response | undefined
-  for (const base of await rvSet(rv)) {
-    try { const r = await postJson(`${base}${path}`, body, 15_000); if (r.ok) last ??= r } catch {}
-  }
-  return last ?? new Response('{"error":"no rv accepted"}', { status: 502 })
-}
-
-export function settleEscrow (mem: NektarMemory, funding: Array<{ tx: import('@bsv/sdk').Transaction, vout: number }>, tx: import('@bsv/sdk').Transaction): void {
+function settleEscrow (mem: NektarMemory, funding: Array<{ tx: import('@bsv/sdk').Transaction, vout: number }>, tx: import('@bsv/sdk').Transaction): void {
   for (const inp of funding) mem.markSpentOut(inp.tx.id('hex'), inp.vout)
   if (tx.outputs[1]) mem.addOwnedOut(tx, 1)
 }
@@ -820,6 +625,20 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
   const r = await dispatchTool(mem, name, args, ctx)
   if (MUTATING_TOOLS.has(name) || name.includes('#')) mem.events.emit('change', name)
   return r
+}
+
+/** the single non-revoked policy carrying `role` for this agent+network —
+ *  exactly-one is an operator decision: none means "approve one first",
+ *  several means "revoke down to one" — the agent never picks silently */
+async function singlePolicy (au: NonNullable<NektarMemory['automation']>, role: 'buyer' | 'seller', tool: string): Promise<string> {
+  const found: string[] = []
+  for (const r of await au.store.policies()) {
+    if (r.revokedAt !== undefined) continue
+    const p = await au.store.activePolicy(r.policyHash)
+    if (p && p.roles.includes(role) && p.agentPub === au.engine.agentPub && p.network === au.engine.network) found.push(r.policyHash)
+  }
+  if (found.length !== 1) throw new Error(`${tool}: operator must approve exactly one ${role} policy (pnpm automation policy approve …)`)
+  return found[0]!
 }
 
 async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
@@ -866,70 +685,6 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     }
     case 'sendSats': {
       return await mem.sendSats({ amount: Number(args.amount), address: args.address, scriptHex: args.scriptHex, opReturn: args.opReturn })
-    }
-    case 'sendEnvelope': {
-      const { sendEnvelope } = await import('./mailbox.js')
-      const keeper = String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090')
-      return await sendEnvelope(mem.operatorKey(), keeper, {
-        recipient: String(args.recipient), kind: String(args.kind) as any, payload: args.payload ?? {},
-        conversationId: args.conversationId, operationId: args.operationId, replyTo: args.replyTo, expiresAt: args.expiresAt
-      })
-    }
-    case 'collect': {
-      const { collect } = await import('./mailbox.js')
-      const keeper = String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090')
-      return await collect(mem.operatorKey(), keeper, (ctx as any).mailboxSeen ??= new Set())
-    }
-    case 'mailboxServe': {
-      // the responder half of async peerCall: poll the mailbox for 'request'
-      // envelopes, execute the named tool locally, reply with the result as a
-      // 'delivery-reference' envelope — the agent needs no inbound port at all
-      const { collect, sendEnvelope } = await import('./mailbox.js')
-      const keeper = String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090')
-      const seen = (ctx as any).mailboxSeen ??= new Set()
-      const interval = Number(args?.intervalMs ?? 10_000)
-      const handled = new Set<string>()
-      const once = args?.once === true
-      const answered: Array<{ operationId?: string, tool: string }> = []
-      // remote-tool allowlist — a valid sender signature proves who sent a
-      // request, not authority over local owner/payment operations. Only
-      // read-only market tools are callable via the mailbox by default.
-      const REMOTE_OK = new Set(args?.allowTools ?? ['recall', 'describeMemory', 'catalog', 'prices', 'pack', 'feed', 'watch', 'whoami'])
-      for (let round = 0; once ? round < 1 : true; round++) {
-        const msgs = await collect(mem.operatorKey(), keeper, seen)
-        for (const m of msgs) {
-          if (m.kind !== 'request' || handled.has(m.messageId)) continue
-          handled.add(m.messageId)
-          const req = (m.payload ?? {}) as { tool?: string, args?: unknown }
-          if (!req.tool) continue
-          if (!REMOTE_OK.has(req.tool)) {
-            await sendEnvelope(mem.operatorKey(), keeper, { recipient: m.sender, kind: 'delivery-reference', operationId: m.operationId, conversationId: m.conversationId, payload: { tool: req.tool, result: { error: `remote tool '${req.tool}' is not allowed — mailbox calls are restricted to read-only tools` } } }).catch(() => {})
-            continue
-          }
-          let result: unknown
-          try { result = await callTool(mem, req.tool, req.args, ctx) } catch (e) { result = { error: (e as Error).message } }
-          await sendEnvelope(mem.operatorKey(), keeper, { recipient: m.sender, kind: 'delivery-reference', operationId: m.operationId, conversationId: m.conversationId, payload: { tool: req.tool, result } }).catch(() => {})
-          answered.push({ operationId: m.operationId, tool: req.tool })
-        }
-        if (!once) await new Promise(r => setTimeout(r, interval))
-      }
-      return { answered, note: once ? 'one poll round' : 'loop runs until killed' }
-    }
-    case 'fetchObject': {
-      // hash-addressed retrieval — pull the signed object by sha256 from any
-      // keeper; the verifier re-checks the signature + commitment locally
-      const { sha256, toHex } = await import('@nektar/core')
-      const hash = String(args.sha)
-      for (const k of await rvSet(String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090'))) {
-        try {
-          const r = await fetch(`${k}/v1/object/${encodeURIComponent(hash)}`)
-          if (r.ok) {
-            const obj = await r.json()
-            if (toHex(Uint8Array.from(sha256(new TextEncoder().encode(JSON.stringify(obj))))) === hash) return { object: obj, sha: hash, via: k }
-          }
-        } catch {}
-      }
-      throw new Error(`fetchObject: no keeper served ${hash.slice(0, 16)}…`)
     }
     case 'sale': {
       const op = String(args?.op ?? '')
@@ -1123,20 +878,6 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
           if (out.verified && args.commitment.anchorTxid) out.anchorTxid = args.commitment.anchorTxid
           if (!out.verified) out.reason = 'computeLeaf(payload) != committed leaf'
         } catch (e) { out.verified = false; out.reason = `payload verification failed: ${(e as Error).message}` }
-      }
-      // a failed claim is an attributable fraud proof — publishFraud signs
-      // the evidence (txid + committed leaf + the mismatch) as an
-      // attestation so the market sees it; reputation feeds on it.
-      if (out.verified === false && args?.publishFraud === true) {
-        try {
-          const { signAttestation } = await import('@nektar/overlay')
-          const claims = [`fraud:sale:${tx.id('hex')}`, `hWrapped:${args.hWrapped ?? ''}`, `committedLeaf:${args?.commitment?.leaf ?? ''}`, `sellerPub:${args?.sellerPub ?? ''}`]
-          const signed = signAttestation(mem.operatorKey(), { modelId: 'fraud-claim', provider: 'nektar-claim', claims, ts: Date.now() })
-          const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-          const r = await postJson(`${rv}/attestation`, signed, 15_000)
-          out.fraudPublished = r.ok && (await r.json().catch(() => ({})))?.ok === true
-          out.fraudEvidence = { attestation: signed.attestation }
-        } catch (e) { out.fraudPublished = false; out.fraudReason = `publishFraud failed: ${(e as Error).message}` }
       }
       return out
     }
@@ -1510,151 +1251,6 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (!Array.isArray(args?.domains)) throw new Error('describeShard: domains[] required — the tags peers search by')
       return await mem.describeShard(args.shard, { domains: args.domains, desc: args.desc, offers: args.offers })
     }
-    case 'discover': {
-      const base = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      // local-matching mode — tail the bounded feed and filter locally so the
-      // rv never learns the query terms (the friend's query-privacy point)
-      if (args?.localMatch === true || process.env.NEKTAR_LOCAL_MATCH === '1') {
-        const seen = new Map<string, unknown>()
-        for (const b of await rvSet(base)) {
-          try {
-            const j = await (await fetch(`${b}/events?since=-500&limit=500`)).json()
-            for (const e of j.events ?? []) if (e.kind === 'ad' || e.kind === 'catalog') {
-              const p = e.payload?.ad ?? e.payload?.catalog ?? e.payload
-              if (!p) continue
-              const doms: string[] = [...(p.domains ?? []), ...(p.ad?.domains ?? []), ...(p.catalog?.domains ?? [])].map((d: string) => String(d).toLowerCase())
-              const matchDomain = !args?.domain || doms.includes(String(args.domain).toLowerCase())
-              const matchPub = !args?.pub || p.pub === args.pub
-              const matchShard = !args?.shard || p.shard === args.shard || p.shards?.includes(args.shard)
-              if (matchDomain && matchPub && matchShard && p.pub) seen.set(`${p.pub}:${p.shard ?? p.streamId ?? ''}`, { pub: p.pub, endpoint: p.endpoint, domains: doms, via: b })
-            }
-          } catch {}
-        }
-        return { localMatch: true, hits: [...seen.values()] }
-      }
-      const q = typeof args?.domain === 'string' && args.domain ? `?domain=${encodeURIComponent(args.domain)}`
-        : typeof args?.shard === 'string' && args.shard ? `?shard=${encodeURIComponent(args.shard)}`
-        : typeof args?.pub === 'string' && args.pub ? `?pub=${encodeURIComponent(args.pub)}`
-        : '?all=1'
-      const merged: any = {}
-      const seenId = new Set<string>()
-      let answered = 0
-      for (const b of await rvSet(base)) {
-        try {
-          const r = await fetch(`${b}/directory${q}`, { signal: AbortSignal.timeout(15_000) })
-          if (!r.ok) continue
-          answered++
-          const out = await r.json()
-          for (const k of Object.keys(out)) {
-            if (Array.isArray(out[k])) { for (const x of out[k]) { const id = JSON.stringify(x?.ad?.pub ?? x?.catalog?.pub ?? x); if (!seenId.has(id)) { seenId.add(id); (merged[k] ??= []).push(x) } } }
-            else if (merged[k] === undefined) merged[k] = out[k]
-          }
-        } catch {}
-      }
-      if (!answered) throw new Error(`discover: no rendezvous answered`)
-      return { rendezvous: base, query: q.slice(1), ...merged }
-    }
-    case 'peerCall': {
-      const tool = String(args?.tool ?? '')
-      if (!tool) throw new Error('peerCall: tool required')
-      // mailbox mode — the remote has no public endpoint; the request goes as
-      // an encrypted envelope through any keeper, the reply returns the same
-      // way. No inbound port, no synchronous IP-revealing connection.
-      if (args?.mailbox === true) {
-        const remotePub = String(args?.remotePub ?? '')
-        if (!/^[0-9a-f]{66}$/i.test(remotePub)) throw new Error('peerCall mailbox: remotePub required (66-hex pub)')
-        const { sendEnvelope, collect } = await import('./mailbox.js')
-        const keeper = String(args?.keeperUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090')
-        const operationId = crypto.randomUUID()
-        const seen = (ctx as any).mailboxSeen ??= new Set()
-        const { messageId } = await sendEnvelope(mem.operatorKey(), keeper, { recipient: remotePub, kind: 'request', operationId, conversationId: operationId, payload: { tool, args: args?.args ?? {} } })
-        const deadline = Date.now() + Number(args?.timeoutMs ?? 60_000)
-        while (Date.now() < deadline) {
-          const msgs = await collect(mem.operatorKey(), keeper, seen)
-          const reply = msgs.find(m => m.operationId === operationId && (m.kind === 'delivery-reference' || m.kind === 'acknowledgement'))
-          if (reply) return { via: 'mailbox', operationId, messageId, result: reply.payload }
-          await new Promise(r => setTimeout(r, 3_000))
-        }
-        return { via: 'mailbox', operationId, messageId, pending: true, note: 'request sent; no reply within timeout — the remote may be offline; collect later with the same operationId' }
-      }
-      const endpoint = String(args?.endpoint ?? '').replace(/\/+$/, '')
-      if (!/^https?:\/\//i.test(endpoint)) throw new Error('peerCall: endpoint must be http(s)')
-      const headers: Record<string, string> = { 'content-type': 'application/json' }
-      if (typeof args?.token === 'string' && args.token) headers.authorization = `Bearer ${args.token}`
-      // acting under a signed delegation: the grant must be valid, name this
-      // agent as grantee, cover the called tool, and stay within its spendCap
-      let deleg: any | undefined
-      if (args?.delegation !== undefined) {
-        const { verifyDelegation, delegationSubset } = await import('@nektar/overlay')
-        deleg = args.delegation
-        if (!verifyDelegation(deleg.grant, deleg.sig)) throw new Error('peerCall: delegation signature invalid or grant expired')
-        const opPub = mem.operatorKey().toPublicKey().toString()
-        if (deleg.grant.granteePub !== opPub) throw new Error('peerCall: delegation grants a different grantee — this agent is not the delegate')
-        // nested chain: the grant carries parentGrantId — the caller must
-        // supply the ancestor chain; every level must be a strict subset
-        // of its parent and valid on its own signature
-        if (deleg.grant.parentGrantId !== undefined) {
-          const chain = Array.isArray(deleg.chain) ? deleg.chain : (args?.delegation?.parent ? [{ grant: args.delegation.parent.grant, sig: args.delegation.parent.sig }] : [])
-          if (chain.length === 0) throw new Error('peerCall: nested delegation needs the ancestor chain (delegation.parent or delegation.chain)')
-          let child = deleg.grant
-          let hops = 0
-          for (const link of chain) {
-            if (!verifyDelegation(link.grant, link.sig)) throw new Error('peerCall: ancestor grant in chain is invalid or expired')
-            if (!delegationSubset(child, link.grant)) throw new Error('peerCall: chain link is not a subset of its parent — scope/cap must shrink at each hop')
-            child = link.grant
-            hops++
-            if (hops > 16) throw new Error('peerCall: delegation chain too long')
-          }
-          if (child.parentGrantId !== undefined) throw new Error('peerCall: chain does not reach a root grant')
-        }
-        if (deleg.grant.scope?.tools?.length && !deleg.grant.scope.tools.includes(tool)) throw new Error(`peerCall: delegation scope does not cover tool '${tool}'`)
-      }
-      const post = async (body: unknown) => {
-        const r = await fetch(`${endpoint}/v1/tools/${encodeURIComponent(tool)}`, { method: 'POST', headers, body: JSON.stringify(body ?? {}), signal: AbortSignal.timeout(120_000) })
-        const j = await r.json().catch(() => ({}))
-        return { status: r.status, body: j }
-      }
-      let res = await post(args?.args ?? {})
-      // the 402 challenge comes back in the result body (callTool returns the
-      // PaymentRequired as data) — pay and retry once
-      const acc = (res.body as any)?.accepts?.[0]
-      const demand = (res.body as any)?.ok === false && acc ? res.body : undefined
-      if (demand) {
-        const extra = acc.extra ?? {}
-        const amount = Number(acc.amount ?? 0)
-        // a delegation's spendCap is the harder bound — the call may spend
-        // at most the grant's cap, even if maxSats is set higher
-        const cap = deleg?.grant.spendCapSats
-        const max = cap !== undefined ? Math.min(args?.maxSats !== undefined ? Number(args.maxSats) : cap, cap) : (args?.maxSats !== undefined ? Number(args.maxSats) : undefined)
-        if (max === undefined) return { needsPayment: true, demand, hint: 're-run with maxSats to authorize paying this invoice' }
-        if (amount > max) throw new Error(`peerCall: ${tool} costs ${amount} sats — over maxSats ${max}`)
-        // settlement context: the invoice's network tag must match the chain
-        // this buyer actually settles on — never sign a payment on the wrong network
-        const mine = process.env.NEKTAR_NETWORK ?? 'mock'
-        const expected = mine === 'main' ? 'bsv:mainnet' : mine === 'ttn' ? 'bsv:teratestnet' : mine === 'regtest' ? 'bsv:regtest' : 'bsv:mock'
-        if (typeof acc.network === 'string' && acc.network !== expected) throw new Error(`peerCall: invoice settles on ${acc.network} but this instance runs ${mine} — refusing to sign`)
-        if (extra.quoteSig !== undefined && !verifyQuoteSig({ ...extra, amount })) throw new Error('peerCall: quoteSig does not verify — the invoice may be doctored or not from this endpoint')
-        // F3 budget authority — reserve before spending under a grant; the
-        // lifetime cap is the real invariant, not the per-call check above
-        const actionId = `peerCall:${tool}:${extra.invoiceId}`
-        if (deleg?.grant.grantId && mem.budget) {
-          const r = mem.budget.reserve(String(deleg.grant.grantId), actionId, amount)
-          if (r !== 'ok' && r !== 'exists') throw new Error(`peerCall: grant ${deleg.grant.grantId} budget ${r} — ${amount} sats refused`) // fail closed
-        }
-        let paid
-        try {
-          paid = await mem.payInvoice({ invoiceId: String(extra.invoiceId), amount, lockingScriptHex: String(extra.lockingScriptHex), opReturn: String(extra.opReturn) })
-        } catch (e) {
-          if (deleg?.grant.grantId && mem.budget) mem.budget.release(String(deleg.grant.grantId), actionId)
-          throw e
-        }
-        if (deleg?.grant.grantId && mem.budget) mem.budget.commit(String(deleg.grant.grantId), actionId)
-        res = await post({ ...(args?.args ?? {}), payment: paid.payment })
-        return { result: res.body, paidTxid: paid.txid, amount }
-      }
-      if (res.status >= 400) throw new Error(`peerCall: ${endpoint}/v1/tools/${tool} → ${res.status}: ${(res.body as any)?.error ?? res.status}`)
-      return res.body
-    }
     case 'importRecord': {
       // land a record bought via sale#claim — caller passes the verified
       // claimed payload; lineage (from shard:seq, leaf, settlement txid)
@@ -1662,50 +1258,74 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (typeof args?.data !== 'string') throw new Error('importRecord: data required (the verified claim payload)')
       return await mem.importRecord({ data: args.data, provenance: args.provenance, sourceShard: args.sourceShard, sourceSeq: args.sourceSeq, leaf: args.leaf, saleTxid: args.saleTxid, shard: args.shard })
     }
-    case 'publishOffer': {
-      // wrap a sale offerMemory result into a signed market listing and post
-      // it to the rendezvous — the enumerable shelf: buyers watching the
-      // shard's domains see "record N for X sats" on their next pull
-      const { signOffer } = await import('@nektar/overlay')
-      if (typeof args?.shard !== 'string') throw new Error('publishOffer: shard required')
-      if (!Number.isSafeInteger(Number(args?.seq))) throw new Error('publishOffer: seq required')
-      const m = await mem.shardManifest(args.shard).catch(() => undefined)
-      const priceSats = Math.max(0, Math.floor(Number(args?.priceSats ?? 0)))
-      let quote: Record<string, unknown> | undefined
-      if (args?.offer !== undefined) {
-        const { publicSaleQuote, saleQuoteWire, verifyOfferSig } = await import('@nektar/identity')
-        const q = publicSaleQuote(args.offer as Parameters<typeof publicSaleQuote>[0])
-        const buyer = String(args?.buyerPub ?? '')
-        if (!verifyOfferSig(q, buyer, String(args?.leaf ?? ''))) throw new Error('publishOffer: offerSig does not verify — refusing to publish a doctored quote')
-        if (Number(q.cfg.price) !== priceSats) throw new Error(`publishOffer: outer priceSats ${priceSats} != quote price ${q.cfg.price}`)
-        if (q.sellerPub !== mem.operatorKey().toPublicKey().toString()) throw new Error('publishOffer: quote sellerPub is not this instance — only the seller may list it')
-        quote = saleQuoteWire(q)
+    case 'want': {
+      const au = mem.automation
+      if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
+      const ph = await singlePolicy(au, 'buyer', 'want')
+      const r = await au.engine.publishWant({ domains: (args?.domains ?? []).map(String), ...(args?.question ? { question: String(args.question).slice(0, 560) } : {}), maxSats: Number(args?.maxSats) }, ph)
+      void au.cycle()
+      return { wantId: r.wantId, operationId: r.operationId }
+    }
+    case 'sell': {
+      const au = mem.automation
+      if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
+      if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('sell: shard required')
+      if (!Array.isArray(args?.domains)) throw new Error('sell: domains[] required')
+      const priceSats = Number(args?.priceSats)
+      if (!Number.isSafeInteger(priceSats) || priceSats <= 0) throw new Error('sell: priceSats must be a positive integer')
+      await mem.describeShard(args.shard, { domains: args.domains, desc: args.desc, offers: [{ kind: 'record', priceSats }] })
+      const ph = await singlePolicy(au, 'seller', 'sell')
+      await au.engine.enableSeller(ph)
+      void au.cycle()
+      return { shard: args.shard, domains: args.domains, priceSats, policyHash: ph }
+    }
+    case 'deals': {
+      const au = mem.automation
+      if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
+      const entry = (o: import('./automation/store.js').Operation): Record<string, unknown> => {
+        const d = o.data
+        const selKey = typeof (d.selected as { key?: string } | undefined)?.key === 'string' ? (d.selected as { key: string }).key : undefined
+        return {
+          operationId: o.operationId, role: o.role, kind: o.kind, state: o.state,
+          wantId: (d.want as { want?: { wantId?: string } } | undefined)?.want?.wantId,
+          priceSats: (d.amounts as { purchaseSats?: number } | undefined)?.purchaseSats ?? d.priceSats,
+          counterparty: o.role === 'seller' ? (d.want as { want?: { pub?: string } } | undefined)?.want?.pub : selKey?.split(':')[0],
+          escrowTxid: d.escrowTxid, disclosureTxid: (d.result as { disclosureTxid?: string } | undefined)?.disclosureTxid, refundTxid: d.refundTxid,
+          updatedAt: o.updatedAt
+        }
       }
-      const fields = {
-        shard: args.shard, seq: Number(args.seq),
-        ...(m ? { shardId: m.shardId, domains: m.domains } : { domains: (args?.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32) }),
-        ...(args?.leaf ? { leaf: String(args.leaf) } : {}), ...(args?.hdp ? { hdp: String(args.hdp) } : {}), ...(args?.batchR ? { batchR: String(args.batchR) } : {}),
-        priceSats,
-        ...(quote !== undefined ? { offer: quote } : {}),
-        ...(args?.offerId !== undefined ? { offerId: String(args.offerId) } : {}),
-        ...(args?.revision !== undefined ? { revision: Number(args.revision) } : {}),
-        ...(args?.previousHash !== undefined ? { previousHash: String(args.previousHash) } : {}),
-        ...(args?.wantId !== undefined ? { wantId: String(args.wantId) } : {}),
-        ...(args?.taskHash !== undefined ? { taskHash: String(args.taskHash) } : {}),
-        ...(args?.wantRevision !== undefined ? { wantRevision: Number(args.wantRevision) } : {}),
-        ...(args?.buyerPub !== undefined ? { buyerPub: String(args.buyerPub) } : {}),
-        ...(args?.replyTo !== undefined ? { replyTo: String(args.replyTo) } : {}),
-        ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {}),
-        net: process.env.NEKTAR_NETWORK ?? 'ttn',
-        ...(await mem.tipRef().catch(() => undefined) ?? {})
+      const detail = (o: import('./automation/store.js').Operation, events: unknown): Record<string, unknown> => {
+        const e: Record<string, unknown> = { ...entry(o), data: o.data, events, ...(o.lastError ? { lastError: o.lastError } : {}) }
+        if (o.role === 'buyer' && (o.state === 'disclosure_verified' || o.state === 'useful')) {
+          const text = (o.data.result as { text?: string } | undefined)?.text
+          if (text !== undefined) e.result = { text }
+        }
+        return e
       }
-      if (!fields.domains.length) throw new Error('publishOffer: no domains — describeShard first or pass {domains}')
-      const signed = signOffer(mem.operatorKey(), fields)
-      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await postFanout(rv, '/offer', signed)
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishOffer: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
-      return { ok: true, pub: (j as any).pub, offer: signed.offer }
+      if (args?.operationId) {
+        const st = await au.engine.status(String(args.operationId))
+        if (!st) throw new Error(`deals: unknown operationId ${args.operationId}`)
+        return detail(st.operation, st.events)
+      }
+      const ops = (await au.store.operations())
+        .filter(o => o.kind === 'purchase' || o.kind === 'sale')
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 50)
+        .map(entry)
+      return { deals: ops }
+    }
+    case 'fund': {
+      const au = mem.automation
+      if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
+      const w = ctx.ops?.wallet ? await ctx.ops.wallet() as Record<string, unknown> : mem.fundingStatus() as unknown as Record<string, unknown>
+      const slots = await au.marketSlots()
+      const live = (await au.store.policies()).filter(x => x.revokedAt === undefined)
+      return {
+        address: w.address, network: au.engine.network,
+        spendableSats: Number(w.balanceSats ?? 0), utxos: Number(w.utxos ?? 0),
+        marketSlots: slots,
+        ...(live.length === 1 ? { budget: await au.store.budgetStatus(live[0]!.policyHash) } : {})
+      }
     }
     case 'automation': {
       const au = mem.automation
@@ -1723,217 +1343,6 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (op === 'budget') return await au.store.budgetStatus(String(args?.policyHash ?? ''))
       if (op === 'policies') return { policies: await au.store.policies() }
       throw new Error('automation: op required — publishWant|enableSeller|status|operations|approvals|budget|policies')
-    }
-    case 'publishWant': {
-      const { signWant } = await import('@nektar/overlay')
-      const domains = (args?.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32)
-      if (!domains.length) throw new Error('publishWant: domains required')
-      const fields = {
-        domains,
-        ...(args?.maxSats !== undefined ? { maxSats: Math.max(0, Math.floor(Number(args.maxSats))) } : {}),
-        ...(args?.desc ? { question: String(args.desc).slice(0, 560) } : {}),
-        ...(args?.wantId !== undefined ? { wantId: String(args.wantId) } : {}),
-        ...(args?.revision !== undefined ? { revision: Number(args.revision) } : {}),
-        ...(args?.taskHash !== undefined ? { taskHash: String(args.taskHash) } : {}),
-        ...(args?.previousHash !== undefined ? { previousHash: String(args.previousHash) } : {}),
-        ...(args?.status === 'canceled' ? { status: 'canceled' as const } : {}),
-        ts: Date.now(), ...(args?.exp !== undefined ? { exp: Number(args.exp) } : {}),
-        net: process.env.NEKTAR_NETWORK ?? 'ttn',
-        ...(await mem.tipRef().catch(() => undefined) ?? {})
-      }
-      const signed = signWant(mem.operatorKey(), fields)
-      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await postFanout(rv, '/want', signed)
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishWant: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
-      return { ok: true, pub: (j as any).pub, want: signed.want }
-    }
-    case 'delegate': {
-      // owner grants bounded authority to a grantee — Wright's liability
-      // primitive as a signed, checkable object. pass `parent` (a
-      // SignedDelegation) to re-delegate a SUBSET of a grant you hold —
-      // nested chains: the child must be a strict subset of the parent.
-      const { signDelegation, verifyDelegation, delegationSubset } = await import('@nektar/overlay')
-      if (typeof args?.grantee !== 'string' || !/^[0-9a-f]{66}$/i.test(args.grantee)) throw new Error('delegate: grantee pub (66hex) required')
-      const ttlMs = Number(args?.ttlMs ?? 86_400_000)
-      const fields: any = {
-        grantId: (args?.grantId as string) ?? `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-        granteePub: args.grantee,
-        scope: { ...(args?.tools ? { tools: (args.tools as string[]).slice(0, 64) } : {}), ...(args?.domains ? { domains: (args.domains as string[]).slice(0, 32).map(String) } : {}) },
-        spendCapSats: Math.max(0, Math.floor(Number(args?.spendCapSats ?? 0))),
-        expiresAt: Date.now() + ttlMs,
-        ts: Date.now()
-      }
-      if (args?.parent !== undefined) {
-        const parent = args.parent
-        if (!verifyDelegation(parent.grant, parent.sig)) throw new Error('delegate: parent grant signature invalid or expired')
-        const opPub = mem.operatorKey().toPublicKey().toString()
-        if (parent.grant.granteePub !== opPub) throw new Error('delegate: you are not the parent grant\'s grantee — only the holder may re-delegate')
-        fields.parentGrantId = parent.grant.grantId
-        // construct the child grant to subset-check it before signing
-        const child = { ...fields, ownerPub: opPub }
-        if (!delegationSubset(child, parent.grant)) throw new Error('delegate: child grant is not a subset of the parent — scope/cap/expiry must shrink, never grow')
-      }
-      const signed = signDelegation(mem.operatorKey(), fields)
-      // F3 — register the grant's lifetime cap with the budget authority so
-      // delegated spends count cumulatively, not just per call
-      if (mem.budget && fields.spendCapSats) mem.budget.setCap(String(fields.grantId), Number(fields.totalCapSats ?? fields.spendCapSats), args?.parent ? [String(args.parent.grant?.grantId)] : [])
-      if (args?.publish !== true) return { grant: signed.grant, sig: signed.sig }
-      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await postJson(`${rv}/delegation`, signed, 15_000)
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || (j as any)?.ok !== true) throw new Error(`delegate: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
-      return { ok: true, grant: signed.grant, sig: signed.sig }
-    }
-    case 'attest': {
-      // "model M answered" — a signed, attributable declaration (never a truth claim)
-      const { signAttestation } = await import('@nektar/overlay')
-      if (typeof args?.modelId !== 'string' || !args.modelId) throw new Error('attest: modelId required')
-      const fields = {
-        modelId: args.modelId,
-        ...(args?.weightsHash ? { weightsHash: String(args.weightsHash) } : {}),
-        ...(args?.provider ? { provider: String(args.provider) } : {}),
-        ...(args?.claims ? { claims: (args.claims as string[]).slice(0, 64).map(String) } : {}),
-        ts: Date.now()
-      }
-      const signed = signAttestation(mem.operatorKey(), fields)
-      // the receipt's manifestId — the instance's latest attestation carried
-      // by default into groundedAnswer receipts
-      process.env.NEKTAR_LAST_MANIFEST = (await import('node:crypto')).createHash('sha256').update(JSON.stringify(signed.attestation)).digest('hex')
-      if (args?.publish !== true) return { attestation: signed.attestation, sig: signed.sig }
-      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await postJson(`${rv}/attestation`, signed, 15_000)
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || (j as any)?.ok !== true) throw new Error(`attest: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
-      return { ok: true, attestation: signed.attestation }
-    }
-    case 'revokeGrant': {
-      // revoke a delegation — tombstone the grant so peers stop honoring it
-      if (typeof args?.grantId !== 'string' || !args.grantId) throw new Error('revokeGrant: grantId required')
-      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const { signRevocation } = await import('@nektar/overlay')
-      const r0 = { grantId: args.grantId, pub: mem.operatorKey().toPublicKey().toString(), ts: Date.now() }
-      const { sig } = signRevocation(mem.operatorKey(), r0)
-      const r = await postJson(`${rv}/delegation/revoke`, { ...r0, sig }, 15_000)
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || (j as any)?.ok !== true) throw new Error(`revoke: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
-      mem.budget?.revoke(String(args.grantId)) // N6 — revocation must also disable the budget ledger, not just the directory entry
-      return { ok: true, grantId: args.grantId }
-    }
-    case 'respond': {
-      // want → offer replyTo — the seller's half of the match: the wanter's
-      // own watch sees "an offer answering my want" on their next pull
-      if (typeof args?.wantPub !== 'string' || !args.wantPub) throw new Error('respond: wantPub required (from the want event)')
-      if (typeof args?.wantId !== 'string' || !args.wantId) throw new Error('respond: wantId required — answer an exact want, not a publisher')
-      if (typeof args?.taskHash !== 'string' || !/^[0-9a-f]{64}$/i.test(args.taskHash)) throw new Error('respond: taskHash required (the want\'s signed task commitment)')
-      if (!Number.isSafeInteger(Number(args?.wantRevision)) || Number(args.wantRevision) < 1) throw new Error('respond: wantRevision required — offers bind one want revision')
-      const a = { ...args, replyTo: args.wantPub }
-      delete a.wantPub
-      const { signOffer } = await import('@nektar/overlay')
-      const m = await mem.shardManifest(String(a.shard)).catch(() => undefined)
-      const priceSats = Math.max(0, Math.floor(Number(a.priceSats ?? 0)))
-      let quote: Record<string, unknown> | undefined
-      if (a.offer !== undefined) {
-        const { publicSaleQuote, saleQuoteWire, verifyOfferSig } = await import('@nektar/identity')
-        const q = publicSaleQuote(a.offer as Parameters<typeof publicSaleQuote>[0])
-        if (!verifyOfferSig(q, String(a.wantPub), String(a.leaf ?? ''))) throw new Error('respond: offerSig does not verify — refusing to publish a doctored quote')
-        if (Number(q.cfg.price) !== priceSats) throw new Error(`respond: outer priceSats ${priceSats} != quote price ${q.cfg.price}`)
-        if (q.sellerPub !== mem.operatorKey().toPublicKey().toString()) throw new Error('respond: quote sellerPub is not this instance — only the seller may list it')
-        quote = saleQuoteWire(q)
-      }
-      const fields = {
-        shard: String(a.shard), seq: Number(a.seq),
-        ...(m ? { shardId: m.shardId, domains: m.domains } : { domains: (a.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32) }),
-        ...(a.leaf ? { leaf: String(a.leaf) } : {}), ...(a.hdp ? { hdp: String(a.hdp) } : {}), ...(a.batchR ? { batchR: String(a.batchR) } : {}),
-        priceSats,
-        ...(quote !== undefined ? { offer: quote } : {}),
-        wantId: String(a.wantId), taskHash: String(a.taskHash), wantRevision: Number(a.wantRevision),
-        buyerPub: String(a.replyTo),
-        ...(a.offerId !== undefined ? { offerId: String(a.offerId) } : {}),
-        ...(a.revision !== undefined ? { revision: Number(a.revision) } : {}),
-        ...(a.previousHash !== undefined ? { previousHash: String(a.previousHash) } : {}),
-        replyTo: a.wantPub ?? a.replyTo,
-        ts: Date.now(), ...(a.exp !== undefined ? { exp: Number(a.exp) } : {}),
-        net: process.env.NEKTAR_NETWORK ?? 'ttn',
-        ...(await mem.tipRef().catch(() => undefined) ?? {})
-      }
-      if (!fields.domains.length) throw new Error('respond: no domains — describeShard first or pass {domains}')
-      const signed = signOffer(mem.operatorKey(), fields)
-      const rv = String(a.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await postFanout(rv, '/offer', signed)
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || (j as any)?.ok !== true) throw new Error(`respond: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
-      return { ok: true, pub: (j as any).pub, offer: signed.offer }
-    }
-    case 'reputation': {
-      const { signReputation } = await import('@nektar/overlay')
-      const fields = await mem.reputationCard()
-      const signed = signReputation(mem.operatorKey(), fields)
-      if (args?.publish !== true) return { card: signed.card, sig: signed.sig }
-      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await postJson(`${rv}/reputation`, signed, 15_000)
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || (j as any)?.ok !== true) throw new Error(`reputation: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
-      return { ok: true, pub: (j as any).pub, card: signed.card }
-    }
-    case 'verifyReputation': {
-      // neutral recompute: rebuild the card's vectors from the seller's own
-      // committed records and diff — the card is a claim until recomputed
-      const { reputationEntriesFromRecords } = await import('./memory.js')
-      let card = args?.card as { pub?: string, entries?: Array<{ domain: string, receipts: number, verifiedCites: number, settledSats: number, settlements: number }> } | undefined
-      if (!card && typeof args?.pub === 'string') {
-        const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-        const r = await fetch(`${rv}/reputation?pub=${encodeURIComponent(args.pub)}`, { signal: AbortSignal.timeout(15_000) })
-        const j = await r.json().catch(() => ({})) as { reputations?: Array<{ card: typeof card }> }
-        card = j.reputations?.[0]?.card
-        if (!card) throw new Error(`verifyReputation: no card for pub ${args.pub.slice(0, 12)}…`)
-      }
-      if (!card?.entries) throw new Error('verifyReputation: card required (or pub+rendezvousUrl to fetch)')
-      const receiptsPack = args?.receiptsPack as { records?: Array<{ data: string }> } | undefined
-      if (!receiptsPack?.records?.length) throw new Error('verifyReputation: receiptsPack (seller\'s exported __receipts__) required')
-      const shardDomains = new Map<string, string[]>()
-      const catalogPack = args?.catalogPack as { records?: Array<{ data: string }> } | undefined
-      for (const rec of catalogPack?.records ?? []) {
-        try { const m = JSON.parse(rec.data); if (m?.type === 'shard-manifest' && Array.isArray(m.domains)) shardDomains.set(String(m.shard), m.domains.map((d: string) => String(d).toLowerCase())) } catch { /* skip */ }
-      }
-      const recomputed = reputationEntriesFromRecords(receiptsPack.records, shardDomains)
-      const diffs: Array<{ domain: string, claimed: Record<string, number>, recomputed: Record<string, number> }> = []
-      const recMap = new Map([...recomputed.values()].map(e => [e.domain, e]))
-      for (const e of card.entries) {
-        const r = recMap.get(e.domain)
-        const claimed = { receipts: e.receipts, verifiedCites: e.verifiedCites, settledSats: e.settledSats, settlements: e.settlements }
-        const got = r ? { receipts: r.receipts, verifiedCites: r.verifiedCites, settledSats: r.settledSats, settlements: r.settlements } : { receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 }
-        if (JSON.stringify(claimed) !== JSON.stringify(got)) diffs.push({ domain: e.domain, claimed, recomputed: got })
-        recMap.delete(e.domain)
-      }
-      for (const e of recMap.values()) diffs.push({ domain: e.domain, claimed: { receipts: 0, verifiedCites: 0, settledSats: 0, settlements: 0 }, recomputed: { receipts: e.receipts, verifiedCites: e.verifiedCites, settledSats: e.settledSats, settlements: e.settlements } })
-      return { ok: diffs.length === 0, pub: card.pub, checked: card.entries.length, diffs }
-    }
-    case 'publishSettlement': {
-      const { signSettlement } = await import('@nektar/overlay')
-      const fields = {
-        invoiceId: String(args.invoiceId), tool: String(args.tool), sats: Math.max(0, Math.floor(Number(args.sats))),
-        txid: String(args.txid), domains: (args.domains ?? []).map((d: string) => String(d).toLowerCase()).slice(0, 32), ts: Date.now()
-      }
-      const signed = signSettlement(mem.operatorKey(), fields)
-      const rv = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const r = await postJson(`${rv}/settlement`, signed, 15_000)
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || (j as any)?.ok !== true) throw new Error(`publishSettlement: rendezvous rejected — ${JSON.stringify(j).slice(0, 200)}`)
-      return { ok: true, pub: (j as any).pub, ad: signed.ad }
-    }
-    case 'watch': {
-      const base = String(args?.rendezvousUrl ?? process.env.NEKTAR_OVERLAY_URL ?? 'http://localhost:8090').replace(/\/+$/, '')
-      const qs = new URLSearchParams()
-      if (args?.since !== undefined) qs.set('since', String(args.since))
-      else qs.set('since', '0') // default: replay the current log from the start
-      if (Array.isArray(args?.domains) && args.domains.length) qs.set('domains', args.domains.join(','))
-      if (typeof args?.kind === 'string') qs.set('kind', args.kind)
-      if (args?.wait !== undefined) qs.set('wait', String(Math.min(Number(args.wait), 30_000)))
-      const r = await fetch(`${base}/events?${qs}`, { signal: AbortSignal.timeout(Number(qs.get('wait')) + 20_000) })
-      if (!r.ok) throw new Error(`watch: rendezvous ${base}/events → ${r.status}`)
-      const out = await r.json()
-      return { rendezvous: base, ...out, nextCall: { since: out.cursor } }
     }
     default:
       throw new Error(`unknown tool ${name}`)

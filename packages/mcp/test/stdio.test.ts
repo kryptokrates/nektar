@@ -10,14 +10,14 @@ const text = (r: unknown) => JSON.parse(((r as { content: Array<{ text: string }
 
 test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 30_000 }, async () => {
   const bin = fileURLToPath(new URL('../src/bin.js', import.meta.url))
-  const transport = new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env as Record<string, string>, NEKTAR_NETWORK: 'mock', NEKTAR_MODEL_ID: 'stdio-test', NEKTAR_DEMO_UTXOS: '20', NEKTAR_BATCH: '2' }, stderr: 'ignore' })
+  const transport = new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env as Record<string, string>, NEKTAR_NETWORK: 'mock', NEKTAR_MODEL_ID: 'stdio-test', NEKTAR_DEMO_UTXOS: '20', NEKTAR_BATCH: '2', NEKTAR_TOOL_PROFILE: 'operator', NEKTAR_PAID_DISCLOSURE: '1' }, stderr: 'ignore' })
   const client = new Client({ name: 'nektar-test', version: '1.0.0' })
   await client.connect(transport)
   try {
     assert.equal(client.getServerVersion()?.name, 'nektar')
     assert.match(client.getInstructions() ?? '', /recall/)
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 61)
+    assert.equal(tools.length, 50)
     const by = new Map(tools.map(t => [t.name, t]))
     assert.equal(by.get('recall')!.annotations?.readOnlyHint, true)
     assert.equal(by.get('revoke')!.annotations?.destructiveHint, true)

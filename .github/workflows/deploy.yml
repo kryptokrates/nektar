@@ -85,8 +85,8 @@ jobs:
             printf "%s\n" "[Unit]" "Description=nektar STARK prover HTTP shim" "After=network.target docker.service" "Requires=docker.service" "" "[Service]" "EnvironmentFile=/etc/nektar-prover.env" "WorkingDirectory=/opt/nektar/tools/stark" "ExecStart=/usr/local/bin/node prover-server.mjs" "Restart=always" "RestartSec=5" "" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/nektar-prover.service
             systemctl daemon-reload
             systemctl enable --now nektar-prover
-            systemctl restart nektar-http nektar-rendezvous nektar-watch || {
-              for s in nektar-http nektar-rendezvous nektar-watch; do
+            systemctl restart nektar-http nektar-watch || {
+              for s in nektar-http nektar-watch; do
                 echo "=== unit $s ==="
                 cat "/etc/systemd/system/$s.service" || true
                 echo "=== status $s ==="
@@ -101,7 +101,7 @@ jobs:
               exit 1
             }
             sleep 3
-            systemctl is-active nektar-http nektar-rendezvous nektar-watch nektar-prover
+            systemctl is-active nektar-http nektar-watch nektar-prover
             echo "=== bind check ==="
             ss -tlnp | grep -E "node|MainThread|:808" || true
             echo "=== env var names (values hidden) ==="

@@ -20,7 +20,7 @@ const envPath = join(root, '.env')
 const KNOWN = new Set([
   'NEKTAR_NETWORK', 'NEKTAR_DATA_DIR', 'NEKTAR_KEY_PASSPHRASE', 'NEKTAR_KEY_PASSPHRASE_FILE',
   'NEKTAR_FUND_WIF', 'NEKTAR_FUND_WIF_FILE', 'NEKTAR_REGTEST_WIF', 'NEKTAR_MAINNET_CONFIRM',
-  'NEKTAR_OVERLAY_URL', 'NEKTAR_VERIFY_BASE', 'NEKTAR_HTTP_PORT', 'NEKTAR_HTTP_HOST', 'NEKTAR_HTTP_TOKEN',
+  'NEKTAR_VERIFY_BASE', 'NEKTAR_HTTP_PORT', 'NEKTAR_HTTP_HOST', 'NEKTAR_HTTP_TOKEN',
   'NEKTAR_MODEL_ID', 'NEKTAR_PAYMENTS', 'NEKTAR_OPERATOR_WALLET', 'NEKTAR_PACK_SHARE',
   'NEKTAR_RPC_URL', 'NEKTAR_RPC_USER', 'NEKTAR_RPC_PASS', 'NEKTAR_PROPAGATION_URL', 'NEKTAR_ASSET_URL',
   'NEKTAR_BROADCASTER_URL', 'NEKTAR_BROADCASTER_API_KEY', 'NEKTAR_ARC_URL', 'NEKTAR_ARC_API_KEY', // ARC_* = deprecated aliases
@@ -34,7 +34,7 @@ const KNOWN = new Set([
   'NEKTAR_STARK_PROVER', 'NEKTAR_STARK_IMAGE', 'NEKTAR_PAID_DISCLOSURE', 'NEKTAR_ACCESS_LOG',
   'NEKTAR_HETZNER_TOKEN', 'NEKTAR_DEMO_PORT',
   'NEKTAR_AUTORESPOND', 'NEKTAR_AUTORESPOND_PRICE_SATS', 'NEKTAR_AUTORESPOND_DOMAINS',
-  'NEKTAR_AUTOMATION', 'NEKTAR_AUTOMATION_INTERVAL_MS', 'NEKTAR_MAILBOX_URL', 'NEKTAR_OVERLAY_TOKEN', 'NEKTAR_HTTP_TOKEN_FILE',
+  'NEKTAR_AUTOMATION', 'NEKTAR_AUTOMATION_INTERVAL_MS', 'NEKTAR_HTTP_TOKEN_FILE',
   'NEKTAR_AI_BASE_URL', 'NEKTAR_AI_MODEL', 'NEKTAR_AI_PROVIDER', 'NEKTAR_AI_EGRESS', 'NEKTAR_AI_API_KEY', 'NEKTAR_AI_API_KEY_FILE'
 ])
 const SECRET = /WIF|PASS|KEY|TOKEN|SECRET/i
@@ -100,7 +100,6 @@ switch (cmd) {
     }
     if (net === 'ttn') get('NEKTAR_KEY_PASSPHRASE', env) ? ok('key passphrase') : warn('ttn: NEKTAR_KEY_PASSPHRASE recommended')
     if (net === 'regtest') (get('NEKTAR_FUND_WIF', env) ?? get('NEKTAR_REGTEST_WIF', env)) && get('NEKTAR_RPC_PASS', env) ? ok('regtest secrets') : warn('regtest needs NEKTAR_FUND_WIF/NEKTAR_REGTEST_WIF + NEKTAR_RPC_PASS')
-    if (net !== 'mock') get('NEKTAR_OVERLAY_URL', env) ? ok(`rendezvous ${get('NEKTAR_OVERLAY_URL', env)}`) : warn('live network without NEKTAR_OVERLAY_URL — no discovery; agents cannot find your offers')
     const port = get('NEKTAR_HTTP_PORT', env)
     if (port !== undefined) (/^\d+$/.test(port) && Number(port) < 65536 ? ok(`HTTP :${port}`) : warn(`NEKTAR_HTTP_PORT=${port} is not a valid port`))
     else if (net !== 'mock') warn('no NEKTAR_HTTP_PORT — the instance serves MCP stdio only; agents cannot reach it over HTTP')

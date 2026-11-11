@@ -145,31 +145,9 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
         const cat = await mem.shardCatalog().catch(() => [] as Array<{ shard: string, domains: string[], offers?: Array<{ kind: string, priceSats: number }> }>)
         const marketRows = cat.map(m => `<div class="row"><span><b>${esc(m.shard)}</b></span><span class="dim">${esc(m.domains.join(', '))}</span><span>${esc(m.offers?.map(o => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? '')}</span></div>`).join('')
         const dataDir = (mem as unknown as { opts?: { dataDir?: string } }).opts?.dataDir ?? '.nektar'
-        let autoLine = ''
-        try {
-          const { readFileSync, existsSync } = await import('node:fs')
-          const { join } = await import('node:path')
-          const st = join(dataDir, 'autorespond.state.json')
-          if (existsSync(st)) { const s = JSON.parse(readFileSync(st, 'utf8')); autoLine = `<div class="row dim">autorespond — ${(s.responded ?? []).length} wants answered</div>` }
-        } catch {}
-        let fraudRows = ''
-        const rv = process.env.NEKTAR_OVERLAY_URL
-        if (rv) {
-          try {
-            const fr = await fetch(`${rv.replace(/\/+$/, '')}/events?kind=fraud&since=-1`, { signal: AbortSignal.timeout(5000) })
-            const fj = await fr.json() as { events?: Array<{ seq: number, pub: string }> }
-            if (fj.events?.length) fraudRows = fj.events.slice(-5).map(e => `<div class="row"><span class="warn">fraud</span> <span class="dim">#${e.seq} · ${esc(String(e.pub).slice(0, 16))}…</span></div>`).join('')
-          } catch {}
-        }
+        const fraudRows = ''
         // agents panel — this agent's declared identity + discovered peers
-        let agentsRows = `<div class="row"><span><b>${esc(process.env.NEKTAR_MODEL_ID ?? 'this agent')}</b></span><span class="dim">${esc(mem.operatorKey().toPublicKey().toString().slice(0, 16))}…</span></div>`
-        if (rv) {
-          try {
-            const dr = await fetch(`${rv.replace(/\/+$/, '')}/directory`, { signal: AbortSignal.timeout(5000) })
-            const dj = await dr.json() as { ads?: Array<{ ad?: { endpoint?: string } }> }
-            agentsRows += `<div class="row"><span class="dim">peers on rendezvous</span><span>${dj.ads?.length ?? 0} discovered</span></div>`
-          } catch {}
-        }
+        const agentsRows = `<div class="row"><span><b>${esc(process.env.NEKTAR_MODEL_ID ?? 'this agent')}</b></span><span class="dim">${esc(mem.operatorKey().toPublicKey().toString().slice(0, 16))}…</span></div>`
         const f = d.funding as Record<string, unknown>
         const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
         const up = process.uptime()
@@ -229,7 +207,7 @@ ${receiptRows || '<div class="empty">no receipts yet — your agent hasn’t ans
 <div class="card">
 <div class="top"><span class="label">Market</span><span class="tags">${cat.length} for sale</span></div>
 ${marketRows || '<div class="empty">nothing for sale yet — describeShard a public shard to list it</div>'}
-${autoLine}${fraudRows}
+${fraudRows}
 <div class="stream" data-ev="market"></div>
 </div>
 <div class="card">
@@ -256,7 +234,7 @@ const reload = async () => {
     if (m) document.getElementById('app').innerHTML = m[1]
   } catch {}
 }
-const PANEL = { remember: 'market', describeShard: 'market', publishOffer: 'market', publishWant: 'market', respond: 'market', groundedAnswer: 'receipts', commitReceipt: 'receipts', attestInference: 'receipts', recall: 'receipts', peerCall: 'money', payInvoice: 'money', payQuote: 'money', sale: 'money', claim: 'money', fundingImport: 'money', delegate: 'agents', revokeGrant: 'agents', attest: 'agents', importRecord: 'agents', importShard: 'agents' }
+const PANEL = { remember: 'market', describeShard: 'market', groundedAnswer: 'receipts', commitReceipt: 'receipts', attestInference: 'receipts', recall: 'receipts', payInvoice: 'money', payQuote: 'money', sale: 'money', claim: 'money', fundingImport: 'money', importRecord: 'agents', importShard: 'agents' }
 const stamp = e => '<div><span class="t">' + new Date().toLocaleTimeString() + '</span> ' + e + '</div>'
 const es = new EventSource('/dashboard/events')
 es.onmessage = m => {
@@ -424,7 +402,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
         const pub = await mem.publicShards()
         const catalog = await mem.shardCatalog().catch(() => [] as import('./memory.js').ShardManifest[])
         return send(200, {
-          v: 1, kind: 'nektar-discovery', verifyBase: `${base}/v1/verify`, logPublicKey: mem.logPublicKey(),
+          v: 1, kind: 'nektar-discovery', verifyBase: `${base}/v1/verify`, logPublicKey: mem.logPublicKey(), operatorPub: mem.operatorKey()?.toPublicKey().toString(),
           publicShards: await Promise.all(pub.map(async s => {
             const manifest = catalog.find(m => m.shard === s)
             const head = mem.tailLink(s)

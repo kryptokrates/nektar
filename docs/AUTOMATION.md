@@ -313,8 +313,8 @@ The trial report is written to `artifacts/model-trials/report.json`.
 
 ### Verification status
 
-- `pnpm -r build` and `pnpm -r test` pass (mcp 156 pass / 5 skipped; the two
-  former shardpack failures are fixed).
+- `pnpm -r build` and the package suites pass (chain 25, anchor 27, bstack 54,
+  mcp 199 pass / 5 skipped).
 - `pnpm scenarios -- --profile mock --scenario all` passes S1/S2/S3 as real OS
   processes; S1's sandbox step passes in a network-less container.
 - `pnpm audit` reports one high (zod <4.6.6 via the MCP SDK; a major upgrade is
@@ -327,6 +327,18 @@ The trial report is written to `artifacts/model-trials/report.json`.
   → proveStage → timeouts → anchored settle), fee vault, watcher fraud
   challenge, and the full MCP lane (anchor, STARK + replay/tamper negatives,
   clearance, restart persistence, claim deploy/settle, gated sale) all PASS.
+- **Regtest, current transport (Teranode, two reference hosts, four production
+  instances):** three sellers quoted 450/300/200 sats on different host
+  assignments, the buyer took the 200-sat offer, escrow
+  `8b598ef18ce3703c863dba576916a6fba87d6b26f1d359adcc1a45a6f8039582` (940
+  bytes, 1 sat fee) and disclosure
+  `f8073ab8a179551bb3d2f10ea1ca52ab490aac2dbaf8cc501acf50e51b17b13b` (1487
+  bytes, 8 sats fee) verified 33 s after the want, over 16 blocks. Each agent
+  paid 346 sats once for its four funding trees. Regtest coins, not money.
+- **Testnet, current transport:** not run. The two-host testnet pair and the
+  live header shim are up, but both public faucets refuse automated claims
+  (captcha), so no instance could be funded. The run below is the last funded
+  testnet result and used the old transport.
 - **Testnet (Hetzner, real rendezvous + mailbox, two live instances):** this ran on the previous rendezvous + mailbox transport, which has since been removed from the automation runtime. The
   autonomous purchase loop ran end to end — signed want admitted to the feed,
   seller matched a level-0 record, signed a buyer-bound offer, buyer selected,

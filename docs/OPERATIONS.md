@@ -120,24 +120,23 @@ setInterval(() => mem.flushDue(), 5_000)                          // interval/by
 
 Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sbom.cdx.json`. Cross-implementation vectors: `pnpm smt:vectors`, `pnpm curve:vectors`.
 
-## Rendezvous (public overlay node)
+## Market hosts (overlay)
 
-A public rendezvous (e.g. a small Hetzner VPS) is a thin, replaceable index — never a trust root. Run it stateful:
+Instances reach each other through overlay hosts listed in `NEKTAR_MARKET_HOSTS`. A host is a reference bstack overlay host running four modules: nektar (`tm_nektar_<network>_0..f`, `ls_nektar`), bbox (`tm_bbox_*`, `ls_bbox`), blogs (`tm_log_*`, `ls_log`) and bfinger (`tm_finger`, `ls_finger`). It is a replaceable relay, never a trust root: it admits only artifacts that verify (signature, network, lane, proven funding tree, expiry within 7 days) and every reader re-verifies what it returns. Hosts do not sync with each other; run at least two under different operators so withholding by one is detected.
 
-```sh
-NEKTAR_OVERLAY_HOST=0.0.0.0 NEKTAR_OVERLAY_PORT=8090 \
-  NEKTAR_OVERLAY_DIR=/var/lib/nektar-overlay \
-  NEKTAR_OVERLAY_TOKEN=<bearer> \
-  NEKTAR_NETWORK=ttn \
-  node packages/overlay/serve.mjs
-```
+| Compose file | Chain | Hosts |
+|---|---|---|
+| `deploy/bstack-sandbox/compose.yaml` | devchain (no real coin) | `127.0.0.1:18091` |
+| `deploy/bstack-sandbox/compose.regtest.yaml` | local Teranode regtest | `127.0.0.1:18191`, `:18192` |
+| `deploy/bstack-sandbox/compose.testnet.yaml` | public testnet headers via the header shim | `127.0.0.1:18291`, `:18292` |
 
-| Surface | Access |
-|---|---|
-| `GET /health`, `/directory`, `/events`, GASP routes | public read |
-| `POST /announce`, `/catalog`, `/want`, `/overlay/submit` | bearer token when `NEKTAR_OVERLAY_TOKEN` set (recommended on public binds) |
+Images are pinned by digest. Module bundles are build artifacts; see `deploy/bstack-sandbox/README.md`. Host state is MySQL; nothing a host stores is authoritative.
 
-`NEKTAR_OVERLAY_DIR` holds `overlay.sqlite` (ads, catalogs, wants, anchor heads, the event log) — back it up; losing it forfeits directory state and the event-cursor space consumers depend on. Announcements re-verify signatures on ingest, so a restored db contains only self-authenticating artifacts. The off-chain announce/catalog/want routes are the free path; the same artifacts are also submittable on-chain as `tm_presence` outputs, which propagate via GASP to any peer overlay hitting `/requestSyncResponse`.
+`pnpm scenarios:real` runs the three-seller deal (four production instances, two hosts) against the regtest pair and writes `summary.json` plus a per-agent `tx-log.jsonl` under `.state/run-real-*`.
+
+### Confirmations without polling
+
+Broadcasts go to the BSV Broadcaster (`NEKTAR_BROADCASTER_URL`). Status arrives by push: as a webhook at `/v1/broadcaster-callback` when `NEKTAR_CALLBACK_URL` is set (bearer `NEKTAR_CALLBACK_TOKEN`), or over the broadcaster's status stream when it is not — the instance then needs no inbound port. The stream reconnects with backoff and resumes from `<dataDir>/sse-cursor`; its token is generated once into `<dataDir>/callback-token`. Both paths share one handler: a status is a hint until its merkle path validates against the instance's own headers.
 
 ## Object storage (bstore)
 

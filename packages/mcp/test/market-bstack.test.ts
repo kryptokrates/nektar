@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory from 'knex'
@@ -407,4 +407,168 @@ test('bstack J: push — a mined funding tree is proven and a cycle runs without
     if (kx !== undefined) await kx.destroy()
     await h1.close()
   }
+})
+
+
+// recovery-note helpers: wipe the automation dir and reopen on the SAME memory
+const respawn = async (a: A, o: { dir: string, name: string, hosts: string[], logs: string[], chain: MockChain, opts?: MkOpts['opts'] }): Promise<A> => {
+  const rt = await openAutomation(a.mem, { network: NET, dataDir: join(o.dir, o.name), marketHosts: o.hosts, intervalMs: 0, call: (t2, args) => callTool(a.mem, t2, args), log: l => o.logs.push(`${o.name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts } })
+  return { mem: a.mem, rt, pub: a.pub, policyHash: await rt.store.approvePolicy(policyFor(a.pub), 'test:operator'), name: o.name }
+}
+const OFFICE = 'nektar_abcdefghij'
+const readBuyer = async (key: import('@bsv/sdk').PrivateKey, hosts: string[], chain: MockChain) => {
+  const { readBox } = await import('@nektar/bstack')
+  return await readBox({ key, hosts, office: OFFICE, tracker: trackerFor(chain) })
+}
+const noteItems = <T extends { body: object }>(items: T[]): T[] => items.filter(i => (i.body as { market?: { type?: string } }).market?.type === 'note')
+
+test('bstack K: buyer loses its database — the inbox note rebuilds the deal and the refund still fires', { timeout: 300_000 }, async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A; let b2!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir, opts: { refundBlocks: 40 } })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    await s.rt.stop() // seller dies before the accept is processed
+    s = undefined as never
+    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 80), 'never funded | ' + logs.slice(-20).join(' | '))
+    const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
+    const refundAfter = Number(((await buyerOp(b))!.data.escrow as { refundAfter: number }).refundAfter)
+    await drive([b.rt], chain, 2) // the note lands + is ingested but stays unacked
+    await b.rt.stop()
+    rmSync(join(dir, 'buyer'), { recursive: true, force: true })
+    b2 = await respawn(b, { dir, name: 'buyer', hosts: [h1.url, h2.url], logs, chain, opts: { refundBlocks: 40 } })
+    assert.equal(b2.policyHash, b.policyHash, 're-approved same policy file → same content hash')
+    assert.ok(await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'awaiting_disclosure', 60), 'op not restored | ' + logs.slice(-20).join(' | '))
+    const ops = (await b2.rt.store.operations({ role: 'buyer' })).filter(o => o.kind === 'purchase')
+    assert.equal(ops.length, 1, 'exactly one buyer operation after restore')
+    assert.equal(ops[0]!.data.restored, true)
+    assert.equal(ops[0]!.data.escrowTxid, escrowTxid, 'same escrow')
+    while ((await b2.mem.chainHeight()) < refundAfter) chain.mine(1) // refundAfter is on the engine's height scale
+    const wasRefunded = await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'refunded', 40)
+    if (!wasRefunded) console.log('KFAIL', JSON.stringify(await buyerOp(b2)), '\nLOGS', logs.slice(-25))
+    assert.ok(wasRefunded, 'never refunded | ' + logs.slice(-20).join(' | '))
+    const refunded = (await buyerOp(b2))!
+    const rtx = chain.getTx(refunded.data.refundTxid as string)
+    assert.equal(rtx?.inputs[0]?.sourceTXID, escrowTxid, 'refund tx spends the escrow output')
+    await drive([b2.rt], chain, 2)
+    assert.equal((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'note acked once the deal was finished')
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } try { await b2?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+test('bstack L: buyer loses its database — delivery still completes after restore', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A; let b2!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
+    const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
+    await b.rt.stop()
+    rmSync(join(dir, 'buyer'), { recursive: true, force: true })
+    b2 = await respawn(b, { dir, name: 'buyer', hosts: [h1.url, h2.url], logs, chain })
+    assert.ok(await until([b2.rt, s.rt], chain, async () => (await buyerOp(b2))?.state === 'disclosure_verified', 100), 'delivery never verified | ' + logs.slice(-20).join(' | '))
+    const bo = (await buyerOp(b2))!
+    assert.equal(bo.data.restored, true)
+    assert.equal(bo.data.escrowTxid, escrowTxid)
+    assert.equal((bo.data.result as { verified?: boolean }).verified, true, 'restored buyer verified the disclosure')
+    await drive([b2.rt, s.rt], chain, 2)
+    assert.equal((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'inbox empty after the restored deal finished')
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } try { await b2?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+test('bstack M: no loss — one operation; the note is listed while the deal is open and acked when it ends', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
+    const listed = await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)
+    assert.equal(noteItems(listed.items).length, 1, 'recovery note stays listed while the deal is open')
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'no deal | ' + logs.slice(-20).join(' | '))
+    const purchases = (await b.rt.store.operations({ role: 'buyer' })).filter(o => o.kind === 'purchase')
+    assert.equal(purchases.length, 1, 'the note did not duplicate the operation')
+    await drive([b.rt, s.rt], chain, 2)
+    assert.equal((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'note + delivered acked once settled')
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+test('bstack N: a note from a foreign key is ignored and still acked', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await drive([b.rt], chain, 12)
+    const { sendBox, MemoryTreeLedger, MemoryCarrierJournal, boxFundingLock, mintTree } = await import('@nektar/bstack')
+    const { PrivateKey, Transaction, P2PKH, MerklePath } = await import('@bsv/sdk')
+    const ghost = PrivateKey.fromRandom()
+    const parent = new Transaction(); parent.addOutput({ satoshis: 100_000, lockingScript: new P2PKH().lock(ghost.toPublicKey().toAddress()) })
+    const gTree = await mintTree({ key: ghost, funding: { tx: parent, vout: 0, satoshis: 100_000 }, n: 4, satsPerOutput: 1000, lock: await boxFundingLock(ghost) })
+    gTree.merklePath = new MerklePath(1, [[{ offset: 0, hash: '00'.repeat(32) }, { offset: 1, hash: gTree.id('hex'), txid: true }]])
+    const gl = new MemoryTreeLedger(); await gl.add(gTree, 4, 'bbox'); await gl.markProven(gTree.id('hex'))
+    const forged = { type: 'note', v: 1, wantId: 'cc'.repeat(32), offerId: 'sale#fake', policyHash: 'deadbeef', want: { want: { wantId: 'cc'.repeat(32), pub: b.pub, net: NET }, sig: '00' }, offer: { so: { offer: { wantId: 'cc'.repeat(32), buyerPub: b.pub }, sig: '00' } }, escrow: { refundAfter: 1 }, utxo: { txid: 'dd'.repeat(32), vout: 0, satoshis: 500, script: '76a914' + '00'.repeat(20) + '88ac' }, escrowAction: 'x', amounts: { purchaseSats: 200, feeSats: 10, lockedSats: 210 } }
+    await sendBox({ key: ghost, ledger: gl, journal: new MemoryCarrierJournal(), hosts: [h1.url, h2.url], office: OFFICE, to: b.pub, body: { market: forged } })
+    await drive([b.rt], chain, 4)
+    assert.equal((await b.rt.store.operations({ role: 'buyer' })).filter(o => o.kind === 'purchase').length, 0, 'forged note created no operation')
+    assert.equal((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'foreign envelope was acked anyway')
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
+})
+
+test('bstack O: the recovery note fits the 16 KiB box content limit', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { tracker: trackerFor(chain), office: OFFICE })
+  let b!: A; let s!: A
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 100), 'never funded | ' + logs.slice(-20).join(' | '))
+    const items = (await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items
+    const note = noteItems(items)[0]
+    assert.ok(note, 'note is listed')
+    const { Transaction } = await import('@bsv/sdk')
+    const noteTxidDisplay = note.txid.match(/../g)!.reverse().join('') // BoxItem.txid is hash byte order
+    let recordBytes = -1
+    for (const beef of h1.raw().concat(h2.raw())) {
+      try {
+        const tx = Transaction.fromAtomicBEEF(beef)
+        if (tx.id('hex') !== noteTxidDisplay) continue
+        recordBytes = Math.max(recordBytes, ...tx.outputs.map(o => o.lockingScript.toHex().length / 2))
+      } catch { /* not the note carrier */ }
+    }
+    assert.ok(recordBytes > 0, 'note carrier found on a host')
+    assert.ok(recordBytes < 16384, `sealed envelope record is ${recordBytes} bytes — under the 16 KiB limit`)
+    console.log(`    note: sealed envelope record is ${recordBytes} bytes (limit 16384)`)
+  } finally { try { await b?.rt.stop() } catch { /* already stopped */ } try { await s?.rt.stop() } catch { /* already stopped */ } await h1.close(); await h2.close() }
 })

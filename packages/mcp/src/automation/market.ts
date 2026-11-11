@@ -13,6 +13,9 @@ export type MarketMessage =
   | { type: 'quote', wantId: string, offerId: string, commitment: any, mode: string }
   | { type: 'accept', wantId: string, offerId: string, utxo: { txid: string, vout: number, satoshis: number, script: string }, depositorPkh: string, txHex?: string }
   | { type: 'delivered', wantId: string, offerId: string, txid: string, txHex: string }
+  // encrypted self-note the buyer keeps in its own inbox until the deal ends —
+  // enough to rebuild the operation after losing the automation database
+  | { type: 'note', v: 1, wantId: string, offerId: string, policyHash: string, want: SignedWant, offer: { so: SignedOffer, commitment?: any, mode?: string }, escrow: any, utxo: { txid: string, vout: number, satoshis: number, script: string }, escrowAction: string, amounts: { purchaseSats: number, feeSats: number, lockedSats: number } }
 
 export interface MarketTransport {
   publishWant: (sw: SignedWant) => Promise<void>
@@ -394,10 +397,54 @@ export class MarketEngine {
     await this.d.store.transition(op.operationId, op.revision, bad ? 'disputed' : 'disclosure_verified', { cause: bad ? 'payload_does_not_match_commitment' : 'disclosure_verified', data: { result }, dueHeight: null, evidence: { txid: m.txid, verified: claim.verified, authorVerified: claim.authorVerified, reason: claim.reason } })
   }
 
+  private noteFor (op: Operation, wantId: string, s: StoredOffer, escrow: any, utxo: any, escrowAction: string, amounts: { purchaseSats: number, feeSats: number, lockedSats: number }): Extract<MarketMessage, { type: 'note' }> {
+    return {
+      type: 'note', v: 1, wantId, offerId: s.so.offer.offerId, policyHash: op.policyHash,
+      want: op.data.want as SignedWant,
+      offer: { so: s.so, ...(s.commitment !== undefined ? { commitment: s.commitment } : {}), ...(s.mode !== undefined ? { mode: s.mode } : {}) },
+      escrow, utxo, escrowAction, amounts
+    }
+  }
+
+  /** the recovery note settles only when the buyer has nothing left to do on-chain */
+  async noteSettled (wantId: string): Promise<boolean> {
+    const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${wantId}`)
+    return op !== undefined && ['disclosure_verified', 'useful', 'not_useful', 'refunded', 'disputed'].includes(op.state)
+  }
+
+  /** a self-note rebuilds the operation after a database loss. Throwing keeps
+   *  the inbox item pending (escrow not observable yet → retried next tick). */
+  private async onNote (n: Extract<MarketMessage, { type: 'note' }>): Promise<void> {
+    const sw = n?.want
+    if (!sw?.want || !verifyWant(sw.want, sw.sig, { allowExpired: true })) return
+    if (sw.want.pub !== this.me || sw.want.net !== this.d.network || sw.want.wantId !== n.wantId) return
+    const so = n.offer?.so
+    if (!so?.offer || !verifyOffer(so.offer, so.sig, { allowExpired: true })) return
+    if (so.offer.wantId !== n.wantId || so.offer.buyerPub !== this.me || so.offer.offerId !== n.offerId) return
+    const tx = await this.d.fetchTx(n.utxo.txid)
+    const out = tx?.outputs[n.utxo.vout]
+    if (!tx || !out) throw new Error('recovery note: escrow not observable yet')
+    if (tx.id('hex') !== n.utxo.txid || out.lockingScript.toHex() !== n.utxo.script || out.satoshis !== n.utxo.satoshis) return
+    const dedupeKey = `buyer:${this.d.network}:${n.wantId}`
+    const key = `${so.offer.pub}:${so.offer.offerId}`
+    const { operation, created } = await this.d.store.createOperation({
+      role: 'buyer', kind: 'purchase', dedupeKey, policyHash: n.policyHash, network: this.d.network, state: 'published',
+      data: {
+        want: sw,
+        offers: { [key]: { so, ...(n.offer.commitment !== undefined ? { commitment: n.offer.commitment } : {}), ...(n.offer.mode !== undefined ? { mode: n.offer.mode } : {}) } },
+        selected: { key }, escrow: n.escrow, utxo: n.utxo, escrowTxid: n.utxo.txid, escrowAction: n.escrowAction, amounts: n.amounts, restored: true
+      }
+    })
+    if (!created) return
+    await this.d.store.transition(operation.operationId, operation.revision, 'awaiting_disclosure', { cause: 'restored_from_note', dueHeight: Number(n.escrow.refundAfter) })
+  }
+
   private async onMessage (from: string, m: MarketMessage): Promise<void> {
     if (m?.type === 'quote') return await this.onQuote(from, m)
     if (m?.type === 'accept') return await this.onAccept(from, m)
     if (m?.type === 'delivered') return await this.onDelivered(from, m)
+    // recovery notes are only ever handled when they came from our own key
+    if (m?.type === 'note' && from === this.me) return await this.onNote(m)
   }
 
   private async escalate (op: Operation, reason: string, actionDigest: string, maxExtraSats: number, evidence: unknown, state = 'escalated'): Promise<void> {
@@ -501,7 +548,10 @@ export class MarketEngine {
       const cur = (await this.d.store.operation(op.operationId))!
       await this.d.store.transition(cur.operationId, cur.revision, 'awaiting_disclosure', {
         cause: 'escrow_broadcast', data: { escrow: r.escrow, utxo: r.utxo, escrowTxid: r.txid }, dueHeight: Number(q.cfg.refundAfter),
-        outbox: [{ actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo: r.utxo, depositorPkh: r.escrow.depositorPkh, ...(escrowTx !== undefined ? { txHex: escrowTx.inputs.every(i => i.sourceTransaction !== undefined) ? Buffer.from(escrowTx.toEF()).toString('hex') : escrowTx.toHex() } : {}) } }]
+        outbox: [
+          { actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo: r.utxo, depositorPkh: r.escrow.depositorPkh, ...(escrowTx !== undefined ? { txHex: escrowTx.inputs.every(i => i.sourceTransaction !== undefined) ? Buffer.from(escrowTx.toEF()).toString('hex') : escrowTx.toHex() } : {}) } },
+          { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w.wantId, s, r.escrow, r.utxo, ctx.actionId, amounts) }
+        ]
       })
     } finally { this.inflight.delete(op.operationId) }
   }
@@ -532,9 +582,13 @@ export class MarketEngine {
             if (wtx) this.d.settleEscrow(Transaction.fromHex(wtx.rawHex))
             await this.d.store.commitBudget(op.data.escrowAction as string)
             const sel2 = op.data.selected as { key: string }
-            const so2 = (op.data.offers as Record<string, StoredOffer>)[sel2.key]!.so
+            const s2 = (op.data.offers as Record<string, StoredOffer>)[sel2.key]!
+            const so2 = s2.so
             const w2 = (op.data.want as SignedWant).want
-            await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', { cause: 'escrow_resumed_same_bytes', data: { escrow: pending.cfg, utxo: pending.utxo, escrowTxid: pending.utxo.txid }, dueHeight: Number(pending.cfg.refundAfter), outbox: [{ actionId: `${op.operationId}:accept`, kind: 'message', destination: so2.offer.pub, payload: { type: 'accept', wantId: w2.wantId, offerId: so2.offer.offerId, utxo: pending.utxo, depositorPkh: pending.cfg.depositorPkh, ...(wtx?.rawHex !== undefined ? { txHex: wtx.rawHex } : {}) } }] })
+            await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', { cause: 'escrow_resumed_same_bytes', data: { escrow: pending.cfg, utxo: pending.utxo, escrowTxid: pending.utxo.txid }, dueHeight: Number(pending.cfg.refundAfter), outbox: [
+              { actionId: `${op.operationId}:accept`, kind: 'message', destination: so2.offer.pub, payload: { type: 'accept', wantId: w2.wantId, offerId: so2.offer.offerId, utxo: pending.utxo, depositorPkh: pending.cfg.depositorPkh, ...(wtx?.rawHex !== undefined ? { txHex: wtx.rawHex } : {}) } },
+              { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w2.wantId, s2, pending.cfg, pending.utxo, op.data.escrowAction as string, op.data.amounts as { purchaseSats: number, feeSats: number, lockedSats: number }) }
+            ] })
             return
           }
         }

@@ -233,6 +233,11 @@ Honest boundaries:
 - Purchased patches run only in an isolated container (no network, no
   secrets, hidden tests outside the writable checkout). No container runtime →
   `BLOCKED`, never a host run.
+- A buyer that loses its automation database recovers escrowed purchases from
+  an encrypted note in its own bbox inbox (kept until the deal is finished, at
+  most 7 days) and can still refund or receive the disclosure. Policies,
+  budgets and operations that had not reached escrow are not recovered;
+  seller-side operations are not recovered.
 - Transport is bstack carriers (wants, offers) and bbox envelopes (quote,
   accept, delivered), submitted over HTTPS to every configured overlay host
   and verified locally on read. 1BSV multicast delivery is not used yet. Read

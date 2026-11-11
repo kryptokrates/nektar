@@ -80,12 +80,14 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     for (const h of r.unreachable) if (!downNow.has(h)) { downNow.add(h); log(`automation: unreachable ${h}`) }
     for (const h of [...downNow]) if (!r.unreachable.includes(h)) { downNow.delete(h); log(`automation: host back ${h}`) }
   }
-  let pendingAcks: Array<{ txid: string, commitment: string }> = []
+  let pendingAcks: Array<{ txid: string, commitment: string, from: string, msg: MarketMessage | undefined }> = []
   let lastAckSkipped = -1
   const msgs = cfg.messages ?? (lanes === undefined ? undefined : {
     send: async (to: string, msg: MarketMessage): Promise<void> => {
       try {
-        await lanes.mod.sendBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, office: cfg.boxOffice, to, body: { market: msg }, expiresAt: Math.floor(Date.now() / 1000) + 86400 })
+        // recovery notes live as long as a deal can — everything else 24h
+        const ttl = (msg as { type?: string }).type === 'note' ? 7 * 86400 : 86400
+        await lanes.mod.sendBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, office: cfg.boxOffice, to, body: { market: msg }, expiresAt: Math.floor(Date.now() / 1000) + ttl })
       } catch (e) { log(`automation: box: ${(e as Error).message}`); throw e }
     },
     collect: async (): Promise<Array<{ from: string, msg: MarketMessage }>> => {
@@ -93,20 +95,26 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
         const tracker = await mem.sdkTracker()
         const r = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker })
         laneNotes(r)
-        pendingAcks = r.items.map(i => ({ txid: i.txid, commitment: i.commitment }))
+        pendingAcks = r.items.map(i => ({ txid: i.txid, commitment: i.commitment, from: i.from, msg: (i.body as { market?: MarketMessage }).market }))
         const out: Array<{ from: string, msg: MarketMessage }> = []
-        for (const i of r.items) { const m = (i.body as { market?: MarketMessage }).market; if (m !== undefined && typeof m === 'object') out.push({ from: i.from, msg: m }) }
+        for (const p of pendingAcks) if (p.msg !== undefined && typeof p.msg === 'object') out.push({ from: p.from, msg: p.msg })
         return out
       } catch (e) { log(`automation: box: ${(e as Error).message}`); return [] }
     },
     ack: async (): Promise<void> => {
-      if (pendingAcks.length === 0) return
-      const items = pendingAcks
-      pendingAcks = []
+      const items: Array<{ txid: string, commitment: string }> = []
+      const held: typeof pendingAcks = []
+      for (const p of pendingAcks) {
+        // a recovery note from our own key stays listed until its deal is over
+        if (p.from === me && p.msg?.type === 'note' && typeof (p.msg as { wantId?: unknown }).wantId === 'string' && !(await engine.noteSettled((p.msg as { wantId: string }).wantId))) { held.push(p); continue }
+        items.push({ txid: p.txid, commitment: p.commitment })
+      }
+      pendingAcks = held
+      if (items.length === 0) return
       try {
         const r = await lanes.mod.ackBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, office: cfg.boxOffice, items })
         if (r.skipped > 0 && r.skipped !== lastAckSkipped) { lastAckSkipped = r.skipped; log(`automation: box ack: ${r.skipped} envelope(s) skipped — no bbox funding slot`) }
-      } catch (e) { pendingAcks = items.concat(pendingAcks); log(`automation: box ack: ${(e as Error).message}`) }
+      } catch (e) { pendingAcks = pendingAcks.concat(items.map(i => ({ ...i, from: '', msg: undefined }))); log(`automation: box ack: ${(e as Error).message}`) }
     }
   })
   const lanePoll = async (): Promise<void> => {
@@ -158,20 +166,33 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   const timer = cfg.intervalMs === 0 ? undefined : setInterval(() => { void cycle() }, cfg.intervalMs ?? 5000)
   timer?.unref()
   let stopped = false
+  const inflight = new Set<Promise<void>>()
   // push-driven progress: a verified tx proof (broadcaster callback or the
   // chain's own mined event) may make a funding tree provable and advance
   // completion_submitted → settled — run a cycle now, not at the next interval
   mem.onTxProof((txid, mp) => {
     if (stopped) return
-    void (async () => {
+    const work = (async () => {
       try {
-        if (lanes !== undefined && (await lanes.ledger.unproven()).some(u => u.txid === txid)) await lanes.ledger.markProven(txid, mp)
+        if (lanes !== undefined) {
+          const unproven = await lanes.ledger.unproven()
+          if (stopped) return
+          if (unproven.some(u => u.txid === txid)) await lanes.ledger.markProven(txid, mp)
+        }
       } catch (e) { log(`automation: txproof: ${(e as Error).message}`) }
       if (!stopped) await cycle().catch(e => log(`automation: ${(e as Error).message}`))
     })()
+    inflight.add(work)
+    void work.finally(() => { inflight.delete(work) })
   })
   return {
     store, engine, cycle,
-    stop: async () => { stopped = true; if (timer) clearInterval(timer); while (busy) await new Promise(r => setTimeout(r, 25)); await kx.destroy() }
+    stop: async () => {
+      stopped = true
+      if (timer) clearInterval(timer)
+      await Promise.allSettled([...inflight])
+      while (busy) await new Promise(r => setTimeout(r, 25))
+      await kx.destroy()
+    }
   }
 }

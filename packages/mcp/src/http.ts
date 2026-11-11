@@ -1,7 +1,7 @@
 // API-001: minimal versioned HTTP API (node:http, no framework). Same tools
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
 import { createServer, type IncomingMessage, type Server } from 'node:http'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { MerklePath } from '@bsv/sdk'
 import type { NektarMemory } from './memory.js'
 import { TOOLS, visibleTools, callTool } from './server.js'
@@ -363,7 +363,11 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           // NEKTAR_CALLBACK_TOKEN was sent as X-CallbackToken; BSV Broadcaster
           // delivers it on the webhook as Authorization: Bearer (openapi)
           const cbTok = process.env.NEKTAR_CALLBACK_TOKEN
-          if (cbTok && req.headers.authorization !== `Bearer ${cbTok}`) return send(401, { error: 'bad callback token' })
+          if (cbTok) {
+            const expected = Buffer.from(`Bearer ${cbTok}`)
+            const given = Buffer.from(String(req.headers.authorization ?? ''))
+            if (given.length !== expected.length || !timingSafeEqual(given, expected)) return send(401, { error: 'bad callback token' })
+          }
           const j = (await body(req)) as any
           const status = String(j.txStatus ?? '?')
           mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: status.toLowerCase() }, 1, 'broadcaster status callbacks received')
@@ -381,7 +385,12 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
                   if (await cand.verify(j.txid, await mem.sdkTracker())) mp = cand
                 } catch { /* unusable — fetch evidence instead */ }
               }
-              mp ??= await (mem as any).chain?.merklePathOf?.(j.txid)
+              if (mp === undefined) {
+                const cand2 = await (mem as any).chain?.merklePathOf?.(j.txid)
+                // the fetched path must verify against our own tracker too —
+                // the broadcaster's word alone is a hint, never a proof
+                if (cand2 !== undefined) { try { if (await cand2.verify(j.txid, await mem.sdkTracker())) mp = cand2 } catch { /* unverifiable */ } }
+              }
               if (mp) mem.deliverTxProof(j.txid, mp)
               // no fallback: a callback without retrievable evidence is a hint, not a confirmation
             } catch { /* evidence fetch failed — leave unconfirmed, reconcile later */ }

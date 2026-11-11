@@ -46,7 +46,7 @@ const mkagent = async (name: string, o: MkOpts): Promise<A> => {
   for (const t of funder.parents) o.chain.registerParent(t)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
   const pub = mem.operatorKey().toPublicKey().toString()
-  const rt = await openAutomation(mem, { network: NET, dataDir: join(o.dir, name), rendezvousUrls: [], marketHosts: o.hosts, intervalMs: 0, call: (t2, a) => callTool(mem, t2, a), log: l => o.logs.push(`${name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, messages: o.msgs?.for(pub), opts: o.opts })
+  const rt = await openAutomation(mem, { network: NET, dataDir: join(o.dir, name), marketHosts: o.hosts, intervalMs: 0, call: (t2, a) => callTool(mem, t2, a), log: l => o.logs.push(`${name}:${l}`), ai: new ScriptedExecutor(), now: () => clock, messages: o.msgs?.for(pub), opts: o.opts })
   return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name }
 }
 const sellerize = async (s: A, price: number) => {
@@ -178,7 +178,7 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
     for (const t of funderB.parents) chain.registerParent(t)
     const memB = new NektarMemory(chain, funderB, funderB.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
     const pubB = memB.operatorKey().toPublicKey().toString()
-    const open = async () => await openAutomation(memB, { network: NET, dataDir: join(dir, 'buyer'), rendezvousUrls: [], marketHosts: [h1.url], intervalMs: 0, call: (t2, a) => callTool(memB, t2, a), log: l => logs.push('B:' + l), ai: new ScriptedExecutor(), now: () => clock, messages: msgs.for(pubB) })
+    const open = async () => await openAutomation(memB, { network: NET, dataDir: join(dir, 'buyer'), marketHosts: [h1.url], intervalMs: 0, call: (t2, a) => callTool(memB, t2, a), log: l => logs.push('B:' + l), ai: new ScriptedExecutor(), now: () => clock, messages: msgs.for(pubB) })
     let bRt = await open()
     const policyHash = await bRt.store.approvePolicy(policyFor(pubB), 'test:operator')
     const s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir })

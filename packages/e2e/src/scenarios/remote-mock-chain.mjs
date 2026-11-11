@@ -11,7 +11,7 @@ export class RemoteMockChain {
   async headerAtHeight (h) { return (await this.#get(`/header?h=${h}`)).header ?? undefined }
   async isValidRootForHeight (root, height) { return (await this.#post('/root', { root, height })).ok }
   async merklePathOf (txid) { const p = (await this.#get(`/merkle?txid=${txid}`)).path; return p ? new MerklePath(p.blockHeight, p.path) : undefined }
-  async getTx (txid) { const h = (await this.#get(`/tx?txid=${txid}`)).txHex; return h ? Transaction.fromHex(h) : undefined }
+  async getTx (txid) { const h = (await this.#get(`/tx?txid=${txid}`)).txHex; if (!h) return undefined; const tx = Transaction.fromHex(h); const p = await this.merklePathOf(txid); if (p) tx.merklePath = p; return tx }
   async registerParent (tx) { await this.#post('/register-parent', { hex: tx.toHex() }) }
   async mine (count = 1) { return await this.#post('/mine', { count }) }
 }

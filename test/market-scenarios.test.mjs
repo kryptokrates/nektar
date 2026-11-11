@@ -1,12 +1,14 @@
 // Autonomous marketplace scenarios — mock-chain lane, real everything else:
-// two federated rendezvous processes, encrypted mailbox delivery, the
-// production automation runtime per agent, operator CLI for policy approval,
-// independent evidence verification. A shared MockChain stands in for the
-// network (real covenant script evaluation, no funds). Honest labels: this
-// lane proves the workflow; public-network confirmation is a separate lane.
+// two independent in-process overlay hosts (test double running the real
+// nektar module and the real bbox admission codec), bstack carriers for
+// wants/offers, bbox envelopes for quote/accept/delivered, the production
+// automation runtime per agent, operator CLI for policy approval, independent
+// evidence verification. A shared MockChain stands in for the network (real
+// covenant script evaluation, no funds). Honest labels: this lane proves the
+// workflow; public-network confirmation is a separate lane.
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn, execFileSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -23,28 +25,13 @@ import { parsePatch, evaluatePatch } from '../packages/mcp/dist/src/automation/s
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const tmp = mkdtempSync(join(tmpdir(), 'nektar-scenarios-'))
-const PORT_A = 18411, PORT_B = 18412
-const RV_A = `http://127.0.0.1:${PORT_A}`, RV_B = `http://127.0.0.1:${PORT_B}`
-const procs = []
+let H1, H2
 const FINDING = 'libfoo 3.0 renamed connect() to open(); callers must switch.\n```nektar-patch\n{"edits":[{"file":"src/app.js","find":"libfoo.connect(","replace":"libfoo.open("}]}\n```'
 
 const chain = new MockChain(); chain.verifyScripts = true
 const agents = []
 
-function bootRv (port, peers) {
-  const dir = join(tmp, `rv-${port}`)
-  const p = spawn(process.execPath, ['packages/overlay/serve.mjs'], {
-    cwd: root, stdio: 'ignore',
-    env: { ...process.env, NEKTAR_OVERLAY_HOST: '127.0.0.1', NEKTAR_OVERLAY_PORT: String(port), NEKTAR_OVERLAY_DIR: dir, NEKTAR_RV_URL: `http://127.0.0.1:${port}`, NEKTAR_PEERS: peers, NEKTAR_NETWORK: 'mock', NEKTAR_OVERLAY_STRICT_NET: '0' }
-  })
-  procs.push(p)
-}
-async function up (url) {
-  for (let i = 0; i < 100; i++) { try { if ((await fetch(`${url}/health`, { signal: AbortSignal.timeout(500) })).ok) return } catch {} await delay(200) }
-  throw new Error(`rendezvous ${url} did not start`)
-}
-
-async function agent (name, rv, { seller, publicDisclosure = false, bond } = {}) {
+async function agent (name, hosts, { seller, publicDisclosure = false, bond } = {}) {
   const funder = new MockFunder(); funder.topup(30)
   for (const t of funder.parents) chain.registerParent(t)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'scripted', network: 'mock', ...(bond ? { bond } : {}) })
@@ -59,7 +46,7 @@ async function agent (name, rv, { seller, publicDisclosure = false, bond } = {})
     ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
     sandbox: { mode: 'sandbox-only' }
   }
-  const au = await openAutomation(mem, { network: 'mock', dataDir, rendezvousUrls: [rv], intervalMs: 0, call: (tool, args) => callTool(mem, tool, args) })
+  const au = await openAutomation(mem, { network: 'mock', dataDir, marketHosts: hosts, intervalMs: 0, opts: { refundBlocks: 10000, offerTtlBlocks: 10000 }, call: (tool, args) => callTool(mem, tool, args) })
   mem.automation = au
   // the human step, once: the operator approves the policy from the CLI
   const file = join(dataDir, 'policy.json'); writeFileSync(file, JSON.stringify(policy))
@@ -80,6 +67,7 @@ async function until (who, fn, ms = 90_000) {
   const end = Date.now() + ms
   for (;;) {
     for (const a of who) await a.au.cycle()
+    chain.mine(1)
     const v = await fn()
     if (v) return v
     if (Date.now() > end) throw new Error('scenario timed out')
@@ -87,22 +75,25 @@ async function until (who, fn, ms = 90_000) {
   }
 }
 
+const hostTracker = { isValidRootForHeight: (r, h) => chain.isValidRootForHeight(r, h), currentHeight: () => chain.currentHeight() }
 before(async () => {
-  bootRv(PORT_A, RV_B); bootRv(PORT_B, RV_A)
-  await up(RV_A); await up(RV_B)
+  const { minihost } = await import('../packages/bstack/dist/src/testing.js')
+  const { DEFAULT_OFFICE } = await import('../packages/bstack/dist/src/index.js')
+  H1 = await minihost(['mock'], { tracker: hostTracker, office: DEFAULT_OFFICE })
+  H2 = await minihost(['mock'], { tracker: hostTracker, office: DEFAULT_OFFICE })
 })
 after(async () => {
   for (const a of agents) await a.au.stop().catch(() => {})
-  for (const p of procs) try { p.kill() } catch {}
+  if (H1) await H1.close(); if (H2) await H2.close()
   await delay(300)
   try { rmSync(tmp, { recursive: true, force: true }) } catch {}
 })
 
 test('S1: competing sellers across two federated hosts → autonomous purchase → verified disclosure → sandboxed fix', async (t) => {
-  const alice = await agent('alice', RV_A, { seller: 450 })
-  const ben = await agent('ben', RV_B, { seller: 300 })
-  const cara = await agent('cara', RV_B, { seller: 200 })
-  const bob = await agent('bob', RV_A)
+  const alice = await agent('alice', [H1.url], { seller: 450 })
+  const ben = await agent('ben', [H2.url], { seller: 300 })
+  const cara = await agent('cara', [H2.url], { seller: 200 })
+  const bob = await agent('bob', [H1.url, H2.url])
   const all = [alice, ben, cara, bob]
   const { operationId, wantId } = await callTool(bob.mem, 'automation', { op: 'publishWant', policyHash: bob.policyHash, domains: ['libfoo'], question: 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function', maxSats: 500 })
   // nothing below is a marketplace tool call — the runtimes do the rest
@@ -116,10 +107,10 @@ test('S1: competing sellers across two federated hosts → autonomous purchase �
   assert.equal(op.data.result.verified, true, 'payload hashes to the anchored leaf the seller committed to')
   // public feeds on both hosts never carried the reveal credential
   const sealed = (await cara.au.store.operations({ role: 'seller' })).find(o => o.kind === 'sale').data.offer.wrapped
-  for (const rv of [RV_A, RV_B]) {
-    const feed = JSON.stringify(await (await fetch(`${rv}/events?since=-1&limit=1000`)).json())
-    assert.ok(feed.includes(wantId), `${rv} carries the want`)
-    assert.ok(!feed.includes(sealed), `${rv} never saw the reveal credential`)
+  for (const h of [H1, H2]) {
+    const raw = Buffer.concat(h.raw().map(b => Buffer.from(b)))
+    assert.ok(raw.includes(wantId), `${h.url} carries the want`)
+    assert.ok(!raw.includes(sealed), `${h.url} never saw the reveal credential`)
   }
   // budget: 200 purchase, nothing left locked, no human prompt
   const budget = await callTool(bob.mem, 'automation', { op: 'budget', policyHash: bob.policyHash })
@@ -142,16 +133,19 @@ test('S1: competing sellers across two federated hosts → autonomous purchase �
 })
 
 test('S3: one buyer pays for a public disclosure; a third agent reads and verifies it for free', async () => {
-  const pat = await agent('pat', RV_B, { seller: 150, publicDisclosure: true })
-  const dee = await agent('dee', RV_A)
-  const reader = await agent('reader', RV_A)
+  const pat = await agent('pat', [H2.url], { seller: 150, publicDisclosure: true })
+  const dee = await agent('dee', [H1.url, H2.url])
+  const reader = await agent('reader', [H1.url, H2.url])
   const { operationId } = await callTool(dee.mem, 'automation', { op: 'publishWant', policyHash: dee.policyHash, domains: ['libfoo'], question: 'libfoo 3.0 connect open rename', maxSats: 180 })
   const op = await until([pat, dee], async () => { const o = await stateOf(dee, operationId); return ['disclosure_verified', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed'].includes(o.state) ? o : undefined })
   assert.equal(op.state, 'disclosure_verified', op.lastError)
   assert.equal(op.data.selected.key.split(':')[0], pat.pub, 'only the offer priced under this want\'s ceiling qualified')
   // the reader never bought anything: it finds the public listing on its own host and reads the reveal from the chain
-  const listing = (await (await fetch(`${RV_A}/offers?domain=libfoo`)).json()).offers.find(o => o.offer.pub === pat.pub && o.offer.wantId === op.data.want.want.wantId)
-  assert.ok(listing, 'the public listing federated to the reader\'s host')
+  const { readOffers } = await import('../packages/bstack/dist/src/index.js')
+  // pat only submits to H2 — the reader queries every host it knows
+  const lres = await readOffers([H1.url, H2.url], { net: 'mock', wantId: op.data.want.want.wantId, buyerPub: dee.pub }, { tracker: hostTracker, net: 'mock' })
+  const listing = lres.items.find(i => i.payload.body.offer.pub === pat.pub)?.payload.body
+  assert.ok(listing, 'the public listing is readable from the overlay hosts')
   const reveal = await reader.mem.fetchTx(op.data.result.disclosureTxid)
   const read = await callTool(reader.mem, 'sale#claim', { txHex: reveal.toHex(), hWrapped: listing.offer.offer.cfg.hWrapped, offerMode: 'fragment', commitment: { leaf: listing.offer.leaf, hdp: listing.offer.hdp } })
   assert.equal(read.mode, 'public')
@@ -166,8 +160,8 @@ test('S3: one buyer pays for a public disclosure; a third agent reads and verifi
 })
 
 test('S2: operator goes dark after a checkpoint; an independent observer seizes the bond at the deadline', async () => {
-  const alice = await agent('alice2', RV_A, { bond: { epochBlocks: 4 } })
-  const observer = await agent('observer', RV_B)
+  const alice = await agent('alice2', [H1.url], { bond: { epochBlocks: 4 } })
+  const observer = await agent('observer', [H2.url])
   await alice.mem.bondDeploy(5000)
   const commit = await alice.mem.bondCommit('ab'.repeat(32))
   assert.equal(commit.n, 1n, 'a successful checkpoint precedes the outage')

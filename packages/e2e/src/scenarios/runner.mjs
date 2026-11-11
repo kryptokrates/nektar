@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // pnpm scenarios -- --profile mock --scenario all
-// Real OS processes for every actor: mock-chain hub, two federated rendezvous,
-// N agents with their own data dirs and HTTP APIs. The only marketplace calls
-// are the `automation` tool and the operator CLI. No production resources.
+// Real OS processes for every actor: mock-chain hub, two independent overlay
+// hosts (test double running the real nektar module and the real bbox
+// admission codec), N agents with their own data dirs and HTTP APIs. Wants and
+// offers travel as bstack carriers; quote/accept/delivered as bbox envelopes.
+// The only marketplace calls are the `automation` tool and the operator CLI.
+// No production resources.
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -51,22 +54,23 @@ const tool = async (a, name, args) => {
   if (!r.ok) throw new Error(`${a.name} ${name}: ${j.error ?? r.status}`)
   return j
 }
-const rvPort = n => 18500 + n
+const hostPort = n => 18500 + n
 const agentPort = n => 18600 + n
 
-async function bootRv (n, peers) {
-  const url = `http://127.0.0.1:${rvPort(n)}`
-  spawnNode('packages/overlay/serve.mjs', { NEKTAR_OVERLAY_HOST: '127.0.0.1', NEKTAR_OVERLAY_PORT: String(rvPort(n)), NEKTAR_OVERLAY_DIR: join(dir, `rv${n}`), NEKTAR_RV_URL: url, NEKTAR_PEERS: peers, NEKTAR_NETWORK: 'mock', NEKTAR_OVERLAY_STRICT_NET: '0' }, `rv${n}`)
-  await up(`${url}/health`)
-  return url
+async function bootHost (n) {
+  const url = `http://127.0.0.1:${hostPort(n)}`
+  spawnNode('packages/e2e/src/scenarios/market-host.mjs', { NEKTAR_CHAIN_HUB: hub.url, NEKTAR_HOST_PORT: String(hostPort(n)) }, `host${n}`)
+  // readiness: any HTTP response (even an error) to POST /lookup means the listener is up
+  for (let i = 0; i < 120; i++) { try { await fetch(`${url}/lookup`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(500) }); return url } catch {} await delay(200) }
+  throw new Error(`${url} did not start`)
 }
 
-async function addAgent (name, rv, { seller, publicDisclosure = false, bondEpoch, index }) {
+async function addAgent (name, hosts, { seller, publicDisclosure = false, bondEpoch, index }) {
   const dataDir = join(dir, name); mkdirSync(dataDir, { recursive: true })
   const token = `tok-${name}`
   const url = `http://127.0.0.1:${agentPort(index)}`
   spawnNode('packages/e2e/src/scenarios/agent-process.mjs', {
-    NEKTAR_CHAIN_HUB: hub.url, NEKTAR_DATA_DIR: dataDir, NEKTAR_OVERLAY_URL: rv, NEKTAR_HTTP_PORT: String(agentPort(index)), NEKTAR_HTTP_TOKEN: token, NEKTAR_PAID_DISCLOSURE: '1', NEKTAR_AGENT_NAME: name, NEKTAR_AUTOMATION_INTERVAL_MS: '500', ...(bondEpoch ? { NEKTAR_BOND_EPOCH: String(bondEpoch) } : {}),
+    NEKTAR_CHAIN_HUB: hub.url, NEKTAR_DATA_DIR: dataDir, NEKTAR_MARKET_HOSTS: hosts.join(','), NEKTAR_HTTP_PORT: String(agentPort(index)), NEKTAR_HTTP_TOKEN: token, NEKTAR_PAID_DISCLOSURE: '1', NEKTAR_AGENT_NAME: name, NEKTAR_AUTOMATION_INTERVAL_MS: '500', ...(bondEpoch ? { NEKTAR_BOND_EPOCH: String(bondEpoch) } : {}),
     ...(process.env.NEKTAR_AI_BASE_URL ? { NEKTAR_AI_BASE_URL: process.env.NEKTAR_AI_BASE_URL, NEKTAR_AI_MODEL: process.env.NEKTAR_AI_MODEL ?? 'qwen2.5:7b', NEKTAR_AI_PROVIDER: 'ollama', NEKTAR_AI_EGRESS: 'local' } : {})
   }, name)
   await up(`${url}/v1/health`)
@@ -80,7 +84,7 @@ async function addAgent (name, rv, { seller, publicDisclosure = false, bondEpoch
   }
   const pf = join(dataDir, 'policy.json'); writeFileSync(pf, JSON.stringify(policy))
   const { policyHash } = JSON.parse(execFileSync(process.execPath, [join(root, 'tools/automation.mjs'), '--data', dataDir, '--json', 'policy', 'approve', pf], { encoding: 'utf8' }))
-  const a = { name, url, token, dataDir, policyHash, pub, rv }
+  const a = { name, url, token, dataDir, policyHash, pub, hosts }
   agents.push(a)
   if (seller) {
     await tool(a, 'remember', { shard: 'guide', data: FINDING })
@@ -97,18 +101,19 @@ async function waitState (a, operationId, states, ms = 120_000) {
     const st = (await tool(a, 'automation', { op: 'status', operationId })).operation
     if (states.includes(st.state)) return st
     if (Date.now() > end) throw new Error(`${a.name} ${operationId} stuck in ${st.state}: ${st.lastError ?? ''}`)
+    await chain.mine(1) // funding trees and escrow only become usable once mined
     await delay(500)
   }
 }
 
 async function S1 () {
   log('S1: three sellers, two hosts, one buyer')
-  const rvA = await bootRv(1, `http://127.0.0.1:${rvPort(2)}`)
-  const rvB = await bootRv(2, `http://127.0.0.1:${rvPort(1)}`)
-  const alice = await addAgent('alice', rvA, { seller: 450, index: 1 })
-  const ben = await addAgent('ben', rvB, { seller: 300, index: 2 })
-  const cara = await addAgent('cara', rvB, { seller: 200, index: 3 })
-  const bob = await addAgent('bob', rvA, { index: 4 })
+  const H1 = await bootHost(1)
+  const H2 = await bootHost(2)
+  const alice = await addAgent('alice', [H1], { seller: 450, index: 1 })
+  const ben = await addAgent('ben', [H2], { seller: 300, index: 2 })
+  const cara = await addAgent('cara', [H2], { seller: 200, index: 3 })
+  const bob = await addAgent('bob', [H1, H2], { index: 4 })
   const { operationId } = await tool(bob, 'automation', { op: 'publishWant', policyHash: bob.policyHash, domains: ['libfoo'], question: 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function', maxSats: 500 })
   const op = await waitState(bob, operationId, ['disclosure_verified', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed'])
   if (op.state !== 'disclosure_verified') throw new Error(`S1 ended in ${op.state}: ${op.lastError ?? ''}`)
@@ -130,18 +135,16 @@ async function S1 () {
 
 async function S2 () {
   log('S2: operator process killed; independent observer seizes')
-  const rvA = await bootRv(3, `http://127.0.0.1:${rvPort(4)}`)
-  const rvB = await bootRv(4, `http://127.0.0.1:${rvPort(3)}`)
-  const alice = await addAgent('alice2', rvA, { bondEpoch: 4, index: 5 })
-  const observer = await addAgent('observer', rvB, { index: 6 })
+  const H1 = await bootHost(3)
+  const H2 = await bootHost(4)
+  const alice = await addAgent('alice2', [H1], { bondEpoch: 4, index: 5 })
+  const observer = await addAgent('observer', [H2], { index: 6 })
   await tool(alice, 'bondDeploy', { sats: 5000 })
   const commit = await tool(alice, 'bondCommit', { root: 'ab'.repeat(32) })
   if (commit.n !== '1') throw new Error('checkpoint did not land')
   const st = await tool(alice, 'bondStatus', {})
   const descriptor = { cfg: { operatorPkh: st.cfg.operatorPkh, bondReleaseHeight: st.cfg.bondReleaseHeight, maxFee: st.cfg.maxFee, epochLen: st.cfg.epochLen }, txid: st.utxo.txid, vout: st.utxo.vout }
-  const aliceProc = procs.find(p => p.spawnargs.includes('agent-process.mjs') && p.spawnargs.includes('agent-process.mjs'))
   // kill by PID — a real stopped process, not an in-process pause
-  for (const p of procs) if (p.spawnargs.includes('agent-process.mjs')) { /* handled below by index */ }
   const victim = procs[procs.length - 2] // alice2 was spawned before observer
   victim.kill('SIGKILL')
   await delay(500)
@@ -168,16 +171,19 @@ async function S2 () {
 
 async function S3 () {
   log('S3: paid public disclosure, free reader')
-  const rvA = await bootRv(5, `http://127.0.0.1:${rvPort(6)}`)
-  const rvB = await bootRv(6, `http://127.0.0.1:${rvPort(5)}`)
-  const pat = await addAgent('pat', rvB, { seller: 150, publicDisclosure: true, index: 7 })
-  const dee = await addAgent('dee', rvA, { index: 8 })
-  const reader = await addAgent('reader', rvA, { index: 9 })
+  const H1 = await bootHost(5)
+  const H2 = await bootHost(6)
+  const pat = await addAgent('pat', [H2], { seller: 150, publicDisclosure: true, index: 7 })
+  const dee = await addAgent('dee', [H1, H2], { index: 8 })
+  const reader = await addAgent('reader', [H1, H2], { index: 9 })
   const { operationId } = await tool(dee, 'automation', { op: 'publishWant', policyHash: dee.policyHash, domains: ['libfoo'], question: 'libfoo 3.0 connect open rename', maxSats: 180 })
   const op = await waitState(dee, operationId, ['disclosure_verified', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed'])
   if (op.state !== 'disclosure_verified') throw new Error(`S3 ended in ${op.state}`)
-  const listing = (await (await fetch(`${rvA}/offers?domain=libfoo`)).json()).offers.find(o => o.offer.pub === pat.pub && o.offer.wantId === op.data.want.want.wantId)
-  if (!listing) throw new Error('public listing did not federate')
+  // pat only submits to H2 — the reader queries every host it knows
+  const { readOffers } = await import('../../../bstack/dist/src/index.js')
+  const lres = await readOffers([H1, H2], { net: 'mock', wantId: op.data.want.want.wantId, buyerPub: dee.pub }, { tracker: chain, net: 'mock' })
+  const listing = lres.items.find(i => i.payload.body.offer.pub === pat.pub)?.payload.body
+  if (!listing) throw new Error('public listing not readable from the overlay hosts')
   const reveal = await chain.getTx(op.data.result.disclosureTxid)
   const read = await tool(reader, 'sale', { op: 'claim', txHex: reveal.toHex(), hWrapped: listing.offer.offer.cfg.hWrapped, offerMode: 'fragment', commitment: { leaf: listing.offer.leaf, hdp: listing.offer.hdp } })
   if (read.mode !== 'public' || read.verified !== true) throw new Error('free reader could not verify the public disclosure')
@@ -190,7 +196,7 @@ try {
   hub = await startHub(0)
   hub.url = `http://127.0.0.1:${hub.port}`
   chain = new RemoteMockChain(hub.url)
-  write('manifest.json', { runId, profile, scenario, startedAt: new Date().toISOString(), chain: 'mock (shared hub, real covenant script evaluation)', transport: 'HTTPS federation + encrypted mailbox' })
+  write('manifest.json', { runId, profile, scenario, startedAt: new Date().toISOString(), chain: 'mock (shared hub, real covenant script evaluation)', transport: 'bstack carriers + bbox envelopes over HTTPS unicast to two independent overlay hosts (mock-chain test hosts)' })
   const results = {}
   if (scenario === 'all' || scenario === 'S1') results.S1 = await S1()
   if (scenario === 'all' || scenario === 'S3') results.S3 = await S3()

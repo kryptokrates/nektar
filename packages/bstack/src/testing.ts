@@ -11,8 +11,8 @@ export class FakeTracker implements ChainTracker {
   async currentHeight (): Promise<number> { return 1 }
 }
 
-export interface MinihostOpts { tracker: ChainTracker, evil?: boolean, failNext?: () => boolean, drop?: (txid: string) => boolean, office?: string, corrupt?: boolean }
-export interface MinihostHandle { url: string, close: () => Promise<void>, has: (txid: string) => boolean, txids: () => string[] }
+export interface MinihostOpts { tracker: ChainTracker, evil?: boolean, failNext?: () => boolean, drop?: (txid: string) => boolean, office?: string, corrupt?: boolean, port?: number }
+export interface MinihostHandle { url: string, close: () => Promise<void>, has: (txid: string) => boolean, txids: () => string[], raw: () => number[][] }
 export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker): Promise<MinihostHandle> {
   const tracker: ChainTracker = 'tracker' in opts ? opts.tracker : opts
   const evil = 'evil' in opts ? (opts.evil ?? false) : false
@@ -20,6 +20,7 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
   const drop = 'drop' in opts ? opts.drop : undefined
   const office = 'office' in opts ? opts.office : undefined
   const corrupt = 'corrupt' in opts ? (opts.corrupt ?? false) : false
+  const port = 'port' in opts ? opts.port : undefined
   const host = { log: () => {}, chainTracker: tracker as unknown as ChainTracker, engine: { submit: async () => ({}) } }
   const { topics, lookups } = createNektarModule(host as never, nets)
   const stored = new Map<string, number[]>()
@@ -76,12 +77,13 @@ export async function minihost (nets: string[], opts: MinihostOpts | FakeTracker
       } else { res.writeHead(404); res.end() }
     } catch (e) { res.writeHead(500); res.end(String((e as Error).message)) }
   })
-  await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
-  const { port } = srv.address() as AddressInfo
+  await new Promise<void>(r => srv.listen(port ?? 0, '127.0.0.1', r))
+  const { port: bound } = srv.address() as AddressInfo
   return {
-    url: `http://127.0.0.1:${port}`,
+    url: `http://127.0.0.1:${bound}`,
     close: async () => { await new Promise<void>(r => srv.close(() => r())) },
     has: (txid: string) => stored.has(txid),
-    txids: () => [...stored.keys()]
+    txids: () => [...stored.keys()],
+    raw: () => [...stored.values()]
   }
 }

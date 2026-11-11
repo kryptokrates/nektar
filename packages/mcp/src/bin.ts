@@ -35,11 +35,10 @@ if (paymentsEnabled()) process.stderr.write(`nektar: payments on — settling to
 if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
   const { openAutomation } = await import('./automation/runtime.js')
   const { callTool } = await import('./server.js')
-  const rvs = (process.env.NEKTAR_OVERLAY_URL ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  const mh = (process.env.NEKTAR_MARKET_HOSTS ?? '').split(',').map(s => s.trim()).filter(Boolean)
   rt.mem.automation = await openAutomation(rt.mem, {
     network: rt.network, dataDir: rt.network === 'mock' && !process.env.NEKTAR_DATA_DIR ? undefined : (process.env.NEKTAR_DATA_DIR ?? '.nektar'),
-    rendezvousUrls: rvs, keeperUrl: process.env.NEKTAR_MAILBOX_URL, overlayToken: process.env.NEKTAR_OVERLAY_TOKEN,
-    marketHosts: (process.env.NEKTAR_MARKET_HOSTS ?? '').split(',').map(s => s.trim()).filter(Boolean),
+    marketHosts: mh,
     boxOffice: process.env.NEKTAR_BBOX_OFFICE ?? undefined,
     intervalMs: Number(process.env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 5000),
     call: (tool, args) => callTool(rt.mem, tool, args, { ops: rt.ops }),
@@ -47,7 +46,9 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
     log: line => process.stderr.write(`nektar: ${line}
 `)
   })
-  process.stderr.write(`nektar: automation on — ${rvs.length} rendezvous host(s); policies and approvals via 'pnpm automation'
+  process.stderr.write(`nektar: automation on — ${mh.length} market host(s); policies and approvals via 'pnpm automation'
+`)
+  if (mh.length === 0) process.stderr.write(`nektar: automation: NEKTAR_MARKET_HOSTS is empty — wants and offers cannot be published
 `)
 }
 const port = process.env.NEKTAR_HTTP_PORT

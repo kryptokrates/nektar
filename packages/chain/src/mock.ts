@@ -136,7 +136,10 @@ export class MockChain implements ChainTracker, Broadcaster {
   mine (count = 1): BlockHeader[] {
     const out: BlockHeader[] = []
     for (let b = 0; b < count; b++) {
-      const txids = [...this.mempool.keys()]
+      const realTxids = [...this.mempool.keys()]
+      // every real block has a coinbase at index 0 — keep a synthetic leaf so
+      // no mined tx ever ends up with a lone-leaf level-0 BUMP
+      const txids = realTxids.length ? [toHex(dsha256(new TextEncoder().encode(`coinbase:${this.height + 1}`))), ...realTxids] : realTxids
       this.height++
       const leaves = txids.map(toInternal)
       const rootInternal = merkleRootDisplay(leaves)
@@ -150,9 +153,9 @@ export class MockChain implements ChainTracker, Broadcaster {
         nonce: this.height
       }
       // assign each tx a BUMP
-      txids.forEach((txid, i) => {
+      realTxids.forEach((txid, i) => {
         const tx = this.mempool.get(txid)!
-        tx.merklePath = buildBump(txids, i, this.height)
+        tx.merklePath = buildBump(txids, i + 1, this.height)
         this.minedTxs.set(txid, { height: this.height })
         this.bumps.set(txid, tx.merklePath)
         this.emit({ txid, status: 'mined', blockHeight: this.height, merklePath: tx.merklePath })

@@ -15,8 +15,10 @@ funder.topup(30)
 for (const t of funder.parents) await chain.registerParent(t)
 const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'scripted', network: 'mock', bond: env.NEKTAR_BOND_EPOCH ? { epochBlocks: Number(env.NEKTAR_BOND_EPOCH) } : undefined })
 const au = await openAutomation(mem, {
-  network: 'mock', dataDir: env.NEKTAR_DATA_DIR, rendezvousUrls: (env.NEKTAR_OVERLAY_URL ?? '').split(',').filter(Boolean),
+  network: 'mock', dataDir: env.NEKTAR_DATA_DIR, marketHosts: (env.NEKTAR_MARKET_HOSTS ?? '').split(',').filter(Boolean),
   intervalMs: Number(env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 1000),
+  // block-based TTLs must span the fast mock mining cadence (~1 block per wait loop)
+  opts: { refundBlocks: 10000, offerTtlBlocks: 10000 },
   call: (tool, args) => callTool(mem, tool, args)
 })
 mem.automation = au

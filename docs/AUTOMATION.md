@@ -193,7 +193,7 @@ cp .devin/automation.policy.example.json my-policy.json     # set agentPub, netw
 pnpm automation policy approve my-policy.json
 
 # 2. run the instance with the runtime on
-NEKTAR_AUTOMATION=1 NEKTAR_PAID_DISCLOSURE=1 NEKTAR_OVERLAY_URL=https://rv-a,https://rv-b \
+NEKTAR_AUTOMATION=1 NEKTAR_PAID_DISCLOSURE=1 NEKTAR_MARKET_HOSTS=https://host-a,https://host-b \
   NEKTAR_HTTP_PORT=8080 node packages/mcp/dist/src/bin.js
 
 # 3. that's it — buyer side: one call; seller side: one call
@@ -233,8 +233,10 @@ Honest boundaries:
 - Purchased patches run only in an isolated container (no network, no
   secrets, hidden tests outside the writable checkout). No container runtime →
   `BLOCKED`, never a host run.
-- Transport is HTTPS rendezvous federation + encrypted mailbox. The 1BSV
-  object plane is not used by this runtime.
+- Transport is bstack carriers (wants, offers) and bbox envelopes (quote,
+  accept, delivered), submitted over HTTPS to every configured overlay host
+  and verified locally on read. 1BSV multicast delivery is not used yet. bbox
+  receipts are not implemented: envelopes stay listed until they expire (24h).
 - Existing owner tools (`sale`, `sendSats`, `payInvoice`, bond ops, anchors)
   are not yet routed through the automation budget ledger; its caps bound what
   the automation runtime itself spends. SpendGuard still fronts every broadcast.
@@ -299,7 +301,7 @@ The trial report is written to `artifacts/model-trials/report.json`.
   → proveStage → timeouts → anchored settle), fee vault, watcher fraud
   challenge, and the full MCP lane (anchor, STARK + replay/tamper negatives,
   clearance, restart persistence, claim deploy/settle, gated sale) all PASS.
-- **Testnet (Hetzner, real rendezvous + mailbox, two live instances):** the
+- **Testnet (Hetzner, real rendezvous + mailbox, two live instances):** this ran on the previous rendezvous + mailbox transport, which has since been removed from the automation runtime. The
   autonomous purchase loop ran end to end — signed want admitted to the feed,
   seller matched a level-0 record, signed a buyer-bound offer, buyer selected,
   funded and broadcast the DisclosureSale escrow
@@ -318,7 +320,8 @@ The trial report is written to `artifacts/model-trials/report.json`.
   deployed on the Hetzner box. The gateway identity needed a second UTXO for
   fee inputs — funded; the host lost its MySQL connection at boot and reports
   `ready=false` until restarted. No object-plane delivery demonstrated yet —
-  the runtime transport remains HTTPS rendezvous + encrypted mailbox.
+  at the time the runtime transport was HTTPS rendezvous + encrypted mailbox,
+  since removed from the automation runtime.
 - Reserve/provider fixes exercised live: `takeReserve` applies a 546-sat dust
   floor on bare calls, `reconcile` revives/prunes entries against chain truth
   (phantom entries pruned; spent marks no longer drop records),

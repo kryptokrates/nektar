@@ -3,7 +3,6 @@ import { join } from 'node:path'
 import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/overlay'
 import type { NektarMemory } from '../memory.js'
-import { sendEnvelope, collect } from '../mailbox.js'
 import { AutomationStore } from './store.js'
 import { MarketEngine, type MarketMessage, type MarketTransport, type MarketOptions } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
@@ -14,9 +13,6 @@ export type { Automation } from './types.js'
 export interface AutomationConfig {
   network: string
   dataDir?: string
-  rendezvousUrls: string[]
-  keeperUrl?: string
-  overlayToken?: string
   ai?: AIExecutor
   intervalMs?: number
   call: (tool: string, args: any) => Promise<any>
@@ -29,8 +25,6 @@ export interface AutomationConfig {
   treeLowWater?: number
   now?: () => number
 }
-
-const KIND = { quote: 'offer', accept: 'acceptance', delivered: 'delivery-reference' } as const
 
 export function aiFromEnv (env = process.env): AIExecutor {
   const baseUrl = env.NEKTAR_AI_BASE_URL
@@ -50,39 +44,24 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   const store = new AutomationStore(kx)
   await store.init()
   const key = mem.operatorKey()
-  const rvs = cfg.rendezvousUrls.map(u => u.replace(/\/+$/, ''))
-  const keeper = (cfg.keeperUrl ?? rvs[0])?.replace(/\/+$/, '')
   const marketHosts = (cfg.marketHosts ?? []).map(u => u.replace(/\/+$/, ''))
   const lanes = marketHosts.length === 0 ? undefined : await (async () => {
     const mod = await import('@nektar/bstack')
     return { mod, ledger: new mod.KnexTreeLedger(kx), journal: new mod.KnexCarrierJournal(kx) }
   })()
   const log = cfg.log ?? (() => {})
-  const post = async (path: string, body: unknown): Promise<void> => {
-    let ok = false
-    let last = 'no rendezvous configured'
-    for (const rv of rvs) {
-      try {
-        const r = await fetch(`${rv}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(cfg.overlayToken ? { authorization: `Bearer ${cfg.overlayToken}` } : {}) }, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) })
-        const j = await r.json().catch(() => ({})) as { ok?: boolean }
-        if (r.ok && j.ok === true) ok = true; else last = `${rv}${path} → ${r.status}`
-      } catch (e) { last = `${rv}${path}: ${(e as Error).message}` }
-    }
-    if (!ok) throw new Error(last)
-  }
   const transport: MarketTransport = {
     publishWant: async (sw: SignedWant) => {
-      if (lanes !== undefined) await lanes.mod.publishArtifact({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, net: cfg.network, payload: { v: 1, kind: 'want', body: sw } })
-      else await post('/want', sw)
+      if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
+      await lanes.mod.publishArtifact({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, net: cfg.network, payload: { v: 1, kind: 'want', body: sw } })
     },
     publishOffer: async (so: SignedOffer) => {
-      if (lanes !== undefined) await lanes.mod.publishArtifact({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, net: cfg.network, payload: { v: 1, kind: 'offer', body: so } })
-      else await post('/offer', so)
+      if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
+      await lanes.mod.publishArtifact({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, net: cfg.network, payload: { v: 1, kind: 'offer', body: so } })
     },
     send: async (to: string, msg: MarketMessage) => {
-      if (msgs !== undefined) { await msgs.send(to, msg); return }
-      if (!keeper) throw new Error('no mailbox keeper configured')
-      await sendEnvelope(key, keeper, { recipient: to, kind: KIND[msg.type], payload: { market: msg }, conversationId: msg.wantId, operationId: msg.offerId, expiresAt: Date.now() + 86_400_000 })
+      if (msgs === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
+      await msgs.send(to, msg)
     }
   }
   const engine = new MarketEngine({
@@ -93,7 +72,6 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     settleEscrow: tx => { for (const inp of tx.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } if (tx.outputs[1]) mem.addOwnedOut(tx, 1) },
     transport, ai: cfg.ai ?? aiFromEnv(), opts: cfg.opts
   })
-  const seen = new Set<string>()
   const me = key.toPublicKey().toString()
   const withheldSeen = new Set<string>()
   const downNow = new Set<string>()
@@ -139,27 +117,8 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   }
   const poll = async (): Promise<void> => {
     if (lanes !== undefined) { try { await lanePoll() } catch (e) { log(`automation: lanes: ${(e as Error).message}`) } }
-    else for (const rv of rvs) {
-      try {
-        const source = `rv:${rv}`
-        const since = Number(await store.cursor(source) ?? -1)
-        const r = await fetch(`${rv}/events?since=${since}&limit=500`, { signal: AbortSignal.timeout(15_000) })
-        if (!r.ok) throw new Error(`events → ${r.status}`)
-        const j = await r.json() as { cursor?: number, events?: Array<{ seq: number, kind: string, payload: unknown }> }
-        const events = j.events ?? []
-        const last = events.length ? events[events.length - 1]!.seq : since
-        if (events.length) await engine.ingestEvents(source, events, String(last))
-      } catch (e) { log(`automation: ${rv}: ${(e as Error).message}`) }
-    }
     if (msgs !== undefined) {
       try { for (const m of await msgs.collect()) await engine.ingestMessage(m.from, m.msg) } catch (e) { log(`automation: messages: ${(e as Error).message}`) }
-    } else if (keeper) {
-      try {
-        for (const m of await collect(key, keeper, seen)) {
-          const msg = (m.payload as { market?: MarketMessage })?.market
-          if (msg && typeof msg.type === 'string') await engine.ingestMessage(m.sender, msg)
-        }
-      } catch (e) { log(`automation: mailbox: ${(e as Error).message}`) }
     }
   }
   let busy = false

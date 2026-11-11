@@ -69,6 +69,42 @@ export const OPENAPI = {
   }
 } as const
 
+/** One broadcaster tx-status payload → memory side effects. Shared by the
+ *  inbound webhook route and the outbound-only /events SSE reader (runtime):
+ *  REJECTED/DOUBLE_SPEND_ATTEMPTED → deliverTxRejected; MINED/IMMUTABLE →
+ *  the carried/fetched BUMP must verify against our own tracker before
+ *  deliverTxProof — a status is a hint, never proof on the broadcaster's word. */
+export async function handleBroadcasterStatus (mem: NektarMemory, j: { txid?: string, txStatus?: string, merklePath?: string, extraInfo?: string }): Promise<void> {
+  const status = String(j.txStatus ?? '?')
+  mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: status.toLowerCase() }, 1, 'broadcaster status callbacks received')
+  mem.events.emit('broadcasterStatus', { txid: j.txid, status, detail: j.extraInfo })
+  // a definitive rejection is pushed down as a hint — the engine asks
+  // txState itself and acts only on that answer
+  if (typeof j.txid === 'string' && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status.toUpperCase())) mem.deliverTxRejected(j.txid)
+  // N9 — the status is an unauthenticated input, not proof. A carried BUMP
+  // must verify against our own tracker before it counts; without one we
+  // fetch evidence; without evidence the tx stays unconfirmed.
+  if ((status === 'MINED' || status === 'IMMUTABLE') && typeof j.txid === 'string') {
+    try {
+      let mp: import('@bsv/sdk').MerklePath | undefined
+      if (typeof j.merklePath === 'string' && j.merklePath.length > 0) {
+        try {
+          const cand = MerklePath.fromHex(j.merklePath)
+          if (await cand.verify(j.txid, await mem.sdkTracker())) mp = cand
+        } catch { /* unusable — fetch evidence instead */ }
+      }
+      if (mp === undefined) {
+        const cand2 = await (mem as any).chain?.merklePathOf?.(j.txid)
+        // the fetched path must verify against our own tracker too —
+        // the broadcaster's word alone is a hint, never a proof
+        if (cand2 !== undefined) { try { if (await cand2.verify(j.txid, await mem.sdkTracker())) mp = cand2 } catch { /* unverifiable */ } }
+      }
+      if (mp) mem.deliverTxProof(j.txid, mp)
+      // no fallback: a status without retrievable evidence is a hint, not a confirmation
+    } catch { /* evidence fetch failed — leave unconfirmed, reconcile later */ }
+  }
+}
+
 async function body (req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = []
   let size = 0
@@ -335,7 +371,9 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
       // broadcaster tx-status callback — pushes SEEN_ON_NETWORK → MINED etc.
       // for every tx we submitted with X-CallbackUrl, so anchor confirmations
       // arrive as events, not polls. /v1/arc-callback is kept for transactions
-      // submitted before the rename (they carry the old URL).
+      // submitted before the rename (they carry the old URL). Outbound-only
+      // mode instead consumes the same statuses via the /events SSE stream —
+      // the handler below is shared by both paths.
       if (req.method === 'POST' && (url.pathname === '/v1/broadcaster-callback' || url.pathname === '/v1/arc-callback')) {
         try {
           // NEKTAR_CALLBACK_TOKEN was sent as X-CallbackToken; BSV Broadcaster
@@ -347,35 +385,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
             if (given.length !== expected.length || !timingSafeEqual(given, expected)) return send(401, { error: 'bad callback token' })
           }
           const j = (await body(req)) as any
-          const status = String(j.txStatus ?? '?')
-          mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: status.toLowerCase() }, 1, 'broadcaster status callbacks received')
-          mem.events.emit('broadcasterStatus', { txid: j.txid, status, detail: j.extraInfo })
-          // a definitive rejection is pushed down as a hint — the engine asks
-          // txState itself and acts only on that answer
-          if (typeof j.txid === 'string' && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status.toUpperCase())) mem.deliverTxRejected(j.txid)
-          // N9 — the callback is an unauthenticated status input, not proof.
-          // A carried BUMP must verify against our own tracker before it
-          // counts; without one we fetch evidence; without evidence the txid
-          // is marked callback-seen, never confirmed on the broadcaster's word.
-          if ((status === 'MINED' || status === 'IMMUTABLE') && typeof j.txid === 'string') {
-            try {
-              let mp: import('@bsv/sdk').MerklePath | undefined
-              if (typeof j.merklePath === 'string' && j.merklePath.length > 0) {
-                try {
-                  const cand = MerklePath.fromHex(j.merklePath)
-                  if (await cand.verify(j.txid, await mem.sdkTracker())) mp = cand
-                } catch { /* unusable — fetch evidence instead */ }
-              }
-              if (mp === undefined) {
-                const cand2 = await (mem as any).chain?.merklePathOf?.(j.txid)
-                // the fetched path must verify against our own tracker too —
-                // the broadcaster's word alone is a hint, never a proof
-                if (cand2 !== undefined) { try { if (await cand2.verify(j.txid, await mem.sdkTracker())) mp = cand2 } catch { /* unverifiable */ } }
-              }
-              if (mp) mem.deliverTxProof(j.txid, mp)
-              // no fallback: a callback without retrievable evidence is a hint, not a confirmation
-            } catch { /* evidence fetch failed — leave unconfirmed, reconcile later */ }
-          }
+          await handleBroadcasterStatus(mem, j)
           return send(200, { ok: true })
         } catch { return send(400, { error: 'bad callback' }) }
       }

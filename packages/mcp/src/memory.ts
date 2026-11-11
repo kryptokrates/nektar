@@ -1621,6 +1621,7 @@ export class NektarMemory {
   }
   /** the configured bstore/S3 object store (undefined = feature off) */
   get objectStore (): import('./objectstore.js').S3ObjectStore | undefined { return this.opts.objectStore }
+  get feeRateSatPerKb (): number { return this.opts.feeRateSatPerKb ?? 1 }
   /** pack-store refs this instance PUT to bstore — the `.well-known` doc
    *  names them so importers can fetch through the store instead of HTTP. */
   packStoreRef (shard: string): import('./objectstore.js').ObjectRef | undefined { return this.packStores.get(shard) }

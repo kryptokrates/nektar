@@ -92,3 +92,27 @@ test('V3 sale: claimDisclosure reads wrapped back from the real covenant buy tx'
   assert.equal(Buffer.from(r.wrapped).toString('hex'), WRAPPED)
   assert.throws(() => claimDisclosure(good.tx, { hWrapped: 'ff'.repeat(32) }), /does not match/)
 })
+
+test('V3 escrow: funding fee follows the instance rate, not a constant', async () => {
+  const { host } = setup()
+  const mkFunding = (sats: number) => {
+    const f = new Transaction()
+    f.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: new UnlockingScript() })
+    f.addOutput({ satoshis: sats, lockingScript: LockingScript.fromHex(
+      Buffer.concat([Buffer.from('76a914', 'hex'), Buffer.from(buyer.toPublicKey().toHash()), Buffer.from('88ac', 'hex')]).toString('hex')) })
+    return f
+  }
+  const feeOf = async (rate: number) => {
+    const { tx, feeSats } = await host.buildEscrow([{ tx: mkFunding(20_000), vout: 0, satoshis: 20_000 }], buyer, 6_000, undefined, rate)
+    const paid = 20_000 - tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)
+    assert.equal(feeSats, paid, 'reported fee equals actual input-output delta')
+    return paid
+  }
+  const at100 = await feeOf(100)
+  const bytes = (await host.buildEscrow([{ tx: mkFunding(20_000), vout: 0, satoshis: 20_000 }], buyer, 6_000, undefined, 100)).tx.toBinary().length
+  assert.ok(at100 >= bytes * 0.1 - 2 && at100 <= bytes * 0.1 + 2, `100 sat/kB on ~${bytes}B tx → ${at100} sats`)
+  const at1 = await feeOf(1)
+  assert.ok(at1 >= 1 && at1 <= bytes * 0.001 + 1, `1 sat/kB → ${at1} sats (min 1)`)
+  // insufficient funding still refuses
+  await assert.rejects(() => host.buildEscrow([{ tx: mkFunding(5_000), vout: 0, satoshis: 5_000 }], buyer, 6_000, undefined, 1), /amount .* \+ fee/)
+})

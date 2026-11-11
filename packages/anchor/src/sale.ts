@@ -5,7 +5,7 @@
 // claim credential); `refund` returns the deposit to the DEPOSITOR
 // (buyer) after refundAfter. The seller can never take a deposit
 // without revealing.
-import { PrivateKey, Transaction, LockingScript, UnlockingScript, Hash, P2PKH } from '@bsv/sdk'
+import { PrivateKey, Transaction, LockingScript, UnlockingScript, Hash, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, buildP2PKHScript } from 'runar-sdk'
 import { DISCLOSURESALE_ARTIFACT } from '@nektar/contracts'
 
@@ -58,7 +58,7 @@ export class DisclosureSaleHost {
    *  into the escrow script, change back to the depositor. The deposit
    *  should be price + maxFee + a small change margin (the covenant
    *  bounds the buy fee anyway). */
-  async buildEscrow (fundingUtxos: Array<{ tx: Transaction, vout: number, satoshis: number }>, buyerKey: PrivateKey, amount: number, changeTo?: string): Promise<{ tx: Transaction, utxo: SaleUtxo }> {
+  async buildEscrow (fundingUtxos: Array<{ tx: Transaction, vout: number, satoshis: number }>, buyerKey: PrivateKey, amount: number, changeTo?: string, feeRateSatPerKb = 1): Promise<{ tx: Transaction, utxo: SaleUtxo, feeSats: number }> {
     const tx = new Transaction()
     let total = 0
     const p2pkh = new P2PKH()
@@ -71,11 +71,17 @@ export class DisclosureSaleHost {
     }
     tx.addOutput({ satoshis: amount, lockingScript: LockingScript.fromHex(this.lockingScript()) })
     const depositorPkh = changeTo ?? this.cfg.depositorPkh
-    const change = total - amount - 250 // ~feerate headroom for the funding tx itself
-    if (change < 0) throw new Error(`buildEscrow: funding utxos ${total} < amount ${amount} + fee`)
-    if (change > 0) tx.addOutput({ satoshis: change, lockingScript: LockingScript.fromHex(buildP2PKHScript(depositorPkh)) })
+    // the funding tx pays its own size at the instance fee rate — the SDK
+    // fills (or removes, when the remainder is exactly 0) the change output
+    tx.addOutput({ satoshis: 0, lockingScript: LockingScript.fromHex(buildP2PKHScript(depositorPkh)), change: true })
+    try {
+      await tx.fee(new SatoshisPerKilobyte(Math.max(1, feeRateSatPerKb)))
+    } catch {
+      throw new Error(`buildEscrow: funding utxos ${total} < amount ${amount} + fee`)
+    }
     await tx.sign()
-    return { tx, utxo: { txid: tx.id('hex'), vout: 0, satoshis: amount, script: this.lockingScript() } }
+    const feeSats = total - tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)
+    return { tx, utxo: { txid: tx.id('hex'), vout: 0, satoshis: amount, script: this.lockingScript() }, feeSats }
   }
 
   /** seller-side: reveal `wrapped` — outputs [price→seller, change→depositor].

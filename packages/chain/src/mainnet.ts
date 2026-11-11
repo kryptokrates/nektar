@@ -44,13 +44,12 @@ export class BsvBroadcaster implements Broadcaster {
     const { broadcasterUrl, wocUrl } = this.cfg
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }
     if (this.cfg.broadcasterApiKey) headers.Authorization = `Bearer ${this.cfg.broadcasterApiKey}`
-    // status webhook — the broadcaster pushes tx-status updates (MINED et al.)
-    // to our endpoint instead of us polling /tx/{txid}
-    if (this.cfg.callbackUrl) {
-      headers['X-CallbackUrl'] = `${this.cfg.callbackUrl}/v1/broadcaster-callback`
-      headers['X-FullStatusUpdates'] = 'true'
-      if (this.cfg.callbackToken) headers['X-CallbackToken'] = this.cfg.callbackToken
-    }
+    // tx-status updates: pushed to our webhook when a callback URL is
+    // configured, or pulled by our own SSE reader on /events — either way the
+    // token tags the submissions so only our statuses reach us
+    if (this.cfg.callbackUrl) headers['X-CallbackUrl'] = `${this.cfg.callbackUrl}/v1/broadcaster-callback`
+    if (this.cfg.callbackUrl || this.cfg.callbackToken) headers['X-FullStatusUpdates'] = 'true'
+    if (this.cfg.callbackToken) headers['X-CallbackToken'] = this.cfg.callbackToken
     try {
       // Extended Format when every input carries its source tx (the broadcaster
       // resolves unconfirmed parents from it); plain raw otherwise
@@ -83,6 +82,86 @@ export class BsvBroadcaster implements Broadcaster {
       }
     }
   }
+}
+
+export interface StatusStreamEvent { id?: string, event?: string, data?: string }
+export interface StatusStreamOpts {
+  cursor?: { get: () => Promise<string | undefined> | string | undefined, set: (id: string) => Promise<void> | void }
+  onError?: (e: Error) => void
+  minBackoffMs?: number // default 1000
+  maxBackoffMs?: number // default 30000
+}
+
+/** BSV Broadcaster SSE status stream — GET {base}/events?callbackToken=<t>.
+ *  Pull-mode equivalent of the webhook: same status payloads, outbound only.
+ *  Parses `id:`/`event:`/`data:` fields (multi-line data joined with '\n'),
+ *  skips `:` comments/keepalives, and reconnects with exponential backoff
+ *  (1 s → 30 s) resuming via `Last-Event-ID`. When opts.cursor is given the
+ *  last delivered id is persisted through get/set so a process restart
+ *  resumes exactly where it left off. */
+export function statusStream (cfg: MainnetConfig | undefined, onEvent: (e: StatusStreamEvent) => void | Promise<void>, opts: StatusStreamOpts = {}): { close: () => void } {
+  const c = def(cfg)
+  const f = c.fetch
+  const url = `${c.broadcasterUrl}/events?callbackToken=${encodeURIComponent(c.callbackToken ?? '')}`
+  const minB = opts.minBackoffMs ?? 1000, maxB = opts.maxBackoffMs ?? 30_000
+  let closed = false
+  let lastId: string | undefined
+  let abort: AbortController | undefined
+  const ready = (async () => { lastId = await opts.cursor?.get() })()
+  let backoff = minB
+  const run = async (): Promise<void> => {
+    await ready
+    while (!closed) {
+      abort = new AbortController()
+      try {
+        const headers: Record<string, string> = { accept: 'text/event-stream' }
+        if (lastId !== undefined) headers['Last-Event-ID'] = lastId
+        if (c.broadcasterApiKey) headers.Authorization = `Bearer ${c.broadcasterApiKey}`
+        const res = await f(url, { headers, signal: abort.signal })
+        if (!res.ok || res.body === null) throw new Error(`events HTTP ${res.status}`)
+        backoff = minB
+        const dec = new TextDecoder()
+        const reader = res.body.getReader()
+        let buf = ''
+        let ev: { id?: string, event?: string, data: string[] } = { data: [] }
+        const dispatch = async () => {
+          if (ev.data.length === 0) { ev = { data: [] }; return }
+          const e = { id: ev.id, event: ev.event, data: ev.data.join('\n') }
+          ev = { data: [] }
+          if (e.id !== undefined) { lastId = e.id; await opts.cursor?.set(e.id) }
+          await onEvent(e)
+        }
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += dec.decode(value, { stream: true })
+          let nl
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            let line = buf.slice(0, nl); buf = buf.slice(nl + 1)
+            if (line.endsWith('\r')) line = line.slice(0, -1)
+            if (line === '') { await dispatch(); continue }
+            if (line.startsWith(':')) continue // comment / keepalive
+            const colon = line.indexOf(':')
+            const field = colon < 0 ? line : line.slice(0, colon)
+            let val = colon < 0 ? '' : line.slice(colon + 1)
+            if (val.startsWith(' ')) val = val.slice(1)
+            if (field === 'id') ev.id = val
+            else if (field === 'event') ev.event = val
+            else if (field === 'data') ev.data.push(val)
+          }
+        }
+        await dispatch() // flush a trailing unterminated event
+        throw new Error('events stream ended')
+      } catch (e) {
+        if (closed) return
+        opts.onError?.(e as Error)
+        await new Promise(r => setTimeout(r, backoff))
+        backoff = Math.min(maxB, backoff * 2)
+      }
+    }
+  }
+  const p = run()
+  return { close: () => { closed = true; abort?.abort(); void p.catch(() => {}) } }
 }
 
 /** BSV Broadcaster /policy → mining fee in sat/kB (ceil). */

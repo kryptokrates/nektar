@@ -7,8 +7,10 @@
 //                          funding are configured (no real funds without approval).
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { PrivateKey, MerklePath, Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, regtestTx, BsvBroadcaster, WocTracker, fetchBroadcasterFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, regtestTx, BsvBroadcaster, WocTracker, fetchBroadcasterFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, statusStream, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
+import { handleBroadcasterStatus } from './http.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -383,6 +385,18 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const tracker = new ChaintracksTracker(mc,
     mc.chaintracksUrl ?? (ttn ? `${mc.broadcasterUrl}/chaintracks/v2` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'),
     new WocTracker(mc))
+  // per-instance callback token — tags our submissions so the broadcaster can
+  // route their status updates back to us (configFromEnv leaves both fields
+  // to def()'s env fallback: NEKTAR_CALLBACK_TOKEN wins; else a persisted
+  // random token, also pushed into env so the webhook auth check sees it).
+  if (!mc.callbackToken && !process.env.NEKTAR_CALLBACK_TOKEN) {
+    const tokFile = join(cfg.dataDir, 'callback-token')
+    mc.callbackToken = existsSync(tokFile)
+      ? readFileSync(tokFile, 'utf8').trim()
+      : (() => { const t = randomBytes(32).toString('hex'); writeFileSync(tokFile, t, { mode: 0o600 }); return t })()
+    process.env.NEKTAR_CALLBACK_TOKEN = mc.callbackToken
+  }
+  const callbackUrl = mc.callbackUrl ?? process.env.NEKTAR_CALLBACK_URL
   const rawBroadcaster = new BsvBroadcaster(mc)
   const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))
   const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
@@ -471,6 +485,27 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   memRef = mem
   mem.ledger = ledger
   mem.metrics.gauge('nektar_fee_balance_sats', () => reserve.utxos.reduce((s, u) => s + u.satoshis, 0), 'operator fee-key balance (sats)')
+  // outbound-only status push: no callback URL → pull tx statuses from the
+  // broadcaster's /events SSE stream into the same handler the webhook uses.
+  // Needs no inbound port; Last-Event-ID cursor persists across restarts.
+  let stream: { close: () => void } | undefined
+  if (!callbackUrl && (mc.callbackToken ?? process.env.NEKTAR_CALLBACK_TOKEN)) {
+    const cursorFile = join(cfg.dataDir, 'sse-cursor')
+    stream = statusStream(mc, async ev => {
+      if (ev.data === undefined) return
+      let j: { txid?: string, txStatus?: string, merklePath?: string, extraInfo?: string }
+      try { j = JSON.parse(ev.data) } catch { return } // malformed data line — skip
+      mem.metrics.inc('nektar_broadcaster_stream_events_total', { status: String(j.txStatus ?? '?').toLowerCase() }, 1, 'broadcaster status stream events received')
+      await handleBroadcasterStatus(mem, j)
+    }, {
+      cursor: {
+        get: () => { try { const v = readFileSync(cursorFile, 'utf8').trim(); return v === '' ? undefined : v } catch { return undefined } },
+        set: id => { try { writeFileSync(cursorFile, id) } catch { /* best effort */ } }
+      },
+      onError: e => process.stderr.write(`nektar ${net}: status stream: ${e.message}\n`)
+    })
+    process.stderr.write(`nektar ${net}: no callback URL — pulling tx statuses from the broadcaster /events stream\n`)
+  }
   const persistKeys = () => {
     let changed = false
     for (const [s, k] of shardKeys) if (keys.shardKeys[s] !== k.toHex()) { keys.shardKeys[s] = k.toHex(); changed = true }
@@ -695,6 +730,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   return {
     mem, network: net, ops,
     close: async () => {
+      stream?.close()
       clearInterval(timer); clearInterval(beatTimer); clearInterval(watchTimer)
       await tick(); await knex.destroy()
       try { (await import('node:fs')).rmSync(lockFile) } catch { /* already gone */ }

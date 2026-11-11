@@ -191,6 +191,10 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
      - fee rate `max(100 sat/kB, broadcaster policy)`;
      - headers and SPV from WhatsOnChain; BUMPs from the broadcaster, else the WoC TSC proof; finality depth 6;
      - a 200/202 means accepted. The anchor chain continues immediately, and the BUMP is attached in the background once the transaction is mined.
+
+     **Status delivery — webhook mode.** With `NEKTAR_CALLBACK_URL` set, every broadcast carries `X-CallbackUrl`; the broadcaster pushes each status transition (`SEEN_ON_NETWORK` → `MINED`/`IMMUTABLE`, or `REJECTED`/`DOUBLE_SPEND_ATTEMPTED`) to `POST {url}/v1/broadcaster-callback`. When `NEKTAR_CALLBACK_TOKEN` is set it is sent as `X-CallbackToken` and the route requires it back as `Authorization: Bearer`. The URL must be publicly routable.
+
+     **Status delivery — stream mode.** Without a callback URL the instance pulls the same statuses from `GET {broadcaster}/events?callbackToken=<token>` — an SSE stream, outbound-only, no inbound port needed. The token is `NEKTAR_CALLBACK_TOKEN` or a per-instance random value persisted to `<data dir>/callback-token` (0600); submissions carry it as `X-CallbackToken` so the stream only sees this instance's transactions. Reconnects resume via `Last-Event-ID`, with the last delivered id persisted in `<data dir>/sse-cursor`. Both modes feed the same handler: a `MINED`/`IMMUTABLE` BUMP is verified against the instance's own tracker before it confirms — a status is a hint, never proof.
   4. Hard caps, enforced before every broadcast and fail-closed:
      - `NEKTAR_MAX_FEE_SATS_PER_TX` (1000)
      - `NEKTAR_MAX_SPEND_SATS_PER_DAY` (20000)

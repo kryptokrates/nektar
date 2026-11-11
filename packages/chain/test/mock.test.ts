@@ -60,17 +60,24 @@ test('mock chain: UTXO_SPENT rejects double-spend, reorg releases it', async () 
   const chain = new MockChain()
   const f = new MockFunder(); f.topup(2)
   const u = await f.take(1)
-  const mk = () => { const t = new Transaction(); t.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScript: U }); return t }
+  // a double-spend is a DIFFERENT txid claiming the same outpoint — identical
+  // bytes resubmitted are an idempotent retry (broadcaster 202), not a conflict
+  const mk = (sats?: number) => {
+    const t = new Transaction()
+    t.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScript: U })
+    if (sats !== undefined) t.addOutput({ lockingScript: new P2PKH().lock(f.address()), satoshis: sats })
+    return t
+  }
   const r1 = await chain.broadcast(mk())
   assert.equal(r1.status, 'success')
-  const r2 = await chain.broadcast(mk())
+  const r2 = await chain.broadcast(mk(500))
   assert.equal(r2.status, 'error')
   assert.match(r2.description ?? '', /UTXO_SPENT/)
   chain.mine(1)
-  const r3 = await chain.broadcast(mk())
+  const r3 = await chain.broadcast(mk(600))
   assert.equal(r3.status, 'error', 'mined spend still rejected')
   chain.reorg(1)
-  const r4 = await chain.broadcast(mk())
+  const r4 = await chain.broadcast(mk(700))
   assert.equal(r4.status, 'success', 'reorg releases the outpoint')
 })
 

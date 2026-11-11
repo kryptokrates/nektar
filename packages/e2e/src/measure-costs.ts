@@ -1,5 +1,5 @@
 // Measure REAL anchor tx sizes + fees on regtest at a configurable fee rate
-// (default 100 sat/kB — the GorillaPool ARC policy rate). Read-only w.r.t.
+// (default 100 sat/kB — the GorillaPool broadcaster policy rate). Read-only w.r.t.
 // the brief: broadcasts regtest txs only, never mainnet.
 //   node packages/e2e/dist/src/measure-costs.js
 import { PrivateKey, Transaction, P2PKH } from '@bsv/sdk'

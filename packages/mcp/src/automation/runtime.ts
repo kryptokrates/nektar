@@ -157,8 +157,21 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   }
   const timer = cfg.intervalMs === 0 ? undefined : setInterval(() => { void cycle() }, cfg.intervalMs ?? 5000)
   timer?.unref()
+  let stopped = false
+  // push-driven progress: a verified tx proof (broadcaster callback or the
+  // chain's own mined event) may make a funding tree provable and advance
+  // completion_submitted → settled — run a cycle now, not at the next interval
+  mem.onTxProof((txid, mp) => {
+    if (stopped) return
+    void (async () => {
+      try {
+        if (lanes !== undefined && (await lanes.ledger.unproven()).some(u => u.txid === txid)) await lanes.ledger.markProven(txid, mp)
+      } catch (e) { log(`automation: txproof: ${(e as Error).message}`) }
+      if (!stopped) await cycle().catch(e => log(`automation: ${(e as Error).message}`))
+    })()
+  })
   return {
     store, engine, cycle,
-    stop: async () => { if (timer) clearInterval(timer); while (busy) await new Promise(r => setTimeout(r, 25)); await kx.destroy() }
+    stop: async () => { stopped = true; if (timer) clearInterval(timer); while (busy) await new Promise(r => setTimeout(r, 25)); await kx.destroy() }
   }
 }

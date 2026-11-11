@@ -3,7 +3,7 @@ title: nektar on Teranode Test Net (TTN — test coins)
 type: server
 image: nektar:local
 description: >-
-  nektar on BSV Teranode Test Net via Arcade + WoC-TTN. Anchor fees are paid by
+  nektar on BSV Teranode Test Net via BSV Broadcaster + WoC-TTN. Anchor fees are paid by
   a dedicated operator fee key (generated on first start; its address is
   printed to stderr — fund it with TTN coins). All broadcasts pass a SpendGuard
   (per-tx fee cap, per-day spend cap, min interval, persisted ledger). Keys are
@@ -16,10 +16,10 @@ secrets:
     env: NEKTAR_KEY_PASSPHRASE
     example: <long random passphrase>
     description: Encrypts keys.json and fee.key.json at rest (required)
-  - name: nektar-ttn.arc_api_key
-    env: NEKTAR_ARC_API_KEY
-    example: <arcade api key — optional>
-    description: Arcade API key (optional; public endpoints work without one)
+  - name: nektar-ttn.broadcaster_api_key
+    env: NEKTAR_BROADCASTER_API_KEY
+    example: <broadcaster api key — optional>
+    description: BSV Broadcaster API key (optional; public endpoints work without one)
   - name: nektar-ttn.fund_wif
     env: NEKTAR_FUND_WIF
     example: <testnet WIF — optional>

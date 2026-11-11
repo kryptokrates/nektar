@@ -48,6 +48,9 @@ export class MockChain implements ChainTracker, Broadcaster {
 
   async broadcast (tx: Transaction): Promise<BroadcastResult> {
     const txid = tx.id('hex')
+    // idempotent resubmit, like BSV Broadcaster's 202 for a known tx — the
+    // same bytes can only produce the same txid, so this is never a double-spend
+    if (this.mempool.has(txid) || this.minedTxs.has(txid)) return { status: 'success', txid }
     if (this.verifyScripts) {
       for (let ix = 0; ix < tx.inputs.length; ix++) {
         const inp = tx.inputs[ix]!

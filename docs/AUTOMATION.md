@@ -11,7 +11,7 @@ Ordered by time lost, not by code size.
 entries at *broadcast time*, never at *verdict time*. On mainnet this produced
 four classes of damage:
 
-- ARC returned non-rejected 200s, then later marked the tx `REJECTED`
+- The broadcaster returned non-rejected 202s, then later marked the tx `REJECTED`
   (`UTXO_SPENT`, `parent rejected`) — dead txs stayed in the reserve as live
   entries; the next spend picked them and was orphaned. ~19 entries poisoned.
 - `payInvoice` marks its input spent + adds change via `addOwned` — **and
@@ -28,7 +28,7 @@ four classes of damage:
 - `[done]` `fundingRefresh` tool: queries `address/{fee}/unspent` → revives
   outputs that are still live but spent-marked (dead unbroadcast txs),
   marks entries actually spent on-chain, drops entries whose parent tx
-  ARC reports REJECTED (and revives their inputs that are still live).
+  the broadcaster reports REJECTED (and revives their inputs that are still live).
   On-demand call — a timed/triggered run is still open.
 - `[done]` `takeReserve(minSats)`: smallest-sufficient-first (≥ need), never
   dust; `spendCheck` callback prunes chain-spent candidates.
@@ -36,7 +36,7 @@ four classes of damage:
 - `[part]` Broadcast verdict: covenant `spend()` throws on synchronous
   REFUSED, and `sendSats`/deploy check `br.status` before marking spent /
   advancing state. The post-accept async-REJECTED watch (~60 s poll of
-  ARC `/tx/{txid}` + rollback) is still open — `fundingRefresh` is the
+  broadcaster `/tx/{txid}` + rollback) is still open — `fundingRefresh` is the
   manual recovery until it lands.
 - `[done]` `sendSats` (below) broadcasts directly — the unbroadcast
   `payInvoice` path no longer needs to consume entries by hand. Making
@@ -90,7 +90,7 @@ spend time; a fresh deploy 404s for minutes → the commit dies.
   records its raw hex (bounded, last 64); `fetchParentTx` consults it
   before the network and survives restarts.
 - `[part]` `fetchParentTx` retries 404s 3× at 10 s (fresh txs index within
-  ~30 s). ARC `rawTx` and peer fallbacks still open.
+  ~30 s). broadcaster `rawTx` and peer fallbacks still open.
 
 ## F5 — Chain-time waits as runtime tasks
 
@@ -101,9 +101,9 @@ today each needed a hand-rolled `ssh`-polled python script armed manually.
 
 - `[ ]` In-service scheduler: `refund`, `bondClose`, `bondSeize` accept
   `{when: {height|time}}` — the runtime persists the pending op and fires
-  it when the condition passes. Uses the **ARC callback** path already in
-  `mainnet.ts` (`X-CallbackUrl` → `/v1/arc-callback`) for block/tx events —
-  push, not polling.
+  it when the condition passes. Uses the **broadcaster callback** path already
+  in `mainnet.ts` (`X-CallbackUrl` → `/v1/broadcaster-callback`) for block/tx
+  events — push, not polling.
 - `[ ]` A `tasks` tool to list/cancel pending scheduled ops.
 
 ## F6 — Service lifecycle
@@ -168,8 +168,8 @@ reported it as a fresh deploy, hiding that nothing new aired.
 | 1 | `fundingRefresh` + smallest-sufficient `take` + bond mutex | F1 | M | done (async broadcast verdict loop open) |
 | 2 | Auto-size covenant args + depositorPkh default + dryRun | F3 | S | done except dryRun |
 | 3 | `sendSats` + `fundingRefresh` | F2 | S | done |
-| 4 | parentHex in state + fetch fallback | F4 | S | done (ARC/peer fallback open) |
-| 5 | Scheduled ops on ARC callback (`when:`) + tasks tool | F5 | M | open |
+| 4 | parentHex in state + fetch fallback | F4 | S | done (broadcaster/peer fallback open) |
+| 5 | Scheduled ops on broadcaster status callback (`when:`) + tasks tool | F5 | M | open |
 | 6 | `e2e-mainnet` runner + evidence.json | F8 | M | open |
 | 7 | bondScan | F7 | S | open |
 | 8 | service-run/installer + readiness gate | F6 | M | in progress |
@@ -263,7 +263,7 @@ outcome is known (bytes, parents, fee, leased inputs). `payInvoice` records an
 `exported` signed transaction and no longer adds unbroadcast change back to
 the reserve. `ReserveFunder` skips leased outpoints. Escrow funding is split
 into build → persist → submit; a restart resubmits the same bytes instead of
-escalating. A watcher observes late ARC rejections and triggers funding
+escalating. A watcher observes late broadcaster rejections and triggers funding
 reconciliation. Policy caps still bind only the automation runtime; manual
 owner calls are recorded, not capped.
 

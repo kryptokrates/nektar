@@ -349,7 +349,7 @@ NEKTAR_OVERLAY_HOST=0.0.0.0 NEKTAR_OVERLAY_PORT=8090 \
   `packages/e2e/src/e2e-pay-remote.mjs` drives a DEPLOYED server over
   the public wire (`NEKTAR_REMOTE_URL` + `NEKTAR_HTTP_TOKEN`): MCP
   remember → auto-anchor → 402 → locally signed BEEF settlement →
-  public `/v1/verify` → tx visible via Arcade.
+  public `/v1/verify` → tx visible via BSV Broadcaster.
   Hosted demo: the Hetzner box (`nektar.run`) runs
   `NEKTAR_NETWORK=ttn` with a funded `fee.key.json` reserve (3M sats,
   `NEKTAR_FUND_TXIDS=hex:<rawtx>` offline import — the tx wasn't indexed
@@ -379,10 +379,10 @@ NEKTAR_OVERLAY_HOST=0.0.0.0 NEKTAR_OVERLAY_PORT=8090 \
   `model:{id, params, weightsHash}` on the instance; receipts carry it
   (plus per-call `modelParams`) inside the signed digest.
 - TTN (Teranode Test Net — test coins, `NEKTAR_NETWORK=ttn`):
-  - Endpoints: Arcade (ARC-compatible) `https://arcade-v2-ttn-us-1.bsvblockchain.tech`, WoC-TTN `https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` (`openLiveRuntime`) — SpendGuard caps, encrypted keys, WoC merkle paths.
-  - Differences from main: **no** `NEKTAR_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (Arcade policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); no broadcast fallback beyond WoC `/tx/raw`; confirm interval 30 s.
+  - Endpoints: BSV Broadcaster (ARC-compatible) `https://arcade-v2-ttn-us-1.bsvblockchain.tech`, WoC-TTN `https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` (`openLiveRuntime`) — SpendGuard caps, encrypted keys, WoC merkle paths.
+  - Differences from main: **no** `NEKTAR_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (broadcaster policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); no broadcast fallback beyond WoC `/tx/raw`; confirm interval 30 s.
   - No faucet on TTN — coins come from the community/bsv.dev testcoin channel. The fee-key address is printed to stderr at startup.
-  - Read-only smoke (no spend): `pnpm ttn:readonly` — Arcade policy, WoC tip, header root check, and a real merkle path for a recent coinbase verified with `merklePath.verify(txid, tracker)`.
+  - Read-only smoke (no spend): `pnpm ttn:readonly` — broadcaster policy, WoC tip, header root check, and a real merkle path for a recent coinbase verified with `merklePath.verify(txid, tracker)`.
   - Funded pilot: `NEKTAR_DATA_DIR=.ttn-pilot NEKTAR_KEY_PASSPHRASE=… NEKTAR_NETWORK=ttn pnpm ttn:pilot` — remember→anchor→BUMP→prove→append→rotate→restart-no-fork, with explorer links and per-tx fees from `ops.costs()`.
   - Docker MCP profile: `pnpm mcp:install --ttn` registers `nektar_ttn`.
 - ZK proving:

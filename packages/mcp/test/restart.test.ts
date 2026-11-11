@@ -35,12 +35,10 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
     await b.remember('s', 'e'); const r = await b.remember('s', 'f')
     assert.equal(r.anchored?.n, 2, 'next anchor is n=2 — it spent the persisted head (a fork would be rejected by script/double-spend checks)')
     chain.mine(1)
-    // the confirmer's job: BUMPs for every unproven anchor (incl. the one restored from BEEF)
-    // only the anchor restored from BEEF (n=1, unconfirmed at the "crash") lacks a proof;
-    // the new n=2 tx object received its BUMP when mined
-    assert.deepEqual(b.unprovenAnchors().map(u => u.txid), [b.anchorLinks('s')[1]!.txid])
-    for (const { shard, txid } of b.unprovenAnchors()) b.attachProof(shard, txid, chain.merklePathOf(txid)!)
-    assert.equal(b.unprovenAnchors().length, 0)
+    // push confirmer: 'mined' status events deliver BUMPs for every txid this
+    // instance tracks — including the anchor restored from BEEF — so nothing
+    // stays unproven waiting on a poll
+    assert.equal(b.unprovenAnchors().length, 0, 'mined events attached proofs to both anchors, restored one included')
     assert.throws(() => b.attachProof('s', b.tailLink('s')!.txid, chain.merklePathOf(b.anchorLinks('s')[0]!.txid)!), /does not contain this txid/)
     for (const seq of [0, 1, 2, 3, 4, 5]) assert.equal((await b.prove('s', seq)).result.ok, true, `seq ${seq} provable after restart`)
     const sec = (await b.recall('s', { seq: 1 })).items[0]!

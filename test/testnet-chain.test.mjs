@@ -2,7 +2,7 @@
 // headers resolve, a mined tx's merkle path verifies against the real
 // header chain, and a broadcast lands (if a funded key is provided).
 // Run: node test/testnet-chain.test.mjs  [NEKTAR_FUND_WIF optional]
-import { WocTracker, ArcBroadcaster, merklePathMainnet, discoverUtxos } from '../packages/chain/dist/src/index.js'
+import { WocTracker, BsvBroadcaster, merklePathMainnet, discoverUtxos } from '../packages/chain/dist/src/index.js'
 import { PrivateKey, Transaction, P2PKH } from '@bsv/sdk'
 
 let pass = 0, fail = 0
@@ -52,8 +52,8 @@ console.log('== live testnet chain path ==')
       tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: (u.satoshis ?? u.value) - 500, change: true })
       await tx.fee()
       await tx.sign()
-      const arc = new ArcBroadcaster({ net: 'testnet' })
-      const r = await arc.broadcast(tx)
+      const bcast = new BsvBroadcaster({ broadcasterUrl: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech' })
+      const r = await bcast.broadcast(tx)
       ok(r.status === 'success' || r.txid === tx.id('hex'), `broadcast lands: ${tx.id('hex').slice(0, 12)}… (${r.status ?? r.description ?? 'ok'})`)
     }
   } else {

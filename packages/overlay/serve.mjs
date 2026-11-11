@@ -28,7 +28,7 @@ import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 import knexPkg from 'knex'
-import { ArcBroadcaster, ChaintracksTracker } from '@nektar/chain'
+import { BsvBroadcaster, ChaintracksTracker } from '@nektar/chain'
 import { PrivateKey } from '@bsv/sdk'
 import { createNektarOverlay, verifyPresence, verifyCatalog, verifyWant, verifyOffer, verifySettlement, verifyReputationCard, verifyDelegation, verifyAttestation, signBeacon, signInterval, deliveryRecord, eventEnvelope, KIND_PATTERN } from './dist/src/index.js'
 import { sha256 } from '@nektar/core'
@@ -39,19 +39,19 @@ const DIR = process.env.NEKTAR_OVERLAY_DIR ?? path.join(process.cwd(), '.state',
 const TOKEN = process.env.NEKTAR_OVERLAY_TOKEN
 const NET = process.env.NEKTAR_NETWORK ?? 'testnet'
 // No WhatsOnChain anywhere: tracker = chaintracks only (no WocTracker
-// fallback); broadcaster's post-ARC fallback is pointed back at the same
-// arcade (self-referential retry — a 404 there just ends in 'broadcast failed').
+// fallback); the WoC broadcast fallback is pointed back at the same
+// broadcaster (self-referential retry — a 404 there just ends in 'broadcast failed').
 const URLS = {
-  testnet: { arc: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', ct: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v2' },
-  ttn:     { arc: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',    ct: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech/chaintracks/v2' },
-  main:    { arc: 'https://arcade-us-1.bsvblockchain.tech',           ct: 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2' }
+  testnet: { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', ct: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v2' },
+  ttn:     { broadcaster: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',    ct: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech/chaintracks/v2' },
+  main:    { broadcaster: 'https://arcade-us-1.bsvblockchain.tech',           ct: 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2' }
 }
 const u = URLS[NET] ?? URLS.testnet
 fs.mkdirSync(DIR, { recursive: true })
 
 const overlay = await createNektarOverlay(
-  new ChaintracksTracker({ arcUrl: u.arc, wocUrl: u.arc }, u.ct),
-  new ArcBroadcaster({ arcUrl: u.arc, wocUrl: u.arc }),
+  new ChaintracksTracker({ broadcasterUrl: u.broadcaster, wocUrl: u.broadcaster }, u.ct),
+  new BsvBroadcaster({ broadcasterUrl: u.broadcaster, wocUrl: u.broadcaster }),
   knexPkg({ client: 'sqlite3', connection: { filename: path.join(DIR, 'overlay.sqlite') }, useNullAsDefault: true }),
   // strict by default — only SPV-verified (net+tip-bound) artifacts land on the
   // feed; NEKTAR_OVERLAY_STRICT_NET=0 relaxes for dev/compat

@@ -27,7 +27,7 @@ const topics = [
   ['time', 'Python 3.12 removed utcnow from datetime', 'datetime.utcnow is deprecated'],
   ['path', 'Node path.win32 resolves .. above the root', 'path traversal check fails on windows'],
   ['mempool', 'unconfirmed chains longer than 25 are rejected', 'too-long-mempool-chain error'],
-  ['fees', 'ARC enforces a minimum fee rate', 'fee too low broadcast rejection'],
+  ['fees', 'the broadcaster enforces a minimum fee rate', 'fee too low broadcast rejection'],
   ['keys', 'compressed public keys are 33 bytes', 'public key length mismatch'],
   ['merkle', 'a BUMP path proves inclusion in a block', 'how to prove a transaction is in a block'],
   ['libfoo', 'libfoo 3.0 renamed connect to open', 'connect is not a function after the libfoo upgrade'],

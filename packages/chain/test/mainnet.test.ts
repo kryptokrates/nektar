@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { Transaction, P2PKH, UnlockingScript } from '@bsv/sdk'
 import type { Broadcaster } from '../src/interfaces.js'
 import { sha256 } from '@nektar/core'
-import { ArcBroadcaster, fetchArcFeeRate, WocTracker, tscToMerklePath, merklePathMainnet, discoverUtxos } from '../src/mainnet.js'
+import { BsvBroadcaster, fetchBroadcasterFeeRate, WocTracker, tscToMerklePath, merklePathMainnet, discoverUtxos } from '../src/mainnet.js'
 import { SpendGuard } from '../src/spendguard.js'
 import { buildBump } from '../src/mock.js'
 import { mkdtempSync } from 'node:fs'
@@ -27,6 +27,23 @@ const stubFetch = (routes: Record<string, { status?: number, body?: any, raw?: s
   ;(f as any).calls = calls
   return f
 }
+// same shape but captures request headers (callback-header assertions)
+const stubFetchHdrs = (routes: Record<string, { status?: number, body?: any, raw?: string } | ((n: number) => { status?: number, body?: any, raw?: string })>) => {
+  const calls: Array<{ url: string, headers: Record<string, string> }> = []
+  const f: typeof fetch = async (input: any, init?: any) => {
+    const url = String(input)
+    calls.push({ url, headers: Object.fromEntries(Object.entries(init?.headers ?? {})) })
+    for (const [k, v] of Object.entries(routes)) {
+      if (url.includes(k)) {
+        const r = typeof v === 'function' ? v(calls.filter(c => c.url === url).length) : v
+        return new Response(r.raw ?? JSON.stringify(r.body ?? {}), { status: r.status ?? 200, headers: { 'content-type': 'application/json' } })
+      }
+    }
+    return new Response('not found', { status: 404 })
+  }
+  ;(f as any).calls = calls
+  return f
+}
 
 const tx = () => { // minimal valid tx for broadcast tests
   const parent = new Transaction()
@@ -37,39 +54,75 @@ const tx = () => { // minimal valid tx for broadcast tests
   return t
 }
 
-test('ArcBroadcaster: success on 2xx non-rejected status', async () => {
-  const fetchImpl = stubFetch({ '/v1/tx': { body: { txid: 'aa', txStatus: 'SEEN_ON_NETWORK' } } })
-  const b = new ArcBroadcaster({ fetchImpl, arcUrl: 'http://arc' })
+test('BsvBroadcaster: posts /tx with callback headers; 202 RECEIVED → success', async () => {
+  const fetchImpl = stubFetchHdrs({ '/tx': { status: 202, body: { txid: 'aa', status: 202, txStatus: 'RECEIVED' } } })
+  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast', callbackUrl: 'https://me.example', callbackToken: 'tok123' })
   const res = await b.broadcast(tx())
   assert.equal(res.status, 'success')
+  const post = (fetchImpl as any).calls.find((c: any) => c.url === 'http://bcast/tx')
+  assert.ok(post, 'posted to <base>/tx')
+  assert.equal(post.headers['X-CallbackUrl'], 'https://me.example/v1/broadcaster-callback')
+  assert.equal(post.headers['X-CallbackToken'], 'tok123')
+  assert.equal(post.headers['X-FullStatusUpdates'], 'true')
 })
 
-test('ArcBroadcaster: REJECTED is an error with NO WoC fallback', async () => {
+test('BsvBroadcaster: 202 terminal status is an error; 400 carries the reason; NO WoC fallback', async () => {
   const fetchImpl = stubFetch({
-    'arc.example/v1/tx': { body: { txStatus: 'REJECTED', extraInfo: 'low fee' } },
+    'bcast.example/tx': { status: 202, body: { txStatus: 'DOUBLE_SPEND_ATTEMPTED' } },
     'woc.example/tx/raw': { body: { txid: 'x' } },
   })
-  const b = new ArcBroadcaster({ fetchImpl, arcUrl: 'http://arc.example', wocUrl: 'http://woc.example' })
+  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' })
   const res = await b.broadcast(tx())
   assert.equal(res.status, 'error')
-  assert.match(res.description!, /REJECTED.*low fee/)
-  assert.ok(!(fetchImpl as any).calls.some((c: string) => c.includes('woc.example')), 'policy rejection must NOT fall back')
+  assert.match(res.description!, /DOUBLE_SPEND_ATTEMPTED/)
+  assert.ok(!(fetchImpl as any).calls.some((c: string) => c.includes('woc.example')), 'terminal status must NOT fall back')
+
+  const fetchImpl2 = stubFetch({
+    'bcast.example/tx': { status: 400, body: { error: 'ERR_BAD_FEE', reason: 'fee too low', txid: 'aa', status: 400, title: 'bad', detail: 'fee below minimum', type: 'broadcaster' } },
+    'woc.example/tx/raw': { body: { txid: 'x' } },
+  })
+  const b2 = new BsvBroadcaster({ fetchImpl: fetchImpl2, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' })
+  const res2 = await b2.broadcast(tx())
+  assert.equal(res2.status, 'error')
+  assert.match(res2.description!, /fee too low/)
+  assert.ok(!(fetchImpl2 as any).calls.some((c: string) => c.includes('woc.example')), 'terminal 400 must NOT fall back')
 })
 
-test('ArcBroadcaster: 5xx falls back to WoC', async () => {
+test('BsvBroadcaster: 503 twice then 202 → success, WoC never called; network error → WoC fallback', async () => {
+  let n = 0
+  const fetchImpl = stubFetchHdrs({
+    'bcast.example/tx': () => (++n <= 2 ? { status: 503, body: { detail: 'busy' } } : { status: 202, body: { txStatus: 'RECEIVED' } }),
+    'woc.example/tx/raw': { body: { txid: 'x' } },
+  })
+  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' })
+  const res = await b.broadcast(tx())
+  assert.equal(res.status, 'success')
+  assert.equal((fetchImpl as any).calls.filter((c: any) => c.url === 'http://bcast.example/tx').length, 3, 'two 503 retries then accepted')
+  assert.ok(!(fetchImpl as any).calls.some((c: any) => c.url.includes('woc.example')), 'WoC never called')
+
+  const fetchImpl2: typeof fetch = async (input: any) => {
+    if (String(input).includes('woc.example')) return new Response(JSON.stringify({ txid: 'x' }), { status: 200 })
+    throw new Error('ECONNREFUSED')
+  }
+  const b2 = new BsvBroadcaster({ fetchImpl: fetchImpl2, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' })
+  const res2 = await b2.broadcast(tx())
+  assert.equal(res2.status, 'success', 'network error → WoC fallback')
+})
+
+test('BsvBroadcaster: 5xx (non-503) falls back to WoC', async () => {
   const fetchImpl = stubFetch({
-    'arc.example/v1/tx': { status: 503, body: 'oops', raw: 'oops' },
+    'bcast.example/tx': { status: 500, raw: 'oops' },
     'woc.example/tx/raw': { body: 'deadbeef', raw: '"deadbeef"' },
   })
-  const b = new ArcBroadcaster({ fetchImpl, arcUrl: 'http://arc.example', wocUrl: 'http://woc.example' })
+  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' })
   const res = await b.broadcast(tx())
   assert.equal(res.status, 'success')
   assert.ok((fetchImpl as any).calls.some((c: string) => c.includes('woc.example/tx/raw')), 'WoC fallback used')
 })
 
-test('fetchArcFeeRate: policy 100sat/1000B → 100 sat/kB', async () => {
-  const fetchImpl = stubFetch({ '/v1/policy': { body: { policy: { miningFee: { bytes: 1000, satoshis: 100 } } } } })
-  assert.equal(await fetchArcFeeRate({ fetchImpl, arcUrl: 'http://arc' }), 100)
+test('fetchBroadcasterFeeRate: /policy 100sat/1000B → 100 sat/kB', async () => {
+  const fetchImpl = stubFetch({ '/policy': { body: { policy: { miningFee: { bytes: 1000, satoshis: 100 } } } } })
+  assert.equal(await fetchBroadcasterFeeRate({ fetchImpl, broadcasterUrl: 'http://bcast' }), 100)
 })
 
 test('WocTracker: header cached; 429 retried', async () => {
@@ -127,15 +180,15 @@ test('tscToMerklePath: real tree roots verify for N=1..8', () => {
   }
 })
 
-test('merklePathMainnet (ARC BUMP) + discoverUtxos with recorded fixtures', async () => {
+test('merklePathMainnet (broadcaster BUMP) + discoverUtxos with recorded fixtures', async () => {
   const bumpHex = buildBump(['aa'.repeat(32), 'bb'.repeat(32)], 0, 850_000).toHex()
   const fetchImpl = stubFetch({
-    'arc.example/v1/tx/aa': { body: { txStatus: 'MINED', merklePath: bumpHex } },
+    'bcast.example/tx/aa': { body: { txStatus: 'IMMUTABLE', merklePath: bumpHex } },
     '/address/addr/unspent': { body: [{ tx_hash: 'bb'.repeat(32), tx_pos: 0, value: 5000 }] },
     '/tx/bb': { raw: '01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01e8030000000000001976a914000000000000000000000000000000000000000088ac00000000' },
   })
-  const mp = await merklePathMainnet({ fetchImpl, arcUrl: 'http://arc.example', wocUrl: 'http://woc' }, 'aa'.repeat(32))
-  assert.ok(mp?.merklePath, 'ARC BUMP hex parses')
+  const mp = await merklePathMainnet({ fetchImpl, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc' }, 'aa'.repeat(32))
+  assert.ok(mp?.merklePath, 'broadcaster BUMP hex parses')
   const utxos = await discoverUtxos({ fetchImpl, wocUrl: 'http://woc' }, 'addr')
   assert.equal(utxos.length, 1)
   assert.equal(utxos[0]!.satoshis, 5000)

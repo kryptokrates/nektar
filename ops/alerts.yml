@@ -41,4 +41,4 @@ groups:
       - alert: NektarBroadcastFailures
         expr: increase(nektar_anchor_failures_total[10m]) > 2
         labels: { severity: critical }
-        annotations: { summary: "repeated broadcast failures — check ARC/WoC reachability and fee balance" }
+        annotations: { summary: "repeated broadcast failures — check broadcaster/WoC reachability and fee balance" }

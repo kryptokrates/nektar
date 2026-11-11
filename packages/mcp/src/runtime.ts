@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { PrivateKey, MerklePath, Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, ArcBroadcaster, WocTracker, fetchArcFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, BsvBroadcaster, WocTracker, fetchBroadcasterFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -22,7 +22,7 @@ export interface RuntimeConfig {
   main?: MainnetConfig & {
     fundWif?: string // fee key; absent → load/generate fee.key.json
     passphrase?: string // NEKTAR_KEY_PASSPHRASE — mandatory on main
-    feeRateSatPerKb?: number // default: max(100, ARC policy)
+    feeRateSatPerKb?: number // default: max(100, broadcaster policy)
     maxFeePerTx?: number // sats (default 1000)
     maxSpendPerDay?: number // sats (default 20000)
     minBroadcastIntervalMs?: number // default 10000
@@ -85,16 +85,19 @@ export function configFromEnv (env = process.env): RuntimeConfig {
     // "ttn" below = any test network (testnet encoding, test coins, low fee floor)
     const ttn = network !== 'main'
     const urls = network === 'testnet'
-      ? { arc: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', woc: 'https://api.whatsonchain.com/v1/bsv/test' }
-      : network === 'ttn' ? { arc: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech', woc: 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test' } : undefined
+      ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', woc: 'https://api.whatsonchain.com/v1/bsv/test' }
+      : network === 'ttn' ? { broadcaster: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech', woc: 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test' } : undefined
+    const legacyBroadcaster = env.NEKTAR_ARC_URL !== undefined || env.NEKTAR_ARC_API_KEY !== undefined || env.NEKTAR_ARC_API_KEY_FILE !== undefined
+    const newBroadcaster = env.NEKTAR_BROADCASTER_URL !== undefined || env.NEKTAR_BROADCASTER_API_KEY !== undefined || env.NEKTAR_BROADCASTER_API_KEY_FILE !== undefined
+    if (legacyBroadcaster && !newBroadcaster) process.stderr.write('nektar: NEKTAR_ARC_URL is deprecated — use NEKTAR_BROADCASTER_URL\n')
     cfg.confirmEveryMs = Number(env.NEKTAR_CONFIRM_MS ?? (ttn ? 30_000 : 60_000))
     cfg.main = {
       fundWif: secret('NEKTAR_FUND_WIF'),
       passphrase: secret('NEKTAR_KEY_PASSPHRASE'),
-      // TTN defaults: Arcade + WoC-TTN endpoints (probed live); main keeps the
-      // built-in GorillaPool/WoC defaults when env vars are unset
-      arcUrl: env.NEKTAR_ARC_URL ?? urls?.arc,
-      arcApiKey: secret('NEKTAR_ARC_API_KEY'),
+      // TTN defaults: BSV Broadcaster + WoC-TTN endpoints (probed live); main
+      // keeps the built-in GorillaPool/WoC defaults when env vars are unset
+      broadcasterUrl: env.NEKTAR_BROADCASTER_URL ?? env.NEKTAR_ARC_URL ?? urls?.broadcaster,
+      broadcasterApiKey: secret('NEKTAR_BROADCASTER_API_KEY') ?? secret('NEKTAR_ARC_API_KEY'),
       wocUrl: env.NEKTAR_WOC_URL ?? urls?.woc,
       wocApiKey: secret('NEKTAR_WOC_API_KEY'),
       chaintracksUrl: env.NEKTAR_CHAINTRACKS_URL,
@@ -344,12 +347,12 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   process.stderr.write(`nektar ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)\n`)
 
   // headers via Chaintracks (public, no key, PoW-verifiable — the only global
-  // data SPV needs); WoC stays as fallback. GorillaPool's arcade doesn't mount
-  // the chaintracks listener, so mainnet uses the association arcade that does.
+  // data SPV needs); WoC stays as fallback. GorillaPool's broadcaster doesn't mount
+  // the chaintracks listener, so mainnet uses the association broadcaster that does.
   const tracker = new ChaintracksTracker(mc,
-    mc.chaintracksUrl ?? (ttn ? `${mc.arcUrl}/chaintracks/v2` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'),
+    mc.chaintracksUrl ?? (ttn ? `${mc.broadcasterUrl}/chaintracks/v2` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'),
     new WocTracker(mc))
-  const rawBroadcaster = new ArcBroadcaster(mc)
+  const rawBroadcaster = new BsvBroadcaster(mc)
   const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))
   const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
   const addIfNew = (u: { tx: Transaction, vout: number }) => {
@@ -385,7 +388,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     p2p.connect()
   }
   const floor = ttn ? 1 : 100
-  const feeRate = Math.max(mc.feeRateSatPerKb ?? floor, await fetchArcFeeRate(mc).catch(() => floor))
+  const feeRate = Math.max(mc.feeRateSatPerKb ?? floor, await fetchBroadcasterFeeRate(mc).catch(() => floor))
   const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async (_sc?: unknown, minSats?: number) => await reserve.takeReserve(undefined, minSats) }
   const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker, { wocApiKey: mc.wocApiKey, fetchImpl: mc.fetchImpl })
   const chain = {
@@ -592,8 +595,8 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     // fundingRefresh MCP tool: reconcile the reserve against chain truth.
     //   - outputs WoC reports live at the fee address are revived (stale
     //     spent-marks from dead unbroadcast txs cleared) or imported fresh
-    //   - entries whose parent tx ARC rejected get dropped, and any input they
-    //     consumed that is still live on-chain is revived
+    //   - entries whose parent tx the broadcaster rejected get dropped, and
+    //     any input they consumed that is still live on-chain is revived
     //   - entries existing on WoC but no longer unspent get marked spent
     // Fixes the phantom-entry/dust-pick class without a restart.
     refreshFunding: async () => {
@@ -624,11 +627,11 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
         const txid = u.tx.id('hex')
         const exists = await fetch(`${wocBase}/tx/${txid}`, { headers: h }).then(x => x.ok).catch(() => false)
         if (exists) { reserve.markSpent(txid, u.vout); marked++; continue }
-        // absent from both the unspent set and the tx index — check ARC's verdict
+        // absent from both the unspent set and the tx index — check the broadcaster's verdict
         let rejected = false
         try {
-          const st = await fetch(`${mc.arcUrl ?? 'https://arc.gorillapool.com'}/v1/tx/${txid}`).then(x => x.ok ? x.json() : null)
-          rejected = st != null && String(st.txStatus ?? st.status ?? '').includes('REJECTED')
+          const st = await fetch(`${mc.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`).then(x => x.ok ? x.json() : null)
+          rejected = st != null && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(String(st.txStatus ?? '').toUpperCase())
         } catch { /* keep */ }
         if (!rejected) { pending++; continue }
         // dead tx — drop the entry and revive any of its inputs still live
@@ -648,11 +651,11 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const { TransactionWatcher } = await import('./automation/ledger.js')
   const watcher = new TransactionWatcher(ledger, async txid => {
     try {
-      const st = await fetch(`${mc.arcUrl ?? 'https://arc.gorillapool.com'}/v1/tx/${txid}`, { signal: AbortSignal.timeout(10_000) }).then(x => x.ok ? x.json() : null)
-      const status = String(st?.txStatus ?? st?.status ?? '')
-      if (/MINED/.test(status)) return { status: 'seen', source: 'arc' }
-      if (/REJECTED/.test(status)) return { status: 'rejected', source: 'arc', reason: st?.txStatus ?? status }
-      if (/SEEN|ACCEPTED|ANNOUNCED/.test(status)) return { status: 'seen', source: 'arc' }
+      const st = await fetch(`${mc.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) }).then(x => x.ok ? x.json() : null)
+      const status = String(st?.txStatus ?? '').toUpperCase()
+      const SEEN = ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE']
+      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) return { status: 'rejected', source: 'broadcaster', reason: status }
+      if (SEEN.includes(status)) return { status: 'seen', source: 'broadcaster' }
     } catch { /* undecidable — retry next tick */ }
     return undefined
   }, async () => { await ops.refreshFunding?.().catch(() => {}) })

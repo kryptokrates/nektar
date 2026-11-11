@@ -38,7 +38,7 @@ export interface NektarMemoryOptions {
   maxLevel?: number // highest access level this seed may hold
   burstLimit?: number
   /** fee rate for anchor txs in sats per KB (runar-sdk fee = ceil(size*rate/1000));
-   *  default 1 (mock/regtest); mainnet uses ~100 (ARC policy) */
+   *  default 1 (mock/regtest); mainnet uses ~100 (broadcaster policy) */
   feeRateSatPerKb?: number
   batchPolicy?: import('@nektar/log').ClosePolicy
   overlay?: NektarOverlay // if set, anchors are also submitted to tm_nektar
@@ -334,6 +334,11 @@ export class NektarMemory {
     if (opts.dataDir) this.budget = new BudgetAuthority(opts.dataDir)
     this.restoreSecurityState()
     this.restoreState()
+    // push confirmations: backends that emit status events (mock, regtest)
+    // deliver 'mined' proofs straight in — no confirmation polling
+    this.chain.onStatus?.(ev => {
+      if (ev.status === 'mined' && ev.merklePath) this.deliverTxProof(ev.txid, ev.merklePath)
+    })
   }
   private logKey: PrivateKey
   public budget?: import('./budget.js').BudgetAuthority
@@ -348,6 +353,20 @@ export class NektarMemory {
   /** state-change events for live surfaces (dashboard SSE, watchers) —
    *  emitted once per successful mutating tool call by the server layer */
   readonly events = new EventEmitter()
+  private txProofCbs: Array<(txid: string, mp: import('@bsv/sdk').MerklePath) => void> = []
+  /** subscribe to verified tx proofs — fed by verified broadcaster callbacks
+   *  (http layer checks the BUMP first) and by chain 'mined' status events */
+  onTxProof (cb: (txid: string, mp: import('@bsv/sdk').MerklePath) => void): void { this.txProofCbs.push(cb) }
+  /** a merkle proof that was already verified by the caller (callback BUMP
+   *  checked against our own tracker) or produced by the chain backend
+   *  itself: attach it to the anchor it belongs to, then notify subscribers */
+  deliverTxProof (txid: string, mp: import('@bsv/sdk').MerklePath): void {
+    try {
+      const shard = this.txidShard.get(txid)
+      if (shard) this.attachProof(shard, txid, mp)
+    } catch { /* proof not for us / malformed */ }
+    for (const cb of this.txProofCbs) { try { cb(txid, mp) } catch { /* listener errors are their own */ } }
+  }
   /** the log signing key's pubkey (verifies promises and checkpoints) */
   logPublicKey (): string { return this.logKey.toPublicKey().toString() }
 
@@ -1709,8 +1728,8 @@ export class NektarMemory {
     return { policySetHash: hash, decision: d.allow ? 'allow' as const : 'deny' as const, zkaccess: args.zk ? (zk.ok ? 'verified' : 'rejected') : 'not-required' }
   }
 
-  /** ARC-callback path: a MINED push names only the txid — resolve the shard
-   *  and confirm; no-op for txids we didn't anchor. Never a poll, always push. */
+  /** broadcaster-callback path: a MINED push names only the txid — resolve the
+   *  shard and confirm; no-op for txids we didn't anchor. Never a poll, always push. */
   confirmByTxid (txid: string): boolean {
     const shard = this.txidShard.get(txid)
     if (!shard) return false

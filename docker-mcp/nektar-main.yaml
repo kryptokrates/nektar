@@ -18,10 +18,10 @@ secrets:
     env: NEKTAR_KEY_PASSPHRASE
     example: <long random passphrase>
     description: Encrypts keys.json and fee.key.json at rest (required)
-  - name: nektar-main.arc_api_key
-    env: NEKTAR_ARC_API_KEY
-    example: <gorillapool arc api key — optional>
-    description: ARC API key (public policy/broadcast works without it; a key lifts rate limits)
+  - name: nektar-main.broadcaster_api_key
+    env: NEKTAR_BROADCASTER_API_KEY
+    example: <gorillapool broadcaster api key — optional>
+    description: BSV Broadcaster API key (public policy/broadcast works without it; a key lifts rate limits)
   - name: nektar-main.fund_wif
     env: NEKTAR_FUND_WIF
     example: <WIF — optional>

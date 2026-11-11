@@ -1,6 +1,6 @@
 // ai_inference Groth16 verifier deploy+spend on PUBLIC BSV testnet.
 // Same txs as e2e-grothinf-regtest.mjs, pointed at the live network:
-//   broadcast:  BSVA Arcade testnet (NEKTAR_ARC_URL overridable)
+//   broadcast:  BSV Broadcaster testnet (NEKTAR_BROADCASTER_URL overridable)
 //   discovery:  WhatsOnChain testnet index (NEKTAR_WOC_URL overridable)
 //
 // Funding: NEKTAR_FUND_WIF wins; otherwise the encrypted ttn-data keystore
@@ -13,7 +13,7 @@
 //
 // Run: node packages/e2e/src/e2e-grothinf-testnet.mjs
 import { PrivateKey, Transaction, LockingScript, UnlockingScript, P2PKH } from '@bsv/sdk'
-import { ArcBroadcaster, WocTracker, discoverUtxos, fetchArcFeeRate } from '@nektar/chain'
+import { BsvBroadcaster, WocTracker, discoverUtxos, fetchBroadcasterFeeRate } from '@nektar/chain'
 import { readKeyFile } from '../../mcp/dist/src/keystore.js'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -28,12 +28,12 @@ const check = (cond, name) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${name}`)
 
 // --- config ----------------------------------------------------------------
 const cfg = {
-  arcUrl: process.env.NEKTAR_ARC_URL ?? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech',
+  broadcasterUrl: process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech',
   wocUrl: process.env.NEKTAR_WOC_URL ?? 'https://api.whatsonchain.com/v1/bsv/test',
-  arcApiKey: process.env.NEKTAR_ARC_API_KEY,
+  broadcasterApiKey: process.env.NEKTAR_BROADCASTER_API_KEY,
   wocApiKey: process.env.NEKTAR_WOC_API_KEY
 }
-const broadcaster = new ArcBroadcaster(cfg)
+const broadcaster = new BsvBroadcaster(cfg)
 const tracker = new WocTracker(cfg)
 
 // --- key -------------------------------------------------------------------
@@ -56,9 +56,9 @@ const fund = utxos.sort((a, b) => b.satoshis - a.satoshis)[0]
 check(!!fund, `testnet UTXO discovered (${utxos.length} found${fund ? `, largest ${fund.satoshis} sats` : ''})`)
 if (!fund) process.exit(1)
 
-const feeRate = await fetchArcFeeRate(cfg).catch(() => 1)
+const feeRate = await fetchBroadcasterFeeRate(cfg).catch(() => 1)
 const feeFor = (bytes) => Math.max(Math.ceil((bytes / 1000) * feeRate) + 500, 1500)
-console.log(`ARC fee rate: ${feeRate} sat/kB`)
+console.log(`broadcaster fee rate: ${feeRate} sat/kB`)
 
 const broadcast = async (tx) => {
   const r = await broadcaster.broadcast(tx)

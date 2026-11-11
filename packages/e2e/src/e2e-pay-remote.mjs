@@ -5,7 +5,7 @@
 //   node packages/e2e/src/e2e-pay-remote.mjs
 // env: NEKTAR_REMOTE_URL (default https://nektar.run),
 //      NEKTAR_HTTP_TOKEN (bearer), NEKTAR_FUND_WIF or the ttn-data keystore +
-//      NEKTAR_KEY_PASSPHRASE for the payer, NEKTAR_ARC_URL for the visibility check.
+//      NEKTAR_KEY_PASSPHRASE for the payer, NEKTAR_BROADCASTER_URL for the visibility check.
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { readFileSync, existsSync } from 'node:fs'
 import { buildPaymentTx } from '../../mcp/dist/src/payclient.js'
@@ -13,7 +13,7 @@ import { readKeyFile } from '../../mcp/dist/src/keystore.js'
 
 const BASE = process.env.NEKTAR_REMOTE_URL ?? 'https://nektar.run'
 const TOKEN = process.env.NEKTAR_HTTP_TOKEN ?? ''
-const ARC = process.env.NEKTAR_ARC_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
+const BROADCASTER = process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
 const check = (ok, label) => { console.log(` ${ok ? '✔' : '✗ FAIL'} ${label}`); if (!ok) process.exit(1) }
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -105,7 +105,7 @@ check(r.receipt?.payment?.txid === txid, 'receipt commits the settlement txid')
 check(r.receipt?.payment?.payTo === inv.payTo, `payment pays the operator ${inv.payTo}`)
 
 // ── 6) the tx exists on the real public network
-const st = await fetch(`${ARC}/tx/${txid}`).then(x => x.ok ? x.json() : null).catch(() => null)
+const st = await fetch(`${BROADCASTER}/tx/${txid}`).then(x => x.ok ? x.json() : null).catch(() => null)
 check(!!st?.txid || !!st?.txStatus, `settlement tx visible on the network (${st?.txStatus ?? 'pending'})`)
 
 // ── 7) public verify — no auth, what a phone sees

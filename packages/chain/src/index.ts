@@ -4,7 +4,7 @@ export { TeranodeBroadcaster, TeranodeRPCTracker, regtestStackFromEnv, merklePat
 export { ChaintracksTracker, parseHeaderHex } from './mainnet.js'
 export { P2PListener } from './p2p.js'
 export type { RegtestConfig } from './regtest.js'
-export { ArcBroadcaster, fetchArcFeeRate, WocTracker, merklePathMainnet, tscToMerklePath, discoverUtxos, importFundingTx } from './mainnet.js'
+export { BsvBroadcaster, fetchBroadcasterFeeRate, WocTracker, merklePathMainnet, tscToMerklePath, discoverUtxos, importFundingTx } from './mainnet.js'
 export type { MainnetConfig } from './mainnet.js'
 export { SpendGuard } from './spendguard.js'
 export type { SpendGuardOpts, CostRecord } from './spendguard.js'

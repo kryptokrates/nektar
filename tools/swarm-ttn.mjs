@@ -15,7 +15,7 @@ for (let i = 0; i < 10; i++) {
   fs.mkdirSync(dir, { recursive: true })
   const rt = await openRuntime({ network: 'ttn', dataDir: dir, main: {
     passphrase: 'demo-only',
-    arcUrl: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',
+    broadcasterUrl: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',
     chaintracksUrl: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech/chaintracks/v2'
   } })
   agents.push({ i, rt, pub: rt.mem.operatorKey().toPublicKey().encode('hex', true) })

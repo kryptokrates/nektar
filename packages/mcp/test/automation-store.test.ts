@@ -203,7 +203,7 @@ test('wallet: one outpoint, one live action; guard refusal releases, network rej
     await tx.sign()
     return tx
   }
-  let reply = { status: 'error' as const, description: 'ARC: REJECTED — missing inputs' }
+  let reply = { status: 'error' as const, description: 'broadcaster: REJECTED — missing inputs' }
   const w = new WalletCoordinator(store, { broadcast: async () => reply })
   const t1 = await build(), t2 = await build()
   await w.prepare(ctx('h', 'a'), 'send', t1)

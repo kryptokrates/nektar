@@ -1,14 +1,15 @@
 // mainnet.ts — read-only mainnet access (policy, headers, chain info, UTXO
-// discovery, merkle paths) + the ARC broadcaster. NO spend happens here:
-// ArcBroadcaster is the only write path and it is wrapped by SpendGuard in
-// the runtime before any tx reaches it.
+// discovery, merkle paths) + the BSV Broadcaster client. NO spend happens
+// here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
+// in the runtime before any tx reaches it.
 import { Transaction, MerklePath, Hash } from '@bsv/sdk'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 
 export interface MainnetConfig {
-  arcUrl?: string // BSV Broadcaster (ex-Arcade) or classic ARC base (no trailing slash)
-  arcApiKey?: string
-  callbackUrl?: string // our public base — ARC pushes tx-status updates here (X-CallbackUrl)
+  broadcasterUrl?: string // BSV Broadcaster base (no trailing slash)
+  broadcasterApiKey?: string
+  callbackUrl?: string // our public base — the broadcaster pushes tx-status updates here (X-CallbackUrl)
+  callbackToken?: string // sent as X-CallbackToken; webhooks carry it as Authorization: Bearer
   wocUrl?: string // WhatsOnChain base (no trailing slash)
   wocApiKey?: string
   chaintracksUrl?: string // chaintracks base incl. /v1|/v2 — header source for BUMP verification
@@ -17,11 +18,12 @@ export interface MainnetConfig {
 
 const def = (c?: MainnetConfig) => ({
   // BSV Broadcaster (formerly Arcade; the ARC successor) — GorillaPool instance
-  arcUrl: c?.arcUrl ?? 'https://arcade.gorillapool.io',
+  broadcasterUrl: c?.broadcasterUrl ?? 'https://arcade.gorillapool.io',
   callbackUrl: c?.callbackUrl ?? process.env.NEKTAR_CALLBACK_URL,
+  callbackToken: c?.callbackToken ?? process.env.NEKTAR_CALLBACK_TOKEN,
   wocUrl: c?.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main',
   fetch: c?.fetchImpl ?? fetch,
-  arcApiKey: c?.arcApiKey,
+  broadcasterApiKey: c?.broadcasterApiKey,
   wocApiKey: c?.wocApiKey
 })
 
@@ -32,36 +34,42 @@ const req = async (c: ReturnType<typeof def>, url: string, init: RequestInit = {
 }
 const j = async (r: Response): Promise<any> => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return await r.json() }
 
-// --- ARC broadcaster ---------------------------------------------------------
-const txPaths = new Map<string, string>() // arcUrl → '/v1/tx' (ARC) | '/tx' (Arcade)
-// BSV Broadcaster / Arcade hosts serve /tx; classic ARC /v1/tx (still learned on 404)
-const txPathFor = (arcUrl: string) => txPaths.get(arcUrl) ?? (/arcade|broadcaster/.test(arcUrl) ? '/tx' : '/v1/tx')
-export class ArcBroadcaster implements Broadcaster {
+// --- BSV Broadcaster client --------------------------------------------------
+// Own client on purpose: the sdk ARC class posts /v1/tx which BSV Broadcaster
+// does not serve, and the sdk Teranode class has no callback support.
+export class BsvBroadcaster implements Broadcaster {
   private cfg
   constructor (c?: MainnetConfig) { this.cfg = def(c) }
   async broadcast (tx: Transaction): Promise<BroadcastResult> {
-    const { arcUrl, wocUrl } = this.cfg
+    const { broadcasterUrl, wocUrl } = this.cfg
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }
-    if (this.cfg.arcApiKey) headers.Authorization = `Bearer ${this.cfg.arcApiKey}`
-    // ARC callback — the broadcaster pushes status updates (MINED et al.) to
-    // our endpoint instead of us polling /v1/tx/{txid}
-    if (this.cfg.callbackUrl) headers['X-CallbackUrl'] = `${this.cfg.callbackUrl}/v1/arc-callback`
+    if (this.cfg.broadcasterApiKey) headers.Authorization = `Bearer ${this.cfg.broadcasterApiKey}`
+    // status webhook — the broadcaster pushes tx-status updates (MINED et al.)
+    // to our endpoint instead of us polling /tx/{txid}
+    if (this.cfg.callbackUrl) {
+      headers['X-CallbackUrl'] = `${this.cfg.callbackUrl}/v1/broadcaster-callback`
+      headers['X-FullStatusUpdates'] = 'true'
+      if (this.cfg.callbackToken) headers['X-CallbackToken'] = this.cfg.callbackToken
+    }
     try {
-      // classic ARC: /v1/tx; BSVA Arcade: /tx (404 on /v1/tx) — learn once per URL
-      // Extended Format when every input carries its source tx (Arcade requires it
-      // for unconfirmed parents); plain raw otherwise
-      const ef = tx.inputs.every(i => i.sourceTransaction !== undefined)
-      const payload = new Uint8Array(ef ? tx.toEF() : tx.toBinary())
-      const post = (p: string) => req(this.cfg, `${arcUrl}${p}`, { method: 'POST', headers, body: payload })
-      let r = await post(txPathFor(arcUrl))
-      if (r.status === 404 && txPathFor(arcUrl) === '/v1/tx') { txPaths.set(arcUrl, '/tx'); r = await post('/tx') }
-      if (r.status >= 500) throw new Error(`ARC ${r.status}`) // → WoC fallback
-      const body = await r.json().catch(() => ({}))
+      // Extended Format when every input carries its source tx (the broadcaster
+      // resolves unconfirmed parents from it); plain raw otherwise
+      const payload = new Uint8Array(tx.inputs.every(i => i.sourceTransaction !== undefined) ? tx.toEF() : tx.toBinary())
+      const post = () => req(this.cfg, `${broadcasterUrl}/tx`, { method: 'POST', headers, body: payload })
+      // 503 = backpressure, nothing queued — retry the same instance shortly
+      let r: Response | undefined
+      for (let i = 0; ; i++) {
+        r = await post()
+        if (r.status !== 503 || i >= 3) break
+        await new Promise(rs => setTimeout(rs, 500 * 2 ** i))
+      }
+      if (r!.status >= 500) throw new Error(`broadcaster HTTP ${r!.status}`) // → WoC fallback
+      const body = await r!.json().catch(() => ({}))
       const st = String(body.txStatus ?? '').toUpperCase()
-      if (r.ok && st !== 'REJECTED' && st !== 'DOUBLE_SPEND_ATTEMPTED') {
+      if (r!.ok && st !== 'REJECTED' && st !== 'DOUBLE_SPEND_ATTEMPTED') {
         return { status: 'success', txid: tx.id('hex') }
       }
-      return { status: 'error', description: `ARC ${st || `HTTP ${r.status}`}: ${body.extraInfo ?? body.detail ?? ''}`.trim() }
+      return { status: 'error', description: `broadcaster ${st || `HTTP ${r!.status}`}: ${body.reason ?? body.detail ?? body.extraInfo ?? ''}`.trim() }
     } catch (e) {
       // network error / 5xx → WoC fallback (policy rejections already returned)
       try {
@@ -71,18 +79,18 @@ export class ArcBroadcaster implements Broadcaster {
         if (!wr.ok) return { status: 'error', description: `WoC HTTP ${wr.status}: ${await wr.text().catch(() => '')}`.slice(0, 200) }
         return { status: 'success', txid: tx.id('hex') }
       } catch (we) {
-        return { status: 'error', description: `broadcast failed: ARC ${(e as Error).message}; WoC ${(we as Error).message}` }
+        return { status: 'error', description: `broadcast failed: broadcaster ${(e as Error).message}; WoC ${(we as Error).message}` }
       }
     }
   }
 }
 
-/** ARC /v1/policy → mining fee in sat/kB (ceil). */
-export async function fetchArcFeeRate (cfg?: MainnetConfig): Promise<number> {
+/** BSV Broadcaster /policy → mining fee in sat/kB (ceil). */
+export async function fetchBroadcasterFeeRate (cfg?: MainnetConfig): Promise<number> {
   const c = def(cfg)
   const h: Record<string, string> = {}
-  if (c.arcApiKey) h.Authorization = `Bearer ${c.arcApiKey}`
-  const p = await j(await req(c, `${c.arcUrl}/v1/policy`, { headers: h }))
+  if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
+  const p = await j(await req(c, `${c.broadcasterUrl}/policy`, { headers: h }))
   const f = p.policy?.miningFee ?? p.miningFee
   return Math.ceil((f.satoshis * 1000) / f.bytes)
 }
@@ -143,7 +151,7 @@ export class ChaintracksTracker implements ChainTracker {
   private cfg: ReturnType<typeof def>
   constructor (c?: MainnetConfig, base?: string, private fallback?: ChainTracker) {
     this.cfg = def(c)
-    this.base = (base ?? `${this.cfg.arcUrl}/chaintracks/v2`).replace(/\/$/, '')
+    this.base = (base ?? `${this.cfg.broadcasterUrl}/chaintracks/v2`).replace(/\/$/, '')
     this.v1 = this.base.endsWith('/v1')
   }
 
@@ -228,22 +236,19 @@ export function tscToMerklePath (tsc: { index: number, txOrId: string, target: s
 
 export type PathResult = { merklePath: MerklePath, status: string }
 
-/** ARC /v1/tx (BUMP hex) → MerklePath; else WoC TSC proof → MerklePath. */
+/** BSV Broadcaster /tx (BUMP hex) → MerklePath; else WoC TSC proof → MerklePath. */
 export async function merklePathMainnet (cfg: MainnetConfig | undefined, txid: string): Promise<PathResult | null> {
   const c = def(cfg)
   const h: Record<string, string> = {}
-  if (c.arcApiKey) h.Authorization = `Bearer ${c.arcApiKey}`
-  let ar = await req(c, `${c.arcUrl}${txPathFor(c.arcUrl)}/${txid}`, { headers: h })
-  if (ar.status === 404 && txPathFor(c.arcUrl) === '/v1/tx') {
-    const alt = await req(c, `${c.arcUrl}/tx/${txid}`, { headers: h })
-    if (alt.status !== 404 || (await alt.clone().text()).includes('transaction not found')) { txPaths.set(c.arcUrl, '/tx'); ar = alt }
-  }
+  if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
+  const ar = await req(c, `${c.broadcasterUrl}/tx/${txid}`, { headers: h })
   if (ar.ok) {
     const b = await ar.json()
     if (b.merklePath) {
       try { return { merklePath: MerklePath.fromHex(b.merklePath), status: String(b.txStatus ?? 'mined') } } catch { /* fall through to WoC */ }
     }
-    if (b.txStatus && String(b.txStatus).toUpperCase() !== 'MINED' && String(b.txStatus).toUpperCase() !== 'CONFIRMED') {
+    const st = String(b.txStatus ?? '').toUpperCase()
+    if (st !== 'MINED' && st !== 'IMMUTABLE') {
       return null // still pending / rejected upstream
     }
   }

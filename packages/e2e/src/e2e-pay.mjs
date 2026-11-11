@@ -155,8 +155,8 @@ if (net === 'regtest') {
   const res = await fetch(`${rc.assetUrl}/tx/${txid}`).catch(() => null)
   check(!!res?.ok, `payment tx resolvable via Teranode asset API (${res?.status ?? 'unreachable'})`)
 } else {
-  const arc = process.env.NEKTAR_ARC_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
-  const st = await fetch(`${arc}/tx/${txid}`).then(r => r.ok ? r.json() : null).catch(() => null)
+  const bcast = process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
+  const st = await fetch(`${bcast}/tx/${txid}`).then(r => r.ok ? r.json() : null).catch(() => null)
   check(!!st?.txid || !!st?.txStatus, `payment tx visible on TTN (${st?.txStatus ?? 'pending'})`)
 }
 

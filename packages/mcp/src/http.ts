@@ -2,6 +2,7 @@
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { MerklePath } from '@bsv/sdk'
 import type { NektarMemory } from './memory.js'
 import { TOOLS, visibleTools, callTool } from './server.js'
 import { receiptToken } from './receipt.js'
@@ -104,7 +105,7 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
     // bearer token — the gate that makes a public bind safe. Unset =
     // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
     const tok = process.env.NEKTAR_HTTP_TOKEN
-    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname === '/.well-known/nektar' || url.pathname.startsWith('/v1/pack/') || url.pathname.startsWith('/v1/zkproof/') || url.pathname === '/v1/arc-callback'
+    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname === '/.well-known/nektar' || url.pathname.startsWith('/v1/pack/') || url.pathname.startsWith('/v1/zkproof/') || url.pathname === '/v1/broadcaster-callback' || url.pathname === '/v1/arc-callback'
     const operatorApproval = url.pathname.startsWith('/v1/automation/approvals/') && process.env.NEKTAR_OPERATOR_TOKEN && req.headers.authorization === `Bearer ${process.env.NEKTAR_OPERATOR_TOKEN}`
     if (tok && !publicPath && !operatorApproval && req.headers.authorization !== `Bearer ${tok}`) {
       return send(401, { error: 'unauthorized' })
@@ -353,24 +354,35 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           return send(200, badgeSvg('unverifiable', '#6e7681'), 'image/svg+xml; charset=utf-8')
         }
       }
-      // ARC tx-status callback — the broadcaster pushes SEEN_ON_NETWORK →
-      // MINED etc. for every tx we submitted with X-CallbackUrl, so anchor
-      // confirmations arrive as events, not polls
-      if (req.method === 'POST' && url.pathname === '/v1/arc-callback') {
+      // broadcaster tx-status callback — pushes SEEN_ON_NETWORK → MINED etc.
+      // for every tx we submitted with X-CallbackUrl, so anchor confirmations
+      // arrive as events, not polls. /v1/arc-callback is kept for transactions
+      // submitted before the rename (they carry the old URL).
+      if (req.method === 'POST' && (url.pathname === '/v1/broadcaster-callback' || url.pathname === '/v1/arc-callback')) {
         try {
+          // NEKTAR_CALLBACK_TOKEN was sent as X-CallbackToken; BSV Broadcaster
+          // delivers it on the webhook as Authorization: Bearer (openapi)
+          const cbTok = process.env.NEKTAR_CALLBACK_TOKEN
+          if (cbTok && req.headers.authorization !== `Bearer ${cbTok}`) return send(401, { error: 'bad callback token' })
           const j = (await body(req)) as any
           const status = String(j.txStatus ?? '?')
-          mem.metrics.inc('nektar_arc_callbacks_total', { status: status.toLowerCase() }, 1, 'ARC status callbacks received')
-          mem.events.emit('arcStatus', { txid: j.txid, status, detail: j.extraInfo })
+          mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: status.toLowerCase() }, 1, 'broadcaster status callbacks received')
+          mem.events.emit('broadcasterStatus', { txid: j.txid, status, detail: j.extraInfo })
           // N9 — the callback is an unauthenticated status input, not proof.
-          // MINED only triggers evidence fetch + proof attach (which validates
-          // the BUMP contains the txid against real headers); without evidence
-          // the txid is marked callback-seen, never confirmed on the broadcaster's word.
-          if (status === 'MINED' && typeof j.txid === 'string') {
+          // A carried BUMP must verify against our own tracker before it
+          // counts; without one we fetch evidence; without evidence the txid
+          // is marked callback-seen, never confirmed on the broadcaster's word.
+          if ((status === 'MINED' || status === 'IMMUTABLE') && typeof j.txid === 'string') {
             try {
-              const mp = await (mem as any).chain?.merklePathOf?.(j.txid)
-              const shard = (mem as any).txidShard?.get?.(j.txid)
-              if (mp && shard) mem.attachProof(shard, j.txid, mp)
+              let mp: import('@bsv/sdk').MerklePath | undefined
+              if (typeof j.merklePath === 'string' && j.merklePath.length > 0) {
+                try {
+                  const cand = MerklePath.fromHex(j.merklePath)
+                  if (await cand.verify(j.txid, await mem.sdkTracker())) mp = cand
+                } catch { /* unusable — fetch evidence instead */ }
+              }
+              mp ??= await (mem as any).chain?.merklePathOf?.(j.txid)
+              if (mp) mem.deliverTxProof(j.txid, mp)
               // no fallback: a callback without retrievable evidence is a hint, not a confirmation
             } catch { /* evidence fetch failed — leave unconfirmed, reconcile later */ }
           }

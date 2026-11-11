@@ -306,3 +306,105 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
     for (const r of all) await r.stop()
   } finally { await h1.close(); await h2.close() }
 })
+
+test('bstack H: blind seller completes via accept txHex — seller broadcasts the escrow itself', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const msgs = bus(); const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
+  let b!: Awaited<ReturnType<typeof mkagent>>
+  let s!: Awaited<ReturnType<typeof mkagent>>
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url], msgs, chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir })
+    // the seller's view can never see the escrow tx (indexer lag) — but it
+    // must broadcast it itself once, from the bytes inside the accept
+    let blindTxid: string | undefined
+    const origFetch = s.mem.fetchTx.bind(s.mem)
+    s.mem.fetchTx = async (id: string) => id === blindTxid ? undefined : await origFetch(id)
+    let escrowBroadcasts = 0
+    const origBcast = s.mem.broadcastTx.bind(s.mem)
+    s.mem.broadcastTx = async (t: import('@bsv/sdk').Transaction) => { if (t.id('hex') === blindTxid) escrowBroadcasts++; return await origBcast(t) }
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    let done = false
+    for (let i = 0; i < 100 && !done; i++) {
+      clock += 500
+      await b.rt.cycle()
+      const bo = await buyerOp(b)
+      if (blindTxid === undefined && bo?.data.escrowTxid !== undefined) blindTxid = bo.data.escrowTxid as string
+      chain.mine(1)
+      await s.rt.cycle()
+      if (bo?.state === 'disclosure_verified') done = true
+    }
+    assert.ok(done, 'no deal | ' + logs.slice(-20).join(' | '))
+    assert.ok(escrowBroadcasts >= 1, 'seller broadcast the escrow tx itself')
+  } finally { if (b !== undefined) await b.rt.stop(); if (s !== undefined) await s.rt.stop(); await h1.close() }
+})
+
+test('bstack I: tampered accept — txHex of a different transaction → seller stays quoted with accept_refused', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const msgs = bus(); const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
+  let b!: Awaited<ReturnType<typeof mkagent>>
+  let s!: Awaited<ReturnType<typeof mkagent>>
+  try {
+    b = await mkagent('buyer', { hosts: [h1.url], msgs, chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 12)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    const op = (await saleOps(s))[0]!
+    const want = (op.data.want as { want: { wantId: string, pub: string } }).want
+    const offer = op.data.offer as { cfg: { price: number | string, refundAfter: number | string, maxFee: number | string } }
+    const { PublicKey, Script, Transaction } = await import('@bsv/sdk')
+    const { DisclosureSaleHost } = await import('@nektar/anchor')
+    const pkh = Buffer.from(PublicKey.fromString(b.pub).toHash() as number[]).toString('hex')
+    const cfg = { ...offer.cfg, price: BigInt(offer.cfg.price), refundAfter: BigInt(offer.cfg.refundAfter), maxFee: BigInt(offer.cfg.maxFee) }
+    const script = DisclosureSaleHost.escrowScript(cfg as never, pkh)
+    // a perfectly valid script+amount claim — but the carried bytes are a DIFFERENT transaction
+    const other = new Transaction()
+    other.addInput({ sourceTXID: '11'.repeat(32), sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })
+    other.addOutput({ satoshis: 9999, lockingScript: Script.fromHex(script) })
+    const fakeUtxo = { txid: 'aa'.repeat(32), vout: 0, satoshis: 9999, script }
+    await s.rt.engine.ingestMessage(b.pub, { type: 'accept', wantId: want.wantId, offerId: op.operationId, utxo: fakeUtxo, depositorPkh: pkh, txHex: other.toHex() })
+    await s.rt.cycle() // tick drains the inbox → onAccept
+    const op2 = (await saleOps(s))[0]!
+    assert.equal(op2.state, 'quoted', 'tampered accept must not advance the sale')
+    const evs = await s.rt.store.events(op.operationId)
+    assert.ok(evs.some(e => e.cause === 'accept_refused'), 'accept_refused event recorded')
+  } finally { if (b !== undefined) await b.rt.stop(); if (s !== undefined) await s.rt.stop(); await h1.close() }
+})
+
+test('bstack J: push — a mined funding tree is proven and a cycle runs without cycle()', async () => {
+  const chain = new MockChain(); chain.verifyScripts = true
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const logs: string[] = []
+  const h1 = await minihost([NET], { tracker: trackerFor(chain) })
+  let a!: Awaited<ReturnType<typeof mkagent>>
+  let kx: ReturnType<typeof knexFactory> | undefined
+  try {
+    a = await mkagent('push', { hosts: [h1.url], chain, logs, dir })
+    await a.rt.cycle() // broadcast market + bbox funding trees — still unproven
+    kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'push', 'automation.sqlite') }, useNullAsDefault: true })
+    const { KnexTreeLedger } = await import('@nektar/bstack')
+    const ledger2 = new KnexTreeLedger(kx)
+    assert.ok((await ledger2.unproven()).length >= 2, 'funding trees broadcast but unproven')
+    let ticks = 0
+    const engine = a.rt.engine as unknown as { tick: () => Promise<void> }
+    const origTick = engine.tick.bind(engine)
+    engine.tick = async () => { ticks++; return await origTick() }
+    chain.mine(1) // the push: mined events → proofs delivered → markProven + cycle
+    const t0 = Date.now()
+    while ((ticks === 0 || (await ledger2.unproven()).length > 0) && Date.now() - t0 < 5000) await new Promise(r => setTimeout(r, 25))
+    assert.equal((await ledger2.unproven()).length, 0, 'funding trees proven on the push — no manual cycle')
+    assert.ok(ticks > 0, 'a cycle ran on the push (intervalMs was 0)')
+  } finally {
+    if (a !== undefined) await a.rt.stop() // unsubscribe proofs before pools close
+    if (kx !== undefined) await kx.destroy()
+    await h1.close()
+  }
+})

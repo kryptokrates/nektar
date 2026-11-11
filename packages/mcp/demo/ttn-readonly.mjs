@@ -1,14 +1,14 @@
 // Read-only TTN smoke: Arcade policy fee, WoC tip, header check, and a real
 // merkle path for a recent coinbase txid verified against TTN headers.
 // NEVER broadcasts — GETs only.
-import { fetchArcFeeRate, WocTracker, merklePathMainnet } from '@nektar/chain'
+import { fetchBroadcasterFeeRate, WocTracker, merklePathMainnet } from '@nektar/chain'
 
 const cfg = {
-  arcUrl: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',
+  broadcasterUrl: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',
   wocUrl: 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test'
 }
 
-const fee = await fetchArcFeeRate(cfg)
+const fee = await fetchBroadcasterFeeRate(cfg)
 console.log(`Arcade TTN policy miningFee → ${fee} sat/kB`)
 
 const tracker = new WocTracker(cfg)

@@ -358,6 +358,20 @@ The trial report is written to `artifacts/model-trials/report.json`.
   from the broadcaster flagged a neighbouring own transaction, which the bbox
   module refuses; and a seller never left `completion_submitted` because
   pushed proofs for market transactions were not remembered.
+- **Testnet over https hosts, zero-conf (same host pair published at
+  `https://nektar.run/hosts/{a,b}`):** with provisioned agents the whole run
+  has no block in its path. bfinger records resolved for all four agents
+  within 1 s (each record lists exactly that agent's hosts), the buyer
+  verified the disclosure 67.9 s after the want (20 s collect window), escrow
+  `b21cfd2aae53…`, disclosure `79a9fdc2d49f…`, receipts cleared on both
+  hosts. Readers now accept an unmined identity token whose ancestry is
+  proven, as the bfinger reader rules allow, and the publisher repairs a
+  token whose fee parent was unmined when it was minted. What still needs one
+  block, once per agent and never per deal: a new funding tree, because hosts
+  admit carriers only from a proven tree. The runner keeps provisioned agents
+  in `.state/testnet-agents-*` (`--fresh` provisions a new set). Open
+  latency, not block-bound: about 11 s from escrow broadcast until the seller
+  acts and about 34 s from the seller's reveal until the buyer has verified.
 - **Testnet (Hetzner, real rendezvous + mailbox, two live instances):** this ran on the previous rendezvous + mailbox transport, which has since been removed from the automation runtime. The
   autonomous purchase loop ran end to end — signed want admitted to the feed,
   seller matched a level-0 record, signed a buyer-bound offer, buyer selected,

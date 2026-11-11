@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PrivateKey, ProtoWallet, Transaction, Utils } from '@bsv/sdk'
+import { PrivateKey, ProtoWallet, Transaction, P2PKH, Utils } from '@bsv/sdk'
 import { MemoryTreeLedger, mintTree } from '../src/tree.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
 import {
@@ -10,7 +10,7 @@ import {
 import { mintCarrier } from '@lightwebinc/bcommon'
 import { encodeRecord, MagicV1, type CommittedRecord } from '@lightwebinc/bfinger-host/dist/record.js'
 import { FundingTag } from '@lightwebinc/bfinger-host/dist/funding.js'
-import { fund, prove } from './helpers.js'
+import { fund, prove, fakeParent } from './helpers.js'
 import { minihost, FakeTracker } from '../src/testing.js'
 import { CborMap } from '@lightwebinc/bcommon'
 import type { FundingOut } from '@nektar/chain'
@@ -23,11 +23,11 @@ const body1 = (hosts: string[] = ['https://one.example.com', 'https://two.exampl
 interface Rig {
   tracker: FakeTracker, h1: Awaited<ReturnType<typeof minihost>>, h2: Awaited<ReturnType<typeof minihost>>
   key: PrivateKey, ledger: MemoryTreeLedger, journal: MemoryCarrierJournal, state: MemoryFingerState
-  hosts: string[], mined: Map<string, Transaction>, broadcasts: Transaction[]
+  hosts: string[], mined: Map<string, Transaction>, broadcasts: Transaction[], tree: Transaction
   publish: (body: FingerBody) => Promise<{ changed: boolean, seq: number, carrierTxid?: string, tokenTxid?: string }>
 }
 
-async function rig (o: { failH1?: () => boolean, noproof?: boolean } = {}): Promise<Rig> {
+async function rig (o: { failH1?: () => boolean, noproof?: boolean, provenFunding?: boolean, gapFunding?: boolean } = {}): Promise<Rig> {
   const tracker = new FakeTracker()
   const h1 = await minihost([], { tracker, finger: true, ...(o.failH1 !== undefined ? { failNext: () => o.failH1!() } : {}) })
   const h2 = await minihost([], { tracker, finger: true })
@@ -42,7 +42,20 @@ async function rig (o: { failH1?: () => boolean, noproof?: boolean } = {}): Prom
   const mined = new Map<string, Transaction>()
   const broadcasts: Transaction[] = []
   const hosts = [h1.url, h2.url]
-  const takeFunding = async (_sats: number): Promise<FundingOut> => fund(key)
+  const takeFunding = async (_sats: number): Promise<FundingOut> => {
+    if (o.gapFunding === true) {
+      // an unmined fee parent in raw-hex shape: its own input keeps the
+      // sourceTXID but carries no sourceTransaction — the live funding gap
+      const f = new Transaction()
+      f.addInput({ sourceTransaction: fakeParent(key), sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+      f.addOutput({ satoshis: _sats, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
+      await f.sign()
+      return { tx: Transaction.fromHex(f.toHex()), vout: 0, satoshis: _sats }
+    }
+    const f = fund(key)
+    if (o.provenFunding === true) prove(f.tx) // the token's fee parent carries a proof
+    return f
+  }
   const broadcast = async (tx: Transaction): Promise<{ status: string }> => {
     if (o.noproof !== true) { prove(tx); mined.set(tx.id('hex'), tx) }
     broadcasts.push(tx)
@@ -51,7 +64,7 @@ async function rig (o: { failH1?: () => boolean, noproof?: boolean } = {}): Prom
   const fetchTx = async (txid: string): Promise<Transaction | undefined> => mined.get(txid)
   const publish = async (body: FingerBody) =>
     await publishFinger({ key, state, ledger, journal, hosts, body, takeFunding, broadcast, fetchTx })
-  return { tracker, h1, h2, key, ledger, journal, state, hosts, mined, broadcasts, publish }
+  return { tracker, h1, h2, key, ledger, journal, state, hosts, mined, broadcasts, publish, tree }
 }
 
 // 1. create → token mined → resolve on either host returns the body, seq 1
@@ -153,13 +166,92 @@ test('finger: forged record under another key loses to the real chain', async ()
   } finally { await s.h1.close(); await s.h2.close() }
 })
 
-// 4b. an unproven token never resolves — the reader requires SPV (§10.3)
-test('finger: unmined token resolves to nothing', async () => {
+// 4b. an unmined token whose ancestry is NOT proven resolves to nothing —
+// the zero-conf path still requires proven parents (§10.3); the rig's
+// takeFunding parent carries no merkle path, so tx.verify fails
+test('finger: unmined token without proven ancestry resolves to nothing', async () => {
   const s = await rig({ noproof: true })
   try {
     await s.publish(body1())
     const got = await resolveFinger({ hosts: s.hosts, pub: s.key.toPublicKey().toString(), tracker: s.tracker })
-    assert.equal(got, undefined, 'token without a merkle path is not resolvable')
+    assert.equal(got, undefined, 'unmined token whose ancestry is unproven is not resolvable')
+  } finally { await s.h1.close(); await s.h2.close() }
+})
+
+// 4b2. upstream reader rule "mined or through its ancestry": a fresh token
+// broadcast but not yet mined resolves while every input ancestor is proven
+test('finger: unmined token resolves through proven ancestry', async () => {
+  const s = await rig({ noproof: true, provenFunding: true })
+  try {
+    const r = await s.publish(body1())
+    assert.equal(r.changed, true)
+    const got = await resolveFinger({ hosts: s.hosts, pub: s.key.toPublicKey().toString(), tracker: s.tracker })
+    assert.ok(got !== undefined, 'unmined token with proven ancestry resolves')
+    assert.equal(got.seq, 1)
+    assert.deepEqual(got.body, body1())
+    assert.equal(got.tokenTxid, r.tokenTxid)
+  } finally { await s.h1.close(); await s.h2.close() }
+})
+
+// 4b3. a mined token whose BUMP root the tracker does not know still does
+// not resolve — the carrier's funding-parent root alone is trusted here, so
+// the refusal is attributable to the token check, not §10.4
+test('finger: mined token whose proof the tracker rejects resolves to nothing', async () => {
+  const s = await rig()
+  try {
+    await s.publish(body1())
+    await s.publish(body1()) // propagate the proven token to the hosts
+    s.tracker.strict = true
+    s.tracker.validRoots.add(s.tree.merklePath!.computeRoot(s.tree.id('hex')))
+    const got = await resolveFinger({ hosts: s.hosts, pub: s.key.toPublicKey().toString(), tracker: s.tracker })
+    assert.equal(got, undefined, 'a BUMP root the tracker rejects fails closed')
+  } finally { await s.h1.close(); await s.h2.close() }
+})
+
+// 4b4. ancestry heal: the token was minted from an unmined fee parent whose
+// own source is absent from the BEEF (the live testnet defect). Once fetchTx
+// answers that parent proven, the next publish re-journals a healed BEEF and
+// the record resolves while the token is still unmined. The rig's stub hosts
+// admit the incomplete BEEF (they do not run the reference host's missing-
+// source check), so the defect is asserted via verify() on the stored beef.
+test('finger: stale ancestry heals once the fee parent is proven', async () => {
+  const s = await rig({ noproof: true, gapFunding: true })
+  try {
+    const r = await s.publish(body1())
+    assert.equal(r.changed, true)
+    const pub = s.key.toPublicKey().toString()
+    const beef0 = [...(await s.state.get())!.tokenBeef]
+    const stx0 = Transaction.fromBEEF(beef0)
+    assert.equal(await stx0.verify(s.tracker).catch(() => false), false, 'ancestry gap: SPV fails')
+    assert.equal(await resolveFinger({ hosts: s.hosts, pub, tracker: s.tracker }), undefined)
+    // the fee parent has since been mined — fetchTx now answers it proven
+    const parent = stx0.inputs.find(i => i.sourceTransaction !== undefined)!.sourceTransaction!
+    prove(parent)
+    s.mined.set(parent.id('hex'), parent)
+    const r2 = await s.publish(body1())
+    assert.equal(r2.changed, false)
+    const st = (await s.state.get())!
+    assert.notDeepEqual(st.tokenBeef, beef0, 'stored token BEEF was replaced by the healed one')
+    const stx1 = Transaction.fromBEEF(st.tokenBeef)
+    assert.equal(stx1.merklePath, undefined, 'the token itself is still unmined')
+    assert.equal(await stx1.verify(s.tracker), true, 'ancestry proven — SPV passes')
+    const got = await resolveFinger({ hosts: s.hosts, pub, tracker: s.tracker })
+    assert.ok(got !== undefined, 'record resolves while the token is unmined')
+    assert.equal(got.seq, 1)
+    assert.deepEqual(got.body, body1())
+  } finally { await s.h1.close(); await s.h2.close() }
+})
+
+// 4b5. with proven ancestry there is nothing to heal — the stored BEEF is
+// byte-identical across a re-publish
+test('finger: ancestry heal is a no-op when ancestry is already proven', async () => {
+  const s = await rig({ noproof: true, provenFunding: true })
+  try {
+    await s.publish(body1())
+    const before = (await s.state.get())!.tokenBeef
+    const r2 = await s.publish(body1())
+    assert.equal(r2.changed, false)
+    assert.deepEqual((await s.state.get())!.tokenBeef, before, 'stored BEEF untouched')
   } finally { await s.h1.close(); await s.h2.close() }
 })
 

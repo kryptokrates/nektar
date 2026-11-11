@@ -156,8 +156,8 @@ export class KnexFingerState implements FingerState {
  *  On later calls, when fetchTx shows the token mined, the proven BEEF is
  *  re-journaled and re-submitted — that is the "once admission prerequisites
  *  are met" resubmission: tm_finger admits an unmined token on its own
- *  validity, but a reader can only resolve once the served token BEEF
- *  carries a proof. */
+ *  validity, and a reader resolves it either once the served token BEEF
+ *  carries a proof or while its ancestry is proven (zero-conf). */
 export async function publishFinger (p: {
   key: PrivateKey
   state: FingerState
@@ -183,8 +183,11 @@ export async function publishFinger (p: {
   // stored tx (which still carries its full ancestry) and re-submit. The
   // proven copy lives in STATE, not the journal — the journal is insert-only
   // (the journaled first attempt is the idempotent object), while the BEEF a
-  // host needs is the latest one carrying the proof.
-  let provenBeef: number[] | undefined
+  // host needs is the latest one carrying the proof. While the token itself
+  // is still unmined, healAncestry patches stale ancestry instead — an
+  // ancestor that has since been mined gets its proof, and source gaps are
+  // filled from fetchTx — so the BEEF can pass SPV through ancestry.
+  let latestBeef: number[] | undefined
   if (prev !== undefined) {
     try {
       const stx = Transaction.fromBEEF(prev.tokenBeef)
@@ -192,8 +195,11 @@ export async function publishFinger (p: {
         const mined = await p.fetchTx(prev.tokenTxid).catch(() => undefined)
         if (mined?.merklePath !== undefined) {
           stx.merklePath = mined.merklePath
-          provenBeef = stx.toBEEF()
-          await p.state.set({ ...prev, tokenBeef: provenBeef })
+          latestBeef = stx.toBEEF()
+          await p.state.set({ ...prev, tokenBeef: latestBeef })
+        } else if (await healAncestry(stx, p.fetchTx)) {
+          latestBeef = stx.toBEEF()
+          await p.state.set({ ...prev, tokenBeef: latestBeef })
         }
       }
     } catch { /* resubmission below uses whatever state holds */ }
@@ -202,7 +208,7 @@ export async function publishFinger (p: {
   if (prev !== undefined && prev.bodyHash === hash) {
     const ch = await p.journal.get(`finger:carrier:${prev.seq}`)
     if (ch !== undefined) await submitAll(p.hosts, ch.beef, topics, { retryWaits: [] })
-    const tokenBeef = provenBeef ?? prev.tokenBeef ?? (await p.journal.get(`finger:token:${prev.seq}`))?.beef
+    const tokenBeef = latestBeef ?? prev.tokenBeef ?? (await p.journal.get(`finger:token:${prev.seq}`))?.beef
     if (tokenBeef !== undefined) await submitAll(p.hosts, tokenBeef, topics, { retryWaits: [] })
     return { changed: false, seq: prev.seq, carrierTxid: ch?.txid, tokenTxid: prev.tokenTxid }
   }
@@ -271,6 +277,9 @@ export async function publishFinger (p: {
     tokenTx.addInput({ sourceTransaction: fund.tx, sourceOutputIndex: fund.vout, unlockingScriptTemplate: new P2PKH().unlock(p.key) })
     await tokenTx.fee()
     await tokenTx.sign()
+    // the fee parent may be a not-yet-proven tx — carry whatever ancestry is
+    // obtainable now so the BEEF passes host SPV while the token is unmined
+    await healAncestry(tokenTx, p.fetchTx)
     tokenTxid = tokenTx.id('hex')
     tokenBeefOut = tokenTx.toBEEF()
     await p.journal.put(tkey, { txid: tokenTxid, beef: tokenBeefOut, topics })
@@ -285,6 +294,47 @@ export async function publishFinger (p: {
   if (p.onSpent !== undefined) await p.onSpent(tokenTx)
   await p.state.set({ seq, tokenTxid, tokenBeef: tokenBeefOut, bodyHash: hash, witness: Utils.toHex(Array.from(derived(p.key, 'witness', seq))) })
   return { changed: true, seq, carrierTxid, tokenTxid }
+}
+
+/** Repair the ancestry a BEEF carries for `tx` so it passes SPV while `tx`
+ *  itself is still unmined. For every ancestor without a proof: if fetchTx
+ *  now returns it proven, attach the path and cut its input sources (a proven
+ *  tx terminates BEEF ancestry — the rule tree.ts markProven applies); if it
+ *  stays unproven, fill input sources missing from the graph via their
+ *  sourceTXID and keep walking. Depth-capped, visited-guarded; never touches
+ *  `tx` itself. Returns whether anything changed. */
+async function healAncestry (tx: Transaction, fetchTx: (txid: string) => Promise<Transaction | undefined>): Promise<boolean> {
+  let changed = false
+  const seen = new Set<string>([tx.id('hex')])
+  const walk = async (a: Transaction, depth: number): Promise<void> => {
+    if (depth > 8) return
+    const id = a.id('hex')
+    if (seen.has(id)) return
+    seen.add(id)
+    if (a.merklePath !== undefined) return // proven — ancestry terminates here
+    const fetched = await fetchTx(id).catch(() => undefined)
+    if (fetched?.merklePath !== undefined) {
+      a.merklePath = fetched.merklePath
+      for (const i of a.inputs) i.sourceTransaction = undefined
+      changed = true
+      return // do not descend past a proven tx
+    }
+    for (const i of a.inputs) {
+      if (i.sourceTransaction === undefined && i.sourceTXID !== undefined) {
+        const src = await fetchTx(i.sourceTXID).catch(() => undefined)
+        if (src !== undefined) { i.sourceTransaction = src; changed = true }
+      }
+      if (i.sourceTransaction !== undefined) await walk(i.sourceTransaction, depth + 1)
+    }
+  }
+  for (const i of tx.inputs) {
+    if (i.sourceTransaction === undefined && i.sourceTXID !== undefined) {
+      const src = await fetchTx(i.sourceTXID).catch(() => undefined)
+      if (src !== undefined) { i.sourceTransaction = src; changed = true }
+    }
+    if (i.sourceTransaction !== undefined) await walk(i.sourceTransaction, 1)
+  }
+  return changed
 }
 
 /** A deterministic 32 bytes for (key, label, seq): salt and witness material
@@ -351,8 +401,14 @@ export async function resolveFinger (p: {
       try { return bytesEq(new Uint8Array(commitment(tx)), cBytes) } catch { return false }
     })
     if (token === undefined || carrier === undefined || cBytes === undefined) continue
-    // §10.3: the token must be mined and proven
-    if (token.merklePath === undefined || !(await token.merklePath.verify(token.id('hex'), p.tracker))) continue
+    // §10.3: the token is proven, or valid through proven ancestry (unmined)
+    if (token.merklePath !== undefined) {
+      if (!(await token.merklePath.verify(token.id('hex'), p.tracker))) continue
+    } else {
+      let ok = false
+      try { ok = await token.verify(p.tracker) } catch { ok = false }
+      if (!ok) continue
+    }
     // §10.3: locked to the identity's profile derivation
     const tlock = token.outputs.map(o => inspectToken(o.lockingScript)).find(i => i.kind === 'token')
     if (tlock?.kind !== 'token') continue

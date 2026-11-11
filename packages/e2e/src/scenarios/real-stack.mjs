@@ -17,7 +17,7 @@
 // deploy/bstack-sandbox/compose.regtest.yaml up -d` has been run with
 // NEKTAR_RPC_USER/NEKTAR_RPC_PASS in the environment. Nothing is torn down.
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, createWriteStream } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, createWriteStream } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -25,6 +25,7 @@ import { PrivateKey, Transaction, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import { TeranodeBroadcaster, TeranodeRPCTracker, utxoStatus } from '../../../chain/dist/src/regtest.js'
 import { BsvBroadcaster, ChaintracksTracker, WocTracker } from '../../../chain/dist/src/mainnet.js'
 import { readBox } from '../../../bstack/dist/src/index.js'
+import { resolveFinger } from '../../../bstack/dist/src/finger.js'
 
 const root = resolve(fileURLToPath(new URL('../../../..', import.meta.url)))
 const envFile = join(root, '.env')
@@ -57,8 +58,14 @@ const broadcaster = LIVE ? new BsvBroadcaster(TESTNET) : new TeranodeBroadcaster
 const tracker = LIVE
   ? new ChaintracksTracker(TESTNET, `${TESTNET.broadcasterUrl}/chaintracks/v2`, new WocTracker(TESTNET))
   : new TeranodeRPCTracker({ ...cfg, rpcUser: E('NEKTAR_RPC_USER'), rpcPass: E('NEKTAR_RPC_PASS') })
-const HOST_A = LIVE ? 'http://127.0.0.1:18291' : 'http://127.0.0.1:18191'
-const HOST_B = LIVE ? 'http://127.0.0.1:18292' : 'http://127.0.0.1:18192'
+// NEKTAR_TESTNET_HOSTS=https://a,https://b points the testnet run at hosts
+// reachable over https; only then do instances publish bfinger records
+// (https only off regtest) and resolve each other's hosts from them.
+const liveHosts = (process.env.NEKTAR_TESTNET_HOSTS ?? 'http://127.0.0.1:18291,http://127.0.0.1:18292').split(',').map(x => x.trim())
+if (LIVE && liveHosts.length !== 2) { console.error('real-stack: NEKTAR_TESTNET_HOSTS needs exactly two hosts'); process.exit(2) }
+const HOST_A = LIVE ? liveHosts[0] : 'http://127.0.0.1:18191'
+const HOST_B = LIVE ? liveHosts[1] : 'http://127.0.0.1:18192'
+const FINGER = LIVE && liveHosts.every(h => h.startsWith('https://'))
 const HOSTS = [HOST_A, HOST_B]
 const FINDING = 'libfoo 3.0 renamed connect() to open(); callers must switch.\n```nektar-patch\n{"edits":[{"file":"src/app.js","find":"libfoo.connect(","replace":"libfoo.open("}]}\n```'
 const QUESTION = 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function'
@@ -92,16 +99,39 @@ const agents = [
   { name: 'bob', hosts: [HOST_A, HOST_B] }
 ]
 // testnet: one split of the treasury's largest unspent output pays each
-// instance six 15k-sat outputs (parallel spends without waiting for change)
+// instance six 10k-sat outputs (parallel spends without waiting for change)
 // and returns the rest to the treasury. Instances import it offline
 // (NEKTAR_FUND_TXIDS=hex:…); their keys are kept in the run dir so leftover
 // test coins can be swept back.
+// Testnet agents are provisioned once and kept (.state/testnet-agents-*):
+// a host admits carriers only from a funding tree proven in a block, which is
+// a one-time setup cost per agent, not per deal. A provisioned agent trades
+// with no block in the path — pass --fresh to provision a new set.
+const AGENTS_DIR = join(root, '.state', `testnet-agents-${FINGER ? 'https' : 'http'}`)
+const REUSE = LIVE && !process.argv.includes('--fresh') && existsSync(join(AGENTS_DIR, 'agent-keys.json'))
 async function fundAgentsLive () {
-  const woc = async path => { const r = await fetch(`${TESTNET.wocUrl}${path}`, { signal: AbortSignal.timeout(20_000) }); if (!r.ok) throw new Error(`woc ${path}: ${r.status}`); return r }
+  if (REUSE) {
+    const keys = JSON.parse(readFileSync(join(AGENTS_DIR, 'agent-keys.json'), 'utf8'))
+    const passFile = join(AGENTS_DIR, 'agent-pass.json')
+    const pass = existsSync(passFile) ? JSON.parse(readFileSync(passFile, 'utf8')) : {}
+    for (const a of agents) { a.key = PrivateKey.fromWif(keys[a.name]); a.dataDir = join(AGENTS_DIR, a.name); a.pass = pass[a.name] }
+    log(`reusing provisioned agents in ${AGENTS_DIR}`)
+    return
+  }
+  rmSync(AGENTS_DIR, { recursive: true, force: true }); mkdirSync(AGENTS_DIR, { recursive: true })
+  // WoC lists a fresh unconfirmed output a few seconds before it serves its hex
+  const woc = async path => {
+    for (let i = 0; ; i++) {
+      const r = await fetch(`${TESTNET.wocUrl}${path}`, { signal: AbortSignal.timeout(20_000) })
+      if (r.ok) return r
+      if (i >= 8) throw new Error(`woc ${path}: ${r.status}`)
+      await delay(3000)
+    }
+  }
   const conf = await (await woc(`/address/${treasuryAddr}/unspent`)).json()
   const unconf = (await (await woc(`/address/${treasuryAddr}/unconfirmed/unspent`)).json()).result ?? []
   const best = [...conf, ...unconf].sort((x, y) => y.value - x.value)[0]
-  const per = 15_000; const outs = 6
+  const per = 10_000; const outs = 6
   if (best === undefined || best.value < agents.length * per * outs + 10_000) throw new Error(`testnet treasury ${treasuryAddr} underfunded: ${best?.value ?? 0} sats`)
   const parent = Transaction.fromHex((await (await woc(`/tx/${best.tx_hash}/hex`)).text()).trim())
   const split = new Transaction()
@@ -112,10 +142,10 @@ async function fundAgentsLive () {
   }
   split.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), change: true })
   await split.fee(new SatoshisPerKilobyte(100)); await split.sign()
-  writeFileSync(join(dir, 'agent-keys.json'), JSON.stringify(Object.fromEntries(agents.map(a => [a.name, a.key.toWif([0xef])]))), { mode: 0o600 })
+  writeFileSync(join(AGENTS_DIR, 'agent-keys.json'), JSON.stringify(Object.fromEntries(agents.map(a => [a.name, a.key.toWif([0xef])]))), { mode: 0o600 })
   const r = await broadcaster.broadcast(split)
   if (r.status !== 'success') throw new Error(`treasury split refused: ${r.description}`)
-  for (const a of agents) { a.dataDir = join(dir, a.name); mkdirSync(a.dataDir, { recursive: true }); a.fundHex = split.toHex() }
+  for (const a of agents) { a.dataDir = join(AGENTS_DIR, a.name); mkdirSync(a.dataDir, { recursive: true }); a.fundHex = split.toHex() }
   log(`treasury split ${split.id('hex')} (${split.toBinary().length} bytes, fee ${split.getFee()} sats) → ${agents.length}×${outs}×${per} sats`)
   return split.id('hex')
 }
@@ -174,7 +204,7 @@ function spawnInstance (a) {
       NEKTAR_AUTOMATION_INTERVAL_MS: '1000',
       NEKTAR_OFFER_TTL_BLOCKS: '48',
       ...(LIVE
-        ? { NEKTAR_FUND_WIF: a.key.toWif([0xef]), NEKTAR_FUND_TXIDS: `hex:${a.fundHex}`, NEKTAR_KEY_PASSPHRASE: `run-${runId}-${a.name}`, NEKTAR_MIN_BROADCAST_INTERVAL_MS: '250', NEKTAR_MAX_SPEND_SATS_PER_DAY: '100000' }
+        ? { NEKTAR_FUND_WIF: a.key.toWif([0xef]), ...(a.fundHex ? { NEKTAR_FUND_TXIDS: `hex:${a.fundHex}` } : {}), NEKTAR_KEY_PASSPHRASE: a.pass ?? `testnet-agent-${a.name}`, NEKTAR_MIN_BROADCAST_INTERVAL_MS: '250', NEKTAR_MAX_SPEND_SATS_PER_DAY: '100000' }
         : {
             NEKTAR_FUND_WIF: a.key.toWif(),
             NEKTAR_RPC_URL: cfg.rpcUrl, NEKTAR_RPC_USER: E('NEKTAR_RPC_USER'), NEKTAR_RPC_PASS: E('NEKTAR_RPC_PASS'),
@@ -206,15 +236,17 @@ async function bootAgent (a, index) {
   const p = spawnInstance(a)
   await up(`${a.url}/v1/health`, a.name)
   a.pub = (await (await fetch(`${a.url}/.well-known/nektar`)).json()).operatorPub
-  log(`${a.name} up :${port} pub ${a.pub.slice(0, 12)}… hosts [${a.hosts.map(h => h.split(':').pop()).join(',')}]`)
+  log(`${a.name} up :${port} pub ${a.pub.slice(0, 12)}… hosts [${a.hosts.map(h => h === HOST_A ? 'a' : 'b').join(',')}]`)
   const policy = {
     v: 1, policyId: `${a.name}-policy`, network: NET, agentPub: a.pub, roles: ['buyer', 'seller'], notBefore: 0, notAfter: 4102444800000, domains: ['libfoo'],
     limits: { perPurchaseSats: 500, dailyPurchaseSats: 1500, perTxFeeSats: 600, dailyFeeSats: 3000, runTotalSats: 6000, maxLockedSats: 1200, maxUnconfirmedSats: 1200, maxUnconfirmedCount: 3 },
-    scoring: { minimumScoreBps: 0, weights: { relevance: 3000, provenance: 2500, history: 1500, price: 2000, latency: 1000 }, collectMs: LIVE ? 120000 : 30000 },
+    scoring: { minimumScoreBps: 0, weights: { relevance: 3000, provenance: 2500, history: 1500, price: 2000, latency: 1000 }, collectMs: LIVE ? 20000 : 30000 },
     seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 10, sellableShards: ['guide'] },
     disclosure: { allowPublic: false }, ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 60000 }, sandbox: { mode: 'sandbox-only' }
   }
-  const pf = join(a.dataDir, 'policy.json'); writeFileSync(pf, JSON.stringify(policy))
+  const pf = join(a.dataDir, 'policy.json')
+  if (REUSE && existsSync(pf)) return // policy approved when the agent was provisioned
+  writeFileSync(pf, JSON.stringify(policy))
   const { policyHash } = JSON.parse(execFileSync(process.execPath, [join(root, 'tools/automation.mjs'), '--data', a.dataDir, '--json', 'policy', 'approve', pf], { encoding: 'utf8' }))
   a.policyHash = policyHash
 }
@@ -240,12 +272,16 @@ async function waitState (a, operationId, states, ms = LIVE ? 3 * 3600_000 : 900
 // outside mock/regtest, so no identity record is published and a recipient
 // cannot learn the sender's extra hosts to send its receipt there — the copy
 // on a host the recipient never reads expires after 24h. LIVE therefore
-// checks only the agent's own configured hosts; regtest keeps all HOSTS.
-async function inboxEmpty (a) {
+// checks only the agent's own configured hosts; regtest and https testnet
+// hosts (where records resolve) keep all HOSTS.
+async function inboxEmpty (a, allowOwnSellerNote = false) {
   const key = a.key
-  for (const h of LIVE ? a.hosts : HOSTS) {
+  for (const h of LIVE && !FINGER ? a.hosts : HOSTS) {
     const r = await readBox({ key, hosts: [h], tracker })
-    if (r.items.length !== 0) return { empty: false, host: h, items: r.items.length }
+    const items = allowOwnSellerNote
+      ? r.items.filter(i => !(i.from === a.pub && (i.body.market ?? i.body).type === 'sellerNote'))
+      : r.items
+    if (items.length !== 0) return { empty: false, host: h, items: items.length }
   }
   return { empty: true }
 }
@@ -254,7 +290,7 @@ try {
   await fundAgents()
   for (const [i, a] of agents.entries()) await bootAgent(a, i)
   const [alice, ben, cara, bob] = agents
-  for (const s of [alice, ben, cara]) {
+  for (const s of REUSE ? [] : [alice, ben, cara]) {
     await tool(s, 'remember', { shard: 'guide', data: FINDING })
     await tool(s, 'sell', { shard: 'guide', domains: ['libfoo'], priceSats: s.seller })
     log(`${s.name} selling at ${s.seller} sats`)
@@ -267,6 +303,21 @@ try {
       const slots = await Promise.all(agents.map(async a => { try { return (await tool(a, 'fund', {})).marketSlots } catch { return undefined } }))
       if (slots.every(x => x !== undefined && x.market > 0 && x.bbox > 0)) { log(`funding trees proven on all four agents after ${((Date.now() - t0) / 1000).toFixed(0)}s: ${JSON.stringify(slots)}`); break }
       if (Date.now() - t0 > 3 * 3600_000) throw new Error(`funding trees not proven after 3h: ${JSON.stringify(slots)}`)
+      await delay(15_000)
+    }
+  }
+  if (FINGER) {
+    // a record resolves while its token is unmined, as long as the token's
+    // ancestry is proven — no further block. Each agent's record must name
+    // exactly its own hosts.
+    const t0 = Date.now()
+    for (;;) {
+      const recs = await Promise.all(agents.map(async a => { try { return (await resolveFinger({ hosts: HOSTS, pub: a.pub, tracker })).body.hosts } catch { return undefined } }))
+      if (recs.every(x => x !== undefined)) {
+        for (const [i, a] of agents.entries()) if (JSON.stringify([...recs[i]].sort()) !== JSON.stringify([...a.hosts].sort())) throw new Error(`${a.name} finger record lists ${JSON.stringify(recs[i])} — expected ${JSON.stringify(a.hosts)}`)
+        log(`bfinger records resolve for all four agents after ${((Date.now() - t0) / 1000).toFixed(0)}s`); break
+      }
+      if (Date.now() - t0 > 3 * 3600_000) throw new Error(`finger records not resolvable after 3h: ${JSON.stringify(recs)}`)
       await delay(15_000)
     }
   }
@@ -289,13 +340,17 @@ try {
   for (const a of [bob, cara]) {
     // the delivered/seller-note envelopes are held until the op reaches a
     // settled state and released on the following ack cycle — poll briefly.
-    // The seller settles only once its collect tx is proven in a block, so
-    // on testnet this waits for the next block (after the deal clock stopped)
+    // on testnet the seller keeps its recovery note until its collect
+    // transaction is proven; that is bookkeeping after the deal and the
+    // runner does not wait for a block for it.
     let b
-    const until = Date.now() + (LIVE ? 90 * 60_000 : 30000)
-    do { b = await inboxEmpty(a); if (!b.empty) await delay(1000) } while (!b.empty && Date.now() < until)
+    const until = Date.now() + 30000
+    do { b = await inboxEmpty(a, LIVE && a === cara); if (!b.empty) await delay(1000) } while (!b.empty && Date.now() < until)
     if (!b.empty) throw new Error(`${a.name} inbox not empty on ${b.host} (${b.items} item(s)) after settlement`)
   }
+  const sellerOp = ((await tool(cara, 'deals', {})).deals ?? []).find(d => d.wantId === op.wantId)
+  const sellerState = sellerOp?.state
+  if (sellerState !== 'completion_submitted' && sellerState !== 'settled') throw new Error(`cara seller op in ${sellerState ?? 'missing'} — expected completion_submitted or settled`)
   for (const a of agents) {
     const f = join(a.dataDir, 'tx-log.jsonl')
     if (!existsSync(f)) throw new Error(`${a.name}: no tx log at ${f}`)
@@ -307,17 +362,18 @@ try {
     }
   }
   const summary = {
-    runId, network: NET, outcome: 'PASS',
+    runId, network: NET, outcome: 'PASS', provisionedAgentsReused: REUSE,
     instances: agents.map(a => ({ name: a.name, pub: a.pub, dataDir: a.dataDir, port: Number(a.url.split(':').pop()) })),
     buyerOperationId: operationId, wantId: op.wantId, escrowTxid: op.escrowTxid, disclosureTxid: op.disclosureTxid,
+    sellerState,
     wallClockMsToDisclosureVerified: verifiedMs, blocksMinedDuringDeal: dealBlocks,
-    hosts: { a: HOST_A, b: HOST_B },
+    hosts: { a: HOST_A, b: HOST_B }, fingerResolved: FINGER,
     broadcasts: Object.fromEntries(agents.map(a => [a.name, a.txCount]))
   }
   writeFileSync(join(dir, 'summary.json'), JSON.stringify(summary, null, 1))
   log(`PASS — disclosure verified in ${(verifiedMs / 1000).toFixed(1)}s over ${dealBlocks} blocks`)
   log(`  offers 200/300/450 recorded; cara's 200-sat offer selected; escrow ${String(op.escrowTxid).slice(0, 12)}… disclosure ${String(op.disclosureTxid).slice(0, 12)}…`)
-  log(`  counterparty journal complete; bob+cara inboxes empty on ${LIVE ? 'their own hosts' : 'both hosts'}`)
+  log(`  counterparty journal complete; bob+cara inboxes empty on ${LIVE && !FINGER ? 'their own hosts' : 'both hosts'}${LIVE ? ' (seller note held until proof)' : ''}`)
   log(`  tx logs: ${agents.map(a => `${a.name}=${a.txCount}`).join(' ')}`)
   log(`  summary: ${join(dir, 'summary.json')}`)
 } catch (e) {

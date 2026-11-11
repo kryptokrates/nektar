@@ -91,14 +91,16 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   const transport: MarketTransport = {
     publishWant: async (sw: SignedWant) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
-      await lanes.mod.publishArtifact({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, net: cfg.network, payload: { v: 1, kind: 'want', body: sw } })
+      const r = await lanes.mod.publishArtifact({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, net: cfg.network, payload: { v: 1, kind: 'want', body: sw } })
+      if (r.missed.length > 0) throw new Error(`want missed host(s): ${r.missed.map(m => `${m.host} (${m.error})`).join(', ')}`)
     },
     publishOffer: async (so: SignedOffer) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
       // the offer goes where the BUYER's record says it keeps its artifacts —
       // this is also the seller's lazy resolution of the buyer
       const hosts = so.offer.buyerPub !== undefined ? await hostsFor(so.offer.buyerPub) : marketHosts
-      await lanes.mod.publishArtifact({ key, ledger: lanes.ledger, journal: lanes.journal, hosts, net: cfg.network, payload: { v: 1, kind: 'offer', body: so } })
+      const r = await lanes.mod.publishArtifact({ key, ledger: lanes.ledger, journal: lanes.journal, hosts, net: cfg.network, payload: { v: 1, kind: 'offer', body: so } })
+      if (r.missed.length > 0) throw new Error(`offer missed host(s): ${r.missed.map(m => `${m.host} (${m.error})`).join(', ')}`)
     },
     send: async (to: string, msg: MarketMessage) => {
       if (msgs === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -150,7 +152,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
       } catch (e) { log(`automation: box: ${(e as Error).message}`); return [] }
     },
     ack: async (): Promise<void> => {
-      const items: Array<{ txid: string, commitment: string }> = []
+      const items: Array<{ txid: string, commitment: string, from: string }> = []
       const held: typeof pendingAcks = []
       for (const p of pendingAcks) {
         // a recovery note from our own key stays listed until its deal is over
@@ -164,12 +166,18 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
           const wantId = (p.msg as { wantId: string }).wantId
           if (!(await engine.noteSettled(wantId)) && ((await engine.hasPurchase(wantId)) || Date.now() / 1000 - p.created < 600)) { held.push(p); continue }
         }
-        items.push({ txid: p.txid, commitment: p.commitment })
+        items.push({ txid: p.txid, commitment: p.commitment, from: p.from })
       }
       pendingAcks = held
       if (items.length === 0) return
       try {
-        const r = await lanes.mod.ackBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, office: cfg.boxOffice, items })
+        // senders fan envelopes out to their own hosts ∪ our record's hosts —
+        // the receipt has to reach every copy, not only the ones we read
+        const ackHosts = new Set(marketHosts)
+        for (const f of [...new Set(items.map(i => i.from).filter(f => f !== me))]) {
+          for (const h of (await resolveRecord(f).catch(() => undefined))?.hosts ?? []) ackHosts.add(h)
+        }
+        const r = await lanes.mod.ackBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: [...ackHosts], office: cfg.boxOffice, items })
         if (r.skipped > 0 && r.skipped !== lastAckSkipped) { lastAckSkipped = r.skipped; log(`automation: box ack: ${r.skipped} envelope(s) skipped — no bbox funding slot`) }
       } catch (e) { pendingAcks = pendingAcks.concat(items.map(i => ({ ...i, from: '', msg: undefined, created: 0 }))); log(`automation: box ack: ${(e as Error).message}`) }
     }

@@ -5,10 +5,10 @@
 //                          NEKTAR_DATA_DIR; a confirmer attaches BUMPs.
 //   NEKTAR_NETWORK=testnet  same shape as regtest; refused until an endpoint and
 //                          funding are configured (no real funds without approval).
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PrivateKey, MerklePath, Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, BsvBroadcaster, WocTracker, fetchBroadcasterFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, regtestTx, BsvBroadcaster, WocTracker, fetchBroadcasterFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -140,6 +140,31 @@ function loadFeeKey (dataDir: string, wif: string | undefined, pass: string | un
   return key
 }
 
+// NEKTAR_TX_LOG: when set to a file path, append one JSON line per SUCCESSFUL
+// broadcast — {t, txid, bytes, inSats, outSats, feeSats} — so operator cost
+// accounting comes from the wire, not from estimates. inSats/feeSats are null
+// when a source transaction is missing. Write failures are ignored; no
+// behaviour change otherwise.
+export function txLogBroadcast<B extends (tx: Transaction) => Promise<import('@nektar/chain').BroadcastResult>> (inner: B, logPath: string | undefined = process.env.NEKTAR_TX_LOG): B {
+  if (logPath === undefined || logPath === '') return inner
+  return (async (tx: Transaction) => {
+    const r = await inner(tx)
+    if (r.status === 'success') {
+      try {
+        let inSats: number | null = 0
+        for (const i of tx.inputs) {
+          const src = i.sourceTransaction?.outputs[i.sourceOutputIndex ?? 0]
+          if (src?.satoshis === undefined) { inSats = null; break }
+          inSats += src.satoshis
+        }
+        const outSats = tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)
+        appendFileSync(logPath, JSON.stringify({ t: Date.now(), txid: tx.id('hex'), bytes: tx.toBinary().length, inSats, outSats, feeSats: inSats === null ? null : inSats - outSats }) + '\n')
+      } catch { /* logging must never break a broadcast */ }
+    }
+    return r
+  }) as B
+}
+
 export interface Runtime {
   mem: NektarMemory
   close: () => Promise<void>
@@ -170,6 +195,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     await ledger.init()
     const innerBroadcast = chain.broadcast.bind(chain)
     chain.broadcast = wrapBroadcast(ledger, innerBroadcast)
+    chain.broadcast = txLogBroadcast(chain.broadcast)
     const mem = new NektarMemory(chain, funder, funder.keyPair, base)
     mem.ledger = ledger
     // auto-mined: every anchor is immediately provable
@@ -234,6 +260,9 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
     },
     currentHeight: () => tracker.currentHeight(),
     isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
+    // mem.fetchTx's only regtest source: mempool/mined tx bytes + sealed BUMP
+    // so bstack funding trees (and escrow fetches) can be marked proven
+    getTx: async (txid: string) => await regtestTx(rc, txid),
     // §12: header TIMES are the weighted median across temporal sources;
     // single-source (default) is bit-identical to the raw tracker
     headerAtHeight: (h: number) => temporal.headerAtHeight(h),
@@ -250,6 +279,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   await ledger.init()
   reserve.leased = leasePredicate(ledger)
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
+  chain.broadcast = txLogBroadcast(chain.broadcast)
   const mem = new NektarMemory(chain as never, funder as never, fundKey, {
     ...base,
     agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,
@@ -428,6 +458,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   await ledger.init()
   reserve.leased = leasePredicate(ledger)
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
+  chain.broadcast = txLogBroadcast(chain.broadcast)
   const mem = new NektarMemory(chain as never, funder as never, fundKey, {
     ...base,
     agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,

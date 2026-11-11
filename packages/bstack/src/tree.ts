@@ -50,7 +50,18 @@ export class MemoryTreeLedger implements TreeLedger {
     }
     return undefined
   }
-  async markProven (txid: string, merklePath?: MerklePath): Promise<void> { const t = this.trees.get(txid); if (t) { t.proven = true; if (merklePath !== undefined) t.tree.merklePath = merklePath } }
+  async markProven (txid: string, merklePath?: MerklePath): Promise<void> {
+    const t = this.trees.get(txid)
+    if (t) {
+      t.proven = true
+      if (merklePath !== undefined) {
+        t.tree.merklePath = merklePath
+        // a BUMP-anchored tx terminates BEEF ancestry: unproven parents left
+        // attached would be refused by hosts for missing source transactions
+        for (const i of t.tree.inputs) i.sourceTransaction = undefined
+      }
+    }
+  }
   async unproven (): Promise<Array<{ txid: string, kind: string }>> { return [...this.trees].filter(([, t]) => !t.proven).map(([id, t]) => ({ txid: id, kind: t.kind })) }
   async remaining (kind = 'market'): Promise<number> { let n = 0; for (const k of this.free) { const t = this.trees.get(k.split(':')[0]!)!; if (t.proven && t.kind === kind) n++ } return n }
 }
@@ -107,7 +118,14 @@ export class KnexTreeLedger implements TreeLedger {
       await trx('bstack_trees').where({ txid }).update({ proven: 1 })
       if (merklePath !== undefined) {
         const t = await trx('bstack_trees').where({ txid }).first()
-        if (t) { const tree = Transaction.fromBEEF(JSON.parse(t.beef)); tree.merklePath = merklePath; await trx('bstack_trees').where({ txid }).update({ beef: JSON.stringify(tree.toBEEF()) }) }
+        if (t) {
+          const tree = Transaction.fromBEEF(JSON.parse(t.beef))
+          tree.merklePath = merklePath
+          // a BUMP-anchored tx terminates BEEF ancestry: unproven parents left
+          // attached would be refused by hosts for missing source transactions
+          for (const i of tree.inputs) i.sourceTransaction = undefined
+          await trx('bstack_trees').where({ txid }).update({ beef: JSON.stringify(tree.toBEEF()) })
+        }
       }
     })
   }

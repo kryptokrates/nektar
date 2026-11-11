@@ -1,0 +1,3 @@
+CREATE DATABASE IF NOT EXISTS overlay_b;
+GRANT ALL PRIVILEGES ON overlay_b.* TO 'overlay'@'%';
+FLUSH PRIVILEGES;

@@ -148,12 +148,15 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
 | `NEKTAR_BSTORE_S3_URL` | gateway base URL (e.g. `http://127.0.0.1:9000` for the quickstart `s3d`) |
 | `NEKTAR_BSTORE_BUCKET` | S3 bucket name — the bstore bucket id with `-` for `_` (e.g. `packs-psbqmkflww`) |
 | `NEKTAR_BSTORE_ACCESS_KEY` / `NEKTAR_BSTORE_SECRET_KEY` | SigV4 credentials — or `NEKTAR_BSTORE_SECRET_KEY_FILE` for a file-held secret |
-| `NEKTAR_BSTORE_BOUNTY_SATS` | currently inert: bstore's bounty is set in the gateway's own config (`bounty` object), not per request — docs/s3.md defines no put-time bounty header |
 
 - Buyer ops reaching `disclosure_verified` store a **redacted** evidence bundle at `evidence/<network>/<operationId>.json` (question and disclosure tx become SHA-256 digests — no plaintext or wrapped secret leaves the node) and commit the `{bucket, key, sha256, size}` ref into the op via an `evidence_stored` event, which the deal journal then anchors. `deals {operationId}` shows `evidence: {ref, stored: true}`; the operator tool `evidence {ref | operationId}` fetches and re-verifies.
 - `describeShard`/`sell` on a PUBLIC shard also PUT the shard pack at `packs/<network>/<shardId>/<sha256>.json` and publish the ref in `/.well-known/nektar` (`store` field) — `importShard {store}` fetches it.
 - **What Nektar verifies:** every read goes through `getVerified` — object size ≤ 8 MiB, optional expected size, and SHA-256 equal to the stored ref — before evidence checks or pack re-verification run. A wrong or tampered object is refused, never trusted.
 - **What Nektar does not verify or operate:** provider possession proofs (CHIRP closures), bounty races/claims, provider settlement, and gateway availability or honesty — those are the gateway's and providers' business. The gateway's ETag is not an MD5; Nektar's own SHA-256 is the only integrity check relied on.
+
+## Transaction log
+
+`NEKTAR_TX_LOG=<path>` appends one JSON line per successful broadcast (all networks): `{t, txid, bytes, inSats, outSats, feeSats}` — `t` is a millisecond timestamp, `bytes` the raw transaction length, `inSats`/`outSats` the summed input/output values, `feeSats` their difference. `inSats`/`feeSats` are `null` when a source transaction is missing. Write failures are ignored; nothing else about broadcast behavior changes.
 
 ## Troubleshooting
 

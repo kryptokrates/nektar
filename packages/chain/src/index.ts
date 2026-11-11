@@ -1,6 +1,6 @@
 export * from './interfaces.js'
 export { MockChain, MockFunder, buildBump } from './mock.js'
-export { TeranodeBroadcaster, TeranodeRPCTracker, regtestStackFromEnv, merklePathFor, parseLegacyBlock, merkleRootOf, ReserveFunder, merklePathAtHeight, bootstrapReserve, utxoStatus } from './regtest.js'
+export { TeranodeBroadcaster, TeranodeRPCTracker, regtestStackFromEnv, merklePathFor, parseLegacyBlock, merkleRootOf, ReserveFunder, merklePathAtHeight, bootstrapReserve, utxoStatus, regtestTx } from './regtest.js'
 export { ChaintracksTracker, parseHeaderHex } from './mainnet.js'
 export { P2PListener } from './p2p.js'
 export type { RegtestConfig } from './regtest.js'

@@ -1,0 +1,80 @@
+# Two real reference hosts on the Teranode regtest chain (Phase 4a).
+# Standalone project: `docker compose -p nektar-bstack-regtest -f deploy/bstack-sandbox/compose.regtest.yaml up -d`
+# The header shim translates the hosts' /v1/tip + /v1/root/<h> tracker calls to
+# Teranode RPC (host.docker.internal:9292) and proxies the asset API paths with
+# auth injected. SHIM_RPC_USER/SHIM_RPC_PASS come from the environment
+# (NEKTAR_RPC_USER / NEKTAR_RPC_PASS in the repo .env — export or --env-file).
+name: nektar-bstack-regtest
+services:
+  db:
+    image: mysql@sha256:df90258da46f6e7ff8574ff84f17618aba0765cac749928299c69fd4e7cb8ad8
+    environment:
+      MYSQL_DATABASE: overlay
+      MYSQL_USER: overlay
+      MYSQL_PASSWORD: spike
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    command: ["--innodb-buffer-pool-size=128M","--performance-schema=OFF"]
+    healthcheck:
+      test: ["CMD-SHELL","mysqladmin ping -h 127.0.0.1 -uoverlay -pspike --silent"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+    volumes:
+      - db:/var/lib/mysql
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+  shim:
+    image: node:22-alpine
+    working_dir: /shim
+    command: ["node","header-shim.mjs"]
+    environment:
+      SHIM_PORT: 8080
+      SHIM_RPC_URL: http://host.docker.internal:9292/
+      SHIM_RPC_USER: ${NEKTAR_RPC_USER:?set NEKTAR_RPC_USER (repo .env)}
+      SHIM_RPC_PASS: ${NEKTAR_RPC_PASS:?set NEKTAR_RPC_PASS (repo .env)}
+      SHIM_ASSET_URL: http://host.docker.internal:8090/api/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./header-shim.mjs:/shim/header-shim.mjs:ro
+  host-a: &host
+    image: ghcr.io/lightwebinc/bbox-host@sha256:9e3579b24e35e853df3cf194bee33a1355e17f3c480fb0ccf9e17cd13997d0df
+    depends_on:
+      db:
+        condition: service_healthy
+      shim:
+        condition: service_started
+    environment: &hostenv
+      BBOX_OFFICES: nektar_abcdefghij
+      BLOGS_STREAMS: nektar_abcdefghij=open
+      BLOGS_STATE_DIR: /var/lib/bbox/blogs
+      BLOGS_KEEP_DAYS: 90
+      OVERLAY_TOPICS: tm_bbox_nektar_abcdefghij,tm_log_nektar_abcdefghij,tm_finger,tm_nektar_regtest_0,tm_nektar_regtest_1,tm_nektar_regtest_2,tm_nektar_regtest_3,tm_nektar_regtest_4,tm_nektar_regtest_5,tm_nektar_regtest_6,tm_nektar_regtest_7,tm_nektar_regtest_8,tm_nektar_regtest_9,tm_nektar_regtest_a,tm_nektar_regtest_b,tm_nektar_regtest_c,tm_nektar_regtest_d,tm_nektar_regtest_e,tm_nektar_regtest_f
+      OVERLAY_MODULES: /app/modules/bbox/bbox-module.js,/app/modules/nektar/nektar-module.js,/app/modules/blogs/blogs-module.js,/app/modules/finger/finger-module.js
+      OVERLAY_CHAIN_TRACKER_URL: http://shim:8080
+      BBOX_ASSET_URL: http://shim:8080
+      OVERLAY_ADMIN_TOKEN: spike-token
+      NEKTAR_NETS: regtest
+      OVERLAY_KNEX_URL: mysql://overlay:spike@db:3306/overlay
+    volumes:
+      - ../../packages/bstack/bundle:/app/modules/nektar:ro
+      - ./modules/blogs:/app/modules/blogs:ro
+      - ./modules/finger:/app/modules/finger:ro
+      - host-state-a:/var/lib/bbox
+    ports:
+      - "127.0.0.1:18191:8080"
+  host-b:
+    <<: *host
+    environment:
+      <<: *hostenv
+      OVERLAY_KNEX_URL: mysql://overlay:spike@db:3306/overlay_b
+    volumes:
+      - ../../packages/bstack/bundle:/app/modules/nektar:ro
+      - ./modules/blogs:/app/modules/blogs:ro
+      - ./modules/finger:/app/modules/finger:ro
+      - host-state-b:/var/lib/bbox
+    ports:
+      - "127.0.0.1:18192:8080"
+volumes:
+  db: {}
+  host-state-a: {}
+  host-state-b: {}

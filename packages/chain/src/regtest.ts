@@ -1,7 +1,7 @@
 // Real regtest adapters — Teranode propagation /tx for broadcast and
 // Teranode JSON-RPC for headers. Compiled but only exercised on a live stack
 // (NEKTAR_NETWORK=regtest). No tests depend on these.
-import { Transaction } from '@bsv/sdk'
+import { Transaction, MerklePath } from '@bsv/sdk'
 import * as nodeCrypto from 'node:crypto'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker } from './interfaces.js'
 
@@ -33,7 +33,7 @@ export class TeranodeRPCTracker implements ChainTracker {
   private rpcId = 0
   constructor (private cfg: RegtestConfig) {}
 
-  private async rpc (method: string, ...params: unknown[]): Promise<any> {
+  private async rpcOnce (method: string, ...params: unknown[]): Promise<any> {
     const res = await fetch(this.cfg.rpcUrl, {
       method: 'POST',
       headers: {
@@ -46,6 +46,21 @@ export class TeranodeRPCTracker implements ChainTracker {
     const j = await res.json()
     if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
     return j.result
+  }
+
+  // Teranode regtest returns intermittent non-JSON bodies under block churn;
+  // retry transport/parse failures (JSON-RPC error replies are real answers
+  // and are thrown by rpcOnce immediately without retrying)
+  private async rpc (method: string, ...params: unknown[]): Promise<any> {
+    let last: unknown
+    for (let t = 0; t < 5; t++) {
+      try { return await this.rpcOnce(method, ...params) } catch (e) {
+        if (e instanceof Error && e.message.startsWith(`rpc ${method}:`)) throw e
+        last = e
+        await new Promise(r => setTimeout(r, 300 * (t + 1)))
+      }
+    }
+    throw last
   }
 
   async currentHeight (): Promise<number> {
@@ -91,6 +106,31 @@ async function assetGet (cfg: RegtestConfig, path: string, binary = true): Promi
   })
   if (!res.ok) return null
   return res
+}
+
+/** Tx + (when sealed) BUMP lookup for the regtest runtime's chain.getTx —
+ * `getrawtransaction` serves mempool and mined txs as hex; the asset API's
+ * `/merkle_proof` answers the binary MerklePath once the tx is sealed in a
+ * subtree (404 while pending). Without this, mem.fetchTx returns nothing on
+ * regtest and bstack funding trees can never be marked proven.
+ * (The asset `/tx` endpoint answers EXTENDED-format bytes, not a raw tx.) */
+export async function regtestTx (cfg: RegtestConfig, txid: string, fetchImpl: typeof fetch = fetch): Promise<Transaction | undefined> {
+  const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
+  try {
+    const r = await fetchImpl(cfg.rpcUrl, {
+      method: 'POST', headers: { 'content-type': 'application/json', Authorization: auth },
+      body: JSON.stringify({ jsonrpc: '1.0', id: 1, method: 'getrawtransaction', params: [txid] }),
+      signal: AbortSignal.timeout(15_000)
+    })
+    const j = await r.json() as { result?: unknown, error?: unknown }
+    if (typeof j.result !== 'string' || j.result === '') return undefined
+    const tx = Transaction.fromHex(j.result)
+    const mp = await fetchImpl(`${cfg.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(15_000) }).catch(() => null)
+    if (mp !== null && mp.ok) {
+      try { tx.merklePath = MerklePath.fromBinary([...new Uint8Array(await mp.arrayBuffer())]) } catch { /* unparseable proof → treat as unproven */ }
+    }
+    return tx
+  } catch { return undefined }
 }
 
 // --- legacy-block parsing + MerklePathProvider --------------------------

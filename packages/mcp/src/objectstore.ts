@@ -11,10 +11,8 @@
 // Protocol notes (bstore docs/s3.md): path-style URLs, AWS SigV4, region
 // us-east-1; signed headers must include `host` and every `x-amz-*` header the
 // request carries; ETag is NOT an MD5 — integrity is our own SHA-256. The
-// gateway's bounty is configured server-side (bounty object in the gateway
-// config); there is no documented per-put bounty request header, so
-// NEKTAR_BSTORE_BOUNTY_SATS has nothing to map to and is intentionally unused
-// here (see objectStoreFromEnv comment).
+// gateway's bounty is configured server-side (the bounty object in the
+// gateway config); there is no per-request bounty header to set.
 
 import { createHash, createHmac } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -150,10 +148,7 @@ export class S3ObjectStore {
  *  NEKTAR_BSTORE_BUCKET          S3 bucket name (bstore id with '-' for '_')
  *  NEKTAR_BSTORE_ACCESS_KEY      SigV4 access key
  *  NEKTAR_BSTORE_SECRET_KEY      SigV4 secret — or NEKTAR_BSTORE_SECRET_KEY_FILE
- *  NEKTAR_BSTORE_BOUNTY_SATS     accepted for documentation only: bstore's
- *    bounty is configured on the GATEWAY (its bounty object), not per request;
- *    docs/s3.md defines no put-time bounty header, so this env currently maps
- *    to nothing and is ignored. */
+ *  (the put bounty is the gateway's own `bounty` config — no client setting) */
 export function objectStoreFromEnv (env = process.env): S3ObjectStore | undefined {
   const endpoint = env.NEKTAR_BSTORE_S3_URL
   const bucket = env.NEKTAR_BSTORE_BUCKET

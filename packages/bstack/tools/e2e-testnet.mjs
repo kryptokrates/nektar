@@ -164,6 +164,22 @@ const sent = await sendBox({ key, ledger, journal, hosts: HOSTS, to: key.toPubli
 // submitAll resolves early once quorum lands — the remaining leg completes in
 // the background, so `took` (answered ok) is the honest claim, not `admitted`
 check(sent.missed.length === 0, `envelope submitted to ${sent.took.length}/${HOSTS.length} hosts (${sent.txid.slice(0, 16)}…)`)
+// the carrier is a fresh chain tx — admit() verifies its BEEF ancestry against
+// chain headers, so ls_bbox can't open it until the next block seals + WoC
+// indexes it. Wait for the proof like the finger token, not a blind poll.
+console.log('waiting for the envelope carrier to mine (~10 min)…')
+{
+  const dl = Date.now() + 25 * 60_000
+  let mined = false
+  while (Date.now() < dl && !mined) {
+    mined = (await merklePathMainnet(cfg, sent.txid).catch(() => null)) !== null
+    if (!mined) {
+      await sleep(30_000)
+      process.stdout.write('.')
+    }
+  }
+  check(mined, `envelope carrier mined (${sent.txid.slice(0, 16)}…)`)
+}
 let envBack
 for (let i = 0; i < 20 && envBack === undefined; i++) {
   const r = await readBox({ key, hosts: HOSTS, tracker, timeoutMs: 15_000 })

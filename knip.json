@@ -7,7 +7,6 @@
         "integrations/**/*.{js,mjs}",
         "circuits/**/*.mjs",
         "docs/**/*.mjs",
-        "test/**/*.mjs",
         "deploy/**/*.mjs"
       ],
       "ignore": [

@@ -281,7 +281,7 @@ Tests: `packages/mcp/test/{automation-scoring,automation-store,market-engine,aut
 seizure, S3 paid public disclosure read for free):
 
 ```sh
-pnpm -r build && node --test --test-force-exit test/market-scenarios.test.mjs
+pnpm -r build && pnpm scenarios -- --profile mock --scenario all
 ```
 
 ### Ledger coverage and crash recovery (update)

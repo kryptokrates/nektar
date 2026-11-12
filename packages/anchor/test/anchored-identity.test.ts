@@ -2,15 +2,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8 } from '@nektar/core'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld } from '@nektar/chain'
 import { AnchorChain } from '../src/runarchain.js'
 import { Smt, verifyProof } from '@nektar/identity'
 import { verifyCertChain, makeRotationCert, type RotationCert } from '@nektar/identity'
 
-test('smt revocation: anchored root verifies a status proof; stale root fails', async () => {
-  const chain = new MockChain()
-  const f = new MockFunder()
-  f.topup(6)
+test('smt revocation: anchored root verifies a status proof; stale root fails', async t => {
+  const w = await stackWorld(t, 6)
+  if (w === undefined) return
+  const { chain, funder: f } = w
   const smt = new Smt()
   const pk = new Uint8Array(32).fill(9)
   const ac = new AnchorChain('revoke', f.keyPair, f, f.keyPair, chain)
@@ -18,19 +18,20 @@ test('smt revocation: anchored root verifies a status proof; stale root fails', 
   const v = new Uint8Array(32).fill(1)
   smt.insert(pk, v) // revoke(pk)
   const h1 = await ac.anchor(1, smt.root()) // R = root after revocation
-  chain.mine(1)
+  await chain.mine(1)
   const p = smt.prove(pk)
   assert.equal(verifyProof(p, { present: true, value: v }, h1.head.data.R), true, 'revoked-status vs anchored root')
   assert.equal(verifyProof(p, { present: true, value: v }, h0.head.data.R), false, 'vs stale anchored root')
   assert.equal(verifyProof(p, { present: false }, h1.head.data.R), false, 'revoked key non-inclusion rejected')
-  assert.ok(h1.tx.merklePath, 'anchor tx mined with BUMP')
-  assert.equal(await chain.isValidRootForHeight(h1.tx.merklePath!.computeRoot(h1.tx.id('hex')), h1.tx.merklePath!.blockHeight), true)
+  const h1m = (await chain.getTx(h1.tx.id('hex')))?.merklePath
+  assert.ok(h1m, 'anchor tx mined with BUMP')
+  assert.equal(await chain.isValidRootForHeight(h1m.computeRoot(h1.tx.id('hex')), h1m.blockHeight), true)
 })
 
-test('rotated anchor chain verifies alongside the cert chain', async () => {
-  const chain = new MockChain()
-  const f = new MockFunder()
-  f.topup(10)
+test('rotated anchor chain verifies alongside the cert chain', async t => {
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain, funder: f } = w
   const ac = new AnchorChain('s', f.keyPair, f, f.keyPair, chain)
   await ac.anchor(1, dsha256(utf8('d')))
   const newKey = PrivateKey.fromRandom()
@@ -44,10 +45,10 @@ test('rotated anchor chain verifies alongside the cert chain', async () => {
 import { BatchLog, MemoryShardStore } from '@nektar/log'
 import { reconstructRoot } from '@nektar/core'
 
-test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusion', async () => {
-  const chain = new MockChain()
-  const f = new MockFunder()
-  f.topup(6)
+test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusion', async t => {
+  const w = await stackWorld(t, 6)
+  if (w === undefined) return
+  const { chain, funder: f } = w
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
   const ac = new AnchorChain('rotlog', f.keyPair, f, f.keyPair, chain)
   const k0 = PrivateKey.fromRandom(),
@@ -57,8 +58,8 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
   const batch = await log.closeBatch('rotlog')
   // anchor the batch root through the AnchorChain shard (mined, BUMP)
   const h = await ac.anchor(batch!.size, batch!.R)
-  chain.mine(1)
-  assert.ok(h.tx.merklePath)
+  await chain.mine(1)
+  assert.ok((await chain.getTx(h.tx.id('hex')))?.merklePath)
   // inclusion check against the ANCHORED root
   const proof = log.batchProof(batch!, 0)
   const recomputed = reconstructRoot(batch!.leaves[0]!, proof)
@@ -74,10 +75,10 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
 
 import { issueDisclosure, fieldPath, randSalt, fieldsCommitment, type FieldCommitment } from '@nektar/identity'
 
-test('DIS-006: disclosure event logged as a leaf and anchored', async () => {
-  const chain = new MockChain()
-  const f = new MockFunder()
-  f.topup(6)
+test('DIS-006: disclosure event logged as a leaf and anchored', async t => {
+  const w = await stackWorld(t, 6)
+  if (w === undefined) return
+  const { chain, funder: f } = w
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
   const ac = new AnchorChain('discl', f.keyPair, f, f.keyPair, chain)
   const owner = PrivateKey.fromRandom(),
@@ -91,8 +92,8 @@ test('DIS-006: disclosure event logged as a leaf and anchored', async () => {
   await log.remember('discl', { d: utf8(JSON.stringify(env)), p: { source: 'discl', time: env.expiresAt, signature: new Uint8Array(0), modelId: 'm1' } })
   const batch = await log.closeBatch('discl')
   const h = await ac.anchor(batch!.size, batch!.R)
-  chain.mine(1)
-  assert.ok(h.tx.merklePath)
+  await chain.mine(1)
+  assert.ok((await chain.getTx(h.tx.id('hex')))?.merklePath)
   const recomputed = reconstructRoot(batch!.leaves[0]!, log.batchProof(batch!, 0))
   assert.equal(Buffer.from(recomputed).toString('hex'), Buffer.from(h.head.data.R).toString('hex'), 'disclosure event committed to anchored root')
   // and the field commitment binds count+root for the anchored fragment path

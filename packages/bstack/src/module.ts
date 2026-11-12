@@ -1,41 +1,23 @@
 import { Transaction, type ChainTracker } from '@bsv/sdk'
+import {
+  HeaderTracker, isNativeSource,
+  type LookupFormula, type LookupQuestion, type LookupService, type Module, type ModuleHost,
+  type OutputAdmittedByTopic, type OutputSpent, type TopicManager
+} from '@lightwebinc/bcommon'
 import { checkCarrier, checkSweep, carrierLockingKey } from './carrier.js'
 import { allLanes, decodePayload, lanesFor, verifyBody, bodyPub, bodyDomains, bodyExp, MAX_LIFETIME_MS, LS_NAME, type MarketPayload } from './market.js'
 
-interface TopicManager {
-  getDocumentation?: () => Promise<string>
-  identifyAdmissibleOutputs: (beef: number[], previousCoins: number[]) => Promise<{ outputsToAdmit: number[]; coinsToRetain: number[] }>
-  identifyNeededInputs?: (beef: number[]) => Promise<Array<{ txid: string }>>
-}
-interface LookupService {
-  admissionMode: string
-  spendNotificationMode: string
-  outputAdmittedByTopic: (p: { mode: string; atomicBEEF: number[]; outputIndex: number; topic: string }) => Promise<void> | void
-  outputSpent?: (p: { txid: string; outputIndex: number; topic: string }) => Promise<void> | void
-  outputEvicted?: (txid: string, topic: string) => Promise<void> | void
-  lookup: (q: { service: string; query: unknown }) => Promise<unknown>
-  getDocumentation?: () => Promise<string>
-  getMetaData?: () => Promise<unknown>
-}
-interface Host {
-  log: (m: string, x?: Record<string, unknown>) => void
+interface Host extends Partial<ModuleHost> {
+  log: ModuleHost['log']
   chainTracker?: ChainTracker
   engine?: { submit: (beef: number[], topics: readonly string[]) => Promise<unknown> }
-}
-
-function httpTracker(base: string): ChainTracker {
-  const get = async (p: string): Promise<Record<string, unknown>> => (await (await fetch(`${base.replace(/\/+$/, '')}${p}`)).json()) as Record<string, unknown>
-  return {
-    isValidRootForHeight: async (root, height) => (await get(`/v1/root/${height}`)).merkleRoot === root,
-    currentHeight: async () => Number((await get('/v1/tip')).height)
-  }
 }
 
 function trackerOf(host: Host): ChainTracker {
   if (host.chainTracker !== undefined) return host.chainTracker
   const url = process.env.OVERLAY_CHAIN_TRACKER_URL ?? ''
-  if (url === '') throw new Error('nektar module: host.chainTracker unset and OVERLAY_CHAIN_TRACKER_URL empty')
-  return httpTracker(url)
+  if (!isNativeSource(url)) throw new Error('nektar module: host.chainTracker unset and OVERLAY_CHAIN_TRACKER_URL is not a native header source')
+  return new HeaderTracker(url)
 }
 
 const laneNet = (topic: string): string | undefined => /^tm_nektar_([a-z0-9]+)_[0-9a-f]$/.exec(topic)?.[1]
@@ -78,6 +60,7 @@ function makeTopicManager(
   const say = log ?? (() => {})
   return {
     getDocumentation: async () => `nektar market lane ${lane}`,
+    getMetaData: async () => ({ name: lane, shortDescription: 'nektar market lane' }),
     identifyNeededInputs: async () => [],
     identifyAdmissibleOutputs: async (beef: number[]) => {
       const c = await checkCarrier(beef, { tracker })
@@ -152,8 +135,8 @@ function makeLookup(nets: string[], lanes: string[], shared: Map<string, LaneInd
     admissionMode: 'whole-tx',
     spendNotificationMode: 'txid',
     getDocumentation: async () => 'nektar market lookup',
-    getMetaData: async () => ({ name: LS_NAME }),
-    outputAdmittedByTopic: async (p: { mode: string; atomicBEEF: number[]; outputIndex: number; topic: string }) => {
+    getMetaData: async () => ({ name: LS_NAME, shortDescription: 'nektar market lookup' }),
+    outputAdmittedByTopic: async (p: OutputAdmittedByTopic) => {
       const idx = idxOf(p.topic)
       if (idx === undefined || p.mode !== 'whole-tx') return
       const c = await checkCarrier(p.atomicBEEF, { tracker })
@@ -172,13 +155,13 @@ function makeLookup(nets: string[], lanes: string[], shared: Map<string, LaneInd
       const sw = await checkSweep(p.atomicBEEF, { tracker, heldOutpoints: (op) => idx.byOutpoint.has(op) })
       if (sw.ok) for (const op of sw.spends) idx.spendOutpoint(op)
     },
-    outputSpent: (p: { txid: string }) => {
+    outputSpent: (p: OutputSpent) => {
       for (const l of lanes) shared.get(l)!.spent(p.txid)
     },
     outputEvicted: (txid: string) => {
       for (const l of lanes) shared.get(l)!.spent(txid)
     },
-    lookup: async (q: { service: string; query: unknown }) => {
+    lookup: async (q: LookupQuestion): Promise<LookupFormula> => {
       if (q.service !== LS_NAME) throw new Error(`unknown service ${q.service}`)
       const query = q.query as Record<string, unknown>
       for (const k of Object.keys(query ?? {})) if (!['wants', 'offers', 'want'].includes(k)) throw new Error(`unknown member ${k}`)
@@ -224,7 +207,7 @@ export function createNektarModule(
   host: Host,
   nets: string[],
   opts?: { now?: () => number }
-): { topics: Record<string, TopicManager>; lookups: Record<string, LookupService> } {
+): Required<Module> {
   const now = opts?.now ?? Date.now
   const shared = new Map<string, LaneIndex>()
   const topics: Record<string, TopicManager> = {}
@@ -239,7 +222,7 @@ export function createNektarModule(
   return { topics, lookups }
 }
 
-export default function create(host: Host): { topics: Record<string, TopicManager>; lookups: Record<string, LookupService> } {
+export default function create(host: Host): Required<Module> {
   const nets = (process.env.NEKTAR_NETS ?? '')
     .split(',')
     .map((s) => s.trim())

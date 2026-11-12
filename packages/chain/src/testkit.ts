@@ -29,7 +29,31 @@ import {
 // ---------------------------------------------------------------------------
 // stack connection
 
+// Repo .env carries NEKTAR_RPC_*/NEKTAR_REGTEST_WIF for local runs — load it
+// once so `pnpm test` works from any package dir without manual exports.
+// Existing process.env values always win.
+let envLoaded = false
+function loadRepoEnv(): void {
+  if (envLoaded) return
+  envLoaded = true
+  let dir = process.cwd()
+  for (let up = 0; up < 5; up++) {
+    const f = join(dir, '.env')
+    if (existsSync(f)) {
+      for (const line of readFileSync(f, 'utf8').split(/\r?\n/)) {
+        const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line)
+        if (m !== null && process.env[m[1]!] === undefined) process.env[m[1]!] = m[2]!.replace(/^["']|["']$/g, '')
+      }
+      return
+    }
+    const parent = dirname(dir)
+    if (parent === dir) return
+    dir = parent
+  }
+}
+
 export function stackCfgFromEnv(): RegtestConfig | undefined {
+  loadRepoEnv()
   const pass = process.env.NEKTAR_RPC_PASS
   if (pass === undefined || pass === '') return undefined
   return {
@@ -146,6 +170,7 @@ export class StackTreasury {
     readonly cfg: RegtestConfig,
     file = join(STATE_DIR, 'treasury.json')
   ) {
+    loadRepoEnv()
     this.key =
       process.env.NEKTAR_REGTEST_WIF !== undefined && process.env.NEKTAR_REGTEST_WIF !== ''
         ? PrivateKey.fromWif(process.env.NEKTAR_REGTEST_WIF)
@@ -188,6 +213,15 @@ export class StackTreasury {
   async mine(n = 1): Promise<void> {
     await this.chain.mine(n)
   }
+  /** split the treasury tail into another ~60 reserve entries when the pool
+   *  runs dry mid-suite — the split chain is self-funding on regtest. */
+  async refill(): Promise<void> {
+    const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
+      treasuryFile: join(STATE_DIR, 'treasury.json')
+    })
+    if (r === null) throw new Error('testkit: treasury tail spent — cannot refill reserve')
+    await this.chain.mine(1)
+  }
 }
 
 let treasuryPromise: Promise<StackTreasury> | undefined
@@ -209,6 +243,10 @@ export class StackFunder implements Funder {
   private constructor(key: PrivateKey) {
     this.keyPair = key
   }
+  /** a funder with no utxos — take() always throws; no stack needed */
+  static dry(key: PrivateKey = PrivateKey.fromRandom()): StackFunder {
+    return new StackFunder(key)
+  }
   static async fund(t: StackTreasury, outputs: number, sats = 10_000): Promise<StackFunder> {
     const f = new StackFunder(PrivateKey.fromRandom())
     const addr = f.keyPair.toPublicKey().toAddress([0x6f])
@@ -216,16 +254,29 @@ export class StackFunder implements Funder {
     // broadcast failure — allow enough attempts to walk past a rotten pool
     const need = outputs * sats + 5_000
     for (let attempt = 0; attempt < 8; attempt++) {
-      // accumulate reserve entries until the spend is covered — the ~50k-sat
-      // entry cap means bigger funds take several inputs
+      // accumulate reserve entries until the spend is covered — the 16-input
+      // cap sets the floor so entries don't need to be 50k each
       const srcs: Array<{ tx: Transaction, vout: number, satoshis: number }> = []
+      const picked = new Set<string>()
       let inSats = 0
+      const floor = Math.min(50_000, Math.ceil(need / 16))
       while (inSats < need && srcs.length < 16) {
-        const src = await t.reserve.takeReserve(async (txid, vout) => (await utxoStatus(t.cfg, txid, vout)) === 'spent', Math.min(50_000, need))
+        // takeReserve doesn't mark on take — exclude this tx's own picks or a
+        // multi-input spend would consume the same outpoint twice (TX_INVALID)
+        const src = await t.reserve.takeReserve(
+          async (txid, vout) => picked.has(`${txid}:${vout}`) || (await utxoStatus(t.cfg, txid, vout)) === 'spent',
+          floor
+        )
         if (src === null) break
+        picked.add(`${src.tx.id('hex')}:${src.vout}`)
         srcs.push(src); inSats += src.satoshis
       }
-      if (inSats < need) throw new Error('testkit: reserve empty — bootstrap failed')
+      if (inSats < need) {
+        // pool drained below the floor — split another ~60 entries off the
+        // treasury tail and retry rather than failing the suite
+        if (attempt < 6) { await t.refill(); continue }
+        throw new Error('testkit: reserve empty — bootstrap failed')
+      }
       const tx = new Transaction()
       for (const src of srcs) tx.addInput({ sourceTransaction: src.tx, sourceOutputIndex: src.vout, unlockingScriptTemplate: new P2PKH().unlock(t.key) })
       for (let i = 0; i < outputs; i++) tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: sats })

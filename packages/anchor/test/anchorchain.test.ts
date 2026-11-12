@@ -3,20 +3,20 @@ import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8, chainRp, eq } from '@nektar/core'
 import { decodeNektarAnchor } from '@nektar/contracts'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, StackFunder } from '@nektar/chain'
 import { AnchorChain } from '../src/index.js'
 
-const setup = (burstLimit = Infinity) => {
-  const chain = new MockChain()
-  const funder = new MockFunder()
-  funder.topup(200)
-  for (const u of (funder as any).utxos) chain.registerParent(u.tx)
+const setup = async (t: { skip: (m?: string) => void }, burstLimit = Infinity) => {
+  const w = await stackWorld(t, 16, 10_000)
+  if (w === undefined) return undefined
+  const { chain, funder } = w
   const ac = new AnchorChain('s1', PrivateKey.fromRandom(), funder, funder.keyPair, chain, { burstLimit })
   return { chain, funder, ac }
 }
 
-test('regression: confirming a descendant never gives its BUMP to earlier pending heads', async () => {
-  const { ac } = setup()
+test('regression: confirming a descendant never gives its BUMP to earlier pending heads', async t => {
+  const s0 = await setup(t); if (s0 === undefined) return
+  const { ac } = s0
   const g = await ac.anchor(1, dsha256(utf8('c0')))
   const a1 = await ac.anchor(1, dsha256(utf8('c1')))
   const { MerklePath } = await import('@bsv/sdk')
@@ -28,8 +28,9 @@ test('regression: confirming a descendant never gives its BUMP to earlier pendin
   assert.equal(ac.getHead()!.data.n, 1)
 })
 
-test('anchor: genesis then successor spends the head UTXO', async () => {
-  const { chain, ac } = setup()
+test('anchor: genesis then successor spends the head UTXO', async t => {
+  const s0 = await setup(t); if (s0 === undefined) return
+  const { chain, ac } = s0
   const g = await ac.anchor(10, dsha256(utf8('b0')))
   const gd = decodeNektarAnchor(g.tx.outputs[0]!.lockingScript.toHex())
   assert.equal(gd!.n, 0)
@@ -42,17 +43,16 @@ test('anchor: genesis then successor spends the head UTXO', async () => {
   assert.equal(a1d!.n, 1)
   assert.ok(eq(a1d!.Rp, chainRp(gd!.Rp, a1d!.R, 20)))
 
-  chain.mine(1)
-  ac.confirm(a1.tx.id('hex'), a1.tx.merklePath)
+  await chain.mine(1)
+  ac.confirm(a1.tx.id('hex'), (await chain.getTx(a1.tx.id('hex')))!.merklePath)
   assert.equal(ac.getHead()!.data.n, 1)
   assert.ok(ac.headAtomicBEEF()!.length > 0)
 })
 
-test('anchor: failed broadcast does not advance the head', async () => {
-  const chain = new MockChain()
-  const funder = new MockFunder()
-  funder.topup(200)
-  for (const u of (funder as any).utxos) chain.registerParent(u.tx)
+test('anchor: failed broadcast does not advance the head', async t => {
+  const w = await stackWorld(t, 16, 10_000)
+  if (w === undefined) return
+  const { chain, funder } = w
   // wrap the broadcaster: fail exactly once (the 3rd broadcast = 2nd append)
   let calls = 0
   const flaky = {
@@ -79,23 +79,22 @@ test('anchor: failed broadcast does not advance the head', async () => {
   assert.equal(decodeNektarAnchor(a4.tx.outputs[0]!.lockingScript.toHex())!.n, 3)
 })
 
-test('anchor: unconfirmed chain + burst back-pressure', async () => {
-  const { chain, ac } = setup(3)
+test('anchor: unconfirmed chain + burst back-pressure', async t => {
+  const s0 = await setup(t, 3); if (s0 === undefined) return
+  const { chain, ac } = s0
   for (let i = 0; i < 3; i++) await ac.anchor(1, dsha256(utf8(`b${i}`)))
   await assert.rejects(() => ac.anchor(1, dsha256(utf8('x'))), /back-pressure/)
-  chain.mine(1)
+  await chain.mine(1)
   // confirm the whole chain (all mined in one block)
-  for (const h of [...(ac as any).pendingHeads]) ac.confirm(h.tx.id('hex'), h.tx.merklePath)
+  for (const h of [...(ac as any).pendingHeads]) ac.confirm(h.tx.id('hex'), (await chain.getTx(h.tx.id('hex')))!.merklePath)
   await ac.anchor(1, dsha256(utf8('b3')))
   assert.equal(ac.getHead()!.data.n, 3)
 })
 
-test('burst: 20 anchors with reserve-style funder pass script verification', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(30)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+test('burst: 20 anchors with reserve-style funder pass script verification', async t => {
+  const w = await stackWorld(t, 30, 10_000)
+  if (w === undefined) return
+  const { chain, funder: f } = w
   // emulate ReserveFunder: hand out each parent exactly once
   const pool = [...(f as any).utxos]
   const spentSet = new Set<string>()
@@ -128,13 +127,14 @@ test('burst: 20 anchors with reserve-style funder pass script verification', asy
   assert.equal(true, true)
 })
 
-test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', async () => {
+test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', async t => {
   // A broadcaster that rejects the SECOND broadcast once with TX_MISSING_PARENT
   // (regtest propagation race). Before the fix, lastTx was set to the FAILED
   // child, so the retry's parent fetch returned '' → partial sourceTransaction
   // → preimage mismatch → TX_INVALID on the retry.
-  const chain = new MockChain()
-  chain.verifyScripts = true
+  const w = await stackWorld(t, 10, 10_000)
+  if (w === undefined) return
+  const { chain } = w
   const inner = chain
   const flaky: any = {
     broadcast: async (tx: import('@bsv/sdk').Transaction) => {
@@ -146,18 +146,17 @@ test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', asyn
       return inner.broadcast(tx)
     }
   }
-  const f = new MockFunder()
-  f.topup(6)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const { funder: f } = w
   const ac = new AnchorChain('r', f.keyPair, f, f.keyPair, flaky)
   await ac.anchor(1, new Uint8Array(32).fill(1)) // genesis ok
   await ac.anchor(1, new Uint8Array(32).fill(2)) // n=1: first broadcast fails, retry must succeed
   assert.equal(ac.getHead()!.data.n, 1, 'chain advanced despite the failed attempt')
 })
 
-test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
+test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async t => {
+  const w = await stackWorld(t, 10, 10_000)
+  if (w === undefined) return
+  const { chain } = w
   let n = 0
   let rejectedHex: string | undefined
   let secondHex: string | undefined
@@ -174,9 +173,7 @@ test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async 
       return chain.broadcast(tx)
     }
   }
-  const f = new MockFunder()
-  f.topup(6)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const { funder: f } = w
   const ac = new AnchorChain('r', f.keyPair, f, f.keyPair, flaky)
   await ac.anchor(1, new Uint8Array(32).fill(1))
   await ac.anchor(1, new Uint8Array(32).fill(2)) // n=1: first broadcast rejected, re-broadcast identical
@@ -184,9 +181,10 @@ test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async 
   assert.equal(secondHex, rejectedHex, 're-broadcast must be byte-identical')
 })
 
-test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
+test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async t => {
+  const w = await stackWorld(t, 10, 10_000)
+  if (w === undefined) return
+  const { chain } = w
   let n = 0
   let lostTxid = ''
   let headOp = ''
@@ -207,9 +205,7 @@ test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async () =
       return chain.broadcast(tx)
     }
   }
-  const f = new MockFunder()
-  f.topup(6)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const { funder: f } = w
   const ac = new AnchorChain('r', f.keyPair, f, f.keyPair, flaky)
   await ac.anchor(1, new Uint8Array(32).fill(1))
   headOp = ac.getHead()!.tx.id('hex') + ':0'
@@ -219,20 +215,20 @@ test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async () =
 })
 
 test('anchorOnce fails fast on dry funding — never broadcasts a contract-only tx', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder() // no topup — dry
-  const ac = new AnchorChain('d', f.keyPair, f, f.keyPair, chain)
-  await assert.rejects(() => ac.anchor(1, new Uint8Array(32).fill(1)), /reserve dry/)
-  assert.equal(chain['mempool'].size + (chain['spent'].size ?? 0), 0, 'nothing was broadcast')
+  // no chain needed: funding emptiness must abort before any broadcast
+  const f = StackFunder.dry()
+  let calls = 0
+  const probe = { broadcast: async () => { calls++; return { status: 'error' as const } } }
+  const ac = new AnchorChain('d', f.keyPair, f, f.keyPair, probe as any)
+  await assert.rejects(() => ac.anchor(1, new Uint8Array(32).fill(1)), /reserve dry|no utxo/i)
+  assert.equal(calls, 0, 'nothing was broadcast')
 })
 
-test('every AnchorChain tx produces a BEEF with all inputs resolved', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(8)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+test('every AnchorChain tx produces a BEEF with all inputs resolved', async t => {
+  const w = await stackWorld(t, 10, 10_000)
+  if (w === undefined) return
+  const { chain } = w
+  const { funder: f } = w
   const ac = new AnchorChain('b', f.keyPair, f, f.keyPair, chain)
   const { Transaction } = await import('@bsv/sdk')
   for (let i = 0; i < 4; i++) {
@@ -244,12 +240,11 @@ test('every AnchorChain tx produces a BEEF with all inputs resolved', async () =
   }
 })
 
-test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent stays decodable', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(6)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent stays decodable', async t => {
+  const w = await stackWorld(t, 10, 10_000)
+  if (w === undefined) return
+  const { chain } = w
+  const { funder: f } = w
   const ac = new AnchorChain('v3', f.keyPair, f, f.keyPair, chain)
   await ac.anchor(3, dsha256(utf8('batch')))
   await ac.anchor(2, dsha256(utf8('batch2'))) // append passes script verification
@@ -296,9 +291,10 @@ test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent s
   assert.equal(decodeNektarAnchor(hex.slice(0, at) + '20' + '42'.repeat(32) + hex.slice(at)), null, 'v2 layout refused')
 })
 
-test('GOAL-v8 D5: extractAnchorAuthorship exposes σ_n — verified against the preimage', async () => {
+test('GOAL-v8 D5: extractAnchorAuthorship exposes σ_n — verified against the preimage', async t => {
   const { extractAnchorAuthorship } = await import('@nektar/contracts')
-  const { ac } = setup()
+  const s0 = await setup(t); if (s0 === undefined) return
+  const { ac } = s0
   const g = await ac.anchor(1, dsha256(utf8('g')))
   const a1 = await ac.anchor(2, dsha256(utf8('a1')))
   // the successor spend's input 0 spends the genesis anchor output

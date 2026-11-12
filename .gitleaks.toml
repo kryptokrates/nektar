@@ -1,13 +1,28 @@
 # gitleaks — local `check:secrets` runs `gitleaks dir` (working tree) and CI
-# runs `gitleaks git` (history). These paths hold secrets BY DESIGN (local
-# keystores / env) and are all .gitignore'd — allowlisting keeps the scan
-# signal-only for everything else.
+# runs `gitleaks git` on the incoming commit range.
+#
+# paths  : local-only secret stores (all .gitignore'd — they hold keys BY DESIGN)
+# regexes: a repo full of public crypto material — txids, pubkeys, vkey and
+#          field constants — floods generic-api-key on hex. Suppress hex-only
+#          lines; WIF keys and API tokens are not hex and still flag.
+[extend]
+useDefault = true
+
 [allowlist]
-description = "local-only secret stores (gitignored)"
 paths = [
   '''^\.env''',
   '''^\.nektar''',
   '''^\.state''',
   '''^\.mod''',
-  '''^infra/teranode-quickstart/''',
+  '''dist-bundle/''',
+  '''tools/groth16-spike/''',
+]
+regexTarget = "line"
+regexes = [
+  '''0x[0-9a-fA-F]{32,}''',
+  '''\b[0-9a-fA-F]{64,}\b''',
+]
+stopWords = [
+  '''0x123456789abcdef''',
+  '''r3.items''',
 ]

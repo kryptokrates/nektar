@@ -4,7 +4,7 @@
 // the regtest node's own admission: real UTXOs, real signatures, real CLTV.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Transaction, PrivateKey, LockingScript } from '@bsv/sdk'
+import { Transaction, PrivateKey, LockingScript, UnlockingScript } from '@bsv/sdk'
 import { Hash } from '@bsv/sdk'
 import { stackWorld, type StackChain, type StackFunder } from '@nektar/chain'
 import { DisclosureSaleHost } from '../src/sale.js'
@@ -98,7 +98,9 @@ test('V3 escrow: funding fee follows the instance rate, not a constant', async (
   const host = new DisclosureSaleHost({ ...cfg, depositorPkh: buyerPkh })
   const mkFunding = (sats: number) => {
     const f = new Transaction()
-    f.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff })
+    // coinbase-shaped parent — a 1-byte unlock so the parent serializes; the
+    // tx never hits the node, only the escrow's fee math reads it
+    f.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromHex('51') })
     f.addOutput({
       satoshis: sats,
       lockingScript: LockingScript.fromHex(

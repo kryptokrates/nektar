@@ -12,6 +12,7 @@
     "test": "node --test --test-timeout=60000 dist/test/*.test.js"
   },
   "dependencies": {
+    "@lightwebinc/bcommon": "file:../../vendor/lightwebinc-bcommon-0.34.0.tgz",
     "@nektar/core": "workspace:*",
     "runar-sdk": "0.4.6"
   },

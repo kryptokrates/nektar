@@ -4,6 +4,7 @@
 // in the runtime before any tx reaches it.
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash } from '@bsv/sdk'
+import { tscMerklePath } from '@lightwebinc/bcommon'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 
 export interface MainnetConfig {
@@ -368,30 +369,17 @@ export function parseHeaderHex(hex: string, height: number): BlockHeader {
 
 // --- merkle paths -------------------------------------------------------------
 /** TSC proof JSON → SDK MerklePath. nodes['*'] = duplicate of the neighbour
- *  (odd leaf self-pair). Pure + exported for tests. */
+ *  (odd leaf self-pair). Pure + exported for tests. The upstream
+ *  `tscMerklePath` does the conversion and the malformed-proof refusals;
+ *  this adapter only normalises TSC `nodes`, which a source may send as
+ *  null for a single-tx block (common on TTN): an empty sibling list, not
+ *  a malformed proof. A null *inside* the list stays a refusal upstream. */
 export function tscToMerklePath(
   tsc: { index: number; txOrId: string; target: string; nodes: (string | null)[] | null },
   txid: string,
   blockHeight: number
 ): MerklePath {
-  // SDK MerklePath rows: each level lists the working node (level 0 = the txid
-  // leaf) plus its sibling; '*' in TSC = odd-leaf self-pair → duplicate.
-  // TSC `nodes` may be null entirely (single-tx block — common on TTN):
-  // offset 0 leaf alone is the whole path.
-  const nodes = tsc.nodes ?? []
-  let idx = nodes.length === 0 ? 0 : tsc.index
-  const path: { offset: number; hash?: string; txid?: boolean; duplicate?: boolean }[][] = []
-  for (let lvl = 0; lvl < nodes.length; lvl++) {
-    const row: { offset: number; hash?: string; txid?: boolean; duplicate?: boolean }[] = []
-    if (lvl === 0) row.push({ offset: idx, hash: txid, txid: true })
-    const raw = nodes[lvl]!
-    if (raw === '*' || raw === null) row.push({ offset: idx % 2 === 0 ? idx + 1 : idx - 1, duplicate: true })
-    else row.push({ offset: idx % 2 === 0 ? idx + 1 : idx - 1, hash: raw })
-    path.push(row)
-    idx = Math.floor(idx / 2)
-  }
-  if (path.length === 0) path.push([{ offset: 0, hash: txid, txid: true }]) // single-tx block
-  return new MerklePath(blockHeight, path)
+  return tscMerklePath({ ...tsc, nodes: (tsc.nodes ?? []) as string[] }, txid, blockHeight)
 }
 
 export type PathResult = { merklePath: MerklePath; status: string }

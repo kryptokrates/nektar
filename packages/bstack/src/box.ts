@@ -2,7 +2,8 @@ import { Hash, PrivateKey, ProtoWallet, Utils, type ChainTracker } from '@bsv/sd
 import { sealEnvelope, encodePlaintext, envelopeRecord, envelopeCarrier, envelopeFundingLock } from '@lightwebinc/bbox-host/codec/send.js'
 import { decodeEnvelope, encodeReceipt, checkBox, checkOffice, MaxAcks } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { checkContent, verifyContentSignature } from '@lightwebinc/bbox-host/codec/content.js'
-import { JObject, parseJSON, type JValue } from '@lightwebinc/bbox-host/codec/jcs.js'
+import { open as openPlaintext, parsePlaintext } from '@lightwebinc/bbox-host/codec/payment.js'
+import { JObject, type JValue } from '@lightwebinc/bbox-host/codec/jcs.js'
 import { admit } from '@lightwebinc/bbox-host/codec/admit.js'
 import { submitAll, lookupAll, type Quorum } from './hosts.js'
 import type { TreeLedger } from './tree.js'
@@ -192,18 +193,19 @@ async function openEnvelope(beef: number[], w: ProtoWallet, office: string, me: 
   if (env.expires !== 0 && env.expires <= Math.floor(Date.now() / 1000)) return undefined
   const c = checkContent(env)
   verifyContentSignature(c, new Uint8Array(env.from))
-  // §4.7 check 1 undecryptable → BRC-78 open
-  const inner = JSON.parse(new TextDecoder().decode(new Uint8Array(env.content))) as { content: string }
-  const brc78 = new Uint8Array(Array.from(Buffer.from(inner.content, 'base64')))
-  const keyID = Utils.toBase64(Array.from(brc78.subarray(4 + 66, 4 + 66 + 32)))
-  const ciphertext = brc78.subarray(4 + 66 + 32)
-  const opened = await w
-    .decrypt({ ciphertext: Array.from(ciphertext), protocolID: [2, 'message encryption'], keyID, counterparty: Utils.toHex(Array.from(env.from)) }, ORIGINATOR)
-    .catch(() => undefined)
+  // §4.7 check 1 undecryptable → BRC-78 open (stock codec: the cipher bytes
+  // were already validated by checkContent; counterparty is the sender)
+  const opened = await openPlaintext(w, c, new Uint8Array(env.from)).catch(() => undefined)
   if (opened === undefined) return undefined
-  // §4.7 checks 2,3: plaintext-json / plaintext-shape
-  const doc = parseJSON(new Uint8Array(opened.plaintext))
-  if (!(doc instanceof JObject) || !doc.has('nektar')) return undefined
+  // §4.7 checks 2,3: plaintext-json / plaintext-shape — the stock parser keeps
+  // unknown members in doc, so {nektar: ...} survives alongside body/refs/payment
+  let doc: JObject
+  try {
+    doc = parsePlaintext(opened).doc
+  } catch {
+    return undefined
+  }
+  if (!doc.has('nektar')) return undefined
   return {
     txid: Utils.toHex(Array.from(adm.txid)),
     from: Utils.toHex(Array.from(env.from)),

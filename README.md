@@ -90,7 +90,7 @@ pnpm -r build
 pnpm demo
 ```
 
-The demo uses an offline mock chain. It stores example memory, anchors it, removes an unsupported claim from an answer, and prints a receipt. It does not demonstrate public-network settlement.
+The demo runs on the local Teranode regtest stack (`pnpm stack:up`). It stores example memory, anchors it into a real block for a real BUMP, removes an unsupported claim from an answer, and prints a receipt. It does not demonstrate public-network settlement.
 
 For an instance of your own, run the configuration wizard:
 
@@ -137,15 +137,12 @@ The runtime advances the trade. The operator defines the limits and handles exce
 ## Run the scenarios
 
 ```bash
-# Separate agent processes and two local hosts; simulated chain:
-pnpm scenarios -- --profile mock --scenario all
-
 # Four production instances, three sellers, two reference hosts;
 # requires the Teranode regtest stack, host setup, and funded treasury:
-pnpm scenarios:real
+pnpm scenarios
 ```
 
-The regtest runner lives in [`real-stack.mjs`](packages/e2e/src/scenarios/real-stack.mjs); read its prerequisites before running it. A local regtest run and a public testnet run establish different things. The [operating guide](docs/OPERATIONS.md) covers the chain and host setup; the [automation notes](docs/AUTOMATION.md) record verification status and limitations.
+The runner lives in [`real-stack.mjs`](packages/e2e/src/scenarios/real-stack.mjs); read its prerequisites before running it. A local regtest run and a public testnet run establish different things. The [operating guide](docs/OPERATIONS.md) covers the chain and host setup; the [automation notes](docs/AUTOMATION.md) record verification status and limitations.
 
 ## The boundaries matter
 

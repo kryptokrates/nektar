@@ -24,6 +24,14 @@ jobs:
       - name: regtest e2e
         run: node packages/e2e/src/e2e-regtest.ts
         timeout-minutes: 20
+      - name: full e2e (regtest stack, full-paper scenario)
+        run: pnpm e2e
+        timeout-minutes: 20
+      - name: autonomous marketplace scenarios (regtest stack, real processes)
+        run: pnpm scenarios
+        timeout-minutes: 15
+        env:
+          NEKTAR_SCENARIO_OUT: artifacts/market-scenarios
       - name: stop the stack
         if: always()
         run: pnpm stack:down

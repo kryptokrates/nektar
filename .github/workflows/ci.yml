@@ -42,14 +42,6 @@ jobs:
         timeout-minutes: 10
       - name: reproduce (vectors + pinned vkey)
         run: pnpm reproduce
-      - name: offline e2e (mock chain, full-paper scenario)
-        run: pnpm e2e
-        timeout-minutes: 5
-      - name: autonomous marketplace scenarios (mock chain, real processes)
-        run: pnpm scenarios -- --profile mock --scenario all
-        timeout-minutes: 10
-        env:
-          NEKTAR_SCENARIO_OUT: artifacts/market-scenarios
       - name: marketplace evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

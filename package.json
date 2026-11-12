@@ -47,8 +47,7 @@
     "stack:up": "cd infra/teranode-quickstart && ./start.sh",
     "stack:down": "cd infra/teranode-quickstart && ./stop.sh",
     "bundle:mcp": "node tools/bundle-mcp.mjs",
-    "scenarios": "node packages/e2e/src/scenarios/runner.mjs",
-    "scenarios:real": "node packages/e2e/src/scenarios/real-stack.mjs",
+    "scenarios": "node packages/e2e/src/scenarios/real-stack.mjs",
     "scenarios:verify": "node packages/e2e/src/scenarios/verify.mjs"
   },
   "devDependencies": {

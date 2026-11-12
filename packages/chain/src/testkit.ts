@@ -147,6 +147,10 @@ export class StackChain implements ChainTracker, Broadcaster {
   async utxoStatus(txid: string, vout: number): Promise<'unspent' | 'spent' | 'unknown'> {
     return await utxoStatus(this.cfg, txid, vout)
   }
+  /** raw JSON-RPC passthrough for stack-only verbs (invalidateblock, etc.) */
+  async rpc(method: string, ...params: unknown[]): Promise<any> {
+    return await stackRpc(this.cfg, method, ...params)
+  }
   /** generatetoaddress to the treasury address; waits for the tip to catch up */
   async mine(n = 1): Promise<void> {
     const addr = this.treasuryAddr ?? new PrivateKey(1).toPublicKey().toAddress([0x6f])

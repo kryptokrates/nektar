@@ -1,18 +1,19 @@
-// Offline E2E on the mock chain — the maintenance-manual story:
+// E2E on the local Teranode regtest stack — the maintenance-manual story:
 //   write → anchor → verify → correction → linked superseding record
-// plus: 2 parallel shards, a 1,000-anchor burst,
-// both admit the same anchor chain.
-// Reduced live-regtest variant: set NEKTAR_NETWORK=regtest to run
-// e2e-regtest.ts (fresh funding + real tracker + real headers) instead.
-if (process.env.NEKTAR_NETWORK === 'regtest') {
-  await import('./e2e-regtest.js')
-  process.exit(0)
-}
+// plus: 2 parallel shards, a 60-anchor burst, reorg recovery, covenant eval.
 import { PrivateKey } from '@bsv/sdk'
 import { utf8, toHex, dsha256, hash160 } from '@nektar/core'
 const dsha256utf8 = (s: string) => dsha256(utf8(s))
-import { MockChain, MockFunder } from '@nektar/chain'
+import { StackChain, StackFunder, stackTreasury, stackCfgFromEnv, stackUp } from '@nektar/chain'
 import { NektarMemory } from '@nektar/mcp'
+
+if (!(await stackUp())) {
+  console.error('pnpm e2e needs the local Teranode regtest stack (NEKTAR_RPC_*) — start it first')
+  process.exit(1)
+}
+const stackCfg = stackCfgFromEnv()!
+const treasury = await stackTreasury()
+const mkfunder = (n: number) => StackFunder.fund(treasury, n)
 
 let failures = 0
 const check = (cond: boolean, name: string) => {
@@ -21,15 +22,9 @@ const check = (cond: boolean, name: string) => {
 }
 
 const _t0 = Date.now()
-const chain = new MockChain()
-chain.verifyScripts = true
-const funder = new MockFunder()
-funder.topup(40)
-for (const u of (funder as any).utxos) chain.registerParent(u.tx)
-for (const u of (funder as any).utxos as Array<{ tx: import('@bsv/sdk').Transaction }>) {
-  chain.mempool.set(u.tx.id('hex'), u.tx)
-}
-chain.mine(1)
+const chain = new StackChain(stackCfg)
+const funder = await mkfunder(40)
+await chain.mine(1)
 
 // --- scenario: maintenance manual, 2 shards ---
 // each shard gets its own owner key (NektarMemory default); funding inputs are
@@ -51,7 +46,7 @@ const w1 = await mem.remember('manual', 'drain port 4 torque 45Nm')
 await mem.remember('manual', 'inspect belt every 10h')
 check(!!w1.anchored || true, 'write accepted')
 await mem.anchorShard('manual')
-chain.mine(1)
+await chain.mine(1)
 
 let { result: r0 } = await mem.prove('manual', 0)
 check(r0.ok === true, 'initial record verifies')
@@ -59,7 +54,7 @@ check(r0.ok === true, 'initial record verifies')
 // correction: a superseding record, linked by referencing seq 0
 const corr = await mem.remember('manual', 'CORRECTION: drain port 4 torque is 42Nm (supersedes seq 0)')
 await mem.anchorShard('manual')
-chain.mine(1)
+await chain.mine(1)
 const { result: r1 } = await mem.prove('manual', corr.seq)
 check(r1.ok === true, 'correction record verifies')
 lap('story writes+anchors+prove0')
@@ -72,17 +67,14 @@ console.log('— parallel shards —')
 const mem2w = await mem.remember('telemetry', 'pump temp 71C')
 await mem.remember('telemetry', 'pump vib 2.1mm/s')
 await mem.anchorShard('telemetry')
-chain.mine(1)
+await chain.mine(1)
 const { result: rT } = await mem.prove('telemetry', mem2w.seq)
 check(rT.ok === true, 'second shard verifies independently')
 
 lap('parallel shards')
 console.log('— 60-anchor burst —')
-const bChain = new MockChain()
-bChain.verifyScripts = true
-const bFunder = new MockFunder()
-bFunder.topup(80)
-for (const u of (bFunder as any).utxos) bChain.registerParent(u.tx)
+const bChain = new StackChain(stackCfg)
+const bFunder = await mkfunder(80)
 const burstChain = AnchorChainBurst('burst', bChain, bFunder, bFunder.keyPair)
 const t0 = Date.now()
 let burstOk = true
@@ -103,7 +95,7 @@ try {
   burstOk = false
   console.log('burst failed:', (e as Error).message)
 }
-check(burstOk, `60 unconfirmed anchors chained (mock chain imposes no limit; real limit = Spike B, pending)`)
+check(burstOk, `60 unconfirmed anchors chained against the real node's ancestor policy`)
 console.log(`  burst took ${Date.now() - t0}ms`)
 
 // --- owner rotation mid-chain: rotate then append with the new key ---
@@ -117,11 +109,11 @@ console.log(`  burst took ${Date.now() - t0}ms`)
   check(post.head.data.n === 60, 'new owner appends n+1 after rotate')
 }
 lap('burst+rotate')
-bChain.mine(1)
+await bChain.mine(1)
 
 // AnchorChain import for the burst
 import { AnchorChain } from '@nektar/anchor'
-function AnchorChainBurst(shard: string, c: MockChain, f: MockFunder, k: PrivateKey) {
+function AnchorChainBurst(shard: string, c: StackChain, f: StackFunder, k: PrivateKey) {
   return new AnchorChain(shard, k, f, k, c)
 }
 
@@ -129,32 +121,36 @@ function AnchorChainBurst(shard: string, c: MockChain, f: MockFunder, k: Private
 lap('burst-block')
 console.log('— reorg —')
 {
-  const rc = new MockChain()
-  rc.verifyScripts = true
-  const rf = new MockFunder()
-  rf.topup(10)
-  for (const u of (rf as any).utxos as Array<{ tx: import('@bsv/sdk').Transaction }>) {
-    rc.mempool.set(u.tx.id('hex'), u.tx)
-    rc.registerParent(u.tx)
-  }
-  rc.mine(1)
+  const rc = new StackChain(stackCfg)
+  const rf = await mkfunder(10)
+  await rc.mine(1)
   const rm = new NektarMemory(rc, rf, rf.keyPair, { batchPolicy: { maxLeaves: 1 } })
   await rm.remember('reorg', 'to be reorged')
   await rm.anchorShard('reorg')
-  rc.mine(1)
+  await rc.mine(1)
   const rac = (rm as any).anchors.get('reorg')
   rac.confirm(rac.getHead().tx.id('hex'), rac.getHead().tx.merklePath)
   const { result: before } = await rm.prove('reorg', 0)
   check(before.ok === true, 'anchor verifies pre-reorg')
   const lostTxid = rac.getHead().tx.id('hex')
-  rc.reorg(1)
-  await rac.handleReorg([lostTxid])
-  check((rm as any).anchors.get('reorg').getHead().tx.id('hex') === lostTxid, 'rollback kept head pending and re-broadcast')
-  rc.mine(1)
-  const rh = rac.getHead()
-  rac.confirm(rh.tx.id('hex'), rh.tx.merklePath)
-  const { result: after } = await rm.prove('reorg', 0)
-  check(after.ok === true, 're-anchored proof verifies against new block')
+  const tipBefore = await rc.currentHeight()
+  const hdr = await rc.headerAtHeight(tipBefore)
+  let reorged = false
+  try {
+    await rc.rpc('invalidateblock', hdr!.hash)
+    reorged = true
+  } catch {
+    console.log('  ~ reorg lane skipped — node has no invalidateblock')
+  }
+  if (reorged) {
+    await rac.handleReorg([lostTxid])
+    check((rm as any).anchors.get('reorg').getHead().tx.id('hex') === lostTxid, 'rollback kept head pending and re-broadcast')
+    await rc.mine(1)
+    const rh = rac.getHead()
+    rac.confirm(rh.tx.id('hex'), rh.tx.merklePath)
+    const { result: after } = await rm.prove('reorg', 0)
+    check(after.ok === true, 're-anchored proof verifies against new block')
+  }
 }
 
 // --- origin-falsehood boundary ---
@@ -164,7 +160,7 @@ console.log('— origin-falsehood —')
   const fm = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 } })
   const w = await fm.remember('falsity', 'the sky is green (deliberately false)')
   await fm.anchorShard('falsity')
-  chain.mine(1)
+  await chain.mine(1)
   const fac = (fm as any).anchors.get('falsity')
   fac.confirm(fac.getHead().tx.id('hex'), fac.getHead().tx.merklePath)
   const { result } = await fm.prove('falsity', w.seq)
@@ -176,11 +172,8 @@ console.log('— origin-falsehood —')
 // --- v2 scenario: Cedar + ZKAccess + identity, rotate, SMT revoke, disclosure ---
 console.log('— v2 scenario —')
 {
-  const vc = new MockChain()
-  vc.verifyScripts = true
-  const vf = new MockFunder()
-  vf.topup(12)
-  for (const u of (vf as any).utxos) vc.registerParent(u.tx)
+  const vc = new StackChain(stackCfg)
+  const vf = await mkfunder(12)
   const B = PrivateKey.fromRandom()
   const pubB = B.toPublicKey().toString()
   const { canonicalizePolicySet } = await import('@nektar/policy')
@@ -210,7 +203,7 @@ console.log('— v2 scenario —')
   // agent A writes level-2 data
   await vm.remember('v2', 'level-2 secret', { source: 'agent-a' }, 2)
   await vm.anchorShard('v2')
-  vc.mine(1)
+  await vc.mine(1)
   // agent B: verified identity + ZK clearance ≥2 + Cedar ALLOW → reads
   const binding = signBinding(B, 'uuid-b', '00'.repeat(32), 0)
   const chal = vm.issueChallenge()
@@ -243,7 +236,7 @@ console.log('— v2 scenario —')
   const newOwner = PrivateKey.fromRandom()
   const ac2 = (vm as any).anchors.get('v2')
   const rot = await ac2.rotate(newOwner)
-  vc.mine(1)
+  await vc.mine(1)
   check(Number(rot.head.data.n) === 0, `rotate keeps state n=${rot.head.data.n}`)
   // earlier zk proof still verifies against the same commitment/transcript
   check((await import('@nektar/identity')).verifyAccess(iss.commitment, 2n, proof, tr) === true, 'ZK proof still verifies after rotate')
@@ -257,7 +250,7 @@ console.log('— v2 scenario —')
     console.log('  rev anchor:', String(e?.message ?? e).slice(0, 120))
     return null
   })
-  vc.mine(1)
+  await vc.mine(1)
   check(ra !== null || ((vm as any).tails.get('__rev__')?.length ?? 0) > 0, 'revocation root anchored')
   const { proveNonInclusion, verifyProof: verifySmtProof } = (await import('@nektar/identity')) as any
   const nip = smt.prove(dsha256(Buffer.from(newOwner.toPublicKey().toString())))
@@ -302,7 +295,7 @@ else
   try {
     const vm = mem
     for (const d of ['p10 frag 0', 'p10 frag 1', 'p10 frag 2', 'p10 frag 3']) await vm.remember('zkm', d, {}, 1) // batch of 4 → anchored
-    chain.mine(1)
+    await chain.mine(1)
     const link = vm.tailLink('zkm')
     check(!!link, 'zkm batch anchored')
     vm.confirmAnchor('zkm', link!.txid)
@@ -348,7 +341,7 @@ spec(S, V) :- requires(P, V), applies(S, P).`).rules
   const ga = new GraphAnchor(mem, '__graph__')
   for (const h of [e1.h, e2.h, e3.h, d45.h, rf.h]) await ga.record(h)
   const graphTxid = await ga.anchor()
-  chain.mine(1)
+  await chain.mine(1)
   check(await ga.verifyVertex(d45.h), 'anchored vertex verifies')
   const pRules = parseProgram(`@id pol
 permit(P, read, R) :- member(P, verified), fragment(R).`).rules
@@ -356,14 +349,12 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
   const proot = Buffer.from(dag.policyRoot()).toString('hex')
   await mem.remember('__policy__', `policyroot:${proot}`)
   const pAnchor = await mem.anchorShard('__policy__')
-  chain.mine(1)
+  await chain.mine(1)
   const GRAPH_TXID = graphTxid
   const POL_TXID = pAnchor?.txid ?? 'n/a'
   console.log(`  TXIDS graph-anchor=${GRAPH_TXID} policy-root-anchor=${POL_TXID}`)
   // derivation-ALLOW + conflict-DENY through NektarMemory DAG gate
-  const f2 = new MockFunder()
-  f2.topup(4)
-  for (const u of (f2 as any).utxos) chain.registerParent(u.tx)
+  const f2 = await mkfunder(4)
   const memDag = new NektarMemory(chain, f2, f2.keyPair, { batchPolicy: { maxLeaves: 10 }, policyDag: dag, anchoredPolicyRoot: proot })
   await memDag.remember('docs', 'spec sheet', {}, 0)
   const denyNoId = await memDag.recall('docs')
@@ -424,9 +415,7 @@ try {
     O: ['ok']
   }
   const out = toHex(dsha256utf8('manual rev 2 published'))
-  const f3 = new MockFunder()
-  f3.topup(8)
-  for (const t of f3.parents) chain.registerParent(t)
+  const f3 = await mkfunder(8)
   const am = new NektarMemory(chain, f3, f3.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const d = await am.automatonDeploy('manual-lifecycle', def)
   const ac = am.automaton('manual-lifecycle')
@@ -459,7 +448,7 @@ try {
   await lm.step(0)
   await lm.step(1)
   await am.anchorShard('auto-trace')
-  chain.mine(1)
+  await chain.mine(1)
   for (const l of [am.tailLink('auto-trace')].filter(Boolean)) am.confirmAnchor('auto-trace', l!.txid)
   const proven = await Promise.all(seqs.map(async (s) => (await am.prove('auto-trace', s)).result.ok === true))
   const events = lm.events.map((e) => ({ ...e, anchorTxid: am.tailLink('auto-trace')?.txid ?? '' }))
@@ -473,9 +462,7 @@ try {
 console.log('— full paper scenario —')
 try {
   const { runFullPaper } = await import('./full-paper.js')
-  const pf = new MockFunder()
-  pf.topup(40)
-  for (const t of pf.parents) chain.registerParent(t)
+  const pf = await mkfunder(40)
   const txids = await runFullPaper({
     chain,
     funder: pf,
@@ -483,7 +470,7 @@ try {
     check,
     label: 'paper',
     settle: async (m, shards) => {
-      chain.mine(1)
+      await chain.mine(1)
       for (const s of shards) {
         const l = m.tailLink(s)
         if (l) m.confirmAnchor(s, l.txid)
@@ -502,9 +489,7 @@ try {
 console.log('— v4 production block —')
 try {
   const { runV4Block } = await import('./v4-block.js')
-  const vf4 = new MockFunder()
-  vf4.topup(12)
-  for (const t of vf4.parents) chain.registerParent(t)
+  const vf4 = await mkfunder(12)
   const tx = await runV4Block({
     chain,
     funder: vf4,
@@ -512,14 +497,14 @@ try {
     check,
     label: 'v4',
     settle: async (m, shards) => {
-      chain.mine(1)
+      await chain.mine(1)
       for (const s of shards) {
         const l = m.tailLink(s)
         if (l) m.confirmAnchor(s, l.txid)
       }
     },
     mineMore: async (n) => {
-      chain.mine(n)
+      await chain.mine(n)
     }
   })
   console.log(

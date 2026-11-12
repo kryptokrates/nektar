@@ -449,9 +449,13 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       scripts: new Set([fundPkhScript])
     })
     p2p.on('spend', (t, v, by) => { if (!reserve.isSpent(t, v)) { reserve.markSpent(t, v); process.stderr.write(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`) } })
-    p2p.on('pay', (t, v, s) => {
-      process.stderr.write(`nektar p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v} — importing\n`)
-      importFundingTx(mc, t, pkhHex).then(us => { for (const u of us) addIfNew(u) }).catch(() => {})
+    p2p.on('pay', (t, v, s) => process.stderr.write(`nektar p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v}\n`))
+    // matched txs arrive already fetched from the peer — credit fee-key
+    // outputs straight from the wire bytes; no indexer round-trip
+    p2p.on('tx', tx => {
+      for (const [v, o] of tx.outputs.entries()) {
+        if (o.lockingScript.toHex() === fundPkhScript) addIfNew({ tx, vout: v })
+      }
     })
     p2p.on('peer', (a, up) => process.stderr.write(`nektar p2p: peer ${a} ${up ? 'connected' : 'down'}\n`))
     p2p.connect()
@@ -715,11 +719,13 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       return { imported: added.length, utxos: reserve.utxos.length, balanceSats, address: fundAddress }
     },
     // fundingRefresh MCP tool: reconcile the reserve against chain truth.
-    //   - outputs WoC reports live at the fee address are revived (stale
-    //     spent-marks from dead unbroadcast txs cleared) or imported fresh
+    //   - outputs the unspent index reports live at the fee address are
+    //     revived (stale spent-marks from dead unbroadcast txs cleared) or
+    //     imported fresh
     //   - entries whose parent tx the broadcaster rejected get dropped, and
     //     any input they consumed that is still live on-chain is revived
-    //   - entries existing on WoC but no longer unspent get marked spent
+    //   - entries the broadcaster knows (mempool or mined) but which are no
+    //     longer unspent get marked spent
     // Fixes the phantom-entry/dust-pick class without a restart.
     refreshFunding: async () => {
       const r = reserve as any
@@ -734,9 +740,6 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
         return false
       }
       let revived = 0, dropped = 0, marked = 0, pending = 0
-      const h: Record<string, string> = {}
-      if (mc.wocApiKey) h['woc-api-key'] = mc.wocApiKey
-      const wocBase = mc.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main'
       let live = new Map<string, { tx: Transaction, vout: number }>()
       try {
         const list = await discoverUtxos(mc, fundAddress)
@@ -747,15 +750,17 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
         const o = op(u.tx.id('hex'), u.vout)
         if (live.has(o)) continue
         const txid = u.tx.id('hex')
-        const exists = await fetch(`${wocBase}/tx/${txid}`, { headers: h }).then(x => x.ok).catch(() => false)
-        if (exists) { reserve.markSpent(txid, u.vout); marked++; continue }
-        // absent from both the unspent set and the tx index — check the broadcaster's verdict
-        let rejected = false
+        // the broadcaster's verdict decides: known live status (mempool or
+        // mined) → the output is spent since it is absent from the unspent
+        // set; an explicit rejection → the parent is dead, drop and revive
+        // inputs; undecidable → leave for the next reconcile
+        let st: { txStatus?: string } | null = null
         try {
-          const st = await fetch(`${mc.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`).then(x => x.ok ? x.json() : null)
-          rejected = st != null && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(String(st.txStatus ?? '').toUpperCase())
-        } catch { /* keep */ }
-        if (!rejected) { pending++; continue }
+          st = await fetch(`${mc.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) }).then(x => x.ok ? x.json() : null)
+        } catch { /* undecidable — pending */ }
+        const status = String(st?.txStatus ?? '').toUpperCase()
+        if (status !== '' && !['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) { reserve.markSpent(txid, u.vout); marked++; continue }
+        if (st === null) { pending++; continue }
         // dead tx — drop the entry and revive any of its inputs still live
         r.entries = (r.entries as any[]).filter(e => op(e.txid, e.vout) !== o)
         r.utxos = (r.utxos as any[]).filter(x => op(x.tx.id('hex'), x.vout) !== o)

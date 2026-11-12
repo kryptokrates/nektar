@@ -318,19 +318,30 @@ export async function publishFinger(p: {
   // the carrier, journaled per seq BEFORE submission. A hit means this seq
   // was already journaled: the journaled record is the committed one, so its
   // body — not the caller's — is what gets published and stored.
-  let carrierBeef: number[], carrierTxid: string
+  let carrierBeef: number[] | undefined, carrierTxid: string | undefined
   const chit = await p.journal.get(`finger:carrier:${seq}`)
   if (chit !== undefined) {
-    carrierBeef = chit.beef
-    carrierTxid = chit.txid
-    const dec = decodeCarrier(Transaction.fromAtomicBEEF(carrierBeef))
-    if (typeof dec === 'string') throw new Error(`finger journal: bad stored carrier ${dec}`)
-    record = dec.record
-    map = dec.record.body
-    hash = bodyHash(map)
-    // the journaled carrier is what commits — its refs, not the caller's
-    refsHash = Utils.toHex(Hash.sha256(Array.from(cborEncode(encodeRefs(record.refs)))))
-  } else {
+    try {
+      const dec = decodeCarrier(Transaction.fromAtomicBEEF(chit.beef))
+      if (typeof dec === 'string') throw new Error(`finger journal: bad stored carrier ${dec}`)
+      carrierBeef = chit.beef
+      carrierTxid = chit.txid
+      record = dec.record
+      map = dec.record.body
+      hash = bodyHash(map)
+      // the journaled carrier is what commits — its refs, not the caller's
+      refsHash = Utils.toHex(Hash.sha256(Array.from(cborEncode(encodeRefs(record.refs)))))
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('finger journal:')) throw e
+      // truncated bytes (a crash mid-write) name a tx that was never
+      // broadcast — the journal is insert-only, so drop the row and re-mint
+      // the seq deterministically instead of wedging every future publish
+      // on a decode error
+      if (p.journal.del === undefined) throw e
+      await p.journal.del(`finger:carrier:${seq}`)
+    }
+  }
+  if (carrierBeef === undefined) {
     validateRecord(record)
     const slot = await p.ledger.take(FINGER_KIND)
     if (slot === undefined) throw new Error('publishFinger: no funding slot')

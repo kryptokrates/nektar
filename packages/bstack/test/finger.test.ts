@@ -419,3 +419,25 @@ test('finger: mempool-evicted parent heals via ancestor rebroadcast', async () =
     await s.h2.close()
   }
 })
+
+// a crash mid-write leaves a truncated carrier in the journal; its bytes can
+// never have broadcast, so the seq is a blank slate — the publish must drop
+// the row and re-mint instead of throwing on every future attempt (bob's
+// testnet wedge: ReaderUint8Array on every boot)
+test('finger: a truncated journaled carrier re-mints instead of wedging', async () => {
+  const s = await rig({ noproof: true, provenFunding: true })
+  try {
+    const r1 = await s.publish(body1())
+    assert.equal(r1.seq, 1)
+    await s.journal.put('finger:carrier:2', { txid: 'f'.repeat(64), beef: [1, 1, 1, 1, 9, 9], topics: [] })
+    const r2 = await s.publish(body1(['https://three.example.com']))
+    assert.equal(r2.changed, true)
+    assert.equal(r2.seq, 2)
+    assert.notEqual(r2.carrierTxid, 'f'.repeat(64), 'the poisoned entry was re-minted')
+    const got = await resolveFinger({ hosts: [s.h1.url], pub: s.key.toPublicKey().toString(), tracker: s.tracker })
+    assert.equal(got?.seq, 2)
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
+})

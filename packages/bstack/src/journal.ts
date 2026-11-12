@@ -3,6 +3,7 @@ import type { Knex } from 'knex'
 export interface CarrierJournal {
   get(hash: string): Promise<{ txid: string; beef: number[]; topics: string[] } | undefined>
   put(hash: string, c: { txid: string; beef: number[]; topics: string[] }): Promise<void>
+  del?(hash: string): Promise<void>
 }
 
 export class MemoryCarrierJournal implements CarrierJournal {
@@ -12,6 +13,9 @@ export class MemoryCarrierJournal implements CarrierJournal {
   }
   async put(hash: string, c: { txid: string; beef: number[]; topics: string[] }) {
     this.m.set(hash, c)
+  }
+  async del(hash: string) {
+    this.m.delete(hash)
   }
 }
 
@@ -46,5 +50,9 @@ export class KnexCarrierJournal implements CarrierJournal {
       .insert({ artifact_hash: hash, txid: c.txid, beef: JSON.stringify(c.beef), topics: JSON.stringify(c.topics), created_at: Date.now() })
       .onConflict('artifact_hash')
       .ignore()
+  }
+  async del(hash: string): Promise<void> {
+    await this.ensure()
+    await this.kx('bstack_carriers').where({ artifact_hash: hash }).delete()
   }
 }

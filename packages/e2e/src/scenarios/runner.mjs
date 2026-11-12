@@ -42,7 +42,7 @@ let hub, chain
 const log = m => console.log(`[${runId}] ${m}`)
 const write = (name, obj) => writeFileSync(join(outDir, name), JSON.stringify(obj, null, 1))
 const spawnNode = (file, env, name) => {
-  const p = spawn(process.execPath, [file], { cwd: root, env: { ...process.env, ...env }, stdio: 'ignore' })
+  const p = spawn(process.execPath, [file], { cwd: root, env: { ...process.env, ...env }, stdio: ['ignore', 'ignore', process.env.NEKTAR_SCENARIO_DEBUG ? 'inherit' : 'ignore'] })
   p.on('exit', c => { if (c && c !== 0) console.error(`[${runId}] ${name} exited ${c}`) })
   procs.push(p)
   return p
@@ -115,7 +115,7 @@ async function S1 () {
   const bob = await addAgent('bob', [H1, H2], { index: 4 })
   const { operationId } = await tool(bob, 'want', { domains: ['libfoo'], question: 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function', maxSats: 500 })
   const op = await waitState(bob, operationId, ['disclosure_verified', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed'])
-  if (op.state !== 'disclosure_verified') throw new Error(`S1 ended in ${op.state}: ${op.lastError ?? ''}`)
+  if (op.state !== 'disclosure_verified') throw new Error(`S1 ended in ${op.state}: ${op.lastError ?? ''}\n${JSON.stringify(op, null, 1).slice(0, 6000)}`)
   if (op.data.selected.key.split(':')[0] !== cara.pub) throw new Error('S1 did not select the 200-sat offer')
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(bob.dataDir, 'automation.sqlite') }, useNullAsDefault: true })
   const store = new AutomationStore(kx); await store.init()

@@ -17,8 +17,13 @@ const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { max
 const au = await openAutomation(mem, {
   network: 'mock', dataDir: env.NEKTAR_DATA_DIR, marketHosts: (env.NEKTAR_MARKET_HOSTS ?? '').split(',').filter(Boolean),
   intervalMs: Number(env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 1000),
+  // the remote hub has no status push — proven-marking only happens on the
+  // upkeep tick, so it must run at the scenario's own cadence, not the
+  // production 10s default that assumes a pushing chain
+  upkeepMs: Number(env.NEKTAR_AUTOMATION_UPKEEP_MS ?? env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 1000),
   // block-based TTLs must span the fast mock mining cadence (~1 block per wait loop)
   opts: { refundBlocks: 10000, offerTtlBlocks: 10000 },
+  log: line => process.stderr.write(`${env.NEKTAR_AGENT_NAME}: ${line}\n`),
   call: (tool, args) => callTool(mem, tool, args)
 })
 mem.automation = au

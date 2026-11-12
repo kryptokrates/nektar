@@ -43,6 +43,9 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
     boxOffice: process.env.NEKTAR_BBOX_OFFICE ?? undefined,
     logStream: process.env.NEKTAR_LOG_STREAM ?? undefined,
     intervalMs: Number(process.env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 1000),
+    // chains without a status push (remote mock, polled broadcasters) mark
+    // funding trees proven only here — let ops tune the cadence
+    upkeepMs: process.env.NEKTAR_AUTOMATION_UPKEEP_MS ? Number(process.env.NEKTAR_AUTOMATION_UPKEEP_MS) : undefined,
     call: (tool, args) => callTool(rt.mem, tool, args, { ops: rt.ops }),
     opts: {
       ...(rt.network === 'main' ? { saleMaxFee: 500 } : {}),

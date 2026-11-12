@@ -80,7 +80,10 @@ interface MkOpts {
   objectStore?: import('../src/objectstore.js').S3ObjectStore
 }
 const mkagent = async (name: string, o: MkOpts): Promise<A> => {
-  const funder = await StackFunder.fund(await stackTreasury(), 30)
+  // real upkeep spends across 4 tree lanes + finger + evidence every cycle —
+  // 30 funded outputs ran dry mid-deal ('no utxo of that size' log storms);
+  // change recycles, but trees lock outputs for their lifetime
+  const funder = await StackFunder.fund(await stackTreasury(), 60)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1', objectStore: o.objectStore })
   const pub = mem.operatorKey().toPublicKey().toString()
   const rt = await openAutomation(mem, {
@@ -109,7 +112,10 @@ const sellerize = async (s: A, price: number) => {
 const drive = async (rts: Automation[], chain: StackChain, n = 2) => {
   for (let i = 0; i < n; i++) {
     clock += 500
-    for (const rt of rts) await rt.cycle()
+    // the parties' cycles are independent per round — they rendezvous through
+    // the shared hosts/chain, not in-process state — so run them concurrently:
+    // ~25-round deals were paying 2×cycle+mine serially (~58s at the 60s cap)
+    await Promise.all(rts.map((rt) => rt.cycle()))
     await chain.mine(1)
   }
 }
@@ -299,7 +305,7 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   try {
-    const funderB = await StackFunder.fund(await stackTreasury(), 30)
+    const funderB = await StackFunder.fund(await stackTreasury(), 60)
     const memB = new NektarMemory(chain, funderB, funderB.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
     const pubB = memB.operatorKey().toPublicKey().toString()
     const open = async () =>
@@ -369,11 +375,13 @@ test('bstack E: hosts down after escrow funded — chain advance still refunds t
       await chain.mine(1)
     }
     assert.ok(funded, 'escrow never funded | ' + logs.slice(-20).join(' | '))
-    // both hosts go down and the seller stops — tick must still fire refunds
+    // both hosts go down and the seller stops — tick must still fire refunds.
+    // refundBlocks=40 is a pure height wait: one generatetoaddress(40) call
+    // beats ~30 rounds of cycle+mine (~1.5s each) for the same tip
     await h1.close()
     await s.rt.stop()
-    await chain.mine(10)
-    const refunded = await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'refunded', 30)
+    await chain.mine(40)
+    const refunded = await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'refunded', 10)
     const fin = await buyerOp(b)
     assert.ok(refunded, `buyer not refunded state=${fin?.state} err=${fin?.lastError} | ` + logs.slice(-20).join(' | '))
     await b.rt.stop()
@@ -741,7 +749,9 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
     assert.equal(ops.length, 1, 'exactly one buyer operation after restore')
     assert.equal(ops[0].data.restored, true)
     assert.equal(ops[0].data.escrowTxid, escrowTxid, 'same escrow')
-    while ((await b2.mem.chainHeight()) < refundAfter) await chain.mine(1) // refundAfter is on the engine's height scale
+    // pure height wait — batch the generate instead of a mine-per-round loop
+    const kShort = refundAfter - (await b2.mem.chainHeight())
+    if (kShort > 0) await chain.mine(kShort)
     const wasRefunded = await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'refunded', 40)
     if (!wasRefunded) console.log('KFAIL', JSON.stringify(await buyerOp(b2)), '\nLOGS', logs.slice(-25))
     assert.ok(wasRefunded, 'never refunded | ' + logs.slice(-20).join(' | '))
@@ -1224,7 +1234,8 @@ test('bstack T: refused refund retries on reconcile — succeeds after one refus
       await s.rt.stop() // seller gone — the refund deadline will hit
       s = undefined as never
       await h1.close()
-      while ((await b.mem.chainHeight()) < refundAfter) await chain.mine(1)
+      const tShort = refundAfter - (await b.mem.chainHeight())
+      if (tShort > 0) await chain.mine(tShort)
       if (refuse === 1) {
         assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'refunded', 80), 'not refunded | ' + logs.slice(-20).join(' | '))
         const evs = await b.rt.store.events((await buyerOp(b))!.operationId)

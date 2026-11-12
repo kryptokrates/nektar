@@ -14,7 +14,7 @@
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut, Funder } from './interfaces.js'
+import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut, Funder, TxStatusEvent } from './interfaces.js'
 import {
   TeranodeRPCTracker,
   TeranodeBroadcaster,
@@ -67,6 +67,24 @@ export function stackCfgFromEnv(): RegtestConfig | undefined {
 }
 
 let rpcCounter = 0
+
+// timing instrumentation — NEKTAR_DEBUG_TIMING=1 logs where a test's wallclock
+// actually goes: mine() rounds, treasury-lock waits, proof-push latency.
+/** watched broadcasts that never seal are dropped after this — regtest txs
+ *  only prove once something mines, and tests often broadcast without mining. */
+const WATCH_TTL_MS = 60_000
+const dbgTimings = (): boolean => process.env.NEKTAR_DEBUG_TIMING === '1'
+const dbgLog = (m: string): void => {
+  process.stderr.write(`[testkit ${process.pid}] ${m}\n`)
+}
+const dbg = { mineMs: 0, mineN: 0 }
+function dbgMine(ms: number): void {
+  if (!dbgTimings()) return
+  dbg.mineMs += ms
+  dbg.mineN++
+  dbgLog(`mine() ${ms}ms — total ${dbg.mineN} mines, ${dbg.mineMs}ms`)
+}
+
 async function stackRpc(cfg: RegtestConfig, method: string, ...params: unknown[]): Promise<any> {
   const r = await fetch(cfg.rpcUrl, {
     method: 'POST',
@@ -116,6 +134,13 @@ export class StackChain implements ChainTracker, Broadcaster {
   private tracker: TeranodeRPCTracker
   private submit: TeranodeBroadcaster
   private treasuryAddr?: string
+  private statusCbs: Array<(ev: TxStatusEvent) => void> = []
+  /** txid → first-watched ms; entries older than WATCH_TTL_MS are dropped so a
+   *  tx that never seals (mempool stays unmined in tests) can't pin the watch
+   *  — and its keep-alive sockets — open past the process's natural exit. */
+  private watched = new Map<string, number>()
+  private watcher?: NodeJS.Timeout
+  private polling = false
   constructor(
     private cfg: RegtestConfig,
     treasuryKey?: PrivateKey
@@ -124,8 +149,59 @@ export class StackChain implements ChainTracker, Broadcaster {
     this.submit = new TeranodeBroadcaster(cfg.propagationUrl)
     if (treasuryKey !== undefined) this.treasuryAddr = treasuryKey.toPublicKey().toAddress([0x6f])
   }
+  /** broadcast; the txid joins the status watch so 'mined' + proof push on seal */
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
-    return await this.submit.broadcast(tx)
+    const r = await this.submit.broadcast(tx)
+    if (r.status === 'success') this.watched.set(tx.id('hex'), Date.now())
+    return r
+  }
+  /** status push, the same shape statusStream gives live networks: Teranode
+   *  has no per-tx event feed, so watched broadcasts are polled against
+   *  /merkle_proof and 'mined' fires with the real BUMP once the subtree
+   *  seals — the engine's markProven path runs push-side, not on a timer. */
+  onStatus(cb: (ev: TxStatusEvent) => void): void {
+    this.statusCbs.push(cb)
+    this.watcher ??= setInterval(() => void this.pollWatched(), 500)
+    this.watcher.unref()
+  }
+  /** release the status watch — the poll loop's fetches hold keep-alive sockets
+   *  that pin the event loop open, so stackWorld's t.after teardown calls this. */
+  stopWatching(): void {
+    if (this.watcher !== undefined) clearInterval(this.watcher)
+    this.watcher = undefined
+    this.watched.clear()
+    this.statusCbs = []
+  }
+  private async pollWatched(): Promise<void> {
+    if (this.polling || this.watched.size === 0 || this.statusCbs.length === 0) return
+    const staleAt = Date.now() - WATCH_TTL_MS
+    for (const [txid, seenAt] of this.watched) if (seenAt < staleAt) this.watched.delete(txid)
+    if (this.watched.size === 0) return
+    if (dbgTimings()) dbgLog(`pollWatched: ${this.watched.size} watched`)
+    this.polling = true
+    try {
+      const auth = 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
+      const batch = [...this.watched.keys()].slice(0, 8)
+      await Promise.all(
+        batch.map(async (txid) => {
+          const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${txid}`, {
+            headers: { Authorization: auth },
+            signal: AbortSignal.timeout(4_000)
+          }).catch(() => null)
+          if (r?.ok !== true) return
+          try {
+            const merklePath = MerklePath.fromBinary([...new Uint8Array(await r.arrayBuffer())])
+            this.watched.delete(txid)
+            if (dbgTimings()) dbgLog(`proof pushed for ${txid.slice(0, 12)}…`)
+            for (const cb of this.statusCbs) cb({ txid, status: 'mined', blockHeight: merklePath.blockHeight, merklePath })
+          } catch {
+            /* unparseable proof → keep watching */
+          }
+        })
+      )
+    } finally {
+      this.polling = false
+    }
   }
   async currentHeight(): Promise<number> {
     return await this.tracker.currentHeight()
@@ -167,16 +243,32 @@ export class StackChain implements ChainTracker, Broadcaster {
   }
   /** generatetoaddress to the treasury address; waits for the tip to catch up */
   async mine(n = 1): Promise<void> {
+    const t0 = Date.now()
     const addr = this.treasuryAddr ?? new PrivateKey(1).toPublicKey().toAddress([0x6f])
-    const hashes = (await stackRpc(this.cfg, 'generatetoaddress', n, addr)) as string[]
+    // Teranode throttles concurrent generate calls ("Too busy") — parallel test
+    // files legitimately collide here, so retry the throttle with backoff.
+    let hashes: string[] | undefined
+    for (let i = 0; i < 20 && hashes === undefined; i++) {
+      hashes = await stackRpc(this.cfg, 'generatetoaddress', n, addr)
+        .then((h) => h as string[])
+        .catch(async (e: unknown) => {
+          // parallel test files collide two ways: the throttle ("too busy") and
+          // stale candidates (a peer's block sealed first) — both are retriable
+          if (!/too busy|overload|queue.*full|503|job not found|stale/i.test(String(e))) throw e
+          await new Promise((r) => setTimeout(r, 200 + Math.random() * 300))
+          return undefined
+        })
+    }
+    if (hashes === undefined) throw new Error('testkit: generatetoaddress stayed busy')
     // Teranode's getblockchaininfo.blocks lags seconds behind generate; the
     // header index serves the new blocks almost immediately — wait on that.
-    for (const h of hashes) {
-      for (let i = 0; i < 40; i++) {
-        const hdr = await stackRpc(this.cfg, 'getblockheader', h).catch(() => undefined)
-        if (hdr !== undefined) break
-        await new Promise((r) => setTimeout(r, 100))
-      }
+    // Sealing is ordered: the tip hash being indexed implies all ancestors are,
+    // so only it needs the wait (mine(40) would otherwise pay 40 round-trips).
+    const tip = hashes[hashes.length - 1]
+    for (let i = 0; i < 40; i++) {
+      const hdr = await stackRpc(this.cfg, 'getblockheader', tip).catch(() => undefined)
+      if (hdr !== undefined) break
+      await new Promise((r) => setTimeout(r, 100))
     }
     // asset index catch-up: /merkle_proof only answers once the block's
     // subtree is sealed — block_legacy serving the generated hash is not
@@ -184,23 +276,31 @@ export class StackChain implements ChainTracker, Broadcaster {
     // txid, and poll /merkle_proof/{coinbase}: sealed for one member means
     // sealed for the whole block.
     const auth = 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
-    for (const h of hashes) {
+    {
       let coinbase: string | undefined
       for (let i = 0; i < 120 && coinbase === undefined; i++) {
-        const r = await fetch(`${this.cfg.assetUrl}/block_legacy/${h}`, { signal: AbortSignal.timeout(4_000) }).catch(() => null)
+        const r = await fetch(`${this.cfg.assetUrl}/block_legacy/${tip}`, { signal: AbortSignal.timeout(4_000) }).catch(() => null)
         if (r?.ok === true) {
           coinbase = parseLegacyBlock(new Uint8Array(await r.arrayBuffer())).txids[0]
         } else await new Promise((r) => setTimeout(r, 250))
       }
-      if (coinbase === undefined) continue
-      for (let i = 0; i < 120; i++) {
-        const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${coinbase}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(4_000) }).catch(
-          () => null
-        )
-        if (r?.ok === true) break
-        await new Promise((r) => setTimeout(r, 250))
+      if (coinbase !== undefined) {
+        for (let i = 0; i < 120; i++) {
+          const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${coinbase}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(4_000) }).catch(
+            () => null
+          )
+          if (r?.ok === true) break
+          await new Promise((r) => setTimeout(r, 250))
+        }
       }
     }
+    // the subtree is sealed by here — push watched proofs now rather than
+    // leaving consumers to the next poll tick (mine(); confirm() determinism)
+    for (let i = 0; i < 10 && this.watched.size > 0; i++) {
+      if (!this.polling) await this.pollWatched()
+      if (this.watched.size > 0) await new Promise((r) => setTimeout(r, 100))
+    }
+    dbgMine(Date.now() - t0)
   }
 }
 
@@ -308,13 +408,21 @@ export class StackTreasury {
     await this.chain.mine(n)
   }
   /** split the treasury tail into another ~60 reserve entries when the pool
-   *  runs dry mid-suite — the split chain is self-funding on regtest. */
-  async refill(): Promise<void> {
+   *  can't cover `need` — entries merely existing is not enough: they may all
+   *  be leased by other processes or too small to cover this spend. */
+  async refill(need: number): Promise<void> {
     await withTreasuryLock(async () => {
       // another process may have refilled while this one waited on the lock —
       // splitting the treasury tail again would burn it for nothing
       this.reserve.reload()
-      if (this.reserve.utxos.length > 0) return
+      const leases = readLeases(join(STATE_DIR, 'leases.json'))
+      const op = (u: { tx: Transaction; vout: number }) => `${u.tx.id('hex')}:${u.vout}`
+      const free = this.reserve.utxos
+        .filter((u) => u.satoshis >= 546 && leases[op(u)] === undefined)
+        .sort((a, b) => b.satoshis - a.satoshis)
+      // same coverage predicate leaseReserve applies: single ≥need or 16 largest
+      const coverable = free.some((u) => u.satoshis >= need) || free.slice(0, 16).reduce((a, u) => a + u.satoshis, 0) >= need
+      if (coverable) return
       const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
         treasuryFile: join(STATE_DIR, 'treasury.json')
       })
@@ -348,14 +456,16 @@ function readLeases(file: string): Record<string, number> {
  *  can't cover — caller refills under the same protocol. */
 async function leaseReserve(t: StackTreasury, need: number): Promise<ReserveSrc[] | null> {
   const leasesFile = join(STATE_DIR, 'leases.json')
-  return await withTreasuryLock(async () => {
+  const tw = Date.now()
+  const res = await withTreasuryLock(async () => {
     t.reserve.reload()
     const leases = readLeases(leasesFile)
     const op = (u: ReserveSrc) => `${u.tx.id('hex')}:${u.vout}`
     const free = t.reserve.utxos
       .filter((u) => !t.reserve.isSpent(u.tx.id('hex'), u.vout) && u.satoshis >= 546 && leases[op(u)] === undefined)
-      .sort((a, b) => a.satoshis - b.satoshis)
-    // prefer ONE entry covering the whole spend; else accumulate smallest-first
+      .sort((a, b) => b.satoshis - a.satoshis)
+    // prefer ONE entry covering the whole spend; else accumulate largest-first —
+    // the 16-input cap must not cap coverage at the 16 smallest entries
     const single = free.find((u) => u.satoshis >= need)
     const srcs: ReserveSrc[] = single !== undefined ? [single] : []
     let inSats = single?.satoshis ?? 0
@@ -374,6 +484,8 @@ async function leaseReserve(t: StackTreasury, need: number): Promise<ReserveSrc[
     writeFileSync(leasesFile, JSON.stringify(leases))
     return srcs
   })
+  if (dbgTimings()) dbgLog(`leaseReserve need=${need} → ${res === null ? 'null' : `${res.length} srcs`} (lock wait ${Date.now() - tw}ms)`)
+  return res
 }
 
 // `node --test` runs files in parallel processes sharing .state/*.json —
@@ -445,7 +557,7 @@ export class StackFunder implements Funder {
         // pool drained below the floor — split another ~60 entries off the
         // treasury tail and retry rather than failing the suite
         if (attempt < 6) {
-          await t.refill()
+          await t.refill(need)
           continue
         }
         throw new Error('testkit: reserve empty — bootstrap failed')
@@ -474,12 +586,25 @@ export class StackFunder implements Funder {
         // where a proof is actually asserted
         return f
       }
+      if (/UTXO_SPENT|already.*spent|missing.*(input|parent)/i.test(r.description ?? '')) {
+        // spent-class failure: the parents really are consumed on-chain — mark
+        // them so the pool stops offering them (leases may stay; entries are dead)
+        await withTreasuryLock(async () => {
+          t.reserve.reload()
+          for (const src of srcs) t.reserve.markSpent(src.tx.id('hex'), src.vout)
+        })
+        continue
+      }
+      // any other failure never consumed the inputs — release the leases so a
+      // later fund() can still draw them, then surface the real error
       await withTreasuryLock(async () => {
-        t.reserve.reload()
-        for (const src of srcs) t.reserve.markSpent(src.tx.id('hex'), src.vout)
+        const leasesFile = join(STATE_DIR, 'leases.json')
+        const leases = readLeases(leasesFile)
+        const op = (u: ReserveSrc) => `${u.tx.id('hex')}:${u.vout}`
+        for (const s of srcs) delete leases[op(s)]
+        writeFileSync(leasesFile, JSON.stringify(leases))
       })
-      if (!/UTXO_SPENT|already.*spent|missing.*(input|parent)/i.test(r.description ?? ''))
-        throw new Error(`testkit: fund broadcast failed ${r.description ?? ''}`.slice(0, 160))
+      throw new Error(`testkit: fund broadcast failed ${r.description ?? ''}`.slice(0, 160))
     }
     throw new Error('testkit: fund broadcast raced 8 times')
   }
@@ -507,21 +632,36 @@ export class StackFunder implements Funder {
 }
 
 /** a bare chain handle — for tests that only broadcast/track, no funder */
-export async function stackChain(t: { skip: (m?: string) => void }): Promise<StackChain | undefined> {
+/** the chain inside the shared treasury is per-process — a test that shadows
+ *  `broadcast` (wrapBroadcast) would otherwise route later tests' broadcasts
+ *  through a destroyed store. Tests restore on teardown via t.after. */
+const unshadowBroadcast = (chain: StackChain): void => {
+  delete (chain as Partial<StackChain>).broadcast
+}
+export async function stackChain(t: { skip: (m?: string) => void; after?: (fn: () => void) => void }): Promise<StackChain | undefined> {
   const cfg = await skipUnlessStack(t)
   if (cfg === undefined) return undefined
-  return (await stackTreasury(cfg)).chain
+  const chain = (await stackTreasury(cfg)).chain
+  t.after?.(() => {
+    chain.stopWatching()
+    unshadowBroadcast(chain)
+  })
+  return chain
 }
 
 /** one-call convenience: `const { chain, funder } = await stackWorld(t, 30)` */
 export async function stackWorld(
-  t: { skip: (m?: string) => void },
+  t: { skip: (m?: string) => void; after?: (fn: () => void) => void },
   outputs = 30,
   sats = 10_000
 ): Promise<{ chain: StackChain; funder: StackFunder; treasury: StackTreasury } | undefined> {
   const cfg = await skipUnlessStack(t)
   if (cfg === undefined) return undefined
   const treasury = await stackTreasury(cfg)
+  t.after?.(() => {
+    treasury.chain.stopWatching()
+    unshadowBroadcast(treasury.chain)
+  })
   const funder = await StackFunder.fund(treasury, outputs, sats)
   return { chain: treasury.chain, funder, treasury }
 }

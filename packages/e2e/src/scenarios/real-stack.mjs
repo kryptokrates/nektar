@@ -171,6 +171,7 @@ async function injectFault({ verb, arg }) {
   }
   const a = agents.find((x) => x.name === arg)
   if (a?.proc === undefined) throw new Error(`fault: no live agent ${arg}`)
+  if (verb === 'dead') a.dead = true // respawns suppressed — the refund path needs a seller that never returns
   log(`fault: SIGKILL ${arg}`)
   const p = a.proc
   const exited = new Promise((res) => p.once('exit', res))
@@ -357,7 +358,7 @@ function spawnInstance(a) {
     // abnormal exit: nonzero code, or a kill signal (Windows reports
     // SIGKILL'd children with code null — the signal is the crash marker)
     const abnormal = (c !== 0 && c !== null) || s === 'SIGKILL'
-    if (abnormal && !stopping && a.restarts < 3) {
+    if (abnormal && !stopping && a.restarts < 3 && a.dead !== true) {
       a.restarts++
       log(`${a.name} exited ${c ?? s} — restarting (${a.restarts}/3)`)
       // instance.lock stays 'live' for 20s after the last heartbeat

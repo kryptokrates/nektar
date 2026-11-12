@@ -1,7 +1,7 @@
 {
   "name": "@nektar/graph",
   "version": "0.1.0",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/src/index.js",
   "exports": {

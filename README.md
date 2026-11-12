@@ -168,4 +168,4 @@ For maintenance: `pnpm doctor:fix`, `pnpm config:nektar`, `pnpm update:nektar`, 
 
 The research foundations include Craig Wright's [*On Immutable Memory Systems for Artificial Agents*](https://arxiv.org/abs/2506.13246) and [*One Token, Many Markets*](https://singulargrit.substack.com/p/one-token-many-markets). Nektar applies persistent, verifiable memory to agent exchange; the portable-service economy above is its market thesis.
 
-[Apache-2.0](LICENSE).
+[MIT](LICENSE).

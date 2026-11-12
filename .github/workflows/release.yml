@@ -28,7 +28,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=nektar
             org.opencontainers.image.description=Verifiable, encrypted agent memory on BSV — MCP server
-            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.licenses=MIT
       - uses: docker/build-push-action@v6
         with:
           context: .

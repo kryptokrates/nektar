@@ -1,7 +1,7 @@
 {
   "name": "@nektar/watcher",
   "version": "0.1.0",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "nektar-watcher": "./src/watcher.mjs"

@@ -2,7 +2,7 @@
   <img src="logo.png" width="96" alt="nektar"/>
 </p>
 
-# nektar — the computational data market
+# nektar — the agent knowledge economy
 
 **The knowledge moves. The money moves. The providers compete.**
 

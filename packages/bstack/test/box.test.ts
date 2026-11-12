@@ -28,13 +28,16 @@ test('box: send -> recipient reads + decrypts; third key gets nothing; resend = 
     const journal = new MemoryCarrierJournal()
     const body = { market: { type: 'quote', wantId: 'w-1', priceSats: 42 } }
     const r1 = await sendBox({ key: sender, ledger, journal, hosts: [h1.url, h2.url], to: recip.toPublicKey().toString(), body })
-    assert.ok(r1.took.length === 2)
+    assert.ok(r1.took.length >= 1, 'quorum reached — straggler legs still land in the background')
     const read = await readBox({ key: recip, hosts: [h1.url, h2.url], tracker: tr })
     assert.equal(read.items.length, 1)
     assert.equal(read.items[0]!.from, sender.toPublicKey().toString())
     assert.deepEqual(read.items[0]!.body, body)
     const r3 = await readBox({ key: third, hosts: [h1.url], tracker: tr })
     assert.equal(r3.items.length, 0, 'third key cannot read')
+    // the host that answered late still ends up holding the envelope
+    for (let i = 0; i < 50 && (await readBox({ key: recip, hosts: [h2.url], tracker: tr })).items.length === 0; i++) await new Promise(r => setTimeout(r, 40))
+    assert.equal((await readBox({ key: recip, hosts: [h2.url], tracker: tr })).items.length, 1, 'straggler host holds the envelope too')
     const slots = await ledger.remaining('bbox')
     const r2 = await sendBox({ key: sender, ledger, journal, hosts: [h1.url, h2.url], to: recip.toPublicKey().toString(), body })
     assert.equal(r2.txid, r1.txid, 'same carrier on retry')
@@ -119,7 +122,7 @@ test('box ack: failed receipt submission leaves items listed; resend retires the
     await sendBox({ key: a, ledger: ledgerA, journal: journalA, hosts, to: b.toPublicKey().toString(), body: { market: { t: 1 } } })
     await sendBox({ key: a, ledger: ledgerA, journal: journalA, hosts, to: b.toPublicKey().toString(), body: { market: { t: 2 } } })
     const items = (await readBox({ key: b, hosts, tracker: tr })).items.map(i => ({ txid: i.txid, commitment: i.commitment }))
-    h2fails = 4 // enough to fail submitAll's initial post plus its three 5xx retries
+    h2fails = 1 // fail the receipt submission to h2 on the first ack call
     const before = await ledgerB.remaining('bbox')
     const ack = await ackBox({ key: b, ledger: ledgerB, journal: journalB, hosts, items })
     assert.equal(ack.acked, 2)
@@ -128,6 +131,8 @@ test('box ack: failed receipt submission leaves items listed; resend retires the
     const ack2 = await ackBox({ key: b, ledger: ledgerB, journal: journalB, hosts, items })
     assert.equal(ack2.resent, 2); assert.equal(ack2.acked, 0)
     assert.equal(await ledgerB.remaining('bbox'), before - 1, 'resend burns no slot')
+    // the receipt's h2 leg lands in the background — poll until the host retires them
+    for (let i = 0; i < 50 && (await readBox({ key: b, hosts, tracker: tr })).items.length > 0; i++) await new Promise(r => setTimeout(r, 40))
     assert.equal((await readBox({ key: b, hosts, tracker: tr })).items.length, 0)
   } finally { await h1.close(); await h2.close() }
 })

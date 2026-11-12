@@ -16,7 +16,7 @@ export type MarketMessage =
   | { type: 'delivered', wantId: string, offerId: string, txid: string, tx: string }
   // encrypted self-note the buyer keeps in its own inbox until the deal ends —
   // enough to rebuild the operation after losing the automation database
-  | { type: 'note', v: 1, wantId: string, offerId: string, policyHash: string, want: SignedWant, offer: { so: SignedOffer, commitment?: any, mode?: string }, escrow: any, utxo: { txid: string, vout: number, satoshis: number, script: string }, escrowAction: string, amounts: { purchaseSats: number, feeSats: number, lockedSats: number } }
+  | { type: 'note', v: 1, wantId: string, offerId: string, policyHash: string, want: SignedWant, offer: { so: SignedOffer, commitment?: any, mode?: string }, escrow: any, utxo: { txid: string, vout: number, satoshis: number, script: string }, escrowAction: string, amounts: { purchaseSats: number, feeSats: number, lockedSats: number }, tx?: string }
   // the seller's equivalent — rebuilds the quoted sale after a database loss;
   // signedOffer may be dropped to fit the box limit (the buyer's offer is
   // already published — `offer.offerSig` then proves the quote came from us)
@@ -51,7 +51,7 @@ export interface MarketDeps {
    *  handed (BEEF when the ancestry is proven, else Extended Format, else
    *  raw), `readTx` parses such a payload and runs SPV against the
    *  instance's own headers, `rememberTx` keeps an accepted transaction */
-  txWire?: (txid: string) => string | undefined
+  txWire?: (txid: string, maxBytes?: number) => string | undefined
   readTx?: (hex: string) => Promise<Ingested>
   rememberTx?: (tx: Transaction) => void
   settleEscrow?: (tx: Transaction) => void
@@ -196,10 +196,19 @@ export class MarketEngine {
     })
   }
 
-  watchBond (d: { cfg: { operatorPkh: string, bondReleaseHeight: string | number | bigint, maxFee: string | number | bigint, epochLen: string | number | bigint }, txid: string, vout: number }, policyHash: string): Promise<{ operationId: string, deadline: number }> {
+  watchBond (d: { cfg: { operatorPkh: string, bondReleaseHeight: string | number | bigint, maxFee: string | number | bigint, epochLen: string | number | bigint }, txid: string, vout: number, tx?: string }, policyHash: string): Promise<{ operationId: string, deadline: number }> {
     return this.run(async () => {
       if (!(await this.d.store.activePolicy(policyHash))) throw new Error('watchBond: no active policy')
-      const tx = await this.d.fetchTx(d.txid)
+      // a handed-over bond resolves without touching any indexer; the wire
+      // form is verified (SPV) and remembered like every inbound payload
+      let tx: Transaction | undefined
+      if (typeof d.tx === 'string') {
+        try {
+          const got = await this.readTx(d.tx)
+          if (got.tx.id('hex') === d.txid) { tx = got.tx; this.d.rememberTx?.(tx) }
+        } catch { /* unreadable — fall through to the chain view */ }
+      }
+      tx ??= await this.d.fetchTx(d.txid)
       const out = tx?.outputs[d.vout]
       if (!tx || tx.id('hex') !== d.txid || !out) throw new Error('watchBond: bond output is not observable on this chain view')
       const cfg = { operatorPkh: d.cfg.operatorPkh, bondReleaseHeight: BigInt(d.cfg.bondReleaseHeight), maxFee: BigInt(d.cfg.maxFee), epochLen: BigInt(d.cfg.epochLen) }
@@ -366,6 +375,17 @@ export class MarketEngine {
     const out = tx?.outputs[m.utxo.vout]
     if (!tx || tx.id('hex') !== m.utxo.txid || !out) return await refuse('escrow transaction not observable yet')
     if (out.lockingScript.toHex() !== script || out.satoshis !== m.utxo.satoshis) return await refuse('on-chain escrow output differs from the claimed one')
+    // every escrow input whose parent we can resolve is evaluated locally —
+    // a bogus or unsigned spend is refused before the network is even asked
+    let spends = 0
+    for (let ix = 0; ix < tx.inputs.length; ix++) {
+      const i = tx.inputs[ix]!
+      const src = i.sourceTransaction?.outputs[i.sourceOutputIndex ?? -1]
+      const ptxid = i.sourceTXID ?? i.sourceTransaction?.id('hex')
+      if (src === undefined || i.sourceOutputIndex === undefined || ptxid === undefined) continue
+      if (!spendValid(tx, ix, { txid: ptxid, vout: i.sourceOutputIndex, satoshis: src.satoshis ?? 0, script: src.lockingScript.toHex() })) return await refuse('escrow input does not spend its claimed parent output')
+      spends++
+    }
     if (typeof m.tx === 'string' && this.d.broadcast !== undefined) {
       const br = await this.d.broadcast(tx)
       if (br.status !== 'success') return await refuse(`escrow not accepted by the network: ${br.description ?? br.status}`)
@@ -373,7 +393,7 @@ export class MarketEngine {
     this.d.rememberTx?.(tx)
     const h = await this.d.height()
     if (h + this.o.sellerSafetyBlocks >= Number(offer.cfg.refundAfter)) return await refuse('too close to the refund deadline')
-    const next = await this.d.store.transition(op.operationId, op.revision, 'completing', { cause: 'escrow_verified', data: { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } }, evidence: { spv } })
+    const next = await this.d.store.transition(op.operationId, op.revision, 'completing', { cause: 'escrow_verified', data: { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } }, evidence: { spv, spends } })
     await this.complete(next)
   }
 
@@ -473,12 +493,19 @@ export class MarketEngine {
     return w !== undefined ? { tx: w } : {}
   }
 
-  private noteFor (op: Operation, wantId: string, s: StoredOffer, escrow: any, utxo: any, escrowAction: string, amounts: { purchaseSats: number, feeSats: number, lockedSats: number }): Extract<MarketMessage, { type: 'note' }> {
+  private noteFor (op: Operation, wantId: string, s: StoredOffer, escrow: any, utxo: any, escrowAction: string, amounts: { purchaseSats: number, feeSats: number, lockedSats: number }, rawHex?: string): Extract<MarketMessage, { type: 'note' }> {
+    // the escrow travels inside the note too — after a database loss the
+    // rebuilt operation can check and re-broadcast it without asking any
+    // indexer; the wire stays small enough to fit the box beside the rest
+    // (a pathological multi-input escrow simply falls back to fetchTx)
+    const cand = this.d.txWire?.(utxo.txid, 2000) ?? rawHex
+    const tx = cand !== undefined && cand.length <= 6000 ? cand : undefined
     return {
       type: 'note', v: 1, wantId, offerId: s.so.offer.offerId, policyHash: op.policyHash,
       want: op.data.want as SignedWant,
       offer: { so: s.so, ...(s.commitment !== undefined ? { commitment: s.commitment } : {}), ...(s.mode !== undefined ? { mode: s.mode } : {}) },
-      escrow, utxo, escrowAction, amounts
+      escrow, utxo, escrowAction, amounts,
+      ...(tx !== undefined ? { tx } : {})
     }
   }
 
@@ -508,7 +535,16 @@ export class MarketEngine {
     const so = n.offer?.so
     if (!so?.offer || !verifyOffer(so.offer, so.sig, { allowExpired: true })) return
     if (so.offer.wantId !== n.wantId || so.offer.buyerPub !== this.me || so.offer.offerId !== n.offerId) return
-    const tx = await this.d.fetchTx(n.utxo.txid)
+    // the escrow bytes ride in the note — no indexer needed to observe it;
+    // a missing/foreign payload falls back to the chain view as before
+    let tx: Transaction | undefined
+    if (typeof n.tx === 'string') {
+      try {
+        const got = await this.readTx(n.tx)
+        if (got.tx.id('hex') === n.utxo.txid) { tx = got.tx; this.d.rememberTx?.(tx) }
+      } catch { /* unreadable — fall through to the chain view */ }
+    }
+    tx ??= await this.d.fetchTx(n.utxo.txid)
     const out = tx?.outputs[n.utxo.vout]
     if (!tx || !out) throw new Error('recovery note: escrow not observable yet')
     if (tx.id('hex') !== n.utxo.txid || out.lockingScript.toHex() !== n.utxo.script || out.satoshis !== n.utxo.satoshis) return
@@ -669,7 +705,7 @@ export class MarketEngine {
         cause: 'escrow_broadcast', data: { escrow: r.escrow, utxo: r.utxo, escrowTxid: r.txid }, dueHeight: Number(q.cfg.refundAfter),
         outbox: [
           { actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo: r.utxo, depositorPkh: r.escrow.depositorPkh, ...this.escrowWire(r.txid, escrowTx?.toHex()) } },
-          { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w.wantId, s, r.escrow, r.utxo, ctx.actionId, amounts) }
+          { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w.wantId, s, r.escrow, r.utxo, ctx.actionId, amounts, escrowTx?.toHex()) }
         ]
       })
     } finally { this.inflight.delete(op.operationId) }
@@ -744,7 +780,7 @@ export class MarketEngine {
       dueHeight: Number(escrow.refundAfter),
       outbox: [
         { actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo, depositorPkh: String(escrow.depositorPkh), ...this.escrowWire(txid, wtx?.rawHex) } },
-        { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w.wantId, s, escrow, utxo, actionId ?? `${op.operationId}:escrow`, op.data.amounts as { purchaseSats: number, feeSats: number, lockedSats: number }) }
+        { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w.wantId, s, escrow, utxo, actionId ?? `${op.operationId}:escrow`, op.data.amounts as { purchaseSats: number, feeSats: number, lockedSats: number }, wtx?.rawHex) }
       ]
     })
   }
@@ -787,7 +823,7 @@ export class MarketEngine {
             const w2 = (op.data.want as SignedWant).want
             await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', { cause: 'escrow_resumed_same_bytes', data: { escrow: pending.cfg, utxo: pending.utxo, escrowTxid: pending.utxo.txid }, dueHeight: Number(pending.cfg.refundAfter), outbox: [
               { actionId: `${op.operationId}:accept`, kind: 'message', destination: so2.offer.pub, payload: { type: 'accept', wantId: w2.wantId, offerId: so2.offer.offerId, utxo: pending.utxo, depositorPkh: pending.cfg.depositorPkh, ...this.escrowWire(pending.utxo.txid, wtx?.rawHex) } },
-              { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w2.wantId, s2, pending.cfg, pending.utxo, op.data.escrowAction as string, op.data.amounts as { purchaseSats: number, feeSats: number, lockedSats: number }) }
+              { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w2.wantId, s2, pending.cfg, pending.utxo, op.data.escrowAction as string, op.data.amounts as { purchaseSats: number, feeSats: number, lockedSats: number }, wtx?.rawHex) }
             ] })
             return
           }

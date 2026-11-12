@@ -398,7 +398,7 @@ export class NektarMemory {
   /** keep a transaction (and the ancestry it carries) in the instance's graph */
   rememberTx (tx: import('@bsv/sdk').Transaction): void { this.txs.put(tx) }
   /** hex to hand a counterparty: BEEF when the ancestry is proven, else EF, else raw */
-  txWire (txid: string): string | undefined { return this.txs.wire(txid) }
+  txWire (txid: string, maxBytes?: number): string | undefined { return this.txs.wire(txid, maxBytes) }
   /** read a counterparty's wire transaction and run SPV against our own headers */
   async readTxWire (hex: string): Promise<import('@nektar/chain').Ingested> { return await TxStore.read(hex, this.sdkTracker()) }
   /** state-change events for live surfaces (dashboard SSE, watchers) —

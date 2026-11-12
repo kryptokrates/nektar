@@ -89,8 +89,13 @@ spend time; a fresh deploy 404s for minutes → the commit dies.
 - `[done]` `txHex` cache persisted in `state.json`: every bond broadcast
   records its raw hex (bounded, last 64); `fetchParentTx` consults it
   before the network and survives restarts.
-- `[part]` `fetchParentTx` retries 404s 3× at 10 s (fresh txs index within
-  ~30 s). broadcaster `rawTx` and peer fallbacks still open.
+- `[done]` the instance transaction graph (`TxStore`) replaced the indexer
+  hot path: parents for covenant spends, and the BEEF/EF a counterparty
+  needs, come from the graph the instance already holds — `fetchParentTx`
+  remains only as a last-resort fallback for transactions the instance was
+  never handed. Deal messages (accept, delivered, recovery notes) carry the
+  transaction itself; receivers run SPV against their own headers and keep
+  the ancestry, so a fresh broadcast never needs an indexer to become usable.
 
 ## F5 — Chain-time waits as runtime tasks
 
@@ -370,8 +375,13 @@ The trial report is written to `artifacts/model-trials/report.json`.
   block, once per agent and never per deal: a new funding tree, because hosts
   admit carriers only from a proven tree. The runner keeps provisioned agents
   in `.state/testnet-agents-*` (`--fresh` provisions a new set). Open
-  latency, not block-bound: about 11 s from escrow broadcast until the seller
-  acts and about 34 s from the seller's reveal until the buyer has verified.
+  Latency follow-up: the 11 s/34 s hops were host-transport costs, not block
+  waits — per-send retry sleeps, serial host fan-out, and receipts sent before
+  the tick. With the transaction graph carrying BEEF/EF inside deal messages,
+  bounded lookups, parallel lanes and post-tick receipts, the same run now
+  measures ~1 s from escrow broadcast to seller verification and ~1.3 s from
+  the seller's reveal to buyer verification — the whole deal in ~12 s over 0
+  blocks (`hopMs` in the run's summary.json).
 - **Testnet (Hetzner, real rendezvous + mailbox, two live instances):** this ran on the previous rendezvous + mailbox transport, which has since been removed from the automation runtime. The
   autonomous purchase loop ran end to end — signed want admitted to the feed,
   seller matched a level-0 record, signed a buyer-bound offer, buyer selected,

@@ -95,10 +95,18 @@ export class DisclosureSaleHost {
     return parent
   }
 
-  buildBuy (utxo: SaleUtxo, wrapped: string, changeSats: bigint): { tx: Transaction } {
+  /** the real escrow transaction when the caller already has it (txid +
+   *  output must check out); otherwise the synthetic stand-in — a stub is
+   *  enough for the fee/preimage but carries no ancestry, so it cannot end
+   *  up inside an EF/BEEF payload */
+  private static parent (utxo: SaleUtxo, parentTx?: Transaction): Transaction {
+    return parentTx !== undefined && parentTx.id('hex') === utxo.txid && parentTx.outputs[utxo.vout] !== undefined ? parentTx : DisclosureSaleHost.sourceOf(utxo)
+  }
+
+  buildBuy (utxo: SaleUtxo, wrapped: string, changeSats: bigint, parentTx?: Transaction): { tx: Transaction } {
     const tx = new Transaction()
     tx.addInput({
-      sourceTXID: utxo.txid, sourceTransaction: DisclosureSaleHost.sourceOf(utxo), sourceOutputIndex: utxo.vout,
+      sourceTXID: utxo.txid, sourceTransaction: DisclosureSaleHost.parent(utxo, parentTx), sourceOutputIndex: utxo.vout,
       unlockingScript: new UnlockingScript(), sequence: 0xfffffffe
     })
     tx.addOutput({ satoshis: Number(this.cfg.price), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.sellerPkh)) })
@@ -114,10 +122,10 @@ export class DisclosureSaleHost {
 
   /** depositor-side: reclaim the escrow after refundAfter — depositor
    *  signed, locktime-gated, output [change→depositor]. */
-  buildRefund (utxo: SaleUtxo, depositorKey: PrivateKey, lockTime: number, changeSats: bigint): { tx: Transaction } {
+  buildRefund (utxo: SaleUtxo, depositorKey: PrivateKey, lockTime: number, changeSats: bigint, parentTx?: Transaction): { tx: Transaction } {
     const tx = new Transaction()
     tx.addInput({
-      sourceTXID: utxo.txid, sourceTransaction: DisclosureSaleHost.sourceOf(utxo), sourceOutputIndex: utxo.vout,
+      sourceTXID: utxo.txid, sourceTransaction: DisclosureSaleHost.parent(utxo, parentTx), sourceOutputIndex: utxo.vout,
       unlockingScript: new UnlockingScript(), sequence: 0xfffffffe
     })
     tx.addOutput({ satoshis: Number(changeSats), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.depositorPkh)) })

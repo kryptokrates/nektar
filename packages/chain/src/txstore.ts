@@ -54,7 +54,13 @@ export class TxStore {
       this.save(txid)
     }
     if (proof !== undefined || depth >= MAX_DEPTH) return // a proven tx ends the ancestry
-    for (const i of tx.inputs) if (i.sourceTransaction !== undefined) this.put(i.sourceTransaction, depth + 1)
+    for (const i of tx.inputs) {
+      // a sourceTransaction whose own id does not match sourceTXID is a
+      // synthetic stand-in (fee preimage stub), not ancestry — never store it
+      if (i.sourceTransaction === undefined) continue
+      if (i.sourceTXID !== undefined && i.sourceTransaction.id('hex') !== i.sourceTXID) continue
+      this.put(i.sourceTransaction, depth + 1)
+    }
   }
 
   /** attach a proof the caller has verified against its own headers */

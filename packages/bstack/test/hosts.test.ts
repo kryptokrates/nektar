@@ -26,6 +26,36 @@ test('hosts: majority quorum still ok with one host down, missed names it', asyn
   await h.close()
 })
 
+test('hosts: early resolve returns at quorum while a straggler still lands', async () => {
+  const tr = new FakeTracker()
+  const a = await minihost([NET], tr)
+  // a host that holds /submit open for 3s before answering â€” early resolve
+  // must not wait for it, but the leg still completes and the object lands
+  const { createServer } = await import('node:http')
+  const slow = createServer((req, res) => {
+    if (req.url === '/submit') { setTimeout(() => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}') }, 3000); return }
+    res.writeHead(404); res.end()
+  })
+  await new Promise<void>(r => slow.listen(0, '127.0.0.1', r))
+  const slowUrl = `http://127.0.0.1:${(slow.address() as { port: number }).port}`
+  try {
+    const k = PrivateKey.fromRandom()
+    const { beef } = await want(k)
+    const t0 = Date.now()
+    const r = await submitAll([a.url, slowUrl], beef, lanesFor(NET, ['compute']), { retryWaits: [], early: true })
+    const ms = Date.now() - t0
+    assert.ok(r.ok)
+    assert.ok(ms < 2500, `early resolve waited ${ms}ms for the straggler`)
+    // the straggler leg completes in the background â€” no dangling work
+    await new Promise(r2 => setTimeout(r2, 3300))
+    // without early the same call is priced by the slow host
+    const t1 = Date.now()
+    const r2 = await submitAll([a.url, slowUrl], beef, lanesFor(NET, ['compute']), { retryWaits: [] })
+    assert.ok(r2.ok)
+    assert.ok(Date.now() - t1 >= 2900, 'non-early call waits for every host')
+  } finally { slow.close(); await a.close() }
+})
+
 test('hosts: readWants verifies and reports a host that withholds', async () => {
   const tr = new FakeTracker()
   const a = await minihost([NET], tr); const b = await minihost([NET], tr)
@@ -53,7 +83,7 @@ test('hosts: garbage beef in an answer is dropped, not thrown', async () => {
   await a.close()
 })
 
-test('hosts: retraction needs a MINED sweep — unmined or bad-proof spends do nothing', async () => {
+test('hosts: retraction needs a MINED sweep ï¿½ unmined or bad-proof spends do nothing', async () => {
   const tr = new FakeTracker()
   const a = await minihost([NET], tr)
   const k = PrivateKey.fromRandom()
@@ -89,7 +119,7 @@ test('hosts: host that 200s with empty admittance is took, not admitted', async 
   const good = await submitAll([a.url], beef, lanesFor(NET, ['compute']))
   assert.ok(good.admitted.includes(a.url))
   const dup = await submitAll([a.url], beef, lanesFor(NET, ['compute']))
-  // same carrier again: tm claims 'dup' and still admits [0] — use a refused beef instead
+  // same carrier again: tm claims 'dup' and still admits [0] ï¿½ use a refused beef instead
   const bad = await submitAll([a.url], beef.slice().fill(0, 0, 4), lanesFor(NET, ['compute']))
   assert.ok(bad.took.includes(a.url))
   assert.ok(!bad.admitted.includes(a.url))
@@ -121,7 +151,7 @@ test('hosts: unreachable host goes to unreachable, not withheld', async () => {
   await a.close()
 })
 
-test('hosts: multi-net — a want on net A is not returned for net B', async () => {
+test('hosts: multi-net ï¿½ a want on net A is not returned for net B', async () => {
   const tr = new FakeTracker()
   const a = await minihost([NET, 'other'], tr)
   const k = PrivateKey.fromRandom()

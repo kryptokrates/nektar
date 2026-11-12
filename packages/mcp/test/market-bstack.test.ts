@@ -338,12 +338,18 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
   try {
     b = await mkagent('buyer', { hosts: [h1.url], msgs, chain, logs, dir })
     s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir })
-    // the seller never looks the escrow up: it takes it from the accept,
-    // verifies it against its own headers and broadcasts it itself
+    // the seller never looks the escrow up while deciding on the accept: it
+    // takes it from the message, verifies it against its own headers and
+    // broadcasts it itself. After the op leaves 'quoted' the same local graph
+    // read just returns what rememberTx stored — not a lookup.
     let blindTxid: string | undefined
     let escrowLookups = 0
     const origFetch = s.mem.fetchTx.bind(s.mem)
-    s.mem.fetchTx = async (id: string) => { if (id === blindTxid) { escrowLookups++; return undefined } return await origFetch(id) }
+    s.mem.fetchTx = async (id: string) => {
+      const stillDeciding = (await saleOps(s))[0]?.state === 'quoted'
+      if (id === blindTxid && stillDeciding) { escrowLookups++; return undefined }
+      return await origFetch(id)
+    }
     let escrowBroadcasts = 0
     const origBcast = s.mem.broadcastTx.bind(s.mem)
     s.mem.broadcastTx = async (t: import('@bsv/sdk').Transaction) => { if (t.id('hex') === blindTxid) escrowBroadcasts++; return await origBcast(t) }
@@ -380,7 +386,7 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
     assert.equal(escrowLookups, 0, 'seller never looked the escrow up')
     const sale = (await saleOps(s))[0]!
     const verified = (await s.rt.store.events(sale.operationId)).find(e => e.cause === 'escrow_verified')
-    assert.deepEqual(verified?.evidence, { spv: true }, 'the escrow arrived as BEEF and passed SPV against the headers the seller holds')
+    assert.deepEqual(verified?.evidence, { spv: true, spends: 1 }, 'the escrow arrived as BEEF and passed SPV + local spend checks against the headers the seller holds')
     const bought = (await b.rt.store.events((await buyerOp(b))!.operationId)).find(e => e.cause === 'disclosure_verified')
     assert.equal((bought?.evidence as { spv?: boolean } | undefined)?.spv, true, 'the reveal arrived as BEEF and passed SPV at the buyer')
   } finally { if (b !== undefined) await b.rt.stop(); if (s !== undefined) await s.rt.stop(); await h1.close() }
@@ -490,7 +496,14 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
     rmSync(join(dir, 'buyer'), { recursive: true, force: true })
     b2 = await respawn(b, { dir, name: 'buyer', hosts: [h1.url, h2.url], logs, chain, opts: { refundBlocks: 40 } })
     assert.equal(b2.policyHash, b.policyHash, 're-approved same policy file → same content hash')
+    // the chain view can never produce the escrow — the note must carry it:
+    // after the database loss only the bytes inside the note keep the deal
+    // alive (zero indexer, zero chain read for the recovery itself)
+    let escrowLookups = 0
+    const origFetch = b2.mem.fetchTx.bind(b2.mem)
+    b2.mem.fetchTx = async (id: string) => { if (id === escrowTxid) { escrowLookups++; return undefined } return await origFetch(id) }
     assert.ok(await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'awaiting_disclosure', 60), 'op not restored | ' + logs.slice(-20).join(' | '))
+    assert.equal(escrowLookups, 0, 'the recovery note carried the escrow — no chain lookup needed')
     const ops = (await b2.rt.store.operations({ role: 'buyer' })).filter(o => o.kind === 'purchase')
     assert.equal(ops.length, 1, 'exactly one buyer operation after restore')
     assert.equal(ops[0]!.data.restored, true)
@@ -868,9 +881,10 @@ test('bstack V: delivered collected but not yet processed — the held envelope 
     // but its tick dies before processing it — the doomed store loses the inbox row
     assert.ok(await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_submitted', 100), 'never delivered | ' + logs.slice(-20).join(' | '))
     const engine = b.rt.engine as unknown as { tick: () => Promise<void> }
-    const origTick = engine.tick.bind(engine)
-    let fail = true
-    engine.tick = async () => { if (fail) { fail = false; throw new Error('simulated crash after collect') } return origTick() }
+    // the doomed runtime never ticks again — push-driven cycles (tx proofs on
+    // mine) race the explicit one, so a one-shot throw would be consumed by
+    // whichever cycle fires first; every tick must fail until stop()
+    engine.tick = async () => { throw new Error('simulated crash after collect') }
     await b.rt.cycle() // collect + ack-hold ran; tick threw
     await b.rt.stop()
     rmSync(join(dir, 'buyer'), { recursive: true, force: true })

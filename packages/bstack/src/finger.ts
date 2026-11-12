@@ -367,6 +367,7 @@ export async function resolveFinger (p: {
   quorum?: number
   allowHttp?: boolean
   now?: () => number
+  timeoutMs?: number
 }): Promise<{
   body: FingerBody
   seq: number
@@ -375,7 +376,7 @@ export async function resolveFinger (p: {
   unreachable: string[]
 } | undefined> {
   const pinned = p.pin !== undefined ? await p.pin(p.pub) : undefined
-  const { answers } = await lookupAll(p.hosts, 'ls_finger', { identityKey: p.pub.toLowerCase() })
+  const { answers } = await lookupAll(p.hosts, 'ls_finger', { identityKey: p.pub.toLowerCase() }, { timeoutMs: p.timeoutMs })
   const unreachable: string[] = []
   const profileKey = profileLockingKey(p.pub)
   const recordKey = recordLockingKey(p.pub)

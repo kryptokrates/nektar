@@ -85,7 +85,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     if (c !== undefined && t - c.at < (c.rec === undefined ? 60_000 : 600_000)) return c.rec
     let rec: { hosts: string[], office: string, stream: string } | undefined
     try {
-      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: await mem.sdkTracker(), allowHttp: mockNet, now: cfg.now })
+      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: await mem.sdkTracker(), allowHttp: mockNet, now: cfg.now, timeoutMs: 5_000 })
       if (r !== undefined && (r.body.nets.length === 0 || r.body.nets.includes(cfg.network))) {
         const hosts = r.body.hosts.filter(u => lanes.mod.fingerHostAllowed(u, { allowHttp: mockNet, allowLocal: mockNet })).slice(0, 8)
         rec = { hosts, office: r.body.office, stream: r.body.stream }
@@ -121,7 +121,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     height: () => mem.chainHeight(), tip: () => mem.tipRef(), fetchTx: txid => mem.fetchTx(txid),
     txState: txid => mem.txState(txid),
     broadcast: tx => mem.broadcastTx(tx),
-    txWire: txid => mem.txWire(txid), readTx: hex => mem.readTxWire(hex), rememberTx: tx => { mem.rememberTx(tx) },
+    txWire: (txid, maxBytes) => mem.txWire(txid, maxBytes), readTx: hex => mem.readTxWire(hex), rememberTx: tx => { mem.rememberTx(tx) },
     settleEscrow: tx => { for (const inp of tx.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } if (tx.outputs[1]) mem.addOwnedOut(tx, 1) },
     transport, ai: cfg.ai ?? aiFromEnv(), opts: cfg.opts, logStream
   })
@@ -196,30 +196,46 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     const watch = await engine.watchList()
     const tracker = await mem.sdkTracker()
     const net = cfg.network
-    for (const domain of watch.sellerDomains) {
-      const r = await readWants(marketHosts, { net, domain }, { tracker, net, now: cfg.now?.() })
-      const events = r.items.map(i => ({ seq: i.txid, kind: 'want', payload: i.payload.body }))
-      if (events.length) await engine.ingestEvents(`lane:${net}:${domain}`, events, '')
-      laneNotes(r)
-    }
-    for (const c of watch.collecting) {
-      const r = await readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: me }, { tracker, net, now: cfg.now?.() })
-      const events = r.items.map(i => ({ seq: i.txid, kind: 'offer', payload: i.payload.body }))
-      if (events.length) await engine.ingestEvents(`offers:${c.wantId}`, events, '')
-      laneNotes(r)
-    }
+    // every lane read is independent — run them together, bounded, instead
+    // of serially pricing the pass at the sum of all host latencies
+    await Promise.all([
+      ...watch.sellerDomains.map(async domain => {
+        const r = await readWants(marketHosts, { net, domain }, { tracker, net, now: cfg.now?.(), timeoutMs: 5_000 })
+        const events = r.items.map(i => ({ seq: i.txid, kind: 'want', payload: i.payload.body }))
+        if (events.length) await engine.ingestEvents(`lane:${net}:${domain}`, events, '')
+        laneNotes(r)
+      }),
+      ...watch.collecting.map(async c => {
+        const r = await readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: me }, { tracker, net, now: cfg.now?.(), timeoutMs: 5_000 })
+        const events = r.items.map(i => ({ seq: i.txid, kind: 'offer', payload: i.payload.body }))
+        if (events.length) await engine.ingestEvents(`offers:${c.wantId}`, events, '')
+        laneNotes(r)
+      })
+    ])
   }
   const poll = async (): Promise<void> => {
-    if (lanes !== undefined) { try { await lanePoll() } catch (e) { log(`automation: lanes: ${(e as Error).message}`) } }
-    if (msgs !== undefined) {
-      let ingested = false
-      try { for (const m of await msgs.collect()) await engine.ingestMessage(m.from, m.msg); ingested = true } catch (e) { log(`automation: messages: ${(e as Error).message}`) }
-      if (ingested && msgs.ack !== undefined) { try { await msgs.ack() } catch (e) { log(`automation: box ack: ${(e as Error).message}`) } }
-    }
+    // discovery reads and the inbox are independent — a stalled lane lookup
+    // must not delay message collection, and receipts are pushed by the deal
+    // loop after the tick, never before it
+    await Promise.all([
+      lanes !== undefined ? lanePoll().catch(e => log(`automation: lanes: ${(e as Error).message}`)) : Promise.resolve(),
+      msgs !== undefined
+        ? (async () => { try { for (const m of await msgs.collect()) await engine.ingestMessage(m.from, m.msg) } catch (e) { log(`automation: messages: ${(e as Error).message}`) } })()
+        : Promise.resolve()
+    ])
   }
   let busy = false
   let again = false
   let running: Promise<void> | undefined
+  // envelope receipts ride the journaled ack path — submitted AFTER the
+  // engine's tick under their own busy guard, so a slow or dead host can
+  // never delay the processing of messages that just arrived
+  let acking = false
+  const pushAcks = (): void => {
+    if (acking || stopped || msgs?.ack === undefined) return
+    acking = true
+    void msgs.ack().catch(e => log(`automation: box ack: ${(e as Error).message}`)).finally(() => { acking = false })
+  }
   // Two loops. The deal loop reads the hosts and advances operations; it
   // does nothing else, so a deal never queues behind housekeeping. Upkeep
   // (funding trees, the identity record, the journal, evidence) runs beside
@@ -231,7 +247,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
       try {
         do {
           again = false
-          try { await poll(); await engine.tick() } catch (e) { log(`automation: ${(e as Error).message}`) }
+          try { await poll(); await engine.tick(); pushAcks() } catch (e) { log(`automation: ${(e as Error).message}`) }
         } while (again && !stopped)
       } finally { busy = false; if (again && !stopped) void deals() }
     })()
@@ -469,7 +485,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
       stopped = true
       if (timer) clearInterval(timer)
       await Promise.allSettled([...inflight])
-      while (busy || upkeepRun !== undefined) await new Promise(r => setTimeout(r, 25))
+      while (busy || upkeepRun !== undefined || acking) await new Promise(r => setTimeout(r, 25))
       await engine.idle()
       await kx.destroy()
     }

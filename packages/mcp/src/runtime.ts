@@ -663,6 +663,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   await waitForFunding()
   await topUp()
   let busy = false
+  let proofPullAt = 0
   const tick = async () => {
     if (busy) return
     busy = true
@@ -677,7 +678,15 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
         const mp = (await mem.fetchTx(txid))?.merklePath
         if (mp) mem.attachProof(shard, txid, mp)
       }
-      for (const txid of txStore.unproven().slice(-64)) await mem.fetchTx(txid)
+      // a bounded, rotating pull: each tick tries a few unproven txs so a
+      // long list can never serialize minutes of lookups inside one pass —
+      // push (callbacks/status stream) stays the primary proof channel
+      {
+        const unproven = txStore.unproven()
+        const pull = unproven.length <= 8 ? unproven : Array.from({ length: 8 }, (_, i) => unproven[(proofPullAt + i) % unproven.length]!)
+        proofPullAt = unproven.length > 0 ? (proofPullAt + 8) % unproven.length : 0
+        for (const txid of pull) await mem.fetchTx(txid)
+      }
       await topUp()
       persistKeys()
     } catch (e) { process.stderr.write(`nektar confirmer(${net}): ${(e as Error).message}\n`) } finally { busy = false }

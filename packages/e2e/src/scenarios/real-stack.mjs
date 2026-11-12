@@ -351,6 +351,22 @@ try {
   const sellerOp = ((await tool(cara, 'deals', {})).deals ?? []).find(d => d.wantId === op.wantId)
   const sellerState = sellerOp?.state
   if (sellerState !== 'completion_submitted' && sellerState !== 'settled') throw new Error(`cara seller op in ${sellerState ?? 'missing'} — expected completion_submitted or settled`)
+  // per-hop latency, off the event journals (same machine → comparable clocks):
+  // escrow_broadcast(buyer) → escrow_verified(seller) and
+  // disclosure_broadcast(seller) → disclosure_verified(buyer)
+  const hopMs = await (async () => {
+    try {
+      const at = (evs, cause) => evs.find(e => e.cause === cause)?.at
+      const bev = (await tool(bob, 'deals', { operationId })).events ?? []
+      const sev = (await tool(cara, 'deals', { operationId: sellerOp.operationId })).events ?? []
+      const e1 = at(bev, 'escrow_broadcast'), e2 = at(sev, 'escrow_verified')
+      const e3 = at(sev, 'disclosure_broadcast'), e4 = at(bev, 'disclosure_verified')
+      return {
+        escrowBroadcastToSellerVerified: e1 !== undefined && e2 !== undefined ? e2 - e1 : null,
+        disclosureBroadcastToBuyerVerified: e3 !== undefined && e4 !== undefined ? e4 - e3 : null
+      }
+    } catch { return { escrowBroadcastToSellerVerified: null, disclosureBroadcastToBuyerVerified: null } }
+  })()
   for (const a of agents) {
     const f = join(a.dataDir, 'tx-log.jsonl')
     if (!existsSync(f)) throw new Error(`${a.name}: no tx log at ${f}`)
@@ -366,12 +382,13 @@ try {
     instances: agents.map(a => ({ name: a.name, pub: a.pub, dataDir: a.dataDir, port: Number(a.url.split(':').pop()) })),
     buyerOperationId: operationId, wantId: op.wantId, escrowTxid: op.escrowTxid, disclosureTxid: op.disclosureTxid,
     sellerState,
-    wallClockMsToDisclosureVerified: verifiedMs, blocksMinedDuringDeal: dealBlocks,
+    wallClockMsToDisclosureVerified: verifiedMs, hopMs, blocksMinedDuringDeal: dealBlocks,
     hosts: { a: HOST_A, b: HOST_B }, fingerResolved: LIVE,
     broadcasts: Object.fromEntries(agents.map(a => [a.name, a.txCount]))
   }
   writeFileSync(join(dir, 'summary.json'), JSON.stringify(summary, null, 1))
   log(`PASS — disclosure verified in ${(verifiedMs / 1000).toFixed(1)}s over ${dealBlocks} blocks`)
+  log(`  hops: escrow→seller ${hopMs.escrowBroadcastToSellerVerified ?? '?'}ms, disclosure→buyer ${hopMs.disclosureBroadcastToBuyerVerified ?? '?'}ms`)
   log(`  offers 200/300/450 recorded; cara's 200-sat offer selected; escrow ${String(op.escrowTxid).slice(0, 12)}… disclosure ${String(op.disclosureTxid).slice(0, 12)}…`)
   log(`  counterparty journal complete; bob+cara inboxes empty on both hosts${LIVE ? ' (seller note held until proof)' : ''}`)
   log(`  tx logs: ${agents.map(a => `${a.name}=${a.txCount}`).join(' ')}`)

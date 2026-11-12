@@ -55,7 +55,9 @@ export async function sendBox (p: {
     txid = carrier.id('hex')
     await p.journal.put(artifactHash, { txid, beef, topics })
   }
-  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum })
+  // the journal is the retry layer — a dead host must not put seconds of
+  // sleeps on the message path, and a send is done when quorum answered
+  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
   if (!r.ok) throw new Error(`box submit failed: ${JSON.stringify(r.missed).slice(0, 200)}`)
   return { txid, took: r.took, admitted: r.admitted, missed: r.missed }
 }
@@ -99,28 +101,33 @@ export async function ackBox (p: {
     resend.set(txid, { txid, beef })
     acked += chunk.length
   }
-  for (const r of resend.values()) {
-    const s = await submitAll(p.hosts, r.beef, topics, { quorum: p.quorum })
+  // receipts fan out in parallel with no sleeps — the journal re-serves any
+  // host that misses this round on the next cycle
+  await Promise.all([...resend.values()].map(async r => {
+    const s = await submitAll(p.hosts, r.beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
     if (s.ok) receipts.push(r.txid)
-  }
+  }))
   return { receipts, acked, resent, skipped }
 }
 
 export async function readBox (p: {
-  key: PrivateKey, hosts: string[], office?: string, tracker: ChainTracker, limit?: number
+  key: PrivateKey, hosts: string[], office?: string, tracker: ChainTracker, limit?: number, timeoutMs?: number
 }): Promise<{ items: BoxItem[], withheld: Array<{ host: string, txid: string }>, unreachable: string[] }> {
   const office = p.office ?? DEFAULT_OFFICE
   const me = p.key.toPublicKey().toString()
   const w = new ProtoWallet(p.key)
-  const r = await lookupAll(p.hosts, 'ls_bbox', { office, to: me }, { timeoutMs: 15_000 })
+  // interactive read path: a host that cannot answer inside a few seconds is
+  // down for deal purposes — reported unreachable, not waited on
+  const r = await lookupAll(p.hosts, 'ls_bbox', { office, to: me }, { timeoutMs: p.timeoutMs ?? 5_000 })
   const items = new Map<string, BoxItem>()
   const perHost = new Map<string, string[]>()
   const unreachable: string[] = []
   for (const a of r.answers) {
     if ('error' in a) { unreachable.push(a.host); continue }
+    // envelopes open in parallel — each admit may fetch a header
+    const opened = await Promise.all(a.outputs.map(async o => await openEnvelope(o.beef, w, office, me, p.tracker).catch(() => undefined)))
     const ids: string[] = []
-    for (const o of a.outputs) {
-      const it = await openEnvelope(o.beef, w, office, me, p.tracker).catch(() => undefined)
+    for (const it of opened) {
       if (it !== undefined) { ids.push(it.txid); items.set(it.txid, it) }
     }
     perHost.set(a.host, ids)

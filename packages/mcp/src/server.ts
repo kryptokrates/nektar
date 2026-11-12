@@ -834,7 +834,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       // never more than the bound allows.
       const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats)
         : BigInt(args.utxo.satoshis) - BigInt(args.cfg.price) - BigInt(Math.min(Number(args.cfg.maxFee) - 2, 350))
-      const { tx } = host.buildBuy(args.utxo, args.wrapped, changeSats)
+      // the remembered escrow is the reveal's real parent — with it attached
+      // the tx broadcasts as proper EF and the buyer receives BEEF/EF, not a
+      // synthetic stub that cannot carry ancestry
+      const { tx } = host.buildBuy(args.utxo, args.wrapped, changeSats, await mem.fetchTx(args.utxo.txid))
       const r = await mem.broadcastTx(tx)
       if (r.status !== 'success') return { accepted: false, reason: r.description }
       return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0]!.satoshis, txHex: tx.toHex() }
@@ -848,7 +851,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       })
       const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats)
         : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(args.cfg.maxFee), 350))
-      const { tx } = host.buildRefund(args.utxo, mem.operatorKey(), args.lockTime ?? Number(args.cfg.refundAfter), changeSats)
+      const { tx } = host.buildRefund(args.utxo, mem.operatorKey(), args.lockTime ?? Number(args.cfg.refundAfter), changeSats, await mem.fetchTx(args.utxo.txid))
       const r = await mem.broadcastTx(tx)
       if (r.status !== 'success') return { accepted: false, reason: r.description }
       return { accepted: true, txid: tx.id('hex'), refundSats: tx.outputs[0]!.satoshis }

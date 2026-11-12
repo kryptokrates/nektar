@@ -1,9 +1,10 @@
 // Client side of the paid-call flow: build the signed settlement tx for an
-// invoice (from payQuote / a 402 paymentRequired). Needs only the payer's WIF
-// key and its spendable utxos — no wallet protocol. Emits BEEF hex so the
-// funding parents travel inline (Teranode EF admission wants
-// them attached).
-import { Transaction, PrivateKey, P2PKH, Script, LockingScript } from '@bsv/sdk'
+// invoice (from payQuote / a 402 paymentRequired). The payer is any SignerLike
+// — a WIF key, or a wallet signer when the payer holds no key material either.
+// Emits BEEF hex so the funding parents travel inline (Teranode EF admission
+// wants them attached).
+import { Transaction, P2PKH, Script, LockingScript } from '@bsv/sdk'
+import { unlockP2PKH, signerAddress, type SignerLike } from '@nektar/core'
 
 export interface PaymentInvoice {
   amount: number | string
@@ -38,16 +39,16 @@ export const invoiceOf = (
  *  unspent outputs ({tx, vout, satoshis} — sourceTransaction attached). */
 export async function buildPaymentTx(
   inv: PaymentInvoice,
-  payer: PrivateKey,
+  payer: SignerLike,
   utxos: Array<{ tx: Transaction; vout: number; satoshis: number }>,
   opts: { testnet?: boolean } = {}
 ): Promise<{ hex: string; txid: string }> {
   const amount = Number(inv.amount)
-  const addr = payer.toPublicKey().toAddress(opts.testnet === false ? undefined : [0x6f])
+  const addr = await signerAddress(payer, opts.testnet === false ? undefined : [0x6f])
   const tx = new Transaction()
   let inSats = 0
   for (const u of utxos) {
-    tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: new P2PKH().unlock(payer) })
+    tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: unlockP2PKH(payer) })
     inSats += u.satoshis
     if (inSats >= amount + 2000) break
   }

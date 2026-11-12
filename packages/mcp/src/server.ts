@@ -224,11 +224,12 @@ export const TOOLS = [
   },
   {
     name: 'rotate',
-    description: "Rotate a shard's owner key on-chain; emits a matching rotation cert leaf.",
+    description:
+      "Rotate a shard's owner key on-chain; emits a matching rotation cert leaf. New owner: newOwnerWif (legacy key custody) or newOwnerKeyId (wallet-derived keyID, e.g. nektar-shard:payments:2 — wallet custody, no key material crosses the API).",
     inputSchema: {
       type: 'object',
-      properties: { shard: { type: 'string' }, newOwnerWif: { type: 'string' } },
-      required: ['shard', 'newOwnerWif']
+      properties: { shard: { type: 'string' }, newOwnerWif: { type: 'string' }, newOwnerKeyId: { type: 'string' } },
+      required: ['shard']
     }
   },
   {
@@ -1296,8 +1297,12 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       return mem.verifyDerivation(args.shard, new Uint8Array(Buffer.from(args.bytes, 'hex')))
     }
     case 'rotate': {
+      const keyId = args.newOwnerKeyId === undefined ? undefined : String(args.newOwnerKeyId)
+      const wif = args.newOwnerWif === undefined ? undefined : String(args.newOwnerWif)
+      if ((keyId === undefined) === (wif === undefined)) throw new Error('rotate needs exactly one of newOwnerKeyId (wallet) or newOwnerWif (legacy)')
       const { PrivateKey } = await import('@bsv/sdk')
-      const r = await mem.rotateShard(args.shard, PrivateKey.fromWif(args.newOwnerWif))
+      const newKey = keyId !== undefined ? mem.walletKeySigner(keyId) : PrivateKey.fromWif(wif!)
+      const r = await mem.rotateShard(args.shard, newKey)
       return { ...r, receipt: { decision: 'allow', action: 'rotate' } }
     }
     case 'automaton': {

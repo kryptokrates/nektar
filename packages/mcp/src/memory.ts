@@ -660,6 +660,14 @@ export class NektarMemory {
     return walletSigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: 'nektar-log', counterparty: 'self' })
   }
 
+  /** arbitrary wallet-derived signer for a nektar keyID — used by rotate to
+   *  assign a new shard owner without key material crossing the API. Throws
+   *  when the instance has no wallet custody. */
+  walletKeySigner(keyID: string): DigestSigner {
+    if (this.opts.wallet === undefined) throw new Error('walletKeySigner requires wallet custody (NEKTAR_WALLET)')
+    return walletSigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID, counterparty: 'self' })
+  }
+
   private shardKey(shard: string): SignerLike {
     if (!this.opts.shardKeys) this.opts.shardKeys = new Map()
     if (!this.opts.shardKeys.has(shard)) {

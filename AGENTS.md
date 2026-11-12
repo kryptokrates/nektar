@@ -27,6 +27,13 @@ question that could come from memory:
 - Regtest e2e: `node packages/e2e/src/e2e-regtest.ts` and siblings (needs the local Teranode stack)
 - Groth16 spike: `tools/groth16-spike/README.md` (Python 3.12 venv inside the zkscript checkout; Rust circuit builds inside Docker on Windows)
 
+## Key custody (`NEKTAR_WALLET`)
+
+- **`client`** — `WalletClient('auto')` over an external BRC-100 substrate (BSV/Metanet Desktop). The app holds **zero** private keys: fund, log, shard-owner and automaton signatures go through `createSignature`/`getPublicKey`; fragment encryption uses `createHmac`; `keys.json` is only _read_ for legacy shard owners + old records. `fundKey`/`fee.key.json`/`NEKTAR_FUND_WIF`/`NEKTAR_FUND_MNEMONIC` are unnecessary on this path.
+- **`toolbox`** — embedded `@bsv/wallet-toolbox` (`wallet.sqlite`); the keyDeriver root still needs `NEKTAR_FUND_WIF`/`NEKTAR_FUND_MNEMONIC` — the documented embedded-wallet exception.
+- **unset (legacy)** — `fee.key.json`/env WIF for the fee key + `keys.json` (scrypt passphrase `NEKTAR_KEY_PASSPHRASE`) for agent/log/shard keys. Kept for bootstrap + regtest; the signing seam treats every key as `SignerLike`, so behavior is identical under any custody.
+- Test-only treasuries (`testkit.ts`, `e2e`, `.state/ttn-wif.txt`, `agent-keys.json`) hold keys by design — they aren't app custody. Consumer-side helpers (`client-kit.ts`, `identity.signBinding`/`answerChallenge`, `reasoning.makeDelegation`, `graph.delegate`) take the _caller's_ key — custody there belongs to the caller.
+
 ## Regtest stack gotchas (learned the hard way)
 
 - **Teranode JSON-RPC drops requests with no `id`** — treated as notifications:

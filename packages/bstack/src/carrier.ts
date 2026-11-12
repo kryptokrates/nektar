@@ -111,3 +111,16 @@ function extractPayload(tx: Transaction): Uint8Array {
 export function carrierLockingKey(pubHex: string): string {
   return readerLockingKey(DERIVATION.protocol, DERIVATION.keyID, pubHex).toString()
 }
+
+/** the locking-script hex of the funding leaf a carrier spends — a journaled
+ *  carrier minted under a rotated identity replays forever but can never
+ *  evaluate on-chain, so readers compare this against the expected lock */
+export function carrierFundingLockHex(beef: number[]): string | undefined {
+  try {
+    const tx = Transaction.fromAtomicBEEF(beef)
+    const src = tx.inputs[0]?.sourceTransaction
+    return src?.outputs[tx.inputs[0].sourceOutputIndex ?? -1]?.lockingScript.toHex()
+  } catch {
+    return undefined
+  }
+}

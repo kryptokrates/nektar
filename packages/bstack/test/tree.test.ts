@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PrivateKey } from '@bsv/sdk'
-import { decodeFunding } from '@lightwebinc/bcommon'
+import { PrivateKey, ProtoWallet } from '@bsv/sdk'
+import { decodeFunding, fundingLock } from '@lightwebinc/bcommon'
 import knex from 'knex'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mintTree, FUNDING_TAG, KnexTreeLedger, MemoryTreeLedger } from '../src/tree.js'
+import { mintTree, DERIVATION, FUNDING_TAG, ORIGINATOR, KnexTreeLedger, MemoryTreeLedger } from '../src/tree.js'
 import { anchoredTree, fakeParent, fund, prove } from './helpers.js'
 
 test('tree: n=8 mints 8 funding outputs + change, each decodes our tag', async () => {
@@ -74,6 +74,29 @@ test('ledger (knex): unproven tree with anchored ancestry hands out zero-conf sl
     assert.equal(await l.remaining('bbox'), 0)
   } finally {
     await kx.destroy()
+  }
+})
+
+test('ledger: a stale tree minted under another identity is skipped, not handed out', async () => {
+  const key = PrivateKey.fromRandom()
+  const other = PrivateKey.fromRandom()
+  const expectHex = (await fundingLock(new ProtoWallet(key), ORIGINATOR, DERIVATION, FUNDING_TAG)).toHex()
+  const foreign = await fundingLock(new ProtoWallet(other), ORIGINATOR, DERIVATION, FUNDING_TAG)
+  // a proven tree whose leaves lock to a different identity — the on-chain
+  // slots are real but no carrier built from them can ever evaluate
+  const stale = await mintTree({ key, funding: fund(key), n: 4, satsPerOutput: 1000, lock: foreign })
+  prove(stale)
+  const good = await mintTree({ key, funding: fund(key), n: 2, satsPerOutput: 1000 })
+  prove(good)
+  for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true }))]) {
+    await l.add(stale, 4)
+    await l.add(good, 2)
+    const slot = await l.take('market', expectHex)
+    assert.ok(slot !== undefined, 'the correctly-keyed tree still serves')
+    assert.equal(slot.tree.id('hex'), good.id('hex'))
+    assert.equal(await l.take('market', expectHex) !== undefined, true, 'second good slot')
+    assert.equal(await l.take('market', expectHex), undefined, 'stale slots consumed, not served')
+    if (l instanceof KnexTreeLedger) await l['kx'].destroy()
   }
 })
 

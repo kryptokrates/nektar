@@ -29,6 +29,7 @@ import { intervalRoot } from '@lightwebinc/blogs-host/dist/merkle.js'
 import { readPushDrop } from '@lightwebinc/blogs-host/dist/script.js'
 import { submitAll, lookupAll, type Quorum } from './hosts.js'
 import { ancestorsOf } from './finger.js'
+import { carrierFundingLockHex } from './carrier.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 import type { Knex } from 'knex'
@@ -125,7 +126,12 @@ export async function appendLog(p: {
   const seq = head.seq + 1
   const topics = [logTopic(p.stream)]
   const jkey = `log:${p.stream}:${seq}`
-  const hit = await p.journal.get(jkey)
+  const logLockHex = (await logFundingLock(p.key)).toHex()
+  let hit = await p.journal.get(jkey)
+  if (hit !== undefined && carrierFundingLockHex(hit.beef) !== logLockHex && p.journal.del !== undefined) {
+    await p.journal.del(jkey)
+    hit = undefined
+  }
   let beef: number[], txid: string, commitment: string
   if (hit !== undefined) {
     beef = hit.beef

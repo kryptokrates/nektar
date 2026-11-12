@@ -39,6 +39,7 @@ import { FundingTag, decodeFunding } from '@lightwebinc/bfinger-host/dist/fundin
 import { checkOffice } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { checkStream } from '@lightwebinc/blogs-host/dist/index.js'
 import { submitAll, lookupAll } from './hosts.js'
+import { carrierFundingLockHex } from './carrier.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 import type { Knex } from 'knex'
@@ -330,6 +331,10 @@ export async function publishFinger(p: {
     try {
       const dec = decodeCarrier(Transaction.fromAtomicBEEF(chit.beef))
       if (typeof dec === 'string') throw new Error(`finger journal: bad stored carrier ${dec}`)
+      // a carrier minted under a rotated identity replays forever but can
+      // never evaluate — the seq must be re-minted, not re-served
+      if (carrierFundingLockHex(chit.beef) !== (await fingerFundingLock(p.key)).toHex())
+        throw new Error('finger carrier minted under a different identity')
       carrierBeef = chit.beef
       carrierTxid = chit.txid
       record = dec.record

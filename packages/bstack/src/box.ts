@@ -6,6 +6,7 @@ import { open as openPlaintext, parsePlaintext, MaxRefs } from '@lightwebinc/bbo
 import { JObject, type JValue } from '@lightwebinc/bbox-host/codec/jcs.js'
 import { admit } from '@lightwebinc/bbox-host/codec/admit.js'
 import { submitAll, lookupAll, type Quorum } from './hosts.js'
+import { carrierFundingLockHex } from './carrier.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 
@@ -69,13 +70,20 @@ export async function sendBox(p: {
   const plain = encodePlaintext(doc)
   const artifactHash = Utils.toHex(Hash.sha256(new Uint8Array([...to, ...plain])))
   const topics = [`tm_bbox_${office}`]
-  const hit = await p.journal.get(artifactHash)
+  const bboxLockHex = (await boxFundingLock(p.key)).toHex()
+  let hit = await p.journal.get(artifactHash)
+  // a journaled carrier minted under a rotated identity can never evaluate —
+  // drop it and let the mint path re-derive under the current key
+  if (hit !== undefined && carrierFundingLockHex(hit.beef) !== bboxLockHex && p.journal.del !== undefined) {
+    await p.journal.del(artifactHash)
+    hit = undefined
+  }
   let beef: number[], txid: string
   if (hit !== undefined) {
     beef = hit.beef
     txid = hit.txid
   } else {
-    const slot = await p.ledger.take('bbox', (await boxFundingLock(p.key)).toHex())
+    const slot = await p.ledger.take('bbox', bboxLockHex)
     if (slot === undefined) throw new Error('no funding slot')
     const nowSec = Math.floor(Date.now() / 1000)
     const content = await sealEnvelope(w, ORIGINATOR, from, to, plain, nowSec)
@@ -122,10 +130,14 @@ export async function ackBox(p: {
   const topics = [`tm_bbox_${office}`]
   const resend = new Map<string, { txid: string; beef: number[] }>()
   const fresh: Array<{ txid: string; commitment: string }> = []
+  const bboxLock = (await boxFundingLock(p.key)).toHex()
   let resent = 0
   for (const i of p.items) {
     const hit = await p.journal.get(`ack:${i.txid}`)
-    if (hit !== undefined) {
+    if (hit !== undefined && carrierFundingLockHex(hit.beef) !== bboxLock && p.journal.del !== undefined) {
+      await p.journal.del(`ack:${i.txid}`)
+      fresh.push(i)
+    } else if (hit !== undefined) {
       resent++
       resend.set(hit.txid, { txid: hit.txid, beef: hit.beef })
     } else fresh.push(i)
@@ -135,7 +147,6 @@ export async function ackBox(p: {
   const receipts: string[] = []
   const w = new ProtoWallet(p.key)
   const by = new Uint8Array(Array.from(p.key.toPublicKey().encode(true) as number[]))
-  const bboxLock = (await boxFundingLock(p.key)).toHex()
   for (let c = 0; c < fresh.length; c += MaxAcks) {
     const chunk = fresh.slice(c, c + MaxAcks)
     const slot = await p.ledger.take('bbox', bboxLock)

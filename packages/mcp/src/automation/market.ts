@@ -782,7 +782,7 @@ export class MarketEngine {
           actionId: `${op.operationId}:delivered`,
           kind: 'message',
           destination: w.pub,
-          payload: { type: 'delivered', wantId: w.wantId, offerId: op.operationId, txid: r.txid, tx: this.d.txWire?.(r.txid) ?? r.txHex },
+          payload: { type: 'delivered', wantId: w.wantId, offerId: op.operationId, txid: r.txid, tx: this.d.txWire?.(r.txid, 3200) ?? r.txHex },
           ...(deliveredPackRefs(this.d, op) !== undefined ? { refs: deliveredPackRefs(this.d, op) } : {})
         }
       ]

@@ -141,7 +141,11 @@ export class TxStore {
     }
     if (tx.inputs.every((i) => i.sourceTransaction !== undefined)) {
       try {
-        return hexOf(tx.toEF())
+        const ef = tx.toEF()
+        // EF embeds every direct parent — an unproven parent chain makes it
+        // just as heavy as BEEF, so the same byte ceiling applies: over it,
+        // the raw tx is the only honest wire (the receiver pulls ancestry)
+        if (ef.length <= maxBytes) return hexOf(ef)
       } catch {
         /* fall through */
       }

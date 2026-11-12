@@ -55,7 +55,10 @@ const policyFor = (pub: string): AutomationPolicy => ({
     maxUnconfirmedSats: 1000,
     maxUnconfirmedCount: 3
   },
-  scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 8000 },
+  // collectMs is on cfg.now() — the virtual clock only advances 500ms per
+  // pumped round, so 8000 cost 16 rounds (~25s) of every deal before scoring.
+  // 2500 (5 rounds) still lets multi-seller offers land before select().
+  scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 2500 },
   seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 5, sellableShards: ['guide'] },
   disclosure: { allowPublic: false },
   ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
@@ -1007,19 +1010,35 @@ const escrowScriptFor = async (s: A, buyerPub: string): Promise<string | undefin
 
 // broadcast that lets the escrow onto the chain but reports a transport error
 // — the wallet records submission_unknown and the op escalates to `uncertain`
-const sabotageEscrowBroadcast = (b: A, script: string): { txid: () => string | undefined } => {
+const sabotageEscrowBroadcast = (b: A, chain: StackChain, script: string, reject: boolean): { txid: () => string | undefined } => {
   let txid: string | undefined
   let armed = true
   const orig = b.mem.broadcastTx.bind(b.mem)
   b.mem.broadcastTx = async (tx: import('@bsv/sdk').Transaction) => {
     const hit = tx.outputs.some((o) => o.lockingScript.toHex() === script)
-    const r = await orig(tx)
-    if (hit && armed) {
-      armed = false
-      txid = tx.id('hex')
-      return { status: 'error', description: 'transport: connection reset' }
+    if (!hit || !armed) return await orig(tx)
+    armed = false
+    txid = tx.id('hex')
+    if (reject) {
+      // REAL rejection on a first-seen-wins mempool: spend the escrow's funding
+      // inputs first, then let the node itself refuse the escrow (UTXO_SPENT) —
+      // a fake 'transport' error can never make txState answer 'rejected'
+      const { Transaction, P2PKH } = await import('@bsv/sdk')
+      const conflict = new Transaction()
+      for (const inp of tx.inputs)
+        conflict.addInput({
+          sourceTransaction: inp.sourceTransaction!,
+          sourceOutputIndex: inp.sourceOutputIndex,
+          unlockingScriptTemplate: new P2PKH().unlock(b.mem.operatorKey())
+        })
+      conflict.addOutput({ lockingScript: new P2PKH().lock(b.mem.operatorKey().toPublicKey().toAddress()), change: true })
+      await conflict.fee()
+      await conflict.sign()
+      await chain.broadcast(conflict)
+      return await orig(tx)
     }
-    return r
+    const r = await orig(tx)
+    return { status: 'error', description: 'transport: connection reset' }
   }
   return { txid: () => txid }
 }
@@ -1039,7 +1058,7 @@ test('bstack P: uncertain + escrow observable — reconcile resumes the deal wit
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
     const script = (await escrowScriptFor(s, b.pub))!
-    const sab = sabotageEscrowBroadcast(b, script)
+    const sab = sabotageEscrowBroadcast(b, chain, script, false)
     const all = [b.rt, s.rt]
     assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 120), 'no deal | ' + logs.slice(-25).join(' | '))
     assert.ok(sab.txid() !== undefined, 'the sabotaged escrow broadcast happened')
@@ -1085,7 +1104,7 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
     const script = (await escrowScriptFor(s, b.pub))!
-    const sab = sabotageEscrowBroadcast(b, script)
+    const sab = sabotageEscrowBroadcast(b, chain, script, true)
     assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'uncertain', 80), 'never went uncertain | ' + logs.slice(-20).join(' | '))
     const txid = sab.txid() ?? ((await buyerOp(b))!.data.pendingEscrow as { utxo: { txid: string } }).utxo.txid
     assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 40), 'not funding_failed | ' + logs.slice(-20).join(' | '))
@@ -1114,7 +1133,11 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
   }
 })
 
-test('bstack R: escrow rejected while awaiting_disclosure — late rejection frees the budget before the refund height', async (t) => {
+// first-seen-wins mempool: a broadcast-accepted tx can never be rejected later
+// (a conflicting spend bounces, the original stays). Late-rejection of an
+// accepted escrow is a mock-only state — real coverage: Q (broadcast-time
+// refusal → escrow_rejected) + the 'unknown → escrow_unconfirmed_timeout' path.
+test.skip('bstack R: escrow rejected while awaiting_disclosure — late rejection frees the budget before the refund height', async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1157,7 +1180,9 @@ test('bstack R: escrow rejected while awaiting_disclosure — late rejection fre
   }
 })
 
-test('bstack S: disclosure rejected after completion_submitted — seller moves to completion_failed', async (t) => {
+// same first-seen-wins constraint as R: the completion tx is broadcast-accepted
+// before completion_submitted — a late 'rejected' state cannot occur on regtest.
+test.skip('bstack S: disclosure rejected after completion_submitted — seller moves to completion_failed', async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1237,7 +1262,14 @@ test('bstack T: refused refund retries on reconcile — succeeds after one refus
       const tShort = refundAfter - (await b.mem.chainHeight())
       if (tShort > 0) await chain.mine(tShort)
       if (refuse === 1) {
-        assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'refunded', 80), 'not refunded | ' + logs.slice(-20).join(' | '))
+        // the refund retry waits on the 30s reconcile gate — bump the virtual
+        // clock past it each round instead of paying 60 wallclock rounds
+        for (let i = 0; i < 12 && (await buyerOp(b))?.state !== 'refunded'; i++) {
+          clock += 31_000
+          await b.rt.cycle()
+          await chain.mine(1)
+        }
+        assert.equal((await buyerOp(b))?.state, 'refunded', 'not refunded | ' + logs.slice(-20).join(' | '))
         const evs = await b.rt.store.events((await buyerOp(b))!.operationId)
         assert.ok(
           evs.some((e) => e.cause === 'needs_human:unresolved_settlement'),

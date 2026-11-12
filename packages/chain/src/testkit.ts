@@ -86,11 +86,17 @@ function dbgMine(ms: number): void {
 }
 
 async function stackRpc(cfg: RegtestConfig, method: string, ...params: unknown[]): Promise<any> {
+  // last param may be a timeout-seconds override for slow verbs
+  // (generatetoaddress for n blocks legitimately outlives the 15s default)
+  let timeoutMs = 15_000
+  if (typeof params[params.length - 1] === 'object' && params[params.length - 1] !== null && '__timeoutMs' in (params[params.length - 1] as object)) {
+    timeoutMs = (params.pop() as { __timeoutMs: number }).__timeoutMs
+  }
   const r = await fetch(cfg.rpcUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json', Authorization: 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64') },
     body: JSON.stringify({ jsonrpc: '1.0', id: ++rpcCounter, method, params }),
-    signal: AbortSignal.timeout(15_000)
+    signal: AbortSignal.timeout(timeoutMs)
   })
   const text = await r.text()
   let j: { result?: any; error?: { message?: string } }
@@ -135,6 +141,8 @@ export class StackChain implements ChainTracker, Broadcaster {
   private submit: TeranodeBroadcaster
   private treasuryAddr?: string
   private statusCbs: Array<(ev: TxStatusEvent) => void> = []
+  private known = new Map<string, Transaction>()
+  private rejectedSet = new Set<string>()
   /** txid → first-watched ms; entries older than WATCH_TTL_MS are dropped so a
    *  tx that never seals (mempool stays unmined in tests) can't pin the watch
    *  — and its keep-alive sockets — open past the process's natural exit. */
@@ -152,8 +160,32 @@ export class StackChain implements ChainTracker, Broadcaster {
   /** broadcast; the txid joins the status watch so 'mined' + proof push on seal */
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
     const r = await this.submit.broadcast(tx)
-    if (r.status === 'success') this.watched.set(tx.id('hex'), Date.now())
+    const txid = tx.id('hex')
+    if (r.status === 'success') {
+      this.known.set(txid, tx)
+      this.watched.set(txid, Date.now())
+    } else if (/double.?spend|conflict|already.*spent|UTXO_SPENT|mandatory|invalid|reject/i.test(r.description ?? '')) {
+      // definitive rejects only — missing-parent and non-final are transient
+      // (lagging ingestion, locktime before height): retried, never terminal.
+      // A broadcast-time refusal is a final state — push it like 'mined' so
+      // onTxRejected → engine.hint clears the reconcile gate immediately.
+      this.rejectedSet.add(txid)
+      const ev: TxStatusEvent = { txid, status: 'rejected' }
+      for (const cb of this.statusCbs) cb(ev)
+    }
     return r
+  }
+  /** sync chain view — the same contract the in-memory stack carried: txs
+   *  this chain broadcast, merklePath attached when the subtree seals.
+   *  NektarMemory.txState calls this WITHOUT await — an async signature
+   *  returns a Promise (≠undefined) and every query would read 'seen',
+   *  which is exactly the regtest reconcile failure this must not hide. */
+  getTx(txid: string): Transaction | undefined {
+    return this.known.get(txid)
+  }
+  /** definitive broadcast rejection, sync — feed to engine reconcile gates */
+  isRejected(txid: string): boolean {
+    return this.rejectedSet.has(txid)
   }
   /** status push, the same shape statusStream gives live networks: Teranode
    *  has no per-tx event feed, so watched broadcasts are polled against
@@ -192,6 +224,10 @@ export class StackChain implements ChainTracker, Broadcaster {
           try {
             const merklePath = MerklePath.fromBinary([...new Uint8Array(await r.arrayBuffer())])
             this.watched.delete(txid)
+            // attach the proof to the cached tx so the sync getTx view answers
+            // 'mined', not 'seen' — txState consumers rely on it
+            const cached = this.known.get(txid)
+            if (cached !== undefined) cached.merklePath = merklePath
             if (dbgTimings()) dbgLog(`proof pushed for ${txid.slice(0, 12)}…`)
             for (const cb of this.statusCbs) cb({ txid, status: 'mined', blockHeight: merklePath.blockHeight, merklePath })
           } catch {
@@ -215,10 +251,10 @@ export class StackChain implements ChainTracker, Broadcaster {
   async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
     return await this.tracker.headerAtHeight(height)
   }
-  /** mempool + mined, with the node's merkle proof attached once sealed.
-   *  Retries briefly on not-found: propagation ingestion lags the broadcast
-   *  ACK under load, so a just-aired tx can 404 for a beat. */
-  async getTx(txid: string): Promise<Transaction | undefined> {
+  /** node-fetched variant — for txids this chain did not itself broadcast
+   *  (foreign parents, lookups). The sync getTx above is the chain-view the
+   *  engine consumes; this one hits getrawtransaction + the proof endpoint. */
+  async fetchTx(txid: string): Promise<Transaction | undefined> {
     for (let i = 0; i < 12; i++) {
       const tx = await regtestTx(this.cfg, txid)
       if (tx !== undefined) return tx
@@ -247,19 +283,27 @@ export class StackChain implements ChainTracker, Broadcaster {
     const addr = this.treasuryAddr ?? new PrivateKey(1).toPublicKey().toAddress([0x6f])
     // Teranode throttles concurrent generate calls ("Too busy") — parallel test
     // files legitimately collide here, so retry the throttle with backoff.
-    let hashes: string[] | undefined
-    for (let i = 0; i < 20 && hashes === undefined; i++) {
-      hashes = await stackRpc(this.cfg, 'generatetoaddress', n, addr)
-        .then((h) => h as string[])
-        .catch(async (e: unknown) => {
-          // parallel test files collide two ways: the throttle ("too busy") and
-          // stale candidates (a peer's block sealed first) — both are retriable
-          if (!/too busy|overload|queue.*full|503|job not found|stale/i.test(String(e))) throw e
-          await new Promise((r) => setTimeout(r, 200 + Math.random() * 300))
-          return undefined
-        })
+    // Batched n>10 is chunked: the node's own RPC layer aborts generate calls
+    // that run past ~30s, so big batches go in 10-block pieces.
+    const hashes: string[] = []
+    for (let done = 0; done < n; ) {
+      const step = Math.min(10, n - done)
+      let got: string[] | undefined
+      for (let i = 0; i < 20 && got === undefined; i++) {
+        got = await stackRpc(this.cfg, 'generatetoaddress', step, addr, { __timeoutMs: 25_000 })
+          .then((h) => h as string[])
+          .catch(async (e: unknown) => {
+            // parallel test files collide two ways: the throttle ("too busy") and
+            // stale candidates (a peer's block sealed first) — both are retriable
+            if (!/too busy|overload|queue.*full|503|job not found|stale|timed out/i.test(String(e))) throw e
+            await new Promise((r) => setTimeout(r, 200 + Math.random() * 300))
+            return undefined
+          })
+      }
+      if (got === undefined) throw new Error('testkit: generatetoaddress stayed busy')
+      hashes.push(...got)
+      done += step
     }
-    if (hashes === undefined) throw new Error('testkit: generatetoaddress stayed busy')
     // Teranode's getblockchaininfo.blocks lags seconds behind generate; the
     // header index serves the new blocks almost immediately — wait on that.
     // Sealing is ordered: the tip hash being indexed implies all ancestors are,

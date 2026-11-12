@@ -143,6 +143,50 @@ const agents = [
 // with no block in the path — pass --fresh to provision a new set.
 const AGENTS_DIR = join(root, '.state', 'testnet-agents')
 const REUSE = LIVE && !process.argv.includes('--fresh') && existsSync(join(AGENTS_DIR, 'agent-keys.json'))
+// --fault <trigger>:<verb>:<arg> injects a failure mid-deal:
+//   triggers: 'want' (right after the want posts), 'funded' (buyer reaches
+//   awaiting_disclosure — escrow broadcast, before delivery can land)
+//   verbs: 'kill:<name>' SIGKILL the agent (the runner's respawn is the
+//   restart path), 'db-loss:<name>' kill + delete automation.sqlite (the
+//   recovery-note rebuild is what gets exercised), 'host-down:<a|b>' docker
+//   stop the host container, 'seller-dark' host-down:b (ben/cara's only
+//   host — the winner goes unreachable post-escrow)
+// --expect <verified|refunded> picks the assertion set (default verified)
+const FAULT = (() => {
+  const i = process.argv.indexOf('--fault')
+  if (i === -1) return undefined
+  const [trigger, verb, arg] = process.argv[i + 1].split(':')
+  return { trigger, verb, arg }
+})()
+const EXPECT = process.argv.includes('--expect') ? process.argv[process.argv.indexOf('--expect') + 1] : 'verified'
+const HOST_CONTAINER = { a: 'nektar-bstack-testnet-host-a-1', b: 'nektar-bstack-testnet-host-b-1' }
+let hostDowned
+const docker = (args) => new Promise((res) => spawn('docker', args, { stdio: 'inherit' }).on('exit', res))
+async function injectFault({ verb, arg }) {
+  if (verb === 'host-down' || verb === 'seller-dark') {
+    hostDowned = HOST_CONTAINER[verb === 'seller-dark' ? 'b' : arg]
+    log(`fault: docker stop ${hostDowned}`)
+    await docker(['stop', hostDowned])
+    return
+  }
+  const a = agents.find((x) => x.name === arg)
+  if (a?.proc === undefined) throw new Error(`fault: no live agent ${arg}`)
+  log(`fault: SIGKILL ${arg}`)
+  const p = a.proc
+  const exited = new Promise((res) => p.once('exit', res))
+  p.kill('SIGKILL')
+  await Promise.race([exited, delay(5000)])
+  if (verb === 'db-loss') {
+    for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(join(a.dataDir, `automation.sqlite${suffix}`), { force: true })
+    log(`fault: deleted ${arg}'s automation.sqlite — respawn rebuilds via the recovery note`)
+  }
+}
+async function restoreFault() {
+  if (hostDowned === undefined) return
+  log(`fault restore: docker start ${hostDowned}`)
+  await docker(['start', hostDowned])
+  hostDowned = undefined
+}
 async function fundAgentsLive() {
   if (REUSE) {
     const keys = JSON.parse(readFileSync(join(AGENTS_DIR, 'agent-keys.json'), 'utf8'))
@@ -302,6 +346,7 @@ function spawnInstance(a) {
     } else if (c && c !== 0 && c !== null) log(`${a.name} exited ${c}`)
   })
   procs.push(p)
+  a.proc = p
   return p
 }
 async function bootAgent(a, index) {
@@ -457,13 +502,31 @@ try {
   const wantAt = Date.now()
   const wantAtBlocks = blocksMined
   const { operationId } = await tool(bob, 'want', { domains: ['libfoo'], question: QUESTION, maxSats: 500 })
-  const op = await waitState(bob, operationId, ['disclosure_verified', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed', 'useful'])
+  if (FAULT?.trigger === 'want') await injectFault(FAULT)
+  if (FAULT?.trigger === 'funded') {
+    // inject the moment escrow is broadcast but before delivery can land —
+    // 'awaiting_disclosure' is the post-escrow/pre-disclosure window
+    const hit = await waitState(bob, operationId, ['awaiting_disclosure', 'disclosure_verified', 'refunded', 'refunding', 'expired', 'funding_failed', 'denied', 'uncertain', 'disputed', 'useful'])
+    log(`fault: funded trigger — buyer in ${hit.state}; injecting ${FAULT.verb}${FAULT.arg !== undefined ? `:${FAULT.arg}` : ''}`)
+    await injectFault(FAULT)
+  }
+  const op = await waitState(bob, operationId, ['disclosure_verified', 'refunded', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed', 'useful'])
   const verifiedMs = Date.now() - wantAt
   const dealBlocks = blocksMined - wantAtBlocks
-  if (op.state !== 'disclosure_verified') throw new Error(`buyer ended in ${op.state}: ${op.lastError ?? ''}`)
+  if (EXPECT === 'refunded') {
+    if (op.state !== 'refunded') throw new Error(`expected refund — buyer ended in ${op.state}: ${op.lastError ?? ''}`)
+    const rtx = op.data?.refundTxid
+    if (typeof rtx !== 'string' || rtx.length !== 64) throw new Error(`refunded op carries no refundTxid: ${JSON.stringify(op.data).slice(0, 200)}`)
+    const seen = await fetch(`${TESTNET.wocUrl}/tx/${rtx}`).then((r) => r.ok).catch(() => false)
+    log(`PASS — refund fired: op refunded, refund tx ${rtx.slice(0, 12)}… broadcast${seen === true ? ' (WoC-visible)' : ' (WoC lookup pending)'} after ${(verifiedMs / 1000).toFixed(0)}s`)
+    writeFileSync(join(dir, 'summary.json'), JSON.stringify({ runId, outcome: 'PASS', expect: 'refunded', fault: FAULT, refundTxid: rtx, wallClockMsToRefunded: verifiedMs }, null, 1))
+  }
+  if (EXPECT === 'verified' && op.state !== 'disclosure_verified') throw new Error(`buyer ended in ${op.state}: ${op.lastError ?? ''}`)
 
   // ---- assertions ----------------------------------------------------------
-  const offers = Object.values(op.data.offers ?? {}).map((o) => ({ pub: o.so?.offer?.pub, price: Number(o.so?.offer?.priceSats) }))
+  verified: {
+    if (EXPECT !== 'verified') break verified
+    const offers = Object.values(op.data.offers ?? {}).map((o) => ({ pub: o.so?.offer?.pub, price: Number(o.so?.offer?.priceSats) }))
   const prices = offers.map((o) => o.price).sort((x, y) => x - y)
   if (JSON.stringify(prices) !== JSON.stringify([200, 300, 450])) throw new Error(`recorded offers ${JSON.stringify(prices)} — expected [200,300,450]`)
   const sel = op.data.selected.key
@@ -557,12 +620,14 @@ try {
   log(`  counterparty journal complete; bob+cara inboxes empty on both hosts${LIVE ? ' (seller note held until proof)' : ''}`)
   log(`  tx logs: ${agents.map((a) => `${a.name}=${a.txCount}`).join(' ')}`)
   log(`  summary: ${join(dir, 'summary.json')}`)
+  }
 } catch (e) {
   writeFileSync(join(dir, 'summary.json'), JSON.stringify({ runId, outcome: 'FAIL', error: e.message }, null, 1))
   console.error(`[${runId}] FAIL: ${e.stack}`)
   process.exitCode = 1
 } finally {
   stopping = true
+  await restoreFault().catch(() => {})
   mining = false
   await mineLoop.catch(() => {})
   for (const p of procs)

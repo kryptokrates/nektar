@@ -16,6 +16,7 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
   return async (tx) => {
     const txid = tx.id('hex')
     const actionId = `owner:${txid}`
+    let recorded = false
     try {
       const parents: Record<string, string> = {}
       const outs: Array<{ txid: string; vout: number; satoshis: number }> = []
@@ -24,10 +25,12 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
         const srcTxid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
         const vout = inp.sourceOutputIndex ?? 0
         if (!srcTxid) continue
-        outs.push({ txid: srcTxid, vout, satoshis: inp.sourceTransaction?.outputs[vout]?.satoshis ?? 0 })
-        if (inp.sourceTransaction) {
-          parents[srcTxid] = inp.sourceTransaction.toHex()
-          vin += inp.sourceTransaction.outputs[vout]?.satoshis ?? 0
+        // EF wires carry sparse parents — the spent output entry can be null
+        const spent = inp.sourceTransaction?.outputs?.[vout]
+        outs.push({ txid: srcTxid, vout, satoshis: spent?.satoshis ?? 0 })
+        if (spent !== undefined && spent !== null) {
+          parents[srcTxid] = inp.sourceTransaction!.toHex()
+          vin += spent.satoshis ?? 0
         }
       }
       await store.recordBroadcast(
@@ -36,15 +39,19 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
         'owner',
         'owner'
       )
+      recorded = true
     } catch {
       /* a ledger outage must not fabricate an authorization — the broadcaster still decides */
     }
     try {
       const r = await inner(tx)
-      await store.setTxState(actionId, r.status === 'success' ? 'submitted' : 'submission_unknown', { at: Date.now(), result: r }, true)
+      if (recorded)
+        await store
+          .setTxState(actionId, r.status === 'success' ? 'submitted' : 'submission_unknown', { at: Date.now(), result: r }, true)
+          .catch(() => {})
       return r
     } catch (e) {
-      await store.setTxState(actionId, 'submission_unknown', { at: Date.now(), error: (e as Error).message }, true)
+      if (recorded) await store.setTxState(actionId, 'submission_unknown', { at: Date.now(), error: (e as Error).message }, true).catch(() => {})
       throw e
     }
   }

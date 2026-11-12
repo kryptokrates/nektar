@@ -742,7 +742,7 @@ export class MarketEngine {
       const i = tx.inputs[ix]
       const src = i.sourceTransaction?.outputs[i.sourceOutputIndex ?? -1]
       const ptxid = i.sourceTXID ?? i.sourceTransaction?.id('hex')
-      if (src === undefined || i.sourceOutputIndex === undefined || ptxid === undefined) continue
+      if (!src || i.sourceOutputIndex === undefined || ptxid === undefined) continue
       if (!spendValid(tx, ix, { txid: ptxid, vout: i.sourceOutputIndex, satoshis: src.satoshis ?? 0, script: src.lockingScript.toHex() }))
         return await refuse('escrow input does not spend its claimed parent output')
       spends++

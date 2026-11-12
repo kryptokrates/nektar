@@ -79,6 +79,22 @@ test('ledger: reserve predicate skips leased outpoints; addOwned dedups', async 
   await kx.destroy()
 })
 
+test('ledger: EF relay with sparse parent outputs — bookkeeping must not veto a broadcast it cannot record', async (t) => {
+  const { kx, store } = await open()
+  const tx = new Transaction()
+  tx.addInput({ sourceTXID: 'c'.repeat(64), sourceOutputIndex: 1, unlockingScript: Script.fromHex('51') })
+  tx.addOutput({ satoshis: 1, lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toHash()) })
+  // EF wires carry the spent output only — the rest of the parent is null holes
+  const stub = new Transaction()
+  stub.outputs = [null as any, null as any]
+  tx.inputs[0].sourceTransaction = stub as any
+  const inner = async () => ({ status: 'success' as const, txid: tx.id('hex'), description: 'ok' })
+  const wrapped = wrapBroadcast(store, inner)
+  const r = await wrapped(tx)
+  assert.equal(r.status, 'success', 'the broadcast result reaches the caller even though nothing was recordable')
+  await kx.destroy()
+})
+
 test('ledger: releaseUnsigned frees only a never-submitted preparation', async (t) => {
   const { kx, store } = await open()
   const tx = new Transaction()

@@ -5,6 +5,7 @@
 // passphrase is set.
 import { readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { scryptSync, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
+import { HD, Mnemonic, PrivateKey } from '@bsv/sdk'
 
 const V = 1
 const KDF = { N: 2 ** 15, r: 8, p: 1 }
@@ -74,4 +75,12 @@ export function writeKeyFile(file: string, plain: string, pass: string | undefin
   } catch {
     /* windows */
   }
+}
+
+/** NEKTAR_FUND_MNEMONIC: BIP-39 → HD root → m/44'/236'/0'/0/0. The mnemonic is
+ *  custody-of-record — recoverable, one string to protect — while the derived
+ *  key feeds the same keyDeriver the WIF path used. */
+export function fundKeyFromMnemonic(phrase: string): PrivateKey {
+  const hd = HD.fromSeed(Mnemonic.fromString(phrase).toSeed())
+  return hd.derive("m/44'/236'/0'/0/0").privKey
 }

@@ -7,7 +7,7 @@ import { PrivateKey, ProtoWallet, MerklePath } from '@bsv/sdk'
 import { fundingLock } from '@lightwebinc/bcommon'
 import { stackWorld, TeranodeRPCTracker, merklePathFor } from '@nektar/chain'
 import { DERIVATION, FUNDING_TAG, ORIGINATOR } from '@nektar/bstack'
-import { openToolboxWallet, RegtestWalletServices, fundToolbox, ToolboxFunder } from '../src/automation/toolbox.js'
+import { openToolboxWallet, RegtestWalletServices, fundToolbox, ToolboxFunder, NEKTAR_BASKET, type ToolboxHandle } from '../src/automation/toolbox.js'
 
 // The wallet-toolbox lane on the local Teranode stack: construction, its own
 // createAction funding path (broadcast through RegtestWalletServices), output
@@ -19,10 +19,13 @@ try {
   const { funder, treasury } = world
   const cfg = treasury.cfg
   const dir = mkdtempSync(join(tmpdir(), 'nektar-tb-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const tbs: Array<{ wallet: { destroy?: () => Promise<void> } }> = []
+  const tbs: ToolboxHandle[] = []
   t.after(async () => {
-    for (const tb of tbs) await tb.wallet.destroy?.().catch(() => undefined)
+    for (const tb of tbs) {
+      await tb.wallet.destroy?.().catch(() => undefined)
+      await tb.activeStorage.destroy?.().catch(() => undefined)
+    }
+    rmSync(dir, { recursive: true, force: true })
   })
 
   const tracker = new TeranodeRPCTracker(cfg)
@@ -55,9 +58,10 @@ try {
   const funded = await fundToolbox(tb, outs, funder.keyPair)
   assert.deepEqual(funded.map((r) => r.success), [true, true], JSON.stringify(funded))
 
-  // 2. outputs are listed; ToolboxFunder materializes a real source tx
-  const lo = await tb.wallet.listOutputs({ basket: 'default', include: 'entire transactions' }, 'nektar')
-  assert.ok(lo.outputs.length >= 1, 'wallet should hold spendable outputs')
+  // 2. outputs are listed in the funding basket (custody stays explicit);
+  //    ToolboxFunder materializes a real source tx
+  const lo = await tb.wallet.listOutputs({ basket: NEKTAR_BASKET, include: 'entire transactions' }, 'nektar')
+  assert.ok(lo.outputs.length >= 1, `wallet should hold spendable outputs in ${NEKTAR_BASKET}`)
   const taken = await tb.funder.take(500)
   assert.equal(typeof taken.tx.id('hex'), 'string')
   assert.ok(taken.satoshis >= 500)

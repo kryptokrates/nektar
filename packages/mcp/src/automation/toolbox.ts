@@ -30,7 +30,7 @@ const NAME = 'teranode-regtest'
 const sdkc = createRequire(import.meta.url)('@bsv/sdk') as typeof import('@bsv/sdk')
 // BRC-100 reserves 'default' for wallet-balance outputs — funding UTXOs live
 // in their own basket so custody and spend-source selection stay explicit.
-const NEKTAR_BASKET = 'nektar-funding'
+export const NEKTAR_BASKET = 'nektar-funding'
 
 const werr = (e: unknown): sdk.WalletError => ({ code: 'WERR_INTERNAL', description: String(e) }) as sdk.WalletError
 
@@ -253,7 +253,39 @@ export async function fundToolbox(
   const beef = sdkc.Beef.fromBinaryStrict(esmBeef.toBinary())
   // getKeyPair takes a hex secret (or a cjs PrivateKey) — never a WIF
   const kp = Setup.getKeyPair(srcKey.toHex())
-  return await Setup.fundWalletFromP2PKHOutpoints(tb.wallet, outpoints.map((o) => `${o.txid}.${o.vout}`), kp, beef.toBinary())
+  const id = await tb.wallet.getPublicKey({ identityKey: true }, 'nektar')
+  const inSats = outpoints.reduce((s, o) => s + (o.tx.outputs[o.vout].satoshis ?? 0), 0)
+  // The funding output is declared with `basket` at creation — change can
+  // never be reclassified after the fact (the toolbox rejects basket
+  // insertion over wallet-managed change), so custody has to start here.
+  // inSats - 1000 leaves headroom for the network fee; rounding dust lands
+  // as ordinary 'default' change.
+  const car = await tb.wallet.createAction({
+    inputBEEF: beef.toBinary(),
+    inputs: outpoints.map((o) => ({ outpoint: `${o.txid}.${o.vout}`, unlockingScriptLength: 108, inputDescription: 'fund wallet from P2PKH' })),
+    outputs: [{ satoshis: Math.max(1, inSats - 1000), lockingScript: new sdkc.P2PKH().lock(sdkc.PublicKey.fromString(id.publicKey).toAddress()).toHex(), basket: NEKTAR_BASKET, outputDescription: 'nektar funding output', tags: ['nektar'] }],
+    labels: ['nektar-funding'],
+    description: `nektar funding top-up (${outpoints.length} outpoints)`,
+    options: { trustSelf: 'known' }
+  })
+  const st = car.signableTransaction
+  if (st === undefined) return outpoints.map((o) => ({ outpoint: `${o.txid}.${o.vout}`, txid: car.txid, success: true }))
+  // the wallet can't sign foreign P2PKH inputs — signable flow: sign each
+  // input with srcKey (same getUnlockP2PKH template the Setup helper uses),
+  // then hand the unlock scripts back via signAction
+  const unsignedTx = sdkc.Transaction.fromAtomicBEEF(st.tx)
+  for (const o of outpoints) {
+    const idx = unsignedTx.inputs.findIndex((i) => String(i.sourceTXID).toLowerCase() === o.txid && i.sourceOutputIndex === o.vout)
+    if (idx < 0) throw new Error(`signable tx missing input for ${o.txid}.${o.vout}`)
+    // same cjs instance at runtime — the cast only bridges the dual-build
+    // type split (sdkc is typed through the esm surface)
+    unsignedTx.inputs[idx].unlockingScriptTemplate = Setup.getUnlockP2PKH(kp.privateKey, o.tx.outputs[o.vout].satoshis ?? 0) as never
+  }
+  await unsignedTx.sign()
+  const spends: Record<number, { unlockingScript: string }> = {}
+  for (let i = 0; i < unsignedTx.inputs.length; i++) spends[i] = { unlockingScript: unsignedTx.inputs[i].unlockingScript!.toHex() }
+  const sar = await tb.wallet.signAction({ reference: st.reference, spends })
+  return outpoints.map((o) => ({ outpoint: `${o.txid}.${o.vout}`, txid: sar.txid, success: sar.txid !== undefined }))
 }
 
 // ── live-net (testnet/main) ──────────────────────────────────────────────────

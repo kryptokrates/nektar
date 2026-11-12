@@ -25,6 +25,30 @@
     },
     {
       "path": "../automaton"
+    },
+    {
+      "path": "../anchor"
+    },
+    {
+      "path": "../bstack"
+    },
+    {
+      "path": "../datalog"
+    },
+    {
+      "path": "../graph"
+    },
+    {
+      "path": "../log"
+    },
+    {
+      "path": "../reasoning"
+    },
+    {
+      "path": "../verify"
+    },
+    {
+      "path": "../zk"
     }
   ]
 }

@@ -45,7 +45,14 @@ const NKT1 = new TextEncoder().encode('nkt1')
 
 // ── 1. market record: our nkt1 payload through the stock record codec ────────
 {
-  const body = { wantId: 'w-interop1', pub: '02' + 'ab'.repeat(32), net: 'bsv:regtest', want: { want: 'fixture', domain: 'interop.test', level: 0, maxPrice: 5 }, sig: 's', at: 1 }
+  const body = {
+    wantId: 'w-interop1',
+    pub: '02' + 'ab'.repeat(32),
+    net: 'bsv:regtest',
+    want: { want: 'fixture', domain: 'interop.test', level: 0, maxPrice: 5 },
+    sig: 's',
+    at: 1
+  }
   const payload = encodePayload({ v: 1, kind: 'want', body })
   await check('market payload claims the nkt1 record magic', () => {
     if (!claimsRecord(payload, NKT1)) throw new Error('claimsRecord refused')
@@ -113,7 +120,17 @@ const NKT1 = new TextEncoder().encode('nkt1')
     body: new CborMap([
       { key: 'v', val: 1n },
       { key: 'name', val: 'nektar-packs' },
-      { key: 'members', val: members.map((c) => new CborMap([{ key: 'c', val: c }, { key: 'sha256', val: new Uint8Array(32) }, { key: 'size', val: 1n }])) }
+      {
+        key: 'members',
+        val: members.map(
+          (c) =>
+            new CborMap([
+              { key: 'c', val: c },
+              { key: 'sha256', val: new Uint8Array(32) },
+              { key: 'size', val: 1n }
+            ])
+        )
+      }
     ]),
     refs: [],
     unknown: []

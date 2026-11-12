@@ -6,9 +6,32 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
-import { mintCarrier, fundingLock, lockFields, unlocker, commitment, CborMap, encode as cborEncode, encodeRefs, bytesEqual, readWire, subjectTx, type Derivation, type Ref } from '@lightwebinc/bcommon'
+import {
+  mintCarrier,
+  fundingLock,
+  lockFields,
+  unlocker,
+  commitment,
+  CborMap,
+  encode as cborEncode,
+  encodeRefs,
+  bytesEqual,
+  readWire,
+  subjectTx,
+  type Derivation,
+  type Ref
+} from '@lightwebinc/bcommon'
 import type { FundingOut } from '@nektar/chain'
-import { encodeRecord, validateRecord, KindCreate, KindUpdate, KindSub, KindManifest, MagicV1, type CommittedRecord } from '@lightwebinc/bfinger-host/dist/record.js'
+import {
+  encodeRecord,
+  validateRecord,
+  KindCreate,
+  KindUpdate,
+  KindSub,
+  KindManifest,
+  MagicV1,
+  type CommittedRecord
+} from '@lightwebinc/bfinger-host/dist/record.js'
 import { Protocol, KeyIDProfile, KeyIDRecord, profileLockingKey, recordLockingKey } from '@lightwebinc/bfinger-host/dist/keys.js'
 import { Tag, inspectToken } from '@lightwebinc/bfinger-host/dist/token.js'
 import { decodeCarrier } from '@lightwebinc/bfinger-host/dist/carrier.js'

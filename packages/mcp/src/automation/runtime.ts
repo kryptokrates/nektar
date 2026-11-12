@@ -203,7 +203,14 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
         log(`automation: host back ${h}`)
       }
   }
-  let pendingAcks: Array<{ txid: string; commitment: string; from: string; msg: MarketMessage | undefined; refs?: import('@nektar/bstack').BoxRef[]; created: number }> = []
+  let pendingAcks: Array<{
+    txid: string
+    commitment: string
+    from: string
+    msg: MarketMessage | undefined
+    refs?: import('@nektar/bstack').BoxRef[]
+    created: number
+  }> = []
   let lastAckSkipped = -1
   const msgs =
     cfg.messages ??

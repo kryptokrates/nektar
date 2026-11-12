@@ -14,6 +14,12 @@ sbom.cdx.json
 codex-receipts.log
 **/*.runar.ts
 packages/contracts/Nektar*.json
+packages/contracts/BabyBearProbe.json
+packages/contracts/ClaimVerdict.json
+packages/contracts/DisclosureSale.json
+packages/contracts/MiniStage.json
+packages/contracts/Poseidon2Blocks.json
+packages/contracts/Poseidon2Stage.json
 packages/zk/stark/**
 **/test/fixtures/**
 **/vectors/**

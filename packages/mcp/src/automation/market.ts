@@ -1,5 +1,5 @@
 import { PublicKey, Transaction, P2PKH, type PrivateKey } from '@bsv/sdk'
-import { signWant, verifyWant, signOffer, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/bstack'
+import { signWant, verifyWant, signOffer, verifyOffer, type SignedWant, type SignedOffer, type BoxRef } from '@nektar/bstack'
 import { verifyOfferSig, publicSaleQuote, saleQuoteWire } from '@nektar/identity'
 import { DisclosureSaleHost, CheckpointBond } from '@nektar/anchor'
 import { parseFragment, fromHex } from '@nektar/core'
@@ -447,7 +447,10 @@ export class MarketEngine {
         try {
           if (i.kind === 'want') await this.onWant(i.payload as SignedWant)
           else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
-          else await this.onMessage((i.payload as any).from, (i.payload as any).msg, (i.payload as any).refs)
+          else {
+            const p = i.payload as { from: string; msg: MarketMessage; refs?: BoxRef[] }
+            await this.onMessage(p.from, p.msg, p.refs)
+          }
           await this.d.store.completeInbox(i.source, i.messageId)
         } catch (e) {
           await this.d.store.failInbox(i.source, i.messageId, (e as Error).message)
@@ -802,7 +805,14 @@ export class MarketEngine {
       cause: bad ? 'payload_does_not_match_commitment' : 'disclosure_verified',
       data: { result },
       dueHeight: null,
-      evidence: { txid: m.txid, verified: claim.verified, authorVerified: claim.authorVerified, reason: claim.reason, spv: got.spv, ...(refs !== undefined ? { refs } : {}) }
+      evidence: {
+        txid: m.txid,
+        verified: claim.verified,
+        authorVerified: claim.authorVerified,
+        reason: claim.reason,
+        spv: got.spv,
+        ...(refs !== undefined ? { refs } : {})
+      }
     })
   }
 
@@ -966,7 +976,7 @@ export class MarketEngine {
     await this.d.store.transition(operation.operationId, operation.revision, 'quoted', { cause: 'restored_from_note' })
   }
 
-  private async onMessage(from: string, m: MarketMessage, refs?: import('@nektar/bstack').BoxRef[]): Promise<void> {
+  private async onMessage(from: string, m: MarketMessage, refs?: BoxRef[]): Promise<void> {
     if (m?.type === 'quote') return await this.onQuote(from, m)
     if (m?.type === 'accept') return await this.onAccept(from, m)
     if (m?.type === 'delivered') return await this.onDelivered(from, m, refs)

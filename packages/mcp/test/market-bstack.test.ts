@@ -1035,8 +1035,10 @@ const sabotageEscrowBroadcast = (b: A, chain: StackChain, script: string, reject
       conflict.addOutput({ lockingScript: new P2PKH().lock(b.mem.operatorKey().toPublicKey().toAddress()), change: true })
       await conflict.fee()
       await conflict.sign()
-      await chain.broadcast(conflict)
-      return await orig(tx)
+      const cr = await chain.broadcast(conflict)
+      const rr = await orig(tx)
+      process.stderr.write(`[sabotage] conflict=${JSON.stringify(cr).slice(0, 140)} escrow=${JSON.stringify(rr).slice(0, 200)}\n`)
+      return rr
     }
     const r = await orig(tx)
     return { status: 'error', description: 'transport: connection reset' }

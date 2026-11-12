@@ -132,7 +132,18 @@ const getReceiver = (): LedgerReceiver => {
     try {
       if (existsSync(legacyPayFile()))
         for (const t of (JSON.parse(readFileSync(legacyPayFile(), 'utf8')).consumed ?? []) as string[])
-          receiver.claim({ txid: String(t), beef: [], outputIndex: 0, satoshis: 0, derivationPrefix: '', derivationSuffix: '', senderIdentityKey: '', class: 'x402', inputs: [], decision: 'fast' })
+          receiver.claim({
+            txid: String(t),
+            beef: [],
+            outputIndex: 0,
+            satoshis: 0,
+            derivationPrefix: '',
+            derivationSuffix: '',
+            senderIdentityKey: '',
+            class: 'x402',
+            inputs: [],
+            decision: 'fast'
+          })
     } catch {
       /* legacy file unreadable — txid-only protection survives in memory */
     }

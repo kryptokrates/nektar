@@ -40,6 +40,15 @@
     },
     {
       "path": "../reasoning"
+    },
+    {
+      "path": "../datalog"
+    },
+    {
+      "path": "../graph"
+    },
+    {
+      "path": "../zk"
     }
   ]
 }

@@ -7,11 +7,17 @@ const dsha256utf8 = (s: string) => dsha256(utf8(s))
 import { StackChain, StackFunder, stackTreasury, stackCfgFromEnv, stackUp } from '@nektar/chain'
 import { NektarMemory } from '@nektar/mcp'
 
-if (!(await stackUp())) {
-  console.error('pnpm e2e needs the local Teranode regtest stack (NEKTAR_RPC_*) — start it first')
+const stackCfg = stackCfgFromEnv()
+if (stackCfg === undefined) {
+  // same convention as packages/watcher/test/run.mjs — no stack env configured
+  // (real CI) is a skip, not a failure
+  console.log('# SKIP pnpm e2e needs the local Teranode regtest stack (NEKTAR_RPC_*) — start it first')
+  process.exit(0)
+}
+if (!(await stackUp(stackCfg))) {
+  console.error('regtest stack configured (NEKTAR_RPC_*) but unreachable — start it first')
   process.exit(1)
 }
-const stackCfg = stackCfgFromEnv()!
 const treasury = await stackTreasury()
 const mkfunder = (n: number) => StackFunder.fund(treasury, n)
 

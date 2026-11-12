@@ -263,7 +263,7 @@ export class StackChain implements ChainTracker, Broadcaster {
     return undefined
   }
   async merklePathOf(txid: string): Promise<MerklePath | undefined> {
-    const tx = await this.getTx(txid)
+    const tx = this.getTx(txid)
     if (tx?.merklePath !== undefined) return tx.merklePath
     const r = await merklePathFor(this.cfg, txid, this.tracker)
     if (r === null) return undefined
@@ -286,7 +286,7 @@ export class StackChain implements ChainTracker, Broadcaster {
     // Batched n>10 is chunked: the node's own RPC layer aborts generate calls
     // that run past ~30s, so big batches go in 10-block pieces.
     const hashes: string[] = []
-    for (let done = 0; done < n; ) {
+    for (let done = 0; done < n;) {
       const step = Math.min(10, n - done)
       let got: string[] | undefined
       for (let i = 0; i < 20 && got === undefined; i++) {
@@ -330,9 +330,10 @@ export class StackChain implements ChainTracker, Broadcaster {
       }
       if (coinbase !== undefined) {
         for (let i = 0; i < 120; i++) {
-          const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${coinbase}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(4_000) }).catch(
-            () => null
-          )
+          const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${coinbase}`, {
+            headers: { Authorization: auth },
+            signal: AbortSignal.timeout(4_000)
+          }).catch(() => null)
           if (r?.ok === true) break
           await new Promise((r) => setTimeout(r, 250))
         }
@@ -461,9 +462,7 @@ export class StackTreasury {
       this.reserve.reload()
       const leases = readLeases(join(STATE_DIR, 'leases.json'))
       const op = (u: { tx: Transaction; vout: number }) => `${u.tx.id('hex')}:${u.vout}`
-      const free = this.reserve.utxos
-        .filter((u) => u.satoshis >= 546 && leases[op(u)] === undefined)
-        .sort((a, b) => b.satoshis - a.satoshis)
+      const free = this.reserve.utxos.filter((u) => u.satoshis >= 546 && leases[op(u)] === undefined).sort((a, b) => b.satoshis - a.satoshis)
       // same coverage predicate leaseReserve applies: single ≥need or 16 largest
       const coverable = free.some((u) => u.satoshis >= need) || free.slice(0, 16).reduce((a, u) => a + u.satoshis, 0) >= need
       if (coverable) return

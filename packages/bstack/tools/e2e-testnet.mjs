@@ -115,11 +115,13 @@ const chainChange = (tx) => {
 const ledger = new MemoryTreeLedger()
 const journal = new MemoryCarrierJournal()
 const trees = []
-for (const [kind, lock] of [
+/** @type {Array<[string, import('@bsv/sdk').LockingScript | undefined]>} */
+const lanes = [
   ['market', undefined],
   ['bbox', await boxFundingLock(key)],
   ['finger', await fingerFundingLock(key)]
-]) {
+]
+for (const [kind, lock] of lanes) {
   const funding = await takeFunding(800)
   const tx = await mintTree({ key, funding, n: 4, satsPerOutput: 1, ...(lock !== undefined ? { lock } : {}) })
   const br = await broadcaster.broadcast(tx)
@@ -149,7 +151,10 @@ if (failures > 0) process.exit(1)
 const domain = 'e2e-testnet'
 const sw = signWant(key, { domains: [domain], question: 'bstack testnet smoke', maxSats: 1, ts: Date.now(), exp: Date.now() + 3600_000, net: NET })
 const pub = await publishArtifact({ key, ledger, journal, hosts: HOSTS, net: NET, payload: { v: 1, kind: 'want', body: sw } })
-check(pub.missed.length === 0 && pub.admitted.length === HOSTS.length, `want carrier admitted by ${pub.admitted.length}/${HOSTS.length} hosts (${pub.txid.slice(0, 16)}…)`)
+check(
+  pub.missed.length === 0 && pub.admitted.length === HOSTS.length,
+  `want carrier admitted by ${pub.admitted.length}/${HOSTS.length} hosts (${pub.txid.slice(0, 16)}…)`
+)
 let wantBack
 for (let i = 0; i < 20 && wantBack === undefined; i++) {
   const r = await readWants(HOSTS, { net: NET, domain }, { tracker, net: NET })
@@ -160,7 +165,15 @@ check(wantBack !== undefined, `want readable back via ls_nektar (wantId ${sw.wan
 
 // ── 4. bbox envelope + stock refs → ls_bbox read-back ────────────────────────
 const ref = { url: 'https://nektar.run/.well-known/nektar', sha256: 'a'.repeat(64), length: 512 }
-const sent = await sendBox({ key, ledger, journal, hosts: HOSTS, to: key.toPublicKey().toString(), body: { market: { type: 'smoke', at: Date.now() } }, refs: [ref] })
+const sent = await sendBox({
+  key,
+  ledger,
+  journal,
+  hosts: HOSTS,
+  to: key.toPublicKey().toString(),
+  body: { market: { type: 'smoke', at: Date.now() } },
+  refs: [ref]
+})
 // submitAll resolves early once quorum lands — the remaining leg completes in
 // the background, so `took` (answered ok) is the honest claim, not `admitted`
 check(sent.missed.length === 0, `envelope submitted to ${sent.took.length}/${HOSTS.length} hosts (${sent.txid.slice(0, 16)}…)`)
@@ -200,7 +213,12 @@ const member = await publishSubRecord({
   hosts: HOSTS,
   kind: 5,
   id: 1,
-  body: new CborMap([{ key: 'v', val: 1n }, { key: 'shard', val: 'smoke' }, { key: 'sha256', val: new Uint8Array(32) }, { key: 'size', val: 1n }])
+  body: new CborMap([
+    { key: 'v', val: 1n },
+    { key: 'shard', val: 'smoke' },
+    { key: 'sha256', val: new Uint8Array(32) },
+    { key: 'size', val: 1n }
+  ])
 })
 check(!!member.commitment, `kind-5 store member admitted (commitment ${member.commitment.slice(0, 16)}…)`)
 const manifest = await publishSubRecord({

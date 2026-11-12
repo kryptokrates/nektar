@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, Utils } from '@bsv/sdk'
 import { MemoryTreeLedger, mintTree } from '../src/tree.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
-import { MemoryFingerState, publishFinger, resolveFinger, fingerFundingLock, checkFingerBody, FINGER_KIND, type FingerBody } from '../src/finger.js'
+import { MemoryFingerState, KnexFingerState, publishFinger, resolveFinger, fingerFundingLock, checkFingerBody, FINGER_KIND, type FingerBody, type FingerState } from '../src/finger.js'
 import { mintCarrier } from '@lightwebinc/bcommon'
 import { encodeRecord, MagicV1, type CommittedRecord } from '@lightwebinc/bfinger-host/dist/record.js'
 
@@ -29,7 +29,8 @@ interface Rig {
   key: PrivateKey
   ledger: MemoryTreeLedger
   journal: MemoryCarrierJournal
-  state: MemoryFingerState
+  state: FingerState
+  kx?: import('knex').Knex
   hosts: string[]
   mined: Map<string, Transaction>
   broadcasts: Transaction[]
@@ -45,6 +46,7 @@ async function rig(
     provenFunding?: boolean
     gapFunding?: boolean
     liveMempool?: boolean
+    knexState?: boolean
     refuseBroadcast?: (tx: Transaction) => string | undefined
   } = {}
 ): Promise<Rig> {
@@ -54,7 +56,8 @@ async function rig(
   const key = PrivateKey.fromRandom()
   const ledger = new MemoryTreeLedger()
   const journal = new MemoryCarrierJournal()
-  const state = new MemoryFingerState()
+  const kx = o.knexState === true ? (await import('knex')).default({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true }) : undefined
+  const state: FingerState = kx !== undefined ? new KnexFingerState(kx) : new MemoryFingerState()
   const tree = await mintTree({ key, funding: fund(key), n: 8, satsPerOutput: 100, lock: await fingerFundingLock(key) })
   prove(tree)
   await ledger.add(tree, 8, FINGER_KIND)
@@ -101,7 +104,7 @@ async function rig(
   }
   const fetchTx = async (txid: string): Promise<Transaction | undefined> => mined.get(txid)
   const publish = async (body: FingerBody) => await publishFinger({ key, state, ledger, journal, hosts, body, takeFunding, broadcast, fetchTx })
-  return { tracker, h1, h2, key, ledger, journal, state, hosts, mined, broadcasts, publish, tree, mempool }
+  return { tracker, h1, h2, key, ledger, journal, state, kx, hosts, mined, broadcasts, publish, tree, mempool }
 }
 
 // 1. create → token mined → resolve on either host returns the body, seq 1
@@ -446,6 +449,30 @@ test('finger: a truncated journaled carrier re-mints instead of wedging', async 
     const got = await resolveFinger({ hosts: [s.h1.url], pub: s.key.toPublicKey().toString(), tracker: s.tracker })
     assert.equal(got?.seq, 2)
   } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
+})
+
+// the knex state store must round-trip refsHash — a publish dedupes on
+// (bodyHash, refsHash), and a store that drops refsHash reads back undefined,
+// fails the check every cycle, and remints a record on every upkeep tick
+// (live testnet: seq 12 -> 20 in seconds, funding slots drained)
+test('finger: knex state dedupes an unchanged republish', async () => {
+  const s = await rig({ noproof: true, provenFunding: true, knexState: true })
+  try {
+    const r1 = await s.publish(body1())
+    assert.equal(r1.seq, 1)
+    assert.equal(r1.changed, true)
+    const got = await s.state.get()
+    assert.notEqual(got?.refsHash, undefined, 'refsHash must persist through the knex store')
+    const r2 = await s.publish(body1())
+    assert.equal(r2.changed, false)
+    assert.equal(r2.seq, 1, 'unchanged body+refs must not advance seq')
+    const r3 = await s.publish(body1(['https://three.example.com']))
+    assert.equal(r3.seq, 2, 'a real body change still advances')
+  } finally {
+    await s.kx?.destroy()
     await s.h1.close()
     await s.h2.close()
   }

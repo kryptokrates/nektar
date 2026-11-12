@@ -164,7 +164,12 @@ export class KnexFingerState implements FingerState {
         t.string('tokenTxid').notNullable()
         t.text('tokenBeef').notNullable()
         t.string('bodyHash').notNullable()
+        t.string('refsHash').nullable()
         t.string('witness').nullable()
+      })
+    } else if (!(await this.kx.schema.hasColumn('bstack_finger_state', 'refsHash'))) {
+      await this.kx.schema.alterTable('bstack_finger_state', (t) => {
+        t.string('refsHash').nullable()
       })
     }
   }
@@ -178,12 +183,13 @@ export class KnexFingerState implements FingerState {
           tokenTxid: String(r.tokenTxid),
           tokenBeef: JSON.parse(String(r.tokenBeef)) as number[],
           bodyHash: String(r.bodyHash),
+          ...(r.refsHash !== null && r.refsHash !== undefined ? { refsHash: String(r.refsHash) } : {}),
           ...(r.witness !== null && r.witness !== undefined ? { witness: String(r.witness) } : {})
         }
   }
   async set(s: FingerStateRow): Promise<void> {
     await this.ensure()
-    const row = { seq: s.seq, tokenTxid: s.tokenTxid, tokenBeef: JSON.stringify(s.tokenBeef), bodyHash: s.bodyHash, witness: s.witness ?? null }
+    const row = { seq: s.seq, tokenTxid: s.tokenTxid, tokenBeef: JSON.stringify(s.tokenBeef), bodyHash: s.bodyHash, refsHash: s.refsHash ?? null, witness: s.witness ?? null }
     if ((await this.kx('bstack_finger_state').count('id as n').first())?.n === 0) {
       await this.kx('bstack_finger_state').insert(row)
     } else {

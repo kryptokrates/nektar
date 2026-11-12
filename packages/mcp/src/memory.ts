@@ -22,7 +22,8 @@ const DELTA_PREFIX = 'delta:'
 
 /** write refused at ingest (COM-003) */
 export class IngestError extends Error {}
-import { AnchorChain, CheckpointBond, type BondUtxo } from '@nektar/anchor'
+import { AnchorChain, type CheckpointBond, type BondUtxo } from '@nektar/anchor'
+import { BondOps } from './bonds.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import { deriveFragmentKey, deriveLevelKey, encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@nektar/crypto'
@@ -344,6 +345,12 @@ export class NektarMemory {
     this.logKey = opts.signingKey ?? PrivateKey.fromRandom()
     this.log = new BatchLog(store, this.logKey, opts.batchPolicy ?? { maxLeaves: 16 })
     if (opts.dataDir) this.budget = new BudgetAuthority(opts.dataDir)
+    this.bonds = new BondOps({
+      chain: this.chain, txs: () => this.txs, fetchTx: t => this.fetchTx(t),
+      takeFunding: s => this.takeFunding(s), fundKey: this.fundKey,
+      bondOpts: () => this.opts.bond, network: this.opts.network,
+      persist: () => this.persistState()
+    })
     this.restoreSecurityState()
     this.restoreState()
     // push confirmations: backends that emit status events (mock, regtest)
@@ -634,149 +641,14 @@ export class NektarMemory {
     return { revoked: this.revocations.has(key), root, matchesCurrent: root === current, smtProof, seq, anchored }
   }
 
-  // ── §12 SLA bond (NektarCheckpointBond) ────────────────────────────────
-  private bondContract?: CheckpointBond
-  private bondHead?: BondUtxo
-  // serializes covenant spends — two in-flight ops (manual call + background
-  // poll) racing the same parent produce one rejected double-spend
-  private bondBusy = false
-  private bondKey (): PrivateKey { return this.opts.bond?.ownerKey ?? this.fundKey }
+  // ── §12 SLA bond (NektarCheckpointBond) — lifecycle lives in bonds.ts ──
+  private bonds!: BondOps
 
-  /** deploy the checkpoint-bond covenant: `sats` locked, releasable after
-   *  `releaseHeight` (default: current height + horizonBlocks). From then on
-   *  every anchor commits its checkpoint digest — the on-chain history is
-   *  unforkable and timestamped, so promise/SLA violations are provable by
-   *  anyone replaying the commit chain. */
-  async bondDeploy (sats = this.opts.bond?.sats ?? 5_000, releaseHeight?: bigint, force = false): Promise<{ txid: string, releaseHeight: bigint }> {
-    if (this.bondHead && !force) throw new Error('bond already deployed')
-    // force: drop the local bond state — the old bond stays on-chain and
-    // remains seizeable under its own deadline; we just stop tracking it.
-    if (force) { this.bondContract = undefined; this.bondHead = undefined }
-    const key = this.bondKey()
-    const release = releaseHeight ?? BigInt(await this.chain.currentHeight()) + BigInt(this.opts.bond?.horizonBlocks ?? 1008)
-    const pkh = key.toPublicKey().toHash()
-    // mainnet's 100 sat/kB relay floor needs ~300-sat fees for a ~3KB covenant
-    // tx — the covenant's own residual bound (fee+2 ≤ maxFee+1) must allow it.
-    const mainnet = this.opts.network === 'main'
-    // mainnet's 100 sat/kB relay floor needs ~400-500-sat fees for ~4KB covenant
-    // spends — maxFee must leave headroom (residual = fee+2 ≤ maxFee+1).
-    const cfg = { operatorPkh: typeof pkh === 'string' ? pkh : toHex(Uint8Array.from(pkh)), bondReleaseHeight: release, maxFee: this.opts.bond?.maxFee ?? (mainnet ? 1500n : 10n), epochLen: BigInt(this.opts.bond?.epochBlocks ?? 144) }
-    this.bondContract = new CheckpointBond(cfg)
-    const fund = await this.takeFunding(sats + 600)
-    const { tx, sats: bondSats, script } = this.bondContract.buildDeploy({ tx: fund.tx, vout: fund.vout, satoshis: fund.satoshis }, key, sats, mainnet ? 300n : 1n)
-    await tx.sign() // P2PKH funding input — txid serialization needs the signed unlock
-    const utxo = this.bondContract.deployUtxo(tx, bondSats, script)
-    const br = await this.chain.broadcast(tx)
-    if (br.status !== 'success') { this.bondContract = undefined; throw new Error(`bond deploy broadcast failed: ${br.description ?? 'unknown'}`) }
-    this.txs.put(tx)
-    this.bondHead = utxo
-    this.persistState()
-    return { txid: tx.id('hex'), releaseHeight: release }
-  }
-
-  /** current on-chain bond state + head — absent when no bond was deployed.
-   *  `deadline` is the seize threshold: if chain height reaches it without a
-   *  commit, ANYONE may take the bond (§12 deadline-slashing). */
-  bondStatus (): { n: number, lastRoot: string, headTxid: string, sats: number, releaseHeight: bigint, deadline: bigint, seized: boolean, cfg?: { operatorPkh: string, bondReleaseHeight: bigint, maxFee: bigint, epochLen: bigint }, utxo?: { txid: string, vout: number, satoshis: number, script: string } } | null {
-    if (!this.bondContract || !this.bondHead) return null
-    const s = this.bondContract.stateOf(this.bondHead.script)
-    return { n: Number(s.n), lastRoot: s.lastRoot, headTxid: this.bondHead.txid, sats: this.bondHead.satoshis, releaseHeight: this.bondContract.params.bondReleaseHeight, deadline: s.deadline, seized: s.seized === 1n,
-      // the observer's reconstruction kit — the bond's public constructor
-      // args + its on-chain utxo. Anyone holding these can seize after the
-      // deadline; nothing secret is revealed.
-      cfg: { operatorPkh: this.bondContract.params.operatorPkh, bondReleaseHeight: this.bondContract.params.bondReleaseHeight, maxFee: this.bondContract.params.maxFee, epochLen: this.bondContract.params.epochLen },
-      utxo: this.bondHead }
-  }
-
-  /** seize an overdue bond — permissionless: valid only after the on-chain
-   *  deadline. Any observer can run this against a bond head they hold; the
-   *  payout goes to `payToScript` (default: this instance's operator). */
-  /** seize an overdue bond — permissionless: valid only once the on-chain
-   *  deadline has passed. With `bond: {cfg, utxo}` an OBSERVER seizes a bond
-   *  it never deployed — cfg is the bond's public constructor args (posted in
-   *  the bond's own manifest/attestation), utxo is read from the chain. No
-   *  local bond state or operator key is needed. */
-  async bondSeize (payToScript?: string, bond?: { cfg: ConstructorParameters<typeof CheckpointBond>[0], utxo: BondUtxo }): Promise<{ txid: string } | null> {
-    const contract = bond ? new CheckpointBond(bond.cfg) : this.bondContract
-    const head = bond ? bond.utxo : this.bondHead
-    if (!contract || !head) return null
-    if (this.bondBusy) throw new Error('bond op in flight')
-    this.bondBusy = true
-    try {
-      const height = await this.chain.currentHeight()
-      const s = contract.stateOf(head.script)
-      if (s.seized !== 0n) throw new Error('bond already seized')
-      if (BigInt(height) < s.deadline) throw new Error(`bond not yet seizable — deadline ${s.deadline}, height ${height}`)
-      const { buildP2PKHScript } = await import('@nektar/anchor')
-      const pkh = contract.params.operatorPkh
-      // the seize spends the REAL parent — a synthetic sourceTransaction
-      // mismatches the outpoint txid in the covenant's preimage and produces
-      // an invalid unlock on-chain. Fetch the actual bond deploy tx — on the
-      // INSTANCE's own network (never a silent mainnet fallback).
-      const parentTx = await this.fetchParentTx(head.txid)
-      // covenant bound: input − payoutSats (= fee + husk + change) ≤ maxFee+1
-      // → fee ≤ maxFee−1. Use exactly maxFee−1 so the residual equals the bound.
-      // fee: relay needs ~100sat/kB on main (~500 for a ~4KB covenant tx);
-      // the covenant bounds residual = fee+2 ≤ maxFee+1. Pick the lower of the
-      // two — 500 on main, maxFee−1 on test (where 1-sat relays pass anyway).
-      const spendFee = this.opts.network === 'main' ? 500n : BigInt(contract.params.maxFee) - 1n
-      const { tx } = await contract.buildSeize(head, payToScript ?? buildP2PKHScript(pkh), height, this.chain, spendFee, parentTx)
-      this.txs.put(tx)
-      if (!bond) { // only update local state for the bond WE deployed
-        this.bondHead = { txid: tx.id('hex'), vout: 1, satoshis: tx.outputs[1]!.satoshis!, script: tx.outputs[1]!.lockingScript.toHex() }
-        this.persistState()
-      }
-      return { txid: tx.id('hex') }
-    } finally { this.bondBusy = false }
-  }
-
-  /** the covenant preimage needs the REAL parent tx — a synthetic
-   *  sourceTransaction mismatches the outpoint txid and produces an invalid
-   *  unlock on-chain. Fetch it on the instance's own network. */
-  private async fetchParentTx (txid: string): Promise<import('@bsv/sdk').Transaction> {
-    const tx = await this.fetchTx(txid)
-    if (tx === undefined) throw new Error(`parent tx ${txid} is not known to this instance`)
-    return tx
-  }
-
-  /** commit a checkpoint root — keeps the bond alive past its current deadline. */
-  async bondCommit (root: string): Promise<{ txid: string, n: bigint } | null> {
-    if (!this.bondContract || !this.bondHead) return null
-    if (this.bondBusy) throw new Error('bond op in flight')
-    this.bondBusy = true
-    try {
-      const head = this.bondHead
-      const height = await this.chain.currentHeight()
-      const parentTx = await this.fetchParentTx(head.txid)
-      const commitFee = this.opts.network === 'main' ? 500n : BigInt(this.bondContract.params.maxFee) - 1n
-      const { tx, state } = await this.bondContract.buildCommit(head, this.bondKey(), root, height, this.chain, commitFee, parentTx)
-      this.txs.put(tx)
-      this.bondHead = { txid: tx.id('hex'), vout: 0, satoshis: tx.outputs[0]!.satoshis!, script: tx.outputs[0]!.lockingScript.toHex() }
-      this.persistState()
-      return { txid: tx.id('hex'), n: state.n }
-    } finally { this.bondBusy = false }
-  }
-
-  /** close the bond after its release height — operator reclaims the funds. */
-  async bondClose (): Promise<{ txid: string } | null> {
-    if (!this.bondContract || !this.bondHead) return null
-    const head = this.bondHead
-    const s = this.bondContract.stateOf(head.script)
-    const height = await this.chain.currentHeight()
-    if (this.bondBusy) throw new Error('bond op in flight')
-    this.bondBusy = true
-    try {
-      if (BigInt(height) < BigInt(this.bondContract.params.bondReleaseHeight)) throw new Error(`bond not yet releasable — release ${this.bondContract.params.bondReleaseHeight}, height ${height}`)
-      const parentTx = await this.fetchParentTx(head.txid)
-      const closeFee = this.opts.network === 'main' ? 500n : BigInt(this.bondContract.params.maxFee) - 1n
-      const { tx } = await this.bondContract.buildClose(head, this.bondKey(), height, this.chain, closeFee, parentTx)
-      this.txs.put(tx)
-      this.bondContract = undefined
-      this.bondHead = undefined
-      this.persistState()
-      return { txid: tx.id('hex') }
-    } finally { this.bondBusy = false }
-  }
+  async bondDeploy (sats = this.opts.bond?.sats ?? 5_000, releaseHeight?: bigint, force = false): Promise<{ txid: string, releaseHeight: bigint }> { return await this.bonds.deploy(sats, releaseHeight, force) }
+  bondStatus (): ReturnType<BondOps['status']> { return this.bonds.status() }
+  async bondSeize (payToScript?: string, bond?: { cfg: ConstructorParameters<typeof CheckpointBond>[0], utxo: BondUtxo }): Promise<{ txid: string } | null> { return await this.bonds.seize(payToScript, bond) }
+  async bondCommit (root: string): Promise<{ txid: string, n: bigint } | null> { return await this.bonds.commit(root) }
+  async bondClose (): Promise<{ txid: string } | null> { return await this.bonds.close() }
 
   /** build + sign the payment tx for an invoice (payQuote → invoice fields)
    *  using the instance's own fund key — the agent pays without an external
@@ -1494,17 +1366,11 @@ export class NektarMemory {
     // §12 SLA: the bond covenant mirrors the checkpoint on-chain — lastRoot
     // commits to the FULL signed checkpoint (digest binds logId+size+n+R+R'+
     // time+txid), making the history unforkable and publicly replayable.
-    if (this.bondContract && this.bondHead && !this.bondBusy) {
+    if (this.bonds.active) {
       const cp = cps[cps.length - 1]!
       const lastRoot = toHex(Uint8Array.from(checkpointDigest(cp)))
-      const key = this.opts.bond?.ownerKey ?? this.fundKey
-      this.bondBusy = true
-      try {
-        const c = await this.bondContract.buildCommit(this.bondHead, key, lastRoot, await this.chain.currentHeight(), this.chain)
-        this.bondHead = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0]!.satoshis!, script: c.tx.outputs[0]!.lockingScript.toHex() }
-        this.persistState()
-      } catch { this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed') }
-      finally { this.bondBusy = false }
+      const ok = await this.bonds.mirror(lastRoot)
+      if (!ok) this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed')
     }
     return { txid, n: res.head.data.n }
   }
@@ -1689,20 +1555,10 @@ export class NektarMemory {
     // §12 SLA watchdog: if no anchor renewed the bond for half an epoch,
     // commit the current root again — a lapsed deadline makes the bond
     // seizable by anyone, so the operator must refresh before it passes.
-    if (this.bondContract && this.bondHead) {
-      const height = await this.chain.currentHeight()
-      const s = this.bondContract.stateOf(this.bondHead.script)
-      const margin = this.bondContract.params.epochLen / 2n > 0n ? this.bondContract.params.epochLen / 2n : 1n
-      if (s.seized === 0n && !this.bondBusy && BigInt(height) + margin >= s.deadline) {
-        this.bondBusy = true
-        try {
-          const c = await this.bondContract.buildCommit(this.bondHead, this.opts.bond?.ownerKey ?? this.fundKey, s.lastRoot, height, this.chain)
-          this.bondHead = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0]!.satoshis!, script: c.tx.outputs[0]!.lockingScript.toHex() }
-          this.persistState()
-          this.metrics.inc('nektar_bond_renewals_total', {}, 1, 'bond deadline renewals committed by the SLA watchdog')
-        } catch { this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed') }
-        finally { this.bondBusy = false }
-      }
+    {
+      const renewed = await this.bonds.renewIfDue()
+      if (renewed === 'committed') this.metrics.inc('nektar_bond_renewals_total', {}, 1, 'bond deadline renewals committed by the SLA watchdog')
+      else if (renewed === 'failed') this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed')
     }
     return out
   }
@@ -1815,10 +1671,7 @@ export class NektarMemory {
         checkpoints: this.cps.get(shard) ?? [], certs: [...ac.rotationCerts], anchors
       }
     }
-    const bond = this.bondContract && this.bondHead ? {
-      txid: this.bondHead.txid, vout: this.bondHead.vout, satoshis: this.bondHead.satoshis, script: this.bondHead.script,
-      operatorPkh: this.bondContract.params.operatorPkh, releaseHeight: this.bondContract.params.bondReleaseHeight.toString(), maxFee: this.bondContract.params.maxFee.toString(), epochLen: this.bondContract.params.epochLen.toString()
-    } : undefined
+    const bond = this.bonds.snapshot()
     st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags), importedBundles: Object.fromEntries(this.importedBundles), bond, packStores: Object.fromEntries(this.packStores) } as PersistedMemoryState)
   }
   private restoreState (): void {
@@ -1842,10 +1695,7 @@ export class NektarMemory {
     for (const [k, b] of Object.entries(s.importedBundles ?? {})) this.importedBundles.set(k, b)
     for (const [shard, f] of Object.entries(s.flags ?? {})) this.flags.set(shard, f)
     for (const [shard, r] of Object.entries(s.packStores ?? {})) this.packStores.set(shard, r)
-    if (s.bond) {
-      this.bondContract = new CheckpointBond({ operatorPkh: s.bond.operatorPkh, bondReleaseHeight: BigInt(s.bond.releaseHeight), maxFee: BigInt(s.bond.maxFee), epochLen: BigInt(s.bond.epochLen ?? this.opts.bond?.epochBlocks ?? 144) })
-      this.bondHead = { txid: s.bond.txid, vout: s.bond.vout, satoshis: s.bond.satoshis, script: s.bond.script }
-    }
+    if (s.bond) this.bonds.restore(s.bond)
   }
 
   /**

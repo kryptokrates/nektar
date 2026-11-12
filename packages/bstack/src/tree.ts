@@ -56,7 +56,13 @@ const ownPath = (tree: Transaction): Transaction => {
 
 export interface TreeLedger {
   add(tree: Transaction, n: number, kind?: string): Promise<void>
-  take(kind?: string): Promise<{ tree: Transaction; vout: number } | undefined>
+  /**
+   *  Hands out the next free slot. `expectedLockHex`, when given, must equal
+   *  the leaf output's locking script hex — a stored tree minted under an
+   *  older identity produces carriers that always fail script evaluation, so
+   *  its slots are consumed and skipped instead of handed out.
+   */
+  take(kind?: string, expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined>
   markProven(txid: string, merklePath?: MerklePath): Promise<void>
   /** a funding parent's own proof: write it into every stored tree whose
    *  input ancestry still shows that parent unproven — after this the tree
@@ -87,12 +93,13 @@ export class MemoryTreeLedger implements TreeLedger {
     this.trees.set(txid, { tree, proven: false, kind })
     for (let i = 0; i < n; i++) this.free.add(`${txid}:${i}`)
   }
-  async take(kind = 'market'): Promise<{ tree: Transaction; vout: number } | undefined> {
+  async take(kind = 'market', expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined> {
     for (const k of this.free) {
       const [txid, v] = k.split(':')
       const t = this.trees.get(txid)!
       if (!serves(t, kind) || t.kind !== kind) continue
       this.free.delete(k)
+      if (expectedLockHex !== undefined && t.tree.outputs[Number(v)]?.lockingScript.toHex() !== expectedLockHex) continue
       return { tree: ownPath(t.tree), vout: Number(v) }
     }
     return undefined
@@ -184,9 +191,9 @@ export class KnexTreeLedger implements TreeLedger {
       if (rows.length) await trx('bstack_tree_outputs').insert(rows).onConflict('key').ignore()
     })
   }
-  async take(kind = 'market'): Promise<{ tree: Transaction; vout: number } | undefined> {
+  async take(kind = 'market', expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined> {
     await this.ensure()
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 5; ) {
       const r = await this.kx.transaction(async (trx) => {
         const row = await trx('bstack_tree_outputs as o')
           .join('bstack_trees as t', 'o.txid', 't.txid')
@@ -198,8 +205,12 @@ export class KnexTreeLedger implements TreeLedger {
         const n = await trx('bstack_tree_outputs').where({ key: row.key }).del()
         if (n !== 1) return false
         const t = await trx('bstack_trees').where({ txid: row.txid }).first()
-        return { tree: ownPath(Transaction.fromBEEF(JSON.parse(t.beef))), vout: row.vout }
+        const tree = ownPath(Transaction.fromBEEF(JSON.parse(t.beef)))
+        if (expectedLockHex !== undefined && tree.outputs[row.vout]?.lockingScript.toHex() !== expectedLockHex) return 'skip'
+        return { tree, vout: row.vout }
       })
+      if (r === 'skip') continue // poisoned leaf consumed — doesn't count against the race budget
+      attempt++
       if (r !== false && r !== null) return r
       if (r !== false) break
     }
@@ -213,6 +224,10 @@ export class KnexTreeLedger implements TreeLedger {
       .select('o.key', 'o.txid', 'o.vout', 't.beef')) {
       const tree = Transaction.fromBEEF(JSON.parse(row.beef as string))
       if (!anchoredTree(tree)) continue
+      if (expectedLockHex !== undefined && tree.outputs[row.vout]?.lockingScript.toHex() !== expectedLockHex) {
+        await this.kx('bstack_tree_outputs').where({ key: row.key }).del()
+        continue
+      }
       if ((await this.kx('bstack_tree_outputs').where({ key: row.key }).del()) === 1) return { tree, vout: row.vout }
     }
     return undefined

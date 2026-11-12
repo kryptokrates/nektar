@@ -75,7 +75,7 @@ export async function sendBox(p: {
     beef = hit.beef
     txid = hit.txid
   } else {
-    const slot = await p.ledger.take('bbox')
+    const slot = await p.ledger.take('bbox', (await boxFundingLock(p.key)).toHex())
     if (slot === undefined) throw new Error('no funding slot')
     const nowSec = Math.floor(Date.now() / 1000)
     const content = await sealEnvelope(w, ORIGINATOR, from, to, plain, nowSec)
@@ -135,9 +135,10 @@ export async function ackBox(p: {
   const receipts: string[] = []
   const w = new ProtoWallet(p.key)
   const by = new Uint8Array(Array.from(p.key.toPublicKey().encode(true) as number[]))
+  const bboxLock = (await boxFundingLock(p.key)).toHex()
   for (let c = 0; c < fresh.length; c += MaxAcks) {
     const chunk = fresh.slice(c, c + MaxAcks)
-    const slot = await p.ledger.take('bbox')
+    const slot = await p.ledger.take('bbox', bboxLock)
     if (slot === undefined) {
       skipped += chunk.length
       continue

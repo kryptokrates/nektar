@@ -349,7 +349,7 @@ export async function publishFinger(p: {
   }
   if (carrierBeef === undefined) {
     validateRecord(record)
-    const slot = await p.ledger.take(FINGER_KIND)
+    const slot = await p.ledger.take(FINGER_KIND, (await fingerFundingLock(p.key)).toHex())
     if (slot === undefined) throw new Error('publishFinger: no funding slot')
     const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_RECORD, encodeRecord(record), slot.tree, slot.vout)
     carrierBeef = carrier.toAtomicBEEF()
@@ -460,7 +460,7 @@ export async function publishSubRecord(p: {
     unknown: []
   }
   validateRecord(record)
-  const slot = await p.ledger.take(FINGER_KIND)
+  const slot = await p.ledger.take(FINGER_KIND, (await fingerFundingLock(p.key)).toHex())
   if (slot === undefined) throw new Error('publishSubRecord: no funding slot')
   const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_RECORD, encodeRecord(record), slot.tree, slot.vout)
   const beef = carrier.toAtomicBEEF()

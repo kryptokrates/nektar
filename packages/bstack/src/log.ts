@@ -146,7 +146,7 @@ export async function appendLog(p: {
       size: content.length,
       extra: []
     })
-    const slot = await p.ledger.take(LOG_KIND)
+    const slot = await p.ledger.take(LOG_KIND, (await logFundingLock(p.key)).toHex())
     if (slot === undefined) throw new Error('no funding slot')
     const carrier = await mintCarrier(new ProtoWallet(p.key), ORIGINATOR, DERIVATION_BATCH, record, slot.tree, slot.vout)
     beef = carrier.toAtomicBEEF()
@@ -487,8 +487,9 @@ export async function anchorLog(p: {
   tx.addOutput({ satoshis: 1, lockingScript: token })
   tx.addOutput({ lockingScript: new P2PKH().lock(p.key.toPublicKey().toAddress()), change: true })
   // funding inputs until the fee is covered
+  const logLock = (await logFundingLock(p.key)).toHex()
   for (let i = 0; i < 8; i++) {
-    const slot = await p.ledger.take(LOG_KIND)
+    const slot = await p.ledger.take(LOG_KIND, logLock)
     if (slot === undefined) {
       log('log anchor: no funding slot for the fee')
       return undefined

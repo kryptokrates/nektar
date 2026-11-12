@@ -1,9 +1,10 @@
-import { PrivateKey } from '@bsv/sdk'
+import { PrivateKey, ProtoWallet } from '@bsv/sdk'
 import { sha256, toHex } from '@nektar/core'
+import { fundingLock } from '@lightwebinc/bcommon'
 import { buildCarrier } from './carrier.js'
 import { encodePayload, lanesFor, bodyDomains, type MarketPayload } from './market.js'
 import { submitAll, type Quorum } from './hosts.js'
-import type { TreeLedger } from './tree.js'
+import { DERIVATION, FUNDING_TAG, ORIGINATOR, type TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 
 export function artifactHash(payload: MarketPayload): string {
@@ -28,7 +29,10 @@ export async function publishArtifact(p: {
     beef = held.beef
     txid = held.txid
   } else {
-    const slot = await p.ledger.take()
+    const slot = await p.ledger.take(
+      'market',
+      (await fundingLock(new ProtoWallet(p.key), ORIGINATOR, DERIVATION, FUNDING_TAG)).toHex()
+    )
     if (slot === undefined) throw new Error('no funding slot')
     const c = await buildCarrier({ key: p.key, payload: encodePayload(p.payload), slot })
     beef = c.beef

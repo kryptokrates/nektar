@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, Script, LockingScript } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { utf8 } from '@nektar/core'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -15,20 +15,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 function setup(opts: NektarMemoryOptions = {}) {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(50)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 50)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
   const settle = (shard: string) => {
-    chain.mine(1)
+    await chain.mine(1)
     const l = mem.tailLink(shard)
     if (l) mem.confirmAnchor(shard, l.txid)
   }
-  const payer = new MockFunder()
+  const payer = StackFunder.dry()
   payer.topup(4)
-  for (const t of payer.parents) chain.registerParent(t)
   return { chain, funder, mem, settle, payer }
 }
 

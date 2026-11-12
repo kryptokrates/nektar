@@ -84,6 +84,33 @@ jobs:
         env:
           NEKTAR_SANDBOX_E2E: '1'
 
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # gitleaks scans history
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: pnpm
+        run: corepack enable && corepack prepare pnpm@12.16.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - name: lint · format · version consistency · declared imports · dep graph · dead code
+        run: pnpm check:hygiene
+      - name: shellcheck
+        run: git ls-files '*.sh' | xargs shellcheck
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo "rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667" -color
+      - name: hadolint
+        run: docker run --rm -i "hadolint/hadolint@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d" < Dockerfile
+      - name: zizmor
+        run: docker run --rm -v "$PWD:/repo" -w /repo "ghcr.io/zizmorcore/zizmor@sha256:3014cc8f68f663935f69b3c3e0e41f5ce102b268d97db13db0f62208747f860d" .github/workflows
+      - name: gitleaks
+        run: docker run --rm -v "$PWD:/repo" -w /repo "zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f" git
+
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 30

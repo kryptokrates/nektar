@@ -345,6 +345,13 @@ export class StackFunder implements Funder {
   }
 }
 
+/** a bare chain handle — for tests that only broadcast/track, no funder */
+export async function stackChain(t: { skip: (m?: string) => void }): Promise<StackChain | undefined> {
+  const cfg = await skipUnlessStack(t)
+  if (cfg === undefined) return undefined
+  return (await stackTreasury(cfg)).chain
+}
+
 /** one-call convenience: `const { chain, funder } = await stackWorld(t, 30)` */
 export async function stackWorld(
   t: { skip: (m?: string) => void },

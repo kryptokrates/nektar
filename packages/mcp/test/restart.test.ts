@@ -9,17 +9,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory from 'knex'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { KnexShardStore } from '@nektar/log'
 import { NektarMemory, FileStateStore } from '../src/index.js'
 
 test('restart: resume from persisted head, no fork, proofs + level gate survive', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-restart-'))
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(20)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 20)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const knex = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'records.sqlite') }, useNullAsDefault: true })
   try {
     const store = new KnexShardStore(knex)
@@ -30,7 +28,7 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
     const a = new NektarMemory(chain, funder, funder.keyPair, opts(), store)
     await a.remember('s', 'public fact')
     await a.remember('s', 'secret fact', {}, 2)
-    chain.mine(1)
+    await chain.mine(1)
     a.confirmAnchor('s', a.tailLink('s')!.txid)
     await a.remember('s', 'c')
     await a.remember('s', 'd') // second anchor, unconfirmed at "crash"
@@ -43,7 +41,7 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
     await b.remember('s', 'e')
     const r = await b.remember('s', 'f')
     assert.equal(r.anchored?.n, 2, 'next anchor is n=2 — it spent the persisted head (a fork would be rejected by script/double-spend checks)')
-    chain.mine(1)
+    await chain.mine(1)
     // push confirmer: 'mined' status events deliver BUMPs for every txid this
     // instance tracks — including the anchor restored from BEEF — so nothing
     // stays unproven waiting on a poll

@@ -54,15 +54,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
+          # no cache in a publish workflow — a poisoned store reaches release assets
+          package-manager-cache: false
       - name: pnpm
         run: corepack enable && corepack prepare pnpm@12.16.1 --activate
-      - name: pnpm store cache
-        # tag builds run uncached — a poisoned store would reach the release asset
-        if: github.ref_type != 'tag'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.local/share/pnpm/store
-          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
         timeout-minutes: 10
@@ -79,7 +74,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" nektar-mcp-bundle.tar.gz --clobber
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" nektar-mcp-bundle.tar.gz --clobber
 
       # npm-publish removed — the bundle ships as a release asset
       # (nektar-mcp-bundle.tar.gz) and via the GHCR image instead

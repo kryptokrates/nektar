@@ -4,22 +4,20 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { diff, apply, revert, decodeDelta, encodeDelta, DeltaError, utf8 } from '@nektar/core'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { signProvenance } from '@nektar/log'
 import { makeRotationCert, verifyAuthorship } from '@nektar/identity'
 import { always, eventually, obligation, causalClosure, type TimedFact } from '@nektar/reasoning'
 import { axiomHash, ontologyEntails, Jurisdictions, validByPrecedent, type Axiom } from '@nektar/graph'
 import { NektarMemory } from '@nektar/mcp'
 
-function world() {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(20)
-  for (const t of funder.parents) chain.registerParent(t)
+function await world(t, ) {
+  const w = await stackWorld(t, 20)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const settle = (s: string) => {
-    chain.mine(1)
+    await chain.mine(1)
     const l = mem.tailLink(s)
     if (l) mem.confirmAnchor(s, l.txid)
   }
@@ -44,7 +42,7 @@ test('§8 delta: deterministic, invertible, unicode-safe; tampered Δ rejected',
 })
 
 test('§8 delta: revisions stored as Δ; every version materialises from proven links', async () => {
-  const { mem, settle } = world()
+  const { mem, settle } = await world(t, )
   const versions = [
     'Manual rev1: torque 45Nm, belt 10h',
     'Manual rev2: torque 55Nm, belt 10h',
@@ -128,7 +126,7 @@ test('§19 epoch binding: authorship survives rotation; wrong epoch / after expi
   assert.deepEqual(verifyAuthorship(k1.toPublicKey().toString(), 1, 1500, g, certs), { ok: true })
   assert.match(verifyAuthorship(k1.toPublicKey().toString(), 1, 900, g, certs).reason!, /outside/, 'before certification')
   // through NektarMemory: a signed write keeps its epoch and verifies after later rotations
-  const { mem } = world()
+  const { mem } = await world(t, )
   const p = signProvenance(k1, utf8('epoch-1 statement'), { source: 'op', time: 1500, signature: new Uint8Array(0), modelId: 'm' })
   await mem.remember('a', 'epoch-1 statement', { ...p, sourcePub: k1.toPublicKey().toString(), epoch: 1 })
   assert.deepEqual(await mem.authorship('a', 0, g, certs), { ok: true })
@@ -194,7 +192,7 @@ test('§16 delegation map: sub-decisions signed by delegating agents; tampering 
   }
   assert.equal(verifyReceiptDelegations(forged).ok, false, 'sig moved to another delegator fails')
   // commitReceipt anchors the receipt (with its delegation map) into __receipts__
-  const { mem } = world()
+  const { mem } = await world(t, )
   const { receiptHash } = await commitReceipt(receipt, mem)
   assert.equal(receiptHash.length, 64)
 })

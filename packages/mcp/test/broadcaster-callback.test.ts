@@ -1,16 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, type MerklePath } from '@bsv/sdk'
-import { MockChain, MockFunder, buildBump } from '@nektar/chain'
+import { buildBump, stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory, createHttpApi } from '../src/index.js'
 import type { Server } from 'node:http'
 
 const serve = async (): Promise<{ chain: MockChain; funder: MockFunder; mem: NektarMemory; srv: Server; base: string }> => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(10)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair)
   const srv = createHttpApi(mem).listen(0)
   await new Promise((r) => srv.once('listening', r))
@@ -27,7 +25,7 @@ const minedTx = async (chain: MockChain, funder: MockFunder): Promise<{ txid: st
   await tx.fee()
   await tx.sign()
   assert.equal((await chain.broadcast(tx)).status, 'success')
-  chain.mine(1)
+  await chain.mine(1)
   return { txid: tx.id('hex'), mp: chain.merklePathOf(tx.id('hex'))! }
 }
 

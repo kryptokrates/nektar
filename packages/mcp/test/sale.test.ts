@@ -4,19 +4,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { visibleTools, callTool } from '../src/server.js'
 
 const SALE_TOOLS = ['sale']
 
 function setup() {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const mk = (opts: any = {}) => {
-    const funder = new MockFunder()
+  const chain = (await stackChain(t))!
+    const mk = (opts: any = {}) => {
+    const funder = StackFunder.dry()
     funder.topup(50)
-    for (const t of funder.parents) chain.registerParent(t)
     return new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
   }
   return { chain, seller: mk(), buyer: mk(), mk }
@@ -198,7 +196,7 @@ test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before 
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const { chain, seller, buyer } = setup()
-    chain.mine(5) // push the mock tip to height 5
+    await chain.mine(5) // push the mock tip to height 5
     const buyerPub = buyer.operatorKey().toPublicKey().toString()
     // D9 — offer expiry is inside the signed digest and enforced at escrow time
     const expired = await callTool(seller, 'sale', { op: 'offer', value: 'aa', price: 100, refundAfter: 1_000_000, maxFee: 10, buyerPub, expiresAt: 3 })

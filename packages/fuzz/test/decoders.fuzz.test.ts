@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8, toHex } from '@nektar/core'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { verifyFragment } from '@nektar/verify'
 import {
@@ -75,15 +75,13 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const unhex = (s: string) => new Uint8Array(Buffer.from(s, 'hex'))
 
 async function anchoredWorld() {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(12)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 12)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   await mem.remember('f', 'a')
   await mem.remember('f', 'b')
-  chain.mine(1)
+  await chain.mine(1)
   mem.confirmAnchor('f', mem.tailLink('f')!.txid)
   return { chain, funder, mem }
 }
@@ -257,11 +255,9 @@ test('fuzz: disclosure envelope verifier rejects every byte-level mutation', () 
 })
 
 test('fuzz: NektarAutomaton decoder is byte-authenticated', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(4)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 4)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const ac = new AutomatonChain(
     { Q: ['a', 'b'], Sigma: ['x'], delta: [[0, 0, 1]], q0: 0, F: [1], O: [] },
     PrivateKey.fromRandom(),

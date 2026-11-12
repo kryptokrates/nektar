@@ -375,7 +375,9 @@ export async function publishMinedLog(p: { journal: CarrierJournal; hosts: strin
   if (hit !== undefined) {
     beef = hit.beef
   } else {
-    beef = p.tx.toBEEF()
+    // atomic BEEF — the canonical single-subject form an engine hands a
+    // whole-tx lookup service; non-atomic BEEF parses as garbage there
+    beef = p.tx.toAtomicBEEF()
     await p.journal.put(jkey, { txid, beef, topics })
   }
   const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum ?? 'one', retryWaits: [] })

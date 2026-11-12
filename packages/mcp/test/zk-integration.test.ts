@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { fromHex, dsha256, utf8 } from '@nektar/core'
@@ -29,16 +29,14 @@ const issued = (...q: string[]): QueryRegistry => {
 }
 
 async function anchoredBatch(R: Uint8Array, size: number, mine = true) {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(6)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const w = await stackWorld(t, 6)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const ac = new AnchorChain('stark', f.keyPair, f, f.keyPair, chain)
   await ac.anchor(size, R)
   const tx = ac.getHead()!.tx
   if (mine) {
-    chain.mine(1)
+    await chain.mine(1)
     ac.confirm(tx.id('hex'), chain.merklePathOf(tx.id('hex')))
   }
   return { chain, tx, ac, shard: decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
@@ -84,7 +82,7 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
     ],
     [
       'anchor not SPV-valid on this header chain',
-      verifyMembershipAnchoredStark(proofBytes(), good.tx, new MockChain(), issued(q), { shard: good.shard }),
+      verifyMembershipAnchoredStark(proofBytes(), good.tx, (await stackChain(t))!, issued(q), { shard: good.shard }),
       /BEEFInvalid|NotMined/
     ],
     ['queryId never issued', v(proofBytes(), good, issued()), /queryId/],
@@ -127,9 +125,9 @@ test('NektarMemory: issued ZK queries are single use and survive a restart (pers
       saved = JSON.parse(JSON.stringify(s))
     }
   }
-  const chain = new MockChain()
-  const f = new MockFunder()
-  f.topup(2)
+  const w = await stackWorld(t, 2)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const m1 = new NektarMemory(chain, f, f.keyPair, { securityStore: store })
   const q = m1.issueZkQuery('auditor')
   assert.match(q.queryId, /^[0-9a-f]{64}$/)
@@ -143,14 +141,12 @@ test('NektarMemory: issued ZK queries are single use and survive a restart (pers
 })
 
 test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own anchored batch', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(20)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const w = await stackWorld(t, 20)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 3 } })
   for (const d of ['a', 'b', 'c']) await mem.remember('s', d, {}, 0)
-  chain.mine(1)
+  await chain.mine(1)
   mem.confirmAnchor('s', mem.tailLink('s')!.txid)
   const q = mem.issueZkQuery('auditor')
   const { bytes } = await mem.proveMembership('s', 1, q.queryId)
@@ -166,7 +162,7 @@ test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own anchored 
 async function memWithFixtureAnchor() {
   const { chain, tx, ac } = await anchoredBatch(fromHex(fx.journal.root), 5)
   const authority = PrivateKey.fromRandom()
-  const f = new MockFunder()
+  const f = StackFunder.dry()
   f.topup(2)
   const mem = new NektarMemory(chain, f, f.keyPair, { clearanceAuthorities: [authority.toPublicKey().toString()] })
   ;(mem as any).anchors.set('s', ac)
@@ -213,15 +209,13 @@ test('§13 combined Π: the Π binding rejects proofs paired with an unrelated c
 })
 
 test('end-to-end §13 Π: membership STARK + ZKAccess clearance under ONE verifier query', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(20)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const w = await stackWorld(t, 20)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const authority = PrivateKey.fromRandom()
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 3 }, clearanceAuthorities: [authority.toPublicKey().toString()] })
   for (const d of ['a', 'b', 'c']) await mem.remember('s', d, {}, 0)
-  chain.mine(1)
+  await chain.mine(1)
   mem.confirmAnchor('s', mem.tailLink('s')!.txid)
   const q = mem.issueZkQuery('auditor')
   const holder = PrivateKey.fromRandom().toPublicKey().toString()

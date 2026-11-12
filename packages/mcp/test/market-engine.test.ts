@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory, { type Knex } from 'knex'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/bstack'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -28,10 +28,9 @@ interface Agent {
   file: string
 }
 
-function world(opts: { refundBlocks?: number } = {}) {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-market-'))
+function await world(t, opts: { refundBlocks?: number } = {}) {
+  const chain = (await stackChain(t))!
+    const dir = mkdtempSync(join(tmpdir(), 'nektar-market-'))
   const agents = new Map<string, Agent>()
   const feed: Array<{ seq: number; kind: string; payload: unknown }> = []
   const wire: string[] = []
@@ -105,9 +104,8 @@ function world(opts: { refundBlocks?: number } = {}) {
     sandbox: { mode: 'sandbox-only' }
   })
   const add = async (name: string, limits: Partial<AutomationPolicy['limits']> = {}): Promise<Agent> => {
-    const funder = new MockFunder()
+    const funder = StackFunder.dry()
     funder.topup(30)
-    for (const t of funder.parents) chain.registerParent(t)
     const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
     const file = join(dir, `${name}.sqlite`)
     const kx = knexFactory({ client: 'sqlite3', connection: { filename: file }, useNullAsDefault: true })
@@ -124,7 +122,7 @@ function world(opts: { refundBlocks?: number } = {}) {
     const a = await add(name)
     await a.mem.remember('guide', FINDING)
     await a.mem.remember('guide', 'unrelated note about gardening and tomatoes')
-    chain.mine(1)
+    await chain.mine(1)
     for (const l of a.mem.anchorLinks('guide')) a.mem.confirmAnchor('guide', l.txid)
     await a.mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'record', priceSats: price }] })
     await a.engine.enableSeller(a.policyHash)
@@ -171,7 +169,7 @@ function world(opts: { refundBlocks?: number } = {}) {
 }
 
 test('S1 mock: three sellers quote 450/300/200, buyer scores, pays the best, verifies the disclosure — no manual tool calls', async (t) => {
-  const w = world()
+  const w = await world(t, )
   t.after(w.close)
   const a = await w.seller('alice', 450),
     b = await w.seller('ben', 300),
@@ -225,7 +223,7 @@ test('S1 mock: three sellers quote 450/300/200, buyer scores, pays the best, ver
 })
 
 test('two wants from one buyer are answered and settled independently', async (t) => {
-  const w = world()
+  const w = await world(t, )
   t.after(w.close)
   const c = await w.seller('cara', 200)
   const bob = await w.add('bob')
@@ -242,7 +240,7 @@ test('two wants from one buyer are answered and settled independently', async (t
 })
 
 test('outside policy → paused for a human; approval is bound to the exact action; denial stops it', async (t) => {
-  const w = world()
+  const w = await world(t, )
   t.after(w.close)
   await w.seller('cara', 200)
   const bob = await w.add('bob', { maxLockedSats: 100 })
@@ -274,7 +272,7 @@ test('outside policy → paused for a human; approval is bound to the exact acti
 })
 
 test('seller goes dark after quoting → buyer refunds itself at the deadline; revoked policy stops new buying', async (t) => {
-  const w = world({ refundBlocks: 6 })
+  const w = await world(t, { refundBlocks: 6 })
   t.after(w.close)
   const c = await w.seller('cara', 200)
   const bob = await w.add('bob')
@@ -289,7 +287,7 @@ test('seller goes dark after quoting → buyer refunds itself at the deadline; r
   assert.equal((await bob.store.budgetStatus(bob.policyHash)).lockedSats, 210)
   await w.round([bob])
   assert.equal((await bob.engine.status(operationId))!.operation.state, 'awaiting_disclosure', 'no early refund')
-  w.chain.mine(8)
+  w.await chain.mine(8)
   await w.round([bob])
   st = (await bob.engine.status(operationId))!.operation
   assert.equal(st.state, 'refunded', st.lastError)
@@ -300,7 +298,7 @@ test('seller goes dark after quoting → buyer refunds itself at the deadline; r
 })
 
 test('hostile offers are rejected with reasons and never funded', async (t) => {
-  const w = world()
+  const w = await world(t, )
   t.after(w.close)
   const c = await w.seller('cara', 200)
   const bob = await w.add('bob')
@@ -317,7 +315,7 @@ test('hostile offers are rejected with reasons and never funded', async (t) => {
 })
 
 test('crash between escrow prepare and submit: restart resubmits the SAME bytes, no second escrow, no operator prompt', async (t) => {
-  const w = world()
+  const w = await world(t, )
   t.after(w.close)
   await w.seller('cara', 200)
   const bob = await w.add('bob')

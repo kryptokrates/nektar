@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction, Script } from '@bsv/sdk'
-import { MockChain, MockFunder, ReserveFunder } from '@nektar/chain'
+import { ReserveFunder, stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,11 +19,9 @@ async function open() {
 
 test('ledger: every owner broadcast is recorded with bytes before the outcome is known', async () => {
   const { kx, store } = await open()
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(2)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 2)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const r = await mem.sendSats({ amount: 500, address: PrivateKey.fromRandom().toPublicKey().toAddress([0x6f]) })
   // mem was constructed without a wrapped chain, so this is the owner-tool
@@ -41,11 +39,9 @@ test('ledger: every owner broadcast is recorded with bytes before the outcome is
 
 test('ledger: payInvoice exports a signed tx whose input stays leased — no phantom change, no second spend of the same outpoint', async () => {
   const { kx, store } = await open()
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(1)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 1)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   mem.ledger = store
   const inv = {

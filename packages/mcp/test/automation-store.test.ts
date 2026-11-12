@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { AutomationStore, RevisionConflict } from '../src/automation/store.js'
 import { WalletCoordinator } from '../src/automation/wallet.js'
 import { policyHash, policyError, decidePurchase, decideOffer, type AutomationPolicy, type ActionContext } from '../src/automation/policy.js'
@@ -245,10 +245,9 @@ async function payment(funder: MockFunder, sats = 500) {
 
 test('wallet: bytes persisted before submission; a crash between prepare and submit resumes the SAME tx', async (t) => {
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-auto-')), 'a.sqlite')
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(3)
+  const w = await stackWorld(t, 3)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   for (const p of funder.parents) chain.registerParent(p)
   const tx = await payment(funder)
   const a = await open(file)
@@ -284,7 +283,7 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
 test('wallet: one outpoint, one live action; guard refusal releases, network rejection does not', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
-  const funder = new MockFunder()
+  const funder = StackFunder.dry()
   funder.topup(1)
   const f = (funder as any).utxos[0] as { tx: Transaction; vout: number; satoshis: number }
   const build = async () => {

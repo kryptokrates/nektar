@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { minihost } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
 import { callTool, visibleTools } from '../src/server.js'
@@ -60,7 +60,7 @@ interface A {
   policyHash: string
 }
 const mkagent = async (name: string, o: { hosts: string[]; chain: MockChain; dir: string }): Promise<A> => {
-  const funder = new MockFunder()
+  const funder = StackFunder.dry()
   funder.topup(30)
   for (const t of funder.parents) o.chain.registerParent(t)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
@@ -85,7 +85,7 @@ const drive = async (rts: Automation[], chain: MockChain, n = 2) => {
   for (let i = 0; i < n; i++) {
     clock += 500
     for (const rt of rts) await rt.cycle()
-    chain.mine(1)
+    await chain.mine(1)
     await new Promise((r) => setTimeout(r, 25))
     for (const rt of rts) await rt.cycle()
   }
@@ -132,11 +132,9 @@ test('profile: agent lists exactly the nine agent tools; operator lists all', ()
 })
 
 test('profile: an operator-only tool is refused over HTTP and MCP in agent profile, allowed in operator profile', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(10)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const prev = process.env.NEKTAR_TOOL_PROFILE
   const srv = createHttpApi(mem).listen(0, '127.0.0.1')
@@ -173,15 +171,13 @@ test('profile: an operator-only tool is refused over HTTP and MCP in agent profi
 })
 
 test('profile: want refuses zero or several buyer policies; exactly one publishes', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
+  const chain = (await stackChain(t))!
+    const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
   const h = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   let rt: Automation | undefined
   try {
-    const funder = new MockFunder()
+    const funder = StackFunder.dry()
     funder.topup(30)
-    for (const t of funder.parents) chain.registerParent(t)
     const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test' })
     const pub = mem.operatorKey().toPublicKey().toString()
     rt = await openAutomation(mem, {
@@ -214,9 +210,8 @@ test('profile: want refuses zero or several buyer policies; exactly one publishe
 })
 
 test('profile: sell → want → deals drives a full deal; fund reports slot counts', { timeout: 300_000 }, async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
+  const chain = (await stackChain(t))!
+    const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
   const office = 'nektar_abcdefghij'
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
   const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
@@ -227,7 +222,7 @@ test('profile: sell → want → deals drives a full deal; fund reports slot cou
     const bb = b,
       ss = s
     await s.mem.remember('guide', FINDING)
-    chain.mine(1)
+    await chain.mine(1)
     for (const l of s.mem.anchorLinks('guide')) s.mem.confirmAnchor('guide', l.txid)
     const sr = (await callTool(ss.mem, 'sell', { shard: 'guide', domains: ['libfoo'], priceSats: 200 })) as { policyHash: string }
     assert.equal(sr.policyHash, s.policyHash)

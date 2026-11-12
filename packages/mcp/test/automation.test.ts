@@ -3,7 +3,7 @@
 // one-call broadcast sends, and bond covenant spend serialization.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MockChain, MockFunder, ReserveFunder } from '@nektar/chain'
+import { ReserveFunder, stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { PrivateKey, Transaction, P2PKH, Script } from '@bsv/sdk'
 import { mkdtempSync } from 'node:fs'
@@ -70,11 +70,9 @@ test('takeReserve: spendCheck prunes chain-spent candidates and tries the next',
 })
 
 test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(3, 50_000)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 3, 50_000)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const payee = PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])
   const r = await mem.sendSats({ amount: 5_000, address: payee })
@@ -85,10 +83,9 @@ test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change',
 })
 
 test('sendSats: scriptHex target + opReturn tag', async () => {
-  const chain = new MockChain()
-  const funder = new MockFunder()
-  funder.topup(1, 50_000)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 1, 50_000)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const payeeScript = new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])).toHex()
   const r = await mem.sendSats({ amount: 1_000, scriptHex: payeeScript, opReturn: 'nektar-test' })
@@ -101,10 +98,9 @@ test('sendSats: scriptHex target + opReturn tag', async () => {
 })
 
 test('bond ops serialize: a second covenant spend while one is in flight throws', async () => {
-  const chain = new MockChain()
-  const funder = new MockFunder()
-  funder.topup(5, 100_000)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 5, 100_000)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { bond: { sats: 5_000, epochBlocks: 3, horizonBlocks: 4 } })
   await mem.bondDeploy(5_000)
   const root = 'bb'.repeat(32)

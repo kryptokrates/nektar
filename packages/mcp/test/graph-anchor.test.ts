@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/index.js'
 import { AORGraph, GraphAnchor, PolicyDAG } from '@nektar/graph'
 import { parseProgram } from '@nektar/datalog'
@@ -12,18 +12,16 @@ const rules = () =>
 spec(S,V) :- requires(P,V), applies(S,P).`).rules
 
 test('AOR-006: GraphAnchor records + anchors vertex hashes; tamper detected', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(10)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 10 } })
   const ga = new GraphAnchor(mem, 'g1')
   const g = new AORGraph(rules())
   const e = g.append({ kind: 'episode', phi: 'requires(t, 45)', t: { logPos: 1 }, context: ['m'], sigma: [] }, [])
   await ga.record(e.h)
   await ga.anchor()
-  chain.mine(1)
+  await chain.mine(1)
   assert.ok(await ga.verifyVertex(e.h), 'recorded vertex verifies')
   assert.ok(!(await ga.verifyVertex('ff'.repeat(32))), 'tampered/foreign hash rejects')
   const { anchorTx } = ga.proveVertex(e.h)
@@ -31,11 +29,9 @@ test('AOR-006: GraphAnchor records + anchors vertex hashes; tamper detected', as
 })
 
 test('POL-016: policy DAG gates recall — ALLOW only when Cedar+DAG agree; conflict DENY; caller facts ignored', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(10)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const dag = new PolicyDAG([
     {
       name: 'org',
@@ -53,11 +49,9 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
 })
 
 test('POL-016b: per-item DAG permit — mixed batch withholds only the unpermitted fragment', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(10)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   // DAG permits ONLY 's/0' — 's/1' has no permit rule
   const dag = new PolicyDAG([
     {
@@ -70,7 +64,7 @@ permit(P, read, 's/0') :- member(P, verified).`).rules
   await mem.remember('s', 'permitted fragment', {}, 0)
   await mem.remember('s', 'withheld fragment', {}, 0)
   await mem.anchorShard('s')
-  chain.mine(1) // S6.1: plaintext is served only after SPV verify
+  await chain.mine(1) // S6.1: plaintext is served only after SPV verify
   const caller = PrivateKey.fromRandom()
   const nonce = mem.issueChallenge()
   const identity = {
@@ -90,11 +84,9 @@ permit(P, read, 's/0') :- member(P, verified).`).rules
 })
 
 test('POL-016c: anchoredPolicyRoot mismatch denies everything', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(10)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const dag = new PolicyDAG([
     {
       name: 'org',

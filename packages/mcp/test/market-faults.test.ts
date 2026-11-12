@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory, { type Knex } from 'knex'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '../src/automation/store.js'
@@ -27,16 +27,15 @@ function rng(seed: number) {
 test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes never double-pay or overrun the budget', async (t) => {
   for (let seed = 1; seed <= 20; seed++) {
     const rand = rng(seed)
-    const chain = new MockChain()
-    chain.verifyScripts = true
-    const dir = mkdtempSync(join(tmpdir(), `nektar-fault-${seed}-`))
+    const chain = (await stackChain(t))!
+        const dir = mkdtempSync(join(tmpdir(), `nektar-fault-${seed}-`))
     const kxs: Knex[] = []
     const feed: Array<{ seq: number; kind: string; payload: unknown }> = []
     const pending: Array<{ to: string; from: string; msg: MarketMessage }> = []
     const agents = new Map<string, { mem: NektarMemory; store: AutomationStore; engine: MarketEngine; pub: string; policyHash: string; name: string }>()
     const now = () => 1_800_000_000_000
     const mk = async (name: string, seller = false) => {
-      const funder = new MockFunder()
+      const funder = StackFunder.dry()
       funder.topup(30)
       for (const p of funder.parents) chain.registerParent(p)
       const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test', network: 'mock' })
@@ -110,7 +109,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
       agents.set(name, a)
       if (seller) {
         await mem.remember('guide', 'libfoo 3.0 renamed connect to open; replace connect( with open(')
-        chain.mine(1)
+        await chain.mine(1)
         for (const l of mem.anchorLinks('guide')) mem.confirmAnchor('guide', l.txid)
         await mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'record', priceSats: 200 }] })
         await engine.enableSeller(policyHash)

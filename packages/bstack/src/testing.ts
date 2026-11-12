@@ -151,6 +151,9 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
             } catch {
               tx = Transaction.fromBEEF(beefArr)
             }
+            // an engine always hands whole-tx admissions the ATOMIC form —
+            // a non-atomic BEEF does not parse inside the lookup service
+            const atomic = tx.toAtomicBEEF()
             const prevCoins: number[] = []
             for (const [i, inp] of tx.inputs.entries()) {
               const src = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
@@ -159,7 +162,7 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
             const r = await logTM.identifyAdmissibleOutputs(beefArr, prevCoins)
             admitted = admitted.concat(r.outputsToAdmit)
             stored.set(tx.id('hex'), beefArr)
-            for (const o of r.outputsToAdmit) await logLS!.outputAdmittedByTopic({ mode: 'whole-tx', atomicBEEF: beefArr, outputIndex: o, topic: t })
+            for (const o of r.outputsToAdmit) await logLS!.outputAdmittedByTopic({ mode: 'whole-tx', atomicBEEF: atomic, outputIndex: o, topic: t })
             continue
           }
           if (finger && t === 'tm_finger') {

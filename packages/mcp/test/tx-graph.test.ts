@@ -4,13 +4,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
-import { MockChain, MockFunder, TxStore, spendValid } from '@nektar/chain'
+import { TxStore, spendValid, stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/index.js'
 
 const liveMem = (): { mem: NektarMemory; chain: MockChain; funder: MockFunder } => {
-  const chain = new MockChain()
-  const funder = new MockFunder()
-  funder.topup(4)
+  const w = await stackWorld(t, 4)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const view = Object.create(chain) as MockChain
   ;(view as { getTx?: unknown }).getTx = undefined // live backends have no getTx
   return { mem: new NektarMemory(view, funder, funder.keyPair, { network: 'testnet' }), chain, funder }
@@ -27,7 +27,7 @@ const pair = async (chain: MockChain, mineParent: boolean): Promise<{ parent: Tr
   await parent.sign()
   if (mineParent) {
     assert.equal((await chain.broadcast(parent)).status, 'success')
-    chain.mine(1)
+    await chain.mine(1)
     parent.merklePath = chain.merklePathOf(parent.id('hex'))
     assert.ok(parent.merklePath !== undefined)
   }
@@ -122,7 +122,7 @@ test('wire: Extended Format when the parent is unproven; raw when it is unknown'
 })
 
 test('TxStore: a proof ends the stored ancestry and survives a reload', async () => {
-  const chain = new MockChain()
+  const chain = (await stackChain(t))!
   const { parent, child } = await pair(chain, true)
   const rows = new Map<string, { txid: string; raw: string; proof?: string }>()
   const persist = {
@@ -144,7 +144,7 @@ test('TxStore: a proof ends the stored ancestry and survives a reload', async ()
 })
 
 test('spendValid: a real spend passes; a spend of another output or a broken signature does not', async () => {
-  const chain = new MockChain()
+  const chain = (await stackChain(t))!
   const { parent, child } = await pair(chain, false)
   const src = { txid: parent.id('hex'), vout: 0, satoshis: 10_000, script: parent.outputs[0]!.lockingScript.toHex() }
   assert.equal(spendValid(child, 0, src), true)

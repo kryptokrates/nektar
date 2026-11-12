@@ -4,7 +4,7 @@
 // and the NEKTAR_PROOF_SHARDING opt-out.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { dsha256, utf8, merkleRoot } from '@nektar/core'
@@ -15,16 +15,14 @@ const leaves = (n: number) => Array.from({ length: n }, (_, i) => dsha256(utf8(`
 const subsetBytes = (n: number, idx: number[]) => encodeZkdis(buildSubsetProof(leaves(n), idx))
 
 async function anchoredBatch(R: Uint8Array, size: number, mine = true) {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(6)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const w = await stackWorld(t, 6)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const ac = new AnchorChain('dis', f.keyPair, f, f.keyPair, chain)
   await ac.anchor(size, R)
   const tx = ac.getHead()!.tx
   if (mine) {
-    chain.mine(1)
+    await chain.mine(1)
     ac.confirm(tx.id('hex'), chain.merklePathOf(tx.id('hex')))
   }
   return { chain, tx, shard: decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
@@ -69,7 +67,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
       })(),
       /NotMined/
     ],
-    ['anchor not SPV-valid on this header chain', verifySubsetAnchored(bytes(), good.tx, new MockChain(), { shard: good.shard }), /BEEFInvalid|NotMined/],
+    ['anchor not SPV-valid on this header chain', verifySubsetAnchored(bytes(), good.tx, (await stackChain(t))!, { shard: good.shard }), /BEEFInvalid|NotMined/],
     [
       'tampered disclosed leaf',
       (() => {
@@ -89,15 +87,13 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
 })
 
 test('NektarMemory: proveSubset + verifySubset over its own anchored batch; NEKTAR_PROOF_SHARDING=0 → disabled', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(20)
-  for (const u of (f as any).utxos) chain.registerParent(u.tx)
+  const w = await stackWorld(t, 20)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 100 } })
   for (let i = 0; i < 70; i++) await mem.remember('s', `rec-${i}`)
   await mem.anchorShard('s')
-  chain.mine(1)
+  await chain.mine(1)
   mem.confirmAnchor('s', mem.tailLink('s')!.txid)
   const seqs = [1, 63, 64, 69]
   const sub = await mem.proveSubset('s', seqs)
@@ -124,7 +120,7 @@ test('NektarMemory: proveSubset + verifySubset over its own anchored batch; NEKT
   await mem.remember('s', 'later-1')
   await mem.remember('s', 'later-2')
   await mem.anchorShard('s')
-  chain.mine(1)
+  await chain.mine(1)
   mem.confirmAnchor('s', mem.tailLink('s')!.txid)
   const span = await mem.proveSubset('s', [0, 70])
   assert.equal(span.ok, false)

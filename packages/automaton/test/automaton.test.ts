@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { utf8, dsha256, toHex } from '@nektar/core'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { MockChain MockFunder } from '@nektar/chain'
 import {
   Automaton,
   AutomatonError,
@@ -36,9 +36,9 @@ const OUT = toHex(dsha256(utf8('out')))
 // production path: NektarProvider over MockChain with Teranode-faithful script
 // evaluation — the chain is the oracle; owner key ≠ funding key.
 async function deployed(def = DEF) {
-  const chain = new MockChain()
+  const chain = (await stackChain(t))!
   chain.verifyScripts = true
-  const funder = new MockFunder()
+  const funder = StackFunder.dry()
   funder.topup(20)
   for (const t of funder.parents) chain.registerParent(t)
   const ac = new AutomatonChain(def, PrivateKey.fromRandom(), funder, funder.keyPair, chain)

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { BatchLog, MemoryShardStore } from '@nektar/log'
 import { utf8 } from '@nektar/core'
@@ -47,9 +47,9 @@ test('cedar: ALLOW/DENY decisions + level isolation (bounded exhaustive)', () =>
 })
 
 test('cedar: policy set + receipts anchored via AnchorChain', async () => {
-  const chain = new MockChain()
-  const f = new MockFunder()
-  f.topup(6)
+  const w = await stackWorld(t, 6)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
   const ac = new AnchorChain('policy', f.keyPair, f, f.keyPair, chain)
   const ps = canonicalizePolicySet('p1', POLICY)
@@ -57,7 +57,7 @@ test('cedar: policy set + receipts anchored via AnchorChain', async () => {
   await log.remember('policy', { d: utf8(ps.hash), p: { source: 'policy', time: 1, signature: new Uint8Array(0), modelId: 'm1' } })
   const batch = await log.closeBatch('policy')
   const h = await ac.anchor(batch!.size, batch!.R)
-  chain.mine(1)
+  await chain.mine(1)
   assert.ok(h.tx.merklePath)
   const anchoredHash = ps.hash // the anchored commitment
   // a receipt must match the anchored hash

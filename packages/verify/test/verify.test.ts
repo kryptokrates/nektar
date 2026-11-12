@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8, computeLeaf, merkleRoot, merkleProof, toHex } from '@nektar/core'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { buildProofBundle, verifyFragment, type AnchorLink } from '../src/bundle.js'
 
@@ -12,18 +12,18 @@ const frag = (s: string) => ({
 })
 
 async function scenario() {
-  const chain = new MockChain()
-  const funder = new MockFunder()
-  funder.topup(10)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   for (const u of (funder as any).utxos as Array<{ tx: import('@bsv/sdk').Transaction }>) {
     chain.mempool.set(u.tx.id('hex'), u.tx)
   }
-  chain.mine(1)
+  await chain.mine(1)
   const ac = new AnchorChain('s1', PrivateKey.fromRandom(), funder, funder.keyPair, chain)
   const leaves = [frag('oil change'), frag('belt inspection')].map(computeLeaf)
   const R = merkleRoot(leaves)
   const g = await ac.anchor(leaves.length, R)
-  chain.mine(1)
+  await chain.mine(1)
   ac.confirm(g.tx.id('hex'), g.tx.merklePath)
   const link0: AnchorLink = { txid: g.tx.id('hex'), outputIndex: 0, n: 0, size: 2, R: toHex(R), Rp: toHex(g.head.data.Rp) }
   const bundle = buildProofBundle({
@@ -69,7 +69,7 @@ test('verify: unmined anchor still verifies locally (settled=false)', async () =
   const tx = Transaction.fromAtomicBEEF(bundle.anchorBEEF)
   tx.merklePath = undefined as any
   bundle.anchorBEEF = tx.toAtomicBEEF()
-  const res = await verifyFragment(bundle, new MockChain())
+  const res = await verifyFragment(bundle, (await stackChain(t))!)
   // mining is settlement, not validity: leaf path + anchor fields + chain
   // consistency all verify without a BUMP — the result reports unsettled
   assert.equal(res.ok, true)
@@ -112,9 +112,9 @@ test('verify: path one missing sibling rejected', async () => {
 test('verify: odd-batch duplicate-last-leaf claim rejected', async () => {
   // 3 leaves: merkleProof(leaves,2) path includes the self-paired sibling.
   // Claiming index = size (3) must fail binding even though the sibling exists.
-  const chain2 = new MockChain()
-  const f2 = new MockFunder()
-  f2.topup(10)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain2, funder: f2 } = w
   for (const u of (f2 as any).utxos as Array<{ tx: import('@bsv/sdk').Transaction }>) {
     chain2.mempool.set(u.tx.id('hex'), u.tx)
   }

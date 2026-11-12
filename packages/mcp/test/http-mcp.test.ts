@@ -4,18 +4,16 @@ import assert from 'node:assert/strict'
 import type { AddressInfo } from 'node:net'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory, createHttpApi } from '../src/index.js'
 
 process.env.NEKTAR_TOOL_PROFILE = 'operator'
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 
 test('MCP Streamable HTTP: session, tools, call, resource; unknown session rejected', { timeout: 30_000 }, async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(10)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const srv = createHttpApi(mem).listen(0, '127.0.0.1')
   await new Promise((r) => srv.once('listening', r))

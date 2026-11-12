@@ -2,18 +2,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { AddressInfo } from 'node:net'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { verifyCheckpoint } from '@nektar/log'
 import { NektarMemory, createHttpApi, OPENAPI } from '../src/index.js'
 
 process.env.NEKTAR_TOOL_PROFILE = 'operator'
 
 test('HTTP API: tools, public proof + checkpoint, metrics move, every route documented', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(10)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const srv = createHttpApi(mem).listen(0)
   await new Promise((r) => srv.once('listening', r))
@@ -24,7 +22,7 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
     assert.equal((await post('remember', { shard: 'm', data: 'torque 45Nm' })).status, 200)
     await post('remember', { shard: 'm', data: 'belt 10h' })
     assert.equal((await fetch(`${base}/checkpoint/none`)).status, 404)
-    chain.mine(1)
+    await chain.mine(1)
     mem.confirmAnchor('m', mem.tailLink('m')!.txid)
     const pr = (await (await fetch(`${base}/proof/m/0`)).json()) as { result: { ok: boolean }; bundle: unknown }
     assert.deepEqual(pr.result, { ok: true, settled: true, anchorState: 'mined' })
@@ -70,11 +68,9 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
 test('HTTP API: NEKTAR_HTTP_TOKEN gates every route except /v1/health', async () => {
   process.env.NEKTAR_HTTP_TOKEN = 't0ken-xyz'
   try {
-    const chain = new MockChain()
-    chain.verifyScripts = true
-    const funder = new MockFunder()
-    funder.topup(4)
-    for (const t of funder.parents) chain.registerParent(t)
+    const w = await stackWorld(t, 4)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
     const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
     const srv = createHttpApi(mem).listen(0)
     await new Promise((r) => srv.once('listening', r))
@@ -95,11 +91,9 @@ test('HTTP API: NEKTAR_HTTP_TOKEN gates every route except /v1/health', async ()
 })
 
 test('verify page: OG unfurl meta + install CTA + copyable badge markdown', async () => {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(10)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 10)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const srv = createHttpApi(mem).listen(0)
   await new Promise((r) => srv.once('listening', r))
@@ -108,12 +102,12 @@ test('verify page: OG unfurl meta + install CTA + copyable badge markdown', asyn
   try {
     await post('remember', { shard: 'm', data: 'torque 45Nm' })
     await post('remember', { shard: 'm', data: 'belt 10h' })
-    chain.mine(1)
+    await chain.mine(1)
     mem.confirmAnchor('m', mem.tailLink('m')!.txid)
     const g = (await (await post('groundedAnswer', { claims: [{ text: 'torque 45Nm', cites: [{ shard: 'm', seq: 0 }] }] })).json()) as {
       share?: { token: string }
     }
-    chain.mine(1)
+    await chain.mine(1)
     mem.confirmAnchor('__receipts__', mem.tailLink('__receipts__')!.txid)
     const html = await (await fetch(`${base}/v1/verify?r=${encodeURIComponent(g.share!.token)}`, { headers: { accept: 'text/html' } })).text()
     assert.match(html, /<meta property="og:title"/, 'OG title for unfurls')

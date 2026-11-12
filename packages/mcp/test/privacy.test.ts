@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
@@ -17,14 +17,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 function setup(opts: NektarMemoryOptions = {}) {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(20)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 20)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-priv-')), ...opts })
   const settle = (shard: string) => {
-    chain.mine(1)
+    await chain.mine(1)
     const l = mem.tailLink(shard)
     if (l) mem.confirmAnchor(shard, l.txid)
   }
@@ -54,9 +52,9 @@ test('private flag persists across a restart (stateStore round-trip)', async () 
       saved = JSON.parse(JSON.stringify(s))
     }
   }
-  const chain = new MockChain()
-  const f = new MockFunder()
-  f.topup(2)
+  const w = await stackWorld(t, 2)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const m1 = new NektarMemory(chain, f, f.keyPair, { stateStore: store })
   m1.setShardPrivate('hr')
   assert.equal(saved.flags.hr.private, true, 'flag written to the persisted state')

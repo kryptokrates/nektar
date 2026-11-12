@@ -6,17 +6,15 @@ import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Transaction, P2PKH } from '@bsv/sdk'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { txLogBroadcast } from '../src/runtime.js'
 
 test('tx log: two successful broadcasts → two lines with correct fee', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-txlog-'))
   const logPath = join(dir, 'tx-log.jsonl')
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(3, 10_000)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 3, 10_000)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const broadcast = txLogBroadcast(chain.broadcast.bind(chain), logPath)
   const spend = (parent: Transaction, sats: number): Transaction => {
     const tx = new Transaction()
@@ -50,7 +48,7 @@ test('tx log: two successful broadcasts → two lines with correct fee', async (
 })
 
 test('tx log: no path → the wrap is a pass-through', async () => {
-  const chain = new MockChain()
+  const chain = (await stackChain(t))!
   const inner = chain.broadcast.bind(chain)
   assert.equal(txLogBroadcast(inner, undefined), inner)
   assert.equal(txLogBroadcast(inner, ''), inner)

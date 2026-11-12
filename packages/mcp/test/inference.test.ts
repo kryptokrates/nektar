@@ -6,7 +6,7 @@
 // other (input,output) is refused before it can enter a receipt.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
@@ -19,14 +19,12 @@ import { join } from 'node:path'
 process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 
 function setup(opts: NektarMemoryOptions = {}) {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(20)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 20)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-inf-')), ...opts })
   const settle = (shard: string) => {
-    chain.mine(1)
+    await chain.mine(1)
     const l = mem.tailLink(shard)
     if (l) mem.confirmAnchor(shard, l.txid)
   }
@@ -158,11 +156,9 @@ test('commitReceipt auto-attests in one call; exclusive with modelAttestation', 
 
 test('attestInference: on-chain when artifacts + funding exist (mock evaluates the 398KB verifier)', { timeout: 120_000 }, async () => {
   delete process.env.NEKTAR_GROTH16_OUT
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const f = new MockFunder()
-  f.topup(5, 100_000)
-  for (const t of f.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 5, 100_000)
+  if (w === undefined) return
+  const { chain: chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-inf-on-')) })
   const { existsSync } = await import('node:fs')
   const dir = new URL('../../../../tools/groth16-spike/out/', import.meta.url)
@@ -183,7 +179,7 @@ test('attestInference: on-chain when artifacts + funding exist (mock evaluates t
     checkResult: 'verified',
     modelAttestation: r.attestation
   })
-  chain.mine(1)
+  await chain.mine(1)
   const l = mem.tailLink('__receipts__')
   if (l) mem.confirmAnchor('__receipts__', l.txid)
   const v = await verifyReceipt(mem, { receiptHash: c.receiptHash })

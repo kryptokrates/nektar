@@ -5,15 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey } from '@bsv/sdk'
 import { utf8 } from '@nektar/core'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { signProvenance, verifyCheckpoint, PromiseMonitor } from '@nektar/log'
 import { signBinding, answerChallenge, issueClearance, proveAccess } from '@nektar/identity'
 import { NektarMemory, IngestError, FileSecurityStore, type NektarMemoryOptions } from '../src/index.js'
 
-function world(opts: NektarMemoryOptions = {}, chain = new MockChain(), funder = new MockFunder()) {
-  chain.verifyScripts = true
-  funder.topup(20)
-  for (const t of funder.parents) chain.registerParent(t)
+async function await world(t, t: { skip: (m?: string) => void }opts: NektarMemoryOptions = {}, shared?: { chain: any, funder: any }) {
+    funder.topup(20)
   return { chain, funder, mem: new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts }) }
 }
 const P = { source: 'doi:10.1/manual', time: 1_700_000_000, signature: new Uint8Array(0), modelId: 'm' }
@@ -21,7 +19,7 @@ const P = { source: 'doi:10.1/manual', time: 1_700_000_000, signature: new Uint8
 test('COM-003: signed provenance verified at ingest; unsigned refused when required', async () => {
   const src = PrivateKey.fromRandom()
   const pub = src.toPublicKey().toString()
-  const { mem } = world({ requireSignedProvenance: true, agentSeed: PrivateKey.fromRandom() })
+  const { mem } = await world(t, { requireSignedProvenance: true, agentSeed: PrivateKey.fromRandom() })
   const p = signProvenance(src, utf8('torque 45Nm'), P)
   assert.equal((await mem.remember('m', 'torque 45Nm', { ...p, sourcePub: pub })).seq, 0, 'valid signature accepted (encrypted store)')
   await assert.rejects(
@@ -35,11 +33,11 @@ test('COM-003: signed provenance verified at ingest; unsigned refused when requi
     'wrong key'
   )
   await assert.rejects(() => mem.remember('m', 'unsigned'), /unsigned provenance refused/)
-  assert.equal((await world().mem.remember('m', 'unsigned ok when not required')).seq, 0)
+  assert.equal((await await world(t, ).mem.remember('m', 'unsigned ok when not required')).seq, 0)
 })
 
 test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms promises', async () => {
-  const { mem } = world()
+  const { mem } = await world(t, )
   const t0 = Date.now()
   await mem.remember('s', 'a')
   await mem.remember('s', 'b')
@@ -66,24 +64,24 @@ test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms
 })
 
 test('LOG-006: flushDue anchors on the age threshold without a new write', async () => {
-  const { mem } = world({ batchPolicy: { maxLeaves: 100, maxAgeMs: 0 } })
+  const { mem } = await world(t, { batchPolicy: { maxLeaves: 100, maxAgeMs: 0 } })
   const r = await mem.remember('s', 'lonely record') // maxAgeMs 0 → due immediately
   assert.ok(r.anchored, 'closed on age at write time')
-  const { mem: m2 } = world({ batchPolicy: { maxLeaves: 100, maxBytes: 1_000_000 } })
+  const { mem: m2 } = await world(t, { batchPolicy: { maxLeaves: 100, maxBytes: 1_000_000 } })
   await m2.remember('s', 'x')
   assert.deepEqual(await m2.flushDue(), [], 'nothing due')
 })
 
 test('CHN-006: pending → mined → final; requireFinal withholds until finalityDepth', async () => {
-  const { chain, mem } = world({ finalityDepth: 3 })
+  const { chain, mem } = await world(t, { finalityDepth: 3 })
   await mem.remember('s', 'a')
   await mem.remember('s', 'b')
   assert.equal((await mem.anchorStatus('s', 0)).state, 'pending')
-  chain.mine(1)
+  await chain.mine(1)
   mem.confirmAnchor('s', mem.tailLink('s')!.txid)
   assert.deepEqual(await mem.anchorStatus('s', 0), { state: 'mined', confirmations: 1, depth: 3 })
   assert.match((await mem.recall('s', { seq: 0, requireFinal: true })).items[0]!.reason!, /not final: 1\/3 confirmations/)
-  chain.mine(2)
+  await chain.mine(2)
   assert.equal((await mem.anchorStatus('s', 0)).state, 'final')
   assert.equal((await mem.recall('s', { seq: 0, requireFinal: true })).items[0]!.text, 'a')
 })
@@ -92,7 +90,7 @@ test('persistence: challenges, used ZK transcripts and revocations survive a res
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-sec-')), 'security.json')
   const authority = PrivateKey.fromRandom()
   const opts = { securityStore: new FileSecurityStore(file), clearanceAuthorities: [authority.toPublicKey().toString()] }
-  const a = world(opts)
+  const a = await world(t, opts)
   await a.mem.remember('s', 'secret', {}, 1)
   await a.mem.remember('s', 'x')
   const key = PrivateKey.fromRandom()
@@ -102,7 +100,7 @@ test('persistence: challenges, used ZK transcripts and revocations survive a res
   const cred = issueClearance(authority, 2n, pub)
   const transcript = { queryId: 'q', fragmentId: 's/0', nonce: new Uint8Array(32).fill(5) }
   const zk = { commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, transcript)!, transcript, requiredLevel: 1n }
-  a.chain.mine(1)
+  await a.chain.mine(1)
   a.mem.confirmAnchor('s', a.mem.tailLink('s')!.txid) // S6.1: plaintext is served only after SPV verify
   assert.equal((await a.mem.recall('s', { seq: 0, identity, zk })).items[0]!.text, 'secret')
   const revoked = PrivateKey.fromRandom().toPublicKey().toString()

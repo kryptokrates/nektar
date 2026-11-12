@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { AddressInfo } from 'node:net'
 import knexFactory from 'knex'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { createHttpApi } from '../src/http.js'
 import { AutomationStore } from '../src/automation/store.js'
@@ -10,9 +10,9 @@ import { AutomationStore } from '../src/automation/store.js'
 test('dashboard automation inbox: agent bearer cannot approve; operator token can; origin and expiry enforced', async (t) => {
   process.env.NEKTAR_HTTP_TOKEN = 'agent-token'
   process.env.NEKTAR_OPERATOR_TOKEN = 'operator-token'
-  const chain = new MockChain()
-  const funder = new MockFunder()
-  funder.topup(1)
+  const w = await stackWorld(t, 1)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   const store = new AutomationStore(kx)

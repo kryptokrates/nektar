@@ -3,21 +3,19 @@
 // layer, the pack flow, and the discovery-doc projection.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MockChain, MockFunder } from '@nektar/chain'
+import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory, type NektarMemoryOptions, CATALOG_SHARD } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { createHttpApi } from '../src/http.js'
 import type { AddressInfo } from 'node:net'
 
 function setup(opts: NektarMemoryOptions = {}) {
-  const chain = new MockChain()
-  chain.verifyScripts = true
-  const funder = new MockFunder()
-  funder.topup(50)
-  for (const t of funder.parents) chain.registerParent(t)
+  const w = await stackWorld(t, 50)
+  if (w === undefined) return
+  const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
   const settle = (shard: string) => {
-    chain.mine(1)
+    await chain.mine(1)
     const l = mem.tailLink(shard)
     if (l) mem.confirmAnchor(shard, l.txid)
   }

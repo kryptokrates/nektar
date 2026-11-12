@@ -20,7 +20,7 @@ export function hashNode(left: SmtHash, right: SmtHash): SmtHash {
 }
 
 const emptyTable: SmtHash[] = (() => {
-  const t: SmtHash[] = new Array<SmtHash>(SMT_DEPTH + 1).fill(EMPTY_LEAF)
+  const t: SmtHash[] = Array.from({ length: SMT_DEPTH + 1 }, () => EMPTY_LEAF)
   for (let d = SMT_DEPTH - 1; d >= 0; d--) t[d] = hashNode(t[d + 1]!, t[d + 1]!)
   return t
 })()

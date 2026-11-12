@@ -127,6 +127,10 @@ export interface NektarMemoryOptions {
    *  when a manifest is committed (env NEKTAR_BSTORE_*); absent = feature off
    *  and /v1/pack/{shard} stays the only pack endpoint */
   objectStore?: import('./objectstore.js').S3ObjectStore
+  /** the bfinger packs store: stored packs also commit as kind-5 sub-records
+   *  under the operator identity so a reader resolves them through the
+   *  record's refs — no /.well-known or operator origin needed. */
+  packsStore?: import('./packstore.js').PacksStore
   /** data dir for the public proof store (proofs/<sha256>) — defaults to
    *  NEKTAR_DATA_DIR or ./.nektar; proofs committed in private cites are
    *  served publicly for independent re-verification. */
@@ -183,6 +187,9 @@ export interface PersistedMemoryState {
   /** object-store refs of packs this instance PUT to bstore — keyed by shard;
    *  lets /.well-known/nektar name the store location across restarts */
   packStores?: Record<string, import('./objectstore.js').ObjectRef>
+  /** the bfinger packs store's members + manifest seq — survives a restart
+   *  that boots without lanes so a later lanes-up run keeps committing. */
+  packsStore?: { members?: import('./packstore.js').PackMember[]; manifestSeq?: number }
 }
 export interface MemoryStateStore {
   load: () => PersistedMemoryState | undefined
@@ -1759,6 +1766,7 @@ export class NektarMemory {
   /** bstore refs of packs this instance PUT (describeShard) — persisted in
    *  state so /.well-known/nektar keeps naming them across restarts */
   private packStores = new Map<string, import('./objectstore.js').ObjectRef>()
+  private savedPacksStore: { members?: import('./packstore.js').PackMember[]; manifestSeq?: number } | undefined
   /** is this shard declared private? */
   shardPrivate(shard: string): boolean {
     return this.flags.get(shard)?.private === true
@@ -1934,11 +1942,37 @@ export class NektarMemory {
         }
         this.packStores.set(shard, ref)
         this.persistState()
+        try {
+          // the same pack commits as a bfinger store member (kind-5 carrier +
+          // re-issued manifest) — the identity record's refs then resolve the
+          // pack set with no /.well-known lookup. Best-effort like the PUT.
+          await this.opts.packsStore?.add({
+            shard,
+            shardId: this.shardId(shard),
+            network: manifest.network ?? 'regtest',
+            sha256: sha,
+            size: bytes.length,
+            ...(ref.chirp !== undefined ? { chirp: ref.chirp } : {}),
+            ...(ref.endpoint !== undefined ? { endpoint: ref.endpoint } : {}),
+            ...(ref.bucket !== undefined ? { bucket: ref.bucket } : {}),
+            ...(ref.key !== undefined ? { key: ref.key } : {})
+          })
+        } catch {
+          this.metrics.inc('nektar_pack_store_errors_total')
+        }
       } catch {
         this.metrics.inc('nektar_pack_store_errors_total')
       }
     }
     return { manifest, seq: r.seq }
+  }
+  /** attach the bfinger packs store post-construction (the automation
+   *  runtime builds it once lanes exist); restores members persisted by a
+   *  previous run and binds state persistence. */
+  attachPacksStore(store: import('./packstore.js').PacksStore): void {
+    this.opts.packsStore = store
+    store.bindPersist(() => this.persistState())
+    store.restore(this.savedPacksStore)
   }
   /** the configured bstore/S3 object store (undefined = feature off) */
   get objectStore(): import('./objectstore.js').S3ObjectStore | undefined {
@@ -2189,7 +2223,8 @@ export class NektarMemory {
       flags: Object.fromEntries(this.flags),
       importedBundles: Object.fromEntries(this.importedBundles),
       bond,
-      packStores: Object.fromEntries(this.packStores)
+      packStores: Object.fromEntries(this.packStores),
+      packsStore: this.opts.packsStore?.snapshot() ?? this.savedPacksStore
     })
   }
   private restoreState(): void {
@@ -2221,6 +2256,7 @@ export class NektarMemory {
     for (const [k, b] of Object.entries(s.importedBundles ?? {})) this.importedBundles.set(k, b)
     for (const [shard, f] of Object.entries(s.flags ?? {})) this.flags.set(shard, f)
     for (const [shard, r] of Object.entries(s.packStores ?? {})) this.packStores.set(shard, r)
+    this.savedPacksStore = s.packsStore
     if (s.bond) this.bonds.restore(s.bond)
   }
 

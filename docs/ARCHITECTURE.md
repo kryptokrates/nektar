@@ -206,6 +206,47 @@ shards transfer as verified packs over `/v1/pack/{shard}` or `importShard` —
 there is no chain-side UTXO sync between hosts; the old GASP overlay sync was
 removed with the rendezvous transport.
 
+Everything on these lanes is a stock Lightweb encoding; nektar adds no custom
+envelope or record format:
+
+- **Market artifacts** are canonical `nkt1` records — a CBOR record
+  (`{1: kind, 2: body}` plus preserved extension keys) claiming the `nkt1`
+  magic, so any stock `recordReader` walks them. The legacy JSON payload is
+  still accepted on decode, and `NEKTAR_MARKET_V1=1` opts back out of v2.
+- **Deal envelopes** are stock bbox records — BRC-78 sealed, opened by the
+  counterparty's wallet only. Stock plaintext members carry nektar content
+  (`nektar:` object) and evidence pointers ride the stock `refs[]` member
+  (`{url, sha256, length}` — https/uhrp URLs only, per stock admission).
+- **Objects are content-addressed**: packs, evidence bundles, and proofs are
+  written to bstore AND as CHIRP closures (`chirp://<identifier>`); refs
+  carry both the `chirp` URI and the keyed `{bucket, key, sha256, size}`.
+  Readers resolve CHIRP first and verify the closure, then fall back to the
+  keyed ref — every unsigned read is digest-verified either way. The
+  operator's `/v1/pack/{shard}` origin is a compatibility fallback, not the
+  data plane.
+- **Discovery is committed**: the operator's bfinger record `refs` advertises
+  the `nektar-packs` store — an RFC-6962 root over member commitments. Each
+  pack is a kind-5 sub-record (its carrier commitment is the member); a
+  kind-6 manifest lists members once count > 1 and `refs.head` points at it.
+  A reader holding only the operator pubkey resolves the whole store through
+  `ls_finger` — no `/.well-known` or origin dependency.
+
+**Payments** use two stock rails, each where it fits. x402-style tool/quote
+invoices settle through `decidePayment`-shaped checks plus the stock
+`TakenPayments`/`spentOutpoints` ledger — a txid replay AND a conflicting
+input spend are both refused. Deal payments keep the NektarAnchor sale
+escrow covenant: it is the application primitive (timeout refund, disclosure
+binding) that no stock rail replaces, so envelope `Payment`/`checkPayment`
+is not bolted on as a parallel stream. `LookupFront` stays unadopted —
+nektar is a client of priced lookups, not the front operator. `keyed` is
+Go-only at the vendored upstream versions with no TS twin, so fragment keys
+remain the local HKDF scheme (divergence recorded in the plan).
+
+Residual central dependencies are infrastructure, not application servers:
+the broadcaster, a WoC/chaintracks tip source, the regtest node, and the
+deployment's S3/bstore gateway — all replaceable, none trusted with content
+or settlement truth.
+
 ## 10. Reasoning, correction and audit
 
 ```mermaid

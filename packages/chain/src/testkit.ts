@@ -20,6 +20,7 @@ import {
   TeranodeBroadcaster,
   regtestTx,
   merklePathFor,
+  parseLegacyBlock,
   utxoStatus,
   ReserveFunder,
   bootstrapReserve,
@@ -73,7 +74,13 @@ async function stackRpc(cfg: RegtestConfig, method: string, ...params: unknown[]
     body: JSON.stringify({ jsonrpc: '1.0', id: ++rpcCounter, method, params }),
     signal: AbortSignal.timeout(15_000)
   })
-  const j = (await r.json()) as { result?: any; error?: { message?: string } }
+  const text = await r.text()
+  let j: { result?: any; error?: { message?: string } }
+  try {
+    j = JSON.parse(text) as typeof j
+  } catch {
+    throw new Error(`rpc ${method}: non-JSON response ${r.status}: ${text.slice(0, 140)}`)
+  }
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }
@@ -132,9 +139,16 @@ export class StackChain implements ChainTracker, Broadcaster {
   async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
     return await this.tracker.headerAtHeight(height)
   }
-  /** mempool + mined, with the node's merkle proof attached once sealed */
+  /** mempool + mined, with the node's merkle proof attached once sealed.
+   *  Retries briefly on not-found: propagation ingestion lags the broadcast
+   *  ACK under load, so a just-aired tx can 404 for a beat. */
   async getTx(txid: string): Promise<Transaction | undefined> {
-    return await regtestTx(this.cfg, txid)
+    for (let i = 0; i < 12; i++) {
+      const tx = await regtestTx(this.cfg, txid)
+      if (tx !== undefined) return tx
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    return undefined
   }
   async merklePathOf(txid: string): Promise<MerklePath | undefined> {
     const tx = await this.getTx(txid)
@@ -162,6 +176,29 @@ export class StackChain implements ChainTracker, Broadcaster {
         const hdr = await stackRpc(this.cfg, 'getblockheader', h).catch(() => undefined)
         if (hdr !== undefined) break
         await new Promise((r) => setTimeout(r, 100))
+      }
+    }
+    // asset index catch-up: /merkle_proof only answers once the block's
+    // subtree is sealed — block_legacy serving the generated hash is not
+    // enough (subtree sealing lags it), so fetch the block, take its coinbase
+    // txid, and poll /merkle_proof/{coinbase}: sealed for one member means
+    // sealed for the whole block.
+    const auth = 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
+    for (const h of hashes) {
+      let coinbase: string | undefined
+      for (let i = 0; i < 120 && coinbase === undefined; i++) {
+        const r = await fetch(`${this.cfg.assetUrl}/block_legacy/${h}`, { signal: AbortSignal.timeout(4_000) }).catch(() => null)
+        if (r?.ok === true) {
+          coinbase = parseLegacyBlock(new Uint8Array(await r.arrayBuffer())).txids[0]
+        } else await new Promise((r) => setTimeout(r, 250))
+      }
+      if (coinbase === undefined) continue
+      for (let i = 0; i < 120; i++) {
+        const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${coinbase}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(4_000) }).catch(
+          () => null
+        )
+        if (r?.ok === true) break
+        await new Promise((r) => setTimeout(r, 250))
       }
     }
   }
@@ -288,6 +325,57 @@ export class StackTreasury {
   }
 }
 
+type ReserveSrc = { tx: Transaction; vout: number; satoshis: number }
+const LEASE_MS = 300_000
+
+/** Read leases.json, drop expired rows. Caller holds the treasury lock. */
+function readLeases(file: string): Record<string, number> {
+  let leases: Record<string, number> = {}
+  try {
+    leases = JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    /* missing/corrupt → fresh */
+  }
+  const now = Date.now()
+  for (const k of Object.keys(leases)) if (leases[k] < now) delete leases[k]
+  return leases
+}
+
+/** Pick reserve inputs covering `need` sats and lease ONLY those picks —
+ *  reload + selection + lease write happen in one critical section, so two
+ *  parallel processes can never pick the same entry (the UTXO_SPENT retry
+ *  storm) nor lease entries they didn't take. Returns null when the pool
+ *  can't cover — caller refills under the same protocol. */
+async function leaseReserve(t: StackTreasury, need: number): Promise<ReserveSrc[] | null> {
+  const leasesFile = join(STATE_DIR, 'leases.json')
+  return await withTreasuryLock(async () => {
+    t.reserve.reload()
+    const leases = readLeases(leasesFile)
+    const op = (u: ReserveSrc) => `${u.tx.id('hex')}:${u.vout}`
+    const free = t.reserve.utxos
+      .filter((u) => !t.reserve.isSpent(u.tx.id('hex'), u.vout) && u.satoshis >= 546 && leases[op(u)] === undefined)
+      .sort((a, b) => a.satoshis - b.satoshis)
+    // prefer ONE entry covering the whole spend; else accumulate smallest-first
+    const single = free.find((u) => u.satoshis >= need)
+    const srcs: ReserveSrc[] = single !== undefined ? [single] : []
+    let inSats = single?.satoshis ?? 0
+    if (single === undefined) {
+      for (const u of free) {
+        if (inSats >= need || srcs.length >= 16) break
+        srcs.push(u)
+        inSats += u.satoshis
+      }
+    }
+    if (inSats < need) {
+      writeFileSync(leasesFile, JSON.stringify(leases))
+      return null
+    }
+    for (const s of srcs) leases[op(s)] = Date.now() + LEASE_MS
+    writeFileSync(leasesFile, JSON.stringify(leases))
+    return srcs
+  })
+}
+
 // `node --test` runs files in parallel processes sharing .state/*.json —
 // serialize bootstrap/refill (treasury-tail splits) across processes.
 async function withTreasuryLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -348,28 +436,12 @@ export class StackFunder implements Funder {
     // broadcast failure — allow enough attempts to walk past a rotten pool
     const need = outputs * sats + 5_000
     for (let attempt = 0; attempt < 8; attempt++) {
-      // prefer ONE entry covering the whole spend (the leased big pool makes
-      // that the common case); fall back to accumulating smaller entries
-      const srcs: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
-      const picked = new Set<string>()
-      let inSats = 0
-      const spendCheck = async (txid: string, vout: number) => picked.has(`${txid}:${vout}`) || (await utxoStatus(t.cfg, txid, vout)) === 'spent'
-      const single = await t.reserve.takeReserve(spendCheck, need)
-      if (single !== null) {
-        picked.add(`${single.tx.id('hex')}:${single.vout}`)
-        srcs.push(single)
-        inSats = single.satoshis
-      } else {
-        const floor = Math.min(50_000, Math.ceil(need / 16))
-        while (inSats < need && srcs.length < 16) {
-          const src = await t.reserve.takeReserve(spendCheck, floor)
-          if (src === null) break
-          picked.add(`${src.tx.id('hex')}:${src.vout}`)
-          srcs.push(src)
-          inSats += src.satoshis
-        }
-      }
-      if (inSats < need) {
+      // pick + lease under ONE lock: the old per-candidate leased() hook took
+      // the treasury lock AND leased every scanned entry for 5 min — the
+      // first process to scan starved all others into refill(), serializing
+      // the suite behind the lock. Batch selection fixes both.
+      const srcs = await leaseReserve(t, need)
+      if (srcs === null) {
         // pool drained below the floor — split another ~60 entries off the
         // treasury tail and retry rather than failing the suite
         if (attempt < 6) {
@@ -385,17 +457,27 @@ export class StackFunder implements Funder {
       await tx.fee()
       await tx.sign()
       const r = await t.chain.broadcast(tx)
+      // reserve accounting under the lock: save() writes the whole in-memory
+      // file, so unlocked markSpent/addOwned from parallel processes clobber
+      // each other (lost entries, resurrected spends → UTXO_SPENT storms and
+      // phantom "reserve empty"). reload first so this process sees the union.
       if (r.status === 'success') {
-        for (const src of srcs) t.reserve.markSpent(src.tx.id('hex'), src.vout)
-        const changeVout = tx.outputs.length - 1
-        if ((tx.outputs[changeVout].satoshis ?? 0) > 0) t.reserve.addOwned(tx, changeVout)
+        await withTreasuryLock(async () => {
+          t.reserve.reload()
+          for (const src of srcs) t.reserve.markSpent(src.tx.id('hex'), src.vout)
+          const changeVout = tx.outputs.length - 1
+          if ((tx.outputs[changeVout].satoshis ?? 0) > 0) t.reserve.addOwned(tx, changeVout)
+        })
         f.fundingTx = tx
         for (let i = 0; i < outputs; i++) f.utxos.push({ tx, vout: i, satoshis: sats })
         // zeroconf: outputs are spendable while unconfirmed — tests mine only
         // where a proof is actually asserted
         return f
       }
-      for (const src of srcs) t.reserve.markSpent(src.tx.id('hex'), src.vout)
+      await withTreasuryLock(async () => {
+        t.reserve.reload()
+        for (const src of srcs) t.reserve.markSpent(src.tx.id('hex'), src.vout)
+      })
       if (!/UTXO_SPENT|already.*spent|missing.*(input|parent)/i.test(r.description ?? ''))
         throw new Error(`testkit: fund broadcast failed ${r.description ?? ''}`.slice(0, 160))
     }

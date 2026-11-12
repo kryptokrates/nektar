@@ -6,7 +6,7 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
-import { mintCarrier, fundingLock, lockFields, unlocker, commitment, CborMap, encode as cborEncode, type Derivation } from '@lightwebinc/bcommon'
+import { mintCarrier, fundingLock, lockFields, unlocker, commitment, CborMap, encode as cborEncode, encodeRefs, type Derivation, type Ref } from '@lightwebinc/bcommon'
 import type { FundingOut } from '@nektar/chain'
 import { encodeRecord, validateRecord, KindCreate, KindUpdate, MagicV1, type CommittedRecord } from '@lightwebinc/bfinger-host/dist/record.js'
 import { Protocol, KeyIDProfile, KeyIDRecord, profileLockingKey, recordLockingKey } from '@lightwebinc/bfinger-host/dist/keys.js'
@@ -103,6 +103,9 @@ export interface FingerStateRow {
   tokenTxid: string
   tokenBeef: number[]
   bodyHash: string
+  /** hash of the last committed refs — a store root moving republishes the
+   *  record even when the body is unchanged */
+  refsHash?: string
   witness?: string
 }
 
@@ -187,6 +190,9 @@ export async function publishFinger(p: {
   journal: CarrierJournal
   hosts: string[]
   body: FingerBody
+  /** store refs committed alongside the body — e.g. the packs store. Old
+   *  readers ignore them; new readers resolve stores through them. */
+  refs?: Ref[]
   takeFunding: (sats: number) => Promise<FundingOut>
   broadcast: (tx: Transaction) => Promise<{ status: string }>
   fetchTx: (txid: string) => Promise<Transaction | undefined>
@@ -198,6 +204,7 @@ export async function publishFinger(p: {
   const w = new ProtoWallet(p.key)
   let map = bodyToMap(p.body)
   let hash = bodyHash(map)
+  let refsHash = Utils.toHex(Hash.sha256(Array.from(cborEncode(encodeRefs(p.refs ?? [])))))
   const topics = [FINGER_TOPIC]
   const prev = await p.state.get()
 
@@ -229,7 +236,7 @@ export async function publishFinger(p: {
     }
   }
 
-  if (prev !== undefined && prev.bodyHash === hash) {
+  if (prev !== undefined && prev.bodyHash === hash && prev.refsHash === refsHash) {
     const ch = await p.journal.get(`finger:carrier:${prev.seq}`)
     if (ch !== undefined) await submitAll(p.hosts, ch.beef, topics, { retryWaits: [] })
     const tokenBeef = latestBeef ?? prev.tokenBeef ?? (await p.journal.get(`finger:token:${prev.seq}`))?.beef
@@ -261,7 +268,7 @@ export async function publishFinger(p: {
     notBefore: 0n,
     notAfter: 0n,
     body: map,
-    refs: [],
+    refs: p.refs ?? [],
     unknown: []
   }
 
@@ -278,6 +285,8 @@ export async function publishFinger(p: {
     record = dec.record
     map = dec.record.body
     hash = bodyHash(map)
+    // the journaled carrier is what commits — its refs, not the caller's
+    refsHash = Utils.toHex(Hash.sha256(Array.from(cborEncode(encodeRefs(record.refs)))))
   } else {
     validateRecord(record)
     const slot = await p.ledger.take(FINGER_KIND)
@@ -326,8 +335,61 @@ export async function publishFinger(p: {
     if (br.status !== 'success') throw new Error(`publishFinger: token broadcast refused ${JSON.stringify(br).slice(0, 120)}`)
   }
   if (p.onSpent !== undefined) await p.onSpent(tokenTx)
-  await p.state.set({ seq, tokenTxid, tokenBeef: tokenBeefOut, bodyHash: hash, witness: Utils.toHex(Array.from(derived(p.key, 'witness', seq))) })
+  await p.state.set({ seq, tokenTxid, tokenBeef: tokenBeefOut, bodyHash: hash, refsHash, witness: Utils.toHex(Array.from(derived(p.key, 'witness', seq))) })
   return { changed: true, seq, carrierTxid, tokenTxid }
+}
+
+/** Publish store material — a kind-5 sub-record or a kind-6 manifest — as a
+ *  carrier under this identity. Store material never advances the chain and
+ *  carries no token: ls_finger indexes it like any carrier and answers it
+ *  through the {identityKey, carrier} class, which is exactly what a record
+ *  `refs` entry's `head` resolves through. Every store record is create-
+ *  shaped (seq 1, zero prev — the transition rules admit nothing else), so
+ *  `id` is only the journal's idempotency slot: a retried id re-submits the
+ *  journaled carrier, never a re-minted one, and a member's commitment is
+ *  stable across crashes and republishes. */
+export async function publishSubRecord(p: {
+  key: PrivateKey
+  ledger: TreeLedger /* kind 'finger' */
+  journal: CarrierJournal
+  hosts: string[]
+  kind: 5 | 6
+  /** journal idempotency key (member index / manifest version) — NOT the
+   *  record's seq, which is always 1 */
+  id: number
+  body: CborMap
+}): Promise<{ commitment: string; txid: string }> {
+  const jkey = `finger:sub:${p.kind}:${p.id}`
+  const hit = await p.journal.get(jkey)
+  if (hit !== undefined) {
+    await submitAll(p.hosts, hit.beef, [FINGER_TOPIC], { retryWaits: [] })
+    const c = Utils.toHex(Array.from(commitment(Transaction.fromAtomicBEEF(hit.beef))))
+    return { commitment: c, txid: hit.txid }
+  }
+  const w = new ProtoWallet(p.key)
+  const record: CommittedRecord = {
+    magic: MagicV1,
+    identityKey: new Uint8Array(p.key.toPublicKey().encode(true) as number[]),
+    seq: 1n,
+    kind: p.kind,
+    prev: ZERO32,
+    salt: derived(p.key, `salt:${p.kind}`, p.id),
+    wc: new Uint8Array(Hash.sha256(Array.from(derived(p.key, `witness:${p.kind}`, p.id)))),
+    notBefore: 0n,
+    notAfter: 0n,
+    body: p.body,
+    refs: [],
+    unknown: []
+  }
+  validateRecord(record)
+  const slot = await p.ledger.take(FINGER_KIND)
+  if (slot === undefined) throw new Error('publishSubRecord: no funding slot')
+  const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_RECORD, encodeRecord(record), slot.tree, slot.vout)
+  const beef = carrier.toAtomicBEEF()
+  const txid = carrier.id('hex')
+  await p.journal.put(jkey, { txid, beef, topics: [FINGER_TOPIC] })
+  await submitAll(p.hosts, beef, [FINGER_TOPIC], { retryWaits: [] })
+  return { commitment: Utils.toHex(Array.from(commitment(carrier))), txid }
 }
 
 /** Repair the ancestry a BEEF carries for `tx` so it passes SPV while `tx`

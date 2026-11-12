@@ -2,7 +2,7 @@ import { Hash, PrivateKey, ProtoWallet, Utils, type ChainTracker } from '@bsv/sd
 import { sealEnvelope, encodePlaintext, envelopeRecord, envelopeCarrier, envelopeFundingLock } from '@lightwebinc/bbox-host/codec/send.js'
 import { decodeEnvelope, encodeReceipt, checkBox, checkOffice, MaxAcks } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { checkContent, verifyContentSignature } from '@lightwebinc/bbox-host/codec/content.js'
-import { open as openPlaintext, parsePlaintext } from '@lightwebinc/bbox-host/codec/payment.js'
+import { open as openPlaintext, parsePlaintext, MaxRefs } from '@lightwebinc/bbox-host/codec/payment.js'
 import { JObject, type JValue } from '@lightwebinc/bbox-host/codec/jcs.js'
 import { admit } from '@lightwebinc/bbox-host/codec/admit.js'
 import { submitAll, lookupAll, type Quorum } from './hosts.js'
@@ -12,6 +12,16 @@ import type { CarrierJournal } from './journal.js'
 export const BOX = 'market'
 export const DEFAULT_OFFICE = 'nektar_abcdefghij'
 export const officeFor = (_net?: string): string => DEFAULT_OFFICE
+
+/** A stock plaintext reference to an external object (spec §4.5): digests are
+ *  lowercase hex on the wire; urls admit https:// and uhrp:// only — a
+ *  chirp:// identifier does not ride here, put the store URL instead. */
+export interface BoxRef {
+  url: string
+  sha256: string
+  length: number
+  key?: string
+}
 const ORIGINATOR = 'nektar'
 
 const toJ = (v: unknown): JValue => {
@@ -40,16 +50,23 @@ export async function sendBox(p: {
   office?: string
   to: string
   body: object
+  /** external objects the body points at — deal evidence, packs — carried as
+   *  the stock plaintext `refs` member instead of nektar-body fields, so any
+   *  stock reader sees a digest-pinned locator, not app JSON. */
+  refs?: BoxRef[]
   expiresAt?: number
   quorum?: 'all' | 'majority' | 'one' | number
 }): Promise<{ txid: string; took: string[]; admitted: string[]; missed: Array<{ host: string; error: string }> }> {
   const office = p.office ?? DEFAULT_OFFICE
   checkOffice(office)
   checkBox(BOX)
+  if (p.refs !== undefined && p.refs.length > MaxRefs) throw new Error(`sendBox: ${p.refs.length} refs > ${MaxRefs}`)
   const w = new ProtoWallet(p.key)
   const from = new Uint8Array(Array.from(p.key.toPublicKey().encode(true) as number[]))
   const to = new Uint8Array(Utils.toArray(p.to, 'hex'))
-  const plain = encodePlaintext(new JObject().set('nektar', toJ(p.body)))
+  const doc = new JObject().set('nektar', toJ(p.body))
+  if (p.refs !== undefined && p.refs.length > 0) doc.set('refs', toJ(p.refs))
+  const plain = encodePlaintext(doc)
   const artifactHash = Utils.toHex(Hash.sha256(new Uint8Array([...to, ...plain])))
   const topics = [`tm_bbox_${office}`]
   const hit = await p.journal.get(artifactHash)
@@ -80,6 +97,8 @@ export interface BoxItem {
   txid: string
   from: string
   body: object
+  /** stock plaintext refs the sender attached (object locators, digest-pinned) */
+  refs?: BoxRef[]
   created: number
   commitment: string
 }
@@ -200,8 +219,16 @@ async function openEnvelope(beef: number[], w: ProtoWallet, office: string, me: 
   // §4.7 checks 2,3: plaintext-json / plaintext-shape — the stock parser keeps
   // unknown members in doc, so {nektar: ...} survives alongside body/refs/payment
   let doc: JObject
+  let refs: BoxItem['refs']
   try {
-    doc = parsePlaintext(opened).doc
+    const plain = parsePlaintext(opened)
+    doc = plain.doc
+    refs = plain.refs?.map((r) => ({
+      url: r.url,
+      sha256: Utils.toHex(Array.from(r.sha256)),
+      length: r.length,
+      ...(r.key !== undefined ? { key: Utils.toHex(Array.from(r.key)) } : {})
+    }))
   } catch {
     return undefined
   }
@@ -210,6 +237,7 @@ async function openEnvelope(beef: number[], w: ProtoWallet, office: string, me: 
     txid: Utils.toHex(Array.from(adm.txid)),
     from: Utils.toHex(Array.from(env.from)),
     body: fromJ(doc.get('nektar')!) as object,
+    ...(refs !== undefined ? { refs } : {}),
     created: env.created,
     commitment: Utils.toHex(Array.from(adm.carrier.commitment))
   }

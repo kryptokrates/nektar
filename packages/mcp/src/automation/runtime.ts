@@ -78,6 +78,17 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   const logStream = lanes === undefined ? undefined : (cfg.logStream ?? 'nektar_abcdefghij')
   const logState = lanes === undefined || logStream === undefined ? undefined : new lanes.mod.KnexLogState(kx)
   const fingerState = lanes === undefined ? undefined : new lanes.mod.KnexFingerState(kx)
+  // bfinger packs store: packs describeShard PUTs to bstore also commit as
+  // kind-5 sub-records under our identity; the finger record's refs then
+  // resolve the whole pack set — no /.well-known dependency for readers
+  let packsStore: import('../packstore.js').PacksStore | undefined
+  if (lanes !== undefined) {
+    const { PacksStore } = await import('../packstore.js')
+    packsStore = new PacksStore({
+      publish: (kind, id, body) => lanes.mod.publishSubRecord({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, kind, id, body })
+    })
+    mem.attachPacksStore(packsStore)
+  }
   // bfinger counterparty resolution: an agent publishes {hosts, office, stream,
   // nets} signed under its identity; a counterparty resolves it lazily on the
   // first send and unions the record's hosts over its own configured set.
@@ -199,7 +210,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
     (lanes === undefined
       ? undefined
       : {
-          send: async (to: string, msg: MarketMessage): Promise<void> => {
+          send: async (to: string, msg: MarketMessage, refs?: import('@nektar/bstack').BoxRef[]): Promise<void> => {
             try {
               // recovery notes live as long as a deal can — everything else 24h
               const ttl = (msg as { type?: string }).type === 'note' || (msg as { type?: string }).type === 'sellerNote' ? 7 * 86400 : 86400
@@ -214,6 +225,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
                 office: rec?.office ?? cfg.boxOffice,
                 to,
                 body: { market: msg },
+                refs,
                 expiresAt: Math.floor(Date.now() / 1000) + ttl
               })
             } catch (e) {
@@ -450,6 +462,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
       // when nothing changed, resubmits to any host that missed the objects
       if (lanes !== undefined && fingerState !== undefined && logStream !== undefined) {
         try {
+          const packsRef = packsStore?.ref()
           const r = await lanes.mod.publishFinger({
             key,
             state: fingerState,
@@ -457,6 +470,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
             journal: lanes.journal,
             hosts: marketHosts,
             body: { v: 1, hosts: marketHosts, office: cfg.boxOffice ?? lanes.mod.officeFor(), stream: logStream, nets: [cfg.network] },
+            refs: packsRef !== undefined ? [packsRef] : undefined,
             takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0],
             broadcast: (tx) => mem.broadcastTx(tx),
             fetchTx: (txid) => mem.fetchTx(txid),
@@ -508,8 +522,17 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
         const key = `evidence/${cfg.network}/${op.operationId}.json`
         const digest = Buffer.from(await crypto.subtle.digest('SHA-256', bytes)).toString('hex')
         const head = await objectStore.head(key).catch(() => undefined)
-        const ref =
+        const ref: import('../objectstore.js').ObjectRef =
           head?.sha256 === digest ? { bucket: objectStore.bucket, key, sha256: digest, size: head.size } : await objectStore.put(key, bytes, 'application/json')
+        try {
+          // content-addressed like packs: chirp://<root> resolves the bundle
+          // from any store holding chirp/<hash> objects, not just our bucket
+          const { storeChirp } = await import('../chirp.js')
+          ref.chirp = await storeChirp(objectStore, bytes)
+          ref.endpoint = objectStore.endpoint
+        } catch {
+          /* chirp publish is best-effort — the keyed ref alone still resolves */
+        }
         const cur = await store.operation(op.operationId)
         if (cur === undefined || cur.data.evidenceRef !== undefined) continue
         await store.transition(op.operationId, cur.revision, cur.state, { cause: 'evidence_stored', data: { evidenceRef: ref }, evidence: { ref } })

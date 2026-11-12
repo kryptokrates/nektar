@@ -23,7 +23,9 @@ const FIXTURE = {
     maxSats: 450,
     ts: 1700000000000,
     exp: 1800000000000,
-    net: 'regtest',
+    // net is signature-covered — the overlay fixture was signed with 'mock';
+    // do NOT sweep this to 'regtest' with the migration rename
+    net: 'mock',
     wantId: 'fixture-want-1',
     streamSeq: 3,
     prevHash: 'ab'.repeat(32),
@@ -42,7 +44,7 @@ const FIXTURE = {
     domains: ['libfoo'],
     ts: 1700000000001,
     exp: 1800000000001,
-    net: 'regtest',
+    net: 'mock',
     wantId: 'fixture-want-1',
     buyerPub: '02fe8d1eb1bcb3432b1db5833ff5f2226d9cb5e65cee430558c18ed3a3c86ce1af',
     offerId: 'fixture-offer-1',

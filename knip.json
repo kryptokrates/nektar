@@ -23,7 +23,7 @@
       "entry": ["*.mjs"]
     },
     "packages/bstack": {
-      "entry": ["src/module.ts", "demo/**/*.mjs", "test/**/*.ts"]
+      "entry": ["src/module.ts", "demo/**/*.mjs", "test/**/*.ts", "tools/**/*.mjs"]
     }
   },
   "rules": {

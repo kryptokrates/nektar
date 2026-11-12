@@ -58,7 +58,9 @@ export type MarketMessage =
 export interface MarketTransport {
   publishWant: (sw: SignedWant) => Promise<void>
   publishOffer: (so: SignedOffer) => Promise<void>
-  send: (toPub: string, msg: MarketMessage) => Promise<void>
+  /** refs: stock plaintext object references riding the envelope — digest-
+   *  pinned locators for external objects (evidence bundles, packs) */
+  send: (toPub: string, msg: MarketMessage, refs?: import('@nektar/bstack').BoxRef[]) => Promise<void>
 }
 
 interface MarketMemory {

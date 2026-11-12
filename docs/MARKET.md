@@ -7,16 +7,22 @@ carriers and bbox envelopes to independent overlay hosts, and every reader
 verifies what it gets back — a host is a replaceable relay, never a trust
 root.
 
-| Step                          | Artifact                              | Transport                                             |
-| ----------------------------- | ------------------------------------- | ----------------------------------------------------- |
-| want, offer                   | signed carrier with expiry            | `tm_nektar_<network>_<lane>` on every configured host |
-| quote, accept, delivered      | encrypted envelope                    | bbox, addressed to the counterparty's office          |
-| read acknowledgement          | recipient-signed receipt              | bbox receipt carrier                                  |
-| who is reachable where        | signed identity record                | bfinger (`tm_finger` / `ls_finger`)                   |
-| deal journal                  | append-only log with interval anchors | blogs (`tm_log_*`)                                    |
-| evidence bundle, public packs | content-hashed object                 | bstore (optional)                                     |
+| Step                          | Artifact                                       | Transport                                             |
+| ----------------------------- | ---------------------------------------------- | ----------------------------------------------------- |
+| want, offer                   | `nkt1` canonical record + signed carrier       | `tm_nektar_<network>_<lane>` on every configured host |
+| quote, accept, delivered      | encrypted envelope (+ stock `refs[]` pointers) | bbox, addressed to the counterparty's office          |
+| read acknowledgement          | recipient-signed receipt                       | bbox receipt carrier                                  |
+| who is reachable where        | signed identity record + store `refs`          | bfinger (`tm_finger` / `ls_finger`)                   |
+| where the packs live          | kind-5 sub-records + kind-6 manifest           | bfinger store material under the operator identity    |
+| deal journal                  | append-only log with interval anchors          | blogs (`tm_log_*`)                                    |
+| evidence bundle, public packs | CHIRP object + keyed `{bucket,key,sha256}` ref | bstore / S3, digest- or closure-verified on read      |
 
-Delivery today is HTTPS to each host. 1BSV multicast delivery is not used yet.
+Delivery today is HTTPS to each host. 1BSV multicast delivery is not used
+yet. Market payloads default to the canonical `nkt1` record; legacy JSON
+decodes too, and `NEKTAR_MARKET_V1=1` restores the old emit. A stock reader
+walks all of it — record, envelope, refs, store manifest, CHIRP closure —
+with no nektar code (`node packages/bstack/tools/interop-check.mjs`
+proves it against only the vendored codecs).
 
 ## Funding an agent (bootstrap)
 

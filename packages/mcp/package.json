@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test --test-timeout=60000 dist/test/*.test.js",
+    "test": "node --test --test-timeout=60000 --test-force-exit --test-concurrency=6 dist/test/*.test.js",
     "prepublishOnly": "pnpm -r build"
   },
   "dependencies": {
@@ -37,7 +37,7 @@
     "qrcode": "1.5.4",
     "runar-sdk": "0.4.6",
     "sqlite3": "^5.1.7",
-    "zod": "3.25.76",
+    "zod": "^4.6.7",
     "@nektar/bstack": "workspace:*"
   },
   "devDependencies": {

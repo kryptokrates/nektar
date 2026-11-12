@@ -262,7 +262,7 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
   assert.equal(prepared.state, 'prepared')
   assert.equal(prepared.feeSats, 50)
   assert.equal((await w1.submit('pay:1')).state, 'submission_unknown', 'a transport failure is undecidable, not a rejection')
-  assert.equal((await a.store.leaseState(tx.inputs[0]!.sourceTXID!, 0))?.state, 'leased', 'inputs stay leased while the outcome is unknown')
+  assert.equal((await a.store.leaseState(tx.inputs[0].sourceTXID!, 0))?.state, 'leased', 'inputs stay leased while the outcome is unknown')
   await a.kx.destroy()
   const b = await open(file)
   t.after(() => b.kx.destroy())
@@ -277,7 +277,7 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
   assert.equal((await w2.submit('pay:1')).state, 'submitted', 'resubmitting an accepted tx is harmless')
   assert.equal(await w2.observe(tx.id('hex'), { status: 'seen', source: 'arc' }), 'observed')
   assert.equal(await w2.observe(tx.id('hex'), { status: 'proven', source: 'spv', blockHeight: 7 }), 'confirmed')
-  assert.equal((await b.store.leaseState(tx.inputs[0]!.sourceTXID!, 0))?.state, 'spent')
+  assert.equal((await b.store.leaseState(tx.inputs[0].sourceTXID!, 0))?.state, 'spent')
   assert.equal(await w2.observe('f'.repeat(64), { status: 'seen', source: 'arc' }), undefined, 'untracked txids change nothing')
 })
 

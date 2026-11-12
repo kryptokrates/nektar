@@ -21,11 +21,11 @@ export function hashNode(left: SmtHash, right: SmtHash): SmtHash {
 
 const emptyTable: SmtHash[] = (() => {
   const t: SmtHash[] = Array.from({ length: SMT_DEPTH + 1 }, () => EMPTY_LEAF)
-  for (let d = SMT_DEPTH - 1; d >= 0; d--) t[d] = hashNode(t[d + 1]!, t[d + 1]!)
+  for (let d = SMT_DEPTH - 1; d >= 0; d--) t[d] = hashNode(t[d + 1], t[d + 1])
   return t
 })()
 export function emptySubtree(depth: number): SmtHash {
-  return emptyTable[depth]!
+  return emptyTable[depth]
 }
 /** registry key from identity bytes: SHA-256(0x02 ‖ id) — idattr_smt::derive_key */
 export function deriveKey(identity: Bytes): SmtKey {
@@ -35,13 +35,13 @@ export function emptyRoot(): SmtHash {
   return emptySubtree(0)
 }
 
-const bit = (key: SmtKey, i: number) => (key[i >> 3]! >> (7 - (i & 7))) & 1
+const bit = (key: SmtKey, i: number) => (key[i >> 3] >> (7 - (i & 7))) & 1
 const truncate = (key: SmtKey, depth: number): SmtKey => {
   const out = new Uint8Array(32)
   const full = depth >> 3
   out.set(key.subarray(0, full))
   const rem = depth & 7
-  if (rem !== 0) out[full] = key[full]! & (0xff << (8 - rem))
+  if (rem !== 0) out[full] = key[full] & (0xff << (8 - rem))
   return out
 }
 
@@ -123,7 +123,7 @@ export class Smt {
 function truncateKeySibling(key: SmtKey, depth: number): SmtKey {
   const t = truncate(key, depth)
   const b = depth - 1
-  t[b >> 3] = t[b >> 3]! ^ (1 << (7 - (b & 7)))
+  t[b >> 3] = t[b >> 3] ^ (1 << (7 - (b & 7)))
   return t
 }
 export { truncateKeySibling as siblingPath }

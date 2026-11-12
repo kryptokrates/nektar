@@ -41,7 +41,7 @@ export class CheckpointBond {
 
   private stateHex(n: bigint, lastRoot: string, deadline: bigint, seized: bigint): string {
     const c = this.cfg
-    return serializeState(NEKTAR_CHECKPOINTBOND_ARTIFACT.stateFields!, {
+    return serializeState(NEKTAR_CHECKPOINTBOND_ARTIFACT.stateFields, {
       operatorPkh: c.operatorPkh,
       bondReleaseHeight: c.bondReleaseHeight,
       maxFee: c.maxFee,
@@ -134,7 +134,7 @@ export class CheckpointBond {
       return a
     })
     const unlock = c.buildStatefulPrefix(opSig, true) + this.contract.buildUnlockingScript(method, resolved)
-    tx.inputs[0]!.unlockingScript = UnlockingScript.fromHex(unlock)
+    tx.inputs[0].unlockingScript = UnlockingScript.fromHex(unlock)
     const r = await broadcaster.broadcast(tx)
     if (r.status !== 'success') throw new Error(`bond ${method} refused: ${r.description ?? r.status}`)
     return { tx }

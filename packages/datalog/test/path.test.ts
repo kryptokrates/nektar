@@ -23,16 +23,16 @@ test('§14 path: ordered steps, fromStep links, node/edge hashes', () => {
   const p = derivationPath(run(), 'permit', ['a', 's1'])!
   assert.equal(p.steps.length, 2)
   const [s0, s1] = p.steps
-  assert.equal(s0!.ruleId, 'r-allow')
-  assert.deepEqual(s0!.output, { pred: 'allowed', args: ['a', 's1'] })
+  assert.equal(s0.ruleId, 'r-allow')
+  assert.deepEqual(s0.output, { pred: 'allowed', args: ['a', 's1'] })
   assert.deepEqual(
-    s0!.inputs.map((i) => i.fromStep),
+    s0.inputs.map((i) => i.fromStep),
     [null, null],
     'EDB premises are context leaves'
   )
-  assert.equal(s1!.ruleId, 'r-permit')
+  assert.equal(s1.ruleId, 'r-permit')
   assert.deepEqual(
-    s1!.inputs.map((i) => i.fromStep),
+    s1.inputs.map((i) => i.fromStep),
     [0, null],
     'allowed premise links to step 0'
   )
@@ -44,7 +44,7 @@ test('§14 path: ordered steps, fromStep links, node/edge hashes', () => {
 test('§14 commitments: edge = dsha256(h_in‖…‖τ‖h_out); path digest folds edges', () => {
   const p = derivationPath(run(), 'permit', ['a', 's1'])!
   const tau = (id: string) => dsha256(utf8(`tau:${id}`)) // test stand-in for the rule's DAG node hash
-  const e0 = stepEdge(p.steps[0]!, tau('r-allow'))
+  const e0 = stepEdge(p.steps[0], tau('r-allow'))
   assert.equal(
     toHex(e0),
     toHex(
@@ -56,7 +56,7 @@ test('§14 commitments: edge = dsha256(h_in‖…‖τ‖h_out); path digest fol
     )
   )
   const d = pathDigest(p.steps, tau)
-  const expect = dsha256(concat(dsha256(concat(new Uint8Array(32), e0)), stepEdge(p.steps[1]!, tau('r-permit'))))
+  const expect = dsha256(concat(dsha256(concat(new Uint8Array(32), e0)), stepEdge(p.steps[1], tau('r-permit'))))
   assert.equal(toHex(d), toHex(expect))
   // deterministic across EDB shuffles (canonical provenance)
   const shuffled = derivationPath(run([...EDB].reverse()), 'permit', ['a', 's1'])!
@@ -87,5 +87,5 @@ pair(P) :- base(P), member(P, verified).
   const facts = new Datalog(rules).run([{ pred: 'member', args: ['a', 'verified'] }])
   const p = derivationPath(facts, 'pair', ['a'])!
   assert.equal(p.steps.length, 2)
-  assert.equal(p.steps[1]!.inputs[0]!.fromStep, 0)
+  assert.equal(p.steps[1].inputs[0].fromStep, 0)
 })

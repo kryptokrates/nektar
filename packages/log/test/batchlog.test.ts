@@ -52,7 +52,7 @@ for (const [name, makeStore] of [
     assert.equal(batch.size, 2)
     const proof = log.batchProof(batch, 1)
     const { verifyProof } = await import('@nektar/core')
-    assert.equal(verifyProof(batch.leaves[1]!, proof, batch.R), true)
+    assert.equal(verifyProof(batch.leaves[1], proof, batch.R), true)
 
     await log.markAnchored('s1', batch.n, 'aa'.repeat(32))
     const all = await log['store'].all('s1')

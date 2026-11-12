@@ -43,7 +43,7 @@ export class FeeVault {
 
   private stateHex(spentInWindow: bigint, windowStart: bigint): string {
     const c = this.cfg
-    return serializeState(NEKTAR_FEEVAULT_ARTIFACT.stateFields!, {
+    return serializeState(NEKTAR_FEEVAULT_ARTIFACT.stateFields, {
       destPkh: c.destPkh,
       ownerPkh: c.ownerPkh,
       perTxCap: c.perTxCap,
@@ -112,7 +112,7 @@ export class FeeVault {
         changeSats,
         preimageHex
       ])
-    tx.inputs[0]!.unlockingScript = UnlockingScript.fromHex(unlock)
+    tx.inputs[0].unlockingScript = UnlockingScript.fromHex(unlock)
     return { tx }
   }
 }

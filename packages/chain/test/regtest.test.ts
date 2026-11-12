@@ -29,9 +29,9 @@ const stub = (rawHex: string | undefined, routes: Record<string, { status: numbe
       return new Response(JSON.stringify({ jsonrpc: '1.0', id: 1, result: rawHex ?? null, error }), { status: 200 })
     }
     const hit = Object.keys(routes).find((k) => url === `${cfg.assetUrl}/${k}`)
-    const r = hit !== undefined ? routes[hit]! : { status: 404 }
+    const r = hit !== undefined ? routes[hit] : { status: 404 }
     return new Response(new Uint8Array(r.body ?? []), { status: r.status })
-  }) as typeof fetch
+  })
 
 test('regtestTx: mined tx returns tx with attached MerklePath', async () => {
   const tx = await aTx()

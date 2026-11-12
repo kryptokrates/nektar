@@ -46,10 +46,10 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
     // instance tracks — including the anchor restored from BEEF — so nothing
     // stays unproven waiting on a poll
     assert.equal(b.unprovenAnchors().length, 0, 'mined events attached proofs to both anchors, restored one included')
-    const mp = (await chain.merklePathOf(b.anchorLinks('s')[0]!.txid))!
+    const mp = (await chain.merklePathOf(b.anchorLinks('s')[0].txid))!
     assert.throws(() => b.attachProof('s', b.tailLink('s')!.txid, mp), /does not contain this txid/)
     for (const seq of [0, 1, 2, 3, 4, 5]) assert.equal((await b.prove('s', seq)).result.ok, true, `seq ${seq} provable after restart`)
-    const sec = (await b.recall('s', { seq: 1 })).items[0]!
+    const sec = (await b.recall('s', { seq: 1 })).items[0]
     assert.equal(sec.text, undefined, 'level-2 record still gated after restart (level persisted in sqlite)')
     assert.match(sec.reason!, /zkaccess required/)
   } finally {

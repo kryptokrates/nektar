@@ -44,15 +44,15 @@ const rowsOf = (f: string): number[][] =>
     .trim()
     .split('\n')
     .map((l) => l.trim().split(/\s+/).map(Number))
-const col0 = (f: string): number[] => rowsOf(f).map((r) => r[0]!)
+const col0 = (f: string): number[] => rowsOf(f).map((r) => r[0])
 
 test('modelPoseidon re-derives from parameter files', (t) => {
   if (!existsSync(join(P, 'weight_1.txt'))) {
     t.skip('nChain zkscript checkout not present (set NEKTAR_AIINF_DIR)')
     return
   }
-  const hm = modelPoseidon(rowsOf('weight_1.txt'), rowsOf('weight_2.txt'), col0('bias_1.txt'), col0('bias_2.txt'), rowsOf('zero_relu.txt')[0]![0]!)
+  const hm = modelPoseidon(rowsOf('weight_1.txt'), rowsOf('weight_2.txt'), col0('bias_1.txt'), col0('bias_2.txt'), rowsOf('zero_relu.txt')[0][0])
   assert.equal(hm, BigInt(vec.modelPoseidon))
-  const stmt = publicStatement(col0('input.txt'), rowsOf('expected_output.txt')[0]![0]!, hm)
+  const stmt = publicStatement(col0('input.txt'), rowsOf('expected_output.txt')[0][0], hm)
   assert.equal(stmt, BigInt(vec.publicStatement))
 })

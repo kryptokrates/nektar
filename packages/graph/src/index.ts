@@ -102,13 +102,13 @@ export class AORGraph {
       const premFacts: Fact[] = premises.map((p) => {
         const pv = this.vertices.get(p)!
         const lit = pv.phi.match(/^([a-z][a-zA-Z0-9_-]*)\((.*)\)$/)!
-        return { pred: lit[1]!, args: lit[2]!.split(',').map((a) => a.trim()) }
+        return { pred: lit[1], args: lit[2].split(',').map((a) => a.trim()) }
       })
       const facts = dl.run(premFacts)
       const goal = v.phi.match(/^([a-z][a-zA-Z0-9_-]*)\((.*)\)$/)!
       if (
         !facts.has(
-          `${goal[1]}(${goal[2]!
+          `${goal[1]}(${goal[2]
             .split(',')
             .map((a) => a.trim())
             .join(',')})`

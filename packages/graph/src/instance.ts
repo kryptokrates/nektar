@@ -97,15 +97,15 @@ export function entails(g: GraphLike, inst: Instance, goal: string, rulesSubset:
     const v = g.vertices.get(h)
     if (!v || v.kind === 'derived' || v.kind === 'refinement') return []
     const m = v.phi.match(/^([a-z][a-zA-Z0-9_-]*)\((.*)\)$/)
-    return m ? [{ pred: m[1]!, args: m[2]!.split(',').map((a) => a.trim()) }] : []
+    return m ? [{ pred: m[1], args: m[2].split(',').map((a) => a.trim()) }] : []
   })
   const dl = new Datalog(catalogue.filter((r) => rulesSubset.has(r.id)))
   const out = dl.run(facts, rulesSubset)
   const m = goal.match(/^([a-z][a-zA-Z0-9_-]*)\((.*)\)$/)!
   const d = dl.derivation(
     out,
-    m[1]!,
-    m[2]!.split(',').map((a) => a.trim())
+    m[1],
+    m[2].split(',').map((a) => a.trim())
   )
   return { entailed: d !== null, derivation: d ? d.premises : [] }
 }

@@ -78,8 +78,8 @@ test('hosts: readWants verifies and reports a host that withholds', async () => 
   assert.ok(sub.ok)
   const r = await readWants([a.url, b.url], { net: NET, domain: 'compute' }, { tracker: tr, net: NET })
   assert.equal(r.items.length, 1)
-  assert.deepEqual(r.perHost[a.url], [r.items[0]!.txid])
-  assert.deepEqual(r.withheld, [{ host: b.url, txid: r.items[0]!.txid }])
+  assert.deepEqual(r.perHost[a.url], [r.items[0].txid])
+  assert.deepEqual(r.withheld, [{ host: b.url, txid: r.items[0].txid }])
   await a.close()
   await b.close()
 })
@@ -91,7 +91,7 @@ test('hosts: garbage beef in an answer is dropped, not thrown', async () => {
   assert.equal(r.items.length, 0)
   const k = PrivateKey.fromRandom()
   const { beef } = await want(k)
-  beef[10] = beef[10]! ^ 0xff
+  beef[10] = beef[10] ^ 0xff
   const sub = await submitAll([a.url], beef, lanesFor(NET, ['compute']))
   const r2 = await readWants([a.url], { net: NET, domain: 'compute' }, { tracker: tr, net: NET })
   assert.equal(r2.items.length, 0)

@@ -15,8 +15,8 @@ test('parser: facts, rules, @id, negation', () => {
   const p = parseProgram(`revoked(agent-c). ${PROG}`)
   assert.equal(p.facts.length, 1)
   assert.equal(p.rules.length, 3)
-  assert.equal(p.rules[0]!.id, 'r-clear')
-  assert.equal(p.rules[2]!.body[2]!.neg, true)
+  assert.equal(p.rules[0].id, 'r-clear')
+  assert.equal(p.rules[2].body[2].neg, true)
   assert.throws(() => parseProgram('p(X) :- q(X)'), /unterminated/, 'unterminated rejected')
   assert.throws(() => parseProgram('p(?X).'), ParseError, 'bad term rejected')
 })
@@ -72,7 +72,7 @@ reach(X, Z) :- reach(X, Y), edge(Y, Z).`
   const got = new Datalog(parseProgram(src).rules).run(edges)
   // reference: naive transitive closure
   const adj = new Map<string, string[]>()
-  for (const e of edges) adj.set(e.args[0]!, [...(adj.get(e.args[0]!) ?? []), e.args[1]!])
+  for (const e of edges) adj.set(e.args[0], [...(adj.get(e.args[0]) ?? []), e.args[1]])
   const ref = new Set<string>()
   for (const s of adj.keys()) {
     const seen = new Set<string>()

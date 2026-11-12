@@ -90,7 +90,7 @@ export class BudgetAuthority {
       if (this.revoked.has(pid) || wouldBreach(p)) return 'denied'
     }
     g.reservations[actionId] = allInSats
-    for (const pid of g.parents ?? []) this.ledger[pid]!.reservations[`${grantId}:${actionId}`] = allInSats
+    for (const pid of g.parents ?? []) this.ledger[pid].reservations[`${grantId}:${actionId}`] = allInSats
     this.save()
     return 'ok'
   }
@@ -100,7 +100,7 @@ export class BudgetAuthority {
   commit(grantId: string, actionId: string): boolean {
     const g = this.ledger[grantId]
     if (!g || !(actionId in g.reservations)) return false
-    const amt = g.reservations[actionId]!
+    const amt = g.reservations[actionId]
     delete g.reservations[actionId]
     g.committed += amt
     ;(g.completed ??= {})[actionId] = amt

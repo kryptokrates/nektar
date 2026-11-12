@@ -135,7 +135,7 @@ export class PolicyDAG {
         if (facts.has(dk)) {
           const permitPath = path(k),
             denyPath = path(dk)
-          const layers = [...new Set([...permitPath, ...denyPath].map((s) => layerOf(s.split(':')[0]!)))]
+          const layers = [...new Set([...permitPath, ...denyPath].map((s) => layerOf(s.split(':')[0])))]
           conflicts.push({ claim: k.slice(7, -1), permitPath, denyPath, layers })
         }
       }
@@ -234,7 +234,7 @@ export function dagAuthorize(dag: PolicyDAG, edb: Fact[], cedarAllows: boolean, 
   const { facts, conflicts } = dag.evaluate(edb)
   const root = Buffer.from(dag.policyRoot()).toString('hex')
   if (conflicts.length > 0) {
-    const c = conflicts[0]!
+    const c = conflicts[0]
     return {
       decision: 'DENY',
       reason: `policy conflict on ${c.claim} (permit ${c.permitPath.join('>')}, deny ${c.denyPath.join('>')}, layers ${c.layers.join('/')})`,

@@ -58,13 +58,13 @@ export class Datalog {
   }
 
   private subst(args: string[], b: Bindings): string[] {
-    return args.map((a) => (isVar(a) ? b[a]! : a))
+    return args.map((a) => (isVar(a) ? b[a] : a))
   }
 
   private unify(lit: Literal, f: Fact, b: Bindings): Bindings | null {
     const nb = { ...b }
     for (let j = 0; j < lit.args.length; j++) {
-      const a = lit.args[j]!
+      const a = lit.args[j]
       if (isVar(a)) {
         if (nb[a] !== undefined && nb[a] !== f.args[j]) return null
         nb[a] = f.args[j]!
@@ -85,7 +85,7 @@ export class Datalog {
       yield b
       return
     }
-    const lit = body[i]!
+    const lit = body[i]
     if (lit.neg) {
       for (const f of all.get(lit.pred) ?? []) if (this.unify(lit, f, b)) return // a match exists → negated literal fails
       yield* this.matchAll(body, i + 1, all, delta, deltaAt, b)

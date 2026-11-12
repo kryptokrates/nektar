@@ -60,8 +60,8 @@ test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms
     ]
   )
   assert.ok(cps.every((c) => verifyCheckpoint(c, mem.logPublicKey())))
-  assert.equal(cps[1]!.anchorTxid, mem.tailLink('s')!.txid)
-  const mon = new PromiseMonitor(mem.logPublicKey(), () => cps[0]!.logId)
+  assert.equal(cps[1].anchorTxid, mem.tailLink('s')!.txid)
+  const mon = new PromiseMonitor(mem.logPublicKey(), () => cps[0].logId)
   for (const seq of [0, 1, 2, 3, 4]) mon.observePromise({ shard: 's', seq, issuedAt: t0 })
   cps.forEach((c) => mon.observeCheckpoint(c))
   assert.deepEqual(
@@ -94,10 +94,10 @@ test('CHN-006: pending → mined → final; requireFinal withholds until finalit
   await chain.mine(1)
   mem.confirmAnchor('s', mem.tailLink('s')!.txid)
   assert.deepEqual(await mem.anchorStatus('s', 0), { state: 'mined', confirmations: 1, depth: 3 })
-  assert.match((await mem.recall('s', { seq: 0, requireFinal: true })).items[0]!.reason!, /not final: 1\/3 confirmations/)
+  assert.match((await mem.recall('s', { seq: 0, requireFinal: true })).items[0].reason!, /not final: 1\/3 confirmations/)
   await chain.mine(2)
   assert.equal((await mem.anchorStatus('s', 0)).state, 'final')
-  assert.equal((await mem.recall('s', { seq: 0, requireFinal: true })).items[0]!.text, 'a')
+  assert.equal((await mem.recall('s', { seq: 0, requireFinal: true })).items[0].text, 'a')
 })
 
 test('persistence: challenges, used ZK transcripts and revocations survive a restart', async t => {
@@ -117,7 +117,7 @@ test('persistence: challenges, used ZK transcripts and revocations survive a res
   const zk = { commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, transcript)!, transcript, requiredLevel: 1n }
   await a.chain.mine(1)
   a.mem.confirmAnchor('s', a.mem.tailLink('s')!.txid) // S6.1: plaintext is served only after SPV verify
-  assert.equal((await a.mem.recall('s', { seq: 0, identity, zk })).items[0]!.text, 'secret')
+  assert.equal((await a.mem.recall('s', { seq: 0, identity, zk })).items[0].text, 'secret')
   const revoked = PrivateKey.fromRandom().toPublicKey().toString()
   a.mem.revoke(revoked)
   // restart: a new instance on the same store

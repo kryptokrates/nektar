@@ -159,7 +159,7 @@ export class BondOps {
       this.deps.txs().put(tx)
       if (!bond) {
         // only update local state for the bond WE deployed
-        this.head = { txid: tx.id('hex'), vout: 1, satoshis: tx.outputs[1]!.satoshis!, script: tx.outputs[1]!.lockingScript.toHex() }
+        this.head = { txid: tx.id('hex'), vout: 1, satoshis: tx.outputs[1].satoshis!, script: tx.outputs[1].lockingScript.toHex() }
         this.deps.persist()
       }
       return { txid: tx.id('hex') }
@@ -189,7 +189,7 @@ export class BondOps {
       const commitFee = this.deps.network === 'main' ? 500n : BigInt(this.contract.params.maxFee) - 1n
       const { tx, state } = await this.contract.buildCommit(head, this.key(), root, height, this.deps.chain, commitFee, parentTx)
       this.deps.txs().put(tx)
-      this.head = { txid: tx.id('hex'), vout: 0, satoshis: tx.outputs[0]!.satoshis!, script: tx.outputs[0]!.lockingScript.toHex() }
+      this.head = { txid: tx.id('hex'), vout: 0, satoshis: tx.outputs[0].satoshis!, script: tx.outputs[0].lockingScript.toHex() }
       this.deps.persist()
       return { txid: tx.id('hex'), n: state.n }
     } finally {
@@ -229,7 +229,7 @@ export class BondOps {
     this.busy = true
     try {
       const c = await this.contract.buildCommit(this.head, this.key(), lastRoot, await this.deps.chain.currentHeight(), this.deps.chain)
-      this.head = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0]!.satoshis!, script: c.tx.outputs[0]!.lockingScript.toHex() }
+      this.head = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0].satoshis!, script: c.tx.outputs[0].lockingScript.toHex() }
       this.deps.persist()
       return true
     } catch {
@@ -251,7 +251,7 @@ export class BondOps {
     this.busy = true
     try {
       const c = await this.contract.buildCommit(this.head, this.key(), s.lastRoot, height, this.deps.chain)
-      this.head = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0]!.satoshis!, script: c.tx.outputs[0]!.lockingScript.toHex() }
+      this.head = { txid: c.tx.id('hex'), vout: 0, satoshis: c.tx.outputs[0].satoshis!, script: c.tx.outputs[0].lockingScript.toHex() }
       this.deps.persist()
       return 'committed'
     } catch {

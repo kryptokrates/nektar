@@ -21,19 +21,19 @@ export function buildBump(txids: string[], index: number, height: number): Merkl
   // internal-order node hashes per level
   let level: Bytes[] = txids.map(toInternal)
   const path: Array<Array<{ offset: number; hash?: string; txid?: boolean; duplicate?: boolean }>> = []
-  const own = { offset: index, hash: txids[index]!, txid: true }
+  const own = { offset: index, hash: txids[index], txid: true }
   let pos = index
   while (level.length > 1) {
     const row: Array<{ offset: number; hash?: string; txid?: boolean; duplicate?: boolean }> = []
     if (path.length === 0) row.push(own)
     const sib = pos % 2 === 0 ? pos + 1 : pos - 1
-    if (sib < level.length) row.push({ offset: sib, hash: toDisplay(level[sib]!) })
+    if (sib < level.length) row.push({ offset: sib, hash: toDisplay(level[sib]) })
     else row.push({ offset: pos + 1, duplicate: true })
     path.push(row)
     const next: Bytes[] = []
     for (let i = 0; i < level.length; i += 2) {
-      const l = level[i]!
-      const r = i + 1 < level.length ? level[i + 1]! : l
+      const l = level[i]
+      const r = i + 1 < level.length ? level[i + 1] : l
       next.push(nodeHash(l, r))
     }
     level = next

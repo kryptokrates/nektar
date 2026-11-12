@@ -68,14 +68,14 @@ function proveOr(label: string, base: Point, statements: Point[], trueIdx: numbe
     if (j === trueIdx) continue
     e[j] = rand()
     s[j] = rand()
-    a[j] = mulP(base, s[j]!).add(negP(mulP(statements[j]!, e[j]!)))
-    sumFake = add(sumFake, e[j]!)
+    a[j] = mulP(base, s[j]).add(negP(mulP(statements[j], e[j])))
+    sumFake = add(sumFake, e[j])
   }
   const k = rand()
   a[trueIdx] = mulP(base, k)
   const total = challenge(label, [base, ...statements, ...a])
   e[trueIdx] = sub(total, sumFake)
-  s[trueIdx] = add(k, mul(e[trueIdx]!, witness))
+  s[trueIdx] = add(k, mul(e[trueIdx], witness))
   return { a: a.map(ptHex), e: e.map((x) => x.toString()), s: s.map((x) => x.toString()) }
 }
 function verifyOr(label: string, base: Point, statements: Point[], p: OrProof): boolean {
@@ -90,8 +90,8 @@ function verifyOr(label: string, base: Point, statements: Point[], p: OrProof): 
   for (const ej of p.e) sum = add(sum, BigInt(ej))
   if (mod(sum) !== mod(total)) return false
   for (let j = 0; j < m; j++) {
-    const lhs = mulP(base, BigInt(p.s[j]!))
-    const rhs = pts[j]!.add(mulP(statements[j]!, BigInt(p.e[j]!)))
+    const lhs = mulP(base, BigInt(p.s[j]))
+    const rhs = pts[j].add(mulP(statements[j], BigInt(p.e[j])))
     if (!lhs.eq(rhs)) return false
   }
   return true
@@ -111,16 +111,16 @@ export function proveRange(value: bigint, blinding: bigint, bits: number, t: ZkT
   let weighted = 0n
   for (let i = 1; i < bits; i++) {
     r[i] = rand()
-    weighted = add(weighted, mul(r[i]!, 1n << BigInt(i)))
+    weighted = add(weighted, mul(r[i], 1n << BigInt(i)))
   }
   r[0] = sub(blinding, weighted)
   const bitCommits: Point[] = []
   const bitProofs: OrProof[] = []
   for (let i = 0; i < bits; i++) {
     const bi = (v >> BigInt(i)) & 1n
-    const ci = commit(bi, r[i]!)
+    const ci = commit(bi, r[i])
     bitCommits.push(ci)
-    bitProofs.push(proveOr(transcriptLabel(t, `bit/${i}`), H, [ci, subG(ci)], Number(bi), r[i]!))
+    bitProofs.push(proveOr(transcriptLabel(t, `bit/${i}`), H, [ci, subG(ci)], Number(bi), r[i]))
   }
   return { bits, bitCommits: bitCommits.map(ptHex), bitProofs }
 }
@@ -128,16 +128,16 @@ export function verifyRange(C: Point, proof: RangeProof, t: ZkTranscript): boole
   if (proof.bitCommits.length !== proof.bits || proof.bitProofs.length !== proof.bits) return false
   let acc: Point | undefined
   for (let i = 0; i < proof.bits; i++) {
-    const q = PublicKey.fromString(proof.bitCommits[i]!) as any
+    const q = PublicKey.fromString(proof.bitCommits[i]) as any
     const ci = new Point(q.x, q.y)
     const term = mulP(ci, 1n << BigInt(i))
     acc = acc === undefined ? term : acc.add(term)
   }
   if (acc === undefined || !acc.eq(C)) return false
   for (let i = 0; i < proof.bits; i++) {
-    const q = PublicKey.fromString(proof.bitCommits[i]!) as any
+    const q = PublicKey.fromString(proof.bitCommits[i]) as any
     const ci = new Point(q.x, q.y)
-    if (!verifyOr(transcriptLabel(t, `bit/${i}`), H, [ci, subG(ci)], proof.bitProofs[i]!)) return false
+    if (!verifyOr(transcriptLabel(t, `bit/${i}`), H, [ci, subG(ci)], proof.bitProofs[i])) return false
   }
   return true
 }

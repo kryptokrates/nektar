@@ -63,10 +63,10 @@ export function encodeZkm2(p: ZkMembershipProof): Uint8Array {
 export function decodeZkm2(b: Uint8Array): ZkMembershipProof {
   if (b.length < HEADER_V1) throw new ZkmCodecError('truncated header')
   for (let i = 0; i < 4; i++) if (b[i] !== ZKM2_MAGIC[i]) throw new ZkmCodecError('bad magic (not L_ZKMem v2)')
-  const ver = b[4]!
+  const ver = b[4]
   if (ver !== 1 && ver !== ZKM2_VERSION) throw new ZkmCodecError(`unsupported version ${ver}`)
   const off = ver === 1 ? 0 : 1 // rev 2 inserts the algorithm byte at index 5
-  const alg = ver === 1 ? ALG_SHA256D : b[5]!
+  const alg = ver === 1 ? ALG_SHA256D : b[5]
   if (alg !== ALG_SHA256D) throw new ZkmCodecError(`unsupported algorithm ${alg}`)
   const header = HEADER_V1 + off
   if (b.length < header) throw new ZkmCodecError('truncated header')

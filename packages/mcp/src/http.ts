@@ -148,7 +148,7 @@ export async function handleBroadcasterStatus(
       if (typeof j.merklePath === 'string' && j.merklePath.length > 0) {
         try {
           const cand = MerklePath.fromHex(j.merklePath)
-          if (await cand.verify(j.txid, await mem.sdkTracker())) mp = cand
+          if (await cand.verify(j.txid, mem.sdkTracker())) mp = cand
         } catch {
           /* unusable — fetch evidence instead */
         }
@@ -159,7 +159,7 @@ export async function handleBroadcasterStatus(
         // the broadcaster's word alone is a hint, never a proof
         if (cand2 !== undefined) {
           try {
-            if (await cand2.verify(j.txid, await mem.sdkTracker())) mp = cand2
+            if (await cand2.verify(j.txid, mem.sdkTracker())) mp = cand2
           } catch {
             /* unverifiable */
           }
@@ -216,7 +216,7 @@ export function createHttpApi(
     }
     await transport.handleRequest(req, res, parsed)
   }
-  const server = createServer(async (req, res) => {
+  const server = createServer((req, res) => void (async () => {
     const send = (code: number, v: unknown, type = 'application/json') => {
       res.writeHead(code, { 'content-type': type })
       res.end(typeof v === 'string' ? v : json(v))
@@ -276,7 +276,13 @@ export function createHttpApi(
       if (req.method === 'GET' && url.pathname === '/dashboard') {
         // the operator audit surface — one page: identity, money, receipts,
         // market. Every block degrades to an honest empty state.
-        const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
+        const esc = (s: unknown) =>
+          (s === null || s === undefined
+            ? ''
+            : typeof s === 'object'
+              ? JSON.stringify(s)
+              : String(s as string | number | boolean | bigint)
+          ).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
         const d = await mem.doctor()
         if (ops?.wallet) {
           const w = (await ops.wallet()) as Record<string, unknown>
@@ -295,7 +301,7 @@ export function createHttpApi(
             const m = r.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
             if (m) {
               try {
-                const j = JSON.parse(Buffer.from(m[1]!, 'base64url').toString())
+                const j = JSON.parse(Buffer.from(m[1], 'base64url').toString())
                 amt = String(j.payment?.amountSats ?? j.payment?.amount ?? '')
                 tool = String(j.tool ?? j.toolName ?? '')
               } catch {}
@@ -315,7 +321,7 @@ export function createHttpApi(
         const fraudRows = ''
         // agents panel — this agent's declared identity + discovered peers
         const agentsRows = `<div class="row"><span><b>${esc(process.env.NEKTAR_MODEL_ID ?? 'this agent')}</b></span><span class="dim">${esc(mem.operatorKey().toPublicKey().toString().slice(0, 16))}…</span></div>`
-        const f = d.funding as Record<string, unknown>
+        const f = d.funding
         const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
         const up = process.uptime()
         const upStr = up > 86400 ? `${Math.floor(up / 86400)}d` : up > 3600 ? `${Math.floor(up / 3600)}h` : `${Math.floor(up / 60)}m`
@@ -448,7 +454,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
         const decisionBody = (await body(req).catch(() => ({}))) as { approve?: boolean }
         let r
         try {
-          r = await au.store.decideApproval(p[3]!, decisionBody.approve === true, 'dashboard:operator')
+          r = await au.store.decideApproval(p[3], decisionBody.approve === true, 'dashboard:operator')
         } catch (e) {
           return send(400, { error: (e as Error).message })
         }
@@ -459,23 +465,23 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
       if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
         if (!visibleTools().some((t) => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
         try {
-          return send(200, await callTool(mem, p[2]!, await body(req), { ops, external: !tok }))
+          return send(200, await callTool(mem, p[2], await body(req), { ops, external: !tok }))
         } catch (e) {
           return send(400, { error: (e as Error).message })
         }
       }
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'zkproof' && p.length === 3) {
-        const bytes = mem.getProof(decodeURIComponent(p[2]!))
+        const bytes = mem.getProof(decodeURIComponent(p[2]))
         if (!bytes) return send(404, { error: 'no proof artifact under that commitment' })
         res.writeHead(200, { 'content-type': 'application/octet-stream' })
         return res.end(Buffer.from(bytes))
       }
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'proof' && p.length === 4) {
-        const r = await mem.prove(decodeURIComponent(p[2]!), Number(p[3]))
+        const r = await mem.prove(decodeURIComponent(p[2]), Number(p[3]))
         return send(200, { result: r.result, bundle: r.bundle ?? null })
       }
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'checkpoint' && p.length === 3) {
-        const cp = mem.checkpoints(decodeURIComponent(p[2]!)).at(-1)
+        const cp = mem.checkpoints(decodeURIComponent(p[2])).at(-1)
         return cp ? send(200, { checkpoint: cp, logPublicKey: mem.logPublicKey() }) : send(404, { error: 'no checkpoint' })
       }
       if (req.method === 'GET' && url.pathname === '/v1/verify') {
@@ -620,7 +626,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'pack' && p.length === 3) {
         if (/^(0|false|no)$/i.test(process.env.NEKTAR_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
         try {
-          const pack = await mem.exportShardPack(decodeURIComponent(p[2]!))
+          const pack = await mem.exportShardPack(decodeURIComponent(p[2]))
           mem.metrics.inc('nektar_packs_served_total', {}, 1, 'public shard packs served')
           return send(200, pack)
         } catch (e) {
@@ -647,7 +653,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
     } catch (e) {
       if (!res.headersSent) send(500, { error: (e as Error).message })
     }
-  })
+  })())
   server.on('close', () => {
     for (const t of sessions.values()) void t.close()
   })

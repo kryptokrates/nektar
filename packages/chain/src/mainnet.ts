@@ -73,13 +73,13 @@ export class BsvBroadcaster implements Broadcaster {
         if (r.status !== 503 || i >= 3) break
         await new Promise((rs) => setTimeout(rs, 500 * 2 ** i))
       }
-      if (r!.status >= 500) throw new Error(`broadcaster HTTP ${r!.status}`) // → WoC fallback
-      const body = await r!.json().catch(() => ({}))
+      if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`) // → WoC fallback
+      const body = await r.json().catch(() => ({}))
       const st = String(body.txStatus ?? '').toUpperCase()
-      if (r!.ok && st !== 'REJECTED' && st !== 'DOUBLE_SPEND_ATTEMPTED') {
+      if (r.ok && st !== 'REJECTED' && st !== 'DOUBLE_SPEND_ATTEMPTED') {
         return { status: 'success', txid: tx.id('hex') }
       }
-      return { status: 'error', description: `broadcaster ${st || `HTTP ${r!.status}`}: ${body.reason ?? body.detail ?? body.extraInfo ?? ''}`.trim() }
+      return { status: 'error', description: `broadcaster ${st || `HTTP ${r.status}`}: ${body.reason ?? body.detail ?? body.extraInfo ?? ''}`.trim() }
     } catch (e) {
       // network error / 5xx → WoC fallback (policy rejections already returned)
       try {

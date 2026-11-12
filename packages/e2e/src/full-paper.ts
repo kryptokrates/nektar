@@ -176,7 +176,7 @@ spec(S, V) :- requires(P, V), applies(S, P).`).rules
   )
   const report = await ground(answer, fetch, { rules })
   check(
-    report.claims[0]!.reason === 'grounded:entailed' && report.claims[1]!.reason === 'uncited' && report.flagged.length === 1,
+    report.claims[0].reason === 'grounded:entailed' && report.claims[1].reason === 'uncited' && report.flagged.length === 1,
     L('grounding: entailed claim kept, unsupported statement flagged')
   )
   const model = await modelIdentity({ kind: 'api', provider: 'anthropic', release: 'claude-paper-run' })
@@ -195,7 +195,7 @@ spec(S, V) :- requires(P, V), applies(S, P).`).rules
   idx.add({ receiptHash: committed.receiptHash, claims: answer })
   const corr = await onRevision(idx, m(0), m(2), fetch, { rules, mem })
   check(
-    corr.length === 1 && corr[0]!.withdrawn[0] === 'port 4 is torqued to 45 Nm',
+    corr.length === 1 && corr[0].withdrawn[0] === 'port 4 is torqued to 45 Nm',
     L('manual revision: the citing answer is re-checked and its claim withdrawn')
   )
 
@@ -216,7 +216,7 @@ spec(S, V) :- requires(P, V), applies(S, P).`).rules
   await ac.step(0, 1, committed.receiptHash)
   await ac.step(1, 2, committed.receiptHash)
   const halted = await ac.halt({}).catch(() => null) // q=published ∉ F → contract refuses
-  const s3 = await ac.step(2, 3, corr[0]!.correctionHash)
+  const s3 = await ac.step(2, 3, corr[0].correctionHash)
   const hl = await ac.halt()
   check(halted === null && s3.state.q === 3 && hl.state.halted, L('automaton: drafted→grounded→published→corrected; premature halt refused'))
   txids.automatonDeploy = auto.tx.id('hex')
@@ -240,7 +240,7 @@ spec(S, V) :- requires(P, V), applies(S, P).`).rules
   )
   txids.revocation = mem.tailLink('__revocation__')!.txid
   check(
-    (await mem.prove('__receipts__', committed.anchor!.seq)).result.ok && (await mem.prove('__corrections__', corr[0]!.anchor!.seq)).result.ok,
+    (await mem.prove('__receipts__', committed.anchor!.seq)).result.ok && (await mem.prove('__corrections__', corr[0].anchor!.seq)).result.ok,
     L('answer receipt + correction anchored and provable')
   )
 

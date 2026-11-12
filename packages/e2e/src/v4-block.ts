@@ -65,7 +65,7 @@ export async function runV4Block({ chain, funder, fundKey, settle, mineMore, che
   // CHN-006 finality
   await settle(mem, ['v4'])
   const s1 = await mem.anchorStatus('v4', 0)
-  const held = (await mem.recall('v4', { seq: 1, requireFinal: true })).items[0]!
+  const held = (await mem.recall('v4', { seq: 1, requireFinal: true })).items[0]
   await mineMore(1)
   const s2 = await mem.anchorStatus('v4', 0)
   check(
@@ -120,7 +120,7 @@ export async function runV4Block({ chain, funder, fundKey, settle, mineMore, che
   await settle(m5, ['law'])
   check(
     (await m5.materialize('law', 1)) === 'Manual rev2: torque 55Nm' &&
-      Buffer.from((await m5.records('law'))[1]!.fragment.d)
+      Buffer.from((await m5.records('law'))[1].fragment.d)
         .toString()
         .startsWith('delta:0:'),
     L('§8 revision stored as Δ and materialised from proven links')

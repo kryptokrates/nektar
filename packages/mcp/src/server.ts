@@ -854,7 +854,7 @@ async function singlePolicy(au: NonNullable<NektarMemory['automation']>, role: '
     if (p && p.roles.includes(role) && p.agentPub === au.engine.agentPub && p.network === au.engine.network) found.push(r.policyHash)
   }
   if (found.length !== 1) throw new Error(`${tool}: operator must approve exactly one ${role} policy (pnpm automation policy approve …)`)
-  return found[0]!
+  return found[0]
 }
 
 async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
@@ -947,7 +947,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       const gid = typeof args?.grantId === 'string' ? args.grantId : undefined
       if (op === 'escrow' && gid && mem.budget) {
         const actionId = `sale:escrow:${args.cfg ? JSON.stringify(args.cfg).slice(0, 60) : Date.now()}`
-        const amount = Number((args.cfg as any)?.price ?? args.amount ?? 0)
+        const amount = Number((args.cfg)?.price ?? args.amount ?? 0)
         const r = mem.budget.reserve(gid, actionId, amount)
         if (r === 'exists') throw new Error(`sale: action already recorded for grant ${gid} � idempotent replay refused`)
         if (r !== 'ok') throw new Error(`sale: grant ${gid} budget ${r}`)
@@ -1116,7 +1116,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       const { tx } = host.buildBuy(args.utxo, args.wrapped, changeSats, await mem.fetchTx(args.utxo.txid))
       const r = await mem.broadcastTx(tx)
       if (r.status !== 'success') return { accepted: false, reason: r.description }
-      return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0]!.satoshis, txHex: tx.toHex() }
+      return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0].satoshis, txHex: tx.toHex() }
     }
     case 'sale#refund': {
       const { DisclosureSaleHost } = await import('@nektar/anchor')
@@ -1138,7 +1138,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       )
       const r = await mem.broadcastTx(tx)
       if (r.status !== 'success') return { accepted: false, reason: r.description }
-      return { accepted: true, txid: tx.id('hex'), refundSats: tx.outputs[0]!.satoshis }
+      return { accepted: true, txid: tx.id('hex'), refundSats: tx.outputs[0].satoshis }
     }
     case 'sale#claim': {
       const { Transaction } = await import('@bsv/sdk')
@@ -1157,7 +1157,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
             const { verifyProvenance } = await import('@nektar/log')
             const { d, p, E } = claimKeySale(r.value)
             const frag = { d, p, hdp: args.commitment.hdp ? fromHex(args.commitment.hdp) : undefined, E }
-            out.verified = toHex(computeLeaf(frag as any)) === args.commitment.leaf
+            out.verified = toHex(computeLeaf(frag)) === args.commitment.leaf
             if (out.verified && args.commitment.authorPub && p.signature.length) {
               out.authorVerified = verifyProvenance(args.commitment.authorPub, d, p)
             }
@@ -1815,7 +1815,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         spendableSats: Number(w.balanceSats ?? 0),
         utxos: Number(w.utxos ?? 0),
         marketSlots: slots,
-        ...(live.length === 1 ? { budget: await au.store.budgetStatus(live[0]!.policyHash) } : {})
+        ...(live.length === 1 ? { budget: await au.store.budgetStatus(live[0].policyHash) } : {})
       }
     }
     case 'automation': {

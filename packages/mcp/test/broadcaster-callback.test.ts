@@ -20,10 +20,10 @@ const serve = async (t: {
 
 // a real spend mined on the chain — returns the txid and its true BUMP
 const minedTx = async (chain: StackChain, funder: StackFunder): Promise<{ txid: string; mp: MerklePath }> => {
-  const parent = funder.parents[0]!
+  const parent = funder.parents[0]
   const tx = new Transaction()
   tx.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })
-  tx.addOutput({ satoshis: (parent.outputs[0]!.satoshis ?? 0) - 500, lockingScript: new P2PKH().lock(funder.keyPair.toPublicKey().toAddress()) })
+  tx.addOutput({ satoshis: (parent.outputs[0].satoshis ?? 0) - 500, lockingScript: new P2PKH().lock(funder.keyPair.toPublicKey().toAddress()) })
   await tx.fee()
   await tx.sign()
   assert.equal((await chain.broadcast(tx)).status, 'success')

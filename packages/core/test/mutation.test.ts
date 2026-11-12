@@ -19,7 +19,7 @@ function accept(leaf: Bytes, proof: MerkleProof, size: number, root: Bytes): boo
 }
 const flip = (b: Bytes, i: number) => {
   const c = Uint8Array.from(b)
-  c[i % c.length] = c[i % c.length]! ^ 0x01
+  c[i % c.length] = c[i % c.length] ^ 0x01
   return c
 }
 
@@ -32,24 +32,24 @@ test('TST-006: every single-node mutation fails, sizes 1..33, every leaf', () =>
     if (size === 3) {
       // document the hazard the anchored size closes
       const pr = merkleProof(leaves, 0)
-      assert.ok(eq(reconstructRoot(leaves[0]!, pr), root) && heightForLeafCount(4) === heightForLeafCount(3), 'path alone cannot tell 3 from 4 leaves')
+      assert.ok(eq(reconstructRoot(leaves[0], pr), root) && heightForLeafCount(4) === heightForLeafCount(3), 'path alone cannot tell 3 from 4 leaves')
     }
     for (let i = 0; i < size; i++) {
       const pr = merkleProof(leaves, i)
-      assert.ok(accept(leaves[i]!, pr, size, root), `honest proof size=${size} i=${i}`)
+      assert.ok(accept(leaves[i], pr, size, root), `honest proof size=${size} i=${i}`)
       const reject = (leaf: Bytes, p: MerkleProof, s: number, what: string) => {
         mutants++
         assert.equal(accept(leaf, p, s, root), false, `${what} size=${size} i=${i}`)
       }
-      for (let byte = 0; byte < 32; byte += 11) reject(flip(leaves[i]!, byte), pr, size, `leaf byte ${byte}`)
-      pr.siblings.forEach((_, k) => reject(leaves[i]!, { index: i, siblings: pr.siblings.map((s, j) => (j === k ? flip(s, k) : s)) }, size, `sibling ${k}`))
-      for (let j = 0; j < size + 2; j++) if (j !== i) reject(leaves[i]!, { index: j, siblings: pr.siblings }, size, `index ${i}→${j}`)
-      reject(leaves[i]!, { index: i, siblings: [...pr.siblings, root] }, size, 'extra sibling')
-      if (pr.siblings.length) reject(leaves[i]!, { index: i, siblings: pr.siblings.slice(0, -1) }, size, 'missing sibling')
-      for (const s of [size - 1, size + 1, size * 2]) if (s >= 1 && s !== size) reject(leaves[i]!, pr, s, `claimed size ${s}`)
+      for (let byte = 0; byte < 32; byte += 11) reject(flip(leaves[i], byte), pr, size, `leaf byte ${byte}`)
+      pr.siblings.forEach((_, k) => reject(leaves[i], { index: i, siblings: pr.siblings.map((s, j) => (j === k ? flip(s, k) : s)) }, size, `sibling ${k}`))
+      for (let j = 0; j < size + 2; j++) if (j !== i) reject(leaves[i], { index: j, siblings: pr.siblings }, size, `index ${i}→${j}`)
+      reject(leaves[i], { index: i, siblings: [...pr.siblings, root] }, size, 'extra sibling')
+      if (pr.siblings.length) reject(leaves[i], { index: i, siblings: pr.siblings.slice(0, -1) }, size, 'missing sibling')
+      for (const s of [size - 1, size + 1, size * 2]) if (s >= 1 && s !== size) reject(leaves[i], pr, s, `claimed size ${s}`)
       // the odd-level self-pair ("duplicate last leaf", CVE-2012-2459 shape) as a forged extra leaf
       if (size % 2 === 1 && size > 1)
-        reject(leaves[size - 1]!, { index: size, siblings: merkleProof(leaves, size - 1).siblings }, size, 'duplicate-last-leaf index')
+        reject(leaves[size - 1], { index: size, siblings: merkleProof(leaves, size - 1).siblings }, size, 'duplicate-last-leaf index')
     }
   }
   assert.ok(mutants > 15_000, `mutants checked: ${mutants}`)

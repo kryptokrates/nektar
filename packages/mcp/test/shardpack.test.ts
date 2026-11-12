@@ -86,12 +86,12 @@ test('shard packs: tampered data recomputes a different leaf → reported, never
   const b = await peerOf(a)
   if (b === undefined) return
   const tampered = JSON.parse(JSON.stringify(pack)) as typeof pack
-  tampered.records[0]!.data = 'fact one, altered'
+  tampered.records[0].data = 'fact one, altered'
   const imp = await b.importShardPack(tampered)
   assert.equal(imp.imported, 2) // records land — the PACK is the evidence, not a blacklist
   assert.equal(imp.anchored, 1)
   assert.equal(imp.unverifiable.length, 1)
-  assert.match(imp.unverifiable[0]!, /leaf/)
+  assert.match(imp.unverifiable[0], /leaf/)
 
   // malformed pack → hard error, nothing lands
   const c = await peerOf(a)
@@ -235,12 +235,12 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
     await a.mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'pack', priceSats: 50 }] })
     const ref = a.mem.packStoreRef('guide')
     assert.ok(ref !== undefined, 'pack stored after describeShard')
-    assert.equal(ref!.bucket, 'packs-regtest')
-    assert.match(ref!.key, /^packs\/regtest\/[0-9a-f]+\/[0-9a-f]{64}\.json$/)
+    assert.equal(ref.bucket, 'packs-regtest')
+    assert.match(ref.key, /^packs\/regtest\/[0-9a-f]+\/[0-9a-f]{64}\.json$/)
     // the discovery doc names the store ref for the shard
     const disco = await (await fetch(`${base}/.well-known/nektar`)).json()
     const entry = (disco.publicShards as Array<{ shard: string; store?: { key: string }; packUrl?: string }>).find((s) => s.shard === 'guide')
-    assert.equal(entry?.store?.key, ref!.key, '.well-known carries the store ref')
+    assert.equal(entry?.store?.key, ref.key, '.well-known carries the store ref')
     assert.ok(entry?.packUrl, 'http fallback stays advertised')
     // a peer imports through the store ref — getVerified + pack re-verification
     const b = await peerOf(a, { objectStore: client })
@@ -251,7 +251,7 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
     // a tampered object is refused by getVerified (size/digest) before it can land
     const c = await peerOf(a, { objectStore: client })
   if (c === undefined) return
-    objects.set(ref!.key, new TextEncoder().encode('{"kind":"forged"}'))
+    objects.set(ref.key, new TextEncoder().encode('{"kind":"forged"}'))
     await assert.rejects(callTool(c, 'importShard', { store: ref }) as Promise<unknown>, /objectstore/)
     // and a pack that passes the digest but fails re-verification is refused too
     const d2 = await peerOf(a, { objectStore: client })

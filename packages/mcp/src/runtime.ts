@@ -372,7 +372,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   chain.broadcast = txLogBroadcast(chain.broadcast)
   const mem = new NektarMemory(
-    chain as never,
+    chain,
     funder as never,
     fundKey,
     {
@@ -623,7 +623,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       for (const inp of tx.inputs) {
         if (inp.sourceTransaction || !inp.sourceTXID) continue
         const p = txStore.get(inp.sourceTXID) ?? reserve.utxos.find((u) => u.tx.id('hex') === inp.sourceTXID)?.tx ?? memRef?.anchorTx(inp.sourceTXID)
-        if (p) inp.sourceTransaction = p as Transaction
+        if (p) inp.sourceTransaction = p
       }
       const r = await spendGuard.broadcast(tx)
       if (r.status === 'success') {
@@ -661,7 +661,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   chain.broadcast = txLogBroadcast(chain.broadcast)
   const mem = new NektarMemory(
-    chain as never,
+    chain,
     funder as never,
     fundKey,
     {
@@ -864,7 +864,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       // push (callbacks/status stream) stays the primary proof channel
       {
         const unproven = txStore.unproven()
-        const pull = unproven.length <= 8 ? unproven : Array.from({ length: 8 }, (_, i) => unproven[(proofPullAt + i) % unproven.length]!)
+        const pull = unproven.length <= 8 ? unproven : Array.from({ length: 8 }, (_, i) => unproven[(proofPullAt + i) % unproven.length])
         proofPullAt = unproven.length > 0 ? (proofPullAt + 8) % unproven.length : 0
         for (const txid of pull) await mem.fetchTx(txid)
       }

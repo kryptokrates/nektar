@@ -21,7 +21,7 @@ process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
   const w = await stackWorld(t, 20)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-inf-')), ...opts })
   const settle = async (shard: string) => {
     await chain.mine(1)
@@ -168,7 +168,7 @@ test('attestInference: on-chain when artifacts + funding exist (the node evaluat
   delete process.env.NEKTAR_GROTH16_OUT
   const w = await stackWorld(t, 5, 100_000)
   if (w === undefined) return
-  const { chain: chain, funder: f } = w
+  const { chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-inf-on-')) })
   const { existsSync } = await import('node:fs')
   const dir = new URL('../../../../tools/groth16-spike/out/', import.meta.url)

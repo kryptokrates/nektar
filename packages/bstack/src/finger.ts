@@ -489,7 +489,7 @@ export async function resolveFinger(p: {
     // §10.4: the carrier's funding parent — a mined bf\x02 funding leaf under
     // the identity's record derivation
     const parent = carrier.inputs[0]?.sourceTransaction
-    const pout = parent?.outputs[carrier.inputs[0]!.sourceOutputIndex]
+    const pout = parent?.outputs[carrier.inputs[0].sourceOutputIndex]
     if (parent === undefined || pout === undefined) continue
     if (parent.merklePath === undefined || !(await parent.merklePath.verify(parent.id('hex'), p.tracker))) continue
     const fkey = decodeFunding(pout.lockingScript)

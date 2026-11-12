@@ -60,7 +60,7 @@ const addO = (a: Opt, b: Opt): Opt => (a === undefined ? b : b === undefined ? a
 const smul = (s: bigint, p: Point): Opt => (mod(s) === 0n ? undefined : mulP(p, s))
 const msm = (ss: bigint[], ps: Point[]): Opt => {
   let acc: Opt
-  for (let i = 0; i < ss.length; i++) acc = addO(acc, smul(ss[i]!, ps[i]!))
+  for (let i = 0; i < ss.length; i++) acc = addO(acc, smul(ss[i], ps[i]))
   return acc
 }
 const need = (p: Opt): Point => {
@@ -68,13 +68,13 @@ const need = (p: Opt): Point => {
   return p
 }
 const eqO = (a: Opt, b: Opt) => (a === undefined || b === undefined ? a === b : a.eq(b))
-const inner = (a: bigint[], b: bigint[]) => a.reduce((acc, x, i) => add(acc, mul(x, b[i]!)), 0n)
+const inner = (a: bigint[], b: bigint[]) => a.reduce((acc, x, i) => add(acc, mul(x, b[i])), 0n)
 const powers = (b: bigint, n: number): bigint[] => {
   const o = [1n]
-  for (let i = 1; i < n; i++) o.push(mul(o[i - 1]!, b))
+  for (let i = 1; i < n; i++) o.push(mul(o[i - 1], b))
   return o
 }
-const hadamard = (a: bigint[], b: bigint[]) => a.map((x, i) => mul(x, b[i]!))
+const hadamard = (a: bigint[], b: bigint[]) => a.map((x, i) => mul(x, b[i]))
 const isPow2 = (n: number) => n > 0 && (n & (n - 1)) === 0
 
 interface InnerProductProof {
@@ -126,10 +126,10 @@ function proveIP(gIn: Point[], hIn: Point[], U: Point, aIn: bigint[], bIn: bigin
       aNext: bigint[] = [],
       bNext: bigint[] = []
     for (let i = 0; i < nn; i++) {
-      gNext.push(need(addO(smul(uInv, gLo[i]!), smul(u, gHi[i]!))))
-      hNext.push(need(addO(smul(u, hLo[i]!), smul(uInv, hHi[i]!))))
-      aNext.push(add(mul(aLo[i]!, u), mul(aHi[i]!, uInv)))
-      bNext.push(add(mul(bLo[i]!, uInv), mul(bHi[i]!, u)))
+      gNext.push(need(addO(smul(uInv, gLo[i]), smul(u, gHi[i]))))
+      hNext.push(need(addO(smul(u, hLo[i]), smul(uInv, hHi[i]))))
+      aNext.push(add(mul(aLo[i], u), mul(aHi[i], uInv)))
+      bNext.push(add(mul(bLo[i], uInv), mul(bHi[i], u)))
     }
     g = gNext
     h = hNext
@@ -137,7 +137,7 @@ function proveIP(gIn: Point[], hIn: Point[], U: Point, aIn: bigint[], bIn: bigin
     b = bNext
     round++
   }
-  return { L: L.map(ptHex), R: R.map(ptHex), a: a[0]!.toString(), b: b[0]!.toString() }
+  return { L: L.map(ptHex), R: R.map(ptHex), a: a[0].toString(), b: b[0].toString() }
 }
 
 function verifyIP(gIn: Point[], hIn: Point[], U: Point, Pin: Point, proof: InnerProductProof, bind = ''): boolean {
@@ -145,8 +145,8 @@ function verifyIP(gIn: Point[], hIn: Point[], U: Point, Pin: Point, proof: Inner
     h = hIn.slice(),
     P: Point = Pin
   for (let round = 0; round < proof.L.length; round++) {
-    const Lj = ptFromHex(proof.L[round]!),
-      Rj = ptFromHex(proof.R[round]!)
+    const Lj = ptFromHex(proof.L[round]),
+      Rj = ptFromHex(proof.R[round])
     const u = challenge(`${bind}nektar/bp/ip/${round}`, [Lj, Rj]),
       uInv = inv(u)
     const u2 = mul(u, u),
@@ -159,14 +159,14 @@ function verifyIP(gIn: Point[], hIn: Point[], U: Point, Pin: Point, proof: Inner
     const gNext: Point[] = [],
       hNext: Point[] = []
     for (let i = 0; i < nn; i++) {
-      gNext.push(need(addO(smul(uInv, gLo[i]!), smul(u, gHi[i]!))))
-      hNext.push(need(addO(smul(u, hLo[i]!), smul(uInv, hHi[i]!))))
+      gNext.push(need(addO(smul(uInv, gLo[i]), smul(u, gHi[i]))))
+      hNext.push(need(addO(smul(u, hLo[i]), smul(uInv, hHi[i]))))
     }
     g = gNext
     h = hNext
     P = need(addO(addO(need(smul(u2, Lj)), P), need(smul(uInv2, Rj))))
   }
-  const rhs = addO(addO(smul(BigInt(proof.a), g[0]!), smul(BigInt(proof.b), h[0]!)), smul(mul(BigInt(proof.a), BigInt(proof.b)), U))
+  const rhs = addO(addO(smul(BigInt(proof.a), g[0]), smul(BigInt(proof.b), h[0])), smul(mul(BigInt(proof.a), BigInt(proof.b)), U))
   return eqO(P, rhs)
 }
 
@@ -212,7 +212,7 @@ export function proveRangeBP(value: bigint, blinding: bigint, bits: number, bind
   const mu = add(alpha, mul(rho, x))
   const yInv = inv(y),
     yInvN = powers(yInv, n)
-  const hp = hv.map((p, i) => mulP(p, yInvN[i]!))
+  const hp = hv.map((p, i) => mulP(p, yInvN[i]))
   const ip = proveIP(gv, hp, U, l, r, bind)
   return {
     proof: { bits, A: ptHex(A), S: ptHex(S), T1: ptHex(T1), T2: ptHex(T2), taux: taux.toString(), mu: mu.toString(), tHat: tHat.toString(), ip },
@@ -220,7 +220,7 @@ export function proveRangeBP(value: bigint, blinding: bigint, bits: number, bind
   }
 }
 function vecAdd(a: bigint[], b: bigint[]) {
-  return a.map((x, i) => add(x, b[i]!))
+  return a.map((x, i) => add(x, b[i]))
 }
 function vecScale(s: bigint, a: bigint[]) {
   return a.map((x) => mul(s, x))
@@ -253,16 +253,16 @@ export function verifyRangeBP(commitment: Point, proof: RangeProofBP, bind = '')
   const rhs1 = need(addO(addO(addO(smul(z2, commitment), smul(delta, BP_G)), smul(x, T1)), smul(x2, T2)))
   if (!lhs1.eq(rhs1)) return false
   const yInvN = powers(inv(y), n)
-  const hp = hv.map((p, i) => mulP(p, yInvN[i]!))
+  const hp = hv.map((p, i) => mulP(p, yInvN[i]))
   // P = A + x·S + Σ (−z)·g_i + Σ (z·y^i + z²·2^i)·h'_i; then Pip = P − μ·H + tHat·U
   const gScalars = oneN.map(() => mod(-z))
-  const hScalars = yN.map((yi, i) => add(mul(z, yi), mul(z2, twoN[i]!)))
+  const hScalars = yN.map((yi, i) => add(mul(z, yi), mul(z2, twoN[i])))
   const P = need(addO(addO(addO(A, need(smul(x, S))), msm(gScalars, gv)), msm(hScalars, hp)))
   const Pip = need(addO(addO(P, smul(mod(-mu), BP_H)), smul(tHat, U)))
   return verifyIP(gv, hp, U, Pip, proof.ip, bind)
 }
 function msmPsum(pts: Point[]): Point {
-  let acc = pts[0]!
-  for (let i = 1; i < pts.length; i++) acc = acc.add(pts[i]!)
+  let acc = pts[0]
+  for (let i = 1; i < pts.length; i++) acc = acc.add(pts[i])
   return acc
 }

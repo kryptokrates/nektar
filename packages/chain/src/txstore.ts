@@ -16,7 +16,7 @@ export interface TxPersistence {
   put: (row: TxRow) => Promise<void>
 }
 
-const hexOf = (b: number[] | Uint8Array): string => Buffer.from(b as Uint8Array).toString('hex')
+const hexOf = (b: number[] | Uint8Array): string => Buffer.from(b).toString('hex')
 const MAX_DEPTH = 64
 
 /** what a wire payload turned out to be: `spv` is true only when the whole

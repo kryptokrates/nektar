@@ -24,7 +24,7 @@ export function attestationScript(commitment: Bytes): LockingScript {
     .writeOpCode(0x6a) // OP_RETURN
     .writeBin([...utf8(ATTEST_TAG)])
     .writeBin([...commitment])
-  return s as LockingScript
+  return s
 }
 
 /** extract the attestation commitment from a locking script, or null.
@@ -37,15 +37,15 @@ export function decodeAttestationScript(scriptHex: string): { tag: string; commi
     const rest = Buffer.from(hex.slice(4), 'hex')
     const pushes: Buffer[] = []
     for (let o = 0; o < rest.length;) {
-      const len = rest[o]!
+      const len = rest[o]
       if (len === 0 || len > 75 || o + 1 + len > rest.length) return null // all fields ≤ 75 B
       pushes.push(rest.subarray(o + 1, o + 1 + len))
       o += 1 + len
     }
-    if (pushes.length !== 2 || pushes[1]!.length !== 32) return null
-    const tag = pushes[0]!.toString('utf8')
+    if (pushes.length !== 2 || pushes[1].length !== 32) return null
+    const tag = pushes[0].toString('utf8')
     if (tag !== ATTEST_TAG) return null
-    return { tag, commitment: new Uint8Array(pushes[1]!) }
+    return { tag, commitment: new Uint8Array(pushes[1]) }
   } catch {
     return null
   }

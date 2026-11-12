@@ -155,7 +155,7 @@ test('profile: an operator-only tool is refused over HTTP and MCP in agent profi
     await client.connect(ct)
     const r = await client.callTool({ name: 'fundingStatus', arguments: {} })
     assert.equal((r as { isError?: boolean }).isError, true, 'MCP refuses an operator tool under agent profile')
-    assert.match((r as { content: Array<{ text: string }> }).content[0]!.text, /unknown tool/)
+    assert.match((r as { content: Array<{ text: string }> }).content[0].text, /unknown tool/)
     await client.close()
 
     process.env.NEKTAR_TOOL_PROFILE = 'operator'
@@ -251,7 +251,7 @@ test('profile: sell → want → deals drives a full deal; fund reports slot cou
     assert.ok(Array.isArray(d.events) && d.events.length > 0)
     const list = (await callTool(bb.mem, 'deals', {})) as { deals: Array<{ operationId: string; state: string; wantId: string }> }
     assert.equal(list.deals.length, 1)
-    assert.equal(list.deals[0]!.wantId, w.wantId)
+    assert.equal(list.deals[0].wantId, w.wantId)
     const slots1 = (await callTool(bb.mem, 'fund', {})) as { marketSlots: { market: number; bbox: number } }
     assert.ok(
       slots1.marketSlots.market < slots0.marketSlots.market,

@@ -13,7 +13,7 @@ test('tree: n=8 mints 8 funding outputs + change, each decodes our tag', async (
   const key = PrivateKey.fromRandom()
   const t = await mintTree({ key, funding: fund(key), n: 8, satsPerOutput: 1000 })
   assert.equal(t.outputs.length, 9)
-  for (let i = 0; i < 8; i++) assert.ok(decodeFunding(t.outputs[i]!.lockingScript, Array.from(FUNDING_TAG)))
+  for (let i = 0; i < 8; i++) assert.ok(decodeFunding(t.outputs[i].lockingScript, Array.from(FUNDING_TAG)))
 })
 
 test('ledger: unproven tree is not handed out; once proven it is', async () => {
@@ -114,10 +114,10 @@ const blockPaths = (h2: string, h3: string, h6: string): { compound: MerklePath;
 const assertOwnPath = (mp: MerklePath | undefined, txid: string, root: string, h3: string): void => {
   assert.ok(mp !== undefined)
   assert.equal(mp.computeRoot(txid), root)
-  assert.equal(mp.path[0]!.length, 2)
-  const me = mp.path[0]!.find((e) => e.hash === txid)
+  assert.equal(mp.path[0].length, 2)
+  const me = mp.path[0].find((e) => e.hash === txid)
   assert.ok(me !== undefined && me.txid === true)
-  const sib = mp.path[0]!.find((e) => e !== me)
+  const sib = mp.path[0].find((e) => e !== me)
   assert.ok(sib !== undefined && sib.txid !== true && sib.hash === h3)
   for (const [lvl, row] of mp.path.entries()) if (lvl > 0) assert.equal(row.length, 1, `level ${lvl}`)
   assert.equal(minimalPath(mp, txid), true)

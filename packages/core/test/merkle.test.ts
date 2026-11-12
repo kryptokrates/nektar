@@ -17,7 +17,7 @@ test('merkle: odd self-pairing and proof round-trip (anchorchain parity)', () =>
     const root = merkleRoot(leaves)
     for (let idx = 0; idx < size; idx++) {
       const proof = merkleProof(leaves, idx)
-      assert.equal(verifyProof(leaves[idx]!, proof, root), true)
+      assert.equal(verifyProof(leaves[idx], proof, root), true)
       assert.equal(proof.siblings.length, heightForLeafCount(size))
     }
   }
@@ -27,11 +27,11 @@ test('merkle: tamper detection', () => {
   const leaves = Array.from({ length: 12 }, (_, i) => leaf(i + 1))
   const root = merkleRoot(leaves)
   const proof = merkleProof(leaves, 5)
-  assert.equal(verifyProof(leaves[6]!, proof, root), false)
-  assert.equal(verifyProof(leaves[5]!, { index: 9, siblings: proof.siblings }, root), false)
+  assert.equal(verifyProof(leaves[6], proof, root), false)
+  assert.equal(verifyProof(leaves[5], { index: 9, siblings: proof.siblings }, root), false)
   const bad = Uint8Array.from(root)
-  bad[0]! ^= 0xff
-  assert.equal(verifyProof(leaves[5]!, proof, bad), false)
+  bad[0] ^= 0xff
+  assert.equal(verifyProof(leaves[5], proof, bad), false)
 })
 
 // anchorchain parity vector: BSV mainnet block 181 (2 txids, root from the block)

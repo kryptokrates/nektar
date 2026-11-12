@@ -38,7 +38,7 @@ export interface MinihostHandle {
 export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker): Promise<MinihostHandle> {
   const tracker: ChainTracker = 'tracker' in opts ? opts.tracker : opts
   const evil = 'evil' in opts ? (opts.evil ?? false) : false
-  const failNext = 'failNext' in opts ? (opts.failNext as ((topics?: string[]) => boolean) | undefined) : undefined
+  const failNext = 'failNext' in opts ? (opts.failNext) : undefined
   const drop = 'drop' in opts ? opts.drop : undefined
   const office = 'office' in opts ? opts.office : undefined
   const logStream = 'logStream' in opts ? opts.logStream : undefined
@@ -46,8 +46,8 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
   const corrupt = 'corrupt' in opts ? (opts.corrupt ?? false) : false
   const port = 'port' in opts ? opts.port : undefined
   const now = 'now' in opts ? opts.now : undefined
-  const host = { log: () => {}, chainTracker: tracker as unknown as ChainTracker, engine: { submit: async () => ({}) } }
-  const { topics, lookups } = createNektarModule(host as never, nets, now !== undefined ? { now } : undefined)
+  const host = { log: () => {}, chainTracker: tracker, engine: { submit: async () => ({}) } }
+  const { topics, lookups } = createNektarModule(host, nets, now !== undefined ? { now } : undefined)
   const stored = new Map<string, number[]>()
   // ls_bbox below is a spec-shaped double: it implements only {office,to} and
   // inbox-after; admission on tm_bbox_<office> runs the REAL codec admit() verdict,
@@ -70,7 +70,7 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
   if (logStream !== undefined) {
     const mod = await import('@lightwebinc/blogs-host/dist/module.js')
     const mhost = { metrics: { preset: () => {}, inc: () => {}, gauge: () => {} }, log: () => {}, chainTracker: tracker }
-    const m = mod.blogsModule(mhost as never, [{ stream: logStream, policy: { open: true } }], [`tm_log_${logStream}`])
+    const m = mod.blogsModule(mhost, [{ stream: logStream, policy: { open: true } }], [`tm_log_${logStream}`])
     logTM = m.topics![`tm_log_${logStream}`] as never
     logLS = m.lookups!['ls_log'] as never
   }
@@ -92,8 +92,8 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
   if (finger) {
     const mod = await import('@lightwebinc/bfinger-host/dist/index.js')
     const mhost = { metrics: { preset: () => {}, inc: () => {}, gauge: () => {} }, log: () => {}, chainTracker: tracker }
-    fingerTM = new mod.FingerTopicManager(mhost as never) as never
-    fingerLS = new mod.FingerLookupService(mhost as never) as never
+    fingerTM = new mod.FingerTopicManager(mhost) as never
+    fingerLS = new mod.FingerLookupService(mhost) as never
   }
   const srv = http.createServer(async (req, res) => {
     const chunks: Buffer[] = []
@@ -197,14 +197,14 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
             res.end(JSON.stringify({ error: `unknown topic ${t}` }))
             return
           }
-          const r = await topics[t]!.identifyAdmissibleOutputs(beef, [])
+          const r = await topics[t].identifyAdmissibleOutputs(beef, [])
           admitted = admitted.concat(r.outputsToAdmit)
           try {
             stored.set(Transaction.fromAtomicBEEF(beef).id('hex'), beef)
           } catch {
             /* */
           }
-          for (const o of r.outputsToAdmit) await lookups['ls_nektar']!.outputAdmittedByTopic({ mode: 'whole-tx', atomicBEEF: beef, outputIndex: o, topic: t })
+          for (const o of r.outputsToAdmit) await lookups['ls_nektar'].outputAdmittedByTopic({ mode: 'whole-tx', atomicBEEF: beef, outputIndex: o, topic: t })
         }
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(admitted.length ? { [names[0]]: { outputsToAdmit: admitted } } : {}))
@@ -228,7 +228,7 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
         } else
           a = evil
             ? [...stored.keys()].map((txid) => ({ txid, outputIndex: 0 }))
-            : ((await lookups[q.service]!.lookup(q)) as Array<{ txid: string; outputIndex: number }>)
+            : ((await lookups[q.service].lookup(q)))
         if (drop !== undefined) a = a.filter((x) => !drop(x.txid))
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(
@@ -236,7 +236,7 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
             type: 'output-list',
             outputs: a.map((o) => {
               const b = [...(stored.get(o.txid) ?? [])]
-              if (corrupt && b.length > 10) b[10] = b[10]! ^ 0xff
+              if (corrupt && b.length > 10) b[10] = b[10] ^ 0xff
               return { beef: b, outputIndex: o.outputIndex }
             })
           })

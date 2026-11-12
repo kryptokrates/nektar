@@ -82,9 +82,9 @@ test('sandbox: control flow with a recording backend — baseline must fail, pat
   })
   const pass = await evaluatePatch(spec, good, script([1, 0, 0]))
   assert.equal(pass.outcome, 'PASS')
-  assert.match(calls[0]!.app, /libfoo\.connect\(/, 'baseline ran on the unpatched checkout')
-  assert.match(calls[1]!.app, /libfoo\.open\(/, 'acceptance ran on the patched checkout')
-  assert.ok(calls[2]!.hidden, 'hidden tests are mounted separately from the writable checkout')
+  assert.match(calls[0].app, /libfoo\.connect\(/, 'baseline ran on the unpatched checkout')
+  assert.match(calls[1].app, /libfoo\.open\(/, 'acceptance ran on the patched checkout')
+  assert.ok(calls[2].hidden, 'hidden tests are mounted separately from the writable checkout')
   assert.match(readFileSync(join(spec.fixtureDir, 'src', 'app.js'), 'utf8'), /libfoo\.connect\(/, 'the original fixture is never modified')
   assert.equal((await evaluatePatch(spec, good, script([0]))).outcome, 'BLOCKED', 'a fixture that already passes proves nothing')
   assert.equal((await evaluatePatch(spec, good, script([1, 1]))).outcome, 'FAIL')
@@ -177,7 +177,7 @@ test('ai: provider-neutral HTTP adapter — same contract against two endpoints,
     seen.map((s) => s.auth),
     [undefined, 'Bearer k']
   )
-  assert.equal(seen[0]!.body.max_tokens, 64)
+  assert.equal(seen[0].body.max_tokens, 64)
   assert.ok(!JSON.stringify(seen).includes('WIF'), 'no wallet material in a model request')
   const evil = new HttpChatExecutor({
     provider: 'p',

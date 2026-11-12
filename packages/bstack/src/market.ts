@@ -62,7 +62,7 @@ export function decodePayload(b: Uint8Array): MarketPayload {
 }
 
 export function laneNibble(domain: string): string {
-  return toHex(Uint8Array.of(sha256(utf8(domain.toLowerCase()))[0]!))[0]!
+  return toHex(Uint8Array.of(sha256(utf8(domain.toLowerCase()))[0]))[0]
 }
 export function laneOf(net: string, domain: string): string {
   return `tm_nektar_${net}_${laneNibble(domain)}`

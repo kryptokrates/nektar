@@ -57,7 +57,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
   const engineFor = (mem: NektarMemory, store: AutomationStore) =>
     new MarketEngine({
       store,
-      memory: mem as never,
+      memory: mem,
       key: mem.operatorKey(),
       network: 'regtest',
       now,
@@ -257,17 +257,17 @@ test('outside policy → paused for a human; approval is bound to the exact acti
   const op1 = await run()
   assert.equal((await bob.engine.status(op1))!.operation.state, 'escalated')
   const [pending] = await bob.store.approvals('pending')
-  assert.equal(pending!.reason, 'locked_capital_above_policy')
-  assert.equal(pending!.maxExtraSats, 710)
+  assert.equal(pending.reason, 'locked_capital_above_policy')
+  assert.equal(pending.maxExtraSats, 710)
   await w.round([bob])
   assert.equal((await bob.engine.status(op1))!.operation.state, 'escalated', 'nothing is spent while the approval is pending')
   assert.equal((await bob.store.budgetStatus(bob.policyHash)).purchaseTodaySats, 0)
-  await bob.store.decideApproval(pending!.approvalId, true, 'cli:operator')
+  await bob.store.decideApproval(pending.approvalId, true, 'cli:operator')
   for (let i = 0; i < 3; i++) await w.round()
   assert.equal((await bob.engine.status(op1))!.operation.state, 'disclosure_verified')
   const op2 = await run()
   const [p2] = await bob.store.approvals('pending')
-  await bob.store.decideApproval(p2!.approvalId, false, 'cli:operator')
+  await bob.store.decideApproval(p2.approvalId, false, 'cli:operator')
   await w.round([bob])
   assert.equal((await bob.engine.status(op2))!.operation.state, 'denied')
   assert.equal((await bob.store.budgetStatus(bob.policyHash)).purchaseTodaySats, 200, 'only the approved purchase was spent')

@@ -25,7 +25,7 @@ async function scenario(t: { skip: (m?: string) => void }) {
   const link0: AnchorLink = { txid: g.tx.id('hex'), outputIndex: 0, n: 0, size: 2, R: toHex(R), Rp: toHex(g.head.data.Rp) }
   const bundle = buildProofBundle({
     shard: 's1',
-    leaf: leaves[0]!,
+    leaf: leaves[0],
     leafIndex: 0,
     siblings: merkleProof(leaves, 0).siblings,
     batchN: 0,
@@ -59,7 +59,7 @@ test('verify: broken anchor chain detected', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s
-  bundle.chainTail[0]!.Rp = toHex(dsha256(utf8('fake')))
+  bundle.chainTail[0].Rp = toHex(dsha256(utf8('fake')))
   const res = await verifyFragment(bundle, chain)
   assert.equal(res.ok, false)
   assert.equal((res as any).reason, 'ChainInconsistent')
@@ -106,7 +106,7 @@ test('verify: path one extra sibling rejected', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s
-  bundle.path = [...bundle.path, bundle.path[0]!]
+  bundle.path = [...bundle.path, bundle.path[0]]
   const r = await verifyFragment(bundle, chain)
   assert.equal(r.ok, false)
   assert.equal((r as any).reason, 'BadBundle')
@@ -139,7 +139,7 @@ test('verify: odd-batch duplicate-last-leaf claim rejected', async (t) => {
   chain2.mine(1)
   const b = buildProofBundle({
     shard: 'odd',
-    leaf: leaves[2]!,
+    leaf: leaves[2],
     leafIndex: 3, // claim index = size!
     siblings: mp(leaves, 2).siblings,
     batchN: 0,
@@ -158,7 +158,7 @@ test('verify: tampered middle tail link with recomputed self-consistent tail fai
   const { chain, bundle } = s
   // recompute Rp of last link so tail is self-consistent but differs from on-chain
   const { chainRp: crp } = await import('@nektar/core')
-  const mid = bundle.chainTail[0]!
+  const mid = bundle.chainTail[0]
   const fakeR = dsha256(utf8('middle'))
   mid.R = toHex(fakeR)
   mid.Rp = toHex(crp(new Uint8Array(32), fakeR, mid.size))

@@ -35,14 +35,14 @@ export interface PolicySet {
 }
 /** canonicalize + hash the policy text — the anchorable commitment. */
 export function canonicalizePolicySet(name: string, text: string): PolicySet {
-  const res = formatPolicies({ policyText: text } as any) as any
+  const res = formatPolicies({ policyText: text }) as any
   const canon = res?.formatted_policy
   if (typeof canon !== 'string') throw new Error('cedar formatPolicies failed: ' + JSON.stringify(res).slice(0, 120))
   return { name, text: canon, hash: toHex(dsha256(concat(utf8('nektar/policyset/v1'), utf8(canon)))) }
 }
 
 export function parseCheck(text: string): { ok: boolean; errors?: string[] } {
-  const res = formatPolicies({ policyText: text } as any) as any
+  const res = formatPolicies({ policyText: text }) as any
   return { ok: res?.type === 'success', errors: res?.parseErrors ?? (res?.type !== 'success' ? [JSON.stringify(res).slice(0, 200)] : undefined) }
 }
 

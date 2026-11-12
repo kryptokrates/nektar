@@ -44,8 +44,8 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
   const res = await mem.recall('s')
   // no verified identity → principal facts empty → DAG cannot derive permit → deny
   assert.ok(res.receipt.dag, 'dag receipt present')
-  assert.match(res.receipt.dag!.state, /dag-deny/, 'DAG gate denies without verified principal')
-  assert.ok(res.receipt.dag!.policyRoot.length === 64, 'receipt carries policy root')
+  assert.match(res.receipt.dag.state, /dag-deny/, 'DAG gate denies without verified principal')
+  assert.ok(res.receipt.dag.policyRoot.length === 64, 'receipt carries policy root')
 })
 
 test('POL-016b: per-item DAG permit — mixed batch withholds only the unpermitted fragment', async (t) => {
@@ -97,7 +97,7 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 10 }, policyDag: dag, anchoredPolicyRoot: 'ff'.repeat(32) })
   await mem.remember('s', 'x', {}, 0)
   const res = await mem.recall('s')
-  assert.equal(res.items[0]!.unverifiable, true)
+  assert.equal(res.items[0].unverifiable, true)
   assert.match(res.receipt.dag!.state, /policy DAG root mismatch/, 'root mismatch denies')
   assert.equal(res.receipt.cedar, 'deny')
 })

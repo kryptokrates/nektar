@@ -33,8 +33,8 @@ test('box: send -> recipient reads + decrypts; third key gets nothing; resend = 
     assert.ok(r1.took.length >= 1, 'quorum reached — straggler legs still land in the background')
     const read = await readBox({ key: recip, hosts: [h1.url, h2.url], tracker: tr })
     assert.equal(read.items.length, 1)
-    assert.equal(read.items[0]!.from, sender.toPublicKey().toString())
-    assert.deepEqual(read.items[0]!.body, body)
+    assert.equal(read.items[0].from, sender.toPublicKey().toString())
+    assert.deepEqual(read.items[0].body, body)
     const r3 = await readBox({ key: third, hosts: [h1.url], tracker: tr })
     assert.equal(r3.items.length, 0, 'third key cannot read')
     // the host that answered late still ends up holding the envelope

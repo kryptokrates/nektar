@@ -42,7 +42,7 @@ function loadRepoEnv(): void {
     if (existsSync(f)) {
       for (const line of readFileSync(f, 'utf8').split(/\r?\n/)) {
         const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line)
-        if (m !== null && process.env[m[1]!] === undefined) process.env[m[1]!] = m[2]!.replace(/^["']|["']$/g, '')
+        if (m !== null && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
       }
       return
     }
@@ -184,6 +184,31 @@ export class StackTreasury {
         : this.loadOrMakeKey(file)
     this.chain = new StackChain(cfg, this.key)
     this.reserve = new ReserveFunder(this.key, join(STATE_DIR, 'reserve.json'))
+    // cross-process lease: takeReserve consults .state/leases.json so two
+    // parallel test files never pick the same entry (same-entry picks were
+    // the UTXO_SPENT retry storm). Leases carry an expiry so dead processes
+    // release theirs.
+    this.reserve.leased = async (txid, vout) => {
+      const f = join(STATE_DIR, 'leases.json')
+      return await withTreasuryLock(async () => {
+        let leases: Record<string, number> = {}
+        try {
+          leases = JSON.parse(readFileSync(f, 'utf8'))
+        } catch {
+          /* missing/corrupt → fresh */
+        }
+        const now = Date.now()
+        for (const k of Object.keys(leases)) if (leases[k] < now) delete leases[k]
+        const key = `${txid}:${vout}`
+        if (leases[key] !== undefined) {
+          writeFileSync(f, JSON.stringify(leases))
+          return true
+        }
+        leases[key] = now + 300_000
+        writeFileSync(f, JSON.stringify(leases))
+        return false
+      })
+    }
   }
   private loadOrMakeKey(file: string): PrivateKey {
     const kf = join(STATE_DIR, 'testkit-treasury.json')
@@ -228,8 +253,9 @@ export class StackTreasury {
         treasuryFile: join(STATE_DIR, 'treasury.json')
       })
       if (r === null) throw new Error('testkit: treasury tail spent — cannot refill reserve')
+      // zeroconf: the fresh reserve outputs are spendable as mempool children —
+      // no block needed before the next fund() can draw on them
     })
-    await this.chain.mine(1)
   }
 }
 
@@ -293,20 +319,26 @@ export class StackFunder implements Funder {
     // broadcast failure — allow enough attempts to walk past a rotten pool
     const need = outputs * sats + 5_000
     for (let attempt = 0; attempt < 8; attempt++) {
-      // accumulate reserve entries until the spend is covered — the 16-input
-      // cap sets the floor so entries don't need to be 50k each
+      // prefer ONE entry covering the whole spend (the leased big pool makes
+      // that the common case); fall back to accumulating smaller entries
       const srcs: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
       const picked = new Set<string>()
       let inSats = 0
-      const floor = Math.min(50_000, Math.ceil(need / 16))
-      while (inSats < need && srcs.length < 16) {
-        // takeReserve doesn't mark on take — exclude this tx's own picks or a
-        // multi-input spend would consume the same outpoint twice (TX_INVALID)
-        const src = await t.reserve.takeReserve(async (txid, vout) => picked.has(`${txid}:${vout}`) || (await utxoStatus(t.cfg, txid, vout)) === 'spent', floor)
-        if (src === null) break
-        picked.add(`${src.tx.id('hex')}:${src.vout}`)
-        srcs.push(src)
-        inSats += src.satoshis
+      const spendCheck = async (txid: string, vout: number) => picked.has(`${txid}:${vout}`) || (await utxoStatus(t.cfg, txid, vout)) === 'spent'
+      const single = await t.reserve.takeReserve(spendCheck, need)
+      if (single !== null) {
+        picked.add(`${single.tx.id('hex')}:${single.vout}`)
+        srcs.push(single)
+        inSats = single.satoshis
+      } else {
+        const floor = Math.min(50_000, Math.ceil(need / 16))
+        while (inSats < need && srcs.length < 16) {
+          const src = await t.reserve.takeReserve(spendCheck, floor)
+          if (src === null) break
+          picked.add(`${src.tx.id('hex')}:${src.vout}`)
+          srcs.push(src)
+          inSats += src.satoshis
+        }
       }
       if (inSats < need) {
         // pool drained below the floor — split another ~60 entries off the
@@ -327,10 +359,11 @@ export class StackFunder implements Funder {
       if (r.status === 'success') {
         for (const src of srcs) t.reserve.markSpent(src.tx.id('hex'), src.vout)
         const changeVout = tx.outputs.length - 1
-        if ((tx.outputs[changeVout]!.satoshis ?? 0) > 0) t.reserve.addOwned(tx, changeVout)
+        if ((tx.outputs[changeVout].satoshis ?? 0) > 0) t.reserve.addOwned(tx, changeVout)
         f.fundingTx = tx
         for (let i = 0; i < outputs; i++) f.utxos.push({ tx, vout: i, satoshis: sats })
-        await t.mine(1)
+        // zeroconf: outputs are spendable while unconfirmed — tests mine only
+        // where a proof is actually asserted
         return f
       }
       for (const src of srcs) t.reserve.markSpent(src.tx.id('hex'), src.vout)
@@ -342,7 +375,7 @@ export class StackFunder implements Funder {
   async take(satoshis: number): Promise<FundingOut> {
     const i = this.utxos.findIndex((u) => u.satoshis >= satoshis)
     if (i < 0) throw new Error('StackFunder: no utxo of that size')
-    const u = this.utxos.splice(i, 1)[0]!
+    const u = this.utxos.splice(i, 1)[0]
     return u
   }
   markSpent(txid: string, vout: number): void {

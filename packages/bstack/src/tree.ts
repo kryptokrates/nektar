@@ -65,7 +65,7 @@ export class MemoryTreeLedger implements TreeLedger {
   async take(kind = 'market'): Promise<{ tree: Transaction; vout: number } | undefined> {
     for (const k of this.free) {
       const [txid, v] = k.split(':')
-      const t = this.trees.get(txid!)!
+      const t = this.trees.get(txid)!
       if (!t.proven || t.kind !== kind) continue
       this.free.delete(k)
       return { tree: ownPath(t.tree), vout: Number(v) }
@@ -90,7 +90,7 @@ export class MemoryTreeLedger implements TreeLedger {
   async remaining(kind = 'market'): Promise<number> {
     let n = 0
     for (const k of this.free) {
-      const t = this.trees.get(k.split(':')[0]!)!
+      const t = this.trees.get(k.split(':')[0])!
       if (t.proven && t.kind === kind) n++
     }
     return n

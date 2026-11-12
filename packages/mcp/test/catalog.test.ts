@@ -36,7 +36,7 @@ test('describeShard: manifest committed to __catalog__, shardId binds label to c
   // the claim is a real anchored record, not a mutable field
   const cat = await mem.records(CATALOG_SHARD)
   assert.equal(cat.length, 1)
-  assert.equal(JSON.parse(Buffer.from(cat[0]!.fragment.d).toString('utf8')).type, 'shard-manifest')
+  assert.equal(JSON.parse(Buffer.from(cat[0].fragment.d).toString('utf8')).type, 'shard-manifest')
 })
 
 test('describeShard: unknown/system shards and junk tags refused; latest wins', async (t) => {
@@ -100,7 +100,7 @@ test('importRecord: bought payload lands + __imports__ audit; forged provenance 
   const recs = await mem.records('bought')
   assert.equal(recs.length, 1)
   const audit = await mem.records('__imports__')
-  const a = JSON.parse(Buffer.from(audit[0]!.fragment.d).toString('utf8'))
+  const a = JSON.parse(Buffer.from(audit[0].fragment.d).toString('utf8'))
   assert.equal(a.type, 'record-import')
   assert.equal(a.fromShard, 'ball')
   assert.equal(a.saleTxid, 'e'.repeat(64))

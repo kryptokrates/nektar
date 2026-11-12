@@ -152,8 +152,8 @@ export class NektarProvider implements Provider {
       byOut.set(`${u.tx.id('hex')}:${u.vout}`, {
         txid: u.tx.id('hex'),
         outputIndex: u.vout,
-        satoshis: u.satoshis ?? u.tx.outputs[u.vout]!.satoshis!,
-        script: u.tx.outputs[u.vout]!.lockingScript.toHex(),
+        satoshis: u.satoshis ?? u.tx.outputs[u.vout].satoshis!,
+        script: u.tx.outputs[u.vout].lockingScript.toHex(),
         tx: u.tx
       })
     }
@@ -242,7 +242,7 @@ export class AnchorChain {
    *  append spends exactly this UTXO — no new genesis, no fork. */
   resume(headTx: Transaction, opts: { confirmed: boolean; certs?: import('@nektar/identity').RotationCert[] }): Head {
     if (this.getHead()) throw new Error('resume: chain already has a head')
-    const dec = decodeNektarAnchor(headTx.outputs[0]!.lockingScript.toHex())
+    const dec = decodeNektarAnchor(headTx.outputs[0].lockingScript.toHex())
     if (!dec) throw new Error('resume: head tx output 0 is not an authentic NektarAnchor')
     if (toHex(dec.ownerPkh) !== toHexPub160(this.ownerPub())) throw new Error('resume: head owner is not this shard key')
     const head: Head = { tx: headTx, vout: 0, data: { shard: dec.shard, n: dec.n, size: dec.size, R: dec.R, Rp: dec.Rp, ownerPkh: dec.ownerPkh } }
@@ -268,7 +268,7 @@ export class AnchorChain {
   private acceptHead(tx: Transaction): AnchorResult {
     this.provider.markAccepted(tx)
     this.register(tx)
-    const dec = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
+    const dec = decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())
     if (!dec) throw new Error('accepted tx: continuation output did not decode')
     const head: Head = { tx, vout: 0, data: { shard: dec.shard, n: dec.n, size: dec.size, R: dec.R, Rp: dec.Rp, ownerPkh: dec.ownerPkh } }
     this.pendingHeads.push(head)
@@ -302,7 +302,7 @@ export class AnchorChain {
         const sm = /([0-9a-f]{64}):(\d+) utxo already spent/.exec(msg)
         const h = this.getHead()
         if (sm && (!h || `${sm[1]}:${sm[2]}` !== `${h.tx.id('hex')}:${h.vout}`)) {
-          ;(this.funder as any).markSpent?.(sm[1]!, Number(sm[2]))
+          ;(this.funder as any).markSpent?.(sm[1], Number(sm[2]))
           bookFor(this.funder).spent.add(`${sm[1]}:${sm[2]}`)
           this.contract = undefined
           if (attempt >= 5) throw e
@@ -351,7 +351,7 @@ export class AnchorChain {
       const d = await this.contract.deploy({ satoshis: 1 })
       const tx = this.provider.lastTx!
       this.register(tx)
-      const gdec = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
+      const gdec = decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())
       const head: Head = {
         tx,
         vout: 0,
@@ -373,7 +373,7 @@ export class AnchorChain {
     await contract.finalizeCall(prep, sigMap)
     const tx = this.provider.lastTx!
     this.register(tx)
-    const decoded = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
+    const decoded = decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())
     if (!decoded) throw new Error('anchor: continuation output did not decode')
     const head: Head = {
       tx,
@@ -417,7 +417,7 @@ export class AnchorChain {
     await contract.finalizeCall(prep, sigMap)
     const tx = this.provider.lastTx!
     this.register(tx)
-    const decoded = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
+    const decoded = decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())
     if (!decoded) throw new Error('rotate: continuation output did not decode')
     const head: Head = {
       tx,
@@ -431,7 +431,7 @@ export class AnchorChain {
   private async freshContract(cur: Head): Promise<RunarContract> {
     // every field comes from the decoded on-chain head (genesisOwner and
     // ownerPkh included) — never from local key state
-    const script = cur.tx.outputs[cur.vout]!.lockingScript.toHex()
+    const script = cur.tx.outputs[cur.vout].lockingScript.toHex()
     const dec = decodeNektarAnchor(script)
     if (!dec) throw new Error('freshContract: head output is not an authentic anchor')
     // ANC-006: flagged heads rehydrate the flagged artifact; pre-flag (v3)
@@ -444,7 +444,7 @@ export class AnchorChain {
         : [dec.ownerPub, toHex(dec.ownerPkh), BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), TAG_HEX]
     )
     c.connect(this.provider, this.signer)
-    c['currentUtxo'] = { txid: cur.tx.id('hex'), outputIndex: cur.vout, satoshis: cur.tx.outputs[cur.vout]!.satoshis!, script }
+    c['currentUtxo'] = { txid: cur.tx.id('hex'), outputIndex: cur.vout, satoshis: cur.tx.outputs[cur.vout].satoshis!, script }
     return c
   }
 
@@ -452,7 +452,7 @@ export class AnchorChain {
     const idx = this.pendingHeads.findIndex((h) => h.tx.id('hex') === txid)
     if (idx < 0) return
     for (let i = 0; i <= idx; i++) {
-      const h = this.pendingHeads[i]!
+      const h = this.pendingHeads[i]
       // a mined descendant implies its ancestors are mined, but each tx keeps
       // ITS OWN proof — never the descendant's BUMP (it does not contain them)
       if (i === idx && merklePath) h.tx.merklePath = merklePath
@@ -517,9 +517,9 @@ export class AnchorChain {
     if (ntx.merklePath) return ntx // proven: ancestry not needed
     tx.inputs.forEach((inp: any, ix: number) => {
       const ptxid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      if (ntx.inputs[ix]!.sourceTXID === undefined) ntx.inputs[ix]!.sourceTXID = ptxid
+      if (ntx.inputs[ix].sourceTXID === undefined) ntx.inputs[ix].sourceTXID = ptxid
       const src = inp.sourceTransaction ?? (ptxid ? (this.txById.get(ptxid) ?? this.provider.recentOf(ptxid) ?? this.provider.taken.get(ptxid)) : undefined)
-      if (src) ntx.inputs[ix]!.sourceTransaction = this.normalize(src as Transaction, memo)
+      if (src) ntx.inputs[ix].sourceTransaction = this.normalize(src as Transaction, memo)
     })
     return ntx
   }

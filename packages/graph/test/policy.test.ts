@@ -27,23 +27,23 @@ test('policy DAG: layered rules, conflict with localisation, Merkle proof, Cedar
   // both org-permit and dept-permit derive the permit; provenance is the
   // canonical (lexicographically smallest) one — independent of rule order
   assert.ok(
-    conflicts[0]!.permitPath.some((p) => /^(org|dept)-permit:/.test(p)),
+    conflicts[0].permitPath.some((p) => /^(org|dept)-permit:/.test(p)),
     'permit path localised'
   )
   assert.deepEqual(
     new PolicyDAG([
       { name: 'dept', rules: layerDept },
       { name: 'org', rules: layerBase }
-    ]).evaluate(edb).conflicts[0]!.permitPath,
-    conflicts[0]!.permitPath,
+    ]).evaluate(edb).conflicts[0].permitPath,
+    conflicts[0].permitPath,
     'localisation is independent of layer/rule order'
   )
   assert.ok(
-    conflicts[0]!.denyPath.some((p) => p.startsWith('org-deny')),
+    conflicts[0].denyPath.some((p) => p.startsWith('org-deny')),
     'deny path localised'
   )
-  assert.ok(conflicts[0]!.layers.includes('org'), 'conflict localised to layer')
-  const h = [...dag.nodes.keys()][0]!
+  assert.ok(conflicts[0].layers.includes('org'), 'conflict localised to layer')
+  const h = [...dag.nodes.keys()][0]
   assert.ok(dag.nodeProof(h).siblings.length > 0 || dag.nodes.size === 1, 'POL-006 per-node Merkle proof')
   // Cedar ALLOW but DAG conflict → DENY
   const d1 = dagAuthorize(dag, edb, true, 'bob', 'read', 'f1')

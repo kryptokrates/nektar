@@ -83,11 +83,11 @@ test('smt: inclusion + non-inclusion proofs, root anchored', () => {
     return k
   })
   const vals = keys.map((_, i) => new Uint8Array(32).fill(i + 40))
-  keys.forEach((k, i) => t.insert(k, vals[i]!))
+  keys.forEach((k, i) => t.insert(k, vals[i]))
   const root = t.root()
   for (let i = 0; i < keys.length; i++) {
-    const p = t.prove(keys[i]!)
-    assert.equal(verifyProof(p, { present: true, value: vals[i]! }, root), true, `inclusion ${i}`)
+    const p = t.prove(keys[i])
+    assert.equal(verifyProof(p, { present: true, value: vals[i] }, root), true, `inclusion ${i}`)
     assert.equal(verifyProof(p, { present: false }, root), false, 'same key not absent')
   }
   // non-inclusion: a key never enrolled
@@ -126,7 +126,7 @@ test('smt: port vector — two inserts cross-check vs idattr-smt', () => {
   let cur = hashLeaf(k, v)
   for (let d = 255; d >= 0; d--) {
     const sib = emptySubtree(d + 1)
-    cur = (k[d >> 3]! >> (7 - (d & 7))) & 1 ? hashNode(sib, cur) : hashNode(cur, sib)
+    cur = (k[d >> 3] >> (7 - (d & 7))) & 1 ? hashNode(sib, cur) : hashNode(cur, sib)
   }
   assert.equal(Buffer.from(r).toString('hex'), Buffer.from(cur).toString('hex'))
   assert.equal(t.len, 1)
@@ -215,11 +215,11 @@ test('smt: inclusion + non-inclusion proofs, root anchored', () => {
     return k
   })
   const vals = keys.map((_, i) => new Uint8Array(32).fill(i + 40))
-  keys.forEach((k, i) => t.insert(k, vals[i]!))
+  keys.forEach((k, i) => t.insert(k, vals[i]))
   const root = t.root()
   for (let i = 0; i < keys.length; i++) {
-    const p = t.prove(keys[i]!)
-    assert.equal(verifyProof(p, { present: true, value: vals[i]! }, root), true, `inclusion ${i}`)
+    const p = t.prove(keys[i])
+    assert.equal(verifyProof(p, { present: true, value: vals[i] }, root), true, `inclusion ${i}`)
     assert.equal(verifyProof(p, { present: false }, root), false, 'same key not absent')
   }
   // non-inclusion: a key never enrolled
@@ -258,7 +258,7 @@ test('smt: port vector — two inserts cross-check vs idattr-smt', () => {
   let cur = hashLeaf(k, v)
   for (let d = 255; d >= 0; d--) {
     const sib = emptySubtree(d + 1)
-    cur = (k[d >> 3]! >> (7 - (d & 7))) & 1 ? hashNode(sib, cur) : hashNode(cur, sib)
+    cur = (k[d >> 3] >> (7 - (d & 7))) & 1 ? hashNode(sib, cur) : hashNode(cur, sib)
   }
   assert.equal(Buffer.from(r).toString('hex'), Buffer.from(cur).toString('hex'))
   assert.equal(t.len, 1)
@@ -272,13 +272,13 @@ test('custody: 2-of-3 threshold signs; 1-of-3 cannot; reconstruction gives same 
   const msg = new Uint8Array(32).fill(42)
   // reconstruction from any 2 shares = original key
   assert.equal(reconstruct(shares.slice(0, 2)), secret)
-  assert.equal(reconstruct([shares[0]!, shares[2]!]), secret)
+  assert.equal(reconstruct([shares[0], shares[2]]), secret)
   // 1 share does NOT reconstruct
-  assert.notEqual(reconstruct([shares[0]!]), secret)
+  assert.notEqual(reconstruct([shares[0]]), secret)
   // sign: needs a correct threshold
-  const sig = custodian.sign([shares[0]!, shares[1]!], msg)
+  const sig = custodian.sign([shares[0], shares[1]], msg)
   assert.ok(sig.length > 0)
-  assert.throws(() => custodian.sign([shares[0]!], msg), /reconstruct/)
+  assert.throws(() => custodian.sign([shares[0]], msg), /reconstruct/)
   // lifecycle: rotate → old shares stop working, revoke → all signing stops
   const old = custodian.publicKeyHex()
   const newShares = custodian.rotate(2, 3, 2000n)
@@ -292,18 +292,18 @@ test('custody: 2-of-3 threshold signs; 1-of-3 cannot; reconstruction gives same 
 test('custody: threshold Schnorr — 2-of-3 signs, aggregate verifies', () => {
   const { custodian, shares } = KeyCustodian.generate(2, 3, 1n)
   const msg = new Uint8Array(32).fill(7)
-  const set = [shares[0]!.x, shares[2]!.x] // 2-of-3
+  const set = [shares[0].x, shares[2].x] // 2-of-3
   const nonces = [1234567n, 7654321n] // one k_j per signer
   const pub = custodian.publicKeyHex()
   // round: reveals R_j, aggregate R, challenge e, partial sigs, aggregate s
   const agg = aggregateSchnorr([], nonces) // R only
   const e = challengeOf(agg.R, pub, msg)
-  const partials = [partialSign(shares[0]!, nonces[0], e, set), partialSign(shares[2]!, nonces[1], e, set)]
+  const partials = [partialSign(shares[0], nonces[0], e, set), partialSign(shares[2], nonces[1], e, set)]
   const sig = aggregateSchnorr(partials, nonces)
   assert.equal(verifySchnorr(pub, msg, sig), true)
   // tampered message or 1-of-3 fails
   assert.equal(verifySchnorr(pub, new Uint8Array(32).fill(8), sig), false)
-  const s1 = partialSign(shares[0]!, nonces[0], e, [shares[0]!.x]) // lone-signer set
+  const s1 = partialSign(shares[0], nonces[0], e, [shares[0].x]) // lone-signer set
   const bad = aggregateSchnorr([s1], [nonces[0]])
   assert.equal(verifySchnorr(pub, msg, bad), false)
 })
@@ -355,7 +355,7 @@ test('wrap: HKDF+GCM — fresh pad per wrap, tamper + wrong context fail', () =>
   assert.notEqual(Buffer.from(w1.ct).toString('hex'), Buffer.from(w2.ct).toString('hex'), 'fresh salt → unrelated pads')
   assert.equal(Buffer.from(unwrapFor(r1, sender.toPublicKey().toString(), w1, ctx)).toString('hex'), Buffer.from(key).toString('hex'))
   const tampered = { ...w1, ct: w1.ct.slice() }
-  tampered.ct[0] = tampered.ct[0]! ^ 1
+  tampered.ct[0] = tampered.ct[0] ^ 1
   assert.throws(() => unwrapFor(r1, sender.toPublicKey().toString(), tampered, ctx), 'tampered wrap fails GCM auth')
   assert.throws(() => unwrapFor(r1, sender.toPublicKey().toString(), w1, 'wrong-ctx'), 'wrong context fails AAD')
   const wraps = wrapMulti(sender, key, [r1.toPublicKey().toString(), r2.toPublicKey().toString()], ctx)

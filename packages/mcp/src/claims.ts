@@ -38,7 +38,7 @@ export class ClaimService {
     this.aArt = loadArt(deps.contractsDir, 'NektarAnchor')
     this.sArt = loadArt(deps.contractsDir, 'DisclosureSale')
     const key = mem.operatorKey()
-    this.provider = new NektarProvider({ broadcast: (t: Transaction) => mem.broadcastTx(t) } as any, (mem as any).funder, key.toPublicKey().toAddress([0x6f]))
+    this.provider = new NektarProvider({ broadcast: (t: Transaction) => mem.broadcastTx(t) }, (mem as any).funder, key.toPublicKey().toAddress([0x6f]))
     this.signer = new LocalSigner(key.toWif())
     this.pubKeyHex = key.toPublicKey().toString()
     this.pkh = Buffer.from(Hash.hash160(Buffer.from(this.pubKeyHex, 'hex'))).toString('hex')
@@ -141,7 +141,7 @@ export class ClaimService {
     if (!st.found) throw new Error(`claim ${txid}:${vout} not found`)
     const raw = await this.deps.fetchTx(txid)
     const tx = Transaction.fromHex(raw!)
-    const cUtxo = { txid, outputIndex: vout, satoshis: tx.outputs[vout]!.satoshis!, script: tx.outputs[vout]!.lockingScript.toHex() }
+    const cUtxo = { txid, outputIndex: vout, satoshis: tx.outputs[vout].satoshis!, script: tx.outputs[vout].lockingScript.toHex() }
     const state = readClaimState(this.cArt, cUtxo.script)
     const ctor = [
       state.status,
@@ -221,8 +221,8 @@ export class ClaimService {
     if (!sRaw || !vRaw) throw new Error('sale or verdict tx not found')
     const sTx = Transaction.fromHex(sRaw),
       vTx = Transaction.fromHex(vRaw)
-    const saleUtxo = { txid: saleTxid, outputIndex: 0, satoshis: sTx.outputs[0]!.satoshis!, script: sTx.outputs[0]!.lockingScript.toHex() }
-    const verdictUtxo = { txid: vTxid, outputIndex: vVout, satoshis: vTx.outputs[vVout]!.satoshis!, script: vTx.outputs[vVout]!.lockingScript.toHex() }
+    const saleUtxo = { txid: saleTxid, outputIndex: 0, satoshis: sTx.outputs[0].satoshis!, script: sTx.outputs[0].lockingScript.toHex() }
+    const verdictUtxo = { txid: vTxid, outputIndex: vVout, satoshis: vTx.outputs[vVout].satoshis!, script: vTx.outputs[vVout].lockingScript.toHex() }
     const hw = Buffer.from(Hash.sha256(Buffer.from(wrappedHex, 'hex'))).toString('hex')
     const sale = new RunarContract(this.sArt, [this.pkh, BigInt(priceSats), hw, 0n, 1000n, this.pkh, verdictOutpoint])
     // verdict ctor = its state fields (deserialize the deployed script tail)

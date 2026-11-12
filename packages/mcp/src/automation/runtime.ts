@@ -96,7 +96,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
     if (c !== undefined && t - c.at < (c.rec === undefined ? 60_000 : 600_000)) return c.rec
     let rec: { hosts: string[]; office: string; stream: string } | undefined
     try {
-      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: await mem.sdkTracker(), allowHttp: localNet, now: cfg.now, timeoutMs: 5_000 })
+      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: mem.sdkTracker(), allowHttp: localNet, now: cfg.now, timeoutMs: 5_000 })
       if (r !== undefined && (r.body.nets.length === 0 || r.body.nets.includes(cfg.network))) {
         const hosts = r.body.hosts.filter((u) => lanes.mod.fingerHostAllowed(u, { allowHttp: localNet, allowLocal: localNet })).slice(0, 8)
         rec = { hosts, office: r.body.office, stream: r.body.stream }
@@ -144,7 +144,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   const engine = new MarketEngine({
     store,
     call: cfg.call,
-    memory: mem as never,
+    memory: mem,
     key,
     network: cfg.network,
     now: cfg.now,
@@ -223,7 +223,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
           },
           collect: async (): Promise<Array<{ from: string; msg: MarketMessage }>> => {
             try {
-              const tracker = await mem.sdkTracker()
+              const tracker = mem.sdkTracker()
               const r = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker })
               laneNotes(r)
               pendingAcks = r.items.map((i) => ({
@@ -303,7 +303,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   const lanePoll = async (): Promise<void> => {
     const { readWants, readOffers } = lanes!.mod
     const watch = await engine.watchList()
-    const tracker = await mem.sdkTracker()
+    const tracker = mem.sdkTracker()
     const net = cfg.network
     // every lane read is independent — run them together, bounded, instead
     // of serially pricing the pass at the sum of all host latencies
@@ -422,7 +422,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
                     : kind === 'finger'
                       ? await lanes.mod.fingerFundingLock(key)
                       : undefined,
-              takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0]!,
+              takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0],
               broadcast: (tx) => mem.broadcastTx(tx),
               fetchTx: (txid) => mem.fetchTx(txid),
               onSpent: (tree) => {
@@ -431,7 +431,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
                   if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0)
                 }
                 const n = tree.outputs.length - 1
-                if (n >= 1 && (tree.outputs[n]!.satoshis ?? 0) > 0) mem.addOwnedOut(tree, n)
+                if (n >= 1 && (tree.outputs[n].satoshis ?? 0) > 0) mem.addOwnedOut(tree, n)
               }
             })
             // a proven log tree's BEEF must reach tm_log before hosts can
@@ -457,7 +457,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
             journal: lanes.journal,
             hosts: marketHosts,
             body: { v: 1, hosts: marketHosts, office: cfg.boxOffice ?? lanes.mod.officeFor(), stream: logStream, nets: [cfg.network] },
-            takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0]!,
+            takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0],
             broadcast: (tx) => mem.broadcastTx(tx),
             fetchTx: (txid) => mem.fetchTx(txid),
             allowHttp: localNet,
@@ -617,7 +617,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
         ? (() => {
             const sel = (op.data.selected as { key?: string } | undefined)?.key
             const so = sel !== undefined ? (op.data.offers as Record<string, { so: SignedOffer }> | undefined)?.[sel]?.so : undefined
-            return so?.offer.journal?.stream !== undefined && sel !== undefined ? { stream: so.offer.journal.stream, producer: sel.split(':')[0]! } : undefined
+            return so?.offer.journal?.stream !== undefined && sel !== undefined ? { stream: so.offer.journal.stream, producer: sel.split(':')[0] } : undefined
           })()
         : (() => {
             const w = op.data.want as SignedWant | undefined
@@ -632,7 +632,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
         hosts: await hostsFor(cp.producer),
         stream: rec?.stream ?? cp.stream,
         producer: cp.producer,
-        tracker: await mem.sdkTracker()
+        tracker: mem.sdkTracker()
       })
       const wantId = wantIdOf(op)
       const entries: Array<{ seq: number; n: number; state: string; cause: string; t: number }> = []

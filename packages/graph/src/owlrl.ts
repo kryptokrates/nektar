@@ -182,7 +182,7 @@ function compileAxiom(a: OwlAxiom, i: number, facts: Fact[], rules: Rule[]): voi
       break
     case 'allDifferent': // prp-adp: AllDifferent(x₁…xₙ) expands to the n(n−1)/2 pairs
       for (let j = 0; j < a.members.length; j++) {
-        for (let m = j + 1; m < a.members.length; m++) facts.push(fact('diff', lc(a.members[j]!), lc(a.members[m]!)))
+        for (let m = j + 1; m < a.members.length; m++) facts.push(fact('diff', lc(a.members[j]), lc(a.members[m])))
       }
       break
     case 'equivalentClass': // C ≡ D — both directions, as rules AND schema facts
@@ -293,7 +293,7 @@ export class CommittedOntology {
     this.dag = new PolicyDAG([{ name: 'owlrl', rules: c.rules }])
     this.axiomHashes = this.axioms.map(owlAxiomHash)
     for (const f of this.facts) this.commitNode('fact', factCanonical(f))
-    for (const [i, a] of this.axioms.entries()) this.commitNode('axiom', owlAxiomCanonical(a), this.axiomHashes[i]!)
+    for (const [i, a] of this.axioms.entries()) this.commitNode('axiom', owlAxiomCanonical(a), this.axiomHashes[i])
   }
   get rules(): Rule[] {
     return this.dag.rules

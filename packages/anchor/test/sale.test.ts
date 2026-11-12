@@ -44,14 +44,14 @@ test('V3 escrow: buyer funds, seller reveals+collects atomically; underpayment/r
   const good = host.buildBuy(utxo, WRAPPED, 990n)
   const r = await chain.broadcast(good.tx)
   assert.equal(r.status, 'success', `buy accepted: ${(r as any).description ?? ''}`)
-  assert.equal(good.tx.outputs[0]!.satoshis, 5_000, 'seller paid exactly price')
-  assert.equal(good.tx.outputs[1]!.satoshis, 990, 'depositor change returned')
+  assert.equal(good.tx.outputs[0].satoshis, 5_000, 'seller paid exactly price')
+  assert.equal(good.tx.outputs[1].satoshis, 990, 'depositor change returned')
   // a different preimage fails sha256(wrapped) === hWrapped
   const bad = host.buildBuy(utxo, Buffer.from('wrong-payload').toString('hex'), 990n)
   assert.notEqual((await chain.broadcast(bad.tx)).status, 'success', 'wrong wrapped must be rejected')
   // underpayment: tamper the seller output below `price`
   const under = host.buildBuy(utxo, WRAPPED, 990n)
-  under.tx.outputs[0]!.satoshis = 4_999
+  under.tx.outputs[0].satoshis = 4_999
   assert.notEqual((await chain.broadcast(under.tx)).status, 'success', 'underpayment must be rejected')
   // fee bound: changeSats too small → fee > maxFee
   const greedy = host.buildBuy(utxo, WRAPPED, 500n)

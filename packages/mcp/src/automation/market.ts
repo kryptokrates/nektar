@@ -292,7 +292,7 @@ export class MarketEngine {
       const operation = await this.d.store.operation(operationId)
       if (!operation) return undefined
       const data = { ...operation.data }
-      if (operation.role === 'seller' && data.offer) data.offer = { ...(data.offer as object), wrapped: '[sealed]' }
+      if (operation.role === 'seller' && data.offer) data.offer = { ...(data.offer), wrapped: '[sealed]' }
       return { operation: { ...operation, data }, events: await this.d.store.events(operationId) }
     })
   }
@@ -642,7 +642,7 @@ export class MarketEngine {
     // a bogus or unsigned spend is refused before the network is even asked
     let spends = 0
     for (let ix = 0; ix < tx.inputs.length; ix++) {
-      const i = tx.inputs[ix]!
+      const i = tx.inputs[ix]
       const src = i.sourceTransaction?.outputs[i.sourceOutputIndex ?? -1]
       const ptxid = i.sourceTXID ?? i.sourceTransaction?.id('hex')
       if (src === undefined || i.sourceOutputIndex === undefined || ptxid === undefined) continue
@@ -743,7 +743,7 @@ export class MarketEngine {
     const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${m.wantId}`)
     if (!op || op.state !== 'awaiting_disclosure') return
     const sel = op.data.selected as { key: string }
-    const chosen = (op.data.offers as Record<string, StoredOffer>)[sel.key]!
+    const chosen = (op.data.offers as Record<string, StoredOffer>)[sel.key]
     if (from !== chosen.so.offer.pub || m.offerId !== chosen.so.offer.offerId) return
     const utxo = op.data.utxo as { txid: string; vout: number; satoshis: number; script: string }
     let got: Ingested
@@ -1015,7 +1015,7 @@ export class MarketEngine {
 
   private async fund(op: Operation, p: AutomationPolicy): Promise<void> {
     const sel = op.data.selected as { key: string }
-    const s = (op.data.offers as Record<string, StoredOffer>)[sel.key]!
+    const s = (op.data.offers as Record<string, StoredOffer>)[sel.key]
     const q = s.so.offer.offer as any
     const w = (op.data.want as SignedWant).want
     const price = s.so.offer.priceSats,
@@ -1261,7 +1261,7 @@ export class MarketEngine {
       const vout = tx.outputs.findIndex((o) => o.lockingScript.toHex() === script)
       if (vout < 0) return // cannot prove which output is the escrow — stay uncertain
       escrow = { ...q.cfg, depositorPkh }
-      utxo = { txid, vout, satoshis: tx.outputs[vout]!.satoshis ?? 0, script }
+      utxo = { txid, vout, satoshis: tx.outputs[vout].satoshis ?? 0, script }
     }
     if (escrow === undefined || utxo === undefined) return
     if (wtx !== undefined) this.d.settleEscrow?.(Transaction.fromHex(wtx.rawHex))
@@ -1344,7 +1344,7 @@ export class MarketEngine {
             if (wtx) this.d.settleEscrow(Transaction.fromHex(wtx.rawHex))
             await this.d.store.commitBudget(op.data.escrowAction as string)
             const sel2 = op.data.selected as { key: string }
-            const s2 = (op.data.offers as Record<string, StoredOffer>)[sel2.key]!
+            const s2 = (op.data.offers as Record<string, StoredOffer>)[sel2.key]
             const so2 = s2.so
             const w2 = (op.data.want as SignedWant).want
             await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {

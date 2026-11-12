@@ -71,7 +71,7 @@ test('AGT-003 grounding: quote, entailed, uncited, unverifiable, not-entailed; f
   const rm = await ground(claims, w.fetch, { rules: RULES, mode: 'remove' })
   assert.deepEqual(
     rm.kept.map((c) => c.text),
-    [claims[0]!.text, claims[1]!.text],
+    [claims[0].text, claims[1].text],
     'remove mode drops ungrounded claims'
   )
   assert.equal((await ground(claims, w.fetch, { rules: RULES })).reportHash, r.reportHash, 'report hash deterministic')
@@ -102,7 +102,7 @@ test('AGT-011/012 model identity + committed, anchored receipt', async t => {
   const anchored = await commitReceipt(base, w.mem)
   w.settle('__receipts__')
   assert.ok(anchored.anchor?.txid, 'receipt anchored')
-  assert.equal((await w.mem.prove('__receipts__', anchored.anchor!.seq)).result.ok, true)
+  assert.equal((await w.mem.prove('__receipts__', anchored.anchor.seq)).result.ok, true)
 })
 
 test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction anchored', async t => {
@@ -114,7 +114,7 @@ test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction a
     { text: 'applies(port4, torque)', cites: [m(1)] }
   ]
   idx.add({ receiptHash: 'r1', claims })
-  idx.add({ receiptHash: 'r2', claims: [claims[1]!] })
+  idx.add({ receiptHash: 'r2', claims: [claims[1]] })
   assert.deepEqual(
     idx.citing(m(0)).map((a) => a.receiptHash),
     ['r1']
@@ -134,10 +134,10 @@ test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction a
   assert.equal(older.result.ok, true, `older batch still provable after a newer anchor: ${JSON.stringify(older.result)}`)
   const corr = await onRevision(idx, m(0), m(2), w.fetch, { rules: RULES, mem: w.mem })
   assert.equal(corr.length, 1)
-  assert.equal(corr[0]!.stillGrounded, false)
-  assert.deepEqual(corr[0]!.withdrawn, ['port 4 is torqued to 45'])
+  assert.equal(corr[0].stillGrounded, false)
+  assert.deepEqual(corr[0].withdrawn, ['port 4 is torqued to 45'])
   w.settle('__corrections__')
-  assert.equal((await w.mem.prove('__corrections__', corr[0]!.anchor!.seq)).result.ok, true, 'correction anchored + provable')
+  assert.equal((await w.mem.prove('__corrections__', corr[0].anchor!.seq)).result.ok, true, 'correction anchored + provable')
   assert.equal(new CitationIndex(idx['file']).citing(m(1)).length, 2, 'index persists')
 })
 
@@ -196,8 +196,8 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
       { ref: m(1), bundle: b1 }
     ],
     signers: [
-      { ref: m(0), pubkey: pub, promise: w.promises[0]! },
-      { ref: m(1), pubkey: pub, promise: w.promises[1]! }
+      { ref: m(0), pubkey: pub, promise: w.promises[0] },
+      { ref: m(1), pubkey: pub, promise: w.promises[1] }
     ],
     policy: { edb, derivation }
   })
@@ -264,8 +264,8 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
         { ref: m(1), bundle: b1 }
       ],
       signers: [
-        { ref: m(0), pubkey: pub, promise: w.promises[0]! },
-        { ref: m(1), pubkey: pub, promise: w.promises[1]! }
+        { ref: m(0), pubkey: pub, promise: w.promises[0] },
+        { ref: m(1), pubkey: pub, promise: w.promises[1] }
       ]
     })
   // without the carried evidence and without a local checker the bundle verifies
@@ -273,7 +273,7 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
   assert.equal((await verifyAuditBundle(base(), w.chain)).ok, true)
   // with the anchored revocation record the signer is convicted even though the
   // verifier holds no isRevoked view — chain data alone convicts
-  const withRev = { ...base(), revocations: [{ pubkey: pub, seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: rev.leaf, bundle: rev.bundle! }] }
+  const withRev = { ...base(), revocations: [{ pubkey: pub, seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: rev.leaf, bundle: rev.bundle }] }
   const vr = await verifyAuditBundle(withRev, w.chain)
   assert.ok(
     vr.reasons.some((r) => /key revoked \(anchored\)/.test(r)),
@@ -283,7 +283,7 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
   const wrongKey = {
     ...base(),
     revocations: [
-      { pubkey: PrivateKey.fromRandom().toPublicKey().toString(), seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: rev.leaf, bundle: rev.bundle! }
+      { pubkey: PrivateKey.fromRandom().toPublicKey().toString(), seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: rev.leaf, bundle: rev.bundle }
     ]
   }
   assert.ok((await verifyAuditBundle(wrongKey, w.chain)).reasons.some((r) => /does not bind this pubkey/.test(r)))
@@ -294,7 +294,7 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
   // and a genuinely wrong proof (leaf matches but bundle fails) is refused too
   const badProof = {
     ...base(),
-    revocations: [{ pubkey: pub, seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: rev.leaf, bundle: { ...rev.bundle!, leaf: 'ff'.repeat(32) } }]
+    revocations: [{ pubkey: pub, seq: rev.seq, data: rev.data, prov: rev.prov, E: rev.E, leaf: rev.leaf, bundle: { ...rev.bundle, leaf: 'ff'.repeat(32) } }]
   }
   assert.ok((await verifyAuditBundle(badProof, w.chain)).reasons.some((r) => /inclusion proof failed/.test(r)))
 })
@@ -308,20 +308,20 @@ test('GOAL-v8 D4: anchored rotation chain — third party replays pk(0)→pk(i) 
   w.settle('__identity__')
   const proof = await w.mem.rotationChainProof('manual')
   assert.ok(proof && proof.certs.length === 1, 'one anchored cert')
-  assert.equal(proof.certs[0]!.cert.pubkey, k1.toPublicKey().toString())
-  assert.ok(proof.certs[0]!.anchored, 'cert is SPV-verifiably anchored')
+  assert.equal(proof.certs[0].cert.pubkey, k1.toPublicKey().toString())
+  assert.ok(proof.certs[0].anchored, 'cert is SPV-verifiably anchored')
   const v = await verifyAnchoredRotationChain(proof, w.chain)
   assert.deepEqual(v.reasons, [])
   assert.equal(v.activePub, k1.toPublicKey().toString(), 'verified chain resolves the rotated key')
   // negative: a cert swapped for an unanchored record breaks the chain link
   const forged = {
     genesisPub: proof.genesisPub,
-    certs: [{ ...proof.certs[0]!, cert: { ...proof.certs[0]!.cert, pubkey: PrivateKey.fromRandom().toPublicKey().toString() } }]
+    certs: [{ ...proof.certs[0], cert: { ...proof.certs[0].cert, pubkey: PrivateKey.fromRandom().toPublicKey().toString() } }]
   }
   const vf = await verifyAnchoredRotationChain(forged, w.chain)
   assert.ok(!vf.ok && vf.reasons.some((r) => /payload mismatch|do not link/.test(r)), `forged cert refused: ${vf.reasons.join('; ')}`)
   // negative: dropping the bundle leaves the cert unprovable
-  const noBundle = { genesisPub: proof.genesisPub, certs: [{ ...proof.certs[0]!, bundle: undefined }] }
+  const noBundle = { genesisPub: proof.genesisPub, certs: [{ ...proof.certs[0], bundle: undefined }] }
   const vn = await verifyAnchoredRotationChain(noBundle, w.chain)
   assert.ok(!vn.ok && vn.reasons.some((r) => /no inclusion bundle|do not link/.test(r)))
 })

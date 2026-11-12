@@ -352,7 +352,7 @@ export class ReserveFunder {
   /** Record an output we created (change) as a reserve candidate. */
   addOwned(tx: Transaction, vout: number): void {
     const hex = tx.toHex()
-    const e: ReserveEntry = { txid: tx.id('hex'), vout, satoshis: tx.outputs[vout]!.satoshis ?? 0, txHex: hex }
+    const e: ReserveEntry = { txid: tx.id('hex'), vout, satoshis: tx.outputs[vout].satoshis ?? 0, txHex: hex }
     if (this.spent.has(this.op(e.txid, e.vout))) return
     if (this.utxos.some((x) => this.op(x.tx.id('hex'), x.vout) === this.op(e.txid, e.vout))) return
     this.entries.push(e)
@@ -408,7 +408,7 @@ export class ReserveFunder {
       if (!res) continue
       try {
         const { txs } = parseLegacyBlock(new Uint8Array(await res.arrayBuffer()))
-        const cb = Transaction.fromHex(Buffer.from(txs[0]!).toString('hex'))
+        const cb = Transaction.fromHex(Buffer.from(txs[0]).toString('hex'))
         cb.outputs.forEach((o, v) => {
           const s = o.satoshis ?? 0
           if (o.lockingScript.toHex().includes(want) && s > 2000 && !this.spent.has(this.op(cb.id('hex'), v))) {
@@ -444,11 +444,13 @@ export async function bootstrapReserve(
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
   const n = opts.outputs ?? 60
   const split = async (parent: Transaction, vout: number): Promise<Transaction | null> => {
-    const sats = parent.outputs[vout]!.satoshis ?? 0
+    const sats = parent.outputs[vout].satoshis ?? 0
     if (sats < 1e6) return null
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: parent, sourceOutputIndex: vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
-    const per = Math.min(50_000, Math.floor((sats - 2000) / (n + 1)))
+    // entries sized to cover a full funder in one input — a 50k cap forced
+    // 10-16 inputs + utxo probes per test setup
+    const per = Math.min(1_000_000, Math.floor((sats - 2000) / (n + 1)))
     for (let k = 0; k < n; k++) tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: per })
     tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: sats - n * per - 1000 })
     await tx.sign()
@@ -477,7 +479,7 @@ export async function bootstrapReserve(
     const hash = (await rpc('getblockhash', h)) as string
     const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`, { signal: AbortSignal.timeout(20_000) })
     if (!res.ok) continue
-    const cb = Transaction.fromHex(Buffer.from(parseLegacyBlock(new Uint8Array(await res.arrayBuffer())).txs[0]!).toString('hex'))
+    const cb = Transaction.fromHex(Buffer.from(parseLegacyBlock(new Uint8Array(await res.arrayBuffer())).txs[0]).toString('hex'))
     for (const [v, o] of cb.outputs.entries()) {
       if (!o.lockingScript.toHex().includes(want) || (o.satoshis ?? 0) < 1e7) continue
       tried++
@@ -520,7 +522,7 @@ export async function merklePathAtHeight(cfg: RegtestConfig, txid: string, track
     const sibling = pos % 2 === 0 ? pos + 1 : pos - 1
     const lvl: Array<{ offset: number; hash: string; txid?: boolean }> = []
     if (first) {
-      lvl.push({ offset: pos, hash: disp(leaves[pos]!), txid: true })
+      lvl.push({ offset: pos, hash: disp(leaves[pos]), txid: true })
       first = false
     }
     lvl.push({ offset: sibling, hash: disp(sibling < level.length ? level[sibling]! : level[pos]!) })
@@ -534,6 +536,6 @@ export async function merklePathAtHeight(cfg: RegtestConfig, txid: string, track
     level = next
     pos = Math.floor(pos / 2)
   }
-  if (path.length === 0) path.push([{ offset: 0, hash: disp(leaves[0]!), txid: true }])
+  if (path.length === 0) path.push([{ offset: 0, hash: disp(leaves[0]), txid: true }])
   return { blockHeight: height, path }
 }

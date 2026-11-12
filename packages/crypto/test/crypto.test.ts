@@ -55,8 +55,8 @@ test('crypto: disjoint level keyspaces — holder {0,1} opens l1 not l2; l2 alon
 
   const d = utf8('level-1 payload')
   const ctxL1 = { ...ctx, l: 1 }
-  const ef1 = encryptFragment(deriveFragmentKey(grant01[1]!, ctxL1).fragmentKey, d, sha256(d), ctxL1)
-  assert.ok(eq(decryptFragment(deriveFragmentKey(grant01[1]!, ctxL1).fragmentKey, ef1), d), 'l1 holder decrypts l1')
+  const ef1 = encryptFragment(deriveFragmentKey(grant01[1], ctxL1).fragmentKey, d, sha256(d), ctxL1)
+  assert.ok(eq(decryptFragment(deriveFragmentKey(grant01[1], ctxL1).fragmentKey, ef1), d), 'l1 holder decrypts l1')
 
   // same holder: level-2 ciphertext cannot be opened (no level-2 key granted)
   const ctxL2 = { ...ctx, l: 2 }

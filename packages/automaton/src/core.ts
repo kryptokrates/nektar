@@ -132,7 +132,7 @@ export class Automaton {
   async step(sym: number): Promise<TraceEvent> {
     const tr = this.def.delta.find(([f, s]) => f === this.q && s === sym)
     if (!tr) throw new AutomatonError(`no δ(${this.def.Q[this.q]},${this.def.Sigma[sym]}) — step rejected locally`)
-    const ev: TraceEvent = { from: this.q, sym, to: tr[2]!, out: tr[3] ?? 0, leaf: eventLeaf(this.def, this.q, sym, tr[2]!, tr[3] ?? 0) }
+    const ev: TraceEvent = { from: this.q, sym, to: tr[2], out: tr[3] ?? 0, leaf: eventLeaf(this.def, this.q, sym, tr[2], tr[3] ?? 0) }
     if (this.mem && this.shard) await this.mem.remember(this.shard, ev.leaf)
     this.q = tr[2]!
     this.events.push(ev)
@@ -162,12 +162,12 @@ export function verifyTrace(
   const tbl = deltaTable(def)
   const flagged: number[] = []
   for (let i = 0; i < events.length; i++) {
-    const ev = events[i]!
+    const ev = events[i]
     if (!tbl.entryIndex.has(`${ev.from},${ev.sym},${ev.to}`)) {
       flagged.push(i)
       continue
     }
-    if (i > 0 && events[i - 1]!.to !== ev.from) {
+    if (i > 0 && events[i - 1].to !== ev.from) {
       flagged.push(i)
       continue
     }

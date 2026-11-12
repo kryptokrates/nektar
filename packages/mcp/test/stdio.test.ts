@@ -10,7 +10,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const text = (r: unknown) => JSON.parse((r as { content: Array<{ text: string }> }).content[0]!.text)
+const text = (r: unknown) => JSON.parse((r as { content: Array<{ text: string }> }).content[0].text)
 
 test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 60_000 }, async t => {
   if ((await skipUnlessStack(t)) === undefined) return
@@ -60,7 +60,7 @@ test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resourc
     const { prompts } = await client.listPrompts()
     assert.deepEqual(prompts.map((p) => p.name).sort(), ['audit-answer', 'grounded-answer', 'remember-with-source'])
     const gp = await client.getPrompt({ name: 'grounded-answer', arguments: { question: 'What torque for port 4?', shard: 'm' } })
-    assert.match((gp.messages[0]!.content as { text: string }).text, /recall/)
+    assert.match((gp.messages[0].content as { text: string }).text, /recall/)
   } finally {
     await client.close()
   }

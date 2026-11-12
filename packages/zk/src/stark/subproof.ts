@@ -67,8 +67,8 @@ function subpathFromTree(tree: MerkleTree, index: number, depth: number): Uint8A
   const out: Uint8Array[] = []
   let pos = index
   for (let level = 0; level < depth; level++) {
-    const nodes = tree.levels[level]!
-    out.push(pos % 2 === 0 ? (pos + 1 < nodes.length ? nodes[pos + 1]! : nodes[pos]!) : nodes[pos - 1]!)
+    const nodes = tree.levels[level]
+    out.push(pos % 2 === 0 ? (pos + 1 < nodes.length ? nodes[pos + 1] : nodes[pos]) : nodes[pos - 1])
     pos = Math.floor(pos / 2)
   }
   return out
@@ -126,9 +126,9 @@ export function buildSubsetProof(leaves: Uint8Array[], indices: number[]): ZkSub
   const shardIndices = [...groups.keys()].sort((a, b) => a - b)
   const shards: ShardProof[] = shardIndices.map((shardIndex) => ({
     shardIndex,
-    leaves: groups.get(shardIndex)!.map((i) => ({ index: i, hash: leaves[i]!, subpath: subpathFromTree(tree, i, subLen) }))
+    leaves: groups.get(shardIndex)!.map((i) => ({ index: i, hash: leaves[i], subpath: subpathFromTree(tree, i, subLen) }))
   }))
-  const topPath = topProofWalk(size, shardIndices, (level, sib) => tree.levels[level]![sib]!)
+  const topPath = topProofWalk(size, shardIndices, (level, sib) => tree.levels[level][sib])
   return { algorithm: ALG_SHA256D, batchRoot: tree.root, size, shards, topPath }
 }
 
@@ -198,10 +198,10 @@ export function encodeZkdis(p: ZkSubsetProof): Uint8Array {
 export function decodeZkdis(b: Uint8Array): ZkSubsetProof {
   if (b.length < HEADER_V1 + 4) throw new ZksCodecError('truncated header')
   for (let i = 0; i < 4; i++) if (b[i] !== ZKS2_MAGIC[i]) throw new ZksCodecError('bad magic (not L_ZKDis v2)')
-  const ver = b[4]!
+  const ver = b[4]
   if (ver !== 1 && ver !== ZKS2_VERSION) throw new ZksCodecError(`unsupported version ${ver}`)
   const off = ver === 1 ? 0 : 1 // rev 2 inserts the algorithm byte at index 5
-  const alg = ver === 1 ? ALG_SHA256D : b[5]!
+  const alg = ver === 1 ? ALG_SHA256D : b[5]
   if (alg !== ALG_SHA256D) throw new ZksCodecError(`unsupported algorithm ${alg}`)
   const header = HEADER_V1 + off
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength)
@@ -234,7 +234,7 @@ export function decodeZkdis(b: Uint8Array): ZkSubsetProof {
       o += 4
       const hash = b.slice(o, o + 32)
       o += 32
-      const sl = b[o]!
+      const sl = b[o]
       o += 1
       if (sl !== subLen) throw new ZksCodecError(`subpath must be ${subLen} siblings`)
       need(sl * 32, 'subpath')

@@ -687,7 +687,7 @@ export class NektarMemory {
   }
   /** the instance's chain tracker in @bsv/sdk ChainTracker shape (bstack checkCarrier/verify) */
   sdkTracker(): import('@bsv/sdk').ChainTracker {
-    return this.chain as unknown as import('@bsv/sdk').ChainTracker
+    return this.chain
   }
   /** {hash,height} pair near the current tip — walks back a few blocks because
    *  the header index lags the tip; the chain-bound identity an artifact claims */
@@ -795,7 +795,7 @@ export class NektarMemory {
       else if (rec.fragment.E?.length && this.opts.agentSeed) {
         // encrypted deployment — the operator holds the seed; decrypt to read
         const k = await this.fragmentKeyFor(rec)
-        const aadLen = (rec.fragment.E[0]! << 8) | rec.fragment.E[1]!
+        const aadLen = (rec.fragment.E[0] << 8) | rec.fragment.E[1]
         const aad = rec.fragment.E.slice(2, 2 + aadLen)
         const ciphertext = rec.fragment.E.slice(2 + aadLen)
         data = Buffer.from(decryptFragment(k, { ciphertext, aad, keyID: '' })).toString('utf8')
@@ -978,7 +978,7 @@ export class NektarMemory {
       if (rec.fragment.d.length) data = Buffer.from(rec.fragment.d).toString('utf8')
       else if (rec.fragment.E?.length && this.opts.agentSeed) {
         const k = await this.fragmentKeyFor(rec)
-        const aadLen = (rec.fragment.E[0]! << 8) | rec.fragment.E[1]!
+        const aadLen = (rec.fragment.E[0] << 8) | rec.fragment.E[1]
         const aad = rec.fragment.E.slice(2, 2 + aadLen)
         const ciphertext = rec.fragment.E.slice(2 + aadLen)
         data = Buffer.from(decryptFragment(k, { ciphertext, aad, keyID: '' })).toString('utf8')
@@ -1269,7 +1269,7 @@ export class NektarMemory {
     const anchorTx = this.anchorTxs.get(anchorTxid)
     if (!anchorTx) return { ok: false, reason: 'committed anchor tx unknown to this instance' }
     const { decodeNektarAnchor } = await import('@nektar/contracts')
-    const data = decodeNektarAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
+    const data = decodeNektarAnchor(anchorTx.outputs[0].lockingScript.toHex())
     if (!data) return { ok: false, reason: 'committed tx output 0 is not a nektar anchor' }
     const shardName = [...this.anchors.entries()].find(([, ac]) => ac.getShardId() === data.shard)?.[0]
     if (shardName === undefined) return { ok: false, reason: 'anchor shard is not one of ours' }
@@ -1384,7 +1384,7 @@ export class NektarMemory {
     for (const r of recs) if (seqs.includes(r.seq)) found.set(r.seq, r)
     const missing = seqs.filter((s) => !found.has(s))
     if (missing.length > 0) return { ok: false, reason: `no record(s) seq ${missing.join(',')}` }
-    const batchIndex = found.get(seqs[0]!)!.batchIndex
+    const batchIndex = found.get(seqs[0])!.batchIndex
     if (batchIndex === undefined) return { ok: false, reason: 'not batched' }
     if (![...found.values()].every((r) => r.batchIndex === batchIndex))
       return { ok: false, reason: 'seqs span multiple batches — one subset proof covers one batch' }
@@ -1454,7 +1454,7 @@ export class NektarMemory {
     const { derivationPath, nodeHash } = await import('@nektar/datalog')
     const edb = [...(await this.store.all(shard)).map((r) => ({ pred: 'fragment', args: [`${shard}/${r.seq}`] })), ...(query.edb ?? [])]
     const { facts, conflicts } = dag.evaluate(edb)
-    if (conflicts.length > 0) throw new Error(`policy conflict on ${conflicts[0]!.claim} — no derivation attestation`)
+    if (conflicts.length > 0) throw new Error(`policy conflict on ${conflicts[0].claim} — no derivation attestation`)
     const path = derivationPath(facts, query.pred, query.args)
     if (!path) throw new Error(`${query.pred}(${query.args.join(',')}) not entailed by the policy DAG over this EDB`)
     // snapshot the committed node set — the anchored root covers exactly this list
@@ -1532,7 +1532,7 @@ export class NektarMemory {
       const m = /^delta:(\d+):([\s\S]*)$/.exec(d)!
       if (Number(m[1]) >= s) throw new Error('materialize: delta must reference an earlier record')
       await this.logAccess({ event: 'traverse', shard, seq: s, follows: Number(m[1]) })
-      return apply(await text(Number(m[1])), decodeDelta(m[2]!))
+      return apply(await text(Number(m[1])), decodeDelta(m[2]))
     }
     return await text(seq)
   }
@@ -1567,7 +1567,7 @@ export class NektarMemory {
     const gtx = genesis ? this.anchorTxs.get(genesis.txid) : undefined
     if (gtx) {
       const { decodeNektarAnchor } = await import('@nektar/contracts')
-      const dec = decodeNektarAnchor(gtx.outputs[0]!.lockingScript.toHex())
+      const dec = decodeNektarAnchor(gtx.outputs[0].lockingScript.toHex())
       if (dec) out = { genesisPub: dec.ownerPub, certs: [...this.anchorChain(shard).rotationCerts] }
     }
     this.authorChainCache.set(shard, out)
@@ -1657,7 +1657,7 @@ export class NektarMemory {
     const seqGuess = await this.store.nextSeq(shard)
     if (this.opts.agentSeed) {
       const c = this.ctx(shard, seqGuess, level)
-      const { fragmentKey } = deriveFragmentKey(deriveLevelKey(this.opts.agentSeed!, level), c)
+      const { fragmentKey } = deriveFragmentKey(deriveLevelKey(this.opts.agentSeed, level), c)
       const hd = sha256(fragment.d)
       const ef = encryptFragment(fragmentKey, fragment.d, hd, c)
       // E = [2-byte aadLen][aad][nonce|tag|ct] — aad is not secret, storing it
@@ -1741,7 +1741,7 @@ export class NektarMemory {
     // commits to the FULL signed checkpoint (digest binds logId+size+n+R+R'+
     // time+txid), making the history unforkable and publicly replayable.
     if (this.bonds.active) {
-      const cp = cps[cps.length - 1]!
+      const cp = cps[cps.length - 1]
       const lastRoot = toHex(Uint8Array.from(checkpointDigest(cp)))
       const ok = await this.bonds.mirror(lastRoot)
       if (!ok) this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed')
@@ -1797,7 +1797,7 @@ export class NektarMemory {
     if (rec.fragment.d.length) return Buffer.from(rec.fragment.d).toString('utf8')
     if (rec.fragment.E?.length && this.opts.agentSeed) {
       const k = await this.fragmentKeyFor(rec)
-      const aadLen = (rec.fragment.E[0]! << 8) | rec.fragment.E[1]!
+      const aadLen = (rec.fragment.E[0] << 8) | rec.fragment.E[1]
       const aad = rec.fragment.E.slice(2, 2 + aadLen)
       return Buffer.from(decryptFragment(k, { ciphertext: rec.fragment.E.slice(2 + aadLen), aad, keyID: '' })).toString('utf8')
     }
@@ -2197,7 +2197,7 @@ export class NektarMemory {
       importedBundles: Object.fromEntries(this.importedBundles),
       bond,
       packStores: Object.fromEntries(this.packStores)
-    } as PersistedMemoryState)
+    })
   }
   private restoreState(): void {
     const s = this.opts.stateStore?.load()
@@ -2218,7 +2218,7 @@ export class NektarMemory {
     }
     this.promises.push(...s.promises)
     // state files written before the transaction graph kept parents here
-    for (const hex of Object.values((s.txHex ?? {}) as Record<string, string>)) {
+    for (const hex of Object.values((s.txHex ?? {}))) {
       try {
         this.txs.put(Transaction.fromHex(hex))
       } catch {
@@ -2334,7 +2334,7 @@ export class NektarMemory {
         const { facts: derived, conflicts } = dag.evaluate(facts)
         dagDerivationHash = new Datalog(dag.rules).derivHash(derived)
         if (conflicts.length > 0) {
-          dagState = `dag-deny:policy conflict on ${conflicts[0]!.claim}`
+          dagState = `dag-deny:policy conflict on ${conflicts[0].claim}`
           for (const r of items) dagPermit.set(r.seq, false)
         } else {
           // per-item: each fragment needs its own permit; non-permitted items
@@ -2467,7 +2467,7 @@ export class NektarMemory {
       if (item.unverifiable)
         this.metrics.inc(
           'nektar_rejected_reads_total',
-          { reason: (item.reason ?? 'unknown').split(/[:\d]/)[0]!.trim() },
+          { reason: (item.reason ?? 'unknown').split(/[:\d]/)[0].trim() },
           1,
           'records withheld from a read, by reason'
         )

@@ -152,7 +152,7 @@ async function checkClaim(entry) {
   }
   const st = readClaimState(script)
   if (st.status !== 0n) {
-    if (process.env.NEKTAR_WATCH_DEBUG) console.log(`  ${txid.slice(0, 8)}:${vout} — status=${st.status}, skipping`)
+    if (process.env.NEKTAR_WATCH_DEBUG) console.log(`  ${txid.slice(0, 8)}:${vout} — status=${st.status.toString()}, skipping`)
     return
   }
   // deadline check: nLockTime is time-or-height; treat < 500M as height

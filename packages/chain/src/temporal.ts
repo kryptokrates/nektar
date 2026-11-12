@@ -39,7 +39,7 @@ export function weightedMedianTime(entries: Array<{ time: number; weight?: numbe
     cum += e.w
     if (cum >= total / 2) return e.t
   }
-  return s[s.length - 1]!.t
+  return s[s.length - 1].t
 }
 
 /** pure median over raw timestamps (all weights 1) */
@@ -71,7 +71,7 @@ export class TemporalSources implements ChainTracker {
   }
 
   async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
-    const head = await this.sources[0]!.tracker.headerAtHeight(height)
+    const head = await this.sources[0].tracker.headerAtHeight(height)
     if (!head) return undefined
     if (this.sources.length === 1) return head // single source: unchanged
     const t = await this.consensusTime(height)
@@ -79,16 +79,16 @@ export class TemporalSources implements ChainTracker {
   }
 
   currentHeight(): Promise<number> {
-    return this.sources[0]!.tracker.currentHeight()
+    return this.sources[0].tracker.currentHeight()
   }
   tipHeight(): Promise<number> {
-    const p = this.sources[0]!.tracker
+    const p = this.sources[0].tracker
     return p.tipHeight ? p.tipHeight() : p.currentHeight()
   }
   isValidRootForHeight(root: string, height: number, signal?: AbortSignal): Promise<boolean> {
-    return this.sources[0]!.tracker.isValidRootForHeight(root, height, signal)
+    return this.sources[0].tracker.isValidRootForHeight(root, height, signal)
   }
   onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
-    this.sources[0]!.tracker.onReorg?.(cb)
+    this.sources[0].tracker.onReorg?.(cb)
   }
 }

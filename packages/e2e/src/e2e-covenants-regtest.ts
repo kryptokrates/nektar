@@ -18,7 +18,7 @@ function readEnv(p: URL): Record<string, string> {
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
     const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
-    if (m) out[m[1]!] = m[2]!.trim()
+    if (m) out[m[1]] = m[2].trim()
   }
   return out
 }
@@ -43,7 +43,7 @@ async function rpc(method: string, ...params: unknown[]): Promise<any> {
     headers: { 'Content-Type': 'application/json', Authorization: auth },
     body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
   })
-  const j = (await r.json()) as any
+  const j = (await r.json())
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }
@@ -91,7 +91,7 @@ check(true, 'V2 commit#1 accepted')
 await mineOne()
 
 // commit 2 on the continuation: root2 → {n=2}
-bondUtxo = { txid: c1.tx.id('hex'), vout: 0, satoshis: c1.tx.outputs[0]!.satoshis!, script: c1.tx.outputs[0]!.lockingScript.toHex() }
+bondUtxo = { txid: c1.tx.id('hex'), vout: 0, satoshis: c1.tx.outputs[0].satoshis!, script: c1.tx.outputs[0].lockingScript.toHex() }
 const st = bond.stateOf(bondUtxo.script)
 check(st.n === 1n && st.lastRoot === root1, 'V2 on-chain state reads back {n:1, root1}')
 const root2 = 'bb'.repeat(32)
@@ -99,7 +99,7 @@ const c2 = await bond.buildCommit(bondUtxo, key, root2, await tracker.currentHei
 check(true, 'V2 commit#2 accepted')
 await mineOne()
 
-bondUtxo = { txid: c2.tx.id('hex'), vout: 0, satoshis: c2.tx.outputs[0]!.satoshis!, script: c2.tx.outputs[0]!.lockingScript.toHex() }
+bondUtxo = { txid: c2.tx.id('hex'), vout: 0, satoshis: c2.tx.outputs[0].satoshis!, script: c2.tx.outputs[0].lockingScript.toHex() }
 
 // negative: close with a locktime BELOW bondReleaseHeight — the tx is final
 // (locktime <= tip) so the node's script eval itself must refuse it.
@@ -125,7 +125,7 @@ await mineOne()
   const lc = await lazy.buildCommit(lUtxo, key, 'cc'.repeat(32), await tracker.currentHeight(), broadcaster, 1n)
   check(true, 'V2 seize-setup commit accepted')
   await mineOne()
-  lUtxo = { txid: lc.tx.id('hex'), vout: 0, satoshis: lc.tx.outputs[0]!.satoshis!, script: lc.tx.outputs[0]!.lockingScript.toHex() }
+  lUtxo = { txid: lc.tx.id('hex'), vout: 0, satoshis: lc.tx.outputs[0].satoshis!, script: lc.tx.outputs[0].lockingScript.toHex() }
   // too early: deadline = commitHeight + 2 has not passed — seize refused
   const rEarlySeize = await lazy.buildSeize(lUtxo, buildP2PKHScript(opPkh), await tracker.currentHeight(), broadcaster, 1n).then(
     () => false,
@@ -137,7 +137,7 @@ await mineOne()
   const seizer = PrivateKey.fromRandom()
   const seizerPkh = Buffer.from(seizer.toPublicKey().toHash()).toString('hex')
   const se = await lazy.buildSeize(lUtxo, buildP2PKHScript(seizerPkh), await tracker.currentHeight(), broadcaster, 1n)
-  check(se.tx.outputs[0]!.lockingScript.toHex() === buildP2PKHScript(seizerPkh), 'V2 seize after deadline accepted (paid to foreign seizer)')
+  check(se.tx.outputs[0].lockingScript.toHex() === buildP2PKHScript(seizerPkh), 'V2 seize after deadline accepted (paid to foreign seizer)')
 }
 
 // ============================ V3: DisclosureSale (BIP-199 escrow) ==========
@@ -174,8 +174,8 @@ const buyTx = sale.buildBuy(saleUtxo, WRAPPED, 1_990n) // fee = 10
 const rBuy = await broadcaster.broadcast(buyTx.tx)
 check(rBuy.status === 'success', `V3 buy accepted (seller paid 3000, wrapped revealed) — ${rBuy.description?.slice(0, 50) ?? 'ok'}`)
 if (rBuy.status === 'success') {
-  check(buyTx.tx.outputs[0]!.satoshis === 3_000, 'V3 seller output = exact price')
-  check(buyTx.tx.outputs[1]!.lockingScript.toHex() === buildP2PKHScript(buyerPkh), 'V3 change pinned to depositor')
+  check(buyTx.tx.outputs[0].satoshis === 3_000, 'V3 seller output = exact price')
+  check(buyTx.tx.outputs[1].lockingScript.toHex() === buildP2PKHScript(buyerPkh), 'V3 change pinned to depositor')
 }
 await mineOne()
 

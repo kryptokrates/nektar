@@ -58,7 +58,7 @@ export function provenanceDigest(d: Bytes, p: Provenance): Bytes {
 /** inverse of field(): read a u32le-prefixed blob. */
 function takeField(b: Bytes, off: number): { v: Bytes; next: number } {
   if (off + 4 > b.length) throw new Error('parse: truncated field header')
-  const len = (b[off]! | (b[off + 1]! << 8) | (b[off + 2]! << 16) | (b[off + 3]! << 24)) >>> 0
+  const len = (b[off] | (b[off + 1] << 8) | (b[off + 2] << 16) | (b[off + 3] << 24)) >>> 0
   if (off + 4 + len > b.length) throw new Error('parse: truncated field body')
   return { v: b.slice(off + 4, off + 4 + len), next: off + 4 + len }
 }
@@ -69,7 +69,7 @@ export function parseProvenance(b: Bytes): Provenance {
   if (src.next + 8 > b.length) throw new Error('parse: truncated time')
   const tb = b.slice(src.next, src.next + 8)
   let time = 0n
-  for (let i = 7; i >= 0; i--) time = (time << 8n) | BigInt(tb[i]!)
+  for (let i = 7; i >= 0; i--) time = (time << 8n) | BigInt(tb[i])
   const sig = takeField(b, src.next + 8)
   const mid = takeField(b, sig.next)
   const p: Provenance = {

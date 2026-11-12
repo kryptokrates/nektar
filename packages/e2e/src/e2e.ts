@@ -89,8 +89,8 @@ try {
     }
     if (i % 50 === 49) console.log(`  ${i + 1} anchors ${Date.now() - t0}ms`)
   }
-  const lastSeg = segTimes[segTimes.length - 1]!
-  check(lastSeg <= 2 * segTimes[0]!, `per-anchor cost ~flat: firstSeg=${segTimes[0]}ms lastSeg=${lastSeg}ms (<=2x)`)
+  const lastSeg = segTimes[segTimes.length - 1]
+  check(lastSeg <= 2 * segTimes[0], `per-anchor cost ~flat: firstSeg=${segTimes[0]}ms lastSeg=${lastSeg}ms (<=2x)`)
 } catch (e) {
   burstOk = false
   console.log('burst failed:', (e as Error).message)
@@ -391,7 +391,7 @@ deny(P, read, R) :- member(P, verified), fragment(R).`).rules
   const expiry = Date.now() + 60000
   const dsig = delegate(dk, inst, expiry)
   const anchored = new Map([...inst.members].map((h) => [h, { anchorTxid: GRAPH_TXID }]))
-  const vi = verifyInstance(g, inst, anchored as any, { pub: dk.toPublicKey(), expiry, sig: dsig })
+  const vi = verifyInstance(g, inst, anchored, { pub: dk.toPublicKey(), expiry, sig: dsig })
   check(vi.ok, `third-party instance verify (${vi.reason ?? 'ok'})`)
   check(!verifyInstance(g, inst, new Map(), { pub: dk.toPublicKey(), expiry, sig: dsig }).ok, 'unanchored member instance rejected')
 } catch (e) {

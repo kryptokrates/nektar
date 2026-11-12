@@ -181,7 +181,7 @@ async function admitBatch(beef: number[], o: { stream: string; producer: Uint8Ar
     if (a.kind !== 'batch' || a.carrier === undefined) return undefined
     const b = a.carrier.batch
     if (b.stream !== o.stream || !b.producer.every((x, i) => x === o.producer[i]) || b.seq !== o.seq) return undefined
-    const parent = tx.inputs[0]!.sourceTransaction
+    const parent = tx.inputs[0].sourceTransaction
     if (parent?.merklePath === undefined || !(await parent.merklePath.verify(parent.id('hex'), o.tracker))) return undefined
     const lines =
       b.profile === ProfileFull && b.encoding === EncodingLines && b.content !== undefined
@@ -273,7 +273,7 @@ export async function readLog(p: { hosts: string[]; stream: string; producer: st
       // backwards — any candidate starts a segment. A real break is a
       // mismatch against a picked predecessor.
       const matching = expectedPrev === undefined ? list : list.filter((c) => c.prev === expectedPrev)
-      const pick = matching.length === 0 ? list[0]! : matching[0]!
+      const pick = matching.length === 0 ? list[0] : matching[0]
       if (matching.length === 0 && expectedPrev !== undefined) gaps.push({ from: s, to: s })
       closeGap(s - 1)
       expectedPrev = pick.commitment
@@ -321,10 +321,10 @@ export async function readLog(p: { hosts: string[]; stream: string; producer: st
         if (tx.merklePath === undefined || !(await tx.merklePath.verify(tx.id('hex'), p.tracker))) continue
         const pd = tx.outputs
           .map((o) => readPushDrop(new Uint8Array(o.lockingScript.toBinary())))
-          .find((r) => r !== undefined && r.fields.length === 3 && bytesEq(r.fields[0]!, TagAnchor))
+          .find((r) => r !== undefined && r.fields.length === 3 && bytesEq(r.fields[0], TagAnchor))
         if (pd === undefined) continue
         const fields = pd.fields
-        const a = decodeAnchor(fields[1]!)
+        const a = decodeAnchor(fields[1])
         if (a.stream !== p.stream || toHex(a.producer) !== p.producer.toLowerCase()) continue
         if (a.interval !== interval || a.first !== prevFirst + prevCount || toHex(a.prev) !== prevTokenTxid) continue
         const covered: Uint8Array[] = []
@@ -519,7 +519,7 @@ export async function anchorLog(p: {
 
 /** The record inside a carrier's single PushDrop field. */
 function recordOf(carrier: Transaction): Uint8Array {
-  const r = readPushDrop(new Uint8Array(carrier.outputs[0]!.lockingScript.toBinary()))
+  const r = readPushDrop(new Uint8Array(carrier.outputs[0].lockingScript.toBinary()))
   if (r === undefined || r.fields.length < 1) throw new Error('carrier has no PushDrop fields')
-  return r.fields[0]!
+  return r.fields[0]
 }

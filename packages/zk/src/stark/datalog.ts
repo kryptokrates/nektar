@@ -70,10 +70,10 @@ export function encodeZkder(p: ZkDerivationProof): Uint8Array {
 export function decodeZkder(b: Uint8Array): ZkDerivationProof {
   if (b.length < HEADER_V1) throw new ZkdCodecError('truncated header')
   for (let i = 0; i < 4; i++) if (b[i] !== ZKD3_MAGIC[i]) throw new ZkdCodecError('bad magic (not L_ZKDer v3)')
-  const ver = b[4]!
+  const ver = b[4]
   if (ver !== 1 && ver !== ZKD3_VERSION) throw new ZkdCodecError(`unsupported version ${ver}`)
   const off = ver === 1 ? 0 : 1 // rev 2 inserts the algorithm byte at index 5
-  const alg = ver === 1 ? ALG_SHA256D : b[5]!
+  const alg = ver === 1 ? ALG_SHA256D : b[5]
   if (alg !== ALG_SHA256D) throw new ZkdCodecError(`unsupported algorithm ${alg}`)
   const header = HEADER_V1 + off
   if (b.length < header) throw new ZkdCodecError('truncated header')

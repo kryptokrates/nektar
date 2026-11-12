@@ -273,7 +273,7 @@ test('bstack C: withheld offer still completes via other host; withheld logged n
       await drive(all, chain, 1)
       const { readOffers } = await import('@nektar/bstack')
       const r = await readOffers([h1.url], { net: NET, wantId: w.wantId, buyerPub: b.pub }, { tracker: trackerFor(chain), net: NET })
-      if (r.items.length > 0) dropTxid = r.items[0]!.txid
+      if (r.items.length > 0) dropTxid = r.items[0].txid
     }
     assert.notEqual(dropTxid, '', 'offer carrier landed on h1')
     assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'logs: ' + logs.slice(-20).join(' | '))
@@ -404,7 +404,7 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
     )
     const bo0 = await buyerOp(b)
     const sel = (bo0!.data.selected as { key: string }).key
-    const offerId = (bo0!.data.offers as Record<string, { so: { offer: { offerId: string } } }>)[sel]!.so.offer.offerId
+    const offerId = (bo0!.data.offers as Record<string, { so: { offer: { offerId: string } } }>)[sel].so.offer.offerId
     const { sendBox, MemoryTreeLedger, MemoryCarrierJournal, boxFundingLock, mintTree } = await import('@nektar/bstack')
     const { PrivateKey, Transaction, P2PKH, MerklePath } = await import('@bsv/sdk')
     const ghost = PrivateKey.fromRandom()
@@ -476,7 +476,7 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
     const sw = (bo.data.want as { want: { ts: number; exp?: number } }).want
     assert.equal(sw.exp, sw.ts + 8000, 'want expires with its collect window')
     const sel = (bo.data.selected as { key: string }).key
-    const so = (bo.data.offers as Record<string, { so: { offer: { exp?: number } } }>)[sel]!.so
+    const so = (bo.data.offers as Record<string, { so: { offer: { exp?: number } } }>)[sel].so
     assert.ok(Number.isSafeInteger(so.offer.exp), 'offer carries a signed expiry')
     await drive(all, chain, 2)
     const { readBox } = await import('@nektar/bstack')
@@ -537,12 +537,12 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
     }
     const bk = b.mem.operatorKey()
     const mined = new Transaction()
-    mined.addInput({ sourceTransaction: coin[0]!.tx, sourceOutputIndex: coin[0]!.vout, unlockingScriptTemplate: new P2PKH().unlock(bk) })
+    mined.addInput({ sourceTransaction: coin[0].tx, sourceOutputIndex: coin[0].vout, unlockingScriptTemplate: new P2PKH().unlock(bk) })
     mined.addOutput({ satoshis: 9_500, lockingScript: new P2PKH().lock(bk.toPublicKey().toAddress()) })
     await mined.sign()
     assert.equal((await chain.broadcast(mined)).status, 'success')
     await chain.mine(1)
-    const proven = chain.getTx(mined.id('hex'))!
+    const proven = chain.getTx(mined.id('hex'))
     assert.ok((await proven)?.merklePath !== undefined)
     b.mem.addOwnedOut((await proven)!, 0)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
@@ -559,7 +559,7 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
     assert.ok(done, 'no deal | ' + logs.slice(-20).join(' | '))
     assert.ok(escrowBroadcasts >= 1, 'seller broadcast the escrow tx itself')
     assert.equal(escrowLookups, 0, 'seller never looked the escrow up')
-    const sale = (await saleOps(s))[0]!
+    const sale = (await saleOps(s))[0]
     const verified = (await s.rt.store.events(sale.operationId)).find((e) => e.cause === 'escrow_verified')
     assert.deepEqual(
       verified?.evidence,
@@ -590,7 +590,7 @@ test('bstack I: tampered accept — txHex of a different transaction → seller 
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
-    const op = (await saleOps(s))[0]!
+    const op = (await saleOps(s))[0]
     const want = (op.data.want as { want: { wantId: string; pub: string } }).want
     const offer = op.data.offer as { cfg: { price: number | string; refundAfter: number | string; maxFee: number | string } }
     const { PublicKey, Script, Transaction } = await import('@bsv/sdk')
@@ -612,7 +612,7 @@ test('bstack I: tampered accept — txHex of a different transaction → seller 
       tx: other.toHex()
     })
     await s.rt.cycle() // tick drains the inbox → onAccept
-    const op2 = (await saleOps(s))[0]!
+    const op2 = (await saleOps(s))[0]
     assert.equal(op2.state, 'quoted', 'tampered accept must not advance the sale')
     const evs = await s.rt.store.events(op.operationId)
     assert.ok(
@@ -739,8 +739,8 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
     assert.equal(escrowLookups, 0, 'the recovery note carried the escrow — no chain lookup needed')
     const ops = (await b2.rt.store.operations({ role: 'buyer' })).filter((o) => o.kind === 'purchase')
     assert.equal(ops.length, 1, 'exactly one buyer operation after restore')
-    assert.equal(ops[0]!.data.restored, true)
-    assert.equal(ops[0]!.data.escrowTxid, escrowTxid, 'same escrow')
+    assert.equal(ops[0].data.restored, true)
+    assert.equal(ops[0].data.escrowTxid, escrowTxid, 'same escrow')
     while ((await b2.mem.chainHeight()) < refundAfter) await chain.mine(1) // refundAfter is on the engine's height scale
     const wasRefunded = await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'refunded', 40)
     if (!wasRefunded) console.log('KFAIL', JSON.stringify(await buyerOp(b2)), '\nLOGS', logs.slice(-25))
@@ -1170,12 +1170,12 @@ test('bstack S: disclosure rejected after completion_submitted — seller moves 
       if (!submitted) await chain.mine(1)
     }
     assert.ok(submitted, 'never completion_submitted | ' + logs.slice(-20).join(' | '))
-    const completeTxid = (await saleOps(s))[0]!.data.completeTxid as string
+    const completeTxid = (await saleOps(s))[0].data.completeTxid as string
     assert.ok(
       await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_failed', 40),
       'not completion_failed | ' + logs.slice(-20).join(' | ')
     )
-    const evs = await s.rt.store.events((await saleOps(s))[0]!.operationId)
+    const evs = await s.rt.store.events((await saleOps(s))[0].operationId)
     assert.ok(
       evs.some((e) => e.cause === 'disclosure_rejected_late'),
       'cause disclosure_rejected_late: ' + evs.map((e) => e.cause).join(',')
@@ -1286,7 +1286,7 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
-    const origOp = (await saleOps(s))[0]!
+    const origOp = (await saleOps(s))[0]
     // measure the sealed sellerNote on the wire — must fit the 12 KiB budget
     await drive([b.rt, s.rt], chain, 2)
     const items = (await readBuyer(s.mem.operatorKey(), [h1.url, h2.url], chain)).items
@@ -1319,9 +1319,9 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
     )
     const ops = await saleOps(s2)
     assert.equal(ops.length, 1, 'exactly one sale operation after restore')
-    assert.equal(ops[0]!.operationId, origOp.operationId, 'restored with the original operationId')
-    assert.equal(ops[0]!.data.restored, true)
-    assert.ok(COMPLETE.has(ops[0]!.state), `restored sale reached ${ops[0]!.state}`)
+    assert.equal(ops[0].operationId, origOp.operationId, 'restored with the original operationId')
+    assert.equal(ops[0].data.restored, true)
+    assert.ok(COMPLETE.has(ops[0].state), `restored sale reached ${ops[0].state}`)
     await drive([b.rt, s2.rt], chain, 2)
     assert.equal((await readBuyer(s2.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'seller inbox empty after settlement')
     for (const r of [b.rt, s2.rt]) await r.stop()
@@ -1518,7 +1518,7 @@ test(
       assert.ok(await until([b.rt, s.rt], chain, done, 120), 'no deal | ' + logs.slice(-25).join(' | '))
       await drive([b.rt, s.rt], chain, 3) // let the journal append settle
       const bo = (await buyerOp(b))!
-      const so = (await saleOps(s))[0]!
+      const so = (await saleOps(s))[0]
 
       // the buyer sees the seller's stream for this deal: complete, with the
       // seller-side states
@@ -1556,7 +1556,7 @@ test(
           if (pd === undefined || pd.fields.length !== 2) continue
           let b2: ReturnType<typeof decodeBatch>
           try {
-            b2 = decodeBatch(pd.fields[0]!)
+            b2 = decodeBatch(pd.fields[0])
           } catch {
             continue
           }
@@ -1610,7 +1610,7 @@ test('bstack Y: a journal batch dropped by every host shows the gap — complete
     const sj = await dealJournal(b, bo.operationId)
     const seqs = [...new Set((sj.counterparty as { entries: Array<{ seq: number }> }).entries.map((e) => e.seq))]
     assert.ok(seqs.length >= 1, 'deal entries exist in the seller journal')
-    const mid = seqs[Math.floor(seqs.length / 2)]!
+    const mid = seqs[Math.floor(seqs.length / 2)]
     dropped.add(await jTxid(dir, 'seller', mid))
     const bj = await dealJournal(b, bo.operationId)
     const cp = bj.counterparty as { complete: boolean; gaps: Array<{ from: number; to: number }> }
@@ -1890,11 +1890,11 @@ test('bstack AD: a full deal stores redacted evidence — verified read, one eve
     const bo = (await buyerOp(b))!
     const ref = bo.data.evidenceRef as { bucket: string; key: string; sha256: string; size: number } | undefined
     assert.ok(ref !== undefined, 'buyer op carries evidenceRef')
-    assert.equal(ref!.key, `evidence/${NET}/${bo.operationId}.json`)
-    assert.equal(ref!.bucket, 'evidence-regtest')
+    assert.equal(ref.key, `evidence/${NET}/${bo.operationId}.json`)
+    assert.equal(ref.bucket, 'evidence-regtest')
     const evs = (await b.rt.store.events(bo.operationId)).filter((e) => e.cause === 'evidence_stored')
     assert.equal(evs.length, 1, 'exactly one evidence_stored event')
-    const bytes = await s3.client.getVerified(ref!)
+    const bytes = await s3.client.getVerified(ref)
     const { verifyTradeEvidence } = await import('../src/automation/evidence.js')
     const verdict = verifyTradeEvidence(JSON.parse(new TextDecoder().decode(bytes)))
     assert.equal(verdict.ok, true, JSON.stringify(verdict.checks))
@@ -1912,11 +1912,11 @@ test('bstack AD: a full deal stores redacted evidence — verified read, one eve
     const jl = read.batches.flatMap((x) => x.lines.map((l) => JSON.parse(l) as { op?: string; cause?: string; ev?: string | null }))
     const evLines = jl.filter((l) => l.op === bo.operationId && l.cause === 'evidence_stored')
     assert.equal(evLines.length, 1, 'one evidence_stored journal line')
-    assert.ok(evLines[0]!.ev !== null && evLines[0]!.ev !== undefined, 'journal line carries the ref digest')
+    assert.ok(evLines[0].ev !== null && evLines[0].ev !== undefined, 'journal line carries the ref digest')
     // deals view surfaces it
     const deal = (await callTool(b.mem, 'deals', { operationId: bo.operationId })) as { evidence?: { stored?: boolean; ref?: { key: string } } }
     assert.equal(deal.evidence?.stored, true)
-    assert.equal(deal.evidence?.ref?.key, ref!.key)
+    assert.equal(deal.evidence?.ref?.key, ref.key)
     await b.rt.stop()
     await s.rt.stop()
   } finally {
@@ -2011,7 +2011,7 @@ test('bstack AF: crash between the put and the transition — one event, one obj
     b.rt.store.transition = (async (id: string, rev: number, to: string, ch: { cause?: string } & Record<string, unknown>) => {
       if (failCommit && ch?.cause === 'evidence_stored') throw new Error('crash before commit')
       return await origTransition(id, rev, to, ch as never)
-    }) as typeof b.rt.store.transition
+    })
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     // the window this test asserts: object exists, transition never committed
     assert.ok(

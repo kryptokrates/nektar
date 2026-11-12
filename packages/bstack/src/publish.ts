@@ -36,7 +36,7 @@ export async function publishArtifact(p: {
     await p.journal.put(hash, { txid, beef, topics })
   }
   // the journal re-serves missed hosts — no sleeps inside the send path
-  const r = await submitAll(p.hosts, beef!, topics, { quorum: p.quorum, retryWaits: [] })
+  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [] })
   if (!r.ok) throw new Error(`publishArtifact: quorum failed ${JSON.stringify(r.missed)}`)
-  return { txid: txid!, took: r.took, admitted: r.admitted, missed: r.missed }
+  return { txid: txid, took: r.took, admitted: r.admitted, missed: r.missed }
 }

@@ -94,7 +94,7 @@ test('StackFunder: take, markSpent, addOwned manage the pool like the faucet did
   const { funder } = w
   await funder.take(1_000)
   await funder.take(1_000)
-  const leftover = (funder as unknown as { utxos: Array<{ tx: Transaction; vout: number }> }).utxos[0]!
+  const leftover = (funder as unknown as { utxos: Array<{ tx: Transaction; vout: number }> }).utxos[0]
   funder.markSpent(leftover.tx.id('hex'), leftover.vout)
   await assert.rejects(funder.take(1), /no utxo/)
   const tx = new Transaction()

@@ -34,14 +34,14 @@ test('anchor: genesis then successor spends the head UTXO', async (t) => {
   if (s0 === undefined) return
   const { chain, ac } = s0
   const g = await ac.anchor(10, dsha256(utf8('b0')))
-  const gd = decodeNektarAnchor(g.tx.outputs[0]!.lockingScript.toHex())
+  const gd = decodeNektarAnchor(g.tx.outputs[0].lockingScript.toHex())
   assert.equal(gd!.n, 0)
 
   const a1 = await ac.anchor(20, dsha256(utf8('b1')))
   // input 0 must spend genesis head outpoint
   const cIn = a1.tx.inputs.find((i) => (i.sourceTXID ?? i.sourceTransaction?.id('hex')) === g.tx.id('hex'))!
   assert.equal(cIn.sourceOutputIndex, 0)
-  const a1d = decodeNektarAnchor(a1.tx.outputs[0]!.lockingScript.toHex())
+  const a1d = decodeNektarAnchor(a1.tx.outputs[0].lockingScript.toHex())
   assert.equal(a1d!.n, 1)
   assert.ok(eq(a1d!.Rp, chainRp(gd!.Rp, a1d!.R, 20)))
 
@@ -64,7 +64,7 @@ test('anchor: failed broadcast does not advance the head', async (t) => {
       return chain.broadcast(tx)
     }
   }
-  const ac = new AnchorChain('s1', PrivateKey.fromRandom(), funder, funder.keyPair, flaky as any)
+  const ac = new AnchorChain('s1', PrivateKey.fromRandom(), funder, funder.keyPair, flaky)
   const R = (i: number) => dsha256(utf8(`rb${i}`))
   const g = await ac.anchor(1, R(0))
   const a1 = await ac.anchor(1, R(1))
@@ -73,12 +73,12 @@ test('anchor: failed broadcast does not advance the head', async (t) => {
   assert.equal(ac.getHead()!.data.n, 1, 'head must not advance on failed broadcast')
   // retry after the drop — must produce a valid successor of n=1 (not a phantom)
   const a3 = await ac.anchor(1, R(2))
-  const d = decodeNektarAnchor(a3.tx.outputs[0]!.lockingScript.toHex())
+  const d = decodeNektarAnchor(a3.tx.outputs[0].lockingScript.toHex())
   assert.equal(d!.n, 2)
   const cIn = a3.tx.inputs.find((i) => (i.sourceTXID ?? i.sourceTransaction?.id('hex')) === a1.tx.id('hex'))!
   assert.ok(cIn, 'successor spends the n=1 head')
   const a4 = await ac.anchor(1, R(3))
-  assert.equal(decodeNektarAnchor(a4.tx.outputs[0]!.lockingScript.toHex())!.n, 3)
+  assert.equal(decodeNektarAnchor(a4.tx.outputs[0].lockingScript.toHex())!.n, 3)
 })
 
 test('anchor: unconfirmed chain + burst back-pressure', async (t) => {
@@ -141,11 +141,11 @@ test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', asyn
   const inner = chain
   const flaky: any = {
     broadcast: async (tx: import('@bsv/sdk').Transaction) => {
-      if ((flaky as any)._n === 1) {
-        ;(flaky as any)._n = 2
+      if ((flaky)._n === 1) {
+        ;(flaky)._n = 2
         return { status: 'error', description: 'TX_MISSING_PARENT (34): error getting parent' }
       }
-      ;(flaky as any)._n = ((flaky as any)._n ?? 0) + 1
+      ;(flaky)._n = ((flaky)._n ?? 0) + 1
       return inner.broadcast(tx)
     }
   }
@@ -227,7 +227,7 @@ test('anchorOnce fails fast on dry funding — never broadcasts a contract-only 
       return { status: 'error' as const }
     }
   }
-  const ac = new AnchorChain('d', f.keyPair, f, f.keyPair, probe as any)
+  const ac = new AnchorChain('d', f.keyPair, f, f.keyPair, probe)
   await assert.rejects(() => ac.anchor(1, new Uint8Array(32).fill(1)), /reserve dry|no utxo/i)
   assert.equal(calls, 0, 'nothing was broadcast')
 })
@@ -241,7 +241,7 @@ test('every AnchorChain tx produces a BEEF with all inputs resolved', async (t) 
   const { Transaction } = await import('@bsv/sdk')
   for (let i = 0; i < 4; i++) {
     const r = await ac.anchor(1, new Uint8Array(32).fill(i + 1))
-    const ntx = Transaction.fromBEEF(ac.beefOf(r.tx) as any)
+    const ntx = Transaction.fromBEEF(ac.beefOf(r.tx))
     for (const [ix, inp] of ntx.inputs.entries()) {
       assert.ok(inp.sourceTXID !== undefined || inp.sourceTransaction !== undefined, `anchor ${i} in${ix}: parent unresolvable in BEEF`)
     }
@@ -256,14 +256,14 @@ test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent s
   const ac = new AnchorChain('v3', f.keyPair, f, f.keyPair, chain)
   await ac.anchor(3, dsha256(utf8('batch')))
   await ac.anchor(2, dsha256(utf8('batch2'))) // append passes script verification
-  const d = decodeNektarAnchor(ac.getHead()!.tx.outputs[0]!.lockingScript.toHex())!
+  const d = decodeNektarAnchor(ac.getHead()!.tx.outputs[0].lockingScript.toHex())!
   assert.ok(d, 'v3 anchor decodes')
   assert.deepEqual(Object.keys(d).sort(), ['R', 'Rp', 'metanet', 'n', 'ownerPkh', 'ownerPub', 'shard', 'size', 'tag'])
   assert.equal(d.metanet, true, 'new anchors carry the META flag push')
   assert.equal(d.n, 1)
   assert.equal(d.size, 2)
   assert.equal(Buffer.from(d.R).toString('hex'), Buffer.from(dsha256(utf8('batch2'))).toString('hex'))
-  const hex = ac.getHead()!.tx.outputs[0]!.lockingScript.toHex()
+  const hex = ac.getHead()!.tx.outputs[0].lockingScript.toHex()
   // the flag is a real push — <0x04> 'META' — directly after the state
   // OP_RETURN. Match the full sequence: a bare lastIndexOf('6a') is flaky —
   // byte 0x6a can appear inside the state's pubkey/hash fields that follow.
@@ -307,7 +307,7 @@ test('GOAL-v8 D5: extractAnchorAuthorship exposes σ_n — verified against the 
   const g = await ac.anchor(1, dsha256(utf8('g')))
   const a1 = await ac.anchor(2, dsha256(utf8('a1')))
   // the successor spend's input 0 spends the genesis anchor output
-  const auth = extractAnchorAuthorship(a1.tx, g.tx.outputs[0]!.lockingScript.toHex())
+  const auth = extractAnchorAuthorship(a1.tx, g.tx.outputs[0].lockingScript.toHex())
   assert.ok(auth, 'σ_n extracted from the spend')
   assert.equal(auth.ownerPub, (ac as any).ownerPub())
   assert.equal(auth.sighashScope, 0x41)
@@ -318,8 +318,8 @@ test('GOAL-v8 D5: extractAnchorAuthorship exposes σ_n — verified against the 
   // negatives: a non-anchor prevOut yields no authorship
   assert.equal(extractAnchorAuthorship(a1.tx, '76a914' + '00'.repeat(20) + '88ac'), null, 'P2PKH prevOut → null')
   // a spend input without an owner-key push yields null (input 1 = funding P2PKH)
-  assert.equal(extractAnchorAuthorship(a1.tx, g.tx.outputs[0]!.lockingScript.toHex(), 1), null, 'funding input carries no σ_n')
+  assert.equal(extractAnchorAuthorship(a1.tx, g.tx.outputs[0].lockingScript.toHex(), 1), null, 'funding input carries no σ_n')
   // a corrupted preimage breaks verification
-  const bad = extractAnchorAuthorship(a1.tx, g.tx.outputs[0]!.lockingScript.toHex())!
+  const bad = extractAnchorAuthorship(a1.tx, g.tx.outputs[0].lockingScript.toHex())!
   assert.ok(bad.verified)
 })

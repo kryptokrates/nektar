@@ -19,7 +19,7 @@ function readEnv(p: URL): Record<string, string> {
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
     const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
-    if (m) out[m[1]!] = m[2]!.trim()
+    if (m) out[m[1]] = m[2].trim()
   }
   return out
 }
@@ -44,7 +44,7 @@ async function rpc(method: string, ...params: unknown[]): Promise<any> {
     headers: { 'Content-Type': 'application/json', Authorization: auth },
     body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
   })
-  const j = (await r.json()) as any
+  const j = (await r.json())
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }
@@ -113,7 +113,7 @@ reserve.addOwned(s1.tx, 2) // the 1-sat change — cheap bookkeeping
 await mineOne()
 
 // spend 2: continuation carries window state on-chain
-const cont = s1.tx.outputs[0]!
+const cont = s1.tx.outputs[0]
 utxo = { txid: s1.tx.id('hex'), vout: 0, satoshis: cont.satoshis!, script: cont.lockingScript.toHex() }
 lt = await tracker.currentHeight()
 const s2 = vault.buildSpend(utxo, owner, 1_500n, lt)
@@ -123,7 +123,7 @@ await mineOne()
 
 // negative: over perTxCap on the FRESH continuation utxo — the node's script
 // eval must refuse (not a double-spend refusal)
-const cont2 = s2.tx.outputs[0]!
+const cont2 = s2.tx.outputs[0]
 const utxo2 = { txid: s2.tx.id('hex'), vout: 0, satoshis: cont2.satoshis!, script: cont2.lockingScript.toHex() }
 lt = await tracker.currentHeight()
 const bad = vault.buildSpend(utxo2, owner, 5_000n, lt)

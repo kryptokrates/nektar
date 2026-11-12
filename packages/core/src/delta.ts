@@ -12,8 +12,8 @@ export interface Delta {
 export class DeltaError extends Error {}
 
 export function diff(a: string, b: string): Delta {
-  const A = [...a],
-    B = [...b] // code points, never split a surrogate pair
+  const A = Array.from(a),
+    B = Array.from(b) // code points, never split a surrogate pair
   let pre = 0
   while (pre < A.length && pre < B.length && A[pre] === B[pre]) pre++
   let suf = 0
@@ -22,7 +22,7 @@ export function diff(a: string, b: string): Delta {
 }
 
 function splice(s: string, d: Delta, expect: string, put: string): string {
-  const S = [...s]
+  const S = Array.from(s)
   if (d.pre + d.suf > S.length) throw new DeltaError('delta does not fit its base')
   const mid = S.slice(d.pre, S.length - d.suf).join('')
   if (mid !== expect) throw new DeltaError('delta base mismatch')

@@ -37,7 +37,7 @@ export function parseLiteral(s: string): Literal {
   const body = neg ? t.slice(4).trim() : t
   const m = /^([a-z][a-zA-Z0-9_-]*)\((.*)\)$/.exec(body)
   if (!m) throw new ParseError(`malformed literal '${t}'`)
-  return { pred: m[1]!, args: parseArgs(body, t), neg }
+  return { pred: m[1], args: parseArgs(body, t), neg }
 }
 
 export function parseProgram(src: string): { rules: Rule[]; facts: Fact[] } {
@@ -68,13 +68,13 @@ export function parseProgram(src: string): { rules: Rule[]; facts: Fact[] } {
       continue
     }
     const parts = st.split(':-')
-    const head = parseLiteral(parts[0]!.trim())
+    const head = parseLiteral(parts[0].trim())
     if (parts.length === 1) {
       if (head.args.some(isVar)) throw new ParseError(`fact has variable: '${st}'`)
       facts.push({ pred: head.pred, args: head.args })
       continue
     }
-    const body = parts[1]!.split(/,(?![^()]*\))/).map((b) => parseLiteral(b))
+    const body = parts[1].split(/,(?![^()]*\))/).map((b) => parseLiteral(b))
     rules.push({ id: pendingId ?? `r${rules.length}`, head, body })
     pendingId = null
   }

@@ -29,8 +29,8 @@ export class Metrics {
       out.push(`# HELP ${n} ${this.help.get(n) ?? n}`, `# TYPE ${n} ${t}`)
     }
     const seen = new Set<string>()
-    for (const [k, v] of [...this.counters].sort()) {
-      const n = k.split('{')[0]!
+    for (const [k, v] of [...this.counters].sort(([a], [b]) => a.localeCompare(b))) {
+      const n = k.split('{')[0]
       if (!seen.has(n)) {
         head(n, 'counter')
         seen.add(n)
@@ -50,7 +50,7 @@ export class Metrics {
 }
 function key(name: string, labels: Record<string, string>): string {
   const l = Object.entries(labels)
-    .sort()
+    .sort(([a], [b]) => a.localeCompare(b))
     .map(([k, v]) => `${k}="${v.replace(/["\\\n]/g, '_')}"`)
     .join(',')
   return l ? `${name}{${l}}` : name

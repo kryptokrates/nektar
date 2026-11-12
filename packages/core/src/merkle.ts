@@ -24,8 +24,8 @@ export function hashNode(left: Bytes, right: Bytes): Bytes {
 function nextLevel(level: Bytes[]): Bytes[] {
   const next: Bytes[] = []
   for (let i = 0; i < level.length; i += 2) {
-    const l = level[i]!
-    const r = i + 1 < level.length ? level[i + 1]! : l
+    const l = level[i]
+    const r = i + 1 < level.length ? level[i + 1] : l
     next.push(hashNode(l, r))
   }
   return next
@@ -34,12 +34,12 @@ function nextLevel(level: Bytes[]): Bytes[] {
 export function buildTree(leaves: Bytes[]): MerkleTree {
   if (leaves.length === 0) throw new Error('EmptyLeaves: no leaves')
   const levels: Bytes[][] = [leaves.slice()]
-  let cur = levels[0]!
+  let cur = levels[0]
   while (cur.length > 1) {
     cur = nextLevel(cur)
     levels.push(cur)
   }
-  return { root: cur[0]!, levels }
+  return { root: cur[0], levels }
 }
 
 export function merkleRoot(leaves: Bytes[]): Bytes {
@@ -54,8 +54,8 @@ export function merkleProof(leaves: Bytes[], index: number): MerkleProof {
   const siblings: Bytes[] = []
   let pos = index
   for (let level = 0; level < tree.levels.length - 1; level++) {
-    const nodes = tree.levels[level]!
-    siblings.push(pos % 2 === 0 ? (pos + 1 < nodes.length ? nodes[pos + 1]! : nodes[pos]!) : nodes[pos - 1]!)
+    const nodes = tree.levels[level]
+    siblings.push(pos % 2 === 0 ? (pos + 1 < nodes.length ? nodes[pos + 1] : nodes[pos]) : nodes[pos - 1])
     pos = Math.floor(pos / 2)
   }
   return { index, siblings }

@@ -53,8 +53,8 @@ test('AUT-005: deploy + valid steps accepted by script evaluation; head decoded 
   assert.deepEqual([h1.state.q, h1.state.n, h1.state.lastOut], [1, 1, OUT])
   const h2 = await ac.step(1, 2, OUT)
   assert.deepEqual([h2.state.q, h2.state.n], [2, 2])
-  assert.ok(decodeNektarAutomaton(h2.tx.outputs[0]!.lockingScript.toHex()), 'continuation authenticates')
-  const sh = h2.tx.outputs[0]!.lockingScript.toHex()
+  assert.ok(decodeNektarAutomaton(h2.tx.outputs[0].lockingScript.toHex()), 'continuation authenticates')
+  const sh = h2.tx.outputs[0].lockingScript.toHex()
   const flipped = sh.slice(0, 40) + (sh.slice(40, 42) === '00' ? '01' : '00') + sh.slice(42)
   assert.equal(decodeNektarAutomaton(flipped), null, 'tampered contract code rejected by decoder')
 })
@@ -67,7 +67,7 @@ test('AUT-005 negatives: wrong from / not-in-δ / tampered path / wrong signer r
   const q = deltaPath(TBL, 0, 0, 1)
   await assert.rejects(() => ac.step(1, 2, OUT, { from: 0, sibs: q.sibs.map(toHex), dir: q.dir }), SCRIPT_INVALID, '(A,b,C) not in δ')
   const sw = q.sibs.map(toHex)
-  ;[sw[0], sw[1]] = [sw[1]!, sw[0]!]
+  ;[sw[0], sw[1]] = [sw[1], sw[0]]
   await assert.rejects(() => ac.step(0, 1, OUT, { sibs: sw, dir: q.dir }), SCRIPT_INVALID, 'tampered path')
   await assert.rejects(() => ac.step(0, 1, OUT, { pubKey: PrivateKey.fromRandom().toPublicKey().toString() }), SCRIPT_INVALID, 'wrong signer')
   await assert.rejects(() => ac.step(0, 1, '00'), SCRIPT_INVALID, 'outHash must be 32 bytes')
@@ -166,8 +166,8 @@ test('AUT-002/003/004: light-mode step, trace verify, acceptance', async () => {
   const vr = verifyTrace(DEF, events, () => true)
   assert.ok(vr.ok, 'chained trace verifies')
   const broken = [
-    { ...events[0]!, anchorTxid: 'x' },
-    { ...events[1]!, from: 0, anchorTxid: 'x' }
+    { ...events[0], anchorTxid: 'x' },
+    { ...events[1], from: 0, anchorTxid: 'x' }
   ]
   assert.ok(!verifyTrace(DEF, broken, () => true).ok, 'broken chain flagged')
   assert.ok(!verifyTrace(DEF, events, (ev) => ev.from !== 0).ok, 'unproven leaf flagged')

@@ -281,7 +281,7 @@ export async function onRevision(
     const swapped = a.claims.map((c) => ({ ...c, cites: c.cites.map((r) => (refKey(r) === refKey(oldRef) ? newRef : r)) }))
     const before = await ground(a.claims, fetch, { rules: opts.rules })
     const after = await ground(swapped, fetch, { rules: opts.rules })
-    const withdrawn = after.claims.filter((c, i) => !c.grounded && before.claims[i]!.grounded).map((c) => c.text)
+    const withdrawn = after.claims.filter((c, i) => !c.grounded && before.claims[i].grounded).map((c) => c.text)
     const body = { receiptHash: a.receiptHash, oldRef, newRef, regroundedHash: after.reportHash, withdrawn }
     const corr: Correction = {
       receiptHash: a.receiptHash,
@@ -327,7 +327,7 @@ export async function timeBounds(anchorTx: Transaction, tracker: ChainTracker): 
   return {
     blockHeight: h,
     notAfter: head.time,
-    mtp: times[Math.floor(times.length / 2)]!,
+    mtp: times[Math.floor(times.length / 2)],
     statement: 'existed no later than the block time; says nothing about when it was created'
   }
 }

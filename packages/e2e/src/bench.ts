@@ -65,10 +65,10 @@ async function world(utxos: number, maxLeaves: number) {
   const qs = [mem.issueZkQuery('bench')]
   const proofs: Uint8Array[] = []
   await time('ZK membership prove (STARK, 16-leaf batch, CPU, Docker prover)', 1, async () => {
-    proofs.push((await mem.proveMembership('s', 5, qs[0]!.queryId)).bytes)
+    proofs.push((await mem.proveMembership('s', 5, qs[0].queryId)).bytes)
   })
-  fact('L_ZKMem v2 proof size (succinct receipt)', `${proofs[0]!.length} B`)
-  await time('ZK membership verify (WASM STARK + SPV of the anchor)', 1, () => mem.verifyMembership('s', 5, proofs[0]!))
+  fact('L_ZKMem v2 proof size (succinct receipt)', `${proofs[0].length} B`)
+  await time('ZK membership verify (WASM STARK + SPV of the anchor)', 1, () => mem.verifyMembership('s', 5, proofs[0]))
 }
 // 5. ZK clearance (Bulletproofs, 8-bit)
 {

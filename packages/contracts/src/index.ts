@@ -154,7 +154,7 @@ export function extractAnchorAuthorship(
     if (toHex(hash160(d)) !== pkhHex) continue
     const sigD = push(i - 1)
     if (!sigD || sigD.length < 70 || sigD.length > 73 || sigD[0] !== 0x30) return null
-    const scope = sigD[sigD.length - 1]!
+    const scope = sigD[sigD.length - 1]
     const der = toHex(sigD.slice(0, -1))
     let verified = false
     try {

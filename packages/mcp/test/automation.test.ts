@@ -78,8 +78,8 @@ test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change',
   const r = await mem.sendSats({ amount: 5_000, address: payee })
   const tx = (chain as any).known.get(r.txid) as Transaction
   assert.ok(tx, 'tx aired on the chain, not just returned as BEEF')
-  assert.equal(tx.outputs[0]!.satoshis, 5_000)
-  assert.equal(tx.outputs[0]!.lockingScript.toHex(), new P2PKH().lock(payee).toHex())
+  assert.equal(tx.outputs[0].satoshis, 5_000)
+  assert.equal(tx.outputs[0].lockingScript.toHex(), new P2PKH().lock(payee).toHex())
 })
 
 test('sendSats: scriptHex target + opReturn tag', async (t) => {

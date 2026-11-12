@@ -32,7 +32,7 @@ export interface RedactedTradeEvidence extends Omit<TradeEvidence, 'want' | 'dis
 export function redactTradeEvidence(e: TradeEvidence): RedactedTradeEvidence {
   const want = { ...e.want.want } as unknown as Record<string, unknown>
   if (typeof want.question === 'string') {
-    want.questionSha256 = toHex(sha256(utf8(want.question as string)))
+    want.questionSha256 = toHex(sha256(utf8(want.question)))
     delete want.question
   }
   return {
@@ -123,7 +123,7 @@ export function verifyTradeEvidence(e: TradeEvidence | RedactedTradeEvidence): {
     const cfg = { ...q.cfg, price: BigInt(q.cfg.price), refundAfter: BigInt(q.cfg.refundAfter), maxFee: BigInt(q.cfg.maxFee) }
     return (
       e.escrow.depositorPkh === pkh(w.pub) &&
-      escrow.outputs[e.escrow.vout]!.lockingScript.toHex() === DisclosureSaleHost.escrowScript(cfg, e.escrow.depositorPkh)
+      escrow.outputs[e.escrow.vout].lockingScript.toHex() === DisclosureSaleHost.escrowScript(cfg, e.escrow.depositorPkh)
     )
   })
   if (discHex === undefined) {
@@ -134,11 +134,11 @@ export function verifyTradeEvidence(e: TradeEvidence | RedactedTradeEvidence): {
     const disc = Transaction.fromHex(discHex)
     check(
       'disclosure spends the escrow output',
-      () => disc.id('hex') === e.disclosure.txid && disc.inputs[0]!.sourceTXID === e.escrow.txid && (disc.inputs[0]!.sourceOutputIndex ?? 0) === e.escrow.vout
+      () => disc.id('hex') === e.disclosure.txid && disc.inputs[0].sourceTXID === e.escrow.txid && (disc.inputs[0].sourceOutputIndex ?? 0) === e.escrow.vout
     )
     check(
       'disclosure pays the seller exactly the quoted price',
-      () => disc.outputs[0]!.satoshis === Number(q.cfg.price) && disc.outputs[0]!.lockingScript.toHex() === buildP2PKHScript(pkh(sel!.offer.pub))
+      () => disc.outputs[0].satoshis === Number(q.cfg.price) && disc.outputs[0].lockingScript.toHex() === buildP2PKHScript(pkh(sel!.offer.pub))
     )
     check('revealed value matches the committed hash', () => toHex(sha256(parseBuyWrapped(disc))) === q.cfg.hWrapped)
   }

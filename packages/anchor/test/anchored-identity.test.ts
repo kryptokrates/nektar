@@ -62,9 +62,9 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
   assert.ok((await chain.getTx(h.tx.id('hex')))?.merklePath)
   // inclusion check against the ANCHORED root
   const proof = log.batchProof(batch!, 0)
-  const recomputed = reconstructRoot(batch!.leaves[0]!, proof)
+  const recomputed = reconstructRoot(batch!.leaves[0], proof)
   const inLog = (c: RotationCert) =>
-    JSON.parse(Buffer.from(batch!.records[0]!.fragment.d).toString()).sig === c.sig &&
+    JSON.parse(Buffer.from(batch!.records[0].fragment.d).toString()).sig === c.sig &&
     Buffer.from(recomputed).toString('hex') === Buffer.from(h.head.data.R).toString('hex')
   const r = verifyCertChain(k0.toPublicKey().toString(), [cert], { inclusionCheck: inLog })
   assert.ok(r?.activePub === k1.toPublicKey().toString())
@@ -94,7 +94,7 @@ test('DIS-006: disclosure event logged as a leaf and anchored', async (t) => {
   const h = await ac.anchor(batch!.size, batch!.R)
   await chain.mine(1)
   assert.ok((await chain.getTx(h.tx.id('hex')))?.merklePath)
-  const recomputed = reconstructRoot(batch!.leaves[0]!, log.batchProof(batch!, 0))
+  const recomputed = reconstructRoot(batch!.leaves[0], log.batchProof(batch!, 0))
   assert.equal(Buffer.from(recomputed).toString('hex'), Buffer.from(h.head.data.R).toString('hex'), 'disclosure event committed to anchored root')
   // and the field commitment binds count+root for the anchored fragment path
   const fc = fieldsCommitment(fields)

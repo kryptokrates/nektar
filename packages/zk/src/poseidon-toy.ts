@@ -45,13 +45,13 @@ export const fr = (x: bigint | number): bigint => {
 function permute(s: bigint[]): void {
   const hf = FULL_ROUNDS / 2
   for (let r = 0; r < FULL_ROUNDS + PARTIAL_ROUNDS; r++) {
-    for (let j = 0; j < SIZE; j++) s[j] = fr(s[j]! + ARK[r]![j]!)
+    for (let j = 0; j < SIZE; j++) s[j] = fr(s[j] + ARK[r][j])
     if (r < hf || r >= hf + PARTIAL_ROUNDS) {
-      for (let j = 0; j < SIZE; j++) s[j] = fr(s[j]! ** ALPHA)
+      for (let j = 0; j < SIZE; j++) s[j] = fr(s[j] ** ALPHA)
     } else {
-      s[0] = fr(s[0]! ** ALPHA)
+      s[0] = fr(s[0] ** ALPHA)
     }
-    const next = MDS.map((row) => row.reduce((acc, m, j) => acc + m * s[j]!, 0n) % FR_MODULUS)
+    const next = MDS.map((row) => row.reduce((acc, m, j) => acc + m * s[j], 0n) % FR_MODULUS)
     for (let j = 0; j < SIZE; j++) s[j] = next[j]!
   }
 }
@@ -66,11 +66,11 @@ export function poseidonToy(elems: ReadonlyArray<bigint | number>): bigint {
       permute(s)
       pos = 0
     }
-    s[CAPACITY + pos] = fr(s[CAPACITY + pos]! + BigInt(e))
+    s[CAPACITY + pos] = fr(s[CAPACITY + pos] + BigInt(e))
     pos++
   }
   permute(s) // absorbing → squeezing transition
-  return s[CAPACITY]!
+  return s[CAPACITY]
 }
 
 /** nChain circuit's model commitment: poseidon(W1 ‖ W2 ‖ b1 ‖ b2 ‖ zero_relu) */

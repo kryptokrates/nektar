@@ -70,7 +70,7 @@ export function issueDisclosure(
   purpose = 'audit',
   wrapped?: Bytes
 ): DisclosureEnvelope {
-  const field = fields[index]!
+  const field = fields[index]
   const root = fieldRoot(fields)
   const e: Omit<DisclosureEnvelope, 'sig'> = {
     fieldIndex: index,

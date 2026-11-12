@@ -33,7 +33,7 @@ const args = (s: DecodedAutomaton) => [BigInt(s.q), s.deltaRoot, s.ownerPkh, Big
 export function decodeNektarAutomaton(scriptHex: string): DecodedAutomaton | null {
   let st: Record<string, unknown> | null
   try {
-    st = extractStateFromScript(NEKTAR_AUTOMATON_ARTIFACT, scriptHex) as Record<string, unknown> | null
+    st = extractStateFromScript(NEKTAR_AUTOMATON_ARTIFACT, scriptHex)
   } catch {
     return null
   }
@@ -43,7 +43,7 @@ export function decodeNektarAutomaton(scriptHex: string): DecodedAutomaton | nul
     deltaRoot: String(st.deltaRoot),
     ownerPkh: String(st.ownerPkh),
     n: Number(st.n),
-    lastOut: String(st.lastOut ?? ''),
+    lastOut: typeof st.lastOut === 'string' ? st.lastOut : '',
     finalRoot: String(st.finalRoot),
     halted: BigInt(st.halted as bigint) === 1n
   }
@@ -59,7 +59,7 @@ export class AutomatonChain {
   // NektarProvider is declared against @nektar/anchor's runar-sdk type copy;
   // structurally identical, nominally distinct across the two package graphs
   private get runarProvider(): Provider {
-    return this.provider as unknown as Provider
+    return this.provider
   }
   private head?: AutomatonHead
   private txById = new Map<string, Transaction>()
@@ -129,11 +129,11 @@ export class AutomatonChain {
     await this.requireFunding()
     const c = new RunarContract(NEKTAR_AUTOMATON_ARTIFACT, args(cur.state))
     c.connect(this.runarProvider, this.signer)
-    const script = cur.tx.outputs[cur.vout]!.lockingScript.toHex()
+    const script = cur.tx.outputs[cur.vout].lockingScript.toHex()
     ;(c as unknown as { currentUtxo: unknown }).currentUtxo = {
       txid: cur.tx.id('hex'),
       outputIndex: cur.vout,
-      satoshis: cur.tx.outputs[cur.vout]!.satoshis!,
+      satoshis: cur.tx.outputs[cur.vout].satoshis!,
       script
     }
     const pub = pubKey ?? this.ownerKey.toPublicKey().toString()
@@ -158,7 +158,7 @@ export class AutomatonChain {
       const parent = this.txById.get(inp.sourceTXID) ?? this.provider.taken.get(inp.sourceTXID) ?? fund
       if (parent) inp.sourceTransaction = parent
     }
-    const state = decodeNektarAutomaton(tx.outputs[0]!.lockingScript.toHex())
+    const state = decodeNektarAutomaton(tx.outputs[0].lockingScript.toHex())
     if (!state) throw new AutomatonError('continuation output is not an authentic NektarAutomaton')
     this.head = { tx, vout: 0, state }
     return this.head

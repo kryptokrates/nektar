@@ -141,7 +141,7 @@ export class DisclosureSaleHost {
     const c = this.contract as any
     const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, 0)
     const unlock = c.buildStatefulPrefix(opSig) + this.contract.buildUnlockingScript('buy', [wrapped, changeSats, preimageHex])
-    tx.inputs[0]!.unlockingScript = UnlockingScript.fromHex(unlock)
+    tx.inputs[0].unlockingScript = UnlockingScript.fromHex(unlock)
     return { tx }
   }
 
@@ -169,7 +169,7 @@ export class DisclosureSaleHost {
     const sig = Buffer.from(depositorKey.sign(Array.from(Hash.sha256(Buffer.from(sigPre, 'hex')))).toDER()).toString('hex') + '41'
     const unlock =
       c.buildStatefulPrefix(opSig) + this.contract.buildUnlockingScript('refund', [sig, depositorKey.toPublicKey().toString(), changeSats, preimageHex])
-    tx.inputs[0]!.unlockingScript = UnlockingScript.fromHex(unlock)
+    tx.inputs[0].unlockingScript = UnlockingScript.fromHex(unlock)
     return { tx }
   }
 }

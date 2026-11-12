@@ -40,9 +40,9 @@ export async function checkCarrier(beef: number[], o: { tracker: ChainTracker })
     const r2 = unlockingRefusal(tx)
     if (r2 !== undefined) return { ok: false, reason: `unlocking:${r2}` }
     if (tx.inputs.length !== 1 || tx.outputs.length !== 1) return { ok: false, reason: 'shape' }
-    const parent = tx.inputs[0]!.sourceTransaction
+    const parent = tx.inputs[0].sourceTransaction
     if (!parent) return { ok: false, reason: 'no-parent' }
-    const out = parent.outputs[tx.inputs[0]!.sourceOutputIndex]!
+    const out = parent.outputs[tx.inputs[0].sourceOutputIndex]
     const key = decodeFunding(out.lockingScript, Array.from(FUNDING_TAG))
     if (key === undefined) return { ok: false, reason: 'not-funding' }
     return {
@@ -50,7 +50,7 @@ export async function checkCarrier(beef: number[], o: { tracker: ChainTracker })
       carrier: tx,
       payload: extractPayload(tx),
       lockingKey: key.toString(),
-      fundingOutpoint: `${parent.id('hex')}:${tx.inputs[0]!.sourceOutputIndex}`
+      fundingOutpoint: `${parent.id('hex')}:${tx.inputs[0].sourceOutputIndex}`
     }
   } catch (e) {
     return { ok: false, reason: `parse:${(e as Error).message.slice(0, 80)}` }
@@ -84,7 +84,7 @@ export async function checkSweep(beef: number[], o: { tracker: ChainTracker; hel
 }
 
 function extractPayload(tx: Transaction): Uint8Array {
-  return Uint8Array.from(decodeStrictPushDrop(tx.outputs[0]!.lockingScript)?.fields?.[0] ?? [])
+  return Uint8Array.from(decodeStrictPushDrop(tx.outputs[0].lockingScript)?.fields?.[0] ?? [])
 }
 
 export function carrierLockingKey(pubHex: string): string {

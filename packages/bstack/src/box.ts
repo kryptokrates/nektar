@@ -15,8 +15,8 @@ export const officeFor = (_net?: string): string => DEFAULT_OFFICE
 const ORIGINATOR = 'nektar'
 
 const toJ = (v: unknown): JValue => {
-  if (v === null || typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') return v as JValue
-  if (Array.isArray(v)) return v.map(toJ) as JValue
+  if (v === null || typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') return v
+  if (Array.isArray(v)) return v.map(toJ)
   const o = new JObject()
   for (const [k, x] of Object.entries(v as Record<string, unknown>)) o.set(k, toJ(x))
   return o
@@ -85,7 +85,7 @@ export interface BoxItem {
 }
 
 const bytewise = (a: Uint8Array, b: Uint8Array): number => {
-  for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i]! - b[i]!
+  for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i] - b[i]
   return a.length - b.length
 }
 
@@ -211,6 +211,6 @@ async function openEnvelope(beef: number[], w: ProtoWallet, office: string, me: 
     from: Utils.toHex(Array.from(env.from)),
     body: fromJ(doc.get('nektar')!) as object,
     created: env.created,
-    commitment: Utils.toHex(Array.from(adm.carrier!.commitment))
+    commitment: Utils.toHex(Array.from(adm.carrier.commitment))
   }
 }

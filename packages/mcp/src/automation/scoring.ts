@@ -115,7 +115,7 @@ export function rankOffers(candidates: readonly ScoreCandidate[], policy: Scorin
   }
   const ranked: RankedOffer[] = []
   for (const [offerKey, group] of groups) {
-    const candidate = group[0]!
+    const candidate = group[0]
     let reason: ScoreRejection | undefined
     if (invalidKeys.has(offerKey) || !group.every((c) => sameCandidate(candidate, c))) reason = 'conflicting_offer'
     else if (!candidate.eligible) reason = 'ineligible'

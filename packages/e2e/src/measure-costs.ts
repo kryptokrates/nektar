@@ -40,7 +40,7 @@ const rpc = async (method: string, ...params: unknown[]): Promise<any> => {
     headers: { 'Content-Type': 'application/json', Authorization: auth },
     body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
   })
-  const j = (await r.json()) as any
+  const j = (await r.json())
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }
@@ -90,7 +90,7 @@ const report = (label: string, tx: Transaction) => {
   console.log(`${label}: txid=${tx.id('hex')} bytes=${tx.toBinary().length} fee=${feeOf(tx)} sats`)
 }
 
-const ac = new AnchorChain('measure', PrivateKey.fromRandom(), funder as never, key, chain as never, { feeRateSatPerKb: RATE })
+const ac = new AnchorChain('measure', PrivateKey.fromRandom(), funder as never, key, chain, { feeRateSatPerKb: RATE })
 seed()
 report('genesis', (await ac.anchor(5, dsha256(utf8('m1')))).tx)
 seed()

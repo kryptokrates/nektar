@@ -25,7 +25,7 @@ async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, s
     await chain.mine(1)
     ac.confirm(tx.id('hex'), chain.merklePathOf(tx.id('hex')))
   }
-  return { chain, tx, shard: decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
+  return { chain, tx, shard: decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())!.shard }
 }
 
 test('subset proof verifies against a real anchor whose R is the batch root (records across the shard boundary)', async (t) => {
@@ -48,7 +48,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
       'anchor of another batch (R differs)',
       (async () => {
         const o = await anchoredBatch(t, merkleRoot(leaves(71)), 71)
-  if (o === undefined) return { ok: false, reason: 'skipped' } as any
+  if (o === undefined) return { ok: false, reason: 'skipped' }
         return v(bytes(), o, { shard: o.shard })
       })(),
       /not the anchored R/
@@ -57,7 +57,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
       'anchored size differs',
       (async () => {
         const o = await anchoredBatch(t, merkleRoot(leaves(70)), 71)
-  if (o === undefined) return { ok: false, reason: 'skipped' } as any
+  if (o === undefined) return { ok: false, reason: 'skipped' }
         return v(bytes(), o, { shard: o.shard })
       })(),
       /size/
@@ -68,7 +68,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
       'anchor not mined',
       (async () => {
         const o = await anchoredBatch(t, merkleRoot(leaves(70)), 70, false)
-  if (o === undefined) return { ok: false, reason: 'skipped' } as any
+  if (o === undefined) return { ok: false, reason: 'skipped' }
         return v(bytes(), o, { shard: o.shard })
       })(),
       /NotMined/

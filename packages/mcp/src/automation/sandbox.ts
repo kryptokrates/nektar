@@ -45,7 +45,7 @@ export function parsePatch(text: string): PatchProposal | undefined {
   const m = /```nektar-patch\s*\n([\s\S]*?)\n```/.exec(text)
   if (!m) return undefined
   try {
-    const j = JSON.parse(m[1]!)
+    const j = JSON.parse(m[1])
     if (!Array.isArray(j?.edits)) return undefined
     return { edits: j.edits.map((e: any) => ({ file: String(e.file), find: String(e.find), replace: String(e.replace) })) }
   } catch {

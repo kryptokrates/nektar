@@ -144,18 +144,18 @@ export function parsePushes(scriptHex: string): Bytes[] {
   const b = fromHex(scriptHex)
   const out: Bytes[] = []
   for (let i = 0; i < b.length;) {
-    const op = b[i++]!
+    const op = b[i++]
     let len = 0
     if (op <= 0x4b) len = op
     else if (op === 0x4c) len = b[i++]!
     else if (op === 0x4d) {
-      len = b[i]! | (b[i + 1]! << 8)
+      len = b[i] | (b[i + 1] << 8)
       i += 2
     } else if (op === 0) {
       out.push(new Uint8Array(0))
       continue
     } else if (op === 0x4e) {
-      len = b[i]! | (b[i + 1]! << 8) | (b[i + 2]! << 16) | (b[i + 3]! << 24)
+      len = b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)
       i += 4
     } else if (op === 0x4f) {
       out.push(Uint8Array.of(0x81))
@@ -176,7 +176,7 @@ export function parsePushes(scriptHex: string): Bytes[] {
 export function parseBuyArgs(unlockingHex: string): { wrapped: Bytes; changeSats: Bytes } {
   const p = parsePushes(unlockingHex)
   if (p.length < 5 || !p[1] || !p[2]) throw new Error(`parseBuyArgs: expected ≥5 pushes, got ${p.length}`)
-  return { wrapped: p[1]!, changeSats: p[2]! }
+  return { wrapped: p[1], changeSats: p[2] }
 }
 
 /** Fetch `wrapped` from a buy transaction (input 0 must be the listing spend). */
@@ -208,7 +208,7 @@ export function encodeKeySale(fragmentKey: Bytes, E: Bytes, p: import('@nektar/c
 export function decodeKeySale(b: Bytes): { fragmentKey: Bytes; E: Bytes; p: import('@nektar/core').Provenance } {
   const take = (off: number) => {
     if (off + 4 > b.length) throw new Error('keySale: truncated')
-    const len = (b[off]! | (b[off + 1]! << 8) | (b[off + 2]! << 16) | (b[off + 3]! << 24)) >>> 0
+    const len = (b[off] | (b[off + 1] << 8) | (b[off + 2] << 16) | (b[off + 3] << 24)) >>> 0
     if (off + 4 + len > b.length) throw new Error('keySale: truncated')
     return { v: b.slice(off + 4, off + 4 + len), next: off + 4 + len }
   }
@@ -225,7 +225,7 @@ export function decodeKeySale(b: Bytes): { fragmentKey: Bytes; E: Bytes; p: impo
  *  needed — returns {d, p, E} for the caller's leaf/provenance checks. */
 export function claimKeySale(payload: Bytes): { d: Bytes; p: import('@nektar/core').Provenance; E: Bytes } {
   const { fragmentKey, E, p } = decodeKeySale(payload)
-  const aadLen = (E[0]! << 8) | E[1]!
+  const aadLen = (E[0] << 8) | E[1]
   const aad = E.slice(2, 2 + aadLen)
   const ciphertext = E.slice(2 + aadLen)
   const d = decryptFragment(fragmentKey, { ciphertext, aad, keyID: '' })

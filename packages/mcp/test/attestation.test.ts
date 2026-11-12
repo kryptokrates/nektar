@@ -44,7 +44,7 @@ test('anchorAttestation on the regtest stack: real signed spend, commitment extr
   assert.ok(tx, 'broadcast accepted into mempool')
   const atts = attestationsOf(tx)
   assert.equal(atts.length, 1)
-  assert.equal(toHex(atts[0]!.commitment), commitment)
+  assert.equal(toHex(atts[0].commitment), commitment)
   // verifyAttestation: matching proof verifies; a different proof does not
   const ok = await mem.verifyAttestation(txid, pb)
   assert.equal(ok.ok, true)

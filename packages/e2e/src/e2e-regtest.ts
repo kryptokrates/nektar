@@ -25,7 +25,7 @@ function readEnv(p: URL): Record<string, string> {
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
     const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
-    if (m) out[m[1]!] = m[2]!.trim()
+    if (m) out[m[1]] = m[2].trim()
   }
   return out
 }
@@ -50,7 +50,7 @@ async function rpc(method: string, ...params: unknown[]): Promise<any> {
     headers: { 'Content-Type': 'application/json', Authorization: auth },
     body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
   })
-  const j = (await r.json()) as any
+  const j = (await r.json())
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }
@@ -117,7 +117,7 @@ let treasuryTx: Transaction | null = null
   // attempt 1: spend the persisted treasury
   if (rs.treasury) {
     treasuryTx = Transaction.fromHex(rs.treasury.txHex)
-    const split = await splitTreasury(treasuryTx, rs.treasury.vout, treasuryTx.outputs[rs.treasury.vout]!.satoshis ?? 0)
+    const split = await splitTreasury(treasuryTx, rs.treasury.vout, treasuryTx.outputs[rs.treasury.vout].satoshis ?? 0)
     if (split) {
       reserve.heights.set(split.id('hex'), await mineOne())
       saveRS({ txid: split.id('hex'), vout: 120, txHex: split.toHex() })
@@ -137,7 +137,7 @@ let treasuryTx: Transaction | null = null
         const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`)
         if (!res.ok) break
         const { txs } = parseLegacyBlock(new Uint8Array(await res.arrayBuffer()))
-        const cb = Transaction.fromHex(Buffer.from(txs[0]!).toString('hex'))
+        const cb = Transaction.fromHex(Buffer.from(txs[0]).toString('hex'))
         for (const [v, o] of cb.outputs.entries()) {
           if (done || !o.lockingScript.toHex().includes(want) || (o.satoshis ?? 0) < 1e7) continue
           const split = await splitTreasury(cb, v, o.satoshis!)
@@ -207,7 +207,7 @@ console.log('— story + correction —')
 // shard key = fund key: funding UTXOs are P2PKH-locked to `key`, and
 // LocalSigner signs the funding inputs with the shard key
 const shardKeys = new Map([['manual', key]])
-const mem = new NektarMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 2 }, modelId: 'reg-e2e', shardKeys })
+const mem = new NektarMemory(chain, funder, key, { batchPolicy: { maxLeaves: 2 }, modelId: 'reg-e2e', shardKeys })
 await mem.remember('manual', 'drain port 4 torque 45Nm')
 await mem.anchorShard('manual')
 const corr = await mem.remember('manual', 'CORRECTION: torque is 42Nm (supersedes seq 0)')
@@ -225,7 +225,7 @@ const bF: any = {
   markSpent: (t: string, v: number) => reserve.markSpent(t, v),
   takeReserve: (sc?: unknown, min?: number) => reserve.takeReserve(sc as any, min)
 }
-const burst = new AnchorChain('burst', key, bF as any, key, chain)
+const burst = new AnchorChain('burst', key, bF, key, chain)
 const t0 = Date.now()
 const burstIds: string[] = []
 for (let i = 0; i < 20; i++) {
@@ -246,9 +246,9 @@ console.log('— rotate —')
 const newOwner = PrivateKey.fromRandom()
 const rot = await burst.rotate(newOwner)
 await rpc('generatetoaddress', 1, addr)
-const rotDec = decodeNektarAnchor(rot.tx.outputs[0]!.lockingScript.toHex())!
+const rotDec = decodeNektarAnchor(rot.tx.outputs[0].lockingScript.toHex())!
 check(
-  rotDec.n === 19 && rotDec.shard === decodeNektarAnchor(burst.getHead()!.tx.outputs[0]!.lockingScript.toHex())!.shard,
+  rotDec.n === 19 && rotDec.shard === decodeNektarAnchor(burst.getHead()!.tx.outputs[0].lockingScript.toHex())!.shard,
   `rotate broadcast+mined: n=${rotDec.n} shard stable ${rotDec.shard.slice(0, 16)}`
 )
 
@@ -269,7 +269,7 @@ for (const [txid, tx] of txMap) {
 const { result } = await mem.prove('manual', corr.seq)
 check(result.ok === true, `correction proof verifies against real headers ${JSON.stringify(result)}`)
 // SPV check on the burst chain too
-const btx = burstIds[burstIds.length - 1]!
+const btx = burstIds[burstIds.length - 1]
 let mp = null as Awaited<ReturnType<typeof merklePathFor>>
 for (let t = 0; t < 6 && !mp; t++) {
   mp = await merklePathFor(cfg, btx, tracker).catch(() => null)
@@ -280,7 +280,7 @@ if (mp) {
   const btxRaw = await rpc('getrawtransaction', btx)
   const btxObj = Transaction.fromHex(btxRaw)
   btxObj.merklePath = new MerklePath(mp.blockHeight, mp.path)
-  check(await btxObj.merklePath.verify(btx, tracker as any), 'burst anchor SPV verified against real header')
+  check(await btxObj.merklePath.verify(btx, tracker), 'burst anchor SPV verified against real header')
 }
 
 // --- v2 scenario on regtest -------------------------------------------------
@@ -304,7 +304,7 @@ console.log('— v2 scenario (regtest) —')
   const pubB = B.toPublicKey().toString()
   const policyText = `permit(principal == Agent::"${toHex(hash160(Buffer.from(pubB, 'hex')))}", action, resource);`
   const ps = canonicalizePolicySet('v2r', policyText)
-  const vm = new NektarMemory(chain, funder as any, key, {
+  const vm = new NektarMemory(chain, funder, key, {
     batchPolicy: { maxLeaves: 2 },
     shardKeys: new Map([['v2r', key]]),
     policy: { policyText, anchoredPolicySetHash: ps.hash },
@@ -485,8 +485,8 @@ spec(S, V) :- requires(P, V), applies(S, P).`).rules
     )
     check(!g.currentView(6).some((v) => v.phi === 'spec(port4, 45)'), 'regtest: refinement changes currentView')
     // anchor graph + policy roots on the real chain (fresh memory on the shared chain/funder)
-    const v4m = new NektarMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 10 } })
-    const ga = new GraphAnchor(v4m as any, 'aorg')
+    const v4m = new NektarMemory(chain, funder, key, { batchPolicy: { maxLeaves: 10 } })
+    const ga = new GraphAnchor(v4m, 'aorg')
     for (const h of [e1.h, e2.h, e3.h, d45.h, rf.h]) await ga.record(h)
     const gtx = await ga.anchor()
     await mineOne()
@@ -521,7 +521,7 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
     const dk = PrivateKey.fromRandom()
     const expiry = Date.now() + 60000
     const anchored = new Map([...inst.members].map((h) => [h, { anchorTxid: GRAPH_TXID }]))
-    const vi = verifyInstance(g, inst, anchored as any, { pub: dk.toPublicKey(), expiry, sig: delegate(dk, inst, expiry) })
+    const vi = verifyInstance(g, inst, anchored, { pub: dk.toPublicKey(), expiry, sig: delegate(dk, inst, expiry) })
     check(vi.ok, 'regtest: delegated instance verifies')
   } catch (e) {
     check(false, `regtest v4 block: ${String((e as Error).message).slice(0, 160)}`)
@@ -546,7 +546,7 @@ console.log('— P14 Merkle Automaton (regtest) —')
       O: ['ok']
     }
     const out = Buffer.from(dsha256(utf8('regtest manual published'))).toString('hex')
-    const am = new NektarMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 10 } })
+    const am = new NektarMemory(chain, funder, key, { batchPolicy: { maxLeaves: 10 } })
     const d = await am.automatonDeploy('lifecycle', def)
     const ac = am.automaton('lifecycle')
     const s1 = await ac.step(0, 1, out)
@@ -579,7 +579,7 @@ console.log('— full paper scenario (regtest) —')
     const { runFullPaper } = await import('./full-paper.js')
     const txids = await runFullPaper({
       chain,
-      funder: funder as any,
+      funder: funder,
       fundKey: key,
       check,
       label: 'regtest paper',
@@ -641,7 +641,7 @@ console.log('— v4 production block (regtest) —')
     }
     const tx = await runV4Block({
       chain,
-      funder: funder as any,
+      funder: funder,
       fundKey: key,
       check,
       label: 'regtest v4',

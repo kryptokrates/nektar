@@ -31,9 +31,9 @@ test('ledger: every owner broadcast is recorded with bytes before the outcome is
   const r2 = await mem.sendSats({ amount: 500, address: PrivateKey.fromRandom().toPublicKey().toAddress([0x6f]) })
   const rec = await store.walletTx({ txid: r2.txid })
   assert.ok(rec, 'owner spend landed in the ledger')
-  assert.equal(rec!.state, 'submitted')
-  assert.ok(rec!.rawHex.length > 0)
-  assert.ok(rec!.feeSats > 0)
+  assert.equal(rec.state, 'submitted')
+  assert.ok(rec.rawHex.length > 0)
+  assert.ok(rec.feeSats > 0)
   await kx.destroy()
 })
 
@@ -53,7 +53,7 @@ test('ledger: payInvoice exports a signed tx whose input stays leased — no pha
   const r = await mem.payInvoice(inv)
   const rec = await store.walletTx({ txid: r.txid })
   assert.equal(rec!.state, 'exported', 'exported, not submitted')
-  const inputTxid = Transaction.fromHex(rec!.rawHex).inputs[0]!.sourceTXID!
+  const inputTxid = Transaction.fromHex(rec!.rawHex).inputs[0].sourceTXID!
   assert.equal(await store.leasedOutpoint(inputTxid, 0), true, 'the exported input is leased')
   assert.equal((await store.leasedOutpoint(r.txid, 2)) ?? false, false)
   assert.equal((funder as any).utxos.length, 0, 'no unbroadcast change was added back to the reserve')

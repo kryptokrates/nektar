@@ -5,9 +5,9 @@ import { signWant, verifyWant, signOffer, verifyOffer, wantTaskDigest, type Sign
 
 const key = PrivateKey.fromRandom()
 const other = PrivateKey.fromRandom()
-const want = (o: Record<string, unknown> = {}, k = key) => signWant(k, { domains: ['soccer'], ts: Date.now(), ...o } as never)
+const want = (o: Record<string, unknown> = {}, k = key) => signWant(k, { domains: ['soccer'], ts: Date.now(), ...o })
 const offer = (o: Record<string, unknown> = {}, k = key) =>
-  signOffer(k, { shard: 's', seq: 0, priceSats: 100, domains: ['soccer'], ts: Date.now(), ...o } as never)
+  signOffer(k, { shard: 's', seq: 0, priceSats: 100, domains: ['soccer'], ts: Date.now(), ...o })
 const pub = key.toPublicKey().toString()
 const quote = (price = 100) => ({
   cfg: { sellerPkh: 'a'.repeat(40), price, hWrapped: 'b'.repeat(64), refundAfter: 1_000_000, maxFee: 10 },
@@ -63,7 +63,7 @@ const FIXTURE = {
 
 test('fixture: artifacts signed by @nektar/overlay still verify byte-for-byte', () => {
   assert.equal(verifyWant(FIXTURE.want, FIXTURE.wantSig, { allowExpired: true }), true)
-  assert.equal(verifyOffer(FIXTURE.offer as SignedOffer['offer'], FIXTURE.offerSig, { allowExpired: true }), true)
+  assert.equal(verifyOffer(FIXTURE.offer, FIXTURE.offerSig, { allowExpired: true }), true)
   // the same fields re-serialize to the same canonical taskHash
   assert.equal(wantTaskDigest({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }), FIXTURE.want.taskHash)
 })

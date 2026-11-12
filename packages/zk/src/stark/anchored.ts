@@ -56,7 +56,7 @@ export async function verifyMembershipAnchoredStark(
   pinnedImageId = PINNED_IMAGE_ID
 ): Promise<StarkVerifyResult> {
   const txid = anchorTx.id('hex')
-  const data = decodeNektarAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
+  const data = decodeNektarAnchor(anchorTx.outputs[0].lockingScript.toHex())
   if (!data || !isValidAnchor(data)) return { ok: false, reason: 'anchor tx output 0 is not a nektar anchor' }
   if (data.shard !== expected.shard) return { ok: false, reason: 'anchor belongs to another shard' }
   if (expected.isCanonical && !(await expected.isCanonical(txid))) return { ok: false, reason: 'anchor not on the canonical shard chain' }
@@ -101,7 +101,7 @@ export async function verifySubsetAnchored(
   expected: StarkExpectation
 ): Promise<SubsetVerifyResult> {
   const txid = anchorTx.id('hex')
-  const data = decodeNektarAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
+  const data = decodeNektarAnchor(anchorTx.outputs[0].lockingScript.toHex())
   if (!data || !isValidAnchor(data)) return { ok: false, reason: 'anchor tx output 0 is not a nektar anchor' }
   if (data.shard !== expected.shard) return { ok: false, reason: 'anchor belongs to another shard' }
   if (expected.isCanonical && !(await expected.isCanonical(txid))) return { ok: false, reason: 'anchor not on the canonical shard chain' }

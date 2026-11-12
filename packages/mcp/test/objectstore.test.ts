@@ -17,12 +17,12 @@ const hmac = (key: Buffer | string, data: string): Buffer => createHmac('sha256'
 /** recompute the SigV4 signature an honest client should have produced for
  *  this request — the gateway's own check. Returns the expected Signature. */
 function expectedSig(method: string, path: string, headers: Record<string, string>, secret = SECRET): string {
-  const auth = headers.authorization!
-  const signed = auth.match(/SignedHeaders=([^,]+)/)![1]!.split(';')
-  const canonicalHeaders = signed.map((h) => `${h}:${headers[h]!.replace(/\s+/g, ' ').trim()}\n`).join('')
-  const payloadHash = headers['x-amz-content-sha256']!
+  const auth = headers.authorization
+  const signed = auth.match(/SignedHeaders=([^,]+)/)![1].split(';')
+  const canonicalHeaders = signed.map((h) => `${h}:${headers[h].replace(/\s+/g, ' ').trim()}\n`).join('')
+  const payloadHash = headers['x-amz-content-sha256']
   const canonical = [method, path, '', canonicalHeaders, signed.join(';'), payloadHash].join('\n')
-  const amzDate = headers['x-amz-date']!
+  const amzDate = headers['x-amz-date']
   const scope = `${amzDate.slice(0, 8)}/${REGION}/s3/aws4_request`
   const sts = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${sha256Hex(new TextEncoder().encode(canonical))}`
   const k = hmac(hmac(hmac(hmac(`AWS4${secret}`, amzDate.slice(0, 8)), REGION), 's3'), 'aws4_request')
@@ -149,15 +149,15 @@ test('objectstore: getVerified rejects oversized content and oversized refs', as
 })
 
 test('objectstore: env config — off without URL/bucket, secret via file or env', async t => {
-  assert.equal(objectStoreFromEnv({} as NodeJS.ProcessEnv), undefined)
+  assert.equal(objectStoreFromEnv({}), undefined)
   assert.equal(
     objectStoreFromEnv({
       NEKTAR_BSTORE_S3_URL: 'http://x',
       NEKTAR_BSTORE_BUCKET: 'b',
       NEKTAR_BSTORE_ACCESS_KEY: 'a',
       NEKTAR_BSTORE_SECRET_KEY: 's'
-    } as unknown as NodeJS.ProcessEnv)?.bucket,
+    })?.bucket,
     'b'
   )
-  assert.throws(() => objectStoreFromEnv({ NEKTAR_BSTORE_S3_URL: 'http://x', NEKTAR_BSTORE_BUCKET: 'b' } as unknown as NodeJS.ProcessEnv), /key/)
+  assert.throws(() => objectStoreFromEnv({ NEKTAR_BSTORE_S3_URL: 'http://x', NEKTAR_BSTORE_BUCKET: 'b' }), /key/)
 })

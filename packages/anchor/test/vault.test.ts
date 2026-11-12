@@ -54,16 +54,16 @@ test('V1 vault: valid spend accepted; over-cap, wrong outputs and wrong sig all 
   assert.notEqual((await chain.broadcast(wrong.tx)).status, 'success', 'non-owner sig must be rejected')
   // tampered outputs: pay to a different address than destPkh
   const evil = vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
-  evil.tx.outputs[1]!.lockingScript = LockingScript.fromHex(buildP2PKHScript(Buffer.from(PrivateKey.fromRandom().toPublicKey().toHash()).toString('hex')))
+  evil.tx.outputs[1].lockingScript = LockingScript.fromHex(buildP2PKHScript(Buffer.from(PrivateKey.fromRandom().toPublicKey().toHash()).toString('hex')))
   assert.notEqual((await chain.broadcast(evil.tx)).status, 'success', 'payment to non-destPkh must be rejected')
   // tampered continuation: keep the old state (spentInWindow reset fraud)
   const stale = vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
-  stale.tx.outputs[0]!.lockingScript = LockingScript.fromHex(vault.lockingScript(0n, 0n))
+  stale.tx.outputs[0].lockingScript = LockingScript.fromHex(vault.lockingScript(0n, 0n))
   assert.notEqual((await chain.broadcast(stale.tx)).status, 'success', 'stale-state continuation must be rejected')
   // forged continuation code: output 0 is a foreign script, not the vault's
   // code part — the covenant's output-hash assert binds code AND state
   const forged = vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
-  forged.tx.outputs[0]!.lockingScript = LockingScript.fromHex(buildP2PKHScript(ownerPkh))
+  forged.tx.outputs[0].lockingScript = LockingScript.fromHex(buildP2PKHScript(ownerPkh))
   assert.notEqual((await chain.broadcast(forged.tx)).status, 'success', 'foreign continuation script must be rejected')
 })
 
@@ -76,7 +76,7 @@ test('V1 vault: rolling window — 4th payment in the same window rejected, roll
     const s = vault.buildSpend(cur, owner, 1_000n, 1)
     assert.equal((await chain.broadcast(s.tx)).status, 'success', `spend ${i + 1} within windowCap`)
     await chain.mine(1)
-    const cont = s.tx.outputs[0]!
+    const cont = s.tx.outputs[0]
     cur = { txid: s.tx.id('hex'), vout: 0, satoshis: cont.satoshis!, script: cont.lockingScript.toHex() }
   }
   // window spent 3000 of 3000 — a 4th payment must fail the script assert
@@ -106,8 +106,8 @@ test('V1 VaultFunder: take() mints a capped funding out through the covenant; ov
   const out = await funder.take(400)
   assert.equal(out.vout, 1)
   assert.equal(out.satoshis, 402, 'take() pays satoshis+fee into the funding out')
-  assert.equal(out.tx.outputs[1]!.lockingScript.toHex(), buildP2PKHScript(destPkh), 'minted out pays destPkh')
-  cur = { txid: out.tx.id('hex'), vout: 0, satoshis: out.tx.outputs[0]!.satoshis!, script: out.tx.outputs[0]!.lockingScript.toHex() }
+  assert.equal(out.tx.outputs[1].lockingScript.toHex(), buildP2PKHScript(destPkh), 'minted out pays destPkh')
+  cur = { txid: out.tx.id('hex'), vout: 0, satoshis: out.tx.outputs[0].satoshis!, script: out.tx.outputs[0].lockingScript.toHex() }
   // a take above perTxCap is refused by node script eval — take() throws and
   // the vault utxo is not advanced (the failed tx is never broadcast-mined)
   await assert.rejects(() => funder.take(5_000), /refused|fail|error/i)

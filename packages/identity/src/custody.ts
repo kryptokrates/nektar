@@ -44,7 +44,7 @@ export function splitSecret(secret: bigint, threshold: number, numShares: number
   for (let i = 1; i <= numShares; i++) {
     const x = BigInt(i)
     let acc = 0n
-    for (let j = coeffs.length - 1; j >= 0; j--) acc = add(mul(acc, x), coeffs[j]!)
+    for (let j = coeffs.length - 1; j >= 0; j--) acc = add(mul(acc, x), coeffs[j])
     shares.push({ x, y: acc })
   }
   return shares
@@ -176,7 +176,7 @@ export class KeyCustodian {
   }
 }
 export function verifyLifecycle(events: LifecycleEvent[]): boolean {
-  if (events.length === 0 || events[0]!.kind !== 'genesis') return false
+  if (events.length === 0 || events[0].kind !== 'genesis') return false
   let prev = ZERO
   for (const e of events) {
     if (e.prevHashHex !== prev) return false

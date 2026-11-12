@@ -34,7 +34,7 @@ export function makeRevocationRecord(pkHex: string, root: Bytes, proof?: SmtProo
 export function parseRevocationRecord(data: string): RevocationEntry | null {
   const m = /^revoke:([0-9a-f]{66}):root=([0-9a-f]{64})(?::proof=(.+))?$/i.exec(data)
   if (!m) return null
-  const e: RevocationEntry = { pk: m[1]!, root: m[2]! }
+  const e: RevocationEntry = { pk: m[1], root: m[2] }
   if (m[3]) {
     try {
       e.proof = deserializeSmtProof(m[3])
@@ -54,7 +54,7 @@ export function verifyRevocationEntry(e: { pk: string; root: string; proof?: Smt
   if (!e.proof) return false
   try {
     const key = revocationKey(e.pk)
-    return eqB(e.proof.key as SmtKey, key) && verifyProof(e.proof, { present: true, value: REVOKED_VALUE }, fromHex(e.root))
+    return eqB(e.proof.key, key) && verifyProof(e.proof, { present: true, value: REVOKED_VALUE }, fromHex(e.root))
   } catch {
     return false
   }
@@ -64,7 +64,7 @@ export function verifyRevocationEntry(e: { pk: string; root: string; proof?: Smt
 export function verifyRevocationStatus(pkHex: string, root: string, proof: SmtProof): { ok: boolean; revoked: boolean } {
   try {
     const key = revocationKey(pkHex)
-    if (!eqB(proof.key as SmtKey, key)) return { ok: false, revoked: false }
+    if (!eqB(proof.key, key)) return { ok: false, revoked: false }
     if (verifyProof(proof, { present: true, value: REVOKED_VALUE }, fromHex(root))) return { ok: true, revoked: true }
     if (verifyProof(proof, { present: false }, fromHex(root))) return { ok: true, revoked: false }
     return { ok: false, revoked: false }

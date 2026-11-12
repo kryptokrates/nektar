@@ -47,7 +47,7 @@ export function buildProofBundle(args: {
   anchorTx: Transaction
   chainTail: AnchorLink[]
 }): ProofBundle {
-  const anchorData = decodeNektarAnchor(args.anchorTx.outputs[0]!.lockingScript.toHex())
+  const anchorData = decodeNektarAnchor(args.anchorTx.outputs[0].lockingScript.toHex())
   if (!anchorData || !isValidAnchor(anchorData)) throw new Error('anchor tx output 0 is not a nektar anchor')
   const anchor: AnchorLink = {
     txid: args.anchorTx.id('hex'),
@@ -101,7 +101,7 @@ export async function verifyFragment(bundle: ProofBundle, tracker: ChainTracker)
   } catch (e) {
     return { ok: false, reason: 'BadBundle', detail: `BEEF parse: ${(e as Error).message}` }
   }
-  const data = decodeNektarAnchor(anchorTx.outputs[0]!.lockingScript.toHex())
+  const data = decodeNektarAnchor(anchorTx.outputs[0].lockingScript.toHex())
   if (!data || !isValidAnchor(data)) return { ok: false, reason: 'BadBundle', detail: 'output 0 not a nektar anchor' }
   if (data.shard !== bundle.shard || data.n !== bundle.n || data.size !== bundle.size) {
     return { ok: false, reason: 'AnchorFieldMismatch', detail: 'shard/n/size mismatch' }
@@ -115,7 +115,7 @@ export async function verifyFragment(bundle: ProofBundle, tracker: ChainTracker)
   let settled = false
   let anchorState: 'broadcast' | 'mined' = 'broadcast'
   if (anchorTx.merklePath) {
-    const mined = await anchorTx.merklePath.verify(anchorTx.id('hex'), tracker as any)
+    const mined = await anchorTx.merklePath.verify(anchorTx.id('hex'), tracker)
     if (!mined) return { ok: false, reason: 'BEEFInvalid', detail: 'BUMP root not in header chain' }
     settled = true
     anchorState = 'mined'
@@ -129,19 +129,19 @@ export async function verifyFragment(bundle: ProofBundle, tracker: ChainTracker)
   // the last link authenticates the entire tail.
   if (
     tail.length === 0 ||
-    lastLink!.txid !== bundle.anchor.txid ||
-    lastLink!.txid !== anchorTx.id('hex') ||
-    lastLink!.n !== data.n ||
-    lastLink!.size !== data.size ||
-    toHex(fromHex(lastLink!.R)) !== toHex(data.R) ||
-    toHex(fromHex(lastLink!.Rp)) !== toHex(data.Rp)
+    lastLink.txid !== bundle.anchor.txid ||
+    lastLink.txid !== anchorTx.id('hex') ||
+    lastLink.n !== data.n ||
+    lastLink.size !== data.size ||
+    toHex(fromHex(lastLink.R)) !== toHex(data.R) ||
+    toHex(fromHex(lastLink.Rp)) !== toHex(data.Rp)
   ) {
     return { ok: false, reason: 'ChainInconsistent', detail: 'chainTail head does not match the on-chain anchor' }
   }
   for (let i = 0; i < tail.length; i++) {
-    const link = tail[i]!
+    const link = tail[i]
     if (link.n !== i) return { ok: false, reason: 'ChainInconsistent', detail: `gap at n=${i}` }
-    const prevRp = i === 0 ? GENESIS_PREV_RP : fromHex(tail[i - 1]!.Rp)
+    const prevRp = i === 0 ? GENESIS_PREV_RP : fromHex(tail[i - 1].Rp)
     if (!eq(fromHex(link.Rp), chainRp(prevRp, fromHex(link.R), link.size))) {
       return { ok: false, reason: 'ChainInconsistent', detail: `R' link broken at n=${i}` }
     }

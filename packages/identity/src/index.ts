@@ -115,9 +115,9 @@ export function keyValidAt(cert: RotationCert, useTime: number): boolean {
 export function epochKey(genesisPub: string, certs: RotationCert[], epoch: number): { pub: string; from: number; until: number } | null {
   const sorted = [...certs].sort((a, b) => a.index - b.index)
   if (!verifyCertChain(genesisPub, sorted) || epoch < 0 || epoch > sorted.length) return null
-  const pub = epoch === 0 ? genesisPub : sorted[epoch - 1]!.pubkey
-  const from = epoch === 0 ? -Infinity : sorted[epoch - 1]!.issuedAt
-  const until = sorted[epoch] ? sorted[epoch]!.issuedAt + sorted[epoch]!.horizon : Infinity
+  const pub = epoch === 0 ? genesisPub : sorted[epoch - 1].pubkey
+  const from = epoch === 0 ? -Infinity : sorted[epoch - 1].issuedAt
+  const until = sorted[epoch] ? sorted[epoch].issuedAt + sorted[epoch].horizon : Infinity
   return { pub, from, until }
 }
 /** authorship survives rotation: signer must equal the epoch key and the

@@ -28,7 +28,7 @@ const vectors = {
   description: 'nektar core deterministic vectors (regenerate: pnpm reproduce --write)',
   fragments: leaves.map((l, i) => ({
     index: i,
-    serialized: toHex(serializeFragment({ ...frag(i)!, hdp: hdp(frag(i)!), E: new Uint8Array(0) })),
+    serialized: toHex(serializeFragment({ ...frag(i), hdp: hdp(frag(i)), E: new Uint8Array(0) })),
     leaf: toHex(l)
   })),
   merkleRoot: toHex(root),

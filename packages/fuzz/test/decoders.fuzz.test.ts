@@ -51,7 +51,7 @@ function mutate(b: Uint8Array): Uint8Array {
   switch (int(5)) {
     case 0: {
       const i = int(c.length)
-      c[i] = c[i]! ^ (1 << int(8))
+      c[i] = c[i] ^ (1 << int(8))
       return c
     } // bit flip
     case 1:
@@ -66,7 +66,7 @@ function mutate(b: Uint8Array): Uint8Array {
     default: {
       const i = int(c.length),
         j = int(c.length)
-      ;[c[i], c[j]] = [c[j]!, c[i]!]
+      ;[c[i], c[j]] = [c[j], c[i]]
       return c
     } // swap
   }
@@ -90,7 +90,7 @@ test(`fuzz: NektarAnchor decoder is byte-authenticated (seed ${SEED}, n ${N})`, 
   const _w = await anchoredWorld(t)
   if (_w === undefined) return
   const { mem } = _w
-  const script = mem.anchorTx(mem.tailLink('f')!.txid)!.outputs[0]!.lockingScript.toHex()
+  const script = mem.anchorTx(mem.tailLink('f')!.txid)!.outputs[0].lockingScript.toHex()
   const orig = decodeNektarAnchor(script)!
   const code = script.slice(0, findLastOpReturn(script))
   let stateOnly = 0
@@ -211,7 +211,7 @@ test('fuzz: L_pol parser throws only ParseError on garbage', () => {
   const alphabet = '()[],.:-_ "@\nabcXYZ019\\\'notNOT'
   for (let i = 0; i < N * 3; i++) {
     const chars = [...src]
-    for (let k = 0; k <= int(4); k++) chars.splice(int(chars.length + 1), int(3), alphabet[int(alphabet.length)]!)
+    for (let k = 0; k <= int(4); k++) chars.splice(int(chars.length + 1), int(3), alphabet[int(alphabet.length)])
     try {
       parseProgram(chars.join(''))
     } catch (e) {
@@ -269,7 +269,7 @@ test('fuzz: NektarAutomaton decoder is byte-authenticated', async (t) => {
     funder.keyPair,
     chain
   )
-  const script = (await ac.deploy()).tx.outputs[0]!.lockingScript.toHex()
+  const script = (await ac.deploy()).tx.outputs[0].lockingScript.toHex()
   const code = script.slice(0, findLastOpReturn(script))
   const orig = decodeNektarAutomaton(script)
   for (let i = 0; i < N; i++) {

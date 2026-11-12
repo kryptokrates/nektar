@@ -53,7 +53,7 @@ const tx = () => {
   parent.addOutput({ satoshis: 1000, lockingScript: new P2PKH().lock('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa') })
   const t = new Transaction()
   t.addInput({ sourceTXID: parent.id('hex'), sourceOutputIndex: 0, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
-  t.addOutput({ satoshis: 900, lockingScript: parent.outputs[0]!.lockingScript })
+  t.addOutput({ satoshis: 900, lockingScript: parent.outputs[0].lockingScript })
   return t
 }
 
@@ -182,14 +182,14 @@ test('tscToMerklePath: real tree roots verify for N=1..8', () => {
         level = internal.map((h) => Buffer.from(h))
       while (level.length > 1) {
         const sib = idx % 2 === 0 ? idx + 1 : idx - 1
-        nodes.push(sib < level.length ? Buffer.from(level[sib]!).reverse().toString('hex') : '*')
+        nodes.push(sib < level.length ? Buffer.from(level[sib]).reverse().toString('hex') : '*')
         const next: Buffer[] = []
         for (let k = 0; k < level.length; k += 2) next.push(dsha(Buffer.concat([level[k]!, level[k + 1] ?? level[k]!])))
         level = next
         idx = Math.floor(idx / 2)
       }
-      const mp = tscToMerklePath({ index: i, txOrId: display[i]!, target: rootDisplay, nodes }, display[i]!, 100)
-      assert.equal(mp.computeRoot(display[i]!), rootDisplay, `N=${n} idx=${i}`)
+      const mp = tscToMerklePath({ index: i, txOrId: display[i]!, target: rootDisplay, nodes }, display[i], 100)
+      assert.equal(mp.computeRoot(display[i]), rootDisplay, `N=${n} idx=${i}`)
     }
   }
 })
@@ -207,7 +207,7 @@ test('merklePathMainnet (broadcaster BUMP) + discoverUtxos with recorded fixture
   assert.ok(mp?.merklePath, 'broadcaster BUMP hex parses')
   const utxos = await discoverUtxos({ fetchImpl, wocUrl: 'http://woc' }, 'addr')
   assert.equal(utxos.length, 1)
-  assert.equal(utxos[0]!.satoshis, 5000)
+  assert.equal(utxos[0].satoshis, 5000)
 })
 
 // -- SpendGuard ----------------------------------------------------------------
@@ -223,7 +223,7 @@ test('SpendGuard: caps, interval, unknown input, ledger persistence', async () =
   const mkTx = () => {
     const t = new Transaction()
     t.addInput({ sourceTXID: pid, sourceOutputIndex: 0, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
-    t.addOutput({ satoshis: 9000, lockingScript: parent.outputs[0]!.lockingScript })
+    t.addOutput({ satoshis: 9000, lockingScript: parent.outputs[0].lockingScript })
     return t
   }
   const resolve = (id: string) => (id === pid ? 10_000 : undefined)

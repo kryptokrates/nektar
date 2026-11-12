@@ -134,7 +134,7 @@ export class S3ObjectStore {
       ...extra
     }
     const signed = Object.keys(headers).sort()
-    const canonicalHeaders = signed.map((h) => `${h}:${headers[h]!.replace(/\s+/g, ' ').trim()}\n`).join('')
+    const canonicalHeaders = signed.map((h) => `${h}:${headers[h].replace(/\s+/g, ' ').trim()}\n`).join('')
     const canonical = [method, path, '', canonicalHeaders, signed.join(';'), payloadHash].join('\n')
     const scope = `${date}/${this.region}/s3/aws4_request`
     const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${sha256Hex(new TextEncoder().encode(canonical))}`

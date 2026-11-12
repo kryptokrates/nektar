@@ -84,7 +84,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
       }
       const engine = new MarketEngine({
         store,
-        memory: mem as never,
+        memory: mem,
         key: mem.operatorKey(),
         network: 'regtest',
         now,

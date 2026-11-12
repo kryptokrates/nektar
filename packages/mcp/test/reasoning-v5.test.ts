@@ -52,8 +52,8 @@ test('§8 delta: revisions stored as Δ; every version materialises from proven 
     'Manual rev4: torque 55Nm, belt 12h, oil 5W30',
     'Manual rev5: torque 50Nm, belt 12h, oil 5W30'
   ]
-  await mem.remember('man', versions[0]!)
-  for (let i = 1; i < versions.length; i++) await mem.revise('man', i - 1, versions[i]!)
+  await mem.remember('man', versions[0])
+  for (let i = 1; i < versions.length; i++) await mem.revise('man', i - 1, versions[i])
   await mem.remember('man', 'filler')
   settle('man')
   const stored = (await mem.records('man')).map((r) => Buffer.from(r.fragment.d).toString())
@@ -61,7 +61,7 @@ test('§8 delta: revisions stored as Δ; every version materialises from proven 
     stored.slice(1, 5).every((s) => s.startsWith('delta:')),
     'revisions are deltas, not full copies'
   )
-  assert.ok(stored[4]!.length < versions[4]!.length + 16)
+  assert.ok(stored[4].length < versions[4].length + 16)
   for (let i = 0; i < versions.length; i++) assert.equal(await mem.materialize('man', i), versions[i], `version ${i}`)
   // 0-conf semantics: the auto-anchored (broadcast, unmined) batch IS provable
   // locally — mining is settlement, not validity — so the links materialize
@@ -109,8 +109,8 @@ test('§12 temporal: □_t, ◇_(t1,t2), obligations with deadlines, causal clos
     true,
     'open obligation is not yet a violation'
   )
-  assert.deepEqual(causalClosure([{ conclusion: 'fit(op1)', t: 260, cites: [F[3]!] }]), { ok: true })
-  assert.match(causalClosure([{ conclusion: 'pump3 ok', t: 150, cites: [F[2]!] }]).reason!, /cites "incident\(pump3\)" anchored at t=200/)
+  assert.deepEqual(causalClosure([{ conclusion: 'fit(op1)', t: 260, cites: [F[3]] }]), { ok: true })
+  assert.match(causalClosure([{ conclusion: 'pump3 ok', t: 150, cites: [F[2]] }]).reason!, /cites "incident\(pump3\)" anchored at t=200/)
 })
 
 test('§19 epoch binding: authorship survives rotation; wrong epoch / after expiry refused', async (t) => {
@@ -147,10 +147,10 @@ test('§9 memory as law: anchored DL entailment, jurisdiction graphs, precedent'
   ]
   const all = new Set(ax.map(axiomHash))
   assert.ok(ontologyEntails(ax, { pred: 'instance', args: ['alice', 'professional'] }, (h) => all.has(h)).entailed, 'C ⊑ D via an anchored subclass chain')
-  const missing = new Set([axiomHash(ax[0]!), axiomHash(ax[2]!)])
+  const missing = new Set([axiomHash(ax[0]), axiomHash(ax[2])])
   const r = ontologyEntails(ax, { pred: 'instance', args: ['alice', 'professional'] }, (h) => missing.has(h))
   assert.equal(r.entailed, false, 'an unanchored axiom breaks the chain (void ab initio)')
-  assert.deepEqual(r.rejected, [axiomHash(ax[1]!)])
+  assert.deepEqual(r.rejected, [axiomHash(ax[1])])
   const J = new Jurisdictions()
   J.add('EU', [
     ...ax,
@@ -191,7 +191,7 @@ test('§16 delegation map: sub-decisions signed by delegating agents; tampering 
   const forged = {
     ...receipt,
     delegations: [
-      { delegator: PrivateKey.fromRandom().toPublicKey().toString(), decision: 'compliance check passed', signature: receipt.delegations[0]!.signature }
+      { delegator: PrivateKey.fromRandom().toPublicKey().toString(), decision: 'compliance check passed', signature: receipt.delegations[0].signature }
     ]
   }
   assert.equal(verifyReceiptDelegations(forged).ok, false, 'sig moved to another delegator fails')

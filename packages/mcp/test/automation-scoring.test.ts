@@ -56,8 +56,8 @@ test('scoring: bounds, threshold, and deterministic key tie-break', () => {
     { offerKey: 'low', reason: 'below_minimum' },
     { offerKey: 'over', reason: 'over_budget' }
   ])
-  assert.equal(rankOffers([candidate('boundary', 1000)], policy({ minimumScoreBps: 8000 })).ranked[0]!.scoreBps, 8000)
-  assert.equal(rankOffers([candidate('free', 0)], policy()).ranked[0]!.scoreBps, 10000)
+  assert.equal(rankOffers([candidate('boundary', 1000)], policy({ minimumScoreBps: 8000 })).ranked[0].scoreBps, 8000)
+  assert.equal(rankOffers([candidate('free', 0)], policy()).ranked[0].scoreBps, 10000)
 })
 
 test('scoring: exact duplicate copies collapse; conflicting same-key copies fail closed regardless of order', () => {
@@ -80,7 +80,7 @@ test('scoring: malicious numeric features and unknown policy constraints are rej
     { ...policy(), unknownConstraint: true }
   ])
     assert.throws(() => rankOffers([], invalid), /invalid scoring policy/)
-  assert.equal(rankOffers([null as unknown as ScoreCandidate], policy()).rejected[0]!.reason, 'invalid_offer')
+  assert.equal(rankOffers([null as unknown as ScoreCandidate], policy()).rejected[0].reason, 'invalid_offer')
 })
 
 test('scoring: malformed duplicate cannot shadow a valid offer; result snapshots do not alias inputs', () => {
@@ -89,7 +89,7 @@ test('scoring: malformed duplicate cannot shadow a valid offer; result snapshots
   assert.deepEqual(rankOffers([valid, bad], policy()), rankOffers([bad, valid], policy()))
   assert.equal(rankOffers([valid, bad], policy()).ranked.length, 0)
   const p = policy()
-  const snapshot = rankOffers([valid], p).ranked[0]!
+  const snapshot = rankOffers([valid], p).ranked[0]
   valid.features.relevance = 0
   p.weights.relevance = 0
   assert.equal(snapshot.featuresBps.relevance, 10000)
@@ -98,6 +98,6 @@ test('scoring: malformed duplicate cannot shadow a valid offer; result snapshots
 
 test('scoring: price normalization is exact at the maximum safe-integer amount', () => {
   const result = rankOffers([candidate('large', Number.MAX_SAFE_INTEGER - 1)], policy({ maxAllInSats: Number.MAX_SAFE_INTEGER }))
-  assert.equal(result.ranked[0]!.featuresBps.price, 0)
-  assert.equal(result.ranked[0]!.scoreBps, 8000)
+  assert.equal(result.ranked[0].featuresBps.price, 0)
+  assert.equal(result.ranked[0].scoreBps, 8000)
 })

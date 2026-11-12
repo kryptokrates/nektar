@@ -10,7 +10,7 @@ import { NektarMemory } from '../src/index.js'
 const liveMem = async (t: { skip: (m?: string) => void }): Promise<{ mem: NektarMemory; chain: StackChain; funder: StackFunder } | undefined> => {
   const w = await stackWorld(t, 4)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const view = Object.create(chain) as StackChain
   ;(view as { getTx?: unknown }).getTx = undefined // live backends have no getTx
   return { mem: new NektarMemory(view, funder, funder.keyPair, { network: 'testnet' }), chain, funder }
@@ -110,7 +110,7 @@ test('wire: BEEF when the ancestry is proven — the receiver verifies it agains
   assert.equal((await TxStore.read(wire, other.chain)).spv, false)
   // a tampered child fails SPV
   const bad = Transaction.fromAtomicBEEF(Array.from(Buffer.from(wire, 'hex')))
-  bad.outputs[0]!.satoshis = 9_999
+  bad.outputs[0].satoshis = 9_999
   assert.equal((await TxStore.read(Buffer.from(bad.toAtomicBEEF()).toString('hex'), chain)).spv, false)
 })
 
@@ -147,7 +147,7 @@ test('TxStore: a proof ends the stored ancestry and survives a reload', async (t
   const b = new TxStore(persist)
   await b.load()
   const back = b.get(child.id('hex'))!
-  assert.ok(back.inputs[0]!.sourceTransaction?.merklePath !== undefined)
+  assert.ok(back.inputs[0].sourceTransaction?.merklePath !== undefined)
   assert.equal(await back.verify(chain), true)
   assert.deepEqual(b.unproven(), [child.id('hex')])
 })
@@ -155,7 +155,7 @@ test('TxStore: a proof ends the stored ancestry and survives a reload', async (t
 test('spendValid: a real spend passes; a spend of another output or a broken signature does not', async (t) => {
   const chain = (await stackChain(t))!
   const { parent, child } = await pair(chain, false)
-  const src = { txid: parent.id('hex'), vout: 0, satoshis: 10_000, script: parent.outputs[0]!.lockingScript.toHex() }
+  const src = { txid: parent.id('hex'), vout: 0, satoshis: 10_000, script: parent.outputs[0].lockingScript.toHex() }
   assert.equal(spendValid(child, 0, src), true)
   assert.equal(spendValid(child, 0, { ...src, vout: 1 }), false)
   assert.equal(spendValid(child, 0, { ...src, satoshis: 10_001 }), false, 'the signature commits to the amount')

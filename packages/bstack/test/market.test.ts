@@ -10,7 +10,7 @@ import { provenTree } from './helpers.js'
 import { FakeTracker } from '../src/testing.js'
 
 const NET = 'regtest'
-const mod = (t: FakeTracker) => createNektarModule({ log: () => {}, chainTracker: t as never, engine: { submit: async () => ({}) } }, [NET])
+const mod = (t: FakeTracker) => createNektarModule({ log: () => {}, chainTracker: t, engine: { submit: async () => ({}) } }, [NET])
 
 async function wantCarrier(signer: PrivateKey, minter: PrivateKey, domains = ['compute'], net = NET, tree?: import('@bsv/sdk').Transaction) {
   const sw = signWant(signer, { domains, question: 'q', net, ts: Date.now(), exp: Date.now() + 60000 })
@@ -25,7 +25,7 @@ test('market: same signer+minter admits on the right lane', async () => {
   const t = new FakeTracker()
   const m = mod(t)
   const lane = laneOf(NET, 'compute')
-  const r = await m.topics[lane]!.identifyAdmissibleOutputs(await wantCarrier(k, k), [])
+  const r = await m.topics[lane].identifyAdmissibleOutputs(await wantCarrier(k, k), [])
   assert.deepEqual(r.outputsToAdmit, [0])
 })
 
@@ -33,7 +33,7 @@ test('market: signed by A, minted by B -> refused', async () => {
   const a = PrivateKey.fromRandom()
   const b = PrivateKey.fromRandom()
   const m = mod(new FakeTracker())
-  const r = await m.topics[laneOf(NET, 'compute')]!.identifyAdmissibleOutputs(await wantCarrier(a, b), [])
+  const r = await m.topics[laneOf(NET, 'compute')].identifyAdmissibleOutputs(await wantCarrier(a, b), [])
   assert.deepEqual(r.outputsToAdmit, [])
 })
 
@@ -43,14 +43,14 @@ test('market: domain hashing elsewhere is refused by this lane; >3 domains refus
   const right = lanesFor(NET, ['compute', 'storage'])
   const wrong = 'tm_nektar_regtest_' + '0123456789abcdef'.split('').find((n) => !right.includes(`tm_nektar_regtest_${n}`))!
   const beef = await wantCarrier(k, k, ['compute', 'storage'])
-  assert.deepEqual((await m.topics[wrong]!.identifyAdmissibleOutputs(beef, [])).outputsToAdmit, [])
+  assert.deepEqual((await m.topics[wrong].identifyAdmissibleOutputs(beef, [])).outputsToAdmit, [])
   assert.throws(() => lanesFor(NET, ['a', 'b', 'c', 'd']), /1\.\.3|domains/)
 })
 
 test('market: wrong net refused', async () => {
   const k = PrivateKey.fromRandom()
   const m = mod(new FakeTracker())
-  const r = await m.topics[laneOf(NET, 'compute')]!.identifyAdmissibleOutputs(await wantCarrier(k, k, ['compute'], 'other'), [])
+  const r = await m.topics[laneOf(NET, 'compute')].identifyAdmissibleOutputs(await wantCarrier(k, k, ['compute'], 'other'), [])
   assert.deepEqual(r.outputsToAdmit, [])
 })
 
@@ -58,7 +58,7 @@ test('market: second different carrier on same funding outpoint refused; same ca
   const k = PrivateKey.fromRandom()
   const m = mod(new FakeTracker())
   const lane = laneOf(NET, 'compute')
-  const tm = m.topics[lane]!
+  const tm = m.topics[lane]
   const tree = await provenTree(k)
   const b1 = await wantCarrier(k, k, ['compute'], NET, tree)
   const b2 = await wantCarrier(k, k, ['compute'], NET, tree)
@@ -77,9 +77,9 @@ async function wantCarrierExp(signer: PrivateKey, minter: PrivateKey, exp: numbe
 
 test('market: expiry required — missing, past or >7d-ahead exp refused; +1h admitted', async () => {
   let clock = Date.now()
-  const m = createNektarModule({ log: () => {}, chainTracker: new FakeTracker() as never, engine: { submit: async () => ({}) } }, [NET], { now: () => clock })
+  const m = createNektarModule({ log: () => {}, chainTracker: new FakeTracker(), engine: { submit: async () => ({}) } }, [NET], { now: () => clock })
   const lane = laneOf(NET, 'compute')
-  const tm = m.topics[lane]!
+  const tm = m.topics[lane]
   const k = PrivateKey.fromRandom()
   assert.deepEqual((await tm.identifyAdmissibleOutputs((await wantCarrierExp(k, k, undefined)).beef, [])).outputsToAdmit, [], 'no exp refused')
   // signWant refuses a past exp at sign time — sign ahead, then move the module clock past it
@@ -94,18 +94,18 @@ test('market: expiry required — missing, past or >7d-ahead exp refused; +1h ad
 test('market: expired artifacts leave the index — lookup returns nothing and the outpoint frees', async () => {
   let clock = Date.now()
   const t = new FakeTracker()
-  const m = createNektarModule({ log: () => {}, chainTracker: t as never, engine: { submit: async () => ({}) } }, [NET], { now: () => clock })
+  const m = createNektarModule({ log: () => {}, chainTracker: t, engine: { submit: async () => ({}) } }, [NET], { now: () => clock })
   const lane = laneOf(NET, 'compute')
-  const tm = m.topics[lane]!
+  const tm = m.topics[lane]
   const k = PrivateKey.fromRandom()
   const tree = await provenTree(k)
   const { beef } = await wantCarrierExp(k, k, clock + 3_600_000, tree)
   assert.deepEqual((await tm.identifyAdmissibleOutputs(beef, [])).outputsToAdmit, [0])
-  await m.lookups['ls_nektar']!.outputAdmittedByTopic({ mode: 'whole-tx', atomicBEEF: beef, outputIndex: 0, topic: lane })
-  const wants = (await m.lookups['ls_nektar']!.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })) as Array<{ txid: string }>
+  await m.lookups['ls_nektar'].outputAdmittedByTopic({ mode: 'whole-tx', atomicBEEF: beef, outputIndex: 0, topic: lane })
+  const wants = (await m.lookups['ls_nektar'].lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })) as Array<{ txid: string }>
   assert.equal(wants.length, 1, 'admitted want listed')
   clock += 3_600_001 // now past exp
-  const gone = (await m.lookups['ls_nektar']!.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })) as Array<{ txid: string }>
+  const gone = (await m.lookups['ls_nektar'].lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })) as Array<{ txid: string }>
   assert.equal(gone.length, 0, 'expired want no longer returned')
   // the freed outpoint admits a different carrier — proof the entry was dropped
   const second = await wantCarrierExp(k, k, clock + 3_600_000, tree)

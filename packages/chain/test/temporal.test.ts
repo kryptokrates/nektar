@@ -9,7 +9,7 @@ const hdr = (height: number, time: number): BlockHeader => ({ height, hash: `h${
 const stub = (times: Record<number, number>, miss = false): ChainTracker => ({
   currentHeight: async () => Math.max(...Object.keys(times).map(Number)),
   isValidRootForHeight: async (root, h) => root === `r${h}`,
-  headerAtHeight: async (h) => (miss ? undefined : times[h] === undefined ? undefined : hdr(h, times[h]!))
+  headerAtHeight: async (h) => (miss ? undefined : times[h] === undefined ? undefined : hdr(h, times[h]))
 })
 
 test('medianTime: odd → middle; even → lower median (skewed-high can never push time up)', () => {

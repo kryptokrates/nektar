@@ -93,7 +93,7 @@ test('entailment only from anchored axioms — foreign/unanchored axioms are voi
   const minus = new Set(ont.axiomHashes.filter((_, i) => i !== 1)) // Scientist ⊑ Professional
   const r = ont.entail([], q, (h) => minus.has(h))
   assert.ok(!r.entailed, 'unanchored SubClassOf breaks entailment')
-  assert.deepEqual(r.rejected, [owlAxiomHash(V[1]!)])
+  assert.deepEqual(r.rejected, [owlAxiomHash(V[1])])
   // a FOREIGN axiom (never committed) cannot extend the ontology
   const foreign: OwlAxiom = { kind: 'subClassOf', sub: 'Person', sup: 'Agent' }
   const r2 = entail([...V, foreign], [], { pred: 'inst', args: ['alice', 'agent'] }, (h) => all.has(h))

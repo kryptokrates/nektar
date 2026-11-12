@@ -120,12 +120,12 @@ export async function setupFeeVault(opts: {
     const r = await opts.broadcast(tx)
     if (r.status !== 'success') throw new Error(`vault spend refused: ${r.description}`)
     opts.reserve.addOwned(tx, 2) // the 1-sat covenant change — reclaimable
-    const cont = tx.outputs[0]!
+    const cont = tx.outputs[0]
     vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: cont.satoshis!, script: cont.lockingScript.toHex() }
     opts.reserve.addOwned(tx, 1)
     vaultMinted.add(`${tx.id('hex')}:1`)
     saveVault()
-    return { tx, vout: 1, satoshis: tx.outputs[1]!.satoshis! }
+    return { tx, vout: 1, satoshis: tx.outputs[1].satoshis! }
   }
   let minting: Promise<unknown> = Promise.resolve()
   const takeReserve = async () => {

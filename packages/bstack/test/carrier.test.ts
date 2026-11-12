@@ -23,7 +23,7 @@ test('carrier: flipped payload byte fails', async () => {
   const key = PrivateKey.fromRandom()
   const tree = await provenTree(key)
   const { beef } = await buildCarrier({ key, payload: pay, slot: { tree, vout: 0 } })
-  beef[beef.length - 5] = beef[beef.length - 5]! ^ 0xff
+  beef[beef.length - 5] = beef[beef.length - 5] ^ 0xff
   assert.equal((await checkCarrier(beef, { tracker: new FakeTracker() })).ok, false)
 })
 
@@ -50,5 +50,5 @@ test('sweep: builds a self-paying sweep of tree outputs', async () => {
   const tree = await provenTree(key)
   const s = await buildSweep({ key, tree, vouts: [1, 2], fees: { sats: 1, bytes: 1, floor: 1 } })
   assert.equal(s.inputs.length, 2)
-  assert.ok(s.outputs[0]!.satoshis! > 0)
+  assert.ok(s.outputs[0].satoshis! > 0)
 })

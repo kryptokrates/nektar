@@ -139,9 +139,9 @@ export class P2PListener extends EventEmitter {
 
   connect(): void {
     if (this.closed) return
-    const [host, port] = this.peers[this.peerIdx % this.peers.length]!.split(':')
+    const [host, port] = this.peers[this.peerIdx % this.peers.length].split(':')
     this.peerIdx++
-    const sock = createConnection({ host: host!, port: Number(port ?? 8333), timeout: 15_000 })
+    const sock = createConnection({ host: host, port: Number(port ?? 8333), timeout: 15_000 })
     this.sock = sock
     let handshook = false
     sock.on('connect', () => {

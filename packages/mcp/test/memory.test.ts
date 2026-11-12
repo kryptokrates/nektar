@@ -56,17 +56,17 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
   // S6.1: an unanchored PLAINTEXT record is withheld like an encrypted one —
   // it never earned 'verified' from anchor presence alone, and now it is not
   // served at all until SPV verification passes
-  assert.equal(items[0]!.text, undefined)
-  assert.equal(items[0]!.unverifiable, true)
-  assert.match(items[0]!.reason!, /verify: NotAnchored/)
+  assert.equal(items[0].text, undefined)
+  assert.equal(items[0].unverifiable, true)
+  assert.match(items[0].reason!, /verify: NotAnchored/)
   assert.equal(receipt.checkResult, 'unverifiable') // not anchored yet
   assert.equal(receipt.modelId, 'test-model-1')
   // once anchored and mined the same plaintext record is served + verified
   await mem.anchorShard('s')
   settle('s')
   const after = await mem.recall('s')
-  assert.equal(after.items[0]!.text, 'fact one')
-  assert.equal(after.items[0]!.unverifiable, undefined)
+  assert.equal(after.items[0].text, 'fact one')
+  assert.equal(after.items[0].unverifiable, undefined)
   assert.equal(after.receipt.checkResult, 'verified')
   const seed = PrivateKey.fromRandom()
   const enc = await setup(t, { agentSeed: seed, maxLevel: 1 })
@@ -75,14 +75,14 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
   // decrypt requires the record to be anchored AND verified (KEY-008)
   await enc.mem.anchorShard('s')
   enc.settle('s')
-  assert.equal((await enc.mem.recall('s')).items[0]!.text, 'classified fact', 'decrypts with seed after verify')
+  assert.equal((await enc.mem.recall('s')).items[0].text, 'classified fact', 'decrypts with seed after verify')
   // unanchored encrypted record is never decrypted
   const enc2 = await setup(t, { agentSeed: seed })
   if (enc2 === undefined) return
   await enc2.mem.remember('s', 'unanchored secret')
   const rec3 = await enc2.mem.recall('s')
-  assert.equal(rec3.items[0]!.text, undefined)
-  assert.equal(rec3.items[0]!.unverifiable, true)
+  assert.equal(rec3.items[0].text, undefined)
+  assert.equal(rec3.items[0].unverifiable, true)
 })
 
 test('S6.1 regression: plaintext items are SPV-verified like encrypted ones (broken anchor → unverifiable)', async (t) => {
@@ -201,7 +201,7 @@ test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-us
   settle('s')
   const { key, identity } = callerOf(mem)
   const cred = issueClearance(authority, 3n, identity.pubkey)
-  const read = async (zk: ZkClearance, id = identity) => (await mem.recall('s', { seq: 0, zk, identity: id })).items[0]!
+  const read = async (zk: ZkClearance, id = identity) => (await mem.recall('s', { seq: 0, zk, identity: id })).items[0]
   // valid: ℓ=3 proves ≥ 2 for s/0 → served
   const ok = await read({ commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('s/0', 1))!, transcript: tr('s/0', 1), requiredLevel: 2n })
   assert.equal(ok.text, 'classified fact')
@@ -230,7 +230,7 @@ test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-us
   )
   assert.match(anon.reason!, /verified caller identity/)
   // no proof at all → level-2 record withheld
-  assert.match((await mem.recall('s', { seq: 0, identity })).items[0]!.reason!, /zkaccess required/)
+  assert.match((await mem.recall('s', { seq: 0, identity })).items[0].reason!, /zkaccess required/)
 })
 
 test('ZKA: plaintext level>0 records are gated too; instances without trusted authorities refuse', async (t) => {
@@ -246,10 +246,10 @@ test('ZKA: plaintext level>0 records are gated too; instances without trusted au
       identity,
       zk: { commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('p/0'))!, transcript: tr('p/0'), requiredLevel: 2n }
     })
-  ).items[0]!
+  ).items[0]
   assert.equal(r.text, undefined)
   assert.match(r.reason!, /no trusted clearance authority configured/)
-  assert.equal((await mem.recall('p')).items[0]!.text, undefined, 'no proof, no plaintext')
+  assert.equal((await mem.recall('p')).items[0].text, undefined, 'no proof, no plaintext')
 })
 
 test('Cedar gates recall — verified identity, ZK-proven level, hash-mismatch; challenge must be issued here', async t => {
@@ -286,7 +286,7 @@ when { resource.level <= principal.level };
     zk: { commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, tr('s/0', 1))!, transcript: tr('s/0', 1), requiredLevel: 5n }
   })
   assert.equal(forged.receipt.cedar, 'deny')
-  assert.equal(forged.items[0]!.text, undefined)
+  assert.equal(forged.items[0].text, undefined)
   // proven level 3 → Cedar ALLOW + served
   const ok = await mem.recall('s', {
     seq: 0,
@@ -294,7 +294,7 @@ when { resource.level <= principal.level };
     zk: { commitment: cred.commitment, proof: proveAccess(cred, 3n, 8, tr('s/0', 2))!, transcript: tr('s/0', 2), requiredLevel: 3n }
   })
   assert.equal(ok.receipt.cedar, 'allow')
-  assert.equal(ok.items[0]!.text, 'fact two')
+  assert.equal(ok.items[0].text, 'fact two')
   // tampered instance policy (hash mismatch vs anchored) → refused
   const tampered = await setup(t, { ...base, policy: { policyText: 'permit(principal,action,resource);', anchoredPolicySetHash: ps.hash } })
   if (tampered === undefined) return
@@ -369,11 +369,11 @@ test('§19 read-path: revoked author key withholds the record at recall', async 
   await mem.remember('s', 'filler record')
   settle('s')
   const ok = await mem.recall('s')
-  assert.equal(ok.items[0]!.unverifiable, undefined, 'served before revoke')
+  assert.equal(ok.items[0].unverifiable, undefined, 'served before revoke')
   mem.revoke(author.toPublicKey().toString())
   const bad = await mem.recall('s')
-  assert.equal(bad.items[0]!.unverifiable, true, 'revoked author record withheld')
-  assert.match(bad.items[0]!.reason!, /revoked key/)
+  assert.equal(bad.items[0].unverifiable, true, 'revoked author record withheld')
+  assert.match(bad.items[0].reason!, /revoked key/)
 })
 
 test('§19 CRL: embedded SMT proof makes the anchored revoke record self-convicting', async (t) => {
@@ -447,13 +447,13 @@ test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-ho
   // §16: the map is anchored — tampered delegator, swapped decision, stripped
   // entry, and appended entry ALL break the terminal signature
   assert.equal(
-    verifyAnswerReceipt({ ...receipt, delegations: [{ ...receipt.delegations[0]!, delegator: PrivateKey.fromRandom().toPublicKey().toString() }] }).ok,
+    verifyAnswerReceipt({ ...receipt, delegations: [{ ...receipt.delegations[0], delegator: PrivateKey.fromRandom().toPublicKey().toString() }] }).ok,
     false,
     'delegator swapped'
   )
-  assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [{ ...receipt.delegations[0]!, decision: 'other decision' }] }).ok, false, 'decision swapped')
+  assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [{ ...receipt.delegations[0], decision: 'other decision' }] }).ok, false, 'decision swapped')
   assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [] }).ok, false, 'map stripped')
-  assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [...receipt.delegations, receipt.delegations[0]!] }).ok, false, 'entry appended')
+  assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [...receipt.delegations, receipt.delegations[0]] }).ok, false, 'entry appended')
 })
 
 test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-verifies Π, not the flag', async t => {
@@ -476,14 +476,14 @@ test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-ver
   assert.equal(receipt.zkaccess, 'verified')
   assert.deepEqual(verifyReceiptZk(receipt, { trustedAuthorities: [authority.toPublicKey().toString()], holder: identity.pubkey }), { ok: true })
   // tampered artifact fails; stripped artifact is honest (nothing to verify)
-  const tampered = { ...receipt, zk: { ...receipt.zk!, requiredLevel: '99' } }
+  const tampered = { ...receipt, zk: { ...receipt.zk, requiredLevel: '99' } }
   assert.equal(verifyReceiptZk(tampered, { trustedAuthorities: [authority.toPublicKey().toString()], holder: identity.pubkey }).ok, false)
   assert.equal(verifyReceiptZk({ zk: undefined }, {}).ok, false)
   // the artifact is digest-bound — swapping it breaks the receipt signature
   const { verifyAnswerReceipt } = await import('../src/memory.js')
   assert.equal(verifyAnswerReceipt(tampered as any).ok, false, 'swapped artifact breaks σ')
   // decoded artifact roundtrips through the wire codec
-  const dec = decodePresentation(receipt.zk!)
+  const dec = decodePresentation(receipt.zk)
   assert.equal(dec.requiredLevel, 2n)
 })
 
@@ -514,7 +514,7 @@ test('GOAL-v8 D2: App E level floor — derived content cannot fall below its pr
   settle('vault')
   const { identity } = callerOf(mem)
   const low = await mem.recall('vault', { seq: derived.seq, identity })
-  assert.equal(low.items[0]!.text, undefined, 'derived record at floored level is not served to a level-0 reader')
+  assert.equal(low.items[0].text, undefined, 'derived record at floored level is not served to a level-0 reader')
   // §8 revise() inherits the base's level automatically — a delta can't downgrade
   // (a plaintext instance: revise materialises the base, which needs plaintext)
   const plain2 = await setup(t)
@@ -548,7 +548,7 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
     const cred = issueClearance(authority, 1n, identity.pubkey)
     const zk: ZkClearance = { commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, tr('s/0', 5))!, transcript: tr('s/0', 5), requiredLevel: 1n }
     const served = await on.mem.recall('s', { seq: 0, zk, identity })
-    assert.equal(served.items[0]!.text, 'classified', 'cleared read serves the record')
+    assert.equal(served.items[0].text, 'classified', 'cleared read serves the record')
     const logs = (await on.mem.records('__access__')).map((r) => JSON.parse(Buffer.from(r.fragment.d).toString('utf8')))
     const dec = logs.find((l) => l.event === 'decrypt')
     assert.ok(dec, 'a decrypt event was logged')
@@ -589,7 +589,7 @@ test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash',
   // the model block is inside the signed digest — tampering breaks verification
   const { verifyAnswerReceipt } = await import('../src/memory.js')
   assert.ok(verifyAnswerReceipt(receipt).ok)
-  const tampered = { ...receipt, model: { ...receipt.model!, weightsHash: 'cd'.repeat(32) } }
+  const tampered = { ...receipt, model: { ...receipt.model, weightsHash: 'cd'.repeat(32) } }
   assert.ok(!verifyAnswerReceipt(tampered).ok, 'a forged weightsHash invalidates the signature')
   // receipts without a configured model still verify (empty-safe digest)
   const plain = await setup(t)
@@ -650,7 +650,7 @@ test('verifyReceipt: token → found/hash/provenance/anchored/fragments; unknown
   for (const n of ['found', 'hash', 'provenance', 'anchored', 'fragment manual:0']) {
     assert.equal(byName[n]?.ok, true, `${n}: ${byName[n]?.detail}`)
   }
-  assert.equal((v.receipt as any).checkResult, 'verified')
+  assert.equal((v.receipt).checkResult, 'verified')
 
   // bare 64-hex hash also accepted
   const v2 = await callTool(mem, 'verifyReceipt', { receiptHash: r.receiptHash })

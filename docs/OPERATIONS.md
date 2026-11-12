@@ -151,7 +151,9 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
 
 - Buyer ops reaching `disclosure_verified` store a **redacted** evidence bundle at `evidence/<network>/<operationId>.json` (question and disclosure tx become SHA-256 digests — no plaintext or wrapped secret leaves the node) and commit the `{bucket, key, sha256, size}` ref into the op via an `evidence_stored` event, which the deal journal then anchors. `deals {operationId}` shows `evidence: {ref, stored: true}`; the operator tool `evidence {ref | operationId}` fetches and re-verifies.
 - `describeShard`/`sell` on a PUBLIC shard also PUT the shard pack at `packs/<network>/<shardId>/<sha256>.json` and publish the ref in `/.well-known/nektar` (`store` field) — `importShard {store}` fetches it.
-- Every stored object also gets a **CHIRP copy** at `chirp/<sha256(blob)>` plus a `chirp://<identifier>` ref on the stored `ObjectRef` (`ref.chirp`, `ref.endpoint`). Resolution order on every read: CHIRP identifier first (closure-verified against the store), then the unsigned keyed object (SHA-256 verified), so the operator origin is only a fallback, never a required hop.
+- Every stored object also gets a **CHIRP copy** at `chirp/<sha256(blob)>` plus a `chirp://<identifier>` ref on the stored `ObjectRef` (`ref.chirp`, `ref.endpoint`). One shared resolution order covers packs, evidence and ZK proofs (`fetchObjectByRef`): CHIRP via the signed client → CHIRP unsigned against the ref's endpoint → keyed object signed → keyed object unsigned — so the operator origin is only a fallback, never a required hop, and a ref carrying `endpoint` resolves with **no credentials at all** when the gateway serves public reads.
+- `delivered` envelopes now carry the pack's stock plaintext `refs[]` (`{url, sha256, length}` — https only, per stock admission) so a buyer resolves deal evidence through the store, not the seller's origin. Receipts/attestations carry `proofStore: {endpoint, bucket}` next to `proofCommit`: proof bytes sit at `chirp/<commit>` (the blob key IS the digest), so a verifier resolves them origin-free and re-runs verification with no `/v1/zkproof` call.
+- **Gateway posture:** configure the bucket for public (unsigned) reads — every consumer path above has a working unsigned leg; signed reads remain for operators with credentials.
 - Public packs are additionally committed as the **`nektar-packs` store** on the operator's bfinger record `refs` — each pack a kind-5 sub-record (its carrier commitment is the member), a kind-6 manifest listing members once count > 1, `refs.head` pointing at the manifest. A reader with only the operator pubkey walks `ls_finger` → `refs` → `{identityKey, carrier: head}` → members — no origin or `/.well-known` dependency.
 - **What Nektar verifies:** every read goes through `getVerified` — object size ≤ 8 MiB, optional expected size, and SHA-256 equal to the stored ref — before evidence checks or pack re-verification run; CHIRP reads additionally verify the closure (`verifyClosure`) over content-hashed nodes. A wrong or tampered object is refused, never trusted.
 - **What Nektar does not verify or operate:** provider possession proofs (CHIRP closures as bstore's internal proof protocol), bounty races/claims, provider settlement, and gateway availability or honesty — those are the gateway's and providers' business. The gateway's ETag is not an MD5; Nektar's own SHA-256 is the only integrity check relied on.
@@ -191,7 +193,7 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
      - `POST /tx`; Extended Format when every parent is known, raw otherwise;
      - falls back to WhatsOnChain only on network/5xx errors;
      - fee rate `max(100 sat/kB, broadcaster policy)`;
-     - headers and SPV from WhatsOnChain; BUMPs from the broadcaster, else the WoC TSC proof; finality depth 6;
+     - headers and SPV from Chaintracks (PoW-verifiable, no key) with WhatsOnChain as fallback; BUMPs from the broadcaster first, else the WoC TSC proof; raw-tx pulls (`/tx/{txid}/hex`) are WoC's only remaining first-class role — everything else reaches it only as fallback, and `hex:` funding imports + `NEKTAR_FUND_TXIDS` bypass it entirely; finality depth 6;
      - a 200/202 means accepted. The anchor chain continues immediately, and the BUMP is attached in the background once the transaction is mined.
 
      **Status delivery — webhook mode.** With `NEKTAR_CALLBACK_URL` set, every broadcast carries `X-CallbackUrl`; the broadcaster pushes each status transition (`SEEN_ON_NETWORK` → `MINED`/`IMMUTABLE`, or `REJECTED`/`DOUBLE_SPEND_ATTEMPTED`) to `POST {url}/v1/broadcaster-callback`. When `NEKTAR_CALLBACK_TOKEN` is set it is sent as `X-CallbackToken` and the route requires it back as `Authorization: Bearer`. The URL must be publicly routable.
@@ -358,7 +360,11 @@ publicShards:[{shard, records, packUrl, import}]}` enumerating what the
   the "signed usage receipt" names what paid for it; `/v1/verify` shows a
   `paid` check line (receipts minted before enabling payments will show
   unpaid → failed while the flag is on). One tx pays for exactly one
-  call: consumed invoices and txids are refused (`<dataDir>/payments.json`).
+  call: consumed invoices and txids are refused by the stock
+  `LedgerReceiver` — one line per accepted payment in
+  `<dataDir>/payments.jsonl` (the stock `LedgerFile` name and line
+  format, so a Lightweb host reads the same file); a legacy
+  `payments.json` txid list is migrated in on first run.
   `payment.transaction` accepts raw hex **or BEEF** (AtomicBEEF too) —
   BEEF is the right choice: funding parents travel inline, which the
   `verifyScripts` and Teranode Extended Format both want.

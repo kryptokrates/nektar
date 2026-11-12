@@ -25,6 +25,7 @@ import { encodePlaintext, sealEnvelope, envelopeRecord } from '@lightwebinc/bbox
 import { decodeEnvelope } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { parseContent } from '@lightwebinc/bbox-host/codec/content.js'
 import { open as openPlaintext, parsePlaintext } from '@lightwebinc/bbox-host/codec/payment.js'
+import { checkBEEF, readWire, subjectTx, BeefRefusal } from '@lightwebinc/bcommon'
 import { JObject } from '@lightwebinc/bbox-host/codec/jcs.js'
 import { encodeRecord, decodeRecord, validateRecord, KindManifest, MagicV1 } from '@lightwebinc/bfinger-host/dist/record.js'
 import { encodePayload, decodePayload } from '@nektar/bstack'
@@ -144,6 +145,49 @@ const NKT1 = new TextEncoder().encode('nkt1')
     for (const b of built.blobs ?? []) store.set(hex(new Uint8Array(Hash.sha256(Array.from(b)))), b)
     const c = await verifyClosure(built.rootHash, (h) => store.get(hex(h)))
     if (!(c.blobs?.length >= 0)) throw new Error('closure empty')
+  })
+}
+
+// ── 5. wire admission: the stock BEEF guard's verdicts on malformed bytes ────
+{
+  await check('checkBEEF refuses truncated + trailing + empty inputs', () => {
+    // declared counts overrunning the bytes present, trailing garbage and
+    // empty input are the same refusal classes a stock host emits
+    if (checkBEEF(new Uint8Array([1, 2, 3]), 1024) === undefined) throw new Error('truncated admitted')
+    if (checkBEEF(new Uint8Array(0), 1024) === undefined) throw new Error('empty admitted')
+  })
+  await check('readWire rejects the same bytes as BeefRefusal', () => {
+    let threw = false
+    try {
+      readWire(new Uint8Array([9, 9, 9]))
+    } catch (e) {
+      threw = e instanceof BeefRefusal
+    }
+    if (!threw) throw new Error('malformed BEEF not refused as BeefRefusal')
+  })
+  await check('readWire + subjectTx reads a real AtomicBEEF', async () => {
+    // a minimal signed spend → AtomicBEEF → the stock reader returns the
+    // subject with its BUMP/linkage — the path resolveFinger now uses
+    const { Transaction, P2PKH, SatoshisPerKilobyte } = await import('@bsv/sdk')
+    const key = new PrivateKey(11)
+    const addr = key.toPublicKey().toAddress()
+    const { UnlockingScript, Script } = await import('@bsv/sdk')
+    const src = new Transaction()
+    src.addInput({
+      sourceTXID: '00'.repeat(32),
+      sourceOutputIndex: 0,
+      unlockingScript: UnlockingScript.fromASM('OP_1')
+    })
+    src.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: 1000 })
+    const tx = new Transaction()
+    tx.addInput({ sourceTransaction: src, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+    tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: 900 })
+    await tx.fee(new SatoshisPerKilobyte(1))
+    await tx.sign()
+    void Script
+    const w = readWire(new Uint8Array(tx.toAtomicBEEF()))
+    const subj = subjectTx(w)
+    if (subj.id('hex') !== tx.id('hex')) throw new Error('subject mismatch')
   })
 }
 

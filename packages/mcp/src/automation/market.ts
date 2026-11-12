@@ -67,6 +67,9 @@ interface MarketMemory {
   shardManifest: (shard: string) => Promise<{ shardId: string; domains: string[]; offers?: Array<{ kind: string; priceSats?: number }> } | undefined>
   records: (shard: string) => Promise<Array<{ seq: number; level?: number; fragment: { d: Uint8Array } }>>
   marketCandidates?: (shard: string) => Promise<Array<{ seq: number; text: string }>>
+  /** bstore locator of a shard's published pack — becomes the stock refs a
+   *  `delivered` envelope carries so evidence resolves origin-free */
+  packStoreRef?: (shard: string) => { bucket: string; key: string; sha256: string; size: number; endpoint?: string; chirp?: string } | undefined
 }
 
 export interface MarketDeps {
@@ -118,6 +121,22 @@ const DEFAULTS: MarketOptions = {
   approvalTtlMs: 86_400_000
 }
 const pkhOf = (pub: string) => Buffer.from(PublicKey.fromString(pub).toHash() as number[]).toString('hex')
+/** a bstore ObjectRef → stock plaintext ref (digest-pinned locator). https
+ *  only — uhrp/local http gateways can't ride a stock ref; the envelope
+ *  still carries the disclosure fields themselves. */
+const packBoxRef = (r: { sha256: string; size: number; endpoint?: string; bucket: string; key: string }): import('@nektar/bstack').BoxRef | undefined => {
+  if (r.endpoint === undefined || !r.endpoint.startsWith('https://')) return undefined
+  return { url: `${r.endpoint.replace(/\/+$/, '')}/${r.bucket}/${r.key.split('/').map(encodeURIComponent).join('/')}`, sha256: r.sha256, length: r.size }
+}
+/** the stock refs a `delivered` envelope carries: a digest-pinned locator
+ *  for the sold shard's stored pack so the buyer resolves evidence through
+ *  bstore/CHIRP rather than the seller's origin */
+const deliveredPackRefs = (d: MarketDeps, op: Operation): import('@nektar/bstack').BoxRef[] | undefined => {
+  const shard = (op.data as { shard?: string }).shard
+  const r = shard !== undefined ? d.memory.packStoreRef?.(shard) : undefined
+  const ref = r !== undefined ? packBoxRef(r) : undefined
+  return ref !== undefined ? [ref] : undefined
+}
 const CAP = /_cap$|_above_policy$|^domain_outside_policy$/
 const TERMINAL = [
   'expired',
@@ -406,8 +425,8 @@ export class MarketEngine {
     await this.d.store.ingest(source, items, cursor)
   }
 
-  async ingestMessage(fromPub: string, msg: MarketMessage): Promise<void> {
-    const payload = { from: fromPub, msg }
+  async ingestMessage(fromPub: string, msg: MarketMessage, refs?: import('@nektar/bstack').BoxRef[]): Promise<void> {
+    const payload = { from: fromPub, msg, ...(refs !== undefined ? { refs } : {}) }
     const h = digestOf('nektar:market:inbox:1', payload)
     await this.d.store.ingest(`msg:${fromPub}`, [{ messageId: h, artifactHash: h, kind: 'message', payload }], h)
   }
@@ -428,7 +447,7 @@ export class MarketEngine {
         try {
           if (i.kind === 'want') await this.onWant(i.payload as SignedWant)
           else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
-          else await this.onMessage((i.payload as any).from, (i.payload as any).msg)
+          else await this.onMessage((i.payload as any).from, (i.payload as any).msg, (i.payload as any).refs)
           await this.d.store.completeInbox(i.source, i.messageId)
         } catch (e) {
           await this.d.store.failInbox(i.source, i.messageId, (e as Error).message)
@@ -462,7 +481,7 @@ export class MarketEngine {
   private async deliver(i: OutboxItem): Promise<void> {
     if (i.kind === 'publish-want') return await this.d.transport.publishWant(i.payload as SignedWant)
     if (i.kind === 'publish-offer') return await this.d.transport.publishOffer(i.payload as SignedOffer)
-    if (i.kind === 'message') return await this.d.transport.send(i.destination, i.payload as MarketMessage)
+    if (i.kind === 'message') return await this.d.transport.send(i.destination, i.payload as MarketMessage, i.refs)
     throw new Error(`unknown outbox kind ${i.kind}`)
   }
 
@@ -687,7 +706,8 @@ export class MarketEngine {
           actionId: `${op.operationId}:delivered`,
           kind: 'message',
           destination: w.pub,
-          payload: { type: 'delivered', wantId: w.wantId, offerId: op.operationId, txid: r.txid, tx: this.d.txWire?.(r.txid) ?? r.txHex }
+          payload: { type: 'delivered', wantId: w.wantId, offerId: op.operationId, txid: r.txid, tx: this.d.txWire?.(r.txid) ?? r.txHex },
+          ...(deliveredPackRefs(this.d, op) !== undefined ? { refs: deliveredPackRefs(this.d, op) } : {})
         }
       ]
     })
@@ -741,7 +761,7 @@ export class MarketEngine {
     await this.d.store.transition(op.operationId, op.revision, 'collecting', { cause: 'quote_attached', data: { offers } })
   }
 
-  private async onDelivered(from: string, m: Extract<MarketMessage, { type: 'delivered' }>): Promise<void> {
+  private async onDelivered(from: string, m: Extract<MarketMessage, { type: 'delivered' }>, refs?: import('@nektar/bstack').BoxRef[]): Promise<void> {
     const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${m.wantId}`)
     if (!op || op.state !== 'awaiting_disclosure') return
     const sel = op.data.selected as { key: string }
@@ -782,7 +802,7 @@ export class MarketEngine {
       cause: bad ? 'payload_does_not_match_commitment' : 'disclosure_verified',
       data: { result },
       dueHeight: null,
-      evidence: { txid: m.txid, verified: claim.verified, authorVerified: claim.authorVerified, reason: claim.reason, spv: got.spv }
+      evidence: { txid: m.txid, verified: claim.verified, authorVerified: claim.authorVerified, reason: claim.reason, spv: got.spv, ...(refs !== undefined ? { refs } : {}) }
     })
   }
 
@@ -946,10 +966,10 @@ export class MarketEngine {
     await this.d.store.transition(operation.operationId, operation.revision, 'quoted', { cause: 'restored_from_note' })
   }
 
-  private async onMessage(from: string, m: MarketMessage): Promise<void> {
+  private async onMessage(from: string, m: MarketMessage, refs?: import('@nektar/bstack').BoxRef[]): Promise<void> {
     if (m?.type === 'quote') return await this.onQuote(from, m)
     if (m?.type === 'accept') return await this.onAccept(from, m)
-    if (m?.type === 'delivered') return await this.onDelivered(from, m)
+    if (m?.type === 'delivered') return await this.onDelivered(from, m, refs)
     // recovery notes are only ever handled when they came from our own key
     if (m?.type === 'note' && from === this.me) return await this.onNote(m)
     if (m?.type === 'sellerNote' && from === this.me) return await this.onSellerNote(m)

@@ -110,14 +110,17 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
       hdp?: string
       anchorTxid?: string
       proofCommit?: string
+      proofStore?: { endpoint?: string; bucket?: string }
     }>) {
       if (ref.private === true) {
         // private shard: the cite is redacted — when the receipt commits
         // proofCommit and the proof is fetchable, the STARK is RE-RUN here:
         // independently verifiable, not service-attested. (The hdp itself
         // stays unverifiable by design — ZK hides which leaf it was.)
+        // proofStore makes fetchable mean resolvable off-origin: the receipt
+        // carries the bstore endpoint/bucket and chirp/<commit> is the key.
         const atx = ref.anchorTxid ? mem.anchorTx(ref.anchorTxid) : undefined
-        const proof = ref.proofCommit ? mem.getProof(ref.proofCommit) : undefined
+        const proof = ref.proofCommit ? await mem.fetchProof(ref.proofCommit, ref.proofStore) : undefined
         if (proof !== undefined && ref.anchorTxid !== undefined) {
           const rv = await mem.reverifyMembershipBytes(proof, ref.anchorTxid)
           checks.push({
@@ -190,6 +193,7 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
             output: string | number
             publicStatement: string
             proofCommit?: string
+            proofStore?: { endpoint?: string; bucket?: string }
             attestationTxid?: string
             verifierTxid?: string
             circuit?: string
@@ -213,7 +217,7 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
     } else if (v.ok && att.attestationTxid) {
       // anchored commitment: fetch the exact proof bytes the attestation
       // binds (proof store serves /v1/zkproof/<commit>) and re-check
-      const bytes = att.proofCommit ? mem.getProof(att.proofCommit) : undefined
+      const bytes = att.proofCommit ? await mem.fetchProof(att.proofCommit, att.proofStore) : undefined
       if (!bytes) {
         attOk = false
         detail += `; attestationTxid ${att.attestationTxid.slice(0, 16)}… claimed but proof bytes unavailable (proofCommit ${att.proofCommit?.slice(0, 16) ?? 'missing'}…) — cannot re-check the anchored commitment`

@@ -27,8 +27,8 @@ export interface AutomationConfig {
    *  only name public https hosts. */
   localHosts?: boolean
   messages?: {
-    send: (toPub: string, msg: MarketMessage) => Promise<void>
-    collect: () => Promise<Array<{ from: string; msg: MarketMessage }>>
+    send: (toPub: string, msg: MarketMessage, refs?: import('@nektar/bstack').BoxRef[]) => Promise<void>
+    collect: () => Promise<Array<{ from: string; msg: MarketMessage; refs?: import('@nektar/bstack').BoxRef[] }>>
     ack?: () => Promise<void>
   }
   treeSize?: number
@@ -203,7 +203,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
         log(`automation: host back ${h}`)
       }
   }
-  let pendingAcks: Array<{ txid: string; commitment: string; from: string; msg: MarketMessage | undefined; created: number }> = []
+  let pendingAcks: Array<{ txid: string; commitment: string; from: string; msg: MarketMessage | undefined; refs?: import('@nektar/bstack').BoxRef[]; created: number }> = []
   let lastAckSkipped = -1
   const msgs =
     cfg.messages ??
@@ -233,7 +233,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
               throw e
             }
           },
-          collect: async (): Promise<Array<{ from: string; msg: MarketMessage }>> => {
+          collect: async (): Promise<Array<{ from: string; msg: MarketMessage; refs?: import('@nektar/bstack').BoxRef[] }>> => {
             try {
               const tracker = mem.sdkTracker()
               const r = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker })
@@ -243,13 +243,14 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
                 commitment: i.commitment,
                 from: i.from,
                 msg: (i.body as { market?: MarketMessage }).market,
+                refs: i.refs,
                 created: i.created
               }))
               // self-notes restore lost operations — ingest them before any other message in the batch
               const selfNote = (p: { from: string; msg?: MarketMessage }) => p.from === me && (p.msg?.type === 'note' || p.msg?.type === 'sellerNote')
               pendingAcks.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
-              const out: Array<{ from: string; msg: MarketMessage }> = []
-              for (const p of pendingAcks) if (p.msg !== undefined && typeof p.msg === 'object') out.push({ from: p.from, msg: p.msg })
+              const out: Array<{ from: string; msg: MarketMessage; refs?: import('@nektar/bstack').BoxRef[] }> = []
+              for (const p of pendingAcks) if (p.msg !== undefined && typeof p.msg === 'object') out.push({ from: p.from, msg: p.msg, refs: p.refs })
               return out
             } catch (e) {
               log(`automation: box: ${(e as Error).message}`)
@@ -343,7 +344,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
       msgs !== undefined
         ? (async () => {
             try {
-              for (const m of await msgs.collect()) await engine.ingestMessage(m.from, m.msg)
+              for (const m of await msgs.collect()) await engine.ingestMessage(m.from, m.msg, m.refs)
             } catch (e) {
               log(`automation: messages: ${(e as Error).message}`)
             }

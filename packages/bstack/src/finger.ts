@@ -6,9 +6,9 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
-import { mintCarrier, fundingLock, lockFields, unlocker, commitment, CborMap, encode as cborEncode, encodeRefs, type Derivation, type Ref } from '@lightwebinc/bcommon'
+import { mintCarrier, fundingLock, lockFields, unlocker, commitment, CborMap, encode as cborEncode, encodeRefs, bytesEqual, readWire, subjectTx, type Derivation, type Ref } from '@lightwebinc/bcommon'
 import type { FundingOut } from '@nektar/chain'
-import { encodeRecord, validateRecord, KindCreate, KindUpdate, MagicV1, type CommittedRecord } from '@lightwebinc/bfinger-host/dist/record.js'
+import { encodeRecord, validateRecord, KindCreate, KindUpdate, KindSub, KindManifest, MagicV1, type CommittedRecord } from '@lightwebinc/bfinger-host/dist/record.js'
 import { Protocol, KeyIDProfile, KeyIDRecord, profileLockingKey, recordLockingKey } from '@lightwebinc/bfinger-host/dist/keys.js'
 import { Tag, inspectToken } from '@lightwebinc/bfinger-host/dist/token.js'
 import { decodeCarrier } from '@lightwebinc/bfinger-host/dist/carrier.js'
@@ -475,6 +475,9 @@ export async function resolveFinger(p: {
       body: FingerBody
       seq: number
       tokenTxid: string
+      /** the winning record's committed store refs — already decoded by the
+       *  stock codec; empty when the record publishes no stores */
+      refs: Ref[]
       hostsAnswered: string[]
       unreachable: string[]
     }
@@ -487,7 +490,7 @@ export async function resolveFinger(p: {
   const recordKey = recordLockingKey(p.pub)
 
   // candidate: host -> verified {seq, tokenTxid, cHex, body}
-  const byCarrier = new Map<string, { seq: number; tokenTxid: string; body: FingerBody; hosts: string[] }>()
+  const byCarrier = new Map<string, { seq: number; tokenTxid: string; body: FingerBody; refs: Ref[]; hosts: string[] }>()
   for (const a of answers) {
     if ('error' in a) {
       unreachable.push(a.host)
@@ -517,7 +520,7 @@ export async function resolveFinger(p: {
         ? undefined
         : carriers.find((tx) => {
             try {
-              return bytesEq(new Uint8Array(commitment(tx)), cBytes)
+              return bytesEqual(new Uint8Array(commitment(tx)), cBytes)
             } catch {
               return false
             }
@@ -541,7 +544,7 @@ export async function resolveFinger(p: {
     const dec = decodeCarrier(carrier)
     if (typeof dec === 'string') continue
     // §10.4: the record is the one the token commits to (C = carrier txid, hash order)
-    if (!bytesEq(cBytes, new Uint8Array(dec.c))) continue
+    if (!bytesEqual(cBytes, new Uint8Array(dec.c))) continue
     const rec = dec.record
     // §10.5: identity, derivation of both locks
     if (Utils.toHex(Array.from(rec.identityKey)) !== p.pub.toLowerCase()) continue
@@ -562,7 +565,7 @@ export async function resolveFinger(p: {
       if (rec.notBefore !== 0n && t < rec.notBefore) continue
       if (rec.notAfter !== 0n && t > rec.notAfter) continue
     }
-    if (pinned !== undefined && !bytesEq(cBytes, pinnedBytes(pinned))) continue
+    if (pinned !== undefined && !bytesEqual(cBytes, pinnedBytes(pinned))) continue
     const body = mapToBody(rec.body)
     try {
       checkFingerBody(body, { allowHttp: p.allowHttp })
@@ -571,7 +574,7 @@ export async function resolveFinger(p: {
     }
     const cHex = Utils.toHex(Array.from(cBytes))
     const hit = byCarrier.get(cHex)
-    if (hit === undefined) byCarrier.set(cHex, { seq: Number(rec.seq), tokenTxid: token.id('hex'), body, hosts: [a.host] })
+    if (hit === undefined) byCarrier.set(cHex, { seq: Number(rec.seq), tokenTxid: token.id('hex'), body, refs: rec.refs, hosts: [a.host] })
     else hit.hosts.push(a.host)
   }
 
@@ -579,7 +582,43 @@ export async function resolveFinger(p: {
   const winners = [...byCarrier.values()].filter((c) => c.hosts.length >= quorum).sort((x, y) => y.seq - x.seq)
   const win = winners[0]
   if (win === undefined) return undefined
-  return { body: win.body, seq: win.seq, tokenTxid: win.tokenTxid, hostsAnswered: win.hosts, unreachable }
+  return { body: win.body, seq: win.seq, tokenTxid: win.tokenTxid, refs: win.refs, hostsAnswered: win.hosts, unreachable }
+}
+
+/** Walk a committed store ref's `head`: ask `ls_finger` for the carrier under
+ *  `{identityKey, carrier}` (the third stock question class — a carrier by its
+ *  commitment, scoped to the identity that published it). Returns the decoded
+ *  sub-record bodies — kind-5 members carry the object locator, a kind-6
+ *  manifest lists every member. Membership against the ref root is the
+ *  reader's own check: the host only asserts it holds the carrier. */
+export async function resolveStoreMembers(p: {
+  hosts: string[]
+  pub: string
+  /** the refs entry's head — carrier commitment, 64-hex display order */
+  carrier: string
+  tracker: ChainTracker
+  timeoutMs?: number
+}): Promise<Array<{ txid: string; kind: number; body: CborMap }>> {
+  const { answers } = await lookupAll(p.hosts, 'ls_finger', { identityKey: p.pub.toLowerCase(), carrier: p.carrier.toLowerCase() }, { timeoutMs: p.timeoutMs })
+  const out: Array<{ txid: string; kind: number; body: CborMap }> = []
+  const seen = new Set<string>()
+  for (const a of answers) {
+    if ('error' in a) continue
+    for (const o of a.outputs) {
+      const tx = parseBeef(o.beef)
+      if (tx === undefined) continue
+      const d = decodeCarrier(tx)
+      if (typeof d === 'string') continue
+      const rec = d.record
+      if (rec.kind !== KindSub && rec.kind !== KindManifest) continue
+      if (Utils.toHex(Array.from(rec.identityKey)) !== p.pub.toLowerCase()) continue
+      const txid = tx.id('hex')
+      if (seen.has(txid)) continue
+      seen.add(txid)
+      out.push({ txid, kind: rec.kind, body: rec.body })
+    }
+  }
+  return out
 }
 
 /** The locking key a valid token carries. */
@@ -591,8 +630,6 @@ function tokenKeyOf(token: Transaction): string | undefined {
   return undefined
 }
 
-const bytesEq = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((x, i) => x === b[i])
-
 // a pin may be the 32-byte commitment or its hash-order hex
 function pinnedBytes(pin: string): Uint8Array {
   try {
@@ -602,18 +639,18 @@ function pinnedBytes(pin: string): Uint8Array {
   }
 }
 
+/** untrusted host bytes → the subject transaction. readWire is the stock
+ *  bounded walk: BEEF V1/V2/Atomic, every declared count and length held to
+ *  the bytes present (256 KiB default bound), inputs linked to the entries
+ *  holding them and proven tx's BUMPs attached — malformed shapes refuse
+ *  before the SDK parser ever sees them. */
 function parseBeef(beef: number[]): Transaction | undefined {
   try {
-    return Transaction.fromBEEF(beef)
-  } catch {
-    /* */
+    return subjectTx(readWire(new Uint8Array(beef)))
+  } catch (e) {
+    if (process.env.NEKTAR_DEBUG_PARSEBEEF) console.error(`parseBeef refused ${beef.length}B: ${(e as Error).message}`)
+    return undefined
   }
-  try {
-    return Transaction.fromAtomicBEEF(beef)
-  } catch {
-    /* */
-  }
-  return undefined
 }
 
 // ── host screening (SSRF) ──────────────────────────────────────────────────

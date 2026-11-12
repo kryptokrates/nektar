@@ -1448,7 +1448,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       // proofCommit. Prover absent/failed → flagged and stripped — fail-closed.
       const privRefused: any[] = []
       const claimsForGround: any[] = []
-      const proofCommits = new Map<string, string>() // `${shard}:${seq}` → sha256(proof)
+      const proofCommits = new Map<string, { commit: string; store?: { endpoint: string; bucket: string } }>() // `${shard}:${seq}` → proof commit + store locator
       for (const c of args.claims ?? []) {
         const priv = (c.cites ?? []).filter((r: any) => mem.shardPrivate(r.shard))
         if (priv.length === 0) {
@@ -1477,7 +1477,8 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
           }
           // the proof becomes a public artifact: committed in the receipt and
           // fetchable at /v1/proof — a verifier re-runs it, no trust in us.
-          proofCommits.set(`${r.shard}:${r.seq}`, mem.putProof(bytes))
+          const pc = mem.putProof(bytes)
+          proofCommits.set(`${r.shard}:${r.seq}`, { commit: pc, store: mem.proofStoreRef(pc) })
         }
         if (zkok) claimsForGround.push(c)
         else privRefused.push(c)
@@ -1510,7 +1511,12 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         for (const r of c.cites ?? []) {
           refs.push(
             mem.shardPrivate(r.shard)
-              ? { private: true, proofCommit: proofCommits.get(`${r.shard}:${r.seq}`), ...((await mem.fragmentRef(r.shard, r.seq)) ?? { hdp: '' }) }
+              ? {
+                  private: true,
+                  proofCommit: proofCommits.get(`${r.shard}:${r.seq}`)?.commit,
+                  ...(proofCommits.get(`${r.shard}:${r.seq}`)?.store !== undefined ? { proofStore: proofCommits.get(`${r.shard}:${r.seq}`)!.store } : {}),
+                  ...((await mem.fragmentRef(r.shard, r.seq)) ?? { hdp: '' })
+                }
               : r
           )
         }
@@ -1592,7 +1598,13 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         }
         const v = await mem.verifyMembership(r.shard, r.seq, bytes)
         if (!v.ok) throw new Error(`ZK membership proof for private cite failed: ${v.reason}`)
-        refs.push({ private: true, proofCommit: mem.putProof(bytes), ...((await mem.fragmentRef(r.shard, r.seq)) ?? { hdp: '' }) })
+        const pc = mem.putProof(bytes)
+        refs.push({
+          private: true,
+          proofCommit: pc,
+          ...(mem.proofStoreRef(pc) !== undefined ? { proofStore: mem.proofStoreRef(pc) } : {}),
+          ...((await mem.fragmentRef(r.shard, r.seq)) ?? { hdp: '' })
+        })
       }
       let attestation = args.modelAttestation
       if (args.attestInference !== undefined) {
@@ -1651,8 +1663,15 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('exportShard: shard required')
       const pack = await mem.exportShardPack(args.shard)
       // the serve endpoint makes the pack a shareable URL — an invite the
-      // agent can hand to another operator ('importShard from this URL')
-      return { ...pack, packUrl: `${verifyBase()}/v1/pack/${encodeURIComponent(args.shard)}` }
+      // agent can hand to another operator ('importShard from this URL').
+      // The store ref is preferred: it resolves origin-free and re-stores
+      // when the shard changed since the last PUT (the ref pins sha256).
+      const store = await mem.storePack(args.shard, pack).catch(() => undefined)
+      return {
+        ...pack,
+        ...(store !== undefined ? { store } : {}),
+        packUrl: `${verifyBase()}/v1/pack/${encodeURIComponent(args.shard)}`
+      }
     }
     case 'importShard': {
       let pack = args?.pack
@@ -1687,10 +1706,10 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       // runs the evidence verifier; redacted bundles report which checks the
       // withheld question/disclosure fields make unavailable.
       const { objectStoreFromEnv } = await import('./objectstore.js')
+      const { fetchObjectByRef } = await import('./chirp.js')
       const { verifyTradeEvidence } = await import('./automation/evidence.js')
       const st = mem.objectStore ?? mem.automation?.objectStore ?? objectStoreFromEnv()
-      if (st === undefined) throw new Error('evidence: object store is not configured (NEKTAR_BSTORE_*)')
-      let ref = args?.ref as { bucket?: string; key: string; sha256: string; size?: number } | undefined
+      let ref = args?.ref as { bucket?: string; key?: string; sha256?: string; size?: number; chirp?: string; endpoint?: string } | undefined
       if (ref === undefined && typeof args?.operationId === 'string') {
         const au = mem.automation
         if (!au) throw new Error('evidence: operationId lookup needs automation (NEKTAR_AUTOMATION=1)')
@@ -1698,7 +1717,10 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         if (ref === undefined) throw new Error(`evidence: no stored evidence for ${args.operationId}`)
       }
       if (ref === undefined) throw new Error('evidence: give {ref} or {operationId}')
-      const bytes = await st.getVerified(ref)
+      // the shared store-ref chain: chirp signed → chirp unsigned → keyed
+      // signed → keyed unsigned — evidence resolves with no credentials when
+      // the seller's gateway serves public reads
+      const bytes = await fetchObjectByRef(st, ref)
       return verifyTradeEvidence(JSON.parse(new TextDecoder().decode(bytes)))
     }
     case 'doctor': {

@@ -43,8 +43,7 @@ import {
   type Checkpoint
 } from '@nektar/log'
 import { Metrics } from './metrics.js'
-import { storeChirp, fetchChirp, fetchChirpUnsigned } from './chirp.js'
-import { getObjectUnsigned } from './objectstore.js'
+import { storeChirp, fetchObjectByRef } from './chirp.js'
 
 const DELTA_PREFIX = 'delta:'
 
@@ -187,6 +186,9 @@ export interface PersistedMemoryState {
   /** object-store refs of packs this instance PUT to bstore — keyed by shard;
    *  lets /.well-known/nektar name the store location across restarts */
   packStores?: Record<string, import('./objectstore.js').ObjectRef>
+  /** proofCommit → the bstore endpoint/bucket the proof bytes were PUT under
+   *  `chirp/<commit>` — lets a verifier resolve proofs origin-free */
+  proofStores?: Record<string, { endpoint: string; bucket: string }>
   /** the bfinger packs store's members + manifest seq — survives a restart
    *  that boots without lanes so a later lanes-up run keeps committing. */
   packsStore?: { members?: import('./packstore.js').PackMember[]; manifestSeq?: number }
@@ -1250,7 +1252,12 @@ export class NektarMemory {
     // digest; /v1/proof stays the compatibility fallback.
     if (this.opts.objectStore !== undefined) {
       const st = this.opts.objectStore
-      void storeChirp(st, bytes).catch(() => this.metrics.inc('nektar_proof_store_errors_total'))
+      // record the locator synchronously — the blob key IS chirp/<commit>,
+      // so any holder of {endpoint,bucket}+digest fetches and self-verifies
+      this.proofStores.set(commit, { endpoint: st.endpoint, bucket: st.bucket })
+      void storeChirp(st, bytes)
+        .then(() => this.persistState())
+        .catch(() => this.metrics.inc('nektar_proof_store_errors_total'))
     }
     return commit
   }
@@ -1264,6 +1271,41 @@ export class NektarMemory {
     } catch {
       return undefined
     }
+  }
+  /** the bstore locator a proof was PUT under (endpoint+bucket — the object
+   *  key is derivable: `chirp/<commit>`); receipts carry it in proofStore so
+   *  a remote verifier needs no origin call. */
+  proofStoreRef(commitHex: string): { endpoint: string; bucket: string } | undefined {
+    return this.proofStores.get(commitHex)
+  }
+  /** proof bytes by commitment — local dir first, then the store locator a
+   *  receipt carried (`chirp/<commit>` unsigned, then signed when this
+   *  instance has a store configured). Digest-checked: wrong bytes never
+   *  verify as the committed proof. */
+  async fetchProof(commitHex: string, store?: { endpoint?: string; bucket?: string }): Promise<Uint8Array | undefined> {
+    const local = this.getProof(commitHex)
+    if (local !== undefined) return local
+    const key = `chirp/${commitHex}`
+    const endpoint = store?.endpoint ?? this.proofStores.get(commitHex)?.endpoint ?? this.opts.objectStore?.endpoint
+    const bucket = store?.bucket ?? this.proofStores.get(commitHex)?.bucket ?? this.opts.objectStore?.bucket
+    if (endpoint !== undefined && bucket !== undefined) {
+      try {
+        const { getObjectUnsigned } = await import('./objectstore.js')
+        const bytes = await getObjectUnsigned(endpoint, bucket, key)
+        return toHex(sha256(bytes)) === commitHex ? bytes : undefined
+      } catch {
+        /* fall through to the signed path */
+      }
+    }
+    if (this.opts.objectStore !== undefined) {
+      try {
+        const bytes = await this.opts.objectStore.get(key, bucket)
+        return toHex(sha256(bytes)) === commitHex ? bytes : undefined
+      } catch {
+        return undefined
+      }
+    }
+    return undefined
   }
 
   /** re-verify a committed private-cite proof WITHOUT consuming anything:
@@ -1766,6 +1808,7 @@ export class NektarMemory {
   /** bstore refs of packs this instance PUT (describeShard) — persisted in
    *  state so /.well-known/nektar keeps naming them across restarts */
   private packStores = new Map<string, import('./objectstore.js').ObjectRef>()
+  private proofStores = new Map<string, { endpoint: string; bucket: string }>()
   private savedPacksStore: { members?: import('./packstore.js').PackMember[]; manifestSeq?: number } | undefined
   /** is this shard declared private? */
   shardPrivate(shard: string): boolean {
@@ -1928,43 +1971,60 @@ export class NektarMemory {
     if (this.opts.objectStore !== undefined) {
       try {
         const pack = await this.exportShardPack(shard)
-        const bytes = utf8(JSON.stringify(pack))
-        const sha = toHex(sha256(bytes))
-        const ref = await this.opts.objectStore.put(`packs/${manifest.network}/${this.shardId(shard)}/${sha}.json`, bytes, 'application/json')
-        // the same bytes land content-addressed: chirp://<root> resolves the
-        // whole closure from any store holding chirp/<hash> objects, so an
-        // importer is not bound to this operator's bucket layout
-        try {
-          ref.chirp = await storeChirp(this.opts.objectStore, bytes)
-          ref.endpoint = this.opts.objectStore.endpoint
-        } catch {
-          // chirp publish is best-effort — the keyed ref alone still resolves
-        }
-        this.packStores.set(shard, ref)
-        this.persistState()
-        try {
-          // the same pack commits as a bfinger store member (kind-5 carrier +
-          // re-issued manifest) — the identity record's refs then resolve the
-          // pack set with no /.well-known lookup. Best-effort like the PUT.
-          await this.opts.packsStore?.add({
-            shard,
-            shardId: this.shardId(shard),
-            network: manifest.network ?? 'regtest',
-            sha256: sha,
-            size: bytes.length,
-            ...(ref.chirp !== undefined ? { chirp: ref.chirp } : {}),
-            ...(ref.endpoint !== undefined ? { endpoint: ref.endpoint } : {}),
-            ...(ref.bucket !== undefined ? { bucket: ref.bucket } : {}),
-            ...(ref.key !== undefined ? { key: ref.key } : {})
-          })
-        } catch {
-          this.metrics.inc('nektar_pack_store_errors_total')
-        }
+        await this.storePack(shard, pack, manifest.network ?? 'regtest')
       } catch {
         this.metrics.inc('nektar_pack_store_errors_total')
       }
     }
     return { manifest, seq: r.seq }
+  }
+  /** PUT a shard pack to bstore when its bytes differ from the stored copy —
+   *  the stored ref pins sha256, so a record change must re-store or remote
+   *  importers keep resolving the stale pack. Also commits the fresh pack as
+   *  a bfinger store member (kind-5 + re-issued manifest) so the identity
+   *  record's refs resolve the current set with no /.well-known lookup.
+   *  Best-effort: a store failure never fails the caller. Returns the
+   *  (possibly pre-existing) ref. */
+  async storePack(shard: string, pack: ShardPack, network?: string): Promise<import('./objectstore.js').ObjectRef | undefined> {
+    const st = this.opts.objectStore
+    if (st === undefined) return undefined
+    const bytes = utf8(JSON.stringify(pack))
+    const sha = toHex(sha256(bytes))
+    const existing = this.packStores.get(shard)
+    if (existing?.sha256 === sha) return existing
+    try {
+      const ref = await st.put(`packs/${network ?? process.env.NEKTAR_NETWORK ?? 'regtest'}/${this.shardId(shard)}/${sha}.json`, bytes, 'application/json')
+      // the same bytes land content-addressed: chirp://<root> resolves the
+      // whole closure from any store holding chirp/<hash> objects, so an
+      // importer is not bound to this operator's bucket layout
+      try {
+        ref.chirp = await storeChirp(st, bytes)
+        ref.endpoint = st.endpoint
+      } catch {
+        // chirp publish is best-effort — the keyed ref alone still resolves
+      }
+      this.packStores.set(shard, ref)
+      this.persistState()
+      try {
+        await this.opts.packsStore?.add({
+          shard,
+          shardId: this.shardId(shard),
+          network: network ?? 'regtest',
+          sha256: sha,
+          size: bytes.length,
+          ...(ref.chirp !== undefined ? { chirp: ref.chirp } : {}),
+          ...(ref.endpoint !== undefined ? { endpoint: ref.endpoint } : {}),
+          ...(ref.bucket !== undefined ? { bucket: ref.bucket } : {}),
+          ...(ref.key !== undefined ? { key: ref.key } : {})
+        })
+      } catch {
+        this.metrics.inc('nektar_pack_store_errors_total')
+      }
+      return ref
+    } catch {
+      this.metrics.inc('nektar_pack_store_errors_total')
+      return existing
+    }
   }
   /** attach the bfinger packs store post-construction (the automation
    *  runtime builds it once lanes exist); restores members persisted by a
@@ -1993,37 +2053,8 @@ export class NektarMemory {
    *  (no credentials needed on a public-read gateway); the keyed object is
    *  the compatibility fallback, signed then unsigned. */
   async fetchStoredPack(ref: { bucket?: string; key?: string; sha256?: string; size?: number; chirp?: string; endpoint?: string }): Promise<ShardPack> {
-    const st = this.opts.objectStore
-    const bucket = ref.bucket ?? st?.bucket
-    const asPack = (b: Uint8Array): ShardPack => JSON.parse(new TextDecoder().decode(b)) as ShardPack
-    if (ref.chirp !== undefined && bucket !== undefined) {
-      if (st !== undefined) {
-        try {
-          return asPack(await fetchChirp(st, ref.chirp, bucket))
-        } catch {
-          this.metrics.inc('nektar_pack_fetch_chirp_fallback_total')
-        }
-      }
-      if (ref.endpoint !== undefined) {
-        try {
-          return asPack(await fetchChirpUnsigned(ref.endpoint, bucket, ref.chirp))
-        } catch {
-          this.metrics.inc('nektar_pack_fetch_chirp_fallback_total')
-        }
-      }
-    }
-    if (ref.key !== undefined && ref.sha256 !== undefined) {
-      if (st !== undefined) {
-        return asPack(await st.getVerified({ bucket: ref.bucket, key: ref.key, sha256: ref.sha256, size: ref.size }))
-      }
-      if (ref.endpoint !== undefined && bucket !== undefined) {
-        const bytes = await getObjectUnsigned(ref.endpoint, bucket, ref.key)
-        if (toHex(sha256(bytes)) !== ref.sha256) throw new Error(`objectstore: sha256 mismatch for ${ref.key} (unsigned read)`)
-        if (ref.size !== undefined && bytes.length !== ref.size) throw new Error(`objectstore: size mismatch for ${ref.key} (unsigned read)`)
-        return asPack(bytes)
-      }
-    }
-    throw new Error('object store is not configured (NEKTAR_BSTORE_*) and the ref has no unsigned path')
+    const bytes = await fetchObjectByRef(this.opts.objectStore, ref, () => this.metrics.inc('nektar_pack_fetch_chirp_fallback_total'))
+    return JSON.parse(new TextDecoder().decode(bytes)) as ShardPack
   }
   /** the committed hash + anchor of a fragment — for redacted (private) cites
    *  that carry the proof value without naming the shard. */
@@ -2224,6 +2255,7 @@ export class NektarMemory {
       importedBundles: Object.fromEntries(this.importedBundles),
       bond,
       packStores: Object.fromEntries(this.packStores),
+      proofStores: Object.fromEntries(this.proofStores),
       packsStore: this.opts.packsStore?.snapshot() ?? this.savedPacksStore
     })
   }
@@ -2256,6 +2288,7 @@ export class NektarMemory {
     for (const [k, b] of Object.entries(s.importedBundles ?? {})) this.importedBundles.set(k, b)
     for (const [shard, f] of Object.entries(s.flags ?? {})) this.flags.set(shard, f)
     for (const [shard, r] of Object.entries(s.packStores ?? {})) this.packStores.set(shard, r)
+    for (const [commit, r] of Object.entries(s.proofStores ?? {})) this.proofStores.set(commit, r)
     this.savedPacksStore = s.packsStore
     if (s.bond) this.bonds.restore(s.bond)
   }

@@ -229,18 +229,31 @@ envelope or record format:
   pack is a kind-5 sub-record (its carrier commitment is the member); a
   kind-6 manifest lists members once count > 1 and `refs.head` points at it.
   A reader holding only the operator pubkey resolves the whole store through
-  `ls_finger` — no `/.well-known` or origin dependency.
+  `ls_finger` — `resolveFinger` surfaces the record's decoded `refs`, and
+  `resolveStoreMembers` walks `{identityKey, carrier: head}` (the third stock
+  question class) to the member records — no `/.well-known` or origin
+  dependency.
+
+Object reads share one resolver (`fetchObjectByRef`): CHIRP signed → CHIRP
+unsigned → keyed signed → keyed unsigned. `delivered` envelopes carry the
+pack's plaintext `refs[]`; receipts carry `proofStore` locators so ZK proof
+bytes resolve via `chirp/<commit>` with no origin call. Residual refs gaps:
+stock `refs[]` admit https/uhrp only, so a local http gateway can't ride an
+envelope ref (the message fields still carry everything).
 
 **Payments** use two stock rails, each where it fits. x402-style tool/quote
-invoices settle through `decidePayment`-shaped checks plus the stock
-`TakenPayments`/`spentOutpoints` ledger — a txid replay AND a conflicting
-input spend are both refused. Deal payments keep the NektarAnchor sale
-escrow covenant: it is the application primitive (timeout refund, disclosure
-binding) that no stock rail replaces, so envelope `Payment`/`checkPayment`
-is not bolted on as a parallel stream. `LookupFront` stays unadopted —
-nektar is a client of priced lookups, not the front operator. `keyed` is
-Go-only at the vendored upstream versions with no TS twin, so fragment keys
-remain the local HKDF scheme (divergence recorded in the plan).
+invoices settle through the stock `LedgerReceiver` — `payments.jsonl` (the
+stock `LedgerFile` name and line format) in the data dir, claimed atomically:
+a txid replay AND a conflicting input spend are both refused. Deal payments
+keep the NektarAnchor sale escrow covenant: it is the application primitive
+(timeout refund, disclosure binding) that no stock rail replaces, so envelope
+`Payment`/`checkPayment` is not bolted on as a parallel stream. `PaymentGate`/
+`decidePayment`/`LedgerReceiver`-as-envelope-payee stay unadopted — they gate
+a stock host engine's paid question classes, and nektar runs no stock host;
+`LookupFront` stays unadopted for the same reason (client, not front
+operator). `keyed` is Go-only at the vendored upstream versions with no TS
+twin, so fragment keys remain the local HKDF scheme (divergence recorded in
+the plan).
 
 Residual central dependencies are infrastructure, not application servers:
 the broadcaster, a WoC/chaintracks tip source, the regtest node, and the

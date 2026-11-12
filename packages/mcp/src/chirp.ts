@@ -63,12 +63,60 @@ async function resolveChirp(url: string, fetch: (hash: Uint8Array) => Promise<Ui
 }
 
 /** chirp:// resolution through a signed store client. */
-export async function fetchChirp(store: S3ObjectStore, url: string, bucket?: string): Promise<Uint8Array> {
+async function fetchChirp(store: S3ObjectStore, url: string, bucket?: string): Promise<Uint8Array> {
   return await resolveChirp(url, signedFetch(store, bucket))
 }
 
 /** chirp:// resolution through unsigned GETs — the importer needs no
  *  credentials when the gateway serves the bucket publicly. */
-export async function fetchChirpUnsigned(endpoint: string, bucket: string, url: string): Promise<Uint8Array> {
+async function fetchChirpUnsigned(endpoint: string, bucket: string, url: string): Promise<Uint8Array> {
   return await resolveChirp(url, unsignedFetch(endpoint, bucket))
+}
+
+/** The one object-ref resolution order every fetcher shares — packs,
+ *  evidence bundles, receipts: a chirp:// ref resolves through the signed
+ *  store first, then unsigned against the advertised endpoint; the keyed
+ *  object is the compatibility fallback, signed then unsigned. Digest and
+ *  size are checked wherever the ref pins them, so a wrong byte stream
+ *  fails the read rather than the caller's parse. `st` may be undefined —
+ *  unsigned paths alone are enough when the gateway serves public reads. */
+export async function fetchObjectByRef(
+  st: S3ObjectStore | undefined,
+  ref: { bucket?: string; key?: string; sha256?: string; size?: number; chirp?: string; endpoint?: string },
+  onFallback?: (path: string) => void
+): Promise<Uint8Array> {
+  const bucket = ref.bucket ?? st?.bucket
+  if (ref.chirp !== undefined && bucket !== undefined) {
+    if (st !== undefined) {
+      try {
+        return await fetchChirp(st, ref.chirp, bucket)
+      } catch {
+        onFallback?.('chirp-signed')
+      }
+    }
+    if (ref.endpoint !== undefined) {
+      try {
+        return await fetchChirpUnsigned(ref.endpoint, bucket, ref.chirp)
+      } catch {
+        onFallback?.('chirp-unsigned')
+      }
+    }
+  }
+  if (ref.key !== undefined && ref.sha256 !== undefined) {
+    if (st !== undefined) {
+      try {
+        return await st.getVerified({ bucket: ref.bucket, key: ref.key, sha256: ref.sha256, size: ref.size })
+      } catch (e) {
+        if (ref.endpoint === undefined || bucket === undefined) throw e
+        onFallback?.('keyed-signed')
+      }
+    }
+    if (ref.endpoint !== undefined && bucket !== undefined) {
+      const bytes = await getObjectUnsigned(ref.endpoint, bucket, ref.key)
+      if (toHex(sha256(bytes)) !== ref.sha256) throw new Error(`objectstore: sha256 mismatch for ${ref.key} (unsigned read)`)
+      if (ref.size !== undefined && bytes.length !== ref.size) throw new Error(`objectstore: size mismatch for ${ref.key} (unsigned read)`)
+      return bytes
+    }
+  }
+  throw new Error('object store is not configured (NEKTAR_BSTORE_*) and the ref has no unsigned path')
 }

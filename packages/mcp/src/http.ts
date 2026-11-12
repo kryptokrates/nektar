@@ -239,6 +239,7 @@ export function createHttpApi(
           url.pathname === '/.well-known/x402' ||
           url.pathname === '/.well-known/nektar' ||
           url.pathname.startsWith('/v1/pack/') ||
+          url.pathname.startsWith('/v1/proof/') ||
           url.pathname.startsWith('/v1/zkproof/') ||
           url.pathname === '/v1/broadcaster-callback' ||
           url.pathname === '/v1/arc-callback'

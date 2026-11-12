@@ -1,9 +1,17 @@
-import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
+import { PrivateKey, Transaction, P2PKH, MerklePath, UnlockingScript } from '@bsv/sdk'
 import { mintTree } from '../src/tree.js'
 import type { FundingOut } from '@nektar/chain'
 
 export function fakeParent(key: PrivateKey, sats = 1_000_000): Transaction {
   const p = new Transaction()
+  // a transaction must have ≥1 input to be a valid BEEF member (stock
+  // checkBEEF refuses zero-input txs) — coinbase-shaped: null prevout,
+  // no sourceTransaction needed since nothing verifies its spend here
+  p.addInput({
+    sourceTXID: '00'.repeat(32),
+    sourceOutputIndex: 0xffffffff,
+    unlockingScript: UnlockingScript.fromASM('OP_1')
+  })
   p.addOutput({ satoshis: sats, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
   return p
 }

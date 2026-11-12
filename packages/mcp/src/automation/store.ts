@@ -46,6 +46,9 @@ export interface OutboxItem {
   kind: string
   destination: string
   payload: unknown
+  /** stock plaintext refs (url/sha256/length[/key]) riding an envelope
+   *  message — digest-pinned locators for external evidence */
+  refs?: Array<{ url: string; sha256: string; length: number; key?: string }>
   attempts: number
 }
 export interface BudgetAmounts {
@@ -148,11 +151,13 @@ export class AutomationStore {
       t.string('kind').notNullable()
       t.string('destination').notNullable()
       t.text('payload').notNullable()
+      t.text('refs')
       t.string('status').notNullable().index()
       t.integer('attempts').notNullable()
       t.bigInteger('next_at').notNullable()
       t.text('last_error')
     })
+    if (!(await this.kx.schema.hasColumn(T.outbox, 'refs'))) await this.kx.schema.alterTable(T.outbox, (t) => t.text('refs'))
     await mk(T.policies, (t) => {
       t.string('policy_hash').primary()
       t.string('policy_id').notNullable()
@@ -474,6 +479,7 @@ export class AutomationStore {
         kind: o.kind,
         destination: o.destination,
         payload: canonicalJson(o.payload),
+        refs: o.refs !== undefined ? canonicalJson(o.refs) : null,
         status: 'pending',
         attempts: 0,
         next_at: this.now()
@@ -489,6 +495,7 @@ export class AutomationStore {
       kind: r.kind,
       destination: r.destination,
       payload: JSON.parse(r.payload),
+      ...(r.refs != null ? { refs: JSON.parse(r.refs) } : {}),
       attempts: r.attempts
     }))
   }

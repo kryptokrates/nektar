@@ -9,6 +9,7 @@
  *  no /.well-known or operator origin needed. */
 
 import { CborMap, rootOfBytes, type Pair, type Ref, type Value } from '@lightwebinc/bcommon'
+import { KindSub, KindManifest } from '@lightwebinc/bfinger-host/dist/record.js'
 import { Utils } from '@bsv/sdk'
 
 const PACKS_STORE_NAME = 'nektar-packs'
@@ -32,7 +33,7 @@ export interface PacksStoreDeps {
    *  operator identity; resolves to the carrier's commitment + txid. `id` is
    *  the journal idempotency slot — member index for members, a version
    *  counter for manifests (store records are seq-1 create-shaped). */
-  publish: (kind: 5 | 6, id: number, body: CborMap) => Promise<{ commitment: string; txid: string }>
+  publish: (kind: typeof KindSub | typeof KindManifest, id: number, body: CborMap) => Promise<{ commitment: string; txid: string }>
 }
 
 const bytes = (hex: string): Uint8Array => new Uint8Array(Utils.toArray(hex, 'hex'))
@@ -103,7 +104,7 @@ export class PacksStore {
    *  Content-addressed — a pack already stored (same sha256) is a no-op. */
   async add(m: Omit<PackMember, 'c'>): Promise<{ commitment: string; txid?: string } | undefined> {
     if (this.members.some((x) => x.sha256 === m.sha256)) return undefined
-    const sub = await this.deps.publish(5, this.members.length + 1, new CborMap(memberEntries({ ...m, c: '' }, false)))
+    const sub = await this.deps.publish(KindSub, this.members.length + 1, new CborMap(memberEntries({ ...m, c: '' }, false)))
     this.members.push({ ...m, c: sub.commitment })
     let txid: string | undefined
     if (this.members.length > 1) {
@@ -112,7 +113,7 @@ export class PacksStore {
         { key: 'name', val: PACKS_STORE_NAME },
         { key: 'members', val: this.members.map((x): Value => new CborMap(memberEntries(x, true))) }
       ])
-      const man = await this.deps.publish(6, ++this.manifestSeq, manifest)
+      const man = await this.deps.publish(KindManifest, ++this.manifestSeq, manifest)
       this.manifestC = man.commitment
       txid = man.txid
     }

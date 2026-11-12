@@ -53,6 +53,10 @@ export async function attestInference(mem: NektarMemory, args: { input?: number[
   // publish the proof bytes so /v1/zkproof/<commit> can serve them —
   // the attestation binds these exact bytes, not a claim about them
   mem.putProof(unlockBytes)
+  // the store locator rides the attestation: chirp/<commit> resolves the
+  // bytes off any public-read gateway — no origin call needed to re-verify
+  const ps = mem.proofStoreRef(att.proofCommit)
+  if (ps !== undefined) att.proofStore = ps
 
   // dispute/showcase rail (§18 "if necessary"): consensus runs the verifier
   if (args.onchain) {

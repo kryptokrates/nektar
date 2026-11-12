@@ -5,9 +5,9 @@
 // enough). Settlement is publicly auditable from the tx alone: (pays payTo ≥
 // amount) ∧ (carries `nektarpay:<invoiceId>`) — the receipt commits the txid.
 import { Transaction, PrivateKey, PublicKey, Signature, P2PKH, Beef } from '@bsv/sdk'
-import { TakenPayments, spentOutpoints } from '@lightwebinc/bcommon/host'
+import { LedgerReceiver, spentOutpoints } from '@lightwebinc/bcommon/host'
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { utf8, sha256, toHex } from '@nektar/core'
 import type { NektarMemory } from './memory.js'
@@ -116,46 +116,28 @@ export const verifyQuoteSig = (q: {
   }
 }
 
-/** consumed payments — the stock payee claim model (TakenPayments): a txid
- *  replays as 'replayed', and a second tx spending a coin an accepted payment
- *  spent refuses as 'conflict' — both verify, only one can ever settle. Lines
- *  persist as {txid, inputs} JSONL in the data dir (the stock LedgerFile
- *  name); the pre-ledger payments.json txid list still loads at first use. */
-const payFile = (): string => join(process.env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar'), 'payments.jsonl')
-const legacyPayFile = (): string => join(process.env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar'), 'payments.json')
-let taken = new TakenPayments()
-let takenLoaded = false
-const loadTaken = (): void => {
-  if (takenLoaded) return
-  takenLoaded = true
-  try {
-    if (existsSync(payFile())) {
-      for (const line of readFileSync(payFile(), 'utf8').split('\n')) {
-        if (line.trim() === '') continue
-        try {
-          const e = JSON.parse(line) as { txid?: string; inputs?: string[] }
-          if (typeof e.txid === 'string') taken.take({ txid: e.txid, inputs: e.inputs ?? [], decision: 'fast' })
-        } catch {
-          /* a crash-cut tail line is skipped like a stock reader skips it */
-        }
-      }
+/** consumed payments — the stock payee engine (LedgerReceiver): payments.jsonl
+ *  in the data dir, one stock ledger line each, claimed atomically — a txid
+ *  replays as 'replayed', a second tx spending a coin an accepted payment
+ *  spent refuses as 'conflict'. The pre-ledger payments.json txid list is
+ *  migrated into the ledger at first use. */
+const payDir = (): string => process.env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar')
+const legacyPayFile = (): string => join(payDir(), 'payments.json')
+let receiver: LedgerReceiver | undefined
+let legacyMigrated = false
+const getReceiver = (): LedgerReceiver => {
+  receiver ??= new LedgerReceiver(payDir())
+  if (!legacyMigrated) {
+    legacyMigrated = true
+    try {
+      if (existsSync(legacyPayFile()))
+        for (const t of (JSON.parse(readFileSync(legacyPayFile(), 'utf8')).consumed ?? []) as string[])
+          receiver.claim({ txid: String(t), beef: [], outputIndex: 0, satoshis: 0, derivationPrefix: '', derivationSuffix: '', senderIdentityKey: '', class: 'x402', inputs: [], decision: 'fast' })
+    } catch {
+      /* legacy file unreadable — txid-only protection survives in memory */
     }
-  } catch {
-    /* fresh or unreadable — start empty */
   }
-  try {
-    if (existsSync(legacyPayFile()))
-      for (const t of (JSON.parse(readFileSync(legacyPayFile(), 'utf8')).consumed ?? []) as string[]) taken.take({ txid: String(t), inputs: [], decision: 'fast' })
-  } catch {
-    /* legacy file unreadable — txid-only protection survives in the new file */
-  }
-}
-const persistTaken = (txid: string, inputs: string[]): void => {
-  try {
-    appendFileSync(payFile(), JSON.stringify({ txid, inputs, at: Math.floor(Date.now() / 1000) }) + '\n')
-  } catch {
-    /* data dir may be absent on read-only tests */
-  }
+  return receiver
 }
 
 /** issue an invoice for a paid tool call — signed so the quote travels as an
@@ -226,7 +208,7 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
     invoices.delete(inv.invoiceId)
     throw new Error('invoice expired — call payQuote for a fresh one')
   }
-  loadTaken()
+  const recv = getReceiver()
   // raw hex OR BEEF: BEEF carries the funding parents — needed by script
   // validation and supplied to Teranode as Extended
   // Format. Bare legacy hex is fine when the network already knows the
@@ -271,21 +253,32 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   // coin an accepted payment already spent — two verifying txs sharing a coin
   // can never both settle
   const inputs = spentOutpoints(tx)
-  const claim = taken.refusal({ txid, inputs })
+  const claim = recv.refusal({ txid, inputs })
   if (claim === 'replayed') throw new Error(`payment txid ${txid.slice(0, 16)}… already consumed — one tx pays for one call`)
   if (claim === 'conflict') throw new Error(`payment tx spends a coin an accepted payment already spent — conflict, only one can settle`)
   const r = await mem.broadcastTx(tx)
   if (r.status !== 'success') throw new Error(`payment broadcast failed: ${r.description}`)
-  taken.take({ txid, inputs, decision: 'fast' })
-  persistTaken(txid, inputs)
+  recv.claim({
+    txid,
+    beef: Array.from(Uint8Array.from(tx.toAtomicBEEF())),
+    outputIndex: 0,
+    satoshis: inv.amount,
+    derivationPrefix: '',
+    derivationSuffix: '',
+    senderIdentityKey: '',
+    class: 'x402',
+    inputs,
+    decision: 'fast'
+  })
   invoices.delete(inv.invoiceId)
   return { txid, amountSats: inv.amount, payTo: inv.payTo, invoiceId: inv.invoiceId }
 }
 
 export const _testReset = (): void => {
   invoices.clear()
-  taken = new TakenPayments()
-  takenLoaded = false
+  receiver?.close()
+  receiver = undefined
+  legacyMigrated = false
   opAddr = undefined
   opKey = undefined
 }

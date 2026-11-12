@@ -47,6 +47,9 @@ export interface InferenceAttestation {
   output: string // the argmax the proof asserts
   publicStatement: string // 0x-fr — the proof's single public input
   proofCommit?: string // sha256 hex of the unlocking-script bytes (proof + statement as pushed)
+  /** bstore endpoint/bucket the proof bytes sit under `chirp/<proofCommit>` —
+   *  a verifier resolves them off any public-read gateway, origin-free */
+  proofStore?: { endpoint: string; bucket: string }
   attestationTxid?: string // ~300B OP_RETURN tx anchoring sha256(proof) — the normal path
   commitment?: string // the anchored commitment (= proofCommit when bound this way)
   verifierTxid?: string // on-chain spend that ran the verifier under consensus — the dispute/showcase rail

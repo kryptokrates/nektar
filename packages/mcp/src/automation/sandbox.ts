@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { cpSync, existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 
@@ -93,6 +93,10 @@ export async function evaluatePatch (spec: SandboxSpec, patch: PatchProposal, ba
   const isolation = { backend: backend.name, network: 'none' as const, image: spec.image }
   const work = mkdtempSync(join(tmpdir(), 'nektar-sandbox-'))
   try {
+    // mkdtempSync creates 0700 — the container runs with --cap-drop ALL, so its
+    // uid-0 lacks CAP_DAC_OVERRIDE and cannot traverse a runner-owned 0700 dir
+    // on a real dockerd (Docker Desktop maps perms, which is why it hid locally)
+    chmodSync(work, 0o755)
     cpSync(spec.fixtureDir, work, { recursive: true })
     const root = realpathSync(work)
     const baseline = await backend.run(root, undefined, spec.testCommand, spec.image, spec.timeoutMs)

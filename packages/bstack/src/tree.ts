@@ -34,14 +34,20 @@ export async function mintTree(p: {
 // A broadcaster BUMP can prove several transactions of one block at once, and
 // marks a sibling leaf as a txid when it is another of the client's own
 // transactions; hosts admit a carrier only when the proof is the funding
-// tree's path alone, with its sibling an ordinary hash.
+// tree's path alone, with its sibling an ordinary hash. An odd-count block
+// duplicates the last leaf at the next offset — extract() re-flags that copy
+// because it finds the txid by hash, so the flag must be restored to the
+// offset the source path flagged.
 const ownPath = (tree: Transaction): Transaction => {
   if (tree.merklePath === undefined) return tree
   const txid = tree.id('hex')
+  const own = tree.merklePath.path[0]?.find((e) => e.txid === true && e.hash === txid)?.offset ?? tree.merklePath.indexOf(txid)
   const mp = tree.merklePath.extract([txid])
   tree.merklePath = new MerklePath(
     mp.blockHeight,
-    mp.path.map((level, i) => (i !== 0 ? level : level.map((e) => (e.hash === txid || e.txid !== true ? e : { offset: e.offset, hash: e.hash }))))
+    mp.path.map((level, i) =>
+      i !== 0 ? level : level.map((e) => (e.hash === txid && e.offset === own ? { offset: e.offset, hash: e.hash, txid: true } : { offset: e.offset, hash: e.hash }))
+    )
   )
   return tree
 }

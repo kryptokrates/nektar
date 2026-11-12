@@ -219,4 +219,49 @@ for (const mk of [
       await done()
     }
   })
+
+  // regression: an odd-count block duplicates the last leaf — the tree's own
+  // txid legitimately appears at both the real offset and the offset after.
+  // MerklePath.extract() resolves the txid by hash and re-flags that copy, so
+  // take() used to emit carriers hosts refuse ("the proof holds more than the
+  // funding tree's path"). The flag must stay on the source path's offset.
+  test(`ownPath (${mk.name}): self-paired last leaf keeps a single txid flag`, async () => {
+    const key = PrivateKey.fromRandom()
+    const t2 = await mintTree({ key, funding: fund(key), n: 4, satsPerOutput: 1000 })
+    const txid = t2.id('hex')
+    // 3-leaf block: tree at offset 2, duplicated to offset 3 by tree pairing.
+    // n0 covers leaves 0..1, n1 = h(t2,t2); root = h256(n1, n0).
+    const t0 = '44'.repeat(32),
+      t1 = '55'.repeat(32)
+    const n0 = h256(t1, t0)
+    const root = h256(h256(txid, txid), n0)
+    const stored = new MerklePath(1, [
+      [
+        { offset: 0, hash: t0, txid: true },
+        { offset: 1, hash: t1 },
+        { offset: 2, hash: txid, txid: true },
+        { offset: 3, hash: txid }
+      ],
+      [
+        { offset: 0, hash: n0 },
+        { offset: 1, hash: h256(txid, txid) }
+      ]
+    ])
+    const { l, done } = await mk.ledger()
+    try {
+      await l.add(t2, 4)
+      await l.markProven(txid, stored)
+      const got = await l.take()
+      assert.ok(got !== undefined)
+      const mp = got.tree.merklePath
+      assert.ok(mp !== undefined)
+      assert.equal(mp.computeRoot(txid), root)
+      const flagged = mp.path[0].filter((e) => e.txid === true)
+      assert.equal(flagged.length, 1, 'extract re-flags the duplicate leaf — hosts refuse it')
+      assert.equal(flagged[0].offset, 2)
+      assert.equal(minimalPath(mp, txid), true)
+    } finally {
+      await done()
+    }
+  })
 }

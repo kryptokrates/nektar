@@ -81,7 +81,8 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
     call: (tool, args) => callTool(rt.mem, tool, args, { ops: rt.ops }),
     opts: {
       ...(rt.network === 'main' ? { saleMaxFee: 500 } : {}),
-      ...(process.env.NEKTAR_OFFER_TTL_BLOCKS ? { offerTtlBlocks: Number(process.env.NEKTAR_OFFER_TTL_BLOCKS) } : {})
+      ...(process.env.NEKTAR_OFFER_TTL_BLOCKS ? { offerTtlBlocks: Number(process.env.NEKTAR_OFFER_TTL_BLOCKS) } : {}),
+      ...(process.env.NEKTAR_REFUND_BLOCKS ? { refundBlocks: Number(process.env.NEKTAR_REFUND_BLOCKS) } : {})
     },
     log: (line) =>
       process.stderr.write(`nektar: ${line}

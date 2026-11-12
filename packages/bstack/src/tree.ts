@@ -1,5 +1,5 @@
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
-import { fundingLock, feeFor, type Derivation, type Fees } from '@lightwebinc/bcommon'
+import { fundingLock, feeFor, type Derivation, type Fees, type SigningWallet } from '@lightwebinc/bcommon'
 import type { FundingOut } from '@nektar/chain'
 import type { Knex } from 'knex'
 
@@ -10,6 +10,7 @@ export const MAX_TREE_OUTPUTS = 1023
 
 export async function mintTree(p: {
   key: PrivateKey
+  wallet?: SigningWallet
   funding: FundingOut
   n: number
   satsPerOutput?: number
@@ -20,7 +21,7 @@ export async function mintTree(p: {
   const sats = p.satsPerOutput ?? 1
   if (!Number.isInteger(n) || n < 1 || n > MAX_TREE_OUTPUTS) throw new Error(`mintTree: n must be 1..${MAX_TREE_OUTPUTS}`)
   if (!Number.isSafeInteger(sats) || sats < 1) throw new Error('mintTree: bad satsPerOutput')
-  const w = new ProtoWallet(key)
+  const w = p.wallet ?? new ProtoWallet(key)
   const tx = new Transaction()
   tx.addInput({ sourceTransaction: funding.tx, sourceOutputIndex: funding.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
   const lock = p.lock ?? (await fundingLock(w, ORIGINATOR, DERIVATION, FUNDING_TAG))
@@ -193,7 +194,7 @@ export class KnexTreeLedger implements TreeLedger {
   }
   async take(kind = 'market', expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined> {
     await this.ensure()
-    for (let attempt = 0; attempt < 5; ) {
+    for (let attempt = 0; attempt < 5;) {
       const r = await this.kx.transaction(async (trx) => {
         const row = await trx('bstack_tree_outputs as o')
           .join('bstack_trees as t', 'o.txid', 't.txid')

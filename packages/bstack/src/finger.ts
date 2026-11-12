@@ -190,7 +190,14 @@ export class KnexFingerState implements FingerState {
   }
   async set(s: FingerStateRow): Promise<void> {
     await this.ensure()
-    const row = { seq: s.seq, tokenTxid: s.tokenTxid, tokenBeef: JSON.stringify(s.tokenBeef), bodyHash: s.bodyHash, refsHash: s.refsHash ?? null, witness: s.witness ?? null }
+    const row = {
+      seq: s.seq,
+      tokenTxid: s.tokenTxid,
+      tokenBeef: JSON.stringify(s.tokenBeef),
+      bodyHash: s.bodyHash,
+      refsHash: s.refsHash ?? null,
+      witness: s.witness ?? null
+    }
     if ((await this.kx('bstack_finger_state').count('id as n').first())?.n === 0) {
       await this.kx('bstack_finger_state').insert(row)
     } else {
@@ -333,8 +340,7 @@ export async function publishFinger(p: {
       if (typeof dec === 'string') throw new Error(`finger journal: bad stored carrier ${dec}`)
       // a carrier minted under a rotated identity replays forever but can
       // never evaluate — the seq must be re-minted, not re-served
-      if (carrierFundingLockHex(chit.beef) !== (await fingerFundingLock(p.key)).toHex())
-        throw new Error('finger carrier minted under a different identity')
+      if (carrierFundingLockHex(chit.beef) !== (await fingerFundingLock(p.key)).toHex()) throw new Error('finger carrier minted under a different identity')
       carrierBeef = chit.beef
       carrierTxid = chit.txid
       record = dec.record

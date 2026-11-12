@@ -94,7 +94,7 @@ test('ledger: a stale tree minted under another identity is skipped, not handed 
     const slot = await l.take('market', expectHex)
     assert.ok(slot !== undefined, 'the correctly-keyed tree still serves')
     assert.equal(slot.tree.id('hex'), good.id('hex'))
-    assert.equal(await l.take('market', expectHex) !== undefined, true, 'second good slot')
+    assert.equal((await l.take('market', expectHex)) !== undefined, true, 'second good slot')
     assert.equal(await l.take('market', expectHex), undefined, 'stale slots consumed, not served')
     if (l instanceof KnexTreeLedger) await l['kx'].destroy()
   }

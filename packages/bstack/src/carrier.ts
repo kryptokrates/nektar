@@ -7,7 +7,8 @@ import {
   decodeFunding,
   decodeStrictPushDrop,
   readerLockingKey,
-  type Fees
+  type Fees,
+  type SigningWallet
 } from '@lightwebinc/bcommon'
 import { anchoredTree, DERIVATION, FUNDING_TAG, ORIGINATOR } from './tree.js'
 
@@ -27,17 +28,18 @@ const provenParent = async (p: Transaction, tracker: ChainTracker): Promise<bool
 
 export async function buildCarrier(p: {
   key: PrivateKey
+  wallet?: SigningWallet
   payload: Uint8Array
   slot: { tree: Transaction; vout: number }
 }): Promise<{ carrier: Transaction; beef: number[] }> {
   const { key, payload, slot } = p
   if (!anchoredTree(slot.tree)) throw new Error('buildCarrier: funding tree is not proven (no merklePath or anchored ancestry)')
-  const carrier = await mintCarrier(new ProtoWallet(key), ORIGINATOR, DERIVATION, payload, slot.tree, slot.vout)
+  const carrier = await mintCarrier(p.wallet ?? new ProtoWallet(key), ORIGINATOR, DERIVATION, payload, slot.tree, slot.vout)
   return { carrier, beef: carrier.toAtomicBEEF() }
 }
 
-export async function buildSweep(p: { key: PrivateKey; tree: Transaction; vouts: number[]; fees: Fees }): Promise<Transaction> {
-  return await bSweep(new ProtoWallet(p.key), ORIGINATOR, DERIVATION, FUNDING_TAG, p.tree, p.vouts, p.fees)
+export async function buildSweep(p: { key: PrivateKey; wallet?: SigningWallet; tree: Transaction; vouts: number[]; fees: Fees }): Promise<Transaction> {
+  return await bSweep(p.wallet ?? new ProtoWallet(p.key), ORIGINATOR, DERIVATION, FUNDING_TAG, p.tree, p.vouts, p.fees)
 }
 
 export type CarrierCheck =

@@ -89,7 +89,8 @@ test('HTTP API: NEKTAR_HTTP_TOKEN gates every route except /v1/health', async (t
       // leaks); 404 here means automation off, never 401
       assert.equal((await fetch(`${base}/v1/automation/health`)).status, 404, 'automation health stays public ({pass} only)')
       assert.equal((await fetch(`${base}/v1/automation/preflight`)).status, 401, 'the full preflight report stays behind the token')
-      assert.equal((await fetch(`${base}/v1/proof/m/0`, { headers: { authorization: 'Bearer wrong' } })).status, 401)
+      // a wrong bearer is not a valid bearer — on a gated route
+      assert.equal((await fetch(`${base}/v1/tools`, { headers: { authorization: 'Bearer wrong' } })).status, 401)
     } finally {
       srv.close()
     }

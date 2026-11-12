@@ -305,7 +305,25 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     reserve.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
     txStore.get(txid)?.outputs[vout]?.satoshis ??
     memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
-  const broadcaster = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), valueOf, { unlimited: true })
+  // D2 hard daily cap: default 10_000 sats/day of fees on regtest too —
+  // 'unlimited' is an explicit opt-out for soak/stress runs, never the
+  // default, because an unattended agent must always have a provable guard.
+  // NEKTAR_DAILY_CAP_SATS is the plan's hard cap; NEKTAR_MAX_SPEND_SATS_PER_DAY
+  // (the live env) sets it too — the smaller of the two wins.
+  const caps = [process.env.NEKTAR_DAILY_CAP_SATS, process.env.NEKTAR_MAX_SPEND_SATS_PER_DAY].filter((x) => x !== undefined)
+  // opt-out only when every set value agrees — a stray numeric cap keeps the
+  // guard on (mixed signals never silently un-guard the spend path)
+  const unlimited = caps.length > 0 && caps.every((x) => x === 'unlimited')
+  const maxPerDay = unlimited
+    ? Number.MAX_SAFE_INTEGER
+    : Math.min(...caps.filter((x) => x !== 'unlimited').map((x) => Number(x)), 10_000)
+  const broadcaster = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), valueOf, {
+    unlimited,
+    maxPerDay,
+    maxFeePerTx: Number(process.env.NEKTAR_MAX_FEE_SATS_PER_TX ?? 1_000),
+    minIntervalMs: Number(process.env.NEKTAR_MIN_BROADCAST_INTERVAL_MS ?? 0),
+    ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
+  })
   const auth = 'Basic ' + Buffer.from(`${rc.rpcUser}:${rc.rpcPass}`).toString('base64')
   const rpc = async (method: string, ...params: unknown[]): Promise<any> => {
     const r = await fetch(rc.rpcUrl, {
@@ -420,6 +438,11 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   let busy = false
   const firstSeen = new Map<string, number>()
   const abandoned = new Set<string>()
+  // proof scans are gated on the tip advancing — a proof cannot exist without
+  // a new block, so a static tip makes every merkle_proof fetch a guaranteed
+  // miss. First tick (proofScanTip=0) always scans: restart recovery must
+  // pick up proofs mined while the instance was down.
+  let proofScanTip = 0
   const tick = async () => {
     if (busy) return
     busy = true
@@ -430,7 +453,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
       if (waiting.length && cfg.autoMine) await mineOne()
       const tip = Math.max(lastMined, await tracker.currentHeight())
       let attached = 0
-      for (const { shard, txid } of waiting) {
+      for (const { shard, txid } of tip > proofScanTip ? waiting : []) {
         const res = await fetch(`${rc.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(10_000) }).catch(
           () => null
         )
@@ -453,6 +476,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
           attached++
         }
       }
+      if (waiting.length && tip > proofScanTip) proofScanTip = tip
       if (waiting.length) process.stderr.write(`nektar confirmer: waiting=${waiting.length} attached=${attached} tip=${tip}\n`)
       persistKeys()
     } catch (e) {
@@ -816,7 +840,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     process.stderr.write(`nektar ${net}: waiting for funding — send a few sats to ${fundAddress}\n`)
     const deadline = Date.now() + Number(process.env.NEKTAR_WAIT_FUNDING_MS ?? 30 * 60_000)
     while (reserve.utxos.length === 0 && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 15_000))
+      await new Promise((r) => setTimeout(r, Number(process.env.NEKTAR_FUND_POLL_MS ?? 15_000)))
       for (const txid of (process.env.NEKTAR_FUND_TXIDS ?? '')
         .split(',')
         .map((s) => s.trim())
@@ -1010,9 +1034,21 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       await ops.refreshFunding?.().catch(() => {})
     }
   )
-  const watchTimer = setInterval(() => {
-    void watcher.tick().catch(() => {})
-  }, 60_000)
+  let watching = false
+  const watchOnce = () => {
+    if (watching) return
+    watching = true
+    void watcher
+      .tick()
+      .catch(() => {})
+      .finally(() => {
+        watching = false
+      })
+  }
+  // event-driven primary: a pushed broadcaster status may settle a watched
+  // tx now — the interval below is only the sweep ceiling for missed pushes
+  mem.events.on('broadcasterStatus', watchOnce)
+  const watchTimer = setInterval(watchOnce, Number(process.env.NEKTAR_TX_WATCH_MS ?? 60_000))
   watchTimer.unref()
   return {
     mem,
@@ -1020,6 +1056,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     ops,
     close: async () => {
       stream?.close()
+      mem.events.off('broadcasterStatus', watchOnce)
       clearInterval(timer)
       clearInterval(beatTimer)
       clearInterval(watchTimer)

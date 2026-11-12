@@ -1102,13 +1102,31 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
   try {
     b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir })
     s = await mkagent('seller', { hosts: [h1.url], chain, logs, dir })
+    process.stderr.write('[Q] agents up\n')
     await sellerize(s, 200)
+    process.stderr.write('[Q] sellerized\n')
     await drive([b.rt, s.rt], chain, 12)
+    process.stderr.write('[Q] drove\n')
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    for (let i = 0; i < 80 && (await saleOps(s))[0]?.state !== 'quoted'; i++) {
+      if (i % 10 === 0) process.stderr.write(`[Q] r${i} saleState=${(await saleOps(s))[0]?.state} buyerState=${(await buyerOp(b))?.state}\n`)
+      clock += 500
+      await Promise.all([b.rt.cycle(), s.rt.cycle()])
+      await chain.mine(1)
+    }
+    assert.equal((await saleOps(s))[0]?.state, 'quoted', 'no quote | ' + logs.slice(-20).join(' | '))
     const script = (await escrowScriptFor(s, b.pub))!
     const sab = sabotageEscrowBroadcast(b, chain, script, true)
-    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'uncertain', 80), 'never went uncertain | ' + logs.slice(-20).join(' | '))
+    // the rejected push can reconcile uncertain → funding_failed inside one
+    // round — a once-per-round sampler legitimately never observes 'uncertain',
+    // so accept either state here; the events below prove the path was taken
+    assert.ok(
+      await until([b.rt], chain, async () => {
+        const st = (await buyerOp(b))?.state
+        return st === 'uncertain' || st === 'funding_failed'
+      }, 80),
+      'never went uncertain | ' + logs.slice(-20).join(' | ')
+    )
     const txid = sab.txid() ?? ((await buyerOp(b))!.data.pendingEscrow as { utxo: { txid: string } }).utxo.txid
     assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 40), 'not funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!

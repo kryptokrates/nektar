@@ -42,6 +42,26 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
+  // unattended mode is honored ONLY behind a valid conformance token —
+  // it implies the strict gate so a red preflight refuses to start
+  const unattended = /^(1|true|yes)$/i.test(process.env.NEKTAR_UNATTENDED ?? '')
+  const strict = unattended || /^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION_STRICT ?? '')
+  // the transport knows the broadcast endpoint — an HTTP answer proves the
+  // socket where a txState 'unknown' cannot
+  const broadcasterProbe = async (): Promise<boolean> => {
+    try {
+      if (rt.network === 'regtest') {
+        const url = process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx'
+        await fetch(url, { method: 'POST', body: '', signal: AbortSignal.timeout(3_000) })
+        return true // any HTTP answer = endpoint up
+      }
+      const base = process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade.gorillapool.io'
+      await fetch(`${base}/tx/${'00'.repeat(32)}`, { signal: AbortSignal.timeout(5_000) })
+      return true
+    } catch {
+      return false
+    }
+  }
   rt.mem.automation = await openAutomation(rt.mem, {
     network: rt.network,
     dataDir: process.env.NEKTAR_DATA_DIR ?? '.nektar',
@@ -49,6 +69,11 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
     localHosts: process.env.NEKTAR_MARKET_LOCAL_HOSTS === '1',
     boxOffice: process.env.NEKTAR_BBOX_OFFICE ?? undefined,
     logStream: process.env.NEKTAR_LOG_STREAM ?? undefined,
+    strict,
+    unattended,
+    broadcasterProbe,
+    publishFinger: /^(1|true|yes)$/i.test(process.env.NEKTAR_BFINGER_PUBLISH ?? ''),
+    watchdogMs: process.env.NEKTAR_WATCHDOG_MS ? Number(process.env.NEKTAR_WATCHDOG_MS) : undefined,
     intervalMs: Number(process.env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 1000),
     // chains without a status push (polled broadcasters) mark
     // funding trees proven only here — let ops tune the cadence

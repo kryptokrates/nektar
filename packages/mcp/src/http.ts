@@ -109,6 +109,18 @@ export const OPENAPI = {
         responses: { 402: { description: 'PaymentRequired invoice' }, 404: { description: 'payments disabled' } }
       }
     },
+    '/v1/automation/health': {
+      get: {
+        summary: 'automation preflight verdict — public surface is {pass} only; the full report sits behind the bearer token at /v1/automation/preflight',
+        responses: { 200: { description: '{pass: boolean}' }, 404: { description: 'automation off' } }
+      }
+    },
+    '/v1/automation/preflight': {
+      get: {
+        summary: 'full preflight report (token-gated — names hosts, reserves, policy state)',
+        responses: { 200: { description: '{pass, at, checks[]}' }, 404: { description: 'automation off' } }
+      }
+    },
     '/v1/wallet': {
       get: {
         summary: 'fee wallet: address, balance, spend caps, runway (main only)',
@@ -234,6 +246,7 @@ export function createHttpApi(
         const tok = process.env.NEKTAR_HTTP_TOKEN
         const publicPath =
           url.pathname === '/v1/health' ||
+          url.pathname === '/v1/automation/health' ||
           url.pathname === '/v1/verify' ||
           url.pathname === '/v1/badge' ||
           url.pathname === '/.well-known/x402' ||
@@ -431,6 +444,19 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
 </script>
 </body></html>`
             return send(200, html, 'text/html; charset=utf-8')
+          }
+          // public surface: {pass} ONLY — reserves, hosts and policy details
+          // never leave the unauthenticated path (preflight's full report is
+          // the token-gated route below)
+          if (req.method === 'GET' && url.pathname === '/v1/automation/health') {
+            const au = mem.automation
+            if (!au) return send(404, { error: 'automation not enabled' })
+            return send(200, { pass: au.health().pass })
+          }
+          if (req.method === 'GET' && url.pathname === '/v1/automation/preflight') {
+            const au = mem.automation
+            if (!au) return send(404, { error: 'automation not enabled' })
+            return send(200, await au.preflight())
           }
           if (req.method === 'GET' && url.pathname === '/v1/automation/state') {
             const au = mem.automation

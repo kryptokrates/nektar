@@ -99,6 +99,13 @@ export interface MarketDeps {
   /** this agent's blogs deal-journal stream id; signed into wants/offers so
    *  the counterparty (and anyone holding the deal) can follow the journal */
   logStream?: string
+  /** operator stop flag — consulted at every new-deal and new-escrow entry
+   *  point (fail closed). In-flight deals are never gated: refunds and
+   *  settlements keep running so the stop can't strand money. */
+  killed?: () => boolean
+  /** watchdog flag — every configured host currently unreachable. New deals
+   *  and new escrows pause while deaf; in-flight deals continue. */
+  deaf?: () => boolean
   now?: () => number
   opts?: Partial<MarketOptions>
 }
@@ -138,6 +145,33 @@ const deliveredPackRefs = (d: MarketDeps, op: Operation): import('@nektar/bstack
   return ref !== undefined ? [ref] : undefined
 }
 const CAP = /_cap$|_above_policy$|^domain_outside_policy$/
+/** D7 — the stuck-deal rule: no FSM state is unbounded. Every nonterminal
+ *  state declares a maxAge (measured against the op's last transition —
+ *  activity refreshes it) and a forced exit: abort (nothing on-chain can be
+ *  in flight), refund (escrow exists — reclaim it), or escalate:human
+ *  ('uncertain' — a broadcast may have escaped; only a person can close it).
+ *  Terminal states need no entry; 'escalated'/'uncertain' already ARE the
+ *  human exit — their bound is a re-assert, not a transition. */
+export type StuckExit = 'abort' | 'refund' | 'escalate:human'
+export const STATE_LIMITS: Record<string, { maxAgeMs: number; exit: StuckExit }> = {
+  // buyer
+  published: { maxAgeMs: 60_000, exit: 'abort' },
+  collecting: { maxAgeMs: 86_400_000, exit: 'abort' },
+  selected: { maxAgeMs: 15 * 60_000, exit: 'abort' },
+  escalated: { maxAgeMs: 7 * 86_400_000, exit: 'escalate:human' },
+  funding: { maxAgeMs: 30 * 60_000, exit: 'escalate:human' },
+  awaiting_disclosure: { maxAgeMs: 6 * 3600_000, exit: 'refund' },
+  refunding: { maxAgeMs: 15 * 60_000, exit: 'escalate:human' },
+  uncertain: { maxAgeMs: 86_400_000, exit: 'escalate:human' },
+  // seller
+  preparing: { maxAgeMs: 10 * 60_000, exit: 'abort' },
+  quoted: { maxAgeMs: 86_400_000, exit: 'abort' },
+  completing: { maxAgeMs: 30 * 60_000, exit: 'escalate:human' },
+  completion_submitted: { maxAgeMs: 3 * 86_400_000, exit: 'escalate:human' },
+  // observer
+  watching: { maxAgeMs: 90 * 86_400_000, exit: 'escalate:human' },
+  seizing: { maxAgeMs: 30 * 60_000, exit: 'escalate:human' }
+}
 const TERMINAL = [
   'expired',
   'denied',
@@ -227,6 +261,7 @@ export class MarketEngine {
 
   // ── owner surface ───────────────────────────────────────────────────────
   async enableSeller(policyHash: string): Promise<void> {
+    if (this.d.killed?.()) throw new Error('killed: operator stop flag is set — new deals blocked')
     const p = await this.d.store.activePolicy(policyHash)
     if (!p || !p.roles.includes('seller') || p.agentPub !== this.me || p.network !== this.d.network)
       throw new Error('enableSeller: no active seller policy for this agent and network')
@@ -267,6 +302,8 @@ export class MarketEngine {
     input: { domains: string[]; question?: string; maxSats: number; wantId?: string },
     policyHash: string
   ): Promise<{ wantId: string; operationId: string }> {
+    if (this.d.killed?.()) throw new Error('killed: operator stop flag is set — new deals blocked')
+    if (this.d.deaf?.()) throw new Error('deaf: no market hosts reachable — not starting a deal we cannot run')
     return this.run(async () => {
       const p = await this.d.store.activePolicy(policyHash)
       if (!p || !p.roles.includes('buyer') || p.agentPub !== this.me || p.network !== this.d.network)
@@ -339,6 +376,7 @@ export class MarketEngine {
     },
     policyHash: string
   ): Promise<{ operationId: string; deadline: number }> {
+    if (this.d.killed?.()) throw new Error('killed: operator stop flag is set — new watches blocked')
     return this.run(async () => {
       if (!(await this.d.store.activePolicy(policyHash))) throw new Error('watchBond: no active policy')
       // a handed-over bond resolves without touching any indexer; the wire
@@ -445,7 +483,12 @@ export class MarketEngine {
       inbox.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
       for (const i of inbox) {
         try {
-          if (i.kind === 'want') await this.onWant(i.payload as SignedWant)
+          // new-deal gates leave the item pending WITHOUT spending an
+          // attempt — a host flap must not dead-letter wants
+          if (i.kind === 'want') {
+            if (this.d.killed?.() || this.d.deaf?.()) continue
+            await this.onWant(i.payload as SignedWant)
+          }
           else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
           else {
             const p = i.payload as { from: string; msg: MarketMessage; refs?: BoxRef[] }
@@ -476,7 +519,12 @@ export class MarketEngine {
         await this.deliver(item)
         await this.d.store.ackOutbox(item.actionId)
       } catch (e) {
-        await this.d.store.retryOutbox(item.actionId, (e as Error).message)
+        const msg = (e as Error).message
+        // resource starvation (a funding-tree slot being empty) is not a
+        // delivery fault — defer without consuming attempts; unblockOutbox
+        // wakes it the moment a topup proof frees a slot
+        if (/funding slot/.test(msg)) await this.d.store.deferOutbox(item.actionId, msg)
+        else await this.d.store.retryOutbox(item.actionId, msg)
       }
     }
   }
@@ -490,6 +538,10 @@ export class MarketEngine {
 
   // ── seller ──────────────────────────────────────────────────────────────
   private async onWant(sw: SignedWant): Promise<void> {
+    // new-deal gates run BEFORE the want is consumed — throwing keeps the
+    // inbox item pending so the want is retried when the gate re-opens
+    if (this.d.killed?.()) throw new Error('killed: operator stop flag is set')
+    if (this.d.deaf?.()) throw new Error('deaf: no market hosts reachable')
     const sp = await this.sellerPolicy()
     if (!sp || !sw?.want || !verifyWant(sw.want, sw.sig, { now: this.now() })) return
     const w = sw.want
@@ -799,7 +851,19 @@ export class MarketEngine {
     } catch {
       /* opaque payload */
     }
-    const result = { mode: claim.mode, verified: claim.verified, authorVerified: claim.authorVerified, valueHex: claim.valueHex, text, disclosureTxid: m.txid }
+    // D4 — purchased content is UNTRUSTED counterparty data: the taint tag is
+    // minted here at the verification boundary and must survive every consumer
+    // surface (deals tool, importRecord). Content under this tag is data,
+    // never instructions — the hostile-payload invariant is zero sats moved.
+    const result = {
+      mode: claim.mode,
+      verified: claim.verified,
+      authorVerified: claim.authorVerified,
+      valueHex: claim.valueHex,
+      text,
+      taint: 'untrusted-purchased-content',
+      disclosureTxid: m.txid
+    }
     const bad = chosen.commitment ? claim.verified !== true : false
     await this.d.store.transition(op.operationId, op.revision, bad ? 'disputed' : 'disclosure_verified', {
       cause: bad ? 'payload_does_not_match_commitment' : 'disclosure_verified',
@@ -1046,6 +1110,9 @@ export class MarketEngine {
   }
 
   private async fund(op: Operation, p: AutomationPolicy): Promise<void> {
+    // a new escrow is a new spend — paused while stopped or deaf, retried on
+    // the next tick (the op stays 'selected'/'escalated', it does not fail)
+    if (this.d.killed?.() || this.d.deaf?.()) return
     const sel = op.data.selected as { key: string }
     const s = (op.data.offers as Record<string, StoredOffer>)[sel.key]
     const q = s.so.offer.offer as any
@@ -1356,7 +1423,62 @@ export class MarketEngine {
     }
   }
 
+  /** D7 forced exit — an op in `state` longer than its declared maxAge leaves
+   *  by the state's declared route. `updatedAt` is the state-entry clock:
+   *  same-state activity (an offer recording, a retry note) bumps it, so
+   *  only a truly silent state times out. */
+  private async stuckExit(op: Operation, lim: { maxAgeMs: number; exit: StuckExit }): Promise<void> {
+    if (lim.exit === 'abort') {
+      // abort-eligible states never have a broadcast in flight — release any
+      // reservation and leave by the terminal each state maps to
+      if (op.data.escrowAction !== undefined) await this.d.store.releaseBudget(op.data.escrowAction as string)
+      const to = op.state === 'preparing' ? 'preparation_failed' : op.state === 'collecting' ? 'expired' : 'canceled'
+      await this.d.store.transition(op.operationId, op.revision, to, {
+        cause: 'stuck_timeout',
+        lastError: `state '${op.state}' exceeded its ${Math.round(lim.maxAgeMs / 1000)}s bound`,
+        dueAt: null,
+        dueHeight: null
+      })
+      return
+    }
+    if (lim.exit === 'refund') {
+      if (op.data.escrow !== undefined && op.data.utxo !== undefined) return await this.refund(op)
+      // money never reached the escrow — abort is honest, 'refunded' is not
+      if (op.data.escrowAction !== undefined) await this.d.store.releaseBudget(op.data.escrowAction as string)
+      await this.d.store.transition(op.operationId, op.revision, 'canceled', { cause: 'stuck_timeout_no_escrow', dueHeight: null })
+      return
+    }
+    // escalate:human — 'uncertain'/'escalated' already sit at this exit with a
+    // pending approval; re-asserting would only spam events. Anything else
+    // goes there now (a broadcast may have escaped — only a person closes it)
+    if (op.state === 'uncertain' || op.state === 'escalated') return
+    await this.escalate(
+      op,
+      'stuck_state_timeout',
+      digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'stuck-exit', state: op.state }),
+      0,
+      { state: op.state, ageMs: this.now() - op.updatedAt },
+      'uncertain'
+    )
+  }
+
+  /** D5's assertion surface: every nonterminal state's declared bound, and
+   *  which ops currently violate theirs (post-tick this should be empty —
+   *  an op past maxAge has already been pushed through its declared exit). */
+  async dealStateAudit(): Promise<{ limits: Record<string, { maxAgeMs: number; exit: StuckExit }>; violations: Array<{ operationId: string; state: string; ageMs: number }> }> {
+    const violations: Array<{ operationId: string; state: string; ageMs: number }> = []
+    for (const op of await this.d.store.operations({ notStates: TERMINAL })) {
+      const lim = STATE_LIMITS[op.state]
+      if (lim === undefined) violations.push({ operationId: op.operationId, state: op.state, ageMs: this.now() - op.updatedAt })
+      else if (lim.exit !== 'escalate:human' && this.now() - op.updatedAt > lim.maxAgeMs)
+        violations.push({ operationId: op.operationId, state: op.state, ageMs: this.now() - op.updatedAt })
+    }
+    return { limits: { ...STATE_LIMITS }, violations }
+  }
+
   private async advance(op: Operation, height: number): Promise<void> {
+    const lim = STATE_LIMITS[op.state]
+    if (lim !== undefined && this.now() - op.updatedAt > lim.maxAgeMs) return await this.stuckExit(op, lim)
     if (op.role === 'buyer') {
       if (op.state === 'collecting' && op.dueAt !== undefined && op.dueAt <= this.now()) return await this.select(op, height)
       if (op.state === 'selected' || op.state === 'escalated') {

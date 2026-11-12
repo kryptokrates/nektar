@@ -109,15 +109,22 @@ async function stackRpc(cfg: RegtestConfig, method: string, ...params: unknown[]
   return j.result
 }
 
-/** cheap liveness probe — the gate behind skipUnlessStack */
-export async function stackUp(cfg: RegtestConfig = stackCfgFromEnv() ?? ({} as RegtestConfig)): Promise<boolean> {
+/** cheap liveness probe — the gate behind skipUnlessStack. `probe` bounds
+ *  the check for callers where a down stack is a skip, not a failure
+ *  (the `pnpm -r test` entry — it must not stall on 3×15s RPC timeouts). */
+export async function stackUp(
+  cfg: RegtestConfig = stackCfgFromEnv() ?? ({} as RegtestConfig),
+  probe?: { attempts?: number; timeoutMs?: number }
+): Promise<boolean> {
   if (cfg.rpcUrl === undefined) return false
-  for (let i = 0; i < 3; i++) {
+  const attempts = probe?.attempts ?? 3
+  const timeoutMs = probe?.timeoutMs ?? 15_000
+  for (let i = 0; i < attempts; i++) {
     try {
-      await stackRpc(cfg, 'getblockchaininfo')
+      await stackRpc(cfg, 'getblockchaininfo', { __timeoutMs: timeoutMs })
       return true
     } catch {
-      await new Promise((r) => setTimeout(r, 500 * (i + 1)))
+      if (i + 1 < attempts) await new Promise((r) => setTimeout(r, Math.min(500 * (i + 1), timeoutMs)))
     }
   }
   return false
@@ -315,33 +322,32 @@ export class StackChain implements ChainTracker, Broadcaster {
       await new Promise((r) => setTimeout(r, 100))
     }
     // asset index catch-up: /merkle_proof only answers once the block's
-    // subtree is sealed — block_legacy serving the generated hash is not
-    // enough (subtree sealing lags it), so fetch the block, take its coinbase
-    // txid, and poll /merkle_proof/{coinbase}: sealed for one member means
-    // sealed for the whole block.
+    // subtree is sealed. Wait briefly for it (a sealed tip means proofs are
+    // pushable now), but bound the wait — under suite load the asset index
+    // lags ~30s and stalling every mine on it costs more than the async
+    // watcher's poll tick. Beyond the bound the push path carries proofs.
     const auth = 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
     {
+      const deadline = Date.now() + 3_000
       let coinbase: string | undefined
-      for (let i = 0; i < 120 && coinbase === undefined; i++) {
-        const r = await fetch(`${this.cfg.assetUrl}/block_legacy/${tip}`, { signal: AbortSignal.timeout(4_000) }).catch(() => null)
+      while (coinbase === undefined && Date.now() < deadline) {
+        const r = await fetch(`${this.cfg.assetUrl}/block_legacy/${tip}`, { signal: AbortSignal.timeout(1_500) }).catch(() => null)
         if (r?.ok === true) {
           coinbase = parseLegacyBlock(new Uint8Array(await r.arrayBuffer())).txids[0]
-        } else await new Promise((r) => setTimeout(r, 250))
+        } else await new Promise((r) => setTimeout(r, 200))
       }
-      if (coinbase !== undefined) {
-        for (let i = 0; i < 120; i++) {
-          const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${coinbase}`, {
-            headers: { Authorization: auth },
-            signal: AbortSignal.timeout(4_000)
-          }).catch(() => null)
-          if (r?.ok === true) break
-          await new Promise((r) => setTimeout(r, 250))
-        }
+      while (coinbase !== undefined && Date.now() < deadline) {
+        const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${coinbase}`, {
+          headers: { Authorization: auth },
+          signal: AbortSignal.timeout(1_500)
+        }).catch(() => null)
+        if (r?.ok === true) break
+        await new Promise((r) => setTimeout(r, 200))
       }
     }
     // the subtree is sealed by here — push watched proofs now rather than
     // leaving consumers to the next poll tick (mine(); confirm() determinism)
-    for (let i = 0; i < 10 && this.watched.size > 0; i++) {
+    for (let i = 0; i < 5 && this.watched.size > 0; i++) {
       if (!this.polling) await this.pollWatched()
       if (this.watched.size > 0) await new Promise((r) => setTimeout(r, 100))
     }
@@ -562,11 +568,19 @@ async function withTreasuryLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 let treasuryPromise: Promise<StackTreasury> | undefined
-/** per-process shared treasury — lazily opened, bootstrapped once */
+/** per-process shared treasury — lazily opened, bootstrapped once. The
+ *  singleton is bound to the cfg that opened it: a caller passing a
+ *  DIFFERENT stack would silently fund itself from the wrong treasury —
+ *  refuse instead of mixing. */
 export function stackTreasury(cfg?: RegtestConfig): Promise<StackTreasury> {
   const c = cfg ?? stackCfgFromEnv()
   if (c === undefined) throw new Error('testkit: no regtest stack env (NEKTAR_RPC_*)')
-  return (treasuryPromise ??= StackTreasury.open(c))
+  treasuryPromise ??= StackTreasury.open(c)
+  return treasuryPromise.then((t) => {
+    if (t.cfg.rpcUrl !== c.rpcUrl || t.cfg.assetUrl !== c.assetUrl || t.cfg.propagationUrl !== c.propagationUrl)
+      throw new Error('testkit: stackTreasury() given a different stack config — the singleton is bound to the first cfg it opened with')
+    return t
+  })
 }
 
 /** the test funder's surface on real money: a fresh identity key holding `outputs`

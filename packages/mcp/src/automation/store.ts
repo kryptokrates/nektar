@@ -504,6 +504,27 @@ export class AutomationStore {
     await this.kx(T.outbox).where({ action_id: actionId }).update({ status: 'acked' })
   }
 
+  /** pull a due-future retry forward to now — used when an event (a proven
+   *  funding-tree topup, a slot freeing) removes the cause the backoff was
+   *  waiting on. Attempts are untouched: this never hastens a dead-letter. */
+  async unblockOutbox(lastErrorLike: string): Promise<number> {
+    return await this.kx(T.outbox)
+      .where({ status: 'pending' })
+      .where('last_error', 'like', `%${lastErrorLike}%`)
+      .where('next_at', '>', this.now())
+      .update({ next_at: this.now() })
+  }
+
+  /** a resource-gated defer — the cause is starvation (a funding slot, not
+   *  a delivery failure), so attempts are NOT consumed toward dead-letter.
+   *  Short fixed re-check; the real wake-up is unblockOutbox on a freeing
+   *  event (topup proven → slots appear). */
+  async deferOutbox(actionId: string, error: string, checkInMs = 2_000): Promise<void> {
+    await this.kx(T.outbox)
+      .where({ action_id: actionId, status: 'pending' })
+      .update({ last_error: error.slice(0, 500), next_at: this.now() + checkInMs })
+  }
+
   async retryOutbox(actionId: string, error: string, maxAttempts = 10): Promise<void> {
     await this.kx.transaction(async (trx) => {
       const r = await trx(T.outbox).where({ action_id: actionId }).first()

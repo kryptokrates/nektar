@@ -7,9 +7,20 @@ import { AutomationStore } from './store.js'
 import { MarketEngine, type MarketMessage, type MarketTransport, type MarketOptions } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '../objectstore.js'
+import { runPreflight, WATCHDOG_CHECKS, type PreflightReport } from './preflight.js'
+import { killSwitchActive } from './kill.js'
 import type { Automation } from './types.js'
 
 export type { Automation } from './types.js'
+
+/** requeue envelope receipts after a failed ackBox push — the retry MUST
+ *  keep `from`: the next ack() pass resolves the SENDER's finger record to
+ *  reach every copy of the envelope, and dropping it would silently lose the
+ *  retry for hosts only the sender knows */
+export const requeueAckItems = (
+  items: Array<{ txid: string; commitment: string; from: string }>
+): Array<{ txid: string; commitment: string; from: string; msg: undefined; created: number }> =>
+  items.map((i) => ({ txid: i.txid, commitment: i.commitment, from: i.from, msg: undefined, created: 0 }))
 
 export interface AutomationConfig {
   network: string
@@ -40,6 +51,21 @@ export interface AutomationConfig {
   /** bstore/S3 object store for deal evidence — absent = feature off.
    *  Default: objectStoreFromEnv() (NEKTAR_BSTORE_*). */
   objectStore?: import('../objectstore.js').S3ObjectStore
+  /** A9 — strict startup: refuse to open the runtime unless preflight is
+   *  green. Non-strict starts anyway, seeded with the checks' down-host set. */
+  strict?: boolean
+  /** NEKTAR_UNATTENDED — the A11 conformance token becomes a required check;
+   *  honored only while the token validates. Implies strict when set. */
+  unattended?: boolean
+  /** stronger broadcaster liveness probe (the transport knows the endpoint —
+   *  an HTTP answer proves the socket where txState can't) */
+  broadcasterProbe?: () => Promise<boolean>
+  /** publish our bfinger identity record in upkeep — opt-in (it costs sats
+   *  and makes this agent publicly discoverable; NEKTAR_BFINGER_PUBLISH=1) */
+  publishFinger?: boolean
+  /** watchdog cadence — the cheap checks (chain/broadcaster/hosts) re-run on
+   *  this tick (default 60s; 0 disables) */
+  watchdogMs?: number
   now?: () => number
 }
 
@@ -67,6 +93,24 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   const key = mem.operatorKey()
   const objectStore = cfg.objectStore ?? objectStoreFromEnv()
   const marketHosts = (cfg.marketHosts ?? []).map((u) => u.replace(/\/+$/, ''))
+  const log = cfg.log ?? (() => {})
+  // A9 — the readiness gate. Preflight runs BEFORE anything can spend:
+  // strict refuses to open on a red check; non-strict opens anyway and seeds
+  // the host-health set the lane readers maintain.
+  const pfCfg = { network: cfg.network, dataDir: cfg.dataDir, marketHosts, boxOffice: cfg.boxOffice, unattended: cfg.unattended, now: cfg.now }
+  const runChecks = (only?: string[]) =>
+    runPreflight({ mem, store, objectStore, cfg: pfCfg, probes: { broadcaster: cfg.broadcasterProbe }, ...(only !== undefined ? { only } : {}) })
+  let lastReport: PreflightReport | undefined = await runChecks()
+  if (cfg.strict === true && !lastReport.pass) {
+    const failed = lastReport.checks.filter((c) => !c.pass).map((c) => `${c.check}: ${c.detail}`).join(' | ')
+    await kx.destroy()
+    throw new Error(`automation preflight failed (strict) — ${failed}`)
+  }
+  if (!lastReport.pass) log(`automation: preflight degraded — ${lastReport.checks.filter((c) => !c.pass).map((c) => c.check).join(', ')}`)
+  const downNow = new Set<string>(lastReport.downHosts)
+  /** deaf = every configured host unreachable — new deals pause, in-flight
+   *  work (refunds, settlements, outbox retries) keeps running */
+  const deafNow = (): boolean => marketHosts.length > 0 && marketHosts.every((h) => downNow.has(h))
   const lanes =
     marketHosts.length === 0
       ? undefined
@@ -74,7 +118,6 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
           const mod = await import('@nektar/bstack')
           return { mod, ledger: new mod.KnexTreeLedger(kx), journal: new mod.KnexCarrierJournal(kx) }
         })()
-  const log = cfg.log ?? (() => {})
   const logStream = lanes === undefined ? undefined : (cfg.logStream ?? 'nektar_abcdefghij')
   const logState = lanes === undefined || logStream === undefined ? undefined : new lanes.mod.KnexLogState(kx)
   const fingerState = lanes === undefined ? undefined : new lanes.mod.KnexFingerState(kx)
@@ -178,12 +221,13 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
     },
     transport,
     ai: cfg.ai ?? aiFromEnv(),
+    killed: () => killSwitchActive(cfg.dataDir).killed,
+    deaf: deafNow,
     opts: cfg.opts,
     logStream
   })
   const me = key.toPublicKey().toString()
   const withheldSeen = new Set<string>()
-  const downNow = new Set<string>()
   const laneNotes = (r: { withheld: Array<{ host: string; txid: string }>; unreachable: string[] }): void => {
     for (const w of r.withheld) {
       const k2 = `${w.host}:${w.txid}`
@@ -315,7 +359,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
                 log(`automation: box ack: ${r.skipped} envelope(s) skipped — no bbox funding slot`)
               }
             } catch (e) {
-              pendingAcks = pendingAcks.concat(items.map((i) => ({ ...i, from: '', msg: undefined, created: 0 })))
+              pendingAcks = pendingAcks.concat(requeueAckItems(items))
               log(`automation: box ack: ${(e as Error).message}`)
             }
           }
@@ -467,8 +511,10 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
         }
       }
       // own bfinger record: (re)publishes on the current host list, no-ops
-      // when nothing changed, resubmits to any host that missed the objects
-      if (lanes !== undefined && fingerState !== undefined && logStream !== undefined) {
+      // when nothing changed, resubmits to any host that missed the objects.
+      // B1 — opt-in only: it costs sats and makes this agent publicly
+      // discoverable, so it is never automatic (NEKTAR_BFINGER_PUBLISH=1).
+      if (lanes !== undefined && fingerState !== undefined && logStream !== undefined && cfg.publishFinger === true) {
         try {
           const packsRef = packsStore?.ref()
           const r = await lanes.mod.publishFinger({
@@ -696,6 +742,42 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
           if (Date.now() - upkeepAt >= upkeepMs) void upkeep().catch(() => {})
         }, cfg.intervalMs ?? 1000)
   timer?.unref()
+  // A10 — the watchdog: the cheap probe tier (chain/broadcaster/hosts/kill
+  // state) re-runs on a slow tick; host losses update the deaf flag the
+  // engine consults at every new-deal entry point
+  const watchdogMs = cfg.watchdogMs ?? 60_000
+  const watchdog =
+    watchdogMs <= 0
+      ? undefined
+      : setInterval(() => {
+          const work = (async () => {
+            try {
+              const r = await runChecks([...WATCHDOG_CHECKS])
+              if (lastReport !== undefined) {
+                const byName = new Map(lastReport.checks.map((c) => [c.check, c]))
+                for (const c of r.checks) byName.set(c.check, c)
+                lastReport = { ...r, checks: [...byName.values()], pass: [...byName.values()].every((c) => c.pass) }
+              } else lastReport = r
+              for (const h of r.downHosts)
+                if (!downNow.has(h)) {
+                  downNow.add(h)
+                  log(`automation: watchdog: host down ${h}`)
+                }
+              for (const h of [...downNow])
+                if (marketHosts.includes(h) && !r.downHosts.includes(h)) {
+                  downNow.delete(h)
+                  log(`automation: watchdog: host back ${h}`)
+                }
+            } catch (e) {
+              log(`automation: watchdog: ${(e as Error).message}`)
+            }
+          })()
+          inflight.add(work)
+          void work.finally(() => {
+            inflight.delete(work)
+          })
+        }, watchdogMs)
+  watchdog?.unref()
   let stopped = false
   const inflight = new Set<Promise<void>>()
   // push-driven progress: a verified tx proof (broadcaster callback or the
@@ -708,7 +790,13 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
         if (lanes !== undefined) {
           const unproven = await lanes.ledger.unproven()
           if (stopped) return
-          if (unproven.some((u) => u.txid === txid)) await lanes.ledger.markProven(txid, mp)
+          if (unproven.some((u) => u.txid === txid)) {
+            await lanes.ledger.markProven(txid, mp)
+            // a proven topup frees funding-tree slots — pull any
+            // slot-starved outbox item forward instead of letting it sit
+            // out the retry backoff (measured: a want stalled ~15s on this)
+            await store.unblockOutbox('funding slot')
+          }
         }
       } catch (e) {
         log(`automation: txproof: ${(e as Error).message}`)
@@ -741,6 +829,17 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
     logStream,
     dealJournal,
     objectStore,
+    /** the latest full preflight report — health surfaces read this, the
+     *  watchdog keeps its cheap tier fresh between full runs */
+    health: () => ({ pass: lastReport?.pass ?? false, report: lastReport }),
+    bootstrap: () => (cfg.publishFinger === true && lanes !== undefined ? 'sealed' : 'unsealed'),
+    /** re-run the full preflight now (automationDoctor) — refreshes the
+     *  cached report and the seeded host-health set */
+    preflight: async () => {
+      lastReport = await runChecks()
+      for (const h of lastReport.downHosts) downNow.add(h)
+      return lastReport
+    },
     marketSlots: async () =>
       lanes === undefined
         ? { market: 0, bbox: 0, log: 0, finger: 0 }
@@ -753,6 +852,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
     stop: async () => {
       stopped = true
       if (timer) clearInterval(timer)
+      if (watchdog) clearInterval(watchdog)
       await Promise.allSettled(inflight)
       while (busy || upkeepRun !== undefined || acking) await new Promise((r) => setTimeout(r, 25))
       await engine.idle()

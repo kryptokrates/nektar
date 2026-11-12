@@ -729,6 +729,12 @@ export const TOOLS = [
     }
   },
   {
+    name: 'automationDoctor',
+    description:
+      'Automation preflight — the readiness gate for the market agent. Re-runs every dependency check now (chain, broadcaster, hosts, store read-back, payments, policy, funds, watch liveness, spendguard dry-run, kill switch, conformance token) and reports {check,pass,detail,fix}[] with a deterministic verdict. Sensitive details (reserves, host lists, policy) stay on this trusted channel — the public HTTP surface reports pass only.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
     name: 'deals',
     description:
       "List this agent's market operations (newest first, max 50) or detail one: state machine, event trail, sealed seller wraps, and the disclosed result once verified.",
@@ -769,7 +775,7 @@ const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund'
 const CLAIM_OPS = new Set(['deploy', 'status', 'settle', 'deploySale', 'buySale'])
 const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAID_DISCLOSURE ?? '')
 /** tools visible to clients right now — paid-disclosure tools are gated by env */
-const AGENT_TOOLS = new Set(['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor'])
+const AGENT_TOOLS = new Set(['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor'])
 const toolProfile = (): 'agent' | 'operator' => ((process.env.NEKTAR_TOOL_PROFILE ?? 'agent').toLowerCase() === 'operator' ? 'operator' : 'agent')
 export const visibleTools = () =>
   TOOLS.filter((t) => (toolProfile() === 'operator' || AGENT_TOOLS.has(t.name)) && (!PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled()))
@@ -1729,8 +1735,12 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         const w = (await ctx.ops.wallet()) as Record<string, unknown>
         d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
       }
-      if (args?.fix) return { ...d, repair: await mem.doctorRepair() }
-      return d
+      // B3 — bootstrap state: 'sealed' = the agent publishes its bfinger
+      // record and is discoverable; 'unsealed' = it still needs a configured
+      // host set for counterparties to reach it
+      const out: Record<string, unknown> = { ...d, bootstrap: mem.automation?.bootstrap?.() ?? 'unsealed' }
+      if (args?.fix) return { ...out, repair: await mem.doctorRepair() }
+      return out
     }
     case 'describeShard': {
       if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('describeShard: shard required')
@@ -1780,6 +1790,11 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       void au.cycle()
       return { shard: args.shard, domains: args.domains, priceSats, policyHash: ph }
     }
+    case 'automationDoctor': {
+      const au = mem.automation
+      if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
+      return await au.preflight()
+    }
     case 'deals': {
       const au = mem.automation
       if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
@@ -1804,8 +1819,10 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       const detail = (o: import('./automation/store.js').Operation, events: unknown): Record<string, unknown> => {
         const e: Record<string, unknown> = { ...entry(o), data: o.data, events, ...(o.lastError ? { lastError: o.lastError } : {}) }
         if (o.role === 'buyer' && (o.state === 'disclosure_verified' || o.state === 'useful')) {
-          const text = (o.data.result as { text?: string } | undefined)?.text
-          if (text !== undefined) e.result = { text }
+          const r = o.data.result as { text?: string; taint?: string } | undefined
+          // D4 — the taint tag rides the consumer surface: purchased content
+          // reaches the caller TAGGED, never bare
+          if (r?.text !== undefined) e.result = { text: r.text, taint: r.taint ?? 'untrusted-purchased-content' }
         }
         return e
       }

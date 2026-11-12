@@ -524,6 +524,13 @@ try {
   const wantAtBlocks = blocksMined
   const { operationId } = await tool(bob, 'want', { domains: ['libfoo'], question: QUESTION, maxSats: 500 })
   if (FAULT?.trigger === 'want') await injectFault(FAULT)
+  if (FAULT?.trigger === 'funding') {
+    // inject inside the pay window — escrow is being assembled/broadcast; the
+    // respawned agent must not produce a second escrow for the same op
+    const hit = await waitState(bob, operationId, ['funding', 'awaiting_disclosure'], 60_000)
+    log(`fault: funding trigger — buyer in ${hit.state}; injecting ${FAULT.verb}${FAULT.arg !== undefined ? `:${FAULT.arg}` : ''}`)
+    await injectFault(FAULT)
+  }
   if (FAULT?.trigger === 'funded') {
     // inject the moment escrow is broadcast but before delivery can land —
     // 'awaiting_disclosure' is the post-escrow/pre-disclosure window

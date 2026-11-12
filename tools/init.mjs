@@ -3,7 +3,7 @@
 // lives → passphrase → write .env → print the exact next command.
 //
 //   node tools/init.mjs            interactive
-//   node tools/init.mjs --yes      accept all defaults (mock, ./.nektar, stdio)
+//   node tools/init.mjs --yes      accept all defaults (regtest, ./.nektar, stdio)
 //   node tools/init.mjs --env ttn --dir .ttn --port 8080
 import { createInterface } from 'node:readline'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
@@ -62,10 +62,9 @@ console.log(
 
 // ─── 1. network ─────────────────────────────────────────────────────────────
 const networks = [
-  { id: 'mock', label: 'mock — offline, zero setup, auto-mined (best first run)' },
+  { id: 'regtest', label: 'regtest — local Teranode stack, zero real cost (best first run)' },
   { id: 'ttn', label: 'ttn — Teranode Test Net, test coins, real market' },
   { id: 'main', label: 'main — real BSV. Read docs/OPERATIONS.md first' },
-  { id: 'regtest', label: 'regtest — local Teranode stack (devs)' }
 ]
 const net =
   arg('--env') ??
@@ -83,7 +82,7 @@ if (!networks.some((n) => n.id === net)) {
 }
 
 // ─── 2. data dir ────────────────────────────────────────────────────────────
-const defDir = prev.NEKTAR_DATA_DIR ?? (net === 'mock' ? '.nektar' : `.nektar-${net}`)
+const defDir = prev.NEKTAR_DATA_DIR ?? '.nektar'
 const dir =
   arg('--dir') ??
   ((YES ? defDir : await ask(`2/4 — where does your agent live? (identity + memory)\n  This directory IS the agent — back it up.\n[${defDir}] > `)) || defDir)
@@ -94,7 +93,7 @@ mkdirSync(dataDir, { recursive: true })
 let pass = arg('--passphrase')
 if (pass === undefined && !YES) {
   pass = await askSecret(
-    `3/4 — key passphrase (encrypts your identity at rest; unrecoverable)\n  ${net === 'main' ? 'REQUIRED on main.' : 'empty = skip (mock is fine without)'}${prev.NEKTAR_KEY_PASSPHRASE ? ' — Enter keeps the current one' : ''}\n> `
+    `3/4 — key passphrase (encrypts your identity at rest; unrecoverable)\n  ${net === 'main' ? 'REQUIRED on main.' : 'empty = skip (regtest is fine without)'}${prev.NEKTAR_KEY_PASSPHRASE ? ' — Enter keeps the current one' : ''}\n> `
   )
   if (!pass && prev.NEKTAR_KEY_PASSPHRASE) pass = prev.NEKTAR_KEY_PASSPHRASE
 } else pass ??= prev.NEKTAR_KEY_PASSPHRASE ?? ''
@@ -129,8 +128,9 @@ console.log(`\nwrote ${envPath}`)
 
 // ─── next steps ─────────────────────────────────────────────────────────────
 console.log('\nNext:')
-if (net === 'mock') {
-  console.log('  pnpm demo          — first verified receipt in <60s, nothing spent')
+if (net === 'regtest') {
+  console.log('  pnpm stack:up      — local Teranode stack (regtest coins, free)')
+  console.log('  pnpm demo          — first verified receipt in <60s on the stack')
   console.log('  pnpm setup:claude  — wire Claude Code (or: pnpm setup:codex)')
 } else if (net === 'ttn') {
   console.log(`  node packages/mcp/dist/src/bin.js            # starts on ttn (port: ${port ?? 'stdio only'})`)
@@ -142,8 +142,6 @@ if (net === 'mock') {
   console.log('    NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND')
   console.log('    NEKTAR_FUND_WIF=<funded key>   (docker: mcp secret set …)')
   console.log('  docs/OPERATIONS.md is the runbook.')
-} else {
-  console.log('  regtest needs the local Teranode stack: docs/OPERATIONS.md § regtest')
 }
 console.log(`\nYour agent lives in ${dataDir} — that directory + its passphrase`)
 console.log('is the identity. Back it up; there is no recovery.\n')

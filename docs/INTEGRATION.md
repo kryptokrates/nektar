@@ -12,7 +12,7 @@ flowchart LR
   end
   gw["Docker MCP Gateway (profile: nektar)"]
   srv["nektar MCP server (container, /data volume)"]
-  bsv[("BSV: mock | regtest")]
+  bsv[("BSV: regtest | ttn | main")]
   cd & cu --> gw --> srv
   lm -- "chat.mjs (MCP client)" --> srv
   app -- "/v1 REST · /mcp Streamable HTTP" --> srv
@@ -30,7 +30,7 @@ pnpm mcp:smoke                                # remember → anchor → prove TH
 - Supported clients for `docker mcp client connect`: claude-code, claude-desktop, cline, codex, continue, crush, cursor, gemini, goose, gordon, kiro, lmstudio, opencode, sema4, vscode, zed.
 - For any other client, configure the command `docker` with args `["mcp","gateway","run","--profile","nektar"]`.
 - The server runs **long-lived** in a sandboxed container (`--security-opt no-new-privileges`, 1 CPU, 2 GB), with data in the `nektar-data` volume.
-- The default backend is the offline mock chain, which needs zero setup. For a real chain, see §5.
+- The default backend is the local Teranode regtest stack (`pnpm stack:up`). For a public chain, see §5.
 
 ### Docker + real chain (regtest)
 
@@ -47,7 +47,7 @@ NEKTAR_PROFILE=nektar_regtest pnpm mcp:smoke
 - Verified:
   - session 1: `remembered seq=0`, anchored n=0, `prove ok` against real headers;
   - session 2 (a new gateway, new container): `remembered seq=1; anchored n=1`, `prove ok`. The shard chain continued from the persisted head.
-- It has its own profile because the tool names match the mock server's.
+- It has its own profile because the tool names match the instance server's.
 
 ## 2. Direct stdio (no Docker)
 
@@ -117,7 +117,7 @@ OpenAI/Anthropic function-calling apps can call `/v1/tools/{name}` directly.
 
 | env                                                                                         | meaning                                                                                            |
 | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `NEKTAR_NETWORK`                                                                            | `mock` (default) · `regtest` · `testnet` (refused until configured)                                |
+| `NEKTAR_NETWORK`                                                                            | `regtest` (default) · `testnet` · `ttn` · `main`                                                  |
 | `NEKTAR_DATA_DIR`                                                                           | records (sqlite), anchor state, security state, funding reserve, keys (0600). `/data` in the image |
 | `NEKTAR_FUND_WIF` / `_FILE`                                                                 | fee-paying key (regtest: the miner key)                                                            |
 | `NEKTAR_RPC_PASS` / `_FILE`, `NEKTAR_RPC_URL`, `NEKTAR_PROPAGATION_URL`, `NEKTAR_ASSET_URL` | Teranode endpoints (from a container: `http://host.docker.internal:…`)                             |

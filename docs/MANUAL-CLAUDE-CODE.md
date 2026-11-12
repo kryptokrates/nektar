@@ -135,12 +135,12 @@ One tx pays for exactly one call — invoice-tagged, replay-protected.
 ```sh
 git clone https://github.com/kryptokrates/nektar && cd merkle-automaton
 pnpm install && pnpm -r build
-NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=mock node packages/mcp/dist/src/bin.js
+NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=regtest node packages/mcp/dist/src/bin.js
 claude mcp add --transport http nektar http://localhost:8080/mcp
 ```
 
-`mock` is fully offline — the simulated chain auto-mines, receipts mint
-and verify, anchors exist on the mock ledger (honest caveat: they
+`regtest` runs on the local Teranode stack (`pnpm stack:up`) — receipts mint
+and verify, anchors exist on the regtest ledger (honest caveat: they
 aren't on a public chain). Every feature works; it's the right way to
 explore before touching real coins. `NEKTAR_NETWORK=regtest` upgrades to
 a local Teranode; `ttn` to the public testnet.

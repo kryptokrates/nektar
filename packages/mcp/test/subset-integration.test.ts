@@ -1,5 +1,5 @@
 // DIS-002 proof sharding (GOAL-v6 S5): L_ZKDis v2 subset proofs checked
-// against real NektarAnchor transactions on the mock chain — every check of
+// against real NektarAnchor transactions on the regtest stack — every check of
 // verifySubsetAnchored — plus NektarMemory.proveSubset/verifySubset end to end
 // and the NEKTAR_PROOF_SHARDING opt-out.
 import test from 'node:test'

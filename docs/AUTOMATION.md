@@ -281,7 +281,7 @@ Tests: `packages/mcp/test/{automation-scoring,automation-store,market-engine,aut
 seizure, S3 paid public disclosure read for free):
 
 ```sh
-pnpm -r build && pnpm scenarios -- --profile mock --scenario all
+pnpm -r build && pnpm scenarios
 ```
 
 ### Ledger coverage and crash recovery (update)
@@ -301,7 +301,7 @@ owner calls are recorded, not capped.
 - Dashboard `/dashboard` has an Automation card with pending approvals.
   Approving requires `NEKTAR_OPERATOR_TOKEN` (separate from the agent bearer)
   and is disabled when that is unset. The agent bearer cannot approve.
-- `pnpm scenarios -- --profile mock --scenario all` runs S1/S2/S3 as real OS
+- `pnpm scenarios` runs S1/S2/S3 as real OS
   processes with evidence bundles; `pnpm scenarios:verify -- <dir>` re-checks
   the S1 bundle offline. Regtest/testnet profiles need their chain stacks.
 
@@ -319,7 +319,7 @@ The trial report is written to `artifacts/model-trials/report.json`.
 
 - `pnpm -r build` and the package suites pass (chain 25, anchor 27, bstack 54,
   mcp 199 pass / 5 skipped).
-- `pnpm scenarios -- --profile mock --scenario all` passes S1/S2/S3 as real OS
+- `pnpm scenarios` passes S1/S2/S3 as real OS
   processes; S1's sandbox step passes in a network-less container.
 - `pnpm audit` reports one high (zod <4.6.6 via the MCP SDK; a major upgrade is
   needed) and one low (`@tootallnate/once` via node-gyp).

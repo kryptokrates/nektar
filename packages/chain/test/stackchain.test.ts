@@ -1,4 +1,4 @@
-// Real-node conformance — the same semantic guarantees MockChain modeled,
+// Real-node conformance — the semantic guarantees the chain backend must hold,
 // verified against the actual regtest node: mined BUMPs match the header's
 // merkle root, chained unconfirmed spends are admitted, and a double-spend is
 // refused. Requires the Teranode stack (skipUnlessStack).
@@ -56,7 +56,12 @@ test('chain: chained unconfirmed spends admit, then prove together', async (t) =
   assert.equal((await chain.broadcast(a)).status, 'success', `a: ${(await chain.broadcast(a)).description ?? ''}`)
   assert.equal((await chain.broadcast(b)).status, 'success')
   assert.equal((await chain.broadcast(c)).status, 'success')
-  await chain.mine(1)
+  // children of mempool parents can land a block later — mine until all prove
+  for (let i = 0; i < 6; i++) {
+    await chain.mine(1)
+    const proofs = await Promise.all([a, b, c].map((tx) => chain.getTx(tx.id('hex'))))
+    if (proofs.every((p) => p?.merklePath !== undefined)) break
+  }
   for (const tx of [a, b, c]) assert.ok((await chain.getTx(tx.id('hex')))?.merklePath, `no proof for ${tx.id('hex').slice(0, 8)}`)
 })
 

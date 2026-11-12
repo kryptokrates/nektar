@@ -1,19 +1,20 @@
 #!/usr/bin/env node
 // tools/demo-two-ais.mjs — "another AI reads your link": two nektar
-// instances on one (mock) network. AI A commits knowledge on :8090,
+// instances on the local regtest stack. AI A commits knowledge on :8090,
 // AI B pulls it over real HTTP via importShard — re-verifying every
 // record against the shared chain before trusting a byte of it.
-import { MockChain, MockFunder } from '../packages/chain/dist/src/index.js'
+import { StackChain, StackFunder, stackTreasury, stackCfgFromEnv, stackUp } from '../packages/chain/dist/src/index.js'
 import { NektarMemory } from '../packages/mcp/dist/src/memory.js'
 import { createHttpApi } from '../packages/mcp/dist/src/http.js'
 import { callTool } from '../packages/mcp/dist/src/server.js'
 
 const listen = (srv) => new Promise((r) => srv.once('listening', r))
-const chain = new MockChain()
-chain.verifyScripts = true
-const funder = new MockFunder()
-funder.topup(50)
-for (const t of funder.parents) chain.registerParent(t)
+if (!(await stackUp())) {
+  console.error('needs the local Teranode regtest stack (NEKTAR_RPC_*) — run pnpm stack:up first')
+  process.exit(1)
+}
+const chain = new StackChain(stackCfgFromEnv())
+const funder = await StackFunder.fund(await stackTreasury(), 50)
 
 const memA = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
 const memB = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
@@ -27,7 +28,7 @@ const baseA = `http://127.0.0.1:${portA}`
 console.log(`─ AI A (your instance) :${portA} ─────────────────────────────`)
 await memA.remember('guide', 'nektar anchors encrypted, provenance-signed agent memory on BSV')
 await memA.remember('guide', 'every grounded answer commits a receipt anyone can verify')
-chain.mine(1)
+await chain.mine(1)
 memA.confirmAnchor('guide', memA.tailLink('guide').txid)
 console.log('  remembered 2 facts on shard "guide" + anchored them on-chain')
 console.log('  serving them publicly:')

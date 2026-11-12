@@ -1,6 +1,6 @@
 // Wright §13 membership, verifier side: the committed REAL RISC Zero receipt
 // (leaf 4 of a 5-leaf core/merkle.ts batch) is checked against real NektarAnchor
-// transactions on the mock chain — every check of verifyMembershipAnchoredStark.
+// transactions on the regtest chain — every check of verifyMembershipAnchoredStark.
 // NEKTAR_STARK_PROVE=1 additionally proves end-to-end through NektarMemory (~50 s).
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -164,7 +164,7 @@ test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own anchored 
 
 /** mem whose 's' shard has ONE anchored batch committing the fixture's R — the
  *  record is a stub (verifyCombined only reads seq/batchIndex); the anchor is
- *  real (NektarAnchor tx on the mock chain, mined). */
+ *  real (NektarAnchor tx on the regtest chain, mined). */
 async function memWithFixtureAnchor(t: { skip: (m?: string) => void }) {
   const _w = await anchoredBatch(t, fromHex(fx.journal.root), 5)
   if (_w === undefined) return

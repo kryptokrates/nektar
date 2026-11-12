@@ -358,7 +358,7 @@ publicShards:[{shard, records, packUrl, import}]}` enumerating what the
   unpaid → failed while the flag is on). One tx pays for exactly one
   call: consumed invoices and txids are refused (`<dataDir>/payments.json`).
   `payment.transaction` accepts raw hex **or BEEF** (AtomicBEEF too) —
-  BEEF is the right choice: funding parents travel inline, which mock
+  BEEF is the right choice: funding parents travel inline, which the
   `verifyScripts` and Teranode Extended Format both want.
   `payclient.ts` (`buildPaymentTx`) is the reference client: payer WIF +
   spendable utxos in → signed BEEF hex out; any WIF-capable signer works
@@ -379,7 +379,7 @@ NEKTAR_KEY_PASSPHRASE=… node packages/e2e/src/e2e-pay.mjs` (public
   `NEKTAR_FUND_TXIDS=hex:<rawtx>` offline import — the tx wasn't indexed
   at the lookup endpoints yet) and `NEKTAR_PAYMENTS=1`. Anchors are real
   public testnet txs; payments settle to the operator address for real.
-  Mock network caveat: settlement is recorded by the mock chain, not
+  Regtest caveat: settlement is recorded on the local chain, not
   consensus-validated — real payment semantics need regtest/ttn/main.
 - **Access audit log (GOAL-v8 D6, opt-in):** `NEKTAR_ACCESS_LOG=1`
   appends timestamped `{event:'decrypt'|'traverse', shard, seq, caller}`

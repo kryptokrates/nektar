@@ -33,7 +33,7 @@ const DEF: AutomatonDef = {
 const TBL = deltaTable(DEF)
 const OUT = toHex(dsha256(utf8('out')))
 
-// production path: NektarProvider over MockChain with Teranode-faithful script
+// production path: NektarProvider over the regtest stack with real node script
 // evaluation — the chain is the oracle; owner key ≠ funding key.
 async function deployed(t: { skip: (m?: string) => void }, def = DEF) {
   const w = await stackWorld(t, 24)

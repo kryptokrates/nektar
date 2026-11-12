@@ -2,7 +2,7 @@
 // Interpreter-green (claim-lifecycle.mjs, 10/10) → now through real mempool
 // policy + block acceptance. One operator key plays all roles; tx locktime
 // is always 0 so deadline=0 settles instantly and window=0 makes timeouts
-// immediately claimable (same semantics as the mock eval).
+// immediately claimable.
 import { PrivateKey, Transaction, LockingScript, P2PKH, Hash, Transaction as BsvTransaction, UnlockingScript } from '@bsv/sdk'
 import { NektarProvider } from '@nektar/anchor'
 import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve, utxoStatus } from '@nektar/chain'
@@ -157,7 +157,7 @@ const encNum = (n) => {
 const encArg = (v) => (typeof v === 'bigint' ? encNum(v) : encPush(v))
 
 // Terminal methods: emitted script wants [codePart][opSig][args][changePKH][changeAmount][preimage][selector]
-// + a trailing change output. Patch the prepared call like the mock eval does.
+// + a trailing change output.
 const callTerminal = async (c, method, args, outputs, changeAmt = 1n) => {
   const pubMethods = c.artifact.abi.methods.filter((m) => m.isPublic)
   const mIdx = pubMethods.findIndex((m) => m.name === method)

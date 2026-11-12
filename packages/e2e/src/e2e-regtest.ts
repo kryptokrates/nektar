@@ -167,7 +167,7 @@ const funder: any = {
 const burstPool = reserve.utxos.slice(40) // own half of the pool
 
 // real chain facade: broadcast→propagation, tracker→asset/rpc; stubs for the
-// mock-only bits NektarMemory/overlay may touch
+// in-memory bits NektarMemory may touch
 const chain: any = {
   broadcast: (tx: Transaction) => broadcaster.broadcast(tx),
   mempool: new Map(),

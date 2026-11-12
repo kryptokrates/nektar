@@ -137,7 +137,7 @@ url = "http://localhost:8080/mcp"
 ```
 
 ```sh
-NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=mock node packages/mcp/dist/src/bin.js
+NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=regtest node packages/mcp/dist/src/bin.js
 ```
 
 Or pure stdio (no port, Codex spawns it):
@@ -146,11 +146,11 @@ Or pure stdio (no port, Codex spawns it):
 [mcp_servers.nektar]
 command = "node"
 args = ["<abs path>/packages/mcp/dist/src/bin.js"]
-env = { NEKTAR_NETWORK = "mock" }
+env = { NEKTAR_NETWORK = "regtest" }
 ```
 
-`mock` is fully offline — the simulated chain auto-mines, receipts mint
-and verify, anchors exist on the mock ledger (honest caveat: they
+`regtest` runs on the local Teranode stack (`pnpm stack:up`) — receipts mint
+and verify, anchors exist on the regtest ledger (honest caveat: they
 aren't on a public chain). `NEKTAR_NETWORK=regtest` upgrades to a local
 Teranode; `ttn` to the public testnet.
 

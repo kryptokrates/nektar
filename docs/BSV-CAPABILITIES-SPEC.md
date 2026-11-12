@@ -32,7 +32,7 @@ Jeff Harris's bstack papers provide useful patterns for these capabilities. They
 | Portable memory           | Existing Nektar evidence in a versioned package; experimental off-chain carriers are a separate profile                             |
 | Availability              | Content-addressed encrypted objects, explicit retention contracts, bounded possession challenges; no automatic slashing             |
 | Asynchronous exchange     | A small encrypted mailbox profile over HTTPS with durable deduplication; standard mailbox compatibility tested separately           |
-| Chain environment         | Mock for deterministic tests, regtest for controlled chain tests, explicitly configured public BSV testnet for integration evidence |
+| Chain environment         | regtest for controlled chain tests, explicitly configured public BSV testnet for integration evidence |
 | Mainnet                   | A later deployment decision after integration and financial recovery gates pass                                                     |
 
 ## 2. Goals, limits, and terminology

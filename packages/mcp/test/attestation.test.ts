@@ -1,5 +1,5 @@
 // GOAL-v6 S1a — §13 cheap on-chain commitment: OP_FALSE OP_RETURN
-// sha256(proof) in a fee-key-funded data tx (unit codec + MockChain spend).
+// sha256(proof) in a fee-key-funded data tx (unit codec + real-node spend).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
@@ -32,14 +32,14 @@ test('attestation script: encode/decode round-trip; non-attestation scripts → 
   assert.throws(() => attestationScript(new Uint8Array(31)), /32 bytes/)
 })
 
-test('anchorAttestation on MockChain: real signed spend, commitment extractable, verifyAttestation round-trip', async t => {
+test('anchorAttestation on the regtest stack: real signed spend, commitment extractable, verifyAttestation round-trip', async t => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { chain, mem } = _w
   const pb = proofBytes()
   const { txid, commitment } = await mem.anchorAttestation(pb)
   assert.equal(commitment, toHex(attestationCommitment(pb)))
-  // the tx is a real signed P2PKH spend the script-verifying mock accepted
+  // the tx is a real signed P2PKH spend the node's script evaluation accepted
   const tx = (await chain.getTx(txid))!
   assert.ok(tx, 'broadcast accepted into mempool')
   const atts = attestationsOf(tx)

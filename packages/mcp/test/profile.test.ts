@@ -24,7 +24,7 @@ import type { AutomationPolicy } from '../src/automation/policy.js'
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const AGENT_NINE = ['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor']
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
-const NET = 'mock'
+const NET = 'regtest'
 let clock = Date.now()
 
 const policyFor = (pub: string, policyId = 'demo'): AutomationPolicy => ({

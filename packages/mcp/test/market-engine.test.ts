@@ -167,7 +167,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
   }
 }
 
-test('S1 mock: three sellers quote 450/300/200, buyer scores, pays the best, verifies the disclosure — no manual tool calls', async (t) => {
+test('S1 regtest: three sellers quote 450/300/200, buyer scores, pays the best, verifies the disclosure — no manual tool calls', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   t.after(w.close)

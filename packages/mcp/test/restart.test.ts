@@ -1,6 +1,6 @@
 // Restart safety: a new NektarMemory on the same persisted state continues
 // the SAME shard (next anchor spends the persisted head — the script-
-// evaluating, double-spend-checking MockChain rejects any fork), old records
+// evaluating, double-spend-checking node rejects any fork), old records
 // stay provable, and record metadata (level gate) survives in sqlite.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

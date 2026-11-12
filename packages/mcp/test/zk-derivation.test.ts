@@ -1,6 +1,6 @@
 // Wright §14 ZK derivation attestation, verifier side: the committed REAL
 // RISC Zero receipt (the gen-vectors 2-step permit path) is verified through
-// NektarMemory against an anchored dagroot record on the mock chain.
+// NektarMemory against an anchored dagroot record on the regtest chain.
 // NEKTAR_STARK_PROVE=1 additionally proves end-to-end through the instance.
 import test from 'node:test'
 import assert from 'node:assert/strict'

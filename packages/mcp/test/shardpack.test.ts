@@ -17,7 +17,7 @@ async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
   }
   return { chain, funder, mem, settle }
 }
-/** second instance on the SAME network (shared MockChain) — the real case:
+/** second instance on the SAME network (shared regtest chain) — the real case:
  *  an importer on a different network could never anchor-verify anyway */
 function peerOf(a: NonNullable<Awaited<ReturnType<typeof setup>>>, opts: NektarMemoryOptions = {}) {
   return new NektarMemory(a.chain, a.funder, a.funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })

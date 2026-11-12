@@ -1,5 +1,5 @@
 // GOAL-v7 V3: paid-disclosure MCP tools — env gating + the full two-party
-// BIP-199 flow on a shared MockChain (real covenant script eval):
+// BIP-199 flow on a shared regtest chain (real covenant script eval):
 // seller offer → buyer escrow → seller complete (reveal+paid) → buyer claim.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -207,7 +207,7 @@ test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before 
     const _w = await setup(t)
     if (_w === undefined) return
     const { chain, seller, buyer } = _w
-    await chain.mine(5) // push the mock tip to height 5
+    await chain.mine(5) // push the tip forward
     const buyerPub = buyer.operatorKey().toPublicKey().toString()
     // D9 — offer expiry is inside the signed digest and enforced at escrow time
     const expired = await callTool(seller, 'sale', { op: 'offer', value: 'aa', price: 100, refundAfter: 1_000_000, maxFee: 10, buyerPub, expiresAt: 3 })

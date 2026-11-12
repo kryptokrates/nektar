@@ -103,7 +103,7 @@ export async function skipUnlessStack(t: { skip: (msg?: string) => void }, cfg?:
 }
 
 // ---------------------------------------------------------------------------
-// chain surface — the same shape tests used on MockChain, backed by the node
+// chain surface — the same shape tests used on the in-memory stub, backed by the node
 
 export class StackChain implements ChainTracker, Broadcaster {
   private tracker: TeranodeRPCTracker
@@ -271,7 +271,7 @@ export function stackTreasury(cfg?: RegtestConfig): Promise<StackTreasury> {
   return (treasuryPromise ??= StackTreasury.open(c))
 }
 
-/** MockFunder's surface on real money: a fresh identity key holding `outputs`
+/** the test funder's surface on real money: a fresh identity key holding `outputs`
  *  mined P2PKH utxos of `sats` each, created by one split tx from the shared
  *  reserve. `parents` returns the real funding txs for API parity — nothing
  *  needs registering, the node already validated and mined them. */

@@ -93,7 +93,7 @@ const b1 = await broadcast(tx1)
 check(b1.ok, `tx1 (deploy ${lockHex.length / 2}B verifier) broadcast${b1.ok ? ` ${b1.txid}` : ` — ${b1.error}`}`)
 if (!b1.ok) {
   console.log('\nNOTE: a ~400KB tx may exceed public-testnet relay policy. The verifier')
-  console.log('evaluates identically under mock/regtest consensus (proven); this is a')
+  console.log('evaluates identically under regtest consensus (proven); this is a')
   console.log('network-acceptance test, not a new claim about the script.')
   process.exit(1)
 }

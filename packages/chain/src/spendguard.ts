@@ -11,7 +11,7 @@ export interface SpendGuardOpts {
   maxPerDay?: number // sats — refuse once today's UTC spend would exceed this
   minIntervalMs?: number // ms — refuse a broadcast sooner than this after the last
   ledgerFile?: string // persisted day ledger + cost record (atomic write)
-  unlimited?: boolean // regtest/mock default: caps off unless env set
+  unlimited?: boolean // regtest default: caps off unless env set
   refuseOnInterval?: boolean // default false: wait out the interval instead of refusing
 }
 

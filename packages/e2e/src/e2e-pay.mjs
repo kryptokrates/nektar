@@ -1,4 +1,4 @@
-// Real-chain payment e2e — no mocks. Spins the full runtime (regtest or ttn),
+// Real-chain payment e2e. Spins the full runtime (regtest or ttn),
 // funds an INDEPENDENT payer key on-chain, runs the paid-call flow:
 //   402 invoice → signed tx paying the operator + OP_RETURN tag → settled by
 //   real consensus → receipt commits the settlement txid → /v1/verify green.
@@ -72,7 +72,7 @@ const call = async (tool, body) =>
   await (await fetch(`${base}/v1/tools/${tool}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()
 console.log(`\n═══ payment e2e on ${net.toUpperCase()} (real chain) ═══`)
 
-// ── payer: an independent key, funded on-chain (not a mock utxo)
+// ── payer: an independent key, funded on-chain
 const payer = PrivateKey.fromRandom()
 const payerAddr = payer.toPublicKey().toAddress([0x6f])
 const payerUtxos = []
@@ -181,7 +181,7 @@ check(r.committed === true, `paid call committed — payment tx ${txid.slice(0, 
 check(r.receipt.payment?.txid === txid, 'receipt commits the settlement txid')
 check(r.receipt.payment?.payTo === opAddr, `payment pays the operator ${opAddr}`)
 
-// ── 3) the payment tx exists ON THE REAL CHAIN (not a mock ledger)
+// ── 3) the payment tx exists ON THE REAL CHAIN
 if (net === 'regtest') {
   const res = await fetch(`${rc.assetUrl}/tx/${txid}`).catch(() => null)
   check(!!res?.ok, `payment tx resolvable via Teranode asset API (${res?.status ?? 'unreachable'})`)

@@ -318,7 +318,7 @@ test('finger: body validation refuses too many or bad hosts', async () => {
     assert.throws(() => checkFingerBody({ ...body1(), office: 'bad office' }))
     assert.throws(() => checkFingerBody({ ...body1(), stream: 'bad stream' }))
     assert.throws(() => checkFingerBody({ ...body1(), nets: ['UPPER'] }))
-    // http is refused unless the caller is on a mock/regtest network
+    // http is refused unless the caller is on a regtest/local rig
     assert.throws(() => checkFingerBody(body1(['http://h.example.com'])))
     checkFingerBody(body1(['http://127.0.0.1:18091']), { allowHttp: true })
   } finally {

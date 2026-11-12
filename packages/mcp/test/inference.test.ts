@@ -164,7 +164,7 @@ test('commitReceipt auto-attests in one call; exclusive with modelAttestation', 
   )
 })
 
-test('attestInference: on-chain when artifacts + funding exist (mock evaluates the 398KB verifier)', { timeout: 120_000 }, async (t) => {
+test('attestInference: on-chain when artifacts + funding exist (the node evaluates the 398KB verifier)', { timeout: 120_000 }, async (t) => {
   delete process.env.NEKTAR_GROTH16_OUT
   const w = await stackWorld(t, 5, 100_000)
   if (w === undefined) return

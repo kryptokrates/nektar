@@ -1,7 +1,7 @@
 // V1 NektarFeeVault covenant — live regtest E2E (NEKTAR_NETWORK=regtest):
 // fund a vault UTXO → spend through the covenant → spend the continuation →
 // negative: over-cap spend must be REFUSED by the node (real Teranode script
-// evaluation, not the mock interpreter).
+// evaluation).
 import { PrivateKey, Transaction, LockingScript, P2PKH } from '@bsv/sdk'
 import { buildP2PKHScript } from 'runar-sdk'
 import { FeeVault } from '@nektar/anchor'

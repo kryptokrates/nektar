@@ -59,7 +59,7 @@ The instance publishes its own bfinger record (hosts, bbox office, journal
 stream) and republishes it when it changes. Counterparties resolve that
 record and add its hosts to their own configured set, so a buyer and a seller
 that share only one host still reach each other. Resolved hosts must be
-`https` and may not be loopback, private or link-local outside mock/regtest.
+`https` and may not be loopback, private or link-local outside regtest/local rigs.
 
 No inbound port is required: without `NEKTAR_CALLBACK_URL` the instance
 subscribes to the broadcaster's status stream and receives confirmations and
@@ -105,7 +105,7 @@ CLI-only and never reachable from a tool.
 
 | var                                                    | meaning                                                                      |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `NEKTAR_NETWORK`                                       | `mock` (offline) \| `regtest` \| `testnet` \| `ttn` \| `main`                |
+| `NEKTAR_NETWORK`                                       | `regtest` \| `testnet` \| `ttn` \| `main`                                     |
 | `NEKTAR_FUND_WIF`                                      | fee key — required on live nets                                              |
 | `NEKTAR_OPERATOR_WIF`                                  | signing / settlement key                                                     |
 | `NEKTAR_AUTOMATION`                                    | `1` turns the market runtime on                                              |
@@ -132,7 +132,7 @@ CLI-only and never reachable from a tool.
   configured host, withholding is undetectable.
 - Wants expire with their collect window, offers after their TTL; hosts refuse
   artifacts without an expiry or with one more than 7 days ahead.
-- Verified on mock, on a local Teranode regtest chain and on public testnet,
+- Verified on a local Teranode regtest chain and on public testnet,
   each with two reference hosts (three sellers at 450/300/200 sats, buyer
   takes 200). The testnet run used local http hosts, so host resolution over
   bfinger was not exercised there; see [AUTOMATION](AUTOMATION.md#verification-status).

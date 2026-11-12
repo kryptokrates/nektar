@@ -63,7 +63,7 @@ if (args.includes('--regtest')) {
   }
   execFileSync('docker', ['mcp', 'secret', 'set', 'nektar-regtest.fund_wif'], { input: wif, stdio: ['pipe', 'ignore', 'inherit'] })
   execFileSync('docker', ['mcp', 'secret', 'set', 'nektar-regtest.rpc_pass'], { input: pass, stdio: ['pipe', 'ignore', 'inherit'] })
-  // own profile: the regtest server exposes the same tool names as the mock one
+  // own profile: the regtest server exposes the operator tool set
   const RP = `${PROFILE}_regtest` // profile IDs are slugs (no "-")
   const ryaml = staged('nektar-regtest.yaml')
   if (!out(['mcp', 'profile', 'list']).split(/\s+/).includes(RP)) run(['mcp', 'profile', 'create', '--name', RP, '--id', RP])

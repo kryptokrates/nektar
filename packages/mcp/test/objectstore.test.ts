@@ -85,15 +85,15 @@ test('objectstore: put/get/head round trip on a signature-checking fake S3', asy
   try {
     const s = store(url)
     const bytes = new TextEncoder().encode('{"v":1,"evidence":true}')
-    const ref = await s.put('evidence/mock/op-1.json', bytes, 'application/json')
-    assert.equal(ref.key, 'evidence/mock/op-1.json')
+    const ref = await s.put('evidence/regtest/op-1.json', bytes, 'application/json')
+    assert.equal(ref.key, 'evidence/regtest/op-1.json')
     assert.equal(ref.size, bytes.length)
     assert.equal(ref.sha256, sha256Hex(bytes))
     const head = await s.head(ref.key)
     assert.equal(head?.size, bytes.length)
     assert.equal(head?.sha256, ref.sha256) // x-amz-meta-sha256 carried through
     assert.deepEqual([...(await s.get(ref.key))], [...bytes])
-    assert.equal(objects.has('evidence/mock/op-1.json'), true)
+    assert.equal(objects.has('evidence/regtest/op-1.json'), true)
   } finally {
     server.close()
   }

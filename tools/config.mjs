@@ -83,7 +83,7 @@ const KNOWN = new Set([
   'NEKTAR_AI_API_KEY_FILE'
 ])
 const SECRET = /WIF|PASS|KEY|TOKEN|SECRET/i
-const NETWORKS = ['mock', 'regtest', 'testnet', 'ttn', 'main']
+const NETWORKS = ['regtest', 'testnet', 'ttn', 'main']
 
 const read = () => (existsSync(envPath) ? readFileSync(envPath, 'utf8') : '')
 const parse = (txt) =>
@@ -153,7 +153,7 @@ switch (cmd) {
   case 'check':
   case 'validate': {
     const env = parse(read())
-    const net = get('NEKTAR_NETWORK', env) ?? 'mock'
+    const net = get('NEKTAR_NETWORK', env) ?? 'regtest'
     const warn = (m) => console.log(`  ! ${m}`)
     const ok = (m) => console.log(`  ok ${m}`)
     NETWORKS.includes(net) ? ok(`NEKTAR_NETWORK=${net}`) : warn(`NEKTAR_NETWORK=${net} — must be ${NETWORKS.join('|')}`)
@@ -171,7 +171,7 @@ switch (cmd) {
         : warn('regtest needs NEKTAR_FUND_WIF/NEKTAR_REGTEST_WIF + NEKTAR_RPC_PASS')
     const port = get('NEKTAR_HTTP_PORT', env)
     if (port !== undefined) /^\d+$/.test(port) && Number(port) < 65536 ? ok(`HTTP :${port}`) : warn(`NEKTAR_HTTP_PORT=${port} is not a valid port`)
-    else if (net !== 'mock') warn('no NEKTAR_HTTP_PORT — the instance serves MCP stdio only; agents cannot reach it over HTTP')
+    else warn('no NEKTAR_HTTP_PORT — the instance serves MCP stdio only; agents cannot reach it over HTTP')
     const dir = get('NEKTAR_DATA_DIR', env)
     dir
       ? existsSync(resolve(dir))

@@ -1,5 +1,5 @@
 // The "full paper" scenario (GOAL-v3 §Testing): one flow through every layer
-// of arXiv:2506.13246 as implemented — run by the offline e2e (mock chain)
+// of arXiv:2506.13246 as implemented — run by the e2e on the regtest stack
 // and the regtest e2e (Teranode) with the same code; only `settle` differs.
 import { PrivateKey, type Transaction } from '@bsv/sdk'
 import { utf8, toHex, hash160 } from '@nektar/core'

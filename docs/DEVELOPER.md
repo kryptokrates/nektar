@@ -15,7 +15,7 @@
 | Package     | Responsibility                                                                                                                                                                                                                                                          |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `core`      | canonical serialization, domain tags, double-SHA-256 Merkle, R' chaining, anchor codec                                                                                                                                                                                  |
-| `chain`     | Broadcaster/ChainTracker/Funder interfaces; `MockChain` (script-evaluating, reorgs, double-spend checks); Teranode adapters                                                                                                                                             |
+| `chain`     | Broadcaster/ChainTracker/Funder interfaces; `StackChain`/`StackFunder` test kit on the regtest stack (real script admission, real BUMPs); Teranode adapters                                                                                                                                             |
 | `log`       | append-only BatchLog, dedup by H(d‖p), signed inclusion promises, batch policy, stores                                                                                                                                                                                  |
 | `contracts` | Rúnar `NektarAnchor`, `NektarAutomaton` (+ measured `NektarAutomatonZk`), artifacts, byte-authenticated decoders                                                                                                                                                        |
 | `anchor`    | `AnchorChain` (one head UTXO per shard, retry and adoption, BEEF normalization), `NektarProvider`                                                                                                                                                                       |
@@ -35,7 +35,7 @@
 
 ## How to…
 
-- **Add a Rúnar contract method.** Declare state in `super()` order and keep "constants" as mutable state. Use distinct `const`s, never reassign a `let` from a private method. Every method must `addOutput` (a terminal method reads deploy-time state). Then run `pnpm --filter @nektar/contracts build`. Add tests that go through a chain class on `MockChain.verifyScripts = true` (the script-evaluating mock is the oracle) and include a regtest step.
+- **Add a Rúnar contract method.** Declare state in `super()` order and keep "constants" as mutable state. Use distinct `const`s, never reassign a `let` from a private method. Every method must `addOutput` (a terminal method reads deploy-time state). Then run `pnpm --filter @nektar/contracts build`. Add tests that go through `stackWorld`/`stackChain` — the real node's script admission is the oracle.
 - **Add an MCP tool.** Add the schema to `TOOLS` and a case in `callTool` that calls a **public** `NektarMemory` method. Add a test in `mcp/test` and, where it adds I/O, a stdio test.
 - **Add a policy rule.** Write L_pol with an `@id`; run `lint()`; anchor the new DAG root and configure `anchoredPolicyRoot`; add a derivation test with `verifyDerivation`.
 - **Add an automaton.** Write the `AutomatonDef` (≤16 transitions, deterministic, F non-empty), then call `AutomatonChain.deploy`; steps are δ-checked on-chain.
@@ -51,6 +51,6 @@
 ## Test conventions
 
 - `node:test` + `node:assert/strict`. Each package has `test/*.test.ts`, compiled to `dist/test`.
-- Use the script-evaluating `MockChain` (`verifyScripts = true`) for anything that spends a contract.
+- Spend paths are exercised through `stackWorld`/`stackChain` — the real node evaluates every covenant script at broadcast.
 - Close every worker and handle (`shutdownZk()`, `knex.destroy()`); never `process.exit` in tests.
 - Fuzz with seeds: `NEKTAR_FUZZ_SEED`, `NEKTAR_FUZZ_N`.

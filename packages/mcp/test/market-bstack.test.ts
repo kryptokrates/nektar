@@ -1806,12 +1806,12 @@ test('bstack AC: hostile record hosts are refused by the SSRF guard', async (t) 
   assert.equal(fingerHostAllowed('https://172.16.0.1'), false)
   assert.equal(fingerHostAllowed('https://192.168.1.1'), false)
   assert.equal(fingerHostAllowed('javascript:alert(1)'), false)
-  assert.equal(fingerHostAllowed('http://ok.example.com'), false, 'http refused off mock')
+  assert.equal(fingerHostAllowed('http://ok.example.com'), false, 'http refused off regtest/local rigs')
   assert.equal(fingerHostAllowed('https://ok.example.com'), true)
   // under allowHttp (regtest) plain http is fine — private literals still refused
   assert.equal(fingerHostAllowed('http://127.0.0.1:18091', { allowHttp: true }), false)
   assert.equal(fingerHostAllowed('http://ok.example.com', { allowHttp: true }), true)
-  // on a mock network the guard stands down entirely — the rig's hosts ARE local
+  // on a local rig the guard stands down entirely — the rig's hosts ARE local
   assert.equal(fingerHostAllowed('http://127.0.0.1:18091', { allowHttp: true, allowLocal: true }), true)
 })
 
@@ -1865,7 +1865,7 @@ const fakeS3 = async () => {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
   const port = (server.address() as { port: number }).port
   const { S3ObjectStore } = await import('../src/objectstore.js')
-  const client = new S3ObjectStore({ endpoint: `http://127.0.0.1:${port}`, bucket: 'evidence-mock', accessKey: 'a', secretKey: 's' })
+  const client = new S3ObjectStore({ endpoint: `http://127.0.0.1:${port}`, bucket: 'evidence-regtest', accessKey: 'a', secretKey: 's' })
   return { server, client, objects, flags }
 }
 
@@ -1891,7 +1891,7 @@ test('bstack AD: a full deal stores redacted evidence — verified read, one eve
     const ref = bo.data.evidenceRef as { bucket: string; key: string; sha256: string; size: number } | undefined
     assert.ok(ref !== undefined, 'buyer op carries evidenceRef')
     assert.equal(ref!.key, `evidence/${NET}/${bo.operationId}.json`)
-    assert.equal(ref!.bucket, 'evidence-mock')
+    assert.equal(ref!.bucket, 'evidence-regtest')
     const evs = (await b.rt.store.events(bo.operationId)).filter((e) => e.cause === 'evidence_stored')
     assert.equal(evs.length, 1, 'exactly one evidence_stored event')
     const bytes = await s3.client.getVerified(ref!)

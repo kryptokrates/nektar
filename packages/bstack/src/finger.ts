@@ -42,7 +42,7 @@ export interface FingerBody {
 
 const NET_LABEL = /^[a-z][a-z0-9-]{0,15}$/
 
-/** Shape-check a body. `allowHttp` is for mock/regtest hosts: records on a
+/** Shape-check a body. `allowHttp` is for regtest/local-rig hosts: records on a
  *  real network name https hosts only. Throws on any violation. */
 export function checkFingerBody(body: FingerBody, opts?: { allowHttp?: boolean }): void {
   if (body === null || typeof body !== 'object' || body.v !== 1) throw new Error('finger body: v must be 1')
@@ -568,7 +568,7 @@ export function fingerHostAllowed(url: string, opts?: { allowHttp?: boolean; all
     return false
   }
   if (u.protocol !== 'https:' && !(opts?.allowHttp === true && u.protocol === 'http:')) return false
-  if (opts?.allowLocal === true) return true // mock/regtest: hosts are the test rig's
+  if (opts?.allowLocal === true) return true // regtest/local rigs: hosts are the rig's
   const h = u.hostname.toLowerCase()
   if (h === 'localhost' || h.endsWith('.localhost')) return false
   const ip = /^\d{1,3}(\.\d{1,3}){3}$/.test(h) ? h.split('.').map(Number) : undefined

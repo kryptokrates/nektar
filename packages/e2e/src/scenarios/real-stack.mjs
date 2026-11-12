@@ -263,6 +263,10 @@ function spawnInstance(a) {
       NEKTAR_TX_LOG: join(a.dataDir, 'tx-log.jsonl'),
       NODE_OPTIONS: `--report-on-fatalerror --report-directory=${a.dataDir}`,
       NEKTAR_MARKET_HOSTS: a.hosts.join(','),
+      // envelope receipts must reach every copy — the ack targets the sender's
+      // record hosts, which only exist when records are published (LIVE sets
+      // this implicitly via NEKTAR_MARKET_LOCAL_HOSTS; regtest needs it too)
+      NEKTAR_BFINGER_PUBLISH: '1',
       NEKTAR_AUTOMATION_INTERVAL_MS: '1000',
       NEKTAR_OFFER_TTL_BLOCKS: '48',
       ...(LIVE
@@ -424,10 +428,11 @@ try {
       await delay(15_000)
     }
   }
-  if (LIVE) {
+  {
     // a record resolves while its token is unmined, as long as the token's
     // ancestry is proven — no further block. Each agent's record must name
-    // exactly its own hosts.
+    // exactly its own hosts. Without records the ack path cannot compute the
+    // sender's fan-out set and leaves copies stranded on unconfigured hosts.
     const t0 = Date.now()
     for (;;) {
       const recs = await Promise.all(
@@ -540,7 +545,7 @@ try {
     hopMs,
     blocksMinedDuringDeal: dealBlocks,
     hosts: { a: HOST_A, b: HOST_B },
-    fingerResolved: LIVE,
+    fingerResolved: true,
     broadcasts: Object.fromEntries(agents.map((a) => [a.name, a.txCount]))
   }
   writeFileSync(join(dir, 'summary.json'), JSON.stringify(summary, null, 1))

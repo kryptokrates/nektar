@@ -5,7 +5,7 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for market
 // artifacts, with the blogs derivations and tags of spec section 6.1.
 import { PrivateKey, ProtoWallet, Transaction, type ChainTracker } from '@bsv/sdk'
-import { mintCarrier, fundingLock, lockFields, unlocker, type Derivation } from '@lightwebinc/bcommon'
+import { mintCarrier, fundingLock, lockFields, unlocker, type Derivation, type SigningWallet } from '@lightwebinc/bcommon'
 import { P2PKH } from '@bsv/sdk'
 import {
   EncodingLines,
@@ -42,8 +42,8 @@ const DERIVATION_ANCHOR: Derivation = { protocol: [1, 'blogs'], keyID: 'anchor' 
 const ZERO32 = '00'.repeat(32)
 
 export const logTopic = (stream: string): string => `tm_log_${stream}`
-export const logFundingLock = async (key: PrivateKey): Promise<import('@bsv/sdk').LockingScript> =>
-  await fundingLock(new ProtoWallet(key), ORIGINATOR, DERIVATION_BATCH, TagFunding)
+export const logFundingLock = async (key: PrivateKey, wallet?: SigningWallet): Promise<import('@bsv/sdk').LockingScript> =>
+  await fundingLock(wallet ?? new ProtoWallet(key), ORIGINATOR, DERIVATION_BATCH, TagFunding)
 
 // ── stream state ─────────────────────────────────────────────────────────
 
@@ -111,6 +111,7 @@ const flightKey = (s: string): string => `${s}#flight` // seq=interval, prev=txi
  *  only after the journal write AND a quorum of hosts took the carrier. */
 export async function appendLog(p: {
   key: PrivateKey
+  wallet?: SigningWallet
   ledger: TreeLedger
   journal: CarrierJournal
   state: LogState
@@ -152,9 +153,11 @@ export async function appendLog(p: {
       size: content.length,
       extra: []
     })
-    const slot = await p.ledger.take(LOG_KIND, (await logFundingLock(p.key)).toHex())
+    const slot = await p.ledger.take(LOG_KIND, (await logFundingLock(p.key, p.wallet)).toHex())
     if (slot === undefined) throw new Error('no funding slot')
-    const carrier = await mintCarrier(new ProtoWallet(p.key), ORIGINATOR, DERIVATION_BATCH, record, slot.tree, slot.vout)
+    // boundary: the wallet only signs the record lock — the carrier itself is
+    // unmineable and must never be routed through a wallet action
+    const carrier = await mintCarrier(p.wallet ?? new ProtoWallet(p.key), ORIGINATOR, DERIVATION_BATCH, record, slot.tree, slot.vout)
     beef = carrier.toAtomicBEEF()
     txid = carrier.id('hex')
     commitment = toHex(new Uint8Array(carrier.hash() as number[]))
@@ -402,6 +405,7 @@ export async function publishMinedLog(p: { journal: CarrierJournal; hosts: strin
  *  `maxAgeMs` (engine clock). */
 export async function anchorLog(p: {
   key: PrivateKey
+  wallet?: SigningWallet
   ledger: TreeLedger
   journal: CarrierJournal
   state: LogState
@@ -465,7 +469,7 @@ export async function anchorLog(p: {
 
   const ah = await p.state.get(anchorKey(p.stream))
   const interval = (ah?.seq ?? 0) + 1
-  const w = new ProtoWallet(p.key)
+  const w = p.wallet ?? new ProtoWallet(p.key)
   const record = encodeAnchor({
     producer: new Uint8Array(p.key.toPublicKey().encode(true) as number[]),
     stream: p.stream,

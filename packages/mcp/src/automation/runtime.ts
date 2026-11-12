@@ -91,6 +91,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   const store = new AutomationStore(kx)
   await store.init()
   const key = mem.operatorKey()
+  const wallet = mem.operatorWallet()
   const objectStore = cfg.objectStore ?? objectStoreFromEnv()
   const marketHosts = (cfg.marketHosts ?? []).map((u) => u.replace(/\/+$/, ''))
   const log = cfg.log ?? (() => {})
@@ -154,7 +155,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   if (lanes !== undefined) {
     const { PacksStore } = await import('../packstore.js')
     packsStore = new PacksStore({
-      publish: (kind, id, body) => lanes.mod.publishSubRecord({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, kind, id, body })
+      publish: (kind, id, body) => lanes.mod.publishSubRecord({ key, wallet, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, kind, id, body })
     })
     mem.attachPacksStore(packsStore)
   }
@@ -195,6 +196,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
       const r = await lanes.mod.publishArtifact({
         key,
+        wallet,
         ledger: lanes.ledger,
         journal: lanes.journal,
         hosts: marketHosts,
@@ -210,6 +212,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
       const hosts = so.offer.buyerPub !== undefined ? await hostsFor(so.offer.buyerPub) : marketHosts
       const r = await lanes.mod.publishArtifact({
         key,
+        wallet,
         ledger: lanes.ledger,
         journal: lanes.journal,
         hosts,
@@ -303,6 +306,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
               const rec = await resolveRecord(to)
               await lanes.mod.sendBox({
                 key,
+                wallet,
                 ledger: lanes.ledger,
                 journal: lanes.journal,
                 hosts: rec === undefined ? marketHosts : await hostsFor(to),
@@ -320,7 +324,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
           collect: async (): Promise<Array<{ from: string; msg: MarketMessage; refs?: import('@nektar/bstack').BoxRef[] }>> => {
             try {
               const tracker = mem.sdkTracker()
-              const r = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker })
+              const r = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet })
               laneNotes(r)
               pendingAcks = r.items.map((i) => ({
                 txid: i.txid,
@@ -407,7 +411,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
                     retry.push({ txid: i.txid, commitment: i.commitment, from: i.from, until: priorUntil.get(`${i.txid}:${i.commitment}`) ?? now + 600 })
               }
               deferredAcks = retry
-              const r = await lanes.mod.ackBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: [...ackHosts], office: cfg.boxOffice, items })
+              const r = await lanes.mod.ackBox({ key, wallet, ledger: lanes.ledger, journal: lanes.journal, hosts: [...ackHosts], office: cfg.boxOffice, items })
               if (r.skipped > 0 && r.skipped !== lastAckSkipped) {
                 lastAckSkipped = r.skipped
                 log(`automation: box ack: ${r.skipped} envelope(s) skipped — no bbox funding slot`)
@@ -527,6 +531,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
           for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger'] as const) {
             const r = await lanes.mod.ensureTrees({
               key,
+              wallet,
               ledger: lanes.ledger,
               kind,
               lowWater: kind === 'finger' ? 1 : cfg.treeLowWater,
@@ -534,11 +539,11 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
               satsPerOutput: kind === 'log' || kind === 'finger' ? 100 : undefined,
               lock:
                 kind === 'bbox'
-                  ? await lanes.mod.boxFundingLock(key)
+                  ? await lanes.mod.boxFundingLock(key, wallet)
                   : kind === 'log'
-                    ? await lanes.mod.logFundingLock(key)
+                    ? await lanes.mod.logFundingLock(key, wallet)
                     : kind === 'finger'
-                      ? await lanes.mod.fingerFundingLock(key)
+                      ? await lanes.mod.fingerFundingLock(key, wallet)
                       : undefined,
               takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0],
               broadcast: (tx) => mem.broadcastTx(tx),
@@ -577,6 +582,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
           const packsRef = packsStore?.ref()
           const r = await lanes.mod.publishFinger({
             key,
+            wallet,
             state: fingerState,
             ledger: lanes.ledger,
             journal: lanes.journal,
@@ -691,6 +697,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
       if (lines.length > 0)
         await lanes.mod.appendLog({
           key,
+          wallet,
           ledger: lanes.ledger,
           journal: lanes.journal,
           state: logState,
@@ -720,6 +727,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
       try {
         const r = await lanes.mod.anchorLog({
           key,
+          wallet,
           ledger: lanes.ledger,
           journal: lanes.journal,
           state: logState,

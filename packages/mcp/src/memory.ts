@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { BudgetAuthority } from './budget.js'
 import type { Automation } from './automation/types.js'
-import { PrivateKey, PublicKey, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
+import { PrivateKey, PublicKey, ProtoWallet, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte, type WalletInterface } from '@bsv/sdk'
 import {
   utf8,
   fromHex,
@@ -73,8 +73,21 @@ import {
   verifyCombinedStark
 } from '@nektar/zk'
 
+/** the operator's signing surface for protocol artifacts — carrier locks,
+ *  record signatures, envelope seal/open. `ProtoWallet` satisfies this
+ *  locally; any BRC-100 wallet implementing the crypto subset can be
+ *  injected (e.g. @bsv/wallet-toolbox `Wallet`, or WalletClient to an
+ *  external signer) so the operator key never lives in-process. Plumbing
+ *  ops that genuinely need private-key material — P2PKH funding inputs,
+ *  change scripts, deterministic salts — stay on `operatorKey()`. */
+export type OperatorWallet = Pick<WalletInterface, 'getPublicKey' | 'createSignature' | 'encrypt' | 'decrypt'>
+
 export interface NektarMemoryOptions {
   signingKey?: PrivateKey
+  /** injected signing surface for lanes/bstack protocol calls — defaults to
+   *  `new ProtoWallet(fundKey)`. NOTE: unmineable carriers and covenant txs
+   *  never become wallet `createAction`s — this surface only signs. */
+  wallet?: OperatorWallet
   shardKeys?: Map<string, PrivateKey>
   agentSeed?: PrivateKey // enables encryption when set
   maxLevel?: number // highest access level this seed may hold
@@ -429,6 +442,7 @@ export class NektarMemory {
     }
   }
   private log: BatchLog
+  private _wallet: OperatorWallet | undefined
   private anchors = new Map<string, AnchorChain>()
   private tails = new Map<string, AnchorLink[]>()
   private anchorTxs = new Map<string, import('@bsv/sdk').Transaction>()
@@ -666,6 +680,10 @@ export class NektarMemory {
   /** the operator fee key — covenant hosts need it as owner/buyer key */
   operatorKey(): PrivateKey {
     return this.fundKey
+  }
+
+  operatorWallet(): OperatorWallet {
+    return (this._wallet ??= this.opts.wallet ?? new ProtoWallet(this.fundKey))
   }
   /** funding outs for covenant hosts (escrow deposits, covenant inputs) —
    *  callers markSpent/addOwned after a successful broadcast like

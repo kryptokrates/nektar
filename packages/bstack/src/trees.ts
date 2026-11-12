@@ -1,5 +1,6 @@
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import { mintTree, type TreeLedger } from './tree.js'
+import type { SigningWallet } from '@lightwebinc/bcommon'
 import type { FundingOut, BroadcastResult } from '@nektar/chain'
 
 /** outputs per funding tree unless the caller sizes it */
@@ -7,6 +8,7 @@ export const TREE_SIZE = 64
 
 export async function ensureTrees(p: {
   key: PrivateKey
+  wallet?: SigningWallet
   ledger: TreeLedger
   lowWater?: number
   size?: number
@@ -39,7 +41,7 @@ export async function ensureTrees(p: {
   let minted: string | undefined
   if (remaining < lowWater && (await p.ledger.unproven()).filter((u) => u.kind === kind).length === 0) {
     const funding = await p.takeFunding(size * satsPerOutput + 2000)
-    const tree = await mintTree({ key: p.key, funding, n: size, satsPerOutput, lock: p.lock })
+    const tree = await mintTree({ key: p.key, wallet: p.wallet, funding, n: size, satsPerOutput, lock: p.lock })
     const r = await p.broadcast(tree)
     if (r.status !== 'success') throw new Error(`ensureTrees: broadcast failed ${JSON.stringify(r).slice(0, 120)}`)
     await p.ledger.add(tree, size, kind)

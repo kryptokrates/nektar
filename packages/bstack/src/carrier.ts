@@ -34,6 +34,8 @@ export async function buildCarrier(p: {
 }): Promise<{ carrier: Transaction; beef: number[] }> {
   const { key, payload, slot } = p
   if (!anchoredTree(slot.tree)) throw new Error('buildCarrier: funding tree is not proven (no merklePath or anchored ancestry)')
+  // boundary: the wallet only signs the record lock — the carrier itself is
+  // unmineable and must never be routed through a wallet action
   const carrier = await mintCarrier(p.wallet ?? new ProtoWallet(key), ORIGINATOR, DERIVATION, payload, slot.tree, slot.vout)
   return { carrier, beef: carrier.toAtomicBEEF() }
 }

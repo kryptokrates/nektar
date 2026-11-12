@@ -1,6 +1,6 @@
 import { PrivateKey, ProtoWallet } from '@bsv/sdk'
 import { sha256, toHex } from '@nektar/core'
-import { fundingLock } from '@lightwebinc/bcommon'
+import { fundingLock, type SigningWallet } from '@lightwebinc/bcommon'
 import { buildCarrier, carrierFundingLockHex } from './carrier.js'
 import { encodePayload, lanesFor, bodyDomains, type MarketPayload } from './market.js'
 import { submitAll, type Quorum } from './hosts.js'
@@ -13,6 +13,7 @@ export function artifactHash(payload: MarketPayload): string {
 
 export async function publishArtifact(p: {
   key: PrivateKey
+  wallet?: SigningWallet
   ledger: TreeLedger
   journal: CarrierJournal
   hosts: string[]
@@ -22,7 +23,7 @@ export async function publishArtifact(p: {
 }): Promise<{ txid: string; took: string[]; admitted: string[]; missed: Array<{ host: string; error: string }> }> {
   const hash = artifactHash(p.payload)
   const topics = lanesFor(p.net, bodyDomains(p.payload))
-  const lockHex = (await fundingLock(new ProtoWallet(p.key), ORIGINATOR, DERIVATION, FUNDING_TAG)).toHex()
+  const lockHex = (await fundingLock(p.wallet ?? new ProtoWallet(p.key), ORIGINATOR, DERIVATION, FUNDING_TAG)).toHex()
   let beef: number[] | undefined
   let txid: string | undefined
   let held = await p.journal.get(hash)
@@ -37,7 +38,7 @@ export async function publishArtifact(p: {
   } else {
     const slot = await p.ledger.take('market', lockHex)
     if (slot === undefined) throw new Error('no funding slot')
-    const c = await buildCarrier({ key: p.key, payload: encodePayload(p.payload), slot })
+    const c = await buildCarrier({ key: p.key, wallet: p.wallet, payload: encodePayload(p.payload), slot })
     beef = c.beef
     txid = c.carrier.id('hex')
     await p.journal.put(hash, { txid, beef, topics })

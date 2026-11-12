@@ -1,4 +1,4 @@
-import { Hash, PrivateKey, ProtoWallet, Utils, type ChainTracker } from '@bsv/sdk'
+import { Hash, PrivateKey, ProtoWallet, Utils, type ChainTracker, type WalletInterface } from '@bsv/sdk'
 import { sealEnvelope, encodePlaintext, envelopeRecord, envelopeCarrier, envelopeFundingLock } from '@lightwebinc/bbox-host/codec/send.js'
 import { decodeEnvelope, encodeReceipt, checkBox, checkOffice, MaxAcks } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { checkContent, verifyContentSignature } from '@lightwebinc/bbox-host/codec/content.js'
@@ -41,10 +41,13 @@ const fromJ = (v: JValue): unknown => {
   if (Array.isArray(v)) return v.map(fromJ)
   return v
 }
-export const boxFundingLock = async (key: PrivateKey): Promise<import('@bsv/sdk').LockingScript> => await envelopeFundingLock(new ProtoWallet(key), ORIGINATOR)
+type BoxWallet = Pick<WalletInterface, 'getPublicKey' | 'createSignature' | 'encrypt' | 'decrypt'>
+
+export const boxFundingLock = async (key: PrivateKey, wallet?: BoxWallet): Promise<import('@bsv/sdk').LockingScript> => await envelopeFundingLock(wallet ?? new ProtoWallet(key), ORIGINATOR)
 
 export async function sendBox(p: {
   key: PrivateKey
+  wallet?: BoxWallet
   ledger: TreeLedger
   journal: CarrierJournal
   hosts: string[]
@@ -62,7 +65,7 @@ export async function sendBox(p: {
   checkOffice(office)
   checkBox(BOX)
   if (p.refs !== undefined && p.refs.length > MaxRefs) throw new Error(`sendBox: ${p.refs.length} refs > ${MaxRefs}`)
-  const w = new ProtoWallet(p.key)
+  const w = p.wallet ?? new ProtoWallet(p.key)
   const from = new Uint8Array(Array.from(p.key.toPublicKey().encode(true) as number[]))
   const to = new Uint8Array(Utils.toArray(p.to, 'hex'))
   const doc = new JObject().set('nektar', toJ(p.body))
@@ -118,6 +121,7 @@ const bytewise = (a: Uint8Array, b: Uint8Array): number => {
 
 export async function ackBox(p: {
   key: PrivateKey
+  wallet?: BoxWallet
   ledger: TreeLedger
   journal: CarrierJournal
   hosts: string[]
@@ -130,7 +134,7 @@ export async function ackBox(p: {
   const topics = [`tm_bbox_${office}`]
   const resend = new Map<string, { txid: string; beef: number[] }>()
   const fresh: Array<{ txid: string; commitment: string }> = []
-  const bboxLock = (await boxFundingLock(p.key)).toHex()
+  const bboxLock = (await boxFundingLock(p.key, p.wallet)).toHex()
   let resent = 0
   for (const i of p.items) {
     const hit = await p.journal.get(`ack:${i.txid}`)
@@ -145,7 +149,7 @@ export async function ackBox(p: {
   let acked = 0,
     skipped = 0
   const receipts: string[] = []
-  const w = new ProtoWallet(p.key)
+  const w = p.wallet ?? new ProtoWallet(p.key)
   const by = new Uint8Array(Array.from(p.key.toPublicKey().encode(true) as number[]))
   for (let c = 0; c < fresh.length; c += MaxAcks) {
     const chunk = fresh.slice(c, c + MaxAcks)
@@ -176,6 +180,7 @@ export async function ackBox(p: {
 
 export async function readBox(p: {
   key: PrivateKey
+  wallet?: BoxWallet
   hosts: string[]
   office?: string
   tracker: ChainTracker
@@ -184,7 +189,7 @@ export async function readBox(p: {
 }): Promise<{ items: BoxItem[]; withheld: Array<{ host: string; txid: string }>; unreachable: string[] }> {
   const office = p.office ?? DEFAULT_OFFICE
   const me = p.key.toPublicKey().toString()
-  const w = new ProtoWallet(p.key)
+  const w = p.wallet ?? new ProtoWallet(p.key)
   // interactive read path: a host that cannot answer inside a few seconds is
   // down for deal purposes — reported unreachable, not waited on
   const r = await lookupAll(p.hosts, 'ls_bbox', { office, to: me }, { timeoutMs: p.timeoutMs ?? 5_000 })
@@ -214,7 +219,7 @@ export async function readBox(p: {
   return { items: out, withheld, unreachable }
 }
 
-async function openEnvelope(beef: number[], w: ProtoWallet, office: string, me: string, tracker: ChainTracker): Promise<BoxItem | undefined> {
+async function openEnvelope(beef: number[], w: BoxWallet, office: string, me: string, tracker: ChainTracker): Promise<BoxItem | undefined> {
   // spec §8.1 via the real codec verdict, then §4.7 recipient checks in order
   const adm = await admit(new Uint8Array(beef), [], { office, headers: tracker }).catch(() => undefined)
   if (adm === undefined || adm.kind !== 'envelope' || adm.carrier === undefined) return undefined

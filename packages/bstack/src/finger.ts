@@ -19,7 +19,8 @@ import {
   readWire,
   subjectTx,
   type Derivation,
-  type Ref
+  type Ref,
+  type SigningWallet
 } from '@lightwebinc/bcommon'
 import type { FundingOut } from '@nektar/chain'
 import {
@@ -51,8 +52,8 @@ const DERIVATION_PROFILE: Derivation = { protocol: Protocol, keyID: KeyIDProfile
 const DERIVATION_RECORD: Derivation = { protocol: Protocol, keyID: KeyIDRecord }
 const ZERO32 = new Uint8Array(32)
 
-export const fingerFundingLock = async (key: PrivateKey): Promise<LockingScript> =>
-  await fundingLock(new ProtoWallet(key), ORIGINATOR, DERIVATION_RECORD, new Uint8Array(FundingTag))
+export const fingerFundingLock = async (key: PrivateKey, wallet?: SigningWallet): Promise<LockingScript> =>
+  await fundingLock(wallet ?? new ProtoWallet(key), ORIGINATOR, DERIVATION_RECORD, new Uint8Array(FundingTag))
 
 // ── the record body ────────────────────────────────────────────────────────
 
@@ -242,6 +243,7 @@ export function ancestorsOf(tx: Transaction): Transaction[] {
 }
 export async function publishFinger(p: {
   key: PrivateKey
+  wallet?: SigningWallet
   state: FingerState
   ledger: TreeLedger /* kind 'finger' */
   journal: CarrierJournal
@@ -258,7 +260,7 @@ export async function publishFinger(p: {
   now?: () => number
 }): Promise<{ changed: boolean; seq: number; carrierTxid?: string; tokenTxid?: string }> {
   checkFingerBody(p.body, { allowHttp: p.allowHttp })
-  const w = new ProtoWallet(p.key)
+  const w = p.wallet ?? new ProtoWallet(p.key)
   let map = bodyToMap(p.body)
   let hash = bodyHash(map)
   let refsHash = Utils.toHex(Hash.sha256(Array.from(cborEncode(encodeRefs(p.refs ?? [])))))
@@ -439,6 +441,7 @@ export async function publishFinger(p: {
  *  stable across crashes and republishes. */
 export async function publishSubRecord(p: {
   key: PrivateKey
+  wallet?: SigningWallet
   ledger: TreeLedger /* kind 'finger' */
   journal: CarrierJournal
   hosts: string[]
@@ -455,7 +458,7 @@ export async function publishSubRecord(p: {
     const c = Utils.toHex(Array.from(commitment(Transaction.fromAtomicBEEF(hit.beef))))
     return { commitment: c, txid: hit.txid }
   }
-  const w = new ProtoWallet(p.key)
+  const w = p.wallet ?? new ProtoWallet(p.key)
   const record: CommittedRecord = {
     magic: MagicV1,
     identityKey: new Uint8Array(p.key.toPublicKey().encode(true) as number[]),

@@ -40,29 +40,29 @@ test('V1 vault: valid spend accepted; over-cap, wrong outputs and wrong sig all 
   const w = await setup(t)
   if (w === undefined) return
   const { chain, vault } = w
-  const good = vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
+  const good = await vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
   const r = await chain.broadcast(good.tx)
   assert.equal(r.status, 'success', `valid spend should be accepted: ${(r as any).description ?? ''}`)
   // over perTxCap
-  const over = vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 1_500n, 1)
+  const over = await vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 1_500n, 1)
   assert.notEqual((await chain.broadcast(over.tx)).status, 'success', 'over perTxCap must be rejected')
   // fee above maxFee
-  const hiFee = vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1, 50n)
+  const hiFee = await vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1, 50n)
   assert.notEqual((await chain.broadcast(hiFee.tx)).status, 'success', 'fee > maxFee must be rejected')
   // wrong signer — covenant rejects even a well-formed tx
-  const wrong = vault.buildSpend(await vaultOut(w, vault.lockingScript()), PrivateKey.fromRandom(), 500n, 1)
+  const wrong = await vault.buildSpend(await vaultOut(w, vault.lockingScript()), PrivateKey.fromRandom(), 500n, 1)
   assert.notEqual((await chain.broadcast(wrong.tx)).status, 'success', 'non-owner sig must be rejected')
   // tampered outputs: pay to a different address than destPkh
-  const evil = vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
+  const evil = await vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
   evil.tx.outputs[1].lockingScript = LockingScript.fromHex(buildP2PKHScript(Buffer.from(PrivateKey.fromRandom().toPublicKey().toHash()).toString('hex')))
   assert.notEqual((await chain.broadcast(evil.tx)).status, 'success', 'payment to non-destPkh must be rejected')
   // tampered continuation: keep the old state (spentInWindow reset fraud)
-  const stale = vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
+  const stale = await vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
   stale.tx.outputs[0].lockingScript = LockingScript.fromHex(vault.lockingScript(0n, 0n))
   assert.notEqual((await chain.broadcast(stale.tx)).status, 'success', 'stale-state continuation must be rejected')
   // forged continuation code: output 0 is a foreign script, not the vault's
   // code part — the covenant's output-hash assert binds code AND state
-  const forged = vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
+  const forged = await vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
   forged.tx.outputs[0].lockingScript = LockingScript.fromHex(buildP2PKHScript(ownerPkh))
   assert.notEqual((await chain.broadcast(forged.tx)).status, 'success', 'foreign continuation script must be rejected')
 })
@@ -73,17 +73,17 @@ test('V1 vault: rolling window — 4th payment in the same window rejected, roll
   const { chain, vault } = w
   let cur = await vaultOut(w, vault.lockingScript())
   for (let i = 0; i < 3; i++) {
-    const s = vault.buildSpend(cur, owner, 1_000n, 1)
+    const s = await vault.buildSpend(cur, owner, 1_000n, 1)
     assert.equal((await chain.broadcast(s.tx)).status, 'success', `spend ${i + 1} within windowCap`)
     await chain.mine(1)
     const cont = s.tx.outputs[0]
     cur = { txid: s.tx.id('hex'), vout: 0, satoshis: cont.satoshis!, script: cont.lockingScript.toHex() }
   }
   // window spent 3000 of 3000 — a 4th payment must fail the script assert
-  const fourth = vault.buildSpend(cur, owner, 1n, 4)
+  const fourth = await vault.buildSpend(cur, owner, 1n, 4)
   assert.notEqual((await chain.broadcast(fourth.tx)).status, 'success', 'over windowCap must be rejected')
   // after the window rolls (locktime >= start+blocks) a new payment is fine
-  const rolled = vault.buildSpend(cur, owner, 500n, 10)
+  const rolled = await vault.buildSpend(cur, owner, 500n, 10)
   assert.equal((await chain.broadcast(rolled.tx)).status, 'success', 'rolled window must allow spending again')
 })
 

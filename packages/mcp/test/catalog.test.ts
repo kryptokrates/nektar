@@ -77,7 +77,7 @@ test('describeShard via tool + /.well-known/nektar projects domains/offers/shard
   assert.deepEqual(entry.domains, ['soccer'])
   assert.equal(entry.shardId, out.manifest.shardId)
   assert.equal(entry.offers.length, 2)
-  assert.equal(doc.logPublicKey, mem.logPublicKey())
+  assert.equal(doc.logPublicKey, await mem.logPublicKey())
 })
 
 test('exportShardPack carries the manifest as advisory metadata', async (t) => {

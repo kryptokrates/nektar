@@ -183,8 +183,9 @@ export async function callTerminal(
 }
 
 // ── file-backed claim registry + proof store (shared by watcher + MCP) ──
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { writeFileAtomic } from '@nektar/core'
+import { join } from 'node:path'
 
 export interface ClaimEntry {
   txid: string
@@ -202,8 +203,8 @@ export function registerClaim(file: string, e: ClaimEntry): void {
   const list = loadClaims(file)
   if (!list.some((x) => x.txid === e.txid && x.vout === e.vout)) {
     list.push(e)
-    mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, JSON.stringify(list, null, 1))
+    // tmp+rename: a torn registry reads as [] — the honest challenger goes blind
+    writeFileAtomic(file, JSON.stringify(list, null, 1))
   }
 }
 // The outpoint is consumed (by our challenge or any spend). The claim's
@@ -214,13 +215,12 @@ export function markClaimSpent(file: string, txid: string, vout: number): void {
   const e = list.find((x) => x.txid === txid && x.vout === vout)
   if (e && !e.spent) {
     e.spent = true
-    writeFileSync(file, JSON.stringify(list, null, 1))
+    writeFileAtomic(file, JSON.stringify(list, null, 1))
   }
 }
 export const proofFile = (dir: string, receiptHash: string): string => join(dir, `${receiptHash}.bin`)
 export function storeProof(dir: string, receiptHash: string, bytes: Uint8Array): string {
-  mkdirSync(dir, { recursive: true })
   const f = proofFile(dir, receiptHash)
-  writeFileSync(f, bytes)
+  writeFileAtomic(f, bytes)
   return f
 }

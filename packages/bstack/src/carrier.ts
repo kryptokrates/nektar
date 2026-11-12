@@ -1,4 +1,5 @@
 import { PrivateKey, ProtoWallet, Transaction, type ChainTracker } from '@bsv/sdk'
+import type { SignerLike } from '@nektar/core'
 import {
   mintCarrier,
   sweep as bSweep,
@@ -26,8 +27,17 @@ const provenParent = async (p: Transaction, tracker: ChainTracker): Promise<bool
   return true
 }
 
+/** the lane wallet: an explicit wallet wins (typed as given — a BoxWallet
+ *  keeps its encrypt/decrypt); a raw PrivateKey falls back to ProtoWallet;
+ *  a signer-only key cannot fabricate one and throws. */
+export function walletOrProto<W extends SigningWallet>(key: SignerLike, wallet?: W): W | ProtoWallet {
+  if (wallet !== undefined) return wallet
+  if (key instanceof PrivateKey) return new ProtoWallet(key)
+  throw new Error('signer-backed key requires an explicit SigningWallet')
+}
+
 export async function buildCarrier(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: SigningWallet
   payload: Uint8Array
   slot: { tree: Transaction; vout: number }
@@ -36,12 +46,12 @@ export async function buildCarrier(p: {
   if (!anchoredTree(slot.tree)) throw new Error('buildCarrier: funding tree is not proven (no merklePath or anchored ancestry)')
   // boundary: the wallet only signs the record lock — the carrier itself is
   // unmineable and must never be routed through a wallet action
-  const carrier = await mintCarrier(p.wallet ?? new ProtoWallet(key), ORIGINATOR, DERIVATION, payload, slot.tree, slot.vout)
+  const carrier = await mintCarrier(walletOrProto(key, p.wallet), ORIGINATOR, DERIVATION, payload, slot.tree, slot.vout)
   return { carrier, beef: carrier.toAtomicBEEF() }
 }
 
-export async function buildSweep(p: { key: PrivateKey; wallet?: SigningWallet; tree: Transaction; vouts: number[]; fees: Fees }): Promise<Transaction> {
-  return await bSweep(p.wallet ?? new ProtoWallet(p.key), ORIGINATOR, DERIVATION, FUNDING_TAG, p.tree, p.vouts, p.fees)
+export async function buildSweep(p: { key: SignerLike; wallet?: SigningWallet; tree: Transaction; vouts: number[]; fees: Fees }): Promise<Transaction> {
+  return await bSweep(walletOrProto(p.key, p.wallet), ORIGINATOR, DERIVATION, FUNDING_TAG, p.tree, p.vouts, p.fees)
 }
 
 export type CarrierCheck =

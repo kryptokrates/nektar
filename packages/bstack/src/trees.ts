@@ -1,13 +1,14 @@
-import { PrivateKey, Transaction } from '@bsv/sdk'
+import { Transaction } from '@bsv/sdk'
 import { mintTree, type TreeLedger } from './tree.js'
 import type { SigningWallet } from '@lightwebinc/bcommon'
+import type { SignerLike } from '@nektar/core'
 import type { FundingOut, BroadcastResult } from '@nektar/chain'
 
 /** outputs per funding tree unless the caller sizes it */
 export const TREE_SIZE = 64
 
 export async function ensureTrees(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: SigningWallet
   ledger: TreeLedger
   lowWater?: number

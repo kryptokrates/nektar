@@ -4,7 +4,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { P2PListener } from '@nektar/chain'
-import type { PrivateKey, Transaction } from '@bsv/sdk'
+import type { Transaction } from '@bsv/sdk'
+import { unlockP2PKH, type SignerLike } from '@nektar/core'
 
 export interface ReserveLike {
   utxos: Array<{ tx: Transaction; vout: number; satoshis: number }>
@@ -18,7 +19,6 @@ export interface ReserveLike {
  *  bytes — no index, no mempool scan, first-hand inv stream only. */
 export function wireP2p(opts: {
   peers: string[]
-  fundKey: PrivateKey
   pkhHex: string
   reserve: ReserveLike
   addIfNew: (u: { tx: Transaction; vout: number }) => void
@@ -61,7 +61,7 @@ export async function setupFeeVault(opts: {
   vaultSpec: string
   dataDir: string
   pkhHex: string
-  fundKey: PrivateKey
+  fundKey: SignerLike
   fundAddress: string
   reserve: ReserveLike
   broadcast: (tx: Transaction) => Promise<{ status: string; description?: string }>
@@ -70,7 +70,7 @@ export async function setupFeeVault(opts: {
   log: (s: string) => void
 }): Promise<() => Promise<{ tx: Transaction; vout: number; satoshis: number }>> {
   const { FeeVault, buildP2PKHScript } = await import('@nektar/anchor')
-  const { P2PKH, LockingScript: LScript, Transaction: Tx } = await import('@bsv/sdk')
+  const { LockingScript: LScript, Transaction: Tx } = await import('@bsv/sdk')
   const vcfg = JSON.parse(opts.vaultSpec.startsWith('@') ? readFileSync(opts.vaultSpec.slice(1), 'utf8') : opts.vaultSpec) as {
     perTxCap: number
     windowCap: number
@@ -99,7 +99,7 @@ export async function setupFeeVault(opts: {
     const u = opts.reserve.utxos.find((x) => x.satoshis > sats + 600 && !opts.reserve.isSpent(x.tx.id('hex'), x.vout))
     if (!u) throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + 600} sats — fund ${opts.fundAddress}`)
     const tx = new Tx()
-    tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: new P2PKH().unlock(opts.fundKey) })
+    tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: unlockP2PKH(opts.fundKey) })
     tx.addOutput({ satoshis: sats, lockingScript: LScript.fromHex(vault.lockingScript(0n, 0n)) })
     tx.addOutput({ satoshis: u.satoshis - sats - 100, lockingScript: LScript.fromHex(buildP2PKHScript(opts.pkhHex)) })
     await tx.sign()
@@ -116,7 +116,7 @@ export async function setupFeeVault(opts: {
   const mint = async () => {
     if (!vaultUtxo) await deployVault()
     const pay = BigInt(vcfg.fundSats ?? vcfg.perTxCap)
-    const { tx } = vault.buildSpend(vaultUtxo!, opts.fundKey, pay, await opts.currentHeight(), 2n)
+    const { tx } = await vault.buildSpend(vaultUtxo!, opts.fundKey, pay, await opts.currentHeight(), 2n)
     const r = await opts.broadcast(tx)
     if (r.status !== 'success') throw new Error(`vault spend refused: ${r.description}`)
     opts.reserve.addOwned(tx, 2) // the 1-sat covenant change — reclaimable

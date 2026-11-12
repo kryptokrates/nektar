@@ -8,7 +8,8 @@ import { Transaction, Hash } from '@bsv/sdk'
 import { NektarProvider } from '@nektar/anchor'
 import { deployClaim, readClaimState, callTerminal, outpointOf, p2pkh, registerClaim, storeProof } from '@nektar/chain'
 import { verifyZkm2 } from '@nektar/zk'
-import { LocalSigner } from 'runar-sdk'
+import { runarSigner, signerAddress, signerPubHex, type DigestSigner } from '@nektar/core'
+import type { Signer } from 'runar-sdk'
 import type { NektarMemory } from './memory.js'
 
 export interface ClaimServiceDeps {
@@ -24,10 +25,11 @@ export class ClaimService {
   private vArt: any
   private aArt: any
   private sArt: any
-  private provider: NektarProvider
-  private signer: LocalSigner
-  private pubKeyHex: string
-  private pkh: string
+  private provider!: NektarProvider
+  private signer: Signer
+  private signerLike: DigestSigner
+  private pubKeyHex!: string
+  private pkh!: string
 
   constructor(
     private mem: NektarMemory,
@@ -37,11 +39,22 @@ export class ClaimService {
     this.vArt = loadArt(deps.contractsDir, 'ClaimVerdict')
     this.aArt = loadArt(deps.contractsDir, 'NektarAnchor')
     this.sArt = loadArt(deps.contractsDir, 'DisclosureSale')
-    const key = mem.operatorKey()
-    this.provider = new NektarProvider({ broadcast: (t: Transaction) => mem.broadcastTx(t) }, (mem as any).funder, key.toPublicKey().toAddress([0x6f]))
-    this.signer = new LocalSigner(key.toWif())
-    this.pubKeyHex = key.toPublicKey().toString()
-    this.pkh = Buffer.from(Hash.hash160(Buffer.from(this.pubKeyHex, 'hex'))).toString('hex')
+    // custody-agnostic: the operator signer seam (local fund key or wallet)
+    this.signerLike = mem.operatorSigner()
+    this.signer = runarSigner(this.signerLike)
+  }
+
+  /** pubkey/pkh/provider need the resolved key — async under wallet custody */
+  private async ready(): Promise<void> {
+    if (this.pubKeyHex === undefined) {
+      this.pubKeyHex = await signerPubHex(this.signerLike)
+      this.pkh = Buffer.from(Hash.hash160(Buffer.from(this.pubKeyHex, 'hex'))).toString('hex')
+      this.provider = new NektarProvider(
+        { broadcast: (t: Transaction) => this.mem.broadcastTx(t) },
+        (this.mem as any).funder,
+        await signerAddress(this.signerLike, [0x6f])
+      )
+    }
   }
 
   private get claimsFile() {
@@ -54,6 +67,7 @@ export class ClaimService {
   /** deploy an open claim bound to an L_ZKMem proof bundle's journal.
    *  Registers the outpoint (the watcher picks it up) + stores the bundle. */
   async deploy(lzkmemHex: string, opts: { bondSats?: number; deadline?: number; anchorOutpoint?: string } = {}) {
+    await this.ready()
     const bytes = new Uint8Array(Buffer.from(lzkmemHex, 'hex'))
     const v = verifyZkm2(bytes)
     if (!v.ok) throw new Error(`proof does not verify: ${v.reason}`)
@@ -98,7 +112,7 @@ export class ClaimService {
       s.verdictCode,
       s.anchorOutpoint
     ]
-    const { contract, utxo } = await deployClaim(this.cArt, ctor, this.provider, this.signer, Number(s.bondSats))
+    const { utxo } = await deployClaim(this.cArt, ctor, this.provider, this.signer, Number(s.bondSats))
     registerClaim(this.claimsFile, { txid: utxo.txid, vout: utxo.outputIndex })
     storeProof(this.proofDir, receiptHash, bytes)
     return {
@@ -137,6 +151,7 @@ export class ClaimService {
   /** unanchored settle: emits the ClaimVerdict UTXO + bond payout.
    *  Only for claims deployed with anchorOutpoint ''. */
   async settle(txid: string, vout = 0, payoutSats = 4980, verdictSats = 10) {
+    await this.ready()
     const st = await this.status(txid, vout)
     if (!st.found) throw new Error(`claim ${txid}:${vout} not found`)
     const raw = await this.deps.fetchTx(txid)

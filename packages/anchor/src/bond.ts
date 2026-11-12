@@ -4,8 +4,9 @@
 // Bitcoin Script. The compiled covenant verifies the injected
 // _changePKH/_changeAmount slots on every public method, so each spend tx
 // carries the 1-sat change output to the operator.
-import { PrivateKey, Transaction, LockingScript, UnlockingScript, Hash, P2PKH } from '@bsv/sdk'
+import { Transaction, LockingScript, UnlockingScript, Hash } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, serializeState, extractStateFromScript, buildP2PKHScript } from 'runar-sdk'
+import { unlockP2PKH, signerPubHex, toSigner, type SignerLike } from '@nektar/core'
 import { NEKTAR_CHECKPOINTBOND_ARTIFACT } from '@nektar/contracts'
 import type { Broadcaster } from '@nektar/chain'
 
@@ -79,13 +80,13 @@ export class CheckpointBond {
    *  then call `deployUtxo`. */
   buildDeploy(
     fundUtxo: { tx: Transaction; vout: number; satoshis: number },
-    key: PrivateKey,
+    key: SignerLike,
     sats: number,
     fee = 1n
   ): { tx: Transaction; sats: number; script: string } {
     const script = this.lockingScript(0n, '')
     const tx = new Transaction()
-    tx.addInput({ sourceTransaction: fundUtxo.tx, sourceOutputIndex: fundUtxo.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
+    tx.addInput({ sourceTransaction: fundUtxo.tx, sourceOutputIndex: fundUtxo.vout, unlockingScriptTemplate: unlockP2PKH(key) })
     tx.addOutput({ satoshis: sats, lockingScript: LockingScript.fromHex(script) })
     const change = BigInt(fundUtxo.satoshis) - BigInt(sats) - fee
     if (change > 546n) tx.addOutput({ satoshis: Number(change), lockingScript: LockingScript.fromHex(buildP2PKHScript(this.cfg.operatorPkh)) })
@@ -107,7 +108,7 @@ export class CheckpointBond {
     outputs: { satoshis: number; script: string }[],
     lockTime: number,
     broadcaster: Broadcaster,
-    ownerKey?: PrivateKey,
+    ownerKey?: SignerLike,
     parentTx?: Transaction
   ): Promise<{ tx: Transaction }> {
     const tx = new Transaction()
@@ -124,15 +125,15 @@ export class CheckpointBond {
     tx.lockTime = lockTime // sequence < final so consensus enforces nLockTime
     const c = this.contract as any
     const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, methodIndex)
-    const resolved = args.map((a) => {
-      if (a === 'PREIMAGE') return preimageHex
-      if (a === 'SIG') {
+    const resolved: unknown[] = []
+    for (const a of args) {
+      if (a === 'PREIMAGE') resolved.push(preimageHex)
+      else if (a === 'SIG') {
         const sub = c.getSubscriptForSigning(utxo.script, methodIndex)
         const pre = computeOpPushTx(tx, 0, sub, utxo.satoshis).preimageHex
-        return Buffer.from(ownerKey!.sign(Array.from(Hash.sha256(Buffer.from(pre, 'hex')))).toDER()).toString('hex') + '41'
-      }
-      return a
-    })
+        resolved.push(Buffer.from((await toSigner(ownerKey!).sign(Array.from(Hash.sha256(Buffer.from(pre, 'hex'))))).toDER()).toString('hex') + '41')
+      } else resolved.push(a)
+    }
     const unlock = c.buildStatefulPrefix(opSig, true) + this.contract.buildUnlockingScript(method, resolved)
     tx.inputs[0].unlockingScript = UnlockingScript.fromHex(unlock)
     const r = await broadcaster.broadcast(tx)
@@ -144,7 +145,7 @@ export class CheckpointBond {
    *  change to operator (the covenant verifies _changePKH/_changeAmount). */
   async buildCommit(
     utxo: BondUtxo,
-    ownerKey: PrivateKey,
+    ownerKey: SignerLike,
     newRoot: string,
     lockTime: number,
     broadcaster: Broadcaster,
@@ -159,7 +160,7 @@ export class CheckpointBond {
       utxo,
       0,
       'commit',
-      ['SIG', ownerKey.toPublicKey().toString(), newRoot, bondSats, next.deadline, this.cfg.operatorPkh, 1n, 'PREIMAGE'],
+      ['SIG', await signerPubHex(ownerKey), newRoot, bondSats, next.deadline, this.cfg.operatorPkh, 1n, 'PREIMAGE'],
       [
         { satoshis: Number(bondSats), script: contScript },
         { satoshis: 1, script: buildP2PKHScript(this.cfg.operatorPkh) }
@@ -208,7 +209,7 @@ export class CheckpointBond {
    *  release height. Emitted payout at vout 0, covenant change slot at vout 1. */
   async buildClose(
     utxo: BondUtxo,
-    ownerKey: PrivateKey,
+    ownerKey: SignerLike,
     lockTime: number,
     broadcaster: Broadcaster,
     fee = 1n,
@@ -219,7 +220,7 @@ export class CheckpointBond {
       utxo,
       2,
       'close',
-      ['SIG', ownerKey.toPublicKey().toString(), payoutSats, this.cfg.operatorPkh, 1n, 'PREIMAGE'],
+      ['SIG', await signerPubHex(ownerKey), payoutSats, this.cfg.operatorPkh, 1n, 'PREIMAGE'],
       [
         { satoshis: Number(payoutSats), script: buildP2PKHScript(this.cfg.operatorPkh) },
         { satoshis: 1, script: buildP2PKHScript(this.cfg.operatorPkh) }

@@ -4,13 +4,13 @@
 // SDK P2PKH template (plain fee funding is allowed).
 import { makeRotationCert } from '@nektar/identity'
 import { Transaction, PrivateKey, P2PKH } from '@bsv/sdk'
-import { RunarContract, LocalSigner } from 'runar-sdk'
+import { RunarContract, LocalSigner, type Signer } from 'runar-sdk'
 import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 // default burstLimit=100: measured 100 unconfirmed contract anchors on
 // regtest with no limit (see spikes/depth-contract.mjs); conservative default.
 import { NEKTAR_ANCHOR_ARTIFACT, NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX, contractRp, decodeNektarAnchor, TAG_RPRIME } from '@nektar/contracts'
 const TAG_HEX = toHex(TAG_RPRIME)
-import { dsha256, toHex, expectedRp, type AnchorData, type Bytes } from '@nektar/core'
+import { toHex, runarSigner, signerPubHex, toSigner, type AnchorData, type Bytes, type SignerLike } from '@nektar/core'
 import type { Broadcaster, Funder } from '@nektar/chain'
 
 export interface Head {
@@ -139,7 +139,7 @@ export class NektarProvider implements Provider {
     this.onSuccess?.(tx)
     return txid
   }
-  async getUtxos(address: string): Promise<RUTXO[]> {
+  async getUtxos(_address: string): Promise<RUTXO[]> {
     // hand runar the single largest live candidate — it becomes exactly one
     // funding input. smallest-first starved on a small change output while
     // big reserve entries sat unused; a list >1 makes runar add every entry
@@ -179,33 +179,43 @@ export class NektarProvider implements Provider {
 
 export class AnchorChain {
   readonly shard: string // label (also used as nothing else — shardId = hash160(owner))
-  shardKey: PrivateKey // changes on rotate()
-  private fundKey: PrivateKey
-  private signer: LocalSigner
+  shardKey: SignerLike // changes on rotate()
+  private fundKey: SignerLike
+  private signer: Signer
   private provider: NektarProvider
   private contract?: RunarContract
   private head?: Head
   private pendingHeads: Head[] = []
   private txById = new Map<string, Transaction>()
+  /** resolves the shard owner pubkey — set by the constructor kick-off; async
+   *  callers that ran through `ready` can rely on `_shardPub` being filled. */
+  readonly ready: Promise<void>
+  private _shardPub?: string
   readonly rotationCerts: import('@nektar/identity').RotationCert[] = []
 
   constructor(
     shard: string,
-    shardKey: PrivateKey,
+    shardKey: SignerLike,
     private funder: Funder,
-    fundKey: PrivateKey,
+    fundKey: SignerLike,
     broadcaster: Broadcaster,
-    private opts: AnchorOptions = {}
+    private opts: AnchorOptions & { shardPub?: string } = {}
   ) {
     this.shard = shard
     this.shardKey = shardKey
     this.fundKey = fundKey
+    this._shardPub = opts.shardPub ?? (shardKey instanceof PrivateKey ? shardKey.toPublicKey().toString() : undefined)
     // Two keys, two roles: the runar-connected signer is the FUND key (it signs
     // the P2PKH funding inputs, which are locked to the funder); the contract's
     // Sig argument (owner authorization) is signed separately with the SHARD
     // key via prepareCall/finalizeCall. Shards therefore don't need their own
     // funders, and distinct shards get distinct owners (distinct shard ids).
-    this.signer = new LocalSigner(fundKey.toHex())
+    this.signer = fundKey instanceof PrivateKey ? new LocalSigner(fundKey.toHex()) : runarSigner(fundKey)
+    this.ready = this._shardPub
+      ? Promise.resolve()
+      : signerPubHex(shardKey).then((p) => {
+          this._shardPub = p
+        })
     this.provider = new NektarProvider(broadcaster, funder)
     if (opts.feeRateSatPerKb !== undefined) this.provider.feeRate = opts.feeRateSatPerKb
     const rec = (tx: Transaction) => {
@@ -228,9 +238,30 @@ export class AnchorChain {
     if (this._shardId) return this._shardId
     return (this._shardId = toHexPub160(this.ownerPub()))
   }
-  /** the current owner (shard) public key — authorizes contract calls */
+  /** the current owner (shard) public key — authorizes contract calls. Sync
+   *  only because getShardId/resume predate the signer seam: PrivateKey
+   *  resolves inline; a DigestSigner must have its pub pre-resolved via
+   *  `opts.shardPub` or have completed `ready` (any async path does). */
   private ownerPub(): string {
-    return this.shardKey.toPublicKey().toString()
+    if (this._shardPub) {
+      this.checkResume()
+      return this._shardPub
+    }
+    throw new Error('anchor: shard pubkey unresolved — pass opts.shardPub or await anchorChain.ready')
+  }
+  private async ownerPubAsync(): Promise<string> {
+    this._shardPub ??= await signerPubHex(this.shardKey)
+    this.checkResume()
+    return this._shardPub
+  }
+  /** resume() could not check the owner synchronously (wallet signer — pub
+   *  unresolved); the expected ownerPkh is enforced on first pub resolution. */
+  private _resumePkh?: string
+  private checkResume(): void {
+    if (this._resumePkh === undefined || this._shardPub === undefined) return
+    const expected = this._resumePkh
+    this._resumePkh = undefined
+    if (toHexPub160(this._shardPub) !== expected) throw new Error('resume: head owner is not this shard key')
   }
 
   getHead(): Head | undefined {
@@ -244,7 +275,12 @@ export class AnchorChain {
     if (this.getHead()) throw new Error('resume: chain already has a head')
     const dec = decodeNektarAnchor(headTx.outputs[0].lockingScript.toHex())
     if (!dec) throw new Error('resume: head tx output 0 is not an authentic NektarAnchor')
-    if (toHex(dec.ownerPkh) !== toHexPub160(this.ownerPub())) throw new Error('resume: head owner is not this shard key')
+    // owner check: synchronous when the pub is already known (PrivateKey or a
+    // pre-resolved shardPub); deferred to first pub resolution otherwise —
+    // the head is recorded either way, a mismatch fails loudly on next use.
+    if (this._shardPub !== undefined) {
+      if (toHex(dec.ownerPkh) !== toHexPub160(this._shardPub)) throw new Error('resume: head owner is not this shard key')
+    } else this._resumePkh = toHex(dec.ownerPkh)
     const head: Head = { tx: headTx, vout: 0, data: { shard: dec.shard, n: dec.n, size: dec.size, R: dec.R, Rp: dec.Rp, ownerPkh: dec.ownerPkh } }
     if (opts.confirmed) this.head = head
     else this.pendingHeads.push(head)
@@ -341,14 +377,14 @@ export class AnchorChain {
     const funding = await this.provider.getUtxos(await this.signer.getAddress())
     if (funding.length === 0) throw new Error('reserve dry: no funding UTXO available')
     const cur = this.getHead()
-    const pub = this.ownerPub()
+    const pub = await this.ownerPubAsync()
     if (!cur) {
       // genesis: deploy with n=0, Rp = contractRp(0, R, size)
       const Rp = contractRp(new Uint8Array(32), R, size)
       // ANC-006: new anchors carry the META flag as the state payload's first push
       this.contract = new RunarContract(NEKTAR_ANCHOR_ARTIFACT, [pub, pkhOf(pub), META_FLAG_HEX, 0n, BigInt(size), toHex(R), toHex(Rp), TAG_HEX])
       this.contract.connect(this.provider, this.signer)
-      const d = await this.contract.deploy({ satoshis: 1 })
+      await this.contract.deploy({ satoshis: 1 })
       const tx = this.provider.lastTx!
       this.register(tx)
       const gdec = decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())
@@ -367,7 +403,7 @@ export class AnchorChain {
     const contract = await this.freshContract(cur)
     const prep = await contract.prepareCall('append', [null, pub, toHex(R), BigInt(size)])
     const digest = Array.from(Buffer.from(prep.sighash, 'hex'))
-    const der = Buffer.from(this.shardKey.sign(digest).toDER()).toString('hex') + '41'
+    const der = Buffer.from((await toSigner(this.shardKey).sign(digest)).toDER()).toString('hex') + '41'
     const sigMap: Record<number, string> = {}
     for (const i of prep.sigIndices) sigMap[i] = der
     await contract.finalizeCall(prep, sigMap)
@@ -386,32 +422,33 @@ export class AnchorChain {
 
   /** Rotate the anchor owner to a new key. Only after the rotate tx is
    *  broadcast and its continuation decoded does the signer switch. */
-  async rotate(newKey: PrivateKey): Promise<AnchorResult> {
+  async rotate(newKey: SignerLike): Promise<AnchorResult> {
     const oldKey = this.shardKey
-    const newPub = newKey.toPublicKey().toString()
+    const newPub = await signerPubHex(newKey)
     const res = await this.withRetry(async () => await this.rotateOnce(newKey))
     // emit the matching rotation certificate (IDN-002..005): C(i) signed by
     // the old key binding pk(i-1)→pk(i), indexed by this shard's cert chain
-    const cert = makeRotationCert(oldKey, newPub, Math.floor(Date.now() / 1000), this.opts.rotationHorizon ?? 86_400)
+    const cert = await makeRotationCert(oldKey, newPub, Math.floor(Date.now() / 1000), this.opts.rotationHorizon ?? 86_400)
     cert.index = this.rotationCerts.length
     this.rotationCerts.push(cert)
     // switch the owner key only after the rotate is accepted (the funding
     // signer is the fund key and does not change)
     this.shardKey = newKey
+    this._shardPub = newPub
     return res
   }
 
-  private async rotateOnce(newKey: PrivateKey): Promise<AnchorResult> {
+  private async rotateOnce(newKey: SignerLike): Promise<AnchorResult> {
     const funding = await this.provider.getUtxos(await this.signer.getAddress())
     if (funding.length === 0) throw new Error('reserve dry: no funding UTXO available')
     const cur = this.getHead()
     if (!cur) throw new Error('rotate: no anchor head')
     const contract = await this.freshContract(cur)
-    const pub = this.ownerPub()
-    const newPub = newKey.toPublicKey().toString()
+    const pub = await this.ownerPubAsync()
+    const newPub = await signerPubHex(newKey)
     const prep = await contract.prepareCall('rotate', [null, pub, pkhOf(newPub)])
     const digest = Array.from(Buffer.from(prep.sighash, 'hex'))
-    const der = Buffer.from(this.shardKey.sign(digest).toDER()).toString('hex') + '41'
+    const der = Buffer.from((await toSigner(this.shardKey).sign(digest)).toDER()).toString('hex') + '41'
     const sigMap: Record<number, string> = {}
     for (const i of prep.sigIndices) sigMap[i] = der
     await contract.finalizeCall(prep, sigMap)

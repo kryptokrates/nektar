@@ -529,7 +529,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           }
           if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'checkpoint' && p.length === 3) {
             const cp = mem.checkpoints(decodeURIComponent(p[2])).at(-1)
-            return cp ? send(200, { checkpoint: cp, logPublicKey: mem.logPublicKey() }) : send(404, { error: 'no checkpoint' })
+            return cp ? send(200, { checkpoint: cp, logPublicKey: await mem.logPublicKey() }) : send(404, { error: 'no checkpoint' })
           }
           if (req.method === 'GET' && url.pathname === '/v1/verify') {
             const tok = url.searchParams.get('r')
@@ -566,7 +566,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
                     base,
                     importShards: cited,
                     totals: { views: mem.metrics.value('nektar_verify_views_total'), anchors: mem.metrics.value('nektar_anchors_total') },
-                    operator: mem.fundingStatus().address
+                    operator: (await mem.fundingStatus()).address
                   }),
                   'text/html; charset=utf-8'
                 )
@@ -648,7 +648,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
               v: 1,
               kind: 'nektar-discovery',
               verifyBase: `${base}/v1/verify`,
-              logPublicKey: mem.logPublicKey(),
+              logPublicKey: await mem.logPublicKey(),
               operatorPub: mem.operatorKey()?.toPublicKey().toString(),
               publicShards: await Promise.all(
                 pub.map(async (s) => {
@@ -686,7 +686,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
             if (!paymentsEnabled()) return send(404, { error: 'payments disabled (NEKTAR_PAYMENTS=1)' })
             const tool = url.searchParams.get('tool') ?? 'groundedAnswer'
             if (!PAID_TOOLS.has(tool)) return send(400, { error: `not a paid tool: ${tool}` })
-            const pr = paymentRequired(tool)
+            const pr = await paymentRequired(mem, tool)
             res.writeHead(402, { 'content-type': 'application/json', 'PAYMENT-REQUIRED': Buffer.from(JSON.stringify(pr.required)).toString('base64') })
             return res.end(json(pr))
           }

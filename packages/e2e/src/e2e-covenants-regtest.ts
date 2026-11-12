@@ -186,12 +186,12 @@ const bad = sale.buildBuy(saleUtxo, Buffer.from('decoy-payload').toString('hex')
 const rBad = await broadcaster.broadcast(bad.tx)
 check(rBad.status !== 'success', `V3 wrong wrapped refused (${rBad.description?.slice(0, 50) ?? 'refused'})`)
 
-const earlyRefund = sale.buildRefund(saleUtxo, buyer, saleDeadline - 1, 4_990n)
+const earlyRefund = await sale.buildRefund(saleUtxo, buyer, saleDeadline - 1, 4_990n)
 const rER = await broadcaster.broadcast(earlyRefund.tx)
 check(rER.status !== 'success', `V3 refund before deadline refused (${rER.description?.slice(0, 50) ?? 'refused'})`)
 
 while ((await tracker.currentHeight()) < saleDeadline) await mineOne()
-const refund = sale.buildRefund(saleUtxo, buyer, saleDeadline, 4_990n) // fee = 10
+const refund = await sale.buildRefund(saleUtxo, buyer, saleDeadline, 4_990n) // fee = 10
 const rRef = await broadcaster.broadcast(refund.tx)
 check(rRef.status === 'success', `V3 depositor refund at deadline accepted — ${rRef.description?.slice(0, 60) ?? 'ok'}`)
 

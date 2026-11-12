@@ -5,7 +5,8 @@
 // admission verdicts are upstream's (vendored @lightwebinc/bfinger-host);
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
-import { PrivateKey, ProtoWallet, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
+import { PublicKey, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
+import { toSigner, unlockP2PKH, signerAddress, type SignerLike } from '@nektar/core'
 import {
   mintCarrier,
   fundingLock,
@@ -40,7 +41,7 @@ import { FundingTag, decodeFunding } from '@lightwebinc/bfinger-host/dist/fundin
 import { checkOffice } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { checkStream } from '@lightwebinc/blogs-host/dist/index.js'
 import { submitAll, lookupAll } from './hosts.js'
-import { carrierFundingLockHex } from './carrier.js'
+import { carrierFundingLockHex, walletOrProto } from './carrier.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 import type { Knex } from 'knex'
@@ -52,8 +53,8 @@ const DERIVATION_PROFILE: Derivation = { protocol: Protocol, keyID: KeyIDProfile
 const DERIVATION_RECORD: Derivation = { protocol: Protocol, keyID: KeyIDRecord }
 const ZERO32 = new Uint8Array(32)
 
-export const fingerFundingLock = async (key: PrivateKey, wallet?: SigningWallet): Promise<LockingScript> =>
-  await fundingLock(wallet ?? new ProtoWallet(key), ORIGINATOR, DERIVATION_RECORD, new Uint8Array(FundingTag))
+export const fingerFundingLock = async (key: SignerLike, wallet?: SigningWallet): Promise<LockingScript> =>
+  await fundingLock(walletOrProto(key, wallet), ORIGINATOR, DERIVATION_RECORD, new Uint8Array(FundingTag))
 
 // ── the record body ────────────────────────────────────────────────────────
 
@@ -242,7 +243,7 @@ export function ancestorsOf(tx: Transaction): Transaction[] {
   return out
 }
 export async function publishFinger(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: SigningWallet
   state: FingerState
   ledger: TreeLedger /* kind 'finger' */
@@ -260,7 +261,8 @@ export async function publishFinger(p: {
   now?: () => number
 }): Promise<{ changed: boolean; seq: number; carrierTxid?: string; tokenTxid?: string }> {
   checkFingerBody(p.body, { allowHttp: p.allowHttp })
-  const w = p.wallet ?? new ProtoWallet(p.key)
+  const s = toSigner(p.key)
+  const w = walletOrProto(p.key, p.wallet)
   let map = bodyToMap(p.body)
   let hash = bodyHash(map)
   let refsHash = Utils.toHex(Hash.sha256(Array.from(cborEncode(encodeRefs(p.refs ?? [])))))
@@ -310,18 +312,18 @@ export async function publishFinger(p: {
   // the private key keeps it unguessable without a random table to keep.
   const seq = (prev?.seq ?? 0) + 1
   const kind = prev === undefined ? KindCreate : KindUpdate
-  const pub33 = new Uint8Array(p.key.toPublicKey().encode(true) as number[])
-  const witness = derived(p.key, 'witness', seq)
+  const pub33 = new Uint8Array(PublicKey.fromString(await s.pubKeyHex()).encode(true) as number[])
+  const witness = await derived(s, 'witness', seq)
   const prevC = prev === undefined ? ZERO32 : prevCommitment(prev.tokenBeef)
   const prevWitness =
-    prev !== undefined ? (prev.witness !== undefined ? new Uint8Array(Utils.toArray(prev.witness, 'hex')) : derived(p.key, 'witness', prev.seq)) : undefined
+    prev !== undefined ? (prev.witness !== undefined ? new Uint8Array(Utils.toArray(prev.witness, 'hex')) : await derived(s, 'witness', prev.seq)) : undefined
   let record: CommittedRecord = {
     magic: MagicV1,
     identityKey: pub33,
     seq: BigInt(seq),
     kind,
     prev: prevC,
-    salt: derived(p.key, 'salt', seq),
+    salt: await derived(s, 'salt', seq),
     wc: new Uint8Array(Hash.sha256(Array.from(witness))),
     ...(prevWitness !== undefined ? { prevWitness } : {}),
     notBefore: 0n,
@@ -342,7 +344,7 @@ export async function publishFinger(p: {
       if (typeof dec === 'string') throw new Error(`finger journal: bad stored carrier ${dec}`)
       // a carrier minted under a rotated identity replays forever but can
       // never evaluate — the seq must be re-minted, not re-served
-      if (carrierFundingLockHex(chit.beef) !== (await fingerFundingLock(p.key)).toHex()) throw new Error('finger carrier minted under a different identity')
+      if (carrierFundingLockHex(chit.beef) !== (await fingerFundingLock(s, w)).toHex()) throw new Error('finger carrier minted under a different identity')
       carrierBeef = chit.beef
       carrierTxid = chit.txid
       record = dec.record
@@ -362,7 +364,7 @@ export async function publishFinger(p: {
   }
   if (carrierBeef === undefined) {
     validateRecord(record)
-    const slot = await p.ledger.take(FINGER_KIND, (await fingerFundingLock(p.key)).toHex())
+    const slot = await p.ledger.take(FINGER_KIND, (await fingerFundingLock(s, w)).toHex())
     if (slot === undefined) throw new Error('publishFinger: no funding slot')
     const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_RECORD, encodeRecord(record), slot.tree, slot.vout)
     carrierBeef = carrier.toAtomicBEEF()
@@ -388,9 +390,9 @@ export async function publishFinger(p: {
       tokenTx.addInput({ sourceTransaction: prevToken, sourceOutputIndex: 0, unlockingScriptTemplate: unlocker(w, ORIGINATOR, DERIVATION_PROFILE) })
     }
     tokenTx.addOutput({ satoshis: 1, lockingScript: await lockFields(w, ORIGINATOR, DERIVATION_PROFILE, [new Uint8Array(Tag), new Uint8Array(c)], true) })
-    tokenTx.addOutput({ lockingScript: new P2PKH().lock(p.key.toPublicKey().toAddress()), change: true })
+    tokenTx.addOutput({ lockingScript: new P2PKH().lock(await signerAddress(s)), change: true })
     const fund = await p.takeFunding(5000)
-    tokenTx.addInput({ sourceTransaction: fund.tx, sourceOutputIndex: fund.vout, unlockingScriptTemplate: new P2PKH().unlock(p.key) })
+    tokenTx.addInput({ sourceTransaction: fund.tx, sourceOutputIndex: fund.vout, unlockingScriptTemplate: unlockP2PKH(s) })
     await tokenTx.fee()
     await tokenTx.sign()
     // the fee parent may be a not-yet-proven tx — carry whatever ancestry is
@@ -426,7 +428,7 @@ export async function publishFinger(p: {
   }
   if (br.status !== 'success') throw new Error(`publishFinger: token broadcast refused ${JSON.stringify(br).slice(0, 120)}`)
   if (p.onSpent !== undefined) await p.onSpent(tokenTx)
-  await p.state.set({ seq, tokenTxid, tokenBeef: tokenBeefOut, bodyHash: hash, refsHash, witness: Utils.toHex(Array.from(derived(p.key, 'witness', seq))) })
+  await p.state.set({ seq, tokenTxid, tokenBeef: tokenBeefOut, bodyHash: hash, refsHash, witness: Utils.toHex(Array.from(await derived(s, 'witness', seq))) })
   return { changed: true, seq, carrierTxid, tokenTxid }
 }
 
@@ -440,7 +442,7 @@ export async function publishFinger(p: {
  *  journaled carrier, never a re-minted one, and a member's commitment is
  *  stable across crashes and republishes. */
 export async function publishSubRecord(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: SigningWallet
   ledger: TreeLedger /* kind 'finger' */
   journal: CarrierJournal
@@ -458,15 +460,16 @@ export async function publishSubRecord(p: {
     const c = Utils.toHex(Array.from(commitment(Transaction.fromAtomicBEEF(hit.beef))))
     return { commitment: c, txid: hit.txid }
   }
-  const w = p.wallet ?? new ProtoWallet(p.key)
+  const s = toSigner(p.key)
+  const w = walletOrProto(p.key, p.wallet)
   const record: CommittedRecord = {
     magic: MagicV1,
-    identityKey: new Uint8Array(p.key.toPublicKey().encode(true) as number[]),
+    identityKey: new Uint8Array(PublicKey.fromString(await s.pubKeyHex()).encode(true) as number[]),
     seq: 1n,
     kind: p.kind,
     prev: ZERO32,
-    salt: derived(p.key, `salt:${p.kind}`, p.id),
-    wc: new Uint8Array(Hash.sha256(Array.from(derived(p.key, `witness:${p.kind}`, p.id)))),
+    salt: await derived(s, `salt:${p.kind}`, p.id),
+    wc: new Uint8Array(Hash.sha256(Array.from(await derived(s, `witness:${p.kind}`, p.id)))),
     notBefore: 0n,
     notAfter: 0n,
     body: p.body,
@@ -474,7 +477,7 @@ export async function publishSubRecord(p: {
     unknown: []
   }
   validateRecord(record)
-  const slot = await p.ledger.take(FINGER_KIND, (await fingerFundingLock(p.key)).toHex())
+  const slot = await p.ledger.take(FINGER_KIND, (await fingerFundingLock(s, w)).toHex())
   if (slot === undefined) throw new Error('publishSubRecord: no funding slot')
   const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_RECORD, encodeRecord(record), slot.tree, slot.vout)
   const beef = carrier.toAtomicBEEF()
@@ -533,8 +536,12 @@ async function healAncestry(tx: Transaction, fetchTx: (txid: string) => Promise<
 
 /** A deterministic 32 bytes for (key, label, seq): salt and witness material
  *  secret until revealed, stable across a crash retry. */
-function derived(key: PrivateKey, label: string, seq: number): Uint8Array {
-  return new Uint8Array(Hash.sha256(Utils.toArray(`nektar finger ${label} ${key.toWif()} ${seq}`, 'utf8')))
+async function derived(key: SignerLike, label: string, seq: number): Promise<Uint8Array> {
+  const s = toSigner(key)
+  if (s.deriveSecret === undefined) throw new Error('signer does not support secret derivation')
+  // `nektar finger ${label} ` + key + ` ${seq}` keeps the key-backed output
+  // byte-identical to the old key.toWif() interpolation
+  return await s.deriveSecret(`nektar finger ${label} `, ` ${seq}`)
 }
 
 /** The commitment the current token carries — the previous record's C. */

@@ -34,7 +34,10 @@ if (hostFlag) process.env.NEKTAR_HTTP_HOST = hostFlag
 const rt = await openRuntime(configFromEnv())
 process.stderr.write(`nektar: network=${rt.network}\n`)
 const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
-if (paymentsEnabled()) process.stderr.write(`nektar: payments on — settling to ${requireOperatorWallet()}\n`)
+if (paymentsEnabled()) {
+  requireOperatorWallet()
+  process.stderr.write('nektar: payments on\n')
+}
 if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
   const { openAutomation } = await import('./automation/runtime.js')
   const { callTool } = await import('./server.js')
@@ -75,6 +78,10 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
     publishFinger: /^(1|true|yes)$/i.test(process.env.NEKTAR_BFINGER_PUBLISH ?? ''),
     watchdogMs: process.env.NEKTAR_WATCHDOG_MS ? Number(process.env.NEKTAR_WATCHDOG_MS) : undefined,
     intervalMs: Number(process.env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 1000),
+    watchHosts: (process.env.NEKTAR_WATCH_URLS ?? '')
+      .split(',')
+      .map((u) => u.trim())
+      .filter((u) => u !== ''),
     // chains without a status push (polled broadcasters) mark
     // funding trees proven only here — let ops tune the cadence
     upkeepMs: process.env.NEKTAR_AUTOMATION_UPKEEP_MS ? Number(process.env.NEKTAR_AUTOMATION_UPKEEP_MS) : undefined,

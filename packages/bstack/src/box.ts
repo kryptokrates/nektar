@@ -1,4 +1,5 @@
-import { Hash, PrivateKey, ProtoWallet, Utils, type ChainTracker, type WalletInterface } from '@bsv/sdk'
+import { Hash, PublicKey, Utils, type ChainTracker, type WalletInterface } from '@bsv/sdk'
+import { toSigner, signerPubHex, type SignerLike } from '@nektar/core'
 import { sealEnvelope, encodePlaintext, envelopeRecord, envelopeCarrier, envelopeFundingLock } from '@lightwebinc/bbox-host/codec/send.js'
 import { decodeEnvelope, encodeReceipt, checkBox, checkOffice, MaxAcks } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { checkContent, verifyContentSignature } from '@lightwebinc/bbox-host/codec/content.js'
@@ -6,7 +7,7 @@ import { open as openPlaintext, parsePlaintext, MaxRefs } from '@lightwebinc/bbo
 import { JObject, type JValue } from '@lightwebinc/bbox-host/codec/jcs.js'
 import { admit } from '@lightwebinc/bbox-host/codec/admit.js'
 import { submitAll, lookupAll, type Quorum } from './hosts.js'
-import { carrierFundingLockHex } from './carrier.js'
+import { carrierFundingLockHex, walletOrProto } from './carrier.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 
@@ -43,10 +44,11 @@ const fromJ = (v: JValue): unknown => {
 }
 type BoxWallet = Pick<WalletInterface, 'getPublicKey' | 'createSignature' | 'encrypt' | 'decrypt'>
 
-export const boxFundingLock = async (key: PrivateKey, wallet?: BoxWallet): Promise<import('@bsv/sdk').LockingScript> => await envelopeFundingLock(wallet ?? new ProtoWallet(key), ORIGINATOR)
+export const boxFundingLock = async (key: SignerLike, wallet?: BoxWallet): Promise<import('@bsv/sdk').LockingScript> =>
+  await envelopeFundingLock(walletOrProto(key, wallet), ORIGINATOR)
 
 export async function sendBox(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: BoxWallet
   ledger: TreeLedger
   journal: CarrierJournal
@@ -65,15 +67,16 @@ export async function sendBox(p: {
   checkOffice(office)
   checkBox(BOX)
   if (p.refs !== undefined && p.refs.length > MaxRefs) throw new Error(`sendBox: ${p.refs.length} refs > ${MaxRefs}`)
-  const w = p.wallet ?? new ProtoWallet(p.key)
-  const from = new Uint8Array(Array.from(p.key.toPublicKey().encode(true) as number[]))
+  const s = toSigner(p.key)
+  const w = walletOrProto(p.key, p.wallet)
+  const from = new Uint8Array(Array.from(PublicKey.fromString(await s.pubKeyHex()).encode(true) as number[]))
   const to = new Uint8Array(Utils.toArray(p.to, 'hex'))
   const doc = new JObject().set('nektar', toJ(p.body))
   if (p.refs !== undefined && p.refs.length > 0) doc.set('refs', toJ(p.refs))
   const plain = encodePlaintext(doc)
   const artifactHash = Utils.toHex(Hash.sha256(new Uint8Array([...to, ...plain])))
   const topics = [`tm_bbox_${office}`]
-  const bboxLockHex = (await boxFundingLock(p.key)).toHex()
+  const bboxLockHex = (await boxFundingLock(s, w)).toHex()
   let hit = await p.journal.get(artifactHash)
   // a journaled carrier minted under a rotated identity can never evaluate —
   // drop it and let the mint path re-derive under the current key
@@ -120,7 +123,7 @@ const bytewise = (a: Uint8Array, b: Uint8Array): number => {
 }
 
 export async function ackBox(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: BoxWallet
   ledger: TreeLedger
   journal: CarrierJournal
@@ -134,7 +137,10 @@ export async function ackBox(p: {
   const topics = [`tm_bbox_${office}`]
   const resend = new Map<string, { txid: string; beef: number[] }>()
   const fresh: Array<{ txid: string; commitment: string }> = []
-  const bboxLock = (await boxFundingLock(p.key, p.wallet)).toHex()
+  const s = toSigner(p.key)
+  const w = walletOrProto(p.key, p.wallet)
+  const by = new Uint8Array(Array.from(PublicKey.fromString(await s.pubKeyHex()).encode(true) as number[]))
+  const bboxLock = (await boxFundingLock(s, w)).toHex()
   let resent = 0
   for (const i of p.items) {
     const hit = await p.journal.get(`ack:${i.txid}`)
@@ -149,8 +155,6 @@ export async function ackBox(p: {
   let acked = 0,
     skipped = 0
   const receipts: string[] = []
-  const w = p.wallet ?? new ProtoWallet(p.key)
-  const by = new Uint8Array(Array.from(p.key.toPublicKey().encode(true) as number[]))
   for (let c = 0; c < fresh.length; c += MaxAcks) {
     const chunk = fresh.slice(c, c + MaxAcks)
     const slot = await p.ledger.take('bbox', bboxLock)
@@ -179,7 +183,7 @@ export async function ackBox(p: {
 }
 
 export async function readBox(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: BoxWallet
   hosts: string[]
   office?: string
@@ -188,8 +192,8 @@ export async function readBox(p: {
   timeoutMs?: number
 }): Promise<{ items: BoxItem[]; withheld: Array<{ host: string; txid: string }>; unreachable: string[] }> {
   const office = p.office ?? DEFAULT_OFFICE
-  const me = p.key.toPublicKey().toString()
-  const w = p.wallet ?? new ProtoWallet(p.key)
+  const me = await signerPubHex(p.key)
+  const w = walletOrProto(p.key, p.wallet)
   // interactive read path: a host that cannot answer inside a few seconds is
   // down for deal purposes — reported unreachable, not waited on
   const r = await lookupAll(p.hosts, 'ls_bbox', { office, to: me }, { timeoutMs: p.timeoutMs ?? 5_000 })

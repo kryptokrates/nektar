@@ -4,8 +4,8 @@
 // the fee key carrying OP_FALSE OP_RETURN <tag> <sha256(proof)>. The WASM
 // verifier stays authoritative — the chain only timestamps the commitment.
 // This is NOT a new anchor: no shard state, no contract, plain P2PKH spend.
-import { Transaction, PrivateKey, P2PKH, Script, LockingScript, SatoshisPerKilobyte } from '@bsv/sdk'
-import { sha256, fromHex, utf8, type Bytes } from '@nektar/core'
+import { Transaction, P2PKH, Script, LockingScript, SatoshisPerKilobyte } from '@bsv/sdk'
+import { sha256, utf8, unlockP2PKH, signerAddress, type Bytes, type SignerLike } from '@nektar/core'
 import type { FundingOut } from '@nektar/chain'
 
 /** attestation push tag — decoders route on it; versioned by suffix */
@@ -69,15 +69,15 @@ export function attestationsOf(tx: Transaction): Array<{ vout: number; tag: stri
  */
 export async function buildAttestationTx(
   funding: FundingOut,
-  fundKey: PrivateKey,
+  fundKey: SignerLike,
   commitment: Bytes,
   feeRateSatPerKb = 1,
   changeAddress?: string
 ): Promise<{ tx: Transaction; changeVout: number }> {
   const tx = new Transaction()
-  tx.addInput({ sourceTransaction: funding.tx, sourceOutputIndex: funding.vout, unlockingScriptTemplate: new P2PKH().unlock(fundKey) })
+  tx.addInput({ sourceTransaction: funding.tx, sourceOutputIndex: funding.vout, unlockingScriptTemplate: unlockP2PKH(fundKey) })
   tx.addOutput({ lockingScript: attestationScript(commitment), satoshis: 0 })
-  tx.addOutput({ lockingScript: new P2PKH().lock(changeAddress ?? fundKey.toPublicKey().toAddress([0x6f])), change: true })
+  tx.addOutput({ lockingScript: new P2PKH().lock(changeAddress ?? (await signerAddress(fundKey, [0x6f]))), change: true })
   await tx.fee(new SatoshisPerKilobyte(feeRateSatPerKb))
   await tx.sign()
   return { tx, changeVout: tx.outputs.length - 1 }

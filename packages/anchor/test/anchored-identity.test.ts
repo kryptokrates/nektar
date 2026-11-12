@@ -53,7 +53,7 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
   const ac = new AnchorChain('rotlog', f.keyPair, f, f.keyPair, chain)
   const k0 = PrivateKey.fromRandom(),
     k1 = PrivateKey.fromRandom()
-  const cert = makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
+  const cert = await makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
   await log.remember('rotlog', { d: utf8(JSON.stringify(cert)), p: { source: 'rotlog', time: 1000, signature: new Uint8Array(0), modelId: 'm1' } })
   const batch = await log.closeBatch('rotlog')
   // anchor the batch root through the AnchorChain shard (mined, BUMP)
@@ -69,7 +69,7 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
   const r = verifyCertChain(k0.toPublicKey().toString(), [cert], { inclusionCheck: inLog })
   assert.ok(r?.activePub === k1.toPublicKey().toString())
   // a cert never anchored fails the anchored-inclusion check
-  const outsider = makeRotationCert(k1, PrivateKey.fromRandom().toPublicKey().toString(), 2000, 3600)
+  const outsider = await makeRotationCert(k1, PrivateKey.fromRandom().toPublicKey().toString(), 2000, 3600)
   assert.equal(verifyCertChain(k0.toPublicKey().toString(), [cert, { ...outsider, index: 1 }], { inclusionCheck: inLog }), null)
 })
 

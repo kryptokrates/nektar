@@ -8,9 +8,9 @@
 //   build/verifyAuditBundle  AGT-007  output → fragments → signers → policy path → anchors
 // Proofs establish inclusion + integrity + existence-by-time — never truth.
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync } from 'node:fs'
 import { PublicKey, Signature, PrivateKey, type Transaction } from '@bsv/sdk'
-import { dsha256, utf8, toHex, fromHex, concat, computeLeaf, TAG_PROMISE, TAG_DELEGATION } from '@nektar/core'
+import { dsha256, utf8, toHex, fromHex, concat, computeLeaf, TAG_PROMISE, TAG_DELEGATION, writeFileAtomic } from '@nektar/core'
 import { verifyCertChain, type RotationCert } from '@nektar/identity'
 import { Datalog, parseLiteral, parseProgram, ParseError, type Fact, type Rule } from '@nektar/datalog'
 import { verifyFragment, type ProofBundle } from '@nektar/verify'
@@ -249,7 +249,7 @@ export class CitationIndex {
         if (!this.byRef.has(k)) this.byRef.set(k, new Set())
         this.byRef.get(k)!.add(a.receiptHash)
       }
-    if (persist && this.file) writeFileSync(this.file, JSON.stringify({ answers: [...this.answers.values()] }))
+    if (persist && this.file) writeFileAtomic(this.file, JSON.stringify({ answers: [...this.answers.values()] }))
   }
   /** STO-005: receipts whose answers cite `ref` */
   citing(ref: FragmentRef): CitedAnswer[] {

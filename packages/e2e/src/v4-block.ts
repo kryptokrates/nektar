@@ -40,7 +40,7 @@ export async function runV4Block({ chain, funder, fundKey, settle, mineMore, che
   const src = PrivateKey.fromRandom()
   const srcPub = src.toPublicKey().toString()
   const P = { source: 'doi:10.5555/manual-rev3', time: Math.floor(Date.now() / 1000), signature: new Uint8Array(0), modelId: 'v4' }
-  const sign = (d: string) => ({ ...signProvenance(src, utf8(d), P), sourcePub: srcPub })
+  const sign = async (d: string) => ({ ...(await signProvenance(src, utf8(d), P)), sourcePub: srcPub })
   let refused = ''
   try {
     await mem.remember('v4', 'unsigned claim')
@@ -48,18 +48,18 @@ export async function runV4Block({ chain, funder, fundKey, settle, mineMore, che
     refused = (e as Error).message
   }
   try {
-    await mem.remember('v4', 'torque 47Nm', sign('torque 45Nm'))
+    await mem.remember('v4', 'torque 47Nm', await sign('torque 45Nm'))
   } catch (e) {
     refused += ` | ${(e as Error).message}`
   }
   check(refused === 'unsigned provenance refused | provenance signature invalid', L('ingest refuses unsigned and mis-signed provenance'))
-  await mem.remember('v4', 'torque 45Nm', sign('torque 45Nm'), 1)
-  await mem.remember('v4', 'belt 10h', sign('belt 10h'))
+  await mem.remember('v4', 'torque 45Nm', await sign('torque 45Nm'), 1)
+  await mem.remember('v4', 'belt 10h', await sign('belt 10h'))
   // LOG-007/005 checkpoint + monitor
   const cp = mem.checkpoints('v4').at(-1)
-  check(!!cp && verifyCheckpoint(cp, mem.logPublicKey()) && cp.size === 2, L('signed checkpoint issued for the anchor'))
+  check(!!cp && verifyCheckpoint(cp, await mem.logPublicKey()) && cp.size === 2, L('signed checkpoint issued for the anchor'))
   check(
-    mem.promiseViolations(60_000, Date.now() + 120_000).length === 0,
+    (await mem.promiseViolations(60_000, Date.now() + 120_000)).length === 0,
     L('promise monitor: every promise covered by a checkpoint within the 60 s merge delay')
   )
   // CHN-006 finality
@@ -141,7 +141,7 @@ export async function runV4Block({ chain, funder, fundKey, settle, mineMore, che
     L('§12 temporal check + causal closure on consensus time')
   )
   const k1 = PrivateKey.fromRandom()
-  const cert = { ...makeRotationCert(src, k1.toPublicKey().toString(), P.time - 10, 3600), index: 1 }
+  const cert = { ...(await makeRotationCert(src, k1.toPublicKey().toString(), P.time - 10, 3600)), index: 1 }
   check((await mem.authorship('v4', 0, srcPub, [cert])).ok, L('§19 authorship of an epoch-0 write survives a later rotation'))
   return { v4anchor: mem.tailLink('v4')!.txid, v5anchor: m5.tailLink('law')!.txid }
 }

@@ -21,7 +21,17 @@
 import { createRequire } from 'node:module'
 import { Beef, Hash, MerklePath, PrivateKey, Transaction, Utils, type ChainTracker } from '@bsv/sdk'
 import { Services, Setup, StorageKnex, Wallet, WalletStorageManager, randomBytesHex, sdk } from '@bsv/wallet-toolbox'
-import { TeranodeRPCTracker, merklePathFor, merklePathMainnet, utxoStatus, type BroadcastResult, type Funder, type FundingOut, type MainnetConfig, type RegtestConfig } from '@nektar/chain'
+import {
+  TeranodeRPCTracker,
+  merklePathFor,
+  merklePathMainnet,
+  utxoStatus,
+  type BroadcastResult,
+  type Funder,
+  type FundingOut,
+  type MainnetConfig,
+  type RegtestConfig
+} from '@nektar/chain'
 import { join } from 'node:path'
 
 const NAME = 'teranode-regtest'
@@ -59,9 +69,24 @@ export class RegtestWalletServices implements sdk.WalletServices {
   private async headerOf(height: number, hash?: string): Promise<sdk.BlockHeader> {
     const h = hash ?? ((await this.rpc('getblockhash', height)) as string)
     const b = (await this.rpc('getblockheader', h, true)) as {
-      version: number; previousblockhash?: string; merkleroot: string; time: number; bits: string; nonce: number; height: number
+      version: number
+      previousblockhash?: string
+      merkleroot: string
+      time: number
+      bits: string
+      nonce: number
+      height: number
     }
-    return { version: b.version, previousHash: b.previousblockhash ?? '0'.repeat(64), merkleRoot: b.merkleroot, time: b.time, bits: parseInt(b.bits, 16), nonce: b.nonce, height: b.height, hash: h }
+    return {
+      version: b.version,
+      previousHash: b.previousblockhash ?? '0'.repeat(64),
+      merkleRoot: b.merkleroot,
+      time: b.time,
+      bits: parseInt(b.bits, 16),
+      nonce: b.nonce,
+      height: b.height,
+      hash: h
+    }
   }
 
   getChainTracker = async (): Promise<ChainTracker> => this.tracker
@@ -88,7 +113,11 @@ export class RegtestWalletServices implements sdk.WalletServices {
     const r = await merklePathFor(this.cfg, txid, this.tracker, 50)
     if (r === null) return { name: NAME, error: werr(`no merkle path for ${txid}`) }
     // cjs-built MerklePath — the wallet consumes it (dual-build boundary)
-    return { name: NAME, merklePath: new sdkc.MerklePath(r.blockHeight, r.path) as unknown as sdk.GetMerklePathResult['merklePath'], header: await this.headerOf(r.blockHeight) }
+    return {
+      name: NAME,
+      merklePath: new sdkc.MerklePath(r.blockHeight, r.path) as unknown as sdk.GetMerklePathResult['merklePath'],
+      header: await this.headerOf(r.blockHeight)
+    }
   }
 
   postBeef: sdk.WalletServices['postBeef'] = async (beef, txids) => {
@@ -150,7 +179,12 @@ export class RegtestWalletServices implements sdk.WalletServices {
     if (typeof txOrLockTime === 'number') {
       lockTime = txOrLockTime
     } else {
-      const tx = typeof txOrLockTime === 'string' ? sdkc.Transaction.fromHex(txOrLockTime) : Array.isArray(txOrLockTime) ? sdkc.Transaction.fromBinary(txOrLockTime) : txOrLockTime
+      const tx =
+        typeof txOrLockTime === 'string'
+          ? sdkc.Transaction.fromHex(txOrLockTime)
+          : Array.isArray(txOrLockTime)
+            ? sdkc.Transaction.fromBinary(txOrLockTime)
+            : txOrLockTime
       lockTime = (tx as { lockTime: number }).lockTime
       for (const i of (tx as { inputs: Array<{ sequence?: number }> }).inputs) if ((i.sequence ?? 0xffffffff) !== 0xffffffff) allSeqFinal = false
     }
@@ -173,7 +207,16 @@ export class RegtestWalletServices implements sdk.WalletServices {
 
   getServicesCallHistory = (_reset?: boolean): sdk.ServicesCallHistory => {
     const h = { serviceName: NAME, historyByProvider: {} }
-    return { version: 1, getMerklePath: h, getRawTx: h, postBeef: h, getUtxoStatus: h, getStatusForTxids: h, getScriptHashHistory: h, updateFiatExchangeRates: h }
+    return {
+      version: 1,
+      getMerklePath: h,
+      getRawTx: h,
+      postBeef: h,
+      getUtxoStatus: h,
+      getStatusForTxids: h,
+      getScriptHashHistory: h,
+      updateFiatExchangeRates: h
+    }
   }
 }
 
@@ -263,7 +306,15 @@ export async function fundToolbox(
   const car = await tb.wallet.createAction({
     inputBEEF: beef.toBinary(),
     inputs: outpoints.map((o) => ({ outpoint: `${o.txid}.${o.vout}`, unlockingScriptLength: 108, inputDescription: 'fund wallet from P2PKH' })),
-    outputs: [{ satoshis: Math.max(1, inSats - 1000), lockingScript: new sdkc.P2PKH().lock(sdkc.PublicKey.fromString(id.publicKey).toAddress()).toHex(), basket: NEKTAR_BASKET, outputDescription: 'nektar funding output', tags: ['nektar'] }],
+    outputs: [
+      {
+        satoshis: Math.max(1, inSats - 1000),
+        lockingScript: new sdkc.P2PKH().lock(sdkc.PublicKey.fromString(id.publicKey).toAddress()).toHex(),
+        basket: NEKTAR_BASKET,
+        outputDescription: 'nektar funding output',
+        tags: ['nektar']
+      }
+    ],
     labels: ['nektar-funding'],
     description: `nektar funding top-up (${outpoints.length} outpoints)`,
     options: { trustSelf: 'known' }
@@ -320,7 +371,10 @@ export class LiveWalletServices implements sdk.WalletServices {
   private woc(path: string): Promise<Response> {
     const h: Record<string, string> = {}
     if (this.opts.mc.wocApiKey) h['woc-api-key'] = this.opts.mc.wocApiKey
-    return (this.opts.mc.fetchImpl ?? fetch)(`${this.opts.mc.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main'}${path}`, { headers: h, signal: AbortSignal.timeout(15_000) })
+    return (this.opts.mc.fetchImpl ?? fetch)(`${this.opts.mc.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main'}${path}`, {
+      headers: h,
+      signal: AbortSignal.timeout(15_000)
+    })
   }
 
   private async headerAtHeight(height: number): Promise<sdk.BlockHeader> {
@@ -329,7 +383,16 @@ export class LiveWalletServices implements sdk.WalletServices {
     const j = (await r.json()) as WocHeader | WocHeader[]
     const h = Array.isArray(j) ? j[0] : j
     if (h === undefined || h.merkleroot === undefined) throw new Error(`woc header ${height}: empty`)
-    return { version: h.version, previousHash: h.previousblockhash ?? '0'.repeat(64), merkleRoot: h.merkleroot, time: h.time, bits: parseInt(h.bits, 16), nonce: h.nonce, height: h.height, hash: h.hash }
+    return {
+      version: h.version,
+      previousHash: h.previousblockhash ?? '0'.repeat(64),
+      merkleRoot: h.merkleroot,
+      time: h.time,
+      bits: parseInt(h.bits, 16),
+      nonce: h.nonce,
+      height: h.height,
+      hash: h.hash
+    }
   }
 
   getChainTracker = async (): Promise<ChainTracker> => this.opts.tracker as ChainTracker
@@ -342,7 +405,16 @@ export class LiveWalletServices implements sdk.WalletServices {
   }
   getServicesCallHistory = (_reset?: boolean): sdk.ServicesCallHistory => {
     const h = { serviceName: 'woc-live', historyByProvider: {} }
-    return { version: 1, getMerklePath: h, getRawTx: h, postBeef: h, getUtxoStatus: h, getStatusForTxids: h, getScriptHashHistory: h, updateFiatExchangeRates: h }
+    return {
+      version: 1,
+      getMerklePath: h,
+      getRawTx: h,
+      postBeef: h,
+      getUtxoStatus: h,
+      getStatusForTxids: h,
+      getScriptHashHistory: h,
+      updateFiatExchangeRates: h
+    }
   }
 
   getHeaderForHeight = async (height: number): Promise<number[]> => {
@@ -433,7 +505,12 @@ export class LiveWalletServices implements sdk.WalletServices {
     if (typeof txOrLockTime === 'number') {
       lockTime = txOrLockTime
     } else {
-      const tx = typeof txOrLockTime === 'string' ? sdkc.Transaction.fromHex(txOrLockTime) : Array.isArray(txOrLockTime) ? sdkc.Transaction.fromBinary(txOrLockTime) : txOrLockTime
+      const tx =
+        typeof txOrLockTime === 'string'
+          ? sdkc.Transaction.fromHex(txOrLockTime)
+          : Array.isArray(txOrLockTime)
+            ? sdkc.Transaction.fromBinary(txOrLockTime)
+            : txOrLockTime
       lockTime = (tx as { lockTime: number }).lockTime
       for (const i of (tx as { inputs: Array<{ sequence?: number }> }).inputs) if ((i.sequence ?? 0xffffffff) !== 0xffffffff) allSeqFinal = false
     }

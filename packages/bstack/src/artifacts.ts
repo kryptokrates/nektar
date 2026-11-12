@@ -3,8 +3,8 @@
 // needs). Canonical digests and signatures are byte-identical: prefix +
 // marketJson(ad) → sha256 → DER sig. The `pay`/listing-fee fields and the
 // output-script encoders had no remaining users and are gone.
-import { PrivateKey, PublicKey, Signature } from '@bsv/sdk'
-import { sha256, utf8, toHex } from '@nektar/core'
+import { PublicKey, Signature } from '@bsv/sdk'
+import { sha256, utf8, toHex, toSigner, signerPubHex, type SignerLike } from '@nektar/core'
 import { randomUUID } from 'node:crypto'
 
 /** deterministic JSON: BigInt → decimal string, object keys sorted recursively, array order kept */
@@ -27,8 +27,8 @@ const numLike = (v: unknown): boolean =>
   typeof v === 'bigint' || (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) || (typeof v === 'string' && /^[0-9]{1,20}$/.test(v))
 
 // shared artifact machinery — canonical → sha256 → DER sign | verify
-const sigFor = <T>(key: PrivateKey, obj: T, canonical: (t: T) => string): string =>
-  toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(canonical(obj))))).toDER() as number[]))
+const sigFor = async <T>(key: SignerLike, obj: T, canonical: (t: T) => string): Promise<string> =>
+  toHex(Uint8Array.from((await toSigner(key).sign(Array.from(sha256(utf8(canonical(obj)))))).toDER() as number[]))
 const verifyDigest = (pubHex: string, digest: Uint8Array, sigHex: string): boolean => {
   try {
     return PublicKey.fromString(pubHex).verify(Array.from(digest), Signature.fromDER(sigHex, 'hex'))
@@ -126,8 +126,8 @@ export function streamCommit(pub: string, kind: string, hash: string): void {
 export type WantInput = Omit<WantAd, 'pub' | 'wantId' | 'revision' | 'status' | 'taskHash' | 'previousHash'> &
   Partial<Pick<WantAd, 'wantId' | 'revision' | 'status' | 'taskHash' | 'previousHash'>>
 
-export function signWant(key: PrivateKey, fields: WantInput): SignedWant {
-  const pub = key.toPublicKey().toString()
+export async function signWant(key: SignerLike, fields: WantInput): Promise<SignedWant> {
+  const pub = await signerPubHex(key)
   const want: WantAd = {
     ...fields,
     wantId: fields.wantId ?? randomUUID(),
@@ -146,7 +146,7 @@ export function signWant(key: PrivateKey, fields: WantInput): SignedWant {
     fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'want')
   Object.assign(want, sr)
   streamCommit(pub, 'want', toHex(Uint8Array.from(wantDigest(want))))
-  return { want, sig: sigFor(key, want, wantCanonical) }
+  return { want, sig: await sigFor(key, want, wantCanonical) }
 }
 
 export function verifyWant(want: WantAd, sigHex: string, opts?: { allowExpired?: boolean; now?: number }): boolean {
@@ -252,8 +252,8 @@ const offerShapeError = (o: OfferAd, allowExpired = false, now = Date.now()): st
 
 export type OfferInput = Omit<OfferAd, 'pub' | 'offerId' | 'revision' | 'previousHash'> & Partial<Pick<OfferAd, 'offerId' | 'revision' | 'previousHash'>>
 
-export function signOffer(key: PrivateKey, fields: OfferInput): SignedOffer {
-  const pub = key.toPublicKey().toString()
+export async function signOffer(key: SignerLike, fields: OfferInput): Promise<SignedOffer> {
+  const pub = await signerPubHex(key)
   const offer: OfferAd = {
     ...fields,
     offerId: fields.offerId ?? randomUUID(),
@@ -267,7 +267,7 @@ export function signOffer(key: PrivateKey, fields: OfferInput): SignedOffer {
     fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'offer')
   Object.assign(offer, sr)
   streamCommit(pub, 'offer', toHex(Uint8Array.from(offerDigest(offer))))
-  return { offer, sig: sigFor(key, offer, offerCanonical) }
+  return { offer, sig: await sigFor(key, offer, offerCanonical) }
 }
 
 export function verifyOffer(offer: OfferAd, sigHex: string, opts?: { allowExpired?: boolean; now?: number }): boolean {

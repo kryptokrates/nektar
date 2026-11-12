@@ -13,7 +13,7 @@ const NET = 'regtest'
 const mod = (t: FakeTracker) => createNektarModule({ log: () => {}, chainTracker: t, engine: { submit: async () => ({}) } }, [NET])
 
 async function wantCarrier(signer: PrivateKey, minter: PrivateKey, domains = ['compute'], net = NET, tree?: import('@bsv/sdk').Transaction) {
-  const sw = signWant(signer, { domains, question: 'q', net, ts: Date.now(), exp: Date.now() + 60000 })
+  const sw = await signWant(signer, { domains, question: 'q', net, ts: Date.now(), exp: Date.now() + 60000 })
   const beef = (
     await buildCarrier({ key: minter, payload: encodePayload({ v: 1, kind: 'want', body: sw }), slot: { tree: tree ?? (await provenTree(minter)), vout: 0 } })
   ).beef
@@ -68,7 +68,7 @@ test('market: second different carrier on same funding outpoint refused; same ca
 })
 
 async function wantCarrierExp(signer: PrivateKey, minter: PrivateKey, exp: number | undefined, tree?: import('@bsv/sdk').Transaction) {
-  const sw = signWant(signer, { domains: ['compute'], question: 'q', net: NET, ts: Date.now(), ...(exp !== undefined ? { exp } : {}) })
+  const sw = await signWant(signer, { domains: ['compute'], question: 'q', net: NET, ts: Date.now(), ...(exp !== undefined ? { exp } : {}) })
   const beef = (
     await buildCarrier({ key: minter, payload: encodePayload({ v: 1, kind: 'want', body: sw }), slot: { tree: tree ?? (await provenTree(minter)), vout: 0 } })
   ).beef
@@ -119,8 +119,8 @@ const aWant = () => {
   return signWant(k, { domains: ['compute'], question: 'q', net: NET, ts: Date.now(), exp: Date.now() + 60000 })
 }
 
-test('market wire: v2 emits a claimsRecord nkt1 record {magic,kind,body}', () => {
-  const sw = aWant()
+test('market wire: v2 emits a claimsRecord nkt1 record {magic,kind,body}', async () => {
+  const sw = await aWant()
   const b = encodePayload({ v: 1, kind: 'want', body: sw })
   assert.ok(claimsRecord(b, NKT1), 'payload claims the nkt1 record')
   const m = decodeValue(b)
@@ -131,8 +131,8 @@ test('market wire: v2 emits a claimsRecord nkt1 record {magic,kind,body}', () =>
   assert.deepEqual(JSON.parse(bodyText as string), sw, 'body is the untouched signed artifact')
 })
 
-test('market wire: v2 and v1 encode the same artifact and both decode', () => {
-  const sw = aWant()
+test('market wire: v2 and v1 encode the same artifact and both decode', async () => {
+  const sw = await aWant()
   const p = { v: 1 as const, kind: 'want' as const, body: sw }
   const v2 = decodePayload(encodePayload(p))
   const v1 = decodePayload(encodePayload(p, { legacy: true }))
@@ -140,16 +140,16 @@ test('market wire: v2 and v1 encode the same artifact and both decode', () => {
   assert.deepEqual(v1, p)
 })
 
-test('market wire: offer kind round-trips as kind 2', () => {
+test('market wire: offer kind round-trips as kind 2', async () => {
   const k = PrivateKey.fromRandom()
-  const so = signOffer(k, { shard: 's', seq: 0, priceSats: 10, domains: ['compute'], net: NET, ts: Date.now() })
+  const so = await signOffer(k, { shard: 's', seq: 0, priceSats: 10, domains: ['compute'], net: NET, ts: Date.now() })
   const b = encodePayload({ v: 1, kind: 'offer', body: so })
   assert.equal((decodeValue(b) as CborMap).get(1n), 2n)
   assert.deepEqual(decodePayload(b), { v: 1, kind: 'offer', body: so })
 })
 
-test('market wire: refuse wrong magic, truncated, non-canonical, missing keys', () => {
-  const sw = aWant()
+test('market wire: refuse wrong magic, truncated, non-canonical, missing keys', async () => {
+  const sw = await aWant()
   const b = encodePayload({ v: 1, kind: 'want', body: sw })
   assert.throws(() => decodePayload(b.subarray(0, b.length - 5)), /market payload|bad market payload/)
   const wrongMagic = new Uint8Array(b)
@@ -159,8 +159,8 @@ test('market wire: refuse wrong magic, truncated, non-canonical, missing keys', 
   assert.throws(() => decodePayload(new TextEncoder().encode('{"v":1,"kind":"want"}')), /bad market payload/)
 })
 
-test('market wire: extra keys above 2 are preserved-but-ignored on decode', () => {
-  const sw = aWant()
+test('market wire: extra keys above 2 are preserved-but-ignored on decode', async () => {
+  const sw = await aWant()
   const b = encodePayload({ v: 1, kind: 'want', body: sw })
   const m = decodeValue(b) as CborMap
   m.entries.push({ key: 9n, val: 'future-field' })

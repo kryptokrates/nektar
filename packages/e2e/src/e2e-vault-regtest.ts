@@ -102,7 +102,7 @@ let utxo = { txid: fundTx.id('hex'), vout: 0, satoshis: FUND_SATS, script: vault
 
 // spend 1: pay 1000 ≤ perTxCap through the covenant
 let lt = await tracker.currentHeight()
-const s1 = vault.buildSpend(utxo, owner, 1_000n, lt)
+const s1 = await vault.buildSpend(utxo, owner, 1_000n, lt)
 const r1 = await broadcaster.broadcast(s1.tx)
 check(r1.status === 'success', `spend 1 (1000 sats) accepted by node — ${r1.description ?? 'ok'}`)
 if (r1.status !== 'success') {
@@ -116,7 +116,7 @@ await mineOne()
 const cont = s1.tx.outputs[0]
 utxo = { txid: s1.tx.id('hex'), vout: 0, satoshis: cont.satoshis!, script: cont.lockingScript.toHex() }
 lt = await tracker.currentHeight()
-const s2 = vault.buildSpend(utxo, owner, 1_500n, lt)
+const s2 = await vault.buildSpend(utxo, owner, 1_500n, lt)
 const r2 = await broadcaster.broadcast(s2.tx)
 check(r2.status === 'success', `spend 2 (continuation, 1500 sats) accepted — ${r2.description ?? 'ok'}`)
 await mineOne()
@@ -126,7 +126,7 @@ await mineOne()
 const cont2 = s2.tx.outputs[0]
 const utxo2 = { txid: s2.tx.id('hex'), vout: 0, satoshis: cont2.satoshis!, script: cont2.lockingScript.toHex() }
 lt = await tracker.currentHeight()
-const bad = vault.buildSpend(utxo2, owner, 5_000n, lt)
+const bad = await vault.buildSpend(utxo2, owner, 5_000n, lt)
 const rb = await broadcaster.broadcast(bad.tx)
 check(rb.status !== 'success', `over-cap spend refused by node (${rb.description?.slice(0, 60) ?? 'refused'})`)
 

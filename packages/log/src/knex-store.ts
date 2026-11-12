@@ -27,12 +27,15 @@ export class KnexShardStore implements ShardStore {
         t.text('meta_json')
         t.primary(['shard', 'seq'])
         t.unique(['shard', 'hdp'])
+        t.index(['shard', 'state', 'batch_index'], 'nektar_log_pending_idx')
       })
     } else if (!(await this.knex.schema.hasColumn(TABLE, 'meta_json'))) {
       await this.knex.schema.alterTable(TABLE, (t) => {
         t.text('meta_json')
       })
     }
+    // hot scan: committedUnbatched runs on every remember + flush tick
+    await this.knex.raw('CREATE INDEX IF NOT EXISTS nektar_log_pending_idx ON ?? (??, ??, ??)', [TABLE, 'shard', 'state', 'batch_index'])
   }
 
   private row(r: LogRecord) {
@@ -74,6 +77,13 @@ export class KnexShardStore implements ShardStore {
       .first()
     return row && this.rec(row)
   }
+  async bySeq(shard: string, seq: number): Promise<LogRecord | undefined> {
+    const row = await this.knex(TABLE).where({ shard, seq }).first()
+    return row && this.rec(row)
+  }
+  async byBatch(shard: string, batchIndex: number): Promise<LogRecord[]> {
+    return (await this.knex(TABLE).where({ shard, batch_index: batchIndex }).orderBy('leaf_index')).map((r) => this.rec(r))
+  }
   async nextSeq(shard: string): Promise<number> {
     const row = await this.knex(TABLE).where({ shard }).max('seq as m').first()
     return (row?.m ?? -1) + 1
@@ -84,12 +94,18 @@ export class KnexShardStore implements ShardStore {
   async committedUnbatched(shard: string): Promise<LogRecord[]> {
     return (await this.knex(TABLE).where({ shard, state: 'committed' }).whereNull('batch_index').orderBy('seq')).map((r) => this.rec(r))
   }
+  async resetUnanchored(shard: string): Promise<number> {
+    return await this.knex(TABLE).where({ shard, state: 'committed' }).whereNotNull('batch_index').update({ batch_index: null, leaf_index: null })
+  }
   async markBatched(shard: string, seqs: number[], batchIndex: number): Promise<void> {
-    for (const seq of seqs) {
-      await this.knex(TABLE)
-        .where({ shard, seq })
-        .update({ batch_index: batchIndex, leaf_index: seqs.indexOf(seq) })
-    }
+    // one transaction — a partial batch assignment is the same orphan class as
+    // a dropped anchor, only finer-grained
+    const leafIndex = new Map(seqs.map((s, i) => [s, i] as const))
+    await this.knex.transaction(async (trx) => {
+      for (const [seq, idx] of leafIndex) {
+        await trx(TABLE).where({ shard, seq }).update({ batch_index: batchIndex, leaf_index: idx })
+      }
+    })
   }
   async markAnchored(shard: string, batchIndex: number, txid: string): Promise<void> {
     await this.knex(TABLE).where({ shard, batch_index: batchIndex }).update({ state: 'anchored', anchor_txid: txid })

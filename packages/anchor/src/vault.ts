@@ -2,9 +2,10 @@
 // The contract is a StatefulSmartContract: mutable props carry the window
 // state; the SDK serializes state / builds scripts / computes the
 // OP_PUSH_TX preimage — no hand-assembled script bytes here.
-import { PrivateKey, Transaction, LockingScript, UnlockingScript, Hash } from '@bsv/sdk'
+import { Transaction, LockingScript, UnlockingScript, Hash } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, serializeState, extractStateFromScript, buildP2PKHScript } from 'runar-sdk'
 import type { Broadcaster, Funder, FundingOut } from '@nektar/chain'
+import { toSigner, signerPubHex, type SignerLike } from '@nektar/core'
 import { NEKTAR_FEEVAULT_ARTIFACT } from '@nektar/contracts'
 
 /** GOAL-v7 name kept for compatibility. */
@@ -64,7 +65,7 @@ export class FeeVault {
 
   /** build a vault spend tx: payment → destPkh, continuation, change → ownerPkh.
    *  Returns { tx } — the caller broadcasts it. */
-  buildSpend(utxo: VaultUtxo, ownerKey: PrivateKey, payAmount: bigint, lockTime: number, fee = 1n): { tx: Transaction } {
+  async buildSpend(utxo: VaultUtxo, ownerKey: SignerLike, payAmount: bigint, lockTime: number, fee = 1n): Promise<{ tx: Transaction }> {
     const cur = this.stateOf(utxo.script)
     const lt = BigInt(lockTime)
     const [newSpent, newStart] = lt >= cur.windowStart + this.cfg.windowBlocks ? [payAmount, lt] : [cur.spentInWindow + payAmount, cur.windowStart]
@@ -96,14 +97,14 @@ export class FeeVault {
     // user sig: checkSig runs after OP_CODESEPARATOR → sign over the trimmed subscript
     const sigSub = c.getSubscriptForSigning ? c.getSubscriptForSigning(utxo.script, 0) : utxo.script
     const sigPreimage = computeOpPushTx(tx, 0, sigSub, utxo.satoshis).preimageHex
-    const sig = Buffer.from(ownerKey.sign(Array.from(Hash.sha256(Buffer.from(sigPreimage, 'hex')))).toDER()).toString('hex') + '41'
+    const sig = Buffer.from((await toSigner(ownerKey).sign(Array.from(Hash.sha256(Buffer.from(sigPreimage, 'hex'))))).toDER()).toString('hex') + '41'
     // needsCodePart=true: this method is non-terminal stateful with _changePKH —
     // the SDK pushes the code part as a witness item before the opSig.
     const unlock =
       c.buildStatefulPrefix(opSig, true) +
       this.contract.buildUnlockingScript('spend', [
         sig,
-        ownerKey.toPublicKey().toString(),
+        await signerPubHex(ownerKey),
         payAmount,
         newSpent,
         newStart,
@@ -121,7 +122,7 @@ export class FeeVault {
 export class VaultFunder implements Funder {
   constructor(
     private vault: FeeVault,
-    private ownerKey: PrivateKey,
+    private ownerKey: SignerLike,
     private broadcaster: Broadcaster,
     private current: () => Promise<VaultUtxo>,
     private height: () => Promise<number>,
@@ -133,7 +134,7 @@ export class VaultFunder implements Funder {
   async take(satoshis: number): Promise<FundingOut> {
     const u = await this.current()
     const pay = BigInt(satoshis) + this.feeSats
-    const { tx } = this.vault.buildSpend(u, this.ownerKey, pay, await this.height(), this.feeSats)
+    const { tx } = await this.vault.buildSpend(u, this.ownerKey, pay, await this.height(), this.feeSats)
     const res = await this.broadcaster.broadcast(tx)
     if (res.status !== 'success') throw new Error(`vault spend refused: ${res.description ?? res.status}`)
     return { tx, vout: 1, satoshis: Number(pay) }

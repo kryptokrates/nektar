@@ -144,7 +144,7 @@ test('§15 modality: committed into H(d‖p) and the provenance signature; inval
   const { signProvenance, verifyProvenance } = await import('@nektar/log')
   const key = PrivateKey.fromRandom()
   const d = new TextEncoder().encode('x')
-  const p = signProvenance(key, d, {
+  const p = await signProvenance(key, d, {
     source: 's',
     time: 1,
     signature: new Uint8Array(0),
@@ -364,7 +364,7 @@ test('§19 read-path: revoked author key withholds the record at recall', async 
   const author = PrivateKey.fromRandom()
   const { signProvenance } = await import('@nektar/log')
   const p0 = { source: 'agent', time: Math.floor(Date.now() / 1000), signature: new Uint8Array(0), modelId: 't' }
-  const signed = signProvenance(author, new Uint8Array(Buffer.from('killed key test', 'utf8')), p0)
+  const signed = await signProvenance(author, new Uint8Array(Buffer.from('killed key test', 'utf8')), p0)
   await mem.remember('s', 'killed key test', { ...signed, sourcePub: author.toPublicKey().toString(), epoch: 0 })
   await mem.remember('s', 'filler record')
   settle('s')

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { signWant, verifyWant, signOffer, verifyOffer, wantTaskDigest, type SignedOffer } from '../src/artifacts.js'
+import { signWant, verifyWant, signOffer, verifyOffer, wantTaskDigest } from '../src/artifacts.js'
 
 const key = PrivateKey.fromRandom()
 const other = PrivateKey.fromRandom()
@@ -69,8 +69,8 @@ test('fixture: artifacts signed by @nektar/overlay still verify byte-for-byte', 
   assert.equal(wantTaskDigest({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }), FIXTURE.want.taskHash)
 })
 
-test('signature covers the whole canonical artifact — any mutation fails', () => {
-  const w = want({ question: 'who won', maxSats: 500 })
+test('signature covers the whole canonical artifact — any mutation fails', async () => {
+  const w = await want({ question: 'who won', maxSats: 500 })
   assert.ok(verifyWant(w.want, w.sig))
   for (const mutate of [
     () => ({ ...w.want, question: 'other' }),
@@ -94,25 +94,25 @@ test('signature covers the whole canonical artifact — any mutation fails', () 
   ])
     assert.equal(verifyWant(bad as never, w.sig), false)
   // signing invalid values throws instead of producing an unverifiable artifact
-  assert.throws(() => want({ wantId: 'has space' }))
-  assert.throws(() => want({ taskHash: 'nothex' }))
-  assert.throws(() => want({ revision: 0 }))
+  await assert.rejects(() => want({ wantId: 'has space' }))
+  await assert.rejects(() => want({ taskHash: 'nothex' }))
+  await assert.rejects(() => want({ revision: 0 }))
   // revision>1 must name its predecessor
-  assert.throws(() => want({ revision: 2 }), /previousHash/)
+  await assert.rejects(() => want({ revision: 2 }), /previousHash/)
   // taskHash default commits to the request terms
   assert.equal(w.want.taskHash, wantTaskDigest({ domains: ['soccer'], question: 'who won', maxSats: 500 }))
 })
 
 test('expired wants verify only with allowExpired (evidence path)', async () => {
-  const w = want({ exp: Date.now() + 30 })
+  const w = await want({ exp: Date.now() + 30 })
   await new Promise((r) => setTimeout(r, 60)) // let the expiry lapse
   assert.equal(verifyWant(w.want, w.sig), false)
   assert.equal(verifyWant(w.want, w.sig, { allowExpired: true }), true)
 })
 
-test('offer: want binding, quote without wrapped, revision + id rules', () => {
-  const w = want()
-  const o = offer({ wantId: w.want.wantId, taskHash: w.want.taskHash, wantRevision: 1, buyerPub: w.want.pub, replyTo: w.want.pub })
+test('offer: want binding, quote without wrapped, revision + id rules', async () => {
+  const w = await want()
+  const o = await offer({ wantId: w.want.wantId, taskHash: w.want.taskHash, wantRevision: 1, buyerPub: w.want.pub, replyTo: w.want.pub })
   assert.ok(verifyOffer(o.offer, o.sig))
   assert.equal(o.offer.offerId.length > 0 && o.offer.revision, 1)
   // mutation of nested quote / want binding / price breaks the signature
@@ -128,20 +128,20 @@ test('offer: want binding, quote without wrapped, revision + id rules', () => {
     assert.equal(verifyOffer(mutate(), o.sig), false)
   // a quote carrying the reveal credential can never be signed or verified
   const leaky = { ...quote(), wrapped: 'aa'.repeat(32) }
-  assert.throws(() => offer({ offer: leaky }), /quote|wrapped/i)
+  await assert.rejects(() => offer({ offer: leaky }), /quote|wrapped/i)
   assert.equal(verifyOffer({ ...o.offer, offer: leaky }, o.sig), false)
   // revision chain enforced
-  assert.throws(() => offer({ offerId: o.offer.offerId, revision: 2 }), /previousHash/)
-  const o2 = offer({ offerId: o.offer.offerId, revision: 2, previousHash: 'f'.repeat(64) })
+  await assert.rejects(() => offer({ offerId: o.offer.offerId, revision: 2 }), /previousHash/)
+  const o2 = await offer({ offerId: o.offer.offerId, revision: 2, previousHash: 'f'.repeat(64) })
   assert.ok(verifyOffer(o2.offer, o2.sig))
 })
 
-test('signWant/signOffer stamp monotonic stream fields per producer', () => {
+test('signWant/signOffer stamp monotonic stream fields per producer', async () => {
   const k = PrivateKey.fromRandom()
-  const w1 = signWant(k, { domains: ['soccer'], ts: Date.now() })
-  const w2 = signWant(k, { domains: ['soccer'], ts: Date.now() })
+  const w1 = await signWant(k, { domains: ['soccer'], ts: Date.now() })
+  const w2 = await signWant(k, { domains: ['soccer'], ts: Date.now() })
   assert.equal(w2.want.streamSeq, (w1.want.streamSeq ?? 0) + 1)
   assert.notEqual(w2.want.prevHash, '0'.repeat(64))
-  const o = signOffer(k, { shard: 's', seq: 0, priceSats: 1, domains: ['soccer'], ts: Date.now() })
+  const o = await signOffer(k, { shard: 's', seq: 0, priceSats: 1, domains: ['soccer'], ts: Date.now() })
   assert.equal(o.offer.streamSeq, 1, 'offer stream is its own sequence')
 })

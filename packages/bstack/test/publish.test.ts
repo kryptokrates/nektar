@@ -10,10 +10,10 @@ import { provenTree, fund, prove } from './helpers.js'
 import { FakeTracker, minihost } from '../src/testing.js'
 
 const NET = 'regtest'
-const wantPayload = (k: PrivateKey) => ({
+const wantPayload = async (k: PrivateKey) => ({
   v: 1 as const,
   kind: 'want' as const,
-  body: signWant(k, { domains: ['compute'], question: 'q', net: NET, ts: Date.now(), exp: Date.now() + 60000 })
+  body: await signWant(k, { domains: ['compute'], question: 'q', net: NET, ts: Date.now(), exp: Date.now() + 60000 })
 })
 
 test('journal: round-trip', async () => {
@@ -33,7 +33,7 @@ test('publish: same payload twice burns one slot, same txid, both submits ok', a
   await ledger.markProven(tree.id('hex'))
   const j = new MemoryCarrierJournal()
   const p = { key: k, ledger, journal: j, hosts: [h.url], net: NET }
-  const payload = wantPayload(k)
+  const payload = await wantPayload(k)
   const r1 = await publishArtifact({ ...p, payload })
   const r2 = await publishArtifact({ ...p, payload })
   assert.equal(r1.txid, r2.txid)
@@ -45,7 +45,9 @@ test('publish: no slot throws', async () => {
   const h = await minihost([NET], new FakeTracker())
   const k = PrivateKey.fromRandom()
   await assert.rejects(
-    publishArtifact({ key: k, ledger: new MemoryTreeLedger(), journal: new MemoryCarrierJournal(), hosts: [h.url], net: NET, payload: wantPayload(k) }),
+    wantPayload(k).then((payload) =>
+      publishArtifact({ key: k, ledger: new MemoryTreeLedger(), journal: new MemoryCarrierJournal(), hosts: [h.url], net: NET, payload })
+    ),
     /no funding slot/
   )
   await h.close()
@@ -64,7 +66,7 @@ test('ensureTrees: mints once, no double-mint while unproven, proven then low-wa
   const r1 = await ensureTrees(p)
   assert.equal(broadcasted.length, 1)
   assert.ok(r1.minted)
-  const r2 = await ensureTrees(p)
+  await ensureTrees(p)
   assert.equal(broadcasted.length, 1, 'no second mint while unproven')
   prove(broadcasted[0])
   const r3 = await ensureTrees(p)

@@ -3,7 +3,17 @@ import assert from 'node:assert/strict'
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, Utils } from '@bsv/sdk'
 import { MemoryTreeLedger, mintTree } from '../src/tree.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
-import { MemoryFingerState, KnexFingerState, publishFinger, resolveFinger, fingerFundingLock, checkFingerBody, FINGER_KIND, type FingerBody, type FingerState } from '../src/finger.js'
+import {
+  MemoryFingerState,
+  KnexFingerState,
+  publishFinger,
+  resolveFinger,
+  fingerFundingLock,
+  checkFingerBody,
+  FINGER_KIND,
+  type FingerBody,
+  type FingerState
+} from '../src/finger.js'
 import { mintCarrier } from '@lightwebinc/bcommon'
 import { encodeRecord, MagicV1, type CommittedRecord } from '@lightwebinc/bfinger-host/dist/record.js'
 
@@ -56,7 +66,8 @@ async function rig(
   const key = PrivateKey.fromRandom()
   const ledger = new MemoryTreeLedger()
   const journal = new MemoryCarrierJournal()
-  const kx = o.knexState === true ? (await import('knex')).default({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true }) : undefined
+  const kx =
+    o.knexState === true ? (await import('knex')).default({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true }) : undefined
   const state: FingerState = kx !== undefined ? new KnexFingerState(kx) : new MemoryFingerState()
   const tree = await mintTree({ key, funding: fund(key), n: 8, satsPerOutput: 100, lock: await fingerFundingLock(key) })
   prove(tree)

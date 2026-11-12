@@ -1,7 +1,6 @@
-import { PrivateKey, ProtoWallet } from '@bsv/sdk'
-import { sha256, toHex } from '@nektar/core'
+import { sha256, toHex, type SignerLike } from '@nektar/core'
 import { fundingLock, type SigningWallet } from '@lightwebinc/bcommon'
-import { buildCarrier, carrierFundingLockHex } from './carrier.js'
+import { buildCarrier, carrierFundingLockHex, walletOrProto } from './carrier.js'
 import { encodePayload, lanesFor, bodyDomains, type MarketPayload } from './market.js'
 import { submitAll, type Quorum } from './hosts.js'
 import { DERIVATION, FUNDING_TAG, ORIGINATOR, type TreeLedger } from './tree.js'
@@ -12,7 +11,7 @@ export function artifactHash(payload: MarketPayload): string {
 }
 
 export async function publishArtifact(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: SigningWallet
   ledger: TreeLedger
   journal: CarrierJournal
@@ -23,7 +22,7 @@ export async function publishArtifact(p: {
 }): Promise<{ txid: string; took: string[]; admitted: string[]; missed: Array<{ host: string; error: string }> }> {
   const hash = artifactHash(p.payload)
   const topics = lanesFor(p.net, bodyDomains(p.payload))
-  const lockHex = (await fundingLock(p.wallet ?? new ProtoWallet(p.key), ORIGINATOR, DERIVATION, FUNDING_TAG)).toHex()
+  const lockHex = (await fundingLock(walletOrProto(p.key, p.wallet), ORIGINATOR, DERIVATION, FUNDING_TAG)).toHex()
   let beef: number[] | undefined
   let txid: string | undefined
   let held = await p.journal.get(hash)

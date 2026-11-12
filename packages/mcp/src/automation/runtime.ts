@@ -66,6 +66,11 @@ export interface AutomationConfig {
   /** watchdog cadence — the cheap checks (chain/broadcaster/hosts) re-run on
    *  this tick (default 60s; 0 disables) */
   watchdogMs?: number
+  /** watch-shim base URLs (NEKTAR_WATCH_URLS) — long-poll wake in front of
+   *  ordinary BRC-24 hosts. Each subscription mirrors a query the poll loop
+   *  already issues; a changed result-set runs deals() at once. Optional:
+   *  absent/down shim = plain polling. */
+  watchHosts?: string[]
   now?: () => number
 }
 
@@ -411,7 +416,15 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
                     retry.push({ txid: i.txid, commitment: i.commitment, from: i.from, until: priorUntil.get(`${i.txid}:${i.commitment}`) ?? now + 600 })
               }
               deferredAcks = retry
-              const r = await lanes.mod.ackBox({ key, wallet, ledger: lanes.ledger, journal: lanes.journal, hosts: [...ackHosts], office: cfg.boxOffice, items })
+              const r = await lanes.mod.ackBox({
+                key,
+                wallet,
+                ledger: lanes.ledger,
+                journal: lanes.journal,
+                hosts: [...ackHosts],
+                office: cfg.boxOffice,
+                items
+              })
               if (r.skipped > 0 && r.skipped !== lastAckSkipped) {
                 lastAckSkipped = r.skipped
                 log(`automation: box ack: ${r.skipped} envelope(s) skipped — no bbox funding slot`)
@@ -433,13 +446,19 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
       ...watch.sellerDomains.map(async (domain) => {
         const r = await readWants(marketHosts, { net, domain }, { tracker, net, now: cfg.now?.(), timeoutMs: 5_000 })
         const events = r.items.map((i) => ({ seq: i.txid, kind: 'want', payload: i.payload.body }))
-        if (events.length) await engine.ingestEvents(`lane:${net}:${domain}`, events, '')
+        if (events.length) {
+          hotUntil = Date.now() + 5_000
+          await engine.ingestEvents(`lane:${net}:${domain}`, events, '')
+        }
         laneNotes(r)
       }),
       ...watch.collecting.map(async (c) => {
         const r = await readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: me }, { tracker, net, now: cfg.now?.(), timeoutMs: 5_000 })
         const events = r.items.map((i) => ({ seq: i.txid, kind: 'offer', payload: i.payload.body }))
-        if (events.length) await engine.ingestEvents(`offers:${c.wantId}`, events, '')
+        if (events.length) {
+          hotUntil = Date.now() + 5_000
+          await engine.ingestEvents(`offers:${c.wantId}`, events, '')
+        }
         laneNotes(r)
       })
     ])
@@ -453,7 +472,9 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
       msgs !== undefined
         ? (async () => {
             try {
-              for (const m of await msgs.collect()) await engine.ingestMessage(m.from, m.msg, m.refs)
+              const collected = await msgs.collect()
+              if (collected.length > 0) hotUntil = Date.now() + 5_000
+              for (const m of collected) await engine.ingestMessage(m.from, m.msg, m.refs)
             } catch (e) {
               log(`automation: messages: ${(e as Error).message}`)
             }
@@ -464,6 +485,10 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   let busy = false
   let again = false
   let running: Promise<void> | undefined
+  // A4 — adaptive floor: any inbound activity (lane events, inbox messages,
+  // a watch-shim wake) keeps the loop hot for 5s — mid-deal polls run at
+  // the fast cadence; silence falls back to intervalMs.
+  let hotUntil = 0
   // envelope receipts ride the journaled ack path — submitted AFTER the
   // engine's tick under their own busy guard, so a slow or dead host can
   // never delay the processing of messages that just arrived
@@ -497,6 +522,9 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
             await poll()
             await engine.tick()
             pushAcks()
+            // new lanes appear as deals start — re-derive watch subs at the
+            // end of a pass so a fresh want is subscribed within one cycle
+            if (watchBases.length > 0) void refreshWatches().catch(() => undefined)
           } catch (e) {
             log(`automation: ${(e as Error).message}`)
           }
@@ -800,14 +828,22 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   }
 
   const upkeepMs = cfg.upkeepMs ?? 10_000
-  const timer =
-    cfg.intervalMs === 0
-      ? undefined
-      : setInterval(() => {
-          void deals()
-          if (Date.now() - upkeepAt >= upkeepMs) void upkeep().catch(() => {})
-        }, cfg.intervalMs ?? 1000)
-  timer?.unref()
+  // A4 — a setTimeout chain, not a fixed interval: while the loop is hot
+  // (recent inbound activity) the deals cadence floors at 250ms so an
+  // in-flight deal never waits a full interval for the next hop.
+  const idleMs = cfg.intervalMs ?? 1000
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const tick = (): void => {
+    if (stopped) return
+    void deals()
+    if (Date.now() - upkeepAt >= upkeepMs) void upkeep().catch(() => {})
+    timer = setTimeout(tick, Date.now() < hotUntil ? Math.min(250, idleMs) : idleMs)
+    timer.unref()
+  }
+  if (cfg.intervalMs !== 0) {
+    timer = setTimeout(tick, idleMs)
+    timer.unref()
+  }
   // A10 — the watchdog: the cheap probe tier (chain/broadcaster/hosts/kill
   // state) re-runs on a slow tick; host losses update the deaf flag the
   // engine consults at every new-deal entry point
@@ -846,6 +882,73 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   watchdog?.unref()
   let stopped = false
   const inflight = new Set<Promise<void>>()
+  // A2 — push wake: optional watch-shim endpoints. Each subscription mirrors
+  // a query the poll loop already issues; a changed result-set fires deals()
+  // at once instead of waiting out the poll interval. Every failure mode
+  // (no shim configured, shim down, backend down) degrades to the ordinary
+  // poll path — a wake is only ever a hint, never the load path.
+  const watchBases = (cfg.watchHosts ?? []).map((u) => u.replace(/\/+$/, ''))
+  const watches = new Map<string, AbortController>()
+  const watchOne = async (base: string, service: string, query: unknown, signal: AbortSignal): Promise<void> => {
+    let cursor: string | undefined
+    while (!stopped && !signal.aborted) {
+      try {
+        const u = `${base}/watch?service=${encodeURIComponent(service)}&query=${encodeURIComponent(JSON.stringify(query))}${cursor !== undefined ? `&cursor=${cursor}` : ''}&waitMs=25000`
+        const r = await fetch(u, { signal })
+        if (!r.ok) {
+          await new Promise((r2) => setTimeout(r2, 5_000))
+          continue
+        }
+        const j = (await r.json()) as { changed?: boolean; cursor?: string }
+        cursor = j.cursor ?? cursor
+        if (j.changed === true && !stopped) {
+          hotUntil = Date.now() + 5_000
+          void deals().catch((e) => log(`automation: watch: ${(e as Error).message}`))
+        }
+      } catch {
+        if (signal.aborted || stopped) return
+        await new Promise((r) => setTimeout(r, 5_000))
+      }
+    }
+  }
+  const refreshWatches = async (): Promise<void> => {
+    if (watchBases.length === 0 || stopped) return
+    const want = new Map<string, { base: string; service: string; query: unknown }>()
+    try {
+      const w = await engine.watchList()
+      const net = cfg.network
+      for (const domain of w.sellerDomains)
+        for (const base of watchBases) want.set(`${base}|ls_nektar|wants:${domain}`, { base, service: 'ls_nektar', query: { wants: { net, domain } } })
+      for (const c of w.collecting)
+        for (const base of watchBases)
+          want.set(`${base}|ls_nektar|offers:${c.wantId}`, { base, service: 'ls_nektar', query: { offers: { net, wantId: c.wantId, buyerPub: me } } })
+      // office watch only when envelopes ride lanes (cfg.messages bypasses)
+      if (lanes !== undefined && cfg.messages === undefined) {
+        const q = { office: cfg.boxOffice ?? lanes.mod.officeFor(), to: me }
+        for (const base of watchBases) want.set(`${base}|ls_bbox|office`, { base, service: 'ls_bbox', query: q })
+      }
+    } catch {
+      return
+    }
+    for (const [k, ac] of watches)
+      if (!want.has(k)) {
+        ac.abort()
+        watches.delete(k)
+      }
+    for (const [k, w] of want)
+      if (!watches.has(k)) {
+        const ac = new AbortController()
+        watches.set(k, ac)
+        const work = watchOne(w.base, w.service, w.query, ac.signal).catch(() => undefined)
+        inflight.add(work)
+        void work.finally(() => inflight.delete(work))
+      }
+  }
+  // watch queries derive from the engine's live watch-list — re-derive on a
+  // slow tick plus after every deals pass so new wants appear in ≤1 cycle
+  const watchTimer = watchBases.length === 0 ? undefined : setInterval(() => void refreshWatches().catch(() => undefined), 15_000)
+  watchTimer?.unref()
+  void refreshWatches().catch(() => undefined)
   // push-driven progress: a verified tx proof (broadcaster callback or the
   // chain's own mined event) may make a funding tree provable and advance
   // completion_submitted → settled — run a cycle now, not at the next interval
@@ -921,8 +1024,11 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
           },
     stop: async () => {
       stopped = true
-      if (timer) clearInterval(timer)
+      if (timer) clearTimeout(timer)
       if (watchdog) clearInterval(watchdog)
+      if (watchTimer) clearInterval(watchTimer)
+      for (const ac of watches.values()) ac.abort()
+      watches.clear()
       await Promise.allSettled(inflight)
       while (busy || upkeepRun !== undefined || acking) await new Promise((r) => setTimeout(r, 25))
       await engine.idle()

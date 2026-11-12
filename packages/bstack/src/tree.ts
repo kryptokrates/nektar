@@ -1,5 +1,6 @@
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { fundingLock, feeFor, type Derivation, type Fees, type SigningWallet } from '@lightwebinc/bcommon'
+import { unlockP2PKH, signerAddress, type SignerLike } from '@nektar/core'
 import type { FundingOut } from '@nektar/chain'
 import type { Knex } from 'knex'
 
@@ -9,7 +10,7 @@ export const ORIGINATOR = 'nektar'
 export const MAX_TREE_OUTPUTS = 1023
 
 export async function mintTree(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: SigningWallet
   funding: FundingOut
   n: number
@@ -21,12 +22,13 @@ export async function mintTree(p: {
   const sats = p.satsPerOutput ?? 1
   if (!Number.isInteger(n) || n < 1 || n > MAX_TREE_OUTPUTS) throw new Error(`mintTree: n must be 1..${MAX_TREE_OUTPUTS}`)
   if (!Number.isSafeInteger(sats) || sats < 1) throw new Error('mintTree: bad satsPerOutput')
-  const w = p.wallet ?? new ProtoWallet(key)
+  const w = p.wallet ?? (key instanceof PrivateKey ? new ProtoWallet(key) : undefined)
+  if (!w) throw new Error('mintTree: wallet required when key is a signer')
   const tx = new Transaction()
-  tx.addInput({ sourceTransaction: funding.tx, sourceOutputIndex: funding.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  tx.addInput({ sourceTransaction: funding.tx, sourceOutputIndex: funding.vout, unlockingScriptTemplate: unlockP2PKH(key) })
   const lock = p.lock ?? (await fundingLock(w, ORIGINATOR, DERIVATION, FUNDING_TAG))
   for (let i = 0; i < n; i++) tx.addOutput({ satoshis: sats, lockingScript: lock })
-  tx.addOutput({ lockingScript: p.changeScript ?? new P2PKH().lock(key.toPublicKey().toAddress()), change: true })
+  tx.addOutput({ lockingScript: p.changeScript ?? new P2PKH().lock(await signerAddress(key)), change: true })
   await tx.fee()
   await tx.sign()
   return tx

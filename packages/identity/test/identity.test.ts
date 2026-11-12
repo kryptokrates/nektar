@@ -34,27 +34,27 @@ test('identity: challenge-response', () => {
   assert.equal(verifyChallenge(k1.toPublicKey().toString(), c, s), false)
 })
 
-test('rotation: cert chain verifies from pk(0)', () => {
-  const c1 = makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
-  const c2 = { ...makeRotationCert(k1, k2.toPublicKey().toString(), 2000, 3600), index: 1 }
+test('rotation: cert chain verifies from pk(0)', async () => {
+  const c1 = await makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
+  const c2 = { ...(await makeRotationCert(k1, k2.toPublicKey().toString(), 2000, 3600)), index: 1 }
   assert.equal(verifyRotationCert(c1), true)
   const r = verifyCertChain(k0.toPublicKey().toString(), [c1, c2])
   assert.equal(r?.activePub, k2.toPublicKey().toString())
   assert.equal(r?.expiredAt, 2000 + 3600)
 })
 
-test('rotation NEGATIVE: cert not signed by the previous key fails', () => {
-  const c1 = makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
+test('rotation NEGATIVE: cert not signed by the previous key fails', async () => {
+  const c1 = await makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
   // forge: re-sign with a different key, keep prevPubkey=pk0
   const forged = { ...c1, sig: k2.sign([1, 2, 3]).toDER('hex') as string }
   assert.equal(verifyRotationCert(forged), false)
   // a chain where cert2's prevPubkey skips pk1 → break
-  const bad2 = { ...makeRotationCert(k0, k2.toPublicKey().toString(), 2000, 3600), index: 1 }
+  const bad2 = { ...(await makeRotationCert(k0, k2.toPublicKey().toString(), 2000, 3600)), index: 1 }
   assert.equal(verifyCertChain(k0.toPublicKey().toString(), [c1, bad2]), null)
 })
 
-test('rotation: expiry — expired key cannot sign NEW messages, historical use still valid', () => {
-  const c1 = makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600) // pk0 deprecated at 4600
+test('rotation: expiry — expired key cannot sign NEW messages, historical use still valid', async () => {
+  const c1 = await makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600) // pk0 deprecated at 4600
   assert.equal(keyValidAt(c1, 4599), true, 'use inside window ok')
   assert.equal(keyValidAt(c1, 4600), false, 'new signature at expiry rejected')
   assert.equal(keyValidAt(c1, 9999), false, 'new signature after expiry rejected')
@@ -134,7 +134,7 @@ test('smt: port vector — two inserts cross-check vs idattr-smt', () => {
 
 test('rotation certs anchored: leaves in a batch log, root verified', async () => {
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
-  const c1 = makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
+  const c1 = await makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
   const leaf = { d: concat(utf8(JSON.stringify(c1)), Uint8Array.of(0)), p: { source: 'rotlog', time: 1000, signature: new Uint8Array(0), modelId: 'm1' } }
   await log.remember('rotlog', leaf)
   const batch = await log.closeBatch('rotlog')
@@ -149,7 +149,7 @@ test('rotation certs anchored: leaves in a batch log, root verified', async () =
   }
   assert.ok(verifyCertChain(k0.toPublicKey().toString(), [c1], { inclusionCheck: inclusion }))
   // a cert not in the log fails inclusion
-  const c2 = makeRotationCert(k1, k2.toPublicKey().toString(), 2000, 3600)
+  const c2 = await makeRotationCert(k1, k2.toPublicKey().toString(), 2000, 3600)
   assert.equal(verifyCertChain(k0.toPublicKey().toString(), [c1, { ...c2, index: 1 }], { inclusionCheck: () => false }), null)
 })
 
@@ -166,27 +166,27 @@ test('identity: challenge-response', () => {
   assert.equal(verifyChallenge(k1.toPublicKey().toString(), c, s), false)
 })
 
-test('rotation: cert chain verifies from pk(0)', () => {
-  const c1 = makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
-  const c2 = { ...makeRotationCert(k1, k2.toPublicKey().toString(), 2000, 3600), index: 1 }
+test('rotation: cert chain verifies from pk(0)', async () => {
+  const c1 = await makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
+  const c2 = { ...(await makeRotationCert(k1, k2.toPublicKey().toString(), 2000, 3600)), index: 1 }
   assert.equal(verifyRotationCert(c1), true)
   const r = verifyCertChain(k0.toPublicKey().toString(), [c1, c2])
   assert.equal(r?.activePub, k2.toPublicKey().toString())
   assert.equal(r?.expiredAt, 2000 + 3600)
 })
 
-test('rotation NEGATIVE: cert not signed by the previous key fails', () => {
-  const c1 = makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
+test('rotation NEGATIVE: cert not signed by the previous key fails', async () => {
+  const c1 = await makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
   // forge: re-sign with a different key, keep prevPubkey=pk0
   const forged = { ...c1, sig: k2.sign([1, 2, 3]).toDER('hex') as string }
   assert.equal(verifyRotationCert(forged), false)
   // a chain where cert2's prevPubkey skips pk1 → break
-  const bad2 = { ...makeRotationCert(k0, k2.toPublicKey().toString(), 2000, 3600), index: 1 }
+  const bad2 = { ...(await makeRotationCert(k0, k2.toPublicKey().toString(), 2000, 3600)), index: 1 }
   assert.equal(verifyCertChain(k0.toPublicKey().toString(), [c1, bad2]), null)
 })
 
-test('rotation: expiry — expired key cannot sign NEW messages, historical use still valid', () => {
-  const c1 = makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600) // pk0 deprecated at 4600
+test('rotation: expiry — expired key cannot sign NEW messages, historical use still valid', async () => {
+  const c1 = await makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600) // pk0 deprecated at 4600
   assert.equal(keyValidAt(c1, 4599), true, 'use inside window ok')
   assert.equal(keyValidAt(c1, 4600), false, 'new signature at expiry rejected')
   assert.equal(keyValidAt(c1, 9999), false, 'new signature after expiry rejected')

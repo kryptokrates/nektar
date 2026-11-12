@@ -315,7 +315,7 @@ export class MarketEngine {
         throw new Error('publishWant: maxSats outside the approved per-purchase limit')
       const now = this.now()
       const tip = await this.d.tip?.()
-      const sw = signWant(this.d.key, {
+      const sw = await signWant(this.d.key, {
         domains,
         ...(input.question ? { question: input.question } : {}),
         maxSats: input.maxSats,
@@ -643,7 +643,7 @@ export class MarketEngine {
         ...(p.disclosure.allowPublic ? {} : { buyerPub: w.pub })
       })
       const c = offer.commitment
-      const so = signOffer(this.d.key, {
+      const so = await signOffer(this.d.key, {
         offerId: operation.operationId,
         shard: pick.shard,
         seq: pick.seq,

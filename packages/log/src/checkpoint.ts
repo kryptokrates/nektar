@@ -3,8 +3,8 @@
 // leaves up to batch n with root R and chained root R'", issued per anchor.
 // The monitor flags every inclusion promise that no VALID checkpoint covers
 // within the maximum merge delay (the CT SCT/MMD design).
-import { PrivateKey, PublicKey, Signature } from '@bsv/sdk'
-import { dsha256, concat, utf8, u64le, fromHex, toHex, TAG_CHECKPOINT } from '@nektar/core'
+import { PublicKey, Signature } from '@bsv/sdk'
+import { dsha256, concat, utf8, u64le, fromHex, toHex, toSigner, TAG_CHECKPOINT, type SignerLike } from '@nektar/core'
 
 export interface Checkpoint {
   logId: string // shard id (hash160 of the genesis owner), hex
@@ -22,8 +22,8 @@ export function checkpointDigest(c: Omit<Checkpoint, 'sig'>): number[] {
     dsha256(concat(TAG_CHECKPOINT, utf8(c.logId), u64le(c.size), u64le(c.n), fromHex(c.root), fromHex(c.chainedRoot), u64le(c.time), fromHex(c.anchorTxid)))
   )
 }
-export function signCheckpoint(key: PrivateKey, c: Omit<Checkpoint, 'sig'>): Checkpoint {
-  return { ...c, sig: toHex(Uint8Array.from(key.sign(checkpointDigest(c)).toDER() as number[])) }
+export async function signCheckpoint(key: SignerLike, c: Omit<Checkpoint, 'sig'>): Promise<Checkpoint> {
+  return { ...c, sig: toHex(Uint8Array.from((await toSigner(key).sign(checkpointDigest(c))).toDER() as number[])) }
 }
 export function verifyCheckpoint(c: Checkpoint, pubHex: string): boolean {
   try {

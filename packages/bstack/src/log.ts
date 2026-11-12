@@ -4,9 +4,10 @@
 // admission verdict are upstream's (vendored @lightwebinc/blogs-host); the
 // carriers, funding trees and unlock scripts are bcommon's, as for market
 // artifacts, with the blogs derivations and tags of spec section 6.1.
-import { PrivateKey, ProtoWallet, Transaction, type ChainTracker } from '@bsv/sdk'
+import { PublicKey, Transaction, type ChainTracker } from '@bsv/sdk'
 import { mintCarrier, fundingLock, lockFields, unlocker, type Derivation, type SigningWallet } from '@lightwebinc/bcommon'
 import { P2PKH } from '@bsv/sdk'
+import { toSigner, signerAddress, type SignerLike } from '@nektar/core'
 import {
   EncodingLines,
   ProfileFull,
@@ -29,7 +30,7 @@ import { intervalRoot } from '@lightwebinc/blogs-host/dist/merkle.js'
 import { readPushDrop } from '@lightwebinc/blogs-host/dist/script.js'
 import { submitAll, lookupAll, type Quorum } from './hosts.js'
 import { ancestorsOf } from './finger.js'
-import { carrierFundingLockHex } from './carrier.js'
+import { carrierFundingLockHex, walletOrProto } from './carrier.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 import type { Knex } from 'knex'
@@ -42,8 +43,8 @@ const DERIVATION_ANCHOR: Derivation = { protocol: [1, 'blogs'], keyID: 'anchor' 
 const ZERO32 = '00'.repeat(32)
 
 export const logTopic = (stream: string): string => `tm_log_${stream}`
-export const logFundingLock = async (key: PrivateKey, wallet?: SigningWallet): Promise<import('@bsv/sdk').LockingScript> =>
-  await fundingLock(wallet ?? new ProtoWallet(key), ORIGINATOR, DERIVATION_BATCH, TagFunding)
+export const logFundingLock = async (key: SignerLike, wallet?: SigningWallet): Promise<import('@bsv/sdk').LockingScript> =>
+  await fundingLock(walletOrProto(key, wallet), ORIGINATOR, DERIVATION_BATCH, TagFunding)
 
 // ── stream state ─────────────────────────────────────────────────────────
 
@@ -110,7 +111,7 @@ const flightKey = (s: string): string => `${s}#flight` // seq=interval, prev=txi
  *  the same BEEF and never consumes a second slot or seq. The head advances
  *  only after the journal write AND a quorum of hosts took the carrier. */
 export async function appendLog(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: SigningWallet
   ledger: TreeLedger
   journal: CarrierJournal
@@ -127,7 +128,9 @@ export async function appendLog(p: {
   const seq = head.seq + 1
   const topics = [logTopic(p.stream)]
   const jkey = `log:${p.stream}:${seq}`
-  const logLockHex = (await logFundingLock(p.key)).toHex()
+  const s = toSigner(p.key)
+  const w = walletOrProto(p.key, p.wallet)
+  const logLockHex = (await logFundingLock(s, w)).toHex()
   let hit = await p.journal.get(jkey)
   if (hit !== undefined && carrierFundingLockHex(hit.beef) !== logLockHex && p.journal.del !== undefined) {
     await p.journal.del(jkey)
@@ -141,7 +144,7 @@ export async function appendLog(p: {
   } else {
     const content = new TextEncoder().encode(p.lines.map((l) => (l.endsWith('\n') ? l : `${l}\n`)).join(''))
     const record = encodeBatch({
-      producer: new Uint8Array(p.key.toPublicKey().encode(true) as number[]),
+      producer: new Uint8Array(PublicKey.fromString(await s.pubKeyHex()).encode(true) as number[]),
       stream: p.stream,
       seq,
       prev: fromHex(head.prev),
@@ -153,11 +156,11 @@ export async function appendLog(p: {
       size: content.length,
       extra: []
     })
-    const slot = await p.ledger.take(LOG_KIND, (await logFundingLock(p.key, p.wallet)).toHex())
+    const slot = await p.ledger.take(LOG_KIND, logLockHex)
     if (slot === undefined) throw new Error('no funding slot')
     // boundary: the wallet only signs the record lock — the carrier itself is
     // unmineable and must never be routed through a wallet action
-    const carrier = await mintCarrier(p.wallet ?? new ProtoWallet(p.key), ORIGINATOR, DERIVATION_BATCH, record, slot.tree, slot.vout)
+    const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_BATCH, record, slot.tree, slot.vout)
     beef = carrier.toAtomicBEEF()
     txid = carrier.id('hex')
     commitment = toHex(new Uint8Array(carrier.hash() as number[]))
@@ -404,7 +407,7 @@ export async function publishMinedLog(p: { journal: CarrierJournal; hosts: strin
  *  `minBatches` unanchored batches AND the oldest is fresher than
  *  `maxAgeMs` (engine clock). */
 export async function anchorLog(p: {
-  key: PrivateKey
+  key: SignerLike
   wallet?: SigningWallet
   ledger: TreeLedger
   journal: CarrierJournal
@@ -469,9 +472,10 @@ export async function anchorLog(p: {
 
   const ah = await p.state.get(anchorKey(p.stream))
   const interval = (ah?.seq ?? 0) + 1
-  const w = p.wallet ?? new ProtoWallet(p.key)
+  const s = toSigner(p.key)
+  const w = walletOrProto(p.key, p.wallet)
   const record = encodeAnchor({
-    producer: new Uint8Array(p.key.toPublicKey().encode(true) as number[]),
+    producer: new Uint8Array(PublicKey.fromString(await s.pubKeyHex()).encode(true) as number[]),
     stream: p.stream,
     interval,
     prev: ah === undefined ? new Uint8Array(32) : fromHex(ah.prev),
@@ -495,9 +499,9 @@ export async function anchorLog(p: {
   }
   const token = await lockFields(w, ORIGINATOR, DERIVATION_ANCHOR, [TagAnchor, record], true)
   tx.addOutput({ satoshis: 1, lockingScript: token })
-  tx.addOutput({ lockingScript: new P2PKH().lock(p.key.toPublicKey().toAddress()), change: true })
+  tx.addOutput({ lockingScript: new P2PKH().lock(await signerAddress(s)), change: true })
   // funding inputs until the fee is covered
-  const logLock = (await logFundingLock(p.key)).toHex()
+  const logLock = (await logFundingLock(s, w)).toHex()
   for (let i = 0; i < 8; i++) {
     const slot = await p.ledger.take(LOG_KIND, logLock)
     if (slot === undefined) {

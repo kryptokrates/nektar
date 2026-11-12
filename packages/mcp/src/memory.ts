@@ -2,7 +2,7 @@
 // Wires log (append/batch) → anchor (head UTXO per shard) → broadcast
 // → verify (proof bundles) → crypto (BRC-42/AES-GCM), all behind the chain
 // interfaces so it runs identically on regtest and live networks.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
@@ -27,10 +27,19 @@ import {
   decodeDelta,
   serializeFragment,
   parseFragment,
+  writeFileAtomic,
   TAG_RECEIPT_SIG,
   type Fragment,
   type Bytes,
-  type Provenance
+  type Provenance,
+  walletSigner,
+  unlockP2PKH,
+  signerPubHex,
+  signerAddress,
+  toSigner,
+  type SignerLike,
+  type DigestSigner,
+  type SignerWallet
 } from '@nektar/core'
 import {
   BatchLog,
@@ -54,7 +63,16 @@ import { AnchorChain, type CheckpointBond, type BondUtxo } from '@nektar/anchor'
 import { BondOps } from './bonds.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
-import { deriveFragmentKey, deriveLevelKey, encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@nektar/crypto'
+import {
+  deriveFragmentKey,
+  deriveLevelKey,
+  encryptFragment,
+  decryptFragment,
+  shredKey,
+  canonicalKeyID,
+  CRYPTO_PROTOCOL_ID,
+  type FragmentContext
+} from '@nektar/crypto'
 import { TxStore } from '@nektar/chain'
 import type { Broadcaster, ChainTracker, Funder } from '@nektar/chain'
 import * as idbind from '@nektar/identity'
@@ -80,15 +98,19 @@ import {
  *  external signer) so the operator key never lives in-process. Plumbing
  *  ops that genuinely need private-key material — P2PKH funding inputs,
  *  change scripts, deterministic salts — stay on `operatorKey()`. */
-export type OperatorWallet = Pick<WalletInterface, 'getPublicKey' | 'createSignature' | 'encrypt' | 'decrypt'>
+export type OperatorWallet = Pick<WalletInterface, 'getPublicKey' | 'createSignature' | 'encrypt' | 'decrypt' | 'createHmac'>
 
 export interface NektarMemoryOptions {
-  signingKey?: PrivateKey
+  signingKey?: SignerLike
   /** injected signing surface for lanes/bstack protocol calls — defaults to
    *  `new ProtoWallet(fundKey)`. NOTE: unmineable carriers and covenant txs
    *  never become wallet `createAction`s — this surface only signs. */
   wallet?: OperatorWallet
-  shardKeys?: Map<string, PrivateKey>
+  shardKeys?: Map<string, SignerLike>
+  /** pre-resolved owner pubkeys for wallet-custody shardKeys — the runtime
+   *  resolves them (async) before constructing NektarMemory so the sync
+   *  restoreState/resume path never needs a wallet round trip. */
+  shardPubs?: Map<string, string> | Record<string, string>
   agentSeed?: PrivateKey // enables encryption when set
   maxLevel?: number // highest access level this seed may hold
   burstLimit?: number
@@ -451,11 +473,13 @@ export class NektarMemory {
   constructor(
     private chain: ChainTracker & Broadcaster,
     private funder: Funder,
-    private fundKey: PrivateKey,
+    private fundKey: PrivateKey | undefined,
     private opts: NektarMemoryOptions = {},
     private store: ShardStore = new MemoryShardStore()
   ) {
-    this.logKey = opts.signingKey ?? PrivateKey.fromRandom()
+    if (opts.shardPubs !== undefined) this._shardPubs = opts.shardPubs instanceof Map ? new Map(opts.shardPubs) : new Map(Object.entries(opts.shardPubs))
+    this.logKey = opts.signingKey ?? (opts.wallet !== undefined ? this.walletLogSigner() : PrivateKey.fromRandom())
+    this._logPub = this.logKey instanceof PrivateKey ? this.logKey.toPublicKey().toString() : undefined
     this.log = new BatchLog(store, this.logKey, opts.batchPolicy ?? { maxLeaves: 16 })
     if (opts.dataDir) this.budget = new BudgetAuthority(opts.dataDir)
     this.bonds = new BondOps({
@@ -463,7 +487,7 @@ export class NektarMemory {
       txs: () => this.txs,
       fetchTx: (t) => this.fetchTx(t),
       takeFunding: (s) => this.takeFunding(s),
-      fundKey: this.fundKey,
+      fundKey: this.fundSigner(),
       bondOpts: () => this.opts.bond,
       network: this.opts.network,
       persist: () => this.persistState()
@@ -477,7 +501,8 @@ export class NektarMemory {
       if (ev.status === 'rejected' || ev.status === 'double-spent') this.deliverTxRejected(ev.txid)
     })
   }
-  private logKey: PrivateKey
+  private logKey: SignerLike
+  private _logPub?: string
   public budget?: import('./budget.js').BudgetAuthority
   public automation?: Automation
   public ledger?: import('./automation/store.js').AutomationStore
@@ -625,13 +650,28 @@ export class NektarMemory {
     return 'unknown'
   }
   /** the log signing key's pubkey (verifies promises and checkpoints) */
-  logPublicKey(): string {
-    return this.logKey.toPublicKey().toString()
+  async logPublicKey(): Promise<string> {
+    return (this._logPub ??= await signerPubHex(this.logKey))
   }
 
-  private shardKey(shard: string): PrivateKey {
+  /** log receipt signer under wallet custody: createSignature under a stable
+   *  keyID — same pub every restart, no key material in-process. */
+  private walletLogSigner(): DigestSigner {
+    return walletSigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: 'nektar-log', counterparty: 'self' })
+  }
+
+  private shardKey(shard: string): SignerLike {
     if (!this.opts.shardKeys) this.opts.shardKeys = new Map()
-    if (!this.opts.shardKeys.has(shard)) this.opts.shardKeys.set(shard, PrivateKey.fromRandom())
+    if (!this.opts.shardKeys.has(shard)) {
+      // wallet custody: a per-shard derived keyID — deterministic across
+      // restarts (same wallet → same owner pubkey), zero stored key material.
+      this.opts.shardKeys.set(
+        shard,
+        this.opts.wallet !== undefined
+          ? walletSigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: `nektar-shard:${shard}`, counterparty: 'self' })
+          : PrivateKey.fromRandom()
+      )
+    }
     return this.opts.shardKeys.get(shard)!
   }
 
@@ -639,14 +679,18 @@ export class NektarMemory {
     if (!this.anchors.has(shard)) {
       this.anchors.set(
         shard,
-        new AnchorChain(shard, this.shardKey(shard), this.funder, this.fundKey, this.chain, {
+        new AnchorChain(shard, this.shardKey(shard), this.funder, this.fundSigner(), this.chain, {
           burstLimit: this.opts.burstLimit,
-          feeRateSatPerKb: this.opts.feeRateSatPerKb
+          feeRateSatPerKb: this.opts.feeRateSatPerKb,
+          shardPub: this._shardPubs.get(shard)
         })
       )
     }
     return this.anchors.get(shard)!
   }
+  /** pre-resolved shard owner pubkeys — runtime fills this for wallet-mode
+   *  shards so sync paths (restoreState/resume) never need a round trip. */
+  private _shardPubs = new Map<string, string>()
 
   /** the shard's current anchor head (undefined before the first anchor) */
   anchorHead(shard: string) {
@@ -677,13 +721,51 @@ export class NektarMemory {
     if (r.status === 'success') this.txs.put(tx)
     return r
   }
-  /** the operator fee key — covenant hosts need it as owner/buyer key */
+  /** the operator fee key — throws under wallet custody (NEKTAR_WALLET=client);
+   *  all signing call sites take `operatorSigner()`/`fundSigner()` instead. */
   operatorKey(): PrivateKey {
+    if (this.fundKey === undefined) throw new Error('operatorKey: wallet-custody mode holds no private key — use operatorSigner()')
     return this.fundKey
   }
 
+  /** the operator signing surface — the fund key when held, otherwise the
+   *  wallet's identity key. Every legacy `.sign()` site routes here. */
+  operatorSigner(): DigestSigner {
+    return this.opts.wallet !== undefined ? walletSigner(this.opts.wallet as SignerWallet) : this.fundSigner()
+  }
+  private _fundSigner?: DigestSigner
+  /** funding-signer — P2PKH inputs, covenant funding calls, change output
+   *  derivation. Toolbox/client mode: the wallet's identity key (= the
+   *  keyDeriver root for toolbox, the external wallet root for client). */
+  fundSigner(): DigestSigner {
+    if (this._fundSigner === undefined) {
+      if (this.opts.wallet !== undefined) this._fundSigner = walletSigner(this.opts.wallet as SignerWallet)
+      else if (this.fundKey !== undefined) this._fundSigner = toSigner(this.fundKey)
+      else throw new Error('no funding signer: configure a wallet or a fund key')
+    }
+    return this._fundSigner
+  }
+  /** register a pre-resolved shard owner pubkey (wallet-mode restore path) */
+  registerShardPub(shard: string, pub: string): void {
+    this._shardPubs.set(shard, pub)
+  }
+
   operatorWallet(): OperatorWallet {
-    return (this._wallet ??= this.opts.wallet ?? new ProtoWallet(this.fundKey))
+    return (this._wallet ??=
+      this.opts.wallet ??
+      (this.fundKey !== undefined
+        ? new ProtoWallet(this.fundKey)
+        : (() => {
+            throw new Error('operatorWallet: no wallet and no fund key')
+          })()))
+  }
+  /** disclosure-wrap custody: the wallet's BRC-42 encrypt/decrypt under
+   *  wallet mode, else the raw fund key — ECDH cannot go through a signer
+   *  (the wallet deliberately never exposes the shared point). */
+  wrapCustody(): PrivateKey | import('@bsv/sdk').WalletInterface {
+    if (this.opts.wallet !== undefined) return this.opts.wallet as import('@bsv/sdk').WalletInterface
+    if (this.fundKey !== undefined) return this.fundKey
+    throw new Error('wrapCustody: no wallet and no fund key')
   }
   /** funding outs for covenant hosts (escrow deposits, covenant inputs) —
    *  callers markSpent/addOwned after a successful broadcast like
@@ -694,12 +776,60 @@ export class NektarMemory {
   }
   /** §7 key-sale (GOAL-v7 V3): re-derive the fragment key for an encrypted
    *  record — the decryption capability being sold. Caller must ensure the
-   *  record's level is within this instance's maxLevel. */
+   *  record's level is within this instance's maxLevel. Wallet custody: the
+   *  fragment key is a deterministic wallet hmac under the record's canonical
+   *  keyID (self counterparty) — no seed bytes leave the wallet and the
+   *  derived capability can still be handed over in a sale. */
   async fragmentKeyFor(rec: import('@nektar/log').LogRecord): Promise<Uint8Array> {
-    if (!this.opts.agentSeed) throw new Error('fragmentKeyFor: instance has no agentSeed (encryption disabled)')
-    const level = rec.level ?? 0
-    const { fragmentKey } = deriveFragmentKey(deriveLevelKey(this.opts.agentSeed, level), this.ctx(rec.shard, rec.seq, level))
-    return fragmentKey
+    const ks = await this.fragmentKeyCandidates(this.ctx(rec.shard, rec.seq, rec.level ?? 0))
+    if (ks.length === 0) throw new Error('fragmentKeyFor: no encryption custody (neither wallet nor agentSeed)')
+    // yields the key that actually decrypts THIS record (scheme is not tagged
+    // on-chain — the GCM tag discriminates); fall back to the write-scheme key.
+    if (rec.fragment.E?.length) {
+      const E = rec.fragment.E
+      const aadLen = (E[0] << 8) | E[1]
+      const ef = { ciphertext: E.slice(2 + aadLen), aad: E.slice(2, 2 + aadLen), keyID: '' }
+      for (const k of ks) {
+        try {
+          decryptFragment(k, ef)
+          return k
+        } catch {
+          /* try the next custody scheme */
+        }
+      }
+    }
+    return ks[0]
+  }
+  /** all fragment-key candidates this instance can derive, wallet scheme
+   *  first (the write scheme under wallet custody), legacy seed second —
+   *  dual-read: a record decrypts under exactly one (GCM tag enforces it). */
+  private async fragmentKeyCandidates(c: FragmentContext): Promise<Uint8Array[]> {
+    const out: Uint8Array[] = []
+    const w = this.opts.wallet as SignerWallet | undefined
+    if (w !== undefined && typeof w.createHmac === 'function') {
+      const s = walletSigner(w, { protocolID: CRYPTO_PROTOCOL_ID, keyID: canonicalKeyID(c), counterparty: 'self' })
+      out.push(await s.deriveSecret!('nektar:fragkey'))
+    }
+    if (this.opts.agentSeed !== undefined) out.push(deriveFragmentKey(deriveLevelKey(this.opts.agentSeed, c.l), c).fragmentKey)
+    return out
+  }
+  /** decrypt an encrypted record — tries every custody scheme (dual-read) */
+  private async decryptRecord(rec: import('@nektar/log').LogRecord): Promise<string | undefined> {
+    const E = rec.fragment.E
+    if (!E?.length) return undefined
+    const aadLen = (E[0] << 8) | E[1]
+    const ef = { ciphertext: E.slice(2 + aadLen), aad: E.slice(2, 2 + aadLen), keyID: '' }
+    for (const k of await this.fragmentKeyCandidates(this.ctx(rec.shard, rec.seq, rec.level ?? 0))) {
+      try {
+        return Buffer.from(decryptFragment(k, ef)).toString('utf8')
+      } catch {
+        /* next scheme */
+      }
+    }
+    return undefined
+  }
+  private canEncrypt(): boolean {
+    return this.opts.agentSeed !== undefined || typeof (this.opts.wallet as SignerWallet | undefined)?.createHmac === 'function'
   }
   /** return a tx output to the reserve as owned (change/escrow outs) */
   addOwnedOut(tx: import('@bsv/sdk').Transaction, vout: number): void {
@@ -761,11 +891,12 @@ export class NektarMemory {
   /** rotate a shard's owner key on-chain (rotation cert emitted by AnchorChain).
    *  D4 (§19): the cert is also written to the `__identity__` shard and anchored
    *  — a third party reconstructs the pk(0)→pk(i) ledger from chain data alone. */
-  async rotateShard(shard: string, newKey: PrivateKey): Promise<{ txid: string; n: number }> {
+  async rotateShard(shard: string, newKey: SignerLike): Promise<{ txid: string; n: number }> {
     const ac = this.anchors.get(shard)
     if (!ac) throw new Error(`no anchor for shard ${shard}`)
     const r = await ac.rotate(newKey)
     this.opts.shardKeys?.set(shard, newKey)
+    this._shardPubs.set(shard, await signerPubHex(newKey))
     this.anchorTxs.set(r.tx.id('hex'), r.tx)
     this.txidShard.set(r.tx.id('hex'), shard)
     this.authorChainCache.delete(shard)
@@ -820,13 +951,11 @@ export class NektarMemory {
     for (const rec of await this.store.all('__revocation__')) {
       let data: string
       if (rec.fragment.d.length) data = Buffer.from(rec.fragment.d).toString('utf8')
-      else if (rec.fragment.E?.length && this.opts.agentSeed) {
+      else if (rec.fragment.E?.length && this.canEncrypt()) {
         // encrypted deployment — the operator holds the seed; decrypt to read
-        const k = await this.fragmentKeyFor(rec)
-        const aadLen = (rec.fragment.E[0] << 8) | rec.fragment.E[1]
-        const aad = rec.fragment.E.slice(2, 2 + aadLen)
-        const ciphertext = rec.fragment.E.slice(2 + aadLen)
-        data = Buffer.from(decryptFragment(k, { ciphertext, aad, keyID: '' })).toString('utf8')
+        const t = await this.decryptRecord(rec)
+        if (t === undefined) continue
+        data = t
       } else continue
       const entry = idbind.parseRevocationRecord(data)
       if (!entry || entry.pk.toLowerCase() !== pubHex.toLowerCase()) continue
@@ -904,7 +1033,7 @@ export class NektarMemory {
   }): Promise<{ payment: { invoiceId: string; transaction: string }; txid: string }> {
     const f = await this.takeFunding(inv.amount + 600)
     const tx = new Transaction()
-    tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(this.fundKey) })
+    tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.fundSigner()) })
     tx.addOutput({ satoshis: inv.amount, lockingScript: LockingScript.fromHex(inv.lockingScriptHex) })
     // OP_FALSE OP_RETURN + ascii tag push — settlePayment parses '006a'+utf8(tag)
     const tagHex = Buffer.from(inv.opReturn, 'utf8').toString('hex')
@@ -915,7 +1044,7 @@ export class NektarMemory {
       )
     })
     tx.addOutput({
-      lockingScript: new P2PKH().lock(this.fundKey.toPublicKey().toAddress((this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])),
+      lockingScript: new P2PKH().lock(await signerAddress(this.fundSigner(), (this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])),
       change: true
     })
     await tx.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
@@ -956,7 +1085,7 @@ export class NektarMemory {
     const script = args.scriptHex ? LockingScript.fromHex(args.scriptHex) : new P2PKH().lock(args.address!)
     const f = await this.takeFunding(args.amount + 600)
     const tx = new Transaction()
-    tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(this.fundKey) })
+    tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.fundSigner()) })
     tx.addOutput({ satoshis: args.amount, lockingScript: script })
     if (args.opReturn) {
       const tagHex = Buffer.from(args.opReturn, 'utf8').toString('hex')
@@ -968,7 +1097,7 @@ export class NektarMemory {
       })
     }
     tx.addOutput({
-      lockingScript: new P2PKH().lock(this.fundKey.toPublicKey().toAddress((this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])),
+      lockingScript: new P2PKH().lock(await signerAddress(this.fundSigner(), (this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])),
       change: true
     })
     await tx.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
@@ -1004,12 +1133,10 @@ export class NektarMemory {
     for (const rec of await this.store.all('__identity__')) {
       let data: string
       if (rec.fragment.d.length) data = Buffer.from(rec.fragment.d).toString('utf8')
-      else if (rec.fragment.E?.length && this.opts.agentSeed) {
-        const k = await this.fragmentKeyFor(rec)
-        const aadLen = (rec.fragment.E[0] << 8) | rec.fragment.E[1]
-        const aad = rec.fragment.E.slice(2, 2 + aadLen)
-        const ciphertext = rec.fragment.E.slice(2 + aadLen)
-        data = Buffer.from(decryptFragment(k, { ciphertext, aad, keyID: '' })).toString('utf8')
+      else if (rec.fragment.E?.length && this.canEncrypt()) {
+        const t = await this.decryptRecord(rec)
+        if (t === undefined) continue
+        data = t
       } else continue
       let cert: import('@nektar/identity').RotationCert
       try {
@@ -1086,9 +1213,16 @@ export class NektarMemory {
   // ── P14 full-mode automata (AUT-005): one Rúnar NektarAutomaton UTXO per id,
   // funded by the instance funder, owned by its own key.
   private automata = new Map<string, AutomatonChain>()
-  async automatonDeploy(id: string, def: AutomatonDef, ownerKey = PrivateKey.fromRandom()): Promise<AutomatonHead> {
+  async automatonDeploy(id: string, def: AutomatonDef, ownerKey?: SignerLike): Promise<AutomatonHead> {
     if (this.automata.has(id)) throw new Error(`automaton ${id} already deployed`)
-    const ac = new AutomatonChain(def, ownerKey, this.funder, this.fundKey, this.chain)
+    // wallet custody: a per-automaton derived keyID — deterministic across
+    // restarts (same wallet → same owner pubkey), no stored key material.
+    const owner =
+      ownerKey ??
+      (this.opts.wallet !== undefined
+        ? walletSigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: `nektar-automaton:${id}`, counterparty: 'self' })
+        : PrivateKey.fromRandom())
+    const ac = new AutomatonChain(def, owner, this.funder, this.fundSigner(), this.chain)
     const h = await ac.deploy()
     this.automata.set(id, ac)
     return h
@@ -1108,10 +1242,9 @@ export class NektarMemory {
    *  (RISC Zero succinct receipt): reveals neither the leaf, its index nor the path. */
   async proveMembership(shard: string, seq: number, queryIdHex: string): Promise<{ bytes: Uint8Array; ms: number }> {
     if (!/^[0-9a-f]{64}$/.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
-    const recs = await this.store.all(shard)
-    const rec = recs.find((r) => r.seq === seq)
+    const rec = await this.store.bySeq(shard, seq)
     if (!rec || rec.batchIndex === undefined) throw new Error('fragment not batched')
-    const batch = recs.filter((r) => r.batchIndex === rec.batchIndex).sort((a, b) => (a.leafIndex ?? 0) - (b.leafIndex ?? 0))
+    const batch = await this.store.byBatch(shard, rec.batchIndex)
     const leaves = batch.map((r) => r.leaf)
     const index = batch.findIndex((r) => r.seq === seq)
     const { siblings } = merkleProof(leaves, index)
@@ -1140,12 +1273,12 @@ export class NektarMemory {
   /** fee-reserve status for the fundingStatus MCP tool — mem-side view only
    *  (address + tracked UTXOs); spend caps/runway live in ops.wallet() which
    *  the tool prefers when the runtime passes it through. */
-  fundingStatus(): { address: string; balanceSats: number; utxos: number; funded: boolean } {
+  async fundingStatus(): Promise<{ address: string; balanceSats: number; utxos: number; funded: boolean }> {
     const f = this.funder as any
     const utxos: { satoshis?: number }[] = f.utxos ?? []
     const prefix = this.opts.network && this.opts.network !== 'main' ? [0x6f] : undefined
     return {
-      address: this.fundKey.toPublicKey().toAddress(prefix),
+      address: await signerAddress(this.fundSigner(), prefix),
       balanceSats: utxos.reduce((s, u) => s + (u.satoshis ?? 0), 0),
       utxos: utxos.length,
       funded: utxos.length > 0
@@ -1158,7 +1291,7 @@ export class NektarMemory {
     const { buildAttestationTx, attestationCommitment } = await import('./onchain.js')
     const commitment = attestationCommitment(proofBytes)
     const f = await this.takeFunding(5_000)
-    const { tx, changeVout } = await buildAttestationTx(f, this.fundKey, commitment, this.opts.feeRateSatPerKb ?? 1)
+    const { tx, changeVout } = await buildAttestationTx(f, this.fundSigner(), commitment, this.opts.feeRateSatPerKb ?? 1)
     const r = await this.chain.broadcast(tx)
     if (r.status !== 'success') throw new Error(`attestation broadcast failed: ${r.description}`)
     this.attestationTxs.set(tx.id('hex'), tx)
@@ -1193,7 +1326,7 @@ export class NektarMemory {
   /** verifier side: the proof's root must be the R of an SPV-verified anchor of
    *  THIS shard on its canonical chain, and the queryId one we issued (single use). */
   async verifyMembership(shard: string, seq: number, bytes: Uint8Array): Promise<{ ok: boolean; reason?: string; anchorTxid?: string; statement: string }> {
-    const rec = (await this.store.all(shard)).find((r) => r.seq === seq)
+    const rec = await this.store.bySeq(shard, seq)
     if (!rec || rec.batchIndex === undefined) return { ok: false, reason: 'not batched', statement: 'no anchor' }
     const link = (this.tails.get(shard) ?? []).find((l) => l.n === rec.batchIndex)
     const anchorTx = link ? this.anchorTxs.get(link.txid) : undefined
@@ -1201,6 +1334,7 @@ export class NektarMemory {
     const tail = this.tails.get(shard) ?? []
     // expected shard = THIS instance's shard id (hash160 of the genesis owner,
     // from our own anchor chain) — never read from the anchor being verified
+    await this.anchors.get(shard)?.ready
     const shardId = this.anchors.get(shard)?.getShardId()
     if (!shardId) return { ok: false, reason: 'unknown shard', statement: 'no anchor' }
     const res = await verifyMembershipAnchoredStark(
@@ -1230,10 +1364,10 @@ export class NektarMemory {
   async attestInferenceOnchain(lockHex: string, unlockHex: string): Promise<{ deployTxid: string; spendTxid: string }> {
     const { Transaction, LockingScript, UnlockingScript, P2PKH, SatoshisPerKilobyte } = await import('@bsv/sdk')
     const LOCK_SATS = 20_000
-    const addr = this.fundKey.toPublicKey().toAddress([0x6f])
+    const addr = await signerAddress(this.fundSigner(), [0x6f])
     const f = await this.takeFunding(LOCK_SATS + 5_000)
     const tx1 = new Transaction()
-    tx1.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(this.fundKey) })
+    tx1.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.fundSigner()) })
     tx1.addOutput({ lockingScript: LockingScript.fromHex(lockHex), satoshis: LOCK_SATS })
     tx1.addOutput({ lockingScript: new P2PKH().lock(addr), change: true })
     await tx1.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
@@ -1263,8 +1397,9 @@ export class NektarMemory {
   /** store a proof artifact; returns its sha256 commitment hex */
   putProof(bytes: Uint8Array): string {
     const commit = toHex(sha256(bytes))
-    mkdirSync(this.proofDir(), { recursive: true })
-    writeFileSync(join(this.proofDir(), commit), Buffer.from(bytes))
+    // atomic: a torn proof file would read as a FAILED verification — the
+    // watcher would challenge an honest claim and put its bond at risk
+    writeFileAtomic(join(this.proofDir(), commit), Buffer.from(bytes))
     // stock object plane: the same bytes land content-addressed in bstore —
     // for single-chunk content the blob key IS chirp/<commit>, so a verifier
     // resolves the proof from any gateway copy and self-verifies on the
@@ -1339,6 +1474,7 @@ export class NektarMemory {
     const { decodeNektarAnchor } = await import('@nektar/contracts')
     const data = decodeNektarAnchor(anchorTx.outputs[0].lockingScript.toHex())
     if (!data) return { ok: false, reason: 'committed tx output 0 is not a nektar anchor' }
+    for (const [, ac] of this.anchors) await ac.ready
     const shardName = [...this.anchors.entries()].find(([, ac]) => ac.getShardId() === data.shard)?.[0]
     if (shardName === undefined) return { ok: false, reason: 'anchor shard is not one of ours' }
     const tail = this.tails.get(shardName) ?? []
@@ -1369,12 +1505,13 @@ export class NektarMemory {
   ): Promise<{ ok: boolean; reason?: string; anchorTxid?: string; statement: string }> {
     const statement =
       'Π_j = (π_j, ZKAccess): some record is in this anchored batch AND the clearance bound to the same verifier query proves level ≥ required — reveals no leaf, index, path, level or credential; not which record, not truth'
-    const rec = (await this.store.all(shard)).find((r) => r.seq === seq)
+    const rec = await this.store.bySeq(shard, seq)
     if (!rec || rec.batchIndex === undefined) return { ok: false, reason: 'not batched', statement }
     const tail = this.tails.get(shard) ?? []
     const link = tail.find((l) => l.n === rec.batchIndex)
     const anchorTx = link ? this.anchorTxs.get(link.txid) : undefined
     if (!anchorTx) return { ok: false, reason: 'anchor tx not found', statement }
+    await this.anchors.get(shard)?.ready
     const shardId = this.anchors.get(shard)?.getShardId()
     if (!shardId) return { ok: false, reason: 'unknown shard', statement }
     const scope = opts?.scope ?? `${shard}/${seq}`
@@ -1447,16 +1584,18 @@ export class NektarMemory {
     if (!Array.isArray(seqs) || seqs.length === 0 || !seqs.every((s) => Number.isInteger(s) && s >= 0))
       return { ok: false, reason: 'seqs must be a non-empty list of record seqs' }
     if (new Set(seqs).size !== seqs.length) return { ok: false, reason: 'duplicate seqs' }
-    const recs = await this.store.all(shard)
     const found = new Map<number, LogRecord>()
-    for (const r of recs) if (seqs.includes(r.seq)) found.set(r.seq, r)
+    for (const s of seqs) {
+      const r = await this.store.bySeq(shard, s)
+      if (r !== undefined) found.set(s, r)
+    }
     const missing = seqs.filter((s) => !found.has(s))
     if (missing.length > 0) return { ok: false, reason: `no record(s) seq ${missing.join(',')}` }
     const batchIndex = found.get(seqs[0])!.batchIndex
     if (batchIndex === undefined) return { ok: false, reason: 'not batched' }
     if (![...found.values()].every((r) => r.batchIndex === batchIndex))
       return { ok: false, reason: 'seqs span multiple batches — one subset proof covers one batch' }
-    const batch = recs.filter((r) => r.batchIndex === batchIndex).sort((a, b) => (a.leafIndex ?? 0) - (b.leafIndex ?? 0))
+    const batch = await this.store.byBatch(shard, batchIndex)
     const leaves = batch.map((r) => r.leaf)
     const indices = seqs.map((s) => batch.findIndex((r) => r.seq === s))
     const proof = buildSubsetProof(leaves, indices)
@@ -1485,10 +1624,11 @@ export class NektarMemory {
     const anchorTx = link ? this.anchorTxs.get(link.txid) : undefined
     if (!link || !anchorTx) return { ok: false, reason: 'no anchor of this shard commits that batch root', statement }
     // expected shard = THIS instance's shard id — never read from the anchor
+    await this.anchors.get(shard)?.ready
     const shardId = this.anchors.get(shard)?.getShardId()
     if (!shardId) return { ok: false, reason: 'unknown shard', statement }
     const res = await verifySubsetAnchored(bytes, anchorTx, this.chain, { shard: shardId, isCanonical: (txid: string) => tail.some((l) => l.txid === txid) })
-    const batch = (await this.store.all(shard)).filter((r) => r.batchIndex === link.n)
+    const batch = await this.store.byBatch(shard, link.n)
     const seqs = res.indices?.map((i) => batch.find((r) => (r.leafIndex ?? 0) === i)?.seq ?? i)
     return { ok: res.ok, reason: res.reason, anchorTxid: res.anchorTxid, size: res.size, indices: res.indices, seqs, statement }
   }
@@ -1644,7 +1784,7 @@ export class NektarMemory {
 
   /** §19: was record seq written by the key of its recorded epoch, inside that key's window? */
   async authorship(shard: string, seq: number, genesisPub: string, certs: import('@nektar/identity').RotationCert[]) {
-    const r = (await this.store.all(shard)).find((x) => x.seq === seq)
+    const r = await this.store.bySeq(shard, seq)
     if (!r?.authorPub || r.authorEpoch === undefined) return { ok: false, reason: 'record carries no verified author epoch' }
     return idbind.verifyAuthorship(r.authorPub, r.authorEpoch, r.fragment.p.time, genesisPub, certs)
   }
@@ -1677,7 +1817,7 @@ export class NektarMemory {
   async premiseLevelFloor(premiseRefs: Array<{ shard: string; seq: number }>): Promise<number> {
     let floor = 0
     for (const r of premiseRefs) {
-      const rec = (await this.store.all(r.shard)).find((x) => x.seq === r.seq)
+      const rec = await this.store.bySeq(r.shard, r.seq)
       if (rec !== undefined && (rec.level ?? 0) > floor) floor = rec.level ?? 0
     }
     return floor
@@ -1718,33 +1858,45 @@ export class NektarMemory {
       throw new IngestError('unsigned provenance refused')
     }
     // an encrypted write above the held levels could never be decrypted again
-    if (this.opts.agentSeed && level > (this.opts.maxLevel ?? 0))
+    if (this.canEncrypt() && level > (this.opts.maxLevel ?? 0))
       throw new IngestError(`level ${level} exceeds this instance's maxLevel ${this.opts.maxLevel ?? 0}`)
     this.touched.add(shard)
-    // provisional seq for ctx = next seq (identity hash is checked inside remember)
-    const seqGuess = await this.store.nextSeq(shard)
-    if (this.opts.agentSeed) {
-      const c = this.ctx(shard, seqGuess, level)
-      const { fragmentKey } = deriveFragmentKey(deriveLevelKey(this.opts.agentSeed, level), c)
-      const hd = sha256(fragment.d)
-      const ef = encryptFragment(fragmentKey, fragment.d, hd, c)
-      // E = [2-byte aadLen][aad][nonce|tag|ct] — aad is not secret, storing it
-      // lets recall decrypt without re-deriving H(d) (d is dropped).
-      const aadLen = Buffer.alloc(2)
-      aadLen.writeUInt16BE(ef.aad.length)
-      fragment.E = Uint8Array.from(Buffer.concat([aadLen, Buffer.from(ef.aad), Buffer.from(ef.ciphertext)]))
-      shredKey(fragmentKey)
-      // identity hash H(d|p) must bind the PLAINTEXT — computed before d is
-      // dropped, otherwise every encrypted record with the same provenance
-      // hashes to H(∅|p) and later writes are silently deduplicated away
-      fragment.hdp = identityHash(fragment)
-      fragment.d = new Uint8Array(0) // plaintext is not retained with E
-    }
-    // level (Cedar/ZK read gate) and author epoch are stored WITH the record
-    const { rec, promise, duplicate } = await this.log.remember(shard, fragment, {
-      level,
-      ...(prov?.sourcePub !== undefined ? { authorPub: prov.sourcePub, authorEpoch: prov.epoch ?? 0 } : {})
-    })
+    // encryption runs inside the shard queue (log.remember's prepare hook):
+    // the seq the key context binds is the seq actually assigned — a guessed
+    // seq could interleave with another writer and produce an undecryptable
+    // record. The dedup identity hash still binds the plaintext (computed
+    // upstream of prepare).
+    const seed = this.canEncrypt() ? (this.opts.agentSeed ?? null) : undefined
+    const { rec, promise, duplicate } = await this.log.remember(
+      shard,
+      fragment,
+      {
+        level,
+        ...(prov?.sourcePub !== undefined ? { authorPub: prov.sourcePub, authorEpoch: prov.epoch ?? 0 } : {})
+      },
+      seed === undefined
+        ? undefined
+        : async (frag, seq) => {
+            const c = this.ctx(shard, seq, level)
+            // wallet custody writes under the hmac scheme; legacy seed custody
+            // keeps the BRC-42 derivation (fragmentKeyCandidates orders wallet
+            // first, so index 0 IS the write scheme)
+            const fragmentKey = (await this.fragmentKeyCandidates(c))[0]
+            const hd = sha256(frag.d)
+            const ef = encryptFragment(fragmentKey, frag.d, hd, c)
+            // E = [2-byte aadLen][aad][nonce|tag|ct] — aad is not secret, storing it
+            // lets recall decrypt without re-deriving H(d) (d is dropped).
+            const aadLen = Buffer.alloc(2)
+            aadLen.writeUInt16BE(ef.aad.length)
+            frag.E = Uint8Array.from(Buffer.concat([aadLen, Buffer.from(ef.aad), Buffer.from(ef.ciphertext)]))
+            shredKey(fragmentKey)
+            // identity hash H(d|p) must bind the PLAINTEXT — computed before d is
+            // dropped, otherwise every encrypted record with the same provenance
+            // hashes to H(∅|p) and later writes are silently deduplicated away
+            frag.hdp = identityHash(frag)
+            frag.d = new Uint8Array(0) // plaintext is not retained with E
+          }
+    )
     if (!duplicate) this.promises.push({ shard, seq: rec.seq, issuedAt: Date.now() })
     const out: RememberResult = {
       shard,
@@ -1762,8 +1914,34 @@ export class NektarMemory {
     return out
   }
 
+  /** per-shard anchor serialization: close→broadcast→markAnchored must not
+   *  overlap another anchorShard on the same shard — resetUnanchored could
+   *  otherwise return an in-flight batch's records to the pending pool and
+   *  commit the same leaves to two on-chain batches. */
+  private anchorQueues = new Map<string, Promise<unknown>>()
+  private enqueueAnchor<T>(shard: string, fn: () => Promise<T>): Promise<T> {
+    const tail = this.anchorQueues.get(shard) ?? Promise.resolve()
+    const p = (tail as Promise<void>).then(fn)
+    this.anchorQueues.set(
+      shard,
+      p.then(
+        () => undefined,
+        () => undefined
+      )
+    )
+    return p
+  }
+
   /** Close the pending batch of a shard and broadcast the anchor. */
   async anchorShard(shard: string): Promise<{ txid: string; n: number } | null> {
+    return await this.enqueueAnchor(shard, async () => await this.anchorShardInner(shard))
+  }
+  private async anchorShardInner(shard: string): Promise<{ txid: string; n: number } | null> {
+    // at-least-once: records marked batched by a batch whose anchor never
+    // landed (failed broadcast, or crash before markAnchored) go back into the
+    // pending pool — without this they are stranded and their signed promises
+    // breach the merge delay forever
+    await this.log.resetUnanchored(shard)
     const batch = await this.log.closeBatch(shard)
     if (!batch) return null
     let res
@@ -1793,7 +1971,7 @@ export class NektarMemory {
     // LOG-007: the log's signed checkpoint for this anchor
     const cps = this.cps.get(shard) ?? []
     cps.push(
-      signCheckpoint(this.logKey, {
+      await signCheckpoint(this.logKey, {
         logId: this.anchorChain(shard).getShardId(),
         size: tail.reduce((s, l) => s + l.size, 0),
         n: link.n,
@@ -1804,6 +1982,10 @@ export class NektarMemory {
       })
     )
     this.cps.set(shard, cps)
+    // compaction: a promise covered by a checkpoint can never violate — drop
+    // it so state.json, violations() and the lag gauge stay O(outstanding)
+    const cov = this.covered()
+    this.promises = this.promises.filter((x) => !cov(x))
     this.persistState()
     // §12 SLA: the bond covenant mirrors the checkpoint on-chain — lastRoot
     // commits to the FULL signed checkpoint (digest binds logId+size+n+R+R'+
@@ -1857,19 +2039,18 @@ export class NektarMemory {
   /** the shard's on-chain id — hash160 of the genesis owner pubkey, stable
    *  across owner rotations (the anchor head is authoritative when present).
    *  Binds a manifest's label to the anchor chain a verifier can look up. */
-  shardId(shard: string): string {
-    return this.anchorChain(shard).getShardId()
+  async shardId(shard: string): Promise<string> {
+    const ac = this.anchorChain(shard)
+    await ac.ready
+    return ac.getShardId()
   }
 
   /** read a record's plaintext — decrypting E via the level key when the
    *  instance holds the seed (same path recall/disclose use). */
   private async recordText(rec: LogRecord): Promise<string | undefined> {
     if (rec.fragment.d.length) return Buffer.from(rec.fragment.d).toString('utf8')
-    if (rec.fragment.E?.length && this.opts.agentSeed) {
-      const k = await this.fragmentKeyFor(rec)
-      const aadLen = (rec.fragment.E[0] << 8) | rec.fragment.E[1]
-      const aad = rec.fragment.E.slice(2, 2 + aadLen)
-      return Buffer.from(decryptFragment(k, { ciphertext: rec.fragment.E.slice(2 + aadLen), aad, keyID: '' })).toString('utf8')
+    if (rec.fragment.E?.length && this.canEncrypt()) {
+      return await this.decryptRecord(rec)
     }
     return undefined
   }
@@ -1975,7 +2156,7 @@ export class NektarMemory {
       v: 1,
       type: 'shard-manifest',
       shard,
-      shardId: this.shardId(shard),
+      shardId: await this.shardId(shard),
       domains,
       ...(desc ? { desc } : {}),
       ...(offers.length ? { offers } : {}),
@@ -2012,7 +2193,11 @@ export class NektarMemory {
     const existing = this.packStores.get(shard)
     if (existing?.sha256 === sha) return existing
     try {
-      const ref = await st.put(`packs/${network ?? process.env.NEKTAR_NETWORK ?? 'regtest'}/${this.shardId(shard)}/${sha}.json`, bytes, 'application/json')
+      const ref = await st.put(
+        `packs/${network ?? process.env.NEKTAR_NETWORK ?? 'regtest'}/${await this.shardId(shard)}/${sha}.json`,
+        bytes,
+        'application/json'
+      )
       // the same bytes land content-addressed: chirp://<root> resolves the
       // whole closure from any store holding chirp/<hash> objects, so an
       // importer is not bound to this operator's bucket layout
@@ -2027,7 +2212,7 @@ export class NektarMemory {
       try {
         await this.opts.packsStore?.add({
           shard,
-          shardId: this.shardId(shard),
+          shardId: await this.shardId(shard),
           network: network ?? 'regtest',
           sha256: sha,
           size: bytes.length,
@@ -2078,7 +2263,7 @@ export class NektarMemory {
   /** the committed hash + anchor of a fragment — for redacted (private) cites
    *  that carry the proof value without naming the shard. */
   async fragmentRef(shard: string, seq: number): Promise<{ hdp: string; anchorTxid?: string } | undefined> {
-    const rec = (await this.store.all(shard)).find((r) => r.seq === seq)
+    const rec = await this.store.bySeq(shard, seq)
     return rec ? { hdp: Buffer.from(rec.hdp).toString('hex'), anchorTxid: rec.anchorTxid } : undefined
   }
   /** OPS-002 metrics (Prometheus text via metrics.render()) */
@@ -2098,9 +2283,24 @@ export class NektarMemory {
       },
       'age of the oldest promise not yet checkpointed'
     )
+    // promiseViolations is async (the log pubkey may need a wallet round
+    // trip); the gauge refreshes on scrape and reports the last computed
+    // value. No eager refresh — field initializers run before this.opts.
+    let pvCount = 0
+    const pvRefresh = () => {
+      void this.promiseViolations(this.opts.maxMergeDelayMs ?? 600_000).then(
+        (v) => {
+          pvCount = v.length
+        },
+        () => {}
+      )
+    }
     m.gauge(
       'nektar_promise_violations',
-      () => this.promiseViolations(this.opts.maxMergeDelayMs ?? 600_000).length,
+      () => {
+        pvRefresh()
+        return pvCount
+      },
       'promises past the max merge delay without a checkpoint'
     )
     return m
@@ -2109,8 +2309,8 @@ export class NektarMemory {
     return (p: { shard: string; seq: number }) => (this.cps.get(p.shard) ?? []).some((c) => c.size > p.seq)
   }
   /** LOG-005: own promises not covered by a valid checkpoint within the delay */
-  promiseViolations(maxMergeDelayMs: number, now = Date.now()) {
-    const mon = new PromiseMonitor(this.logPublicKey(), (s) => this.cps.get(s)?.[0]?.logId)
+  async promiseViolations(maxMergeDelayMs: number, now = Date.now()) {
+    const mon = new PromiseMonitor(await this.logPublicKey(), (s) => this.cps.get(s)?.[0]?.logId)
     for (const p of this.promises) mon.observePromise(p)
     for (const list of this.cps.values()) for (const c of list) mon.observeCheckpoint(c)
     return mon.violations(now, maxMergeDelayMs)
@@ -2144,7 +2344,7 @@ export class NektarMemory {
   /** CHN-006: pending (not batched/anchored or not mined), mined (k < depth), final */
   async anchorStatus(shard: string, seq: number): Promise<{ state: 'pending' | 'mined' | 'final'; confirmations: number; depth: number }> {
     const depth = this.opts.finalityDepth ?? 1
-    const rec = (await this.store.all(shard)).find((r) => r.seq === seq)
+    const rec = await this.store.bySeq(shard, seq)
     const mp = rec?.anchorTxid ? this.anchorTxs.get(rec.anchorTxid)?.merklePath : undefined
     if (!mp) return { state: 'pending', confirmations: 0, depth }
     const tip = this.chain.tipHeight ? await this.chain.tipHeight() : await this.chain.currentHeight()
@@ -2340,8 +2540,8 @@ export class NektarMemory {
       modelParams?: Record<string, unknown>
     }
   ): Promise<{ items: Array<{ seq: number; state: string; text?: string; unverifiable?: boolean; reason?: string; zk?: string }>; receipt: AnswerReceipt }> {
-    const all = await this.store.all(shard)
-    const items = opts?.seq !== undefined ? all.filter((r) => r.seq === opts.seq) : all
+    const single = opts?.seq !== undefined ? await this.store.bySeq(shard, opts.seq) : undefined
+    const items = opts?.seq !== undefined ? (single ? [single] : []) : await this.store.all(shard)
     const caller = this.verifiedCaller(opts?.identity)
     let zkState: AnswerReceipt['zkaccess'] = 'not-required'
     let zkOk = false
@@ -2480,7 +2680,7 @@ export class NektarMemory {
           item.unverifiable = true
           item.reason = `verify: ${(result as any).reason}`
           verifyFailed = true
-        } else if (this.opts.agentSeed) {
+        } else if (this.canEncrypt()) {
           try {
             const buf = Buffer.from(r.fragment.E)
             const aadLen = buf.readUInt16BE(0)
@@ -2492,9 +2692,13 @@ export class NektarMemory {
             // try each granted level key — disjoint keyspaces mean only the
             // level the fragment was written at will pass GCM auth.
             for (let l = 0; l <= (this.opts.maxLevel ?? 0); l++) {
-              try {
-                const { fragmentKey } = deriveFragmentKey(deriveLevelKey(this.opts.agentSeed, l), this.ctx(shard, r.seq, l))
-                const pt = decryptFragment(fragmentKey, ef)
+              for (const fragmentKey of await this.fragmentKeyCandidates(this.ctx(shard, r.seq, l))) {
+                let pt: Uint8Array
+                try {
+                  pt = decryptFragment(fragmentKey, ef)
+                } catch {
+                  continue
+                }
                 // defence in depth: the key level that decrypted must also be
                 // covered by the proven clearance (the record's level was
                 // already checked above)
@@ -2516,8 +2720,6 @@ export class NektarMemory {
                 }
                 shredKey(fragmentKey)
                 break
-              } catch {
-                /* try next level */
               }
             }
             if (item.text === undefined && item.reason === undefined) {
@@ -2530,7 +2732,7 @@ export class NektarMemory {
           }
         } else {
           item.unverifiable = true
-          item.reason = 'no agent seed held'
+          item.reason = 'no encryption custody held'
         }
       } else {
         // S6.1: plaintext items run the SAME SPV verification as encrypted
@@ -2588,8 +2790,8 @@ export class NektarMemory {
     // §18 terminal commitment: σ = Sign_logKey(H(answer‖trace‖τ))
     const receipt: AnswerReceipt = {
       ...unsigned,
-      signerPub: this.logKey.toPublicKey().toString(),
-      signature: this.logKey.sign([...receiptDigest(unsigned)]).toDER('hex') as string
+      signerPub: await this.logPublicKey(),
+      signature: (await toSigner(this.logKey).sign([...receiptDigest(unsigned)])).toDER('hex') as string
     }
     return { items: texts, receipt }
   }
@@ -2600,7 +2802,7 @@ export class NektarMemory {
    * 'unverifiable' — we never claim provenance we cannot show.
    */
   async prove(shard: string, seq: number): Promise<{ bundle?: ProofBundle; result: VerifyResult | { ok: false; reason: 'NotAnchored' | 'NotFound' } }> {
-    const rec = await this.store.all(shard).then((rs) => rs.find((r) => r.seq === seq))
+    const rec = await this.store.bySeq(shard, seq)
     if (!rec) return { result: { ok: false, reason: 'NotFound' } }
     // pack-imported record: its proof is the bundle the exporter shipped —
     // verifyFragment re-checks leaf→batch→anchor→headers, zero trust needed
@@ -2610,7 +2812,7 @@ export class NektarMemory {
       return { result: { ok: false, reason: 'NotAnchored' } }
     }
     // rebuild the batch leaves from records of the same batch
-    const batchRecs = (await this.store.all(shard)).filter((r) => r.batchIndex === rec.batchIndex).sort((a, b) => (a.leafIndex ?? 0) - (b.leafIndex ?? 0))
+    const batchRecs = await this.store.byBatch(shard, rec.batchIndex)
     const leaves = batchRecs.map((r) => r.leaf)
     const R = merkleRoot(leaves)
     const head = this.anchorChain(shard).getHead()
@@ -2846,7 +3048,7 @@ export class NektarMemory {
         })
     return {
       network: this.opts.network ?? 'main',
-      funding: this.fundingStatus(),
+      funding: await this.fundingStatus(),
       shards: shards.length,
       records,
       anchoredRecords,

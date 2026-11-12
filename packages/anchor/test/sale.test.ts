@@ -64,20 +64,20 @@ test('V3 escrow: depositor refunds after deadline; seller/early/stranger refused
   const { chain, host, buyer } = w
   const utxo = await escrowOf(w)
   // too early — locktime below refundAfter
-  const early = host.buildRefund(utxo, buyer, 50, 5_990n)
+  const early = await host.buildRefund(utxo, buyer, 50, 5_990n)
   assert.notEqual((await chain.broadcast(early.tx)).status, 'success', 'refund before refundAfter must be rejected')
   // the SELLER cannot take the deposit — their key is not the depositor's
-  const rug = host.buildRefund(utxo, seller, 100, 5_990n)
+  const rug = await host.buildRefund(utxo, seller, 100, 5_990n)
   assert.notEqual((await chain.broadcast(rug.tx)).status, 'success', 'seller refund must be rejected')
   // a stranger can't either
-  const stranger = host.buildRefund(utxo, PrivateKey.fromRandom(), 100, 5_990n)
+  const stranger = await host.buildRefund(utxo, PrivateKey.fromRandom(), 100, 5_990n)
   assert.notEqual((await chain.broadcast(stranger.tx)).status, 'success', 'stranger refund must be rejected')
   // depositor at the deadline — deposit comes back
-  const ok = host.buildRefund(utxo, buyer, 100, 5_990n)
+  const ok = await host.buildRefund(utxo, buyer, 100, 5_990n)
   const r = await chain.broadcast(ok.tx)
   assert.equal(r.status, 'success', `depositor refund accepted: ${(r as any).description ?? ''}`)
   // fee bound: changeSats below input-maxFee → fee > maxFee
-  const greedy = host.buildRefund(utxo, buyer, 100, 5_000n)
+  const greedy = await host.buildRefund(utxo, buyer, 100, 5_000n)
   assert.notEqual((await chain.broadcast(greedy.tx)).status, 'success', 'refund with fee > maxFee must be rejected')
 })
 
@@ -89,10 +89,10 @@ test('V3 sale: claimDisclosure reads wrapped back from the real covenant buy tx'
   const good = host.buildBuy(utxo, WRAPPED, 990n)
   // parseBuyArgs/claimDisclosure (identity layer) on the covenant's real arg frame
   const { claimDisclosure } = await import('@nektar/identity')
-  const r = claimDisclosure(good.tx, { hWrapped: H_WRAPPED })
+  const r = await claimDisclosure(good.tx, { hWrapped: H_WRAPPED })
   assert.equal(r.mode, 'public')
   assert.equal(Buffer.from(r.wrapped).toString('hex'), WRAPPED)
-  assert.throws(() => claimDisclosure(good.tx, { hWrapped: 'ff'.repeat(32) }), /does not match/)
+  await assert.rejects(() => claimDisclosure(good.tx, { hWrapped: 'ff'.repeat(32) }), /does not match/)
 })
 
 test('V3 escrow: funding fee follows the instance rate, not a constant', async () => {

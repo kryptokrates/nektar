@@ -118,8 +118,8 @@ test('§19 epoch binding: authorship survives rotation; wrong epoch / after expi
   const k1 = PrivateKey.fromRandom()
   const k2 = PrivateKey.fromRandom()
   const g = k0.toPublicKey().toString()
-  const c1 = { ...makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 100), index: 1 }
-  const c2 = { ...makeRotationCert(k1, k2.toPublicKey().toString(), 2000, 100), index: 2 }
+  const c1 = { ...(await makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 100)), index: 1 }
+  const c2 = { ...(await makeRotationCert(k1, k2.toPublicKey().toString(), 2000, 100)), index: 2 }
   const certs = [c1, c2]
   assert.deepEqual(verifyAuthorship(g, 0, 900, g, certs), { ok: true })
   assert.deepEqual(verifyAuthorship(g, 0, 1050, g, certs), { ok: true }, 'inside the deprecation horizon')
@@ -131,7 +131,7 @@ test('§19 epoch binding: authorship survives rotation; wrong epoch / after expi
   const _w = await world(t)
   if (_w === undefined) return
   const { mem } = _w
-  const p = signProvenance(k1, utf8('epoch-1 statement'), { source: 'op', time: 1500, signature: new Uint8Array(0), modelId: 'm' })
+  const p = await signProvenance(k1, utf8('epoch-1 statement'), { source: 'op', time: 1500, signature: new Uint8Array(0), modelId: 'm' })
   await mem.remember('a', 'epoch-1 statement', { ...p, sourcePub: k1.toPublicKey().toString(), epoch: 1 })
   assert.deepEqual(await mem.authorship('a', 0, g, certs), { ok: true })
   assert.match((await mem.authorship('a', 0, g, [c1])).reason ?? 'ok', /ok/, 'still valid with a shorter chain')

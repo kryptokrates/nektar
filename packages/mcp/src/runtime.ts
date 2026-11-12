@@ -33,6 +33,7 @@ import {
   type MainnetConfig
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
+import { walletSigner, type SignerWallet } from '@nektar/core'
 import { wireP2p, setupFeeVault } from './setup.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
@@ -169,9 +170,13 @@ interface KeyFile {
   shardKeys: Record<string, string>
 }
 /** keys are generated once into the data dir (0600) unless supplied; never logged.
- *  Encrypted at rest when a passphrase is set; mandatory on main. */
-function loadKeys(dataDir: string, pass: string | undefined, requireEnc = false): { keys: KeyFile; save: () => void } {
+ *  Encrypted at rest when a passphrase is set; mandatory on main.
+ *  `create=false` (external-wallet custody): an absent file is NOT generated —
+ *  the wallet covers seed/log/shard custody; an existing file is still read
+ *  for legacy shard owners and old records. */
+function loadKeys(dataDir: string, pass: string | undefined, requireEnc = false, create = true): { keys: KeyFile; save: () => void } {
   const file = join(dataDir, 'keys.json')
+  if (!existsSync(file) && !create) return { keys: { agentSeed: '', logKey: '', shardKeys: {} }, save: () => undefined }
   const keys: KeyFile = existsSync(file)
     ? (JSON.parse(readKeyFile(file, pass, requireEnc)) as KeyFile)
     : { agentSeed: PrivateKey.fromRandom().toHex(), logKey: PrivateKey.fromRandom().toHex(), shardKeys: {} }
@@ -187,7 +192,9 @@ function loadFeeKey(dataDir: string, wif: string | undefined, pass: string | und
   // NEKTAR_FUND_MNEMONIC (or _FILE): BIP-39 custody-of-record — recoverable,
   // one string to protect. Derived at m/44'/236'/0'/0/0; feeds the same
   // keyDeriver the WIF path uses.
-  const mn = process.env.NEKTAR_FUND_MNEMONIC ?? (existsSync(process.env.NEKTAR_FUND_MNEMONIC_FILE ?? '') ? readFileSync(process.env.NEKTAR_FUND_MNEMONIC_FILE!, 'utf8').trim() : undefined)
+  const mn =
+    process.env.NEKTAR_FUND_MNEMONIC ??
+    (existsSync(process.env.NEKTAR_FUND_MNEMONIC_FILE ?? '') ? readFileSync(process.env.NEKTAR_FUND_MNEMONIC_FILE!, 'utf8').trim() : undefined)
   if (mn) return fundKeyFromMnemonic(mn)
   const file = join(dataDir, 'fee.key.json')
   if (existsSync(file)) {
@@ -382,6 +389,10 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   }
   const knexMod = (await import('knex')).default
   const knex = knexMod({ client: 'sqlite3', connection: { filename: join(cfg.dataDir, 'records.sqlite') }, useNullAsDefault: true })
+  // WAL: readers don't queue behind the writer; busy_timeout turns a
+  // contended SQLITE_BUSY into a wait instead of a surfaced error
+  await knex.raw('PRAGMA journal_mode=WAL')
+  await knex.raw('PRAGMA busy_timeout=5000')
   const store: ShardStore = new KnexShardStore(knex)
   await store.init?.()
   await openTxStore(knex)
@@ -435,10 +446,12 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     )
   }
   // persist newly generated shard keys (rotation replaces the entry)
+  // only legacy PrivateKey entries persist — wallet-mode shard keys are
+  // deterministic (re-derived from the wallet each boot, nothing to store)
   const persistKeys = () => {
     let changed = false
     for (const [s, k] of shardKeys)
-      if (keys.shardKeys[s] !== k.toHex()) {
+      if (k instanceof PrivateKey && keys.shardKeys[s] !== k.toHex()) {
         keys.shardKeys[s] = k.toHex()
         changed = true
       }
@@ -481,7 +494,11 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
           }
           continue
         }
-        const buf = Buffer.from(await res.arrayBuffer())
+        const buf = await res
+          .arrayBuffer()
+          .then((b) => Buffer.from(b))
+          .catch(() => null)
+        if (buf === null) continue
         const h = buf.length >= 3 && buf[0] === 0xfd ? buf.readUInt16LE(1) : undefined
         const mp = h !== undefined ? await merklePathAtHeight(rc, txid, tracker, h) : null
         if (mp) {
@@ -509,7 +526,11 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
             () => null
           )
           if (res === null || res.status !== 200) continue
-          const buf = Buffer.from(await res.arrayBuffer())
+          const buf = await res
+            .arrayBuffer()
+            .then((b) => Buffer.from(b))
+            .catch(() => null)
+          if (buf === null) continue
           const h = buf.length >= 3 && buf[0] === 0xfd ? buf.readUInt16LE(1) : undefined
           const mp = h !== undefined ? await merklePathAtHeight(rc, txid, tracker, h) : null
           if (mp) mem.deliverTxProof(txid, new MerklePath(mp.blockHeight, mp.path))
@@ -607,10 +628,31 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   const beatTimer = setInterval(beat, 5_000)
   beatTimer.unref()
 
-  const { keys, save } = loadKeys(cfg.dataDir, pass, true)
-  const fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, true)
+  // NEKTAR_WALLET=client: an external BRC-100 wallet (Metanet Desktop or any
+  // 'auto'-detected substrate) holds ALL signing material — no fund key, no
+  // agent seed, no log key, no new shard keys in-process. An existing
+  // keys.json is still READ (legacy shard owners + seed for old records) but
+  // nothing new is generated into it. Mutually exclusive with =toolbox.
+  const externalWallet = process.env.NEKTAR_WALLET === 'client'
+  const { keys, save } = loadKeys(cfg.dataDir, pass, true, !externalWallet)
+  let clientWallet: import('@bsv/sdk').WalletInterface | undefined
+  let fundAddress: string
+  let pkhHex: string
+  let fundKey: PrivateKey | undefined
+  if (externalWallet) {
+    if (mc.fundWif !== undefined) process.stderr.write(`nektar ${net}: NEKTAR_FUND_WIF ignored under NEKTAR_WALLET=client — the external wallet signs\n`)
+    const { WalletClient, PublicKey: SdkPublicKey } = await import('@bsv/sdk')
+    clientWallet = new WalletClient('auto', 'nektar')
+    const pk = SdkPublicKey.fromString((await clientWallet.getPublicKey({ identityKey: true })).publicKey)
+    fundAddress = pk.toAddress(ttn ? [0x6f] : undefined)
+    pkhHex = Buffer.from(pk.toHash()).toString('hex')
+    process.stderr.write(`nektar ${net}: NEKTAR_WALLET=client — signing via external wallet substrate (address ${fundAddress})\n`)
+  } else {
+    fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, true)
+    fundAddress = fundKey.toPublicKey().toAddress(ttn ? [0x6f] : undefined)
+    pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
+  }
   // TTN uses testnet encoding (prefix byte 0x6f → 'm'/'n' addresses); main '1…'
-  const fundAddress = fundKey.toPublicKey().toAddress(ttn ? [0x6f] : undefined)
   process.stderr.write(
     `nektar ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)\n`
   )
@@ -640,14 +682,13 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   }
   const callbackUrl = mc.callbackUrl ?? process.env.NEKTAR_CALLBACK_URL
   const rawBroadcaster = new BsvBroadcaster(mc)
-  const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))
+  const reserve = new ReserveFunder(fundKey ?? { pkhHex }, join(cfg.dataDir, 'reserve.json'))
   const { txStore, open: openTxStore } = persistedTxStore()
-  const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
   const addIfNew = (u: { tx: Transaction; vout: number }) => {
     txStore.put(u.tx)
     if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some((x) => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout)) {
       reserve.addOwned(u.tx, u.vout)
-      liveTf?.addOwned(u.tx, u.vout)
+      void liveTf?.addOwned(u.tx, u.vout)
     }
   }
   let memRef: NektarMemory | undefined
@@ -668,7 +709,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-  wireP2p({ peers: p2pPeers, fundKey, pkhHex, reserve, addIfNew, log: (s) => process.stderr.write(s) })
+  wireP2p({ peers: p2pPeers, pkhHex, reserve, addIfNew, log: (s) => process.stderr.write(s) })
   const floor = ttn ? 1 : 100
   const feeRate = Math.max(mc.feeRateSatPerKb ?? floor, await fetchBroadcasterFeeRate(mc).catch(() => floor))
   const funder = {
@@ -715,6 +756,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   }
   const knexMod = (await import('knex')).default
   const knex = knexMod({ client: 'sqlite3', connection: { filename: join(cfg.dataDir, 'records.sqlite') }, useNullAsDefault: true })
+  // WAL: readers don't queue behind the writer; busy_timeout turns a
+  // contended SQLITE_BUSY into a wait instead of a surfaced error
+  await knex.raw('PRAGMA journal_mode=WAL')
+  await knex.raw('PRAGMA busy_timeout=5000')
   const store: ShardStore = new KnexShardStore(knex)
   await store.init?.()
   await openTxStore(knex)
@@ -732,6 +777,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // parent-attach / balance gauge read it as before); takeReserve picks from
   // wallet storage, markSpent relinquishes, addOwned internalizes.
   if (process.env.NEKTAR_WALLET === 'toolbox') {
+    if (fundKey === undefined) throw new Error('NEKTAR_WALLET=toolbox embeds its keyDeriver from the fee key — =client is the keyless mode')
     const tb = await import('./automation/toolbox.js')
     const services = new tb.LiveWalletServices({ chain: ttn ? 'test' : 'main', mc, tracker, broadcast: (tx) => rawBroadcaster.broadcast(tx) })
     liveToolbox = await tb.openToolboxWallet({
@@ -759,7 +805,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     const own = funder.addOwned
     funder.addOwned = (tx: Transaction, v: number) => {
       own(tx, v)
-      tf.addOwned(tx, v)
+      void tf.addOwned(tx, v)
     }
     process.stderr.write(`nektar ${net}: wallet backend toolbox (wallet.sqlite)\n`)
   }
@@ -769,10 +815,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     fundKey,
     {
       ...base,
-      wallet: liveToolbox?.wallet,
+      wallet: clientWallet ?? liveToolbox?.wallet,
       txStore,
-      agentSeed: PrivateKey.fromHex(keys.agentSeed),
-      signingKey: PrivateKey.fromHex(keys.logKey),
+      agentSeed: keys.agentSeed ? PrivateKey.fromHex(keys.agentSeed) : undefined,
+      signingKey: keys.logKey ? PrivateKey.fromHex(keys.logKey) : undefined,
       shardKeys,
       maxLevel: Number(process.env.NEKTAR_MAX_LEVEL ?? 3),
       feeRateSatPerKb: feeRate,
@@ -850,10 +896,12 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     )
     process.stderr.write(`nektar ${net}: no callback URL — pulling tx statuses from the broadcaster /events stream\n`)
   }
+  // only legacy PrivateKey entries persist — wallet-mode shard keys are
+  // deterministic (re-derived from the wallet each boot, nothing to store)
   const persistKeys = () => {
     let changed = false
     for (const [s, k] of shardKeys)
-      if (keys.shardKeys[s] !== k.toHex()) {
+      if (k instanceof PrivateKey && keys.shardKeys[s] !== k.toHex()) {
         keys.shardKeys[s] = k.toHex()
         changed = true
       }
@@ -867,7 +915,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       vaultSpec,
       dataDir: cfg.dataDir,
       pkhHex,
-      fundKey,
+      fundKey: fundKey ?? walletSigner(clientWallet as SignerWallet),
       fundAddress,
       reserve,
       broadcast: async (tx) => await chain.broadcast(tx),
@@ -1024,7 +1072,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       const r = reserve as any
       const op = (txid: string, vout: number) => `${txid}:${vout}`
       const revive = (o: string, tx?: Transaction): boolean => {
-        const [txid, v] = o.split(':')
+        const [, v] = o.split(':')
         const vout = Number(v)
         r.spent.delete(o)
         if (r.utxos.some((u: { tx: Transaction; vout: number }) => op(u.tx.id('hex'), u.vout) === o)) return false

@@ -99,7 +99,10 @@ const rpc = async (method, ...params) => {
   const r = await fetch(cfg.rpcUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: auth },
-    body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
+    body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }),
+    // a hung RPC (stale port proxy, saturated rpc_max_clients) must not freeze
+    // the tick forever — the deadline keeps the challenger live
+    signal: AbortSignal.timeout(15_000)
   })
   const text = await r.text()
   let j
@@ -221,16 +224,23 @@ async function checkClaim(entry) {
 
 const inconclusiveStreaks = new Map() // txid → consecutive inconclusive verifications
 
+let ticking = false // no overlapping ticks: a 60s verify outlives the 5s interval
 async function tick() {
-  const claims = loadClaims(cfg.claimsFile)
-  if (process.env.NEKTAR_WATCH_DEBUG) console.log(`  tick: ${claims.length} registry entries`)
-  for (const e of claims) {
-    if (e.spent) continue
-    try {
-      await checkClaim(e)
-    } catch (err) {
-      console.log(`  ${e.txid?.slice(0, 8)}:${e.vout} — error: ${err.message.slice(0, 200)}`)
+  if (ticking) return
+  ticking = true
+  try {
+    const claims = loadClaims(cfg.claimsFile)
+    if (process.env.NEKTAR_WATCH_DEBUG) console.log(`  tick: ${claims.length} registry entries`)
+    for (const e of claims) {
+      if (e.spent) continue
+      try {
+        await checkClaim(e)
+      } catch (err) {
+        console.log(`  ${e.txid?.slice(0, 8)}:${e.vout} — error: ${err.message.slice(0, 200)}`)
+      }
     }
+  } finally {
+    ticking = false
   }
 }
 console.log(`nektar-watcher up — claims: ${cfg.claimsFile}, proofs: ${cfg.proofDir}, every ${WATCH_MS}ms${ONCE ? ' (once)' : ''}`)

@@ -5,8 +5,9 @@
 // claim credential); `refund` returns the deposit to the DEPOSITOR
 // (buyer) after refundAfter. The seller can never take a deposit
 // without revealing.
-import { PrivateKey, Transaction, LockingScript, UnlockingScript, Hash, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
+import { Transaction, LockingScript, UnlockingScript, Hash, SatoshisPerKilobyte } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, buildP2PKHScript } from 'runar-sdk'
+import { unlockP2PKH, signerPubHex, toSigner, type SignerLike } from '@nektar/core'
 import { DISCLOSURESALE_ARTIFACT } from '@nektar/contracts'
 
 /** The seller's published offer — depositorPkh is added by each buyer
@@ -74,19 +75,19 @@ export class DisclosureSaleHost {
    *  bounds the buy fee anyway). */
   async buildEscrow(
     fundingUtxos: Array<{ tx: Transaction; vout: number; satoshis: number }>,
-    buyerKey: PrivateKey,
+    buyerKey: SignerLike,
     amount: number,
     changeTo?: string,
     feeRateSatPerKb = 1
   ): Promise<{ tx: Transaction; utxo: SaleUtxo; feeSats: number }> {
     const tx = new Transaction()
     let total = 0
-    const p2pkh = new P2PKH()
+    const unlockTpl = unlockP2PKH(buyerKey)
     for (const u of fundingUtxos) {
       tx.addInput({
         sourceTransaction: u.tx,
         sourceOutputIndex: u.vout,
-        unlockingScriptTemplate: p2pkh.unlock(buyerKey)
+        unlockingScriptTemplate: unlockTpl
       })
       total += u.satoshis
     }
@@ -147,7 +148,7 @@ export class DisclosureSaleHost {
 
   /** depositor-side: reclaim the escrow after refundAfter — depositor
    *  signed, locktime-gated, output [change→depositor]. */
-  buildRefund(utxo: SaleUtxo, depositorKey: PrivateKey, lockTime: number, changeSats: bigint, parentTx?: Transaction): { tx: Transaction } {
+  async buildRefund(utxo: SaleUtxo, depositorKey: SignerLike, lockTime: number, changeSats: bigint, parentTx?: Transaction): Promise<{ tx: Transaction }> {
     const tx = new Transaction()
     tx.addInput({
       sourceTXID: utxo.txid,
@@ -166,9 +167,8 @@ export class DisclosureSaleHost {
     const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, rIdx)
     const sigSub = c.getSubscriptForSigning ? c.getSubscriptForSigning(utxo.script, rIdx) : utxo.script
     const sigPre = computeOpPushTx(tx, 0, sigSub, utxo.satoshis).preimageHex
-    const sig = Buffer.from(depositorKey.sign(Array.from(Hash.sha256(Buffer.from(sigPre, 'hex')))).toDER()).toString('hex') + '41'
-    const unlock =
-      c.buildStatefulPrefix(opSig) + this.contract.buildUnlockingScript('refund', [sig, depositorKey.toPublicKey().toString(), changeSats, preimageHex])
+    const sig = Buffer.from((await toSigner(depositorKey).sign(Array.from(Hash.sha256(Buffer.from(sigPre, 'hex'))))).toDER()).toString('hex') + '41'
+    const unlock = c.buildStatefulPrefix(opSig) + this.contract.buildUnlockingScript('refund', [sig, await signerPubHex(depositorKey), changeSats, preimageHex])
     tx.inputs[0].unlockingScript = UnlockingScript.fromHex(unlock)
     return { tx }
   }

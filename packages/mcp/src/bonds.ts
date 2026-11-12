@@ -3,17 +3,17 @@
 // commit and the deadline watchdog. The covenant spends the REAL parent — a
 // synthetic sourceTransaction mismatches the outpoint txid in the preimage —
 // so parents come through the caller's fetchTx (graph first, network last).
-import type { PrivateKey, Transaction } from '@bsv/sdk'
+import type { Transaction } from '@bsv/sdk'
 import { CheckpointBond, type BondUtxo } from '@nektar/anchor'
-import { toHex } from '@nektar/core'
+import { signerPubKeyHash, toHex, type SignerLike } from '@nektar/core'
 
 export interface BondOpsDeps {
   chain: import('@nektar/chain').Broadcaster & import('@nektar/chain').ChainTracker
   txs: () => import('@nektar/chain').TxStore
   fetchTx: (txid: string) => Promise<Transaction | undefined>
   takeFunding: (satoshis: number) => Promise<import('@nektar/chain').FundingOut>
-  fundKey: PrivateKey
-  bondOpts: () => { ownerKey?: PrivateKey; sats?: number; horizonBlocks?: number; maxFee?: bigint; epochBlocks?: number } | undefined
+  fundKey: SignerLike
+  bondOpts: () => { ownerKey?: SignerLike; sats?: number; horizonBlocks?: number; maxFee?: bigint; epochBlocks?: number } | undefined
   network?: string
   persist: () => void
 }
@@ -38,7 +38,7 @@ export class BondOps {
   busy = false
   constructor(private deps: BondOpsDeps) {}
 
-  private key(): PrivateKey {
+  private key(): SignerLike {
     return this.deps.bondOpts()?.ownerKey ?? this.deps.fundKey
   }
 
@@ -61,14 +61,14 @@ export class BondOps {
     }
     const key = this.key()
     const release = releaseHeight ?? BigInt(await this.deps.chain.currentHeight()) + BigInt(this.deps.bondOpts()?.horizonBlocks ?? 1008)
-    const pkh = key.toPublicKey().toHash()
+    const pkh = toHex(Uint8Array.from(await signerPubKeyHash(key)))
     // mainnet's 100 sat/kB relay floor needs ~300-sat fees for a ~3KB covenant
     // tx — the covenant's own residual bound (fee+2 ≤ maxFee+1) must allow it.
     const mainnet = this.deps.network === 'main'
     // mainnet's 100 sat/kB relay floor needs ~400-500-sat fees for ~4KB covenant
     // spends — maxFee must leave headroom (residual = fee+2 ≤ maxFee+1).
     const cfg = {
-      operatorPkh: typeof pkh === 'string' ? pkh : toHex(Uint8Array.from(pkh)),
+      operatorPkh: pkh,
       bondReleaseHeight: release,
       maxFee: this.deps.bondOpts()?.maxFee ?? (mainnet ? 1500n : 10n),
       epochLen: BigInt(this.deps.bondOpts()?.epochBlocks ?? 144)
@@ -201,7 +201,6 @@ export class BondOps {
   async close(): Promise<{ txid: string } | null> {
     if (!this.contract || !this.head) return null
     const head = this.head
-    const s = this.contract.stateOf(head.script)
     const height = await this.deps.chain.currentHeight()
     if (this.busy) throw new Error('bond op in flight')
     this.busy = true

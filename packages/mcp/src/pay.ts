@@ -9,7 +9,7 @@ import { LedgerReceiver, spentOutpoints } from '@lightwebinc/bcommon/host'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { utf8, sha256, toHex } from '@nektar/core'
+import { utf8, sha256, toHex, signerAddress, signerPubHex, toSigner } from '@nektar/core'
 import type { NektarMemory } from './memory.js'
 
 export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAYMENTS ?? '')
@@ -33,35 +33,39 @@ const networkTag = (): string => {
   return n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest'
 }
 
+/** the operator's settlement key when NEKTAR_OPERATOR_WIF is set — its
+ *  ADDRESS receives payments and it signs attributable quotes. Absent under
+ *  external-wallet custody (NEKTAR_WALLET=client): the instance's operator
+ *  signer does both (payments settle to the wallet's identity address). */
 let opKey: PrivateKey | undefined
 let opAddr: string | undefined
-const operatorKey = (): PrivateKey => {
-  if (opKey === undefined) {
-    const wif = process.env.NEKTAR_OPERATOR_WIF
-    if (!wif) throw new Error('NEKTAR_PAYMENTS=1 needs NEKTAR_OPERATOR_WIF — the WIF whose address payments settle to (never broadcast)')
-    opKey = PrivateKey.fromWif(wif)
+const opWif = (): PrivateKey | undefined => {
+  if (opKey === undefined && process.env.NEKTAR_OPERATOR_WIF) {
+    opKey = PrivateKey.fromWif(process.env.NEKTAR_OPERATOR_WIF)
     opAddr = opKey.toPublicKey().toAddress(process.env.NEKTAR_NETWORK === 'main' ? [0x00] : [0x6f])
   }
   return opKey
 }
-const operatorAddress = (): string => {
-  operatorKey()
-  return opAddr!
-}
 
-/** startup check: paid tools require a valid operator wallet BEFORE the first
- *  invoice is served — an invoice to a missing address can never settle. The
- *  WIF is used for its ADDRESS only (never signs); returns the payTo. */
-export const requireOperatorWallet = (): string => {
-  if (!process.env.NEKTAR_OPERATOR_WIF)
+/** settle address + quote signer: the operator WIF when set (legacy custody),
+ *  else the instance's operator signer — no private key held. */
+const operatorAddress = async (mem: NektarMemory): Promise<string> =>
+  opWif() !== undefined ? opAddr! : await signerAddress(mem.operatorSigner(), process.env.NEKTAR_NETWORK === 'main' ? [0x00] : [0x6f])
+
+/** startup check: paid tools require a settle destination BEFORE the first
+ *  invoice is served — either the operator WIF (legacy) or NEKTAR_WALLET=client
+ *  (the wallet's identity address; quoteSigs sign through the wallet). */
+export const requireOperatorWallet = (): void => {
+  if (!process.env.NEKTAR_OPERATOR_WIF && process.env.NEKTAR_WALLET !== 'client')
     throw new Error(
-      'NEKTAR_PAYMENTS=1 requires NEKTAR_OPERATOR_WIF at startup — set the operator wallet WIF (payments settle to its address; the key never signs)'
+      'NEKTAR_PAYMENTS=1 requires NEKTAR_OPERATOR_WIF or NEKTAR_WALLET=client at startup — without a settle destination an invoice can never be paid'
     )
-  try {
-    return operatorAddress()
-  } catch (e) {
-    throw new Error(`NEKTAR_OPERATOR_WIF is not a valid WIF — ${(e as Error).message}`, { cause: e })
-  }
+  if (process.env.NEKTAR_OPERATOR_WIF)
+    try {
+      opWif()
+    } catch (e) {
+      throw new Error(`NEKTAR_OPERATOR_WIF is not a valid WIF — ${(e as Error).message}`, { cause: e })
+    }
 }
 
 /** per-tool price: NEKTAR_PRICE_<TOOL>_SATS, falling back to NEKTAR_PRICE_SATS, then defaults */
@@ -153,28 +157,29 @@ const getReceiver = (): LedgerReceiver => {
 
 /** issue an invoice for a paid tool call — signed so the quote travels as an
  *  attributable offer (a doctored amount/payTo fails quoteSig verification) */
-const issueInvoice = (tool: string, amount?: number): Invoice => {
-  const key = operatorKey()
+const issueInvoice = async (mem: NektarMemory, tool: string, amount?: number): Promise<Invoice> => {
+  const signer = toSigner(opWif() ?? mem.operatorSigner())
+  const payTo = await operatorAddress(mem)
   const inv: Invoice = {
     invoiceId: randomBytes(8).toString('hex'),
     tool,
     amount: amount ?? priceFor(tool),
-    payTo: opAddr!,
-    lockingScriptHex: new P2PKH().lock(opAddr!).toHex(),
+    payTo,
+    lockingScriptHex: new P2PKH().lock(payTo).toHex(),
     opReturn: '',
     expires: Date.now() + INVOICE_TTL_MS,
-    pub: key.toPublicKey().toString(),
+    pub: await signerPubHex(signer),
     quoteSig: ''
   }
   inv.opReturn = `nektarpay:${inv.invoiceId}`
-  inv.quoteSig = toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(quoteCanonical(inv))))).toDER() as number[]))
+  inv.quoteSig = toHex(Uint8Array.from((await signer.sign(Array.from(sha256(utf8(quoteCanonical(inv)))))).toDER() as number[]))
   invoices.set(inv.invoiceId, inv)
   return inv
 }
 
 /** the 402 payload — x402 v2 PaymentRequired shape carrying the invoice in accepts[].extra */
-export const paymentRequired = (tool: string, amount?: number): { invoice: Invoice; required: Record<string, unknown> } => {
-  const invoice = issueInvoice(tool, amount)
+export const paymentRequired = async (mem: NektarMemory, tool: string, amount?: number): Promise<{ invoice: Invoice; required: Record<string, unknown> }> => {
+  const invoice = await issueInvoice(mem, tool, amount)
   const required = {
     x402Version: 2,
     error: `payment required — ${tool} costs ${invoice.amount} sats`,

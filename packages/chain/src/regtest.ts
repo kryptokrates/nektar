@@ -229,7 +229,11 @@ export async function merklePathFor(cfg: RegtestConfig, txid: string, tracker: T
     if (!hdr) continue
     const res = await assetGet(cfg, `block_legacy/${hdr.hash}`)
     if (!res) continue
-    const { txids } = parseLegacyBlock(new Uint8Array(await res.arrayBuffer()))
+    // a mid-body socket close (keep-alive race/server restart) must not kill
+    // the proof scan — skip the block like any other unreadable one
+    const body = await res.arrayBuffer().catch(() => null)
+    if (body === null) continue
+    const { txids } = parseLegacyBlock(new Uint8Array(body))
     const idx = txids.indexOf(txid)
     if (idx < 0) continue
     // sanity: block's own merkle root must match the header
@@ -268,8 +272,9 @@ export async function merklePathFor(cfg: RegtestConfig, txid: string, tracker: T
 // broadcast change outputs to our P2PKH, persists in .state/reserve.json,
 // marks outputs spent on broadcast (and on UTXO_SPENT rejects), and returns
 // change after each run.
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { writeFileAtomic } from '@nektar/core'
 import type { PrivateKey } from '@bsv/sdk'
 
 interface ReserveEntry {
@@ -281,7 +286,7 @@ interface ReserveEntry {
 }
 
 export class ReserveFunder {
-  keyPair: PrivateKey
+  keyPair: PrivateKey | undefined
   utxos: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
   private entries: ReserveEntry[] = []
   private spent = new Set<string>()
@@ -289,10 +294,12 @@ export class ReserveFunder {
   private pkhHex: string
   heights = new Map<string, number>()
 
-  constructor(key: PrivateKey, file = '.state.json') {
-    this.keyPair = key
+  /** key custody for signing is NOT needed here — the reserve only tracks
+   *  ownership by pubkey hash. Pass `{pkhHex}` under external-wallet custody. */
+  constructor(key: PrivateKey | { pkhHex: string }, file = '.state.json') {
+    this.keyPair = 'pkhHex' in key ? undefined : key
     this.file = file
-    this.pkhHex = Buffer.from(key.toPublicKey().toHash()).toString('hex')
+    this.pkhHex = 'pkhHex' in key ? key.pkhHex : Buffer.from(key.toPublicKey().toHash()).toString('hex')
     this.load()
   }
 
@@ -330,7 +337,7 @@ export class ReserveFunder {
   }
   private save(): void {
     mkdirSync(dirname(this.file), { recursive: true })
-    writeFileSync(this.file, JSON.stringify({ spent: [...this.spent], entries: this.entries }, null, 1))
+    writeFileAtomic(this.file, JSON.stringify({ spent: [...this.spent], entries: this.entries }, null, 1))
   }
 
   isSpent(txid: string, vout: number): boolean {
@@ -479,7 +486,7 @@ export async function bootstrapReserve(
   const accept = (tx: Transaction): Transaction => {
     for (let k = 0; k < n; k++) reserve.addOwned(tx, k)
     mkdirSync(dirname(opts.treasuryFile), { recursive: true })
-    writeFileSync(opts.treasuryFile, JSON.stringify({ treasury: { txid: tx.id('hex'), vout: n, txHex: tx.toHex() } }))
+    writeFileAtomic(opts.treasuryFile, JSON.stringify({ treasury: { txid: tx.id('hex'), vout: n, txHex: tx.toHex() } }))
     return tx
   }
   if (existsSync(opts.treasuryFile)) {
@@ -501,9 +508,11 @@ export async function bootstrapReserve(
   const first = Math.max(1, last - (opts.maxScan ?? 800))
   for (let h = last; h >= first && tried < (opts.maxCandidates ?? 200); h--) {
     const hash = (await rpc('getblockhash', h)) as string
-    const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`, { signal: AbortSignal.timeout(20_000) })
-    if (!res.ok) continue
-    const cb = Transaction.fromHex(Buffer.from(parseLegacyBlock(new Uint8Array(await res.arrayBuffer())).txs[0]).toString('hex'))
+    const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`, { signal: AbortSignal.timeout(20_000) }).catch(() => null)
+    if (res === null || !res.ok) continue
+    const body = await res.arrayBuffer().catch(() => null)
+    if (body === null) continue
+    const cb = Transaction.fromHex(Buffer.from(parseLegacyBlock(new Uint8Array(body)).txs[0]).toString('hex'))
     for (const [v, o] of cb.outputs.entries()) {
       if (!o.lockingScript.toHex().includes(want) || (o.satoshis ?? 0) < 1e7) continue
       tried++
@@ -522,8 +531,9 @@ export async function bootstrapReserve(
 export async function utxoStatus(cfg: RegtestConfig, txid: string, vout: number): Promise<'unspent' | 'spent' | 'unknown'> {
   const res = await assetGet(cfg, `utxo/${txid}?vout=${vout}`)
   if (!res) return 'unknown'
-  const b = new Uint8Array(await res.arrayBuffer())
-  return b[0] === 1 ? 'spent' : 'unspent'
+  const b = await res.arrayBuffer().catch(() => null)
+  if (b === null) return 'unknown'
+  return new Uint8Array(b)[0] === 1 ? 'spent' : 'unspent'
 }
 
 /** MerklePath for a txid at a known block height. */
@@ -532,7 +542,9 @@ export async function merklePathAtHeight(cfg: RegtestConfig, txid: string, track
   if (!hdr) return null
   const res = await assetGet(cfg, `block_legacy/${hdr.hash}`)
   if (!res) return null
-  const { txids } = parseLegacyBlock(new Uint8Array(await res.arrayBuffer()))
+  const body = await res.arrayBuffer().catch(() => null)
+  if (body === null) return null
+  const { txids } = parseLegacyBlock(new Uint8Array(body))
   const idx = txids.indexOf(txid)
   if (idx < 0) return null
   if (merkleRootOf(txids) !== hdr.merkleRoot) throw new Error(`block ${height}: merkle root mismatch`)

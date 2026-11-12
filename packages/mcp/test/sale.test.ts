@@ -118,7 +118,7 @@ test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; cl
     const { signProvenance } = await import('@nektar/log')
     const { utf8 } = await import('@nektar/core')
     const p0 = { source: 'agent', time: 1_700_000_000, signature: new Uint8Array(0), modelId: 'test-model-1' }
-    const signed = signProvenance(seller.operatorKey(), utf8('the sold secret fact'), p0)
+    const signed = await signProvenance(seller.operatorKey(), utf8('the sold secret fact'), p0)
     await seller.remember('vault', 'the sold secret fact', { ...p0, signature: signed.signature, sourcePub: sellerPub })
     const buyerPub = buyer.operatorKey().toPublicKey().toString()
     const offer = await callTool(seller, 'sale', { op: 'offerMemory', shard: 'vault', seq: 0, price: 500, refundAfter: 1_000_000, maxFee: 10, buyerPub })

@@ -7,18 +7,22 @@
 // Tx building/broadcast stays in @nektar/anchor's DisclosureSaleHost — this
 // package must not import @nektar/anchor (anchor already depends on us).
 import { PrivateKey, PublicKey, Signature, Transaction, Hash } from '@bsv/sdk'
-import { sha256, concat, toHex, fromHex, type Bytes } from '@nektar/core'
-import { wrapFor, unwrapFor, type WrappedKey } from './disclosure.js'
+import { sha256, concat, toHex, fromHex, toSigner, walletSigner, type Bytes, type DigestSigner, type SignerWallet } from '@nektar/core'
+import { wrapForCustody, unwrapForCustody, type WrappedKey, type WrapCustody } from './disclosure.js'
 
 /** fixed wrap context — binds the ECDH pad to the sale channel. */
 export const SALE_CTX = 'nektar:sale:v1'
+
+/** custody → signing surface: a PrivateKey signs directly; a wallet signs via
+ *  createSignature/getPublicKey (createHmac goes unused on this path). */
+const custodySigner = (c: WrapCustody): DigestSigner => (c instanceof PrivateKey ? toSigner(c) : walletSigner(c as SignerWallet))
 
 // --- seller side ----------------------------------------------------------
 
 /** Wrap `value` to the buyer via BRC-42; the blob (salt‖nonce‖ct) is the
  *  on-chain `wrapped` arg, hWrapped commits the covenant to it. */
-export function wrapSaleValue(sellerKey: PrivateKey, buyerPub: string, value: Bytes): { wrapped: Bytes; hWrapped: string } {
-  const w = wrapFor(sellerKey, buyerPub, value, SALE_CTX)
+export async function wrapSaleValue(seller: WrapCustody, buyerPub: string, value: Bytes): Promise<{ wrapped: Bytes; hWrapped: string }> {
+  const w = await wrapForCustody(seller, buyerPub, value, SALE_CTX)
   const wrapped = concat(w.salt, w.nonce, w.ct)
   return { wrapped, hWrapped: toHex(sha256(wrapped)) }
 }
@@ -74,8 +78,8 @@ function offerDigest(
 /** Build a sale listing: cfg for the covenant + the committed `wrapped` +
  *  the seller's signed offer attestation. `leaf` binds the offer to a
  *  specific anchored memory record when set (sale op=offerMemory). */
-export function offerDisclosure(params: {
-  sellerKey: PrivateKey
+export async function offerDisclosure(params: {
+  sellerKey: WrapCustody
   value: Bytes
   price: bigint
   refundAfter: bigint
@@ -86,14 +90,15 @@ export function offerDisclosure(params: {
   leaf?: string
   /** §19 horizon: block height at which the offer lapses (0 = no expiry) */
   expiresAt?: bigint
-}): SaleOffer {
-  const { wrapped, hWrapped } = params.buyerPub ? wrapSaleValue(params.sellerKey, params.buyerPub, params.value) : plainSaleValue(params.value)
-  const sellerPub = params.sellerKey.toPublicKey().toString()
-  const sellerPkh = toHex(new Uint8Array(params.sellerKey.toPublicKey().toHash() as number[]))
+}): Promise<SaleOffer> {
+  const signer = custodySigner(params.sellerKey)
+  const { wrapped, hWrapped } = params.buyerPub ? await wrapSaleValue(params.sellerKey, params.buyerPub, params.value) : plainSaleValue(params.value)
+  const sellerPub = await signer.pubKeyHex()
+  const sellerPkh = toHex(new Uint8Array(PublicKey.fromString(sellerPub).toHash() as number[]))
   const cfg = { sellerPkh, price: params.price, hWrapped, refundAfter: params.refundAfter, maxFee: params.maxFee }
   const expiresAt = params.expiresAt ?? 0n
   const digest = offerDigest(cfg, params.buyerPub ?? '', params.leaf ?? '', expiresAt)
-  const offerSig = params.sellerKey.sign(Array.from(Hash.sha256(Buffer.from(digest)))).toDER('hex') as string
+  const offerSig = (await signer.sign(Array.from(Hash.sha256(Buffer.from(digest))))).toDER('hex') as string
   return { cfg, wrapped: toHex(wrapped), sellerPub, expiresAt, offerSig }
 }
 
@@ -241,21 +246,21 @@ export interface ClaimResult {
 /** Buyer claim: parse `wrapped` from the buy tx, check sha256 == hWrapped,
  *  unwrap to the buyer's key (private) or return as-is (public listing —
  *  detectable because the blob is NOT a well-formed WrappedKey). */
-export function claimDisclosure(
+export async function claimDisclosure(
   tx: Transaction,
   opts: {
     hWrapped: string
-    buyerKey?: PrivateKey
+    buyerKey?: WrapCustody
     sellerPub?: string
   }
-): ClaimResult {
+): Promise<ClaimResult> {
   const wrapped = parseBuyWrapped(tx)
   if (toHex(sha256(wrapped)) !== opts.hWrapped) throw new Error('claimDisclosure: wrapped does not match the committed hWrapped')
   if (opts.buyerKey && opts.sellerPub) {
     const wk: WrappedKey = { salt: wrapped.subarray(0, 32), nonce: wrapped.subarray(32, 44), ct: wrapped.subarray(44) }
     try {
       // plaintext len = ct − 16B GCM tag (wrapFor defaults to 32B keys)
-      return { value: unwrapFor(opts.buyerKey, opts.sellerPub, wk, SALE_CTX, wk.ct.length - 16), mode: 'private', wrapped }
+      return { value: await unwrapForCustody(opts.buyerKey, opts.sellerPub, wk, SALE_CTX, wk.ct.length - 16), mode: 'private', wrapped }
     } catch {
       /* not a private wrap — fall through to public */
     }

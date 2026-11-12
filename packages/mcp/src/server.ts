@@ -3,7 +3,6 @@
 import { receiptToken } from './receipt.js'
 import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment } from './pay.js'
 import type { NektarMemory } from './memory.js'
-import { dirname } from 'node:path'
 
 /** ready-to-paste share surface for a receipt — the model drops `markdown`
  *  straight into PRs/docs; every pasted badge is a verify-page entry point */
@@ -887,7 +886,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
   const gated = paymentsEnabled() ? (PAID_TOOLS.has(name) ? { tool: name, amount: priceFor(name) } : await pricedTool()) : undefined
   if (gated) {
     if (typeof args?.payment?.transaction !== 'string') {
-      const { required } = paymentRequired(gated.tool, gated.amount)
+      const { required } = await paymentRequired(mem, gated.tool, gated.amount)
       return { ok: false, error: `payment required — ${gated.tool} costs ${gated.amount} sats`, ...required }
     }
     paid = await settlePayment(mem, gated.tool, args.payment)
@@ -896,7 +895,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
     case 'payQuote': {
       if (!PAID_TOOLS.has(String(args?.tool))) throw new Error(`payQuote: unknown or unpaid tool "${args?.tool}"`)
       if (!paymentsEnabled()) throw new Error('payments are disabled — set NEKTAR_PAYMENTS=1 (and NEKTAR_OPERATOR_WIF)')
-      const { invoice, required } = paymentRequired(String(args.tool))
+      const { invoice, required } = await paymentRequired(mem, String(args.tool))
       return {
         invoice: {
           invoiceId: invoice.invoiceId,
@@ -970,8 +969,8 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
     }
     case 'sale#offer': {
       const { offerDisclosure } = await import('@nektar/identity')
-      const r = offerDisclosure({
-        sellerKey: mem.operatorKey(),
+      const r = await offerDisclosure({
+        sellerKey: mem.wrapCustody(),
         value: new Uint8Array(Buffer.from(args.value, 'hex')),
         price: BigInt(args.price),
         refundAfter: BigInt(args.refundAfter),
@@ -1009,8 +1008,8 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       // π_i — the record's inclusion proof — goes into the commitment so the
       // buyer verifies leaf∈anchored-batch BEFORE funding (ZKCP verify-before-pay).
       const { bundle } = await mem.prove(args.shard, args.seq)
-      const r = offerDisclosure({
-        sellerKey: mem.operatorKey(),
+      const r = await offerDisclosure({
+        sellerKey: mem.wrapCustody(),
         value: payload,
         price: BigInt(args.price),
         refundAfter: BigInt(args.refundAfter),
@@ -1135,7 +1134,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         maxFee: BigInt(args.cfg.maxFee)
       })
       const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats) : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(args.cfg.maxFee), 350))
-      const { tx } = host.buildRefund(
+      const { tx } = await host.buildRefund(
         args.utxo,
         mem.operatorKey(),
         args.lockTime ?? Number(args.cfg.refundAfter),
@@ -1150,7 +1149,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       const { Transaction } = await import('@bsv/sdk')
       const { claimDisclosure } = await import('@nektar/identity')
       const tx = Transaction.fromHex(args.txHex)
-      const r = claimDisclosure(tx, { hWrapped: args.hWrapped, buyerKey: mem.operatorKey(), sellerPub: args.sellerPub })
+      const r = await claimDisclosure(tx, { hWrapped: args.hWrapped, buyerKey: mem.wrapCustody(), sellerPub: args.sellerPub })
       const out: any = { mode: r.mode, valueHex: Buffer.from(r.value).toString('hex') }
       // memory-bound payload? verify the bought bytes hash to the anchored leaf
       if (args.commitment?.leaf) {
@@ -1654,7 +1653,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         const w = (await ctx.ops.wallet()) as Record<string, unknown>
         return { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
       }
-      return mem.fundingStatus()
+      return await mem.fundingStatus()
     }
     case 'fundingImport': {
       if (!ctx.ops?.importFunding) throw new Error('fundingImport: live network only (regtest funds via the test harness)')
@@ -1844,7 +1843,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
     case 'fund': {
       const au = mem.automation
       if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
-      const w = ctx.ops?.wallet ? ((await ctx.ops.wallet()) as Record<string, unknown>) : (mem.fundingStatus() as unknown as Record<string, unknown>)
+      const w = ctx.ops?.wallet ? ((await ctx.ops.wallet()) as Record<string, unknown>) : ((await mem.fundingStatus()) as unknown as Record<string, unknown>)
       const slots = await au.marketSlots()
       const live = (await au.store.policies()).filter((x) => x.revokedAt === undefined)
       return {

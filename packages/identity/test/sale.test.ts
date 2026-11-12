@@ -29,8 +29,8 @@ function fakeBuyUnlock(wrapped: Uint8Array): string {
   return push(new Uint8Array(71)) + push(wrapped) + push(new Uint8Array([0xa0, 0x0f])) + push(new Uint8Array(181)) + '00'
 }
 
-test('sale: offer→wrap→claim roundtrip (private BRC-42)', () => {
-  const { wrapped, hWrapped } = wrapSaleValue(seller, buyerPub, VALUE)
+test('sale: offer→wrap→claim roundtrip (private BRC-42)', async () => {
+  const { wrapped, hWrapped } = await wrapSaleValue(seller, buyerPub, VALUE)
   assert.equal(hWrapped, toHex(sha256(wrapped)))
   // parse the unlock pushes back out
   const unlockHex = fakeBuyUnlock(wrapped)
@@ -38,23 +38,23 @@ test('sale: offer→wrap→claim roundtrip (private BRC-42)', () => {
   assert.deepEqual([...args.wrapped], [...wrapped])
   const tx = new Transaction()
   tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(unlockHex) })
-  const r = claimDisclosure(tx, { hWrapped, buyerKey: buyer, sellerPub })
+  const r = await claimDisclosure(tx, { hWrapped, buyerKey: buyer, sellerPub })
   assert.equal(r.mode, 'private')
   assert.deepEqual([...r.value], [...VALUE])
 })
 
-test('sale: public disclosure unwraps as-is; tampered hWrapped rejected', () => {
+test('sale: public disclosure unwraps as-is; tampered hWrapped rejected', async () => {
   const { wrapped, hWrapped } = plainSaleValue(VALUE)
   const tx = new Transaction()
   tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(fakeBuyUnlock(wrapped)) })
-  const r = claimDisclosure(tx, { hWrapped })
+  const r = await claimDisclosure(tx, { hWrapped })
   assert.equal(r.mode, 'public')
   assert.deepEqual([...r.value], [...VALUE])
-  assert.throws(() => claimDisclosure(tx, { hWrapped: 'ff'.repeat(32) }), /does not match/)
+  await assert.rejects(() => claimDisclosure(tx, { hWrapped: 'ff'.repeat(32) }), /does not match/)
 })
 
-test('sale: offerDisclosure produces a valid covenant cfg + committed wrapped', () => {
-  const offer = offerDisclosure({
+test('sale: offerDisclosure produces a valid covenant cfg + committed wrapped', async () => {
+  const offer = await offerDisclosure({
     sellerKey: seller,
     value: VALUE,
     price: 3_000n,
@@ -70,12 +70,12 @@ test('sale: offerDisclosure produces a valid covenant cfg + committed wrapped', 
   const unlockHex = fakeBuyUnlock(fromHexForTest(offer.wrapped))
   const tx = new Transaction()
   tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(unlockHex) })
-  const r = claimDisclosure(tx, { hWrapped: offer.cfg.hWrapped, buyerKey: buyer, sellerPub })
+  const r = await claimDisclosure(tx, { hWrapped: offer.cfg.hWrapped, buyerKey: buyer, sellerPub })
   assert.equal(r.mode, 'private')
   assert.deepEqual([...r.value], [...VALUE])
 })
-test('sale: public quote carries no reveal credential yet still verifies', () => {
-  const offer = offerDisclosure({
+test('sale: public quote carries no reveal credential yet still verifies', async () => {
+  const offer = await offerDisclosure({
     sellerKey: seller,
     value: VALUE,
     price: 500n,

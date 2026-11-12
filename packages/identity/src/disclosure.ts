@@ -4,7 +4,7 @@
 // the committed leaf content. An envelope reveals ONE field + salt + its path
 // to ONE verifier, signed by the owner, with an expiry; the value can be
 // encrypted to the verifier via BRC-42 ECDH (multi-recipient key wrapping).
-import { PrivateKey, PublicKey, Signature, Point, BigNumber } from '@bsv/sdk'
+import { PrivateKey, PublicKey, Signature, Point, BigNumber, type WalletInterface } from '@bsv/sdk'
 import { sha256, dsha256, concat, utf8, fromHex, type Bytes } from '@nektar/core'
 import { merkleRoot, merkleProof, reconstructRoot, type MerkleProof } from '@nektar/core'
 
@@ -197,4 +197,38 @@ export function unwrapMulti(
   const mine = wraps.find((w) => w.pub === recipient.toPublicKey().toString())
   if (!mine) return null
   return unwrapFor(recipient, senderPub, mine.wrapped, context, keyLen)
+}
+
+// --- custody-aware wrap: raw ECDH (PrivateKey) vs BRC-42 (wallet) -----------
+// A BRC-100 wallet deliberately never exposes an ECDH shared point — wrap
+// custody is therefore a REAL boundary, not a signing call. The two wire
+// schemes share the salt‖nonce‖ct envelope (on-chain `wrapped` is opaque —
+// only sha256(wrapped) is committed): legacy ECDH fills it as before; a
+// wallet wrap tags the salt slot with WRAP_WALLET_TAG so the receiver parses
+// the right scheme. Cross-mode pairs cannot unwrap — a key cannot reverse a
+// wallet wrap and vice versa.
+export type WrapCustody = PrivateKey | Pick<WalletInterface, 'encrypt' | 'decrypt' | 'getPublicKey' | 'createSignature' | 'createHmac'>
+
+const WRAP_WALLET_TAG = 'WLT42!'
+export const isWalletWrap = (w: WrappedKey): boolean =>
+  w.salt.length >= WRAP_WALLET_TAG.length && Buffer.from(w.salt.subarray(0, WRAP_WALLET_TAG.length)).toString('utf8') === WRAP_WALLET_TAG
+
+export async function wrapForCustody(custody: WrapCustody, recipientPub: string, key: Bytes, context: string): Promise<WrappedKey> {
+  if (custody instanceof PrivateKey) return wrapFor(custody, recipientPub, key, context)
+  const r = await custody.encrypt({ protocolID: [2, 'nektar'], keyID: context, counterparty: recipientPub, plaintext: Array.from(key) } as never)
+  return {
+    salt: concat(utf8(WRAP_WALLET_TAG), new Uint8Array(randomBytes(32 - WRAP_WALLET_TAG.length))),
+    nonce: new Uint8Array(12),
+    ct: new Uint8Array(r.ciphertext)
+  }
+}
+
+export async function unwrapForCustody(custody: WrapCustody, senderPub: string, w: WrappedKey, context: string, keyLen = 32): Promise<Bytes> {
+  if (isWalletWrap(w)) {
+    if (custody instanceof PrivateKey) throw new Error('wrapped payload uses wallet custody — a local key cannot unwrap it')
+    const r = await custody.decrypt({ protocolID: [2, 'nektar'], keyID: context, counterparty: senderPub, ciphertext: Array.from(w.ct) } as never)
+    return new Uint8Array(r.plaintext).subarray(0, keyLen)
+  }
+  if (!(custody instanceof PrivateKey)) throw new Error('wrapped payload uses legacy ECDH — wallet custody cannot unwrap it')
+  return unwrapFor(custody, senderPub, w, context, keyLen)
 }

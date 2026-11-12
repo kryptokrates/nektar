@@ -8,8 +8,8 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory from 'knex'
-import { PrivateKey } from '@bsv/sdk'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { PrivateKey, type Transaction } from '@bsv/sdk'
+import { stackWorld } from '@nektar/chain'
 import { KnexShardStore } from '@nektar/log'
 import { NektarMemory, FileStateStore } from '../src/index.js'
 
@@ -52,6 +52,44 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
     const sec = (await b.recall('s', { seq: 1 })).items[0]
     assert.equal(sec.text, undefined, 'level-2 record still gated after restart (level persisted in sqlite)')
     assert.match(sec.reason!, /zkaccess required/)
+  } finally {
+    await knex.destroy()
+  }
+})
+
+test('recovery: a failed anchor broadcast re-batches and anchors (at-least-once)', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-recover-'))
+  const w = await stackWorld(t, 20)
+  if (w === undefined) return
+  const { chain, funder } = w
+  const knex = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'records.sqlite') }, useNullAsDefault: true })
+  try {
+    const store = new KnexShardStore(knex)
+    await store.init()
+    const shardKeys = new Map([['s', PrivateKey.fromRandom()]])
+    const signingKey = PrivateKey.fromRandom()
+    const opts = () => ({ batchPolicy: { maxLeaves: 2 }, shardKeys, signingKey, stateStore: new FileStateStore(join(dir, 'state.json')) })
+    const mem = new NektarMemory(chain, funder, funder.keyPair, opts(), store)
+    // inject an outage at broadcast: closeBatch marks the records batched,
+    // the anchor never lands — the orphan case resetUnanchored repairs
+    const orig = chain.broadcast.bind(chain)
+    let fail = true
+    chain.broadcast = async (tx: Transaction) => (fail ? { status: 'error', description: 'injected outage' } : orig(tx))
+    await mem.remember('s', 'a')
+    await assert.rejects(() => mem.remember('s', 'b'), /injected outage|broadcast failed/, 'the failing anchor surfaces')
+    fail = false
+    const a = await mem.anchorShard('s')
+    assert.ok(a, 'recovery anchor lands')
+    const recs = await store.all('s')
+    assert.equal(
+      recs.every((r) => r.state === 'anchored' && r.anchorTxid === a.txid),
+      true,
+      'orphaned records re-batched and anchored under the recovery anchor'
+    )
+    assert.equal(mem.checkpoints('s').length, 1, 'one checkpoint — no stray duplicate batch')
+    await chain.mine(1)
+    mem.confirmAnchor('s', a.txid)
+    for (const seq of [0, 1]) assert.equal((await mem.prove('s', seq)).result.ok, true, `seq ${seq} provable`)
   } finally {
     await knex.destroy()
   }

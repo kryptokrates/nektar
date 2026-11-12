@@ -357,7 +357,9 @@ export class StackChain implements ChainTracker, Broadcaster {
       while (coinbase === undefined && Date.now() < deadline) {
         const r = await fetch(`${this.cfg.assetUrl}/block_legacy/${tip}`, { signal: AbortSignal.timeout(1_500) }).catch(() => null)
         if (r?.ok === true) {
-          coinbase = parseLegacyBlock(new Uint8Array(await r.arrayBuffer())).txids[0]
+          const body = await r.arrayBuffer().catch(() => null)
+          if (body !== null) coinbase = parseLegacyBlock(new Uint8Array(body)).txids[0]
+          else await new Promise((r) => setTimeout(r, 200))
         } else await new Promise((r) => setTimeout(r, 200))
       }
       while (coinbase !== undefined && Date.now() < deadline) {
@@ -474,7 +476,14 @@ export class StackTreasury {
       // bootstrap scan above already ruled the older mature heights out.
       const t0 = await this.chain.currentHeight()
       await this.chain.mine(110)
-      await this.reserve.scanCoinbases(this.cfg, (m, ...p) => stackRpc(this.cfg, m, ...p), t0, (await this.chain.currentHeight()) - 101)
+      // bound the scan by what was generated, not the (lagging) reported tip —
+      // getblockchaininfo.blocks trails generatetoaddress by seconds under load,
+      // which can leave toHeight < t0 and scan nothing. The asset index and its
+      // throttle also lag the generate — retry briefly: both settle fast.
+      for (let i = 0; i < 20 && this.reserve.utxos.length === 0; i++) {
+        await this.reserve.scanCoinbases(this.cfg, (m, ...p) => stackRpc(this.cfg, m, ...p), t0, t0 + 10)
+        if (this.reserve.utxos.length === 0) await new Promise((r) => setTimeout(r, 500))
+      }
       await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), { treasuryFile: join(STATE_DIR, 'treasury.json') })
     }
     if (this.reserve.utxos.length === 0) throw new Error('testkit: treasury could not be funded — no mature coinbases')

@@ -7,7 +7,7 @@
 //   - signatures made inside the window remain verifiable forever
 //     (historical validation uses the signing-time t, not wall-clock time).
 import { PrivateKey, PublicKey, Signature } from '@bsv/sdk'
-import { concat, dsha256, utf8, toHex, fromHex, type Bytes } from '@nektar/core'
+import { concat, dsha256, utf8, toHex, fromHex, toSigner, signerPubHex, type Bytes, type SignerLike } from '@nektar/core'
 
 export const TAG_ROT = utf8('nektar:rotcert:v1')
 export const TAG_IDBIND = utf8('nektar:idbind:v1')
@@ -72,9 +72,9 @@ export function rotDigest(c: Omit<RotationCert, 'sig'>): Bytes {
   new DataView(t8.buffer).setBigUint64(0, BigInt(c.issuedAt), true)
   return dsha256(concat(TAG_ROT, fromHex(c.prevPubkey), fromHex(c.pubkey), t8))
 }
-export function makeRotationCert(oldKey: PrivateKey, newPub: string, issuedAt: number, horizon = 86_400): RotationCert {
-  const prevPubkey = oldKey.toPublicKey().toString()
-  const sig = oldKey.sign(Array.from(rotDigest({ index: 0, prevPubkey, pubkey: newPub, issuedAt, horizon }))).toDER('hex') as string
+export async function makeRotationCert(oldKey: SignerLike, newPub: string, issuedAt: number, horizon = 86_400): Promise<RotationCert> {
+  const prevPubkey = await signerPubHex(oldKey)
+  const sig = (await toSigner(oldKey).sign(Array.from(rotDigest({ index: 0, prevPubkey, pubkey: newPub, issuedAt, horizon })))).toDER('hex') as string
   return { index: 0, prevPubkey, pubkey: newPub, issuedAt, horizon, sig }
 }
 export function verifyRotationCert(c: RotationCert): boolean {

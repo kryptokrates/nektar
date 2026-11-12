@@ -24,7 +24,7 @@ test('COM-003: signed provenance verified at ingest; unsigned refused when requi
   const s = await world(t, { requireSignedProvenance: true, agentSeed: PrivateKey.fromRandom() })
   if (s === undefined) return
   const { mem } = s
-  const p = signProvenance(src, utf8('torque 45Nm'), P)
+  const p = await signProvenance(src, utf8('torque 45Nm'), P)
   assert.equal((await mem.remember('m', 'torque 45Nm', { ...p, sourcePub: pub })).seq, 0, 'valid signature accepted (encrypted store)')
   await assert.rejects(
     () => mem.remember('m', 'torque 46Nm', { ...p, sourcePub: pub }),
@@ -59,9 +59,10 @@ test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms
       [1, 4]
     ]
   )
-  assert.ok(cps.every((c) => verifyCheckpoint(c, mem.logPublicKey())))
+  const logPub = await mem.logPublicKey()
+  assert.ok(cps.every((c) => verifyCheckpoint(c, logPub)))
   assert.equal(cps[1].anchorTxid, mem.tailLink('s')!.txid)
-  const mon = new PromiseMonitor(mem.logPublicKey(), () => cps[0].logId)
+  const mon = new PromiseMonitor(logPub, () => cps[0].logId)
   for (const seq of [0, 1, 2, 3, 4]) mon.observePromise({ shard: 's', seq, issuedAt: t0 })
   cps.forEach((c) => mon.observeCheckpoint(c))
   assert.deepEqual(

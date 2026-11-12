@@ -92,7 +92,7 @@ export function createMcpServer(mem: NektarMemory, ops?: import('./server.js').T
     async (uri, { shard }) => {
       const cp = mem.checkpoints(String(shard)).at(-1)
       if (!cp) throw new Error(`no checkpoint for shard ${String(shard)}`)
-      return { contents: [{ uri: uri.href, mimeType: 'application/json', text: json({ checkpoint: cp, logPublicKey: mem.logPublicKey() }) }] }
+      return { contents: [{ uri: uri.href, mimeType: 'application/json', text: json({ checkpoint: cp, logPublicKey: await mem.logPublicKey() }) }] }
     }
   )
 

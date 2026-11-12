@@ -1507,7 +1507,7 @@ test('bstack W: a sellerNote from a foreign key is ignored and still acked', { t
     const gl = new MemoryTreeLedger()
     await gl.add(gTree, 4, 'bbox')
     await gl.markProven(gTree.id('hex'))
-    const sw = signWant(ghost, { domains: ['libfoo'], maxSats: 500, ts: Date.now(), exp: Date.now() + 3_600_000, net: NET })
+    const sw = await signWant(ghost, { domains: ['libfoo'], maxSats: 500, ts: Date.now(), exp: Date.now() + 3_600_000, net: NET })
     const forged = {
       type: 'sellerNote',
       v: 1,

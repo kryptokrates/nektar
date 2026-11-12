@@ -1,12 +1,12 @@
 // COM-003: originator signatures over provenance. σ = Sign_source(provenanceDigest(d, p)).
-import { PrivateKey, PublicKey, Signature } from '@bsv/sdk'
-import { provenanceDigest, type Bytes, type Provenance } from '@nektar/core'
+import { PublicKey, Signature } from '@bsv/sdk'
+import { provenanceDigest, toSigner, type Bytes, type Provenance, type SignerLike } from '@nektar/core'
 
 export class ProvenanceError extends Error {}
 
 /** returns p with σ filled in */
-export function signProvenance(key: PrivateKey, d: Bytes, p: Provenance): Provenance {
-  const sig = key.sign(Array.from(provenanceDigest(d, p)))
+export async function signProvenance(key: SignerLike, d: Bytes, p: Provenance): Promise<Provenance> {
+  const sig = await toSigner(key).sign(Array.from(provenanceDigest(d, p)))
   return { ...p, signature: Uint8Array.from(sig.toDER() as number[]) }
 }
 

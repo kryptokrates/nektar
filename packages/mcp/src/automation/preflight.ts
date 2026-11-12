@@ -278,7 +278,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
 
   // A7 — funds: the reserve must cover one deal's lock + fee runway.
   push('funds', async () => {
-    const f = mem.fundingStatus()
+    const f = await mem.fundingStatus()
     // one deal = the largest lock a policy can create (or a 1500-sat
     // stand-in) + the escrow fee reserve + ~500 sats of runway
     let need = 2000

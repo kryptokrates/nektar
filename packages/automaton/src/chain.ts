@@ -4,10 +4,10 @@
 // state at prepareCall), the funding key is separate from the owner key, and
 // the new head is decoded from the broadcast continuation — never recomputed.
 import { Transaction, PrivateKey } from '@bsv/sdk'
-import { RunarContract, LocalSigner, extractStateFromScript, type Provider } from 'runar-sdk'
+import { RunarContract, LocalSigner, extractStateFromScript, type Provider, type Signer } from 'runar-sdk'
 import { NEKTAR_AUTOMATON_ARTIFACT } from '@nektar/contracts'
 import { NektarProvider } from '@nektar/anchor'
-import { hash160, toHex, fromHex } from '@nektar/core'
+import { hash160, toHex, fromHex, runarSigner, signerPubHex, toSigner, type SignerLike } from '@nektar/core'
 import type { Broadcaster, Funder } from '@nektar/chain'
 import { AutomatonError, deltaTable, deltaPath, finalTable, finalPath, type AutomatonDef, type FinalTable } from './core.js'
 
@@ -54,7 +54,7 @@ export function decodeNektarAutomaton(scriptHex: string): DecodedAutomaton | nul
 const pkhOf = (pub: string) => toHex(hash160(fromHex(pub)))
 
 export class AutomatonChain {
-  private signer: LocalSigner
+  private signer: Signer
   private provider: NektarProvider
   // NektarProvider is declared against @nektar/anchor's runar-sdk type copy;
   // structurally identical, nominally distinct across the two package graphs
@@ -68,14 +68,14 @@ export class AutomatonChain {
 
   constructor(
     readonly def: AutomatonDef,
-    private ownerKey: PrivateKey,
+    private ownerKey: SignerLike,
     private funder: Funder,
-    fundKey: PrivateKey,
+    fundKey: SignerLike,
     broadcaster: Broadcaster
   ) {
     this.tbl = deltaTable(def)
     this.ftbl = finalTable(def)
-    this.signer = new LocalSigner(fundKey.toHex())
+    this.signer = fundKey instanceof PrivateKey ? new LocalSigner(fundKey.toHex()) : runarSigner(fundKey)
     this.provider = new NektarProvider(broadcaster, funder)
     this.provider.onSuccess = (tx) => {
       this.txById.set(tx.id('hex'), tx)
@@ -93,7 +93,7 @@ export class AutomatonChain {
     if (this.head) throw new AutomatonError('automaton already deployed')
     this.provider.funderAddress = await this.signer.getAddress()
     await this.requireFunding()
-    const pub = this.ownerKey.toPublicKey().toString()
+    const pub = await signerPubHex(this.ownerKey)
     const c = new RunarContract(NEKTAR_AUTOMATON_ARTIFACT, [BigInt(this.def.q0), toHex(this.tbl.root), pkhOf(pub), 0n, '', toHex(this.ftbl.root), 0n])
     c.connect(this.runarProvider, this.signer)
     await c.deploy({ satoshis: 1 })
@@ -136,9 +136,9 @@ export class AutomatonChain {
       satoshis: cur.tx.outputs[cur.vout].satoshis!,
       script
     }
-    const pub = pubKey ?? this.ownerKey.toPublicKey().toString()
+    const pub = pubKey ?? (await signerPubHex(this.ownerKey))
     const prep = await c.prepareCall(method, [null, pub, ...rest])
-    const der = Buffer.from(this.ownerKey.sign(Array.from(Buffer.from(prep.sighash, 'hex'))).toDER()).toString('hex') + '41'
+    const der = Buffer.from((await toSigner(this.ownerKey).sign(Array.from(Buffer.from(prep.sighash, 'hex')))).toDER()).toString('hex') + '41'
     const sigMap: Record<number, string> = {}
     for (const i of prep.sigIndices) sigMap[i] = der
     await c.finalizeCall(prep, sigMap)

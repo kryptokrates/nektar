@@ -23,9 +23,16 @@ export interface ShardStore {
   init?: () => Promise<void>
   append: (rec: LogRecord) => Promise<void>
   byIdentity: (shard: string, hdpHex: string) => Promise<LogRecord | undefined>
+  bySeq: (shard: string, seq: number) => Promise<LogRecord | undefined>
+  byBatch: (shard: string, batchIndex: number) => Promise<LogRecord[]> // batch members, leafIndex order
   nextSeq: (shard: string) => Promise<number>
   pending: (shard: string) => Promise<LogRecord[]> // state 'committed', not anchored
   committedUnbatched: (shard: string) => Promise<LogRecord[]> // committed, no batchIndex yet
+  /** batched but never anchored ⇒ the anchor never landed (failed broadcast or
+   *  crash between markBatched and markAnchored). Return those records to the
+   *  unbatched pool so the next closeBatch re-collects them — at-least-once
+   *  anchoring; the head UTXO + hdp dedup absorb the rare double-anchored leaf. */
+  resetUnanchored: (shard: string) => Promise<number>
   markBatched: (shard: string, seqs: number[], batchIndex: number) => Promise<void>
   markAnchored: (shard: string, batchIndex: number, txid: string) => Promise<void>
   all: (shard: string) => Promise<LogRecord[]>
@@ -44,6 +51,14 @@ export class MemoryShardStore implements ShardStore {
   async byIdentity(shard: string, hdpHex: string): Promise<LogRecord | undefined> {
     return this.list(shard).find((r) => Buffer.from(r.hdp).toString('hex') === hdpHex)
   }
+  async bySeq(shard: string, seq: number): Promise<LogRecord | undefined> {
+    return this.list(shard).find((r) => r.seq === seq)
+  }
+  async byBatch(shard: string, batchIndex: number): Promise<LogRecord[]> {
+    return this.list(shard)
+      .filter((r) => r.batchIndex === batchIndex)
+      .sort((a, b) => (a.leafIndex ?? 0) - (b.leafIndex ?? 0))
+  }
   async nextSeq(shard: string): Promise<number> {
     return this.list(shard).length
   }
@@ -52,6 +67,17 @@ export class MemoryShardStore implements ShardStore {
   }
   async committedUnbatched(shard: string): Promise<LogRecord[]> {
     return this.list(shard).filter((r) => r.state === 'committed' && r.batchIndex === undefined)
+  }
+  async resetUnanchored(shard: string): Promise<number> {
+    let n = 0
+    for (const r of this.list(shard)) {
+      if (r.state === 'committed' && r.batchIndex !== undefined) {
+        delete r.batchIndex
+        delete r.leafIndex
+        n++
+      }
+    }
+    return n
   }
   async markBatched(shard: string, seqs: number[], batchIndex: number): Promise<void> {
     const seqSet = new Set(seqs)

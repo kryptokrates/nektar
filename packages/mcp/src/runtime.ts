@@ -389,12 +389,20 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   reserve.leased = leasePredicate(ledger)
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   chain.broadcast = txLogBroadcast(chain.broadcast)
+  // NEKTAR_WALLET=toolbox: the BRC-100 wallet owns the signing surface;
+  // its WalletServices view of this same Teranode node keeps it honest.
+  let toolboxWallet: import('./automation/toolbox.js').ToolboxHandle | undefined
+  if (process.env.NEKTAR_WALLET === 'toolbox') {
+    const tb = await import('./automation/toolbox.js')
+    toolboxWallet = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: 'regtest', services: new tb.RegtestWalletServices(rc, tracker) })
+  }
   const mem = new NektarMemory(
     chain,
     funder as never,
     fundKey,
     {
       ...base,
+      wallet: toolboxWallet?.wallet,
       txStore,
       agentSeed: PrivateKey.fromHex(keys.agentSeed),
       signingKey: PrivateKey.fromHex(keys.logKey),

@@ -17,8 +17,15 @@
     "prepublishOnly": "pnpm -r build"
   },
   "dependencies": {
+    "@bsv/sdk": "4.0.1",
+    "@bsv/wallet-toolbox": "2.15.0",
+    "@lightwebinc/bcommon": "file:../../vendor/lightwebinc-bcommon-0.34.0.tgz",
+    "@lightwebinc/bfinger-host": "file:../../vendor/lightwebinc-bfinger-host-0.8.5.tgz",
+    "@lightwebinc/blogs-host": "file:../../vendor/lightwebinc-blogs-host-0.6.4.tgz",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@nektar/anchor": "workspace:*",
     "@nektar/automaton": "workspace:*",
+    "@nektar/bstack": "workspace:*",
     "@nektar/chain": "workspace:*",
     "@nektar/contracts": "workspace:*",
     "@nektar/core": "workspace:*",
@@ -31,17 +38,11 @@
     "@nektar/reasoning": "workspace:*",
     "@nektar/verify": "workspace:*",
     "@nektar/zk": "workspace:*",
-    "@bsv/sdk": "4.0.1",
-    "@modelcontextprotocol/sdk": "1.32.2",
     "knex": "^3.3.0",
     "qrcode": "1.5.4",
     "runar-sdk": "0.4.6",
     "sqlite3": "^5.1.7",
-    "zod": "^4.6.7",
-    "@nektar/bstack": "workspace:*",
-    "@lightwebinc/bfinger-host": "file:../../vendor/lightwebinc-bfinger-host-0.8.5.tgz",
-    "@lightwebinc/blogs-host": "file:../../vendor/lightwebinc-blogs-host-0.6.4.tgz",
-    "@lightwebinc/bcommon": "file:../../vendor/lightwebinc-bcommon-0.34.0.tgz"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6"

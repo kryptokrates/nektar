@@ -51,7 +51,7 @@ async function world(t: { skip: (m?: string) => void }) {
 const m = (seq: number) => ({ shard: 'manual', seq })
 
 test('AGT-003 grounding: quote, entailed, uncited, unverifiable, not-entailed; flag vs remove', async () => {
-  const w = await await world(t)
+  const w = await world(t)
   await w.mem.remember('manual', 'requires(torque, 99).') // pending — never anchored
   const claims: Claim[] = [
     { text: 'requires(torque,   45)', cites: [m(0)] },
@@ -91,7 +91,7 @@ test('AGT-011/012 model identity + committed, anchored receipt', async () => {
   })
   await assert.rejects(() => modelIdentity({ kind: 'api', provider: 'anthropic', release: '' }), /provider \+ release/)
   const api = await modelIdentity({ kind: 'api', provider: 'anthropic', release: 'claude-x-2026-01-01' })
-  const w = await await world(t)
+  const w = await world(t)
   const base = { answer: 'torque 45', fragmentRefs: [m(0)], checkResult: 'verified' as const, modelId: api, timestamp: 1_700_000_000 }
   const a = await commitReceipt(base)
   assert.equal(a.receiptHash, (await commitReceipt({ ...base })).receiptHash, 'deterministic')
@@ -104,7 +104,7 @@ test('AGT-011/012 model identity + committed, anchored receipt', async () => {
 })
 
 test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction anchored', async () => {
-  const w = await await world(t)
+  const w = await world(t)
   const idx = new CitationIndex(join(mkdtempSync(join(tmpdir(), 'nektar-')), 'cit.json'))
   const claims: Claim[] = [
     { text: 'port 4 is torqued to 45', literal: 'spec(port4, 45)', cites: [m(0), m(1)] },
@@ -139,7 +139,7 @@ test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction a
 })
 
 test('AGT-005 consensus time: existence-by the block time; unmined/forged refused', async (t) => {
-  const w = await await world(t)
+  const w = await world(t)
   const tx = w.mem.anchorTx(w.mem.tailLink('manual')!.txid)!
   const tb = await timeBounds(tx, w.chain)
   const hdr = await w.chain.headerAtHeight(tb.blockHeight)
@@ -157,7 +157,7 @@ test('AGT-005 consensus time: existence-by the block time; unmined/forged refuse
 })
 
 test('AGT-007 audit bundle verifies offline; 4 tamper cases rejected with reasons', async (t) => {
-  const w = await await world(t)
+  const w = await world(t)
   await w.mem.remember('manual', 'requires(torque, 55).')
   await w.mem.remember('manual', 'z.')
   w.settle('manual')
@@ -229,7 +229,7 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
 })
 
 test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRevoked needed', async (t) => {
-  const w = await await world(t)
+  const w = await world(t)
   const b0 = (await w.mem.prove('manual', 0)).bundle!
   const b1 = (await w.mem.prove('manual', 1)).bundle!
   const { receipt } = await commitReceipt({
@@ -295,7 +295,7 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
 
 test('GOAL-v8 D4: anchored rotation chain — third party replays pk(0)→pk(i) from chain data', async (t) => {
   const { verifyAnchoredRotationChain } = await import('@nektar/reasoning')
-  const w = await await world(t)
+  const w = await world(t)
   const k1 = PrivateKey.fromRandom()
   await w.mem.rotateShard('manual', k1)
   w.settle('__identity__')

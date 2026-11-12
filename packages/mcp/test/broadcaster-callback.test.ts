@@ -5,7 +5,9 @@ import { buildBump, stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory, createHttpApi } from '../src/index.js'
 import type { Server } from 'node:http'
 
-const serve = async (): Promise<{ chain: MockChain; funder: MockFunder; mem: NektarMemory; srv: Server; base: string }> => {
+const serve = async (t: {
+  skip: (m?: string) => void
+}): Promise<{ chain: StackChain; funder: StackFunder; mem: NektarMemory; srv: Server; base: string } | undefined> => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w
@@ -17,7 +19,7 @@ const serve = async (): Promise<{ chain: MockChain; funder: MockFunder; mem: Nek
 }
 
 // a real spend mined on the chain — returns the txid and its true BUMP
-const minedTx = async (chain: MockChain, funder: MockFunder): Promise<{ txid: string; mp: MerklePath }> => {
+const minedTx = async (chain: StackChain, funder: StackFunder): Promise<{ txid: string; mp: MerklePath }> => {
   const parent = funder.parents[0]!
   const tx = new Transaction()
   tx.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })
@@ -26,7 +28,9 @@ const minedTx = async (chain: MockChain, funder: MockFunder): Promise<{ txid: st
   await tx.sign()
   assert.equal((await chain.broadcast(tx)).status, 'success')
   await chain.mine(1)
-  return { txid: tx.id('hex'), mp: chain.merklePathOf(tx.id('hex'))! }
+  const mp = (await chain.getTx(tx.id('hex')))!.merklePath
+  assert.ok(mp, 'mined spend carries the node BUMP')
+  return { txid: tx.id('hex'), mp }
 }
 
 const cb = (base: string, path: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> =>
@@ -40,7 +44,9 @@ const bodyOf = (txid: string, mp?: { blockHeight: number; toHex: () => string })
 })
 
 test('broadcaster callback: MINED with a valid BUMP delivers the proof once', async (t) => {
-  const { chain, funder, mem, srv, base } = await serve()
+  const _w = await serve(t)
+  if (_w === undefined) return
+  const { chain, funder, mem, srv, base } = _w
   try {
     const { txid, mp } = await minedTx(chain, funder)
     let fires = 0
@@ -59,7 +65,9 @@ test('broadcaster callback: MINED with a valid BUMP delivers the proof once', as
 })
 
 test('broadcaster callback: BUMP for a different txid or an invalid root is ignored (still 200)', async (t) => {
-  const { chain, funder, mem, srv, base } = await serve()
+  const _w = await serve(t)
+  if (_w === undefined) return
+  const { chain, funder, mem, srv, base } = _w
   try {
     const { mp } = await minedTx(chain, funder)
     let fires = 0
@@ -81,7 +89,9 @@ test('broadcaster callback: BUMP for a different txid or an invalid root is igno
 })
 
 test('broadcaster callback: legacy /v1/arc-callback path still works', async (t) => {
-  const { chain, funder, mem, srv, base } = await serve()
+  const _w = await serve(t)
+  if (_w === undefined) return
+  const { chain, funder, mem, srv, base } = _w
   try {
     const { txid, mp } = await minedTx(chain, funder)
     let fires = 0
@@ -97,7 +107,9 @@ test('broadcaster callback: legacy /v1/arc-callback path still works', async (t)
 })
 
 test('broadcaster callback: NEKTAR_CALLBACK_TOKEN gates the webhook (Authorization: Bearer)', async (t) => {
-  const { chain, funder, mem, srv, base } = await serve()
+  const _w = await serve(t)
+  if (_w === undefined) return
+  const { chain, funder, mem, srv, base } = _w
   const prev = process.env.NEKTAR_CALLBACK_TOKEN
   process.env.NEKTAR_CALLBACK_TOKEN = 'tok-secret'
   try {

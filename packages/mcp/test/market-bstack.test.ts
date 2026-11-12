@@ -697,7 +697,7 @@ const readBuyer = async (key: import('@bsv/sdk').PrivateKey, hosts: string[], ch
 }
 const noteItems = <T extends { body: object }>(items: T[]): T[] => items.filter((i) => (i.body as { market?: { type?: string } }).market?.type === 'note')
 
-test('bstack K: buyer loses its database — the inbox note rebuilds the deal and the refund still fires', { timeout: 300_000 }, async () => {
+test('bstack K: buyer loses its database — the inbox note rebuilds the deal and the refund still fires', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1592,7 +1592,7 @@ test(
   }
 )
 
-test('bstack Y: a journal batch dropped by every host shows the gap — complete:false', { timeout: 300_000 }, async () => {
+test('bstack Y: a journal batch dropped by every host shows the gap — complete:false', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1641,7 +1641,7 @@ test('bstack Y: a journal batch dropped by every host shows the gap — complete
   }
 })
 
-test('bstack Z: restart between tick and append — events land exactly once', { timeout: 300_000 }, async () => {
+test('bstack Z: restart between tick and append — events land exactly once', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1708,7 +1708,7 @@ test('bstack Z: restart between tick and append — events land exactly once', {
   }
 })
 
-test('bstack AA: disjoint host sets — records find each other over the shared host', { timeout: 300_000 }, async () => {
+test('bstack AA: disjoint host sets — records find each other over the shared host', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1765,7 +1765,7 @@ test('bstack AA: disjoint host sets — records find each other over the shared 
   }
 })
 
-test('bstack AB: no counterparty record — the deal completes over the shared host', { timeout: 300_000 }, async () => {
+test('bstack AB: no counterparty record — the deal completes over the shared host', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1942,7 +1942,7 @@ test('bstack AD: a full deal stores redacted evidence — verified read, one eve
   }
 })
 
-test('bstack AE: store down — the deal completes; evidence lands once the store returns', { timeout: 300_000 }, async () => {
+test('bstack AE: store down — the deal completes; evidence lands once the store returns', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []

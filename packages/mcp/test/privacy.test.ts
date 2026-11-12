@@ -16,10 +16,10 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-function setup(opts: NektarMemoryOptions = {}) {
+async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
   const w = await stackWorld(t, 20)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-priv-')), ...opts })
   const settle = async (shard: string) => {
     await chain.mine(1)
@@ -30,7 +30,9 @@ function setup(opts: NektarMemoryOptions = {}) {
 }
 
 test('private shards: the flag is declared at write time and is monotone', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const r = await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   assert.equal(r.private, true)
   assert.equal(mem.shardPrivate('hr'), true)
@@ -54,7 +56,7 @@ test('private flag persists across a restart (stateStore round-trip)', async (t)
   }
   const w = await stackWorld(t, 2)
   if (w === undefined) return
-  const { chain: chain, funder: f } = w
+  const { chain, funder: f } = w
   const m1 = new NektarMemory(chain, f, f.keyPair, { stateStore: store })
   m1.setShardPrivate('hr')
   assert.equal(saved.flags.hr.private, true, 'flag written to the persisted state')
@@ -67,7 +69,9 @@ test('private flag persists across a restart (stateStore round-trip)', async (t)
 })
 
 test('private shards: recall reads them for the owner but marks the policy', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
   settle('hr')
@@ -77,7 +81,9 @@ test('private shards: recall reads them for the owner but marks the policy', asy
 })
 
 test('private shards: plain merkle citations are refused (prove)', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
   settle('hr')
@@ -103,7 +109,9 @@ function noProver(): () => void {
 }
 
 test('private cites: groundedAnswer strips them when the proof cannot be produced — nothing leaks', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
   settle('hr')
@@ -120,7 +128,9 @@ test('private cites: AUTO-PROVE — groundedAnswer keeps a plain private cite wh
     t.skip('set NEKTAR_STARK_PROVE=1 to run the real STARK prover')
     return
   }
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
   settle('hr')
@@ -139,7 +149,9 @@ test('private cites: AUTO-PROVE — groundedAnswer keeps a plain private cite wh
 })
 
 test('private cites: a verified ZK proof keeps the claim; the shard name is redacted from the anchored receipt', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
   settle('hr')
@@ -185,7 +197,9 @@ test('private cites: a verified ZK proof keeps the claim; the shard name is reda
 })
 
 test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
   settle('hr')
@@ -200,7 +214,9 @@ test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', asyn
 })
 
 test('private cites: commitReceipt redacts the shard name the same way — and demands the ZK proof', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
   settle('hr')
@@ -231,7 +247,9 @@ test('zk prover tools are priced when payments are on; the verify side stays fre
   assert.equal(priceFor('proveMembership'), 500, 'proving defaults to the ZK tier')
   assert.equal(priceFor('groundedAnswer'), 250)
   assert.equal(priceFor('anchor'), 100)
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   for (const tool of ['proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership']) {
     const r = await callTool(mem, tool, {})
     assert.equal(r.ok, false, `${tool} must 402 before it runs`)
@@ -253,8 +271,10 @@ test('zk prover tools are priced when payments are on; the verify side stays fre
   }
 })
 
-test('private cites end-to-end: a REAL STARK keeps the private cite', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async () => {
-  const { mem, settle } = setup()
+test('private cites end-to-end: a REAL STARK keeps the private cite', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await callTool(mem, 'remember', { shard: 'hr', data: 'headcount 12' })
   await mem.anchorShard('hr')

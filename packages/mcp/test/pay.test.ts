@@ -14,10 +14,10 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-function setup(opts: NektarMemoryOptions = {}) {
+async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
   const w = await stackWorld(t, 50)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
   const settle = async (shard: string) => {
     await chain.mine(1)
@@ -85,7 +85,9 @@ test('payments: gated tool 402s → signed tx settles → receipt commits the pa
     _testReset()
   })
 
-  const { mem, settle, payer } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle, payer } = _w
   await mem.remember('s', 'the fee is 250 sats')
   await mem.anchorShard('s')
   settle('s')
@@ -153,7 +155,9 @@ test('payments: underpayment, missing tag and unknown invoice are refused', asyn
     _testReset()
   })
 
-  const { mem, payer } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, payer } = _w
   const q = await callTool(mem, 'payQuote', { tool: 'anchor' })
   assert.equal(q.invoice.amount, 100)
 
@@ -191,7 +195,9 @@ test('payments: invoices carry a verifiable signed quote; tampering detected', a
     _testReset()
   })
 
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const q = await callTool(mem, 'payQuote', { tool: 'groundedAnswer' })
   const inv = q.invoice
   assert.equal(inv.pub, OP_KEY.toPublicKey().toString(), 'quote is attributable to the operator key')

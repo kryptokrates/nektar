@@ -22,6 +22,13 @@ export interface ObjectRef {
   key: string
   sha256: string
   size: number
+  /** CHIRP/BRC-167 content address (`chirp://<id>`) of the object — the same
+   *  bytes are also PUT as `chirp/<hash>` objects so any holder of the URL
+   *  can resolve them from any store that carries them (see chirp.ts). */
+  chirp?: string
+  /** the gateway base URL this ref was written through — lets an importer
+   *  attempt an unsigned read before it needs credentials of its own. */
+  endpoint?: string
 }
 export interface StoredHead {
   size: number
@@ -59,7 +66,7 @@ export interface ObjectStoreConfig {
 
 export class S3ObjectStore {
   readonly bucket: string
-  private readonly endpoint: string
+  readonly endpoint: string
   private readonly accessKey: string
   private readonly secretKey: string
   private readonly region: string
@@ -147,6 +154,20 @@ export class S3ObjectStore {
     const message = text.match(/<Message>([^<]*)<\/Message>/)?.[1] ?? text.slice(0, 200)
     return new Error(`s3 ${r.status}${code !== '' ? ` ${code}` : ''}: ${message}`)
   }
+}
+
+/** Plain unsigned GET of one S3 object — no SigV4, no credentials. Works
+ *  against a gateway whose bucket allows public reads; any refusal (403/404)
+ *  throws so the caller can fall back to a signed read or another source.
+ *  Content integrity is never delegated to this fetch: callers verify the
+ *  returned bytes against a digest (getVerified-style) or a CHIRP closure. */
+export async function getObjectUnsigned(endpoint: string, bucket: string, key: string): Promise<Uint8Array> {
+  const url = `${endpoint.replace(/\/+$/, '')}/${uriEncode(bucket)}/${encodeKey(key)}`
+  const r = await fetch(url)
+  if (!r.ok) throw new Error(`s3 unsigned GET ${bucket}/${key} → ${r.status}`)
+  const bytes = new Uint8Array(await r.arrayBuffer())
+  if (bytes.length > OBJECT_MAX_BYTES) throw new Error(`objectstore: object ${key} is ${bytes.length} bytes, over the ${OBJECT_MAX_BYTES} byte bound`)
+  return bytes
 }
 
 /** Env configuration — feature is OFF when NEKTAR_BSTORE_S3_URL or

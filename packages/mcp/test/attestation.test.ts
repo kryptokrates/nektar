@@ -11,10 +11,10 @@ import { attestationScript, decodeAttestationScript, attestationsOf, attestation
 const fakeProof = () => dsha256(utf8('lzkmem-stand-in')) // any ≥32B payload; commitment = sha256(it)
 const proofBytes = () => new Uint8Array([...fakeProof(), 1, 2, 3])
 
-function setup() {
+async function setup(t: { skip: (m?: string) => void }) {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test' })
   return { chain, funder, mem }
 }
@@ -33,7 +33,9 @@ test('attestation script: encode/decode round-trip; non-attestation scripts → 
 })
 
 test('anchorAttestation on MockChain: real signed spend, commitment extractable, verifyAttestation round-trip', async () => {
-  const { chain, mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { chain, mem } = _w
   const pb = proofBytes()
   const { txid, commitment } = await mem.anchorAttestation(pb)
   assert.equal(commitment, toHex(attestationCommitment(pb)))
@@ -54,7 +56,9 @@ test('anchorAttestation on MockChain: real signed spend, commitment extractable,
 })
 
 test('MCP tools: attestMembership/verifyAttestation via callTool (anchorAttestation path)', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const pb = proofBytes()
   const { txid } = await mem.anchorAttestation(pb)
   const r = await callTool(mem, 'verifyAttestation', { txid, bytes: Buffer.from(pb).toString('hex') })

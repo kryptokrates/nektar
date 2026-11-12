@@ -53,7 +53,7 @@ test('STARK derivation verifies against the anchored dagroot record + issued que
   const d = dag()
   const root = Buffer.from(d.policyRoot()).toString('hex')
   assert.equal(root, fx.journal.policyRoot, 'test DAG must reproduce the fixture policy root')
-  const { chain, mem } = await await world(t, { policyDag: d, securityStore: seedQuery })
+  const { chain, mem } = await world(t, { policyDag: d, securityStore: seedQuery })
   await mem.remember('__policy__', `dagroot:${root}`)
   await mem.anchorShard('__policy__')
   await chain.mine(1)
@@ -71,18 +71,18 @@ test('STARK derivation verifies against the anchored dagroot record + issued que
 test('STARK derivation NEGATIVES: unanchored root, mismatch, unissued query', async () => {
   const d = dag()
   // 1. dagroot record exists but is NOT anchored → no trusted root
-  const w1 = await await world(t, { policyDag: d, securityStore: seedQuery })
+  const w1 = await world(t, { policyDag: d, securityStore: seedQuery })
   await w1.mem.remember('__policy__', `dagroot:${fx.journal.policyRoot}`) // unanchored
   const r1 = await w1.mem.verifyDerivation('__policy__', proofBytes())
   assert.equal(r1.ok, false)
   assert.match(String(r1.reason), /no anchored policy DAG root/)
   // 2. anchoredPolicyRoot configured but ≠ recomputed → deny everything (same rule as recall)
-  const w2 = await await world(t, { policyDag: d, anchoredPolicyRoot: 'ff'.repeat(32), securityStore: seedQuery })
+  const w2 = await world(t, { policyDag: d, anchoredPolicyRoot: 'ff'.repeat(32), securityStore: seedQuery })
   const r2 = await w2.mem.verifyDerivation('__policy__', proofBytes())
   assert.equal(r2.ok, false)
   assert.match(String(r2.reason), /no anchored policy DAG root/)
   // 3. anchored record present, query never issued
-  const w3 = await await world(t, { policyDag: d })
+  const w3 = await world(t, { policyDag: d })
   await w3.mem.remember('__policy__', `dagroot:${fx.journal.policyRoot}`)
   await w3.mem.anchorShard('__policy__')
   await w3.chain.mine(1)
@@ -92,9 +92,9 @@ test('STARK derivation NEGATIVES: unanchored root, mismatch, unissued query', as
   assert.match(String(r3.reason), /queryId/)
 })
 
-test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own derivation', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async () => {
+test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own derivation', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
   const d = dag()
-  const { chain, mem } = await await world(t, { policyDag: d })
+  const { chain, mem } = await world(t, { policyDag: d })
   await mem.remember('s', 's1 data')
   await mem.anchorShard('s')
   await chain.mine(1)

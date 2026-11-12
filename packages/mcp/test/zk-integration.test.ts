@@ -28,7 +28,7 @@ const issued = (...q: string[]): QueryRegistry => {
   return { consume: (id) => s.delete(id) }
 }
 
-async function anchoredBatch(R: Uint8Array, size: number, mine = true) {
+async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, size: number, mine = true) {
   const w = await stackWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -140,7 +140,7 @@ test('NektarMemory: issued ZK queries are single use and survive a restart (pers
   assert.equal((m2 as any).consumeZkQuery(q.queryId), false, 'single use')
 })
 
-test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own anchored batch', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async () => {
+test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own anchored batch', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
   const w = await stackWorld(t, 20)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -208,7 +208,7 @@ test('§13 combined Π: the Π binding rejects proofs paired with an unrelated c
   assert.match(String(r.reason), /header does not match|stark/)
 })
 
-test('end-to-end §13 Π: membership STARK + ZKAccess clearance under ONE verifier query', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async () => {
+test('end-to-end §13 Π: membership STARK + ZKAccess clearance under ONE verifier query', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
   const w = await stackWorld(t, 20)
   if (w === undefined) return
   const { chain, funder: f } = w

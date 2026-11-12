@@ -43,6 +43,8 @@ import {
   type Checkpoint
 } from '@nektar/log'
 import { Metrics } from './metrics.js'
+import { storeChirp, fetchChirp, fetchChirpUnsigned } from './chirp.js'
+import { getObjectUnsigned } from './objectstore.js'
 
 const DELTA_PREFIX = 'delta:'
 
@@ -1913,6 +1915,15 @@ export class NektarMemory {
         const bytes = utf8(JSON.stringify(pack))
         const sha = toHex(sha256(bytes))
         const ref = await this.opts.objectStore.put(`packs/${manifest.network}/${this.shardId(shard)}/${sha}.json`, bytes, 'application/json')
+        // the same bytes land content-addressed: chirp://<root> resolves the
+        // whole closure from any store holding chirp/<hash> objects, so an
+        // importer is not bound to this operator's bucket layout
+        try {
+          ref.chirp = await storeChirp(this.opts.objectStore, bytes)
+          ref.endpoint = this.opts.objectStore.endpoint
+        } catch {
+          // chirp publish is best-effort — the keyed ref alone still resolves
+        }
         this.packStores.set(shard, ref)
         this.persistState()
       } catch {
@@ -1934,11 +1945,50 @@ export class NektarMemory {
     return this.packStores.get(shard)
   }
   /** fetch + verify a pack through the object store — every byte checks
-   *  against the ref's digest before importShardPack's own re-verification. */
-  async fetchStoredPack(ref: { bucket?: string; key: string; sha256: string; size?: number }): Promise<ShardPack> {
+   *  against the ref's digest or the CHIRP closure before importShardPack's
+   *  own re-verification. Resolution order: a chirp:// ref resolves through
+   *  the signed store first, then unsigned against the advertised endpoint
+   *  (no credentials needed on a public-read gateway); the keyed object is
+   *  the compatibility fallback, signed then unsigned. */
+  async fetchStoredPack(ref: {
+    bucket?: string
+    key?: string
+    sha256?: string
+    size?: number
+    chirp?: string
+    endpoint?: string
+  }): Promise<ShardPack> {
     const st = this.opts.objectStore
-    if (st === undefined) throw new Error('object store is not configured (NEKTAR_BSTORE_*)')
-    return JSON.parse(new TextDecoder().decode(await st.getVerified(ref))) as ShardPack
+    const bucket = ref.bucket ?? st?.bucket
+    const asPack = (b: Uint8Array): ShardPack => JSON.parse(new TextDecoder().decode(b)) as ShardPack
+    if (ref.chirp !== undefined && bucket !== undefined) {
+      if (st !== undefined) {
+        try {
+          return asPack(await fetchChirp(st, ref.chirp, bucket))
+        } catch {
+          this.metrics.inc('nektar_pack_fetch_chirp_fallback_total')
+        }
+      }
+      if (ref.endpoint !== undefined) {
+        try {
+          return asPack(await fetchChirpUnsigned(ref.endpoint, bucket, ref.chirp))
+        } catch {
+          this.metrics.inc('nektar_pack_fetch_chirp_fallback_total')
+        }
+      }
+    }
+    if (ref.key !== undefined && ref.sha256 !== undefined) {
+      if (st !== undefined) {
+        return asPack(await st.getVerified({ bucket: ref.bucket, key: ref.key, sha256: ref.sha256, size: ref.size }))
+      }
+      if (ref.endpoint !== undefined && bucket !== undefined) {
+        const bytes = await getObjectUnsigned(ref.endpoint, bucket, ref.key)
+        if (toHex(sha256(bytes)) !== ref.sha256) throw new Error(`objectstore: sha256 mismatch for ${ref.key} (unsigned read)`)
+        if (ref.size !== undefined && bytes.length !== ref.size) throw new Error(`objectstore: size mismatch for ${ref.key} (unsigned read)`)
+        return asPack(bytes)
+      }
+    }
+    throw new Error('object store is not configured (NEKTAR_BSTORE_*) and the ref has no unsigned path')
   }
   /** the committed hash + anchor of a fragment — for redacted (private) cites
    *  that carry the proof value without naming the shard. */

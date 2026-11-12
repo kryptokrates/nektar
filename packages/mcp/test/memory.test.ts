@@ -7,10 +7,10 @@ import { signBinding, answerChallenge, issueChallenge, issueClearance, proveAcce
 import { NektarMemory, type NektarMemoryOptions, type ZkClearance } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 
-function setup(opts: NektarMemoryOptions = {}) {
+async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
   const w = await stackWorld(t, 50)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
   const settle = async (shard: string) => {
     await chain.mine(1)
@@ -35,7 +35,9 @@ function callerOf(mem: NektarMemory, key = PrivateKey.fromRandom()) {
 const tr = (fragmentId: string, fill = 7): ZkTranscript => ({ queryId: `q${fill}`, fragmentId, nonce: new Uint8Array(32).fill(fill) })
 
 test('mcp memory: remember → anchor → prove (verified)', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   const r = await mem.remember('manual', 'inspect belt every 10h')
   assert.ok(r.anchored, 'batch of 2 auto-anchored')
@@ -46,7 +48,9 @@ test('mcp memory: remember → anchor → prove (verified)', async (t) => {
 })
 
 test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await mem.remember('s', 'fact one')
   const { items, receipt } = await mem.recall('s')
   // S6.1: an unanchored PLAINTEXT record is withheld like an encrypted one —
@@ -65,14 +69,14 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
   assert.equal(after.items[0]!.unverifiable, undefined)
   assert.equal(after.receipt.checkResult, 'verified')
   const seed = PrivateKey.fromRandom()
-  const enc = setup({ agentSeed: seed, maxLevel: 1 })
+  const enc = await setup(t, { agentSeed: seed, maxLevel: 1 })
   await enc.mem.remember('s', 'classified fact')
   // decrypt requires the record to be anchored AND verified (KEY-008)
   await enc.mem.anchorShard('s')
   enc.settle('s')
   assert.equal((await enc.mem.recall('s')).items[0]!.text, 'classified fact', 'decrypts with seed after verify')
   // unanchored encrypted record is never decrypted
-  const enc2 = setup({ agentSeed: seed })
+  const enc2 = await setup(t, { agentSeed: seed })
   await enc2.mem.remember('s', 'unanchored secret')
   const rec3 = await enc2.mem.recall('s')
   assert.equal(rec3.items[0]!.text, undefined)
@@ -80,7 +84,9 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
 })
 
 test('S6.1 regression: plaintext items are SPV-verified like encrypted ones (broken anchor → unverifiable)', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await mem.remember('s', 'fact one')
   await mem.remember('s', 'fact two') // anchored batch of 2
   settle('s')
@@ -120,7 +126,9 @@ test('regression: encrypted records with identical provenance are NOT deduplicat
 })
 
 test('§15 modality: committed into H(d‖p) and the provenance signature; invalid kind refused', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const prov = { source: 's', time: 1_700_000_000 }
   const plain = await mem.remember('m', 'rule text', prov)
   const modal = await mem.remember('m', 'rule text', {
@@ -154,7 +162,9 @@ test('§15 modality: committed into H(d‖p) and the provenance signature; inval
 })
 
 test('§18 terminal commitment: every receipt is signed; tampering breaks verification', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await mem.remember('s', 'fact one')
   await mem.anchorShard('s')
   settle('s')
@@ -169,7 +179,9 @@ test('§18 terminal commitment: every receipt is signed; tampering breaks verifi
 })
 
 test('mcp memory: tools dispatch + prove NotAnchored is honest', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const rr = await callTool(mem, 'remember', { shard: 'x', data: 'via tool' })
   assert.equal(rr.seq, 0)
   assert.deepEqual((await mem.prove('x', 0)).result, { ok: false, reason: 'NotAnchored' })
@@ -216,7 +228,9 @@ test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-us
 })
 
 test('ZKA: plaintext level>0 records are gated too; instances without trusted authorities refuse', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   await mem.remember('p', 'plain but level 2', undefined, 2)
   const { identity } = callerOf(mem)
   const cred = issueClearance(PrivateKey.fromRandom(), 5n, identity.pubkey)
@@ -242,7 +256,9 @@ when { resource.level <= principal.level };
   )
   const authority = PrivateKey.fromRandom()
   const base = { policy: { policyText: ps.text, anchoredPolicySetHash: ps.hash }, clearanceAuthorities: [authority.toPublicKey().toString()] }
-  const { mem, settle } = setup(base)
+  const _w = await setup(t, base)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await mem.remember('s', 'fact two', undefined, 2)
   await mem.anchorShard('s')
   settle('s') // S6.1: plaintext is served only after SPV verify
@@ -305,7 +321,9 @@ test('mcp tools: challenge / rotate / revoke / authorize receipts (incl. DENY)',
 })
 
 test('mcp tool: automaton deploy → step → halt; off-δ step refused; honest statement', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const def = {
     Q: ['draft', 'review', 'published'],
     Sigma: ['submit', 'approve'],
@@ -331,7 +349,9 @@ test('mcp tool: automaton deploy → step → halt; off-δ step refused; honest 
 })
 
 test('§19 read-path: revoked author key withholds the record at recall', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   const author = PrivateKey.fromRandom()
   const { signProvenance } = await import('@nektar/log')
   const p0 = { source: 'agent', time: Math.floor(Date.now() / 1000), signature: new Uint8Array(0), modelId: 't' }
@@ -348,7 +368,9 @@ test('§19 read-path: revoked author key withholds the record at recall', async 
 })
 
 test('§19 CRL: embedded SMT proof makes the anchored revoke record self-convicting', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   const idm = await import('@nektar/identity')
   const pk = PrivateKey.fromRandom().toPublicKey().toString()
 
@@ -395,7 +417,9 @@ test('§19 CRL: embedded SMT proof makes the anchored revoke record self-convict
 })
 
 test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-hoc edits break verification', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   const { dsha256, utf8, concat, TAG_DELEGATION } = await import('@nektar/core')
   const { verifyAnswerReceipt } = await import('../src/memory.js')
   await mem.remember('s', 'service manual fact')
@@ -454,7 +478,9 @@ test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-ver
 
 test('GOAL-v8 D2: App E level floor — derived content cannot fall below its premises', async (t) => {
   const seed = PrivateKey.fromRandom()
-  const { mem, settle } = setup({ agentSeed: seed, maxLevel: 5 })
+  const _w = await setup(t, { agentSeed: seed, maxLevel: 5 })
+  if (_w === undefined) return
+  const { mem, settle } = _w
   // a level-5 premise
   const p = await mem.remember('vault', 'classified premise', undefined, 5)
   assert.equal(p.level, 5)
@@ -480,7 +506,7 @@ test('GOAL-v8 D2: App E level floor — derived content cannot fall below its pr
   assert.equal(low.items[0]!.text, undefined, 'derived record at floored level is not served to a level-0 reader')
   // §8 revise() inherits the base's level automatically — a delta can't downgrade
   // (a plaintext instance: revise materialises the base, which needs plaintext)
-  const plain2 = setup()
+  const plain2 = await setup(t)
   const base5 = await plain2.mem.remember('v', 'classified premise', undefined, 5)
   const revised = await plain2.mem.revise('v', base5.seq, 'classified premise v2')
   assert.equal(revised.level, 5, 'a revision of a level-5 base lands at level 5, not 0')
@@ -490,7 +516,7 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
   const seed = PrivateKey.fromRandom()
   // disabled by default: no __access__ records at all
   delete process.env.NEKTAR_ACCESS_LOG
-  const off = setup({ agentSeed: seed, maxLevel: 1 })
+  const off = await setup(t, { agentSeed: seed, maxLevel: 1 })
   await off.mem.remember('s', 'classified', undefined, 1)
   await off.mem.anchorShard('s')
   off.settle('s')
@@ -518,7 +544,7 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
     assert.equal(dec.caller, identity.pubkey, 'the verified caller is recorded')
     assert.ok(typeof dec.at === 'number' && dec.at > 0, 'timestamped')
     // traverse: materialising a delta chain logs each hop
-    const p2 = setup()
+    const p2 = await setup(t)
     const base = await p2.mem.remember('d', 'v1 text')
     await p2.mem.revise('d', base.seq, 'v2 text')
     await p2.mem.materialize('d', base.seq + 1, { requireProof: false })
@@ -535,7 +561,9 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
 
 test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash', async () => {
   const weightsHash = 'ab'.repeat(32)
-  const { mem, settle } = setup({ model: { id: 'qwen-local-7b', params: { temperature: 0 }, weightsHash } })
+  const _w = await setup(t, { model: { id: 'qwen-local-7b', params: { temperature: 0 }, weightsHash } })
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await mem.remember('s', 'a fact')
   await mem.anchorShard('s')
   settle('s')
@@ -549,7 +577,7 @@ test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash',
   const tampered = { ...receipt, model: { ...receipt.model!, weightsHash: 'cd'.repeat(32) } }
   assert.ok(!verifyAnswerReceipt(tampered).ok, 'a forged weightsHash invalidates the signature')
   // receipts without a configured model still verify (empty-safe digest)
-  const plain = setup()
+  const plain = await setup(t)
   await plain.mem.remember('s', 'x')
   const r2 = await plain.mem.recall('s')
   assert.equal(r2.receipt.model, undefined)
@@ -557,7 +585,9 @@ test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash',
 })
 
 test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest declares', async () => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   await mem.remember('manual', 'inspect belt every 10h')
   settle('manual')
@@ -586,7 +616,9 @@ test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest d
 })
 
 test('verifyReceipt: token → found/hash/provenance/anchored/fragments; unknown + malformed fail', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   await mem.remember('manual', 'inspect belt every 10h')
   settle('manual')

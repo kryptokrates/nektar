@@ -9,10 +9,10 @@ import { callTool } from '../src/server.js'
 import { createHttpApi } from '../src/http.js'
 import type { AddressInfo } from 'node:net'
 
-function setup(opts: NektarMemoryOptions = {}) {
+async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
   const w = await stackWorld(t, 50)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
   const settle = async (shard: string) => {
     await chain.mine(1)
@@ -23,7 +23,9 @@ function setup(opts: NektarMemoryOptions = {}) {
 }
 
 test('describeShard: manifest committed to __catalog__, shardId binds label to chain', async () => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   await mem.remember('ball', 'Metz beat Lyon 2-1')
   const r = await mem.describeShard('ball', { domains: ['Soccer', 'Ligue-1'], desc: 'French football results', offers: [{ kind: 'answer', priceSats: 250 }] })
   assert.equal(r.manifest.shard, 'ball')
@@ -38,7 +40,9 @@ test('describeShard: manifest committed to __catalog__, shardId binds label to c
 })
 
 test('describeShard: unknown/system shards and junk tags refused; latest wins', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   await assert.rejects(() => mem.describeShard('nope', { domains: ['x'] }), /unknown shard/)
   await mem.remember('ball', 'x')
   await assert.rejects(() => mem.describeShard('__catalog__', { domains: ['x'] }), /system shards/)
@@ -51,7 +55,9 @@ test('describeShard: unknown/system shards and junk tags refused; latest wins', 
 })
 
 test('describeShard via tool + /.well-known/nektar projects domains/offers/shardId', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   await mem.remember('ball', 'Metz beat Lyon 2-1')
   const out = await callTool(mem, 'describeShard', {
     shard: 'ball',
@@ -75,7 +81,9 @@ test('describeShard via tool + /.well-known/nektar projects domains/offers/shard
 })
 
 test('exportShardPack carries the manifest as advisory metadata', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   await mem.remember('ball', 'Metz beat Lyon 2-1')
   await mem.describeShard('ball', { domains: ['soccer'] })
   const pack = await mem.exportShardPack('ball')
@@ -84,7 +92,9 @@ test('exportShardPack carries the manifest as advisory metadata', async (t) => {
 })
 
 test('importRecord: bought payload lands + __imports__ audit; forged provenance refused', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const r = await mem.importRecord({ data: 'Metz beat Lyon 2-1', sourceShard: 'ball', sourceSeq: 3, leaf: 'd'.repeat(64), saleTxid: 'e'.repeat(64) })
   assert.equal(r.seq, 0)
   const recs = await mem.records('bought')
@@ -103,7 +113,9 @@ test('importRecord: bought payload lands + __imports__ audit; forged provenance 
 })
 
 test('contentPrice: manifest offers drive external read/pack pricing', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   await mem.remember('ball', 'x')
   assert.equal(await mem.contentPrice('ball', 'read'), 0, 'no manifest → free')
   await mem.describeShard('ball', {

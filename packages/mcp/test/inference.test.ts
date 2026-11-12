@@ -18,7 +18,7 @@ import { join } from 'node:path'
 // point the artifact lookup somewhere empty — on-chain spend is e2e's job
 process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 
-function setup(opts: NektarMemoryOptions = {}) {
+async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
   const w = await stackWorld(t, 20)
   if (w === undefined) return
   const { chain: chain, funder: funder } = w
@@ -50,7 +50,9 @@ test('tampered attestation fails validation', () => {
 })
 
 test('attestInference: off-chain attestation when artifacts absent', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const r = await callTool(mem, 'attestInference', {})
   assert.equal(r.onchain, false)
   assert.equal(r.attestation.publicStatement.slice(0, 10), '0x5c034d38')
@@ -59,15 +61,19 @@ test('attestInference: off-chain attestation when artifacts absent', async (t) =
 })
 
 test('attestInference: non-demo input refused', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const bad: number[] = [...AIINF_DEMO.input]
   bad[5] = 99
   await assert.rejects(() => callTool(mem, 'attestInference', { input: bad }), /no proof exists/)
 })
 
-test('attestInference: DEFAULT path anchors sha256(proof) in one small tx', { timeout: 30_000 }, async () => {
+test('attestInference: DEFAULT path anchors sha256(proof) in one small tx', { timeout: 30_000 }, async (t) => {
   delete process.env.NEKTAR_GROTH16_OUT
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const { existsSync } = await import('node:fs')
   const dir = new URL('../../../../tools/groth16-spike/out/', import.meta.url)
   if (!existsSync(new URL('lock-aiinf.hex', dir))) {
@@ -89,9 +95,11 @@ test('attestInference: DEFAULT path anchors sha256(proof) in one small tx', { ti
   process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 })
 
-test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 }, async () => {
+test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 }, async (t) => {
   delete process.env.NEKTAR_GROTH16_OUT
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   const { existsSync } = await import('node:fs')
   const dir = new URL('../../../../tools/groth16-spike/out/', import.meta.url)
   if (!existsSync(new URL('lock-aiinf.hex', dir))) {
@@ -126,7 +134,9 @@ test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 
 })
 
 test('commitReceipt auto-attests in one call; exclusive with modelAttestation', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   const w = await callTool(mem, 'remember', { shard: 'facts', data: 'auto attest' })
   await mem.anchorShard('facts')
   // artifacts absent under the /nonexistent dir → statement-verified attestation still embeds
@@ -154,7 +164,7 @@ test('commitReceipt auto-attests in one call; exclusive with modelAttestation', 
   )
 })
 
-test('attestInference: on-chain when artifacts + funding exist (mock evaluates the 398KB verifier)', { timeout: 120_000 }, async () => {
+test('attestInference: on-chain when artifacts + funding exist (mock evaluates the 398KB verifier)', { timeout: 120_000 }, async (t) => {
   delete process.env.NEKTAR_GROTH16_OUT
   const w = await stackWorld(t, 5, 100_000)
   if (w === undefined) return
@@ -190,7 +200,9 @@ test('attestInference: on-chain when artifacts + funding exist (mock evaluates t
 })
 
 test('commitReceipt embeds a validated attestation; verify shows model check', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   const w = await callTool(mem, 'remember', { shard: 'facts', data: 'the sky is blue' })
   await mem.anchorShard('facts')
   settle('facts')
@@ -213,7 +225,9 @@ test('commitReceipt embeds a validated attestation; verify shows model check', a
 })
 
 test('commitReceipt refuses an attestation whose statement does not re-derive', async (t) => {
-  const { mem } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const att = demoAttestation()
   att.publicStatement = '0xdeadbeef'
   await assert.rejects(
@@ -229,7 +243,9 @@ test('commitReceipt refuses an attestation whose statement does not re-derive', 
 })
 
 test('a receipt without attestation shows declared model (info)', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   const w = await callTool(mem, 'remember', { shard: 'facts', data: 'plain fact' })
   await mem.anchorShard('facts')
   settle('facts')

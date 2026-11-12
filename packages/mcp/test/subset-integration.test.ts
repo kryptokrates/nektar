@@ -14,7 +14,7 @@ import { NektarMemory, callTool } from '../src/index.js'
 const leaves = (n: number) => Array.from({ length: n }, (_, i) => dsha256(utf8(`rec-${i}`)))
 const subsetBytes = (n: number, idx: number[]) => encodeZkdis(buildSubsetProof(leaves(n), idx))
 
-async function anchoredBatch(R: Uint8Array, size: number, mine = true) {
+async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, size: number, mine = true) {
   const w = await stackWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w

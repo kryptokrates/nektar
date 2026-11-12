@@ -612,14 +612,18 @@ export const TOOLS = [
   {
     name: 'importShard',
     description:
-      'Import a shard pack (from exportShard or a remote operator): records re-land preserving provenance, every proof bundle re-verifies against the live chain (zero trust in the exporter — a hostile pack yields unverifiable entries, never trusted records), and the import event itself is recorded on __imports__. Target shard must be empty. Same network only — a regtest pack cannot anchor-verify on mainnet. Give EITHER {pack} (ShardPack JSON), OR {from, shard} (an operator base URL + shard — fetches {from}/v1/pack/{shard}), OR {packUrl} (a full pack URL).',
+      'Import a shard pack (from exportShard or a remote operator): records re-land preserving provenance, every proof bundle re-verifies against the live chain (zero trust in the exporter — a hostile pack yields unverifiable entries, never trusted records), and the import event itself is recorded on __imports__. Target shard must be empty. Same network only — a regtest pack cannot anchor-verify on mainnet. Give EITHER {pack} (ShardPack JSON), OR {from, shard} (an operator base URL + shard — fetches {from}/v1/pack/{shard}), OR {packUrl} (a full pack URL), OR {store} (a bstore ObjectRef — {key, sha256} or {chirp}, plus optional bucket/endpoint; a chirp:// ref resolves content-addressed objects, unsigned when the gateway allows it — no credentials needed).',
     inputSchema: {
       type: 'object',
       properties: {
         pack: { type: 'object', description: 'the ShardPack JSON returned by exportShard' },
         from: { type: 'string', description: 'operator base URL — fetches {from}/v1/pack/{shard}' },
         shard: { type: 'string', description: 'shard name when importing via {from}' },
-        packUrl: { type: 'string', description: 'full pack URL (e.g. from exportShard packUrl or /.well-known/nektar)' }
+        packUrl: { type: 'string', description: 'full pack URL (e.g. from exportShard packUrl or /.well-known/nektar)' },
+        store: {
+          type: 'object',
+          description: 'bstore object ref — {key, sha256} or {chirp} (chirp:// content address), optional bucket/endpoint/size'
+        }
       }
     }
   },
@@ -1655,9 +1659,12 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       // object-store ref — fetch through getVerified (digest-checked) before
       // the pack's own re-verification decides what lands
       if (pack === undefined && typeof args?.store === 'object' && args.store !== null) {
-        const r = args.store as { bucket?: string; key?: string; sha256?: string; size?: number }
-        if (typeof r.key !== 'string' || typeof r.sha256 !== 'string') throw new Error('importShard: store ref needs {key, sha256} (bucket/size optional)')
-        pack = await mem.fetchStoredPack(r as { bucket?: string; key: string; sha256: string; size?: number })
+        const r = args.store as { bucket?: string; key?: string; sha256?: string; size?: number; chirp?: string; endpoint?: string }
+        const keyed = typeof r.key === 'string' && typeof r.sha256 === 'string'
+        if (!keyed && typeof r.chirp !== 'string')
+          throw new Error('importShard: store ref needs {key, sha256} or {chirp} (bucket/size/endpoint optional)')
+        if (r.endpoint !== undefined && !/^https?:\/\//i.test(r.endpoint)) throw new Error('importShard: store endpoint must be http(s)')
+        pack = await mem.fetchStoredPack(r)
       }
       if (pack === undefined) {
         const url =

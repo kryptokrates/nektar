@@ -5,10 +5,10 @@ import type { AddressInfo } from 'node:net'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 
-function setup(opts: NektarMemoryOptions = {}) {
+async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
   const w = await stackWorld(t, 50)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
   const settle = async (shard: string) => {
     await chain.mine(1)
@@ -24,7 +24,7 @@ function peerOf(a: ReturnType<typeof setup>, opts: NektarMemoryOptions = {}) {
 }
 
 test('shard packs: export → import re-verifies every bundle; records provable on the peer', async (t) => {
-  const a = setup()
+  const a = await setup(t)
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
   a.settle('guide')
@@ -61,17 +61,17 @@ test('shard packs: export → import re-verifies every bundle; records provable 
   await assert.rejects(c.importShardPack(pack), /already has records/)
 
   // private shards refuse export outright; level>0 too
-  const d = setup()
+  const d = await setup(t)
   d.mem.setShardPrivate('hr')
   await d.mem.remember('hr', 'salary band')
   await assert.rejects(d.mem.exportShardPack('hr'), /private/)
-  const e = setup()
+  const e = await setup(t)
   await e.mem.remember('restricted', 'gate this', undefined, 5)
   await assert.rejects(e.mem.exportShardPack('restricted'), /level>0/)
 })
 
 test('shard packs: tampered data recomputes a different leaf → reported, never trusted', async () => {
-  const a = setup()
+  const a = await setup(t)
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
   a.settle('guide')
@@ -92,7 +92,9 @@ test('shard packs: tampered data recomputes a different leaf → reported, never
 })
 
 test('doctor: one-call diagnostic carries funding/shards/records/anchors/payments/prover', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await mem.remember('s', 'x')
   await mem.remember('s', 'y')
   settle('s')
@@ -108,7 +110,9 @@ test('doctor: one-call diagnostic carries funding/shards/records/anchors/payment
 })
 
 test('groundedAnswer/commitReceipt share block: token + verifyUrl + badgeUrl + markdown', async (t) => {
-  const { mem, settle } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { mem, settle } = _w
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   await mem.remember('manual', 'inspect belt every 10h')
   settle('manual')
@@ -122,7 +126,7 @@ test('groundedAnswer/commitReceipt share block: token + verifyUrl + badgeUrl + m
 
 test('pack endpoint + remote import: /.well-known/nektar lists offerable shards; importShard {from,shard} pulls + re-verifies', async () => {
   const { createHttpApi } = await import('../src/http.js')
-  const a = setup()
+  const a = await setup(t)
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
   a.settle('guide')
@@ -208,7 +212,7 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
   await new Promise<void>((r) => fake.listen(0, '127.0.0.1', r))
   const s3port = (fake.address() as AddressInfo).port
   const client = new S3ObjectStore({ endpoint: `http://127.0.0.1:${s3port}`, bucket: 'packs-mock', accessKey: 'a', secretKey: 's' })
-  const a = setup({ objectStore: client })
+  const a = await setup(t, { objectStore: client })
   const srv = createHttpApi(a.mem).listen(0)
   await new Promise((r) => srv.once('listening', r))
   const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`

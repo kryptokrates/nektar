@@ -21,7 +21,9 @@ function setup() {
 }
 
 test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is set', async (t) => {
-  const { seller } = setup()
+  const _w = await setup(t)
+  if (_w === undefined) return
+  const { seller } = _w
   process.env.NEKTAR_TOOL_PROFILE = 'operator'
   try {
     delete process.env.NEKTAR_PAID_DISCLOSURE
@@ -43,7 +45,9 @@ test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is s
 test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claims', async () => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
-    const { chain, seller, buyer } = setup()
+    const _w = await setup(t)
+    if (_w === undefined) return
+    const { chain, seller, buyer } = _w
     const buyerPub = buyer.operatorKey().toPublicKey().toString()
     const sellerPub = seller.operatorKey().toPublicKey().toString()
     const VALUE = Buffer.from('{"field":7,"salt":"aa","path":[]}')
@@ -85,7 +89,9 @@ test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claim
 test('paid disclosure: depositor refunds an unrevealed escrow after deadline', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
-    const { seller, buyer } = setup()
+    const _w = await setup(t)
+    if (_w === undefined) return
+    const { seller, buyer } = _w
     const offer = await callTool(seller, 'sale', { op: 'offer', value: 'deadbeef', price: 1_000, refundAfter: 100, maxFee: 10 })
     const esc = await callTool(buyer, 'sale', { op: 'escrow', cfg: offer.cfg, amount: 2_000 })
     assert.equal(esc.accepted, true)
@@ -105,7 +111,9 @@ test('paid disclosure: depositor refunds an unrevealed escrow after deadline', a
 test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; claim verifies it + provenance σ', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
-    const { chain, seller, buyer } = setup()
+    const _w = await setup(t)
+    if (_w === undefined) return
+    const { chain, seller, buyer } = _w
     const sellerPub = seller.operatorKey().toPublicKey().toString()
     // §16: the sold record carries a verifiable provenance signature
     const { signProvenance } = await import('@nektar/log')
@@ -157,7 +165,9 @@ test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; cl
 test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape); buyer decrypts + verifies', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
-    const { chain, mk } = setup()
+    const _w = await setup(t)
+    if (_w === undefined) return
+    const { chain, mk } = _w
     // agentSeed enables §7 encryption; maxLevel 0 keeps writes at level 0
     const seller = mk({ agentSeed: PrivateKey.fromRandom(), maxLevel: 0 })
     const buyer = mk()
@@ -195,7 +205,9 @@ test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape)
 test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before funding', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
-    const { chain, seller, buyer } = setup()
+    const _w = await setup(t)
+    if (_w === undefined) return
+    const { chain, seller, buyer } = _w
     await chain.mine(5) // push the mock tip to height 5
     const buyerPub = buyer.operatorKey().toPublicKey().toString()
     // D9 — offer expiry is inside the signed digest and enforced at escrow time

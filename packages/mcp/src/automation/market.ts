@@ -28,6 +28,7 @@ export type MarketMessage =
       v: 1
       wantId: string
       offerId: string
+      buyerOp?: string
       policyHash: string
       want: SignedWant
       offer: { so: SignedOffer; commitment?: any; mode?: string }
@@ -909,6 +910,7 @@ export class MarketEngine {
       v: 1,
       wantId,
       offerId: s.so.offer.offerId,
+      buyerOp: op.operationId,
       policyHash: op.policyHash,
       want: op.data.want as SignedWant,
       offer: { so: s.so, ...(s.commitment !== undefined ? { commitment: s.commitment } : {}), ...(s.mode !== undefined ? { mode: s.mode } : {}) },
@@ -967,6 +969,9 @@ export class MarketEngine {
     const dedupeKey = `buyer:${this.d.network}:${n.wantId}`
     const key = `${so.offer.pub}:${so.offer.offerId}`
     const { operation, created } = await this.d.store.createOperation({
+      // rebuilt under the original id — the seller's note has always kept the
+      // offerId, and an external caller holding this handle must keep working
+      ...(typeof n.buyerOp === 'string' ? { operationId: n.buyerOp } : {}),
       role: 'buyer',
       kind: 'purchase',
       dedupeKey,

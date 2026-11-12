@@ -227,7 +227,8 @@ async function fundAgentsLive() {
     const parent = Transaction.fromHex((await (await woc(`/tx/${best.tx_hash}/hex`)).text()).trim())
     const split = new Transaction()
     split.addInput({ sourceTransaction: parent, sourceOutputIndex: best.tx_pos, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
-    for (const a of agents) for (let i = 0; i < outs; i++) split.addOutput({ lockingScript: new P2PKH().lock(a.key.toPublicKey().toAddress([0x6f])), satoshis: per })
+    for (const a of agents)
+      for (let i = 0; i < outs; i++) split.addOutput({ lockingScript: new P2PKH().lock(a.key.toPublicKey().toAddress([0x6f])), satoshis: per })
     split.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), change: true })
     await split.fee(new SatoshisPerKilobyte(100))
     await split.sign()
@@ -523,156 +524,175 @@ try {
     }
   }
   deal: {
-  if (EXPECT === 'guard') {
-    // money-safety probe: a want priced over the guard's per-purchase cap must
-    // be refused before anything is broadcast — zero escrow txs must exist.
-    // escrowTxids from earlier deals stay listed, so diff before/after
-    const txOf = (o) => o.escrowTxid ?? o.data?.escrowTxid
-    const before = new Set((await tool(bob, 'deals', {})).deals?.map(txOf).filter(Boolean) ?? [])
-    let refused = ''
-    try {
-      await tool(bob, 'want', { domains: ['libfoo'], question: QUESTION, maxSats: 600 })
-    } catch (e) {
-      refused = String(e?.message ?? e)
-    }
-    if (!/per-purchase limit/.test(refused)) throw new Error(`over-cap want was not refused by the guard: ${refused || '(no refusal — want accepted)'}`)
-    const after = (await tool(bob, 'deals', {})).deals?.map(txOf).filter(Boolean) ?? []
-    const escrows = after.filter((t) => !before.has(t))
-    if (escrows.length > 0) throw new Error(`refused want still produced escrow txs: ${JSON.stringify(escrows)}`)
-    log(`PASS — guard refused 600-sat want (cap 500), zero escrow broadcasts | refusal: ${refused.slice(0, 80)}`)
-    writeFileSync(join(dir, 'summary.json'), JSON.stringify({ runId, outcome: 'PASS', expect: 'guard', refusal: refused }, null, 1))
-    break deal
-  }
-  log('want: posting (deal clock starts)')
-  const wantAt = Date.now()
-  const wantAtBlocks = blocksMined
-  const { operationId } = await tool(bob, 'want', { domains: ['libfoo'], question: QUESTION, maxSats: 500 })
-  if (FAULT?.trigger === 'want') await injectFault(FAULT)
-  if (FAULT?.trigger === 'funding') {
-    // inject inside the pay window — escrow is being assembled/broadcast; the
-    // respawned agent must not produce a second escrow for the same op
-    const hit = await waitState(bob, operationId, ['funding', 'awaiting_disclosure'], 60_000)
-    log(`fault: funding trigger — buyer in ${hit.state}; injecting ${FAULT.verb}${FAULT.arg !== undefined ? `:${FAULT.arg}` : ''}`)
-    await injectFault(FAULT)
-  }
-  if (FAULT?.trigger === 'funded') {
-    // inject the moment escrow is broadcast but before delivery can land —
-    // 'awaiting_disclosure' is the post-escrow/pre-disclosure window
-    const hit = await waitState(bob, operationId, ['awaiting_disclosure', 'disclosure_verified', 'refunded', 'refunding', 'expired', 'funding_failed', 'denied', 'uncertain', 'disputed', 'useful'])
-    log(`fault: funded trigger — buyer in ${hit.state}; injecting ${FAULT.verb}${FAULT.arg !== undefined ? `:${FAULT.arg}` : ''}`)
-    await injectFault(FAULT)
-  }
-  const op = await waitState(bob, operationId, ['disclosure_verified', 'refunded', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed', 'useful'])
-  const verifiedMs = Date.now() - wantAt
-  const dealBlocks = blocksMined - wantAtBlocks
-  if (EXPECT === 'refunded') {
-    if (op.state !== 'refunded') throw new Error(`expected refund — buyer ended in ${op.state}: ${op.lastError ?? ''}`)
-    const rtx = op.data?.refundTxid
-    if (typeof rtx !== 'string' || rtx.length !== 64) throw new Error(`refunded op carries no refundTxid: ${JSON.stringify(op.data).slice(0, 200)}`)
-    const seen = await fetch(`${TESTNET.wocUrl}/tx/${rtx}`).then((r) => r.ok).catch(() => false)
-    log(`PASS — refund fired: op refunded, refund tx ${rtx.slice(0, 12)}… broadcast${seen === true ? ' (WoC-visible)' : ' (WoC lookup pending)'} after ${(verifiedMs / 1000).toFixed(0)}s`)
-    writeFileSync(join(dir, 'summary.json'), JSON.stringify({ runId, outcome: 'PASS', expect: 'refunded', fault: FAULT, refundTxid: rtx, wallClockMsToRefunded: verifiedMs }, null, 1))
-  }
-  if (EXPECT === 'verified' && op.state !== 'disclosure_verified') throw new Error(`buyer ended in ${op.state}: ${op.lastError ?? ''}`)
-
-  // ---- assertions ----------------------------------------------------------
-  verified: {
-    if (EXPECT !== 'verified') break verified
-    const offers = Object.values(op.data.offers ?? {}).map((o) => ({ pub: o.so?.offer?.pub, price: Number(o.so?.offer?.priceSats) }))
-  const prices = offers.map((o) => o.price).sort((x, y) => x - y)
-  if (JSON.stringify(prices) !== JSON.stringify([200, 300, 450])) throw new Error(`recorded offers ${JSON.stringify(prices)} — expected [200,300,450]`)
-  const sel = op.data.selected.key
-  if (sel.split(':')[0] !== cara.pub) throw new Error(`selected ${sel.split(':')[0].slice(0, 12)}… — expected cara's 200-sat offer`)
-  if (op.result?.text !== FINDING) throw new Error('deals.result.text differs from the sold finding')
-  if (op.journal?.counterparty?.complete !== true) throw new Error(`counterparty journal incomplete: ${JSON.stringify(op.journal?.counterparty).slice(0, 300)}`)
-  // the seller holds her recovery note until the sale op settles (collect tx
-  // proven) — on regtest wait for that settle before demanding an empty box,
-  // so the assertion also verifies the collect-proof-settle chain. on testnet
-  // the runner accepts the note as post-deal bookkeeping instead of waiting
-  // for a block.
-  if (!LIVE) {
-    const settleUntil = Date.now() + 90_000
-    for (;;) {
-      const d = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
-      if (d?.state === 'settled' || Date.now() > settleUntil) break
-      await delay(2000)
-    }
-  }
-  for (const a of [bob, cara]) {
-    let b
-    const until = Date.now() + 30000
-    do {
-      b = await inboxEmpty(a, op.wantId, LIVE && a === cara)
-      if (!b.empty) await delay(1000)
-    } while (!b.empty && Date.now() < until)
-    if (!b.empty) throw new Error(`${a.name} inbox not empty on ${b.host} (${b.items} item(s): ${b.detail ?? ''}) after settlement`)
-  }
-  const sellerOp = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
-  const sellerState = sellerOp?.state
-  if (sellerState !== 'completion_submitted' && sellerState !== 'settled')
-    throw new Error(`cara seller op in ${sellerState ?? 'missing'} — expected completion_submitted or settled`)
-  // per-hop latency, off the event journals (same machine → comparable clocks):
-  // escrow_broadcast(buyer) → escrow_verified(seller) and
-  // disclosure_broadcast(seller) → disclosure_verified(buyer)
-  const hopMs = await (async () => {
-    try {
-      const at = (evs, cause) => evs.find((e) => e.cause === cause)?.at
-      const bev = (await tool(bob, 'deals', { operationId })).events ?? []
-      const sev = (await tool(cara, 'deals', { operationId: sellerOp.operationId })).events ?? []
-      const e1 = at(bev, 'escrow_broadcast'),
-        e2 = at(sev, 'escrow_verified')
-      const e3 = at(sev, 'disclosure_broadcast'),
-        e4 = at(bev, 'disclosure_verified')
-      return {
-        escrowBroadcastToSellerVerified: e1 !== undefined && e2 !== undefined ? e2 - e1 : null,
-        disclosureBroadcastToBuyerVerified: e3 !== undefined && e4 !== undefined ? e4 - e3 : null
+    if (EXPECT === 'guard') {
+      // money-safety probe: a want priced over the guard's per-purchase cap must
+      // be refused before anything is broadcast — zero escrow txs must exist.
+      // escrowTxids from earlier deals stay listed, so diff before/after
+      const txOf = (o) => o.escrowTxid ?? o.data?.escrowTxid
+      const before = new Set((await tool(bob, 'deals', {})).deals?.map(txOf).filter(Boolean) ?? [])
+      let refused = ''
+      try {
+        await tool(bob, 'want', { domains: ['libfoo'], question: QUESTION, maxSats: 600 })
+      } catch (e) {
+        refused = String(e?.message ?? e)
       }
-    } catch {
-      return { escrowBroadcastToSellerVerified: null, disclosureBroadcastToBuyerVerified: null }
+      if (!/per-purchase limit/.test(refused)) throw new Error(`over-cap want was not refused by the guard: ${refused || '(no refusal — want accepted)'}`)
+      const after = (await tool(bob, 'deals', {})).deals?.map(txOf).filter(Boolean) ?? []
+      const escrows = after.filter((t) => !before.has(t))
+      if (escrows.length > 0) throw new Error(`refused want still produced escrow txs: ${JSON.stringify(escrows)}`)
+      log(`PASS — guard refused 600-sat want (cap 500), zero escrow broadcasts | refusal: ${refused.slice(0, 80)}`)
+      writeFileSync(join(dir, 'summary.json'), JSON.stringify({ runId, outcome: 'PASS', expect: 'guard', refusal: refused }, null, 1))
+      break deal
     }
-  })()
-  for (const a of agents) {
-    const f = join(a.dataDir, 'tx-log.jsonl')
-    if (!existsSync(f)) throw new Error(`${a.name}: no tx log at ${f}`)
-    const lines = readFileSync(f, 'utf8')
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((l) => JSON.parse(l))
-    a.txCount = lines.length
-    for (const l of lines) {
-      for (const k of ['t', 'txid', 'bytes', 'inSats', 'outSats', 'feeSats']) if (!(k in l)) throw new Error(`${a.name} tx-log line missing ${k}`)
-      if (l.inSats !== null && l.feeSats !== l.inSats - l.outSats) throw new Error(`${a.name} tx-log fee mismatch`)
+    log('want: posting (deal clock starts)')
+    const wantAt = Date.now()
+    const wantAtBlocks = blocksMined
+    const { operationId } = await tool(bob, 'want', { domains: ['libfoo'], question: QUESTION, maxSats: 500 })
+    if (FAULT?.trigger === 'want') await injectFault(FAULT)
+    if (FAULT?.trigger === 'funding') {
+      // inject inside the pay window — escrow is being assembled/broadcast; the
+      // respawned agent must not produce a second escrow for the same op
+      const hit = await waitState(bob, operationId, ['funding', 'awaiting_disclosure'], 60_000)
+      log(`fault: funding trigger — buyer in ${hit.state}; injecting ${FAULT.verb}${FAULT.arg !== undefined ? `:${FAULT.arg}` : ''}`)
+      await injectFault(FAULT)
     }
-  }
-  const summary = {
-    runId,
-    network: NET,
-    outcome: 'PASS',
-    provisionedAgentsReused: REUSE,
-    instances: agents.map((a) => ({ name: a.name, pub: a.pub, dataDir: a.dataDir, port: Number(a.url.split(':').pop()) })),
-    buyerOperationId: operationId,
-    wantId: op.wantId,
-    escrowTxid: op.escrowTxid,
-    disclosureTxid: op.disclosureTxid,
-    sellerState,
-    wallClockMsToDisclosureVerified: verifiedMs,
-    hopMs,
-    blocksMinedDuringDeal: dealBlocks,
-    hosts: { a: HOST_A, b: HOST_B },
-    fingerResolved: true,
-    broadcasts: Object.fromEntries(agents.map((a) => [a.name, a.txCount]))
-  }
-  writeFileSync(join(dir, 'summary.json'), JSON.stringify(summary, null, 1))
-  log(`PASS — disclosure verified in ${(verifiedMs / 1000).toFixed(1)}s over ${dealBlocks} blocks`)
-  log(`  hops: escrow→seller ${hopMs.escrowBroadcastToSellerVerified ?? '?'}ms, disclosure→buyer ${hopMs.disclosureBroadcastToBuyerVerified ?? '?'}ms`)
-  log(
-    `  offers 200/300/450 recorded; cara's 200-sat offer selected; escrow ${String(op.escrowTxid).slice(0, 12)}… disclosure ${String(op.disclosureTxid).slice(0, 12)}…`
-  )
-  log(`  counterparty journal complete; bob+cara inboxes empty on both hosts${LIVE ? ' (seller note held until proof)' : ''}`)
-  log(`  tx logs: ${agents.map((a) => `${a.name}=${a.txCount}`).join(' ')}`)
-  log(`  summary: ${join(dir, 'summary.json')}`)
-  }
+    if (FAULT?.trigger === 'funded') {
+      // inject the moment escrow is broadcast but before delivery can land —
+      // 'awaiting_disclosure' is the post-escrow/pre-disclosure window
+      const hit = await waitState(bob, operationId, [
+        'awaiting_disclosure',
+        'disclosure_verified',
+        'refunded',
+        'refunding',
+        'expired',
+        'funding_failed',
+        'denied',
+        'uncertain',
+        'disputed',
+        'useful'
+      ])
+      log(`fault: funded trigger — buyer in ${hit.state}; injecting ${FAULT.verb}${FAULT.arg !== undefined ? `:${FAULT.arg}` : ''}`)
+      await injectFault(FAULT)
+    }
+    const op = await waitState(bob, operationId, ['disclosure_verified', 'refunded', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed', 'useful'])
+    const verifiedMs = Date.now() - wantAt
+    const dealBlocks = blocksMined - wantAtBlocks
+    if (EXPECT === 'refunded') {
+      if (op.state !== 'refunded') throw new Error(`expected refund — buyer ended in ${op.state}: ${op.lastError ?? ''}`)
+      const rtx = op.data?.refundTxid
+      if (typeof rtx !== 'string' || rtx.length !== 64) throw new Error(`refunded op carries no refundTxid: ${JSON.stringify(op.data).slice(0, 200)}`)
+      const seen = await fetch(`${TESTNET.wocUrl}/tx/${rtx}`)
+        .then((r) => r.ok)
+        .catch(() => false)
+      log(
+        `PASS — refund fired: op refunded, refund tx ${rtx.slice(0, 12)}… broadcast${seen === true ? ' (WoC-visible)' : ' (WoC lookup pending)'} after ${(verifiedMs / 1000).toFixed(0)}s`
+      )
+      writeFileSync(
+        join(dir, 'summary.json'),
+        JSON.stringify({ runId, outcome: 'PASS', expect: 'refunded', fault: FAULT, refundTxid: rtx, wallClockMsToRefunded: verifiedMs }, null, 1)
+      )
+    }
+    if (EXPECT === 'verified' && op.state !== 'disclosure_verified') throw new Error(`buyer ended in ${op.state}: ${op.lastError ?? ''}`)
+
+    // ---- assertions ----------------------------------------------------------
+    verified: {
+      if (EXPECT !== 'verified') break verified
+      const offers = Object.values(op.data.offers ?? {}).map((o) => ({ pub: o.so?.offer?.pub, price: Number(o.so?.offer?.priceSats) }))
+      const prices = offers.map((o) => o.price).sort((x, y) => x - y)
+      if (JSON.stringify(prices) !== JSON.stringify([200, 300, 450])) throw new Error(`recorded offers ${JSON.stringify(prices)} — expected [200,300,450]`)
+      const sel = op.data.selected.key
+      if (sel.split(':')[0] !== cara.pub) throw new Error(`selected ${sel.split(':')[0].slice(0, 12)}… — expected cara's 200-sat offer`)
+      if (op.result?.text !== FINDING) throw new Error('deals.result.text differs from the sold finding')
+      if (op.journal?.counterparty?.complete !== true)
+        throw new Error(`counterparty journal incomplete: ${JSON.stringify(op.journal?.counterparty).slice(0, 300)}`)
+      // the seller holds her recovery note until the sale op settles (collect tx
+      // proven) — on regtest wait for that settle before demanding an empty box,
+      // so the assertion also verifies the collect-proof-settle chain. on testnet
+      // the runner accepts the note as post-deal bookkeeping instead of waiting
+      // for a block.
+      if (!LIVE) {
+        const settleUntil = Date.now() + 90_000
+        for (;;) {
+          const d = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
+          if (d?.state === 'settled' || Date.now() > settleUntil) break
+          await delay(2000)
+        }
+      }
+      for (const a of [bob, cara]) {
+        let b
+        const until = Date.now() + 30000
+        do {
+          b = await inboxEmpty(a, op.wantId, LIVE && a === cara)
+          if (!b.empty) await delay(1000)
+        } while (!b.empty && Date.now() < until)
+        if (!b.empty) throw new Error(`${a.name} inbox not empty on ${b.host} (${b.items} item(s): ${b.detail ?? ''}) after settlement`)
+      }
+      const sellerOp = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
+      const sellerState = sellerOp?.state
+      if (sellerState !== 'completion_submitted' && sellerState !== 'settled')
+        throw new Error(`cara seller op in ${sellerState ?? 'missing'} — expected completion_submitted or settled`)
+      // per-hop latency, off the event journals (same machine → comparable clocks):
+      // escrow_broadcast(buyer) → escrow_verified(seller) and
+      // disclosure_broadcast(seller) → disclosure_verified(buyer)
+      const hopMs = await (async () => {
+        try {
+          const at = (evs, cause) => evs.find((e) => e.cause === cause)?.at
+          const bev = (await tool(bob, 'deals', { operationId })).events ?? []
+          const sev = (await tool(cara, 'deals', { operationId: sellerOp.operationId })).events ?? []
+          const e1 = at(bev, 'escrow_broadcast'),
+            e2 = at(sev, 'escrow_verified')
+          const e3 = at(sev, 'disclosure_broadcast'),
+            e4 = at(bev, 'disclosure_verified')
+          return {
+            escrowBroadcastToSellerVerified: e1 !== undefined && e2 !== undefined ? e2 - e1 : null,
+            disclosureBroadcastToBuyerVerified: e3 !== undefined && e4 !== undefined ? e4 - e3 : null
+          }
+        } catch {
+          return { escrowBroadcastToSellerVerified: null, disclosureBroadcastToBuyerVerified: null }
+        }
+      })()
+      for (const a of agents) {
+        const f = join(a.dataDir, 'tx-log.jsonl')
+        if (!existsSync(f)) throw new Error(`${a.name}: no tx log at ${f}`)
+        const lines = readFileSync(f, 'utf8')
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map((l) => JSON.parse(l))
+        a.txCount = lines.length
+        for (const l of lines) {
+          for (const k of ['t', 'txid', 'bytes', 'inSats', 'outSats', 'feeSats']) if (!(k in l)) throw new Error(`${a.name} tx-log line missing ${k}`)
+          if (l.inSats !== null && l.feeSats !== l.inSats - l.outSats) throw new Error(`${a.name} tx-log fee mismatch`)
+        }
+      }
+      const summary = {
+        runId,
+        network: NET,
+        outcome: 'PASS',
+        provisionedAgentsReused: REUSE,
+        instances: agents.map((a) => ({ name: a.name, pub: a.pub, dataDir: a.dataDir, port: Number(a.url.split(':').pop()) })),
+        buyerOperationId: operationId,
+        wantId: op.wantId,
+        escrowTxid: op.escrowTxid,
+        disclosureTxid: op.disclosureTxid,
+        sellerState,
+        wallClockMsToDisclosureVerified: verifiedMs,
+        hopMs,
+        blocksMinedDuringDeal: dealBlocks,
+        hosts: { a: HOST_A, b: HOST_B },
+        fingerResolved: true,
+        broadcasts: Object.fromEntries(agents.map((a) => [a.name, a.txCount]))
+      }
+      writeFileSync(join(dir, 'summary.json'), JSON.stringify(summary, null, 1))
+      log(`PASS — disclosure verified in ${(verifiedMs / 1000).toFixed(1)}s over ${dealBlocks} blocks`)
+      log(`  hops: escrow→seller ${hopMs.escrowBroadcastToSellerVerified ?? '?'}ms, disclosure→buyer ${hopMs.disclosureBroadcastToBuyerVerified ?? '?'}ms`)
+      log(
+        `  offers 200/300/450 recorded; cara's 200-sat offer selected; escrow ${String(op.escrowTxid).slice(0, 12)}… disclosure ${String(op.disclosureTxid).slice(0, 12)}…`
+      )
+      log(`  counterparty journal complete; bob+cara inboxes empty on both hosts${LIVE ? ' (seller note held until proof)' : ''}`)
+      log(`  tx logs: ${agents.map((a) => `${a.name}=${a.txCount}`).join(' ')}`)
+      log(`  summary: ${join(dir, 'summary.json')}`)
+    }
   }
 } catch (e) {
   writeFileSync(join(dir, 'summary.json'), JSON.stringify({ runId, outcome: 'FAIL', error: e.message }, null, 1))

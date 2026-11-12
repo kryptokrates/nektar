@@ -38,7 +38,16 @@ interface Rig {
   publish: (body: FingerBody) => Promise<{ changed: boolean; seq: number; carrierTxid?: string; tokenTxid?: string }>
 }
 
-async function rig(o: { failH1?: () => boolean; noproof?: boolean; provenFunding?: boolean; gapFunding?: boolean; liveMempool?: boolean; refuseBroadcast?: (tx: Transaction) => string | undefined } = {}): Promise<Rig> {
+async function rig(
+  o: {
+    failH1?: () => boolean
+    noproof?: boolean
+    provenFunding?: boolean
+    gapFunding?: boolean
+    liveMempool?: boolean
+    refuseBroadcast?: (tx: Transaction) => string | undefined
+  } = {}
+): Promise<Rig> {
   const tracker = new FakeTracker()
   const h1 = await minihost([], { tracker, finger: true, ...(o.failH1 !== undefined ? { failNext: () => o.failH1!() } : {}) })
   const h2 = await minihost([], { tracker, finger: true })

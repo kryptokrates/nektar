@@ -382,6 +382,9 @@ The trial report is written to `artifacts/model-trials/report.json`.
   measures ~1 s from escrow broadcast to seller verification and ~1.3 s from
   the seller's reveal to buyer verification — the whole deal in ~12 s over 0
   blocks (`hopMs` in the run's summary.json).
+- *Field history — the next two reports ran on the removed rendezvous+mailbox
+  transport and the retired Hetzner deployment. Kept as provenance; the
+  current transport is bstack carriers over the host pair above.*
 - **Testnet (Hetzner, real rendezvous + mailbox, two live instances):** this ran on the previous rendezvous + mailbox transport, which has since been removed from the automation runtime. The
   autonomous purchase loop ran end to end — signed want admitted to the feed,
   seller matched a level-0 record, signed a buyer-bound offer, buyer selected,
@@ -397,12 +400,14 @@ The trial report is written to `artifacts/model-trials/report.json`.
   sellers running an `agentSeed` (encrypted-by-default) can now match wants —
   `marketCandidates` decrypts own records for matching while the sale still
   delivers only the fragment key.
-- **Object plane:** the bstore stack (host/provider/gateway/MySQL, testnet) is
-  deployed on the Hetzner box. The gateway identity needed a second UTXO for
-  fee inputs — funded; the host lost its MySQL connection at boot and reports
-  `ready=false` until restarted. No object-plane delivery demonstrated yet —
-  at the time the runtime transport was HTTPS rendezvous + encrypted mailbox,
-  since removed from the automation runtime.
+- **Object plane (historical):** the bstore stack (host/provider/gateway/
+  MySQL, testnet) was deployed on the Hetzner box, which has since been
+  retired — there is no current Hetzner dependency. The gateway identity
+  needed a second UTXO for fee inputs — funded; the host lost its MySQL
+  connection at boot and reported `ready=false` until restarted. No
+  object-plane delivery was demonstrated on that deployment — at the time
+  the runtime transport was HTTPS rendezvous + encrypted mailbox, since
+  removed from the automation runtime.
 - Reserve/provider fixes exercised live: `takeReserve` applies a 546-sat dust
   floor on bare calls, `reconcile` revives/prunes entries against chain truth
   (phantom entries pruned; spent marks no longer drop records),

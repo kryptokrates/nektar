@@ -89,17 +89,14 @@ export function configFromEnv (env = process.env): RuntimeConfig {
     const urls = network === 'testnet'
       ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', woc: 'https://api.whatsonchain.com/v1/bsv/test' }
       : network === 'ttn' ? { broadcaster: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech', woc: 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test' } : undefined
-    const legacyBroadcaster = env.NEKTAR_ARC_URL !== undefined || env.NEKTAR_ARC_API_KEY !== undefined || env.NEKTAR_ARC_API_KEY_FILE !== undefined
-    const newBroadcaster = env.NEKTAR_BROADCASTER_URL !== undefined || env.NEKTAR_BROADCASTER_API_KEY !== undefined || env.NEKTAR_BROADCASTER_API_KEY_FILE !== undefined
-    if (legacyBroadcaster && !newBroadcaster) process.stderr.write('nektar: NEKTAR_ARC_URL is deprecated — use NEKTAR_BROADCASTER_URL\n')
     cfg.confirmEveryMs = Number(env.NEKTAR_CONFIRM_MS ?? (ttn ? 30_000 : 60_000))
     cfg.main = {
       fundWif: secret('NEKTAR_FUND_WIF'),
       passphrase: secret('NEKTAR_KEY_PASSPHRASE'),
       // TTN defaults: BSV Broadcaster + WoC-TTN endpoints (probed live); main
       // keeps the built-in GorillaPool/WoC defaults when env vars are unset
-      broadcasterUrl: env.NEKTAR_BROADCASTER_URL ?? env.NEKTAR_ARC_URL ?? urls?.broadcaster,
-      broadcasterApiKey: secret('NEKTAR_BROADCASTER_API_KEY') ?? secret('NEKTAR_ARC_API_KEY'),
+      broadcasterUrl: env.NEKTAR_BROADCASTER_URL ?? urls?.broadcaster,
+      broadcasterApiKey: secret('NEKTAR_BROADCASTER_API_KEY'),
       wocUrl: env.NEKTAR_WOC_URL ?? urls?.woc,
       wocApiKey: secret('NEKTAR_WOC_API_KEY'),
       chaintracksUrl: env.NEKTAR_CHAINTRACKS_URL,

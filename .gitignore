@@ -42,3 +42,5 @@ test/fixtures/swarm-keys/
 packages/bstack/bundle/
 labs/bstack-spike/
 deploy/bstack-sandbox/modules/
+# rendered media pipeline output (tools/render-nektar-* regenerates on demand)
+artifacts/nektar-video/

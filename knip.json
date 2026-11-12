@@ -58,6 +58,7 @@
   },
   "rules": {
     "exports": "error",
-    "types": "error"
+    "types": "error",
+    "files": "error"
   }
 }

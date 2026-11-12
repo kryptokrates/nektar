@@ -36,7 +36,7 @@ flowchart TB
     AUT["NektarAutomaton — δ enforced on-chain"]
   end
   subgraph L0["L0 BSV"]
-    TN["Teranode (Chronicle) · headers · BEEF/BUMP · overlay (tm_nektar / ls_nektar, GASP)"]
+    TN["Teranode (Chronicle) · headers · BEEF/BUMP · hosts serve tm_* lanes"]
   end
   MCP --> RS --> DAG --> AORG
   MCP --> CED
@@ -60,7 +60,7 @@ flowchart LR
   chain --> anchor
   log --> anchor
   identity --> anchor
-  anchor --> overlay
+  chain --> bstack
   contracts --> verify
   chain --> verify
   core --> crypto
@@ -72,7 +72,7 @@ flowchart LR
   identity --> aorg
   contracts --> automaton
   anchor --> automaton
-  anchor & overlay & verify & crypto & identity & zk & aorg & datalog & policy & automaton --> mcp
+  anchor & bstack & verify & crypto & identity & zk & aorg & datalog & policy & automaton --> mcp
   mcp & aorg & verify & datalog --> reasoning
   mcp & reasoning --> e2e
   mcp & zk & automaton & identity --> fuzz
@@ -182,21 +182,29 @@ flowchart TB
   v1 & v2 --> comb["verifyCombined: same nonce, same queryId"]
 ```
 
-## 9. Overlay synchronisation (GASP)
+## 9. Instance synchronisation — bstack carriers
 
 ```mermaid
 sequenceDiagram
-  participant H1 as overlay host 1 (tm_nektar)
-  participant H2 as overlay host 2 (empty)
-  H2->>H1: GASP initial request (since)
-  H1-->>H2: UTXO list (shard heads)
-  loop each head
-    H2->>H1: request node (anchor tx + BUMP + topical ancestors)
-    H1-->>H2: graph node
-    H2->>H2: tm_nektar admits only a valid successor of the known head<br/>(forged genesis / non-head spend rejected)
-  end
-  Note over H2: converges to host 1 heads, including rotations
+  participant A as agent A
+  participant H1 as host 1 (tm_nektar_* lanes)
+  participant H2 as host 2 (tm_nektar_* lanes)
+  participant B as agent B
+  A->>H1: signed carrier (funding-tree spend, expiry)
+  A->>H2: same carrier
+  Note over H1,H2: host module admits only proven-tree carriers,<br/>fresh signatures, unexpired artifacts
+  B->>H1: read lane
+  B->>H2: read lane (parallel, quorum)
+  H1 & H2-->>B: envelopes / records
+  Note over B: verifies signatures + BEEF/SPV locally —<br/>hosts are relays, never trust roots
 ```
+
+Artifacts move as carriers on `tm_*` lanes admitted by each host's module —
+wants/offers on `tm_nektar_<net>_<lane>`, deal envelopes via bbox, identity
+records via bfinger (`tm_finger`), journals via blogs (`tm_log_*`). Knowledge
+shards transfer as verified packs over `/v1/pack/{shard}` or `importShard` —
+there is no chain-side UTXO sync between hosts; the old GASP overlay sync was
+removed with the rendezvous transport.
 
 ## 10. Reasoning, correction and audit
 

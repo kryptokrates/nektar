@@ -1,5 +1,5 @@
 // NektarMemory — the product service the MCP server wraps.
-// Wires log (append/batch) → anchor (head UTXO per shard) → overlay (submit)
+// Wires log (append/batch) → anchor (head UTXO per shard) → broadcast
 // → verify (proof bundles) → crypto (BRC-42/AES-GCM), all behind the chain
 // interfaces so it runs identically on the mock chain and regtest.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

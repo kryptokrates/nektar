@@ -165,7 +165,20 @@ export class StackChain implements ChainTracker, Broadcaster {
 // ---------------------------------------------------------------------------
 // treasury + funder — real funded keys on the real chain
 
-const STATE_DIR = join(process.cwd(), '.state')
+// .state lives beside the repo-root .env (the same upward walk loadRepoEnv
+// does) — resolving it per-cwd meant each package dir kept its own reserve,
+// and a package without one re-scanned ~2900 coinbase blocks under the lock.
+function stateDir(): string {
+  let dir = process.cwd()
+  for (let up = 0; up < 5; up++) {
+    if (existsSync(join(dir, '.env'))) return join(dir, '.state')
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return join(process.cwd(), '.state')
+}
+const STATE_DIR = stateDir()
 
 /** shared treasury: the same key/file real-stack + e2e-regtest use. Opens
  *  once per process; stackFunder splits reserve outputs into fresh keys. */

@@ -1,0 +1,17 @@
+{
+  "as-any": {
+    "packages/anchor": 17,
+    "packages/chain": 3,
+    "packages/crypto": 3,
+    "packages/e2e": 20,
+    "packages/identity": 12,
+    "packages/mcp": 36,
+    "packages/policy": 6
+  },
+  "ts-suppress": {},
+  "markers": {},
+  "debug-output": {},
+  "commented-code": {
+    "packages/mcp": 5
+  }
+}

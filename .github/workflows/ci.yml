@@ -90,7 +90,7 @@ jobs:
       - name: pnpm
         run: corepack enable && corepack prepare pnpm@12.16.1 --activate
       - run: pnpm install --frozen-lockfile
-      - name: lint · format · version consistency · declared imports · dep graph · dead code
+      - name: lint (incl. type-aware) · format · version consistency · declared imports · dep graph · dead code · dupes · leftovers · secrets
         run: pnpm check:hygiene
       - name: shellcheck
         run: git ls-files '*.sh' | xargs shellcheck

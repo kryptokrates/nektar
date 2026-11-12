@@ -213,31 +213,49 @@ async function fundAgentsLive() {
   }
   const conf = await (await woc(`/address/${treasuryAddr}/unspent`)).json()
   const unconf = (await (await woc(`/address/${treasuryAddr}/unconfirmed/unspent`)).json()).result ?? []
-  const best = [...conf, ...unconf].sort((x, y) => y.value - x.value)[0]
   const per = 10_000
   const outs = 6
-  if (best === undefined || best.value < agents.length * per * outs + 10_000)
-    throw new Error(`testnet treasury ${treasuryAddr} underfunded: ${best?.value ?? 0} sats`)
-  const parent = Transaction.fromHex((await (await woc(`/tx/${best.tx_hash}/hex`)).text()).trim())
-  const split = new Transaction()
-  split.addInput({ sourceTransaction: parent, sourceOutputIndex: best.tx_pos, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
-  for (const a of agents) {
-    a.key = PrivateKey.fromRandom()
-    for (let i = 0; i < outs; i++) split.addOutput({ lockingScript: new P2PKH().lock(a.key.toPublicKey().toAddress([0x6f])), satoshis: per })
-  }
-  split.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), change: true })
-  await split.fee(new SatoshisPerKilobyte(100))
-  await split.sign()
+  const need = agents.length * per * outs + 10_000
+  for (const a of agents) a.key = PrivateKey.fromRandom()
   writeFileSync(join(AGENTS_DIR, 'agent-keys.json'), JSON.stringify(Object.fromEntries(agents.map((a) => [a.name, a.key.toWif([0xef])]))), { mode: 0o600 })
-  const r = await broadcaster.broadcast(split)
-  if (r.status !== 'success') throw new Error(`treasury split refused: ${r.description}`)
-  for (const a of agents) {
-    a.dataDir = join(AGENTS_DIR, a.name)
-    mkdirSync(a.dataDir, { recursive: true })
-    a.fundHex = split.toHex()
+  // an aborted run can leave one of our own prior splits holding the outpoint
+  // WoC still lists — the broadcaster accepts the submit then REJECTS once the
+  // mempool conflict resolves, so settle-watch the status before trusting it
+  for (const best of [...conf, ...unconf].sort((x, y) => y.value - x.value)) {
+    if (best.value < need) break
+    const parent = Transaction.fromHex((await (await woc(`/tx/${best.tx_hash}/hex`)).text()).trim())
+    const split = new Transaction()
+    split.addInput({ sourceTransaction: parent, sourceOutputIndex: best.tx_pos, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
+    for (const a of agents) for (let i = 0; i < outs; i++) split.addOutput({ lockingScript: new P2PKH().lock(a.key.toPublicKey().toAddress([0x6f])), satoshis: per })
+    split.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), change: true })
+    await split.fee(new SatoshisPerKilobyte(100))
+    await split.sign()
+    const r = await broadcaster.broadcast(split)
+    if (r.status !== 'success') {
+      log(`treasury split refused (${r.description}) — next candidate`)
+      continue
+    }
+    let rejected = ''
+    for (let i = 0; i < 3 && rejected === ''; i++) {
+      await delay(5000)
+      const st = await fetch(`${TESTNET.broadcasterUrl}/tx/${split.id('hex')}`, { signal: AbortSignal.timeout(10_000) })
+        .then((x) => (x.ok ? x.json() : null))
+        .catch(() => null)
+      if (st?.txStatus === 'REJECTED') rejected = st.extraInfo ?? ''
+    }
+    if (rejected !== '') {
+      log(`split ${split.id('hex').slice(0, 12)}… rejected: ${rejected.slice(0, 100)} — next candidate`)
+      continue
+    }
+    for (const a of agents) {
+      a.dataDir = join(AGENTS_DIR, a.name)
+      mkdirSync(a.dataDir, { recursive: true })
+      a.fundHex = split.toHex()
+    }
+    log(`treasury split ${split.id('hex')} (${split.toBinary().length} bytes, fee ${split.getFee()} sats) → ${agents.length}×${outs}×${per} sats`)
+    return split.id('hex')
   }
-  log(`treasury split ${split.id('hex')} (${split.toBinary().length} bytes, fee ${split.getFee()} sats) → ${agents.length}×${outs}×${per} sats`)
-  return split.id('hex')
+  throw new Error(`testnet treasury ${treasuryAddr} underfunded or every candidate UTXO contested`)
 }
 async function fundAgents() {
   if (LIVE) return await fundAgentsLive()

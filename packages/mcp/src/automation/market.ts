@@ -509,6 +509,27 @@ export class MarketEngine {
             await this.d.store.transition(cur.operationId, cur.revision, cur.state, { cause: 'tick_error', lastError: (e as Error).message.slice(0, 500) })
         }
       }
+      // a refund accepted at submit then rejected by the network must not sit
+      // in 'refunded' claiming the money came back — the outpoint went to the
+      // seller. escrow (advance) and collect (completion_submitted) already
+      // reconcile late rejections; this is the same watch for refundTxid,
+      // bounded to the 60 min after the transition — post-submit rejections
+      // surface within a couple of blocks on a slow chain
+      for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'] })) {
+        try {
+          const txid = op.data.refundTxid as string | undefined
+          if (txid === undefined || this.d.txState === undefined || this.now() - op.updatedAt > 60 * 60_000) continue
+          if (!this.reconcileGate(op.operationId, txid)) continue
+          if ((await this.d.txState(txid)) === 'rejected')
+            await this.d.store.transition(op.operationId, op.revision, 'uncertain', {
+              cause: 'refund_rejected',
+              data: { refundTxid: txid },
+              dueHeight: null
+            })
+        } catch {
+          /* status probes must not stall the tick */
+        }
+      }
       await this.flush()
     })
   }

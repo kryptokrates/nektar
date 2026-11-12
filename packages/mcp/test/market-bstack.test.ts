@@ -36,6 +36,7 @@ const bus = () => {
   }
 }
 
+const COLLECT_MS = 2500
 const policyFor = (pub: string): AutomationPolicy => ({
   v: 1,
   policyId: 'demo',
@@ -58,7 +59,7 @@ const policyFor = (pub: string): AutomationPolicy => ({
   // collectMs is on cfg.now() — the virtual clock only advances 500ms per
   // pumped round, so 8000 cost 16 rounds (~25s) of every deal before scoring.
   // 2500 (5 rounds) still lets multi-seller offers land before select().
-  scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 2500 },
+  scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: COLLECT_MS },
   seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 5, sellableShards: ['guide'] },
   disclosure: { allowPublic: false },
   ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
@@ -485,7 +486,7 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
     assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'no deal | ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!
     const sw = (bo.data.want as { want: { ts: number; exp?: number } }).want
-    assert.equal(sw.exp, sw.ts + 8000, 'want expires with its collect window')
+    assert.equal(sw.exp, sw.ts + COLLECT_MS, 'want expires with its collect window')
     const sel = (bo.data.selected as { key: string }).key
     const so = (bo.data.offers as Record<string, { so: { offer: { exp?: number } } }>)[sel].so
     assert.ok(Number.isSafeInteger(so.offer.exp), 'offer carries a signed expiry')

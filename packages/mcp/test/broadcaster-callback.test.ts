@@ -8,7 +8,7 @@ import type { Server } from 'node:http'
 const serve = async (): Promise<{ chain: MockChain; funder: MockFunder; mem: NektarMemory; srv: Server; base: string }> => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair)
   const srv = createHttpApi(mem).listen(0)
   await new Promise((r) => srv.once('listening', r))
@@ -39,7 +39,7 @@ const bodyOf = (txid: string, mp?: { blockHeight: number; toHex: () => string })
   ...(mp ? { blockHeight: mp.blockHeight, merklePath: mp.toHex() } : {})
 })
 
-test('broadcaster callback: MINED with a valid BUMP delivers the proof once', async () => {
+test('broadcaster callback: MINED with a valid BUMP delivers the proof once', async t => {
   const { chain, funder, mem, srv, base } = await serve()
   try {
     const { txid, mp } = await minedTx(chain, funder)
@@ -58,7 +58,7 @@ test('broadcaster callback: MINED with a valid BUMP delivers the proof once', as
   }
 })
 
-test('broadcaster callback: BUMP for a different txid or an invalid root is ignored (still 200)', async () => {
+test('broadcaster callback: BUMP for a different txid or an invalid root is ignored (still 200)', async t => {
   const { chain, funder, mem, srv, base } = await serve()
   try {
     const { mp } = await minedTx(chain, funder)
@@ -80,7 +80,7 @@ test('broadcaster callback: BUMP for a different txid or an invalid root is igno
   }
 })
 
-test('broadcaster callback: legacy /v1/arc-callback path still works', async () => {
+test('broadcaster callback: legacy /v1/arc-callback path still works', async t => {
   const { chain, funder, mem, srv, base } = await serve()
   try {
     const { txid, mp } = await minedTx(chain, funder)
@@ -96,7 +96,7 @@ test('broadcaster callback: legacy /v1/arc-callback path still works', async () 
   }
 })
 
-test('broadcaster callback: NEKTAR_CALLBACK_TOKEN gates the webhook (Authorization: Bearer)', async () => {
+test('broadcaster callback: NEKTAR_CALLBACK_TOKEN gates the webhook (Authorization: Bearer)', async t => {
   const { chain, funder, mem, srv, base } = await serve()
   const prev = process.env.NEKTAR_CALLBACK_TOKEN
   process.env.NEKTAR_CALLBACK_TOKEN = 'tok-secret'

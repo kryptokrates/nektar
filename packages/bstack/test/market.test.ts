@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { signWant } from '../src/artifacts.js'
+import { claimsRecord, decodeValue, encode as cborEncode, CborMap } from '@lightwebinc/bcommon'
+import { signWant, signOffer } from '../src/artifacts.js'
 import { buildCarrier } from '../src/carrier.js'
-import { encodePayload, lanesFor, laneOf } from '../src/market.js'
+import { decodePayload, encodePayload, lanesFor, laneOf } from '../src/market.js'
 import { createNektarModule } from '../src/module.js'
 import { provenTree } from './helpers.js'
 import { FakeTracker } from '../src/testing.js'
@@ -109,4 +110,60 @@ test('market: expired artifacts leave the index — lookup returns nothing and t
   // the freed outpoint admits a different carrier — proof the entry was dropped
   const second = await wantCarrierExp(k, k, clock + 3_600_000, tree)
   assert.deepEqual((await tm.identifyAdmissibleOutputs(second.beef, [])).outputsToAdmit, [0], 'expired entry released its outpoint')
+})
+
+// ── wire format — v2 canonical record, dual decode ─────────────────────
+const NKT1 = new TextEncoder().encode('nkt1')
+const aWant = () => {
+  const k = PrivateKey.fromRandom()
+  return signWant(k, { domains: ['compute'], question: 'q', net: NET, ts: Date.now(), exp: Date.now() + 60000 })
+}
+
+test('market wire: v2 emits a claimsRecord nkt1 record {magic,kind,body}', () => {
+  const sw = aWant()
+  const b = encodePayload({ v: 1, kind: 'want', body: sw })
+  assert.ok(claimsRecord(b, NKT1), 'payload claims the nkt1 record')
+  const m = decodeValue(b)
+  assert.ok(m instanceof CborMap)
+  assert.equal(m.get(1n), 1n, 'kind 1 = want')
+  const bodyText = m.get(2n)
+  assert.equal(typeof bodyText, 'string')
+  assert.deepEqual(JSON.parse(bodyText as string), sw, 'body is the untouched signed artifact')
+})
+
+test('market wire: v2 and v1 encode the same artifact and both decode', () => {
+  const sw = aWant()
+  const p = { v: 1 as const, kind: 'want' as const, body: sw }
+  const v2 = decodePayload(encodePayload(p))
+  const v1 = decodePayload(encodePayload(p, { legacy: true }))
+  assert.deepEqual(v2, p)
+  assert.deepEqual(v1, p)
+})
+
+test('market wire: offer kind round-trips as kind 2', () => {
+  const k = PrivateKey.fromRandom()
+  const so = signOffer(k, { shard: 's', seq: 0, priceSats: 10, domains: ['compute'], net: NET, ts: Date.now() })
+  const b = encodePayload({ v: 1, kind: 'offer', body: so })
+  assert.equal((decodeValue(b) as CborMap).get(1n), 2n)
+  assert.deepEqual(decodePayload(b), { v: 1, kind: 'offer', body: so })
+})
+
+test('market wire: refuse wrong magic, truncated, non-canonical, missing keys', () => {
+  const sw = aWant()
+  const b = encodePayload({ v: 1, kind: 'want', body: sw })
+  assert.throws(() => decodePayload(b.subarray(0, b.length - 5)), /market payload|bad market payload/)
+  const wrongMagic = new Uint8Array(b)
+  wrongMagic[wrongMagic.indexOf(0x6e)] = 0x78 // 'n' -> 'x' inside 'nkt1'
+  assert.throws(() => decodePayload(wrongMagic), /magic|bad market payload/)
+  assert.throws(() => decodePayload(new TextEncoder().encode('{"v":2,"kind":"want","body":{}}')), /bad market payload/)
+  assert.throws(() => decodePayload(new TextEncoder().encode('{"v":1,"kind":"want"}')), /bad market payload/)
+})
+
+test('market wire: extra keys above 2 are preserved-but-ignored on decode', () => {
+  const sw = aWant()
+  const b = encodePayload({ v: 1, kind: 'want', body: sw })
+  const m = decodeValue(b) as CborMap
+  m.entries.push({ key: 9n, val: 'future-field' })
+  const d = decodePayload(cborEncode(m))
+  assert.equal(d.kind, 'want')
 })

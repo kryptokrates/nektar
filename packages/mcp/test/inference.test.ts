@@ -49,7 +49,7 @@ test('tampered attestation fails validation', () => {
   assert.equal(validateAttestation(att).ok, false)
 })
 
-test('attestInference: off-chain attestation when artifacts absent', async () => {
+test('attestInference: off-chain attestation when artifacts absent', async t => {
   const { mem } = setup()
   const r = await callTool(mem, 'attestInference', {})
   assert.equal(r.onchain, false)
@@ -58,7 +58,7 @@ test('attestInference: off-chain attestation when artifacts absent', async () =>
   assert.match(r.note ?? '', /artifacts absent/)
 })
 
-test('attestInference: non-demo input refused', async () => {
+test('attestInference: non-demo input refused', async t => {
   const { mem } = setup()
   const bad: number[] = [...AIINF_DEMO.input]
   bad[5] = 99
@@ -125,7 +125,7 @@ test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 
   process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 })
 
-test('commitReceipt auto-attests in one call; exclusive with modelAttestation', async () => {
+test('commitReceipt auto-attests in one call; exclusive with modelAttestation', async t => {
   const { mem, settle } = setup()
   const w = await callTool(mem, 'remember', { shard: 'facts', data: 'auto attest' })
   await mem.anchorShard('facts')
@@ -189,7 +189,7 @@ test('attestInference: on-chain when artifacts + funding exist (mock evaluates t
   process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 })
 
-test('commitReceipt embeds a validated attestation; verify shows model check', async () => {
+test('commitReceipt embeds a validated attestation; verify shows model check', async t => {
   const { mem, settle } = setup()
   const w = await callTool(mem, 'remember', { shard: 'facts', data: 'the sky is blue' })
   await mem.anchorShard('facts')
@@ -212,7 +212,7 @@ test('commitReceipt embeds a validated attestation; verify shows model check', a
   assert.equal(v.ok, true)
 })
 
-test('commitReceipt refuses an attestation whose statement does not re-derive', async () => {
+test('commitReceipt refuses an attestation whose statement does not re-derive', async t => {
   const { mem } = setup()
   const att = demoAttestation()
   att.publicStatement = '0xdeadbeef'
@@ -228,7 +228,7 @@ test('commitReceipt refuses an attestation whose statement does not re-derive', 
   )
 })
 
-test('a receipt without attestation shows declared model (info)', async () => {
+test('a receipt without attestation shows declared model (info)', async t => {
   const { mem, settle } = setup()
   const w = await callTool(mem, 'remember', { shard: 'facts', data: 'plain fact' })
   await mem.anchorShard('facts')

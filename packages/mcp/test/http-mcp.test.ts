@@ -13,7 +13,7 @@ process.env.NEKTAR_PAID_DISCLOSURE = '1'
 test('MCP Streamable HTTP: session, tools, call, resource; unknown session rejected', { timeout: 30_000 }, async () => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const srv = createHttpApi(mem).listen(0, '127.0.0.1')
   await new Promise((r) => srv.once('listening', r))

@@ -21,7 +21,7 @@ const mkParent = (key: PrivateKey, satoshis: number, tag: number): Transaction =
   return t
 }
 
-test('takeReserve: smallest-sufficient pick — dust never selected for a big spend', async () => {
+test('takeReserve: smallest-sufficient pick — dust never selected for a big spend', async t => {
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
   const r = new ReserveFunder(key, file)
@@ -34,7 +34,7 @@ test('takeReserve: smallest-sufficient pick — dust never selected for a big sp
   assert.equal(small?.satoshis, 500)
 })
 
-test('takeReserve: bare call never hands out sub-dust change entries', async () => {
+test('takeReserve: bare call never hands out sub-dust change entries', async t => {
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
   const r = new ReserveFunder(key, file)
@@ -46,7 +46,7 @@ test('takeReserve: bare call never hands out sub-dust change entries', async () 
   assert.equal(explicit?.satoshis, 1, 'an explicit minimum below the floor still works')
 })
 
-test('takeReserve: null when every entry is insufficient — no negative-fee tx', async () => {
+test('takeReserve: null when every entry is insufficient — no negative-fee tx', async t => {
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
   const r = new ReserveFunder(key, file)
@@ -55,7 +55,7 @@ test('takeReserve: null when every entry is insufficient — no negative-fee tx'
   assert.equal(await r.takeReserve(undefined, 10_000), null)
 })
 
-test('takeReserve: spendCheck prunes chain-spent candidates and tries the next', async () => {
+test('takeReserve: spendCheck prunes chain-spent candidates and tries the next', async t => {
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
   const r = new ReserveFunder(key, file)
@@ -69,10 +69,10 @@ test('takeReserve: spendCheck prunes chain-spent candidates and tries the next',
   assert.ok(r.isSpent(dead.id('hex'), 0), 'pruned candidate marked spent')
 })
 
-test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change', async () => {
+test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change', async t => {
   const w = await stackWorld(t, 3, 50_000)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const payee = PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])
   const r = await mem.sendSats({ amount: 5_000, address: payee })
@@ -82,10 +82,10 @@ test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change',
   assert.equal(tx.outputs[0]!.lockingScript.toHex(), new P2PKH().lock(payee).toHex())
 })
 
-test('sendSats: scriptHex target + opReturn tag', async () => {
+test('sendSats: scriptHex target + opReturn tag', async t => {
   const w = await stackWorld(t, 1, 50_000)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const payeeScript = new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])).toHex()
   const r = await mem.sendSats({ amount: 1_000, scriptHex: payeeScript, opReturn: 'nektar-test' })
@@ -97,10 +97,10 @@ test('sendSats: scriptHex target + opReturn tag', async () => {
   )
 })
 
-test('bond ops serialize: a second covenant spend while one is in flight throws', async () => {
+test('bond ops serialize: a second covenant spend while one is in flight throws', async t => {
   const w = await stackWorld(t, 5, 100_000)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { bond: { sats: 5_000, epochBlocks: 3, horizonBlocks: 4 } })
   await mem.bondDeploy(5_000)
   const root = 'bb'.repeat(32)

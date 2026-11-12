@@ -11,12 +11,12 @@ import { always, eventually, obligation, causalClosure, type TimedFact } from '@
 import { axiomHash, ontologyEntails, Jurisdictions, validByPrecedent, type Axiom } from '@nektar/graph'
 import { NektarMemory } from '@nektar/mcp'
 
-function await world(t, ) {
+async function world(t: { skip: (m?: string) => void }) {
   const w = await stackWorld(t, 20)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
-  const settle = (s: string) => {
+  const settle = async (s: string) => {
     await chain.mine(1)
     const l = mem.tailLink(s)
     if (l) mem.confirmAnchor(s, l.txid)
@@ -41,7 +41,7 @@ test('§8 delta: deterministic, invertible, unicode-safe; tampered Δ rejected',
   assert.throws(() => decodeDelta('[1,"x"]'), DeltaError)
 })
 
-test('§8 delta: revisions stored as Δ; every version materialises from proven links', async () => {
+test('§8 delta: revisions stored as Δ; every version materialises from proven links', async t => {
   const { mem, settle } = await world(t, )
   const versions = [
     'Manual rev1: torque 45Nm, belt 10h',
@@ -111,7 +111,7 @@ test('§12 temporal: □_t, ◇_(t1,t2), obligations with deadlines, causal clos
   assert.match(causalClosure([{ conclusion: 'pump3 ok', t: 150, cites: [F[2]!] }]).reason!, /cites "incident\(pump3\)" anchored at t=200/)
 })
 
-test('§19 epoch binding: authorship survives rotation; wrong epoch / after expiry refused', async () => {
+test('§19 epoch binding: authorship survives rotation; wrong epoch / after expiry refused', async t => {
   const k0 = PrivateKey.fromRandom()
   const k1 = PrivateKey.fromRandom()
   const k2 = PrivateKey.fromRandom()
@@ -169,7 +169,7 @@ test('§9 memory as law: anchored DL entailment, jurisdiction graphs, precedent'
   assert.equal(validByPrecedent(precedent, 'case_2026_03', (h) => unanchoredPrecedent.has(h)).entailed, false, 'precedent must itself be anchored')
 })
 
-test('§16 delegation map: sub-decisions signed by delegating agents; tampering fails', async () => {
+test('§16 delegation map: sub-decisions signed by delegating agents; tampering fails', async t => {
   const { makeDelegation, verifyReceiptDelegations, commitReceipt } = await import('@nektar/reasoning')
   const sub = PrivateKey.fromRandom()
   const answer = 'approved transfer of EUR 500'

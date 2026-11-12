@@ -134,7 +134,7 @@ test('profile: agent lists exactly the nine agent tools; operator lists all', ()
 test('profile: an operator-only tool is refused over HTTP and MCP in agent profile, allowed in operator profile', async () => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const prev = process.env.NEKTAR_TOOL_PROFILE
   const srv = createHttpApi(mem).listen(0, '127.0.0.1')
@@ -170,7 +170,7 @@ test('profile: an operator-only tool is refused over HTTP and MCP in agent profi
   }
 })
 
-test('profile: want refuses zero or several buyer policies; exactly one publishes', async () => {
+test('profile: want refuses zero or several buyer policies; exactly one publishes', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
   const h = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })

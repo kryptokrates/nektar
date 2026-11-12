@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8, computeLeaf, merkleRoot, merkleProof, toHex } from '@nektar/core'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { stackWorld, stackChain } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { buildProofBundle, verifyFragment, type AnchorLink } from '../src/bundle.js'
 
@@ -11,13 +11,10 @@ const frag = (s: string) => ({
   p: { source: 'manual', time: 1700000000, signature: new Uint8Array(64), modelId: 'm1' }
 })
 
-async function scenario() {
+async function scenario(t: { skip: (m?: string) => void }) {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
-  for (const u of (funder as any).utxos as Array<{ tx: import('@bsv/sdk').Transaction }>) {
-    chain.mempool.set(u.tx.id('hex'), u.tx)
-  }
+  const { chain, funder } = w
   await chain.mine(1)
   const ac = new AnchorChain('s1', PrivateKey.fromRandom(), funder, funder.keyPair, chain)
   const leaves = [frag('oil change'), frag('belt inspection')].map(computeLeaf)
@@ -40,30 +37,38 @@ async function scenario() {
   return { chain, bundle, ac, leaves, R }
 }
 
-test('verify: valid bundle verifies offline against headers', async () => {
-  const { chain, bundle } = await scenario()
+test('verify: valid bundle verifies offline against headers', async t => {
+  const s = await scenario(t)
+  if (s === undefined) return
+  const { chain, bundle } = s
   const res = await verifyFragment(bundle, chain)
   assert.deepEqual(res, { ok: true, settled: true, anchorState: 'mined' })
 })
 
-test('verify: tampered leaf rejected', async () => {
-  const { chain, bundle } = await scenario()
+test('verify: tampered leaf rejected', async t => {
+  const s = await scenario(t)
+  if (s === undefined) return
+  const { chain, bundle } = s
   bundle.leaf = toHex(dsha256(utf8('tampered')))
   const res = await verifyFragment(bundle, chain)
   assert.equal(res.ok, false)
   assert.equal((res as any).reason, 'LeafPathMismatch')
 })
 
-test('verify: broken anchor chain detected', async () => {
-  const { chain, bundle } = await scenario()
+test('verify: broken anchor chain detected', async t => {
+  const s = await scenario(t)
+  if (s === undefined) return
+  const { chain, bundle } = s
   bundle.chainTail[0]!.Rp = toHex(dsha256(utf8('fake')))
   const res = await verifyFragment(bundle, chain)
   assert.equal(res.ok, false)
   assert.equal((res as any).reason, 'ChainInconsistent')
 })
 
-test('verify: unmined anchor still verifies locally (settled=false)', async () => {
-  const { bundle } = await scenario()
+test('verify: unmined anchor still verifies locally (settled=false)', async t => {
+  const s = await scenario(t)
+  if (s === undefined) return
+  const { bundle } = s
   // strip the BUMP inside the beef: rebuild tx without merklePath
   const { Transaction } = await import('@bsv/sdk')
   const tx = Transaction.fromAtomicBEEF(bundle.anchorBEEF)
@@ -78,46 +83,51 @@ test('verify: unmined anchor still verifies locally (settled=false)', async () =
 })
 
 // --- leaf-count binding (ADR-002) + tail authentication negatives ---
-test('verify: leafIndex >= size rejected', async () => {
-  const { chain, bundle } = await scenario()
+test('verify: leafIndex >= size rejected', async t => {
+  const s = await scenario(t)
+  if (s === undefined) return
+  const { chain, bundle } = s
   bundle.leafIndex = bundle.size
   const r = await verifyFragment(bundle, chain)
   assert.equal(r.ok, false)
   assert.equal((r as any).reason, 'BadBundle')
 })
 
-test('verify: negative leafIndex rejected', async () => {
-  const { chain, bundle } = await scenario()
+test('verify: negative leafIndex rejected', async t => {
+  const s = await scenario(t)
+  if (s === undefined) return
+  const { chain, bundle } = s
   bundle.leafIndex = -1
   const r = await verifyFragment(bundle, chain)
   assert.equal(r.ok, false)
 })
 
-test('verify: path one extra sibling rejected', async () => {
-  const { chain, bundle } = await scenario()
+test('verify: path one extra sibling rejected', async t => {
+  const s = await scenario(t)
+  if (s === undefined) return
+  const { chain, bundle } = s
   bundle.path = [...bundle.path, bundle.path[0]!]
   const r = await verifyFragment(bundle, chain)
   assert.equal(r.ok, false)
   assert.equal((r as any).reason, 'BadBundle')
 })
 
-test('verify: path one missing sibling rejected', async () => {
-  const { chain, bundle } = await scenario()
+test('verify: path one missing sibling rejected', async t => {
+  const s = await scenario(t)
+  if (s === undefined) return
+  const { chain, bundle } = s
   bundle.path = bundle.path.slice(0, -1)
   const r = await verifyFragment(bundle, chain)
   assert.equal(r.ok, false)
   assert.equal((r as any).reason, 'BadBundle')
 })
 
-test('verify: odd-batch duplicate-last-leaf claim rejected', async () => {
+test('verify: odd-batch duplicate-last-leaf claim rejected', async t => {
   // 3 leaves: merkleProof(leaves,2) path includes the self-paired sibling.
   // Claiming index = size (3) must fail binding even though the sibling exists.
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain: chain2, funder: f2 } = w
-  for (const u of (f2 as any).utxos as Array<{ tx: import('@bsv/sdk').Transaction }>) {
-    chain2.mempool.set(u.tx.id('hex'), u.tx)
-  }
   chain2.mine(1)
   const { PrivateKey: PK } = await import('@bsv/sdk')
   const { AnchorChain: AC } = await import('@nektar/anchor')
@@ -142,8 +152,10 @@ test('verify: odd-batch duplicate-last-leaf claim rejected', async () => {
   assert.equal(r.ok, false)
 })
 
-test('verify: tampered middle tail link with recomputed self-consistent tail fails', async () => {
-  const { chain, bundle } = await scenario()
+test('verify: tampered middle tail link with recomputed self-consistent tail fails', async t => {
+  const s = await scenario(t)
+  if (s === undefined) return
+  const { chain, bundle } = s
   // recompute Rp of last link so tail is self-consistent but differs from on-chain
   const { chainRp: crp } = await import('@nektar/core')
   const mid = bundle.chainTail[0]!
@@ -155,8 +167,10 @@ test('verify: tampered middle tail link with recomputed self-consistent tail fai
   assert.equal((r as any).reason, 'ChainInconsistent')
 })
 
-test('verify: last tail entry differing from on-chain fields rejected', async () => {
-  const { chain, bundle } = await scenario()
+test('verify: last tail entry differing from on-chain fields rejected', async t => {
+  const s = await scenario(t)
+  if (s === undefined) return
+  const { chain, bundle } = s
   for (const mutate of [
     (t: any) => {
       t.n = 7

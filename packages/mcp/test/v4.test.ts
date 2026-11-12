@@ -10,16 +10,20 @@ import { signProvenance, verifyCheckpoint, PromiseMonitor } from '@nektar/log'
 import { signBinding, answerChallenge, issueClearance, proveAccess } from '@nektar/identity'
 import { NektarMemory, IngestError, FileSecurityStore, type NektarMemoryOptions } from '../src/index.js'
 
-async function await world(t, t: { skip: (m?: string) => void }opts: NektarMemoryOptions = {}, shared?: { chain: any, funder: any }) {
-    funder.topup(20)
+async function world(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}, shared?: { chain: any, funder: any }) {
+  const w = shared ?? await stackWorld(t, 20)
+  if (w === undefined) return undefined
+  const { chain, funder } = w
   return { chain, funder, mem: new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts }) }
 }
 const P = { source: 'doi:10.1/manual', time: 1_700_000_000, signature: new Uint8Array(0), modelId: 'm' }
 
-test('COM-003: signed provenance verified at ingest; unsigned refused when required', async () => {
+test('COM-003: signed provenance verified at ingest; unsigned refused when required', async t => {
   const src = PrivateKey.fromRandom()
   const pub = src.toPublicKey().toString()
-  const { mem } = await world(t, { requireSignedProvenance: true, agentSeed: PrivateKey.fromRandom() })
+  const s = await world(t, { requireSignedProvenance: true, agentSeed: PrivateKey.fromRandom() })
+  if (s === undefined) return
+  const { mem } = s
   const p = signProvenance(src, utf8('torque 45Nm'), P)
   assert.equal((await mem.remember('m', 'torque 45Nm', { ...p, sourcePub: pub })).seq, 0, 'valid signature accepted (encrypted store)')
   await assert.rejects(
@@ -36,7 +40,7 @@ test('COM-003: signed provenance verified at ingest; unsigned refused when requi
   assert.equal((await await world(t, ).mem.remember('m', 'unsigned ok when not required')).seq, 0)
 })
 
-test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms promises', async () => {
+test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms promises', async t => {
   const { mem } = await world(t, )
   const t0 = Date.now()
   await mem.remember('s', 'a')
@@ -63,17 +67,23 @@ test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms
   )
 })
 
-test('LOG-006: flushDue anchors on the age threshold without a new write', async () => {
-  const { mem } = await world(t, { batchPolicy: { maxLeaves: 100, maxAgeMs: 0 } })
+test('LOG-006: flushDue anchors on the age threshold without a new write', async t => {
+  const s = await world(t, { batchPolicy: { maxLeaves: 100, maxAgeMs: 0 } })
+  if (s === undefined) return
+  const { mem } = s
   const r = await mem.remember('s', 'lonely record') // maxAgeMs 0 → due immediately
   assert.ok(r.anchored, 'closed on age at write time')
-  const { mem: m2 } = await world(t, { batchPolicy: { maxLeaves: 100, maxBytes: 1_000_000 } })
+  const s = await world(t, { batchPolicy: { maxLeaves: 100, maxBytes: 1_000_000 } })
+  if (s === undefined) return
+  const { mem: m2 } = s
   await m2.remember('s', 'x')
   assert.deepEqual(await m2.flushDue(), [], 'nothing due')
 })
 
-test('CHN-006: pending → mined → final; requireFinal withholds until finalityDepth', async () => {
-  const { chain, mem } = await world(t, { finalityDepth: 3 })
+test('CHN-006: pending → mined → final; requireFinal withholds until finalityDepth', async t => {
+  const s = await world(t, { finalityDepth: 3 })
+  if (s === undefined) return
+  const { chain, mem } = s
   await mem.remember('s', 'a')
   await mem.remember('s', 'b')
   assert.equal((await mem.anchorStatus('s', 0)).state, 'pending')

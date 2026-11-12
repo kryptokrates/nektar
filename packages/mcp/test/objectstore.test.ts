@@ -80,7 +80,7 @@ async function fakeS3(secret = SECRET): Promise<{ server: Server; url: string; o
 const store = (url: string, secret = SECRET) =>
   new S3ObjectStore({ endpoint: url, bucket: 'packs-zzktyfefka', accessKey: ACCESS, secretKey: secret, region: REGION })
 
-test('objectstore: put/get/head round trip on a signature-checking fake S3', async () => {
+test('objectstore: put/get/head round trip on a signature-checking fake S3', async t => {
   const { server, url, objects } = await fakeS3()
   try {
     const s = store(url)
@@ -99,7 +99,7 @@ test('objectstore: put/get/head round trip on a signature-checking fake S3', asy
   }
 })
 
-test('objectstore: wrong secret → 403 surfaces as an error', async () => {
+test('objectstore: wrong secret → 403 surfaces as an error', async t => {
   const { server, url } = await fakeS3()
   try {
     await assert.rejects(() => store(url, 'wrong-secret').put('k.json', new Uint8Array([1])), /403|SignatureDoesNotMatch/)
@@ -108,7 +108,7 @@ test('objectstore: wrong secret → 403 surfaces as an error', async () => {
   }
 })
 
-test('objectstore: getVerified returns verified bytes', async () => {
+test('objectstore: getVerified returns verified bytes', async t => {
   const { server, url } = await fakeS3()
   try {
     const s = store(url)
@@ -122,7 +122,7 @@ test('objectstore: getVerified returns verified bytes', async () => {
   }
 })
 
-test('objectstore: getVerified rejects tampered content', async () => {
+test('objectstore: getVerified rejects tampered content', async t => {
   const { server, url, objects } = await fakeS3()
   try {
     const s = store(url)
@@ -134,7 +134,7 @@ test('objectstore: getVerified rejects tampered content', async () => {
   }
 })
 
-test('objectstore: getVerified rejects oversized content and oversized refs', async () => {
+test('objectstore: getVerified rejects oversized content and oversized refs', async t => {
   const { server, url, objects } = await fakeS3()
   try {
     const s = store(url)

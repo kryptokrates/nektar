@@ -77,7 +77,7 @@ const unhex = (s: string) => new Uint8Array(Buffer.from(s, 'hex'))
 async function anchoredWorld() {
   const w = await stackWorld(t, 12)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   await mem.remember('f', 'a')
   await mem.remember('f', 'b')
@@ -141,7 +141,7 @@ test('fuzz: proof bundle verifier never throws, never accepts a mutated bundle',
   }
 })
 
-test('fuzz: L_ZKMem v2 codec + STARK verifier never throw and never accept a mutation', async () => {
+test('fuzz: L_ZKMem v2 codec + STARK verifier never throw and never accept a mutation', async t => {
   const { readFileSync } = await import('node:fs')
   const fx = JSON.parse(readFileSync(new URL('../../../zk/test/fixtures/zkm2-n5i4.json', import.meta.url), 'utf8'))
   const H = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
@@ -160,7 +160,7 @@ test('fuzz: L_ZKMem v2 codec + STARK verifier never throw and never accept a mut
   }
 })
 
-test('fuzz: L_ZKDer v3 codec + STARK verifier never throw and never accept a mutation', async () => {
+test('fuzz: L_ZKDer v3 codec + STARK verifier never throw and never accept a mutation', async t => {
   const { readFileSync } = await import('node:fs')
   const fx = JSON.parse(readFileSync(new URL('../../../zk/test/fixtures/zkder-permit.json', import.meta.url), 'utf8'))
   const H = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
@@ -185,7 +185,7 @@ test('fuzz: L_ZKDer v3 codec + STARK verifier never throw and never accept a mut
   }
 })
 
-test('fuzz: L_ZKDis v2 codec + subset verifier never throw and never accept a mutation', async () => {
+test('fuzz: L_ZKDis v2 codec + subset verifier never throw and never accept a mutation', async t => {
   const leaves = Array.from({ length: 70 }, (_, i) => dsha256(utf8(`fz-${i}`)))
   const valid = encodeZkdis(buildSubsetProof(leaves, [1, 63, 64, 69]))
   assert.ok(verifyZkdis(valid).ok, 'valid subset proof verifies')
@@ -254,10 +254,10 @@ test('fuzz: disclosure envelope verifier rejects every byte-level mutation', () 
   }
 })
 
-test('fuzz: NektarAutomaton decoder is byte-authenticated', async () => {
+test('fuzz: NektarAutomaton decoder is byte-authenticated', async t => {
   const w = await stackWorld(t, 4)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const ac = new AutomatonChain(
     { Q: ['a', 'b'], Sigma: ['x'], delta: [[0, 0, 1]], q0: 0, F: [1], O: [] },
     PrivateKey.fromRandom(),

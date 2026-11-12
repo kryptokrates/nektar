@@ -23,7 +23,7 @@ function peerOf(a: ReturnType<typeof setup>, opts: NektarMemoryOptions = {}) {
   return new NektarMemory(a.chain, a.funder, a.funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
 }
 
-test('shard packs: export → import re-verifies every bundle; records provable on the peer', async () => {
+test('shard packs: export → import re-verifies every bundle; records provable on the peer', async t => {
   const a = setup()
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
@@ -91,7 +91,7 @@ test('shard packs: tampered data recomputes a different leaf → reported, never
   await assert.rejects(c.importShardPack({ v: 2 }), /malformed/)
 })
 
-test('doctor: one-call diagnostic carries funding/shards/records/anchors/payments/prover', async () => {
+test('doctor: one-call diagnostic carries funding/shards/records/anchors/payments/prover', async t => {
   const { mem, settle } = setup()
   await mem.remember('s', 'x')
   await mem.remember('s', 'y')
@@ -107,7 +107,7 @@ test('doctor: one-call diagnostic carries funding/shards/records/anchors/payment
   assert.match(d.prover, /docker image|native binary|absent/)
 })
 
-test('groundedAnswer/commitReceipt share block: token + verifyUrl + badgeUrl + markdown', async () => {
+test('groundedAnswer/commitReceipt share block: token + verifyUrl + badgeUrl + markdown', async t => {
   const { mem, settle } = setup()
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   await mem.remember('manual', 'inspect belt every 10h')
@@ -165,7 +165,7 @@ test('pack endpoint + remote import: /.well-known/nektar lists offerable shards;
   }
 })
 
-test('bstore packs: describeShard publishes the pack; .well-known carries store; importShard {store} verifies; tamper refuses', async () => {
+test('bstore packs: describeShard publishes the pack; .well-known carries store; importShard {store} verifies; tamper refuses', async t => {
   const { createServer } = await import('node:http')
   const { S3ObjectStore } = await import('../src/objectstore.js')
   const { createHttpApi } = await import('../src/http.js')

@@ -27,13 +27,13 @@ const RULES = parseProgram(`@id r-spec
 spec(S, V) :- requires(P, V), applies(S, P).`).rules
 
 /** one anchored manual batch [requires(torque,45), applies(port4,torque)] + helpers */
-async function await world(t, ) {
+async function world(t: { skip: (m?: string) => void }) {
   const w = await stackWorld(t, 20)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const sk = PrivateKey.fromRandom()
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, signingKey: sk })
-  const settle = (shard: string) => {
+  const settle = async (shard: string) => {
     await chain.mine(1)
     const l = mem.tailLink(shard)
     if (l) mem.confirmAnchor(shard, l.txid)
@@ -138,7 +138,7 @@ test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction a
   assert.equal(new CitationIndex(idx['file']).citing(m(1)).length, 2, 'index persists')
 })
 
-test('AGT-005 consensus time: existence-by the block time; unmined/forged refused', async () => {
+test('AGT-005 consensus time: existence-by the block time; unmined/forged refused', async t => {
   const w = await await world(t, )
   const tx = w.mem.anchorTx(w.mem.tailLink('manual')!.txid)!
   const tb = await timeBounds(tx, w.chain)
@@ -156,7 +156,7 @@ test('AGT-005 consensus time: existence-by the block time; unmined/forged refuse
   await assert.rejects(() => timeBounds(Transaction.fromHex(tx.toHex()), w.chain), /not mined/)
 })
 
-test('AGT-007 audit bundle verifies offline; 4 tamper cases rejected with reasons', async () => {
+test('AGT-007 audit bundle verifies offline; 4 tamper cases rejected with reasons', async t => {
   const w = await await world(t, )
   await w.mem.remember('manual', 'requires(torque, 55).')
   await w.mem.remember('manual', 'z.')
@@ -228,7 +228,7 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
   assert.equal(hashOf(receipt), bundle.receiptHash)
 })
 
-test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRevoked needed', async () => {
+test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRevoked needed', async t => {
   const w = await await world(t, )
   const b0 = (await w.mem.prove('manual', 0)).bundle!
   const b1 = (await w.mem.prove('manual', 1)).bundle!
@@ -293,7 +293,7 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
   assert.ok((await verifyAuditBundle(badProof, w.chain)).reasons.some((r) => /inclusion proof failed/.test(r)))
 })
 
-test('GOAL-v8 D4: anchored rotation chain — third party replays pk(0)→pk(i) from chain data', async () => {
+test('GOAL-v8 D4: anchored rotation chain — third party replays pk(0)→pk(i) from chain data', async t => {
   const { verifyAnchoredRotationChain } = await import('@nektar/reasoning')
   const w = await await world(t, )
   const k1 = PrivateKey.fromRandom()

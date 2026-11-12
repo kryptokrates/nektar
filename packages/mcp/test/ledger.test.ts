@@ -17,11 +17,11 @@ async function open() {
   return { kx, store }
 }
 
-test('ledger: every owner broadcast is recorded with bytes before the outcome is known', async () => {
+test('ledger: every owner broadcast is recorded with bytes before the outcome is known', async t => {
   const { kx, store } = await open()
   const w = await stackWorld(t, 2)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const r = await mem.sendSats({ amount: 500, address: PrivateKey.fromRandom().toPublicKey().toAddress([0x6f]) })
   // mem was constructed without a wrapped chain, so this is the owner-tool
@@ -41,7 +41,7 @@ test('ledger: payInvoice exports a signed tx whose input stays leased — no pha
   const { kx, store } = await open()
   const w = await stackWorld(t, 1)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   mem.ledger = store
   const inv = {
@@ -61,7 +61,7 @@ test('ledger: payInvoice exports a signed tx whose input stays leased — no pha
   await kx.destroy()
 })
 
-test('ledger: reserve predicate skips leased outpoints; addOwned dedups', async () => {
+test('ledger: reserve predicate skips leased outpoints; addOwned dedups', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-ledger-'))
   const { kx, store } = await open()
   const key = PrivateKey.fromRandom()
@@ -79,7 +79,7 @@ test('ledger: reserve predicate skips leased outpoints; addOwned dedups', async 
   await kx.destroy()
 })
 
-test('ledger: releaseUnsigned frees only a never-submitted preparation', async () => {
+test('ledger: releaseUnsigned frees only a never-submitted preparation', async t => {
   const { kx, store } = await open()
   const tx = new Transaction()
   tx.addInput({ sourceTXID: 'b'.repeat(64), sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })

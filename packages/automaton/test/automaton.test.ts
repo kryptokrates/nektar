@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { utf8, dsha256, toHex } from '@nektar/core'
-import { MockChain MockFunder } from '@nektar/chain'
+import { stackWorld } from '@nektar/chain'
 import {
   Automaton,
   AutomatonError,
@@ -35,20 +35,19 @@ const OUT = toHex(dsha256(utf8('out')))
 
 // production path: NektarProvider over MockChain with Teranode-faithful script
 // evaluation — the chain is the oracle; owner key ≠ funding key.
-async function deployed(def = DEF) {
-  const chain = (await stackChain(t))!
-  chain.verifyScripts = true
-  const funder = StackFunder.dry()
-  funder.topup(20)
-  for (const t of funder.parents) chain.registerParent(t)
+async function deployed(t: { skip: (m?: string) => void }, def = DEF) {
+  const w = await stackWorld(t, 24)
+  if (w === undefined) return undefined
+  const { chain, funder } = w
   const ac = new AutomatonChain(def, PrivateKey.fromRandom(), funder, funder.keyPair, chain)
   await ac.deploy()
   return ac
 }
 const SCRIPT_INVALID = /SCRIPT_INVALID/
 
-test('AUT-005: deploy + valid steps accepted by script evaluation; head decoded from chain', async () => {
-  const ac = await deployed()
+test('AUT-005: deploy + valid steps accepted by script evaluation; head decoded from chain', async t => {
+  const ac = await deployed(t)
+  if (ac === undefined) return
   assert.equal(ac.getHead()!.state.q, 0)
   const h1 = await ac.step(0, 1, OUT)
   assert.deepEqual([h1.state.q, h1.state.n, h1.state.lastOut], [1, 1, OUT])
@@ -60,8 +59,9 @@ test('AUT-005: deploy + valid steps accepted by script evaluation; head decoded 
   assert.equal(decodeNektarAutomaton(flipped), null, 'tampered contract code rejected by decoder')
 })
 
-test('AUT-005 negatives: wrong from / not-in-δ / tampered path / wrong signer rejected by script', async () => {
-  const ac = await deployed()
+test('AUT-005 negatives: wrong from / not-in-δ / tampered path / wrong signer rejected by script', async t => {
+  const ac = await deployed(t)
+  if (ac === undefined) return
   const p = deltaPath(TBL, 1, 1, 2)
   await assert.rejects(() => ac.step(1, 2, OUT, { from: 1, sibs: p.sibs.map(toHex), dir: p.dir }), SCRIPT_INVALID, 'from != q')
   const q = deltaPath(TBL, 0, 0, 1)
@@ -75,8 +75,9 @@ test('AUT-005 negatives: wrong from / not-in-δ / tampered path / wrong signer r
   assert.throws(() => deltaPath(TBL, 0, 1, 2), AutomatonError, 'off-δ path refused locally')
 })
 
-test('AUT-005: wrong deltaRoot — a path for another δ is rejected', async () => {
-  const ac = await deployed()
+test('AUT-005: wrong deltaRoot — a path for another δ is rejected', async t => {
+  const ac = await deployed(t)
+  if (ac === undefined) return
   const other = deltaTable({
     ...DEF,
     delta: [
@@ -88,8 +89,9 @@ test('AUT-005: wrong deltaRoot — a path for another δ is rejected', async () 
   await assert.rejects(() => ac.step(0, 1, OUT, { sibs: p.sibs.map(toHex), dir: p.dir }), SCRIPT_INVALID)
 })
 
-test('AUT-005: halt from non-final state fails; from final passes', async () => {
-  const ac = await deployed()
+test('AUT-005: halt from non-final state fails; from final passes', async t => {
+  const ac = await deployed(t)
+  if (ac === undefined) return
   await assert.rejects(() => ac.halt(), /not final — halt refused locally/, 'halt from q=A (local)')
   await assert.rejects(() => ac.halt({ asState: 2 }), SCRIPT_INVALID, 'q=A with the F-path of C (contract)')
   await ac.step(0, 1, OUT)
@@ -107,7 +109,7 @@ const pathOf = (f: number, s: number, t: number) => {
   return { sibs: p.sibs.map(toHex), dir: p.dir }
 }
 
-test('AUT-005: step reads the CURRENT on-chain q (not the deploy-time value)', async () => {
+test('AUT-005: step reads the CURRENT on-chain q (not the deploy-time value)', async t => {
   // regression: a runar terminal method reads mutable fields from constructor
   // slots; every method must continue state so q comes from the preimage
   const def: AutomatonDef = {
@@ -122,7 +124,8 @@ test('AUT-005: step reads the CURRENT on-chain q (not the deploy-time value)', a
     F: [0],
     O: []
   }
-  const ac = await deployed(def)
+  const ac = await deployed(t, def)
+  if (ac === undefined) return
   await ac.step(0, 1, OUT)
   ac.unguarded = true
   await assert.rejects(() => ac.halt({ asState: 0 }), SCRIPT_INVALID, 'q=B is not final even though q0=A is')

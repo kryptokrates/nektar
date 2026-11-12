@@ -12,7 +12,7 @@ test('dashboard automation inbox: agent bearer cannot approve; operator token ca
   process.env.NEKTAR_OPERATOR_TOKEN = 'operator-token'
   const w = await stackWorld(t, 1)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   const store = new AutomationStore(kx)

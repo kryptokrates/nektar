@@ -46,7 +46,7 @@ const bumpFor = (txid: string): MerklePath =>
     ]
   ])
 
-test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it', async () => {
+test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it', async t => {
   const { mem, chain } = liveMem()
   const { child } = await pair(chain, false)
   const txid = child.id('hex')
@@ -89,7 +89,7 @@ test('fetchTx: proof and tx lookups are single attempts, remembered when they hi
   assert.ok(Date.now() - t0 < 1000, 'a miss never sleeps')
 })
 
-test('wire: BEEF when the ancestry is proven — the receiver verifies it against its own headers', async () => {
+test('wire: BEEF when the ancestry is proven — the receiver verifies it against its own headers', async t => {
   const { mem, chain } = liveMem()
   const { child } = await pair(chain, true)
   mem.rememberTx(child)
@@ -107,7 +107,7 @@ test('wire: BEEF when the ancestry is proven — the receiver verifies it agains
   assert.equal((await TxStore.read(Buffer.from(bad.toAtomicBEEF()).toString('hex'), chain)).spv, false)
 })
 
-test('wire: Extended Format when the parent is unproven; raw when it is unknown', async () => {
+test('wire: Extended Format when the parent is unproven; raw when it is unknown', async t => {
   const { mem, chain } = liveMem()
   const { child } = await pair(chain, false)
   mem.rememberTx(child)
@@ -121,7 +121,7 @@ test('wire: Extended Format when the parent is unproven; raw when it is unknown'
   assert.equal(lone.wire(child.id('hex')), child.toHex())
 })
 
-test('TxStore: a proof ends the stored ancestry and survives a reload', async () => {
+test('TxStore: a proof ends the stored ancestry and survives a reload', async t => {
   const chain = (await stackChain(t))!
   const { parent, child } = await pair(chain, true)
   const rows = new Map<string, { txid: string; raw: string; proof?: string }>()
@@ -143,7 +143,7 @@ test('TxStore: a proof ends the stored ancestry and survives a reload', async ()
   assert.deepEqual(b.unproven(), [child.id('hex')])
 })
 
-test('spendValid: a real spend passes; a spend of another output or a broken signature does not', async () => {
+test('spendValid: a real spend passes; a spend of another output or a broken signature does not', async t => {
   const chain = (await stackChain(t))!
   const { parent, child } = await pair(chain, false)
   const src = { txid: parent.id('hex'), vout: 0, satoshis: 10_000, script: parent.outputs[0]!.lockingScript.toHex() }

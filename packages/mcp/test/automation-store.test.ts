@@ -247,7 +247,7 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-auto-')), 'a.sqlite')
   const w = await stackWorld(t, 3)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   for (const p of funder.parents) chain.registerParent(p)
   const tx = await payment(funder)
   const a = await open(file)

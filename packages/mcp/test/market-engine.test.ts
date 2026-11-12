@@ -28,7 +28,7 @@ interface Agent {
   file: string
 }
 
-function await world(t, opts: { refundBlocks?: number } = {}) {
+async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: number } = {}) {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-market-'))
   const agents = new Map<string, Agent>()
@@ -287,7 +287,7 @@ test('seller goes dark after quoting → buyer refunds itself at the deadline; r
   assert.equal((await bob.store.budgetStatus(bob.policyHash)).lockedSats, 210)
   await w.round([bob])
   assert.equal((await bob.engine.status(operationId))!.operation.state, 'awaiting_disclosure', 'no early refund')
-  w.await chain.mine(8)
+  await w.chain.mine(8)
   await w.round([bob])
   st = (await bob.engine.status(operationId))!.operation
   assert.equal(st.state, 'refunded', st.lastError)

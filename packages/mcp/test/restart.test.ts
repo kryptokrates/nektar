@@ -17,7 +17,7 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
   const dir = mkdtempSync(join(tmpdir(), 'nektar-restart-'))
   const w = await stackWorld(t, 20)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const knex = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'records.sqlite') }, useNullAsDefault: true })
   try {
     const store = new KnexShardStore(knex)

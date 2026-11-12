@@ -35,10 +35,10 @@ pair(P) :- member(P, verified), member(P, verified).
 `
 const dag = () => new PolicyDAG([{ name: 'base', rules: parseProgram(PROG).rules }])
 
-async function await world(t, opts: NektarMemoryOptions = {}) {
+async function world(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
   const w = await stackWorld(t, 4)
   if (w === undefined) return
-  const { chain: chain, funder: f } = w
+  const { chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 10 }, ...opts })
   return { chain, f, mem }
 }
@@ -49,7 +49,7 @@ const seedQuery: SecurityStateStore = {
   save: () => {}
 }
 
-test('STARK derivation verifies against the anchored dagroot record + issued queryId', async () => {
+test('STARK derivation verifies against the anchored dagroot record + issued queryId', async t => {
   const d = dag()
   const root = Buffer.from(d.policyRoot()).toString('hex')
   assert.equal(root, fx.journal.policyRoot, 'test DAG must reproduce the fixture policy root')

@@ -224,7 +224,7 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
   }
 })
 
-test('bstack B: competing sellers — buyer completes with the 200-sat offer', async () => {
+test('bstack B: competing sellers — buyer completes with the 200-sat offer', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -256,7 +256,7 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', a
   }
 })
 
-test('bstack C: withheld offer still completes via other host; withheld logged naming h2', async () => {
+test('bstack C: withheld offer still completes via other host; withheld logged naming h2', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -348,7 +348,7 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
   }
 })
 
-test('bstack E: hosts down after escrow funded — chain advance still refunds the buyer', async () => {
+test('bstack E: hosts down after escrow funded — chain advance still refunds the buyer', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -385,7 +385,7 @@ test('bstack E: hosts down after escrow funded — chain advance still refunds t
   }
 })
 
-test('bstack F: default bbox channel � no injected bus; forged delivered ignored', async () => {
+test('bstack F: default bbox channel � no injected bus; forged delivered ignored', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -460,7 +460,7 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
   }
 })
 
-test('bstack G: read envelopes are acked off the hosts; want+offer carry signed expiry', async () => {
+test('bstack G: read envelopes are acked off the hosts; want+offer carry signed expiry', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -493,7 +493,7 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
   }
 })
 
-test('bstack H: seller takes the escrow from the accept and broadcasts it itself', async () => {
+test('bstack H: seller takes the escrow from the accept and broadcasts it itself', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -578,7 +578,7 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
   }
 })
 
-test('bstack I: tampered accept — txHex of a different transaction → seller stays quoted with accept_refused', async () => {
+test('bstack I: tampered accept — txHex of a different transaction → seller stays quoted with accept_refused', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -629,7 +629,7 @@ test('bstack I: tampered accept — txHex of a different transaction → seller 
   }
 })
 
-test('bstack J: push — a mined funding tree is proven and a cycle runs without cycle()', async () => {
+test('bstack J: push — a mined funding tree is proven and a cycle runs without cycle()', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -774,7 +774,7 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
   }
 })
 
-test('bstack L: buyer loses its database — delivery still completes after restore', async () => {
+test('bstack L: buyer loses its database — delivery still completes after restore', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -828,7 +828,7 @@ test('bstack L: buyer loses its database — delivery still completes after rest
   }
 })
 
-test('bstack M: no loss — one operation; the note is listed while the deal is open and acked when it ends', async () => {
+test('bstack M: no loss — one operation; the note is listed while the deal is open and acked when it ends', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -872,7 +872,7 @@ test('bstack M: no loss — one operation; the note is listed while the deal is 
   }
 })
 
-test('bstack N: a note from a foreign key is ignored and still acked', async () => {
+test('bstack N: a note from a foreign key is ignored and still acked', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -931,7 +931,7 @@ test('bstack N: a note from a foreign key is ignored and still acked', async () 
   }
 })
 
-test('bstack O: the recovery note fits the 16 KiB box content limit', async () => {
+test('bstack O: the recovery note fits the 16 KiB box content limit', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1017,7 +1017,7 @@ const sabotageEscrowBroadcast = (b: A, script: string): { txid: () => string | u
   return { txid: () => txid }
 }
 
-test('bstack P: uncertain + escrow observable — reconcile resumes the deal with no operator action', async () => {
+test('bstack P: uncertain + escrow observable — reconcile resumes the deal with no operator action', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1108,7 +1108,7 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
   }
 })
 
-test('bstack R: escrow rejected while awaiting_disclosure — late rejection frees the budget before the refund height', async () => {
+test('bstack R: escrow rejected while awaiting_disclosure — late rejection frees the budget before the refund height', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1152,7 +1152,7 @@ test('bstack R: escrow rejected while awaiting_disclosure — late rejection fre
   }
 })
 
-test('bstack S: disclosure rejected after completion_submitted — seller moves to completion_failed', async () => {
+test('bstack S: disclosure rejected after completion_submitted — seller moves to completion_failed', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1203,7 +1203,7 @@ test('bstack S: disclosure rejected after completion_submitted — seller moves 
   }
 })
 
-test('bstack T: refused refund retries on reconcile — succeeds after one refusal; five refusals stay uncertain', async () => {
+test('bstack T: refused refund retries on reconcile — succeeds after one refusal; five refusals stay uncertain', async t => {
   for (const refuse of [1, 10]) {
     const chain = (await stackChain(t))!
         const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
@@ -1276,7 +1276,7 @@ test('bstack T: refused refund retries on reconcile — succeeds after one refus
   }
 })
 
-test('bstack U: seller loses its database — the sellerNote rebuilds the quoted sale and the deal completes', async () => {
+test('bstack U: seller loses its database — the sellerNote rebuilds the quoted sale and the deal completes', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1352,7 +1352,7 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
   }
 })
 
-test('bstack V: delivered collected but not yet processed — the held envelope survives a buyer database loss', async () => {
+test('bstack V: delivered collected but not yet processed — the held envelope survives a buyer database loss', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1420,7 +1420,7 @@ test('bstack V: delivered collected but not yet processed — the held envelope 
   }
 })
 
-test('bstack W: a sellerNote from a foreign key is ignored and still acked', async () => {
+test('bstack W: a sellerNote from a foreign key is ignored and still acked', async t => {
   const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1800,7 +1800,7 @@ test('bstack AB: no counterparty record — the deal completes over the shared h
   }
 })
 
-test('bstack AC: hostile record hosts are refused by the SSRF guard', async () => {
+test('bstack AC: hostile record hosts are refused by the SSRF guard', async t => {
   const { fingerHostAllowed } = await import('@nektar/bstack')
   // on a real network: https only, never localhost/private/link-local literals
   assert.equal(fingerHostAllowed('http://127.0.0.1:1'), false)

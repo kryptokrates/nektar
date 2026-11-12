@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { stackWorld } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { BatchLog, MemoryShardStore } from '@nektar/log'
 import { utf8 } from '@nektar/core'
@@ -18,7 +18,7 @@ permit(principal is Agent, action in [Action::"write", Action::"rotate", Action:
 when { resource.shard == "ops" };
 `
 
-test('POL-015: the policy proved by Cedar SymCC (tools/cedar-symcc) IS the policy under test', async () => {
+test('POL-015: the policy proved by Cedar SymCC (tools/cedar-symcc) IS the policy under test', async t => {
   const { readFileSync } = await import('node:fs')
   const proved = readFileSync(new URL('../../../../tools/cedar-symcc/policies/instance.cedar', import.meta.url), 'utf8')
   assert.equal(canonicalizePolicySet('p', proved).hash, canonicalizePolicySet('p', POLICY).hash)
@@ -46,10 +46,10 @@ test('cedar: ALLOW/DENY decisions + level isolation (bounded exhaustive)', () =>
   console.log(`  cedar: single-eval ~${(ms / iso.checked).toFixed(1)}ms, isolation check ${ms.toFixed(0)}ms over ${iso.checked} cases`)
 })
 
-test('cedar: policy set + receipts anchored via AnchorChain', async () => {
+test('cedar: policy set + receipts anchored via AnchorChain', async t => {
   const w = await stackWorld(t, 6)
   if (w === undefined) return
-  const { chain: chain, funder: f } = w
+  const { chain, funder: f } = w
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
   const ac = new AnchorChain('policy', f.keyPair, f, f.keyPair, chain)
   const ps = canonicalizePolicySet('p1', POLICY)

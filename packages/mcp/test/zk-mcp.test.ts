@@ -5,10 +5,10 @@ import assert from 'node:assert/strict'
 import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory, callTool, ClientWallet, ClearanceAuthority } from '../src/index.js'
 
-test('MCP recall with wallet identity + clearance: level-2 read only when cleared; negatives refused', async () => {
+test('MCP recall with wallet identity + clearance: level-2 read only when cleared; negatives refused', async t => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
-  const { chain: chain, funder: funder } = w
+  const { chain, funder } = w
   const authority = new ClearanceAuthority()
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, clearanceAuthorities: [authority.pubkey] })
   const call = (n: string, a: Record<string, unknown>) => callTool(mem, n, a)

@@ -29,7 +29,7 @@ function setup(opts: NektarMemoryOptions = {}) {
   return { chain, mem, settle }
 }
 
-test('private shards: the flag is declared at write time and is monotone', async () => {
+test('private shards: the flag is declared at write time and is monotone', async t => {
   const { mem } = setup()
   const r = await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   assert.equal(r.private, true)
@@ -44,7 +44,7 @@ test('private shards: the flag is declared at write time and is monotone', async
   assert.equal(mem.shardPrivate('pub'), false)
 })
 
-test('private flag persists across a restart (stateStore round-trip)', async () => {
+test('private flag persists across a restart (stateStore round-trip)', async t => {
   let saved: any
   const store = {
     load: () => saved,
@@ -66,7 +66,7 @@ test('private flag persists across a restart (stateStore round-trip)', async () 
   assert.equal(m3.shardPrivate('hr'), false)
 })
 
-test('private shards: recall reads them for the owner but marks the policy', async () => {
+test('private shards: recall reads them for the owner but marks the policy', async t => {
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
@@ -76,7 +76,7 @@ test('private shards: recall reads them for the owner but marks the policy', asy
   assert.equal(r.shardPrivate, true, 'the policy travels with the answer')
 })
 
-test('private shards: plain merkle citations are refused (prove)', async () => {
+test('private shards: plain merkle citations are refused (prove)', async t => {
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
@@ -102,7 +102,7 @@ function noProver(): () => void {
   }
 }
 
-test('private cites: groundedAnswer strips them when the proof cannot be produced — nothing leaks', async () => {
+test('private cites: groundedAnswer strips them when the proof cannot be produced — nothing leaks', async t => {
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
@@ -138,7 +138,7 @@ test('private cites: AUTO-PROVE — groundedAnswer keeps a plain private cite wh
   assert.equal(v.checks.find((c) => c.name === 'fragment (private)')?.ok, true)
 })
 
-test('private cites: a verified ZK proof keeps the claim; the shard name is redacted from the anchored receipt', async () => {
+test('private cites: a verified ZK proof keeps the claim; the shard name is redacted from the anchored receipt', async t => {
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
@@ -184,7 +184,7 @@ test('private cites: a verified ZK proof keeps the claim; the shard name is reda
   ;(mem as any).getProof = origGet
 })
 
-test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', async () => {
+test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', async t => {
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
@@ -199,7 +199,7 @@ test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', asyn
   assert.match(r.flagged[0].reason, /private shard.*ZK membership proof/i)
 })
 
-test('private cites: commitReceipt redacts the shard name the same way — and demands the ZK proof', async () => {
+test('private cites: commitReceipt redacts the shard name the same way — and demands the ZK proof', async t => {
   const { mem, settle } = setup()
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')

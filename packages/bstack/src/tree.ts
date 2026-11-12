@@ -62,6 +62,13 @@ export const anchoredTree = (tree: Transaction): boolean =>
   tree.merklePath !== undefined ||
   (tree.inputs.length > 0 && tree.inputs.every((i) => i.sourceTransaction?.merklePath !== undefined))
 
+// only the market lane tolerates unproven funding: the nektar module accepts
+// anchored ancestry, but the vendored bbox/blogs/finger modules still demand
+// the tree's own path — serving them zero-conf slots would mint carriers
+// they refuse (and submitAll would count the refusal as delivered)
+const serves = (tree: { tree: Transaction; proven: boolean }, kind: string): boolean =>
+  tree.proven || (kind === 'market' && anchoredTree(tree.tree))
+
 export class MemoryTreeLedger implements TreeLedger {
   private trees = new Map<string, { tree: Transaction; proven: boolean; kind: string }>()
   private free = new Set<string>()
@@ -74,7 +81,7 @@ export class MemoryTreeLedger implements TreeLedger {
     for (const k of this.free) {
       const [txid, v] = k.split(':')
       const t = this.trees.get(txid)!
-      if ((!t.proven && !anchoredTree(t.tree)) || t.kind !== kind) continue
+      if (!serves(t, kind) || t.kind !== kind) continue
       this.free.delete(k)
       return { tree: ownPath(t.tree), vout: Number(v) }
     }
@@ -99,7 +106,7 @@ export class MemoryTreeLedger implements TreeLedger {
     let n = 0
     for (const k of this.free) {
       const t = this.trees.get(k.split(':')[0])!
-      if ((t.proven || anchoredTree(t.tree)) && t.kind === kind) n++
+      if (serves(t, kind) && t.kind === kind) n++
     }
     return n
   }
@@ -172,8 +179,9 @@ export class KnexTreeLedger implements TreeLedger {
       if (r !== false && r !== null) return r
       if (r !== false) break
     }
-    // zero-conf path: an unproven tree whose ancestry is anchored is host-
-    // admissible — carriers step back through the DAG to a mined anchor
+    // zero-conf path (market lane only): an unproven tree whose ancestry is
+    // anchored is host-admissible — carriers step back to a mined anchor
+    if (kind !== 'market') return undefined
     for (const row of await this.kx('bstack_tree_outputs as o')
       .join('bstack_trees as t', 'o.txid', 't.txid')
       .where('t.proven', 0)
@@ -217,14 +225,16 @@ export class KnexTreeLedger implements TreeLedger {
       .count('o.key as c')
       .first()
     let n = Number(r?.c ?? 0)
-    for (const row of await this.kx('bstack_tree_outputs as o')
-      .join('bstack_trees as t', 'o.txid', 't.txid')
-      .where('t.proven', 0)
-      .where('o.kind', kind)
-      .groupBy('t.txid', 't.beef')
-      .select('t.beef')
-      .count('o.key as c')) {
-      if (anchoredTree(Transaction.fromBEEF(JSON.parse(row.beef as string)))) n += Number(row.c)
+    if (kind === 'market') {
+      for (const row of await this.kx('bstack_tree_outputs as o')
+        .join('bstack_trees as t', 'o.txid', 't.txid')
+        .where('t.proven', 0)
+        .where('o.kind', kind)
+        .groupBy('t.txid', 't.beef')
+        .select('t.beef')
+        .count('o.key as c')) {
+        if (anchoredTree(Transaction.fromBEEF(JSON.parse(row.beef as string)))) n += Number(row.c)
+      }
     }
     return n
   }

@@ -29,8 +29,14 @@ function trackerOf(host: Host): ChainTracker {
 
 const laneNet = (topic: string): string | undefined => /^tm_nektar_([a-z0-9]+)_[0-9a-f]$/.exec(topic)?.[1]
 
+// a carrier admitted on unproven funding ancestry must anchor within ~one
+// block or its claims are evicted — bounds a double-spent tree's orphaned
+// entries (the BEEF 0-conf rule needs an expiry since no probe can watch
+// the funding outpoint's conflicting spend through ModuleHost today)
+const FUNDING_PROOF_MS = 10 * 60_000
+
 class LaneIndex {
-  entries = new Map<string, { beef: number[]; payload: MarketPayload; outpoint: string }>()
+  entries = new Map<string, { beef: number[]; payload: MarketPayload; outpoint: string; fundingDeadline?: number }>()
   byOutpoint = new Map<string, string>()
   // outpoint already claimed by an admitted carrier; second carrier refused, same carrier fine
   claim(outpoint: string, txid: string): 'admit' | 'dup' | 'reject' {
@@ -39,8 +45,8 @@ class LaneIndex {
     this.byOutpoint.set(outpoint, txid)
     return 'admit'
   }
-  record(txid: string, beef: number[], payload: MarketPayload, outpoint: string): void {
-    this.entries.set(txid, { beef, payload, outpoint })
+  record(txid: string, beef: number[], payload: MarketPayload, outpoint: string, fundingDeadline?: number): void {
+    this.entries.set(txid, { beef, payload, outpoint, fundingDeadline })
     this.byOutpoint.set(outpoint, txid)
   }
   spent(txid: string): void {
@@ -125,10 +131,11 @@ function makeLookup(nets: string[], lanes: string[], shared: Map<string, LaneInd
     const out: Array<{ txid: string; outputIndex: number }> = []
     for (const l of lanes) {
       const ix = shared.get(l)!
-      // retired artifacts are neither returned nor kept
+      // retired artifacts are neither returned nor kept; a carrier admitted
+      // on unproven funding ancestry is evicted when its proof deadline lapses
       for (const [txid, e] of ix.entries) {
         const exp = bodyExp(e.payload)
-        if (exp !== undefined && exp <= now()) ix.spent(txid)
+        if ((exp !== undefined && exp <= now()) || (e.fundingDeadline !== undefined && e.fundingDeadline <= now())) ix.spent(txid)
       }
       for (const [txid, e] of ix.entries) if (f(e)) out.push({ txid, outputIndex: 0 })
     }
@@ -155,7 +162,7 @@ function makeLookup(nets: string[], lanes: string[], shared: Map<string, LaneInd
         } catch {
           /* sweep tombstone */
         }
-        if (m !== undefined) idx.record(txid, p.atomicBEEF, m, c.fundingOutpoint)
+        if (m !== undefined) idx.record(txid, p.atomicBEEF, m, c.fundingOutpoint, c.unprovenFunding ? now() + FUNDING_PROOF_MS : undefined)
         return
       }
       // admitted sweep: only a MINED sweep frees held outpoints

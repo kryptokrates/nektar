@@ -40,10 +40,17 @@ export async function buildSweep(p: { key: PrivateKey; tree: Transaction; vouts:
   return await bSweep(new ProtoWallet(p.key), ORIGINATOR, DERIVATION, FUNDING_TAG, p.tree, p.vouts, p.fees)
 }
 
-export type CarrierCheck = { ok: true; carrier: Transaction; payload: Uint8Array; lockingKey: string; fundingOutpoint: string } | { ok: false; reason: string }
+export type CarrierCheck =
+  | { ok: true; carrier: Transaction; payload: Uint8Array; lockingKey: string; fundingOutpoint: string; unprovenFunding: boolean }
+  | { ok: false; reason: string }
+
+// worst case a carrier beef carries a full 1023-output funding tree (~40KB)
+// plus bumps — anything larger than this is never a legit carrier
+const MAX_CARRIER_BEEF_BYTES = 262_144
 
 export async function checkCarrier(beef: number[], o: { tracker: ChainTracker }): Promise<CarrierCheck> {
   try {
+    if (beef.length > MAX_CARRIER_BEEF_BYTES) return { ok: false, reason: 'shape' }
     const tx = Transaction.fromAtomicBEEF(beef)
     for (const i of tx.inputs) {
       const p = i.sourceTransaction
@@ -64,7 +71,8 @@ export async function checkCarrier(beef: number[], o: { tracker: ChainTracker })
       carrier: tx,
       payload: extractPayload(tx),
       lockingKey: key.toString(),
-      fundingOutpoint: `${parent.id('hex')}:${tx.inputs[0].sourceOutputIndex}`
+      fundingOutpoint: `${parent.id('hex')}:${tx.inputs[0].sourceOutputIndex}`,
+      unprovenFunding: parent.merklePath === undefined
     }
   } catch (e) {
     return { ok: false, reason: `parse:${(e as Error).message.slice(0, 80)}` }

@@ -3,14 +3,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, Script, LockingScript } from '@bsv/sdk'
-import { stackWorld, stackChain, skipUnlessStack, StackFunder } from '@nektar/chain'
+import { stackWorld, stackChain, skipUnlessStack, StackFunder, stackTreasury } from '@nektar/chain'
 import { utf8 } from '@nektar/core'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
 import { _testReset, verifyQuoteSig } from '../src/pay.js'
 import { openRuntime } from '../src/runtime.js'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -24,7 +24,9 @@ async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
     const l = mem.tailLink(shard)
     if (l) mem.confirmAnchor(shard, l.txid)
   }
-  const payer = StackFunder.dry()
+  // real funding: the payer signs real settlement txs that actually broadcast —
+  // a dry funder throws at the first take() (mid-migration leftover)
+  const payer = await StackFunder.fund(await stackTreasury(), 6)
 
   return { chain, funder, mem, settle, payer }
 }
@@ -72,7 +74,30 @@ test('payments: openRuntime refuses to start without a valid operator wallet', a
   process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])
   const rc = await skipUnlessStack(t)
   if (rc === undefined) return
-  const rt = await openRuntime({ network: 'regtest', dataDir: dir(), regtest: { ...rc, fundWif: process.env.NEKTAR_REGTEST_WIF! } })
+  // the runtime bootstraps its fee reserve from a treasury tail in its own
+  // dataDir — seed one with a real split tx to a fresh fund key (a fresh dir
+  // has no coinbases and the shared treasury's tail belongs to that reserve)
+  const chain = await stackChain(t)
+  if (chain === undefined) return
+  const treasury = await stackTreasury()
+  const fundKey = PrivateKey.fromRandom()
+  const dd = dir()
+  {
+    // one big spendable input for the runtime's bootstrap split (it needs a
+    // ≥1e6-sat parent output); StackFunder.fund handles lease+refill itself
+    const ff = await StackFunder.fund(treasury, 2, 1_100_000)
+    const u = await ff.take(1_100_000)
+    const tx = new Transaction()
+    tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: new P2PKH().unlock(ff.keyPair) })
+    tx.addOutput({ lockingScript: new P2PKH().lock(fundKey.toPublicKey().toAddress([0x6f])), satoshis: 1_000_000 })
+    tx.addOutput({ lockingScript: new P2PKH().lock(ff.keyPair.toPublicKey().toAddress([0x6f])), change: true })
+    await tx.fee()
+    await tx.sign()
+    const b = await chain.broadcast(tx)
+    assert.equal(b.status, 'success', `seed split must broadcast: ${JSON.stringify(b)}`)
+    writeFileSync(join(dd, 'treasury.json'), JSON.stringify({ treasury: { txid: tx.id('hex'), vout: 0, txHex: tx.toHex() } }))
+  }
+  const rt = await openRuntime({ network: 'regtest', dataDir: dd, regtest: { ...rc, fundWif: fundKey.toWif([0xef]) } })
   t.after(() => rt.close())
   assert.equal(rt.network, 'regtest', 'valid operator wallet → startup proceeds')
 })

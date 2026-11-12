@@ -42,6 +42,17 @@ test('ledger: unproven tree with anchored ancestry hands out zero-conf slots', a
   assert.deepEqual(await l.unproven(), [{ txid: t.id('hex'), kind: 'market' }])
 })
 
+test('ledger: anchored ancestry serves only the market lane — bbox still waits for mined', async () => {
+  const key = PrivateKey.fromRandom()
+  const t = await anchoredTree(key, 2)
+  const l = new MemoryTreeLedger()
+  await l.add(t, 2, 'bbox')
+  assert.equal(await l.remaining('bbox'), 0, 'unproven bbox tree must not serve')
+  assert.equal(await l.take('bbox'), undefined)
+  await l.markProven(t.id('hex'))
+  assert.equal(await l.remaining('bbox'), 2)
+})
+
 test('ledger (knex): unproven tree with anchored ancestry hands out zero-conf slots', async () => {
   const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
   try {
@@ -56,6 +67,11 @@ test('ledger (knex): unproven tree with anchored ancestry hands out zero-conf sl
     assert.equal(s.tree.id('hex'), t.id('hex'))
     assert.equal(await l.remaining(), 1)
     assert.deepEqual(await l.unproven(), [{ txid: t.id('hex'), kind: 'market' }])
+    // a second anchored tree registered as bbox still waits for the BUMP
+    const b = await anchoredTree(key, 1)
+    await l.add(b, 1, 'bbox')
+    assert.equal(await l.take('bbox'), undefined)
+    assert.equal(await l.remaining('bbox'), 0)
   } finally {
     await kx.destroy()
   }

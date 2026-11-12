@@ -129,10 +129,14 @@ export const OPENAPI = {
     },
     '/v1/automation/approvals/{id}': {
       post: {
-        summary:
-          'decide a pending approval — operator-only (NEKTAR_OPERATOR_TOKEN, not the agent bearer); loopback origin only',
+        summary: 'decide a pending approval — operator-only (NEKTAR_OPERATOR_TOKEN, not the agent bearer); loopback origin only',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'decision recorded' }, 400: { description: 'bad or stale approval id' }, 403: { description: 'operator token required / bad origin' }, 404: { description: 'automation off' } }
+        responses: {
+          200: { description: 'decision recorded' },
+          400: { description: 'bad or stale approval id' },
+          403: { description: 'operator token required / bad origin' },
+          404: { description: 'automation off' }
+        }
       }
     },
     '/v1/wallet': {

@@ -27,7 +27,7 @@ question that could come from memory:
 - Groth16 spike: `tools/groth16-spike/README.md` (Python 3.12 venv inside the zkscript checkout; Rust circuit builds inside Docker on Windows)
 
 Honesty rule: proofs establish recorded + unaltered + derivable — never
-that a memory's content is true, and the model manifest is *declared*, not
+that a memory's content is true, and the model manifest is _declared_, not
 zkML-proven.
 
 # nektar receipts (snippet — merge into your project CLAUDE.md)
@@ -49,4 +49,4 @@ When answering a factual question that could come from memory:
 
 The footer is the auditable part of the answer: anyone can hit the verify
 URL (or scan the QR on that page) to confirm the answer was committed to
-anchored, provenance-signed memory — not that it is *true*.
+anchored, provenance-signed memory — not that it is _true_.

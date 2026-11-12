@@ -18,9 +18,14 @@ const candidate = (offerKey: string, maxAllInSats: number, extra: Partial<ScoreC
 
 test('scoring: equal-quality S1 offers prefer 200 over 300 and 450 with replayable exact scores', () => {
   const result = rankOffers([candidate('seller:a', 450), candidate('seller:b', 300), candidate('seller:c', 200)], policy())
-  assert.deepEqual(result.ranked.map(o => [o.offerKey, o.scoreBps]), [
-    ['seller:c', 9600], ['seller:b', 9400], ['seller:a', 9100]
-  ])
+  assert.deepEqual(
+    result.ranked.map((o) => [o.offerKey, o.scoreBps]),
+    [
+      ['seller:c', 9600],
+      ['seller:b', 9400],
+      ['seller:a', 9100]
+    ]
+  )
   assert.deepEqual(result.rejected, [])
   for (const offer of result.ranked) {
     const numerator = Object.values(offer.weightedNumerators).reduce((a, b) => a + b, 0)
@@ -31,24 +36,33 @@ test('scoring: equal-quality S1 offers prefer 200 over 300 and 450 with replayab
 test('scoring: stronger expensive offer wins; price never overrides eligibility', () => {
   const cheap = candidate('cheap', 200, { features: { relevance: 4000, provenance: 10000, history: 10000, latency: 10000 } })
   const result = rankOffers([cheap, candidate('strong', 450), candidate('invalid', 0, { eligible: false })], policy())
-  assert.deepEqual(result.ranked.map(o => [o.offerKey, o.scoreBps]), [['strong', 9100], ['cheap', 7800]])
+  assert.deepEqual(
+    result.ranked.map((o) => [o.offerKey, o.scoreBps]),
+    [
+      ['strong', 9100],
+      ['cheap', 7800]
+    ]
+  )
   assert.deepEqual(result.rejected, [{ offerKey: 'invalid', reason: 'ineligible' }])
 })
 
 test('scoring: bounds, threshold, and deterministic key tie-break', () => {
-  const result = rankOffers([
-    candidate('z', 200), candidate('a', 200), candidate('over', 1001), candidate('low', 1000)
-  ], policy({ minimumScoreBps: 9000 }))
-  assert.deepEqual(result.ranked.map(o => o.offerKey), ['a', 'z'])
+  const result = rankOffers([candidate('z', 200), candidate('a', 200), candidate('over', 1001), candidate('low', 1000)], policy({ minimumScoreBps: 9000 }))
+  assert.deepEqual(
+    result.ranked.map((o) => o.offerKey),
+    ['a', 'z']
+  )
   assert.deepEqual(result.rejected, [
-    { offerKey: 'low', reason: 'below_minimum' }, { offerKey: 'over', reason: 'over_budget' }
+    { offerKey: 'low', reason: 'below_minimum' },
+    { offerKey: 'over', reason: 'over_budget' }
   ])
   assert.equal(rankOffers([candidate('boundary', 1000)], policy({ minimumScoreBps: 8000 })).ranked[0]!.scoreBps, 8000)
   assert.equal(rankOffers([candidate('free', 0)], policy()).ranked[0]!.scoreBps, 10000)
 })
 
 test('scoring: exact duplicate copies collapse; conflicting same-key copies fail closed regardless of order', () => {
-  const a = candidate('same', 200), b = candidate('same', 300)
+  const a = candidate('same', 200),
+    b = candidate('same', 300)
   assert.equal(rankOffers([a, a], policy()).ranked.length, 1)
   assert.deepEqual(rankOffers([a, b], policy()), rankOffers([b, a], policy()))
   assert.deepEqual(rankOffers([a, b], policy()).rejected, [{ offerKey: 'same', reason: 'conflicting_offer' }])
@@ -64,7 +78,8 @@ test('scoring: malicious numeric features and unknown policy constraints are rej
     policy({ minimumScoreBps: -1 }),
     policy({ weights: { ...DEFAULT_SCORE_WEIGHTS, price: 2001 } }),
     { ...policy(), unknownConstraint: true }
-  ]) assert.throws(() => rankOffers([], invalid), /invalid scoring policy/)
+  ])
+    assert.throws(() => rankOffers([], invalid), /invalid scoring policy/)
   assert.equal(rankOffers([null as unknown as ScoreCandidate], policy()).rejected[0]!.reason, 'invalid_offer')
 })
 

@@ -8,21 +8,33 @@ import { sha256, utf8, toHex } from '@nektar/core'
 import { randomUUID } from 'node:crypto'
 
 /** deterministic JSON: BigInt → decimal string, object keys sorted recursively, array order kept */
-export const marketJson = (v: unknown): string => JSON.stringify(v, (_k, x) =>
-  typeof x === 'bigint' ? x.toString()
-  : (x !== null && typeof x === 'object' && !Array.isArray(x)
-    ? Object.fromEntries(Object.keys(x as object).sort().map(k => [k, (x as Record<string, unknown>)[k]]))
-    : x))
+export const marketJson = (v: unknown): string =>
+  JSON.stringify(v, (_k, x) =>
+    typeof x === 'bigint'
+      ? x.toString()
+      : x !== null && typeof x === 'object' && !Array.isArray(x)
+        ? Object.fromEntries(
+            Object.keys(x as object)
+              .sort()
+              .map((k) => [k, (x as Record<string, unknown>)[k]])
+          )
+        : x
+  )
 
 const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const HASH64_RE = /^[0-9a-f]{64}$/i
-const numLike = (v: unknown): boolean => typeof v === 'bigint' || (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) || (typeof v === 'string' && /^[0-9]{1,20}$/.test(v))
+const numLike = (v: unknown): boolean =>
+  typeof v === 'bigint' || (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) || (typeof v === 'string' && /^[0-9]{1,20}$/.test(v))
 
 // shared artifact machinery — canonical → sha256 → DER sign | verify
 const sigFor = <T>(key: PrivateKey, obj: T, canonical: (t: T) => string): string =>
   toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(canonical(obj))))).toDER() as number[]))
 const verifyDigest = (pubHex: string, digest: Uint8Array, sigHex: string): boolean => {
-  try { return PublicKey.fromString(pubHex).verify(Array.from(digest), Signature.fromDER(sigHex, 'hex')) } catch { return false }
+  try {
+    return PublicKey.fromString(pubHex).verify(Array.from(digest), Signature.fromDER(sigHex, 'hex'))
+  } catch {
+    return false
+  }
 }
 const DOMAIN_RE = /^[a-z0-9][a-z0-9._-]{0,47}$/
 
@@ -54,13 +66,16 @@ export interface WantAd {
    *  absent changes nothing: the canonical digest covers only present fields. */
   journal?: { stream: string }
 }
-export interface SignedWant { want: WantAd, sig: string }
+export interface SignedWant {
+  want: WantAd
+  sig: string
+}
 
 const WANT_PREFIX = 'nektar:market:want:1\n'
 const wantCanonical = (w: WantAd) => `${WANT_PREFIX}${marketJson(w)}`
 const wantDigest = (w: WantAd) => sha256(utf8(wantCanonical(w)))
 
-export const wantTaskDigest = (fields: { domains: string[], question?: string, maxSats?: number }): string =>
+export const wantTaskDigest = (fields: { domains: string[]; question?: string; maxSats?: number }): string =>
   toHex(Uint8Array.from(sha256(utf8(marketJson({ domains: [...fields.domains].sort(), maxSats: fields.maxSats ?? null, question: fields.question ?? '' })))))
 
 // allowExpired: verify a signed historical artifact (evidence) — liveness is a
@@ -82,7 +97,8 @@ const wantShapeError = (w: WantAd, allowExpired = false, now = Date.now()): stri
   if (typeof w.taskHash !== 'string' || !HASH64_RE.test(w.taskHash)) return 'bad taskHash'
   if (w.previousHash !== undefined && (typeof w.previousHash !== 'string' || !HASH64_RE.test(w.previousHash))) return 'bad previousHash'
   if (w.revision > 1 && w.previousHash === undefined) return 'revision>1 requires previousHash'
-  if (!Array.isArray(w.domains) || w.domains.length === 0 || w.domains.length > 32 || !w.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return 'bad domains'
+  if (!Array.isArray(w.domains) || w.domains.length === 0 || w.domains.length > 32 || !w.domains.every((d) => typeof d === 'string' && DOMAIN_RE.test(d)))
+    return 'bad domains'
   if (w.question !== undefined && (typeof w.question !== 'string' || w.question.length > 560)) return 'bad question'
   if (w.maxSats !== undefined && (!Number.isSafeInteger(w.maxSats) || w.maxSats < 0)) return 'bad maxSats'
   if (w.endpoint !== undefined && (typeof w.endpoint !== 'string' || !/^https?:\/\/\S{2,200}$/.test(w.endpoint))) return 'bad endpoint'
@@ -94,21 +110,23 @@ const wantShapeError = (w: WantAd, allowExpired = false, now = Date.now()): stri
 
 // per-producer stream state — signers auto-stamp streamSeq/prevHash; the
 // stream commits are what a reader detects gaps in
-const streamState = new Map<string, { seq: number, hash: string }>()
+const streamState = new Map<string, { seq: number; hash: string }>()
 const GENESIS_HASH = '0'.repeat(64)
-export function streamRef (pub: string, kind: string, prevHash?: string): { streamSeq: number, prevHash: string } {
+export function streamRef(pub: string, kind: string, prevHash?: string): { streamSeq: number; prevHash: string } {
   const k = `${pub}:${kind}`
   const s = streamState.get(k) ?? { seq: 0, hash: GENESIS_HASH }
   streamState.set(k, { seq: s.seq + 1, hash: prevHash ?? s.hash })
   return { streamSeq: s.seq + 1, prevHash: s.hash }
 }
-export function streamCommit (pub: string, kind: string, hash: string): void {
-  const s = streamState.get(`${pub}:${kind}`); if (s) s.hash = hash
+export function streamCommit(pub: string, kind: string, hash: string): void {
+  const s = streamState.get(`${pub}:${kind}`)
+  if (s) s.hash = hash
 }
 
-export type WantInput = Omit<WantAd, 'pub' | 'wantId' | 'revision' | 'status' | 'taskHash' | 'previousHash'> & Partial<Pick<WantAd, 'wantId' | 'revision' | 'status' | 'taskHash' | 'previousHash'>>
+export type WantInput = Omit<WantAd, 'pub' | 'wantId' | 'revision' | 'status' | 'taskHash' | 'previousHash'> &
+  Partial<Pick<WantAd, 'wantId' | 'revision' | 'status' | 'taskHash' | 'previousHash'>>
 
-export function signWant (key: PrivateKey, fields: WantInput): SignedWant {
+export function signWant(key: PrivateKey, fields: WantInput): SignedWant {
   const pub = key.toPublicKey().toString()
   const want: WantAd = {
     ...fields,
@@ -124,18 +142,21 @@ export function signWant (key: PrivateKey, fields: WantInput): SignedWant {
   // hosts and engine alike; signers needn't second-guess other clocks
   const err = wantShapeError(want, true)
   if (err !== null) throw new Error(`signWant: ${err}`)
-  const sr = fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'want')
+  const sr =
+    fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'want')
   Object.assign(want, sr)
   streamCommit(pub, 'want', toHex(Uint8Array.from(wantDigest(want))))
   return { want, sig: sigFor(key, want, wantCanonical) }
 }
 
-export function verifyWant (want: WantAd, sigHex: string, opts?: { allowExpired?: boolean, now?: number }): boolean {
+export function verifyWant(want: WantAd, sigHex: string, opts?: { allowExpired?: boolean; now?: number }): boolean {
   if (wantShapeError(want, opts?.allowExpired ?? false, opts?.now ?? Date.now()) !== null) return false
   if (want.streamSeq === undefined || want.prevHash === undefined) return false // v2: stream fields required
   try {
     return verifyDigest(want.pub, wantDigest(want), sigHex)
-  } catch { return false }
+  } catch {
+    return false
+  }
 }
 
 // ── offers — the enumerable shelf: a signed per-record sale listing ─────
@@ -175,7 +196,10 @@ export interface OfferAd {
    *  absent changes nothing: the canonical digest covers only present fields. */
   journal?: { stream: string }
 }
-export interface SignedOffer { offer: OfferAd, sig: string }
+export interface SignedOffer {
+  offer: OfferAd
+  sig: string
+}
 
 const OFFER_PREFIX = 'nektar:market:offer:1\n'
 const offerCanonical = (o: OfferAd) => `${OFFER_PREFIX}${marketJson(o)}`
@@ -214,18 +238,21 @@ const offerShapeError = (o: OfferAd, allowExpired = false, now = Date.now()): st
   if (typeof o.shard !== 'string' || o.shard.length === 0 || o.shard.length > 64) return 'bad shard'
   if (!Number.isSafeInteger(o.seq) || o.seq < 0) return 'bad seq'
   if (!Number.isSafeInteger(o.priceSats) || o.priceSats < 0) return 'bad priceSats'
-  if (!Array.isArray(o.domains) || o.domains.length > 32 || !o.domains.every(d => typeof d === 'string' && DOMAIN_RE.test(d))) return 'bad domains'
+  if (!Array.isArray(o.domains) || o.domains.length > 32 || !o.domains.every((d) => typeof d === 'string' && DOMAIN_RE.test(d))) return 'bad domains'
   for (const h of [o.shardId, o.leaf, o.hdp, o.batchR]) if (h !== undefined && (typeof h !== 'string' || !/^[0-9a-f]{40,64}$/i.test(h))) return 'bad hex field'
   if (!Number.isSafeInteger(o.ts) || o.ts <= 0) return 'bad ts'
   if (o.exp !== undefined && (!Number.isSafeInteger(o.exp) || (!allowExpired && o.exp <= now))) return 'expired'
   if (journalError(o.journal) !== null) return 'bad journal'
-  if (o.offer !== undefined) { const q = publicQuoteError(o.offer); if (q !== null) return q }
+  if (o.offer !== undefined) {
+    const q = publicQuoteError(o.offer)
+    if (q !== null) return q
+  }
   return null
 }
 
 export type OfferInput = Omit<OfferAd, 'pub' | 'offerId' | 'revision' | 'previousHash'> & Partial<Pick<OfferAd, 'offerId' | 'revision' | 'previousHash'>>
 
-export function signOffer (key: PrivateKey, fields: OfferInput): SignedOffer {
+export function signOffer(key: PrivateKey, fields: OfferInput): SignedOffer {
   const pub = key.toPublicKey().toString()
   const offer: OfferAd = {
     ...fields,
@@ -236,16 +263,19 @@ export function signOffer (key: PrivateKey, fields: OfferInput): SignedOffer {
   }
   const err = offerShapeError(offer, true)
   if (err !== null) throw new Error(`signOffer: ${err}`)
-  const sr = fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'offer')
+  const sr =
+    fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'offer')
   Object.assign(offer, sr)
   streamCommit(pub, 'offer', toHex(Uint8Array.from(offerDigest(offer))))
   return { offer, sig: sigFor(key, offer, offerCanonical) }
 }
 
-export function verifyOffer (offer: OfferAd, sigHex: string, opts?: { allowExpired?: boolean, now?: number }): boolean {
+export function verifyOffer(offer: OfferAd, sigHex: string, opts?: { allowExpired?: boolean; now?: number }): boolean {
   if (offerShapeError(offer, opts?.allowExpired ?? false, opts?.now ?? Date.now()) !== null) return false
   if (offer.streamSeq === undefined || offer.prevHash === undefined) return false // v2: stream fields required
   try {
     return verifyDigest(offer.pub, offerDigest(offer), sigHex)
-  } catch { return false }
+  } catch {
+    return false
+  }
 }

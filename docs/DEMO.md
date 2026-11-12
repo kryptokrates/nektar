@@ -11,18 +11,18 @@ by anyone — no login, no trust in us.
 
 1. **Discovery** — `GET /.well-known/x402` (public, no auth): the
    priced-tool catalog, `scheme: exact`, `network: bsv:teratestnet`.
-   *"The service publishes what it charges before you ask."*
+   _"The service publishes what it charges before you ask."_
 
 2. **Ask** — any MCP client calls `groundedAnswer`. Unpaid → the tool
    returns a **402 invoice** (x402 v2 `PaymentRequired`): amount,
    operator address, `nektarpay:<invoiceId>` tag.
-   *"HTTP 402 — reserved since 1997, finally doing its job."*
+   _"HTTP 402 — reserved since 1997, finally doing its job."_
 
 3. **Pay** — the client signs a normal BSV tx with a WIF key: one
    output pays the operator ≥ the price, one `OP_FALSE OP_RETURN`
    carries the invoice tag. `payclient.ts` shows the whole thing in
    ~40 lines — no wallet protocol, no account.
-   *"The signature IS the authorization — no API key, no session."*
+   _"The signature IS the authorization — no API key, no session."_
 
 4. **Committed answer** — the service verifies the tx, broadcasts it
    through its chain broadcaster, and the receipt **commits the
@@ -32,7 +32,7 @@ by anyone — no login, no trust in us.
 5. **Verify on a phone** — open the verify URL (browsers get the human
    page; curl gets JSON). Green `paid` line, anchored fragments, the
    committed answer to compare against what the AI showed.
-   *"Anyone can check it — the check needs no credentials."*
+   _"Anyone can check it — the check needs no credentials."_
 
 ## Run it
 
@@ -64,7 +64,7 @@ A worked example minted on 2026-11-03 (still verifiable):
   our e2e deliberately chained them and hit exactly this.
 - **Commitment ≠ truth.** The page says it: the receipt proves the
   answer was committed unaltered and derives from anchored records —
-  it can't prove the answer is *right*. Model identity is *declared*,
+  it can't prove the answer is _right_. Model identity is _declared_,
   not zkML-proven.
 - **Everything else is checkable without us.** The receipt token is a
   hash of the committed record; `/v1/verify` re-derives it publicly.

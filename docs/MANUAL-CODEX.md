@@ -12,7 +12,7 @@ public testnet (real transactions, test coins).
 
 ## What a blockchain-less AI gives you today
 
-- **An answer.** Maybe a citation. Nothing you can *check* — the
+- **An answer.** Maybe a citation. Nothing you can _check_ — the
   citation asserts the source exists; it doesn't prove it.
 - **Memory in the vendor's database.** Mutable, invisible, unportable.
   The vendor's "memory feature" can be edited, aged out, or deleted —
@@ -22,7 +22,7 @@ public testnet (real transactions, test coins).
 - **No proof for third parties.** A screenshot of a chat proves
   nothing — it's trivially fakeable.
 - **No grounding check.** You cannot verify whether the answer came
-  from *your* documents or was confabulated from weights.
+  from _your_ documents or was confabulated from weights.
 - **Account-based billing.** A subscription metered by the vendor, on
   the vendor's numbers, audited by nobody.
 - **All-or-nothing sharing.** Showing someone one answer means
@@ -30,30 +30,30 @@ public testnet (real transactions, test coins).
 
 ## What you get here instead
 
-| | today | with nektar |
-|---|---|---|
-| **Memory** | mutable, vendor-held | append-only log; every batch anchors a Merkle root on-chain — edits break the proofs |
-| **Answers** | asserted | `groundedAnswer` strips every claim it can't derive from verified fragments — the answer is *pruned* to what records support |
-| **Proof for others** | screenshots | an anchored, signed receipt — a URL anyone opens, a QR anyone scans, no account needed |
-| **Billing** | trust our metering | per-call atomic payment; the receipt names the settlement txid — **the receipt log IS the invoice**, publicly auditable |
-| **Portability** | dies with the subscription | shard keys are yours; records export and re-verify independently |
-| **Disclosure** | show everything or nothing | prove one claim exists in memory without revealing the rest |
-| **Trust** | vendor says so | receipts verify against a public ledger the service doesn't control |
+|                      | today                      | with nektar                                                                                                                  |
+| -------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Memory**           | mutable, vendor-held       | append-only log; every batch anchors a Merkle root on-chain — edits break the proofs                                         |
+| **Answers**          | asserted                   | `groundedAnswer` strips every claim it can't derive from verified fragments — the answer is _pruned_ to what records support |
+| **Proof for others** | screenshots                | an anchored, signed receipt — a URL anyone opens, a QR anyone scans, no account needed                                       |
+| **Billing**          | trust our metering         | per-call atomic payment; the receipt names the settlement txid — **the receipt log IS the invoice**, publicly auditable      |
+| **Portability**      | dies with the subscription | shard keys are yours; records export and re-verify independently                                                             |
+| **Disclosure**       | show everything or nothing | prove one claim exists in memory without revealing the rest                                                                  |
+| **Trust**            | vendor says so             | receipts verify against a public ledger the service doesn't control                                                          |
 
 The honest boundary, printed on every verify page: this proves the
 answer was **committed and is derivable from sealed records** — never
-that it's *true*. Model identity is *declared*, not zkML-proven.
+that it's _true_. Model identity is _declared_, not zkML-proven.
 
 ---
 
 ## Pick your journey
 
-| | setup | what you can do |
-|---|---|---|
-| **A. Watch + verify** | none | open a receipt link on your phone — see the whole verify surface |
+|                                      | setup                          | what you can do                                                                                                |
+| ------------------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| **A. Watch + verify**                | none                           | open a receipt link on your phone — see the whole verify surface                                               |
 | **B. Free client on the hosted box** | bearer token from the operator | `remember`, `recall`, `recall`-verified proofs, `payQuote`, 30+ tools — everything except the three paid tools |
-| **C. Paid client on the hosted box** | bearer + a funded testnet WIF | the full arc: 402 invoice → your signed tx → receipt that names your txid |
-| **D. Your own instance** | clone + build | everything, offline, on the simulated chain — your own keys, your own data dir |
+| **C. Paid client on the hosted box** | bearer + a funded testnet WIF  | the full arc: 402 invoice → your signed tx → receipt that names your txid                                      |
+| **D. Your own instance**             | clone + build                  | everything, offline, on the simulated chain — your own keys, your own data dir                                 |
 
 ### A — Watch + verify (zero setup)
 
@@ -114,6 +114,7 @@ The flow in-session:
    the same call with `payment:` set to that object. (Codex can run it
    as a shell step; the WIF never leaves your machine — the service
    only sees the signed tx.)
+
 3. The service verifies the tx (pays the operator ≥ amount + carries
    the invoice tag), broadcasts it, and the receipt **commits your
    txid**. `verify:` link → green `paid` line, auditable on the public
@@ -166,17 +167,17 @@ block the turn — honest boundary vs Claude Code's Stop hook). Setup:
 
 ## The tools you'll actually use
 
-| tool | what for |
-|---|---|
-| `remember` | commit a fact to a shard — append-only, anchors on-chain |
-| `recall` | read a record back — `unverifiable` until its anchor is proven |
-| `groundedAnswer` | answer claims, each citing a fragment; ungrounded claims stripped; returns the receipt token |
-| `commitReceipt` | commit an externally-produced answer receipt |
-| `verifyReceipt` | re-check a receipt token programmatically |
-| `payQuote` | get a 402 invoice for a paid tool without calling it |
-| `anchor` | force the shard anchor now (paid — buys immediacy; batching is free) |
-| `modelManifest` | declare which model answered (declared, not proven) |
-| `checkpoint`/`proof` | shard Merkle root + a record's inclusion proof |
+| tool                 | what for                                                                                     |
+| -------------------- | -------------------------------------------------------------------------------------------- |
+| `remember`           | commit a fact to a shard — append-only, anchors on-chain                                     |
+| `recall`             | read a record back — `unverifiable` until its anchor is proven                               |
+| `groundedAnswer`     | answer claims, each citing a fragment; ungrounded claims stripped; returns the receipt token |
+| `commitReceipt`      | commit an externally-produced answer receipt                                                 |
+| `verifyReceipt`      | re-check a receipt token programmatically                                                    |
+| `payQuote`           | get a 402 invoice for a paid tool without calling it                                         |
+| `anchor`             | force the shard anchor now (paid — buys immediacy; batching is free)                         |
+| `modelManifest`      | declare which model answered (declared, not proven)                                          |
+| `checkpoint`/`proof` | shard Merkle root + a record's inclusion proof                                               |
 
 Full list: `tools/list` over `/mcp`, or `GET /v1/tools` on the box.
 

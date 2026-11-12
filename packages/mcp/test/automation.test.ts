@@ -12,7 +12,11 @@ import { join } from 'node:path'
 
 const mkParent = (key: PrivateKey, satoshis: number, tag: number): Transaction => {
   const t = new Transaction()
-  t.addInput({ sourceTXID: Buffer.from(`parent-${tag}`.padEnd(32, 'x')).toString('hex').slice(0, 64), sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })
+  t.addInput({
+    sourceTXID: Buffer.from(`parent-${tag}`.padEnd(32, 'x')).toString('hex').slice(0, 64),
+    sourceOutputIndex: 0,
+    unlockingScript: Script.fromHex('51')
+  })
   t.addOutput({ lockingScript: new P2PKH().lock(key.toPublicKey().toAddress([0x6f])), satoshis })
   return t
 }
@@ -34,7 +38,7 @@ test('takeReserve: bare call never hands out sub-dust change entries', async () 
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
   const r = new ReserveFunder(key, file)
-  r.addOwned(mkParent(key, 1, 1), 0)      // 1-sat change output — real but unspendable alone
+  r.addOwned(mkParent(key, 1, 1), 0) // 1-sat change output — real but unspendable alone
   r.addOwned(mkParent(key, 5_000, 2), 0)
   const u = await r.takeReserve()
   assert.equal(u?.satoshis, 5_000, 'bare takeReserve skips entries below the 546 dust floor')
@@ -55,8 +59,10 @@ test('takeReserve: spendCheck prunes chain-spent candidates and tries the next',
   const key = PrivateKey.fromRandom()
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-reserve-')), 'reserve.json')
   const r = new ReserveFunder(key, file)
-  const dead = mkParent(key, 1_000, 1); const live = mkParent(key, 2_000, 2)
-  r.addOwned(dead, 0); r.addOwned(live, 0)
+  const dead = mkParent(key, 1_000, 1)
+  const live = mkParent(key, 2_000, 2)
+  r.addOwned(dead, 0)
+  r.addOwned(live, 0)
   const deadOp = `${dead.id('hex')}:0`
   const u = await r.takeReserve(async (t, v) => `${t}:${v}` === deadOp, 500)
   assert.equal(u?.tx.id('hex'), live.id('hex'), 'spent candidate pruned, next-smallest tried')
@@ -64,8 +70,10 @@ test('takeReserve: spendCheck prunes chain-spent candidates and tries the next',
 })
 
 test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change', async () => {
-  const chain = new MockChain(); chain.verifyScripts = true
-  const funder = new MockFunder(); funder.topup(3, 50_000)
+  const chain = new MockChain()
+  chain.verifyScripts = true
+  const funder = new MockFunder()
+  funder.topup(3, 50_000)
   for (const t of funder.parents) chain.registerParent(t)
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const payee = PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])
@@ -78,19 +86,24 @@ test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change',
 
 test('sendSats: scriptHex target + opReturn tag', async () => {
   const chain = new MockChain()
-  const funder = new MockFunder(); funder.topup(1, 50_000)
+  const funder = new MockFunder()
+  funder.topup(1, 50_000)
   for (const t of funder.parents) chain.registerParent(t)
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const payeeScript = new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])).toHex()
   const r = await mem.sendSats({ amount: 1_000, scriptHex: payeeScript, opReturn: 'nektar-test' })
   const tx = (chain as any).known.get(r.txid) as Transaction
-  assert.ok(tx.outputs.some(o => o.satoshis === 1_000 && o.lockingScript.toHex() === payeeScript))
-  assert.ok(tx.outputs.some(o => o.lockingScript.toHex().startsWith('006a')), 'OP_RETURN output present')
+  assert.ok(tx.outputs.some((o) => o.satoshis === 1_000 && o.lockingScript.toHex() === payeeScript))
+  assert.ok(
+    tx.outputs.some((o) => o.lockingScript.toHex().startsWith('006a')),
+    'OP_RETURN output present'
+  )
 })
 
 test('bond ops serialize: a second covenant spend while one is in flight throws', async () => {
   const chain = new MockChain()
-  const funder = new MockFunder(); funder.topup(5, 100_000)
+  const funder = new MockFunder()
+  funder.topup(5, 100_000)
   for (const t of funder.parents) chain.registerParent(t)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { bond: { sats: 5_000, epochBlocks: 3, horizonBlocks: 4 } })
   await mem.bondDeploy(5_000)

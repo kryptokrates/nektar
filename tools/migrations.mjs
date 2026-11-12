@@ -17,7 +17,7 @@ export const MIGRATIONS = [
   }
 ]
 
-export function currentVersion (dataDir) {
+export function currentVersion(dataDir) {
   const f = join(dataDir, 'VERSION')
   if (!existsSync(f)) return 0
   return Number(readFileSync(f, 'utf8').trim()) || 0

@@ -20,8 +20,7 @@ export const nodeHash = (f: Fact): Bytes => dsha256(utf8(factCanonical(f)))
  * §14 edge commitment over the raw 32-byte hashes:
  * e_ij = dsha256(h_in1 ‖ … ‖ h_ink ‖ τ ‖ h_out)
  */
-export const edgeHash = (inputHs: Bytes[], ruleH: Bytes, outH: Bytes): Bytes =>
-  dsha256(concat(...inputHs, ruleH, outH))
+export const edgeHash = (inputHs: Bytes[], ruleH: Bytes, outH: Bytes): Bytes => dsha256(concat(...inputHs, ruleH, outH))
 
 /**
  * One applied inference step τ_ij: inputs are the rule's positive premises in
@@ -29,8 +28,15 @@ export const edgeHash = (inputHs: Bytes[], ruleH: Bytes, outH: Bytes): Bytes =>
  * `fromStep` is a context premise (EDB fact or a fact node committed in the
  * policy DAG — the caller decides, the guest proves the commitment case).
  */
-export interface PathInput { fact: Fact, fromStep: number | null }
-export interface PathStep { ruleId: string, inputs: PathInput[], output: Fact }
+export interface PathInput {
+  fact: Fact
+  fromStep: number | null
+}
+export interface PathStep {
+  ruleId: string
+  inputs: PathInput[]
+  output: Fact
+}
 export interface DerivationPath {
   conclusion: Fact
   conclusionH: Bytes // h_k of the last step's output — the journal's conclusionHash
@@ -43,7 +49,7 @@ export interface DerivationPath {
  * provable pointwise (absence can't be shown in the guest) — the path refuses
  * them with PathError instead of emitting an unverifiable step.
  */
-export function derivationPath (facts: Map<string, DerivedFact>, pred: string, args: string[]): DerivationPath | null {
+export function derivationPath(facts: Map<string, DerivedFact>, pred: string, args: string[]): DerivationPath | null {
   const root = facts.get(key(pred, args))
   if (!root) return null
   const steps: PathStep[] = []
@@ -75,11 +81,15 @@ export function derivationPath (facts: Map<string, DerivedFact>, pred: string, a
 
 /** one step's §14 edge once τ is bound to the rule's DAG node hash */
 export const stepEdge = (s: PathStep, ruleH: Bytes): Bytes =>
-  edgeHash(s.inputs.map(i => nodeHash(i.fact)), ruleH, nodeHash(s.output))
+  edgeHash(
+    s.inputs.map((i) => nodeHash(i.fact)),
+    ruleH,
+    nodeHash(s.output)
+  )
 
 /** fold dsha256(d‖e) over the committed edges, seeded with 32 zero bytes —
  * the same accumulation the guest performs while replaying the path */
-export function pathDigest (steps: PathStep[], ruleH: (ruleId: string) => Bytes): Bytes {
+export function pathDigest(steps: PathStep[], ruleH: (ruleId: string) => Bytes): Bytes {
   let d: Bytes = new Uint8Array(32)
   for (const s of steps) d = dsha256(concat(d, stepEdge(s, ruleH(s.ruleId))))
   return d

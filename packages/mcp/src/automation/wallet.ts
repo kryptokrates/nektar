@@ -8,21 +8,24 @@ export interface WalletDeps {
 }
 
 export type TxObservation =
-  | { status: 'seen', source: string }
-  | { status: 'proven', source: string, blockHeight: number }
-  | { status: 'rejected', source: string, reason: string }
-  | { status: 'conflicted', source: string, spentBy: string }
+  | { status: 'seen'; source: string }
+  | { status: 'proven'; source: string; blockHeight: number }
+  | { status: 'rejected'; source: string; reason: string }
+  | { status: 'conflicted'; source: string; spentBy: string }
 
 const NEVER_LEFT = /SpendGuard refused/i
 const DEFINITIVE = /rejected|missing inputs|mempool-conflict|double.?spen|utxo already spent|bad-txns|non-mandatory|unlocking scripts invalid|fee too low/i
 const ALREADY = /already (known|in|mined|exists)|txn-already/i
 
 export class WalletCoordinator {
-  constructor (private store: AutomationStore, private deps: WalletDeps) {}
+  constructor(
+    private store: AutomationStore,
+    private deps: WalletDeps
+  ) {}
 
-  async prepare (ctx: ActionContext, kind: string, tx: Transaction): Promise<WalletTx> {
+  async prepare(ctx: ActionContext, kind: string, tx: Transaction): Promise<WalletTx> {
     const parents: Record<string, string> = {}
-    const outs: Array<{ txid: string, vout: number, satoshis: number }> = []
+    const outs: Array<{ txid: string; vout: number; satoshis: number }> = []
     let vin = 0
     for (const inp of tx.inputs) {
       const src = inp.sourceTransaction
@@ -47,28 +50,43 @@ export class WalletCoordinator {
     return await this.store.recordPrepared({ actionId: ctx.actionId, operationId: ctx.operationId, kind, txid, rawHex: tx.toHex(), parents, feeSats })
   }
 
-  async prepareOwner (kind: string, tx: Transaction, actionId = `owner:${tx.id('hex')}`): Promise<WalletTx> {
+  async prepareOwner(kind: string, tx: Transaction, actionId = `owner:${tx.id('hex')}`): Promise<WalletTx> {
     const parents: Record<string, string> = {}
-    const outs: Array<{ txid: string, vout: number, satoshis: number }> = []
+    const outs: Array<{ txid: string; vout: number; satoshis: number }> = []
     let vin = 0
     for (const inp of tx.inputs) {
       const txid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
       const vout = inp.sourceOutputIndex ?? 0
       if (!txid) throw new Error('owner: input without an outpoint')
       outs.push({ txid, vout, satoshis: inp.sourceTransaction?.outputs[vout]?.satoshis ?? 0 })
-      if (inp.sourceTransaction) { parents[txid] = inp.sourceTransaction.toHex(); vin += inp.sourceTransaction.outputs[vout]?.satoshis ?? 0 }
+      if (inp.sourceTransaction) {
+        parents[txid] = inp.sourceTransaction.toHex()
+        vin += inp.sourceTransaction.outputs[vout]?.satoshis ?? 0
+      }
     }
     const prev = await this.store.walletTx({ actionId })
     if (prev) return prev
-    return await this.store.recordPrepared({ actionId, operationId: 'owner', kind, txid: tx.id('hex'), rawHex: tx.toHex(), parents, feeSats: Math.max(0, vin - tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)) }).then(async w => {
-      for (const o of outs) await this.store.leaseOutpoints(actionId, [o])
-      return w
-    })
+    return await this.store
+      .recordPrepared({
+        actionId,
+        operationId: 'owner',
+        kind,
+        txid: tx.id('hex'),
+        rawHex: tx.toHex(),
+        parents,
+        feeSats: Math.max(0, vin - tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0))
+      })
+      .then(async (w) => {
+        for (const o of outs) await this.store.leaseOutpoints(actionId, [o])
+        return w
+      })
   }
 
-  async rebuildTx (w: WalletTx): Promise<Transaction> { return this.rebuild(w) }
+  async rebuildTx(w: WalletTx): Promise<Transaction> {
+    return this.rebuild(w)
+  }
 
-  private rebuild (w: WalletTx): Transaction {
+  private rebuild(w: WalletTx): Transaction {
     const tx = Transaction.fromHex(w.rawHex)
     if (tx.id('hex') !== w.txid) throw new Error(`stored bytes for ${w.actionId} do not hash to ${w.txid}`)
     for (const inp of tx.inputs) {
@@ -78,12 +96,16 @@ export class WalletCoordinator {
     return tx
   }
 
-  async submit (actionId: string): Promise<{ state: TxState, txid: string, detail?: string }> {
+  async submit(actionId: string): Promise<{ state: TxState; txid: string; detail?: string }> {
     const w = await this.store.walletTx({ actionId })
     if (!w) throw new Error(`submit: nothing prepared for ${actionId}`)
     if (w.state !== 'prepared' && w.state !== 'submission_unknown' && w.state !== 'submitted') return { state: w.state, txid: w.txid }
     let res: BroadcastResult
-    try { res = await this.deps.broadcast(this.rebuild(w)) } catch (e) { res = { status: 'error', description: `transport: ${(e as Error).message}` } }
+    try {
+      res = await this.deps.broadcast(this.rebuild(w))
+    } catch (e) {
+      res = { status: 'error', description: `transport: ${(e as Error).message}` }
+    }
     const detail = res.description ?? ''
     if (res.status === 'success' || ALREADY.test(detail)) {
       await this.store.setTxState(actionId, 'submitted', { at: Date.now(), result: res }, true)
@@ -98,12 +120,12 @@ export class WalletCoordinator {
       await this.store.releaseLeases(actionId)
       return { state: 'rejected', txid: w.txid, detail }
     }
-    const state: TxState = DEFINITIVE.test(detail) && !/^transport:/.test(detail) ? 'rejected' : 'submission_unknown'
+    const state: TxState = DEFINITIVE.test(detail) && !detail.startsWith('transport:') ? 'rejected' : 'submission_unknown'
     await this.store.setTxState(actionId, state, { at: Date.now(), result: res }, true)
     return { state, txid: w.txid, detail }
   }
 
-  async observe (txid: string, o: TxObservation): Promise<TxState | undefined> {
+  async observe(txid: string, o: TxObservation): Promise<TxState | undefined> {
     const w = await this.store.walletTx({ txid })
     if (!w) return undefined
     const next: TxState = o.status === 'proven' ? 'confirmed' : o.status === 'seen' ? (w.state === 'confirmed' ? 'confirmed' : 'observed') : o.status
@@ -111,9 +133,10 @@ export class WalletCoordinator {
     return next
   }
 
-  async resubmitPending (): Promise<Array<{ actionId: string, state: TxState }>> {
-    const out: Array<{ actionId: string, state: TxState }> = []
-    for (const w of await this.store.walletTxs(['prepared', 'submission_unknown'])) out.push({ actionId: w.actionId, state: (await this.submit(w.actionId)).state })
+  async resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>> {
+    const out: Array<{ actionId: string; state: TxState }> = []
+    for (const w of await this.store.walletTxs(['prepared', 'submission_unknown']))
+      out.push({ actionId: w.actionId, state: (await this.submit(w.actionId)).state })
     return out
   }
 }

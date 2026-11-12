@@ -11,10 +11,17 @@ const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint'
 
 export const OPENAPI = {
   openapi: '3.1.0',
-  info: { title: 'nektar API', version: '1.0.0', description: 'Verifiable encrypted agent memory on BSV. Proofs establish inclusion, integrity and existence-by-time — never truth.' },
+  info: {
+    title: 'nektar API',
+    version: '1.0.0',
+    description: 'Verifiable encrypted agent memory on BSV. Proofs establish inclusion, integrity and existence-by-time — never truth.'
+  },
   paths: {
     '/mcp': {
-      post: { summary: 'MCP Streamable HTTP (JSON-RPC; initialize creates a session, mcp-session-id header thereafter)', responses: { 200: { description: 'JSON or SSE stream' } } },
+      post: {
+        summary: 'MCP Streamable HTTP (JSON-RPC; initialize creates a session, mcp-session-id header thereafter)',
+        responses: { 200: { description: 'JSON or SSE stream' } }
+      },
       get: { summary: 'MCP server-to-client SSE stream for a session', responses: { 200: { description: 'SSE' } } },
       delete: { summary: 'end an MCP session', responses: { 200: { description: 'closed' } } }
     },
@@ -25,25 +32,52 @@ export const OPENAPI = {
     '/v1/tools/{name}': {
       post: {
         summary: 'call a tool (same semantics as MCP tools/call); confidential reads need identity + clearance in the body',
-        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string', enum: TOOLS.map(t => t.name) } }],
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string', enum: TOOLS.map((t) => t.name) } }],
         requestBody: { content: { 'application/json': { schema: { type: 'object' } } } },
         responses: { 200: { description: 'tool result' }, 400: { description: 'tool error with reason' } }
       }
     },
     '/v1/proof/{shard}/{seq}': {
-      get: { summary: 'public proof bundle + verification result for one record', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }, { name: 'seq', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: { description: 'bundle + result' } } }
+      get: {
+        summary: 'public proof bundle + verification result for one record',
+        parameters: [
+          { name: 'shard', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'seq', in: 'path', required: true, schema: { type: 'integer' } }
+        ],
+        responses: { 200: { description: 'bundle + result' } }
+      }
     },
     '/v1/zkproof/{commit}': {
-      get: { summary: 'a committed ZK proof artifact by sha256 — private-cite proofs are public (they reveal nothing) so verifiers re-run them', parameters: [{ name: 'commit', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'proof bytes' }, 404: { description: 'unknown/mismatched commit' } } }
+      get: {
+        summary: 'a committed ZK proof artifact by sha256 — private-cite proofs are public (they reveal nothing) so verifiers re-run them',
+        parameters: [{ name: 'commit', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'proof bytes' }, 404: { description: 'unknown/mismatched commit' } }
+      }
     },
     '/v1/checkpoint/{shard}': {
-      get: { summary: 'latest signed checkpoint of the shard (LOG-007)', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'checkpoint + log pubkey' }, 404: { description: 'no anchor yet' } } }
+      get: {
+        summary: 'latest signed checkpoint of the shard (LOG-007)',
+        parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'checkpoint + log pubkey' }, 404: { description: 'no anchor yet' } }
+      }
     },
-    '/.well-known/nektar': { get: { summary: 'capability/pack discovery doc — verify base + offerable public shards (NEKTAR_PACK_SHARE=0 disables)', responses: { 200: { description: 'discovery doc' }, 404: { description: 'pack sharing disabled' } } } },
-    '/v1/pack/{shard}': { get: { summary: 'serve a public shard as a portable pack (records + proof bundles) — importShard re-verifies every bundle; private/gated shards refuse', parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'ShardPack JSON' }, 403: { description: 'private or level-gated' }, 404: { description: 'unknown/disabled' } } } },
+    '/.well-known/nektar': {
+      get: {
+        summary: 'capability/pack discovery doc — verify base + offerable public shards (NEKTAR_PACK_SHARE=0 disables)',
+        responses: { 200: { description: 'discovery doc' }, 404: { description: 'pack sharing disabled' } }
+      }
+    },
+    '/v1/pack/{shard}': {
+      get: {
+        summary: 'serve a public shard as a portable pack (records + proof bundles) — importShard re-verifies every bundle; private/gated shards refuse',
+        parameters: [{ name: 'shard', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'ShardPack JSON' }, 403: { description: 'private or level-gated' }, 404: { description: 'unknown/disabled' } }
+      }
+    },
     '/v1/verify': {
       get: {
-        summary: 'scan a receipt token — traffic-light checks that the answer receipt exists, re-hashes, is provenance-signed + anchored, and its cited fragments are anchored. JSON by default; Accept: text/html (or ?format=html) returns a check page with a QR.',
+        summary:
+          'scan a receipt token — traffic-light checks that the answer receipt exists, re-hashes, is provenance-signed + anchored, and its cited fragments are anchored. JSON by default; Accept: text/html (or ?format=html) returns a check page with a QR.',
         parameters: [{ name: 'r', in: 'query', required: true, schema: { type: 'string', description: 'receipt token nektarr1.<base64url hash>' } }],
         responses: { 200: { description: 'check list + ok flag' }, 400: { description: 'missing/malformed token' } }
       }
@@ -55,17 +89,38 @@ export const OPENAPI = {
         responses: { 200: { description: 'image/svg+xml badge' }, 400: { description: 'missing/malformed token' } }
       }
     },
-    '/.well-known/x402': { get: { summary: 'payment catalog — priced tools, scheme and network (x402 discovery doc)', responses: { 200: { description: 'catalog' }, 404: { description: 'payments disabled' } } } },
-    '/dashboard': { get: { summary: 'operator audit surface — one HTML page: identity, money, receipts, market. Token-gated (non-public route).', responses: { 200: { description: 'text/html dashboard' } } } },
+    '/.well-known/x402': {
+      get: {
+        summary: 'payment catalog — priced tools, scheme and network (x402 discovery doc)',
+        responses: { 200: { description: 'catalog' }, 404: { description: 'payments disabled' } }
+      }
+    },
+    '/dashboard': {
+      get: {
+        summary: 'operator audit surface — one HTML page: identity, money, receipts, market. Token-gated (non-public route).',
+        responses: { 200: { description: 'text/html dashboard' } }
+      }
+    },
     '/v1/pay/quote': {
       get: {
-        summary: 'payment invoice for a paid tool (NEKTAR_PAYMENTS=1) — 402 + PAYMENT-REQUIRED header carrying an x402 v2 PaymentRequired; pay the invoice with a signed tx then retry the tool with payment:{invoiceId,transaction}',
+        summary:
+          'payment invoice for a paid tool (NEKTAR_PAYMENTS=1) — 402 + PAYMENT-REQUIRED header carrying an x402 v2 PaymentRequired; pay the invoice with a signed tx then retry the tool with payment:{invoiceId,transaction}',
         parameters: [{ name: 'tool', in: 'query', required: true, schema: { type: 'string', enum: ['anchor', 'groundedAnswer', 'commitReceipt'] } }],
         responses: { 402: { description: 'PaymentRequired invoice' }, 404: { description: 'payments disabled' } }
       }
     },
-    '/v1/wallet': { get: { summary: 'fee wallet: address, balance, spend caps, runway (main only)', responses: { 200: { description: 'wallet ops' }, 404: { description: 'ops not enabled' } } } },
-    '/v1/costs': { get: { summary: 'broadcast cost ledger entries (main only)', responses: { 200: { description: 'cost records' }, 404: { description: 'ops not enabled' } } } }
+    '/v1/wallet': {
+      get: {
+        summary: 'fee wallet: address, balance, spend caps, runway (main only)',
+        responses: { 200: { description: 'wallet ops' }, 404: { description: 'ops not enabled' } }
+      }
+    },
+    '/v1/costs': {
+      get: {
+        summary: 'broadcast cost ledger entries (main only)',
+        responses: { 200: { description: 'cost records' }, 404: { description: 'ops not enabled' } }
+      }
+    }
   }
 } as const
 
@@ -74,7 +129,10 @@ export const OPENAPI = {
  *  REJECTED/DOUBLE_SPEND_ATTEMPTED → deliverTxRejected; MINED/IMMUTABLE →
  *  the carried/fetched BUMP must verify against our own tracker before
  *  deliverTxProof — a status is a hint, never proof on the broadcaster's word. */
-export async function handleBroadcasterStatus (mem: NektarMemory, j: { txid?: string, txStatus?: string, merklePath?: string, extraInfo?: string }): Promise<void> {
+export async function handleBroadcasterStatus(
+  mem: NektarMemory,
+  j: { txid?: string; txStatus?: string; merklePath?: string; extraInfo?: string }
+): Promise<void> {
   const status = String(j.txStatus ?? '?')
   mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: status.toLowerCase() }, 1, 'broadcaster status callbacks received')
   mem.events.emit('broadcasterStatus', { txid: j.txid, status, detail: j.extraInfo })
@@ -91,28 +149,45 @@ export async function handleBroadcasterStatus (mem: NektarMemory, j: { txid?: st
         try {
           const cand = MerklePath.fromHex(j.merklePath)
           if (await cand.verify(j.txid, await mem.sdkTracker())) mp = cand
-        } catch { /* unusable — fetch evidence instead */ }
+        } catch {
+          /* unusable — fetch evidence instead */
+        }
       }
       if (mp === undefined) {
         const cand2 = await (mem as any).chain?.merklePathOf?.(j.txid)
         // the fetched path must verify against our own tracker too —
         // the broadcaster's word alone is a hint, never a proof
-        if (cand2 !== undefined) { try { if (await cand2.verify(j.txid, await mem.sdkTracker())) mp = cand2 } catch { /* unverifiable */ } }
+        if (cand2 !== undefined) {
+          try {
+            if (await cand2.verify(j.txid, await mem.sdkTracker())) mp = cand2
+          } catch {
+            /* unverifiable */
+          }
+        }
       }
       if (mp) mem.deliverTxProof(j.txid, mp)
       // no fallback: a status without retrievable evidence is a hint, not a confirmation
-    } catch { /* evidence fetch failed — leave unconfirmed, reconcile later */ }
+    } catch {
+      /* evidence fetch failed — leave unconfirmed, reconcile later */
+    }
   }
 }
 
-async function body (req: IncomingMessage): Promise<unknown> {
+async function body(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = []
   let size = 0
-  for await (const c of req) { size += (c as Buffer).length; if (size > 16_000_000) throw new Error('body too large'); chunks.push(c as Buffer) }
+  for await (const c of req) {
+    size += (c as Buffer).length
+    if (size > 16_000_000) throw new Error('body too large')
+    chunks.push(c as Buffer)
+  }
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
 }
 
-export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<unknown>, costs: () => unknown, importFunding?: (txid: string) => Promise<unknown> }): Server {
+export function createHttpApi(
+  mem: NektarMemory,
+  ops?: { wallet: () => Promise<unknown>; costs: () => unknown; importFunding?: (txid: string) => Promise<unknown> }
+): Server {
   // MCP Streamable HTTP: one transport + McpServer per session (mcp-session-id)
   const sessions = new Map<string, import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport>()
   const mcp = async (req: IncomingMessage, res: import('node:http').ServerResponse) => {
@@ -122,16 +197,30 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
     const parsed = req.method === 'POST' ? await body(req) : undefined
     let transport = typeof sid === 'string' ? sessions.get(sid) : undefined
     if (!transport) {
-      if (req.method !== 'POST' || typeof sid === 'string') { res.writeHead(404, { 'content-type': 'application/json' }); res.end(json({ jsonrpc: '2.0', error: { code: -32001, message: 'unknown MCP session' }, id: null })); return }
-      const t: import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID(), onsessioninitialized: id => { sessions.set(id, t) } })
-      t.onclose = () => { if (t.sessionId) sessions.delete(t.sessionId) }
+      if (req.method !== 'POST' || typeof sid === 'string') {
+        res.writeHead(404, { 'content-type': 'application/json' })
+        res.end(json({ jsonrpc: '2.0', error: { code: -32001, message: 'unknown MCP session' }, id: null }))
+        return
+      }
+      const t: import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => {
+          sessions.set(id, t)
+        }
+      })
+      t.onclose = () => {
+        if (t.sessionId) sessions.delete(t.sessionId)
+      }
       await createMcpServer(mem, ops).connect(t)
       transport = t
     }
     await transport.handleRequest(req, res, parsed)
   }
   const server = createServer(async (req, res) => {
-    const send = (code: number, v: unknown, type = 'application/json') => { res.writeHead(code, { 'content-type': type }); res.end(typeof v === 'string' ? v : json(v)) }
+    const send = (code: number, v: unknown, type = 'application/json') => {
+      res.writeHead(code, { 'content-type': type })
+      res.end(typeof v === 'string' ? v : json(v))
+    }
     const url = new URL(req.url ?? '/', 'http://x')
     const p = url.pathname.split('/').filter(Boolean)
     // NEKTAR_HTTP_TOKEN: when set, everything except the public read-only
@@ -141,8 +230,20 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
     // bearer token — the gate that makes a public bind safe. Unset =
     // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
     const tok = process.env.NEKTAR_HTTP_TOKEN
-    const publicPath = url.pathname === '/v1/health' || url.pathname === '/v1/verify' || url.pathname === '/v1/badge' || url.pathname === '/.well-known/x402' || url.pathname === '/.well-known/nektar' || url.pathname.startsWith('/v1/pack/') || url.pathname.startsWith('/v1/zkproof/') || url.pathname === '/v1/broadcaster-callback' || url.pathname === '/v1/arc-callback'
-    const operatorApproval = url.pathname.startsWith('/v1/automation/approvals/') && process.env.NEKTAR_OPERATOR_TOKEN && req.headers.authorization === `Bearer ${process.env.NEKTAR_OPERATOR_TOKEN}`
+    const publicPath =
+      url.pathname === '/v1/health' ||
+      url.pathname === '/v1/verify' ||
+      url.pathname === '/v1/badge' ||
+      url.pathname === '/.well-known/x402' ||
+      url.pathname === '/.well-known/nektar' ||
+      url.pathname.startsWith('/v1/pack/') ||
+      url.pathname.startsWith('/v1/zkproof/') ||
+      url.pathname === '/v1/broadcaster-callback' ||
+      url.pathname === '/v1/arc-callback'
+    const operatorApproval =
+      url.pathname.startsWith('/v1/automation/approvals/') &&
+      process.env.NEKTAR_OPERATOR_TOKEN &&
+      req.headers.authorization === `Bearer ${process.env.NEKTAR_OPERATOR_TOKEN}`
     if (tok && !publicPath && !operatorApproval && req.headers.authorization !== `Bearer ${tok}`) {
       return send(401, { error: 'unauthorized' })
     }
@@ -155,31 +256,61 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
         // SSE — one line per state change; the page swaps its blocks on each
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
         res.write(': connected\n\n')
-        const push = (name: string) => { try { res.write(`data: ${name}\n\n`) } catch {} }
+        const push = (name: string) => {
+          try {
+            res.write(`data: ${name}\n\n`)
+          } catch {}
+        }
         mem.events.on('change', push)
-        const beat = setInterval(() => { try { res.write(': beat\n\n') } catch {} }, 15_000)
-        req.on('close', () => { clearInterval(beat); mem.events.off('change', push) })
+        const beat = setInterval(() => {
+          try {
+            res.write(': beat\n\n')
+          } catch {}
+        }, 15_000)
+        req.on('close', () => {
+          clearInterval(beat)
+          mem.events.off('change', push)
+        })
         return
       }
       if (req.method === 'GET' && url.pathname === '/dashboard') {
         // the operator audit surface — one page: identity, money, receipts,
         // market. Every block degrades to an honest empty state.
-        const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
+        const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
         const d = await mem.doctor()
-        if (ops?.wallet) { const w = await ops.wallet() as Record<string, unknown>; d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 } }
+        if (ops?.wallet) {
+          const w = (await ops.wallet()) as Record<string, unknown>
+          d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
+        }
         const host = req.headers.host ?? 'localhost'
         const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${host}`
         // receipts — newest last N
-        const rrecs = await mem.records('__receipts__').catch(() => [] as Array<{ seq: number, data?: string }>) as Array<{ seq: number, data?: string }>
-        const receiptRows = rrecs.slice(-10).reverse().map(r => {
-          let amt = '', tool = ''
-          const m = r.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
-          if (m) { try { const j = JSON.parse(Buffer.from(m[1]!, 'base64url').toString()); amt = String(j.payment?.amountSats ?? j.payment?.amount ?? ''); tool = String(j.tool ?? j.toolName ?? '') } catch {} }
-          return `<div class="row"><span class="dim">#${r.seq}</span><span>${esc(tool || 'answer')}</span><span>${amt ? esc(amt) + ' sats' : ''}</span><a class="pill" href="${base}/v1/verify?s=${r.seq}&format=html">verify ↗</a></div>`
-        }).join('')
+        const rrecs = (await mem.records('__receipts__').catch(() => [] as Array<{ seq: number; data?: string }>)) as Array<{ seq: number; data?: string }>
+        const receiptRows = rrecs
+          .slice(-10)
+          .reverse()
+          .map((r) => {
+            let amt = '',
+              tool = ''
+            const m = r.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
+            if (m) {
+              try {
+                const j = JSON.parse(Buffer.from(m[1]!, 'base64url').toString())
+                amt = String(j.payment?.amountSats ?? j.payment?.amount ?? '')
+                tool = String(j.tool ?? j.toolName ?? '')
+              } catch {}
+            }
+            return `<div class="row"><span class="dim">#${r.seq}</span><span>${esc(tool || 'answer')}</span><span>${amt ? esc(amt) + ' sats' : ''}</span><a class="pill" href="${base}/v1/verify?s=${r.seq}&format=html">verify ↗</a></div>`
+          })
+          .join('')
         // market — offerable shards + autorespond + fraud
-        const cat = await mem.shardCatalog().catch(() => [] as Array<{ shard: string, domains: string[], offers?: Array<{ kind: string, priceSats: number }> }>)
-        const marketRows = cat.map(m => `<div class="row"><span><b>${esc(m.shard)}</b></span><span class="dim">${esc(m.domains.join(', '))}</span><span>${esc(m.offers?.map(o => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? '')}</span></div>`).join('')
+        const cat = await mem.shardCatalog().catch(() => [] as Array<{ shard: string; domains: string[]; offers?: Array<{ kind: string; priceSats: number }> }>)
+        const marketRows = cat
+          .map(
+            (m) =>
+              `<div class="row"><span><b>${esc(m.shard)}</b></span><span class="dim">${esc(m.domains.join(', '))}</span><span>${esc(m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? '')}</span></div>`
+          )
+          .join('')
         const dataDir = (mem as unknown as { opts?: { dataDir?: string } }).opts?.dataDir ?? '.nektar'
         const fraudRows = ''
         // agents panel — this agent's declared identity + discovered peers
@@ -191,14 +322,21 @@ export function createHttpApi (mem: NektarMemory, ops?: { wallet: () => Promise<
         const badge = (on: boolean, yes: string, no: string) => `<span class="badge ${on ? 'on' : 'off'}">${on ? yes : no}</span>`
         const au = mem.automation
         const pending = au ? await au.store.approvals('pending') : []
-        const autoOps = au ? (await au.store.operations()).filter(o => o.kind !== 'enable').slice(-8).reverse() : []
+        const autoOps = au
+          ? (await au.store.operations())
+              .filter((o) => o.kind !== 'enable')
+              .slice(-8)
+              .reverse()
+          : []
         const escJson = (v: unknown) => esc(JSON.stringify(v))
-        const automationCard = au ? `<div class="card">
+        const automationCard = au
+          ? `<div class="card">
 <div class="top"><span class="label">Automation</span><span class="tags">${pending.length} pending approval${pending.length === 1 ? '' : 's'}</span></div>
-${pending.length ? pending.map(a => `<div class="row"><div><b>${esc(a.reason)}</b><div class="dim">≤ ${a.maxExtraSats} sats · ${esc(a.operationId.slice(0, 8))}… · expires ${esc(new Date(a.expiresAt).toISOString())}</div></div><button class="pill" onclick="decide('${esc(a.approvalId)}',true)">approve</button><button class="pill" onclick="decide('${esc(a.approvalId)}',false)">deny</button></div>`).join('') : '<div class="empty">no pending approvals — routine trades do not prompt</div>'}
-${autoOps.map(o => `<div class="row"><span class="dim">${esc(o.role)} ${esc(o.kind)}</span><b>${esc(o.state)}</b>${o.lastError ? `<span class="warn">${esc(o.lastError)}</span>` : ''}</div>`).join('')}
+${pending.length ? pending.map((a) => `<div class="row"><div><b>${esc(a.reason)}</b><div class="dim">≤ ${a.maxExtraSats} sats · ${esc(a.operationId.slice(0, 8))}… · expires ${esc(new Date(a.expiresAt).toISOString())}</div></div><button class="pill" onclick="decide('${esc(a.approvalId)}',true)">approve</button><button class="pill" onclick="decide('${esc(a.approvalId)}',false)">deny</button></div>`).join('') : '<div class="empty">no pending approvals — routine trades do not prompt</div>'}
+${autoOps.map((o) => `<div class="row"><span class="dim">${esc(o.role)} ${esc(o.kind)}</span><b>${esc(o.state)}</b>${o.lastError ? `<span class="warn">${esc(o.lastError)}</span>` : ''}</div>`).join('')}
 <div class="stream" data-ev="automation"></div>
-</div>` : ''
+</div>`
+          : ''
         const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>nektar — operator</title>
 <style>body{transition:none}#live{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4cc26b;margin-left:6px;vertical-align:middle}
 body{background:#0d0d0d;color:#eaeaea;font:14px/1.6 ui-monospace,monospace;max-width:880px;margin:0 auto;padding:48px 20px}
@@ -288,7 +426,16 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
       if (req.method === 'GET' && url.pathname === '/v1/automation/state') {
         const au = mem.automation
         if (!au) return send(404, { error: 'automation not enabled' })
-        return send(200, { operations: (await au.store.operations()).map(o => ({ operationId: o.operationId, role: o.role, kind: o.kind, state: o.state, lastError: o.lastError })), approvals: await au.store.approvals('pending') })
+        return send(200, {
+          operations: (await au.store.operations()).map((o) => ({
+            operationId: o.operationId,
+            role: o.role,
+            kind: o.kind,
+            state: o.state,
+            lastError: o.lastError
+          })),
+          approvals: await au.store.approvals('pending')
+        })
       }
       if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'automation' && p[2] === 'approvals' && p.length === 4) {
         const au = mem.automation
@@ -298,16 +445,24 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
         if (req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required (the agent bearer cannot approve)' })
         const origin = req.headers.origin
         if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return send(403, { error: 'bad origin' })
-        const decisionBody = await body(req).catch(() => ({})) as { approve?: boolean }
+        const decisionBody = (await body(req).catch(() => ({}))) as { approve?: boolean }
         let r
-        try { r = await au.store.decideApproval(p[3]!, decisionBody.approve === true, 'dashboard:operator') } catch (e) { return send(400, { error: (e as Error).message }) }
+        try {
+          r = await au.store.decideApproval(p[3]!, decisionBody.approve === true, 'dashboard:operator')
+        } catch (e) {
+          return send(400, { error: (e as Error).message })
+        }
         mem.events.emit('change', 'automation')
         return send(200, r)
       }
       if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: visibleTools() })
       if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
-        if (!visibleTools().some(t => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
-        try { return send(200, await callTool(mem, p[2]!, await body(req), { ops, external: !tok })) } catch (e) { return send(400, { error: (e as Error).message }) }
+        if (!visibleTools().some((t) => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
+        try {
+          return send(200, await callTool(mem, p[2]!, await body(req), { ops, external: !tok }))
+        } catch (e) {
+          return send(400, { error: (e as Error).message })
+        }
       }
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'zkproof' && p.length === 3) {
         const bytes = mem.getProof(decodeURIComponent(p[2]!))
@@ -329,7 +484,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
         if (!tok && seq === null) return send(400, { error: 'missing ?r=<receipt token> or ?s=<receipt seq>' })
         try {
           const { verifyReceipt } = await import('./receipt.js')
-          let arg: { token?: string, receiptHash?: string } = { token: tok! }
+          let arg: { token?: string; receiptHash?: string } = { token: tok! }
           if (!tok) {
             // ?s=N — human-readable form: the Nth record on __receipts__
             const rec = (await mem.recall('__receipts__', { seq: Number(seq) })).items[0]
@@ -345,13 +500,28 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
             // viral edge: cited shards this operator offers publicly become
             // a one-line import CTA — "take the memory behind this answer"
             const offerable = new Set(await mem.publicShards().catch(() => [] as string[]))
-            const cited = [...new Set(((result.receipt as { fragmentRefs?: Array<{ shard: string }> } | undefined)?.fragmentRefs ?? []).map(f => f.shard).filter(s => offerable.has(s)))]
-            return send(200, await verifyPage(result, `${base}/v1/verify?${q}&format=html`,
-              { base, importShards: cited, totals: { views: mem.metrics.value('nektar_verify_views_total'), anchors: mem.metrics.value('nektar_anchors_total') },
-                operator: mem.fundingStatus().address }), 'text/html; charset=utf-8')
+            const cited = [
+              ...new Set(
+                ((result.receipt as { fragmentRefs?: Array<{ shard: string }> } | undefined)?.fragmentRefs ?? [])
+                  .map((f) => f.shard)
+                  .filter((s) => offerable.has(s))
+              )
+            ]
+            return send(
+              200,
+              await verifyPage(result, `${base}/v1/verify?${q}&format=html`, {
+                base,
+                importShards: cited,
+                totals: { views: mem.metrics.value('nektar_verify_views_total'), anchors: mem.metrics.value('nektar_anchors_total') },
+                operator: mem.fundingStatus().address
+              }),
+              'text/html; charset=utf-8'
+            )
           }
           return send(200, result)
-        } catch (e) { return send(400, { error: (e as Error).message }) }
+        } catch (e) {
+          return send(400, { error: (e as Error).message })
+        }
       }
       if (req.method === 'GET' && url.pathname === '/v1/badge') {
         const tok = url.searchParams.get('r')
@@ -359,8 +529,8 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
         try {
           const { verifyReceipt } = await import('./receipt.js')
           const result = await verifyReceipt(mem, { token: tok })
-          const pass = (result.checks ?? []).filter(c => c.ok === true).length
-          const total = (result.checks ?? []).filter(c => c.ok !== 'info' && c.ok !== 'skip').length
+          const pass = (result.checks ?? []).filter((c) => c.ok === true).length
+          const total = (result.checks ?? []).filter((c) => c.ok !== 'info' && c.ok !== 'skip').length
           const att = (result.receipt as { modelAttestation?: { verifierTxid?: string } } | undefined)?.modelAttestation
           const value = result.ok ? `verified ${pass}/${total}${att?.verifierTxid ? ' · model on-chain' : att ? ' · model attested' : ''}` : 'failed'
           return send(200, badgeSvg(value, result.ok ? '#2ea043' : '#e5534b'), 'image/svg+xml; charset=utf-8')
@@ -387,7 +557,9 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           const j = (await body(req)) as any
           await handleBroadcasterStatus(mem, j)
           return send(200, { ok: true })
-        } catch { return send(400, { error: 'bad callback' }) }
+        } catch {
+          return send(400, { error: 'bad callback' })
+        }
       }
       // F3 budget state — the cumulative ledger's live numbers for a grant
       if (req.method === 'GET' && url.pathname === '/v1/budget') {
@@ -403,7 +575,12 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           x402Version: 2,
           scheme: 'exact',
           network: n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:mock',
-          resources: [...PAID_TOOLS].map(t => ({ url: `tool://${t}`, description: `nektar ${t}`, priceSats: priceFor(t), payVia: `call ${t} without payment → invoice in the result, or GET /v1/pay/quote?tool=${t}` }))
+          resources: [...PAID_TOOLS].map((t) => ({
+            url: `tool://${t}`,
+            description: `nektar ${t}`,
+            priceSats: priceFor(t),
+            payVia: `call ${t} without payment → invoice in the result, or GET /v1/pay/quote?tool=${t}`
+          }))
         })
       }
       // pack sharing: any visitor may fetch a public shard's pack + discover
@@ -415,23 +592,29 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
         const pub = await mem.publicShards()
         const catalog = await mem.shardCatalog().catch(() => [] as import('./memory.js').ShardManifest[])
         return send(200, {
-          v: 1, kind: 'nektar-discovery', verifyBase: `${base}/v1/verify`, logPublicKey: mem.logPublicKey(), operatorPub: mem.operatorKey()?.toPublicKey().toString(),
-          publicShards: await Promise.all(pub.map(async s => {
-            const manifest = catalog.find(m => m.shard === s)
-            const head = mem.tailLink(s)
-            return {
-              shard: s,
-              shardId: manifest?.shardId,
-              records: (await mem.records(s)).length,
-              domains: manifest?.domains,
-              desc: manifest?.desc,
-              offers: manifest?.offers,
-              headTxid: head?.txid,
-              packUrl: `${base}/v1/pack/${encodeURIComponent(s)}`,
-              ...(mem.packStoreRef(s) !== undefined ? { store: mem.packStoreRef(s) } : {}),
-              import: { tool: 'importShard', args: { from: base, shard: s } }
-            }
-          }))
+          v: 1,
+          kind: 'nektar-discovery',
+          verifyBase: `${base}/v1/verify`,
+          logPublicKey: mem.logPublicKey(),
+          operatorPub: mem.operatorKey()?.toPublicKey().toString(),
+          publicShards: await Promise.all(
+            pub.map(async (s) => {
+              const manifest = catalog.find((m) => m.shard === s)
+              const head = mem.tailLink(s)
+              return {
+                shard: s,
+                shardId: manifest?.shardId,
+                records: (await mem.records(s)).length,
+                domains: manifest?.domains,
+                desc: manifest?.desc,
+                offers: manifest?.offers,
+                headTxid: head?.txid,
+                packUrl: `${base}/v1/pack/${encodeURIComponent(s)}`,
+                ...(mem.packStoreRef(s) !== undefined ? { store: mem.packStoreRef(s) } : {}),
+                import: { tool: 'importShard', args: { from: base, shard: s } }
+              }
+            })
+          )
         })
       }
       if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'pack' && p.length === 3) {
@@ -461,9 +644,13 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
         return ops ? send(200, { costs: ops.costs() }) : send(404, { error: 'ops not enabled (main only)' })
       }
       return send(404, { error: 'not found' })
-    } catch (e) { if (!res.headersSent) send(500, { error: (e as Error).message }) }
+    } catch (e) {
+      if (!res.headersSent) send(500, { error: (e as Error).message })
+    }
   })
-  server.on('close', () => { for (const t of sessions.values()) void t.close() })
+  server.on('close', () => {
+    for (const t of sessions.values()) void t.close()
+  })
   return server
 }
 
@@ -472,51 +659,99 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
  *  Written for humans: the answer leads, each check is a plain-English
  *  claim, and the raw internals stay visible as fine print for auditors. */
 /** shields-style badge — the always-visible verification label */
-function badgeSvg (value: string, color: string): string {
+function badgeSvg(value: string, color: string): string {
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const lw = 52, vw = Math.max(60, value.length * 6.5 + 14)
+  const lw = 52,
+    vw = Math.max(60, value.length * 6.5 + 14)
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${lw + vw}" height="20" role="img" aria-label="nektar: ${esc(value)}"><title>nektar: ${esc(value)}</title><rect width="${lw}" height="20" fill="#555" rx="3"/><rect x="${lw}" width="${vw}" height="20" fill="${color}" rx="3"/><rect x="${lw}" width="4" height="20" fill="${color}"/><g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11"><text x="${lw / 2}" y="14">nektar</text><text x="${lw + vw / 2}" y="14">${esc(value)}</text></g></svg>`
 }
 
-async function verifyPage (r: { ok: boolean, receiptHash: string, checks: Array<{ name: string, ok: boolean | 'info' | 'skip', detail: string }>, receipt?: unknown, anchorTxid?: string }, pageUrl: string, ctx?: { base: string, importShards: string[], totals: { views: number, anchors: number }, operator?: string }): Promise<string> {
-  const rec = r.receipt as { answer?: string, fragmentRefs?: Array<{ shard: string, seq: number }>, checkResult?: string, modelId?: { provider?: string, release?: string }, modelAttestation?: { verifierTxid?: string, publicStatement?: string }, payment?: { txid: string, amountSats: number, payTo: string } } | undefined
+async function verifyPage(
+  r: {
+    ok: boolean
+    receiptHash: string
+    checks: Array<{ name: string; ok: boolean | 'info' | 'skip'; detail: string }>
+    receipt?: unknown
+    anchorTxid?: string
+  },
+  pageUrl: string,
+  ctx?: { base: string; importShards: string[]; totals: { views: number; anchors: number }; operator?: string }
+): Promise<string> {
+  const rec = r.receipt as
+    | {
+        answer?: string
+        fragmentRefs?: Array<{ shard: string; seq: number }>
+        checkResult?: string
+        modelId?: { provider?: string; release?: string }
+        modelAttestation?: { verifierTxid?: string; publicStatement?: string }
+        payment?: { txid: string; amountSats: number; payTo: string }
+      }
+    | undefined
   const QR = await import('qrcode')
   const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 180 })
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const net = process.env.NEKTAR_NETWORK ?? 'mock'
-  const netLabel = net === 'main' ? 'BSV mainnet — real coins' : net === 'ttn' ? 'BSV public testnet — real transactions, test coins' : net === 'regtest' ? 'local Teranode regtest' : 'simulated chain — demo only'
-  const icon = (o: boolean | 'info' | 'skip') => o === true ? '✓' : o === false ? '✗' : '·'
-  const cls = (o: boolean | 'info' | 'skip') => o === true ? 'ok' : o === false ? 'bad' : 'info'
+  const netLabel =
+    net === 'main'
+      ? 'BSV mainnet — real coins'
+      : net === 'ttn'
+        ? 'BSV public testnet — real transactions, test coins'
+        : net === 'regtest'
+          ? 'local Teranode regtest'
+          : 'simulated chain — demo only'
+  const icon = (o: boolean | 'info' | 'skip') => (o === true ? '✓' : o === false ? '✗' : '·')
+  const cls = (o: boolean | 'info' | 'skip') => (o === true ? 'ok' : o === false ? 'bad' : 'info')
   // plain-English title per check — the raw detail stays as the sub-line
   const title = (name: string): string =>
-    name === 'found' ? 'This receipt exists in the log'
-      : name === 'hash' ? 'The record is unaltered'
-      : name === 'provenance' ? 'Signed by the service operator'
-      : name === 'anchored' ? 'Anchored on the blockchain'
-      : name === 'fragment (private)' ? 'Cited record — private shard (ZK-verified)'
-      : name.startsWith('fragment ') ? `Cited record ${name.slice(9)} exists on-chain`
-      : name === 'grounding' ? 'The answer traces to cited records'
-      : name === 'checkResult' ? 'Grounding verdict'
-      : name === 'paid' ? 'Paid for on-chain'
-      : name === 'model' ? 'Model execution'
-      : name
-  const cites = (rec?.fragmentRefs ?? []).map(f => `${f.shard}:${f.seq}`)
-  const meta = rec ? [
-    cites.length ? `built from ${cites.length} cited record${cites.length === 1 ? '' : 's'} (${esc(cites.join(', '))})` : 'no cited records',
-    rec.modelAttestation?.verifierTxid
-      ? `model execution: consensus-verified on-chain (Groth16, ${esc(rec.modelAttestation.verifierTxid.slice(0, 12))}…)`
-      : rec.modelAttestation
-        ? `model execution: statement-attested (${esc((rec.modelAttestation.publicStatement ?? '').slice(0, 14))}… — off-chain)`
-        : `declared model: ${esc(rec.modelId?.provider ?? 'undeclared')}/${esc(rec.modelId?.release ?? 'undeclared')} (declared, not proven)`,
-    rec.payment ? `paid ${rec.payment.amountSats} sats` : null
-  ].filter(Boolean).join(' · ') : ''
+    name === 'found'
+      ? 'This receipt exists in the log'
+      : name === 'hash'
+        ? 'The record is unaltered'
+        : name === 'provenance'
+          ? 'Signed by the service operator'
+          : name === 'anchored'
+            ? 'Anchored on the blockchain'
+            : name === 'fragment (private)'
+              ? 'Cited record — private shard (ZK-verified)'
+              : name.startsWith('fragment ')
+                ? `Cited record ${name.slice(9)} exists on-chain`
+                : name === 'grounding'
+                  ? 'The answer traces to cited records'
+                  : name === 'checkResult'
+                    ? 'Grounding verdict'
+                    : name === 'paid'
+                      ? 'Paid for on-chain'
+                      : name === 'model'
+                        ? 'Model execution'
+                        : name
+  const cites = (rec?.fragmentRefs ?? []).map((f) => `${f.shard}:${f.seq}`)
+  const meta = rec
+    ? [
+        cites.length ? `built from ${cites.length} cited record${cites.length === 1 ? '' : 's'} (${esc(cites.join(', '))})` : 'no cited records',
+        rec.modelAttestation?.verifierTxid
+          ? `model execution: consensus-verified on-chain (Groth16, ${esc(rec.modelAttestation.verifierTxid.slice(0, 12))}…)`
+          : rec.modelAttestation
+            ? `model execution: statement-attested (${esc((rec.modelAttestation.publicStatement ?? '').slice(0, 14))}… — off-chain)`
+            : `declared model: ${esc(rec.modelId?.provider ?? 'undeclared')}/${esc(rec.modelId?.release ?? 'undeclared')} (declared, not proven)`,
+        rec.payment ? `paid ${rec.payment.amountSats} sats` : null
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : ''
   const tok = r.receiptHash ? receiptToken(r.receiptHash) : null
   const badgeUrl = tok ? `${new URL(pageUrl).origin}/v1/badge?r=${tok}` : null
   const badgeMd = badgeUrl ? `[![verified answer](${badgeUrl})](${pageUrl.replace('&format=html', '')})` : null
   const ogDesc = r.ok
-    ? `${r.checks.filter(c => c.ok === true).length}/${r.checks.length} checks passed — committed, unaltered, anchored, derivable. Never truth.`
-    : `receipt failed verification — ${r.checks.filter(c => c.ok === false).length} check(s) broken`
-  const explorer = net === 'main' ? 'https://whatsonchain.com' : net === 'stn' ? 'https://stn.whatsonchain.com' : net === 'ttn' || net === 'test' ? 'https://test.whatsonchain.com' : null
+    ? `${r.checks.filter((c) => c.ok === true).length}/${r.checks.length} checks passed — committed, unaltered, anchored, derivable. Never truth.`
+    : `receipt failed verification — ${r.checks.filter((c) => c.ok === false).length} check(s) broken`
+  const explorer =
+    net === 'main'
+      ? 'https://whatsonchain.com'
+      : net === 'stn'
+        ? 'https://stn.whatsonchain.com'
+        : net === 'ttn' || net === 'test'
+          ? 'https://test.whatsonchain.com'
+          : null
   const anchorUrl = explorer && r.anchorTxid ? `${explorer}/tx/${r.anchorTxid}` : null
   return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>${r.ok ? '✓ verified answer' : '✗ receipt failed'}${rec?.answer ? ` — ${esc(rec.answer.slice(0, 60))}` : ''}</title>
 <meta property="og:title" content="${r.ok ? '✓ verified answer receipt' : '✗ receipt failed verification'} — nektar">
@@ -540,16 +775,18 @@ img{display:block;margin:22px auto 6px;border:6px solid #fff;border-radius:6px}
 details{margin:16px 0;color:#8b949e}summary{cursor:pointer;font-size:13px}details>div{margin-top:10px}</style></head><body>
 <h1>Answer receipt <span class="badge ${cls(r.ok)}">${r.ok ? 'VERIFIED' : 'FAILED'}</span></h1>
 <div class=net>${esc(netLabel)}${ctx?.operator ? ` · operator <span class=mono>${esc(ctx.operator)}</span>` : ''}</div>
-<div class=lede>${r.ok
-  ? 'This answer was recorded in a signed, append-only log on the blockchain — unchanged and anchored. <b>Recorded ≠ true.</b>'
-  : 'Something in this receipt did not check out — see the ✗ lines below.'}</div>
+<div class=lede>${
+    r.ok
+      ? 'This answer was recorded in a signed, append-only log on the blockchain — unchanged and anchored. <b>Recorded ≠ true.</b>'
+      : 'Something in this receipt did not check out — see the ✗ lines below.'
+  }</div>
 ${rec?.answer !== undefined ? `<div class=ans>${esc(rec.answer)}</div>` : ''}
 <button class=sharebtn id=sharebtn>Share this verification</button>
-<script>document.getElementById('sharebtn').onclick=async function(){var u=${JSON.stringify(pageUrl.replace('&format=html',''))};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'verified answer — nektar',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
+<script>document.getElementById('sharebtn').onclick=async function(){var u=${JSON.stringify(pageUrl.replace('&format=html', ''))};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'verified answer — nektar',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
 <img src="${qr}" alt="scan to re-verify"><div class=qrcap>scan to re-check</div>
 ${anchorUrl ? `<div class=qrcap><a href="${anchorUrl}" target=_blank rel=noopener>view the anchor transaction ↗</a></div>` : ''}
-<details${r.ok ? '' : ' open'}><summary>details · ${r.checks.filter(c => c.ok === true).length}/${r.checks.filter(c => c.ok !== 'info' && c.ok !== 'skip').length} checks</summary><div>
-<ul>${r.checks.map(c => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(title(c.name))}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
+<details${r.ok ? '' : ' open'}><summary>details · ${r.checks.filter((c) => c.ok === true).length}/${r.checks.filter((c) => c.ok !== 'info' && c.ok !== 'skip').length} checks</summary><div>
+<ul>${r.checks.map((c) => `<li><span class="${cls(c.ok)}">${icon(c.ok)}</span> ${esc(title(c.name))}<div class=d>${esc(c.detail)}</div></li>`).join('')}</ul>
 ${meta ? `<div class=meta>${meta}</div>` : ''}
 <code class=md>${esc('git clone https://github.com/kryptokrates/nektar && pnpm mcp:install')}</code>
 ${badgeMd ? `<code class=md>${esc(badgeMd)}</code>` : ''}

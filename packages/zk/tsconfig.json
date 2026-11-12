@@ -3,10 +3,7 @@
   "compilerOptions": {
     "outDir": "dist"
   },
-  "include": [
-    "src",
-    "test"
-  ],
+  "include": ["src", "test"],
   "references": [
     {
       "path": "../core"
@@ -15,7 +12,5 @@
       "path": "../contracts"
     }
   ],
-  "exclude": [
-    "dist"
-  ]
+  "exclude": ["dist"]
 }

@@ -5,10 +5,10 @@ Ordered by time lost, not by code size.
 
 **Status key:** `[done]` shipped in this pass · `[part]` partial · `[ ]` open
 
-## F1 — Reserve drift vs chain truth  *(dominant cost)*
+## F1 — Reserve drift vs chain truth _(dominant cost)_
 
 `reserve.json` is optimistic: spends mark inputs `spent` and append change
-entries at *broadcast time*, never at *verdict time*. On mainnet this produced
+entries at _broadcast time_, never at _verdict time_. On mainnet this produced
 four classes of damage:
 
 - The broadcaster returned non-rejected 202s, then later marked the tx `REJECTED`
@@ -16,7 +16,7 @@ four classes of damage:
   entries; the next spend picked them and was orphaned. ~19 entries poisoned.
 - `payInvoice` marks its input spent + adds change via `addOwned` — **and
   never broadcasts**. Each unbroadcast pay tx permanently consumed an entry.
-- `takeReserve` picks the *first* unspent entry with no size check — it chose
+- `takeReserve` picks the _first_ unspent entry with no size check — it chose
   a 700-sat dust pair for a 10,600-sat bond → `negative fee -9900`, and a
   9,299-sat entry for a 20,600-sat pay → `insufficient`.
 - Manual file repair is overwritten by the shutdown flush — the instance
@@ -71,13 +71,13 @@ until the bound was reverse-engineered (refund needed changeSats ≥ 500).
 **Fixes**
 
 - `[done]` Auto-size: `complete` defaults `changeSats = utxo − price −
-  min(maxFee − 2, 350)`; `refund` defaults `changeSats = utxo −
-  min(maxFee, 350)`. Callers may still override explicitly.
+min(maxFee − 2, 350)`; `refund` defaults `changeSats = utxo −
+min(maxFee, 350)`. Callers may still override explicitly.
 - `[done]` `depositorPkh` defaults to the operator key's pkh on `escrow`,
   `complete`, and `refund` — the raw offer cfg works unmodified.
 - `[ ]` `dryRun: true` on every covenant op — build + local-eval (the
   `Spend` interpreter already exists) and return `{valid, fee, residual,
-  bound}` before airing.
+bound}` before airing.
 
 ## F4 — Parent-tx fetch at spend time
 
@@ -168,18 +168,18 @@ reported it as a fresh deploy, hiding that nothing new aired.
 
 ## Ranked implementation order
 
-| # | Item | Kills | Effort | Status |
-|---|------|-------|--------|--------|
-| 1 | `fundingRefresh` + smallest-sufficient `take` + bond mutex | F1 | M | done (async broadcast verdict loop open) |
-| 2 | Auto-size covenant args + depositorPkh default + dryRun | F3 | S | done except dryRun |
-| 3 | `sendSats` + `fundingRefresh` | F2 | S | done |
-| 4 | parentHex in state + fetch fallback | F4 | S | done (broadcaster/peer fallback open) |
-| 5 | Scheduled ops on broadcaster status callback (`when:`) + tasks tool | F5 | M | open |
-| 6 | `e2e-mainnet` runner + evidence.json | F8 | M | open |
-| 7 | bondScan | F7 | S | open |
-| 8 | service-run/installer + readiness gate | F6 | M | in progress |
-| 9 | Error-surface annotations | F9 | S | open |
-| 10 | Deploy dedup | F10 | XS | open |
+| #   | Item                                                                | Kills | Effort | Status                                   |
+| --- | ------------------------------------------------------------------- | ----- | ------ | ---------------------------------------- |
+| 1   | `fundingRefresh` + smallest-sufficient `take` + bond mutex          | F1    | M      | done (async broadcast verdict loop open) |
+| 2   | Auto-size covenant args + depositorPkh default + dryRun             | F3    | S      | done except dryRun                       |
+| 3   | `sendSats` + `fundingRefresh`                                       | F2    | S      | done                                     |
+| 4   | parentHex in state + fetch fallback                                 | F4    | S      | done (broadcaster/peer fallback open)    |
+| 5   | Scheduled ops on broadcaster status callback (`when:`) + tasks tool | F5    | M      | open                                     |
+| 6   | `e2e-mainnet` runner + evidence.json                                | F8    | M      | open                                     |
+| 7   | bondScan                                                            | F7    | S      | open                                     |
+| 8   | service-run/installer + readiness gate                              | F6    | M      | in progress                              |
+| 9   | Error-surface annotations                                           | F9    | S      | open                                     |
+| 10  | Deploy dedup                                                        | F10   | XS     | open                                     |
 
 Items 1–4 remove every manual intervention hit today — the first four rows
 are shipped (with the noted exceptions); 5–8 remove the hand-rolled
@@ -315,7 +315,6 @@ deterministic runs. S1 also passes end to end with that model selected via
 `NEKTAR_AI_BASE_URL=http://127.0.0.1:11434/v1 NEKTAR_AI_MODEL=qwen2.5:7b`.
 The trial report is written to `artifacts/model-trials/report.json`.
 
-
 ### Verification status
 
 - `pnpm -r build` and the package suites pass (chain 25, anchor 27, bstack 54,
@@ -382,9 +381,9 @@ The trial report is written to `artifacts/model-trials/report.json`.
   measures ~1 s from escrow broadcast to seller verification and ~1.3 s from
   the seller's reveal to buyer verification — the whole deal in ~12 s over 0
   blocks (`hopMs` in the run's summary.json).
-- *Field history — the next two reports ran on the removed rendezvous+mailbox
+- _Field history — the next two reports ran on the removed rendezvous+mailbox
   transport and the retired Hetzner deployment. Kept as provenance; the
-  current transport is bstack carriers over the host pair above.*
+  current transport is bstack carriers over the host pair above._
 - **Testnet (Hetzner, real rendezvous + mailbox, two live instances):** this ran on the previous rendezvous + mailbox transport, which has since been removed from the automation runtime. The
   autonomous purchase loop ran end to end — signed want admitted to the feed,
   seller matched a level-0 record, signed a buyer-bound offer, buyer selected,

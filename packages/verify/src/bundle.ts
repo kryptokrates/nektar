@@ -6,7 +6,7 @@
 //   anchor-chain consistency: chainTail [anchor_0..n] re-verified link by link.
 import { Transaction } from '@bsv/sdk'
 import { decodeNektarAnchor, isValidAnchor } from '@nektar/contracts'
-import { reconstructRoot, verifyProof, chainRp, GENESIS_PREV_RP, eq, toHex, fromHex, heightForLeafCount, type Bytes, type AnchorData } from '@nektar/core'
+import { reconstructRoot, chainRp, GENESIS_PREV_RP, eq, toHex, fromHex, heightForLeafCount, type Bytes } from '@nektar/core'
 import type { ChainTracker } from '@nektar/chain'
 
 export interface AnchorLink {
@@ -32,11 +32,11 @@ export interface ProofBundle {
 }
 
 export type VerifyResult =
-  | { ok: true, settled: boolean, anchorState: 'broadcast' | 'mined' }
-  | { ok: false, reason: 'LeafPathMismatch' | 'AnchorFieldMismatch' | 'BEEFInvalid' | 'NotMined' | 'ChainInconsistent' | 'BadBundle', detail?: string }
+  | { ok: true; settled: boolean; anchorState: 'broadcast' | 'mined' }
+  | { ok: false; reason: 'LeafPathMismatch' | 'AnchorFieldMismatch' | 'BEEFInvalid' | 'NotMined' | 'ChainInconsistent' | 'BadBundle'; detail?: string }
 
 /** Build a bundle from a BatchLog record + anchor head + ls history. */
-export function buildProofBundle (args: {
+export function buildProofBundle(args: {
   shard: string
   leaf: Bytes
   leafIndex: number
@@ -50,14 +50,23 @@ export function buildProofBundle (args: {
   const anchorData = decodeNektarAnchor(args.anchorTx.outputs[0]!.lockingScript.toHex())
   if (!anchorData || !isValidAnchor(anchorData)) throw new Error('anchor tx output 0 is not a nektar anchor')
   const anchor: AnchorLink = {
-    txid: args.anchorTx.id('hex'), outputIndex: 0,
-    n: anchorData.n, size: anchorData.size, R: toHex(anchorData.R), Rp: toHex(anchorData.Rp)
+    txid: args.anchorTx.id('hex'),
+    outputIndex: 0,
+    n: anchorData.n,
+    size: anchorData.size,
+    R: toHex(anchorData.R),
+    Rp: toHex(anchorData.Rp)
   }
   return {
-    version: 1, shard: anchorData.shard, n: args.batchN, size: args.batchSize,
-    leaf: toHex(args.leaf), leafIndex: args.leafIndex,
+    version: 1,
+    shard: anchorData.shard,
+    n: args.batchN,
+    size: args.batchSize,
+    leaf: toHex(args.leaf),
+    leafIndex: args.leafIndex,
     path: args.siblings.map(toHex),
-    anchor, chainTail: args.chainTail,
+    anchor,
+    chainTail: args.chainTail,
     anchorBEEF: args.anchorTx.toAtomicBEEF()
   }
 }
@@ -70,7 +79,7 @@ export function buildProofBundle (args: {
  * 4. anchor-chain consistency across chainTail (R'_i links, n contiguous)
  * The verifier needs block headers only — no trust in the bundle's producer.
  */
-export async function verifyFragment (bundle: ProofBundle, tracker: ChainTracker): Promise<VerifyResult> {
+export async function verifyFragment(bundle: ProofBundle, tracker: ChainTracker): Promise<VerifyResult> {
   // 0) leaf-count binding (ADR-002): index must be inside the batch and the
   // path length must match the committed leaf count — otherwise an odd-batch
   // "duplicate last leaf" or an interior node can be presented as a leaf.
@@ -118,12 +127,15 @@ export async function verifyFragment (bundle: ProofBundle, tracker: ChainTracker
   // The last tail entry must EQUAL the on-chain anchor fields decoded from
   // the BEEF — since R'_n recursively commits the whole tail, authenticating
   // the last link authenticates the entire tail.
-  if (tail.length === 0 ||
-      lastLink!.txid !== bundle.anchor.txid ||
-      lastLink!.txid !== anchorTx.id('hex') ||
-      lastLink!.n !== data.n || lastLink!.size !== data.size ||
-      toHex(fromHex(lastLink!.R)) !== toHex(data.R) ||
-      toHex(fromHex(lastLink!.Rp)) !== toHex(data.Rp)) {
+  if (
+    tail.length === 0 ||
+    lastLink!.txid !== bundle.anchor.txid ||
+    lastLink!.txid !== anchorTx.id('hex') ||
+    lastLink!.n !== data.n ||
+    lastLink!.size !== data.size ||
+    toHex(fromHex(lastLink!.R)) !== toHex(data.R) ||
+    toHex(fromHex(lastLink!.Rp)) !== toHex(data.Rp)
+  ) {
     return { ok: false, reason: 'ChainInconsistent', detail: 'chainTail head does not match the on-chain anchor' }
   }
   for (let i = 0; i < tail.length; i++) {

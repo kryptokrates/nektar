@@ -28,7 +28,7 @@ services:
     volumes:
       - host-state:/var/lib/bstore
     ports:
-      - "127.0.0.1:8591:8080"
+      - '127.0.0.1:8591:8080'
 
   # storage provider — the bounty-taker; holds pieces against its terms
   provider:
@@ -37,7 +37,7 @@ services:
     depends_on:
       - host
     restart: unless-stopped
-    command: ["run", "-config", "/etc/bstore/provider.json"]
+    command: ['run', '-config', '/etc/bstore/provider.json']
     configs:
       - source: provider
         target: /etc/bstore/provider.json
@@ -45,7 +45,7 @@ services:
       - provider:/var/lib/bstore-provider
       - certs:/certs:ro
     ports:
-      - "127.0.0.1:8095:8095"
+      - '127.0.0.1:8095:8095'
 
   # throwaway CA for the provider's internal TLS (advertised URLs must be https;
   # these certs sign the private Docker-network name — never public TLS)
@@ -53,7 +53,7 @@ services:
     <<: *cli
     image: ${BSTORE_DEVCHAIN_IMAGE:-ghcr.io/lightwebinc/bstore-devchain:latest}
     profiles: [setup]
-    entrypoint: ["/usr/local/bin/devchain", "certs", "-dir", "/certs", "-names", "provider"]
+    entrypoint: ['/usr/local/bin/devchain', 'certs', '-dir', '/certs', '-names', 'provider']
     volumes:
       - certs:/certs
 
@@ -64,7 +64,7 @@ services:
       - host
       - provider
     restart: unless-stopped
-    command: ["s3d", "run", "-config", "/etc/bstore/gateway.json"]
+    command: ['s3d', 'run', '-config', '/etc/bstore/gateway.json']
     configs:
       - source: gateway
         target: /etc/bstore/gateway.json
@@ -72,7 +72,7 @@ services:
       - gateway:/var/lib/bstore-s3d
       - certs:/certs:ro
     ports:
-      - "127.0.0.1:${BSTORE_S3_PORT:-9000}:9000"
+      - '127.0.0.1:${BSTORE_S3_PORT:-9000}:9000'
 
   # the CLI identity — bucket owner / reader / market participant
   owner:
@@ -92,14 +92,14 @@ services:
       MYSQL_DATABASE: overlay
       MYSQL_USER: overlay
       MYSQL_PASSWORD: ${DB_PASSWORD:-nektar}
-      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_RANDOM_ROOT_PASSWORD: 'yes'
     command:
       - --innodb-buffer-pool-size=128M
       - --performance-schema=OFF
     volumes:
       - db:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uoverlay -p${DB_PASSWORD:-nektar} --silent"]
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -uoverlay -p${DB_PASSWORD:-nektar} --silent']
       interval: 3s
       timeout: 5s
       retries: 60

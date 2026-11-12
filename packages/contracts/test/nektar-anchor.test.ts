@@ -16,9 +16,9 @@ const pkh = (pk: string) => Buffer.from(hash160(Uint8Array.from(Buffer.from(pk, 
 const artifact = JSON.parse(readFileSync(path.join(fileURLToPath(import.meta.url), '..', '..', '..', 'NektarAnchor.json'), 'utf8'))
 const signer = new LocalSigner('11'.repeat(32))
 
-function setup (n = 0n, size = 10n) {
+function setup(n = 0n, size = 10n) {
   const prov = new MockProvider('testnet')
-  return signer.getPublicKey().then(pk => {
+  return signer.getPublicKey().then((pk) => {
     prov.addUtxo('1Q1pE5vPGEEMqRcVRMbtBK842Y6Pzo6nK9', { txid: 'ab'.repeat(32), outputIndex: 0, satoshis: 1e6, script: '' })
     const c = new RunarContract(artifact, [pk, pkh(pk), META_FLAG_HEX, n, size, '11'.repeat(32), '22'.repeat(32), Buffer.from(TAG_RPRIME).toString('hex')])
     c.connect(prov, signer)
@@ -43,11 +43,12 @@ test('contract: genesisOwner carried unchanged across append and rotate', async 
   assert.ok(lock2.includes(pkh(pk2).slice(0, 20)), 'ownerPkh rotated')
   // decode keeps the same shard id across the rotate
   const { decodeNektarAnchor } = await import('../src/index.js')
-  const d0 = decodeNektarAnchor(lock1)!, d1 = decodeNektarAnchor(lock2)!
+  const d0 = decodeNektarAnchor(lock1)!,
+    d1 = decodeNektarAnchor(lock2)!
   assert.equal(d0.shard, d1.shard, 'shard = hash160(genesisOwner) stable')
 })
 
-test('contract: deploy + append produces n+1 and correct R\'', async () => {
+test("contract: deploy + append produces n+1 and correct R'", async () => {
   const c = await setup()
   await c.deploy({ satoshis: 1 })
   const pk = await signer.getPublicKey()
@@ -57,6 +58,10 @@ test('contract: deploy + append produces n+1 and correct R\'', async () => {
   assert.equal(BigInt(st.n), 1n)
   assert.equal(BigInt(st.size), 20n)
   // R' must equal hash256(tag‖Rp‖R‖size_le8) = contractRp
-  const expected = contractRp(Uint8Array.from({ length: 32 }, () => 0x22), Uint8Array.from({ length: 32 }, () => 0x33), 20)
+  const expected = contractRp(
+    Uint8Array.from({ length: 32 }, () => 0x22),
+    Uint8Array.from({ length: 32 }, () => 0x33),
+    20
+  )
   assert.equal(String(st.Rp), Buffer.from(expected).toString('hex'))
 })

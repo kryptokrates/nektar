@@ -8,8 +8,17 @@ import { encodeZkder, verifyZkder, verifyDerivationBound, PINNED_DATALOG_IMAGE_I
 
 const fx = JSON.parse(readFileSync(new URL('../../test/fixtures/zkder-permit.json', import.meta.url), 'utf8'))
 const H = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
-const base = () => ({ imageId: H(fx.imageId), policyRoot: H(fx.journal.policyRoot), conclusionHash: H(fx.journal.conclusionHash), queryId: H(fx.journal.queryId), receipt: H(fx.receipt) })
-const issued = (...q: string[]) => { const s = new Set(q); return { consume: (id: string) => s.delete(id) } }
+const base = () => ({
+  imageId: H(fx.imageId),
+  policyRoot: H(fx.journal.policyRoot),
+  conclusionHash: H(fx.journal.conclusionHash),
+  queryId: H(fx.journal.queryId),
+  receipt: H(fx.receipt)
+})
+const issued = (...q: string[]) => {
+  const s = new Set(q)
+  return { consume: (id: string) => s.delete(id) }
+}
 
 test('STARK derivation fixture: pinned program, journal matches header', () => {
   assert.equal(fx.imageId, PINNED_DATALOG_IMAGE_ID, 'fixture was produced by the pinned derivation program')
@@ -23,7 +32,8 @@ test('STARK derivation fixture: pinned program, journal matches header', () => {
 })
 
 test('STARK derivation NEGATIVES: tampered receipt, header≠journal, foreign program', () => {
-  const t = base(); t.receipt[Math.floor(t.receipt.length / 2)] ^= 1
+  const t = base()
+  t.receipt[Math.floor(t.receipt.length / 2)] ^= 1
   const cases: Array<[string, ReturnType<typeof base>, RegExp]> = [
     ['tampered receipt', t, /stark/],
     ['policyRoot swapped in header', { ...base(), policyRoot: new Uint8Array(32).fill(7) }, /header/],

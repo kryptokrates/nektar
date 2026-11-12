@@ -7,18 +7,32 @@ import { signBinding, answerChallenge, issueChallenge, issueClearance, proveAcce
 import { NektarMemory, type NektarMemoryOptions, type ZkClearance } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 
-function setup (opts: NektarMemoryOptions = {}) {
-  const chain = new MockChain(); chain.verifyScripts = true
-  const funder = new MockFunder(); funder.topup(50)
+function setup(opts: NektarMemoryOptions = {}) {
+  const chain = new MockChain()
+  chain.verifyScripts = true
+  const funder = new MockFunder()
+  funder.topup(50)
   for (const t of funder.parents) chain.registerParent(t)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
-  const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
+  const settle = (shard: string) => {
+    chain.mine(1)
+    const l = mem.tailLink(shard)
+    if (l) mem.confirmAnchor(shard, l.txid)
+  }
   return { chain, funder, mem, settle }
 }
 /** a caller that answers a challenge issued by `mem` (the verifier) */
-function callerOf (mem: NektarMemory, key = PrivateKey.fromRandom()) {
+function callerOf(mem: NektarMemory, key = PrivateKey.fromRandom()) {
   const nonce = mem.issueChallenge()
-  return { key, identity: { pubkey: key.toPublicKey().toString(), binding: signBinding(key, 'agent', '00'.repeat(32), 0), challengeNonce: nonce, challengeSig: answerChallenge(key, nonce) } }
+  return {
+    key,
+    identity: {
+      pubkey: key.toPublicKey().toString(),
+      binding: signBinding(key, 'agent', '00'.repeat(32), 0),
+      challengeNonce: nonce,
+      challengeSig: answerChallenge(key, nonce)
+    }
+  }
 }
 const tr = (fragmentId: string, fill = 7): ZkTranscript => ({ queryId: `q${fill}`, fragmentId, nonce: new Uint8Array(32).fill(fill) })
 
@@ -46,7 +60,8 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
   assert.equal(receipt.checkResult, 'unverifiable') // not anchored yet
   assert.equal(receipt.modelId, 'test-model-1')
   // once anchored and mined the same plaintext record is served + verified
-  await mem.anchorShard('s'); settle('s')
+  await mem.anchorShard('s')
+  settle('s')
   const after = await mem.recall('s')
   assert.equal(after.items[0]!.text, 'fact one')
   assert.equal(after.items[0]!.unverifiable, undefined)
@@ -55,7 +70,8 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
   const enc = setup({ agentSeed: seed, maxLevel: 1 })
   await enc.mem.remember('s', 'classified fact')
   // decrypt requires the record to be anchored AND verified (KEY-008)
-  await enc.mem.anchorShard('s'); enc.settle('s')
+  await enc.mem.anchorShard('s')
+  enc.settle('s')
   assert.equal((await enc.mem.recall('s')).items[0]!.text, 'classified fact', 'decrypts with seed after verify')
   // unanchored encrypted record is never decrypted
   const enc2 = setup({ agentSeed: seed })
@@ -67,11 +83,15 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
 
 test('S6.1 regression: plaintext items are SPV-verified like encrypted ones (broken anchor → unverifiable)', async () => {
   const { mem, settle } = setup()
-  await mem.remember('s', 'fact one'); await mem.remember('s', 'fact two') // anchored batch of 2
+  await mem.remember('s', 'fact one')
+  await mem.remember('s', 'fact two') // anchored batch of 2
   settle('s')
   const good = await mem.recall('s')
   assert.equal(good.receipt.checkResult, 'verified', 'unencrypted anchored records verify')
-  assert.deepEqual(good.items.map(i => i.text), ['fact one', 'fact two'])
+  assert.deepEqual(
+    good.items.map((i) => i.text),
+    ['fact one', 'fact two']
+  )
   // 0-conf semantics: BUMP absent means broadcast, NOT broken — records still
   // verify locally (leaf path + anchor fields + chain consistency all check)
   const txid = mem.tailLink('s')!.txid
@@ -105,15 +125,27 @@ test('§15 modality: committed into H(d‖p) and the provenance signature; inval
   const { mem } = setup()
   const prov = { source: 's', time: 1_700_000_000 }
   const plain = await mem.remember('m', 'rule text', prov)
-  const modal = await mem.remember('m', 'rule text', { ...prov, modality: { kind: 'temporal' as const, qualifier: 'as of Block 105432, Reg X includes Clause Y' } })
+  const modal = await mem.remember('m', 'rule text', {
+    ...prov,
+    modality: { kind: 'temporal' as const, qualifier: 'as of Block 105432, Reg X includes Clause Y' }
+  })
   assert.notEqual(plain.hdp, modal.hdp, 'modality changes the provenance binding hash')
   // the originator signature binds the modality too — tampering invalidates it
   const { signProvenance, verifyProvenance } = await import('@nektar/log')
   const key = PrivateKey.fromRandom()
   const d = new TextEncoder().encode('x')
-  const p = signProvenance(key, d, { source: 's', time: 1, signature: new Uint8Array(0), modelId: 'm', modality: { kind: 'deontic', qualifier: 'obligatory under Reg X' } })
+  const p = signProvenance(key, d, {
+    source: 's',
+    time: 1,
+    signature: new Uint8Array(0),
+    modelId: 'm',
+    modality: { kind: 'deontic', qualifier: 'obligatory under Reg X' }
+  })
   assert.ok(verifyProvenance(key.toPublicKey().toString(), d, p))
-  assert.ok(!verifyProvenance(key.toPublicKey().toString(), d, { ...p, modality: { kind: 'deontic', qualifier: 'forbidden under Reg X' } }), 'tampered qualifier fails')
+  assert.ok(
+    !verifyProvenance(key.toPublicKey().toString(), d, { ...p, modality: { kind: 'deontic', qualifier: 'forbidden under Reg X' } }),
+    'tampered qualifier fails'
+  )
   assert.ok(!verifyProvenance(key.toPublicKey().toString(), d, { ...p, modality: undefined }), 'stripped modality fails')
   // invalid kinds are refused at ingest
   await assert.rejects(() => mem.remember('m', 'y', { modality: { kind: 'bogus', qualifier: 'q' } as any }), /modality must be/)
@@ -126,7 +158,8 @@ test('§15 modality: committed into H(d‖p) and the provenance signature; inval
 test('§18 terminal commitment: every receipt is signed; tampering breaks verification', async () => {
   const { mem, settle } = setup()
   await mem.remember('s', 'fact one')
-  await mem.anchorShard('s'); settle('s')
+  await mem.anchorShard('s')
+  settle('s')
   const { receipt } = await mem.recall('s')
   assert.ok(receipt.signature && receipt.signerPub && receipt.timestamp, 'receipt carries σ, signer and τ')
   const { verifyAnswerReceipt } = await import('../src/memory.js')
@@ -148,7 +181,8 @@ test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-us
   const authority = PrivateKey.fromRandom()
   const { mem, settle } = setup({ agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPublicKey().toString()] })
   await mem.remember('s', 'classified fact', undefined, 2)
-  await mem.anchorShard('s'); settle('s')
+  await mem.anchorShard('s')
+  settle('s')
   const { key, identity } = callerOf(mem)
   const cred = issueClearance(authority, 3n, identity.pubkey)
   const read = async (zk: ZkClearance, id = identity) => (await mem.recall('s', { seq: 0, zk, identity: id })).items[0]!
@@ -160,7 +194,8 @@ test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-us
   assert.match(replay.reason!, /replayed/)
   // proof covers level 1 only → level-2 record withheld
   const low = await read({ commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, tr('s/0', 2))!, transcript: tr('s/0', 2), requiredLevel: 1n })
-  assert.equal(low.text, undefined); assert.match(low.reason!, /proven level 1 < 2/)
+  assert.equal(low.text, undefined)
+  assert.match(low.reason!, /proven level 1 < 2/)
   // transcript scoped to another fragment → refused
   const scoped = await read({ commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('s/9', 3))!, transcript: tr('s/9', 3), requiredLevel: 2n })
   assert.match(scoped.reason!, /transcript scope s\/9 != s\/0/)
@@ -173,7 +208,10 @@ test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-us
   const stolen = await read({ commitment: other.commitment, proof: proveAccess(other, 2n, 8, tr('s/0', 5))!, transcript: tr('s/0', 5), requiredLevel: 2n })
   assert.match(stolen.reason!, /holder is not the verified caller/)
   // no verified identity → refused even with a valid proof
-  const anon = await read({ commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('s/0', 6))!, transcript: tr('s/0', 6), requiredLevel: 2n }, { ...identity, challengeNonce: issueChallenge(), challengeSig: answerChallenge(key, issueChallenge()) })
+  const anon = await read(
+    { commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('s/0', 6))!, transcript: tr('s/0', 6), requiredLevel: 2n },
+    { ...identity, challengeNonce: issueChallenge(), challengeSig: answerChallenge(key, issueChallenge()) }
+  )
   assert.match(anon.reason!, /verified caller identity/)
   // no proof at all → level-2 record withheld
   assert.match((await mem.recall('s', { seq: 0, identity })).items[0]!.reason!, /zkaccess required/)
@@ -184,36 +222,59 @@ test('ZKA: plaintext level>0 records are gated too; instances without trusted au
   await mem.remember('p', 'plain but level 2', undefined, 2)
   const { identity } = callerOf(mem)
   const cred = issueClearance(PrivateKey.fromRandom(), 5n, identity.pubkey)
-  const r = (await mem.recall('p', { seq: 0, identity, zk: { commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('p/0'))!, transcript: tr('p/0'), requiredLevel: 2n } })).items[0]!
+  const r = (
+    await mem.recall('p', {
+      seq: 0,
+      identity,
+      zk: { commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('p/0'))!, transcript: tr('p/0'), requiredLevel: 2n }
+    })
+  ).items[0]!
   assert.equal(r.text, undefined)
   assert.match(r.reason!, /no trusted clearance authority configured/)
   assert.equal((await mem.recall('p')).items[0]!.text, undefined, 'no proof, no plaintext')
 })
 
 test('Cedar gates recall — verified identity, ZK-proven level, hash-mismatch; challenge must be issued here', async () => {
-  const ps = canonicalizePolicySet('p1', `
+  const ps = canonicalizePolicySet(
+    'p1',
+    `
 permit(principal is Agent, action == Action::"read", resource is Fragment)
 when { resource.level <= principal.level };
-`)
+`
+  )
   const authority = PrivateKey.fromRandom()
   const base = { policy: { policyText: ps.text, anchoredPolicySetHash: ps.hash }, clearanceAuthorities: [authority.toPublicKey().toString()] }
   const { mem, settle } = setup(base)
   await mem.remember('s', 'fact two', undefined, 2)
-  await mem.anchorShard('s'); settle('s') // S6.1: plaintext is served only after SPV verify
+  await mem.anchorShard('s')
+  settle('s') // S6.1: plaintext is served only after SPV verify
   const { key, identity } = callerOf(mem)
   assert.equal((await mem.recall('s', { identity })).receipt.cedar, 'deny', 'verified identity, no proven level → DENY')
   // a nonce the caller chose (not issued by the instance) authenticates nothing
   const own = issueChallenge()
   assert.equal((await mem.recall('s', { identity: { ...identity, challengeNonce: own, challengeSig: answerChallenge(key, own) } })).receipt.cedar, 'deny')
   // binding for a different pubkey than the one answering → no principal
-  assert.equal((await mem.recall('s', { identity: { ...identity, binding: signBinding(PrivateKey.fromRandom(), 'x', '00'.repeat(32), 0) } })).receipt.cedar, 'deny')
+  assert.equal(
+    (await mem.recall('s', { identity: { ...identity, binding: signBinding(PrivateKey.fromRandom(), 'x', '00'.repeat(32), 0) } })).receipt.cedar,
+    'deny'
+  )
   // a FORGED proof claiming level 5 must not raise the Cedar level (old bypass)
   const cred = issueClearance(authority, 5n, identity.pubkey)
-  const forged = await mem.recall('s', { seq: 0, identity, zk: { commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, tr('s/0', 1))!, transcript: tr('s/0', 1), requiredLevel: 5n } })
-  assert.equal(forged.receipt.cedar, 'deny'); assert.equal(forged.items[0]!.text, undefined)
+  const forged = await mem.recall('s', {
+    seq: 0,
+    identity,
+    zk: { commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, tr('s/0', 1))!, transcript: tr('s/0', 1), requiredLevel: 5n }
+  })
+  assert.equal(forged.receipt.cedar, 'deny')
+  assert.equal(forged.items[0]!.text, undefined)
   // proven level 3 → Cedar ALLOW + served
-  const ok = await mem.recall('s', { seq: 0, identity, zk: { commitment: cred.commitment, proof: proveAccess(cred, 3n, 8, tr('s/0', 2))!, transcript: tr('s/0', 2), requiredLevel: 3n } })
-  assert.equal(ok.receipt.cedar, 'allow'); assert.equal(ok.items[0]!.text, 'fact two')
+  const ok = await mem.recall('s', {
+    seq: 0,
+    identity,
+    zk: { commitment: cred.commitment, proof: proveAccess(cred, 3n, 8, tr('s/0', 2))!, transcript: tr('s/0', 2), requiredLevel: 3n }
+  })
+  assert.equal(ok.receipt.cedar, 'allow')
+  assert.equal(ok.items[0]!.text, 'fact two')
   // tampered instance policy (hash mismatch vs anchored) → refused
   const tampered = setup({ ...base, policy: { policyText: 'permit(principal,action,resource);', anchoredPolicySetHash: ps.hash } })
   await tampered.mem.remember('s', 'x')
@@ -236,13 +297,28 @@ test('mcp tools: challenge / rotate / revoke / authorize receipts (incl. DENY)',
   assert.equal((await callTool(mem, 'authorize', { action: 'read' })).receipt.decision, 'deny', 'unverified principal')
   const key = PrivateKey.fromRandom()
   const { nonce } = await callTool(mem, 'challenge', {})
-  const identity = { pubkey: key.toPublicKey().toString(), binding: signBinding(key, 'agent', '00'.repeat(32), 0), challengeNonce: nonce, challengeSig: answerChallenge(key, nonce) }
+  const identity = {
+    pubkey: key.toPublicKey().toString(),
+    binding: signBinding(key, 'agent', '00'.repeat(32), 0),
+    challengeNonce: nonce,
+    challengeSig: answerChallenge(key, nonce)
+  }
   assert.equal((await callTool(mem, 'authorize', { action: 'read', identity })).receipt.decision, 'allow', 'verified principal')
 })
 
 test('mcp tool: automaton deploy → step → halt; off-δ step refused; honest statement', async () => {
   const { mem } = setup()
-  const def = { Q: ['draft', 'review', 'published'], Sigma: ['submit', 'approve'], delta: [[0, 0, 1], [1, 1, 2]], q0: 0, F: [2], O: [] }
+  const def = {
+    Q: ['draft', 'review', 'published'],
+    Sigma: ['submit', 'approve'],
+    delta: [
+      [0, 0, 1],
+      [1, 1, 2]
+    ],
+    q0: 0,
+    F: [2],
+    O: []
+  }
   const out = 'ab'.repeat(32)
   const d = await callTool(mem, 'automaton', { op: 'deploy', id: 'doc', def })
   assert.deepEqual([d.q, d.n, d.halted], [0, 0, false])
@@ -295,15 +371,26 @@ test('§19 CRL: embedded SMT proof makes the anchored revoke record self-convict
   assert.equal(idm.verifyRevocationEntry({ ...entry, root: '11'.repeat(32) }), false, 'tampered root')
   const other = PrivateKey.fromRandom().toPublicKey().toString()
   assert.equal(idm.verifyRevocationEntry({ pk: other, root: entry.root, proof: entry.proof }), false, 'proof does not transplant to another key')
-  assert.equal(idm.verifyRevocationEntry({ pk, root: entry.root, proof: { key: entry.proof!.key, siblings: [[1, new Uint8Array(32).fill(9)]] } }), false, 'tampered siblings')
+  assert.equal(
+    idm.verifyRevocationEntry({ pk, root: entry.root, proof: { key: entry.proof!.key, siblings: [[1, new Uint8Array(32).fill(9)]] } }),
+    false,
+    'tampered siblings'
+  )
 
   // status answers BOTH directions against the latest anchored root
   const st = await callTool(mem, 'revocationStatus', { pkHex: pk })
-  assert.equal(st.revoked, true); assert.equal(st.matchesCurrent, true); assert.equal(st.anchored, true)
+  assert.equal(st.revoked, true)
+  assert.equal(st.matchesCurrent, true)
+  assert.equal(st.anchored, true)
   assert.deepEqual(idm.verifyRevocationStatus(pk, st.root, idm.deserializeSmtProof(st.smtProof)), { ok: true, revoked: true })
   const clean = await callTool(mem, 'revocationStatus', { pkHex: other })
-  assert.equal(clean.revoked, false); assert.equal(clean.matchesCurrent, true)
-  assert.deepEqual(idm.verifyRevocationStatus(other, clean.root, idm.deserializeSmtProof(clean.smtProof)), { ok: true, revoked: false }, 'non-membership proven against anchored root')
+  assert.equal(clean.revoked, false)
+  assert.equal(clean.matchesCurrent, true)
+  assert.deepEqual(
+    idm.verifyRevocationStatus(other, clean.root, idm.deserializeSmtProof(clean.smtProof)),
+    { ok: true, revoked: false },
+    'non-membership proven against anchored root'
+  )
 
   // never-revoked key has no CRL entry
   assert.equal((await callTool(mem, 'revocationProof', { pkHex: other })).found, false)
@@ -314,7 +401,8 @@ test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-ho
   const { dsha256, utf8, concat, TAG_DELEGATION } = await import('@nektar/core')
   const { verifyAnswerReceipt } = await import('../src/memory.js')
   await mem.remember('s', 'service manual fact')
-  await mem.anchorShard('s'); settle('s')
+  await mem.anchorShard('s')
+  settle('s')
   // the caller's delegation map is supplied at recall time and bound by σ
   const sub = PrivateKey.fromRandom()
   const mkDel = (answer: string) => {
@@ -327,7 +415,11 @@ test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-ho
   assert.deepEqual(verifyAnswerReceipt(receipt), { ok: true })
   // §16: the map is anchored — tampered delegator, swapped decision, stripped
   // entry, and appended entry ALL break the terminal signature
-  assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [{ ...receipt.delegations[0]!, delegator: PrivateKey.fromRandom().toPublicKey().toString() }] }).ok, false, 'delegator swapped')
+  assert.equal(
+    verifyAnswerReceipt({ ...receipt, delegations: [{ ...receipt.delegations[0]!, delegator: PrivateKey.fromRandom().toPublicKey().toString() }] }).ok,
+    false,
+    'delegator swapped'
+  )
   assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [{ ...receipt.delegations[0]!, decision: 'other decision' }] }).ok, false, 'decision swapped')
   assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [] }).ok, false, 'map stripped')
   assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [...receipt.delegations, receipt.delegations[0]!] }).ok, false, 'entry appended')
@@ -339,7 +431,8 @@ test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-ver
   const { verifyReceiptZk } = await import('../src/memory.js')
   const { decodePresentation } = await import('@nektar/identity')
   await mem.remember('s', 'classified fact', undefined, 2)
-  await mem.anchorShard('s'); settle('s')
+  await mem.anchorShard('s')
+  settle('s')
   const { identity } = callerOf(mem)
   const cred = issueClearance(authority, 3n, identity.pubkey)
   const zk: ZkClearance = { commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('s/0', 11))!, transcript: tr('s/0', 11), requiredLevel: 2n }
@@ -367,13 +460,14 @@ test('GOAL-v8 D2: App E level floor — derived content cannot fall below its pr
   // a level-5 premise
   const p = await mem.remember('vault', 'classified premise', undefined, 5)
   assert.equal(p.level, 5)
-  await mem.anchorShard('vault'); settle('vault')
+  await mem.anchorShard('vault')
+  settle('vault')
   // a caller asking for level 0 with a level-5 premise is FLOORED, not served low
   const derived = await mem.remember('vault', 'conclusion drawn from the premise', undefined, 0, { premiseRefs: [{ shard: 'vault', seq: p.seq }] })
   assert.equal(derived.level, 5, 'App E: the floor raises the stored level to the max premise level')
   // an explicit higher level is honoured (floor is a minimum, not a clamp)
   const higher = await mem.remember('vault', 'more sensitive conclusion', undefined, 3, { premiseRefs: [{ shard: 'vault', seq: p.seq }] })
-  assert.equal(higher.level, 5, 'level 3 request still floored to the premise\'s 5')
+  assert.equal(higher.level, 5, "level 3 request still floored to the premise's 5")
   // no premiseRefs → no floor (existing behaviour unchanged)
   const plain = await mem.remember('vault', 'fresh public fact', undefined, 0)
   assert.equal(plain.level, 0)
@@ -381,7 +475,8 @@ test('GOAL-v8 D2: App E level floor — derived content cannot fall below its pr
   const viaTool = await callTool(mem, 'remember', { shard: 'vault', data: 'tool-derived fact', level: 0, premiseRefs: [{ shard: 'vault', seq: p.seq }] })
   assert.equal(viaTool.level, 5, 'tool path floors identically')
   // a low-clearance reader cannot read the floored (derived) record
-  await mem.anchorShard('vault'); settle('vault')
+  await mem.anchorShard('vault')
+  settle('vault')
   const { identity } = callerOf(mem)
   const low = await mem.recall('vault', { seq: derived.seq, identity })
   assert.equal(low.items[0]!.text, undefined, 'derived record at floored level is not served to a level-0 reader')
@@ -399,7 +494,8 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
   delete process.env.NEKTAR_ACCESS_LOG
   const off = setup({ agentSeed: seed, maxLevel: 1 })
   await off.mem.remember('s', 'classified', undefined, 1)
-  await off.mem.anchorShard('s'); off.settle('s')
+  await off.mem.anchorShard('s')
+  off.settle('s')
   await off.mem.recall('s')
   assert.equal((await off.mem.records('__access__')).length, 0, 'no audit records when the flag is off')
   // enabled: every decrypt + delta traverse is recorded with a timestamp
@@ -408,16 +504,19 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
     const authority = PrivateKey.fromRandom()
     const on = setup({ agentSeed: seed, maxLevel: 1, clearanceAuthorities: [authority.toPublicKey().toString()] })
     await on.mem.remember('s', 'classified', undefined, 1)
-    await on.mem.anchorShard('s'); on.settle('s')
+    await on.mem.anchorShard('s')
+    on.settle('s')
     const { identity } = callerOf(on.mem)
     const cred = issueClearance(authority, 1n, identity.pubkey)
     const zk: ZkClearance = { commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, tr('s/0', 5))!, transcript: tr('s/0', 5), requiredLevel: 1n }
     const served = await on.mem.recall('s', { seq: 0, zk, identity })
     assert.equal(served.items[0]!.text, 'classified', 'cleared read serves the record')
-    const logs = (await on.mem.records('__access__')).map(r => JSON.parse(Buffer.from(r.fragment.d).toString('utf8')))
-    const dec = logs.find(l => l.event === 'decrypt')
+    const logs = (await on.mem.records('__access__')).map((r) => JSON.parse(Buffer.from(r.fragment.d).toString('utf8')))
+    const dec = logs.find((l) => l.event === 'decrypt')
     assert.ok(dec, 'a decrypt event was logged')
-    assert.equal(dec.shard, 's'); assert.equal(dec.seq, 0); assert.equal(dec.level, 1)
+    assert.equal(dec.shard, 's')
+    assert.equal(dec.seq, 0)
+    assert.equal(dec.level, 1)
     assert.equal(dec.caller, identity.pubkey, 'the verified caller is recorded')
     assert.ok(typeof dec.at === 'number' && dec.at > 0, 'timestamped')
     // traverse: materialising a delta chain logs each hop
@@ -425,18 +524,23 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
     const base = await p2.mem.remember('d', 'v1 text')
     await p2.mem.revise('d', base.seq, 'v2 text')
     await p2.mem.materialize('d', base.seq + 1, { requireProof: false })
-    const tlogs = (await p2.mem.records('__access__')).map(r => JSON.parse(Buffer.from(r.fragment.d).toString('utf8')))
-    const tv = tlogs.find(l => l.event === 'traverse')
+    const tlogs = (await p2.mem.records('__access__')).map((r) => JSON.parse(Buffer.from(r.fragment.d).toString('utf8')))
+    const tv = tlogs.find((l) => l.event === 'traverse')
     assert.ok(tv, 'a delta traverse event was logged')
-    assert.equal(tv.seq, 1); assert.equal(tv.follows, 0); assert.ok(tv.at > 0)
-  } finally { delete process.env.NEKTAR_ACCESS_LOG }
+    assert.equal(tv.seq, 1)
+    assert.equal(tv.follows, 0)
+    assert.ok(tv.at > 0)
+  } finally {
+    delete process.env.NEKTAR_ACCESS_LOG
+  }
 })
 
 test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash', async () => {
   const weightsHash = 'ab'.repeat(32)
   const { mem, settle } = setup({ model: { id: 'qwen-local-7b', params: { temperature: 0 }, weightsHash } })
   await mem.remember('s', 'a fact')
-  await mem.anchorShard('s'); settle('s')
+  await mem.anchorShard('s')
+  settle('s')
   const { receipt } = await mem.recall('s', { modelParams: { seed: 42 } })
   assert.equal(receipt.model?.id, 'qwen-local-7b')
   assert.equal(receipt.model?.weightsHash, weightsHash)
@@ -459,11 +563,13 @@ test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest d
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   await mem.remember('manual', 'inspect belt every 10h')
   settle('manual')
-  const r = await callTool(mem, 'groundedAnswer', { claims: [
-    { text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] },
-    { text: 'the moon is cheese', cites: [{ shard: 'manual', seq: 1 }] },
-    { text: 'unsourced claim', cites: [] }
-  ] })
+  const r = await callTool(mem, 'groundedAnswer', {
+    claims: [
+      { text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] },
+      { text: 'the moon is cheese', cites: [{ shard: 'manual', seq: 1 }] },
+      { text: 'unsourced claim', cites: [] }
+    ]
+  })
   assert.equal(r.committed, true)
   assert.equal(r.answer, 'drain port 4 torque 45Nm')
   assert.equal(r.kept.length, 1)
@@ -486,9 +592,7 @@ test('verifyReceipt: token → found/hash/provenance/anchored/fragments; unknown
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   await mem.remember('manual', 'inspect belt every 10h')
   settle('manual')
-  const r = await callTool(mem, 'groundedAnswer', { claims: [
-    { text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] }
-  ] })
+  const r = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] }] })
   assert.equal(r.committed, true)
   assert.ok(r.receiptToken.startsWith('nektarr1.'), 'token emitted')
   assert.ok(r.verifyUrl.includes('/v1/verify?r='), 'verifyUrl emitted')

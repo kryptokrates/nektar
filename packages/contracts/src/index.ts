@@ -9,7 +9,7 @@
 // the pre-flag artifact (NektarAnchorV3.json) stay decodable byte-for-byte.
 import { createRequire } from 'node:module'
 import type { AnchorData, Bytes } from '@nektar/core'
-import { sha256, dsha256, utf8, toHex, fromHex, chainRp, TAG_RPRIME as TAG_RPRIME_BYTES, hash160, META_FLAG } from '@nektar/core'
+import { sha256, utf8, toHex, fromHex, chainRp, TAG_RPRIME as TAG_RPRIME_BYTES, hash160 } from '@nektar/core'
 
 const require = createRequire(import.meta.url)
 export const NEKTAR_ANCHOR_ARTIFACT = require('../../NektarAnchor.json')
@@ -38,11 +38,16 @@ export { TAG_RPRIME } from '@nektar/core'
 // core chainRp byte-for-byte (proved by the vectors test).
 export const contractRp = chainRp
 
-export interface DecodedAnchor extends AnchorData { ownerPub: string, ownerPkh: Bytes, tag: Bytes, /** ANC-006: the data payload's first push is the META flag */ metanet: boolean }
+export interface DecodedAnchor extends AnchorData {
+  ownerPub: string
+  ownerPkh: Bytes
+  tag: Bytes
+  /** ANC-006: the data payload's first push is the META flag */ metanet: boolean
+}
 
 /** tag must equal core TAG_RPRIME (the deployer chooses it; readers must check). */
-export function isValidAnchor (d: Pick<DecodedAnchor,'tag'>): boolean {
-    return d.tag.length === TAG_RPRIME_BYTES.length && d.tag.every((b,i)=>b===TAG_RPRIME_BYTES[i])
+export function isValidAnchor(d: Pick<DecodedAnchor, 'tag'>): boolean {
+  return d.tag.length === TAG_RPRIME_BYTES.length && d.tag.every((b, i) => b === TAG_RPRIME_BYTES[i])
 }
 
 /**
@@ -53,7 +58,7 @@ export function isValidAnchor (d: Pick<DecodedAnchor,'tag'>): boolean {
  * equality. Anything else (including v2 anchors with a poseidonRoot field)
  * returns null.
  */
-export function decodeNektarAnchor (scriptHex: string): DecodedAnchor | null {
+export function decodeNektarAnchor(scriptHex: string): DecodedAnchor | null {
   const hex = scriptHex.startsWith('0x') ? scriptHex.slice(2) : scriptHex
   // 1. state suffix: the last OP_RETURN whose suffix parses and ends the
   // script — layout: [flag(4B)?] genesisOwner(33B)|n(8)|size(8)|R(32)|Rp(32)|tagLen|tag|pkhLen|pkh
@@ -89,9 +94,20 @@ export function decodeNektarAnchor (scriptHex: string): DecodedAnchor | null {
   // 2. byte-auth: rebuild the expected script (flagged → current artifact,
   // flag-absent → pre-flag artifact) and require exact equality
   try {
-    const expected = buildScript(ownerPub, toHex(ownerPkh), BigInt(n), BigInt(size), state.slice(98, 162), state.slice(162, 226), state.slice(228, 228 + tagLen * 2), metanet)
+    const expected = buildScript(
+      ownerPub,
+      toHex(ownerPkh),
+      BigInt(n),
+      BigInt(size),
+      state.slice(98, 162),
+      state.slice(162, 226),
+      state.slice(228, 228 + tagLen * 2),
+      metanet
+    )
     if (expected !== hex) return null
-  } catch { return null }
+  } catch {
+    return null
+  }
   return { shard: toHex(hash160(fromHex(ownerPub))), n, size, R, Rp, tag, ownerPub, ownerPkh, metanet }
 }
 
@@ -103,19 +119,19 @@ export function decodeNektarAnchor (scriptHex: string): DecodedAnchor | null {
  *  state cannot exist without this signature, and it is now extractable from
  *  the spend tx alone — no covenant internals required. */
 export interface AnchorAuthorship {
-  ownerPub: string          // the owner key that authorized this state transition
-  sig: string               // DER + sighash-scope byte, as pushed by the spend
-  sighashScope: number      // trailing byte of sig (0x41 = ALL|FORKID)
-  preimage: string          // the txPreimage chunk the signature commits to
-  inputIndex: number        // which input spent the anchor UTXO
-  verified: boolean         // sig verifies over sha256(preimage) for ownerPub
+  ownerPub: string // the owner key that authorized this state transition
+  sig: string // DER + sighash-scope byte, as pushed by the spend
+  sighashScope: number // trailing byte of sig (0x41 = ALL|FORKID)
+  preimage: string // the txPreimage chunk the signature commits to
+  inputIndex: number // which input spent the anchor UTXO
+  verified: boolean // sig verifies over sha256(preimage) for ownerPub
 }
 /** Extract + verify σ_n from an anchor spend. `spentAnchorScript` is the
  *  locking script of the anchor UTXO being spent (decoded to recover ownerPkh
  *  and prove the input really spends a NektarAnchor). Returns null when the
  *  input doesn't carry a recognizable owner sig/pubKey pair. */
-export function extractAnchorAuthorship (
-  spendTx: { inputs: Array<{ unlockingScript?: { chunks: Array<{ op: number, data?: number[] | Uint8Array }> } }> },
+export function extractAnchorAuthorship(
+  spendTx: { inputs: Array<{ unlockingScript?: { chunks: Array<{ op: number; data?: number[] | Uint8Array }> } }> },
   spentAnchorScript: string,
   inputIndex = 0
 ): AnchorAuthorship | null {
@@ -145,20 +161,22 @@ export function extractAnchorAuthorship (
       // dynamic require (peer dep): sha256+secp256k1 verify via @bsv/sdk
       const { PublicKey, Signature } = require('@bsv/sdk')
       verified = PublicKey.fromString(toHex(d)).verify(Array.from(digest), Signature.fromDER(der, 'hex'))
-    } catch { verified = false }
+    } catch {
+      verified = false
+    }
     return { ownerPub: toHex(d), sig: toHex(sigD), sighashScope: scope, preimage: toHex(pre), inputIndex, verified }
   }
   return null
 }
 
 let RC: any = null
-function buildScript (pub: string, pkh: string, n: bigint, size: bigint, R: string, Rp: string, tag: string, metanet = true): string {
+function buildScript(pub: string, pkh: string, n: bigint, size: bigint, R: string, Rp: string, tag: string, metanet = true): string {
   if (!RC) RC = require('runar-sdk')
   const args = metanet ? [pub, pkh, META_FLAG_HEX, n, size, R, Rp, tag] : [pub, pkh, n, size, R, Rp, tag]
   const c = new RC.RunarContract(metanet ? NEKTAR_ANCHOR_ARTIFACT : NEKTAR_ANCHOR_V3_ARTIFACT, args)
   return c.getLockingScript()
 }
-function readLe8 (hex8bytes: string): bigint {
+function readLe8(hex8bytes: string): bigint {
   let v = 0n
   for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(parseInt(hex8bytes.slice(i * 2, i * 2 + 2), 16))
   return v

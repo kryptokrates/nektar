@@ -13,7 +13,14 @@ import { NektarMemory, type NektarMemoryOptions, type SecurityStateStore } from 
 
 const fx = JSON.parse(readFileSync(new URL('../../../zk/test/fixtures/zkder-permit.json', import.meta.url), 'utf8'))
 const H = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
-const proofBytes = () => encodeZkder({ imageId: H(fx.imageId), policyRoot: H(fx.journal.policyRoot), conclusionHash: H(fx.journal.conclusionHash), queryId: H(fx.journal.queryId), receipt: H(fx.receipt) })
+const proofBytes = () =>
+  encodeZkder({
+    imageId: H(fx.imageId),
+    policyRoot: H(fx.journal.policyRoot),
+    conclusionHash: H(fx.journal.conclusionHash),
+    queryId: H(fx.journal.queryId),
+    receipt: H(fx.receipt)
+  })
 
 // the SAME program the fixture was proven against (gen-vectors-datalog.mjs)
 const PROG = `
@@ -28,15 +35,21 @@ pair(P) :- member(P, verified), member(P, verified).
 `
 const dag = () => new PolicyDAG([{ name: 'base', rules: parseProgram(PROG).rules }])
 
-async function world (opts: NektarMemoryOptions = {}) {
-  const chain = new MockChain(); chain.verifyScripts = true
-  const f = new MockFunder(); f.topup(4); for (const u of (f as any).utxos) chain.registerParent(u.tx)
+async function world(opts: NektarMemoryOptions = {}) {
+  const chain = new MockChain()
+  chain.verifyScripts = true
+  const f = new MockFunder()
+  f.topup(4)
+  for (const u of (f as any).utxos) chain.registerParent(u.tx)
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 10 }, ...opts })
   return { chain, f, mem }
 }
 
 // seed the fixture queryId as an issued (unused) ZK query via securityStore
-const seedQuery: SecurityStateStore = { load: () => ({ challenges: [], zkSeen: [], zkQueries: [[fx.journal.queryId, Date.now() + 600_000]], revocations: [] }), save: () => {} }
+const seedQuery: SecurityStateStore = {
+  load: () => ({ challenges: [], zkSeen: [], zkQueries: [[fx.journal.queryId, Date.now() + 600_000]], revocations: [] }),
+  save: () => {}
+}
 
 test('STARK derivation verifies against the anchored dagroot record + issued queryId', async () => {
   const d = dag()
@@ -45,7 +58,8 @@ test('STARK derivation verifies against the anchored dagroot record + issued que
   const { chain, mem } = await world({ policyDag: d, securityStore: seedQuery })
   await mem.remember('__policy__', `dagroot:${root}`)
   await mem.anchorShard('__policy__')
-  chain.mine(1); mem.confirmAnchor('__policy__', mem.tailLink('__policy__')!.txid)
+  chain.mine(1)
+  mem.confirmAnchor('__policy__', mem.tailLink('__policy__')!.txid)
   const r = await mem.verifyDerivation('__policy__', proofBytes())
   assert.ok(r.ok, JSON.stringify(r))
   assert.equal(r.policyRoot, root)
@@ -73,7 +87,8 @@ test('STARK derivation NEGATIVES: unanchored root, mismatch, unissued query', as
   const w3 = await world({ policyDag: d })
   await w3.mem.remember('__policy__', `dagroot:${fx.journal.policyRoot}`)
   await w3.mem.anchorShard('__policy__')
-  w3.chain.mine(1); w3.mem.confirmAnchor('__policy__', w3.mem.tailLink('__policy__')!.txid)
+  w3.chain.mine(1)
+  w3.mem.confirmAnchor('__policy__', w3.mem.tailLink('__policy__')!.txid)
   const r3 = await w3.mem.verifyDerivation('__policy__', proofBytes())
   assert.equal(r3.ok, false)
   assert.match(String(r3.reason), /queryId/)
@@ -84,15 +99,26 @@ test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own derivatio
   const { chain, mem } = await world({ policyDag: d })
   await mem.remember('s', 's1 data')
   await mem.anchorShard('s')
-  chain.mine(1); mem.confirmAnchor('s', mem.tailLink('s')!.txid)
+  chain.mine(1)
+  mem.confirmAnchor('s', mem.tailLink('s')!.txid)
   const root = Buffer.from(d.policyRoot()).toString('hex')
   await mem.remember('__policy__', `dagroot:${root}`)
   await mem.anchorShard('__policy__')
-  chain.mine(1); mem.confirmAnchor('__policy__', mem.tailLink('__policy__')!.txid)
+  chain.mine(1)
+  mem.confirmAnchor('__policy__', mem.tailLink('__policy__')!.txid)
   const q = mem.issueZkQuery('auditor')
-  const { bytes } = await mem.proveDerivation('s',
-    { pred: 'permit', args: ['a', 's/0'], edb: [{ pred: 'member', args: ['a', 'verified'] }, { pred: 'cleared', args: ['a'] }] },
-    q.queryId)
+  const { bytes } = await mem.proveDerivation(
+    's',
+    {
+      pred: 'permit',
+      args: ['a', 's/0'],
+      edb: [
+        { pred: 'member', args: ['a', 'verified'] },
+        { pred: 'cleared', args: ['a'] }
+      ]
+    },
+    q.queryId
+  )
   const ok = await mem.verifyDerivation('__policy__', bytes)
   assert.ok(ok.ok, JSON.stringify(ok))
   const replay = await mem.verifyDerivation('__policy__', bytes)

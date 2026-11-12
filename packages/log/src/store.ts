@@ -34,22 +34,26 @@ export interface ShardStore {
 
 export class MemoryShardStore implements ShardStore {
   private recs = new Map<string, LogRecord[]>() // shard -> records
-  private list (shard: string): LogRecord[] {
+  private list(shard: string): LogRecord[] {
     if (!this.recs.has(shard)) this.recs.set(shard, [])
     return this.recs.get(shard)!
   }
-  async append (rec: LogRecord): Promise<void> { this.list(rec.shard).push(rec) }
-  async byIdentity (shard: string, hdpHex: string): Promise<LogRecord | undefined> {
-    return this.list(shard).find(r => Buffer.from(r.hdp).toString('hex') === hdpHex)
+  async append(rec: LogRecord): Promise<void> {
+    this.list(rec.shard).push(rec)
   }
-  async nextSeq (shard: string): Promise<number> { return this.list(shard).length }
-  async pending (shard: string): Promise<LogRecord[]> {
-    return this.list(shard).filter(r => r.state === 'committed')
+  async byIdentity(shard: string, hdpHex: string): Promise<LogRecord | undefined> {
+    return this.list(shard).find((r) => Buffer.from(r.hdp).toString('hex') === hdpHex)
   }
-  async committedUnbatched (shard: string): Promise<LogRecord[]> {
-    return this.list(shard).filter(r => r.state === 'committed' && r.batchIndex === undefined)
+  async nextSeq(shard: string): Promise<number> {
+    return this.list(shard).length
   }
-  async markBatched (shard: string, seqs: number[], batchIndex: number): Promise<void> {
+  async pending(shard: string): Promise<LogRecord[]> {
+    return this.list(shard).filter((r) => r.state === 'committed')
+  }
+  async committedUnbatched(shard: string): Promise<LogRecord[]> {
+    return this.list(shard).filter((r) => r.state === 'committed' && r.batchIndex === undefined)
+  }
+  async markBatched(shard: string, seqs: number[], batchIndex: number): Promise<void> {
     const seqSet = new Set(seqs)
     for (const r of this.list(shard)) {
       if (seqSet.has(r.seq)) {
@@ -58,13 +62,18 @@ export class MemoryShardStore implements ShardStore {
       }
     }
   }
-  async markAnchored (shard: string, batchIndex: number, txid: string): Promise<void> {
+  async markAnchored(shard: string, batchIndex: number, txid: string): Promise<void> {
     for (const r of this.list(shard)) {
-      if (r.batchIndex === batchIndex) { r.state = 'anchored'; r.anchorTxid = txid }
+      if (r.batchIndex === batchIndex) {
+        r.state = 'anchored'
+        r.anchorTxid = txid
+      }
     }
   }
-  async all (shard: string): Promise<LogRecord[]> { return this.list(shard).slice() }
-  async lastBatchIndex (shard: string): Promise<number> {
+  async all(shard: string): Promise<LogRecord[]> {
+    return this.list(shard).slice()
+  }
+  async lastBatchIndex(shard: string): Promise<number> {
     let max = -1
     for (const r of this.list(shard)) if (r.batchIndex !== undefined && r.batchIndex > max) max = r.batchIndex
     return max

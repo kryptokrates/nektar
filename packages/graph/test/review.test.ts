@@ -1,23 +1,30 @@
 import test from 'node:test'
 import assert from 'node:assert'
-import { AORGraph, PolicyDAG, verifyDerivation, instanceOf, entails, ruleCanonical } from '../src/index.js'
-import { PrivateKey } from '@bsv/sdk'
+import { AORGraph, PolicyDAG, verifyDerivation, instanceOf, entails } from '../src/index.js'
 import { parseProgram } from '@nektar/datalog'
-import { dsha256, utf8 } from '@nektar/core'
 
-const rules = () => parseProgram(`@id r1
+const rules = () =>
+  parseProgram(`@id r1
 spec(S,V) :- requires(P,V), applies(S,P).`).rules
 
 test('POL-003: rule-body commitment — changing a body changes the root', () => {
   const a = new PolicyDAG([{ name: 'org', rules: rules() }])
-  const b = new PolicyDAG([{ name: 'org', rules: parseProgram(`@id r1
-spec(S,V) :- requires(P,V).`).rules }])
+  const b = new PolicyDAG([
+    {
+      name: 'org',
+      rules: parseProgram(`@id r1
+spec(S,V) :- requires(P,V).`).rules
+    }
+  ])
   assert.notEqual(Buffer.from(a.policyRoot()).toString('hex'), Buffer.from(b.policyRoot()).toString('hex'), 'body change changes policy root')
 })
 
 test('POL-006: query + verifyDerivation; tampered rule, swapped premise, other root', () => {
   const dag = new PolicyDAG([{ name: 'org', rules: rules() }])
-  const edb = [{ pred: 'requires', args: ['t', '45'] }, { pred: 'applies', args: ['p4', 't'] }]
+  const edb = [
+    { pred: 'requires', args: ['t', '45'] },
+    { pred: 'applies', args: ['p4', 't'] }
+  ]
   const q = dag.query(edb, 'spec', ['p4', '45'])!
   assert.ok(verifyDerivation(q, dag, edb).ok, 'valid derivation verifies')
   // tampered rule text: a query whose tree claims a different fact
@@ -55,8 +62,11 @@ test('AOR-008a: currentView boundary — before, at, after refinement t', () => 
   const d = g.append({ kind: 'derived', phi: 'spec(p4, 45)', t: { logPos: 3 }, context: ['m'], sigma: [] }, [e1.h, e2.h], 'r1')
   const e3 = g.append({ kind: 'episode', phi: 'requires(t, 55)', t: { logPos: 4 }, context: ['m'], sigma: [] }, [])
   g.append({ kind: 'refinement', phi: 'spec(p4, 55)', t: { logPos: 5 }, context: ['m'], sigma: [], refines: d.h }, [e3.h, e2.h], 'r1')
-  assert.ok(g.currentView(4).some(v => v.phi === 'spec(p4, 45)'), 'before t=5 old spec valid')
-  assert.ok(!g.currentView(5).some(v => v.phi === 'spec(p4, 45)'), 'AT t=5 old spec invalidated')
-  assert.ok(!g.currentView(100).some(v => v.phi === 'spec(p4, 45)'), 'after t=5 still invalidated')
+  assert.ok(
+    g.currentView(4).some((v) => v.phi === 'spec(p4, 45)'),
+    'before t=5 old spec valid'
+  )
+  assert.ok(!g.currentView(5).some((v) => v.phi === 'spec(p4, 45)'), 'AT t=5 old spec invalidated')
+  assert.ok(!g.currentView(100).some((v) => v.phi === 'spec(p4, 45)'), 'after t=5 still invalidated')
   assert.ok(g.history(d.h)!.phi === 'spec(p4, 45)', 'vertex retained, never mutated')
 })

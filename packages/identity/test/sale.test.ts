@@ -4,9 +4,15 @@ import assert from 'node:assert/strict'
 import { PrivateKey, Transaction, UnlockingScript } from '@bsv/sdk'
 import { toHex, sha256 } from '@nektar/core'
 import {
-  offerDisclosure, wrapSaleValue, plainSaleValue,
-  parseBuyArgs, parsePushes, claimDisclosure,
-  publicSaleQuote, saleQuoteWire, verifyOfferSig
+  offerDisclosure,
+  wrapSaleValue,
+  plainSaleValue,
+  parseBuyArgs,
+  parsePushes,
+  claimDisclosure,
+  publicSaleQuote,
+  saleQuoteWire,
+  verifyOfferSig
 } from '../src/sale.js'
 
 const seller = PrivateKey.fromRandom()
@@ -17,8 +23,9 @@ const VALUE = new TextEncoder().encode('{"field":"role","salt":"ab12","value":"a
 
 /** fake the buy tx's unlocking pushes: opSig‖wrapped‖change‖pre‖00
  *  (depositorPkh is pinned in the escrow script, not an arg) */
-function fakeBuyUnlock (wrapped: Uint8Array): string {
-  const push = (b: Uint8Array) => b.length === 0 ? '00' : (b.length <= 0x4b ? b.length.toString(16).padStart(2, '0') : '4c' + b.length.toString(16).padStart(2, '0')) + toHex(b)
+function fakeBuyUnlock(wrapped: Uint8Array): string {
+  const push = (b: Uint8Array) =>
+    b.length === 0 ? '00' : (b.length <= 0x4b ? b.length.toString(16).padStart(2, '0') : '4c' + b.length.toString(16).padStart(2, '0')) + toHex(b)
   return push(new Uint8Array(71)) + push(wrapped) + push(new Uint8Array([0xa0, 0x0f])) + push(new Uint8Array(181)) + '00'
 }
 
@@ -48,8 +55,12 @@ test('sale: public disclosure unwraps as-is; tampered hWrapped rejected', () => 
 
 test('sale: offerDisclosure produces a valid covenant cfg + committed wrapped', () => {
   const offer = offerDisclosure({
-    sellerKey: seller, value: VALUE, price: 3_000n,
-    refundAfter: 1_000_000n, maxFee: 10n, buyerPub
+    sellerKey: seller,
+    value: VALUE,
+    price: 3_000n,
+    refundAfter: 1_000_000n,
+    maxFee: 10n,
+    buyerPub
   })
   assert.equal(offer.cfg.hWrapped.length, 64)
   assert.equal(offer.cfg.sellerPkh.length, 40)
@@ -65,8 +76,13 @@ test('sale: offerDisclosure produces a valid covenant cfg + committed wrapped', 
 })
 test('sale: public quote carries no reveal credential yet still verifies', () => {
   const offer = offerDisclosure({
-    sellerKey: seller, value: VALUE, price: 500n,
-    refundAfter: 1_000_000n, maxFee: 10n, buyerPub, expiresAt: 700_000n
+    sellerKey: seller,
+    value: VALUE,
+    price: 500n,
+    refundAfter: 1_000_000n,
+    maxFee: 10n,
+    buyerPub,
+    expiresAt: 700_000n
   })
   const q = publicSaleQuote(offer)
   assert.ok(!('wrapped' in q), 'public quote has no wrapped')
@@ -78,10 +94,15 @@ test('sale: public quote carries no reveal credential yet still verifies', () =>
   assert.equal(typeof wire.cfg.price, 'number')
   assert.ok(verifyOfferSig({ ...q, cfg: { ...q.cfg, price: BigInt(wire.cfg.price) } }, buyerPub), 'wire representation verifies')
 })
-function fromHexForTest (s: string): Uint8Array { return new Uint8Array(s.match(/.{2}/g)!.map(b => parseInt(b, 16))) }
+function fromHexForTest(s: string): Uint8Array {
+  return new Uint8Array(s.match(/.{2}/g)!.map((b) => parseInt(b, 16)))
+}
 
 test('parsePushes: small-integer opcodes (OP_1NEGATE, OP_1..OP_16) read as their minimal number pushes', () => {
   const p = parsePushes('00' + '4f' + '51' + '52' + '60' + '02abcd')
-  assert.deepEqual(p.map(b => Buffer.from(b).toString('hex')), ['', '81', '01', '02', '10', 'abcd'])
+  assert.deepEqual(
+    p.map((b) => Buffer.from(b).toString('hex')),
+    ['', '81', '01', '02', '10', 'abcd']
+  )
   assert.throws(() => parsePushes('76'), /non-push opcode/)
 })

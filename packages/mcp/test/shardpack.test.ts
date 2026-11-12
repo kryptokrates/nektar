@@ -5,17 +5,23 @@ import type { AddressInfo } from 'node:net'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 
-function setup (opts: NektarMemoryOptions = {}) {
-  const chain = new MockChain(); chain.verifyScripts = true
-  const funder = new MockFunder(); funder.topup(50)
+function setup(opts: NektarMemoryOptions = {}) {
+  const chain = new MockChain()
+  chain.verifyScripts = true
+  const funder = new MockFunder()
+  funder.topup(50)
   for (const t of funder.parents) chain.registerParent(t)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
-  const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
+  const settle = (shard: string) => {
+    chain.mine(1)
+    const l = mem.tailLink(shard)
+    if (l) mem.confirmAnchor(shard, l.txid)
+  }
   return { chain, funder, mem, settle }
 }
 /** second instance on the SAME network (shared MockChain) — the real case:
  *  an importer on a different network could never anchor-verify anyway */
-function peerOf (a: ReturnType<typeof setup>, opts: NektarMemoryOptions = {}) {
+function peerOf(a: ReturnType<typeof setup>, opts: NektarMemoryOptions = {}) {
   return new NektarMemory(a.chain, a.funder, a.funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
 }
 
@@ -26,23 +32,30 @@ test('shard packs: export → import re-verifies every bundle; records provable 
   a.settle('guide')
 
   const pack = await a.mem.exportShardPack('guide')
-  assert.equal(pack.v, 1); assert.equal(pack.kind, 'nektar-shard-pack'); assert.equal(pack.shard, 'guide')
+  assert.equal(pack.v, 1)
+  assert.equal(pack.kind, 'nektar-shard-pack')
+  assert.equal(pack.shard, 'guide')
   assert.equal(pack.records.length, 2)
-  assert.ok(pack.records.every(r => r.bundle), 'anchored records carry their proof bundle')
-  assert.ok(pack.records.every(r => typeof r.data === 'string' && typeof r.prov?.signature === 'string'))
+  assert.ok(
+    pack.records.every((r) => r.bundle),
+    'anchored records carry their proof bundle'
+  )
+  assert.ok(pack.records.every((r) => typeof r.data === 'string' && typeof r.prov?.signature === 'string'))
 
   const b = peerOf(a)
   const imp = await b.importShardPack(pack)
-  assert.equal(imp.imported, 2); assert.equal(imp.anchored, 2)
+  assert.equal(imp.imported, 2)
+  assert.equal(imp.anchored, 2)
   assert.deepEqual(imp.unverifiable, [])
 
   // imported records are provable on the peer via the imported-bundle path
   const { bundle, result } = await b.prove('guide', 0)
-  assert.ok(bundle); assert.ok(result.ok)
+  assert.ok(bundle)
+  assert.ok(result.ok)
 
   // the import event itself is recorded on __imports__ (anchored lineage, not asserted)
   const imports = await b.records('__imports__')
-  assert.ok(imports.some(i => Buffer.from(i.fragment.d).toString('utf8').includes('shard-import')))
+  assert.ok(imports.some((i) => Buffer.from(i.fragment.d).toString('utf8').includes('shard-import')))
 
   // a non-empty target refuses — imported + native seqs must never mix
   const c = peerOf(a)
@@ -87,7 +100,9 @@ test('doctor: one-call diagnostic carries funding/shards/records/anchors/payment
   settle('s')
   const d = await callTool(mem, 'doctor', {})
   assert.equal(d.network, 'main')
-  assert.equal(d.shards, 1); assert.equal(d.records, 2); assert.equal(d.anchoredRecords, 2)
+  assert.equal(d.shards, 1)
+  assert.equal(d.records, 2)
+  assert.equal(d.anchoredRecords, 2)
   assert.ok(d.funding.address && d.funding.balanceSats > 0 && d.funding.funded === true)
   assert.equal(d.unprovenAnchors, 0)
   assert.equal(d.payments, 'off')
@@ -113,27 +128,32 @@ test('pack endpoint + remote import: /.well-known/nektar lists offerable shards;
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
   a.settle('guide')
-  a.mem.setShardPrivate('hr'); await a.mem.remember('hr', 'secret') // private — must not leak
+  a.mem.setShardPrivate('hr')
+  await a.mem.remember('hr', 'secret') // private — must not leak
   const srv = createHttpApi(a.mem).listen(0)
-  await new Promise(r => srv.once('listening', r))
+  await new Promise((r) => srv.once('listening', r))
   const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`
   try {
     // discovery doc: public shards only — private + __* excluded
     const disco = await (await fetch(`${base}/.well-known/nektar`)).json()
     assert.equal(disco.kind, 'nektar-discovery')
-    const names = (disco.publicShards as Array<{ shard: string }>).map(s => s.shard)
-    assert.ok(names.includes('guide')); assert.ok(!names.includes('hr') && !names.some(n => n.startsWith('__')))
+    const names = (disco.publicShards as Array<{ shard: string }>).map((s) => s.shard)
+    assert.ok(names.includes('guide'))
+    assert.ok(!names.includes('hr') && !names.some((n) => n.startsWith('__')))
 
     // direct fetch == the tool's export (sans packUrl)
     const pack = await (await fetch(`${base}/v1/pack/guide`)).json()
-    assert.equal(pack.kind, 'nektar-shard-pack'); assert.equal(pack.records.length, 2)
+    assert.equal(pack.kind, 'nektar-shard-pack')
+    assert.equal(pack.records.length, 2)
     assert.equal((await fetch(`${base}/v1/pack/hr`)).status, 403)
     assert.equal((await fetch(`${base}/v1/pack/nope`)).status, 404)
 
     // remote import: peer pulls the pack over HTTP and re-verifies every bundle
     const b = peerOf(a)
     const imp = await callTool(b, 'importShard', { from: base, shard: 'guide' })
-    assert.equal(imp.imported, 2); assert.equal(imp.anchored, 2); assert.deepEqual(imp.unverifiable, [])
+    assert.equal(imp.imported, 2)
+    assert.equal(imp.anchored, 2)
+    assert.deepEqual(imp.unverifiable, [])
 
     // exportShard hands out the shareable URL (the invite artifact)
     const ex = await callTool(a.mem, 'exportShard', { shard: 'guide' })
@@ -142,7 +162,9 @@ test('pack endpoint + remote import: /.well-known/nektar lists offerable shards;
     // doctor counts offerable packs
     const d = await callTool(b, 'doctor', {})
     assert.equal(d.publicPacks, 1) // 'guide' only — 'hr' is private, __imports__ is system
-  } finally { srv.close() }
+  } finally {
+    srv.close()
+  }
 })
 
 test('bstore packs: describeShard publishes the pack; .well-known carries store; importShard {store} verifies; tamper refuses', async () => {
@@ -156,28 +178,41 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
   const fake = createServer((req, res) => {
     const key = req.url!.split('/').slice(2).join('/')
     if (req.method === 'PUT') {
-      const c: Buffer[] = []; req.on('data', x => c.push(x))
-      req.on('end', () => { objects.set(key, new Uint8Array(Buffer.concat(c))); metas.set(key, String(req.headers['x-amz-meta-sha256'] ?? '')); res.writeHead(200).end() })
+      const c: Buffer[] = []
+      req.on('data', (x) => c.push(x))
+      req.on('end', () => {
+        objects.set(key, new Uint8Array(Buffer.concat(c)))
+        metas.set(key, String(req.headers['x-amz-meta-sha256'] ?? ''))
+        res.writeHead(200).end()
+      })
       return
     }
     if (req.method === 'HEAD') {
       const o = objects.get(key)
-      if (o === undefined) { res.writeHead(404).end(); return }
-      res.writeHead(200, { 'content-length': o.length, 'x-amz-meta-sha256': metas.get(key) ?? '' }).end(); return
+      if (o === undefined) {
+        res.writeHead(404).end()
+        return
+      }
+      res.writeHead(200, { 'content-length': o.length, 'x-amz-meta-sha256': metas.get(key) ?? '' }).end()
+      return
     }
     if (req.method === 'GET') {
       const o = objects.get(key)
-      if (o === undefined) { res.writeHead(404).end(); return }
-      res.writeHead(200).end(Buffer.from(o)); return
+      if (o === undefined) {
+        res.writeHead(404).end()
+        return
+      }
+      res.writeHead(200).end(Buffer.from(o))
+      return
     }
     res.writeHead(405).end()
   })
-  await new Promise<void>(r => fake.listen(0, '127.0.0.1', r))
+  await new Promise<void>((r) => fake.listen(0, '127.0.0.1', r))
   const s3port = (fake.address() as AddressInfo).port
   const client = new S3ObjectStore({ endpoint: `http://127.0.0.1:${s3port}`, bucket: 'packs-mock', accessKey: 'a', secretKey: 's' })
   const a = setup({ objectStore: client })
   const srv = createHttpApi(a.mem).listen(0)
-  await new Promise(r => srv.once('listening', r))
+  await new Promise((r) => srv.once('listening', r))
   const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`
   try {
     await a.mem.remember('guide', 'fact one')
@@ -191,13 +226,14 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
     assert.match(ref!.key, /^packs\/mock\/[0-9a-f]+\/[0-9a-f]{64}\.json$/)
     // the discovery doc names the store ref for the shard
     const disco = await (await fetch(`${base}/.well-known/nektar`)).json()
-    const entry = (disco.publicShards as Array<{ shard: string, store?: { key: string }, packUrl?: string }>).find(s => s.shard === 'guide')
+    const entry = (disco.publicShards as Array<{ shard: string; store?: { key: string }; packUrl?: string }>).find((s) => s.shard === 'guide')
     assert.equal(entry?.store?.key, ref!.key, '.well-known carries the store ref')
     assert.ok(entry?.packUrl, 'http fallback stays advertised')
     // a peer imports through the store ref — getVerified + pack re-verification
     const b = peerOf(a, { objectStore: client })
-    const imp = await callTool(b, 'importShard', { store: ref }) as { imported: number, anchored: number }
-    assert.equal(imp.imported, 2); assert.equal(imp.anchored, 2)
+    const imp = (await callTool(b, 'importShard', { store: ref })) as { imported: number; anchored: number }
+    assert.equal(imp.imported, 2)
+    assert.equal(imp.anchored, 2)
     // a tampered object is refused by getVerified (size/digest) before it can land
     const c = peerOf(a, { objectStore: client })
     objects.set(ref!.key, new TextEncoder().encode('{"kind":"forged"}'))
@@ -207,8 +243,11 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
     const pack = await a.mem.exportShardPack('guide')
     ;(pack.records[0] as { data: string }).data = 'swapped plaintext'
     const forged = await client.put(`packs/mock/forged/${'ab'.repeat(32)}.json`, new TextEncoder().encode(JSON.stringify(pack)))
-    const r2 = await callTool(d2, 'importShard', { store: forged }) as { imported: number, unverifiable: string[] }
+    const r2 = (await callTool(d2, 'importShard', { store: forged })) as { imported: number; unverifiable: string[] }
     assert.equal(r2.imported, 2, 'tampered records still land — as unverifiable, never trusted')
     assert.ok(r2.unverifiable.length > 0)
-  } finally { fake.close(); srv.close() }
+  } finally {
+    fake.close()
+    srv.close()
+  }
 })

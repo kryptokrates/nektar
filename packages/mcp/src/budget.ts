@@ -7,33 +7,55 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-interface GrantLedger { totalCap: number, committed: number, reservations: Record<string, number>, completed?: Record<string, number>, parents?: string[] }
+interface GrantLedger {
+  totalCap: number
+  committed: number
+  reservations: Record<string, number>
+  completed?: Record<string, number>
+  parents?: string[]
+}
 
 export class BudgetAuthority {
   private file: string
   private ledger: Record<string, GrantLedger>
   private revoked = new Set<string>()
 
-  constructor (dir: string) {
+  constructor(dir: string) {
     this.file = path.join(dir, 'budget.json')
     const revokedFile = `${this.file}.revoked`
-    try { this.revoked = new Set(JSON.parse(fs.readFileSync(revokedFile, 'utf8'))) } catch {}
-    try { this.ledger = JSON.parse(fs.readFileSync(this.file, 'utf8')) } catch { this.ledger = {} }
+    try {
+      this.revoked = new Set(JSON.parse(fs.readFileSync(revokedFile, 'utf8')))
+    } catch {}
+    try {
+      this.ledger = JSON.parse(fs.readFileSync(this.file, 'utf8'))
+    } catch {
+      this.ledger = {}
+    }
   }
 
-  private revokedFile (): string { return `${this.file}.revoked` }
+  private revokedFile(): string {
+    return `${this.file}.revoked`
+  }
 
   /** atomic write — a torn save must never read back as an empty ledger (R2) */
-  private save (): void {
-    try { const tmp = `${this.file}.tmp`; fs.writeFileSync(tmp, JSON.stringify(this.ledger, null, 1)); fs.renameSync(tmp, this.file) } catch {}
+  private save(): void {
+    try {
+      const tmp = `${this.file}.tmp`
+      fs.writeFileSync(tmp, JSON.stringify(this.ledger, null, 1))
+      fs.renameSync(tmp, this.file)
+    } catch {}
   }
 
-  private saveRevoked (): void {
-    try { const tmp = `${this.revokedFile()}.tmp`; fs.writeFileSync(tmp, JSON.stringify([...this.revoked])); fs.renameSync(tmp, this.revokedFile()) } catch {}
+  private saveRevoked(): void {
+    try {
+      const tmp = `${this.revokedFile()}.tmp`
+      fs.writeFileSync(tmp, JSON.stringify([...this.revoked]))
+      fs.renameSync(tmp, this.revokedFile())
+    } catch {}
   }
 
   /** declare a grant's lifetime cap + its ancestor chain */
-  setCap (grantId: string, totalCap: number, parents: string[] = []): void {
+  setCap(grantId: string, totalCap: number, parents: string[] = []): void {
     if (!this.ledger[grantId]) this.ledger[grantId] = { totalCap, committed: 0, reservations: {}, parents }
     this.ledger[grantId].totalCap = totalCap
     if (parents.length) this.ledger[grantId].parents = parents
@@ -41,12 +63,17 @@ export class BudgetAuthority {
   }
 
   /** mark a grant revoked — new reservations reject immediately (R2/R7); persisted (N6) */
-  revoke (grantId: string): void { this.revoked.add(grantId); this.saveRevoked() }
-  isRevoked (grantId: string): boolean { return this.revoked.has(grantId) }
+  revoke(grantId: string): void {
+    this.revoked.add(grantId)
+    this.saveRevoked()
+  }
+  isRevoked(grantId: string): boolean {
+    return this.revoked.has(grantId)
+  }
 
   /** reserve allInSats under grantId — 'ok' reserved, 'exists' idempotent hit,
    *  'denied' breaches a cap (own or any ancestor's), 'no-cap' unknown grant */
-  reserve (grantId: string, actionId: string, allInSats: number): 'ok' | 'exists' | 'denied' | 'no-cap' {
+  reserve(grantId: string, actionId: string, allInSats: number): 'ok' | 'exists' | 'denied' | 'no-cap' {
     if (this.revoked.has(grantId)) return 'denied'
     const g = this.ledger[grantId]
     if (!g) return 'no-cap'
@@ -70,20 +97,27 @@ export class BudgetAuthority {
 
   /** commit a reservation — the spend settled; the action lands in `completed`
    *  forever (idempotency record), the reservation frees. Ancestors debit too. */
-  commit (grantId: string, actionId: string): boolean {
+  commit(grantId: string, actionId: string): boolean {
     const g = this.ledger[grantId]
     if (!g || !(actionId in g.reservations)) return false
     const amt = g.reservations[actionId]!
     delete g.reservations[actionId]
     g.committed += amt
     ;(g.completed ??= {})[actionId] = amt
-    for (const pid of g.parents ?? []) { const p = this.ledger[pid]; if (p) { delete p.reservations[`${grantId}:${actionId}`]; p.committed += amt; ;(p.completed ??= {})[`${grantId}:${actionId}`] = amt } }
+    for (const pid of g.parents ?? []) {
+      const p = this.ledger[pid]
+      if (p) {
+        delete p.reservations[`${grantId}:${actionId}`]
+        p.committed += amt
+        ;(p.completed ??= {})[`${grantId}:${actionId}`] = amt
+      }
+    }
     this.save()
     return true
   }
 
   /** release a reservation — the spend never escaped; headroom returns */
-  release (grantId: string, actionId: string): boolean {
+  release(grantId: string, actionId: string): boolean {
     const g = this.ledger[grantId]
     if (!g || !(actionId in g.reservations)) return false
     delete g.reservations[actionId]
@@ -91,7 +125,7 @@ export class BudgetAuthority {
     return true
   }
 
-  status (grantId: string): { totalCap: number, committed: number, reserved: number, headroom: number } | undefined {
+  status(grantId: string): { totalCap: number; committed: number; reserved: number; headroom: number } | undefined {
     const g = this.ledger[grantId]
     if (!g) return undefined
     const reserved = Object.values(g.reservations).reduce((a, b) => a + b, 0)

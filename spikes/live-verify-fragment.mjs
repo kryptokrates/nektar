@@ -29,8 +29,13 @@ console.log(`BUMP: block ${mp.blockHeight}, path depth ${mp.path.length}`)
 // bundle: leaf = R (the committed batch root; verifier checks reconstructRoot==R)
 const Rhex = Buffer.from(d.R).toString('hex')
 const bundle = {
-  version: 1, shard: d.shard, n: d.n, size: d.size,
-  leaf: Rhex, leafIndex: 0, path: [],
+  version: 1,
+  shard: d.shard,
+  n: d.n,
+  size: d.size,
+  leaf: Rhex,
+  leafIndex: 0,
+  path: [],
   anchor: { txid, outputIndex: 0, n: d.n, size: d.size, R: Rhex, Rp: Buffer.from(d.Rp).toString('hex') },
   chainTail: [{ txid, outputIndex: 0, n: d.n, size: d.size, R: Rhex, Rp: Buffer.from(d.Rp).toString('hex') }],
   anchorBEEF: tx.toAtomicBEEF()

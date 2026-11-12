@@ -3,22 +3,24 @@
 //           /api/v1/block/<hash>/json, /api/v1/txmeta/<txid>/json, /api/v1/merkle_proof/<txid>, /arcade/tx (POST EF, GET /arcade/tx/<id>)
 import { PrivateKey, P2PKH, Transaction, MerklePath } from '@bsv/sdk'
 
-import { signWant, mintTree, buildCarrier, buildSweep, encodePayload, lanesFor, submitAll, readWants, FUNDING_TAG } from '../dist/src/index.js'
-import { tscMerklePath } from '@lightwebinc/bcommon'
+import { signWant, mintTree, buildCarrier, buildSweep, encodePayload, lanesFor, submitAll, readWants } from '../dist/src/index.js'
 
 import { stripEF } from './devchain.mjs'
 
 const CHAIN = process.env.CHAIN_URL ?? 'http://127.0.0.1:18344'
 const HOSTS = [process.env.HOST_URL ?? 'http://127.0.0.1:18091']
 const NET = 'regtest'
-const rpc = (m, p = []) => fetch(`${CHAIN}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: m, params: p }) }).then(r => r.json())
+const rpc = (m, p = []) =>
+  fetch(`${CHAIN}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: m, params: p }) }).then((r) =>
+    r.json()
+  )
 const tracker = {
   isValidRootForHeight: async (root, h) => (await (await fetch(`${CHAIN}/v1/root/${h}`)).json()).merkleRoot === root,
   currentHeight: async () => (await (await fetch(`${CHAIN}/v1/tip`)).json()).height
 }
 const log = []
 const ok = (k, v) => log.push(`${v ? 'PASS' : 'FAIL'} ${k}`)
-const info = s => log.push(`INFO ${s}`)
+const info = (s) => log.push(`INFO ${s}`)
 
 const key = PrivateKey.fromRandom()
 const addr = key.toPublicKey().toAddress([0x6f])
@@ -33,12 +35,18 @@ const ef = Buffer.from(await (await fetch(`${CHAIN}/api/v1/tx/${cbTxid}`)).array
 const parent = Transaction.fromHex(Array.from(stripEF(ef)))
 info(`parent ${parent.id('hex')} == ${cbTxid}: ${parent.id('hex') === cbTxid}`)
 const addrScript = new P2PKH().lock(addr).toHex()
-const vout = parent.outputs.findIndex(o => o.lockingScript.toHex() === addrScript)
+const vout = parent.outputs.findIndex((o) => o.lockingScript.toHex() === addrScript)
 info(`coinbase vout ${vout} sats ${parent.outputs[vout].satoshis}`)
 const ptxid = parent.id('hex')
-// devchain: every proof is one level — sibling 0x33*32, tx at offset 1 (testchain/chain.go proof());
+// devchain: every proof is one level â€” sibling 0x33*32, tx at offset 1 (testchain/chain.go proof());
 // the mined height is txmeta's, not the broadcast answer's blockHeight (block is mined later)
-const mkPath = (txid, h) => new MerklePath(h, [[{ offset: 0, hash: '33'.repeat(32) }, { offset: 1, hash: txid, txid: true }]])
+const mkPath = (txid, h) =>
+  new MerklePath(h, [
+    [
+      { offset: 0, hash: '33'.repeat(32) },
+      { offset: 1, hash: txid, txid: true }
+    ]
+  ])
 const minedHeight = async (txid) => (await (await fetch(`${CHAIN}/api/v1/txmeta/${txid}/json`)).json()).blockHeights[0]
 parent.merklePath = mkPath(ptxid, await minedHeight(ptxid))
 

@@ -14,8 +14,8 @@ export interface RegtestConfig {
 }
 
 export class TeranodeBroadcaster implements Broadcaster {
-  constructor (private url: string) {}
-  async broadcast (tx: Transaction): Promise<BroadcastResult> {
+  constructor(private url: string) {}
+  async broadcast(tx: Transaction): Promise<BroadcastResult> {
     const res = await fetch(this.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
@@ -31,9 +31,9 @@ export class TeranodeBroadcaster implements Broadcaster {
 export class TeranodeRPCTracker implements ChainTracker {
   private headers = new Map<number, BlockHeader>()
   private rpcId = 0
-  constructor (private cfg: RegtestConfig) {}
+  constructor(private cfg: RegtestConfig) {}
 
-  private async rpcOnce (method: string, ...params: unknown[]): Promise<any> {
+  private async rpcOnce(method: string, ...params: unknown[]): Promise<any> {
     const res = await fetch(this.cfg.rpcUrl, {
       method: 'POST',
       headers: {
@@ -51,43 +51,50 @@ export class TeranodeRPCTracker implements ChainTracker {
   // Teranode regtest returns intermittent non-JSON bodies under block churn;
   // retry transport/parse failures (JSON-RPC error replies are real answers
   // and are thrown by rpcOnce immediately without retrying)
-  private async rpc (method: string, ...params: unknown[]): Promise<any> {
+  private async rpc(method: string, ...params: unknown[]): Promise<any> {
     let last: unknown
     for (let t = 0; t < 5; t++) {
-      try { return await this.rpcOnce(method, ...params) } catch (e) {
+      try {
+        return await this.rpcOnce(method, ...params)
+      } catch (e) {
         if (e instanceof Error && e.message.startsWith(`rpc ${method}:`)) throw e
         last = e
-        await new Promise(r => setTimeout(r, 300 * (t + 1)))
+        await new Promise((r) => setTimeout(r, 300 * (t + 1)))
       }
     }
     throw last
   }
 
-  async currentHeight (): Promise<number> {
+  async currentHeight(): Promise<number> {
     return (await this.rpc('getblockchaininfo')).blocks as number
   }
 
-  async isValidRootForHeight (root: string, height: number): Promise<boolean> {
+  async isValidRootForHeight(root: string, height: number): Promise<boolean> {
     const h = await this.headerAtHeight(height)
     return h?.merkleRoot === root
   }
 
-  async headerAtHeight (height: number): Promise<BlockHeader | undefined> {
+  async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
     const cached = this.headers.get(height)
     if (cached) return cached
     const hash = await this.rpc('getblockhash', height).catch(() => undefined)
     if (!hash) return undefined
     const b = await this.rpc('getblockheader', hash)
     const header: BlockHeader = {
-      height, hash, prevHash: b.previousblockhash ?? '', merkleRoot: b.merkleroot,
-      time: b.time, bits: typeof b.bits === 'string' ? parseInt(b.bits, 16) : b.bits, nonce: b.nonce
+      height,
+      hash,
+      prevHash: b.previousblockhash ?? '',
+      merkleRoot: b.merkleroot,
+      time: b.time,
+      bits: typeof b.bits === 'string' ? parseInt(b.bits, 16) : b.bits,
+      nonce: b.nonce
     }
     this.headers.set(height, header)
     return header
   }
 }
 
-export function regtestStackFromEnv (): { tracker: ChainTracker, broadcaster: Broadcaster } {
+export function regtestStackFromEnv(): { tracker: ChainTracker; broadcaster: Broadcaster } {
   const cfg: RegtestConfig = {
     rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
     rpcUser: process.env.NEKTAR_RPC_USER ?? 'teranode',
@@ -99,7 +106,7 @@ export function regtestStackFromEnv (): { tracker: ChainTracker, broadcaster: Br
 }
 
 // --- asset API helpers (basic auth = rpc creds) ---
-async function assetGet (cfg: RegtestConfig, path: string, binary = true): Promise<Response | null> {
+async function assetGet(cfg: RegtestConfig, path: string, binary = true): Promise<Response | null> {
   const res = await fetch(`${cfg.assetUrl}/${path}`, {
     headers: { Authorization: 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64') },
     signal: AbortSignal.timeout(20_000)
@@ -114,27 +121,36 @@ async function assetGet (cfg: RegtestConfig, path: string, binary = true): Promi
  * subtree (404 while pending). Without this, mem.fetchTx returns nothing on
  * regtest and bstack funding trees can never be marked proven.
  * (The asset `/tx` endpoint answers EXTENDED-format bytes, not a raw tx.) */
-export async function regtestTx (cfg: RegtestConfig, txid: string, fetchImpl: typeof fetch = fetch): Promise<Transaction | undefined> {
+export async function regtestTx(cfg: RegtestConfig, txid: string, fetchImpl: typeof fetch = fetch): Promise<Transaction | undefined> {
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
   try {
     const r = await fetchImpl(cfg.rpcUrl, {
-      method: 'POST', headers: { 'content-type': 'application/json', Authorization: auth },
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: auth },
       body: JSON.stringify({ jsonrpc: '1.0', id: 1, method: 'getrawtransaction', params: [txid] }),
       signal: AbortSignal.timeout(15_000)
     })
-    const j = await r.json() as { result?: unknown, error?: unknown }
+    const j = (await r.json()) as { result?: unknown; error?: unknown }
     if (typeof j.result !== 'string' || j.result === '') return undefined
     const tx = Transaction.fromHex(j.result)
-    const mp = await fetchImpl(`${cfg.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(15_000) }).catch(() => null)
+    const mp = await fetchImpl(`${cfg.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(15_000) }).catch(
+      () => null
+    )
     if (mp !== null && mp.ok) {
-      try { tx.merklePath = MerklePath.fromBinary([...new Uint8Array(await mp.arrayBuffer())]) } catch { /* unparseable proof → treat as unproven */ }
+      try {
+        tx.merklePath = MerklePath.fromBinary([...new Uint8Array(await mp.arrayBuffer())])
+      } catch {
+        /* unparseable proof → treat as unproven */
+      }
     }
     return tx
-  } catch { return undefined }
+  } catch {
+    return undefined
+  }
 }
 
 // --- legacy-block parsing + MerklePathProvider --------------------------
-function readVarint (b: Uint8Array, o: number): [number, number] {
+function readVarint(b: Uint8Array, o: number): [number, number] {
   const dv = new DataView(b.buffer, b.byteOffset)
   if (b[o] < 0xfd) return [b[o], o + 1]
   if (b[o] === 0xfd) return [dv.getUint16(o + 1, true), o + 3]
@@ -146,19 +162,32 @@ const sha256d = (b: Uint8Array): Uint8Array => {
   return nodeCrypto.createHash('sha256').update(h1).digest() as Uint8Array
 }
 /** legacy block: 80B header + 8B sizeInBytes + varint txcount + raw txs */
-export function parseLegacyBlock (raw: Uint8Array): { txids: string[], txs: Uint8Array[] } {
+export function parseLegacyBlock(raw: Uint8Array): { txids: string[]; txs: Uint8Array[] } {
   const hexOf = (b: Uint8Array) => Buffer.from(b).toString('hex')
   let off = 88
-  let n; [n, off] = readVarint(raw, off)
+  let n
+  ;[n, off] = readVarint(raw, off)
   const txids: string[] = []
   const txs: Uint8Array[] = []
   for (let t = 0; t < n; t++) {
     const start = off
     off += 4
-    let vin; [vin, off] = readVarint(raw, off)
-    for (let i = 0; i < vin; i++) { off += 36; let sl; [sl, off] = readVarint(raw, off); off += sl + 4 }
-    let vout; [vout, off] = readVarint(raw, off)
-    for (let i = 0; i < vout; i++) { off += 8; let sl; [sl, off] = readVarint(raw, off); off += sl }
+    let vin
+    ;[vin, off] = readVarint(raw, off)
+    for (let i = 0; i < vin; i++) {
+      off += 36
+      let sl
+      ;[sl, off] = readVarint(raw, off)
+      off += sl + 4
+    }
+    let vout
+    ;[vout, off] = readVarint(raw, off)
+    for (let i = 0; i < vout; i++) {
+      off += 8
+      let sl
+      ;[sl, off] = readVarint(raw, off)
+      off += sl
+    }
     off += 4
     const tx = raw.subarray(start, off)
     txs.push(tx)
@@ -167,21 +196,25 @@ export function parseLegacyBlock (raw: Uint8Array): { txids: string[], txs: Uint
   return { txids, txs }
 }
 /** standard merkle root (display order) over txid list */
-export function merkleRootOf (txids: string[]): string {
-  let level = txids.map(id => Buffer.from(id, 'hex').reverse().toString('hex'))
+export function merkleRootOf(txids: string[]): string {
+  let level = txids.map((id) => Buffer.from(id, 'hex').reverse().toString('hex'))
   while (level.length > 1) {
     const next: string[] = []
     for (let i = 0; i < level.length; i += 2) {
-      const a = level[i], b = level[i + 1] ?? level[i]
+      const a = level[i],
+        b = level[i + 1] ?? level[i]
       next.push(Buffer.from(sha256d(Buffer.concat([Buffer.from(a, 'hex'), Buffer.from(b, 'hex')]))).toString('hex'))
     }
     level = next
   }
   return Buffer.from(level[0], 'hex').reverse().toString('hex')
 }
-export interface MerklePathResult { blockHeight: number, path: Array<Array<{ offset: number, hash: string, txid?: boolean }>> }
+export interface MerklePathResult {
+  blockHeight: number
+  path: Array<Array<{ offset: number; hash: string; txid?: boolean }>>
+}
 /** MerklePath for a txid by scanning the last N blocks via /block_legacy. */
-export async function merklePathFor (cfg: RegtestConfig, txid: string, tracker: TeranodeRPCTracker, lookback = 10): Promise<MerklePathResult | null> {
+export async function merklePathFor(cfg: RegtestConfig, txid: string, tracker: TeranodeRPCTracker, lookback = 10): Promise<MerklePathResult | null> {
   const tip = await tracker.currentHeight()
   const disp = (h: string) => Buffer.from(h, 'hex').reverse().toString('hex')
   for (let h = tip; h > tip - lookback && h > 0; h--) {
@@ -194,21 +227,28 @@ export async function merklePathFor (cfg: RegtestConfig, txid: string, tracker: 
     if (idx < 0) continue
     // sanity: block's own merkle root must match the header
     if (merkleRootOf(txids) !== hdr.merkleRoot) throw new Error(`block ${h}: merkle root mismatch`)
-    const leaves = txids.map(id => Buffer.from(id, 'hex').reverse().toString('hex'))
+    const leaves = txids.map((id) => Buffer.from(id, 'hex').reverse().toString('hex'))
     const path: MerklePathResult['path'] = []
-    let level = leaves, pos = idx, first = true
+    let level = leaves,
+      pos = idx,
+      first = true
     while (level.length > 1) {
       const sibling = pos % 2 === 0 ? pos + 1 : pos - 1
-      const lvl: Array<{ offset: number, hash: string, txid?: boolean }> = []
-      if (first) { lvl.push({ offset: pos, hash: disp(leaves[pos]), txid: true }); first = false }
+      const lvl: Array<{ offset: number; hash: string; txid?: boolean }> = []
+      if (first) {
+        lvl.push({ offset: pos, hash: disp(leaves[pos]), txid: true })
+        first = false
+      }
       lvl.push({ offset: sibling, hash: disp(sibling < level.length ? level[sibling] : level[pos]) })
       path.push(lvl)
       const next: string[] = []
       for (let i = 0; i < level.length; i += 2) {
-        const a = level[i], b = level[i + 1] ?? level[i]
+        const a = level[i],
+          b = level[i + 1] ?? level[i]
         next.push(Buffer.from(sha256d(Buffer.concat([Buffer.from(a, 'hex'), Buffer.from(b, 'hex')]))).toString('hex'))
       }
-      level = next; pos = Math.floor(pos / 2)
+      level = next
+      pos = Math.floor(pos / 2)
     }
     return { blockHeight: h, path }
   }
@@ -225,49 +265,63 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { PrivateKey } from '@bsv/sdk'
 
-interface ReserveEntry { txid: string, vout: number, satoshis: number, txHex: string, height?: number }
+interface ReserveEntry {
+  txid: string
+  vout: number
+  satoshis: number
+  txHex: string
+  height?: number
+}
 
 export class ReserveFunder {
   keyPair: PrivateKey
-  utxos: Array<{ tx: Transaction, vout: number, satoshis: number }> = []
+  utxos: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
   private entries: ReserveEntry[] = []
   private spent = new Set<string>()
   private file: string
   private pkhHex: string
   heights = new Map<string, number>()
 
-  constructor (key: PrivateKey, file = '.state.json') {
+  constructor(key: PrivateKey, file = '.state.json') {
     this.keyPair = key
     this.file = file
     this.pkhHex = Buffer.from(key.toPublicKey().toHash()).toString('hex')
     this.load()
   }
 
-  private op (txid: string, vout: number) { return `${txid}:${vout}` }
+  private op(txid: string, vout: number) {
+    return `${txid}:${vout}`
+  }
 
-  private load (): void {
+  private load(): void {
     try {
       const j = JSON.parse(readFileSync(this.file, 'utf8'))
       this.spent = new Set(j.spent ?? [])
       for (const e of (j.entries ?? []) as ReserveEntry[]) {
         try {
           const tx = Transaction.fromHex(e.txHex)
-          this.entries.push(e)         // spent marks keep their record — reconcile() can revive
+          this.entries.push(e) // spent marks keep their record — reconcile() can revive
           if (e.height) this.heights.set(e.txid, e.height)
           if (!this.spent.has(this.op(e.txid, e.vout))) this.utxos.push({ tx, vout: e.vout, satoshis: e.satoshis })
-        } catch { /* skip unparseable */ }
+        } catch {
+          /* skip unparseable */
+        }
       }
-    } catch { /* no state file yet */ }
+    } catch {
+      /* no state file yet */
+    }
   }
-  private save (): void {
+  private save(): void {
     mkdirSync(dirname(this.file), { recursive: true })
     writeFileSync(this.file, JSON.stringify({ spent: [...this.spent], entries: this.entries }, null, 1))
   }
 
-  isSpent (txid: string, vout: number): boolean { return this.spent.has(this.op(txid, vout)) }
-  markSpent (txid: string, vout: number): void {
+  isSpent(txid: string, vout: number): boolean {
+    return this.spent.has(this.op(txid, vout))
+  }
+  markSpent(txid: string, vout: number): void {
     this.spent.add(this.op(txid, vout))
-    this.utxos = this.utxos.filter(u => this.op(u.tx.id('hex'), u.vout) !== this.op(txid, vout))
+    this.utxos = this.utxos.filter((u) => this.op(u.tx.id('hex'), u.vout) !== this.op(txid, vout))
     this.save()
   }
 
@@ -275,13 +329,17 @@ export class ReserveFunder {
    * 'spent' → mark spent; 'unspent' → revive (a stale mark from a dead
    * unbroadcast tx or an older blanket purge must not lose a live output);
    * 'unknown' → left as-is (pending txs may lag the UTXO store). */
-  async reconcile (statusOf: (txid: string, vout: number) => Promise<'unspent' | 'spent' | 'unknown'>): Promise<{ revived: number, pruned: number }> {
-    let revived = 0, pruned = 0
+  async reconcile(statusOf: (txid: string, vout: number) => Promise<'unspent' | 'spent' | 'unknown'>): Promise<{ revived: number; pruned: number }> {
+    let revived = 0,
+      pruned = 0
     for (const e of this.entries) {
       const status = await statusOf(e.txid, e.vout)
       const op = this.op(e.txid, e.vout)
-      if (status === 'spent' && !this.spent.has(op)) { this.spent.add(op); this.utxos = this.utxos.filter(u => this.op(u.tx.id('hex'), u.vout) !== op); pruned++ }
-      else if (status === 'unspent' && this.spent.has(op)) {
+      if (status === 'spent' && !this.spent.has(op)) {
+        this.spent.add(op)
+        this.utxos = this.utxos.filter((u) => this.op(u.tx.id('hex'), u.vout) !== op)
+        pruned++
+      } else if (status === 'unspent' && this.spent.has(op)) {
         this.spent.delete(op)
         this.utxos.push({ tx: Transaction.fromHex(e.txHex), vout: e.vout, satoshis: e.satoshis })
         revived++
@@ -292,11 +350,11 @@ export class ReserveFunder {
   }
 
   /** Record an output we created (change) as a reserve candidate. */
-  addOwned (tx: Transaction, vout: number): void {
+  addOwned(tx: Transaction, vout: number): void {
     const hex = tx.toHex()
     const e: ReserveEntry = { txid: tx.id('hex'), vout, satoshis: tx.outputs[vout]!.satoshis ?? 0, txHex: hex }
     if (this.spent.has(this.op(e.txid, e.vout))) return
-    if (this.utxos.some(x => this.op(x.tx.id('hex'), x.vout) === this.op(e.txid, e.vout))) return
+    if (this.utxos.some((x) => this.op(x.tx.id('hex'), x.vout) === this.op(e.txid, e.vout))) return
     this.entries.push(e)
     this.utxos.push({ tx, vout: e.vout, satoshis: e.satoshis })
     this.save()
@@ -310,7 +368,10 @@ export class ReserveFunder {
    * candidate definitively spent it is pruned and the next is tried —
    * 'unknown' results are kept (pending txs may lag the UTXO store). */
   leased?: (txid: string, vout: number) => Promise<boolean>
-  async takeReserve (spendCheck?: (txid: string, vout: number) => Promise<boolean>, minSats?: number): Promise<{ tx: Transaction, vout: number, satoshis: number } | null> {
+  async takeReserve(
+    spendCheck?: (txid: string, vout: number) => Promise<boolean>,
+    minSats?: number
+  ): Promise<{ tx: Transaction; vout: number; satoshis: number } | null> {
     while (true) {
       // smallest-sufficient: skip spent entries AND entries too small for the
       // spend — a first-fit dust pick produces negative-fee/insufficient txs.
@@ -318,25 +379,31 @@ export class ReserveFunder {
       // (e.g. a 1-sat change output) can never fund a tx, so it is never picked.
       const floor = minSats ?? 546
       const candidates = []
-      for (const x of this.utxos.filter(x => !this.spent.has(this.op(x.tx.id('hex'), x.vout)) && x.satoshis >= floor)) {
-        if (this.leased && await this.leased(x.tx.id('hex'), x.vout)) continue
+      for (const x of this.utxos.filter((x) => !this.spent.has(this.op(x.tx.id('hex'), x.vout)) && x.satoshis >= floor)) {
+        if (this.leased && (await this.leased(x.tx.id('hex'), x.vout))) continue
         candidates.push(x)
       }
-      const u = candidates
-        .sort((a, b) => a.satoshis - b.satoshis)[0]
+      const u = candidates.sort((a, b) => a.satoshis - b.satoshis)[0]
       if (!u) return null
-      if (spendCheck && await spendCheck(u.tx.id('hex'), u.vout)) { this.markSpent(u.tx.id('hex'), u.vout); continue }
+      if (spendCheck && (await spendCheck(u.tx.id('hex'), u.vout))) {
+        this.markSpent(u.tx.id('hex'), u.vout)
+        continue
+      }
       return u
     }
   }
 
   /** Scan generated block coinbases for outputs to our key; add mature ones. */
-  async scanCoinbases (cfg: RegtestConfig, rpc: (m: string, ...p: unknown[]) => Promise<any>, fromHeight: number, toHeight: number): Promise<number> {
+  async scanCoinbases(cfg: RegtestConfig, rpc: (m: string, ...p: unknown[]) => Promise<any>, fromHeight: number, toHeight: number): Promise<number> {
     let added = 0
     const want = this.pkhHex
     for (let h = fromHeight; h <= toHeight; h++) {
       let hash: string
-      try { hash = await rpc('getblockhash', h) } catch { break }
+      try {
+        hash = await rpc('getblockhash', h)
+      } catch {
+        break
+      }
       const res = await assetGet(cfg, `block_legacy/${hash}`)
       if (!res) continue
       try {
@@ -351,7 +418,9 @@ export class ReserveFunder {
             added++
           }
         })
-      } catch { /* unparsable block */ }
+      } catch {
+        /* unparsable block */
+      }
     }
     this.save()
     return added
@@ -363,7 +432,13 @@ export class ReserveFunder {
  *  outputs + a new treasury output. A split the node already knows came from
  *  an earlier run (its outputs are likely spent) and is skipped. Returns the
  *  split tx or null. Bounded: ≤ maxCandidates coinbases are tried. */
-export async function bootstrapReserve (cfg: RegtestConfig, key: PrivateKey, reserve: ReserveFunder, rpc: (m: string, ...p: unknown[]) => Promise<any>, opts: { treasuryFile: string, outputs?: number, maxCandidates?: number }): Promise<Transaction | null> {
+export async function bootstrapReserve(
+  cfg: RegtestConfig,
+  key: PrivateKey,
+  reserve: ReserveFunder,
+  rpc: (m: string, ...p: unknown[]) => Promise<any>,
+  opts: { treasuryFile: string; outputs?: number; maxCandidates?: number }
+): Promise<Transaction | null> {
   const { P2PKH } = await import('@bsv/sdk')
   const addr = key.toPublicKey().toAddress([0x6f])
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
@@ -389,14 +464,17 @@ export async function bootstrapReserve (cfg: RegtestConfig, key: PrivateKey, res
     return tx
   }
   if (existsSync(opts.treasuryFile)) {
-    const t = JSON.parse(readFileSync(opts.treasuryFile, 'utf8')) as { treasury?: { vout: number, txHex: string } }
-    if (t.treasury) { const s = await split(Transaction.fromHex(t.treasury.txHex), t.treasury.vout); if (s) return accept(s) }
+    const t = JSON.parse(readFileSync(opts.treasuryFile, 'utf8')) as { treasury?: { vout: number; txHex: string } }
+    if (t.treasury) {
+      const s = await split(Transaction.fromHex(t.treasury.txHex), t.treasury.vout)
+      if (s) return accept(s)
+    }
   }
   const want = Buffer.from(key.toPublicKey().toHash()).toString('hex')
-  const tip = (await rpc('getblockchaininfo') as { blocks: number }).blocks
+  const tip = ((await rpc('getblockchaininfo')) as { blocks: number }).blocks
   let tried = 0
   for (let h = 1; h <= tip - 101 && tried < (opts.maxCandidates ?? 200); h++) {
-    const hash = await rpc('getblockhash', h) as string
+    const hash = (await rpc('getblockhash', h)) as string
     const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`, { signal: AbortSignal.timeout(20_000) })
     if (!res.ok) continue
     const cb = Transaction.fromHex(Buffer.from(parseLegacyBlock(new Uint8Array(await res.arrayBuffer())).txs[0]!).toString('hex'))
@@ -415,7 +493,7 @@ export async function bootstrapReserve (cfg: RegtestConfig, key: PrivateKey, res
  *  binary: unspent → all-zero record; spent → 0x01 followed by the spending
  *  txid (and block data). 404 → the store doesn't know the outpoint
  *  (pending tx lag or pruned record) — reported as 'unknown', never spent. */
-export async function utxoStatus (cfg: RegtestConfig, txid: string, vout: number): Promise<'unspent' | 'spent' | 'unknown'> {
+export async function utxoStatus(cfg: RegtestConfig, txid: string, vout: number): Promise<'unspent' | 'spent' | 'unknown'> {
   const res = await assetGet(cfg, `utxo/${txid}?vout=${vout}`)
   if (!res) return 'unknown'
   const b = new Uint8Array(await res.arrayBuffer())
@@ -423,7 +501,7 @@ export async function utxoStatus (cfg: RegtestConfig, txid: string, vout: number
 }
 
 /** MerklePath for a txid at a known block height. */
-export async function merklePathAtHeight (cfg: RegtestConfig, txid: string, tracker: TeranodeRPCTracker, height: number): Promise<MerklePathResult | null> {
+export async function merklePathAtHeight(cfg: RegtestConfig, txid: string, tracker: TeranodeRPCTracker, height: number): Promise<MerklePathResult | null> {
   const hdr = await tracker.headerAtHeight(height)
   if (!hdr) return null
   const res = await assetGet(cfg, `block_legacy/${hdr.hash}`)
@@ -433,21 +511,28 @@ export async function merklePathAtHeight (cfg: RegtestConfig, txid: string, trac
   if (idx < 0) return null
   if (merkleRootOf(txids) !== hdr.merkleRoot) throw new Error(`block ${height}: merkle root mismatch`)
   const disp = (h: string) => Buffer.from(h, 'hex').reverse().toString('hex')
-  const leaves = txids.map(id => Buffer.from(id, 'hex').reverse().toString('hex'))
+  const leaves = txids.map((id) => Buffer.from(id, 'hex').reverse().toString('hex'))
   const path: MerklePathResult['path'] = []
-  let level = leaves, pos = idx, first = true
+  let level = leaves,
+    pos = idx,
+    first = true
   while (level.length > 1) {
     const sibling = pos % 2 === 0 ? pos + 1 : pos - 1
-    const lvl: Array<{ offset: number, hash: string, txid?: boolean }> = []
-    if (first) { lvl.push({ offset: pos, hash: disp(leaves[pos]!), txid: true }); first = false }
+    const lvl: Array<{ offset: number; hash: string; txid?: boolean }> = []
+    if (first) {
+      lvl.push({ offset: pos, hash: disp(leaves[pos]!), txid: true })
+      first = false
+    }
     lvl.push({ offset: sibling, hash: disp(sibling < level.length ? level[sibling]! : level[pos]!) })
     path.push(lvl)
     const next: string[] = []
     for (let i = 0; i < level.length; i += 2) {
-      const a = level[i]!, b = level[i + 1] ?? level[i]!
+      const a = level[i]!,
+        b = level[i + 1] ?? level[i]!
       next.push(Buffer.from(sha256d(Buffer.concat([Buffer.from(a, 'hex'), Buffer.from(b, 'hex')]))).toString('hex'))
     }
-    level = next; pos = Math.floor(pos / 2)
+    level = next
+    pos = Math.floor(pos / 2)
   }
   if (path.length === 0) path.push([{ offset: 0, hash: disp(leaves[0]!), txid: true }])
   return { blockHeight: height, path }

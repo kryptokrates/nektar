@@ -12,7 +12,11 @@
 import type { BlockHeader, ChainTracker } from './interfaces.js'
 
 /** a named header/height source; weight defaults to 1 */
-export interface TemporalSource { name: string, tracker: ChainTracker, weight?: number }
+export interface TemporalSource {
+  name: string
+  tracker: ChainTracker
+  weight?: number
+}
 
 /**
  * Weighted median of {time,weight}: sort ascending and take the first
@@ -22,20 +26,25 @@ export interface TemporalSource { name: string, tracker: ChainTracker, weight?: 
  * conservative direction for §12 existence-by ("no later than") bounds.
  * n=1 returns that timestamp, so a single source is bit-identical to today.
  */
-export function weightedMedianTime (entries: Array<{ time: number, weight?: number }>): number {
+export function weightedMedianTime(entries: Array<{ time: number; weight?: number }>): number {
   if (entries.length === 0) throw new Error('weightedMedianTime: no timestamps')
-  const s = entries.map(e => ({ t: e.time, w: e.weight ?? 1 })).filter(e => Number.isFinite(e.t) && e.w > 0)
+  const s = entries
+    .map((e) => ({ t: e.time, w: e.weight ?? 1 }))
+    .filter((e) => Number.isFinite(e.t) && e.w > 0)
     .sort((a, b) => a.t - b.t)
   if (s.length === 0) throw new Error('weightedMedianTime: no positive-weight timestamps')
   const total = s.reduce((a, e) => a + e.w, 0)
   let cum = 0
-  for (const e of s) { cum += e.w; if (cum >= total / 2) return e.t }
+  for (const e of s) {
+    cum += e.w
+    if (cum >= total / 2) return e.t
+  }
   return s[s.length - 1]!.t
 }
 
 /** pure median over raw timestamps (all weights 1) */
-export function medianTime (timestamps: number[]): number {
-  return weightedMedianTime(timestamps.map(t => ({ time: t })))
+export function medianTime(timestamps: number[]): number {
+  return weightedMedianTime(timestamps.map((t) => ({ time: t })))
 }
 
 /**
@@ -45,21 +54,23 @@ export function medianTime (timestamps: number[]): number {
  * height (or errors) simply does not vote.
  */
 export class TemporalSources implements ChainTracker {
-  constructor (private sources: TemporalSource[]) {
+  constructor(private sources: TemporalSource[]) {
     if (sources.length === 0) throw new Error('TemporalSources: at least one source required')
   }
 
   /** f(T_C1(i),…,T_Cm(i)) — weighted median over sources answering height i */
-  async consensusTime (height: number): Promise<number | undefined> {
-    const entries: Array<{ time: number, weight?: number }> = []
-    await Promise.all(this.sources.map(async s => {
-      const h = await s.tracker.headerAtHeight(height).catch(() => undefined)
-      if (h) entries.push({ time: h.time, weight: s.weight })
-    }))
+  async consensusTime(height: number): Promise<number | undefined> {
+    const entries: Array<{ time: number; weight?: number }> = []
+    await Promise.all(
+      this.sources.map(async (s) => {
+        const h = await s.tracker.headerAtHeight(height).catch(() => undefined)
+        if (h) entries.push({ time: h.time, weight: s.weight })
+      })
+    )
     return entries.length === 0 ? undefined : weightedMedianTime(entries)
   }
 
-  async headerAtHeight (height: number): Promise<BlockHeader | undefined> {
+  async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
     const head = await this.sources[0]!.tracker.headerAtHeight(height)
     if (!head) return undefined
     if (this.sources.length === 1) return head // single source: unchanged
@@ -67,15 +78,17 @@ export class TemporalSources implements ChainTracker {
     return t === undefined ? head : { ...head, time: t }
   }
 
-  currentHeight (): Promise<number> { return this.sources[0]!.tracker.currentHeight() }
-  tipHeight (): Promise<number> {
+  currentHeight(): Promise<number> {
+    return this.sources[0]!.tracker.currentHeight()
+  }
+  tipHeight(): Promise<number> {
     const p = this.sources[0]!.tracker
     return p.tipHeight ? p.tipHeight() : p.currentHeight()
   }
-  isValidRootForHeight (root: string, height: number, signal?: AbortSignal): Promise<boolean> {
+  isValidRootForHeight(root: string, height: number, signal?: AbortSignal): Promise<boolean> {
     return this.sources[0]!.tracker.isValidRootForHeight(root, height, signal)
   }
-  onReorg (cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
+  onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
     this.sources[0]!.tracker.onReorg?.(cb)
   }
 }

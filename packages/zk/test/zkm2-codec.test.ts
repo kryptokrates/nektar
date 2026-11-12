@@ -21,7 +21,8 @@ test('ZKM2 codec (GEN-007): rev-2 carries the algorithm id; rev-1 still decodes 
   assert.equal(d.algorithm, ALG_SHA256D)
   assert.equal(d.size, 5)
   // a foreign algorithm id is refused at decode AND at encode
-  const badAlg = ok.slice(); badAlg[5] = 0x7f
+  const badAlg = ok.slice()
+  badAlg[5] = 0x7f
   assert.throws(() => decodeZkm2(badAlg), ZkmCodecError)
   assert.throws(() => encodeZkm2({ ...proof(), algorithm: 0x7f }), ZkmCodecError)
 })
@@ -32,13 +33,55 @@ test('ZKM2 codec: every malformed input is refused with ZkmCodecError', () => {
   const bad: Array<[string, Uint8Array]> = [
     ['empty', new Uint8Array()],
     ['truncated header', ok.slice(0, 50)],
-    ['bad magic', mut(b => { b[0] = 0; return b })],
-    ['v1 magic', mut(b => { b[3] = 0x31; return b })],
-    ['unknown version', mut(b => { b[4] = 3; return b })],
-    ['unknown algorithm', mut(b => { b[5] = 0x02; return b })],
-    ['size 0', mut(b => { b.fill(0, 70, 74); return b })],
-    ['receiptLen 0', mut(b => { b.fill(0, 106, 110); return b })],
-    ['receiptLen too large', mut(b => { new DataView(b.buffer).setUint32(106, ZKM2_MAX_RECEIPT + 1, true); return b })],
+    [
+      'bad magic',
+      mut((b) => {
+        b[0] = 0
+        return b
+      })
+    ],
+    [
+      'v1 magic',
+      mut((b) => {
+        b[3] = 0x31
+        return b
+      })
+    ],
+    [
+      'unknown version',
+      mut((b) => {
+        b[4] = 3
+        return b
+      })
+    ],
+    [
+      'unknown algorithm',
+      mut((b) => {
+        b[5] = 0x02
+        return b
+      })
+    ],
+    [
+      'size 0',
+      mut((b) => {
+        b.fill(0, 70, 74)
+        return b
+      })
+    ],
+    [
+      'receiptLen 0',
+      mut((b) => {
+        b.fill(0, 106, 110)
+        return b
+      })
+    ],
+    [
+      'receiptLen too large',
+      mut((b) => {
+        new DataView(b.buffer).setUint32(106, ZKM2_MAX_RECEIPT + 1, true)
+        return b
+      })
+    ],
     ['truncated receipt', ok.slice(0, ok.length - 1)],
     ['trailing bytes', Uint8Array.from([...ok, 0])]
   ]

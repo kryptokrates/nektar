@@ -7,16 +7,17 @@ import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { MockChain, MockFunder, TxStore, spendValid } from '@nektar/chain'
 import { NektarMemory } from '../src/index.js'
 
-const liveMem = (): { mem: NektarMemory, chain: MockChain, funder: MockFunder } => {
+const liveMem = (): { mem: NektarMemory; chain: MockChain; funder: MockFunder } => {
   const chain = new MockChain()
-  const funder = new MockFunder(); funder.topup(4)
+  const funder = new MockFunder()
+  funder.topup(4)
   const view = Object.create(chain) as MockChain
   ;(view as { getTx?: unknown }).getTx = undefined // live backends have no getTx
   return { mem: new NektarMemory(view, funder, funder.keyPair, { network: 'testnet' }), chain, funder }
 }
 
 /** parent → child, both signed; the parent is mined on `chain` when asked */
-const pair = async (chain: MockChain, mineParent: boolean): Promise<{ parent: Transaction, child: Transaction, key: PrivateKey }> => {
+const pair = async (chain: MockChain, mineParent: boolean): Promise<{ parent: Transaction; child: Transaction; key: PrivateKey }> => {
   const key = PrivateKey.fromRandom()
   const root = new Transaction()
   root.addOutput({ satoshis: 20_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
@@ -38,7 +39,12 @@ const pair = async (chain: MockChain, mineParent: boolean): Promise<{ parent: Tr
 }
 
 const bumpFor = (txid: string): MerklePath =>
-  new MerklePath(1, [[{ offset: 0, hash: txid, txid: true }, { offset: 1, hash: '00'.repeat(32) }]])
+  new MerklePath(1, [
+    [
+      { offset: 0, hash: txid, txid: true },
+      { offset: 1, hash: '00'.repeat(32) }
+    ]
+  ])
 
 test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it', async () => {
   const { mem, chain } = liveMem()
@@ -46,7 +52,10 @@ test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it
   const txid = child.id('hex')
   mem.rememberTx(child)
   let lookups = 0
-  mem.txLookup = async () => { lookups++; return undefined }
+  mem.txLookup = async () => {
+    lookups++
+    return undefined
+  }
   const before = await mem.fetchTx(txid)
   assert.ok(before !== undefined && before.merklePath === undefined)
   assert.equal(lookups, 0, 'a held transaction never goes to the network')
@@ -59,10 +68,17 @@ test('fetchTx: proof and tx lookups are single attempts, remembered when they hi
   const { mem, chain } = liveMem()
   const { child } = await pair(chain, false)
   const txid = child.id('hex')
-  let txHits = 0; let proofHits = 0
-  mem.txLookup = async id => { txHits++; return id === txid ? Transaction.fromHex(child.toHex()) : undefined }
+  let txHits = 0
+  let proofHits = 0
+  mem.txLookup = async (id) => {
+    txHits++
+    return id === txid ? Transaction.fromHex(child.toHex()) : undefined
+  }
   const mp = bumpFor(txid)
-  mem.proofLookup = async id => { proofHits++; return id === txid ? mp : undefined }
+  mem.proofLookup = async (id) => {
+    proofHits++
+    return id === txid ? mp : undefined
+  }
   assert.equal((await mem.fetchTx(txid))?.merklePath, mp)
   await mem.fetchTx(txid)
   assert.deepEqual([txHits, proofHits], [1, 1], 'both served from the graph afterwards')
@@ -108,8 +124,13 @@ test('wire: Extended Format when the parent is unproven; raw when it is unknown'
 test('TxStore: a proof ends the stored ancestry and survives a reload', async () => {
   const chain = new MockChain()
   const { parent, child } = await pair(chain, true)
-  const rows = new Map<string, { txid: string, raw: string, proof?: string }>()
-  const persist = { load: async () => [...rows.values()], put: async (r: { txid: string, raw: string, proof?: string }) => { rows.set(r.txid, r) } }
+  const rows = new Map<string, { txid: string; raw: string; proof?: string }>()
+  const persist = {
+    load: async () => [...rows.values()],
+    put: async (r: { txid: string; raw: string; proof?: string }) => {
+      rows.set(r.txid, r)
+    }
+  }
   const a = new TxStore(persist)
   a.put(child)
   await a.flushed()

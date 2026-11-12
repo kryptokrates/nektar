@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { merkleRoot, merkleProof } from '../src/merkle.js'
 import { computeLeaf, hdp, serializeFragment } from '../src/schema.js'
 import { chainRp, anchorFields, GENESIS_PREV_RP } from '../src/anchor.js'
-import { dsha256, toHex, utf8, fromHex } from '../src/hash.js'
+import { toHex, utf8, fromHex } from '../src/hash.js'
 
 const VEC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'vectors')
 const FILE = join(VEC_DIR, 'core.json')
@@ -20,7 +20,7 @@ const frag = (i: number) => ({
 
 const leaves = Array.from({ length: 9 }, (_, i) => computeLeaf(frag(i)))
 const root = merkleRoot(leaves)
-const proofs = [0, 4, 8].map(i => ({ index: i, siblings: merkleProof(leaves, i).siblings.map(toHex) }))
+const proofs = [0, 4, 8].map((i) => ({ index: i, siblings: merkleProof(leaves, i).siblings.map(toHex) }))
 const R0 = root
 const Rp0 = chainRp(GENESIS_PREV_RP, R0, leaves.length)
 
@@ -35,7 +35,7 @@ const vectors = {
   proofs,
   anchor: {
     genesisRp: toHex(Rp0),
-    fields: anchorFields({ shard: 'vec', n: 0, size: leaves.length, R: R0, Rp: Rp0 }).map(f => toHex(Uint8Array.from(f)))
+    fields: anchorFields({ shard: 'vec', n: 0, size: leaves.length, R: R0, Rp: Rp0 }).map((f) => toHex(Uint8Array.from(f)))
   }
 }
 

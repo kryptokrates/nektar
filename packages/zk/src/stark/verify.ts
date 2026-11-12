@@ -11,18 +11,27 @@ const wasm = require('../../../stark/verifier.js') as { verify: (receipt: Uint8A
 /** the guest program identity nektar trusts (built reproducibly by `pnpm stark:build`) */
 export const PINNED_IMAGE_ID: string = JSON.parse(readFileSync(fileURLToPath(new URL('../../../stark/image-id.json', import.meta.url)), 'utf8')).imageId
 
-export interface Journal { version: number, root: string, size: number, queryId: string }
-export type StarkVerdict = { ok: true, journal: Journal, proof: ZkMembershipProof } | { ok: false, reason: string }
+export interface Journal {
+  version: number
+  root: string
+  size: number
+  queryId: string
+}
+export type StarkVerdict = { ok: true; journal: Journal; proof: ZkMembershipProof } | { ok: false; reason: string }
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 
 /** decode L_ZKMem v2, check the pinned image id, verify the ZK-STARK, and
  *  require header == journal. Anchoring/SPV/queryId checks are the caller's. */
-export function verifyZkm2 (bytes: Uint8Array, pinnedImageId = PINNED_IMAGE_ID): StarkVerdict {
+export function verifyZkm2(bytes: Uint8Array, pinnedImageId = PINNED_IMAGE_ID): StarkVerdict {
   let p: ZkMembershipProof
-  try { p = decodeZkm2(bytes) } catch (e) { return { ok: false, reason: e instanceof ZkmCodecError ? `codec: ${e.message}` : 'codec error' } }
+  try {
+    p = decodeZkm2(bytes)
+  } catch (e) {
+    return { ok: false, reason: e instanceof ZkmCodecError ? `codec: ${e.message}` : 'codec error' }
+  }
   if (hex(p.imageId) !== pinnedImageId) return { ok: false, reason: 'image id is not the pinned nektar membership program' }
-  const r = JSON.parse(wasm.verify(p.receipt, p.imageId)) as { ok: boolean, journal?: Journal, error?: string }
+  const r = JSON.parse(wasm.verify(p.receipt, p.imageId)) as { ok: boolean; journal?: Journal; error?: string }
   if (!r.ok || !r.journal) return { ok: false, reason: `stark: ${r.error ?? 'invalid'}` }
   const j = r.journal
   if (j.version !== 1) return { ok: false, reason: `journal version ${j.version}` }

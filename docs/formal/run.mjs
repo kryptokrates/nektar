@@ -18,15 +18,42 @@ if (!existsSync(jar)) {
   if (!res.ok) throw new Error(`download tla2tools.jar: HTTP ${res.status}`)
   writeFileSync(jar, Buffer.from(await res.arrayBuffer()))
 }
-const sha = createHash('sha256').update((await import('node:fs')).readFileSync(jar)).digest('hex')
+const sha = createHash('sha256')
+  .update((await import('node:fs')).readFileSync(jar))
+  .digest('hex')
 if (sha !== JAR_SHA256) throw new Error(`tla2tools.jar sha256 mismatch: ${sha}`)
 
-function tlc (cfg) {
+function tlc(cfg) {
   try {
-    return { ok: true, out: execFileSync('docker', ['run', '--rm', '-v', `${here}:/spec`, '-w', '/spec', 'eclipse-temurin:21-jre',
-      'java', '-cp', '.tools/tla2tools.jar', 'tlc2.TLC', '-workers', '2', '-deadlock', '-config', cfg, 'AORG.tla'],
-    { encoding: 'utf8', timeout: 110_000, env: { ...process.env, MSYS_NO_PATHCONV: '1' } }) }
-  } catch (e) { return { ok: false, out: String(e.stdout ?? '') + String(e.stderr ?? '') } }
+    return {
+      ok: true,
+      out: execFileSync(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '-v',
+          `${here}:/spec`,
+          '-w',
+          '/spec',
+          'eclipse-temurin:21-jre',
+          'java',
+          '-cp',
+          '.tools/tla2tools.jar',
+          'tlc2.TLC',
+          '-workers',
+          '2',
+          '-deadlock',
+          '-config',
+          cfg,
+          'AORG.tla'
+        ],
+        { encoding: 'utf8', timeout: 110_000, env: { ...process.env, MSYS_NO_PATHCONV: '1' } }
+      )
+    }
+  } catch (e) {
+    return { ok: false, out: String(e.stdout ?? '') + String(e.stderr ?? '') }
+  }
 }
 
 const impl = tlc('AORG.cfg')
@@ -35,4 +62,8 @@ console.log(`AORG.cfg: ${impl.ok && /No error has been found/.test(impl.out) ? '
 const mut = tlc('AORG_mutant.cfg')
 const caught = !mut.ok && /Invariant AppendOnly is violated/.test(mut.out)
 console.log(`AORG_mutant.cfg: ${caught ? 'PASS (AppendOnly violation found, as required)' : 'FAIL (mutant not caught)'}`)
-if (!(impl.ok && caught)) { console.log(impl.out.slice(-1500)); console.log(mut.out.slice(-1500)); process.exit(1) }
+if (!(impl.ok && caught)) {
+  console.log(impl.out.slice(-1500))
+  console.log(mut.out.slice(-1500))
+  process.exit(1)
+}

@@ -14,11 +14,14 @@ test('keystore: round trip / wrong passphrase / tampered ct', () => {
   assert.ok(isEncrypted(readFileSync(f, 'utf8')), 'file is encrypted on disk')
   assert.equal(readKeyFile(f, 'hunter2', true), '{"wif":"L5"}')
   assert.throws(() => readKeyFile(f, 'wrong', true), KeystoreError)
-  const tampered = JSON.parse(readFileSync(f, 'utf8')); tampered.ct = '00' + tampered.ct.slice(2)
-  const tf = path.join(dir, 't.json'); writeFileSync(tf, JSON.stringify(tampered))
+  const tampered = JSON.parse(readFileSync(f, 'utf8'))
+  tampered.ct = '00' + tampered.ct.slice(2)
+  const tf = path.join(dir, 't.json')
+  writeFileSync(tf, JSON.stringify(tampered))
   assert.throws(() => readKeyFile(tf, 'hunter2', true), KeystoreError)
   // plaintext file refused when encryption is required
-  const pf = path.join(dir, 'p.json'); writeFileSync(pf, '{"a":1}')
+  const pf = path.join(dir, 'p.json')
+  writeFileSync(pf, '{"a":1}')
   assert.throws(() => readKeyFile(pf, 'hunter2', true), /plaintext/)
 })
 

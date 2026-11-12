@@ -33,6 +33,15 @@ importers:
       knip:
         specifier: ^6.44.1
         version: 6.44.1
+      oxlint:
+        specifier: ^1.93.0
+        version: 1.93.0
+      prettier:
+        specifier: ^3.9.10
+        version: 3.9.10
+      syncpack:
+        specifier: ^15.3.3
+        version: 15.3.3
       typescript:
         specifier: 5.6.3
         version: 5.6.3
@@ -79,7 +88,7 @@ importers:
         specifier: workspace:*
         version: link:../core
       runar-sdk:
-        specifier: ^0.4.6
+        specifier: 0.4.6
         version: 0.4.6
 
   packages/bstack:
@@ -88,17 +97,17 @@ importers:
         specifier: 4.0.1
         version: 4.0.1
       '@lightwebinc/bbox-host':
-        specifier: file:../../vendor/lightwebinc-bbox-host-0.6.7.tgz
-        version: file:vendor/lightwebinc-bbox-host-0.6.7.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1))
+        specifier: file:../../vendor/lightwebinc-bbox-host-0.6.8.tgz
+        version: file:vendor/lightwebinc-bbox-host-0.6.8.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))
       '@lightwebinc/bcommon':
-        specifier: file:../../vendor/lightwebinc-bcommon-0.33.13.tgz
-        version: file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)
+        specifier: file:../../vendor/lightwebinc-bcommon-0.34.0.tgz
+        version: file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)
       '@lightwebinc/bfinger-host':
-        specifier: file:../../vendor/lightwebinc-bfinger-host-0.8.4.tgz
-        version: file:vendor/lightwebinc-bfinger-host-0.8.4.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1))
+        specifier: file:../../vendor/lightwebinc-bfinger-host-0.8.5.tgz
+        version: file:vendor/lightwebinc-bfinger-host-0.8.5.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))
       '@lightwebinc/blogs-host':
-        specifier: file:../../vendor/lightwebinc-blogs-host-0.6.3.tgz
-        version: file:vendor/lightwebinc-blogs-host-0.6.3.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1))
+        specifier: file:../../vendor/lightwebinc-blogs-host-0.6.4.tgz
+        version: file:vendor/lightwebinc-blogs-host-0.6.4.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))
       '@nektar/chain':
         specifier: workspace:*
         version: link:../chain
@@ -106,7 +115,7 @@ importers:
         specifier: workspace:*
         version: link:../core
       knex:
-        specifier: ^3.1.0
+        specifier: ^3.3.0
         version: 3.3.0(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
       sqlite3:
         specifier: ^5.1.7
@@ -136,14 +145,14 @@ importers:
         specifier: 0.4.6
         version: 0.4.6
       runar-sdk:
-        specifier: ^0.4.6
+        specifier: 0.4.6
         version: 0.4.6
     devDependencies:
       runar-compiler:
         specifier: ^0.4.6
         version: 0.4.6
       typescript:
-        specifier: ^5.4.0
+        specifier: 5.6.3
         version: 5.6.3
 
   packages/core:
@@ -251,7 +260,7 @@ importers:
         specifier: workspace:*
         version: link:../zk
       runar-sdk:
-        specifier: ^0.4.6
+        specifier: 0.4.6
         version: 0.4.6
 
   packages/graph:
@@ -290,7 +299,7 @@ importers:
         specifier: workspace:*
         version: link:../core
       knex:
-        specifier: ^3.1.0
+        specifier: ^3.3.0
         version: 3.3.0(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
       sqlite3:
         specifier: ^5.1.7
@@ -366,11 +375,11 @@ importers:
         version: 3.25.76
     devDependencies:
       '@lightwebinc/bcommon':
-        specifier: file:../../vendor/lightwebinc-bcommon-0.33.13.tgz
-        version: file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)
+        specifier: file:../../vendor/lightwebinc-bcommon-0.34.0.tgz
+        version: file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)
       '@lightwebinc/blogs-host':
-        specifier: file:../../vendor/lightwebinc-blogs-host-0.6.3.tgz
-        version: file:vendor/lightwebinc-blogs-host-0.6.3.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1))
+        specifier: file:../../vendor/lightwebinc-blogs-host-0.6.4.tgz
+        version: file:vendor/lightwebinc-blogs-host-0.6.4.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))
       '@types/qrcode':
         specifier: ^1.5.6
         version: 1.5.6
@@ -659,33 +668,33 @@ packages:
   '@isaacs/nonrecursive-glob-match@1.0.3':
     resolution: {integrity: sha512-SI7kyKHq4XXDRozw+r9GlRZkia1ZkFrpLW98r2IC2Bpr8YkFGE3fvjzmxCG0x78A++69HmDNrDvSMYBZmHGpKA==}
 
-  '@lightwebinc/bbox-host@file:vendor/lightwebinc-bbox-host-0.6.7.tgz':
-    resolution: {integrity: sha512-/XTu+bOqgC/VdQJ/PJOhU8vrqHFjHskMYQ48Q1Inp9Ajqpq1X2o0D7mrbBCbkn54AnJmXMWecBoURX33zdbLfA==, tarball: file:vendor/lightwebinc-bbox-host-0.6.7.tgz}
-    version: 0.6.7
+  '@lightwebinc/bbox-host@file:vendor/lightwebinc-bbox-host-0.6.8.tgz':
+    resolution: {integrity: sha512-Mz9oI1hhrWndTtgvoGD5XTPY3T5ljkuH22fa9Lr+jJ6gPXZ4SA727QTFy84wqkgzbomxqA4sYA1enNzHCQcZ5Q==, tarball: file:vendor/lightwebinc-bbox-host-0.6.8.tgz}
+    version: 0.6.8
     engines: {node: '>=24 <27'}
     peerDependencies:
-      '@lightwebinc/bcommon': ^0.33.13
+      '@lightwebinc/bcommon': ^0.33.13 || ^0.34.0
 
-  '@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz':
-    resolution: {integrity: sha512-xt5qICYcuesCSik7U9RsYIuUB/AAfD7bOET1s4jlRT0tlcvgqGLT3RANg6jvN6uO6Ift13wnttvtLLZ+750zuA==, tarball: file:vendor/lightwebinc-bcommon-0.33.13.tgz}
-    version: 0.33.13
+  '@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz':
+    resolution: {integrity: sha512-YlCyX7Wkjc7LWdLI4NNGAZvQ0LUOIMlokXD3WA8xjgO3Z9y44DGboB1H22t7gNwJHt64FMYLD0VyCu69TrObNQ==, tarball: file:vendor/lightwebinc-bcommon-0.34.0.tgz}
+    version: 0.34.0
     engines: {node: '>=24 <27'}
     peerDependencies:
       '@bsv/sdk': 4.0.1
 
-  '@lightwebinc/bfinger-host@file:vendor/lightwebinc-bfinger-host-0.8.4.tgz':
-    resolution: {integrity: sha512-nhKd5FDMKygpbzzG0l7YaAt2uUft2UkjPt3Ywrjow392K6rClqiA4AtJSBqpsWpiuBO88owrDSxUzRpjbuCKLA==, tarball: file:vendor/lightwebinc-bfinger-host-0.8.4.tgz}
-    version: 0.8.4
+  '@lightwebinc/bfinger-host@file:vendor/lightwebinc-bfinger-host-0.8.5.tgz':
+    resolution: {integrity: sha512-YDTzZdhH/K4XjNO27pNwiX5XastiXLL0tRcdXVXEeBNhS0+D+V6jxIYhgzf5acYhjNYNHn4IUcRlWLmwx0VpyA==, tarball: file:vendor/lightwebinc-bfinger-host-0.8.5.tgz}
+    version: 0.8.5
     engines: {node: '>=24 <27'}
     peerDependencies:
-      '@lightwebinc/bcommon': ^0.33.13
+      '@lightwebinc/bcommon': ^0.33.13 || ^0.34.0
 
-  '@lightwebinc/blogs-host@file:vendor/lightwebinc-blogs-host-0.6.3.tgz':
-    resolution: {integrity: sha512-wSgWU/S7zlUAaWGguYWgfswGGE68rjyZ5ZWtGKHpVGOdzG1UJNaVj59muFNAUHD1RJnyMPSyJ0f2H2Ml4WVsEw==, tarball: file:vendor/lightwebinc-blogs-host-0.6.3.tgz}
-    version: 0.6.3
+  '@lightwebinc/blogs-host@file:vendor/lightwebinc-blogs-host-0.6.4.tgz':
+    resolution: {integrity: sha512-EDVzxYQ4j4cDTZf/6ftijvpDxgCK2iBmjxXeI7vB3bgd4Wfop6CJrjltHsEp2x39MU9VGwDDEljwdVn6KrZcfg==, tarball: file:vendor/lightwebinc-blogs-host-0.6.4.tgz}
+    version: 0.6.4
     engines: {node: '>=24 <27'}
     peerDependencies:
-      '@lightwebinc/bcommon': ^0.33.13
+      '@lightwebinc/bcommon': ^0.33.13 || ^0.34.0
 
   '@modelcontextprotocol/sdk@1.32.2':
     resolution: {integrity: sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw==}
@@ -937,6 +946,128 @@ packages:
 
   '@oxc-resolver/binding-win32-x64-msvc@11.24.2':
     resolution: {integrity: sha512-UqGPmo56KDfLlfXFAFIrNflHT8tFxWGEivWg3Zeyp4Uy2NlKN1FGPr6/BxcLGG3+kZ6Wp14g5Uj+n71boqZfiw==}
+    cpu: [x64]
+    os: [win32]
+
+  '@oxlint/binding-android-arm-eabi@1.93.0':
+    resolution: {integrity: sha512-KKw70pbD5Pvq3G2lJ+WQ71XPMjCmg37rkSe2+mDqCRP3PoTSdDMuEi4UOnE8JBtyNM7bek61EC2s0Jt7S7u+Sg==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [arm]
+    os: [android]
+
+  '@oxlint/binding-android-arm64@1.93.0':
+    resolution: {integrity: sha512-fvr1fTUZGelwRxKDt64pf28aL1WaWgviwz3X+E/FcRYvrlEahH0NECRz/c1SY+K+KWmZk5uAf6h1kQnyBkp/2A==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [arm64]
+    os: [android]
+
+  '@oxlint/binding-darwin-arm64@1.93.0':
+    resolution: {integrity: sha512-VdvSN9JRf4Es6ZzoAdvEeh8tgKdw8L4H82WmA8MMPVfPdZGCwE/nI27Z1HrRHYQhPxOh4kmnxQEioSUFrOvDaw==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@oxlint/binding-darwin-x64@1.93.0':
+    resolution: {integrity: sha512-QR1V890Ml0YGRG0F/iV0K9igG+pOhe+VWd+aZnxY849rRHZf3F2gEoQks5+GVHf105X9Mh/6HdShTP5juekG2g==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [x64]
+    os: [darwin]
+
+  '@oxlint/binding-freebsd-x64@1.93.0':
+    resolution: {integrity: sha512-jDfIbi30zZaKi+rTvig3sge+Xhi8pFFSgHxb0jzovc4qh8ETm/irKV9c7N/JsuwnYc5sbvf4IC8w1vQQ0IL+BA==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [x64]
+    os: [freebsd]
+
+  '@oxlint/binding-linux-arm-gnueabihf@1.93.0':
+    resolution: {integrity: sha512-qtxZ714ND/koFgVH00QgxlzZiIbRPmguaPhnHRU5DFFtrtEdOrSnZD4U/H2AzXrXkZ59eQbMBnJwbum5XohrIQ==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [arm]
+    os: [linux]
+
+  '@oxlint/binding-linux-arm-musleabihf@1.93.0':
+    resolution: {integrity: sha512-5pJ9NjMvH7WMUqXB6bTTOSemBm39w2cod27Hu3+Yom/GhbTeNXlYcpDx1o4CgBP6fhp0YHG66TNdVaUm6sHjsA==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [arm]
+    os: [linux]
+
+  '@oxlint/binding-linux-arm64-gnu@1.93.0':
+    resolution: {integrity: sha512-pRf+7jtbt2fHE23SX7qBxRgnBZicUgsoCK1PVIjnOk+t3a6UBkpt/GrKI99WlxsKUxftz/5nv/kfKvScmYywkw==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@oxlint/binding-linux-arm64-musl@1.93.0':
+    resolution: {integrity: sha512-zM8Fd/K8sqGvsBcJBZ3oVZ3ctGWbszA08IaGt5gFFF5RcunppAI/ZnAXbouABvnWeJ//S44KKlfPZnDDbeiphg==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
+  '@oxlint/binding-linux-ppc64-gnu@1.93.0':
+    resolution: {integrity: sha512-7qKCnvhZKDXJG2pdbLazd2hw4FxjJHbZOFrrbzyy5PdHfPLH9vnNUa1le01A8uItZuYKPBPncH+HCoEiFT4SgA==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [ppc64]
+    os: [linux]
+    libc: [glibc]
+
+  '@oxlint/binding-linux-riscv64-gnu@1.93.0':
+    resolution: {integrity: sha512-2pgulxC6G8V5wE750NJE/fRkf9aO6i6yoj10wyaR2EdiNtan4OemsOtsQ0ZTXGdY8Q3IoTmlND3GYvjJsvikYg==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [riscv64]
+    os: [linux]
+    libc: [glibc]
+
+  '@oxlint/binding-linux-riscv64-musl@1.93.0':
+    resolution: {integrity: sha512-yWsn6Gg2PnGG5jlyDz5+pHGiMTMiy4adaa4WRMzDgzB8efaShk1JMmTHIBSVLQMh0tYXRs4CN5uJCO79r4Mi4g==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [riscv64]
+    os: [linux]
+    libc: [musl]
+
+  '@oxlint/binding-linux-s390x-gnu@1.93.0':
+    resolution: {integrity: sha512-WCn5plwp/ezS2RDPQKp0/EXEVRr9/dDexUdRKmsMFqzNM5xBSZ1wbsi3PuMk1VfkMRnI5BuazCsziCWMXRDOlw==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [s390x]
+    os: [linux]
+    libc: [glibc]
+
+  '@oxlint/binding-linux-x64-gnu@1.93.0':
+    resolution: {integrity: sha512-F2CGjb9LAkzH+IYTZSzd1klQ1vk5z6Utjax64WeLByCkYXbVDbsun+Oy2hLfW2MDSKCvW+jwy/9ld0EPgdeu+A==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@oxlint/binding-linux-x64-musl@1.93.0':
+    resolution: {integrity: sha512-plf5DE2objcG8Tf7mXRuRa8tT8rzDkpjqXQtKoGsKHWkpgsialbON1+cCtoSEUTVbQUjXvuAm8vV9+3rR0yCBw==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
+  '@oxlint/binding-openharmony-arm64@1.93.0':
+    resolution: {integrity: sha512-Kp2yJrKvoTe9FfKdO/xwLNUbs2bYTMKx0+aoQD1s0h/Tx0kSgtHSdGmrk8tTKdluosjFbo88qYRIaNIX43AfFw==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [arm64]
+    os: [openharmony]
+
+  '@oxlint/binding-win32-arm64-msvc@1.93.0':
+    resolution: {integrity: sha512-vigjcHCFsR6KjnWTEVfaCxcMYapEuaK9FZa1MpewwQ1S+Xud3v0okfkj1RySsD6RF1NRHIjSlQSalTnKIaj3nA==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [arm64]
+    os: [win32]
+
+  '@oxlint/binding-win32-ia32-msvc@1.93.0':
+    resolution: {integrity: sha512-0Ot3BEe/AAr2/uQhe55r8CmPlperYk2mQmxdutOru7oU0kir6IiEVHb1TG3GORRlfra97lPHVDLhgmihiKzLrg==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [ia32]
+    os: [win32]
+
+  '@oxlint/binding-win32-x64-msvc@1.93.0':
+    resolution: {integrity: sha512-ZzzIIVs/Qkm8trUWYKF0OYub5ALlv50/3gsEZbKAvWgz+yNJX6uRmQ8ySPXU2Q0/Y9m4JCOjhpmC8XUYbPHX5Q==}
+    engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [x64]
     os: [win32]
 
@@ -1709,6 +1840,19 @@ packages:
   oxc-resolver@11.24.2:
     resolution: {integrity: sha512-FY91FiDBj7ls5MsFS9jN3tjz2o0/zsdSsymlakySaBwVJZorHhkWyICLZMKxlu1R9vYo+sd3z1jwb4J8x7bNDw==}
 
+  oxlint@1.93.0:
+    resolution: {integrity: sha512-19JMsQFX+YvEbcUTFQxjTwhvs0Ibg0D6CFneSLgpwnACWcY/6LjhpGpkPodh0T5aIT1pjMTLlYaeBFzaVgugTA==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    hasBin: true
+    peerDependencies:
+      oxlint-tsgolint: '>=7.0.2005'
+      vite-plus: '*'
+    peerDependenciesMeta:
+      oxlint-tsgolint:
+        optional: true
+      vite-plus:
+        optional: true
+
   p-limit@2.3.0:
     resolution: {integrity: sha512-//88mFWSJx8lxCzwdAABTJL2MyWB12+eIY7MDL2SqLmAkeKU9qxRvWuSyTjm3FUmpBEMuFfckAIqEaVGUDxb6w==}
     engines: {node: '>=6'}
@@ -1772,6 +1916,11 @@ packages:
     resolution: {integrity: sha512-8Mf2cbV7x1cXPUILADGI3wuhfqWvtiLA1iclTDbFRZkgRQS0NqsPZphna9V+HyTEadheuPmjaJMsbzKQFOzLug==}
     engines: {node: '>=10'}
     deprecated: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+    hasBin: true
+
+  prettier@3.9.10:
+    resolution: {integrity: sha512-skGHTH1Yb9QvaTC4hWnRTzEYtCpApF0UMBPz+t/0ZPzP8ihefo/btKd+QA7pUE0fEwA1SbS/NmhyEcstdXOIdA==}
+    engines: {node: '>=14'}
     hasBin: true
 
   promise-inflight@1.0.1:
@@ -1999,6 +2148,51 @@ packages:
   supports-preserve-symlinks-flag@1.0.0:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
+
+  syncpack-darwin-arm64@15.3.3:
+    resolution: {integrity: sha512-sFnHOUT7ZYShxAXfzK8zIxNvY5ciW6c71fHYOJIgZ8Ry25IMWkaGfyLc894wxIPaYTbgEmeeZN6BV7G5Gu27mA==}
+    cpu: [arm64]
+    os: [darwin]
+
+  syncpack-darwin-x64@15.3.3:
+    resolution: {integrity: sha512-gtWysFMwG3W8ieF8+aLMy1qVkehdy40hc02LGEjckmejZxtjDbTKE9vDhBAaXcLbqIsvQ1ImEymHU5N2I4llWQ==}
+    cpu: [x64]
+    os: [darwin]
+
+  syncpack-linux-arm64-musl@15.3.3:
+    resolution: {integrity: sha512-mvj6TGhdwO5bHo1cM638esCx9+7ur0BA+RTdg+YiOD/CZJMP8iMj6ruF8htFNPEOKpAEOmfkOVKNs4yCbvkgyQ==}
+    cpu: [arm64]
+    os: [linux]
+
+  syncpack-linux-arm64@15.3.3:
+    resolution: {integrity: sha512-6hlHPrG+V457fpKEURqshNLaFQENkC416IZ4ngFY+2uBjFsmlA7ax4p4EJlFsxuHiQbx/4Yo27pVXmNJEs/bZQ==}
+    cpu: [arm64]
+    os: [linux]
+
+  syncpack-linux-x64-musl@15.3.3:
+    resolution: {integrity: sha512-7KHIb9b9VCSyQq2GwoshVU9Pt/2qCqhOPusuwkXadI+p1qW7fK5FukjZbG0Y4VRa6mszrD2W28OxWAswwrn1lQ==}
+    cpu: [x64]
+    os: [linux]
+
+  syncpack-linux-x64@15.3.3:
+    resolution: {integrity: sha512-DcnZPKFGEFoktzIrufGGwk2ARTEhlvII6yQsETCaO/Z1xagOjJquxiDvagKnb4GQsQQCuih2ouzQZFCiKImrXA==}
+    cpu: [x64]
+    os: [linux]
+
+  syncpack-windows-arm64@15.3.3:
+    resolution: {integrity: sha512-6pPWh3+uTO7g1FF8ugC+UqektaNXphdmDXqG3rWepFdCS+DrWj/7Gfbtlx/zISTdx//T7zoZZ2fvW4fzN/6ztQ==}
+    cpu: [arm64]
+    os: [win32]
+
+  syncpack-windows-x64@15.3.3:
+    resolution: {integrity: sha512-9CrrEzXE/MdWJuxyB7JvR1b6kiTNQPZh1dDJbWiRgtpNyCbEiddM1/viOsyaufftWDrQFV6RCGQzqCvWEas45g==}
+    cpu: [x64]
+    os: [win32]
+
+  syncpack@15.3.3:
+    resolution: {integrity: sha512-MC99meBhgc/E5xbB5mFUS99wj4bquTbKLKHLXYh3qPbmPZl2HD8KA4ls29a9Xv67oZ03isCaJaqSl+JIfXIfpA==}
+    engines: {node: '>=14.17.0'}
+    hasBin: true
 
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
@@ -2255,24 +2449,24 @@ snapshots:
 
   '@isaacs/nonrecursive-glob-match@1.0.3': {}
 
-  '@lightwebinc/bbox-host@file:vendor/lightwebinc-bbox-host-0.6.7.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1))':
+  '@lightwebinc/bbox-host@file:vendor/lightwebinc-bbox-host-0.6.8.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))':
     dependencies:
       '@bsv/sdk': 4.0.1
-      '@lightwebinc/bcommon': file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)
+      '@lightwebinc/bcommon': file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)
 
-  '@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)':
+  '@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)':
     dependencies:
       '@bsv/sdk': 4.0.1
 
-  '@lightwebinc/bfinger-host@file:vendor/lightwebinc-bfinger-host-0.8.4.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1))':
+  '@lightwebinc/bfinger-host@file:vendor/lightwebinc-bfinger-host-0.8.5.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))':
     dependencies:
       '@bsv/sdk': 4.0.1
-      '@lightwebinc/bcommon': file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)
+      '@lightwebinc/bcommon': file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)
 
-  '@lightwebinc/blogs-host@file:vendor/lightwebinc-blogs-host-0.6.3.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1))':
+  '@lightwebinc/blogs-host@file:vendor/lightwebinc-blogs-host-0.6.4.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))':
     dependencies:
       '@bsv/sdk': 4.0.1
-      '@lightwebinc/bcommon': file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)
+      '@lightwebinc/bcommon': file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)
 
   '@modelcontextprotocol/sdk@1.32.2(supports-color@7.2.0)(zod@3.25.76)':
     dependencies:
@@ -2433,6 +2627,63 @@ snapshots:
     optional: true
 
   '@oxc-resolver/binding-win32-x64-msvc@11.24.2':
+    optional: true
+
+  '@oxlint/binding-android-arm-eabi@1.93.0':
+    optional: true
+
+  '@oxlint/binding-android-arm64@1.93.0':
+    optional: true
+
+  '@oxlint/binding-darwin-arm64@1.93.0':
+    optional: true
+
+  '@oxlint/binding-darwin-x64@1.93.0':
+    optional: true
+
+  '@oxlint/binding-freebsd-x64@1.93.0':
+    optional: true
+
+  '@oxlint/binding-linux-arm-gnueabihf@1.93.0':
+    optional: true
+
+  '@oxlint/binding-linux-arm-musleabihf@1.93.0':
+    optional: true
+
+  '@oxlint/binding-linux-arm64-gnu@1.93.0':
+    optional: true
+
+  '@oxlint/binding-linux-arm64-musl@1.93.0':
+    optional: true
+
+  '@oxlint/binding-linux-ppc64-gnu@1.93.0':
+    optional: true
+
+  '@oxlint/binding-linux-riscv64-gnu@1.93.0':
+    optional: true
+
+  '@oxlint/binding-linux-riscv64-musl@1.93.0':
+    optional: true
+
+  '@oxlint/binding-linux-s390x-gnu@1.93.0':
+    optional: true
+
+  '@oxlint/binding-linux-x64-gnu@1.93.0':
+    optional: true
+
+  '@oxlint/binding-linux-x64-musl@1.93.0':
+    optional: true
+
+  '@oxlint/binding-openharmony-arm64@1.93.0':
+    optional: true
+
+  '@oxlint/binding-win32-arm64-msvc@1.93.0':
+    optional: true
+
+  '@oxlint/binding-win32-ia32-msvc@1.93.0':
+    optional: true
+
+  '@oxlint/binding-win32-x64-msvc@1.93.0':
     optional: true
 
   '@tootallnate/once@1.1.2':
@@ -3316,6 +3567,28 @@ snapshots:
       '@oxc-resolver/binding-win32-arm64-msvc': 11.24.2
       '@oxc-resolver/binding-win32-x64-msvc': 11.24.2
 
+  oxlint@1.93.0:
+    optionalDependencies:
+      '@oxlint/binding-android-arm-eabi': 1.93.0
+      '@oxlint/binding-android-arm64': 1.93.0
+      '@oxlint/binding-darwin-arm64': 1.93.0
+      '@oxlint/binding-darwin-x64': 1.93.0
+      '@oxlint/binding-freebsd-x64': 1.93.0
+      '@oxlint/binding-linux-arm-gnueabihf': 1.93.0
+      '@oxlint/binding-linux-arm-musleabihf': 1.93.0
+      '@oxlint/binding-linux-arm64-gnu': 1.93.0
+      '@oxlint/binding-linux-arm64-musl': 1.93.0
+      '@oxlint/binding-linux-ppc64-gnu': 1.93.0
+      '@oxlint/binding-linux-riscv64-gnu': 1.93.0
+      '@oxlint/binding-linux-riscv64-musl': 1.93.0
+      '@oxlint/binding-linux-s390x-gnu': 1.93.0
+      '@oxlint/binding-linux-x64-gnu': 1.93.0
+      '@oxlint/binding-linux-x64-musl': 1.93.0
+      '@oxlint/binding-openharmony-arm64': 1.93.0
+      '@oxlint/binding-win32-arm64-msvc': 1.93.0
+      '@oxlint/binding-win32-ia32-msvc': 1.93.0
+      '@oxlint/binding-win32-x64-msvc': 1.93.0
+
   p-limit@2.3.0:
     dependencies:
       p-try: 2.2.0
@@ -3370,6 +3643,8 @@ snapshots:
       simple-get: 4.0.1
       tar-fs: 2.1.5
       tunnel-agent: 0.6.0
+
+  prettier@3.9.10: {}
 
   promise-inflight@1.0.1(bluebird@3.7.2):
     optionalDependencies:
@@ -3641,6 +3916,41 @@ snapshots:
       has-flag: 4.0.0
 
   supports-preserve-symlinks-flag@1.0.0: {}
+
+  syncpack-darwin-arm64@15.3.3:
+    optional: true
+
+  syncpack-darwin-x64@15.3.3:
+    optional: true
+
+  syncpack-linux-arm64-musl@15.3.3:
+    optional: true
+
+  syncpack-linux-arm64@15.3.3:
+    optional: true
+
+  syncpack-linux-x64-musl@15.3.3:
+    optional: true
+
+  syncpack-linux-x64@15.3.3:
+    optional: true
+
+  syncpack-windows-arm64@15.3.3:
+    optional: true
+
+  syncpack-windows-x64@15.3.3:
+    optional: true
+
+  syncpack@15.3.3:
+    optionalDependencies:
+      syncpack-darwin-arm64: 15.3.3
+      syncpack-darwin-x64: 15.3.3
+      syncpack-linux-arm64: 15.3.3
+      syncpack-linux-arm64-musl: 15.3.3
+      syncpack-linux-x64: 15.3.3
+      syncpack-linux-x64-musl: 15.3.3
+      syncpack-windows-arm64: 15.3.3
+      syncpack-windows-x64: 15.3.3
 
   tapable@2.3.3: {}
 

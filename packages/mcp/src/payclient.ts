@@ -13,22 +13,35 @@ export interface PaymentInvoice {
 }
 
 /** normalize either the tool-level invoice or accepts[].extra of a 402 payload */
-export const invoiceOf = (paymentRequired: { accepts?: Array<{ amount?: string, extra?: Record<string, unknown> }> } | { invoice?: Record<string, unknown> }): PaymentInvoice => {
+export const invoiceOf = (
+  paymentRequired: { accepts?: Array<{ amount?: string; extra?: Record<string, unknown> }> } | { invoice?: Record<string, unknown> }
+): PaymentInvoice => {
   const acc = (paymentRequired as any).accepts?.[0]
-  if (acc) return { amount: Number(acc.amount), lockingScriptHex: String(acc.extra?.lockingScriptHex ?? ''), opReturn: String(acc.extra?.opReturn ?? ''), invoiceId: String(acc.extra?.invoiceId ?? '') }
+  if (acc)
+    return {
+      amount: Number(acc.amount),
+      lockingScriptHex: String(acc.extra?.lockingScriptHex ?? ''),
+      opReturn: String(acc.extra?.opReturn ?? ''),
+      invoiceId: String(acc.extra?.invoiceId ?? '')
+    }
   const inv = (paymentRequired as any).invoice
-  return { amount: Number(inv?.amount), lockingScriptHex: String(inv?.lockingScriptHex ?? ''), opReturn: String(inv?.opReturn ?? ''), invoiceId: String(inv?.invoiceId ?? '') }
+  return {
+    amount: Number(inv?.amount),
+    lockingScriptHex: String(inv?.lockingScriptHex ?? ''),
+    opReturn: String(inv?.opReturn ?? ''),
+    invoiceId: String(inv?.invoiceId ?? '')
+  }
 }
 
 /** build + sign the payment: pays lockingScriptHex ≥ amount, carries the
  *  OP_RETURN invoice tag, change back to the payer. utxos = the payer's own
  *  unspent outputs ({tx, vout, satoshis} — sourceTransaction attached). */
-export async function buildPaymentTx (
+export async function buildPaymentTx(
   inv: PaymentInvoice,
   payer: PrivateKey,
-  utxos: Array<{ tx: Transaction, vout: number, satoshis: number }>,
+  utxos: Array<{ tx: Transaction; vout: number; satoshis: number }>,
   opts: { testnet?: boolean } = {}
-): Promise<{ hex: string, txid: string }> {
+): Promise<{ hex: string; txid: string }> {
   const amount = Number(inv.amount)
   const addr = payer.toPublicKey().toAddress(opts.testnet === false ? undefined : [0x6f])
   const tx = new Transaction()
@@ -40,8 +53,15 @@ export async function buildPaymentTx (
   }
   if (inSats < amount + 200) throw new Error(`payer utxos too small: ${inSats} < ${amount}+fee`)
   tx.addOutput({ lockingScript: LockingScript.fromHex(inv.lockingScriptHex), satoshis: amount })
-  tx.addOutput({ lockingScript: new Script().writeOpCode(0x00).writeOpCode(0x6a).writeBin([...Buffer.from(inv.opReturn, 'utf8')]), satoshis: 0 })
+  tx.addOutput({
+    lockingScript: new Script()
+      .writeOpCode(0x00)
+      .writeOpCode(0x6a)
+      .writeBin([...Buffer.from(inv.opReturn, 'utf8')]),
+    satoshis: 0
+  })
   tx.addOutput({ lockingScript: new P2PKH().lock(addr), change: true })
-  await tx.fee(); await tx.sign()
+  await tx.fee()
+  await tx.sign()
   return { hex: Buffer.from(tx.toBEEF()).toString('hex'), txid: tx.id('hex') }
 }

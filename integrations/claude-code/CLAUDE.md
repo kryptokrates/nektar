@@ -17,4 +17,4 @@ When answering a factual question that could come from memory:
 
 The footer is the auditable part of the answer: anyone can hit the verify
 URL (or scan the QR on that page) to confirm the answer was committed to
-anchored, provenance-signed memory — not that it is *true*.
+anchored, provenance-signed memory — not that it is _true_.

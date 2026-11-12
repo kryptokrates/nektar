@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@nektar/core": "workspace:*",
-    "knex": "^3.1.0",
+    "knex": "^3.3.0",
     "sqlite3": "^5.1.7"
   },
   "peerDependencies": {

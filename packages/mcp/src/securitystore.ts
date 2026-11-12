@@ -6,13 +6,14 @@ import type { SecurityStateStore, MemoryStateStore, PersistedMemoryState } from 
 
 /** JSON file store for anchor state (atomic replace) */
 export class FileStateStore implements MemoryStateStore {
-  constructor (private file: string) {}
-  load (): PersistedMemoryState | undefined {
-    return existsSync(this.file) ? JSON.parse(readFileSync(this.file, 'utf8')) as PersistedMemoryState : undefined
+  constructor(private file: string) {}
+  load(): PersistedMemoryState | undefined {
+    return existsSync(this.file) ? (JSON.parse(readFileSync(this.file, 'utf8')) as PersistedMemoryState) : undefined
   }
-  save (s: PersistedMemoryState): void {
+  save(s: PersistedMemoryState): void {
     mkdirSync(dirname(this.file), { recursive: true })
-    writeFileSync(`${this.file}.tmp`, JSON.stringify(s)); renameSync(`${this.file}.tmp`, this.file)
+    writeFileSync(`${this.file}.tmp`, JSON.stringify(s))
+    renameSync(`${this.file}.tmp`, this.file)
   }
 }
 
@@ -20,12 +21,12 @@ type State = ReturnType<SecurityStateStore['load']>
 const EMPTY: State = { challenges: [], zkSeen: [], zkQueries: [], revocations: [] }
 
 export class FileSecurityStore implements SecurityStateStore {
-  constructor (private file: string) {}
-  load (): State {
+  constructor(private file: string) {}
+  load(): State {
     if (!existsSync(this.file)) return { ...EMPTY }
-    return { ...EMPTY, ...JSON.parse(readFileSync(this.file, 'utf8')) as Partial<State> }
+    return { ...EMPTY, ...(JSON.parse(readFileSync(this.file, 'utf8')) as Partial<State>) }
   }
-  save (s: State): void {
+  save(s: State): void {
     mkdirSync(dirname(this.file), { recursive: true })
     const tmp = `${this.file}.tmp`
     writeFileSync(tmp, JSON.stringify(s))

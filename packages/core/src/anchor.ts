@@ -21,13 +21,13 @@ export interface AnchorData {
   Rp: Bytes
 }
 
-export function chainRp (prevRp: Bytes, R: Bytes, size: number): Bytes {
+export function chainRp(prevRp: Bytes, R: Bytes, size: number): Bytes {
   return dsha256(concat(TAG_RPRIME, prevRp, R, u64le(size)))
 }
 
 export const GENESIS_PREV_RP: Bytes = ZERO32
 
-export function anchorFields (a: AnchorData): number[][] {
+export function anchorFields(a: AnchorData): number[][] {
   return [
     [...META_FLAG], // ANC-006: Metanet flag is the first push of the data payload
     [...utf8(PROTO)],
@@ -40,7 +40,7 @@ export function anchorFields (a: AnchorData): number[][] {
   ]
 }
 
-export function expectedRp (prev: AnchorData | null, R: Bytes, size: number): Bytes {
+export function expectedRp(prev: AnchorData | null, R: Bytes, size: number): Bytes {
   return chainRp(prev ? prev.Rp : GENESIS_PREV_RP, R, size)
 }
 
@@ -51,6 +51,6 @@ export { eq }
 // (PROTOCOL_ID, keyID=shardLabel, 'self').
 import { hash160, toHex } from './hash.js'
 
-export function shardIdFromPubkey (pubkeyBytes: Bytes): string {
+export function shardIdFromPubkey(pubkeyBytes: Bytes): string {
   return toHex(hash160(pubkeyBytes))
 }

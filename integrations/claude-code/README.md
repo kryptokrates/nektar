@@ -45,7 +45,7 @@ GETs `/v1/verify` for each (3s timeout, max 3, fail-open if the endpoint is
 down):
 
 - **✓ pass** → quiet (visible in verbose output)
-- **✗ fail** → *blocks the stop once* and hands the failure back to Claude,
+- **✗ fail** → _blocks the stop once_ and hands the failure back to Claude,
   which must tell you which check failed — the failure can't slide by
 - **no token** → silent; nothing to check
 
@@ -56,8 +56,8 @@ scan it on a phone to re-verify a receipt anywhere the server is reachable.
 
 A verified receipt proves the answer was **committed to anchored,
 provenance-signed memory and passed the grounding gate** — its cites resolve
-to sealed records. It does *not* prove the answer is **true**, that Claude
-*called* the gate before answering (a skipped `groundedAnswer` yields no
+to sealed records. It does _not_ prove the answer is **true**, that Claude
+_called_ the gate before answering (a skipped `groundedAnswer` yields no
 token at all — which the hook treats as "nothing to check", not as a pass),
 or that the model ran the declared weights (see `modelManifest` — declared
 identity, not zkML).

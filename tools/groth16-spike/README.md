@@ -49,13 +49,13 @@ consensus — no watcher, no challenge window.
    `b6fe4727…` + proof spend `27712ae8…` accepted **under consensus**,
    tampered unlock rejected, mined h8506.
 4. **`attestInference` tool** — re-derives the statement, optionally deploys
-   + spends the verifier, returns a `modelAttestation` record that
-   `commitReceipt`/`groundedAnswer` embed (statement re-validated at commit;
-   the verify page and `/v1/badge` show declared → attested → on-chain).
-   Only the canned demo vector has a proof — anything else fails closed.
+   - spends the verifier, returns a `modelAttestation` record that
+     `commitReceipt`/`groundedAnswer` embed (statement re-validated at commit;
+     the verify page and `/v1/badge` show declared → attested → on-chain).
+     Only the canned demo vector has a proof — anything else fails closed.
 
 The spend binds the exact (input, output, modelPoseidon) triple — the
-statement is *inside* the pushed unlock. Dev trusted setup + nChain toy
+statement is _inside_ the pushed unlock. Dev trusted setup + nChain toy
 params + Research License — regtest-grade, non-commercial. LLM inference
 is NOT covered (that needs zkML/TEE-scale machinery).
 

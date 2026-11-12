@@ -24,7 +24,10 @@ const meta = JSON.parse(readFileSync(new URL('meta-aiinf.json', OUT), 'utf8'))
 console.log(`verifier: ${meta.circuit} (${meta.curve}) — statement ${meta.public_statement_fr.slice(0, 18)}…`)
 
 let failures = 0
-const check = (cond, name) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${name}`); if (!cond) failures++ }
+const check = (cond, name) => {
+  console.log(`${cond ? 'PASS' : 'FAIL'} ${name}`)
+  if (!cond) failures++
+}
 
 // --- config ----------------------------------------------------------------
 const cfg = {
@@ -37,10 +40,9 @@ const broadcaster = new BsvBroadcaster(cfg)
 const tracker = new WocTracker(cfg)
 
 // --- key -------------------------------------------------------------------
-function loadWif () {
+function loadWif() {
   if (process.env.NEKTAR_FUND_WIF) return process.env.NEKTAR_FUND_WIF
-  const pass = process.env.NEKTAR_KEY_PASSPHRASE
-    ?? (existsSync('.state/ttn-passphrase') ? readFileSync('.state/ttn-passphrase', 'utf8').trim() : undefined)
+  const pass = process.env.NEKTAR_KEY_PASSPHRASE ?? (existsSync('.state/ttn-passphrase') ? readFileSync('.state/ttn-passphrase', 'utf8').trim() : undefined)
   const keyFile = process.env.NEKTAR_FEE_KEY_FILE ?? '.state/ttn-data/fee.key.json'
   if (!existsSync(keyFile)) throw new Error(`no NEKTAR_FUND_WIF and no key file at ${keyFile}`)
   return JSON.parse(readKeyFile(keyFile, pass, true)).wif
@@ -69,7 +71,9 @@ const wocStatus = async (txid) => {
     const r = await fetch(`${cfg.wocUrl}/tx/hash/${txid}`, { signal: AbortSignal.timeout(15_000) })
     const j = await r.json()
     return j.blockheight > 0 ? `MINED h${j.blockheight}` : 'in mempool (unconfirmed)'
-  } catch (e) { return `status unknown (${e.message})` }
+  } catch (e) {
+    return `status unknown (${e.message})`
+  }
 }
 
 // --- tx1: deploy the verifier ----------------------------------------------
@@ -78,7 +82,10 @@ const tx1 = new Transaction()
 tx1.addInput({ sourceTransaction: fund.tx, sourceOutputIndex: fund.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
 tx1.addOutput({ lockingScript: LockingScript.fromHex(lockHex), satoshis: LOCK_SATS })
 const change1 = fund.satoshis - LOCK_SATS - feeFor(lockHex.length / 2 + 400)
-if (change1 <= 0) { console.log(`funding utxo too small for fee (${fund.satoshis} sats)`); process.exit(1) }
+if (change1 <= 0) {
+  console.log(`funding utxo too small for fee (${fund.satoshis} sats)`)
+  process.exit(1)
+}
 tx1.addOutput({ lockingScript: p2pkh(), satoshis: change1 })
 await tx1.sign()
 console.log(`tx1 size: ${tx1.toHex().length / 2} bytes, fee≈${fund.satoshis - LOCK_SATS - change1} sats`)
@@ -119,7 +126,7 @@ if (b1.ok) {
   while (Date.now() < deadline) {
     s1 = await wocStatus(b1.txid)
     if (s1.startsWith('MINED')) break
-    await new Promise(r => setTimeout(r, 15_000))
+    await new Promise((r) => setTimeout(r, 15_000))
   }
   console.log(`tx1 status after polling: ${s1}`)
   if (b2.ok) console.log(`tx2 status: ${await wocStatus(b2.txid)}`)

@@ -5,5 +5,15 @@
   },
   "include": ["test"],
   "exclude": ["dist"],
-  "references": [{ "path": "../core" }, { "path": "../chain" }, { "path": "../contracts" }, { "path": "../verify" }, { "path": "../zk" }, { "path": "../datalog" }, { "path": "../identity" }, { "path": "../automaton" }, { "path": "../mcp" }]
+  "references": [
+    { "path": "../core" },
+    { "path": "../chain" },
+    { "path": "../contracts" },
+    { "path": "../verify" },
+    { "path": "../zk" },
+    { "path": "../datalog" },
+    { "path": "../identity" },
+    { "path": "../automaton" },
+    { "path": "../mcp" }
+  ]
 }

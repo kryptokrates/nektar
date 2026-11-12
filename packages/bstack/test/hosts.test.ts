@@ -3,16 +3,16 @@ import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { signWant } from '../src/artifacts.js'
 import { buildCarrier, buildSweep } from '../src/carrier.js'
-import { encodePayload, lanesFor, laneOf } from '../src/market.js'
+import { encodePayload, lanesFor } from '../src/market.js'
 import { submitAll, readWants } from '../src/hosts.js'
 import { provenTree } from './helpers.js'
 import { FakeTracker, minihost } from '../src/testing.js'
 
 const NET = 'regtest'
 
-async function want (k: PrivateKey, domains = ['compute'], tree?: import('@bsv/sdk').Transaction, net = NET) {
+async function want(k: PrivateKey, domains = ['compute'], tree?: import('@bsv/sdk').Transaction, net = NET) {
   const sw = signWant(k, { domains, question: 'q', net, ts: Date.now(), exp: Date.now() + 60000 })
-  const t = tree ?? await provenTree(k)
+  const t = tree ?? (await provenTree(k))
   return { beef: (await buildCarrier({ key: k, payload: encodePayload({ v: 1, kind: 'want', body: sw }), slot: { tree: t, vout: 0 } })).beef, tree: t }
 }
 
@@ -22,7 +22,9 @@ test('hosts: majority quorum still ok with one host down, missed names it', asyn
   const k = PrivateKey.fromRandom()
   const { beef } = await want(k)
   const r = await submitAll([h.url, 'http://127.0.0.1:1'], beef, lanesFor(NET, ['compute']), { timeoutMs: 2000 })
-  assert.ok(r.ok); assert.deepEqual(r.took, [h.url]); assert.equal(r.missed.length, 1)
+  assert.ok(r.ok)
+  assert.deepEqual(r.took, [h.url])
+  assert.equal(r.missed.length, 1)
   await h.close()
 })
 
@@ -33,10 +35,17 @@ test('hosts: early resolve returns at quorum while a straggler still lands', asy
   // must not wait for it, but the leg still completes and the object lands
   const { createServer } = await import('node:http')
   const slow = createServer((req, res) => {
-    if (req.url === '/submit') { setTimeout(() => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}') }, 3000); return }
-    res.writeHead(404); res.end()
+    if (req.url === '/submit') {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('{}')
+      }, 3000)
+      return
+    }
+    res.writeHead(404)
+    res.end()
   })
-  await new Promise<void>(r => slow.listen(0, '127.0.0.1', r))
+  await new Promise<void>((r) => slow.listen(0, '127.0.0.1', r))
   const slowUrl = `http://127.0.0.1:${(slow.address() as { port: number }).port}`
   try {
     const k = PrivateKey.fromRandom()
@@ -47,18 +56,22 @@ test('hosts: early resolve returns at quorum while a straggler still lands', asy
     assert.ok(r.ok)
     assert.ok(ms < 2500, `early resolve waited ${ms}ms for the straggler`)
     // the straggler leg completes in the background — no dangling work
-    await new Promise(r2 => setTimeout(r2, 3300))
+    await new Promise((r2) => setTimeout(r2, 3300))
     // without early the same call is priced by the slow host
     const t1 = Date.now()
     const r2 = await submitAll([a.url, slowUrl], beef, lanesFor(NET, ['compute']), { retryWaits: [] })
     assert.ok(r2.ok)
     assert.ok(Date.now() - t1 >= 2900, 'non-early call waits for every host')
-  } finally { slow.close(); await a.close() }
+  } finally {
+    slow.close()
+    await a.close()
+  }
 })
 
 test('hosts: readWants verifies and reports a host that withholds', async () => {
   const tr = new FakeTracker()
-  const a = await minihost([NET], tr); const b = await minihost([NET], tr)
+  const a = await minihost([NET], tr)
+  const b = await minihost([NET], tr)
   const k = PrivateKey.fromRandom()
   const { beef } = await want(k)
   const sub = await submitAll([a.url], beef, lanesFor(NET, ['compute']))
@@ -67,7 +80,8 @@ test('hosts: readWants verifies and reports a host that withholds', async () => 
   assert.equal(r.items.length, 1)
   assert.deepEqual(r.perHost[a.url], [r.items[0]!.txid])
   assert.deepEqual(r.withheld, [{ host: b.url, txid: r.items[0]!.txid }])
-  await a.close(); await b.close()
+  await a.close()
+  await b.close()
 })
 
 test('hosts: garbage beef in an answer is dropped, not thrown', async () => {
@@ -75,7 +89,8 @@ test('hosts: garbage beef in an answer is dropped, not thrown', async () => {
   const a = await minihost([NET], tr)
   const r = await readWants([a.url], { net: NET, domain: 'compute' }, { tracker: tr, net: NET })
   assert.equal(r.items.length, 0)
-  const k = PrivateKey.fromRandom(); const { beef } = await want(k)
+  const k = PrivateKey.fromRandom()
+  const { beef } = await want(k)
   beef[10] = beef[10]! ^ 0xff
   const sub = await submitAll([a.url], beef, lanesFor(NET, ['compute']))
   const r2 = await readWants([a.url], { net: NET, domain: 'compute' }, { tracker: tr, net: NET })

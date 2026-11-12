@@ -9,7 +9,7 @@ const rev = (b: Bytes) => Uint8Array.from(b).reverse()
 const toInternal = (txid: string) => rev(new Uint8Array(Buffer.from(txid, 'hex')))
 const toDisplay = (internal: Bytes) => toHex(rev(internal))
 
-function nodeHash (l: Bytes, r: Bytes): Bytes {
+function nodeHash(l: Bytes, r: Bytes): Bytes {
   return dsha256(concat(l, r))
 }
 
@@ -34,7 +34,7 @@ export class MockChain implements ChainTracker, Broadcaster {
    * is run via the SDK Spend against its real parent output before accept. */
   verifyScripts = false
 
-  constructor (ancestorLimit = Infinity) {
+  constructor(ancestorLimit = Infinity) {
     this.ancestorLimit = ancestorLimit
   }
 
@@ -43,10 +43,14 @@ export class MockChain implements ChainTracker, Broadcaster {
    * from caller-attached objects. */
   private known = new Map<string, Transaction>()
   /** register a parent tx (e.g. a MockFunder faucet utxo) into the node view */
-  registerParent (tx: Transaction): void { this.known.set(tx.id('hex'), tx) }
-  getTx (txid: string): Transaction | undefined { return this.known.get(txid) }
+  registerParent(tx: Transaction): void {
+    this.known.set(tx.id('hex'), tx)
+  }
+  getTx(txid: string): Transaction | undefined {
+    return this.known.get(txid)
+  }
 
-  async broadcast (tx: Transaction): Promise<BroadcastResult> {
+  async broadcast(tx: Transaction): Promise<BroadcastResult> {
     const txid = tx.id('hex')
     // idempotent resubmit, like BSV Broadcaster's 202 for a known tx — the
     // same bytes can only produce the same txid, so this is never a double-spend
@@ -75,12 +79,15 @@ export class MockChain implements ChainTracker, Broadcaster {
             sourceOutputIndex: inp.sourceOutputIndex,
             lockingScript: src.lockingScript,
             transactionVersion: tx.version,
-            otherInputs: tx.inputs.filter((_, j) => j !== ix).map(i => ({
-              sourceTXID: i.sourceTXID ?? i.sourceTransaction?.id('hex') ?? '',
-              sourceOutputIndex: i.sourceOutputIndex ?? 0,
-              sequence: i.sequence ?? 0xffffffff
-            })),
-            inputIndex: ix, unlockingScript: inp.unlockingScript,
+            otherInputs: tx.inputs
+              .filter((_, j) => j !== ix)
+              .map((i) => ({
+                sourceTXID: i.sourceTXID ?? i.sourceTransaction?.id('hex') ?? '',
+                sourceOutputIndex: i.sourceOutputIndex ?? 0,
+                sequence: i.sequence ?? 0xffffffff
+              })),
+            inputIndex: ix,
+            unlockingScript: inp.unlockingScript,
             outputs: tx.outputs,
             inputSequence: inp.sequence ?? 0xffffffff,
             lockTime: tx.lockTime ?? 0
@@ -126,24 +133,34 @@ export class MockChain implements ChainTracker, Broadcaster {
     return { status: 'success', txid }
   }
 
-  onStatus (cb: (ev: TxStatusEvent) => void): void { this.statusCbs.push(cb) }
-  onReorg (cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void { this.reorgCbs.push(cb) }
+  onStatus(cb: (ev: TxStatusEvent) => void): void {
+    this.statusCbs.push(cb)
+  }
+  onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
+    this.reorgCbs.push(cb)
+  }
 
-  private emit (ev: TxStatusEvent): void { for (const cb of this.statusCbs) cb(ev) }
+  private emit(ev: TxStatusEvent): void {
+    for (const cb of this.statusCbs) cb(ev)
+  }
 
   /** mine up to `count` blocks, including all mempool txs in the first block */
   private bumps = new Map<string, MerklePath>()
   /** the BUMP of a mined tx by txid (like a node's merkle-proof API) */
-  merklePathOf (txid: string): MerklePath | undefined { return this.minedTxs.has(txid) ? this.bumps.get(txid) : undefined }
+  merklePathOf(txid: string): MerklePath | undefined {
+    return this.minedTxs.has(txid) ? this.bumps.get(txid) : undefined
+  }
 
   /** txids this node has definitively rejected (double-spend / policy) */
   private rejectedTxs = new Set<string>()
-  isRejected (txid: string): boolean { return this.rejectedTxs.has(txid) }
+  isRejected(txid: string): boolean {
+    return this.rejectedTxs.has(txid)
+  }
 
   /** mark a previously accepted tx as rejected — drops it from the mempool,
    * frees the outpoints it had reserved, and pushes a 'rejected' status event
    * (the same signal a real node sends on a double-spend attempt). */
-  reject (txid: string): boolean {
+  reject(txid: string): boolean {
     if (this.rejectedTxs.has(txid)) return false
     this.rejectedTxs.add(txid)
     this.mempool.delete(txid)
@@ -154,7 +171,7 @@ export class MockChain implements ChainTracker, Broadcaster {
     return true
   }
 
-  mine (count = 1): BlockHeader[] {
+  mine(count = 1): BlockHeader[] {
     const out: BlockHeader[] = []
     for (let b = 0; b < count; b++) {
       const realTxids = [...this.mempool.keys()]
@@ -191,7 +208,7 @@ export class MockChain implements ChainTracker, Broadcaster {
   }
 
   /** reorg the last `count` blocks: their txs go back to mempool (or are dropped) */
-  reorg (count: number): void {
+  reorg(count: number): void {
     const removed = this.headers.splice(this.headers.length - count, count)
     this.height -= count
     this.tipHash = this.headers.length ? this.headers[this.headers.length - 1]!.hash : '00'.repeat(32)
@@ -207,22 +224,28 @@ export class MockChain implements ChainTracker, Broadcaster {
       }
     }
     if (removed.length) {
-      const tip = this.headers[this.headers.length - 1] ?? { hash: this.tipHash } as BlockHeader
+      const tip = this.headers[this.headers.length - 1] ?? ({ hash: this.tipHash } as BlockHeader)
       for (const cb of this.reorgCbs) cb(removed, tip)
     }
   }
 
   // +100 so sdk merklePath.verify's coinbase-maturity rule (index-0 tx needs
   // blockHeight+100 <= currentHeight) doesn't reject mock-mined txs.
-  async currentHeight (): Promise<number> { return this.height + 100 }
-  async tipHeight (): Promise<number> { return this.height }
-  async isValidRootForHeight (root: string, height: number): Promise<boolean> {
+  async currentHeight(): Promise<number> {
+    return this.height + 100
+  }
+  async tipHeight(): Promise<number> {
+    return this.height
+  }
+  async isValidRootForHeight(root: string, height: number): Promise<boolean> {
     return this.headers[height - 1]?.merkleRoot === root
   }
-  async headerAtHeight (h: number): Promise<BlockHeader | undefined> { return this.headers[h - 1] }
+  async headerAtHeight(h: number): Promise<BlockHeader | undefined> {
+    return this.headers[h - 1]
+  }
 }
 
-function merkleRootDisplay (leavesInternal: Bytes[]): string {
+function merkleRootDisplay(leavesInternal: Bytes[]): string {
   if (leavesInternal.length === 0) return toHex(dsha256(Uint8Array.of(0)))
   let cur = leavesInternal
   while (cur.length > 1) {
@@ -242,14 +265,14 @@ function merkleRootDisplay (leavesInternal: Bytes[]): string {
  * All hashes are display-order hex (as the sdk expects: path[0] entries carry
  * hash=txid; sibling nodes carry their node hash in display order).
  */
-export function buildBump (txids: string[], index: number, height: number): MerklePath {
+export function buildBump(txids: string[], index: number, height: number): MerklePath {
   // internal-order node hashes per level
   let level: Bytes[] = txids.map(toInternal)
-  const path: Array<Array<{ offset: number, hash?: string, txid?: boolean, duplicate?: boolean }>> = []
+  const path: Array<Array<{ offset: number; hash?: string; txid?: boolean; duplicate?: boolean }>> = []
   const own = { offset: index, hash: txids[index]!, txid: true }
   let pos = index
   while (level.length > 1) {
-    const row: Array<{ offset: number, hash?: string, txid?: boolean, duplicate?: boolean }> = []
+    const row: Array<{ offset: number; hash?: string; txid?: boolean; duplicate?: boolean }> = []
     if (path.length === 0) row.push(own)
     const sib = pos % 2 === 0 ? pos + 1 : pos - 1
     if (sib < level.length) row.push({ offset: sib, hash: toDisplay(level[sib]!) })
@@ -273,12 +296,14 @@ export class MockFunder implements Funder {
   private key: PrivateKey
   private utxos: FundingOut[] = []
   private n = 0
-  constructor (key = PrivateKey.fromRandom()) {
+  constructor(key = PrivateKey.fromRandom()) {
     this.key = key
   }
-  address (): string { return this.key.toPublicKey().toAddress([0x6f]) }
+  address(): string {
+    return this.key.toPublicKey().toAddress([0x6f])
+  }
   /** top up with `count` utxos of `satoshis` each (synthetic parents) */
-  topup (count: number, satoshis = 10_000): void {
+  topup(count: number, satoshis = 10_000): void {
     for (let i = 0; i < count; i++) {
       const t = new Transaction()
       t.addInput({
@@ -291,23 +316,27 @@ export class MockFunder implements Funder {
       this.utxos.push({ tx: t, vout: 0, satoshis })
     }
   }
-  async take (satoshis: number): Promise<FundingOut> {
-    const u = this.utxos.find(u => u.satoshis >= satoshis)
+  async take(satoshis: number): Promise<FundingOut> {
+    const u = this.utxos.find((u) => u.satoshis >= satoshis)
     if (!u) throw new Error('MockFunder: no utxo (call topup)')
     this.utxos.splice(this.utxos.indexOf(u), 1)
     return u
   }
   /** mark an outpoint spent so take() never hands it out again */
-  markSpent (txid: string, vout: number): void {
-    const i = this.utxos.findIndex(u => u.tx.id('hex') === txid && u.vout === vout)
+  markSpent(txid: string, vout: number): void {
+    const i = this.utxos.findIndex((u) => u.tx.id('hex') === txid && u.vout === vout)
     if (i >= 0) this.utxos.splice(i, 1)
   }
   /** return a broadcast tx's output to the pool (change/escrow outs) */
-  addOwned (tx: Transaction, vout: number): void {
+  addOwned(tx: Transaction, vout: number): void {
     const o = tx.outputs[vout]
     if (o !== undefined) this.utxos.push({ tx, vout, satoshis: o.satoshis ?? 0 })
   }
-  get keyPair (): PrivateKey { return this.key }
+  get keyPair(): PrivateKey {
+    return this.key
+  }
   /** the synthetic funding parents (register them with MockChain.registerParent) */
-  get parents (): Transaction[] { return this.utxos.map(u => u.tx) }
+  get parents(): Transaction[] {
+    return this.utxos.map((u) => u.tx)
+  }
 }

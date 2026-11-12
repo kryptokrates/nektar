@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 
 const ARG = (k: string) => process.argv.includes('--' + k)
 const ARGV = (k: string): string | undefined => {
-  const hit = process.argv.find(a => a.startsWith(`--${k}=`))
+  const hit = process.argv.find((a) => a.startsWith(`--${k}=`))
   return hit?.slice(k.length + 3)
 }
 // NEKTAR_ENV_FILE overrides the target — lets a scratch env be used for
@@ -41,7 +41,7 @@ if (network !== undefined && network !== 'regtest') {
   process.exit(2)
 }
 
-function readEnv (p: string): Record<string, string> {
+function readEnv(p: string): Record<string, string> {
   const out: Record<string, string> = {}
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
@@ -50,13 +50,18 @@ function readEnv (p: string): Record<string, string> {
   }
   return out
 }
-function upsertEnv (p: string, key: string, value: string): void {
+function upsertEnv(p: string, key: string, value: string): void {
   const lines = existsSync(p) ? readFileSync(p, 'utf8').split(/\r?\n/) : []
   const re = new RegExp(`^${key}=`)
-  const idx = lines.findIndex(l => re.test(l.trim()))
-  if (idx >= 0) lines[idx] = `${key}=${value}`; else lines.push(`${key}=${value}`)
+  const idx = lines.findIndex((l) => re.test(l.trim()))
+  if (idx >= 0) lines[idx] = `${key}=${value}`
+  else lines.push(`${key}=${value}`)
   writeFileSync(p, lines.filter((l, i) => l !== '' || i < lines.length - 1).join('\n'))
-  try { chmodSync(p, 0o600) } catch { /* windows */ }
+  try {
+    chmodSync(p, 0o600)
+  } catch {
+    /* windows */
+  }
 }
 
 const env = readEnv(ENV_PATH)
@@ -97,12 +102,22 @@ if (network === 'regtest') {
   }
   // make the operator .env self-sufficient for the MCP server: map the
   // quickstart creds into NEKTAR_RPC_* if they aren't set already.
-  if (qs.rpc_user && env.NEKTAR_RPC_USER === undefined) { upsertEnv(ENV_PATH, 'NEKTAR_RPC_USER', qs.rpc_user); env.NEKTAR_RPC_USER = qs.rpc_user }
-  if (qs.rpc_pass && env.NEKTAR_RPC_PASS === undefined) { upsertEnv(ENV_PATH, 'NEKTAR_RPC_PASS', qs.rpc_pass); env.NEKTAR_RPC_PASS = qs.rpc_pass }
+  if (qs.rpc_user && env.NEKTAR_RPC_USER === undefined) {
+    upsertEnv(ENV_PATH, 'NEKTAR_RPC_USER', qs.rpc_user)
+    env.NEKTAR_RPC_USER = qs.rpc_user
+  }
+  if (qs.rpc_pass && env.NEKTAR_RPC_PASS === undefined) {
+    upsertEnv(ENV_PATH, 'NEKTAR_RPC_PASS', qs.rpc_pass)
+    env.NEKTAR_RPC_PASS = qs.rpc_pass
+  }
   const { ReserveFunder, bootstrapReserve } = await import('@nektar/chain')
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
   const rpc = async (method: string, ...params: unknown[]): Promise<any> => {
-    const r = await fetch(cfg.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }) })
+    const r = await fetch(cfg.rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: auth },
+      body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
+    })
     const j = await r.json()
     if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
     return j.result
@@ -119,12 +134,15 @@ if (network === 'regtest') {
     const fundTxid = ARGV('fund-txid')
     if (fundTxid) {
       const { Transaction } = await import('@bsv/sdk')
-      const hex = await rpc('getrawtransaction', fundTxid) as string
+      const hex = (await rpc('getrawtransaction', fundTxid)) as string
       const tx = Transaction.fromHex(hex)
       const want = `76a914${Buffer.from(key.toPublicKey().toHash()).toString('hex')}88ac`
       let imported = 0
       for (const [vout, o] of tx.outputs.entries()) {
-        if (o.lockingScript.toHex() === want && !reserve.isSpent(fundTxid, vout)) { reserve.addOwned(tx, vout); imported++ }
+        if (o.lockingScript.toHex() === want && !reserve.isSpent(fundTxid, vout)) {
+          reserve.addOwned(tx, vout)
+          imported++
+        }
       }
       console.log(`  funding : imported ${imported} output(s) paying our key from ${fundTxid.slice(0, 16)}…`)
     }
@@ -135,14 +153,20 @@ if (network === 'regtest') {
       // resplit the persisted treasury only — maxCandidates:0 skips the
       // full-chain scan that is useless for a key that never mined.
       const tx = await bootstrapReserve(cfg, key, reserve, rpc, { treasuryFile, outputs: 16, maxCandidates: 0 })
-      console.log(tx ? `  reserve : funded — split tx ${tx.id('hex').slice(0, 16)}… (+${reserve.utxos.length} outputs)` : '  reserve : treasury present but already spent — fund manually')
+      console.log(
+        tx
+          ? `  reserve : funded — split tx ${tx.id('hex').slice(0, 16)}… (+${reserve.utxos.length} outputs)`
+          : '  reserve : treasury present but already spent — fund manually'
+      )
     } else {
       console.log('  reserve : unfunded — two ways to fund (no scanning):')
       console.log('    a) send a tx to our address from any funded wallet, then:')
       console.log(`         node dist/src/init.js --network=regtest --fund-txid=<txid>`)
       console.log(`       address: ${key.toPublicKey().toAddress([0x6f])}`)
       console.log('    b) mine blocks containing fee-paying txs to our key, then rerun --regtest:')
-      console.log(`            curl -u <rpc_user>:<rpc_pass> -d '{"method":"generatetoaddress","params":[101,"${key.toPublicKey().toAddress([0x6f])}"]}' ${cfg.rpcUrl}`)
+      console.log(
+        `            curl -u <rpc_user>:<rpc_pass> -d '{"method":"generatetoaddress","params":[101,"${key.toPublicKey().toAddress([0x6f])}"]}' ${cfg.rpcUrl}`
+      )
     }
   } catch (e) {
     console.log(`  regtest : unreachable (${(e as Error).message.slice(0, 120)}) — start the stack with pnpm stack:up, then rerun --regtest`)

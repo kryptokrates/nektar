@@ -11,11 +11,14 @@ process.env.NEKTAR_TOOL_PROFILE = 'operator'
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 
 test('MCP Streamable HTTP: session, tools, call, resource; unknown session rejected', { timeout: 30_000 }, async () => {
-  const chain = new MockChain(); chain.verifyScripts = true
-  const funder = new MockFunder(); funder.topup(10); for (const t of funder.parents) chain.registerParent(t)
+  const chain = new MockChain()
+  chain.verifyScripts = true
+  const funder = new MockFunder()
+  funder.topup(10)
+  for (const t of funder.parents) chain.registerParent(t)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
   const srv = createHttpApi(mem).listen(0, '127.0.0.1')
-  await new Promise(r => srv.once('listening', r))
+  await new Promise((r) => srv.once('listening', r))
   const url = new URL(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/mcp`)
   const client = new Client({ name: 'http-test', version: '1.0.0' })
   try {
@@ -25,7 +28,14 @@ test('MCP Streamable HTTP: session, tools, call, resource; unknown session rejec
     await client.callTool({ name: 'remember', arguments: { shard: 'h', data: 'b' } })
     const rr = await client.readResource({ uri: 'nektar://record/h/0' })
     assert.equal(JSON.parse((rr.contents[0] as { text: string }).text).state, 'anchored')
-    const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-session-id': 'forged' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) })
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-session-id': 'forged' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    })
     assert.equal(res.status, 404, 'forged session id refused')
-  } finally { await client.close(); srv.close() }
+  } finally {
+    await client.close()
+    srv.close()
+  }
 })

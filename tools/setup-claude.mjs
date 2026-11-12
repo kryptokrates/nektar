@@ -28,17 +28,22 @@ const claudeMdPath = join(dir, 'CLAUDE.md')
 // — settings.json: read or create, then merge hook entries without dupes ———
 const settings = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {}
 settings.hooks ??= {}
-for (const [hook, command] of [['Stop', STOP_CMD], ['SessionStart', SESSION_CMD]]) {
-  const list = settings.hooks[hook] ??= []
-  const already = list.some(g => g?.hooks?.some(h => h?.command === command || h?.command?.includes(hook === 'Stop' ? 'verify-receipt.mjs' : 'session-start.mjs')))
+for (const [hook, command] of [
+  ['Stop', STOP_CMD],
+  ['SessionStart', SESSION_CMD]
+]) {
+  const list = (settings.hooks[hook] ??= [])
+  const already = list.some((g) =>
+    g?.hooks?.some((h) => h?.command === command || h?.command?.includes(hook === 'Stop' ? 'verify-receipt.mjs' : 'session-start.mjs'))
+  )
   if (!already) list.push({ hooks: [{ type: 'command', command }] })
 }
 const claudeMd = existsSync(claudeMdPath) ? readFileSync(claudeMdPath, 'utf8') : ''
-const claudeMdOut = claudeMd.includes(SNIPPET_MARKER) ? claudeMd
-  : (claudeMd.trimEnd() ? claudeMd.trimEnd() + '\n\n' + CLAUDE_SNIPPET : CLAUDE_SNIPPET)
+const claudeMdOut = claudeMd.includes(SNIPPET_MARKER) ? claudeMd : claudeMd.trimEnd() ? claudeMd.trimEnd() + '\n\n' + CLAUDE_SNIPPET : CLAUDE_SNIPPET
 
 if (dry) {
-  console.log(`[dry] ${settingsPath}:`); console.log(JSON.stringify(settings, null, 2))
+  console.log(`[dry] ${settingsPath}:`)
+  console.log(JSON.stringify(settings, null, 2))
   console.log(`[dry] ${claudeMdPath}: ${claudeMdOut === claudeMd ? 'unchanged (snippet already present)' : 'snippet appended'}`)
   process.exit(0)
 }

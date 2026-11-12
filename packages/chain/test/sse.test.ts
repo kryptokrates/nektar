@@ -6,18 +6,21 @@ import assert from 'node:assert/strict'
 import { statusStream } from '../src/mainnet.js'
 
 const stream = (chunks: string[], open = false): Response =>
-  new Response(new ReadableStream({
-    start (ctl) {
-      const enc = new TextEncoder()
-      for (const c of chunks) ctl.enqueue(enc.encode(c))
-      if (!open) ctl.close()
-    }
-  }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
+  new Response(
+    new ReadableStream({
+      start(ctl) {
+        const enc = new TextEncoder()
+        for (const c of chunks) ctl.enqueue(enc.encode(c))
+        if (!open) ctl.close()
+      }
+    }),
+    { status: 200, headers: { 'content-type': 'text/event-stream' } }
+  )
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 test('statusStream: events in order, malformed skipped, reconnect sends Last-Event-ID', async () => {
-  const seen: Array<{ id?: string, event?: string, data?: string }> = []
+  const seen: Array<{ id?: string; event?: string; data?: string }> = []
   const lastEventIds: Array<string | undefined> = []
   const persisted: string[] = []
   let call = 0
@@ -37,8 +40,18 @@ test('statusStream: events in order, malformed skipped, reconnect sends Last-Eve
 
   const s = statusStream(
     { broadcasterUrl: 'https://b.test', callbackToken: 'tok', fetchImpl },
-    e => { seen.push(e) },
-    { minBackoffMs: 10, cursor: { get: () => undefined, set: id => { persisted.push(id) } } }
+    (e) => {
+      seen.push(e)
+    },
+    {
+      minBackoffMs: 10,
+      cursor: {
+        get: () => undefined,
+        set: (id) => {
+          persisted.push(id)
+        }
+      }
+    }
   )
   for (let i = 0; i < 100 && (seen.length < 4 || call < 2); i++) await sleep(10)
   s.close()
@@ -46,7 +59,10 @@ test('statusStream: events in order, malformed skipped, reconnect sends Last-Eve
   // ids 7,8,9 on the first connection, 10 on the second — in order; the
   // malformed data line was delivered but did not kill the stream (the
   // consumer JSON-parses and skips it — see runtime wiring)
-  assert.deepEqual(seen.map(e => e.id), ['7', '8', '9', '10'])
+  assert.deepEqual(
+    seen.map((e) => e.id),
+    ['7', '8', '9', '10']
+  )
   assert.equal(seen[2]?.event, 'status')
   assert.equal(lastEventIds[0], undefined, 'first connect has no Last-Event-ID')
   assert.equal(lastEventIds[1], '9', 'reconnect resumes at the last delivered id')

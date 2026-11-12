@@ -7,5 +7,13 @@ import { RemoteMockChain } from './remote-mock-chain.mjs'
 const env = process.env
 const host = await minihost(['mock'], { tracker: new RemoteMockChain(env.NEKTAR_CHAIN_HUB), office: DEFAULT_OFFICE, port: Number(env.NEKTAR_HOST_PORT) })
 console.log(`market host on ${host.url} (office ${DEFAULT_OFFICE})`)
-const stop = async () => { await host.close().catch(() => {}); process.exit(0) }
-process.on('SIGTERM', () => { void stop() }); process.on('SIGINT', () => { void stop() })
+const stop = async () => {
+  await host.close().catch(() => {})
+  process.exit(0)
+}
+process.on('SIGTERM', () => {
+  void stop()
+})
+process.on('SIGINT', () => {
+  void stop()
+})

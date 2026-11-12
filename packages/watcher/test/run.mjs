@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
-const readEnv = p => {
+const readEnv = (p) => {
   const out = {}
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
@@ -27,6 +27,7 @@ if (!process.env.NEKTAR_REGTEST_WIF && !local.NEKTAR_REGTEST_WIF) {
   process.exit(0)
 }
 const r = spawnSync(process.execPath, ['src/watcher.mjs', '--once', '--claims', '.state/watcher-claims.json'], {
-  cwd: join(here, '..'), stdio: 'inherit'
+  cwd: join(here, '..'),
+  stdio: 'inherit'
 })
 process.exit(r.status ?? 1)

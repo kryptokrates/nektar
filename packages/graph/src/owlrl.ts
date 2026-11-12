@@ -38,41 +38,51 @@ export class OwlError extends Error {}
 
 /** typed OWL 2 RL axiom list — itself a tiny JSON shape (no RDF parsing) */
 export type OwlAxiom =
-  | { kind: 'subClassOf', sub: string, sup: string }          // cax-sco
-  | { kind: 'subPropertyOf', sub: string, sup: string }       // prp-spo1
-  | { kind: 'domain', prop: string, cls: string }             // prp-dom
-  | { kind: 'range', prop: string, cls: string }              // prp-rng
-  | { kind: 'inverseOf', p: string, q: string }               // prp-inv1/inv2
-  | { kind: 'symmetric', prop: string }                       // prp-symp
-  | { kind: 'transitive', prop: string }                      // prp-trp
-  | { kind: 'propertyChain', chain: string[], sup: string }   // prp-spo2, chain ≥ 2
-  | { kind: 'sameAs', a: string, b: string }                  // eq-*
-  | { kind: 'differentIndividuals', a: string, b: string }    // differentFrom
-  | { kind: 'allDifferent', members: string[] }               // prp-adp
-  | { kind: 'equivalentClass', a: string, b: string }         // cax-eqc1/eqc2
-  | { kind: 'equivalentProperty', a: string, b: string }      // prp-eqp1/eqp2
-  | { kind: 'disjointWith', a: string, b: string }            // cax-dw → conflict
-  | { kind: 'classAssertion', cls: string, ind: string }      // ABox EDB
-  | { kind: 'propertyAssertion', prop: string, from: string, to: string } // ABox EDB
-  | { kind: 'negativeObjectAssertion', prop: string, from: string, to: string } // → conflict
+  | { kind: 'subClassOf'; sub: string; sup: string } // cax-sco
+  | { kind: 'subPropertyOf'; sub: string; sup: string } // prp-spo1
+  | { kind: 'domain'; prop: string; cls: string } // prp-dom
+  | { kind: 'range'; prop: string; cls: string } // prp-rng
+  | { kind: 'inverseOf'; p: string; q: string } // prp-inv1/inv2
+  | { kind: 'symmetric'; prop: string } // prp-symp
+  | { kind: 'transitive'; prop: string } // prp-trp
+  | { kind: 'propertyChain'; chain: string[]; sup: string } // prp-spo2, chain ≥ 2
+  | { kind: 'sameAs'; a: string; b: string } // eq-*
+  | { kind: 'differentIndividuals'; a: string; b: string } // differentFrom
+  | { kind: 'allDifferent'; members: string[] } // prp-adp
+  | { kind: 'equivalentClass'; a: string; b: string } // cax-eqc1/eqc2
+  | { kind: 'equivalentProperty'; a: string; b: string } // prp-eqp1/eqp2
+  | { kind: 'disjointWith'; a: string; b: string } // cax-dw → conflict
+  | { kind: 'classAssertion'; cls: string; ind: string } // ABox EDB
+  | { kind: 'propertyAssertion'; prop: string; from: string; to: string } // ABox EDB
+  | { kind: 'negativeObjectAssertion'; prop: string; from: string; to: string } // → conflict
 
 // IRIs/names → Datalog constants: same normalisation as ontology.ts lc()
-const lc = (s: string) => s.toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/^_/, 'x_')
+const lc = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '_')
+    .replace(/^_/, 'x_')
 
 /** canonical axiom serialisation — fixed key order per kind, so the hash is
  *  independent of how the caller built the object */
-export function owlAxiomCanonical (a: OwlAxiom): string {
+export function owlAxiomCanonical(a: OwlAxiom): string {
   switch (a.kind) {
-    case 'subClassOf': case 'subPropertyOf':
+    case 'subClassOf':
+    case 'subPropertyOf':
       return `owlaxiom:${JSON.stringify({ kind: a.kind, sub: a.sub, sup: a.sup })}`
-    case 'domain': case 'range':
+    case 'domain':
+    case 'range':
       return `owlaxiom:${JSON.stringify({ kind: a.kind, prop: a.prop, cls: a.cls })}`
     case 'inverseOf':
       return `owlaxiom:${JSON.stringify({ kind: a.kind, p: a.p, q: a.q })}`
-    case 'sameAs': case 'differentIndividuals':
-    case 'equivalentClass': case 'equivalentProperty': case 'disjointWith':
+    case 'sameAs':
+    case 'differentIndividuals':
+    case 'equivalentClass':
+    case 'equivalentProperty':
+    case 'disjointWith':
       return `owlaxiom:${JSON.stringify({ kind: a.kind, a: a.a, b: a.b })}`
-    case 'symmetric': case 'transitive':
+    case 'symmetric':
+    case 'transitive':
       return `owlaxiom:${JSON.stringify({ kind: a.kind, prop: a.prop })}`
     case 'propertyChain':
       return `owlaxiom:${JSON.stringify({ kind: a.kind, chain: a.chain, sup: a.sup })}`
@@ -80,7 +90,8 @@ export function owlAxiomCanonical (a: OwlAxiom): string {
       return `owlaxiom:${JSON.stringify({ kind: a.kind, members: a.members })}`
     case 'classAssertion':
       return `owlaxiom:${JSON.stringify({ kind: a.kind, cls: a.cls, ind: a.ind })}`
-    case 'propertyAssertion': case 'negativeObjectAssertion':
+    case 'propertyAssertion':
+    case 'negativeObjectAssertion':
       return `owlaxiom:${JSON.stringify({ kind: a.kind, prop: a.prop, from: a.from, to: a.to })}`
   }
 }
@@ -123,7 +134,7 @@ conflict() :- inst(X, C), inst(X, D), disjoint(C, D).`).rules
 /** compile one axiom (index i in the committed set) to facts + rules.
  *  Rule-shaped axioms emit per-axiom rules `owlrl:<kind>#<i>` (and `#<i>:<n>`
  *  for multi-rule axioms) — τ commits the exact axiom to §14 derivations. */
-function compileAxiom (a: OwlAxiom, i: number, facts: Fact[], rules: Rule[]): void {
+function compileAxiom(a: OwlAxiom, i: number, facts: Fact[], rules: Rule[]): void {
   const id = (n?: number) => `owlrl:${a.kind}#${i}${n === undefined ? '' : `:${n}`}`
   switch (a.kind) {
     case 'subClassOf': // C ⊑ D: inst(x,C) → inst(x,D); subclass fact feeds chain materialisation
@@ -150,11 +161,17 @@ function compileAxiom (a: OwlAxiom, i: number, facts: Fact[], rules: Rule[]): vo
     case 'transitive': // t(x,P,y), t(y,P,z) → t(x,P,z)
       rules.push(rule(id(), lit('t', 'X', lc(a.prop), 'Z'), [lit('t', 'X', lc(a.prop), 'Y'), lit('t', 'Y', lc(a.prop), 'Z')]))
       break
-    case 'propertyChain': { // t(x,P1,·),…,t(·,Pk,z) → t(x,Q,z), general k ≥ 2
+    case 'propertyChain': {
+      // t(x,P1,·),…,t(·,Pk,z) → t(x,Q,z), general k ≥ 2
       if (a.chain.length < 2) throw new OwlError('propertyChain needs ≥ 2 properties (subPropertyOf covers k = 1)')
       const k = a.chain.length
-      rules.push(rule(id(), lit('t', 'X0', lc(a.sup), `X${k}`),
-        a.chain.map((p, j) => lit('t', `X${j}`, lc(p), `X${j + 1}`))))
+      rules.push(
+        rule(
+          id(),
+          lit('t', 'X0', lc(a.sup), `X${k}`),
+          a.chain.map((p, j) => lit('t', `X${j}`, lc(p), `X${j + 1}`))
+        )
+      )
       break
     }
     case 'sameAs': // individual equality — EDB; the eq-* library rewrites terms
@@ -193,15 +210,16 @@ function compileAxiom (a: OwlAxiom, i: number, facts: Fact[], rules: Rule[]): vo
   }
 }
 
-function compilePairs (pairs: { a: OwlAxiom, i: number }[]): { facts: Fact[], rules: Rule[] } {
-  const facts: Fact[] = []; const rules: Rule[] = [...OWLRL_LIB]
+function compilePairs(pairs: { a: OwlAxiom; i: number }[]): { facts: Fact[]; rules: Rule[] } {
+  const facts: Fact[] = []
+  const rules: Rule[] = [...OWLRL_LIB]
   for (const { a, i } of pairs) compileAxiom(a, i, facts, rules)
   return { facts, rules }
 }
 
 /** OWL 2 RL axioms → Datalog facts + rules. `i` in `owlrl:<kind>#<i>` is the
  *  axiom's position in this list, so a committed set's rule ids are stable. */
-export function compileOwl (axioms: OwlAxiom[]): { facts: Fact[], rules: Rule[] } {
+export function compileOwl(axioms: OwlAxiom[]): { facts: Fact[]; rules: Rule[] } {
   return compilePairs(axioms.map((a, i) => ({ a, i })))
 }
 
@@ -227,14 +245,21 @@ export interface OwlEntailResult {
  * triples/predicates), axiom assertions are committed EDB. Query predicates:
  * inst(x, C), t(x, P, y), subclass(C, D), subprop(P, Q), same/diff, conflict().
  */
-export function entail (axioms: OwlAxiom[], facts: Fact[], query: { pred: string, args: string[] }, anchored: (h: string) => boolean = () => true): OwlEntailResult {
-  const ok: { a: OwlAxiom, i: number }[] = []; const rejected: string[] = []
+export function entail(
+  axioms: OwlAxiom[],
+  facts: Fact[],
+  query: { pred: string; args: string[] },
+  anchored: (h: string) => boolean = () => true
+): OwlEntailResult {
+  const ok: { a: OwlAxiom; i: number }[] = []
+  const rejected: string[] = []
   axioms.forEach((a, i) => {
     const h = owlAxiomHash(a)
-    if (anchored(h)) ok.push({ a, i }); else rejected.push(h)
+    if (anchored(h)) ok.push({ a, i })
+    else rejected.push(h)
   })
   const { facts: ef, rules } = compilePairs(ok)
-  const edb = [...ef, ...facts.map(f => ({ pred: lc(f.pred), args: f.args.map(lc) }))]
+  const edb = [...ef, ...facts.map((f) => ({ pred: lc(f.pred), args: f.args.map(lc) }))]
   const derived = new Datalog(rules).run(edb)
   const hit = derived.get(`${lc(query.pred)}(${query.args.map(lc).join(',')})`)
   const conflict = derived.has('conflict()')
@@ -261,7 +286,7 @@ export class CommittedOntology {
   readonly facts: Fact[] // compiled EDB (assertions + schema facts), committed
   readonly dag: PolicyDAG // rule nodes + committed fact/axiom nodes, layer 'owlrl'
   readonly axiomHashes: string[] // parallel to `axioms` — the anchor tokens
-  constructor (axioms: OwlAxiom[]) {
+  constructor(axioms: OwlAxiom[]) {
     this.axioms = [...axioms]
     const c = compileOwl(this.axioms)
     this.facts = c.facts
@@ -270,15 +295,21 @@ export class CommittedOntology {
     for (const f of this.facts) this.commitNode('fact', factCanonical(f))
     for (const [i, a] of this.axioms.entries()) this.commitNode('axiom', owlAxiomCanonical(a), this.axiomHashes[i]!)
   }
-  get rules (): Rule[] { return this.dag.rules }
+  get rules(): Rule[] {
+    return this.dag.rules
+  }
   /** the ontology root — anchors like the policy DAG root (POL-004) */
-  get root (): string { return toHex(this.dag.policyRoot()) }
-  private commitNode (kind: NodeKind, canonical: string, h = toHex(dsha256(utf8(canonical)))): string {
+  get root(): string {
+    return toHex(this.dag.policyRoot())
+  }
+  private commitNode(kind: NodeKind, canonical: string, h = toHex(dsha256(utf8(canonical)))): string {
     if (!this.dag.nodes.has(h)) this.dag.nodes.set(h, { kind, h, canonical, layer: 'owlrl' })
     return h
   }
-  entail (facts: Fact[] = [], query: { pred: string, args: string[] }, anchored: (h: string) => boolean = () => true): OwlEntailResult {
+  entail(facts: Fact[] = [], query: { pred: string; args: string[] }, anchored: (h: string) => boolean = () => true): OwlEntailResult {
     return entail(this.axioms, facts, query, anchored)
   }
 }
-export function commitOntology (axioms: OwlAxiom[]): CommittedOntology { return new CommittedOntology(axioms) }
+export function commitOntology(axioms: OwlAxiom[]): CommittedOntology {
+  return new CommittedOntology(axioms)
+}

@@ -16,8 +16,10 @@ const dir = mkdtempSync(join(tmpdir(), 'nektar-demo-'))
 
 const post = async (tool, args) => {
   const r = await fetch(`${base}/v1/tools/${tool}`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(args), signal: AbortSignal.timeout(20_000)
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(args),
+    signal: AbortSignal.timeout(20_000)
   })
   const j = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(`${tool}: ${j.error ?? r.status}`)
@@ -32,23 +34,27 @@ const child = spawn(process.execPath, [join(root, 'packages/mcp/dist/src/bin.js'
 child.stdout.resume() // keep the child's logs out of the demo output
 try {
   for (let i = 0; i < 80; i++) {
-    try { if ((await fetch(`${base}/v1/health`, { signal: AbortSignal.timeout(500) })).ok) break } catch {}
-    await new Promise(r => setTimeout(r, 250))
+    try {
+      if ((await fetch(`${base}/v1/health`, { signal: AbortSignal.timeout(500) })).ok) break
+    } catch {}
+    await new Promise((r) => setTimeout(r, 250))
     if (i === 79) throw new Error('instance did not come up — is the build current? (pnpm -r build)')
   }
   await post('remember', { shard: 'guide', data: 'nektar anchors encrypted, provenance-signed agent memory on BSV' })
   await post('remember', { shard: 'guide', data: 'every grounded answer commits a receipt anyone can verify' })
   await post('anchor', { shard: 'guide' })
-  await new Promise(r => setTimeout(r, 1500)) // mock BUMP attach tick is 1s
+  await new Promise((r) => setTimeout(r, 1500)) // mock BUMP attach tick is 1s
 
-  const r = await post('groundedAnswer', { claims: [
-    { text: 'nektar anchors encrypted, provenance-signed agent memory on BSV', cites: [{ shard: 'guide', seq: 0 }] },
-    { text: 'and it reads minds', cites: [] } // ungrounded — watch it get stripped
-  ] })
+  const r = await post('groundedAnswer', {
+    claims: [
+      { text: 'nektar anchors encrypted, provenance-signed agent memory on BSV', cites: [{ shard: 'guide', seq: 0 }] },
+      { text: 'and it reads minds', cites: [] } // ungrounded — watch it get stripped
+    ]
+  })
 
   console.log('  groundedAnswer →')
   console.log('    committed answer :', JSON.stringify(r.answer))
-  console.log('    stripped (ungrounded):', (r.flagged ?? []).map(f => f.text ?? f.reason).join(' | ') || 'none')
+  console.log('    stripped (ungrounded):', (r.flagged ?? []).map((f) => f.text ?? f.reason).join(' | ') || 'none')
   console.log()
   console.log('  share the receipt anywhere:')
   console.log('   ', r.share?.markdown ?? '(share block missing)')

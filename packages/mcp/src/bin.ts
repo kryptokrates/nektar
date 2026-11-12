@@ -20,7 +20,10 @@ if (existsSync('.env')) {
   }
 }
 if (envFlag) {
-  if (!/^(mock|regtest|ttn|main)$/.test(envFlag)) { process.stderr.write(`nektar: --env must be mock|regtest|ttn|main, got "${envFlag}"\n`); process.exit(2) }
+  if (!/^(mock|regtest|ttn|main)$/.test(envFlag)) {
+    process.stderr.write(`nektar: --env must be mock|regtest|ttn|main, got "${envFlag}"\n`)
+    process.exit(2)
+  }
   process.env.NEKTAR_NETWORK = envFlag
 }
 const portFlag = argv.includes('--port') ? argv[argv.indexOf('--port') + 1] : undefined
@@ -35,9 +38,13 @@ if (paymentsEnabled()) process.stderr.write(`nektar: payments on — settling to
 if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
   const { openAutomation } = await import('./automation/runtime.js')
   const { callTool } = await import('./server.js')
-  const mh = (process.env.NEKTAR_MARKET_HOSTS ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  const mh = (process.env.NEKTAR_MARKET_HOSTS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
   rt.mem.automation = await openAutomation(rt.mem, {
-    network: rt.network, dataDir: rt.network === 'mock' && !process.env.NEKTAR_DATA_DIR ? undefined : (process.env.NEKTAR_DATA_DIR ?? '.nektar'),
+    network: rt.network,
+    dataDir: rt.network === 'mock' && !process.env.NEKTAR_DATA_DIR ? undefined : (process.env.NEKTAR_DATA_DIR ?? '.nektar'),
     marketHosts: mh,
     localHosts: process.env.NEKTAR_MARKET_LOCAL_HOSTS === '1',
     boxOffice: process.env.NEKTAR_BBOX_OFFICE ?? undefined,
@@ -51,24 +58,44 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
       ...(rt.network === 'main' ? { saleMaxFee: 500 } : {}),
       ...(process.env.NEKTAR_OFFER_TTL_BLOCKS ? { offerTtlBlocks: Number(process.env.NEKTAR_OFFER_TTL_BLOCKS) } : {})
     },
-    log: line => process.stderr.write(`nektar: ${line}
+    log: (line) =>
+      process.stderr.write(`nektar: ${line}
 `)
   })
   process.stderr.write(`nektar: automation on — ${mh.length} market host(s); policies and approvals via 'pnpm automation'
 `)
-  if (mh.length === 0) process.stderr.write(`nektar: automation: NEKTAR_MARKET_HOSTS is empty — wants and offers cannot be published
+  if (mh.length === 0)
+    process.stderr.write(`nektar: automation: NEKTAR_MARKET_HOSTS is empty — wants and offers cannot be published
 `)
 }
 const port = process.env.NEKTAR_HTTP_PORT
 if (port) {
-  createHttpApi(rt.mem, rt.ops).listen(Number(port), process.env.NEKTAR_HTTP_HOST ?? '127.0.0.1', () => process.stderr.write(`nektar: HTTP + MCP on :${port} (/v1, /mcp)\n`))
+  createHttpApi(rt.mem, rt.ops).listen(Number(port), process.env.NEKTAR_HTTP_HOST ?? '127.0.0.1', () =>
+    process.stderr.write(`nektar: HTTP + MCP on :${port} (/v1, /mcp)\n`)
+  )
 }
 let stopping = false
-const stop = async () => { if (stopping) return; stopping = true; await rt.mem.automation?.stop().catch(() => {}); await rt.close().catch(() => {}); process.exit(0) }
-process.on('SIGINT', () => { void stop() }); process.on('SIGTERM', () => { void stop() })
+const stop = async () => {
+  if (stopping) return
+  stopping = true
+  await rt.mem.automation?.stop().catch(() => {})
+  await rt.close().catch(() => {})
+  process.exit(0)
+}
+process.on('SIGINT', () => {
+  void stop()
+})
+process.on('SIGTERM', () => {
+  void stop()
+})
 if (!port) {
   await serveStdio(rt.mem, rt.ops)
   // the MCP client went away → exit (otherwise `docker run -i` containers leak
   // and several instances end up sharing one data volume)
-  process.stdin.on('end', () => { void stop() }); process.stdin.on('close', () => { void stop() })
+  process.stdin.on('end', () => {
+    void stop()
+  })
+  process.stdin.on('close', () => {
+    void stop()
+  })
 }

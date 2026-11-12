@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error"
+  },
+  "env": {
+    "builtin": true,
+    "node": true
+  },
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/artifacts/**",
+    "**/.mod/**",
+    "**/.state/**",
+    "**/.nektar*/**",
+    "vendor/**",
+    "dist-bundle/**",
+    "packages/contracts/Nektar*.json",
+    "packages/zk/stark/**",
+    "infra/teranode-quickstart/**",
+    "spikes/**",
+    "**/*.runar.ts"
+  ],
+  "rules": {
+    "no-unused-vars": [
+      "warn",
+      {
+        "varsIgnorePattern": "^_",
+        "argsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_"
+      }
+    ],
+    "unicorn/no-useless-spread": "warn",
+    "unicorn/prefer-string-starts-ends-with": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.mts", "**/test/**", "**/demo/**", "tools/**", "spikes/**"],
+      "rules": {
+        "no-unused-expressions": "off"
+      }
+    }
+  ]
+}

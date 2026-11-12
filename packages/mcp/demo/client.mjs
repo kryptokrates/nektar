@@ -6,11 +6,13 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const bin = fileURLToPath(new URL('../dist/src/bin.js', import.meta.url))
 const client = new Client({ name: 'nektar-demo', version: '1.0.0' })
-await client.connect(new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env, NEKTAR_MODEL_ID: 'scripted-demo' }, stderr: 'inherit' }))
+await client.connect(
+  new StdioClientTransport({ command: process.execPath, args: [bin], env: { ...process.env, NEKTAR_MODEL_ID: 'scripted-demo' }, stderr: 'inherit' })
+)
 const call = async (name, args) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text)
 
 const { tools } = await client.listTools()
-console.log(`tools: ${tools.map(t => t.name).join(', ')}`)
+console.log(`tools: ${tools.map((t) => t.name).join(', ')}`)
 await call('remember', { shard: 'manual', data: 'drain port 4 torque 45Nm', source: 'manual-rev1' })
 await call('remember', { shard: 'manual', data: 'pump P2 inspected 2026-10-30', source: 'log' })
 const a = await call('anchor', { shard: 'manual' })

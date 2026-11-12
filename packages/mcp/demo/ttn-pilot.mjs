@@ -9,8 +9,11 @@ import { PrivateKey } from '@bsv/sdk'
 import { configFromEnv, openRuntime } from '../dist/src/runtime.js'
 
 let failures = 0
-const check = (ok, name) => { console.log(`${ok ? '✔' : '✖'} ${name}`); if (!ok) failures++ }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const check = (ok, name) => {
+  console.log(`${ok ? '✔' : '✖'} ${name}`)
+  if (!ok) failures++
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const env = {
   ...process.env,
@@ -19,13 +22,16 @@ const env = {
   NEKTAR_BATCH: process.env.NEKTAR_BATCH ?? '8', // pilot closes batches explicitly
   NEKTAR_CONFIRM_MS: process.env.NEKTAR_CONFIRM_MS ?? '20000'
 }
-if (!env.NEKTAR_KEY_PASSPHRASE && !env.NEKTAR_KEY_PASSPHRASE_FILE) { console.error('NEKTAR_KEY_PASSPHRASE (or _FILE) required'); process.exit(1) }
+if (!env.NEKTAR_KEY_PASSPHRASE && !env.NEKTAR_KEY_PASSPHRASE_FILE) {
+  console.error('NEKTAR_KEY_PASSPHRASE (or _FILE) required')
+  process.exit(1)
+}
 const cfg = configFromEnv(env)
-const link = txid => `${env.NEKTAR_NETWORK === 'testnet' ? 'https://test.whatsonchain.com' : 'https://woc-ttn.bsvblockchain.tech'}/tx/${txid}`
+const link = (txid) => `${env.NEKTAR_NETWORK === 'testnet' ? 'https://test.whatsonchain.com' : 'https://woc-ttn.bsvblockchain.tech'}/tx/${txid}`
 const shard = process.env.NEKTAR_PILOT_SHARD ?? `pilot-${Date.now().toString(36)}`
 
 /** poll prove() until the anchor of `seq` carries a BUMP verified against live headers */
-async function waitProven (rt, seq, maxMin = 25) {
+async function waitProven(rt, seq, maxMin = 25) {
   const deadline = Date.now() + maxMin * 60_000
   let r
   while (Date.now() < deadline) {
@@ -41,7 +47,10 @@ let rt = await openRuntime(cfg)
 try {
   const w = await rt.ops.wallet()
   console.log(`network ${env.NEKTAR_NETWORK} · fee address ${w.address} · balance ${w.balanceSats} sats (${w.utxos} utxos) · caps ${JSON.stringify(w.caps)}`)
-  if (w.balanceSats < 3000) { console.error(`fund ${w.address} (≥3000 sats)`); process.exit(2) }
+  if (w.balanceSats < 3000) {
+    console.error(`fund ${w.address} (≥3000 sats)`)
+    process.exit(2)
+  }
 
   // 1. genesis anchor
   for (let i = 0; i < 3; i++) await rt.mem.remember(shard, `pilot record ${i} @ ${new Date().toISOString()}`, { source: 'pilot' })
@@ -87,7 +96,10 @@ try {
     const p2 = await waitProven(rt, 6)
     check(p2?.ok === true, `post-restart seq 6 proven against live headers (${p2?.ok ? 'ok' : p2?.reason})`)
   } else {
-    check(rt.ops.costs().some(c => c.txid === a2?.txid), 'post-restart anchor accepted by the broadcaster (200) — proof follows on mining')
+    check(
+      rt.ops.costs().some((c) => c.txid === a2?.txid),
+      'post-restart anchor accepted by the broadcaster (200) — proof follows on mining'
+    )
   }
 
   const costs = rt.ops.costs()
@@ -95,6 +107,11 @@ try {
   for (const c of costs) console.log(`  ${c.txid}  ${c.bytes} B  ${c.fee} sats  ${link(c.txid)}`)
   const w2 = await rt.ops.wallet()
   console.log(`spent today ${w2.spentTodaySats} sats · balance ${w2.balanceSats} sats`)
-} finally { await rt.close().catch(() => {}) }
-if (failures) { console.error(`${failures} check(s) failed`); process.exit(1) }
+} finally {
+  await rt.close().catch(() => {})
+}
+if (failures) {
+  console.error(`${failures} check(s) failed`)
+  process.exit(1)
+}
 console.log('LIVE PILOT PASS')

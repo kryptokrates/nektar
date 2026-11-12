@@ -2,9 +2,7 @@
   "hooks": {
     "Stop": [
       {
-        "hooks": [
-          { "type": "command", "command": "node integrations/claude-code/verify-receipt.mjs" }
-        ]
+        "hooks": [{ "type": "command", "command": "node integrations/claude-code/verify-receipt.mjs" }]
       }
     ]
   }

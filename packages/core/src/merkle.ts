@@ -13,15 +13,15 @@ export interface MerkleTree {
   levels: Bytes[][]
 }
 
-export function hashLeaf (item: Bytes): Bytes {
+export function hashLeaf(item: Bytes): Bytes {
   return dsha256(item)
 }
 
-export function hashNode (left: Bytes, right: Bytes): Bytes {
+export function hashNode(left: Bytes, right: Bytes): Bytes {
   return dsha256(concat(left, right))
 }
 
-function nextLevel (level: Bytes[]): Bytes[] {
+function nextLevel(level: Bytes[]): Bytes[] {
   const next: Bytes[] = []
   for (let i = 0; i < level.length; i += 2) {
     const l = level[i]!
@@ -31,7 +31,7 @@ function nextLevel (level: Bytes[]): Bytes[] {
   return next
 }
 
-export function buildTree (leaves: Bytes[]): MerkleTree {
+export function buildTree(leaves: Bytes[]): MerkleTree {
   if (leaves.length === 0) throw new Error('EmptyLeaves: no leaves')
   const levels: Bytes[][] = [leaves.slice()]
   let cur = levels[0]!
@@ -42,11 +42,11 @@ export function buildTree (leaves: Bytes[]): MerkleTree {
   return { root: cur[0]!, levels }
 }
 
-export function merkleRoot (leaves: Bytes[]): Bytes {
+export function merkleRoot(leaves: Bytes[]): Bytes {
   return buildTree(leaves).root
 }
 
-export function merkleProof (leaves: Bytes[], index: number): MerkleProof {
+export function merkleProof(leaves: Bytes[], index: number): MerkleProof {
   if (index < 0 || index >= leaves.length) {
     throw new Error(`IndexOutOfRange: index ${index}`)
   }
@@ -61,7 +61,7 @@ export function merkleProof (leaves: Bytes[], index: number): MerkleProof {
   return { index, siblings }
 }
 
-export function reconstructRoot (leaf: Bytes, proof: MerkleProof): Bytes {
+export function reconstructRoot(leaf: Bytes, proof: MerkleProof): Bytes {
   let cur = leaf
   let idx = proof.index
   for (const sib of proof.siblings) {
@@ -71,11 +71,11 @@ export function reconstructRoot (leaf: Bytes, proof: MerkleProof): Bytes {
   return cur
 }
 
-export function verifyProof (leaf: Bytes, proof: MerkleProof, root: Bytes): boolean {
+export function verifyProof(leaf: Bytes, proof: MerkleProof, root: Bytes): boolean {
   return eq(reconstructRoot(leaf, proof), root)
 }
 
-export function heightForLeafCount (leafCount: number): number {
+export function heightForLeafCount(leafCount: number): number {
   if (leafCount <= 1) return 0
   let height = 0
   let size = 1

@@ -9,8 +9,11 @@ import { sha256, utf8, toHex, fromHex } from '@nektar/core'
 import { Smt, deriveKey, emptyRoot, verifyProof } from '../src/index.js'
 
 const V = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../vectors/smt-rust.json', import.meta.url)), 'utf8')) as {
-  keys: string[], rootsAfterEachInsert: string[], rootAfterRemoveId2: string,
-  inclusion: { key: string, siblings: [number, string][] }, nonInclusion: { key: string, siblings: [number, string][] }
+  keys: string[]
+  rootsAfterEachInsert: string[]
+  rootAfterRemoveId2: string
+  inclusion: { key: string; siblings: [number, string][] }
+  nonInclusion: { key: string; siblings: [number, string][] }
 }
 const proofOf = (p: typeof V.inclusion) => ({ key: fromHex(p.key), siblings: p.siblings.map(([d, h]) => [d, fromHex(h)] as [number, Uint8Array]) })
 

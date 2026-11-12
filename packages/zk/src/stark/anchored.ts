@@ -10,22 +10,23 @@ import { decodeZkm2 } from './codec.js'
 import { decodeZkdis, verifySubsetProof } from './subproof.js'
 
 /** verifier challenge: queryId = dsha256('nektar:zkq:v2' ‖ nonce ‖ verifierId) (32 bytes, no field reduction) */
-export interface StarkQuery { nonce: Uint8Array, verifierId: string }
-export function starkQueryId (q: StarkQuery): Uint8Array {
+export interface StarkQuery {
+  nonce: Uint8Array
+  verifierId: string
+}
+export function starkQueryId(q: StarkQuery): Uint8Array {
   return dsha256(Buffer.concat([utf8('nektar:zkq:v2'), q.nonce, utf8(q.verifierId)]))
 }
 
 /** combined Π = (membership, ZKAccess [, §14 derivation]) over ONE verifier
  *  query (§13/§14 shared commitment): the access transcript — and, when given,
  *  the derivation journal — must carry this query's id and nonce. */
-export function verifyCombinedStark (
-  q: StarkQuery,
-  accessTranscript: { queryId: string, nonce: Uint8Array },
-  derivationJournal?: { queryId: string }
-): boolean {
-  return accessTranscript.queryId === Buffer.from(starkQueryId(q)).toString('hex') &&
+export function verifyCombinedStark(q: StarkQuery, accessTranscript: { queryId: string; nonce: Uint8Array }, derivationJournal?: { queryId: string }): boolean {
+  return (
+    accessTranscript.queryId === Buffer.from(starkQueryId(q)).toString('hex') &&
     Buffer.from(accessTranscript.nonce).equals(Buffer.from(q.nonce)) &&
     (derivationJournal === undefined || derivationJournal.queryId === Buffer.from(starkQueryId(q)).toString('hex'))
+  )
 }
 
 /** single-use query registry (persisted by the caller) */
@@ -38,9 +39,15 @@ export interface StarkExpectation {
   shard: string // hash160(genesis owner) of OUR shard — never read from the proof
   isCanonical?: (txid: string) => boolean | Promise<boolean>
 }
-export interface StarkVerifyResult { ok: boolean, reason?: string, anchorTxid?: string, root?: string, size?: number }
+export interface StarkVerifyResult {
+  ok: boolean
+  reason?: string
+  anchorTxid?: string
+  root?: string
+  size?: number
+}
 
-export async function verifyMembershipAnchoredStark (
+export async function verifyMembershipAnchoredStark(
   bytes: Uint8Array,
   anchorTx: Transaction,
   tracker: any, // ChainTracker
@@ -57,7 +64,11 @@ export async function verifyMembershipAnchoredStark (
   if (!(await anchorTx.merklePath.verify(txid, tracker))) return { ok: false, reason: 'BEEFInvalid: BUMP root not in header chain' }
   // header pre-check before the (more expensive) STARK verification
   let hdr
-  try { hdr = decodeZkm2(bytes) } catch (e) { return { ok: false, reason: `codec: ${(e as Error).message}` } }
+  try {
+    hdr = decodeZkm2(bytes)
+  } catch (e) {
+    return { ok: false, reason: `codec: ${(e as Error).message}` }
+  }
   const R = Buffer.from(data.R).toString('hex')
   if (Buffer.from(hdr.root).toString('hex') !== R) return { ok: false, reason: 'proven root is not the anchored R' }
   if (hdr.size !== data.size) return { ok: false, reason: 'proven size is not the anchored batch size' }
@@ -68,7 +79,14 @@ export async function verifyMembershipAnchoredStark (
   return { ok: true, anchorTxid: txid, root: R, size: data.size }
 }
 
-export interface SubsetVerifyResult { ok: boolean, reason?: string, anchorTxid?: string, root?: string, size?: number, indices?: number[] }
+export interface SubsetVerifyResult {
+  ok: boolean
+  reason?: string
+  anchorTxid?: string
+  root?: string
+  size?: number
+  indices?: number[]
+}
 
 /** DIS-002 verifier (GOAL-v6 S5): an L_ZKDis v2 subset proof is accepted iff
  *  its claimed batch root and size equal R_n/size of a real, SPV-verified
@@ -76,7 +94,7 @@ export interface SubsetVerifyResult { ok: boolean, reason?: string, anchorTxid?:
  *  disclosed leaf folds through its shard subpath + the shared top multiproof
  *  to that root. No query binding — the proof reveals positions and leaf
  *  hashes; binding the disclosed records to a question is the caller's. */
-export async function verifySubsetAnchored (
+export async function verifySubsetAnchored(
   bytes: Uint8Array,
   anchorTx: Transaction,
   tracker: any, // ChainTracker
@@ -91,7 +109,11 @@ export async function verifySubsetAnchored (
   if (!(await anchorTx.merklePath.verify(txid, tracker))) return { ok: false, reason: 'BEEFInvalid: BUMP root not in header chain' }
   // header pre-check before the multiproof reconstruction
   let hdr
-  try { hdr = decodeZkdis(bytes) } catch (e) { return { ok: false, reason: `codec: ${(e as Error).message}` } }
+  try {
+    hdr = decodeZkdis(bytes)
+  } catch (e) {
+    return { ok: false, reason: `codec: ${(e as Error).message}` }
+  }
   const R = Buffer.from(data.R).toString('hex')
   if (Buffer.from(hdr.batchRoot).toString('hex') !== R) return { ok: false, reason: 'proven root is not the anchored R' }
   if (hdr.size !== data.size) return { ok: false, reason: 'proven size is not the anchored batch size' }

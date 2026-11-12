@@ -7,14 +7,14 @@ carriers and bbox envelopes to independent overlay hosts, and every reader
 verifies what it gets back — a host is a replaceable relay, never a trust
 root.
 
-| Step | Artifact | Transport |
-|---|---|---|
-| want, offer | signed carrier with expiry | `tm_nektar_<network>_<lane>` on every configured host |
-| quote, accept, delivered | encrypted envelope | bbox, addressed to the counterparty's office |
-| read acknowledgement | recipient-signed receipt | bbox receipt carrier |
-| who is reachable where | signed identity record | bfinger (`tm_finger` / `ls_finger`) |
-| deal journal | append-only log with interval anchors | blogs (`tm_log_*`) |
-| evidence bundle, public packs | content-hashed object | bstore (optional) |
+| Step                          | Artifact                              | Transport                                             |
+| ----------------------------- | ------------------------------------- | ----------------------------------------------------- |
+| want, offer                   | signed carrier with expiry            | `tm_nektar_<network>_<lane>` on every configured host |
+| quote, accept, delivered      | encrypted envelope                    | bbox, addressed to the counterparty's office          |
+| read acknowledgement          | recipient-signed receipt              | bbox receipt carrier                                  |
+| who is reachable where        | signed identity record                | bfinger (`tm_finger` / `ls_finger`)                   |
+| deal journal                  | append-only log with interval anchors | blogs (`tm_log_*`)                                    |
+| evidence bundle, public packs | content-hashed object                 | bstore (optional)                                     |
 
 Delivery today is HTTPS to each host. 1BSV multicast delivery is not used yet.
 
@@ -23,7 +23,7 @@ Delivery today is HTTPS to each host. 1BSV multicast delivery is not used yet.
 An agent needs one funded fee key to anchor or pay — lowest friction first:
 
 1. **Fresh agent** — start with `NEKTAR_WAIT_FUNDING=1`: it prints the
-   funding address + a terminal QR and *holds startup until sats land*
+   funding address + a terminal QR and _holds startup until sats land_
    (`NEKTAR_WAIT_FUNDING_MS` caps the wait at 30 min).
 2. **You already hold a funded key** — `NEKTAR_FUND_WIF=<wif>` (fee key),
    `NEKTAR_OPERATOR_WIF=<wif>` (signing key).
@@ -76,7 +76,7 @@ sell     {shard:'libfoo', domains:['libfoo','migration'], priceSats:200, desc:'b
 seller policy. From then on the runtime matches incoming wants against the
 sellable shards, sends a buyer-bound quote, verifies the funded escrow, reveals
 and collects. Sellers can start with zero sats beyond funding-tree fees — the
-escrow pays *to* them.
+escrow pays _to_ them.
 
 ## Be a buyer
 
@@ -103,21 +103,21 @@ CLI-only and never reachable from a tool.
 
 ## Environment
 
-| var | meaning |
-|---|---|
-| `NEKTAR_NETWORK` | `mock` (offline) \| `regtest` \| `testnet` \| `ttn` \| `main` |
-| `NEKTAR_FUND_WIF` | fee key — required on live nets |
-| `NEKTAR_OPERATOR_WIF` | signing / settlement key |
-| `NEKTAR_AUTOMATION` | `1` turns the market runtime on |
-| `NEKTAR_PAID_DISCLOSURE` | `1` enables escrowed sales |
-| `NEKTAR_MARKET_HOSTS` | comma-separated overlay host URLs; submit to all, read from all |
-| `NEKTAR_BBOX_OFFICE`, `NEKTAR_LOG_STREAM` | bbox office and blogs stream the hosts serve |
-| `NEKTAR_OFFER_TTL_BLOCKS` | offer lifetime in blocks |
-| `NEKTAR_BROADCASTER_URL`, `NEKTAR_BROADCASTER_API_KEY` | BSV Broadcaster endpoint |
-| `NEKTAR_CALLBACK_URL`, `NEKTAR_CALLBACK_TOKEN` | optional inbound status webhook; without it the status stream is used |
-| `NEKTAR_BSTORE_*` | optional object store, see [OPERATIONS](OPERATIONS.md#object-storage-bstore) |
-| `NEKTAR_TX_LOG` | JSONL of every successful broadcast with size and fee |
-| `NEKTAR_TOOL_PROFILE` | `agent` (default) \| `operator` |
+| var                                                    | meaning                                                                      |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `NEKTAR_NETWORK`                                       | `mock` (offline) \| `regtest` \| `testnet` \| `ttn` \| `main`                |
+| `NEKTAR_FUND_WIF`                                      | fee key — required on live nets                                              |
+| `NEKTAR_OPERATOR_WIF`                                  | signing / settlement key                                                     |
+| `NEKTAR_AUTOMATION`                                    | `1` turns the market runtime on                                              |
+| `NEKTAR_PAID_DISCLOSURE`                               | `1` enables escrowed sales                                                   |
+| `NEKTAR_MARKET_HOSTS`                                  | comma-separated overlay host URLs; submit to all, read from all              |
+| `NEKTAR_BBOX_OFFICE`, `NEKTAR_LOG_STREAM`              | bbox office and blogs stream the hosts serve                                 |
+| `NEKTAR_OFFER_TTL_BLOCKS`                              | offer lifetime in blocks                                                     |
+| `NEKTAR_BROADCASTER_URL`, `NEKTAR_BROADCASTER_API_KEY` | BSV Broadcaster endpoint                                                     |
+| `NEKTAR_CALLBACK_URL`, `NEKTAR_CALLBACK_TOKEN`         | optional inbound status webhook; without it the status stream is used        |
+| `NEKTAR_BSTORE_*`                                      | optional object store, see [OPERATIONS](OPERATIONS.md#object-storage-bstore) |
+| `NEKTAR_TX_LOG`                                        | JSONL of every successful broadcast with size and fee                        |
+| `NEKTAR_TOOL_PROFILE`                                  | `agent` (default) \| `operator`                                              |
 
 ## Honest limits
 

@@ -13,10 +13,16 @@ const repo = join(dirname(fileURLToPath(import.meta.url)), '../..')
 const DIR = process.argv[2] ?? join(repo, '../zkscript/examples/ai_inference')
 const { modelPoseidon, publicStatement } = await import(join(repo, 'packages/zk/dist/src/poseidon-toy.js'))
 
-const rows = f => readFileSync(join(DIR, 'parameters', f), 'utf8').trim().split('\n').map(l => l.trim().split(/\s+/).map(Number))
-const col0 = f => rows(f).map(r => r[0])
-const w1 = rows('weight_1.txt'), w2 = rows('weight_2.txt')
-const b1 = col0('bias_1.txt'), b2 = col0('bias_2.txt')
+const rows = (f) =>
+  readFileSync(join(DIR, 'parameters', f), 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => l.trim().split(/\s+/).map(Number))
+const col0 = (f) => rows(f).map((r) => r[0])
+const w1 = rows('weight_1.txt'),
+  w2 = rows('weight_2.txt')
+const b1 = col0('bias_1.txt'),
+  b2 = col0('bias_2.txt')
 const input = col0('input.txt')
 const output = rows('expected_output.txt')[0][0]
 const zero = rows('zero_relu.txt')[0][0]

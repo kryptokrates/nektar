@@ -1,46 +1,43 @@
-// GOAL-v7 V3: the DisclosureSale covenant under real script eval — BIP-199
-// shape: the BUYER funds the escrow, the seller completes by revealing
-// `wrapped`, the DEPOSITOR refunds after the deadline. (MockChain
-// verifyScripts runs the actual locking script via SDK Spend.)
+// GOAL-v7 V3: the DisclosureSale covenant under real node script eval —
+// BIP-199 shape: the BUYER funds the escrow, the seller completes by revealing
+// `wrapped`, the DEPOSITOR refunds after the deadline. Broadcasts go through
+// the regtest node's own admission: real UTXOs, real signatures, real CLTV.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Transaction, PrivateKey, LockingScript, UnlockingScript, P2PKH } from '@bsv/sdk'
+import { Transaction, PrivateKey, LockingScript } from '@bsv/sdk'
 import { Hash } from '@bsv/sdk'
-import { MockChain } from '@nektar/chain'
-import { DisclosureSaleHost, type SaleUtxo } from '../src/sale.js'
+import { stackWorld, type StackChain, type StackFunder } from '@nektar/chain'
+import { DisclosureSaleHost } from '../src/sale.js'
 
 const seller = PrivateKey.fromRandom()
 const sellerPkh = Buffer.from(seller.toPublicKey().toHash()).toString('hex')
-const buyer = PrivateKey.fromRandom()
-const buyerPkh = Buffer.from(buyer.toPublicKey().toHash()).toString('hex')
 const WRAPPED = Buffer.from('the-wrapped-payload-preimage-of-disclosure').toString('hex')
 const H_WRAPPED = Buffer.from(Hash.sha256(Buffer.from(WRAPPED, 'hex'))).toString('hex')
 // the seller's published offer — no depositor; the buyer completes it
 const cfg = { sellerPkh, price: 5_000n, hWrapped: H_WRAPPED, refundAfter: 100n, maxFee: 10n }
 
-/** a buyer-funded escrow utxo (the buyer self-builds the script from cfg) */
-async function escrowOf (chain: MockChain, host: DisclosureSaleHost, deposit = 6_000) {
-  const funding = new Transaction()
-  funding.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: new UnlockingScript() })
-  funding.addOutput({ satoshis: 20_000, lockingScript: LockingScript.fromHex(
-    // buyer's own P2PKH funding out — what a real wallet would give them
-    Buffer.concat([Buffer.from('76a914', 'hex'), Buffer.from(buyer.toPublicKey().toHash()), Buffer.from('88ac', 'hex')]).toString('hex')) })
-  chain.registerParent(funding)
-  const { tx, utxo } = await host.buildEscrow([{ tx: funding, vout: 0, satoshis: 20_000 }], buyer, deposit)
-  assert.equal((await chain.broadcast(tx)).status, 'success', 'escrow funding accepted')
-  chain.registerParent(tx)
+type World = { chain: StackChain, funder: StackFunder, host: DisclosureSaleHost, buyer: PrivateKey }
+async function setup (t: { skip: (m?: string) => void }): Promise<World | undefined> {
+  const w = await stackWorld(t, 8, 20_000)
+  if (w === undefined) return undefined
+  const buyer = w.funder.keyPair
+  const buyerPkh = Buffer.from(buyer.toPublicKey().toHash()).toString('hex')
+  const host = new DisclosureSaleHost({ ...cfg, depositorPkh: buyerPkh })
+  return { chain: w.chain, funder: w.funder, host, buyer }
+}
+
+/** a buyer-funded escrow utxo — a real wallet outpoint into the covenant */
+async function escrowOf (w: World, deposit = 6_000) {
+  const out = await w.funder.take(20_000)
+  const { tx, utxo } = await w.host.buildEscrow([out], w.buyer, deposit)
+  assert.equal((await w.chain.broadcast(tx)).status, 'success', 'escrow funding accepted')
   return utxo
 }
 
-function setup () {
-  const chain = new MockChain(); chain.verifyScripts = true
-  const host = new DisclosureSaleHost({ ...cfg, depositorPkh: buyerPkh })
-  return { chain, host }
-}
-
-test('V3 escrow: buyer funds, seller reveals+collects atomically; underpayment/reroute/fee refused', async () => {
-  const { chain, host } = setup()
-  const utxo = await escrowOf(chain, host)
+test('V3 escrow: buyer funds, seller reveals+collects atomically; underpayment/reroute/fee refused', async t => {
+  const w = await setup(t); if (w === undefined) return
+  const { chain, host } = w
+  const utxo = await escrowOf(w)
   // seller completes unilaterally — reveals WRAPPED, collects price,
   // depositor gets the change back
   const good = host.buildBuy(utxo, WRAPPED, 990n)
@@ -60,9 +57,10 @@ test('V3 escrow: buyer funds, seller reveals+collects atomically; underpayment/r
   assert.notEqual((await chain.broadcast(greedy.tx)).status, 'success', 'fee > maxFee must be rejected')
 })
 
-test('V3 escrow: depositor refunds after deadline; seller/early/stranger refused', async () => {
-  const { chain, host } = setup()
-  const utxo = await escrowOf(chain, host)
+test('V3 escrow: depositor refunds after deadline; seller/early/stranger refused', async t => {
+  const w = await setup(t); if (w === undefined) return
+  const { chain, host, buyer } = w
+  const utxo = await escrowOf(w)
   // too early — locktime below refundAfter
   const early = host.buildRefund(utxo, buyer, 50, 5_990n)
   assert.notEqual((await chain.broadcast(early.tx)).status, 'success', 'refund before refundAfter must be rejected')
@@ -81,9 +79,10 @@ test('V3 escrow: depositor refunds after deadline; seller/early/stranger refused
   assert.notEqual((await chain.broadcast(greedy.tx)).status, 'success', 'refund with fee > maxFee must be rejected')
 })
 
-test('V3 sale: claimDisclosure reads wrapped back from the real covenant buy tx', async () => {
-  const { chain, host } = setup()
-  const utxo = await escrowOf(chain, host)
+test('V3 sale: claimDisclosure reads wrapped back from the real covenant buy tx', async t => {
+  const w = await setup(t); if (w === undefined) return
+  const { host } = w
+  const utxo = await escrowOf(w)
   const good = host.buildBuy(utxo, WRAPPED, 990n)
   // parseBuyArgs/claimDisclosure (identity layer) on the covenant's real arg frame
   const { claimDisclosure } = await import('@nektar/identity')
@@ -94,12 +93,18 @@ test('V3 sale: claimDisclosure reads wrapped back from the real covenant buy tx'
 })
 
 test('V3 escrow: funding fee follows the instance rate, not a constant', async () => {
-  const { host } = setup()
+  const buyer = PrivateKey.fromRandom()
+  const buyerPkh = Buffer.from(buyer.toPublicKey().toHash()).toString('hex')
+  const host = new DisclosureSaleHost({ ...cfg, depositorPkh: buyerPkh })
   const mkFunding = (sats: number) => {
     const f = new Transaction()
-    f.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: new UnlockingScript() })
-    f.addOutput({ satoshis: sats, lockingScript: LockingScript.fromHex(
-      Buffer.concat([Buffer.from('76a914', 'hex'), Buffer.from(buyer.toPublicKey().toHash()), Buffer.from('88ac', 'hex')]).toString('hex')) })
+    f.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff })
+    f.addOutput({
+      satoshis: sats,
+      lockingScript: LockingScript.fromHex(
+        Buffer.concat([Buffer.from('76a914', 'hex'), Buffer.from(buyer.toPublicKey().toHash()), Buffer.from('88ac', 'hex')]).toString('hex')
+      )
+    })
     return f
   }
   const feeOf = async (rate: number) => {

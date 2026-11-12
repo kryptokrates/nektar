@@ -22,5 +22,13 @@ out.push({ ...base, case: 'neg:odd-not-self-paired', siblings: [toHex(dsha256(ut
 // (at the odd last position the guest already refuses a foreign leaf via the self-pair rule)
 out.push({ ...base, case: 'neg:odd-last-foreign-leaf', leaf: toHex(dsha256(utf8('not-in-batch'))), expect: 'refuse' })
 const p1 = merkleProof(leaves, 1)
-out.push({ case: 'neg:non-member-root-differs', leaf: toHex(dsha256(utf8('not-in-batch'))), index: 1, size: 5, siblings: p1.siblings.map(toHex), queryId: q, expect: 'root!=' + toHex(merkleRoot(leaves)) })
+out.push({
+  case: 'neg:non-member-root-differs',
+  leaf: toHex(dsha256(utf8('not-in-batch'))),
+  index: 1,
+  size: 5,
+  siblings: p1.siblings.map(toHex),
+  queryId: q,
+  expect: 'root!=' + toHex(merkleRoot(leaves))
+})
 for (const o of out) console.log(JSON.stringify(o))

@@ -4,16 +4,16 @@
 import { PrivateKey, Transaction, LockingScript, P2PKH, Hash } from '@bsv/sdk'
 import { buildP2PKHScript } from 'runar-sdk'
 import { CheckpointBond, DisclosureSaleHost } from '@nektar/anchor'
-import {
-  TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve,
-  type RegtestConfig
-} from '@nektar/chain'
+import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve, type RegtestConfig } from '@nektar/chain'
 import { existsSync, readFileSync } from 'node:fs'
 
 let failures = 0
-const check = (cond: boolean, name: string) => { console.log(`${cond ? '✔' : '✖'} ${name}`); if (!cond) failures++ }
+const check = (cond: boolean, name: string) => {
+  console.log(`${cond ? '✔' : '✖'} ${name}`)
+  if (!cond) failures++
+}
 
-function readEnv (p: URL): Record<string, string> {
+function readEnv(p: URL): Record<string, string> {
   const out: Record<string, string> = {}
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
@@ -37,19 +37,25 @@ if (!cfg.rpcPass) throw new Error('rpc_pass missing')
 const tracker = new TeranodeRPCTracker(cfg)
 const broadcaster = new TeranodeBroadcaster(cfg.propagationUrl)
 const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
-async function rpc (method: string, ...params: unknown[]): Promise<any> {
-  const r = await fetch(cfg.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }) })
-  const j = await r.json() as any
+async function rpc(method: string, ...params: unknown[]): Promise<any> {
+  const r = await fetch(cfg.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: auth },
+    body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
+  })
+  const j = (await r.json()) as any
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }
 
 const key = PrivateKey.fromWif(WIF)
 const addr = key.toPublicKey().toAddress([0x6f])
-const mineOne = async () => { await rpc('generatetoaddress', 1, addr) }
+const mineOne = async () => {
+  await rpc('generatetoaddress', 1, addr)
+}
 const opPkh = Buffer.from(key.toPublicKey().toHash()).toString('hex')
 
-async function fundTo (script: string, sats: number): Promise<{ txid: string, vout: number, satoshis: number, script: string, parent?: Transaction }> {
+async function fundTo(script: string, sats: number): Promise<{ txid: string; vout: number; satoshis: number; script: string; parent?: Transaction }> {
   const fundUtxo = await reserve.takeReserve(undefined, sats + 1000)
   if (!fundUtxo) throw new Error('no funding utxo')
   const tx = new Transaction()
@@ -98,7 +104,10 @@ bondUtxo = { txid: c2.tx.id('hex'), vout: 0, satoshis: c2.tx.outputs[0]!.satoshi
 // negative: close with a locktime BELOW bondReleaseHeight — the tx is final
 // (locktime <= tip) so the node's script eval itself must refuse it.
 const hNow = await tracker.currentHeight()
-const rEarly = await bond.buildClose(bondUtxo, key, Math.min(hNow, release - 1), broadcaster, 1n).then(() => false, () => true)
+const rEarly = await bond.buildClose(bondUtxo, key, Math.min(hNow, release - 1), broadcaster, 1n).then(
+  () => false,
+  () => true
+)
 check(rEarly, 'V2 close before release refused')
 
 // mine until past release, then close for real
@@ -118,7 +127,10 @@ await mineOne()
   await mineOne()
   lUtxo = { txid: lc.tx.id('hex'), vout: 0, satoshis: lc.tx.outputs[0]!.satoshis!, script: lc.tx.outputs[0]!.lockingScript.toHex() }
   // too early: deadline = commitHeight + 2 has not passed — seize refused
-  const rEarlySeize = await lazy.buildSeize(lUtxo, buildP2PKHScript(opPkh), await tracker.currentHeight(), broadcaster, 1n).then(() => false, () => true)
+  const rEarlySeize = await lazy.buildSeize(lUtxo, buildP2PKHScript(opPkh), await tracker.currentHeight(), broadcaster, 1n).then(
+    () => false,
+    () => true
+  )
   check(rEarlySeize, 'V2 seize before deadline refused')
   // lapse the SLA window: mine past deadline, then a FOREIGN key seizes
   while ((await tracker.currentHeight()) <= Number(lazy.stateOf(lUtxo.script).deadline)) await mineOne()
@@ -138,15 +150,17 @@ const buyer = PrivateKey.fromRandom()
 const buyerPkh = Buffer.from(buyer.toPublicKey().toHash()).toString('hex')
 const saleDeadline = (await tracker.currentHeight()) + 3
 const sale = new DisclosureSaleHost({
-  sellerPkh: opPkh, price: 3_000n, hWrapped: H_WRAPPED,
-  refundAfter: BigInt(saleDeadline), maxFee: 10n, depositorPkh: buyerPkh
+  sellerPkh: opPkh,
+  price: 3_000n,
+  hWrapped: H_WRAPPED,
+  refundAfter: BigInt(saleDeadline),
+  maxFee: 10n,
+  depositorPkh: buyerPkh
 })
 
-async function fundEscrow (amount = 5_000) {
+async function fundEscrow(amount = 5_000) {
   const buyerFunds = await fundTo(buildP2PKHScript(buyerPkh), 20_000)
-  const esc = await sale.buildEscrow(
-    [{ tx: buyerFunds.parent!, vout: buyerFunds.vout, satoshis: buyerFunds.satoshis }],
-    buyer, amount)
+  const esc = await sale.buildEscrow([{ tx: buyerFunds.parent!, vout: buyerFunds.vout, satoshis: buyerFunds.satoshis }], buyer, amount)
   const r = await broadcaster.broadcast(esc.tx)
   if (r.status !== 'success') throw new Error(`escrow funding refused: ${r.description}`)
   return esc.utxo

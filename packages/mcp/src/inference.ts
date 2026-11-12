@@ -32,7 +32,7 @@ export interface AttestInferenceResult {
   note?: string
 }
 
-export async function attestInference (mem: NektarMemory, args: { input?: number[], output?: number, onchain?: boolean } = {}): Promise<AttestInferenceResult> {
+export async function attestInference(mem: NektarMemory, args: { input?: number[]; output?: number; onchain?: boolean } = {}): Promise<AttestInferenceResult> {
   const att = demoAttestation(args.input ?? AIINF_DEMO.input, args.output ?? AIINF_DEMO.output)
 
   const dir = ARTIFACT_DIR()
@@ -62,7 +62,13 @@ export async function attestInference (mem: NektarMemory, args: { input?: number
       att.verifierTxid = spendTxid
       return { attestation: att, onchain: true, anchored: true, statement: att.publicStatement }
     } catch (e) {
-      return { attestation: att, onchain: false, anchored: false, statement: att.publicStatement, note: `on-chain spend unavailable (attestation is statement-verified only): ${(e as Error).message}` }
+      return {
+        attestation: att,
+        onchain: false,
+        anchored: false,
+        statement: att.publicStatement,
+        note: `on-chain spend unavailable (attestation is statement-verified only): ${(e as Error).message}`
+      }
     }
   }
 
@@ -73,6 +79,12 @@ export async function attestInference (mem: NektarMemory, args: { input?: number
     att.commitment = a.commitment
     return { attestation: att, onchain: false, anchored: true, statement: att.publicStatement }
   } catch (e) {
-    return { attestation: att, onchain: false, anchored: false, statement: att.publicStatement, note: `attestation anchor unavailable (statement-verified only): ${(e as Error).message}` }
+    return {
+      attestation: att,
+      onchain: false,
+      anchored: false,
+      statement: att.publicStatement,
+      note: `attestation anchor unavailable (statement-verified only): ${(e as Error).message}`
+    }
   }
 }

@@ -7,7 +7,13 @@ import { poseidonToy, modelPoseidon, publicStatement, fr, FR_MODULUS } from '../
 import { AIINF_DEMO } from '../src/aiinf-demo.js'
 
 const here = fileURLToPath(new URL('../../test', import.meta.url)) // runs from dist/test → back to src test dir
-const vec = { input: AIINF_DEMO.input, output: AIINF_DEMO.output, zeroRelu: AIINF_DEMO.zeroRelu, modelPoseidon: '0x' + AIINF_DEMO.modelPoseidon.toString(16), publicStatement: '0x' + AIINF_DEMO.publicStatement.toString(16) }
+const vec = {
+  input: AIINF_DEMO.input,
+  output: AIINF_DEMO.output,
+  zeroRelu: AIINF_DEMO.zeroRelu,
+  modelPoseidon: '0x' + AIINF_DEMO.modelPoseidon.toString(16),
+  publicStatement: '0x' + AIINF_DEMO.publicStatement.toString(16)
+}
 
 test('reproduces nChain ai_inference public statement (toy Poseidon)', () => {
   // self-contained vector: input(784) + output + modelPoseidon → the exact
@@ -34,16 +40,18 @@ test('rate-boundary absorb permutes mid-stream', () => {
 const AIINF = process.env.NEKTAR_AIINF_DIR ?? join(here, '../../../../zkscript/examples/ai_inference')
 const P = join(AIINF, 'parameters')
 const rowsOf = (f: string): number[][] =>
-  readFileSync(join(P, f), 'utf8').trim().split('\n').map(l => l.trim().split(/\s+/).map(Number))
-const col0 = (f: string): number[] => rowsOf(f).map(r => r[0]!)
+  readFileSync(join(P, f), 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => l.trim().split(/\s+/).map(Number))
+const col0 = (f: string): number[] => rowsOf(f).map((r) => r[0]!)
 
-test('modelPoseidon re-derives from parameter files', t => {
+test('modelPoseidon re-derives from parameter files', (t) => {
   if (!existsSync(join(P, 'weight_1.txt'))) {
     t.skip('nChain zkscript checkout not present (set NEKTAR_AIINF_DIR)')
     return
   }
-  const hm = modelPoseidon(rowsOf('weight_1.txt'), rowsOf('weight_2.txt'),
-    col0('bias_1.txt'), col0('bias_2.txt'), rowsOf('zero_relu.txt')[0]![0]!)
+  const hm = modelPoseidon(rowsOf('weight_1.txt'), rowsOf('weight_2.txt'), col0('bias_1.txt'), col0('bias_2.txt'), rowsOf('zero_relu.txt')[0]![0]!)
   assert.equal(hm, BigInt(vec.modelPoseidon))
   const stmt = publicStatement(col0('input.txt'), rowsOf('expected_output.txt')[0]![0]!, hm)
   assert.equal(stmt, BigInt(vec.publicStatement))

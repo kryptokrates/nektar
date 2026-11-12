@@ -12,26 +12,26 @@
 
 ## Package map
 
-| Package | Responsibility |
-|---|---|
-| `core` | canonical serialization, domain tags, double-SHA-256 Merkle, R' chaining, anchor codec |
-| `chain` | Broadcaster/ChainTracker/Funder interfaces; `MockChain` (script-evaluating, reorgs, double-spend checks); Teranode adapters |
-| `log` | append-only BatchLog, dedup by H(d‖p), signed inclusion promises, batch policy, stores |
-| `contracts` | Rúnar `NektarAnchor`, `NektarAutomaton` (+ measured `NektarAutomatonZk`), artifacts, byte-authenticated decoders |
-| `anchor` | `AnchorChain` (one head UTXO per shard, retry and adoption, BEEF normalization), `NektarProvider` |
-| `overlay` | `tm_nektar` topic manager, `ls_nektar` lookup, GASP sync |
-| `verify` | proof bundles, `verifyFragment` |
-| `crypto` | per-fragment HKDF keys, AES-256-GCM, level keyspaces, shredding |
-| `identity` | bindings, challenges, rotation certs, SMT (TS ≡ Rust), custody, disclosure, ZK clearance |
-| `zk` | Wright §13 membership: L_ZKMem v2 codec, WASM STARK verifier (`stark/`), RISC Zero prover adapter, anchored verifier with issued single-use queryIds. Guest + host + WASM sources live in `tools/stark/` (`pnpm stark:image`, `pnpm stark:build`, `pnpm stark:vectors`) |
-| `datalog` | L_pol parser, linter, stratified semi-naive engine with canonical provenance |
-| `graph` | AORG, GraphAnchor, PolicyDAG (layers, conflicts, derivation proofs), instancing/delegation |
-| `policy` | Cedar authorize, canonical policy sets, receipts |
-| `automaton` | automaton definition, δ/F tables, `AutomatonChain`, light-mode trace verification |
-| `mcp` | `NektarMemory` service, MCP tools, stdio server (`bin.js`), demo client |
-| `reasoning` | grounding, model identity, receipts, citation index and correction loop, consensus time, audit bundles |
-| `fuzz` | seeded fuzzing of every decoder and verifier |
-| `e2e` | offline and regtest e2e, the full-paper scenario, benchmarks |
+| Package     | Responsibility                                                                                                                                                                                                                                                          |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core`      | canonical serialization, domain tags, double-SHA-256 Merkle, R' chaining, anchor codec                                                                                                                                                                                  |
+| `chain`     | Broadcaster/ChainTracker/Funder interfaces; `MockChain` (script-evaluating, reorgs, double-spend checks); Teranode adapters                                                                                                                                             |
+| `log`       | append-only BatchLog, dedup by H(d‖p), signed inclusion promises, batch policy, stores                                                                                                                                                                                  |
+| `contracts` | Rúnar `NektarAnchor`, `NektarAutomaton` (+ measured `NektarAutomatonZk`), artifacts, byte-authenticated decoders                                                                                                                                                        |
+| `anchor`    | `AnchorChain` (one head UTXO per shard, retry and adoption, BEEF normalization), `NektarProvider`                                                                                                                                                                       |
+| `overlay`   | `tm_nektar` topic manager, `ls_nektar` lookup, GASP sync                                                                                                                                                                                                                |
+| `verify`    | proof bundles, `verifyFragment`                                                                                                                                                                                                                                         |
+| `crypto`    | per-fragment HKDF keys, AES-256-GCM, level keyspaces, shredding                                                                                                                                                                                                         |
+| `identity`  | bindings, challenges, rotation certs, SMT (TS ≡ Rust), custody, disclosure, ZK clearance                                                                                                                                                                                |
+| `zk`        | Wright §13 membership: L_ZKMem v2 codec, WASM STARK verifier (`stark/`), RISC Zero prover adapter, anchored verifier with issued single-use queryIds. Guest + host + WASM sources live in `tools/stark/` (`pnpm stark:image`, `pnpm stark:build`, `pnpm stark:vectors`) |
+| `datalog`   | L_pol parser, linter, stratified semi-naive engine with canonical provenance                                                                                                                                                                                            |
+| `graph`     | AORG, GraphAnchor, PolicyDAG (layers, conflicts, derivation proofs), instancing/delegation                                                                                                                                                                              |
+| `policy`    | Cedar authorize, canonical policy sets, receipts                                                                                                                                                                                                                        |
+| `automaton` | automaton definition, δ/F tables, `AutomatonChain`, light-mode trace verification                                                                                                                                                                                       |
+| `mcp`       | `NektarMemory` service, MCP tools, stdio server (`bin.js`), demo client                                                                                                                                                                                                 |
+| `reasoning` | grounding, model identity, receipts, citation index and correction loop, consensus time, audit bundles                                                                                                                                                                  |
+| `fuzz`      | seeded fuzzing of every decoder and verifier                                                                                                                                                                                                                            |
+| `e2e`       | offline and regtest e2e, the full-paper scenario, benchmarks                                                                                                                                                                                                            |
 
 ## How to…
 

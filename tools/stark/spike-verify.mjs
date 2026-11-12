@@ -3,14 +3,17 @@ import { readFileSync } from 'node:fs'
 import { encodeZkm2 } from '../../packages/zk/dist/src/stark/codec.js'
 import { verifyZkm2, PINNED_IMAGE_ID } from '../../packages/zk/dist/src/stark/verify.js'
 const p = JSON.parse(readFileSync(process.argv[2], 'utf8'))
-const H = h => Uint8Array.from(Buffer.from(h, 'hex'))
+const H = (h) => Uint8Array.from(Buffer.from(h, 'hex'))
 const base = { imageId: H(p.imageId), root: H(p.journal.root), size: p.journal.size, queryId: H(p.journal.queryId), receipt: H(p.receipt) }
 const run = (name, proof, pinned) => {
-  const t = performance.now(); const r = verifyZkm2(encodeZkm2(proof), pinned); const ms = (performance.now() - t).toFixed(1)
+  const t = performance.now()
+  const r = verifyZkm2(encodeZkm2(proof), pinned)
+  const ms = (performance.now() - t).toFixed(1)
   console.log(`${name}: ${r.ok ? 'ACCEPT' : 'reject — ' + r.reason} (${ms} ms)`)
   return r.ok
 }
-const tampered = base.receipt.slice(); tampered[Math.floor(tampered.length / 2)] ^= 1
+const tampered = base.receipt.slice()
+tampered[Math.floor(tampered.length / 2)] ^= 1
 const results = [
   run('ok', base) === true,
   run('ok again (warm)', base) === true,

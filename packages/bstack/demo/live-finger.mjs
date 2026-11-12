@@ -8,14 +8,17 @@ import { stripEF } from './devchain.mjs'
 
 const CHAIN = process.env.CHAIN_URL ?? 'http://127.0.0.1:18344'
 const HOSTS = [process.env.HOST_URL ?? 'http://127.0.0.1:18091']
-const rpc = (m, p = []) => fetch(`${CHAIN}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: m, params: p }) }).then(r => r.json())
+const rpc = (m, p = []) =>
+  fetch(`${CHAIN}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: m, params: p }) }).then((r) =>
+    r.json()
+  )
 const tracker = {
   isValidRootForHeight: async (root, h) => (await (await fetch(`${CHAIN}/v1/root/${h}`)).json()).merkleRoot === root,
   currentHeight: async () => (await (await fetch(`${CHAIN}/v1/tip`)).json()).height
 }
 const log = []
 const ok = (k, v) => log.push(`${v ? 'PASS' : 'FAIL'} ${k}`)
-const info = s => log.push(`INFO ${s}`)
+const info = (s) => log.push(`INFO ${s}`)
 
 const key = PrivateKey.fromRandom()
 const addr = key.toPublicKey().toAddress([0x6f])
@@ -28,8 +31,14 @@ await rpc('generatetoaddress', [101, addr])
 const ef = Buffer.from(await (await fetch(`${CHAIN}/api/v1/tx/${cbTxid}`)).arrayBuffer())
 const coinbase = Transaction.fromHex(Array.from(stripEF(ef)))
 const addrScript = new P2PKH().lock(addr).toHex()
-const cbVout = coinbase.outputs.findIndex(o => o.lockingScript.toHex() === addrScript)
-const mkPath = (txid, h) => new MerklePath(h, [[{ offset: 0, hash: '33'.repeat(32) }, { offset: 1, hash: txid, txid: true }]])
+const cbVout = coinbase.outputs.findIndex((o) => o.lockingScript.toHex() === addrScript)
+const mkPath = (txid, h) =>
+  new MerklePath(h, [
+    [
+      { offset: 0, hash: '33'.repeat(32) },
+      { offset: 1, hash: txid, txid: true }
+    ]
+  ])
 const minedHeight = async (txid) => (await (await fetch(`${CHAIN}/api/v1/txmeta/${txid}/json`)).json()).blockHeights[0]
 const fetchTx = async (txid) => {
   const res = await fetch(`${CHAIN}/api/v1/tx/${txid}`).catch(() => undefined)
@@ -37,7 +46,11 @@ const fetchTx = async (txid) => {
   const ef2 = Buffer.from(await res.arrayBuffer())
   if (ef2.length === 0) return undefined
   let tx
-  try { tx = Transaction.fromHex(Array.from(stripEF(ef2))) } catch { return undefined }
+  try {
+    tx = Transaction.fromHex(Array.from(stripEF(ef2)))
+  } catch {
+    return undefined
+  }
   const h = await minedHeight(txid).catch(() => undefined)
   if (h === undefined) return tx
   tx.merklePath = mkPath(tx.id('hex'), h)
@@ -52,7 +65,8 @@ fundTx.addOutput({ satoshis: 200_000, lockingScript: new P2PKH().lock(addr) })
 fundTx.addOutput({ satoshis: 100_000, lockingScript: new P2PKH().lock(addr) })
 fundTx.addOutput({ satoshis: 100_000, lockingScript: new P2PKH().lock(addr) })
 fundTx.addOutput({ lockingScript: new P2PKH().lock(addr), change: true })
-await fundTx.fee(); await fundTx.sign()
+await fundTx.fee()
+await fundTx.sign()
 await fetch(`${CHAIN}/arcade/tx`, { method: 'POST', body: Buffer.from(fundTx.toEF()) })
 await rpc('generatetoaddress', [1, addr])
 fundTx.merklePath = mkPath(fundTx.id('hex'), await minedHeight(fundTx.id('hex')))
@@ -63,7 +77,9 @@ const br = await fetch(`${CHAIN}/arcade/tx`, { method: 'POST', body: Buffer.from
 info(`broadcast finger tree ${tree.id('hex')} -> ${br.status}`)
 await rpc('generatetoaddress', [1, addr])
 tree.merklePath = mkPath(tree.id('hex'), await minedHeight(tree.id('hex')))
-const ledger = new MemoryTreeLedger(); await ledger.add(tree, 8, FINGER_KIND); await ledger.markProven(tree.id('hex'))
+const ledger = new MemoryTreeLedger()
+await ledger.add(tree, 8, FINGER_KIND)
+await ledger.markProven(tree.id('hex'))
 const journal = new MemoryCarrierJournal()
 const state = new MemoryFingerState()
 
@@ -73,7 +89,10 @@ const tr = await submitAll(HOSTS, tree.toAtomicBEEF(), ['tm_finger'])
 info(`tree -> tm_finger took=${tr.took.length} missed=${JSON.stringify(tr.missed)}`)
 ok('funding tree BEEF published to tm_finger', tr.took.length === HOSTS.length)
 
-const queue = [{ tx: fundTx, vout: 1 }, { tx: fundTx, vout: 2 }]
+const queue = [
+  { tx: fundTx, vout: 1 },
+  { tx: fundTx, vout: 2 }
+]
 const takeFunding = async () => queue.shift()
 const broadcast = async (tx) => {
   const r = await fetch(`${CHAIN}/arcade/tx`, { method: 'POST', body: Buffer.from(tx.toEF()) })
@@ -81,8 +100,7 @@ const broadcast = async (tx) => {
   await rpc('generatetoaddress', [1, addr])
   return { status: 'success' }
 }
-const publish = async (body) =>
-  await publishFinger({ key, state, ledger, journal, hosts: HOSTS, body, takeFunding, broadcast, fetchTx, allowHttp: true })
+const publish = async (body) => await publishFinger({ key, state, ledger, journal, hosts: HOSTS, body, takeFunding, broadcast, fetchTx, allowHttp: true })
 
 const body1 = { v: 1, hosts: HOSTS, office: 'nektar_abcdefghij', stream: 'nektar_abcdefghij', nets: ['regtest'] }
 const r1 = await publish(body1)
@@ -108,4 +126,4 @@ info(`resolve seq=${got2?.seq} token=${got2?.tokenTxid}`)
 ok('the newer seq wins', got2 !== undefined && got2.seq === 2 && JSON.stringify(got2.body) === JSON.stringify(body2))
 
 console.log(log.join('\n'))
-process.exit(log.some(l => l.startsWith('FAIL')) ? 1 : 0)
+process.exit(log.some((l) => l.startsWith('FAIL')) ? 1 : 0)

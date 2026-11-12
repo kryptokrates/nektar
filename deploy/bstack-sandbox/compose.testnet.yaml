@@ -11,10 +11,10 @@ services:
       MYSQL_DATABASE: overlay
       MYSQL_USER: overlay
       MYSQL_PASSWORD: spike
-      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
-    command: ["--innodb-buffer-pool-size=128M","--performance-schema=OFF"]
+      MYSQL_RANDOM_ROOT_PASSWORD: 'yes'
+    command: ['--innodb-buffer-pool-size=128M', '--performance-schema=OFF']
     healthcheck:
-      test: ["CMD-SHELL","mysqladmin ping -h 127.0.0.1 -uoverlay -pspike --silent"]
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -uoverlay -pspike --silent']
       interval: 3s
       timeout: 2s
       retries: 40
@@ -24,7 +24,7 @@ services:
   shim:
     image: node:22-alpine
     working_dir: /shim
-    command: ["node","header-shim.mjs"]
+    command: ['node', 'header-shim.mjs']
     environment:
       SHIM_PORT: 8080
       SHIM_MODE: live
@@ -58,7 +58,7 @@ services:
       - ./modules/finger:/app/modules/finger:ro
       - host-state-a:/var/lib/bbox
     ports:
-      - "127.0.0.1:18291:8080"
+      - '127.0.0.1:18291:8080'
   host-b:
     <<: *host
     environment:
@@ -70,7 +70,7 @@ services:
       - ./modules/finger:/app/modules/finger:ro
       - host-state-b:/var/lib/bbox
     ports:
-      - "127.0.0.1:18292:8080"
+      - '127.0.0.1:18292:8080'
 volumes:
   db: {}
   host-state-a: {}

@@ -1,10 +1,8 @@
 // Tool definitions (JSON Schema) + their single implementation (callTool),
 // shared by the MCP server (mcp-server.ts, official SDK) and the HTTP API.
-import { sha256, utf8 } from '@nektar/core'
 import { receiptToken } from './receipt.js'
-import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment, verifyQuoteSig } from './pay.js'
+import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment } from './pay.js'
 import type { NektarMemory } from './memory.js'
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 /** ready-to-paste share surface for a receipt — the model drops `markdown`
@@ -28,9 +26,20 @@ export const TOOLS = [
       properties: {
         shard: { type: 'string' },
         data: { type: 'string', description: 'the fact to store, verbatim' },
-        level: { type: 'number', description: 'confidentiality level; omit (0 = public) unless the user asks for restricted access — level > 0 records need a ZK clearance to read' },
-        private: { type: 'boolean', description: 'declare this shard PRIVATE (monotone — cannot be unset): records on it refuse plain merkle citations (prove/groundedAnswer fragmentRefs) and may only be cited via a ZK membership proof; the shard name is withheld from receipts' },
-        premiseRefs: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] }, description: '§AppE: records this fact is derived from — the new level is floored at their max so derived content cannot leak downward' },
+        level: {
+          type: 'number',
+          description: 'confidentiality level; omit (0 = public) unless the user asks for restricted access — level > 0 records need a ZK clearance to read'
+        },
+        private: {
+          type: 'boolean',
+          description:
+            'declare this shard PRIVATE (monotone — cannot be unset): records on it refuse plain merkle citations (prove/groundedAnswer fragmentRefs) and may only be cited via a ZK membership proof; the shard name is withheld from receipts'
+        },
+        premiseRefs: {
+          type: 'array',
+          items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] },
+          description: '§AppE: records this fact is derived from — the new level is floored at their max so derived content cannot leak downward'
+        },
         source: { type: 'string', description: 'where the fact comes from (document, URL, person)' },
         modality: {
           type: 'object',
@@ -50,8 +59,16 @@ export const TOOLS = [
       properties: {
         shard: { type: 'string', description: 'memory namespace' },
         seq: { type: 'number', description: 'one record (the seq returned by remember); omit to recall the whole shard' },
-        identity: { type: 'object', description: 'verified caller (supplied by the client wallet, not the model): {pubkey, binding, challengeNonce, challengeSig} answering a nonce from the challenge tool' },
-        zk: { type: 'object', description: 'clearance presentation for level>0 records (client wallet): {commitment, proof, transcript:{queryId,fragmentId,nonce(hex)}, requiredLevel(decimal string)}' }
+        identity: {
+          type: 'object',
+          description:
+            'verified caller (supplied by the client wallet, not the model): {pubkey, binding, challengeNonce, challengeSig} answering a nonce from the challenge tool'
+        },
+        zk: {
+          type: 'object',
+          description:
+            'clearance presentation for level>0 records (client wallet): {commitment, proof, transcript:{queryId,fragmentId,nonce(hex)}, requiredLevel(decimal string)}'
+        }
       },
       required: ['shard']
     }
@@ -67,42 +84,68 @@ export const TOOLS = [
   },
   {
     name: 'anchor',
-    description: 'Force-close the pending batch of a shard and broadcast the anchor tx. With NEKTAR_PAYMENTS=1 this costs sats — call payQuote, then pass payment.',
-    inputSchema: { type: 'object', properties: { shard: { type: 'string' }, payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } } }, required: ['shard'] }
+    description:
+      'Force-close the pending batch of a shard and broadcast the anchor tx. With NEKTAR_PAYMENTS=1 this costs sats — call payQuote, then pass payment.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        shard: { type: 'string' },
+        payment: {
+          type: 'object',
+          description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote',
+          properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } }
+        }
+      },
+      required: ['shard']
+    }
   },
   {
     name: 'zkQuery',
     description: 'Verifier side: issue a single-use ZK membership query (queryId) that a holder must bind into its proof.',
-    inputSchema: { type: 'object', properties: { verifierId: { type: 'string', description: 'who verifies (bound into the queryId)' } }, required: ['verifierId'] }
+    inputSchema: {
+      type: 'object',
+      properties: { verifierId: { type: 'string', description: 'who verifies (bound into the queryId)' } },
+      required: ['verifierId']
+    }
   },
   {
     name: 'proveMembership',
-    description: 'Holder side: ZK-STARK (transparent, no trusted setup) that a committed record is in the SHA-256 batch tree anchored on BSV, bound to a verifier-issued queryId → L_ZKMem v2 hex. Takes ~35-50 s on CPU.',
+    description:
+      'Holder side: ZK-STARK (transparent, no trusted setup) that a committed record is in the SHA-256 batch tree anchored on BSV, bound to a verifier-issued queryId → L_ZKMem v2 hex. Takes ~35-50 s on CPU.',
     inputSchema: {
       type: 'object',
-      properties: { shard: { type: 'string' }, seq: { type: 'number' }, queryId: { type: 'string', description: '32-byte hex from the verifier\'s zkQuery' } },
+      properties: { shard: { type: 'string' }, seq: { type: 'number' }, queryId: { type: 'string', description: "32-byte hex from the verifier's zkQuery" } },
       required: ['shard', 'seq', 'queryId']
     }
   },
   {
     name: 'verifyMembership',
-    description: 'Verifier side: verify an L_ZKMem v2 proof — pinned program, STARK valid, proven root == R of an SPV-verified anchor of this shard on its canonical chain, queryId issued here and unused. Proves membership only: not which record, not content, not truth.',
+    description:
+      'Verifier side: verify an L_ZKMem v2 proof — pinned program, STARK valid, proven root == R of an SPV-verified anchor of this shard on its canonical chain, queryId issued here and unused. Proves membership only: not which record, not content, not truth.',
     inputSchema: {
       type: 'object',
-      properties: { shard: { type: 'string' }, seq: { type: 'number', description: 'locates the batch anchor (the proof itself does not reveal the record)' }, bytes: { type: 'string' } },
+      properties: {
+        shard: { type: 'string' },
+        seq: { type: 'number', description: 'locates the batch anchor (the proof itself does not reveal the record)' },
+        bytes: { type: 'string' }
+      },
       required: ['shard', 'seq', 'bytes']
     }
   },
   {
     name: 'verifyCombined',
-    description: 'Verifier side (Wright §13 Π_j = (π_j, ZKAccess)): verify the DUAL commitment as one object — the L_ZKMem membership STARK, the ZKAccess clearance and (optionally) an L_ZKDer derivation STARK must all carry the SAME verifier-issued queryId and the clearance transcript must carry the issued nonce. Rejects proofs paired with an unrelated clearance.',
+    description:
+      'Verifier side (Wright §13 Π_j = (π_j, ZKAccess)): verify the DUAL commitment as one object — the L_ZKMem membership STARK, the ZKAccess clearance and (optionally) an L_ZKDer derivation STARK must all carry the SAME verifier-issued queryId and the clearance transcript must carry the issued nonce. Rejects proofs paired with an unrelated clearance.',
     inputSchema: {
       type: 'object',
       properties: {
         shard: { type: 'string' },
         seq: { type: 'number', description: 'locates the batch anchor (the proof itself does not reveal the record)' },
         bytes: { type: 'string', description: 'L_ZKMem v2 hex from proveMembership' },
-        zk: { type: 'object', description: 'clearance presentation bound to the same queryId — {commitment, proof, transcript:{queryId,fragmentId,nonce(hex)}, requiredLevel}' },
+        zk: {
+          type: 'object',
+          description: 'clearance presentation bound to the same queryId — {commitment, proof, transcript:{queryId,fragmentId,nonce(hex)}, requiredLevel}'
+        },
         scope: { type: 'string', description: 'transcript fragmentId to enforce (default shard/seq)' },
         derivationBytes: { type: 'string', description: 'optional L_ZKDer v3 hex bound to the same queryId' },
         callerPubkey: { type: 'string', description: 'optional: require the clearance holder to be this pubkey (else artifact-validity only)' }
@@ -112,7 +155,8 @@ export const TOOLS = [
   },
   {
     name: 'proveSubset',
-    description: 'Holder side (DIS-002 proof sharding): selective proof of existence for a SUBSET of one batch\'s records — per-leaf shard subpaths over the same anchored tree (64-leaf subtrees) + one shared top multiproof → L_ZKDis v2 hex. Reveals leaf positions + hashes, not contents. Gated by NEKTAR_PROOF_SHARDING (default on).',
+    description:
+      "Holder side (DIS-002 proof sharding): selective proof of existence for a SUBSET of one batch's records — per-leaf shard subpaths over the same anchored tree (64-leaf subtrees) + one shared top multiproof → L_ZKDis v2 hex. Reveals leaf positions + hashes, not contents. Gated by NEKTAR_PROOF_SHARDING (default on).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -124,7 +168,8 @@ export const TOOLS = [
   },
   {
     name: 'verifySubset',
-    description: 'Verifier side: verify an L_ZKDis v2 subset proof — strict canonical codec, every disclosed leaf folds to its shard root, the shard roots fold through the shared multiproof to R of an SPV-verified anchor of this shard on its canonical chain, anchored size. Proves the listed leaf hashes are in the batch: not their content, not truth.',
+    description:
+      'Verifier side: verify an L_ZKDis v2 subset proof — strict canonical codec, every disclosed leaf folds to its shard root, the shard roots fold through the shared multiproof to R of an SPV-verified anchor of this shard on its canonical chain, anchored size. Proves the listed leaf hashes are in the batch: not their content, not truth.',
     inputSchema: {
       type: 'object',
       properties: { shard: { type: 'string' }, bytes: { type: 'string', description: 'L_ZKDis v2 hex from proveSubset' } },
@@ -133,38 +178,45 @@ export const TOOLS = [
   },
   {
     name: 'proveDerivation',
-    description: 'Holder side (Wright §14): ZK-STARK that a committed derivation path to pred(args) exists under the anchored policy DAG — each step applies a rule node Merkle-proven against the policy root. Bound to a verifier-issued queryId → L_ZKDer v3 hex. Reveals neither the path nor any fact.',
+    description:
+      'Holder side (Wright §14): ZK-STARK that a committed derivation path to pred(args) exists under the anchored policy DAG — each step applies a rule node Merkle-proven against the policy root. Bound to a verifier-issued queryId → L_ZKDer v3 hex. Reveals neither the path nor any fact.',
     inputSchema: {
       type: 'object',
       properties: {
         shard: { type: 'string', description: 'supplies the instance fragment(<shard>/<seq>) EDB facts' },
         query: { type: 'object', description: '{pred, args, edb?} — the conclusion to prove entailed; edb facts are private context premises' },
-        queryId: { type: 'string', description: '32-byte hex from the verifier\'s zkQuery' }
+        queryId: { type: 'string', description: "32-byte hex from the verifier's zkQuery" }
       },
       required: ['shard', 'query', 'queryId']
     }
   },
   {
     name: 'verifyDerivation',
-    description: 'Verifier side: verify an L_ZKDer v3 proof — pinned derivation program, STARK valid, proven policyRoot == this verifier\'s anchored policy DAG root, queryId issued here and unused. Proves a derivation exists: not which conclusion, not the premises, not truth.',
+    description:
+      "Verifier side: verify an L_ZKDer v3 proof — pinned derivation program, STARK valid, proven policyRoot == this verifier's anchored policy DAG root, queryId issued here and unused. Proves a derivation exists: not which conclusion, not the premises, not truth.",
     inputSchema: {
       type: 'object',
-      properties: { shard: { type: 'string', description: 'shard carrying the anchored dagroot:<root> record (unless anchoredPolicyRoot is configured)' }, bytes: { type: 'string' } },
+      properties: {
+        shard: { type: 'string', description: 'shard carrying the anchored dagroot:<root> record (unless anchoredPolicyRoot is configured)' },
+        bytes: { type: 'string' }
+      },
       required: ['shard', 'bytes']
     }
   },
   {
     name: 'attestMembership',
-    description: '§13 cheap on-chain commitment: produce the L_ZKMem v2 STARK membership proof AND anchor sha256(proof) in an OP_FALSE OP_RETURN data tx funded by the fee key (a timestamped commitment, not a shard anchor; off-chain verification stays authoritative).',
+    description:
+      '§13 cheap on-chain commitment: produce the L_ZKMem v2 STARK membership proof AND anchor sha256(proof) in an OP_FALSE OP_RETURN data tx funded by the fee key (a timestamped commitment, not a shard anchor; off-chain verification stays authoritative).',
     inputSchema: {
       type: 'object',
-      properties: { shard: { type: 'string' }, seq: { type: 'number' }, queryId: { type: 'string', description: '32-byte hex from the verifier\'s zkQuery' } },
+      properties: { shard: { type: 'string' }, seq: { type: 'number' }, queryId: { type: 'string', description: "32-byte hex from the verifier's zkQuery" } },
       required: ['shard', 'seq', 'queryId']
     }
   },
   {
     name: 'verifyAttestation',
-    description: 'Verifier side: fetch the attestation tx, extract the OP_RETURN commitment and check it equals sha256(supplied proof bytes). Only attestations broadcast by this instance are resolvable.',
+    description:
+      'Verifier side: fetch the attestation tx, extract the OP_RETURN commitment and check it equals sha256(supplied proof bytes). Only attestations broadcast by this instance are resolvable.',
     inputSchema: {
       type: 'object',
       properties: { txid: { type: 'string' }, bytes: { type: 'string', description: 'L_ZKMem v2 hex — the proof whose sha256 should be committed on-chain' } },
@@ -173,7 +225,7 @@ export const TOOLS = [
   },
   {
     name: 'rotate',
-    description: 'Rotate a shard\'s owner key on-chain; emits a matching rotation cert leaf.',
+    description: "Rotate a shard's owner key on-chain; emits a matching rotation cert leaf.",
     inputSchema: {
       type: 'object',
       properties: { shard: { type: 'string' }, newOwnerWif: { type: 'string' } },
@@ -182,7 +234,8 @@ export const TOOLS = [
   },
   {
     name: 'revoke',
-    description: 'Mark a pubkey revoked in the revocation SMT and anchor the event. The anchored record embeds the SMT membership proof (§19 CRL) — third-party verifiable without operator state.',
+    description:
+      'Mark a pubkey revoked in the revocation SMT and anchor the event. The anchored record embeds the SMT membership proof (§19 CRL) — third-party verifiable without operator state.',
     inputSchema: {
       type: 'object',
       properties: { pkHex: { type: 'string' } },
@@ -191,7 +244,8 @@ export const TOOLS = [
   },
   {
     name: 'revocationProof',
-    description: 'Third-party §19 CRL evidence: the anchored __revocation__ record for a pubkey with its embedded SMT membership proof + SPV inclusion bundle. verified=true means the record alone convicts.',
+    description:
+      'Third-party §19 CRL evidence: the anchored __revocation__ record for a pubkey with its embedded SMT membership proof + SPV inclusion bundle. verified=true means the record alone convicts.',
     inputSchema: {
       type: 'object',
       properties: { pkHex: { type: 'string' } },
@@ -200,7 +254,8 @@ export const TOOLS = [
   },
   {
     name: 'revocationStatus',
-    description: 'Is a pubkey revoked? Returns the latest anchored SMT root plus a fresh proof — membership (revoked) or non-membership — verifiable via verifyRevocationStatus without trusting this operator.',
+    description:
+      'Is a pubkey revoked? Returns the latest anchored SMT root plus a fresh proof — membership (revoked) or non-membership — verifiable via verifyRevocationStatus without trusting this operator.',
     inputSchema: {
       type: 'object',
       properties: { pkHex: { type: 'string' } },
@@ -209,7 +264,8 @@ export const TOOLS = [
   },
   {
     name: 'bondDeploy',
-    description: 'Deploy the §12 checkpoint-bond covenant: lock sats so every anchor commits its checkpoint digest to an unforkable on-chain chain. A missed commit inside the SLA window is publicly provable.',
+    description:
+      'Deploy the §12 checkpoint-bond covenant: lock sats so every anchor commits its checkpoint digest to an unforkable on-chain chain. A missed commit inside the SLA window is publicly provable.',
     inputSchema: {
       type: 'object',
       properties: { sats: { type: 'number' }, releaseHeight: { type: 'number' } }
@@ -222,7 +278,8 @@ export const TOOLS = [
   },
   {
     name: 'bondSeize',
-    description: 'Permissionless §12 slashing: claim a checkpoint bond whose commit deadline passed. Any observer may call this — the payout goes to payToScript (default: operator).',
+    description:
+      'Permissionless §12 slashing: claim a checkpoint bond whose commit deadline passed. Any observer may call this — the payout goes to payToScript (default: operator).',
     inputSchema: {
       type: 'object',
       properties: { payToScript: { type: 'string' } }
@@ -248,9 +305,15 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        envelope: { type: 'object' }, ownerPub: { type: 'string' }, verifierPub: { type: 'string' },
-        fieldCount: { type: 'number' }, fieldRoot: { type: 'string' }, siblings: { type: 'array' },
-        atTime: { type: 'number' }, shard: { type: 'string' }, seq: { type: 'number' }
+        envelope: { type: 'object' },
+        ownerPub: { type: 'string' },
+        verifierPub: { type: 'string' },
+        fieldCount: { type: 'number' },
+        fieldRoot: { type: 'string' },
+        siblings: { type: 'array' },
+        atTime: { type: 'number' },
+        shard: { type: 'string' },
+        seq: { type: 'number' }
       },
       required: ['envelope', 'ownerPub', 'verifierPub', 'fieldCount', 'fieldRoot', 'siblings', 'atTime', 'shard', 'seq']
     }
@@ -266,7 +329,9 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string' }, identity: { type: 'object' }, zk: { type: 'object' },
+        action: { type: 'string' },
+        identity: { type: 'object' },
+        zk: { type: 'object' },
         resource: { type: 'object' }
       },
       required: ['action']
@@ -274,28 +339,35 @@ export const TOOLS = [
   },
   {
     name: 'automaton',
-    description: 'Full-mode Merkle Automaton (Rúnar contract): deploy a committed δ, step, halt, or read state. The contract proves δ-conformance of each transition, not correctness of the output content.',
+    description:
+      'Full-mode Merkle Automaton (Rúnar contract): deploy a committed δ, step, halt, or read state. The contract proves δ-conformance of each transition, not correctness of the output content.',
     inputSchema: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['deploy', 'step', 'halt', 'state'] },
-        id: { type: 'string' }, def: { type: 'object' },
-        sym: { type: 'number' }, to: { type: 'number' }, outHash: { type: 'string' }
+        id: { type: 'string' },
+        def: { type: 'object' },
+        sym: { type: 'number' },
+        to: { type: 'number' },
+        outHash: { type: 'string' }
       },
       required: ['op', 'id']
     }
-  }
-  ,
+  },
   {
     name: 'sale',
-    description: 'V3 DisclosureSale (GOAL-v7, BIP-199 escrow) — paid disclosure as one state machine. op=offer {value,price,refundAfter,maxFee,buyerPub?,expiresAt?}: seller wraps a payload (BRC-42 to buyerPub, or public) → {cfg,wrapped,sellerPub,offerSig}. op=offerMemory {shard,seq,price,refundAfter,maxFee,buyerPub?,expiresAt?}: sell one memory record — encrypted goes as its fragment key + ciphertext, plaintext as the canonical fragment; returns commitment {leaf,anchorTxid,hdp,authorPub,proof} so the buyer verifies inclusion BEFORE funding. op=escrow {cfg,amount,offer?}: buyer funds; pass offer={sellerPub,offerSig,expiresAt,commitment} for pre-funding sig + leaf-path + expiry checks. op=complete {cfg,utxo,wrapped,changeSats}: the buy tx — reveals wrapped on-chain, pays the seller price, returns change. op=refund {cfg,utxo,lockTime,changeSats}: depositor reclaim after cfg.refundAfter (locktime-gated). op=claim {txHex,hWrapped,sellerPub?,offerMode?,commitment?}: buyer extracts + verifies the payload (leaf-commitment + provenance check when commitment given). Requires NEKTAR_PAID_DISCLOSURE.',
+    description:
+      'V3 DisclosureSale (GOAL-v7, BIP-199 escrow) — paid disclosure as one state machine. op=offer {value,price,refundAfter,maxFee,buyerPub?,expiresAt?}: seller wraps a payload (BRC-42 to buyerPub, or public) → {cfg,wrapped,sellerPub,offerSig}. op=offerMemory {shard,seq,price,refundAfter,maxFee,buyerPub?,expiresAt?}: sell one memory record — encrypted goes as its fragment key + ciphertext, plaintext as the canonical fragment; returns commitment {leaf,anchorTxid,hdp,authorPub,proof} so the buyer verifies inclusion BEFORE funding. op=escrow {cfg,amount,offer?}: buyer funds; pass offer={sellerPub,offerSig,expiresAt,commitment} for pre-funding sig + leaf-path + expiry checks. op=complete {cfg,utxo,wrapped,changeSats}: the buy tx — reveals wrapped on-chain, pays the seller price, returns change. op=refund {cfg,utxo,lockTime,changeSats}: depositor reclaim after cfg.refundAfter (locktime-gated). op=claim {txHex,hWrapped,sellerPub?,offerMode?,commitment?}: buyer extracts + verifies the payload (leaf-commitment + provenance check when commitment given). Requires NEKTAR_PAID_DISCLOSURE.',
     inputSchema: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'] },
         value: { type: 'string', description: 'offer: hex payload (envelope wrapped bytes or a {field,salt,path} JSON)' },
-        shard: { type: 'string' }, seq: { type: 'number' },
-        price: { type: 'number' }, refundAfter: { type: 'number' }, maxFee: { type: 'number' },
+        shard: { type: 'string' },
+        seq: { type: 'number' },
+        price: { type: 'number' },
+        refundAfter: { type: 'number' },
+        maxFee: { type: 'number' },
         buyerPub: { type: 'string', description: 'recipient pubkey — omit for public disclosure' },
         expiresAt: { type: 'number', description: 'block height at which the signed offer lapses' },
         cfg: { type: 'object', description: 'escrow cfg (offer fields + depositorPkh)' },
@@ -303,36 +375,46 @@ export const TOOLS = [
         offer: { type: 'object', description: 'escrow: {sellerPub, offerSig, expiresAt, commitment} — verified pre-funding' },
         utxo: { type: 'object', description: '{txid, vout, satoshis, script} of the funded escrow' },
         wrapped: { type: 'string', description: 'committed wrapped hex (sha256(wrapped) == cfg.hWrapped)' },
-        changeSats: { type: 'number' }, lockTime: { type: 'number' },
-        txHex: { type: 'string' }, hWrapped: { type: 'string' },
+        changeSats: { type: 'number' },
+        lockTime: { type: 'number' },
+        txHex: { type: 'string' },
+        hWrapped: { type: 'string' },
         sellerPub: { type: 'string', description: 'claim: needed to unwrap private (BRC-42) payloads' },
         offerMode: { type: 'string', description: 'claim: "key" for encrypted-record key sales' },
-        commitment: { type: 'object', description: 'claim: {leaf,hdp,authorPub,anchorTxid} — verifies leaf inclusion + provenance σ' },
+        commitment: { type: 'object', description: 'claim: {leaf,hdp,authorPub,anchorTxid} — verifies leaf inclusion + provenance σ' }
       },
       required: ['op']
     }
   },
   {
     name: 'claim',
-    description: 'Optimistic-claim rail (§4.5) + pay-iff-proven gated sale — regtest only. op=deploy {lzkmem,bondSats?,deadline?,anchorOutpoint?}: deploy a NektarZkClaim covenant bound to an L_ZKMem bundle — journal root/size/queryId committed behind the prover\'s bond; the watcher re-verifies the RISC Zero receipt off-chain and auto-challenges fraud. op=status {txid,vout?}: claim state open|challenged|revealed|bisecting, deadline, journalRoot, bond. op=settle {txid,vout?,payoutSats?,verdictSats?}: settle an open claim after deadline → ClaimVerdict UTXO + bond payout (unanchored only — anchored claims settle via the anchor co-spend). op=deploySale {verdictOutpoint,priceSats,wrapped}: DisclosureSale bound to a settled verdict — the price pays only in a tx that also consumes it (atomic pay-iff-settled). op=buySale {saleTxid,verdictOutpoint,wrapped,priceSats,changeSats?}: spends [sale,verdict] — consensus refuses without the verdict input.',
+    description:
+      "Optimistic-claim rail (§4.5) + pay-iff-proven gated sale — regtest only. op=deploy {lzkmem,bondSats?,deadline?,anchorOutpoint?}: deploy a NektarZkClaim covenant bound to an L_ZKMem bundle — journal root/size/queryId committed behind the prover's bond; the watcher re-verifies the RISC Zero receipt off-chain and auto-challenges fraud. op=status {txid,vout?}: claim state open|challenged|revealed|bisecting, deadline, journalRoot, bond. op=settle {txid,vout?,payoutSats?,verdictSats?}: settle an open claim after deadline → ClaimVerdict UTXO + bond payout (unanchored only — anchored claims settle via the anchor co-spend). op=deploySale {verdictOutpoint,priceSats,wrapped}: DisclosureSale bound to a settled verdict — the price pays only in a tx that also consumes it (atomic pay-iff-settled). op=buySale {saleTxid,verdictOutpoint,wrapped,priceSats,changeSats?}: spends [sale,verdict] — consensus refuses without the verdict input.",
     inputSchema: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['deploy', 'status', 'settle', 'deploySale', 'buySale'] },
         lzkmem: { type: 'string', description: 'deploy: L_ZKMem v2 hex from proveMembership' },
-        bondSats: { type: 'number' }, deadline: { type: 'number', description: 'deploy: locktime when the claim becomes settleable; 0 = immediately' },
+        bondSats: { type: 'number' },
+        deadline: { type: 'number', description: 'deploy: locktime when the claim becomes settleable; 0 = immediately' },
         anchorOutpoint: { type: 'string', description: 'deploy: 36-byte anchor outpoint hex to bind journalRoot == anchor.R; omit for unanchored' },
-        txid: { type: 'string' }, vout: { type: 'number' }, payoutSats: { type: 'number' }, verdictSats: { type: 'number' },
+        txid: { type: 'string' },
+        vout: { type: 'number' },
+        payoutSats: { type: 'number' },
+        verdictSats: { type: 'number' },
         verdictOutpoint: { type: 'string', description: '36-byte outpoint hex of the settled verdict' },
-        priceSats: { type: 'number' }, wrapped: { type: 'string', description: 'payload to reveal on buy (hex)' },
-        saleTxid: { type: 'string' }, changeSats: { type: 'number' }
+        priceSats: { type: 'number' },
+        wrapped: { type: 'string', description: 'payload to reveal on buy (hex)' },
+        saleTxid: { type: 'string' },
+        changeSats: { type: 'number' }
       },
       required: ['op']
     }
   },
   {
     name: 'modelManifest',
-    description: 'AGT-011: declare + anchor which model this instance runs — local weights sha256 or API provider+release. Anchored on __model__ and bound into subsequent receipts. DECLARED, not proven: says which model the operator says answered, not that the inference ran those weights.',
+    description:
+      'AGT-011: declare + anchor which model this instance runs — local weights sha256 or API provider+release. Anchored on __model__ and bound into subsequent receipts. DECLARED, not proven: says which model the operator says answered, not that the inference ran those weights.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -347,7 +429,8 @@ export const TOOLS = [
   },
   {
     name: 'groundedAnswer',
-    description: 'Wright §8 (∀φ∈Rq ∃Ki: VerifyFragment(Ki)∧φ⊢di): takes the caller\'s draft claims, checks every cite resolves to a VERIFIED fragment and the claim is quoted or Datalog-entailed, STRIPS everything that fails, then anchors an answer receipt. Ungrounded statements are removed — the receipt is the per-answer proof, not an optional add-on.',
+    description:
+      "Wright §8 (∀φ∈Rq ∃Ki: VerifyFragment(Ki)∧φ⊢di): takes the caller's draft claims, checks every cite resolves to a VERIFIED fragment and the claim is quoted or Datalog-entailed, STRIPS everything that fails, then anchors an answer receipt. Ungrounded statements are removed — the receipt is the per-answer proof, not an optional add-on.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -358,40 +441,72 @@ export const TOOLS = [
             properties: {
               text: { type: 'string' },
               literal: { type: 'string', description: 'optional Datalog literal for entailment checking' },
-              cites: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] }, description: 'private-shard cites are auto-proved (ZK membership) when the prover is available; may also carry explicit zk:{queryId,proof}' }
+              cites: {
+                type: 'array',
+                items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] },
+                description: 'private-shard cites are auto-proved (ZK membership) when the prover is available; may also carry explicit zk:{queryId,proof}'
+              }
             },
             required: ['text', 'cites']
           }
         },
         mode: { type: 'string', description: '"remove" (default — strip ungrounded) or "flag"' },
-        modelAttestation: { type: 'object', description: 'optional inference attestation (from attestInference): the statement is re-derived before being committed' },
-        attestInference: { type: 'object', description: 'auto-attest in one call: {input?, output?, onchain?} — runs attestInference and embeds the validated modelAttestation. Mutually exclusive with modelAttestation.' },
-        payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } }
+        modelAttestation: {
+          type: 'object',
+          description: 'optional inference attestation (from attestInference): the statement is re-derived before being committed'
+        },
+        attestInference: {
+          type: 'object',
+          description:
+            'auto-attest in one call: {input?, output?, onchain?} — runs attestInference and embeds the validated modelAttestation. Mutually exclusive with modelAttestation.'
+        },
+        payment: {
+          type: 'object',
+          description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote',
+          properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } }
+        }
       },
       required: ['claims']
     }
   },
   {
     name: 'commitReceipt',
-    description: 'AGT-012: commit an answer receipt {answer, fragmentRefs, checkResult} — hashed and anchored on __receipts__. Anchored "what I said" — proves the answer was committed, not that it is true.',
+    description:
+      'AGT-012: commit an answer receipt {answer, fragmentRefs, checkResult} — hashed and anchored on __receipts__. Anchored "what I said" — proves the answer was committed, not that it is true.',
     inputSchema: {
       type: 'object',
       properties: {
         answer: { type: 'string' },
-        fragmentRefs: { type: 'array', items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] }, description: 'private-shard refs are auto-proved (ZK membership) when the prover is available; explicit zk:{queryId,proof} still accepted' },
+        fragmentRefs: {
+          type: 'array',
+          items: { type: 'object', properties: { shard: { type: 'string' }, seq: { type: 'number' } }, required: ['shard', 'seq'] },
+          description: 'private-shard refs are auto-proved (ZK membership) when the prover is available; explicit zk:{queryId,proof} still accepted'
+        },
         checkResult: { type: 'string', description: 'verified | unverifiable | failed' },
         model: { type: 'object', description: 'optional ModelIdentity override; defaults to the manifest set by modelManifest' },
-        modelAttestation: { type: 'object', description: 'optional inference attestation (from attestInference): the statement is re-derived before being committed' },
-        attestInference: { type: 'object', description: 'auto-attest in one call: {input?, output?, onchain?} — runs attestInference and embeds the validated modelAttestation. Mutually exclusive with modelAttestation.' },
+        modelAttestation: {
+          type: 'object',
+          description: 'optional inference attestation (from attestInference): the statement is re-derived before being committed'
+        },
+        attestInference: {
+          type: 'object',
+          description:
+            'auto-attest in one call: {input?, output?, onchain?} — runs attestInference and embeds the validated modelAttestation. Mutually exclusive with modelAttestation.'
+        },
         groundingReportHash: { type: 'string' },
-        payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } }
+        payment: {
+          type: 'object',
+          description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote',
+          properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } }
+        }
       },
       required: ['answer', 'fragmentRefs', 'checkResult']
     }
   },
   {
     name: 'payQuote',
-    description: 'Issue a payment invoice for a paid tool (NEKTAR_PAYMENTS=1): returns the operator address, amount, and the OP_RETURN invoice tag. Pay it with a signed raw tx (output to payTo ≥ amount + OP_RETURN output carrying the tag), then retry the tool with payment:{invoiceId, transaction}. Settlement is atomic — the tx IS the payment.',
+    description:
+      'Issue a payment invoice for a paid tool (NEKTAR_PAYMENTS=1): returns the operator address, amount, and the OP_RETURN invoice tag. Pay it with a signed raw tx (output to payTo ≥ amount + OP_RETURN output carrying the tag), then retry the tool with payment:{invoiceId, transaction}. Settlement is atomic — the tx IS the payment.',
     inputSchema: {
       type: 'object',
       properties: { tool: { type: 'string', enum: ['anchor', 'groundedAnswer', 'commitReceipt'], description: 'the paid tool you intend to call' } },
@@ -400,20 +515,30 @@ export const TOOLS = [
   },
   {
     name: 'attestInference',
-    description: 'Model-execution attestation (nChain ai_inference-style): re-derives the Groth16 public statement poseidon(input‖output‖poseidon(model)) for the shipped 784×16×10 quantized MLP. DEFAULT PATH: anchors sha256(proof) in a ~300B OP_RETURN attestation tx and publishes the proof at /v1/zkproof/<commit> — cheap, one tx, verifiable by anyone. onchain:true instead deploys the ~398KB in-script verifier and spends it (Wright §18 "executable on-chain if necessary" — the dispute/showcase rail, ~440KB). Returns a modelAttestation record to embed in commitReceipt/groundedAnswer. Only the canned demo vector has a proof today; LLM inference stays declared-only.',
+    description:
+      'Model-execution attestation (nChain ai_inference-style): re-derives the Groth16 public statement poseidon(input‖output‖poseidon(model)) for the shipped 784×16×10 quantized MLP. DEFAULT PATH: anchors sha256(proof) in a ~300B OP_RETURN attestation tx and publishes the proof at /v1/zkproof/<commit> — cheap, one tx, verifiable by anyone. onchain:true instead deploys the ~398KB in-script verifier and spends it (Wright §18 "executable on-chain if necessary" — the dispute/showcase rail, ~440KB). Returns a modelAttestation record to embed in commitReceipt/groundedAnswer. Only the canned demo vector has a proof today; LLM inference stays declared-only.',
     inputSchema: {
       type: 'object',
       properties: {
         input: { type: 'array', items: { type: 'number' }, description: '784-element input — defaults to the demo vector' },
         output: { type: 'number', description: 'expected argmax — defaults to the demo vector (9)' },
-        onchain: { type: 'boolean', description: 'true = deploy+spend the in-script verifier under consensus (the heavy rail). Default anchors sha256(proof) in a small attestation tx instead.' },
-        payment: { type: 'object', description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote', properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } } }
+        onchain: {
+          type: 'boolean',
+          description:
+            'true = deploy+spend the in-script verifier under consensus (the heavy rail). Default anchors sha256(proof) in a small attestation tx instead.'
+        },
+        payment: {
+          type: 'object',
+          description: 'payment settlement for paid mode: {invoiceId, transaction:<signed raw tx hex>} — see payQuote',
+          properties: { invoiceId: { type: 'string' }, transaction: { type: 'string' } }
+        }
       }
     }
   },
   {
     name: 'verifyReceipt',
-    description: 'Scan a receipt token (nektarr1.…) or receiptHash and run the traffic-light checks: the receipt exists on __receipts__, its body re-hashes, the originator signature verifies, it is anchored, and every cited fragment is anchored. Proves the answer was committed + derivable — never that it was true.',
+    description:
+      'Scan a receipt token (nektarr1.…) or receiptHash and run the traffic-light checks: the receipt exists on __receipts__, its body re-hashes, the originator signature verifies, it is anchored, and every cited fragment is anchored. Proves the answer was committed + derivable — never that it was true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -424,12 +549,14 @@ export const TOOLS = [
   },
   {
     name: 'fundingStatus',
-    description: 'Operator fee-wallet status: funding address (send a few sats here), tracked UTXOs, balance, and — on live networks — spend caps, avg fee per anchor and estimated runway. Anchoring fails when the reserve is empty.',
+    description:
+      'Operator fee-wallet status: funding address (send a few sats here), tracked UTXOs, balance, and — on live networks — spend caps, avg fee per anchor and estimated runway. Anchoring fails when the reserve is empty.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
     name: 'payInvoice',
-    description: 'Pay an invoice (from payQuote — buyer passes invoiceId/amount/lockingScriptHex/opReturn): builds + signs the payment tx from this instance\'s fund key — output ≥ amount to lockingScriptHex + OP_FALSE OP_RETURN tag. Returns payment:{invoiceId, transaction:<BEEF/EF hex>} ready to retry the paid call with. §16: settlement is an anchored tx — the audit trail is the receipt itself.',
+    description:
+      "Pay an invoice (from payQuote — buyer passes invoiceId/amount/lockingScriptHex/opReturn): builds + signs the payment tx from this instance's fund key — output ≥ amount to lockingScriptHex + OP_FALSE OP_RETURN tag. Returns payment:{invoiceId, transaction:<BEEF/EF hex>} ready to retry the paid call with. §16: settlement is an anchored tx — the audit trail is the receipt itself.",
     inputSchema: {
       type: 'object',
       required: ['invoiceId', 'amount', 'lockingScriptHex', 'opReturn'],
@@ -443,7 +570,8 @@ export const TOOLS = [
   },
   {
     name: 'sendSats',
-    description: 'Send sats to an address or locking script — builds, signs and BROADCASTS a plain P2PKH payment from the fee reserve (unlike payInvoice, which returns an unsigned-for-settlement BEEF). Use this to fund another agent\'s fee address.',
+    description:
+      "Send sats to an address or locking script — builds, signs and BROADCASTS a plain P2PKH payment from the fee reserve (unlike payInvoice, which returns an unsigned-for-settlement BEEF). Use this to fund another agent's fee address.",
     inputSchema: {
       type: 'object',
       required: ['amount'],
@@ -457,12 +585,14 @@ export const TOOLS = [
   },
   {
     name: 'fundingRefresh',
-    description: 'Reconcile the fee reserve against chain truth: clears spent-marks left by dead unbroadcast txs (phantom entries), marks entries actually spent on-chain, and imports new outputs discovered at the fee address. Fixes "no funding UTXO" / dust-pick / insufficient-fee failures without a restart. Live networks only.',
+    description:
+      'Reconcile the fee reserve against chain truth: clears spent-marks left by dead unbroadcast txs (phantom entries), marks entries actually spent on-chain, and imports new outputs discovered at the fee address. Fixes "no funding UTXO" / dust-pick / insufficient-fee failures without a restart. Live networks only.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
     name: 'fundingImport',
-    description: 'Import a funding transaction paying the operator fee address (a txid, or "hex:<rawtx>" where supported) into the tracked reserve — use after sending sats to the fundingStatus address. Live networks only.',
+    description:
+      'Import a funding transaction paying the operator fee address (a txid, or "hex:<rawtx>" where supported) into the tracked reserve — use after sending sats to the fundingStatus address. Live networks only.',
     inputSchema: {
       type: 'object',
       required: ['txid'],
@@ -471,7 +601,8 @@ export const TOOLS = [
   },
   {
     name: 'exportShard',
-    description: 'Export a PUBLIC shard as a portable pack: every record\'s plaintext + provenance + its anchor proof bundle. Private shards and level>0 records refuse — a pack never carries gated content. importShard on another instance re-verifies everything.',
+    description:
+      "Export a PUBLIC shard as a portable pack: every record's plaintext + provenance + its anchor proof bundle. Private shards and level>0 records refuse — a pack never carries gated content. importShard on another instance re-verifies everything.",
     inputSchema: {
       type: 'object',
       required: ['shard'],
@@ -480,7 +611,8 @@ export const TOOLS = [
   },
   {
     name: 'importShard',
-    description: 'Import a shard pack (from exportShard or a remote operator): records re-land preserving provenance, every proof bundle re-verifies against the live chain (zero trust in the exporter — a hostile pack yields unverifiable entries, never trusted records), and the import event itself is recorded on __imports__. Target shard must be empty. Same network only — a regtest pack cannot anchor-verify on mainnet. Give EITHER {pack} (ShardPack JSON), OR {from, shard} (an operator base URL + shard — fetches {from}/v1/pack/{shard}), OR {packUrl} (a full pack URL).',
+    description:
+      'Import a shard pack (from exportShard or a remote operator): records re-land preserving provenance, every proof bundle re-verifies against the live chain (zero trust in the exporter — a hostile pack yields unverifiable entries, never trusted records), and the import event itself is recorded on __imports__. Target shard must be empty. Same network only — a regtest pack cannot anchor-verify on mainnet. Give EITHER {pack} (ShardPack JSON), OR {from, shard} (an operator base URL + shard — fetches {from}/v1/pack/{shard}), OR {packUrl} (a full pack URL).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -493,54 +625,80 @@ export const TOOLS = [
   },
   {
     name: 'doctor',
-    description: 'One-call diagnostic: network, funding (address, balance, utxos), shard/record/anchor counts, unproven anchors, payment and prover status. The "is everything working" check. fix:true also repairs what is safe — stale/corrupt instance.lock, missing data dir, missing VERSION marker; anything needing a spend or a judgment call is reported as refused, never attempted silently.',
-    inputSchema: { type: 'object', properties: { fix: { type: 'boolean', description: 'apply safe repairs (stale/corrupt lock, missing dir, VERSION baseline)' } } }
+    description:
+      'One-call diagnostic: network, funding (address, balance, utxos), shard/record/anchor counts, unproven anchors, payment and prover status. The "is everything working" check. fix:true also repairs what is safe — stale/corrupt instance.lock, missing data dir, missing VERSION marker; anything needing a spend or a judgment call is reported as refused, never attempted silently.',
+    inputSchema: {
+      type: 'object',
+      properties: { fix: { type: 'boolean', description: 'apply safe repairs (stale/corrupt lock, missing dir, VERSION baseline)' } }
+    }
   },
   {
     name: 'describeShard',
-    description: 'Commit a shard manifest to __catalog__: the domain tags other agents discover this shard by ("who knows about soccer"), a free-text description, and what is for sale. Anchored + timestamped like any memory — the claim is attributable; re-describing appends a newer manifest. Served via /.well-known/nektar.',
+    description:
+      'Commit a shard manifest to __catalog__: the domain tags other agents discover this shard by ("who knows about soccer"), a free-text description, and what is for sale. Anchored + timestamped like any memory — the claim is attributable; re-describing appends a newer manifest. Served via /.well-known/nektar.',
     inputSchema: {
       type: 'object',
       required: ['shard', 'domains'],
       properties: {
         shard: { type: 'string' },
-        domains: { type: 'array', items: { type: 'string' }, description: 'topic tags this shard covers, e.g. ["soccer","transfer-rumours"] — lowercase a-z0-9._-, up to 32 tags' },
-        desc: { type: 'string', description: 'one-paragraph description of the shard\'s coverage (≤560 chars)' },
-        offers: { type: 'array', items: { type: 'object', properties: { kind: { type: 'string', enum: ['answer', 'pack', 'record'] }, priceSats: { type: 'number' }, seq: { type: 'number' } }, required: ['kind'] }, description: 'saleable access modes: answer = paid groundedAnswer, pack = public shard pack, record = one record via sale escrow (seq required)' }
+        domains: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'topic tags this shard covers, e.g. ["soccer","transfer-rumours"] — lowercase a-z0-9._-, up to 32 tags'
+        },
+        desc: { type: 'string', description: "one-paragraph description of the shard's coverage (≤560 chars)" },
+        offers: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { kind: { type: 'string', enum: ['answer', 'pack', 'record'] }, priceSats: { type: 'number' }, seq: { type: 'number' } },
+            required: ['kind']
+          },
+          description: 'saleable access modes: answer = paid groundedAnswer, pack = public shard pack, record = one record via sale escrow (seq required)'
+        }
       }
     }
   },
   {
     name: 'importRecord',
-    description: 'Land a record purchased via sale#claim as local memory — pass the VERIFIED claim payload (data + provenance). An __imports__ audit record commits the acquisition (source shard:seq, leaf, settlement txid).',
+    description:
+      'Land a record purchased via sale#claim as local memory — pass the VERIFIED claim payload (data + provenance). An __imports__ audit record commits the acquisition (source shard:seq, leaf, settlement txid).',
     inputSchema: {
       type: 'object',
       required: ['data'],
       properties: {
         data: { type: 'string', description: 'the verified claim payload' },
         provenance: { type: 'object', description: '{sourcePub,hash,timestamp,sig} from the claim — preserved on the record' },
-        sourceShard: { type: 'string' }, sourceSeq: { type: 'number' },
-        leaf: { type: 'string' }, saleTxid: { type: 'string' },
+        sourceShard: { type: 'string' },
+        sourceSeq: { type: 'number' },
+        leaf: { type: 'string' },
+        saleTxid: { type: 'string' },
         shard: { type: 'string', description: 'local shard to land it on (default "bought")' }
       }
     }
   },
   {
     name: 'automation',
-    description: 'Autonomous marketplace under an operator-approved policy. op=publishWant {domains, question, maxSats, policyHash} publishes a signed want and the runtime collects offers, scores them, funds escrow, verifies the disclosure and refunds on timeout without further calls. op=enableSeller {policyHash} answers matching wants from the sellable shards named in the policy. op=status {operationId} | operations | approvals | budget {policyHash} | policies are read-only. Approving policies and exceptions is operator-only (pnpm automation ...), never available here.',
+    description:
+      'Autonomous marketplace under an operator-approved policy. op=publishWant {domains, question, maxSats, policyHash} publishes a signed want and the runtime collects offers, scores them, funds escrow, verifies the disclosure and refunds on timeout without further calls. op=enableSeller {policyHash} answers matching wants from the sellable shards named in the policy. op=status {operationId} | operations | approvals | budget {policyHash} | policies are read-only. Approving policies and exceptions is operator-only (pnpm automation ...), never available here.',
     inputSchema: {
       type: 'object',
       required: ['op'],
       properties: {
         op: { type: 'string', enum: ['publishWant', 'enableSeller', 'status', 'operations', 'approvals', 'budget', 'policies'] },
-        policyHash: { type: 'string' }, operationId: { type: 'string' },
-        domains: { type: 'array', items: { type: 'string' } }, question: { type: 'string' }, maxSats: { type: 'number' }, wantId: { type: 'string' }
+        policyHash: { type: 'string' },
+        operationId: { type: 'string' },
+        domains: { type: 'array', items: { type: 'string' } },
+        question: { type: 'string' },
+        maxSats: { type: 'number' },
+        wantId: { type: 'string' }
       }
     }
   },
   {
     name: 'want',
-    description: "Publish a signed purchase want under the agent's single active buyer policy — the engine collects offers, selects, escrows and settles autonomously.",
+    description:
+      "Publish a signed purchase want under the agent's single active buyer policy — the engine collects offers, selects, escrows and settles autonomously.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -553,7 +711,8 @@ export const TOOLS = [
   },
   {
     name: 'sell',
-    description: 'List a shard for sale and enable autonomous selling: commits the manifest (describeShard with a record offer at priceSats) and arms the seller under the single active seller policy.',
+    description:
+      'List a shard for sale and enable autonomous selling: commits the manifest (describeShard with a record offer at priceSats) and arms the seller under the single active seller policy.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -567,7 +726,8 @@ export const TOOLS = [
   },
   {
     name: 'deals',
-    description: "List this agent's market operations (newest first, max 50) or detail one: state machine, event trail, sealed seller wraps, and the disclosed result once verified.",
+    description:
+      "List this agent's market operations (newest first, max 50) or detail one: state machine, event trail, sealed seller wraps, and the disclosed result once verified.",
     inputSchema: {
       type: 'object',
       properties: { operationId: { type: 'string' } }
@@ -575,20 +735,26 @@ export const TOOLS = [
   },
   {
     name: 'fund',
-    description: "Funding overview: receive address, spendable balance, tracked UTXOs, free market/bbox funding-tree slots, and the single active policy's budget when there is one.",
+    description:
+      "Funding overview: receive address, spendable balance, tracked UTXOs, free market/bbox funding-tree slots, and the single active policy's budget when there is one.",
     inputSchema: { type: 'object', properties: {} }
   },
   {
     name: 'evidence',
-    description: "Fetch a stored trade-evidence bundle from the bstore object store and re-verify it: {ref} ({bucket?, key, sha256, size?}) or {operationId} to resolve the operation's stored ref. Returns {ok, checks} — redacted bundles name the checks the withheld question/disclosure fields make unavailable.",
+    description:
+      "Fetch a stored trade-evidence bundle from the bstore object store and re-verify it: {ref} ({bucket?, key, sha256, size?}) or {operationId} to resolve the operation's stored ref. Returns {ok, checks} — redacted bundles name the checks the withheld question/disclosure fields make unavailable.",
     inputSchema: {
       type: 'object',
       properties: {
-        ref: { type: 'object', properties: { bucket: { type: 'string' }, key: { type: 'string' }, sha256: { type: 'string' }, size: { type: 'number' } }, required: ['key', 'sha256'] },
+        ref: {
+          type: 'object',
+          properties: { bucket: { type: 'string' }, key: { type: 'string' }, sha256: { type: 'string' }, size: { type: 'number' } },
+          required: ['key', 'sha256']
+        },
         operationId: { type: 'string' }
       }
     }
-  },
+  }
 ] as const
 
 // consolidated state machines: op → internal case label (never listed in
@@ -600,12 +766,20 @@ const CLAIM_OPS = new Set(['deploy', 'status', 'settle', 'deploySale', 'buySale'
 const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAID_DISCLOSURE ?? '')
 /** tools visible to clients right now — paid-disclosure tools are gated by env */
 const AGENT_TOOLS = new Set(['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor'])
-const toolProfile = (): 'agent' | 'operator' => (process.env.NEKTAR_TOOL_PROFILE ?? 'agent').toLowerCase() === 'operator' ? 'operator' : 'agent'
-export const visibleTools = () => TOOLS.filter(t => (toolProfile() === 'operator' || AGENT_TOOLS.has(t.name)) && (!PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled()))
+const toolProfile = (): 'agent' | 'operator' => ((process.env.NEKTAR_TOOL_PROFILE ?? 'agent').toLowerCase() === 'operator' ? 'operator' : 'agent')
+export const visibleTools = () =>
+  TOOLS.filter((t) => (toolProfile() === 'operator' || AGENT_TOOLS.has(t.name)) && (!PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled()))
 
-const AUTOMATON_NOTE = 'On-chain proof that the transition (q, σ, q′) is in the committed δ and was authorized by the owner; it says nothing about whether the output content is true.'
-const automatonView = (h: import('@nektar/automaton').AutomatonHead) =>
-  ({ txid: h.tx.id('hex'), q: h.state.q, n: h.state.n, halted: h.state.halted, deltaRoot: h.state.deltaRoot, statement: AUTOMATON_NOTE })
+const AUTOMATON_NOTE =
+  'On-chain proof that the transition (q, σ, q′) is in the committed δ and was authorized by the owner; it says nothing about whether the output content is true.'
+const automatonView = (h: import('@nektar/automaton').AutomatonHead) => ({
+  txid: h.tx.id('hex'),
+  q: h.state.q,
+  n: h.state.n,
+  halted: h.state.halted,
+  deltaRoot: h.state.deltaRoot,
+  statement: AUTOMATON_NOTE
+})
 
 /** live-network runtime surface handed in by the MCP/HTTP transport layer —
  *  absent under stdio-less callers (tests, hooks), in which case the funding
@@ -625,14 +799,41 @@ export interface ToolCtx {
 
 /** tools that change instance state — a successful call emits 'change' on
  *  mem.events so live surfaces (dashboard SSE) refresh instantly */
-const MUTATING_TOOLS = new Set(['automation', 'remember', 'describeShard', 'groundedAnswer', 'commitReceipt', 'importRecord', 'importShard', 'disclose', 'rotate', 'revoke', 'payInvoice', 'payQuote', 'authorize', 'challenge', 'bondDeploy', 'bondSeize', 'bondCommit', 'bondClose', 'anchor', 'automaton', 'claim', 'sale', 'attestInference', 'fundingImport', 'sendSats', 'fundingRefresh'])
+const MUTATING_TOOLS = new Set([
+  'automation',
+  'remember',
+  'describeShard',
+  'groundedAnswer',
+  'commitReceipt',
+  'importRecord',
+  'importShard',
+  'disclose',
+  'rotate',
+  'revoke',
+  'payInvoice',
+  'payQuote',
+  'authorize',
+  'challenge',
+  'bondDeploy',
+  'bondSeize',
+  'bondCommit',
+  'bondClose',
+  'anchor',
+  'automaton',
+  'claim',
+  'sale',
+  'attestInference',
+  'fundingImport',
+  'sendSats',
+  'fundingRefresh'
+])
 
-function settleEscrow (mem: NektarMemory, funding: Array<{ tx: import('@bsv/sdk').Transaction, vout: number }>, tx: import('@bsv/sdk').Transaction): void {
+function settleEscrow(mem: NektarMemory, funding: Array<{ tx: import('@bsv/sdk').Transaction; vout: number }>, tx: import('@bsv/sdk').Transaction): void {
   for (const inp of funding) mem.markSpentOut(inp.tx.id('hex'), inp.vout)
   if (tx.outputs[1]) mem.addOwnedOut(tx, 1)
 }
 
-export async function callTool (mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
+export async function callTool(mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
   const r = await dispatchTool(mem, name, args, ctx)
   if (MUTATING_TOOLS.has(name) || name.includes('#')) mem.events.emit('change', name)
   return r
@@ -641,7 +842,7 @@ export async function callTool (mem: NektarMemory, name: string, args: any, ctx:
 /** the single non-revoked policy carrying `role` for this agent+network —
  *  exactly-one is an operator decision: none means "approve one first",
  *  several means "revoke down to one" — the agent never picks silently */
-async function singlePolicy (au: NonNullable<NektarMemory['automation']>, role: 'buyer' | 'seller', tool: string): Promise<string> {
+async function singlePolicy(au: NonNullable<NektarMemory['automation']>, role: 'buyer' | 'seller', tool: string): Promise<string> {
   const found: string[] = []
   for (const r of await au.store.policies()) {
     if (r.revokedAt !== undefined) continue
@@ -652,7 +853,7 @@ async function singlePolicy (au: NonNullable<NektarMemory['automation']>, role: 
   return found[0]!
 }
 
-async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
+async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
   if (PAID_SALE_TOOLS.has(name) && !paidSaleEnabled()) throw new Error(`${name}: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1`)
   // NEKTAR_PAYMENTS=1 (BRC-166-style): anchor/groundedAnswer/commitReceipt need a
   // settled payment tx before they run — atomic, one tx per call, publicly
@@ -661,10 +862,16 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
   // paid content paths: a manifest's offers price recall ('answer' → read
   // sats) and pack downloads ('pack' sats) for EXTERNAL callers. Priced
   // shards join the PAID_TOOLS gate with the manifest's amount.
-  const pricedTool = async (): Promise<{ tool: string, amount: number } | undefined> => {
+  const pricedTool = async (): Promise<{ tool: string; amount: number } | undefined> => {
     if (!paymentsEnabled() || !ctx.external) return undefined
-    if (name === 'recall' && args?.shard) { const p = await mem.contentPrice(String(args.shard), 'read').catch(() => 0); if (p > 0) return { tool: 'recall', amount: p } }
-    if (name === 'exportShard' && args?.shard) { const p = await mem.contentPrice(String(args.shard), 'pack').catch(() => 0); if (p > 0) return { tool: 'exportShard', amount: p } }
+    if (name === 'recall' && args?.shard) {
+      const p = await mem.contentPrice(String(args.shard), 'read').catch(() => 0)
+      if (p > 0) return { tool: 'recall', amount: p }
+    }
+    if (name === 'exportShard' && args?.shard) {
+      const p = await mem.contentPrice(String(args.shard), 'pack').catch(() => 0)
+      if (p > 0) return { tool: 'exportShard', amount: p }
+    }
     return undefined
   }
   const gated = paymentsEnabled() ? (PAID_TOOLS.has(name) ? { tool: name, amount: priceFor(name) } : await pricedTool()) : undefined
@@ -680,7 +887,21 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (!PAID_TOOLS.has(String(args?.tool))) throw new Error(`payQuote: unknown or unpaid tool "${args?.tool}"`)
       if (!paymentsEnabled()) throw new Error('payments are disabled — set NEKTAR_PAYMENTS=1 (and NEKTAR_OPERATOR_WIF)')
       const { invoice, required } = paymentRequired(String(args.tool))
-      return { invoice: { invoiceId: invoice.invoiceId, tool: invoice.tool, amount: invoice.amount, payTo: invoice.payTo, lockingScriptHex: invoice.lockingScriptHex, opReturn: invoice.opReturn, expires: new Date(invoice.expires).toISOString(), expiresMs: invoice.expires, pub: invoice.pub, quoteSig: invoice.quoteSig }, paymentRequired: required }
+      return {
+        invoice: {
+          invoiceId: invoice.invoiceId,
+          tool: invoice.tool,
+          amount: invoice.amount,
+          payTo: invoice.payTo,
+          lockingScriptHex: invoice.lockingScriptHex,
+          opReturn: invoice.opReturn,
+          expires: new Date(invoice.expires).toISOString(),
+          expiresMs: invoice.expires,
+          pub: invoice.pub,
+          quoteSig: invoice.quoteSig
+        },
+        paymentRequired: required
+      }
     }
     case 'payInvoice': {
       // F3 — a grantId scopes this payment to the cumulative ledger; the
@@ -690,9 +911,26 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         const r = mem.budget.reserve(gid, `payInvoice:${args.invoiceId}`, Number(args.amount))
         if (r === 'exists') throw new Error(`payInvoice: action already recorded for grant ${gid} � idempotent replay refused`)
         if (r !== 'ok') throw new Error(`payInvoice: grant ${gid} budget ${r}`)
-        try { const out = await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) }); mem.budget.commit(gid, `payInvoice:${args.invoiceId}`); return out } catch (e) { mem.budget.release(gid, `payInvoice:${args.invoiceId}`); throw e }
+        try {
+          const out = await mem.payInvoice({
+            invoiceId: String(args.invoiceId),
+            amount: Number(args.amount),
+            lockingScriptHex: String(args.lockingScriptHex),
+            opReturn: String(args.opReturn)
+          })
+          mem.budget.commit(gid, `payInvoice:${args.invoiceId}`)
+          return out
+        } catch (e) {
+          mem.budget.release(gid, `payInvoice:${args.invoiceId}`)
+          throw e
+        }
       }
-      return await mem.payInvoice({ invoiceId: String(args.invoiceId), amount: Number(args.amount), lockingScriptHex: String(args.lockingScriptHex), opReturn: String(args.opReturn) })
+      return await mem.payInvoice({
+        invoiceId: String(args.invoiceId),
+        amount: Number(args.amount),
+        lockingScriptHex: String(args.lockingScriptHex),
+        opReturn: String(args.opReturn)
+      })
     }
     case 'sendSats': {
       return await mem.sendSats({ amount: Number(args.amount), address: args.address, scriptHex: args.scriptHex, opReturn: args.opReturn })
@@ -709,27 +947,41 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         const r = mem.budget.reserve(gid, actionId, amount)
         if (r === 'exists') throw new Error(`sale: action already recorded for grant ${gid} � idempotent replay refused`)
         if (r !== 'ok') throw new Error(`sale: grant ${gid} budget ${r}`)
-        try { const out = await callTool(mem, `sale#${op}`, args, ctx); mem.budget.commit(gid, actionId); return out } catch (e) { mem.budget.release(gid, actionId); throw e }
+        try {
+          const out = await callTool(mem, `sale#${op}`, args, ctx)
+          mem.budget.commit(gid, actionId)
+          return out
+        } catch (e) {
+          mem.budget.release(gid, actionId)
+          throw e
+        }
       }
       return await callTool(mem, `sale#${op}`, args, ctx)
     }
     case 'sale#offer': {
       const { offerDisclosure } = await import('@nektar/identity')
       const r = offerDisclosure({
-        sellerKey: mem.operatorKey(), value: new Uint8Array(Buffer.from(args.value, 'hex')),
-        price: BigInt(args.price), refundAfter: BigInt(args.refundAfter), maxFee: BigInt(args.maxFee),
-        buyerPub: args.buyerPub, expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined
+        sellerKey: mem.operatorKey(),
+        value: new Uint8Array(Buffer.from(args.value, 'hex')),
+        price: BigInt(args.price),
+        refundAfter: BigInt(args.refundAfter),
+        maxFee: BigInt(args.maxFee),
+        buyerPub: args.buyerPub,
+        expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined
       })
       // JSON-RPC cannot carry BigInt — cfg crosses the wire as plain numbers
       return {
         cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) },
-        wrapped: r.wrapped, sellerPub: r.sellerPub, expiresAt: Number(r.expiresAt ?? 0n), offerSig: r.offerSig
+        wrapped: r.wrapped,
+        sellerPub: r.sellerPub,
+        expiresAt: Number(r.expiresAt ?? 0n),
+        offerSig: r.offerSig
       }
     }
     case 'sale#offerMemory': {
       const { offerDisclosure, encodeKeySale } = await import('@nektar/identity')
       const { serializeFragment, computeLeaf, toHex } = await import('@nektar/core')
-      const rec = (await mem.records(args.shard)).find(r => r.seq === args.seq)
+      const rec = (await mem.records(args.shard)).find((r) => r.seq === args.seq)
       if (!rec) throw new Error(`no record seq ${args.seq} in shard "${args.shard}"`)
       // Paper f_i = {c_i, H(d_i), π_i}: an encrypted record is sold as its
       // FRAGMENT KEY (the §7 decryption capability) + ciphertext + provenance;
@@ -748,18 +1000,30 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       // buyer verifies leaf∈anchored-batch BEFORE funding (ZKCP verify-before-pay).
       const { bundle } = await mem.prove(args.shard, args.seq)
       const r = offerDisclosure({
-        sellerKey: mem.operatorKey(), value: payload,
-        price: BigInt(args.price), refundAfter: BigInt(args.refundAfter), maxFee: BigInt(args.maxFee),
-        buyerPub: args.buyerPub, leaf: leafHex,
+        sellerKey: mem.operatorKey(),
+        value: payload,
+        price: BigInt(args.price),
+        refundAfter: BigInt(args.refundAfter),
+        maxFee: BigInt(args.maxFee),
+        buyerPub: args.buyerPub,
+        leaf: leafHex,
         expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined
       })
       return {
         cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) },
-        wrapped: r.wrapped, sellerPub: r.sellerPub, expiresAt: Number(r.expiresAt ?? 0n), offerSig: r.offerSig, mode,
+        wrapped: r.wrapped,
+        sellerPub: r.sellerPub,
+        expiresAt: Number(r.expiresAt ?? 0n),
+        offerSig: r.offerSig,
+        mode,
         commitment: {
-          leaf: leafHex, anchorTxid: rec.anchorTxid ?? null,
-          hdp: toHex(rec.hdp), shard: args.shard, seq: args.seq,
-          authorPub: rec.authorPub ?? null, level: rec.level ?? 0,
+          leaf: leafHex,
+          anchorTxid: rec.anchorTxid ?? null,
+          hdp: toHex(rec.hdp),
+          shard: args.shard,
+          seq: args.seq,
+          authorPub: rec.authorPub ?? null,
+          level: rec.level ?? 0,
           batchR: bundle?.anchor.R ?? null,
           proof: bundle ? { path: bundle.path, leafIndex: bundle.leafIndex, n: bundle.n, size: bundle.size } : null
         }
@@ -779,13 +1043,15 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         // the sig binds whatever buyerPub the seller offered to — a public
         // offer signed with '' verifies against '', a private one against the
         // operator's own pub. Accept either; the sig covers the choice.
-        if (!verifyOfferSig(
-          { cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig, expiresAt: args.offer.expiresAt },
-          args.offer.buyerPub ?? buyerPub, leaf
-        ) && !verifyOfferSig(
-          { cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig, expiresAt: args.offer.expiresAt },
-          '', leaf
-        )) throw new Error('sale op=escrow: offerSig does not verify — cfg may have been substituted')
+        if (
+          !verifyOfferSig(
+            { cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig, expiresAt: args.offer.expiresAt },
+            args.offer.buyerPub ?? buyerPub,
+            leaf
+          ) &&
+          !verifyOfferSig({ cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig, expiresAt: args.offer.expiresAt }, '', leaf)
+        )
+          throw new Error('sale op=escrow: offerSig does not verify — cfg may have been substituted')
         // π_i pre-funding check: if the commitment carries a path, the leaf
         // must rebuild the committed batch root — catch a bogus leaf early.
         const proof = args.offer.commitment?.proof
@@ -802,15 +1068,16 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       // is a locktime gate (height < 500M ⇒ block height, else timestamp).
       {
         const ra = BigInt(args.cfg.refundAfter)
-        const future = ra < 500_000_000n
-          ? ra > BigInt(await mem.chainHeight())
-          : ra > BigInt(Math.floor(Date.now() / 1000))
+        const future = ra < 500_000_000n ? ra > BigInt(await mem.chainHeight()) : ra > BigInt(Math.floor(Date.now() / 1000))
         if (!future) throw new Error('sale op=escrow: cfg.refundAfter is not in the future — the escrow would be instantly refundable')
       }
       const depositorPkh = Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
       const host = new DisclosureSaleHost({
-        ...args.cfg, depositorPkh,
-        price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
+        ...args.cfg,
+        depositorPkh,
+        price: BigInt(args.cfg.price),
+        refundAfter: BigInt(args.cfg.refundAfter),
+        maxFee: BigInt(args.cfg.maxFee)
       })
       const funding = await mem.fundingOuts(args.amount + 500)
       const { tx, utxo, feeSats } = await host.buildEscrow(funding, mem.operatorKey(), args.amount, undefined, mem.feeRateSatPerKb)
@@ -826,14 +1093,19 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       // cfg never carries it; fill it here so callers can pass the raw offer cfg.
       const depositorPkh = args.cfg.depositorPkh ?? Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
       const host = new DisclosureSaleHost({
-        ...args.cfg, depositorPkh,
-        price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
+        ...args.cfg,
+        depositorPkh,
+        price: BigInt(args.cfg.price),
+        refundAfter: BigInt(args.cfg.refundAfter),
+        maxFee: BigInt(args.cfg.maxFee)
       })
       // covenant bound: utxo − price − change ≤ maxFee → change ≥ utxo − price − maxFee.
       // Default the change so the spend pays ~350 sats (≈mainnet relay for ~1.5KB),
       // never more than the bound allows.
-      const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats)
-        : BigInt(args.utxo.satoshis) - BigInt(args.cfg.price) - BigInt(Math.min(Number(args.cfg.maxFee) - 2, 350))
+      const changeSats =
+        args.changeSats !== undefined
+          ? BigInt(args.changeSats)
+          : BigInt(args.utxo.satoshis) - BigInt(args.cfg.price) - BigInt(Math.min(Number(args.cfg.maxFee) - 2, 350))
       // the remembered escrow is the reveal's real parent — with it attached
       // the tx broadcasts as proper EF and the buyer receives BEEF/EF, not a
       // synthetic stub that cannot carry ancestry
@@ -846,12 +1118,20 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const { DisclosureSaleHost } = await import('@nektar/anchor')
       const depositorPkh = args.cfg.depositorPkh ?? Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
       const host = new DisclosureSaleHost({
-        ...args.cfg, depositorPkh,
-        price: BigInt(args.cfg.price), refundAfter: BigInt(args.cfg.refundAfter), maxFee: BigInt(args.cfg.maxFee)
+        ...args.cfg,
+        depositorPkh,
+        price: BigInt(args.cfg.price),
+        refundAfter: BigInt(args.cfg.refundAfter),
+        maxFee: BigInt(args.cfg.maxFee)
       })
-      const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats)
-        : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(args.cfg.maxFee), 350))
-      const { tx } = host.buildRefund(args.utxo, mem.operatorKey(), args.lockTime ?? Number(args.cfg.refundAfter), changeSats, await mem.fetchTx(args.utxo.txid))
+      const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats) : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(args.cfg.maxFee), 350))
+      const { tx } = host.buildRefund(
+        args.utxo,
+        mem.operatorKey(),
+        args.lockTime ?? Number(args.cfg.refundAfter),
+        changeSats,
+        await mem.fetchTx(args.utxo.txid)
+      )
       const r = await mem.broadcastTx(tx)
       if (r.status !== 'success') return { accepted: false, reason: r.description }
       return { accepted: true, txid: tx.id('hex'), refundSats: tx.outputs[0]!.satoshis }
@@ -891,7 +1171,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
           }
           if (out.verified && args.commitment.anchorTxid) out.anchorTxid = args.commitment.anchorTxid
           if (!out.verified) out.reason = 'computeLeaf(payload) != committed leaf'
-        } catch (e) { out.verified = false; out.reason = `payload verification failed: ${(e as Error).message}` }
+        } catch (e) {
+          out.verified = false
+          out.reason = `payload verification failed: ${(e as Error).message}`
+        }
       }
       return out
     }
@@ -906,15 +1189,24 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const r = await mem.recall(args.shard, { seq: args.seq, identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk) })
       // tell the model how to recover from a wrong seq instead of an empty answer
       if (args.seq !== undefined && r.items.length === 0) {
-        const seqs = (await mem.records(args.shard)).map(x => x.seq)
-        return { ...r, hint: seqs.length ? `no record with seq ${args.seq} in shard "${args.shard}"; existing seqs: ${seqs.join(', ')} — or omit seq to recall all` : `shard "${args.shard}" is empty` }
+        const seqs = (await mem.records(args.shard)).map((x) => x.seq)
+        return {
+          ...r,
+          hint: seqs.length
+            ? `no record with seq ${args.seq} in shard "${args.shard}"; existing seqs: ${seqs.join(', ')} — or omit seq to recall all`
+            : `shard "${args.shard}" is empty`
+        }
       }
       return { ...r, shardPrivate: mem.shardPrivate(args.shard) || undefined }
     }
     case 'prove':
       // fail-closed: a private shard's plain merkle citation is a leak —
       // the same verification goal is met by proveMembership (ZK).
-      if (mem.shardPrivate(args.shard)) return { ok: false, reason: `shard "${args.shard}" is private — plain citations refused; cite via a ZK membership proof (zkQuery → proveMembership → verifyMembership)` }
+      if (mem.shardPrivate(args.shard))
+        return {
+          ok: false,
+          reason: `shard "${args.shard}" is private — plain citations refused; cite via a ZK membership proof (zkQuery → proveMembership → verifyMembership)`
+        }
       return mem.prove(args.shard, args.seq)
     case 'anchor': {
       const r = await mem.anchorShard(args.shard)
@@ -925,7 +1217,12 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     case 'proveMembership': {
       const { Buffer } = await import('node:buffer')
       const { bytes, ms } = await mem.proveMembership(args.shard, args.seq, args.queryId)
-      return { lzkmem: Buffer.from(bytes).toString('hex'), bytes: bytes.length, proveMs: ms, statement: 'ZK-STARK: some record is in the anchored SHA-256 batch tree; reveals no leaf, index or path' }
+      return {
+        lzkmem: Buffer.from(bytes).toString('hex'),
+        bytes: bytes.length,
+        proveMs: ms,
+        statement: 'ZK-STARK: some record is in the anchored SHA-256 batch tree; reveals no leaf, index or path'
+      }
     }
     case 'verifyMembership': {
       const { Buffer } = await import('node:buffer')
@@ -943,7 +1240,15 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     case 'attestMembership': {
       const { Buffer } = await import('node:buffer')
       const { bytes, ms, txid, commitment } = await mem.attestMembership(args.shard, args.seq, args.queryId)
-      return { lzkmem: Buffer.from(bytes).toString('hex'), bytes: bytes.length, proveMs: ms, txid, commitment, statement: 'OP_FALSE OP_RETURN sha256(proof) anchored on-chain: a timestamped commitment to the STARK\'s existence; the WASM verifier stays authoritative — this is not an anchor and proves nothing about truth' }
+      return {
+        lzkmem: Buffer.from(bytes).toString('hex'),
+        bytes: bytes.length,
+        proveMs: ms,
+        txid,
+        commitment,
+        statement:
+          "OP_FALSE OP_RETURN sha256(proof) anchored on-chain: a timestamped commitment to the STARK's existence; the WASM verifier stays authoritative — this is not an anchor and proves nothing about truth"
+      }
     }
     case 'verifyAttestation': {
       const { Buffer } = await import('node:buffer')
@@ -953,7 +1258,15 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const { Buffer } = await import('node:buffer')
       const r = await mem.proveSubset(args.shard, args.seqs)
       if (!r.ok) return { ok: false, reason: r.reason }
-      return { lzkdis: Buffer.from(r.bytes).toString('hex'), bytes: r.bytes.length, batch: r.batchIndex, size: r.size, indices: r.indices, statement: 'subset inclusion proof: the listed leaf hashes are in this anchored batch (per-shard subpaths + shared top path); reveals positions and leaf hashes, not record contents' }
+      return {
+        lzkdis: Buffer.from(r.bytes).toString('hex'),
+        bytes: r.bytes.length,
+        batch: r.batchIndex,
+        size: r.size,
+        indices: r.indices,
+        statement:
+          'subset inclusion proof: the listed leaf hashes are in this anchored batch (per-shard subpaths + shared top path); reveals positions and leaf hashes, not record contents'
+      }
     }
     case 'verifySubset': {
       const { Buffer } = await import('node:buffer')
@@ -962,7 +1275,12 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     case 'proveDerivation': {
       const { Buffer } = await import('node:buffer')
       const { bytes, ms } = await mem.proveDerivation(args.shard, args.query, args.queryId)
-      return { lzkder: Buffer.from(bytes).toString('hex'), bytes: bytes.length, proveMs: ms, statement: 'ZK-STARK: a derivation path to the conclusion exists under the anchored policy DAG; reveals no rule, premise or fact' }
+      return {
+        lzkder: Buffer.from(bytes).toString('hex'),
+        bytes: bytes.length,
+        proveMs: ms,
+        statement: 'ZK-STARK: a derivation path to the conclusion exists under the anchored policy DAG; reveals no rule, premise or fact'
+      }
     }
     case 'verifyDerivation': {
       const { Buffer } = await import('node:buffer')
@@ -978,7 +1296,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const ac = mem.automaton(args.id)
       if (args.op === 'step') return automatonView(await ac.step(args.sym, args.to, args.outHash))
       if (args.op === 'halt') return automatonView(await ac.halt())
-      if (args.op === 'state') { const h = ac.getHead(); return h ? automatonView(h) : null }
+      if (args.op === 'state') {
+        const h = ac.getHead()
+        return h ? automatonView(h) : null
+      }
       throw new Error(`automaton: unknown op ${args.op}`)
     }
     case 'revoke': {
@@ -998,9 +1319,18 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (!p) return { found: false, note: 'no revoke record for this pubkey on __revocation__' }
       const idm = await import('@nektar/identity')
       const entry = idm.parseRevocationRecord(p.data)
-      return { found: true, seq: p.seq, data: p.data, leaf: p.leaf, root: p.root, smtProof: p.smtProof, anchored: p.anchored, bundle: p.bundle,
+      return {
+        found: true,
+        seq: p.seq,
+        data: p.data,
+        leaf: p.leaf,
+        root: p.root,
+        smtProof: p.smtProof,
+        anchored: p.anchored,
+        bundle: p.bundle,
         verified: entry ? idm.verifyRevocationEntry(entry) : false,
-        verifier: 'verifyRevocationEntry(parseRevocationRecord(data)) binds derive_key(pk)+root; bundle anchors the record text' }
+        verifier: 'verifyRevocationEntry(parseRevocationRecord(data)) binds derive_key(pk)+root; bundle anchors the record text'
+      }
     }
     case 'revocationStatus': {
       return await mem.revocationStatus(String(args.pkHex))
@@ -1014,7 +1344,17 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       return s ? { ...s, releaseHeight: s.releaseHeight.toString(), deadline: s.deadline.toString() } : { deployed: false }
     }
     case 'bondSeize': {
-      const bond = args.bond ? { ...args.bond, cfg: { ...args.bond.cfg, bondReleaseHeight: BigInt(args.bond.cfg.bondReleaseHeight), maxFee: BigInt(args.bond.cfg.maxFee), epochLen: BigInt(args.bond.cfg.epochLen) } } : undefined
+      const bond = args.bond
+        ? {
+            ...args.bond,
+            cfg: {
+              ...args.bond.cfg,
+              bondReleaseHeight: BigInt(args.bond.cfg.bondReleaseHeight),
+              maxFee: BigInt(args.bond.cfg.maxFee),
+              epochLen: BigInt(args.bond.cfg.epochLen)
+            }
+          }
+        : undefined
       const r = await mem.bondSeize(args.payToScript, bond)
       return r ? { ...r, receipt: { decision: 'allow', action: 'bondSeize' } } : { deployed: false }
     }
@@ -1030,16 +1370,29 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const idm = await import('@nektar/identity')
       const verifyAnchor = async () => (await mem.prove(args.shard, args.seq)).result.ok === true
       const r = await idm.verifyDisclosureAnchored(
-        args.envelope, args.ownerPub, args.verifierPub,
-        args.fieldCount, Buffer.from(args.fieldRoot, 'hex'),
-        (args.siblings as string[]).map(s => Buffer.from(s, 'hex')),
-        args.atTime, verifyAnchor)
+        args.envelope,
+        args.ownerPub,
+        args.verifierPub,
+        args.fieldCount,
+        Buffer.from(args.fieldRoot, 'hex'),
+        (args.siblings as string[]).map((s) => Buffer.from(s, 'hex')),
+        args.atTime,
+        verifyAnchor
+      )
       return { verified: r.ok, reason: r.reason ?? null, receipt: { decision: r.ok ? 'allow' : 'deny', action: 'disclose' } }
     }
-    case 'authorize':
-    {
+    case 'authorize': {
       const { decodePresentation } = await import('@nektar/identity')
-      return { receipt: { ...(await mem.authorizeAction(args.action, { identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk), resource: args.resource })), action: args.action } }
+      return {
+        receipt: {
+          ...(await mem.authorizeAction(args.action, {
+            identity: args.identity,
+            zk: args.zk === undefined ? undefined : decodePresentation(args.zk),
+            resource: args.resource
+          })),
+          action: args.action
+        }
+      }
     }
     case 'challenge':
       return { nonce: mem.issueChallenge(), statement: 'sign with answerChallenge(key, nonce) within 5 minutes; nonces from anywhere else are refused' }
@@ -1051,7 +1404,11 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     case 'claim#deploy': {
       if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
       const { Buffer } = await import('node:buffer')
-      return await mem.claims.deploy(Buffer.from(args.lzkmem, 'hex').toString('hex'), { bondSats: args.bondSats, deadline: args.deadline, anchorOutpoint: args.anchorOutpoint })
+      return await mem.claims.deploy(Buffer.from(args.lzkmem, 'hex').toString('hex'), {
+        bondSats: args.bondSats,
+        deadline: args.deadline,
+        anchorOutpoint: args.anchorOutpoint
+      })
     }
     case 'claim#status': {
       if (!mem.claims) throw new Error('claims: not available on this network (regtest only)')
@@ -1090,7 +1447,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const proofCommits = new Map<string, string>() // `${shard}:${seq}` → sha256(proof)
       for (const c of args.claims ?? []) {
         const priv = (c.cites ?? []).filter((r: any) => mem.shardPrivate(r.shard))
-        if (priv.length === 0) { claimsForGround.push(c); continue }
+        if (priv.length === 0) {
+          claimsForGround.push(c)
+          continue
+        }
         let zkok = true
         for (const r of priv) {
           const zk = r.zk ?? c.zk
@@ -1101,10 +1461,16 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
             try {
               const q = mem.issueZkQuery('nektar:auto-cite')
               bytes = (await mem.proveMembership(r.shard, r.seq, q.queryId)).bytes
-            } catch { zkok = false; break }
+            } catch {
+              zkok = false
+              break
+            }
           }
           const v = await mem.verifyMembership(r.shard, r.seq, bytes)
-          if (!v.ok) { zkok = false; break }
+          if (!v.ok) {
+            zkok = false
+            break
+          }
           // the proof becomes a public artifact: committed in the receipt and
           // fetchable at /v1/proof — a verifier re-runs it, no trust in us.
           proofCommits.set(`${r.shard}:${r.seq}`, mem.putProof(bytes))
@@ -1113,18 +1479,37 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         else privRefused.push(c)
       }
       const report = await ground(claimsForGround, fetch, { mode: args.mode === 'flag' ? 'flag' : 'remove' })
-      for (const c of privRefused) report.flagged.push({ ...c, grounded: false, reason: 'cite targets a private shard — the ZK membership proof could not be produced (record unanchored or prover unavailable); supply {zk:{queryId,proof}} to cite explicitly' })
-      const answer = report.kept.map(c => c.text).join(' ')
+      for (const c of privRefused)
+        report.flagged.push({
+          ...c,
+          grounded: false,
+          reason:
+            'cite targets a private shard — the ZK membership proof could not be produced (record unanchored or prover unavailable); supply {zk:{queryId,proof}} to cite explicitly'
+        })
+      const answer = report.kept.map((c) => c.text).join(' ')
       if (report.kept.length === 0) {
-        return { answer: '', committed: false, kept: [], flagged: report.flagged, grounding: report, checkResult: 'failed', note: 'no claim survived grounding — nothing committed (an underivable answer is invalid by construction)' }
+        return {
+          answer: '',
+          committed: false,
+          kept: [],
+          flagged: report.flagged,
+          grounding: report,
+          checkResult: 'failed',
+          note: 'no claim survived grounding — nothing committed (an underivable answer is invalid by construction)'
+        }
       }
       // the receipt commits only cites of KEPT claims — and private cites are
       // redacted to {private, hdp, anchorTxid}: the shard name never enters
       // the anchored record.
       const refs: any[] = []
-      for (const c of report.kept) for (const r of c.cites ?? []) {
-        refs.push(mem.shardPrivate(r.shard) ? { private: true, proofCommit: proofCommits.get(`${r.shard}:${r.seq}`), ...(await mem.fragmentRef(r.shard, r.seq) ?? { hdp: '' }) } : r)
-      }
+      for (const c of report.kept)
+        for (const r of c.cites ?? []) {
+          refs.push(
+            mem.shardPrivate(r.shard)
+              ? { private: true, proofCommit: proofCommits.get(`${r.shard}:${r.seq}`), ...((await mem.fragmentRef(r.shard, r.seq)) ?? { hdp: '' }) }
+              : r
+          )
+        }
       // modelAttestation (from attestInference): the statement MUST re-derive
       // from (input‖output‖modelPoseidon) before it enters the anchored record —
       // fail closed, never commit an unverifiable attestation.
@@ -1139,21 +1524,39 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         const v = validateAttestation(attestation)
         if (!v.ok) throw new Error(`modelAttestation rejected: ${v.reason}`)
       }
-      const { receipt, receiptHash, anchor } = await commitReceipt({
-        answer,
-        fragmentRefs: refs,
-        checkResult: 'verified',
-        timestamp: Date.now(),
-        modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
-        groundingReportHash: report.reportHash,
-        ...(attestation ? { modelAttestation: attestation } : {}),
-        ...(paid ? { payment: paid } : {}),
-        ...(typeof args?.caller === 'string' ? { caller: args.caller } : {}),
-        ...(typeof args?.delegationId === 'string' ? { delegationId: args.delegationId } : {}),
-        ...(typeof (args?.manifestId ?? process.env.NEKTAR_LAST_MANIFEST) === 'string' ? { manifestId: args?.manifestId ?? process.env.NEKTAR_LAST_MANIFEST } : {})
-      }, mem)
+      const { receipt, receiptHash, anchor } = await commitReceipt(
+        {
+          answer,
+          fragmentRefs: refs,
+          checkResult: 'verified',
+          timestamp: Date.now(),
+          modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
+          groundingReportHash: report.reportHash,
+          ...(attestation ? { modelAttestation: attestation } : {}),
+          ...(paid ? { payment: paid } : {}),
+          ...(typeof args?.caller === 'string' ? { caller: args.caller } : {}),
+          ...(typeof args?.delegationId === 'string' ? { delegationId: args.delegationId } : {}),
+          ...(typeof (args?.manifestId ?? process.env.NEKTAR_LAST_MANIFEST) === 'string'
+            ? { manifestId: args?.manifestId ?? process.env.NEKTAR_LAST_MANIFEST }
+            : {})
+        },
+        mem
+      )
       const token = receiptToken(receiptHash)
-      return { answer, committed: true, kept: report.kept, flagged: report.flagged, grounding: report, receipt, receiptHash, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, share: shareBlock(token), anchor, checkResult: 'verified' }
+      return {
+        answer,
+        committed: true,
+        kept: report.kept,
+        flagged: report.flagged,
+        grounding: report,
+        receipt,
+        receiptHash,
+        receiptToken: token,
+        verifyUrl: `${verifyBase()}/v1/verify?r=${token}`,
+        share: shareBlock(token),
+        anchor,
+        checkResult: 'verified'
+      }
     }
     case 'commitReceipt': {
       const { commitReceipt } = await import('@nektar/reasoning')
@@ -1163,7 +1566,10 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       // redacted with the proof's sha256 so a verifier can re-run it.
       const refs: any[] = []
       for (const r of args.fragmentRefs ?? []) {
-        if (!mem.shardPrivate(r.shard)) { refs.push(r); continue }
+        if (!mem.shardPrivate(r.shard)) {
+          refs.push(r)
+          continue
+        }
         const zk = r.zk
         let bytes: Uint8Array
         if (typeof zk?.queryId === 'string' && typeof zk?.proof === 'string') {
@@ -1171,13 +1577,18 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         } else {
           // auto-prove: self-issue → prove → verify (same artifact, no caller choreography)
           let q: { queryId: string }
-          try { q = mem.issueZkQuery('nektar:auto-cite'); bytes = (await mem.proveMembership(r.shard, r.seq, q.queryId)).bytes } catch (e) {
-            throw new Error(`private cite for "${r.shard}" could not be auto-proven (${(e as Error).message}) — supply zk:{queryId,proof} to cite explicitly`)
+          try {
+            q = mem.issueZkQuery('nektar:auto-cite')
+            bytes = (await mem.proveMembership(r.shard, r.seq, q.queryId)).bytes
+          } catch (e) {
+            throw new Error(`private cite for "${r.shard}" could not be auto-proven (${(e as Error).message}) — supply zk:{queryId,proof} to cite explicitly`, {
+              cause: e
+            })
           }
         }
         const v = await mem.verifyMembership(r.shard, r.seq, bytes)
         if (!v.ok) throw new Error(`ZK membership proof for private cite failed: ${v.reason}`)
-        refs.push({ private: true, proofCommit: mem.putProof(bytes), ...(await mem.fragmentRef(r.shard, r.seq) ?? { hdp: '' }) })
+        refs.push({ private: true, proofCommit: mem.putProof(bytes), ...((await mem.fragmentRef(r.shard, r.seq)) ?? { hdp: '' }) })
       }
       let attestation = args.modelAttestation
       if (args.attestInference !== undefined) {
@@ -1190,16 +1601,19 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         const v = validateAttestation(attestation)
         if (!v.ok) throw new Error(`modelAttestation rejected: ${v.reason}`)
       }
-      const out = await commitReceipt({
-        answer: args.answer,
-        fragmentRefs: refs,
-        checkResult: args.checkResult,
-        timestamp: Date.now(),
-        modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
-        groundingReportHash: args.groundingReportHash,
-        ...(attestation ? { modelAttestation: attestation } : {}),
-        ...(paid ? { payment: paid } : {})
-      }, mem)
+      const out = await commitReceipt(
+        {
+          answer: args.answer,
+          fragmentRefs: refs,
+          checkResult: args.checkResult,
+          timestamp: Date.now(),
+          modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
+          groundingReportHash: args.groundingReportHash,
+          ...(attestation ? { modelAttestation: attestation } : {}),
+          ...(paid ? { payment: paid } : {})
+        },
+        mem
+      )
       const token = receiptToken(out.receiptHash)
       return { ...out, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, share: shareBlock(token) }
     }
@@ -1215,7 +1629,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       // prefer the runtime's live wallet view (spend caps, runway, correct
       // net prefix); fall back to the reserve mem tracks itself
       if (ctx.ops?.wallet) {
-        const w = await ctx.ops.wallet() as Record<string, unknown>
+        const w = (await ctx.ops.wallet()) as Record<string, unknown>
         return { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
       }
       return mem.fundingStatus()
@@ -1241,14 +1655,17 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       // object-store ref — fetch through getVerified (digest-checked) before
       // the pack's own re-verification decides what lands
       if (pack === undefined && typeof args?.store === 'object' && args.store !== null) {
-        const r = args.store as { bucket?: string, key?: string, sha256?: string, size?: number }
+        const r = args.store as { bucket?: string; key?: string; sha256?: string; size?: number }
         if (typeof r.key !== 'string' || typeof r.sha256 !== 'string') throw new Error('importShard: store ref needs {key, sha256} (bucket/size optional)')
-        pack = await mem.fetchStoredPack(r as { bucket?: string, key: string, sha256: string, size?: number })
+        pack = await mem.fetchStoredPack(r as { bucket?: string; key: string; sha256: string; size?: number })
       }
       if (pack === undefined) {
-        const url = typeof args?.packUrl === 'string' ? args.packUrl
-          : typeof args?.from === 'string' && typeof args?.shard === 'string'
-            ? `${args.from.replace(/\/+$/, '')}/v1/pack/${encodeURIComponent(args.shard)}` : undefined
+        const url =
+          typeof args?.packUrl === 'string'
+            ? args.packUrl
+            : typeof args?.from === 'string' && typeof args?.shard === 'string'
+              ? `${args.from.replace(/\/+$/, '')}/v1/pack/${encodeURIComponent(args.shard)}`
+              : undefined
         if (!url) throw new Error('importShard: give {pack}, {from,shard}, {packUrl}, or {store}')
         if (!/^https?:\/\//i.test(url)) throw new Error('importShard: pack URL must be http(s)')
         const r = await fetch(url, { signal: AbortSignal.timeout(15_000) })
@@ -1267,7 +1684,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       const { verifyTradeEvidence } = await import('./automation/evidence.js')
       const st = mem.objectStore ?? mem.automation?.objectStore ?? objectStoreFromEnv()
       if (st === undefined) throw new Error('evidence: object store is not configured (NEKTAR_BSTORE_*)')
-      let ref = args?.ref as { bucket?: string, key: string, sha256: string, size?: number } | undefined
+      let ref = args?.ref as { bucket?: string; key: string; sha256: string; size?: number } | undefined
       if (ref === undefined && typeof args?.operationId === 'string') {
         const au = mem.automation
         if (!au) throw new Error('evidence: operationId lookup needs automation (NEKTAR_AUTOMATION=1)')
@@ -1281,7 +1698,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     case 'doctor': {
       const d = await mem.doctor()
       if (ctx.ops?.wallet) {
-        const w = await ctx.ops.wallet() as Record<string, unknown>
+        const w = (await ctx.ops.wallet()) as Record<string, unknown>
         d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
       }
       if (args?.fix) return { ...d, repair: await mem.doctorRepair() }
@@ -1297,13 +1714,28 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       // claimed payload; lineage (from shard:seq, leaf, settlement txid)
       // commits on __imports__
       if (typeof args?.data !== 'string') throw new Error('importRecord: data required (the verified claim payload)')
-      return await mem.importRecord({ data: args.data, provenance: args.provenance, sourceShard: args.sourceShard, sourceSeq: args.sourceSeq, leaf: args.leaf, saleTxid: args.saleTxid, shard: args.shard })
+      return await mem.importRecord({
+        data: args.data,
+        provenance: args.provenance,
+        sourceShard: args.sourceShard,
+        sourceSeq: args.sourceSeq,
+        leaf: args.leaf,
+        saleTxid: args.saleTxid,
+        shard: args.shard
+      })
     }
     case 'want': {
       const au = mem.automation
       if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
       const ph = await singlePolicy(au, 'buyer', 'want')
-      const r = await au.engine.publishWant({ domains: (args?.domains ?? []).map(String), ...(args?.question ? { question: String(args.question).slice(0, 560) } : {}), maxSats: Number(args?.maxSats) }, ph)
+      const r = await au.engine.publishWant(
+        {
+          domains: (args?.domains ?? []).map(String),
+          ...(args?.question ? { question: String(args.question).slice(0, 560) } : {}),
+          maxSats: Number(args?.maxSats)
+        },
+        ph
+      )
       void au.cycle()
       return { wantId: r.wantId, operationId: r.operationId }
     }
@@ -1327,11 +1759,16 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         const d = o.data
         const selKey = typeof (d.selected as { key?: string } | undefined)?.key === 'string' ? (d.selected as { key: string }).key : undefined
         return {
-          operationId: o.operationId, role: o.role, kind: o.kind, state: o.state,
+          operationId: o.operationId,
+          role: o.role,
+          kind: o.kind,
+          state: o.state,
           wantId: (d.want as { want?: { wantId?: string } } | undefined)?.want?.wantId,
           priceSats: (d.amounts as { purchaseSats?: number } | undefined)?.purchaseSats ?? d.priceSats,
           counterparty: o.role === 'seller' ? (d.want as { want?: { pub?: string } } | undefined)?.want?.pub : selKey?.split(':')[0],
-          escrowTxid: d.escrowTxid, disclosureTxid: (d.result as { disclosureTxid?: string } | undefined)?.disclosureTxid, refundTxid: d.refundTxid,
+          escrowTxid: d.escrowTxid,
+          disclosureTxid: (d.result as { disclosureTxid?: string } | undefined)?.disclosureTxid,
+          refundTxid: d.refundTxid,
           ...(d.evidenceRef !== undefined ? { evidence: { ref: d.evidenceRef, stored: true } } : {}),
           updatedAt: o.updatedAt
         }
@@ -1353,7 +1790,7 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
         return e
       }
       const ops = (await au.store.operations())
-        .filter(o => o.kind === 'purchase' || o.kind === 'sale')
+        .filter((o) => o.kind === 'purchase' || o.kind === 'sale')
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, 50)
         .map(entry)
@@ -1362,12 +1799,14 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
     case 'fund': {
       const au = mem.automation
       if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
-      const w = ctx.ops?.wallet ? await ctx.ops.wallet() as Record<string, unknown> : mem.fundingStatus() as unknown as Record<string, unknown>
+      const w = ctx.ops?.wallet ? ((await ctx.ops.wallet()) as Record<string, unknown>) : (mem.fundingStatus() as unknown as Record<string, unknown>)
       const slots = await au.marketSlots()
-      const live = (await au.store.policies()).filter(x => x.revokedAt === undefined)
+      const live = (await au.store.policies()).filter((x) => x.revokedAt === undefined)
       return {
-        address: w.address, network: au.engine.network,
-        spendableSats: Number(w.balanceSats ?? 0), utxos: Number(w.utxos ?? 0),
+        address: w.address,
+        network: au.engine.network,
+        spendableSats: Number(w.balanceSats ?? 0),
+        utxos: Number(w.utxos ?? 0),
         marketSlots: slots,
         ...(live.length === 1 ? { budget: await au.store.budgetStatus(live[0]!.policyHash) } : {})
       }
@@ -1377,13 +1816,39 @@ async function dispatchTool (mem: NektarMemory, name: string, args: any, ctx: To
       if (!au) throw new Error('automation: not enabled — start the instance with NEKTAR_AUTOMATION=1')
       const op = String(args?.op ?? '')
       if (op === 'publishWant') {
-        const r = await au.engine.publishWant({ domains: (args?.domains ?? []).map(String), ...(args?.question ? { question: String(args.question).slice(0, 560) } : {}), maxSats: Number(args?.maxSats), ...(args?.wantId ? { wantId: String(args.wantId) } : {}) }, String(args?.policyHash ?? ''))
+        const r = await au.engine.publishWant(
+          {
+            domains: (args?.domains ?? []).map(String),
+            ...(args?.question ? { question: String(args.question).slice(0, 560) } : {}),
+            maxSats: Number(args?.maxSats),
+            ...(args?.wantId ? { wantId: String(args.wantId) } : {})
+          },
+          String(args?.policyHash ?? '')
+        )
         void au.cycle()
         return { ok: true, ...r }
       }
-      if (op === 'enableSeller') { await au.engine.enableSeller(String(args?.policyHash ?? '')); void au.cycle(); return { ok: true } }
-      if (op === 'status') { const st = await au.engine.status(String(args?.operationId ?? '')); if (!st) throw new Error('automation: unknown operationId'); return st }
-      if (op === 'operations') return { operations: (await au.store.operations()).map(o => ({ operationId: o.operationId, role: o.role, kind: o.kind, state: o.state, updatedAt: o.updatedAt, ...(o.lastError ? { lastError: o.lastError } : {}) })) }
+      if (op === 'enableSeller') {
+        await au.engine.enableSeller(String(args?.policyHash ?? ''))
+        void au.cycle()
+        return { ok: true }
+      }
+      if (op === 'status') {
+        const st = await au.engine.status(String(args?.operationId ?? ''))
+        if (!st) throw new Error('automation: unknown operationId')
+        return st
+      }
+      if (op === 'operations')
+        return {
+          operations: (await au.store.operations()).map((o) => ({
+            operationId: o.operationId,
+            role: o.role,
+            kind: o.kind,
+            state: o.state,
+            updatedAt: o.updatedAt,
+            ...(o.lastError ? { lastError: o.lastError } : {})
+          }))
+        }
       if (op === 'approvals') return { approvals: await au.store.approvals('pending') }
       if (op === 'budget') return await au.store.budgetStatus(String(args?.policyHash ?? ''))
       if (op === 'policies') return { policies: await au.store.policies() }

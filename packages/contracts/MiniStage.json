@@ -538,11 +538,7 @@
             "value": {
               "kind": "call",
               "func": "super",
-              "args": [
-                "t0",
-                "t1",
-                "t2"
-              ]
+              "args": ["t0", "t1", "t2"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -913,11 +909,7 @@
             "value": {
               "kind": "add_output",
               "satoshis": "t15",
-              "stateValues": [
-                "la",
-                "lb",
-                "t18"
-              ],
+              "stateValues": ["la", "lb", "t18"],
               "preimage": ""
             },
             "sourceLoc": {
@@ -945,10 +937,7 @@
             "value": {
               "kind": "call",
               "func": "buildChangeOutput",
-              "args": [
-                "t20",
-                "t21"
-              ]
+              "args": ["t20", "t21"]
             }
           },
           {
@@ -956,10 +945,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t19",
-                "t22"
-              ]
+              "args": ["t19", "t22"]
             }
           },
           {
@@ -967,9 +953,7 @@
             "value": {
               "kind": "call",
               "func": "hash256",
-              "args": [
-                "t23"
-              ]
+              "args": ["t23"]
             }
           },
           {
@@ -984,9 +968,7 @@
             "value": {
               "kind": "call",
               "func": "extractOutputHash",
-              "args": [
-                "t25"
-              ]
+              "args": ["t25"]
             }
           },
           {
@@ -1012,7 +994,5 @@
     ]
   },
   "codeSeparatorIndex": 1,
-  "codeSeparatorIndices": [
-    1
-  ]
+  "codeSeparatorIndices": [1]
 }

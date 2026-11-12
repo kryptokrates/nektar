@@ -25,22 +25,42 @@ export interface ZkMembershipProof {
   receipt: Uint8Array // RISC Zero succinct receipt (one ZK-STARK), bincode
 }
 
-const u32 = (v: number) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b }
+const u32 = (v: number) => {
+  const b = new Uint8Array(4)
+  new DataView(b.buffer).setUint32(0, v, true)
+  return b
+}
 
-export function encodeZkm2 (p: ZkMembershipProof): Uint8Array {
+export function encodeZkm2(p: ZkMembershipProof): Uint8Array {
   const alg = p.algorithm ?? ALG_SHA256D
   if (alg !== ALG_SHA256D) throw new ZkmCodecError(`unsupported algorithm ${alg}`)
-  for (const [k, v] of [['imageId', p.imageId], ['root', p.root], ['queryId', p.queryId]] as const) if (v.length !== 32) throw new ZkmCodecError(`${k} must be 32 bytes`)
+  for (const [k, v] of [
+    ['imageId', p.imageId],
+    ['root', p.root],
+    ['queryId', p.queryId]
+  ] as const)
+    if (v.length !== 32) throw new ZkmCodecError(`${k} must be 32 bytes`)
   if (!Number.isInteger(p.size) || p.size < 1 || p.size > 0xffffffff) throw new ZkmCodecError('size out of range')
   if (p.receipt.length === 0 || p.receipt.length > ZKM2_MAX_RECEIPT) throw new ZkmCodecError('receipt length out of range')
   const out = new Uint8Array(HEADER + p.receipt.length)
   let o = 0
-  const put = (b: Uint8Array) => { out.set(b, o); o += b.length }
-  put(ZKM2_MAGIC); put(Uint8Array.of(ZKM2_VERSION)); put(Uint8Array.of(alg)); put(p.imageId); put(p.root); put(u32(p.size)); put(p.queryId); put(u32(p.receipt.length)); put(p.receipt)
+  const put = (b: Uint8Array) => {
+    out.set(b, o)
+    o += b.length
+  }
+  put(ZKM2_MAGIC)
+  put(Uint8Array.of(ZKM2_VERSION))
+  put(Uint8Array.of(alg))
+  put(p.imageId)
+  put(p.root)
+  put(u32(p.size))
+  put(p.queryId)
+  put(u32(p.receipt.length))
+  put(p.receipt)
   return out
 }
 
-export function decodeZkm2 (b: Uint8Array): ZkMembershipProof {
+export function decodeZkm2(b: Uint8Array): ZkMembershipProof {
   if (b.length < HEADER_V1) throw new ZkmCodecError('truncated header')
   for (let i = 0; i < 4; i++) if (b[i] !== ZKM2_MAGIC[i]) throw new ZkmCodecError('bad magic (not L_ZKMem v2)')
   const ver = b[4]!
@@ -56,5 +76,12 @@ export function decodeZkm2 (b: Uint8Array): ZkMembershipProof {
   const len = dv.getUint32(header - 4, true)
   if (len === 0 || len > ZKM2_MAX_RECEIPT) throw new ZkmCodecError('receipt length out of range')
   if (b.length !== header + len) throw new ZkmCodecError(b.length < header + len ? 'truncated receipt' : 'trailing bytes')
-  return { algorithm: alg, imageId: b.slice(5 + off, 37 + off), root: b.slice(37 + off, 69 + off), size, queryId: b.slice(73 + off, 105 + off), receipt: b.slice(header) }
+  return {
+    algorithm: alg,
+    imageId: b.slice(5 + off, 37 + off),
+    root: b.slice(37 + off, 69 + off),
+    size,
+    queryId: b.slice(73 + off, 105 + off),
+    receipt: b.slice(header)
+  }
 }

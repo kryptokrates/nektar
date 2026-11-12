@@ -15,20 +15,29 @@ import { readFileSync } from 'node:fs'
 let input = ''
 for await (const c of process.stdin) input += c
 let meta = {}
-try { meta = JSON.parse(input || '{}') } catch {}
+try {
+  meta = JSON.parse(input || '{}')
+} catch {}
 const { transcript_path, stop_hook_active } = meta
 if (!transcript_path) process.exit(0)
 
-const norm = s => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+const norm = (s) => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
 
 let lines = []
-try { lines = readFileSync(transcript_path, 'utf8').trim().split('\n') } catch { process.exit(0) }
+try {
+  lines = readFileSync(transcript_path, 'utf8').trim().split('\n')
+} catch {
+  process.exit(0)
+}
 let text = ''
 for (let i = lines.length - 1; i >= 0 && !text; i--) {
   try {
     const m = JSON.parse(lines[i])
     if (m.type === 'assistant') {
-      text = (m.message?.content ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n')
+      text = (m.message?.content ?? [])
+        .filter((p) => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n')
     }
   } catch {}
 }
@@ -39,7 +48,9 @@ if (!tokens.length) process.exit(0)
 // hook follows whichever server minted the token) > localhost
 let base = process.env.NEKTAR_VERIFY_BASE
 if (!base) {
-  try { base = new URL(text.match(/verify:\s*(https?:\/\/\S+)/i)?.[1] ?? '').origin } catch {}
+  try {
+    base = new URL(text.match(/verify:\s*(https?:\/\/\S+)/i)?.[1] ?? '').origin
+  } catch {}
 }
 base ??= `http://localhost:${process.env.NEKTAR_HTTP_PORT ?? 8080}`
 
@@ -50,20 +61,24 @@ for (const t of tokens) {
   try {
     const r = await fetch(`${base}/v1/verify?r=${t}`, { signal: AbortSignal.timeout(3000) })
     const j = await r.json()
-    const fails = (j.checks ?? []).filter(c => c.ok === false).map(c => c.name)
+    const fails = (j.checks ?? []).filter((c) => c.ok === false).map((c) => c.name)
     const drift = !!j.receipt?.answer && !norm(text).includes(norm(j.receipt.answer))
     if (drift) fails.push('answer-drift')
     results.push({ token: t, ok: j.ok === true && !drift, failNames: fails, checks: j.checks ?? [], receipt: j.receipt })
   } catch (e) {
-    results.push({ token: t, ok: null, note: `verify endpoint unreachable (${(e).message})` })
+    results.push({ token: t, ok: null, note: `verify endpoint unreachable (${e.message})` })
   }
 }
 
 // compact full-check summary — the user sees what verified without thinking
 // about it: "found✓ hash✓ provenance✓ anchored✓ fragments✓ model:attested paid·"
 const checkLine = (checks, receipt) => {
-  const ico = c => c.ok === true ? '✓' : c.ok === false ? '✗' : '·'
-  return (checks ?? []).map(c => `${c.name === 'model' && receipt?.modelAttestation ? `model:${receipt.modelAttestation.verifierTxid ? 'on-chain' : 'attested'}` : c.name}${ico(c)}`).join(' ')
+  const ico = (c) => (c.ok === true ? '✓' : c.ok === false ? '✗' : '·')
+  return (checks ?? [])
+    .map(
+      (c) => `${c.name === 'model' && receipt?.modelAttestation ? `model:${receipt.modelAttestation.verifierTxid ? 'on-chain' : 'attested'}` : c.name}${ico(c)}`
+    )
+    .join(' ')
 }
 
 for (const r of results) {
@@ -72,12 +87,14 @@ for (const r of results) {
   if (r.checks?.length) process.stderr.write(`  ${checkLine(r.checks, r.receipt)}\n`)
 }
 
-const failed = results.filter(r => r.ok === false)
+const failed = results.filter((r) => r.ok === false)
 if (failed.length && !stop_hook_active) {
-  const names = [...new Set(failed.flatMap(f => f.failNames))]
-  process.stdout.write(JSON.stringify({
-    decision: 'block',
-    reason: `nektar receipt verification FAILED — checks that failed: ${names.join(', ')}. Tell the user the receipt did not verify (which check failed and why that matters); do NOT claim the answer is verified.${names.includes('answer-drift') ? ' answer-drift means the printed answer is not the committed receipt text — the receipt does not cover what the user was shown.' : ''}`
-  }) + '\n')
+  const names = [...new Set(failed.flatMap((f) => f.failNames))]
+  process.stdout.write(
+    JSON.stringify({
+      decision: 'block',
+      reason: `nektar receipt verification FAILED — checks that failed: ${names.join(', ')}. Tell the user the receipt did not verify (which check failed and why that matters); do NOT claim the answer is verified.${names.includes('answer-drift') ? ' answer-drift means the printed answer is not the committed receipt text — the receipt does not cover what the user was shown.' : ''}`
+    }) + '\n'
+  )
 }
 process.exit(0)

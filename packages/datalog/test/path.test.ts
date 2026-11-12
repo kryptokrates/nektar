@@ -25,9 +25,17 @@ test('§14 path: ordered steps, fromStep links, node/edge hashes', () => {
   const [s0, s1] = p.steps
   assert.equal(s0!.ruleId, 'r-allow')
   assert.deepEqual(s0!.output, { pred: 'allowed', args: ['a', 's1'] })
-  assert.deepEqual(s0!.inputs.map(i => i.fromStep), [null, null], 'EDB premises are context leaves')
+  assert.deepEqual(
+    s0!.inputs.map((i) => i.fromStep),
+    [null, null],
+    'EDB premises are context leaves'
+  )
   assert.equal(s1!.ruleId, 'r-permit')
-  assert.deepEqual(s1!.inputs.map(i => i.fromStep), [0, null], 'allowed premise links to step 0')
+  assert.deepEqual(
+    s1!.inputs.map((i) => i.fromStep),
+    [0, null],
+    'allowed premise links to step 0'
+  )
   assert.equal(toHex(p.conclusionH), toHex(nodeHash({ pred: 'permit', args: ['a', 's1'] })))
   // every fromStep strictly precedes its step (no skipped or reordered steps)
   for (const [i, s] of p.steps.entries()) for (const inp of s.inputs) assert.ok(inp.fromStep === null || inp.fromStep < i)
@@ -37,9 +45,16 @@ test('§14 commitments: edge = dsha256(h_in‖…‖τ‖h_out); path digest fol
   const p = derivationPath(run(), 'permit', ['a', 's1'])!
   const tau = (id: string) => dsha256(utf8(`tau:${id}`)) // test stand-in for the rule's DAG node hash
   const e0 = stepEdge(p.steps[0]!, tau('r-allow'))
-  assert.equal(toHex(e0), toHex(edgeHash(
-    [nodeHash({ pred: 'member', args: ['a', 'verified'] }), nodeHash({ pred: 'fragment', args: ['s1'] })],
-    tau('r-allow'), nodeHash({ pred: 'allowed', args: ['a', 's1'] }))))
+  assert.equal(
+    toHex(e0),
+    toHex(
+      edgeHash(
+        [nodeHash({ pred: 'member', args: ['a', 'verified'] }), nodeHash({ pred: 'fragment', args: ['s1'] })],
+        tau('r-allow'),
+        nodeHash({ pred: 'allowed', args: ['a', 's1'] })
+      )
+    )
+  )
   const d = pathDigest(p.steps, tau)
   const expect = dsha256(concat(dsha256(concat(new Uint8Array(32), e0)), stepEdge(p.steps[1]!, tau('r-permit'))))
   assert.equal(toHex(d), toHex(expect))

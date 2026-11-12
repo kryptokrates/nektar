@@ -17,8 +17,16 @@
 import { createHash, createHmac } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 
-export interface ObjectRef { bucket: string, key: string, sha256: string, size: number }
-export interface StoredHead { size: number, sha256?: string }
+export interface ObjectRef {
+  bucket: string
+  key: string
+  sha256: string
+  size: number
+}
+export interface StoredHead {
+  size: number
+  sha256?: string
+}
 
 /** hard read bound — evidence packs are small; anything bigger is refused
  *  before it can exhaust memory (bstore's own ceiling is 5 GiB) */
@@ -56,7 +64,7 @@ export class S3ObjectStore {
   private readonly secretKey: string
   private readonly region: string
 
-  constructor (cfg: ObjectStoreConfig) {
+  constructor(cfg: ObjectStoreConfig) {
     this.endpoint = cfg.endpoint.replace(/\/+$/, '')
     this.bucket = cfg.bucket
     this.accessKey = cfg.accessKey
@@ -66,7 +74,7 @@ export class S3ObjectStore {
 
   /** PUT an object; stores our sha256 as x-amz-meta-sha256 so HEAD can confirm
    *  an earlier write survived (the gateway's ETag is not an MD5). */
-  async put (key: string, bytes: Uint8Array, contentType = 'application/octet-stream', bucket = this.bucket): Promise<ObjectRef> {
+  async put(key: string, bytes: Uint8Array, contentType = 'application/octet-stream', bucket = this.bucket): Promise<ObjectRef> {
     const sha256 = sha256Hex(bytes)
     const r = await this.request('PUT', bucket, key, bytes, {
       'content-type': contentType,
@@ -76,13 +84,13 @@ export class S3ObjectStore {
     return { bucket, key, sha256, size: bytes.length }
   }
 
-  async get (key: string, bucket = this.bucket): Promise<Uint8Array> {
+  async get(key: string, bucket = this.bucket): Promise<Uint8Array> {
     const r = await this.request('GET', bucket, key)
     if (!r.ok) throw await this.s3Error(r)
     return new Uint8Array(await r.arrayBuffer())
   }
 
-  async head (key: string, bucket = this.bucket): Promise<StoredHead | undefined> {
+  async head(key: string, bucket = this.bucket): Promise<StoredHead | undefined> {
     const r = await this.request('HEAD', bucket, key)
     if (r.status === 404) return undefined
     if (!r.ok) throw await this.s3Error(r)
@@ -94,7 +102,7 @@ export class S3ObjectStore {
   /** Verified read — every read of stored content goes through here. Fetches,
    *  enforces the size bound and an optional expected size, then compares the
    *  SHA-256 against the reference. Any mismatch throws. */
-  async getVerified (ref: { bucket?: string, key: string, sha256: string, size?: number }): Promise<Uint8Array> {
+  async getVerified(ref: { bucket?: string; key: string; sha256: string; size?: number }): Promise<Uint8Array> {
     if (ref.size !== undefined && ref.size > OBJECT_MAX_BYTES) throw new Error(`objectstore: ref size ${ref.size} exceeds ${OBJECT_MAX_BYTES} byte bound`)
     const bytes = await this.get(ref.key, ref.bucket ?? this.bucket)
     if (bytes.length > OBJECT_MAX_BYTES) throw new Error(`objectstore: object ${ref.key} is ${bytes.length} bytes, over the ${OBJECT_MAX_BYTES} byte bound`)
@@ -104,7 +112,7 @@ export class S3ObjectStore {
     return bytes
   }
 
-  private async request (method: string, bucket: string, key: string, body?: Uint8Array, extra: Record<string, string> = {}): Promise<Response> {
+  private async request(method: string, bucket: string, key: string, body?: Uint8Array, extra: Record<string, string> = {}): Promise<Response> {
     const path = `/${uriEncode(bucket)}/${encodeKey(key)}`
     const url = `${this.endpoint}${path}`
     const now = new Date()
@@ -119,7 +127,7 @@ export class S3ObjectStore {
       ...extra
     }
     const signed = Object.keys(headers).sort()
-    const canonicalHeaders = signed.map(h => `${h}:${headers[h]!.replace(/\s+/g, ' ').trim()}\n`).join('')
+    const canonicalHeaders = signed.map((h) => `${h}:${headers[h]!.replace(/\s+/g, ' ').trim()}\n`).join('')
     const canonical = [method, path, '', canonicalHeaders, signed.join(';'), payloadHash].join('\n')
     const scope = `${date}/${this.region}/s3/aws4_request`
     const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${sha256Hex(new TextEncoder().encode(canonical))}`
@@ -133,7 +141,7 @@ export class S3ObjectStore {
     })
   }
 
-  private async s3Error (r: Response): Promise<Error> {
+  private async s3Error(r: Response): Promise<Error> {
     const text = await r.text().catch(() => '')
     const code = text.match(/<Code>([^<]*)<\/Code>/)?.[1] ?? ''
     const message = text.match(/<Message>([^<]*)<\/Message>/)?.[1] ?? text.slice(0, 200)
@@ -149,7 +157,7 @@ export class S3ObjectStore {
  *  NEKTAR_BSTORE_ACCESS_KEY      SigV4 access key
  *  NEKTAR_BSTORE_SECRET_KEY      SigV4 secret — or NEKTAR_BSTORE_SECRET_KEY_FILE
  *  (the put bounty is the gateway's own `bounty` config — no client setting) */
-export function objectStoreFromEnv (env = process.env): S3ObjectStore | undefined {
+export function objectStoreFromEnv(env = process.env): S3ObjectStore | undefined {
   const endpoint = env.NEKTAR_BSTORE_S3_URL
   const bucket = env.NEKTAR_BSTORE_BUCKET
   const accessKey = env.NEKTAR_BSTORE_ACCESS_KEY

@@ -22,8 +22,16 @@ test('parser: facts, rules, @id, negation', () => {
 })
 
 test('safety: unsafe head + negated vars rejected', () => {
-  assert.throws(() => new Datalog([{ id: 'r', head: { pred: 'p', args: ['Y'], neg: false }, body: [{ pred: 'q', args: ['X'], neg: false }] }]), SafetyError, 'unsafe head var')
-  assert.throws(() => new Datalog([{ id: 'r', head: { pred: 'p', args: ['A'], neg: false }, body: [{ pred: 'q', args: ['A'], neg: true }] }]), SafetyError, 'unsafe negated var')
+  assert.throws(
+    () => new Datalog([{ id: 'r', head: { pred: 'p', args: ['Y'], neg: false }, body: [{ pred: 'q', args: ['X'], neg: false }] }]),
+    SafetyError,
+    'unsafe head var'
+  )
+  assert.throws(
+    () => new Datalog([{ id: 'r', head: { pred: 'p', args: ['A'], neg: false }, body: [{ pred: 'q', args: ['A'], neg: true }] }]),
+    SafetyError,
+    'unsafe negated var'
+  )
 })
 
 test('stratification: negation cycle throws CycleError', () => {
@@ -43,7 +51,8 @@ test('evaluate + provenance + determinism across shuffled input order', () => {
   ]
   const dl = new Datalog(rules)
   const h = [0, 1, 2].map(() => dl.derivHash(dl.run([...edb].sort(() => 0.5 - Math.random()))))
-  assert.equal(h[0], h[1]); assert.equal(h[1], h[2], 'derivHash deterministic')
+  assert.equal(h[0], h[1])
+  assert.equal(h[1], h[2], 'derivHash deterministic')
   const facts = dl.run(edb)
   const d = dl.derivation(facts, 'allowed', ['agent-b', 'frag-1'])!
   assert.equal(d.ruleId, 'r-allow')
@@ -66,21 +75,38 @@ reach(X, Z) :- reach(X, Y), edge(Y, Z).`
   for (const e of edges) adj.set(e.args[0]!, [...(adj.get(e.args[0]!) ?? []), e.args[1]!])
   const ref = new Set<string>()
   for (const s of adj.keys()) {
-    const seen = new Set<string>(); const stack = [...(adj.get(s) ?? [])]
-    while (stack.length) { const n = stack.pop()!; if (seen.has(n)) continue; seen.add(n); ref.add(`reach(${s},${n})`); stack.push(...(adj.get(n) ?? [])) }
+    const seen = new Set<string>()
+    const stack = [...(adj.get(s) ?? [])]
+    while (stack.length) {
+      const n = stack.pop()!
+      if (seen.has(n)) continue
+      seen.add(n)
+      ref.add(`reach(${s},${n})`)
+      stack.push(...(adj.get(n) ?? []))
+    }
   }
-  const reach = [...got.keys()].filter(k => k.startsWith('reach('))
+  const reach = [...got.keys()].filter((k) => k.startsWith('reach('))
   assert.deepEqual(new Set(reach), ref, 'closure identical to reference')
   const reversed = parseProgram(src).rules.reverse()
-  const dl1 = new Datalog(parseProgram(src).rules), dl2 = new Datalog(reversed)
+  const dl1 = new Datalog(parseProgram(src).rules),
+    dl2 = new Datalog(reversed)
   assert.equal(dl1.derivHash(dl1.run(edges)), dl2.derivHash(dl2.run([...edges].reverse())), 'canonical provenance')
 })
 
 test('linter: undefined predicate, unused rule, unsafe var', () => {
   const { rules, facts } = parseProgram(`p(A) :- q(A).`)
   const diags = lint(rules, facts)
-  assert.ok(diags.some(d => d.code === 'undefined-predicate'), 'undefined predicate flagged')
-  assert.ok(diags.some(d => d.code === 'unused-rule'), 'unused rule flagged')
+  assert.ok(
+    diags.some((d) => d.code === 'undefined-predicate'),
+    'undefined predicate flagged'
+  )
+  assert.ok(
+    diags.some((d) => d.code === 'unused-rule'),
+    'unused rule flagged'
+  )
   const bad = lint([{ id: 'r', head: { pred: 'p', args: ['Y'], neg: false }, body: [{ pred: 'q', args: ['X'], neg: false }] }], [])
-  assert.ok(bad.some(d => d.code === 'unsafe-variable'), 'unsafe var flagged')
+  assert.ok(
+    bad.some((d) => d.code === 'unsafe-variable'),
+    'unsafe var flagged'
+  )
 })

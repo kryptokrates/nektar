@@ -2,57 +2,28 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "workspaces": {
     ".": {
-      "entry": [
-        "tools/**/*.mjs",
-        "integrations/**/*.{js,mjs}",
-        "circuits/**/*.mjs",
-        "docs/**/*.mjs",
-        "deploy/**/*.mjs"
-      ],
-      "ignore": [
-        "spikes/**",
-        "test/fixtures/**"
-      ],
+      "entry": ["tools/**/*.mjs", "integrations/**/*.{js,mjs}", "circuits/**/*.mjs", "docs/**/*.mjs", "deploy/**/*.mjs"],
+      "ignore": ["spikes/**", "test/fixtures/**"],
       "ignoreBinaries": []
     },
     "packages/mcp": {
-      "entry": [
-        "src/payclient.ts",
-        "demo/**/*.{ts,mts,mjs}"
-      ]
+      "entry": ["src/payclient.ts", "demo/**/*.{ts,mts,mjs}"]
     },
     "packages/e2e": {
-      "entry": [
-        "src/**/*.{ts,mts,mjs}"
-      ]
+      "entry": ["src/**/*.{ts,mts,mjs}"]
     },
     "packages/contracts": {
-      "entry": [
-        "*.mjs",
-        "src/*.runar.ts",
-        "mini-stage.runar.ts"
-      ]
+      "entry": ["*.mjs", "src/*.runar.ts", "mini-stage.runar.ts"]
     },
     "packages/zk": {
-      "ignoreUnresolved": [
-        "stark/verifier\\.js$"
-      ],
-      "ignore": [
-        "stark/verifier*.{js,d.ts}",
-        "stark/*.wasm*"
-      ]
+      "ignoreUnresolved": ["stark/verifier\\.js$"],
+      "ignore": ["stark/verifier*.{js,d.ts}", "stark/*.wasm*"]
     },
     "packages/anchor": {
-      "entry": [
-        "*.mjs"
-      ]
+      "entry": ["*.mjs"]
     },
     "packages/bstack": {
-      "entry": [
-        "src/module.ts",
-        "demo/**/*.mjs",
-        "test/**/*.ts"
-      ]
+      "entry": ["src/module.ts", "demo/**/*.mjs", "test/**/*.ts"]
     }
   },
   "rules": {

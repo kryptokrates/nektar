@@ -5,19 +5,10 @@
 // admission verdicts are upstream's (vendored @lightwebinc/bfinger-host);
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
-import {
-  PrivateKey, ProtoWallet, Transaction, P2PKH, Hash, Utils,
-  type ChainTracker, type LockingScript
-} from '@bsv/sdk'
-import {
-  mintCarrier, fundingLock, lockFields, unlocker, commitment,
-  CborMap, encode as cborEncode, type Derivation
-} from '@lightwebinc/bcommon'
+import { PrivateKey, ProtoWallet, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
+import { mintCarrier, fundingLock, lockFields, unlocker, commitment, CborMap, encode as cborEncode, type Derivation } from '@lightwebinc/bcommon'
 import type { FundingOut } from '@nektar/chain'
-import {
-  encodeRecord, decodeRecord, validateRecord, KindCreate, KindUpdate,
-  MagicV1, type CommittedRecord
-} from '@lightwebinc/bfinger-host/dist/record.js'
+import { encodeRecord, validateRecord, KindCreate, KindUpdate, MagicV1, type CommittedRecord } from '@lightwebinc/bfinger-host/dist/record.js'
 import { Protocol, KeyIDProfile, KeyIDRecord, profileLockingKey, recordLockingKey } from '@lightwebinc/bfinger-host/dist/keys.js'
 import { Tag, inspectToken } from '@lightwebinc/bfinger-host/dist/token.js'
 import { decodeCarrier } from '@lightwebinc/bfinger-host/dist/carrier.js'
@@ -53,23 +44,35 @@ const NET_LABEL = /^[a-z][a-z0-9-]{0,15}$/
 
 /** Shape-check a body. `allowHttp` is for mock/regtest hosts: records on a
  *  real network name https hosts only. Throws on any violation. */
-export function checkFingerBody (body: FingerBody, opts?: { allowHttp?: boolean }): void {
+export function checkFingerBody(body: FingerBody, opts?: { allowHttp?: boolean }): void {
   if (body === null || typeof body !== 'object' || body.v !== 1) throw new Error('finger body: v must be 1')
   if (!Array.isArray(body.hosts) || body.hosts.length < 1 || body.hosts.length > 8) throw new Error('finger body: 1..8 hosts')
   for (const h of body.hosts) {
     let u: URL
-    try { u = new URL(h) } catch { throw new Error(`finger body: bad host URL ${JSON.stringify(h).slice(0, 60)}`) }
+    try {
+      u = new URL(h)
+    } catch {
+      throw new Error(`finger body: bad host URL ${JSON.stringify(h).slice(0, 60)}`)
+    }
     if (u.protocol !== 'https:' && !(opts?.allowHttp === true && u.protocol === 'http:')) {
       throw new Error(`finger body: host must be https ${u.protocol}//`)
     }
   }
-  try { checkOffice(body.office) } catch { throw new Error('finger body: bad office') }
-  try { checkStream(body.stream) } catch { throw new Error('finger body: bad stream') }
-  if (!Array.isArray(body.nets) || body.nets.length < 1 || body.nets.length > 8 ||
-    body.nets.some(n => typeof n !== 'string' || !NET_LABEL.test(n))) throw new Error('finger body: bad nets')
+  try {
+    checkOffice(body.office)
+  } catch {
+    throw new Error('finger body: bad office')
+  }
+  try {
+    checkStream(body.stream)
+  } catch {
+    throw new Error('finger body: bad stream')
+  }
+  if (!Array.isArray(body.nets) || body.nets.length < 1 || body.nets.length > 8 || body.nets.some((n) => typeof n !== 'string' || !NET_LABEL.test(n)))
+    throw new Error('finger body: bad nets')
 }
 
-function bodyToMap (body: FingerBody): CborMap {
+function bodyToMap(body: FingerBody): CborMap {
   return new CborMap([
     { key: 'v', val: 1n },
     { key: 'hosts', val: body.hosts },
@@ -79,11 +82,14 @@ function bodyToMap (body: FingerBody): CborMap {
   ])
 }
 
-function mapToBody (m: CborMap): FingerBody {
+function mapToBody(m: CborMap): FingerBody {
   const v = m.get('v')
   const body = {
     v: typeof v === 'bigint' ? Number(v) : v,
-    hosts: m.get('hosts'), office: m.get('office'), stream: m.get('stream'), nets: m.get('nets')
+    hosts: m.get('hosts'),
+    office: m.get('office'),
+    stream: m.get('stream'),
+    nets: m.get('nets')
   } as FingerBody
   return body
 }
@@ -101,39 +107,55 @@ export interface FingerStateRow {
 }
 
 export interface FingerState {
-  get (): Promise<FingerStateRow | undefined>
-  set (s: FingerStateRow): Promise<void>
+  get(): Promise<FingerStateRow | undefined>
+  set(s: FingerStateRow): Promise<void>
 }
 
 export class MemoryFingerState implements FingerState {
   private row: FingerStateRow | undefined
-  async get () { return this.row }
-  async set (s: FingerStateRow) { this.row = s }
+  async get() {
+    return this.row
+  }
+  async set(s: FingerStateRow) {
+    this.row = s
+  }
 }
 
 export class KnexFingerState implements FingerState {
-  constructor (private kx: Knex) {}
+  constructor(private kx: Knex) {}
   private ensured?: Promise<void>
-  private async ensure (): Promise<void> {
-    return await (this.ensured ??= this.doEnsure().catch(e => { this.ensured = undefined; throw e }))
+  private async ensure(): Promise<void> {
+    return await (this.ensured ??= this.doEnsure().catch((e) => {
+      this.ensured = undefined
+      throw e
+    }))
   }
-  private async doEnsure (): Promise<void> {
+  private async doEnsure(): Promise<void> {
     if (!(await this.kx.schema.hasTable('bstack_finger_state'))) {
-      await this.kx.schema.createTable('bstack_finger_state', t => {
-        t.increments('id').primary(); t.integer('seq').notNullable(); t.string('tokenTxid').notNullable()
-        t.text('tokenBeef').notNullable(); t.string('bodyHash').notNullable(); t.string('witness').nullable()
+      await this.kx.schema.createTable('bstack_finger_state', (t) => {
+        t.increments('id').primary()
+        t.integer('seq').notNullable()
+        t.string('tokenTxid').notNullable()
+        t.text('tokenBeef').notNullable()
+        t.string('bodyHash').notNullable()
+        t.string('witness').nullable()
       })
     }
   }
-  async get () {
+  async get() {
     await this.ensure()
     const r = await this.kx('bstack_finger_state').orderBy('id').first()
-    return r === undefined ? undefined : {
-      seq: Number(r.seq), tokenTxid: String(r.tokenTxid), tokenBeef: JSON.parse(String(r.tokenBeef)) as number[],
-      bodyHash: String(r.bodyHash), ...(r.witness !== null && r.witness !== undefined ? { witness: String(r.witness) } : {})
-    }
+    return r === undefined
+      ? undefined
+      : {
+          seq: Number(r.seq),
+          tokenTxid: String(r.tokenTxid),
+          tokenBeef: JSON.parse(String(r.tokenBeef)) as number[],
+          bodyHash: String(r.bodyHash),
+          ...(r.witness !== null && r.witness !== undefined ? { witness: String(r.witness) } : {})
+        }
   }
-  async set (s: FingerStateRow): Promise<void> {
+  async set(s: FingerStateRow): Promise<void> {
     await this.ensure()
     const row = { seq: s.seq, tokenTxid: s.tokenTxid, tokenBeef: JSON.stringify(s.tokenBeef), bodyHash: s.bodyHash, witness: s.witness ?? null }
     if ((await this.kx('bstack_finger_state').count('id as n').first())?.n === 0) {
@@ -158,7 +180,7 @@ export class KnexFingerState implements FingerState {
  *  are met" resubmission: tm_finger admits an unmined token on its own
  *  validity, and a reader resolves it either once the served token BEEF
  *  carries a proof or while its ancestry is proven (zero-conf). */
-export async function publishFinger (p: {
+export async function publishFinger(p: {
   key: PrivateKey
   state: FingerState
   ledger: TreeLedger /* kind 'finger' */
@@ -171,7 +193,7 @@ export async function publishFinger (p: {
   allowHttp?: boolean
   onSpent?: (tx: Transaction) => void | Promise<void>
   now?: () => number
-}): Promise<{ changed: boolean, seq: number, carrierTxid?: string, tokenTxid?: string }> {
+}): Promise<{ changed: boolean; seq: number; carrierTxid?: string; tokenTxid?: string }> {
   checkFingerBody(p.body, { allowHttp: p.allowHttp })
   const w = new ProtoWallet(p.key)
   let map = bodyToMap(p.body)
@@ -202,7 +224,9 @@ export async function publishFinger (p: {
           await p.state.set({ ...prev, tokenBeef: latestBeef })
         }
       }
-    } catch { /* resubmission below uses whatever state holds */ }
+    } catch {
+      /* resubmission below uses whatever state holds */
+    }
   }
 
   if (prev !== undefined && prev.bodyHash === hash) {
@@ -223,15 +247,22 @@ export async function publishFinger (p: {
   const pub33 = new Uint8Array(p.key.toPublicKey().encode(true) as number[])
   const witness = derived(p.key, 'witness', seq)
   const prevC = prev === undefined ? ZERO32 : prevCommitment(prev.tokenBeef)
-  const prevWitness = prev !== undefined
-    ? (prev.witness !== undefined ? new Uint8Array(Utils.toArray(prev.witness, 'hex')) : derived(p.key, 'witness', prev.seq))
-    : undefined
+  const prevWitness =
+    prev !== undefined ? (prev.witness !== undefined ? new Uint8Array(Utils.toArray(prev.witness, 'hex')) : derived(p.key, 'witness', prev.seq)) : undefined
   let record: CommittedRecord = {
-    magic: MagicV1, identityKey: pub33, seq: BigInt(seq), kind,
-    prev: prevC, salt: derived(p.key, 'salt', seq),
+    magic: MagicV1,
+    identityKey: pub33,
+    seq: BigInt(seq),
+    kind,
+    prev: prevC,
+    salt: derived(p.key, 'salt', seq),
     wc: new Uint8Array(Hash.sha256(Array.from(witness))),
     ...(prevWitness !== undefined ? { prevWitness } : {}),
-    notBefore: 0n, notAfter: 0n, body: map, refs: [], unknown: []
+    notBefore: 0n,
+    notAfter: 0n,
+    body: map,
+    refs: [],
+    unknown: []
   }
 
   // the carrier, journaled per seq BEFORE submission. A hit means this seq
@@ -240,7 +271,8 @@ export async function publishFinger (p: {
   let carrierBeef: number[], carrierTxid: string
   const chit = await p.journal.get(`finger:carrier:${seq}`)
   if (chit !== undefined) {
-    carrierBeef = chit.beef; carrierTxid = chit.txid
+    carrierBeef = chit.beef
+    carrierTxid = chit.txid
     const dec = decodeCarrier(Transaction.fromAtomicBEEF(carrierBeef))
     if (typeof dec === 'string') throw new Error(`finger journal: bad stored carrier ${dec}`)
     record = dec.record
@@ -263,7 +295,9 @@ export async function publishFinger (p: {
   let tokenBeefOut: number[], tokenTxid: string, tokenTx: Transaction
   const thit = await p.journal.get(tkey)
   if (thit !== undefined) {
-    tokenBeefOut = thit.beef; tokenTxid = thit.txid; tokenTx = Transaction.fromBEEF(thit.beef)
+    tokenBeefOut = thit.beef
+    tokenTxid = thit.txid
+    tokenTx = Transaction.fromBEEF(thit.beef)
   } else {
     const c = commitment(Transaction.fromAtomicBEEF(carrierBeef))
     tokenTx = new Transaction()
@@ -303,7 +337,7 @@ export async function publishFinger (p: {
  *  stays unproven, fill input sources missing from the graph via their
  *  sourceTXID and keep walking. Depth-capped, visited-guarded; never touches
  *  `tx` itself. Returns whether anything changed. */
-async function healAncestry (tx: Transaction, fetchTx: (txid: string) => Promise<Transaction | undefined>): Promise<boolean> {
+async function healAncestry(tx: Transaction, fetchTx: (txid: string) => Promise<Transaction | undefined>): Promise<boolean> {
   let changed = false
   const seen = new Set<string>([tx.id('hex')])
   const walk = async (a: Transaction, depth: number): Promise<void> => {
@@ -322,7 +356,10 @@ async function healAncestry (tx: Transaction, fetchTx: (txid: string) => Promise
     for (const i of a.inputs) {
       if (i.sourceTransaction === undefined && i.sourceTXID !== undefined) {
         const src = await fetchTx(i.sourceTXID).catch(() => undefined)
-        if (src !== undefined) { i.sourceTransaction = src; changed = true }
+        if (src !== undefined) {
+          i.sourceTransaction = src
+          changed = true
+        }
       }
       if (i.sourceTransaction !== undefined) await walk(i.sourceTransaction, depth + 1)
     }
@@ -330,7 +367,10 @@ async function healAncestry (tx: Transaction, fetchTx: (txid: string) => Promise
   for (const i of tx.inputs) {
     if (i.sourceTransaction === undefined && i.sourceTXID !== undefined) {
       const src = await fetchTx(i.sourceTXID).catch(() => undefined)
-      if (src !== undefined) { i.sourceTransaction = src; changed = true }
+      if (src !== undefined) {
+        i.sourceTransaction = src
+        changed = true
+      }
     }
     if (i.sourceTransaction !== undefined) await walk(i.sourceTransaction, 1)
   }
@@ -339,12 +379,12 @@ async function healAncestry (tx: Transaction, fetchTx: (txid: string) => Promise
 
 /** A deterministic 32 bytes for (key, label, seq): salt and witness material
  *  secret until revealed, stable across a crash retry. */
-function derived (key: PrivateKey, label: string, seq: number): Uint8Array {
+function derived(key: PrivateKey, label: string, seq: number): Uint8Array {
   return new Uint8Array(Hash.sha256(Utils.toArray(`nektar finger ${label} ${key.toWif()} ${seq}`, 'utf8')))
 }
 
 /** The commitment the current token carries — the previous record's C. */
-function prevCommitment (tokenBeef: number[]): Uint8Array {
+function prevCommitment(tokenBeef: number[]): Uint8Array {
   const tx = Transaction.fromBEEF(tokenBeef)
   for (const out of tx.outputs) {
     const t = inspectToken(out.lockingScript)
@@ -359,7 +399,7 @@ function prevCommitment (tokenBeef: number[]): Uint8Array {
  *  upstream verdicts and the §10 reader checks, and return the record behind
  *  the highest-sequence valid answer that `quorum` hosts agree on. undefined
  *  when nothing valid is found or the quorum is not met. */
-export async function resolveFinger (p: {
+export async function resolveFinger(p: {
   hosts: string[]
   pub: string /* 66-hex identity key */
   tracker: ChainTracker
@@ -368,13 +408,16 @@ export async function resolveFinger (p: {
   allowHttp?: boolean
   now?: () => number
   timeoutMs?: number
-}): Promise<{
-  body: FingerBody
-  seq: number
-  tokenTxid: string
-  hostsAnswered: string[]
-  unreachable: string[]
-} | undefined> {
+}): Promise<
+  | {
+      body: FingerBody
+      seq: number
+      tokenTxid: string
+      hostsAnswered: string[]
+      unreachable: string[]
+    }
+  | undefined
+> {
   const pinned = p.pin !== undefined ? await p.pin(p.pub) : undefined
   const { answers } = await lookupAll(p.hosts, 'ls_finger', { identityKey: p.pub.toLowerCase() }, { timeoutMs: p.timeoutMs })
   const unreachable: string[] = []
@@ -382,9 +425,12 @@ export async function resolveFinger (p: {
   const recordKey = recordLockingKey(p.pub)
 
   // candidate: host -> verified {seq, tokenTxid, cHex, body}
-  const byCarrier = new Map<string, { seq: number, tokenTxid: string, body: FingerBody, hosts: string[] }>()
+  const byCarrier = new Map<string, { seq: number; tokenTxid: string; body: FingerBody; hosts: string[] }>()
   for (const a of answers) {
-    if ('error' in a) { unreachable.push(a.host); continue }
+    if ('error' in a) {
+      unreachable.push(a.host)
+      continue
+    }
     // a current-state answer carries the token, the current carrier and the
     // previous carrier: the record is the carrier the token commits to
     let token: Transaction | undefined
@@ -393,25 +439,42 @@ export async function resolveFinger (p: {
     for (const out of a.outputs) {
       const tx = parseBeef(out.beef)
       if (tx === undefined) continue
-      const tt = tx.outputs.map(o => inspectToken(o.lockingScript)).find(i => i.kind === 'token')
-      if (tt?.kind === 'token') { if (tt.token.valid) { token = tx; cBytes = new Uint8Array(tt.token.c) } continue }
+      const tt = tx.outputs.map((o) => inspectToken(o.lockingScript)).find((i) => i.kind === 'token')
+      if (tt?.kind === 'token') {
+        if (tt.token.valid) {
+          token = tx
+          cBytes = new Uint8Array(tt.token.c)
+        }
+        continue
+      }
       const d = decodeCarrier(tx)
       if (typeof d !== 'string') carriers.push(tx)
     }
-    const carrier = cBytes === undefined ? undefined : carriers.find(tx => {
-      try { return bytesEq(new Uint8Array(commitment(tx)), cBytes) } catch { return false }
-    })
+    const carrier =
+      cBytes === undefined
+        ? undefined
+        : carriers.find((tx) => {
+            try {
+              return bytesEq(new Uint8Array(commitment(tx)), cBytes)
+            } catch {
+              return false
+            }
+          })
     if (token === undefined || carrier === undefined || cBytes === undefined) continue
     // §10.3: the token is proven, or valid through proven ancestry (unmined)
     if (token.merklePath !== undefined) {
       if (!(await token.merklePath.verify(token.id('hex'), p.tracker))) continue
     } else {
       let ok = false
-      try { ok = await token.verify(p.tracker) } catch { ok = false }
+      try {
+        ok = await token.verify(p.tracker)
+      } catch {
+        ok = false
+      }
       if (!ok) continue
     }
     // §10.3: locked to the identity's profile derivation
-    const tlock = token.outputs.map(o => inspectToken(o.lockingScript)).find(i => i.kind === 'token')
+    const tlock = token.outputs.map((o) => inspectToken(o.lockingScript)).find((i) => i.kind === 'token')
     if (tlock?.kind !== 'token') continue
     const dec = decodeCarrier(carrier)
     if (typeof dec === 'string') continue
@@ -439,7 +502,11 @@ export async function resolveFinger (p: {
     }
     if (pinned !== undefined && !bytesEq(cBytes, pinnedBytes(pinned))) continue
     const body = mapToBody(rec.body)
-    try { checkFingerBody(body, { allowHttp: p.allowHttp }) } catch { continue }
+    try {
+      checkFingerBody(body, { allowHttp: p.allowHttp })
+    } catch {
+      continue
+    }
     const cHex = Utils.toHex(Array.from(cBytes))
     const hit = byCarrier.get(cHex)
     if (hit === undefined) byCarrier.set(cHex, { seq: Number(rec.seq), tokenTxid: token.id('hex'), body, hosts: [a.host] })
@@ -447,14 +514,14 @@ export async function resolveFinger (p: {
   }
 
   const quorum = p.quorum ?? 1
-  const winners = [...byCarrier.values()].filter(c => c.hosts.length >= quorum).sort((x, y) => y.seq - x.seq)
+  const winners = [...byCarrier.values()].filter((c) => c.hosts.length >= quorum).sort((x, y) => y.seq - x.seq)
   const win = winners[0]
   if (win === undefined) return undefined
   return { body: win.body, seq: win.seq, tokenTxid: win.tokenTxid, hostsAnswered: win.hosts, unreachable }
 }
 
 /** The locking key a valid token carries. */
-function tokenKeyOf (token: Transaction): string | undefined {
+function tokenKeyOf(token: Transaction): string | undefined {
   for (const out of token.outputs) {
     const i = inspectToken(out.lockingScript)
     if (i.kind === 'token' && i.token.valid) return i.token.lockingKey.encode(true, 'hex') as string
@@ -465,13 +532,25 @@ function tokenKeyOf (token: Transaction): string | undefined {
 const bytesEq = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((x, i) => x === b[i])
 
 // a pin may be the 32-byte commitment or its hash-order hex
-function pinnedBytes (pin: string): Uint8Array {
-  try { return new Uint8Array(Utils.toArray(pin, 'hex')) } catch { return new Uint8Array(0) }
+function pinnedBytes(pin: string): Uint8Array {
+  try {
+    return new Uint8Array(Utils.toArray(pin, 'hex'))
+  } catch {
+    return new Uint8Array(0)
+  }
 }
 
-function parseBeef (beef: number[]): Transaction | undefined {
-  try { return Transaction.fromBEEF(beef) } catch { /* */ }
-  try { return Transaction.fromAtomicBEEF(beef) } catch { /* */ }
+function parseBeef(beef: number[]): Transaction | undefined {
+  try {
+    return Transaction.fromBEEF(beef)
+  } catch {
+    /* */
+  }
+  try {
+    return Transaction.fromAtomicBEEF(beef)
+  } catch {
+    /* */
+  }
   return undefined
 }
 
@@ -481,9 +560,13 @@ function parseBeef (beef: number[]): Transaction | undefined {
  *  under allowHttp) and not a loopback/private/link-local target. The guard
  *  lives here so `resolveFinger` stays transport-agnostic and every consumer
  *  (runtime hostsFor) screens through one place. */
-export function fingerHostAllowed (url: string, opts?: { allowHttp?: boolean, allowLocal?: boolean }): boolean {
+export function fingerHostAllowed(url: string, opts?: { allowHttp?: boolean; allowLocal?: boolean }): boolean {
   let u: URL
-  try { u = new URL(url) } catch { return false }
+  try {
+    u = new URL(url)
+  } catch {
+    return false
+  }
   if (u.protocol !== 'https:' && !(opts?.allowHttp === true && u.protocol === 'http:')) return false
   if (opts?.allowLocal === true) return true // mock/regtest: hosts are the test rig's
   const h = u.hostname.toLowerCase()
@@ -495,7 +578,7 @@ export function fingerHostAllowed (url: string, opts?: { allowHttp?: boolean, al
     if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return false // private
     if (a === 169 && b === 254) return false // link-local (metadata endpoint)
     if (a >= 224) return false // multicast/reserved
-    if (ip.some(o => o > 255)) return false
+    if (ip.some((o) => o > 255)) return false
   }
   if (h === '::1' || h === '[::1]' || h.startsWith('fe80') || h.startsWith('[fe80')) return false
   return true

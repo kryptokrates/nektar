@@ -10,7 +10,16 @@ const leaves = (n: number) => Array.from({ length: n }, (_, i) => dsha256(utf8(`
 const proofOf = (n: number, idx: number[]) => buildSubsetProof(leaves(n), idx)
 
 test('ZKS2 codec: round-trip is exact for every shape', () => {
-  for (const [n, idx] of [[1, [0]], [5, [1]], [40, [3, 39]], [64, [0, 63]], [65, [0, 64]], [70, [1, 63, 64, 69]], [128, [0, 127]], [200, [0, 63, 64, 127, 128, 199]]] as Array<[number, number[]]>) {
+  for (const [n, idx] of [
+    [1, [0]],
+    [5, [1]],
+    [40, [3, 39]],
+    [64, [0, 63]],
+    [65, [0, 64]],
+    [70, [1, 63, 64, 69]],
+    [128, [0, 127]],
+    [200, [0, 63, 64, 127, 128, 199]]
+  ] as Array<[number, number[]]>) {
     const p = proofOf(n, idx)
     const back = decodeZkdis(encodeZkdis(p))
     assert.deepEqual(back, p, `size ${n}`)
@@ -19,10 +28,23 @@ test('ZKS2 codec: round-trip is exact for every shape', () => {
 })
 
 test('subset proof verifies: single leaf, runs, across the shard boundary, all leaves', () => {
-  for (const [n, idx] of [[5, [1]], [5, [1, 2, 3]], [70, [63, 64]], [70, [1, 63, 64, 69]], [200, [64, 128, 199]], [70, Array.from({ length: 70 }, (_, i) => i)], [1, [0]], [64, [0, 31, 63]], [65, [64]]] as Array<[number, number[]]>) {
+  for (const [n, idx] of [
+    [5, [1]],
+    [5, [1, 2, 3]],
+    [70, [63, 64]],
+    [70, [1, 63, 64, 69]],
+    [200, [64, 128, 199]],
+    [70, Array.from({ length: 70 }, (_, i) => i)],
+    [1, [0]],
+    [64, [0, 31, 63]],
+    [65, [64]]
+  ] as Array<[number, number[]]>) {
     const v = verifyZkdis(encodeZkdis(proofOf(n, idx)))
     assert.ok(v.ok, `size ${n} subset ${JSON.stringify(idx.slice(0, 5))}…: ${JSON.stringify(v)}`)
-    assert.deepEqual(v.indices, [...idx].sort((a, b) => a - b))
+    assert.deepEqual(
+      v.indices,
+      [...idx].sort((a, b) => a - b)
+    )
     assert.deepEqual(v.root, merkleRoot(leaves(n)))
   }
 })
@@ -68,17 +90,86 @@ test('ZKS2 codec: every malformed input is refused with ZksCodecError', () => {
   const bad: Array<[string, Uint8Array]> = [
     ['empty', new Uint8Array()],
     ['truncated header', ok.slice(0, 30)],
-    ['bad magic', mut(b => { b[0] = 0; return b })],
-    ['zkm2 magic', mut(b => { b[3] = 0x4d; return b })],
-    ['unknown version', mut(b => { b[4] = 3; return b })],
-    ['unknown algorithm', mut(b => { b[5] = 0x7f; return b })],
-    ['size 0', mut(b => { b.fill(0, 38, 42); return b })],
-    ['numShards 0', mut(b => { b.fill(0, 42, 46); return b })],
-    ['shardIndex out of range', mut(b => { new DataView(b.buffer).setUint32(46, 9, true); return b })],
-    ['leafIndex in wrong shard', mut(b => { new DataView(b.buffer).setUint32(52, 65, true); return b })],
-    ['subpathLen wrong', mut(b => { b[88] = 5; return b })],
-    ['non-canonical leaf order', mut(b => { const e0 = b.slice(52, 52 + ENTRY), e1 = b.slice(52 + ENTRY, 52 + 2 * ENTRY); b.set(e1, 52); b.set(e0, 52 + ENTRY); return b })],
-    ['topPathLen +1', mut(b => { new DataView(b.buffer).setUint32(b.length - 4, 1, true); return b })],
+    [
+      'bad magic',
+      mut((b) => {
+        b[0] = 0
+        return b
+      })
+    ],
+    [
+      'zkm2 magic',
+      mut((b) => {
+        b[3] = 0x4d
+        return b
+      })
+    ],
+    [
+      'unknown version',
+      mut((b) => {
+        b[4] = 3
+        return b
+      })
+    ],
+    [
+      'unknown algorithm',
+      mut((b) => {
+        b[5] = 0x7f
+        return b
+      })
+    ],
+    [
+      'size 0',
+      mut((b) => {
+        b.fill(0, 38, 42)
+        return b
+      })
+    ],
+    [
+      'numShards 0',
+      mut((b) => {
+        b.fill(0, 42, 46)
+        return b
+      })
+    ],
+    [
+      'shardIndex out of range',
+      mut((b) => {
+        new DataView(b.buffer).setUint32(46, 9, true)
+        return b
+      })
+    ],
+    [
+      'leafIndex in wrong shard',
+      mut((b) => {
+        new DataView(b.buffer).setUint32(52, 65, true)
+        return b
+      })
+    ],
+    [
+      'subpathLen wrong',
+      mut((b) => {
+        b[88] = 5
+        return b
+      })
+    ],
+    [
+      'non-canonical leaf order',
+      mut((b) => {
+        const e0 = b.slice(52, 52 + ENTRY),
+          e1 = b.slice(52 + ENTRY, 52 + 2 * ENTRY)
+        b.set(e1, 52)
+        b.set(e0, 52 + ENTRY)
+        return b
+      })
+    ],
+    [
+      'topPathLen +1',
+      mut((b) => {
+        new DataView(b.buffer).setUint32(b.length - 4, 1, true)
+        return b
+      })
+    ],
     ['truncated proof', ok.slice(0, ok.length - 1)],
     ['trailing bytes', Uint8Array.from([...ok, 0])]
   ]
@@ -96,14 +187,57 @@ test('ZKS2 codec: every malformed input is refused with ZksCodecError', () => {
 test('subset proof NEGATIVES (fails closed with a specific reason)', () => {
   const L = leaves(70)
   const ok = () => proofOf(70, [1, 63, 64, 69])
-  const cases: Array<[string, () => { ok: boolean, reason?: string }]> = [
-    ['tampered subpath sibling', () => { const p = ok(); p.shards[0]!.leaves[0]!.subpath[2] = dsha256(utf8('forged')); return verifySubsetProof(p) }],
-    ['leaves disagree on the shard root', () => { const p = proofOf(70, [61, 62, 63]); p.shards[0]!.leaves[1]!.subpath[5] = dsha256(utf8('x')); return verifySubsetProof(p) }],
-    ['wrong claimed batch root', () => { const p = ok(); p.batchRoot = dsha256(utf8('other')); return verifySubsetProof(p) }],
+  const cases: Array<[string, () => { ok: boolean; reason?: string }]> = [
+    [
+      'tampered subpath sibling',
+      () => {
+        const p = ok()
+        p.shards[0]!.leaves[0]!.subpath[2] = dsha256(utf8('forged'))
+        return verifySubsetProof(p)
+      }
+    ],
+    [
+      'leaves disagree on the shard root',
+      () => {
+        const p = proofOf(70, [61, 62, 63])
+        p.shards[0]!.leaves[1]!.subpath[5] = dsha256(utf8('x'))
+        return verifySubsetProof(p)
+      }
+    ],
+    [
+      'wrong claimed batch root',
+      () => {
+        const p = ok()
+        p.batchRoot = dsha256(utf8('other'))
+        return verifySubsetProof(p)
+      }
+    ],
     ['missing sibling (truncated)', () => verifyZkdis(encodeZkdis(ok()).slice(0, 60))],
-    ['mutated wire leaf hash', () => { const b = encodeZkdis(ok()); b[60] ^= 1; return verifyZkdis(b) }],
-    ['mutated wire top path', () => { const p = proofOf(70, [63]); const b = encodeZkdis(p); b[b.length - 16] ^= 1; return verifyZkdis(b) }],
-    ['disclosed leaf swapped for a foreign hash', () => { const p = ok(); p.shards[1]!.leaves[0]!.hash = dsha256(utf8('impostor')); return verifySubsetProof(p) }]
+    [
+      'mutated wire leaf hash',
+      () => {
+        const b = encodeZkdis(ok())
+        b[60] ^= 1
+        return verifyZkdis(b)
+      }
+    ],
+    [
+      'mutated wire top path',
+      () => {
+        const p = proofOf(70, [63])
+        const b = encodeZkdis(p)
+        b[b.length - 16] ^= 1
+        return verifyZkdis(b)
+      }
+    ],
+    [
+      'disclosed leaf swapped for a foreign hash',
+      () => {
+        const p = ok()
+        p.shards[1]!.leaves[0]!.hash = dsha256(utf8('impostor'))
+        return verifySubsetProof(p)
+      }
+    ]
   ]
   for (const [name, run] of cases) {
     const r = run()
@@ -115,7 +249,12 @@ test('subset proof NEGATIVES (fails closed with a specific reason)', () => {
 test('mutated L_ZKDis bytes never verify (seeded walk)', () => {
   const ok = encodeZkdis(proofOf(70, [1, 63, 64, 69]))
   let s = 0x5eed
-  const rnd = () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return (s >>> 0) / 2 ** 32 }
+  const rnd = () => {
+    s ^= s << 13
+    s ^= s >>> 17
+    s ^= s << 5
+    return (s >>> 0) / 2 ** 32
+  }
   for (let i = 0; i < 300; i++) {
     const m = Uint8Array.from(ok)
     const j = Math.floor(rnd() * m.length)

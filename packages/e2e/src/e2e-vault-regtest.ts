@@ -5,16 +5,16 @@
 import { PrivateKey, Transaction, LockingScript, P2PKH } from '@bsv/sdk'
 import { buildP2PKHScript } from 'runar-sdk'
 import { FeeVault } from '@nektar/anchor'
-import {
-  TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve,
-  type RegtestConfig
-} from '@nektar/chain'
+import { TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, bootstrapReserve, type RegtestConfig } from '@nektar/chain'
 import { existsSync, readFileSync } from 'node:fs'
 
 let failures = 0
-const check = (cond: boolean, name: string) => { console.log(`${cond ? '✔' : '✖'} ${name}`); if (!cond) failures++ }
+const check = (cond: boolean, name: string) => {
+  console.log(`${cond ? '✔' : '✖'} ${name}`)
+  if (!cond) failures++
+}
 
-function readEnv (p: URL): Record<string, string> {
+function readEnv(p: URL): Record<string, string> {
   const out: Record<string, string> = {}
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
@@ -38,16 +38,22 @@ if (!cfg.rpcPass) throw new Error('rpc_pass missing')
 const tracker = new TeranodeRPCTracker(cfg)
 const broadcaster = new TeranodeBroadcaster(cfg.propagationUrl)
 const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
-async function rpc (method: string, ...params: unknown[]): Promise<any> {
-  const r = await fetch(cfg.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }) })
-  const j = await r.json() as any
+async function rpc(method: string, ...params: unknown[]): Promise<any> {
+  const r = await fetch(cfg.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: auth },
+    body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
+  })
+  const j = (await r.json()) as any
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }
 
 const key = PrivateKey.fromWif(WIF)
 const addr = key.toPublicKey().toAddress([0x6f])
-const mineOne = async () => { await rpc('generatetoaddress', 1, addr) }
+const mineOne = async () => {
+  await rpc('generatetoaddress', 1, addr)
+}
 
 // --- funding: reuse the persistent reserve, split fresh if empty ----------
 const reserve = new ReserveFunder(key, '.state/reserve-vault.json')
@@ -58,15 +64,22 @@ if (reserve.utxos.length === 0) {
 const FUND_SATS = 10_000
 const fundUtxo = await reserve.takeReserve(undefined, FUND_SATS + 2000)
 check(!!fundUtxo, 'reserve has a spendable funding utxo')
-if (!fundUtxo) { console.log('FATAL: no funding utxo'); process.exit(1) }
+if (!fundUtxo) {
+  console.log('FATAL: no funding utxo')
+  process.exit(1)
+}
 
 // --- the vault -----------------------------------------------------------
 const owner = key // operator key = the WIF key for this E2E
 const ownerPkh = Buffer.from(owner.toPublicKey().toHash()).toString('hex')
 const destPkh = ownerPkh // self-pay for the test (dest = the anchoring wallet)
 const vault = new FeeVault({
-  destPkh, ownerPkh,
-  perTxCap: 2_000n, windowCap: 5_000n, windowBlocks: 5n, maxFee: 10n
+  destPkh,
+  ownerPkh,
+  perTxCap: 2_000n,
+  windowCap: 5_000n,
+  windowBlocks: 5n,
+  maxFee: 10n
 })
 
 // fund tx: P2PKH utxo → vault locking script
@@ -79,7 +92,10 @@ await fundTx.sign()
 const fundRes = await broadcaster.broadcast(fundTx)
 check(fundRes.status === 'success', `vault funding tx broadcast (${fundTx.id('hex').slice(0, 12)}…) — ${fundRes.description ?? 'ok'}`)
 reserve.markSpent(fundUtxo.tx.id('hex'), fundUtxo.vout)
-if (fundRes.status !== 'success') { console.log('FATAL: funding failed'); process.exit(1) }
+if (fundRes.status !== 'success') {
+  console.log('FATAL: funding failed')
+  process.exit(1)
+}
 await mineOne()
 
 let utxo = { txid: fundTx.id('hex'), vout: 0, satoshis: FUND_SATS, script: vault.lockingScript() }
@@ -89,7 +105,10 @@ let lt = await tracker.currentHeight()
 const s1 = vault.buildSpend(utxo, owner, 1_000n, lt)
 const r1 = await broadcaster.broadcast(s1.tx)
 check(r1.status === 'success', `spend 1 (1000 sats) accepted by node — ${r1.description ?? 'ok'}`)
-if (r1.status !== 'success') { console.log('FATAL: first covenant spend refused'); process.exit(1) }
+if (r1.status !== 'success') {
+  console.log('FATAL: first covenant spend refused')
+  process.exit(1)
+}
 reserve.addOwned(s1.tx, 2) // the 1-sat change — cheap bookkeeping
 await mineOne()
 

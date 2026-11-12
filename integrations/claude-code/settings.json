@@ -2,16 +2,12 @@
   "hooks": {
     "Stop": [
       {
-        "hooks": [
-          { "type": "command", "command": "node integrations/claude-code/verify-receipt.mjs" }
-        ]
+        "hooks": [{ "type": "command", "command": "node integrations/claude-code/verify-receipt.mjs" }]
       }
     ],
     "SessionStart": [
       {
-        "hooks": [
-          { "type": "command", "command": "node integrations/claude-code/session-start.mjs" }
-        ]
+        "hooks": [{ "type": "command", "command": "node integrations/claude-code/session-start.mjs" }]
       }
     ]
   }

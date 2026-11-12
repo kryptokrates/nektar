@@ -7,10 +7,16 @@ import { readFileSync } from 'node:fs'
 import { verifyZkm2 } from '@nektar/zk'
 
 const file = process.argv[2]
-if (!file) { console.log(JSON.stringify({ ok: false, reason: 'usage: verify-worker <file>' })); process.exit(2) }
+if (!file) {
+  console.log(JSON.stringify({ ok: false, reason: 'usage: verify-worker <file>' }))
+  process.exit(2)
+}
 let bytes
-try { bytes = new Uint8Array(readFileSync(file)) } catch (e) {
-  console.log(JSON.stringify({ ok: false, reason: `read: ${e.message}` })); process.exit(0)
+try {
+  bytes = new Uint8Array(readFileSync(file))
+} catch (e) {
+  console.log(JSON.stringify({ ok: false, reason: `read: ${e.message}` }))
+  process.exit(0)
 }
 // verifyZkm2 may abort the process inside wasm — nothing to catch here;
 // the parent classifies any nonzero/missing output as INCONCLUSIVE.

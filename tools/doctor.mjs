@@ -13,13 +13,33 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const FIX = process.argv.includes('--fix')
 const envPath = join(root, '.env')
 const env = existsSync(envPath)
-  ? Object.fromEntries(readFileSync(envPath, 'utf8').split(/\r?\n/).map(l => l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean).map(m => [m[1], m[2].trim()]))
+  ? Object.fromEntries(
+      readFileSync(envPath, 'utf8')
+        .split(/\r?\n/)
+        .map((l) => l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/))
+        .filter(Boolean)
+        .map((m) => [m[1], m[2].trim()])
+    )
   : {}
 const dataDir = resolve(process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR ?? join(root, '.nektar'))
 
-const issues = [], fixed = [], refused = []
-const report = (ok, msg) => { issues.push({ ok, msg }); console.log(`  ${ok ? 'ok ' : '!  '} ${msg}`) }
-const repair = (msg, fn) => { if (FIX) { fn(); fixed.push(msg); console.log(`  fix ${msg}`) } else { refused.push(msg); console.log(`  !   ${msg} (fixable)`) } }
+const issues = [],
+  fixed = [],
+  refused = []
+const report = (ok, msg) => {
+  issues.push({ ok, msg })
+  console.log(`  ${ok ? 'ok ' : '!  '} ${msg}`)
+}
+const repair = (msg, fn) => {
+  if (FIX) {
+    fn()
+    fixed.push(msg)
+    console.log(`  fix ${msg}`)
+  } else {
+    refused.push(msg)
+    console.log(`  !   ${msg} (fixable)`)
+  }
+}
 
 console.log(`doctor${FIX ? ' --fix' : ''} — dataDir ${dataDir}\n`)
 
@@ -31,12 +51,18 @@ else report(true, 'data dir exists')
 const lock = join(dataDir, 'instance.lock')
 if (existsSync(lock)) {
   let l = null
-  try { l = JSON.parse(readFileSync(lock, 'utf8')) } catch { /* corrupt */ }
+  try {
+    l = JSON.parse(readFileSync(lock, 'utf8'))
+  } catch {
+    /* corrupt */
+  }
   if (l === null) repair('remove corrupt instance.lock (unparseable — blocks startup)', () => rmSync(lock))
   else {
     const age = Date.now() - (l.beat ?? 0)
-    if (age < 20_000) { report(false, `instance.lock held by live instance ${l.owner} — stop it first`); refused.push('live lock untouched') }
-    else repair(`remove stale instance.lock (beat ${Math.round(age / 1000)}s old)`, () => rmSync(lock))
+    if (age < 20_000) {
+      report(false, `instance.lock held by live instance ${l.owner} — stop it first`)
+      refused.push('live lock untouched')
+    } else repair(`remove stale instance.lock (beat ${Math.round(age / 1000)}s old)`, () => rmSync(lock))
   }
 } else report(true, 'no instance.lock')
 

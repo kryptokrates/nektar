@@ -16,10 +16,10 @@ const hmac = (key: Buffer | string, data: string): Buffer => createHmac('sha256'
 
 /** recompute the SigV4 signature an honest client should have produced for
  *  this request — the gateway's own check. Returns the expected Signature. */
-function expectedSig (method: string, path: string, headers: Record<string, string>, secret = SECRET): string {
+function expectedSig(method: string, path: string, headers: Record<string, string>, secret = SECRET): string {
   const auth = headers.authorization!
   const signed = auth.match(/SignedHeaders=([^,]+)/)![1]!.split(';')
-  const canonicalHeaders = signed.map(h => `${h}:${headers[h]!.replace(/\s+/g, ' ').trim()}\n`).join('')
+  const canonicalHeaders = signed.map((h) => `${h}:${headers[h]!.replace(/\s+/g, ' ').trim()}\n`).join('')
   const payloadHash = headers['x-amz-content-sha256']!
   const canonical = [method, path, '', canonicalHeaders, signed.join(';'), payloadHash].join('\n')
   const amzDate = headers['x-amz-date']!
@@ -30,8 +30,8 @@ function expectedSig (method: string, path: string, headers: Record<string, stri
 }
 
 /** minimal path-style S3: PUT/GET/HEAD on /{bucket}/{key}, SigV4 enforced. */
-async function fakeS3 (secret = SECRET): Promise<{ server: Server, url: string, objects: Map<string, { bytes: Uint8Array, meta: Record<string, string> }> }> {
-  const objects = new Map<string, { bytes: Uint8Array, meta: Record<string, string> }>()
+async function fakeS3(secret = SECRET): Promise<{ server: Server; url: string; objects: Map<string, { bytes: Uint8Array; meta: Record<string, string> }> }> {
+  const objects = new Map<string, { bytes: Uint8Array; meta: Record<string, string> }>()
   const server = createServer((req, res) => {
     const headers = Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v.join(',') : String(v)]))
     const auth = headers.authorization ?? ''
@@ -43,7 +43,7 @@ async function fakeS3 (secret = SECRET): Promise<{ server: Server, url: string, 
     const key = req.url!.split('/').slice(2).join('/')
     if (req.method === 'PUT') {
       const chunks: Buffer[] = []
-      req.on('data', c => chunks.push(c))
+      req.on('data', (c) => chunks.push(c))
       req.on('end', () => {
         const meta: Record<string, string> = {}
         for (const [h, v] of Object.entries(headers)) if (h.startsWith('x-amz-meta-')) meta[h] = v
@@ -58,18 +58,27 @@ async function fakeS3 (secret = SECRET): Promise<{ server: Server, url: string, 
       return
     }
     if (req.method === 'HEAD') {
-      res.writeHead(200, { 'content-length': o.bytes.length, ...(o.meta['x-amz-meta-sha256'] !== undefined ? { 'x-amz-meta-sha256': o.meta['x-amz-meta-sha256'] } : {}) }).end()
+      res
+        .writeHead(200, {
+          'content-length': o.bytes.length,
+          ...(o.meta['x-amz-meta-sha256'] !== undefined ? { 'x-amz-meta-sha256': o.meta['x-amz-meta-sha256'] } : {})
+        })
+        .end()
       return
     }
-    if (req.method === 'GET') { res.writeHead(200, { 'content-length': o.bytes.length }).end(Buffer.from(o.bytes)) ; return }
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-length': o.bytes.length }).end(Buffer.from(o.bytes))
+      return
+    }
     res.writeHead(405).end()
   })
-  await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
   const { port } = server.address() as { port: number }
   return { server, url: `http://127.0.0.1:${port}`, objects }
 }
 
-const store = (url: string, secret = SECRET) => new S3ObjectStore({ endpoint: url, bucket: 'packs-zzktyfefka', accessKey: ACCESS, secretKey: secret, region: REGION })
+const store = (url: string, secret = SECRET) =>
+  new S3ObjectStore({ endpoint: url, bucket: 'packs-zzktyfefka', accessKey: ACCESS, secretKey: secret, region: REGION })
 
 test('objectstore: put/get/head round trip on a signature-checking fake S3', async () => {
   const { server, url, objects } = await fakeS3()
@@ -85,14 +94,18 @@ test('objectstore: put/get/head round trip on a signature-checking fake S3', asy
     assert.equal(head?.sha256, ref.sha256) // x-amz-meta-sha256 carried through
     assert.deepEqual([...(await s.get(ref.key))], [...bytes])
     assert.equal(objects.has('evidence/mock/op-1.json'), true)
-  } finally { server.close() }
+  } finally {
+    server.close()
+  }
 })
 
 test('objectstore: wrong secret → 403 surfaces as an error', async () => {
   const { server, url } = await fakeS3()
   try {
     await assert.rejects(() => store(url, 'wrong-secret').put('k.json', new Uint8Array([1])), /403|SignatureDoesNotMatch/)
-  } finally { server.close() }
+  } finally {
+    server.close()
+  }
 })
 
 test('objectstore: getVerified returns verified bytes', async () => {
@@ -104,7 +117,9 @@ test('objectstore: getVerified returns verified bytes', async () => {
     assert.deepEqual([...(await s.getVerified(ref))], [...bytes])
     assert.deepEqual([...(await s.getVerified({ key: ref.key, sha256: ref.sha256 }))], [...bytes])
     await assert.rejects(() => s.getVerified({ key: ref.key, sha256: ref.sha256, size: bytes.length + 1 }), /expected/)
-  } finally { server.close() }
+  } finally {
+    server.close()
+  }
 })
 
 test('objectstore: getVerified rejects tampered content', async () => {
@@ -114,7 +129,9 @@ test('objectstore: getVerified rejects tampered content', async () => {
     const ref = await s.put('x.json', new TextEncoder().encode('honest bytes'))
     objects.get('x.json')!.bytes = new TextEncoder().encode('forged-bytes') // same length — reaches the digest check
     await assert.rejects(() => s.getVerified(ref), /sha256 mismatch/)
-  } finally { server.close() }
+  } finally {
+    server.close()
+  }
 })
 
 test('objectstore: getVerified rejects oversized content and oversized refs', async () => {
@@ -126,11 +143,21 @@ test('objectstore: getVerified rejects oversized content and oversized refs', as
     // and a stored object over the bound is refused after fetch
     objects.set('big', { bytes: new Uint8Array(OBJECT_MAX_BYTES + 1), meta: {} })
     await assert.rejects(() => s.getVerified({ key: 'big', sha256: 'ab'.repeat(32) }), /bound/)
-  } finally { server.close() }
+  } finally {
+    server.close()
+  }
 })
 
 test('objectstore: env config — off without URL/bucket, secret via file or env', async () => {
   assert.equal(objectStoreFromEnv({} as NodeJS.ProcessEnv), undefined)
-  assert.equal(objectStoreFromEnv({ NEKTAR_BSTORE_S3_URL: 'http://x', NEKTAR_BSTORE_BUCKET: 'b', NEKTAR_BSTORE_ACCESS_KEY: 'a', NEKTAR_BSTORE_SECRET_KEY: 's' } as unknown as NodeJS.ProcessEnv)?.bucket, 'b')
+  assert.equal(
+    objectStoreFromEnv({
+      NEKTAR_BSTORE_S3_URL: 'http://x',
+      NEKTAR_BSTORE_BUCKET: 'b',
+      NEKTAR_BSTORE_ACCESS_KEY: 'a',
+      NEKTAR_BSTORE_SECRET_KEY: 's'
+    } as unknown as NodeJS.ProcessEnv)?.bucket,
+    'b'
+  )
   assert.throws(() => objectStoreFromEnv({ NEKTAR_BSTORE_S3_URL: 'http://x', NEKTAR_BSTORE_BUCKET: 'b' } as unknown as NodeJS.ProcessEnv), /key/)
 })

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const QUICKSTART = path.join(ROOT, 'infra', 'teranode-quickstart')
 
-function loadEnvFile (p) {
+function loadEnvFile(p) {
   const out = {}
   if (!fs.existsSync(p)) return out
   for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
@@ -33,7 +33,7 @@ export const STATE_FILE = path.join(ROOT, 'spikes', '.state.json')
 if (!WIF) throw new Error('NEKTAR_REGTEST_WIF missing in nektar/.env')
 if (!RPC.pass) throw new Error('rpc_pass missing in teranode-quickstart/.env')
 
-export async function rpc (method, ...params) {
+export async function rpc(method, ...params) {
   const res = await fetch(RPC.url, {
     method: 'POST',
     headers: {
@@ -47,7 +47,7 @@ export async function rpc (method, ...params) {
   return j.result
 }
 
-export async function broadcastEF (tx) {
+export async function broadcastEF(tx) {
   const res = await fetch(PROPAGATION_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
@@ -57,10 +57,10 @@ export async function broadcastEF (tx) {
   return { status: res.status, body: text }
 }
 
-export function loadState () {
+export function loadState() {
   return fs.existsSync(STATE_FILE) ? JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) : {}
 }
 
-export function saveState (s) {
+export function saveState(s) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2))
 }

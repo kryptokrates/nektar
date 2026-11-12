@@ -52,7 +52,15 @@ NEKTAR_PROFILE=nektar_regtest pnpm mcp:smoke
 ## 2. Direct stdio (no Docker)
 
 ```json
-{ "mcpServers": { "nektar": { "command": "node", "args": ["C:/path/to/nektar/packages/mcp/dist/src/bin.js"], "env": { "NEKTAR_MODEL_ID": "claude-sonnet-4-5 (Anthropic API)" } } } }
+{
+  "mcpServers": {
+    "nektar": {
+      "command": "node",
+      "args": ["C:/path/to/nektar/packages/mcp/dist/src/bin.js"],
+      "env": { "NEKTAR_MODEL_ID": "claude-sonnet-4-5 (Anthropic API)" }
+    }
+  }
+}
 ```
 
 Claude Desktop: `claude_desktop_config.json`. Claude Code: `claude mcp add nektar -- node <path>/bin.js`. Cursor/Windsurf: their MCP settings, with the same command.
@@ -64,7 +72,7 @@ Set `NEKTAR_MODEL_ID` to the exact model release, because receipts bind it (AGT-
 `verifyUrl`. The agent ends its answer with them; anyone hits
 `/v1/verify?r=` — JSON checks, or a page with a QR (`?format=html` or a
 browser's Accept header). A Claude Code **Stop hook** can verify every
-answer automatically — the failure *blocks the stop* and goes back to the
+answer automatically — the failure _blocks the stop_ and goes back to the
 model, so an ungrounded answer can't slide by. Setup and the honest
 boundary: [integrations/claude-code/README.md](../integrations/claude-code/README.md).
 
@@ -81,12 +89,12 @@ NEKTAR_LLM_URL=http://localhost:11434/v1 NEKTAR_LLM_MODEL=qwen3 pnpm chat "…" 
 - `chat.mjs` streams responses, so slow CPU models don't hit fetch's header timeout.
 - **Measured on this machine (CPU only; Docker Desktop 4.97, llama.cpp `b9879-cpu`):**
 
-| Model | Result |
-|---|---|
-| **`ai/qwen3:4b-instruct-2507` (2.3 GB) — recommended** | real tool calls: `remember` → `recall`, then an answer that cites shard/seq and states the truth caveat, in **~15 s** |
-| `ai/qwen3` 8B | too slow on this CPU (no first token after several minutes) |
-| `ai/qwen3:0.6B` | fast; with streaming it makes real `remember` calls, but answers poorly |
-| `ai/qwen3.8-flash-next:q8_0` | still rejected even by llama.cpp `b9879`: `unknown model architecture: 'qwen4exp'` (an experimental architecture not yet in llama.cpp) |
+| Model                                                  | Result                                                                                                                                 |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **`ai/qwen3:4b-instruct-2507` (2.3 GB) — recommended** | real tool calls: `remember` → `recall`, then an answer that cites shard/seq and states the truth caveat, in **~15 s**                  |
+| `ai/qwen3` 8B                                          | too slow on this CPU (no first token after several minutes)                                                                            |
+| `ai/qwen3:0.6B`                                        | fast; with streaming it makes real `remember` calls, but answers poorly                                                                |
+| `ai/qwen3.8-flash-next:q8_0`                           | still rejected even by llama.cpp `b9879`: `unknown model architecture: 'qwen4exp'` (an experimental architecture not yet in llama.cpp) |
 
 - **OpenAI.** Run `NEKTAR_LLM_PROVIDER=openai pnpm chat "…"`. The default model is `gpt-4.1-mini`; override it with `NEKTAR_LLM_MODEL`. The key is read from `OPENAI_API_KEY` in the environment or in the gitignored `nektar/.env`, never from the command line.
   - Verified run (about 9 s): `remember` ×2 → `recall` seq 0 → `prove` seq 0.
@@ -97,6 +105,7 @@ NEKTAR_LLM_URL=http://localhost:11434/v1 NEKTAR_LLM_MODEL=qwen3 pnpm chat "…" 
 ## 4. Custom apps: HTTP
 
 `NEKTAR_HTTP_PORT=8080 node packages/mcp/dist/src/bin.js` serves:
+
 - `/mcp`: **MCP Streamable HTTP** (sessions via `mcp-session-id`; unknown sessions are refused);
 - `/v1/*`: REST (tools, public proofs, checkpoints, metrics), documented in `/v1/openapi.json`.
 
@@ -106,15 +115,16 @@ OpenAI/Anthropic function-calling apps can call `/v1/tools/{name}` directly.
 
 ## 5. Real chain (regtest now, testnet later)
 
-| env | meaning |
-|---|---|
-| `NEKTAR_NETWORK` | `mock` (default) · `regtest` · `testnet` (refused until configured) |
-| `NEKTAR_DATA_DIR` | records (sqlite), anchor state, security state, funding reserve, keys (0600). `/data` in the image |
-| `NEKTAR_FUND_WIF` / `_FILE` | fee-paying key (regtest: the miner key) |
-| `NEKTAR_RPC_PASS` / `_FILE`, `NEKTAR_RPC_URL`, `NEKTAR_PROPAGATION_URL`, `NEKTAR_ASSET_URL` | Teranode endpoints (from a container: `http://host.docker.internal:…`) |
-| `NEKTAR_AUTOMINE=1` | regtest only: mine when anchors wait |
+| env                                                                                         | meaning                                                                                            |
+| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `NEKTAR_NETWORK`                                                                            | `mock` (default) · `regtest` · `testnet` (refused until configured)                                |
+| `NEKTAR_DATA_DIR`                                                                           | records (sqlite), anchor state, security state, funding reserve, keys (0600). `/data` in the image |
+| `NEKTAR_FUND_WIF` / `_FILE`                                                                 | fee-paying key (regtest: the miner key)                                                            |
+| `NEKTAR_RPC_PASS` / `_FILE`, `NEKTAR_RPC_URL`, `NEKTAR_PROPAGATION_URL`, `NEKTAR_ASSET_URL` | Teranode endpoints (from a container: `http://host.docker.internal:…`)                             |
+| `NEKTAR_AUTOMINE=1`                                                                         | regtest only: mine when anchors wait                                                               |
 
 **Restart safety:**
+
 - the server resumes each shard from its persisted head;
 - the next anchor spends exactly that UTXO, so there is no fork;
 - a confirmer attaches BUMPs to every unproven anchor;
@@ -133,6 +143,7 @@ The model never handles keys or proofs. The **harness** does, using the client k
 4. `chat.mjs` with `NEKTAR_CHAT_CLEARANCE=<level>` does this transparently whenever a recall comes back `zkaccess required`.
 
 **Rejected, each with a specific reason:**
+
 - no clearance;
 - a replayed presentation (persisted across restarts);
 - a self-issued or untrusted authority;
@@ -144,6 +155,7 @@ The model never handles keys or proofs. The **harness** does, using the client k
 ## Agent-level E2E on local Teranode (`pnpm e2e:mcp`)
 
 The real MCP server process, driven by the SDK client exactly like an AI client. It covers:
+
 - Rúnar anchoring, plus SPV `prove` against real headers;
 - **STARK membership** (Wright §13; 224 KB RISC Zero receipt, ~35–50 s on CPU) against the SPV-checked SHA-256 anchor, via `zkQuery` → `proveMembership` → `verifyMembership`; replayed and tampered proofs rejected;
 - **Bulletproof clearance** with all the negatives above;
@@ -152,10 +164,12 @@ The real MCP server process, driven by the SDK client exactly like an AI client.
 16/16 checks, **3 consecutive passes** over stdio. The same flow through the **Docker MCP Gateway** (`NEKTAR_E2E_GATEWAY=nektar_regtest`) also passes 16/16; Groth16 proving takes about 6 s in the 1-CPU container, against 1.5 s natively.
 
 **Model-driven run (OpenAI `gpt-4.1-mini`, regtest, harness clearance level 3):**
+
 - `remember` ×2 (one at level 2) → `anchor` → `recall` (the harness attached ZK clearance → `verified`) → `prove` ×2;
 - the answer cited both seqs, the anchor txid and the truth caveat.
 
 **Operational lessons:**
+
 - **The server exits when its stdio client disconnects.** Before this fix, leaked `docker run -i` containers kept auto-mining and writing to the same volume.
 - **One writer per data dir.** The runtime refuses to start when a live heartbeat lock is present.
 - **All Teranode calls have timeouts.** The confirmer indexes each block once (txid → height) and abandons anchors that are not mined within 100 blocks, which happens after a conflicting spend.

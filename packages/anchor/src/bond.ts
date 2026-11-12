@@ -5,54 +5,71 @@
 // _changePKH/_changeAmount slots on every public method, so each spend tx
 // carries the 1-sat change output to the operator.
 import { PrivateKey, Transaction, LockingScript, UnlockingScript, Hash, P2PKH } from '@bsv/sdk'
-import {
-  RunarContract, computeOpPushTx, serializeState,
-  extractStateFromScript, buildP2PKHScript
-} from 'runar-sdk'
+import { RunarContract, computeOpPushTx, serializeState, extractStateFromScript, buildP2PKHScript } from 'runar-sdk'
 import { NEKTAR_CHECKPOINTBOND_ARTIFACT } from '@nektar/contracts'
 import type { Broadcaster } from '@nektar/chain'
 
 export interface BondConfig {
-  operatorPkh: string       // 20B hex — checkpoint writer
+  operatorPkh: string // 20B hex — checkpoint writer
   bondReleaseHeight: bigint // locktime gate for close()
   maxFee: bigint
-  epochLen: bigint          // §12 SLA window — commit renews deadline to nLockTime+epochLen
+  epochLen: bigint // §12 SLA window — commit renews deadline to nLockTime+epochLen
 }
 
-export interface BondUtxo { txid: string, vout: number, satoshis: number, script: string }
-export interface BondState { n: bigint, lastRoot: string, deadline: bigint, seized: bigint }
+export interface BondUtxo {
+  txid: string
+  vout: number
+  satoshis: number
+  script: string
+}
+export interface BondState {
+  n: bigint
+  lastRoot: string
+  deadline: bigint
+  seized: bigint
+}
 
 export class CheckpointBond {
   private contract: RunarContract
-  constructor (private cfg: BondConfig) {
-    this.contract = new RunarContract(NEKTAR_CHECKPOINTBOND_ARTIFACT, [
-      cfg.operatorPkh, cfg.bondReleaseHeight, cfg.maxFee, cfg.epochLen
-    ])
+  constructor(private cfg: BondConfig) {
+    this.contract = new RunarContract(NEKTAR_CHECKPOINTBOND_ARTIFACT, [cfg.operatorPkh, cfg.bondReleaseHeight, cfg.maxFee, cfg.epochLen])
   }
 
-  get params (): BondConfig { return this.cfg }
+  get params(): BondConfig {
+    return this.cfg
+  }
 
-  private stateHex (n: bigint, lastRoot: string, deadline: bigint, seized: bigint): string {
+  private stateHex(n: bigint, lastRoot: string, deadline: bigint, seized: bigint): string {
     const c = this.cfg
     return serializeState(NEKTAR_CHECKPOINTBOND_ARTIFACT.stateFields!, {
-      operatorPkh: c.operatorPkh, bondReleaseHeight: c.bondReleaseHeight,
-      maxFee: c.maxFee, epochLen: c.epochLen, n, lastRoot, deadline, seized
+      operatorPkh: c.operatorPkh,
+      bondReleaseHeight: c.bondReleaseHeight,
+      maxFee: c.maxFee,
+      epochLen: c.epochLen,
+      n,
+      lastRoot,
+      deadline,
+      seized
     })
   }
 
   /** bond locking script = code part + OP_RETURN + serialized state.
    *  Genesis: deadline = releaseHeight (first commit must land before it). */
-  lockingScript (n = 0n, lastRoot = '', deadline?: bigint, seized = 0n): string {
+  lockingScript(n = 0n, lastRoot = '', deadline?: bigint, seized = 0n): string {
     return (this.contract as any).getCodePartHex() + '6a' + this.stateHex(n, lastRoot, deadline ?? this.cfg.bondReleaseHeight, seized)
   }
 
   /** read the full on-chain state back out of a bond script */
-  stateOf (script: string): BondState {
+  stateOf(script: string): BondState {
     const d = extractStateFromScript(NEKTAR_CHECKPOINTBOND_ARTIFACT, script) as any
     if (!d) throw new Error('bond: not a stateful bond script')
-    const num = (v: unknown) => typeof v === 'bigint' ? v : BigInt(v as string)
-    return { n: num(d.n), deadline: num(d.deadline), seized: num(d.seized),
-      lastRoot: typeof d.lastRoot === 'string' ? d.lastRoot : Buffer.from(d.lastRoot).toString('hex') }
+    const num = (v: unknown) => (typeof v === 'bigint' ? v : BigInt(v as string))
+    return {
+      n: num(d.n),
+      deadline: num(d.deadline),
+      seized: num(d.seized),
+      lastRoot: typeof d.lastRoot === 'string' ? d.lastRoot : Buffer.from(d.lastRoot).toString('hex')
+    }
   }
 
   /** deploy: spend a P2PKH funding utxo into the genesis bond output
@@ -60,7 +77,12 @@ export class CheckpointBond {
   /** builds the unsigned deploy tx — `utxo` is null until signed: txid()
    *  serializes inputs and the unsigned unlock can't serialize. Sign first,
    *  then call `deployUtxo`. */
-  buildDeploy (fundUtxo: { tx: Transaction, vout: number, satoshis: number }, key: PrivateKey, sats: number, fee = 1n): { tx: Transaction, sats: number, script: string } {
+  buildDeploy(
+    fundUtxo: { tx: Transaction; vout: number; satoshis: number },
+    key: PrivateKey,
+    sats: number,
+    fee = 1n
+  ): { tx: Transaction; sats: number; script: string } {
     const script = this.lockingScript(0n, '')
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: fundUtxo.tx, sourceOutputIndex: fundUtxo.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
@@ -71,24 +93,38 @@ export class CheckpointBond {
   }
 
   /** the bond utxo once the deploy tx is signed */
-  deployUtxo (tx: Transaction, sats: number, script: string): BondUtxo {
+  deployUtxo(tx: Transaction, sats: number, script: string): BondUtxo {
     return { txid: tx.id('hex'), vout: 0, satoshis: sats, script }
   }
 
   /** shared spend machinery: covenant preimage + opPushTx sig + user sig for the
    *  given method, all computed over the final lockTime-bearing tx. */
-  private async spend (utxo: BondUtxo, methodIndex: number, method: string,
-    args: unknown[], outputs: { satoshis: number, script: string }[],
-    lockTime: number, broadcaster: Broadcaster, ownerKey?: PrivateKey, parentTx?: Transaction): Promise<{ tx: Transaction }> {
+  private async spend(
+    utxo: BondUtxo,
+    methodIndex: number,
+    method: string,
+    args: unknown[],
+    outputs: { satoshis: number; script: string }[],
+    lockTime: number,
+    broadcaster: Broadcaster,
+    ownerKey?: PrivateKey,
+    parentTx?: Transaction
+  ): Promise<{ tx: Transaction }> {
     const tx = new Transaction()
     // the REAL parent tx — a synthetic one mismatches the outpoint txid in
     // the covenant's preimage and produces an invalid unlock on-chain.
-    tx.addInput({ sourceTXID: utxo.txid, sourceTransaction: parentTx, sourceOutputIndex: utxo.vout, unlockingScript: new UnlockingScript(), sequence: 0xfffffffe })
+    tx.addInput({
+      sourceTXID: utxo.txid,
+      sourceTransaction: parentTx,
+      sourceOutputIndex: utxo.vout,
+      unlockingScript: new UnlockingScript(),
+      sequence: 0xfffffffe
+    })
     for (const o of outputs) tx.addOutput({ satoshis: o.satoshis, lockingScript: LockingScript.fromHex(o.script) })
     tx.lockTime = lockTime // sequence < final so consensus enforces nLockTime
     const c = this.contract as any
     const { sigHex: opSig, preimageHex } = c.computeOpPushTxWithCodeSep(tx, 0, utxo.script, utxo.satoshis, methodIndex)
-    const resolved = args.map(a => {
+    const resolved = args.map((a) => {
       if (a === 'PREIMAGE') return preimageHex
       if (a === 'SIG') {
         const sub = c.getSubscriptForSigning(utxo.script, methodIndex)
@@ -106,47 +142,93 @@ export class CheckpointBond {
 
   /** commit: continuation {n+1, newRoot, deadline=lockTime+epochLen} + 1-sat
    *  change to operator (the covenant verifies _changePKH/_changeAmount). */
-  async buildCommit (utxo: BondUtxo, ownerKey: PrivateKey, newRoot: string, lockTime: number, broadcaster: Broadcaster, fee = 1n, parentTx?: Transaction): Promise<{ tx: Transaction, state: BondState }> {
+  async buildCommit(
+    utxo: BondUtxo,
+    ownerKey: PrivateKey,
+    newRoot: string,
+    lockTime: number,
+    broadcaster: Broadcaster,
+    fee = 1n,
+    parentTx?: Transaction
+  ): Promise<{ tx: Transaction; state: BondState }> {
     const cur = this.stateOf(utxo.script)
     const bondSats = BigInt(utxo.satoshis) - fee - 1n // residual = fee + 1-sat change ≤ maxFee+1
     const next: BondState = { n: cur.n + 1n, lastRoot: newRoot, deadline: BigInt(lockTime) + this.cfg.epochLen, seized: cur.seized }
     const contScript = (this.contract as any).getCodePartHex() + '6a' + this.stateHex(next.n, next.lastRoot, next.deadline, next.seized)
-    const { tx } = await this.spend(utxo, 0, 'commit',
+    const { tx } = await this.spend(
+      utxo,
+      0,
+      'commit',
       ['SIG', ownerKey.toPublicKey().toString(), newRoot, bondSats, next.deadline, this.cfg.operatorPkh, 1n, 'PREIMAGE'],
-      [{ satoshis: Number(bondSats), script: contScript }, { satoshis: 1, script: buildP2PKHScript(this.cfg.operatorPkh) }],
-      lockTime, broadcaster, ownerKey, parentTx)
+      [
+        { satoshis: Number(bondSats), script: contScript },
+        { satoshis: 1, script: buildP2PKHScript(this.cfg.operatorPkh) }
+      ],
+      lockTime,
+      broadcaster,
+      ownerKey,
+      parentTx
+    )
     return { tx, state: next }
   }
 
   /** seize: permissionless — valid only once the on-chain deadline has passed.
    *  `payTo` is the seizer's locking script; the bond (minus fee, the 1-sat
    *  inert husk and the change slot) pays out there. No signature. */
-  async buildSeize (utxo: BondUtxo, payToScript: string, lockTime: number, broadcaster: Broadcaster, fee = 1n, parentTx?: Transaction): Promise<{ tx: Transaction }> {
+  async buildSeize(
+    utxo: BondUtxo,
+    payToScript: string,
+    lockTime: number,
+    broadcaster: Broadcaster,
+    fee = 1n,
+    parentTx?: Transaction
+  ): Promise<{ tx: Transaction }> {
     const cur = this.stateOf(utxo.script)
     const payoutSats = BigInt(utxo.satoshis) - fee - 1n - 1n // −fee −husk −change
     const huskScript = (this.contract as any).getCodePartHex() + '6a' + this.stateHex(cur.n, cur.lastRoot, cur.deadline, 1n)
-    const { tx } = await this.spend(utxo, 1, 'seize',
+    const { tx } = await this.spend(
+      utxo,
+      1,
+      'seize',
       [payToScript, payoutSats, this.cfg.operatorPkh, 1n, 'PREIMAGE'],
       [
         { satoshis: Number(payoutSats), script: payToScript },
         { satoshis: 1, script: huskScript },
         { satoshis: 1, script: buildP2PKHScript(this.cfg.operatorPkh) }
       ],
-      lockTime, broadcaster, undefined, parentTx)
+      lockTime,
+      broadcaster,
+      undefined,
+      parentTx
+    )
     return { tx }
   }
 
   /** close: terminal — whole bond (minus bounded fee) back to operator after
    *  release height. Emitted payout at vout 0, covenant change slot at vout 1. */
-  async buildClose (utxo: BondUtxo, ownerKey: PrivateKey, lockTime: number, broadcaster: Broadcaster, fee = 1n, parentTx?: Transaction): Promise<{ tx: Transaction }> {
+  async buildClose(
+    utxo: BondUtxo,
+    ownerKey: PrivateKey,
+    lockTime: number,
+    broadcaster: Broadcaster,
+    fee = 1n,
+    parentTx?: Transaction
+  ): Promise<{ tx: Transaction }> {
     const payoutSats = BigInt(utxo.satoshis) - fee - 1n // residual = fee + 1-sat change ≤ maxFee+1
-    const { tx } = await this.spend(utxo, 2, 'close',
+    const { tx } = await this.spend(
+      utxo,
+      2,
+      'close',
       ['SIG', ownerKey.toPublicKey().toString(), payoutSats, this.cfg.operatorPkh, 1n, 'PREIMAGE'],
       [
         { satoshis: Number(payoutSats), script: buildP2PKHScript(this.cfg.operatorPkh) },
         { satoshis: 1, script: buildP2PKHScript(this.cfg.operatorPkh) }
       ],
-      lockTime, broadcaster, ownerKey, parentTx)
+      lockTime,
+      broadcaster,
+      ownerKey,
+      parentTx
+    )
     return { tx }
   }
 }

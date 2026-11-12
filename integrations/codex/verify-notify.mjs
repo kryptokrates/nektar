@@ -25,7 +25,13 @@ const chainIdx = argv.indexOf('--chain')
 const payload = argv.at(-1)
 const chainArgs = chainIdx >= 0 ? argv.slice(chainIdx + 1, -1) : []
 if (chainArgs.length) {
-  try { await new Promise(res => { const c = spawn(chainArgs[0], [...chainArgs.slice(1), payload], { stdio: 'inherit' }); c.on('close', res); c.on('error', res) }) } catch {}
+  try {
+    await new Promise((res) => {
+      const c = spawn(chainArgs[0], [...chainArgs.slice(1), payload], { stdio: 'inherit' })
+      c.on('close', res)
+      c.on('error', res)
+    })
+  } catch {}
 }
 
 // 1. extract the last assistant message from the payload
@@ -33,27 +39,35 @@ let text = ''
 try {
   const j = JSON.parse(payload ?? '{}')
   text = j['last-assistant-message'] ?? j.lastAssistantMessage ?? ''
-} catch { text = payload ?? '' } // some setups may pass raw text
+} catch {
+  text = payload ?? ''
+} // some setups may pass raw text
 const tokens = [...new Set(text.match(/nektarr1\.[A-Za-z0-9_-]{40,}/g) ?? [])].slice(0, 3)
 if (!tokens.length) process.exit(0)
 
 // verify host: env override > the 'verify:' URL in the message > localhost
 let base = process.env.NEKTAR_VERIFY_BASE
 if (!base) {
-  try { base = new URL(text.match(/verify:\s*(https?:\/\/\S+)/i)?.[1] ?? '').origin } catch {}
+  try {
+    base = new URL(text.match(/verify:\s*(https?:\/\/\S+)/i)?.[1] ?? '').origin
+  } catch {}
 }
 base ??= `http://localhost:${process.env.NEKTAR_HTTP_PORT ?? 8080}`
-const norm = s => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+const norm = (s) => (s ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
 const lines = []
 const checkLine = (checks, receipt) => {
-  const ico = c => c.ok === true ? '✓' : c.ok === false ? '✗' : '·'
-  return (checks ?? []).map(c => `${c.name === 'model' && receipt?.modelAttestation ? `model:${receipt.modelAttestation.verifierTxid ? 'on-chain' : 'attested'}` : c.name}${ico(c)}`).join(' ')
+  const ico = (c) => (c.ok === true ? '✓' : c.ok === false ? '✗' : '·')
+  return (checks ?? [])
+    .map(
+      (c) => `${c.name === 'model' && receipt?.modelAttestation ? `model:${receipt.modelAttestation.verifierTxid ? 'on-chain' : 'attested'}` : c.name}${ico(c)}`
+    )
+    .join(' ')
 }
 for (const t of tokens) {
   try {
     const r = await fetch(`${base}/v1/verify?r=${t}`, { signal: AbortSignal.timeout(3000) })
     const j = await r.json()
-    const fails = (j.checks ?? []).filter(c => c.ok === false).map(c => c.name)
+    const fails = (j.checks ?? []).filter((c) => c.ok === false).map((c) => c.name)
     // drift: committed answer text must appear in the assistant's reply,
     // else the receipt doesn't cover what the user was shown
     if (j.receipt?.answer && !norm(text).includes(norm(j.receipt.answer))) fails.push('answer-drift')
@@ -65,10 +79,14 @@ for (const t of tokens) {
   }
 }
 const stamp = new Date().toISOString()
-try { appendFileSync('codex-receipts.log', lines.map(l => `${stamp} nektar ${l}`).join('\n') + '\n') } catch {}
+try {
+  appendFileSync('codex-receipts.log', lines.map((l) => `${stamp} nektar ${l}`).join('\n') + '\n')
+} catch {}
 const out = lines.join('\n')
 process.stderr.write(`nektar ${out}\n`)
 if (process.env.NEKTAR_NOTIFY_CMD) {
-  try { spawn(process.env.NEKTAR_NOTIFY_CMD, [out], { stdio: 'ignore', shell: true }) } catch {}
+  try {
+    spawn(process.env.NEKTAR_NOTIFY_CMD, [out], { stdio: 'ignore', shell: true })
+  } catch {}
 }
 process.exit(0)

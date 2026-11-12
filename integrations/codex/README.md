@@ -42,4 +42,4 @@ Codex `notify` is **fire-and-forget** — it can flag a FAILED receipt in the
 log but cannot block the turn or feed back to the model (the Claude Code
 Stop hook can). If the agent never calls `groundedAnswer`, no token appears
 and the hook reports nothing — "no receipt" is itself the signal. And as
-always: a verified receipt proves committed + derivable, never *true*.
+always: a verified receipt proves committed + derivable, never _true_.

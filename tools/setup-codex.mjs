@@ -31,16 +31,22 @@ const notes = []
 let out = toml
 // `notify` is a top-level key — it must precede any [table]; prepend when absent
 if (/^\s*notify\s*=/m.test(toml)) notes.push('notify already set — chain ours: notify = ["node", "<verify-notify.mjs>", "--chain", "<your notify>"]')
-else { out = NOTIFY_LINE + '\n\n' + out; notes.push('notify hook added (receipt check on turn end)') }
+else {
+  out = NOTIFY_LINE + '\n\n' + out
+  notes.push('notify hook added (receipt check on turn end)')
+}
 if (/\[mcp_servers\.nektar\]/.test(toml)) notes.push('[mcp_servers.nektar] already present — left as-is')
-else { out = out.trimEnd() + '\n' + MCP_BLOCK; notes.push('[mcp_servers.nektar] added → http://localhost:8080/mcp') }
+else {
+  out = out.trimEnd() + '\n' + MCP_BLOCK
+  notes.push('[mcp_servers.nektar] added → http://localhost:8080/mcp')
+}
 
 const agentsMd = existsSync(agentsMdPath) ? readFileSync(agentsMdPath, 'utf8') : ''
-const agentsOut = agentsMd.includes(MARKER) ? agentsMd
-  : (agentsMd.trimEnd() ? agentsMd.trimEnd() + '\n\n' + SNIPPET : SNIPPET)
+const agentsOut = agentsMd.includes(MARKER) ? agentsMd : agentsMd.trimEnd() ? agentsMd.trimEnd() + '\n\n' + SNIPPET : SNIPPET
 
 if (dry) {
-  console.log(`[dry] ${configPath}:`); console.log(out)
+  console.log(`[dry] ${configPath}:`)
+  console.log(out)
   console.log(`[dry] ${agentsMdPath}: ${agentsOut === agentsMd ? 'unchanged (snippet present)' : 'snippet appended'}`)
   process.exit(0)
 }

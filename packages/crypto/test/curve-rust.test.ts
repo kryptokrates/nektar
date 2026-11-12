@@ -7,14 +7,31 @@ import { fileURLToPath } from 'node:url'
 import { createHmac } from 'node:crypto'
 import { PrivateKey, PublicKey, ECDSA, BigNumber } from '@bsv/sdk'
 
-interface Case { skA: string, pubA: string, skB: string, pubB: string, ecdhX: string, salt: string, prk: string, info: string, okm: string, prehash: string, sigRS: string }
+interface Case {
+  skA: string
+  pubA: string
+  skB: string
+  pubB: string
+  ecdhX: string
+  salt: string
+  prk: string
+  info: string
+  okm: string
+  prehash: string
+  sigRS: string
+}
 const V = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../vectors/curve-rust.json', import.meta.url)), 'utf8')) as { cases: Case[] }
-const hmac = (k: Buffer, ...d: Buffer[]) => { const h = createHmac('sha256', k); for (const x of d) h.update(x); return h.digest() }
+const hmac = (k: Buffer, ...d: Buffer[]) => {
+  const h = createHmac('sha256', k)
+  for (const x of d) h.update(x)
+  return h.digest()
+}
 
 test('KEY-012: ECDH x, HKDF extract/expand and RFC 6979 low-S ECDSA match Rust bsvcurve', () => {
   assert.ok(V.cases.length >= 6)
   for (const c of V.cases) {
-    const a = PrivateKey.fromHex(c.skA); const b = PrivateKey.fromHex(c.skB)
+    const a = PrivateKey.fromHex(c.skA)
+    const b = PrivateKey.fromHex(c.skB)
     assert.equal(a.toPublicKey().toString(), c.pubA, 'pubkey derivation')
     assert.equal(b.toPublicKey().toString(), c.pubB)
     const x = (sk: PrivateKey, pub: string) => sk.deriveSharedSecret(PublicKey.fromString(pub)).getX().toHex(32)

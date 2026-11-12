@@ -25,15 +25,16 @@ const OUT = new URL('../../../tools/groth16-spike/out/', import.meta.url)
 const lockHex = readFileSync(new URL('lock.hex', OUT), 'utf8').trim()
 const unlockHex = readFileSync(new URL('unlock.hex', OUT), 'utf8').trim()
 const params = JSON.parse(readFileSync(new URL('../../../circuits/membership/parameters.json', import.meta.url), 'utf8'))
-const ROOT = params.root                                  // eda3ef76.. — the real bound statement
-const RH = Buffer.from(Hash.sha256(Buffer.concat([
-  Buffer.from(ROOT, 'hex'), Buffer.from([params.index])
-]))).toString('hex') // sha256(root‖index) — the certified statement hash
+const ROOT = params.root // eda3ef76.. — the real bound statement
+const RH = Buffer.from(Hash.sha256(Buffer.concat([Buffer.from(ROOT, 'hex'), Buffer.from([params.index])]))).toString('hex') // sha256(root‖index) — the certified statement hash
 
 let failures = 0
-const check = (cond, name) => { console.log(`${cond ? '✔' : '✖'} ${name}`); if (!cond) failures++ }
+const check = (cond, name) => {
+  console.log(`${cond ? '✔' : '✖'} ${name}`)
+  if (!cond) failures++
+}
 
-function readEnv (p) {
+function readEnv(p) {
   const out = {}
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
@@ -58,7 +59,11 @@ const broadcaster = new TeranodeBroadcaster(cfg.propagationUrl)
 const tracker = new TeranodeRPCTracker(cfg)
 const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
 const rpc = async (method, ...params) => {
-  const r = await fetch(cfg.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }) })
+  const r = await fetch(cfg.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: auth },
+    body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
+  })
   const j = await r.json()
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
@@ -66,8 +71,10 @@ const rpc = async (method, ...params) => {
 const key = PrivateKey.fromWif(WIF)
 const addr = key.toPublicKey().toAddress([0x6f])
 const opPkh = Buffer.from(key.toPublicKey().toHash()).toString('hex')
-const mineOne = async () => { await rpc('generatetoaddress', 1, addr) }
-const p2pkh = p => '76a914' + p + '88ac'
+const mineOne = async () => {
+  await rpc('generatetoaddress', 1, addr)
+}
+const p2pkh = (p) => '76a914' + p + '88ac'
 
 const reserve = new ReserveFunder(key, '.state/reserve-vault.json')
 const rec = await reserve.reconcile(async (t, v) => await utxoStatus(cfg, t, v))
@@ -92,7 +99,10 @@ const ch1 = fund.satoshis - LOCK_SATS - 25_000
 if (ch1 > 0) tx1.addOutput({ lockingScript: LockingScript.fromHex(p2pkh(opPkh)), satoshis: ch1 })
 await tx1.sign()
 const b1 = await broadcaster.broadcast(tx1)
-check(b1.status === 'success', `verifier deploy (${tx1.toHex().length / 2}B — ${tx1.id('hex').slice(0, 12)}…${b1.status !== 'success' ? ' ' + (b1.description ?? '').slice(0, 80) : ''})`)
+check(
+  b1.status === 'success',
+  `verifier deploy (${tx1.toHex().length / 2}B — ${tx1.id('hex').slice(0, 12)}…${b1.status !== 'success' ? ' ' + (b1.description ?? '').slice(0, 80) : ''})`
+)
 if (b1.status !== 'success') process.exit(1)
 reserve.markSpent(fund.tx.id('hex'), fund.vout)
 reserve.addOwned(tx1, 1)
@@ -115,19 +125,32 @@ const cOp = Buffer.concat([Buffer.from(cUtxo.txid, 'hex').reverse(), Buffer.from
 console.log(`claim deployed ${cUtxo.txid.slice(0, 12)}… pins verifier ${tx1.id('hex').slice(0, 12)}…:0`)
 
 // ── shared settle-tx builder ─────────────────────────────────────────
-const encPush = h => { const l = h.length / 2
-  if (l === 0) return '00'; if (l <= 75) return l.toString(16).padStart(2, '0') + h
+const encPush = (h) => {
+  const l = h.length / 2
+  if (l === 0) return '00'
+  if (l <= 75) return l.toString(16).padStart(2, '0') + h
   if (l <= 0xff) return '4c' + l.toString(16).padStart(2, '0') + h
-  return '4d' + (l & 0xff).toString(16).padStart(2, '0') + ((l >> 8) & 0xff).toString(16).padStart(2, '0') + h }
-const encNum = n => { if (n === 0n) return '00'; if (n >= 1n && n <= 16n) return (0x50 + Number(n)).toString(16)
+  return '4d' + (l & 0xff).toString(16).padStart(2, '0') + ((l >> 8) & 0xff).toString(16).padStart(2, '0') + h
+}
+const encNum = (n) => {
+  if (n === 0n) return '00'
+  if (n >= 1n && n <= 16n) return (0x50 + Number(n)).toString(16)
   if (n === -1n) return '4f'
-  const neg = n < 0n; let a = neg ? -n : n; const b = []
-  while (a > 0n) { b.push(Number(a & 0xffn)); a >>= 8n }
-  if (b[b.length - 1] & 0x80) b.push(neg ? 0x80 : 0); else if (neg) b[b.length - 1] |= 0x80
-  return encPush(b.map(x => x.toString(16).padStart(2, '0')).join('')) }
-const encArg = v => typeof v === 'bigint' ? encNum(v) : encPush(v)
+  const neg = n < 0n
+  let a = neg ? -n : n
+  const b = []
+  while (a > 0n) {
+    b.push(Number(a & 0xffn))
+    a >>= 8n
+  }
+  if (b[b.length - 1] & 0x80) b.push(neg ? 0x80 : 0)
+  else if (neg) b[b.length - 1] |= 0x80
+  return encPush(b.map((x) => x.toString(16).padStart(2, '0')).join(''))
+}
+const encArg = (v) => (typeof v === 'bigint' ? encNum(v) : encPush(v))
 
-const VERDICT_SATS = 10n, PAYOUT_SATS = 24_000n
+const VERDICT_SATS = 10n,
+  PAYOUT_SATS = 24_000n
 const verdictScript = VCR + '6a' + serializeState(vArt.stateFields, { receiptHash: RH, journalRoot: ROOT, queryId: QID, payeePkh: opPkh })
 
 const buildSettleTx = async ({ withVerifier, prevoutsArg, tamperUnlock }) => {
@@ -142,13 +165,24 @@ const buildSettleTx = async ({ withVerifier, prevoutsArg, tamperUnlock }) => {
   const sigSub = c.getSubscriptForSigning(cUtxo.script, mIdx)
   const userSig = await signer.sign(tx.toHex(), 0, sigSub, cUtxo.satoshis)
   tx.inputs[0].unlockingScript = UnlockingScript.fromHex(
-    c.buildStatefulPrefix(opSig, true)
-    + encArg(userSig) + encArg(pubKeyHex) + encArg(prevoutsArg)
-    + encArg(BigInt(LOCK_SATS)) + encArg(VERDICT_SATS) + encArg(PAYOUT_SATS)
-    + encPush(opPkh) + encNum(1n) + encPush(pre))
+    c.buildStatefulPrefix(opSig, true) +
+      encArg(userSig) +
+      encArg(pubKeyHex) +
+      encArg(prevoutsArg) +
+      encArg(BigInt(LOCK_SATS)) +
+      encArg(VERDICT_SATS) +
+      encArg(PAYOUT_SATS) +
+      encPush(opPkh) +
+      encNum(1n) +
+      encPush(pre)
+  )
   if (withVerifier) {
     let u = unlockHex
-    if (tamperUnlock) { const b = Buffer.from(u, 'hex'); b[Math.floor(b.length / 2)] ^= 0x01; u = b.toString('hex') }
+    if (tamperUnlock) {
+      const b = Buffer.from(u, 'hex')
+      b[Math.floor(b.length / 2)] ^= 0x01
+      u = b.toString('hex')
+    }
     tx.inputs[1].unlockingScript = UnlockingScript.fromHex(u)
   }
   return tx
@@ -172,7 +206,10 @@ console.log('── settleValid: claim + verifier co-spend ──')
 {
   const tx = await buildSettleTx({ withVerifier: true, prevoutsArg: cOp + verifierOp, tamperUnlock: false })
   const r = await broadcaster.broadcast(tx)
-  check(r.status === 'success', `settleValid broadcast (${tx.id('hex').slice(0, 12)}…${r.status !== 'success' ? ' ' + (r.description ?? '').slice(0, 80) : ''})`)
+  check(
+    r.status === 'success',
+    `settleValid broadcast (${tx.id('hex').slice(0, 12)}…${r.status !== 'success' ? ' ' + (r.description ?? '').slice(0, 80) : ''})`
+  )
   if (r.status === 'success') {
     mprovider.markAccepted?.(tx)
     // the ClaimVerdict UTXO at out0 is the consensus-certified statement

@@ -7,18 +7,20 @@ import { P2PKH } from '@bsv/sdk'
 import { utf8, dsha256, toHex, hash160 } from '@nektar/core'
 const dsha256utf8 = (s: string) => dsha256(utf8(s))
 import { NektarMemory } from '@nektar/mcp'
-import { verifyFragment } from '@nektar/verify'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { TeranodeBroadcaster, TeranodeRPCTracker, merklePathFor, merklePathAtHeight, parseLegacyBlock, type RegtestConfig } from '@nektar/chain'
 
 let failures = 0
-const check = (cond: boolean, name: string) => { console.log(`${cond ? '✔' : '✖'} ${name}`); if (!cond) failures++ }
+const check = (cond: boolean, name: string) => {
+  console.log(`${cond ? '✔' : '✖'} ${name}`)
+  if (!cond) failures++
+}
 
 // Load secrets from gitignored env files (never printed): nektar/.env holds
 // NEKTAR_REGTEST_WIF; the teranode quickstart .env holds rpc_user/rpc_pass.
 import { existsSync, readFileSync } from 'node:fs'
-function readEnv (p: URL): Record<string, string> {
+function readEnv(p: URL): Record<string, string> {
   const out: Record<string, string> = {}
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
@@ -42,9 +44,13 @@ if (!cfg.rpcPass) throw new Error('rpc_pass missing: set it in infra/teranode-qu
 const tracker = new TeranodeRPCTracker(cfg)
 const broadcaster = new TeranodeBroadcaster(cfg.propagationUrl)
 const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
-async function rpc (method: string, ...params: unknown[]): Promise<any> {
-  const r = await fetch(cfg.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }) })
-  const j = await r.json() as any
+async function rpc(method: string, ...params: unknown[]): Promise<any> {
+  const r = await fetch(cfg.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: auth },
+    body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
+  })
+  const j = (await r.json()) as any
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }
@@ -65,10 +71,14 @@ const TREASURY_FILE = '.state/treasury.json'
 const RS_FILE = '.state/reserve-run.json'
 mkdirSync('.state', { recursive: true })
 rmSync(RS_FILE, { force: true })
-const loadRS = (): { treasury?: { txid: string, vout: number, txHex: string } } => {
-  try { return JSON.parse(readFileSync(TREASURY_FILE, 'utf8')) } catch { return {} }
+const loadRS = (): { treasury?: { txid: string; vout: number; txHex: string } } => {
+  try {
+    return JSON.parse(readFileSync(TREASURY_FILE, 'utf8'))
+  } catch {
+    return {}
+  }
 }
-const saveRS = (t: { txid: string, vout: number, txHex: string }) => {
+const saveRS = (t: { txid: string; vout: number; txHex: string }) => {
   writeFileSync(TREASURY_FILE, JSON.stringify({ treasury: t }, null, 1))
 }
 /** Mine one block and return ITS height, read from the mined block's own
@@ -76,15 +86,15 @@ const saveRS = (t: { txid: string, vout: number, txHex: string }) => {
 // getblockchaininfo.blocks lags generatetoaddress on Teranode; the mined
 // block's own header height is authoritative for the tip we just made
 let lastMinedHeight = 0
-async function mineOne (): Promise<number> {
-  const [hash] = await rpc('generatetoaddress', 1, addr) as string[]
+async function mineOne(): Promise<number> {
+  const [hash] = (await rpc('generatetoaddress', 1, addr)) as string[]
   const hdr = await rpc('getblockheader', hash, true)
   if (typeof hdr?.height !== 'number') throw new Error(`getblockheader ${hash}: no height`)
   lastMinedHeight = Math.max(lastMinedHeight, hdr.height)
   return hdr.height
 }
 /** spend `u` into ~120×50k outputs + a new treasury output. Returns the split tx. */
-async function splitTreasury (parentTx: Transaction, vout: number, sats: number): Promise<Transaction | null> {
+async function splitTreasury(parentTx: Transaction, vout: number, sats: number): Promise<Transaction | null> {
   const split = new Transaction()
   split.addInput({ sourceTransaction: parentTx, sourceOutputIndex: vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
   const per = Math.min(50_000, Math.floor((sats - 2000) / 121))
@@ -139,14 +149,18 @@ let treasuryTx: Transaction | null = null
             done = true
           }
         }
-      } catch { break }
+      } catch {
+        break
+      }
       if (h > 100) break // bounded: ≤100 candidates
     }
   }
 }
 const funder: any = {
   keyPair: key,
-  get utxos () { return reserve.utxos },
+  get utxos() {
+    return reserve.utxos
+  },
   markSpent: (t: string, v: number) => reserve.markSpent(t, v),
   takeReserve: (sc?: unknown, min?: number) => reserve.takeReserve(sc as any, min)
 }
@@ -157,7 +171,9 @@ const burstPool = reserve.utxos.slice(40) // own half of the pool
 const chain: any = {
   broadcast: (tx: Transaction) => broadcaster.broadcast(tx),
   mempool: new Map(),
-  mine: async () => { await rpc('generatetoaddress', 1, addr) },
+  mine: async () => {
+    await rpc('generatetoaddress', 1, addr)
+  },
   currentHeight: () => tracker.currentHeight(),
   isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
   headerAtHeight: (h: number) => tracker.headerAtHeight(h),
@@ -179,7 +195,7 @@ for (const u of reserve.utxos) chain.mempool.set(u.tx.id('hex'), u.tx)
     let mp = null as Awaited<ReturnType<typeof merklePathAtHeight>>
     for (let a = 0; a < 10 && !mp; a++) {
       mp = await merklePathAtHeight(cfg, id, tracker, h).catch(() => null)
-      if (!mp) await new Promise(r => setTimeout(r, 300))
+      if (!mp) await new Promise((r) => setTimeout(r, 300))
     }
     if (!mp) throw new Error(`funding parent ${id} has no merkle proof at height ${h}`)
     u.tx.merklePath = new MerklePath(mp.blockHeight, mp.path)
@@ -203,7 +219,9 @@ console.log('anchors broadcast + block mined')
 console.log('— 20-anchor burst —')
 const bF: any = {
   keyPair: key,
-  get utxos () { return reserve.utxos.slice(40) },
+  get utxos() {
+    return reserve.utxos.slice(40)
+  },
   markSpent: (t: string, v: number) => reserve.markSpent(t, v),
   takeReserve: (sc?: unknown, min?: number) => reserve.takeReserve(sc as any, min)
 }
@@ -212,7 +230,8 @@ const t0 = Date.now()
 const burstIds: string[] = []
 for (let i = 0; i < 20; i++) {
   try {
-    const r = await burst.anchor(1, dsha256utf8(`rb-${i}`)); burstIds.push(r.tx.id('hex'))
+    const r = await burst.anchor(1, dsha256utf8(`rb-${i}`))
+    burstIds.push(r.tx.id('hex'))
   } catch (e) {
     console.log(`burst FAIL at i=${i}: ${(e as Error).message.split('\n')[0]}`)
     throw e
@@ -228,20 +247,22 @@ const newOwner = PrivateKey.fromRandom()
 const rot = await burst.rotate(newOwner)
 await rpc('generatetoaddress', 1, addr)
 const rotDec = decodeNektarAnchor(rot.tx.outputs[0]!.lockingScript.toHex())!
-check(rotDec.n === 19 && rotDec.shard === decodeNektarAnchor(burst.getHead()!.tx.outputs[0]!.lockingScript.toHex())!.shard,
-  `rotate broadcast+mined: n=${rotDec.n} shard stable ${rotDec.shard.slice(0, 16)}`)
+check(
+  rotDec.n === 19 && rotDec.shard === decodeNektarAnchor(burst.getHead()!.tx.outputs[0]!.lockingScript.toHex())!.shard,
+  `rotate broadcast+mined: n=${rotDec.n} shard stable ${rotDec.shard.slice(0, 16)}`
+)
 
 // --- verifyFragment on real headers -----------------------------------------
 console.log('— verifyFragment (real headers) —')
 // attach real BUMPs to every broadcast anchor tx (offline mine() does this).
 // The asset API lags briefly indexing a just-mined block — retry a few times.
 const txMap: Map<string, Transaction> = (mem as any).anchorTxs
-await new Promise(r => setTimeout(r, 2500))
+await new Promise((r) => setTimeout(r, 2500))
 for (const [txid, tx] of txMap) {
   let mp0 = null
   for (let t = 0; t < 6 && !mp0; t++) {
     mp0 = await merklePathFor(cfg, txid, tracker).catch(() => null)
-    if (!mp0) await new Promise(r => setTimeout(r, 1000))
+    if (!mp0) await new Promise((r) => setTimeout(r, 1000))
   }
   if (mp0) tx.merklePath = new MerklePath(mp0.blockHeight, mp0.path)
 }
@@ -252,7 +273,7 @@ const btx = burstIds[burstIds.length - 1]!
 let mp = null as Awaited<ReturnType<typeof merklePathFor>>
 for (let t = 0; t < 6 && !mp; t++) {
   mp = await merklePathFor(cfg, btx, tracker).catch(() => null)
-  if (!mp) await new Promise(r => setTimeout(r, 1000))
+  if (!mp) await new Promise((r) => setTimeout(r, 1000))
 }
 check(!!mp, `BUMP built for ${btx.slice(0, 12)}… (block ${mp?.blockHeight ?? '?'})`)
 if (mp) {
@@ -266,41 +287,73 @@ if (mp) {
 console.log('— v2 scenario (regtest) —')
 {
   const { canonicalizePolicySet } = await import('@nektar/policy')
-  const { signBinding, issueChallenge, answerChallenge, issueClearance, proveAccess, verifyAccess, Smt, issueDisclosure, verifyDisclosureAnchored, fieldRoot, fieldPath } = await import('@nektar/identity')
-  const B = PrivateKey.fromRandom(); const pubB = B.toPublicKey().toString()
+  const {
+    signBinding,
+    issueChallenge,
+    answerChallenge,
+    issueClearance,
+    proveAccess,
+    verifyAccess,
+    Smt,
+    issueDisclosure,
+    verifyDisclosureAnchored,
+    fieldRoot,
+    fieldPath
+  } = await import('@nektar/identity')
+  const B = PrivateKey.fromRandom()
+  const pubB = B.toPublicKey().toString()
   const policyText = `permit(principal == Agent::"${toHex(hash160(Buffer.from(pubB, 'hex')))}", action, resource);`
   const ps = canonicalizePolicySet('v2r', policyText)
   const vm = new NektarMemory(chain, funder as any, key, {
-    batchPolicy: { maxLeaves: 2 }, shardKeys: new Map([['v2r', key]]),
-    policy: { policyText, anchoredPolicySetHash: ps.hash }, agentSeed: key, maxLevel: 2,
+    batchPolicy: { maxLeaves: 2 },
+    shardKeys: new Map([['v2r', key]]),
+    policy: { policyText, anchoredPolicySetHash: ps.hash },
+    agentSeed: key,
+    maxLevel: 2,
     clearanceAuthorities: [key.toPublicKey().toString()]
   })
   // A writes level-2 data
   await vm.remember('v2r', 'level-2 secret', { source: 'agent-a' }, 2)
-  await vm.anchorShard('v2r'); await mineOne()
+  await vm.anchorShard('v2r')
+  await mineOne()
   // attach the real BUMP to the just-mined anchor + confirm it, like the
   // other mined-anchor paths in this file
   {
     const txid = (vm as any).tails.get('v2r')?.at(-1)?.txid
     let mp = null
-    for (let t = 0; t < 20 && !mp; t++) { mp = await merklePathFor(cfg, txid, tracker).catch(() => null); if (!mp) await new Promise(r => setTimeout(r, 1500)) }
+    for (let t = 0; t < 20 && !mp; t++) {
+      mp = await merklePathFor(cfg, txid, tracker).catch(() => null)
+      if (!mp) await new Promise((r) => setTimeout(r, 1500))
+    }
     const tx = (vm as any).anchorTxs.get(txid)
-    if (mp && tx) { tx.merklePath = new MerklePath(mp.blockHeight, mp.path); (vm as any).confirmAnchor?.('v2r', txid) }
+    if (mp && tx) {
+      tx.merklePath = new MerklePath(mp.blockHeight, mp.path)
+      ;(vm as any).confirmAnchor?.('v2r', txid)
+    }
   }
   // B reads: verified identity + ZK clearance ≥2 + Cedar ALLOW
   const binding = signBinding(B, 'uuid-b', '00'.repeat(32), 0)
-  const chal = vm.issueChallenge(); const csig = answerChallenge(B, chal)
+  const chal = vm.issueChallenge()
+  const csig = answerChallenge(B, chal)
   const iss = issueClearance(key, 2n, pubB)
   const tr = { queryId: 'q1', fragmentId: 'v2r/0', nonce: new Uint8Array(32).fill(9) }
   const proof = proveAccess(iss, 2n, 8, tr)!
   const ident = { pubkey: pubB, binding, challengeNonce: chal, challengeSig: csig }
-  const rb = await vm.recall('v2r', { seq: 0, zk:  { commitment: iss.commitment, proof, transcript: tr, requiredLevel: 2n }, identity: ident })
-  if (rb.items[0]?.text !== 'level-2 secret') console.log('  Brecall:', JSON.stringify(rb.items[0]).slice(0,220), JSON.stringify(rb.receipt).slice(0,120))
-  check(rb.items[0]?.text === 'level-2 secret' && rb.receipt.zkaccess === 'verified' && rb.receipt.cedar === 'allow', 'regtest: B reads level-2 with identity+zk+cedar')
+  const rb = await vm.recall('v2r', { seq: 0, zk: { commitment: iss.commitment, proof, transcript: tr, requiredLevel: 2n }, identity: ident })
+  if (rb.items[0]?.text !== 'level-2 secret') console.log('  Brecall:', JSON.stringify(rb.items[0]).slice(0, 220), JSON.stringify(rb.receipt).slice(0, 120))
+  check(
+    rb.items[0]?.text === 'level-2 secret' && rb.receipt.zkaccess === 'verified' && rb.receipt.cedar === 'allow',
+    'regtest: B reads level-2 with identity+zk+cedar'
+  )
   // C denied: Cedar DENY (valid identity, not in policy)
   const C = PrivateKey.fromRandom()
   const cchal = vm.issueChallenge()
-  const cident = { pubkey: C.toPublicKey().toString(), binding: signBinding(C, 'uuid-c', '00'.repeat(32), 0), challengeNonce: cchal, challengeSig: answerChallenge(C, cchal) }
+  const cident = {
+    pubkey: C.toPublicKey().toString(),
+    binding: signBinding(C, 'uuid-c', '00'.repeat(32), 0),
+    challengeNonce: cchal,
+    challengeSig: answerChallenge(C, cchal)
+  }
   const dc = await vm.recall('v2r', { seq: 0, zk: { commitment: iss.commitment, proof, transcript: tr, requiredLevel: 2n }, identity: cident })
   check(dc.items[0]?.unverifiable === true && dc.receipt.cedar === 'deny', 'regtest: C denied by Cedar')
   // B without ZK → denied on level-2
@@ -338,18 +391,39 @@ console.log('— v2 scenario (regtest) —')
       const atx = (vm as any).anchorTxs.get(txid)
       if (atx && !atx.merklePath) {
         const mp = await merklePathFor(cfg, txid, tracker).catch(() => null)
-        if (mp) { atx.merklePath = new MerklePath(mp.blockHeight, mp.path); (vm as any).confirmAnchor?.('v2r', txid) }
+        if (mp) {
+          atx.merklePath = new MerklePath(mp.blockHeight, mp.path)
+          ;(vm as any).confirmAnchor?.('v2r', txid)
+        }
       }
       const pr = await vm.prove('v2r', 0)
       if (pr.result.ok === true) return true
-      await new Promise(r => setTimeout(r, 800))
+      await new Promise((r) => setTimeout(r, 800))
     }
     return false
   }
   const now = Math.floor(Date.now() / 1000)
-  const okD = await verifyDisclosureAnchored(env, key.toPublicKey().toString(), C.toPublicKey().toString(), fld.length, fieldRoot(fld), fp.siblings ?? fp, now, verifyAnchor)
+  const okD = await verifyDisclosureAnchored(
+    env,
+    key.toPublicKey().toString(),
+    C.toPublicKey().toString(),
+    fld.length,
+    fieldRoot(fld),
+    fp.siblings ?? fp,
+    now,
+    verifyAnchor
+  )
   check(okD.ok === true, 'regtest: auditor envelope verifies anchored')
-  const badD = await verifyDisclosureAnchored(env, key.toPublicKey().toString(), C.toPublicKey().toString(), fld.length, fieldRoot(fld), fp.siblings ?? fp, exp + 61, verifyAnchor)
+  const badD = await verifyDisclosureAnchored(
+    env,
+    key.toPublicKey().toString(),
+    C.toPublicKey().toString(),
+    fld.length,
+    fieldRoot(fld),
+    fp.siblings ?? fp,
+    exp + 61,
+    verifyAnchor
+  )
   check(badD.ok === false, 'regtest: auditor envelope fails after expiry')
   // disclosure-event anchor txid (anchored via the __rev__ shard pattern — the
   // envelope itself is off-chain; the anchor carrying it is the v2r fragment's)
@@ -359,32 +433,35 @@ console.log('— v2 scenario (regtest) —')
   // --- P10: ZK membership on a live-anchored regtest batch + transcript leaf ---
   console.log('— P10 zk membership (regtest, STARK) —')
   if (process.env.NEKTAR_E2E_STARK === '0') console.log('  (skipped: NEKTAR_E2E_STARK=0)')
-  else try {
-    await vm.remember('zkm', 'p10 regtest frag 0', {}, 1)
-    await vm.remember('zkm', 'p10 regtest frag 1', {}, 1)
-    const za = await vm.anchorShard('zkm')
-    await mineOne()
-    const ZKM_TXID = za?.txid ?? vm.tailLink('zkm')?.txid ?? 'unknown'
-    check(ZKM_TXID !== 'unknown', `regtest: zkm batch anchored txid=${String(ZKM_TXID).slice(0, 12)}…`)
-    // attach the BUMP like verifyAnchor does — asset index lags behind mining
-    const atx = vm.anchorTx(ZKM_TXID)
-    if (atx && !atx.merklePath) {
-      for (let t = 0; t < 20 && !atx.merklePath; t++) {
-        const mp = await merklePathFor(cfg, ZKM_TXID, tracker).catch(() => null)
-        if (mp) { atx.merklePath = new MerklePath(mp.blockHeight, mp.path); vm.confirmAnchor('zkm', ZKM_TXID) }
-        else await new Promise(r => setTimeout(r, 1500))
+  else
+    try {
+      await vm.remember('zkm', 'p10 regtest frag 0', {}, 1)
+      await vm.remember('zkm', 'p10 regtest frag 1', {}, 1)
+      const za = await vm.anchorShard('zkm')
+      await mineOne()
+      const ZKM_TXID = za?.txid ?? vm.tailLink('zkm')?.txid ?? 'unknown'
+      check(ZKM_TXID !== 'unknown', `regtest: zkm batch anchored txid=${String(ZKM_TXID).slice(0, 12)}…`)
+      // attach the BUMP like verifyAnchor does — asset index lags behind mining
+      const atx = vm.anchorTx(ZKM_TXID)
+      if (atx && !atx.merklePath) {
+        for (let t = 0; t < 20 && !atx.merklePath; t++) {
+          const mp = await merklePathFor(cfg, ZKM_TXID, tracker).catch(() => null)
+          if (mp) {
+            atx.merklePath = new MerklePath(mp.blockHeight, mp.path)
+            vm.confirmAnchor('zkm', ZKM_TXID)
+          } else await new Promise((r) => setTimeout(r, 1500))
+        }
       }
+      const q = vm.issueZkQuery('regtest-verifier')
+      const { bytes, ms } = await vm.proveMembership('zkm', 1, q.queryId)
+      const res = await vm.verifyMembership('zkm', 1, bytes)
+      check(res.ok === true, `regtest: STARK membership (${bytes.length} B, ${ms} ms) verifies vs the live SHA-256 anchor (${res.reason ?? 'ok'})`)
+      const replay = await vm.verifyMembership('zkm', 1, bytes)
+      check(replay.ok === false, `regtest: replay rejected (${replay.reason})`)
+      console.log(`  TXIDS zkm-anchor=${ZKM_TXID}`)
+    } catch (e) {
+      check(false, `regtest P10 zk block: ${String((e as Error).message).slice(0, 160)}`)
     }
-    const q = vm.issueZkQuery('regtest-verifier')
-    const { bytes, ms } = await vm.proveMembership('zkm', 1, q.queryId)
-    const res = await vm.verifyMembership('zkm', 1, bytes)
-    check(res.ok === true, `regtest: STARK membership (${bytes.length} B, ${ms} ms) verifies vs the live SHA-256 anchor (${res.reason ?? 'ok'})`)
-    const replay = await vm.verifyMembership('zkm', 1, bytes)
-    check(replay.ok === false, `regtest: replay rejected (${replay.reason})`)
-    console.log(`  TXIDS zkm-anchor=${ZKM_TXID}`)
-  } catch (e) {
-    check(false, `regtest P10 zk block: ${String((e as Error).message).slice(0, 160)}`)
-  }
 }
 
 // — v4 AORG / policy DAG on regtest —
@@ -401,35 +478,49 @@ spec(S, V) :- requires(P, V), applies(S, P).`).rules
     const e2 = g.append({ ...ep, phi: 'applies(port4, torque)', t: { logPos: 2 } }, [])
     const d45 = g.append({ kind: 'derived', phi: 'spec(port4, 45)', t: { logPos: 3 }, context: ['manual'], sigma: [] }, [e1.h, e2.h], 'r-spec')
     const e3 = g.append({ ...ep, phi: 'requires(torque, 55)', t: { logPos: 4 } }, [])
-    const rf = g.append({ kind: 'refinement', phi: 'spec(port4, 55)', t: { logPos: 5 }, context: ['manual'], sigma: [], refines: d45.h }, [e3.h, e2.h], 'r-spec')
-    check(!g.currentView(6).some(v => v.phi === 'spec(port4, 45)'), 'regtest: refinement changes currentView')
+    const rf = g.append(
+      { kind: 'refinement', phi: 'spec(port4, 55)', t: { logPos: 5 }, context: ['manual'], sigma: [], refines: d45.h },
+      [e3.h, e2.h],
+      'r-spec'
+    )
+    check(!g.currentView(6).some((v) => v.phi === 'spec(port4, 45)'), 'regtest: refinement changes currentView')
     // anchor graph + policy roots on the real chain (fresh memory on the shared chain/funder)
     const v4m = new NektarMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 10 } })
     const ga = new GraphAnchor(v4m as any, 'aorg')
     for (const h of [e1.h, e2.h, e3.h, d45.h, rf.h]) await ga.record(h)
-    const gtx = await ga.anchor(); await mineOne()
+    const gtx = await ga.anchor()
+    await mineOne()
     const atx = ga.proveVertex(d45.h).anchorTx
     if (atx && !atx.merklePath) {
       for (let t = 0; t < 20 && !atx.merklePath; t++) {
         const mp = await merklePathFor(cfg, gtx, tracker).catch(() => null)
-        if (mp) { atx.merklePath = new MerklePath(mp.blockHeight, mp.path); v4m.confirmAnchor('aorg', gtx) }
-        else await new Promise(r => setTimeout(r, 1500))
+        if (mp) {
+          atx.merklePath = new MerklePath(mp.blockHeight, mp.path)
+          v4m.confirmAnchor('aorg', gtx)
+        } else await new Promise((r) => setTimeout(r, 1500))
       }
     }
     const GRAPH_TXID = gtx
-    check(GRAPH_TXID !== 'unknown' && await ga.verifyVertex(d45.h), `regtest: graph root anchored txid=${String(GRAPH_TXID).slice(0, 12)}…`)
-    const dag = new PolicyDAG([{ name: 'org', rules: parseProgram(`@id pol
-permit(P, read, R) :- member(P, verified), fragment(R).`).rules }])
+    check(GRAPH_TXID !== 'unknown' && (await ga.verifyVertex(d45.h)), `regtest: graph root anchored txid=${String(GRAPH_TXID).slice(0, 12)}…`)
+    const dag = new PolicyDAG([
+      {
+        name: 'org',
+        rules: parseProgram(`@id pol
+permit(P, read, R) :- member(P, verified), fragment(R).`).rules
+      }
+    ])
     const proot = Buffer.from(dag.policyRoot()).toString('hex')
     await v4m.remember('pol', `policyroot:${proot}`)
-    const pa = await v4m.anchorShard('pol'); await mineOne()
+    const pa = await v4m.anchorShard('pol')
+    await mineOne()
     const POL_TXID = pa?.txid ?? 'unknown'
     check(POL_TXID !== 'unknown', `regtest: policy root anchored txid=${String(POL_TXID).slice(0, 12)}…`)
     console.log(`  TXIDS graph-anchor=${GRAPH_TXID} policy-root-anchor=${POL_TXID}`)
     // delegated instance verified by a third party
     const inst = instanceOf(g, ['manual'])
-    const dk = PrivateKey.fromRandom(); const expiry = Date.now() + 60000
-    const anchored = new Map([...inst.members].map(h => [h, { anchorTxid: GRAPH_TXID }]))
+    const dk = PrivateKey.fromRandom()
+    const expiry = Date.now() + 60000
+    const anchored = new Map([...inst.members].map((h) => [h, { anchorTxid: GRAPH_TXID }]))
     const vi = verifyInstance(g, inst, anchored as any, { pub: dk.toPublicKey(), expiry, sig: delegate(dk, inst, expiry) })
     check(vi.ok, 'regtest: delegated instance verifies')
   } catch (e) {
@@ -443,7 +534,17 @@ console.log('— P14 Merkle Automaton (regtest) —')
   try {
     const { NEKTAR_AUTOMATON_ARTIFACT } = await import('@nektar/automaton')
     const { automatonCosts } = await import('./automaton-costs.js')
-    const def = { Q: ['draft', 'review', 'published'], Sigma: ['submit', 'approve'], delta: [[0, 0, 1], [1, 1, 2]] as [number, number, number][], q0: 0, F: [2], O: ['ok'] }
+    const def = {
+      Q: ['draft', 'review', 'published'],
+      Sigma: ['submit', 'approve'],
+      delta: [
+        [0, 0, 1],
+        [1, 1, 2]
+      ] as [number, number, number][],
+      q0: 0,
+      F: [2],
+      O: ['ok']
+    }
     const out = Buffer.from(dsha256(utf8('regtest manual published'))).toString('hex')
     const am = new NektarMemory(chain, funder as any, key, { batchPolicy: { maxLeaves: 10 } })
     const d = await am.automatonDeploy('lifecycle', def)
@@ -452,7 +553,11 @@ console.log('— P14 Merkle Automaton (regtest) —')
     // an off-δ transition built without local guards: Teranode must reject it
     ac.unguarded = true
     let rejected = ''
-    try { await ac.halt({ asState: 2 }) } catch (e) { rejected = (e as Error).message }
+    try {
+      await ac.halt({ asState: 2 })
+    } catch (e) {
+      rejected = (e as Error).message
+    }
     ac.unguarded = false
     check(rejected.length > 0 && ac.getHead()!.state.n === 1, `regtest: Teranode rejects halt from non-final state (${rejected.slice(0, 60)})`)
     const s2 = await ac.step(1, 2, out)
@@ -473,7 +578,11 @@ console.log('— full paper scenario (regtest) —')
   try {
     const { runFullPaper } = await import('./full-paper.js')
     const txids = await runFullPaper({
-      chain, funder: funder as any, fundKey: key, check, label: 'regtest paper',
+      chain,
+      funder: funder as any,
+      fundKey: key,
+      check,
+      label: 'regtest paper',
       settle: async (m, shards) => {
         await mineOne()
         // every not-yet-proven anchor of the shard (batches also close
@@ -484,17 +593,28 @@ console.log('— full paper scenario (regtest) —')
             for (let t = 0; t < 20 && atx && !atx.merklePath; t++) {
               const mp = await merklePathFor(cfg, l.txid, tracker).catch(() => null)
               if (mp) atx.merklePath = new MerklePath(mp.blockHeight, mp.path)
-              else await new Promise(r => setTimeout(r, 500))
+              else await new Promise((r) => setTimeout(r, 500))
             }
             if (atx && !atx.merklePath) throw new Error(`settle: no BUMP for ${s} anchor ${l.txid.slice(0, 12)}…`)
           }
-          const last = m.tailLink(s); if (last) m.confirmAnchor(s, last.txid)
+          const last = m.tailLink(s)
+          if (last) m.confirmAnchor(s, last.txid)
         }
       }
     })
-    console.log(`  TXIDS ${Object.entries(txids).map(([k, v]) => `${k}=${v}`).join(' ')}`)
+    console.log(
+      `  TXIDS ${Object.entries(txids)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(' ')}`
+    )
   } catch (e) {
-    check(false, `regtest full paper block: ${String((e as Error).stack ?? e).split('\n').slice(0, 3).join(' | ')}`)
+    check(
+      false,
+      `regtest full paper block: ${String((e as Error).stack ?? e)
+        .split('\n')
+        .slice(0, 3)
+        .join(' | ')}`
+    )
   }
 }
 
@@ -511,17 +631,38 @@ console.log('— v4 production block (regtest) —')
           for (let t = 0; t < 20 && atx && !atx.merklePath; t++) {
             const mp = await merklePathFor(cfg, l.txid, tracker).catch(() => null)
             if (mp) atx.merklePath = new MerklePath(mp.blockHeight, mp.path)
-            else await new Promise(r => setTimeout(r, 500))
+            else await new Promise((r) => setTimeout(r, 500))
           }
           if (atx && !atx.merklePath) throw new Error(`settle: no BUMP for ${s} anchor ${l.txid.slice(0, 12)}…`)
         }
-        const last = m.tailLink(s); if (last) m.confirmAnchor(s, last.txid)
+        const last = m.tailLink(s)
+        if (last) m.confirmAnchor(s, last.txid)
       }
     }
-    const tx = await runV4Block({ chain, funder: funder as any, fundKey: key, check, label: 'regtest v4', settle: settleV4, mineMore: async n => { for (let i = 0; i < n; i++) await mineOne() } })
-    console.log(`  TXIDS ${Object.entries(tx).map(([k, v]) => `${k}=${v}`).join(' ')}`)
+    const tx = await runV4Block({
+      chain,
+      funder: funder as any,
+      fundKey: key,
+      check,
+      label: 'regtest v4',
+      settle: settleV4,
+      mineMore: async (n) => {
+        for (let i = 0; i < n; i++) await mineOne()
+      }
+    })
+    console.log(
+      `  TXIDS ${Object.entries(tx)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(' ')}`
+    )
   } catch (e) {
-    check(false, `regtest v4 block: ${String((e as Error).stack ?? e).split('\n').slice(0, 3).join(' | ')}`)
+    check(
+      false,
+      `regtest v4 block: ${String((e as Error).stack ?? e)
+        .split('\n')
+        .slice(0, 3)
+        .join(' | ')}`
+    )
   }
 }
 

@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PrivateKey, Transaction } from '@bsv/sdk'
+import { PrivateKey } from '@bsv/sdk'
 import { buildCarrier, checkCarrier, buildSweep } from '../src/carrier.js'
-import { FUNDING_TAG } from '../src/tree.js'
+
 import { provenTree } from './helpers.js'
 import { FakeTracker } from '../src/testing.js'
 
@@ -31,9 +31,11 @@ test('carrier: tree proof failing the tracker fails', async () => {
   const key = PrivateKey.fromRandom()
   const tree = await provenTree(key)
   const { beef } = await buildCarrier({ key, payload: pay, slot: { tree, vout: 0 } })
-  const bad = new FakeTracker(); bad.ok = false
+  const bad = new FakeTracker()
+  bad.ok = false
   const c = await checkCarrier(beef, { tracker: bad })
-  assert.equal(c.ok, false); assert.equal(c.reason, 'spv')
+  assert.equal(c.ok, false)
+  assert.equal(c.reason, 'spv')
 })
 
 test('carrier: unproven tree cannot build (beef would not be atomic-verifiable)', async () => {

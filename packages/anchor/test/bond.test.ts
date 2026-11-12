@@ -13,8 +13,9 @@ const cfg = { operatorPkh, bondReleaseHeight: 100n, maxFee: 10n, epochLen: 10n }
 const R1 = 'aa'.repeat(32)
 const R2 = 'bb'.repeat(32)
 
-function setup () {
-  const chain = new MockChain(); chain.verifyScripts = true
+function setup() {
+  const chain = new MockChain()
+  chain.verifyScripts = true
   const bond = new CheckpointBond(cfg)
   const parent = new Transaction()
   parent.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: new LockingScript() })
@@ -72,7 +73,10 @@ test('V2 seize: deadline lapse → permissionless slashing (§12 SLA enforcement
   assert.equal(husk.seized, 1n, 'husk continuation marked seized')
   // the husk cannot be committed further — a 1-sat input can't even fund a
   // commit, and the covenant asserts seized==0 regardless
-  await assert.rejects(() => bond.buildCommit({ txid: se.tx.id('hex'), vout: 1, satoshis: 1, script: se.tx.outputs[1]!.lockingScript.toHex() }, operator, R2, 61, chain), /refused|SCRIPT|satoshis/i)
+  await assert.rejects(
+    () => bond.buildCommit({ txid: se.tx.id('hex'), vout: 1, satoshis: 1, script: se.tx.outputs[1]!.lockingScript.toHex() }, operator, R2, 61, chain),
+    /refused|SCRIPT|satoshis/i
+  )
 })
 
 test('V2 seize boundary: exactly at deadline seizable, commit exactly at deadline refused', async () => {

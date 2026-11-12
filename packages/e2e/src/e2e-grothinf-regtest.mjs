@@ -13,9 +13,7 @@
 //
 // Run: node packages/e2e/src/e2e-grothinf-regtest.mjs
 import { PrivateKey, Transaction, LockingScript, UnlockingScript, P2PKH } from '@bsv/sdk'
-import {
-  TeranodeRPCTracker, ReserveFunder, bootstrapReserve, utxoStatus
-} from '@nektar/chain'
+import { TeranodeRPCTracker, ReserveFunder, bootstrapReserve, utxoStatus } from '@nektar/chain'
 import { existsSync, readFileSync } from 'node:fs'
 
 const OUT = new URL('../../../tools/groth16-spike/out/', import.meta.url)
@@ -25,9 +23,12 @@ const meta = JSON.parse(readFileSync(new URL('meta-aiinf.json', OUT), 'utf8'))
 console.log(`verifier: ${meta.circuit} (${meta.curve}) — statement ${meta.public_statement_fr.slice(0, 18)}…`)
 
 let failures = 0
-const check = (cond, name) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${name}`); if (!cond) failures++ }
+const check = (cond, name) => {
+  console.log(`${cond ? 'PASS' : 'FAIL'} ${name}`)
+  if (!cond) failures++
+}
 
-function readEnv (p) {
+function readEnv(p) {
   const out = {}
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
@@ -50,17 +51,30 @@ const cfg = {
 if (!cfg.rpcPass) throw new Error('rpc_pass missing')
 const tracker = new TeranodeRPCTracker(cfg)
 const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
-async function rpc (method, ...params) {
-  const r = await fetch(cfg.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }) })
+async function rpc(method, ...params) {
+  const r = await fetch(cfg.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: auth },
+    body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
+  })
   const j = await r.json()
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }
-async function broadcast (tx) {
-  const res = await fetch(cfg.propagationUrl, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: Buffer.from(tx.toHex(), 'hex'), signal: AbortSignal.timeout(60_000) })
+async function broadcast(tx) {
+  const res = await fetch(cfg.propagationUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: Buffer.from(tx.toHex(), 'hex'),
+    signal: AbortSignal.timeout(60_000)
+  })
   if (res.ok) return { ok: true, txid: tx.id('hex') }
   const t = await res.text()
-  const r = await fetch(cfg.rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 1, method: 'sendrawtransaction', params: [tx.toHex()], timeout: 60_000 }) })
+  const r = await fetch(cfg.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: auth },
+    body: JSON.stringify({ jsonrpc: '1.0', id: 1, method: 'sendrawtransaction', params: [tx.toHex()], timeout: 60_000 })
+  })
   const j = await r.json()
   return j.error ? { ok: false, error: `prop:${res.status} ${t} | rpc:${JSON.stringify(j.error)}` } : { ok: true, txid: tx.id('hex') }
 }
@@ -98,7 +112,7 @@ let seen = false
 for (let i = 0; i < 20 && !seen; i++) {
   const s = await utxoStatus(cfg, tx1.id('hex'), 0)
   if (s === 'unspent') seen = true
-  else await new Promise(r => setTimeout(r, 1500))
+  else await new Promise((r) => setTimeout(r, 1500))
 }
 console.log(`utxo store sees tx1:0 as ${seen ? 'unspent' : 'unknown (proceeding anyway — mempool chain)'}`)
 

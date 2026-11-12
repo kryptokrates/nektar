@@ -12,11 +12,11 @@ pnpm stack:up      # Teranode v0.16.0 quickstart (infra/teranode-quickstart)
 pnpm stack:down
 ```
 
-| Service | Port | Used for |
-|---|---|---|
-| propagation (HTTP) | 8833 | broadcasting txs (**not** 8084, which is internal gRPC) |
-| asset API | 8090 (basic auth = RPC creds) | `/api/v1/block_legacy/:hash` for BUMPs |
-| RPC | 9292 | headers (`getblockheader`), mining (`generatetoaddress`) |
+| Service            | Port                          | Used for                                                 |
+| ------------------ | ----------------------------- | -------------------------------------------------------- |
+| propagation (HTTP) | 8833                          | broadcasting txs (**not** 8084, which is internal gRPC)  |
+| asset API          | 8090 (basic auth = RPC creds) | `/api/v1/block_legacy/:hash` for BUMPs                   |
+| RPC                | 9292                          | headers (`getblockheader`), mining (`generatetoaddress`) |
 
 Credentials: `infra/teranode-quickstart/.env` (`rpc_pass`) and `nektar/.env` (`NEKTAR_REGTEST_WIF`). Both are gitignored and loaded automatically by the regtest e2e.
 
@@ -41,17 +41,17 @@ global address indexes are explicitly excluded for scale reasons.
 
 Per-network primitives, all O(1) per known outpoint/txid:
 
-| need | regtest (Teranode) | mainnet |
-|---|---|---|
-| tx mined? | `asset /merkle_proof/<txid>` (404 = pending) | BSV Broadcaster `GET /tx/<txid>` → `merklePath` (BRC-74 BUMP) |
-| outpoint spent? | `asset /utxo/<txid>?vout=N` (binary record; 0x01 = spent + spending txid) — wired into `takeReserve` | our ledger: we're the only spender — a spend is spent iff *our* spend tx mined (broadcaster status) |
-| funding | `init --fund-txid` → `getrawtransaction` → record outputs paying our key | `NEKTAR_FUND_TXIDS=<txid>` or `hex:<rawtx>` (fully offline) |
+| need            | regtest (Teranode)                                                                                   | mainnet                                                                                             |
+| --------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| tx mined?       | `asset /merkle_proof/<txid>` (404 = pending)                                                         | BSV Broadcaster `GET /tx/<txid>` → `merklePath` (BRC-74 BUMP)                                       |
+| outpoint spent? | `asset /utxo/<txid>?vout=N` (binary record; 0x01 = spent + spending txid) — wired into `takeReserve` | our ledger: we're the only spender — a spend is spent iff _our_ spend tx mined (broadcaster status) |
+| funding         | `init --fund-txid` → `getrawtransaction` → record outputs paying our key                             | `NEKTAR_FUND_TXIDS=<txid>` or `hex:<rawtx>` (fully offline)                                         |
 
 `NEKTAR_INDEXER_DISCOVERY=1` re-enables WoC address-index lookup as an opt-in
 convenience — off by default. Broadcasting is the one unavoidable external
 service (public BSV Broadcaster endpoints are no-key: `arcade-*-1.bsvblockchain.tech`,
 `arcade.gorillapool.io`); running your own Teranode (e.g. a Hetzner box) makes
-the regtest path *literally* the self-sovereign mainnet path — same endpoints,
+the regtest path _literally_ the self-sovereign mainnet path — same endpoints,
 same code.
 
 **Bootstrap funding UX (live networks):** `NEKTAR_WAIT_FUNDING=1` prints a
@@ -85,7 +85,6 @@ docker build -t nektar:local .      # clean-checkout gate (install → build →
 
 The MCP server now runs on the official SDK, with stdio and Streamable HTTP at `/mcp`. It has persistent `NEKTAR_NETWORK=regtest` mode with a confirmer, and installs through Docker MCP Toolkit with `pnpm mcp:install` / `pnpm mcp:smoke`. Full guide: [INTEGRATION.md](INTEGRATION.md). Live check of the production runtime with a restart: `node packages/mcp/demo/regtest-runtime.mjs`.
 
-
 ```sh
 node packages/mcp/dist/src/bin.js              # stdio; offline demo chain that mines per tx
 NODE_OPTIONS="--max-old-space-size=512" node packages/mcp/dist/src/bin.js  # cap the agent's heap — use on small hosts (4 GB and under); RSS is driven by heap + NEKTAR_BATCH, not the image
@@ -101,22 +100,24 @@ Claude Desktop: copy `packages/mcp/demo/claude_desktop_config.example.json` into
 ```ts
 import { createHttpApi, FileSecurityStore, NektarMemory } from '@nektar/mcp'
 const mem = new NektarMemory(chain, funder, fundKey, {
-  securityStore: new FileSecurityStore('.state/security.json'),   // replay protection survives restarts
-  requireSignedProvenance: true, finalityDepth: 6, maxMergeDelayMs: 600_000,
+  securityStore: new FileSecurityStore('.state/security.json'), // replay protection survives restarts
+  requireSignedProvenance: true,
+  finalityDepth: 6,
+  maxMergeDelayMs: 600_000,
   batchPolicy: { maxLeaves: 1024, maxAgeMs: 60_000, maxBytes: 4_000_000 }
 })
 createHttpApi(mem).listen(8080)
-setInterval(() => mem.flushDue(), 5_000)                          // interval/byte/cost batch closing
+setInterval(() => mem.flushDue(), 5_000) // interval/byte/cost batch closing
 ```
 
-| Route | Purpose |
-|---|---|
-| `GET /v1/health` | liveness |
-| `GET /v1/openapi.json` | OpenAPI 3.1 |
-| `GET /v1/metrics` | Prometheus: anchors, anchor failures, unconfirmed anchors, anchor lag, promise violations, proof latency, withheld reads by reason |
-| `GET /v1/tools`, `POST /v1/tools/{name}` | same tools as MCP |
-| `GET /v1/proof/{shard}/{seq}` | public proof bundle + result |
-| `GET /v1/checkpoint/{shard}` | latest signed checkpoint + log pubkey |
+| Route                                    | Purpose                                                                                                                            |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/health`                         | liveness                                                                                                                           |
+| `GET /v1/openapi.json`                   | OpenAPI 3.1                                                                                                                        |
+| `GET /v1/metrics`                        | Prometheus: anchors, anchor failures, unconfirmed anchors, anchor lag, promise violations, proof latency, withheld reads by reason |
+| `GET /v1/tools`, `POST /v1/tools/{name}` | same tools as MCP                                                                                                                  |
+| `GET /v1/proof/{shard}/{seq}`            | public proof bundle + result                                                                                                       |
+| `GET /v1/checkpoint/{shard}`             | latest signed checkpoint + log pubkey                                                                                              |
 
 Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sbom.cdx.json`. Cross-implementation vectors: `pnpm smt:vectors`, `pnpm curve:vectors`.
 
@@ -124,10 +125,10 @@ Alert rules are in `ops/alerts.yml`. Supply-chain artefacts: `pnpm sbom` → `sb
 
 Instances reach each other through overlay hosts listed in `NEKTAR_MARKET_HOSTS`. A host is a reference bstack overlay host running four modules: nektar (`tm_nektar_<network>_0..f`, `ls_nektar`), bbox (`tm_bbox_*`, `ls_bbox`), blogs (`tm_log_*`, `ls_log`) and bfinger (`tm_finger`, `ls_finger`). It is a replaceable relay, never a trust root: it admits only artifacts that verify (signature, network, lane, proven funding tree, expiry within 7 days) and every reader re-verifies what it returns. Hosts do not sync with each other; run at least two under different operators so withholding by one is detected.
 
-| Compose file | Chain | Hosts |
-|---|---|---|
-| `deploy/bstack-sandbox/compose.yaml` | devchain (no real coin) | `127.0.0.1:18091` |
-| `deploy/bstack-sandbox/compose.regtest.yaml` | local Teranode regtest | `127.0.0.1:18191`, `:18192` |
+| Compose file                                 | Chain                                      | Hosts                       |
+| -------------------------------------------- | ------------------------------------------ | --------------------------- |
+| `deploy/bstack-sandbox/compose.yaml`         | devchain (no real coin)                    | `127.0.0.1:18091`           |
+| `deploy/bstack-sandbox/compose.regtest.yaml` | local Teranode regtest                     | `127.0.0.1:18191`, `:18192` |
 | `deploy/bstack-sandbox/compose.testnet.yaml` | public testnet headers via the header shim | `127.0.0.1:18291`, `:18292` |
 
 Images are pinned by digest. Module bundles are build artifacts; see `deploy/bstack-sandbox/README.md`. Host state is MySQL; nothing a host stores is authoritative.
@@ -142,11 +143,11 @@ Broadcasts go to the BSV Broadcaster (`NEKTAR_BROADCASTER_URL`). Status arrives 
 
 Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Lightweb's storage market) instead of relying on the built-in HTTP origin. Writing to bstore is Go-only (`bstore s3d`), so Nektar acts as an S3 client — SigV4, path-style — to a gateway the **deployment operator runs and pays for**. With no store configured the feature is off and nothing else changes (`/v1/pack/{shard}` remains the pack path).
 
-| Env | Meaning |
-|---|---|
-| `NEKTAR_BSTORE_S3_URL` | gateway base URL (e.g. `http://127.0.0.1:9000` for the quickstart `s3d`) |
-| `NEKTAR_BSTORE_BUCKET` | S3 bucket name — the bstore bucket id with `-` for `_` (e.g. `packs-psbqmkflww`) |
-| `NEKTAR_BSTORE_ACCESS_KEY` / `NEKTAR_BSTORE_SECRET_KEY` | SigV4 credentials — or `NEKTAR_BSTORE_SECRET_KEY_FILE` for a file-held secret |
+| Env                                                     | Meaning                                                                          |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `NEKTAR_BSTORE_S3_URL`                                  | gateway base URL (e.g. `http://127.0.0.1:9000` for the quickstart `s3d`)         |
+| `NEKTAR_BSTORE_BUCKET`                                  | S3 bucket name — the bstore bucket id with `-` for `_` (e.g. `packs-psbqmkflww`) |
+| `NEKTAR_BSTORE_ACCESS_KEY` / `NEKTAR_BSTORE_SECRET_KEY` | SigV4 credentials — or `NEKTAR_BSTORE_SECRET_KEY_FILE` for a file-held secret    |
 
 - Buyer ops reaching `disclosure_verified` store a **redacted** evidence bundle at `evidence/<network>/<operationId>.json` (question and disclosure tx become SHA-256 digests — no plaintext or wrapped secret leaves the node) and commit the `{bucket, key, sha256, size}` ref into the op via an `evidence_stored` event, which the deal journal then anchors. `deals {operationId}` shows `evidence: {ref, stored: true}`; the operator tool `evidence {ref | operationId}` fetches and re-verifies.
 - `describeShard`/`sell` on a PUBLIC shard also PUT the shard pack at `packs/<network>/<shardId>/<sha256>.json` and publish the ref in `/.well-known/nektar` (`store` field) — `importShard {store}` fetches it.
@@ -159,16 +160,16 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| `TX_MISSING_PARENT` | propagation race in a burst | handled: identical re-broadcast with backoff; persistent → check that the parent was accepted |
-| `no Merkle proof at height` | asset API indexes a just-mined block with lag | handled: bounded retry; the mined height is read from the block header, not the tracker |
-| `reserve dry: no funding UTXO available` | treasury exhausted | re-run (the treasury re-splits) or delete `.state/treasury.json` to re-bootstrap |
-| `script[serializedBytes] is not a function` | two `@bsv/sdk` versions in the graph | `pnpm why @bsv/sdk` must show one version; keep the `overrides` in `pnpm-workspace.yaml` |
-| `SCRIPT_INVALID … OP_EQUALVERIFY` on a new Rúnar method | runar 0.4.6 miscompiles (see migration-log) | distinct `const`s instead of reassigned `let`; every method continues state |
-| Record proof reports `settled:false` / `anchorState:'broadcast'` | anchor broadcast but no BUMP attached yet | normal at 0-conf — the record is *anchored* (locally verified); `settled` upgrades when the confirmer attaches the BUMP. A `NotMined`/`BEEFInvalid` result from the STARK-anchored verifiers still means a genuinely missing or bogus BUMP |
-| finality stuck at 1 confirmation on regtest | `getblockchaininfo.blocks` lags `generatetoaddress` | the tracker's `tipHeight` uses the mined header height |
-| Long-running command | a bug, not slowness | stop, inspect, fix; never extend timeouts |
+| Symptom                                                          | Cause                                               | Fix                                                                                                                                                                                                                                        |
+| ---------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `TX_MISSING_PARENT`                                              | propagation race in a burst                         | handled: identical re-broadcast with backoff; persistent → check that the parent was accepted                                                                                                                                              |
+| `no Merkle proof at height`                                      | asset API indexes a just-mined block with lag       | handled: bounded retry; the mined height is read from the block header, not the tracker                                                                                                                                                    |
+| `reserve dry: no funding UTXO available`                         | treasury exhausted                                  | re-run (the treasury re-splits) or delete `.state/treasury.json` to re-bootstrap                                                                                                                                                           |
+| `script[serializedBytes] is not a function`                      | two `@bsv/sdk` versions in the graph                | `pnpm why @bsv/sdk` must show one version; keep the `overrides` in `pnpm-workspace.yaml`                                                                                                                                                   |
+| `SCRIPT_INVALID … OP_EQUALVERIFY` on a new Rúnar method          | runar 0.4.6 miscompiles (see migration-log)         | distinct `const`s instead of reassigned `let`; every method continues state                                                                                                                                                                |
+| Record proof reports `settled:false` / `anchorState:'broadcast'` | anchor broadcast but no BUMP attached yet           | normal at 0-conf — the record is _anchored_ (locally verified); `settled` upgrades when the confirmer attaches the BUMP. A `NotMined`/`BEEFInvalid` result from the STARK-anchored verifiers still means a genuinely missing or bogus BUMP |
+| finality stuck at 1 confirmation on regtest                      | `getblockchaininfo.blocks` lags `generatetoaddress` | the tracker's `tipHeight` uses the mined header height                                                                                                                                                                                     |
+| Long-running command                                             | a bug, not slowness                                 | stop, inspect, fix; never extend timeouts                                                                                                                                                                                                  |
 
 ## Backups
 
@@ -194,22 +195,23 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
      **Status delivery — webhook mode.** With `NEKTAR_CALLBACK_URL` set, every broadcast carries `X-CallbackUrl`; the broadcaster pushes each status transition (`SEEN_ON_NETWORK` → `MINED`/`IMMUTABLE`, or `REJECTED`/`DOUBLE_SPEND_ATTEMPTED`) to `POST {url}/v1/broadcaster-callback`. When `NEKTAR_CALLBACK_TOKEN` is set it is sent as `X-CallbackToken` and the route requires it back as `Authorization: Bearer`. The URL must be publicly routable.
 
      **Status delivery — stream mode.** Without a callback URL the instance pulls the same statuses from `GET {broadcaster}/events?callbackToken=<token>` — an SSE stream, outbound-only, no inbound port needed. The token is `NEKTAR_CALLBACK_TOKEN` or a per-instance random value persisted to `<data dir>/callback-token` (0600); submissions carry it as `X-CallbackToken` so the stream only sees this instance's transactions. Reconnects resume via `Last-Event-ID`, with the last delivered id persisted in `<data dir>/sse-cursor`. Both modes feed the same handler: a `MINED`/`IMMUTABLE` BUMP is verified against the instance's own tracker before it confirms — a status is a hint, never proof.
+
   4. Hard caps, enforced before every broadcast and fail-closed:
      - `NEKTAR_MAX_FEE_SATS_PER_TX` (1000)
      - `NEKTAR_MAX_SPEND_SATS_PER_DAY` (20000)
      - `NEKTAR_MIN_BROADCAST_INTERVAL_MS` (10000)
-  4b. **Consensus-enforced caps (GOAL-v7 V1, optional):** `NEKTAR_FEE_VAULT`
-     routes anchor funding through the `NektarFeeVault` covenant — caps are
-     enforced by node script eval, not just the local SpendGuard. Value is
-     inline JSON or `@/path/to.json`:
-     `{"perTxCap":1000,"windowCap":20000,"windowBlocks":144,"maxFee":10,"fundSats":500,"vaultSats":50000}`.
-     On first start it deploys the vault (one tx, `vaultSats` locked) from the
-     reserve; each anchor then mints a `fundSats`-capped P2PKH funding out.
-     The vault utxo + minted outs persist in `NEKTAR_DATA_DIR/vault-utxo.json`
-     (back it up with `.state/`). A covenant spend that violates per-tx /
-     rolling-window / fee caps is refused by the network (TX_INVALID) —
-     independent of local config. Reserve outs the vault did not mint are
-     never used for anchoring while this is set.
+       4b. **Consensus-enforced caps (GOAL-v7 V1, optional):** `NEKTAR_FEE_VAULT`
+       routes anchor funding through the `NektarFeeVault` covenant — caps are
+       enforced by node script eval, not just the local SpendGuard. Value is
+       inline JSON or `@/path/to.json`:
+       `{"perTxCap":1000,"windowCap":20000,"windowBlocks":144,"maxFee":10,"fundSats":500,"vaultSats":50000}`.
+       On first start it deploys the vault (one tx, `vaultSats` locked) from the
+       reserve; each anchor then mints a `fundSats`-capped P2PKH funding out.
+       The vault utxo + minted outs persist in `NEKTAR_DATA_DIR/vault-utxo.json`
+       (back it up with `.state/`). A covenant spend that violates per-tx /
+       rolling-window / fee caps is refused by the network (TX_INVALID) —
+       independent of local config. Reserve outs the vault did not mint are
+       never used for anchoring while this is set.
   5. Measured at 100 sat/kB: genesis 1,143 B / 115 sats, append 3,315 B / 332 sats, rotate 2,904 B / 291 sats.
   6. Monitor `GET /v1/wallet` (balance, runway), `GET /v1/costs`, and the alerts `NektarFeeBalanceLow`, `NektarSpendCapHit` and `NektarBroadcastFailures`.
   7. Back up `NEKTAR_DATA_DIR` (keys, state, reserve, spend ledger, records) **and** the passphrase. Losing either loses the shard ownership keys.
@@ -251,20 +253,20 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
   5. `sale op=refund` (buyer): if the seller never completes, the depositor
      reclaims the escrow after `refundAfter` — depositor-signed,
      locktime-gated.
-  GOAL-v8 additions: offers carry `expiresAt` (inside the signature —
-  expired offers are refused at verification AND before escrow funding),
-  and `sale op=escrow` refuses a `refundAfter` that isn't safely in the
-  future (`> currentHeight + margin`) before any deposit is made.
-  Threat note: `wrapped` is public on-chain — private mode relies on
-  BRC-42 ECDH confidentiality; the covenant binds payment↔reveal but
-  cannot prevent the buyer reselling the plaintext afterwards, nor a
-  third party front-running a *public* payload they saw in the mempool.
+     GOAL-v8 additions: offers carry `expiresAt` (inside the signature —
+     expired offers are refused at verification AND before escrow funding),
+     and `sale op=escrow` refuses a `refundAfter` that isn't safely in the
+     future (`> currentHeight + margin`) before any deposit is made.
+     Threat note: `wrapped` is public on-chain — private mode relies on
+     BRC-42 ECDH confidentiality; the covenant binds payment↔reveal but
+     cannot prevent the buyer reselling the plaintext afterwards, nor a
+     third party front-running a _public_ payload they saw in the mempool.
 - **Public shard packs (cold-start sharing, on by default):**
   `GET /v1/pack/{shard}` serves a public shard's portable pack — every
   record's plaintext + provenance + its anchor `ProofBundle`, the same
   object `exportShard` returns plus a shareable `packUrl`.
   `GET /.well-known/nektar` is the discovery doc: `{verifyBase,
-  publicShards:[{shard, records, packUrl, import}]}` enumerating what the
+publicShards:[{shard, records, packUrl, import}]}` enumerating what the
   operator offers (private shards, `__*` system shards, and shards holding
   level>0 records are never listed). `NEKTAR_PACK_SHARE=0` disables both.
   The importer calls `importShard {from: "<base>", shard: "<name>"}` (or
@@ -294,7 +296,7 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
   STARK itself (`reverifyMembershipBytes` — peek mode; the committed
   proof is already consumed, the tombstone proves it was issued and
   used exactly once). Missing artifact → the private cite cannot be
-  marked verified. This is a *privacy* policy on the data, not a caller
+  marked verified. This is a _privacy_ policy on the data, not a caller
   preference — and like all proofs here it attests membership, never
   truth.
 - **Model-execution attestation (`attestInference` tool):** nChain
@@ -342,7 +344,7 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
   spend reserve outpoints), or `NEKTAR_PRICE_SATS` for all. Verifier-side
   tools (`verifyMembership`, `verifyCombined`, `verifySubset`,
   `verifyDerivation`, `verifyAttestation`, `zkQuery`, `verifyReceipt`)
-  are never gated — a verifier pays to *get* a proof, never to check one.
+  are never gated — a verifier pays to _get_ a proof, never to check one.
   Flow: unpaid call → `402`-shaped `{paymentRequired}` invoice (also
   `GET /v1/pay/quote?tool=…` → real HTTP 402 + `PAYMENT-REQUIRED`
   header; `GET /.well-known/x402` → the priced-tool catalog for
@@ -364,7 +366,7 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
   Verified on real chains by `packages/e2e/src/e2e-pay.mjs`:
   `NEKTAR_NETWORK=regtest node packages/e2e/src/e2e-pay.mjs` (local
   Teranode) and `NEKTAR_NETWORK=ttn NEKTAR_DATA_DIR=<funded dir>
-  NEKTAR_KEY_PASSPHRASE=… node packages/e2e/src/e2e-pay.mjs` (public
+NEKTAR_KEY_PASSPHRASE=… node packages/e2e/src/e2e-pay.mjs` (public
   testnet) — payer funding tx, 402 invoice, signed settlement broadcast
   by real consensus, receipt commits the txid, `paid` check green,
   replay rejected.

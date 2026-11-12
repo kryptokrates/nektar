@@ -13,14 +13,14 @@
     "@bsv/sdk": "4.0.1",
     "@nektar/core": "workspace:*",
     "runar-lang": "0.4.6",
-    "runar-sdk": "^0.4.6"
+    "runar-sdk": "0.4.6"
   },
   "peerDependencies": {
     "@bsv/sdk": "4.0.1"
   },
   "devDependencies": {
     "runar-compiler": "^0.4.6",
-    "typescript": "^5.4.0"
+    "typescript": "5.6.3"
   },
   "files": [
     "dist",

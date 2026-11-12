@@ -42,7 +42,7 @@ export const fr = (x: bigint | number): bigint => {
   return r < 0n ? r + FR_MODULUS : r
 }
 
-function permute (s: bigint[]): void {
+function permute(s: bigint[]): void {
   const hf = FULL_ROUNDS / 2
   for (let r = 0; r < FULL_ROUNDS + PARTIAL_ROUNDS; r++) {
     for (let j = 0; j < SIZE; j++) s[j] = fr(s[j]! + ARK[r]![j]!)
@@ -51,18 +51,21 @@ function permute (s: bigint[]): void {
     } else {
       s[0] = fr(s[0]! ** ALPHA)
     }
-    const next = MDS.map(row => row.reduce((acc, m, j) => acc + m * s[j]!, 0n) % FR_MODULUS)
+    const next = MDS.map((row) => row.reduce((acc, m, j) => acc + m * s[j]!, 0n) % FR_MODULUS)
     for (let j = 0; j < SIZE; j++) s[j] = next[j]!
   }
 }
 
 /** poseidon(input elements) → one field element (arkworks squeeze(1)).
  *  Elements are raw field inputs — callers wrap negatives via fr(). */
-export function poseidonToy (elems: ReadonlyArray<bigint | number>): bigint {
+export function poseidonToy(elems: ReadonlyArray<bigint | number>): bigint {
   const s = [0n, 0n, 0n] // [capacity | rate, rate]
   let pos = 0
   for (const e of elems) {
-    if (pos === RATE) { permute(s); pos = 0 }
+    if (pos === RATE) {
+      permute(s)
+      pos = 0
+    }
     s[CAPACITY + pos] = fr(s[CAPACITY + pos]! + BigInt(e))
     pos++
   }
@@ -71,11 +74,11 @@ export function poseidonToy (elems: ReadonlyArray<bigint | number>): bigint {
 }
 
 /** nChain circuit's model commitment: poseidon(W1 ‖ W2 ‖ b1 ‖ b2 ‖ zero_relu) */
-export function modelPoseidon (w1: number[][], w2: number[][], b1: readonly number[], b2: readonly number[], zeroRelu: number): bigint {
+export function modelPoseidon(w1: number[][], w2: number[][], b1: readonly number[], b2: readonly number[], zeroRelu: number): bigint {
   return poseidonToy([...w1.flat(), ...w2.flat(), ...b1, ...b2, zeroRelu])
 }
 
 /** the circuit's single public input: poseidon(input ‖ output ‖ poseidon(model)) */
-export function publicStatement (input: readonly number[], output: number, model: bigint): bigint {
+export function publicStatement(input: readonly number[], output: number, model: bigint): bigint {
   return poseidonToy([...input, output, model])
 }

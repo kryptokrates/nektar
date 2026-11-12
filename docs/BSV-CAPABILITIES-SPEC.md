@@ -24,16 +24,16 @@ Jeff Harris's bstack papers provide useful patterns for these capabilities. They
 
 ### 1.1 Decisions proposed for approval
 
-| Decision | Proposed default |
-| --- | --- |
-| Discovery | BRC-88 SHIP/SLAP plus BRC-180 domain manifests; BRC-169 handles as a subsequent interoperability milestone |
-| Global budget enforcement | One principal-controlled funding authority with a durable transactional ledger; no general budget covenant in the first release |
-| Market history | Per-producer signed sequences and bounded intervals committed by existing Nektar anchoring mechanisms |
-| Portable memory | Existing Nektar evidence in a versioned package; experimental off-chain carriers are a separate profile |
-| Availability | Content-addressed encrypted objects, explicit retention contracts, bounded possession challenges; no automatic slashing |
-| Asynchronous exchange | A small encrypted mailbox profile over HTTPS with durable deduplication; standard mailbox compatibility tested separately |
-| Chain environment | Mock for deterministic tests, regtest for controlled chain tests, explicitly configured public BSV testnet for integration evidence |
-| Mainnet | A later deployment decision after integration and financial recovery gates pass |
+| Decision                  | Proposed default                                                                                                                    |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Discovery                 | BRC-88 SHIP/SLAP plus BRC-180 domain manifests; BRC-169 handles as a subsequent interoperability milestone                          |
+| Global budget enforcement | One principal-controlled funding authority with a durable transactional ledger; no general budget covenant in the first release     |
+| Market history            | Per-producer signed sequences and bounded intervals committed by existing Nektar anchoring mechanisms                               |
+| Portable memory           | Existing Nektar evidence in a versioned package; experimental off-chain carriers are a separate profile                             |
+| Availability              | Content-addressed encrypted objects, explicit retention contracts, bounded possession challenges; no automatic slashing             |
+| Asynchronous exchange     | A small encrypted mailbox profile over HTTPS with durable deduplication; standard mailbox compatibility tested separately           |
+| Chain environment         | Mock for deterministic tests, regtest for controlled chain tests, explicitly configured public BSV testnet for integration evidence |
+| Mainnet                   | A later deployment decision after integration and financial recovery gates pass                                                     |
 
 ## 2. Goals, limits, and terminology
 
@@ -57,15 +57,15 @@ Jeff Harris's bstack papers provide useful patterns for these capabilities. They
 
 ### 2.3 Proof vocabulary
 
-| Property | What establishes it | What it does not establish |
-| --- | --- | --- |
-| Attribution | Valid signature and the applicable key/identity binding | Truth, authorization for every action, or uncompromised keys |
-| Integrity | Recomputed hashes and commitment paths | Availability or freshness |
-| Inclusion | Transaction proof checked against an accepted header chain | Current unspent status or irreversible finality |
-| Freshness | A declared observation policy, current state observations, and anti-rollback rules | Absolute proof that no newer publication exists anywhere |
+| Property     | What establishes it                                                                      | What it does not establish                                                       |
+| ------------ | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Attribution  | Valid signature and the applicable key/identity binding                                  | Truth, authorization for every action, or uncompromised keys                     |
+| Integrity    | Recomputed hashes and commitment paths                                                   | Availability or freshness                                                        |
+| Inclusion    | Transaction proof checked against an accepted header chain                               | Current unspent status or irreversible finality                                  |
+| Freshness    | A declared observation policy, current state observations, and anti-rollback rules       | Absolute proof that no newer publication exists anywhere                         |
 | Completeness | Recomputed commitment for a specified producer, interval, sequence range, and object set | All real-world events, every producer, or arbitrary semantic search completeness |
-| Authority | Verified grant chain, scope, expiry, revocation policy, and funding authorization | Funds exist unless separately verified |
-| Availability | Successful retrieval or a possession challenge under its stated assumptions | Permanent retention or independent physical copies |
+| Authority    | Verified grant chain, scope, expiry, revocation policy, and funding authorization        | Funds exist unless separately verified                                           |
+| Availability | Successful retrieval or a possession challenge under its stated assumptions              | Permanent retention or independent physical copies                               |
 
 **MUST**, **SHOULD**, and **MAY** describe requirements of this proposed Nektar implementation. They do not add requirements to the external BRCs.
 
@@ -73,14 +73,14 @@ Jeff Harris's bstack papers provide useful patterns for these capabilities. They
 
 The following are source observations, not a complete security audit. Revalidate them before implementing because the repository is actively changing.
 
-| Area | Existing building blocks | Gap addressed by this spec |
-| --- | --- | --- |
-| Overlay engine | `packages/overlay/src/node.ts`, `tm.ts`, `ls.ts`: `tm_nektar`, `tm_presence`, `ls_nektar`, `ls_presence`, BEEF parsing, anchor successors, persistent anchor heads | Standard public discovery and protocol conformance at deployment boundaries |
-| Marketplace transport | `packages/overlay/serve.mjs`: signed announcements, configured `NEKTAR_PEERS`, beacons, event feeds, GASP routes | Discovered peers, complete security-event propagation, durable recovery and bounded fan-out |
-| Delegation | `packages/overlay/src/presence.ts`: signed grants, parent scope/cap/expiry checks; `packages/mcp/src/server.ts`: `delegate`, `peerCall`, `revokeGrant` | Shared cumulative accounting, authenticated revocation evidence, full caller/funder enforcement |
-| Payments and disclosure | `packages/mcp/src/server.ts`: invoice payment and `sale` offer/escrow/complete/refund/claim; `packages/identity/src/sale.ts`; `packages/contracts/src/DisclosureSale.runar.ts` | Grant-bound funding and durable asynchronous orchestration around the existing escrow |
-| Memory and receipts | `packages/mcp/src/memory.ts`: anchor operations, shard packs, answer receipts, `receiptDigest`; identity and verify packages | Portable versioned evidence and explicit assurance/freshness results |
-| Lightweb compatibility | `packages/overlay/src/host-module.ts`, vendored `bcommon` engine types | Optional integration boundary; no requirement to ship this code in the independent core |
+| Area                    | Existing building blocks                                                                                                                                                       | Gap addressed by this spec                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| Overlay engine          | `packages/overlay/src/node.ts`, `tm.ts`, `ls.ts`: `tm_nektar`, `tm_presence`, `ls_nektar`, `ls_presence`, BEEF parsing, anchor successors, persistent anchor heads             | Standard public discovery and protocol conformance at deployment boundaries                     |
+| Marketplace transport   | `packages/overlay/serve.mjs`: signed announcements, configured `NEKTAR_PEERS`, beacons, event feeds, GASP routes                                                               | Discovered peers, complete security-event propagation, durable recovery and bounded fan-out     |
+| Delegation              | `packages/overlay/src/presence.ts`: signed grants, parent scope/cap/expiry checks; `packages/mcp/src/server.ts`: `delegate`, `peerCall`, `revokeGrant`                         | Shared cumulative accounting, authenticated revocation evidence, full caller/funder enforcement |
+| Payments and disclosure | `packages/mcp/src/server.ts`: invoice payment and `sale` offer/escrow/complete/refund/claim; `packages/identity/src/sale.ts`; `packages/contracts/src/DisclosureSale.runar.ts` | Grant-bound funding and durable asynchronous orchestration around the existing escrow           |
+| Memory and receipts     | `packages/mcp/src/memory.ts`: anchor operations, shard packs, answer receipts, `receiptDigest`; identity and verify packages                                                   | Portable versioned evidence and explicit assurance/freshness results                            |
+| Lightweb compatibility  | `packages/overlay/src/host-module.ts`, vendored `bcommon` engine types                                                                                                         | Optional integration boundary; no requirement to ship this code in the independent core         |
 
 ### 3.1 Findings to resolve before expanding federation
 
@@ -288,17 +288,17 @@ BRC-169 distinguishes per-action caps from cumulative caps: a cumulative total i
 
 Publish a new grant schema rather than reinterpret old signatures. Bind:
 
-| Field | Purpose |
-| --- | --- |
-| `grantId`, `version`, `network` | Stable identity and replay boundary |
-| `principalKey`, `delegateKey`, `parentGrantId` | Authority chain and actors |
-| `scope` | Allowed tools, resources, domains, and counterparties under a specified matching rule |
-| `perActionCapSats` | Maximum all-in debit for one action |
-| `totalCapSats` | Maximum lifetime budget debit including allowed fees |
-| `expiresAt`, optional `expiryHeight` | Expiry; earliest applicable bound wins |
-| `delegable`, `maxDepth` | Explicit ability to delegate further |
-| `fundingAuthorityKey`, `fundingAuthorityEndpoint` | Identity and route of the budget enforcer |
-| `revocationReference`, `issuedAt`, `signature` | Revocation profile and authenticated grant |
+| Field                                             | Purpose                                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `grantId`, `version`, `network`                   | Stable identity and replay boundary                                                   |
+| `principalKey`, `delegateKey`, `parentGrantId`    | Authority chain and actors                                                            |
+| `scope`                                           | Allowed tools, resources, domains, and counterparties under a specified matching rule |
+| `perActionCapSats`                                | Maximum all-in debit for one action                                                   |
+| `totalCapSats`                                    | Maximum lifetime budget debit including allowed fees                                  |
+| `expiresAt`, optional `expiryHeight`              | Expiry; earliest applicable bound wins                                                |
+| `delegable`, `maxDepth`                           | Explicit ability to delegate further                                                  |
+| `fundingAuthorityKey`, `fundingAuthorityEndpoint` | Identity and route of the budget enforcer                                             |
+| `revocationReference`, `issuedAt`, `signature`    | Revocation profile and authenticated grant                                            |
 
 Unknown scopes deny access. A child cannot broaden scope, expiry, per-action cap, total allocation, or delegation depth. Omitted/empty scope semantics MUST be explicit; omission cannot turn a restricted parent into an unrestricted child.
 
@@ -381,16 +381,16 @@ The first release packages existing Nektar evidence. The data-carrier paper's tr
 
 The logical package contains:
 
-| Component | Requirement |
-| --- | --- |
-| Manifest | Schema, network, issuer, content identifiers, media types, byte sizes, record identity, encryption profile, component hashes |
-| Record material | Public canonical bytes or ciphertext; plaintext and private keys absent unless explicitly intended for this buyer |
-| Provenance | Existing Nektar author signature and derivation/provenance evidence |
-| Commitment | Record leaf, tree path, root, shard sequence/state identity, and anchor reference |
-| Transaction evidence | Required transaction bytes/BEEF, inclusion paths, and references needed to verify the anchor against locally accepted headers |
-| Receipt references | Existing answer receipt and optional versioned exchange receipt, each preserving its original signing rules |
-| Authority/status evidence | Grant/revocation observations if relevant; observation time and freshness policy |
-| Availability references | Optional providers/content locations; never substitutes for content hashes |
+| Component                 | Requirement                                                                                                                   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Manifest                  | Schema, network, issuer, content identifiers, media types, byte sizes, record identity, encryption profile, component hashes  |
+| Record material           | Public canonical bytes or ciphertext; plaintext and private keys absent unless explicitly intended for this buyer             |
+| Provenance                | Existing Nektar author signature and derivation/provenance evidence                                                           |
+| Commitment                | Record leaf, tree path, root, shard sequence/state identity, and anchor reference                                             |
+| Transaction evidence      | Required transaction bytes/BEEF, inclusion paths, and references needed to verify the anchor against locally accepted headers |
+| Receipt references        | Existing answer receipt and optional versioned exchange receipt, each preserving its original signing rules                   |
+| Authority/status evidence | Grant/revocation observations if relevant; observation time and freshness policy                                              |
+| Availability references   | Optional providers/content locations; never substitutes for content hashes                                                    |
 
 The package manifest signs component hashes with typed roles, preventing substitution of a payment receipt for a memory commitment. Content-address each component and bound aggregate/decompressed size before parsing. The archive/container encoding is chosen during implementation; hash canonical components, not incidental ZIP timestamps.
 
@@ -538,14 +538,14 @@ Keep a small free discovery/health surface. Mailbox pricing, content pricing, st
 
 These are logical operations, not a mandate to create one MCP tool or npm package per row. Prefer extending existing tools and internal modules where that preserves clarity.
 
-| Surface | Proposed operations | Existing integration point |
-| --- | --- | --- |
-| Discovery | Resolve domain/services/handle; discover candidates; refresh advertisements | `discover`, overlay server, engine wiring |
-| History | Publish interval; retrieve range; verify interval; repair gap | Presence event log, anchor package, GASP and event feeds |
-| Funding | Issue grant; reserve action; authorize transaction; reconcile; revoke; inspect budget | `delegate`, `peerCall`, `payInvoice`, sale funding, chain/wallet layer |
-| Evidence | Export package; verify package; import verified record | Shard packs, `sale#claim`, `importRecord`, receipt/verify modules |
-| Retention | Quote; place; advertise; retrieve; challenge; renew | Content/package store, BSV payment path, provider adapter |
-| Async exchange | Send; receive; acknowledge; reconcile exchange | Existing want/offer/sale tools and a durable coordinator |
+| Surface        | Proposed operations                                                                   | Existing integration point                                             |
+| -------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Discovery      | Resolve domain/services/handle; discover candidates; refresh advertisements           | `discover`, overlay server, engine wiring                              |
+| History        | Publish interval; retrieve range; verify interval; repair gap                         | Presence event log, anchor package, GASP and event feeds               |
+| Funding        | Issue grant; reserve action; authorize transaction; reconcile; revoke; inspect budget | `delegate`, `peerCall`, `payInvoice`, sale funding, chain/wallet layer |
+| Evidence       | Export package; verify package; import verified record                                | Shard packs, `sale#claim`, `importRecord`, receipt/verify modules      |
+| Retention      | Quote; place; advertise; retrieve; challenge; renew                                   | Content/package store, BSV payment path, provider adapter              |
+| Async exchange | Send; receive; acknowledge; reconcile exchange                                        | Existing want/offer/sale tools and a durable coordinator               |
 
 ### 11.1 Exchange receipt v1
 
@@ -561,15 +561,15 @@ Errors must include stable machine-readable codes and safe evidence references. 
 
 ## 12. Delivery plan and release gates
 
-| Milestone | Deliverable | Gate |
-| --- | --- | --- |
-| M0 — foundations | Pin source/spec revisions, shared encoding fixtures, authenticated revocations, durable event ingest, explicit network/provider policy | Forged revocations rejected; restart/backfill preserves state; no silent downgrade |
-| M1 — discovery | Standard service advertisements, domain manifests, compatible submission/lookup bindings | F1 core discovery tests with a standard client and two independently configured hosts |
-| M2 — funded delegation | Grant v2, principal funding authority, transactional reservations, recovery, budget receipts | All F3 concurrency/crash/reorg tests pass before enabling delegated principal funding |
-| M3 — portable evidence | Package v1 and exchange receipt v1 | F4 offline/historical and tamper tests; legacy receipt fixtures unchanged |
-| M4 — history | Producer sequences, interval commitments, gap detection/repair | All F2 tests; withheld latest state never presented as proven current |
-| M5 — asynchronous exchange | Durable encrypted mailbox and sale coordinator | All F6 tests including refund and crash replay |
-| M6 — retention | Content-addressed provider adapters, retrieval, bounded payment and challenge profile | All F5 tests with explicit confidence and service limits |
+| Milestone                  | Deliverable                                                                                                                            | Gate                                                                                  |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| M0 — foundations           | Pin source/spec revisions, shared encoding fixtures, authenticated revocations, durable event ingest, explicit network/provider policy | Forged revocations rejected; restart/backfill preserves state; no silent downgrade    |
+| M1 — discovery             | Standard service advertisements, domain manifests, compatible submission/lookup bindings                                               | F1 core discovery tests with a standard client and two independently configured hosts |
+| M2 — funded delegation     | Grant v2, principal funding authority, transactional reservations, recovery, budget receipts                                           | All F3 concurrency/crash/reorg tests pass before enabling delegated principal funding |
+| M3 — portable evidence     | Package v1 and exchange receipt v1                                                                                                     | F4 offline/historical and tamper tests; legacy receipt fixtures unchanged             |
+| M4 — history               | Producer sequences, interval commitments, gap detection/repair                                                                         | All F2 tests; withheld latest state never presented as proven current                 |
+| M5 — asynchronous exchange | Durable encrypted mailbox and sale coordinator                                                                                         | All F6 tests including refund and crash replay                                        |
+| M6 — retention             | Content-addressed provider adapters, retrieval, bounded payment and challenge profile                                                  | All F5 tests with explicit confidence and service limits                              |
 
 BRC-169 full identity/certificate/payment compatibility may be delivered after basic M1 service discovery. Experimental carriers, storage challenge settlement contracts, and alternative transports are separately reviewed follow-ups. Do not couple the whole program to their completion.
 
@@ -603,17 +603,17 @@ These events must be real operations. A demonstration is acceptance evidence onl
 
 ## 14. Risks and engineering decisions still open
 
-| Question | Required decision before implementation |
-| --- | --- |
-| Bootstrap diversity | Which discovery trackers and header/state sources are operated independently, and how does a user replace them? |
-| Identity authority | Which domain trust anchors/certifiers are accepted, how are key changes handled, and what is the certificate revocation freshness bound? |
-| Chain policy | Confirmation counts, mempool acceptance treatment, reorg response, maximum state staleness, and endpoint disagreement behavior |
-| Budget HA | Single-writer deployment versus fenced multi-instance store; transaction/input reconciliation ownership |
-| Budget refunds | Confirm the proposed lifetime accounting policy and the treatment of fees and recovered escrow principal |
-| Public history | Which event kinds and fields may be public; retention/redaction policy; acceptable anchoring latency and cost |
-| Evidence format | Existing-tree reuse, canonical component encoding, package size limits, and streaming verification |
-| Mailbox profile | BRC-33/BRC-169 conformance target, encryption/key rotation, admission price, expiry, acknowledgement retention |
-| Storage profile | Provider selection, retention economics, chunk/proof tree, sample count, challenge deadline, and outcome dispute semantics |
+| Question                 | Required decision before implementation                                                                                                       |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bootstrap diversity      | Which discovery trackers and header/state sources are operated independently, and how does a user replace them?                               |
+| Identity authority       | Which domain trust anchors/certifiers are accepted, how are key changes handled, and what is the certificate revocation freshness bound?      |
+| Chain policy             | Confirmation counts, mempool acceptance treatment, reorg response, maximum state staleness, and endpoint disagreement behavior                |
+| Budget HA                | Single-writer deployment versus fenced multi-instance store; transaction/input reconciliation ownership                                       |
+| Budget refunds           | Confirm the proposed lifetime accounting policy and the treatment of fees and recovered escrow principal                                      |
+| Public history           | Which event kinds and fields may be public; retention/redaction policy; acceptable anchoring latency and cost                                 |
+| Evidence format          | Existing-tree reuse, canonical component encoding, package size limits, and streaming verification                                            |
+| Mailbox profile          | BRC-33/BRC-169 conformance target, encryption/key rotation, admission price, expiry, acknowledgement retention                                |
+| Storage profile          | Provider selection, retention economics, chunk/proof tree, sample count, challenge deadline, and outcome dispute semantics                    |
 | Lightweb source boundary | Remove the optional adapter or keep it as a separately distributed integration; preserve required attribution while any vendored code remains |
 
 Public specifications and papers are design inputs, not substitutes for adversarial tests. Distinct signatures do not prove distinct operators; agreement on a hash does not prove truth; a lookup response does not establish the absence of a newer state.
@@ -622,24 +622,24 @@ Public specifications and papers are design inputs, not substitutes for adversar
 
 Papers were reviewed as architectural proposals. Their performance and economic claims are not Nektar benchmarks. This specification does not reproduce their implementations or declare Nektar compatible with them without tests.
 
-| ID | Primary source | Relevant use |
-| --- | --- | --- |
-| S1 | Jeff Harris, [The bstack: publish once, prove everything, and let users ride free](https://1bsv.net/papers/bstack-patterns.pdf) | Separate verifiable state from delivery; point-to-point deployment remains possible |
-| S2 | Jeff Harris, [The data carrier](https://1bsv.net/papers/data-carrier.pdf) | Off-chain transaction-shaped carriers, parent evidence, payment separation, and limits of SPV |
-| S3 | Jeff Harris, [bfinger](https://1bsv.net/patterns/bfinger.pdf) | Identity records, replaceable hosts, and freshness/retraction boundaries |
-| S4 | Jeff Harris, [blogs](https://1bsv.net/patterns/blogs.pdf) | Signed sequences, interval anchoring, scoped completeness, and sibling repair |
-| S5 | Jeff Harris, [bstore](https://1bsv.net/patterns/bstore.pdf) | Retention markets, content/proof roots, possession sampling, and limits of independence/enforcement |
-| S6 | Jeff Harris, [bbox](https://1bsv.net/patterns/bbox.pdf) | Encrypted multiple-keeper mailboxes, acknowledgements, enclosed payments and their limits |
-| S7 | [BRC-88: Overlay Services Synchronization Architecture](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0088.md) | SHIP/SLAP host discovery and overlay synchronization architecture |
-| S8 | [BRC-180: Overlay Service Discovery at an Internet Domain](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0180.md) | `metanet.overlays` domain declarations |
-| S9 | [BRC-169: Universal Handle Addressing and Resolution](https://github.com/bsv-blockchain/BRCs/blob/master/peer-to-peer/0169.md) | Handle identity, message/payment interoperability, delegation and cumulative-cap limitations |
-| S10 | [BRC-178: Race-Settled Collection Markets](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0178.md) | Optional future pricing across multiple delivery hosts; not a consensus or truth mechanism |
-| S11 | [BRC-26: Universal Hash Resolution Protocol](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0026.md) | Content-addressed retrieval advertisements |
-| S12 | [BRC-33: Message Box Protocol](https://github.com/bsv-blockchain/BRCs/blob/master/peer-to-peer/0033.md) | Standard mailbox semantics to evaluate and test |
-| S13 | [BRC-22](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0022.md), [BRC-24](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0024.md) | Overlay submission and lookup contracts |
-| S14 | [BRC-62 BEEF](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0062.md), [BRC-95 Atomic BEEF](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0095.md) | Portable transaction evidence formats |
-| S15 | [BRC-100 wallet interface](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md), [BRC-103 authentication](https://github.com/bsv-blockchain/BRCs/blob/master/peer-to-peer/0103.md), [BRC-104 HTTP transport](https://github.com/bsv-blockchain/BRCs/blob/master/peer-to-peer/0104.md) | Optional standardized wallet/auth boundaries; explicit conformance work required |
-| S16 | [1BSV standards](https://1bsv.net/standards.html), [overlay object plane paper](https://1bsv.net/papers/overlay-object-plane.pdf) | Optional BRC-148/149 delivery compatibility, outside the mandatory deployment |
+| ID  | Primary source                                                                                                                                                                                                                                                                                      | Relevant use                                                                                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| S1  | Jeff Harris, [The bstack: publish once, prove everything, and let users ride free](https://1bsv.net/papers/bstack-patterns.pdf)                                                                                                                                                                     | Separate verifiable state from delivery; point-to-point deployment remains possible                 |
+| S2  | Jeff Harris, [The data carrier](https://1bsv.net/papers/data-carrier.pdf)                                                                                                                                                                                                                           | Off-chain transaction-shaped carriers, parent evidence, payment separation, and limits of SPV       |
+| S3  | Jeff Harris, [bfinger](https://1bsv.net/patterns/bfinger.pdf)                                                                                                                                                                                                                                       | Identity records, replaceable hosts, and freshness/retraction boundaries                            |
+| S4  | Jeff Harris, [blogs](https://1bsv.net/patterns/blogs.pdf)                                                                                                                                                                                                                                           | Signed sequences, interval anchoring, scoped completeness, and sibling repair                       |
+| S5  | Jeff Harris, [bstore](https://1bsv.net/patterns/bstore.pdf)                                                                                                                                                                                                                                         | Retention markets, content/proof roots, possession sampling, and limits of independence/enforcement |
+| S6  | Jeff Harris, [bbox](https://1bsv.net/patterns/bbox.pdf)                                                                                                                                                                                                                                             | Encrypted multiple-keeper mailboxes, acknowledgements, enclosed payments and their limits           |
+| S7  | [BRC-88: Overlay Services Synchronization Architecture](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0088.md)                                                                                                                                                                        | SHIP/SLAP host discovery and overlay synchronization architecture                                   |
+| S8  | [BRC-180: Overlay Service Discovery at an Internet Domain](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0180.md)                                                                                                                                                                     | `metanet.overlays` domain declarations                                                              |
+| S9  | [BRC-169: Universal Handle Addressing and Resolution](https://github.com/bsv-blockchain/BRCs/blob/master/peer-to-peer/0169.md)                                                                                                                                                                      | Handle identity, message/payment interoperability, delegation and cumulative-cap limitations        |
+| S10 | [BRC-178: Race-Settled Collection Markets](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0178.md)                                                                                                                                                                                     | Optional future pricing across multiple delivery hosts; not a consensus or truth mechanism          |
+| S11 | [BRC-26: Universal Hash Resolution Protocol](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0026.md)                                                                                                                                                                                   | Content-addressed retrieval advertisements                                                          |
+| S12 | [BRC-33: Message Box Protocol](https://github.com/bsv-blockchain/BRCs/blob/master/peer-to-peer/0033.md)                                                                                                                                                                                             | Standard mailbox semantics to evaluate and test                                                     |
+| S13 | [BRC-22](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0022.md), [BRC-24](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0024.md)                                                                                                                                        | Overlay submission and lookup contracts                                                             |
+| S14 | [BRC-62 BEEF](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0062.md), [BRC-95 Atomic BEEF](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0095.md)                                                                                                               | Portable transaction evidence formats                                                               |
+| S15 | [BRC-100 wallet interface](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md), [BRC-103 authentication](https://github.com/bsv-blockchain/BRCs/blob/master/peer-to-peer/0103.md), [BRC-104 HTTP transport](https://github.com/bsv-blockchain/BRCs/blob/master/peer-to-peer/0104.md) | Optional standardized wallet/auth boundaries; explicit conformance work required                    |
+| S16 | [1BSV standards](https://1bsv.net/standards.html), [overlay object plane paper](https://1bsv.net/papers/overlay-object-plane.pdf)                                                                                                                                                                   | Optional BRC-148/149 delivery compatibility, outside the mandatory deployment                       |
 
 ### 15.1 Avoiding scope creep
 

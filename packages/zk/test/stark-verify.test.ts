@@ -7,18 +7,28 @@ import { encodeZkm2, verifyZkm2, PINNED_IMAGE_ID, starkQueryId, verifyCombinedSt
 
 const fx = JSON.parse(readFileSync(new URL('../../test/fixtures/zkm2-n5i4.json', import.meta.url), 'utf8'))
 const H = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
-const base = () => ({ imageId: H(fx.imageId), root: H(fx.journal.root), size: fx.journal.size as number, queryId: H(fx.journal.queryId), receipt: H(fx.receipt) })
+const base = () => ({
+  imageId: H(fx.imageId),
+  root: H(fx.journal.root),
+  size: fx.journal.size as number,
+  queryId: H(fx.journal.queryId),
+  receipt: H(fx.receipt)
+})
 
 test('STARK fixture: pinned program, proven root == core/merkle.ts root of the batch', () => {
   assert.equal(fx.imageId, PINNED_IMAGE_ID, 'fixture was produced by the pinned program')
   const leaves = Array.from({ length: 5 }, (_, i) => dsha256(utf8(`leaf-5-${i}`)))
   const r = verifyZkm2(encodeZkm2(base()))
   assert.ok(r.ok, r.ok ? '' : r.reason)
-  if (r.ok) { assert.equal(r.journal.root, toHex(merkleRoot(leaves))); assert.equal(r.journal.size, 5) }
+  if (r.ok) {
+    assert.equal(r.journal.root, toHex(merkleRoot(leaves)))
+    assert.equal(r.journal.size, 5)
+  }
 })
 
 test('STARK verify NEGATIVES: tampered receipt, header≠journal, foreign/unpinned program', () => {
-  const t = base(); t.receipt[Math.floor(t.receipt.length / 2)] ^= 1
+  const t = base()
+  t.receipt[Math.floor(t.receipt.length / 2)] ^= 1
   const cases: Array<[string, ReturnType<typeof base>, RegExp]> = [
     ['tampered receipt', t, /stark/],
     ['root swapped in header', { ...base(), root: new Uint8Array(32).fill(7) }, /header/],

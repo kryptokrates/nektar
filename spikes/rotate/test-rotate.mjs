@@ -32,13 +32,19 @@ const deploy = async (signer) => {
 
 const evalSpend = (txHex, lockingHex, sats = 1) => {
   const tx = Transaction.fromHex(txHex)
-  const i = tx.inputs.findIndex(x => x.unlockingScript.toHex().length > 100)
+  const i = tx.inputs.findIndex((x) => x.unlockingScript.toHex().length > 100)
   const spend = new Spend({
-    sourceTXID: tx.inputs[i].sourceTXID, sourceOutputIndex: tx.inputs[i].sourceOutputIndex,
-    sourceSatoshis: sats, lockingScript: LockingScript.fromHex(lockingHex),
-    transactionVersion: tx.version, otherInputs: tx.inputs.filter((_, j) => j !== i),
-    allInputs: tx.inputs, outputs: tx.outputs, inputIndex: i,
-    unlockingScript: tx.inputs[i].unlockingScript, inputSequence: tx.inputs[i].sequence ?? 0xffffffff,
+    sourceTXID: tx.inputs[i].sourceTXID,
+    sourceOutputIndex: tx.inputs[i].sourceOutputIndex,
+    sourceSatoshis: sats,
+    lockingScript: LockingScript.fromHex(lockingHex),
+    transactionVersion: tx.version,
+    otherInputs: tx.inputs.filter((_, j) => j !== i),
+    allInputs: tx.inputs,
+    outputs: tx.outputs,
+    inputIndex: i,
+    unlockingScript: tx.inputs[i].unlockingScript,
+    inputSequence: tx.inputs[i].sequence ?? 0xffffffff,
     lockTime: tx.lockTime
   })
   return spend.validate()
@@ -47,7 +53,8 @@ const evalSpend = (txHex, lockingHex, sats = 1) => {
 const signCall = async (c, method, args, key) => {
   const prep = await c.prepareCall(method, args)
   const der = Buffer.from(key.sign(Array.from(Buffer.from(prep.sighash, 'hex'))).toDER()).toString('hex') + '41'
-  const sigs = {}; for (const i of prep.sigIndices) sigs[i] = der
+  const sigs = {}
+  for (const i of prep.sigIndices) sigs[i] = der
   return c.finalizeCall(prep, sigs)
 }
 
@@ -57,7 +64,11 @@ const otherKey = PrivateKey.fromHex('22'.repeat(32))
 const newSigner = new LocalSigner('33'.repeat(32))
 const newKey = PrivateKey.fromHex('33'.repeat(32))
 
-const le8 = (h) => { let v = 0n; for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(parseInt(h.slice(i * 2, i * 2 + 2), 16)); return v }
+const le8 = (h) => {
+  let v = 0n
+  for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(parseInt(h.slice(i * 2, i * 2 + 2), 16))
+  return v
+}
 const parseState = (lock) => {
   // find the OP_RETURN whose suffix = n|size|R|Rp|poseidon(00)|len|tag|len|20B pkh
   for (let p = lock.length - 2; p >= 0; p -= 2) {
@@ -66,7 +77,14 @@ const parseState = (lock) => {
     if (cand.length >= 200 && cand.slice(160, 162) === '00') {
       const tl = parseInt(cand.slice(162, 164), 16) * 2
       const tail = 164 + tl
-      return { n: le8(cand.slice(0, 16)), size: le8(cand.slice(16, 32)), R: cand.slice(32, 96), Rp: cand.slice(96, 160), tag: cand.slice(164, tail), pkh: cand.slice(tail + 2, tail + 42) }
+      return {
+        n: le8(cand.slice(0, 16)),
+        size: le8(cand.slice(16, 32)),
+        R: cand.slice(32, 96),
+        Rp: cand.slice(96, 160),
+        tag: cand.slice(164, tail),
+        pkh: cand.slice(tail + 2, tail + 42)
+      }
     }
   }
   return null
@@ -121,5 +139,9 @@ test('append: right sig but wrong pubKey (hash160 mismatch) fails', async () => 
   const wrongPub = await new LocalSigner('44'.repeat(32)).getPublicKey()
   // sig by owner, but pubKey arg is a DIFFERENT key → hash160(pubKey) != ownerPkh
   await signCall(c, 'append', [null, wrongPub, 'bb'.repeat(32), 2n], ownerKey)
-  assert.throws(() => evalSpend(prov.broadcastedTxs.at(-1), lock), /OP_CHECKSIGVERIFY|top stack|signature|assert|OP_EQUALVERIFY/, 'pubkey-pkh mismatch rejected')
+  assert.throws(
+    () => evalSpend(prov.broadcastedTxs.at(-1), lock),
+    /OP_CHECKSIGVERIFY|top stack|signature|assert|OP_EQUALVERIFY/,
+    'pubkey-pkh mismatch rejected'
+  )
 })

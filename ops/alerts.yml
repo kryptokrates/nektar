@@ -5,40 +5,40 @@ groups:
       - alert: NektarAnchorFailure
         expr: increase(nektar_anchor_failures_total[10m]) > 0
         labels: { severity: critical }
-        annotations: { summary: "anchor broadcast failed on shard {{ $labels.shard }}" }
+        annotations: { summary: 'anchor broadcast failed on shard {{ $labels.shard }}' }
       - alert: NektarPromiseViolation
         expr: nektar_promise_violations > 0
         labels: { severity: critical }
-        annotations: { summary: "inclusion promises past the max merge delay without a signed checkpoint (LOG-005)" }
+        annotations: { summary: 'inclusion promises past the max merge delay without a signed checkpoint (LOG-005)' }
       - alert: NektarAnchorLag
         expr: nektar_anchor_lag_ms > 300000
         for: 5m
         labels: { severity: warning }
-        annotations: { summary: "oldest uncheckpointed promise older than 5 minutes" }
+        annotations: { summary: 'oldest uncheckpointed promise older than 5 minutes' }
       - alert: NektarUnconfirmedAnchors
         expr: nektar_unconfirmed_anchors > 50
         for: 15m
         labels: { severity: warning }
-        annotations: { summary: "many anchors without a BUMP — mining stalled or reorg in progress" }
+        annotations: { summary: 'many anchors without a BUMP — mining stalled or reorg in progress' }
       - alert: NektarReorgSuspected
         expr: delta(nektar_unconfirmed_anchors[5m]) > 10
         labels: { severity: warning }
-        annotations: { summary: "unconfirmed anchors jumped — possible reorg (CHN-002 re-anchors automatically)" }
+        annotations: { summary: 'unconfirmed anchors jumped — possible reorg (CHN-002 re-anchors automatically)' }
       - alert: NektarReadRejectionsSpike
         expr: sum(rate(nektar_rejected_reads_total[5m])) > 1
         for: 10m
         labels: { severity: info }
-        annotations: { summary: "elevated withheld reads (policy, clearance, finality) — check for probing" }
+        annotations: { summary: 'elevated withheld reads (policy, clearance, finality) — check for probing' }
       - alert: NektarFeeBalanceLow
         expr: nektar_fee_balance_sats < 5000
         for: 30m
         labels: { severity: warning }
-        annotations: { summary: "operator fee key below ~5 anchors of runway — top up the printed address" }
+        annotations: { summary: 'operator fee key below ~5 anchors of runway — top up the printed address' }
       - alert: NektarSpendCapHit
         expr: increase(nektar_spend_refused_total[15m]) > 0
         labels: { severity: warning }
-        annotations: { summary: "SpendGuard refused a broadcast ({{ $labels.reason }}) — cap or interval hit" }
+        annotations: { summary: 'SpendGuard refused a broadcast ({{ $labels.reason }}) — cap or interval hit' }
       - alert: NektarBroadcastFailures
         expr: increase(nektar_anchor_failures_total[10m]) > 2
         labels: { severity: critical }
-        annotations: { summary: "repeated broadcast failures — check broadcaster/WoC reachability and fee balance" }
+        annotations: { summary: 'repeated broadcast failures — check broadcaster/WoC reachability and fee balance' }

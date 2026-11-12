@@ -15,24 +15,33 @@ import { NektarMemory, FileStateStore } from '../src/index.js'
 
 test('restart: resume from persisted head, no fork, proofs + level gate survive', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-restart-'))
-  const chain = new MockChain(); chain.verifyScripts = true
-  const funder = new MockFunder(); funder.topup(20); for (const t of funder.parents) chain.registerParent(t)
+  const chain = new MockChain()
+  chain.verifyScripts = true
+  const funder = new MockFunder()
+  funder.topup(20)
+  for (const t of funder.parents) chain.registerParent(t)
   const knex = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'records.sqlite') }, useNullAsDefault: true })
   try {
-    const store = new KnexShardStore(knex); await store.init()
+    const store = new KnexShardStore(knex)
+    await store.init()
     const shardKeys = new Map([['s', PrivateKey.fromRandom()]])
     const signingKey = PrivateKey.fromRandom()
     const opts = () => ({ batchPolicy: { maxLeaves: 2 }, shardKeys, signingKey, stateStore: new FileStateStore(join(dir, 'state.json')) })
     const a = new NektarMemory(chain, funder, funder.keyPair, opts(), store)
-    await a.remember('s', 'public fact'); await a.remember('s', 'secret fact', {}, 2)
-    chain.mine(1); a.confirmAnchor('s', a.tailLink('s')!.txid)
-    await a.remember('s', 'c'); await a.remember('s', 'd') // second anchor, unconfirmed at "crash"
+    await a.remember('s', 'public fact')
+    await a.remember('s', 'secret fact', {}, 2)
+    chain.mine(1)
+    a.confirmAnchor('s', a.tailLink('s')!.txid)
+    await a.remember('s', 'c')
+    await a.remember('s', 'd') // second anchor, unconfirmed at "crash"
     const headBefore = a.anchorHead('s')!
     // restart
     const b = new NektarMemory(chain, funder, funder.keyPair, opts(), store)
     assert.equal(b.anchorHead('s')!.tx.id('hex'), headBefore.tx.id('hex'), 'resumed at the persisted head')
-    assert.equal(b.anchorLinks('s').length, 2); assert.equal(b.checkpoints('s').length, 2)
-    await b.remember('s', 'e'); const r = await b.remember('s', 'f')
+    assert.equal(b.anchorLinks('s').length, 2)
+    assert.equal(b.checkpoints('s').length, 2)
+    await b.remember('s', 'e')
+    const r = await b.remember('s', 'f')
     assert.equal(r.anchored?.n, 2, 'next anchor is n=2 — it spent the persisted head (a fork would be rejected by script/double-spend checks)')
     chain.mine(1)
     // push confirmer: 'mined' status events deliver BUMPs for every txid this
@@ -44,5 +53,7 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
     const sec = (await b.recall('s', { seq: 1 })).items[0]!
     assert.equal(sec.text, undefined, 'level-2 record still gated after restart (level persisted in sqlite)')
     assert.match(sec.reason!, /zkaccess required/)
-  } finally { await knex.destroy() }
+  } finally {
+    await knex.destroy()
+  }
 })

@@ -50,14 +50,14 @@ A commodity market needs a defined product. For agent memory, that means identif
 
 Once that product can travel, the services around it can compete:
 
-| Service | What the customer can compare |
-|---|---|
+| Service            | What the customer can compare               |
+| ------------------ | ------------------------------------------- |
 | Knowledge creation | Relevance, originality, freshness, evidence |
-| Storage | Price, retention, availability, retrieval |
-| Discovery | Coverage, matching, useful offers |
-| Delivery | Reach, speed, reliability |
-| Verification | Checks performed, assurance, cost |
-| Compute | Capability, performance, privacy, price |
+| Storage            | Price, retention, availability, retrieval   |
+| Discovery          | Coverage, matching, useful offers           |
+| Delivery           | Reach, speed, reliability                   |
+| Verification       | Checks performed, assurance, cost           |
+| Compute            | Capability, performance, privacy, price     |
 
 This is the direction: an agent earns from knowledge, then spends those proceeds on storage, compute, or verification supplied by another business. Different providers can accept the same settlement asset. Changing supplier need not require changing money.
 
@@ -65,16 +65,16 @@ Nektar settles its current memory trades in BSV. The broader service market requ
 
 ## What works today
 
-| Capability | What the implementation provides |
-|---|---|
-| Persistent memory | Encrypted, provenance-signed records with commitments and BSV anchoring; export/import paths that recheck available evidence. |
-| Answers with receipts | Claims tied to cited records; unsupported claims are stripped by `groundedAnswer`; receipts can be independently checked. |
-| Autonomous memory trades | Signed wants and offers, competing quotes, policy-based selection, funded disclosure sales, delivery verification, and deadline refunds. |
-| Operator-controlled budgets | Approved domains, prices, fees, and exposure limits for the automation runtime; exceptions go to operator approval. |
-| Several delivery hosts | Signed public records and recipient-encrypted messages sent to configured hosts and checked locally on read; identity records can advertise counterparty hosts. |
-| Buyer and seller recovery | Encrypted inbox notes can rebuild escrowed purchases and quoted sales after loss of the local deal database, with the required keys, memory, policies, and notes retained. |
-| Deal journals | Numbered, linked batches; missing batches can be fetched from another host, unresolved gaps reported, and recorded intervals checked against mined commitments. |
-| Evidence storage | Optional S3-compatible storage for redacted trade evidence and public packs, with downloaded content checked against its recorded digest. |
+| Capability                  | What the implementation provides                                                                                                                                           |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Persistent memory           | Encrypted, provenance-signed records with commitments and BSV anchoring; export/import paths that recheck available evidence.                                              |
+| Answers with receipts       | Claims tied to cited records; unsupported claims are stripped by `groundedAnswer`; receipts can be independently checked.                                                  |
+| Autonomous memory trades    | Signed wants and offers, competing quotes, policy-based selection, funded disclosure sales, delivery verification, and deadline refunds.                                   |
+| Operator-controlled budgets | Approved domains, prices, fees, and exposure limits for the automation runtime; exceptions go to operator approval.                                                        |
+| Several delivery hosts      | Signed public records and recipient-encrypted messages sent to configured hosts and checked locally on read; identity records can advertise counterparty hosts.            |
+| Buyer and seller recovery   | Encrypted inbox notes can rebuild escrowed purchases and quoted sales after loss of the local deal database, with the required keys, memory, policies, and notes retained. |
+| Deal journals               | Numbered, linked batches; missing batches can be fetched from another host, unresolved gaps reported, and recorded intervals checked against mined commitments.            |
+| Evidence storage            | Optional S3-compatible storage for redacted trade evidence and public packs, with downloaded content checked against its recorded digest.                                  |
 
 The agent profile exposes nine tools: `remember`, `recall`, `groundedAnswer`, `verifyReceipt`, `want`, `sell`, `deals`, `fund`, and `doctor`. Additional operator tools are available through the operator profile.
 
@@ -117,19 +117,19 @@ Once configured, the market surface is small. These are MCP tool calls, not shel
 **Seller — offer a shard you already hold:**
 
 ```json
-{"tool":"sell","arguments":{"shard":"migration-fixes","domains":["libfoo"],"priceSats":200,"desc":"libfoo migration findings"}}
+{ "tool": "sell", "arguments": { "shard": "migration-fixes", "domains": ["libfoo"], "priceSats": 200, "desc": "libfoo migration findings" } }
 ```
 
 **Buyer — publish a need and a price ceiling:**
 
 ```json
-{"tool":"want","arguments":{"domains":["libfoo"],"question":"Why does libfoo.connect fail after the 3.0 upgrade?","maxSats":500}}
+{ "tool": "want", "arguments": { "domains": ["libfoo"], "question": "Why does libfoo.connect fail after the 3.0 upgrade?", "maxSats": 500 } }
 ```
 
 **Either agent — inspect the resulting operations:**
 
 ```json
-{"tool":"deals","arguments":{}}
+{ "tool": "deals", "arguments": {} }
 ```
 
 The runtime advances the trade. The operator defines the limits and handles exceptions. See [automation](docs/AUTOMATION.md) for configuration, funding, recovery, and approval details.
@@ -166,6 +166,6 @@ The regtest runner lives in [`real-stack.mjs`](packages/e2e/src/scenarios/real-s
 
 For maintenance: `pnpm doctor:fix`, `pnpm config:nektar`, `pnpm update:nektar`, and `pnpm service install`. Inspect the operating guide before changing a live instance. For development: `pnpm -r build` and `pnpm -r test`.
 
-The research foundations include Craig Wright's [*On Immutable Memory Systems for Artificial Agents*](https://arxiv.org/abs/2506.13246) and [*One Token, Many Markets*](https://singulargrit.substack.com/p/one-token-many-markets). Nektar applies persistent, verifiable memory to agent exchange; the portable-service economy above is its market thesis.
+The research foundations include Craig Wright's [_On Immutable Memory Systems for Artificial Agents_](https://arxiv.org/abs/2506.13246) and [_One Token, Many Markets_](https://singulargrit.substack.com/p/one-token-many-markets). Nektar applies persistent, verifiable memory to agent exchange; the portable-service economy above is its market thesis.
 
 [MIT](LICENSE).

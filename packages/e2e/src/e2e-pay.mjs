@@ -12,10 +12,13 @@ import { buildPaymentTx } from '../../mcp/dist/src/payclient.js'
 import { existsSync, readFileSync } from 'node:fs'
 
 const net = process.env.NEKTAR_NETWORK ?? 'regtest'
-const check = (ok, label) => { console.log(` ${ok ? '✔' : '✗ FAIL'} ${label}`); if (!ok) process.exit(1) }
+const check = (ok, label) => {
+  console.log(` ${ok ? '✔' : '✗ FAIL'} ${label}`)
+  if (!ok) process.exit(1)
+}
 
 // regtest connection — same env resolution as the sibling e2e scripts
-function readEnvFile (p) {
+function readEnvFile(p) {
   const out = {}
   if (!existsSync(p)) return out
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
@@ -36,8 +39,14 @@ const rc = {
 }
 const rpc = async (method, ...params) => {
   const auth = 'Basic ' + Buffer.from(`${rc.rpcUser}:${rc.rpcPass}`).toString('base64')
-  const r = await fetch(rc.rpcUrl, { method: 'POST', headers: { 'content-type': 'application/json', authorization: auth }, body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }) })
-  const j = await r.json(); if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`); return j.result
+  const r = await fetch(rc.rpcUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: auth },
+    body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
+  })
+  const j = await r.json()
+  if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
+  return j.result
 }
 
 // ── operator = a fresh key; payments settle to ITS address (never the funder)
@@ -57,9 +66,10 @@ if (net === 'regtest' && !existsSync(`${process.env.NEKTAR_DATA_DIR}/reserve.jso
 }
 const rt = await openRuntime(configFromEnv())
 const srv = createHttpApi(rt.mem).listen(0)
-await new Promise(r => srv.once('listening', r))
+await new Promise((r) => srv.once('listening', r))
 const base = `http://127.0.0.1:${srv.address().port}`
-const call = async (tool, body) => (await (await fetch(`${base}/v1/tools/${tool}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json())
+const call = async (tool, body) =>
+  await (await fetch(`${base}/v1/tools/${tool}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()
 console.log(`\n═══ payment e2e on ${net.toUpperCase()} (real chain) ═══`)
 
 // ── payer: an independent key, funded on-chain (not a mock utxo)
@@ -76,21 +86,27 @@ if (net === 'regtest') {
   const fundAddr = fundKey.toPublicKey().toAddress([0x6f])
   let srcTx, srcVout
   const { utxoStatus } = await import('@nektar/chain')
-  const usable = async (e) => e && await utxoStatus(rc, e.tx.id('hex'), e.vout) === 'unspent'
+  const usable = async (e) => e && (await utxoStatus(rc, e.tx.id('hex'), e.vout)) === 'unspent'
   const t = JSON.parse(readFileSync(new URL('../../../.state/treasury.json', import.meta.url), 'utf8')).treasury
   const cand = []
   if (t) cand.push({ tx: Transaction.fromHex(t.txHex), vout: t.vout })
   const rs = JSON.parse(readFileSync(new URL('../../../.nektar/reserve.json', import.meta.url), 'utf8'))
   const spent = new Set(rs.spent ?? [])
-  for (const e of (rs.entries ?? [])) if (!spent.has(`${e.txid}:${e.vout}`)) cand.push({ tx: Transaction.fromHex(e.txHex), vout: e.vout })
-  for (const c of cand) if ((c.tx.outputs[c.vout]?.satoshis ?? 0) >= 20_000 && await usable(c)) { srcTx = c.tx; srcVout = c.vout; break }
+  for (const e of rs.entries ?? []) if (!spent.has(`${e.txid}:${e.vout}`)) cand.push({ tx: Transaction.fromHex(e.txHex), vout: e.vout })
+  for (const c of cand)
+    if ((c.tx.outputs[c.vout]?.satoshis ?? 0) >= 20_000 && (await usable(c))) {
+      srcTx = c.tx
+      srcVout = c.vout
+      break
+    }
   if (!srcTx) throw new Error('no fund source: treasury + reserve all spent or too small')
   const paySats = Math.min(50_000, srcTx.outputs[srcVout].satoshis - 5000)
   const send = new Transaction()
   send.addInput({ sourceTransaction: srcTx, sourceOutputIndex: srcVout, unlockingScriptTemplate: new P2PKH().unlock(fundKey) })
   send.addOutput({ lockingScript: new P2PKH().lock(payerAddr), satoshis: paySats })
   send.addOutput({ lockingScript: new P2PKH().lock(fundAddr), change: true })
-  await send.fee(); await send.sign()
+  await send.fee()
+  await send.sign()
   const br = await new TeranodeBroadcaster(rc.propagationUrl).broadcast(send)
   check(br.status === 'success', `payer funding broadcast — ${send.id('hex').slice(0, 16)}… (real spend of the fund treasury)`)
   await rpc('generatetoaddress', 1, fundAddr)
@@ -110,14 +126,15 @@ if (net === 'regtest') {
   const { readFileSync } = await import('node:fs')
   const reserve = JSON.parse(readFileSync(`${process.env.NEKTAR_DATA_DIR}/reserve.json`, 'utf8'))
   const spent = new Set(reserve.spent ?? [])
-  const entry = (reserve.entries ?? []).find(e => !spent.has(`${e.txid}:${e.vout}`) && e.satoshis > 5000)
+  const entry = (reserve.entries ?? []).find((e) => !spent.has(`${e.txid}:${e.vout}`) && e.satoshis > 5000)
   if (!entry) throw new Error('no spendable reserve entry in ttn data dir')
   const ftx = Transaction.fromHex(entry.txHex)
   const send = new Transaction()
   send.addInput({ sourceTransaction: ftx, sourceOutputIndex: entry.vout, unlockingScriptTemplate: new P2PKH().unlock(fundKey) })
   send.addOutput({ lockingScript: new P2PKH().lock(payerAddr), satoshis: 3000 })
   send.addOutput({ lockingScript: new P2PKH().lock(fundKey.toPublicKey().toAddress([0x6f])), change: true })
-  await send.fee(); await send.sign()
+  await send.fee()
+  await send.sign()
   const bc = await rt.mem.broadcastTx(send)
   check(bc.status === 'success', `payer funding broadcast — ${send.id('hex').slice(0, 16)}… ${bc.status === 'success' ? '(public ttn tx)' : bc.description}`)
   const fund = rt.mem.funder
@@ -131,20 +148,34 @@ if (net === 'regtest') {
 const SHARD = 'pay-e2e'
 for (let i = 0; i < 4; i++) await call('remember', { shard: SHARD, data: `paid answers settle on a real chain — record ${i}` })
 console.log(' fragment committed — waiting for anchor…')
-for (let i = 0; i < 60; i++) { const r = await call('recall', { shard: SHARD, seq: 0 }); if (!r.items?.[0]?.unverifiable) break; await new Promise(r => setTimeout(r, 5000)) }
+for (let i = 0; i < 60; i++) {
+  const r = await call('recall', { shard: SHARD, seq: 0 })
+  if (!r.items?.[0]?.unverifiable) break
+  await new Promise((r) => setTimeout(r, 5000))
+}
 const f = (await call('recall', { shard: SHARD, seq: 0 })).items[0]
 check(f && !f.unverifiable, `${SHARD}:0 anchored + verified on ${net}`)
 
 // ── 1) catalog + unpaid call → the 402 invoice
 const catalog = await (await fetch(`${base}/.well-known/x402`)).json()
-check(catalog.resources?.some(r => r.url === 'tool://groundedAnswer'), 'discovery catalog lists priced tools')
+check(
+  catalog.resources?.some((r) => r.url === 'tool://groundedAnswer'),
+  'discovery catalog lists priced tools'
+)
 const denied = await call('groundedAnswer', { claims: [{ text: 'paid answers settle on a real chain — record 0', cites: [{ shard: SHARD, seq: 0 }] }] })
 check(denied.ok === false && denied.accepts?.[0]?.scheme === 'exact', 'unpaid call refused with x402 invoice')
 const extra = denied.accepts[0].extra
 
 // ── 2) pay it for real: signed tx → server verifies + broadcasts → mined by consensus
-const { hex, txid } = await buildPaymentTx({ amount: denied.accepts[0].amount, lockingScriptHex: extra.lockingScriptHex, opReturn: extra.opReturn }, payer, payerUtxos)
-const r = await call('groundedAnswer', { claims: [{ text: 'paid answers settle on a real chain — record 0', cites: [{ shard: SHARD, seq: 0 }] }], payment: { invoiceId: extra.invoiceId, transaction: hex } })
+const { hex, txid } = await buildPaymentTx(
+  { amount: denied.accepts[0].amount, lockingScriptHex: extra.lockingScriptHex, opReturn: extra.opReturn },
+  payer,
+  payerUtxos
+)
+const r = await call('groundedAnswer', {
+  claims: [{ text: 'paid answers settle on a real chain — record 0', cites: [{ shard: SHARD, seq: 0 }] }],
+  payment: { invoiceId: extra.invoiceId, transaction: hex }
+})
 if (r.committed !== true) console.log('  paid call response:', JSON.stringify(r).slice(0, 400))
 check(r.committed === true, `paid call committed — payment tx ${txid.slice(0, 20)}… settled by real consensus`)
 check(r.receipt.payment?.txid === txid, 'receipt commits the settlement txid')
@@ -156,19 +187,25 @@ if (net === 'regtest') {
   check(!!res?.ok, `payment tx resolvable via Teranode asset API (${res?.status ?? 'unreachable'})`)
 } else {
   const bcast = process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
-  const st = await fetch(`${bcast}/tx/${txid}`).then(r => r.ok ? r.json() : null).catch(() => null)
+  const st = await fetch(`${bcast}/tx/${txid}`)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
   check(!!st?.txid || !!st?.txStatus, `payment tx visible on TTN (${st?.txStatus ?? 'pending'})`)
 }
 
 // ── 4) independent verify → 'paid' line green
 const v = await (await fetch(`${base}/v1/verify?r=${r.receiptToken}`)).json()
 check(v.ok === true, 'receipt verifies')
-check(v.checks.find(c => c.name === 'paid')?.ok === true, `'paid' check green — settlement auditable on ${net}`)
+check(v.checks.find((c) => c.name === 'paid')?.ok === true, `'paid' check green — settlement auditable on ${net}`)
 
 // ── 5) replay rejected
 const denied2 = await call('groundedAnswer', { claims: [{ text: 'paid answers settle on a real chain — record 1', cites: [{ shard: SHARD, seq: 1 }] }] })
-const again = await call('groundedAnswer', { claims: [{ text: 'paid answers settle on a real chain — record 1', cites: [{ shard: SHARD, seq: 1 }] }], payment: { invoiceId: denied2.accepts[0].extra.invoiceId, transaction: hex } })
+const again = await call('groundedAnswer', {
+  claims: [{ text: 'paid answers settle on a real chain — record 1', cites: [{ shard: SHARD, seq: 1 }] }],
+  payment: { invoiceId: denied2.accepts[0].extra.invoiceId, transaction: hex }
+})
 check(!!again.error || !!again.paymentRequired === false, 'reused payment tx rejected')
 console.log(`\n receipt: ${r.receiptToken}\n verify:  ${r.verifyUrl}\n`)
-srv.close(); await rt.close()
+srv.close()
+await rt.close()
 process.exit(0)

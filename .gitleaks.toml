@@ -1,0 +1,13 @@
+# gitleaks — local `check:secrets` runs `gitleaks dir` (working tree) and CI
+# runs `gitleaks git` (history). These paths hold secrets BY DESIGN (local
+# keystores / env) and are all .gitignore'd — allowlisting keeps the scan
+# signal-only for everything else.
+[allowlist]
+description = "local-only secret stores (gitignored)"
+paths = [
+  '''^\.env''',
+  '''^\.nektar''',
+  '''^\.state''',
+  '''^\.mod''',
+  '''^infra/teranode-quickstart/''',
+]

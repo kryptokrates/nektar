@@ -9,7 +9,8 @@ import { verifyCertChain, makeRotationCert, type RotationCert } from '@nektar/id
 
 test('smt revocation: anchored root verifies a status proof; stale root fails', async () => {
   const chain = new MockChain()
-  const f = new MockFunder(); f.topup(6)
+  const f = new MockFunder()
+  f.topup(6)
   const smt = new Smt()
   const pk = new Uint8Array(32).fill(9)
   const ac = new AnchorChain('revoke', f.keyPair, f, f.keyPair, chain)
@@ -28,7 +29,8 @@ test('smt revocation: anchored root verifies a status proof; stale root fails', 
 
 test('rotated anchor chain verifies alongside the cert chain', async () => {
   const chain = new MockChain()
-  const f = new MockFunder(); f.topup(10)
+  const f = new MockFunder()
+  f.topup(10)
   const ac = new AnchorChain('s', f.keyPair, f, f.keyPair, chain)
   await ac.anchor(1, dsha256(utf8('d')))
   const newKey = PrivateKey.fromRandom()
@@ -44,10 +46,12 @@ import { reconstructRoot } from '@nektar/core'
 
 test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusion', async () => {
   const chain = new MockChain()
-  const f = new MockFunder(); f.topup(6)
+  const f = new MockFunder()
+  f.topup(6)
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
   const ac = new AnchorChain('rotlog', f.keyPair, f, f.keyPair, chain)
-  const k0 = PrivateKey.fromRandom(), k1 = PrivateKey.fromRandom()
+  const k0 = PrivateKey.fromRandom(),
+    k1 = PrivateKey.fromRandom()
   const cert = makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
   await log.remember('rotlog', { d: utf8(JSON.stringify(cert)), p: { source: 'rotlog', time: 1000, signature: new Uint8Array(0), modelId: 'm1' } })
   const batch = await log.closeBatch('rotlog')
@@ -58,7 +62,8 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
   // inclusion check against the ANCHORED root
   const proof = log.batchProof(batch!, 0)
   const recomputed = reconstructRoot(batch!.leaves[0]!, proof)
-  const inLog = (c: RotationCert) => JSON.parse(Buffer.from(batch!.records[0]!.fragment.d).toString()).sig === c.sig &&
+  const inLog = (c: RotationCert) =>
+    JSON.parse(Buffer.from(batch!.records[0]!.fragment.d).toString()).sig === c.sig &&
     Buffer.from(recomputed).toString('hex') === Buffer.from(h.head.data.R).toString('hex')
   const r = verifyCertChain(k0.toPublicKey().toString(), [cert], { inclusionCheck: inLog })
   assert.ok(r?.activePub === k1.toPublicKey().toString())
@@ -67,14 +72,16 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
   assert.equal(verifyCertChain(k0.toPublicKey().toString(), [cert, { ...outsider, index: 1 }], { inclusionCheck: inLog }), null)
 })
 
-import { issueDisclosure, fieldRoot, fieldPath, randSalt, fieldsCommitment, type FieldCommitment } from '@nektar/identity'
+import { issueDisclosure, fieldPath, randSalt, fieldsCommitment, type FieldCommitment } from '@nektar/identity'
 
 test('DIS-006: disclosure event logged as a leaf and anchored', async () => {
   const chain = new MockChain()
-  const f = new MockFunder(); f.topup(6)
+  const f = new MockFunder()
+  f.topup(6)
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
   const ac = new AnchorChain('discl', f.keyPair, f, f.keyPair, chain)
-  const owner = PrivateKey.fromRandom(), verifier = PrivateKey.fromRandom()
+  const owner = PrivateKey.fromRandom(),
+    verifier = PrivateKey.fromRandom()
   const fields: FieldCommitment[] = [
     { name: 'a', value: utf8('1'), salt: randSalt() },
     { name: 'b', value: utf8('2'), salt: randSalt() }

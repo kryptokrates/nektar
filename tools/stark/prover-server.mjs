@@ -28,28 +28,60 @@ const TOKEN = process.env.PROVER_TOKEN ?? ''
 const TIMEOUT_MS = Number(process.env.PROVER_TIMEOUT_MS ?? 600_000)
 const MAX_BODY = 64 * 1024 * 1024 // 64 MiB — derivation payloads can be large
 
-function proverCommand (sub) {
+function proverCommand(sub) {
   if (process.env.PROVER_DOCKER) {
-    return ['docker', ['run', '--rm', '-i',
-      '-v', `${process.env.NEKTAR_STARK_TARGET_VOLUME ?? 'nektar-stark-target'}:/work/target`,
-      process.env.NEKTAR_STARK_IMAGE ?? 'nektar-stark-build',
-      '/work/target/release/nektar-stark', sub]]
+    return [
+      'docker',
+      [
+        'run',
+        '--rm',
+        '-i',
+        '-v',
+        `${process.env.NEKTAR_STARK_TARGET_VOLUME ?? 'nektar-stark-target'}:/work/target`,
+        process.env.NEKTAR_STARK_IMAGE ?? 'nektar-stark-build',
+        '/work/target/release/nektar-stark',
+        sub
+      ]
+    ]
   }
   return [resolve(process.env.PROVER_BIN ?? `${ROOT}/target/release/nektar-stark`), [sub]]
 }
 
-function runProver (sub, body) {
+function runProver(sub, body) {
   return new Promise((res, rej) => {
     const [cmd, args] = proverCommand(sub)
     const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, MSYS_NO_PATHCONV: '1' } })
-    let out = ''; let err = ''
-    const t = setTimeout(() => { child.kill('SIGKILL'); rej(new Error(`prover timed out after ${TIMEOUT_MS} ms`)) }, TIMEOUT_MS)
-    child.stdout.on('data', d => { out += d })
-    child.stderr.on('data', d => { err += d })
-    child.on('error', e => { clearTimeout(t); rej(new Error(`prover failed to start: ${e.message}`)) })
-    child.on('close', code => {
+    let out = ''
+    let err = ''
+    const t = setTimeout(() => {
+      child.kill('SIGKILL')
+      rej(new Error(`prover timed out after ${TIMEOUT_MS} ms`))
+    }, TIMEOUT_MS)
+    child.stdout.on('data', (d) => {
+      out += d
+    })
+    child.stderr.on('data', (d) => {
+      err += d
+    })
+    child.on('error', (e) => {
       clearTimeout(t)
-      if (code !== 0) return rej(new Error(`prover exited ${code}: ${err.split('\n').filter(l => /panicked|assert|error/i.test(l)).slice(-2).join(' ').slice(0, 300) || 'no detail'}`))
+      rej(new Error(`prover failed to start: ${e.message}`))
+    })
+    child.on('close', (code) => {
+      clearTimeout(t)
+      if (code !== 0)
+        return rej(
+          new Error(
+            `prover exited ${code}: ${
+              err
+                .split('\n')
+                .filter((l) => /panicked|assert|error/i.test(l))
+                .slice(-2)
+                .join(' ')
+                .slice(0, 300) || 'no detail'
+            }`
+          )
+        )
       res(out)
     })
     child.stdin.end(body)
@@ -57,7 +89,10 @@ function runProver (sub, body) {
 }
 
 const server = createServer(async (req, res) => {
-  const reply = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)) }
+  const reply = (code, obj) => {
+    res.writeHead(code, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(obj))
+  }
   if (req.method === 'GET' && req.url === '/health') return reply(200, { ok: true, bin: proverCommand('prove')[0] })
   if (req.method !== 'POST' || (req.url !== '/prove' && req.url !== '/prove-der')) return reply(404, { error: 'not found' })
   if (TOKEN) {
@@ -67,13 +102,23 @@ const server = createServer(async (req, res) => {
     return reply(500, { error: 'PROVER_TOKEN is required when binding a non-loopback address' })
   }
   let body = ''
-  req.on('data', c => { body += c; if (body.length > MAX_BODY) { req.destroy(); } })
+  req.on('data', (c) => {
+    body += c
+    if (body.length > MAX_BODY) {
+      req.destroy()
+    }
+  })
   req.on('end', async () => {
     try {
       const out = await runProver(req.url.slice(1), body)
-      res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(out)
-    } catch (e) { reply(502, { error: e.message }) }
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(out)
+    } catch (e) {
+      reply(502, { error: e.message })
+    }
   })
 })
 
-server.listen(PORT, HOST, () => console.log(`nektar prover-server on ${HOST}:${PORT} (bin: ${proverCommand('prove')[0]}${TOKEN ? ', token auth on' : ', NO TOKEN'})`))
+server.listen(PORT, HOST, () =>
+  console.log(`nektar prover-server on ${HOST}:${PORT} (bin: ${proverCommand('prove')[0]}${TOKEN ? ', token auth on' : ', NO TOKEN'})`)
+)

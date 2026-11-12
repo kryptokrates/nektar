@@ -26,7 +26,7 @@ const WOC = (process.env.SHIM_WOC ?? 'https://api.whatsonchain.com/v1/bsv/test')
 const CT = (process.env.SHIM_CHAINTRACKS ?? `${BCAST}/chaintracks/v2`).replace(/\/+$/, '')
 let rpcId = 0
 
-async function rpcOnce (method, ...params) {
+async function rpcOnce(method, ...params) {
   const res = await fetch(`${RPC}/`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', Authorization: AUTH },
@@ -44,14 +44,16 @@ async function rpcOnce (method, ...params) {
 
 // Teranode's legacy RPC fails transiently while the 2s-block rig churns —
 // retry transport/5xx-style failures (never a "not found" answer) a few times
-async function rpc (method, ...params) {
+async function rpc(method, ...params) {
   let last
   for (let t = 0; t < 6; t++) {
-    try { return await rpcOnce(method, ...params) } catch (e) {
+    try {
+      return await rpcOnce(method, ...params)
+    } catch (e) {
       if (e.code === -5 || e.code === -8) throw e
       last = e
       console.log(`${new Date().toISOString()} rpc ${method}${params.length ? ' ' + params : ''} retry ${t + 1}: ${String(e.message).slice(0, 160)}`)
-      await new Promise(r => setTimeout(r, 400 * (t + 1)))
+      await new Promise((r) => setTimeout(r, 400 * (t + 1)))
     }
   }
   throw last
@@ -59,13 +61,16 @@ async function rpc (method, ...params) {
 
 // WoC free tier is ~3 req/s — space reads and retry 429s; 404 answers undefined
 let wocLast = 0
-async function wocGet (path, retries = 3) {
+async function wocGet(path, retries = 3) {
   for (let i = 0; i <= retries; i++) {
     const wait = 350 - (Date.now() - wocLast)
-    if (wait > 0) await new Promise(r => setTimeout(r, wait))
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait))
     wocLast = Date.now()
     const r = await fetch(`${WOC}${path}`, { signal: AbortSignal.timeout(15_000) })
-    if (r.status === 429 && i < retries) { await new Promise(rs => setTimeout(rs, 1200 * (i + 1))); continue }
+    if (r.status === 429 && i < retries) {
+      await new Promise((rs) => setTimeout(rs, 1200 * (i + 1)))
+      continue
+    }
     if (r.status === 404 || r.status === 400) return undefined
     if (!r.ok) throw new Error(`woc ${path}: HTTP ${r.status}`)
     return await r.json()
@@ -74,17 +79,25 @@ async function wocGet (path, retries = 3) {
 }
 
 // bitcoin varint (BUMP leaf count/offset/block-height encoding)
-function varint (n) {
+function varint(n) {
   if (n < 0xfd) return [n]
   if (n <= 0xffff) return [0xfd, n & 0xff, n >> 8]
-  if (n <= 0xffffffff) { const b = Buffer.alloc(5); b[0] = 0xfe; b.writeUInt32LE(n, 1); return [...b] }
-  const b = Buffer.alloc(9); b[0] = 0xff; b.writeBigUInt64LE(BigInt(n), 1); return [...b]
+  if (n <= 0xffffffff) {
+    const b = Buffer.alloc(5)
+    b[0] = 0xfe
+    b.writeUInt32LE(n, 1)
+    return [...b]
+  }
+  const b = Buffer.alloc(9)
+  b[0] = 0xff
+  b.writeBigUInt64LE(BigInt(n), 1)
+  return [...b]
 }
 
 // TSC proof JSON → BUMP binary (sdk MerklePath.toWriter): nodes['*'] is an
 // odd-leaf self-pair (duplicate → flags 1, no hash); the level-0 working leaf
 // carries the txid flag (2). nodes may be null in a single-transaction block.
-function tscToBump (tsc, txid, blockHeight) {
+function tscToBump(tsc, txid, blockHeight) {
   const nodes = tsc.nodes ?? []
   let idx = nodes.length === 0 ? 0 : tsc.index
   const rows = []
@@ -92,9 +105,9 @@ function tscToBump (tsc, txid, blockHeight) {
     const row = []
     if (lvl === 0) row.push({ offset: idx, hash: txid, flags: 2 })
     const raw = nodes[lvl]
-    row.push(raw === '*' || raw === null
-      ? { offset: idx % 2 === 0 ? idx + 1 : idx - 1, flags: 1 }
-      : { offset: idx % 2 === 0 ? idx + 1 : idx - 1, hash: raw, flags: 0 })
+    row.push(
+      raw === '*' || raw === null ? { offset: idx % 2 === 0 ? idx + 1 : idx - 1, flags: 1 } : { offset: idx % 2 === 0 ? idx + 1 : idx - 1, hash: raw, flags: 0 }
+    )
     rows.push(row)
     idx = Math.floor(idx / 2)
   }
@@ -111,7 +124,7 @@ function tscToBump (tsc, txid, blockHeight) {
 }
 
 // live mode: txid → binary BUMP from the broadcaster, else the WoC TSC proof
-async function liveProof (txid) {
+async function liveProof(txid) {
   const r = await fetch(`${BCAST}/tx/${txid}`, { signal: AbortSignal.timeout(15_000) })
   if (r.ok) {
     const b = await r.json().catch(() => ({}))
@@ -126,7 +139,7 @@ async function liveProof (txid) {
 }
 
 // live mode: per-output spend view — one WoC /spent read per output
-async function liveUtxos (txid) {
+async function liveUtxos(txid) {
   const t = await wocGet(`/tx/hash/${txid}`)
   if (t === undefined) return undefined
   const n = Array.isArray(t.vout) ? t.vout.length : 0
@@ -148,13 +161,18 @@ const json = (res, code, body) => {
   res.end(b)
 }
 
-async function handle (req, res) {
+async function handle(req, res) {
   const url = new URL(req.url ?? '/', 'http://x')
-  if (req.method !== 'GET') { json(res, 405, { error: 'method' }); return }
+  if (req.method !== 'GET') {
+    json(res, 405, { error: 'method' })
+    return
+  }
   try {
     if (url.pathname === '/v1/tip') {
       if (MODE === 'live') {
-        const h = await fetch(`${CT}/height`, { signal: AbortSignal.timeout(15_000) }).then(r => r.ok ? r.json() : undefined).catch(() => undefined)
+        const h = await fetch(`${CT}/height`, { signal: AbortSignal.timeout(15_000) })
+          .then((r) => (r.ok ? r.json() : undefined))
+          .catch(() => undefined)
         const height = h?.height ?? (await wocGet('/chain/info'))?.blocks
         if (height === undefined) throw new Error('no header source answered')
         json(res, 200, { height })
@@ -168,17 +186,25 @@ async function handle (req, res) {
     if (m !== null) {
       const h = Number(m[1])
       if (MODE === 'live') {
-        const b = await fetch(`${CT}/header/height/${h}`, { signal: AbortSignal.timeout(15_000) }).then(r => r.ok ? r.json() : undefined).catch(() => undefined)
+        const b = await fetch(`${CT}/header/height/${h}`, { signal: AbortSignal.timeout(15_000) })
+          .then((r) => (r.ok ? r.json() : undefined))
+          .catch(() => undefined)
         const root = b?.merkleRoot ?? (await wocGet(`/block/height/${h}`))?.merkleroot
-        if (root === undefined) { json(res, 404, { error: 'unknown height' }); return }
+        if (root === undefined) {
+          json(res, 404, { error: 'unknown height' })
+          return
+        }
         json(res, 200, { merkleRoot: root })
         return
       }
-      const hash = await rpc('getblockhash', h).catch(e => {
+      const hash = await rpc('getblockhash', h).catch((e) => {
         if (e.code === -5 || e.code === -8) return undefined
         throw e
       })
-      if (hash === undefined) { json(res, 404, { error: 'unknown height' }); return }
+      if (hash === undefined) {
+        json(res, 404, { error: 'unknown height' })
+        return
+      }
       const hd = await rpc('getblockheader', hash)
       json(res, 200, { merkleRoot: hd.merkleroot })
       return
@@ -186,14 +212,21 @@ async function handle (req, res) {
     m = /^\/api\/v1\/merkle_proof\/([0-9a-fA-F]{64})$/.exec(url.pathname)
     if (m !== null && MODE === 'live') {
       const bump = await liveProof(m[1])
-      if (bump === undefined) { json(res, 404, { error: 'no proof' }); return }
-      res.writeHead(200, { 'content-type': 'application/octet-stream' }); res.end(bump)
+      if (bump === undefined) {
+        json(res, 404, { error: 'no proof' })
+        return
+      }
+      res.writeHead(200, { 'content-type': 'application/octet-stream' })
+      res.end(bump)
       return
     }
     m = /^\/api\/v1\/utxos\/([0-9a-fA-F]{64})\/json$/.exec(url.pathname)
     if (m !== null && MODE === 'live') {
       const outs = await liveUtxos(m[1])
-      if (outs === undefined) { json(res, 404, { error: 'unknown tx' }); return }
+      if (outs === undefined) {
+        json(res, 404, { error: 'unknown tx' })
+        return
+      }
       json(res, 200, outs)
       return
     }
@@ -210,5 +243,13 @@ async function handle (req, res) {
   }
 }
 
-createServer((req, res) => { handle(req, res).catch(() => { try { res.writeHead(500); res.end() } catch { /* closed */ } }) })
-  .listen(PORT, () => console.log(`header-shim on :${PORT} mode=${MODE} -> ${MODE === 'live' ? `${CT} / ${WOC}` : `${RPC} / ${ASSET}`}`))
+createServer((req, res) => {
+  handle(req, res).catch(() => {
+    try {
+      res.writeHead(500)
+      res.end()
+    } catch {
+      /* closed */
+    }
+  })
+}).listen(PORT, () => console.log(`header-shim on :${PORT} mode=${MODE} -> ${MODE === 'live' ? `${CT} / ${WOC}` : `${RPC} / ${ASSET}`}`))

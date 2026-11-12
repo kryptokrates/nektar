@@ -10,12 +10,15 @@ export * from './anchor.js'
 export * from './ontology.js'
 export * from './owlrl.js'
 import { dsha256, utf8 } from '@nektar/core'
-import { Datalog, type Fact, type Literal, type Rule } from '@nektar/datalog'
+import { Datalog, type Fact, type Rule } from '@nektar/datalog'
 
 export class GraphError extends Error {}
 
 export type VertexKind = 'episode' | 'axiom' | 'empirical' | 'derived' | 'refinement'
-export interface VertexTime { logPos: number, height?: number }
+export interface VertexTime {
+  logPos: number
+  height?: number
+}
 export interface Vertex {
   kind: VertexKind
   phi: string // canonical literal for non-episode kinds; verbatim text for episode
@@ -25,14 +28,19 @@ export interface Vertex {
   h: string // dsha256(phi‖σ‖t‖context)
   refines?: string // set on refinement vertices
 }
-export interface Edge { from: string, to: string, rule: string, e: string }
+export interface Edge {
+  from: string
+  to: string
+  rule: string
+  e: string
+}
 const cat = (...xs: string[]) => xs.join('|')
 
-function vhash (phi: string, sigma: string[], t: VertexTime, context: string[]): string {
+function vhash(phi: string, sigma: string[], t: VertexTime, context: string[]): string {
   const ser = `${phi}|${sigma.join(',')}|${t.logPos}:${t.height ?? ''}|${context.join(',')}`
   return Buffer.from(dsha256(utf8(ser))).toString('hex')
 }
-export function signMaterial (phi: string, t: VertexTime, context: string[]): Uint8Array {
+export function signMaterial(phi: string, t: VertexTime, context: string[]): Uint8Array {
   return dsha256(utf8(`${phi}|${t.logPos}:${t.height ?? ''}|${context.join(',')}`))
 }
 
@@ -41,23 +49,26 @@ export class AORGraph {
   readonly edges: Edge[] = []
   private catalogue: Map<string, Rule>
   private invalidAt = new Map<string, number>()
-  constructor (catalogue: Rule[]) {
-    this.catalogue = new Map(catalogue.map(r => [r.id, r]))
+  constructor(catalogue: Rule[]) {
+    this.catalogue = new Map(catalogue.map((r) => [r.id, r]))
   }
 
-  private ancestors (h: string, out = new Set<string>()): Set<string> {
+  private ancestors(h: string, out = new Set<string>()): Set<string> {
     if (out.has(h)) return out
     out.add(h)
     for (const e of this.edges) if (e.to === h) this.ancestors(e.from, out)
     return out
   }
-  private contradicts (a: string, b: string): boolean {
-    return (a === `neg_${b}`) || (b === `neg_${a}`) ||
+  private contradicts(a: string, b: string): boolean {
+    return (
+      a === `neg_${b}` ||
+      b === `neg_${a}` ||
       (a.startsWith('permit(') && b.startsWith('deny(') && a.slice(7) === b.slice(4)) ||
       (b.startsWith('permit(') && a.startsWith('deny(') && b.slice(7) === a.slice(4))
+    )
   }
 
-  append (v: Omit<Vertex, 'h'>, premises: string[], ruleId?: string): Vertex {
+  append(v: Omit<Vertex, 'h'>, premises: string[], ruleId?: string): Vertex {
     // acyclicity: premises must exist, no self-ref
     for (const p of premises) {
       if (!this.vertices.has(p)) throw new GraphError(`unknown premise ${p.slice(0, 12)}`)
@@ -88,14 +99,21 @@ export class AORGraph {
       const rule = ruleId && this.catalogue.get(ruleId)
       if (!rule) throw new GraphError(`unjustified: rule '${ruleId}' not in catalogue`)
       const dl = new Datalog([rule, ...this.catalogue.values()])
-      const premFacts: Fact[] = premises.map(p => {
+      const premFacts: Fact[] = premises.map((p) => {
         const pv = this.vertices.get(p)!
         const lit = pv.phi.match(/^([a-z][a-zA-Z0-9_-]*)\((.*)\)$/)!
-        return { pred: lit[1]!, args: lit[2]!.split(',').map(a => a.trim()) }
+        return { pred: lit[1]!, args: lit[2]!.split(',').map((a) => a.trim()) }
       })
       const facts = dl.run(premFacts)
       const goal = v.phi.match(/^([a-z][a-zA-Z0-9_-]*)\((.*)\)$/)!
-      if (!facts.has(`${goal[1]}(${goal[2]!.split(',').map(a => a.trim()).join(',')})`)) {
+      if (
+        !facts.has(
+          `${goal[1]}(${goal[2]!
+            .split(',')
+            .map((a) => a.trim())
+            .join(',')})`
+        )
+      ) {
         throw new GraphError(`unjustified: rule '${ruleId}' does not derive '${v.phi}'`)
       }
       // traceability: the transitive closure over this vertex's premises must
@@ -124,16 +142,21 @@ export class AORGraph {
   }
 
   /** valid facts at logical time t (refinements invalidate from invalid_at) */
-  currentView (atT = Infinity): Vertex[] {
-    return [...this.vertices.values()].filter(v => { const iv = this.invalidAt.get(v.h); return iv === undefined || iv > atT })
+  currentView(atT = Infinity): Vertex[] {
+    return [...this.vertices.values()].filter((v) => {
+      const iv = this.invalidAt.get(v.h)
+      return iv === undefined || iv > atT
+    })
   }
-  history (h: string): Vertex | undefined { return this.vertices.get(h) }
+  history(h: string): Vertex | undefined {
+    return this.vertices.get(h)
+  }
 
   /** subgraph scoping G_i^k: vertices sharing ≥1 context with Ψ, closed under edges */
-  instance (psi: string[]): Set<string> {
+  instance(psi: string[]): Set<string> {
     const out = new Set<string>()
     for (const v of this.vertices.values()) {
-      if (v.context.some(c => psi.includes(c))) out.add(v.h)
+      if (v.context.some((c) => psi.includes(c))) out.add(v.h)
     }
     // closure: include ancestors of selected vertices
     for (const h of [...out]) for (const a of this.ancestors(h)) out.add(a)
@@ -141,10 +164,12 @@ export class AORGraph {
   }
 
   /** Metanet-compatible head export (AOR-011) */
-  metanetHead (nodeKey: string, parentTxid: string, txid: string) {
+  metanetHead(nodeKey: string, parentTxid: string, txid: string) {
     return { protocol: 'meta', nodeKey, parentTxid, txid }
   }
 
   /** reverse citation index hook (STO-005): h → citing vertex hashes */
-  citing (h: string): string[] { return this.edges.filter(e => e.from === h).map(e => e.to) }
+  citing(h: string): string[] {
+    return this.edges.filter((e) => e.from === h).map((e) => e.to)
+  }
 }

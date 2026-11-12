@@ -2763,16 +2763,7 @@
             "value": {
               "kind": "call",
               "func": "super",
-              "args": [
-                "t0",
-                "t1",
-                "t2",
-                "t3",
-                "t4",
-                "t5",
-                "t6",
-                "t7"
-              ]
+              "args": ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3068,9 +3059,7 @@
             "value": {
               "kind": "call",
               "func": "hash160",
-              "args": [
-                "t5"
-              ]
+              "args": ["t5"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3146,10 +3135,7 @@
             "value": {
               "kind": "call",
               "func": "checkSig",
-              "args": [
-                "t10",
-                "t11"
-              ]
+              "args": ["t10", "t11"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3234,10 +3220,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t17",
-                "t18"
-              ]
+              "args": ["t17", "t18"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3250,10 +3233,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t16",
-                "t19"
-              ]
+              "args": ["t16", "t19"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3266,10 +3246,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t15",
-                "t20"
-              ]
+              "args": ["t15", "t20"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3282,10 +3259,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t14",
-                "t21"
-              ]
+              "args": ["t14", "t21"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3298,9 +3272,7 @@
             "value": {
               "kind": "call",
               "func": "hash256",
-              "args": [
-                "t22"
-              ]
+              "args": ["t22"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3435,15 +3407,7 @@
             "value": {
               "kind": "add_output",
               "satoshis": "t24",
-              "stateValues": [
-                "t27",
-                "t28",
-                "t29",
-                "newRp",
-                "t30",
-                "t31",
-                "t32"
-              ],
+              "stateValues": ["t27", "t28", "t29", "newRp", "t30", "t31", "t32"],
               "preimage": ""
             },
             "sourceLoc": {
@@ -3471,10 +3435,7 @@
             "value": {
               "kind": "call",
               "func": "buildChangeOutput",
-              "args": [
-                "t34",
-                "t35"
-              ]
+              "args": ["t34", "t35"]
             }
           },
           {
@@ -3482,10 +3443,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t33",
-                "t36"
-              ]
+              "args": ["t33", "t36"]
             }
           },
           {
@@ -3493,9 +3451,7 @@
             "value": {
               "kind": "call",
               "func": "hash256",
-              "args": [
-                "t37"
-              ]
+              "args": ["t37"]
             }
           },
           {
@@ -3510,9 +3466,7 @@
             "value": {
               "kind": "call",
               "func": "extractOutputHash",
-              "args": [
-                "t39"
-              ]
+              "args": ["t39"]
             }
           },
           {
@@ -3616,9 +3570,7 @@
             "value": {
               "kind": "call",
               "func": "hash160",
-              "args": [
-                "t5"
-              ]
+              "args": ["t5"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3694,10 +3646,7 @@
             "value": {
               "kind": "call",
               "func": "checkSig",
-              "args": [
-                "t10",
-                "t11"
-              ]
+              "args": ["t10", "t11"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3818,15 +3767,7 @@
             "value": {
               "kind": "add_output",
               "satoshis": "t14",
-              "stateValues": [
-                "t15",
-                "t16",
-                "t17",
-                "t18",
-                "t19",
-                "t20",
-                "t21"
-              ],
+              "stateValues": ["t15", "t16", "t17", "t18", "t19", "t20", "t21"],
               "preimage": ""
             },
             "sourceLoc": {
@@ -3854,10 +3795,7 @@
             "value": {
               "kind": "call",
               "func": "buildChangeOutput",
-              "args": [
-                "t23",
-                "t24"
-              ]
+              "args": ["t23", "t24"]
             }
           },
           {
@@ -3865,10 +3803,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t22",
-                "t25"
-              ]
+              "args": ["t22", "t25"]
             }
           },
           {
@@ -3876,9 +3811,7 @@
             "value": {
               "kind": "call",
               "func": "hash256",
-              "args": [
-                "t26"
-              ]
+              "args": ["t26"]
             }
           },
           {
@@ -3893,9 +3826,7 @@
             "value": {
               "kind": "call",
               "func": "extractOutputHash",
-              "args": [
-                "t28"
-              ]
+              "args": ["t28"]
             }
           },
           {
@@ -3921,8 +3852,5 @@
     ]
   },
   "codeSeparatorIndex": 477,
-  "codeSeparatorIndices": [
-    6,
-    477
-  ]
+  "codeSeparatorIndices": [6, 477]
 }

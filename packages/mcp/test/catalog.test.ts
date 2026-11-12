@@ -9,12 +9,18 @@ import { callTool } from '../src/server.js'
 import { createHttpApi } from '../src/http.js'
 import type { AddressInfo } from 'node:net'
 
-function setup (opts: NektarMemoryOptions = {}) {
-  const chain = new MockChain(); chain.verifyScripts = true
-  const funder = new MockFunder(); funder.topup(50)
+function setup(opts: NektarMemoryOptions = {}) {
+  const chain = new MockChain()
+  chain.verifyScripts = true
+  const funder = new MockFunder()
+  funder.topup(50)
   for (const t of funder.parents) chain.registerParent(t)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
-  const settle = (shard: string) => { chain.mine(1); const l = mem.tailLink(shard); if (l) mem.confirmAnchor(shard, l.txid) }
+  const settle = (shard: string) => {
+    chain.mine(1)
+    const l = mem.tailLink(shard)
+    if (l) mem.confirmAnchor(shard, l.txid)
+  }
   return { chain, funder, mem, settle }
 }
 
@@ -49,11 +55,16 @@ test('describeShard: unknown/system shards and junk tags refused; latest wins', 
 test('describeShard via tool + /.well-known/nektar projects domains/offers/shardId', async (t) => {
   const { mem } = setup()
   await mem.remember('ball', 'Metz beat Lyon 2-1')
-  const out = await callTool(mem, 'describeShard', { shard: 'ball', domains: ['soccer'], desc: 'football', offers: [{ kind: 'pack' }, { kind: 'record', seq: 0, priceSats: 500 }] })
+  const out = await callTool(mem, 'describeShard', {
+    shard: 'ball',
+    domains: ['soccer'],
+    desc: 'football',
+    offers: [{ kind: 'pack' }, { kind: 'record', seq: 0, priceSats: 500 }]
+  })
   assert.equal(out.manifest.shardId.length, 40)
 
   const api = createHttpApi(mem)
-  await new Promise<void>(res => api.listen(0, res))
+  await new Promise<void>((res) => api.listen(0, res))
   t.after(() => api.close())
   const port = (api.address() as AddressInfo).port
   const doc = await (await fetch(`http://localhost:${port}/.well-known/nektar`)).json()
@@ -97,9 +108,13 @@ test('contentPrice: manifest offers drive external read/pack pricing', async () 
   const { mem } = setup()
   await mem.remember('ball', 'x')
   assert.equal(await mem.contentPrice('ball', 'read'), 0, 'no manifest → free')
-  await mem.describeShard('ball', { domains: ['soccer'], offers: [{ kind: 'answer', priceSats: 300 }, { kind: 'pack', priceSats: 2000 }] })
+  await mem.describeShard('ball', {
+    domains: ['soccer'],
+    offers: [
+      { kind: 'answer', priceSats: 300 },
+      { kind: 'pack', priceSats: 2000 }
+    ]
+  })
   assert.equal(await mem.contentPrice('ball', 'read'), 300)
   assert.equal(await mem.contentPrice('ball', 'pack'), 2000)
 })
-
-

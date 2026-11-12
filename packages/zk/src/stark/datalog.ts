@@ -32,21 +32,42 @@ export interface ZkDerivationProof {
   receipt: Uint8Array // RISC Zero succinct receipt (one ZK-STARK), bincode
 }
 
-const u32 = (v: number) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b }
+const u32 = (v: number) => {
+  const b = new Uint8Array(4)
+  new DataView(b.buffer).setUint32(0, v, true)
+  return b
+}
 
-export function encodeZkder (p: ZkDerivationProof): Uint8Array {
+export function encodeZkder(p: ZkDerivationProof): Uint8Array {
   const alg = p.algorithm ?? ALG_SHA256D
   if (alg !== ALG_SHA256D) throw new ZkdCodecError(`unsupported algorithm ${alg}`)
-  for (const [k, v] of [['imageId', p.imageId], ['policyRoot', p.policyRoot], ['conclusionHash', p.conclusionHash], ['queryId', p.queryId]] as const) if (v.length !== 32) throw new ZkdCodecError(`${k} must be 32 bytes`)
+  for (const [k, v] of [
+    ['imageId', p.imageId],
+    ['policyRoot', p.policyRoot],
+    ['conclusionHash', p.conclusionHash],
+    ['queryId', p.queryId]
+  ] as const)
+    if (v.length !== 32) throw new ZkdCodecError(`${k} must be 32 bytes`)
   if (p.receipt.length === 0 || p.receipt.length > ZKD3_MAX_RECEIPT) throw new ZkdCodecError('receipt length out of range')
   const out = new Uint8Array(HEADER + p.receipt.length)
   let o = 0
-  const put = (b: Uint8Array) => { out.set(b, o); o += b.length }
-  put(ZKD3_MAGIC); put(Uint8Array.of(ZKD3_VERSION)); put(Uint8Array.of(alg)); put(p.imageId); put(p.policyRoot); put(p.conclusionHash); put(p.queryId); put(u32(p.receipt.length)); put(p.receipt)
+  const put = (b: Uint8Array) => {
+    out.set(b, o)
+    o += b.length
+  }
+  put(ZKD3_MAGIC)
+  put(Uint8Array.of(ZKD3_VERSION))
+  put(Uint8Array.of(alg))
+  put(p.imageId)
+  put(p.policyRoot)
+  put(p.conclusionHash)
+  put(p.queryId)
+  put(u32(p.receipt.length))
+  put(p.receipt)
   return out
 }
 
-export function decodeZkder (b: Uint8Array): ZkDerivationProof {
+export function decodeZkder(b: Uint8Array): ZkDerivationProof {
   if (b.length < HEADER_V1) throw new ZkdCodecError('truncated header')
   for (let i = 0; i < 4; i++) if (b[i] !== ZKD3_MAGIC[i]) throw new ZkdCodecError('bad magic (not L_ZKDer v3)')
   const ver = b[4]!
@@ -60,7 +81,14 @@ export function decodeZkder (b: Uint8Array): ZkDerivationProof {
   const len = dv.getUint32(header - 4, true)
   if (len === 0 || len > ZKD3_MAX_RECEIPT) throw new ZkdCodecError('receipt length out of range')
   if (b.length !== header + len) throw new ZkdCodecError(b.length < header + len ? 'truncated receipt' : 'trailing bytes')
-  return { algorithm: alg, imageId: b.slice(5 + off, 37 + off), policyRoot: b.slice(37 + off, 69 + off), conclusionHash: b.slice(69 + off, 101 + off), queryId: b.slice(101 + off, 133 + off), receipt: b.slice(header) }
+  return {
+    algorithm: alg,
+    imageId: b.slice(5 + off, 37 + off),
+    policyRoot: b.slice(37 + off, 69 + off),
+    conclusionHash: b.slice(69 + off, 101 + off),
+    queryId: b.slice(101 + off, 133 + off),
+    receipt: b.slice(header)
+  }
 }
 
 // ── verification (off-chain WASM risc0 verifier; pure: bytes → journal) ──
@@ -68,24 +96,36 @@ const require = createRequire(import.meta.url)
 const wasm = require('../../../stark/verifier.js') as { verify: (receipt: Uint8Array, imageId: Uint8Array) => string }
 
 /** the derivation program identity nektar trusts (built by `pnpm stark:build`) */
-export const PINNED_DATALOG_IMAGE_ID: string = JSON.parse(readFileSync(fileURLToPath(new URL('../../../stark/image-id.json', import.meta.url)), 'utf8')).datalogImageId
+export const PINNED_DATALOG_IMAGE_ID: string = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../../../stark/image-id.json', import.meta.url)), 'utf8')
+).datalogImageId
 
-export interface DerJournal { version: number, policyRoot: string, conclusionHash: string, queryId: string }
-export type DerVerdict = { ok: true, journal: DerJournal, proof: ZkDerivationProof } | { ok: false, reason: string }
+export interface DerJournal {
+  version: number
+  policyRoot: string
+  conclusionHash: string
+  queryId: string
+}
+export type DerVerdict = { ok: true; journal: DerJournal; proof: ZkDerivationProof } | { ok: false; reason: string }
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 
 /** decode L_ZKDer v3, check the pinned datalog image id, verify the ZK-STARK
  *  and require header == journal. policyRoot/queryId checks are the caller's. */
-export function verifyZkder (bytes: Uint8Array, pinnedImageId = PINNED_DATALOG_IMAGE_ID): DerVerdict {
+export function verifyZkder(bytes: Uint8Array, pinnedImageId = PINNED_DATALOG_IMAGE_ID): DerVerdict {
   let p: ZkDerivationProof
-  try { p = decodeZkder(bytes) } catch (e) { return { ok: false, reason: e instanceof ZkdCodecError ? `codec: ${e.message}` : 'codec error' } }
+  try {
+    p = decodeZkder(bytes)
+  } catch (e) {
+    return { ok: false, reason: e instanceof ZkdCodecError ? `codec: ${e.message}` : 'codec error' }
+  }
   if (hex(p.imageId) !== pinnedImageId) return { ok: false, reason: 'image id is not the pinned nektar derivation program' }
-  const r = JSON.parse(wasm.verify(p.receipt, p.imageId)) as { ok: boolean, journal?: DerJournal, error?: string }
+  const r = JSON.parse(wasm.verify(p.receipt, p.imageId)) as { ok: boolean; journal?: DerJournal; error?: string }
   if (!r.ok || !r.journal) return { ok: false, reason: `stark: ${r.error ?? 'invalid'}` }
   const j = r.journal
   if (j.version !== 1) return { ok: false, reason: `journal version ${j.version}` }
-  if (j.policyRoot !== hex(p.policyRoot) || j.conclusionHash !== hex(p.conclusionHash) || j.queryId !== hex(p.queryId)) return { ok: false, reason: 'header does not match the proven journal' }
+  if (j.policyRoot !== hex(p.policyRoot) || j.conclusionHash !== hex(p.conclusionHash) || j.queryId !== hex(p.queryId))
+    return { ok: false, reason: 'header does not match the proven journal' }
   return { ok: true, journal: j, proof: p }
 }
 
@@ -93,12 +133,12 @@ export function verifyZkder (bytes: Uint8Array, pinnedImageId = PINNED_DATALOG_I
  * bound verifier: journal.policyRoot must be the verifier's anchored policy
  * root (never read from the proof) and the queryId one the verifier issued.
  */
-export function verifyDerivationBound (
+export function verifyDerivationBound(
   bytes: Uint8Array,
   queries: { consume: (queryIdHex: string) => boolean },
   expectedPolicyRoot: string,
   pinnedImageId = PINNED_DATALOG_IMAGE_ID
-): { ok: boolean, reason?: string, journal?: DerJournal } {
+): { ok: boolean; reason?: string; journal?: DerJournal } {
   if (!/^[0-9a-f]{64}$/.test(expectedPolicyRoot)) return { ok: false, reason: 'no anchored policy root configured' }
   const v = verifyZkder(bytes, pinnedImageId)
   if (!v.ok) return { ok: false, reason: v.reason }
@@ -108,13 +148,18 @@ export function verifyDerivationBound (
 }
 
 // ── proving (local only: the prover sees the private path + fact contents) ──
-export interface DerStepInputWire { fact: { pred: string, args: string[] }, fromStep: number | null, committedIndex?: number | null, committedSiblings?: string[] }
+export interface DerStepInputWire {
+  fact: { pred: string; args: string[] }
+  fromStep: number | null
+  committedIndex?: number | null
+  committedSiblings?: string[]
+}
 export interface DerStepWire {
-  rule: { id: string, layer: string, head: { pred: string, args: string[], neg: boolean }, body: Array<{ pred: string, args: string[], neg: boolean }> }
+  rule: { id: string; layer: string; head: { pred: string; args: string[]; neg: boolean }; body: Array<{ pred: string; args: string[]; neg: boolean }> }
   ruleIndex: number
   ruleSiblings: string[]
   inputs: DerStepInputWire[]
-  output: { pred: string, args: string[] }
+  output: { pred: string; args: string[] }
 }
 export interface ProveDerivationInput {
   nodeCount: number // total committed DAG nodes the policy root covers
@@ -124,42 +169,98 @@ export interface ProveDerivationInput {
 }
 const unhex = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
 
-function proverCommand (): [string, string[]] {
+function proverCommand(): [string, string[]] {
   const bin = process.env.NEKTAR_STARK_PROVER
   if (bin) return [bin, ['prove-der']]
-  return ['docker', ['run', '--rm', '-i', '-v', `${process.env.NEKTAR_STARK_TARGET_VOLUME ?? 'nektar-stark-target'}:/work/target`, process.env.NEKTAR_STARK_IMAGE ?? 'nektar-stark-build', '/work/target/release/nektar-stark', 'prove-der']]
+  return [
+    'docker',
+    [
+      'run',
+      '--rm',
+      '-i',
+      '-v',
+      `${process.env.NEKTAR_STARK_TARGET_VOLUME ?? 'nektar-stark-target'}:/work/target`,
+      process.env.NEKTAR_STARK_IMAGE ?? 'nektar-stark-build',
+      '/work/target/release/nektar-stark',
+      'prove-der'
+    ]
+  ]
 }
 
 /** prove a §14 committed derivation path and return L_ZKDer v3 bytes */
-export async function proveDerivationStark (inp: ProveDerivationInput, timeoutMs = Number(process.env.NEKTAR_STARK_TIMEOUT_MS ?? 300_000)): Promise<{ bytes: Uint8Array, ms: number, policyRoot: string, conclusionHash: string }> {
+export async function proveDerivationStark(
+  inp: ProveDerivationInput,
+  timeoutMs = Number(process.env.NEKTAR_STARK_TIMEOUT_MS ?? 300_000)
+): Promise<{ bytes: Uint8Array; ms: number; policyRoot: string; conclusionHash: string }> {
   const payload = JSON.stringify({
     nodeCount: inp.nodeCount,
     policyRoot: hex(inp.policyRoot),
     queryId: hex(inp.queryId),
-    steps: inp.steps.map(s => ({
+    steps: inp.steps.map((s) => ({
       rule: s.rule,
       ruleIndex: s.ruleIndex,
       ruleSiblings: s.ruleSiblings,
-      inputs: s.inputs.map(i => ({ fact: i.fact, fromStep: i.fromStep, committedIndex: i.committedIndex ?? null, committedSiblings: i.committedSiblings ?? [] })),
+      inputs: s.inputs.map((i) => ({
+        fact: i.fact,
+        fromStep: i.fromStep,
+        committedIndex: i.committedIndex ?? null,
+        committedSiblings: i.committedSiblings ?? []
+      })),
       output: s.output
     }))
   })
-  const out = proverUrl() ? await remoteProve(payload, 'prove-der', timeoutMs) : await new Promise<string>((resolve, reject) => {
-    const [cmd, args] = proverCommand()
-    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, MSYS_NO_PATHCONV: '1' } })
-    let so = ''; let se = ''
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new StarkProverError(`prover timed out after ${timeoutMs} ms`)) }, timeoutMs)
-    child.stdout.on('data', d => { so += d })
-    child.stderr.on('data', d => { se += d })
-    child.on('error', e => { clearTimeout(timer); reject(new StarkProverError(`prover failed to start: ${e.message}`)) })
-    child.on('close', code => {
-      clearTimeout(timer)
-      if (code !== 0) reject(new StarkProverError(`prover refused (exit ${code}): ${se.split('\n').filter(l => /panicked|assert|error/i.test(l)).slice(-2).join(' ').slice(0, 300) || 'no detail'}`))
-      else resolve(so)
-    })
-    child.stdin.end(payload)
+  const out = proverUrl()
+    ? await remoteProve(payload, 'prove-der', timeoutMs)
+    : await new Promise<string>((resolve, reject) => {
+        const [cmd, args] = proverCommand()
+        const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, MSYS_NO_PATHCONV: '1' } })
+        let so = ''
+        let se = ''
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL')
+          reject(new StarkProverError(`prover timed out after ${timeoutMs} ms`))
+        }, timeoutMs)
+        child.stdout.on('data', (d) => {
+          so += d
+        })
+        child.stderr.on('data', (d) => {
+          se += d
+        })
+        child.on('error', (e) => {
+          clearTimeout(timer)
+          reject(new StarkProverError(`prover failed to start: ${e.message}`))
+        })
+        child.on('close', (code) => {
+          clearTimeout(timer)
+          if (code !== 0)
+            reject(
+              new StarkProverError(
+                `prover refused (exit ${code}): ${
+                  se
+                    .split('\n')
+                    .filter((l) => /panicked|assert|error/i.test(l))
+                    .slice(-2)
+                    .join(' ')
+                    .slice(0, 300) || 'no detail'
+                }`
+              )
+            )
+          else resolve(so)
+        })
+        child.stdin.end(payload)
+      })
+  const r = JSON.parse(out.trim().split('\n').pop()!) as {
+    receipt: string
+    imageId: string
+    ms: number
+    journal: { policyRoot: string; conclusionHash: string; queryId: string }
+  }
+  const bytes = encodeZkder({
+    imageId: unhex(r.imageId),
+    policyRoot: unhex(r.journal.policyRoot),
+    conclusionHash: unhex(r.journal.conclusionHash),
+    queryId: unhex(r.journal.queryId),
+    receipt: unhex(r.receipt)
   })
-  const r = JSON.parse(out.trim().split('\n').pop()!) as { receipt: string, imageId: string, ms: number, journal: { policyRoot: string, conclusionHash: string, queryId: string } }
-  const bytes = encodeZkder({ imageId: unhex(r.imageId), policyRoot: unhex(r.journal.policyRoot), conclusionHash: unhex(r.journal.conclusionHash), queryId: unhex(r.journal.queryId), receipt: unhex(r.receipt) })
   return { bytes, ms: r.ms, policyRoot: r.journal.policyRoot, conclusionHash: r.journal.conclusionHash }
 }

@@ -4,11 +4,8 @@ import { PrivateKey } from '@bsv/sdk'
 import { MockChain, MockFunder } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { BatchLog, MemoryShardStore } from '@nektar/log'
-import { dsha256, utf8 } from '@nektar/core'
-import {
-  canonicalizePolicySet, parseCheck, authorize, proveLevelIsolation,
-  makeReceipt, receiptMatchesAnchor, NEKTAR_SCHEMA
-} from '../src/index.js'
+import { utf8 } from '@nektar/core'
+import { canonicalizePolicySet, parseCheck, authorize, proveLevelIsolation, makeReceipt, receiptMatchesAnchor } from '../src/index.js'
 
 const POLICY = `
 permit(principal is Agent, action == Action::"read", resource is Fragment)
@@ -51,7 +48,8 @@ test('cedar: ALLOW/DENY decisions + level isolation (bounded exhaustive)', () =>
 
 test('cedar: policy set + receipts anchored via AnchorChain', async () => {
   const chain = new MockChain()
-  const f = new MockFunder(); f.topup(6)
+  const f = new MockFunder()
+  f.topup(6)
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
   const ac = new AnchorChain('policy', f.keyPair, f, f.keyPair, chain)
   const ps = canonicalizePolicySet('p1', POLICY)
@@ -64,7 +62,13 @@ test('cedar: policy set + receipts anchored via AnchorChain', async () => {
   const anchoredHash = ps.hash // the anchored commitment
   // a receipt must match the anchored hash
   const d = authorize(ps.text, { type: 'Agent', id: 'a', level: 3 }, 'read', { type: 'Fragment', id: 'f', attrs: { level: 2, shard: 's', class: 'c' } })
-  const r = makeReceipt({ type: 'Agent', id: 'a', level: 3 }, 'read', { type: 'Fragment', id: 'f', attrs: { level: 2, shard: 's', class: 'c' } }, ps, d.allow ? 'Allow' : 'Deny')
+  const r = makeReceipt(
+    { type: 'Agent', id: 'a', level: 3 },
+    'read',
+    { type: 'Fragment', id: 'f', attrs: { level: 2, shard: 's', class: 'c' } },
+    ps,
+    d.allow ? 'Allow' : 'Deny'
+  )
   assert.equal(r.decision, 'Allow')
   assert.equal(receiptMatchesAnchor(r, anchoredHash), true)
   // a decision receipt against a DIFFERENT policy hash is refused
@@ -84,5 +88,9 @@ test('cedar: DENY-policy bypass attempt is refused', () => {
   // a bypass attempt would mint a forged Allow receipt — it still fails the
   // anchored-hash check when the policy hash is different OR decision forged:
   const bypassed = { ...r, decision: 'Allow' as const }
-  assert.equal(bypassed.decision === 'Allow' && receiptMatchesAnchor(bypassed, ps.hash), true, 'hash matches but the DECISION itself came from Cedar DENY — caller must honor d.allow')
+  assert.equal(
+    bypassed.decision === 'Allow' && receiptMatchesAnchor(bypassed, ps.hash),
+    true,
+    'hash matches but the DECISION itself came from Cedar DENY — caller must honor d.allow'
+  )
 })

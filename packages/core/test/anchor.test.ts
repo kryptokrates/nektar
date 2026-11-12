@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chainRp, expectedRp, GENESIS_PREV_RP } from '../src/anchor.js'
-import { dsha256, eq, u64le } from '../src/hash.js'
+import { dsha256, eq } from '../src/hash.js'
 
 test("anchor: R' chain = H(R'prev | R | size_le8)", () => {
   const R0 = dsha256(new TextEncoder().encode('b0'))

@@ -23,8 +23,8 @@
 // This is binding-equivalent to H(s‖p‖o‖l): no element can be swapped
 // without changing the derived key.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
-import { PrivateKey, PublicKey, KeyDeriver } from '@bsv/sdk'
-import { sha256, concat, utf8, toHex, type Bytes } from '@nektar/core'
+import { PrivateKey, KeyDeriver } from '@bsv/sdk'
+import { sha256, concat, utf8, type Bytes } from '@nektar/core'
 
 export interface FragmentContext {
   t: string // tenant
@@ -35,9 +35,9 @@ export interface FragmentContext {
 }
 
 /** canonical keyID: t‖ψ‖ρ‖π‖l with |-separator and length prefixing */
-export function canonicalKeyID (c: FragmentContext): string {
+export function canonicalKeyID(c: FragmentContext): string {
   const parts = [c.t, c.psi, c.rho, c.pi, String(c.l)]
-  return parts.map(p => `${p.length}:${p}`).join('|')
+  return parts.map((p) => `${p.length}:${p}`).join('|')
 }
 
 export const CRYPTO_PROTOCOL_ID: [number, string] = [2, 'nektar']
@@ -54,7 +54,7 @@ export interface FragmentKeys {
  * via BRC-42 ECDH between the agent's derived keypair and itself (self mode):
  * the fragment key is only computable by whoever holds S_A (or the level key).
  */
-export function deriveFragmentKey (agentSeed: PrivateKey, ctx: FragmentContext): FragmentKeys {
+export function deriveFragmentKey(agentSeed: PrivateKey, ctx: FragmentContext): FragmentKeys {
   const deriver = new KeyDeriver(agentSeed)
   const keyID = canonicalKeyID(ctx)
   const pub = deriver.derivePublicKey(CRYPTO_PROTOCOL_ID as any, keyID, 'self')
@@ -64,7 +64,7 @@ export function deriveFragmentKey (agentSeed: PrivateKey, ctx: FragmentContext):
 }
 
 /** Level key: derive once per (seed, level); used to hand out level access. */
-export function deriveLevelKey (agentSeed: PrivateKey, level: number): PrivateKey {
+export function deriveLevelKey(agentSeed: PrivateKey, level: number): PrivateKey {
   const deriver = new KeyDeriver(agentSeed)
   return deriver.derivePrivateKey(CRYPTO_PROTOCOL_ID as any, `level:${level}`, 'self')
 }
@@ -75,7 +75,7 @@ export interface EncryptedFragment {
   aad: Bytes
 }
 
-export function encryptFragment (
+export function encryptFragment(
   key: Bytes,
   plaintext: Bytes,
   hd: Bytes, // H(d)
@@ -90,7 +90,7 @@ export function encryptFragment (
   return { ciphertext: concat(nonce, tag, ct), keyID: canonicalKeyID(ctx), aad }
 }
 
-export function decryptFragment (key: Bytes, ef: EncryptedFragment): Bytes {
+export function decryptFragment(key: Bytes, ef: EncryptedFragment): Bytes {
   const nonce = ef.ciphertext.subarray(0, 12)
   const tag = ef.ciphertext.subarray(12, 28)
   const ct = ef.ciphertext.subarray(28)
@@ -104,12 +104,12 @@ export function decryptFragment (key: Bytes, ef: EncryptedFragment): Bytes {
  * Crypto-shredding: securely zero key material. Once shredKey runs, the
  * ciphertext is unrecoverable by design (AES-256-GCM, no escrow).
  */
-export function shredKey (key: Bytes): void {
+export function shredKey(key: Bytes): void {
   key.fill(0)
 }
 
 /** grantLevels(seed, L): the per-level keys 0..L that make up a holder's S_A. */
-export function grantLevels (seed: PrivateKey, L: number): PrivateKey[] {
+export function grantLevels(seed: PrivateKey, L: number): PrivateKey[] {
   const out: PrivateKey[] = []
   for (let l = 0; l <= L; l++) out.push(deriveLevelKey(seed, l))
   return out

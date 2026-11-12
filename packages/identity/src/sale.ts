@@ -17,7 +17,7 @@ export const SALE_CTX = 'nektar:sale:v1'
 
 /** Wrap `value` to the buyer via BRC-42; the blob (salt‖nonce‖ct) is the
  *  on-chain `wrapped` arg, hWrapped commits the covenant to it. */
-export function wrapSaleValue (sellerKey: PrivateKey, buyerPub: string, value: Bytes): { wrapped: Bytes, hWrapped: string } {
+export function wrapSaleValue(sellerKey: PrivateKey, buyerPub: string, value: Bytes): { wrapped: Bytes; hWrapped: string } {
   const w = wrapFor(sellerKey, buyerPub, value, SALE_CTX)
   const wrapped = concat(w.salt, w.nonce, w.ct)
   return { wrapped, hWrapped: toHex(sha256(wrapped)) }
@@ -25,13 +25,13 @@ export function wrapSaleValue (sellerKey: PrivateKey, buyerPub: string, value: B
 
 /** Public (non-encrypted) sale: `wrapped` is the value itself — e.g. a
  *  serialized {field,salt,path} triple for paid public disclosure. */
-export function plainSaleValue (value: Bytes): { wrapped: Bytes, hWrapped: string } {
+export function plainSaleValue(value: Bytes): { wrapped: Bytes; hWrapped: string } {
   return { wrapped: value, hWrapped: toHex(sha256(value)) }
 }
 
 export interface SaleOffer {
   /** fields to construct a DisclosureSaleHost with (sellerPkh = seller key's) */
-  cfg: { sellerPkh: string, price: bigint, hWrapped: string, refundAfter: bigint, maxFee: bigint }
+  cfg: { sellerPkh: string; price: bigint; hWrapped: string; refundAfter: bigint; maxFee: bigint }
   /** hex the seller supplies as `wrapped` in buy() */
   wrapped: string
   /** seller pubkey (the buyer verifies offerSig against it) */
@@ -46,20 +46,35 @@ export interface SaleOffer {
 }
 
 /** canonical bytes the offer signature covers — every field a MITM could swap. */
-function offerDigest (cfg: { sellerPkh: string, price: bigint | number, hWrapped: string, refundAfter: bigint | number, maxFee: bigint | number }, buyerPub: string, leaf: string, expiresAt: bigint | number = 0): Bytes {
-  const u64 = (n: bigint | number) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return new Uint8Array(b) }
-  return sha256(concat(
-    fromHex(cfg.sellerPkh), fromHex(cfg.hWrapped),
-    u64(cfg.price), u64(cfg.refundAfter), u64(cfg.maxFee),
-    fromHex(buyerPub || '00'), fromHex(leaf || '00'.repeat(32)),
-    u64(expiresAt)
-  ))
+function offerDigest(
+  cfg: { sellerPkh: string; price: bigint | number; hWrapped: string; refundAfter: bigint | number; maxFee: bigint | number },
+  buyerPub: string,
+  leaf: string,
+  expiresAt: bigint | number = 0
+): Bytes {
+  const u64 = (n: bigint | number) => {
+    const b = Buffer.alloc(8)
+    b.writeBigUInt64LE(BigInt(n))
+    return new Uint8Array(b)
+  }
+  return sha256(
+    concat(
+      fromHex(cfg.sellerPkh),
+      fromHex(cfg.hWrapped),
+      u64(cfg.price),
+      u64(cfg.refundAfter),
+      u64(cfg.maxFee),
+      fromHex(buyerPub || '00'),
+      fromHex(leaf || '00'.repeat(32)),
+      u64(expiresAt)
+    )
+  )
 }
 
 /** Build a sale listing: cfg for the covenant + the committed `wrapped` +
  *  the seller's signed offer attestation. `leaf` binds the offer to a
  *  specific anchored memory record when set (sale op=offerMemory). */
-export function offerDisclosure (params: {
+export function offerDisclosure(params: {
   sellerKey: PrivateKey
   value: Bytes
   price: bigint
@@ -72,9 +87,7 @@ export function offerDisclosure (params: {
   /** §19 horizon: block height at which the offer lapses (0 = no expiry) */
   expiresAt?: bigint
 }): SaleOffer {
-  const { wrapped, hWrapped } = params.buyerPub
-    ? wrapSaleValue(params.sellerKey, params.buyerPub, params.value)
-    : plainSaleValue(params.value)
+  const { wrapped, hWrapped } = params.buyerPub ? wrapSaleValue(params.sellerKey, params.buyerPub, params.value) : plainSaleValue(params.value)
   const sellerPub = params.sellerKey.toPublicKey().toString()
   const sellerPkh = toHex(new Uint8Array(params.sellerKey.toPublicKey().toHash() as number[]))
   const cfg = { sellerPkh, price: params.price, hWrapped, refundAfter: params.refundAfter, maxFee: params.maxFee }
@@ -86,17 +99,23 @@ export function offerDisclosure (params: {
 
 /** Buyer-side: verify the seller's offer attestation before funding the
  *  escrow — refuses MITM-substituted cfgs AND tampered expiry horizons. */
-export function verifyOfferSig (offer: { cfg: SaleOffer['cfg'], sellerPub: string, offerSig: string, expiresAt?: bigint | number }, buyerPub = '', leaf = ''): boolean {
+export function verifyOfferSig(
+  offer: { cfg: SaleOffer['cfg']; sellerPub: string; offerSig: string; expiresAt?: bigint | number },
+  buyerPub = '',
+  leaf = ''
+): boolean {
   try {
     const digest = offerDigest(offer.cfg, buyerPub, leaf, offer.expiresAt ?? 0)
     const sig = Signature.fromDER(Array.from(Buffer.from(offer.offerSig, 'hex')))
     return PublicKey.fromString(offer.sellerPub).verify(Array.from(Hash.sha256(Buffer.from(digest))), sig)
-  } catch { return false }
+  } catch {
+    return false
+  }
 }
 
 export type SaleQuote = Omit<SaleOffer, 'wrapped'>
 
-export function publicSaleQuote (offer: SaleOffer): SaleQuote {
+export function publicSaleQuote(offer: SaleOffer): SaleQuote {
   const q: SaleQuote = {
     cfg: { sellerPkh: offer.cfg.sellerPkh, price: offer.cfg.price, hWrapped: offer.cfg.hWrapped, refundAfter: offer.cfg.refundAfter, maxFee: offer.cfg.maxFee },
     sellerPub: offer.sellerPub,
@@ -106,8 +125,9 @@ export function publicSaleQuote (offer: SaleOffer): SaleQuote {
   return q
 }
 
-export function saleQuoteWire (q: SaleQuote): Record<string, unknown> {
-  const n = (v: bigint | number | string | undefined): number | string | undefined => typeof v === 'bigint' ? (v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v.toString()) : v
+export function saleQuoteWire(q: SaleQuote): Record<string, unknown> {
+  const n = (v: bigint | number | string | undefined): number | string | undefined =>
+    typeof v === 'bigint' ? (v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v.toString()) : v
   const out: Record<string, unknown> = {
     cfg: { sellerPkh: q.cfg.sellerPkh, price: n(q.cfg.price), hWrapped: q.cfg.hWrapped, refundAfter: n(q.cfg.refundAfter), maxFee: n(q.cfg.maxFee) },
     sellerPub: q.sellerPub,
@@ -120,7 +140,7 @@ export function saleQuoteWire (q: SaleQuote): Record<string, unknown> {
 // --- buyer side -----------------------------------------------------------
 
 /** Minimal push-opcode reader (script pushes only — a parser, not an author). */
-export function parsePushes (scriptHex: string): Bytes[] {
+export function parsePushes(scriptHex: string): Bytes[] {
   const b = fromHex(scriptHex)
   const out: Bytes[] = []
   for (let i = 0; i < b.length;) {
@@ -128,13 +148,24 @@ export function parsePushes (scriptHex: string): Bytes[] {
     let len = 0
     if (op <= 0x4b) len = op
     else if (op === 0x4c) len = b[i++]!
-    else if (op === 0x4d) { len = b[i]! | (b[i + 1]! << 8); i += 2 }
-    else if (op === 0) { out.push(new Uint8Array(0)); continue }
-    else if (op === 0x4e) { len = b[i]! | (b[i + 1]! << 8) | (b[i + 2]! << 16) | (b[i + 3]! << 24); i += 4 }
-    else if (op === 0x4f) { out.push(Uint8Array.of(0x81)); continue }
-    else if (op >= 0x51 && op <= 0x60) { out.push(Uint8Array.of(op - 0x50)); continue }
-    else throw new Error(`parsePushes: non-push opcode 0x${op.toString(16)} at ${i - 1}`)
-    out.push(b.slice(i, i + len)); i += len
+    else if (op === 0x4d) {
+      len = b[i]! | (b[i + 1]! << 8)
+      i += 2
+    } else if (op === 0) {
+      out.push(new Uint8Array(0))
+      continue
+    } else if (op === 0x4e) {
+      len = b[i]! | (b[i + 1]! << 8) | (b[i + 2]! << 16) | (b[i + 3]! << 24)
+      i += 4
+    } else if (op === 0x4f) {
+      out.push(Uint8Array.of(0x81))
+      continue
+    } else if (op >= 0x51 && op <= 0x60) {
+      out.push(Uint8Array.of(op - 0x50))
+      continue
+    } else throw new Error(`parsePushes: non-push opcode 0x${op.toString(16)} at ${i - 1}`)
+    out.push(b.slice(i, i + len))
+    i += len
   }
   return out
 }
@@ -142,14 +173,14 @@ export function parsePushes (scriptHex: string): Bytes[] {
 /** Extract the buy() args from a spending tx's input-0 unlocking script.
  *  Frame: opSig ‖ wrapped ‖ changeSats ‖ preimage ‖ 00-selector —
  *  the buyer/depositor pkh is pinned in the escrow script, not the args. */
-export function parseBuyArgs (unlockingHex: string): { wrapped: Bytes, changeSats: Bytes } {
+export function parseBuyArgs(unlockingHex: string): { wrapped: Bytes; changeSats: Bytes } {
   const p = parsePushes(unlockingHex)
   if (p.length < 5 || !p[1] || !p[2]) throw new Error(`parseBuyArgs: expected ≥5 pushes, got ${p.length}`)
   return { wrapped: p[1]!, changeSats: p[2]! }
 }
 
 /** Fetch `wrapped` from a buy transaction (input 0 must be the listing spend). */
-export function parseBuyWrapped (tx: Transaction): Bytes {
+export function parseBuyWrapped(tx: Transaction): Bytes {
   const unlock = tx.inputs[0]?.unlockingScript
   if (!unlock) throw new Error('parseBuyWrapped: input 0 has no unlocking script')
   return parseBuyArgs(unlock.toHex()).wrapped
@@ -164,20 +195,26 @@ import { serializeProvenance, parseProvenance } from '@nektar/core'
 import { decryptFragment } from '@nektar/crypto'
 
 /** encode {fragmentKey‖E‖serializeProvenance(p)} with u32le length frames. */
-export function encodeKeySale (fragmentKey: Bytes, E: Bytes, p: import('@nektar/core').Provenance): Bytes {
-  const field = (b: Bytes) => { const l = Buffer.alloc(4); l.writeUInt32LE(b.length); return concat(new Uint8Array(l), b) }
+export function encodeKeySale(fragmentKey: Bytes, E: Bytes, p: import('@nektar/core').Provenance): Bytes {
+  const field = (b: Bytes) => {
+    const l = Buffer.alloc(4)
+    l.writeUInt32LE(b.length)
+    return concat(new Uint8Array(l), b)
+  }
   return concat(field(fragmentKey), field(E), field(serializeProvenance(p)))
 }
 
 /** decode a key-sale payload back into its parts. */
-export function decodeKeySale (b: Bytes): { fragmentKey: Bytes, E: Bytes, p: import('@nektar/core').Provenance } {
+export function decodeKeySale(b: Bytes): { fragmentKey: Bytes; E: Bytes; p: import('@nektar/core').Provenance } {
   const take = (off: number) => {
     if (off + 4 > b.length) throw new Error('keySale: truncated')
     const len = (b[off]! | (b[off + 1]! << 8) | (b[off + 2]! << 16) | (b[off + 3]! << 24)) >>> 0
     if (off + 4 + len > b.length) throw new Error('keySale: truncated')
     return { v: b.slice(off + 4, off + 4 + len), next: off + 4 + len }
   }
-  const k = take(0); const e = take(k.next); const p = take(e.next)
+  const k = take(0)
+  const e = take(k.next)
+  const p = take(e.next)
   if (p.next !== b.length) throw new Error('keySale: trailing bytes')
   if (k.v.length !== 32) throw new Error('keySale: fragmentKey must be 32B')
   return { fragmentKey: k.v, E: e.v, p: parseProvenance(p.v) }
@@ -186,7 +223,7 @@ export function decodeKeySale (b: Bytes): { fragmentKey: Bytes, E: Bytes, p: imp
 /** Buyer-side: decrypt a key-sale payload → the fragment. E carries
  *  [aadLen‖aad] inline (see memory.ts encrypt path), so no context is
  *  needed — returns {d, p, E} for the caller's leaf/provenance checks. */
-export function claimKeySale (payload: Bytes): { d: Bytes, p: import('@nektar/core').Provenance, E: Bytes } {
+export function claimKeySale(payload: Bytes): { d: Bytes; p: import('@nektar/core').Provenance; E: Bytes } {
   const { fragmentKey, E, p } = decodeKeySale(payload)
   const aadLen = (E[0]! << 8) | E[1]!
   const aad = E.slice(2, 2 + aadLen)
@@ -195,16 +232,23 @@ export function claimKeySale (payload: Bytes): { d: Bytes, p: import('@nektar/co
   return { d, p, E }
 }
 
-export interface ClaimResult { value: Bytes, mode: 'private' | 'public', wrapped: Bytes }
+export interface ClaimResult {
+  value: Bytes
+  mode: 'private' | 'public'
+  wrapped: Bytes
+}
 
 /** Buyer claim: parse `wrapped` from the buy tx, check sha256 == hWrapped,
  *  unwrap to the buyer's key (private) or return as-is (public listing —
  *  detectable because the blob is NOT a well-formed WrappedKey). */
-export function claimDisclosure (tx: Transaction, opts: {
-  hWrapped: string
-  buyerKey?: PrivateKey
-  sellerPub?: string
-}): ClaimResult {
+export function claimDisclosure(
+  tx: Transaction,
+  opts: {
+    hWrapped: string
+    buyerKey?: PrivateKey
+    sellerPub?: string
+  }
+): ClaimResult {
   const wrapped = parseBuyWrapped(tx)
   if (toHex(sha256(wrapped)) !== opts.hWrapped) throw new Error('claimDisclosure: wrapped does not match the committed hWrapped')
   if (opts.buyerKey && opts.sellerPub) {
@@ -212,7 +256,9 @@ export function claimDisclosure (tx: Transaction, opts: {
     try {
       // plaintext len = ct − 16B GCM tag (wrapFor defaults to 32B keys)
       return { value: unwrapFor(opts.buyerKey, opts.sellerPub, wk, SALE_CTX, wk.ct.length - 16), mode: 'private', wrapped }
-    } catch { /* not a private wrap — fall through to public */ }
+    } catch {
+      /* not a private wrap — fall through to public */
+    }
   }
   return { value: wrapped, mode: 'public', wrapped }
 }

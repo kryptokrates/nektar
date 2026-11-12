@@ -7,9 +7,13 @@ const profile = process.env.NEKTAR_PROFILE ?? 'nektar'
 const client = new Client({ name: 'gateway-smoke', version: '1.0.0' })
 await client.connect(new StdioClientTransport({ command: 'docker', args: ['mcp', 'gateway', 'run', '--profile', profile], env: process.env, stderr: 'ignore' }))
 const { tools } = await client.listTools()
-const names = tools.map(t => t.name)
+const names = tools.map((t) => t.name)
 console.log(`gateway tools (${names.length}): ${names.join(', ')}`)
-for (const n of ['remember', 'recall', 'prove']) if (!names.includes(n)) { console.error(`✖ ${n} missing`); process.exit(1) }
+for (const n of ['remember', 'recall', 'prove'])
+  if (!names.includes(n)) {
+    console.error(`✖ ${n} missing`)
+    process.exit(1)
+  }
 const call = async (name, args) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text)
 const w = await call('remember', { shard: 'smoke', data: `gateway works ${new Date().toISOString()}`, source: 'smoke' })
 const a = await call('anchor', { shard: 'smoke' })
@@ -19,7 +23,7 @@ let proof
 for (let t = 0; t < 30; t++) {
   proof = (await call('prove', { shard: 'smoke', seq: 0 })).result
   if (proof.ok || proof.reason !== 'NotMined') break
-  await new Promise(r => setTimeout(r, 2000))
+  await new Promise((r) => setTimeout(r, 2000))
 }
 console.log(`prove: ${JSON.stringify(proof)}`)
 if (!proof.ok) process.exit(1)

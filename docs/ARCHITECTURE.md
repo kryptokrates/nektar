@@ -254,7 +254,7 @@ flowchart LR
       prop["propagation :8833"]
       asset["asset API :8090 (block_legacy)"]
       rpc["RPC :9292 (headers)"]
-      pg[("postgres")] 
+      pg[("postgres")]
       ae[("aerospike")]
       kf[("kafka")]
     end
@@ -297,38 +297,40 @@ flowchart LR
 
 ## Key decisions (ADR summary)
 
-| ADR | Decision |
-|---|---|
-| 001 | TypeScript on `@bsv/sdk`; Rust references used as vector oracles (SMT run via Docker cargo) |
-| 002 | Double-SHA-256 Merkle, odd self-pairing, leaf count committed |
-| 003 | Trillian is a design reference only; fork-freedom comes from the head UTXO |
-| 011 | Standard BSV stack (Teranode, overlay, BEEF/BUMP) replaces custom chain code |
-| 012 | One anchor UTXO per shard; every successor spends it (Rúnar `NektarAnchor`) |
-| 013 | Standard BEEF/BUMP proofs (no patented proof-entity formats) |
-| 014 | BRC-42-style key derivation, level as KDF namespace |
-| 015 | ~~ZK membership over a Poseidon companion tree whose root rides in the anchor~~ — **superseded by ADR-020** |
-| 016 | Horizontal sharding; shards never coordinate |
-| 017 | Automaton δ and F Merkle-committed in the Rúnar state; every method continues state |
-| 018 | One `@bsv/sdk` version across the dependency graph (pnpm overrides) |
-| 019 | Verifier-issued challenges; clearance holder-bound and authority-pinned; the Cedar level comes only from a verified ZK proof |
+| ADR | Decision                                                                                                                                                                                                                                                                                                                                      |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 001 | TypeScript on `@bsv/sdk`; Rust references used as vector oracles (SMT run via Docker cargo)                                                                                                                                                                                                                                                   |
+| 002 | Double-SHA-256 Merkle, odd self-pairing, leaf count committed                                                                                                                                                                                                                                                                                 |
+| 003 | Trillian is a design reference only; fork-freedom comes from the head UTXO                                                                                                                                                                                                                                                                    |
+| 011 | Standard BSV stack (Teranode, overlay, BEEF/BUMP) replaces custom chain code                                                                                                                                                                                                                                                                  |
+| 012 | One anchor UTXO per shard; every successor spends it (Rúnar `NektarAnchor`)                                                                                                                                                                                                                                                                   |
+| 013 | Standard BEEF/BUMP proofs (no patented proof-entity formats)                                                                                                                                                                                                                                                                                  |
+| 014 | BRC-42-style key derivation, level as KDF namespace                                                                                                                                                                                                                                                                                           |
+| 015 | ~~ZK membership over a Poseidon companion tree whose root rides in the anchor~~ — **superseded by ADR-020**                                                                                                                                                                                                                                   |
+| 016 | Horizontal sharding; shards never coordinate                                                                                                                                                                                                                                                                                                  |
+| 017 | Automaton δ and F Merkle-committed in the Rúnar state; every method continues state                                                                                                                                                                                                                                                           |
+| 018 | One `@bsv/sdk` version across the dependency graph (pnpm overrides)                                                                                                                                                                                                                                                                           |
+| 019 | Verifier-issued challenges; clearance holder-bound and authority-pinned; the Cedar level comes only from a verified ZK proof                                                                                                                                                                                                                  |
 | 020 | ZK membership as Wright §13 specifies: **one** double-SHA-256 tree (the anchored R_n), proven with a transparent **ZK-STARK** (RISC Zero 3.0.3 succinct receipt; Fiat–Shamir, FRI, no trusted setup), verified off-chain (WASM) against the SPV-verified anchor with a pinned program ID and a verifier-issued single-use queryId. See below. |
 
 ### ADR-020 — hash-based STARK over the anchored SHA-256 tree
 
 **Context.** Wright §13 / App. C define π = ZKMerkleProve(h_j, R_n, P_j) over the tree anchored on-chain. H is "a collision-resistant hash, e.g., SHA-256". Proofs are non-interactive via Fiat–Shamir. Only "public parameters for H, ZKProve, ZKAccess" are needed, with no central authority. ADR-015 departed from this in two ways:
+
 - a second (Poseidon) tree, whose equality with R_n was never proven;
 - a Groth16 trusted setup.
 
 **Options evaluated (measured or documented, Nov 2026).**
 
-| Option | Finding |
-|---|---|
+| Option                                                                                                          | Finding                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | SP1 (Plonky3 STARK) — the BSV-stack choice (Rúnar ships an SP1 FRI verifier; BSVM verifies SP1 STARKs on-chain) | **Rejected:** Succinct's security model states "individual STARK proofs in SP1 do not currently satisfy the zero-knowledge property". Only the Groth16/PLONK wrapper is ZK, which reintroduces a trusted setup. A non-ZK proof would leak the leaf, breaking §13. |
-| RISC Zero succinct receipt | **Chosen:** documented as a zero-knowledge STARK (DEEP-ALI + FRI, trace noise added; "hides all program inputs"). Composite receipts leak the trace length, so only succinct receipts are accepted. |
-| Noir/UltraHonk | Not chosen: universal setup (KZG), so not hash-only. |
-| Bulletproofs over SHA-256 | Transparent, but impractical prover cost at depth 16. |
+| RISC Zero succinct receipt                                                                                      | **Chosen:** documented as a zero-knowledge STARK (DEEP-ALI + FRI, trace noise added; "hides all program inputs"). Composite receipts leak the trace length, so only succinct receipts are accepted.                                                               |
+| Noir/UltraHonk                                                                                                  | Not chosen: universal setup (KZG), so not hash-only.                                                                                                                                                                                                              |
+| Bulletproofs over SHA-256                                                                                       | Transparent, but impractical prover cost at depth 16.                                                                                                                                                                                                             |
 
 **Measured on this machine** (CPU only, prover in Docker; spike `tools/stark/`):
+
 - **Program:** reproduces `core/merkle.ts` for all 561 leaf positions of sizes 1..33, and refuses index ≥ size, a short path, a broken odd self-pair and a foreign leaf at the odd position.
 - **Real Teranode anchor** `662e9ae9…7a77`:
   - prove **34.9 s**, succinct receipt **224 KB**;
@@ -339,6 +341,7 @@ flowchart LR
 **On-chain verification:** not available for RISC Zero receipts in Rúnar, which only has an SP1 FRI verifier. Verification stays off-chain against the SPV-verified anchor, which §13 permits ("executable on-chain if necessary").
 
 **Consequences:**
+
 - the Poseidon tree, the Groth16 circuits and ceremony, and the anchor's `poseidonRoot` are removed (NektarAnchor v3, fresh regtest chains);
 - the nullifier is replaced by a verifier-issued single-use queryId;
 - proofs are larger (224 KB vs 389 B, all off-chain);

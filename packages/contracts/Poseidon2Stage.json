@@ -28506,10 +28506,7 @@
             "value": {
               "kind": "call",
               "func": "buildChangeOutput",
-              "args": [
-                "t740",
-                "t741"
-              ]
+              "args": ["t740", "t741"]
             }
           },
           {
@@ -28517,10 +28514,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t736",
-                "t739"
-              ]
+              "args": ["t736", "t739"]
             }
           },
           {
@@ -28528,10 +28522,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t743",
-                "t742"
-              ]
+              "args": ["t743", "t742"]
             }
           },
           {
@@ -28539,9 +28530,7 @@
             "value": {
               "kind": "call",
               "func": "hash256",
-              "args": [
-                "t744"
-              ]
+              "args": ["t744"]
             }
           },
           {
@@ -28556,9 +28545,7 @@
             "value": {
               "kind": "call",
               "func": "extractOutputHash",
-              "args": [
-                "t746"
-              ]
+              "args": ["t746"]
             }
           },
           {
@@ -32251,10 +32238,7 @@
             "value": {
               "kind": "call",
               "func": "buildChangeOutput",
-              "args": [
-                "t225",
-                "t226"
-              ]
+              "args": ["t225", "t226"]
             }
           },
           {
@@ -32262,10 +32246,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t221",
-                "t224"
-              ]
+              "args": ["t221", "t224"]
             }
           },
           {
@@ -32273,10 +32254,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t228",
-                "t227"
-              ]
+              "args": ["t228", "t227"]
             }
           },
           {
@@ -32284,9 +32262,7 @@
             "value": {
               "kind": "call",
               "func": "hash256",
-              "args": [
-                "t229"
-              ]
+              "args": ["t229"]
             }
           },
           {
@@ -32301,9 +32277,7 @@
             "value": {
               "kind": "call",
               "func": "extractOutputHash",
-              "args": [
-                "t231"
-              ]
+              "args": ["t231"]
             }
           },
           {
@@ -32329,8 +32303,5 @@
     ]
   },
   "codeSeparatorIndex": 3271,
-  "codeSeparatorIndices": [
-    6,
-    3271
-  ]
+  "codeSeparatorIndices": [6, 3271]
 }

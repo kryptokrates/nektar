@@ -1686,12 +1686,7 @@
             "value": {
               "kind": "call",
               "func": "super",
-              "args": [
-                "t0",
-                "t1",
-                "t2",
-                "t3"
-              ]
+              "args": ["t0", "t1", "t2", "t3"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -1939,9 +1934,7 @@
             "value": {
               "kind": "call",
               "func": "hash160",
-              "args": [
-                "t5"
-              ]
+              "args": ["t5"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2017,10 +2010,7 @@
             "value": {
               "kind": "call",
               "func": "checkSig",
-              "args": [
-                "t10",
-                "t11"
-              ]
+              "args": ["t10", "t11"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2069,10 +2059,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t14",
-                "t15"
-              ]
+              "args": ["t14", "t15"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2109,10 +2096,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t17",
-                "t18"
-              ]
+              "args": ["t17", "t18"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2149,10 +2133,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t20",
-                "t21"
-              ]
+              "args": ["t20", "t21"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2165,10 +2146,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t19",
-                "t22"
-              ]
+              "args": ["t19", "t22"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2181,10 +2159,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t16",
-                "t23"
-              ]
+              "args": ["t16", "t23"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2221,10 +2196,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t25",
-                "t26"
-              ]
+              "args": ["t25", "t26"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2261,10 +2233,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t28",
-                "t29"
-              ]
+              "args": ["t28", "t29"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2301,10 +2270,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t31",
-                "t32"
-              ]
+              "args": ["t31", "t32"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2317,10 +2283,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t30",
-                "t33"
-              ]
+              "args": ["t30", "t33"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2333,10 +2296,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t27",
-                "t34"
-              ]
+              "args": ["t27", "t34"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2373,10 +2333,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t36",
-                "t37"
-              ]
+              "args": ["t36", "t37"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2413,10 +2370,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t39",
-                "t40"
-              ]
+              "args": ["t39", "t40"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2453,10 +2407,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t42",
-                "t43"
-              ]
+              "args": ["t42", "t43"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2469,10 +2420,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t41",
-                "t44"
-              ]
+              "args": ["t41", "t44"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2485,10 +2433,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t38",
-                "t45"
-              ]
+              "args": ["t38", "t45"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2525,10 +2470,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t47",
-                "t48"
-              ]
+              "args": ["t47", "t48"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2565,10 +2507,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t50",
-                "t51"
-              ]
+              "args": ["t50", "t51"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2605,10 +2544,7 @@
             "value": {
               "kind": "call",
               "func": "num2bin",
-              "args": [
-                "t53",
-                "t54"
-              ]
+              "args": ["t53", "t54"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2621,10 +2557,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t52",
-                "t55"
-              ]
+              "args": ["t52", "t55"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2637,10 +2570,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t49",
-                "t56"
-              ]
+              "args": ["t49", "t56"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2653,10 +2583,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t46",
-                "t57"
-              ]
+              "args": ["t46", "t57"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2669,10 +2596,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t35",
-                "t58"
-              ]
+              "args": ["t35", "t58"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2685,10 +2609,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t24",
-                "t59"
-              ]
+              "args": ["t24", "t59"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -2713,9 +2634,7 @@
             "value": {
               "kind": "call",
               "func": "hash256",
-              "args": [
-                "table"
-              ]
+              "args": ["table"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -3537,12 +3456,7 @@
             "value": {
               "kind": "add_output",
               "satoshis": "t117",
-              "stateValues": [
-                "t118",
-                "t119",
-                "t120",
-                "t123"
-              ],
+              "stateValues": ["t118", "t119", "t120", "t123"],
               "preimage": ""
             },
             "sourceLoc": {
@@ -3570,10 +3484,7 @@
             "value": {
               "kind": "call",
               "func": "buildChangeOutput",
-              "args": [
-                "t125",
-                "t126"
-              ]
+              "args": ["t125", "t126"]
             }
           },
           {
@@ -3581,10 +3492,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t124",
-                "t127"
-              ]
+              "args": ["t124", "t127"]
             }
           },
           {
@@ -3592,9 +3500,7 @@
             "value": {
               "kind": "call",
               "func": "hash256",
-              "args": [
-                "t128"
-              ]
+              "args": ["t128"]
             }
           },
           {
@@ -3609,9 +3515,7 @@
             "value": {
               "kind": "call",
               "func": "extractOutputHash",
-              "args": [
-                "t130"
-              ]
+              "args": ["t130"]
             }
           },
           {
@@ -3637,7 +3541,5 @@
     ]
   },
   "codeSeparatorIndex": 1,
-  "codeSeparatorIndices": [
-    1
-  ]
+  "codeSeparatorIndices": [1]
 }

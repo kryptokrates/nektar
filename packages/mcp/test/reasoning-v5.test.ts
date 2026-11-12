@@ -11,18 +11,32 @@ import { always, eventually, obligation, causalClosure, type TimedFact } from '@
 import { axiomHash, ontologyEntails, Jurisdictions, validByPrecedent, type Axiom } from '@nektar/graph'
 import { NektarMemory } from '@nektar/mcp'
 
-function world () {
-  const chain = new MockChain(); chain.verifyScripts = true
-  const funder = new MockFunder(); funder.topup(20); for (const t of funder.parents) chain.registerParent(t)
+function world() {
+  const chain = new MockChain()
+  chain.verifyScripts = true
+  const funder = new MockFunder()
+  funder.topup(20)
+  for (const t of funder.parents) chain.registerParent(t)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
-  const settle = (s: string) => { chain.mine(1); const l = mem.tailLink(s); if (l) mem.confirmAnchor(s, l.txid) }
+  const settle = (s: string) => {
+    chain.mine(1)
+    const l = mem.tailLink(s)
+    if (l) mem.confirmAnchor(s, l.txid)
+  }
   return { mem, settle }
 }
 
 test('§8 delta: deterministic, invertible, unicode-safe; tampered Δ rejected', () => {
-  for (const [a, b] of [['torque 45Nm', 'torque 55Nm'], ['', 'new'], ['same', 'same'], ['abc', ''], ['naïve ✓ 🙂 x', 'naïve ✗ 🙂 y']] as const) {
+  for (const [a, b] of [
+    ['torque 45Nm', 'torque 55Nm'],
+    ['', 'new'],
+    ['same', 'same'],
+    ['abc', ''],
+    ['naïve ✓ 🙂 x', 'naïve ✗ 🙂 y']
+  ] as const) {
     const d = diff(a, b)
-    assert.equal(apply(a, d), b); assert.equal(revert(b, d), a)
+    assert.equal(apply(a, d), b)
+    assert.equal(revert(b, d), a)
     assert.deepEqual(decodeDelta(encodeDelta(d)), d)
   }
   assert.throws(() => apply('torque 99Nm', diff('torque 45Nm', 'torque 55Nm')), DeltaError, 'Δ applied to a different base')
@@ -31,12 +45,22 @@ test('§8 delta: deterministic, invertible, unicode-safe; tampered Δ rejected',
 
 test('§8 delta: revisions stored as Δ; every version materialises from proven links', async () => {
   const { mem, settle } = world()
-  const versions = ['Manual rev1: torque 45Nm, belt 10h', 'Manual rev2: torque 55Nm, belt 10h', 'Manual rev3: torque 55Nm, belt 12h', 'Manual rev4: torque 55Nm, belt 12h, oil 5W30', 'Manual rev5: torque 50Nm, belt 12h, oil 5W30']
+  const versions = [
+    'Manual rev1: torque 45Nm, belt 10h',
+    'Manual rev2: torque 55Nm, belt 10h',
+    'Manual rev3: torque 55Nm, belt 12h',
+    'Manual rev4: torque 55Nm, belt 12h, oil 5W30',
+    'Manual rev5: torque 50Nm, belt 12h, oil 5W30'
+  ]
   await mem.remember('man', versions[0]!)
   for (let i = 1; i < versions.length; i++) await mem.revise('man', i - 1, versions[i]!)
-  await mem.remember('man', 'filler'); settle('man')
-  const stored = (await mem.records('man')).map(r => Buffer.from(r.fragment.d).toString())
-  assert.ok(stored.slice(1, 5).every(s => s.startsWith('delta:')), 'revisions are deltas, not full copies')
+  await mem.remember('man', 'filler')
+  settle('man')
+  const stored = (await mem.records('man')).map((r) => Buffer.from(r.fragment.d).toString())
+  assert.ok(
+    stored.slice(1, 5).every((s) => s.startsWith('delta:')),
+    'revisions are deltas, not full copies'
+  )
   assert.ok(stored[4]!.length < versions[4]!.length + 16)
   for (let i = 0; i < versions.length; i++) assert.equal(await mem.materialize('man', i), versions[i], `version ${i}`)
   // 0-conf semantics: the auto-anchored (broadcast, unmined) batch IS provable
@@ -51,21 +75,48 @@ test('§8 delta: revisions stored as Δ; every version materialises from proven 
 
 test('§12 temporal: □_t, ◇_(t1,t2), obligations with deadlines, causal closure', () => {
   const F: TimedFact[] = [
-    { phi: 'incident(pump2)', t: 100 }, { phi: 'repaired(pump2)', t: 160 },
+    { phi: 'incident(pump2)', t: 100 },
+    { phi: 'repaired(pump2)', t: 160 },
     { phi: 'incident(pump3)', t: 200 },
     { phi: 'certified(op1)', t: 50, withdrawnAt: 300 }
   ]
-  assert.ok(always(F, 'certified(op1)', 250)); assert.ok(!always(F, 'certified(op1)', 300), 'withdrawn by t=300'); assert.ok(!always(F, 'certified(op1)', 40))
-  assert.ok(eventually(F, 'repaired(pump2)', 100, 200)); assert.ok(!eventually(F, 'repaired(pump2)', 0, 150))
-  const sla = obligation(F.map(f => ({ ...f, phi: f.phi.replace(/\(.*/, '') })), 'incident', 'repaired', 100, 400)
-  assert.equal(sla.ok, false); assert.deepEqual(sla.violations.map((v: { trigger: TimedFact }) => v.trigger.t), [200], 'pump3 incident unrepaired past its deadline')
-  assert.equal(obligation(F.map(f => ({ ...f, phi: f.phi.replace(/\(.*/, '') })), 'incident', 'repaired', 100, 250).ok, true, 'open obligation is not yet a violation')
+  assert.ok(always(F, 'certified(op1)', 250))
+  assert.ok(!always(F, 'certified(op1)', 300), 'withdrawn by t=300')
+  assert.ok(!always(F, 'certified(op1)', 40))
+  assert.ok(eventually(F, 'repaired(pump2)', 100, 200))
+  assert.ok(!eventually(F, 'repaired(pump2)', 0, 150))
+  const sla = obligation(
+    F.map((f) => ({ ...f, phi: f.phi.replace(/\(.*/, '') })),
+    'incident',
+    'repaired',
+    100,
+    400
+  )
+  assert.equal(sla.ok, false)
+  assert.deepEqual(
+    sla.violations.map((v: { trigger: TimedFact }) => v.trigger.t),
+    [200],
+    'pump3 incident unrepaired past its deadline'
+  )
+  assert.equal(
+    obligation(
+      F.map((f) => ({ ...f, phi: f.phi.replace(/\(.*/, '') })),
+      'incident',
+      'repaired',
+      100,
+      250
+    ).ok,
+    true,
+    'open obligation is not yet a violation'
+  )
   assert.deepEqual(causalClosure([{ conclusion: 'fit(op1)', t: 260, cites: [F[3]!] }]), { ok: true })
   assert.match(causalClosure([{ conclusion: 'pump3 ok', t: 150, cites: [F[2]!] }]).reason!, /cites "incident\(pump3\)" anchored at t=200/)
 })
 
 test('§19 epoch binding: authorship survives rotation; wrong epoch / after expiry refused', async () => {
-  const k0 = PrivateKey.fromRandom(); const k1 = PrivateKey.fromRandom(); const k2 = PrivateKey.fromRandom()
+  const k0 = PrivateKey.fromRandom()
+  const k1 = PrivateKey.fromRandom()
+  const k2 = PrivateKey.fromRandom()
   const g = k0.toPublicKey().toString()
   const c1 = { ...makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 100), index: 1 }
   const c2 = { ...makeRotationCert(k1, k2.toPublicKey().toString(), 2000, 100), index: 2 }
@@ -93,13 +144,17 @@ test('§9 memory as law: anchored DL entailment, jurisdiction graphs, precedent'
     { kind: 'ClassAssertion', cls: 'Cryptographer', ind: 'alice' }
   ]
   const all = new Set(ax.map(axiomHash))
-  assert.ok(ontologyEntails(ax, { pred: 'instance', args: ['alice', 'professional'] }, h => all.has(h)).entailed, 'C ⊑ D via an anchored subclass chain')
+  assert.ok(ontologyEntails(ax, { pred: 'instance', args: ['alice', 'professional'] }, (h) => all.has(h)).entailed, 'C ⊑ D via an anchored subclass chain')
   const missing = new Set([axiomHash(ax[0]!), axiomHash(ax[2]!)])
-  const r = ontologyEntails(ax, { pred: 'instance', args: ['alice', 'professional'] }, h => missing.has(h))
+  const r = ontologyEntails(ax, { pred: 'instance', args: ['alice', 'professional'] }, (h) => missing.has(h))
   assert.equal(r.entailed, false, 'an unanchored axiom breaks the chain (void ab initio)')
   assert.deepEqual(r.rejected, [axiomHash(ax[1]!)])
   const J = new Jurisdictions()
-  J.add('EU', [...ax, { kind: 'Rule', text: '@id eu-export\npermitted(X) :- instance(X, professional), licensed(X, eu).' }, { kind: 'ObjectPropertyAssertion', prop: 'licensed', from: 'alice', to: 'eu' }])
+  J.add('EU', [
+    ...ax,
+    { kind: 'Rule', text: '@id eu-export\npermitted(X) :- instance(X, professional), licensed(X, eu).' },
+    { kind: 'ObjectPropertyAssertion', prop: 'licensed', from: 'alice', to: 'eu' }
+  ])
   J.add('US', [...ax, { kind: 'Rule', text: '@id us-export\npermitted(X) :- instance(X, professional), cleared(X, us).' }])
   const yes = () => true
   assert.ok(J.permissible('alice', 'EU', yes).entailed)
@@ -113,7 +168,7 @@ test('§9 memory as law: anchored DL entailment, jurisdiction graphs, precedent'
   assert.ok(validByPrecedent(precedent, 'case_2026_03', yes).entailed, 'new action entailed by anchored precedent')
   assert.equal(validByPrecedent(precedent, 'case_2026_04', yes).entailed, false, 'no precedent → not valid')
   const unanchoredPrecedent = new Set(precedent.slice(1).map(axiomHash))
-  assert.equal(validByPrecedent(precedent, 'case_2026_03', h => unanchoredPrecedent.has(h)).entailed, false, 'precedent must itself be anchored')
+  assert.equal(validByPrecedent(precedent, 'case_2026_03', (h) => unanchoredPrecedent.has(h)).entailed, false, 'precedent must itself be anchored')
 })
 
 test('§16 delegation map: sub-decisions signed by delegating agents; tampering fails', async () => {
@@ -121,7 +176,9 @@ test('§16 delegation map: sub-decisions signed by delegating agents; tampering 
   const sub = PrivateKey.fromRandom()
   const answer = 'approved transfer of EUR 500'
   const receipt = {
-    answer, fragmentRefs: [], checkResult: 'verified' as const,
+    answer,
+    fragmentRefs: [],
+    checkResult: 'verified' as const,
     modelId: { kind: 'local' as const, weightsSha256: 'ab'.repeat(32), name: 'm' },
     timestamp: 1_700_000_000,
     delegations: [makeDelegation(sub, 'compliance check passed', answer)]
@@ -129,7 +186,12 @@ test('§16 delegation map: sub-decisions signed by delegating agents; tampering 
   assert.deepEqual(verifyReceiptDelegations(receipt), { ok: true, reasons: [] })
   // a delegation over a different decision or answer fails
   assert.equal(verifyReceiptDelegations({ ...receipt, answer: 'approved transfer of EUR 500000' }).ok, false, 'delegation does not carry to a different answer')
-  const forged = { ...receipt, delegations: [{ delegator: PrivateKey.fromRandom().toPublicKey().toString(), decision: 'compliance check passed', signature: receipt.delegations[0]!.signature }] }
+  const forged = {
+    ...receipt,
+    delegations: [
+      { delegator: PrivateKey.fromRandom().toPublicKey().toString(), decision: 'compliance check passed', signature: receipt.delegations[0]!.signature }
+    ]
+  }
   assert.equal(verifyReceiptDelegations(forged).ok, false, 'sig moved to another delegator fails')
   // commitReceipt anchors the receipt (with its delegation map) into __receipts__
   const { mem } = world()

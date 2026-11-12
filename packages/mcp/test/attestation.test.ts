@@ -11,9 +11,11 @@ import { attestationScript, decodeAttestationScript, attestationsOf, attestation
 const fakeProof = () => dsha256(utf8('lzkmem-stand-in')) // any ≥32B payload; commitment = sha256(it)
 const proofBytes = () => new Uint8Array([...fakeProof(), 1, 2, 3])
 
-function setup () {
-  const chain = new MockChain(); chain.verifyScripts = true
-  const funder = new MockFunder(); funder.topup(10)
+function setup() {
+  const chain = new MockChain()
+  chain.verifyScripts = true
+  const funder = new MockFunder()
+  funder.topup(10)
   for (const t of funder.parents) chain.registerParent(t)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test' })
   return { chain, funder, mem }

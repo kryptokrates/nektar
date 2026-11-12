@@ -24,8 +24,8 @@ module.exports = {
           // JSON artifacts, never imported by the module graph
           '\\.runar\\.[cm]?[jt]s$',
           // library/CLI entrypoints invoked from outside this codebase
-          'payclient\\.[cm]?[jt]s$',      // standalone x402 payer client
-          '(^|/)tools/'                   // build/dev scripts — invoked, never imported
+          'payclient\\.[cm]?[jt]s$', // standalone x402 payer client
+          '(^|/)tools/' // build/dev scripts — invoked, never imported
         ]
       },
       to: {}
@@ -34,13 +34,16 @@ module.exports = {
     // own packages/<name>/ tree — anything resolved into a DIFFERENT package
     // dir means the specifier was ../../other-pkg/… (package-name imports of
     // @nektar/x land in node_modules or dist/, both already excluded below)
-    ...fs.readdirSync('packages').filter(d => fs.existsSync(`packages/${d}/package.json`)).map(pkg => ({
-      name: `no-cross-package-relative-${pkg}`,
-      severity: 'error',
-      comment: 'import sibling packages by name (@nektar/x) — a relative path across packages/ breaks the layering',
-      from: { path: `^packages/${pkg}/` },
-      to: { path: `^packages/(?!${pkg}/)` }
-    })),
+    ...fs
+      .readdirSync('packages')
+      .filter((d) => fs.existsSync(`packages/${d}/package.json`))
+      .map((pkg) => ({
+        name: `no-cross-package-relative-${pkg}`,
+        severity: 'error',
+        comment: 'import sibling packages by name (@nektar/x) — a relative path across packages/ breaks the layering',
+        from: { path: `^packages/${pkg}/` },
+        to: { path: `^packages/(?!${pkg}/)` }
+      })),
     {
       name: 'no-lower-to-upper',
       severity: 'error',
@@ -94,10 +97,7 @@ module.exports = {
         // match the spec suffix, not the repo path. These are generated
         // artifacts: compile:contract → packages/contracts/Nektar*.json and
         // stark:build → packages/zk/stark/verifier.js (gitignored by design)
-        pathNot: [
-          '(Nektar|DisclosureSale)[A-Za-z0-9]*\\.json$',
-          'stark/verifier\\.(js|wasm)$'
-        ]
+        pathNot: ['(Nektar|DisclosureSale)[A-Za-z0-9]*\\.json$', 'stark/verifier\\.(js|wasm)$']
       }
     },
     {
@@ -166,7 +166,7 @@ module.exports = {
     },
     reporterOptions: {
       text: { highlightFocused: true },
-      err: { }
+      err: {}
     },
     prefix: 'https://github.com/nedzof/nektar/blob/master/'
   }

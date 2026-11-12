@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knex from 'knex'
 import { PrivateKey } from '@bsv/sdk'
-import { utf8, fromHex, eq } from '@nektar/core'
+import { utf8, fromHex } from '@nektar/core'
 import { MemoryShardStore } from '../src/store.js'
 import { KnexShardStore } from '../src/knex-store.js'
 import { BatchLog } from '../src/batchlog.js'
@@ -14,11 +14,27 @@ const frag = (i: number) => ({
 
 for (const [name, makeStore] of [
   ['memory', async () => new MemoryShardStore()],
-  ['knex-sqlite', async () => { const k = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true }); const s = new KnexShardStore(k); await s.init(); const orig = s.all.bind(s); (s as any).all = async (sh: string) => { const r = await orig(sh); return r }; (s as any).destroy = () => k.destroy(); return s }]
+  [
+    'knex-sqlite',
+    async () => {
+      const k = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+      const s = new KnexShardStore(k)
+      await s.init()
+      const orig = s.all.bind(s)
+      ;(s as any).all = async (sh: string) => {
+        const r = await orig(sh)
+        return r
+      }
+      ;(s as any).destroy = () => k.destroy()
+      return s
+    }
+  ]
 ] as const) {
   test(`batchlog (${name}): dedup, promise, batch close, lifecycle`, async (t) => {
     const store = await makeStore()
-    t.after(async () => { await (store as any).destroy?.() })
+    t.after(async () => {
+      await (store as any).destroy?.()
+    })
     const log = new BatchLog(store, PrivateKey.fromRandom(), { maxLeaves: 2 })
     const r1 = await log.remember('s1', frag(1))
     const r2 = await log.remember('s1', frag(1))
@@ -40,6 +56,9 @@ for (const [name, makeStore] of [
 
     await log.markAnchored('s1', batch.n, 'aa'.repeat(32))
     const all = await log['store'].all('s1')
-    assert.equal(all.every(r => r.state === 'anchored' && r.anchorTxid === 'aa'.repeat(32)), true)
+    assert.equal(
+      all.every((r) => r.state === 'anchored' && r.anchorTxid === 'aa'.repeat(32)),
+      true
+    )
   })
 }

@@ -2,41 +2,54 @@
 // stateful contract `NektarAnchor` (packages/contracts). No hand-written
 // script: locking/unlocking is built by runar-sdk; funding inputs use the
 // SDK P2PKH template (plain fee funding is allowed).
-import { makeRotationCert } from "@nektar/identity"
-import { Transaction, PrivateKey, LockingScript, P2PKH } from '@bsv/sdk'
+import { makeRotationCert } from '@nektar/identity'
+import { Transaction, PrivateKey, P2PKH } from '@bsv/sdk'
 import { RunarContract, LocalSigner } from 'runar-sdk'
 import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 // default burstLimit=100: measured 100 unconfirmed contract anchors on
 // regtest with no limit (see spikes/depth-contract.mjs); conservative default.
 import { NEKTAR_ANCHOR_ARTIFACT, NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX, contractRp, decodeNektarAnchor, TAG_RPRIME } from '@nektar/contracts'
 const TAG_HEX = toHex(TAG_RPRIME)
-import { PROTOCOL_ID, dsha256, utf8, toHex, fromHex, expectedRp, type AnchorData, type Bytes } from '@nektar/core'
-import type { Broadcaster, BroadcastResult, Funder } from '@nektar/chain'
+import { dsha256, toHex, expectedRp, type AnchorData, type Bytes } from '@nektar/core'
+import type { Broadcaster, Funder } from '@nektar/chain'
 
 export interface Head {
   tx: Transaction
   vout: number
   data: AnchorData & { ownerPkh?: Bytes }
 }
-export interface AnchorResult { tx: Transaction, head: Head }
-export interface AnchorOptions { burstLimit?: number, rotationHorizon?: number, feeRateSatPerKb?: number }
+export interface AnchorResult {
+  tx: Transaction
+  head: Head
+}
+export interface AnchorOptions {
+  burstLimit?: number
+  rotationHorizon?: number
+  feeRateSatPerKb?: number
+}
 
 // Spent outpoints and spendable change are tracked PER FUNDER, not per
 // provider: several AnchorChains (one per shard) share one funder, and each
 // must see what the others already spent.
-interface FunderBook { spent: Set<string>, owned: Map<string, RUTXO> }
+interface FunderBook {
+  spent: Set<string>
+  owned: Map<string, RUTXO>
+}
 const books = new WeakMap<object, FunderBook>()
-function bookFor (funder: object): FunderBook {
+function bookFor(funder: object): FunderBook {
   let b = books.get(funder)
-  if (!b) { b = { spent: new Set(), owned: new Map() }; books.set(funder, b) }
+  if (!b) {
+    b = { spent: new Set(), owned: new Map() }
+    books.set(funder, b)
+  }
   return b
 }
 
 /** runar-sdk Provider backed by our Broadcaster/Funder (+ optional utxo feed). */
 export class NektarProvider implements Provider {
-  network: 'testnet' = 'testnet'
+  network = 'testnet' as const
   lastTx?: Transaction
-  constructor (
+  constructor(
     public broadcaster: Broadcaster,
     private funder: Funder,
     public funderAddress?: string
@@ -45,33 +58,48 @@ export class NektarProvider implements Provider {
   onAttempt?: (tx: Transaction) => void
   onSuccess?: (tx: Transaction) => void
 
-  async getTransaction (txid: string): Promise<TransactionData> {
+  async getTransaction(txid: string): Promise<TransactionData> {
     const hex = await this.getRawTransaction(txid)
     if (!hex) throw new Error(`tx ${txid} not found`)
     // parse the real tx — runar uses these fields to fill the input's
     // sourceSatoshis/lockingScript; an empty outputs[] produces a bad preimage
     const tx = Transaction.fromHex(hex)
     return {
-      txid, version: tx.version,
-      inputs: tx.inputs.map(i => ({ txid: i.sourceTXID ?? i.sourceTransaction?.id('hex'), outputIndex: i.sourceOutputIndex, script: '', sequence: i.sequence })),
-      outputs: tx.outputs.map(o => ({ script: o.lockingScript.toHex(), satoshis: o.satoshis })),
-      locktime: tx.lockTime, raw: hex
+      txid,
+      version: tx.version,
+      inputs: tx.inputs.map((i) => ({
+        txid: i.sourceTXID ?? i.sourceTransaction?.id('hex'),
+        outputIndex: i.sourceOutputIndex,
+        script: '',
+        sequence: i.sequence
+      })),
+      outputs: tx.outputs.map((o) => ({ script: o.lockingScript.toHex(), satoshis: o.satoshis })),
+      locktime: tx.lockTime,
+      raw: hex
     } as unknown as TransactionData
   }
   private recent = new Map<string, Transaction>()
-  recentOf (txid: string): Transaction | undefined { return this.recent.get(txid) }
+  recentOf(txid: string): Transaction | undefined {
+    return this.recent.get(txid)
+  }
   /** make a known tx resolvable as a parent (e.g. a head restored after restart) */
-  rememberTx (tx: Transaction): void { this.recent.set(tx.id('hex'), tx) }
-  async getRawTransaction (txid: string): Promise<string> {
+  rememberTx(tx: Transaction): void {
+    this.recent.set(tx.id('hex'), tx)
+  }
+  async getRawTransaction(txid: string): Promise<string> {
     if (this.lastTx && this.lastTx.id('hex') === txid) return this.lastTx.toHex()
     return this.recent.get(txid)?.toHex() ?? ''
   }
-  private get spent (): Set<string> { return bookFor(this.funder).spent }
-  private get owned (): Map<string, RUTXO> { return bookFor(this.funder).owned } // outpoint -> spendable output we created
+  private get spent(): Set<string> {
+    return bookFor(this.funder).spent
+  }
+  private get owned(): Map<string, RUTXO> {
+    return bookFor(this.funder).owned
+  } // outpoint -> spendable output we created
 
   /** the tx as it was last presented for broadcast — success or failure. */
   lastAttempt?: Transaction
-  async broadcast (tx: Transaction): Promise<string> {
+  async broadcast(tx: Transaction): Promise<string> {
     this.lastAttempt = tx
     this.onAttempt?.(tx) // record BEFORE the outcome — an ambiguous accept must be findable
     const res = await this.broadcaster.broadcast(tx)
@@ -83,7 +111,7 @@ export class NektarProvider implements Provider {
    *  when an earlier ambiguous attempt is adopted or re-broadcast: its inputs
    *  are spent (in the shared per-funder book and the funder itself) and our
    *  own P2PKH change outputs become spendable. */
-  markAccepted (tx: Transaction): string {
+  markAccepted(tx: Transaction): string {
     // record spent outpoints + our own spendable change outputs — mark them in
     // the funder too, so a peeking reserve stops handing them out
     for (const inp of tx.inputs) {
@@ -111,34 +139,42 @@ export class NektarProvider implements Provider {
     this.onSuccess?.(tx)
     return txid
   }
-  async getUtxos (address: string): Promise<RUTXO[]> {
+  async getUtxos(address: string): Promise<RUTXO[]> {
     // hand runar the single largest live candidate — it becomes exactly one
     // funding input. smallest-first starved on a small change output while
     // big reserve entries sat unused; a list >1 makes runar add every entry
     // as an input (wasteful), and change lives in BOTH the funder and the
     // owned book, so the merge must dedupe by outpoint or the tx repeats
     // inputs and is invalid.
-    const all = (this.funder as any).utxos as Array<{ tx: Transaction, vout: number, satoshis: number }> | undefined ?? []
-    const byOut = new Map<string, { txid: string, outputIndex: number, satoshis: number, script: string, tx?: Transaction }>()
+    const all = ((this.funder as any).utxos as Array<{ tx: Transaction; vout: number; satoshis: number }> | undefined) ?? []
+    const byOut = new Map<string, { txid: string; outputIndex: number; satoshis: number; script: string; tx?: Transaction }>()
     for (const u of all) {
       byOut.set(`${u.tx.id('hex')}:${u.vout}`, {
-        txid: u.tx.id('hex'), outputIndex: u.vout,
+        txid: u.tx.id('hex'),
+        outputIndex: u.vout,
         satoshis: u.satoshis ?? u.tx.outputs[u.vout]!.satoshis!,
-        script: u.tx.outputs[u.vout]!.lockingScript.toHex(), tx: u.tx
+        script: u.tx.outputs[u.vout]!.lockingScript.toHex(),
+        tx: u.tx
       })
     }
     for (const u of this.owned.values()) if (!byOut.has(`${u.txid}:${u.outputIndex}`)) byOut.set(`${u.txid}:${u.outputIndex}`, u)
-    const free = [...byOut.values()].filter(u => !this.spent.has(`${u.txid}:${u.outputIndex}`))
+    const free = [...byOut.values()].filter((u) => !this.spent.has(`${u.txid}:${u.outputIndex}`))
     if (free.length === 0) return []
     const u = free.reduce((a, b) => (b.satoshis > a.satoshis ? b : a))
     if (u.tx) this.taken.set(u.txid, u.tx)
     return [{ txid: u.txid, outputIndex: u.outputIndex, satoshis: u.satoshis, script: u.script }]
   }
   taken = new Map<string, Transaction>()
-  async getContractUtxo (_scriptHash: string): Promise<RUTXO | null> { return null }
-  getNetwork (): 'testnet' { return 'testnet' }
+  async getContractUtxo(_scriptHash: string): Promise<RUTXO | null> {
+    return null
+  }
+  getNetwork(): 'testnet' {
+    return 'testnet'
+  }
   feeRate = 1 // sats per KB, per runar-sdk fee computation
-  async getFeeRate (): Promise<number> { return this.feeRate }
+  async getFeeRate(): Promise<number> {
+    return this.feeRate
+  }
 }
 
 export class AnchorChain {
@@ -151,9 +187,9 @@ export class AnchorChain {
   private head?: Head
   private pendingHeads: Head[] = []
   private txById = new Map<string, Transaction>()
-  readonly rotationCerts: import("@nektar/identity").RotationCert[] = []
+  readonly rotationCerts: import('@nektar/identity').RotationCert[] = []
 
-  constructor (
+  constructor(
     shard: string,
     shardKey: PrivateKey,
     private funder: Funder,
@@ -172,14 +208,19 @@ export class AnchorChain {
     this.signer = new LocalSigner(fundKey.toHex())
     this.provider = new NektarProvider(broadcaster, funder)
     if (opts.feeRateSatPerKb !== undefined) this.provider.feeRate = opts.feeRateSatPerKb
-    const rec = (tx: Transaction) => { this.ownAttempts.add(tx.id('hex')); this.txById.set(tx.id('hex'), tx) }
+    const rec = (tx: Transaction) => {
+      this.ownAttempts.add(tx.id('hex'))
+      this.txById.set(tx.id('hex'), tx)
+    }
     this.provider.onAttempt = rec
     this.provider.onSuccess = rec
-    void this.signer.getAddress().then(a => { this.provider.funderAddress = a })
+    void this.signer.getAddress().then((a) => {
+      this.provider.funderAddress = a
+    })
   }
 
   private _shardId?: string
-  getShardId (): string {
+  getShardId(): string {
     // shard = hash160(genesisOwner) — taken from the decoded on-chain head so
     // it stays stable across owner rotations (the signer key changes)
     const fromHead = this.getHead()?.data.shard
@@ -188,14 +229,18 @@ export class AnchorChain {
     return (this._shardId = toHexPub160(this.ownerPub()))
   }
   /** the current owner (shard) public key — authorizes contract calls */
-  private ownerPub (): string { return this.shardKey.toPublicKey().toString() }
+  private ownerPub(): string {
+    return this.shardKey.toPublicKey().toString()
+  }
 
-  getHead (): Head | undefined { return this.pendingHeads.at(-1) ?? this.head }
+  getHead(): Head | undefined {
+    return this.pendingHeads.at(-1) ?? this.head
+  }
 
   /** Restart: rehydrate from a persisted head tx (with its ancestry/BUMP via
    *  BEEF). The tx must decode as an authentic anchor of THIS owner; the next
    *  append spends exactly this UTXO — no new genesis, no fork. */
-  resume (headTx: Transaction, opts: { confirmed: boolean, certs?: import('@nektar/identity').RotationCert[] }): Head {
+  resume(headTx: Transaction, opts: { confirmed: boolean; certs?: import('@nektar/identity').RotationCert[] }): Head {
     if (this.getHead()) throw new Error('resume: chain already has a head')
     const dec = decodeNektarAnchor(headTx.outputs[0]!.lockingScript.toHex())
     if (!dec) throw new Error('resume: head tx output 0 is not an authentic NektarAnchor')
@@ -209,7 +254,7 @@ export class AnchorChain {
     return head
   }
 
-  async anchor (size: number, R: Bytes): Promise<AnchorResult> {
+  async anchor(size: number, R: Bytes): Promise<AnchorResult> {
     const limit = this.opts.burstLimit ?? 100
     if (this.pendingHeads.length >= limit) {
       throw new Error(`anchor back-pressure: unconfirmed depth ${this.pendingHeads.length} >= burstLimit ${limit}`)
@@ -220,7 +265,7 @@ export class AnchorChain {
   /** Accept a tx as the new head: mark its inputs spent / change spendable,
    *  register it, decode its continuation output. Used for direct successes,
    *  identical re-broadcasts and adopted earlier attempts alike. */
-  private acceptHead (tx: Transaction): AnchorResult {
+  private acceptHead(tx: Transaction): AnchorResult {
     this.provider.markAccepted(tx)
     this.register(tx)
     const dec = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
@@ -232,7 +277,7 @@ export class AnchorChain {
 
   /** If `msg` reports our head spent by one of our own attempts, that earlier
    *  attempt landed — return it for adoption. */
-  private ownSpenderOfHead (msg: string): Transaction | undefined {
+  private ownSpenderOfHead(msg: string): Transaction | undefined {
     const m = /([0-9a-f]{64}):(\d+) utxo already spent(?: by tx ([0-9a-f]{64}))?/.exec(msg)
     const h = this.getHead()
     if (!m || !h || !m[3] || `${m[1]}:${m[2]}` !== `${h.tx.id('hex')}:${h.vout}`) return undefined
@@ -246,9 +291,11 @@ export class AnchorChain {
    *  - ambiguous errors (TX_MISSING_PARENT, timeouts) → re-broadcast the
    *    IDENTICAL bytes with backoff, never rebuild.
    *  Everything else is thrown. */
-  private async withRetry (buildOnce: () => Promise<AnchorResult>): Promise<AnchorResult> {
+  private async withRetry(buildOnce: () => Promise<AnchorResult>): Promise<AnchorResult> {
     for (let attempt = 0; ; attempt++) {
-      try { return await buildOnce() } catch (e) {
+      try {
+        return await buildOnce()
+      } catch (e) {
         const msg = String((e as Error).message)
         const adopted = this.ownSpenderOfHead(msg)
         if (adopted) return this.acceptHead(adopted)
@@ -265,14 +312,18 @@ export class AnchorChain {
         const attemptTx = this.provider.lastAttempt
         if (!attemptTx) throw e
         for (let r = 0; r < 10; r++) {
-          await new Promise(resolve => setTimeout(resolve, 250 * (r + 1)))
+          await new Promise((resolve) => setTimeout(resolve, 250 * (r + 1)))
           let res
-          try { res = await this.provider.broadcaster.broadcast(attemptTx) } catch { res = undefined }
+          try {
+            res = await this.provider.broadcaster.broadcast(attemptTx)
+          } catch {
+            res = undefined
+          }
           if (res?.status === 'success') return this.acceptHead(attemptTx)
-          const inner = res?.status === 'error' ? res.description ?? '' : ''
+          const inner = res?.status === 'error' ? (res.description ?? '') : ''
           const adoptedInner = this.ownSpenderOfHead(inner)
           if (adoptedInner) return this.acceptHead(adoptedInner)
-          if (inner && !/TX_MISSING_PARENT/.test(inner)) throw new Error(inner)
+          if (inner && !/TX_MISSING_PARENT/.test(inner)) throw new Error(inner, { cause: e })
         }
         throw e
       }
@@ -281,9 +332,11 @@ export class AnchorChain {
 
   /** txids we broadcast during this chain's lifetime (for own-attempt detection). */
   private ownAttempts = new Set<string>()
-  private isOwnAttempt (txid: string): boolean { return this.ownAttempts.has(txid) }
+  private isOwnAttempt(txid: string): boolean {
+    return this.ownAttempts.has(txid)
+  }
 
-  private async anchorOnce (size: number, R: Bytes): Promise<AnchorResult> {
+  private async anchorOnce(size: number, R: Bytes): Promise<AnchorResult> {
     // fail fast on dry funding — never build or broadcast a contract-only tx
     const funding = await this.provider.getUtxos(await this.signer.getAddress())
     if (funding.length === 0) throw new Error('reserve dry: no funding UTXO available')
@@ -299,7 +352,11 @@ export class AnchorChain {
       const tx = this.provider.lastTx!
       this.register(tx)
       const gdec = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
-      const head: Head = { tx, vout: 0, data: gdec ? { shard: gdec.shard, n: gdec.n, size: gdec.size, R: gdec.R, Rp: gdec.Rp } : { shard: toHexPub160(pub), n: 0, size, R, Rp } }
+      const head: Head = {
+        tx,
+        vout: 0,
+        data: gdec ? { shard: gdec.shard, n: gdec.n, size: gdec.size, R: gdec.R, Rp: gdec.Rp } : { shard: toHexPub160(pub), n: 0, size, R, Rp }
+      }
       this.pendingHeads.push(head)
       return { tx, head }
     }
@@ -318,14 +375,18 @@ export class AnchorChain {
     this.register(tx)
     const decoded = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
     if (!decoded) throw new Error('anchor: continuation output did not decode')
-    const head: Head = { tx, vout: 0, data: { shard: decoded.shard, n: decoded.n, size: decoded.size, R: decoded.R, Rp: decoded.Rp, ownerPkh: decoded.ownerPkh } }
+    const head: Head = {
+      tx,
+      vout: 0,
+      data: { shard: decoded.shard, n: decoded.n, size: decoded.size, R: decoded.R, Rp: decoded.Rp, ownerPkh: decoded.ownerPkh }
+    }
     this.pendingHeads.push(head)
     return { tx, head }
   }
 
   /** Rotate the anchor owner to a new key. Only after the rotate tx is
    *  broadcast and its continuation decoded does the signer switch. */
-  async rotate (newKey: PrivateKey): Promise<AnchorResult> {
+  async rotate(newKey: PrivateKey): Promise<AnchorResult> {
     const oldKey = this.shardKey
     const newPub = newKey.toPublicKey().toString()
     const res = await this.withRetry(async () => await this.rotateOnce(newKey))
@@ -340,7 +401,7 @@ export class AnchorChain {
     return res
   }
 
-  private async rotateOnce (newKey: PrivateKey): Promise<AnchorResult> {
+  private async rotateOnce(newKey: PrivateKey): Promise<AnchorResult> {
     const funding = await this.provider.getUtxos(await this.signer.getAddress())
     if (funding.length === 0) throw new Error('reserve dry: no funding UTXO available')
     const cur = this.getHead()
@@ -358,12 +419,16 @@ export class AnchorChain {
     this.register(tx)
     const decoded = decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())
     if (!decoded) throw new Error('rotate: continuation output did not decode')
-    const head: Head = { tx, vout: 0, data: { shard: decoded.shard, n: decoded.n, size: decoded.size, R: decoded.R, Rp: decoded.Rp, ownerPkh: decoded.ownerPkh } }
+    const head: Head = {
+      tx,
+      vout: 0,
+      data: { shard: decoded.shard, n: decoded.n, size: decoded.size, R: decoded.R, Rp: decoded.Rp, ownerPkh: decoded.ownerPkh }
+    }
     this.pendingHeads.push(head)
     return { tx, head }
   }
 
-  private async freshContract (cur: Head): Promise<RunarContract> {
+  private async freshContract(cur: Head): Promise<RunarContract> {
     // every field comes from the decoded on-chain head (genesisOwner and
     // ownerPkh included) — never from local key state
     const script = cur.tx.outputs[cur.vout]!.lockingScript.toHex()
@@ -372,17 +437,19 @@ export class AnchorChain {
     // ANC-006: flagged heads rehydrate the flagged artifact; pre-flag (v3)
     // heads keep their flag-absent layout — a fork of formats is impossible
     // because the contract itself serializes its continuation
-    const c = new RunarContract(dec.metanet ? NEKTAR_ANCHOR_ARTIFACT : NEKTAR_ANCHOR_V3_ARTIFACT,
+    const c = new RunarContract(
+      dec.metanet ? NEKTAR_ANCHOR_ARTIFACT : NEKTAR_ANCHOR_V3_ARTIFACT,
       dec.metanet
         ? [dec.ownerPub, toHex(dec.ownerPkh), META_FLAG_HEX, BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), TAG_HEX]
-        : [dec.ownerPub, toHex(dec.ownerPkh), BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), TAG_HEX])
+        : [dec.ownerPub, toHex(dec.ownerPkh), BigInt(dec.n), BigInt(dec.size), toHex(dec.R), toHex(dec.Rp), TAG_HEX]
+    )
     c.connect(this.provider, this.signer)
     c['currentUtxo'] = { txid: cur.tx.id('hex'), outputIndex: cur.vout, satoshis: cur.tx.outputs[cur.vout]!.satoshis!, script }
     return c
   }
 
-  confirm (txid: string, merklePath?: any): void {
-    const idx = this.pendingHeads.findIndex(h => h.tx.id('hex') === txid)
+  confirm(txid: string, merklePath?: any): void {
+    const idx = this.pendingHeads.findIndex((h) => h.tx.id('hex') === txid)
     if (idx < 0) return
     for (let i = 0; i <= idx; i++) {
       const h = this.pendingHeads[i]!
@@ -394,7 +461,7 @@ export class AnchorChain {
     this.pendingHeads.splice(0, idx + 1)
   }
 
-  async handleReorg (lostTxids: string[]): Promise<void> {
+  async handleReorg(lostTxids: string[]): Promise<void> {
     if (this.head && lostTxids.includes(this.head.tx.id('hex'))) {
       this.pendingHeads.unshift(this.head)
       this.head = undefined
@@ -407,18 +474,18 @@ export class AnchorChain {
     }
   }
 
-  get shardId (): string {
+  get shardId(): string {
     return this.getShardId()
   }
-  headAtomicBEEF (): number[] | undefined {
+  headAtomicBEEF(): number[] | undefined {
     const h = this.getHead()
     return h ? h.tx.toAtomicBEEF() : undefined
   }
-  private register (tx: Transaction): void {
+  private register(tx: Transaction): void {
     // attach source parents for BEEF completeness: funding inputs come from
     // the funder; the contract input comes from the tracked head chain
     const fundUtxos = new Map<string, Transaction>(this.provider.taken)
-    for (const u of ((this.funder as any).utxos ?? []) as Array<{ tx: Transaction, vout: number }>) fundUtxos.set(u.tx.id('hex'), u.tx)
+    for (const u of ((this.funder as any).utxos ?? []) as Array<{ tx: Transaction; vout: number }>) fundUtxos.set(u.tx.id('hex'), u.tx)
     for (const inp of tx.inputs) {
       if (inp.sourceTransaction) continue
       const txid = inp.sourceTXID
@@ -429,7 +496,7 @@ export class AnchorChain {
     this.txById.set(tx.id('hex'), tx)
   }
 
-  beefOf (tx: Transaction, atomic = false): number[] {
+  beefOf(tx: Transaction, atomic = false): number[] {
     const ntx = this.normalize(tx, new Map())
     return atomic ? ntx.toAtomicBEEF() : ntx.toBEEF()
   }
@@ -439,7 +506,7 @@ export class AnchorChain {
    *  a tx carries a merkle proof (a proven tx needs no further ancestry).
    *  runar-sdk builds txs with its own @bsv/sdk 2.8.11 class, whose objects
    *  lack the source links 4.0.1 BEEF serialization requires. */
-  private normalize (tx: Transaction, memo: Map<string, Transaction>): Transaction {
+  private normalize(tx: Transaction, memo: Map<string, Transaction>): Transaction {
     const txid = tx.id('hex')
     const hit = memo.get(txid)
     if (hit) return hit
@@ -458,11 +525,11 @@ export class AnchorChain {
   }
 }
 
-function toHexPub160 (pub: string): string {
+function toHexPub160(pub: string): string {
   return toHexPub160Impl(pub)
 }
 const pkhOf = toHexPub160
 import { hash160 } from '@nektar/core'
-function toHexPub160Impl (pub: string): string {
+function toHexPub160Impl(pub: string): string {
   return toHex(hash160(Uint8Array.from(Buffer.from(pub, 'hex'))))
 }

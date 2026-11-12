@@ -1,4 +1,4 @@
-import { Hash, PrivateKey, ProtoWallet, Transaction, Utils, type ChainTracker } from '@bsv/sdk'
+import { Hash, PrivateKey, ProtoWallet, Utils, type ChainTracker } from '@bsv/sdk'
 import { sealEnvelope, encodePlaintext, envelopeRecord, envelopeCarrier, envelopeFundingLock } from '@lightwebinc/bbox-host/codec/send.js'
 import { decodeEnvelope, encodeReceipt, checkBox, checkOffice, MaxAcks } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { checkContent, verifyContentSignature } from '@lightwebinc/bbox-host/codec/content.js'
@@ -21,19 +21,30 @@ const toJ = (v: unknown): JValue => {
   return o
 }
 const fromJ = (v: JValue): unknown => {
-  if (v instanceof JObject) { const o: Record<string, unknown> = {}; for (const m of v.members) o[m.name] = fromJ(m.value); return o }
+  if (v instanceof JObject) {
+    const o: Record<string, unknown> = {}
+    for (const m of v.members) o[m.name] = fromJ(m.value)
+    return o
+  }
   if (Array.isArray(v)) return v.map(fromJ)
   return v
 }
-export const boxFundingLock = async (key: PrivateKey): Promise<import('@bsv/sdk').LockingScript> =>
-  await envelopeFundingLock(new ProtoWallet(key), ORIGINATOR)
+export const boxFundingLock = async (key: PrivateKey): Promise<import('@bsv/sdk').LockingScript> => await envelopeFundingLock(new ProtoWallet(key), ORIGINATOR)
 
-export async function sendBox (p: {
-  key: PrivateKey, ledger: TreeLedger, journal: CarrierJournal, hosts: string[], office?: string,
-  to: string, body: object, expiresAt?: number, quorum?: 'all' | 'majority' | 'one' | number
-}): Promise<{ txid: string, took: string[], admitted: string[], missed: Array<{ host: string, error: string }> }> {
+export async function sendBox(p: {
+  key: PrivateKey
+  ledger: TreeLedger
+  journal: CarrierJournal
+  hosts: string[]
+  office?: string
+  to: string
+  body: object
+  expiresAt?: number
+  quorum?: 'all' | 'majority' | 'one' | number
+}): Promise<{ txid: string; took: string[]; admitted: string[]; missed: Array<{ host: string; error: string }> }> {
   const office = p.office ?? DEFAULT_OFFICE
-  checkOffice(office); checkBox(BOX)
+  checkOffice(office)
+  checkBox(BOX)
   const w = new ProtoWallet(p.key)
   const from = new Uint8Array(Array.from(p.key.toPublicKey().encode(true) as number[]))
   const to = new Uint8Array(Utils.toArray(p.to, 'hex'))
@@ -42,8 +53,10 @@ export async function sendBox (p: {
   const topics = [`tm_bbox_${office}`]
   const hit = await p.journal.get(artifactHash)
   let beef: number[], txid: string
-  if (hit !== undefined) { beef = hit.beef; txid = hit.txid }
-  else {
+  if (hit !== undefined) {
+    beef = hit.beef
+    txid = hit.txid
+  } else {
     const slot = await p.ledger.take('bbox')
     if (slot === undefined) throw new Error('no funding slot')
     const nowSec = Math.floor(Date.now() / 1000)
@@ -62,37 +75,54 @@ export async function sendBox (p: {
   return { txid, took: r.took, admitted: r.admitted, missed: r.missed }
 }
 
-export interface BoxItem { txid: string, from: string, body: object, created: number, commitment: string }
+export interface BoxItem {
+  txid: string
+  from: string
+  body: object
+  created: number
+  commitment: string
+}
 
 const bytewise = (a: Uint8Array, b: Uint8Array): number => {
   for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i]! - b[i]!
   return a.length - b.length
 }
 
-export async function ackBox (p: {
-  key: PrivateKey, ledger: TreeLedger, journal: CarrierJournal, hosts: string[], office?: string,
-  items: Array<{ txid: string, commitment: string }>, quorum?: Quorum
-}): Promise<{ receipts: string[], acked: number, resent: number, skipped: number }> {
+export async function ackBox(p: {
+  key: PrivateKey
+  ledger: TreeLedger
+  journal: CarrierJournal
+  hosts: string[]
+  office?: string
+  items: Array<{ txid: string; commitment: string }>
+  quorum?: Quorum
+}): Promise<{ receipts: string[]; acked: number; resent: number; skipped: number }> {
   const office = p.office ?? DEFAULT_OFFICE
   checkOffice(office)
   const topics = [`tm_bbox_${office}`]
-  const resend = new Map<string, { txid: string, beef: number[] }>()
-  const fresh: Array<{ txid: string, commitment: string }> = []
+  const resend = new Map<string, { txid: string; beef: number[] }>()
+  const fresh: Array<{ txid: string; commitment: string }> = []
   let resent = 0
   for (const i of p.items) {
     const hit = await p.journal.get(`ack:${i.txid}`)
-    if (hit !== undefined) { resent++; resend.set(hit.txid, { txid: hit.txid, beef: hit.beef }) }
-    else fresh.push(i)
+    if (hit !== undefined) {
+      resent++
+      resend.set(hit.txid, { txid: hit.txid, beef: hit.beef })
+    } else fresh.push(i)
   }
-  let acked = 0, skipped = 0
+  let acked = 0,
+    skipped = 0
   const receipts: string[] = []
   const w = new ProtoWallet(p.key)
   const by = new Uint8Array(Array.from(p.key.toPublicKey().encode(true) as number[]))
   for (let c = 0; c < fresh.length; c += MaxAcks) {
     const chunk = fresh.slice(c, c + MaxAcks)
     const slot = await p.ledger.take('bbox')
-    if (slot === undefined) { skipped += chunk.length; continue }
-    const acks = [...new Map(chunk.map(i => [i.commitment, new Uint8Array(Utils.toArray(i.commitment, 'hex'))])).values()].sort(bytewise)
+    if (slot === undefined) {
+      skipped += chunk.length
+      continue
+    }
+    const acks = [...new Map(chunk.map((i) => [i.commitment, new Uint8Array(Utils.toArray(i.commitment, 'hex'))])).values()].sort(bytewise)
     const record = encodeReceipt({ office, by, acks, created: Math.floor(Date.now() / 1000), extra: [] })
     const carrier = await envelopeCarrier(w, ORIGINATOR, record, slot.tree, slot.vout)
     const beef = carrier.toAtomicBEEF()
@@ -103,16 +133,23 @@ export async function ackBox (p: {
   }
   // receipts fan out in parallel with no sleeps — the journal re-serves any
   // host that misses this round on the next cycle
-  await Promise.all([...resend.values()].map(async r => {
-    const s = await submitAll(p.hosts, r.beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
-    if (s.ok) receipts.push(r.txid)
-  }))
+  await Promise.all(
+    [...resend.values()].map(async (r) => {
+      const s = await submitAll(p.hosts, r.beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
+      if (s.ok) receipts.push(r.txid)
+    })
+  )
   return { receipts, acked, resent, skipped }
 }
 
-export async function readBox (p: {
-  key: PrivateKey, hosts: string[], office?: string, tracker: ChainTracker, limit?: number, timeoutMs?: number
-}): Promise<{ items: BoxItem[], withheld: Array<{ host: string, txid: string }>, unreachable: string[] }> {
+export async function readBox(p: {
+  key: PrivateKey
+  hosts: string[]
+  office?: string
+  tracker: ChainTracker
+  limit?: number
+  timeoutMs?: number
+}): Promise<{ items: BoxItem[]; withheld: Array<{ host: string; txid: string }>; unreachable: string[] }> {
   const office = p.office ?? DEFAULT_OFFICE
   const me = p.key.toPublicKey().toString()
   const w = new ProtoWallet(p.key)
@@ -123,23 +160,29 @@ export async function readBox (p: {
   const perHost = new Map<string, string[]>()
   const unreachable: string[] = []
   for (const a of r.answers) {
-    if ('error' in a) { unreachable.push(a.host); continue }
+    if ('error' in a) {
+      unreachable.push(a.host)
+      continue
+    }
     // envelopes open in parallel — each admit may fetch a header
-    const opened = await Promise.all(a.outputs.map(async o => await openEnvelope(o.beef, w, office, me, p.tracker).catch(() => undefined)))
+    const opened = await Promise.all(a.outputs.map(async (o) => await openEnvelope(o.beef, w, office, me, p.tracker).catch(() => undefined)))
     const ids: string[] = []
     for (const it of opened) {
-      if (it !== undefined) { ids.push(it.txid); items.set(it.txid, it) }
+      if (it !== undefined) {
+        ids.push(it.txid)
+        items.set(it.txid, it)
+      }
     }
     perHost.set(a.host, ids)
   }
-  const withheld: Array<{ host: string, txid: string }> = []
+  const withheld: Array<{ host: string; txid: string }> = []
   for (const [host, ids] of perHost) for (const txid of items.keys()) if (!ids.includes(txid)) withheld.push({ host, txid })
   let out = [...items.values()]
   if (p.limit !== undefined) out = out.slice(0, p.limit)
   return { items: out, withheld, unreachable }
 }
 
-async function openEnvelope (beef: number[], w: ProtoWallet, office: string, me: string, tracker: ChainTracker): Promise<BoxItem | undefined> {
+async function openEnvelope(beef: number[], w: ProtoWallet, office: string, me: string, tracker: ChainTracker): Promise<BoxItem | undefined> {
   // spec §8.1 via the real codec verdict, then §4.7 recipient checks in order
   const adm = await admit(new Uint8Array(beef), [], { office, headers: tracker }).catch(() => undefined)
   if (adm === undefined || adm.kind !== 'envelope' || adm.carrier === undefined) return undefined
@@ -154,7 +197,9 @@ async function openEnvelope (beef: number[], w: ProtoWallet, office: string, me:
   const brc78 = new Uint8Array(Array.from(Buffer.from(inner.content, 'base64')))
   const keyID = Utils.toBase64(Array.from(brc78.subarray(4 + 66, 4 + 66 + 32)))
   const ciphertext = brc78.subarray(4 + 66 + 32)
-  const opened = await w.decrypt({ ciphertext: Array.from(ciphertext), protocolID: [2, 'message encryption'], keyID, counterparty: Utils.toHex(Array.from(env.from)) }, ORIGINATOR).catch(() => undefined)
+  const opened = await w
+    .decrypt({ ciphertext: Array.from(ciphertext), protocolID: [2, 'message encryption'], keyID, counterparty: Utils.toHex(Array.from(env.from)) }, ORIGINATOR)
+    .catch(() => undefined)
   if (opened === undefined) return undefined
   // §4.7 checks 2,3: plaintext-json / plaintext-shape
   const doc = parseJSON(new Uint8Array(opened.plaintext))

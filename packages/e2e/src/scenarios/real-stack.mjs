@@ -501,6 +501,24 @@ try {
       await delay(500)
     }
   }
+  deal: {
+  if (EXPECT === 'guard') {
+    // money-safety probe: a want priced over the guard's per-purchase cap must
+    // be refused before anything is broadcast — zero escrow txs must exist
+    let refused = ''
+    try {
+      await tool(bob, 'want', { domains: ['libfoo'], question: QUESTION, maxSats: 600 })
+    } catch (e) {
+      refused = String(e?.message ?? e)
+    }
+    if (!/per-purchase limit/.test(refused)) throw new Error(`over-cap want was not refused by the guard: ${refused || '(no refusal — want accepted)'}`)
+    const ops = await tool(bob, 'ops')
+    const escrows = (ops?.operations ?? ops ?? []).filter((o) => o.data?.escrowTxid !== undefined)
+    if (escrows.length > 0) throw new Error(`refused want still produced escrow txs: ${JSON.stringify(escrows.map((o) => o.data.escrowTxid))}`)
+    log(`PASS — guard refused 600-sat want (cap 500), zero escrow broadcasts | refusal: ${refused.slice(0, 80)}`)
+    writeFileSync(join(dir, 'summary.json'), JSON.stringify({ runId, outcome: 'PASS', expect: 'guard', refusal: refused }, null, 1))
+    break deal
+  }
   log('want: posting (deal clock starts)')
   const wantAt = Date.now()
   const wantAtBlocks = blocksMined
@@ -623,6 +641,7 @@ try {
   log(`  counterparty journal complete; bob+cara inboxes empty on both hosts${LIVE ? ' (seller note held until proof)' : ''}`)
   log(`  tx logs: ${agents.map((a) => `${a.name}=${a.txCount}`).join(' ')}`)
   log(`  summary: ${join(dir, 'summary.json')}`)
+  }
   }
 } catch (e) {
   writeFileSync(join(dir, 'summary.json'), JSON.stringify({ runId, outcome: 'FAIL', error: e.message }, null, 1))

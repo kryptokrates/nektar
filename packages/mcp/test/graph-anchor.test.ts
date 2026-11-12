@@ -11,7 +11,7 @@ const rules = () =>
   parseProgram(`@id r1
 spec(S,V) :- requires(P,V), applies(S,P).`).rules
 
-test('AOR-006: GraphAnchor records + anchors vertex hashes; tamper detected', async t => {
+test('AOR-006: GraphAnchor records + anchors vertex hashes; tamper detected', async (t) => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -28,7 +28,7 @@ test('AOR-006: GraphAnchor records + anchors vertex hashes; tamper detected', as
   assert.ok(anchorTx, 'anchored vertex exposes its anchor tx')
 })
 
-test('POL-016: policy DAG gates recall — ALLOW only when Cedar+DAG agree; conflict DENY; caller facts ignored', async t => {
+test('POL-016: policy DAG gates recall — ALLOW only when Cedar+DAG agree; conflict DENY; caller facts ignored', async (t) => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -48,7 +48,7 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
   assert.ok(res.receipt.dag!.policyRoot.length === 64, 'receipt carries policy root')
 })
 
-test('POL-016b: per-item DAG permit — mixed batch withholds only the unpermitted fragment', async t => {
+test('POL-016b: per-item DAG permit — mixed batch withholds only the unpermitted fragment', async (t) => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -83,7 +83,7 @@ permit(P, read, 's/0') :- member(P, verified).`).rules
   assert.match(res.receipt.dag!.state, /dag-deny|dag-allow/, 'dag state reported')
 })
 
-test('POL-016c: anchoredPolicyRoot mismatch denies everything', async t => {
+test('POL-016c: anchoredPolicyRoot mismatch denies everything', async (t) => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w

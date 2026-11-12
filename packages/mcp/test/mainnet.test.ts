@@ -52,7 +52,7 @@ test('runtime ttn: no confirm flag required; testnet-encoded fee address', () =>
   assert.equal(s1.toHex(), s2.toHex(), 'PKH lock is encoding-independent')
 })
 
-test('runtime main: refuses without passphrase / with plaintext keys.json', async t => {
+test('runtime main: refuses without passphrase / with plaintext keys.json', async (t) => {
   const { openRuntime } = await import('../src/runtime.js')
   const base = { NEKTAR_NETWORK: 'main', NEKTAR_MAINNET_CONFIRM: 'I_UNDERSTAND' }
   // no passphrase

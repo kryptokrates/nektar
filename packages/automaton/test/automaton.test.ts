@@ -45,7 +45,7 @@ async function deployed(t: { skip: (m?: string) => void }, def = DEF) {
 }
 const SCRIPT_INVALID = /SCRIPT_INVALID/
 
-test('AUT-005: deploy + valid steps accepted by script evaluation; head decoded from chain', async t => {
+test('AUT-005: deploy + valid steps accepted by script evaluation; head decoded from chain', async (t) => {
   const ac = await deployed(t)
   if (ac === undefined) return
   assert.equal(ac.getHead()!.state.q, 0)
@@ -59,7 +59,7 @@ test('AUT-005: deploy + valid steps accepted by script evaluation; head decoded 
   assert.equal(decodeNektarAutomaton(flipped), null, 'tampered contract code rejected by decoder')
 })
 
-test('AUT-005 negatives: wrong from / not-in-δ / tampered path / wrong signer rejected by script', async t => {
+test('AUT-005 negatives: wrong from / not-in-δ / tampered path / wrong signer rejected by script', async (t) => {
   const ac = await deployed(t)
   if (ac === undefined) return
   const p = deltaPath(TBL, 1, 1, 2)
@@ -75,7 +75,7 @@ test('AUT-005 negatives: wrong from / not-in-δ / tampered path / wrong signer r
   assert.throws(() => deltaPath(TBL, 0, 1, 2), AutomatonError, 'off-δ path refused locally')
 })
 
-test('AUT-005: wrong deltaRoot — a path for another δ is rejected', async t => {
+test('AUT-005: wrong deltaRoot — a path for another δ is rejected', async (t) => {
   const ac = await deployed(t)
   if (ac === undefined) return
   const other = deltaTable({
@@ -89,7 +89,7 @@ test('AUT-005: wrong deltaRoot — a path for another δ is rejected', async t =
   await assert.rejects(() => ac.step(0, 1, OUT, { sibs: p.sibs.map(toHex), dir: p.dir }), SCRIPT_INVALID)
 })
 
-test('AUT-005: halt from non-final state fails; from final passes', async t => {
+test('AUT-005: halt from non-final state fails; from final passes', async (t) => {
   const ac = await deployed(t)
   if (ac === undefined) return
   await assert.rejects(() => ac.halt(), /not final — halt refused locally/, 'halt from q=A (local)')
@@ -103,13 +103,13 @@ test('AUT-005: halt from non-final state fails; from final passes', async t => {
   await assert.rejects(() => ac.halt(), SCRIPT_INVALID, 'halted: contract refuses a second halt')
   await assert.rejects(() => ac.step(0, 1, OUT, { from: 2, ...pathOf(2, 0, 0) }), /SCRIPT_INVALID|not in δ/, 'halted: no step')
 })
-const pathOf = (f: number, s: number, t: number) => {
+const pathOf = async (f: number, s: number, t: number) => {
   const d = deltaTable({ ...DEF, delta: [...DEF.delta, [f, s, t]] })
   const p = deltaPath(d, f, s, t)
   return { sibs: p.sibs.map(toHex), dir: p.dir }
 }
 
-test('AUT-005: step reads the CURRENT on-chain q (not the deploy-time value)', async t => {
+test('AUT-005: step reads the CURRENT on-chain q (not the deploy-time value)', async (t) => {
   // regression: a runar terminal method reads mutable fields from constructor
   // slots; every method must continue state so q comes from the preimage
   const def: AutomatonDef = {

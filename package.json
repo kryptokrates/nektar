@@ -18,7 +18,7 @@
     "check:format": "prettier --check .",
     "format": "prettier --write . --log-level warn",
     "check:syncpack": "syncpack lint",
-    "check:secrets": "gitleaks dir",
+    "check:secrets": "node tools/check-secrets.mjs",
     "check:hygiene": "pnpm check:lint && pnpm check:format && pnpm check:syncpack && pnpm check:deps && pnpm check:cruise && pnpm check:knip",
     "sbom": "node tools/sbom.mjs",
     "mcp:install": "node tools/mcp-install.mjs",

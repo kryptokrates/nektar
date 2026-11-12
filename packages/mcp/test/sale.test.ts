@@ -12,7 +12,7 @@ const SALE_TOOLS = ['sale']
 
 function setup() {
   const chain = (await stackChain(t))!
-    const mk = (opts: any = {}) => {
+  const mk = (opts: any = {}) => {
     const funder = StackFunder.dry()
     funder.topup(50)
     return new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
@@ -20,7 +20,7 @@ function setup() {
   return { chain, seller: mk(), buyer: mk(), mk }
 }
 
-test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is set', async t => {
+test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is set', async (t) => {
   const { seller } = setup()
   process.env.NEKTAR_TOOL_PROFILE = 'operator'
   try {
@@ -82,7 +82,7 @@ test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claim
   }
 })
 
-test('paid disclosure: depositor refunds an unrevealed escrow after deadline', async t => {
+test('paid disclosure: depositor refunds an unrevealed escrow after deadline', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const { seller, buyer } = setup()
@@ -102,7 +102,7 @@ test('paid disclosure: depositor refunds an unrevealed escrow after deadline', a
   }
 })
 
-test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; claim verifies it + provenance σ', async t => {
+test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; claim verifies it + provenance σ', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const { chain, seller, buyer } = setup()
@@ -154,7 +154,7 @@ test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; cl
   }
 })
 
-test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape); buyer decrypts + verifies', async t => {
+test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape); buyer decrypts + verifies', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const { chain, mk } = setup()
@@ -192,7 +192,7 @@ test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape)
   }
 })
 
-test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before funding', async t => {
+test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before funding', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const { chain, seller, buyer } = setup()

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory, callTool, ClientWallet, ClearanceAuthority } from '../src/index.js'
 
-test('MCP recall with wallet identity + clearance: level-2 read only when cleared; negatives refused', async t => {
+test('MCP recall with wallet identity + clearance: level-2 read only when cleared; negatives refused', async (t) => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w

@@ -37,7 +37,7 @@ async function scenario(t: { skip: (m?: string) => void }) {
   return { chain, bundle, ac, leaves, R }
 }
 
-test('verify: valid bundle verifies offline against headers', async t => {
+test('verify: valid bundle verifies offline against headers', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s
@@ -45,7 +45,7 @@ test('verify: valid bundle verifies offline against headers', async t => {
   assert.deepEqual(res, { ok: true, settled: true, anchorState: 'mined' })
 })
 
-test('verify: tampered leaf rejected', async t => {
+test('verify: tampered leaf rejected', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s
@@ -55,7 +55,7 @@ test('verify: tampered leaf rejected', async t => {
   assert.equal((res as any).reason, 'LeafPathMismatch')
 })
 
-test('verify: broken anchor chain detected', async t => {
+test('verify: broken anchor chain detected', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s
@@ -65,7 +65,7 @@ test('verify: broken anchor chain detected', async t => {
   assert.equal((res as any).reason, 'ChainInconsistent')
 })
 
-test('verify: unmined anchor still verifies locally (settled=false)', async t => {
+test('verify: unmined anchor still verifies locally (settled=false)', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { bundle } = s
@@ -83,7 +83,7 @@ test('verify: unmined anchor still verifies locally (settled=false)', async t =>
 })
 
 // --- leaf-count binding (ADR-002) + tail authentication negatives ---
-test('verify: leafIndex >= size rejected', async t => {
+test('verify: leafIndex >= size rejected', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s
@@ -93,7 +93,7 @@ test('verify: leafIndex >= size rejected', async t => {
   assert.equal((r as any).reason, 'BadBundle')
 })
 
-test('verify: negative leafIndex rejected', async t => {
+test('verify: negative leafIndex rejected', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s
@@ -102,7 +102,7 @@ test('verify: negative leafIndex rejected', async t => {
   assert.equal(r.ok, false)
 })
 
-test('verify: path one extra sibling rejected', async t => {
+test('verify: path one extra sibling rejected', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s
@@ -112,7 +112,7 @@ test('verify: path one extra sibling rejected', async t => {
   assert.equal((r as any).reason, 'BadBundle')
 })
 
-test('verify: path one missing sibling rejected', async t => {
+test('verify: path one missing sibling rejected', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s
@@ -122,7 +122,7 @@ test('verify: path one missing sibling rejected', async t => {
   assert.equal((r as any).reason, 'BadBundle')
 })
 
-test('verify: odd-batch duplicate-last-leaf claim rejected', async t => {
+test('verify: odd-batch duplicate-last-leaf claim rejected', async (t) => {
   // 3 leaves: merkleProof(leaves,2) path includes the self-paired sibling.
   // Claiming index = size (3) must fail binding even though the sibling exists.
   const w = await stackWorld(t, 10)
@@ -152,7 +152,7 @@ test('verify: odd-batch duplicate-last-leaf claim rejected', async t => {
   assert.equal(r.ok, false)
 })
 
-test('verify: tampered middle tail link with recomputed self-consistent tail fails', async t => {
+test('verify: tampered middle tail link with recomputed self-consistent tail fails', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s
@@ -167,7 +167,7 @@ test('verify: tampered middle tail link with recomputed self-consistent tail fai
   assert.equal((r as any).reason, 'ChainInconsistent')
 })
 
-test('verify: last tail entry differing from on-chain fields rejected', async t => {
+test('verify: last tail entry differing from on-chain fields rejected', async (t) => {
   const s = await scenario(t)
   if (s === undefined) return
   const { chain, bundle } = s

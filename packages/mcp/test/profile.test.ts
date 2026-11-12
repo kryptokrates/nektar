@@ -170,9 +170,9 @@ test('profile: an operator-only tool is refused over HTTP and MCP in agent profi
   }
 })
 
-test('profile: want refuses zero or several buyer policies; exactly one publishes', async t => {
+test('profile: want refuses zero or several buyer policies; exactly one publishes', async (t) => {
   const chain = (await stackChain(t))!
-    const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
   const h = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   let rt: Automation | undefined
   try {
@@ -211,7 +211,7 @@ test('profile: want refuses zero or several buyer policies; exactly one publishe
 
 test('profile: sell → want → deals drives a full deal; fund reports slot counts', { timeout: 300_000 }, async () => {
   const chain = (await stackChain(t))!
-    const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
   const office = 'nektar_abcdefghij'
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
   const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })

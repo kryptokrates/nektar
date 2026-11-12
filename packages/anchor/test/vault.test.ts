@@ -16,27 +16,29 @@ const dest = PrivateKey.fromRandom()
 const destPkh = Buffer.from(dest.toPublicKey().toHash()).toString('hex')
 const params = { destPkh, ownerPkh, perTxCap: 1_000n, windowCap: 3_000n, windowBlocks: 5n, maxFee: 10n }
 
-type World = { chain: StackChain, funder: StackFunder, vault: FeeVault }
-async function setup (t: { skip: (m?: string) => void }): Promise<World | undefined> {
+type World = { chain: StackChain; funder: StackFunder; vault: FeeVault }
+async function setup(t: { skip: (m?: string) => void }): Promise<World | undefined> {
   const w = await stackWorld(t, 16, 20_000)
   if (w === undefined) return undefined
   return { chain: w.chain, funder: w.funder, vault: new FeeVault(params) }
 }
 
 /** a real covenant-funded utxo: the node saw and admitted the funding tx */
-async function vaultOut (w: World, script: string, satoshis = 10_000): Promise<VaultUtxo> {
+async function vaultOut(w: World, script: string, satoshis = 10_000): Promise<VaultUtxo> {
   const out = await w.funder.take(satoshis + 2_000)
   const fund = new Transaction()
   fund.addInput({ sourceTransaction: out.tx, sourceOutputIndex: out.vout, unlockingScriptTemplate: new P2PKH().unlock(w.funder.keyPair) })
   fund.addOutput({ satoshis, lockingScript: LockingScript.fromHex(script) })
   fund.addOutput({ lockingScript: new P2PKH().lock(w.funder.address()), change: true })
-  await fund.fee(); await fund.sign()
+  await fund.fee()
+  await fund.sign()
   assert.equal((await w.chain.broadcast(fund)).status, 'success', 'vault funding must be admitted')
   return { txid: fund.id('hex'), vout: 0, satoshis, script }
 }
 
-test('V1 vault: valid spend accepted; over-cap, wrong outputs and wrong sig all rejected by consensus', async t => {
-  const w = await setup(t); if (w === undefined) return
+test('V1 vault: valid spend accepted; over-cap, wrong outputs and wrong sig all rejected by consensus', async (t) => {
+  const w = await setup(t)
+  if (w === undefined) return
   const { chain, vault } = w
   const good = vault.buildSpend(await vaultOut(w, vault.lockingScript()), owner, 500n, 1)
   const r = await chain.broadcast(good.tx)
@@ -65,8 +67,9 @@ test('V1 vault: valid spend accepted; over-cap, wrong outputs and wrong sig all 
   assert.notEqual((await chain.broadcast(forged.tx)).status, 'success', 'foreign continuation script must be rejected')
 })
 
-test('V1 vault: rolling window — 4th payment in the same window rejected, rolls after windowBlocks', async t => {
-  const w = await setup(t); if (w === undefined) return
+test('V1 vault: rolling window — 4th payment in the same window rejected, rolls after windowBlocks', async (t) => {
+  const w = await setup(t)
+  if (w === undefined) return
   const { chain, vault } = w
   let cur = await vaultOut(w, vault.lockingScript())
   for (let i = 0; i < 3; i++) {
@@ -84,8 +87,9 @@ test('V1 vault: rolling window — 4th payment in the same window rejected, roll
   assert.equal((await chain.broadcast(rolled.tx)).status, 'success', 'rolled window must allow spending again')
 })
 
-test('V1 VaultFunder: take() mints a capped funding out through the covenant; over-cap refused', async t => {
-  const w = await setup(t); if (w === undefined) return
+test('V1 VaultFunder: take() mints a capped funding out through the covenant; over-cap refused', async (t) => {
+  const w = await setup(t)
+  if (w === undefined) return
   const { chain, vault } = w
   let cur = await vaultOut(w, vault.lockingScript())
   // same shape the NEKTAR_FEE_VAULT runtime path drives: current() yields the

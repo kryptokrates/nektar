@@ -14,7 +14,7 @@ function setup(opts: NektarMemoryOptions = {}) {
   if (w === undefined) return
   const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
-  const settle = (shard: string) => {
+  const settle = async (shard: string) => {
     await chain.mine(1)
     const l = mem.tailLink(shard)
     if (l) mem.confirmAnchor(shard, l.txid)
@@ -37,7 +37,7 @@ test('describeShard: manifest committed to __catalog__, shardId binds label to c
   assert.equal(JSON.parse(Buffer.from(cat[0]!.fragment.d).toString('utf8')).type, 'shard-manifest')
 })
 
-test('describeShard: unknown/system shards and junk tags refused; latest wins', async t => {
+test('describeShard: unknown/system shards and junk tags refused; latest wins', async (t) => {
   const { mem } = setup()
   await assert.rejects(() => mem.describeShard('nope', { domains: ['x'] }), /unknown shard/)
   await mem.remember('ball', 'x')
@@ -74,7 +74,7 @@ test('describeShard via tool + /.well-known/nektar projects domains/offers/shard
   assert.equal(doc.logPublicKey, mem.logPublicKey())
 })
 
-test('exportShardPack carries the manifest as advisory metadata', async t => {
+test('exportShardPack carries the manifest as advisory metadata', async (t) => {
   const { mem } = setup()
   await mem.remember('ball', 'Metz beat Lyon 2-1')
   await mem.describeShard('ball', { domains: ['soccer'] })
@@ -83,7 +83,7 @@ test('exportShardPack carries the manifest as advisory metadata', async t => {
   assert.deepEqual(pack.manifest?.domains, ['soccer'])
 })
 
-test('importRecord: bought payload lands + __imports__ audit; forged provenance refused', async t => {
+test('importRecord: bought payload lands + __imports__ audit; forged provenance refused', async (t) => {
   const { mem } = setup()
   const r = await mem.importRecord({ data: 'Metz beat Lyon 2-1', sourceShard: 'ball', sourceSeq: 3, leaf: 'd'.repeat(64), saleTxid: 'e'.repeat(64) })
   assert.equal(r.seq, 0)
@@ -102,7 +102,7 @@ test('importRecord: bought payload lands + __imports__ audit; forged provenance 
   )
 })
 
-test('contentPrice: manifest offers drive external read/pack pricing', async t => {
+test('contentPrice: manifest offers drive external read/pack pricing', async (t) => {
   const { mem } = setup()
   await mem.remember('ball', 'x')
   assert.equal(await mem.contentPrice('ball', 'read'), 0, 'no manifest → free')

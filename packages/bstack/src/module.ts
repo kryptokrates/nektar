@@ -1,8 +1,15 @@
 import { Transaction, type ChainTracker } from '@bsv/sdk'
 import {
-  HeaderTracker, isNativeSource,
-  type LookupFormula, type LookupQuestion, type LookupService, type Module, type ModuleHost,
-  type OutputAdmittedByTopic, type OutputSpent, type TopicManager
+  HeaderTracker,
+  isNativeSource,
+  type LookupFormula,
+  type LookupQuestion,
+  type LookupService,
+  type Module,
+  type ModuleHost,
+  type OutputAdmittedByTopic,
+  type OutputSpent,
+  type TopicManager
 } from '@lightwebinc/bcommon'
 import { checkCarrier, checkSweep, carrierLockingKey } from './carrier.js'
 import { allLanes, decodePayload, lanesFor, verifyBody, bodyPub, bodyDomains, bodyExp, MAX_LIFETIME_MS, LS_NAME, type MarketPayload } from './market.js'
@@ -203,11 +210,7 @@ function makeLookup(nets: string[], lanes: string[], shared: Map<string, LaneInd
   }
 }
 
-export function createNektarModule(
-  host: Host,
-  nets: string[],
-  opts?: { now?: () => number }
-): Required<Module> {
+export function createNektarModule(host: Host, nets: string[], opts?: { now?: () => number }): Required<Module> {
   const now = opts?.now ?? Date.now
   const shared = new Map<string, LaneIndex>()
   const topics: Record<string, TopicManager> = {}

@@ -240,11 +240,23 @@ async function withTreasuryLock<T>(fn: () => Promise<T>): Promise<T> {
       break
     } catch {
       if (Date.now() > deadline) throw new Error('testkit: treasury lock wait exceeded')
-      try { const st = statSync(lock); if (Date.now() - st.mtimeMs > 120_000) { rmSync(lock, { recursive: true }); continue } } catch { /* raced */ }
+      try {
+        const st = statSync(lock)
+        if (Date.now() - st.mtimeMs > 120_000) {
+          rmSync(lock, { recursive: true })
+          continue
+        }
+      } catch {
+        /* raced */
+      }
       await new Promise((r) => setTimeout(r, 150))
     }
   }
-  try { return await fn() } finally { rmSync(lock, { recursive: true }) }
+  try {
+    return await fn()
+  } finally {
+    rmSync(lock, { recursive: true })
+  }
 }
 
 let treasuryPromise: Promise<StackTreasury> | undefined
@@ -279,25 +291,26 @@ export class StackFunder implements Funder {
     for (let attempt = 0; attempt < 8; attempt++) {
       // accumulate reserve entries until the spend is covered — the 16-input
       // cap sets the floor so entries don't need to be 50k each
-      const srcs: Array<{ tx: Transaction, vout: number, satoshis: number }> = []
+      const srcs: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
       const picked = new Set<string>()
       let inSats = 0
       const floor = Math.min(50_000, Math.ceil(need / 16))
       while (inSats < need && srcs.length < 16) {
         // takeReserve doesn't mark on take — exclude this tx's own picks or a
         // multi-input spend would consume the same outpoint twice (TX_INVALID)
-        const src = await t.reserve.takeReserve(
-          async (txid, vout) => picked.has(`${txid}:${vout}`) || (await utxoStatus(t.cfg, txid, vout)) === 'spent',
-          floor
-        )
+        const src = await t.reserve.takeReserve(async (txid, vout) => picked.has(`${txid}:${vout}`) || (await utxoStatus(t.cfg, txid, vout)) === 'spent', floor)
         if (src === null) break
         picked.add(`${src.tx.id('hex')}:${src.vout}`)
-        srcs.push(src); inSats += src.satoshis
+        srcs.push(src)
+        inSats += src.satoshis
       }
       if (inSats < need) {
         // pool drained below the floor — split another ~60 entries off the
         // treasury tail and retry rather than failing the suite
-        if (attempt < 6) { await t.refill(); continue }
+        if (attempt < 6) {
+          await t.refill()
+          continue
+        }
         throw new Error('testkit: reserve empty — bootstrap failed')
       }
       const tx = new Transaction()

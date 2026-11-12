@@ -28,7 +28,7 @@ export {
 } from './mainnet.js'
 export type { StatusStreamEvent, StatusStreamOpts } from './mainnet.js'
 export type { MainnetConfig } from './mainnet.js'
-export { StackChain, StackFunder, StackTreasury, stackCfgFromEnv, stackTreasury, stackUp, stackWorld, skipUnlessStack } from './testkit.js'
+export { StackChain, StackFunder, StackTreasury, stackCfgFromEnv, stackTreasury, stackUp, stackWorld, stackChain, skipUnlessStack } from './testkit.js'
 export { SpendGuard } from './spendguard.js'
 export type { SpendGuardOpts, CostRecord } from './spendguard.js'
 export type { PathResult } from './mainnet.js'

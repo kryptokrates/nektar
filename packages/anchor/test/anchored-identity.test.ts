@@ -7,7 +7,7 @@ import { AnchorChain } from '../src/runarchain.js'
 import { Smt, verifyProof } from '@nektar/identity'
 import { verifyCertChain, makeRotationCert, type RotationCert } from '@nektar/identity'
 
-test('smt revocation: anchored root verifies a status proof; stale root fails', async t => {
+test('smt revocation: anchored root verifies a status proof; stale root fails', async (t) => {
   const w = await stackWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -28,7 +28,7 @@ test('smt revocation: anchored root verifies a status proof; stale root fails', 
   assert.equal(await chain.isValidRootForHeight(h1m.computeRoot(h1.tx.id('hex')), h1m.blockHeight), true)
 })
 
-test('rotated anchor chain verifies alongside the cert chain', async t => {
+test('rotated anchor chain verifies alongside the cert chain', async (t) => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -45,7 +45,7 @@ test('rotated anchor chain verifies alongside the cert chain', async t => {
 import { BatchLog, MemoryShardStore } from '@nektar/log'
 import { reconstructRoot } from '@nektar/core'
 
-test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusion', async t => {
+test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusion', async (t) => {
   const w = await stackWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -75,7 +75,7 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
 
 import { issueDisclosure, fieldPath, randSalt, fieldsCommitment, type FieldCommitment } from '@nektar/identity'
 
-test('DIS-006: disclosure event logged as a leaf and anchored', async t => {
+test('DIS-006: disclosure event logged as a leaf and anchored', async (t) => {
   const w = await stackWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w

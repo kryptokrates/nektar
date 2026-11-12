@@ -1,4 +1,5 @@
 import { sha256, utf8, toHex } from '@nektar/core'
+import { claimsRecord, recordReader } from '@lightwebinc/bcommon'
 import { marketJson, verifyWant, verifyOffer, type SignedWant, type SignedOffer } from './artifacts.js'
 
 export const MAX_PAYLOAD = 16384
@@ -7,13 +8,55 @@ export const LS_NAME = 'ls_nektar'
 
 export type MarketPayload = { v: 1; kind: 'want' | 'offer'; body: SignedWant | SignedOffer }
 
-export function encodePayload(m: MarketPayload): Uint8Array {
-  const b = utf8(marketJson(m))
-  if (b.length > MAX_PAYLOAD) throw new Error(`payload ${b.length} over ${MAX_PAYLOAD}`)
-  return b
+// ── wire form ──────────────────────────────────────────────────────────
+// v2: the stock application-record envelope — a canonical CBOR map with a
+// 'nkt1' magic, key 1 the kind (1 want, 2 offer), key 2 the signed artifact
+// as canonical marketJson text. The artifact inside is byte-identical to
+// v1, so signatures and the whole verify path are unchanged; a reader that
+// knows only the record layer can still name the record and lift the body.
+// Keys above 2 are preserved-but-ignored headroom for a later schema.
+// v1 was the same {v,kind,body} as JSON text; decode accepts both forever.
+const MAGIC = new TextEncoder().encode('nkt1')
+const LAST_KEY = 2n
+const KIND: Record<MarketPayload['kind'], bigint> = { want: 1n, offer: 2n }
+const KIND_NAME: Record<string, MarketPayload['kind']> = { '1': 'want', '2': 'offer' }
+const reader = recordReader((reason, detail) => new Error(`market payload ${reason}${detail !== undefined ? ` ${detail}` : ''}`))
+
+/** Emit the legacy v1 JSON envelope (pre-record wire form for talking to
+ *  hosts running an older module — also NEKTAR_MARKET_V1=1). */
+export function encodePayload(m: MarketPayload, opts?: { legacy?: boolean }): Uint8Array {
+  if (opts?.legacy === true || process.env.NEKTAR_MARKET_V1 === '1') {
+    const b = utf8(marketJson(m))
+    if (b.length > MAX_PAYLOAD) throw new Error(`payload ${b.length} over ${MAX_PAYLOAD}`)
+    return b
+  }
+  const body = marketJson(m.body)
+  const pairs = [
+    { key: 0n, val: MAGIC },
+    { key: 1n, val: KIND[m.kind] },
+    { key: 2n, val: body }
+  ]
+  return reader.encode(pairs, [], MAX_PAYLOAD)
 }
 export function decodePayload(b: Uint8Array): MarketPayload {
-  const m = JSON.parse(new TextDecoder().decode(b)) as MarketPayload
+  if (claimsRecord(b, MAGIC)) {
+    const f = reader.decode(b, MAX_PAYLOAD, LAST_KEY, MAGIC)
+    const kind = KIND_NAME[String(reader.uint(f, 1, 1, 2))]
+    let body: SignedWant | SignedOffer | undefined
+    try {
+      body = JSON.parse(reader.text(f, 2)) as SignedWant | SignedOffer
+    } catch {
+      throw new Error('market payload: body is not valid JSON')
+    }
+    if (body === undefined || typeof body !== 'object') throw new Error('market payload: empty body')
+    return { v: 1, kind, body }
+  }
+  let m: MarketPayload
+  try {
+    m = JSON.parse(new TextDecoder().decode(b)) as MarketPayload
+  } catch {
+    throw new Error('bad market payload')
+  }
   if (m?.v !== 1 || (m.kind !== 'want' && m.kind !== 'offer') || m.body === undefined) throw new Error('bad market payload')
   return m
 }

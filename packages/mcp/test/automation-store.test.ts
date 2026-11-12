@@ -181,8 +181,10 @@ test('operations: idempotent creation, CAS transitions, transactional outbox, ev
       state: 'published',
       data: { wantId: 'w1' }
     })
-  const a = await mk(),
-    b = await mk()
+  const a = await mk()
+  if (a === undefined) return
+  const b = await mk()
+  if (b === undefined) return
   assert.equal(a.created, true)
   assert.equal(b.created, false)
   assert.equal(a.operation.operationId, b.operation.operationId)
@@ -233,7 +235,7 @@ test('approvals: bound to the exact action digest, single use, expiry enforced',
   await assert.rejects(store.decideApproval(b.approvalId, true, 'x'), /expired/)
 })
 
-async function payment(funder: MockFunder, sats = 500) {
+async function payment(funder: StackFunder, sats = 500) {
   const f = await funder.take(sats + 200)
   const tx = new Transaction()
   tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })
@@ -248,7 +250,6 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
   const w = await stackWorld(t, 3)
   if (w === undefined) return
   const { chain, funder } = w
-  for (const p of funder.parents) chain.registerParent(p)
   const tx = await payment(funder)
   const a = await open(file)
   const seen: string[] = []

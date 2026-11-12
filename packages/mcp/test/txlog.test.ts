@@ -9,7 +9,7 @@ import { Transaction, P2PKH } from '@bsv/sdk'
 import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { txLogBroadcast } from '../src/runtime.js'
 
-test('tx log: two successful broadcasts → two lines with correct fee', async t => {
+test('tx log: two successful broadcasts → two lines with correct fee', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-txlog-'))
   const logPath = join(dir, 'tx-log.jsonl')
   const w = await stackWorld(t, 3, 10_000)
@@ -47,7 +47,7 @@ test('tx log: two successful broadcasts → two lines with correct fee', async t
   assert.equal(readFileSync(logPath, 'utf8').trim().split('\n').length, 2)
 })
 
-test('tx log: no path → the wrap is a pass-through', async t => {
+test('tx log: no path → the wrap is a pass-through', async (t) => {
   const chain = (await stackChain(t))!
   const inner = chain.broadcast.bind(chain)
   assert.equal(txLogBroadcast(inner, undefined), inner)

@@ -28,7 +28,7 @@ async function anchoredBatch(R: Uint8Array, size: number, mine = true) {
   return { chain, tx, shard: decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
 }
 
-test('subset proof verifies against a real anchor whose R is the batch root (records across the shard boundary)', async t => {
+test('subset proof verifies against a real anchor whose R is the batch root (records across the shard boundary)', async (t) => {
   const { chain, tx, shard } = await anchoredBatch(merkleRoot(leaves(70)), 70)
   const res = await verifySubsetAnchored(subsetBytes(70, [1, 63, 64, 69]), tx, chain, { shard })
   assert.ok(res.ok, JSON.stringify(res))
@@ -36,7 +36,7 @@ test('subset proof verifies against a real anchor whose R is the batch root (rec
   assert.deepEqual(res.indices, [1, 63, 64, 69])
 })
 
-test('subset proof NEGATIVES (each check fails closed with a specific reason)', async t => {
+test('subset proof NEGATIVES (each check fails closed with a specific reason)', async (t) => {
   const good = await anchoredBatch(merkleRoot(leaves(70)), 70)
   const bytes = () => subsetBytes(70, [1, 63, 64])
   const v = (b: Uint8Array, a = good, exp: any = { shard: good.shard }) => verifySubsetAnchored(b, a.tx, a.chain, exp)
@@ -67,7 +67,11 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
       })(),
       /NotMined/
     ],
-    ['anchor not SPV-valid on this header chain', verifySubsetAnchored(bytes(), good.tx, (await stackChain(t))!, { shard: good.shard }), /BEEFInvalid|NotMined/],
+    [
+      'anchor not SPV-valid on this header chain',
+      verifySubsetAnchored(bytes(), good.tx, (await stackChain(t))!, { shard: good.shard }),
+      /BEEFInvalid|NotMined/
+    ],
     [
       'tampered disclosed leaf',
       (() => {
@@ -86,7 +90,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
   }
 })
 
-test('NektarMemory: proveSubset + verifySubset over its own anchored batch; NEKTAR_PROOF_SHARDING=0 → disabled', async t => {
+test('NektarMemory: proveSubset + verifySubset over its own anchored batch; NEKTAR_PROOF_SHARDING=0 → disabled', async (t) => {
   const w = await stackWorld(t, 20)
   if (w === undefined) return
   const { chain, funder: f } = w

@@ -51,7 +51,7 @@ test('sandbox: traversal, protected files, test-oracle edits and oversized patch
   assert.match(validatePatch(spec, { edits: [{ file: 'src/app.js', find: '', replace: 'x' }] })!, /malformed/)
 })
 
-test('sandbox: without real isolation the evaluation is BLOCKED — never run on the host', async t => {
+test('sandbox: without real isolation the evaluation is BLOCKED — never run on the host', async (t) => {
   let ran = false
   const none: IsolationBackend = {
     name: 'absent',
@@ -111,7 +111,7 @@ test('sandbox: real container run — failing build, purchased fix, passing acce
   })
 })
 
-test('ai: scripted matcher is deterministic; results outside the offered candidates are rejected', async t => {
+test('ai: scripted matcher is deterministic; results outside the offered candidates are rejected', async (t) => {
   const job = {
     jobId: 'j',
     kind: 'match' as const,

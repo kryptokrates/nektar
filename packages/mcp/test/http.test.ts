@@ -65,12 +65,12 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
   }
 })
 
-test('HTTP API: NEKTAR_HTTP_TOKEN gates every route except /v1/health', async t => {
+test('HTTP API: NEKTAR_HTTP_TOKEN gates every route except /v1/health', async (t) => {
   process.env.NEKTAR_HTTP_TOKEN = 't0ken-xyz'
   try {
     const w = await stackWorld(t, 4)
-  if (w === undefined) return
-  const { chain, funder } = w
+    if (w === undefined) return
+    const { chain, funder } = w
     const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
     const srv = createHttpApi(mem).listen(0)
     await new Promise((r) => srv.once('listening', r))
@@ -90,7 +90,7 @@ test('HTTP API: NEKTAR_HTTP_TOKEN gates every route except /v1/health', async t 
   }
 })
 
-test('verify page: OG unfurl meta + install CTA + copyable badge markdown', async t => {
+test('verify page: OG unfurl meta + install CTA + copyable badge markdown', async (t) => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w

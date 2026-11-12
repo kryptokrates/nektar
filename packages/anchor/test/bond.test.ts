@@ -14,27 +14,29 @@ const cfg = { operatorPkh, bondReleaseHeight: 100n, maxFee: 10n, epochLen: 10n }
 const R1 = 'aa'.repeat(32)
 const R2 = 'bb'.repeat(32)
 
-type World = { chain: StackChain, funder: StackFunder, bond: CheckpointBond }
-async function setup (t: { skip: (m?: string) => void }): Promise<World | undefined> {
+type World = { chain: StackChain; funder: StackFunder; bond: CheckpointBond }
+async function setup(t: { skip: (m?: string) => void }): Promise<World | undefined> {
   const w = await stackWorld(t, 8, 20_000)
   if (w === undefined) return undefined
   return { chain: w.chain, funder: w.funder, bond: new CheckpointBond(cfg) }
 }
 
 /** a real bond utxo — funding tx admitted by the node */
-async function bondOut (w: World, script: string, satoshis = 10_000): Promise<BondUtxo> {
+async function bondOut(w: World, script: string, satoshis = 10_000): Promise<BondUtxo> {
   const out = await w.funder.take(satoshis + 2_000)
   const fund = new Transaction()
   fund.addInput({ sourceTransaction: out.tx, sourceOutputIndex: out.vout, unlockingScriptTemplate: new P2PKH().unlock(w.funder.keyPair) })
   fund.addOutput({ satoshis, lockingScript: LockingScript.fromHex(script) })
   fund.addOutput({ lockingScript: new P2PKH().lock(w.funder.address()), change: true })
-  await fund.fee(); await fund.sign()
+  await fund.fee()
+  await fund.sign()
   assert.equal((await w.chain.broadcast(fund)).status, 'success', 'bond funding must be admitted')
   return { txid: fund.id('hex'), vout: 0, satoshis, script }
 }
 
-test('V2 bond: commit chain continues n→n+1 with lastRoot; wrong signer rejected', async t => {
-  const w = await setup(t); if (w === undefined) return
+test('V2 bond: commit chain continues n→n+1 with lastRoot; wrong signer rejected', async (t) => {
+  const w = await setup(t)
+  if (w === undefined) return
   const { chain, bond } = w
   const utxo = await bondOut(w, bond.lockingScript())
   // genesis deadline = releaseHeight (100) — a commit at height 50 renews to 60
@@ -54,8 +56,9 @@ test('V2 bond: commit chain continues n→n+1 with lastRoot; wrong signer reject
   await assert.rejects(() => bond.buildCommit(u2, operator, R2, 55, chain, 500n), /refused|SCRIPT|error/i)
 })
 
-test('V2 bond: close gated by release height', async t => {
-  const w = await setup(t); if (w === undefined) return
+test('V2 bond: close gated by release height', async (t) => {
+  const w = await setup(t)
+  if (w === undefined) return
   const { chain, bond } = w
   const utxo = await bondOut(w, bond.lockingScript())
   // too early — locktime below release height must be refused by consensus
@@ -65,8 +68,9 @@ test('V2 bond: close gated by release height', async t => {
   assert.ok(close.tx.id('hex').length === 64, 'close at release accepted')
 })
 
-test('V2 seize: deadline lapse → permissionless slashing (§12 SLA enforcement)', async t => {
-  const w = await setup(t); if (w === undefined) return
+test('V2 seize: deadline lapse → permissionless slashing (§12 SLA enforcement)', async (t) => {
+  const w = await setup(t)
+  if (w === undefined) return
   const { chain, bond } = w
   const utxo = await bondOut(w, bond.lockingScript())
   // commit at 50 → deadline 60
@@ -91,8 +95,9 @@ test('V2 seize: deadline lapse → permissionless slashing (§12 SLA enforcement
   )
 })
 
-test('V2 seize boundary: exactly at deadline seizable, commit exactly at deadline refused', async t => {
-  const w = await setup(t); if (w === undefined) return
+test('V2 seize boundary: exactly at deadline seizable, commit exactly at deadline refused', async (t) => {
+  const w = await setup(t)
+  if (w === undefined) return
   const { chain, bond } = w
   const utxo = await bondOut(w, bond.lockingScript())
   const c1 = await bond.buildCommit(utxo, operator, R1, 90, chain) // deadline = 100 = releaseHeight

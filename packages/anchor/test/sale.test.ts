@@ -16,8 +16,8 @@ const H_WRAPPED = Buffer.from(Hash.sha256(Buffer.from(WRAPPED, 'hex'))).toString
 // the seller's published offer — no depositor; the buyer completes it
 const cfg = { sellerPkh, price: 5_000n, hWrapped: H_WRAPPED, refundAfter: 100n, maxFee: 10n }
 
-type World = { chain: StackChain, funder: StackFunder, host: DisclosureSaleHost, buyer: PrivateKey }
-async function setup (t: { skip: (m?: string) => void }): Promise<World | undefined> {
+type World = { chain: StackChain; funder: StackFunder; host: DisclosureSaleHost; buyer: PrivateKey }
+async function setup(t: { skip: (m?: string) => void }): Promise<World | undefined> {
   const w = await stackWorld(t, 8, 20_000)
   if (w === undefined) return undefined
   const buyer = w.funder.keyPair
@@ -27,15 +27,16 @@ async function setup (t: { skip: (m?: string) => void }): Promise<World | undefi
 }
 
 /** a buyer-funded escrow utxo — a real wallet outpoint into the covenant */
-async function escrowOf (w: World, deposit = 6_000) {
+async function escrowOf(w: World, deposit = 6_000) {
   const out = await w.funder.take(20_000)
   const { tx, utxo } = await w.host.buildEscrow([out], w.buyer, deposit)
   assert.equal((await w.chain.broadcast(tx)).status, 'success', 'escrow funding accepted')
   return utxo
 }
 
-test('V3 escrow: buyer funds, seller reveals+collects atomically; underpayment/reroute/fee refused', async t => {
-  const w = await setup(t); if (w === undefined) return
+test('V3 escrow: buyer funds, seller reveals+collects atomically; underpayment/reroute/fee refused', async (t) => {
+  const w = await setup(t)
+  if (w === undefined) return
   const { chain, host } = w
   const utxo = await escrowOf(w)
   // seller completes unilaterally — reveals WRAPPED, collects price,
@@ -57,8 +58,9 @@ test('V3 escrow: buyer funds, seller reveals+collects atomically; underpayment/r
   assert.notEqual((await chain.broadcast(greedy.tx)).status, 'success', 'fee > maxFee must be rejected')
 })
 
-test('V3 escrow: depositor refunds after deadline; seller/early/stranger refused', async t => {
-  const w = await setup(t); if (w === undefined) return
+test('V3 escrow: depositor refunds after deadline; seller/early/stranger refused', async (t) => {
+  const w = await setup(t)
+  if (w === undefined) return
   const { chain, host, buyer } = w
   const utxo = await escrowOf(w)
   // too early — locktime below refundAfter
@@ -79,8 +81,9 @@ test('V3 escrow: depositor refunds after deadline; seller/early/stranger refused
   assert.notEqual((await chain.broadcast(greedy.tx)).status, 'success', 'refund with fee > maxFee must be rejected')
 })
 
-test('V3 sale: claimDisclosure reads wrapped back from the real covenant buy tx', async t => {
-  const w = await setup(t); if (w === undefined) return
+test('V3 sale: claimDisclosure reads wrapped back from the real covenant buy tx', async (t) => {
+  const w = await setup(t)
+  if (w === undefined) return
   const { host } = w
   const utxo = await escrowOf(w)
   const good = host.buildBuy(utxo, WRAPPED, 990n)

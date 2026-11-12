@@ -60,9 +60,9 @@ interface OrProof {
 }
 function proveOr(label: string, base: Point, statements: Point[], trueIdx: number, witness: bigint): OrProof {
   const m = statements.length
-  const a: Point[] = Array.from({ length: m })
-  const e: bigint[] = Array.from({ length: m })
-  const s: bigint[] = Array.from({ length: m })
+  const a: Point[] = []
+  const e: bigint[] = []
+  const s: bigint[] = []
   let sumFake = 0n
   for (let j = 0; j < m; j++) {
     if (j === trueIdx) continue
@@ -107,7 +107,7 @@ export function proveRange(value: bigint, blinding: bigint, bits: number, t: ZkT
   if (bits <= 0 || bits > 64) return null
   const v = mod(value)
   if (v >= 1n << BigInt(bits)) return null
-  const r: bigint[] = Array.from({ length: bits })
+  const r: bigint[] = []
   let weighted = 0n
   for (let i = 1; i < bits; i++) {
     r[i] = rand()

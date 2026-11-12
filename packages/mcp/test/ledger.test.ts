@@ -17,7 +17,7 @@ async function open() {
   return { kx, store }
 }
 
-test('ledger: every owner broadcast is recorded with bytes before the outcome is known', async t => {
+test('ledger: every owner broadcast is recorded with bytes before the outcome is known', async (t) => {
   const { kx, store } = await open()
   const w = await stackWorld(t, 2)
   if (w === undefined) return
@@ -61,7 +61,7 @@ test('ledger: payInvoice exports a signed tx whose input stays leased — no pha
   await kx.destroy()
 })
 
-test('ledger: reserve predicate skips leased outpoints; addOwned dedups', async t => {
+test('ledger: reserve predicate skips leased outpoints; addOwned dedups', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-ledger-'))
   const { kx, store } = await open()
   const key = PrivateKey.fromRandom()
@@ -79,7 +79,7 @@ test('ledger: reserve predicate skips leased outpoints; addOwned dedups', async 
   await kx.destroy()
 })
 
-test('ledger: releaseUnsigned frees only a never-submitted preparation', async t => {
+test('ledger: releaseUnsigned frees only a never-submitted preparation', async (t) => {
   const { kx, store } = await open()
   const tx = new Transaction()
   tx.addInput({ sourceTXID: 'b'.repeat(64), sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })

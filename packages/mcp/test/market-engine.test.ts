@@ -30,7 +30,7 @@ interface Agent {
 
 async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: number } = {}) {
   const chain = (await stackChain(t))!
-    const dir = mkdtempSync(join(tmpdir(), 'nektar-market-'))
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-market-'))
   const agents = new Map<string, Agent>()
   const feed: Array<{ seq: number; kind: string; payload: unknown }> = []
   const wire: string[] = []
@@ -169,7 +169,8 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
 }
 
 test('S1 mock: three sellers quote 450/300/200, buyer scores, pays the best, verifies the disclosure — no manual tool calls', async (t) => {
-  const w = await world(t, )
+  const w = await world(t)
+  if (w === undefined) return
   t.after(w.close)
   const a = await w.seller('alice', 450),
     b = await w.seller('ben', 300),
@@ -223,7 +224,8 @@ test('S1 mock: three sellers quote 450/300/200, buyer scores, pays the best, ver
 })
 
 test('two wants from one buyer are answered and settled independently', async (t) => {
-  const w = await world(t, )
+  const w = await world(t)
+  if (w === undefined) return
   t.after(w.close)
   const c = await w.seller('cara', 200)
   const bob = await w.add('bob')
@@ -240,7 +242,8 @@ test('two wants from one buyer are answered and settled independently', async (t
 })
 
 test('outside policy → paused for a human; approval is bound to the exact action; denial stops it', async (t) => {
-  const w = await world(t, )
+  const w = await world(t)
+  if (w === undefined) return
   t.after(w.close)
   await w.seller('cara', 200)
   const bob = await w.add('bob', { maxLockedSats: 100 })
@@ -273,6 +276,7 @@ test('outside policy → paused for a human; approval is bound to the exact acti
 
 test('seller goes dark after quoting → buyer refunds itself at the deadline; revoked policy stops new buying', async (t) => {
   const w = await world(t, { refundBlocks: 6 })
+  if (w === undefined) return
   t.after(w.close)
   const c = await w.seller('cara', 200)
   const bob = await w.add('bob')
@@ -298,7 +302,8 @@ test('seller goes dark after quoting → buyer refunds itself at the deadline; r
 })
 
 test('hostile offers are rejected with reasons and never funded', async (t) => {
-  const w = await world(t, )
+  const w = await world(t)
+  if (w === undefined) return
   t.after(w.close)
   const c = await w.seller('cara', 200)
   const bob = await w.add('bob')
@@ -315,7 +320,8 @@ test('hostile offers are rejected with reasons and never funded', async (t) => {
 })
 
 test('crash between escrow prepare and submit: restart resubmits the SAME bytes, no second escrow, no operator prompt', async (t) => {
-  const w = await world(t, )
+  const w = await world(t)
+  if (w === undefined) return
   t.after(w.close)
   await w.seller('cara', 200)
   const bob = await w.add('bob')

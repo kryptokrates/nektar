@@ -49,7 +49,7 @@ const seedQuery: SecurityStateStore = {
   save: () => {}
 }
 
-test('STARK derivation verifies against the anchored dagroot record + issued queryId', async t => {
+test('STARK derivation verifies against the anchored dagroot record + issued queryId', async (t) => {
   const d = dag()
   const root = Buffer.from(d.policyRoot()).toString('hex')
   assert.equal(root, fx.journal.policyRoot, 'test DAG must reproduce the fixture policy root')

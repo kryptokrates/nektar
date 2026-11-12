@@ -14,8 +14,9 @@ const setup = async (t: { skip: (m?: string) => void }, burstLimit = Infinity) =
   return { chain, funder, ac }
 }
 
-test('regression: confirming a descendant never gives its BUMP to earlier pending heads', async t => {
-  const s0 = await setup(t); if (s0 === undefined) return
+test('regression: confirming a descendant never gives its BUMP to earlier pending heads', async (t) => {
+  const s0 = await setup(t)
+  if (s0 === undefined) return
   const { ac } = s0
   const g = await ac.anchor(1, dsha256(utf8('c0')))
   const a1 = await ac.anchor(1, dsha256(utf8('c1')))
@@ -28,8 +29,9 @@ test('regression: confirming a descendant never gives its BUMP to earlier pendin
   assert.equal(ac.getHead()!.data.n, 1)
 })
 
-test('anchor: genesis then successor spends the head UTXO', async t => {
-  const s0 = await setup(t); if (s0 === undefined) return
+test('anchor: genesis then successor spends the head UTXO', async (t) => {
+  const s0 = await setup(t)
+  if (s0 === undefined) return
   const { chain, ac } = s0
   const g = await ac.anchor(10, dsha256(utf8('b0')))
   const gd = decodeNektarAnchor(g.tx.outputs[0]!.lockingScript.toHex())
@@ -49,7 +51,7 @@ test('anchor: genesis then successor spends the head UTXO', async t => {
   assert.ok(ac.headAtomicBEEF()!.length > 0)
 })
 
-test('anchor: failed broadcast does not advance the head', async t => {
+test('anchor: failed broadcast does not advance the head', async (t) => {
   const w = await stackWorld(t, 16, 10_000)
   if (w === undefined) return
   const { chain, funder } = w
@@ -79,8 +81,9 @@ test('anchor: failed broadcast does not advance the head', async t => {
   assert.equal(decodeNektarAnchor(a4.tx.outputs[0]!.lockingScript.toHex())!.n, 3)
 })
 
-test('anchor: unconfirmed chain + burst back-pressure', async t => {
-  const s0 = await setup(t, 3); if (s0 === undefined) return
+test('anchor: unconfirmed chain + burst back-pressure', async (t) => {
+  const s0 = await setup(t, 3)
+  if (s0 === undefined) return
   const { chain, ac } = s0
   for (let i = 0; i < 3; i++) await ac.anchor(1, dsha256(utf8(`b${i}`)))
   await assert.rejects(() => ac.anchor(1, dsha256(utf8('x'))), /back-pressure/)
@@ -91,7 +94,7 @@ test('anchor: unconfirmed chain + burst back-pressure', async t => {
   assert.equal(ac.getHead()!.data.n, 3)
 })
 
-test('burst: 20 anchors with reserve-style funder pass script verification', async t => {
+test('burst: 20 anchors with reserve-style funder pass script verification', async (t) => {
   const w = await stackWorld(t, 30, 10_000)
   if (w === undefined) return
   const { chain, funder: f } = w
@@ -127,7 +130,7 @@ test('burst: 20 anchors with reserve-style funder pass script verification', asy
   assert.equal(true, true)
 })
 
-test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', async t => {
+test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', async (t) => {
   // A broadcaster that rejects the SECOND broadcast once with TX_MISSING_PARENT
   // (regtest propagation race). Before the fix, lastTx was set to the FAILED
   // child, so the retry's parent fetch returned '' → partial sourceTransaction
@@ -153,7 +156,7 @@ test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', asyn
   assert.equal(ac.getHead()!.data.n, 1, 'chain advanced despite the failed attempt')
 })
 
-test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async t => {
+test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async (t) => {
   const w = await stackWorld(t, 10, 10_000)
   if (w === undefined) return
   const { chain } = w
@@ -181,7 +184,7 @@ test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async 
   assert.equal(secondHex, rejectedHex, 're-broadcast must be byte-identical')
 })
 
-test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async t => {
+test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async (t) => {
   const w = await stackWorld(t, 10, 10_000)
   if (w === undefined) return
   const { chain } = w
@@ -218,13 +221,18 @@ test('anchorOnce fails fast on dry funding — never broadcasts a contract-only 
   // no chain needed: funding emptiness must abort before any broadcast
   const f = StackFunder.dry()
   let calls = 0
-  const probe = { broadcast: async () => { calls++; return { status: 'error' as const } } }
+  const probe = {
+    broadcast: async () => {
+      calls++
+      return { status: 'error' as const }
+    }
+  }
   const ac = new AnchorChain('d', f.keyPair, f, f.keyPair, probe as any)
   await assert.rejects(() => ac.anchor(1, new Uint8Array(32).fill(1)), /reserve dry|no utxo/i)
   assert.equal(calls, 0, 'nothing was broadcast')
 })
 
-test('every AnchorChain tx produces a BEEF with all inputs resolved', async t => {
+test('every AnchorChain tx produces a BEEF with all inputs resolved', async (t) => {
   const w = await stackWorld(t, 10, 10_000)
   if (w === undefined) return
   const { chain } = w
@@ -240,7 +248,7 @@ test('every AnchorChain tx produces a BEEF with all inputs resolved', async t =>
   }
 })
 
-test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent stays decodable', async t => {
+test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent stays decodable', async (t) => {
   const w = await stackWorld(t, 10, 10_000)
   if (w === undefined) return
   const { chain } = w
@@ -291,9 +299,10 @@ test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent s
   assert.equal(decodeNektarAnchor(hex.slice(0, at) + '20' + '42'.repeat(32) + hex.slice(at)), null, 'v2 layout refused')
 })
 
-test('GOAL-v8 D5: extractAnchorAuthorship exposes σ_n — verified against the preimage', async t => {
+test('GOAL-v8 D5: extractAnchorAuthorship exposes σ_n — verified against the preimage', async (t) => {
   const { extractAnchorAuthorship } = await import('@nektar/contracts')
-  const s0 = await setup(t); if (s0 === undefined) return
+  const s0 = await setup(t)
+  if (s0 === undefined) return
   const { ac } = s0
   const g = await ac.anchor(1, dsha256(utf8('g')))
   const a1 = await ac.anchor(2, dsha256(utf8('a1')))

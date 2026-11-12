@@ -42,14 +42,14 @@ async function anchoredBatch(R: Uint8Array, size: number, mine = true) {
   return { chain, tx, ac, shard: decodeNektarAnchor(tx.outputs[0]!.lockingScript.toHex())!.shard }
 }
 
-test('STARK membership verifies against a real anchor whose R is the proven root', async t => {
+test('STARK membership verifies against a real anchor whose R is the proven root', async (t) => {
   const { chain, tx, shard } = await anchoredBatch(fromHex(fx.journal.root), 5)
   const res = await verifyMembershipAnchoredStark(proofBytes(), tx, chain, issued(fx.journal.queryId), { shard })
   assert.ok(res.ok, JSON.stringify(res))
   assert.equal(res.anchorTxid, tx.id('hex'))
 })
 
-test('STARK membership NEGATIVES (each check fails closed with a specific reason)', async t => {
+test('STARK membership NEGATIVES (each check fails closed with a specific reason)', async (t) => {
   const good = await anchoredBatch(fromHex(fx.journal.root), 5)
   const q = fx.journal.queryId
   const v = (bytes: Uint8Array, a = good, reg = issued(q), exp: any = { shard: good.shard }) => verifyMembershipAnchoredStark(bytes, a.tx, a.chain, reg, exp)
@@ -117,7 +117,7 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
   assert.match(String((await v(proofBytes(), good, reg)).reason), /already used|not issued/)
 })
 
-test('NektarMemory: issued ZK queries are single use and survive a restart (persisted)', async t => {
+test('NektarMemory: issued ZK queries are single use and survive a restart (persisted)', async (t) => {
   let saved: any
   const store = {
     load: () => saved,
@@ -178,7 +178,7 @@ async function memWithFixtureAnchor() {
   return { mem, authority, zk }
 }
 
-test('§13 combined Π: the Π binding rejects proofs paired with an unrelated clearance', async t => {
+test('§13 combined Π: the Π binding rejects proofs paired with an unrelated clearance', async (t) => {
   const { mem, zk } = await memWithFixtureAnchor()
   const bytes = proofBytes() // bound to the fixture's journal queryId
   // 1. proof queryId was never issued here

@@ -19,7 +19,7 @@ function setup(opts: NektarMemoryOptions = {}) {
   if (w === undefined) return
   const { chain: chain, funder: funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
-  const settle = (shard: string) => {
+  const settle = async (shard: string) => {
     await chain.mine(1)
     const l = mem.tailLink(shard)
     if (l) mem.confirmAnchor(shard, l.txid)

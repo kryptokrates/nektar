@@ -53,7 +53,7 @@ test('anchorAttestation on MockChain: real signed spend, commitment extractable,
   assert.equal((await mem.verifyAttestation('ab'.repeat(32), pb)).ok, false)
 })
 
-test('MCP tools: attestMembership/verifyAttestation via callTool (anchorAttestation path)', async t => {
+test('MCP tools: attestMembership/verifyAttestation via callTool (anchorAttestation path)', async (t) => {
   const { mem } = setup()
   const pb = proofBytes()
   const { txid } = await mem.anchorAttestation(pb)

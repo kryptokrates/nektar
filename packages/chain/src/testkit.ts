@@ -12,7 +12,7 @@
 //     it a generated key is persisted to .state/testkit-treasury.json and the
 //     first stackFunder() generates ~120 blocks to it for mature coinbases
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut, Funder } from './interfaces.js'
 import {
@@ -81,12 +81,15 @@ async function stackRpc(cfg: RegtestConfig, method: string, ...params: unknown[]
 /** cheap liveness probe — the gate behind skipUnlessStack */
 export async function stackUp(cfg: RegtestConfig = stackCfgFromEnv() ?? ({} as RegtestConfig)): Promise<boolean> {
   if (cfg.rpcUrl === undefined) return false
-  try {
-    await stackRpc(cfg, 'getblockchaininfo')
-    return true
-  } catch {
-    return false
+  for (let i = 0; i < 3; i++) {
+    try {
+      await stackRpc(cfg, 'getblockchaininfo')
+      return true
+    } catch {
+      await new Promise((r) => setTimeout(r, 500 * (i + 1)))
+    }
   }
+  return false
 }
 
 /** node:test gate — call first thing in a test that needs the chain */
@@ -188,7 +191,7 @@ export class StackTreasury {
   }
   static async open(cfg: RegtestConfig): Promise<StackTreasury> {
     const t = new StackTreasury(cfg)
-    await t.ensureFunded()
+    await withTreasuryLock(() => t.ensureFunded())
     return t
   }
   /** reserve entries exist → nothing to do; else mature coinbases are
@@ -216,12 +219,32 @@ export class StackTreasury {
   /** split the treasury tail into another ~60 reserve entries when the pool
    *  runs dry mid-suite — the split chain is self-funding on regtest. */
   async refill(): Promise<void> {
-    const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
-      treasuryFile: join(STATE_DIR, 'treasury.json')
+    await withTreasuryLock(async () => {
+      const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
+        treasuryFile: join(STATE_DIR, 'treasury.json')
+      })
+      if (r === null) throw new Error('testkit: treasury tail spent — cannot refill reserve')
     })
-    if (r === null) throw new Error('testkit: treasury tail spent — cannot refill reserve')
     await this.chain.mine(1)
   }
+}
+
+// `node --test` runs files in parallel processes sharing .state/*.json —
+// serialize bootstrap/refill (treasury-tail splits) across processes.
+async function withTreasuryLock<T>(fn: () => Promise<T>): Promise<T> {
+  const lock = join(STATE_DIR, 'treasury.lock')
+  const deadline = Date.now() + 180_000
+  for (;;) {
+    try {
+      mkdirSync(lock)
+      break
+    } catch {
+      if (Date.now() > deadline) throw new Error('testkit: treasury lock wait exceeded')
+      try { const st = statSync(lock); if (Date.now() - st.mtimeMs > 120_000) { rmSync(lock, { recursive: true }); continue } } catch { /* raced */ }
+      await new Promise((r) => setTimeout(r, 150))
+    }
+  }
+  try { return await fn() } finally { rmSync(lock, { recursive: true }) }
 }
 
 let treasuryPromise: Promise<StackTreasury> | undefined

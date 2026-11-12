@@ -46,7 +46,7 @@ async function open(file = ':memory:', now?: () => number) {
   await store.init()
   return { kx, store }
 }
-const ctx = (hash: string, actionId: string, operationId = 'op'): ActionContext => ({ operationId, actionId, policyHash: hash, networkId: 'bsv:regtest' })
+const ctx = (hash: string, actionId: string, operationId = 'op'): ActionContext => ({ operationId, actionId, policyHash: hash, networkId: 'regtest' })
 
 test('policy: strict shape, stable hash, unknown constraints rejected', () => {
   const p = policy()

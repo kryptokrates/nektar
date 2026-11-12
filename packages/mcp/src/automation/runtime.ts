@@ -507,6 +507,10 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
                 if (n >= 1 && (tree.outputs[n].satoshis ?? 0) > 0) mem.addOwnedOut(tree, n)
               }
             })
+            // a fresh market tree's slots are usable the moment it's added —
+            // anchored ancestry — so wake slot-deferred work now instead of
+            // letting the defer window lapse
+            if (r.minted !== undefined && kind === 'market') await store.unblockOutbox('funding slot')
             // a proven log tree's BEEF must reach tm_log before hosts can
             // admit carriers spending it - journaled, publishes once
             for (const txid of r.proven) {

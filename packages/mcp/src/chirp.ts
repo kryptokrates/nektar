@@ -14,11 +14,11 @@ import type { S3ObjectStore } from './objectstore.js'
 import { getObjectUnsigned } from './objectstore.js'
 
 /** the content-addressed store key for one CHIRP object (node or blob) */
-export const chirpKey = (hashHex: string): string => `chirp/${hashHex}`
+const chirpKey = (hashHex: string): string => `chirp/${hashHex}`
 
 /** every object the tree for `bytes` produces, keyed for the store:
  *  `chirp/<hash>` → node/blob bytes (root first), plus the chirp:// URL. */
-export function chirpObjects(bytes: Uint8Array): { url: string; rootHash: string; objects: Map<string, Uint8Array> } {
+function chirpObjects(bytes: Uint8Array): { url: string; rootHash: string; objects: Map<string, Uint8Array> } {
   const built = buildChirp(bytes)
   const objects = new Map<string, Uint8Array>()
   objects.set(chirpKey(toHex(Uint8Array.from(built.rootHash))), built.root)
@@ -51,7 +51,7 @@ const unsignedFetch =
 /** Reassemble the content a chirp:// URL names — every object's hash checked
  *  by the closure verification, and the blob order rebuilt end to end.
  *  `fetch` resolves a 32-byte hash to the object bytes it must equal. */
-export async function resolveChirp(url: string, fetch: (hash: Uint8Array) => Promise<Uint8Array> | Uint8Array): Promise<Uint8Array> {
+async function resolveChirp(url: string, fetch: (hash: Uint8Array) => Promise<Uint8Array> | Uint8Array): Promise<Uint8Array> {
   const rootHash = parseChirpURL(url)
   const got = new Map<string, Uint8Array>()
   const closure = await verifyClosure(rootHash, async (h) => {

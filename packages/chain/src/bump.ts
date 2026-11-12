@@ -12,21 +12,6 @@ function nodeHash(l: Bytes, r: Bytes): Bytes {
   return dsha256(concat(l, r))
 }
 
-export function merkleRootDisplay(leavesInternal: Bytes[]): string {
-  if (leavesInternal.length === 0) return toHex(dsha256(Uint8Array.of(0)))
-  let cur = leavesInternal
-  while (cur.length > 1) {
-    const next: Bytes[] = []
-    for (let i = 0; i < cur.length; i += 2) {
-      const l = cur[i]!
-      const r = i + 1 < cur.length ? cur[i + 1]! : l
-      next.push(nodeHash(l, r))
-    }
-    cur = next
-  }
-  return toDisplay(cur[0]!)
-}
-
 /**
  * Build a MerklePath (BUMP) for tx at index `index` among `txids` at `height`.
  * All hashes are display-order hex (as the sdk expects: path[0] entries carry

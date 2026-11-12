@@ -488,8 +488,7 @@ export class MarketEngine {
           if (i.kind === 'want') {
             if (this.d.killed?.() || this.d.deaf?.()) continue
             await this.onWant(i.payload as SignedWant)
-          }
-          else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
+          } else if (i.kind === 'offer') await this.onOffer(i.payload as SignedOffer)
           else {
             const p = i.payload as { from: string; msg: MarketMessage; refs?: BoxRef[] }
             await this.onMessage(p.from, p.msg, p.refs)
@@ -1289,7 +1288,7 @@ export class MarketEngine {
     const next = await this.d.store.transition(op.operationId, op.revision, 'refunding', { cause: 'refund_deadline_reached' })
     const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
     if (r.accepted === true) {
-      await this.d.store.settleBudget(op.data.escrowAction as string)
+      await this.d.store.refundBudget(op.data.escrowAction as string)
       await this.d.store.transition(next.operationId, next.revision, 'refunded', {
         cause: 'refund_broadcast',
         data: { refundTxid: r.txid, refundSats: r.refundSats },
@@ -1411,7 +1410,7 @@ export class MarketEngine {
     if (!this.reconcileGate(op.operationId, op.data.escrowTxid as string | undefined)) return
     const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
     if (r.accepted === true) {
-      await this.d.store.settleBudget(op.data.escrowAction as string)
+      await this.d.store.refundBudget(op.data.escrowAction as string)
       if (pa.approvalId !== undefined) await this.d.store.cancelApproval(pa.approvalId)
       await this.d.store.transition(op.operationId, op.revision, 'refunded', {
         cause: 'refund_broadcast',
@@ -1465,7 +1464,10 @@ export class MarketEngine {
   /** D5's assertion surface: every nonterminal state's declared bound, and
    *  which ops currently violate theirs (post-tick this should be empty —
    *  an op past maxAge has already been pushed through its declared exit). */
-  async dealStateAudit(): Promise<{ limits: Record<string, { maxAgeMs: number; exit: StuckExit }>; violations: Array<{ operationId: string; state: string; ageMs: number }> }> {
+  async dealStateAudit(): Promise<{
+    limits: Record<string, { maxAgeMs: number; exit: StuckExit }>
+    violations: Array<{ operationId: string; state: string; ageMs: number }>
+  }> {
     const violations: Array<{ operationId: string; state: string; ageMs: number }> = []
     for (const op of await this.d.store.operations({ notStates: TERMINAL })) {
       const lim = STATE_LIMITS[op.state]

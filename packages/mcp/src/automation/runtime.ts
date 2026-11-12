@@ -102,11 +102,20 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
     runPreflight({ mem, store, objectStore, cfg: pfCfg, probes: { broadcaster: cfg.broadcasterProbe }, ...(only !== undefined ? { only } : {}) })
   let lastReport: PreflightReport | undefined = await runChecks()
   if (cfg.strict === true && !lastReport.pass) {
-    const failed = lastReport.checks.filter((c) => !c.pass).map((c) => `${c.check}: ${c.detail}`).join(' | ')
+    const failed = lastReport.checks
+      .filter((c) => !c.pass)
+      .map((c) => `${c.check}: ${c.detail}`)
+      .join(' | ')
     await kx.destroy()
     throw new Error(`automation preflight failed (strict) — ${failed}`)
   }
-  if (!lastReport.pass) log(`automation: preflight degraded — ${lastReport.checks.filter((c) => !c.pass).map((c) => c.check).join(', ')}`)
+  if (!lastReport.pass)
+    log(
+      `automation: preflight degraded — ${lastReport.checks
+        .filter((c) => !c.pass)
+        .map((c) => c.check)
+        .join(', ')}`
+    )
   const downNow = new Set<string>(lastReport.downHosts)
   /** deaf = every configured host unreachable — new deals pause, in-flight
    *  work (refunds, settlements, outbox retries) keeps running */

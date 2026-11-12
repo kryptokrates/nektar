@@ -554,9 +554,9 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
     await mined.sign()
     assert.equal((await chain.broadcast(mined)).status, 'success')
     await chain.mine(1)
-    const proven = chain.getTx(mined.id('hex'))
-    assert.ok((await proven)?.merklePath !== undefined)
-    b.mem.addOwnedOut((await proven)!, 0)
+    const proven = await chain.waitProof(mined.id('hex'))
+    assert.ok(proven?.merklePath !== undefined)
+    b.mem.addOwnedOut(proven, 0)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     let done = false
     for (let i = 0; i < 100 && !done; i++) {
@@ -719,18 +719,34 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
     b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir, opts: { refundBlocks: 40 } })
     s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
     await sellerize(s, 200)
+    process.stderr.write('[K] sellerized\n')
     await drive([b.rt, s.rt], chain, 12)
+    process.stderr.write('[K] drove\n')
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    for (let i = 0; i < 80 && (await saleOps(s))[0]?.state !== 'quoted'; i++) {
+      if (i % 8 === 0) process.stderr.write(`[K] q${i} sale=${(await saleOps(s))[0]?.state} buyer=${(await buyerOp(b))?.state}\n`)
+      clock += 500
+      await Promise.all([b.rt.cycle(), s.rt.cycle()])
+      await chain.mine(1)
+    }
+    assert.equal((await saleOps(s))[0]?.state, 'quoted', 'no quote | ' + logs.slice(-20).join(' | '))
     await s.rt.stop() // seller dies before the accept is processed
     s = undefined as never
-    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 80), 'never funded | ' + logs.slice(-20).join(' | '))
+    for (let i = 0; i < 80 && (await buyerOp(b))?.state !== 'awaiting_disclosure'; i++) {
+      if (i % 8 === 0) process.stderr.write(`[K] f${i} buyer=${(await buyerOp(b))?.state}\n`)
+      clock += 500
+      await b.rt.cycle()
+      await chain.mine(1)
+    }
+    assert.equal((await buyerOp(b))?.state, 'awaiting_disclosure', 'never funded | ' + logs.slice(-20).join(' | '))
     const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
     const refundAfter = Number(((await buyerOp(b))!.data.escrow as { refundAfter: number }).refundAfter)
     await drive([b.rt], chain, 2) // the note lands + is ingested but stays unacked
+    process.stderr.write('[K] pre-respawn driven\n')
     await b.rt.stop()
     rmSync(join(dir, 'buyer'), { recursive: true, force: true })
     b2 = await respawn(b, { dir, name: 'buyer', hosts: [h1.url, h2.url], logs, chain, opts: { refundBlocks: 40 } })
+    process.stderr.write('[K] respawned\n')
     assert.equal(b2.policyHash, b.policyHash, 're-approved same policy file → same content hash')
     // the chain view can never produce the escrow — the note must carry it:
     // after the database loss only the bytes inside the note keep the deal
@@ -744,10 +760,14 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
       }
       return await origFetch(id)
     }
-    assert.ok(
-      await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'awaiting_disclosure', 60),
-      'op not restored | ' + logs.slice(-20).join(' | ')
-    )
+    for (let i = 0; i < 60 && (await buyerOp(b2))?.state !== 'awaiting_disclosure'; i++) {
+      if (i % 5 === 0) process.stderr.write(`[K] r${i} restored=${(await buyerOp(b2))?.state}\n`)
+      clock += 500
+      await b2.rt.cycle()
+      await chain.mine(1)
+    }
+    assert.equal((await buyerOp(b2))?.state, 'awaiting_disclosure', 'op not restored | ' + logs.slice(-20).join(' | '))
+    process.stderr.write('[K] restored\n')
     assert.equal(escrowLookups, 0, 'the recovery note carried the escrow — no chain lookup needed')
     const ops = (await b2.rt.store.operations({ role: 'buyer' })).filter((o) => o.kind === 'purchase')
     assert.equal(ops.length, 1, 'exactly one buyer operation after restore')
@@ -755,8 +775,20 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
     assert.equal(ops[0].data.escrowTxid, escrowTxid, 'same escrow')
     // pure height wait — batch the generate instead of a mine-per-round loop
     const kShort = refundAfter - (await b2.mem.chainHeight())
+    process.stderr.write(`[K] refundAfter=${refundAfter} short=${kShort}\n`)
     if (kShort > 0) await chain.mine(kShort)
-    const wasRefunded = await until([b2.rt], chain, async () => (await buyerOp(b2))?.state === 'refunded', 40)
+    let wasRefunded = false
+    for (let i = 0; i < 40; i++) {
+      const st = (await buyerOp(b2))?.state
+      if (st === 'refunded') {
+        wasRefunded = true
+        break
+      }
+      if (i % 5 === 0) process.stderr.write(`[K] rf${i} state=${st} h=${await b2.mem.chainHeight()}\n`)
+      clock += 500
+      await b2.rt.cycle()
+      await chain.mine(1)
+    }
     if (!wasRefunded) console.log('KFAIL', JSON.stringify(await buyerOp(b2)), '\nLOGS', logs.slice(-25))
     assert.ok(wasRefunded, 'never refunded | ' + logs.slice(-20).join(' | '))
     const refunded = (await buyerOp(b2))!
@@ -1102,29 +1134,25 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
   try {
     b = await mkagent('buyer', { hosts: [h1.url], chain, logs, dir })
     s = await mkagent('seller', { hosts: [h1.url], chain, logs, dir })
-    process.stderr.write('[Q] agents up\n')
     await sellerize(s, 200)
-    process.stderr.write('[Q] sellerized\n')
     await drive([b.rt, s.rt], chain, 12)
-    process.stderr.write('[Q] drove\n')
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    for (let i = 0; i < 80 && (await saleOps(s))[0]?.state !== 'quoted'; i++) {
-      if (i % 10 === 0) process.stderr.write(`[Q] r${i} saleState=${(await saleOps(s))[0]?.state} buyerState=${(await buyerOp(b))?.state}\n`)
-      clock += 500
-      await Promise.all([b.rt.cycle(), s.rt.cycle()])
-      await chain.mine(1)
-    }
-    assert.equal((await saleOps(s))[0]?.state, 'quoted', 'no quote | ' + logs.slice(-20).join(' | '))
+    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
     const script = (await escrowScriptFor(s, b.pub))!
     const sab = sabotageEscrowBroadcast(b, chain, script, true)
     // the rejected push can reconcile uncertain → funding_failed inside one
     // round — a once-per-round sampler legitimately never observes 'uncertain',
     // so accept either state here; the events below prove the path was taken
     assert.ok(
-      await until([b.rt], chain, async () => {
-        const st = (await buyerOp(b))?.state
-        return st === 'uncertain' || st === 'funding_failed'
-      }, 80),
+      await until(
+        [b.rt],
+        chain,
+        async () => {
+          const st = (await buyerOp(b))?.state
+          return st === 'uncertain' || st === 'funding_failed'
+        },
+        80
+      ),
       'never went uncertain | ' + logs.slice(-20).join(' | ')
     )
     const txid = sab.txid() ?? ((await buyerOp(b))!.data.pendingEscrow as { utxo: { txid: string } }).utxo.txid

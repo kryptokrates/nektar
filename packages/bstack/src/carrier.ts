@@ -9,7 +9,21 @@ import {
   readerLockingKey,
   type Fees
 } from '@lightwebinc/bcommon'
-import { DERIVATION, FUNDING_TAG, ORIGINATOR } from './tree.js'
+import { anchoredTree, DERIVATION, FUNDING_TAG, ORIGINATOR } from './tree.js'
+
+// a carrier's funding parent must be proven — or one unconfirmed level deep
+// on anchored ancestry, the same §10.3 rule finger applies to tokens: every
+// one of the tree's own inputs carries a verifiable merkle path, so the BEEF
+// steps back to a mined anchor and the host's exposure is a single mempool
+// hop of a 1-sat slot
+const provenParent = async (p: Transaction, tracker: ChainTracker): Promise<boolean> => {
+  if (p.merklePath !== undefined) return await p.merklePath.verify(p.id('hex'), tracker)
+  for (const i of p.inputs) {
+    const gp = i.sourceTransaction
+    if (!gp?.merklePath || !(await gp.merklePath.verify(gp.id('hex'), tracker))) return false
+  }
+  return true
+}
 
 export async function buildCarrier(p: {
   key: PrivateKey
@@ -17,7 +31,7 @@ export async function buildCarrier(p: {
   slot: { tree: Transaction; vout: number }
 }): Promise<{ carrier: Transaction; beef: number[] }> {
   const { key, payload, slot } = p
-  if (!slot.tree.merklePath) throw new Error('buildCarrier: funding tree is not proven (merklePath unset)')
+  if (!anchoredTree(slot.tree)) throw new Error('buildCarrier: funding tree is not proven (no merklePath or anchored ancestry)')
   const carrier = await mintCarrier(new ProtoWallet(key), ORIGINATOR, DERIVATION, payload, slot.tree, slot.vout)
   return { carrier, beef: carrier.toAtomicBEEF() }
 }
@@ -33,7 +47,7 @@ export async function checkCarrier(beef: number[], o: { tracker: ChainTracker })
     const tx = Transaction.fromAtomicBEEF(beef)
     for (const i of tx.inputs) {
       const p = i.sourceTransaction
-      if (!p?.merklePath || !(await p.merklePath.verify(p.id('hex'), o.tracker))) return { ok: false, reason: 'spv' }
+      if (p === undefined || !(await provenParent(p, o.tracker))) return { ok: false, reason: 'spv' }
     }
     const r1 = mineableRefusal(tx)
     if (r1 !== undefined) return { ok: false, reason: `mineable:${r1}` }

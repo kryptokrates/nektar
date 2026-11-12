@@ -44,6 +44,10 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
       '/.well-known/x402',
       '/dashboard',
       '/mcp',
+      '/v1/automation/approvals/{id}',
+      '/v1/automation/health',
+      '/v1/automation/preflight',
+      '/v1/automation/state',
       '/v1/badge',
       '/v1/checkpoint/{shard}',
       '/v1/costs',
@@ -81,6 +85,10 @@ test('HTTP API: NEKTAR_HTTP_TOKEN gates every route except /v1/health', async (t
       assert.equal((await fetch(`${base}/v1/tools`, authed)).status, 200)
       assert.equal((await fetch(`${base}/mcp`, { method: 'POST' })).status, 401)
       assert.equal((await fetch(`${base}/v1/health`)).status, 200, 'health stays public for monitors')
+      // automation health is intentionally public ({pass} only — no detail
+      // leaks); 404 here means automation off, never 401
+      assert.equal((await fetch(`${base}/v1/automation/health`)).status, 404, 'automation health stays public ({pass} only)')
+      assert.equal((await fetch(`${base}/v1/automation/preflight`)).status, 401, 'the full preflight report stays behind the token')
       assert.equal((await fetch(`${base}/v1/proof/m/0`, { headers: { authorization: 'Bearer wrong' } })).status, 401)
     } finally {
       srv.close()

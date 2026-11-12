@@ -106,7 +106,9 @@ export function configFromEnv(env = process.env): RuntimeConfig {
     modelId: env.NEKTAR_MODEL_ID,
     batchLeaves: Number(env.NEKTAR_BATCH ?? 4),
     autoMine: env.NEKTAR_AUTOMINE === '1',
-    confirmEveryMs: Number(env.NEKTAR_CONFIRM_MS ?? 5000),
+    // regtest cadence (live nets override below). The confirmer's tip gate
+    // makes an idle tick one height RPC — proofs surface ~1s after a block.
+    confirmEveryMs: Number(env.NEKTAR_CONFIRM_MS ?? 1000),
     clearanceAuthorities: (env.NEKTAR_CLEARANCE_AUTHORITIES ?? '')
       .split(',')
       .map((s) => s.trim())
@@ -314,9 +316,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   // opt-out only when every set value agrees — a stray numeric cap keeps the
   // guard on (mixed signals never silently un-guard the spend path)
   const unlimited = caps.length > 0 && caps.every((x) => x === 'unlimited')
-  const maxPerDay = unlimited
-    ? Number.MAX_SAFE_INTEGER
-    : Math.min(...caps.filter((x) => x !== 'unlimited').map((x) => Number(x)), 10_000)
+  const maxPerDay = unlimited ? Number.MAX_SAFE_INTEGER : Math.min(...caps.filter((x) => x !== 'unlimited').map((x) => Number(x)), 10_000)
   const broadcaster = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), valueOf, {
     unlimited,
     maxPerDay,

@@ -54,6 +54,14 @@ export interface TreeLedger {
   remaining(kind?: string): Promise<number>
 }
 
+// a tree hosts may fund-accept before it mines: proven, or one unconfirmed
+// level deep on anchored ancestry — every input's source carries a merkle
+// path (the same §10.3 rule finger applies to tokens). The tree still lists
+// in unproven() so its own BUMP attaches when the topup mines.
+export const anchoredTree = (tree: Transaction): boolean =>
+  tree.merklePath !== undefined ||
+  (tree.inputs.length > 0 && tree.inputs.every((i) => i.sourceTransaction?.merklePath !== undefined))
+
 export class MemoryTreeLedger implements TreeLedger {
   private trees = new Map<string, { tree: Transaction; proven: boolean; kind: string }>()
   private free = new Set<string>()
@@ -66,7 +74,7 @@ export class MemoryTreeLedger implements TreeLedger {
     for (const k of this.free) {
       const [txid, v] = k.split(':')
       const t = this.trees.get(txid)!
-      if (!t.proven || t.kind !== kind) continue
+      if ((!t.proven && !anchoredTree(t.tree)) || t.kind !== kind) continue
       this.free.delete(k)
       return { tree: ownPath(t.tree), vout: Number(v) }
     }
@@ -91,7 +99,7 @@ export class MemoryTreeLedger implements TreeLedger {
     let n = 0
     for (const k of this.free) {
       const t = this.trees.get(k.split(':')[0])!
-      if (t.proven && t.kind === kind) n++
+      if ((t.proven || anchoredTree(t.tree)) && t.kind === kind) n++
     }
     return n
   }
@@ -161,7 +169,19 @@ export class KnexTreeLedger implements TreeLedger {
         const t = await trx('bstack_trees').where({ txid: row.txid }).first()
         return { tree: ownPath(Transaction.fromBEEF(JSON.parse(t.beef))), vout: row.vout }
       })
-      if (r !== false) return r ?? undefined
+      if (r !== false && r !== null) return r
+      if (r !== false) break
+    }
+    // zero-conf path: an unproven tree whose ancestry is anchored is host-
+    // admissible — carriers step back through the DAG to a mined anchor
+    for (const row of await this.kx('bstack_tree_outputs as o')
+      .join('bstack_trees as t', 'o.txid', 't.txid')
+      .where('t.proven', 0)
+      .where('o.kind', kind)
+      .select('o.key', 'o.txid', 'o.vout', 't.beef')) {
+      const tree = Transaction.fromBEEF(JSON.parse(row.beef as string))
+      if (!anchoredTree(tree)) continue
+      if ((await this.kx('bstack_tree_outputs').where({ key: row.key }).del()) === 1) return { tree, vout: row.vout }
     }
     return undefined
   }
@@ -196,7 +216,17 @@ export class KnexTreeLedger implements TreeLedger {
       .where('o.kind', kind)
       .count('o.key as c')
       .first()
-    return Number(r?.c ?? 0)
+    let n = Number(r?.c ?? 0)
+    for (const row of await this.kx('bstack_tree_outputs as o')
+      .join('bstack_trees as t', 'o.txid', 't.txid')
+      .where('t.proven', 0)
+      .where('o.kind', kind)
+      .groupBy('t.txid', 't.beef')
+      .select('t.beef')
+      .count('o.key as c')) {
+      if (anchoredTree(Transaction.fromBEEF(JSON.parse(row.beef as string)))) n += Number(row.c)
+    }
+    return n
   }
 }
 

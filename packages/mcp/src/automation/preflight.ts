@@ -29,7 +29,7 @@ import { conformanceStatus } from './conformance.js'
 import { fetchObjectByRef } from '../chirp.js'
 import { type S3ObjectStore } from '../objectstore.js'
 
-export interface PreflightCheck {
+interface PreflightCheck {
   check: string
   pass: boolean
   detail: string
@@ -45,7 +45,7 @@ export interface PreflightReport {
   downHosts: string[]
 }
 
-export interface PreflightCfg {
+interface PreflightCfg {
   network: string
   dataDir?: string
   marketHosts: string[]
@@ -64,7 +64,7 @@ export interface PreflightDeps {
   ceilings?: { hostMs?: number; chainMs?: number; storeMs?: number }
   /** stronger liveness probes the transport can supply when it knows the
    *  endpoints (a raw HTTP answer proves the socket; txState alone can't
-   *  distinguish 'down' from 'unknown txid') */
+   *  distinguish a dead endpoint vs an unrecognized txid) */
   probes?: { broadcaster?: () => Promise<boolean> }
   /** which checks to run — the watchdog re-runs only the cheap probe tier */
   only?: string[]
@@ -122,7 +122,12 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
       }
     }
     if (prev !== undefined && height < prev)
-      return { check: 'chain', pass: false, detail: `height ${height} regressed below cached ${prev}`, fix: 'check the configured RPC/tracker — the chain view moved backwards' }
+      return {
+        check: 'chain',
+        pass: false,
+        detail: `height ${height} regressed below cached ${prev}`,
+        fix: 'check the configured RPC/tracker — the chain view moved backwards'
+      }
     return {
       check: 'chain',
       pass: true,
@@ -138,7 +143,12 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
       const ok = await bounded(deps.probes.broadcaster(), ceil.chainMs, 'broadcaster probe')
       return ok
         ? { check: 'broadcaster', pass: true, detail: 'broadcast endpoint answered the probe' }
-        : { check: 'broadcaster', pass: false, detail: 'broadcast endpoint did not answer', fix: 'broadcasts will black-hole — check the propagation/broadcaster URL' }
+        : {
+            check: 'broadcaster',
+            pass: false,
+            detail: 'broadcast endpoint did not answer',
+            fix: 'broadcasts will black-hole — check the propagation/broadcaster URL'
+          }
     }
     const st = await bounded(mem.txState(ZERO), ceil.chainMs, 'txState probe')
     return {
@@ -148,31 +158,46 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     }
   })
 
-  // A3 — hosts: ls_finger (+ ls_bbox) read-only lookups, once per preflight
-  // tick, bounded per host. The answers never submit an envelope — no sats,
-  // no host noise.
+  // A3 — hosts: ls_nektar answers on each configured host — it is the carrier
+  // service deals actually use, so any failure there (transport or service)
+  // means the host cannot carry want/offer envelopes → genuinely 'down'.
+  // ls_finger (+ ls_bbox when an office is configured) are optional features:
+  // their failures degrade the report but never mark a host down. All probes
+  // are read-only lookups — no sats, no host noise.
   const downHosts: string[] = []
   push('hosts', async () => {
     if (cfg.marketHosts.length === 0)
       return { check: 'hosts', pass: false, detail: 'no market hosts configured', fix: 'set NEKTAR_MARKET_HOSTS (or let bootstrap resolve them)' }
     const { lookupAll } = await import('@nektar/bstack')
     const me = mem.operatorKey().toPublicKey().toString().toLowerCase()
-    const [fingers, boxes] = await Promise.all([
+    const [carriers, fingers, boxes] = await Promise.all([
+      lookupAll(cfg.marketHosts, 'ls_nektar', { wants: { net: cfg.network, domain: '_preflight', limit: 1 } }, { timeoutMs: ceil.hostMs }),
       lookupAll(cfg.marketHosts, 'ls_finger', { identityKey: me }, { timeoutMs: ceil.hostMs }),
-      cfg.boxOffice !== undefined ? lookupAll(cfg.marketHosts, 'ls_bbox', { office: cfg.boxOffice, to: me }, { timeoutMs: ceil.hostMs }) : Promise.resolve({ answers: [] })
+      cfg.boxOffice !== undefined
+        ? lookupAll(cfg.marketHosts, 'ls_bbox', { office: cfg.boxOffice, to: me }, { timeoutMs: ceil.hostMs })
+        : Promise.resolve({ answers: [] })
     ])
     const errs: string[] = []
-    for (const a of fingers.answers) {
-      const b = boxes.answers.find((x) => x.host === a.host)
+    const notes: string[] = []
+    for (const a of carriers.answers) {
       if ('error' in a || !('outputs' in a)) {
         downHosts.push(a.host)
         errs.push(`${a.host} (${'error' in a ? a.error : 'no answer'})`)
         continue
       }
-      if (b !== undefined && ('error' in b || !('outputs' in b))) errs.push(`${a.host} ls_bbox (${'error' in b ? b.error : 'no answer'})`)
+      const f = fingers.answers.find((x) => x.host === a.host)
+      if (f !== undefined && ('error' in f || !('outputs' in f))) notes.push(`${a.host} ls_finger (${'error' in f ? f.error : 'no answer'})`)
+      const b = boxes.answers.find((x) => x.host === a.host)
+      if (b !== undefined && ('error' in b || !('outputs' in b))) notes.push(`${a.host} ls_bbox (${'error' in b ? b.error : 'no answer'})`)
     }
     return errs.length === 0
-      ? { check: 'hosts', pass: true, detail: `${cfg.marketHosts.length} host(s) answered ls_finger${cfg.boxOffice !== undefined ? ' + ls_bbox' : ''}` }
+      ? {
+          check: 'hosts',
+          pass: true,
+          detail:
+            `${cfg.marketHosts.length} host(s) answered ls_nektar${cfg.boxOffice !== undefined ? ' + ls_bbox' : ''}` +
+            (notes.length === 0 ? '' : ` — ${notes.join('; ')}`)
+        }
       : {
           check: 'hosts',
           pass: false,
@@ -202,7 +227,12 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
       } catch {
         /* try the next known ref */
       }
-    return { check: 'store', pass: false, detail: `${refs.length} stored ref(s) — none fetched back`, fix: 'buyers cannot retrieve evidence — check NEKTAR_BSTORE_* / the store endpoint' }
+    return {
+      check: 'store',
+      pass: false,
+      detail: `${refs.length} stored ref(s) — none fetched back`,
+      fix: 'buyers cannot retrieve evidence — check NEKTAR_BSTORE_* / the store endpoint'
+    }
   })
 
   // A5 — payments: the ledger must open and its file must be writable when
@@ -219,14 +249,20 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
       r.close()
       return { check: 'payments', pass: true, detail: `payments.jsonl opens writable in ${dir}` }
     } catch (e) {
-      return { check: 'payments', pass: false, detail: `payment ledger unusable: ${(e as Error).message.slice(0, 120)}`, fix: 'payments would be silently dropped — fix the data dir' }
+      return {
+        check: 'payments',
+        pass: false,
+        detail: `payment ledger unusable: ${(e as Error).message.slice(0, 120)}`,
+        fix: 'payments would be silently dropped — fix the data dir'
+      }
     }
   })
 
   // A6 — policy: an active policy must exist for this network and one of the
   // agent's roles, or publishWant/enableSeller throw on first use.
   push('policy', async () => {
-    if (store === undefined) return { check: 'policy', pass: false, detail: 'automation store not open', fix: 'the automation runtime must open before preflight runs' }
+    if (store === undefined)
+      return { check: 'policy', pass: false, detail: 'automation store not open', fix: 'the automation runtime must open before preflight runs' }
     const me = mem.operatorKey().toPublicKey().toString()
     const live: string[] = []
     for (const row of await store.policies()) {
@@ -269,7 +305,12 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     }
     return stale.length === 0
       ? { check: 'watch', pass: true, detail: `${inflight.length} in-flight tx(s) all resolve a chain state` }
-      : { check: 'watch', pass: false, detail: `${stale.length}/${inflight.length} in-flight tx(s) resolve no state: ${stale.join(', ')}`, fix: 'the broadcaster view is stale — refund automation may be stuck' }
+      : {
+          check: 'watch',
+          pass: false,
+          detail: `${stale.length}/${inflight.length} in-flight tx(s) resolve no state: ${stale.join(', ')}`,
+          fix: 'the broadcaster view is stale — refund automation may be stuck'
+        }
   })
 
   // D2 — spendguard ACTIVE (not configured): an over-budget spend must be
@@ -301,7 +342,12 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
       const ok = mem.budget.reserve('__preflight_probe__', '__probe_ok__', 1)
       if (ok === 'ok') mem.budget.release('__preflight_probe__', '__probe_ok__')
       if (deny !== 'denied' || ok !== 'ok')
-        return { check: 'spendguard', pass: false, detail: `BudgetAuthority misbehaves (deny=${deny}, ok=${ok})`, fix: 'the grant ledger must deny over-cap and admit within-cap' }
+        return {
+          check: 'spendguard',
+          pass: false,
+          detail: `BudgetAuthority misbehaves (deny=${deny}, ok=${ok})`,
+          fix: 'the grant ledger must deny over-cap and admit within-cap'
+        }
       bdetail = 'BudgetAuthority denies over-cap and admits within-cap'
     }
     return { check: 'spendguard', pass: true, detail: `guard refused the dry-run (${desc.slice(0, 100)}); ${bdetail}` }
@@ -321,11 +367,16 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
   push('conformance', async () => {
     const { defaultSuiteDir } = await import('./conformance.js')
     const c = conformanceStatus({ dataDir: cfg.dataDir, network: cfg.network, marketHosts: cfg.marketHosts, suiteDir: defaultSuiteDir() })
-    if (cfg.unattended === true) return { check: 'conformance', pass: c.pass, detail: c.detail, fix: c.pass ? undefined : 'run pnpm scenarios:verify to (re)issue the token' }
+    if (cfg.unattended === true)
+      return { check: 'conformance', pass: c.pass, detail: c.detail, fix: c.pass ? undefined : 'run pnpm scenarios:verify to (re)issue the token' }
     return { check: 'conformance', pass: true, detail: `unattended not requested — token: ${c.detail}` }
   })
 
   await Promise.all(pending)
-  checks.sort((a, b) => ['chain', 'broadcaster', 'hosts', 'store', 'payments', 'policy', 'funds', 'watch', 'spendguard', 'killswitch', 'conformance'].indexOf(a.check) - ['chain', 'broadcaster', 'hosts', 'store', 'payments', 'policy', 'funds', 'watch', 'spendguard', 'killswitch', 'conformance'].indexOf(b.check))
+  checks.sort(
+    (a, b) =>
+      ['chain', 'broadcaster', 'hosts', 'store', 'payments', 'policy', 'funds', 'watch', 'spendguard', 'killswitch', 'conformance'].indexOf(a.check) -
+      ['chain', 'broadcaster', 'hosts', 'store', 'payments', 'policy', 'funds', 'watch', 'spendguard', 'killswitch', 'conformance'].indexOf(b.check)
+  )
   return { pass: checks.every((c) => c.pass), at: now, checks, downHosts }
 }

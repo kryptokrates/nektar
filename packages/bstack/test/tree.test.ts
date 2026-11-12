@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mintTree, FUNDING_TAG, KnexTreeLedger, MemoryTreeLedger } from '../src/tree.js'
-import { fund, prove } from './helpers.js'
+import { anchoredTree, fund, prove } from './helpers.js'
 
 test('tree: n=8 mints 8 funding outputs + change, each decodes our tag', async () => {
   const key = PrivateKey.fromRandom()
@@ -25,6 +25,40 @@ test('ledger: unproven tree is not handed out; once proven it is', async () => {
   prove(t)
   await l.markProven(t.id('hex'))
   assert.ok(await l.take())
+})
+
+test('ledger: unproven tree with anchored ancestry hands out zero-conf slots', async () => {
+  const key = PrivateKey.fromRandom()
+  const t = await anchoredTree(key, 2)
+  assert.equal(t.merklePath, undefined)
+  const l = new MemoryTreeLedger()
+  await l.add(t, 2)
+  assert.equal(await l.remaining(), 2)
+  const s = await l.take()
+  assert.ok(s !== undefined)
+  assert.equal(s.tree.id('hex'), t.id('hex'))
+  assert.equal(await l.remaining(), 1)
+  // it still lists as unproven so markProven anchors it once mined
+  assert.deepEqual(await l.unproven(), [{ txid: t.id('hex'), kind: 'market' }])
+})
+
+test('ledger (knex): unproven tree with anchored ancestry hands out zero-conf slots', async () => {
+  const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  try {
+    const key = PrivateKey.fromRandom()
+    const t = await anchoredTree(key, 2)
+    assert.equal(t.merklePath, undefined)
+    const l = new KnexTreeLedger(kx)
+    await l.add(t, 2)
+    assert.equal(await l.remaining(), 2)
+    const s = await l.take()
+    assert.ok(s !== undefined)
+    assert.equal(s.tree.id('hex'), t.id('hex'))
+    assert.equal(await l.remaining(), 1)
+    assert.deepEqual(await l.unproven(), [{ txid: t.id('hex'), kind: 'market' }])
+  } finally {
+    await kx.destroy()
+  }
 })
 
 test('ledger: two instances on one sqlite file never hand the same slot twice', async () => {

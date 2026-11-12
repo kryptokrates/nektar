@@ -292,7 +292,10 @@ test('seller goes dark after quoting → buyer refunds itself at the deadline; r
   assert.equal((await bob.store.budgetStatus(bob.policyHash)).lockedSats, 210)
   await w.round([bob])
   assert.equal((await bob.engine.status(operationId))!.operation.state, 'awaiting_disclosure', 'no early refund')
-  await w.chain.mine(8)
+  // mine until the indexed tip the engine polls actually passes the refund
+  // deadline — mine() returns before indexing catches up
+  const deadline = (await bob.engine.status(operationId))!.operation.dueHeight!
+  for (let i = 0; i < 30 && (await w.chain.tipHeight()) < deadline; i++) await w.chain.mine(1)
   await w.round([bob])
   st = (await bob.engine.status(operationId))!.operation
   assert.equal(st.state, 'refunded', st.lastError)

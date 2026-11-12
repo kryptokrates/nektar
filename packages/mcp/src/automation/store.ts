@@ -620,6 +620,16 @@ export class AutomationStore {
     return this.moveBudget(actionId, ['reserved', 'committed'], 'released')
   }
 
+  /** a refunded purchase returned its sats: the purchase amount drops out of
+   *  every cap sum (a seller who takes escrow and disappears must not burn the
+   *  buyer's daily purchase cap), while the funding fee stays counted — the
+   *  fee was really spent */
+  async refundBudget(actionId: string): Promise<boolean> {
+    return (
+      (await this.kx(T.budget).where({ action_id: actionId }).whereIn('state', ['reserved', 'committed']).update({ purchase_sats: 0, state: 'settled' })) === 1
+    )
+  }
+
   async budgetStatus(hash: string): Promise<{ day: string; purchaseTodaySats: number; feeTodaySats: number; runTotalSats: number; lockedSats: number }> {
     const live = () => this.kx(T.budget).where({ policy_hash: hash }).whereNot({ state: 'released' })
     const day = dayOf(this.now())

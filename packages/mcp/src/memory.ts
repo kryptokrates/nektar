@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { BudgetAuthority } from './budget.js'
+import type { Automation } from './automation/types.js'
 import { PrivateKey, PublicKey, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import {
   utf8,
@@ -464,7 +465,7 @@ export class NektarMemory {
   }
   private logKey: PrivateKey
   public budget?: import('./budget.js').BudgetAuthority
-  public automation?: import('./automation/types.js').Automation
+  public automation?: Automation
   public ledger?: import('./automation/store.js').AutomationStore
   /** every transaction this instance built, broadcast or was handed, with
    *  its proof once one exists — parents for spends and BEEF for counterparties

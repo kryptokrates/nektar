@@ -32,3 +32,10 @@ export async function provenTree(key: PrivateKey, n = 8): Promise<Transaction> {
   prove(t)
   return t
 }
+// an unmined tree whose every input steps back to a mined parent — the
+// zero-conf funding slot shape hosts admit under the anchored-ancestry rule
+export async function anchoredTree(key: PrivateKey, n = 8): Promise<Transaction> {
+  const f = fakeParent(key)
+  prove(f)
+  return await mintTree({ key, funding: { tx: f, vout: 0, satoshis: 1_000_000 }, n, satsPerOutput: 1000 })
+}

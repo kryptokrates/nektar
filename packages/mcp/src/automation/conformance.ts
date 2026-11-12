@@ -62,7 +62,9 @@ export function suiteDigest(suiteDir: string): string {
 export function currentCommit(env = process.env, cwd = process.cwd()): string {
   if (env.NEKTAR_GIT_COMMIT) return env.NEKTAR_GIT_COMMIT.trim()
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd, stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim()
   } catch {
     return 'unknown'
   }
@@ -73,7 +75,11 @@ export function currentCommit(env = process.env, cwd = process.cwd()): string {
  *  <dataDir>/operator.pub. Empty = no token can verify = fail closed. */
 export function operatorPubs(dataDir?: string, env = process.env): string[] {
   const pubs = new Set<string>()
-  for (const p of (env.NEKTAR_OPERATOR_PUB ?? '').split(',').map((s) => s.trim()).filter(Boolean)) pubs.add(p.toLowerCase())
+  for (const p of (env.NEKTAR_OPERATOR_PUB ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean))
+    pubs.add(p.toLowerCase())
   if (dataDir !== undefined) {
     try {
       for (const l of readFileSync(join(dataDir, 'operator.pub'), 'utf8').split(/\r?\n/))
@@ -91,8 +97,7 @@ export function verifyToken(token: ConformanceToken, allowedPubs: string[], now 
   try {
     if (token.v !== 1 || typeof token.gitCommit !== 'string' || typeof token.configHash !== 'string' || typeof token.suiteDigest !== 'string')
       return { ok: false, reason: 'malformed claims' }
-    if (!Number.isSafeInteger(token.issuedAt) || token.expiresAt !== token.issuedAt + TOKEN_TTL_MS)
-      return { ok: false, reason: 'expiry is not issuedAt+7d' }
+    if (!Number.isSafeInteger(token.issuedAt) || token.expiresAt !== token.issuedAt + TOKEN_TTL_MS) return { ok: false, reason: 'expiry is not issuedAt+7d' }
     if (token.issuedAt > now + 60_000) return { ok: false, reason: 'issued in the future' }
     if (now >= token.expiresAt) return { ok: false, reason: 'stale — scenarios:verify must re-run' }
     const pub = String(token.pub).toLowerCase()
@@ -107,10 +112,22 @@ export function verifyToken(token: ConformanceToken, allowedPubs: string[], now 
 /** issue a token — called by scenarios:verify with the OPERATOR key (the
  *  agent's keystore is never involved). Fails before writing when the signer
  *  is not listed as an operator, so a test key can't forge confidence. */
-export function issueToken(key: PrivateKey, claims: Omit<ConformanceClaims, 'v' | 'issuedAt' | 'expiresAt'>, allowedPubs: string[], now = Date.now()): ConformanceToken {
+export function issueToken(
+  key: PrivateKey,
+  claims: Omit<ConformanceClaims, 'v' | 'issuedAt' | 'expiresAt'>,
+  allowedPubs: string[],
+  now = Date.now()
+): ConformanceToken {
   const pub = key.toPublicKey().toString()
   if (!allowedPubs.includes(pub.toLowerCase())) throw new Error('signer is not an operator key (NEKTAR_OPERATOR_PUB / operator.pub)')
-  const c: ConformanceClaims = { v: 1, gitCommit: claims.gitCommit, configHash: claims.configHash, suiteDigest: claims.suiteDigest, issuedAt: now, expiresAt: now + TOKEN_TTL_MS }
+  const c: ConformanceClaims = {
+    v: 1,
+    gitCommit: claims.gitCommit,
+    configHash: claims.configHash,
+    suiteDigest: claims.suiteDigest,
+    issuedAt: now,
+    expiresAt: now + TOKEN_TTL_MS
+  }
   const sig = toHex(Uint8Array.from(key.sign(Array.from(sha256(utf8(canon(c))))).toDER() as number[]))
   return { ...c, pub, sig }
 }
@@ -140,7 +157,8 @@ export function conformanceStatus(cfg: {
   const v = verifyToken(token, pubs, cfg.now)
   if (!v.ok) return { pass: false, detail: `token invalid: ${v.reason}` }
   const commit = currentCommit(env)
-  if (token.gitCommit !== commit) return { pass: false, detail: `token certifies commit ${token.gitCommit.slice(0, 12)} but this instance runs ${commit.slice(0, 12)}` }
+  if (token.gitCommit !== commit)
+    return { pass: false, detail: `token certifies commit ${token.gitCommit.slice(0, 12)} but this instance runs ${commit.slice(0, 12)}` }
   const ch = conformanceConfigHash(cfg)
   if (token.configHash !== ch) return { pass: false, detail: 'token was issued for a different config (network/hosts changed since)' }
   if (cfg.suiteDir !== undefined) {

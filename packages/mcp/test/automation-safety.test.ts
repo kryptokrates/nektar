@@ -66,13 +66,23 @@ test('conformance token: issue → verify roundtrip; tamper, wrong signer, stale
   const env = { NEKTAR_GIT_COMMIT: 'abc123', NEKTAR_OPERATOR_PUB: pubs[0] }
   const ok = conformanceStatus({ dataDir: dir, network: 'regtest', marketHosts: ['http://h1'], suiteDir: suite, env })
   assert.equal(ok.pass, true, ok.detail)
-  const wrongCommit = conformanceStatus({ dataDir: dir, network: 'regtest', marketHosts: ['http://h1'], suiteDir: suite, env: { ...env, NEKTAR_GIT_COMMIT: 'zzz' } })
+  const wrongCommit = conformanceStatus({
+    dataDir: dir,
+    network: 'regtest',
+    marketHosts: ['http://h1'],
+    suiteDir: suite,
+    env: { ...env, NEKTAR_GIT_COMMIT: 'zzz' }
+  })
   assert.equal(wrongCommit.pass, false)
   assert.match(wrongCommit.detail, /commit/)
   const wrongCfg = conformanceStatus({ dataDir: dir, network: 'regtest', marketHosts: ['http://h2'], suiteDir: suite, env })
   assert.equal(wrongCfg.pass, false, 'host-list drift invalidates the token')
   assert.equal(conformanceStatus({ dataDir: join(dir, 'empty'), network: 'regtest', env }).pass, false, 'missing token refuses')
-  assert.equal(conformanceStatus({ dataDir: dir, network: 'regtest', marketHosts: ['http://h1'], suiteDir: suite, env: { NEKTAR_GIT_COMMIT: 'abc123' } }).pass, false, 'no operator keys → fail closed')
+  assert.equal(
+    conformanceStatus({ dataDir: dir, network: 'regtest', marketHosts: ['http://h1'], suiteDir: suite, env: { NEKTAR_GIT_COMMIT: 'abc123' } }).pass,
+    false,
+    'no operator keys → fail closed'
+  )
 })
 
 test('D7 every nonterminal FSM state declares a bound + an exit; nothing else is allowed to linger', () => {
@@ -192,7 +202,16 @@ const mkEngine = async (opts: { killed?: () => boolean; deaf?: () => boolean }) 
       notBefore: 0,
       notAfter: 4_000_000_000_000,
       domains: ['libfoo'],
-      limits: { perPurchaseSats: 500, dailyPurchaseSats: 1000, perTxFeeSats: 600, dailyFeeSats: 2000, runTotalSats: 5000, maxLockedSats: 1000, maxUnconfirmedSats: 1000, maxUnconfirmedCount: 3 },
+      limits: {
+        perPurchaseSats: 500,
+        dailyPurchaseSats: 1000,
+        perTxFeeSats: 600,
+        dailyFeeSats: 2000,
+        runTotalSats: 5000,
+        maxLockedSats: 1000,
+        maxUnconfirmedSats: 1000,
+        maxUnconfirmedCount: 3
+      },
       scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 60_000 },
       seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 5, sellableShards: ['guide'] },
       disclosure: { allowPublic: false },
@@ -225,7 +244,19 @@ test('killed blocks every new-deal entry — publishWant, enableSeller, watchBon
     await assert.rejects(engine.enableSeller(policyHash), /killed/)
     // a want arriving while stopped stays pending WITHOUT burning an inbox
     // attempt — a flap must not dead-letter it
-    const sw = { want: { v: 1, wantId: 'w', pub: PrivateKey.fromRandom().toPublicKey().toString(), net: 'regtest', status: 'open', domains: ['libfoo'], maxSats: 500, iat: 1 }, sig: 'x' } as unknown as SignedWant
+    const sw = {
+      want: {
+        v: 1,
+        wantId: 'w',
+        pub: PrivateKey.fromRandom().toPublicKey().toString(),
+        net: 'regtest',
+        status: 'open',
+        domains: ['libfoo'],
+        maxSats: 500,
+        iat: 1
+      },
+      sig: 'x'
+    } as unknown as SignedWant
     await engine.ingestEvents('lane', [{ seq: '1', kind: 'want', payload: sw }], '')
     await engine.tick()
     const inbox = await store.pendingInbox()
@@ -257,7 +288,10 @@ interface Agent {
   file: string
 }
 
-async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: number; sellerPrice?: number; killed?: () => boolean; deaf?: () => boolean; finding?: string } = {}) {
+async function world(
+  t: { skip: (m?: string) => void },
+  opts: { refundBlocks?: number; sellerPrice?: number; killed?: () => boolean; deaf?: () => boolean; finding?: string } = {}
+) {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-safe-'))
   const agents = new Map<string, Agent>()
@@ -313,7 +347,16 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
     notBefore: 0,
     notAfter: 4_000_000_000_000,
     domains: ['libfoo'],
-    limits: { perPurchaseSats: 500, dailyPurchaseSats: 1000, perTxFeeSats: 600, dailyFeeSats: 2000, runTotalSats: 5000, maxLockedSats: 1000, maxUnconfirmedSats: 1000, maxUnconfirmedCount: 3 },
+    limits: {
+      perPurchaseSats: 500,
+      dailyPurchaseSats: 1000,
+      perTxFeeSats: 600,
+      dailyFeeSats: 2000,
+      runTotalSats: 5000,
+      maxLockedSats: 1000,
+      maxUnconfirmedSats: 1000,
+      maxUnconfirmedCount: 3
+    },
     scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 1000 },
     seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 5, sellableShards: ['guide'] },
     disclosure: { allowPublic: false },
@@ -387,20 +430,22 @@ test('D2 kill switch: a stopped agent refuses new deals but a due refund still b
     await w.round([i % 2 === 0 ? bob : cara])
     funded = (await bob.store.operation(operationId))?.state === 'awaiting_disclosure'
   }
-  if (!funded) {
-    const op = await bob.store.operation(operationId)
-    const sos = await cara.store.operations({ role: 'seller' })
-    console.log('D2 buyer:', JSON.stringify({ state: op?.state, err: op?.lastError, offers: Object.keys((op?.data.offers as object) ?? {}) }), 'seller ops:', JSON.stringify(sos.map((o) => ({ st: o.state, err: o.lastError }))), 'feed:', w.feed.length)
-  }
   assert.ok(funded, `deal never reached escrow: ${(await bob.store.operation(operationId))?.state}`)
   // the operator stops the agent mid-deal: new work halts, the in-flight
   // escrow's refund path keeps running — money is never stranded by the stop
   writeFileSync(killFile, '')
-  await w.chain.mine(8)
+  // mine until the indexed tip the engine polls actually passes the refund
+  // deadline — mine() returns before indexing catches up
+  const deadline = (await bob.store.operation(operationId))!.dueHeight!
+  for (let i = 0; i < 30 && (await w.chain.tipHeight()) < deadline; i++) await w.chain.mine(1)
   for (let i = 0; i < 12; i++) await w.round([bob])
   const op = (await bob.store.operation(operationId))!
   assert.equal(op.state, 'refunded', `killed agent must still refund — got ${op.state} (${op.lastError ?? ''})`)
-  await assert.rejects(async () => bob.engine.publishWant({ domains: ['libfoo'], maxSats: 500, wantId: 'w2' }, bob.policyHash), /killed/, 'new deals stay blocked while stopped')
+  await assert.rejects(
+    async () => bob.engine.publishWant({ domains: ['libfoo'], maxSats: 500, wantId: 'w2' }, bob.policyHash),
+    /killed/,
+    'new deals stay blocked while stopped'
+  )
   const s = await w.spent(bob)
   assert.equal(s.purchaseSats, 0, 'conservation: refunded deal settles zero purchase sats')
 })
@@ -435,15 +480,12 @@ test('D3 mid-deal disappearance + D7 stuck bound: escrow funded, seller gone —
     await w.round([i % 2 === 0 ? bob : cara])
     funded = (await bob.store.operation(operationId))?.state === 'awaiting_disclosure'
   }
-  if (!funded) {
-    const op = await bob.store.operation(operationId)
-    const sos = await cara.store.operations({ role: 'seller' })
-    console.log('D3 buyer:', JSON.stringify({ state: op?.state, err: op?.lastError }), 'seller ops:', JSON.stringify(sos.map((o) => ({ st: o.state, err: o.lastError }))), 'feed:', w.feed.length)
-  }
   assert.ok(funded, 'escrow never funded')
   // the seller vanishes — only the buyer keeps ticking. refundBlocks heights
-  // pass; the refund path must reclaim the escrow without any seller message
-  await w.chain.mine(8)
+  // pass; the refund path must reclaim the escrow without any seller message.
+  // mine until the indexed tip the engine polls actually passes the deadline
+  const deadline = (await bob.store.operation(operationId))!.dueHeight!
+  for (let i = 0; i < 30 && (await w.chain.tipHeight()) < deadline; i++) await w.chain.mine(1)
   let done = false
   for (let i = 0; i < 15 && !done; i++) {
     await w.round([bob])
@@ -471,13 +513,6 @@ test('D4 taint: purchased content reaches the consumer tagged; a hostile payload
     if (st === 'disclosure_verified') break
   }
   const op = (await bob.store.operation(operationId))!
-  if (op.state !== 'disclosure_verified')
-    console.log(
-      'D4 buyer:',
-      JSON.stringify({ state: op.state, err: op.lastError, offers: Object.keys((op.data.offers as object) ?? {}) }),
-      'seller ops:',
-      JSON.stringify((await w.agents.get('cara')!.store.operations({ role: 'seller' })).map((o) => ({ st: o.state, err: o.lastError })))
-    )
   assert.equal(op.state, 'disclosure_verified', op.lastError)
   const r = op.data.result as { text?: string; taint?: string }
   assert.equal(r.taint, 'untrusted-purchased-content', 'purchased content must carry the taint tag to every consumer')
@@ -502,7 +537,10 @@ test('D7 stuck injection: a collecting op older than its bound exits by the decl
   await w.round([bob])
   assert.equal((await bob.store.operation(operationId))?.state, 'collecting')
   // inject stuck: state-entry clock older than collecting's maxAge
-  await bob.kx('market_operations').where({ operation_id: operationId }).update({ updated_at: Date.now() - 2 * 86_400_000 })
+  await bob
+    .kx('market_operations')
+    .where({ operation_id: operationId })
+    .update({ updated_at: Date.now() - 2 * 86_400_000 })
   await w.round([bob])
   const op = (await bob.store.operation(operationId))!
   assert.equal(op.state, 'expired', `stuck 'collecting' must abort terminal — got ${op.state}`)
@@ -528,7 +566,16 @@ test('preflight on a live stack: dependency checks green; spendguard detects an 
         notBefore: 0,
         notAfter: 4_000_000_000_000,
         domains: ['libfoo'],
-        limits: { perPurchaseSats: 500, dailyPurchaseSats: 1000, perTxFeeSats: 600, dailyFeeSats: 2000, runTotalSats: 5000, maxLockedSats: 1000, maxUnconfirmedSats: 1000, maxUnconfirmedCount: 3 },
+        limits: {
+          perPurchaseSats: 500,
+          dailyPurchaseSats: 1000,
+          perTxFeeSats: 600,
+          dailyFeeSats: 2000,
+          runTotalSats: 5000,
+          maxLockedSats: 1000,
+          maxUnconfirmedSats: 1000,
+          maxUnconfirmedCount: 3
+        },
         scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 0 },
         seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 5, sellableShards: [] },
         disclosure: { allowPublic: false },
@@ -548,7 +595,10 @@ test('preflight on a live stack: dependency checks green; spendguard detects an 
     assert.equal(byName.get('spendguard')?.pass, false, 'an unguarded broadcast path must fail the active check')
     // now the same broadcast behind a SpendGuard proves it
     const guard = new SpendGuard({ broadcast: (tx: Transaction) => chain.broadcast(tx) }, () => 1_000_000, { maxPerDay: 1 })
-    const mem2 = new NektarMemory({ ...chain, broadcast: (tx: Transaction) => guard.broadcast(tx) } as any, funder, funder.keyPair, { dataDir: dir, network: 'regtest' })
+    const mem2 = new NektarMemory({ ...chain, broadcast: (tx: Transaction) => guard.broadcast(tx) } as any, funder, funder.keyPair, {
+      dataDir: dir,
+      network: 'regtest'
+    })
     const r2 = await runPreflight({ mem: mem2, store, cfg: { network: 'regtest', dataDir: dir, marketHosts: [] }, only: ['spendguard'] })
     assert.equal(r2.checks[0].pass, true, `guarded path should refuse the dry-run: ${r2.checks[0].detail}`)
   } finally {

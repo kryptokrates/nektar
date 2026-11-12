@@ -211,6 +211,20 @@ export class StackChain implements ChainTracker, Broadcaster {
     this.watched.clear()
     this.statusCbs = []
   }
+  /** wait until a broadcast tx carries its MerklePath — subtrees seal on a
+   *  ~10s cadence, so proofs are inherently async; callers that NEED one
+   *  synchronously (BEEF payloads) say so explicitly rather than mine()
+   *  stalling for every consumer. */
+  async waitProof(txid: string, timeoutMs = 30_000): Promise<Transaction | undefined> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const tx = this.known.get(txid)
+      if (tx?.merklePath !== undefined) return tx
+      if (!this.polling && this.watched.size > 0) await this.pollWatched()
+      await new Promise((r) => setTimeout(r, 150))
+    }
+    return this.known.get(txid)
+  }
   private async pollWatched(): Promise<void> {
     if (this.polling || this.watched.size === 0 || this.statusCbs.length === 0) return
     const staleAt = Date.now() - WATCH_TTL_MS

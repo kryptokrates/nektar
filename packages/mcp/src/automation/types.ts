@@ -1,5 +1,6 @@
 import type { AutomationStore } from './store.js'
 import type { MarketEngine } from './market.js'
+import type { PreflightReport } from './preflight.js'
 
 export interface Automation {
   store: AutomationStore
@@ -16,9 +17,9 @@ export interface Automation {
   /** bstore/S3 object store in use (undefined = evidence/pack storage off) */
   objectStore?: import('../objectstore.js').S3ObjectStore
   /** the latest preflight verdict — pass + the doctor-style report behind it */
-  health: () => { pass: boolean; report: import('./preflight.js').PreflightReport | undefined }
+  health: () => { pass: boolean; report: PreflightReport | undefined }
   /** re-run the full preflight now (the automationDoctor tool) */
-  preflight: () => Promise<import('./preflight.js').PreflightReport>
+  preflight: () => Promise<PreflightReport>
   /** B3 — 'sealed' = this agent publishes its bfinger record (publicly
    *  discoverable); 'unsealed' = it still requires configured hosts */
   bootstrap?: () => 'sealed' | 'unsealed'

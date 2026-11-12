@@ -2,6 +2,9 @@ import { PrivateKey, Transaction, type MerklePath } from '@bsv/sdk'
 import { mintTree, type TreeLedger } from './tree.js'
 import type { FundingOut, BroadcastResult } from '@nektar/chain'
 
+/** outputs per funding tree unless the caller sizes it */
+export const TREE_SIZE = 64
+
 export async function ensureTrees (p: {
   key: PrivateKey, ledger: TreeLedger, lowWater?: number, size?: number, satsPerOutput?: number,
   kind?: string, lock?: import('@bsv/sdk').LockingScript,
@@ -10,8 +13,12 @@ export async function ensureTrees (p: {
   fetchTx: (txid: string) => Promise<Transaction | undefined>,
   onSpent?: (tx: Transaction) => void | Promise<void>
 }): Promise<{ minted?: string, proven: string[], remaining: number }> {
-  const lowWater = p.lowWater ?? 4
-  const size = p.size ?? 16
+  // Hosts admit a carrier only from a funding tree that is proven in a block,
+  // so the stock is what keeps publishing free of block times: the next tree
+  // is minted when half of the current one is still unused and has a whole
+  // tree's worth of traffic to get mined in.
+  const size = p.size ?? TREE_SIZE
+  const lowWater = p.lowWater ?? Math.ceil(size / 2)
   const satsPerOutput = p.satsPerOutput ?? 1
   const kind = p.kind ?? 'market'
   const proven: string[] = []

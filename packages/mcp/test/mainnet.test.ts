@@ -29,7 +29,7 @@ test('runtime main gate: confirm flag required', () => {
   const cfg = configFromEnv(env({ NEKTAR_NETWORK: 'main', NEKTAR_KEY_PASSPHRASE: 'x', NEKTAR_MAINNET_CONFIRM: 'I_UNDERSTAND' }))
   assert.equal(cfg.main?.maxFeePerTx, 1000)
   assert.equal(cfg.main?.maxSpendPerDay, 20_000)
-  assert.equal(cfg.main?.minBroadcastIntervalMs, 10_000)
+  assert.equal(cfg.main?.minBroadcastIntervalMs, 250)
   assert.equal(cfg.confirmEveryMs, 60_000)
 })
 

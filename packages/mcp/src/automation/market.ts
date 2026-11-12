@@ -3,6 +3,7 @@ import { signWant, verifyWant, signOffer, verifyOffer, type SignedWant, type Sig
 import { verifyOfferSig, publicSaleQuote, saleQuoteWire } from '@nektar/identity'
 import { DisclosureSaleHost, CheckpointBond } from '@nektar/anchor'
 import { parseFragment, fromHex } from '@nektar/core'
+import { TxStore, spendValid, type Ingested } from '@nektar/chain'
 import type { AutomationStore, InboxItem, Operation, OutboxItem } from './store.js'
 import { WalletCoordinator } from './wallet.js'
 import { decidePurchase, decideOffer, digestOf, type AutomationPolicy, type ActionContext } from './policy.js'
@@ -11,8 +12,8 @@ import type { AIExecutor } from './ai.js'
 
 export type MarketMessage =
   | { type: 'quote', wantId: string, offerId: string, commitment: any, mode: string }
-  | { type: 'accept', wantId: string, offerId: string, utxo: { txid: string, vout: number, satoshis: number, script: string }, depositorPkh: string, txHex?: string }
-  | { type: 'delivered', wantId: string, offerId: string, txid: string, txHex: string }
+  | { type: 'accept', wantId: string, offerId: string, utxo: { txid: string, vout: number, satoshis: number, script: string }, depositorPkh: string, tx?: string }
+  | { type: 'delivered', wantId: string, offerId: string, txid: string, tx: string }
   // encrypted self-note the buyer keeps in its own inbox until the deal ends —
   // enough to rebuild the operation after losing the automation database
   | { type: 'note', v: 1, wantId: string, offerId: string, policyHash: string, want: SignedWant, offer: { so: SignedOffer, commitment?: any, mode?: string }, escrow: any, utxo: { txid: string, vout: number, satoshis: number, script: string }, escrowAction: string, amounts: { purchaseSats: number, feeSats: number, lockedSats: number } }
@@ -46,6 +47,13 @@ export interface MarketDeps {
    *  settlement states without waiting on block heights */
   txState?: (txid: string) => Promise<'mined' | 'seen' | 'rejected' | 'unknown'>
   broadcast?: (tx: Transaction) => Promise<import('@nektar/chain').BroadcastResult>
+  /** the instance's transaction graph: `txWire` is what a counterparty is
+   *  handed (BEEF when the ancestry is proven, else Extended Format, else
+   *  raw), `readTx` parses such a payload and runs SPV against the
+   *  instance's own headers, `rememberTx` keeps an accepted transaction */
+  txWire?: (txid: string) => string | undefined
+  readTx?: (hex: string) => Promise<Ingested>
+  rememberTx?: (tx: Transaction) => void
   settleEscrow?: (tx: Transaction) => void
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
@@ -343,27 +351,29 @@ export class MarketEngine {
     const script = DisclosureSaleHost.escrowScript(cfg, m.depositorPkh)
     if (m.utxo?.script !== script) return await refuse('escrow script does not match the quoted terms')
     if (!Number.isSafeInteger(m.utxo.satoshis) || m.utxo.satoshis < Number(offer.cfg.price) + 1) return await refuse('escrow is underfunded')
-    let tx = await this.d.fetchTx(m.utxo.txid)
-    let carried = false
-    if (!tx && typeof m.txHex === 'string') {
-      // the buyer attached the escrow itself — verify it IS the claimed tx and
-      // let the broadcaster's 2xx be the acceptance signal (no indexer wait)
+    // the buyer hands over the escrow itself. It is checked here, against our
+    // own headers where its ancestry is proven, and then put on the network
+    // by us — no indexer has to have seen it first.
+    let tx: Transaction | undefined
+    let spv = false
+    if (typeof m.tx === 'string') {
       try {
-        const cand = /^[0-9a-f]{8}0000000000ef/i.test(m.txHex)
-          ? Transaction.fromHexEF(m.txHex) : Transaction.fromHex(m.txHex)
-        if (cand.id('hex') === m.utxo.txid) { tx = cand; carried = true }
-      } catch { /* falls through to the same refusal as an unobservable tx */ }
-    }
+        const got = await this.readTx(m.tx)
+        if (got.tx.id('hex') !== m.utxo.txid) return await refuse('attached transaction is not the claimed escrow')
+        tx = got.tx; spv = got.spv
+      } catch { return await refuse('attached escrow transaction is unreadable') }
+    } else tx = await this.d.fetchTx(m.utxo.txid)
     const out = tx?.outputs[m.utxo.vout]
     if (!tx || tx.id('hex') !== m.utxo.txid || !out) return await refuse('escrow transaction not observable yet')
     if (out.lockingScript.toHex() !== script || out.satoshis !== m.utxo.satoshis) return await refuse('on-chain escrow output differs from the claimed one')
-    if (carried && this.d.broadcast !== undefined) {
+    if (typeof m.tx === 'string' && this.d.broadcast !== undefined) {
       const br = await this.d.broadcast(tx)
       if (br.status !== 'success') return await refuse(`escrow not accepted by the network: ${br.description ?? br.status}`)
     }
+    this.d.rememberTx?.(tx)
     const h = await this.d.height()
     if (h + this.o.sellerSafetyBlocks >= Number(offer.cfg.refundAfter)) return await refuse('too close to the refund deadline')
-    const next = await this.d.store.transition(op.operationId, op.revision, 'completing', { cause: 'escrow_verified', data: { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } } })
+    const next = await this.d.store.transition(op.operationId, op.revision, 'completing', { cause: 'escrow_verified', data: { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } }, evidence: { spv } })
     await this.complete(next)
   }
 
@@ -378,7 +388,7 @@ export class MarketEngine {
     }
     await this.d.store.transition(op.operationId, op.revision, 'completion_submitted', {
       cause: 'disclosure_broadcast', data: { completeTxid: r.txid, sellerSats: r.sellerSats },
-      outbox: [{ actionId: `${op.operationId}:delivered`, kind: 'message', destination: w.pub, payload: { type: 'delivered', wantId: w.wantId, offerId: op.operationId, txid: r.txid, txHex: r.txHex } }]
+      outbox: [{ actionId: `${op.operationId}:delivered`, kind: 'message', destination: w.pub, payload: { type: 'delivered', wantId: w.wantId, offerId: op.operationId, txid: r.txid, tx: this.d.txWire?.(r.txid) ?? r.txHex } }]
     })
   }
 
@@ -432,11 +442,17 @@ export class MarketEngine {
     const sel = op.data.selected as { key: string }
     const chosen = (op.data.offers as Record<string, StoredOffer>)[sel.key]!
     if (from !== chosen.so.offer.pub || m.offerId !== chosen.so.offer.offerId) return
-    const utxo = op.data.utxo as { txid: string, vout: number }
-    const tx = Transaction.fromHex(m.txHex)
-    if (tx.id('hex') !== m.txid || tx.inputs[0]?.sourceTXID !== utxo.txid || (tx.inputs[0]?.sourceOutputIndex ?? 0) !== utxo.vout) return
+    const utxo = op.data.utxo as { txid: string, vout: number, satoshis: number, script: string }
+    let got: Ingested
+    try { got = await this.readTx(m.tx) } catch { return }
+    const tx = got.tx
+    // the reveal must be a valid spend of OUR escrow output — checked by
+    // running the script here, so the disclosure is accepted the moment it
+    // arrives instead of when an indexer shows it
+    if (tx.id('hex') !== m.txid || !spendValid(tx, 0, utxo)) return
+    this.d.rememberTx?.(tx)
     const q = chosen.so.offer.offer as any
-    const claim = await this.d.call('sale#claim', { txHex: m.txHex, hWrapped: q.cfg.hWrapped, sellerPub: from, offerMode: chosen.mode, ...(chosen.commitment ? { commitment: chosen.commitment } : {}) })
+    const claim = await this.d.call('sale#claim', { txHex: tx.toHex(), hWrapped: q.cfg.hWrapped, sellerPub: from, offerMode: chosen.mode, ...(chosen.commitment ? { commitment: chosen.commitment } : {}) })
     await this.d.store.settleBudget(op.data.escrowAction as string)
     let text: string | undefined
     try {
@@ -445,7 +461,16 @@ export class MarketEngine {
     } catch { /* opaque payload */ }
     const result = { mode: claim.mode, verified: claim.verified, authorVerified: claim.authorVerified, valueHex: claim.valueHex, text, disclosureTxid: m.txid }
     const bad = chosen.commitment ? claim.verified !== true : false
-    await this.d.store.transition(op.operationId, op.revision, bad ? 'disputed' : 'disclosure_verified', { cause: bad ? 'payload_does_not_match_commitment' : 'disclosure_verified', data: { result }, dueHeight: null, evidence: { txid: m.txid, verified: claim.verified, authorVerified: claim.authorVerified, reason: claim.reason } })
+    await this.d.store.transition(op.operationId, op.revision, bad ? 'disputed' : 'disclosure_verified', { cause: bad ? 'payload_does_not_match_commitment' : 'disclosure_verified', data: { result }, dueHeight: null, evidence: { txid: m.txid, verified: claim.verified, authorVerified: claim.authorVerified, reason: claim.reason, spv: got.spv } })
+  }
+
+  private async readTx (hex: string): Promise<Ingested> {
+    return this.d.readTx !== undefined ? await this.d.readTx(hex) : await TxStore.read(hex, undefined)
+  }
+  /** what the seller is handed for an escrow this instance funded */
+  private escrowWire (txid: string, rawHex?: string): { tx: string } | {} {
+    const w = this.d.txWire?.(txid) ?? rawHex
+    return w !== undefined ? { tx: w } : {}
   }
 
   private noteFor (op: Operation, wantId: string, s: StoredOffer, escrow: any, utxo: any, escrowAction: string, amounts: { purchaseSats: number, feeSats: number, lockedSats: number }): Extract<MarketMessage, { type: 'note' }> {
@@ -622,6 +647,7 @@ export class MarketEngine {
           return
         }
         this.d.settleEscrow(tx)
+        this.d.rememberTx?.(tx)
         r = { accepted: true, txid: built.utxo.txid, utxo: built.utxo, escrow: built.escrow }
       } else try {
         r = await this.d.call('sale#escrow', { cfg: q.cfg, amount: amounts.lockedSats, offer: { sellerPub: q.sellerPub, offerSig: q.offerSig, expiresAt: q.expiresAt, commitment: s.commitment ?? (s.so.offer.leaf ? { leaf: s.so.offer.leaf } : undefined) } })
@@ -642,7 +668,7 @@ export class MarketEngine {
       await this.d.store.transition(cur.operationId, cur.revision, 'awaiting_disclosure', {
         cause: 'escrow_broadcast', data: { escrow: r.escrow, utxo: r.utxo, escrowTxid: r.txid }, dueHeight: Number(q.cfg.refundAfter),
         outbox: [
-          { actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo: r.utxo, depositorPkh: r.escrow.depositorPkh, ...(escrowTx !== undefined ? { txHex: escrowTx.inputs.every(i => i.sourceTransaction !== undefined) ? Buffer.from(escrowTx.toEF()).toString('hex') : escrowTx.toHex() } : {}) } },
+          { actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo: r.utxo, depositorPkh: r.escrow.depositorPkh, ...this.escrowWire(r.txid, escrowTx?.toHex()) } },
           { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w.wantId, s, r.escrow, r.utxo, ctx.actionId, amounts) }
         ]
       })
@@ -717,7 +743,7 @@ export class MarketEngine {
       data: { escrow, utxo, escrowTxid: txid },
       dueHeight: Number(escrow.refundAfter),
       outbox: [
-        { actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo, depositorPkh: String(escrow.depositorPkh), ...(wtx?.rawHex !== undefined ? { txHex: wtx.rawHex } : {}) } },
+        { actionId: `${op.operationId}:accept`, kind: 'message', destination: s.so.offer.pub, payload: { type: 'accept', wantId: w.wantId, offerId: s.so.offer.offerId, utxo, depositorPkh: String(escrow.depositorPkh), ...this.escrowWire(txid, wtx?.rawHex) } },
         { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w.wantId, s, escrow, utxo, actionId ?? `${op.operationId}:escrow`, op.data.amounts as { purchaseSats: number, feeSats: number, lockedSats: number }) }
       ]
     })
@@ -760,7 +786,7 @@ export class MarketEngine {
             const so2 = s2.so
             const w2 = (op.data.want as SignedWant).want
             await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', { cause: 'escrow_resumed_same_bytes', data: { escrow: pending.cfg, utxo: pending.utxo, escrowTxid: pending.utxo.txid }, dueHeight: Number(pending.cfg.refundAfter), outbox: [
-              { actionId: `${op.operationId}:accept`, kind: 'message', destination: so2.offer.pub, payload: { type: 'accept', wantId: w2.wantId, offerId: so2.offer.offerId, utxo: pending.utxo, depositorPkh: pending.cfg.depositorPkh, ...(wtx?.rawHex !== undefined ? { txHex: wtx.rawHex } : {}) } },
+              { actionId: `${op.operationId}:accept`, kind: 'message', destination: so2.offer.pub, payload: { type: 'accept', wantId: w2.wantId, offerId: so2.offer.offerId, utxo: pending.utxo, depositorPkh: pending.cfg.depositorPkh, ...this.escrowWire(pending.utxo.txid, wtx?.rawHex) } },
               { actionId: `${op.operationId}:note`, kind: 'message', destination: this.me, payload: this.noteFor(op, w2.wantId, s2, pending.cfg, pending.utxo, op.data.escrowAction as string, op.data.amounts as { purchaseSats: number, feeSats: number, lockedSats: number }) }
             ] })
             return

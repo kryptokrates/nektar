@@ -16,10 +16,16 @@ export interface AutomationConfig {
   dataDir?: string
   ai?: AIExecutor
   intervalMs?: number
+  /** how often the timer runs upkeep (trees, identity record, journal); push events run it at once */
+  upkeepMs?: number
   call: (tool: string, args: any) => Promise<any>
   opts?: Partial<MarketOptions>
   log?: (line: string) => void
   marketHosts?: string[]
+  /** the operator's own hosts: accept http and loopback/private addresses in
+   *  identity records (env NEKTAR_MARKET_LOCAL_HOSTS=1). Off, a record may
+   *  only name public https hosts. */
+  localHosts?: boolean
   messages?: { send: (toPub: string, msg: MarketMessage) => Promise<void>, collect: () => Promise<Array<{ from: string, msg: MarketMessage }>>, ack?: () => Promise<void> }
   treeSize?: number
   boxOffice?: string
@@ -68,7 +74,9 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   // accepted only when the record names this network, and screened through
   // fingerHostAllowed — https only off mock/regtest and never loopback,
   // private or link-local literals (the SSRF guard for dynamic hosts).
-  const mockNet = cfg.network === 'mock' || cfg.network === 'regtest' || cfg.network.startsWith('mock')
+  // identity records may name http and loopback/private hosts on the test
+  // lanes, and anywhere the operator runs its own hosts and says so
+  const mockNet = cfg.network === 'mock' || cfg.network === 'regtest' || cfg.network.startsWith('mock') || cfg.localHosts === true
   const fingerCache = new Map<string, { at: number, rec?: { hosts: string[], office: string, stream: string } }>()
   const resolveRecord = async (pub: string): Promise<{ hosts: string[], office: string, stream: string } | undefined> => {
     if (lanes === undefined) return undefined
@@ -113,6 +121,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     height: () => mem.chainHeight(), tip: () => mem.tipRef(), fetchTx: txid => mem.fetchTx(txid),
     txState: txid => mem.txState(txid),
     broadcast: tx => mem.broadcastTx(tx),
+    txWire: txid => mem.txWire(txid), readTx: hex => mem.readTxWire(hex), rememberTx: tx => { mem.rememberTx(tx) },
     settleEscrow: tx => { for (const inp of tx.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } if (tx.outputs[1]) mem.addOwnedOut(tx, 1) },
     transport, ai: cfg.ai ?? aiFromEnv(), opts: cfg.opts, logStream
   })
@@ -211,21 +220,35 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
   let busy = false
   let again = false
   let running: Promise<void> | undefined
-  const cycle = async (): Promise<void> => {
+  // Two loops. The deal loop reads the hosts and advances operations; it
+  // does nothing else, so a deal never queues behind housekeeping. Upkeep
+  // (funding trees, the identity record, the journal, evidence) runs beside
+  // it under its own guard.
+  const deals = async (): Promise<void> => {
     if (busy) { again = true; await running; return }
     busy = true
     const run = (async () => {
       try {
         do {
           again = false
-          await runCycle()
+          try { await poll(); await engine.tick() } catch (e) { log(`automation: ${(e as Error).message}`) }
         } while (again && !stopped)
-      } finally { busy = false; if (again && !stopped) void cycle() }
+      } finally { busy = false; if (again && !stopped) void deals() }
     })()
     running = run
     await run
   }
-  const runCycle = async (): Promise<void> => {
+  let upkeepRun: Promise<void> | undefined
+  let upkeepAt = 0
+  const upkeep = async (): Promise<void> => {
+    if (upkeepRun !== undefined) return await upkeepRun
+    upkeepAt = Date.now()
+    upkeepRun = runUpkeep().finally(() => { upkeepRun = undefined })
+    await upkeepRun
+  }
+  /** one full pass: deals, then upkeep — what tests and push events drive */
+  const cycle = async (): Promise<void> => { await deals(); if (!stopped) await upkeep() }
+  const runUpkeep = async (): Promise<void> => {
     try {
       if (lanes !== undefined) {
         try {
@@ -239,7 +262,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
               takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0]!,
               broadcast: tx => mem.broadcastTx(tx),
               fetchTx: txid => mem.fetchTx(txid),
-              onSpent: (tree) => { for (const inp of tree.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } const n = cfg.treeSize ?? 16; if (tree.outputs.length === n + 1 && (tree.outputs[n]!.satoshis ?? 0) > 0) mem.addOwnedOut(tree, n) }
+              onSpent: (tree) => { for (const inp of tree.inputs) { const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex'); if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0) } const n = tree.outputs.length - 1; if (n >= 1 && (tree.outputs[n]!.satoshis ?? 0) > 0) mem.addOwnedOut(tree, n) }
             })
             // a proven log tree's BEEF must reach tm_log before hosts can
             // admit carriers spending it - journaled, publishes once
@@ -265,11 +288,11 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
           if (r.changed) log(`automation: finger seq ${r.seq} ${r.tokenTxid ?? ''}`)
         } catch (e) {
           // 'no funding slot' is transient while the finger tree matures — retried next cycle, not worth a line
-          if ((e as Error).message.includes('no funding slot')) return
+          if (!(e as Error).message.includes('no funding slot')) {
           const m = `automation: finger: ${(e as Error).message.slice(0, 160)}`; if (m !== fingerError) { fingerError = m; log(m) }
+          }
         }
       }
-      await poll(); await engine.tick()
       await storeEvidence()
       await appendLogEvents()
     } catch (e) { log(`automation: ${(e as Error).message}`) }
@@ -401,7 +424,11 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
     } catch (e) { return { own, counterparty: { error: (e as Error).message.slice(0, 200) } } }
   }
 
-  const timer = cfg.intervalMs === 0 ? undefined : setInterval(() => { void cycle() }, cfg.intervalMs ?? 5000)
+  const upkeepMs = cfg.upkeepMs ?? 10_000
+  const timer = cfg.intervalMs === 0 ? undefined : setInterval(() => {
+    void deals()
+    if (Date.now() - upkeepAt >= upkeepMs) void upkeep().catch(() => {})
+  }, cfg.intervalMs ?? 1000)
   timer?.unref()
   let stopped = false
   const inflight = new Set<Promise<void>>()
@@ -442,7 +469,7 @@ export async function openAutomation (mem: NektarMemory, cfg: AutomationConfig):
       stopped = true
       if (timer) clearInterval(timer)
       await Promise.allSettled([...inflight])
-      while (busy) await new Promise(r => setTimeout(r, 25))
+      while (busy || upkeepRun !== undefined) await new Promise(r => setTimeout(r, 25))
       await engine.idle()
       await kx.destroy()
     }

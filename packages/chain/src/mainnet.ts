@@ -2,6 +2,7 @@
 // discovery, merkle paths) + the BSV Broadcaster client. NO spend happens
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
+import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash } from '@bsv/sdk'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 
@@ -359,9 +360,11 @@ async function getOk (c: ReturnType<typeof def>, url: string, headers: Record<st
 // --- funding import by txid (address indexes can be unavailable, e.g. WoC-TTN) ---
 /** fetch a funding tx and return its P2PKH outputs locked to `pkhHex` */
 export async function importFundingTx (cfg: MainnetConfig | undefined, ref: string, pkhHex: string): Promise<FundingOut[]> {
-  // 'hex:<rawtx>' = fully offline import — the operator hands us the funding
-  // transaction itself, no network fetch and no index involved.
-  if (ref.startsWith('hex:')) return fundingOutputs(Transaction.fromHex(ref.slice(4)), pkhHex)
+  // 'hex:<tx>' = fully offline import — the operator hands us the funding
+  // transaction itself, no network fetch and no index involved. Handed as
+  // BEEF it brings its proof or proven ancestry, so what is paid from it can
+  // be verified by a counterparty at once.
+  if (ref.startsWith('hex:')) return fundingOutputs((await TxStore.read(ref.slice(4), undefined)).tx, pkhHex)
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey

@@ -26,6 +26,7 @@ import { AnchorChain, CheckpointBond, type BondUtxo } from '@nektar/anchor'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import { deriveFragmentKey, deriveLevelKey, encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@nektar/crypto'
+import { TxStore } from '@nektar/chain'
 import type { Broadcaster, ChainTracker, Funder } from '@nektar/chain'
 import * as idbind from '@nektar/identity'
 import { proveMembershipStark, verifyMembershipAnchoredStark, starkQueryId, proveDerivationStark, verifyDerivationBound, buildSubsetProof, encodeZkdis, decodeZkdis, verifySubsetAnchored, decodeZkm2, decodeZkder, verifyCombinedStark } from '@nektar/zk'
@@ -68,6 +69,9 @@ export interface NektarMemoryOptions {
   /** BSV Broadcaster base URL (live networks) — lets txState ask the
    *  broadcaster's /tx/{txid} verdict when the local view can't decide */
   broadcasterUrl?: string
+  /** the instance's transaction graph — the live runtime passes a persisted
+   *  one; default is in-memory */
+  txStore?: TxStore
   /** CHN-006: confirmations after which an anchor counts as final (default 1) */
   finalityDepth?: number
   /** LOG-005: maximum merge delay for inclusion promises (default 10 min) */
@@ -353,44 +357,50 @@ export class NektarMemory {
   public budget?: import('./budget.js').BudgetAuthority
   public automation?: import('./automation/types.js').Automation
   public ledger?: import('./automation/store.js').AutomationStore
-  async fetchTx (txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
-    const local = this.anchorTxs.get(txid) ?? (this.chain as any).getTx?.(txid)
-    if (local) { await this.attachKnownProof(local, txid); return local }
-    if (this.opts.network === 'mock' || this.opts.network === 'regtest' || this.opts.network === undefined) return undefined
-    try {
-      const tx = await this.fetchParentTx(txid)
-      await this.attachKnownProof(tx, txid)
-      return tx
-    } catch { return undefined }
-  }
-
-  // pushed proofs that no anchor claimed (e.g. a market tx) are remembered so
-  // fetchTx can answer "mined?" for any tx we broadcast — the live networks
-  // have no chain.getTx to attach a path for us. Bounded: 4096, oldest out.
-  private txProofs = new Map<string, import('@bsv/sdk').MerklePath>()
-  private rememberProof (txid: string, mp: import('@bsv/sdk').MerklePath): void {
-    if (this.txProofs.size >= 4096) this.txProofs.delete(this.txProofs.keys().next().value!)
-    this.txProofs.set(txid, mp)
-  }
-  /** pull fallback for proofs that never arrived by push (restart gap) —
-   *  set by the live runtime to a tracker-verified source; unset elsewhere */
+  /** every transaction this instance built, broadcast or was handed, with
+   *  its proof once one exists — parents for spends and BEEF for counterparties
+   *  come from here, not from an indexer */
+  get txs (): TxStore { return (this.opts.txStore ??= new TxStore()) }
+  /** network lookups for what the instance was never handed (a foreign bond,
+   *  a transaction from before a database loss, a proof missed while down).
+   *  Set by the live runtime; each is a single attempt and never sleeps. */
+  txLookup?: (txid: string) => Promise<import('@bsv/sdk').Transaction | undefined>
   proofLookup?: (txid: string) => Promise<import('@bsv/sdk').MerklePath | undefined>
-  private proofLookupAt = new Map<string, number>()
-
-  private async attachKnownProof (tx: import('@bsv/sdk').Transaction, txid: string): Promise<void> {
-    if (tx.merklePath !== undefined) return // never overwrite an existing path
-    let mp = this.txProofs.get(txid)
-    if (mp === undefined && this.proofLookup !== undefined) {
-      const last = this.proofLookupAt.get(txid) ?? 0
-      if (Date.now() - last > 60_000) {
-        if (this.proofLookupAt.size >= 4096) this.proofLookupAt.delete(this.proofLookupAt.keys().next().value!)
-        this.proofLookupAt.set(txid, Date.now())
-        try { mp = await this.proofLookup(txid) ?? undefined } catch { mp = undefined }
-        if (mp !== undefined) this.rememberProof(txid, mp)
-      }
-    }
-    if (mp !== undefined) tx.merklePath = mp
+  private lookupAt = new Map<string, number>()
+  private lookupDue (key: string, everyMs: number): boolean {
+    if (Date.now() - (this.lookupAt.get(key) ?? 0) <= everyMs) return false
+    if (this.lookupAt.size >= 4096) this.lookupAt.delete(this.lookupAt.keys().next().value!)
+    this.lookupAt.set(key, Date.now())
+    return true
   }
+
+  async fetchTx (txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
+    let tx: import('@bsv/sdk').Transaction | undefined = this.anchorTxs.get(txid) ?? this.txs.get(txid)
+    if (tx?.merklePath === undefined) {
+      // mock and regtest backends answer for any transaction on their chain, proof included
+      const seen = await (this.chain as { getTx?: (t: string) => import('@bsv/sdk').Transaction | undefined | Promise<import('@bsv/sdk').Transaction | undefined> }).getTx?.(txid)
+      if (seen?.merklePath !== undefined) { this.txs.setProof(txid, seen.merklePath); tx = seen } else if (tx === undefined) tx = seen
+    }
+    if (tx === undefined && this.txLookup !== undefined && this.lookupDue(`tx:${txid}`, 30_000)) {
+      try { tx = await this.txLookup(txid) } catch { tx = undefined }
+      if (tx !== undefined) this.txs.put(tx)
+    }
+    if (tx === undefined) return undefined
+    // proofs arrive by push; this pull only covers one missed while the
+    // instance was down, so it is tried once and then rarely
+    if (tx.merklePath === undefined && this.proofLookup !== undefined && this.lookupDue(`proof:${txid}`, 600_000)) {
+      let mp: import('@bsv/sdk').MerklePath | undefined
+      try { mp = await this.proofLookup(txid) } catch { mp = undefined }
+      if (mp !== undefined) { this.txs.setProof(txid, mp); tx.merklePath = mp }
+    }
+    return tx
+  }
+  /** keep a transaction (and the ancestry it carries) in the instance's graph */
+  rememberTx (tx: import('@bsv/sdk').Transaction): void { this.txs.put(tx) }
+  /** hex to hand a counterparty: BEEF when the ancestry is proven, else EF, else raw */
+  txWire (txid: string): string | undefined { return this.txs.wire(txid) }
+  /** read a counterparty's wire transaction and run SPV against our own headers */
+  async readTxWire (hex: string): Promise<import('@nektar/chain').Ingested> { return await TxStore.read(hex, this.sdkTracker()) }
   /** state-change events for live surfaces (dashboard SSE, watchers) —
    *  emitted once per successful mutating tool call by the server layer */
   readonly events = new EventEmitter()
@@ -402,7 +412,7 @@ export class NektarMemory {
    *  checked against our own tracker) or produced by the chain backend
    *  itself: attach it to the anchor it belongs to, then notify subscribers */
   deliverTxProof (txid: string, mp: import('@bsv/sdk').MerklePath): void {
-    this.rememberProof(txid, mp)
+    this.txs.setProof(txid, mp)
     try {
       const shard = this.txidShard.get(txid)
       if (shard) this.attachProof(shard, txid, mp)
@@ -475,7 +485,11 @@ export class NektarMemory {
     return out
   }
   /** broadcast a fully-signed tx through the instance's broadcaster (SpendGuard stays in front) — covenant host tools only */
-  async broadcastTx (tx: import('@bsv/sdk').Transaction): Promise<import('@nektar/chain').BroadcastResult> { return await this.chain.broadcast(tx) }
+  async broadcastTx (tx: import('@bsv/sdk').Transaction): Promise<import('@nektar/chain').BroadcastResult> {
+    const r = await this.chain.broadcast(tx)
+    if (r.status === 'success') this.txs.put(tx)
+    return r
+  }
   /** the operator fee key — covenant hosts need it as owner/buyer key */
   operatorKey (): PrivateKey { return this.fundKey }
   /** funding outs for covenant hosts (escrow deposits, covenant inputs) —
@@ -654,7 +668,7 @@ export class NektarMemory {
     const utxo = this.bondContract.deployUtxo(tx, bondSats, script)
     const br = await this.chain.broadcast(tx)
     if (br.status !== 'success') { this.bondContract = undefined; throw new Error(`bond deploy broadcast failed: ${br.description ?? 'unknown'}`) }
-    this.noteTxHex(tx.id('hex'), tx.toHex())
+    this.txs.put(tx)
     this.bondHead = utxo
     this.persistState()
     return { txid: tx.id('hex'), releaseHeight: release }
@@ -707,7 +721,7 @@ export class NektarMemory {
       // two — 500 on main, maxFee−1 on test (where 1-sat relays pass anyway).
       const spendFee = this.opts.network === 'main' ? 500n : BigInt(contract.params.maxFee) - 1n
       const { tx } = await contract.buildSeize(head, payToScript ?? buildP2PKHScript(pkh), height, this.chain, spendFee, parentTx)
-      this.noteTxHex(tx.id('hex'), tx.toHex())
+      this.txs.put(tx)
       if (!bond) { // only update local state for the bond WE deployed
         this.bondHead = { txid: tx.id('hex'), vout: 1, satoshis: tx.outputs[1]!.satoshis!, script: tx.outputs[1]!.lockingScript.toHex() }
         this.persistState()
@@ -719,37 +733,10 @@ export class NektarMemory {
   /** the covenant preimage needs the REAL parent tx — a synthetic
    *  sourceTransaction mismatches the outpoint txid and produces an invalid
    *  unlock on-chain. Fetch it on the instance's own network. */
-  /** raw-tx hex cache keyed by txid — persisted so a covenant spend can build
-   *  its preimage from a parent we broadcast seconds ago, before indexers
-   *  have it (WoC /hex 404s on fresh txs). Bounded to the last 64 entries. */
-  private txHexCache = new Map<string, string>()
-
-  private noteTxHex (txid: string, hex: string): void {
-    if (this.txHexCache.size > 64) this.txHexCache.delete(this.txHexCache.keys().next().value!)
-    this.txHexCache.set(txid, hex)
-  }
-
   private async fetchParentTx (txid: string): Promise<import('@bsv/sdk').Transaction> {
-    const { Transaction } = await import('@bsv/sdk')
-    const cached = this.txHexCache.get(txid)
-    if (cached) return Transaction.fromHex(cached)
-    const local = (this.chain as any).getTx?.(txid) as import('@bsv/sdk').Transaction | undefined
-    if (local) return local
-    const net = this.opts.network ?? 'main'
-    const wocUrl = process.env.NEKTAR_WOC_URL
-      ?? (net === 'testnet' ? 'https://api.whatsonchain.com/v1/bsv/test'
-        : net === 'ttn' ? 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test'
-        : net === 'main' ? 'https://api.whatsonchain.com/v1/bsv/main'
-        : undefined)
-    if (!wocUrl) throw new Error(`bond parent fetch: no endpoint for network '${net}'`)
-    // fresh txs index within ~30s — retry once before giving up
-    for (let i = 0; i < 3; i++) {
-      const pr = await fetch(`${wocUrl}/tx/${txid}/hex`)
-      if (pr.ok) { const hex = (await pr.text()).trim(); this.noteTxHex(txid, hex); return Transaction.fromHex(hex) }
-      if (pr.status !== 404) throw new Error(`bond parent tx ${txid} fetch failed (${pr.status})`)
-      await new Promise(r => setTimeout(r, 10_000))
-    }
-    throw new Error(`bond parent tx ${txid} fetch failed (404 after retries)`)
+    const tx = await this.fetchTx(txid)
+    if (tx === undefined) throw new Error(`parent tx ${txid} is not known to this instance`)
+    return tx
   }
 
   /** commit a checkpoint root — keeps the bond alive past its current deadline. */
@@ -763,7 +750,7 @@ export class NektarMemory {
       const parentTx = await this.fetchParentTx(head.txid)
       const commitFee = this.opts.network === 'main' ? 500n : BigInt(this.bondContract.params.maxFee) - 1n
       const { tx, state } = await this.bondContract.buildCommit(head, this.bondKey(), root, height, this.chain, commitFee, parentTx)
-      this.noteTxHex(tx.id('hex'), tx.toHex())
+      this.txs.put(tx)
       this.bondHead = { txid: tx.id('hex'), vout: 0, satoshis: tx.outputs[0]!.satoshis!, script: tx.outputs[0]!.lockingScript.toHex() }
       this.persistState()
       return { txid: tx.id('hex'), n: state.n }
@@ -783,7 +770,7 @@ export class NektarMemory {
       const parentTx = await this.fetchParentTx(head.txid)
       const closeFee = this.opts.network === 'main' ? 500n : BigInt(this.bondContract.params.maxFee) - 1n
       const { tx } = await this.bondContract.buildClose(head, this.bondKey(), height, this.chain, closeFee, parentTx)
-      this.noteTxHex(tx.id('hex'), tx.toHex())
+      this.txs.put(tx)
       this.bondContract = undefined
       this.bondHead = undefined
       this.persistState()
@@ -844,7 +831,7 @@ export class NektarMemory {
     await tx.sign()
     const br = await this.chain.broadcast(tx)
     if (br.status !== 'success') throw new Error(`sendSats broadcast failed: ${br.description ?? 'unknown'}`)
-    this.noteTxHex(tx.id('hex'), tx.toHex())
+    this.txs.put(tx)
     ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
     ;(this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
     return { txid: tx.id('hex'), paidSats: args.amount }
@@ -1832,7 +1819,7 @@ export class NektarMemory {
       txid: this.bondHead.txid, vout: this.bondHead.vout, satoshis: this.bondHead.satoshis, script: this.bondHead.script,
       operatorPkh: this.bondContract.params.operatorPkh, releaseHeight: this.bondContract.params.bondReleaseHeight.toString(), maxFee: this.bondContract.params.maxFee.toString(), epochLen: this.bondContract.params.epochLen.toString()
     } : undefined
-    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags), importedBundles: Object.fromEntries(this.importedBundles), bond, txHex: Object.fromEntries(this.txHexCache), packStores: Object.fromEntries(this.packStores) } as PersistedMemoryState)
+    st.save({ version: 1, shards, promises: this.promises, flags: Object.fromEntries(this.flags), importedBundles: Object.fromEntries(this.importedBundles), bond, packStores: Object.fromEntries(this.packStores) } as PersistedMemoryState)
   }
   private restoreState (): void {
     const s = this.opts.stateStore?.load()
@@ -1850,7 +1837,8 @@ export class NektarMemory {
       this.tails.set(shard, p.tails); this.cps.set(shard, p.checkpoints); this.touched.add(shard)
     }
     this.promises.push(...s.promises)
-    for (const [txid, hex] of Object.entries((s.txHex ?? {}) as Record<string, string>)) this.txHexCache.set(txid, hex)
+    // state files written before the transaction graph kept parents here
+    for (const hex of Object.values((s.txHex ?? {}) as Record<string, string>)) { try { this.txs.put(Transaction.fromHex(hex)) } catch { /* unreadable entry */ } }
     for (const [k, b] of Object.entries(s.importedBundles ?? {})) this.importedBundles.set(k, b)
     for (const [shard, f] of Object.entries(s.flags ?? {})) this.flags.set(shard, f)
     for (const [shard, r] of Object.entries(s.packStores ?? {})) this.packStores.set(shard, r)

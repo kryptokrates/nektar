@@ -9,7 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, appendFi
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { PrivateKey, MerklePath, Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, regtestTx, BsvBroadcaster, WocTracker, fetchBroadcasterFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, statusStream, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, regtestTx, BsvBroadcaster, WocTracker, fetchBroadcasterFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, statusStream, TxStore, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
@@ -109,7 +109,7 @@ export function configFromEnv (env = process.env): RuntimeConfig {
       feeRateSatPerKb: env.NEKTAR_FEE_RATE_SAT_PER_KB ? Number(env.NEKTAR_FEE_RATE_SAT_PER_KB) : (ttn ? 1 : undefined),
       maxFeePerTx: Number(env.NEKTAR_MAX_FEE_SATS_PER_TX ?? 1000),
       maxSpendPerDay: Number(env.NEKTAR_MAX_SPEND_SATS_PER_DAY ?? 20_000),
-      minBroadcastIntervalMs: Number(env.NEKTAR_MIN_BROADCAST_INTERVAL_MS ?? 10_000)
+      minBroadcastIntervalMs: Number(env.NEKTAR_MIN_BROADCAST_INTERVAL_MS ?? 250)
     }
   }
   return cfg
@@ -226,10 +226,10 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   // input-value resolver for the guard's fee check — same closure as the
   // live runtime: reserve entries, guarded broadcasts, anchor txs (fail-closed)
   let memRef: NektarMemory | undefined
-  const guardedBroadcasts = new Map<string, Transaction>()
+  const { txStore, open: openTxStore } = persistedTxStore()
   const valueOf = (txid: string, vout: number): number | undefined =>
     reserve.utxos.find(u => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
-    guardedBroadcasts.get(txid)?.outputs[vout]?.satoshis ??
+    txStore.get(txid)?.outputs[vout]?.satoshis ??
     memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
   const broadcaster = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), valueOf, { unlimited: true })
   const auth = 'Basic ' + Buffer.from(`${rc.rpcUser}:${rc.rpcPass}`).toString('base64')
@@ -257,7 +257,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   const chain = {
     broadcast: async (tx: Transaction) => {
       const r = await broadcaster.broadcast(tx)
-      if (r.status === 'success') guardedBroadcasts.set(tx.id('hex'), tx)
+      if (r.status === 'success') txStore.put(tx)
       return r
     },
     currentHeight: () => tracker.currentHeight(),
@@ -274,6 +274,8 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   const knex = knexMod({ client: 'sqlite3', connection: { filename: join(cfg.dataDir, 'records.sqlite') }, useNullAsDefault: true })
   const store: ShardStore = new KnexShardStore(knex)
   await store.init?.()
+  await openTxStore(knex)
+  for (const u of reserve.utxos) txStore.put(u.tx)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
   const { AutomationStore } = await import('./automation/store.js')
   const { wrapBroadcast, leasePredicate } = await import('./automation/ledger.js')
@@ -283,7 +285,7 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   chain.broadcast = txLogBroadcast(chain.broadcast)
   const mem = new NektarMemory(chain as never, funder as never, fundKey, {
-    ...base,
+    ...base, txStore,
     agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,
     maxLevel: Number(process.env.NEKTAR_MAX_LEVEL ?? 3),
     securityStore: new FileSecurityStore(join(cfg.dataDir, 'security.json')),
@@ -353,6 +355,27 @@ export async function openRuntime (cfg: RuntimeConfig): Promise<Runtime> {
   }
 }
 
+/** The instance's transaction graph — parents for spends, BEEF for
+ *  counterparties, proofs as they are pushed — persisted next to the records
+ *  once the database is open (nothing is broadcast before that). */
+function persistedTxStore (): { txStore: TxStore, open: (knex: import('knex').Knex) => Promise<void> } {
+  let kx: import('knex').Knex | undefined
+  const txStore = new TxStore({
+    load: async () => kx === undefined ? [] : (await kx('tx_store').select('txid', 'raw', 'proof')).map((r: { txid: string, raw: string, proof: string | null }) => ({ txid: r.txid, raw: r.raw, ...(r.proof ? { proof: r.proof } : {}) })),
+    put: async row => { if (kx !== undefined) await kx('tx_store').insert({ txid: row.txid, raw: row.raw, proof: row.proof ?? null, at: Date.now() }).onConflict('txid').merge(['proof']) }
+  })
+  return {
+    txStore,
+    open: async knex => {
+      if (!(await knex.schema.hasTable('tx_store'))) {
+        await knex.schema.createTable('tx_store', t => { t.string('txid', 64).primary(); t.text('raw').notNullable(); t.text('proof'); t.bigInteger('at').notNullable() })
+      }
+      kx = knex
+      await txStore.load()
+    }
+  }
+}
+
 /** Shared live path for `main` (BSV mainnet) and `ttn` (Teranode Test Net —
  * test coins, same code). Net-dependent bits: address prefix (0x6f testnet
  * for ttn, mainnet for main), fee floor (100 vs 1 sat/kB), labels. */
@@ -399,15 +422,16 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const callbackUrl = mc.callbackUrl ?? process.env.NEKTAR_CALLBACK_URL
   const rawBroadcaster = new BsvBroadcaster(mc)
   const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))
+  const { txStore, open: openTxStore } = persistedTxStore()
   const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
   const addIfNew = (u: { tx: Transaction, vout: number }) => {
+    txStore.put(u.tx)
     if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some(x => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout)) reserve.addOwned(u.tx, u.vout)
   }
   let memRef: NektarMemory | undefined
-  const guardedBroadcasts = new Map<string, Transaction>()
   const valueOf = (txid: string, vout: number): number | undefined =>
     reserve.utxos.find(u => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
-    guardedBroadcasts.get(txid)?.outputs[vout]?.satoshis ??
+    txStore.get(txid)?.outputs[vout]?.satoshis ??
     memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
   const spendGuard = new SpendGuard(rawBroadcaster, valueOf, {
     maxFeePerTx: mc.maxFeePerTx, maxPerDay: mc.maxSpendPerDay,
@@ -442,12 +466,12 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
       // cannot resolve unconfirmed parents from raw txs)
       for (const inp of tx.inputs) {
         if (inp.sourceTransaction || !inp.sourceTXID) continue
-        const p = reserve.utxos.find(u => u.tx.id('hex') === inp.sourceTXID)?.tx ?? guardedBroadcasts.get(inp.sourceTXID) ?? memRef?.anchorTx(inp.sourceTXID)
+        const p = txStore.get(inp.sourceTXID) ?? reserve.utxos.find(u => u.tx.id('hex') === inp.sourceTXID)?.tx ?? memRef?.anchorTx(inp.sourceTXID)
         if (p) inp.sourceTransaction = p as Transaction
       }
       const r = await spendGuard.broadcast(tx)
       if (r.status === 'success') {
-        guardedBroadcasts.set(tx.id('hex'), tx)
+        txStore.put(tx)
         memRef?.metrics.inc('nektar_fee_sats_total', {}, spendGuard.costs().at(-1)?.fee ?? 0, 'total anchor fee spend (sats)')
       } else if (r.description?.startsWith('SpendGuard refused')) {
         memRef?.metrics.inc('nektar_spend_refused_total', { reason: r.description.split(': ')[1]?.split(' ')[0] ?? 'unknown' }, 1, 'broadcasts refused by SpendGuard')
@@ -465,6 +489,8 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   const knex = knexMod({ client: 'sqlite3', connection: { filename: join(cfg.dataDir, 'records.sqlite') }, useNullAsDefault: true })
   const store: ShardStore = new KnexShardStore(knex)
   await store.init?.()
+  await openTxStore(knex)
+  for (const u of reserve.utxos) txStore.put(u.tx)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
   const { AutomationStore } = await import('./automation/store.js')
   const { wrapBroadcast, leasePredicate } = await import('./automation/ledger.js')
@@ -474,7 +500,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   chain.broadcast = txLogBroadcast(chain.broadcast)
   const mem = new NektarMemory(chain as never, funder as never, fundKey, {
-    ...base,
+    ...base, txStore,
     agentSeed: PrivateKey.fromHex(keys.agentSeed), signingKey: PrivateKey.fromHex(keys.logKey), shardKeys,
     maxLevel: Number(process.env.NEKTAR_MAX_LEVEL ?? 3),
     feeRateSatPerKb: feeRate,
@@ -492,6 +518,12 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     if (!r) return undefined
     const root = r.merklePath.computeRoot(txid)
     return await tracker.isValidRootForHeight(root, r.merklePath.blockHeight) ? r.merklePath : undefined
+  }
+  mem.txLookup = async txid => {
+    const h: Record<string, string> = {}
+    if (mc.wocApiKey) h['woc-api-key'] = mc.wocApiKey
+    const r = await (mc.fetchImpl ?? fetch)(`${mc.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main'}/tx/${txid}/hex`, { headers: h, signal: AbortSignal.timeout(10_000) })
+    return r.ok ? Transaction.fromHex((await r.text()).trim()) : undefined
   }
   mem.metrics.gauge('nektar_fee_balance_sats', () => reserve.utxos.reduce((s, u) => s + u.satoshis, 0), 'operator fee-key balance (sats)')
   // outbound-only status push: no callback URL → pull tx statuses from the
@@ -637,10 +669,15 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     try {
       persistKeys()
       await mem.flushDue()
+      // proofs are pushed (webhook or status stream). This pass only picks up
+      // what a push could not deliver: a proof missed while the instance was
+      // down, and proofs of transactions it was handed rather than broadcast.
+      // fetchTx tries each transaction once and then at most every ten minutes.
       for (const { shard, txid } of mem.unprovenAnchors()) {
-        const mp = await merklePathMainnet(mc, txid)
-        if (mp) mem.attachProof(shard, txid, mp.merklePath)
+        const mp = (await mem.fetchTx(txid))?.merklePath
+        if (mp) mem.attachProof(shard, txid, mp)
       }
+      for (const txid of txStore.unproven().slice(-64)) await mem.fetchTx(txid)
       await topUp()
       persistKeys()
     } catch (e) { process.stderr.write(`nektar confirmer(${net}): ${(e as Error).message}\n`) } finally { busy = false }

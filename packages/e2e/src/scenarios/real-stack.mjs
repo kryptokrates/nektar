@@ -58,14 +58,14 @@ const broadcaster = LIVE ? new BsvBroadcaster(TESTNET) : new TeranodeBroadcaster
 const tracker = LIVE
   ? new ChaintracksTracker(TESTNET, `${TESTNET.broadcasterUrl}/chaintracks/v2`, new WocTracker(TESTNET))
   : new TeranodeRPCTracker({ ...cfg, rpcUser: E('NEKTAR_RPC_USER'), rpcPass: E('NEKTAR_RPC_PASS') })
-// NEKTAR_TESTNET_HOSTS=https://a,https://b points the testnet run at hosts
-// reachable over https; only then do instances publish bfinger records
-// (https only off regtest) and resolve each other's hosts from them.
+// The testnet run uses the local host pair; the instances are told these are
+// the operator's own hosts (NEKTAR_MARKET_LOCAL_HOSTS=1), so they publish
+// bfinger records naming them and resolve each other's hosts from those
+// records. NEKTAR_TESTNET_HOSTS=https://a,https://b points the run elsewhere.
 const liveHosts = (process.env.NEKTAR_TESTNET_HOSTS ?? 'http://127.0.0.1:18291,http://127.0.0.1:18292').split(',').map(x => x.trim())
 if (LIVE && liveHosts.length !== 2) { console.error('real-stack: NEKTAR_TESTNET_HOSTS needs exactly two hosts'); process.exit(2) }
 const HOST_A = LIVE ? liveHosts[0] : 'http://127.0.0.1:18191'
 const HOST_B = LIVE ? liveHosts[1] : 'http://127.0.0.1:18192'
-const FINGER = LIVE && liveHosts.every(h => h.startsWith('https://'))
 const HOSTS = [HOST_A, HOST_B]
 const FINDING = 'libfoo 3.0 renamed connect() to open(); callers must switch.\n```nektar-patch\n{"edits":[{"file":"src/app.js","find":"libfoo.connect(","replace":"libfoo.open("}]}\n```'
 const QUESTION = 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function'
@@ -107,7 +107,7 @@ const agents = [
 // a host admits carriers only from a funding tree proven in a block, which is
 // a one-time setup cost per agent, not per deal. A provisioned agent trades
 // with no block in the path — pass --fresh to provision a new set.
-const AGENTS_DIR = join(root, '.state', `testnet-agents-${FINGER ? 'https' : 'http'}`)
+const AGENTS_DIR = join(root, '.state', 'testnet-agents')
 const REUSE = LIVE && !process.argv.includes('--fresh') && existsSync(join(AGENTS_DIR, 'agent-keys.json'))
 async function fundAgentsLive () {
   if (REUSE) {
@@ -193,6 +193,7 @@ function spawnInstance (a) {
     env: {
       ...process.env,
       NEKTAR_NETWORK: NET,
+      ...(LIVE && liveHosts.some(h => h.startsWith('http://')) ? { NEKTAR_MARKET_LOCAL_HOSTS: '1' } : {}),
       NEKTAR_AUTOMATION: '1',
       NEKTAR_PAID_DISCLOSURE: '1',
       NEKTAR_DATA_DIR: a.dataDir,
@@ -239,16 +240,21 @@ async function bootAgent (a, index) {
   log(`${a.name} up :${port} pub ${a.pub.slice(0, 12)}… hosts [${a.hosts.map(h => h === HOST_A ? 'a' : 'b').join(',')}]`)
   const policy = {
     v: 1, policyId: `${a.name}-policy`, network: NET, agentPub: a.pub, roles: ['buyer', 'seller'], notBefore: 0, notAfter: 4102444800000, domains: ['libfoo'],
-    limits: { perPurchaseSats: 500, dailyPurchaseSats: 1500, perTxFeeSats: 600, dailyFeeSats: 3000, runTotalSats: 6000, maxLockedSats: 1200, maxUnconfirmedSats: 1200, maxUnconfirmedCount: 3 },
-    scoring: { minimumScoreBps: 0, weights: { relevance: 3000, provenance: 2500, history: 1500, price: 2000, latency: 1000 }, collectMs: LIVE ? 20000 : 30000 },
-    seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 10, sellableShards: ['guide'] },
+    // provisioned testnet agents trade run after run — daily caps sized for that
+    limits: LIVE
+      ? { perPurchaseSats: 500, dailyPurchaseSats: 50_000, perTxFeeSats: 600, dailyFeeSats: 100_000, runTotalSats: 1_000_000, maxLockedSats: 5000, maxUnconfirmedSats: 5000, maxUnconfirmedCount: 10 }
+      : { perPurchaseSats: 500, dailyPurchaseSats: 1500, perTxFeeSats: 600, dailyFeeSats: 3000, runTotalSats: 6000, maxLockedSats: 1200, maxUnconfirmedSats: 1200, maxUnconfirmedCount: 3 },
+    scoring: { minimumScoreBps: 0, weights: { relevance: 3000, provenance: 2500, history: 1500, price: 2000, latency: 1000 }, collectMs: LIVE ? 8000 : 30000 },
+    seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: LIVE ? 500 : 10, sellableShards: ['guide'] },
     disclosure: { allowPublic: false }, ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 60000 }, sandbox: { mode: 'sandbox-only' }
   }
   const pf = join(a.dataDir, 'policy.json')
-  if (REUSE && existsSync(pf)) return // policy approved when the agent was provisioned
+  const automation = (...args) => JSON.parse(execFileSync(process.execPath, [join(root, 'tools/automation.mjs'), '--data', a.dataDir, '--json', ...args], { encoding: 'utf8' }))
+  if (REUSE && existsSync(pf) && readFileSync(pf, 'utf8') === JSON.stringify(policy)) return // approved when the agent was provisioned
+  for (const old of REUSE ? automation('policy', 'list').policies ?? [] : []) automation('policy', 'revoke', old.policyHash)
   writeFileSync(pf, JSON.stringify(policy))
-  const { policyHash } = JSON.parse(execFileSync(process.execPath, [join(root, 'tools/automation.mjs'), '--data', a.dataDir, '--json', 'policy', 'approve', pf], { encoding: 'utf8' }))
-  a.policyHash = policyHash
+  a.policyHash = automation('policy', 'approve', pf).policyHash
+  a.rearm = true // a seller is armed under a policy — a new one needs a new `sell`
 }
 
 async function waitState (a, operationId, states, ms = LIVE ? 3 * 3600_000 : 900_000) {
@@ -268,19 +274,15 @@ async function waitState (a, operationId, states, ms = LIVE ? 3 * 3600_000 : 900
   }
 }
 
-// on testnet the local hosts are http loopback: bfinger refuses http hosts
-// outside mock/regtest, so no identity record is published and a recipient
-// cannot learn the sender's extra hosts to send its receipt there — the copy
-// on a host the recipient never reads expires after 24h. LIVE therefore
-// checks only the agent's own configured hosts; regtest and https testnet
-// hosts (where records resolve) keep all HOSTS.
-async function inboxEmpty (a, allowOwnSellerNote = false) {
+// every copy of an envelope is receipted: recipients learn the sender's hosts
+// from its identity record, so the check covers both hosts on every lane.
+// Only this deal's envelopes count — provisioned agents carry earlier deals.
+async function inboxEmpty (a, wantId, allowOwnSellerNote = false) {
   const key = a.key
-  for (const h of LIVE && !FINGER ? a.hosts : HOSTS) {
+  for (const h of HOSTS) {
     const r = await readBox({ key, hosts: [h], tracker })
-    const items = allowOwnSellerNote
-      ? r.items.filter(i => !(i.from === a.pub && (i.body.market ?? i.body).type === 'sellerNote'))
-      : r.items
+    const items = r.items.map(i => ({ from: i.from, m: i.body.market ?? i.body }))
+      .filter(i => i.m.wantId === wantId && !(allowOwnSellerNote && i.from === a.pub && i.m.type === 'sellerNote'))
     if (items.length !== 0) return { empty: false, host: h, items: items.length }
   }
   return { empty: true }
@@ -290,8 +292,8 @@ try {
   await fundAgents()
   for (const [i, a] of agents.entries()) await bootAgent(a, i)
   const [alice, ben, cara, bob] = agents
-  for (const s of REUSE ? [] : [alice, ben, cara]) {
-    await tool(s, 'remember', { shard: 'guide', data: FINDING })
+  for (const s of [alice, ben, cara].filter(x => x.rearm)) {
+    if (!REUSE) await tool(s, 'remember', { shard: 'guide', data: FINDING })
     await tool(s, 'sell', { shard: 'guide', domains: ['libfoo'], priceSats: s.seller })
     log(`${s.name} selling at ${s.seller} sats`)
   }
@@ -306,19 +308,17 @@ try {
       await delay(15_000)
     }
   }
-  if (FINGER) {
+  if (LIVE) {
     // a record resolves while its token is unmined, as long as the token's
     // ancestry is proven — no further block. Each agent's record must name
     // exactly its own hosts.
     const t0 = Date.now()
     for (;;) {
-      const recs = await Promise.all(agents.map(async a => { try { return (await resolveFinger({ hosts: HOSTS, pub: a.pub, tracker })).body.hosts } catch { return undefined } }))
-      if (recs.every(x => x !== undefined)) {
-        for (const [i, a] of agents.entries()) if (JSON.stringify([...recs[i]].sort()) !== JSON.stringify([...a.hosts].sort())) throw new Error(`${a.name} finger record lists ${JSON.stringify(recs[i])} — expected ${JSON.stringify(a.hosts)}`)
-        log(`bfinger records resolve for all four agents after ${((Date.now() - t0) / 1000).toFixed(0)}s`); break
-      }
-      if (Date.now() - t0 > 3 * 3600_000) throw new Error(`finger records not resolvable after 3h: ${JSON.stringify(recs)}`)
-      await delay(15_000)
+      const recs = await Promise.all(agents.map(async a => { try { return (await resolveFinger({ hosts: HOSTS, pub: a.pub, tracker, allowHttp: true })).body.hosts } catch { return undefined } }))
+      const same = (x, a) => x !== undefined && JSON.stringify([...x].sort()) === JSON.stringify([...a.hosts].sort())
+      if (agents.every((a, k) => same(recs[k], a))) { log(`bfinger records resolve for all four agents after ${((Date.now() - t0) / 1000).toFixed(1)}s`); break }
+      if (Date.now() - t0 > 600_000) throw new Error(`finger records do not name the agents' hosts after 10 min: ${JSON.stringify(recs)}`)
+      await delay(500)
     }
   }
   log('want: posting (deal clock starts)')
@@ -345,7 +345,7 @@ try {
     // runner does not wait for a block for it.
     let b
     const until = Date.now() + 30000
-    do { b = await inboxEmpty(a, LIVE && a === cara); if (!b.empty) await delay(1000) } while (!b.empty && Date.now() < until)
+    do { b = await inboxEmpty(a, op.wantId, LIVE && a === cara); if (!b.empty) await delay(1000) } while (!b.empty && Date.now() < until)
     if (!b.empty) throw new Error(`${a.name} inbox not empty on ${b.host} (${b.items} item(s)) after settlement`)
   }
   const sellerOp = ((await tool(cara, 'deals', {})).deals ?? []).find(d => d.wantId === op.wantId)
@@ -367,13 +367,13 @@ try {
     buyerOperationId: operationId, wantId: op.wantId, escrowTxid: op.escrowTxid, disclosureTxid: op.disclosureTxid,
     sellerState,
     wallClockMsToDisclosureVerified: verifiedMs, blocksMinedDuringDeal: dealBlocks,
-    hosts: { a: HOST_A, b: HOST_B }, fingerResolved: FINGER,
+    hosts: { a: HOST_A, b: HOST_B }, fingerResolved: LIVE,
     broadcasts: Object.fromEntries(agents.map(a => [a.name, a.txCount]))
   }
   writeFileSync(join(dir, 'summary.json'), JSON.stringify(summary, null, 1))
   log(`PASS — disclosure verified in ${(verifiedMs / 1000).toFixed(1)}s over ${dealBlocks} blocks`)
   log(`  offers 200/300/450 recorded; cara's 200-sat offer selected; escrow ${String(op.escrowTxid).slice(0, 12)}… disclosure ${String(op.disclosureTxid).slice(0, 12)}…`)
-  log(`  counterparty journal complete; bob+cara inboxes empty on ${LIVE && !FINGER ? 'their own hosts' : 'both hosts'}${LIVE ? ' (seller note held until proof)' : ''}`)
+  log(`  counterparty journal complete; bob+cara inboxes empty on both hosts${LIVE ? ' (seller note held until proof)' : ''}`)
   log(`  tx logs: ${agents.map(a => `${a.name}=${a.txCount}`).join(' ')}`)
   log(`  summary: ${join(dir, 'summary.json')}`)
 } catch (e) {

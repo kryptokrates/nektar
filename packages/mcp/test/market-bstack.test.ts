@@ -280,7 +280,7 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
     const gTree = await mintTree({ key: ghost, funding: { tx: parent, vout: 0, satoshis: 100_000 }, n: 4, satsPerOutput: 1000, lock: await boxFundingLock(ghost) })
     gTree.merklePath = new MerklePath(1, [[{ offset: 0, hash: '00'.repeat(32) }, { offset: 1, hash: gTree.id('hex'), txid: true }]])
     const gl = new MemoryTreeLedger(); await gl.add(gTree, 4, 'bbox'); await gl.markProven(gTree.id('hex'))
-    await sendBox({ key: ghost, ledger: gl, journal: new MemoryCarrierJournal(), hosts: [h1.url, h2.url], office, to: b.pub, body: { market: { type: 'delivered', wantId: w.wantId, offerId, txid: 'ff'.repeat(32), txHex: 'ff' } } })
+    await sendBox({ key: ghost, ledger: gl, journal: new MemoryCarrierJournal(), hosts: [h1.url, h2.url], office, to: b.pub, body: { market: { type: 'delivered', wantId: w.wantId, offerId, txid: 'ff'.repeat(32), tx: 'ff' } } })
     const done = async () => {
       const bo = await buyerOp(b); const so = (await saleOps(s))[0]
       return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.includes(so.state)
@@ -328,7 +328,7 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
   } finally { await h1.close(); await h2.close() }
 })
 
-test('bstack H: blind seller completes via accept txHex — seller broadcasts the escrow itself', async () => {
+test('bstack H: seller takes the escrow from the accept and broadcasts it itself', async () => {
   const chain = new MockChain(); chain.verifyScripts = true
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus(); const logs: string[] = []
@@ -338,16 +338,32 @@ test('bstack H: blind seller completes via accept txHex — seller broadcasts th
   try {
     b = await mkagent('buyer', { hosts: [h1.url], msgs, chain, logs, dir })
     s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir })
-    // the seller's view can never see the escrow tx (indexer lag) — but it
-    // must broadcast it itself once, from the bytes inside the accept
+    // the seller never looks the escrow up: it takes it from the accept,
+    // verifies it against its own headers and broadcasts it itself
     let blindTxid: string | undefined
+    let escrowLookups = 0
     const origFetch = s.mem.fetchTx.bind(s.mem)
-    s.mem.fetchTx = async (id: string) => id === blindTxid ? undefined : await origFetch(id)
+    s.mem.fetchTx = async (id: string) => { if (id === blindTxid) { escrowLookups++; return undefined } return await origFetch(id) }
     let escrowBroadcasts = 0
     const origBcast = s.mem.broadcastTx.bind(s.mem)
     s.mem.broadcastTx = async (t: import('@bsv/sdk').Transaction) => { if (t.id('hex') === blindTxid) escrowBroadcasts++; return await origBcast(t) }
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
+    const { Transaction, P2PKH } = await import('@bsv/sdk')
+    // leave the buyer exactly one coin, mined on this chain: what it pays from
+    // it carries a proof, so the escrow travels as BEEF
+    const coin = await b.mem.fundingOuts(9_000)
+    for (;;) { try { await b.mem.fundingOuts(1) } catch { break } }
+    const bk = b.mem.operatorKey()
+    const mined = new Transaction()
+    mined.addInput({ sourceTransaction: coin[0]!.tx, sourceOutputIndex: coin[0]!.vout, unlockingScriptTemplate: new P2PKH().unlock(bk) })
+    mined.addOutput({ satoshis: 9_500, lockingScript: new P2PKH().lock(bk.toPublicKey().toAddress()) })
+    await mined.sign()
+    assert.equal((await chain.broadcast(mined)).status, 'success')
+    chain.mine(1)
+    const proven = chain.getTx(mined.id('hex'))!
+    assert.ok(proven.merklePath !== undefined)
+    b.mem.addOwnedOut(proven, 0)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     let done = false
     for (let i = 0; i < 100 && !done; i++) {
@@ -361,6 +377,12 @@ test('bstack H: blind seller completes via accept txHex — seller broadcasts th
     }
     assert.ok(done, 'no deal | ' + logs.slice(-20).join(' | '))
     assert.ok(escrowBroadcasts >= 1, 'seller broadcast the escrow tx itself')
+    assert.equal(escrowLookups, 0, 'seller never looked the escrow up')
+    const sale = (await saleOps(s))[0]!
+    const verified = (await s.rt.store.events(sale.operationId)).find(e => e.cause === 'escrow_verified')
+    assert.deepEqual(verified?.evidence, { spv: true }, 'the escrow arrived as BEEF and passed SPV against the headers the seller holds')
+    const bought = (await b.rt.store.events((await buyerOp(b))!.operationId)).find(e => e.cause === 'disclosure_verified')
+    assert.equal((bought?.evidence as { spv?: boolean } | undefined)?.spv, true, 'the reveal arrived as BEEF and passed SPV at the buyer')
   } finally { if (b !== undefined) await b.rt.stop(); if (s !== undefined) await s.rt.stop(); await h1.close() }
 })
 
@@ -391,7 +413,7 @@ test('bstack I: tampered accept — txHex of a different transaction → seller 
     other.addInput({ sourceTXID: '11'.repeat(32), sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })
     other.addOutput({ satoshis: 9999, lockingScript: Script.fromHex(script) })
     const fakeUtxo = { txid: 'aa'.repeat(32), vout: 0, satoshis: 9999, script }
-    await s.rt.engine.ingestMessage(b.pub, { type: 'accept', wantId: want.wantId, offerId: op.operationId, utxo: fakeUtxo, depositorPkh: pkh, txHex: other.toHex() })
+    await s.rt.engine.ingestMessage(b.pub, { type: 'accept', wantId: want.wantId, offerId: op.operationId, utxo: fakeUtxo, depositorPkh: pkh, tx: other.toHex() })
     await s.rt.cycle() // tick drains the inbox → onAccept
     const op2 = (await saleOps(s))[0]!
     assert.equal(op2.state, 'quoted', 'tampered accept must not advance the sale')

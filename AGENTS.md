@@ -27,6 +27,25 @@ question that could come from memory:
 - Regtest e2e: `node packages/e2e/src/e2e-regtest.ts` and siblings (needs the local Teranode stack)
 - Groth16 spike: `tools/groth16-spike/README.md` (Python 3.12 venv inside the zkscript checkout; Rust circuit builds inside Docker on Windows)
 
+## Regtest stack gotchas (learned the hard way)
+
+- **Teranode JSON-RPC drops requests with no `id`** — treated as notifications:
+  connection closes with *no* response ("empty reply from server", nothing in
+  the server log). Always include `"id":1` in diagnostic curl/nc calls; a
+  "server is dead" symptom with silent drops is usually this.
+- **`rpc_max_clients` defaults to 3** in the docker.m settings — keep-alive
+  callers (bstack hosts, agent trackers, parallel test files) saturate it and
+  new RPC calls are refused while the healthcheck stays green
+  (`Max RPC clients exceeded` in `docker logs rpc`). Pinned to 128 in
+  `compose/docker-teranode.yml` (`environment:` wins over env_file, so stale
+  .env files are covered), `setup.sh`, and `.env.example`.
+- **Docker Desktop port proxies go stale** after WSL/container restarts — a
+  published port accepts then drops connections while the container is fine
+  internally. `docker restart <service>` re-registers the binding.
+- Container-local verification: `docker exec rpc` + `nc`/`wget` bypasses the
+  Windows proxy entirely — always isolate host-proxy vs in-process before
+  assuming a service is wedged.
+
 Honesty rule: proofs establish recorded + unaltered + derivable — never
 that a memory's content is true, and the model manifest is _declared_, not
 zkML-proven.

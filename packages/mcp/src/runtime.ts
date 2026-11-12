@@ -9,8 +9,9 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, appendFi
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { PrivateKey, MerklePath, Transaction } from '@bsv/sdk'
-import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, regtestTx, BsvBroadcaster, WocTracker, fetchBroadcasterFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, P2PListener, SpendGuard, TemporalSources, statusStream, TxStore, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
+import { MockChain, MockFunder, TeranodeBroadcaster, TeranodeRPCTracker, ReserveFunder, merklePathAtHeight, bootstrapReserve, regtestTx, BsvBroadcaster, WocTracker, fetchBroadcasterFeeRate, merklePathMainnet, discoverUtxos, importFundingTx, utxoStatus, ChaintracksTracker, SpendGuard, TemporalSources, statusStream, TxStore, type TemporalSource, type ChainTracker, type RegtestConfig, type MainnetConfig } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
+import { wireP2p, setupFeeVault } from './setup.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
@@ -438,25 +439,7 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
   // watching our reserve outpoints (spend events by ANYONE) and the fee-key
   // script (unannounced funding). No index: watched set only, rest is dropped.
   const p2pPeers = (process.env.NEKTAR_P2P_PEERS ?? '').split(',').map(s => s.trim()).filter(Boolean)
-  if (p2pPeers.length) {
-    const fundPkhScript = `76a914${Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')}88ac`
-    const p2p = new P2PListener({
-      peers: p2pPeers, fetchAll: true, maxTxFetchPerSec: 200,
-      outpoints: new Set(reserve.utxos.map(u => `${u.tx.id('hex')}:${u.vout}`)),
-      scripts: new Set([fundPkhScript])
-    })
-    p2p.on('spend', (t, v, by) => { if (!reserve.isSpent(t, v)) { reserve.markSpent(t, v); process.stderr.write(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`) } })
-    p2p.on('pay', (t, v, s) => process.stderr.write(`nektar p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v}\n`))
-    // matched txs arrive already fetched from the peer — credit fee-key
-    // outputs straight from the wire bytes; no indexer round-trip
-    p2p.on('tx', tx => {
-      for (const [v, o] of tx.outputs.entries()) {
-        if (o.lockingScript.toHex() === fundPkhScript) addIfNew({ tx, vout: v })
-      }
-    })
-    p2p.on('peer', (a, up) => process.stderr.write(`nektar p2p: peer ${a} ${up ? 'connected' : 'down'}\n`))
-    p2p.connect()
-  }
+  wireP2p({ peers: p2pPeers, fundKey, pkhHex, reserve, addIfNew, log: s => process.stderr.write(s) })
   const floor = ttn ? 1 : 100
   const feeRate = Math.max(mc.feeRateSatPerKb ?? floor, await fetchBroadcasterFeeRate(mc).catch(() => floor))
   const funder = { keyPair: fundKey, get utxos () { return reserve.utxos }, markSpent: (t: string, v: number) => reserve.markSpent(t, v), addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v), takeReserve: async (_sc?: unknown, minSats?: number) => await reserve.takeReserve(undefined, minSats) }
@@ -553,71 +536,11 @@ async function openLiveRuntime (cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testn
     for (const [s, k] of shardKeys) if (keys.shardKeys[s] !== k.toHex()) { keys.shardKeys[s] = k.toHex(); changed = true }
     if (changed) save()
   }
-  // GOAL-v7 V1 (NEKTAR_FEE_VAULT, testnet/main only): mint anchor funding
-  // utxos through the NektarFeeVault covenant — per-tx/window/fee caps are
-  // enforced by node script eval, and SpendGuard stays in front (defense in
-  // depth). Value: inline JSON or "@/path/to.json" with
-  // {perTxCap,windowCap,windowBlocks,maxFee,fundSats?,vaultSats?}.
+  // NEKTAR_FEE_VAULT (testnet/main): anchor funding minted through the
+  // fee-vault covenant — setupFeeVault returns the funder's takeReserve
   const vaultSpec = process.env.NEKTAR_FEE_VAULT
   if (vaultSpec) {
-    const { FeeVault, buildP2PKHScript } = await import('@nektar/anchor')
-    const { P2PKH, LockingScript: LScript, Transaction: Tx } = await import('@bsv/sdk')
-    const vcfg = JSON.parse(vaultSpec.startsWith('@') ? readFileSync(vaultSpec.slice(1), 'utf8') : vaultSpec) as
-      { perTxCap: number, windowCap: number, windowBlocks: number, maxFee: number, fundSats?: number, vaultSats?: number }
-    const vault = new FeeVault({
-      destPkh: pkhHex, ownerPkh: pkhHex,
-      perTxCap: BigInt(vcfg.perTxCap), windowCap: BigInt(vcfg.windowCap),
-      windowBlocks: BigInt(vcfg.windowBlocks), maxFee: BigInt(vcfg.maxFee)
-    })
-    const vutxoFile = join(cfg.dataDir, 'vault-utxo.json')
-    const vstate = existsSync(vutxoFile)
-      ? JSON.parse(readFileSync(vutxoFile, 'utf8')) as { current?: { txid: string, vout: number, satoshis: number, script: string }, minted?: string[] }
-      : {}
-    let vaultUtxo = vstate.current
-    const vaultMinted = new Set(vstate.minted ?? [])
-    const saveVault = () => writeFileSync(vutxoFile, JSON.stringify({ current: vaultUtxo, minted: [...vaultMinted] }))
-    const deployVault = async () => {
-      const sats = vcfg.vaultSats ?? 50_000
-      const u = reserve.utxos.find(x => x.satoshis > sats + 600 && !reserve.isSpent(x.tx.id('hex'), x.vout))
-      if (!u) throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + 600} sats — fund ${fundAddress}`)
-      const tx = new Tx()
-      tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: new P2PKH().unlock(fundKey) })
-      tx.addOutput({ satoshis: sats, lockingScript: LScript.fromHex(vault.lockingScript(0n, 0n)) })
-      tx.addOutput({ satoshis: u.satoshis - sats - 100, lockingScript: LScript.fromHex(buildP2PKHScript(pkhHex)) })
-      await tx.sign()
-      const r = await chain.broadcast(tx)
-      if (r.status !== 'success') throw new Error(`vault deploy refused: ${r.description}`)
-      reserve.markSpent(u.tx.id('hex'), u.vout)
-      reserve.addOwned(tx, 1)
-      vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: sats, script: vault.lockingScript(0n, 0n) }
-      saveVault()
-      process.stderr.write(`nektar ${net}: fee vault deployed ${tx.id('hex').slice(0, 12)}… (${sats} sats; caps ${vcfg.perTxCap}/tx, ${vcfg.windowCap}/${vcfg.windowBlocks} blocks)\n`)
-    }
-    const mint = async () => {
-      if (!vaultUtxo) await deployVault()
-      const pay = BigInt(vcfg.fundSats ?? vcfg.perTxCap)
-      const { tx } = vault.buildSpend(vaultUtxo!, fundKey, pay, await tracker.currentHeight(), 2n)
-      const r = await chain.broadcast(tx)
-      if (r.status !== 'success') throw new Error(`vault spend refused: ${r.description}`)
-      reserve.addOwned(tx, 2) // the 1-sat covenant change — reclaimable
-      const cont = tx.outputs[0]!
-      vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: cont.satoshis!, script: cont.lockingScript.toHex() }
-      reserve.addOwned(tx, 1)
-      vaultMinted.add(`${tx.id('hex')}:1`)
-      saveVault()
-      return { tx, vout: 1, satoshis: tx.outputs[1]!.satoshis! }
-    }
-    let minting: Promise<unknown> = Promise.resolve()
-    funder.takeReserve = async () => {
-      // prefer an already-minted vault out sitting in the pool (e.g. orphaned
-      // by a failed anchor build); otherwise mint a fresh capped one through
-      // the covenant. Non-vault pool entries are never served for anchoring.
-      const pooled = reserve.utxos.find(u => vaultMinted.has(`${u.tx.id('hex')}:${u.vout}`) && !reserve.isSpent(u.tx.id('hex'), u.vout))
-      if (pooled) return pooled
-      minting = minting.then(mint, mint)
-      return await minting as { tx: Transaction, vout: number, satoshis: number }
-    }
-    process.stderr.write(`nektar ${net}: NEKTAR_FEE_VAULT set — anchor funding minted through the fee-vault covenant\n`)
+    funder.takeReserve = await setupFeeVault({ vaultSpec, dataDir: cfg.dataDir, pkhHex, fundKey, fundAddress, reserve, broadcast: async tx => await chain.broadcast(tx), currentHeight: async () => await tracker.currentHeight(), net, log: s => process.stderr.write(s) })
   }
   // NEKTAR_FUND_TXIDS: funding txs to import directly (no address index needed)
   for (const txid of (process.env.NEKTAR_FUND_TXIDS ?? '').split(',').map(s => s.trim()).filter(Boolean)) {

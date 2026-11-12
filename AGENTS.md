@@ -30,7 +30,7 @@ question that could come from memory:
 ## Regtest stack gotchas (learned the hard way)
 
 - **Teranode JSON-RPC drops requests with no `id`** — treated as notifications:
-  connection closes with *no* response ("empty reply from server", nothing in
+  connection closes with _no_ response ("empty reply from server", nothing in
   the server log). Always include `"id":1` in diagnostic curl/nc calls; a
   "server is dead" symptom with silent drops is usually this.
 - **`rpc_max_clients` defaults to 3** in the docker.m settings — keep-alive
@@ -45,6 +45,13 @@ question that could come from memory:
 - Container-local verification: `docker exec rpc` + `nc`/`wget` bypasses the
   Windows proxy entirely — always isolate host-proxy vs in-process before
   assuming a service is wedged.
+- **bstack sandbox hosts race their db on daemon restart** — `depends_on` only
+  applies at `compose up`, and the `nektar-bstack-regtest-*` containers ship
+  with no restart policy, so a WSL/docker restart leaves them dead or
+  crash-looping on a cold db. `restart: unless-stopped` is set in the local
+  `compose.regtest.yaml` (and live via `docker update`) — the restart-retry
+  loop is what beats the race. The sandbox clone is gitignored; reapply after
+  a fresh checkout.
 
 Honesty rule: proofs establish recorded + unaltered + derivable — never
 that a memory's content is true, and the model manifest is _declared_, not

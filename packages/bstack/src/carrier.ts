@@ -41,8 +41,7 @@ export async function buildSweep(p: { key: PrivateKey; tree: Transaction; vouts:
 }
 
 export type CarrierCheck =
-  | { ok: true; carrier: Transaction; payload: Uint8Array; lockingKey: string; fundingOutpoint: string; unprovenFunding: boolean }
-  | { ok: false; reason: string }
+  { ok: true; carrier: Transaction; payload: Uint8Array; lockingKey: string; fundingOutpoint: string; unprovenFunding: boolean } | { ok: false; reason: string }
 
 // worst case a carrier beef carries a full 1023-output funding tree (~40KB)
 // plus bumps — anything larger than this is never a legit carrier

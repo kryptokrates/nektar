@@ -46,7 +46,9 @@ const ownPath = (tree: Transaction): Transaction => {
   tree.merklePath = new MerklePath(
     mp.blockHeight,
     mp.path.map((level, i) =>
-      i !== 0 ? level : level.map((e) => (e.hash === txid && e.offset === own ? { offset: e.offset, hash: e.hash, txid: true } : { offset: e.offset, hash: e.hash }))
+      i !== 0
+        ? level
+        : level.map((e) => (e.hash === txid && e.offset === own ? { offset: e.offset, hash: e.hash, txid: true } : { offset: e.offset, hash: e.hash }))
     )
   )
   return tree
@@ -69,15 +71,13 @@ export interface TreeLedger {
 // path (the same §10.3 rule finger applies to tokens). The tree still lists
 // in unproven() so its own BUMP attaches when the topup mines.
 export const anchoredTree = (tree: Transaction): boolean =>
-  tree.merklePath !== undefined ||
-  (tree.inputs.length > 0 && tree.inputs.every((i) => i.sourceTransaction?.merklePath !== undefined))
+  tree.merklePath !== undefined || (tree.inputs.length > 0 && tree.inputs.every((i) => i.sourceTransaction?.merklePath !== undefined))
 
 // only the market lane tolerates unproven funding: the nektar module accepts
 // anchored ancestry, but the vendored bbox/blogs/finger modules still demand
 // the tree's own path — serving them zero-conf slots would mint carriers
 // they refuse (and submitAll would count the refusal as delivered)
-const serves = (tree: { tree: Transaction; proven: boolean }, kind: string): boolean =>
-  tree.proven || (kind === 'market' && anchoredTree(tree.tree))
+const serves = (tree: { tree: Transaction; proven: boolean }, kind: string): boolean => tree.proven || (kind === 'market' && anchoredTree(tree.tree))
 
 export class MemoryTreeLedger implements TreeLedger {
   private trees = new Map<string, { tree: Transaction; proven: boolean; kind: string }>()

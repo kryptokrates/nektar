@@ -170,7 +170,7 @@ const buyerOp = async (b: A) => (await b.rt.store.operations({ role: 'buyer' }))
 const saleOps = async (s: A) => (await s.rt.store.operations({ role: 'seller' })).filter((o) => o.kind === 'sale')
 const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
 
-test('bstack A: buyer+seller over two minihosts — journal+slot conservation, dedupe, both hosts hold', async (t) => {
+test('bstack A: buyer+seller over two minihosts — journal+slot conservation, dedupe, both hosts hold', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -232,7 +232,7 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
   }
 })
 
-test('bstack B: competing sellers — buyer completes with the 200-sat offer', async (t) => {
+test('bstack B: competing sellers — buyer completes with the 200-sat offer', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -264,7 +264,7 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', a
   }
 })
 
-test('bstack C: withheld offer still completes via other host; withheld logged naming h2', async (t) => {
+test('bstack C: withheld offer still completes via other host; withheld logged naming h2', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -302,7 +302,7 @@ test('bstack C: withheld offer still completes via other host; withheld logged n
   }
 })
 
-test('bstack D: restart — journal+ledger prevent second carrier, purchase completes', async (t) => {
+test('bstack D: restart — journal+ledger prevent second carrier, purchase completes', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -355,7 +355,7 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
   }
 })
 
-test('bstack E: hosts down after escrow funded — chain advance still refunds the buyer', async (t) => {
+test('bstack E: hosts down after escrow funded — chain advance still refunds the buyer', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -394,7 +394,7 @@ test('bstack E: hosts down after escrow funded — chain advance still refunds t
   }
 })
 
-test('bstack F: default bbox channel � no injected bus; forged delivered ignored', async (t) => {
+test('bstack F: default bbox channel � no injected bus; forged delivered ignored', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -469,7 +469,7 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
   }
 })
 
-test('bstack G: read envelopes are acked off the hosts; want+offer carry signed expiry', async (t) => {
+test('bstack G: read envelopes are acked off the hosts; want+offer carry signed expiry', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -502,7 +502,7 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
   }
 })
 
-test('bstack H: seller takes the escrow from the accept and broadcasts it itself', async (t) => {
+test('bstack H: seller takes the escrow from the accept and broadcasts it itself', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -587,7 +587,7 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
   }
 })
 
-test('bstack I: tampered accept — txHex of a different transaction → seller stays quoted with accept_refused', async (t) => {
+test('bstack I: tampered accept — txHex of a different transaction → seller stays quoted with accept_refused', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -638,7 +638,7 @@ test('bstack I: tampered accept — txHex of a different transaction → seller 
   }
 })
 
-test('bstack J: push — a mined funding tree is proven and a cycle runs without cycle()', async (t) => {
+test('bstack J: push — a mined funding tree is proven and a cycle runs without cycle()', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -787,7 +787,7 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
   }
 })
 
-test('bstack L: buyer loses its database — delivery still completes after restore', async (t) => {
+test('bstack L: buyer loses its database — delivery still completes after restore', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -841,7 +841,7 @@ test('bstack L: buyer loses its database — delivery still completes after rest
   }
 })
 
-test('bstack M: no loss — one operation; the note is listed while the deal is open and acked when it ends', async (t) => {
+test('bstack M: no loss — one operation; the note is listed while the deal is open and acked when it ends', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -885,7 +885,7 @@ test('bstack M: no loss — one operation; the note is listed while the deal is 
   }
 })
 
-test('bstack N: a note from a foreign key is ignored and still acked', async (t) => {
+test('bstack N: a note from a foreign key is ignored and still acked', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -944,7 +944,7 @@ test('bstack N: a note from a foreign key is ignored and still acked', async (t)
   }
 })
 
-test('bstack O: the recovery note fits the 16 KiB box content limit', async (t) => {
+test('bstack O: the recovery note fits the 16 KiB box content limit', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1046,7 +1046,7 @@ const sabotageEscrowBroadcast = (b: A, chain: StackChain, script: string, reject
   return { txid: () => txid }
 }
 
-test('bstack P: uncertain + escrow observable — reconcile resumes the deal with no operator action', async (t) => {
+test('bstack P: uncertain + escrow observable — reconcile resumes the deal with no operator action', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1092,7 +1092,7 @@ test('bstack P: uncertain + escrow observable — reconcile resumes the deal wit
   }
 })
 
-test('bstack Q: uncertain + rejected escrow — budget released, approval canceled, funding_failed', async (t) => {
+test('bstack Q: uncertain + rejected escrow — budget released, approval canceled, funding_failed', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1249,7 +1249,7 @@ test.skip('bstack S: disclosure rejected after completion_submitted — seller m
   }
 })
 
-test('bstack T: refused refund retries on reconcile — succeeds after one refusal; five refusals stay uncertain', async (t) => {
+test('bstack T: refused refund retries on reconcile — succeeds after one refusal; five refusals stay uncertain', { timeout: 300_000 }, async (t) => {
   for (const refuse of [1, 10]) {
     const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
@@ -1330,7 +1330,7 @@ test('bstack T: refused refund retries on reconcile — succeeds after one refus
   }
 })
 
-test('bstack U: seller loses its database — the sellerNote rebuilds the quoted sale and the deal completes', async (t) => {
+test('bstack U: seller loses its database — the sellerNote rebuilds the quoted sale and the deal completes', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1406,7 +1406,7 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
   }
 })
 
-test('bstack V: delivered collected but not yet processed — the held envelope survives a buyer database loss', async (t) => {
+test('bstack V: delivered collected but not yet processed — the held envelope survives a buyer database loss', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1474,7 +1474,7 @@ test('bstack V: delivered collected but not yet processed — the held envelope 
   }
 })
 
-test('bstack W: a sellerNote from a foreign key is ignored and still acked', async (t) => {
+test('bstack W: a sellerNote from a foreign key is ignored and still acked', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1854,7 +1854,7 @@ test('bstack AB: no counterparty record — the deal completes over the shared h
   }
 })
 
-test('bstack AC: hostile record hosts are refused by the SSRF guard', async (t) => {
+test('bstack AC: hostile record hosts are refused by the SSRF guard', { timeout: 300_000 }, async (t) => {
   const { fingerHostAllowed } = await import('@nektar/bstack')
   // on a real network: https only, never localhost/private/link-local literals
   assert.equal(fingerHostAllowed('http://127.0.0.1:1'), false)

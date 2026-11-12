@@ -152,11 +152,13 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   // lanes, and anywhere the operator runs its own hosts and says so
   const localNet = cfg.network === 'regtest' || cfg.localHosts === true
   const fingerCache = new Map<string, { at: number; rec?: { hosts: string[]; office: string; stream: string } }>()
-  const resolveRecord = async (pub: string): Promise<{ hosts: string[]; office: string; stream: string } | undefined> => {
+  const resolveRecord = async (pub: string, fresh = false): Promise<{ hosts: string[]; office: string; stream: string } | undefined> => {
     if (lanes === undefined) return undefined
     const t = cfg.now?.() ?? Date.now()
     const c = fingerCache.get(pub)
-    if (c !== undefined && t - c.at < (c.rec === undefined ? 60_000 : 600_000)) return c.rec
+    // fresh callers (ack retries on deferred envelopes) bypass a cached miss —
+    // a stale negative entry would otherwise strand receipts for a minute
+    if (c !== undefined && t - c.at < (c.rec === undefined ? (fresh ? 0 : 60_000) : 600_000)) return c.rec
     let rec: { hosts: string[]; office: string; stream: string } | undefined
     try {
       const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: mem.sdkTracker(), allowHttp: localNet, now: cfg.now, timeoutMs: 5_000 })
@@ -264,6 +266,11 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
     refs?: import('@nektar/bstack').BoxRef[]
     created: number
   }> = []
+  // envelopes pushed for ack whose sender's finger record hadn't resolved —
+  // they leave pendingAcks once our own hosts drop their copy, but the copies
+  // fanned out to the sender's hosts still need a receipt, so they retry here
+  // until the record resolves (bounded, same window as the delivered rule)
+  let deferredAcks: Array<{ txid: string; commitment: string; from: string; until: number }> = []
   let lastAckSkipped = -1
   const msgs =
     cfg.messages ??
@@ -354,14 +361,35 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
               items.push({ txid: p.txid, commitment: p.commitment, from: p.from })
             }
             pendingAcks = held
+            // re-merge still-valid deferred items — they retry until their
+            // sender's record resolves (or their window lapses)
+            const now = Math.floor(Date.now() / 1000)
+            deferredAcks = deferredAcks.filter((d) => d.until > now)
+            for (const d of deferredAcks) {
+              if (!items.some((i) => i.txid === d.txid && i.commitment === d.commitment)) items.push(d)
+            }
             if (items.length === 0) return
             try {
               // senders fan envelopes out to their own hosts ∪ our record's hosts —
-              // the receipt has to reach every copy, not only the ones we read
+              // the receipt has to reach every copy, not only the ones we read.
+              // A sender whose record hasn't resolved yet only narrows this pass's
+              // host set — its envelopes are re-deferred so a later pass receipts
+              // the copies we never read instead of stranding them.
               const ackHosts = new Set(marketHosts)
+              const priorUntil = new Map(deferredAcks.map((d) => [`${d.txid}:${d.commitment}`, d.until]))
+              const retriedFrom = new Set(deferredAcks.map((d) => d.from))
+              const retry: typeof deferredAcks = []
               for (const f of [...new Set(items.map((i) => i.from).filter((f) => f !== me))]) {
-                for (const h of (await resolveRecord(f).catch(() => undefined))?.hosts ?? []) ackHosts.add(h)
+                const rec = await resolveRecord(f, retriedFrom.has(f)).catch(() => undefined)
+                if (rec !== undefined) {
+                  for (const h of rec.hosts) ackHosts.add(h)
+                  continue
+                }
+                for (const i of items)
+                  if (i.from === f)
+                    retry.push({ txid: i.txid, commitment: i.commitment, from: i.from, until: priorUntil.get(`${i.txid}:${i.commitment}`) ?? now + 600 })
               }
+              deferredAcks = retry
               const r = await lanes.mod.ackBox({ key, ledger: lanes.ledger, journal: lanes.journal, hosts: [...ackHosts], office: cfg.boxOffice, items })
               if (r.skipped > 0 && r.skipped !== lastAckSkipped) {
                 lastAckSkipped = r.skipped

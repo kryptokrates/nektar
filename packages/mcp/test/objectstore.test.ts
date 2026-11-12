@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { createServer, type Server } from 'node:http'
 import { createHash, createHmac } from 'node:crypto'
 import { S3ObjectStore, objectStoreFromEnv, OBJECT_MAX_BYTES } from '../src/objectstore.js'
+import { fetchObjectByRef } from '../src/chirp.js'
 
 const SECRET = 'quickstart-secret-not-secret'
 const ACCESS = 'QUICKSTARTACCESSKEY'
@@ -29,14 +30,21 @@ function expectedSig(method: string, path: string, headers: Record<string, strin
   return createHmac('sha256', k).update(sts).digest('hex')
 }
 
-/** minimal path-style S3: PUT/GET/HEAD on /{bucket}/{key}, SigV4 enforced. */
-async function fakeS3(secret = SECRET): Promise<{ server: Server; url: string; objects: Map<string, { bytes: Uint8Array; meta: Record<string, string> }> }> {
+/** minimal path-style S3: PUT/GET/HEAD on /{bucket}/{key}, SigV4 enforced.
+ *  `publicRead` serves GET/HEAD without a signature — a public bucket. */
+async function fakeS3(
+  secret = SECRET,
+  publicRead = false
+): Promise<{ server: Server; url: string; objects: Map<string, { bytes: Uint8Array; meta: Record<string, string> }> }> {
   const objects = new Map<string, { bytes: Uint8Array; meta: Record<string, string> }>()
   const server = createServer((req, res) => {
     const headers = Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v.join(',') : String(v)]))
     const auth = headers.authorization ?? ''
     const m = auth.match(/Signature=([0-9a-f]+)/)
-    if (m === null || m[1] !== expectedSig(req.method!, req.url!, headers, secret)) {
+    // public buckets serve unsigned GET/HEAD — but a *signed* request with a
+    // bad signature is still refused (gateway behaviour, drives the fallback)
+    const anonymous = publicRead && (req.method === 'GET' || req.method === 'HEAD') && auth === ''
+    if (!anonymous && (m === null || m[1] !== expectedSig(req.method!, req.url!, headers, secret))) {
       res.writeHead(403, { 'content-type': 'application/xml' }).end(`<Error><Code>SignatureDoesNotMatch</Code><Message>bad sig</Message></Error>`)
       return
     }
@@ -143,6 +151,46 @@ test('objectstore: getVerified rejects oversized content and oversized refs', as
     // and a stored object over the bound is refused after fetch
     objects.set('big', { bytes: new Uint8Array(OBJECT_MAX_BYTES + 1), meta: {} })
     await assert.rejects(() => s.getVerified({ key: 'big', sha256: 'ab'.repeat(32) }), /bound/)
+  } finally {
+    server.close()
+  }
+})
+
+test('objectstore: credential-free read — a remote reader resolves the ref by digest alone', async (t) => {
+  const { server, url, objects } = await fakeS3(SECRET, true)
+  try {
+    const bytes = new TextEncoder().encode('{"public":true}')
+    const key = 'evidence/regtest/op-remote.json'
+    objects.set(key, { bytes, meta: {} })
+    // a remote reader holds only the ref — no store client, no credentials
+    const ref = { endpoint: url, bucket: 'packs-zzktyfefka', key, sha256: sha256Hex(bytes), size: bytes.length }
+    assert.deepEqual([...(await fetchObjectByRef(undefined, ref))], [...bytes])
+    // tampered or truncated content is rejected on the digest/size, not on parse
+    objects.set(key, { bytes: new TextEncoder().encode('{"forged":1}'), meta: {} })
+    await assert.rejects(() => fetchObjectByRef(undefined, ref), /sha256 mismatch/)
+    objects.set(key, { bytes: new TextEncoder().encode('{"public":true}x'), meta: {} })
+    await assert.rejects(() => fetchObjectByRef(undefined, { ...ref, sha256: sha256Hex(new TextEncoder().encode('{"public":true}x')) }), /size mismatch/)
+    // a ref with no endpoint and no store client has no credential-free path
+    await assert.rejects(() => fetchObjectByRef(undefined, { bucket: ref.bucket, key, sha256: ref.sha256 }), /not configured|no unsigned path/)
+  } finally {
+    server.close()
+  }
+})
+
+test('objectstore: signed read falls back to unsigned when the gateway refuses', async (t) => {
+  const { server, url, objects } = await fakeS3(SECRET, true)
+  try {
+    const bytes = new TextEncoder().encode('fallback bytes')
+    const key = 'packs/regtest/shard/remote.json'
+    objects.set(key, { bytes, meta: {} })
+    // the reader's own credentials are wrong — the ref's public endpoint saves it
+    const s = store(url, 'wrong-secret')
+    const falls: string[] = []
+    const got = await fetchObjectByRef(s, { endpoint: url, bucket: 'packs-zzktyfefka', key, sha256: sha256Hex(bytes), size: bytes.length }, (p) =>
+      falls.push(p)
+    )
+    assert.deepEqual([...got], [...bytes])
+    assert.deepEqual(falls, ['keyed-signed'])
   } finally {
     server.close()
   }

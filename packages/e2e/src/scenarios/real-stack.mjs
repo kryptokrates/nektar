@@ -387,7 +387,8 @@ async function inboxEmpty(a, wantId, allowOwnSellerNote = false) {
     const items = r.items
       .map((i) => ({ from: i.from, m: i.body.market ?? i.body }))
       .filter((i) => i.m.wantId === wantId && !(allowOwnSellerNote && i.from === a.pub && i.m.type === 'sellerNote'))
-    if (items.length !== 0) return { empty: false, host: h, items: items.length }
+    if (items.length !== 0)
+      return { empty: false, host: h, items: items.length, detail: items.map((i) => `${i.m.type ?? '?'}@${i.from.slice(0, 10)}`).join(',') }
   }
   return { empty: true }
 }
@@ -464,19 +465,27 @@ try {
   if (sel.split(':')[0] !== cara.pub) throw new Error(`selected ${sel.split(':')[0].slice(0, 12)}… — expected cara's 200-sat offer`)
   if (op.result?.text !== FINDING) throw new Error('deals.result.text differs from the sold finding')
   if (op.journal?.counterparty?.complete !== true) throw new Error(`counterparty journal incomplete: ${JSON.stringify(op.journal?.counterparty).slice(0, 300)}`)
+  // the seller holds her recovery note until the sale op settles (collect tx
+  // proven) — on regtest wait for that settle before demanding an empty box,
+  // so the assertion also verifies the collect-proof-settle chain. on testnet
+  // the runner accepts the note as post-deal bookkeeping instead of waiting
+  // for a block.
+  if (!LIVE) {
+    const settleUntil = Date.now() + 90_000
+    for (;;) {
+      const d = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
+      if (d?.state === 'settled' || Date.now() > settleUntil) break
+      await delay(2000)
+    }
+  }
   for (const a of [bob, cara]) {
-    // the delivered/seller-note envelopes are held until the op reaches a
-    // settled state and released on the following ack cycle — poll briefly.
-    // on testnet the seller keeps its recovery note until its collect
-    // transaction is proven; that is bookkeeping after the deal and the
-    // runner does not wait for a block for it.
     let b
     const until = Date.now() + 30000
     do {
       b = await inboxEmpty(a, op.wantId, LIVE && a === cara)
       if (!b.empty) await delay(1000)
     } while (!b.empty && Date.now() < until)
-    if (!b.empty) throw new Error(`${a.name} inbox not empty on ${b.host} (${b.items} item(s)) after settlement`)
+    if (!b.empty) throw new Error(`${a.name} inbox not empty on ${b.host} (${b.items} item(s): ${b.detail ?? ''}) after settlement`)
   }
   const sellerOp = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
   const sellerState = sellerOp?.state

@@ -33,11 +33,12 @@ interface Rig {
   hosts: string[]
   mined: Map<string, Transaction>
   broadcasts: Transaction[]
+  mempool: Set<string>
   tree: Transaction
   publish: (body: FingerBody) => Promise<{ changed: boolean; seq: number; carrierTxid?: string; tokenTxid?: string }>
 }
 
-async function rig(o: { failH1?: () => boolean; noproof?: boolean; provenFunding?: boolean; gapFunding?: boolean } = {}): Promise<Rig> {
+async function rig(o: { failH1?: () => boolean; noproof?: boolean; provenFunding?: boolean; gapFunding?: boolean; liveMempool?: boolean; refuseBroadcast?: (tx: Transaction) => string | undefined } = {}): Promise<Rig> {
   const tracker = new FakeTracker()
   const h1 = await minihost([], { tracker, finger: true, ...(o.failH1 !== undefined ? { failNext: () => o.failH1!() } : {}) })
   const h2 = await minihost([], { tracker, finger: true })
@@ -66,7 +67,22 @@ async function rig(o: { failH1?: () => boolean; noproof?: boolean; provenFunding
     if (o.provenFunding === true) prove(f.tx) // the token's fee parent carries a proof
     return f
   }
+  const mempool = new Set<string>()
   const broadcast = async (tx: Transaction): Promise<{ status: string }> => {
+    const refused = o.refuseBroadcast?.(tx)
+    if (refused !== undefined) return { status: 'error', description: refused } as { status: string }
+    if (o.liveMempool === true) {
+      // network model: an unmined input source must sit in mempool (or carry
+      // a proof), else the broadcast refuses 'missing inputs' like the real
+      // broadcaster — a mempool eviction can then be replayed per test
+      for (const inp of tx.inputs) {
+        const src = inp.sourceTransaction
+        if (src !== undefined && src.merklePath === undefined && !mempool.has(src.id('hex'))) {
+          return { status: 'error', description: 'WoC HTTP 400: Missing inputs' } as { status: string }
+        }
+      }
+      mempool.add(tx.id('hex'))
+    }
     if (o.noproof !== true) {
       prove(tx)
       mined.set(tx.id('hex'), tx)
@@ -76,7 +92,7 @@ async function rig(o: { failH1?: () => boolean; noproof?: boolean; provenFunding
   }
   const fetchTx = async (txid: string): Promise<Transaction | undefined> => mined.get(txid)
   const publish = async (body: FingerBody) => await publishFinger({ key, state, ledger, journal, hosts, body, takeFunding, broadcast, fetchTx })
-  return { tracker, h1, h2, key, ledger, journal, state, hosts, mined, broadcasts, publish, tree }
+  return { tracker, h1, h2, key, ledger, journal, state, hosts, mined, broadcasts, publish, tree, mempool }
 }
 
 // 1. create → token mined → resolve on either host returns the body, seq 1
@@ -350,4 +366,56 @@ test('finger: golden — record encoding matches the upstream vector byte for by
     unknown: []
   }
   assert.equal(Utils.toHex(Array.from(encodeRecord(rec))), golden)
+})
+
+// a token whose broadcast was refused is journaled but must never commit
+// locally — the retry must re-attempt broadcast, not skip it (thit path).
+test('finger: refused broadcast stalls the seq instead of committing a phantom', async () => {
+  // refuse every broadcast — no ancestor heal can clear it; publish must
+  // throw and the local chain must not commit the phantom
+  let refusing = true
+  const s = await rig({ noproof: true, liveMempool: true, refuseBroadcast: () => (refusing ? 'rejected by policy' : undefined) })
+  try {
+    await assert.rejects(() => s.publish(body1()), /broadcast refused/i)
+    assert.equal(await s.state.get(), undefined, 'state must stay empty behind a refused token')
+    const je = await s.journal.get('finger:token:1')
+    assert.ok(je !== undefined, 'the journaled token is retained for retry')
+    // lift the refusal and retry: the same journaled token must be broadcast
+    // again (not skipped) — the retry the thit-hit path used to skip
+    refusing = false
+    const r = await s.publish(body1())
+    assert.equal(r.changed, true)
+    assert.equal(r.seq, 1)
+    assert.equal(r.tokenTxid, je!.txid, 'the retried publish reuses the journaled token')
+    assert.equal((await s.state.get())?.tokenTxid, r.tokenTxid)
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
+})
+
+// a mempool-evicted prev token makes the next broadcast fail 'missing
+// inputs'; the heal re-broadcasts the stored ancestry (oldest-first) and the
+// publish then lands — the wedge that stranded ben/cara on testnet
+test('finger: mempool-evicted parent heals via ancestor rebroadcast', async () => {
+  const s = await rig({ noproof: true, provenFunding: true, liveMempool: true })
+  try {
+    const r1 = await s.publish(body1())
+    assert.equal(r1.seq, 1)
+    // evict the seq-1 token (unmined, dropped post-restart) — seq-2's token
+    // spends it, so the next broadcast sees 'missing inputs'
+    s.mempool.delete(r1.tokenTxid!)
+    const r2 = await s.publish(body1(['https://three.example.com']))
+    assert.equal(r2.changed, true)
+    assert.equal(r2.seq, 2)
+    // the evicted parent was re-broadcast before the seq-2 token landed
+    const ids = s.broadcasts.map((t) => t.id('hex'))
+    assert.ok(ids.filter((x) => x === r1.tokenTxid).length >= 2, 'prev token re-broadcast by the heal')
+    assert.equal(ids[ids.length - 1], r2.tokenTxid, 'seq-2 token landed after the heal')
+    const got = await resolveFinger({ hosts: [s.h1.url], pub: s.key.toPublicKey().toString(), tracker: s.tracker })
+    assert.equal(got?.seq, 2)
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
 })

@@ -28,6 +28,7 @@ import {
 import { intervalRoot } from '@lightwebinc/blogs-host/dist/merkle.js'
 import { readPushDrop } from '@lightwebinc/blogs-host/dist/script.js'
 import { submitAll, lookupAll, type Quorum } from './hosts.js'
+import { ancestorsOf } from './finger.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 import type { Knex } from 'knex'
@@ -497,7 +498,21 @@ export async function anchorLog(p: {
       await tx.fee()
       await tx.sign()
       const txid = tx.id('hex')
-      const br = await p.broadcast(tx)
+      let br = await p.broadcast(tx)
+      if (br.status !== 'success' && /missing input/i.test(JSON.stringify(br))) {
+        // the anchor chain outran the network — a parent (previous anchor or
+        // a funding slot tree) is absent from mempool. Re-broadcast the
+        // tx's ancestors oldest-first and retry once before giving up; the
+        // journaled prev tokens carry their ancestry in their BEEF.
+        try {
+          for (const anc of ancestorsOf(tx)) {
+            if (anc.merklePath === undefined) await p.broadcast(anc).catch(() => undefined)
+          }
+        } catch {
+          /* heal is best-effort — the retried broadcast decides */
+        }
+        br = await p.broadcast(tx)
+      }
       if (br.status !== 'success') {
         log(`log anchor: broadcast refused ${JSON.stringify(br).slice(0, 120)}`)
         return undefined

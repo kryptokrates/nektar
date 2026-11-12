@@ -298,6 +298,14 @@ export class StackChain implements ChainTracker, Broadcaster {
   async rpc(method: string, ...params: unknown[]): Promise<any> {
     return await stackRpc(this.cfg, method, ...params)
   }
+  /** mempool txs awaiting a seal — lets test drivers skip rounds that would
+   *  mine an empty block (one ~15ms RPC vs ~0.2-3s for generate+seal waits).
+   *  Teranode keeps an all-ones sentinel entry in getrawmempool — not a tx. */
+  async pendingBroadcasts(): Promise<number> {
+    const mp: unknown = await stackRpc(this.cfg, 'getrawmempool').catch(() => undefined)
+    if (!Array.isArray(mp)) return 1 // mempool unreadable → mine anyway
+    return mp.filter((t) => t !== 'f'.repeat(64)).length
+  }
   /** generatetoaddress to the treasury address; waits for the tip to catch up */
   async mine(n = 1): Promise<void> {
     const t0 = Date.now()
@@ -340,8 +348,10 @@ export class StackChain implements ChainTracker, Broadcaster {
     // pushable now), but bound the wait — under suite load the asset index
     // lags ~30s and stalling every mine on it costs more than the async
     // watcher's poll tick. Beyond the bound the push path carries proofs.
+    // Nothing watched ⇒ no proof consumer can exist for this block — under
+    // load the bound was paid on every mine for nobody, so skip the wait.
     const auth = 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
-    {
+    if (this.watched.size > 0) {
       const deadline = Date.now() + 3_000
       let coinbase: string | undefined
       while (coinbase === undefined && Date.now() < deadline) {

@@ -120,7 +120,9 @@ const drive = async (rts: Automation[], chain: StackChain, n = 2) => {
     // the shared hosts/chain, not in-process state — so run them concurrently:
     // ~25-round deals were paying 2×cycle+mine serially (~58s at the 60s cap)
     await Promise.all(rts.map((rt) => rt.cycle()))
-    await chain.mine(1)
+    // rounds where nobody broadcast seal an empty block — the generate+seal
+    // wait costs ~3s under load while a mempool peek costs ~15ms
+    if ((await chain.pendingBroadcasts()) > 0) await chain.mine(1)
   }
 }
 const until = async (rts: Automation[], chain: StackChain, ok: () => Promise<boolean>, n = 60) => {
@@ -140,7 +142,7 @@ const untilBuyer = async (b: A, s: A, chain: StackChain, ok: () => Promise<boole
     if (await ok()) return true
     await s.rt.cycle()
     if (await ok()) return true
-    await chain.mine(1)
+    if ((await chain.pendingBroadcasts()) > 0) await chain.mine(1)
   }
   return false
 }

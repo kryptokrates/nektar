@@ -420,7 +420,9 @@ async function bootAgent(a, index) {
   const pf = join(a.dataDir, 'policy.json')
   const automation = (...args) =>
     JSON.parse(execFileSync(process.execPath, [join(root, 'tools/automation.mjs'), '--data', a.dataDir, '--json', ...args], { encoding: 'utf8' }))
-  if (REUSE && existsSync(pf) && readFileSync(pf, 'utf8') === JSON.stringify(policy)) return // approved when the agent was provisioned
+  // approvals live in automation.sqlite — a db-loss rebuild wipes them while
+  // policy.json survives on disk, so approve every run; it is the operator's
+  // re-attestation after any kind of state loss
   for (const old of REUSE ? (automation('policy', 'list').policies ?? []) : []) automation('policy', 'revoke', old.policyHash)
   writeFileSync(pf, JSON.stringify(policy))
   a.policyHash = automation('policy', 'approve', pf).policyHash
@@ -522,7 +524,10 @@ try {
   deal: {
   if (EXPECT === 'guard') {
     // money-safety probe: a want priced over the guard's per-purchase cap must
-    // be refused before anything is broadcast — zero escrow txs must exist
+    // be refused before anything is broadcast — zero escrow txs must exist.
+    // escrowTxids from earlier deals stay listed, so diff before/after
+    const txOf = (o) => o.escrowTxid ?? o.data?.escrowTxid
+    const before = new Set((await tool(bob, 'deals', {})).deals?.map(txOf).filter(Boolean) ?? [])
     let refused = ''
     try {
       await tool(bob, 'want', { domains: ['libfoo'], question: QUESTION, maxSats: 600 })
@@ -530,9 +535,9 @@ try {
       refused = String(e?.message ?? e)
     }
     if (!/per-purchase limit/.test(refused)) throw new Error(`over-cap want was not refused by the guard: ${refused || '(no refusal — want accepted)'}`)
-    const ops = await tool(bob, 'ops')
-    const escrows = (ops?.operations ?? ops ?? []).filter((o) => o.data?.escrowTxid !== undefined)
-    if (escrows.length > 0) throw new Error(`refused want still produced escrow txs: ${JSON.stringify(escrows.map((o) => o.data.escrowTxid))}`)
+    const after = (await tool(bob, 'deals', {})).deals?.map(txOf).filter(Boolean) ?? []
+    const escrows = after.filter((t) => !before.has(t))
+    if (escrows.length > 0) throw new Error(`refused want still produced escrow txs: ${JSON.stringify(escrows)}`)
     log(`PASS — guard refused 600-sat want (cap 500), zero escrow broadcasts | refusal: ${refused.slice(0, 80)}`)
     writeFileSync(join(dir, 'summary.json'), JSON.stringify({ runId, outcome: 'PASS', expect: 'guard', refusal: refused }, null, 1))
     break deal

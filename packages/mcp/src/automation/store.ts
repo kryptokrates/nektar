@@ -217,7 +217,9 @@ export class AutomationStore {
   async approvePolicy(policy: AutomationPolicy, approvedBy: string): Promise<string> {
     const hash = policyHash(policy)
     const row = { policy_hash: hash, policy_id: policy.policyId, policy: canonicalJson(policy), approved_at: this.now(), approved_by: approvedBy }
-    await this.kx(T.policies).insert(row).onConflict('policy_hash').ignore()
+    // onConflict-ignore left a revoked row dead while reporting 'approved' —
+    // re-approving must make the policy active again
+    await this.kx(T.policies).insert(row).onConflict('policy_hash').merge({ revoked_at: null, approved_at: row.approved_at, approved_by: approvedBy })
     return hash
   }
 

@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory from 'knex'
-import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
+import { PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
 import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { AutomationStore, RevisionConflict } from '../src/automation/store.js'
 import { WalletCoordinator } from '../src/automation/wallet.js'
@@ -285,8 +285,12 @@ test('wallet: one outpoint, one live action; guard refusal releases, network rej
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const funder = StackFunder.dry()
-  funder.topup(1)
-  const f = (funder as any).utxos[0] as { tx: Transaction; vout: number; satoshis: number }
+  // fabricated coinbase parent — the tx below is never broadcast; the wallet
+  // test only exercises lease + persistence semantics
+  const ftx = new Transaction()
+  ftx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromHex('51') })
+  ftx.addOutput({ satoshis: 50_000, lockingScript: new P2PKH().lock(funder.keyPair.toPublicKey().toAddress()) })
+  const f = { tx: ftx, vout: 0, satoshis: 50_000 }
   const build = async () => {
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })

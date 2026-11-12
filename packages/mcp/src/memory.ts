@@ -1237,6 +1237,14 @@ export class NektarMemory {
     const commit = toHex(sha256(bytes))
     mkdirSync(this.proofDir(), { recursive: true })
     writeFileSync(join(this.proofDir(), commit), Buffer.from(bytes))
+    // stock object plane: the same bytes land content-addressed in bstore —
+    // for single-chunk content the blob key IS chirp/<commit>, so a verifier
+    // resolves the proof from any gateway copy and self-verifies on the
+    // digest; /v1/proof stays the compatibility fallback.
+    if (this.opts.objectStore !== undefined) {
+      const st = this.opts.objectStore
+      void storeChirp(st, bytes).catch(() => this.metrics.inc('nektar_proof_store_errors_total'))
+    }
     return commit
   }
   /** fetch a stored proof by commitment; integrity-checked — a corrupted or

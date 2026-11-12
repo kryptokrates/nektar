@@ -13,7 +13,7 @@ import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { KnexShardStore } from '@nektar/log'
 import { NektarMemory, FileStateStore } from '../src/index.js'
 
-test('restart: resume from persisted head, no fork, proofs + level gate survive', async () => {
+test('restart: resume from persisted head, no fork, proofs + level gate survive', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-restart-'))
   const w = await stackWorld(t, 20)
   if (w === undefined) return
@@ -46,7 +46,8 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
     // instance tracks — including the anchor restored from BEEF — so nothing
     // stays unproven waiting on a poll
     assert.equal(b.unprovenAnchors().length, 0, 'mined events attached proofs to both anchors, restored one included')
-    assert.throws(() => b.attachProof('s', b.tailLink('s')!.txid, chain.merklePathOf(b.anchorLinks('s')[0]!.txid)!), /does not contain this txid/)
+    const mp = (await chain.merklePathOf(b.anchorLinks('s')[0]!.txid))!
+    assert.throws(() => b.attachProof('s', b.tailLink('s')!.txid, mp), /does not contain this txid/)
     for (const seq of [0, 1, 2, 3, 4, 5]) assert.equal((await b.prove('s', seq)).result.ok, true, `seq ${seq} provable after restart`)
     const sec = (await b.recall('s', { seq: 1 })).items[0]!
     assert.equal(sec.text, undefined, 'level-2 record still gated after restart (level persisted in sqlite)')

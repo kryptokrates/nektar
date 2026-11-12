@@ -1,0 +1,4 @@
+test/tx-graph.test.ts(10,96): error TS2304: Cannot find name 'StackChain'.
+test/tx-graph.test.ts(14,40): error TS2304: Cannot find name 'StackChain'.
+test/tx-graph.test.ts(20,28): error TS2304: Cannot find name 'StackChain'.
+test/tx-graph.test.ts(109,42): error TS18048: 'other' is possibly 'undefined'.

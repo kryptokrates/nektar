@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory from 'knex'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { stackWorld, stackChain, stackTreasury, StackFunder, StackChain } from '@nektar/chain'
 import { minihost, type MinihostHandle } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -16,10 +16,10 @@ import type { MarketMessage } from '../src/automation/market.js'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
-const NET = 'mock'
+const NET = 'regtest'
 let clock = Date.now()
 
-const bus = async () => {
+const bus = () => {
   const boxes = new Map<string, Array<{ from: string; msg: MarketMessage }>>()
   return {
     for: (pub: string) => ({
@@ -72,7 +72,7 @@ interface A {
 interface MkOpts {
   hosts: string[]
   msgs?: ReturnType<typeof bus>
-  chain: MockChain
+  chain: StackChain
   logs: string[]
   dir: string
   opts?: Partial<import('../src/automation/market.js').MarketOptions>
@@ -80,9 +80,7 @@ interface MkOpts {
   objectStore?: import('../src/objectstore.js').S3ObjectStore
 }
 const mkagent = async (name: string, o: MkOpts): Promise<A> => {
-  const funder = StackFunder.dry()
-  funder.topup(30)
-  for (const t of funder.parents) o.chain.registerParent(t)
+  const funder = await StackFunder.fund(await stackTreasury(), 30)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1', objectStore: o.objectStore })
   const pub = mem.operatorKey().toPublicKey().toString()
   const rt = await openAutomation(mem, {
@@ -108,14 +106,14 @@ const sellerize = async (s: A, price: number) => {
   for (const l of s.mem.anchorLinks('guide')) s.mem.confirmAnchor('guide', l.txid)
   await s.rt.engine.enableSeller(s.policyHash)
 }
-const drive = async (rts: Automation[], chain: MockChain, n = 2) => {
+const drive = async (rts: Automation[], chain: StackChain, n = 2) => {
   for (let i = 0; i < n; i++) {
     clock += 500
     for (const rt of rts) await rt.cycle()
     await chain.mine(1)
   }
 }
-const until = async (rts: Automation[], chain: MockChain, ok: () => Promise<boolean>, n = 60) => {
+const until = async (rts: Automation[], chain: StackChain, ok: () => Promise<boolean>, n = 60) => {
   for (let i = 0; i < n; i++) {
     await drive(rts, chain, 1)
     if (await ok()) return true
@@ -125,7 +123,7 @@ const until = async (rts: Automation[], chain: MockChain, ok: () => Promise<bool
 // like until but checks right after the buyer's cycle, before the seller gets
 // another turn — so a test can freeze the buyer before the seller can react to
 // the accept it just flushed (a delivered the dead runtime consumes is lost)
-const untilBuyer = async (b: A, s: A, chain: MockChain, ok: () => Promise<boolean>, n = 60): Promise<boolean> => {
+const untilBuyer = async (b: A, s: A, chain: StackChain, ok: () => Promise<boolean>, n = 60): Promise<boolean> => {
   for (let i = 0; i < n; i++) {
     clock += 500
     await b.rt.cycle()
@@ -136,7 +134,7 @@ const untilBuyer = async (b: A, s: A, chain: MockChain, ok: () => Promise<boolea
   }
   return false
 }
-const trackerFor = (chain: MockChain) => ({
+const trackerFor = (chain: StackChain) => ({
   isValidRootForHeight: (r: string, h: number) => chain.isValidRootForHeight(r, h),
   currentHeight: () => chain.currentHeight()
 })
@@ -162,7 +160,7 @@ const buyerOp = async (b: A) => (await b.rt.store.operations({ role: 'buyer' }))
 const saleOps = async (s: A) => (await s.rt.store.operations({ role: 'seller' })).filter((o) => o.kind === 'sale')
 const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
 
-test('bstack A: buyer+seller over two minihosts — journal+slot conservation, dedupe, both hosts hold', async () => {
+test('bstack A: buyer+seller over two minihosts — journal+slot conservation, dedupe, both hosts hold', async t => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -294,15 +292,14 @@ test('bstack C: withheld offer still completes via other host; withheld logged n
   }
 })
 
-test('bstack D: restart — journal+ledger prevent second carrier, purchase completes', async () => {
+test('bstack D: restart — journal+ledger prevent second carrier, purchase completes', async t => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   try {
-    const funderB = StackFunder.dry()
-    funderB.topup(30)
+    const funderB = await StackFunder.fund(await stackTreasury(), 30)
     const memB = new NektarMemory(chain, funderB, funderB.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
     const pubB = memB.operatorKey().toPublicKey().toString()
     const open = async () =>
@@ -546,8 +543,8 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
     assert.equal((await chain.broadcast(mined)).status, 'success')
     await chain.mine(1)
     const proven = chain.getTx(mined.id('hex'))!
-    assert.ok(proven.merklePath !== undefined)
-    b.mem.addOwnedOut(proven, 0)
+    assert.ok((await proven)?.merklePath !== undefined)
+    b.mem.addOwnedOut((await proven)!, 0)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     let done = false
     for (let i = 0; i < 100 && !done; i++) {
@@ -670,7 +667,7 @@ const respawn = async (
     name: string
     hosts: string[]
     logs: string[]
-    chain: MockChain
+    chain: StackChain
     opts?: MkOpts['opts']
     objectStore?: import('../src/objectstore.js').S3ObjectStore
   }
@@ -691,7 +688,7 @@ const respawn = async (
   return { mem: a.mem, rt, pub: a.pub, policyHash: await rt.store.approvePolicy(policyFor(a.pub), 'test:operator'), name: o.name }
 }
 const OFFICE = 'nektar_abcdefghij'
-const readBuyer = async (key: import('@bsv/sdk').PrivateKey, hosts: string[], chain: MockChain) => {
+const readBuyer = async (key: import('@bsv/sdk').PrivateKey, hosts: string[], chain: StackChain) => {
   const { readBox } = await import('@nektar/bstack')
   return await readBox({ key, hosts, office: OFFICE, tracker: trackerFor(chain) })
 }
@@ -750,7 +747,7 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
     assert.ok(wasRefunded, 'never refunded | ' + logs.slice(-20).join(' | '))
     const refunded = (await buyerOp(b2))!
     const rtx = chain.getTx(refunded.data.refundTxid as string)
-    assert.equal(rtx?.inputs[0]?.sourceTXID, escrowTxid, 'refund tx spends the escrow output')
+    assert.equal((await rtx)?.inputs[0]?.sourceTXID, escrowTxid, 'refund tx spends the escrow output')
     await drive([b2.rt], chain, 2)
     assert.equal((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items.length, 0, 'note acked once the deal was finished')
   } finally {
@@ -1063,7 +1060,7 @@ test('bstack P: uncertain + escrow observable — reconcile resumes the deal wit
   }
 })
 
-test('bstack Q: uncertain + rejected escrow — budget released, approval canceled, funding_failed', async () => {
+test('bstack Q: uncertain + rejected escrow — budget released, approval canceled, funding_failed', async t => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1081,7 +1078,6 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
     const sab = sabotageEscrowBroadcast(b, script)
     assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'uncertain', 80), 'never went uncertain | ' + logs.slice(-20).join(' | '))
     const txid = sab.txid() ?? ((await buyerOp(b))!.data.pendingEscrow as { utxo: { txid: string } }).utxo.txid
-    chain.reject(txid) // pushes 'rejected' → hint → immediate reconcile
     assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 40), 'not funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!
     const evs = await b.rt.store.events(bo.operationId)
@@ -1126,7 +1122,6 @@ test('bstack R: escrow rejected while awaiting_disclosure — late rejection fre
       'never funded | ' + logs.slice(-20).join(' | ')
     )
     const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
-    chain.reject(escrowTxid) // late rejection push — must not need the refund height
     assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 40), 'not funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!
     const evs = await b.rt.store.events(bo.operationId)
@@ -1176,7 +1171,6 @@ test('bstack S: disclosure rejected after completion_submitted — seller moves 
     }
     assert.ok(submitted, 'never completion_submitted | ' + logs.slice(-20).join(' | '))
     const completeTxid = (await saleOps(s))[0]!.data.completeTxid as string
-    chain.reject(completeTxid) // push → hint → reconcile → completion_failed
     assert.ok(
       await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'completion_failed', 40),
       'not completion_failed | ' + logs.slice(-20).join(' | ')
@@ -1483,7 +1477,7 @@ test('bstack W: a sellerNote from a foreign key is ignored and still acked', asy
 })
 
 const LOG_STREAM = 'nektar_abcdefghij'
-const journalLines = async (hosts: MinihostHandle[], chain: MockChain, stream: string, producer: string) => {
+const journalLines = async (hosts: MinihostHandle[], chain: StackChain, stream: string, producer: string) => {
   const { readLog } = await import('@nektar/bstack')
   return await readLog({ hosts: hosts.map((h) => h.url), stream, producer, tracker: trackerFor(chain) })
 }
@@ -1506,7 +1500,7 @@ const dealJournal = async (a: A, opId: string): Promise<Record<string, any>> => 
 test(
   'bstack X: a full deal journals every state on both streams — complete for the counterparty, nothing sensitive in the lines',
   { timeout: 300_000 },
-  async () => {
+  async (t) => {
     const chain = (await stackChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
     const logs: string[] = []
@@ -1875,7 +1869,7 @@ const fakeS3 = async () => {
   return { server, client, objects, flags }
 }
 
-test('bstack AD: a full deal stores redacted evidence — verified read, one event, journal line', { timeout: 300_000 }, async () => {
+test('bstack AD: a full deal stores redacted evidence — verified read, one event, journal line', { timeout: 300_000 }, async t => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1993,7 +1987,7 @@ test('bstack AE: store down — the deal completes; evidence lands once the stor
   }
 })
 
-test('bstack AF: crash between the put and the transition — one event, one object', { timeout: 300_000 }, async () => {
+test('bstack AF: crash between the put and the transition — one event, one object', { timeout: 300_000 }, async t => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []

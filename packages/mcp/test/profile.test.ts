@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { stackWorld, stackChain, stackTreasury, StackFunder, StackChain } from '@nektar/chain'
 import { minihost } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
 import { callTool, visibleTools } from '../src/server.js'
@@ -59,10 +59,8 @@ interface A {
   pub: string
   policyHash: string
 }
-const mkagent = async (name: string, o: { hosts: string[]; chain: MockChain; dir: string }): Promise<A> => {
-  const funder = StackFunder.dry()
-  funder.topup(30)
-  for (const t of funder.parents) o.chain.registerParent(t)
+const mkagent = async (name: string, o: { hosts: string[]; chain: StackChain; dir: string }): Promise<A> => {
+  const funder = await StackFunder.fund(await stackTreasury(), 30)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
   const pub = mem.operatorKey().toPublicKey().toString()
   const rt = await openAutomation(mem, {
@@ -81,7 +79,7 @@ const mkagent = async (name: string, o: { hosts: string[]; chain: MockChain; dir
 // real-time yield: want/sell/onTxProof kick a detached cycle that holds `busy`
 // for ~hundreds of ms of real work — without a delay the manual cycles all
 // no-op on `busy` and the loop finishes before any detached work lands
-const drive = async (rts: Automation[], chain: MockChain, n = 2) => {
+const drive = async (rts: Automation[], chain: StackChain, n = 2) => {
   for (let i = 0; i < n; i++) {
     clock += 500
     for (const rt of rts) await rt.cycle()
@@ -90,14 +88,14 @@ const drive = async (rts: Automation[], chain: MockChain, n = 2) => {
     for (const rt of rts) await rt.cycle()
   }
 }
-const until = async (rts: Automation[], chain: MockChain, ok: () => Promise<boolean>, n = 80) => {
+const until = async (rts: Automation[], chain: StackChain, ok: () => Promise<boolean>, n = 80) => {
   for (let i = 0; i < n; i++) {
     await drive(rts, chain, 1)
     if (await ok()) return true
   }
   return false
 }
-const trackerFor = (chain: MockChain) => ({
+const trackerFor = (chain: StackChain) => ({
   isValidRootForHeight: (r: string, h: number) => chain.isValidRootForHeight(r, h),
   currentHeight: () => chain.currentHeight()
 })
@@ -131,7 +129,7 @@ test('profile: agent lists exactly the nine agent tools; operator lists all', ()
   }
 })
 
-test('profile: an operator-only tool is refused over HTTP and MCP in agent profile, allowed in operator profile', async () => {
+test('profile: an operator-only tool is refused over HTTP and MCP in agent profile, allowed in operator profile', async t => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w
@@ -176,8 +174,7 @@ test('profile: want refuses zero or several buyer policies; exactly one publishe
   const h = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   let rt: Automation | undefined
   try {
-    const funder = StackFunder.dry()
-    funder.topup(30)
+    const funder = await StackFunder.fund(await stackTreasury(), 30)
     const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test' })
     const pub = mem.operatorKey().toPublicKey().toString()
     rt = await openAutomation(mem, {

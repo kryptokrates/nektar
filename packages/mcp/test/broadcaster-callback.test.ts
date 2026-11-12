@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, type MerklePath } from '@bsv/sdk'
-import { buildBump, stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { buildBump, stackWorld, stackChain, StackFunder, StackChain } from '@nektar/chain'
 import { NektarMemory, createHttpApi } from '../src/index.js'
 import type { Server } from 'node:http'
 

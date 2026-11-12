@@ -22,7 +22,7 @@ async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
   return { chain, funder, mem, settle }
 }
 
-test('describeShard: manifest committed to __catalog__, shardId binds label to chain', async () => {
+test('describeShard: manifest committed to __catalog__, shardId binds label to chain', async t => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem } = _w

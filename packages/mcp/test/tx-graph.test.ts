@@ -4,20 +4,20 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
-import { TxStore, spendValid, stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { TxStore, spendValid, stackWorld, stackChain, StackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/index.js'
 
-const liveMem = (): { mem: NektarMemory; chain: MockChain; funder: MockFunder } => {
+const liveMem = async (t: { skip: (m?: string) => void }): Promise<{ mem: NektarMemory; chain: StackChain; funder: StackFunder } | undefined> => {
   const w = await stackWorld(t, 4)
   if (w === undefined) return
   const { chain: chain, funder: funder } = w
-  const view = Object.create(chain) as MockChain
+  const view = Object.create(chain) as StackChain
   ;(view as { getTx?: unknown }).getTx = undefined // live backends have no getTx
   return { mem: new NektarMemory(view, funder, funder.keyPair, { network: 'testnet' }), chain, funder }
 }
 
 /** parent → child, both signed; the parent is mined on `chain` when asked */
-const pair = async (chain: MockChain, mineParent: boolean): Promise<{ parent: Transaction; child: Transaction; key: PrivateKey }> => {
+const pair = async (chain: StackChain, mineParent: boolean): Promise<{ parent: Transaction; child: Transaction; key: PrivateKey }> => {
   const key = PrivateKey.fromRandom()
   const root = new Transaction()
   root.addOutput({ satoshis: 20_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
@@ -28,7 +28,7 @@ const pair = async (chain: MockChain, mineParent: boolean): Promise<{ parent: Tr
   if (mineParent) {
     assert.equal((await chain.broadcast(parent)).status, 'success')
     await chain.mine(1)
-    parent.merklePath = chain.merklePathOf(parent.id('hex'))
+    parent.merklePath = await chain.merklePathOf(parent.id('hex'))
     assert.ok(parent.merklePath !== undefined)
   }
   const child = new Transaction()
@@ -47,7 +47,9 @@ const bumpFor = (txid: string): MerklePath =>
   ])
 
 test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it', async (t) => {
-  const { mem, chain } = liveMem()
+  const _lm = await liveMem(t)
+  if (_lm === undefined) return
+  const { mem, chain } = _lm
   const { child } = await pair(chain, false)
   const txid = child.id('hex')
   mem.rememberTx(child)
@@ -64,18 +66,20 @@ test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it
   assert.equal((await mem.fetchTx(txid))?.merklePath, mp)
 })
 
-test('fetchTx: proof and tx lookups are single attempts, remembered when they hit', async () => {
-  const { mem, chain } = liveMem()
+test('fetchTx: proof and tx lookups are single attempts, remembered when they hit', async t => {
+  const _lm = await liveMem(t)
+  if (_lm === undefined) return
+  const { mem, chain } = _lm
   const { child } = await pair(chain, false)
   const txid = child.id('hex')
   let txHits = 0
   let proofHits = 0
-  mem.txLookup = async (id) => {
+  mem.txLookup = async (id: string) => {
     txHits++
     return id === txid ? Transaction.fromHex(child.toHex()) : undefined
   }
   const mp = bumpFor(txid)
-  mem.proofLookup = async (id) => {
+  mem.proofLookup = async (id: string) => {
     proofHits++
     return id === txid ? mp : undefined
   }
@@ -90,12 +94,15 @@ test('fetchTx: proof and tx lookups are single attempts, remembered when they hi
 })
 
 test('wire: BEEF when the ancestry is proven — the receiver verifies it against its own headers', async (t) => {
-  const { mem, chain } = liveMem()
+  const _lm = await liveMem(t)
+  if (_lm === undefined) return
+  const { mem, chain } = _lm
   const { child } = await pair(chain, true)
   mem.rememberTx(child)
   const wire = mem.txWire(child.id('hex'))!
   assert.equal(wire.slice(0, 8), '01010101', 'atomic BEEF')
-  const other = liveMem()
+  const other = await liveMem(t)
+  if (other === undefined) return
   const got = await TxStore.read(wire, chain)
   assert.equal(got.tx.id('hex'), child.id('hex'))
   assert.equal(got.spv, true)
@@ -108,7 +115,9 @@ test('wire: BEEF when the ancestry is proven — the receiver verifies it agains
 })
 
 test('wire: Extended Format when the parent is unproven; raw when it is unknown', async (t) => {
-  const { mem, chain } = liveMem()
+  const _lm = await liveMem(t)
+  if (_lm === undefined) return
+  const { mem, chain } = _lm
   const { child } = await pair(chain, false)
   mem.rememberTx(child)
   const wire = mem.txWire(child.id('hex'))!

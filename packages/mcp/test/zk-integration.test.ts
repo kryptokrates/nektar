@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { PrivateKey } from '@bsv/sdk'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { stackWorld, stackChain, stackTreasury, StackFunder } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { fromHex, dsha256, utf8 } from '@nektar/core'
@@ -43,21 +43,25 @@ async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, s
 }
 
 test('STARK membership verifies against a real anchor whose R is the proven root', async (t) => {
-  const { chain, tx, shard } = await anchoredBatch(fromHex(fx.journal.root), 5)
+  const _w = await anchoredBatch(t, fromHex(fx.journal.root), 5)
+  if (_w === undefined) return
+  const { chain, tx, shard } = _w
   const res = await verifyMembershipAnchoredStark(proofBytes(), tx, chain, issued(fx.journal.queryId), { shard })
   assert.ok(res.ok, JSON.stringify(res))
   assert.equal(res.anchorTxid, tx.id('hex'))
 })
 
 test('STARK membership NEGATIVES (each check fails closed with a specific reason)', async (t) => {
-  const good = await anchoredBatch(fromHex(fx.journal.root), 5)
+  const good = await anchoredBatch(t, fromHex(fx.journal.root), 5)
+  if (good === undefined) return
   const q = fx.journal.queryId
   const v = (bytes: Uint8Array, a = good, reg = issued(q), exp: any = { shard: good.shard }) => verifyMembershipAnchoredStark(bytes, a.tx, a.chain, reg, exp)
   const cases: Array<[string, Promise<{ ok: boolean; reason?: string }>, RegExp]> = [
     [
       'anchor of another batch (R differs)',
       (async () => {
-        const o = await anchoredBatch(dsha256(utf8('other batch')), 5)
+        const o = await anchoredBatch(t, dsha256(utf8('other batch')), 5)
+  if (o === undefined) return { ok: false, reason: 'skipped' } as any
         return v(proofBytes(), o, issued(q), { shard: o.shard })
       })(),
       /not the anchored R/
@@ -65,7 +69,8 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
     [
       'anchored size differs',
       (async () => {
-        const o = await anchoredBatch(fromHex(fx.journal.root), 6)
+        const o = await anchoredBatch(t, fromHex(fx.journal.root), 6)
+  if (o === undefined) return { ok: false, reason: 'skipped' } as any
         return v(proofBytes(), o, issued(q), { shard: o.shard })
       })(),
       /size/
@@ -75,7 +80,8 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
     [
       'anchor not mined',
       (async () => {
-        const o = await anchoredBatch(fromHex(fx.journal.root), 5, false)
+        const o = await anchoredBatch(t, fromHex(fx.journal.root), 5, false)
+  if (o === undefined) return { ok: false, reason: 'skipped' } as any
         return v(proofBytes(), o, issued(q), { shard: o.shard })
       })(),
       /NotMined/
@@ -159,11 +165,12 @@ test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own anchored 
 /** mem whose 's' shard has ONE anchored batch committing the fixture's R — the
  *  record is a stub (verifyCombined only reads seq/batchIndex); the anchor is
  *  real (NektarAnchor tx on the mock chain, mined). */
-async function memWithFixtureAnchor() {
-  const { chain, tx, ac } = await anchoredBatch(fromHex(fx.journal.root), 5)
+async function memWithFixtureAnchor(t: { skip: (m?: string) => void }) {
+  const _w = await anchoredBatch(t, fromHex(fx.journal.root), 5)
+  if (_w === undefined) return
+  const { chain, tx, ac } = _w
   const authority = PrivateKey.fromRandom()
-  const f = StackFunder.dry()
-  f.topup(2)
+  const f = await StackFunder.fund(await stackTreasury(), 2)
   const mem = new NektarMemory(chain, f, f.keyPair, { clearanceAuthorities: [authority.toPublicKey().toString()] })
   ;(mem as any).anchors.set('s', ac)
   ;(mem as any).anchorTxs.set(tx.id('hex'), tx)
@@ -179,7 +186,9 @@ async function memWithFixtureAnchor() {
 }
 
 test('§13 combined Π: the Π binding rejects proofs paired with an unrelated clearance', async (t) => {
-  const { mem, zk } = await memWithFixtureAnchor()
+  const _mw = await memWithFixtureAnchor(t)
+  if (_mw === undefined) return
+  const { mem, zk } = _mw
   const bytes = proofBytes() // bound to the fixture's journal queryId
   // 1. proof queryId was never issued here
   let r = await mem.verifyCombined('s', 4, bytes, zk(fx.journal.queryId, new Uint8Array(32)))

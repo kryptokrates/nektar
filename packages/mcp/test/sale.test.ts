@@ -4,20 +4,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { stackWorld, stackChain, stackTreasury, StackFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { visibleTools, callTool } from '../src/server.js'
 
 const SALE_TOOLS = ['sale']
 
-function setup() {
+async function setup(t: { skip: (m?: string) => void }) {
   const chain = (await stackChain(t))!
-  const mk = (opts: any = {}) => {
-    const funder = StackFunder.dry()
-    funder.topup(50)
+  const mk = async (opts: any = {}) => {
+    const funder = await StackFunder.fund(await stackTreasury(), 50)
     return new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
   }
-  return { chain, seller: mk(), buyer: mk(), mk }
+  return { chain, seller: await mk(), buyer: await mk(), mk }
 }
 
 test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is set', async (t) => {
@@ -42,7 +41,7 @@ test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is s
   }
 })
 
-test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claims', async () => {
+test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claims', async t => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const _w = await setup(t)
@@ -75,7 +74,7 @@ test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claim
     assert.equal(done.accepted, true, `buy accepted: ${done.reason ?? ''}`)
     assert.equal(done.sellerSats, 3_000)
     // 4. buyer claims from the real buy tx
-    const tx = chain.mempool.get(done.txid)!
+    const tx = (await chain.getTx(done.txid))!
     const claim = await callTool(buyer, 'sale', { op: 'claim', txHex: tx.toHex(), hWrapped: offer.cfg.hWrapped, sellerPub })
     assert.equal(claim.mode, 'private')
     assert.equal(claim.valueHex, VALUE.toString('hex'), 'unwrapped payload round-trips')
@@ -136,7 +135,7 @@ test('paid disclosure: saleOfferMemory binds the payload to an anchored leaf; cl
     })
     const done = await callTool(seller, 'sale', { op: 'complete', cfg: esc.escrow, utxo: esc.utxo, wrapped: offer.wrapped, changeSats: 490 })
     assert.equal(done.accepted, true, `buy accepted: ${done.reason ?? ''}`)
-    const tx = chain.mempool.get(done.txid)!
+    const tx = (await chain.getTx(done.txid))!
     const claim = await callTool(buyer, 'sale', {
       op: 'claim',
       txHex: tx.toHex(),
@@ -169,8 +168,8 @@ test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape)
     if (_w === undefined) return
     const { chain, mk } = _w
     // agentSeed enables §7 encryption; maxLevel 0 keeps writes at level 0
-    const seller = mk({ agentSeed: PrivateKey.fromRandom(), maxLevel: 0 })
-    const buyer = mk()
+    const seller = await mk({ agentSeed: PrivateKey.fromRandom(), maxLevel: 0 })
+    const buyer = await mk()
     const buyerPub = buyer.operatorKey().toPublicKey().toString()
     const sellerPub = seller.operatorKey().toPublicKey().toString()
     const r = await seller.remember('vault', 'encrypted memory for sale', {}, 0)
@@ -185,7 +184,7 @@ test('paid disclosure: encrypted records sell the FRAGMENT KEY (paper f_i shape)
     })
     const done = await callTool(seller, 'sale', { op: 'complete', cfg: esc.escrow, utxo: esc.utxo, wrapped: offer.wrapped, changeSats: 490 })
     assert.equal(done.accepted, true, `buy accepted: ${done.reason ?? ''}`)
-    const tx = chain.mempool.get(done.txid)!
+    const tx = (await chain.getTx(done.txid))!
     const claim = await callTool(buyer, 'sale', {
       op: 'claim',
       txHex: tx.toHex(),

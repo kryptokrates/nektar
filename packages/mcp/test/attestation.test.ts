@@ -32,7 +32,7 @@ test('attestation script: encode/decode round-trip; non-attestation scripts → 
   assert.throws(() => attestationScript(new Uint8Array(31)), /32 bytes/)
 })
 
-test('anchorAttestation on MockChain: real signed spend, commitment extractable, verifyAttestation round-trip', async () => {
+test('anchorAttestation on MockChain: real signed spend, commitment extractable, verifyAttestation round-trip', async t => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { chain, mem } = _w
@@ -40,7 +40,7 @@ test('anchorAttestation on MockChain: real signed spend, commitment extractable,
   const { txid, commitment } = await mem.anchorAttestation(pb)
   assert.equal(commitment, toHex(attestationCommitment(pb)))
   // the tx is a real signed P2PKH spend the script-verifying mock accepted
-  const tx = chain.mempool.get(txid)!
+  const tx = (await chain.getTx(txid))!
   assert.ok(tx, 'broadcast accepted into mempool')
   const atts = attestationsOf(tx)
   assert.equal(atts.length, 1)

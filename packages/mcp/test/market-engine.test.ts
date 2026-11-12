@@ -105,7 +105,6 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
   })
   const add = async (name: string, limits: Partial<AutomationPolicy['limits']> = {}): Promise<Agent> => {
     const funder = StackFunder.dry()
-    funder.topup(30)
     const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
     const file = join(dir, `${name}.sqlite`)
     const kx = knexFactory({ client: 'sqlite3', connection: { filename: file }, useNullAsDefault: true })

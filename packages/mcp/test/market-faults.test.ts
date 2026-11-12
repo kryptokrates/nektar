@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory, { type Knex } from 'knex'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { stackWorld, stackChain, stackTreasury, StackFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '../src/automation/store.js'
@@ -35,10 +35,8 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
     const agents = new Map<string, { mem: NektarMemory; store: AutomationStore; engine: MarketEngine; pub: string; policyHash: string; name: string }>()
     const now = () => 1_800_000_000_000
     const mk = async (name: string, seller = false) => {
-      const funder = StackFunder.dry()
-      funder.topup(30)
-      for (const p of funder.parents) chain.registerParent(p)
-      const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test', network: 'mock' })
+      const funder = await StackFunder.fund(await stackTreasury(), 30)
+      const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test', network: 'regtest' })
       const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, `${name}.sqlite`) }, useNullAsDefault: true })
       kxs.push(kx)
       const store = new AutomationStore(kx, now)
@@ -47,7 +45,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
       const policy: AutomationPolicy = {
         v: 1,
         policyId: name,
-        network: 'mock',
+        network: 'regtest',
         agentPub: pub,
         roles: ['buyer', 'seller'],
         notBefore: 0,
@@ -88,7 +86,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
         store,
         memory: mem as never,
         key: mem.operatorKey(),
-        network: 'mock',
+        network: 'regtest',
         now,
         call: (tool, args) => callTool(mem, tool, args),
         height: () => mem.chainHeight(),

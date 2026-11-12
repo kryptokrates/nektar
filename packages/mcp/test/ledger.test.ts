@@ -37,7 +37,7 @@ test('ledger: every owner broadcast is recorded with bytes before the outcome is
   await kx.destroy()
 })
 
-test('ledger: payInvoice exports a signed tx whose input stays leased — no phantom change, no second spend of the same outpoint', async () => {
+test('ledger: payInvoice exports a signed tx whose input stays leased — no phantom change, no second spend of the same outpoint', async t => {
   const { kx, store } = await open()
   const w = await stackWorld(t, 1)
   if (w === undefined) return

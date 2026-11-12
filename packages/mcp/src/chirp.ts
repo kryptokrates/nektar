@@ -59,7 +59,7 @@ export async function resolveChirp(url: string, fetch: (hash: Uint8Array) => Pro
     got.set(toHex(Uint8Array.from(h)), b)
     return b
   })
-  return concat(closure.blobs.map((c) => got.get(toHex(Uint8Array.from(c.hash)))!))
+  return concat(...closure.blobs.map((c) => got.get(toHex(Uint8Array.from(c.hash)))!))
 }
 
 /** chirp:// resolution through a signed store client. */

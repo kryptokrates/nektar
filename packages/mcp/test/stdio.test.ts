@@ -8,7 +8,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const text = (r: unknown) => JSON.parse((r as { content: Array<{ text: string }> }).content[0]!.text)
 
-test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 30_000 }, async () => {
+test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 30_000 }, async t => {
   const bin = fileURLToPath(new URL('../src/bin.js', import.meta.url))
   const transport = new StdioClientTransport({
     command: process.execPath,

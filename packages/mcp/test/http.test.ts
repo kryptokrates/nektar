@@ -8,7 +8,7 @@ import { NektarMemory, createHttpApi, OPENAPI } from '../src/index.js'
 
 process.env.NEKTAR_TOOL_PROFILE = 'operator'
 
-test('HTTP API: tools, public proof + checkpoint, metrics move, every route documented', async () => {
+test('HTTP API: tools, public proof + checkpoint, metrics move, every route documented', async t => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w

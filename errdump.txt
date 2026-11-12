@@ -1,0 +1,484 @@
+automation-store.test.ts:291 TS2304 Cannot find name 'UnlockingScript'.
+    | ftx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromHex('51'
+broadcaster-callback.test.ts:10 TS2304 Cannot find name 'StackChain'.
+    | }): Promise<{ chain: StackChain; funder: StackFunder; mem: NektarMemory; srv: Server; base: string } | undefined> => {
+broadcaster-callback.test.ts:22 TS2304 Cannot find name 'StackChain'.
+    | const minedTx = async (chain: StackChain, funder: StackFunder): Promise<{ txid: string; mp: MerklePath }> => {
+inference.test.ts:145 TS2304 Cannot find name 'r2'.
+    | fragmentRefs: [{ shard: 'facts', seq: r2.seq }],
+inference.test.ts:212 TS2304 Cannot find name 'r2'.
+    | fragmentRefs: [{ shard: 'facts', seq: r2.seq }],
+inference.test.ts:254 TS2304 Cannot find name 'r2'.
+    | fragmentRefs: [{ shard: 'facts', seq: r2.seq }],
+market-bstack.test.ts:95 TS2339 Property 'for' does not exist on type 'Promise<{ for: (pub: string) => { send: (
+    | messages: o.msgs?.for(pub),
+market-bstack.test.ts:315 TS2339 Property 'for' does not exist on type 'Promise<{ for: (pub: string) => { send: (
+    | messages: msgs.for(pubB),
+market-bstack.test.ts:546 TS2339 Property 'merklePath' does not exist on type 'Promise<Transaction | undefined>'.
+    | assert.ok(proven.merklePath !== undefined)
+market-bstack.test.ts:547 TS2345 Argument of type 'Promise<Transaction | undefined>' is not assignable to paramet
+    | b.mem.addOwnedOut(proven, 0)
+market-bstack.test.ts:750 TS2339 Property 'inputs' does not exist on type 'Promise<Transaction | undefined>'.
+    | assert.equal(rtx?.inputs[0]?.sourceTXID, escrowTxid, 'refund tx spends the escrow output')
+market-bstack.test.ts:1081 TS2339 Property 'reject' does not exist on type 'StackChain'.
+    | chain.reject(txid) // pushes 'rejected' → hint → immediate reconcile
+market-bstack.test.ts:1126 TS2339 Property 'reject' does not exist on type 'StackChain'.
+    | chain.reject(escrowTxid) // late rejection push — must not need the refund height
+market-bstack.test.ts:1176 TS2339 Property 'reject' does not exist on type 'StackChain'.
+    | chain.reject(completeTxid) // push → hint → reconcile → completion_failed
+market-bstack.test.ts:1507 TS2304 Cannot find name 't'.
+    | const chain = (await stackChain(t))!
+market-engine.test.ts:108 TS2339 Property 'topup' does not exist on type 'StackFunder'.
+    | funder.topup(30)
+market-faults.test.ts:39 TS2339 Property 'topup' does not exist on type 'StackFunder'.
+    | funder.topup(30)
+market-faults.test.ts:40 TS2339 Property 'registerParent' does not exist on type 'StackChain'.
+    | for (const p of funder.parents) chain.registerParent(p)
+memory.test.ts:73 TS18048 'enc' is possibly 'undefined'.
+    | await enc.mem.remember('s', 'classified fact')
+memory.test.ts:75 TS18048 'enc' is possibly 'undefined'.
+    | await enc.mem.anchorShard('s')
+memory.test.ts:76 TS18048 'enc' is possibly 'undefined'.
+    | enc.settle('s')
+memory.test.ts:77 TS18048 'enc' is possibly 'undefined'.
+    | assert.equal((await enc.mem.recall('s')).items[0]!.text, 'classified fact', 'decrypts with seed after verify')
+memory.test.ts:80 TS18048 'enc2' is possibly 'undefined'.
+    | await enc2.mem.remember('s', 'unanchored secret')
+memory.test.ts:81 TS18048 'enc2' is possibly 'undefined'.
+    | const rec3 = await enc2.mem.recall('s')
+memory.test.ts:118 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | const { mem } = setup({ agentSeed: PrivateKey.fromRandom(), batchPolicy: { maxLeaves: 2 } })
+memory.test.ts:118 TS2353 Object literal may only specify known properties, and 'agentSeed' does not exist
+    | const { mem } = setup({ agentSeed: PrivateKey.fromRandom(), batchPolicy: { maxLeaves: 2 } })
+memory.test.ts:192 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | const { mem, settle } = setup({ agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPubl
+memory.test.ts:192 TS2339 Property 'settle' does not exist on type 'Promise<{ chain: StackChain; funder: S
+    | const { mem, settle } = setup({ agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPubl
+memory.test.ts:192 TS2353 Object literal may only specify known properties, and 'agentSeed' does not exist
+    | const { mem, settle } = setup({ agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPubl
+memory.test.ts:293 TS2353 Object literal may only specify known properties, and 'policy' does not exist in
+    | const tampered = setup({ ...base, policy: { policyText: 'permit(principal,action,resource);', anchoredPolicySetHash: ps.
+memory.test.ts:294 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | await tampered.mem.remember('s', 'x')
+memory.test.ts:295 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | assert.equal((await tampered.mem.recall('s', { identity: callerOf(tampered.mem).identity })).receipt.cedar, 'hash-mismat
+memory.test.ts:295 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | assert.equal((await tampered.mem.recall('s', { identity: callerOf(tampered.mem).identity })).receipt.cedar, 'hash-mismat
+memory.test.ts:300 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | const { mem } = setup({ batchPolicy: { maxLeaves: 1 }, policy: { policyText, anchoredPolicySetHash: canonicalizePolicySe
+memory.test.ts:300 TS2353 Object literal may only specify known properties, and 'batchPolicy' does not exi
+    | const { mem } = setup({ batchPolicy: { maxLeaves: 1 }, policy: { policyText, anchoredPolicySetHash: canonicalizePolicySe
+memory.test.ts:435 TS2739 Type 'Promise<{ delegator: string; decision: string; signature: string; }>' is m
+    | const { receipt } = await mem.recall('s', { delegations: [mkDel('service manual fact')] })
+memory.test.ts:452 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | const { mem, settle } = setup({ agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPubl
+memory.test.ts:452 TS2339 Property 'settle' does not exist on type 'Promise<{ chain: StackChain; funder: S
+    | const { mem, settle } = setup({ agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPubl
+memory.test.ts:452 TS2353 Object literal may only specify known properties, and 'agentSeed' does not exist
+    | const { mem, settle } = setup({ agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPubl
+memory.test.ts:510 TS18048 'plain2' is possibly 'undefined'.
+    | const base5 = await plain2.mem.remember('v', 'classified premise', undefined, 5)
+memory.test.ts:511 TS18048 'plain2' is possibly 'undefined'.
+    | const revised = await plain2.mem.revise('v', base5.seq, 'classified premise v2')
+memory.test.ts:520 TS18048 'off' is possibly 'undefined'.
+    | await off.mem.remember('s', 'classified', undefined, 1)
+memory.test.ts:521 TS18048 'off' is possibly 'undefined'.
+    | await off.mem.anchorShard('s')
+memory.test.ts:522 TS18048 'off' is possibly 'undefined'.
+    | off.settle('s')
+memory.test.ts:523 TS18048 'off' is possibly 'undefined'.
+    | await off.mem.recall('s')
+memory.test.ts:524 TS18048 'off' is possibly 'undefined'.
+    | assert.equal((await off.mem.records('__access__')).length, 0, 'no audit records when the flag is off')
+memory.test.ts:529 TS2353 Object literal may only specify known properties, and 'agentSeed' does not exist
+    | const on = setup({ agentSeed: seed, maxLevel: 1, clearanceAuthorities: [authority.toPublicKey().toString()] })
+memory.test.ts:530 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | await on.mem.remember('s', 'classified', undefined, 1)
+memory.test.ts:531 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | await on.mem.anchorShard('s')
+memory.test.ts:532 TS2339 Property 'settle' does not exist on type 'Promise<{ chain: StackChain; funder: S
+    | on.settle('s')
+memory.test.ts:533 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | const { identity } = callerOf(on.mem)
+memory.test.ts:536 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | const served = await on.mem.recall('s', { seq: 0, zk, identity })
+memory.test.ts:538 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: StackChain; funder: Stac
+    | const logs = (await on.mem.records('__access__')).map((r) => JSON.parse(Buffer.from(r.fragment.d).toString('utf8')))
+memory.test.ts:538 TS7006 Parameter 'r' implicitly has an 'any' type.
+    | const logs = (await on.mem.records('__access__')).map((r) => JSON.parse(Buffer.from(r.fragment.d).toString('utf8')))
+memory.test.ts:539 TS7006 Parameter 'l' implicitly has an 'any' type.
+    | const dec = logs.find((l) => l.event === 'decrypt')
+memory.test.ts:548 TS18048 'p2' is possibly 'undefined'.
+    | const base = await p2.mem.remember('d', 'v1 text')
+memory.test.ts:549 TS18048 'p2' is possibly 'undefined'.
+    | await p2.mem.revise('d', base.seq, 'v2 text')
+memory.test.ts:550 TS18048 'p2' is possibly 'undefined'.
+    | await p2.mem.materialize('d', base.seq + 1, { requireProof: false })
+memory.test.ts:551 TS18048 'p2' is possibly 'undefined'.
+    | const tlogs = (await p2.mem.records('__access__')).map((r) => JSON.parse(Buffer.from(r.fragment.d).toString('utf8')))
+memory.test.ts:581 TS18048 'plain' is possibly 'undefined'.
+    | await plain.mem.remember('s', 'x')
+memory.test.ts:582 TS18048 'plain' is possibly 'undefined'.
+    | const r2 = await plain.mem.recall('s')
+pay.test.ts:28 TS2339 Property 'topup' does not exist on type 'StackFunder'.
+    | payer.topup(4)
+pay.test.ts:34 TS2304 Cannot find name 'MockFunder'.
+    | payer: MockFunder,
+profile.test.ts:62 TS2304 Cannot find name 'MockChain'.
+    | const mkagent = async (name: string, o: { hosts: string[]; chain: MockChain; dir: string }): Promise<A> => {
+profile.test.ts:64 TS2339 Property 'topup' does not exist on type 'StackFunder'.
+    | funder.topup(30)
+profile.test.ts:84 TS2304 Cannot find name 'MockChain'.
+    | const drive = async (rts: Automation[], chain: MockChain, n = 2) => {
+profile.test.ts:93 TS2304 Cannot find name 'MockChain'.
+    | const until = async (rts: Automation[], chain: MockChain, ok: () => Promise<boolean>, n = 80) => {
+profile.test.ts:100 TS2304 Cannot find name 'MockChain'.
+    | const trackerFor = (chain: MockChain) => ({
+profile.test.ts:180 TS2339 Property 'topup' does not exist on type 'StackFunder'.
+    | funder.topup(30)
+reasoning-bridge.test.ts:55 TS18048 'w' is possibly 'undefined'.
+    | await w.mem.remember('manual', 'requires(torque, 99).') // pending — never anchored
+reasoning-bridge.test.ts:63 TS18048 'w' is possibly 'undefined'.
+    | const r = await ground(claims, w.fetch, { rules: RULES })
+reasoning-bridge.test.ts:70 TS18048 'w' is possibly 'undefined'.
+    | const rm = await ground(claims, w.fetch, { rules: RULES, mode: 'remove' })
+reasoning-bridge.test.ts:76 TS18048 'w' is possibly 'undefined'.
+    | assert.equal((await ground(claims, w.fetch, { rules: RULES })).reportHash, r.reportHash, 'report hash deterministic')
+reasoning-bridge.test.ts:100 TS18048 'w' is possibly 'undefined'.
+    | const anchored = await commitReceipt(base, w.mem)
+reasoning-bridge.test.ts:101 TS18048 'w' is possibly 'undefined'.
+    | w.settle('__receipts__')
+reasoning-bridge.test.ts:103 TS18048 'w' is possibly 'undefined'.
+    | assert.equal((await w.mem.prove('__receipts__', anchored.anchor!.seq)).result.ok, true)
+reasoning-bridge.test.ts:127 TS18048 'w' is possibly 'undefined'.
+    | await w.mem.remember('manual', 'requires(torque, 55).')
+reasoning-bridge.test.ts:128 TS18048 'w' is possibly 'undefined'.
+    | await w.mem.remember('manual', 'note(revision, 2).')
+reasoning-bridge.test.ts:129 TS18048 'w' is possibly 'undefined'.
+    | w.settle('manual')
+reasoning-bridge.test.ts:130 TS18048 'w' is possibly 'undefined'.
+    | const older = await w.mem.prove('manual', 0)
+reasoning-bridge.test.ts:132 TS18048 'w' is possibly 'undefined'.
+    | const corr = await onRevision(idx, m(0), m(2), w.fetch, { rules: RULES, mem: w.mem })
+reasoning-bridge.test.ts:132 TS18048 'w' is possibly 'undefined'.
+    | const corr = await onRevision(idx, m(0), m(2), w.fetch, { rules: RULES, mem: w.mem })
+reasoning-bridge.test.ts:136 TS18048 'w' is possibly 'undefined'.
+    | w.settle('__corrections__')
+reasoning-bridge.test.ts:137 TS18048 'w' is possibly 'undefined'.
+    | assert.equal((await w.mem.prove('__corrections__', corr[0]!.anchor!.seq)).result.ok, true, 'correction anchored + provab
+reasoning-bridge.test.ts:143 TS18048 'w' is possibly 'undefined'.
+    | const tx = w.mem.anchorTx(w.mem.tailLink('manual')!.txid)!
+reasoning-bridge.test.ts:143 TS18048 'w' is possibly 'undefined'.
+    | const tx = w.mem.anchorTx(w.mem.tailLink('manual')!.txid)!
+reasoning-bridge.test.ts:144 TS18048 'w' is possibly 'undefined'.
+    | const tb = await timeBounds(tx, w.chain)
+reasoning-bridge.test.ts:145 TS18048 'w' is possibly 'undefined'.
+    | const hdr = await w.chain.headerAtHeight(tb.blockHeight)
+reasoning-bridge.test.ts:150 TS18048 'w' is possibly 'undefined'.
+    | currentHeight: async () => await w.chain.currentHeight(),
+reasoning-bridge.test.ts:151 TS18048 'w' is possibly 'undefined'.
+    | headerAtHeight: async (h: number) => await w.chain.headerAtHeight(h),
+reasoning-bridge.test.ts:156 TS18048 'w' is possibly 'undefined'.
+    | await assert.rejects(() => timeBounds(Transaction.fromHex(tx.toHex()), w.chain), /not mined/)
+reasoning-bridge.test.ts:161 TS18048 'w' is possibly 'undefined'.
+    | await w.mem.remember('manual', 'requires(torque, 55).')
+reasoning-bridge.test.ts:162 TS18048 'w' is possibly 'undefined'.
+    | await w.mem.remember('manual', 'z.')
+reasoning-bridge.test.ts:163 TS18048 'w' is possibly 'undefined'.
+    | w.settle('manual')
+reasoning-bridge.test.ts:164 TS18048 'w' is possibly 'undefined'.
+    | const b0 = (await w.mem.prove('manual', 0)).bundle!
+reasoning-bridge.test.ts:165 TS18048 'w' is possibly 'undefined'.
+    | const b1 = (await w.mem.prove('manual', 1)).bundle!
+reasoning-bridge.test.ts:166 TS18048 'w' is possibly 'undefined'.
+    | const b2 = (await w.mem.prove('manual', 2)).bundle!
+reasoning-bridge.test.ts:186 TS18048 'w' is possibly 'undefined'.
+    | const pub = w.sk.toPublicKey().toString()
+reasoning-bridge.test.ts:194 TS18048 'w' is possibly 'undefined'.
+    | { ref: m(0), pubkey: pub, promise: w.promises[0]! },
+reasoning-bridge.test.ts:195 TS18048 'w' is possibly 'undefined'.
+    | { ref: m(1), pubkey: pub, promise: w.promises[1]! }
+reasoning-bridge.test.ts:200 TS18048 'w' is possibly 'undefined'.
+    | assert.deepEqual(await verifyAuditBundle(json, w.chain, { dag }), { ok: true, reasons: [] })
+reasoning-bridge.test.ts:204 TS18048 'w' is possibly 'undefined'.
+    | assert.deepEqual((await verifyAuditBundle(t1, w.chain, { dag })).reasons, ['receipt hash mismatch'])
+reasoning-bridge.test.ts:208 TS18048 'w' is possibly 'undefined'.
+    | (await verifyAuditBundle(t2, w.chain, { dag })).reasons.some((r) => /signer promise does not bind fragment manual\/0/.te
+reasoning-bridge.test.ts:214 TS18048 'w' is possibly 'undefined'.
+    | (await verifyAuditBundle(t3, w.chain, { dag })).reasons.some((r) => r.startsWith('policy derivation:')),
+reasoning-bridge.test.ts:218 TS18048 'w' is possibly 'undefined'.
+    | ...w.chain,
+reasoning-bridge.test.ts:219 TS18048 'w' is possibly 'undefined'.
+    | currentHeight: () => w.chain.currentHeight(),
+reasoning-bridge.test.ts:220 TS18048 'w' is possibly 'undefined'.
+    | headerAtHeight: async (h: number) => await w.chain.headerAtHeight(h),
+reasoning-bridge.test.ts:227 TS18048 'w' is possibly 'undefined'.
+    | assert.ok((await verifyAuditBundle(clone(), w.chain)).reasons.includes('policy derivation present but verifier holds no 
+reasoning-bridge.test.ts:233 TS18048 'w' is possibly 'undefined'.
+    | const b0 = (await w.mem.prove('manual', 0)).bundle!
+reasoning-bridge.test.ts:234 TS18048 'w' is possibly 'undefined'.
+    | const b1 = (await w.mem.prove('manual', 1)).bundle!
+reasoning-bridge.test.ts:242 TS18048 'w' is possibly 'undefined'.
+    | const pub = w.sk.toPublicKey().toString()
+reasoning-bridge.test.ts:245 TS18048 'w' is possibly 'undefined'.
+    | w.mem.revoke(pub)
+reasoning-bridge.test.ts:246 TS18048 'w' is possibly 'undefined'.
+    | const rr = await w.mem.remember('__revocation__', `revoke:${pub}:root=${'aa'.repeat(32)}`)
+reasoning-bridge.test.ts:247 TS18048 'w' is possibly 'undefined'.
+    | await w.mem.anchorShard('__revocation__')
+reasoning-bridge.test.ts:248 TS18048 'w' is possibly 'undefined'.
+    | w.settle('__revocation__')
+reasoning-bridge.test.ts:249 TS18048 'w' is possibly 'undefined'.
+    | const rev = await w.mem.revocationProof(pub)
+reasoning-bridge.test.ts:261 TS18048 'w' is possibly 'undefined'.
+    | { ref: m(0), pubkey: pub, promise: w.promises[0]! },
+reasoning-bridge.test.ts:262 TS18048 'w' is possibly 'undefined'.
+    | { ref: m(1), pubkey: pub, promise: w.promises[1]! }
+reasoning-bridge.test.ts:267 TS18048 'w' is possibly 'undefined'.
+    | assert.equal((await verifyAuditBundle(base(), w.chain)).ok, true)
+reasoning-bridge.test.ts:271 TS18048 'w' is possibly 'undefined'.
+    | const vr = await verifyAuditBundle(withRev, w.chain)
+reasoning-bridge.test.ts:283 TS18048 'w' is possibly 'undefined'.
+    | assert.ok((await verifyAuditBundle(wrongKey, w.chain)).reasons.some((r) => /does not bind this pubkey/.test(r)))
+reasoning-bridge.test.ts:287 TS18048 'w' is possibly 'undefined'.
+    | assert.ok((await verifyAuditBundle(badBundle, w.chain)).reasons.some((r) => /does not recompute the proven leaf/.test(r)
+reasoning-bridge.test.ts:293 TS18048 'w' is possibly 'undefined'.
+    | assert.ok((await verifyAuditBundle(badProof, w.chain)).reasons.some((r) => /inclusion proof failed/.test(r)))
+reasoning-bridge.test.ts:300 TS18048 'w' is possibly 'undefined'.
+    | await w.mem.rotateShard('manual', k1)
+reasoning-bridge.test.ts:301 TS18048 'w' is possibly 'undefined'.
+    | w.settle('__identity__')
+reasoning-bridge.test.ts:302 TS18048 'w' is possibly 'undefined'.
+    | const proof = await w.mem.rotationChainProof('manual')
+reasoning-bridge.test.ts:306 TS18048 'w' is possibly 'undefined'.
+    | const v = await verifyAnchoredRotationChain(proof, w.chain)
+reasoning-bridge.test.ts:314 TS18048 'w' is possibly 'undefined'.
+    | const vf = await verifyAnchoredRotationChain(forged, w.chain)
+reasoning-bridge.test.ts:318 TS18048 'w' is possibly 'undefined'.
+    | const vn = await verifyAnchoredRotationChain(noBundle, w.chain)
+restart.test.ts:49 TS2345 Argument of type 'Promise<MerklePath | undefined>' is not assignable to paramete
+    | assert.throws(() => b.attachProof('s', b.tailLink('s')!.txid, chain.merklePathOf(b.anchorLinks('s')[0]!.txid)!), /does n
+sale.test.ts:14 TS1308 'await' expressions are only allowed within async functions and at the top level
+    | const chain = (await stackChain(t))!
+sale.test.ts:14 TS2304 Cannot find name 't'.
+    | const chain = (await stackChain(t))!
+sale.test.ts:17 TS2339 Property 'topup' does not exist on type 'StackFunder'.
+    | funder.topup(50)
+sale.test.ts:24 TS2554 Expected 0 arguments, but got 1.
+    | const _w = await setup(t)
+sale.test.ts:48 TS2554 Expected 0 arguments, but got 1.
+    | const _w = await setup(t)
+sale.test.ts:78 TS2339 Property 'mempool' does not exist on type 'StackChain'.
+    | const tx = chain.mempool.get(done.txid)!
+sale.test.ts:92 TS2554 Expected 0 arguments, but got 1.
+    | const _w = await setup(t)
+sale.test.ts:114 TS2554 Expected 0 arguments, but got 1.
+    | const _w = await setup(t)
+sale.test.ts:139 TS2339 Property 'mempool' does not exist on type 'StackChain'.
+    | const tx = chain.mempool.get(done.txid)!
+sale.test.ts:168 TS2554 Expected 0 arguments, but got 1.
+    | const _w = await setup(t)
+sale.test.ts:188 TS2339 Property 'mempool' does not exist on type 'StackChain'.
+    | const tx = chain.mempool.get(done.txid)!
+sale.test.ts:208 TS2554 Expected 0 arguments, but got 1.
+    | const _w = await setup(t)
+shardpack.test.ts:23 TS2339 Property 'chain' does not exist on type 'Promise<{ chain: StackChain; funder: St
+    | return new NektarMemory(a.chain, a.funder, a.funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', .
+shardpack.test.ts:23 TS2339 Property 'funder' does not exist on type 'Promise<{ chain: StackChain; funder: S
+    | return new NektarMemory(a.chain, a.funder, a.funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', .
+shardpack.test.ts:23 TS2339 Property 'funder' does not exist on type 'Promise<{ chain: StackChain; funder: S
+    | return new NektarMemory(a.chain, a.funder, a.funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', .
+shardpack.test.ts:28 TS18048 'a' is possibly 'undefined'.
+    | await a.mem.remember('guide', 'fact one')
+shardpack.test.ts:29 TS18048 'a' is possibly 'undefined'.
+    | await a.mem.remember('guide', 'fact two')
+shardpack.test.ts:30 TS18048 'a' is possibly 'undefined'.
+    | a.settle('guide')
+shardpack.test.ts:32 TS18048 'a' is possibly 'undefined'.
+    | const pack = await a.mem.exportShardPack('guide')
+shardpack.test.ts:43 TS2345 Argument of type '{ chain: StackChain; funder: StackFunder; mem: NektarMemory; s
+    | const b = peerOf(a)
+shardpack.test.ts:59 TS2345 Argument of type '{ chain: StackChain; funder: StackFunder; mem: NektarMemory; s
+    | const c = peerOf(a)
+shardpack.test.ts:65 TS18048 'd' is possibly 'undefined'.
+    | d.mem.setShardPrivate('hr')
+shardpack.test.ts:66 TS18048 'd' is possibly 'undefined'.
+    | await d.mem.remember('hr', 'salary band')
+shardpack.test.ts:67 TS18048 'd' is possibly 'undefined'.
+    | await assert.rejects(d.mem.exportShardPack('hr'), /private/)
+shardpack.test.ts:69 TS18048 'e' is possibly 'undefined'.
+    | await e.mem.remember('restricted', 'gate this', undefined, 5)
+shardpack.test.ts:70 TS18048 'e' is possibly 'undefined'.
+    | await assert.rejects(e.mem.exportShardPack('restricted'), /level>0/)
+shardpack.test.ts:75 TS18048 'a' is possibly 'undefined'.
+    | await a.mem.remember('guide', 'fact one')
+shardpack.test.ts:76 TS18048 'a' is possibly 'undefined'.
+    | await a.mem.remember('guide', 'fact two')
+shardpack.test.ts:77 TS18048 'a' is possibly 'undefined'.
+    | a.settle('guide')
+shardpack.test.ts:78 TS18048 'a' is possibly 'undefined'.
+    | const pack = await a.mem.exportShardPack('guide')
+shardpack.test.ts:80 TS2345 Argument of type '{ chain: StackChain; funder: StackFunder; mem: NektarMemory; s
+    | const b = peerOf(a)
+shardpack.test.ts:90 TS2345 Argument of type '{ chain: StackChain; funder: StackFunder; mem: NektarMemory; s
+    | const c = peerOf(a)
+shardpack.test.ts:130 TS18048 'a' is possibly 'undefined'.
+    | await a.mem.remember('guide', 'fact one')
+shardpack.test.ts:131 TS18048 'a' is possibly 'undefined'.
+    | await a.mem.remember('guide', 'fact two')
+shardpack.test.ts:132 TS18048 'a' is possibly 'undefined'.
+    | a.settle('guide')
+shardpack.test.ts:133 TS18048 'a' is possibly 'undefined'.
+    | a.mem.setShardPrivate('hr')
+shardpack.test.ts:134 TS18048 'a' is possibly 'undefined'.
+    | await a.mem.remember('hr', 'secret') // private — must not leak
+shardpack.test.ts:135 TS18048 'a' is possibly 'undefined'.
+    | const srv = createHttpApi(a.mem).listen(0)
+shardpack.test.ts:154 TS2345 Argument of type '{ chain: StackChain; funder: StackFunder; mem: NektarMemory; s
+    | const b = peerOf(a)
+shardpack.test.ts:161 TS18048 'a' is possibly 'undefined'.
+    | const ex = await callTool(a.mem, 'exportShard', { shard: 'guide' })
+shardpack.test.ts:216 TS18048 'a' is possibly 'undefined'.
+    | const srv = createHttpApi(a.mem).listen(0)
+shardpack.test.ts:220 TS18048 'a' is possibly 'undefined'.
+    | await a.mem.remember('guide', 'fact one')
+shardpack.test.ts:221 TS18048 'a' is possibly 'undefined'.
+    | await a.mem.remember('guide', 'fact two')
+shardpack.test.ts:222 TS18048 'a' is possibly 'undefined'.
+    | a.settle('guide')
+shardpack.test.ts:224 TS18048 'a' is possibly 'undefined'.
+    | await a.mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'pack', priceSats: 50 }] })
+shardpack.test.ts:225 TS18048 'a' is possibly 'undefined'.
+    | const ref = a.mem.packStoreRef('guide')
+shardpack.test.ts:235 TS2345 Argument of type '{ chain: StackChain; funder: StackFunder; mem: NektarMemory; s
+    | const b = peerOf(a, { objectStore: client })
+shardpack.test.ts:240 TS2345 Argument of type '{ chain: StackChain; funder: StackFunder; mem: NektarMemory; s
+    | const c = peerOf(a, { objectStore: client })
+shardpack.test.ts:244 TS2345 Argument of type '{ chain: StackChain; funder: StackFunder; mem: NektarMemory; s
+    | const d2 = peerOf(a, { objectStore: client })
+shardpack.test.ts:245 TS18048 'a' is possibly 'undefined'.
+    | const pack = await a.mem.exportShardPack('guide')
+subset-integration.test.ts:32 TS2339 Property 'chain' does not exist on type '{ chain: StackChain; tx: Transaction; s
+    | const { chain, tx, shard } = await anchoredBatch(merkleRoot(leaves(70)), 70)
+subset-integration.test.ts:32 TS2339 Property 'tx' does not exist on type '{ chain: StackChain; tx: Transaction; shar
+    | const { chain, tx, shard } = await anchoredBatch(merkleRoot(leaves(70)), 70)
+subset-integration.test.ts:32 TS2339 Property 'shard' does not exist on type '{ chain: StackChain; tx: Transaction; s
+    | const { chain, tx, shard } = await anchoredBatch(merkleRoot(leaves(70)), 70)
+subset-integration.test.ts:32 TS2554 Expected 3-4 arguments, but got 2.
+    | const { chain, tx, shard } = await anchoredBatch(merkleRoot(leaves(70)), 70)
+subset-integration.test.ts:40 TS2554 Expected 3-4 arguments, but got 2.
+    | const good = await anchoredBatch(merkleRoot(leaves(70)), 70)
+subset-integration.test.ts:42 TS18048 'good' is possibly 'undefined'.
+    | const v = (b: Uint8Array, a = good, exp: any = { shard: good.shard }) => verifySubsetAnchored(b, a.tx, a.chain, exp)
+subset-integration.test.ts:42 TS18048 'a' is possibly 'undefined'.
+    | const v = (b: Uint8Array, a = good, exp: any = { shard: good.shard }) => verifySubsetAnchored(b, a.tx, a.chain, exp)
+subset-integration.test.ts:42 TS18048 'a' is possibly 'undefined'.
+    | const v = (b: Uint8Array, a = good, exp: any = { shard: good.shard }) => verifySubsetAnchored(b, a.tx, a.chain, exp)
+subset-integration.test.ts:47 TS2554 Expected 3-4 arguments, but got 2.
+    | const o = await anchoredBatch(merkleRoot(leaves(71)), 71)
+subset-integration.test.ts:48 TS18048 'o' is possibly 'undefined'.
+    | return v(bytes(), o, { shard: o.shard })
+subset-integration.test.ts:55 TS2554 Expected 3-4 arguments, but got 2.
+    | const o = await anchoredBatch(merkleRoot(leaves(70)), 71)
+subset-integration.test.ts:56 TS18048 'o' is possibly 'undefined'.
+    | return v(bytes(), o, { shard: o.shard })
+subset-integration.test.ts:61 TS18048 'good' is possibly 'undefined'.
+    | ['anchor not canonical', v(bytes(), good, { shard: good.shard, isCanonical: () => false }), /canonical/],
+subset-integration.test.ts:65 TS2345 Argument of type 'Uint8Array' is not assignable to parameter of type '{ skip: (m
+    | const o = await anchoredBatch(merkleRoot(leaves(70)), 70, false)
+subset-integration.test.ts:66 TS18048 'o' is possibly 'undefined'.
+    | return v(bytes(), o, { shard: o.shard })
+subset-integration.test.ts:72 TS18048 'good' is possibly 'undefined'.
+    | verifySubsetAnchored(bytes(), good.tx, (await stackChain(t))!, { shard: good.shard }),
+subset-integration.test.ts:72 TS18048 'good' is possibly 'undefined'.
+    | verifySubsetAnchored(bytes(), good.tx, (await stackChain(t))!, { shard: good.shard }),
+tx-graph.test.ts:10 TS2304 Cannot find name 'MockChain'.
+    | const liveMem = (): { mem: NektarMemory; chain: MockChain; funder: MockFunder } => {
+tx-graph.test.ts:10 TS2304 Cannot find name 'MockFunder'.
+    | const liveMem = (): { mem: NektarMemory; chain: MockChain; funder: MockFunder } => {
+tx-graph.test.ts:11 TS1308 'await' expressions are only allowed within async functions and at the top level
+    | const w = await stackWorld(t, 4)
+tx-graph.test.ts:11 TS2304 Cannot find name 't'.
+    | const w = await stackWorld(t, 4)
+tx-graph.test.ts:12 TS2322 Type 'undefined' is not assignable to type '{ mem: NektarMemory; chain: MockChai
+    | if (w === undefined) return
+tx-graph.test.ts:14 TS2304 Cannot find name 'MockChain'.
+    | const view = Object.create(chain) as MockChain
+tx-graph.test.ts:20 TS2304 Cannot find name 'MockChain'.
+    | const pair = async (chain: MockChain, mineParent: boolean): Promise<{ parent: Transaction; child: Transaction; key: Priv
+v4.test.ts:40 TS2339 Property 'mem' does not exist on type 'Promise<{ chain: any; funder: any; mem: N
+    | assert.equal((await await world(t).mem.remember('m', 'unsigned ok when not required')).seq, 0)
+v4.test.ts:73 TS2451 Cannot redeclare block-scoped variable 's'.
+    | const s = await world(t, { batchPolicy: { maxLeaves: 100, maxAgeMs: 0 } })
+v4.test.ts:78 TS2451 Cannot redeclare block-scoped variable 's'.
+    | const s = await world(t, { batchPolicy: { maxLeaves: 100, maxBytes: 1_000_000 } })
+zk-derivation.test.ts:56 TS2339 Property 'chain' does not exist on type '{ chain: StackChain; f: StackFunder; me
+    | const { chain, mem } = await world(t, { policyDag: d, securityStore: seedQuery })
+zk-derivation.test.ts:56 TS2339 Property 'mem' does not exist on type '{ chain: StackChain; f: StackFunder; mem:
+    | const { chain, mem } = await world(t, { policyDag: d, securityStore: seedQuery })
+zk-derivation.test.ts:75 TS18048 'w1' is possibly 'undefined'.
+    | await w1.mem.remember('__policy__', `dagroot:${fx.journal.policyRoot}`) // unanchored
+zk-derivation.test.ts:76 TS18048 'w1' is possibly 'undefined'.
+    | const r1 = await w1.mem.verifyDerivation('__policy__', proofBytes())
+zk-derivation.test.ts:81 TS18048 'w2' is possibly 'undefined'.
+    | const r2 = await w2.mem.verifyDerivation('__policy__', proofBytes())
+zk-derivation.test.ts:86 TS18048 'w3' is possibly 'undefined'.
+    | await w3.mem.remember('__policy__', `dagroot:${fx.journal.policyRoot}`)
+zk-derivation.test.ts:87 TS18048 'w3' is possibly 'undefined'.
+    | await w3.mem.anchorShard('__policy__')
+zk-derivation.test.ts:88 TS18048 'w3' is possibly 'undefined'.
+    | await w3.chain.mine(1)
+zk-derivation.test.ts:89 TS18048 'w3' is possibly 'undefined'.
+    | w3.mem.confirmAnchor('__policy__', w3.mem.tailLink('__policy__')!.txid)
+zk-derivation.test.ts:89 TS18048 'w3' is possibly 'undefined'.
+    | w3.mem.confirmAnchor('__policy__', w3.mem.tailLink('__policy__')!.txid)
+zk-derivation.test.ts:90 TS18048 'w3' is possibly 'undefined'.
+    | const r3 = await w3.mem.verifyDerivation('__policy__', proofBytes())
+zk-derivation.test.ts:97 TS2339 Property 'chain' does not exist on type '{ chain: StackChain; f: StackFunder; me
+    | const { chain, mem } = await world(t, { policyDag: d })
+zk-derivation.test.ts:97 TS2339 Property 'mem' does not exist on type '{ chain: StackChain; f: StackFunder; mem:
+    | const { chain, mem } = await world(t, { policyDag: d })
+zk-integration.test.ts:46 TS2339 Property 'chain' does not exist on type '{ chain: StackChain; tx: Transaction; a
+    | const { chain, tx, shard } = await anchoredBatch(fromHex(fx.journal.root), 5)
+zk-integration.test.ts:46 TS2339 Property 'tx' does not exist on type '{ chain: StackChain; tx: Transaction; ac: 
+    | const { chain, tx, shard } = await anchoredBatch(fromHex(fx.journal.root), 5)
+zk-integration.test.ts:46 TS2339 Property 'shard' does not exist on type '{ chain: StackChain; tx: Transaction; a
+    | const { chain, tx, shard } = await anchoredBatch(fromHex(fx.journal.root), 5)
+zk-integration.test.ts:46 TS2554 Expected 3-4 arguments, but got 2.
+    | const { chain, tx, shard } = await anchoredBatch(fromHex(fx.journal.root), 5)
+zk-integration.test.ts:53 TS2554 Expected 3-4 arguments, but got 2.
+    | const good = await anchoredBatch(fromHex(fx.journal.root), 5)
+zk-integration.test.ts:55 TS18048 'good' is possibly 'undefined'.
+    | const v = (bytes: Uint8Array, a = good, reg = issued(q), exp: any = { shard: good.shard }) => verifyMembershipAnchoredSt
+zk-integration.test.ts:55 TS18048 'a' is possibly 'undefined'.
+    | const v = (bytes: Uint8Array, a = good, reg = issued(q), exp: any = { shard: good.shard }) => verifyMembershipAnchoredSt
+zk-integration.test.ts:55 TS18048 'a' is possibly 'undefined'.
+    | const v = (bytes: Uint8Array, a = good, reg = issued(q), exp: any = { shard: good.shard }) => verifyMembershipAnchoredSt
+zk-integration.test.ts:60 TS2554 Expected 3-4 arguments, but got 2.
+    | const o = await anchoredBatch(dsha256(utf8('other batch')), 5)
+zk-integration.test.ts:61 TS18048 'o' is possibly 'undefined'.
+    | return v(proofBytes(), o, issued(q), { shard: o.shard })
+zk-integration.test.ts:68 TS2554 Expected 3-4 arguments, but got 2.
+    | const o = await anchoredBatch(fromHex(fx.journal.root), 6)
+zk-integration.test.ts:69 TS18048 'o' is possibly 'undefined'.
+    | return v(proofBytes(), o, issued(q), { shard: o.shard })
+zk-integration.test.ts:74 TS18048 'good' is possibly 'undefined'.
+    | ['anchor not canonical', v(proofBytes(), good, issued(q), { shard: good.shard, isCanonical: () => false }), /canonical/]
+zk-integration.test.ts:78 TS2345 Argument of type 'Uint8Array' is not assignable to parameter of type '{ skip: (m
+    | const o = await anchoredBatch(fromHex(fx.journal.root), 5, false)
+zk-integration.test.ts:79 TS18048 'o' is possibly 'undefined'.
+    | return v(proofBytes(), o, issued(q), { shard: o.shard })
+zk-integration.test.ts:85 TS18048 'good' is possibly 'undefined'.
+    | verifyMembershipAnchoredStark(proofBytes(), good.tx, (await stackChain(t))!, issued(q), { shard: good.shard }),
+zk-integration.test.ts:85 TS18048 'good' is possibly 'undefined'.
+    | verifyMembershipAnchoredStark(proofBytes(), good.tx, (await stackChain(t))!, issued(q), { shard: good.shard }),
+zk-integration.test.ts:163 TS2339 Property 'chain' does not exist on type '{ chain: StackChain; tx: Transaction; a
+    | const { chain, tx, ac } = await anchoredBatch(fromHex(fx.journal.root), 5)
+zk-integration.test.ts:163 TS2339 Property 'tx' does not exist on type '{ chain: StackChain; tx: Transaction; ac: 
+    | const { chain, tx, ac } = await anchoredBatch(fromHex(fx.journal.root), 5)
+zk-integration.test.ts:163 TS2339 Property 'ac' does not exist on type '{ chain: StackChain; tx: Transaction; ac: 
+    | const { chain, tx, ac } = await anchoredBatch(fromHex(fx.journal.root), 5)
+zk-integration.test.ts:163 TS2554 Expected 3-4 arguments, but got 2.
+    | const { chain, tx, ac } = await anchoredBatch(fromHex(fx.journal.root), 5)
+zk-integration.test.ts:166 TS2339 Property 'topup' does not exist on type 'StackFunder'.
+    | f.topup(2)

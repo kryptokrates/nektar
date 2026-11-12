@@ -19,12 +19,13 @@ async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
 }
 /** second instance on the SAME network (shared MockChain) — the real case:
  *  an importer on a different network could never anchor-verify anyway */
-function peerOf(a: ReturnType<typeof setup>, opts: NektarMemoryOptions = {}) {
+function peerOf(a: NonNullable<Awaited<ReturnType<typeof setup>>>, opts: NektarMemoryOptions = {}) {
   return new NektarMemory(a.chain, a.funder, a.funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
 }
 
 test('shard packs: export → import re-verifies every bundle; records provable on the peer', async (t) => {
   const a = await setup(t)
+  if (a === undefined) return
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
   a.settle('guide')
@@ -40,7 +41,8 @@ test('shard packs: export → import re-verifies every bundle; records provable 
   )
   assert.ok(pack.records.every((r) => typeof r.data === 'string' && typeof r.prov?.signature === 'string'))
 
-  const b = peerOf(a)
+  const b = await peerOf(a)
+  if (b === undefined) return
   const imp = await b.importShardPack(pack)
   assert.equal(imp.imported, 2)
   assert.equal(imp.anchored, 2)
@@ -56,28 +58,33 @@ test('shard packs: export → import re-verifies every bundle; records provable 
   assert.ok(imports.some((i) => Buffer.from(i.fragment.d).toString('utf8').includes('shard-import')))
 
   // a non-empty target refuses — imported + native seqs must never mix
-  const c = peerOf(a)
+  const c = await peerOf(a)
+  if (c === undefined) return
   await c.remember('guide', 'native record')
   await assert.rejects(c.importShardPack(pack), /already has records/)
 
   // private shards refuse export outright; level>0 too
   const d = await setup(t)
+  if (d === undefined) return
   d.mem.setShardPrivate('hr')
   await d.mem.remember('hr', 'salary band')
   await assert.rejects(d.mem.exportShardPack('hr'), /private/)
   const e = await setup(t)
+  if (e === undefined) return
   await e.mem.remember('restricted', 'gate this', undefined, 5)
   await assert.rejects(e.mem.exportShardPack('restricted'), /level>0/)
 })
 
-test('shard packs: tampered data recomputes a different leaf → reported, never trusted', async () => {
+test('shard packs: tampered data recomputes a different leaf → reported, never trusted', async t => {
   const a = await setup(t)
+  if (a === undefined) return
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
   a.settle('guide')
   const pack = await a.mem.exportShardPack('guide')
 
-  const b = peerOf(a)
+  const b = await peerOf(a)
+  if (b === undefined) return
   const tampered = JSON.parse(JSON.stringify(pack)) as typeof pack
   tampered.records[0]!.data = 'fact one, altered'
   const imp = await b.importShardPack(tampered)
@@ -87,7 +94,8 @@ test('shard packs: tampered data recomputes a different leaf → reported, never
   assert.match(imp.unverifiable[0]!, /leaf/)
 
   // malformed pack → hard error, nothing lands
-  const c = peerOf(a)
+  const c = await peerOf(a)
+  if (c === undefined) return
   await assert.rejects(c.importShardPack({ v: 2 }), /malformed/)
 })
 
@@ -124,9 +132,10 @@ test('groundedAnswer/commitReceipt share block: token + verifyUrl + badgeUrl + m
   assert.match(r.share.markdown, /\[!?\[?[^\]]*\]\(.*\/v1\/badge\?r=.*\)\]\(.*\/v1\/verify\?r=.*\)|\/v1\/verify\?r=/)
 })
 
-test('pack endpoint + remote import: /.well-known/nektar lists offerable shards; importShard {from,shard} pulls + re-verifies', async () => {
+test('pack endpoint + remote import: /.well-known/nektar lists offerable shards; importShard {from,shard} pulls + re-verifies', async t => {
   const { createHttpApi } = await import('../src/http.js')
   const a = await setup(t)
+  if (a === undefined) return
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
   a.settle('guide')
@@ -151,7 +160,8 @@ test('pack endpoint + remote import: /.well-known/nektar lists offerable shards;
     assert.equal((await fetch(`${base}/v1/pack/nope`)).status, 404)
 
     // remote import: peer pulls the pack over HTTP and re-verifies every bundle
-    const b = peerOf(a)
+    const b = await peerOf(a)
+  if (b === undefined) return
     const imp = await callTool(b, 'importShard', { from: base, shard: 'guide' })
     assert.equal(imp.imported, 2)
     assert.equal(imp.anchored, 2)
@@ -213,6 +223,7 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
   const s3port = (fake.address() as AddressInfo).port
   const client = new S3ObjectStore({ endpoint: `http://127.0.0.1:${s3port}`, bucket: 'packs-mock', accessKey: 'a', secretKey: 's' })
   const a = await setup(t, { objectStore: client })
+  if (a === undefined) return
   const srv = createHttpApi(a.mem).listen(0)
   await new Promise((r) => srv.once('listening', r))
   const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`
@@ -232,16 +243,19 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
     assert.equal(entry?.store?.key, ref!.key, '.well-known carries the store ref')
     assert.ok(entry?.packUrl, 'http fallback stays advertised')
     // a peer imports through the store ref — getVerified + pack re-verification
-    const b = peerOf(a, { objectStore: client })
+    const b = await peerOf(a, { objectStore: client })
+  if (b === undefined) return
     const imp = (await callTool(b, 'importShard', { store: ref })) as { imported: number; anchored: number }
     assert.equal(imp.imported, 2)
     assert.equal(imp.anchored, 2)
     // a tampered object is refused by getVerified (size/digest) before it can land
-    const c = peerOf(a, { objectStore: client })
+    const c = await peerOf(a, { objectStore: client })
+  if (c === undefined) return
     objects.set(ref!.key, new TextEncoder().encode('{"kind":"forged"}'))
     await assert.rejects(callTool(c, 'importShard', { store: ref }) as Promise<unknown>, /objectstore/)
     // and a pack that passes the digest but fails re-verification is refused too
-    const d2 = peerOf(a, { objectStore: client })
+    const d2 = await peerOf(a, { objectStore: client })
+  if (d2 === undefined) return
     const pack = await a.mem.exportShardPack('guide')
     ;(pack.records[0] as { data: string }).data = 'swapped plaintext'
     const forged = await client.put(`packs/mock/forged/${'ab'.repeat(32)}.json`, new TextEncoder().encode(JSON.stringify(pack)))

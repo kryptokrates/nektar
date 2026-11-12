@@ -108,11 +108,11 @@ test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 
     return
   }
   const a = await callTool(mem, 'attestInference', {})
-  const w = await callTool(mem, 'remember', { shard: 'facts', data: 'ml ran' })
+  const r2 = await callTool(mem, 'remember', { shard: 'facts', data: 'ml ran' })
   await mem.anchorShard('facts')
   const c = await callTool(mem, 'commitReceipt', {
     answer: 'ml ran',
-    fragmentRefs: [{ shard: 'facts', seq: w.seq }],
+    fragmentRefs: [{ shard: 'facts', seq: r2.seq }],
     checkResult: 'verified',
     modelAttestation: a.attestation
   })
@@ -124,7 +124,7 @@ test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 
   // a receipt whose anchored commitment does NOT bind the bytes fails closed
   const c2 = await callTool(mem, 'commitReceipt', {
     answer: 'ml ran 2',
-    fragmentRefs: [{ shard: 'facts', seq: w.seq }],
+    fragmentRefs: [{ shard: 'facts', seq: r2.seq }],
     checkResult: 'verified',
     modelAttestation: { ...a.attestation, attestationTxid: 'f'.repeat(64) }
   })
@@ -137,12 +137,12 @@ test('commitReceipt auto-attests in one call; exclusive with modelAttestation', 
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
-  const w = await callTool(mem, 'remember', { shard: 'facts', data: 'auto attest' })
+  const r2 = await callTool(mem, 'remember', { shard: 'facts', data: 'auto attest' })
   await mem.anchorShard('facts')
   // artifacts absent under the /nonexistent dir → statement-verified attestation still embeds
   const r = await callTool(mem, 'commitReceipt', {
     answer: 'auto attest',
-    fragmentRefs: [{ shard: 'facts', seq: w.seq }],
+    fragmentRefs: [{ shard: 'facts', seq: r2.seq }],
     checkResult: 'verified',
     attestInference: {}
   })
@@ -181,11 +181,11 @@ test('attestInference: on-chain when artifacts + funding exist (mock evaluates t
   assert.match(r.attestation.verifierTxid ?? '', /^[0-9a-f]{64}$/)
   assert.equal(typeof r.attestation.proofCommit, 'string')
   // the attestation now upgrades verify's model line to consensus-verified
-  const w = await callTool(mem, 'remember', { shard: 'facts', data: 'ml ran' })
+  const r2 = await callTool(mem, 'remember', { shard: 'facts', data: 'ml ran' })
   await mem.anchorShard('facts')
   const c = await callTool(mem, 'commitReceipt', {
     answer: 'ml ran',
-    fragmentRefs: [{ shard: 'facts', seq: w.seq }],
+    fragmentRefs: [{ shard: 'facts', seq: r2.seq }],
     checkResult: 'verified',
     modelAttestation: r.attestation
   })
@@ -203,13 +203,13 @@ test('commitReceipt embeds a validated attestation; verify shows model check', a
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
-  const w = await callTool(mem, 'remember', { shard: 'facts', data: 'the sky is blue' })
+  const r2 = await callTool(mem, 'remember', { shard: 'facts', data: 'the sky is blue' })
   await mem.anchorShard('facts')
   settle('facts')
   const att = demoAttestation()
   const r = await callTool(mem, 'commitReceipt', {
     answer: 'the sky is blue',
-    fragmentRefs: [{ shard: 'facts', seq: w.seq }],
+    fragmentRefs: [{ shard: 'facts', seq: r2.seq }],
     checkResult: 'verified',
     modelAttestation: att
   })
@@ -246,12 +246,12 @@ test('a receipt without attestation shows declared model (info)', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
-  const w = await callTool(mem, 'remember', { shard: 'facts', data: 'plain fact' })
+  const r2 = await callTool(mem, 'remember', { shard: 'facts', data: 'plain fact' })
   await mem.anchorShard('facts')
   settle('facts')
   const r = await callTool(mem, 'commitReceipt', {
     answer: 'plain fact',
-    fragmentRefs: [{ shard: 'facts', seq: w.seq }],
+    fragmentRefs: [{ shard: 'facts', seq: r2.seq }],
     checkResult: 'verified'
   })
   settle('__receipts__')

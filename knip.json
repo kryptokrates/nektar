@@ -4,7 +4,7 @@
     ".": {
       "entry": ["tools/**/*.mjs", "integrations/**/*.{js,mjs}", "circuits/**/*.mjs", "docs/**/*.mjs", "deploy/**/*.mjs"],
       "ignore": ["spikes/**", "test/fixtures/**"],
-      "ignoreBinaries": []
+      "ignoreBinaries": ["gitleaks"]
     },
     "packages/mcp": {
       "entry": ["src/payclient.ts", "demo/**/*.{ts,mts,mjs}"]

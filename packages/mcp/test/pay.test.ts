@@ -25,13 +25,13 @@ async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
     if (l) mem.confirmAnchor(shard, l.txid)
   }
   const payer = StackFunder.dry()
-  payer.topup(4)
+  
   return { chain, funder, mem, settle, payer }
 }
 
 /** sign a real payment tx satisfying the invoice: pays payTo ≥ amount + carries the OP_RETURN tag */
 async function payTx(
-  payer: MockFunder,
+  payer: StackFunder,
   inv: { amount: number; lockingScriptHex: string; opReturn: string },
   opts: { sats?: number; skipTag?: boolean } = {}
 ): Promise<string> {

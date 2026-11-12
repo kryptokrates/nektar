@@ -37,7 +37,9 @@ test('COM-003: signed provenance verified at ingest; unsigned refused when requi
     'wrong key'
   )
   await assert.rejects(() => mem.remember('m', 'unsigned'), /unsigned provenance refused/)
-  assert.equal((await await world(t).mem.remember('m', 'unsigned ok when not required')).seq, 0)
+  const _w2 = await world(t)
+  if (_w2 === undefined) return
+  assert.equal((await _w2.mem.remember('m', 'unsigned ok when not required')).seq, 0)
 })
 
 test('LOG-007/005: every anchor yields a signed checkpoint; the monitor confirms promises', async (t) => {
@@ -75,9 +77,9 @@ test('LOG-006: flushDue anchors on the age threshold without a new write', async
   const { mem } = s
   const r = await mem.remember('s', 'lonely record') // maxAgeMs 0 → due immediately
   assert.ok(r.anchored, 'closed on age at write time')
-  const s = await world(t, { batchPolicy: { maxLeaves: 100, maxBytes: 1_000_000 } })
-  if (s === undefined) return
-  const { mem: m2 } = s
+  const s2 = await world(t, { batchPolicy: { maxLeaves: 100, maxBytes: 1_000_000 } })
+  if (s2 === undefined) return
+  const { mem: m2 } = s2
   await m2.remember('s', 'x')
   assert.deepEqual(await m2.flushDue(), [], 'nothing due')
 })
@@ -98,7 +100,7 @@ test('CHN-006: pending → mined → final; requireFinal withholds until finalit
   assert.equal((await mem.recall('s', { seq: 0, requireFinal: true })).items[0]!.text, 'a')
 })
 
-test('persistence: challenges, used ZK transcripts and revocations survive a restart', async () => {
+test('persistence: challenges, used ZK transcripts and revocations survive a restart', async t => {
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-sec-')), 'security.json')
   const authority = PrivateKey.fromRandom()
   const opts = { securityStore: new FileSecurityStore(file), clearanceAuthorities: [authority.toPublicKey().toString()] }

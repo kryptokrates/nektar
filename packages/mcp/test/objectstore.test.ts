@@ -148,7 +148,7 @@ test('objectstore: getVerified rejects oversized content and oversized refs', as
   }
 })
 
-test('objectstore: env config — off without URL/bucket, secret via file or env', async () => {
+test('objectstore: env config — off without URL/bucket, secret via file or env', async t => {
   assert.equal(objectStoreFromEnv({} as NodeJS.ProcessEnv), undefined)
   assert.equal(
     objectStoreFromEnv({

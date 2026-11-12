@@ -37,7 +37,7 @@ import { wireP2p, setupFeeVault } from './setup.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
-import { readKeyFile, writeKeyFile, passphraseFromEnv, KeystoreError } from './keystore.js'
+import { readKeyFile, writeKeyFile, passphraseFromEnv, fundKeyFromMnemonic, KeystoreError } from './keystore.js'
 import { fileURLToPath } from 'node:url'
 
 export interface RuntimeConfig {
@@ -184,6 +184,11 @@ function loadKeys(dataDir: string, pass: string | undefined, requireEnc = false)
  *  dedicated fee.key.json generated once in the data dir — encrypted on main. */
 function loadFeeKey(dataDir: string, wif: string | undefined, pass: string | undefined, requireEnc: boolean): PrivateKey {
   if (wif) return PrivateKey.fromWif(wif)
+  // NEKTAR_FUND_MNEMONIC (or _FILE): BIP-39 custody-of-record — recoverable,
+  // one string to protect. Derived at m/44'/236'/0'/0/0; feeds the same
+  // keyDeriver the WIF path uses.
+  const mn = process.env.NEKTAR_FUND_MNEMONIC ?? (existsSync(process.env.NEKTAR_FUND_MNEMONIC_FILE ?? '') ? readFileSync(process.env.NEKTAR_FUND_MNEMONIC_FILE!, 'utf8').trim() : undefined)
+  if (mn) return fundKeyFromMnemonic(mn)
   const file = join(dataDir, 'fee.key.json')
   if (existsSync(file)) {
     const j = JSON.parse(readKeyFile(file, pass, requireEnc)) as { wif: string }
@@ -640,8 +645,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
   const addIfNew = (u: { tx: Transaction; vout: number }) => {
     txStore.put(u.tx)
-    if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some((x) => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout))
+    if (!reserve.isSpent(u.tx.id('hex'), u.vout) && !reserve.utxos.some((x) => x.tx.id('hex') === u.tx.id('hex') && x.vout === u.vout)) {
       reserve.addOwned(u.tx, u.vout)
+      liveTf?.addOwned(u.tx, u.vout)
+    }
   }
   let memRef: NektarMemory | undefined
   const valueOf = (txid: string, vout: number): number | undefined =>
@@ -673,6 +680,8 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v),
     takeReserve: async (_sc?: unknown, minSats?: number) => await reserve.takeReserve(undefined, minSats)
   }
+  let liveToolbox: import('./automation/toolbox.js').ToolboxHandle | undefined
+  let liveTf: import('./automation/toolbox.js').ToolboxReserveFunder | undefined
   const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker, { wocApiKey: mc.wocApiKey, fetchImpl: mc.fetchImpl })
   const chain = {
     broadcast: async (tx: Transaction) => {
@@ -718,12 +727,49 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   reserve.leased = leasePredicate(ledger)
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   chain.broadcast = txLogBroadcast(chain.broadcast)
+  // NEKTAR_WALLET=toolbox: the BRC-100 wallet owns the signing surface and the
+  // spend-source view. reserve.json stays the synchronous shadow (valueOf /
+  // parent-attach / balance gauge read it as before); takeReserve picks from
+  // wallet storage, markSpent relinquishes, addOwned internalizes.
+  if (process.env.NEKTAR_WALLET === 'toolbox') {
+    const tb = await import('./automation/toolbox.js')
+    const services = new tb.LiveWalletServices({ chain: ttn ? 'test' : 'main', mc, tracker, broadcast: (tx) => rawBroadcaster.broadcast(tx) })
+    liveToolbox = await tb.openToolboxWallet({
+      fundKey,
+      dataDir: cfg.dataDir,
+      chain: ttn ? 'test' : 'main',
+      services
+    })
+    const tf = new tb.ToolboxReserveFunder(liveToolbox.wallet, services, (s) => process.stderr.write(`nektar ${net}: ${s}\n`))
+    liveTf = tf
+    tf.leased = leasePredicate(ledger)
+    // one-time mirror: reserve.json's existing UTXOs feed the wallet's own
+    // storage — addIfNew's dedupe skips re-imports, so seed it here.
+    // Serialized + deduped: each internalize resolves parents over WoC.
+    for (const u of reserve.utxos) {
+      if (await tf.has(u.tx.id('hex'), u.vout)) continue
+      await tf.addOwned(u.tx, u.vout)
+    }
+    funder.takeReserve = async (_sc?: unknown, minSats?: number) => await tf.takeReserve(undefined, minSats)
+    const mark = funder.markSpent
+    funder.markSpent = (t: string, v: number) => {
+      mark(t, v)
+      tf.markSpent(t, v)
+    }
+    const own = funder.addOwned
+    funder.addOwned = (tx: Transaction, v: number) => {
+      own(tx, v)
+      tf.addOwned(tx, v)
+    }
+    process.stderr.write(`nektar ${net}: wallet backend toolbox (wallet.sqlite)\n`)
+  }
   const mem = new NektarMemory(
     chain,
     funder as never,
     fundKey,
     {
       ...base,
+      wallet: liveToolbox?.wallet,
       txStore,
       agentSeed: PrivateKey.fromHex(keys.agentSeed),
       signingKey: PrivateKey.fromHex(keys.logKey),

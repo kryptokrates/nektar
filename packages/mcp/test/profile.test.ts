@@ -129,7 +129,7 @@ test('profile: agent lists exactly the nine agent tools; operator lists all', ()
   }
 })
 
-test('profile: an operator-only tool is refused over HTTP and MCP in agent profile, allowed in operator profile', async t => {
+test('profile: an operator-only tool is refused over HTTP and MCP in agent profile, allowed in operator profile', async (t) => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w

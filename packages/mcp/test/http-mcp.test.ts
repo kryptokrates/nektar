@@ -10,7 +10,7 @@ import { NektarMemory, createHttpApi } from '../src/index.js'
 process.env.NEKTAR_TOOL_PROFILE = 'operator'
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 
-test('MCP Streamable HTTP: session, tools, call, resource; unknown session rejected', { timeout: 30_000 }, async t => {
+test('MCP Streamable HTTP: session, tools, call, resource; unknown session rejected', { timeout: 30_000 }, async (t) => {
   const w = await stackWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w

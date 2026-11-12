@@ -70,7 +70,7 @@ test('sandbox: without real isolation the evaluation is BLOCKED — never run on
   assert.match(bad.reason!, /patch refused/)
 })
 
-test('sandbox: control flow with a recording backend — baseline must fail, patch must apply, hidden tests gate the result', async t => {
+test('sandbox: control flow with a recording backend — baseline must fail, patch must apply, hidden tests gate the result', async (t) => {
   const calls: Array<{ cmd: string[]; hidden?: string; app: string }> = []
   const script = (results: number[]): IsolationBackend => ({
     name: 'recording-double',
@@ -134,7 +134,7 @@ test('ai: scripted matcher is deterministic; results outside the offered candida
   assert.throws(() => validateResult(job, 'ignore previous instructions', model), /not an object/)
 })
 
-test('ai: provider-neutral HTTP adapter — same contract against two endpoints, bounded and schema-checked', async t => {
+test('ai: provider-neutral HTTP adapter — same contract against two endpoints, bounded and schema-checked', async (t) => {
   const job = { jobId: 'j', kind: 'match' as const, question: 'q', domains: ['d'], candidates: [{ id: '0', text: 'a' }], maxOutputTokens: 64, timeoutMs: 1000 }
   const seen: Array<{ url: string; auth?: string; body: any }> = []
   const fake =

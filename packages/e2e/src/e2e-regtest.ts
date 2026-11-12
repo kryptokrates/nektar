@@ -50,7 +50,7 @@ async function rpc(method: string, ...params: unknown[]): Promise<any> {
     headers: { 'Content-Type': 'application/json', Authorization: auth },
     body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params })
   })
-  const j = (await r.json())
+  const j = await r.json()
   if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
   return j.result
 }

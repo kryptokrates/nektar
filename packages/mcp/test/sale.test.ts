@@ -41,7 +41,7 @@ test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is s
   }
 })
 
-test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claims', async t => {
+test('paid disclosure: two-agent escrow — seller reveals+collects, buyer claims', async (t) => {
   process.env.NEKTAR_PAID_DISCLOSURE = '1'
   try {
     const _w = await setup(t)

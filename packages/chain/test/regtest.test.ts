@@ -21,8 +21,9 @@ async function aTx(): Promise<Transaction> {
 
 // stub fetch: POSTs to cfg.rpcUrl answer JSON-RPC getrawtransaction; GETs on
 // the asset base answer the routed binary payloads (404 on misses)
-const stub = (rawHex: string | undefined, routes: Record<string, { status: number; body?: Uint8Array | number[] }> = {}): typeof fetch =>
-  (async (input: unknown) => {
+const stub =
+  (rawHex: string | undefined, routes: Record<string, { status: number; body?: Uint8Array | number[] }> = {}): typeof fetch =>
+  async (input: unknown) => {
     const url = String(input)
     if (url === cfg.rpcUrl) {
       const error = rawHex === undefined ? { code: -5, message: 'No such mempool or blockchain transaction' } : null
@@ -31,7 +32,7 @@ const stub = (rawHex: string | undefined, routes: Record<string, { status: numbe
     const hit = Object.keys(routes).find((k) => url === `${cfg.assetUrl}/${k}`)
     const r = hit !== undefined ? routes[hit] : { status: 404 }
     return new Response(new Uint8Array(r.body ?? []), { status: r.status })
-  })
+  }
 
 test('regtestTx: mined tx returns tx with attached MerklePath', async () => {
   const tx = await aTx()

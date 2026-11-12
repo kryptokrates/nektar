@@ -947,7 +947,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       const gid = typeof args?.grantId === 'string' ? args.grantId : undefined
       if (op === 'escrow' && gid && mem.budget) {
         const actionId = `sale:escrow:${args.cfg ? JSON.stringify(args.cfg).slice(0, 60) : Date.now()}`
-        const amount = Number((args.cfg)?.price ?? args.amount ?? 0)
+        const amount = Number(args.cfg?.price ?? args.amount ?? 0)
         const r = mem.budget.reserve(gid, actionId, amount)
         if (r === 'exists') throw new Error(`sale: action already recorded for grant ${gid} � idempotent replay refused`)
         if (r !== 'ok') throw new Error(`sale: grant ${gid} budget ${r}`)
@@ -1661,8 +1661,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       if (pack === undefined && typeof args?.store === 'object' && args.store !== null) {
         const r = args.store as { bucket?: string; key?: string; sha256?: string; size?: number; chirp?: string; endpoint?: string }
         const keyed = typeof r.key === 'string' && typeof r.sha256 === 'string'
-        if (!keyed && typeof r.chirp !== 'string')
-          throw new Error('importShard: store ref needs {key, sha256} or {chirp} (bucket/size/endpoint optional)')
+        if (!keyed && typeof r.chirp !== 'string') throw new Error('importShard: store ref needs {key, sha256} or {chirp} (bucket/size/endpoint optional)')
         if (r.endpoint !== undefined && !/^https?:\/\//i.test(r.endpoint)) throw new Error('importShard: store endpoint must be http(s)')
         pack = await mem.fetchStoredPack(r)
       }

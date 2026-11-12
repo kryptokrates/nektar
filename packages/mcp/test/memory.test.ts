@@ -191,7 +191,7 @@ test('mcp memory: tools dispatch + prove NotAnchored is honest', async (t) => {
   assert.deepEqual((await mem.prove('x', 0)).result, { ok: false, reason: 'NotAnchored' })
 })
 
-test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-use, level-covering', async t => {
+test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-use, level-covering', async (t) => {
   const authority = PrivateKey.fromRandom()
   const _w = await setup(t, { agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPublicKey().toString()] })
   if (_w === undefined) return
@@ -252,7 +252,7 @@ test('ZKA: plaintext level>0 records are gated too; instances without trusted au
   assert.equal((await mem.recall('p')).items[0].text, undefined, 'no proof, no plaintext')
 })
 
-test('Cedar gates recall — verified identity, ZK-proven level, hash-mismatch; challenge must be issued here', async t => {
+test('Cedar gates recall — verified identity, ZK-proven level, hash-mismatch; challenge must be issued here', async (t) => {
   const ps = canonicalizePolicySet(
     'p1',
     `
@@ -456,7 +456,7 @@ test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-ho
   assert.equal(verifyAnswerReceipt({ ...receipt, delegations: [...receipt.delegations, receipt.delegations[0]] }).ok, false, 'entry appended')
 })
 
-test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-verifies Π, not the flag', async t => {
+test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-verifies Π, not the flag', async (t) => {
   const authority = PrivateKey.fromRandom()
   const _w = await setup(t, { agentSeed: PrivateKey.fromRandom(), maxLevel: 2, clearanceAuthorities: [authority.toPublicKey().toString()] })
   if (_w === undefined) return
@@ -540,7 +540,7 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
   try {
     const authority = PrivateKey.fromRandom()
     const on = await setup(t, { agentSeed: seed, maxLevel: 1, clearanceAuthorities: [authority.toPublicKey().toString()] })
-  if (on === undefined) return
+    if (on === undefined) return
     await on.mem.remember('s', 'classified', undefined, 1)
     await on.mem.anchorShard('s')
     on.settle('s')
@@ -559,7 +559,7 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
     assert.ok(typeof dec.at === 'number' && dec.at > 0, 'timestamped')
     // traverse: materialising a delta chain logs each hop
     const p2 = await setup(t)
-  if (p2 === undefined) return
+    if (p2 === undefined) return
     const base = await p2.mem.remember('d', 'v1 text')
     await p2.mem.revise('d', base.seq, 'v2 text')
     await p2.mem.materialize('d', base.seq + 1, { requireProof: false })
@@ -574,7 +574,7 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
   }
 })
 
-test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash', async t => {
+test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash', async (t) => {
   const weightsHash = 'ab'.repeat(32)
   const _w = await setup(t, { model: { id: 'qwen-local-7b', params: { temperature: 0 }, weightsHash } })
   if (_w === undefined) return
@@ -600,7 +600,7 @@ test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash',
   assert.ok(verifyAnswerReceipt(r2.receipt).ok, 'modelless receipts still verify')
 })
 
-test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest declares', async t => {
+test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest declares', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { mem, settle } = _w
@@ -650,7 +650,7 @@ test('verifyReceipt: token → found/hash/provenance/anchored/fragments; unknown
   for (const n of ['found', 'hash', 'provenance', 'anchored', 'fragment manual:0']) {
     assert.equal(byName[n]?.ok, true, `${n}: ${byName[n]?.detail}`)
   }
-  assert.equal((v.receipt).checkResult, 'verified')
+  assert.equal(v.receipt.checkResult, 'verified')
 
   // bare 64-hex hash also accepted
   const v2 = await callTool(mem, 'verifyReceipt', { receiptHash: r.receiptHash })

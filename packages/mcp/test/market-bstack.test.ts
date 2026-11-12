@@ -160,7 +160,7 @@ const buyerOp = async (b: A) => (await b.rt.store.operations({ role: 'buyer' }))
 const saleOps = async (s: A) => (await s.rt.store.operations({ role: 'seller' })).filter((o) => o.kind === 'sale')
 const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
 
-test('bstack A: buyer+seller over two minihosts — journal+slot conservation, dedupe, both hosts hold', async t => {
+test('bstack A: buyer+seller over two minihosts — journal+slot conservation, dedupe, both hosts hold', async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -292,7 +292,7 @@ test('bstack C: withheld offer still completes via other host; withheld logged n
   }
 })
 
-test('bstack D: restart — journal+ledger prevent second carrier, purchase completes', async t => {
+test('bstack D: restart — journal+ledger prevent second carrier, purchase completes', async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
@@ -1060,7 +1060,7 @@ test('bstack P: uncertain + escrow observable — reconcile resumes the deal wit
   }
 })
 
-test('bstack Q: uncertain + rejected escrow — budget released, approval canceled, funding_failed', async t => {
+test('bstack Q: uncertain + rejected escrow — budget released, approval canceled, funding_failed', async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1869,7 +1869,7 @@ const fakeS3 = async () => {
   return { server, client, objects, flags }
 }
 
-test('bstack AD: a full deal stores redacted evidence — verified read, one event, journal line', { timeout: 300_000 }, async t => {
+test('bstack AD: a full deal stores redacted evidence — verified read, one event, journal line', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -1987,7 +1987,7 @@ test('bstack AE: store down — the deal completes; evidence lands once the stor
   }
 })
 
-test('bstack AF: crash between the put and the transition — one event, one object', { timeout: 300_000 }, async t => {
+test('bstack AF: crash between the put and the transition — one event, one object', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
@@ -2008,10 +2008,10 @@ test('bstack AF: crash between the put and the transition — one event, one obj
     // the object but no ref — then released before the respawn.
     const origTransition = b.rt.store.transition.bind(b.rt.store)
     let failCommit = true
-    b.rt.store.transition = (async (id: string, rev: number, to: string, ch: { cause?: string } & Record<string, unknown>) => {
+    b.rt.store.transition = async (id: string, rev: number, to: string, ch: { cause?: string } & Record<string, unknown>) => {
       if (failCommit && ch?.cause === 'evidence_stored') throw new Error('crash before commit')
       return await origTransition(id, rev, to, ch as never)
-    })
+    }
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     // the window this test asserts: object exists, transition never committed
     assert.ok(

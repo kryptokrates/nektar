@@ -25,7 +25,7 @@ async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
     if (l) mem.confirmAnchor(shard, l.txid)
   }
   const payer = StackFunder.dry()
-  
+
   return { chain, funder, mem, settle, payer }
 }
 

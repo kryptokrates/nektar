@@ -141,11 +141,11 @@ test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', asyn
   const inner = chain
   const flaky: any = {
     broadcast: async (tx: import('@bsv/sdk').Transaction) => {
-      if ((flaky)._n === 1) {
-        ;(flaky)._n = 2
+      if (flaky._n === 1) {
+        flaky._n = 2
         return { status: 'error', description: 'TX_MISSING_PARENT (34): error getting parent' }
       }
-      ;(flaky)._n = ((flaky)._n ?? 0) + 1
+      flaky._n = (flaky._n ?? 0) + 1
       return inner.broadcast(tx)
     }
   }

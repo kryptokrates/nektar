@@ -50,7 +50,7 @@ async function world(t: { skip: (m?: string) => void }) {
 }
 const m = (seq: number) => ({ shard: 'manual', seq })
 
-test('AGT-003 grounding: quote, entailed, uncited, unverifiable, not-entailed; flag vs remove', async t => {
+test('AGT-003 grounding: quote, entailed, uncited, unverifiable, not-entailed; flag vs remove', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   await w.mem.remember('manual', 'requires(torque, 99).') // pending — never anchored
@@ -78,7 +78,7 @@ test('AGT-003 grounding: quote, entailed, uncited, unverifiable, not-entailed; f
   assert.notEqual(rm.reportHash, r.reportHash)
 })
 
-test('AGT-011/012 model identity + committed, anchored receipt', async t => {
+test('AGT-011/012 model identity + committed, anchored receipt', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-'))
   const wp = join(dir, 'weights.gguf')
   writeFileSync(wp, Buffer.alloc(3 * 65536 + 17, 7))
@@ -105,7 +105,7 @@ test('AGT-011/012 model identity + committed, anchored receipt', async t => {
   assert.equal((await w.mem.prove('__receipts__', anchored.anchor.seq)).result.ok, true)
 })
 
-test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction anchored', async t => {
+test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction anchored', async (t) => {
   const w = await world(t)
   if (w === undefined) return
   const idx = new CitationIndex(join(mkdtempSync(join(tmpdir(), 'nektar-')), 'cit.json'))

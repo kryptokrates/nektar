@@ -66,6 +66,13 @@ export class TeranodeRPCTracker implements ChainTracker {
   }
 
   async currentHeight(): Promise<number> {
+    // getblockchaininfo.blocks lags seconds behind generate on Teranode;
+    // bestblockhash+getblockheader reflect the real tip almost immediately.
+    const best = await this.rpc('getbestblockhash').catch(() => undefined)
+    if (best) {
+      const h = await this.rpc('getblockheader', best).catch(() => undefined)
+      if (typeof h?.height === 'number') return h.height
+    }
     return (await this.rpc('getblockchaininfo')).blocks as number
   }
 
@@ -311,6 +318,16 @@ export class ReserveFunder {
       /* no state file yet */
     }
   }
+  /** Re-read the reserve file fresh — another process may have populated or
+   *  updated it while this one waited on the treasury lock (node --test runs
+   *  files as parallel processes sharing .state). */
+  reload(): void {
+    this.utxos = []
+    this.entries = []
+    this.spent = new Set()
+    this.heights = new Map()
+    this.load()
+  }
   private save(): void {
     mkdirSync(dirname(this.file), { recursive: true })
     writeFileSync(this.file, JSON.stringify({ spent: [...this.spent], entries: this.entries }, null, 1))
@@ -437,7 +454,7 @@ export async function bootstrapReserve(
   key: PrivateKey,
   reserve: ReserveFunder,
   rpc: (m: string, ...p: unknown[]) => Promise<any>,
-  opts: { treasuryFile: string; outputs?: number; maxCandidates?: number }
+  opts: { treasuryFile: string; outputs?: number; maxCandidates?: number; maxScan?: number }
 ): Promise<Transaction | null> {
   const { P2PKH } = await import('@bsv/sdk')
   const addr = key.toPublicKey().toAddress([0x6f])
@@ -475,7 +492,14 @@ export async function bootstrapReserve(
   const want = Buffer.from(key.toPublicKey().toHash()).toString('hex')
   const tip = ((await rpc('getblockchaininfo')) as { blocks: number }).blocks
   let tried = 0
-  for (let h = 1; h <= tip - 101 && tried < (opts.maxCandidates ?? 200); h++) {
+  // Scan mature heights BACKWARDS within a bounded window: the treasury key's
+  // usable coinbases cluster near the tip on a live chain, while a from-1
+  // walk on a long chain costs a block fetch per height even when the key
+  // never mined. A key whose only coinbases lie deeper falls through to the
+  // caller's generate-and-split path, which is always correct.
+  const last = tip - 101
+  const first = Math.max(1, last - (opts.maxScan ?? 800))
+  for (let h = last; h >= first && tried < (opts.maxCandidates ?? 200); h--) {
     const hash = (await rpc('getblockhash', h)) as string
     const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`, { signal: AbortSignal.timeout(20_000) })
     if (!res.ok) continue

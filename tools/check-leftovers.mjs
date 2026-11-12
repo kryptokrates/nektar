@@ -13,7 +13,7 @@ const BASELINE = join(ROOT, 'tools', '.leftover-baseline.json')
 const UPDATE = process.argv.includes('--update')
 
 const SRC_GLOBS = ['packages/*/src/**/*.{ts,mts,mjs}', 'tools/**/*.mjs']
-const EXCLUDE = /node_modules|\/dist\/|\/artifacts\/|\/\.state\/|\/\.mod\/|vendor\/|dist-bundle|\.runar\.ts|\.d\.ts$/
+const EXCLUDE = /node_modules|\/dist\/|\/artifacts\/|\/\.state\/|\/\.mod\/|vendor\/|dist-bundle|\.runar\.ts|\.d\.ts$|check-leftovers\.mjs$/
 
 const PATTERNS = {
   'as-any': { re: /\bas any\b/g, files: SRC_GLOBS },

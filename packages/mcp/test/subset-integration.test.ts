@@ -48,7 +48,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
       'anchor of another batch (R differs)',
       (async () => {
         const o = await anchoredBatch(t, merkleRoot(leaves(71)), 71)
-  if (o === undefined) return { ok: false, reason: 'skipped' }
+        if (o === undefined) return { ok: false, reason: 'skipped' }
         return v(bytes(), o, { shard: o.shard })
       })(),
       /not the anchored R/
@@ -57,7 +57,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
       'anchored size differs',
       (async () => {
         const o = await anchoredBatch(t, merkleRoot(leaves(70)), 71)
-  if (o === undefined) return { ok: false, reason: 'skipped' }
+        if (o === undefined) return { ok: false, reason: 'skipped' }
         return v(bytes(), o, { shard: o.shard })
       })(),
       /size/
@@ -68,7 +68,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
       'anchor not mined',
       (async () => {
         const o = await anchoredBatch(t, merkleRoot(leaves(70)), 70, false)
-  if (o === undefined) return { ok: false, reason: 'skipped' }
+        if (o === undefined) return { ok: false, reason: 'skipped' }
         return v(bytes(), o, { shard: o.shard })
       })(),
       /NotMined/

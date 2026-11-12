@@ -409,12 +409,7 @@
             "value": {
               "kind": "call",
               "func": "super",
-              "args": [
-                "t0",
-                "t1",
-                "t2",
-                "t3"
-              ]
+              "args": ["t0", "t1", "t2", "t3"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -660,9 +655,7 @@
             "value": {
               "kind": "call",
               "func": "toByteString",
-              "args": [
-                "t10"
-              ]
+              "args": ["t10"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -699,9 +692,7 @@
             "value": {
               "kind": "call",
               "func": "toByteString",
-              "args": [
-                "t13"
-              ]
+              "args": ["t13"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -714,10 +705,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t12",
-                "t14"
-              ]
+              "args": ["t12", "t14"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -730,10 +718,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t11",
-                "t15"
-              ]
+              "args": ["t11", "t15"]
             },
             "sourceLoc": {
               "file": "contract.ts",
@@ -773,10 +758,7 @@
             "value": {
               "kind": "call",
               "func": "buildChangeOutput",
-              "args": [
-                "t18",
-                "t19"
-              ]
+              "args": ["t18", "t19"]
             }
           },
           {
@@ -784,10 +766,7 @@
             "value": {
               "kind": "call",
               "func": "cat",
-              "args": [
-                "t17",
-                "t20"
-              ]
+              "args": ["t17", "t20"]
             }
           },
           {
@@ -795,9 +774,7 @@
             "value": {
               "kind": "call",
               "func": "hash256",
-              "args": [
-                "t21"
-              ]
+              "args": ["t21"]
             }
           },
           {
@@ -812,9 +789,7 @@
             "value": {
               "kind": "call",
               "func": "extractOutputHash",
-              "args": [
-                "t23"
-              ]
+              "args": ["t23"]
             }
           },
           {
@@ -840,7 +815,5 @@
     ]
   },
   "codeSeparatorIndex": 1,
-  "codeSeparatorIndices": [
-    1
-  ]
+  "codeSeparatorIndices": [1]
 }

@@ -117,7 +117,7 @@ OpenAI/Anthropic function-calling apps can call `/v1/tools/{name}` directly.
 
 | env                                                                                         | meaning                                                                                            |
 | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `NEKTAR_NETWORK`                                                                            | `regtest` (default) · `testnet` · `ttn` · `main`                                                  |
+| `NEKTAR_NETWORK`                                                                            | `regtest` (default) · `testnet` · `ttn` · `main`                                                   |
 | `NEKTAR_DATA_DIR`                                                                           | records (sqlite), anchor state, security state, funding reserve, keys (0600). `/data` in the image |
 | `NEKTAR_FUND_WIF` / `_FILE`                                                                 | fee-paying key (regtest: the miner key)                                                            |
 | `NEKTAR_RPC_PASS` / `_FILE`, `NEKTAR_RPC_URL`, `NEKTAR_PROPAGATION_URL`, `NEKTAR_ASSET_URL` | Teranode endpoints (from a container: `http://host.docker.internal:…`)                             |

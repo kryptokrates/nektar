@@ -38,7 +38,7 @@ export interface MinihostHandle {
 export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker): Promise<MinihostHandle> {
   const tracker: ChainTracker = 'tracker' in opts ? opts.tracker : opts
   const evil = 'evil' in opts ? (opts.evil ?? false) : false
-  const failNext = 'failNext' in opts ? (opts.failNext) : undefined
+  const failNext = 'failNext' in opts ? opts.failNext : undefined
   const drop = 'drop' in opts ? opts.drop : undefined
   const office = 'office' in opts ? opts.office : undefined
   const logStream = 'logStream' in opts ? opts.logStream : undefined
@@ -225,10 +225,7 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
         } else if (q.service === 'ls_log') {
           if (logLS === undefined) throw new Error('log double: not enabled')
           a = await logLS.lookup(q)
-        } else
-          a = evil
-            ? [...stored.keys()].map((txid) => ({ txid, outputIndex: 0 }))
-            : ((await lookups[q.service].lookup(q)))
+        } else a = evil ? [...stored.keys()].map((txid) => ({ txid, outputIndex: 0 })) : await lookups[q.service].lookup(q)
         if (drop !== undefined) a = a.filter((x) => !drop(x.txid))
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(

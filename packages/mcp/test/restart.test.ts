@@ -13,7 +13,7 @@ import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { KnexShardStore } from '@nektar/log'
 import { NektarMemory, FileStateStore } from '../src/index.js'
 
-test('restart: resume from persisted head, no fork, proofs + level gate survive', async t => {
+test('restart: resume from persisted head, no fork, proofs + level gate survive', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-restart-'))
   const w = await stackWorld(t, 20)
   if (w === undefined) return

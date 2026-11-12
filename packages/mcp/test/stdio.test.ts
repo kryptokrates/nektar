@@ -12,7 +12,7 @@ import { join } from 'node:path'
 
 const text = (r: unknown) => JSON.parse((r as { content: Array<{ text: string }> }).content[0].text)
 
-test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 60_000 }, async t => {
+test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 60_000 }, async (t) => {
   if ((await skipUnlessStack(t)) === undefined) return
   const bin = fileURLToPath(new URL('../src/bin.js', import.meta.url))
   const transport = new StdioClientTransport({

@@ -66,7 +66,7 @@ test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it
   assert.equal((await mem.fetchTx(txid))?.merklePath, mp)
 })
 
-test('fetchTx: proof and tx lookups are single attempts, remembered when they hit', async t => {
+test('fetchTx: proof and tx lookups are single attempts, remembered when they hit', async (t) => {
   const _lm = await liveMem(t)
   if (_lm === undefined) return
   const { mem, chain } = _lm

@@ -70,7 +70,7 @@ test('STARK derivation verifies against the anchored dagroot record + issued que
   assert.match(String(replay.reason), /already used|not issued/)
 })
 
-test('STARK derivation NEGATIVES: unanchored root, mismatch, unissued query', async t => {
+test('STARK derivation NEGATIVES: unanchored root, mismatch, unissued query', async (t) => {
   const d = dag()
   // 1. dagroot record exists but is NOT anchored → no trusted root
   const w1 = await world(t, { policyDag: d, securityStore: seedQuery })

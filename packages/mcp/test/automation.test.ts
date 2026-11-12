@@ -76,7 +76,7 @@ test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change',
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const payee = PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])
   const r = await mem.sendSats({ amount: 5_000, address: payee })
-  const tx = (chain as any).known.get(r.txid) as Transaction
+  const tx = (await chain.getTx(r.txid)) as Transaction
   assert.ok(tx, 'tx aired on the chain, not just returned as BEEF')
   assert.equal(tx.outputs[0].satoshis, 5_000)
   assert.equal(tx.outputs[0].lockingScript.toHex(), new P2PKH().lock(payee).toHex())
@@ -89,7 +89,8 @@ test('sendSats: scriptHex target + opReturn tag', async (t) => {
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
   const payeeScript = new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])).toHex()
   const r = await mem.sendSats({ amount: 1_000, scriptHex: payeeScript, opReturn: 'nektar-test' })
-  const tx = (chain as any).known.get(r.txid) as Transaction
+  const tx = (await chain.getTx(r.txid)) as Transaction
+  assert.ok(tx, 'tx aired on the chain')
   assert.ok(tx.outputs.some((o) => o.satoshis === 1_000 && o.lockingScript.toHex() === payeeScript))
   assert.ok(
     tx.outputs.some((o) => o.lockingScript.toHex().startsWith('006a')),

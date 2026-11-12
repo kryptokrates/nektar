@@ -154,11 +154,16 @@ export class StackChain implements ChainTracker, Broadcaster {
   /** generatetoaddress to the treasury address; waits for the tip to catch up */
   async mine(n = 1): Promise<void> {
     const addr = this.treasuryAddr ?? new PrivateKey(1).toPublicKey().toAddress([0x6f])
-    const before = await this.currentHeight()
-    await stackRpc(this.cfg, 'generatetoaddress', n, addr)
-    // getblockchaininfo.blocks lags generatetoaddress on Teranode — poll the
-    // header index until the tip reflects the generate call
-    for (let i = 0; i < 40 && (await this.currentHeight()) < before + n; i++) await new Promise((r) => setTimeout(r, 250))
+    const hashes = (await stackRpc(this.cfg, 'generatetoaddress', n, addr)) as string[]
+    // Teranode's getblockchaininfo.blocks lags seconds behind generate; the
+    // header index serves the new blocks almost immediately — wait on that.
+    for (const h of hashes) {
+      for (let i = 0; i < 40; i++) {
+        const hdr = await stackRpc(this.cfg, 'getblockheader', h).catch(() => undefined)
+        if (hdr !== undefined) break
+        await new Promise((r) => setTimeout(r, 100))
+      }
+    }
   }
 }
 
@@ -239,6 +244,10 @@ export class StackTreasury {
   /** reserve entries exist → nothing to do; else mature coinbases are
    *  generated to the treasury key and split into the reserve pool. */
   async ensureFunded(): Promise<void> {
+    // runs under the treasury lock — re-read the reserve so a process that
+    // waited sees the state the lock holder just produced instead of
+    // bootstrapping all over again
+    this.reserve.reload()
     if (this.reserve.utxos.length > 0) return
     const addr = this.key.toPublicKey().toAddress([0x6f])
     const tip = await this.chain.currentHeight()
@@ -248,9 +257,12 @@ export class StackTreasury {
       treasuryFile: join(STATE_DIR, 'treasury.json')
     })
     if (this.reserve.utxos.length === 0 && r === null) {
-      // no mature coinbase found for our key — generate 110 to it, then split
+      // no mature coinbase found for our key — generate 110 to it, then split.
+      // Only the freshly generated range can hold usable coinbases — the
+      // bootstrap scan above already ruled the older mature heights out.
+      const t0 = await this.chain.currentHeight()
       await this.chain.mine(110)
-      await this.reserve.scanCoinbases(this.cfg, (m, ...p) => stackRpc(this.cfg, m, ...p), 1, (await this.chain.currentHeight()) - 101)
+      await this.reserve.scanCoinbases(this.cfg, (m, ...p) => stackRpc(this.cfg, m, ...p), t0, (await this.chain.currentHeight()) - 101)
       await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), { treasuryFile: join(STATE_DIR, 'treasury.json') })
     }
     if (this.reserve.utxos.length === 0) throw new Error('testkit: treasury could not be funded — no mature coinbases')
@@ -262,6 +274,10 @@ export class StackTreasury {
    *  runs dry mid-suite — the split chain is self-funding on regtest. */
   async refill(): Promise<void> {
     await withTreasuryLock(async () => {
+      // another process may have refilled while this one waited on the lock —
+      // splitting the treasury tail again would burn it for nothing
+      this.reserve.reload()
+      if (this.reserve.utxos.length > 0) return
       const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
         treasuryFile: join(STATE_DIR, 'treasury.json')
       })

@@ -216,134 +216,136 @@ export function createHttpApi(
     }
     await transport.handleRequest(req, res, parsed)
   }
-  const server = createServer((req, res) => void (async () => {
-    const send = (code: number, v: unknown, type = 'application/json') => {
-      res.writeHead(code, { 'content-type': type })
-      res.end(typeof v === 'string' ? v : json(v))
-    }
-    const url = new URL(req.url ?? '/', 'http://x')
-    const p = url.pathname.split('/').filter(Boolean)
-    // NEKTAR_HTTP_TOKEN: when set, everything except the public read-only
-    // endpoints (/v1/health, /v1/verify — a QR scan can't send headers, and
-    // verification output is read-only anyway — plus /.well-known/x402,
-    // which is a discovery doc agents must find unauthenticated) requires a
-    // bearer token — the gate that makes a public bind safe. Unset =
-    // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
-    const tok = process.env.NEKTAR_HTTP_TOKEN
-    const publicPath =
-      url.pathname === '/v1/health' ||
-      url.pathname === '/v1/verify' ||
-      url.pathname === '/v1/badge' ||
-      url.pathname === '/.well-known/x402' ||
-      url.pathname === '/.well-known/nektar' ||
-      url.pathname.startsWith('/v1/pack/') ||
-      url.pathname.startsWith('/v1/zkproof/') ||
-      url.pathname === '/v1/broadcaster-callback' ||
-      url.pathname === '/v1/arc-callback'
-    const operatorApproval =
-      url.pathname.startsWith('/v1/automation/approvals/') &&
-      process.env.NEKTAR_OPERATOR_TOKEN &&
-      req.headers.authorization === `Bearer ${process.env.NEKTAR_OPERATOR_TOKEN}`
-    if (tok && !publicPath && !operatorApproval && req.headers.authorization !== `Bearer ${tok}`) {
-      return send(401, { error: 'unauthorized' })
-    }
-    try {
-      if (url.pathname === '/mcp') return await mcp(req, res)
-      if (req.method === 'GET' && url.pathname === '/v1/health') return send(200, { ok: true })
-      if (req.method === 'GET' && url.pathname === '/v1/openapi.json') return send(200, OPENAPI)
-      if (req.method === 'GET' && url.pathname === '/v1/metrics') return send(200, mem.metrics.render(), 'text/plain; version=0.0.4')
-      if (req.method === 'GET' && url.pathname === '/dashboard/events') {
-        // SSE — one line per state change; the page swaps its blocks on each
-        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
-        res.write(': connected\n\n')
-        const push = (name: string) => {
-          try {
-            res.write(`data: ${name}\n\n`)
-          } catch {}
+  const server = createServer(
+    (req, res) =>
+      void (async () => {
+        const send = (code: number, v: unknown, type = 'application/json') => {
+          res.writeHead(code, { 'content-type': type })
+          res.end(typeof v === 'string' ? v : json(v))
         }
-        mem.events.on('change', push)
-        const beat = setInterval(() => {
-          try {
-            res.write(': beat\n\n')
-          } catch {}
-        }, 15_000)
-        req.on('close', () => {
-          clearInterval(beat)
-          mem.events.off('change', push)
-        })
-        return
-      }
-      if (req.method === 'GET' && url.pathname === '/dashboard') {
-        // the operator audit surface — one page: identity, money, receipts,
-        // market. Every block degrades to an honest empty state.
-        const esc = (s: unknown) =>
-          (s === null || s === undefined
-            ? ''
-            : typeof s === 'object'
-              ? JSON.stringify(s)
-              : String(s as string | number | boolean | bigint)
-          ).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
-        const d = await mem.doctor()
-        if (ops?.wallet) {
-          const w = (await ops.wallet()) as Record<string, unknown>
-          d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
+        const url = new URL(req.url ?? '/', 'http://x')
+        const p = url.pathname.split('/').filter(Boolean)
+        // NEKTAR_HTTP_TOKEN: when set, everything except the public read-only
+        // endpoints (/v1/health, /v1/verify — a QR scan can't send headers, and
+        // verification output is read-only anyway — plus /.well-known/x402,
+        // which is a discovery doc agents must find unauthenticated) requires a
+        // bearer token — the gate that makes a public bind safe. Unset =
+        // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
+        const tok = process.env.NEKTAR_HTTP_TOKEN
+        const publicPath =
+          url.pathname === '/v1/health' ||
+          url.pathname === '/v1/verify' ||
+          url.pathname === '/v1/badge' ||
+          url.pathname === '/.well-known/x402' ||
+          url.pathname === '/.well-known/nektar' ||
+          url.pathname.startsWith('/v1/pack/') ||
+          url.pathname.startsWith('/v1/zkproof/') ||
+          url.pathname === '/v1/broadcaster-callback' ||
+          url.pathname === '/v1/arc-callback'
+        const operatorApproval =
+          url.pathname.startsWith('/v1/automation/approvals/') &&
+          process.env.NEKTAR_OPERATOR_TOKEN &&
+          req.headers.authorization === `Bearer ${process.env.NEKTAR_OPERATOR_TOKEN}`
+        if (tok && !publicPath && !operatorApproval && req.headers.authorization !== `Bearer ${tok}`) {
+          return send(401, { error: 'unauthorized' })
         }
-        const host = req.headers.host ?? 'localhost'
-        const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${host}`
-        // receipts — newest last N
-        const rrecs = (await mem.records('__receipts__').catch(() => [] as Array<{ seq: number; data?: string }>)) as Array<{ seq: number; data?: string }>
-        const receiptRows = rrecs
-          .slice(-10)
-          .reverse()
-          .map((r) => {
-            let amt = '',
-              tool = ''
-            const m = r.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
-            if (m) {
+        try {
+          if (url.pathname === '/mcp') return await mcp(req, res)
+          if (req.method === 'GET' && url.pathname === '/v1/health') return send(200, { ok: true })
+          if (req.method === 'GET' && url.pathname === '/v1/openapi.json') return send(200, OPENAPI)
+          if (req.method === 'GET' && url.pathname === '/v1/metrics') return send(200, mem.metrics.render(), 'text/plain; version=0.0.4')
+          if (req.method === 'GET' && url.pathname === '/dashboard/events') {
+            // SSE — one line per state change; the page swaps its blocks on each
+            res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+            res.write(': connected\n\n')
+            const push = (name: string) => {
               try {
-                const j = JSON.parse(Buffer.from(m[1], 'base64url').toString())
-                amt = String(j.payment?.amountSats ?? j.payment?.amount ?? '')
-                tool = String(j.tool ?? j.toolName ?? '')
+                res.write(`data: ${name}\n\n`)
               } catch {}
             }
-            return `<div class="row"><span class="dim">#${r.seq}</span><span>${esc(tool || 'answer')}</span><span>${amt ? esc(amt) + ' sats' : ''}</span><a class="pill" href="${base}/v1/verify?s=${r.seq}&format=html">verify ↗</a></div>`
-          })
-          .join('')
-        // market — offerable shards + autorespond + fraud
-        const cat = await mem.shardCatalog().catch(() => [] as Array<{ shard: string; domains: string[]; offers?: Array<{ kind: string; priceSats: number }> }>)
-        const marketRows = cat
-          .map(
-            (m) =>
-              `<div class="row"><span><b>${esc(m.shard)}</b></span><span class="dim">${esc(m.domains.join(', '))}</span><span>${esc(m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? '')}</span></div>`
-          )
-          .join('')
-        const dataDir = (mem as unknown as { opts?: { dataDir?: string } }).opts?.dataDir ?? '.nektar'
-        const fraudRows = ''
-        // agents panel — this agent's declared identity + discovered peers
-        const agentsRows = `<div class="row"><span><b>${esc(process.env.NEKTAR_MODEL_ID ?? 'this agent')}</b></span><span class="dim">${esc(mem.operatorKey().toPublicKey().toString().slice(0, 16))}…</span></div>`
-        const f = d.funding
-        const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
-        const up = process.uptime()
-        const upStr = up > 86400 ? `${Math.floor(up / 86400)}d` : up > 3600 ? `${Math.floor(up / 3600)}h` : `${Math.floor(up / 60)}m`
-        const badge = (on: boolean, yes: string, no: string) => `<span class="badge ${on ? 'on' : 'off'}">${on ? yes : no}</span>`
-        const au = mem.automation
-        const pending = au ? await au.store.approvals('pending') : []
-        const autoOps = au
-          ? (await au.store.operations())
-              .filter((o) => o.kind !== 'enable')
-              .slice(-8)
+            mem.events.on('change', push)
+            const beat = setInterval(() => {
+              try {
+                res.write(': beat\n\n')
+              } catch {}
+            }, 15_000)
+            req.on('close', () => {
+              clearInterval(beat)
+              mem.events.off('change', push)
+            })
+            return
+          }
+          if (req.method === 'GET' && url.pathname === '/dashboard') {
+            // the operator audit surface — one page: identity, money, receipts,
+            // market. Every block degrades to an honest empty state.
+            const esc = (s: unknown) =>
+              (s === null || s === undefined ? '' : typeof s === 'object' ? JSON.stringify(s) : String(s as string | number | boolean | bigint)).replace(
+                /[&<>"]/g,
+                (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!
+              )
+            const d = await mem.doctor()
+            if (ops?.wallet) {
+              const w = (await ops.wallet()) as Record<string, unknown>
+              d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
+            }
+            const host = req.headers.host ?? 'localhost'
+            const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${host}`
+            // receipts — newest last N
+            const rrecs = (await mem.records('__receipts__').catch(() => [] as Array<{ seq: number; data?: string }>)) as Array<{ seq: number; data?: string }>
+            const receiptRows = rrecs
+              .slice(-10)
               .reverse()
-          : []
-        const escJson = (v: unknown) => esc(JSON.stringify(v))
-        const automationCard = au
-          ? `<div class="card">
+              .map((r) => {
+                let amt = '',
+                  tool = ''
+                const m = r.data?.match(/^receipt:[0-9a-f]+:([A-Za-z0-9_-]+)$/)
+                if (m) {
+                  try {
+                    const j = JSON.parse(Buffer.from(m[1], 'base64url').toString())
+                    amt = String(j.payment?.amountSats ?? j.payment?.amount ?? '')
+                    tool = String(j.tool ?? j.toolName ?? '')
+                  } catch {}
+                }
+                return `<div class="row"><span class="dim">#${r.seq}</span><span>${esc(tool || 'answer')}</span><span>${amt ? esc(amt) + ' sats' : ''}</span><a class="pill" href="${base}/v1/verify?s=${r.seq}&format=html">verify ↗</a></div>`
+              })
+              .join('')
+            // market — offerable shards + autorespond + fraud
+            const cat = await mem
+              .shardCatalog()
+              .catch(() => [] as Array<{ shard: string; domains: string[]; offers?: Array<{ kind: string; priceSats: number }> }>)
+            const marketRows = cat
+              .map(
+                (m) =>
+                  `<div class="row"><span><b>${esc(m.shard)}</b></span><span class="dim">${esc(m.domains.join(', '))}</span><span>${esc(m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? '')}</span></div>`
+              )
+              .join('')
+            const dataDir = (mem as unknown as { opts?: { dataDir?: string } }).opts?.dataDir ?? '.nektar'
+            const fraudRows = ''
+            // agents panel — this agent's declared identity + discovered peers
+            const agentsRows = `<div class="row"><span><b>${esc(process.env.NEKTAR_MODEL_ID ?? 'this agent')}</b></span><span class="dim">${esc(mem.operatorKey().toPublicKey().toString().slice(0, 16))}…</span></div>`
+            const f = d.funding
+            const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
+            const up = process.uptime()
+            const upStr = up > 86400 ? `${Math.floor(up / 86400)}d` : up > 3600 ? `${Math.floor(up / 3600)}h` : `${Math.floor(up / 60)}m`
+            const badge = (on: boolean, yes: string, no: string) => `<span class="badge ${on ? 'on' : 'off'}">${on ? yes : no}</span>`
+            const au = mem.automation
+            const pending = au ? await au.store.approvals('pending') : []
+            const autoOps = au
+              ? (await au.store.operations())
+                  .filter((o) => o.kind !== 'enable')
+                  .slice(-8)
+                  .reverse()
+              : []
+            const escJson = (v: unknown) => esc(JSON.stringify(v))
+            const automationCard = au
+              ? `<div class="card">
 <div class="top"><span class="label">Automation</span><span class="tags">${pending.length} pending approval${pending.length === 1 ? '' : 's'}</span></div>
 ${pending.length ? pending.map((a) => `<div class="row"><div><b>${esc(a.reason)}</b><div class="dim">≤ ${a.maxExtraSats} sats · ${esc(a.operationId.slice(0, 8))}… · expires ${esc(new Date(a.expiresAt).toISOString())}</div></div><button class="pill" onclick="decide('${esc(a.approvalId)}',true)">approve</button><button class="pill" onclick="decide('${esc(a.approvalId)}',false)">deny</button></div>`).join('') : '<div class="empty">no pending approvals — routine trades do not prompt</div>'}
 ${autoOps.map((o) => `<div class="row"><span class="dim">${esc(o.role)} ${esc(o.kind)}</span><b>${esc(o.state)}</b>${o.lastError ? `<span class="warn">${esc(o.lastError)}</span>` : ''}</div>`).join('')}
 <div class="stream" data-ev="automation"></div>
 </div>`
-          : ''
-        const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>nektar — operator</title>
+              : ''
+            const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>nektar — operator</title>
 <style>body{transition:none}#live{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4cc26b;margin-left:6px;vertical-align:middle}
 body{background:#0d0d0d;color:#eaeaea;font:14px/1.6 ui-monospace,monospace;max-width:880px;margin:0 auto;padding:48px 20px}
 header{margin-bottom:40px}h1{font-size:22px;margin:0 0 6px;font-weight:600}
@@ -427,233 +429,234 @@ es.onerror = () => { document.getElementById('live').style.background = '#e5534b
 es.onopen = () => { document.getElementById('live').style.background = '#4cc26b' }
 </script>
 </body></html>`
-        return send(200, html, 'text/html; charset=utf-8')
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/automation/state') {
-        const au = mem.automation
-        if (!au) return send(404, { error: 'automation not enabled' })
-        return send(200, {
-          operations: (await au.store.operations()).map((o) => ({
-            operationId: o.operationId,
-            role: o.role,
-            kind: o.kind,
-            state: o.state,
-            lastError: o.lastError
-          })),
-          approvals: await au.store.approvals('pending')
-        })
-      }
-      if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'automation' && p[2] === 'approvals' && p.length === 4) {
-        const au = mem.automation
-        if (!au) return send(404, { error: 'automation not enabled' })
-        const operator = process.env.NEKTAR_OPERATOR_TOKEN
-        if (!operator) return send(403, { error: 'operator approvals disabled — set NEKTAR_OPERATOR_TOKEN' })
-        if (req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required (the agent bearer cannot approve)' })
-        const origin = req.headers.origin
-        if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return send(403, { error: 'bad origin' })
-        const decisionBody = (await body(req).catch(() => ({}))) as { approve?: boolean }
-        let r
-        try {
-          r = await au.store.decideApproval(p[3], decisionBody.approve === true, 'dashboard:operator')
-        } catch (e) {
-          return send(400, { error: (e as Error).message })
-        }
-        mem.events.emit('change', 'automation')
-        return send(200, r)
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: visibleTools() })
-      if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
-        if (!visibleTools().some((t) => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
-        try {
-          return send(200, await callTool(mem, p[2], await body(req), { ops, external: !tok }))
-        } catch (e) {
-          return send(400, { error: (e as Error).message })
-        }
-      }
-      if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'zkproof' && p.length === 3) {
-        const bytes = mem.getProof(decodeURIComponent(p[2]))
-        if (!bytes) return send(404, { error: 'no proof artifact under that commitment' })
-        res.writeHead(200, { 'content-type': 'application/octet-stream' })
-        return res.end(Buffer.from(bytes))
-      }
-      if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'proof' && p.length === 4) {
-        const r = await mem.prove(decodeURIComponent(p[2]), Number(p[3]))
-        return send(200, { result: r.result, bundle: r.bundle ?? null })
-      }
-      if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'checkpoint' && p.length === 3) {
-        const cp = mem.checkpoints(decodeURIComponent(p[2])).at(-1)
-        return cp ? send(200, { checkpoint: cp, logPublicKey: mem.logPublicKey() }) : send(404, { error: 'no checkpoint' })
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/verify') {
-        const tok = url.searchParams.get('r')
-        const seq = url.searchParams.get('s')
-        if (!tok && seq === null) return send(400, { error: 'missing ?r=<receipt token> or ?s=<receipt seq>' })
-        try {
-          const { verifyReceipt } = await import('./receipt.js')
-          let arg: { token?: string; receiptHash?: string } = { token: tok! }
-          if (!tok) {
-            // ?s=N — human-readable form: the Nth record on __receipts__
-            const rec = (await mem.recall('__receipts__', { seq: Number(seq) })).items[0]
-            const h = rec?.text?.split(':')[1]
-            if (!h) return send(404, { error: `no receipt at __receipts__ seq ${seq}` })
-            arg = { receiptHash: h }
+            return send(200, html, 'text/html; charset=utf-8')
           }
-          const result = await verifyReceipt(mem, arg)
-          if (url.searchParams.get('format') === 'html' || req.headers.accept?.includes('text/html')) {
-            const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
-            const q = tok ? `r=${tok}` : `s=${seq}`
-            mem.metrics.inc('nektar_verify_views_total', {}, 1, 'verify page views')
-            // viral edge: cited shards this operator offers publicly become
-            // a one-line import CTA — "take the memory behind this answer"
-            const offerable = new Set(await mem.publicShards().catch(() => [] as string[]))
-            const cited = [
-              ...new Set(
-                ((result.receipt as { fragmentRefs?: Array<{ shard: string }> } | undefined)?.fragmentRefs ?? [])
-                  .map((f) => f.shard)
-                  .filter((s) => offerable.has(s))
-              )
-            ]
-            return send(
-              200,
-              await verifyPage(result, `${base}/v1/verify?${q}&format=html`, {
-                base,
-                importShards: cited,
-                totals: { views: mem.metrics.value('nektar_verify_views_total'), anchors: mem.metrics.value('nektar_anchors_total') },
-                operator: mem.fundingStatus().address
-              }),
-              'text/html; charset=utf-8'
-            )
-          }
-          return send(200, result)
-        } catch (e) {
-          return send(400, { error: (e as Error).message })
-        }
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/badge') {
-        const tok = url.searchParams.get('r')
-        if (!tok) return send(400, { error: 'missing ?r=<receipt token>' })
-        try {
-          const { verifyReceipt } = await import('./receipt.js')
-          const result = await verifyReceipt(mem, { token: tok })
-          const pass = (result.checks ?? []).filter((c) => c.ok === true).length
-          const total = (result.checks ?? []).filter((c) => c.ok !== 'info' && c.ok !== 'skip').length
-          const att = (result.receipt as { modelAttestation?: { verifierTxid?: string } } | undefined)?.modelAttestation
-          const value = result.ok ? `verified ${pass}/${total}${att?.verifierTxid ? ' · model on-chain' : att ? ' · model attested' : ''}` : 'failed'
-          return send(200, badgeSvg(value, result.ok ? '#2ea043' : '#e5534b'), 'image/svg+xml; charset=utf-8')
-        } catch {
-          return send(200, badgeSvg('unverifiable', '#6e7681'), 'image/svg+xml; charset=utf-8')
-        }
-      }
-      // broadcaster tx-status callback — pushes SEEN_ON_NETWORK → MINED etc.
-      // for every tx we submitted with X-CallbackUrl, so anchor confirmations
-      // arrive as events, not polls. /v1/arc-callback is kept for transactions
-      // submitted before the rename (they carry the old URL). Outbound-only
-      // mode instead consumes the same statuses via the /events SSE stream —
-      // the handler below is shared by both paths.
-      if (req.method === 'POST' && (url.pathname === '/v1/broadcaster-callback' || url.pathname === '/v1/arc-callback')) {
-        try {
-          // NEKTAR_CALLBACK_TOKEN was sent as X-CallbackToken; BSV Broadcaster
-          // delivers it on the webhook as Authorization: Bearer (openapi)
-          const cbTok = process.env.NEKTAR_CALLBACK_TOKEN
-          if (cbTok) {
-            const expected = Buffer.from(`Bearer ${cbTok}`)
-            const given = Buffer.from(String(req.headers.authorization ?? ''))
-            if (given.length !== expected.length || !timingSafeEqual(given, expected)) return send(401, { error: 'bad callback token' })
-          }
-          const j = (await body(req)) as any
-          await handleBroadcasterStatus(mem, j)
-          return send(200, { ok: true })
-        } catch {
-          return send(400, { error: 'bad callback' })
-        }
-      }
-      // F3 budget state — the cumulative ledger's live numbers for a grant
-      if (req.method === 'GET' && url.pathname === '/v1/budget') {
-        const gid = url.searchParams.get('grantId') ?? ''
-        const s = gid ? mem.budget?.status(gid) : undefined
-        return send(200, { grantId: gid, budget: s ?? null })
-      }
-      if (req.method === 'GET' && url.pathname === '/.well-known/x402') {
-        const { paymentsEnabled, PAID_TOOLS, priceFor } = await import('./pay.js')
-        if (!paymentsEnabled()) return send(404, { error: 'payments disabled (NEKTAR_PAYMENTS=1)' })
-        const n = process.env.NEKTAR_NETWORK ?? 'regtest'
-        return send(200, {
-          x402Version: 2,
-          scheme: 'exact',
-          network: n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest',
-          resources: [...PAID_TOOLS].map((t) => ({
-            url: `tool://${t}`,
-            description: `nektar ${t}`,
-            priceSats: priceFor(t),
-            payVia: `call ${t} without payment → invoice in the result, or GET /v1/pay/quote?tool=${t}`
-          }))
-        })
-      }
-      // pack sharing: any visitor may fetch a public shard's pack + discover
-      // what's offered — the viral cold-start edge (importShard re-verifies
-      // every bundle, so serving adds zero trust). NEKTAR_PACK_SHARE=0 opts out.
-      if (req.method === 'GET' && url.pathname === '/.well-known/nektar') {
-        if (/^(0|false|no)$/i.test(process.env.NEKTAR_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
-        const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
-        const pub = await mem.publicShards()
-        const catalog = await mem.shardCatalog().catch(() => [] as import('./memory.js').ShardManifest[])
-        return send(200, {
-          v: 1,
-          kind: 'nektar-discovery',
-          verifyBase: `${base}/v1/verify`,
-          logPublicKey: mem.logPublicKey(),
-          operatorPub: mem.operatorKey()?.toPublicKey().toString(),
-          publicShards: await Promise.all(
-            pub.map(async (s) => {
-              const manifest = catalog.find((m) => m.shard === s)
-              const head = mem.tailLink(s)
-              return {
-                shard: s,
-                shardId: manifest?.shardId,
-                records: (await mem.records(s)).length,
-                domains: manifest?.domains,
-                desc: manifest?.desc,
-                offers: manifest?.offers,
-                headTxid: head?.txid,
-                packUrl: `${base}/v1/pack/${encodeURIComponent(s)}`,
-                ...(mem.packStoreRef(s) !== undefined ? { store: mem.packStoreRef(s) } : {}),
-                import: { tool: 'importShard', args: { from: base, shard: s } }
-              }
+          if (req.method === 'GET' && url.pathname === '/v1/automation/state') {
+            const au = mem.automation
+            if (!au) return send(404, { error: 'automation not enabled' })
+            return send(200, {
+              operations: (await au.store.operations()).map((o) => ({
+                operationId: o.operationId,
+                role: o.role,
+                kind: o.kind,
+                state: o.state,
+                lastError: o.lastError
+              })),
+              approvals: await au.store.approvals('pending')
             })
-          )
-        })
-      }
-      if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'pack' && p.length === 3) {
-        if (/^(0|false|no)$/i.test(process.env.NEKTAR_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
-        try {
-          const pack = await mem.exportShardPack(decodeURIComponent(p[2]))
-          mem.metrics.inc('nektar_packs_served_total', {}, 1, 'public shard packs served')
-          return send(200, pack)
+          }
+          if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'automation' && p[2] === 'approvals' && p.length === 4) {
+            const au = mem.automation
+            if (!au) return send(404, { error: 'automation not enabled' })
+            const operator = process.env.NEKTAR_OPERATOR_TOKEN
+            if (!operator) return send(403, { error: 'operator approvals disabled — set NEKTAR_OPERATOR_TOKEN' })
+            if (req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required (the agent bearer cannot approve)' })
+            const origin = req.headers.origin
+            if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return send(403, { error: 'bad origin' })
+            const decisionBody = (await body(req).catch(() => ({}))) as { approve?: boolean }
+            let r
+            try {
+              r = await au.store.decideApproval(p[3], decisionBody.approve === true, 'dashboard:operator')
+            } catch (e) {
+              return send(400, { error: (e as Error).message })
+            }
+            mem.events.emit('change', 'automation')
+            return send(200, r)
+          }
+          if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: visibleTools() })
+          if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
+            if (!visibleTools().some((t) => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
+            try {
+              return send(200, await callTool(mem, p[2], await body(req), { ops, external: !tok }))
+            } catch (e) {
+              return send(400, { error: (e as Error).message })
+            }
+          }
+          if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'zkproof' && p.length === 3) {
+            const bytes = mem.getProof(decodeURIComponent(p[2]))
+            if (!bytes) return send(404, { error: 'no proof artifact under that commitment' })
+            res.writeHead(200, { 'content-type': 'application/octet-stream' })
+            return res.end(Buffer.from(bytes))
+          }
+          if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'proof' && p.length === 4) {
+            const r = await mem.prove(decodeURIComponent(p[2]), Number(p[3]))
+            return send(200, { result: r.result, bundle: r.bundle ?? null })
+          }
+          if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'checkpoint' && p.length === 3) {
+            const cp = mem.checkpoints(decodeURIComponent(p[2])).at(-1)
+            return cp ? send(200, { checkpoint: cp, logPublicKey: mem.logPublicKey() }) : send(404, { error: 'no checkpoint' })
+          }
+          if (req.method === 'GET' && url.pathname === '/v1/verify') {
+            const tok = url.searchParams.get('r')
+            const seq = url.searchParams.get('s')
+            if (!tok && seq === null) return send(400, { error: 'missing ?r=<receipt token> or ?s=<receipt seq>' })
+            try {
+              const { verifyReceipt } = await import('./receipt.js')
+              let arg: { token?: string; receiptHash?: string } = { token: tok! }
+              if (!tok) {
+                // ?s=N — human-readable form: the Nth record on __receipts__
+                const rec = (await mem.recall('__receipts__', { seq: Number(seq) })).items[0]
+                const h = rec?.text?.split(':')[1]
+                if (!h) return send(404, { error: `no receipt at __receipts__ seq ${seq}` })
+                arg = { receiptHash: h }
+              }
+              const result = await verifyReceipt(mem, arg)
+              if (url.searchParams.get('format') === 'html' || req.headers.accept?.includes('text/html')) {
+                const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
+                const q = tok ? `r=${tok}` : `s=${seq}`
+                mem.metrics.inc('nektar_verify_views_total', {}, 1, 'verify page views')
+                // viral edge: cited shards this operator offers publicly become
+                // a one-line import CTA — "take the memory behind this answer"
+                const offerable = new Set(await mem.publicShards().catch(() => [] as string[]))
+                const cited = [
+                  ...new Set(
+                    ((result.receipt as { fragmentRefs?: Array<{ shard: string }> } | undefined)?.fragmentRefs ?? [])
+                      .map((f) => f.shard)
+                      .filter((s) => offerable.has(s))
+                  )
+                ]
+                return send(
+                  200,
+                  await verifyPage(result, `${base}/v1/verify?${q}&format=html`, {
+                    base,
+                    importShards: cited,
+                    totals: { views: mem.metrics.value('nektar_verify_views_total'), anchors: mem.metrics.value('nektar_anchors_total') },
+                    operator: mem.fundingStatus().address
+                  }),
+                  'text/html; charset=utf-8'
+                )
+              }
+              return send(200, result)
+            } catch (e) {
+              return send(400, { error: (e as Error).message })
+            }
+          }
+          if (req.method === 'GET' && url.pathname === '/v1/badge') {
+            const tok = url.searchParams.get('r')
+            if (!tok) return send(400, { error: 'missing ?r=<receipt token>' })
+            try {
+              const { verifyReceipt } = await import('./receipt.js')
+              const result = await verifyReceipt(mem, { token: tok })
+              const pass = (result.checks ?? []).filter((c) => c.ok === true).length
+              const total = (result.checks ?? []).filter((c) => c.ok !== 'info' && c.ok !== 'skip').length
+              const att = (result.receipt as { modelAttestation?: { verifierTxid?: string } } | undefined)?.modelAttestation
+              const value = result.ok ? `verified ${pass}/${total}${att?.verifierTxid ? ' · model on-chain' : att ? ' · model attested' : ''}` : 'failed'
+              return send(200, badgeSvg(value, result.ok ? '#2ea043' : '#e5534b'), 'image/svg+xml; charset=utf-8')
+            } catch {
+              return send(200, badgeSvg('unverifiable', '#6e7681'), 'image/svg+xml; charset=utf-8')
+            }
+          }
+          // broadcaster tx-status callback — pushes SEEN_ON_NETWORK → MINED etc.
+          // for every tx we submitted with X-CallbackUrl, so anchor confirmations
+          // arrive as events, not polls. /v1/arc-callback is kept for transactions
+          // submitted before the rename (they carry the old URL). Outbound-only
+          // mode instead consumes the same statuses via the /events SSE stream —
+          // the handler below is shared by both paths.
+          if (req.method === 'POST' && (url.pathname === '/v1/broadcaster-callback' || url.pathname === '/v1/arc-callback')) {
+            try {
+              // NEKTAR_CALLBACK_TOKEN was sent as X-CallbackToken; BSV Broadcaster
+              // delivers it on the webhook as Authorization: Bearer (openapi)
+              const cbTok = process.env.NEKTAR_CALLBACK_TOKEN
+              if (cbTok) {
+                const expected = Buffer.from(`Bearer ${cbTok}`)
+                const given = Buffer.from(String(req.headers.authorization ?? ''))
+                if (given.length !== expected.length || !timingSafeEqual(given, expected)) return send(401, { error: 'bad callback token' })
+              }
+              const j = (await body(req)) as any
+              await handleBroadcasterStatus(mem, j)
+              return send(200, { ok: true })
+            } catch {
+              return send(400, { error: 'bad callback' })
+            }
+          }
+          // F3 budget state — the cumulative ledger's live numbers for a grant
+          if (req.method === 'GET' && url.pathname === '/v1/budget') {
+            const gid = url.searchParams.get('grantId') ?? ''
+            const s = gid ? mem.budget?.status(gid) : undefined
+            return send(200, { grantId: gid, budget: s ?? null })
+          }
+          if (req.method === 'GET' && url.pathname === '/.well-known/x402') {
+            const { paymentsEnabled, PAID_TOOLS, priceFor } = await import('./pay.js')
+            if (!paymentsEnabled()) return send(404, { error: 'payments disabled (NEKTAR_PAYMENTS=1)' })
+            const n = process.env.NEKTAR_NETWORK ?? 'regtest'
+            return send(200, {
+              x402Version: 2,
+              scheme: 'exact',
+              network: n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest',
+              resources: [...PAID_TOOLS].map((t) => ({
+                url: `tool://${t}`,
+                description: `nektar ${t}`,
+                priceSats: priceFor(t),
+                payVia: `call ${t} without payment → invoice in the result, or GET /v1/pay/quote?tool=${t}`
+              }))
+            })
+          }
+          // pack sharing: any visitor may fetch a public shard's pack + discover
+          // what's offered — the viral cold-start edge (importShard re-verifies
+          // every bundle, so serving adds zero trust). NEKTAR_PACK_SHARE=0 opts out.
+          if (req.method === 'GET' && url.pathname === '/.well-known/nektar') {
+            if (/^(0|false|no)$/i.test(process.env.NEKTAR_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
+            const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
+            const pub = await mem.publicShards()
+            const catalog = await mem.shardCatalog().catch(() => [] as import('./memory.js').ShardManifest[])
+            return send(200, {
+              v: 1,
+              kind: 'nektar-discovery',
+              verifyBase: `${base}/v1/verify`,
+              logPublicKey: mem.logPublicKey(),
+              operatorPub: mem.operatorKey()?.toPublicKey().toString(),
+              publicShards: await Promise.all(
+                pub.map(async (s) => {
+                  const manifest = catalog.find((m) => m.shard === s)
+                  const head = mem.tailLink(s)
+                  return {
+                    shard: s,
+                    shardId: manifest?.shardId,
+                    records: (await mem.records(s)).length,
+                    domains: manifest?.domains,
+                    desc: manifest?.desc,
+                    offers: manifest?.offers,
+                    headTxid: head?.txid,
+                    packUrl: `${base}/v1/pack/${encodeURIComponent(s)}`,
+                    ...(mem.packStoreRef(s) !== undefined ? { store: mem.packStoreRef(s) } : {}),
+                    import: { tool: 'importShard', args: { from: base, shard: s } }
+                  }
+                })
+              )
+            })
+          }
+          if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'pack' && p.length === 3) {
+            if (/^(0|false|no)$/i.test(process.env.NEKTAR_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
+            try {
+              const pack = await mem.exportShardPack(decodeURIComponent(p[2]))
+              mem.metrics.inc('nektar_packs_served_total', {}, 1, 'public shard packs served')
+              return send(200, pack)
+            } catch (e) {
+              const m = (e as Error).message
+              return send(/private|level>0/.test(m) ? 403 : 404, { error: m })
+            }
+          }
+          if (req.method === 'GET' && url.pathname === '/v1/pay/quote') {
+            const { paymentsEnabled, PAID_TOOLS, paymentRequired } = await import('./pay.js')
+            if (!paymentsEnabled()) return send(404, { error: 'payments disabled (NEKTAR_PAYMENTS=1)' })
+            const tool = url.searchParams.get('tool') ?? 'groundedAnswer'
+            if (!PAID_TOOLS.has(tool)) return send(400, { error: `not a paid tool: ${tool}` })
+            const pr = paymentRequired(tool)
+            res.writeHead(402, { 'content-type': 'application/json', 'PAYMENT-REQUIRED': Buffer.from(JSON.stringify(pr.required)).toString('base64') })
+            return res.end(json(pr))
+          }
+          if (req.method === 'GET' && url.pathname === '/v1/wallet') {
+            return ops ? send(200, await ops.wallet()) : send(404, { error: 'ops not enabled (main only)' })
+          }
+          if (req.method === 'GET' && url.pathname === '/v1/costs') {
+            return ops ? send(200, { costs: ops.costs() }) : send(404, { error: 'ops not enabled (main only)' })
+          }
+          return send(404, { error: 'not found' })
         } catch (e) {
-          const m = (e as Error).message
-          return send(/private|level>0/.test(m) ? 403 : 404, { error: m })
+          if (!res.headersSent) send(500, { error: (e as Error).message })
         }
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/pay/quote') {
-        const { paymentsEnabled, PAID_TOOLS, paymentRequired } = await import('./pay.js')
-        if (!paymentsEnabled()) return send(404, { error: 'payments disabled (NEKTAR_PAYMENTS=1)' })
-        const tool = url.searchParams.get('tool') ?? 'groundedAnswer'
-        if (!PAID_TOOLS.has(tool)) return send(400, { error: `not a paid tool: ${tool}` })
-        const pr = paymentRequired(tool)
-        res.writeHead(402, { 'content-type': 'application/json', 'PAYMENT-REQUIRED': Buffer.from(JSON.stringify(pr.required)).toString('base64') })
-        return res.end(json(pr))
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/wallet') {
-        return ops ? send(200, await ops.wallet()) : send(404, { error: 'ops not enabled (main only)' })
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/costs') {
-        return ops ? send(200, { costs: ops.costs() }) : send(404, { error: 'ops not enabled (main only)' })
-      }
-      return send(404, { error: 'not found' })
-    } catch (e) {
-      if (!res.headersSent) send(500, { error: (e as Error).message })
-    }
-  })())
+      })()
+  )
   server.on('close', () => {
     for (const t of sessions.values()) void t.close()
   })

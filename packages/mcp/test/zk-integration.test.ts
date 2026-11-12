@@ -61,7 +61,7 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
       'anchor of another batch (R differs)',
       (async () => {
         const o = await anchoredBatch(t, dsha256(utf8('other batch')), 5)
-  if (o === undefined) return { ok: false, reason: 'skipped' }
+        if (o === undefined) return { ok: false, reason: 'skipped' }
         return v(proofBytes(), o, issued(q), { shard: o.shard })
       })(),
       /not the anchored R/
@@ -70,7 +70,7 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
       'anchored size differs',
       (async () => {
         const o = await anchoredBatch(t, fromHex(fx.journal.root), 6)
-  if (o === undefined) return { ok: false, reason: 'skipped' }
+        if (o === undefined) return { ok: false, reason: 'skipped' }
         return v(proofBytes(), o, issued(q), { shard: o.shard })
       })(),
       /size/
@@ -81,7 +81,7 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
       'anchor not mined',
       (async () => {
         const o = await anchoredBatch(t, fromHex(fx.journal.root), 5, false)
-  if (o === undefined) return { ok: false, reason: 'skipped' }
+        if (o === undefined) return { ok: false, reason: 'skipped' }
         return v(proofBytes(), o, issued(q), { shard: o.shard })
       })(),
       /NotMined/

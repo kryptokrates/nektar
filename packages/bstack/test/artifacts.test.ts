@@ -6,8 +6,7 @@ import { signWant, verifyWant, signOffer, verifyOffer, wantTaskDigest, type Sign
 const key = PrivateKey.fromRandom()
 const other = PrivateKey.fromRandom()
 const want = (o: Record<string, unknown> = {}, k = key) => signWant(k, { domains: ['soccer'], ts: Date.now(), ...o })
-const offer = (o: Record<string, unknown> = {}, k = key) =>
-  signOffer(k, { shard: 's', seq: 0, priceSats: 100, domains: ['soccer'], ts: Date.now(), ...o })
+const offer = (o: Record<string, unknown> = {}, k = key) => signOffer(k, { shard: 's', seq: 0, priceSats: 100, domains: ['soccer'], ts: Date.now(), ...o })
 const pub = key.toPublicKey().toString()
 const quote = (price = 100) => ({
   cfg: { sellerPkh: 'a'.repeat(40), price, hWrapped: 'b'.repeat(64), refundAfter: 1_000_000, maxFee: 10 },

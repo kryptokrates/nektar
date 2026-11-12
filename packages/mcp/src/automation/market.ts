@@ -292,7 +292,7 @@ export class MarketEngine {
       const operation = await this.d.store.operation(operationId)
       if (!operation) return undefined
       const data = { ...operation.data }
-      if (operation.role === 'seller' && data.offer) data.offer = { ...(data.offer), wrapped: '[sealed]' }
+      if (operation.role === 'seller' && data.offer) data.offer = { ...data.offer, wrapped: '[sealed]' }
       return { operation: { ...operation, data }, events: await this.d.store.events(operationId) }
     })
   }

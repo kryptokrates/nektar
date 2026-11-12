@@ -1958,14 +1958,7 @@ export class NektarMemory {
    *  the signed store first, then unsigned against the advertised endpoint
    *  (no credentials needed on a public-read gateway); the keyed object is
    *  the compatibility fallback, signed then unsigned. */
-  async fetchStoredPack(ref: {
-    bucket?: string
-    key?: string
-    sha256?: string
-    size?: number
-    chirp?: string
-    endpoint?: string
-  }): Promise<ShardPack> {
+  async fetchStoredPack(ref: { bucket?: string; key?: string; sha256?: string; size?: number; chirp?: string; endpoint?: string }): Promise<ShardPack> {
     const st = this.opts.objectStore
     const bucket = ref.bucket ?? st?.bucket
     const asPack = (b: Uint8Array): ShardPack => JSON.parse(new TextDecoder().decode(b)) as ShardPack
@@ -2218,7 +2211,7 @@ export class NektarMemory {
     }
     this.promises.push(...s.promises)
     // state files written before the transaction graph kept parents here
-    for (const hex of Object.values((s.txHex ?? {}))) {
+    for (const hex of Object.values(s.txHex ?? {})) {
       try {
         this.txs.put(Transaction.fromHex(hex))
       } catch {

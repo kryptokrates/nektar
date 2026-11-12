@@ -100,7 +100,7 @@ test('CHN-006: pending → mined → final; requireFinal withholds until finalit
   assert.equal((await mem.recall('s', { seq: 0, requireFinal: true })).items[0].text, 'a')
 })
 
-test('persistence: challenges, used ZK transcripts and revocations survive a restart', async t => {
+test('persistence: challenges, used ZK transcripts and revocations survive a restart', async (t) => {
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-sec-')), 'security.json')
   const authority = PrivateKey.fromRandom()
   const opts = { securityStore: new FileSecurityStore(file), clearanceAuthorities: [authority.toPublicKey().toString()] }

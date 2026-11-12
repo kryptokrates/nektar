@@ -24,16 +24,16 @@ Jeff Harris's bstack papers provide useful patterns for these capabilities. They
 
 ### 1.1 Decisions proposed for approval
 
-| Decision                  | Proposed default                                                                                                                    |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Discovery                 | BRC-88 SHIP/SLAP plus BRC-180 domain manifests; BRC-169 handles as a subsequent interoperability milestone                          |
-| Global budget enforcement | One principal-controlled funding authority with a durable transactional ledger; no general budget covenant in the first release     |
-| Market history            | Per-producer signed sequences and bounded intervals committed by existing Nektar anchoring mechanisms                               |
-| Portable memory           | Existing Nektar evidence in a versioned package; experimental off-chain carriers are a separate profile                             |
-| Availability              | Content-addressed encrypted objects, explicit retention contracts, bounded possession challenges; no automatic slashing             |
-| Asynchronous exchange     | A small encrypted mailbox profile over HTTPS with durable deduplication; standard mailbox compatibility tested separately           |
-| Chain environment         | regtest for controlled chain tests, explicitly configured public BSV testnet for integration evidence |
-| Mainnet                   | A later deployment decision after integration and financial recovery gates pass                                                     |
+| Decision                  | Proposed default                                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Discovery                 | BRC-88 SHIP/SLAP plus BRC-180 domain manifests; BRC-169 handles as a subsequent interoperability milestone                      |
+| Global budget enforcement | One principal-controlled funding authority with a durable transactional ledger; no general budget covenant in the first release |
+| Market history            | Per-producer signed sequences and bounded intervals committed by existing Nektar anchoring mechanisms                           |
+| Portable memory           | Existing Nektar evidence in a versioned package; experimental off-chain carriers are a separate profile                         |
+| Availability              | Content-addressed encrypted objects, explicit retention contracts, bounded possession challenges; no automatic slashing         |
+| Asynchronous exchange     | A small encrypted mailbox profile over HTTPS with durable deduplication; standard mailbox compatibility tested separately       |
+| Chain environment         | regtest for controlled chain tests, explicitly configured public BSV testnet for integration evidence                           |
+| Mainnet                   | A later deployment decision after integration and financial recovery gates pass                                                 |
 
 ## 2. Goals, limits, and terminology
 

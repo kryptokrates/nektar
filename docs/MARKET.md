@@ -105,7 +105,7 @@ CLI-only and never reachable from a tool.
 
 | var                                                    | meaning                                                                      |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `NEKTAR_NETWORK`                                       | `regtest` \| `testnet` \| `ttn` \| `main`                                     |
+| `NEKTAR_NETWORK`                                       | `regtest` \| `testnet` \| `ttn` \| `main`                                    |
 | `NEKTAR_FUND_WIF`                                      | fee key — required on live nets                                              |
 | `NEKTAR_OPERATOR_WIF`                                  | signing / settlement key                                                     |
 | `NEKTAR_AUTOMATION`                                    | `1` turns the market runtime on                                              |

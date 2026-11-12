@@ -32,7 +32,7 @@ test('attestation script: encode/decode round-trip; non-attestation scripts → 
   assert.throws(() => attestationScript(new Uint8Array(31)), /32 bytes/)
 })
 
-test('anchorAttestation on the regtest stack: real signed spend, commitment extractable, verifyAttestation round-trip', async t => {
+test('anchorAttestation on the regtest stack: real signed spend, commitment extractable, verifyAttestation round-trip', async (t) => {
   const _w = await setup(t)
   if (_w === undefined) return
   const { chain, mem } = _w

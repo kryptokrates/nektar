@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
@@ -120,16 +120,33 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   /** deaf = every configured host unreachable — new deals pause, in-flight
    *  work (refunds, settlements, outbox retries) keeps running */
   const deafNow = (): boolean => marketHosts.length > 0 && marketHosts.every((h) => downNow.has(h))
+  // lane infrastructure (funding trees, carrier journal, finger chain, log
+  // anchors) is NOT recovery-note state — an op-db loss must not take carrier
+  // funding with it: the recovered seller still has to emit the delivered
+  // envelope. Lanes live in their own store; a pre-split deployment's lane
+  // tables sit inside automation.sqlite, so seed lanes.sqlite with a copy.
+  let kxLanes: Knex | undefined
   const lanes =
     marketHosts.length === 0
       ? undefined
       : await (async () => {
           const mod = await import('@nektar/bstack')
-          return { mod, ledger: new mod.KnexTreeLedger(kx), journal: new mod.KnexCarrierJournal(kx) }
+          const lp = cfg.dataDir ? join(cfg.dataDir, 'lanes.sqlite') : ':memory:'
+          if (cfg.dataDir && !existsSync(lp) && existsSync(join(cfg.dataDir, 'automation.sqlite'))) {
+            copyFileSync(join(cfg.dataDir, 'automation.sqlite'), lp)
+          }
+          kxLanes = knexFactory({ client: 'sqlite3', connection: { filename: lp }, useNullAsDefault: true })
+          return {
+            mod,
+            ledger: new mod.KnexTreeLedger(kxLanes),
+            journal: new mod.KnexCarrierJournal(kxLanes),
+            logState: new mod.KnexLogState(kxLanes),
+            fingerState: new mod.KnexFingerState(kxLanes)
+          }
         })()
   const logStream = lanes === undefined ? undefined : (cfg.logStream ?? 'nektar_abcdefghij')
-  const logState = lanes === undefined || logStream === undefined ? undefined : new lanes.mod.KnexLogState(kx)
-  const fingerState = lanes === undefined ? undefined : new lanes.mod.KnexFingerState(kx)
+  const logState = lanes === undefined || logStream === undefined ? undefined : lanes.logState
+  const fingerState = lanes === undefined ? undefined : lanes.fingerState
   // bfinger packs store: packs describeShard PUTs to bstore also commit as
   // kind-5 sub-records under our identity; the finger record's refs then
   // resolve the whole pack set — no /.well-known dependency for readers
@@ -901,6 +918,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
       await Promise.allSettled(inflight)
       while (busy || upkeepRun !== undefined || acking) await new Promise((r) => setTimeout(r, 25))
       await engine.idle()
+      await kxLanes?.destroy()
       await kx.destroy()
     }
   }

@@ -335,15 +335,18 @@ function spawnInstance(a) {
   p.stderr.pipe(err)
   // a native abort on this rig (0xC0000409, no output, no dump) kills an
   // instance mid-deal; all state is in the data dir, so restart it in place
-  p.on('exit', (c) => {
-    if (c && c !== 0 && c !== null && !stopping && a.restarts < 3) {
+  p.on('exit', (c, s) => {
+    // abnormal exit: nonzero code, or a kill signal (Windows reports
+    // SIGKILL'd children with code null — the signal is the crash marker)
+    const abnormal = (c !== 0 && c !== null) || s === 'SIGKILL'
+    if (abnormal && !stopping && a.restarts < 3) {
       a.restarts++
-      log(`${a.name} exited ${c} — restarting (${a.restarts}/3)`)
+      log(`${a.name} exited ${c ?? s} — restarting (${a.restarts}/3)`)
       // instance.lock stays 'live' for 20s after the last heartbeat
       delay(25000).then(() => {
         if (!stopping) a.proc = spawnInstance(a)
       })
-    } else if (c && c !== 0 && c !== null) log(`${a.name} exited ${c}`)
+    } else if (abnormal) log(`${a.name} exited ${c ?? s}`)
   })
   procs.push(p)
   a.proc = p

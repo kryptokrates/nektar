@@ -34,6 +34,7 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@12.16.1 --activate
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages ./packages
+COPY vendor ./vendor
 COPY vectors ./vectors
 COPY tools/cedar-symcc/policies ./tools/cedar-symcc/policies
 RUN pnpm install --frozen-lockfile && pnpm -r build && pnpm reproduce \

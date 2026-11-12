@@ -62,6 +62,7 @@ test('sandbox: control flow with a recording backend — baseline must fail, pat
 })
 
 test('sandbox: real container run — failing build, purchased fix, passing acceptance + hidden tests', async (t) => {
+  if (process.env.CI && process.env.NEKTAR_SANDBOX_E2E !== '1') { t.skip('runs in the dedicated sandbox job (NEKTAR_SANDBOX_E2E=1)'); return }
   if (!(await dockerBackend.available())) { t.skip('BLOCKED: docker is not available on this host — the isolated run was not exercised'); return }
   const r = await evaluatePatch(spec, good)
   assert.equal(r.outcome, 'PASS', `${r.reason ?? ''}\n${r.patched?.outputTail ?? r.baseline?.outputTail ?? ''}`)

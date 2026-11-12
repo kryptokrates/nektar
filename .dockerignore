@@ -6,8 +6,6 @@ node_modules
 **/*.tsbuildinfo
 **/.turbo
 **/coverage
-**/test
-**/tests
 docs
 *.md
 !README.md
@@ -17,4 +15,3 @@ docs
 .env
 .env.*
 deploy
-test/fixtures

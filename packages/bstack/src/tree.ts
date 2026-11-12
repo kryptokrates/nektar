@@ -56,6 +56,10 @@ export interface TreeLedger {
   add(tree: Transaction, n: number, kind?: string): Promise<void>
   take(kind?: string): Promise<{ tree: Transaction; vout: number } | undefined>
   markProven(txid: string, merklePath?: MerklePath): Promise<void>
+  /** a funding parent's own proof: write it into every stored tree whose
+   *  input ancestry still shows that parent unproven — after this the tree
+   *  is ancestry-anchored and its slots serve. true when a beef changed. */
+  attachParentPath(txid: string, merklePath: MerklePath): Promise<boolean>
   unproven(): Promise<Array<{ txid: string; kind: string }>>
   remaining(kind?: string): Promise<number>
 }
@@ -104,6 +108,20 @@ export class MemoryTreeLedger implements TreeLedger {
         for (const i of t.tree.inputs) i.sourceTransaction = undefined
       }
     }
+  }
+  async attachParentPath(txid: string, merklePath: MerklePath): Promise<boolean> {
+    let changed = false
+    for (const t of this.trees.values()) {
+      if (t.proven) continue
+      for (const i of t.tree.inputs) {
+        const src = i.sourceTransaction
+        if (src !== undefined && src.id('hex') === txid && src.merklePath === undefined) {
+          src.merklePath = merklePath
+          changed = true
+        }
+      }
+    }
+    return changed
   }
   async unproven(): Promise<Array<{ txid: string; kind: string }>> {
     return [...this.trees].filter(([, t]) => !t.proven).map(([id, t]) => ({ txid: id, kind: t.kind }))
@@ -217,6 +235,28 @@ export class KnexTreeLedger implements TreeLedger {
         }
       }
     })
+  }
+  async attachParentPath(txid: string, merklePath: MerklePath): Promise<boolean> {
+    await this.ensure()
+    let changed = false
+    for (const row of await this.kx('bstack_trees').where({ proven: 0 }).select('txid', 'beef')) {
+      const tree = Transaction.fromBEEF(JSON.parse(row.beef as string))
+      let touched = false
+      for (const i of tree.inputs) {
+        const src = i.sourceTransaction
+        if (src !== undefined && src.id('hex') === txid && src.merklePath === undefined) {
+          src.merklePath = merklePath
+          touched = true
+        }
+      }
+      if (touched) {
+        await this.kx('bstack_trees')
+          .where({ txid: row.txid })
+          .update({ beef: JSON.stringify(tree.toBEEF()) })
+        changed = true
+      }
+    }
+    return changed
   }
   async unproven(): Promise<Array<{ txid: string; kind: string }>> {
     await this.ensure()

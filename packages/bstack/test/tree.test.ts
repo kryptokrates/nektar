@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mintTree, FUNDING_TAG, KnexTreeLedger, MemoryTreeLedger } from '../src/tree.js'
-import { anchoredTree, fund, prove } from './helpers.js'
+import { anchoredTree, fakeParent, fund, prove } from './helpers.js'
 
 test('tree: n=8 mints 8 funding outputs + change, each decodes our tag', async () => {
   const key = PrivateKey.fromRandom()
@@ -183,6 +183,31 @@ for (const mk of [
     }
   }
 ] as const) {
+  test(`attachParentPath (${mk.name}): a funding parent's proof anchors the tree's ancestry`, async () => {
+    const key = PrivateKey.fromRandom()
+    const parent = fakeParent(key)
+    const tree = await mintTree({ key, funding: { tx: parent, vout: 0, satoshis: 1_000_000 }, n: 4, satsPerOutput: 1000 })
+    const { l, done } = await mk.ledger()
+    try {
+      await l.add(tree, 4)
+      assert.equal(await l.take('market'), undefined, 'unanchored ancestry must not serve')
+      const mp = new MerklePath(1, [
+        [
+          { offset: 0, hash: '00'.repeat(32) },
+          { offset: 1, hash: parent.id('hex'), txid: true }
+        ]
+      ])
+      assert.equal(await l.attachParentPath(parent.id('hex'), mp), true)
+      const got = await l.take('market')
+      assert.ok(got !== undefined, 'parent proof makes the unproven tree serveable')
+      assert.equal(got.tree.inputs[0].sourceTransaction?.merklePath?.computeRoot(parent.id('hex')), mp.computeRoot(parent.id('hex')))
+      assert.equal(await l.take('bbox'), undefined, 'bbox still requires the tree proven')
+      assert.equal(await l.attachParentPath(parent.id('hex'), mp), false, 'idempotent second attach')
+    } finally {
+      await done()
+    }
+  })
+
   test(`ownPath (${mk.name}): compound broadcaster BUMP → minimal path for the tree alone`, async () => {
     const key = PrivateKey.fromRandom()
     const t2 = await mintTree({ key, funding: fund(key), n: 4, satsPerOutput: 1000 })

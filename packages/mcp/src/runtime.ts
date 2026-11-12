@@ -476,6 +476,32 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
           attached++
         }
       }
+      // parents of unproven anchors: a funding tree is ancestry-anchored the
+      // moment its own inputs prove — refreshing those proofs keeps the
+      // one-unconfirmed-level path open instead of always waiting for the
+      // tree's own block. Parents that are anchors themselves are covered
+      // by the main loop; reject/abandon bookkeeping applies as usual.
+      if (tip > proofScanTip) {
+        const seen = new Set(waiting.map((w) => w.txid))
+        const parents = new Map<string, string>()
+        for (const { txid } of waiting) {
+          const tx = await mem.fetchTx(txid)
+          for (const i of tx?.inputs ?? []) {
+            const src = i.sourceTransaction
+            if (src !== undefined && src.merklePath === undefined && !seen.has(src.id('hex'))) parents.set(src.id('hex'), src.id('hex'))
+          }
+        }
+        for (const txid of parents.keys()) {
+          const res = await fetch(`${rc.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(10_000) }).catch(
+            () => null
+          )
+          if (res === null || res.status !== 200) continue
+          const buf = Buffer.from(await res.arrayBuffer())
+          const h = buf.length >= 3 && buf[0] === 0xfd ? buf.readUInt16LE(1) : undefined
+          const mp = h !== undefined ? await merklePathAtHeight(rc, txid, tracker, h) : null
+          if (mp) mem.deliverTxProof(txid, new MerklePath(mp.blockHeight, mp.path))
+        }
+      }
       if (waiting.length && tip > proofScanTip) proofScanTip = tip
       if (waiting.length) process.stderr.write(`nektar confirmer: waiting=${waiting.length} attached=${attached} tip=${tip}\n`)
       persistKeys()

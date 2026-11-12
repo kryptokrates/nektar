@@ -809,6 +809,10 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
             // slot-starved outbox item forward instead of letting it sit
             // out the retry backoff (measured: a want stalled ~15s on this)
             await store.unblockOutbox('funding slot')
+          } else if (await lanes.ledger.attachParentPath(txid, mp)) {
+            // the proof was for a funding parent — stored tree beefs now
+            // carry anchored ancestry, so their slots serve immediately
+            await store.unblockOutbox('funding slot')
           }
         }
       } catch (e) {

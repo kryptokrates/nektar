@@ -46,9 +46,7 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
     try {
       const r = await inner(tx)
       if (recorded)
-        await store
-          .setTxState(actionId, r.status === 'success' ? 'submitted' : 'submission_unknown', { at: Date.now(), result: r }, true)
-          .catch(() => {})
+        await store.setTxState(actionId, r.status === 'success' ? 'submitted' : 'submission_unknown', { at: Date.now(), result: r }, true).catch(() => {})
       return r
     } catch (e) {
       if (recorded) await store.setTxState(actionId, 'submission_unknown', { at: Date.now(), error: (e as Error).message }, true).catch(() => {})

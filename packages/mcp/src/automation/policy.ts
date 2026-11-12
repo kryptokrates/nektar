@@ -61,7 +61,7 @@ export function policyError(p: unknown): string | undefined {
   const q = p as unknown as AutomationPolicy
   if (q.v !== 1) return 'unsupported policy version'
   if (typeof q.policyId !== 'string' || !ID_RE.test(q.policyId)) return 'policyId'
-  if (typeof q.network !== 'string' || !/^(mock|regtest|testnet|ttn|main)$/.test(q.network)) return 'network'
+  if (typeof q.network !== 'string' || !/^(regtest|testnet|ttn|main)$/.test(q.network)) return 'network'
   if (typeof q.agentPub !== 'string' || !/^0[23][0-9a-f]{64}$/.test(q.agentPub)) return 'agentPub'
   if (
     !Array.isArray(q.roles) ||

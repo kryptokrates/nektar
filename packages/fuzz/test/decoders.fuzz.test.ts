@@ -74,7 +74,7 @@ function mutate(b: Uint8Array): Uint8Array {
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const unhex = (s: string) => new Uint8Array(Buffer.from(s, 'hex'))
 
-async function anchoredWorld() {
+async function anchoredWorld(t: { skip: (m?: string) => void }) {
   const w = await stackWorld(t, 12)
   if (w === undefined) return
   const { chain, funder } = w
@@ -86,8 +86,10 @@ async function anchoredWorld() {
   return { chain, funder, mem }
 }
 
-test(`fuzz: NektarAnchor decoder is byte-authenticated (seed ${SEED}, n ${N})`, async () => {
-  const { mem } = await anchoredWorld()
+test(`fuzz: NektarAnchor decoder is byte-authenticated (seed ${SEED}, n ${N})`, async (t) => {
+  const _w = await anchoredWorld(t)
+  if (_w === undefined) return
+  const { mem } = _w
   const script = mem.anchorTx(mem.tailLink('f')!.txid)!.outputs[0]!.lockingScript.toHex()
   const orig = decodeNektarAnchor(script)!
   const code = script.slice(0, findLastOpReturn(script))
@@ -106,8 +108,10 @@ test(`fuzz: NektarAnchor decoder is byte-authenticated (seed ${SEED}, n ${N})`, 
   console.log(`  anchor: ${stateOnly}/${N} mutations were well-formed state-only rewrites (authentic only if on-chain)`)
 })
 
-test('fuzz: proof bundle verifier never throws, never accepts a mutated bundle', async () => {
-  const { chain, mem } = await anchoredWorld()
+test('fuzz: proof bundle verifier never throws, never accepts a mutated bundle', async (t) => {
+  const _w = await anchoredWorld(t)
+  if (_w === undefined) return
+  const { chain, mem } = _w
   const { bundle } = await mem.prove('f', 0)
   assert.deepEqual(await verifyFragment(bundle!, chain), { ok: true, settled: true, anchorState: 'mined' })
   for (let i = 0; i < Math.min(N, 120); i++) {

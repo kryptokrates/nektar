@@ -221,7 +221,7 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
   })
   await new Promise<void>((r) => fake.listen(0, '127.0.0.1', r))
   const s3port = (fake.address() as AddressInfo).port
-  const client = new S3ObjectStore({ endpoint: `http://127.0.0.1:${s3port}`, bucket: 'packs-mock', accessKey: 'a', secretKey: 's' })
+  const client = new S3ObjectStore({ endpoint: `http://127.0.0.1:${s3port}`, bucket: 'packs-regtest', accessKey: 'a', secretKey: 's' })
   const a = await setup(t, { objectStore: client })
   if (a === undefined) return
   const srv = createHttpApi(a.mem).listen(0)
@@ -235,8 +235,8 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
     await a.mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'pack', priceSats: 50 }] })
     const ref = a.mem.packStoreRef('guide')
     assert.ok(ref !== undefined, 'pack stored after describeShard')
-    assert.equal(ref!.bucket, 'packs-mock')
-    assert.match(ref!.key, /^packs\/mock\/[0-9a-f]+\/[0-9a-f]{64}\.json$/)
+    assert.equal(ref!.bucket, 'packs-regtest')
+    assert.match(ref!.key, /^packs\/regtest\/[0-9a-f]+\/[0-9a-f]{64}\.json$/)
     // the discovery doc names the store ref for the shard
     const disco = await (await fetch(`${base}/.well-known/nektar`)).json()
     const entry = (disco.publicShards as Array<{ shard: string; store?: { key: string }; packUrl?: string }>).find((s) => s.shard === 'guide')
@@ -258,7 +258,7 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
   if (d2 === undefined) return
     const pack = await a.mem.exportShardPack('guide')
     ;(pack.records[0] as { data: string }).data = 'swapped plaintext'
-    const forged = await client.put(`packs/mock/forged/${'ab'.repeat(32)}.json`, new TextEncoder().encode(JSON.stringify(pack)))
+    const forged = await client.put(`packs/regtest/forged/${'ab'.repeat(32)}.json`, new TextEncoder().encode(JSON.stringify(pack)))
     const r2 = (await callTool(d2, 'importShard', { store: forged })) as { imported: number; unverifiable: string[] }
     assert.equal(r2.imported, 2, 'tampered records still land — as unverifiable, never trusted')
     assert.ok(r2.unverifiable.length > 0)

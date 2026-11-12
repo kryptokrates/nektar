@@ -65,7 +65,7 @@ export function attestationsOf(tx: Transaction): Array<{ vout: number; tag: stri
  * Build (unsigned→signed) a data-output tx: one P2PKH funding input from the
  * fee key, output 0 = the attestation data output (0 sats, unspendable),
  * output 1 = change back to the fee key. `feeRateSatPerKb` matches the
- * anchor fee policy (default 1 on mock/regtest, ~100 on main).
+ * anchor fee policy (default 1 on regtest, ~100 on main).
  */
 export async function buildAttestationTx(
   funding: FundingOut,

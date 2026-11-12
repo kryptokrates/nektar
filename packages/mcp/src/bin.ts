@@ -2,14 +2,14 @@
 // nektar MCP server.
 //   stdio (default):      node dist/src/bin.js
 //   Streamable HTTP+REST:  NEKTAR_HTTP_PORT=8080 node dist/src/bin.js
-// Backend via NEKTAR_NETWORK=mock (default, offline, zero setup) | regtest
+// Backend via NEKTAR_NETWORK=regtest (default, local Teranode stack) | ttn | main
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
 import { openRuntime, configFromEnv } from './runtime.js'
 import { serveStdio } from './mcp-server.js'
 import { createHttpApi } from './http.js'
 import { existsSync, readFileSync } from 'node:fs'
 
-// --env <mock|regtest|ttn|main> + optional .env beside cwd → minimal-typing boot.
+// --env <regtest|ttn|main> + optional .env beside cwd → minimal-typing boot.
 // .env lines are applied only where the var isn't already set (shell wins).
 const argv = process.argv.slice(2)
 const envFlag = argv.includes('--env') ? argv[argv.indexOf('--env') + 1] : undefined
@@ -20,8 +20,8 @@ if (existsSync('.env')) {
   }
 }
 if (envFlag) {
-  if (!/^(mock|regtest|ttn|main)$/.test(envFlag)) {
-    process.stderr.write(`nektar: --env must be mock|regtest|ttn|main, got "${envFlag}"\n`)
+  if (!/^(regtest|ttn|main)$/.test(envFlag)) {
+    process.stderr.write(`nektar: --env must be regtest|ttn|main, got "${envFlag}"\n`)
     process.exit(2)
   }
   process.env.NEKTAR_NETWORK = envFlag
@@ -44,13 +44,13 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
     .filter(Boolean)
   rt.mem.automation = await openAutomation(rt.mem, {
     network: rt.network,
-    dataDir: rt.network === 'mock' && !process.env.NEKTAR_DATA_DIR ? undefined : (process.env.NEKTAR_DATA_DIR ?? '.nektar'),
+    dataDir: process.env.NEKTAR_DATA_DIR ?? '.nektar',
     marketHosts: mh,
     localHosts: process.env.NEKTAR_MARKET_LOCAL_HOSTS === '1',
     boxOffice: process.env.NEKTAR_BBOX_OFFICE ?? undefined,
     logStream: process.env.NEKTAR_LOG_STREAM ?? undefined,
     intervalMs: Number(process.env.NEKTAR_AUTOMATION_INTERVAL_MS ?? 1000),
-    // chains without a status push (remote mock, polled broadcasters) mark
+    // chains without a status push (polled broadcasters) mark
     // funding trees proven only here — let ops tune the cadence
     upkeepMs: process.env.NEKTAR_AUTOMATION_UPKEEP_MS ? Number(process.env.NEKTAR_AUTOMATION_UPKEEP_MS) : undefined,
     call: (tool, args) => callTool(rt.mem, tool, args, { ops: rt.ops }),

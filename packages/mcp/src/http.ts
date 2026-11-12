@@ -570,11 +570,11 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
       if (req.method === 'GET' && url.pathname === '/.well-known/x402') {
         const { paymentsEnabled, PAID_TOOLS, priceFor } = await import('./pay.js')
         if (!paymentsEnabled()) return send(404, { error: 'payments disabled (NEKTAR_PAYMENTS=1)' })
-        const n = process.env.NEKTAR_NETWORK ?? 'mock'
+        const n = process.env.NEKTAR_NETWORK ?? 'regtest'
         return send(200, {
           x402Version: 2,
           scheme: 'exact',
-          network: n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:mock',
+          network: n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest',
           resources: [...PAID_TOOLS].map((t) => ({
             url: `tool://${t}`,
             description: `nektar ${t}`,
@@ -690,7 +690,7 @@ async function verifyPage(
   const QR = await import('qrcode')
   const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 180 })
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const net = process.env.NEKTAR_NETWORK ?? 'mock'
+  const net = process.env.NEKTAR_NETWORK ?? 'regtest'
   const netLabel =
     net === 'main'
       ? 'BSV mainnet — real coins'

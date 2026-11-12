@@ -83,11 +83,11 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   // first send and unions the record's hosts over its own configured set.
   // Positive resolutions cache 10 min, negatives 1 min. Resolved hosts are
   // accepted only when the record names this network, and screened through
-  // fingerHostAllowed — https only off mock/regtest and never loopback,
+  // fingerHostAllowed — https only off regtest/local rigs and never loopback,
   // private or link-local literals (the SSRF guard for dynamic hosts).
   // identity records may name http and loopback/private hosts on the test
   // lanes, and anywhere the operator runs its own hosts and says so
-  const mockNet = cfg.network === 'mock' || cfg.network === 'regtest' || cfg.network.startsWith('mock') || cfg.localHosts === true
+  const localNet = cfg.network === 'regtest' || cfg.localHosts === true
   const fingerCache = new Map<string, { at: number; rec?: { hosts: string[]; office: string; stream: string } }>()
   const resolveRecord = async (pub: string): Promise<{ hosts: string[]; office: string; stream: string } | undefined> => {
     if (lanes === undefined) return undefined
@@ -96,9 +96,9 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
     if (c !== undefined && t - c.at < (c.rec === undefined ? 60_000 : 600_000)) return c.rec
     let rec: { hosts: string[]; office: string; stream: string } | undefined
     try {
-      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: await mem.sdkTracker(), allowHttp: mockNet, now: cfg.now, timeoutMs: 5_000 })
+      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: await mem.sdkTracker(), allowHttp: localNet, now: cfg.now, timeoutMs: 5_000 })
       if (r !== undefined && (r.body.nets.length === 0 || r.body.nets.includes(cfg.network))) {
-        const hosts = r.body.hosts.filter((u) => lanes.mod.fingerHostAllowed(u, { allowHttp: mockNet, allowLocal: mockNet })).slice(0, 8)
+        const hosts = r.body.hosts.filter((u) => lanes.mod.fingerHostAllowed(u, { allowHttp: localNet, allowLocal: localNet })).slice(0, 8)
         rec = { hosts, office: r.body.office, stream: r.body.stream }
       }
     } catch {
@@ -460,7 +460,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
             takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0]!,
             broadcast: (tx) => mem.broadcastTx(tx),
             fetchTx: (txid) => mem.fetchTx(txid),
-            allowHttp: mockNet,
+            allowHttp: localNet,
             now: cfg.now,
             onSpent: (tx) => {
               for (const inp of tx.inputs) {

@@ -19,7 +19,7 @@ const body1 = (hosts: string[] = ['https://one.example.com', 'https://two.exampl
   hosts,
   office: 'nektar_abcdefghij',
   stream: 'nektar_abcdefghij',
-  nets: ['mock']
+  nets: ['regtest']
 })
 
 interface Rig {
@@ -185,7 +185,7 @@ test('finger: forged record under another key loses to the real chain', async ()
         { key: 'hosts', val: ['https://evil.example.com'] },
         { key: 'office', val: 'nektar_abcdefghij' },
         { key: 'stream', val: 'nektar_abcdefghij' },
-        { key: 'nets', val: ['mock'] }
+        { key: 'nets', val: ['regtest'] }
       ]),
       refs: [],
       unknown: []

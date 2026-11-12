@@ -1,7 +1,7 @@
 // NektarMemory — the product service the MCP server wraps.
 // Wires log (append/batch) → anchor (head UTXO per shard) → broadcast
 // → verify (proof bundles) → crypto (BRC-42/AES-GCM), all behind the chain
-// interfaces so it runs identically on the mock chain and regtest.
+// interfaces so it runs identically on regtest and live networks.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { EventEmitter } from 'node:events'
@@ -80,7 +80,7 @@ export interface NektarMemoryOptions {
   maxLevel?: number // highest access level this seed may hold
   burstLimit?: number
   /** fee rate for anchor txs in sats per KB (runar-sdk fee = ceil(size*rate/1000));
-   *  default 1 (mock/regtest); mainnet uses ~100 (broadcaster policy) */
+   *  default 1 (regtest); mainnet uses ~100 (broadcaster policy) */
   feeRateSatPerKb?: number
   batchPolicy?: import('@nektar/log').ClosePolicy
   modelId?: string // stamped into receipts
@@ -107,7 +107,7 @@ export interface NektarMemoryOptions {
   requireSignedProvenance?: boolean
   /** network the instance runs on — used for the funding-address prefix in
    *  fundingStatus (testnet-family → 0x6f). Optional; absent = mainnet prefix. */
-  network?: 'mock' | 'regtest' | 'testnet' | 'main' | 'ttn'
+  network?: 'regtest' | 'testnet' | 'main' | 'ttn'
   /** BSV Broadcaster base URL (live networks) — lets txState ask the
    *  broadcaster's /tx/{txid} verdict when the local view can't decide */
   broadcasterUrl?: string
@@ -446,7 +446,7 @@ export class NektarMemory {
     })
     this.restoreSecurityState()
     this.restoreState()
-    // push confirmations: backends that emit status events (mock, regtest)
+    // push confirmations: backends that emit status events (regtest stack)
     // deliver 'mined' proofs straight in — no confirmation polling
     this.chain.onStatus?.((ev) => {
       if (ev.status === 'mined' && ev.merklePath) this.deliverTxProof(ev.txid, ev.merklePath)
@@ -479,7 +479,7 @@ export class NektarMemory {
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     let tx: import('@bsv/sdk').Transaction | undefined = this.anchorTxs.get(txid) ?? this.txs.get(txid)
     if (tx?.merklePath === undefined) {
-      // mock and regtest backends answer for any transaction on their chain, proof included
+      // regtest backends answer for any transaction on their chain, proof included
       const seen = await (
         this.chain as { getTx?: (t: string) => import('@bsv/sdk').Transaction | undefined | Promise<import('@bsv/sdk').Transaction | undefined> }
       ).getTx?.(txid)
@@ -583,7 +583,7 @@ export class NektarMemory {
     const local = this.anchorTxs.get(txid) ?? (this.chain as { getTx?: (t: string) => import('@bsv/sdk').Transaction | undefined }).getTx?.(txid)
     if (local?.merklePath !== undefined) return 'mined'
     if (local !== undefined) return 'seen'
-    if (this.opts.network === 'mock' || this.opts.network === 'regtest' || this.opts.network === undefined) return 'unknown'
+    if (this.opts.network === 'regtest' || this.opts.network === undefined) return 'unknown'
     try {
       const st = await fetch(`${this.opts.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) }).then((r) =>
         r.ok ? r.json() : null
@@ -1096,7 +1096,7 @@ export class NektarMemory {
   // anchor: no shard state, no contract. Off-chain WASM verify stays
   // authoritative; the chain only timestamps the commitment.
   private attestationTxs = new Map<string, import('@bsv/sdk').Transaction>()
-  /** one funding outpoint from the fee reserve (MockFunder.take / ReserveFunder.takeReserve / peeked utxo) */
+  /** one funding outpoint from the fee reserve (StackFunder.take / ReserveFunder.takeReserve / peeked utxo) */
   private async takeFunding(satoshis: number): Promise<import('@nektar/chain').FundingOut> {
     const f = this.funder as any
     if (typeof f.take === 'function') return await f.take(satoshis)
@@ -1909,7 +1909,7 @@ export class NektarMemory {
       domains,
       ...(desc ? { desc } : {}),
       ...(offers.length ? { offers } : {}),
-      network: process.env.NEKTAR_NETWORK ?? 'mock',
+      network: process.env.NEKTAR_NETWORK ?? 'regtest',
       issuedAt: Date.now()
     }
     const r = await this.remember(CATALOG_SHARD, JSON.stringify(manifest))

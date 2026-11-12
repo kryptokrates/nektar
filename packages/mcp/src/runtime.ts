@@ -1,5 +1,4 @@
 // openRuntime: one production entry for the MCP / HTTP servers.
-//   NEKTAR_NETWORK=mock     offline MockChain (mines per tx) — zero setup, in-memory
 //   NEKTAR_NETWORK=regtest  Teranode regtest: persistent records (sqlite), anchor
 //                          state, security state, funding reserve and keys in
 //                          NEKTAR_DATA_DIR; a confirmer attaches BUMPs.
@@ -10,8 +9,6 @@ import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { PrivateKey, MerklePath, Transaction } from '@bsv/sdk'
 import {
-  MockChain,
-  MockFunder,
   TeranodeBroadcaster,
   TeranodeRPCTracker,
   ReserveFunder,
@@ -44,7 +41,7 @@ import { readKeyFile, writeKeyFile, passphraseFromEnv, KeystoreError } from './k
 import { fileURLToPath } from 'node:url'
 
 export interface RuntimeConfig {
-  network: 'mock' | 'regtest' | 'testnet' | 'main' | 'ttn'
+  network: 'regtest' | 'testnet' | 'main' | 'ttn'
   dataDir: string
   regtest?: RegtestConfig & { fundWif: string }
   main?: MainnetConfig & {
@@ -100,7 +97,7 @@ function temporalSourcesFor(names: string[], primary: ChainTracker, opts: { wocA
 }
 
 export function configFromEnv(env = process.env): RuntimeConfig {
-  const network = (env.NEKTAR_NETWORK ?? 'mock') as RuntimeConfig['network']
+  const network = (env.NEKTAR_NETWORK ?? 'regtest') as RuntimeConfig['network']
   const dataDir = env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar')
   const secret = (k: string) => env[k] ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
   const cfg: RuntimeConfig = {
@@ -277,44 +274,6 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
             ...(process.env.NEKTAR_BOND_MAXFEE ? { maxFee: BigInt(process.env.NEKTAR_BOND_MAXFEE) } : {})
           }
         : undefined
-  }
-  if (cfg.network === 'mock') {
-    const chain = new MockChain()
-    chain.verifyScripts = true
-    const funder = new MockFunder()
-    funder.topup(Number(process.env.NEKTAR_DEMO_UTXOS ?? 200))
-    for (const t of funder.parents) chain.registerParent(t)
-    const broadcast = chain.broadcast.bind(chain)
-    chain.broadcast = async (tx: Transaction) => {
-      const r = await broadcast(tx)
-      if (r.status === 'success') chain.mine(1)
-      return r
-    }
-    const { AutomationStore } = await import('./automation/store.js')
-    const { wrapBroadcast } = await import('./automation/ledger.js')
-    const ledger = new AutomationStore((await import('knex')).default({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true }))
-    await ledger.init()
-    const innerBroadcast = chain.broadcast.bind(chain)
-    chain.broadcast = wrapBroadcast(ledger, innerBroadcast)
-    chain.broadcast = txLogBroadcast(chain.broadcast)
-    const mem = new NektarMemory(chain, funder, funder.keyPair, base)
-    mem.ledger = ledger
-    // auto-mined: every anchor is immediately provable
-    const t = setInterval(() => {
-      for (const { shard, txid } of mem.unprovenAnchors()) {
-        const mp = chain.merklePathOf(txid)
-        if (mp) mem.attachProof(shard, txid, mp)
-      }
-    }, 1000)
-    t.unref()
-    return {
-      mem,
-      network: 'mock',
-      close: async () => {
-        clearInterval(t)
-        await ledger.close()
-      }
-    }
   }
   if (cfg.network === 'main' || cfg.network === 'ttn' || cfg.network === 'testnet') {
     return await openLiveRuntime(cfg, cfg.network, base)

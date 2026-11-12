@@ -1,5 +1,5 @@
 // Chain-facing interfaces — everything chain-related goes through these so the
-// whole system is testable offline on the mock chain, and swappable to Teranode
+// whole system is testable against the regtest stack, and swappable to live
 // regtest (NEKTAR_NETWORK=regtest) without code changes.
 import type { Transaction, MerklePath } from '@bsv/sdk'
 
@@ -19,7 +19,7 @@ export interface ChainTracker {
   headerAtHeight: (height: number) => Promise<BlockHeader | undefined>
   /** subscribe to tip changes; reorg: blocks removed from tip */
   onReorg?: (cb: (removed: BlockHeader[], newTip: BlockHeader) => void) => void
-  /** the real tip height (currentHeight may be offset, e.g. MockChain adds
+  /** the real tip height (currentHeight may carry an offset
    *  100 for the SDK coinbase-maturity rule) — used for confirmation counts */
   tipHeight?: () => Promise<number>
 }
@@ -41,7 +41,7 @@ export interface TxStatusEvent {
 
 export interface Broadcaster {
   broadcast: (tx: Transaction) => Promise<BroadcastResult>
-  /** statuses pushed as the chain progresses (mock emits on mine) */
+  /** statuses pushed as the chain progresses */
   onStatus?: (cb: (ev: TxStatusEvent) => void) => void
 }
 

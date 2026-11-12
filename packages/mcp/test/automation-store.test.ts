@@ -15,7 +15,7 @@ const agent = PrivateKey.fromRandom().toPublicKey().toString()
 const policy = (limits: Partial<AutomationPolicy['limits']> = {}, extra: Partial<AutomationPolicy> = {}): AutomationPolicy => ({
   v: 1,
   policyId: 'p1',
-  network: 'mock',
+  network: 'regtest',
   agentPub: agent,
   roles: ['buyer', 'seller'],
   notBefore: 0,
@@ -46,7 +46,7 @@ async function open(file = ':memory:', now?: () => number) {
   await store.init()
   return { kx, store }
 }
-const ctx = (hash: string, actionId: string, operationId = 'op'): ActionContext => ({ operationId, actionId, policyHash: hash, networkId: 'mock' })
+const ctx = (hash: string, actionId: string, operationId = 'op'): ActionContext => ({ operationId, actionId, policyHash: hash, networkId: 'bsv:regtest' })
 
 test('policy: strict shape, stable hash, unknown constraints rejected', () => {
   const p = policy()
@@ -62,14 +62,14 @@ test('policy: strict shape, stable hash, unknown constraints rejected', () => {
 
 test('policy decisions: allow inside, escalate over a limit, deny wrong agent/network/role', () => {
   const p = policy()
-  const i = { network: 'mock', agentPub: agent, domains: ['soccer'], priceSats: 200, feeSats: 50, lockedSats: 1000, now: 1000 }
+  const i = { network: 'regtest', agentPub: agent, domains: ['soccer'], priceSats: 200, feeSats: 50, lockedSats: 1000, now: 1000 }
   assert.deepEqual(decidePurchase(p, i), { kind: 'allow' })
   assert.deepEqual(decidePurchase(p, { ...i, priceSats: 501 }), { kind: 'escalate', code: 'price_above_policy' })
   assert.deepEqual(decidePurchase(p, { ...i, domains: ['rugby'] }), { kind: 'escalate', code: 'domain_outside_policy' })
   assert.deepEqual(decidePurchase(p, { ...i, network: 'main' }), { kind: 'deny', code: 'wrong_network' })
   assert.deepEqual(decidePurchase(p, { ...i, priceSats: NaN }), { kind: 'deny', code: 'invalid_amount' })
   assert.deepEqual(decidePurchase(policy({}, { roles: ['seller'] }), i), { kind: 'deny', code: 'role_not_authorized' })
-  const o = { network: 'mock', agentPub: agent, domains: ['soccer'], shard: 'guide', priceSats: 200, publicDisclosure: false, now: 1000 }
+  const o = { network: 'regtest', agentPub: agent, domains: ['soccer'], shard: 'guide', priceSats: 200, publicDisclosure: false, now: 1000 }
   assert.deepEqual(decideOffer(p, o), { kind: 'allow' })
   assert.deepEqual(decideOffer(p, { ...o, shard: 'private-notes' }), { kind: 'deny', code: 'shard_not_sellable' })
   assert.deepEqual(decideOffer(p, { ...o, publicDisclosure: true }), { kind: 'deny', code: 'public_disclosure_not_authorized' })
@@ -177,7 +177,7 @@ test('operations: idempotent creation, CAS transitions, transactional outbox, ev
       kind: 'purchase',
       dedupeKey: 'buyer:w1',
       policyHash: 'h',
-      network: 'mock',
+      network: 'regtest',
       state: 'published',
       data: { wantId: 'w1' }
     })

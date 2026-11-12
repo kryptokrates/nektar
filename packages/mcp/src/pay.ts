@@ -28,8 +28,8 @@ export const PAID_TOOLS = new Set([
 const PROVER_TOOLS = new Set(['proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership', 'attestInference'])
 
 const networkTag = (): string => {
-  const n = process.env.NEKTAR_NETWORK ?? 'mock'
-  return n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:mock'
+  const n = process.env.NEKTAR_NETWORK ?? 'regtest'
+  return n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest'
 }
 
 let opKey: PrivateKey | undefined
@@ -206,7 +206,7 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   }
   loadConsumed()
   // raw hex OR BEEF: BEEF carries the funding parents — needed by script
-  // validation (mock verifyScripts) and supplied to Teranode as Extended
+  // validation and supplied to Teranode as Extended
   // Format. Bare legacy hex is fine when the network already knows the
   // parents (mainnet/ttn broadcasts, tests with registered parents).
   let tx: Transaction

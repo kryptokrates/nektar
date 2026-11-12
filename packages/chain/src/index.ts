@@ -1,5 +1,5 @@
 export * from './interfaces.js'
-export { MockChain, MockFunder, buildBump } from './mock.js'
+export { buildBump } from './bump.js'
 export {
   TeranodeBroadcaster,
   TeranodeRPCTracker,

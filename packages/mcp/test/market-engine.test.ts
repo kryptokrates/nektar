@@ -59,7 +59,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
       store,
       memory: mem as never,
       key: mem.operatorKey(),
-      network: 'mock',
+      network: 'regtest',
       now,
       call: (tool, args) => callTool(mem, tool, args),
       height: () => mem.chainHeight(),
@@ -80,7 +80,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
   const policyFor = (pub: string, extra: Partial<AutomationPolicy['limits']> = {}): AutomationPolicy => ({
     v: 1,
     policyId: 'demo',
-    network: 'mock',
+    network: 'regtest',
     agentPub: pub,
     roles: ['buyer', 'seller'],
     notBefore: 0,

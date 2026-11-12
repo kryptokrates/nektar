@@ -1639,7 +1639,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       return mem.fundingStatus()
     }
     case 'fundingImport': {
-      if (!ctx.ops?.importFunding) throw new Error('fundingImport: live network only (mock/regtest fund via the harness)')
+      if (!ctx.ops?.importFunding) throw new Error('fundingImport: live network only (regtest funds via the test harness)')
       if (typeof args?.txid !== 'string' || args.txid.length < 8) throw new Error('fundingImport: txid required')
       return await ctx.ops.importFunding(args.txid)
     }

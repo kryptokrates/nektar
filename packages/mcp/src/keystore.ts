@@ -1,7 +1,7 @@
 // keystore.ts — encrypted key material at rest (scrypt + AES-256-GCM).
 // Format: {v:1, kdf:'scrypt', salt, iv, ct, tag} hex fields.
 // On `main` every key file MUST be encrypted — a plaintext keys.json or a
-// missing passphrase refuses startup. Regtest/mock only encrypt when a
+// missing passphrase refuses startup. Regtest only encrypts when a
 // passphrase is set.
 import { readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { scryptSync, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'

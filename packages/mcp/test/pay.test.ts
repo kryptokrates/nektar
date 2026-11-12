@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, Script, LockingScript } from '@bsv/sdk'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { stackWorld, stackChain, skipUnlessStack, StackFunder } from '@nektar/chain'
 import { utf8 } from '@nektar/core'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -66,13 +66,15 @@ test('payments: openRuntime refuses to start without a valid operator wallet', a
   })
 
   const dir = () => mkdtempSync(join(tmpdir(), 'nektar-pay-init-'))
-  await assert.rejects(() => openRuntime({ network: 'mock', dataDir: dir() }), /requires NEKTAR_OPERATOR_WIF/, 'missing wallet → no startup')
+  await assert.rejects(() => openRuntime({ network: 'regtest', dataDir: dir() }), /requires NEKTAR_OPERATOR_WIF/, 'missing wallet → no startup')
   process.env.NEKTAR_OPERATOR_WIF = 'definitely-not-a-wif'
-  await assert.rejects(() => openRuntime({ network: 'mock', dataDir: dir() }), /not a valid WIF/, 'garbage WIF → no startup')
+  await assert.rejects(() => openRuntime({ network: 'regtest', dataDir: dir() }), /not a valid WIF/, 'garbage WIF → no startup')
   process.env.NEKTAR_OPERATOR_WIF = OP_KEY.toWif([0xef])
-  const rt = await openRuntime({ network: 'mock', dataDir: dir() })
+  const rc = await skipUnlessStack(t)
+  if (rc === undefined) return
+  const rt = await openRuntime({ network: 'regtest', dataDir: dir(), regtest: { ...rc, fundWif: process.env.NEKTAR_REGTEST_WIF! } })
   t.after(() => rt.close())
-  assert.equal(rt.network, 'mock', 'valid operator wallet → startup proceeds')
+  assert.equal(rt.network, 'regtest', 'valid operator wallet → startup proceeds')
 })
 
 test('payments: gated tool 402s → signed tx settles → receipt commits the payment txid', async (t) => {

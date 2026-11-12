@@ -1,7 +1,7 @@
 // Client side of the paid-call flow: build the signed settlement tx for an
 // invoice (from payQuote / a 402 paymentRequired). Needs only the payer's WIF
 // key and its spendable utxos — no wallet protocol. Emits BEEF hex so the
-// funding parents travel inline (mock verifyScripts + Teranode EF both want
+// funding parents travel inline (Teranode EF admission wants
 // them attached).
 import { Transaction, PrivateKey, P2PKH, Script, LockingScript } from '@bsv/sdk'
 

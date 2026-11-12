@@ -63,7 +63,7 @@ export class FeeVault {
   }
 
   /** build a vault spend tx: payment → destPkh, continuation, change → ownerPkh.
-   *  Returns { tx } — the caller broadcasts it (MockChain or regtest). */
+   *  Returns { tx } — the caller broadcasts it. */
   buildSpend(utxo: VaultUtxo, ownerKey: PrivateKey, payAmount: bigint, lockTime: number, fee = 1n): { tx: Transaction } {
     const cur = this.stateOf(utxo.script)
     const lt = BigInt(lockTime)

@@ -5,19 +5,24 @@ import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { skipUnlessStack } from '@nektar/chain'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const text = (r: unknown) => JSON.parse((r as { content: Array<{ text: string }> }).content[0]!.text)
 
-test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 30_000 }, async t => {
+test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 60_000 }, async t => {
+  if ((await skipUnlessStack(t)) === undefined) return
   const bin = fileURLToPath(new URL('../src/bin.js', import.meta.url))
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [bin],
     env: {
       ...(process.env as Record<string, string>),
-      NEKTAR_NETWORK: 'mock',
+      NEKTAR_NETWORK: 'regtest',
+      NEKTAR_DATA_DIR: mkdtempSync(join(tmpdir(), 'nektar-stdio-')),
       NEKTAR_MODEL_ID: 'stdio-test',
-      NEKTAR_DEMO_UTXOS: '20',
       NEKTAR_BATCH: '2',
       NEKTAR_TOOL_PROFILE: 'operator',
       NEKTAR_PAID_DISCLOSURE: '1'

@@ -113,7 +113,7 @@ test('objectstore: getVerified returns verified bytes', async (t) => {
   try {
     const s = store(url)
     const bytes = new TextEncoder().encode('pack bytes')
-    const ref = await s.put('packs/mock/shard/abc.json', bytes)
+    const ref = await s.put('packs/regtest/shard/abc.json', bytes)
     assert.deepEqual([...(await s.getVerified(ref))], [...bytes])
     assert.deepEqual([...(await s.getVerified({ key: ref.key, sha256: ref.sha256 }))], [...bytes])
     await assert.rejects(() => s.getVerified({ key: ref.key, sha256: ref.sha256, size: bytes.length + 1 }), /expected/)

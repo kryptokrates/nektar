@@ -70,7 +70,7 @@ async function addAgent (name, hosts, { seller, publicDisclosure = false, bondEp
   const token = `tok-${name}`
   const url = `http://127.0.0.1:${agentPort(index)}`
   spawnNode('packages/e2e/src/scenarios/agent-process.mjs', {
-    NEKTAR_CHAIN_HUB: hub.url, NEKTAR_DATA_DIR: dataDir, NEKTAR_MARKET_HOSTS: hosts.join(','), NEKTAR_HTTP_PORT: String(agentPort(index)), NEKTAR_HTTP_TOKEN: token, NEKTAR_PAID_DISCLOSURE: '1', NEKTAR_AGENT_NAME: name, NEKTAR_AUTOMATION_INTERVAL_MS: '500', NEKTAR_TOOL_PROFILE: toolProfile, ...(bondEpoch ? { NEKTAR_BOND_EPOCH: String(bondEpoch) } : {}),
+    NEKTAR_CHAIN_HUB: hub.url, NEKTAR_DATA_DIR: dataDir, NEKTAR_MARKET_HOSTS: hosts.join(','), NEKTAR_HTTP_PORT: String(agentPort(index)), NEKTAR_HTTP_TOKEN: token, NEKTAR_PAID_DISCLOSURE: '1', NEKTAR_AGENT_NAME: name, NEKTAR_AUTOMATION_INTERVAL_MS: '500', NEKTAR_TOOL_PROFILE: toolProfile, NEKTAR_OFFER_TTL_BLOCKS: '120', ...(bondEpoch ? { NEKTAR_BOND_EPOCH: String(bondEpoch) } : {}),
     ...(process.env.NEKTAR_AI_BASE_URL ? { NEKTAR_AI_BASE_URL: process.env.NEKTAR_AI_BASE_URL, NEKTAR_AI_MODEL: process.env.NEKTAR_AI_MODEL ?? 'qwen2.5:7b', NEKTAR_AI_PROVIDER: 'ollama', NEKTAR_AI_EGRESS: 'local' } : {})
   }, name)
   await up(`${url}/v1/health`)

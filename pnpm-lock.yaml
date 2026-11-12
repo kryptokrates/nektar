@@ -298,6 +298,9 @@ importers:
 
   packages/mcp:
     dependencies:
+      '@bsv/sdk':
+        specifier: 4.0.1
+        version: 4.0.1
       '@modelcontextprotocol/sdk':
         specifier: 1.32.2
         version: 1.32.2(supports-color@7.2.0)(zod@3.25.76)
@@ -362,9 +365,6 @@ importers:
         specifier: 3.25.76
         version: 3.25.76
     devDependencies:
-      '@bsv/sdk':
-        specifier: 4.0.1
-        version: 4.0.1
       '@lightwebinc/bcommon':
         specifier: file:../../vendor/lightwebinc-bcommon-0.33.13.tgz
         version: file:vendor/lightwebinc-bcommon-0.33.13.tgz(@bsv/sdk@4.0.1)

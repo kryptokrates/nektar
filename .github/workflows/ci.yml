@@ -88,5 +88,5 @@ jobs:
       - name: build image (clean-checkout gate)
         run: docker build -t nektar:ci .
       - name: smoke — scripted MCP session inside the image
-        run: docker run --rm --entrypoint node nektar:ci packages/mcp/demo/client.mjs
+        run: docker run --rm --entrypoint node nektar:ci demo/client.mjs
         timeout-minutes: 3

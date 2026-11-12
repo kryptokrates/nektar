@@ -90,6 +90,9 @@ jobs:
       - name: pnpm
         run: corepack enable && corepack prepare pnpm@12.16.1 --activate
       - run: pnpm install --frozen-lockfile
+      # the dep-graph gate resolves @nektar/* through package exports → dist/;
+      # without a build every workspace import is couldNotResolve
+      - run: pnpm -r build
       - name: lint (incl. type-aware) · format · version consistency · declared imports · dep graph · dead code · dupes · leftovers · secrets
         run: pnpm check:hygiene
       - name: shellcheck
@@ -112,6 +115,15 @@ jobs:
           persist-credentials: false
       - name: build image (clean-checkout gate)
         run: docker build -t nektar:ci .
-      - name: smoke — scripted MCP session inside the image
-        run: docker run --rm --entrypoint node nektar:ci demo/client.mjs
+      - name: smoke — every packaged module resolves inside the image
+        run: |
+          docker run --rm --entrypoint node nektar:ci --input-type=module -e "
+            import { readdirSync } from 'node:fs'
+            import { pathToFileURL } from 'node:url'
+            const dir = '/app/dist/src'
+            const files = readdirSync(dir, { recursive: true })
+              .filter((f) => f.endsWith('.js') && !f.endsWith('bin.js') && !f.endsWith('init.js'))
+            for (const f of files) await import(pathToFileURL(dir + '/' + f).href)
+            console.log('smoke: ' + files.length + ' packaged modules resolve')
+          "
         timeout-minutes: 3

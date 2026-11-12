@@ -54,9 +54,9 @@ ENV NEKTAR_STARK_PROVER=/usr/local/bin/nektar-stark
 RUN mkdir -p /data && chown node:node /data
 # hadolint ignore=DL3066
 USER node
-# NEKTAR_NETWORK=mock (zero setup) | regtest (persistent in /data; needs
-# NEKTAR_FUND_WIF + NEKTAR_RPC_PASS, Teranode reachable via host.docker.internal)
-ENV NEKTAR_MODEL_ID=unspecified NEKTAR_BATCH=4 NEKTAR_NETWORK=mock NEKTAR_DATA_DIR=/data NEKTAR_TOOL_PROFILE=operator
+# NEKTAR_NETWORK=regtest (persistent in /data; needs NEKTAR_FUND_WIF +
+# NEKTAR_RPC_PASS, Teranode reachable via host.docker.internal) | ttn | main
+ENV NEKTAR_MODEL_ID=unspecified NEKTAR_BATCH=4 NEKTAR_NETWORK=regtest NEKTAR_DATA_DIR=/data NEKTAR_TOOL_PROFILE=operator
 VOLUME /data
 LABEL io.modelcontextprotocol.server.name="io.github.nedzof/nektar"
 # health = a full scripted MCP session against a fresh server process

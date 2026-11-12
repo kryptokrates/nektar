@@ -39,8 +39,17 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-      - name: smoke the pushed image
-        run: docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/nektar:${{ github.ref_type == 'tag' && 'latest' || 'edge' }} demo/client.mjs
+      - name: smoke — every packaged module resolves inside the pushed image
+        run: |
+          docker run --rm --entrypoint node ghcr.io/${{ github.repository_owner }}/nektar:${{ github.ref_type == 'tag' && 'latest' || 'edge' }} --input-type=module -e "
+            import { readdirSync } from 'node:fs'
+            import { pathToFileURL } from 'node:url'
+            const dir = '/app/dist/src'
+            const files = readdirSync(dir, { recursive: true })
+              .filter((f) => f.endsWith('.js') && !f.endsWith('bin.js') && !f.endsWith('init.js'))
+            for (const f of files) await import(pathToFileURL(dir + '/' + f).href)
+            console.log('smoke: ' + files.length + ' packaged modules resolve')
+          "
         timeout-minutes: 3
   bundle:
     runs-on: ubuntu-latest

@@ -54,13 +54,26 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
   // and a recipient receipt removes its acked commitments from the inbox index.
   const boxIndex = new Map<string, Array<{ txid: string; created: number; expires: number; commitment: string }>>()
   const boxEnvelopes: Array<{ to: string; txid: string }> = []
-  // ls_log below is a spec-shaped double: it implements only the three free
-  // question classes (batch/interval/tree); admission on tm_log_<stream>
-  // runs the REAL upstream admit() verdict with the previous coins the
-  // topic holds. Retention, spends-indexing and priced classes are not here.
-  const logBatches = new Map<string, Array<{ txid: string; outputIndex: number }>>() // `${producer}|${seq}` -> carriers
-  const logTokens = new Map<string, Array<{ txid: string; outputIndex: number }>>() // `${producer}|${interval}` -> tokens
-  const logCoins = new Map<string, { lockingScript: number[]; satoshis: number }>() // `txid.vout` -> coin
+  // tm_log/ls_log are the REAL upstream module (blogsModule wires the topic
+  // manager to the lookup service's coin view): admission is the reference
+  // verdict and every free question class behaves exactly as on a
+  // reference host. What this double does not implement: retention passes,
+  // priced question classes, engine-side storage/restore, and GASP catch-up.
+  let logTM: { identifyAdmissibleOutputs: (beef: number[], coins: number[]) => Promise<{ outputsToAdmit: number[]; coinsToRetain: number[] }> } | undefined
+  let logLS:
+    | {
+        coin: (topic: string, txid: string, vout: number) => Promise<unknown>
+        outputAdmittedByTopic: (p: { mode: string; atomicBEEF: number[]; outputIndex: number; topic: string }) => Promise<void> | void
+        lookup: (q: unknown) => Promise<Array<{ txid: string; outputIndex: number }>>
+      }
+    | undefined
+  if (logStream !== undefined) {
+    const mod = await import('@lightwebinc/blogs-host/dist/module.js')
+    const mhost = { metrics: { preset: () => {}, inc: () => {}, gauge: () => {} }, log: () => {}, chainTracker: tracker }
+    const m = mod.blogsModule(mhost as never, [{ stream: logStream, policy: { open: true } }], [`tm_log_${logStream}`])
+    logTM = m.topics![`tm_log_${logStream}`] as never
+    logLS = m.lookups!['ls_log'] as never
+  }
   // tm_finger runs the REAL upstream admission verdict, and ls_finger is the
   // REAL upstream join: admitted outputs and spends are fed to the vendored
   // FingerLookupService, so {identityKey}, {identityKey,pending} and
@@ -81,19 +94,6 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
     const mhost = { metrics: { preset: () => {}, inc: () => {}, gauge: () => {} }, log: () => {}, chainTracker: tracker }
     fingerTM = new mod.FingerTopicManager(mhost as never) as never
     fingerLS = new mod.FingerLookupService(mhost as never) as never
-  }
-  const txOf = (txid: string): Transaction | undefined => {
-    const b = stored.get(txid)
-    if (b === undefined) return undefined
-    try {
-      return Transaction.fromBEEF(b)
-    } catch {
-      try {
-        return Transaction.fromAtomicBEEF(b)
-      } catch {
-        return undefined
-      }
-    }
   }
   const srv = http.createServer(async (req, res) => {
     const chunks: Buffer[] = []
@@ -143,7 +143,7 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
             }
             throw new Error(`box admit kind ${adm.kind}`)
           }
-          if (logStream !== undefined && t === `tm_log_${logStream}`) {
+          if (logTM !== undefined && t === `tm_log_${logStream}`) {
             const beefArr = Array.from(body)
             let tx: Transaction
             try {
@@ -151,37 +151,15 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
             } catch {
               tx = Transaction.fromBEEF(beefArr)
             }
-            const { admit, outpointKey, toHex } = await import('@lightwebinc/blogs-host/dist/index.js')
-            const coins = new Map<string, { lockingScript: Uint8Array; satoshis: number }>()
-            for (const i of tx.inputs) {
-              const k = outpointKey(i.sourceTXID ?? i.sourceTransaction?.id('hex') ?? '', i.sourceOutputIndex)
-              const held = logCoins.get(k)
-              if (held !== undefined) coins.set(k, { lockingScript: new Uint8Array(held.lockingScript), satoshis: held.satoshis })
+            const prevCoins: number[] = []
+            for (const [i, inp] of tx.inputs.entries()) {
+              const src = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+              if (src !== undefined && (await logLS!.coin(t, src, inp.sourceOutputIndex)) !== undefined) prevCoins.push(i)
             }
-            const adm = await admit(tx, coins, { stream: logStream, policy: { open: true }, headers: tracker })
-            if (adm.kind === 'batch' && adm.carrier !== undefined) {
-              const txid = tx.id('hex')
-              stored.set(txid, beefArr)
-              const b = adm.carrier.batch
-              const k = `${toHex(b.producer)}|${b.seq}`
-              if (!logBatches.has(k)) logBatches.set(k, [])
-              logBatches.get(k)!.push({ txid, outputIndex: 0 })
-              admitted = admitted.concat([0])
-            } else if (adm.kind === 'anchor' && adm.token !== undefined) {
-              const txid = tx.id('hex')
-              stored.set(txid, beefArr)
-              const a = adm.token.anchor
-              const k = `${toHex(a.producer)}|${a.interval}`
-              if (!logTokens.has(k)) logTokens.set(k, [])
-              logTokens.get(k)!.push({ txid, outputIndex: adm.token.outputIndex })
-              admitted = admitted.concat([adm.token.outputIndex])
-            }
-            if (adm.funding.length > 0 || adm.kind !== 'none') {
-              const txid = tx.id('hex')
-              stored.set(txid, beefArr)
-              tx.outputs.forEach((o, vout) => logCoins.set(outpointKey(txid, vout), { lockingScript: o.lockingScript.toBinary(), satoshis: o.satoshis ?? 0 }))
-              if (adm.funding.length > 0) admitted = admitted.concat(adm.funding)
-            }
+            const r = await logTM.identifyAdmissibleOutputs(beefArr, prevCoins)
+            admitted = admitted.concat(r.outputsToAdmit)
+            stored.set(tx.id('hex'), beefArr)
+            for (const o of r.outputsToAdmit) await logLS!.outputAdmittedByTopic({ mode: 'whole-tx', atomicBEEF: beefArr, outputIndex: o, topic: t })
             continue
           }
           if (finger && t === 'tm_finger') {
@@ -242,21 +220,8 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
           if (fingerLS === undefined) throw new Error('finger double: not enabled')
           a = await fingerLS.lookup(q)
         } else if (q.service === 'ls_log') {
-          const want = q.query as Record<string, unknown>
-          const keys = Object.keys(want).sort().join(',')
-          if (keys === 'producer,seq,stream') {
-            a = logBatches.get(`${want.producer}|${want.seq}`) ?? []
-          } else if (keys === 'interval,producer,stream') {
-            a = logTokens.get(`${want.producer}|${want.interval}`) ?? []
-          } else if (keys === 'stream,tree') {
-            const tx = txOf(String(want.tree))
-            if (tx === undefined) a = []
-            else {
-              const { isFundingShape } = await import('@lightwebinc/blogs-host/dist/script.js')
-              const at = tx.outputs.findIndex((o) => isFundingShape(new Uint8Array(o.lockingScript.toBinary())))
-              a = at < 0 ? [] : [{ txid: tx.id('hex'), outputIndex: at }]
-            }
-          } else throw new Error('log double: only batch/interval/tree questions')
+          if (logLS === undefined) throw new Error('log double: not enabled')
+          a = await logLS.lookup(q)
         } else
           a = evil
             ? [...stored.keys()].map((txid) => ({ txid, outputIndex: 0 }))

@@ -5,7 +5,7 @@ set -eu
 apt-get -qq update >/dev/null && apt-get -qq install -y curl unzip >/dev/null
 mkdir -p /opt/cvc5 && cd /opt/cvc5
 curl -sSL -o cvc5.zip https://github.com/cvc5/cvc5/releases/download/cvc5-1.3.1/cvc5-Linux-x86_64-static.zip
-unzip -q -o cvc5.zip && export CVC5="$(find /opt/cvc5 -type f -name cvc5 | head -1)"
+unzip -q -o cvc5.zip && CVC5="$(find /opt/cvc5 -type f -name cvc5 | head -1)" && export CVC5
 "$CVC5" --version | head -1
 cd /w && cargo build -q --release
 B=/tmp/t/release/cedar-symcc-check

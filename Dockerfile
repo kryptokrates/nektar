@@ -4,6 +4,7 @@
 # The build FAILS if the program id differs from the pinned one.
 FROM rust:1.94-bookworm AS stark
 ENV RISC0_HOME=/opt/risc0 PATH=/opt/risc0/bin:/root/.risc0/bin:$PATH
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN for i in 1 2 3 4 5; do \
       curl -fsSL https://risczero.com/install | bash \
       && rzup install rust 1.97.0 \
@@ -26,6 +27,7 @@ RUN cargo build --release -p nektar-stark \
 FROM node:24-slim AS build
 # sqlite3 falls back to node-gyp when prebuild-install can't fetch a binary;
 # slim has no toolchain and sqlite3's bundled node-gyp 8.x can't parse Node 24.
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g node-gyp@11
@@ -50,6 +52,7 @@ COPY --from=build /app/packages/mcp/demo /app/demo
 COPY --from=stark /usr/local/bin/nektar-stark /usr/local/bin/r0vm /usr/local/bin/
 ENV NEKTAR_STARK_PROVER=/usr/local/bin/nektar-stark
 RUN mkdir -p /data && chown node:node /data
+# hadolint ignore=DL3066
 USER node
 # NEKTAR_NETWORK=mock (zero setup) | regtest (persistent in /data; needs
 # NEKTAR_FUND_WIF + NEKTAR_RPC_PASS, Teranode reachable via host.docker.internal)
@@ -57,5 +60,6 @@ ENV NEKTAR_MODEL_ID=unspecified NEKTAR_BATCH=4 NEKTAR_NETWORK=mock NEKTAR_DATA_D
 VOLUME /data
 LABEL io.modelcontextprotocol.server.name="io.github.nedzof/nektar"
 # health = a full scripted MCP session against a fresh server process
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=5m --timeout=60s CMD node demo/client.mjs > /dev/null || exit 1
 ENTRYPOINT ["node", "dist/src/bin.js"]

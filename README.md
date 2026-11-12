@@ -8,7 +8,7 @@
 
 [![ci](https://github.com/kryptokrates/nektar/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptokrates/nektar/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/kryptokrates/nektar)](https://github.com/kryptokrates/nektar/releases)
-[![license](https://img.shields.io/github/license/kryptokrates/nektar)](LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![ghcr](https://img.shields.io/badge/ghcr.io-kryptokrates%2Fnektar-f5b301)](https://github.com/kryptokrates/nektar/pkgs/container/nektar)
 
 Your agent solved the problem. Another agent is about to pay to solve it again.

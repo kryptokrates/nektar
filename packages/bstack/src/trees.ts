@@ -19,6 +19,14 @@ export async function ensureTrees(p: {
   takeFunding: (sats: number) => Promise<FundingOut>
   broadcast: (tx: Transaction) => Promise<BroadcastResult>
   fetchTx: (txid: string) => Promise<Transaction | undefined>
+  /** chain-observer verdict for a txid (broadcaster/overlay status) — when
+   *  given, an unproven mint whose status is a definitive rejection is
+   *  dropped so the kind's `unproven === 0` mint gate re-opens */
+  txStatus?: (txid: string) => Promise<string>
+  /** fired when an unproven tree is dropped as chain-rejected — lets the
+   *  caller mark its ghost inputs/outputs spent so funding never re-selects
+   *  them (the change output would otherwise cascade parent-rejected mints) */
+  onReject?: (tx: Transaction) => void | Promise<void>
   onSpent?: (tx: Transaction) => void | Promise<void>
 }): Promise<{ minted?: string; proven: string[]; remaining: number }> {
   // Hosts admit a carrier only from a funding tree that is proven in a block,
@@ -36,6 +44,14 @@ export async function ensureTrees(p: {
     if (tx !== undefined && tx.merklePath !== undefined) {
       await p.ledger.markProven(u.txid, tx.merklePath)
       proven.push(u.txid)
+    } else if (p.txStatus !== undefined) {
+      const st = (await p.txStatus(u.txid)).toUpperCase()
+      if (st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')) {
+        // the mint was refused/lost a competing spend — an unproven row
+        // would gate out every later mint of this kind forever
+        await p.ledger.drop(u.txid)
+        if (p.onReject !== undefined && tx !== undefined) await p.onReject(tx)
+      }
     }
   }
   const remaining = await p.ledger.remaining(kind)

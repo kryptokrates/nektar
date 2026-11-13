@@ -13,10 +13,10 @@
 // UTXOs exclusively — respawn them afterwards with .state/respawn-agents.sh.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, copyFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, copyFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import knex from 'knex'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { PrivateKey, Transaction } from '@bsv/sdk'
@@ -25,6 +25,7 @@ import {
   WocTracker,
   BsvBroadcaster,
   fetchTxStatus,
+  merklePathMainnet,
   ReserveFunder,
   type MainnetConfig,
   type ChainTracker,
@@ -46,6 +47,11 @@ const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
 const WOC = 'https://api.whatsonchain.com/v1/bsv/test'
 const COLLECT_MS = 15_000 // cold-seller margin measured live: want→offer ≈ 8-9s
 const STATE = fileURLToPath(new URL('../../../../.state/testnet-agents', import.meta.url))
+/** persistent per-WIF suite dirs — lanes.sqlite + reserve.json survive across
+ *  tests AND runs: funding trees mint+prove ONCE (one block), then every deal
+ *  runs on stock slots. This is the designed stock model — trees pre-mine
+ *  ahead so publishing never waits on a block. */
+const SUITE_DIR = fileURLToPath(new URL('../../../../.state/tn-suite', import.meta.url))
 
 const WIF: Record<string, string> = {
   alice: 'cPfqX3j79L1QxVVv77C34Caq2hdRoUA61T5jfFZDGp1syWBNxd37',
@@ -61,6 +67,58 @@ interface A {
   pub: string
   policyHash: string
   name: string
+  dir: string
+}
+
+/** live-UTXO reconcile: entries the file still shows free but the network
+ *  already spent must be marked before any funding call can take them. Only
+ *  runs when WoC answers — a failed probe must not zero the reserve. */
+const reconcileReserve = async (fundKey: PrivateKey, reserve: ReserveFunder, mc: MainnetConfig): Promise<void> => {
+  const addr = fundKey.toAddress()
+  const live = await fetch(`${mc.wocUrl}/address/${addr}/unspent`, { signal: AbortSignal.timeout(15_000) })
+    .then(async (r) => (r.ok ? ((await r.json()) as Array<{ tx_hash: string; tx_pos: number }>) : undefined))
+    .catch(() => undefined)
+  if (live === undefined) return
+  const liveSet = new Set(live.map((u) => `${u.tx_hash}:${u.tx_pos}`))
+  for (const u of [...reserve.utxos]) {
+    const txid = u.tx.id('hex')
+    if (!liveSet.has(`${txid}:${u.vout}`)) reserve.markSpent(txid, u.vout)
+  }
+}
+
+/** all deal-path lanes have a proven funding tree in lanes.sqlite.
+ *  `log` warms lazily — it is not on the deal path. */
+const treesReady = async (dataDir: string): Promise<boolean> => {
+  const f = join(dataDir, 'lanes.sqlite')
+  if (!existsSync(f)) return false
+  const kx = knex({ client: 'sqlite3', connection: { filename: f }, useNullAsDefault: true })
+  try {
+    const kinds = (await kx('bstack_trees as t')
+      .join('bstack_tree_outputs as o', 'o.txid', 't.txid')
+      .where('t.proven', 1)
+      .distinct('o.kind')) as Array<{ kind: string }>
+    const have = new Set(kinds.map((r) => r.kind))
+    return ['market', 'bbox', 'finger'].every((k) => have.has(k))
+  } catch {
+    return false
+  } finally {
+    await kx.destroy()
+  }
+}
+
+/** cycle agents until every deal-path funding tree is proven — the one real
+ *  block the suite pays. Persistent dirs make it a once-per-suite cost: a
+ *  re-run with surviving lanes.sqlite skips it entirely. */
+const warmup = async (agents: A[], logs: string[], ms = 1_500_000): Promise<void> => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < ms) {
+    const pending = [] as A[]
+    for (const a of agents) if (!(await treesReady(a.dir))) pending.push(a)
+    if (pending.length === 0) return
+    await drive(agents.map((a) => a.rt))
+    await sleep(15_000) // give the mints time to reach a block
+  }
+  throw new Error(`warmup: trees never proven | ` + logs.slice(-10).join(' | '))
 }
 
 const mcFor = (): MainnetConfig => ({
@@ -91,15 +149,30 @@ const mkagent = async (
 ): Promise<A> => {
   const wif = WIF[wifName]
   const mc = mcFor()
-  const dataDir = join(dir, name)
+  // identity-keyed persistent dir — respawns and later tests reuse the SAME
+  // lanes/reserve state (exactly what a real agent restart looks like)
+  const dataDir = join(dir, wifName)
   mkdirSync(dataDir, { recursive: true })
-  // custody snapshot: the live agent's reserve.json (entries + spent marks +
-  // settlement income) — no re-import, no scanning, no double-spend attempts
-  const src = join(STATE, wifName, 'reserve.json')
-  if (existsSync(src)) copyFileSync(src, join(dataDir, 'reserve.json'))
   const fundKey = PrivateKey.fromWif(wif)
-  const reserve = new ReserveFunder(fundKey, join(dataDir, 'reserve.json'))
-  const chain = mkChain(mc)
+  const reserveFile = join(dataDir, 'reserve.json')
+  // custody snapshot on first use only — afterwards the file is live custody
+  const src = join(STATE, wifName, 'reserve.json')
+  if (!existsSync(reserveFile) && existsSync(src)) copyFileSync(src, reserveFile)
+  const reserve = new ReserveFunder(fundKey, reserveFile)
+  // reconcile against chain truth: entries the file still shows free but the
+  // network already spent (a prior run's tree mint, a killed agent's last
+  // broadcast) must never be handed out — that is exactly how the
+  // UTXO_SPENT double-mint wedge happened
+  await reconcileReserve(fundKey, reserve, mc)
+  const tracker = new ChaintracksTracker(mc, `${ARC}/chaintracks/v2`, new WocTracker(mc))
+  const bcast = new BsvBroadcaster(mc)
+  const chain = {
+    broadcast: (tx: Transaction) => bcast.broadcast(tx),
+    currentHeight: () => tracker.currentHeight(),
+    isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
+    headerAtHeight: (h: number) => tracker.headerAtHeight(h),
+    tipHeight: () => tracker.currentHeight()
+  } as ChainTracker & Broadcaster
   // fundKey IS the WIF — funding inputs pay the WIF's P2PKH and must be
   // signed by it (anchor/provider path). Identity = WIF pub, same as live.
   const mem = new NektarMemory(chain, reserve as never, PrivateKey.fromWif(wif), {
@@ -109,6 +182,18 @@ const mkagent = async (
     txStatus: (txid: string) => fetchTxStatus(mc, txid, { wocFallback: true }),
     batchPolicy: { maxLeaves: 1 }
   })
+  // live-runtime parity: pull-based proof + tx lookups so mined txs get their
+  // BUMP attached (tree provenance, carrier admission, covenant refund gates)
+  mem.proofLookup = async (txid: string) => {
+    const r = await merklePathMainnet(mc, txid)
+    if (!r) return undefined
+    const root = r.merklePath.computeRoot(txid)
+    return (await tracker.isValidRootForHeight(root, r.merklePath.blockHeight)) ? r.merklePath : undefined
+  }
+  mem.txLookup = async (txid: string) => {
+    const r = await fetch(`${WOC}/tx/${txid}/hex`, { signal: AbortSignal.timeout(10_000) })
+    return r.ok ? Transaction.fromHex((await r.text()).trim()) : undefined
+  }
   const pub = mem.operatorKey().toPublicKey().toString()
   const rt = await openAutomation(mem, {
     network: 'testnet',
@@ -124,7 +209,7 @@ const mkagent = async (
     opts: { offerTtlBlocks: 48, refundBlocks: 1, ...opts }
   })
   mem.automation = rt
-  return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name }
+  return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name, dir: dataDir }
 }
 
 const policyFor = (pub: string): AutomationPolicy => ({
@@ -197,9 +282,9 @@ const deal = async (b: A, s: A, logs: string[], ms = 180_000) => {
   return { wantId: w.wantId, ms: elapsed, wallTotal: Date.now() - t0 }
 }
 
-const respawn = async (a: A, hosts: string[], logs: string[], dir: string): Promise<A> => {
+const respawn = async (a: A, hosts: string[], logs: string[]): Promise<A> => {
   const wifName = a.name.split('-')[0] as 'alice' | 'ben' | 'bob'
-  return await mkagent(a.name, wifName, hosts, logs, dir)
+  return await mkagent(a.name, wifName, hosts, logs, SUITE_DIR)
 }
 
 const STOP_ALL = async (rts: Array<Automation | undefined>) => {
@@ -273,7 +358,7 @@ const stubShim = async () => {
 
 test('T1: deal latency distribution — 3 sequential live deals', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
@@ -283,6 +368,7 @@ test('T1: deal latency distribution — 3 sequential live deals', { timeout: 600
     b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
+    await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
     for (let i = 0; i < 3; i++) {
       const r = await deal(b, s, logs)
@@ -299,7 +385,7 @@ test('T1: deal latency distribution — 3 sequential live deals', { timeout: 600
 
 test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
@@ -309,6 +395,7 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 600_000 
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
     for (const [i, w] of (['alice', 'bob'] as const).entries()) buyers.push(await mkagent(`${w}-b${i}`, w, [f1.url, f2.url], logs, dir))
+    await warmup([s, ...buyers], logs)
     await drive([s.rt, ...buyers.map((b) => b.rt)], 6)
     const t0 = Date.now()
     const wants = await Promise.all(
@@ -335,7 +422,7 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 600_000 
 test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
   const run = async (watch: boolean) => {
-    const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+    const dir = SUITE_DIR
     const logs: string[] = []
     const f1 = await faulthost(HOST_A)
     const f2 = await faulthost(HOST_B)
@@ -369,7 +456,7 @@ test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { time
 test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
   for (const kb of [1, 32]) {
-    const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+    const dir = SUITE_DIR
     const logs: string[] = []
     const f1 = await faulthost(HOST_A)
     const f2 = await faulthost(HOST_B)
@@ -381,7 +468,8 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
       await s.mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'record', priceSats: 200 }] })
       for (const l of s.mem.anchorLinks('guide')) s.mem.confirmAnchor('guide', l.txid)
       await s.rt.engine.enableSeller(s.policyHash)
-      await drive([b.rt, s.rt], 6)
+      await warmup([b, s], logs)
+    await drive([b.rt, s.rt], 6)
       const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
       const t0 = Date.now()
       if (kb === 1) {
@@ -420,7 +508,7 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
 
 test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
@@ -429,6 +517,7 @@ test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 60
     b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
+    await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
     assert.ok((await until([b.rt, s.rt], 90_000, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
@@ -448,7 +537,7 @@ test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 60
 
 test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   f1.fault.delayMs = 3_000
@@ -458,6 +547,7 @@ test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeou
     b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
+    await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
     const ms = (await deal(b, s, logs, 200_000)).ms
     console.log(`    deal under 3s-delayed host: ${ms}ms`)
@@ -469,7 +559,7 @@ test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeou
 
 test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (live)', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
@@ -478,6 +568,7 @@ test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (
     b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
+    await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
     assert.ok((await until([b.rt, s.rt], 90_000, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
@@ -500,7 +591,7 @@ test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (
 
 test('R4: partition both hosts → deaf window → heal → completes, no double-broadcast (live)', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
@@ -509,11 +600,13 @@ test('R4: partition both hosts → deaf window → heal → completes, no double
     b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
+    await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
     assert.ok((await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
       'never funded | ' + logs.slice(-15).join(' | '))
     f1.fault.down = true; f2.fault.down = true
+    await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6) // deaf window — in-flight ops persist, no new work
     const mid = await opFor(b, w.wantId)
     assert.ok(mid !== undefined && mid.state !== 'useful' && mid.state !== 'disclosure_verified', 'deal progressed while deaf — impossible')
@@ -534,7 +627,7 @@ test('R4: partition both hosts → deaf window → heal → completes, no double
 
 test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
@@ -543,13 +636,14 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
     b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
+    await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
     assert.ok((await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
       'never funded | ' + logs.slice(-15).join(' | '))
     const opId = (await opFor(b, w.wantId))!.operationId
     await b.rt.stop() // kill -9 equivalent — store persists, respawn resumes
-    b2 = await respawn(b, [f1.url, f2.url], logs, dir)
+    b2 = await respawn(b, [f1.url, f2.url], logs)
     const ms = await until([b2.rt, s.rt], 120_000, async () => {
       const bo = (await buyerOps(b2)).find((o) => o.operationId === opId)
       const so = await saleFor(s, w.wantId)
@@ -566,7 +660,7 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
 
 test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   f1.fault.duplicateOutputs = true
@@ -576,6 +670,7 @@ test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 6
     b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
+    await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
     const r = await deal(b, s, logs)
     assert.ok(r.ms > 0)
@@ -588,7 +683,7 @@ test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 6
 
 test('R7: late escrow rejection → funding_failed via txState event (live)', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
@@ -597,6 +692,7 @@ test('R7: late escrow rejection → funding_failed via txState event (live)', { 
     b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
+    await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
     assert.ok((await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
@@ -621,7 +717,7 @@ test('R7: late escrow rejection → funding_failed via txState event (live)', { 
 
 test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settlements (live)', { timeout: 600_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
@@ -631,6 +727,7 @@ test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settle
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
     for (const [i, w] of (['alice', 'bob'] as const).entries()) buyers.push(await mkagent(`${w}-b${i}`, w, [f1.url, f2.url], logs, dir))
+    await warmup([s, ...buyers], logs)
     await drive([s.rt, ...buyers.map((b) => b.rt)], 6)
     const wants = await Promise.all(
       buyers.map((b) => b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash))
@@ -662,7 +759,7 @@ test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settle
 // the refund (escrow) AND the dispute (direct) — ~10-20min total.
 test('R9: timeout truth — escrow refund vs direct dispute on real blocks', { timeout: 1_800_000 }, async (t) => {
   if (!(await live(t))) return
-  const dir = mkdtempSync(join(tmpdir(), 'nektar-tn-'))
+  const dir = SUITE_DIR
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
@@ -672,6 +769,7 @@ test('R9: timeout truth — escrow refund vs direct dispute on real blocks', { t
     await sellerize(s, 200)
     be = await mkagent('alice-e', 'alice', [f1.url, f2.url], logs, dir, { refundBlocks: 1 })
     bd = await mkagent('bob-d', 'bob', [f1.url, f2.url], logs, dir, { refundBlocks: 1, directMaxSats: 500 })
+    await warmup([be, bd, s], logs)
     await drive([s.rt, be.rt, bd.rt], 6)
     const wE = await be.rt.engine.publishWant({ domains: ['libfoo'], question: 'escrow?', maxSats: 450 }, be.policyHash)
     const wD = await bd.rt.engine.publishWant({ domains: ['libfoo'], question: 'direct?', maxSats: 450 }, bd.policyHash)

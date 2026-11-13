@@ -76,6 +76,10 @@ export interface TreeLedger {
    *  is ancestry-anchored and its slots serve. true when a beef changed. */
   attachParentPath(txid: string, merklePath: MerklePath): Promise<boolean>
   unproven(): Promise<Array<{ txid: string; kind: string }>>
+  /** remove a tree + all its slots — a mint that never landed on-chain
+   *  (rejected / evicted) would otherwise sit in unproven() forever and gate
+   *  out every future mint of that kind */
+  drop(txid: string): Promise<void>
   remaining(kind?: string): Promise<number>
 }
 
@@ -139,6 +143,10 @@ export class MemoryTreeLedger implements TreeLedger {
   }
   async unproven(): Promise<Array<{ txid: string; kind: string }>> {
     return [...this.trees].filter(([, t]) => !t.proven).map(([id, t]) => ({ txid: id, kind: t.kind }))
+  }
+  async drop(txid: string): Promise<void> {
+    this.trees.delete(txid)
+    for (const k of [...this.free]) if (k.startsWith(`${txid}:`)) this.free.delete(k)
   }
   async remaining(kind = 'market'): Promise<number> {
     let n = 0
@@ -299,6 +307,11 @@ export class KnexTreeLedger implements TreeLedger {
   async unproven(): Promise<Array<{ txid: string; kind: string }>> {
     await this.ensure()
     return (await this.kx('bstack_trees').where({ proven: 0 }).select('txid', 'kind')).map((r) => ({ txid: r.txid, kind: r.kind }))
+  }
+  async drop(txid: string): Promise<void> {
+    await this.ensure()
+    await this.kx('bstack_trees').where({ txid }).del()
+    await this.kx('bstack_tree_outputs').where({ txid }).del()
   }
   async remaining(kind = 'market'): Promise<number> {
     await this.ensure()

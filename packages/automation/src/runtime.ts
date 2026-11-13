@@ -629,6 +629,18 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0],
               broadcast: (tx) => mem.broadcastTx(tx),
               fetchTx: (txid) => mem.fetchTx(txid),
+              txStatus: (txid) => mem.txState(txid),
+              onReject: (tree) => {
+                // dead mint: nothing it produced exists on-chain — kill the
+                // ghost change output AND its inputs so fundingOuts can't
+                // re-select them into the next mint (cascade prevention)
+                const tid = tree.id('hex')
+                tree.outputs.forEach((_o, vout) => mem.markSpentOut(tid, vout))
+                for (const inp of tree.inputs) {
+                  const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+                  if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0)
+                }
+              },
               onSpent: (tree) => {
                 for (const inp of tree.inputs) {
                   const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')

@@ -128,11 +128,7 @@ async function assetGet(cfg: RegtestConfig, path: string, binary = true): Promis
  *  the merklePathFor legacy-block scan (the fallback for when the asset
  *  endpoint can't answer). Served bytes are a claim — a caller that needs
  *  trust anchors computeRoot against its own ChainTracker. */
-export async function regtestMerkleProof(
-  cfg: RegtestConfig,
-  txid: string,
-  fetchImpl: typeof fetch = fetch
-): Promise<MerklePath | undefined> {
+export async function regtestMerkleProof(cfg: RegtestConfig, txid: string, fetchImpl: typeof fetch = fetch): Promise<MerklePath | undefined> {
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
   const res = await fetchImpl(`${cfg.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(15_000) }).catch(
     () => null

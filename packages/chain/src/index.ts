@@ -11,7 +11,8 @@ export {
   merklePathAtHeight,
   bootstrapReserve,
   utxoStatus,
-  regtestTx
+  regtestTx,
+  regtestMerkleProof
 } from './regtest.js'
 export { ChaintracksTracker, parseHeaderHex, DEFAULT_BROADCASTER_URL, DEFAULT_WOC_URL } from './mainnet.js'
 export { P2PListener } from './p2p.js'

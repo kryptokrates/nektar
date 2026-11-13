@@ -31,8 +31,8 @@ question that could come from memory:
 ## Key custody (`NEKTAR_WALLET`)
 
 - **`client`** — `WalletClient('auto')` over an external BRC-100 substrate (BSV/Metanet Desktop). The app holds **zero** private keys: fund, log, shard-owner and automaton signatures go through `createSignature`/`getPublicKey`; fragment encryption uses `createHmac`; `keys.json` is only _read_ for legacy shard owners + old records. `fundKey`/`fee.key.json`/`NEKTAR_FUND_WIF`/`NEKTAR_FUND_MNEMONIC` are unnecessary on this path.
-- **`toolbox`** — embedded `@bsv/wallet-toolbox` (`wallet.sqlite`); the keyDeriver root still needs `NEKTAR_FUND_WIF`/`NEKTAR_FUND_MNEMONIC` — the documented embedded-wallet exception.
-- **unset (legacy)** — `fee.key.json`/env WIF for the fee key + `keys.json` (scrypt passphrase `NEKTAR_KEY_PASSPHRASE`) for agent/log/shard keys. Kept for bootstrap + regtest; the signing seam treats every key as `SignerLike`, so behavior is identical under any custody.
+- **`toolbox` (default)** — embedded `@bsv/wallet-toolbox` (`wallet.sqlite`); the keyDeriver root still needs `NEKTAR_FUND_WIF`/`NEKTAR_FUND_MNEMONIC` — the documented embedded-wallet exception. The wallet owns the funding-UTXO lifecycle (selection, spent marks, internalized change); `reserve.json` only seeds it once at boot. Signing goes through local BRC-42 derivation — toolbox's `createSignature` has no `hashToDirectlySign`, so remote signing would sign the wrong digest.
+- **`legacy`** — `fee.key.json`/env WIF for the fee key + `keys.json` (scrypt passphrase `NEKTAR_KEY_PASSPHRASE`) for agent/log/shard keys + the file-backed `ReserveFunder`. Rollback during the toolbox rollout; the signing seam treats every key as `SignerLike`, so behavior is identical under any custody.
 - Test-only treasuries (`testkit.ts`, `e2e`, `.state/ttn-wif.txt`, `agent-keys.json`) hold keys by design — they aren't app custody. Consumer-side helpers (`client-kit.ts`, `identity.signBinding`/`answerChallenge`, `reasoning.makeDelegation`, `graph.delegate`) take the _caller's_ key — custody there belongs to the caller.
 
 ## Regtest stack gotchas (learned the hard way)

@@ -60,6 +60,29 @@ question that could come from memory:
   `compose.regtest.yaml` (and live via `docker update`) — the restart-retry
   loop is what beats the race. The sandbox clone is gitignored; reapply after
   a fresh checkout.
+- **Kafka `txmeta` has ~60s retention** — txmeta records are written by the
+  utxo-persister consuming live Kafka. Coinbases mined while the persister is
+  still initializing (a `clean.sh --data-only` reset fast-seals hundreds of
+  blocks in seconds) never land: the utxo set knows the outpoints but parent
+  fetch returns `TX_MISSING_PARENT` forever — the funds exist on-chain and are
+  unspendable, and every treasury built on them silently drains. Same ghost-
+  parent failure after a reorg orphans the validator-side records. Symptom:
+  `TX_MISSING_PARENT` on an outpoint that `listunspent`/utxo-status says is
+  unspent → the metadata is gone, not the money. Recovery: there is none —
+  reset the stack (`deploy/teranode-quickstart/clean.sh --data-only`) and
+  refund treasuries, or harvest only the live-window coinbases (post-persister
+  heights; binary-probe a 1-coinbase spend at increasing heights to find the
+  lower boundary).
+- **Subsidy collapses fast on this chain** — ~halving every ~150 blocks:
+  early blocks pay ~5e9 sats, by ~block 400 it's ~1.5e8, by ~3000 it's ~37
+  sats/block. Funding a treasury by mining is hopeless once the chain ages;
+  keep `regtest-fund.mjs` output or swept agent leftovers (`sweep-agents.mjs`)
+  topped up instead.
+- **Long-running node evals die with `0xC0000409` on Windows/Node 24** — the
+  libuv teardown assert kills processes holding sockets at exit. Agents are
+  respawned by the scenario, but bench/harness evals aren't — split scans
+  into phases writing checkpoint files, and use `connection: close` so no
+  sockets linger.
 
 Honesty rule: proofs establish recorded + unaltered + derivable — never
 that a memory's content is true, and the model manifest is _declared_, not

@@ -11,7 +11,6 @@ import type { Automation } from '@nektar/automation'
 import { PrivateKey, PublicKey, ProtoWallet, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte, type WalletInterface } from '@bsv/sdk'
 import {
   utf8,
-  fromHex,
   toHex,
   sha256,
   dsha256,
@@ -93,20 +92,7 @@ import {
 import { TxStore } from '@nektar/chain'
 import type { Broadcaster, ChainTracker, Funder } from '@nektar/chain'
 import * as idbind from '@nektar/identity'
-import {
-  proveMembershipStark,
-  verifyMembershipAnchoredStark,
-  starkQueryId,
-  proveDerivationStark,
-  verifyDerivationBound,
-  buildSubsetProof,
-  encodeZkdis,
-  decodeZkdis,
-  verifySubsetAnchored,
-  decodeZkm2,
-  decodeZkder,
-  verifyCombinedStark
-} from '@nektar/zk'
+import { ZkProveOps } from './zkprove.js'
 
 // the domain vocabulary lives in ./types.js — a leaf module so the *ops
 // modules can share these types with NektarMemory without a memory↔ops
@@ -346,6 +332,19 @@ export class NektarMemory {
       persistState: () => this.persistState(),
       metricsInc: (n) => this.metrics.inc(n)
     })
+    this.zkProveOps = new ZkProveOps({
+      store: this.store,
+      tails: this.tails,
+      anchorTxs: this.anchorTxs,
+      anchors: this.anchors,
+      chain: this.chain,
+      consumeZkQuery: (q) => this.consumeZkQuery(q),
+      peekZkQuery: (q) => this.peekZkQuery(q),
+      zkQueryConsumed: (q) => this.zkQueryConsumed(q),
+      verifyClearance: (c, z, s) => this.verifyClearance(c, z, s),
+      policyDag: () => this.opts.policyDag,
+      anchoredPolicyRoot: () => this.opts.anchoredPolicyRoot
+    })
     this.zkQueryOps = new ZkQueryOps({
       zkQueries: this.zkQueries,
       persistSecurityState: () => this.persistSecurityState()
@@ -422,6 +421,7 @@ export class NektarMemory {
   private authorshipOps!: AuthorshipOps
   private zkQueryOps!: ZkQueryOps
   private attestOps!: AttestOps
+  private zkProveOps!: ZkProveOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     return await this.txOps.fetchTx(txid)
@@ -815,15 +815,7 @@ export class NektarMemory {
    *  root R_n is anchored on BSV, bound to a verifier-issued queryId. ZK-STARK
    *  (RISC Zero succinct receipt): reveals neither the leaf, its index nor the path. */
   async proveMembership(shard: string, seq: number, queryIdHex: string): Promise<{ bytes: Uint8Array; ms: number }> {
-    if (!/^[0-9a-f]{64}$/.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
-    const rec = await this.store.bySeq(shard, seq)
-    if (!rec || rec.batchIndex === undefined) throw new Error('fragment not batched')
-    const batch = await this.store.byBatch(shard, rec.batchIndex)
-    const leaves = batch.map((r) => r.leaf)
-    const index = batch.findIndex((r) => r.seq === seq)
-    const { siblings } = merkleProof(leaves, index)
-    const { bytes, ms } = await proveMembershipStark({ leaf: rec.leaf, index, size: leaves.length, siblings, queryId: fromHex(queryIdHex) })
-    return { bytes, ms }
+    return await this.zkProveOps.proveMembership(shard, seq, queryIdHex)
   }
 
   // ── GOAL-v6 S1a (§13 "on-chain if necessary"): cheap receipt commitments —
@@ -867,30 +859,7 @@ export class NektarMemory {
   /** verifier side: the proof's root must be the R of an SPV-verified anchor of
    *  THIS shard on its canonical chain, and the queryId one we issued (single use). */
   async verifyMembership(shard: string, seq: number, bytes: Uint8Array): Promise<{ ok: boolean; reason?: string; anchorTxid?: string; statement: string }> {
-    const rec = await this.store.bySeq(shard, seq)
-    if (!rec || rec.batchIndex === undefined) return { ok: false, reason: 'not batched', statement: 'no anchor' }
-    const link = (this.tails.get(shard) ?? []).find((l) => l.n === rec.batchIndex)
-    const anchorTx = link ? this.anchorTxs.get(link.txid) : undefined
-    if (!anchorTx) return { ok: false, reason: 'anchor tx not found', statement: 'no anchor' }
-    const tail = this.tails.get(shard) ?? []
-    // expected shard = THIS instance's shard id (hash160 of the genesis owner,
-    // from our own anchor chain) — never read from the anchor being verified
-    await this.anchors.get(shard)?.ready
-    const shardId = this.anchors.get(shard)?.getShardId()
-    if (!shardId) return { ok: false, reason: 'unknown shard', statement: 'no anchor' }
-    const res = await verifyMembershipAnchoredStark(
-      bytes,
-      anchorTx,
-      this.chain,
-      { consume: this.consumeZkQuery },
-      { shard: shardId, isCanonical: (txid: string) => tail.some((l) => l.txid === txid) }
-    )
-    return {
-      ok: res.ok,
-      reason: res.reason,
-      anchorTxid: res.anchorTxid,
-      statement: 'proves some record is in this anchored batch (ZK-STARK, no trusted setup) — not which one, not its content, not truth'
-    }
+    return await this.zkProveOps.verifyMembership(shard, seq, bytes)
   }
 
   /** any tx this instance broadcast and remembers — anchor or attestation
@@ -940,23 +909,7 @@ export class NektarMemory {
    *  (private cites never carry the shard name); the cite's hdp stays
    *  unverifiable-by-design — ZK hides which leaf it was. */
   async reverifyMembershipBytes(bytes: Uint8Array, anchorTxid: string): Promise<{ ok: boolean; reason?: string; anchorTxid?: string }> {
-    const anchorTx = this.anchorTxs.get(anchorTxid)
-    if (!anchorTx) return { ok: false, reason: 'committed anchor tx unknown to this instance' }
-    const { decodeNektarAnchor } = await import('@nektar/contracts')
-    const data = decodeNektarAnchor(anchorTx.outputs[0].lockingScript.toHex())
-    if (!data) return { ok: false, reason: 'committed tx output 0 is not a nektar anchor' }
-    for (const [, ac] of this.anchors) await ac.ready
-    const shardName = [...this.anchors.entries()].find(([, ac]) => ac.getShardId() === data.shard)?.[0]
-    if (shardName === undefined) return { ok: false, reason: 'anchor shard is not one of ours' }
-    const tail = this.tails.get(shardName) ?? []
-    const res = await verifyMembershipAnchoredStark(
-      bytes,
-      anchorTx,
-      this.chain,
-      { consume: this.zkQueryConsumed },
-      { shard: data.shard, isCanonical: (txid: string) => tail.some((l) => l.txid === txid) }
-    )
-    return { ok: res.ok, reason: res.reason, anchorTxid: res.anchorTxid }
+    return await this.zkProveOps.reverifyMembershipBytes(bytes, anchorTxid)
   }
 
   /** verifier side (§13 Π_j = (π_j, ZKAccess(ℓ_q ≥ ℓ_j))): the dual commitment
@@ -974,72 +927,7 @@ export class NektarMemory {
     zk: ZkClearance,
     opts?: { scope?: string; derivationBytes?: Uint8Array; callerPubkey?: string }
   ): Promise<{ ok: boolean; reason?: string; anchorTxid?: string; statement: string }> {
-    const statement =
-      'Π_j = (π_j, ZKAccess): some record is in this anchored batch AND the clearance bound to the same verifier query proves level ≥ required — reveals no leaf, index, path, level or credential; not which record, not truth'
-    const rec = await this.store.bySeq(shard, seq)
-    if (!rec || rec.batchIndex === undefined) return { ok: false, reason: 'not batched', statement }
-    const tail = this.tails.get(shard) ?? []
-    const link = tail.find((l) => l.n === rec.batchIndex)
-    const anchorTx = link ? this.anchorTxs.get(link.txid) : undefined
-    if (!anchorTx) return { ok: false, reason: 'anchor tx not found', statement }
-    await this.anchors.get(shard)?.ready
-    const shardId = this.anchors.get(shard)?.getShardId()
-    if (!shardId) return { ok: false, reason: 'unknown shard', statement }
-    const scope = opts?.scope ?? `${shard}/${seq}`
-    // cheap header reads first — verify re-checks header == journal byte for byte
-    let mHdr
-    try {
-      mHdr = decodeZkm2(membershipBytes)
-    } catch (e) {
-      return { ok: false, reason: `codec: ${(e as Error).message}`, statement }
-    }
-    const queryIdHex = toHex(mHdr.queryId)
-    let dHdr
-    if (opts?.derivationBytes !== undefined) {
-      try {
-        dHdr = decodeZkder(opts.derivationBytes)
-      } catch (e) {
-        return { ok: false, reason: `codec: ${(e as Error).message}`, statement }
-      }
-    }
-    const issued = this.peekZkQuery(queryIdHex)
-    if (!issued) return { ok: false, reason: 'proof queryId was not issued by this verifier (or expired)', statement }
-    // the stored query MUST recompute to the proof's queryId — binds the
-    // registry row to THIS proof; without it an inconsistent row could satisfy
-    // the Π check against a different query
-    if (toHex(starkQueryId({ nonce: fromHex(issued.nonce), verifierId: issued.verifierId })) !== queryIdHex) {
-      return { ok: false, reason: 'issued query does not recompute to the proof queryId', statement }
-    }
-    if (
-      !verifyCombinedStark({ nonce: fromHex(issued.nonce), verifierId: issued.verifierId }, zk.transcript, dHdr ? { queryId: toHex(dHdr.queryId) } : undefined)
-    ) {
-      return { ok: false, reason: 'Π binding failed: clearance or derivation is not bound to the same verifier query as the membership proof', statement }
-    }
-    const res = await verifyMembershipAnchoredStark(
-      membershipBytes,
-      anchorTx,
-      this.chain,
-      { consume: () => true },
-      { shard: shardId, isCanonical: (txid: string) => tail.some((l) => l.txid === txid) }
-    )
-    if (!res.ok) return { ok: false, reason: res.reason, statement }
-    if (opts?.derivationBytes !== undefined) {
-      const policyRoot = await this.expectedPolicyRoot(shard)
-      if (!policyRoot) return { ok: false, reason: 'no anchored policy root configured', statement }
-      const dv = verifyDerivationBound(opts.derivationBytes, { consume: () => true }, policyRoot)
-      if (!dv.ok) return { ok: false, reason: `derivation: ${dv.reason}`, statement }
-    }
-    const clear = this.verifyClearance({ pubkey: opts?.callerPubkey ?? zk.commitment.holder }, zk, scope)
-    if (!clear.ok) return { ok: false, reason: `clearance: ${clear.reason}`, statement }
-    if (!this.consumeZkQuery(queryIdHex)) return { ok: false, reason: 'queryId expired or consumed mid-verify', statement }
-    return { ok: true, anchorTxid: res.anchorTxid, statement }
-  }
-
-  /** GOAL-v6 S5 proof sharding (DIS-002; US 12,730,827 B2 under the Open BSV
-   *  pledge — BSV only, see NOTICE): default ON, `NEKTAR_PROOF_SHARDING=0`
-   *  opts out for patent-cautious operators → 'disabled'. */
-  private proofShardingOn(): boolean {
-    return nektarEnv('NEKTAR_PROOF_SHARDING') !== '0'
+    return await this.zkProveOps.verifyCombined(shard, seq, membershipBytes, zk, opts)
   }
 
   /** holder side: a selective inclusion proof for a SUBSET of one batch's
@@ -1051,26 +939,7 @@ export class NektarMemory {
     shard: string,
     seqs: number[]
   ): Promise<{ ok: true; bytes: Uint8Array; batchIndex: number; size: number; indices: number[] } | { ok: false; reason: string }> {
-    if (!this.proofShardingOn()) return { ok: false, reason: 'disabled' }
-    if (!Array.isArray(seqs) || seqs.length === 0 || !seqs.every((s) => Number.isInteger(s) && s >= 0))
-      return { ok: false, reason: 'seqs must be a non-empty list of record seqs' }
-    if (new Set(seqs).size !== seqs.length) return { ok: false, reason: 'duplicate seqs' }
-    const found = new Map<number, LogRecord>()
-    for (const s of seqs) {
-      const r = await this.store.bySeq(shard, s)
-      if (r !== undefined) found.set(s, r)
-    }
-    const missing = seqs.filter((s) => !found.has(s))
-    if (missing.length > 0) return { ok: false, reason: `no record(s) seq ${missing.join(',')}` }
-    const batchIndex = found.get(seqs[0])!.batchIndex
-    if (batchIndex === undefined) return { ok: false, reason: 'not batched' }
-    if (![...found.values()].every((r) => r.batchIndex === batchIndex))
-      return { ok: false, reason: 'seqs span multiple batches — one subset proof covers one batch' }
-    const batch = await this.store.byBatch(shard, batchIndex)
-    const leaves = batch.map((r) => r.leaf)
-    const indices = seqs.map((s) => batch.findIndex((r) => r.seq === s))
-    const proof = buildSubsetProof(leaves, indices)
-    return { ok: true, bytes: encodeZkdis(proof), batchIndex, size: leaves.length, indices: [...indices].sort((a, b) => a - b) }
+    return await this.zkProveOps.proveSubset(shard, seqs)
   }
 
   /** verifier side: the proof's claimed batch root locates OUR anchored link
@@ -1080,40 +949,7 @@ export class NektarMemory {
     shard: string,
     bytes: Uint8Array
   ): Promise<{ ok: boolean; reason?: string; anchorTxid?: string; size?: number; indices?: number[]; seqs?: number[]; statement: string }> {
-    const statement =
-      'proves the listed leaf hashes sit at the listed positions in this anchored batch (selective subset disclosure; record contents stay private) — not truth'
-    if (!this.proofShardingOn()) return { ok: false, reason: 'disabled', statement }
-    let hdr
-    try {
-      hdr = decodeZkdis(bytes)
-    } catch (e) {
-      return { ok: false, reason: `codec: ${(e as Error).message}`, statement }
-    }
-    const rootHex = toHex(hdr.batchRoot)
-    const tail = this.tails.get(shard) ?? []
-    const link = tail.find((l) => l.R === rootHex)
-    const anchorTx = link ? this.anchorTxs.get(link.txid) : undefined
-    if (!link || !anchorTx) return { ok: false, reason: 'no anchor of this shard commits that batch root', statement }
-    // expected shard = THIS instance's shard id — never read from the anchor
-    await this.anchors.get(shard)?.ready
-    const shardId = this.anchors.get(shard)?.getShardId()
-    if (!shardId) return { ok: false, reason: 'unknown shard', statement }
-    const res = await verifySubsetAnchored(bytes, anchorTx, this.chain, { shard: shardId, isCanonical: (txid: string) => tail.some((l) => l.txid === txid) })
-    const batch = await this.store.byBatch(shard, link.n)
-    const seqs = res.indices?.map((i) => batch.find((r) => (r.leafIndex ?? 0) === i)?.seq ?? i)
-    return { ok: res.ok, reason: res.reason, anchorTxid: res.anchorTxid, size: res.size, indices: res.indices, seqs, statement }
-  }
-
-  /** the policy root the verifier trusts: the configured anchored root when it
-   *  equals the recomputed DAG root (same rule as recall's POL-016 gate), else
-   *  an anchored `dagroot:<root>` record in `shard` matching the recomputed root. */
-  private async expectedPolicyRoot(shard: string): Promise<string | undefined> {
-    const dag = this.opts.policyDag
-    if (!dag) return undefined
-    const recomputed = toHex(dag.policyRoot())
-    if (this.opts.anchoredPolicyRoot !== undefined) return this.opts.anchoredPolicyRoot === recomputed ? recomputed : undefined
-    const hit = (await this.store.all(shard)).find((r) => r.anchorTxid !== undefined && Buffer.from(r.fragment.d).toString('utf8') === `dagroot:${recomputed}`)
-    return hit ? recomputed : undefined
+    return await this.zkProveOps.verifySubset(shard, bytes)
   }
 
   /** Wright §14 holder side: a ZK-STARK that the prover knows a committed
@@ -1127,41 +963,7 @@ export class NektarMemory {
     query: { pred: string; args: string[]; edb?: import('@nektar/datalog').Fact[] },
     queryIdHex: string
   ): Promise<{ bytes: Uint8Array; ms: number }> {
-    if (!/^[0-9a-f]{64}$/.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
-    const dag = this.opts.policyDag
-    if (!dag) throw new Error('no policy DAG configured on this instance')
-    const { derivationPath, nodeHash } = await import('@nektar/datalog')
-    const edb = [...(await this.store.all(shard)).map((r) => ({ pred: 'fragment', args: [`${shard}/${r.seq}`] })), ...(query.edb ?? [])]
-    const { facts, conflicts } = dag.evaluate(edb)
-    if (conflicts.length > 0) throw new Error(`policy conflict on ${conflicts[0].claim} — no derivation attestation`)
-    const path = derivationPath(facts, query.pred, query.args)
-    if (!path) throw new Error(`${query.pred}(${query.args.join(',')}) not entailed by the policy DAG over this EDB`)
-    // snapshot the committed node set — the anchored root covers exactly this list
-    const nodeHs = [...dag.nodes.keys()]
-    const nodeBytes = nodeHs.map((h) => new Uint8Array(Buffer.from(h, 'hex')))
-    const layerOf = (ruleId: string) => dag.layers.find((l) => l.rules.some((r) => r.id === ruleId))?.name
-    const steps = path.steps.map((s) => {
-      const rule = dag.rules.find((r) => r.id === s.ruleId)
-      const tau = dag.ruleNode.get(s.ruleId)
-      if (!rule || !tau || layerOf(s.ruleId) === undefined) throw new Error(`step rule ${s.ruleId} is not a committed DAG rule`)
-      const ruleIndex = nodeHs.indexOf(tau)
-      return {
-        rule: { id: rule.id, layer: layerOf(s.ruleId)!, head: rule.head, body: rule.body },
-        ruleIndex,
-        ruleSiblings: merkleProof(nodeBytes, ruleIndex).siblings.map((sib) => toHex(sib)),
-        inputs: s.inputs.map((i) => {
-          if (i.fromStep !== null) return { fact: i.fact, fromStep: i.fromStep }
-          const h = toHex(nodeHash(i.fact))
-          const ci = nodeHs.indexOf(h)
-          return ci >= 0
-            ? { fact: i.fact, fromStep: null, committedIndex: ci, committedSiblings: merkleProof(nodeBytes, ci).siblings.map((sib) => toHex(sib)) }
-            : { fact: i.fact, fromStep: null }
-        }),
-        output: s.output
-      }
-    })
-    const { bytes, ms } = await proveDerivationStark({ nodeCount: nodeHs.length, policyRoot: dag.policyRoot(), queryId: fromHex(queryIdHex), steps })
-    return { bytes, ms }
+    return await this.zkProveOps.proveDerivation(shard, query, queryIdHex)
   }
 
   /** verifier side: the proven policyRoot must be this verifier's anchored
@@ -1170,12 +972,7 @@ export class NektarMemory {
     shard: string,
     bytes: Uint8Array
   ): Promise<{ ok: boolean; reason?: string; policyRoot?: string; conclusionHash?: string; statement: string }> {
-    const statement =
-      'proves a committed derivation path under the anchored policy DAG (ZK-STARK, no trusted setup) — not which conclusion, not the premises, not truth'
-    const expected = await this.expectedPolicyRoot(shard)
-    if (!expected) return { ok: false, reason: 'no anchored policy DAG root (policyDag unset, root mismatch, or dagroot record not anchored)', statement }
-    const res = verifyDerivationBound(bytes, { consume: this.consumeZkQuery }, expected)
-    return { ok: res.ok, reason: res.reason, policyRoot: res.journal?.policyRoot, conclusionHash: res.journal?.conclusionHash, statement }
+    return await this.zkProveOps.verifyDerivation(shard, bytes)
   }
 
   /**

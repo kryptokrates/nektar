@@ -416,9 +416,23 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
       return { txid, status: 'mined', blockHeight: mp.blockHeight, merklePath: new MerklePath(mp.blockHeight, mp.path) }
     }
   })
-  events.on('abandoned', ({ txid }) =>
+  events.on('abandoned', ({ txid, tip, seenAtHeight }) => {
     process.stderr.write(`nektar confirmer: anchor ${txid} not mined after 100 blocks — abandoned (check for a conflicting spend)\n`)
-  )
+    // repair-by-name, not just a log line: mark the durable intent
+    // 'conflicted' so boot-time re-watch doesn't resurrect a dead tx
+    // forever, and surface it on mem.events for live consumers
+    void (async () => {
+      try {
+        const hit = (await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])).find((w) => w.txid === txid)
+        if (hit !== undefined) {
+          await ledger.setTxState(hit.actionId, 'conflicted', { reason: `not mined after 100 blocks (tip ${tip}, watched since height ${seenAtHeight})` })
+        }
+        memRef?.events.emit('txAbandoned', { txid, tip, seenAtHeight })
+      } catch (e) {
+        process.stderr.write(`nektar confirmer: abandoned ${txid} mark failed: ${(e as Error).message}\n`)
+      }
+    })()
+  })
   const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))
   if (reserve.utxos.length < 5) {
     // own treasury chain in the data dir; split mined before use
@@ -913,8 +927,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
           'broadcaster status stream events received'
         )
         await handleBroadcasterStatus(mem, j)
-        // the pushed status is a verified-by-now hint: drop the shared
-        // watch so the pull probe stops re-checking a settled txid
+        // the pushed status is a wake hint: note() records it for
+        // statusOf/waitFor, but interest only drops when a verified observe
+        // delivers — a push whose BUMP failed verification keeps the pull
+        // probe's reconcile floor
         if (typeof j.txid === 'string') {
           const s = String(j.txStatus ?? '').toUpperCase()
           if (s === 'MINED' || s === 'IMMUTABLE') events.note({ txid: j.txid, status: 'mined' })

@@ -3,16 +3,18 @@ name: event-arch
 description: >
   Use to audit or design the realtime/event layer of the UTXO on-chain
   architecture — wait sites, subscriptions, outbox/inbox flows, watch/wake
-  machinery, broadcaster status handling, overlay/topic wiring, counterparty
-  delivery. Suggests ranked fixes toward: as-realtime-as-possible
-  (events drive, polls are ceilings), maximum interoperability +
-  seamlessness (standard envelopes, content-addressed artifacts,
-  conformance), no timeout-as-mechanism (bounded ceilings only), and
-  resilience (fanout, degrade-to-poll, SPV-verify-never-trust). Grounded
-  in Wright/BSV-stack principles (overlays, broadcast manager statuses,
-  MessageBox store-and-forward, block-header verification) and the repo's
-  own seams. For general module/design rules use design-guardrails; for
-  money-path invariants use code-review's nektar.md.
+  machinery, broadcaster status handling, overlay/topic wiring, lanes/
+  transport/counterparty delivery, finger records, bstack plane code.
+  Suggests ranked fixes toward: as-realtime-as-possible (events drive,
+  polls are ceilings), maximum interoperability + seamlessness (standard
+  envelopes, content-addressed artifacts, conformance), no
+  timeout-as-mechanism (bounded ceilings only), and resilience (fanout,
+  degrade-to-poll, SPV-verify-never-trust, numbered+repaired streams).
+  Grounded in Wright/BSV-stack principles, the 1BSV/Lightweb bstack
+  papers + BRCs (the repo vendors @lightwebinc/bcommon + bfinger-host),
+  and the repo's own seams. For general module/design rules use
+  design-guardrails; for money-path invariants use code-review's
+  nektar.md.
 ---
 
 # event-arch — realtime UTXO event-layer audit + fix advisor
@@ -59,9 +61,14 @@ touches. For each, classify:
 - **What bounds it?** (ceiling is fine — ceiling AS the mechanism is
   `ev/timeout-as-mechanism`)
 
-### 3. Walk the principle table (references/principles.md)
+### 3. Walk the principle tables
 
-For each wait/subscription/delivery, the questions that produce findings:
+Load [references/principles.md](references/principles.md) always; load
+[references/fabric.md](references/fabric.md) when the scope touches
+bstack/transport/delivery (lanes, finger, tree, journal, market-wire,
+watch-shim, host fanout, artifact publish/fetch).
+
+For each wait/subscription/delivery — the event-loop questions:
 
 1. Does a producer exist that could signal this, but doesn't on some
    path? → `ev/lost-wakeup`
@@ -82,6 +89,29 @@ For each wait/subscription/delivery, the questions that produce findings:
    `ev/no-dedup`
 10. Is there a second scheduling substrate next to an existing one? →
     `ev/scheduler-sprawl`
+
+… and the fabric questions (delivery/transport scope):
+
+11. Does the stream number its items or carry a cursor — or is "missed
+    #47" invisible? → `fab/unnumbered-stream`
+12. Can a detected gap actually be repaired by name (cursor resume,
+    sweep, NACK), or only logged? → `fab/gap-unrepaired`
+13. Could a repaired/replayed item pose as fresh delivery — repair bound
+    to {source, position}? → `fab/resend-forgeable`
+14. Is the subscription narrower than the interest set — firehose join,
+    or watch outliving its need? → `fab/firehose-subscription`
+15. Does a counterparty flow announce-and-wait-for-pull when it could
+    deliver the artifact in the same step? → `fab/announce-pull`
+16. Is a host deciding truth instead of serving-and-proving — can't
+    rebuild its state from chain/store/digest? → `fab/custody-host`
+17. Can a payload exceed the transport's frame/size ceiling and vanish
+    silently? → `fab/fat-frame`
+18. Does the join name a source where the principal is known, or accept
+    any-source? → `fab/source-ambiguity`
+19. Does bulk data ride a mined lane instead of the carrier plane? →
+    `fab/mineable-carrier`
+20. Does a subscriber re-pull per-read what its own watch delivered? →
+    `fab/pull-what-you-subscribed`
 
 ### 4. Suggest fixes — concrete, repo-seamed, ranked
 
@@ -104,11 +134,15 @@ watch-shim `?cursor` resume, `hotUntil` hot-window, `note()`-hint vs
 
 ### Event-surface map
 <waits/subscriptions/timers found, each classified: signaler / bound / verifier>
+<fabric scope only: streams and their sequence/cursor, lanes joined,
+repair paths>
 
 ### Realtime score
 - Wake coverage: N/M waits have a producer signal on all paths
 - Trust discipline: hints vs verified reads (any hint driving money?)
 - Fallbacks: every push path degrade to bounded poll? every poll bounded?
+- Fabric (if in scope): every stream numbered/cursored? every gap
+  repairable by name? subscriptions derived from live interest?
 ```
 
 Suggest only — do not apply fixes unless asked. For each suggestion,
@@ -126,9 +160,15 @@ Before writing a wait/subscription/delivery:
 3. Name the FLOOR — the bounded poll that covers a missed wake.
 4. Name the VERIFIER — what proves the event (`observe`, BUMP verify,
    digest check)? Hints route through `note()`, never emit 'tx'.
-5. Name the DEGRADATION — shim down / host down / peer offline → what
+5. Name the POSITION — the stream's sequence/cursor the consumer
+   persists (missed items must be nameable, then repairable by name).
+6. Name the DEGRADATION — shim down / host down / peer offline → what
    still works? (MessageBox semantics: hold encrypted, deliver on wake.)
-6. Name the IDEMPOTENCY — applied effects dedup by op-ID at the edge.
+7. Name the IDEMPOTENCY — applied effects dedup by op-ID at the edge.
+8. Name the LANE — which interest-set/topic this delivery belongs to,
+   and who computes the join (narrow subscriptions, dead subs aborted).
+9. Name the STANDARD — the BRC/upstream spec the wire shape implements,
+   or the one it deliberately diverges from.
 
 ## nektar-specific calibration
 
@@ -155,9 +195,24 @@ BSV stack model (overlays/topic managers, broadcast-manager status push
 RECEIVED→ACCEPTED→SEEN, block-header verification, MessageBox
 store-and-forward, SHA-256-addressed storage, 402/header payments,
 open-by-design shared test vectors) — the "BSV Distributed Applications
-Stack" deck + Wright's SPV/P2P/first-seen positions. Repo mechanisms:
-`packages/chain/src/events.ts`, `interfaces.ts` (`onStatus`, `txStatus`,
-`onReorg`), `automation/src/runtime.ts` (watch-shim, hotUntil,
-unblockOutbox, notifyPeer), `bstack/src/market-wire.ts`. Rule IDs `ev/*`
-are local to this skill; cross-map to `data/*`, `stab/*`, `struct/*` in
-`../code-review/references/*` where they overlap.
+Stack" deck + Wright's SPV/P2P/first-seen positions.
+
+1BSV/Lightweb bstack family (1bsv.net + github.com/lightwebinc — this
+repo _implements_ it: `@lightwebinc/bcommon` + `bfinger-host` are
+vendored): Papers 001–016 (pushed Teranode delivery, announce-then-pull
+economics, shard-bit extraction, overlay object plane BRC-148/149,
+bstack pattern language, topic-lane sharding, the data carrier, frame
+sizing, single-source joins, NACK loss repair, provenance at scale);
+pattern briefs bfinger/bbox/borg/bsecret/blogs/bstore. See
+[references/fabric.md](references/fabric.md) for the paper→rule map.
+Wright's Substack essays (singulargrit.substack.com) are cited as
+posture only — see the posture section in
+[references/principles.md](references/principles.md).
+
+Repo mechanisms: `packages/chain/src/events.ts`, `interfaces.ts`
+(`onStatus`, `txStatus`, `onReorg`), `automation/src/runtime.ts`
+(watch-shim, hotUntil, unblockOutbox, notifyPeer),
+`bstack/src/{lanes,finger,tree,journal,market-wire,testing}.ts`. Rule
+IDs `ev/*` + `fab/*` are local to this skill; cross-map to `data/*`,
+`stab/*`, `struct/*` in `../code-review/references/*` where they
+overlap.

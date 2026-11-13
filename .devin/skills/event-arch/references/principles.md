@@ -141,6 +141,41 @@ Demands:
   a ceiling because "events cover it" re-introduces the hang the
   ceiling existed to kill.
 
+## Posture source — Wright's essays (singulargrit.substack.com)
+
+Craig's Substack is paywalled essays — legal/economic/institutional
+pieces, not engineering specs. They ground WHY the rules exist; they do
+NOT define mechanical behavior — cite them as posture, never as the
+authority for a `fab/*`/`ev/*` finding (that's what papers/BRCs are
+for). The recurring themes that map onto this layer:
+
+- **"The Promise Needed an Address"** — a promise is enforceable only
+  when its owner is locatable → identity→locator binding is load-bearing
+  (the bfinger committed record: hosts/office/stream/watch + retraction).
+- **"Truth Is Expensive. Bullshit Scales"** — claims are cheap;
+  verification is everyone's problem → push verification to the edge
+  (readers verify, SPV at the subscriber); a system that makes truth
+  expensive to check will be fed lies.
+- **"The Ledger Has Changed. Someone Still Owes You"** — infrastructure
+  upgrades don't discharge obligations → persisted state outlives the
+  system that wrote it (migrate lane tables, honor tombstones, keep
+  wire formats readable).
+- **"The Agent Has Permission. Who Pays for the Mistake?"** — delegated
+  authority needs declared bounds → SpendGuard caps, budget authorities,
+  signed scope in envelopes.
+- **"Your Reputation Is Excellent. It Is Also Rented"** — platform-held
+  standing isn't portable → records must be self-verifying and
+  host-portable; a reader shouldn't need the issuing host to confirm.
+- **"The Debt Was Due. The Silver Was Not"** — legal validity ≠
+  existence → a claim about a UTXO isn't the UTXO; verify existence
+  (proof/spendability), not the document describing it.
+- **"The Obligation Survived. Who Held the Power?"** — being owed ≠
+  controlling → distinguish holding a claim from holding the key that
+  discharges it (ownership = unlock capability, not receipt).
+
+Essay text is subscriber-gated — the audit may cite titles/themes but
+must not quote or paraphrase bodies beyond the public previews.
+
 ## The one-line summary
 
 Signal is instant (push/hint), truth is verified (proof/observe),

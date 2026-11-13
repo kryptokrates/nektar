@@ -2,13 +2,13 @@
 // Wires log (append/batch) → anchor (head UTXO per shard) → broadcast
 // → verify (proof bundles) → crypto (BRC-42/AES-GCM), all behind the chain
 // interfaces so it runs identically on regtest and live networks.
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { BudgetAuthority } from '@nektar/automation'
 import type { Automation } from '@nektar/automation'
-import { PrivateKey, PublicKey, ProtoWallet, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
+import { PrivateKey, PublicKey, Signature, Transaction } from '@bsv/sdk'
 import {
   utf8,
   toHex,

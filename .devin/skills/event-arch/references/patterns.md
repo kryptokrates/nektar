@@ -144,9 +144,14 @@ own trackers.
 
 ## Quick map: goal → patterns
 
-| Goal (user's words)                 | Patterns that deliver it                                                                      |
-| ----------------------------------- | --------------------------------------------------------------------------------------------- |
-| as realtime as possible             | 1, 2, 3 — everything waits on signals; polls are floors; `hotUntil` cadence                   |
-| max interoperability + seamlessness | 8, 6 + `v:`/`kind:` envelopes + conformance vectors — boring wire, digest refs, vector-proven |
-| no timeout                          | 3, 7 — no timer as mechanism; ceilings stay only as leak guards                               |
-| as resilient as possible            | 4, 5, 6, 7, 9, 10 — verify-not-trust, fanout, degrade-to-poll, dedup, single substrate        |
+| Goal (user's words)                 | Patterns that deliver it                                                                         |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------ |
+| as realtime as possible             | 1, 2, 3 — everything waits on signals; polls are floors; `hotUntil` cadence                      |
+| max interoperability + seamlessness | 8, 6 + `v:`/`kind:` envelopes + conformance vectors — boring wire, digest refs, vector-proven    |
+| no timeout                          | 3, 7 — no timer as mechanism; ceilings stay only as leak guards                                  |
+| as resilient as possible            | 4, 5, 6, 7, 9, 10 — verify-not-trust, fanout, degrade-to-poll, dedup, single substrate           |
+| delivery-plane resilience           | `fab/*` in [fabric.md](fabric.md) — numbered streams, repair-by-name, narrow joins, deliver-once |
+
+Delivery/transport fixes (lanes, finger, tree, journal, watch-shim, host
+fanout) use the `fab/*` catalog in [fabric.md](fabric.md) — same smell →
+move → precedent shape, with the paper→rule map.

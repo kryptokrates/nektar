@@ -6,8 +6,10 @@
 // Trust model: `observe` (our own chain reads — asset API, RPC, chaintracks)
 // produces events verified by construction and they emit 'tx'. Pushed
 // broadcaster statuses are hints only — `note()` records them for waiters and
-// dedup but never emits 'tx'; the verified delivery path stays with the
-// caller (handleBroadcasterStatus verifies BUMPs against our own tracker).
+// dedup but never emits 'tx' and never ends interest: only a verified
+// observe (deliver) drops a watch, so a push that can't be verified keeps
+// its reconcile floor (the verified delivery path stays with the caller —
+// handleBroadcasterStatus verifies BUMPs against our own tracker).
 import { EventEmitter } from 'node:events'
 import type { TxStatusEvent } from './interfaces.js'
 
@@ -40,8 +42,13 @@ interface WatchEntry {
 
 export class ChainEvents extends EventEmitter {
   private watched = new Map<string, WatchEntry>()
-  private lastStatus = new Map<string, TxStatusEvent>()
-  private waiters = new Map<string, Array<(ev: TxStatusEvent | undefined) => void>>()
+  /** retained statuses for statusOf/catch-up — timestamped and TTL-evicted on
+   *  the same sweep as `watched` (retention is for catch-up, not growth) */
+  private lastStatus = new Map<string, { ev: TxStatusEvent; at: number }>()
+  private waiters = new Map<string, Array<(ev: TxStatusEvent | undefined, terminal: boolean) => void>>()
+  /** in-flight observes by txid — the nudge loop and the tick coalesce onto
+   *  one fetch instead of multiplying identical chain reads */
+  private probing = new Map<string, Promise<TxStatusEvent | undefined>>()
   private tip: number | undefined
   private scannedAtTip: number | undefined
   private dirty = true
@@ -81,19 +88,18 @@ export class ChainEvents extends EventEmitter {
   /** last status this instance delivered or was handed — for consumers
    *  catching up without a fresh chain read. */
   statusOf(txid: string): TxStatusEvent | undefined {
-    return this.lastStatus.get(txid)
+    return this.lastStatus.get(txid)?.ev
   }
 
   /** an externally pushed status (SSE, webhook, broadcast response): records
-   *  the status for statusOf/waitFor, drops the watch on terminal states.
-   *  Never emits 'tx' — pushed statuses are unverified hints; attachment is
-   *  the caller's verified path. */
+   *  the status for statusOf/waitFor and wakes waiters — a hint, never truth:
+   *  it never emits 'tx' and it never ends a watch. Interest only drops on a
+   *  verified observe (deliver), so a push that can't be verified — a MINED
+   *  status whose BUMP didn't check out — keeps the poller's reconcile floor
+   *  alive instead of stranding the wait. */
   note(ev: TxStatusEvent): void {
-    this.lastStatus.set(ev.txid, ev)
-    if (TERMINAL.has(ev.status)) {
-      this.watched.delete(ev.txid)
-      this.resolve(ev)
-    }
+    this.lastStatus.set(ev.txid, { ev, at: Date.now() })
+    if (TERMINAL.has(ev.status)) this.resolve(ev)
   }
 
   /** a first-party observation (e.g. a definitive broadcast refusal): emits
@@ -106,22 +112,41 @@ export class ChainEvents extends EventEmitter {
    *  and post-mine nudge path. Emits 'tx' on a result. */
   async probeNow(txid: string): Promise<TxStatusEvent | undefined> {
     this.watch(txid)
-    const ev = await this.opts.observe(txid).catch(() => undefined)
-    if (ev !== undefined) this.deliver(ev)
-    return ev
+    return await this.probe(txid)
+  }
+
+  /** one observed read for `txid`, dedup'd across concurrent callers — a
+   *  waitFor nudge and the tick sharing a txid get one fetch, not two. */
+  private probe(txid: string): Promise<TxStatusEvent | undefined> {
+    const inflight = this.probing.get(txid)
+    if (inflight !== undefined) return inflight
+    const p = this.opts
+      .observe(txid)
+      .catch(() => undefined)
+      .then((ev) => {
+        this.probing.delete(txid)
+        if (ev !== undefined) this.deliver(ev)
+        return ev
+      })
+    this.probing.set(txid, p)
+    return p
   }
 
   /** resolve with the txid's terminal event (or first delivered event), or
    *  undefined on timeout. */
   async waitFor(txid: string, timeoutMs = 30_000, match: (ev: TxStatusEvent) => boolean = () => true): Promise<TxStatusEvent | undefined> {
-    const existing = this.lastStatus.get(txid)
+    const existing = this.lastStatus.get(txid)?.ev
     if (existing !== undefined && match(existing)) return existing
     this.watch(txid)
     const deadline = Date.now() + timeoutMs
-    let done!: (ev: TxStatusEvent | undefined) => void
+    let done!: (ev: TxStatusEvent | undefined, terminal: boolean) => void
     const pending = new Promise<TxStatusEvent | undefined>((resolve) => {
-      done = (ev: TxStatusEvent | undefined) => {
-        if (ev !== undefined && !match(ev)) return
+      done = (ev, terminal) => {
+        // a non-matching event parks the waiter only while the txid can still
+        // move — a terminal event ends the wait for EVERY waiter on it,
+        // matcher or not, and must answer them rather than stranding them
+        // on their own clock
+        if (ev !== undefined && !match(ev) && !terminal) return
         this.waiters.set(
           txid,
           (this.waiters.get(txid) ?? []).filter((w) => w !== done)
@@ -130,17 +155,22 @@ export class ChainEvents extends EventEmitter {
       }
       this.waiters.set(txid, [...(this.waiters.get(txid) ?? []), done])
     })
-    // nudge: poll this txid on a short loop alongside the shared tick so a
-    // caller waiting synchronously does not stall for the next interval
+    // nudge: the waiter's arrival is itself a probe-worthy event — poke now,
+    // then re-probe on a pace proportional to the shared tick (never hotter
+    // than a quarter of it; floor 150ms, ceiling 5s) so a synchronous caller
+    // doesn't stall a whole interval without hammering a live status API.
+    let settled = false
+    const nudgeMs = Math.max(150, Math.min((this.opts.intervalMs ?? 5_000) / 4, 5_000))
     const nudge = (async () => {
-      while (Date.now() < deadline && this.watched.has(txid)) {
+      while (!settled && Date.now() < deadline && this.watched.has(txid)) {
         await this.probeNow(txid)
-        await new Promise((r) => setTimeout(r, 150))
+        await new Promise((r) => setTimeout(r, nudgeMs))
       }
     })()
     const timeout = new Promise<undefined>((r) => setTimeout(() => r(undefined), timeoutMs))
     const ev = await Promise.race([pending, timeout])
-    if (ev === undefined) done(undefined) // timeout: drop the waiter, don't leak it
+    settled = true
+    if (ev === undefined) done(undefined, true) // timeout: drop the waiter, don't leak it
     void nudge.catch(() => undefined)
     return ev
   }
@@ -169,7 +199,8 @@ export class ChainEvents extends EventEmitter {
           this.emit('height', tip)
         }
       }
-      // ttl sweep + first-seen heights + abandonment
+      // ttl sweep + first-seen heights + abandonment; retained statuses age
+      // out on the same window (catch-up cache, not permanent memory)
       const staleAt = Date.now() - (this.opts.ttlMs ?? 2 * 60 * 60_000)
       for (const [txid, w] of this.watched) {
         if (w.since < staleAt) {
@@ -186,6 +217,9 @@ export class ChainEvents extends EventEmitter {
           this.watched.delete(txid)
           this.emit('abandoned', { txid, tip: this.tip, seenAtHeight: w.atHeight })
         }
+      }
+      for (const [txid, s] of this.lastStatus) {
+        if (s.at < staleAt) this.lastStatus.delete(txid)
       }
       // proof-gating: a static tip and no new watches make every observe a
       // guaranteed miss — skip the batch like the old proofScanTip gate did
@@ -206,13 +240,12 @@ export class ChainEvents extends EventEmitter {
   }
 
   private async probeOne(txid: string): Promise<void> {
-    const ev = await this.opts.observe(txid).catch(() => undefined)
-    if (ev !== undefined) this.deliver(ev)
+    await this.probe(txid)
   }
 
   private deliver(ev: TxStatusEvent): void {
-    const prev = this.lastStatus.get(ev.txid)
-    this.lastStatus.set(ev.txid, ev)
+    const prev = this.lastStatus.get(ev.txid)?.ev
+    this.lastStatus.set(ev.txid, { ev, at: Date.now() })
     // re-emit only on change — mined→mined duplicates are suppressed
     if (prev?.status !== ev.status || !!prev?.merklePath !== !!ev.merklePath) {
       this.emit('tx', ev)
@@ -225,11 +258,13 @@ export class ChainEvents extends EventEmitter {
 
   private resolve(ev: TxStatusEvent | undefined): void {
     if (ev !== undefined) {
-      for (const w of this.waiters.get(ev.txid) ?? []) w(ev)
+      // resolve() only fires on terminal events — every waiter on the txid
+      // learns the actual outcome, matcher or not
+      for (const w of this.waiters.get(ev.txid) ?? []) w(ev, true)
       this.waiters.delete(ev.txid)
       return
     }
-    for (const ws of this.waiters.values()) for (const w of ws) w(undefined)
+    for (const ws of this.waiters.values()) for (const w of ws) w(undefined, true)
     this.waiters.clear()
   }
 }

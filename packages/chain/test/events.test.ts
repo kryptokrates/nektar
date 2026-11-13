@@ -75,8 +75,9 @@ test('events: abandonAfterBlocks emits abandoned once and drops the watch', asyn
   assert.equal(abandoned.length, 1)
 })
 
-test('events: note() records pushed status + resolves waitFor without emitting tx', async () => {
-  const ev = new ChainEvents({ observe: async () => undefined })
+test('events: note() records pushed status + resolves waitFor without emitting tx — and never drops the floor', async () => {
+  let proven = false
+  const ev = new ChainEvents({ observe: async () => (proven ? mined('t1') : undefined) })
   const got: TxStatusEvent[] = []
   ev.on('tx', (e) => got.push(e))
   const p = ev.waitFor('t1', 5000)
@@ -85,7 +86,39 @@ test('events: note() records pushed status + resolves waitFor without emitting t
   assert.equal(ev_?.status, 'mined')
   assert.equal(got.length, 0) // hints never emit — verified delivery is the caller's path
   assert.equal(ev.statusOf('t1')?.status, 'mined')
+  // a pushed terminal status must NOT end interest: an unverifiable MINED
+  // keeps the reconcile floor alive — only a verified observe drops the watch
+  assert.equal(ev.watching('t1'), true)
+  proven = true
+  await ev.tick() // the verified observe delivers (proof attached) and drops
   assert.equal(ev.watching('t1'), false)
+  assert.equal(got.length, 1) // 'tx' emits on the verified path — !!prev.mp changed
+})
+
+test('events: a terminal event resolves every waiter, matcher or not', async () => {
+  const ev = new ChainEvents({ observe: async () => undefined })
+  const ds = ev.waitFor('t1', 60_000, (e) => e.status === 'double-spent')
+  const mn = ev.waitFor('t1', 60_000, (e) => e.merklePath !== undefined)
+  ev.report({ txid: 't1', status: 'mined' }) // terminal 'mined' — ends BOTH waits
+  const r1 = await Promise.race([ds, new Promise((r) => setTimeout(() => r('HANG'), 500))])
+  const r2 = await mn
+  assert.notEqual(r1, 'HANG') // no parked-on-the-clock: the wait was over
+  assert.equal((r1 as TxStatusEvent).status, 'mined') // learns the actual outcome
+  assert.equal(r2?.status, 'mined')
+})
+
+test('events: concurrent probes of one txid share a single observe', async () => {
+  let calls = 0
+  const ev = new ChainEvents({
+    observe: async () => {
+      calls++
+      await new Promise((r) => setTimeout(r, 20))
+      return undefined
+    }
+  })
+  ev.watch('t1')
+  await Promise.all([ev.probeNow('t1'), ev.probeNow('t1'), ev.probeNow('t1')])
+  assert.equal(calls, 1)
 })
 
 test('events: report() is the trusted first-party path — emits tx', async () => {

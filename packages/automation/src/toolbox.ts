@@ -24,6 +24,7 @@ import { Services, Setup, StorageKnex, Wallet, WalletStorageManager, randomBytes
 import {
   TeranodeRPCTracker,
   merklePathFor,
+  merklePathAtHeight,
   merklePathMainnet,
   utxoStatus,
   type BroadcastResult,
@@ -110,7 +111,19 @@ export class RegtestWalletServices implements sdk.WalletServices {
   }
 
   getMerklePath = async (txid: string): Promise<sdk.GetMerklePathResult> => {
-    const r = await merklePathFor(this.cfg, txid, this.tracker, 50)
+    let r = await merklePathFor(this.cfg, txid, this.tracker, 50)
+    if (r === null) {
+      // deep fallback: lookback-50 misses old mined txs (coinbases, early
+      // treasury splits) — a coinbase ancestor without a bump leaves the
+      // null-prevout input dangling and the wallet's no-txidOnly validator
+      // rejects the whole internalize. Verbose rawtx names the containing
+      // block; build the path at that exact height instead.
+      const v = (await this.rpc('getrawtransaction', txid, 1).catch(() => undefined)) as { blockhash?: string } | undefined
+      if (v?.blockhash !== undefined) {
+        const bh = await this.headerOf(0, v.blockhash)
+        r = await merklePathAtHeight(this.cfg, txid, this.tracker, bh.height)
+      }
+    }
     if (r === null) return { name: NAME, error: werr(`no merkle path for ${txid}`) }
     // cjs-built MerklePath — the wallet consumes it (dual-build boundary)
     return {
@@ -608,8 +621,14 @@ export class ToolboxReserveFunder {
    *  limits) and callers that don't care can ignore it fire-and-forget. */
   addOwned(tx: Transaction, vout: number): Promise<void> {
     if (this.cache.some((u) => u.tx.id('hex') === tx.id('hex') && u.vout === vout)) return Promise.resolve()
-    this.cache.push({ tx, vout, satoshis: tx.outputs[vout].satoshis ?? 0 })
-    return this.internalize(tx, vout).catch((e) => this.log(`toolbox internalize ${tx.id('hex')}.${vout}: ${e instanceof Error ? e.message : String(e)}`))
+    // cache only what the wallet actually accepted — an optimistic add made
+    // utxos report funding the wallet never held (the 60-utxo silent-fail
+    // class: internalize errors were logged while the cache lied)
+    return this.internalize(tx, vout)
+      .then(() => {
+        this.cache.push({ tx, vout, satoshis: tx.outputs[vout].satoshis ?? 0 })
+      })
+      .catch((e) => this.log(`toolbox internalize ${tx.id('hex')}.${vout}: ${e instanceof Error ? e.message : String(e)}`))
   }
 
   private async internalize(tx: Transaction, vout: number): Promise<void> {
@@ -625,6 +644,35 @@ export class ToolboxReserveFunder {
       const parent = i.sourceTransaction ?? (await this.parent(i.sourceTXID))
       if (parent === undefined) throw new Error(`internalize: no source tx for input ${i.sourceTXID}`)
       beef.mergeTransaction(parent)
+    }
+    // closure completion: the wallet's validators demand every real entry be
+    // proven (BUMP) or have all inputs resolved — txid-only stubs are
+    // rejected and a dangling input rejects the whole atomic beef. Object-
+    // linked ancestry arrives with no merklePath, so walk the merged set:
+    // give every mined entry its BUMP (getMerklePath's deep fallback covers
+    // old coinbases), and fetch+merge whatever a still-unproven entry
+    // references. Fixpoint until nothing changes.
+    for (;;) {
+      let progress = false
+      for (const bt of [...beef.txs]) {
+        if (bt.isTxidOnly || bt.hasProof || bt.tx === undefined) continue
+        const mp = await this.services?.getMerklePath(bt.txid)
+        if (mp?.merklePath !== undefined) {
+          bt.tx.merklePath = MerklePath.fromBinary((mp.merklePath as unknown as MerklePath).toBinary())
+          beef.mergeTransaction(bt.tx)
+          progress = true
+          continue
+        }
+        for (const dep of bt.inputTxids) {
+          if (beef.findTxid(dep) == null) {
+            const p = await this.parent(dep)
+            if (p === undefined) throw new Error(`internalize: unproven ancestor ${bt.txid} has unresolvable input ${dep}`)
+            beef.mergeTransaction(p)
+            progress = true
+          }
+        }
+      }
+      if (!progress) break
     }
     try {
       await this.wallet.internalizeAction({

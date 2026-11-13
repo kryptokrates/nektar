@@ -7,10 +7,10 @@ import { stackChain, stackTreasury, StackFunder, StackChain } from '@nektar/chai
 import { minihost, faulthost } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
-import { openAutomation, type Automation } from '../src/automation/runtime.js'
-import { ScriptedExecutor } from '../src/automation/ai.js'
-import { DEFAULT_SCORE_WEIGHTS } from '../src/automation/scoring.js'
-import type { AutomationPolicy } from '../src/automation/policy.js'
+import { openAutomation, type Automation } from '@nektar/automation'
+import { ScriptedExecutor } from '@nektar/automation'
+import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
+import type { AutomationPolicy } from '@nektar/automation'
 
 // DDIA ch.5/8 resilience plane: deals must survive dead hosts, slow hosts,
 // withholding hosts and mid-deal process kills — and T1 puts numbers on the
@@ -58,7 +58,7 @@ interface A {
   policyHash: string
   name: string
 }
-const mkagent = async (name: string, hosts: string[], chain: StackChain, logs: string[], dir: string, opts?: Partial<import('../src/automation/market.js').MarketOptions>): Promise<A> => {
+const mkagent = async (name: string, hosts: string[], chain: StackChain, logs: string[], dir: string, opts?: Partial<import('@nektar/automation').MarketOptions>): Promise<A> => {
   const funder = await StackFunder.fund(await stackTreasury(), 60)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
   const pub = mem.operatorKey().toPublicKey().toString()
@@ -124,6 +124,8 @@ const buyerOps = async (b: A) => (await b.rt.store.operations({ role: 'buyer' })
 const saleOps = async (s: A) => (await s.rt.store.operations({ role: 'seller' })).filter((o) => o.kind === 'sale')
 const opFor = async (b: A, wantId: string) =>
   (await buyerOps(b)).find((o) => (o.data.want as { want?: { wantId?: string } } | undefined)?.want?.wantId === wantId)
+const saleFor = async (s: A, wantId: string) =>
+  (await saleOps(s)).find((o) => (o.data.want as { want?: { wantId?: string } } | undefined)?.want?.wantId === wantId)
 const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
 const BUYER_DONE = new Set(['disclosure_verified', 'useful'])
 
@@ -133,7 +135,7 @@ const deal = async (b: A, s: A, chain: StackChain, logs: string[], extraRts: Aut
   const t0 = Date.now()
   const rounds = await until(all, chain, async () => {
     const bo = await opFor(b, w.wantId)
-    const so = (await saleOps(s)).find((o) => (o.data as { wantId?: string }).wantId === w.wantId || (o.data.want as { want?: { wantId?: string } } | undefined)?.want?.wantId === w.wantId)
+    const so = await saleFor(s, w.wantId)
     return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
   })
   assert.ok(rounds > 0, 'deal never completed | ' + logs.slice(-20).join(' | '))
@@ -191,16 +193,13 @@ test('R1: host dies mid-deal — fan-out still completes through the survivor', 
     await drive([b.rt, s.rt], chain, 12)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(
-      (await until([b.rt, s.rt], chain, async () => {
-        const so = (await saleOps(s)).find((o) => (o.data as { wantId?: string }).wantId === w.wantId)
-        return so?.state === 'quoted'
-      })) > 0,
+      (await until([b.rt, s.rt], chain, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
       'no quote | ' + logs.slice(-15).join(' | ')
     )
     await h1.close() // the want+offer carrier host dies before the accept is sent
     const rounds = await until([b.rt, s.rt], chain, async () => {
       const bo = await opFor(b, w.wantId)
-      const so = (await saleOps(s)).find((o) => (o.data as { wantId?: string }).wantId === w.wantId)
+      const so = await saleFor(s, w.wantId)
       return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
     })
     assert.ok(rounds > 0, 'deal died with h1 | ' + logs.slice(-20).join(' | '))
@@ -306,17 +305,14 @@ test('R5b: seller killed after quoting respawns and settles; withholding host ca
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    const hit = await until([b.rt, s.rt], chain, async () => {
-      const so = (await saleOps(s)).find((o) => (o.data as { wantId?: string }).wantId === w.wantId)
-      return so?.state === 'quoted'
-    })
+    const hit = await until([b.rt, s.rt], chain, async () => (await saleFor(s, w.wantId))?.state === 'quoted')
     assert.ok(hit > 0, 'no quote through withholding host | ' + logs.slice(-15).join(' | '))
     await s.rt.stop()
     const s2 = await respawn(s, [f1.url, h2.url], chain, logs, dir)
     await s2.rt.engine.enableSeller(s2.policyHash)
     const rounds = await until([b.rt, s2.rt], chain, async () => {
       const bo = await opFor(b, w.wantId)
-      const so = (await saleOps(s2)).find((o) => (o.data as { wantId?: string }).wantId === w.wantId)
+      const so = await saleFor(s2, w.wantId)
       return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
     })
     assert.ok(rounds > 0, 'deal never completed after seller kill | ' + logs.slice(-20).join(' | '))

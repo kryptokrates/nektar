@@ -30,7 +30,13 @@
       "path": "../anchor"
     },
     {
+      "path": "../automation"
+    },
+    {
       "path": "../bstack"
+    },
+    {
+      "path": "../store"
     },
     {
       "path": "../datalog"

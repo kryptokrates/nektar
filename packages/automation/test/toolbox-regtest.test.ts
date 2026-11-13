@@ -7,7 +7,7 @@ import { PrivateKey, ProtoWallet, MerklePath } from '@bsv/sdk'
 import { fundingLock } from '@lightwebinc/bcommon'
 import { stackWorld, TeranodeRPCTracker, merklePathFor } from '@nektar/chain'
 import { DERIVATION, FUNDING_TAG, ORIGINATOR } from '@nektar/bstack'
-import { openToolboxWallet, RegtestWalletServices, fundToolbox, ToolboxFunder, NEKTAR_BASKET, type ToolboxHandle } from '../src/automation/toolbox.js'
+import { openToolboxWallet, RegtestWalletServices, fundToolbox, ToolboxFunder, NEKTAR_BASKET, type ToolboxHandle } from '../src/toolbox.js'
 
 // The wallet-toolbox lane on the local Teranode stack: construction, its own
 // createAction funding path (broadcast through RegtestWalletServices), output

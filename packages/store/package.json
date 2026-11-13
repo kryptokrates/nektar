@@ -1,0 +1,17 @@
+{
+  "name": "@nektar/store",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@bsv/sdk": "4.0.1",
+    "@lightwebinc/bcommon": "file:../../vendor/lightwebinc-bcommon-0.34.0.tgz",
+    "@lightwebinc/bfinger-host": "file:../../vendor/lightwebinc-bfinger-host-0.8.5.tgz",
+    "@nektar/core": "workspace:*"
+  }
+}

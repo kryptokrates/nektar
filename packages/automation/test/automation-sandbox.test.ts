@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parsePatch, validatePatch, evaluatePatch, dockerBackend, type SandboxSpec, type IsolationBackend } from '../src/automation/sandbox.js'
-import { ScriptedExecutor, HttpChatExecutor, validateResult } from '../src/automation/ai.js'
+import { parsePatch, validatePatch, evaluatePatch, dockerBackend, type SandboxSpec, type IsolationBackend } from '../src/sandbox.js'
+import { ScriptedExecutor, HttpChatExecutor, validateResult } from '../src/ai.js'
 
 const root = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
 const spec: SandboxSpec = {

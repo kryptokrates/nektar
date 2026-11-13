@@ -3,7 +3,7 @@
 // endpoint (Ollama). No synthetic shortcuts: the actual HTTP adapter and model.
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { HttpChatExecutor } from '../../../mcp/dist/src/automation/ai.js'
+import { HttpChatExecutor } from '../../../automation/dist/src/ai.js'
 
 const baseUrl = process.env.NEKTAR_AI_BASE_URL ?? 'http://127.0.0.1:11434/v1'
 const modelId = process.env.NEKTAR_AI_MODEL ?? 'qwen2.5:1.5b'

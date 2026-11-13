@@ -2,11 +2,11 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
-import type { NektarMemory } from '../memory.js'
+import type { AutomationHost } from './host.js'
 import { AutomationStore } from './store.js'
 import { MarketEngine, type MarketMessage, type MarketTransport, type MarketOptions } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
-import { objectStoreFromEnv } from '../objectstore.js'
+import { objectStoreFromEnv } from '@nektar/store'
 import { runPreflight, WATCHDOG_CHECKS, type PreflightReport } from './preflight.js'
 import { killSwitchActive } from './kill.js'
 import type { Automation } from './types.js'
@@ -50,7 +50,7 @@ export interface AutomationConfig {
   logStream?: string
   /** bstore/S3 object store for deal evidence — absent = feature off.
    *  Default: objectStoreFromEnv() (NEKTAR_BSTORE_*). */
-  objectStore?: import('../objectstore.js').S3ObjectStore
+  objectStore?: import('@nektar/store').S3ObjectStore
   /** A9 — strict startup: refuse to open the runtime unless preflight is
    *  green. Non-strict starts anyway, seeded with the checks' down-host set. */
   strict?: boolean
@@ -89,7 +89,7 @@ function aiFromEnv(env = process.env): AIExecutor {
   return new HttpChatExecutor({ provider: env.NEKTAR_AI_PROVIDER ?? 'http', baseUrl, modelId: env.NEKTAR_AI_MODEL, apiKey, egress })
 }
 
-export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): Promise<Automation> {
+export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig): Promise<Automation> {
   const knexFactory = (await import('knex')).default
   if (cfg.dataDir) mkdirSync(cfg.dataDir, { recursive: true })
   const kx: Knex = knexFactory({
@@ -160,9 +160,9 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   // bfinger packs store: packs describeShard PUTs to bstore also commit as
   // kind-5 sub-records under our identity; the finger record's refs then
   // resolve the whole pack set — no /.well-known dependency for readers
-  let packsStore: import('../packstore.js').PacksStore | undefined
+  let packsStore: import('@nektar/store').PacksStore | undefined
   if (lanes !== undefined) {
-    const { PacksStore } = await import('../packstore.js')
+    const { PacksStore } = await import('@nektar/store')
     packsStore = new PacksStore({
       publish: (kind, id, body) => lanes.mod.publishSubRecord({ key, wallet, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, kind, id, body })
     })
@@ -728,7 +728,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
         const key = `evidence/${cfg.network}/${op.operationId}.json`
         const digest = Buffer.from(await crypto.subtle.digest('SHA-256', bytes)).toString('hex')
         const head = await objectStore.head(key).catch(() => undefined)
-        const ref: import('../objectstore.js').ObjectRef =
+        const ref: import('@nektar/store').ObjectRef =
           head?.sha256 === digest ? { bucket: objectStore.bucket, key, sha256: digest, size: head.size } : await objectStore.put(key, bytes, 'application/json')
         try {
           // content-addressed like packs: chirp://<root> resolves the bundle
@@ -736,7 +736,7 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
           // A retry after a crash only republishes when the root object is
           // actually missing — same keys otherwise, so head-before-put keeps
           // the crash-and-retry idempotent instead of counting second puts
-          const { chirpRefFor, storeChirp } = await import('../chirp.js')
+          const { chirpRefFor, storeChirp } = await import('@nektar/store')
           const c = chirpRefFor(bytes)
           if ((await objectStore.head(c.rootKey).catch(() => undefined)) === undefined) await storeChirp(objectStore, bytes)
           ref.chirp = c.url

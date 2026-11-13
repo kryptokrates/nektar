@@ -8,11 +8,11 @@ import { stackWorld, stackChain, stackTreasury, StackFunder, StackChain } from '
 import { minihost, type MinihostHandle } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
-import { openAutomation, type Automation } from '../src/automation/runtime.js'
-import { ScriptedExecutor } from '../src/automation/ai.js'
-import { DEFAULT_SCORE_WEIGHTS } from '../src/automation/scoring.js'
-import type { AutomationPolicy } from '../src/automation/policy.js'
-import type { MarketMessage } from '../src/automation/market.js'
+import { openAutomation, type Automation } from '@nektar/automation'
+import { ScriptedExecutor } from '@nektar/automation'
+import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
+import type { AutomationPolicy } from '@nektar/automation'
+import type { MarketMessage } from '@nektar/automation'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
@@ -79,9 +79,9 @@ interface MkOpts {
   chain: StackChain
   logs: string[]
   dir: string
-  opts?: Partial<import('../src/automation/market.js').MarketOptions>
+  opts?: Partial<import('@nektar/automation').MarketOptions>
   call?: (tool: string, args: any) => Promise<any>
-  objectStore?: import('../src/objectstore.js').S3ObjectStore
+  objectStore?: import('@nektar/store').S3ObjectStore
 }
 const mkagent = async (name: string, o: MkOpts): Promise<A> => {
   // real upkeep spends across 4 tree lanes + finger + evidence every cycle —
@@ -687,7 +687,7 @@ const respawn = async (
     logs: string[]
     chain: StackChain
     opts?: MkOpts['opts']
-    objectStore?: import('../src/objectstore.js').S3ObjectStore
+    objectStore?: import('@nektar/store').S3ObjectStore
   }
 ): Promise<A> => {
   const rt = await openAutomation(a.mem, {
@@ -1931,7 +1931,7 @@ const fakeS3 = async () => {
   })
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
   const port = (server.address() as { port: number }).port
-  const { S3ObjectStore } = await import('../src/objectstore.js')
+  const { S3ObjectStore } = await import('@nektar/store')
   const client = new S3ObjectStore({ endpoint: `http://127.0.0.1:${port}`, bucket: 'evidence-regtest', accessKey: 'a', secretKey: 's' })
   return { server, client, objects, flags }
 }
@@ -1962,7 +1962,7 @@ test('bstack AD: a full deal stores redacted evidence — verified read, one eve
     const evs = (await b.rt.store.events(bo.operationId)).filter((e) => e.cause === 'evidence_stored')
     assert.equal(evs.length, 1, 'exactly one evidence_stored event')
     const bytes = await s3.client.getVerified(ref)
-    const { verifyTradeEvidence } = await import('../src/automation/evidence.js')
+    const { verifyTradeEvidence } = await import('@nektar/automation')
     const verdict = verifyTradeEvidence(JSON.parse(new TextDecoder().decode(bytes)))
     assert.equal(verdict.ok, true, JSON.stringify(verdict.checks))
     // the public bundle must not leak: finding text, question text, or the

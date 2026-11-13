@@ -177,9 +177,9 @@ export function conformanceStatus(cfg: {
  *  the default probes both the source-tree and compiled-dist depths. */
 export function defaultSuiteDir(): string {
   const here = fileURLToPath(new URL('.', import.meta.url))
-  for (const rel of ['../../../e2e/src/scenarios', '../../../../e2e/src/scenarios']) {
+  for (const rel of ['../../e2e/src/scenarios', '../../../e2e/src/scenarios', '../../../../e2e/src/scenarios']) {
     const d = resolve(here, rel)
     if (existsSync(d)) return d
   }
-  return resolve(here, '../../../../e2e/src/scenarios')
+  return resolve(here, '../../e2e/src/scenarios')
 }

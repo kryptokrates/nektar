@@ -181,7 +181,7 @@ test('pack endpoint + remote import: /.well-known/nektar lists offerable shards;
 
 test('bstore packs: describeShard publishes the pack; .well-known carries store; importShard {store} verifies; tamper refuses', async (t) => {
   const { createServer } = await import('node:http')
-  const { S3ObjectStore } = await import('../src/objectstore.js')
+  const { S3ObjectStore } = await import('@nektar/store')
   const { createHttpApi } = await import('../src/http.js')
   // accept-any-signature fake S3 — path-style PUT/GET/HEAD (the SigV4 check
   // lives in objectstore.test.ts)

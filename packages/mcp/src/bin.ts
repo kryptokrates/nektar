@@ -39,7 +39,7 @@ if (paymentsEnabled()) {
   process.stderr.write('nektar: payments on\n')
 }
 if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
-  const { openAutomation } = await import('./automation/runtime.js')
+  const { openAutomation } = await import('@nektar/automation')
   const { callTool } = await import('./server.js')
   const mh = (process.env.NEKTAR_MARKET_HOSTS ?? '')
     .split(',')

@@ -6,8 +6,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
-import { BudgetAuthority } from './budget.js'
-import type { Automation } from './automation/types.js'
+import { BudgetAuthority } from '@nektar/automation'
+import type { Automation } from '@nektar/automation'
 import { PrivateKey, PublicKey, ProtoWallet, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte, type WalletInterface } from '@bsv/sdk'
 import {
   utf8,
@@ -55,7 +55,7 @@ import {
   type Checkpoint
 } from '@nektar/log'
 import { Metrics } from './metrics.js'
-import { storeChirp, fetchObjectByRef } from './chirp.js'
+import { storeChirp, fetchObjectByRef } from '@nektar/store'
 
 const DELTA_PREFIX = 'delta:'
 
@@ -163,11 +163,11 @@ export interface NektarMemoryOptions {
   /** bstore/S3 object store: public shard packs are also PUT to the gateway
    *  when a manifest is committed (env NEKTAR_BSTORE_*); absent = feature off
    *  and /v1/pack/{shard} stays the only pack endpoint */
-  objectStore?: import('./objectstore.js').S3ObjectStore
+  objectStore?: import('@nektar/store').S3ObjectStore
   /** the bfinger packs store: stored packs also commit as kind-5 sub-records
    *  under the operator identity so a reader resolves them through the
    *  record's refs — no /.well-known or operator origin needed. */
-  packsStore?: import('./packstore.js').PacksStore
+  packsStore?: import('@nektar/store').PacksStore
   /** data dir for the public proof store (proofs/<sha256>) — defaults to
    *  NEKTAR_DATA_DIR or ./.nektar; proofs committed in private cites are
    *  served publicly for independent re-verification. */
@@ -223,13 +223,13 @@ export interface PersistedMemoryState {
   txHex?: Record<string, string>
   /** object-store refs of packs this instance PUT to bstore — keyed by shard;
    *  lets /.well-known/nektar name the store location across restarts */
-  packStores?: Record<string, import('./objectstore.js').ObjectRef>
+  packStores?: Record<string, import('@nektar/store').ObjectRef>
   /** proofCommit → the bstore endpoint/bucket the proof bytes were PUT under
    *  `chirp/<commit>` — lets a verifier resolve proofs origin-free */
   proofStores?: Record<string, { endpoint: string; bucket: string }>
   /** the bfinger packs store's members + manifest seq — survives a restart
    *  that boots without lanes so a later lanes-up run keeps committing. */
-  packsStore?: { members?: import('./packstore.js').PackMember[]; manifestSeq?: number }
+  packsStore?: { members?: import('@nektar/store').PackMember[]; manifestSeq?: number }
 }
 export interface MemoryStateStore {
   load: () => PersistedMemoryState | undefined
@@ -505,9 +505,9 @@ export class NektarMemory {
   }
   private logKey: SignerLike
   private _logPub?: string
-  public budget?: import('./budget.js').BudgetAuthority
+  public budget?: import('@nektar/automation').BudgetAuthority
   public automation?: Automation
-  public ledger?: import('./automation/store.js').AutomationStore
+  public ledger?: import('@nektar/automation').AutomationStore
   /** every transaction this instance built, broadcast or was handed, with
    *  its proof once one exists — parents for spends and BEEF for counterparties
    *  come from here, not from an indexer */
@@ -1472,7 +1472,7 @@ export class NektarMemory {
     const bucket = store?.bucket ?? this.proofStores.get(commitHex)?.bucket ?? this.opts.objectStore?.bucket
     if (endpoint !== undefined && bucket !== undefined) {
       try {
-        const { getObjectUnsigned } = await import('./objectstore.js')
+        const { getObjectUnsigned } = await import('@nektar/store')
         const bytes = await getObjectUnsigned(endpoint, bucket, key)
         return toHex(sha256(bytes)) === commitHex ? bytes : undefined
       } catch {
@@ -2036,9 +2036,9 @@ export class NektarMemory {
   private flags = new Map<string, { private?: boolean }>()
   /** bstore refs of packs this instance PUT (describeShard) — persisted in
    *  state so /.well-known/nektar keeps naming them across restarts */
-  private packStores = new Map<string, import('./objectstore.js').ObjectRef>()
+  private packStores = new Map<string, import('@nektar/store').ObjectRef>()
   private proofStores = new Map<string, { endpoint: string; bucket: string }>()
-  private savedPacksStore: { members?: import('./packstore.js').PackMember[]; manifestSeq?: number } | undefined
+  private savedPacksStore: { members?: import('@nektar/store').PackMember[]; manifestSeq?: number } | undefined
   /** is this shard declared private? */
   shardPrivate(shard: string): boolean {
     return this.flags.get(shard)?.private === true
@@ -2213,7 +2213,7 @@ export class NektarMemory {
    *  record's refs resolve the current set with no /.well-known lookup.
    *  Best-effort: a store failure never fails the caller. Returns the
    *  (possibly pre-existing) ref. */
-  async storePack(shard: string, pack: ShardPack, network?: string): Promise<import('./objectstore.js').ObjectRef | undefined> {
+  async storePack(shard: string, pack: ShardPack, network?: string): Promise<import('@nektar/store').ObjectRef | undefined> {
     const st = this.opts.objectStore
     if (st === undefined) return undefined
     const bytes = utf8(JSON.stringify(pack))
@@ -2261,13 +2261,13 @@ export class NektarMemory {
   /** attach the bfinger packs store post-construction (the automation
    *  runtime builds it once lanes exist); restores members persisted by a
    *  previous run and binds state persistence. */
-  attachPacksStore(store: import('./packstore.js').PacksStore): void {
+  attachPacksStore(store: import('@nektar/store').PacksStore): void {
     this.opts.packsStore = store
     store.bindPersist(() => this.persistState())
     store.restore(this.savedPacksStore)
   }
   /** the configured bstore/S3 object store (undefined = feature off) */
-  get objectStore(): import('./objectstore.js').S3ObjectStore | undefined {
+  get objectStore(): import('@nektar/store').S3ObjectStore | undefined {
     return this.opts.objectStore
   }
   get feeRateSatPerKb(): number {
@@ -2275,7 +2275,7 @@ export class NektarMemory {
   }
   /** pack-store refs this instance PUT to bstore — the `.well-known` doc
    *  names them so importers can fetch through the store instead of HTTP. */
-  packStoreRef(shard: string): import('./objectstore.js').ObjectRef | undefined {
+  packStoreRef(shard: string): import('@nektar/store').ObjectRef | undefined {
     return this.packStores.get(shard)
   }
   /** fetch + verify a pack through the object store — every byte checks

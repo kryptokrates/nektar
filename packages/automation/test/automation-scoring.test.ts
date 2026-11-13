@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_SCORE_WEIGHTS, rankOffers, type ScoreCandidate, type ScoringPolicy } from '../src/automation/scoring.js'
+import { DEFAULT_SCORE_WEIGHTS, rankOffers, type ScoreCandidate, type ScoringPolicy } from '../src/scoring.js'
 
 const policy = (extra: Partial<ScoringPolicy> = {}): ScoringPolicy => ({
   maxAllInSats: 1000,

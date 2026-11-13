@@ -6,8 +6,8 @@ import { ReserveFunder, stackWorld, stackChain, StackFunder } from '@nektar/chai
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AutomationStore } from '../src/automation/store.js'
-import { wrapBroadcast, leasePredicate } from '../src/automation/ledger.js'
+import { AutomationStore } from '@nektar/automation'
+import { wrapBroadcast, leasePredicate } from '@nektar/automation'
 import { NektarMemory } from '../src/memory.js'
 
 async function open() {

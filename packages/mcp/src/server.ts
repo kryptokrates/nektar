@@ -1763,9 +1763,9 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       // bundle through getVerified (digest/size checked against the ref) and
       // runs the evidence verifier; redacted bundles report which checks the
       // withheld question/disclosure fields make unavailable.
-      const { objectStoreFromEnv } = await import('./objectstore.js')
-      const { fetchObjectByRef } = await import('./chirp.js')
-      const { verifyTradeEvidence } = await import('./automation/evidence.js')
+      const { objectStoreFromEnv } = await import('@nektar/store')
+      const { fetchObjectByRef } = await import('@nektar/store')
+      const { verifyTradeEvidence } = await import('@nektar/automation')
       const st = mem.objectStore ?? mem.automation?.objectStore ?? objectStoreFromEnv()
       let ref = args?.ref as { bucket?: string; key?: string; sha256?: string; size?: number; chirp?: string; endpoint?: string } | undefined
       if (ref === undefined && typeof args?.operationId === 'string') {
@@ -1850,7 +1850,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
     case 'deals': {
       const au = mem.automation
       if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
-      const entry = (o: import('./automation/store.js').Operation): Record<string, unknown> => {
+      const entry = (o: import('@nektar/automation').Operation): Record<string, unknown> => {
         const d = o.data
         const selKey = typeof (d.selected as { key?: string } | undefined)?.key === 'string' ? (d.selected as { key: string }).key : undefined
         return {
@@ -1868,7 +1868,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
           updatedAt: o.updatedAt
         }
       }
-      const detail = (o: import('./automation/store.js').Operation, events: unknown): Record<string, unknown> => {
+      const detail = (o: import('@nektar/automation').Operation, events: unknown): Record<string, unknown> => {
         const e: Record<string, unknown> = { ...entry(o), data: o.data, events, ...(o.lastError ? { lastError: o.lastError } : {}) }
         if (o.role === 'buyer' && (o.state === 'disclosure_verified' || o.state === 'useful')) {
           const r = o.data.result as { text?: string; taint?: string } | undefined

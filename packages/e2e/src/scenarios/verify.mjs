@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { verifyTradeEvidence } from '../../../mcp/dist/src/automation/evidence.js'
+import { verifyTradeEvidence } from '../../../automation/dist/src/evidence.js'
 const dir = process.argv[2]
 if (!dir) {
   console.error('usage: pnpm scenarios:verify -- <evidence-dir>')
@@ -27,7 +27,7 @@ async function certifyUnattended() {
     return
   }
   const { PrivateKey } = await import('@bsv/sdk')
-  const conf = await import('../../../mcp/dist/src/automation/conformance.js')
+  const conf = await import('../../../automation/dist/src/conformance.js')
   const key = /^[0-9a-fA-F]{64}$/.test(keyEnv.trim()) ? PrivateKey.fromHex(keyEnv.trim()) : PrivateKey.fromWif(keyEnv.trim())
   const pub = key.toPublicKey().toString().toLowerCase()
   mkdirSync(dataDir, { recursive: true })

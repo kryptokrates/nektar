@@ -52,3 +52,5 @@ export {
 export type { Utxo, ClaimEntry } from './claims.js'
 export { TxStore, spendValid } from './txstore.js'
 export type { TxRow, TxPersistence, Ingested } from './txstore.js'
+export { ChainEvents } from './events.js'
+export type { ChainEventsOpts } from './events.js'

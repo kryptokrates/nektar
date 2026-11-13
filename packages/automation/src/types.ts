@@ -15,7 +15,7 @@ export interface Automation {
    *  counterparty's stream filtered to this deal */
   dealJournal?: (op: import('./store.js').Operation) => Promise<Record<string, unknown> | undefined>
   /** bstore/S3 object store in use (undefined = evidence/pack storage off) */
-  objectStore?: import('../objectstore.js').S3ObjectStore
+  objectStore?: import('@nektar/store').S3ObjectStore
   /** the latest preflight verdict — pass + the doctor-style report behind it */
   health: () => { pass: boolean; report: PreflightReport | undefined }
   /** re-run the full preflight now (the automationDoctor tool) */

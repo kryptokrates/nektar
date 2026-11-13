@@ -22,12 +22,12 @@
 import { Transaction, P2PKH, PrivateKey, UnlockingScript } from '@bsv/sdk'
 import { mkdirSync, readFileSync, writeFileSync, accessSync, constants } from 'node:fs'
 import { join } from 'node:path'
-import type { NektarMemory } from '../memory.js'
+import type { AutomationHost } from './host.js'
 import type { AutomationStore } from './store.js'
 import { killSwitchActive } from './kill.js'
 import { conformanceStatus } from './conformance.js'
-import { fetchObjectByRef } from '../chirp.js'
-import { type S3ObjectStore } from '../objectstore.js'
+import { fetchObjectByRef } from '@nektar/store'
+import type { S3ObjectStore } from '@nektar/store'
 
 interface PreflightCheck {
   check: string
@@ -56,7 +56,7 @@ interface PreflightCfg {
 }
 
 export interface PreflightDeps {
-  mem: NektarMemory
+  mem: AutomationHost
   store?: AutomationStore
   objectStore?: S3ObjectStore
   cfg: PreflightCfg

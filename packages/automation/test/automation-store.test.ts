@@ -6,10 +6,10 @@ import { join } from 'node:path'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
 import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
-import { AutomationStore, RevisionConflict } from '../src/automation/store.js'
-import { WalletCoordinator } from '../src/automation/wallet.js'
-import { policyHash, policyError, decidePurchase, decideOffer, type AutomationPolicy, type ActionContext } from '../src/automation/policy.js'
-import { DEFAULT_SCORE_WEIGHTS } from '../src/automation/scoring.js'
+import { AutomationStore, RevisionConflict } from '../src/store.js'
+import { WalletCoordinator } from '../src/wallet.js'
+import { policyHash, policyError, decidePurchase, decideOffer, type AutomationPolicy, type ActionContext } from '../src/policy.js'
+import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
 
 const agent = PrivateKey.fromRandom().toPublicKey().toString()
 const policy = (limits: Partial<AutomationPolicy['limits']> = {}, extra: Partial<AutomationPolicy> = {}): AutomationPolicy => ({

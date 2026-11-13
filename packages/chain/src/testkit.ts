@@ -15,6 +15,7 @@ import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut, Funder, TxStatusEvent } from './interfaces.js'
+import { ChainEvents } from './events.js'
 import {
   TeranodeRPCTracker,
   TeranodeBroadcaster,
@@ -147,15 +148,11 @@ export class StackChain implements ChainTracker, Broadcaster {
   private tracker: TeranodeRPCTracker
   private submit: TeranodeBroadcaster
   private treasuryAddr?: string
-  private statusCbs: Array<(ev: TxStatusEvent) => void> = []
   private known = new Map<string, Transaction>()
   private rejectedSet = new Set<string>()
-  /** txid → first-watched ms; entries older than WATCH_TTL_MS are dropped so a
-   *  tx that never seals (mempool stays unmined in tests) can't pin the watch
-   *  — and its keep-alive sockets — open past the process's natural exit. */
-  private watched = new Map<string, number>()
-  private watcher?: NodeJS.Timeout
-  private polling = false
+  /** the shared chain-event substrate — one poll loop serving every consumer;
+   *  txid TTL keeps never-sealing regtest txs from pinning the event loop. */
+  private events: ChainEvents
   constructor(
     private cfg: RegtestConfig,
     treasuryKey?: PrivateKey
@@ -163,6 +160,30 @@ export class StackChain implements ChainTracker, Broadcaster {
     this.tracker = new TeranodeRPCTracker(cfg)
     this.submit = new TeranodeBroadcaster(cfg.propagationUrl)
     if (treasuryKey !== undefined) this.treasuryAddr = treasuryKey.toPublicKey().toAddress([0x6f])
+    this.events = new ChainEvents({
+      intervalMs: 500,
+      ttlMs: WATCH_TTL_MS,
+      height: () => this.tracker.currentHeight(),
+      observe: async (txid) => {
+        const auth = 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
+        const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${txid}`, {
+          headers: { Authorization: auth },
+          signal: AbortSignal.timeout(4_000)
+        }).catch(() => null)
+        if (r?.ok !== true) return undefined
+        try {
+          const merklePath = MerklePath.fromBinary([...new Uint8Array(await r.arrayBuffer())])
+          // attach the proof to the cached tx so the sync getTx view answers
+          // 'mined', not 'seen' — txState consumers rely on it
+          const cached = this.known.get(txid)
+          if (cached !== undefined) cached.merklePath = merklePath
+          if (dbgTimings()) dbgLog(`proof pushed for ${txid.slice(0, 12)}…`)
+          return { txid, status: 'mined', blockHeight: merklePath.blockHeight, merklePath }
+        } catch {
+          return undefined /* unparseable proof → keep watching */
+        }
+      }
+    })
   }
   /** broadcast; the txid joins the status watch so 'mined' + proof push on seal */
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
@@ -170,15 +191,14 @@ export class StackChain implements ChainTracker, Broadcaster {
     const txid = tx.id('hex')
     if (r.status === 'success') {
       this.known.set(txid, tx)
-      this.watched.set(txid, Date.now())
+      this.events.watch(txid)
     } else if (/double.?spend|conflict|already.*spent|UTXO_SPENT|mandatory|invalid|reject/i.test(r.description ?? '')) {
       // definitive rejects only — missing-parent and non-final are transient
       // (lagging ingestion, locktime before height): retried, never terminal.
       // A broadcast-time refusal is a final state — push it like 'mined' so
       // onTxRejected → engine.hint clears the reconcile gate immediately.
       this.rejectedSet.add(txid)
-      const ev: TxStatusEvent = { txid, status: 'rejected' }
-      for (const cb of this.statusCbs) cb(ev)
+      this.events.report({ txid, status: 'rejected' })
     }
     return r
   }
@@ -195,70 +215,30 @@ export class StackChain implements ChainTracker, Broadcaster {
     return this.rejectedSet.has(txid)
   }
   /** status push, the same shape statusStream gives live networks: Teranode
-   *  has no per-tx event feed, so watched broadcasts are polled against
-   *  /merkle_proof and 'mined' fires with the real BUMP once the subtree
-   *  seals — the engine's markProven path runs push-side, not on a timer. */
+   *  has no per-tx event feed, so the shared events substrate polls watched
+   *  broadcasts against /merkle_proof and 'mined' fires with the real BUMP
+   *  once the subtree seals — markProven runs push-side, not on a timer. */
   onStatus(cb: (ev: TxStatusEvent) => void): void {
-    this.statusCbs.push(cb)
-    this.watcher ??= setInterval(() => void this.pollWatched(), 500)
-    this.watcher.unref()
+    this.events.on('tx', cb)
+    this.events.start()
+  }
+  /** expose the substrate — runtimes share this instance's poller for
+   *  confirmer/ledger watches instead of running private proof loops */
+  get chainEvents(): ChainEvents {
+    return this.events
   }
   /** release the status watch — the poll loop's fetches hold keep-alive sockets
    *  that pin the event loop open, so stackWorld's t.after teardown calls this. */
   stopWatching(): void {
-    if (this.watcher !== undefined) clearInterval(this.watcher)
-    this.watcher = undefined
-    this.watched.clear()
-    this.statusCbs = []
+    this.events.stop()
   }
   /** wait until a broadcast tx carries its MerklePath — subtrees seal on a
    *  ~10s cadence, so proofs are inherently async; callers that NEED one
    *  synchronously (BEEF payloads) say so explicitly rather than mine()
    *  stalling for every consumer. */
   async waitProof(txid: string, timeoutMs = 30_000): Promise<Transaction | undefined> {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
-      const tx = this.known.get(txid)
-      if (tx?.merklePath !== undefined) return tx
-      if (!this.polling && this.watched.size > 0) await this.pollWatched()
-      await new Promise((r) => setTimeout(r, 150))
-    }
+    await this.events.waitFor(txid, timeoutMs)
     return this.known.get(txid)
-  }
-  private async pollWatched(): Promise<void> {
-    if (this.polling || this.watched.size === 0 || this.statusCbs.length === 0) return
-    const staleAt = Date.now() - WATCH_TTL_MS
-    for (const [txid, seenAt] of this.watched) if (seenAt < staleAt) this.watched.delete(txid)
-    if (this.watched.size === 0) return
-    if (dbgTimings()) dbgLog(`pollWatched: ${this.watched.size} watched`)
-    this.polling = true
-    try {
-      const auth = 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
-      const batch = [...this.watched.keys()].slice(0, 8)
-      await Promise.all(
-        batch.map(async (txid) => {
-          const r = await fetch(`${this.cfg.assetUrl}/merkle_proof/${txid}`, {
-            headers: { Authorization: auth },
-            signal: AbortSignal.timeout(4_000)
-          }).catch(() => null)
-          if (r?.ok !== true) return
-          try {
-            const merklePath = MerklePath.fromBinary([...new Uint8Array(await r.arrayBuffer())])
-            this.watched.delete(txid)
-            // attach the proof to the cached tx so the sync getTx view answers
-            // 'mined', not 'seen' — txState consumers rely on it
-            const cached = this.known.get(txid)
-            if (cached !== undefined) cached.merklePath = merklePath
-            if (dbgTimings()) dbgLog(`proof pushed for ${txid.slice(0, 12)}…`)
-            for (const cb of this.statusCbs) cb({ txid, status: 'mined', blockHeight: merklePath.blockHeight, merklePath })
-          } catch {
-            /* unparseable proof → keep watching */
-          }
-        })
-      )
-    } finally {
-      this.polling = false
-    }
   }
   async currentHeight(): Promise<number> {
     return await this.tracker.currentHeight()
@@ -369,7 +349,7 @@ export class StackChain implements ChainTracker, Broadcaster {
     // Nothing watched ⇒ no proof consumer can exist for this block — under
     // load the bound was paid on every mine for nobody, so skip the wait.
     const auth = 'Basic ' + Buffer.from(`${this.cfg.rpcUser}:${this.cfg.rpcPass}`).toString('base64')
-    if (this.watched.size > 0) {
+    if (this.events.pending > 0) {
       const deadline = Date.now() + 3_000
       let coinbase: string | undefined
       while (coinbase === undefined && Date.now() < deadline) {
@@ -391,9 +371,9 @@ export class StackChain implements ChainTracker, Broadcaster {
     }
     // the subtree is sealed by here — push watched proofs now rather than
     // leaving consumers to the next poll tick (mine(); confirm() determinism)
-    for (let i = 0; i < 5 && this.watched.size > 0; i++) {
-      if (!this.polling) await this.pollWatched()
-      if (this.watched.size > 0) await new Promise((r) => setTimeout(r, 100))
+    for (let i = 0; i < 5 && this.events.pending > 0; i++) {
+      await this.events.tick()
+      if (this.events.pending > 0) await new Promise((r) => setTimeout(r, 100))
     }
     dbgMine(Date.now() - t0)
   }

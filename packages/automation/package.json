@@ -1,0 +1,22 @@
+{
+  "name": "@nektar/automation",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@bsv/sdk": "4.0.1",
+    "@bsv/wallet-toolbox": "2.15.0",
+    "@nektar/anchor": "workspace:*",
+    "@nektar/bstack": "workspace:*",
+    "@nektar/chain": "workspace:*",
+    "@nektar/core": "workspace:*",
+    "@nektar/identity": "workspace:*",
+    "@nektar/store": "workspace:*",
+    "knex": "^3.3.0"
+  }
+}

@@ -5,7 +5,7 @@ import knexFactory from 'knex'
 import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { createHttpApi } from '../src/http.js'
-import { AutomationStore } from '../src/automation/store.js'
+import { AutomationStore } from '@nektar/automation'
 
 test('dashboard automation inbox: agent bearer cannot approve; operator token can; origin and expiry enforced', async (t) => {
   process.env.NEKTAR_HTTP_TOKEN = 'agent-token'

@@ -76,6 +76,36 @@ importers:
         specifier: 0.4.6
         version: 0.4.6
 
+  packages/automation:
+    dependencies:
+      '@bsv/sdk':
+        specifier: 4.0.1
+        version: 4.0.1
+      '@bsv/wallet-toolbox':
+        specifier: 2.15.0
+        version: 2.15.0(@bsv/sdk@4.0.1)(@types/node@24.19.2)(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
+      '@nektar/anchor':
+        specifier: workspace:*
+        version: link:../anchor
+      '@nektar/bstack':
+        specifier: workspace:*
+        version: link:../bstack
+      '@nektar/chain':
+        specifier: workspace:*
+        version: link:../chain
+      '@nektar/core':
+        specifier: workspace:*
+        version: link:../core
+      '@nektar/identity':
+        specifier: workspace:*
+        version: link:../identity
+      '@nektar/store':
+        specifier: workspace:*
+        version: link:../store
+      knex:
+        specifier: ^3.3.0
+        version: 3.3.0(better-sqlite3@13.1.1)(mysql2@3.24.6(@types/node@24.19.2))(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
+
   packages/automaton:
     dependencies:
       '@bsv/sdk':
@@ -122,7 +152,7 @@ importers:
         version: link:../core
       knex:
         specifier: ^3.3.0
-        version: 3.3.0(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
+        version: 3.3.0(better-sqlite3@13.1.1)(mysql2@3.24.6(@types/node@24.19.2))(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
       sqlite3:
         specifier: ^5.1.7
         version: 5.1.7(bluebird@3.7.2)(supports-color@7.2.0)
@@ -309,7 +339,7 @@ importers:
         version: link:../core
       knex:
         specifier: ^3.3.0
-        version: 3.3.0(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
+        version: 3.3.0(better-sqlite3@13.1.1)(mysql2@3.24.6(@types/node@24.19.2))(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
       sqlite3:
         specifier: ^5.1.7
         version: 5.1.7(bluebird@3.7.2)(supports-color@7.2.0)
@@ -337,6 +367,9 @@ importers:
       '@nektar/anchor':
         specifier: workspace:*
         version: link:../anchor
+      '@nektar/automation':
+        specifier: workspace:*
+        version: link:../automation
       '@nektar/automaton':
         specifier: workspace:*
         version: link:../automaton
@@ -373,6 +406,9 @@ importers:
       '@nektar/reasoning':
         specifier: workspace:*
         version: link:../reasoning
+      '@nektar/store':
+        specifier: workspace:*
+        version: link:../store
       '@nektar/verify':
         specifier: workspace:*
         version: link:../verify
@@ -444,6 +480,21 @@ importers:
       '@nektar/verify':
         specifier: workspace:*
         version: link:../verify
+
+  packages/store:
+    dependencies:
+      '@bsv/sdk':
+        specifier: 4.0.1
+        version: 4.0.1
+      '@lightwebinc/bcommon':
+        specifier: file:../../vendor/lightwebinc-bcommon-0.34.0.tgz
+        version: file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)
+      '@lightwebinc/bfinger-host':
+        specifier: file:../../vendor/lightwebinc-bfinger-host-0.8.5.tgz
+        version: file:vendor/lightwebinc-bfinger-host-0.8.5.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))
+      '@nektar/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/verify:
     dependencies:
@@ -4123,27 +4174,6 @@ snapshots:
     optionalDependencies:
       better-sqlite3: 13.1.1
       mysql2: 3.24.6(@types/node@24.19.2)
-      sqlite3: 5.1.7(bluebird@3.7.2)(supports-color@7.2.0)
-    transitivePeerDependencies:
-      - supports-color
-
-  knex@3.3.0(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0):
-    dependencies:
-      colorette: 2.0.19
-      commander: 10.0.1
-      debug: 4.3.4(supports-color@7.2.0)
-      escalade: 3.2.0
-      esm: 3.2.25
-      get-package-type: 0.1.0
-      getopts: 2.3.0
-      interpret: 2.2.0
-      lodash: 4.18.1
-      pg-connection-string: 2.6.2
-      rechoir: 0.8.0
-      resolve-from: 5.0.0
-      tarn: 3.1.2
-      tildify: 2.0.0
-    optionalDependencies:
       sqlite3: 5.1.7(bluebird@3.7.2)(supports-color@7.2.0)
     transitivePeerDependencies:
       - supports-color

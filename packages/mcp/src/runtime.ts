@@ -27,10 +27,12 @@ import {
   TemporalSources,
   statusStream,
   TxStore,
+  ChainEvents,
   type TemporalSource,
   type ChainTracker,
   type RegtestConfig,
-  type MainnetConfig
+  type MainnetConfig,
+  type TxStatusEvent
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
 import { walletSigner, FUND_SIGN_ARGS, type SignerWallet } from '@nektar/core'
@@ -273,7 +275,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   // an invoice served to a missing address is a payment that can never settle.
   const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
   if (paymentsEnabled()) requireOperatorWallet()
-  const { objectStoreFromEnv } = await import('./objectstore.js')
+  const { objectStoreFromEnv } = await import('@nektar/store')
   const base: NektarMemoryOptions = {
     batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 },
     modelId: cfg.modelId ?? 'unspecified',
@@ -354,6 +356,35 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     const hdr = (await rpc('getblockheader', hash, true)) as { height: number }
     lastMined = Math.max(lastMined, hdr.height)
   }
+  // the one chain-event substrate for this process: every "is it proven?"
+  // consumer (confirmer, anchor parents, ledger) registers interest here and
+  // receives 'tx' pushes instead of running a private poll loop. Its height
+  // probe makes proof fetches impossible-but-cheap misses free: a static tip
+  // and no new watches skips the batch entirely. Self-observed BUMPs come
+  // from our own block scan — verified by construction.
+  const events = new ChainEvents({
+    intervalMs: 2_000,
+    abandonAfterBlocks: 100,
+    height: async () => Math.max(lastMined, await tracker.currentHeight()),
+    observe: async (txid) => {
+      const res = await fetch(`${rc.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(10_000) }).catch(
+        () => null
+      )
+      if (res === null || res.status !== 200) return undefined
+      const buf = await res
+        .arrayBuffer()
+        .then((b) => Buffer.from(b))
+        .catch(() => null)
+      if (buf === null) return undefined
+      const h = buf.length >= 3 && buf[0] === 0xfd ? buf.readUInt16LE(1) : undefined
+      const mp = h !== undefined ? await merklePathAtHeight(rc, txid, tracker, h) : null
+      if (mp === null) return undefined
+      return { txid, status: 'mined', blockHeight: mp.blockHeight, merklePath: new MerklePath(mp.blockHeight, mp.path) }
+    }
+  })
+  events.on('abandoned', ({ txid }) =>
+    process.stderr.write(`nektar confirmer: anchor ${txid} not mined after 100 blocks — abandoned (check for a conflicting spend)\n`)
+  )
   const reserve = new ReserveFunder(fundKey, join(cfg.dataDir, 'reserve.json'))
   if (reserve.utxos.length < 5) {
     // own treasury chain in the data dir; split mined before use
@@ -374,8 +405,17 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   const chain = {
     broadcast: async (tx: Transaction) => {
       const r = await broadcaster.broadcast(tx)
-      if (r.status === 'success') txStore.put(tx)
+      if (r.status === 'success') {
+        txStore.put(tx)
+        events.watch(tx.id('hex'))
+      }
       return r
+    },
+    // push contract: mem's onStatus listener delivers proofs/rejects the
+    // events substrate emits — the same shape statusStream gives live nets
+    onStatus: (cb: (ev: TxStatusEvent) => void) => {
+      events.on('tx', cb)
+      events.start()
     },
     currentHeight: () => tracker.currentHeight(),
     isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
@@ -398,8 +438,8 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   await openTxStore(knex)
   for (const u of reserve.utxos) txStore.put(u.tx)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
-  const { AutomationStore } = await import('./automation/store.js')
-  const { wrapBroadcast, leasePredicate } = await import('./automation/ledger.js')
+  const { AutomationStore } = await import('@nektar/automation')
+  const { wrapBroadcast, leasePredicate } = await import('@nektar/automation')
   const ledger = new AutomationStore(knex)
   await ledger.init()
   reserve.leased = leasePredicate(ledger)
@@ -407,9 +447,9 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   chain.broadcast = txLogBroadcast(chain.broadcast)
   // NEKTAR_WALLET=toolbox: the BRC-100 wallet owns the signing surface;
   // its WalletServices view of this same Teranode node keeps it honest.
-  let toolboxWallet: import('./automation/toolbox.js').ToolboxHandle | undefined
+  let toolboxWallet: import('@nektar/automation').ToolboxHandle | undefined
   if (process.env.NEKTAR_WALLET === 'toolbox') {
-    const tb = await import('./automation/toolbox.js')
+    const tb = await import('@nektar/automation')
     toolboxWallet = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: 'regtest', services: new tb.RegtestWalletServices(rc, tracker) })
   }
   const mem = new NektarMemory(
@@ -457,87 +497,35 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
       }
     if (changed) save()
   }
-  // confirmer: BUMPs for every unproven anchor; optional auto-mine; timed flush.
-  // Height discovery is O(1) per tx: Teranode's asset API serves a merkle
-  // proof only once a tx is sealed in a subtree (404 = unknown or pending),
-  // so there is no block walk. The BUMP itself is still built from the block.
+  // confirmer: timed flush + optional auto-mine; proof attachment itself is
+  // push-shaped — this loop only registers interest with the events
+  // substrate, which observes /merkle_proof once for every watched txid and
+  // emits 'tx' → chain.onStatus → mem.deliverTxProof. Parents of unproven
+  // anchors are watched too: a funding tree is ancestry-anchored the moment
+  // its own inputs prove. Height-gating lives inside the substrate — a
+  // static tip skips the batch like the old proofScanTip gate did.
   let busy = false
-  const firstSeen = new Map<string, number>()
-  const abandoned = new Set<string>()
-  // proof scans are gated on the tip advancing — a proof cannot exist without
-  // a new block, so a static tip makes every merkle_proof fetch a guaranteed
-  // miss. First tick (proofScanTip=0) always scans: restart recovery must
-  // pick up proofs mined while the instance was down.
-  let proofScanTip = 0
+  const rescan = async () => {
+    const waiting = mem.unprovenAnchors()
+    if (waiting.length === 0) return
+    if (cfg.autoMine) await mineOne()
+    for (const { txid } of waiting) {
+      events.watch(txid)
+      const tx = await mem.fetchTx(txid)
+      for (const i of tx?.inputs ?? []) {
+        const src = i.sourceTransaction
+        if (src !== undefined && src.merklePath === undefined) events.watch(src.id('hex'))
+      }
+    }
+    if (waiting.length) process.stderr.write(`nektar confirmer: waiting=${waiting.length} (watched=${events.pending})\n`)
+  }
   const tick = async () => {
     if (busy) return
     busy = true
     try {
       persistKeys()
       await mem.flushDue()
-      const waiting = mem.unprovenAnchors().filter((w) => !abandoned.has(w.txid))
-      if (waiting.length && cfg.autoMine) await mineOne()
-      const tip = Math.max(lastMined, await tracker.currentHeight())
-      let attached = 0
-      for (const { shard, txid } of tip > proofScanTip ? waiting : []) {
-        const res = await fetch(`${rc.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(10_000) }).catch(
-          () => null
-        )
-        if (res === null || res.status >= 500) continue
-        if (res.status === 404) {
-          const seen = firstSeen.get(txid) ?? tip
-          firstSeen.set(txid, seen)
-          // never mined within 100 blocks (e.g. replaced by a conflicting spend): stop waiting
-          if (tip - seen > 100) {
-            abandoned.add(txid)
-            process.stderr.write(`nektar confirmer: anchor ${txid} not mined after 100 blocks — abandoned (check for a conflicting spend)\n`)
-          }
-          continue
-        }
-        const buf = await res
-          .arrayBuffer()
-          .then((b) => Buffer.from(b))
-          .catch(() => null)
-        if (buf === null) continue
-        const h = buf.length >= 3 && buf[0] === 0xfd ? buf.readUInt16LE(1) : undefined
-        const mp = h !== undefined ? await merklePathAtHeight(rc, txid, tracker, h) : null
-        if (mp) {
-          mem.attachProof(shard, txid, new MerklePath(mp.blockHeight, mp.path))
-          attached++
-        }
-      }
-      // parents of unproven anchors: a funding tree is ancestry-anchored the
-      // moment its own inputs prove — refreshing those proofs keeps the
-      // one-unconfirmed-level path open instead of always waiting for the
-      // tree's own block. Parents that are anchors themselves are covered
-      // by the main loop; reject/abandon bookkeeping applies as usual.
-      if (tip > proofScanTip) {
-        const seen = new Set(waiting.map((w) => w.txid))
-        const parents = new Map<string, string>()
-        for (const { txid } of waiting) {
-          const tx = await mem.fetchTx(txid)
-          for (const i of tx?.inputs ?? []) {
-            const src = i.sourceTransaction
-            if (src !== undefined && src.merklePath === undefined && !seen.has(src.id('hex'))) parents.set(src.id('hex'), src.id('hex'))
-          }
-        }
-        for (const txid of parents.keys()) {
-          const res = await fetch(`${rc.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(10_000) }).catch(
-            () => null
-          )
-          if (res === null || res.status !== 200) continue
-          const buf = await res
-            .arrayBuffer()
-            .then((b) => Buffer.from(b))
-            .catch(() => null)
-          if (buf === null) continue
-          const h = buf.length >= 3 && buf[0] === 0xfd ? buf.readUInt16LE(1) : undefined
-          const mp = h !== undefined ? await merklePathAtHeight(rc, txid, tracker, h) : null
-          if (mp) mem.deliverTxProof(txid, new MerklePath(mp.blockHeight, mp.path))
-        }
-      }
-      if (waiting.length && tip > proofScanTip) proofScanTip = tip
-      if (waiting.length) process.stderr.write(`nektar confirmer: waiting=${waiting.length} attached=${attached} tip=${tip}\n`)
+      await rescan()
       persistKeys()
     } catch (e) {
       process.stderr.write(`nektar confirmer: ${(e as Error).message}\n`)
@@ -553,6 +541,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     mem,
     network: 'regtest',
     close: async () => {
+      events.stop()
       clearInterval(timer)
       clearInterval(beatTimer)
       await tick()
@@ -727,8 +716,8 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v),
     takeReserve: async (_sc?: unknown, minSats?: number) => await reserve.takeReserve(undefined, minSats)
   }
-  let liveToolbox: import('./automation/toolbox.js').ToolboxHandle | undefined
-  let liveTf: import('./automation/toolbox.js').ToolboxReserveFunder | undefined
+  let liveToolbox: import('@nektar/automation').ToolboxHandle | undefined
+  let liveTf: import('@nektar/automation').ToolboxReserveFunder | undefined
   const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker, { wocApiKey: mc.wocApiKey, fetchImpl: mc.fetchImpl })
   const chain = {
     broadcast: async (tx: Transaction) => {
@@ -742,6 +731,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       const r = await spendGuard.broadcast(tx)
       if (r.status === 'success') {
         txStore.put(tx)
+        events.watch(tx.id('hex'))
         memRef?.metrics.inc('nektar_fee_sats_total', {}, spendGuard.costs().at(-1)?.fee ?? 0, 'total anchor fee spend (sats)')
       } else if (r.description?.startsWith('SpendGuard refused')) {
         memRef?.metrics.inc(
@@ -753,6 +743,12 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       }
       return r
     },
+    // push contract: mem's onStatus listener delivers proofs/rejects the
+    // events substrate emits — pushed SSE statuses stay hints (handleBroadcasterStatus)
+    onStatus: (cb: (ev: TxStatusEvent) => void) => {
+      events.on('tx', cb)
+      events.start()
+    },
     currentHeight: () => tracker.currentHeight(),
     isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
     // §12: header TIMES are the weighted median across temporal sources;
@@ -760,6 +756,30 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     headerAtHeight: (h: number) => temporal.headerAtHeight(h),
     tipHeight: () => tracker.currentHeight()
   }
+  // the one chain-event substrate: pushed SSE/callback statuses land as
+  // notes (unverified hints), this pull probes what a push could not deliver
+  // — proofs missed while down, and txs handed rather than broadcast.
+  const arcTxStatus = async (txid: string): Promise<string> => {
+    try {
+      const st = await fetch(`${mc.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`, {
+        signal: AbortSignal.timeout(10_000)
+      }).then((x) => (x.ok ? x.json() : null))
+      return String(st?.txStatus ?? '').toUpperCase()
+    } catch {
+      return ''
+    }
+  }
+  const events = new ChainEvents({
+    intervalMs: cfg.confirmEveryMs ?? 30_000,
+    height: () => tracker.currentHeight(),
+    observe: async (txid) => {
+      const tx = await memRef?.fetchTx(txid).catch(() => undefined)
+      if (tx?.merklePath !== undefined) return { txid, status: 'mined', blockHeight: tx.merklePath.blockHeight, merklePath: tx.merklePath }
+      const st = await arcTxStatus(txid)
+      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(st)) return { txid, status: 'rejected' }
+      return undefined
+    }
+  })
   const knexMod = (await import('knex')).default
   const knex = knexMod({ client: 'sqlite3', connection: { filename: join(cfg.dataDir, 'records.sqlite') }, useNullAsDefault: true })
   // WAL: readers don't queue behind the writer; busy_timeout turns a
@@ -771,8 +791,8 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   await openTxStore(knex)
   for (const u of reserve.utxos) txStore.put(u.tx)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
-  const { AutomationStore } = await import('./automation/store.js')
-  const { wrapBroadcast, leasePredicate } = await import('./automation/ledger.js')
+  const { AutomationStore } = await import('@nektar/automation')
+  const { wrapBroadcast, leasePredicate } = await import('@nektar/automation')
   const ledger = new AutomationStore(knex)
   await ledger.init()
   reserve.leased = leasePredicate(ledger)
@@ -784,7 +804,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // wallet storage, markSpent relinquishes, addOwned internalizes.
   if (process.env.NEKTAR_WALLET === 'toolbox') {
     if (fundKey === undefined) throw new Error('NEKTAR_WALLET=toolbox embeds its keyDeriver from the fee key — =client is the keyless mode')
-    const tb = await import('./automation/toolbox.js')
+    const tb = await import('@nektar/automation')
     const services = new tb.LiveWalletServices({ chain: ttn ? 'test' : 'main', mc, tracker, broadcast: (tx) => rawBroadcaster.broadcast(tx) })
     liveToolbox = await tb.openToolboxWallet({
       fundKey,
@@ -878,6 +898,13 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
           'broadcaster status stream events received'
         )
         await handleBroadcasterStatus(mem, j)
+        // the pushed status is a verified-by-now hint: drop the shared
+        // watch so the pull probe stops re-checking a settled txid
+        if (typeof j.txid === 'string') {
+          const s = String(j.txStatus ?? '').toUpperCase()
+          if (s === 'MINED' || s === 'IMMUTABLE') events.note({ txid: j.txid, status: 'mined' })
+          else if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(s)) events.note({ txid: j.txid, status: 'rejected' })
+        }
       },
       {
         cursor: {
@@ -1009,14 +1036,14 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     try {
       persistKeys()
       await mem.flushDue()
-      // proofs are pushed (webhook or status stream). This pass only picks up
-      // what a push could not deliver: a proof missed while the instance was
-      // down, and proofs of transactions it was handed rather than broadcast.
-      // fetchTx tries each transaction once and then at most every ten minutes.
-      for (const { shard, txid } of mem.unprovenAnchors()) {
-        const mp = (await mem.fetchTx(txid))?.merklePath
-        if (mp) mem.attachProof(shard, txid, mp)
-      }
+      // proofs are pushed (webhook or status stream); the events substrate's
+      // pull picks up what a push could not deliver — a proof missed while
+      // the instance was down, or a tx handed rather than broadcast. This
+      // pass registers interest; delivery arrives via chain.onStatus.
+      for (const { txid } of mem.unprovenAnchors()) events.watch(txid)
+      // ledger txs too: one shared probe per txid serves the watcher's
+      // statusOf short-circuit — no second /tx fetch per inflight tx
+      for (const w of await ledger.walletTxs(['submitted', 'submission_unknown', 'observed'])) events.watch(w.txid)
       // a bounded, rotating pull: each tick tries a few unproven txs so a
       // long list can never serialize minutes of lookups inside one pass —
       // push (callbacks/status stream) stays the primary proof channel
@@ -1147,21 +1174,20 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       return { revived, dropped, marked, pending, utxos: reserve.utxos.length, balanceSats, address: fundAddress }
     }
   }
-  const { TransactionWatcher } = await import('./automation/ledger.js')
+  const { TransactionWatcher } = await import('@nektar/automation')
   const watcher = new TransactionWatcher(
     ledger,
     async (txid) => {
-      try {
-        const st = await fetch(`${mc.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) }).then((x) =>
-          x.ok ? x.json() : null
-        )
-        const status = String(st?.txStatus ?? '').toUpperCase()
-        const SEEN = ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE']
-        if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) return { status: 'rejected', source: 'broadcaster', reason: status }
-        if (SEEN.includes(status)) return { status: 'seen', source: 'broadcaster' }
-      } catch {
-        /* undecidable — retry next tick */
-      }
+      // the shared substrate already probed this txid — use its answer
+      // instead of a second /tx fetch per watched tx per pass
+      const seen = events.statusOf(txid)
+      if (seen?.status === 'rejected' || seen?.status === 'double-spent')
+        return { status: 'rejected', source: 'broadcaster', reason: seen.status }
+      if (seen?.status === 'mined') return { status: 'proven', source: 'broadcaster' }
+      const status = await arcTxStatus(txid)
+      const SEEN = ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE']
+      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) return { status: 'rejected', source: 'broadcaster', reason: status }
+      if (SEEN.includes(status)) return { status: 'seen', source: 'broadcaster' }
       return undefined
     },
     async () => {
@@ -1179,21 +1205,21 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
         watching = false
       })
   }
-  // event-driven primary: a pushed broadcaster status may settle a watched
-  // tx now — the interval below is only the sweep ceiling for missed pushes
+  // event-driven: the shared substrate's sweeps, height advances and pushed
+  // broadcaster statuses may each settle a watched tx — no private interval
+  events.on('tick', watchOnce)
+  events.on('height', watchOnce)
   mem.events.on('broadcasterStatus', watchOnce)
-  const watchTimer = setInterval(watchOnce, Number(process.env.NEKTAR_TX_WATCH_MS ?? 60_000))
-  watchTimer.unref()
   return {
     mem,
     network: net,
     ops,
     close: async () => {
       stream?.close()
+      events.stop()
       mem.events.off('broadcasterStatus', watchOnce)
       clearInterval(timer)
       clearInterval(beatTimer)
-      clearInterval(watchTimer)
       await tick()
       await knex.destroy()
       try {

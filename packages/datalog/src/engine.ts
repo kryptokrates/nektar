@@ -1,5 +1,5 @@
 // Stratified semi-naive Datalog evaluation with provenance.
-import { createHash } from 'node:crypto'
+import { sha256, utf8, toHex } from '@nektar/core'
 import { isVar, type Fact, type Literal, type Rule } from './parse.js'
 
 export class CycleError extends Error {}
@@ -165,6 +165,6 @@ export class Datalog {
           `${f.pred}(${f.args.join(',')}) <- ${f.prov.ruleId}:${f.prov.premises.map((p) => (p.neg ? '!' : '') + p.pred + '(' + p.args.join(',') + ')').join(',')}`
       )
       .sort()
-    return createHash('sha256').update(lines.join('\n')).digest('hex')
+    return toHex(sha256(utf8(lines.join('\n'))))
   }
 }

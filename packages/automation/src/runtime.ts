@@ -1102,7 +1102,16 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       for (const ac of watches.values()) ac.abort()
       watches.clear()
       await Promise.allSettled(inflight)
-      while (busy || upkeepRun !== undefined || acking) await new Promise((r) => setTimeout(r, 25))
+      // drain in-flight work with a bound — a wedged producer must not hang
+      // teardown forever (was an unbounded spin)
+      const drainDeadline = Date.now() + 30_000
+      while (busy || upkeepRun !== undefined || acking) {
+        if (Date.now() >= drainDeadline) {
+          log(`automation: stop: drain deadline hit (busy=${busy} upkeep=${upkeepRun !== undefined} acking=${acking}) — proceeding`)
+          break
+        }
+        await new Promise((r) => setTimeout(r, 25))
+      }
       await engine.idle()
       await kxLanes?.destroy()
       await kx.destroy()

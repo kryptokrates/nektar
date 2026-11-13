@@ -13,8 +13,7 @@
 //     proof bytes via /v1/zkproof/<commit> and re-check both
 //   - consensus-checked: `onchain:true` deploys the ~398KB in-script
 //     verifier and spends it — the dispute/showcase rail, not the hot path
-import { nektarEnv } from '@nektar/core'
-import { createHash } from 'node:crypto'
+import { nektarEnv, sha256, toHex } from '@nektar/core'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -50,7 +49,7 @@ export async function attestInference(mem: NektarMemory, args: { input?: number[
   }
   const lockHex = readFileSync(lf, 'utf8').trim()
   const unlockBytes = Buffer.from(readFileSync(uf, 'utf8').trim(), 'hex')
-  att.proofCommit = createHash('sha256').update(unlockBytes).digest('hex')
+  att.proofCommit = toHex(sha256(unlockBytes))
   // publish the proof bytes so /v1/zkproof/<commit> can serve them —
   // the attestation binds these exact bytes, not a claim about them
   mem.putProof(unlockBytes)

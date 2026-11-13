@@ -3,7 +3,7 @@
 // gate, Cedar principal, and the authorizeAction policy path.
 import { toHex, fromHex, hash160 } from '@nektar/core'
 import * as idbind from '@nektar/identity'
-import type { CallerIdentity, ZkClearance } from './memory.js'
+import type { CallerIdentity, ZkClearance } from './types.js'
 
 export interface IdentityOpsDeps {
   /** nonce → expiry (ms) — shared with the security-state persistence blob */

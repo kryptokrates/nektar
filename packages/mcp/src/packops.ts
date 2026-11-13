@@ -4,7 +4,7 @@
 // and resolve stored refs back into ShardPack objects.
 import { utf8, toHex, sha256, nektarEnv } from '@nektar/core'
 import { storeChirp, fetchObjectByRef, type ObjectRef, type PacksStore, type PackMember } from '@nektar/store'
-import type { ShardPack, NektarMemoryOptions } from './memory.js'
+import type { ShardPack, NektarMemoryOptions } from './types.js'
 
 export interface PackOpsDeps {
   opts: NektarMemoryOptions

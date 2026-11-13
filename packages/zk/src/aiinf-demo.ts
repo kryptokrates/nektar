@@ -3,7 +3,7 @@
 // The shipped Groth16 proof binds exactly this (weights ‖ input ‖ output=9)
 // via publicStatement = poseidon(input ‖ output ‖ poseidon(model)).
 // Toy Poseidon params — demo-grade, see poseidon-toy.ts.
-import { createHash } from 'node:crypto'
+import { sha256, toHex, concat } from '@nektar/core'
 import { publicStatement } from './poseidon-toy.js'
 
 export const AIINF_DEMO = {
@@ -89,17 +89,17 @@ export function demoAttestation(input: readonly number[] = AIINF_DEMO.input, out
       `no proof exists for (input, output) ≠ demo vector — statement ${'0x' + stmt.toString(16)} ≠ shipped proof's ${'0x' + AIINF_DEMO.publicStatement.toString(16)}`
     )
   }
-  const inputCommit = createHash('sha256')
-    .update(
-      Buffer.concat(
-        input.map((v) => {
+  const inputCommit = toHex(
+    sha256(
+      concat(
+        ...input.map((v) => {
           const b = Buffer.alloc(4)
           b.writeInt32LE(v)
-          return b
+          return new Uint8Array(b)
         })
       )
     )
-    .digest('hex')
+  )
   return {
     circuit: AIINF_DEMO.circuit,
     setup: AIINF_DEMO.setup,

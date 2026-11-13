@@ -5,7 +5,7 @@
 import { walletSigner, type SignerWallet } from '@nektar/core'
 import { deriveFragmentKey, deriveLevelKey, decryptFragment, canonicalKeyID, CRYPTO_PROTOCOL_ID, type FragmentContext } from '@nektar/crypto'
 import type { LogRecord } from '@nektar/log'
-import type { NektarMemoryOptions } from './memory.js'
+import type { NektarMemoryOptions } from './types.js'
 
 export interface CryptoOpsDeps {
   opts: NektarMemoryOptions

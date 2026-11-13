@@ -14,8 +14,9 @@
 // gateway's bounty is configured server-side (the bounty object in the
 // gateway config); there is no per-request bounty header to set.
 
-import { createHash, createHmac } from 'node:crypto'
+import { createHmac } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
+import { sha256, toHex } from '@nektar/core'
 
 export interface ObjectRef {
   bucket: string
@@ -41,7 +42,7 @@ export const OBJECT_MAX_BYTES = 8 * 1024 * 1024
 
 const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
-const sha256Hex = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex')
+const sha256Hex = (b: Uint8Array): string => toHex(sha256(b))
 const hmac = (key: Uint8Array | string, data: string): Buffer => createHmac('sha256', key).update(data).digest()
 
 // RFC 3986 unreserved characters stay; everything else is %HH (uppercase)

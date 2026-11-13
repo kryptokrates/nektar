@@ -43,6 +43,8 @@ export interface Broadcaster {
   broadcast: (tx: Transaction) => Promise<BroadcastResult>
   /** statuses pushed as the chain progresses */
   onStatus?: (cb: (ev: TxStatusEvent) => void) => void
+  /** pull the broadcaster's current verdict for a txid ('' = undecidable) */
+  txStatus?: (txid: string) => Promise<string>
 }
 
 export interface FundingOut {

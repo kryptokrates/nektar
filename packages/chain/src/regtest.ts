@@ -2,7 +2,8 @@
 // Teranode JSON-RPC for headers. Compiled but only exercised on a live stack
 // (NEKTAR_NETWORK=regtest). No tests depend on these.
 import { Transaction, MerklePath } from '@bsv/sdk'
-import * as nodeCrypto from 'node:crypto'
+import { dsha256 } from '@nektar/core'
+import { withRetry } from './retry.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker } from './interfaces.js'
 
 export interface RegtestConfig {
@@ -52,17 +53,12 @@ export class TeranodeRPCTracker implements ChainTracker {
   // retry transport/parse failures (JSON-RPC error replies are real answers
   // and are thrown by rpcOnce immediately without retrying)
   private async rpc(method: string, ...params: unknown[]): Promise<any> {
-    let last: unknown
-    for (let t = 0; t < 5; t++) {
-      try {
-        return await this.rpcOnce(method, ...params)
-      } catch (e) {
-        if (e instanceof Error && e.message.startsWith(`rpc ${method}:`)) throw e
-        last = e
-        await new Promise((r) => setTimeout(r, 300 * (t + 1)))
-      }
-    }
-    throw last
+    return await withRetry(() => this.rpcOnce(method, ...params), {
+      attempts: 5,
+      delay: (t) => 300 * (t + 1),
+      retryIf: () => false,
+      retryErr: (e) => !(e instanceof Error && e.message.startsWith(`rpc ${method}:`))
+    })
   }
 
   async currentHeight(): Promise<number> {
@@ -164,10 +160,7 @@ function readVarint(b: Uint8Array, o: number): [number, number] {
   if (b[o] === 0xfe) return [dv.getUint32(o + 1, true), o + 5]
   return [Number(dv.getBigUint64(o + 1, true)), o + 9]
 }
-const sha256d = (b: Uint8Array): Uint8Array => {
-  const h1 = nodeCrypto.createHash('sha256').update(b).digest() as Uint8Array
-  return nodeCrypto.createHash('sha256').update(h1).digest() as Uint8Array
-}
+const sha256d = (b: Uint8Array): Uint8Array => dsha256(b)
 /** legacy block: 80B header + 8B sizeInBytes + varint txcount + raw txs */
 export function parseLegacyBlock(raw: Uint8Array): { txids: string[]; txs: Uint8Array[] } {
   const hexOf = (b: Uint8Array) => Buffer.from(b).toString('hex')

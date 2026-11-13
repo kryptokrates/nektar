@@ -67,8 +67,16 @@ the report verbatim.
 Apply [references/smells.md](references/smells.md): the seven-smell catalog
 plus nektar-specific structural smells (boundary leaks through wide index
 surfaces, ambient coupling via env/SQLite/state dir, unstable-dependency
-direction violations, hub concentration). For each candidate: confirm or
-reject with evidence, then classify severity.
+direction violations, hub concentration, convergent implementations, patch
+stratigraphy, timer sprawl, single points of failure, event-substitute
+waits — the EDA audit: an autonomous-agent system should be event-driven
+end to end, with timers only as bounded ceilings and poll substrate). For
+each candidate:
+confirm or reject with evidence, then classify severity.
+
+Then apply [references/consolidation.md](references/consolidation.md): run
+the root-cause drill on stratified/duplicated sites, name the remediation
+pattern per finding, and build the deletion/consolidation ledger.
 
 ### Phase 3 — Judge
 
@@ -95,10 +103,23 @@ fitness function would catch regression, and reversibility of the debt.
 | Coupling | LOOSE / MODERATE / TIGHT |
 | Hotspots | NONE / CONCENTRATED / SPREAD |
 | Debt automation | ENFORCED / PARTIAL / SOCIAL |
+| Duplication | NONE / SYNTACTIC / SEMANTIC |
+| Wait discipline | EVENT-DRIVEN / BOUNDED / SPRAWL |
+| Redundancy | FAILOVER-READY / SINGLE-POINT / UNKNOWN |
 
 ### Findings
 | # | Sev | Smell/rule | Where | Evidence (measured) | Recommendation |
 |---|-----|-----------|-------|---------------------|----------------|
+
+### Root causes
+<one line per stratified/duplicated site: `<site> keeps breaking because
+<missing abstraction>; the move is <extract / merge / reseam>` — hypothesis
+label if the drill didn't complete>
+
+### Simplification ledger
+| Opportunity | Evidence | Est. LOC | Move |
+|-------------|----------|----------|------|
+<ordered by LOC removed ÷ risk — deletions, merges, seam collapses>
 
 ### Top 3 priorities
 <impact-ordered, each with the cheapest structural move that helps>
@@ -108,6 +129,9 @@ fitness function would catch regression, and reversibility of the debt.
 - **Important** — quality-attribute deficiencies worth near-term work
 - **Beneficial** — opportunistic debt reduction
 
+ADR stubs (inline, Nygard format) for each Critical/Important structural
+move — see consolidation.md.
+
 ### Honest paragraph
 <what this system actually is, its load-bearing weakness, and what will
 hurt first if nothing changes>
@@ -116,6 +140,11 @@ hurt first if nothing changes>
 ## Sources
 
 Method adapted from florianbuetow/archibald (architecture-smell assessment
-skill) + the arc42/Lippert–Rook architectural smell taxonomy; hotspots per
-Tornhill (Your Code as a Crime Scene); package metrics per Martin (Ca/Ce/I);
-fitness-function audit per Ford et al. (Building Evolutionary Architectures).
+skill) + the arc42/Lippert–Rook architectural smell taxonomy; hotspots and
+fix-density forensics per Tornhill (Your Code as a Crime Scene); package
+metrics per Martin (Ca/Ce/I); fitness-function audit per Ford et al.
+(Building Evolutionary Architectures); semantic-duplication census per the
+type-1..4 clone taxonomy (jscpd gates 1–3, the census hunts 4); resilience
+layers per Nygard (Release It!); risk-register format per arc42 §11;
+remediation decisions recorded as Nygard ADR stubs; root-cause and
+deletion moves per Ousterhout (A Philosophy of Software Design).

@@ -4,7 +4,7 @@
 //                          NEKTAR_DATA_DIR; a confirmer attaches BUMPs.
 //   NEKTAR_NETWORK=testnet  same shape as regtest; refused until an endpoint and
 //                          funding are configured (no real funds without approval).
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { PrivateKey, MerklePath, Transaction } from '@bsv/sdk'
@@ -272,6 +272,50 @@ export interface Runtime {
   }
 }
 
+/** single writer per data dir: a live heartbeat from another instance
+ *  refuses startup. release() stops the beat and removes the lock —
+ *  was duplicated verbatim across both open paths. */
+async function acquireInstanceLock(dataDir: string): Promise<{ release: () => Promise<void> }> {
+  const lockFile = join(dataDir, 'instance.lock')
+  const me = `${process.pid}@${(await import('node:os')).hostname()}`
+  if (existsSync(lockFile)) {
+    const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string; beat: number }
+    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${dataDir} is in use by another nektar instance (${l.owner}); stop it first`)
+    rmSync(lockFile)
+  }
+  const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
+  writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
+  const beatTimer = setInterval(beat, 5_000)
+  beatTimer.unref()
+  return {
+    release: async () => {
+      clearInterval(beatTimer)
+      try {
+        rmSync(lockFile)
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+}
+
+/** records.sqlite + shard store + automation ledger — the one opener for the
+ *  data dir's durable state (WAL + busy_timeout), was two verbatim copies. */
+async function openRecordsDb(dataDir: string) {
+  const knexMod = (await import('knex')).default
+  const knex = knexMod({ client: 'sqlite3', connection: { filename: join(dataDir, 'records.sqlite') }, useNullAsDefault: true })
+  // WAL: readers don't queue behind the writer; busy_timeout turns a
+  // contended SQLITE_BUSY into a wait instead of a surfaced error
+  await knex.raw('PRAGMA journal_mode=WAL')
+  await knex.raw('PRAGMA busy_timeout=5000')
+  const store: ShardStore = new KnexShardStore(knex)
+  await store.init?.()
+  const { AutomationStore, wrapBroadcast, leasePredicate } = await import('@nektar/automation')
+  const ledger = new AutomationStore(knex)
+  await ledger.init()
+  return { knex, store, ledger, wrapBroadcast, leasePredicate }
+}
+
 export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   // fail fast: paid tools need a valid operator wallet BEFORE the first 402 —
   // an invoice served to a missing address is a payment that can never settle.
@@ -299,20 +343,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   }
   const rc = cfg.regtest!
   mkdirSync(cfg.dataDir, { recursive: true })
-  // single writer per data dir: a live heartbeat from another instance refuses startup
-  const lockFile = join(cfg.dataDir, 'instance.lock')
-  const me = `${process.pid}@${(await import('node:os')).hostname()}`
-  if (existsSync(lockFile)) {
-    const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string; beat: number }
-    if (l.owner !== me && Date.now() - l.beat < 20_000)
-      throw new Error(`data dir ${cfg.dataDir} is in use by another nektar instance (${l.owner}); stop it first`)
-    const { rmSync } = await import('node:fs')
-    rmSync(lockFile)
-  }
-  const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
-  writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
-  const beatTimer = setInterval(beat, 5_000)
-  beatTimer.unref()
+  const { release: releaseLock } = await acquireInstanceLock(cfg.dataDir)
   const { keys, save } = loadKeys(cfg.dataDir, passphraseFromEnv())
   const fundKey = PrivateKey.fromWif(rc.fundWif)
   const tracker = new TeranodeRPCTracker(rc)
@@ -451,21 +482,10 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     headerAtHeight: (h: number) => temporal.headerAtHeight(h),
     tipHeight: async () => Math.max(lastMined, await tracker.currentHeight())
   }
-  const knexMod = (await import('knex')).default
-  const knex = knexMod({ client: 'sqlite3', connection: { filename: join(cfg.dataDir, 'records.sqlite') }, useNullAsDefault: true })
-  // WAL: readers don't queue behind the writer; busy_timeout turns a
-  // contended SQLITE_BUSY into a wait instead of a surfaced error
-  await knex.raw('PRAGMA journal_mode=WAL')
-  await knex.raw('PRAGMA busy_timeout=5000')
-  const store: ShardStore = new KnexShardStore(knex)
-  await store.init?.()
+  const { knex, store, ledger, wrapBroadcast, leasePredicate } = await openRecordsDb(cfg.dataDir)
   await openTxStore(knex)
   for (const u of utxoView.utxos) txStore.put(u.tx)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
-  const { AutomationStore } = await import('@nektar/automation')
-  const { wrapBroadcast, leasePredicate } = await import('@nektar/automation')
-  const ledger = new AutomationStore(knex)
-  await ledger.init()
   // watch intent is a durable record, not an in-memory accident: any tx the
   // journal knows was broadcast-but-not-final gets re-watched on boot, so a
   // crash in the broadcast→watch window can't strand a proof wait
@@ -565,14 +585,9 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     close: async () => {
       events.stop()
       clearInterval(timer)
-      clearInterval(beatTimer)
+      await releaseLock()
       await tick()
       await knex.destroy()
-      try {
-        ;(await import('node:fs')).rmSync(lockFile)
-      } catch {
-        /* already gone */
-      }
     }
   }
 }
@@ -625,19 +640,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   mkdirSync(cfg.dataDir, { recursive: true })
   const pass = mc.passphrase
   if (!pass) throw new KeystoreError(`${net} requires NEKTAR_KEY_PASSPHRASE (or _FILE) for keys at rest`)
-  const lockFile = join(cfg.dataDir, 'instance.lock')
-  const me = `${process.pid}@${(await import('node:os')).hostname()}`
-  if (existsSync(lockFile)) {
-    const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string; beat: number }
-    if (l.owner !== me && Date.now() - l.beat < 20_000)
-      throw new Error(`data dir ${cfg.dataDir} is in use by another nektar instance (${l.owner}); stop it first`)
-    const { rmSync } = await import('node:fs')
-    rmSync(lockFile)
-  }
-  const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
-  writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
-  const beatTimer = setInterval(beat, 5_000)
-  beatTimer.unref()
+  const { release: releaseLock } = await acquireInstanceLock(cfg.dataDir)
 
   // NEKTAR_WALLET=client: an external BRC-100 wallet (Metanet Desktop or any
   // 'auto'-detected substrate) holds ALL signing material — no fund key, no
@@ -734,12 +737,17 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     }
   }
   const { txStore, open: openTxStore } = persistedTxStore()
+  // funding wake: every producer that lands a utxo (p2p 'pay', FUND_TXIDS
+  // import, indexer discovery, fee-vault mint) signals through addIfNew so
+  // waitForFunding's poll can sleep event-driven instead of fixed-cadence
+  let fundingWake: (() => void) | undefined
   const addIfNew = (u: { tx: Transaction; vout: number }) => {
     txStore.put(u.tx)
     // legacy tombstone: a marked-spent outpoint must not be revived. Toolbox
     // has no spent-set — the wallet's spendable flag is the truth there.
     if (liveTf === undefined && reserve.isSpent(u.tx.id('hex'), u.vout)) return
     void utxoView.addOwned(u.tx, u.vout)
+    fundingWake?.()
   }
   let memRef: NektarMemory | undefined
   const valueOf = (txid: string, vout: number): number | undefined =>
@@ -829,21 +837,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       return undefined
     }
   })
-  const knexMod = (await import('knex')).default
-  const knex = knexMod({ client: 'sqlite3', connection: { filename: join(cfg.dataDir, 'records.sqlite') }, useNullAsDefault: true })
-  // WAL: readers don't queue behind the writer; busy_timeout turns a
-  // contended SQLITE_BUSY into a wait instead of a surfaced error
-  await knex.raw('PRAGMA journal_mode=WAL')
-  await knex.raw('PRAGMA busy_timeout=5000')
-  const store: ShardStore = new KnexShardStore(knex)
-  await store.init?.()
+  const { knex, store, ledger, wrapBroadcast, leasePredicate } = await openRecordsDb(cfg.dataDir)
   await openTxStore(knex)
   for (const u of utxoView.utxos) txStore.put(u.tx)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
-  const { AutomationStore } = await import('@nektar/automation')
-  const { wrapBroadcast, leasePredicate } = await import('@nektar/automation')
-  const ledger = new AutomationStore(knex)
-  await ledger.init()
   // watch intent is a durable record, not an in-memory accident: any tx the
   // journal knows was broadcast-but-not-final gets re-watched on boot, so a
   // crash in the broadcast→watch window can't strand a proof wait
@@ -1018,9 +1015,27 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     }
     process.stderr.write(`nektar ${net}: waiting for funding — send a few sats to ${fundAddress}\n`)
     const deadline = Date.now() + Number(nektarEnv('NEKTAR_WAIT_FUNDING_MS') ?? 30 * 60_000)
+    const pollMs = Number(nektarEnv('NEKTAR_FUND_POLL_MS') ?? 15_000)
     while (utxoView.utxos.length === 0 && Date.now() < deadline) {
       await liveTf?.refresh().catch(() => undefined)
-      await new Promise((r) => setTimeout(r, Number(nektarEnv('NEKTAR_FUND_POLL_MS') ?? 15_000)))
+      // event-driven wait: addIfNew resolves the sleep the moment a utxo
+      // lands; re-check first so a just-landed utxo can't sleep past us,
+      // and a missed signal degrades to the bounded poll, never a hang
+      await new Promise<void>((r) => {
+        if (utxoView.utxos.length > 0) return r()
+        const t = setTimeout(
+          () => {
+            fundingWake = undefined
+            r()
+          },
+          Math.min(pollMs, Math.max(0, deadline - Date.now()))
+        )
+        fundingWake = () => {
+          fundingWake = undefined
+          clearTimeout(t)
+          r()
+        }
+      })
       for (const txid of (nektarEnv('NEKTAR_FUND_TXIDS') ?? '')
         .split(',')
         .map((s) => s.trim())
@@ -1247,14 +1262,9 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       events.stop()
       mem.events.off('broadcasterStatus', watchOnce)
       clearInterval(timer)
-      clearInterval(beatTimer)
+      await releaseLock()
       await tick()
       await knex.destroy()
-      try {
-        ;(await import('node:fs')).rmSync(lockFile)
-      } catch {
-        /* already gone */
-      }
     }
   }
 }

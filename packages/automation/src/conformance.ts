@@ -9,10 +9,9 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { PrivateKey, PublicKey, Signature } from '@bsv/sdk'
-import { sha256, utf8, toHex } from '@nektar/core'
+import { sha256, utf8, concat, toHex } from '@nektar/core'
 
 export const TOKEN_TTL_MS = 7 * 24 * 3600 * 1000 // exactly 7d — expiry forces a verify re-run
 export interface ConformanceClaims {
@@ -44,17 +43,10 @@ export function conformanceConfigHash(cfg: { network: string; marketHosts?: stri
 /** digest of the scenario suite itself — sorted file names + bytes under the
  *  suite dir, so a changed scenario invalidates tokens issued before it. */
 export function suiteDigest(suiteDir: string): string {
-  const h = createHash('sha256')
   const files = readdirSync(suiteDir)
     .filter((f) => statSync(join(suiteDir, f)).isFile())
     .sort()
-  for (const f of files) {
-    h.update(f)
-    h.update('\0')
-    h.update(readFileSync(join(suiteDir, f)))
-    h.update('\0')
-  }
-  return h.digest('hex')
+  return toHex(sha256(concat(...files.flatMap((f) => [utf8(f), utf8('\0'), readFileSync(join(suiteDir, f)), utf8('\0')]))))
 }
 
 /** the commit the running code claims — env first (CI/Docker builds set it),

@@ -50,6 +50,8 @@ export interface FaultSpec {
   dropLookup?: boolean
   /** strip lookup results whose beef parses to one of these txids */
   withholdTxids?: Set<string>
+  /** return every output twice — a babbling host; consumers must dedupe */
+  duplicateOutputs?: boolean
   /** flip a byte in every returned beef — a corrupt host */
   corrupt?: boolean
 }
@@ -101,10 +103,11 @@ export async function faulthost(upstream: string): Promise<FaulthostHandle> {
       })
       fwd++
       const buf = Buffer.from(await r.arrayBuffer())
-      if (req.url === '/lookup' && (fault.dropLookup === true || fault.corrupt === true || (fault.withholdTxids?.size ?? 0) > 0)) {
+      if (req.url === '/lookup' && (fault.dropLookup === true || fault.duplicateOutputs === true || fault.corrupt === true || (fault.withholdTxids?.size ?? 0) > 0)) {
         const parsed = JSON.parse(buf.toString('utf8')) as { outputs?: Array<{ beef: number[]; outputIndex: number }> }
         if (fault.dropLookup === true) parsed.outputs = []
         else {
+          if (fault.duplicateOutputs === true) parsed.outputs = [...(parsed.outputs ?? []), ...(parsed.outputs ?? [])]
           if ((fault.withholdTxids?.size ?? 0) > 0)
             parsed.outputs = (parsed.outputs ?? []).filter((o) => {
               const id = txidOf(o.beef)

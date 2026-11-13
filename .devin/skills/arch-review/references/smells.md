@@ -129,6 +129,77 @@ Severity per SKILL.md; every finding needs its measured evidence attached.
   a version-skew liability — that's the SDK 2.7.1/4.0.1 incident class,
   already burned once.
 
+### S6. Convergent implementation (semantic duplication)
+
+- **Rule**: the same domain concept implemented independently in 3+ places
+  — type-4 clones that jscpd cannot see because the syntax differs.
+- **Evidence**: #9 concept census — fetch/json wrappers, spend/broadcast
+  construction, retry helpers, store openers, hash helpers. Confirm by
+  comparing contracts (same inputs → same effect), not by counting greps.
+- Two implementations that agree on the contract are one concept with two
+  maintenance surfaces: every fix must be ported or one silently rots.
+  Severity by blast radius — a duplicated money/wire concept (BEEF parsing,
+  envelope building, spend construction) is HIGH; duplicated harness
+  plumbing is LOW. Different contracts sharing a verb are _not_ a dupe —
+  name them apart instead of merging.
+
+### S7. Patch stratigraphy (fixes layered on fixes)
+
+- **Rule**: a file/area whose history is mostly fix-keyword commits —
+  changes arrive as patches on earlier patches, which means the
+  abstraction underneath is wrong or missing.
+- **Evidence**: #10 fix-density (>40% fix commits with ≥5 touches) and
+  infant-file check (3+ fixes within weeks of creation). Corroborate with
+  hotspot rank (#4): a file that is big AND hot AND fix-dense is the worst
+  quadrant.
+- The root cause is never "add condition N+1" — it's the missing
+  abstraction that would have made the last three fixes unnecessary
+  (Ousterhout: define errors out of existence; make invalid states
+  unrepresentable). The finding names the abstraction, not the patch.
+
+### S8. Timer sprawl (uncoordinated waiting)
+
+- **Rule**: waits that grew organically — hardcoded constants at N sites
+  with different values for the same wait, fixed polls where an event/wake
+  already exists, retry layers stacked so effective attempts multiply.
+- **Evidence**: #11 census classified on the four axes
+  (bounded / event-driven / configured / stacked).
+- Hardcoded timers can't be tuned together under load — a stack under
+  stress has no single knob. Fixed polls on money paths waste the full
+  interval per iteration; unbounded waits convert a slow dependency into a
+  pinned resource. Severity: sprawl ON the money/durability path = HIGH;
+  uniform-but-ugly constants elsewhere = MEDIUM/LOW.
+
+### S9. Single point of failure (missing redundancy)
+
+- **Rule**: exactly one implementation, writer, or upstream in a money or
+  durability path — no failover, no rebuild-from-source story.
+- **Evidence**: #12 inventory: one broadcaster class / one sqlite writer /
+  host-count==1 on a path the money flows through; a derived store with no
+  documented rebuild. For each: kill it mentally — does the system fail
+  over, stall loudly, or silently corrupt/lose?
+- Complements S4 (restart-invisible state covers in-memory state; S9
+  covers missing redundancy). A SPoF on a money path with no failover and
+  no rebuild = HIGH minimum, CRITICAL if its loss is unrecoverable
+  (e.g. the only copy of spendable-UTXO intent with no reconcile).
+
+### S10. Event-substitute wait (EDA violation)
+
+- **Rule**: a poll/sleep/spin waiting for a STATE CHANGE where a producer
+  signal exists — or where one is obviously missing. An autonomous-agent
+  system should be event-driven end to end; timers are bounded ceilings
+  and poll substrate, not the notification mechanism.
+- **Evidence**: #13 classification of every #11 wait site; waiter→signaler
+  pair map (signaler missing on some producer paths = lost-wakeup; signaler
+  with no waiter = dead machinery); >1 scheduling substrate per subsystem =
+  scheduling sprawl.
+- Distinguish from S8 (uncoordinated constants) and from retry-on-failure
+  (legitimate): a `setTimeout` polling a UTXO arrival wastes the whole
+  interval AND burns latency every iteration; an unbounded drain-spin can
+  hang teardown forever. Severity: event-substitute on money/automation
+  paths = HIGH; missing wake on a recoverable wait = MEDIUM; pure
+  infrequency polling (watcher duty cycles) is the design, not a smell.
+
 ## Severity calibration (architecture altitude)
 
 | Sev      | Meaning here                                                                                                                    |

@@ -3,6 +3,7 @@
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
 import { nektarEnv } from '@nektar/core'
+import { sleep, withRetry, pacer } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
@@ -19,12 +20,17 @@ export interface MainnetConfig {
   fetchImpl?: typeof fetch // injectable — tests pass a recorded stub
 }
 
+/** default BSV Broadcaster instance — the single place the fallback URL
+ *  lives (was redeclared at five call sites in mcp/chain). */
+export const DEFAULT_BROADCASTER_URL = 'https://arcade.gorillapool.io'
+export const DEFAULT_WOC_URL = 'https://api.whatsonchain.com/v1/bsv/main'
+
 const def = (c?: MainnetConfig) => ({
   // BSV Broadcaster (formerly Arcade; the ARC successor) — GorillaPool instance
-  broadcasterUrl: c?.broadcasterUrl ?? 'https://arcade.gorillapool.io',
+  broadcasterUrl: c?.broadcasterUrl ?? DEFAULT_BROADCASTER_URL,
   callbackUrl: c?.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL'),
   callbackToken: c?.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'),
-  wocUrl: c?.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main',
+  wocUrl: c?.wocUrl ?? DEFAULT_WOC_URL,
   fetch: c?.fetchImpl ?? fetch,
   broadcasterApiKey: c?.broadcasterApiKey,
   wocApiKey: c?.wocApiKey
@@ -49,8 +55,12 @@ const j = async (r: Response): Promise<any> => {
 // does not serve, and the sdk Teranode class has no callback support.
 export class BsvBroadcaster implements Broadcaster {
   private cfg
+  private readonly wocFallback: boolean
   constructor(c?: MainnetConfig) {
     this.cfg = def(c)
+    // WoC cross-check on status reads engages for public-default configs or
+    // an explicit WoC URL — a custom broadcaster alone isn't assumed public-net
+    this.wocFallback = c?.wocUrl !== undefined || c?.broadcasterUrl === undefined || c.broadcasterUrl === DEFAULT_BROADCASTER_URL
   }
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
     const { broadcasterUrl, wocUrl } = this.cfg
@@ -68,12 +78,11 @@ export class BsvBroadcaster implements Broadcaster {
       const payload = new Uint8Array(tx.inputs.every((i) => i.sourceTransaction !== undefined) ? tx.toEF() : tx.toBinary())
       const post = () => req(this.cfg, `${broadcasterUrl}/tx`, { method: 'POST', headers, body: payload })
       // 503 = backpressure, nothing queued — retry the same instance shortly
-      let r: Response | undefined
-      for (let i = 0; ; i++) {
-        r = await post()
-        if (r.status !== 503 || i >= 3) break
-        await new Promise((rs) => setTimeout(rs, 500 * 2 ** i))
-      }
+      const r = await withRetry(post, {
+        attempts: 4,
+        delay: (i) => 500 * 2 ** i,
+        retryIf: (x) => x.status === 503
+      })
       if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`) // → WoC fallback
       const body = await r.json().catch(() => ({}))
       const st = String(body.txStatus ?? '').toUpperCase()
@@ -93,6 +102,12 @@ export class BsvBroadcaster implements Broadcaster {
         return { status: 'error', description: `broadcast failed: broadcaster ${(e as Error).message}; WoC ${(we as Error).message}` }
       }
     }
+  }
+
+  /** broadcaster's current verdict for a txid (uppercase, '' = undecidable) —
+   *  routes through the shared observer seam incl. the WoC mined-fallback */
+  async txStatus(txid: string): Promise<string> {
+    return await fetchTxStatus(this.cfg, txid, { wocFallback: this.wocFallback })
   }
 }
 
@@ -188,7 +203,7 @@ export function statusStream(
       } catch (e) {
         if (closed) return
         opts.onError?.(e as Error)
-        await new Promise((r) => setTimeout(r, backoff))
+        await sleep(backoff)
         backoff = Math.min(maxB, backoff * 2)
       }
     }
@@ -213,31 +228,55 @@ export async function fetchBroadcasterFeeRate(cfg?: MainnetConfig): Promise<numb
   return Math.ceil((f.satoshis * 1000) / f.bytes)
 }
 
+/** GET {broadcaster}/tx/{txid} → uppercase txStatus ('' when undecidable) —
+ *  the single chain-observer seam for status reads (replaces three
+ *  hand-rolled copies in mcp). `wocFallback` (default: public-default or
+ *  explicitly-WoC configs) cross-checks a dead/erroring broadcaster against
+ *  WoC /tx/{txid}: blockheight > 0 → 'MINED' — rejection verdicts stay
+ *  broadcaster-only (WoC serves no rejection semantics). */
+export async function fetchTxStatus(cfg: MainnetConfig | undefined, txid: string, opts?: { wocFallback?: boolean }): Promise<string> {
+  const c = def(cfg)
+  try {
+    const h: Record<string, string> = {}
+    if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
+    const st = await req(c, `${c.broadcasterUrl}/tx/${txid}`, { headers: h }, 10_000).then((x) => (x.ok ? x.json() : null))
+    const s = String(st?.txStatus ?? '').toUpperCase()
+    if (s !== '') return s
+  } catch {
+    /* broadcaster undecidable — WoC may still answer mined */
+  }
+  const wocOk = opts?.wocFallback ?? (cfg?.wocUrl !== undefined || cfg?.broadcasterUrl === undefined || cfg.broadcasterUrl === DEFAULT_BROADCASTER_URL)
+  if (!wocOk) return ''
+  try {
+    const wh: Record<string, string> = {}
+    if (c.wocApiKey) wh['woc-api-key'] = c.wocApiKey
+    const w = await req(c, `${c.wocUrl}/tx/${txid}`, { headers: wh }, 10_000).then((x) => (x.ok ? x.json() : null))
+    return typeof w?.blockheight === 'number' && w.blockheight > 0 ? 'MINED' : ''
+  } catch {
+    return ''
+  }
+}
+
 // --- WoC tracker (rate-limited, cached headers) -------------------------------
 export class WocTracker implements ChainTracker {
   private cfg
   private headers = new Map<number, BlockHeader>()
-  private lastReq = 0
+  // ≥350 ms spacing — WoC is ~3 req/s unauthenticated
+  private pace = pacer(350)
   constructor(c?: MainnetConfig) {
     this.cfg = def(c)
   }
 
   private async wocGet(path: string, retries = 3): Promise<any> {
-    for (let i = 0; i <= retries; i++) {
-      // ≥350 ms spacing — WoC is ~3 req/s unauthenticated
-      const wait = 350 - (Date.now() - this.lastReq)
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait))
-      const h: Record<string, string> = {}
-      if (this.cfg.wocApiKey) h['woc-api-key'] = this.cfg.wocApiKey
-      this.lastReq = Date.now()
-      const r = await req(this.cfg, `${this.cfg.wocUrl}${path}`, { headers: h }, 15_000)
-      if (r.status === 429 && i < retries) {
-        await new Promise((rs) => setTimeout(rs, 1200 * (i + 1)))
-        continue
-      }
-      if (r.status === 404) return undefined
-      return await j(r)
-    }
+    const h: Record<string, string> = {}
+    if (this.cfg.wocApiKey) h['woc-api-key'] = this.cfg.wocApiKey
+    const r = await withRetry(() => this.pace().then(() => req(this.cfg, `${this.cfg.wocUrl}${path}`, { headers: h }, 15_000)), {
+      attempts: retries + 1,
+      delay: (i) => 1200 * (i + 1),
+      retryIf: (x) => x.status === 429
+    })
+    if (r.status === 404) return undefined
+    return await j(r)
   }
 
   async currentHeight(): Promise<number> {
@@ -422,15 +461,13 @@ export async function merklePathMainnet(cfg: MainnetConfig | undefined, txid: st
 
 /** GET with 429/5xx backoff (WoC rate-limits ~3 req/s); throws on a final non-2xx */
 async function getOk(c: ReturnType<typeof def>, url: string, headers: Record<string, string>): Promise<Response> {
-  for (let i = 0; ; i++) {
-    const r = await req(c, url, { headers })
-    if (r.ok) return r
-    if ((r.status === 429 || r.status >= 500) && i < 4) {
-      await new Promise((res) => setTimeout(res, 800 * 2 ** i))
-      continue
-    }
-    throw new Error(`${url.split('/').slice(-3).join('/')}: HTTP ${r.status}`)
-  }
+  const r = await withRetry(() => req(c, url, { headers }), {
+    attempts: 5,
+    delay: (i) => 800 * 2 ** i,
+    retryIf: (x) => x.status === 429 || x.status >= 500
+  })
+  if (!r.ok) throw new Error(`${url.split('/').slice(-3).join('/')}: HTTP ${r.status}`)
+  return r
 }
 
 // --- funding import by txid (address indexes can be unavailable, e.g. WoC-TTN) ---
@@ -467,8 +504,9 @@ export async function discoverUtxos(cfg: MainnetConfig | undefined, address: str
   if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey
   const list = await (await getOk(c, `${c.wocUrl}/address/${address}/unspent`, h)).json()
   const out: FundingOut[] = []
+  const pace = pacer(350)
   for (const u of list) {
-    await new Promise((res) => setTimeout(res, 350))
+    await pace()
     // a just-broadcast tx may not be served as hex yet (404): skip it this round
     const hex = await getOk(c, `${c.wocUrl}/tx/${u.tx_hash}/hex`, h)
       .then((r) => r.text())

@@ -13,7 +13,7 @@ import {
   type SignerWallet
 } from '@nektar/core'
 import type { WalletInterface } from '@bsv/sdk'
-import type { NektarMemoryOptions, OperatorWallet } from './memory.js'
+import type { NektarMemoryOptions, OperatorWallet } from './types.js'
 
 export interface KeyOpsDeps {
   /** instance opts — shardKeys may be lazily created on it (matches the

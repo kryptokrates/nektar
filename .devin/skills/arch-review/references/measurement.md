@@ -228,8 +228,9 @@ Also check **infant files** — created recently, already patched:
 
 ```bash
 for f in $(git log --since="30 days ago" --diff-filter=A --name-only --format= -- packages | rg "packages/[^/]+/src/" | sort -u); do
-  t=$(git log --oneline -- "$f" | wc -l); c=$(git log --format="%s" -- "$f" | rg -ci "fix|bug|regress|patch|broke" || true)
-  [ "$t" -gt 2 ] && echo "$c/$t $f"
+  [ -f "$f" ] || continue   # skip files already deleted (migrations, renames)
+  t=$(git log --oneline -- "$f" | wc -l); c=$(git log --format="%s" -- "$f" | rg -ci "fix|bug|regress|patch|broke" || echo 0)
+  [ "${t:-0}" -gt 2 ] && echo "${c:-0}/$t $f"
 done | sort -rn | head -15
 ```
 
@@ -289,9 +290,46 @@ example), hot standby, or rebuild-from-source — or does the system degrade
 to silent stall? A derived-state store with no rebuild path is a SPoF even
 with redundant readers. Feeds S9 in smells.md.
 
+## 13. Event & wake topology (EDA audit)
+
+An autonomous-agent system should be **event-driven end to end**: chain
+events, inbox deliveries, outbox drains, and producer signals drive all
+work — timers exist only as bounded ceilings and at the poll substrate.
+Audit whether that's true.
+
+First, inventory the primitives — who emits, who waits, who signals:
+
+```bash
+# emission + wait points per package
+rg -ln "EventEmitter|\.emit\(|waiters|\.on\('|waitFor" packages/*/src | sed 's|/src.*||' | sort | uniq -c | sort -rn
+# wake/signal primitives — the producer→waiter couplings
+rg -n "unblock|wake|nudge|notify|signal|resolveWait|long-?poll" packages/*/src | head -30
+```
+
+Then classify **every wait site from #11** into exactly one bucket:
+
+- **Retry-on-failure** — backoff retrying an operation that FAILED
+  (429/503/5xx, SSE reconnect). Legitimate pattern; the only finding is
+  duplicated implementations (feed #9).
+- **Event-substitute** — a poll/sleep waiting for a STATE CHANGE: a UTXO
+  arriving, a flag clearing, a row appearing. If a producer signal exists
+  (`unblockOutbox`, `ChainEvents` emit, watch-shim wake) the wait is a bug
+  shaped like a loop; if no signal exists, the missing signal is the
+  finding — not the poll.
+- **Substrate** — the one place polling IS the design (ChainEvents' tick
+  scanning `watched`, the automation idle/hot tick). Exactly one substrate
+  per subsystem; N substrates = scheduling sprawl.
+
+Finally map **waiter→signaler pairs**: for each `waiters`/`unblock`/wake
+consumer, enumerate every path that can produce the awaited condition and
+check it signals on ALL paths — success AND error. A producer that signals
+only on its happy path is a lost-wakeup (`data/lost-wakeup` raised to arch
+altitude: map it, don't grep-hunt it). The reverse check matters too:
+a signaler with no waiter is dead signaling machinery.
+
 ## Timeboxing
 
 A monorepo this size: inventory+graph ≈10 min, hotspots ≈5, coupling ≈5,
-cold/debt ≈5, fitness audit ≈10, censuses (#9-#12) ≈15, smell pass
+cold/debt ≈5, fitness audit ≈10, censuses (#9-#13) ≈20, smell pass
 ≈20-30. If a step stalls, mark it "not measured" in the report — never
 fabricate the number.

@@ -77,6 +77,7 @@ import { PackWire } from './packwire.js'
 import { AuthorshipOps } from './authorshipops.js'
 import { ZkQueryOps } from './zkquery.js'
 import { AttestOps } from './attestops.js'
+import { ProofStore } from './proofstore.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -338,6 +339,12 @@ export class NektarMemory {
       addOwnedOut: (tx, v) => this.addOwnedOut(tx, v),
       metricsInc: (n, l, x, h) => this.metrics.inc(n, l, x, h),
       proveMembership: (s, q, qid) => this.proveMembership(s, q, qid)
+    })
+    this.proofStore = new ProofStore({
+      dataDir: () => this.opts.dataDir ?? nektarEnv('NEKTAR_DATA_DIR') ?? join(process.cwd(), '.nektar'),
+      objectStore: () => this.opts.objectStore,
+      persistState: () => this.persistState(),
+      metricsInc: (n) => this.metrics.inc(n)
     })
     this.zkQueryOps = new ZkQueryOps({
       zkQueries: this.zkQueries,
@@ -903,75 +910,27 @@ export class NektarMemory {
   /** proofs committed inside receipts are public artifacts (a ZK proof reveals
    *  nothing): stored under <dataDir>/proofs/<sha256> and served publicly via
    *  GET /v1/proof/<sha256> so a verifier can re-run them without trusting us. */
-  private proofDir(): string {
-    return join(this.opts.dataDir ?? nektarEnv('NEKTAR_DATA_DIR') ?? join(process.cwd(), '.nektar'), 'proofs')
-  }
   /** store a proof artifact; returns its sha256 commitment hex */
   putProof(bytes: Uint8Array): string {
-    const commit = toHex(sha256(bytes))
-    // atomic: a torn proof file would read as a FAILED verification — the
-    // watcher would challenge an honest claim and put its bond at risk
-    writeFileAtomic(join(this.proofDir(), commit), Buffer.from(bytes))
-    // stock object plane: the same bytes land content-addressed in bstore —
-    // for single-chunk content the blob key IS chirp/<commit>, so a verifier
-    // resolves the proof from any gateway copy and self-verifies on the
-    // digest; /v1/proof stays the compatibility fallback.
-    if (this.opts.objectStore !== undefined) {
-      const st = this.opts.objectStore
-      // record the locator synchronously — the blob key IS chirp/<commit>,
-      // so any holder of {endpoint,bucket}+digest fetches and self-verifies
-      this.proofStores.set(commit, { endpoint: st.endpoint, bucket: st.bucket })
-      void storeChirp(st, bytes)
-        .then(() => this.persistState())
-        .catch(() => this.metrics.inc('nektar_proof_store_errors_total'))
-    }
-    return commit
+    return this.proofStore.put(bytes)
   }
   /** fetch a stored proof by commitment; integrity-checked — a corrupted or
    *  foreign file can never masquerade as the committed artifact. */
   getProof(commitHex: string): Uint8Array | undefined {
-    try {
-      const b = readFileSync(join(this.proofDir(), commitHex))
-      const u = new Uint8Array(b)
-      return toHex(sha256(u)) === commitHex ? u : undefined
-    } catch {
-      return undefined
-    }
+    return this.proofStore.get(commitHex)
   }
   /** the bstore locator a proof was PUT under (endpoint+bucket — the object
    *  key is derivable: `chirp/<commit>`); receipts carry it in proofStore so
    *  a remote verifier needs no origin call. */
   proofStoreRef(commitHex: string): { endpoint: string; bucket: string } | undefined {
-    return this.proofStores.get(commitHex)
+    return this.proofStore.ref(commitHex)
   }
   /** proof bytes by commitment — local dir first, then the store locator a
    *  receipt carried (`chirp/<commit>` unsigned, then signed when this
    *  instance has a store configured). Digest-checked: wrong bytes never
    *  verify as the committed proof. */
   async fetchProof(commitHex: string, store?: { endpoint?: string; bucket?: string }): Promise<Uint8Array | undefined> {
-    const local = this.getProof(commitHex)
-    if (local !== undefined) return local
-    const key = `chirp/${commitHex}`
-    const endpoint = store?.endpoint ?? this.proofStores.get(commitHex)?.endpoint ?? this.opts.objectStore?.endpoint
-    const bucket = store?.bucket ?? this.proofStores.get(commitHex)?.bucket ?? this.opts.objectStore?.bucket
-    if (endpoint !== undefined && bucket !== undefined) {
-      try {
-        const { getObjectUnsigned } = await import('@nektar/store')
-        const bytes = await getObjectUnsigned(endpoint, bucket, key)
-        return toHex(sha256(bytes)) === commitHex ? bytes : undefined
-      } catch {
-        /* fall through to the signed path */
-      }
-    }
-    if (this.opts.objectStore !== undefined) {
-      try {
-        const bytes = await this.opts.objectStore.get(key, bucket)
-        return toHex(sha256(bytes)) === commitHex ? bytes : undefined
-      } catch {
-        return undefined
-      }
-    }
-    return undefined
+    return await this.proofStore.fetch(commitHex, store)
   }
 
   /** re-verify a committed private-cite proof WITHOUT consuming anything:
@@ -1508,7 +1467,7 @@ export class NektarMemory {
   /** bstore refs of packs this instance PUT (describeShard) — persisted in
    *  state so /.well-known/nektar keeps naming them across restarts */
   private packStores = new Map<string, import('@nektar/store').ObjectRef>()
-  private proofStores = new Map<string, { endpoint: string; bucket: string }>()
+  private proofStore!: ProofStore
   private savedPacksStore: { members?: import('@nektar/store').PackMember[]; manifestSeq?: number } | undefined
   /** is this shard declared private? */
   shardPrivate(shard: string): boolean {
@@ -1795,7 +1754,7 @@ export class NektarMemory {
       importedBundles: Object.fromEntries(this.importedBundles),
       bond,
       packStores: Object.fromEntries(this.packStores),
-      proofStores: Object.fromEntries(this.proofStores),
+      proofStores: Object.fromEntries(this.proofStore.stores),
       packsStore: this.opts.packsStore?.snapshot() ?? this.savedPacksStore
     })
   }
@@ -1828,7 +1787,7 @@ export class NektarMemory {
     for (const [k, b] of Object.entries(s.importedBundles ?? {})) this.importedBundles.set(k, b)
     for (const [shard, f] of Object.entries(s.flags ?? {})) this.flags.set(shard, f)
     for (const [shard, r] of Object.entries(s.packStores ?? {})) this.packStores.set(shard, r)
-    for (const [commit, r] of Object.entries(s.proofStores ?? {})) this.proofStores.set(commit, r)
+    for (const [commit, r] of Object.entries(s.proofStores ?? {})) this.proofStore.stores.set(commit, r)
     this.savedPacksStore = s.packsStore
     if (s.bond) this.bonds.restore(s.bond)
   }

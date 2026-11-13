@@ -7,8 +7,7 @@ import { verifyFragment, type ProofBundle } from '@nektar/verify'
 import type { Transaction } from '@bsv/sdk'
 import type { LogRecord } from '@nektar/log'
 import type { ChainTracker } from '@nektar/chain'
-import type { ShardPack, ShardManifest } from './memory.js'
-import type { RememberResult } from './types.js'
+import type { ShardPack, ShardManifest, RememberResult } from './types.js'
 
 export interface PackWireDeps {
   shardPrivate: (shard: string) => boolean

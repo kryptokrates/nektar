@@ -927,14 +927,22 @@ export class MarketEngine {
 
   private async onQuote(from: string, m: Extract<MarketMessage, { type: 'quote' }>): Promise<void> {
     const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${m.wantId}`)
-    if (!op || op.state !== 'collecting') return
+    if (!op || TERMINAL.includes(op.state)) return
     const offers = { ...(op.data.offers as Record<string, StoredOffer>) }
     const key = `${from}:${m.offerId}`
     const cur = offers[key]
-    if (!cur) throw new Error('quote arrived before its offer')
+    // before 'collecting' a quote may still beat its offer — retry then;
+    // afterwards the offer is guaranteed recorded (selection needs it)
+    if (!cur) {
+      if (op.state === 'collecting') throw new Error('quote arrived before its offer')
+      return
+    }
     if (!m.commitment || m.commitment.leaf !== cur.so.offer.leaf) return
+    // early-select leaves 'collecting' on the first offer — a quote landing
+    // in selected/funding/awaiting_disclosure still carries the commitment
+    // the claim needs, so attach it whenever the offer is live
     offers[key] = { ...cur, commitment: m.commitment, mode: m.mode }
-    await this.d.store.transition(op.operationId, op.revision, 'collecting', { cause: 'quote_attached', data: { offers } })
+    await this.d.store.transition(op.operationId, op.revision, op.state, { cause: 'quote_attached', data: { offers } })
   }
 
   private async onDelivered(from: string, m: Extract<MarketMessage, { type: 'delivered' }>, refs?: import('@nektar/bstack').BoxRef[]): Promise<void> {

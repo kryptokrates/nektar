@@ -76,9 +76,18 @@ export class TxStore {
     if (proof !== undefined || depth >= MAX_DEPTH) return // a proven tx ends the ancestry
     for (const i of tx.inputs) {
       // a sourceTransaction whose own id does not match sourceTXID is a
-      // synthetic stand-in (fee preimage stub), not ancestry — never store it
+      // synthetic stand-in (fee preimage stub), not ancestry — never store it.
+      // EF-decoded parents are likewise stand-ins (only the spent output is
+      // carried — id()/toHex() can't serialize them): skip them too, since a
+      // partial transaction is not storable ancestry anyway.
       if (i.sourceTransaction === undefined) continue
-      if (i.sourceTXID !== undefined && i.sourceTransaction.id('hex') !== i.sourceTXID) continue
+      let srcId: string
+      try {
+        srcId = i.sourceTransaction.id('hex')
+      } catch {
+        continue
+      }
+      if (i.sourceTXID !== undefined && srcId !== i.sourceTXID) continue
       this.put(i.sourceTransaction, depth + 1)
     }
   }

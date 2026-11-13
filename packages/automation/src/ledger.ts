@@ -22,14 +22,25 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
       const outs: Array<{ txid: string; vout: number; satoshis: number }> = []
       let vin = 0
       for (const inp of tx.inputs) {
-        const srcTxid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+        let srcTxid = inp.sourceTXID
+        if (srcTxid === undefined && inp.sourceTransaction !== undefined) {
+          try {
+            srcTxid = inp.sourceTransaction.id('hex')
+          } catch {
+            /* sparse EF stand-in — only the spent output is carried */
+          }
+        }
         const vout = inp.sourceOutputIndex ?? 0
         if (!srcTxid) continue
         // EF wires carry sparse parents — the spent output entry can be null
         const spent = inp.sourceTransaction?.outputs?.[vout]
         outs.push({ txid: srcTxid, vout, satoshis: spent?.satoshis ?? 0 })
         if (spent !== undefined && spent !== null) {
-          parents[srcTxid] = inp.sourceTransaction!.toHex()
+          try {
+            parents[srcTxid] = inp.sourceTransaction!.toHex()
+          } catch {
+            /* spent output known, full parent bytes are not — hex stays out */
+          }
           vin += spent.satoshis ?? 0
         }
       }

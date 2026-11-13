@@ -256,16 +256,18 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
     await drive([b.rt, sA.rt, sB.rt, sC.rt], chain, 8)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 500 }, b.policyHash)
     // under immediate-select the first offer the buyer ingests wins — so the
-    // sellers must all have quoted on the hosts BEFORE the buyer's next poll,
-    // which lands all three offers in a single ingest batch and select()
-    // still scores the 200-sat one highest. Seller-only rounds first.
+    // offer envelopes must all be LISTED on the hosts before the buyer's next
+    // poll, which lands all three in a single ingest batch and select() still
+    // scores the 200-sat one highest. 'quoted' fires at build time, before the
+    // outbox pump posts the envelope — gate on the buyer's box instead.
     await b.rt.cycle() // flush the want to the hosts
+    const { readBox } = await import('@nektar/bstack')
     assert.ok(
       await until([sA.rt, sB.rt, sC.rt], chain, async () => {
-        const ops = await Promise.all([sA, sB, sC].map((s) => saleOps(s)))
-        return ops.every((o) => o[0]?.state === 'quoted')
+        const box = await readBox({ key: b.mem.operatorKey(), hosts: [h1.url, h2.url], office: OFFICE, tracker: trackerFor(chain) })
+        return box.items.length >= 3
       }, 80),
-      'not all sellers quoted | ' + logs.slice(-20).join(' | ')
+      'not all offers listed | ' + logs.slice(-20).join(' | ')
     )
     const all = [b.rt, sA.rt, sB.rt, sC.rt]
     assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'logs: ' + logs.slice(-20).join(' | '))

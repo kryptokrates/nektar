@@ -811,6 +811,25 @@ try {
       // hardcoded agent
       const winner = [alice, ben, cara].find((a) => a.pub === sel.split(':')[0])
       if (winner === undefined) throw new Error(`selected pub ${sel.split(':')[0].slice(0, 12)}… is not a scenario seller`)
+      if (FAULT) {
+        // D6 — a crash between escrow broadcast and journal write must stay
+        // exactly-once by txid: the deal journal records ONE escrow_broadcast
+        // (a respawn that lost the write re-broadcasts identical bytes — same
+        // txid, one payment), and every broadcast on the tx log is conserved
+        // (inSats = outSats + fee). Terminal state is already asserted above.
+        const esc = bev.filter((e) => e.cause === 'escrow_broadcast')
+        if (esc.length !== 1) throw new Error(`D6: ${esc.length} escrow_broadcast events — payment must be exactly-once per txid`)
+        const escTxid = op.data.escrowTxid
+        const txlog = readFileSync(join(bob.dataDir, 'tx-log.jsonl'), 'utf8')
+          .trim()
+          .split(/\r?\n/)
+          .map((l) => JSON.parse(l))
+        const bad = txlog.filter((r) => !(r.inSats >= r.outSats && r.feeSats === r.inSats - r.outSats))
+        if (bad.length > 0) throw new Error(`D6: ledger conservation violated in ${bad.length} tx-log rows`)
+        const escRows = txlog.filter((r) => r.txid === escTxid)
+        if (escRows.length === 0) throw new Error(`D6: escrow ${escTxid?.slice(0, 12)}… absent from the tx log`)
+        log(`  D6: one escrow payment (${escTxid.slice(0, 12)}…, ${escRows.length} broadcast row(s)), ledger conserved over ${txlog.length} txs`)
+      }
       if (op.result?.text !== FINDING) throw new Error('deals.result.text differs from the sold finding')
       // the seller's journal lines flush on her next deals/upkeep tick — a fast
       // run can out-race the flush, so poll the buyer's view of her stream on a

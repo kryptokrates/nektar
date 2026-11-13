@@ -45,6 +45,29 @@ function bookFor(funder: object): FunderBook {
   return b
 }
 
+/** every ancestor of tx in dependency order (parents before children) via
+ *  sourceTransaction links — the order a missing-ancestors broadcast heal
+ *  must use so each parent lands before its child. Same pure walk as
+ *  bstack's ancestorsOf — inlined here: @nektar/anchor sits below bstack
+ *  in the package graph and must not reach up. */
+function ancestorsOf(tx: Transaction): Transaction[] {
+  const seen = new Set<string>()
+  const out: Transaction[] = []
+  const walk = (t: Transaction): void => {
+    for (const inp of t.inputs) {
+      const src = inp.sourceTransaction
+      if (src === undefined) continue
+      const id = src.id('hex')
+      if (seen.has(id)) continue
+      seen.add(id)
+      walk(src)
+      out.push(src)
+    }
+  }
+  walk(tx)
+  return out
+}
+
 /** runar-sdk Provider backed by our Broadcaster/Funder (+ optional utxo feed). */
 export class NektarProvider implements Provider {
   network = 'testnet' as const
@@ -357,6 +380,17 @@ export class AnchorChain {
         if (!/TX_MISSING_PARENT|timed? ?out|ETIMEDOUT/i.test(msg)) throw e
         const attemptTx = this.provider.lastAttempt
         if (!attemptTx) throw e
+        // the missing parent is our own ancestry — usually the previous head
+        // or a fee input that never landed. attemptTx's sourceTransaction
+        // links carry the chain, so re-supply unproven ancestors oldest-first
+        // before re-broadcasting the child (same heal as finger's token path)
+        try {
+          for (const anc of ancestorsOf(attemptTx)) {
+            if (anc.merklePath === undefined) await this.provider.broadcaster.broadcast(anc).catch(() => undefined)
+          }
+        } catch {
+          /* heal is best-effort — the retry loop decides */
+        }
         for (let r = 0; r < 10; r++) {
           await new Promise((resolve) => setTimeout(resolve, 250 * (r + 1)))
           let res

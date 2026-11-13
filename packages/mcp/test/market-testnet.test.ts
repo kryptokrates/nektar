@@ -221,7 +221,10 @@ const mkagent = async (
     marketHosts: hosts,
     intervalMs: 0,
     call: (t2, a) => callTool(mem, t2, a),
-    log: (l) => logs.push(`${name}:${l}`),
+    log: (l) => {
+      logs.push(`${name}:${l}`)
+      if (process.env.TN_VERBOSE === '1') console.error(`${name}:${l}`)
+    },
     ai: new ScriptedExecutor(),
     publishFinger: true,
     ...(watch !== undefined ? { watchHosts: [watch], watchPublic: watch } : {}),

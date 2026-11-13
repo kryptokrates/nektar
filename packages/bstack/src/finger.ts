@@ -324,9 +324,12 @@ export async function publishFinger(p: {
 
   if (prev !== undefined && prev.bodyHash === hash && prev.refsHash === refsHash) {
     const ch = await p.journal.get(`finger:carrier:${prev.seq}`)
-    if (ch !== undefined) await submitAll(p.hosts, ch.beef, topics, { retryWaits: [] })
     const tokenBeef = latestBeef ?? prev.tokenBeef ?? (await p.journal.get(`finger:token:${prev.seq}`))?.beef
-    if (tokenBeef !== undefined) await submitAll(p.hosts, tokenBeef, topics, { retryWaits: [] })
+    // independent objects, same hosts — one pass, not two round-trips
+    await Promise.all([
+      ch !== undefined ? submitAll(p.hosts, ch.beef, topics, { retryWaits: [] }) : Promise.resolve(),
+      tokenBeef !== undefined ? submitAll(p.hosts, tokenBeef, topics, { retryWaits: [] }) : Promise.resolve()
+    ])
     return { changed: false, seq: prev.seq, carrierTxid: ch?.txid, tokenTxid: prev.tokenTxid }
   }
 
@@ -428,8 +431,9 @@ export async function publishFinger(p: {
     await p.journal.put(tkey, { txid: tokenTxid, beef: tokenBeefOut, topics })
   }
 
-  await submitAll(p.hosts, carrierBeef, topics, { retryWaits: [] })
-  await submitAll(p.hosts, tokenBeefOut, topics, { retryWaits: [] })
+  // independent objects, same hosts — carrier and token beef each carry
+  // their own ancestry, so admission needs no ordering between them
+  await Promise.all([submitAll(p.hosts, carrierBeef, topics, { retryWaits: [] }), submitAll(p.hosts, tokenBeefOut, topics, { retryWaits: [] })])
   // broadcast on EVERY publish, not just the mint: a journaled token whose
   // first broadcast was refused (or crashed before it) must not commit
   // locally — descendants would chain on a tx the network never saw and fail

@@ -52,7 +52,11 @@ export class RegtestWalletServices implements sdk.WalletServices {
   chain: sdk.Chain = 'regtest'
   constructor(
     private cfg: RegtestConfig,
-    private tracker: TeranodeRPCTracker
+    private tracker: TeranodeRPCTracker,
+    // D2: wallet-relayed txs are a spend entry point — callers pass the
+    // SpendGuard-wrapped broadcaster so createAction/signAction relays count
+    // against the same caps; absent it falls back to sendrawtransaction
+    private broadcast?: (tx: Transaction) => Promise<BroadcastResult>
   ) {}
 
   private async rpc(method: string, ...params: unknown[]): Promise<any> {
@@ -144,7 +148,10 @@ export class RegtestWalletServices implements sdk.WalletServices {
       try {
         const tx = beef.findAtomicTransaction(txid)
         if (tx === undefined) throw new Error('txid not in BEEF')
-        await this.rpc('sendrawtransaction', tx.toHex())
+        if (this.broadcast !== undefined) {
+          const r = await this.broadcast(Transaction.fromHex(tx.toHex()))
+          if (r.status !== 'success') throw new Error(r.description ?? 'broadcast failed')
+        } else await this.rpc('sendrawtransaction', tx.toHex())
         txidResults.push({ txid, status: 'success' })
       } catch (e) {
         txidResults.push({ txid, status: 'error', data: { error: String(e) } })

@@ -450,7 +450,9 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   // rollout; =client keeps external-custody semantics (no regtest path).
   if ((nektarEnv('NEKTAR_WALLET') ?? 'toolbox') === 'toolbox') {
     const tb = await import('@nektar/automation')
-    const services = new tb.RegtestWalletServices(rc, tracker)
+    // D2: wallet-relayed txs go through the SAME SpendGuard — postBeef is a
+    // spend entry point, not a side channel around the caps
+    const services = new tb.RegtestWalletServices(rc, tracker, (tx) => broadcaster.broadcast(tx))
     toolboxWallet = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: 'regtest', services })
     tf = new tb.ToolboxReserveFunder(toolboxWallet.wallet, services, (s) => process.stderr.write(`nektar regtest: ${s}\n`))
     await tf.refresh()
@@ -723,6 +725,21 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   const callbackUrl = mc.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL')
   const rawBroadcaster = new BsvBroadcaster(mc)
   const reserve = new ReserveFunder(fundKey ?? { pkhHex }, join(cfg.dataDir, 'reserve.json'))
+  const { txStore, open: openTxStore } = persistedTxStore()
+  let memRef: NektarMemory | undefined
+  // the guard's input resolver reads the custody view lazily — liveTf is
+  // populated by the toolbox block below, so every broadcast resolves against
+  // the wallet-backed set once it exists
+  const valueOf = (txid: string, vout: number): number | undefined =>
+    (liveTf ?? reserve).utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
+    txStore.get(txid)?.outputs[vout]?.satoshis ??
+    memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
+  const spendGuard = new SpendGuard(rawBroadcaster, valueOf, {
+    maxFeePerTx: mc.maxFeePerTx,
+    maxPerDay: mc.maxSpendPerDay,
+    minIntervalMs: mc.minBroadcastIntervalMs,
+    ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
+  })
   // NEKTAR_WALLET=toolbox: the BRC-100 wallet owns the funding-UTXO lifecycle
   // (selection, spent marks, internalized change). reserve.json only seeds it
   // once at boot — every consumer then reads the wallet-backed view through
@@ -735,7 +752,9 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   if ((nektarEnv('NEKTAR_WALLET') ?? 'toolbox') === 'toolbox') {
     if (fundKey === undefined) throw new Error('NEKTAR_WALLET=toolbox embeds its keyDeriver from the fee key — =client is the keyless mode')
     const tb = await import('@nektar/automation')
-    const services = new tb.LiveWalletServices({ chain: ttn ? 'test' : 'main', mc, tracker, broadcast: (tx) => rawBroadcaster.broadcast(tx) })
+    // D2: the wallet's own postBeef relays through the SAME SpendGuard — a
+    // wallet-signed action is a spend entry point like any other
+    const services = new tb.LiveWalletServices({ chain: ttn ? 'test' : 'main', mc, tracker, broadcast: (tx) => spendGuard.broadcast(tx) })
     liveToolbox = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: ttn ? 'test' : 'main', services })
     liveTf = new tb.ToolboxReserveFunder(liveToolbox.wallet, services, (s) => process.stderr.write(`nektar ${net}: ${s}\n`))
     await liveTf.refresh()
@@ -759,7 +778,6 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       void utxoView.addOwned(tx, v)
     }
   }
-  const { txStore, open: openTxStore } = persistedTxStore()
   // funding wake: every producer that lands a utxo (p2p 'pay', FUND_TXIDS
   // import, indexer discovery, fee-vault mint) signals through addIfNew so
   // waitForFunding's poll can sleep event-driven instead of fixed-cadence
@@ -772,17 +790,6 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     void utxoView.addOwned(u.tx, u.vout)
     fundingWake?.()
   }
-  let memRef: NektarMemory | undefined
-  const valueOf = (txid: string, vout: number): number | undefined =>
-    utxoView.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
-    txStore.get(txid)?.outputs[vout]?.satoshis ??
-    memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
-  const spendGuard = new SpendGuard(rawBroadcaster, valueOf, {
-    maxFeePerTx: mc.maxFeePerTx,
-    maxPerDay: mc.maxSpendPerDay,
-    minIntervalMs: mc.minBroadcastIntervalMs,
-    ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
-  })
   // optional p2p eyes: NEKTAR_P2P_PEERS='ip:port,...' — first-hand inv stream
   // watching our reserve outpoints (spend events by ANYONE) and the fee-key
   // script (unannounced funding). No index: watched set only, rest is dropped.

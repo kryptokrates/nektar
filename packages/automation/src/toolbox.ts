@@ -244,6 +244,8 @@ export interface ToolboxHandle {
   storage: WalletStorageManager
   activeStorage: StorageKnex
   funder: ToolboxFunder
+  /** drains the wallet.sqlite knex pool — without it the process can't exit */
+  close: () => Promise<void>
 }
 
 /** Wallet + SQLite storage over `dataDir/wallet.sqlite`, keyed by `fundKey`.
@@ -271,7 +273,7 @@ export async function openToolboxWallet(args: {
   await storage.addWalletStorageProvider(activeStorage)
   if (storage.canMakeAvailable()) await storage.makeAvailable()
   const wallet = new Wallet({ chain: args.chain, keyDeriver: keyDeriver as never, storage, services })
-  return { wallet, services, storage, activeStorage, funder: new ToolboxFunder(wallet) }
+  return { wallet, services, storage, activeStorage, funder: new ToolboxFunder(wallet), close: async () => await activeStorage.destroy() }
 }
 
 /** Funder over wallet outputs — read-only. `take` picks the smallest spendable

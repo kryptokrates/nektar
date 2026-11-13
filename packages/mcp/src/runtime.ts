@@ -600,6 +600,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
       clearInterval(timer)
       await releaseLock()
       await tick()
+      await toolboxWallet?.close()
       await knex.destroy()
     }
   }
@@ -1283,6 +1284,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       clearInterval(timer)
       await releaseLock()
       await tick()
+      await liveToolbox?.close()
       await knex.destroy()
     }
   }

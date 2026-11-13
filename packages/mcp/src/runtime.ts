@@ -37,7 +37,7 @@ import {
   type TxStatusEvent
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
-import { walletSigner, FUND_SIGN_ARGS, nektarEnv, setNektarEnv, type SignerWallet } from '@nektar/core'
+import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvNum, setNektarEnv, type SignerWallet } from '@nektar/core'
 import { wireP2p, setupFeeVault } from './setup.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
@@ -445,7 +445,10 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   // marks, internalized change). Legacy mode keeps the file-backed reserve.
   let toolboxWallet: import('@nektar/automation').ToolboxHandle | undefined
   let tf: import('@nektar/automation').ToolboxReserveFunder | undefined
-  if (nektarEnv('NEKTAR_WALLET') === 'toolbox') {
+  // toolbox is the custody default (soak-verified): the wallet owns the
+  // funding-UTXO lifecycle. NEKTAR_WALLET=legacy pins the file reserve during
+  // rollout; =client keeps external-custody semantics (no regtest path).
+  if ((nektarEnv('NEKTAR_WALLET') ?? 'toolbox') === 'toolbox') {
     const tb = await import('@nektar/automation')
     const services = new tb.RegtestWalletServices(rc, tracker)
     toolboxWallet = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: 'regtest', services })
@@ -723,7 +726,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // utxoView, never reserve.json directly. Legacy mode keeps the file reserve.
   let liveToolbox: import('@nektar/automation').ToolboxHandle | undefined
   let liveTf: import('@nektar/automation').ToolboxReserveFunder | undefined
-  if (nektarEnv('NEKTAR_WALLET') === 'toolbox') {
+  // toolbox is the custody default (soak-verified): the wallet owns the
+  // funding-UTXO lifecycle. NEKTAR_WALLET=legacy pins the file reserve during
+  // rollout; =client keeps external-custody semantics (the keyless mode).
+  if ((nektarEnv('NEKTAR_WALLET') ?? 'toolbox') === 'toolbox') {
     if (fundKey === undefined) throw new Error('NEKTAR_WALLET=toolbox embeds its keyDeriver from the fee key — =client is the keyless mode')
     const tb = await import('@nektar/automation')
     const services = new tb.LiveWalletServices({ chain: ttn ? 'test' : 'main', mc, tracker, broadcast: (tx) => rawBroadcaster.broadcast(tx) })
@@ -843,6 +849,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   const events = new ChainEvents({
     intervalMs: cfg.confirmEveryMs ?? 30_000,
     height: () => tracker.currentHeight(),
+    // a tx unwatched after this many blocks without a terminal status emits
+    // 'abandoned' — the terminal verdict for funding-tree mints that were
+    // resubmitted but never mined (silently evicted, never propagated)
+    abandonAfterBlocks: nektarEnvNum('NEKTAR_ABANDON_BLOCKS') ?? 6,
     observe: async (txid) => {
       const tx = await memRef?.fetchTx(txid).catch(() => undefined)
       if (tx?.merklePath !== undefined) return { txid, status: 'mined', blockHeight: tx.merklePath.blockHeight, merklePath: tx.merklePath }
@@ -854,6 +864,23 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(st)) events.note({ txid, status: 'rejected' })
       return undefined
     }
+  })
+  events.on('abandoned', ({ txid, tip, seenAtHeight }) => {
+    process.stderr.write(`nektar ${net}: tx ${txid} not mined after abandon horizon — abandoned (tip ${tip}, watched since ${seenAtHeight})\n`)
+    // repair-by-name: mark the durable intent 'conflicted' so boot-time
+    // re-watch doesn't resurrect a dead tx forever, and surface it on
+    // mem.events — the automation runtime drops a dead funding mint off it
+    void (async () => {
+      try {
+        const hit = (await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])).find((w) => w.txid === txid)
+        if (hit !== undefined) {
+          await ledger.setTxState(hit.actionId, 'conflicted', { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` })
+        }
+        memRef?.events.emit('txAbandoned', { txid, tip, seenAtHeight })
+      } catch (e) {
+        process.stderr.write(`nektar ${net}: abandoned ${txid} mark failed: ${(e as Error).message}\n`)
+      }
+    })()
   })
   const { knex, store, ledger, wrapBroadcast, leasePredicate } = await openRecordsDb(cfg.dataDir)
   await openTxStore(knex)

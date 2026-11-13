@@ -71,6 +71,7 @@ import { AnchorOps } from './anchorops.js'
 import { IdentityOps } from './identityops.js'
 import { KeyOps } from './keyops.js'
 import { CryptoOps } from './cryptoops.js'
+import { CatalogOps } from './catalogops.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -514,6 +515,10 @@ export class NektarMemory {
       persistState: () => this.persistState()
     })
     this.cryptoOps = new CryptoOps({ opts: this.opts })
+    this.catalogOps = new CatalogOps({
+      store: this.store,
+      recordText: (r) => this.recordText(r)
+    })
     this.identityOps = new IdentityOps({
       challenges: this.challenges,
       zkSeen: this.zkSeen,
@@ -580,6 +585,7 @@ export class NektarMemory {
   private identityOps!: IdentityOps
   private keyOps!: KeyOps
   private cryptoOps!: CryptoOps
+  private catalogOps!: CatalogOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     return await this.txOps.fetchTx(txid)
@@ -674,18 +680,12 @@ export class NektarMemory {
   }
   /** the shard's log records (read view — used by prove/disclose tests) */
   async records(shard: string) {
-    return await this.store.all(shard)
+    return await this.catalogOps.records(shard)
   }
   /** plaintext candidates for marketplace matching — owner-side decrypt of own
    *  encrypted level-0 records; the sale still delivers only the fragment key */
   async marketCandidates(shard: string): Promise<Array<{ seq: number; text: string }>> {
-    const out: Array<{ seq: number; text: string }> = []
-    for (const r of await this.records(shard)) {
-      if ((r.level ?? 0) !== 0) continue
-      const text = await this.recordText(r).catch(() => undefined)
-      if (text?.length) out.push({ seq: r.seq, text: text.slice(0, 4000) })
-    }
-    return out
+    return await this.catalogOps.marketCandidates(shard)
   }
   /** broadcast a fully-signed tx through the instance's broadcaster (SpendGuard stays in front) — covenant host tools only */
   async broadcastTx(tx: import('@bsv/sdk').Transaction): Promise<import('@nektar/chain').BroadcastResult> {
@@ -1830,34 +1830,18 @@ export class NektarMemory {
   /** latest committed manifest per described shard — the catalog projection
    *  the market indexes (one entry per shard, latest record wins). */
   async shardCatalog(): Promise<ShardManifest[]> {
-    const by = new Map<string, { m: ShardManifest; seq: number }>()
-    for (const rec of await this.store.all(CATALOG_SHARD)) {
-      const data = await this.recordText(rec)
-      if (!data) continue
-      let m: ShardManifest
-      try {
-        m = JSON.parse(data)
-      } catch {
-        continue
-      }
-      if (m?.v !== 1 || m.type !== 'shard-manifest' || typeof m.shard !== 'string') continue
-      const cur = by.get(m.shard)
-      if (!cur || rec.seq > cur.seq) by.set(m.shard, { m, seq: rec.seq })
-    }
-    return [...by.values()].map((x) => x.m)
+    return await this.catalogOps.shardCatalog()
   }
 
   /** latest committed manifest for one shard */
   async shardManifest(shard: string): Promise<ShardManifest | undefined> {
-    return (await this.shardCatalog()).find((m) => m.shard === shard)
+    return await this.catalogOps.shardManifest(shard)
   }
 
   /** the content price a manifest declares for `kind` ('pack' or 'read' via
    *  'answer' offers) — 0 when free/undeclared. Drives the paid-content gate. */
   async contentPrice(shard: string, kind: 'read' | 'pack'): Promise<number> {
-    const m = await this.shardManifest(shard).catch(() => undefined)
-    const match = m?.offers?.find((o) => (kind === 'read' ? o.kind === 'answer' : o.kind === 'pack') && Number.isSafeInteger(o.priceSats))
-    return match?.priceSats ?? 0
+    return await this.catalogOps.contentPrice(shard, kind)
   }
 
   /** land a purchased record locally — call AFTER the sale claim verified

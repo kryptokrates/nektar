@@ -258,3 +258,27 @@ test('SpendGuard: caps, interval, unknown input, ledger persistence', async () =
   assert.equal((await g5.broadcast(mkTx())).status, 'success')
   assert.ok(Date.now() - t0 >= 250, 'second broadcast waited out the interval')
 })
+
+test('importFundingTx: hex: raw tx imports; empty/malformed refs fail with clear errors', async () => {
+  const { importFundingTx } = await import('../src/mainnet.js')
+  // vout 0 pays addr/pkh, vout 1 pays someone else — only the matching one imports
+  const addr = '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'
+  const pkh = '62e907b15cbf27d5425399ebf6f0fb50ebb88f18'
+  const parent = new Transaction()
+  parent.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
+  parent.addOutput({ satoshis: 300, lockingScript: new P2PKH().lock(addr) })
+  parent.addOutput({ satoshis: 500, lockingScript: new P2PKH().lock('1BoatSLRHtKNngkdXEeobR76b53LETtpyT') })
+  const hex = parent.toHex()
+  const outs = await importFundingTx(undefined, 'hex:' + hex, pkh)
+  assert.equal(outs.length, 1)
+  assert.equal(outs[0].vout, 0)
+  assert.equal(outs[0].satoshis, 300)
+  // whitespace inside the wire is tolerated (files often carry a trailing \n)
+  const outs2 = await importFundingTx(undefined, 'hex:  ' + hex.slice(0, 100) + '\n' + hex.slice(100) + '  ', pkh)
+  assert.equal(outs2.length, 1)
+  // empty / malformed refs → clear operator-facing errors, never an SDK reader crash
+  await assert.rejects(() => importFundingTx(undefined, 'hex:', pkh), /empty transaction payload/)
+  await assert.rejects(() => importFundingTx(undefined, 'hex:zz', pkh), /malformed transaction hex/)
+  await assert.rejects(() => importFundingTx(undefined, 'hex:0', pkh), /malformed transaction hex/)
+  await assert.rejects(() => importFundingTx(undefined, 'not-a-txid', pkh), /malformed txid/)
+})

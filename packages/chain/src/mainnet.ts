@@ -439,7 +439,13 @@ export async function importFundingTx(cfg: MainnetConfig | undefined, ref: strin
   // transaction itself, no network fetch and no index involved. Handed as
   // BEEF it brings its proof or proven ancestry, so what is paid from it can
   // be verified by a counterparty at once.
-  if (ref.startsWith('hex:')) return fundingOutputs((await TxStore.read(ref.slice(4), undefined)).tx, pkhHex)
+  if (ref.startsWith('hex:')) {
+    const wire = ref.slice(4).replace(/\s+/g, '')
+    if (wire.length === 0) throw new Error('empty transaction payload — check $HEX / the funding file')
+    if (wire.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(wire)) throw new Error(`malformed transaction hex (${wire.length} chars)`)
+    return fundingOutputs((await TxStore.read(wire, undefined)).tx, pkhHex)
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(ref)) throw new Error(`malformed txid — expected 64 hex chars, 'hex:<rawtx>', got "${ref.slice(0, 24)}${ref.length > 24 ? '…' : ''}"`)
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey

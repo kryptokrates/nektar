@@ -63,23 +63,28 @@ const addr = key.toPublicKey().toAddress([0x6f])
 // mines the split, and persists the new treasury immediately after acceptance.
 // This run's reserve is only those fresh outputs — nothing from earlier runs.
 import { ReserveFunder } from '@nektar/chain'
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs'
 // Two separate files: the treasury (the ONLY state carried across runs) and
 // the per-run reserve pool, which is recreated empty on every run so stale
 // entries from earlier runs can never be handed out.
 const TREASURY_FILE = '.state/treasury.json'
+const TREASURY_NS = 'e2e'
 const RS_FILE = '.state/reserve-run.json'
 mkdirSync('.state', { recursive: true })
 rmSync(RS_FILE, { force: true })
-const loadRS = (): { treasury?: { txid: string; vout: number; txHex: string } } => {
+const loadRS = (): { namespace?: string; treasury?: { txid: string; vout: number; txHex: string } } => {
   try {
-    return JSON.parse(readFileSync(TREASURY_FILE, 'utf8'))
-  } catch {
+    const j = JSON.parse(readFileSync(TREASURY_FILE, 'utf8'))
+    if (j.namespace !== undefined && j.namespace !== TREASURY_NS)
+      throw new Error(`treasury file ${TREASURY_FILE} is namespaced '${j.namespace}' — refusing to consume another consumer's treasury`)
+    return j
+  } catch (e) {
+    if (e instanceof Error && e.message.includes('namespaced')) throw e
     return {}
   }
 }
 const saveRS = (t: { txid: string; vout: number; txHex: string }) => {
-  writeFileSync(TREASURY_FILE, JSON.stringify({ treasury: t }, null, 1))
+  writeFileSync(TREASURY_FILE, JSON.stringify({ namespace: TREASURY_NS, treasury: t }, null, 1))
 }
 /** Mine one block and return ITS height, read from the mined block's own
  *  header (tracker.currentHeight() can lag right after generatetoaddress). */

@@ -473,7 +473,7 @@ export async function bootstrapReserve(
   key: PrivateKey,
   reserve: ReserveFunder,
   rpc: (m: string, ...p: unknown[]) => Promise<any>,
-  opts: { treasuryFile: string; outputs?: number; maxCandidates?: number; maxScan?: number }
+  opts: { treasuryFile: string; outputs?: number; maxCandidates?: number; maxScan?: number; namespace?: string }
 ): Promise<Transaction | null> {
   const { P2PKH } = await import('@bsv/sdk')
   const addr = key.toPublicKey().toAddress([0x6f])
@@ -495,14 +495,24 @@ export async function bootstrapReserve(
     const r = await new TeranodeBroadcaster(cfg.propagationUrl).broadcast(tx)
     return r.status === 'success' ? tx : null
   }
+  let existingNs: string | undefined
   const accept = (tx: Transaction): Transaction => {
     for (let k = 0; k < n; k++) reserve.addOwned(tx, k)
     mkdirSync(dirname(opts.treasuryFile), { recursive: true })
-    writeFileAtomic(opts.treasuryFile, JSON.stringify({ treasury: { txid: tx.id('hex'), vout: n, txHex: tx.toHex() } }))
+    // caller-set namespace wins; absent one, preserve whatever the file
+    // already declared so an untagged writer can't strip a consumer's tag
+    const namespace = opts.namespace ?? existingNs
+    writeFileAtomic(opts.treasuryFile, JSON.stringify({ namespace, treasury: { txid: tx.id('hex'), vout: n, txHex: tx.toHex() } }))
     return tx
   }
   if (existsSync(opts.treasuryFile)) {
-    const t = JSON.parse(readFileSync(opts.treasuryFile, 'utf8')) as { treasury?: { vout: number; txHex: string } }
+    const t = JSON.parse(readFileSync(opts.treasuryFile, 'utf8')) as { namespace?: string; treasury?: { vout: number; txHex: string } }
+    existingNs = t.namespace
+    // namespaced files are single-consumer — a mismatch means a file-level
+    // collision (a consumer pointed at another consumer's treasury): refuse,
+    // never spend from it
+    if (opts.namespace !== undefined && t.namespace !== undefined && t.namespace !== opts.namespace)
+      throw new Error(`treasury file ${opts.treasuryFile} is namespaced '${t.namespace}' — refusing to consume another consumer's treasury`)
     if (t.treasury) {
       // TxStore.read takes raw, EF or BEEF — a beef payload carries the
       // treasury's own ancestry, so a fully-spent (unfetchable) parent still

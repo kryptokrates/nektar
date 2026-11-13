@@ -2,7 +2,7 @@
 // Build a usable regtest treasury on a long-lived chain whose recent coinbase
 // outputs are small: aggregate batches of mature coinbases into one large UTXO.
 // Writes the treasury.json shape openRuntime's bootstrapReserve consumes.
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { PrivateKey, Transaction, P2PKH } from '@bsv/sdk'
 import { parseLegacyBlock, TeranodeBroadcaster } from '../../../chain/dist/src/regtest.js'
@@ -98,5 +98,11 @@ const treasury = final[0]
 if (!treasury || treasury.satoshis < 1_000_000) throw new Error(`treasury too small: ${treasury?.satoshis}`)
 const file = env.NEKTAR_TREASURY_FILE
 mkdirSync(dirname(file), { recursive: true })
-writeFileSync(file, JSON.stringify({ treasury: { txid: treasury.tx.id('hex'), vout: treasury.vout, txHex: treasury.tx.toHex() } }))
+// preserve the target file's namespace tag (or NEKTAR_TREASURY_NS when seeding
+// a fresh file) so consumer-side isolation checks keep working across refills
+let namespace = env.NEKTAR_TREASURY_NS
+try {
+  namespace ??= JSON.parse(readFileSync(file, 'utf8')).namespace
+} catch {}
+writeFileSync(file, JSON.stringify({ namespace, treasury: { txid: treasury.tx.id('hex'), vout: treasury.vout, txHex: treasury.tx.toHex() } }))
 console.log(`treasury written to ${file}: ${treasury.satoshis} sats`)

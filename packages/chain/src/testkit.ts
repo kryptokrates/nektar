@@ -13,7 +13,7 @@
 //     first stackFunder() generates ~120 blocks to it for mature coinbases
 import { nektarEnv, setNektarEnv } from '@nektar/core'
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync, appendFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut, Funder, TxStatusEvent } from './interfaces.js'
 import { ChainEvents } from './events.js'
@@ -28,6 +28,7 @@ import {
   bootstrapReserve,
   type RegtestConfig
 } from './regtest.js'
+import { TxStore } from './txstore.js'
 
 // ---------------------------------------------------------------------------
 // stack connection
@@ -467,7 +468,7 @@ export class StackTreasury {
     // coinbases mature at +100 on regtest — generate enough to have ≥1 mature
     if (tip < 120) await this.chain.mine(120 - tip + 1)
     const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
-      treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json')
+      treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'), namespace: 'testkit'
     })
     if (this.reserve.utxos.length === 0 && r === null) {
       // no mature coinbase found for our key — generate 110 to it, then split.
@@ -483,7 +484,7 @@ export class StackTreasury {
         await this.reserve.scanCoinbases(this.cfg, (m, ...p) => stackRpc(this.cfg, m, ...p), t0, t0 + 10)
         if (this.reserve.utxos.length === 0) await new Promise((r) => setTimeout(r, 500))
       }
-      await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), { treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json') })
+      await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), { treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'), namespace: 'testkit' })
     }
     if (this.reserve.utxos.length === 0) throw new Error('testkit: treasury could not be funded — no mature coinbases')
   }
@@ -505,9 +506,27 @@ export class StackTreasury {
       const coverable = free.some((u) => u.satoshis >= need) || free.slice(0, 16).reduce((a, u) => a + u.satoshis, 0) >= need
       if (coverable) return
       const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
-        treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json')
+        treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'), namespace: 'testkit'
       })
-      if (r === null) throw new Error('testkit: treasury tail spent — cannot refill reserve')
+      if (r === null) {
+        // name the real cause: the file tip either drained below the split
+        // floor or is spent — the fix is different (top the file up vs re-point it)
+        let why = 'no usable coinbase in the recent window'
+        try {
+          const t = JSON.parse(readFileSync(join(STATE_DIR, 'testkit-treasury-chain.json'), 'utf8')) as {
+            treasury?: { txid: string; vout: number; txHex: string }
+          }
+          if (t.treasury !== undefined) {
+            const parent = (await TxStore.read(t.treasury.txHex, undefined)).tx
+            const sats = parent.outputs[t.treasury.vout]?.satoshis ?? 0
+            const status = await this.chain.utxoStatus(t.treasury.txid, t.treasury.vout)
+            why = sats < 1e6 ? `treasury tail under the 1M-sat split floor (${sats} sats) — top up ${join(STATE_DIR, 'testkit-treasury-chain.json')}` : `treasury tail ${status}`
+          }
+        } catch {
+          /* fall through to the generic cause */
+        }
+        throw new Error(`testkit: cannot refill reserve — ${why}`)
+      }
       // zeroconf: the fresh reserve outputs are spendable as mempool children —
       // no block needed before the next fund() can draw on them
     })
@@ -632,6 +651,10 @@ export class StackFunder implements Funder {
   }
   static async fund(t: StackTreasury, outputs: number, sats = 10_000): Promise<StackFunder> {
     const f = new StackFunder(PrivateKey.fromRandom())
+    // the suite mints a key per world and discards it — coins parked in dead
+    // worlds are unrecoverable on a zero-subsidy chain. Persist the WIF so a
+    // sweep can return them to the treasury.
+    appendFileSync(join(STATE_DIR, 'stackfunder-keys.jsonl'), JSON.stringify({ wif: f.keyPair.toWif() }) + '\n')
     const addr = f.keyPair.toPublicKey().toAddress([0x6f])
     // stale reserve entries (never-broadcast parents, already-spent) prune on
     // broadcast failure — allow enough attempts to walk past a rotten pool

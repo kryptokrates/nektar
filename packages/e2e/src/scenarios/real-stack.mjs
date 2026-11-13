@@ -145,6 +145,11 @@ const mineLoop = (async () => {
 // and bootstrapReserve, and a concurrent run can spend the recorded outpoint
 // out from under fundAgents. Seed once:
 //   NEKTAR_TREASURY_FILE=.state/real-stack-treasury.json node packages/e2e/src/scenarios/regtest-fund.mjs
+// Permanent state isolation: every consumer's treasury file carries a
+// `namespace` tag; reading a file tagged for ANOTHER consumer throws — the
+// earlier convergence incident (a run pointed NEKTAR_TREASURY_FILE at the
+// testkit chain) corrupted both files silently. Mismatch = loud refusal.
+const TREASURY_NS = 'real-stack'
 const TREASURY_FILE = process.env.NEKTAR_TREASURY_FILE ?? join(root, '.state', 'real-stack-treasury.json')
 const agents = [
   { name: 'alice', hosts: [HOST_A], seller: 450 },
@@ -341,6 +346,8 @@ async function fundAgentsLive() {
 async function fundAgents() {
   if (LIVE) return await fundAgentsLive()
   const saved = JSON.parse(readFileSync(TREASURY_FILE, 'utf8'))
+  if (saved.namespace !== undefined && saved.namespace !== TREASURY_NS)
+    throw new Error(`treasury file ${TREASURY_FILE} is namespaced '${saved.namespace}' — refusing to consume another consumer's treasury`)
   const parent = Transaction.fromHex(saved.treasury.txHex)
   const sats = parent.outputs[saved.treasury.vout].satoshis ?? 0
   const per = 5_000_000
@@ -360,7 +367,7 @@ async function fundAgents() {
   if (r.status !== 'success') throw new Error(`treasury split refused: ${r.description}`)
   await rpc('generatetoaddress', 1, treasuryAddr)
   blocksMined++
-  writeFileSync(TREASURY_FILE, JSON.stringify({ treasury: { txid: split.id('hex'), vout: agents.length, txHex: split.toHex() } }, null, 1))
+  writeFileSync(TREASURY_FILE, JSON.stringify({ namespace: TREASURY_NS, treasury: { txid: split.id('hex'), vout: agents.length, txHex: split.toHex() } }, null, 1))
   // the funding payload carries its ancestry: once the treasury parent is
   // fully spent, chain lookups can't resolve it and toolbox internalize has
   // no path to the proof. BEEF keeps the agent self-sufficient.

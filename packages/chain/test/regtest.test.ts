@@ -62,3 +62,23 @@ test('regtestTx: unknown tx is undefined', async () => {
   const got = await regtestTx(cfg, 'ab'.repeat(32), stub(undefined))
   assert.equal(got, undefined)
 })
+
+// permanent state isolation: a treasury file namespaced for one consumer
+// refuses to be spent by another — the convergence incident (NEKTAR_TREASURY_FILE
+// pointed at another consumer's chain) corrupted both files silently
+test('bootstrapReserve: a treasury file namespaced for another consumer is refused', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { bootstrapReserve, ReserveFunder } = await import('../src/regtest.js')
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-ns-'))
+  const file = join(dir, 'chain.json')
+  writeFileSync(file, JSON.stringify({ namespace: 'testkit', treasury: { txid: 'ab'.repeat(32), vout: 0, txHex: 'aa' } }))
+  const reserve = new ReserveFunder(PrivateKey.fromRandom(), join(dir, 'reserve.json'))
+  await assert.rejects(
+    bootstrapReserve(cfg, PrivateKey.fromRandom(), reserve, async () => {
+      throw new Error('rpc must not be reached')
+    }, { treasuryFile: file, namespace: 'real-stack' }),
+    /namespaced 'testkit'/
+  )
+})

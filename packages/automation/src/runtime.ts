@@ -557,6 +557,50 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         acking = false
       })
   }
+  // outbox delivery is detached under its own busy guard — the store's
+  // outboxReady hook wakes it on every enqueue (so a want/accept/message
+  // hits the wire mid-tick, not at the next one), a next_at timer covers
+  // deferred rows exactly, and the end-of-tick poke is the correctness
+  // floor. Deliveries never touch op state — safe off the engine mutex.
+  let pumping = false
+  let pumpAgain = false
+  let outboxTimer: ReturnType<typeof setTimeout> | undefined
+  const armOutboxTimer = async (): Promise<void> => {
+    if (stopped) return
+    try {
+      const nextAt = await store.nextOutboxAt()
+      if (nextAt === undefined || stopped) return
+      clearTimeout(outboxTimer)
+      outboxTimer = setTimeout(() => {
+        outboxTimer = undefined
+        pumpOutbox()
+      }, Math.max(0, nextAt - Date.now()))
+      outboxTimer.unref()
+    } catch {
+      /* the deals-pass floor covers a missed arm */
+    }
+  }
+  const pumpOutbox = (): void => {
+    if (stopped) return
+    if (pumping) {
+      pumpAgain = true
+      return
+    }
+    pumping = true
+    void engine
+      .pumpOutbox()
+      .catch((e) => log(`automation: outbox pump: ${(e as Error).message}`))
+      .finally(() => {
+        pumping = false
+        if (pumpAgain) {
+          pumpAgain = false
+          pumpOutbox()
+          return
+        }
+        void armOutboxTimer()
+      })
+  }
+  store.outboxReady = () => pumpOutbox()
   // Two loops. The deal loop reads the hosts and advances operations; it
   // does nothing else, so a deal never queues behind housekeeping. Upkeep
   // (funding trees, the identity record, the journal, evidence) runs beside
@@ -1186,6 +1230,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     stop: async () => {
       stopped = true
       if (timer) clearTimeout(timer)
+      if (outboxTimer) clearTimeout(outboxTimer)
       if (watchdog) clearInterval(watchdog)
       if (watchTimer) clearInterval(watchTimer)
       for (const ac of watches.values()) ac.abort()
@@ -1194,9 +1239,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       // drain in-flight work with a bound — a wedged producer must not hang
       // teardown forever (was an unbounded spin)
       const drainDeadline = Date.now() + 30_000
-      while (busy || upkeepRun !== undefined || acking) {
+      while (busy || upkeepRun !== undefined || acking || pumping) {
         if (Date.now() >= drainDeadline) {
-          log(`automation: stop: drain deadline hit (busy=${busy} upkeep=${upkeepRun !== undefined} acking=${acking}) — proceeding`)
+          log(`automation: stop: drain deadline hit (busy=${busy} upkeep=${upkeepRun !== undefined} acking=${acking} pumping=${pumping}) — proceeding`)
           break
         }
         await new Promise((r) => setTimeout(r, 25))

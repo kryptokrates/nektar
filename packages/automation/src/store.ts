@@ -90,6 +90,11 @@ const sum = async (q: Knex.QueryBuilder, col: string): Promise<number> => Number
 export class RevisionConflict extends Error {}
 
 export class AutomationStore {
+  /** wake fired after any transition/enqueue commits fresh outbox rows —
+   *  the runtime wires it to the detached pump; tests leave it unset and
+   *  the engine flushes inline at the end of tick() */
+  outboxReady?: () => void
+
   constructor(
     private kx: Knex,
     private now: () => number = Date.now
@@ -335,7 +340,7 @@ export class AutomationStore {
       outbox?: Array<Omit<OutboxItem, 'attempts' | 'operationId'>>
     }
   ): Promise<Operation> {
-    return await this.kx.transaction(async (trx) => {
+    const op = await this.kx.transaction(async (trx) => {
       const cur = await trx(T.ops).where({ operation_id: operationId }).first()
       if (!cur) throw new Error(`unknown operation ${operationId}`)
       if (cur.revision !== expectedRevision) throw new RevisionConflict(`operation ${operationId}: revision ${cur.revision} != expected ${expectedRevision}`)
@@ -372,6 +377,8 @@ export class AutomationStore {
       }
       return this.op({ ...cur, ...patch })
     })
+    if ((change.outbox?.length ?? 0) > 0) this.outboxReady?.()
+    return op
   }
 
   async events(operationId: string): Promise<Array<{ seq: number; at: number; from?: string; to: string; cause: string; evidence?: unknown }>> {
@@ -473,7 +480,7 @@ export class AutomationStore {
 
   // ── outbox ──────────────────────────────────────────────────────────────
   async enqueue(o: Omit<OutboxItem, 'attempts'>): Promise<boolean> {
-    return await this.kx.transaction(async (trx) => {
+    const added = await this.kx.transaction(async (trx) => {
       if (await trx(T.outbox).where({ action_id: o.actionId }).first()) return false
       await trx(T.outbox).insert({
         action_id: o.actionId,
@@ -488,6 +495,8 @@ export class AutomationStore {
       })
       return true
     })
+    if (added) this.outboxReady?.()
+    return added
   }
 
   async dueOutbox(limit = 50): Promise<OutboxItem[]> {
@@ -500,6 +509,13 @@ export class AutomationStore {
       ...(r.refs != null ? { refs: JSON.parse(r.refs) } : {}),
       attempts: r.attempts
     }))
+  }
+
+  /** earliest pending outbox wake — the pump sleeps until this, so a
+   *  deferred row fires at its next_at rather than at the next tick */
+  async nextOutboxAt(): Promise<number | undefined> {
+    const r = await this.kx(T.outbox).where({ status: 'pending' }).min('next_at as n').first()
+    return r?.n === null || r?.n === undefined ? undefined : Number(r.n)
   }
 
   async ackOutbox(actionId: string): Promise<void> {

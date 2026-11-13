@@ -556,11 +556,15 @@ export class MarketEngine {
           /* status probes must not stall the tick */
         }
       }
-      await this.flush()
+      // with the runtime's detached pump wired, the end-of-tick pass is a
+      // poke (drain runs off the engine mutex); without it the engine
+      // flushes inline — tests drive tick() directly and rely on that
+      if (this.d.store.outboxReady !== undefined) this.d.store.outboxReady()
+      else await this.pumpOutbox()
     })
   }
 
-  private async flush(): Promise<void> {
+  async pumpOutbox(): Promise<void> {
     for (const item of await this.d.store.dueOutbox()) {
       try {
         await this.deliver(item)

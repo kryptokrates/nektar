@@ -1228,7 +1228,7 @@ export class MarketEngine {
     })
   }
 
-  private async select(op: Operation, height: number): Promise<void> {
+  private async select(op: Operation, height: number, opts?: { expire?: boolean }): Promise<void> {
     const p = await this.d.store.activePolicy(op.policyHash)
     if (!p) {
       await this.d.store.transition(op.operationId, op.revision, 'denied', { cause: 'policy_revoked_or_expired' })
@@ -1259,7 +1259,10 @@ export class MarketEngine {
     ]
     const top = ranking.ranked[0]
     if (!top) {
-      await this.d.store.transition(op.operationId, op.revision, 'expired', { cause: 'no_qualifying_offer', evidence: { rejected }, dueAt: null })
+      // early-select passes expire:false — a window full of failing offers
+      // can't end the collection early; only reaching dueAt may expire it
+      if (opts?.expire !== false)
+        await this.d.store.transition(op.operationId, op.revision, 'expired', { cause: 'no_qualifying_offer', evidence: { rejected }, dueAt: null })
       return
     }
     const next = await this.d.store.transition(op.operationId, op.revision, 'selected', {
@@ -1799,7 +1802,13 @@ export class MarketEngine {
     const lim = STATE_LIMITS[op.state]
     if (lim !== undefined && this.now() - op.updatedAt > lim.maxAgeMs) return await this.stuckExit(op, lim)
     if (op.role === 'buyer') {
-      if (op.state === 'collecting' && op.dueAt !== undefined && op.dueAt <= this.now()) return await this.select(op, height)
+      if (op.state === 'collecting') {
+        const due = op.dueAt !== undefined && op.dueAt <= this.now()
+        // early-select: the first acceptable offer fires selection in the same
+        // tick it was ingested — collectMs stays as the collection ceiling
+        if (due || Object.keys((op.data.offers as Record<string, StoredOffer> | undefined) ?? {}).length > 0)
+          return await this.select(op, height, { expire: due })
+      }
       if (op.state === 'selected' || op.state === 'escalated') {
         const p = await this.d.store.activePolicy(op.policyHash)
         if (!p) {

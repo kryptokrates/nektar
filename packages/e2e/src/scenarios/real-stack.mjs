@@ -477,15 +477,52 @@ function spawnInstance(a) {
   a.proc = p
   return p
 }
+// A failed run can leave an agent bound to its fixed port; the next run's
+// healthcheck would then hit the stale process (its pub, policy store and
+// treasury all belong to the dead run — 'up' passes and the deal corrupts).
+// Any listener on our agent port at boot is by definition a leftover: kill it.
+async function ensurePortFree(port, name) {
+  try {
+    await fetch(`http://127.0.0.1:${port}/v1/health`, { signal: AbortSignal.timeout(750) })
+  } catch {
+    return
+  }
+  log(`${name}: :${port} held by a stale agent — evicting`)
+  let out = ''
+  try {
+    // locale-free — netstat's state column is translated (e.g. ABHÖREN on
+    // German Windows) so the listener is found via Get-NetTCPConnection
+    out = execFileSync('powershell', ['-NoProfile', '-Command', `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue).OwningProcess`], { encoding: 'utf8' })
+  } catch {
+    return
+  }
+  const pids = new Set(out.split(/\r?\n/).map((s) => s.trim()).filter((s) => /^\d+$/.test(s) && s !== '0'))
+  for (const pid of pids)
+    try {
+      execFileSync('taskkill', ['/F', '/T', '/PID', pid])
+    } catch {}
+  await delay(1500)
+}
 async function bootAgent(a, index) {
   const port = 18401 + index
   a.url = `http://127.0.0.1:${port}`
   a.token = `real-${a.name}`
   a.port = port
   a.restarts = 0
+  await ensurePortFree(port, a.name)
   const p = spawnInstance(a)
   await up(`${a.url}/v1/health`, a.name)
-  a.pub = (await (await fetch(`${a.url}/.well-known/nektar`)).json()).operatorPub
+  // the agent can crash (0xC0000409) between the healthcheck and this fetch —
+  // retry the control-plane read on the same bounded ceiling `call` uses
+  for (let i = 0; ; i++) {
+    try {
+      a.pub = (await (await fetch(`${a.url}/.well-known/nektar`)).json()).operatorPub
+      break
+    } catch (e) {
+      if (i >= 70) throw e // outlive one 25s crash-respawn cycle
+      await delay(500)
+    }
+  }
   log(`${a.name} up :${port} pub ${a.pub.slice(0, 12)}… hosts [${a.hosts.map((h) => (h === HOST_A ? 'a' : 'b')).join(',')}]`)
   const policy = {
     v: 1,
@@ -728,6 +765,11 @@ try {
       const sel = op.data.selected.key
       if (!offers.some((o) => sel.split(':')[0] === o.pub)) throw new Error(`selected key ${sel.slice(0, 24)}… is not one of the recorded offers`)
       if (prices.length === 3 && sel.split(':')[0] !== cara.pub) throw new Error(`selected ${sel.split(':')[0].slice(0, 12)}… — expected cara's 200-sat offer`)
+      // early-select: the winner is whichever seller's offer landed first —
+      // every seller-side assertion below follows the selected key, not a
+      // hardcoded agent
+      const winner = [alice, ben, cara].find((a) => a.pub === sel.split(':')[0])
+      if (winner === undefined) throw new Error(`selected pub ${sel.split(':')[0].slice(0, 12)}… is not a scenario seller`)
       if (op.result?.text !== FINDING) throw new Error('deals.result.text differs from the sold finding')
       if (op.journal?.counterparty?.complete !== true)
         throw new Error(`counterparty journal incomplete: ${JSON.stringify(op.journal?.counterparty).slice(0, 300)}`)
@@ -739,24 +781,24 @@ try {
       if (!LIVE) {
         const settleUntil = Date.now() + 90_000
         for (;;) {
-          const d = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
+          const d = ((await tool(winner, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
           if (d?.state === 'settled' || Date.now() > settleUntil) break
           await delay(2000)
         }
       }
-      for (const a of [bob, cara]) {
+      for (const a of [bob, winner]) {
         let b
         const until = Date.now() + 30000
         do {
-          b = await inboxEmpty(a, op.wantId, LIVE && a === cara)
+          b = await inboxEmpty(a, op.wantId, LIVE && a === winner)
           if (!b.empty) await delay(1000)
         } while (!b.empty && Date.now() < until)
         if (!b.empty) throw new Error(`${a.name} inbox not empty on ${b.host} (${b.items} item(s): ${b.detail ?? ''}) after settlement`)
       }
-      const sellerOp = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
+      const sellerOp = ((await tool(winner, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
       const sellerState = sellerOp?.state
       if (sellerState !== 'completion_submitted' && sellerState !== 'settled')
-        throw new Error(`cara seller op in ${sellerState ?? 'missing'} — expected completion_submitted or settled`)
+        throw new Error(`${winner.name} seller op in ${sellerState ?? 'missing'} — expected completion_submitted or settled`)
       // per-hop latency, off the event journals (same machine → comparable clocks):
       // escrow_broadcast(buyer) → escrow_verified(seller) and
       // disclosure_broadcast(seller) → disclosure_verified(buyer)
@@ -764,7 +806,7 @@ try {
         try {
           const at = (evs, cause) => evs.find((e) => e.cause === cause)?.at
           const bev = (await tool(bob, 'deals', { operationId })).events ?? []
-          const sev = (await tool(cara, 'deals', { operationId: sellerOp.operationId })).events ?? []
+          const sev = (await tool(winner, 'deals', { operationId: sellerOp.operationId })).events ?? []
           const e1 = at(bev, 'escrow_broadcast'),
             e2 = at(sev, 'escrow_verified')
           const e3 = at(sev, 'disclosure_broadcast'),
@@ -814,9 +856,9 @@ try {
       log(`PASS — disclosure verified in ${(verifiedMs / 1000).toFixed(1)}s over ${dealBlocks} blocks`)
       log(`  hops: escrow→seller ${hopMs.escrowBroadcastToSellerVerified ?? '?'}ms, disclosure→buyer ${hopMs.disclosureBroadcastToBuyerVerified ?? '?'}ms`)
       log(
-        `  offers 200/300/450 recorded; cara's 200-sat offer selected; escrow ${String(op.escrowTxid).slice(0, 12)}… disclosure ${String(op.disclosureTxid).slice(0, 12)}…`
+        `  offers ${prices.join('/')} recorded; ${winner.name}'s offer selected; escrow ${String(op.escrowTxid).slice(0, 12)}… disclosure ${String(op.disclosureTxid).slice(0, 12)}…`
       )
-      log(`  counterparty journal complete; bob+cara inboxes empty on both hosts${LIVE ? ' (seller note held until proof)' : ''}`)
+      log(`  counterparty journal complete; bob+${winner.name} inboxes empty on both hosts${LIVE ? ' (seller note held until proof)' : ''}`)
       log(`  tx logs: ${agents.map((a) => `${a.name}=${a.txCount}`).join(' ')}`)
       log(`  summary: ${join(dir, 'summary.json')}`)
     }

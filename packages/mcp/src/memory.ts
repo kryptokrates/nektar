@@ -75,6 +75,7 @@ import { CatalogOps } from './catalogops.js'
 import { PackOps } from './packops.js'
 import { PackWire } from './packwire.js'
 import { AuthorshipOps } from './authorshipops.js'
+import { ZkQueryOps } from './zkquery.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -325,6 +326,10 @@ export class NektarMemory {
       persistState: () => this.persistState(),
       metricsInc: (n) => this.metrics.inc(n)
     })
+    this.zkQueryOps = new ZkQueryOps({
+      zkQueries: this.zkQueries,
+      persistSecurityState: () => this.persistSecurityState()
+    })
     this.identityOps = new IdentityOps({
       challenges: this.challenges,
       zkSeen: this.zkSeen,
@@ -395,6 +400,7 @@ export class NektarMemory {
   private packOps!: PackOps
   private packWire!: PackWire
   private authorshipOps!: AuthorshipOps
+  private zkQueryOps!: ZkQueryOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     return await this.txOps.fetchTx(txid)
@@ -744,30 +750,18 @@ export class NektarMemory {
   /** verifier side: issue a single-use ZK membership query (default 10 min).
    *  queryId = dsha256('nektar:zkq:v2' ‖ nonce ‖ verifierId); the prover binds it into the STARK journal. */
   issueZkQuery(verifierId: string, ttlMs = 600_000): { nonce: string; verifierId: string; queryId: string } {
-    const nonce = idbind.issueChallenge()
-    const queryId = toHex(starkQueryId({ nonce: fromHex(nonce), verifierId }))
-    this.zkQueries.set(queryId, { nonce, verifierId, expiry: Date.now() + ttlMs })
-    this.persistSecurityState()
-    return { nonce, verifierId, queryId }
+    return this.zkQueryOps.issueZkQuery(verifierId, ttlMs)
   }
-  private consumeZkQuery = (queryIdHex: string): boolean => {
-    const e = this.zkQueries.get(queryIdHex)
-    if (e === undefined || e.expiry < Date.now() || e.consumed === true) return false
-    e.consumed = true
-    this.persistSecurityState()
-    return true
-  }
+  private consumeZkQuery = (queryIdHex: string): boolean => this.zkQueryOps.consumeZkQuery(queryIdHex)
   /** issued-and-fresh query WITHOUT consuming it — verifyCombined checks the
    *  §13 Π binding first, consumes once at the end (single use stays). */
   private peekZkQuery(queryIdHex: string): { nonce: string; verifierId: string } | undefined {
-    const e = this.zkQueries.get(queryIdHex)
-    if (e === undefined || e.expiry < Date.now() || e.consumed === true || e.nonce === '' || e.verifierId === '') return undefined
-    return { nonce: e.nonce, verifierId: e.verifierId }
+    return this.zkQueryOps.peekZkQuery(queryIdHex)
   }
   /** re-verify registry: a queryId passes iff it was CONSUMED — i.e. this
    *  exact proof already verified once (consume runs last, only after all
    *  other checks held). The tombstone survives expiry + restart. */
-  private zkQueryConsumed = (queryIdHex: string): boolean => this.zkQueries.get(queryIdHex)?.consumed === true
+  private zkQueryConsumed = (queryIdHex: string): boolean => this.zkQueryOps.zkQueryConsumed(queryIdHex)
 
   // ── P14 full-mode automata (AUT-005): one Rúnar NektarAutomaton UTXO per id,
   // funded by the instance funder, owned by its own key.

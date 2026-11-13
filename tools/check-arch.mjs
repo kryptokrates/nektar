@@ -97,7 +97,10 @@ const GATES = [
       'packages/automation/src/toolbox.ts',
       'packages/chain/src/testkit.ts',
       // custody signer's own keygen — derives scalars into keys internally
-      'packages/identity/src/custody.ts'
+      'packages/identity/src/custody.ts',
+      // the signing seam itself — heldRootKey re-keys a cross-build root by
+      // WIF so custody detection survives the cjs/esm dual-package boundary
+      'packages/core/src/signer.ts'
     ]
   },
   {

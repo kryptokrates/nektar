@@ -1366,8 +1366,11 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
     const origOp = (await saleOps(s))[0]
-    // measure the sealed sellerNote on the wire — must fit the 12 KiB budget
-    await drive([b.rt, s.rt], chain, 2)
+    // measure the sealed sellerNote on the wire — must fit the 12 KiB budget.
+    // Seller-only rounds: under immediate-select a full drive can run the deal
+    // to settlement before the note is even listed, and a settled note acks —
+    // the wipe must happen while the sale is still live.
+    await drive([s.rt], chain, 2)
     const items = (await readBuyer(s.mem.operatorKey(), [h1.url, h2.url], chain)).items
     const note = items.find((i) => (i.body as { market?: { type?: string } }).market?.type === 'sellerNote')
     assert.ok(note, 'sellerNote is listed in the seller inbox')

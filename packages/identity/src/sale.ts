@@ -14,11 +14,17 @@ import { wrapForCustody, unwrapForCustody, type WrappedKey, type WrapCustody } f
 export const SALE_CTX = 'nektar:sale:v1'
 
 /** custody → signing surface: a PrivateKey signs directly; a wallet goes
- *  through core's custodySigner so held-key custody (toolbox) signs with the
- *  root key — the identity pub the market binds to — while external custody
- *  falls back to a self-derived wallet key (createHmac goes unused here). */
+ *  through core's custodySigner with an explicit derivation tuple. The
+ *  identityKey:true form is incoherent under remote custody — createSignature
+ *  always derives from the protocolID/keyID/counterparty tuple while
+ *  getPublicKey({identityKey}) returns the root pub, so the wire would carry
+ *  a sellerPub that can never verify the sig (observed: toolbox sigs landed
+ *  under the '0-nektar signer-identity' child while sellerPub was identity).
+ *  An explicit tuple makes the signed pub and the reported pub one key under
+ *  every custody: toolbox derives it locally, client custody derives it
+ *  remotely, key custody signs with the raw key. */
 const custodySigner = (c: WrapCustody): DigestSigner =>
-  c instanceof PrivateKey ? toSigner(c) : coreCustodySigner(c as SignerWallet, { identityKey: true })
+  c instanceof PrivateKey ? toSigner(c) : coreCustodySigner(c as SignerWallet, { protocolID: [2, 'nektar sale'], keyID: 'sale', counterparty: 'self' })
 
 // --- seller side ----------------------------------------------------------
 

@@ -633,7 +633,23 @@ try {
   const [alice, ben, cara, bob] = agents
   for (const s of [alice, ben, cara].filter((x) => x.rearm)) {
     if (!REUSE) await tool(s, 'remember', { shard: 'guide', data: FINDING })
-    await tool(s, 'sell', { shard: 'guide', domains: ['libfoo'], priceSats: s.seller })
+    // a respawned agent can lose its armed seller policy — re-approve through
+    // the operator CLI and retry the arming call across the restart window
+    for (let i = 0; ; i++) {
+      try {
+        await tool(s, 'sell', { shard: 'guide', domains: ['libfoo'], priceSats: s.seller })
+        break
+      } catch (e) {
+        // a crash-respawn cycle is ~25-30s — outlast it with the 3s cadence
+        if (i >= 12 || !/seller policy|fetch failed/i.test(String(e))) throw e
+        try {
+          JSON.parse(execFileSync(process.execPath, [join(root, 'tools/automation.mjs'), '--data', s.dataDir, '--json', 'policy', 'approve', join(s.dataDir, 'policy.json')], { encoding: 'utf8' }))
+        } catch {
+          /* approval write raced the sqlite — the retry loop re-attempts */
+        }
+        await delay(3000)
+      }
+    }
     log(`${s.name} selling at ${s.seller} sats`)
   }
   if (LIVE) {

@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH } from '@bsv/sdk'
 import { stackChain, skipUnlessStack, stackTreasury, StackFunder } from '@nektar/chain'
 import { openRuntime } from '../src/runtime.js'
-import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 

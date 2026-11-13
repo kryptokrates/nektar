@@ -4,7 +4,7 @@
 // and the NEKTAR_PROOF_SHARDING opt-out.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { stackWorld } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { dsha256, utf8, merkleRoot } from '@nektar/core'

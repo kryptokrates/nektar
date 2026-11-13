@@ -568,6 +568,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // floor. Deliveries never touch op state — safe off the engine mutex.
   let pumping = false
   let pumpAgain = false
+  let pumpDone: Promise<void> | undefined
   let outboxTimer: ReturnType<typeof setTimeout> | undefined
   const armOutboxTimer = async (): Promise<void> => {
     if (stopped) return
@@ -591,7 +592,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       return
     }
     pumping = true
-    void engine
+    pumpDone = engine
       .pumpOutbox()
       .catch((e) => log(`automation: outbox pump: ${(e as Error).message}`))
       .finally(() => {
@@ -624,6 +625,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             await poll()
             await engine.tick()
             pushAcks()
+            // join the detached drain before ending the pass — a pass isn't
+            // complete while a delivery is in flight (cycle() semantics in
+            // tests: one call = all queued work attempted)
+            await pumpDone
             // a live deal keeps the loop hot — the 5s inbound window alone
             // would let a deal cool to idle cadence between hops
             if ((await store.operations({ notStates: TERMINAL })).length > 0) hotUntil = Date.now() + 5_000

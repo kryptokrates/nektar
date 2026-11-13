@@ -69,6 +69,7 @@ import { CustodyOps, type CustodyOpsDeps } from './custody.js'
 import { TxOps, type TxOpsDeps } from './txops.js'
 import { AnchorOps } from './anchorops.js'
 import { IdentityOps } from './identityops.js'
+import { KeyOps } from './keyops.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -472,7 +473,6 @@ export class NektarMemory {
     }
   }
   private log: BatchLog
-  private _wallet: OperatorWallet | undefined
   private anchors = new Map<string, AnchorChain>()
   private tails = new Map<string, AnchorLink[]>()
   private anchorTxs = new Map<string, import('@bsv/sdk').Transaction>()
@@ -486,6 +486,11 @@ export class NektarMemory {
     private store: ShardStore = new MemoryShardStore()
   ) {
     if (opts.shardPubs !== undefined) this._shardPubs = opts.shardPubs instanceof Map ? new Map(opts.shardPubs) : new Map(Object.entries(opts.shardPubs))
+    this.keyOps = new KeyOps({
+      opts: this.opts,
+      fundKey: () => this.fundKey,
+      shardPubs: this._shardPubs
+    })
     this.logKey = opts.signingKey ?? (opts.wallet !== undefined ? this.walletLogSigner() : PrivateKey.fromRandom())
     this._logPub = this.logKey instanceof PrivateKey ? this.logKey.toPublicKey().toString() : undefined
     this.log = new BatchLog(store, this.logKey, opts.batchPolicy ?? { maxLeaves: 16 })
@@ -571,6 +576,7 @@ export class NektarMemory {
   private txOps!: TxOps
   private anchorOps!: AnchorOps
   private identityOps!: IdentityOps
+  private keyOps!: KeyOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     return await this.txOps.fetchTx(txid)
@@ -624,30 +630,18 @@ export class NektarMemory {
   /** log receipt signer under wallet custody: createSignature under a stable
    *  keyID — same pub every restart, no key material in-process. */
   private walletLogSigner(): DigestSigner {
-    return walletSigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: 'nektar-log', counterparty: 'self' })
+    return this.keyOps.walletLogSigner()
   }
 
   /** arbitrary wallet-derived signer for a nektar keyID — used by rotate to
    *  assign a new shard owner without key material crossing the API. Throws
    *  when the instance has no wallet custody. */
   walletKeySigner(keyID: string): DigestSigner {
-    if (this.opts.wallet === undefined) throw new Error('walletKeySigner requires wallet custody (NEKTAR_WALLET)')
-    return walletSigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID, counterparty: 'self' })
+    return this.keyOps.walletKeySigner(keyID)
   }
 
   private shardKey(shard: string): SignerLike {
-    if (!this.opts.shardKeys) this.opts.shardKeys = new Map()
-    if (!this.opts.shardKeys.has(shard)) {
-      // wallet custody: a per-shard derived keyID — deterministic across
-      // restarts (same wallet → same owner pubkey), zero stored key material.
-      this.opts.shardKeys.set(
-        shard,
-        this.opts.wallet !== undefined
-          ? walletSigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: `nektar-shard:${shard}`, counterparty: 'self' })
-          : PrivateKey.fromRandom()
-      )
-    }
-    return this.opts.shardKeys.get(shard)!
+    return this.keyOps.shardKey(shard)
   }
 
   private anchorChain(shard: string): AnchorChain {
@@ -699,49 +693,34 @@ export class NektarMemory {
   /** the operator fee key — throws under wallet custody (NEKTAR_WALLET=client);
    *  all signing call sites take `operatorSigner()`/`fundSigner()` instead. */
   operatorKey(): PrivateKey {
-    if (this.fundKey === undefined) throw new Error('operatorKey: wallet-custody mode holds no private key — use operatorSigner()')
-    return this.fundKey
+    return this.keyOps.operatorKey()
   }
 
   /** the operator signing surface — the fund key when held, otherwise the
    *  wallet's identity key. Every legacy `.sign()` site routes here. */
   operatorSigner(): DigestSigner {
-    return this.opts.wallet !== undefined ? custodySigner(this.opts.wallet as SignerWallet, { identityKey: true }) : this.fundSigner()
+    return this.keyOps.operatorSigner()
   }
-  private _fundSigner?: DigestSigner
   /** funding-signer — P2PKH inputs, covenant funding calls, change output
    *  derivation. Toolbox mode: keyDeriver root key (exact legacy custody —
    *  the app holds it). Client mode: a stable self-derived wallet keyID
    *  (nektar-fund) whose pkh the reserve funds and spends under. */
   fundSigner(): DigestSigner {
-    if (this._fundSigner === undefined) {
-      if (this.opts.wallet !== undefined) this._fundSigner = custodySigner(this.opts.wallet as SignerWallet, FUND_SIGN_ARGS)
-      else if (this.fundKey !== undefined) this._fundSigner = toSigner(this.fundKey)
-      else throw new Error('no funding signer: configure a wallet or a fund key')
-    }
-    return this._fundSigner
+    return this.keyOps.fundSigner()
   }
   /** register a pre-resolved shard owner pubkey (wallet-mode restore path) */
   registerShardPub(shard: string, pub: string): void {
-    this._shardPubs.set(shard, pub)
+    this.keyOps.registerShardPub(shard, pub)
   }
 
   operatorWallet(): OperatorWallet {
-    return (this._wallet ??=
-      this.opts.wallet ??
-      (this.fundKey !== undefined
-        ? new ProtoWallet(this.fundKey)
-        : (() => {
-            throw new Error('operatorWallet: no wallet and no fund key')
-          })()))
+    return this.keyOps.operatorWallet()
   }
   /** disclosure-wrap custody: the wallet's BRC-42 encrypt/decrypt under
    *  wallet mode, else the raw fund key — ECDH cannot go through a signer
    *  (the wallet deliberately never exposes the shared point). */
   wrapCustody(): PrivateKey | import('@bsv/sdk').WalletInterface {
-    if (this.opts.wallet !== undefined) return this.opts.wallet as import('@bsv/sdk').WalletInterface
-    if (this.fundKey !== undefined) return this.fundKey
-    throw new Error('wrapCustody: no wallet and no fund key')
+    return this.keyOps.wrapCustody()
   }
   /** funding outs for covenant hosts (escrow deposits, covenant inputs) —
    *  callers markSpent/addOwned after a successful broadcast like

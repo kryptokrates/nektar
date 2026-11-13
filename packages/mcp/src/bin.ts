@@ -125,9 +125,21 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
 }
 const port = nektarEnv('NEKTAR_HTTP_PORT')
 if (port) {
-  createHttpApi(rt.mem, rt.ops).listen(Number(port), nektarEnv('NEKTAR_HTTP_HOST') ?? '127.0.0.1', () =>
-    process.stderr.write(`nektar: HTTP + MCP on :${port} (/v1, /mcp)\n`)
-  )
+  const srv = createHttpApi(rt.mem, rt.ops)
+  const host = nektarEnv('NEKTAR_HTTP_HOST') ?? '127.0.0.1'
+  // a crashing-then-respawned agent briefly loses its port to the dying
+  // process (WER holds it on Windows); retry the bind on a bounded ceiling
+  // instead of letting an unhandled 'error' event kill the whole agent
+  let tries = 0
+  srv.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE' && tries < 15) {
+      tries++
+      setTimeout(() => srv.listen(Number(port), host), 1000)
+    } else {
+      throw err
+    }
+  })
+  srv.listen(Number(port), host, () => process.stderr.write(`nektar: HTTP + MCP on :${port} (/v1, /mcp)\n`))
 }
 let stopping = false
 const stop = async () => {

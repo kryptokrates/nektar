@@ -95,6 +95,18 @@ test('sale: public quote carries no reveal credential yet still verifies', async
   assert.equal(typeof wire.cfg.price, 'number')
   assert.ok(verifyOfferSig({ ...q, cfg: { ...q.cfg, price: BigInt(wire.cfg.price) } }, buyerPub), 'wire representation verifies')
 })
+test('sale: wire quote carries payload mode (delivered can out-run the quote)', () => {
+  // regression: when the buyer's `delivered` landed before the out-of-band
+  // `quote` message, the claim ran with offerMode undefined — a key-mode
+  // payload parsed as a fragment and a good sale false-disputed. The signed
+  // quote must self-describe the payload encoding.
+  const offer = { cfg: { sellerPkh: 'aa'.repeat(20), price: 1n, hWrapped: 'bb'.repeat(32), refundAfter: 1n, maxFee: 1n }, wrapped: 'dd', sellerPub: '02' + 'ab'.repeat(32), offerSig: 'cc', mode: 'key' as const }
+  const wire = JSON.parse(JSON.stringify(saleQuoteWire(publicSaleQuote(offer))))
+  assert.equal(wire.mode, 'key')
+  const noMode = { ...offer, mode: undefined }
+  const wire2 = JSON.parse(JSON.stringify(saleQuoteWire(publicSaleQuote(noMode))))
+  assert.ok(!('mode' in wire2), 'unset mode stays absent on the wire')
+})
 test('sale: wallet-custody quote sig (verbatim digest) verifies too', async () => {
   // the DigestSigner seam emits two wire forms for the same attestation:
   // wallet custody signs the digest verbatim (hashToDirectlySign → ECDSA

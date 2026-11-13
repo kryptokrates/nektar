@@ -966,6 +966,11 @@ export class MarketEngine {
     const utxo = op.data.utxo as { txid: string; vout: number; satoshis: number; script: string }
     const q = chosen.so.offer.offer as any
     const direct = op.data.direct === true
+    // quote-message mode wins (it was the authoritative channel); the signed
+    // wire quote now carries it too so a delivered landing ahead of the quote
+    // still claims under the right encoding — without it a key-mode payload
+    // is parsed as a fragment and a good sale false-disputes.
+    const offerMode = chosen.mode ?? q.mode
     // the signed offer carries leaf+hdp — it is the canonical commitment
     // evidence (signed, unlike the quote). The quote's commitment object adds
     // authorPub/anchorTxid/proof when it landed before selection; under
@@ -987,7 +992,7 @@ export class MarketEngine {
         valueHex: m.value,
         hWrapped: q.cfg.hWrapped,
         sellerPub: from,
-        offerMode: chosen.mode,
+        offerMode,
         commitment
       })
     } else {
@@ -1019,7 +1024,7 @@ export class MarketEngine {
         txHex: tx.toHex(),
         hWrapped: q.cfg.hWrapped,
         sellerPub: from,
-        offerMode: chosen.mode,
+        offerMode,
         commitment
       })
     }

@@ -68,6 +68,12 @@ export interface SaleOffer {
    *  the covenant attestation bytes stay identical; the market-level
    *  artifact signature still covers it. */
   direct?: boolean
+  /** payload encoding — 'key' = encrypted record sold as its fragment key,
+   *  'fragment' = plaintext record sold serialized. Carried on the wire quote
+   *  so the buyer's claim is self-sufficient: the out-of-band quote message
+   *  that used to be the only carrier can lag behind `delivered`, and a
+   *  fragment-mode claim on a key payload false-disputes a good sale. */
+  mode?: 'key' | 'fragment'
 }
 
 /** canonical bytes the offer signature covers — every field a MITM could swap. */
@@ -159,6 +165,7 @@ export function publicSaleQuote(offer: SaleOffer): SaleQuote {
   if (offer.expiresAt !== undefined) q.expiresAt = offer.expiresAt
   if (offer.artifact !== undefined) q.artifact = offer.artifact
   if (offer.direct !== undefined) q.direct = offer.direct
+  if (offer.mode !== undefined) q.mode = offer.mode
   return q
 }
 
@@ -173,6 +180,7 @@ export function saleQuoteWire(q: SaleQuote): Record<string, unknown> {
   if (q.expiresAt !== undefined) out.expiresAt = n(q.expiresAt)
   if (q.artifact !== undefined) out.artifact = q.artifact
   if (q.direct !== undefined) out.direct = q.direct
+  if (q.mode !== undefined) out.mode = q.mode
   return out
 }
 

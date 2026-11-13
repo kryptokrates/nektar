@@ -26,6 +26,8 @@ import {
   SpendGuard,
   TemporalSources,
   statusStream,
+  fetchTxStatus,
+  DEFAULT_WOC_URL,
   TxStore,
   ChainEvents,
   type TemporalSource,
@@ -283,7 +285,6 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     modelId: cfg.modelId ?? 'unspecified',
     clearanceAuthorities: cfg.clearanceAuthorities,
     network: cfg.network,
-    broadcasterUrl: cfg.main?.broadcasterUrl,
     objectStore: objectStoreFromEnv(),
     bond:
       bondEpoch || bondMaxFee
@@ -813,16 +814,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // the one chain-event substrate: pushed SSE/callback statuses land as
   // notes (unverified hints), this pull probes what a push could not deliver
   // — proofs missed while down, and txs handed rather than broadcast.
-  const arcTxStatus = async (txid: string): Promise<string> => {
-    try {
-      const st = await fetch(`${mc.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`, {
-        signal: AbortSignal.timeout(10_000)
-      }).then((x) => (x.ok ? x.json() : null))
-      return String(st?.txStatus ?? '').toUpperCase()
-    } catch {
-      return ''
-    }
-  }
+  // status reads go through the chain-observer seam; WoC cross-checks a dead
+  // broadcaster on main, or whenever the operator configured a WoC URL
+  const wocFallback = net === 'main' || mc.wocUrl !== undefined
+  const arcTxStatus = (txid: string): Promise<string> => fetchTxStatus(mc, txid, { wocFallback })
   const events = new ChainEvents({
     intervalMs: cfg.confirmEveryMs ?? 30_000,
     height: () => tracker.currentHeight(),
@@ -865,6 +860,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       ...base,
       wallet: clientWallet ?? liveToolbox?.wallet,
       txStore,
+      txStatus: arcTxStatus,
       agentSeed: keys.agentSeed ? PrivateKey.fromHex(keys.agentSeed) : undefined,
       signingKey: keys.logKey ? PrivateKey.fromHex(keys.logKey) : undefined,
       shardKeys,
@@ -890,7 +886,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   mem.txLookup = async (txid) => {
     const h: Record<string, string> = {}
     if (mc.wocApiKey) h['woc-api-key'] = mc.wocApiKey
-    const r = await (mc.fetchImpl ?? fetch)(`${mc.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main'}/tx/${txid}/hex`, {
+    const r = await (mc.fetchImpl ?? fetch)(`${mc.wocUrl ?? DEFAULT_WOC_URL}/tx/${txid}/hex`, {
       headers: h,
       signal: AbortSignal.timeout(10_000)
     })
@@ -1183,21 +1179,13 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
         // mined) → the output is spent since it is absent from the unspent
         // set; an explicit rejection → the parent is dead, drop and revive
         // inputs; undecidable → leave for the next reconcile
-        let st: { txStatus?: string } | null = null
-        try {
-          st = await fetch(`${mc.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) }).then((x) =>
-            x.ok ? x.json() : null
-          )
-        } catch {
-          /* undecidable — pending */
-        }
-        const status = String(st?.txStatus ?? '').toUpperCase()
+        const status = await arcTxStatus(txid)
         if (status !== '' && !['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) {
           reserve.markSpent(txid, u.vout)
           marked++
           continue
         }
-        if (st === null) {
+        if (status === '') {
           pending++
           continue
         }

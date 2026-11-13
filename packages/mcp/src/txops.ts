@@ -29,7 +29,10 @@ export interface TxOpsDeps {
   txLookup: () => ((txid: string) => Promise<Transaction | undefined>) | undefined
   proofLookup: () => ((txid: string) => Promise<MerklePath | undefined>) | undefined
   network?: string
-  broadcasterUrl?: string
+  /** chain-observer seam — the broadcaster's current verdict for a txid
+   *  (uppercase, '' = undecidable); injected by the runtime so TxOps never
+   *  hand-rolls the /tx fetch or owns the endpoint default */
+  txStatus?: (txid: string) => Promise<string>
 }
 
 export class TxOps {
@@ -151,20 +154,13 @@ export class TxOps {
     if (resolved?.merklePath !== undefined) return 'mined'
     if (resolved !== undefined) return 'seen'
     if (this.deps.network === 'regtest' || this.deps.network === undefined) return 'unknown'
-    try {
-      const st = await fetch(`${this.deps.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) }).then((r) =>
-        r.ok ? r.json() : null
-      )
-      const status = String(st?.txStatus ?? '').toUpperCase()
-      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) {
-        this.txRejected.add(txid)
-        return 'rejected'
-      }
-      if (status === 'MINED' || status === 'IMMUTABLE') return 'mined'
-      if (['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING'].includes(status)) return 'seen'
-    } catch {
-      /* undecidable — caller retries */
+    const status = await (this.deps.txStatus?.(txid).catch(() => '') ?? Promise.resolve(''))
+    if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) {
+      this.txRejected.add(txid)
+      return 'rejected'
     }
+    if (status === 'MINED' || status === 'IMMUTABLE') return 'mined'
+    if (['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING'].includes(status)) return 'seen'
     return 'unknown'
   }
 

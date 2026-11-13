@@ -123,7 +123,20 @@ export function custodySigner(
   keyArgs: { identityKey: true } | { protocolID: [number, string]; keyID: string; counterparty?: string; forSelf?: boolean }
 ): DigestSigner {
   const root = (wallet as { keyDeriver?: { rootKey?: unknown } }).keyDeriver?.rootKey
-  return root instanceof PrivateKey ? keySigner(root) : walletSigner(wallet, keyArgs)
+  if (root instanceof PrivateKey) return keySigner(root)
+  // dual-package builds: wallet-toolbox is CJS, so its keyDeriver's rootKey
+  // is the OTHER sdk copy's PrivateKey — instanceof fails on real key
+  // material and the code silently degrades to a derived walletSigner whose
+  // pub/sig pair doesn't match what custody actually holds. Re-key by WIF
+  // through this copy so every object downstream stays one class set.
+  if (typeof (root as PrivateKey | undefined)?.toWif === 'function') {
+    try {
+      return keySigner(PrivateKey.fromWif((root as PrivateKey).toWif()))
+    } catch {
+      /* not a real key — fall through to the wallet-derived signer */
+    }
+  }
+  return walletSigner(wallet, keyArgs)
 }
 
 /** Accept either custody form — legacy call sites pass PrivateKey, wallet-mode

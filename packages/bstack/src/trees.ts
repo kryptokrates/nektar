@@ -34,6 +34,10 @@ export async function ensureTrees(p: {
    *  failure — a row left here gates every later mint of its kind. */
   onStuck?: (tx: Transaction) => Promise<'keep' | 'drop'>
   onSpent?: (tx: Transaction) => void | Promise<void>
+  /** max unproven mints in flight per kind (default 1) — deeper than one
+   *  keeps a refill minting while an earlier mint still waits on its block,
+   *  so the proof wait never gates the next refill */
+  maxUnproven?: number
 }): Promise<{ minted?: string; proven: string[]; remaining: number }> {
   // Hosts admit a carrier only from a funding tree that is proven in a block,
   // so the stock is what keeps publishing free of block times: the next tree
@@ -69,7 +73,7 @@ export async function ensureTrees(p: {
   }
   const remaining = await p.ledger.remaining(kind)
   let minted: string | undefined
-  if (remaining < lowWater && (await p.ledger.unproven()).filter((u) => u.kind === kind).length === 0) {
+  if (remaining < lowWater && (await p.ledger.unproven()).filter((u) => u.kind === kind).length < (p.maxUnproven ?? 1)) {
     const funding = await p.takeFunding(size * satsPerOutput + 2000)
     const tree = await mintTree({ key: p.key, wallet: p.wallet, funding, n: size, satsPerOutput, lock: p.lock })
     const r = await p.broadcast(tree)

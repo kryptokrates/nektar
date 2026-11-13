@@ -46,6 +46,10 @@ export interface AutomationConfig {
   treeSize?: number
   boxOffice?: string
   treeLowWater?: number
+  /** unproven mints allowed in flight per kind — non-market lanes default 2
+   *  so one mint's block-wait never gates the next refill (market stays 1:
+   *  its slots serve on anchored ancestry anyway) */
+  treeMaxUnproven?: number
   /** blogs deal-journal stream id (`<name>_<10 chars>`); every deal event is
    *  appended as a signed numbered batch to tm_log_<stream> - env NEKTAR_LOG_STREAM */
   logStream?: string
@@ -711,6 +715,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               // the tree's own path) — keep a full tree's worth of proven
               // stock ahead so a slot never waits on a block
               lowWater: kind === 'finger' ? 2 : kind === 'market' ? cfg.treeLowWater : (cfg.treeLowWater ?? cfg.treeSize ?? 64),
+              maxUnproven: kind === 'market' ? cfg.treeMaxUnproven : (cfg.treeMaxUnproven ?? 2),
               size: kind === 'finger' ? 4 : cfg.treeSize,
               satsPerOutput: kind === 'log' || kind === 'finger' ? 100 : undefined,
               lock:

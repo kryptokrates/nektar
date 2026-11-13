@@ -5,10 +5,21 @@
 // claim credential); `refund` returns the deposit to the DEPOSITOR
 // (buyer) after refundAfter. The seller can never take a deposit
 // without revealing.
-import { Transaction, LockingScript, UnlockingScript, Hash, SatoshisPerKilobyte } from '@bsv/sdk'
+import { Transaction, LockingScript, UnlockingScript, Hash, SatoshisPerKilobyte, Utils } from '@bsv/sdk'
 import { RunarContract, computeOpPushTx, buildP2PKHScript } from 'runar-sdk'
 import { unlockP2PKH, signerPubHex, toSigner, type SignerLike } from '@nektar/core'
 import { DISCLOSURESALE_ARTIFACT } from '@nektar/contracts'
+
+/** the escrow covenant's wire identity — name + sha256 of the compiled
+ *  script. Sellers publish it in their quotes so counterparties (especially
+ *  foreign implementations) can pin the artifact they instantiate: a
+ *  lookalike covenant with the same parameter layout is detectable before
+ *  the escrow is funded. buildTimestamp churn doesn't affect it — the
+ *  script bytes are the artifact's real identity. */
+export const COVENANT_ID: { artifactId: string; scriptHash: string } = {
+  artifactId: DISCLOSURESALE_ARTIFACT.contractName,
+  scriptHash: Utils.toHex(Hash.sha256(Utils.toArray(DISCLOSURESALE_ARTIFACT.script, 'hex')))
+}
 
 /** The seller's published offer — depositorPkh is added by each buyer
  *  when they self-build the escrow script. */

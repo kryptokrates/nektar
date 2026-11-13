@@ -1,7 +1,7 @@
 import { PublicKey, Transaction, P2PKH, type PrivateKey } from '@bsv/sdk'
 import { signWant, verifyWant, signOffer, verifyOffer, type SignedWant, type SignedOffer, type BoxRef } from '@nektar/bstack'
 import { verifyOfferSig, publicSaleQuote, saleQuoteWire } from '@nektar/identity'
-import { DisclosureSaleHost, CheckpointBond } from '@nektar/anchor'
+import { DisclosureSaleHost, CheckpointBond, COVENANT_ID } from '@nektar/anchor'
 import { parseFragment, fromHex } from '@nektar/core'
 import { TxStore, spendValid, type Ingested } from '@nektar/chain'
 import type { AutomationStore, InboxItem, Operation, OutboxItem } from './store.js'
@@ -804,6 +804,11 @@ export class MarketEngine {
     if (Number(q.cfg.maxFee) > this.o.escrowFeeReserveSats) return 'fee bound too high'
     const leaf = o.leaf ?? ''
     if (!verifyOfferSig(q, this.me, leaf) && !verifyOfferSig(q, '', leaf)) return 'quote signature invalid'
+    // a quote naming a covenant artifact must pin the same covenant we
+    // instantiate — a lookalike with the same parameter layout fails here
+    // before any sats are committed (quotes without the field are pre-artifact)
+    if (q.artifact !== undefined && (q.artifact.scriptHash !== COVENANT_ID.scriptHash || q.artifact.artifactId !== COVENANT_ID.artifactId))
+      return 'covenant artifact mismatch'
     return undefined
   }
 

@@ -970,6 +970,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
     }
     case 'sale#offer': {
       const { offerDisclosure } = await import('@nektar/identity')
+      const { COVENANT_ID } = await import('@nektar/anchor')
       const r = await offerDisclosure({
         sellerKey: mem.wrapCustody(),
         value: new Uint8Array(Buffer.from(args.value, 'hex')),
@@ -985,11 +986,13 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         wrapped: r.wrapped,
         sellerPub: r.sellerPub,
         expiresAt: Number(r.expiresAt ?? 0n),
-        offerSig: r.offerSig
+        offerSig: r.offerSig,
+        artifact: COVENANT_ID
       }
     }
     case 'sale#offerMemory': {
       const { offerDisclosure, encodeKeySale } = await import('@nektar/identity')
+      const { COVENANT_ID } = await import('@nektar/anchor')
       const { serializeFragment, computeLeaf, toHex } = await import('@nektar/core')
       const rec = (await mem.records(args.shard)).find((r) => r.seq === args.seq)
       if (!rec) throw new Error(`no record seq ${args.seq} in shard "${args.shard}"`)
@@ -1025,6 +1028,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         sellerPub: r.sellerPub,
         expiresAt: Number(r.expiresAt ?? 0n),
         offerSig: r.offerSig,
+        artifact: COVENANT_ID,
         mode,
         commitment: {
           leaf: leafHex,

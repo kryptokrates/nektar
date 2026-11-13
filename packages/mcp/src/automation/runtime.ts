@@ -71,6 +71,10 @@ export interface AutomationConfig {
    *  already issues; a changed result-set runs deals() at once. Optional:
    *  absent/down shim = plain polling. */
   watchHosts?: string[]
+  /** this agent's own watch-shim URL, advertised in the bfinger record so
+   *  counterparties can /notify our long-polls on outbound sends (requires
+   *  publishFinger — records without it simply carry no watch field) */
+  watchPublic?: string
   now?: () => number
 }
 
@@ -174,28 +178,44 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
   // identity records may name http and loopback/private hosts on the test
   // lanes, and anywhere the operator runs its own hosts and says so
   const localNet = cfg.network === 'regtest' || cfg.localHosts === true
-  const fingerCache = new Map<string, { at: number; rec?: { hosts: string[]; office: string; stream: string } }>()
-  const resolveRecord = async (pub: string, fresh = false): Promise<{ hosts: string[]; office: string; stream: string } | undefined> => {
+  const fingerCache = new Map<string, { at: number; rec?: { hosts: string[]; office: string; stream: string; watch?: string } }>()
+  const resolveRecord = async (pub: string, fresh = false): Promise<{ hosts: string[]; office: string; stream: string; watch?: string } | undefined> => {
     if (lanes === undefined) return undefined
     const t = cfg.now?.() ?? Date.now()
     const c = fingerCache.get(pub)
     // fresh callers (ack retries on deferred envelopes) bypass a cached miss —
     // a stale negative entry would otherwise strand receipts for a minute
     if (c !== undefined && t - c.at < (c.rec === undefined ? (fresh ? 0 : 60_000) : 600_000)) return c.rec
-    let rec: { hosts: string[]; office: string; stream: string } | undefined
+    let rec: { hosts: string[]; office: string; stream: string; watch?: string } | undefined
     try {
       const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: mem.sdkTracker(), allowHttp: localNet, now: cfg.now, timeoutMs: 5_000 })
       if (r !== undefined && (r.body.nets.length === 0 || r.body.nets.includes(cfg.network))) {
         const hosts = r.body.hosts.filter((u) => lanes.mod.fingerHostAllowed(u, { allowHttp: localNet, allowLocal: localNet })).slice(0, 8)
-        rec = { hosts, office: r.body.office, stream: r.body.stream }
+        rec = { hosts, office: r.body.office, stream: r.body.stream, watch: r.body.watch }
       }
     } catch {
       /* no record (or no host serves one) — the configured set is the fallback */
     }
     fingerCache.set(pub, { at: t, rec })
+    // event-driven deferred acks: an envelope deferred on an unresolved
+    // sender record receipt-waits the next ack pass — the resolution IS the
+    // event it was waiting on, so fire the pass now instead of on the tick
+    if (rec !== undefined && deferredAcks.some((d) => d.from === pub)) void msgs?.ack?.().catch(() => undefined)
     return rec
   }
   const hostsFor = async (pub: string): Promise<string[]> => [...new Set([...marketHosts, ...((await resolveRecord(pub))?.hosts ?? [])])]
+  // a counterparty's advertised watch shim: POST {service,query} → the shim
+  // wakes their long-polls early. Best-effort only — the shim re-verifies
+  // real state and our own polling covers a miss, so it's fire-and-forget
+  const notifyPeer = (rec: { watch?: string } | undefined, service: string, query?: unknown): void => {
+    if (rec?.watch === undefined) return
+    fetch(`${rec.watch.replace(/\/+$/, '')}/notify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(query === undefined ? { service } : { service, query }),
+      signal: AbortSignal.timeout(2_000)
+    }).catch(() => undefined)
+  }
   const transport: MarketTransport = {
     publishWant: async (sw: SignedWant) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -225,6 +245,9 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
         payload: { v: 1, kind: 'offer', body: so }
       })
       if (r.missed.length > 0) throw new Error(`offer missed host(s): ${r.missed.map((m) => `${m.host} (${m.error})`).join(', ')}`)
+      // the buyer's watch shim (if it advertises one) gets a wake hint — the
+      // offer publish is only visible to its polls once they re-check anyway
+      if (so.offer.buyerPub !== undefined) notifyPeer(await resolveRecord(so.offer.buyerPub), 'ls_nektar')
     },
     send: async (to: string, msg: MarketMessage) => {
       if (msgs === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -309,18 +332,22 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
               // the envelope rides the RECIPIENT's office and hosts (its finger
               // record) — reading stays on our own office, configured set included
               const rec = await resolveRecord(to)
+              const office = rec?.office ?? cfg.boxOffice
               await lanes.mod.sendBox({
                 key,
                 wallet,
                 ledger: lanes.ledger,
                 journal: lanes.journal,
                 hosts: rec === undefined ? marketHosts : await hostsFor(to),
-                office: rec?.office ?? cfg.boxOffice,
+                office,
                 to,
                 body: { market: msg },
                 refs,
                 expiresAt: Math.floor(Date.now() / 1000) + ttl
               })
+              // wake the recipient's box watch with the exact query their
+              // shim holds — ls_bbox {office,to} is the subscription's shape
+              notifyPeer(rec, 'ls_bbox', { office: office ?? lanes.mod.officeFor(), to })
             } catch (e) {
               log(`automation: box: ${(e as Error).message}`)
               throw e
@@ -329,16 +356,37 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
           collect: async (): Promise<Array<{ from: string; msg: MarketMessage; refs?: import('@nektar/bstack').BoxRef[] }>> => {
             try {
               const tracker = mem.sdkTracker()
-              const r = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet })
+              const listAcks = (items: Awaited<ReturnType<typeof lanes.mod.readBox>>['items']) =>
+                items.map((i) => ({
+                  txid: i.txid,
+                  commitment: i.commitment,
+                  from: i.from,
+                  msg: (i.body as { market?: MarketMessage }).market,
+                  refs: i.refs,
+                  created: i.created
+                }))
+              // quorum-1 read first: envelopes are content-addressed, so the
+              // fastest host's answer delivers the items — a single slow or
+              // dead host no longer gates message delivery by its timeout.
+              // The full fan-out runs right behind it for completeness: an
+              // envelope a missed submit left off that host still arrives
+              // this cycle, and withheld/unreachable bookkeeping stays whole.
+              const r =
+                marketHosts.length > 1
+                  ? await (async () => {
+                      const fast = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, quorum: 1 })
+                      void lanes.mod
+                        .readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet })
+                        .then((full) => {
+                          laneNotes(full)
+                          pendingAcks = listAcks(full.items)
+                        })
+                        .catch(() => undefined)
+                      return fast
+                    })()
+                  : await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet })
               laneNotes(r)
-              pendingAcks = r.items.map((i) => ({
-                txid: i.txid,
-                commitment: i.commitment,
-                from: i.from,
-                msg: (i.body as { market?: MarketMessage }).market,
-                refs: i.refs,
-                created: i.created
-              }))
+              pendingAcks = listAcks(r.items)
               // self-notes restore lost operations — ingest them before any other message in the batch
               const selfNote = (p: { from: string; msg?: MarketMessage }) => p.from === me && (p.msg?.type === 'note' || p.msg?.type === 'sellerNote')
               pendingAcks.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
@@ -615,7 +663,14 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
             ledger: lanes.ledger,
             journal: lanes.journal,
             hosts: marketHosts,
-            body: { v: 1, hosts: marketHosts, office: cfg.boxOffice ?? lanes.mod.officeFor(), stream: logStream, nets: [cfg.network] },
+            body: {
+              v: 1,
+              hosts: marketHosts,
+              office: cfg.boxOffice ?? lanes.mod.officeFor(),
+              stream: logStream,
+              nets: [cfg.network],
+              ...(cfg.watchPublic !== undefined ? { watch: cfg.watchPublic } : {})
+            },
             refs: packsRef !== undefined ? [packsRef] : undefined,
             takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0],
             broadcast: (tx) => mem.broadcastTx(tx),
@@ -869,6 +924,13 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
                 if (marketHosts.includes(h) && !r.downHosts.includes(h)) {
                   downNow.delete(h)
                   log(`automation: watchdog: host back ${h}`)
+                  // a recovered host frees every transport-deferred outbox
+                  // item — the backoff was waiting on reachability, not on
+                  // delivery logic, so pull it forward instead of waiting it out
+                  for (const pat of ['fetch failed', 'unreachable', 'http 5', 'timed out']) {
+                    const n = await store.unblockOutbox(pat)
+                    if (n > 0) log(`automation: outbox unblocked ×${n} (${pat})`)
+                  }
                 }
             } catch (e) {
               log(`automation: watchdog: ${(e as Error).message}`)

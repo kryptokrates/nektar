@@ -79,6 +79,10 @@ const server = http.createServer(async (req, res) => {
       const p = JSON.parse(body || '{}')
       if (p.service !== undefined) {
         wake(keyOf(p.service, p.query))
+        // senders can't reproduce a foreign watcher's exact query shape, so
+        // the hint is service-scoped: every held poll for the service
+        // re-checks. Always honest — a spurious wake costs one lookup
+        for (const k of [...waiters.keys()]) if (k.startsWith(`${p.service}|`)) wake(k)
       } else {
         for (const k of [...waiters.keys()]) wake(k)
       }

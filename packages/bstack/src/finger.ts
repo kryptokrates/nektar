@@ -64,6 +64,11 @@ export interface FingerBody {
   office: string /* bbox office */
   stream: string /* blogs journal stream */
   nets: string[] /* network labels this record is authoritative for */
+  /** optional watch-shim base URL — counterparties POST {service,query} to
+   *  `${watch}/notify` to wake this identity's long-polls early (hints only:
+   *  the shim answers changed/not-changed from real backend state, so a
+   *  stale or forged notify just causes a re-check, never a false positive) */
+  watch?: string
 }
 
 const NET_LABEL = /^[a-z][a-z0-9-]{0,15}$/
@@ -96,26 +101,41 @@ export function checkFingerBody(body: FingerBody, opts?: { allowHttp?: boolean }
   }
   if (!Array.isArray(body.nets) || body.nets.length < 1 || body.nets.length > 8 || body.nets.some((n) => typeof n !== 'string' || !NET_LABEL.test(n)))
     throw new Error('finger body: bad nets')
+  if (body.watch !== undefined) {
+    let u: URL
+    try {
+      u = new URL(body.watch)
+    } catch {
+      throw new Error('finger body: bad watch URL')
+    }
+    if (u.protocol !== 'https:' && !(opts?.allowHttp === true && u.protocol === 'http:')) {
+      throw new Error(`finger body: watch must be https ${u.protocol}//`)
+    }
+  }
 }
 
 function bodyToMap(body: FingerBody): CborMap {
-  return new CborMap([
+  const pairs = [
     { key: 'v', val: 1n },
     { key: 'hosts', val: body.hosts },
     { key: 'office', val: body.office },
     { key: 'stream', val: body.stream },
     { key: 'nets', val: body.nets }
-  ])
+  ]
+  if (body.watch !== undefined) pairs.push({ key: 'watch', val: body.watch })
+  return new CborMap(pairs)
 }
 
 function mapToBody(m: CborMap): FingerBody {
   const v = m.get('v')
+  const w = m.get('watch')
   const body = {
     v: typeof v === 'bigint' ? Number(v) : v,
     hosts: m.get('hosts'),
     office: m.get('office'),
     stream: m.get('stream'),
-    nets: m.get('nets')
+    nets: m.get('nets'),
+    ...(typeof w === 'string' ? { watch: w } : {})
   } as FingerBody
   return body
 }

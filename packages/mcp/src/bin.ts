@@ -82,6 +82,9 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
       .split(',')
       .map((u) => u.trim())
       .filter((u) => u !== ''),
+    // our own shim's public URL — goes into the bfinger record so peers can
+    // /notify our long-polls on outbound sends (needs NEKTAR_BFINGER_PUBLISH)
+    watchPublic: process.env.NEKTAR_WATCH_PUBLIC !== undefined && process.env.NEKTAR_WATCH_PUBLIC !== '' ? process.env.NEKTAR_WATCH_PUBLIC : undefined,
     // chains without a status push (polled broadcasters) mark
     // funding trees proven only here — let ops tune the cadence
     upkeepMs: process.env.NEKTAR_AUTOMATION_UPKEEP_MS ? Number(process.env.NEKTAR_AUTOMATION_UPKEEP_MS) : undefined,

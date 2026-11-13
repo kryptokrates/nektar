@@ -314,6 +314,11 @@ export class StackChain implements ChainTracker, Broadcaster {
     // files legitimately collide here, so retry the throttle with backoff.
     // Batched n>10 is chunked: the node's own RPC layer aborts generate calls
     // that run past ~30s, so big batches go in 10-block pieces.
+    // capture the pre-generate tip so the post-wait below can converge on a
+    // real height: generatetoaddress returns before Teranode seals, and under
+    // load the seal can lag tens of seconds — callers that read the height
+    // right after mine() (refund deadlines!) must see the new blocks
+    const h0 = await this.currentHeight().catch(() => undefined)
     const hashes: string[] = []
     for (let done = 0; done < n;) {
       const step = Math.min(10, n - done)
@@ -342,6 +347,19 @@ export class StackChain implements ChainTracker, Broadcaster {
       const hdr = await stackRpc(this.cfg, 'getblockheader', tip).catch(() => undefined)
       if (hdr !== undefined) break
       await new Promise((r) => setTimeout(r, 100))
+    }
+    // generatetoaddress can report before the chain serves the new height —
+    // the fixed header wait above can pass while currentHeight() still trails.
+    // Converge on the real tip (h0+n) — this is a condition, not a timeout:
+    // if the node never reports the generated blocks, mine() is right to wait
+    // rather than return a chain state callers can't act on.
+    if (h0 !== undefined) {
+      const target = h0 + n
+      for (let i = 0; i < 100; i++) {
+        const h = await this.currentHeight().catch(() => 0)
+        if (h >= target) break
+        await new Promise((r) => setTimeout(r, 300))
+      }
     }
     // asset index catch-up: /merkle_proof only answers once the block's
     // subtree is sealed. Wait briefly for it (a sealed tip means proofs are

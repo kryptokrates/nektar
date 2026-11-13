@@ -206,7 +206,9 @@ const offerCanonical = (o: OfferAd) => `${OFFER_PREFIX}${marketJson(o)}`
 const offerDigest = (o: OfferAd) => sha256(utf8(offerCanonical(o)))
 
 const QUOTE_CFG_KEYS = new Set(['sellerPkh', 'price', 'hWrapped', 'refundAfter', 'maxFee'])
-const QUOTE_KEYS = new Set(['cfg', 'sellerPub', 'expiresAt', 'offerSig'])
+// 'artifact' is the covenant identity pin (MARKET-WIRE §3) — optional so
+// pre-artifact quotes still validate
+const QUOTE_KEYS = new Set(['cfg', 'sellerPub', 'expiresAt', 'offerSig', 'artifact'])
 export const publicQuoteError = (q: unknown): string | null => {
   if (q === null || typeof q !== 'object' || Array.isArray(q)) return 'quote is not an object'
   const o = q as Record<string, unknown>
@@ -222,6 +224,14 @@ export const publicQuoteError = (q: unknown): string | null => {
   if (typeof o.sellerPub !== 'string' || !/^[0-9a-f]{66}$/i.test(o.sellerPub)) return 'bad sellerPub'
   if (typeof o.offerSig !== 'string' || !/^[0-9a-f]{20,220}$/i.test(o.offerSig)) return 'bad offerSig'
   if (o.expiresAt !== undefined && !numLike(o.expiresAt)) return 'bad expiresAt'
+  if (o.artifact !== undefined) {
+    const a = o.artifact
+    if (a === null || typeof a !== 'object' || Array.isArray(a)) return 'bad artifact'
+    const ar = a as Record<string, unknown>
+    for (const k of Object.keys(ar)) if (k !== 'artifactId' && k !== 'scriptHash') return `unexpected artifact field '${k}'`
+    if (typeof ar.artifactId !== 'string' || ar.artifactId.length === 0 || ar.artifactId.length > 64) return 'bad artifact.artifactId'
+    if (typeof ar.scriptHash !== 'string' || !/^[0-9a-f]{64}$/i.test(ar.scriptHash)) return 'bad artifact.scriptHash'
+  }
   return null
 }
 

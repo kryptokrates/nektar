@@ -70,7 +70,7 @@ export async function lookupAll(
   hosts: string[],
   service: string,
   query: unknown,
-  opts?: { timeoutMs?: number }
+  opts?: { timeoutMs?: number; quorum?: number }
 ): Promise<{ answers: Array<{ host: string; outputs: Array<{ beef: number[]; outputIndex: number }> } | { host: string; error: string }> }> {
   const per = async (host: string) => {
     try {
@@ -87,7 +87,27 @@ export async function lookupAll(
       return { host, error: (e as Error).message.slice(0, 80) }
     }
   }
-  return { answers: await Promise.all(hosts.map(per)) }
+  const quorum = opts?.quorum ?? hosts.length
+  if (quorum >= hosts.length) return { answers: await Promise.all(hosts.map(per)) }
+  // quorum-N: resolve the moment N hosts have answered (success or error —
+  // the caller asked for N independent reads, not N successes). Slow/dead
+  // hosts no longer gate the read by their full timeout; unanswered hosts
+  // are simply absent from `answers`, not fabricated failures.
+  return {
+    answers: await new Promise((resolve) => {
+      const out: Array<Awaited<ReturnType<typeof per>>> = []
+      let settled = 0
+      let ok = 0
+      for (const h of hosts) {
+        void per(h).then((r) => {
+          out.push(r)
+          settled++
+          if ('outputs' in r) ok++
+          if (ok >= quorum || settled === hosts.length) resolve(out)
+        })
+      }
+    })
+  }
 }
 
 export interface ReadResult {

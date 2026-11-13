@@ -54,6 +54,10 @@ const ownPath = (tree: Transaction): Transaction => {
         : level.map((e) => (e.hash === txid && e.offset === own ? { offset: e.offset, hash: e.hash, txid: true } : { offset: e.offset, hash: e.hash }))
     )
   )
+  // a BUMP-anchored tx terminates BEEF ancestry (same rule markProven
+  // applies): parents left attached ride into carrier beefs and get the
+  // carrier refused by hosts that count transactions strictly
+  for (const i of tree.inputs) i.sourceTransaction = undefined
   return tree
 }
 
@@ -209,6 +213,13 @@ export class KnexTreeLedger implements TreeLedger {
         if (n !== 1) return false
         const t = await trx('bstack_trees').where({ txid: row.txid }).first()
         const tree = ownPath(Transaction.fromBEEF(JSON.parse(t.beef)))
+        if (tree.merklePath === undefined) {
+          // a proven=1 row whose beef lost the tree's own path can't anchor a
+          // carrier — the leaf is burned already; flip the row back so the
+          // upkeep poll re-fetches the proof instead of serving bad beef
+          await trx('bstack_trees').where({ txid: row.txid }).update({ proven: 0 })
+          return 'skip'
+        }
         if (expectedLockHex !== undefined && tree.outputs[row.vout]?.lockingScript.toHex() !== expectedLockHex) return 'skip'
         return { tree, vout: row.vout }
       })
@@ -268,10 +279,14 @@ export class KnexTreeLedger implements TreeLedger {
         }
       }
       if (touched) {
-        await this.kx('bstack_trees')
-          .where({ txid: row.txid })
+        // proven:0 in the UPDATE is the race guard — markProven can commit
+        // (proven:1 + a stripped beef) between our SELECT and this write, and
+        // resurrecting the parented beef over it leaves a proven row whose
+        // beef fails host admission (extra txs in the carrier graph)
+        const n = await this.kx('bstack_trees')
+          .where({ txid: row.txid, proven: 0 })
           .update({ beef: JSON.stringify(tree.toBEEF()) })
-        changed = true
+        changed = changed || n === 1
       }
     }
     return changed

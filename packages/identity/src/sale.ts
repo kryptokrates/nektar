@@ -47,6 +47,11 @@ export interface SaleOffer {
    *  — a non-repudiable "this seller offered this commitment to this buyer"
    *  attestation the buyer checks BEFORE funding the escrow. */
   offerSig: string
+  /** the escrow covenant's wire identity (contractName + sha256 of the
+   *  compiled script) — counterparties verify they instantiate the same
+   *  artifact before funding, so a lookalike covenant is refused early.
+   *  Optional on read: pre-artifact quotes omit it. */
+  artifact?: { artifactId: string; scriptHash: string }
 }
 
 /** canonical bytes the offer signature covers — every field a MITM could swap. */
@@ -127,6 +132,7 @@ export function publicSaleQuote(offer: SaleOffer): SaleQuote {
     offerSig: offer.offerSig
   }
   if (offer.expiresAt !== undefined) q.expiresAt = offer.expiresAt
+  if (offer.artifact !== undefined) q.artifact = offer.artifact
   return q
 }
 
@@ -139,6 +145,7 @@ export function saleQuoteWire(q: SaleQuote): Record<string, unknown> {
     offerSig: q.offerSig
   }
   if (q.expiresAt !== undefined) out.expiresAt = n(q.expiresAt)
+  if (q.artifact !== undefined) out.artifact = q.artifact
   return out
 }
 

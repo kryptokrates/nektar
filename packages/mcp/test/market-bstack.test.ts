@@ -101,6 +101,7 @@ const mkagent = async (name: string, o: MkOpts): Promise<A> => {
     now: () => clock,
     messages: o.msgs?.for(pub),
     objectStore: o.objectStore,
+    publishFinger: true, // production gates it on NEKTAR_BFINGER_PUBLISH; tests exercise both record-present and record-absent paths via the hosts' finger flag
     opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts }
   })
   mem.automation = rt // bin.ts does the same in production
@@ -150,8 +151,11 @@ const trackerFor = (chain: StackChain) => ({
   isValidRootForHeight: (r: string, h: number) => chain.isValidRootForHeight(r, h),
   currentHeight: () => chain.currentHeight()
 })
+// bstack lane tables (trees/outputs/carriers/fingers) live in lanes.sqlite
+// since the lane-split; market tables stay in automation.sqlite
+const dbFor = (dir: string, name: string, table: string) => join(dir, name, table.startsWith('bstack_') ? 'lanes.sqlite' : 'automation.sqlite')
 const countWhere = async (dir: string, name: string, table: string, col: string, val: string): Promise<number> => {
-  const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'automation.sqlite') }, useNullAsDefault: true })
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: dbFor(dir, name, table) }, useNullAsDefault: true })
   try {
     const r = await kx(table).count('* as n').where(col, val).first()
     return Number((r as { n: number }).n)
@@ -160,7 +164,7 @@ const countWhere = async (dir: string, name: string, table: string, col: string,
   }
 }
 const countLike = async (dir: string, name: string, table: string, col: string, pat: string): Promise<number> => {
-  const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'automation.sqlite') }, useNullAsDefault: true })
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: dbFor(dir, name, table) }, useNullAsDefault: true })
   try {
     const r = await kx(table).count('* as n').where(col, 'like', pat).first()
     return Number((r as { n: number }).n)
@@ -458,7 +462,7 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
     const bo = await buyerOp(b)
     assert.equal(bo?.state, 'disclosure_verified', 'forged delivered did not derail the purchase')
     const envs = async (name: string) => {
-      const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'automation.sqlite') }, useNullAsDefault: true })
+      const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'lanes.sqlite') }, useNullAsDefault: true })
       const n = ((await kx('bstack_carriers').where('topics', 'like', '%tm_bbox%').count('* as c').first()) as { c: number }).c
       await kx.destroy()
       return Number(n)
@@ -650,7 +654,7 @@ test('bstack J: push — a mined funding tree is proven and a cycle runs without
   try {
     a = await mkagent('push', { hosts: [h1.url], chain, logs, dir })
     await a.rt.cycle() // broadcast market + bbox funding trees — still unproven
-    kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'push', 'automation.sqlite') }, useNullAsDefault: true })
+    kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'push', 'lanes.sqlite') }, useNullAsDefault: true })
     const { KnexTreeLedger } = await import('@nektar/bstack')
     const ledger2 = new KnexTreeLedger(kx)
     assert.ok((await ledger2.unproven()).length >= 2, 'funding trees broadcast but unproven')
@@ -696,6 +700,7 @@ const respawn = async (
     ai: new ScriptedExecutor(),
     now: () => clock,
     objectStore: o.objectStore,
+    publishFinger: true,
     opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts }
   })
   a.mem.automation = rt
@@ -1544,7 +1549,7 @@ const journalLines = async (hosts: MinihostHandle[], chain: StackChain, stream: 
   return await readLog({ hosts: hosts.map((h) => h.url), stream, producer, tracker: trackerFor(chain) })
 }
 const jTxid = async (dir: string, name: string, seq: number): Promise<string> => {
-  const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'automation.sqlite') }, useNullAsDefault: true })
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'lanes.sqlite') }, useNullAsDefault: true })
   try {
     const r = await kx('bstack_carriers')
       .where({ artifact_hash: `log:${LOG_STREAM}:${seq}` })

@@ -606,10 +606,11 @@ export class ToolboxReserveFunder {
   }
 
   private async internalize(tx: Transaction, vout: number): Promise<void> {
-    // BRC-100 wants a self-contained AtomicBEEF: txid-only deps are rejected,
-    // so input parents ride along — carrying their own merkle proofs when
-    // mined (unmined parents recurse one level back to a proven ancestor or
-    // fail honestly; funding UTXOs in practice spend confirmed treasury).
+    // BRC-100 wants a self-contained AtomicBEEF: txid-only deps are rejected
+    // and every unproven tx must chain through included ancestors to a BUMP.
+    // `parent()` therefore recurses: an unconfirmed input parent carries its
+    // own ancestry with it until the chain bottoms out at proven roots —
+    // zeroconf spends internalize whole, not one level deep.
     const beef = new Beef()
     beef.mergeTransaction(tx)
     for (const i of tx.inputs) {
@@ -634,14 +635,21 @@ export class ToolboxReserveFunder {
   }
 
   /** Fetch a parent tx with its merkle path attached when mined — what the
-   *  AtomicBEEF validator needs to accept the dependency. */
-  private async parent(txid: string): Promise<Transaction | undefined> {
+   *  AtomicBEEF validator needs to accept the dependency. An unmined parent
+   *  has no proof, so its own inputs are fetched and linked recursively until
+   *  the ancestry anchors at proven roots (`depth` bounds pathological
+   *  zeroconf chains). */
+  private async parent(txid: string, depth = 8): Promise<Transaction | undefined> {
     if (this.services === undefined) return undefined
     const r = await this.services.getRawTx(txid)
     if (r.rawTx === undefined) return undefined
     const tx = Transaction.fromBinary(r.rawTx)
     const mp = await this.services.getMerklePath(txid)
     if (mp.merklePath !== undefined) tx.merklePath = MerklePath.fromBinary((mp.merklePath as unknown as MerklePath).toBinary())
+    else if (depth > 0)
+      for (const i of tx.inputs)
+        if (i.sourceTransaction === undefined && i.sourceTXID !== undefined)
+          i.sourceTransaction = await this.parent(i.sourceTXID, depth - 1)
     return tx
   }
 }

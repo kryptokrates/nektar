@@ -190,13 +190,17 @@ export async function readBox(p: {
   tracker: ChainTracker
   limit?: number
   timeoutMs?: number
+  /** stop waiting once this many hosts have answered — the interactive read
+   *  path cares about the envelopes, not per-host coverage; withheld and
+   *  unreachable are then reported only for hosts that did answer */
+  quorum?: number
 }): Promise<{ items: BoxItem[]; withheld: Array<{ host: string; txid: string }>; unreachable: string[] }> {
   const office = p.office ?? DEFAULT_OFFICE
   const me = await signerPubHex(p.key)
   const w = walletOrProto(p.key, p.wallet)
   // interactive read path: a host that cannot answer inside a few seconds is
   // down for deal purposes — reported unreachable, not waited on
-  const r = await lookupAll(p.hosts, 'ls_bbox', { office, to: me }, { timeoutMs: p.timeoutMs ?? 5_000 })
+  const r = await lookupAll(p.hosts, 'ls_bbox', { office, to: me }, { timeoutMs: p.timeoutMs ?? 5_000, quorum: p.quorum })
   const items = new Map<string, BoxItem>()
   const perHost = new Map<string, string[]>()
   const unreachable: string[] = []

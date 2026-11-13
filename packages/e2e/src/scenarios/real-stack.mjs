@@ -21,8 +21,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
-import { PrivateKey, Transaction, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
-import { TeranodeBroadcaster, TeranodeRPCTracker, utxoStatus } from '../../../chain/dist/src/regtest.js'
+import { PrivateKey, Transaction, P2PKH, SatoshisPerKilobyte, Beef } from '@bsv/sdk'
+import { TeranodeBroadcaster, TeranodeRPCTracker, utxoStatus, regtestMerkleProof } from '../../../chain/dist/src/regtest.js'
 import { BsvBroadcaster, ChaintracksTracker, WocTracker } from '../../../chain/dist/src/mainnet.js'
 import { readBox } from '../../../bstack/dist/src/index.js'
 import { resolveFinger } from '../../../bstack/dist/src/finger.js'
@@ -361,10 +361,25 @@ async function fundAgents() {
   await rpc('generatetoaddress', 1, treasuryAddr)
   blocksMined++
   writeFileSync(TREASURY_FILE, JSON.stringify({ treasury: { txid: split.id('hex'), vout: agents.length, txHex: split.toHex() } }, null, 1))
+  // the funding payload carries its ancestry: once the treasury parent is
+  // fully spent, chain lookups can't resolve it and toolbox internalize has
+  // no path to the proof. BEEF keeps the agent self-sufficient.
+  const proofCfg = { ...cfg, rpcUser: E('NEKTAR_RPC_USER'), rpcPass: E('NEKTAR_RPC_PASS') }
+  for (const tx of [split, parent]) {
+    for (let i = 0; tx.merklePath === undefined && i < 15; i++) {
+      const mp = await regtestMerkleProof(proofCfg, tx.id('hex'))
+      if (mp !== undefined) tx.merklePath = mp
+      else await delay(1000)
+    }
+  }
+  const beef = new Beef()
+  beef.mergeTransaction(split)
+  beef.mergeTransaction(parent)
+  const fundHex = Buffer.from(beef.toBinaryAtomic(split.id('hex'))).toString('hex')
   for (const [i, a] of agents.entries()) {
     a.dataDir = join(dir, a.name)
     mkdirSync(a.dataDir, { recursive: true })
-    writeFileSync(join(a.dataDir, 'treasury.json'), JSON.stringify({ treasury: { txid: split.id('hex'), vout: i, txHex: split.toHex() } }))
+    writeFileSync(join(a.dataDir, 'treasury.json'), JSON.stringify({ treasury: { txid: split.id('hex'), vout: i, txHex: fundHex } }))
   }
   // regtest agent keys are ephemeral like the testnet ones — persist them so
   // leftover coins in a dead run can be swept back into the treasury

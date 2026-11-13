@@ -4,6 +4,7 @@
 import { Transaction, MerklePath } from '@bsv/sdk'
 import { dsha256 } from '@nektar/core'
 import { withRetry } from './retry.js'
+import { TxStore } from './txstore.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker } from './interfaces.js'
 
 export interface RegtestConfig {
@@ -503,7 +504,10 @@ export async function bootstrapReserve(
   if (existsSync(opts.treasuryFile)) {
     const t = JSON.parse(readFileSync(opts.treasuryFile, 'utf8')) as { treasury?: { vout: number; txHex: string } }
     if (t.treasury) {
-      const s = await split(Transaction.fromHex(t.treasury.txHex), t.treasury.vout)
+      // TxStore.read takes raw, EF or BEEF — a beef payload carries the
+      // treasury's own ancestry, so a fully-spent (unfetchable) parent still
+      // internalizes without a chain lookup
+      const s = await split((await TxStore.read(t.treasury.txHex, undefined)).tx, t.treasury.vout)
       if (s) return accept(s)
     }
   }

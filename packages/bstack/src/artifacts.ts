@@ -210,7 +210,9 @@ const QUOTE_CFG_KEYS = new Set(['sellerPkh', 'price', 'hWrapped', 'refundAfter',
 // pre-artifact quotes still validate
 // 'direct' marks the quote as accepting outright P2PKH payment to sellerPkh
 // (MARKET-WIRE §3) — market-signed, so it can't be stripped or forged
-const QUOTE_KEYS = new Set(['cfg', 'sellerPub', 'expiresAt', 'offerSig', 'artifact', 'direct'])
+// 'mode' names the payload encoding ('key'|'fragment') — carried on the wire
+// so a delivered that out-runs the quote message still claims correctly
+const QUOTE_KEYS = new Set(['cfg', 'sellerPub', 'expiresAt', 'offerSig', 'artifact', 'direct', 'mode'])
 export const publicQuoteError = (q: unknown): string | null => {
   if (q === null || typeof q !== 'object' || Array.isArray(q)) return 'quote is not an object'
   const o = q as Record<string, unknown>
@@ -235,6 +237,7 @@ export const publicQuoteError = (q: unknown): string | null => {
     if (typeof ar.scriptHash !== 'string' || !/^[0-9a-f]{64}$/i.test(ar.scriptHash)) return 'bad artifact.scriptHash'
   }
   if (o.direct !== undefined && typeof o.direct !== 'boolean') return 'bad direct'
+  if (o.mode !== undefined && o.mode !== 'key' && o.mode !== 'fragment') return 'bad mode'
   return null
 }
 

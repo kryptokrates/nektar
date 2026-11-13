@@ -161,7 +161,9 @@ export function configFromEnv(env = process.env): RuntimeConfig {
       // miners may reject; keep ≥1)
       feeRateSatPerKb: env.NEKTAR_FEE_RATE_SAT_PER_KB ? Number(env.NEKTAR_FEE_RATE_SAT_PER_KB) : ttn ? 1 : undefined,
       maxFeePerTx: Number(env.NEKTAR_MAX_FEE_SATS_PER_TX ?? 1000),
-      maxSpendPerDay: Number(env.NEKTAR_MAX_SPEND_SATS_PER_DAY ?? 20_000),
+      // 'unlimited' is the documented opt-out — Number('unlimited') is NaN,
+      // and NaN would silently disable EVERY cap (fee > NaN is false)
+      maxSpendPerDay: env.NEKTAR_MAX_SPEND_SATS_PER_DAY === 'unlimited' ? Number.MAX_SAFE_INTEGER : Number(env.NEKTAR_MAX_SPEND_SATS_PER_DAY ?? 20_000),
       minBroadcastIntervalMs: Number(env.NEKTAR_MIN_BROADCAST_INTERVAL_MS ?? 250)
     }
   }

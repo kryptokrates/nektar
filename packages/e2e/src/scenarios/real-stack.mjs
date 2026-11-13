@@ -493,13 +493,19 @@ function spawnInstance(a) {
             ...(shimFor(a.hosts[0]) !== undefined ? { NEKTAR_WATCH_PUBLIC: shimFor(a.hosts[0]) } : {})
           }
         : {}),
+      // a run commits ~20-50K sats/agent (tree mints, offer ads, escrow) —
+      // above the 10K hard daily cap, and tree mints pay the agent's OWN
+      // derived locks (self-moves the guard can't prove, so they count
+      // conservatively). The documented soak opt-out is 'unlimited' — cap
+      // enforcement itself is covered by automation-safety tests.
+      NEKTAR_DAILY_CAP_SATS: 'unlimited',
+      NEKTAR_MAX_SPEND_SATS_PER_DAY: 'unlimited',
       ...(LIVE
         ? {
             NEKTAR_FUND_WIF: a.key.toWif([0xef]),
             ...(a.fundHex ? { NEKTAR_FUND_TXIDS: `hex:${a.fundHex}` } : {}),
             NEKTAR_KEY_PASSPHRASE: a.pass ?? `testnet-agent-${a.name}`,
-            NEKTAR_MIN_BROADCAST_INTERVAL_MS: '250',
-            NEKTAR_MAX_SPEND_SATS_PER_DAY: '100000'
+            NEKTAR_MIN_BROADCAST_INTERVAL_MS: '250'
           }
         : {
             NEKTAR_FUND_WIF: a.key.toWif(),

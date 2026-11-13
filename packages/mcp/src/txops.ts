@@ -33,6 +33,9 @@ export interface TxOpsDeps {
    *  (uppercase, '' = undecidable); injected by the runtime so TxOps never
    *  hand-rolls the /tx fetch or owns the endpoint default */
   txStatus?: (txid: string) => Promise<string>
+  /** proof pull cadence — the missed-push recovery floor per txid
+   *  (default 120_000; NEKTAR_PROOF_PULL_MS at the construction site) */
+  proofPullMs?: number
 }
 
 export class TxOps {
@@ -69,10 +72,10 @@ export class TxOps {
       if (tx !== undefined) this.deps.txs().put(tx)
     }
     if (tx === undefined) return undefined
-    // proofs arrive by push; this pull only covers one missed while the
-    // instance was down, so it is tried once and then rarely
+    // proofs arrive by push; this pull is only the missed-push recovery
+    // floor — bounded cadence, never the mechanism
     const proofLookup = this.deps.proofLookup()
-    if (tx.merklePath === undefined && proofLookup !== undefined && this.lookupDue(`proof:${txid}`, 600_000)) {
+    if (tx.merklePath === undefined && proofLookup !== undefined && this.lookupDue(`proof:${txid}`, this.deps.proofPullMs ?? 120_000)) {
       let mp: MerklePath | undefined
       try {
         mp = await proofLookup(txid)

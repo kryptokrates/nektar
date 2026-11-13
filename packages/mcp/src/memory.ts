@@ -352,7 +352,8 @@ export class NektarMemory {
       txLookup: () => this.txLookup,
       proofLookup: () => this.proofLookup,
       network: this.opts.network,
-      txStatus: this.opts.txStatus
+      txStatus: this.opts.txStatus,
+      proofPullMs: Number(nektarEnv('NEKTAR_PROOF_PULL_MS') ?? 120_000)
     })
     this.custodyOps = new CustodyOps({
       funder: this.funder as CustodyOpsDeps['funder'],

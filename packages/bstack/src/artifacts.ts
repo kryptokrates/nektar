@@ -208,7 +208,9 @@ const offerDigest = (o: OfferAd) => sha256(utf8(offerCanonical(o)))
 const QUOTE_CFG_KEYS = new Set(['sellerPkh', 'price', 'hWrapped', 'refundAfter', 'maxFee'])
 // 'artifact' is the covenant identity pin (MARKET-WIRE §3) — optional so
 // pre-artifact quotes still validate
-const QUOTE_KEYS = new Set(['cfg', 'sellerPub', 'expiresAt', 'offerSig', 'artifact'])
+// 'direct' marks the quote as accepting outright P2PKH payment to sellerPkh
+// (MARKET-WIRE §3) — market-signed, so it can't be stripped or forged
+const QUOTE_KEYS = new Set(['cfg', 'sellerPub', 'expiresAt', 'offerSig', 'artifact', 'direct'])
 export const publicQuoteError = (q: unknown): string | null => {
   if (q === null || typeof q !== 'object' || Array.isArray(q)) return 'quote is not an object'
   const o = q as Record<string, unknown>
@@ -232,6 +234,7 @@ export const publicQuoteError = (q: unknown): string | null => {
     if (typeof ar.artifactId !== 'string' || ar.artifactId.length === 0 || ar.artifactId.length > 64) return 'bad artifact.artifactId'
     if (typeof ar.scriptHash !== 'string' || !/^[0-9a-f]{64}$/i.test(ar.scriptHash)) return 'bad artifact.scriptHash'
   }
+  if (o.direct !== undefined && typeof o.direct !== 'boolean') return 'bad direct'
   return null
 }
 

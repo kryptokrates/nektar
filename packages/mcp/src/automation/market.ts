@@ -20,7 +20,18 @@ export type MarketMessage =
       depositorPkh: string
       tx?: string
     }
-  | { type: 'delivered'; wantId: string; offerId: string; txid: string; tx: string }
+  | {
+      type: 'delivered'
+      wantId: string
+      offerId: string
+      /** escrow rail: the on-chain disclosure txid; direct rail: the payment txid */
+      txid: string
+      /** escrow rail: the covenant-spend wire (BEEF/EF/hex); direct rail omits it */
+      tx?: string
+      /** direct rail: the `wrapped` disclosure value itself — verified against
+       *  the quote's hWrapped exactly like an on-chain reveal */
+      value?: string
+    }
   // encrypted self-note the buyer keeps in its own inbox until the deal ends —
   // enough to rebuild the operation after losing the automation database
   | {
@@ -93,6 +104,9 @@ export interface MarketDeps {
   txWire?: (txid: string, maxBytes?: number) => string | undefined
   readTx?: (hex: string) => Promise<Ingested>
   rememberTx?: (tx: Transaction) => void
+  /** mark an output of an accepted transaction as ours — direct-rail payments
+   *  become the seller's custody the moment the payment verifies */
+  ownOutput?: (tx: Transaction, vout: number) => void
   settleEscrow?: (tx: Transaction) => void
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
@@ -118,6 +132,14 @@ export interface MarketOptions {
   escrowFeeReserveSats: number
   sellerSafetyBlocks: number
   approvalTtlMs: number
+  /** buyer-side direct-rail ceiling: when a quote advertises `direct` and the
+   *  price is at or under this, the deal settles by outright P2PKH payment
+   *  instead of an escrow covenant — payment-final (no refund), so the cap
+   *  is the operator's no-recourse exposure. Absent/0 = escrow only. */
+  directMaxSats?: number
+  /** seller-side opt-in: quotes carry `direct: true` so counterparties may
+   *  choose the direct rail for this sale */
+  directAccept?: boolean
 }
 
 const DEFAULTS: MarketOptions = {
@@ -640,7 +662,8 @@ export class MarketEngine {
         refundAfter: h + this.o.refundBlocks,
         maxFee: this.o.saleMaxFee,
         expiresAt: h + this.o.offerTtlBlocks,
-        ...(p.disclosure.allowPublic ? {} : { buyerPub: w.pub })
+        ...(p.disclosure.allowPublic ? {} : { buyerPub: w.pub }),
+        ...(this.o.directAccept === true ? { direct: true } : {})
       })
       const c = offer.commitment
       const so = await signOffer(this.d.key, {
@@ -713,11 +736,19 @@ export class MarketEngine {
     }
     if (from !== w.pub || m.wantId !== w.wantId) return
     if (m.depositorPkh !== pkhOf(from)) return await refuse('depositor is not the buyer key')
+    // the rail is chosen by what the buyer actually funded, not by the
+    // advertisement: a covenant output means escrow, a P2PKH to sellerPkh
+    // means direct (only when the quote advertised it — payment-final)
     const cfg = { ...offer.cfg, price: BigInt(offer.cfg.price), refundAfter: BigInt(offer.cfg.refundAfter), maxFee: BigInt(offer.cfg.maxFee) }
-    const script = DisclosureSaleHost.escrowScript(cfg, m.depositorPkh)
-    if (m.utxo?.script !== script) return await refuse('escrow script does not match the quoted terms')
-    if (!Number.isSafeInteger(m.utxo.satoshis) || m.utxo.satoshis < Number(offer.cfg.price) + 1) return await refuse('escrow is underfunded')
-    // the buyer hands over the escrow itself. It is checked here, against our
+    const escrowScript = DisclosureSaleHost.escrowScript(cfg, m.depositorPkh)
+    const directScript = new P2PKH().lock(Array.from(fromHex(offer.cfg.sellerPkh))).toHex()
+    let direct = false
+    if (m.utxo?.script === escrowScript) direct = false
+    else if (m.utxo?.script === directScript && offer.direct === true) direct = true
+    else return await refuse(offer.direct === true ? 'accept is neither the quoted covenant nor a P2PKH to the seller key' : 'escrow script does not match the quoted terms')
+    if (!Number.isSafeInteger(m.utxo.satoshis) || m.utxo.satoshis < Number(offer.cfg.price) + (direct ? 0 : 1))
+      return await refuse(direct ? 'payment is underfunded' : 'escrow is underfunded')
+    // the buyer hands over the payment itself. It is checked here, against our
     // own headers where its ancestry is proven, and then put on the network
     // by us — no indexer has to have seen it first.
     let tx: Transaction | undefined
@@ -734,7 +765,7 @@ export class MarketEngine {
     } else tx = await this.d.fetchTx(m.utxo.txid)
     const out = tx?.outputs[m.utxo.vout]
     if (!tx || tx.id('hex') !== m.utxo.txid || !out) return await refuse('escrow transaction not observable yet')
-    if (out.lockingScript.toHex() !== script || out.satoshis !== m.utxo.satoshis) return await refuse('on-chain escrow output differs from the claimed one')
+    if (out.lockingScript.toHex() !== m.utxo.script || out.satoshis !== m.utxo.satoshis) return await refuse('on-chain escrow output differs from the claimed one')
     // every escrow input whose parent we can resolve is evaluated locally —
     // a bogus or unsigned spend is refused before the network is even asked
     let spends = 0
@@ -753,12 +784,15 @@ export class MarketEngine {
     }
     this.d.rememberTx?.(tx)
     const h = await this.d.height()
-    if (h + this.o.sellerSafetyBlocks >= Number(offer.cfg.refundAfter)) return await refuse('too close to the refund deadline')
+    if (!direct && h + this.o.sellerSafetyBlocks >= Number(offer.cfg.refundAfter)) return await refuse('too close to the refund deadline')
     const next = await this.d.store.transition(op.operationId, op.revision, 'completing', {
-      cause: 'escrow_verified',
-      data: { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } },
+      cause: direct ? 'payment_verified' : 'escrow_verified',
+      // a direct payment is already the seller's money — mark it owned so the
+      // funder/wallet layer takes custody of the output we just broadcast
+      data: direct ? { direct: true, utxo: m.utxo } : { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } },
       evidence: { spv, spends }
     })
+    if (direct) this.d.ownOutput?.(tx, m.utxo.vout)
     await this.complete(next)
   }
 
@@ -766,6 +800,27 @@ export class MarketEngine {
     const e = op.data.escrow as any
     const offer = op.data.offer as any
     const w = (op.data.want as SignedWant).want
+    // the direct rail: the payment is already a P2PKH output the seller owns —
+    // no covenant to spend. Delivery hands `wrapped` over inside the envelope;
+    // the payment txid stands in as the settlement reference the advance loop
+    // watches for a merkle proof (rejected payment → completion_failed)
+    if (op.data.direct === true) {
+      const p = op.data.utxo as { txid: string; vout: number; satoshis: number; script: string }
+      await this.d.store.transition(op.operationId, op.revision, 'completion_submitted', {
+        cause: 'direct_delivery',
+        data: { completeTxid: p.txid, sellerSats: p.satoshis },
+        outbox: [
+          {
+            actionId: `${op.operationId}:delivered`,
+            kind: 'message',
+            destination: w.pub,
+            payload: { type: 'delivered', wantId: w.wantId, offerId: op.operationId, txid: p.txid, value: offer.wrapped },
+            ...(deliveredPackRefs(this.d, op) !== undefined ? { refs: deliveredPackRefs(this.d, op) } : {})
+          }
+        ]
+      })
+      return
+    }
     const r = await this.d.call('sale#complete', { cfg: e.cfg, utxo: e.utxo, wrapped: offer.wrapped })
     if (r.accepted !== true) {
       await this.d.store.transition(op.operationId, op.revision, 'completion_failed', {
@@ -849,26 +904,44 @@ export class MarketEngine {
     const chosen = (op.data.offers as Record<string, StoredOffer>)[sel.key]
     if (from !== chosen.so.offer.pub || m.offerId !== chosen.so.offer.offerId) return
     const utxo = op.data.utxo as { txid: string; vout: number; satoshis: number; script: string }
-    let got: Ingested
-    try {
-      got = await this.readTx(m.tx)
-    } catch {
-      return
-    }
-    const tx = got.tx
-    // the reveal must be a valid spend of OUR escrow output — checked by
-    // running the script here, so the disclosure is accepted the moment it
-    // arrives instead of when an indexer shows it
-    if (tx.id('hex') !== m.txid || !spendValid(tx, 0, utxo)) return
-    this.d.rememberTx?.(tx)
     const q = chosen.so.offer.offer as any
-    const claim = await this.d.call('sale#claim', {
-      txHex: tx.toHex(),
-      hWrapped: q.cfg.hWrapped,
-      sellerPub: from,
-      offerMode: chosen.mode,
-      ...(chosen.commitment ? { commitment: chosen.commitment } : {})
-    })
+    const direct = op.data.direct === true
+    let spv = false
+    let claim: any
+    if (direct) {
+      // direct rail: `wrapped` rides inside the envelope — nothing on-chain
+      // to run, the hash commitment is the whole verification
+      if (typeof m.value !== 'string' || m.value.length === 0) return
+      claim = await this.d.call('sale#claim', {
+        valueHex: m.value,
+        hWrapped: q.cfg.hWrapped,
+        sellerPub: from,
+        offerMode: chosen.mode,
+        ...(chosen.commitment ? { commitment: chosen.commitment } : {})
+      })
+    } else {
+      if (typeof m.tx !== 'string') return
+      let got: Ingested
+      try {
+        got = await this.readTx(m.tx)
+      } catch {
+        return
+      }
+      const tx = got.tx
+      // the reveal must be a valid spend of OUR escrow output — checked by
+      // running the script here, so the disclosure is accepted the moment it
+      // arrives instead of when an indexer shows it
+      if (tx.id('hex') !== m.txid || !spendValid(tx, 0, utxo)) return
+      this.d.rememberTx?.(tx)
+      spv = got.spv
+      claim = await this.d.call('sale#claim', {
+        txHex: tx.toHex(),
+        hWrapped: q.cfg.hWrapped,
+        sellerPub: from,
+        offerMode: chosen.mode,
+        ...(chosen.commitment ? { commitment: chosen.commitment } : {})
+      })
+    }
     await this.d.store.settleBudget(op.data.escrowAction as string)
     let text: string | undefined
     try {
@@ -900,7 +973,7 @@ export class MarketEngine {
         verified: claim.verified,
         authorVerified: claim.authorVerified,
         reason: claim.reason,
-        spv: got.spv,
+        spv,
         ...(refs !== undefined ? { refs } : {})
       }
     })
@@ -1022,7 +1095,8 @@ export class MarketEngine {
         escrowTxid: n.utxo.txid,
         escrowAction: n.escrowAction,
         amounts: n.amounts,
-        restored: true
+        restored: true,
+        ...(n.escrow?.direct === true ? { direct: true } : {})
       }
     })
     if (!created) return
@@ -1191,6 +1265,131 @@ export class MarketEngine {
     })
     this.inflight.add(op.operationId)
     try {
+      // the direct rail — the quote advertised outright payment and the price
+      // sits inside the operator's no-recourse ceiling. Same policy, budget
+      // and wallet-custody mechanics; what changes is the settlement itself:
+      // a P2PKH output to the seller, payment-final, instead of a covenant
+      const direct =
+        q.direct === true && this.o.directMaxSats !== undefined && this.o.directMaxSats > 0 && price <= this.o.directMaxSats
+      if (direct) {
+        const payScript = new P2PKH().lock(Array.from(fromHex(q.cfg.sellerPkh))).toHex()
+        const payOffer = {
+          sellerPub: q.sellerPub,
+          offerSig: q.offerSig,
+          expiresAt: q.expiresAt,
+          commitment: s.commitment ?? (s.so.offer.leaf ? { leaf: s.so.offer.leaf } : undefined)
+        }
+        let pay: any
+        let payTx: Transaction | undefined
+        if (this.wallet && this.d.settleEscrow) {
+          let built: any
+          try {
+            built = await this.d.call('sale#payBuild', { amount: price, scriptHex: payScript, cfg: q.cfg, offer: payOffer })
+          } catch (e) {
+            await this.d.store.releaseBudget(ctx.actionId)
+            await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', {
+              cause: 'payment_build_refused',
+              lastError: (e as Error).message.slice(0, 500)
+            })
+            return
+          }
+          const tx = (built.tx as Transaction | undefined) ?? Transaction.fromHex(built.txHex)
+          payTx = tx
+          for (const inp of tx.inputs) {
+            if (!inp.sourceTransaction && inp.sourceTXID) inp.sourceTransaction = (await this.d.fetchTx(inp.sourceTXID)) as Transaction
+          }
+          await this.wallet.prepare(ctx, 'payment', tx)
+          const st = await this.d.store.transition(funding.operationId, funding.revision, 'funding', {
+            cause: 'payment_prepared',
+            data: { pendingEscrow: { cfg: { direct: true, refundAfter: q.cfg.refundAfter, depositorPkh: pkhOf(this.me) }, utxo: built.utxo } }
+          })
+          await this.d.afterPrepare?.(ctx.actionId)
+          const sub = await this.wallet.submit(ctx.actionId)
+          if (sub.state !== 'submitted' && sub.state !== 'observed' && sub.state !== 'confirmed') {
+            if (sub.state === 'rejected' && /SpendGuard refused/i.test(sub.detail ?? '')) {
+              await this.d.store.releaseBudget(ctx.actionId)
+              await this.d.store.transition(st.operationId, st.revision, 'funding_failed', {
+                cause: 'spend_guard_refused',
+                lastError: (sub.detail ?? '').slice(0, 500)
+              })
+            } else
+              await this.escalate(
+                st,
+                'unresolved_payment',
+                digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }),
+                0,
+                { reason: sub.detail ?? sub.state },
+                'uncertain'
+              )
+            return
+          }
+          this.d.settleEscrow(tx)
+          this.d.rememberTx?.(tx)
+          pay = { accepted: true, txid: built.utxo.txid, utxo: built.utxo }
+        } else {
+          try {
+            pay = await this.d.call('sale#pay', { amount: price, scriptHex: payScript, cfg: q.cfg, offer: payOffer })
+          } catch (e) {
+            await this.d.store.releaseBudget(ctx.actionId)
+            await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', {
+              cause: 'payment_refused_before_broadcast',
+              lastError: (e as Error).message.slice(0, 500)
+            })
+            return
+          }
+        }
+        if (pay.accepted !== true) {
+          if (/SpendGuard refused/i.test(String(pay.reason))) {
+            await this.d.store.releaseBudget(ctx.actionId)
+            await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', {
+              cause: 'spend_guard_refused',
+              lastError: String(pay.reason).slice(0, 500)
+            })
+          } else
+            await this.escalate(
+              funding,
+              'unresolved_payment',
+              digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }),
+              0,
+              { reason: pay.reason },
+              'uncertain'
+            )
+          return
+        }
+        await this.d.store.commitBudget(ctx.actionId)
+        // the escrow slot carries {direct:true} so every rebuild path (note,
+        // reconcile, wallet-row resume) reconstructs the rail from the data,
+        // not the message that brought it
+        const directEscrow = { ...q.cfg, direct: true, depositorPkh: pkhOf(this.me) }
+        const cur = (await this.d.store.operation(op.operationId))!
+        await this.d.store.transition(cur.operationId, cur.revision, 'awaiting_disclosure', {
+          cause: 'payment_broadcast',
+          data: { direct: true, escrow: directEscrow, utxo: pay.utxo, escrowTxid: pay.txid },
+          dueHeight: Number(q.cfg.refundAfter),
+          outbox: [
+            {
+              actionId: `${op.operationId}:accept`,
+              kind: 'message',
+              destination: s.so.offer.pub,
+              payload: {
+                type: 'accept',
+                wantId: w.wantId,
+                offerId: s.so.offer.offerId,
+                utxo: pay.utxo,
+                depositorPkh: pkhOf(this.me),
+                ...this.escrowWire(pay.txid, payTx?.toHex() ?? pay.txHex)
+              }
+            },
+            {
+              actionId: `${op.operationId}:note`,
+              kind: 'message',
+              destination: this.me,
+              payload: this.noteFor(op, w.wantId, s, directEscrow, pay.utxo, ctx.actionId, amounts, payTx?.toHex() ?? pay.txHex)
+            }
+          ]
+        })
+        return
+      }
       let r: any
       let escrowTx: Transaction | undefined
       if (this.wallet && this.d.settleEscrow) {
@@ -1385,14 +1584,17 @@ export class MarketEngine {
       // the escrow output in the stored bytes and rebuild the cfg from the offer
       const q = s.so.offer.offer as any
       const depositorPkh = pkhOf(this.me)
-      const script = DisclosureSaleHost.escrowScript(
-        { ...q.cfg, price: BigInt(q.cfg.price), refundAfter: BigInt(q.cfg.refundAfter), maxFee: BigInt(q.cfg.maxFee) },
-        depositorPkh
-      )
+      const direct = q.direct === true
+      const script = direct
+        ? new P2PKH().lock(Array.from(fromHex(q.cfg.sellerPkh))).toHex()
+        : DisclosureSaleHost.escrowScript(
+            { ...q.cfg, price: BigInt(q.cfg.price), refundAfter: BigInt(q.cfg.refundAfter), maxFee: BigInt(q.cfg.maxFee) },
+            depositorPkh
+          )
       const tx = Transaction.fromHex(wtx.rawHex)
       const vout = tx.outputs.findIndex((o) => o.lockingScript.toHex() === script)
       if (vout < 0) return // cannot prove which output is the escrow — stay uncertain
-      escrow = { ...q.cfg, depositorPkh }
+      escrow = { ...q.cfg, depositorPkh, ...(direct ? { direct: true } : {}) }
       utxo = { txid, vout, satoshis: tx.outputs[vout].satoshis ?? 0, script }
     }
     if (escrow === undefined || utxo === undefined) return
@@ -1401,7 +1603,7 @@ export class MarketEngine {
     await cancel()
     await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
       cause: 'reconciled_escrow_observed',
-      data: { escrow, utxo, escrowTxid: txid },
+      data: { escrow, utxo, escrowTxid: txid, ...(escrow.direct === true ? { direct: true } : {}) },
       dueHeight: Number(escrow.refundAfter),
       outbox: [
         {
@@ -1475,6 +1677,12 @@ export class MarketEngine {
       return
     }
     if (lim.exit === 'refund') {
+      if (op.data.direct === true) {
+        // a direct payment can never be reclaimed — the honest terminal is
+        // disputed, not refunded
+        await this.d.store.transition(op.operationId, op.revision, 'disputed', { cause: 'stuck_timeout_payment_final', dueHeight: null })
+        return
+      }
       if (op.data.escrow !== undefined && op.data.utxo !== undefined) return await this.refund(op)
       // money never reached the escrow — abort is honest, 'refunded' is not
       if (op.data.escrowAction !== undefined) await this.d.store.releaseBudget(op.data.escrowAction as string)
@@ -1539,7 +1747,7 @@ export class MarketEngine {
             const w2 = (op.data.want as SignedWant).want
             await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
               cause: 'escrow_resumed_same_bytes',
-              data: { escrow: pending.cfg, utxo: pending.utxo, escrowTxid: pending.utxo.txid },
+              data: { escrow: pending.cfg, utxo: pending.utxo, escrowTxid: pending.utxo.txid, ...(pending.cfg.direct === true ? { direct: true } : {}) },
               dueHeight: Number(pending.cfg.refundAfter),
               outbox: [
                 {
@@ -1594,7 +1802,15 @@ export class MarketEngine {
           await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected_late', dueHeight: null })
           return
         }
-        if (op.dueHeight !== undefined && height >= op.dueHeight) return await this.refund(op)
+        if (op.dueHeight !== undefined && height >= op.dueHeight) {
+          // direct rail: the payment is final and the deliver-by lapsed —
+          // record the outcome for scoring, there is nothing left to reclaim
+          if (op.data.direct === true) {
+            await this.d.store.transition(op.operationId, op.revision, 'disputed', { cause: 'delivery_lapsed_payment_final', dueHeight: null })
+            return
+          }
+          return await this.refund(op)
+        }
       }
     }
     if (op.role === 'observer' && (op.state === 'watching' || op.state === 'seizing') && op.dueHeight !== undefined && height >= op.dueHeight)

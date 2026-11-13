@@ -92,7 +92,12 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
     opts: {
       ...(rt.network === 'main' ? { saleMaxFee: 500 } : {}),
       ...(process.env.NEKTAR_OFFER_TTL_BLOCKS ? { offerTtlBlocks: Number(process.env.NEKTAR_OFFER_TTL_BLOCKS) } : {}),
-      ...(process.env.NEKTAR_REFUND_BLOCKS ? { refundBlocks: Number(process.env.NEKTAR_REFUND_BLOCKS) } : {})
+      ...(process.env.NEKTAR_REFUND_BLOCKS ? { refundBlocks: Number(process.env.NEKTAR_REFUND_BLOCKS) } : {}),
+      // the direct rail — NEKTAR_DIRECT_MAX_SATS caps buyer-side outright
+      // payments (payment-final, no refund); NEKTAR_DIRECT_ACCEPT=1 advertises
+      // it on our quotes. Both off by default: escrow stays the default rail.
+      ...(process.env.NEKTAR_DIRECT_MAX_SATS ? { directMaxSats: Number(process.env.NEKTAR_DIRECT_MAX_SATS) } : {}),
+      ...(process.env.NEKTAR_DIRECT_ACCEPT === '1' ? { directAccept: true } : {})
     },
     log: (line) =>
       process.stderr.write(`nektar: ${line}

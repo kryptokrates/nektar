@@ -271,6 +271,9 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
     rememberTx: (tx) => {
       mem.rememberTx(tx)
     },
+    ownOutput: (tx, vout) => {
+      mem.addOwnedOut(tx, vout)
+    },
     settleEscrow: (tx) => {
       for (const inp of tx.inputs) {
         const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
@@ -729,9 +732,14 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
           head?.sha256 === digest ? { bucket: objectStore.bucket, key, sha256: digest, size: head.size } : await objectStore.put(key, bytes, 'application/json')
         try {
           // content-addressed like packs: chirp://<root> resolves the bundle
-          // from any store holding chirp/<hash> objects, not just our bucket
-          const { storeChirp } = await import('../chirp.js')
-          ref.chirp = await storeChirp(objectStore, bytes)
+          // from any store holding chirp/<hash> objects, not just our bucket.
+          // A retry after a crash only republishes when the root object is
+          // actually missing — same keys otherwise, so head-before-put keeps
+          // the crash-and-retry idempotent instead of counting second puts
+          const { chirpRefFor, storeChirp } = await import('../chirp.js')
+          const c = chirpRefFor(bytes)
+          if ((await objectStore.head(c.rootKey).catch(() => undefined)) === undefined) await storeChirp(objectStore, bytes)
+          ref.chirp = c.url
           ref.endpoint = objectStore.endpoint
         } catch {
           /* chirp publish is best-effort — the keyed ref alone still resolves */

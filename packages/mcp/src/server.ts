@@ -770,7 +770,18 @@ export const TOOLS = [
 // consolidated state machines: op → internal case label (never listed in
 // TOOLS — reachable only through the 'sale'/'claim' dispatchers, which keep
 // the paid-disclosure gate on BOTH the tool and the resolved op)
-const PAID_SALE_TOOLS = new Set(['sale', 'sale#offer', 'sale#offerMemory', 'sale#escrow', 'sale#escrowBuild', 'sale#complete', 'sale#refund', 'sale#claim'])
+const PAID_SALE_TOOLS = new Set([
+  'sale',
+  'sale#offer',
+  'sale#offerMemory',
+  'sale#escrow',
+  'sale#escrowBuild',
+  'sale#complete',
+  'sale#refund',
+  'sale#claim',
+  'sale#pay',
+  'sale#payBuild'
+])
 const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'])
 const CLAIM_OPS = new Set(['deploy', 'status', 'settle', 'deploySale', 'buySale'])
 const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAID_DISCLOSURE ?? '')
@@ -1020,7 +1031,8 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         maxFee: BigInt(args.maxFee),
         buyerPub: args.buyerPub,
         leaf: leafHex,
-        expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined
+        expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined,
+        direct: args.direct === true
       })
       return {
         cfg: { ...r.cfg, price: Number(r.cfg.price), refundAfter: Number(r.cfg.refundAfter), maxFee: Number(r.cfg.maxFee) },
@@ -1029,6 +1041,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         expiresAt: Number(r.expiresAt ?? 0n),
         offerSig: r.offerSig,
         artifact: COVENANT_ID,
+        ...(r.direct === true ? { direct: true } : {}),
         mode,
         commitment: {
           leaf: leafHex,
@@ -1101,6 +1114,32 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       settleEscrow(mem, funding, tx)
       return { accepted: true, txid: tx.id('hex'), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh } }
     }
+    case 'sale#pay':
+    case 'sale#payBuild': {
+      // the direct rail: an outright P2PKH payment to the quote's sellerPkh —
+      // payment-final, so the same delegation-sig guard applies (a swapped
+      // cfg would point the payment at a substituted key)
+      const isBuild = name === 'sale#payBuild'
+      if (args.offer) {
+        const { verifyOfferSig } = await import('@nektar/identity')
+        const buyerPub = mem.operatorKey().toPublicKey().toString()
+        const leaf = args.offer.commitment?.leaf ?? ''
+        if (
+          !verifyOfferSig(
+            { cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig, expiresAt: args.offer.expiresAt },
+            args.offer.buyerPub ?? buyerPub,
+            leaf
+          ) &&
+          !verifyOfferSig({ cfg: args.cfg, sellerPub: args.offer.sellerPub, offerSig: args.offer.offerSig, expiresAt: args.offer.expiresAt }, '', leaf)
+        )
+          throw new Error('sale op=pay: offerSig does not verify — cfg may have been substituted')
+        const exp = BigInt(args.offer.expiresAt ?? 0)
+        if (exp > 0n && BigInt(await mem.chainHeight()) >= exp) throw new Error(`sale op=pay: offer expired at height ${exp}`)
+      }
+      const pr = await mem.sendSats({ amount: args.amount, scriptHex: args.scriptHex, buildOnly: isBuild })
+      if (isBuild) return { tx: pr.tx, txHex: pr.txHex, utxo: pr.utxo }
+      return { accepted: true, txid: pr.txid, utxo: pr.utxo, txHex: pr.txHex }
+    }
     case 'sale#complete': {
       const { DisclosureSaleHost } = await import('@nektar/anchor')
       // depositorPkh is always the LOCAL depositor (operator key) — the offer's
@@ -1152,9 +1191,14 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
     }
     case 'sale#claim': {
       const { Transaction } = await import('@bsv/sdk')
-      const { claimDisclosure } = await import('@nektar/identity')
-      const tx = Transaction.fromHex(args.txHex)
-      const r = await claimDisclosure(tx, { hWrapped: args.hWrapped, buyerKey: mem.wrapCustody(), sellerPub: args.sellerPub })
+      const { claimDisclosure, claimValue } = await import('@nektar/identity')
+      const { fromHex: fh2 } = await import('@nektar/core')
+      // the direct rail delivers `wrapped` inside the envelope — no covenant
+      // carrier to parse; verification is the same sha256→hWrapped→unwrap path
+      const r =
+        args.valueHex !== undefined
+          ? await claimValue(fh2(args.valueHex), { hWrapped: args.hWrapped, buyerKey: mem.wrapCustody(), sellerPub: args.sellerPub })
+          : await claimDisclosure(Transaction.fromHex(args.txHex), { hWrapped: args.hWrapped, buyerKey: mem.wrapCustody(), sellerPub: args.sellerPub })
       const out: any = { mode: r.mode, valueHex: Buffer.from(r.value).toString('hex') }
       // memory-bound payload? verify the bought bytes hash to the anchored leaf
       if (args.commitment?.leaf) {

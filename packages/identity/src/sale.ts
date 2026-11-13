@@ -52,6 +52,13 @@ export interface SaleOffer {
    *  artifact before funding, so a lookalike covenant is refused early.
    *  Optional on read: pre-artifact quotes omit it. */
   artifact?: { artifactId: string; scriptHash: string }
+  /** seller opt-in to the direct rail: for these terms the seller also
+   *  accepts an outright P2PKH payment to `sellerPkh` instead of an escrow —
+   *  the trade is then payment-final (no refund window), so the buyer's
+   *  engine caps it under its own `directMaxSats`. Lives outside `cfg` so
+   *  the covenant attestation bytes stay identical; the market-level
+   *  artifact signature still covers it. */
+  direct?: boolean
 }
 
 /** canonical bytes the offer signature covers — every field a MITM could swap. */
@@ -95,6 +102,8 @@ export async function offerDisclosure(params: {
   leaf?: string
   /** §19 horizon: block height at which the offer lapses (0 = no expiry) */
   expiresAt?: bigint
+  /** advertise the direct rail — see SaleOffer.direct */
+  direct?: boolean
 }): Promise<SaleOffer> {
   const signer = custodySigner(params.sellerKey)
   const { wrapped, hWrapped } = params.buyerPub ? await wrapSaleValue(params.sellerKey, params.buyerPub, params.value) : plainSaleValue(params.value)
@@ -104,7 +113,7 @@ export async function offerDisclosure(params: {
   const expiresAt = params.expiresAt ?? 0n
   const digest = offerDigest(cfg, params.buyerPub ?? '', params.leaf ?? '', expiresAt)
   const offerSig = (await signer.sign(Array.from(Hash.sha256(Buffer.from(digest))))).toDER('hex') as string
-  return { cfg, wrapped: toHex(wrapped), sellerPub, expiresAt, offerSig }
+  return { cfg, wrapped: toHex(wrapped), sellerPub, expiresAt, offerSig, ...(params.direct === true ? { direct: true } : {}) }
 }
 
 /** Buyer-side: verify the seller's offer attestation before funding the
@@ -133,6 +142,7 @@ export function publicSaleQuote(offer: SaleOffer): SaleQuote {
   }
   if (offer.expiresAt !== undefined) q.expiresAt = offer.expiresAt
   if (offer.artifact !== undefined) q.artifact = offer.artifact
+  if (offer.direct !== undefined) q.direct = offer.direct
   return q
 }
 
@@ -146,6 +156,7 @@ export function saleQuoteWire(q: SaleQuote): Record<string, unknown> {
   }
   if (q.expiresAt !== undefined) out.expiresAt = n(q.expiresAt)
   if (q.artifact !== undefined) out.artifact = q.artifact
+  if (q.direct !== undefined) out.direct = q.direct
   return out
 }
 
@@ -250,18 +261,18 @@ export interface ClaimResult {
   wrapped: Bytes
 }
 
-/** Buyer claim: parse `wrapped` from the buy tx, check sha256 == hWrapped,
- *  unwrap to the buyer's key (private) or return as-is (public listing —
- *  detectable because the blob is NOT a well-formed WrappedKey). */
-export async function claimDisclosure(
-  tx: Transaction,
+/** Buyer claim: check `wrapped` against the committed hWrapped and unwrap
+ *  to the buyer's key (private) or return as-is (public listing — detectable
+ *  because the blob is NOT a well-formed WrappedKey). Carrier-agnostic —
+ *  the direct rail hands `wrapped` inside the envelope instead of on-chain. */
+export async function claimValue(
+  wrapped: Bytes,
   opts: {
     hWrapped: string
     buyerKey?: WrapCustody
     sellerPub?: string
   }
 ): Promise<ClaimResult> {
-  const wrapped = parseBuyWrapped(tx)
   if (toHex(sha256(wrapped)) !== opts.hWrapped) throw new Error('claimDisclosure: wrapped does not match the committed hWrapped')
   if (opts.buyerKey && opts.sellerPub) {
     const wk: WrappedKey = { salt: wrapped.subarray(0, 32), nonce: wrapped.subarray(32, 44), ct: wrapped.subarray(44) }
@@ -273,4 +284,16 @@ export async function claimDisclosure(
     }
   }
   return { value: wrapped, mode: 'public', wrapped }
+}
+
+/** Buyer claim: parse `wrapped` from the buy tx and verify as `claimValue`. */
+export async function claimDisclosure(
+  tx: Transaction,
+  opts: {
+    hWrapped: string
+    buyerKey?: WrapCustody
+    sellerPub?: string
+  }
+): Promise<ClaimResult> {
+  return await claimValue(parseBuyWrapped(tx), opts)
 }

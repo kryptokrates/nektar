@@ -2131,3 +2131,100 @@ test('bstack AF: crash between the put and the transition — one event, one obj
     await h2.close()
   }
 })
+
+test('bstack AG: direct rail — policy-gated P2PKH payment settles the deal without a covenant', { timeout: 300_000 }, async (t) => {
+  const chain = (await stackChain(t))!
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const msgs = bus()
+  const logs: string[] = []
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  let b!: A
+  let s!: A
+  try {
+    // buyer allows outright payments ≤500 sats; the seller advertises it —
+    // the 200-sat deal settles on the direct rail with no escrow covenant
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], msgs, chain, logs, dir, opts: { directMaxSats: 500 } })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], msgs, chain, logs, dir, opts: { directAccept: true } })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 8)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    const done = async () => {
+      const bo = await buyerOp(b)
+      const so = (await saleOps(s))[0]
+      return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.has(so.state)
+    }
+    assert.ok(await until([b.rt, s.rt], chain, done, 80), 'logs: ' + logs.slice(-20).join(' | '))
+    const bo = (await buyerOp(b))!
+    const so = (await saleOps(s))[0]
+    assert.equal(bo.state, 'disclosure_verified')
+    assert.ok(so && COMPLETE.has(so.state), `seller op ${so?.state}`)
+    // the rail marker survived: the utxo the accept carried is a plain P2PKH
+    // to the seller — no covenant locking script, no refund window
+    assert.equal(bo.data.direct, true)
+    const utxo = bo.data.utxo as { txid: string; vout: number; satoshis: number; script: string }
+    assert.match(utxo.script, /^76a914[0-9a-f]{40}88ac$/, `payment output is P2PKH, got ${utxo.script}`)
+    assert.equal(utxo.satoshis, 200, 'the payment output is exactly the price')
+    // the seller's settlement reference is the payment tx itself — it owns
+    // the sats already; 'completeTxid' is the payment's proof to watch
+    assert.equal(so.data.completeTxid, utxo.txid)
+  } finally {
+    try {
+      await b?.rt.stop()
+    } catch {
+      /* already stopped */
+    }
+    try {
+      await s?.rt.stop()
+    } catch {
+      /* already stopped */
+    }
+    await h1.close()
+    await h2.close()
+  }
+})
+
+test('bstack AH: direct rail gated off without opts — same deal still settles via escrow covenant', { timeout: 300_000 }, async (t) => {
+  const chain = (await stackChain(t))!
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
+  const msgs = bus()
+  const logs: string[] = []
+  const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
+  let b!: A
+  let s!: A
+  try {
+    // the seller advertises direct but the buyer's ceiling is unset — escrow
+    // stays the default rail; nothing about the deal's shape should change
+    b = await mkagent('buyer', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
+    s = await mkagent('seller', { hosts: [h1.url, h2.url], msgs, chain, logs, dir, opts: { directAccept: true } })
+    await sellerize(s, 200)
+    await drive([b.rt, s.rt], chain, 8)
+    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+    const done = async () => {
+      const bo = await buyerOp(b)
+      const so = (await saleOps(s))[0]
+      return bo?.state === 'disclosure_verified' && so !== undefined && COMPLETE.has(so.state)
+    }
+    assert.ok(await until([b.rt, s.rt], chain, done, 80), 'logs: ' + logs.slice(-20).join(' | '))
+    const bo = (await buyerOp(b))!
+    assert.equal(bo.state, 'disclosure_verified')
+    // escrow ran: no direct marker, and the utxo is the covenant script
+    assert.notEqual(bo.data.direct, true)
+    const utxo = bo.data.utxo as { txid: string; vout: number; satoshis: number; script: string }
+    assert.doesNotMatch(utxo.script, /^76a914[0-9a-f]{40}88ac$/, 'escrow output is the covenant, not a bare P2PKH')
+  } finally {
+    try {
+      await b?.rt.stop()
+    } catch {
+      /* already stopped */
+    }
+    try {
+      await s?.rt.stop()
+    } catch {
+      /* already stopped */
+    }
+    await h1.close()
+    await h2.close()
+  }
+})

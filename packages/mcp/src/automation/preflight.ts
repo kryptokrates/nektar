@@ -19,7 +19,7 @@
 //
 // Every check returns {check, pass, detail, fix} — doctor's shape — and the
 // report's verdict is deterministic: pass = every check green.
-import { Transaction, P2PKH, PrivateKey } from '@bsv/sdk'
+import { Transaction, P2PKH, PrivateKey, UnlockingScript } from '@bsv/sdk'
 import { mkdirSync, readFileSync, writeFileSync, accessSync, constants } from 'node:fs'
 import { join } from 'node:path'
 import type { NektarMemory } from '../memory.js'
@@ -322,7 +322,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     const parent = new Transaction()
     parent.addOutput({ lockingScript: new P2PKH().lock(tmp.toPublicKey().toHash()), satoshis: 1_000_000 })
     const tx = new Transaction()
-    tx.addInput({ sourceTXID: parent.id('hex'), sourceOutputIndex: 0, sourceTransaction: parent, unlockingScript: { toHex: () => '00' } as never })
+    tx.addInput({ sourceTXID: parent.id('hex'), sourceOutputIndex: 0, sourceTransaction: parent, unlockingScript: new UnlockingScript([{ op: 0 }]) })
     tx.addOutput({ lockingScript: new P2PKH().lock(tmp.toPublicKey().toHash()), satoshis: 546 })
     const r = await bounded(mem.broadcastTx(tx), ceil.chainMs * 2, 'spend dry-run')
     const desc = r.description ?? ''

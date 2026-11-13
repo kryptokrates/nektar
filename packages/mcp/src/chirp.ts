@@ -27,6 +27,14 @@ function chirpObjects(bytes: Uint8Array): { url: string; rootHash: string; objec
   return { url: chirpURL(built.rootHash), rootHash: toHex(Uint8Array.from(built.rootHash)), objects }
 }
 
+/** The chirp:// URL `bytes` would resolve to, and the store key its root node
+ *  lives under — no puts, so a retry can check the root exists before
+ *  republishing (the object set is deterministic content-addressed data). */
+export function chirpRefFor(bytes: Uint8Array): { url: string; rootKey: string } {
+  const { url, rootHash } = chirpObjects(bytes)
+  return { url, rootKey: chirpKey(rootHash) }
+}
+
 /** PUT every CHIRP object of `bytes` to the store; returns the chirp:// URL.
  *  Idempotent — the same bytes always produce the same keys. */
 export async function storeChirp(store: S3ObjectStore, bytes: Uint8Array, bucket?: string): Promise<string> {

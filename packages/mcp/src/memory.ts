@@ -1086,8 +1086,17 @@ export class NektarMemory {
   /** one-call payment: build + sign + broadcast a plain spend to a payee
    *  address or locking script. Unlike payInvoice (which returns a BEEF for
    *  the payee's settlePayment), this airs the tx and returns its txid —
-   *  the way to fund another agent's fee address. */
-  async sendSats(args: { amount: number; address?: string; scriptHex?: string; opReturn?: string }): Promise<{ txid: string; paidSats: number }> {
+   *  the way to fund another agent's fee address. `buildOnly` returns the
+   *  fee'd, template-unlocked tx without broadcasting — the wallet-custody
+   *  path signs and submits it itself (market direct rail). `utxo` names
+   *  the payment output so an accept envelope can point at it. */
+  async sendSats(args: {
+    amount: number
+    address?: string
+    scriptHex?: string
+    opReturn?: string
+    buildOnly?: boolean
+  }): Promise<{ txid: string; paidSats: number; tx?: Transaction; txHex?: string; utxo?: { txid: string; vout: number; satoshis: number; script: string } }> {
     const { P2PKH, LockingScript, Transaction, SatoshisPerKilobyte } = await import('@bsv/sdk')
     if (!args.address && !args.scriptHex) throw new Error('sendSats: address or scriptHex required')
     const script = args.scriptHex ? LockingScript.fromHex(args.scriptHex) : new P2PKH().lock(args.address!)
@@ -1109,13 +1118,21 @@ export class NektarMemory {
       change: true
     })
     await tx.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
+    // tx.id/toHex serialize the unlocking script, so nothing can be read off
+    // the tx until templates resolve in sign()
     await tx.sign()
+    const utxo = { txid: tx.id('hex'), vout: 0, satoshis: args.amount, script: script.toHex() }
+    if (args.buildOnly === true) {
+      // wallet coordinator path: signed but not aired — prepare serializes
+      // the tx and submit does the broadcast + ownership marks
+      return { txid: utxo.txid, paidSats: args.amount, tx, txHex: tx.toHex(), utxo }
+    }
     const br = await this.chain.broadcast(tx)
     if (br.status !== 'success') throw new Error(`sendSats broadcast failed: ${br.description ?? 'unknown'}`)
     this.txs.put(tx)
     ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
     ;(this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
-    return { txid: tx.id('hex'), paidSats: args.amount }
+    return { txid: tx.id('hex'), paidSats: args.amount, txHex: tx.toHex(), utxo }
   }
 
   /** D4 (§19 M_U): the shard's anchored rotation ledger — genesis owner pub

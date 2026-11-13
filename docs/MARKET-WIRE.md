@@ -59,7 +59,8 @@ Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
   "sellerPub": "<33B compressed-pub hex>",
   "offerSig": "<DER hex>",
   "expiresAt": <height>,
-  "artifact": { "artifactId": "DisclosureSale", "scriptHash": "<32B hex>" }
+  "artifact": { "artifactId": "DisclosureSale", "scriptHash": "<32B hex>" },
+  "direct": true
 }
 ```
 
@@ -73,6 +74,9 @@ Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
   instantiate** — same parameter layout over a different covenant is the
   lookalike attack this field kills. Our id: `DisclosureSale`,
   `scriptHash` of `packages/contracts/DisclosureSale.json` `.script`.
+- `direct` (optional, signed like the rest of the ad): the seller accepts
+  outright P2PKH payment to `cfg.sellerPkh` for this sale — see §4.1.
+  Absent ⇒ escrow-only.
 
 ## 4. Escrow
 
@@ -89,17 +93,43 @@ Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
 - Private sales: `wrapped = salt‖nonce‖ct` — BRC-42 ECDH of the value to
   `buyerPub` under context `nektar:sale:v1`. Public: `wrapped` is the value.
 
+### 4.1 Direct rail (`direct: true`)
+
+Payment-final settlement with no covenant — for counterparties that trade
+recourse for speed. The rail is chosen by the buyer per deal and signalled
+by the funded output, not by a separate message field:
+
+- Buyer funds `P2PKH(cfg.sellerPkh)` with `satoshis ≥ price` — a plain
+  payment, change back to the buyer, ancestry attached like the escrow tx.
+- Seller accepts either rail: `utxo.script == escrowScript` ⇒ escrow;
+  `utxo.script == P2PKH(sellerPkh)` (and the quote advertised `direct`) ⇒
+  direct. Anything else is refused — a P2PKH accept on a non-advertised
+  quote is a refusal, not a downgrade.
+- Seller verifies exactly as for escrow: attached ancestry, every input's
+  spend locally evaluated, then the seller broadcasts the payment itself.
+  Broadcast acceptance ⇒ the money is the seller's (it marks the output
+  owned immediately).
+- No refund path exists. `refundAfter` on the quote is reused as a
+  deliver-by deadline: if delivery lapses the buyer's operation ends
+  `disputed` (`delivery_lapsed_payment_final`), never `refunded`.
+- Buyers SHOULD only take this rail for prices under a configured ceiling
+  (`directMaxSats`); it is the no-recourse exposure.
+
 ## 5. Market messages (bbox envelopes)
 
 Messages ride encrypted envelopes (`ls_bbox`, office-scoped), body
 `{market: <MarketMessage>}`:
 
 - `quote`     `{wantId, offerId, commitment, mode}` — proof bundle attach.
-- `accept`    `{wantId, offerId, utxo, depositorPkh, tx?}` — escrow funded;
-  `tx` carries the escrow tx (Atomic BEEF wire preferred) so the seller
-  verifies without an indexer.
-- `delivered` `{wantId, offerId, txid, tx}` — the buy tx wire; the buyer
-  runs `spendValid` locally on arrival — no confirmation wait.
+- `accept`    `{wantId, offerId, utxo, depositorPkh, tx?}` — settlement
+  funded; `utxo.script` selects the rail (covenant ⇒ escrow, P2PKH ⇒
+  direct when advertised). `tx` carries the funding tx (Atomic BEEF wire
+  preferred) so the seller verifies without an indexer.
+- `delivered` `{wantId, offerId, txid, tx?, value?}` — escrow rail:
+  `tx`/`txid` are the covenant-spend wire, buyer runs `spendValid` locally
+  on arrival — no confirmation wait. Direct rail: `tx` is omitted, `txid`
+  is the payment txid, and `value` carries `wrapped` itself — verified
+  against `cfg.hWrapped` exactly like an on-chain reveal.
 - `note` / `sellerNote` — encrypted self-recovery state (rebuilds a lost
   operation; foreign impls may ignore but SHOULD still ack the envelope).
 - Acks are receipt carriers on `tm_bbox_<office>`; read envelopes MUST be

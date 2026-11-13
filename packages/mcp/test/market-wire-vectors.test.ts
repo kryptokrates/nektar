@@ -55,6 +55,13 @@ test('market wire — lanes, canonical artifacts, nkt1 payloads are byte-stable'
   // the wire quote keeps the artifact through the public projection
   const sq = saleQuoteWire(publicSaleQuote({ ...mv.saleQuote, cfg: { ...mv.saleQuote.cfg }, artifact: mv.covenant } as never))
   assert.deepEqual(sq.artifact, mv.covenant)
+  // direct: the rail advertisement rides inside the signed offer — it is not
+  // a post-hoc flag, so tampering breaks the market signature like any field
+  const dq = { ...mv.saleQuote, cfg: { ...mv.saleQuote.cfg }, artifact: mv.covenant, direct: true }
+  assert.equal(saleQuoteWire(publicSaleQuote(dq as never)).direct, true)
+  const dso = await signOffer(PrivateKey.fromHex(mv.privateKeyHex), { ...mv.offer.offer, offer: dq })
+  assert.equal((dso.offer.offer as { direct?: boolean }).direct, true)
+  assert.ok(verifyOffer(dso.offer, dso.sig, { now: 1800000000000 }))
 })
 
 test('market wire — a malformed artifact field fails quote shape validation', async () => {

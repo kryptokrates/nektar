@@ -220,6 +220,17 @@ reserves budget, funds escrow, verifies the disclosure against the committed
 leaf, and refunds itself at the deadline if the seller never completes. An
 observer watches a bond descriptor and seizes at the on-chain deadline.
 
+The direct rail (`docs/MARKET-WIRE.md` §4.1) settles a deal by outright
+P2PKH payment instead of the escrow covenant — payment-final, no refund,
+delivery carried in the encrypted envelope. Both sides opt in
+independently: the seller advertises `direct` on its quotes with
+`NEKTAR_DIRECT_ACCEPT=1`, and the buyer only takes the rail for prices at
+or under its own no-recourse ceiling `NEKTAR_DIRECT_MAX_SATS=<sats>`. With
+either side off the deal is identical to the escrow flow — the funded
+output selects the rail, never a trust assumption. Lapsed delivery leaves
+the operation `disputed` (the payment is final), so keep the ceiling to
+amounts worth losing.
+
 Where the human is: the policy (once); anything the policy does not cover
 (price/fee/locked-capital above limits, domain outside policy, unresolved
 payment state) pauses that one operation and waits in `approvals`. Revoking a

@@ -153,6 +153,11 @@ export class MemoryTreeLedger implements TreeLedger {
 export class KnexTreeLedger implements TreeLedger {
   constructor(private kx: Knex) {}
   private ensured?: Promise<void>
+  /** create the lane tables up front (migrations/seed copies need the DDL
+   *  before they can insert rows; methods self-ensure lazily otherwise) */
+  async init(): Promise<void> {
+    await this.ensure()
+  }
   private async ensure(): Promise<void> {
     return await (this.ensured ??= this.doEnsure().catch((e) => {
       this.ensured = undefined

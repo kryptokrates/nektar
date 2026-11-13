@@ -30,10 +30,11 @@ import type { ZkClearance } from './types.js'
 
 export interface ZkProveOpsDeps {
   store: ShardStore
-  /** shard → anchor chain tail (canonical-link list) — shared map */
-  tails: Map<string, AnchorLink[]>
-  anchorTxs: Map<string, Transaction>
-  anchors: Map<string, AnchorChain>
+  /** shard → anchor chain tail (canonical-link list) — shared maps are
+   *  read-only here; the memory facade stays the single owner/writer */
+  tails: ReadonlyMap<string, AnchorLink[]>
+  anchorTxs: ReadonlyMap<string, Transaction>
+  anchors: ReadonlyMap<string, AnchorChain>
   chain: Broadcaster
   /** single-use consume — ZkQueryOps stays the registry owner */
   consumeZkQuery: (queryIdHex: string) => boolean
@@ -56,8 +57,10 @@ export class ZkProveOps {
     return nektarEnv('NEKTAR_PROOF_SHARDING') !== '0'
   }
 
-  /** holder side: STARK membership proof for record `seq` of `shard`, bound to
-   *  a verifier-issued queryId. */
+  /** Wright §13 holder side: π ⊢ leaf ∈ the SAME double-SHA-256 batch tree
+   *  whose root R_n is anchored on BSV, bound to a verifier-issued queryId.
+   *  ZK-STARK (RISC Zero succinct receipt): reveals neither the leaf, its
+   *  index nor the path. */
   async proveMembership(shard: string, seq: number, queryIdHex: string): Promise<{ bytes: Uint8Array; ms: number }> {
     if (!/^[0-9a-f]{64}$/.test(queryIdHex)) throw new Error('queryId must be 32-byte hex (issued by the verifier)')
     const rec = await this.deps.store.bySeq(shard, seq)
@@ -269,7 +272,7 @@ export class ZkProveOps {
   /** the policy root the verifier trusts: the configured anchored root when it
    *  equals the recomputed DAG root (same rule as recall's POL-016 gate), else
    *  an anchored `dagroot:<root>` record in `shard` matching the recomputed root. */
-  async expectedPolicyRoot(shard: string): Promise<string | undefined> {
+  private async expectedPolicyRoot(shard: string): Promise<string | undefined> {
     const dag = this.deps.policyDag()
     if (!dag) return undefined
     const recomputed = toHex(dag.policyRoot())

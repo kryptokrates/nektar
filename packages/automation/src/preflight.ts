@@ -33,7 +33,7 @@ import type { S3ObjectStore } from '@nektar/store'
 // PreflightCheck/PreflightReport live in types.ts — the shared type barrel —
 // so the barrel never has to reach back into this module (type-only cycle).
 import type { PreflightCheck, PreflightReport } from './types.js'
-export type { PreflightCheck, PreflightReport }
+export type { PreflightReport }
 
 interface PreflightCfg {
   network: string

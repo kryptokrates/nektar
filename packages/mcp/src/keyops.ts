@@ -3,15 +3,7 @@
 // derivations for shards/log/fund, the operator wallet/signer accessors, and
 // the wrapCustody edge (ECDH cannot go through a signer).
 import { PrivateKey, ProtoWallet } from '@bsv/sdk'
-import {
-  walletSigner,
-  custodySigner,
-  FUND_SIGN_ARGS,
-  toSigner,
-  type SignerLike,
-  type DigestSigner,
-  type SignerWallet
-} from '@nektar/core'
+import { walletSigner, custodySigner, FUND_SIGN_ARGS, toSigner, type SignerLike, type DigestSigner, type SignerWallet } from '@nektar/core'
 import type { WalletInterface } from '@bsv/sdk'
 import type { NektarMemoryOptions, OperatorWallet } from './types.js'
 

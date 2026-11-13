@@ -368,7 +368,13 @@ const stubShim = async () => {
       const v = await new Promise<object>((r) => {
         const t = setTimeout(() => r({ changed: false }), Math.min(waitMs, 10_000))
         const list = waiters.get(service) ?? []
-        waiters.set(service, [...list, (x) => { clearTimeout(t); r(x) }])
+        waiters.set(service, [
+          ...list,
+          (x) => {
+            clearTimeout(t)
+            r(x)
+          }
+        ])
       })
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify(v))
@@ -395,7 +401,13 @@ const stubShim = async () => {
 }
 
 const STOP_ALL = async (rts: Array<Automation | undefined>) => {
-  for (const r of rts) { try { await r?.stop() } catch { /* */ } }
+  for (const r of rts) {
+    try {
+      await r?.stop()
+    } catch {
+      /* */
+    }
+  }
 }
 
 // T2 — throughput: K buyers race one seller's shard; every deal must land
@@ -432,7 +444,8 @@ test('T2: throughput — 3 concurrent buyers on one seller, all deals land', { t
     console.log(`    throughput: ${wants.length} deals in ${rounds} rounds / ${ms}ms wall`)
   } finally {
     await STOP_ALL([s?.rt, ...buyers.map((b) => b.rt)])
-    await h1.close(); await h2.close()
+    await h1.close()
+    await h2.close()
   }
 })
 
@@ -471,12 +484,16 @@ test('T3: watch-shim A/B — notify fires, deal completes at-or-below poll round
       return { rounds, ms: Date.now() - t0, notifies: shim?.notifies() ?? 0, seen: shim?.seen() ?? [] }
     } finally {
       await STOP_ALL([b?.rt, s?.rt])
-      await shim?.close(); await h1.close(); await h2.close()
+      await shim?.close()
+      await h1.close()
+      await h2.close()
     }
   }
   const poll = await run(false)
   const watched = await run(true)
-  console.log(`    A/B: poll ${poll.rounds}r/${poll.ms}ms vs watch ${watched.rounds}r/${watched.ms}ms (notifies=${watched.notifies}, shim saw: ${watched.seen.join(', ') || 'nothing'})`)
+  console.log(
+    `    A/B: poll ${poll.rounds}r/${poll.ms}ms vs watch ${watched.rounds}r/${watched.ms}ms (notifies=${watched.notifies}, shim saw: ${watched.seen.join(', ') || 'nothing'})`
+  )
   assert.ok(watched.notifies > 0, 'shim never notified — the publish→wake path did not fire')
   assert.ok(watched.rounds <= poll.rounds + 2, `watch path was slower (${watched.rounds}r) than polling (${poll.rounds}r)`)
 })
@@ -507,11 +524,16 @@ test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { t
       const t0 = Date.now()
       if (kb === 1) {
         // sanity: under the envelope cap the deal completes end-to-end
-        const rounds = await until([b.rt, s.rt], chain, async () => {
-          const bo = await opFor(b, w.wantId)
-          const so = await saleFor(s, w.wantId)
-          return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
-        }, 80)
+        const rounds = await until(
+          [b.rt, s.rt],
+          chain,
+          async () => {
+            const bo = await opFor(b, w.wantId)
+            const so = await saleFor(s, w.wantId)
+            return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
+          },
+          80
+        )
         const bo = await opFor(b, w.wantId)
         console.log(`    ${kb}KB: ${rounds} rounds / ${Date.now() - t0}ms — buyer=${bo?.state}`)
         assert.ok(rounds > 0 && bo !== undefined && BUYER_DONE.has(bo.state), `1KB deal failed: buyer=${bo?.state} | ` + logs.slice(-12).join(' | '))
@@ -519,23 +541,36 @@ test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { t
         // over the cap: the disclosure can never ride the envelope. The buyer
         // must not sit at awaiting_disclosure — the escrow covenant gives it
         // a way out at dueHeight (refund) or the reconcile path escalates it.
-        assert.ok((await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure', 60)) > 0,
-          `${kb}KB escrow never funded | ` + logs.slice(-15).join(' | '))
+        assert.ok(
+          (await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure', 60)) > 0,
+          `${kb}KB escrow never funded | ` + logs.slice(-15).join(' | ')
+        )
         await drive([b.rt, s.rt], chain, 15) // delivery retries burn + outbox dead-letters
         await chain.mine(40)
         const honest = new Set(['refunded', 'uncertain', 'disclosure_verified', 'useful', 'refunding'])
-        const rounds = await until([b.rt, s.rt], chain, async () => {
-          const bo = await opFor(b, w.wantId)
-          return bo !== undefined && honest.has(bo.state)
-        }, 30)
+        const rounds = await until(
+          [b.rt, s.rt],
+          chain,
+          async () => {
+            const bo = await opFor(b, w.wantId)
+            return bo !== undefined && honest.has(bo.state)
+          },
+          30
+        )
         const bo = await opFor(b, w.wantId)
         const so = await saleFor(s, w.wantId)
-        console.log(`    ${kb}KB: ${rounds} rounds / ${Date.now() - t0}ms — buyer=${bo?.state} cause=${JSON.stringify((bo?.data as { cause?: string })?.cause)} seller=${so?.state}`)
-        assert.ok(rounds > 0, `${kb}KB buyer wedged at ${bo?.state} past the refund gate — an undeliverable payload must end visibly | ` + logs.slice(-12).join(' | '))
+        console.log(
+          `    ${kb}KB: ${rounds} rounds / ${Date.now() - t0}ms — buyer=${bo?.state} cause=${JSON.stringify((bo?.data as { cause?: string })?.cause)} seller=${so?.state}`
+        )
+        assert.ok(
+          rounds > 0,
+          `${kb}KB buyer wedged at ${bo?.state} past the refund gate — an undeliverable payload must end visibly | ` + logs.slice(-12).join(' | ')
+        )
       }
     } finally {
       await STOP_ALL([b?.rt, s?.rt])
-      await h1.close(); await h2.close()
+      await h1.close()
+      await h2.close()
     }
   }
 })
@@ -557,8 +592,7 @@ test('R3: withholding host loses the offer — deal completes + withheld is logg
     await drive([b.rt, s.rt], chain, 12)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
     const before = new Set(h1.txids())
-    assert.ok((await until([b.rt, s.rt], chain, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
-      'no quote | ' + logs.slice(-15).join(' | '))
+    assert.ok((await until([b.rt, s.rt], chain, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0, 'no quote | ' + logs.slice(-15).join(' | '))
     // everything the seller just published to h1 becomes invisible to lookups
     if (f1.fault.withholdTxids === undefined) f1.fault.withholdTxids = new Set()
     for (const id of h1.txids()) if (!before.has(id)) f1.fault.withholdTxids.add(id)
@@ -568,10 +602,15 @@ test('R3: withholding host loses the offer — deal completes + withheld is logg
       return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
     })
     assert.ok(rounds > 0, 'withheld offer starved the deal | ' + logs.slice(-20).join(' | '))
-    assert.ok(logs.some((l) => l.includes('withheld')), 'withholding was never logged — bookkeeping is blind')
+    assert.ok(
+      logs.some((l) => l.includes('withheld')),
+      'withholding was never logged — bookkeeping is blind'
+    )
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await f1.close(); await h1.close(); await h2.close()
+    await f1.close()
+    await h1.close()
+    await h2.close()
   }
 })
 
@@ -592,13 +631,17 @@ test('R4: partition heals — ops resume after deaf window, no double-broadcast'
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
-    assert.ok((await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
-      'never funded | ' + logs.slice(-15).join(' | '))
-    f1.fault.down = true; f2.fault.down = true
+    assert.ok(
+      (await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
+      'never funded | ' + logs.slice(-15).join(' | ')
+    )
+    f1.fault.down = true
+    f2.fault.down = true
     await drive([b.rt, s.rt], chain, 10) // deaf window — new work pauses, in-flight persists
     const mid = await opFor(b, w.wantId)
     assert.ok(mid !== undefined && mid.state !== 'useful' && mid.state !== 'disclosure_verified', 'deal progressed while deaf — impossible')
-    f1.fault.down = false; f2.fault.down = false
+    f1.fault.down = false
+    f2.fault.down = false
     const rounds = await until([b.rt, s.rt], chain, async () => {
       const bo = await opFor(b, w.wantId)
       const so = await saleFor(s, w.wantId)
@@ -609,7 +652,10 @@ test('R4: partition heals — ops resume after deaf window, no double-broadcast'
     assert.equal((bo!.data as { escrowTxid?: string }).escrowTxid, (mid.data as { escrowTxid?: string }).escrowTxid, 'escrow was re-broadcast after heal')
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await f1.close(); await f2.close(); await h1.close(); await h2.close()
+    await f1.close()
+    await f2.close()
+    await h1.close()
+    await h2.close()
   }
 })
 
@@ -635,7 +681,9 @@ test('R6: duplicate lookup outputs — deal completes once, no double-ingest', {
     assert.ok(!logs.some((l) => /double|already.*claim|rejected/i.test(l)), 'duplicate delivery leaked into the op path | ' + logs.slice(-15).join(' | '))
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await f1.close(); await h1.close(); await h2.close()
+    await f1.close()
+    await h1.close()
+    await h2.close()
   }
 })
 
@@ -655,25 +703,29 @@ test('R7: late escrow rejection — funding_failed via txState event, budget rel
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
-    assert.ok((await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
-      'escrow never funded | ' + logs.slice(-15).join(' | '))
+    assert.ok(
+      (await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
+      'escrow never funded | ' + logs.slice(-15).join(' | ')
+    )
     const escrowTxid = (await opFor(b, w.wantId))!.data.escrowTxid as string
     const orig = b.mem.txState.bind(b.mem)
-    ;(b.mem as unknown as { txState: (txid: string) => Promise<string> }).txState =
-      async (txid: string) => (txid === escrowTxid ? 'rejected' : orig(txid))
+    ;(b.mem as unknown as { txState: (txid: string) => Promise<string> }).txState = async (txid: string) => (txid === escrowTxid ? 'rejected' : orig(txid))
     const rounds = await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'funding_failed')
     assert.ok(rounds > 0, 'rejected funding did not land funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await opFor(b, w.wantId))!
     assert.equal(bo.state, 'funding_failed')
     const evts = await b.rt.store.events(bo.operationId)
-    assert.ok(evts.some((e) => e.cause === 'escrow_rejected_late'),
-      `expected an escrow_rejected_late event, got: ${evts.map((e) => e.cause).join(', ')}`)
+    assert.ok(
+      evts.some((e) => e.cause === 'escrow_rejected_late'),
+      `expected an escrow_rejected_late event, got: ${evts.map((e) => e.cause).join(', ')}`
+    )
     b.mem.txState = orig as never
     await drive([b.rt], chain, 4) // settled state must stick — no retry resurrection
     assert.equal((await opFor(b, w.wantId))!.state, 'funding_failed', 'rejected funding retried itself back to life')
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await h1.close(); await h2.close()
+    await h1.close()
+    await h2.close()
   }
 })
 
@@ -692,18 +744,21 @@ test('R8: concurrency invariant — 3 buyers race, all terminal, settlement txid
     await sellerize(s, 200)
     for (const n of ['b1', 'b2', 'b3']) buyers.push(await mkagent(n, [h1.url, h2.url], chain, logs, dir))
     await drive([s.rt, ...buyers.map((b) => b.rt)], chain, 10)
-    const wants = await Promise.all(
-      buyers.map((b) => b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash))
-    )
+    const wants = await Promise.all(buyers.map((b) => b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)))
     const all = [s.rt, ...buyers.map((b) => b.rt)]
     const terminal = new Set([...BUYER_DONE, 'denied', 'expired', 'funding_failed', 'canceled', 'refunded', 'disputed', 'not_useful'])
-    const rounds = await until(all, chain, async () => {
-      for (const [i, b] of buyers.entries()) {
-        const st = (await opFor(b, wants[i].wantId))?.state
-        if (st === undefined || !terminal.has(st)) return false
-      }
-      return true
-    }, 160)
+    const rounds = await until(
+      all,
+      chain,
+      async () => {
+        for (const [i, b] of buyers.entries()) {
+          const st = (await opFor(b, wants[i].wantId))?.state
+          if (st === undefined || !terminal.has(st)) return false
+        }
+        return true
+      },
+      160
+    )
     assert.ok(rounds > 0, 'a buyer op never reached a terminal state | ' + logs.slice(-25).join(' | '))
     const sales = (await saleOps(s)).filter((o) => COMPLETE.has(o.state))
     const txids = sales.map((o) => (o.data as { completeTxid?: string }).completeTxid).filter(Boolean)
@@ -713,7 +768,8 @@ test('R8: concurrency invariant — 3 buyers race, all terminal, settlement txid
     console.log(`    race: ${won}/${buyers.length} buyers completed, ${sales.length} seller settlements`)
   } finally {
     await STOP_ALL([s?.rt, ...buyers.map((b) => b.rt)])
-    await h1.close(); await h2.close()
+    await h1.close()
+    await h2.close()
   }
 })
 
@@ -735,20 +791,28 @@ test('R9: timeout truth — escrow refund vs direct dispute on seller ghosting',
       await drive([b.rt, s.rt], chain, 10)
       const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
       // ghost after the quote lands — the accept the buyer sends never gets read
-      assert.ok((await until([b.rt, s.rt], chain, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
-        'no quote | ' + logs.slice(-15).join(' | '))
+      assert.ok(
+        (await until([b.rt, s.rt], chain, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
+        'no quote | ' + logs.slice(-15).join(' | ')
+      )
       await s.rt.stop()
-      assert.ok((await until([b.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
-        'escrow never funded | ' + logs.slice(-15).join(' | '))
+      assert.ok(
+        (await until([b.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
+        'escrow never funded | ' + logs.slice(-15).join(' | ')
+      )
       await chain.mine(40)
       const refundRounds = await until([b.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'refunded', 40)
       const boEnd = await opFor(b, w.wantId)
       const evts = boEnd !== undefined ? await b.rt.store.events(boEnd.operationId) : []
-      assert.ok(refundRounds > 0,
-        `escrow rail did not refund — buyer=${boEnd?.state} dueHeight=${boEnd?.dueHeight} lastError=${boEnd?.lastError} events=${evts.map((e) => e.cause).join(',')} | ` + logs.slice(-15).join(' | '))
+      assert.ok(
+        refundRounds > 0,
+        `escrow rail did not refund — buyer=${boEnd?.state} dueHeight=${boEnd?.dueHeight} lastError=${boEnd?.lastError} events=${evts.map((e) => e.cause).join(',')} | ` +
+          logs.slice(-15).join(' | ')
+      )
     } finally {
       await STOP_ALL([b?.rt, s?.rt])
-      await h1.close(); await h2.close()
+      await h1.close()
+      await h2.close()
     }
   }
   // (b) direct rail → disputed
@@ -764,8 +828,10 @@ test('R9: timeout truth — escrow refund vs direct dispute on seller ghosting',
       await sellerize(s, 200)
       await drive([b.rt, s.rt], chain, 10)
       const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
-      assert.ok((await until([b.rt, s.rt], chain, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
-        'no quote | ' + logs.slice(-15).join(' | '))
+      assert.ok(
+        (await until([b.rt, s.rt], chain, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
+        'no quote | ' + logs.slice(-15).join(' | ')
+      )
       await s.rt.stop() // ghost before the accept is read — delivery can never start
       const hit = await until([b.rt], chain, async () => {
         const bo = await opFor(b, w.wantId)
@@ -776,11 +842,15 @@ test('R9: timeout truth — escrow refund vs direct dispute on seller ghosting',
       const dispRounds = await until([b.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'disputed', 40)
       const boEnd = await opFor(b, w.wantId)
       const evts = boEnd !== undefined ? await b.rt.store.events(boEnd.operationId) : []
-      assert.ok(dispRounds > 0,
-        `direct rail did not dispute — buyer=${boEnd?.state} dueHeight=${boEnd?.dueHeight} lastError=${boEnd?.lastError} events=${evts.map((e) => e.cause).join(',')} | ` + logs.slice(-15).join(' | '))
+      assert.ok(
+        dispRounds > 0,
+        `direct rail did not dispute — buyer=${boEnd?.state} dueHeight=${boEnd?.dueHeight} lastError=${boEnd?.lastError} events=${evts.map((e) => e.cause).join(',')} | ` +
+          logs.slice(-15).join(' | ')
+      )
     } finally {
       await STOP_ALL([b?.rt, s?.rt])
-      await h1.close(); await h2.close()
+      await h1.close()
+      await h2.close()
     }
   }
 })

@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { BudgetAuthority } from '@nektar/automation'
 import type { Automation } from '@nektar/automation'
-import { PrivateKey, PublicKey, ProtoWallet, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte, type WalletInterface } from '@bsv/sdk'
+import { PrivateKey, PublicKey, ProtoWallet, Signature, Transaction, LockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import {
   utf8,
   toHex,
@@ -16,7 +16,6 @@ import {
   dsha256,
   concat,
   field,
-  hash160,
   merkleRoot,
   merkleProof,
   identityHash,
@@ -24,36 +23,20 @@ import {
   apply,
   encodeDelta,
   decodeDelta,
-  serializeFragment,
-  parseFragment,
-  writeFileAtomic,
   TAG_RECEIPT_SIG,
   type Fragment,
   type Bytes,
   type Provenance,
   walletSigner,
-  custodySigner,
-  FUND_SIGN_ARGS,
-  unlockP2PKH,
   signerPubHex,
-  signerAddress,
   toSigner,
   nektarEnv,
   type SignerLike,
   type DigestSigner,
   type SignerWallet
 } from '@nektar/core'
-import {
-  BatchLog,
-  MemoryShardStore,
-  verifyProvenance,
-  PromiseMonitor,
-  type ShardStore,
-  type LogRecord,
-  type Checkpoint
-} from '@nektar/log'
+import { BatchLog, MemoryShardStore, verifyProvenance, PromiseMonitor, type ShardStore, type LogRecord, type Checkpoint } from '@nektar/log'
 import { Metrics } from './metrics.js'
-import { storeChirp, fetchObjectByRef } from '@nektar/store'
 
 const DELTA_PREFIX = 'delta:'
 
@@ -77,16 +60,7 @@ import { AttestOps } from './attestops.js'
 import { ProofStore } from './proofstore.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
-import {
-  deriveFragmentKey,
-  deriveLevelKey,
-  encryptFragment,
-  decryptFragment,
-  shredKey,
-  canonicalKeyID,
-  CRYPTO_PROTOCOL_ID,
-  type FragmentContext
-} from '@nektar/crypto'
+import { encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@nektar/crypto'
 import { TxStore } from '@nektar/chain'
 import type { Broadcaster, ChainTracker, Funder } from '@nektar/chain'
 import * as idbind from '@nektar/identity'
@@ -822,9 +796,8 @@ export class NektarMemory {
     return this.cryptoOps.ctx(shard, seq, level)
   }
 
-  /** Wright §13 holder side: π ⊢ leaf ∈ the SAME double-SHA-256 batch tree whose
-   *  root R_n is anchored on BSV, bound to a verifier-issued queryId. ZK-STARK
-   *  (RISC Zero succinct receipt): reveals neither the leaf, its index nor the path. */
+  /** holder side: STARK membership proof bound to a verifier-issued queryId
+   *  (Wright §13 — contract/mechanism documented on ZkProveOps). */
   async proveMembership(shard: string, seq: number, queryIdHex: string): Promise<{ bytes: Uint8Array; ms: number }> {
     return await this.zkProveOps.proveMembership(shard, seq, queryIdHex)
   }
@@ -867,8 +840,8 @@ export class NektarMemory {
     return await this.attestOps.verifyAttestation(txid, proofBytes)
   }
 
-  /** verifier side: the proof's root must be the R of an SPV-verified anchor of
-   *  THIS shard on its canonical chain, and the queryId one we issued (single use). */
+  /** verifier side: anchored-STARK verification against THIS shard's
+   *  canonical chain; the queryId is ours, single use (ZkProveOps). */
   async verifyMembership(shard: string, seq: number, bytes: Uint8Array): Promise<{ ok: boolean; reason?: string; anchorTxid?: string; statement: string }> {
     return await this.zkProveOps.verifyMembership(shard, seq, bytes)
   }
@@ -887,50 +860,38 @@ export class NektarMemory {
   }
 
   // ── public proof store + private-cite re-verification ────────────────────
-  /** proofs committed inside receipts are public artifacts (a ZK proof reveals
-   *  nothing): stored under <dataDir>/proofs/<sha256> and served publicly via
-   *  GET /v1/proof/<sha256> so a verifier can re-run them without trusting us. */
+  // proofs committed inside receipts are public artifacts, served via
+  // GET /v1/proof/<sha256> — storage, locator and integrity rules live in
+  // ProofStore (canonical docs there).
   /** store a proof artifact; returns its sha256 commitment hex */
   putProof(bytes: Uint8Array): string {
     return this.proofStore.put(bytes)
   }
-  /** fetch a stored proof by commitment; integrity-checked — a corrupted or
-   *  foreign file can never masquerade as the committed artifact. */
+  /** fetch a stored proof by commitment — digest-checked (ProofStore). */
   getProof(commitHex: string): Uint8Array | undefined {
     return this.proofStore.get(commitHex)
   }
-  /** the bstore locator a proof was PUT under (endpoint+bucket — the object
-   *  key is derivable: `chirp/<commit>`); receipts carry it in proofStore so
-   *  a remote verifier needs no origin call. */
+  /** the {endpoint,bucket} locator a receipt carries so a remote verifier
+   *  needs no origin call (ProofStore). */
   proofStoreRef(commitHex: string): { endpoint: string; bucket: string } | undefined {
     return this.proofStore.ref(commitHex)
   }
-  /** proof bytes by commitment — local dir first, then the store locator a
-   *  receipt carried (`chirp/<commit>` unsigned, then signed when this
-   *  instance has a store configured). Digest-checked: wrong bytes never
-   *  verify as the committed proof. */
+  /** proof bytes by commitment — local dir first, then the locator a receipt
+   *  carried; digest-checked (ProofStore). */
   async fetchProof(commitHex: string, store?: { endpoint?: string; bucket?: string }): Promise<Uint8Array | undefined> {
     return await this.proofStore.fetch(commitHex, store)
   }
 
-  /** re-verify a committed private-cite proof WITHOUT consuming anything:
-   *  runs the full anchored STARK verification with the tombstone registry —
-   *  the queryId must already be CONSUMED, i.e. this exact proof verified
-   *  once at commit. The shard is resolved from the anchor's own script data
-   *  (private cites never carry the shard name); the cite's hdp stays
-   *  unverifiable-by-design — ZK hides which leaf it was. */
+  /** re-verify a committed private-cite proof WITHOUT consuming — tombstone
+   *  registry check: this exact proof must already have verified once
+   *  (ZkProveOps). */
   async reverifyMembershipBytes(bytes: Uint8Array, anchorTxid: string): Promise<{ ok: boolean; reason?: string; anchorTxid?: string }> {
     return await this.zkProveOps.reverifyMembershipBytes(bytes, anchorTxid)
   }
 
-  /** verifier side (§13 Π_j = (π_j, ZKAccess(ℓ_q ≥ ℓ_j))): the dual commitment
-   *  as ONE verifiable object — the L_ZKMem membership STARK, the ZKAccess
-   *  clearance and (optionally) a §14 derivation STARK must all carry the SAME
-   *  verifier-issued query: transcript.queryId == each STARK journal's queryId
-   *  and transcript.nonce == the nonce this verifier issued with it. That is
-   *  exactly `verifyCombinedStark`; the individual verifiers then run with the
-   *  consume delegated to one final consumeZkQuery (issued-ness + single use
-   *  are checked here, artifact validity there). */
+  /** verifier side: §13 Π_j = (π_j, ZKAccess) as ONE verifiable object —
+   *  same-query binding across clearance/membership/derivation, single-use
+   *  consume at the end (ZkProveOps). */
   async verifyCombined(
     shard: string,
     seq: number,
@@ -941,11 +902,9 @@ export class NektarMemory {
     return await this.zkProveOps.verifyCombined(shard, seq, membershipBytes, zk, opts)
   }
 
-  /** holder side: a selective inclusion proof for a SUBSET of one batch's
-   *  records — per-leaf shard subpaths (K=64-leaf subtrees of the same
-   *  anchored tree) plus one shared level-6→root multiproof, encoded as
-   *  L_ZKDis v2. The anchored root is untouched; the proof reveals positions
-   *  and leaf hashes, never record contents. */
+  /** holder side: selective subset-disclosure proof (L_ZKDis v2) over one
+   *  anchored batch — reveals positions + leaf hashes, never contents
+   *  (ZkProveOps). */
   async proveSubset(
     shard: string,
     seqs: number[]
@@ -953,9 +912,8 @@ export class NektarMemory {
     return await this.zkProveOps.proveSubset(shard, seqs)
   }
 
-  /** verifier side: the proof's claimed batch root locates OUR anchored link
-   *  with that R — then the same shard/canonical/SPV checks as
-   *  verifyMembership, and the multiproof must fold to the anchored R. */
+  /** verifier side: claimed batch root → OUR anchored link, then the same
+   *  shard/canonical/SPV checks + multiproof fold (ZkProveOps). */
   async verifySubset(
     shard: string,
     bytes: Uint8Array
@@ -963,12 +921,8 @@ export class NektarMemory {
     return await this.zkProveOps.verifySubset(shard, bytes)
   }
 
-  /** Wright §14 holder side: a ZK-STARK that the prover knows a committed
-   *  derivation path to `query.pred(query.args)` under the anchored policy DAG
-   *  — every step applies a rule node Merkle-proven against the policy root.
-   *  The instance supplies `fragment(<shard>/<seq>)` facts from its own store
-   *  (same as recall); caller EDB facts are private context premises.
-   *  Reveals neither the path nor any fact; journal = (policyRoot, conclusionHash, queryId). */
+  /** holder side: §14 derivation STARK under the anchored policy DAG —
+   *  journal = (policyRoot, conclusionHash, queryId) (ZkProveOps). */
   async proveDerivation(
     shard: string,
     query: { pred: string; args: string[]; edb?: import('@nektar/datalog').Fact[] },
@@ -977,8 +931,8 @@ export class NektarMemory {
     return await this.zkProveOps.proveDerivation(shard, query, queryIdHex)
   }
 
-  /** verifier side: the proven policyRoot must be this verifier's anchored
-   *  policy DAG root and the queryId one it issued (single use). */
+  /** verifier side: proven policyRoot must be this verifier's anchored DAG
+   *  root; queryId ours, single use (ZkProveOps). */
   async verifyDerivation(
     shard: string,
     bytes: Uint8Array

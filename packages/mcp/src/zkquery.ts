@@ -6,7 +6,7 @@ import { toHex, fromHex } from '@nektar/core'
 import * as idbind from '@nektar/identity'
 import { starkQueryId } from '@nektar/zk'
 
-export type ZkQueryEntry = { nonce: string; verifierId: string; expiry: number; consumed?: boolean }
+type ZkQueryEntry = { nonce: string; verifierId: string; expiry: number; consumed?: boolean }
 
 export interface ZkQueryOpsDeps {
   /** queryId hex → entry — persisted by the security-state blob (shared ref) */

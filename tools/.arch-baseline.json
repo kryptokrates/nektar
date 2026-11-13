@@ -9,7 +9,7 @@
       "instability": 0.444
     },
     "automation": {
-      "loc": 6380,
+      "loc": 6456,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1917,
@@ -25,15 +25,15 @@
       "instability": 0.667
     },
     "bstack": {
-      "loc": 3491,
+      "loc": 3518,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
-      "maxFileLoc": 804,
-      "maxFileFanout": 12,
+      "maxFileLoc": 809,
+      "maxFileFanout": 13,
       "instability": 0.667
     },
     "chain": {
-      "loc": 3141,
+      "loc": 3217,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 755,
@@ -105,7 +105,7 @@
       "instability": 0.333
     },
     "mcp": {
-      "loc": 9742,
+      "loc": 10700,
       "pkgFanout": 16,
       "edges": [
         "anchor",
@@ -125,8 +125,8 @@
         "verify",
         "zk"
       ],
-      "maxFileLoc": 2929,
-      "maxFileFanout": 26,
+      "maxFileLoc": 1971,
+      "maxFileFanout": 35,
       "instability": 0.941
     },
     "policy": {
@@ -146,10 +146,10 @@
       "instability": 0.75
     },
     "store": {
-      "loc": 450,
+      "loc": 451,
       "pkgFanout": 1,
       "edges": ["core"],
-      "maxFileLoc": 191,
+      "maxFileLoc": 192,
       "maxFileFanout": 3,
       "instability": 0.333
     },
@@ -184,7 +184,7 @@
       "fanout": 10
     },
     "packages/automation/src/runtime.ts": {
-      "loc": 1112,
+      "loc": 1123,
       "fanout": 15
     },
     "packages/automation/src/store.ts": {
@@ -192,7 +192,7 @@
       "fanout": 3
     },
     "packages/bstack/src/finger.ts": {
-      "loc": 804,
+      "loc": 809,
       "fanout": 7
     },
     "packages/mcp/src/http.ts": {
@@ -200,11 +200,11 @@
       "fanout": 10
     },
     "packages/mcp/src/memory.ts": {
-      "loc": 2929,
-      "fanout": 26
+      "loc": 1971,
+      "fanout": 35
     },
     "packages/mcp/src/runtime.ts": {
-      "loc": 1273,
+      "loc": 1271,
       "fanout": 19
     },
     "packages/mcp/src/server.ts": {

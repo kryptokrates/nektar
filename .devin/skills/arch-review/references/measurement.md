@@ -220,9 +220,9 @@ git log --since="6 months ago" --format="@@@%s" --name-only -- packages \
   | sort -rn | head -20
 ```
 
->40% fix commits with ≥5 touches = stratified site. Caveats: refactor
-commits named "fix" mislead the ratio — read the cluster before confirming.
-Short histories (<1 month) give high-resolution but thin signal; say so.
+> 40% fix commits with ≥5 touches = stratified site. Caveats: refactor
+> commits named "fix" mislead the ratio — read the cluster before confirming.
+> Short histories (<1 month) give high-resolution but thin signal; say so.
 
 Also check **infant files** — created recently, already patched:
 

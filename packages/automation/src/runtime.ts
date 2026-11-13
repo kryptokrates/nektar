@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
@@ -142,10 +142,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       : await (async () => {
           const mod = await import('@nektar/bstack')
           const lp = cfg.dataDir ? join(cfg.dataDir, 'lanes.sqlite') : ':memory:'
-          if (cfg.dataDir && !existsSync(lp) && existsSync(join(cfg.dataDir, 'automation.sqlite'))) {
-            copyFileSync(join(cfg.dataDir, 'automation.sqlite'), lp)
-          }
+          const lanesExisted = cfg.dataDir === undefined || existsSync(lp)
           kxLanes = knexFactory({ client: 'sqlite3', connection: { filename: lp }, useNullAsDefault: true })
+          // seed a fresh lanes.sqlite by copying lane-table ROWS — a file copy
+          // would drag every automation table in and miss WAL commits
+          if (!lanesExisted && existsSync(join(cfg.dataDir!, 'automation.sqlite')))
+            await mod.migrateLaneTables(join(cfg.dataDir!, 'automation.sqlite'), kxLanes)
           return {
             mod,
             ledger: new mod.KnexTreeLedger(kxLanes),

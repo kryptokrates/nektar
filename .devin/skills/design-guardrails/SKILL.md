@@ -1,144 +1,167 @@
 ---
 name: design-guardrails
 description: >
-  Use when designing or writing non-trivial code — new modules, packages,
-  interfaces, storage shapes, message flows, or public APIs — and when a
-  change will shape structure others must later work inside. Applies
-  Ousterhout's A Philosophy of Software Design and Kleppmann's
-  Designing Data-Intensive Applications as pre-flight guardrails, so
-  deep structural debt is prevented rather than reviewed out later.
-  For auditing a finished diff use code-review; for whole-system
-  analysis use arch-review.
+  Use to audit in-flight or newly written code for deep structural issues —
+  run it on the working diff, a named file/package, or the last commit —
+  and when designing non-trivial code (new modules, packages, interfaces,
+  storage shapes, message flows, public APIs). Applies Ousterhout's
+  A Philosophy of Software Design and Kleppmann's Designing Data-Intensive
+  Applications as enforceable rules, each mapped to the gate or review
+  rule ID that catches a miss. For PR/diff review use code-review; for
+  whole-system analysis use arch-review.
 ---
 
-# design-guardrails — write-time structural rules
+# design-guardrails — structural rules audit + authoring checks
 
-You are about to write code whose shape other code will have to live with.
-The expensive defects are structural: a shallow abstraction, a leaked
-decision, a persisted shape nobody can evolve, an invariant only a comment
-defends. They are cheap to avoid now and expensive to extract later. This
-skill exists to catch them **at authoring time**, before `check:arch` and
-code-review ever see the diff.
+Structural defects are cheap to avoid while writing and expensive to
+extract after merge: shallow abstractions, leaked decisions, persisted
+shapes nobody can evolve, invariants only a comment defends. This skill
+has two jobs:
 
-## Operating rules
+- **AUDIT** — walk in-flight code against the rule catalogs and report
+  findings with rule IDs, `file:line`, why, and the fix.
+- **CHECKPOINT** — the same rules applied before/during writing, so the
+  audit finds nothing.
 
-- **Strategic, not tactical.** "Working" is the floor, not the goal —
-  every change should leave the design better, or at least no worse
-  (POSD ch.3/16). If you find yourself asking "what is the smallest diff
-  that does what I need?", stop and ask what design the system would have
-  had if the feature was in scope from the start. Build that instead.
-- **Complexity is incremental.** No single shortcut looks fatal; the
-  debt accretes one "just this once" at a time. Treat every red flag in
-  the reference files as a stop-and-fix, not a note-for-later.
-- **Design it twice** for anything with a real interface or persistence
-  footprint: sketch a genuinely different alternative (radically
-  different, not a variant), list pros/cons, then pick — or combine
-  (POSD ch.11). If both options are ugly, that's signal the abstraction
-  boundary itself is wrong.
-- **Interfaces first, implementations second.** Write the exported
-  signature and its contract (what callers may assume, what's hidden)
-  before the body. If you can't write the interface comment without
-  describing internals, the module is too shallow or leaking.
-- **Enforcement beats memory.** Every rule in this skill has a "how it's
-  enforced" hook — a mechanical gate, a review rule ID, or a named
-  discipline. If you create a new structural rule, also create its
-  enforcement (see [references/enforcement.md](references/enforcement.md)).
-  An unenforced invariant is a future incident.
+## Audit mode — process
 
-## The design checkpoint — run before writing
+### 1. Scope
 
-Answer these explicitly (in your head for small work, in the task plan
-for anything that adds a package, a persisted shape, a wire format, or a
-public surface):
+- `--files <paths>` → audit those files.
+- `--pkg <name>` → that package's src/ (a scope audit, not a diff audit).
+- `--last [n]` → last n commits on this branch (`git show`).
+- Default → in-flight work: `git diff` + `git diff --cached` + untracked
+  files under `packages/*/src`. Generated artifacts (contract JSON,
+  verifier.js, dist/) are out of scope.
 
-1. **Module shape** — what is this module's job, and is its interface
-   much simpler than its implementation (deep) or nearly the same
-   (shallow)? If shallow: inline it, merge it, or move complexity down.
-2. **What does it hide?** Name the design decision(s) the module keeps
-   from callers: data layout, protocol staging, error policy, timing,
-   key custody. If you can't name one, ask why the module exists.
-3. **Who must know what?** List every fact a caller must hold to use
-   this correctly. Each one is cognitive load or a leaked decision —
-   eliminate it or push it inside.
-4. **Blast radius** — which files change if this decision changes? If
-   more than one, the decision lives in too many places (information
-   leakage → change amplification).
-5. **Error semantics** — can the exceptional condition be defined out of
-   existence (default, clamp, no-op, aggregate once at boundary)? Can it
-   be masked inside the module? Design so there's less to throw.
-6. **Persistence & evolution** — will anything this writes be read by
-   older or newer builds (SQLite rows, journals, `*.json` payloads,
-   wire envelopes, contract artifacts)? If so, what is the compat
-   contract — and where is it written down?
-7. **Failure & replay** — for any write/act sequence: persist intent →
-   act → record outcome. Walk the restart drill before coding it.
-8. **Enforcement** — which existing gate protects this design
-   (cruise/check-arch/review rule), and does the change weaken it?
+### 2. Load the catalogs
 
-## While writing — the red-flag reflexes
+- [references/module-design.md](references/module-design.md) — ALWAYS:
+  depth, hiding, coupling, error semantics, names/comments, obviousness.
+- [references/system-design.md](references/system-design.md) — when the
+  diff touches persistence, wire formats, outbox/inbox, host/chain calls,
+  or restartable paths.
+- `../code-review/references/nektar.md` — when the diff touches keys,
+  sats, escrow, SpendGuard, or proofs.
+- `../event-arch` (skill) — when the scope is specifically the realtime
+  event layer (waits, subscriptions, watch/wake machinery, outbox
+  delivery, broadcaster statuses): run its event-surface audit instead;
+  this skill stays the general structural auditor.
 
-Stop and fix on sight (details + rule IDs in the reference files):
+### 3. Run the audit pass — per touched module/file
 
-| You notice yourself…                                        | Stop: it's a red flag for…                              |
-| ----------------------------------------------------------- | ------------------------------------------------------- |
-| writing a wrapper that just forwards args                    | pass-through method → wrong boundary or missing class   |
-| documenting internals in an interface comment                | implementation docs contaminating contract              |
-| "the caller will just set X before calling"                  | temporal coupling / pushed-up complexity                |
-| adding a boolean/enum to pick behavior inside a function     | mode flag → two functions, not one                      |
-| splitting code by WHEN steps run, not by knowledge           | temporal decomposition → group by hidden information    |
-| exporting a type that reveals storage/wire internals         | leaky interface → callers now depend on the detail      |
-| writing the same logic a second time "just for this case"    | change amplification / convergent duplication           |
-| throwing where a default or no-op is correct                 | exception proliferation → define it out of existence    |
-| writing code a stranger can't parse without opening 3 files  | obscurity → hidden dependency, undocumented invariant   |
-| persisting a shape with no version/migration story           | schema drift → old builds will read your rows someday   |
-| treating a local row / memory map as proof of a remote fact  | hidden source of truth → name the arbiter               |
-| applying an effect straight from a delivered message         | at-least-once victim → dedup / idempotency key          |
+For each new or re-shaped module, export, or boundary, ask:
 
-The full catalog — with the Ousterhout red-flag names and the DDIA
-system-level rules — lives in:
+1. **Depth** — is the interface much simpler than what it hides? Would a
+   caller do better inlining it? (shallow-module)
+2. **Hidden decision** — name the decision(s) the module keeps from
+   callers: layout, staging, error policy, timing, custody. Can't name
+   one → why does it exist?
+3. **Caller knowledge** — list the facts a caller must hold to call this
+   correctly. Each is cognitive load or leakage; count them.
+4. **Change amplification** — pick the module's most likely future
+   change; trace how many files it would touch. >1 → the decision lives
+   in too many places.
+5. **Layering** — do new dependencies point toward stability? Check the
+   edge matrix in `tools/check-arch.mjs`, not vibes — depcruise can't
+   see `@nektar/*` edges (they resolve into dist/).
+6. **Red-flag sweep** — walk the file against the reflex table below;
+   every hit gets a finding or a justified exception.
+7. **For persistence/wire paths** — compat contract named? durability
+   order (persist intent → act → record outcome)? idempotency/dedup?
+   derived-state rebuild path?
+8. **Enforcement** — which existing gate protects each new invariant?
+   A rule with no gate is an "unenforced invariant" finding.
 
-- [references/module-design.md](references/module-design.md) — depth,
-  hiding, coupling, error semantics, naming, comments, obviousness.
-- [references/system-design.md](references/system-design.md) — evolvable
-  data shapes, end-to-end correctness, durability ordering, auditability,
-  operability (what keeps the system fixable in production).
+### 4. Run the gates that measure the change
 
-## After writing — cheap verification before "done"
+`pnpm --filter <pkg> build` → `pnpm check:cruise` → `pnpm check:arch` →
+`pnpm check:knip` → `pnpm check:leftovers` → `pnpm check:dupes`; for
+money/durability paths also `pnpm --filter <pkg> test` and
+`pnpm check:lint:types`. "Not run" is an honest report line; a claimed
+gate that didn't run is not.
 
-- Re-read only the **public surface** you added (index/exports/signatures)
-  and ask: could I say what this module does from the interface alone,
-  without opening internals? If not, the interface lies.
-- Run the blast-radius test: list files a reader must open to verify one
-  call path through your change. >~3 for a routine call → the boundary
-  is wrong or dependencies are obscured.
-- Run the gates that measure what you just shaped:
-  `pnpm --filter <pkg> build`, `pnpm check:cruise` (no cycles/orphans/
-  layering violations — the edge matrix lives in `tools/check-arch.mjs`),
-  `pnpm check:arch` (LOC/fanout/god-file baselines + custody/env/layering
-  grep gates), `pnpm check:knip` (dead exports/files). For money paths:
-  `pnpm --filter <pkg> test`.
-- If the change introduces a new structural rule future code must obey,
-  add its enforcement in the same change — a check-arch grep gate, a
-  cruise forbidden-rule, a review rule ID, or an ADR-style comment at the
-  boundary. See [references/enforcement.md](references/enforcement.md).
+### 5. Report
+
+```
+## Design audit — <scope>
+
+**Verdict: CLEAN | MINOR ISSUES | NEEDS RESHAPE | BLOCKED**
+
+### Findings
+- [SEV] `<rule-id>` — file:line — <why it matters here> — <the fix>
+  (SEV: BLOCKER = money/durability/custody at risk; MAJOR = structural
+   debt that compounds; MINOR = worth fixing while you're here)
+
+### Public-surface check
+<new exports/interfaces — is each deep? does the index say what it promises?>
+
+### Gate results
+- pnpm check:cruise: pass/fail — <details>
+- pnpm check:arch: pass/fail — <details>
+- <every gate actually run; "not run" entries listed honestly>
+
+### Unenforced invariants
+<each structural rule the change relies on that no gate/review rule
+catches — propose the gate, or name the promotion explicitly deferred>
+```
+
+Never invent findings to look thorough. If the code is clean, say what
+was checked and move on — evidence over confidence: cite `file:line`.
+
+## Checkpoint mode — before writing non-trivial code
+
+Answer explicitly (in the task plan for package/persisted-shape/wire/API
+work, in your head otherwise):
+
+1. **Module shape** — deep (interface ≪ implementation) or shallow?
+   Shallow: inline it, merge it, or pull complexity inside.
+2. **What does it hide?** If no design decision is hidden, the module is
+   decoration — delete it before it exists.
+3. **Who must know what?** Every fact a caller must hold is a leak
+   candidate — push it inside or make it unrepresentable.
+4. **Blast radius** — which files change when this decision changes?
+5. **Error semantics** — can the exceptional path be defined out of
+   existence (default/clamp/no-op/aggregate-at-boundary)?
+6. **Persistence & evolution** — will older/newer builds read these
+   bytes? Where is the compat contract written down?
+7. **Failure & replay** — persist intent → act → record outcome; walk
+   the restart drill before coding it.
+8. **Enforcement** — which gate protects this design; does the change
+   weaken any existing one?
+
+## Red-flag reflexes — stop and fix on sight
+
+| You notice yourself…                                        | Red flag                                              |
+| ----------------------------------------------------------- | ----------------------------------------------------- |
+| writing a wrapper that just forwards args                   | pass-through method → wrong boundary or missing class |
+| documenting internals in an interface comment               | impl docs contaminating the contract                  |
+| "the caller will just set X before calling"                 | temporal coupling / pushed-up complexity              |
+| adding a boolean/enum to pick behavior inside a function    | mode flag → two functions, not one                    |
+| splitting code by WHEN steps run, not by knowledge          | temporal decomposition → group by hidden information  |
+| exporting a type that reveals storage/wire internals        | leaky interface → callers now depend on the detail    |
+| writing the same logic a second time "just for this case"   | change amplification / convergent duplication         |
+| throwing where a default or no-op is correct                | exception proliferation → define it out of existence  |
+| writing code a stranger can't parse without opening 3 files | obscurity → hidden dependency, undocumented invariant |
+| persisting a shape with no version/migration story          | schema drift → old builds will read your rows someday |
+| treating a local row / memory map as proof of a remote fact | hidden source of truth → name the arbiter             |
+| applying an effect straight from a delivered message        | at-least-once victim → dedup / idempotency key        |
 
 ## nektar-specific calibration
 
 - Custody, SpendGuard coverage, escrow semantics and the honesty rule
   outrank every design preference — load
-  `../code-review/references/nektar.md` before designing anything that
+  `../code-review/references/nektar.md` before auditing anything that
   touches keys, sats, or proofs.
-- The declared layering is the spec: `core` root → leaf libs → `chain` →
+- Declared layering is the spec: `core` root → leaf libs → `chain` →
   `anchor/verify/automaton` → `bstack` transport → `mcp/watcher` apps.
-  Dep-cruiser can't see `@nektar/*` edges (they resolve into dist/) —
-  check-arch's edge matrix is authoritative. Design new dependencies to
-  point toward stability, and keep the automation engine reachable only
-  through `AutomationHost`.
-- Established seams to reuse rather than re-invent: `market_outbox`
+  Design dependencies to point toward stability; the automation engine
+  reaches the app only through `AutomationHost`.
+- Established seams to reuse, not re-invent: `market_outbox`
   (per-destination tracking), `take()` journaling, op event log,
   `nektarEnv` env reads, `faulthost` fault injection, composition-root
-  broadcaster construction. Reusing a seam is strategic; writing a
-  fourth variant is convergent implementation (S6).
+  broadcaster construction. A fourth variant of an existing pattern is
+  convergent implementation (smell S6).
 
 ## Sources
 
@@ -149,5 +172,6 @@ of Software Design_ (2nd ed.). Reliability/simplicity/evolvability triad,
 schema compat, end-to-end argument, idempotence, auditability,
 operability: Kleppmann, _Designing Data-Intensive Applications_. Repo
 gates: `.dependency-cruiser.cjs`, `tools/check-arch.mjs`,
-`tools/check-leftovers.mjs`, `knip`, `jscpd`, oxlint. Review rule IDs
-cross-referenced from `../code-review/references/*`.
+`tools/check-leftovers.mjs`, `knip`, `jscpd`, oxlint. Rule IDs
+cross-referenced from `../code-review/references/*`. Enforcement model:
+[references/enforcement.md](references/enforcement.md).

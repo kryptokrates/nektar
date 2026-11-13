@@ -103,7 +103,10 @@ export async function faulthost(upstream: string): Promise<FaulthostHandle> {
       })
       fwd++
       const buf = Buffer.from(await r.arrayBuffer())
-      if (req.url === '/lookup' && (fault.dropLookup === true || fault.duplicateOutputs === true || fault.corrupt === true || (fault.withholdTxids?.size ?? 0) > 0)) {
+      if (
+        req.url === '/lookup' &&
+        (fault.dropLookup === true || fault.duplicateOutputs === true || fault.corrupt === true || (fault.withholdTxids?.size ?? 0) > 0)
+      ) {
         const parsed = JSON.parse(buf.toString('utf8')) as { outputs?: Array<{ beef: number[]; outputIndex: number }> }
         if (fault.dropLookup === true) parsed.outputs = []
         else {

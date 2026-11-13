@@ -21,11 +21,7 @@ export interface PackWireDeps {
   /** 'shard:seq' → verified imported bundle — read by the prove path */
   importedBundles: Map<string, ProofBundle>
   touched: Set<string>
-  logRemember: (
-    shard: string,
-    frag: Fragment,
-    meta: Partial<Pick<LogRecord, 'level' | 'authorPub' | 'authorEpoch'>>
-  ) => Promise<{ rec: LogRecord }>
+  logRemember: (shard: string, frag: Fragment, meta: Partial<Pick<LogRecord, 'level' | 'authorPub' | 'authorEpoch'>>) => Promise<{ rec: LogRecord }>
   remember: (
     shard: string,
     data: string,

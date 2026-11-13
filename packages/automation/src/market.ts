@@ -901,8 +901,13 @@ export class MarketEngine {
     if (w.maxSats !== undefined && o.priceSats > w.maxSats) return 'above the want ceiling'
     const q = o.offer as any
     if (!q?.cfg) return 'no signed quote'
-    if (q.sellerPub !== o.pub || Number(q.cfg.price) !== o.priceSats) return 'quote does not match the listing'
-    if (q.cfg.sellerPkh !== pkhOf(o.pub)) return 'payee is not the seller key'
+    if (Number(q.cfg.price) !== o.priceSats) return 'quote does not match the listing'
+    // the escrow pays cfg.sellerPkh — under derived custody the quote signer
+    // is a custody child of the identity (never the identity itself, which
+    // remote custody can't sign with); the SignedOffer's own sig is what binds
+    // the quote to o.pub. The money-path invariant: the payee is exactly the
+    // verified quote signer — anything else is a graft.
+    if (q.cfg.sellerPkh !== pkhOf(q.sellerPub)) return 'payee is not the quote signer'
     if (Number(q.cfg.maxFee) > this.o.escrowFeeReserveSats) return 'fee bound too high'
     const leaf = o.leaf ?? ''
     if (!verifyOfferSig(q, this.me, leaf) && !verifyOfferSig(q, '', leaf)) return 'quote signature invalid'

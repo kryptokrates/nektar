@@ -496,6 +496,11 @@ export class AnchorChain {
   }
 
   confirm(txid: string, merklePath?: any): void {
+    // merklePath is `any` on purpose (rúnar's sdk build produces its own
+    // MerklePath class — instanceof can't gate it) but it must never be a
+    // Promise: one un-awaited lookup lands silently on tx.merklePath and
+    // every downstream verifier dies on a missing method
+    if (typeof merklePath?.then === 'function') throw new Error('confirm: merklePath is a Promise — await it first')
     const idx = this.pendingHeads.findIndex((h) => h.tx.id('hex') === txid)
     if (idx < 0) return
     for (let i = 0; i <= idx; i++) {

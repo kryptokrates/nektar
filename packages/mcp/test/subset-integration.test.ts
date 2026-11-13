@@ -23,7 +23,7 @@ async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, s
   const tx = ac.getHead()!.tx
   if (mine) {
     await chain.mine(1)
-    ac.confirm(tx.id('hex'), chain.merklePathOf(tx.id('hex')))
+    ac.confirm(tx.id('hex'), await chain.merklePathOf(tx.id('hex')))
   }
   return { chain, tx, shard: decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())!.shard }
 }
@@ -75,7 +75,10 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
     ],
     [
       'anchor not SPV-valid on this header chain',
-      verifySubsetAnchored(bytes(), good.tx, (await stackChain(t))!, { shard: good.shard }),
+      // a second StackChain handle still answers against the SAME node's
+      // headers — the BUMP root is genuinely valid there. The negative needs
+      // a tracker whose header chain does NOT contain the root.
+      verifySubsetAnchored(bytes(), good.tx, { isValidRootForHeight: async () => false, currentHeight: async () => 0 }, { shard: good.shard }),
       /BEEFInvalid|NotMined/
     ],
     [

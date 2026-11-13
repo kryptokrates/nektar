@@ -37,7 +37,7 @@ async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, s
   const tx = ac.getHead()!.tx
   if (mine) {
     await chain.mine(1)
-    ac.confirm(tx.id('hex'), chain.merklePathOf(tx.id('hex')))
+    ac.confirm(tx.id('hex'), await chain.merklePathOf(tx.id('hex')))
   }
   return { chain, tx, ac, shard: decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())!.shard }
 }
@@ -88,7 +88,10 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
     ],
     [
       'anchor not SPV-valid on this header chain',
-      verifyMembershipAnchoredStark(proofBytes(), good.tx, (await stackChain(t))!, issued(q), { shard: good.shard }),
+      // a second StackChain handle still answers against the SAME node's
+      // headers — the BUMP root is genuinely valid there. The negative needs
+      // a tracker whose header chain does NOT contain the root.
+      verifyMembershipAnchoredStark(proofBytes(), good.tx, { isValidRootForHeight: async () => false, currentHeight: async () => 0 }, issued(q), { shard: good.shard }),
       /BEEFInvalid|NotMined/
     ],
     ['queryId never issued', v(proofBytes(), good, issued()), /queryId/],
@@ -171,11 +174,28 @@ async function memWithFixtureAnchor(t: { skip: (m?: string) => void }) {
   const { chain, tx, ac } = _w
   const authority = PrivateKey.fromRandom()
   const f = await StackFunder.fund(await stackTreasury(), 2)
-  const mem = new NektarMemory(chain, f, f.keyPair, { clearanceAuthorities: [authority.toPublicKey().toString()] })
+  // the record stub rides in as the ctor store: post-ctor `mem.store =`
+  // doesn't reach the ops (they hold the ctor-passed store) — and a stub
+  // must implement the whole interface consumers touch, not just `all`
+  const rows = [{ seq: 4, batchIndex: 0, leaf: new Uint8Array(32), leafIndex: 4, shard: 's', hdp: new Uint8Array(32), state: 'anchored' }]
+  const stubStore = {
+    all: async () => rows,
+    bySeq: async (_s: string, seq: number) => rows.find((r) => r.seq === seq),
+    byBatch: async (_s: string, b: number) => rows.filter((r) => r.batchIndex === b),
+    byIdentity: async () => undefined,
+    nextSeq: async () => rows.length,
+    lastBatchIndex: async () => 0,
+    pending: async () => [],
+    committedUnbatched: async () => [],
+    resetUnanchored: async () => 0,
+    markBatched: async () => {},
+    markAnchored: async () => {},
+    append: async () => {}
+  }
+  const mem = new NektarMemory(chain, f, f.keyPair, { clearanceAuthorities: [authority.toPublicKey().toString()] }, stubStore as never)
   ;(mem as any).anchors.set('s', ac)
   ;(mem as any).anchorTxs.set(tx.id('hex'), tx)
   ;(mem as any).tails.set('s', [{ txid: tx.id('hex'), outputIndex: 0, n: 0, size: 5, R: fx.journal.root, Rp: '00'.repeat(32) }])
-  ;(mem as any).store = { all: async () => [{ seq: 4, batchIndex: 0, leaf: new Uint8Array(32), leafIndex: 4 }] }
   const zk = (queryId: string, nonce: Uint8Array): ZkClearance => ({
     commitment: {} as any,
     proof: {} as any,

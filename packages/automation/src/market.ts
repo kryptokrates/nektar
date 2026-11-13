@@ -1356,9 +1356,11 @@ export class MarketEngine {
           }
           const tx = (built.tx as Transaction | undefined) ?? Transaction.fromHex(built.txHex)
           payTx = tx
-          for (const inp of tx.inputs) {
-            if (!inp.sourceTransaction && inp.sourceTXID) inp.sourceTransaction = (await this.d.fetchTx(inp.sourceTXID)) as Transaction
-          }
+          await Promise.all(
+            tx.inputs.map(async (inp) => {
+              if (!inp.sourceTransaction && inp.sourceTXID) inp.sourceTransaction = (await this.d.fetchTx(inp.sourceTXID)) as Transaction
+            })
+          )
           await this.wallet.prepare(ctx, 'payment', tx)
           const st = await this.d.store.transition(funding.operationId, funding.revision, 'funding', {
             cause: 'payment_prepared',
@@ -1476,9 +1478,11 @@ export class MarketEngine {
         }
         const tx = (built.tx as Transaction | undefined) ?? Transaction.fromHex(built.txHex)
         escrowTx = tx
-        for (const inp of tx.inputs) {
-          if (!inp.sourceTransaction && inp.sourceTXID) inp.sourceTransaction = (await this.d.fetchTx(inp.sourceTXID)) as Transaction
-        }
+        await Promise.all(
+          tx.inputs.map(async (inp) => {
+            if (!inp.sourceTransaction && inp.sourceTXID) inp.sourceTransaction = (await this.d.fetchTx(inp.sourceTXID)) as Transaction
+          })
+        )
         await this.wallet.prepare(ctx, 'escrow', tx)
         const st = await this.d.store.transition(funding.operationId, funding.revision, 'funding', {
           cause: 'escrow_prepared',

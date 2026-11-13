@@ -245,4 +245,4 @@ async function tick() {
 }
 console.log(`nektar-watcher up — claims: ${cfg.claimsFile}, proofs: ${cfg.proofDir}, every ${WATCH_MS}ms${ONCE ? ' (once)' : ''}`)
 await tick()
-if (!ONCE) setInterval(tick, WATCH_MS)
+if (!ONCE) setInterval(() => void tick(), WATCH_MS)

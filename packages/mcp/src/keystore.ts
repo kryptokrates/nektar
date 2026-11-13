@@ -43,8 +43,8 @@ function dec(pass: string, blob: string): string {
 }
 
 export function passphraseFromEnv(): string | undefined {
-  if (process.env.NEKTAR_KEY_PASSPHRASE) return process.env.NEKTAR_KEY_PASSPHRASE
-  const f = process.env.NEKTAR_KEY_PASSPHRASE_FILE
+  if (nektarEnv('NEKTAR_KEY_PASSPHRASE')) return nektarEnv('NEKTAR_KEY_PASSPHRASE')
+  const f = nektarEnv('NEKTAR_KEY_PASSPHRASE_FILE')
   if (f) return readFileSync(f, 'utf8').trim()
   return undefined
 }

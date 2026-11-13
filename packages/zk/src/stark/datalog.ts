@@ -170,7 +170,7 @@ export interface ProveDerivationInput {
 const unhex = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
 
 function proverCommand(): [string, string[]] {
-  const bin = process.env.NEKTAR_STARK_PROVER
+  const bin = nektarEnv('NEKTAR_STARK_PROVER')
   if (bin) return [bin, ['prove-der']]
   return [
     'docker',
@@ -179,8 +179,8 @@ function proverCommand(): [string, string[]] {
       '--rm',
       '-i',
       '-v',
-      `${process.env.NEKTAR_STARK_TARGET_VOLUME ?? 'nektar-stark-target'}:/work/target`,
-      process.env.NEKTAR_STARK_IMAGE ?? 'nektar-stark-build',
+      `${nektarEnv('NEKTAR_STARK_TARGET_VOLUME') ?? 'nektar-stark-target'}:/work/target`,
+      nektarEnv('NEKTAR_STARK_IMAGE') ?? 'nektar-stark-build',
       '/work/target/release/nektar-stark',
       'prove-der'
     ]
@@ -190,7 +190,7 @@ function proverCommand(): [string, string[]] {
 /** prove a §14 committed derivation path and return L_ZKDer v3 bytes */
 export async function proveDerivationStark(
   inp: ProveDerivationInput,
-  timeoutMs = Number(process.env.NEKTAR_STARK_TIMEOUT_MS ?? 300_000)
+  timeoutMs = Number(nektarEnv('NEKTAR_STARK_TIMEOUT_MS') ?? 300_000)
 ): Promise<{ bytes: Uint8Array; ms: number; policyRoot: string; conclusionHash: string }> {
   const payload = JSON.stringify({
     nodeCount: inp.nodeCount,

@@ -90,7 +90,7 @@ function temporalSourcesFor(names: string[], primary: ChainTracker, opts: { wocA
       sources.push({
         name: 'btc',
         tracker: new WocTracker({
-          wocUrl: process.env.NEKTAR_BTC_WOC_URL ?? 'https://api.whatsonchain.com/v1/btc/main',
+          wocUrl: nektarEnv('NEKTAR_BTC_WOC_URL') ?? 'https://api.whatsonchain.com/v1/btc/main',
           wocApiKey: opts.wocApiKey,
           fetchImpl: opts.fetchImpl
         })
@@ -195,8 +195,8 @@ function loadFeeKey(dataDir: string, wif: string | undefined, pass: string | und
   // one string to protect. Derived at m/44'/236'/0'/0/0; feeds the same
   // keyDeriver the WIF path uses.
   const mn =
-    process.env.NEKTAR_FUND_MNEMONIC ??
-    (existsSync(process.env.NEKTAR_FUND_MNEMONIC_FILE ?? '') ? readFileSync(process.env.NEKTAR_FUND_MNEMONIC_FILE!, 'utf8').trim() : undefined)
+    nektarEnv('NEKTAR_FUND_MNEMONIC') ??
+    (existsSync(nektarEnv('NEKTAR_FUND_MNEMONIC_FILE') ?? '') ? readFileSync(nektarEnv('NEKTAR_FUND_MNEMONIC_FILE')!, 'utf8').trim() : undefined)
   if (mn) return fundKeyFromMnemonic(mn)
   const file = join(dataDir, 'fee.key.json')
   if (existsSync(file)) {
@@ -215,7 +215,7 @@ function loadFeeKey(dataDir: string, wif: string | undefined, pass: string | und
 // behaviour change otherwise.
 export function txLogBroadcast<B extends (tx: Transaction) => Promise<import('@nektar/chain').BroadcastResult>>(
   inner: B,
-  logPath: string | undefined = process.env.NEKTAR_TX_LOG
+  logPath: string | undefined = nektarEnv('NEKTAR_TX_LOG')
 ): B {
   if (logPath === undefined || logPath === '') return inner
   return (async (tx: Transaction) => {
@@ -284,10 +284,10 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     broadcasterUrl: cfg.main?.broadcasterUrl,
     objectStore: objectStoreFromEnv(),
     bond:
-      process.env.NEKTAR_BOND_EPOCH || process.env.NEKTAR_BOND_MAXFEE
+      nektarEnv('NEKTAR_BOND_EPOCH') || nektarEnv('NEKTAR_BOND_MAXFEE')
         ? {
-            epochBlocks: Number(process.env.NEKTAR_BOND_EPOCH ?? 144),
-            ...(process.env.NEKTAR_BOND_MAXFEE ? { maxFee: BigInt(process.env.NEKTAR_BOND_MAXFEE) } : {})
+            epochBlocks: Number(nektarEnv('NEKTAR_BOND_EPOCH') ?? 144),
+            ...(nektarEnv('NEKTAR_BOND_MAXFEE') ? { maxFee: BigInt(nektarEnv('NEKTAR_BOND_MAXFEE')) } : {})
           }
         : undefined
   }
@@ -326,7 +326,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   // default, because an unattended agent must always have a provable guard.
   // NEKTAR_DAILY_CAP_SATS is the plan's hard cap; NEKTAR_MAX_SPEND_SATS_PER_DAY
   // (the live env) sets it too — the smaller of the two wins.
-  const caps = [process.env.NEKTAR_DAILY_CAP_SATS, process.env.NEKTAR_MAX_SPEND_SATS_PER_DAY].filter((x) => x !== undefined)
+  const caps = [nektarEnv('NEKTAR_DAILY_CAP_SATS'), nektarEnv('NEKTAR_MAX_SPEND_SATS_PER_DAY')].filter((x) => x !== undefined)
   // opt-out only when every set value agrees — a stray numeric cap keeps the
   // guard on (mixed signals never silently un-guard the spend path)
   const unlimited = caps.length > 0 && caps.every((x) => x === 'unlimited')
@@ -334,8 +334,8 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   const broadcaster = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), valueOf, {
     unlimited,
     maxPerDay,
-    maxFeePerTx: Number(process.env.NEKTAR_MAX_FEE_SATS_PER_TX ?? 1_000),
-    minIntervalMs: Number(process.env.NEKTAR_MIN_BROADCAST_INTERVAL_MS ?? 0),
+    maxFeePerTx: Number(nektarEnv('NEKTAR_MAX_FEE_SATS_PER_TX') ?? 1_000),
+    minIntervalMs: Number(nektarEnv('NEKTAR_MIN_BROADCAST_INTERVAL_MS') ?? 0),
     ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
   })
   const auth = 'Basic ' + Buffer.from(`${rc.rpcUser}:${rc.rpcPass}`).toString('base64')
@@ -398,7 +398,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   // marks, internalized change). Legacy mode keeps the file-backed reserve.
   let toolboxWallet: import('@nektar/automation').ToolboxHandle | undefined
   let tf: import('@nektar/automation').ToolboxReserveFunder | undefined
-  if (process.env.NEKTAR_WALLET === 'toolbox') {
+  if (nektarEnv('NEKTAR_WALLET') === 'toolbox') {
     const tb = await import('@nektar/automation')
     const services = new tb.RegtestWalletServices(rc, tracker)
     toolboxWallet = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: 'regtest', services })
@@ -463,6 +463,10 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   const { wrapBroadcast, leasePredicate } = await import('@nektar/automation')
   const ledger = new AutomationStore(knex)
   await ledger.init()
+  // watch intent is a durable record, not an in-memory accident: any tx the
+  // journal knows was broadcast-but-not-final gets re-watched on boot, so a
+  // crash in the broadcast→watch window can't strand a proof wait
+  for (const t of await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])) events.watch(t.txid)
   reserve.leased = leasePredicate(ledger)
   if (tf !== undefined) tf.leased = leasePredicate(ledger)
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
@@ -478,7 +482,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
       agentSeed: PrivateKey.fromHex(keys.agentSeed),
       signingKey: PrivateKey.fromHex(keys.logKey),
       shardKeys,
-      maxLevel: Number(process.env.NEKTAR_MAX_LEVEL ?? 3),
+      maxLevel: Number(nektarEnv('NEKTAR_MAX_LEVEL') ?? 3),
       securityStore: new FileSecurityStore(join(cfg.dataDir, 'security.json')),
       stateStore: new FileStateStore(join(cfg.dataDir, 'state.json')),
       finalityDepth: 1
@@ -637,7 +641,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // agent seed, no log key, no new shard keys in-process. An existing
   // keys.json is still READ (legacy shard owners + seed for old records) but
   // nothing new is generated into it. Mutually exclusive with =toolbox.
-  const externalWallet = process.env.NEKTAR_WALLET === 'client'
+  const externalWallet = nektarEnv('NEKTAR_WALLET') === 'client'
   const { keys, save } = loadKeys(cfg.dataDir, pass, true, !externalWallet)
   let clientWallet: import('@bsv/sdk').WalletInterface | undefined
   let fundAddress: string
@@ -679,7 +683,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // route their status updates back to us (configFromEnv leaves both fields
   // to def()'s env fallback: NEKTAR_CALLBACK_TOKEN wins; else a persisted
   // random token, also pushed into env so the webhook auth check sees it).
-  if (!mc.callbackToken && !process.env.NEKTAR_CALLBACK_TOKEN) {
+  if (!mc.callbackToken && !nektarEnv('NEKTAR_CALLBACK_TOKEN')) {
     const tokFile = join(cfg.dataDir, 'callback-token')
     mc.callbackToken = existsSync(tokFile)
       ? readFileSync(tokFile, 'utf8').trim()
@@ -688,9 +692,9 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
           writeFileSync(tokFile, t, { mode: 0o600 })
           return t
         })()
-    process.env.NEKTAR_CALLBACK_TOKEN = mc.callbackToken
+    setNektarEnv('NEKTAR_CALLBACK_TOKEN', mc.callbackToken)
   }
-  const callbackUrl = mc.callbackUrl ?? process.env.NEKTAR_CALLBACK_URL
+  const callbackUrl = mc.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL')
   const rawBroadcaster = new BsvBroadcaster(mc)
   const reserve = new ReserveFunder(fundKey ?? { pkhHex }, join(cfg.dataDir, 'reserve.json'))
   // NEKTAR_WALLET=toolbox: the BRC-100 wallet owns the funding-UTXO lifecycle
@@ -699,7 +703,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // utxoView, never reserve.json directly. Legacy mode keeps the file reserve.
   let liveToolbox: import('@nektar/automation').ToolboxHandle | undefined
   let liveTf: import('@nektar/automation').ToolboxReserveFunder | undefined
-  if (process.env.NEKTAR_WALLET === 'toolbox') {
+  if (nektarEnv('NEKTAR_WALLET') === 'toolbox') {
     if (fundKey === undefined) throw new Error('NEKTAR_WALLET=toolbox embeds its keyDeriver from the fee key — =client is the keyless mode')
     const tb = await import('@nektar/automation')
     const services = new tb.LiveWalletServices({ chain: ttn ? 'test' : 'main', mc, tracker, broadcast: (tx) => rawBroadcaster.broadcast(tx) })
@@ -748,7 +752,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // optional p2p eyes: NEKTAR_P2P_PEERS='ip:port,...' — first-hand inv stream
   // watching our reserve outpoints (spend events by ANYONE) and the fee-key
   // script (unannounced funding). No index: watched set only, rest is dropped.
-  const p2pPeers = (process.env.NEKTAR_P2P_PEERS ?? '')
+  const p2pPeers = (nektarEnv('NEKTAR_P2P_PEERS') ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
@@ -843,6 +847,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   const { wrapBroadcast, leasePredicate } = await import('@nektar/automation')
   const ledger = new AutomationStore(knex)
   await ledger.init()
+  // watch intent is a durable record, not an in-memory accident: any tx the
+  // journal knows was broadcast-but-not-final gets re-watched on boot, so a
+  // crash in the broadcast→watch window can't strand a proof wait
+  for (const t of await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])) events.watch(t.txid)
   reserve.leased = leasePredicate(ledger)
   if (liveTf !== undefined) liveTf.leased = leasePredicate(ledger)
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
@@ -858,11 +866,11 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       agentSeed: keys.agentSeed ? PrivateKey.fromHex(keys.agentSeed) : undefined,
       signingKey: keys.logKey ? PrivateKey.fromHex(keys.logKey) : undefined,
       shardKeys,
-      maxLevel: Number(process.env.NEKTAR_MAX_LEVEL ?? 3),
+      maxLevel: Number(nektarEnv('NEKTAR_MAX_LEVEL') ?? 3),
       feeRateSatPerKb: feeRate,
       securityStore: new FileSecurityStore(join(cfg.dataDir, 'security.json')),
       stateStore: new FileStateStore(join(cfg.dataDir, 'state.json')),
-      finalityDepth: Number(process.env.NEKTAR_FINALITY_DEPTH ?? 6)
+      finalityDepth: Number(nektarEnv('NEKTAR_FINALITY_DEPTH') ?? 6)
     },
     store
   )
@@ -891,7 +899,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // broadcaster's /events SSE stream into the same handler the webhook uses.
   // Needs no inbound port; Last-Event-ID cursor persists across restarts.
   let stream: { close: () => void } | undefined
-  if (!callbackUrl && (mc.callbackToken ?? process.env.NEKTAR_CALLBACK_TOKEN)) {
+  if (!callbackUrl && (mc.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'))) {
     const cursorFile = join(cfg.dataDir, 'sse-cursor')
     stream = statusStream(
       mc,
@@ -954,7 +962,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   }
   // NEKTAR_FEE_VAULT (testnet/main): anchor funding minted through the
   // fee-vault covenant — setupFeeVault returns the funder's takeReserve
-  const vaultSpec = process.env.NEKTAR_FEE_VAULT
+  const vaultSpec = nektarEnv('NEKTAR_FEE_VAULT')
   if (vaultSpec) {
     funder.takeReserve = await setupFeeVault({
       vaultSpec,
@@ -970,7 +978,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     })
   }
   // NEKTAR_FUND_TXIDS: funding txs to import directly (no address index needed)
-  for (const txid of (process.env.NEKTAR_FUND_TXIDS ?? '')
+  for (const txid of (nektarEnv('NEKTAR_FUND_TXIDS') ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)) {
@@ -985,7 +993,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     // index discovery (WoC) is OPT-IN — NEKTAR_INDEXER_DISCOVERY=1 — because it
     // creates an indexer dependency that doesn't scale. The default funding
     // path is NEKTAR_FUND_TXIDS=<txid|hex:rawtx> (import above).
-    if (process.env.NEKTAR_INDEXER_DISCOVERY === '1') {
+    if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') === '1') {
       try {
         for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u)
       } catch (e) {
@@ -1003,7 +1011,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // wait: indexer discovery when enabled, p2p 'pay' auto-import, or the
   // operator setting NEKTAR_FUND_TXIDS. NEKTAR_WAIT_FUNDING_MS caps it (30 min).
   const waitForFunding = async () => {
-    if (utxoView.utxos.length > 0 || process.env.NEKTAR_WAIT_FUNDING !== '1') return
+    if (utxoView.utxos.length > 0 || nektarEnv('NEKTAR_WAIT_FUNDING') !== '1') return
     try {
       const QR = await import('qrcode')
       process.stderr.write('\n' + (await QR.toString(fundAddress, { type: 'terminal', small: true })) + '\n')
@@ -1011,11 +1019,11 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       /* QR optional — the address prints either way */
     }
     process.stderr.write(`nektar ${net}: waiting for funding — send a few sats to ${fundAddress}\n`)
-    const deadline = Date.now() + Number(process.env.NEKTAR_WAIT_FUNDING_MS ?? 30 * 60_000)
+    const deadline = Date.now() + Number(nektarEnv('NEKTAR_WAIT_FUNDING_MS') ?? 30 * 60_000)
     while (utxoView.utxos.length === 0 && Date.now() < deadline) {
       await liveTf?.refresh().catch(() => undefined)
-      await new Promise((r) => setTimeout(r, Number(process.env.NEKTAR_FUND_POLL_MS ?? 15_000)))
-      for (const txid of (process.env.NEKTAR_FUND_TXIDS ?? '')
+      await new Promise((r) => setTimeout(r, Number(nektarEnv('NEKTAR_FUND_POLL_MS') ?? 15_000)))
+      for (const txid of (nektarEnv('NEKTAR_FUND_TXIDS') ?? '')
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean)) {
@@ -1025,7 +1033,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
           /* keep polling */
         }
       }
-      if (process.env.NEKTAR_INDEXER_DISCOVERY === '1') {
+      if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') === '1') {
         try {
           for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u)
         } catch {

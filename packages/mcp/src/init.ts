@@ -30,7 +30,7 @@ const ARGV = (k: string): string | undefined => {
 }
 // NEKTAR_ENV_FILE overrides the target — lets a scratch env be used for
 // testing or non-standard layouts without touching the operator's .env.
-const ENV_PATH = process.env.NEKTAR_ENV_FILE ?? fileURLToPath(new URL('../../../../.env', import.meta.url))
+const ENV_PATH = nektarEnv('NEKTAR_ENV_FILE') ?? fileURLToPath(new URL('../../../../.env', import.meta.url))
 const QS_PATH = fileURLToPath(new URL('../../../../infra/teranode-quickstart/.env', import.meta.url))
 
 // --network: only regtest is honest today — reject anything that would
@@ -65,7 +65,7 @@ function upsertEnv(p: string, key: string, value: string): void {
 }
 
 const env = readEnv(ENV_PATH)
-const existing = process.env.NEKTAR_REGTEST_WIF ?? env.NEKTAR_REGTEST_WIF
+const existing = nektarEnv('NEKTAR_REGTEST_WIF') ?? env.NEKTAR_REGTEST_WIF
 let key: PrivateKey
 let fresh = false
 if (existing && !ARG('force')) {
@@ -94,11 +94,11 @@ if (network === 'regtest') {
   // when the operator reuses a previously funded key.
   const qs = readEnv(QS_PATH)
   const cfg = {
-    rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
-    rpcUser: process.env.NEKTAR_RPC_USER ?? qs.rpc_user ?? 'teranode',
-    rpcPass: process.env.NEKTAR_RPC_PASS ?? qs.rpc_pass ?? '',
-    propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-    assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
+    rpcUrl: nektarEnv('NEKTAR_RPC_URL') ?? 'http://localhost:9292/',
+    rpcUser: nektarEnv('NEKTAR_RPC_USER') ?? qs.rpc_user ?? 'teranode',
+    rpcPass: nektarEnv('NEKTAR_RPC_PASS') ?? qs.rpc_pass ?? '',
+    propagationUrl: nektarEnv('NEKTAR_PROPAGATION_URL') ?? 'http://localhost:8833/tx',
+    assetUrl: nektarEnv('NEKTAR_ASSET_URL') ?? 'http://localhost:8090/api/v1'
   }
   // make the operator .env self-sufficient for the MCP server: map the
   // quickstart creds into NEKTAR_RPC_* if they aren't set already.

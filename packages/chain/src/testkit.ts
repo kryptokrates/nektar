@@ -56,14 +56,14 @@ function loadRepoEnv(): void {
 
 export function stackCfgFromEnv(): RegtestConfig | undefined {
   loadRepoEnv()
-  const pass = process.env.NEKTAR_RPC_PASS
+  const pass = nektarEnv('NEKTAR_RPC_PASS')
   if (pass === undefined || pass === '') return undefined
   return {
-    rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
-    rpcUser: process.env.NEKTAR_RPC_USER ?? 'teranode',
+    rpcUrl: nektarEnv('NEKTAR_RPC_URL') ?? 'http://localhost:9292/',
+    rpcUser: nektarEnv('NEKTAR_RPC_USER') ?? 'teranode',
     rpcPass: pass,
-    propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-    assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
+    propagationUrl: nektarEnv('NEKTAR_PROPAGATION_URL') ?? 'http://localhost:8833/tx',
+    assetUrl: nektarEnv('NEKTAR_ASSET_URL') ?? 'http://localhost:8090/api/v1'
   }
 }
 
@@ -74,7 +74,7 @@ let rpcCounter = 0
 /** watched broadcasts that never seal are dropped after this — regtest txs
  *  only prove once something mines, and tests often broadcast without mining. */
 const WATCH_TTL_MS = 60_000
-const dbgTimings = (): boolean => process.env.NEKTAR_DEBUG_TIMING === '1'
+const dbgTimings = (): boolean => nektarEnv('NEKTAR_DEBUG_TIMING') === '1'
 const dbgLog = (m: string): void => {
   process.stderr.write(`[testkit ${process.pid}] ${m}\n`)
 }
@@ -409,8 +409,8 @@ export class StackTreasury {
   ) {
     loadRepoEnv()
     this.key =
-      process.env.NEKTAR_REGTEST_WIF !== undefined && process.env.NEKTAR_REGTEST_WIF !== ''
-        ? PrivateKey.fromWif(process.env.NEKTAR_REGTEST_WIF)
+      nektarEnv('NEKTAR_REGTEST_WIF') !== undefined && nektarEnv('NEKTAR_REGTEST_WIF') !== ''
+        ? PrivateKey.fromWif(nektarEnv('NEKTAR_REGTEST_WIF'))
         : this.loadOrMakeKey(file)
     this.chain = new StackChain(cfg, this.key)
     this.reserve = new ReserveFunder(this.key, join(STATE_DIR, 'reserve.json'))

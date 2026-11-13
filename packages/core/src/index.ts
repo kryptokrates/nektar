@@ -8,3 +8,4 @@ export { PROTO, VERSION, PROTOCOL_ID, FIELD_COUNT, META_FLAG, chainRp, GENESIS_P
 export type { AnchorData } from './anchor.js'
 export * from './signer.js'
 export * from './fsx.js'
+export * from './env.js'

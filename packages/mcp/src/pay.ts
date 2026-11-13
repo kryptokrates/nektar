@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { utf8, sha256, toHex, signerAddress, signerPubHex, toSigner } from '@nektar/core'
 import type { NektarMemory } from './memory.js'
 
-export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAYMENTS ?? '')
+export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAYMENTS') ?? '')
 
 /** tools that cost sats when NEKTAR_PAYMENTS=1 */
 export const PAID_TOOLS = new Set([
@@ -29,7 +29,7 @@ export const PAID_TOOLS = new Set([
 const PROVER_TOOLS = new Set(['proveMembership', 'proveSubset', 'proveDerivation', 'attestMembership', 'attestInference'])
 
 const networkTag = (): string => {
-  const n = process.env.NEKTAR_NETWORK ?? 'regtest'
+  const n = nektarEnv('NEKTAR_NETWORK') ?? 'regtest'
   return n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest'
 }
 
@@ -40,9 +40,9 @@ const networkTag = (): string => {
 let opKey: PrivateKey | undefined
 let opAddr: string | undefined
 const opWif = (): PrivateKey | undefined => {
-  if (opKey === undefined && process.env.NEKTAR_OPERATOR_WIF) {
-    opKey = PrivateKey.fromWif(process.env.NEKTAR_OPERATOR_WIF)
-    opAddr = opKey.toPublicKey().toAddress(process.env.NEKTAR_NETWORK === 'main' ? [0x00] : [0x6f])
+  if (opKey === undefined && nektarEnv('NEKTAR_OPERATOR_WIF')) {
+    opKey = PrivateKey.fromWif(nektarEnv('NEKTAR_OPERATOR_WIF'))
+    opAddr = opKey.toPublicKey().toAddress(nektarEnv('NEKTAR_NETWORK') === 'main' ? [0x00] : [0x6f])
   }
   return opKey
 }
@@ -50,17 +50,17 @@ const opWif = (): PrivateKey | undefined => {
 /** settle address + quote signer: the operator WIF when set (legacy custody),
  *  else the instance's operator signer — no private key held. */
 const operatorAddress = async (mem: NektarMemory): Promise<string> =>
-  opWif() !== undefined ? opAddr! : await signerAddress(mem.operatorSigner(), process.env.NEKTAR_NETWORK === 'main' ? [0x00] : [0x6f])
+  opWif() !== undefined ? opAddr! : await signerAddress(mem.operatorSigner(), nektarEnv('NEKTAR_NETWORK') === 'main' ? [0x00] : [0x6f])
 
 /** startup check: paid tools require a settle destination BEFORE the first
  *  invoice is served — either the operator WIF (legacy) or NEKTAR_WALLET=client
  *  (the wallet's identity address; quoteSigs sign through the wallet). */
 export const requireOperatorWallet = (): void => {
-  if (!process.env.NEKTAR_OPERATOR_WIF && process.env.NEKTAR_WALLET !== 'client')
+  if (!nektarEnv('NEKTAR_OPERATOR_WIF') && nektarEnv('NEKTAR_WALLET') !== 'client')
     throw new Error(
       'NEKTAR_PAYMENTS=1 requires NEKTAR_OPERATOR_WIF or NEKTAR_WALLET=client at startup — without a settle destination an invoice can never be paid'
     )
-  if (process.env.NEKTAR_OPERATOR_WIF)
+  if (nektarEnv('NEKTAR_OPERATOR_WIF'))
     try {
       opWif()
     } catch (e) {
@@ -71,7 +71,7 @@ export const requireOperatorWallet = (): void => {
 /** per-tool price: NEKTAR_PRICE_<TOOL>_SATS, falling back to NEKTAR_PRICE_SATS, then defaults */
 export const priceFor = (tool: string): number =>
   Number(
-    process.env[`NEKTAR_PRICE_${tool.toUpperCase()}_SATS`] ?? process.env.NEKTAR_PRICE_SATS ?? (tool === 'anchor' ? 100 : PROVER_TOOLS.has(tool) ? 500 : 250)
+    process.env[`NEKTAR_PRICE_${tool.toUpperCase()}_SATS`] ?? nektarEnv('NEKTAR_PRICE_SATS') ?? (tool === 'anchor' ? 100 : PROVER_TOOLS.has(tool) ? 500 : 250)
   )
 
 interface Invoice {
@@ -125,7 +125,7 @@ export const verifyQuoteSig = (q: {
  *  replays as 'replayed', a second tx spending a coin an accepted payment
  *  spent refuses as 'conflict'. The pre-ledger payments.json txid list is
  *  migrated into the ledger at first use. */
-const payDir = (): string => process.env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar')
+const payDir = (): string => nektarEnv('NEKTAR_DATA_DIR') ?? join(process.cwd(), '.nektar')
 const legacyPayFile = (): string => join(payDir(), 'payments.json')
 let receiver: LedgerReceiver | undefined
 let legacyMigrated = false

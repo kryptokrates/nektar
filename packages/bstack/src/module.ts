@@ -233,7 +233,7 @@ export function createNektarModule(host: Host, nets: string[], opts?: { now?: ()
 }
 
 export default function create(host: Host): Required<Module> {
-  const nets = (process.env.NEKTAR_NETS ?? '')
+  const nets = (nektarEnv('NEKTAR_NETS') ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)

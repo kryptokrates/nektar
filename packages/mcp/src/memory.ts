@@ -1420,7 +1420,7 @@ export class NektarMemory {
    *  nothing): stored under <dataDir>/proofs/<sha256> and served publicly via
    *  GET /v1/proof/<sha256> so a verifier can re-run them without trusting us. */
   private proofDir(): string {
-    return join(this.opts.dataDir ?? process.env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar'), 'proofs')
+    return join(this.opts.dataDir ?? nektarEnv('NEKTAR_DATA_DIR') ?? join(process.cwd(), '.nektar'), 'proofs')
   }
   /** store a proof artifact; returns its sha256 commitment hex */
   putProof(bytes: Uint8Array): string {
@@ -1596,7 +1596,7 @@ export class NektarMemory {
    *  pledge — BSV only, see NOTICE): default ON, `NEKTAR_PROOF_SHARDING=0`
    *  opts out for patent-cautious operators → 'disabled'. */
   private proofShardingOn(): boolean {
-    return process.env.NEKTAR_PROOF_SHARDING !== '0'
+    return nektarEnv('NEKTAR_PROOF_SHARDING') !== '0'
   }
 
   /** holder side: a selective inclusion proof for a SUBSET of one batch's
@@ -1824,7 +1824,7 @@ export class NektarMemory {
    *  enable only where that tradeoff is acceptable. Writes bypass the public
    *  `remember` (no auto-anchor mid-read) and never break a read on failure. */
   private accessLogEnabled(): boolean {
-    return process.env.NEKTAR_ACCESS_LOG === '1'
+    return nektarEnv('NEKTAR_ACCESS_LOG') === '1'
   }
   async logAccess(entry: Record<string, unknown>): Promise<void> {
     if (!this.accessLogEnabled()) return
@@ -2188,7 +2188,7 @@ export class NektarMemory {
       domains,
       ...(desc ? { desc } : {}),
       ...(offers.length ? { offers } : {}),
-      network: process.env.NEKTAR_NETWORK ?? 'regtest',
+      network: nektarEnv('NEKTAR_NETWORK') ?? 'regtest',
       issuedAt: Date.now()
     }
     const r = await this.remember(CATALOG_SHARD, JSON.stringify(manifest))
@@ -2222,7 +2222,7 @@ export class NektarMemory {
     if (existing?.sha256 === sha) return existing
     try {
       const ref = await st.put(
-        `packs/${network ?? process.env.NEKTAR_NETWORK ?? 'regtest'}/${await this.shardId(shard)}/${sha}.json`,
+        `packs/${network ?? nektarEnv('NEKTAR_NETWORK') ?? 'regtest'}/${await this.shardId(shard)}/${sha}.json`,
         bytes,
         'application/json'
       )
@@ -3065,12 +3065,12 @@ export class NektarMemory {
         records++
         if (r.anchorTxid !== undefined) anchoredRecords++
       }
-    const prover = process.env.NEKTAR_STARK_PROVER
-      ? existsSync(process.env.NEKTAR_STARK_PROVER)
+    const prover = nektarEnv('NEKTAR_STARK_PROVER')
+      ? existsSync(nektarEnv('NEKTAR_STARK_PROVER'))
         ? 'native binary'
         : 'NEKTAR_STARK_PROVER set but file missing'
       : await new Promise<string>((res) => {
-          execFile('docker', ['image', 'inspect', process.env.NEKTAR_STARK_IMAGE ?? 'nektar-stark-build'], { timeout: 5_000 }, (e) =>
+          execFile('docker', ['image', 'inspect', nektarEnv('NEKTAR_STARK_IMAGE') ?? 'nektar-stark-build'], { timeout: 5_000 }, (e) =>
             res(e ? 'absent (set NEKTAR_STARK_PROVER or build nektar-stark-build)' : 'docker image')
           )
         })
@@ -3083,7 +3083,7 @@ export class NektarMemory {
       unprovenAnchors: this.unprovenAnchors().length,
       importedBundles: this.importedBundles.size,
       publicPacks: (await this.publicShards()).length,
-      payments: /^(1|true|yes)$/i.test(process.env.NEKTAR_PAYMENTS ?? '') ? 'on' : 'off',
+      payments: /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAYMENTS') ?? '') ? 'on' : 'off',
       prover,
       bond: (() => {
         const b = this.bondStatus()

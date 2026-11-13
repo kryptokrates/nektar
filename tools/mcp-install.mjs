@@ -14,11 +14,11 @@ const PROFILE = process.env.NEKTAR_PROFILE ?? 'nektar'
 // Docker Desktop ≥ 4.97 only accepts file:// servers inside ~/.docker/mcp/catalogs
 const { mkdirSync, copyFileSync } = await import('node:fs')
 const { homedir } = await import('node:os')
-const { join } = await import('node:path')
-const catDir = join(homedir(), '.docker', 'mcp', 'catalogs', 'nektar')
+const nodePath = await import('node:path')
+const catDir = nodePath.join(homedir(), '.docker', 'mcp', 'catalogs', 'nektar')
 mkdirSync(catDir, { recursive: true })
 const staged = (name) => {
-  const dst = join(catDir, name)
+  const dst = nodePath.join(catDir, name)
   copyFileSync(fileURLToPath(new URL(`../docker-mcp/${name}`, import.meta.url)), dst)
   return dst
 }

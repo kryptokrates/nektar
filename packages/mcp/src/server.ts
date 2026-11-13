@@ -14,7 +14,7 @@ const shareBlock = (token: string) => {
 
 /** public base of /v1/verify for footers/QRs — NEKTAR_VERIFY_BASE for hosted
  *  deployments (https://host or ngrok), else the local HTTP port. */
-const verifyBase = (): string => process.env.NEKTAR_VERIFY_BASE ?? `http://localhost:${process.env.NEKTAR_HTTP_PORT ?? 8080}`
+const verifyBase = (): string => nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://localhost:${nektarEnv('NEKTAR_HTTP_PORT') ?? 8080}`
 
 export const TOOLS = [
   {
@@ -784,10 +784,10 @@ const PAID_SALE_TOOLS = new Set([
 ])
 const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'])
 const CLAIM_OPS = new Set(['deploy', 'status', 'settle', 'deploySale', 'buySale'])
-const paidSaleEnabled = () => /^(1|true|yes)$/i.test(process.env.NEKTAR_PAID_DISCLOSURE ?? '')
+const paidSaleEnabled = () => /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAID_DISCLOSURE') ?? '')
 /** tools visible to clients right now — paid-disclosure tools are gated by env */
 const AGENT_TOOLS = new Set(['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor'])
-const toolProfile = (): 'agent' | 'operator' => ((process.env.NEKTAR_TOOL_PROFILE ?? 'agent').toLowerCase() === 'operator' ? 'operator' : 'agent')
+const toolProfile = (): 'agent' | 'operator' => ((nektarEnv('NEKTAR_TOOL_PROFILE') ?? 'agent').toLowerCase() === 'operator' ? 'operator' : 'agent')
 export const visibleTools = () =>
   TOOLS.filter((t) => (toolProfile() === 'operator' || AGENT_TOOLS.has(t.name)) && (!PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled()))
 
@@ -1604,8 +1604,8 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
           ...(paid ? { payment: paid } : {}),
           ...(typeof args?.caller === 'string' ? { caller: args.caller } : {}),
           ...(typeof args?.delegationId === 'string' ? { delegationId: args.delegationId } : {}),
-          ...(typeof (args?.manifestId ?? process.env.NEKTAR_LAST_MANIFEST) === 'string'
-            ? { manifestId: args?.manifestId ?? process.env.NEKTAR_LAST_MANIFEST }
+          ...(typeof (args?.manifestId ?? nektarEnv('NEKTAR_LAST_MANIFEST')) === 'string'
+            ? { manifestId: args?.manifestId ?? nektarEnv('NEKTAR_LAST_MANIFEST') }
             : {})
         },
         mem

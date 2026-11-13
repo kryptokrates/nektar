@@ -22,7 +22,7 @@ import type { NektarMemory } from './memory.js'
 
 /** emitted verifier artifacts — dev-local output of spike_groth16_aiinf.py
  *  (gitignored; the shipped proof is nChain's, the setup is dev-grade) */
-const ARTIFACT_DIR = () => process.env.NEKTAR_GROTH16_OUT ?? fileURLToPath(new URL('../../../../tools/groth16-spike/out/', import.meta.url))
+const ARTIFACT_DIR = () => nektarEnv('NEKTAR_GROTH16_OUT') ?? fileURLToPath(new URL('../../../../tools/groth16-spike/out/', import.meta.url))
 
 export interface AttestInferenceResult {
   attestation: InferenceAttestation

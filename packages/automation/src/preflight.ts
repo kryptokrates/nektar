@@ -238,9 +238,9 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
   // A5 — payments: the ledger must open and its file must be writable when
   // payments are enabled; off = nothing to drop, reported as on.
   push('payments', async () => {
-    const on = /^(1|true|yes)$/i.test(process.env.NEKTAR_PAYMENTS ?? '')
+    const on = /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAYMENTS') ?? '')
     if (!on) return { check: 'payments', pass: true, detail: 'payments off (NEKTAR_PAYMENTS unset)' }
-    const dir = cfg.dataDir ?? process.env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar')
+    const dir = cfg.dataDir ?? nektarEnv('NEKTAR_DATA_DIR') ?? join(process.cwd(), '.nektar')
     try {
       mkdirSync(dir, { recursive: true })
       accessSync(dir, constants.W_OK)

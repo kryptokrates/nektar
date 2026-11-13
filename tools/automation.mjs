@@ -41,7 +41,7 @@ const env = existsSync(join(root, '.env'))
   : {}
 const dataDir = resolve(flag('--data') ?? process.env.NEKTAR_DATA_DIR ?? env.NEKTAR_DATA_DIR ?? join(root, '.nektar'))
 const json = argv.includes('--json') ? (argv.splice(argv.indexOf('--json'), 1), true) : false
-const dist = join(root, 'packages/mcp/dist/src/automation')
+const dist = join(root, 'packages/automation/dist/src')
 if (!existsSync(join(dist, 'store.js'))) {
   console.error('automation: no build — run pnpm -r build first')
   process.exit(1)

@@ -64,7 +64,7 @@ const wake = (key) => {
   for (const r of set) r()
 }
 
-const server = http.createServer(async (req, res) => {
+const handle = async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://x')
   const json = (code, body) => {
     res.writeHead(code, { 'content-type': 'application/json' })
@@ -144,6 +144,7 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     return json(500, { error: String(e).slice(0, 200) })
   }
-})
+}
+const server = http.createServer((req, res) => void handle(req, res))
 
 server.listen(PORT, () => console.log(`watch-shim: :${PORT} → ${BACKEND} (poll ${POLL_MS}ms, maxWait ${MAX_WAIT_MS}ms)`))

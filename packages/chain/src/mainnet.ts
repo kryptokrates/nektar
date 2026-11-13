@@ -21,8 +21,8 @@ export interface MainnetConfig {
 const def = (c?: MainnetConfig) => ({
   // BSV Broadcaster (formerly Arcade; the ARC successor) — GorillaPool instance
   broadcasterUrl: c?.broadcasterUrl ?? 'https://arcade.gorillapool.io',
-  callbackUrl: c?.callbackUrl ?? process.env.NEKTAR_CALLBACK_URL,
-  callbackToken: c?.callbackToken ?? process.env.NEKTAR_CALLBACK_TOKEN,
+  callbackUrl: c?.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL'),
+  callbackToken: c?.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'),
   wocUrl: c?.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main',
   fetch: c?.fetchImpl ?? fetch,
   broadcasterApiKey: c?.broadcasterApiKey,

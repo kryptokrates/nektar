@@ -767,7 +767,7 @@ function parseBeef(beef: number[]): Transaction | undefined {
   try {
     return subjectTx(readWire(new Uint8Array(beef)))
   } catch (e) {
-    if (process.env.NEKTAR_DEBUG_PARSEBEEF) console.error(`parseBeef refused ${beef.length}B: ${(e as Error).message}`)
+    if (nektarEnv('NEKTAR_DEBUG_PARSEBEEF')) console.error(`parseBeef refused ${beef.length}B: ${(e as Error).message}`)
     return undefined
   }
 }

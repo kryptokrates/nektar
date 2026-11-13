@@ -59,6 +59,20 @@ module.exports = {
       to: { path: '^(packages/mcp/|node_modules/@nektar/mcp/)' }
     },
     {
+      name: 'no-automation-to-mcp',
+      severity: 'error',
+      comment: 'automation is a self-contained engine — it reaches its host only through the AutomationHost interface, never the app package',
+      from: { path: '^packages/automation/' },
+      to: { path: '^(packages/mcp/|node_modules/@nektar/mcp/)' }
+    },
+    {
+      name: 'no-store-to-app',
+      severity: 'error',
+      comment: 'store is leaf blob/pack persistence — it must not depend on application packages',
+      from: { path: '^packages/store/' },
+      to: { path: '^(packages/(mcp|automation|bstack)/|node_modules/@nektar/(mcp|automation|bstack)/)' }
+    },
+    {
       name: 'no-e2e-imports',
       severity: 'error',
       comment: 'e2e is a test harness — only e2e itself and test files may import it',

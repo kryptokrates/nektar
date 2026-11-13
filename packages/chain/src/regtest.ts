@@ -103,11 +103,11 @@ export class TeranodeRPCTracker implements ChainTracker {
 
 export function regtestStackFromEnv(): { tracker: ChainTracker; broadcaster: Broadcaster } {
   const cfg: RegtestConfig = {
-    rpcUrl: process.env.NEKTAR_RPC_URL ?? 'http://localhost:9292/',
-    rpcUser: process.env.NEKTAR_RPC_USER ?? 'teranode',
-    rpcPass: process.env.NEKTAR_RPC_PASS ?? '',
-    propagationUrl: process.env.NEKTAR_PROPAGATION_URL ?? 'http://localhost:8833/tx',
-    assetUrl: process.env.NEKTAR_ASSET_URL ?? 'http://localhost:8090/api/v1'
+    rpcUrl: nektarEnv('NEKTAR_RPC_URL') ?? 'http://localhost:9292/',
+    rpcUser: nektarEnv('NEKTAR_RPC_USER') ?? 'teranode',
+    rpcPass: nektarEnv('NEKTAR_RPC_PASS') ?? '',
+    propagationUrl: nektarEnv('NEKTAR_PROPAGATION_URL') ?? 'http://localhost:8833/tx',
+    assetUrl: nektarEnv('NEKTAR_ASSET_URL') ?? 'http://localhost:8090/api/v1'
   }
   return { tracker: new TeranodeRPCTracker(cfg), broadcaster: new TeranodeBroadcaster(cfg.propagationUrl) }
 }

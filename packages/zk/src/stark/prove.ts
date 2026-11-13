@@ -20,7 +20,7 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const unhex = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'))
 
 export function proverUrl(): string | null {
-  const u = process.env.NEKTAR_STARK_PROVER_URL
+  const u = nektarEnv('NEKTAR_STARK_PROVER_URL')
   return u ? u.replace(/\/$/, '') : null
 }
 
@@ -31,7 +31,7 @@ export async function remoteProve(payload: string, path: 'prove' | 'prove-der', 
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), timeoutMs)
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (process.env.NEKTAR_STARK_PROVER_TOKEN) headers.Authorization = `Bearer ${process.env.NEKTAR_STARK_PROVER_TOKEN}`
+  if (nektarEnv('NEKTAR_STARK_PROVER_TOKEN')) headers.Authorization = `Bearer ${nektarEnv('NEKTAR_STARK_PROVER_TOKEN')}`
   let res: Response
   try {
     res = await fetch(url, { method: 'POST', headers, body: payload, signal: ctrl.signal })
@@ -46,7 +46,7 @@ export async function remoteProve(payload: string, path: 'prove' | 'prove-der', 
 }
 
 function proverCommand(): [string, string[]] {
-  const bin = process.env.NEKTAR_STARK_PROVER
+  const bin = nektarEnv('NEKTAR_STARK_PROVER')
   if (bin) return [bin, ['prove']]
   return [
     'docker',
@@ -55,8 +55,8 @@ function proverCommand(): [string, string[]] {
       '--rm',
       '-i',
       '-v',
-      `${process.env.NEKTAR_STARK_TARGET_VOLUME ?? 'nektar-stark-target'}:/work/target`,
-      process.env.NEKTAR_STARK_IMAGE ?? 'nektar-stark-build',
+      `${nektarEnv('NEKTAR_STARK_TARGET_VOLUME') ?? 'nektar-stark-target'}:/work/target`,
+      nektarEnv('NEKTAR_STARK_IMAGE') ?? 'nektar-stark-build',
       '/work/target/release/nektar-stark',
       'prove'
     ]
@@ -66,7 +66,7 @@ function proverCommand(): [string, string[]] {
 /** prove leaf ∈ batch(root) and return L_ZKMem v2 bytes */
 export async function proveMembershipStark(
   inp: ProveMembershipInput,
-  timeoutMs = Number(process.env.NEKTAR_STARK_TIMEOUT_MS ?? 300_000)
+  timeoutMs = Number(nektarEnv('NEKTAR_STARK_TIMEOUT_MS') ?? 300_000)
 ): Promise<{ bytes: Uint8Array; ms: number; root: string }> {
   const payload = JSON.stringify({ leaf: hex(inp.leaf), index: inp.index, size: inp.size, siblings: inp.siblings.map(hex), queryId: hex(inp.queryId) })
   const out = proverUrl()

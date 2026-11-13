@@ -261,7 +261,7 @@ export function createHttpApi(
         // which is a discovery doc agents must find unauthenticated) requires a
         // bearer token — the gate that makes a public bind safe. Unset =
         // localhost-trusted behaviour (the default bind is 127.0.0.1 anyway).
-        const tok = process.env.NEKTAR_HTTP_TOKEN
+        const tok = nektarEnv('NEKTAR_HTTP_TOKEN')
         const publicPath =
           url.pathname === '/v1/health' ||
           url.pathname === '/v1/automation/health' ||
@@ -276,8 +276,8 @@ export function createHttpApi(
           url.pathname === '/v1/arc-callback'
         const operatorApproval =
           url.pathname.startsWith('/v1/automation/approvals/') &&
-          process.env.NEKTAR_OPERATOR_TOKEN &&
-          req.headers.authorization === `Bearer ${process.env.NEKTAR_OPERATOR_TOKEN}`
+          nektarEnv('NEKTAR_OPERATOR_TOKEN') &&
+          req.headers.authorization === `Bearer ${nektarEnv('NEKTAR_OPERATOR_TOKEN')}`
         if (tok && !publicPath && !operatorApproval && req.headers.authorization !== `Bearer ${tok}`) {
           return send(401, { error: 'unauthorized' })
         }
@@ -321,7 +321,7 @@ export function createHttpApi(
               d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
             }
             const host = req.headers.host ?? 'localhost'
-            const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${host}`
+            const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${host}`
             // receipts — newest last N
             const rrecs = (await mem.records('__receipts__').catch(() => [] as Array<{ seq: number; data?: string }>)) as Array<{ seq: number; data?: string }>
             const receiptRows = rrecs
@@ -354,7 +354,7 @@ export function createHttpApi(
             const dataDir = (mem as unknown as { opts?: { dataDir?: string } }).opts?.dataDir ?? '.nektar'
             const fraudRows = ''
             // agents panel — this agent's declared identity + discovered peers
-            const agentsRows = `<div class="row"><span><b>${esc(process.env.NEKTAR_MODEL_ID ?? 'this agent')}</b></span><span class="dim">${esc(mem.operatorKey().toPublicKey().toString().slice(0, 16))}…</span></div>`
+            const agentsRows = `<div class="row"><span><b>${esc(nektarEnv('NEKTAR_MODEL_ID') ?? 'this agent')}</b></span><span class="dim">${esc(mem.operatorKey().toPublicKey().toString().slice(0, 16))}…</span></div>`
             const f = d.funding
             const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
             const up = process.uptime()
@@ -425,7 +425,7 @@ ${fraudRows}
 <div class="stream" data-ev="market"></div>
 </div>
 <div class="card">
-<div class="top"><span class="label">Agents</span><span class="tags">${esc(process.env.NEKTAR_MODEL_ID ?? 'unattested')}</span></div>
+<div class="top"><span class="label">Agents</span><span class="tags">${esc(nektarEnv('NEKTAR_MODEL_ID') ?? 'unattested')}</span></div>
 ${agentsRows}
 <div class="stream" data-ev="agents"></div>
 </div>
@@ -493,7 +493,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'automation' && p[2] === 'approvals' && p.length === 4) {
             const au = mem.automation
             if (!au) return send(404, { error: 'automation not enabled' })
-            const operator = process.env.NEKTAR_OPERATOR_TOKEN
+            const operator = nektarEnv('NEKTAR_OPERATOR_TOKEN')
             if (!operator) return send(403, { error: 'operator approvals disabled — set NEKTAR_OPERATOR_TOKEN' })
             if (req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required (the agent bearer cannot approve)' })
             const origin = req.headers.origin
@@ -547,7 +547,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
               }
               const result = await verifyReceipt(mem, arg)
               if (url.searchParams.get('format') === 'html' || req.headers.accept?.includes('text/html')) {
-                const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
+                const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${req.headers.host ?? 'localhost'}`
                 const q = tok ? `r=${tok}` : `s=${seq}`
                 mem.metrics.inc('nektar_verify_views_total', {}, 1, 'verify page views')
                 // viral edge: cited shards this operator offers publicly become
@@ -601,7 +601,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
             try {
               // NEKTAR_CALLBACK_TOKEN was sent as X-CallbackToken; BSV Broadcaster
               // delivers it on the webhook as Authorization: Bearer (openapi)
-              const cbTok = process.env.NEKTAR_CALLBACK_TOKEN
+              const cbTok = nektarEnv('NEKTAR_CALLBACK_TOKEN')
               if (cbTok) {
                 const expected = Buffer.from(`Bearer ${cbTok}`)
                 const given = Buffer.from(String(req.headers.authorization ?? ''))
@@ -623,7 +623,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           if (req.method === 'GET' && url.pathname === '/.well-known/x402') {
             const { paymentsEnabled, PAID_TOOLS, priceFor } = await import('./pay.js')
             if (!paymentsEnabled()) return send(404, { error: 'payments disabled (NEKTAR_PAYMENTS=1)' })
-            const n = process.env.NEKTAR_NETWORK ?? 'regtest'
+            const n = nektarEnv('NEKTAR_NETWORK') ?? 'regtest'
             return send(200, {
               x402Version: 2,
               scheme: 'exact',
@@ -640,8 +640,8 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           // what's offered — the viral cold-start edge (importShard re-verifies
           // every bundle, so serving adds zero trust). NEKTAR_PACK_SHARE=0 opts out.
           if (req.method === 'GET' && url.pathname === '/.well-known/nektar') {
-            if (/^(0|false|no)$/i.test(process.env.NEKTAR_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
-            const base = process.env.NEKTAR_VERIFY_BASE ?? `http://${req.headers.host ?? 'localhost'}`
+            if (/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
+            const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${req.headers.host ?? 'localhost'}`
             const pub = await mem.publicShards()
             const catalog = await mem.shardCatalog().catch(() => [] as import('./memory.js').ShardManifest[])
             return send(200, {
@@ -671,7 +671,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
             })
           }
           if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'pack' && p.length === 3) {
-            if (/^(0|false|no)$/i.test(process.env.NEKTAR_PACK_SHARE ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
+            if (/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
             try {
               const pack = await mem.exportShardPack(decodeURIComponent(p[2]))
               mem.metrics.inc('nektar_packs_served_total', {}, 1, 'public shard packs served')
@@ -744,7 +744,7 @@ async function verifyPage(
   const QR = await import('qrcode')
   const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 180 })
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const net = process.env.NEKTAR_NETWORK ?? 'regtest'
+  const net = nektarEnv('NEKTAR_NETWORK') ?? 'regtest'
   const netLabel =
     net === 'main'
       ? 'BSV mainnet — real coins'

@@ -25,7 +25,7 @@ const reader = recordReader((reason, detail) => new Error(`market payload ${reas
 /** Emit the legacy v1 JSON envelope (pre-record wire form for talking to
  *  hosts running an older module — also NEKTAR_MARKET_V1=1). */
 export function encodePayload(m: MarketPayload, opts?: { legacy?: boolean }): Uint8Array {
-  if (opts?.legacy === true || process.env.NEKTAR_MARKET_V1 === '1') {
+  if (opts?.legacy === true || nektarEnv('NEKTAR_MARKET_V1') === '1') {
     const b = utf8(marketJson(m))
     if (b.length > MAX_PAYLOAD) throw new Error(`payload ${b.length} over ${MAX_PAYLOAD}`)
     return b

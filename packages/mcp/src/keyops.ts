@@ -3,7 +3,7 @@
 // derivations for shards/log/fund, the operator wallet/signer accessors, and
 // the wrapCustody edge (ECDH cannot go through a signer).
 import { PrivateKey, ProtoWallet } from '@bsv/sdk'
-import { walletSigner, custodySigner, FUND_SIGN_ARGS, toSigner, type SignerLike, type DigestSigner, type SignerWallet } from '@nektar/core'
+import { custodySigner, heldRootKey, FUND_SIGN_ARGS, toSigner, type SignerLike, type DigestSigner, type SignerWallet } from '@nektar/core'
 import type { WalletInterface } from '@bsv/sdk'
 import type { NektarMemoryOptions, OperatorWallet } from './types.js'
 
@@ -25,14 +25,14 @@ export class KeyOps {
 
   /** the wallet-derived log signer (checkpoint signatures under custody) */
   walletLogSigner(): DigestSigner {
-    return walletSigner(this.deps.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: 'nektar-log', counterparty: 'self' })
+    return custodySigner(this.deps.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: 'nektar-log', counterparty: 'self' })
   }
   /** arbitrary wallet-derived signer for a nektar keyID — used by rotate to
    *  assign a new shard owner without key material crossing the API. Throws
    *  when the instance has no wallet custody. */
   walletKeySigner(keyID: string): DigestSigner {
     if (this.deps.opts.wallet === undefined) throw new Error('walletKeySigner requires wallet custody (NEKTAR_WALLET)')
-    return walletSigner(this.deps.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID, counterparty: 'self' })
+    return custodySigner(this.deps.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID, counterparty: 'self' })
   }
 
   shardKey(shard: string): SignerLike {
@@ -44,7 +44,7 @@ export class KeyOps {
       opts.shardKeys.set(
         shard,
         opts.wallet !== undefined
-          ? walletSigner(opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: `nektar-shard:${shard}`, counterparty: 'self' })
+          ? custodySigner(opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: `nektar-shard:${shard}`, counterparty: 'self' })
           : PrivateKey.fromRandom()
       )
     }
@@ -70,7 +70,10 @@ export class KeyOps {
    *  (nektar-fund) whose pkh the reserve funds and spends under. */
   fundSigner(): DigestSigner {
     if (this._fundSigner === undefined) {
-      if (this.deps.opts.wallet !== undefined) this._fundSigner = custodySigner(this.deps.opts.wallet as SignerWallet, FUND_SIGN_ARGS)
+      const w = this.deps.opts.wallet as SignerWallet | undefined
+      // held-key custody (toolbox): the wallet's root IS the fee key the
+      // reserve outputs lock to — derived schemes are external custody only.
+      if (w !== undefined) this._fundSigner = custodySigner(w, heldRootKey(w) !== undefined ? { identityKey: true } : FUND_SIGN_ARGS)
       else if (this.deps.fundKey() !== undefined) this._fundSigner = toSigner(this.deps.fundKey()!)
       else throw new Error('no funding signer: configure a wallet or a fund key')
     }

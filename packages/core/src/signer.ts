@@ -118,22 +118,46 @@ export const FUND_SIGN_ARGS: { protocolID: [number, string]; keyID: string; coun
  *  over keyArgs — a consistent derived pub/sig pair on spec-conformant
  *  substrates; unlockP2PKH/runarSigner self-verify catches substrates that
  *  cannot honor pub↔sig parity (e.g. sdk-4 ProtoWallet). */
+/** the wallet's held root key, re-keyed into THIS sdk build — toolbox's
+ *  keyDeriver carries the CJS copy's PrivateKey, which fails instanceof on
+ *  real key material (WIF round-trip keeps every downstream object one
+ *  class set). undefined under genuine external custody (WalletClient). */
+export function heldRootKey(wallet: SignerWallet): PrivateKey | undefined {
+  const root = (wallet as { keyDeriver?: { rootKey?: unknown } }).keyDeriver?.rootKey
+  if (root instanceof PrivateKey) return root
+  if (typeof (root as PrivateKey | undefined)?.toWif === 'function') {
+    try {
+      return PrivateKey.fromWif((root as PrivateKey).toWif())
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+
 export function custodySigner(
   wallet: SignerWallet,
   keyArgs: { identityKey: true } | { protocolID: [number, string]; keyID: string; counterparty?: string; forSelf?: boolean }
 ): DigestSigner {
-  const root = (wallet as { keyDeriver?: { rootKey?: unknown } }).keyDeriver?.rootKey
-  if (root instanceof PrivateKey) return keySigner(root)
-  // dual-package builds: wallet-toolbox is CJS, so its keyDeriver's rootKey
-  // is the OTHER sdk copy's PrivateKey — instanceof fails on real key
-  // material and the code silently degrades to a derived walletSigner whose
-  // pub/sig pair doesn't match what custody actually holds. Re-key by WIF
-  // through this copy so every object downstream stays one class set.
-  if (typeof (root as PrivateKey | undefined)?.toWif === 'function') {
-    try {
-      return keySigner(PrivateKey.fromWif((root as PrivateKey).toWif()))
-    } catch {
-      /* not a real key — fall through to the wallet-derived signer */
+  // Held-key custody (toolbox): the app literally holds the root key, so every
+  // signer is a local keySigner — exact legacy semantics AND correct digest
+  // semantics. The remote path can't be used anyway: toolbox's createSignature
+  // doesn't implement hashToDirectlySign (it would sign sha256(digest), which
+  // no on-chain verifier accepts). Derived args take the same BRC-42
+  // derivation the wallet's own signing uses, so the pub is byte-identical
+  // to what getPublicKey(keyArgs) returns.
+  const root = heldRootKey(wallet)
+  if (root !== undefined) {
+    if ('identityKey' in keyArgs) return keySigner(root)
+    const derive = (
+      wallet as { keyDeriver?: { derivePrivateKey?: (p: [number, string], k: string, c: unknown) => { toWif(): string } } }
+    ).keyDeriver?.derivePrivateKey
+    if (typeof derive === 'function') {
+      try {
+        return keySigner(PrivateKey.fromWif(derive(keyArgs.protocolID, keyArgs.keyID, keyArgs.counterparty ?? 'self').toWif()))
+      } catch {
+        /* derivation unsupported — fall through to the remote signer */
+      }
     }
   }
   return walletSigner(wallet, keyArgs)

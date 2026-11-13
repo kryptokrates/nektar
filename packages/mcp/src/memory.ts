@@ -27,7 +27,7 @@ import {
   type Fragment,
   type Bytes,
   type Provenance,
-  walletSigner,
+  custodySigner,
   signerPubHex,
   toSigner,
   nektarEnv,
@@ -448,6 +448,13 @@ export class NektarMemory {
     this.txOps.deliverTxRejected(txid)
   }
 
+  /** the chain observer's abandon horizon fired for a txid — the terminal
+   *  verdict for a mint that was resubmitted but never mined (regtest and
+   *  mainnet runtimes emit it on `events`) */
+  onTxAbandoned(cb: (txid: string) => void): void {
+    this.events.on('txAbandoned', ({ txid }: { txid: string }) => cb(txid))
+  }
+
   /** what the chain view knows about a tx right now */
   async txState(txid: string): Promise<'mined' | 'seen' | 'rejected' | 'unknown'> {
     return await this.txOps.txState(txid)
@@ -779,7 +786,7 @@ export class NektarMemory {
     const owner =
       ownerKey ??
       (this.opts.wallet !== undefined
-        ? walletSigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: `nektar-automaton:${id}`, counterparty: 'self' })
+        ? custodySigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: `nektar-automaton:${id}`, counterparty: 'self' })
         : PrivateKey.fromRandom())
     const ac = new AutomatonChain(def, owner, this.funder, this.fundSigner(), this.chain)
     const h = await ac.deploy()

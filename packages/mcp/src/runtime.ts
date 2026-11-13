@@ -33,7 +33,7 @@ import {
   type MainnetConfig
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
-import { walletSigner, type SignerWallet } from '@nektar/core'
+import { walletSigner, FUND_SIGN_ARGS, type SignerWallet } from '@nektar/core'
 import { wireP2p, setupFeeVault } from './setup.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
@@ -643,10 +643,16 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     if (mc.fundWif !== undefined) process.stderr.write(`nektar ${net}: NEKTAR_FUND_WIF ignored under NEKTAR_WALLET=client — the external wallet signs\n`)
     const { WalletClient, PublicKey: SdkPublicKey } = await import('@bsv/sdk')
     clientWallet = new WalletClient('auto', 'nektar')
-    const pk = SdkPublicKey.fromString((await clientWallet.getPublicKey({ identityKey: true })).publicKey)
+    // the reserve funds a stable self-derived wallet keyID (nektar-fund) —
+    // createSignature under the same derivation produces the matching sig, so
+    // P2PKH spends can be wallet-signed without the app holding key material.
+    // (identityKey cannot root-sign on sdk-4 — the derived pair is the only
+    // spendable surface external custody exposes.)
+    const fund = walletSigner(clientWallet, FUND_SIGN_ARGS)
+    const pk = SdkPublicKey.fromString(await fund.pubKeyHex())
     fundAddress = pk.toAddress(ttn ? [0x6f] : undefined)
     pkhHex = Buffer.from(pk.toHash()).toString('hex')
-    process.stderr.write(`nektar ${net}: NEKTAR_WALLET=client — signing via external wallet substrate (address ${fundAddress})\n`)
+    process.stderr.write(`nektar ${net}: NEKTAR_WALLET=client — signing via external wallet substrate (derived funding address ${fundAddress})\n`)
   } else {
     fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, true)
     fundAddress = fundKey.toPublicKey().toAddress(ttn ? [0x6f] : undefined)
@@ -915,7 +921,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       vaultSpec,
       dataDir: cfg.dataDir,
       pkhHex,
-      fundKey: fundKey ?? walletSigner(clientWallet as SignerWallet),
+      fundKey: fundKey ?? walletSigner(clientWallet as SignerWallet, FUND_SIGN_ARGS),
       fundAddress,
       reserve,
       broadcast: async (tx) => await chain.broadcast(tx),

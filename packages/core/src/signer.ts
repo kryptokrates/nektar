@@ -7,11 +7,15 @@
 // differs.
 //
 // Contract notes:
-// - DigestSigner.sign(digest) mimics PrivateKey.sign: it SHA-256s `digest`
-//   then ECDSA-signs. Callers pass the same digest bytes they passed to
-//   key.sign(...) and get a DER signature back.
+// - DigestSigner.sign(digest) mimics PrivateKey.sign: ECDSA over `digest` as
+//   given (sdk 4.x PrivateKey.sign signs the bytes directly — callers pass
+//   already-digested material such as sighash preimages). Wallet impls use
+//   hashToDirectlySign so both custodies sign the identical digest.
 // - unlockP2PKH produces the same unlocking script the SDK's
-//   P2PKH().unlock(privateKey,...) template produces: <sig+sighash> <pubkey>.
+//   P2PKH().unlock(privateKey,...) template produces: <sig+sighash> <pubkey>,
+//   and self-verifies the pair — a wallet substrate whose createSignature
+//   derives a key that does not match getPublicKey throws instead of
+//   emitting a script that can never evaluate on-chain.
 
 import {
   Hash,
@@ -29,7 +33,7 @@ import {
 
 /** Anything that can sign a digest and expose its public key. */
 export interface DigestSigner {
-  /** ECDSA over sha256(digest) — same contract as PrivateKey.sign. */
+  /** ECDSA over `digest` as given — same contract as PrivateKey.sign. */
   sign(digest: number[] | Uint8Array): Promise<Signature>
   /** compressed public key (hex). */
   pubKeyHex(): Promise<string>
@@ -96,6 +100,32 @@ export function walletSigner(
   }
 }
 
+/** Derivation the app uses for funding spends under external wallet custody
+ *  (NEKTAR_WALLET=client): a stable self-derived keyID so the reserve's pkh
+ *  and the signing pair come from one BRC-42 derivation. Deterministic
+ *  across restarts for the same wallet. */
+export const FUND_SIGN_ARGS: { protocolID: [number, string]; keyID: string; counterparty: string } = {
+  protocolID: [2, 'nektar'],
+  keyID: 'nektar-fund',
+  counterparty: 'self'
+}
+
+/** Best ECDSA-capable signer a wallet surface can offer for a given
+ *  derivation. If the wallet holds a keyDeriver (toolbox custody — the app
+ *  literally holds the root key) the signer is a keySigner over that root
+ *  key: byte-exact legacy semantics, pub = identity. External custody
+ *  (WalletClient, no key material in-process) falls back to a walletSigner
+ *  over keyArgs — a consistent derived pub/sig pair on spec-conformant
+ *  substrates; unlockP2PKH/runarSigner self-verify catches substrates that
+ *  cannot honor pub↔sig parity (e.g. sdk-4 ProtoWallet). */
+export function custodySigner(
+  wallet: SignerWallet,
+  keyArgs: { identityKey: true } | { protocolID: [number, string]; keyID: string; counterparty?: string; forSelf?: boolean }
+): DigestSigner {
+  const root = (wallet as { keyDeriver?: { rootKey?: unknown } }).keyDeriver?.rootKey
+  return root instanceof PrivateKey ? keySigner(root) : walletSigner(wallet, keyArgs)
+}
+
 /** Accept either custody form — legacy call sites pass PrivateKey, wallet-mode
  *  call sites pass a DigestSigner. */
 export function toSigner(x: SignerLike): DigestSigner {
@@ -151,12 +181,15 @@ export function unlockP2PKH(
       const lockingScript = opts.lockingScript ?? input.sourceTransaction!.outputs[input.sourceOutputIndex].lockingScript
       const preimage = tx.preimage(inputIndex, signatureScope, lockingScript)
       const preimageHash = Hash.sha256(preimage)
-      // PrivateKey.sign would sha256(preimageHash) — the wallet path passes it
-      // as `data`, which the wallet sha256s before signing: identical digest.
       const raw = await s.sign(preimageHash)
+      const pub = PublicKey.fromString(await s.pubKeyHex())
+      if (!pub.verify(Array.from(preimageHash), raw))
+        throw new Error(
+          'unlockP2PKH: signer produced a signature that does not verify under its public key — wallet-custody signers must return a matching pub/sig pair (BRC-100 derived keys on a conformant substrate, or a held key)'
+        )
       const txsig = new TransactionSignature(raw.r, raw.s, signatureScope)
       const sigForScript = txsig.toChecksigFormat()
-      const enc = PublicKey.fromString(await s.pubKeyHex()).encode(true)
+      const enc = pub.encode(true)
       const pubkeyForScript = typeof enc === 'string' ? Utils.toArray(enc, 'hex') : enc
       return new UnlockingScript([
         { op: sigForScript.length, data: sigForScript },
@@ -171,8 +204,9 @@ export function unlockP2PKH(
  *  `LocalSigner`/`ExternalSigner` implement) backed by a DigestSigner, so
  *  RunarContract funding/covenant calls can run on wallet custody. Replicates
  *  LocalSigner.sign exactly: BIP-143 preimage via TransactionSignature.format,
- *  sha256(preimage) into signer.sign (which sha256s again → hash256), DER +
- *  sighash byte. Typed structurally — core does not depend on runar-sdk. */
+ *  sha256(preimage) into signer.sign, DER + sighash byte. Self-verifies the
+ *  pub/sig pair like unlockP2PKH — covenant sigs are the same risk class.
+ *  Typed structurally — core does not depend on runar-sdk. */
 export function runarSigner(
   signer: SignerLike,
   opts: { addressPrefix?: number[] } = {}
@@ -208,6 +242,10 @@ export function runarSigner(
       })
       const sighash = Hash.sha256(preimage)
       const signature = await s.sign(sighash)
+      if (!PublicKey.fromString(await s.pubKeyHex()).verify(Array.from(sighash), signature))
+        throw new Error(
+          'runarSigner: signer produced a signature that does not verify under its public key — wallet-custody signers must return a matching pub/sig pair'
+        )
       const der = signature.toDER('hex') as string
       return der + sigHashType.toString(16).padStart(2, '0')
     }

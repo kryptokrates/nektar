@@ -33,6 +33,8 @@ import {
   type Bytes,
   type Provenance,
   walletSigner,
+  custodySigner,
+  FUND_SIGN_ARGS,
   unlockP2PKH,
   signerPubHex,
   signerAddress,
@@ -739,15 +741,16 @@ export class NektarMemory {
   /** the operator signing surface — the fund key when held, otherwise the
    *  wallet's identity key. Every legacy `.sign()` site routes here. */
   operatorSigner(): DigestSigner {
-    return this.opts.wallet !== undefined ? walletSigner(this.opts.wallet as SignerWallet) : this.fundSigner()
+    return this.opts.wallet !== undefined ? custodySigner(this.opts.wallet as SignerWallet, { identityKey: true }) : this.fundSigner()
   }
   private _fundSigner?: DigestSigner
   /** funding-signer — P2PKH inputs, covenant funding calls, change output
-   *  derivation. Toolbox/client mode: the wallet's identity key (= the
-   *  keyDeriver root for toolbox, the external wallet root for client). */
+   *  derivation. Toolbox mode: keyDeriver root key (exact legacy custody —
+   *  the app holds it). Client mode: a stable self-derived wallet keyID
+   *  (nektar-fund) whose pkh the reserve funds and spends under. */
   fundSigner(): DigestSigner {
     if (this._fundSigner === undefined) {
-      if (this.opts.wallet !== undefined) this._fundSigner = walletSigner(this.opts.wallet as SignerWallet)
+      if (this.opts.wallet !== undefined) this._fundSigner = custodySigner(this.opts.wallet as SignerWallet, FUND_SIGN_ARGS)
       else if (this.fundKey !== undefined) this._fundSigner = toSigner(this.fundKey)
       else throw new Error('no funding signer: configure a wallet or a fund key')
     }

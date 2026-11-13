@@ -35,6 +35,102 @@ export interface MinihostHandle {
   raw: () => number[][]
   envelopes: () => Array<{ to: string; txid: string }>
 }
+/** network-plane faults for resilience tests — a proxy in front of any
+ *  BRC-24-style host. Compose: `h = await minihost(...); f = await
+ *  faulthost(h.url)` and hand agents `f.url`. Mutating `fault` takes effect
+ *  on the next request — no control socket, tests stay in-process. */
+export interface FaultSpec {
+  /** refuse every request with 503, never forwarding — a dead host */
+  down?: boolean
+  /** sleep this long before forwarding — a slow host (quorum races it) */
+  delayMs?: number
+  /** refuse /submit calls whose x-topics match — a host rejecting a lane */
+  dropSubmitTopics?: RegExp
+  /** answer /lookup with an empty output-list — a withholding host */
+  dropLookup?: boolean
+  /** strip lookup results whose beef parses to one of these txids */
+  withholdTxids?: Set<string>
+  /** flip a byte in every returned beef — a corrupt host */
+  corrupt?: boolean
+}
+export interface FaulthostHandle {
+  url: string
+  close: () => Promise<void>
+  fault: FaultSpec
+  /** requests that reached the upstream, for assertions */
+  forwarded: () => number
+}
+export async function faulthost(upstream: string): Promise<FaulthostHandle> {
+  const fault: FaultSpec = {}
+  let fwd = 0
+  const txidOf = (beef: number[]): string | undefined => {
+    try {
+      return Transaction.fromAtomicBEEF(beef).id('hex')
+    } catch {
+      try {
+        return Transaction.fromBEEF(beef).id('hex')
+      } catch {
+        return undefined
+      }
+    }
+  }
+  const srv = http.createServer(async (req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (c) => chunks.push(c))
+    await new Promise((r) => req.on('end', r))
+    const body = Buffer.concat(chunks)
+    if (fault.down === true) {
+      res.writeHead(503)
+      res.end('fault: down')
+      return
+    }
+    if (req.method === 'POST' && req.url === '/submit' && fault.dropSubmitTopics !== undefined) {
+      const names = JSON.parse(String(req.headers['x-topics'] ?? '[]')) as string[]
+      if (names.some((t) => fault.dropSubmitTopics!.test(t))) {
+        res.writeHead(503)
+        res.end('fault: dropSubmitTopics')
+        return
+      }
+    }
+    if (fault.delayMs !== undefined && fault.delayMs > 0) await new Promise((r) => setTimeout(r, fault.delayMs))
+    try {
+      const r = await fetch(upstream + (req.url ?? '/'), { method: req.method, headers: { 'content-type': String(req.headers['content-type'] ?? 'application/octet-stream'), 'x-topics': String(req.headers['x-topics'] ?? '') }, body: req.method === 'POST' ? body : undefined })
+      fwd++
+      const buf = Buffer.from(await r.arrayBuffer())
+      if (req.url === '/lookup' && (fault.dropLookup === true || fault.corrupt === true || (fault.withholdTxids?.size ?? 0) > 0)) {
+        const parsed = JSON.parse(buf.toString('utf8')) as { outputs?: Array<{ beef: number[]; outputIndex: number }> }
+        if (fault.dropLookup === true) parsed.outputs = []
+        else {
+          if ((fault.withholdTxids?.size ?? 0) > 0)
+            parsed.outputs = (parsed.outputs ?? []).filter((o) => {
+              const id = txidOf(o.beef)
+              return id === undefined || !fault.withholdTxids!.has(id)
+            })
+          if (fault.corrupt === true) for (const o of parsed.outputs ?? []) if (o.beef.length > 10) o.beef[10] = o.beef[10] ^ 0xff
+        }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(parsed))
+        return
+      }
+      res.writeHead(r.status, { 'content-type': String(r.headers.get('content-type') ?? 'application/json') })
+      res.end(buf)
+    } catch (e) {
+      res.writeHead(502)
+      res.end(`fault: upstream ${(e as Error).message}`)
+    }
+  })
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r))
+  const { port: bound } = srv.address() as AddressInfo
+  return {
+    url: `http://127.0.0.1:${bound}`,
+    close: async () => {
+      await new Promise<void>((r) => srv.close(() => r()))
+    },
+    fault,
+    forwarded: () => fwd
+  }
+}
+
 export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker): Promise<MinihostHandle> {
   const tracker: ChainTracker = 'tracker' in opts ? opts.tracker : opts
   const evil = 'evil' in opts ? (opts.evil ?? false) : false

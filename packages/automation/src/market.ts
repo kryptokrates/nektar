@@ -961,6 +961,17 @@ export class MarketEngine {
     const utxo = op.data.utxo as { txid: string; vout: number; satoshis: number; script: string }
     const q = chosen.so.offer.offer as any
     const direct = op.data.direct === true
+    // the signed offer carries leaf+hdp — it is the canonical commitment
+    // evidence (signed, unlike the quote). The quote's commitment object adds
+    // authorPub/anchorTxid/proof when it landed before selection; under
+    // early-select the escrow can fund first, so derive the base here rather
+    // than trust envelope timing. Restore paths inherit the same guarantee:
+    // the buyerNote persists the signed offer even when the quote was lost.
+    const commitment = {
+      leaf: chosen.so.offer.leaf,
+      hdp: chosen.so.offer.hdp,
+      ...(chosen.commitment !== undefined ? chosen.commitment : {})
+    }
     let spv = false
     let claim: any
     if (direct) {
@@ -972,7 +983,7 @@ export class MarketEngine {
         hWrapped: q.cfg.hWrapped,
         sellerPub: from,
         offerMode: chosen.mode,
-        ...(chosen.commitment ? { commitment: chosen.commitment } : {})
+        commitment
       })
     } else {
       let got: Ingested | undefined
@@ -1004,7 +1015,7 @@ export class MarketEngine {
         hWrapped: q.cfg.hWrapped,
         sellerPub: from,
         offerMode: chosen.mode,
-        ...(chosen.commitment ? { commitment: chosen.commitment } : {})
+        commitment
       })
     }
     await this.d.store.settleBudget(op.data.escrowAction as string)
@@ -1028,7 +1039,7 @@ export class MarketEngine {
       taint: 'untrusted-purchased-content',
       disclosureTxid: m.txid
     }
-    const bad = chosen.commitment ? claim.verified !== true : false
+    const bad = claim.verified !== true
     const next = await this.d.store.transition(op.operationId, op.revision, bad ? 'disputed' : 'disclosure_verified', {
       cause: bad ? 'payload_does_not_match_commitment' : 'disclosure_verified',
       data: { result },

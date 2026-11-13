@@ -91,7 +91,9 @@ test('STARK membership NEGATIVES (each check fails closed with a specific reason
       // a second StackChain handle still answers against the SAME node's
       // headers — the BUMP root is genuinely valid there. The negative needs
       // a tracker whose header chain does NOT contain the root.
-      verifyMembershipAnchoredStark(proofBytes(), good.tx, { isValidRootForHeight: async () => false, currentHeight: async () => 0 }, issued(q), { shard: good.shard }),
+      verifyMembershipAnchoredStark(proofBytes(), good.tx, { isValidRootForHeight: async () => false, currentHeight: async () => 0 }, issued(q), {
+        shard: good.shard
+      }),
       /BEEFInvalid|NotMined/
     ],
     ['queryId never issued', v(proofBytes(), good, issued()), /queryId/],

@@ -149,9 +149,8 @@ export function custodySigner(
   const root = heldRootKey(wallet)
   if (root !== undefined) {
     if ('identityKey' in keyArgs) return keySigner(root)
-    const derive = (
-      wallet as { keyDeriver?: { derivePrivateKey?: (p: [number, string], k: string, c: unknown) => { toWif(): string } } }
-    ).keyDeriver?.derivePrivateKey
+    const derive = (wallet as { keyDeriver?: { derivePrivateKey?: (p: [number, string], k: string, c: unknown) => { toWif(): string } } }).keyDeriver
+      ?.derivePrivateKey
     if (typeof derive === 'function') {
       try {
         return keySigner(PrivateKey.fromWif(derive(keyArgs.protocolID, keyArgs.keyID, keyArgs.counterparty ?? 'self').toWif()))

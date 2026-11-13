@@ -43,8 +43,11 @@ export async function publishArtifact(p: {
     txid = c.carrier.id('hex')
     await p.journal.put(hash, { txid, beef, topics, fundingTxid: slot.tree.id('hex') })
   }
-  // the journal re-serves missed hosts — no sleeps inside the send path
-  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [] })
+  // the journal re-serves missed hosts — no sleeps inside the send path, and
+  // resolve at quorum: a straggler host leg completes in the background and
+  // the journal still carries it, so one slow host can't price every send at
+  // its own 15s timeout (observed: offers pending until the want expired)
+  const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
   if (!r.ok) throw new Error(`publishArtifact: quorum failed ${JSON.stringify(r.missed)}`)
   return { txid: txid, took: r.took, admitted: r.admitted, missed: r.missed }
 }

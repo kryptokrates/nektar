@@ -139,9 +139,24 @@ if (swept.length === 0) {
 const file = JSON.parse(readFileSync(TREASURY_FILE, 'utf8'))
 if (file.namespace !== undefined && file.namespace !== TREASURY_NS)
   throw new Error(`treasury file ${TREASURY_FILE} is namespaced '${file.namespace}' — refusing to consume another consumer's treasury`)
+// the recorded tip may be stale (a run died between its split broadcast and
+// the file write): walk the tip history for the last live outpoint; if none
+// is live the value is gone anyway — combine the sweeps alone.
+let fileTip = file.treasury
+let fileParent
+for (const cand of [fileTip, ...(file.history ?? [])]) {
+  const live = await utxoLive(cand.txid, cand.vout)
+  if (live) {
+    if (cand !== fileTip) console.log(`  treasury tip ${fileTip.txid.slice(0, 12)}… spent — recovered ${cand.txid.slice(0, 12)}…:${cand.vout} from history`)
+    fileTip = cand
+    fileParent = Transaction.fromHex(cand.txHex)
+    break
+  }
+}
+if (fileParent === undefined) console.log(`  treasury tip ${fileTip.txid.slice(0, 12)}… and all history spent — combining sweeps alone`)
 const tx = new Transaction()
-const fileParent = Transaction.fromHex(file.treasury.txHex)
-tx.addInput({ sourceTransaction: fileParent, sourceOutputIndex: file.treasury.vout, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
+if (fileParent !== undefined)
+  tx.addInput({ sourceTransaction: fileParent, sourceOutputIndex: fileTip.vout, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
 for (const s of swept) {
   tx.addInput({ sourceTransaction: s.tx, sourceOutputIndex: s.vout, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
 }
@@ -151,6 +166,18 @@ await tx.sign()
 const r = await broadcaster.broadcast(tx)
 if (r.status !== 'success') throw new Error(`combine refused: ${r.description}`)
 await rpc('generatetoaddress', 1, treasuryAddr)
-const total = fileParent.outputs[file.treasury.vout].satoshis + swept.reduce((a, s) => a + s.sats, 0) - tx.getFee()
-writeFileSync(TREASURY_FILE, JSON.stringify({ namespace: TREASURY_NS, treasury: { txid: tx.id('hex'), vout: 0, txHex: tx.toHex() } }, null, 1))
-console.log(`  treasury: ${fileParent.outputs[file.treasury.vout].satoshis} + ${swept.reduce((a, s) => a + s.sats, 0)} swept → ${total} @ ${tx.id('hex').slice(0, 12)}…`)
+const tipSats = fileParent?.outputs[fileTip.vout].satoshis ?? 0
+const total = tipSats + swept.reduce((a, s) => a + s.sats, 0) - tx.getFee()
+writeFileSync(
+  TREASURY_FILE,
+  JSON.stringify(
+    {
+      namespace: TREASURY_NS,
+      treasury: { txid: tx.id('hex'), vout: 0, txHex: tx.toHex() },
+      history: [file.treasury, ...(file.history ?? [])].slice(0, 8)
+    },
+    null,
+    1
+  )
+)
+console.log(`  treasury: ${tipSats} + ${swept.reduce((a, s) => a + s.sats, 0)} swept → ${total} @ ${tx.id('hex').slice(0, 12)}…`)

@@ -152,9 +152,12 @@ const mineLoop = (async () => {
 const TREASURY_NS = 'real-stack'
 const TREASURY_FILE = process.env.NEKTAR_TREASURY_FILE ?? join(root, '.state', 'real-stack-treasury.json')
 const agents = [
-  { name: 'alice', hosts: [HOST_A], seller: 450 },
-  { name: 'ben', hosts: [HOST_B], seller: 300 },
-  { name: 'cara', hosts: [HOST_B], seller: 200 },
+  // every agent fans publishes out to both hosts — one stalled host must not
+  // price a send at its timeout (observed: single-host offers sat 'pending'
+  // through a host timeout window and the want expired unheard)
+  { name: 'alice', hosts: [HOST_A, HOST_B], seller: 450 },
+  { name: 'ben', hosts: [HOST_A, HOST_B], seller: 300 },
+  { name: 'cara', hosts: [HOST_A, HOST_B], seller: 200 },
   { name: 'bob', hosts: [HOST_A, HOST_B] }
 ]
 // broadcast-driven sealing (regtest, test-only — never protocol): a fresh
@@ -348,26 +351,56 @@ async function fundAgents() {
   const saved = JSON.parse(readFileSync(TREASURY_FILE, 'utf8'))
   if (saved.namespace !== undefined && saved.namespace !== TREASURY_NS)
     throw new Error(`treasury file ${TREASURY_FILE} is namespaced '${saved.namespace}' — refusing to consume another consumer's treasury`)
-  const parent = Transaction.fromHex(saved.treasury.txHex)
-  const sats = parent.outputs[saved.treasury.vout].satoshis ?? 0
+  // tip history + self-heal: a crash between the split broadcast and the
+  // treasury-file write leaves the recorded tip spent. Keep the last few tips
+  // and walk them on 'spent' so one dead run can't wedge every later run.
+  let tip = saved.treasury
+  let parent = Transaction.fromHex(tip.txHex)
+  const statusCfg = { ...cfg, rpcUser: E('NEKTAR_RPC_USER'), rpcPass: E('NEKTAR_RPC_PASS') }
+  if ((await utxoStatus(statusCfg, tip.txid, tip.vout)) === 'spent') {
+    let recovered = false
+    for (const cand of saved.history ?? []) {
+      if ((await utxoStatus(statusCfg, cand.txid, cand.vout)) !== 'spent') {
+        log(`treasury tip ${tip.txid.slice(0, 12)}… spent — recovered ${cand.txid.slice(0, 12)}…:${cand.vout} from history`)
+        tip = cand
+        parent = Transaction.fromHex(tip.txHex)
+        recovered = true
+        break
+      }
+    }
+    if (!recovered) throw new Error('treasury outpoint already spent — re-run packages/e2e/src/scenarios/regtest-fund.mjs')
+  }
+  const sats = parent.outputs[tip.vout].satoshis ?? 0
   const per = 5_000_000
   const change = sats - agents.length * per - 1000
   if (sats < agents.length * 1_000_100 + 1_000_000) throw new Error(`treasury outpoint too small for ${agents.length} instances: ${sats}`)
-  const status = await utxoStatus({ ...cfg, rpcUser: E('NEKTAR_RPC_USER'), rpcPass: E('NEKTAR_RPC_PASS') }, saved.treasury.txid, saved.treasury.vout)
-  if (status === 'spent') throw new Error('treasury outpoint already spent — re-run packages/e2e/src/scenarios/regtest-fund.mjs')
+  // agent keys are generated and persisted before the split lands — a crash
+  // between split-broadcast and treasury-write must not strand their outputs
+  // under keys that only ever lived in the dead process's memory
+  for (const a of agents) a.key = PrivateKey.fromRandom()
+  writeFileSync(join(dir, 'agent-keys.json'), JSON.stringify(Object.fromEntries(agents.map((a) => [a.name, a.key.toWif([0xef])]))), { mode: 0o600 })
   const split = new Transaction()
-  split.addInput({ sourceTransaction: parent, sourceOutputIndex: saved.treasury.vout, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
-  for (const a of agents) {
-    a.key = PrivateKey.fromRandom()
+  split.addInput({ sourceTransaction: parent, sourceOutputIndex: tip.vout, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
+  for (const a of agents)
     split.addOutput({ lockingScript: new P2PKH().lock(a.key.toPublicKey().toAddress([0x6f])), satoshis: per })
-  }
   split.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), satoshis: change })
   await split.sign()
   const r = await broadcaster.broadcast(split)
   if (r.status !== 'success') throw new Error(`treasury split refused: ${r.description}`)
   await rpc('generatetoaddress', 1, treasuryAddr)
   blocksMined++
-  writeFileSync(TREASURY_FILE, JSON.stringify({ namespace: TREASURY_NS, treasury: { txid: split.id('hex'), vout: agents.length, txHex: split.toHex() } }, null, 1))
+  writeFileSync(
+    TREASURY_FILE,
+    JSON.stringify(
+      {
+        namespace: TREASURY_NS,
+        treasury: { txid: split.id('hex'), vout: agents.length, txHex: split.toHex() },
+        history: [saved.treasury, ...(saved.history ?? [])].slice(0, 8)
+      },
+      null,
+      1
+    )
+  )
   // the funding payload carries its ancestry: once the treasury parent is
   // fully spent, chain lookups can't resolve it and toolbox internalize has
   // no path to the proof. BEEF keeps the agent self-sufficient.
@@ -388,9 +421,6 @@ async function fundAgents() {
     mkdirSync(a.dataDir, { recursive: true })
     writeFileSync(join(a.dataDir, 'treasury.json'), JSON.stringify({ treasury: { txid: split.id('hex'), vout: i, txHex: fundHex } }))
   }
-  // regtest agent keys are ephemeral like the testnet ones — persist them so
-  // leftover coins in a dead run can be swept back into the treasury
-  writeFileSync(join(dir, 'agent-keys.json'), JSON.stringify(Object.fromEntries(agents.map((a) => [a.name, a.key.toWif([0xef])]))), { mode: 0o600 })
   log(`treasury split ${split.id('hex').slice(0, 12)}… → ${agents.length}×${per} sats + new treasury`)
 }
 

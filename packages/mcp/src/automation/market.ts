@@ -140,6 +140,10 @@ export interface MarketOptions {
   /** seller-side opt-in: quotes carry `direct: true` so counterparties may
    *  choose the direct rail for this sale */
   directAccept?: boolean
+  /** buyer-side opt-in: a verified disclosure counts as the usefulness
+   *  evaluation — deals reach `useful` without an operator call. Default off:
+   *  the consumer judges content. */
+  autoUseful?: boolean
 }
 
 const DEFAULTS: MarketOptions = {
@@ -562,14 +566,42 @@ export class MarketEngine {
         await this.deliver(item)
         await this.d.store.ackOutbox(item.actionId)
       } catch (e) {
-        const msg = (e as Error).message
+        let msg = (e as Error).message
         // resource starvation (a funding-tree slot being empty) is not a
         // delivery fault — defer without consuming attempts; unblockOutbox
         // wakes it the moment a topup proof frees a slot
         if (/funding slot/.test(msg)) await this.d.store.deferOutbox(item.actionId, msg)
-        else await this.d.store.retryOutbox(item.actionId, msg)
+        else {
+          // a persisted payload can outgrow the box cap — built under an older
+          // bound, or an escrow wire that came out larger than expected. The
+          // `tx` field is advisory on every message that carries it (receivers
+          // fall back to fetchTx), so drop it once before burning attempts;
+          // an unshrinkable envelope dead-letters on the normal path.
+          if (item.kind === 'message' && /range: content/.test(msg)) {
+            const shrunk = this.shrinkWire(item.payload as MarketMessage)
+            if (shrunk !== undefined) {
+              try {
+                await this.deliver({ ...item, payload: shrunk })
+                await this.d.store.ackOutbox(item.actionId)
+                continue
+              } catch (e2) {
+                msg = (e2 as Error).message
+              }
+            }
+          }
+          await this.d.store.retryOutbox(item.actionId, msg)
+        }
       }
     }
+  }
+
+  /** the wire a market message can lose without changing its meaning — every
+   *  reader falls back to `fetchTx` when `tx` is absent */
+  private shrinkWire(m: MarketMessage): MarketMessage | undefined {
+    const w = m as { type: string; tx?: string }
+    if ((w.type === 'accept' || w.type === 'delivered' || w.type === 'note' || w.type === 'sellerNote') && typeof w.tx === 'string')
+      return { ...m, tx: undefined } as MarketMessage
+    return undefined
   }
 
   private async deliver(i: OutboxItem): Promise<void> {
@@ -745,7 +777,10 @@ export class MarketEngine {
     let direct = false
     if (m.utxo?.script === escrowScript) direct = false
     else if (m.utxo?.script === directScript && offer.direct === true) direct = true
-    else return await refuse(offer.direct === true ? 'accept is neither the quoted covenant nor a P2PKH to the seller key' : 'escrow script does not match the quoted terms')
+    else
+      return await refuse(
+        offer.direct === true ? 'accept is neither the quoted covenant nor a P2PKH to the seller key' : 'escrow script does not match the quoted terms'
+      )
     if (!Number.isSafeInteger(m.utxo.satoshis) || m.utxo.satoshis < Number(offer.cfg.price) + (direct ? 0 : 1))
       return await refuse(direct ? 'payment is underfunded' : 'escrow is underfunded')
     // the buyer hands over the payment itself. It is checked here, against our
@@ -765,7 +800,8 @@ export class MarketEngine {
     } else tx = await this.d.fetchTx(m.utxo.txid)
     const out = tx?.outputs[m.utxo.vout]
     if (!tx || tx.id('hex') !== m.utxo.txid || !out) return await refuse('escrow transaction not observable yet')
-    if (out.lockingScript.toHex() !== m.utxo.script || out.satoshis !== m.utxo.satoshis) return await refuse('on-chain escrow output differs from the claimed one')
+    if (out.lockingScript.toHex() !== m.utxo.script || out.satoshis !== m.utxo.satoshis)
+      return await refuse('on-chain escrow output differs from the claimed one')
     // every escrow input whose parent we can resolve is evaluated locally —
     // a bogus or unsigned spend is refused before the network is even asked
     let spends = 0
@@ -920,13 +956,23 @@ export class MarketEngine {
         ...(chosen.commitment ? { commitment: chosen.commitment } : {})
       })
     } else {
-      if (typeof m.tx !== 'string') return
-      let got: Ingested
+      let got: Ingested | undefined
       try {
-        got = await this.readTx(m.tx)
+        if (typeof m.tx === 'string') got = await this.readTx(m.tx)
       } catch {
-        return
+        /* unreadable wire — fall through to the on-chain fetch */
       }
+      if (got === undefined) {
+        // shrunk envelope (or an unparsable wire) — the reveal is already
+        // broadcast, fetch it by txid
+        try {
+          const t = await this.d.fetchTx(m.txid)
+          if (t !== undefined) got = { tx: t, spv: false }
+        } catch {
+          return
+        }
+      }
+      if (got === undefined) return
       const tx = got.tx
       // the reveal must be a valid spend of OUR escrow output — checked by
       // running the script here, so the disclosure is accepted the moment it
@@ -964,7 +1010,7 @@ export class MarketEngine {
       disclosureTxid: m.txid
     }
     const bad = chosen.commitment ? claim.verified !== true : false
-    await this.d.store.transition(op.operationId, op.revision, bad ? 'disputed' : 'disclosure_verified', {
+    const next = await this.d.store.transition(op.operationId, op.revision, bad ? 'disputed' : 'disclosure_verified', {
       cause: bad ? 'payload_does_not_match_commitment' : 'disclosure_verified',
       data: { result },
       dueHeight: null,
@@ -977,6 +1023,15 @@ export class MarketEngine {
         ...(refs !== undefined ? { refs } : {})
       }
     })
+    // auto-evaluation: with the policy opt-in the verification result IS the
+    // usefulness judgment — cryptographic commitment satisfied ⇒ useful;
+    // anything else already exited `disputed` above. Human evaluation stays
+    // the default (autoUseful unset).
+    if (!bad && this.o.autoUseful === true)
+      await this.d.store.transition(next.operationId, next.revision, 'useful', {
+        cause: 'auto_evaluation',
+        data: { usefulness: { useful: true, evidence: { auto: true, verified: claim.verified, authorVerified: claim.authorVerified } } }
+      })
   }
 
   private async readTx(hex: string): Promise<Ingested> {
@@ -1269,8 +1324,7 @@ export class MarketEngine {
       // sits inside the operator's no-recourse ceiling. Same policy, budget
       // and wallet-custody mechanics; what changes is the settlement itself:
       // a P2PKH output to the seller, payment-final, instead of a covenant
-      const direct =
-        q.direct === true && this.o.directMaxSats !== undefined && this.o.directMaxSats > 0 && price <= this.o.directMaxSats
+      const direct = q.direct === true && this.o.directMaxSats !== undefined && this.o.directMaxSats > 0 && price <= this.o.directMaxSats
       if (direct) {
         const payScript = new P2PKH().lock(Array.from(fromHex(q.cfg.sellerPkh))).toHex()
         const payOffer = {
@@ -1639,9 +1693,22 @@ export class MarketEngine {
   }
 
   /** a refused refund retries on the reconcile throttle — after five refusals
-   *  the operation stays `uncertain` for the operator */
+   *  the operation stays `uncertain` for the operator. An nLockTime-immature
+   *  spend (the covenant's refundAfter height hasn't arrived) is NOT a
+   *  refusal: park until the height and don't burn tries — nodes can only
+   *  call it non-final below that height. */
   private async reconcileRefund(op: Operation, pa: { approvalId?: string }): Promise<void> {
     const tries = Number(op.data.refundTries ?? 0)
+    const refundAfter = Number((op.data.escrow as { refundAfter?: string | number } | undefined)?.refundAfter ?? 0)
+    if (refundAfter > 0 && (await this.d.height()) < refundAfter) {
+      if (op.dueHeight !== refundAfter || tries !== 0)
+        await this.d.store.transition(op.operationId, op.revision, 'uncertain', {
+          cause: 'refund_wait_height',
+          dueHeight: refundAfter,
+          data: { refundTries: 0 }
+        })
+      return
+    }
     if (tries >= 5) return
     if (!this.reconcileGate(op.operationId, op.data.escrowTxid as string | undefined)) return
     const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
@@ -1652,6 +1719,14 @@ export class MarketEngine {
         cause: 'refund_broadcast',
         data: { refundTxid: r.txid, refundSats: r.refundSats },
         dueHeight: null
+      })
+    } else if (/non.?final|lock.?time|premature|immature|too early|height/i.test(String((r as { reason?: string }).reason ?? ''))) {
+      // the broadcaster still calls it immature (height lag on its view) —
+      // park on the same height gate rather than counting a try
+      await this.d.store.transition(op.operationId, op.revision, 'uncertain', {
+        cause: 'refund_retry_immature',
+        dueHeight: refundAfter > 0 ? refundAfter : null,
+        data: { refundTries: 0 }
       })
     } else {
       await this.d.store.transition(op.operationId, op.revision, 'uncertain', { cause: 'refund_retry_refused', data: { refundTries: tries + 1 } })

@@ -97,7 +97,10 @@ if (/^(1|true|yes)$/i.test(process.env.NEKTAR_AUTOMATION ?? '')) {
       // payments (payment-final, no refund); NEKTAR_DIRECT_ACCEPT=1 advertises
       // it on our quotes. Both off by default: escrow stays the default rail.
       ...(process.env.NEKTAR_DIRECT_MAX_SATS ? { directMaxSats: Number(process.env.NEKTAR_DIRECT_MAX_SATS) } : {}),
-      ...(process.env.NEKTAR_DIRECT_ACCEPT === '1' ? { directAccept: true } : {})
+      ...(process.env.NEKTAR_DIRECT_ACCEPT === '1' ? { directAccept: true } : {}),
+      // NEKTAR_AUTO_USEFUL=1 — a verified disclosure closes the deal as
+      // `useful` without waiting on an operator markUsefulness call
+      ...(process.env.NEKTAR_AUTO_USEFUL === '1' ? { autoUseful: true } : {})
     },
     log: (line) =>
       process.stderr.write(`nektar: ${line}

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "bundle": "node ../../node_modules/esbuild/bin/esbuild src/module.ts --bundle --format=esm --platform=node --target=es2023 --external:@bsv/sdk --outfile=bundle/nektar-module.js",
+    "bundle": "node ../../node_modules/esbuild/bin/esbuild src/module.ts --bundle --format=esm --platform=node --target=es2023 --outfile=bundle/nektar-module.js",
     "test": "node --test --test-timeout=60000 dist/test/*.test.js"
   },
   "dependencies": {

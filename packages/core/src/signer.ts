@@ -73,9 +73,16 @@ export function walletSigner(
   keyArgs: { identityKey: true } | { protocolID: [number, string]; keyID: string; counterparty?: string; forSelf?: boolean } = { identityKey: true }
 ): DigestSigner {
   let cachedPub: string | undefined
+  // BRC-100 validation requires protocolID+keyID on signature/hmac calls even
+  // under identityKey:true (they're ignored for identity derivation but the
+  // tuple shape is checked) — bare identityKey throws on strict substrates.
+  const args = 'identityKey' in keyArgs ? { identityKey: true as const, protocolID: [0, 'nektar signer'] as [number, string], keyID: 'identity' } : keyArgs
   return {
     sign: async (d) => {
-      const r = await wallet.createSignature({ ...keyArgs, data: Array.from(d) } as never)
+      // hashToDirectlySign — callers hand us the digest itself (sighash for
+      // script unlocks); `data` would make the wallet sign sha256(digest),
+      // which no on-chain verifier accepts
+      const r = await wallet.createSignature({ ...args, hashToDirectlySign: Array.from(d) } as never)
       return Signature.fromDER(Array.from(r.signature))
     },
     pubKeyHex: async () => {
@@ -83,7 +90,7 @@ export function walletSigner(
       return cachedPub
     },
     deriveSecret: async (pre, post) => {
-      const r = await wallet.createHmac({ ...keyArgs, data: Array.from(Utils.toArray(pre + (post ?? ''), 'utf8')) } as never)
+      const r = await wallet.createHmac({ ...args, data: Array.from(Utils.toArray(pre + (post ?? ''), 'utf8')) } as never)
       return new Uint8Array(r.hmac)
     }
   }

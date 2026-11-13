@@ -275,8 +275,15 @@ export class NektarMemory {
     })
     this.cryptoOps = new CryptoOps({ opts: this.opts })
     this.catalogOps = new CatalogOps({
+      opts: this.opts,
       store: this.store,
-      recordText: (r) => this.recordText(r)
+      recordText: (r) => this.recordText(r),
+      shards: () => this.shards(),
+      shardId: (s) => this.shardId(s),
+      remember: (s, d, p, l) => this.remember(s, d, p, l),
+      exportShardPack: (s) => this.exportShardPack(s),
+      storePack: (s, p, n) => this.storePack(s, p, n),
+      metricsInc: (n) => this.metrics.inc(n)
     })
     this.packWire = new PackWire({
       shardPrivate: (s) => this.shardPrivate(s),
@@ -1632,39 +1639,8 @@ export class NektarMemory {
    *  only stores what was already checked). The record keeps the seller's
    *  provenance fields; an __imports__ audit record commits the acquisition
    *  (source shard:seq, leaf, settlement txid) so the lineage is anchored. */
-  async importRecord(args: {
-    data: string
-    provenance?: { sourcePub?: string; hash?: string; timestamp?: number; sig?: string }
-    sourceShard?: string
-    sourceSeq?: number
-    leaf?: string
-    saleTxid?: string
-    shard?: string
-  }): Promise<{ seq: number }> {
-    const shard = args.shard ?? 'bought'
-    const prov = args.provenance?.sourcePub
-      ? {
-          hash: args.provenance.hash ?? '',
-          timestamp: args.provenance.timestamp ?? Date.now(),
-          sig: args.provenance.sig ?? '',
-          sourcePub: args.provenance.sourcePub
-        }
-      : undefined
-    const { seq } = await this.remember(shard, args.data, prov)
-    await this.remember(
-      '__imports__',
-      JSON.stringify({
-        type: 'record-import',
-        fromShard: args.sourceShard ?? 'unknown',
-        fromSeq: args.sourceSeq ?? null,
-        ...(args.leaf ? { leaf: args.leaf } : {}),
-        ...(args.saleTxid ? { saleTxid: args.saleTxid } : {}),
-        toShard: shard,
-        seq,
-        importedAt: Date.now()
-      })
-    ).catch(() => undefined)
-    return { seq }
+  async importRecord(args: Parameters<CatalogOps['importRecord']>[0]): Promise<{ seq: number }> {
+    return await this.catalogOps.importRecord(args)
   }
 
   /** Commit a shard manifest to __catalog__ — the domain tags another agent
@@ -1675,47 +1651,7 @@ export class NektarMemory {
     shard: string,
     fields: { domains: string[]; desc?: string; offers?: ManifestOffer[] }
   ): Promise<{ manifest: ShardManifest; seq: number }> {
-    if (shard.startsWith('__')) throw new Error('describeShard: system shards (__*) cannot be described')
-    if (!this.shards().includes(shard)) throw new Error(`describeShard: unknown shard "${shard}" — describe a shard this instance has written`)
-    const domains = [...new Set((fields.domains ?? []).map((d) => String(d).trim().toLowerCase()).filter((d) => /^[a-z0-9][a-z0-9._-]{0,47}$/.test(d)))].slice(
-      0,
-      32
-    )
-    if (domains.length === 0) throw new Error('describeShard: at least one valid domain tag required (a-z0-9._-, up to 48 chars)')
-    const desc = fields.desc !== undefined ? String(fields.desc).slice(0, 560) : undefined
-    const offers = (fields.offers ?? [])
-      .map((o) => ({
-        kind: String(o?.kind) as ManifestOffer['kind'],
-        ...(o?.priceSats !== undefined ? { priceSats: Math.max(0, Math.floor(Number(o.priceSats))) } : {}),
-        ...(o?.seq !== undefined ? { seq: Math.floor(Number(o.seq)) } : {})
-      }))
-      .filter((o) => o.kind === 'answer' || o.kind === 'pack' || o.kind === 'record')
-      .slice(0, 64)
-    const manifest: ShardManifest = {
-      v: 1,
-      type: 'shard-manifest',
-      shard,
-      shardId: await this.shardId(shard),
-      domains,
-      ...(desc ? { desc } : {}),
-      ...(offers.length ? { offers } : {}),
-      network: nektarEnv('NEKTAR_NETWORK') ?? 'regtest',
-      issuedAt: Date.now()
-    }
-    const r = await this.remember(CATALOG_SHARD, JSON.stringify(manifest))
-    // store the pack when a bstore gateway is configured — only for shards
-    // the public-pack rule admits (not private, no level>0 records;
-    // exportShardPack enforces the same gates). Best-effort: a store
-    // failure never fails the describe, and /v1/pack stays the fallback.
-    if (this.opts.objectStore !== undefined) {
-      try {
-        const pack = await this.exportShardPack(shard)
-        await this.storePack(shard, pack, manifest.network ?? 'regtest')
-      } catch {
-        this.metrics.inc('nektar_pack_store_errors_total')
-      }
-    }
-    return { manifest, seq: r.seq }
+    return await this.catalogOps.describeShard(shard, fields)
   }
   /** PUT a shard pack to bstore when its bytes differ from the stored copy —
    *  the stored ref pins sha256, so a record change must re-store or remote

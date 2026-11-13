@@ -70,6 +70,7 @@ import { TxOps, type TxOpsDeps } from './txops.js'
 import { AnchorOps } from './anchorops.js'
 import { IdentityOps } from './identityops.js'
 import { KeyOps } from './keyops.js'
+import { CryptoOps } from './cryptoops.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -512,6 +513,7 @@ export class NektarMemory {
       shards: () => this.shards(),
       persistState: () => this.persistState()
     })
+    this.cryptoOps = new CryptoOps({ opts: this.opts })
     this.identityOps = new IdentityOps({
       challenges: this.challenges,
       zkSeen: this.zkSeen,
@@ -577,6 +579,7 @@ export class NektarMemory {
   private anchorOps!: AnchorOps
   private identityOps!: IdentityOps
   private keyOps!: KeyOps
+  private cryptoOps!: CryptoOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     return await this.txOps.fetchTx(txid)
@@ -737,55 +740,20 @@ export class NektarMemory {
    *  keyID (self counterparty) — no seed bytes leave the wallet and the
    *  derived capability can still be handed over in a sale. */
   async fragmentKeyFor(rec: import('@nektar/log').LogRecord): Promise<Uint8Array> {
-    const ks = await this.fragmentKeyCandidates(this.ctx(rec.shard, rec.seq, rec.level ?? 0))
-    if (ks.length === 0) throw new Error('fragmentKeyFor: no encryption custody (neither wallet nor agentSeed)')
-    // yields the key that actually decrypts THIS record (scheme is not tagged
-    // on-chain — the GCM tag discriminates); fall back to the write-scheme key.
-    if (rec.fragment.E?.length) {
-      const E = rec.fragment.E
-      const aadLen = (E[0] << 8) | E[1]
-      const ef = { ciphertext: E.slice(2 + aadLen), aad: E.slice(2, 2 + aadLen), keyID: '' }
-      for (const k of ks) {
-        try {
-          decryptFragment(k, ef)
-          return k
-        } catch {
-          /* try the next custody scheme */
-        }
-      }
-    }
-    return ks[0]
+    return await this.cryptoOps.fragmentKeyFor(rec)
   }
   /** all fragment-key candidates this instance can derive, wallet scheme
    *  first (the write scheme under wallet custody), legacy seed second —
    *  dual-read: a record decrypts under exactly one (GCM tag enforces it). */
   private async fragmentKeyCandidates(c: FragmentContext): Promise<Uint8Array[]> {
-    const out: Uint8Array[] = []
-    const w = this.opts.wallet as SignerWallet | undefined
-    if (w !== undefined && typeof w.createHmac === 'function') {
-      const s = walletSigner(w, { protocolID: CRYPTO_PROTOCOL_ID, keyID: canonicalKeyID(c), counterparty: 'self' })
-      out.push(await s.deriveSecret!('nektar:fragkey'))
-    }
-    if (this.opts.agentSeed !== undefined) out.push(deriveFragmentKey(deriveLevelKey(this.opts.agentSeed, c.l), c).fragmentKey)
-    return out
+    return await this.cryptoOps.fragmentKeyCandidates(c)
   }
   /** decrypt an encrypted record — tries every custody scheme (dual-read) */
   private async decryptRecord(rec: import('@nektar/log').LogRecord): Promise<string | undefined> {
-    const E = rec.fragment.E
-    if (!E?.length) return undefined
-    const aadLen = (E[0] << 8) | E[1]
-    const ef = { ciphertext: E.slice(2 + aadLen), aad: E.slice(2, 2 + aadLen), keyID: '' }
-    for (const k of await this.fragmentKeyCandidates(this.ctx(rec.shard, rec.seq, rec.level ?? 0))) {
-      try {
-        return Buffer.from(decryptFragment(k, ef)).toString('utf8')
-      } catch {
-        /* next scheme */
-      }
-    }
-    return undefined
+    return await this.cryptoOps.decryptRecord(rec)
   }
   private canEncrypt(): boolean {
-    return this.opts.agentSeed !== undefined || typeof (this.opts.wallet as SignerWallet | undefined)?.createHmac === 'function'
+    return this.cryptoOps.canEncrypt()
   }
   /** return a tx output to the reserve as owned (change/escrow outs) */
   addOwnedOut(tx: import('@bsv/sdk').Transaction, vout: number): void {
@@ -1057,7 +1025,7 @@ export class NektarMemory {
   }
 
   private ctx(shard: string, seq: number, level: number): FragmentContext {
-    return { t: 'nektar', psi: shard, rho: 'rec', pi: String(seq), l: level }
+    return this.cryptoOps.ctx(shard, seq, level)
   }
 
   /** Wright §13 holder side: π ⊢ leaf ∈ the SAME double-SHA-256 batch tree whose
@@ -1856,11 +1824,7 @@ export class NektarMemory {
   /** read a record's plaintext — decrypting E via the level key when the
    *  instance holds the seed (same path recall/disclose use). */
   private async recordText(rec: LogRecord): Promise<string | undefined> {
-    if (rec.fragment.d.length) return Buffer.from(rec.fragment.d).toString('utf8')
-    if (rec.fragment.E?.length && this.canEncrypt()) {
-      return await this.decryptRecord(rec)
-    }
-    return undefined
+    return await this.cryptoOps.recordText(rec)
   }
 
   /** latest committed manifest per described shard — the catalog projection

@@ -443,6 +443,17 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
                 held.push(p)
                 continue
               }
+              // `accept` funds a quoted sale — keep the envelope until the
+              // sellerNote settles so a database loss after processing does
+              // not leave the rebuilt 'quoted' sale with nothing to ingest;
+              // junk with no matching sale is released once it is old
+              if (p.msg?.type === 'accept' && typeof (p.msg as { offerId?: unknown }).offerId === 'string') {
+                const offerId = (p.msg as { offerId: string }).offerId
+                if (!(await engine.noteSettled(offerId, 'seller')) && ((await engine.hasSale(offerId)) || Date.now() / 1000 - p.created < 600)) {
+                  held.push(p)
+                  continue
+                }
+              }
               // `delivered` is ingested to the inbox but processed on the next tick —
               // keep the envelope until the purchase settles so a database loss in
               // between does not lose the disclosure; junk with no matching purchase

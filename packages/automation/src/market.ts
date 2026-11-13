@@ -1115,6 +1115,12 @@ export class MarketEngine {
     return (await this.d.store.operationByKey(`buyer:${this.d.network}:${wantId}`)) !== undefined
   }
 
+  /** does a seller sale exist for this offer (held `accept` envelopes are
+   *  dropped only when none exists AND the envelope is old) */
+  async hasSale(offerId: string): Promise<boolean> {
+    return (await this.d.store.operation(offerId)) !== undefined
+  }
+
   /** a recovery note settles only when its side has nothing left to do on-chain.
    *  Buyer notes key on wantId; seller notes key on offerId (= operationId). */
   async noteSettled(id: string, kind: 'buyer' | 'seller' = 'buyer'): Promise<boolean> {

@@ -17,6 +17,7 @@ export interface MainnetConfig {
   wocUrl?: string // WhatsOnChain base (no trailing slash)
   wocApiKey?: string
   chaintracksUrl?: string // chaintracks base incl. /v1|/v2 — header source for BUMP verification
+  tipCacheMs?: number // currentHeight() cache TTL — heights only grow, so a stale-low answer only delays gates by ≤TTL; NEKTAR_TIP_CACHE_MS overrides (default 3000)
   fetchImpl?: typeof fetch // injectable — tests pass a recorded stub
 }
 
@@ -33,7 +34,8 @@ const def = (c?: MainnetConfig) => ({
   wocUrl: c?.wocUrl ?? DEFAULT_WOC_URL,
   fetch: c?.fetchImpl ?? fetch,
   broadcasterApiKey: c?.broadcasterApiKey,
-  wocApiKey: c?.wocApiKey
+  wocApiKey: c?.wocApiKey,
+  tipCacheMs: c?.tipCacheMs ?? Number(nektarEnv('NEKTAR_TIP_CACHE_MS') ?? 3_000)
 })
 
 const req = async (c: ReturnType<typeof def>, url: string, init: RequestInit = {}, ms = 20_000): Promise<Response> => {
@@ -279,8 +281,13 @@ export class WocTracker implements ChainTracker {
     return await j(r)
   }
 
+  private tip = { at: 0, height: 0 }
   async currentHeight(): Promise<number> {
-    return (await this.wocGet('/chain/info')).blocks
+    const ms = this.cfg.tipCacheMs
+    if (ms > 0 && Date.now() - this.tip.at < ms) return this.tip.height
+    const height = (await this.wocGet('/chain/info')).blocks as number
+    this.tip = { at: Date.now(), height }
+    return height
   }
   async tipHeight(): Promise<number> {
     return await this.currentHeight()
@@ -337,7 +344,15 @@ export class ChaintracksTracker implements ChainTracker {
     return await r.json()
   }
 
+  private tip = { at: 0, height: 0 }
   async currentHeight(): Promise<number> {
+    const ms = this.cfg.tipCacheMs
+    if (ms > 0 && Date.now() - this.tip.at < ms) return this.tip.height
+    const height = await this.loadHeight()
+    this.tip = { at: Date.now(), height }
+    return height
+  }
+  private async loadHeight(): Promise<number> {
     try {
       if (this.v1) {
         const j = await this.j('/getPresentHeight')

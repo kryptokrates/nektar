@@ -12,6 +12,7 @@ export interface RegtestConfig {
   rpcPass: string
   propagationUrl: string // http://localhost:8084/tx
   assetUrl: string // http://localhost:8090/api/v1
+  tipCacheMs?: number // currentHeight() cache TTL (default 500 — regtest mines ~1blk/2s in harnesses)
 }
 
 export class TeranodeBroadcaster implements Broadcaster {
@@ -61,15 +62,22 @@ export class TeranodeRPCTracker implements ChainTracker {
     })
   }
 
+  private tip = { at: 0, height: 0 }
   async currentHeight(): Promise<number> {
+    const ms = this.cfg.tipCacheMs ?? 500
+    if (ms > 0 && Date.now() - this.tip.at < ms) return this.tip.height
     // getblockchaininfo.blocks lags seconds behind generate on Teranode;
     // bestblockhash+getblockheader reflect the real tip almost immediately.
-    const best = await this.rpc('getbestblockhash').catch(() => undefined)
-    if (best) {
-      const h = await this.rpc('getblockheader', best).catch(() => undefined)
-      if (typeof h?.height === 'number') return h.height
-    }
-    return (await this.rpc('getblockchaininfo')).blocks as number
+    const height = await (async (): Promise<number> => {
+      const best = await this.rpc('getbestblockhash').catch(() => undefined)
+      if (best) {
+        const h = await this.rpc('getblockheader', best).catch(() => undefined)
+        if (typeof h?.height === 'number') return h.height
+      }
+      return (await this.rpc('getblockchaininfo')).blocks as number
+    })()
+    this.tip = { at: Date.now(), height }
+    return height
   }
 
   async isValidRootForHeight(root: string, height: number): Promise<boolean> {

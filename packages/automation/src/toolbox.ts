@@ -590,6 +590,13 @@ export class ToolboxReserveFunder {
     void this.wallet.relinquishOutput({ basket: NEKTAR_BASKET, output: `${txid}.${vout}` }).catch(() => {})
   }
 
+  /** ReserveLike parity: "not custody-known" ≈ "spent" — the wallet's
+   *  spendable set is the truth, so an outpoint absent from it is never a
+   *  candidate. Matches ReserveFunder's isSpent for every watched outpoint. */
+  isSpent(txid: string, vout: number): boolean {
+    return !this.cache.some((u) => u.tx.id('hex') === txid && u.vout === vout)
+  }
+
   /** Whether the wallet already custodies this outpoint — lets boot seeding
    *  skip re-internalizing outputs that survived a restart. */
   async has(txid: string, vout: number): Promise<boolean> {

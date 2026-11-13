@@ -26,6 +26,7 @@ import {
   merklePathFor,
   merklePathAtHeight,
   merklePathMainnet,
+  regtestMerkleProof,
   utxoStatus,
   type BroadcastResult,
   type Funder,
@@ -111,7 +112,11 @@ export class RegtestWalletServices implements sdk.WalletServices {
   }
 
   getMerklePath = async (txid: string): Promise<sdk.GetMerklePathResult> => {
-    let r = await merklePathFor(this.cfg, txid, this.tracker, 50)
+    // proof-service read first — one /merkle_proof request. Block-walking is
+    // the fallback for when the asset endpoint can't answer (then the deep
+    // fallback builds the path at the height verbose rawtx names).
+    const served = await regtestMerkleProof(this.cfg, txid)
+    let r = served !== undefined ? served : await merklePathFor(this.cfg, txid, this.tracker, 50)
     if (r === null) {
       // deep fallback: lookback-50 misses old mined txs (coinbases, early
       // treasury splits) — a coinbase ancestor without a bump leaves the
@@ -155,7 +160,7 @@ export class RegtestWalletServices implements sdk.WalletServices {
   getStatusForTxids = async (txids: string[]): Promise<sdk.GetStatusForTxidsResult> => {
     const results: sdk.StatusForTxidResult[] = []
     for (const txid of txids) {
-      const r = await merklePathFor(this.cfg, txid, this.tracker, 50)
+      const r = (await regtestMerkleProof(this.cfg, txid)) ?? (await merklePathFor(this.cfg, txid, this.tracker, 50))
       if (r !== null) {
         results.push({ txid, depth: (await this.getHeight()) - r.blockHeight + 1, status: 'mined' })
         continue
@@ -211,7 +216,7 @@ export class RegtestWalletServices implements sdk.WalletServices {
   getBeefForTxid: sdk.WalletServices['getBeefForTxid'] = async (txid) => {
     const hex = (await this.rpc('getrawtransaction', txid, 0)) as string
     const tx = sdkc.Transaction.fromHex(hex)
-    const r = await merklePathFor(this.cfg, txid, this.tracker, 50)
+    const r = (await regtestMerkleProof(this.cfg, txid)) ?? (await merklePathFor(this.cfg, txid, this.tracker, 50))
     if (r !== null) tx.merklePath = new sdkc.MerklePath(r.blockHeight, r.path)
     const beef = new sdkc.Beef()
     beef.mergeTransaction(tx)

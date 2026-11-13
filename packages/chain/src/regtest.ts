@@ -124,6 +124,28 @@ async function assetGet(cfg: RegtestConfig, path: string, binary = true): Promis
  * subtree (404 while pending). Without this, mem.fetchTx returns nothing on
  * regtest and bstack funding trees can never be marked proven.
  * (The asset `/tx` endpoint answers EXTENDED-format bytes, not a raw tx.) */
+/** the proof-service read: one /merkle_proof request → parsed BUMP, versus
+ *  the merklePathFor legacy-block scan (the fallback for when the asset
+ *  endpoint can't answer). Served bytes are a claim — a caller that needs
+ *  trust anchors computeRoot against its own ChainTracker. */
+export async function regtestMerkleProof(
+  cfg: RegtestConfig,
+  txid: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<MerklePath | undefined> {
+  const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
+  const res = await fetchImpl(`${cfg.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(15_000) }).catch(
+    () => null
+  )
+  if (res === null || !res.ok) return undefined
+  try {
+    return MerklePath.fromBinary([...new Uint8Array(await res.arrayBuffer())])
+  } catch {
+    /* unparseable proof → treat as unproven */
+    return undefined
+  }
+}
+
 export async function regtestTx(cfg: RegtestConfig, txid: string, fetchImpl: typeof fetch = fetch): Promise<Transaction | undefined> {
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
   try {
@@ -136,16 +158,8 @@ export async function regtestTx(cfg: RegtestConfig, txid: string, fetchImpl: typ
     const j = (await r.json()) as { result?: unknown; error?: unknown }
     if (typeof j.result !== 'string' || j.result === '') return undefined
     const tx = Transaction.fromHex(j.result)
-    const mp = await fetchImpl(`${cfg.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(15_000) }).catch(
-      () => null
-    )
-    if (mp !== null && mp.ok) {
-      try {
-        tx.merklePath = MerklePath.fromBinary([...new Uint8Array(await mp.arrayBuffer())])
-      } catch {
-        /* unparseable proof → treat as unproven */
-      }
-    }
+    const mp = await regtestMerkleProof(cfg, txid, fetchImpl)
+    if (mp !== undefined) tx.merklePath = mp
     return tx
   } catch {
     return undefined

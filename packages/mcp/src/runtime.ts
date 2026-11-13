@@ -7,14 +7,14 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { PrivateKey, MerklePath, Transaction } from '@bsv/sdk'
+import { PrivateKey, Transaction } from '@bsv/sdk'
 import {
   TeranodeBroadcaster,
   TeranodeRPCTracker,
   ReserveFunder,
-  merklePathAtHeight,
   bootstrapReserve,
   regtestTx,
+  regtestMerkleProof,
   BsvBroadcaster,
   WocTracker,
   fetchBroadcasterFeeRate,
@@ -395,25 +395,24 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   // receives 'tx' pushes instead of running a private poll loop. Its height
   // probe makes proof fetches impossible-but-cheap misses free: a static tip
   // and no new watches skips the batch entirely. Self-observed BUMPs come
-  // from our own block scan — verified by construction.
+  // from the asset proof endpoint — served bytes are claims until their
+  // root anchors to our own header chain (the SPV kernel, not "the node
+  // said so").
   const events = new ChainEvents({
     intervalMs: 2_000,
     abandonAfterBlocks: 100,
     height: async () => Math.max(lastMined, await tracker.currentHeight()),
     observe: async (txid) => {
-      const res = await fetch(`${rc.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(10_000) }).catch(
-        () => null
-      )
-      if (res === null || res.status !== 200) return undefined
-      const buf = await res
-        .arrayBuffer()
-        .then((b) => Buffer.from(b))
-        .catch(() => null)
-      if (buf === null) return undefined
-      const h = buf.length >= 3 && buf[0] === 0xfd ? buf.readUInt16LE(1) : undefined
-      const mp = h !== undefined ? await merklePathAtHeight(rc, txid, tracker, h) : null
-      if (mp === null) return undefined
-      return { txid, status: 'mined', blockHeight: mp.blockHeight, merklePath: new MerklePath(mp.blockHeight, mp.path) }
+      const mp = await regtestMerkleProof(rc, txid)
+      if (mp === undefined) return undefined
+      let root: string
+      try {
+        root = mp.computeRoot(txid)
+      } catch {
+        return undefined // served path doesn't contain the txid — a claim, not a proof
+      }
+      if (!(await tracker.isValidRootForHeight(root, mp.blockHeight))) return undefined
+      return { txid, status: 'mined', blockHeight: mp.blockHeight, merklePath: mp }
     }
   })
   events.on('abandoned', ({ txid, tip, seenAtHeight }) => {
@@ -846,8 +845,12 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     observe: async (txid) => {
       const tx = await memRef?.fetchTx(txid).catch(() => undefined)
       if (tx?.merklePath !== undefined) return { txid, status: 'mined', blockHeight: tx.merklePath.blockHeight, merklePath: tx.merklePath }
+      // a broadcaster rejection verdict is a claim with no possible proof
+      // object — only a double-spend is provable (via the conflicting tx's
+      // own BUMP). It lands as a hint (resolves waiters, keeps the floor),
+      // never on the verified path — same treatment the push path gives it.
       const st = await arcTxStatus(txid)
-      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(st)) return { txid, status: 'rejected' }
+      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(st)) events.note({ txid, status: 'rejected' })
       return undefined
     }
   })

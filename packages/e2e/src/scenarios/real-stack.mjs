@@ -17,7 +17,7 @@
 // deploy/bstack-sandbox/compose.regtest.yaml up -d` has been run with
 // NEKTAR_RPC_USER/NEKTAR_RPC_PASS in the environment. Nothing is torn down.
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, createWriteStream } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, statSync, createWriteStream } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -109,14 +109,22 @@ let stopping = false
 // ---- background mining: ~1 block / 2 s while anything waits -------------
 let mining = !LIVE
 let blocksMined = 0
+let sealing = false
+const sealNow = async () => {
+  if (!mining || sealing) return
+  sealing = true
+  try {
+    await rpc('generatetoaddress', 1, treasuryAddr)
+    blocksMined++
+  } catch (e) {
+    log(`mine: ${e.message}`)
+  } finally {
+    sealing = false
+  }
+}
 const mineLoop = (async () => {
   while (mining) {
-    try {
-      await rpc('generatetoaddress', 1, treasuryAddr)
-      blocksMined++
-    } catch (e) {
-      log(`mine: ${e.message}`)
-    }
+    await sealNow()
     await delay(2000)
   }
 })()
@@ -132,6 +140,26 @@ const agents = [
   { name: 'cara', hosts: [HOST_B], seller: 200 },
   { name: 'bob', hosts: [HOST_A, HOST_B] }
 ]
+// broadcast-driven sealing (regtest, test-only — never protocol): a fresh
+// tx-log line means an agent's tx just hit the mempool, so seal it inside
+// ~150 ms instead of leaving it for the 2 s idle floor of mineLoop
+const txLogPos = new Map()
+const txLogScan = (async () => {
+  while (mining) {
+    for (const a of agents) {
+      if (a.dataDir === undefined) continue
+      const f = join(a.dataDir, 'tx-log.jsonl')
+      if (!existsSync(f)) continue
+      const st = statSync(f)
+      const at = txLogPos.get(f) ?? 0
+      if (st.size > at) {
+        txLogPos.set(f, st.size)
+        void sealNow()
+      }
+    }
+    await delay(150)
+  }
+})()
 // testnet: one split of the treasury's largest unspent output pays each
 // instance six 10k-sat outputs (parallel spends without waiting for change)
 // and returns the rest to the treasury. Instances import it offline
@@ -160,6 +188,45 @@ const FAULT = (() => {
 })()
 const EXPECT = process.argv.includes('--expect') ? process.argv[process.argv.indexOf('--expect') + 1] : 'verified'
 const HOST_CONTAINER = { a: 'nektar-bstack-testnet-host-a-1', b: 'nektar-bstack-testnet-host-b-1' }
+
+// ---- per-step timing ------------------------------------------------------
+// The deal journals on both sides record every transition with `cause`+`at`
+// (same machine → comparable clocks). stepTable diffs the two journals into a
+// want→verified timeline, all anchored to the runner's want-post mark.
+const stepAt = (evs, cause, t0) => {
+  const ts = evs.filter((e) => e.cause === cause).map((e) => e.at)
+  return ts.length === 0 ? NaN : Math.min(...ts) - t0
+}
+const STEP_ROWS = [
+  ['want signed', (b, s, t0) => stepAt(b, 'want_signed', t0), 'want tx build + broadcast'],
+  ['seller prepared offer', (b, s, t0) => stepAt(s, 'offer_prepared', t0), 'want propagates to seller + offer build'],
+  ['offer recorded (buyer)', (b, s, t0) => stepAt(b, 'offer_recorded', t0), 'host write → buyer lane read'],
+  ['offer selected', (b, s, t0) => stepAt(b, 'offer_selected', t0), 'scoring collectMs window'],
+  ['escrow broadcast', (b, s, t0) => stepAt(b, 'escrow_broadcast', t0), 'spend guard + escrow build + broadcast'],
+  ['escrow verified (seller)', (b, s, t0) => stepAt(s, 'escrow_verified', t0), 'host write → seller read + verify'],
+  ['disclosure broadcast', (b, s, t0) => stepAt(s, 'disclosure_broadcast', t0), 'delivery build + broadcast'],
+  ['disclosure verified (buyer)', (b, s, t0) => stepAt(b, 'disclosure_verified', t0), 'host write → buyer read + payload verify'],
+  ['payment verified (seller)', (b, s, t0) => stepAt(s, 'payment_verified', t0), 'seller observe + collect build']
+]
+function stepTable(bev, sev, wantAt) {
+  const rows = [['step', 't (s)', 'Δ (s)', 'waited on']]
+  let prev = 0
+  for (const [label, fn, waited] of STEP_ROWS) {
+    const t = fn(bev, sev, wantAt)
+    if (typeof t !== 'number' || Number.isNaN(t)) {
+      rows.push([label, '—', '—', waited])
+      continue
+    }
+    const tS = t / 1000
+    rows.push([label, tS.toFixed(1), (tS - prev).toFixed(1), waited])
+    prev = tS
+  }
+  return rows
+}
+function printTable(rows) {
+  const w = rows[0].map((_, c) => Math.max(...rows.map((r) => String(r[c]).length)))
+  for (const r of rows) log('  ' + r.map((c, i) => String(c).padEnd(w[i])).join('  '))
+}
 let hostDowned
 const docker = (args) => new Promise((res) => spawn('docker', args, { stdio: 'inherit' }).on('exit', res))
 async function injectFault({ verb, arg }) {
@@ -439,7 +506,7 @@ async function waitState(a, operationId, states, ms = LIVE ? 3 * 3600_000 : 900_
       st = await tool(a, 'deals', { operationId })
     } catch (e) {
       if (Date.now() > end) throw e
-      await delay(1500)
+      await delay(200)
       continue // instance restarting — state lives in its data dir
     }
     if (states.includes(st.state)) return st
@@ -447,7 +514,7 @@ async function waitState(a, operationId, states, ms = LIVE ? 3 * 3600_000 : 900_
       const tail = existsSync(join(a.dataDir, 'stderr.log')) ? readFileSync(join(a.dataDir, 'stderr.log'), 'utf8').split('\n').slice(-12).join('\n') : ''
       throw new Error(`${a.name} ${operationId} stuck in ${st.state}: ${st.lastError ?? ''}\nstderr tail:\n${tail}`)
     }
-    await delay(1500)
+    await delay(200)
   }
 }
 
@@ -577,6 +644,20 @@ try {
     const op = await waitState(bob, operationId, ['disclosure_verified', 'refunded', 'expired', 'denied', 'uncertain', 'disputed', 'funding_failed', 'useful'])
     const verifiedMs = Date.now() - wantAt
     const dealBlocks = blocksMined - wantAtBlocks
+    // ---- per-step table (before assertions — timing survives a later fail) --
+    let steps
+    {
+      const sellerOp = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
+      const bev = (await tool(bob, 'deals', { operationId })).events ?? []
+      const sev = sellerOp ? (await tool(cara, 'deals', { operationId: sellerOp.operationId })).events ?? [] : []
+      steps = stepTable(bev, sev, wantAt)
+      log('step table (anchored to want post):')
+      printTable(steps)
+      if (EXPECT === 'refunded') {
+        const rb = stepAt(bev, 'refund_broadcast', wantAt)
+        if (!Number.isNaN(rb)) log(`  refund broadcast at t=${(rb / 1000).toFixed(1)}s`)
+      }
+    }
     if (EXPECT === 'refunded') {
       if (op.state !== 'refunded') throw new Error(`expected refund — buyer ended in ${op.state}: ${op.lastError ?? ''}`)
       const rtx = op.data?.refundTxid
@@ -589,7 +670,7 @@ try {
       )
       writeFileSync(
         join(dir, 'summary.json'),
-        JSON.stringify({ runId, outcome: 'PASS', expect: 'refunded', fault: FAULT, refundTxid: rtx, wallClockMsToRefunded: verifiedMs }, null, 1)
+        JSON.stringify({ runId, outcome: 'PASS', expect: 'refunded', fault: FAULT, refundTxid: rtx, wallClockMsToRefunded: verifiedMs, steps }, null, 1)
       )
     }
     if (EXPECT === 'verified' && op.state !== 'disclosure_verified') throw new Error(`buyer ended in ${op.state}: ${op.lastError ?? ''}`)
@@ -677,6 +758,7 @@ try {
         disclosureTxid: op.disclosureTxid,
         sellerState,
         wallClockMsToDisclosureVerified: verifiedMs,
+        steps,
         hopMs,
         blocksMinedDuringDeal: dealBlocks,
         hosts: { a: HOST_A, b: HOST_B },
@@ -703,6 +785,7 @@ try {
   await restoreFault().catch(() => {})
   mining = false
   await mineLoop.catch(() => {})
+  await txLogScan.catch(() => {})
   for (const p of procs)
     try {
       p.kill('SIGTERM')

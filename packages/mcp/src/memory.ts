@@ -67,6 +67,7 @@ import { BondOps } from './bonds.js'
 import { RevocationOps } from './revocations.js'
 import { CustodyOps, type CustodyOpsDeps } from './custody.js'
 import { TxOps, type TxOpsDeps } from './txops.js'
+import { AnchorOps } from './anchorops.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -498,6 +499,13 @@ export class NektarMemory {
       network: this.opts.network,
       persist: () => this.persistState()
     })
+    this.anchorOps = new AnchorOps({
+      anchors: this.anchors,
+      tails: this.tails,
+      anchorTxs: this.anchorTxs,
+      shards: () => this.shards(),
+      persistState: () => this.persistState()
+    })
     this.txOps = new TxOps({
       txs: () => this.txs,
       anchorTxs: this.anchorTxs,
@@ -553,6 +561,7 @@ export class NektarMemory {
   txLookup?: (txid: string) => Promise<import('@bsv/sdk').Transaction | undefined>
   proofLookup?: (txid: string) => Promise<import('@bsv/sdk').MerklePath | undefined>
   private txOps!: TxOps
+  private anchorOps!: AnchorOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     return await this.txOps.fetchTx(txid)
@@ -651,11 +660,11 @@ export class NektarMemory {
 
   /** the shard's current anchor head (undefined before the first anchor) */
   anchorHead(shard: string) {
-    return this.anchors.get(shard)?.getHead()
+    return this.anchorOps.anchorHead(shard)
   }
   /** an anchor tx by txid (as broadcast, with BUMP when attached) */
   anchorTx(txid: string) {
-    return this.anchorTxs.get(txid)
+    return this.anchorOps.anchorTx(txid)
   }
   /** the shard's log records (read view — used by prove/disclose tests) */
   async records(shard: string) {
@@ -818,21 +827,15 @@ export class NektarMemory {
   }
   /** the shard's latest anchor link (tail of the on-chain succession) */
   tailLink(shard: string) {
-    return this.tails.get(shard)?.at(-1)
+    return this.anchorOps.tailLink(shard)
   }
   /** anchors still waiting for their BUMP */
   unprovenAnchors(): Array<{ shard: string; txid: string }> {
-    return this.shards().flatMap((s) =>
-      (this.tails.get(s) ?? []).filter((l) => !this.anchorTxs.get(l.txid)?.merklePath).map((l) => ({ shard: s, txid: l.txid }))
-    )
+    return this.anchorOps.unprovenAnchors()
   }
   /** attach a BUMP to an anchor (must prove THIS txid) and mark the chain confirmed */
   attachProof(shard: string, txid: string, mp: import('@bsv/sdk').MerklePath): void {
-    const tx = this.anchorTxs.get(txid)
-    if (!tx) throw new Error(`attachProof: unknown anchor ${txid}`)
-    if (!mp.path[0]?.some((n) => n.txid === true && n.hash === txid)) throw new Error('attachProof: BUMP does not contain this txid')
-    tx.merklePath = mp
-    this.confirmAnchor(shard, txid)
+    this.anchorOps.attachProof(shard, txid, mp)
   }
   /** shards this instance has written or anchored */
   shards(): string[] {
@@ -840,7 +843,7 @@ export class NektarMemory {
   }
   /** every anchor link of the shard, genesis first (read-only copy) */
   anchorLinks(shard: string): AnchorLink[] {
-    return [...(this.tails.get(shard) ?? [])]
+    return this.anchorOps.anchorLinks(shard)
   }
 
   /** bundles of pack-imported records ('shard:seq' → ProofBundle) — the only
@@ -2252,10 +2255,7 @@ export class NektarMemory {
 
   /** Mark anchor txs mined (drive from broadcaster status events). */
   confirmAnchor(shard: string, txid: string): void {
-    const ac = this.anchors.get(shard)
-    if (!ac) return
-    ac.confirm(txid, this.anchorTxs.get(txid)?.merklePath)
-    this.persistState()
+    this.anchorOps.confirmAnchor(shard, txid)
   }
 
   // ── persisted anchor state (restart without forking the shard) ───────────

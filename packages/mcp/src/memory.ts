@@ -76,6 +76,7 @@ import { PackOps } from './packops.js'
 import { PackWire } from './packwire.js'
 import { AuthorshipOps } from './authorshipops.js'
 import { ZkQueryOps } from './zkquery.js'
+import { AttestOps } from './attestops.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -326,6 +327,18 @@ export class NektarMemory {
       persistState: () => this.persistState(),
       metricsInc: (n) => this.metrics.inc(n)
     })
+    this.attestOps = new AttestOps({
+      attestationTxs: this.attestationTxs,
+      anchorTxs: this.anchorTxs,
+      takeFunding: (s) => this.takeFunding(s),
+      fundSigner: () => this.fundSigner(),
+      chain: this.chain,
+      feeRateSatPerKb: () => this.opts.feeRateSatPerKb ?? 1,
+      markSpentOut: (t, v) => this.markSpentOut(t, v),
+      addOwnedOut: (tx, v) => this.addOwnedOut(tx, v),
+      metricsInc: (n, l, x, h) => this.metrics.inc(n, l, x, h),
+      proveMembership: (s, q, qid) => this.proveMembership(s, q, qid)
+    })
     this.zkQueryOps = new ZkQueryOps({
       zkQueries: this.zkQueries,
       persistSecurityState: () => this.persistSecurityState()
@@ -401,6 +414,7 @@ export class NektarMemory {
   private packWire!: PackWire
   private authorshipOps!: AuthorshipOps
   private zkQueryOps!: ZkQueryOps
+  private attestOps!: AttestOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     return await this.txOps.fetchTx(txid)
@@ -826,39 +840,21 @@ export class NektarMemory {
   /** anchor sha256(proofBytes) in an OP_FALSE OP_RETURN data tx funded by the
    *  fee key (~1 sat of fee at regtest rates). Returns the txid + commitment. */
   async anchorAttestation(proofBytes: Uint8Array): Promise<{ txid: string; commitment: string }> {
-    const { buildAttestationTx, attestationCommitment } = await import('./onchain.js')
-    const commitment = attestationCommitment(proofBytes)
-    const f = await this.takeFunding(5_000)
-    const { tx, changeVout } = await buildAttestationTx(f, this.fundSigner(), commitment, this.opts.feeRateSatPerKb ?? 1)
-    const r = await this.chain.broadcast(tx)
-    if (r.status !== 'success') throw new Error(`attestation broadcast failed: ${r.description}`)
-    this.attestationTxs.set(tx.id('hex'), tx)
-    ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
-    ;(this.funder as any).addOwned?.(tx, changeVout)
-    this.metrics.inc('nektar_anchors_total', {}, 1, 'anchors broadcast')
-    return { txid: tx.id('hex'), commitment: toHex(commitment) }
+    return await this.attestOps.anchorAttestation(proofBytes)
   }
 
   /** holder side (§13/S1a): produce the STARK membership proof AND anchor its
    *  commitment on-chain. The queryId stays unconsumed — the verifier's own
    *  verifyMembership call still succeeds (single use is its privilege). */
   async attestMembership(shard: string, seq: number, queryIdHex: string): Promise<{ bytes: Uint8Array; ms: number; txid: string; commitment: string }> {
-    const { bytes, ms } = await this.proveMembership(shard, seq, queryIdHex)
-    const a = await this.anchorAttestation(bytes)
-    return { bytes, ms, ...a }
+    return await this.attestOps.attestMembership(shard, seq, queryIdHex)
   }
 
   /** verifier side: fetch the attestation tx, extract the OP_RETURN hash and
    *  check it equals sha256(supplied proof bytes). Only txs broadcast by THIS
    *  instance are resolvable (chain fetch by txid is an ops gap, CHN-*). */
   async verifyAttestation(txid: string, proofBytes: Uint8Array): Promise<{ ok: boolean; reason?: string; commitment?: string; vout?: number }> {
-    const { attestationsOf, attestationCommitment } = await import('./onchain.js')
-    const tx = this.attestationTxs.get(txid) ?? this.anchorTxs.get(txid)
-    if (!tx) return { ok: false, reason: 'attestation tx unknown to this instance' }
-    const want = toHex(attestationCommitment(proofBytes))
-    const hit = attestationsOf(tx).find((a) => toHex(a.commitment) === want)
-    if (!hit) return { ok: false, reason: 'no attestation output carries sha256(proof)' }
-    return { ok: true, commitment: want, vout: hit.vout }
+    return await this.attestOps.verifyAttestation(txid, proofBytes)
   }
 
   /** verifier side: the proof's root must be the R of an SPV-verified anchor of
@@ -900,29 +896,7 @@ export class NektarMemory {
    *  (unlock) — consensus itself runs the verification. The spend txid is the
    *  attestation a receipt cites: it exists on-chain or it doesn't. */
   async attestInferenceOnchain(lockHex: string, unlockHex: string): Promise<{ deployTxid: string; spendTxid: string }> {
-    const { Transaction, LockingScript, UnlockingScript, P2PKH, SatoshisPerKilobyte } = await import('@bsv/sdk')
-    const LOCK_SATS = 20_000
-    const addr = await signerAddress(this.fundSigner(), [0x6f])
-    const f = await this.takeFunding(LOCK_SATS + 5_000)
-    const tx1 = new Transaction()
-    tx1.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.fundSigner()) })
-    tx1.addOutput({ lockingScript: LockingScript.fromHex(lockHex), satoshis: LOCK_SATS })
-    tx1.addOutput({ lockingScript: new P2PKH().lock(addr), change: true })
-    await tx1.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
-    await tx1.sign()
-    const b1 = await this.chain.broadcast(tx1)
-    if (b1.status !== 'success') throw new Error(`verifier deploy failed: ${b1.description}`)
-    ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
-    ;(this.funder as any).addOwned?.(tx1, 1)
-    this.attestationTxs.set(tx1.id('hex'), tx1)
-    const tx2 = new Transaction()
-    tx2.addInput({ sourceTransaction: tx1, sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(unlockHex) })
-    tx2.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: LOCK_SATS - 5_000 })
-    const b2 = await this.chain.broadcast(tx2)
-    if (b2.status !== 'success') throw new Error(`proof spend failed: ${b2.description}`)
-    ;(this.funder as any).addOwned?.(tx2, 0)
-    this.attestationTxs.set(tx2.id('hex'), tx2)
-    return { deployTxid: tx1.id('hex'), spendTxid: tx2.id('hex') }
+    return await this.attestOps.attestInferenceOnchain(lockHex, unlockHex)
   }
 
   // ── public proof store + private-cite re-verification ────────────────────

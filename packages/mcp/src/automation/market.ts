@@ -909,10 +909,13 @@ export class MarketEngine {
   private async readTx(hex: string): Promise<Ingested> {
     return this.d.readTx !== undefined ? await this.d.readTx(hex) : await TxStore.read(hex, undefined)
   }
-  /** what the seller is handed for an escrow this instance funded */
+  /** what the seller is handed for an escrow this instance funded — bounded
+   *  so the whole envelope stays under the box's MaxContent cap (16KiB):
+   *  the covenant script + fields already cost ~4KiB of it. Over budget the
+   *  tx field is omitted and the seller falls back to fetchTx. */
   private escrowWire(txid: string, rawHex?: string): { tx: string } | {} {
-    const w = this.d.txWire?.(txid) ?? rawHex
-    return w !== undefined ? { tx: w } : {}
+    const w = this.d.txWire?.(txid, 4000) ?? rawHex
+    return w !== undefined && w.length <= 8000 ? { tx: w } : {}
   }
 
   private noteFor(

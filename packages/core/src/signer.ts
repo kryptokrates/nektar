@@ -7,10 +7,12 @@
 // differs.
 //
 // Contract notes:
-// - DigestSigner.sign(digest) mimics PrivateKey.sign: ECDSA over `digest` as
-//   given (sdk 4.x PrivateKey.sign signs the bytes directly — callers pass
-//   already-digested material such as sighash preimages). Wallet impls use
-//   hashToDirectlySign so both custodies sign the identical digest.
+// - DigestSigner.sign(digest) mimics PrivateKey.sign: ECDSA over
+//   sha256(digest) — sdk 4.x PrivateKey.sign HASHES its input, and callers
+//   pass single-hashed material (sighash preimages, attestation digests) so
+//   the pair lands on the consensus double-hash. Wallet impls therefore
+//   hand hashToDirectlySign sha256(digest): createSignature signs that value
+//   raw, matching PrivateKey byte-for-byte.
 // - unlockP2PKH produces the same unlocking script the SDK's
 //   P2PKH().unlock(privateKey,...) template produces: <sig+sighash> <pubkey>,
 //   and self-verifies the pair — a wallet substrate whose createSignature
@@ -33,7 +35,7 @@ import {
 
 /** Anything that can sign a digest and expose its public key. */
 export interface DigestSigner {
-  /** ECDSA over `digest` as given — same contract as PrivateKey.sign. */
+  /** ECDSA over sha256(digest) — same contract as PrivateKey.sign. */
   sign(digest: number[] | Uint8Array): Promise<Signature>
   /** compressed public key (hex). */
   pubKeyHex(): Promise<string>
@@ -77,20 +79,29 @@ export function walletSigner(
   keyArgs: { identityKey: true } | { protocolID: [number, string]; keyID: string; counterparty?: string; forSelf?: boolean } = { identityKey: true }
 ): DigestSigner {
   let cachedPub: string | undefined
-  // BRC-100 validation requires protocolID+keyID on signature/hmac calls even
-  // under identityKey:true (they're ignored for identity derivation but the
-  // tuple shape is checked) — bare identityKey throws on strict substrates.
-  const args = 'identityKey' in keyArgs ? { identityKey: true as const, protocolID: [0, 'nektar signer'] as [number, string], keyID: 'identity' } : keyArgs
+  // One explicit derivation tuple for BOTH calls — conformant substrates
+  // (ProtoWallet and every wallet built on it) ignore `identityKey` inside
+  // createSignature and derive by protocolID/keyID/counterparty, with
+  // counterparty defaulting to 'anyone' there but 'self' in getPublicKey:
+  // passing the flag produced a sig under a key nothing could name. The
+  // identity surface is therefore the self-derived 'nektar signer/identity'
+  // keyID — a deterministic pub/sig pair under any BRC-100 wallet. Held-key
+  // custody (toolbox) never reaches this path: custodySigner intercepts to
+  // keySigner(root), which yields the literal identity pub.
+  const args: { protocolID: [number, string]; keyID: string; counterparty: string; forSelf?: boolean } =
+    'identityKey' in keyArgs
+      ? { protocolID: [0, 'nektar signer'], keyID: 'identity', counterparty: 'self' }
+      : { ...keyArgs, counterparty: keyArgs.counterparty ?? 'self' }
   return {
     sign: async (d) => {
-      // hashToDirectlySign — callers hand us the digest itself (sighash for
-      // script unlocks); `data` would make the wallet sign sha256(digest),
-      // which no on-chain verifier accepts
-      const r = await wallet.createSignature({ ...args, hashToDirectlySign: Array.from(d) } as never)
+      // hashToDirectlySign is signed raw (no internal hash), so we hand the
+      // wallet sha256(d) — PrivateKey.sign semantics: ECDSA over
+      // sha256(digest), the construction every caller verifies against.
+      const r = await wallet.createSignature({ ...args, hashToDirectlySign: Array.from(Hash.sha256(Array.from(d))) } as never)
       return Signature.fromDER(Array.from(r.signature))
     },
     pubKeyHex: async () => {
-      if (!cachedPub) cachedPub = (await wallet.getPublicKey(keyArgs as never)).publicKey
+      if (!cachedPub) cachedPub = (await wallet.getPublicKey(args as never)).publicKey
       return cachedPub
     },
     deriveSecret: async (pre, post) => {

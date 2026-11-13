@@ -680,9 +680,16 @@ try {
       if (EXPECT !== 'verified') break verified
       const offers = Object.values(op.data.offers ?? {}).map((o) => ({ pub: o.so?.offer?.pub, price: Number(o.so?.offer?.priceSats) }))
       const prices = offers.map((o) => o.price).sort((x, y) => x - y)
-      if (JSON.stringify(prices) !== JSON.stringify([200, 300, 450])) throw new Error(`recorded offers ${JSON.stringify(prices)} — expected [200,300,450]`)
+      // early-select semantics (market.ts): the first acceptable offer fires
+      // selection in the tick it lands, so `offers` is whoever arrived before
+      // that tick — require ≥1 of the three sellers and a selected key drawn
+      // from that set; when all three made the window the ranking must still
+      // pick cara's 200-sat bid
+      if (prices.length < 1 || prices.some((p) => ![200, 300, 450].includes(p)))
+        throw new Error(`recorded offers ${JSON.stringify(prices)} — expected a non-empty subset of [200,300,450]`)
       const sel = op.data.selected.key
-      if (sel.split(':')[0] !== cara.pub) throw new Error(`selected ${sel.split(':')[0].slice(0, 12)}… — expected cara's 200-sat offer`)
+      if (!offers.some((o) => sel.split(':')[0] === o.pub)) throw new Error(`selected key ${sel.slice(0, 24)}… is not one of the recorded offers`)
+      if (prices.length === 3 && sel.split(':')[0] !== cara.pub) throw new Error(`selected ${sel.split(':')[0].slice(0, 12)}… — expected cara's 200-sat offer`)
       if (op.result?.text !== FINDING) throw new Error('deals.result.text differs from the sold finding')
       if (op.journal?.counterparty?.complete !== true)
         throw new Error(`counterparty journal incomplete: ${JSON.stringify(op.journal?.counterparty).slice(0, 300)}`)

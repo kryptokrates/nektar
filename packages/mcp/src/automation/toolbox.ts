@@ -648,8 +648,7 @@ export class ToolboxReserveFunder {
     if (mp.merklePath !== undefined) tx.merklePath = MerklePath.fromBinary((mp.merklePath as unknown as MerklePath).toBinary())
     else if (depth > 0)
       for (const i of tx.inputs)
-        if (i.sourceTransaction === undefined && i.sourceTXID !== undefined)
-          i.sourceTransaction = await this.parent(i.sourceTXID, depth - 1)
+        if (i.sourceTransaction === undefined && i.sourceTXID !== undefined) i.sourceTransaction = await this.parent(i.sourceTXID, depth - 1)
     return tx
   }
 }

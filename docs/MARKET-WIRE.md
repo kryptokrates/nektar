@@ -14,7 +14,7 @@ Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
   funding-tree output and carries that tree's Merkle path (2 txs, 1 BUMP —
   stricter modules reject any other shape; the `ls_nektar` module alone also
   admits unproven carriers whose ancestry terminates in proven parents).
-- Everything is zeroconf-safe: a *broadcast* carrier is admissible. Never
+- Everything is zeroconf-safe: a _broadcast_ carrier is admissible. Never
   wait for a confirmation before acting on a record or envelope; only SPV
   proofs (where required by the lane) and explicit locktime gates matter.
 
@@ -37,15 +37,15 @@ Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
 - Canonical JSON (`marketJson`): JSON.stringify with object keys sorted
   recursively; bigint → decimal string. Sign over
   `sha256(utf8(prefix + marketJson(ad)))`, DER-encoded ECDSA.
-  - want  prefix: `nektar:market:want:1\n`
+  - want prefix: `nektar:market:want:1\n`
   - offer prefix: `nektar:market:offer:1\n`
 - `SignedWant  = {want: WantAd,  sig: hex}`
 - `SignedOffer = {offer: OfferAd, sig: hex}`
 - `WantAd`: `{v:1, wantId, pub, domains[], taskHash, maxSats?, revision,
-  status, streamSeq?, previousHash?, exp?}`.
+status, streamSeq?, previousHash?, exp?}`.
 - `OfferAd`: `{v:1, offerId, pub, shard, seq, shardId, domains[], leaf, hdp,
-  batchR?, priceSats, offer, wantId, taskHash, wantRevision, buyerPub?,
-  replyTo?, ts, exp?, net, tip?, tipHeight?, journal?}`.
+batchR?, priceSats, offer, wantId, taskHash, wantRevision, buyerPub?,
+replyTo?, ts, exp?, net, tip?, tipHeight?, journal?}`.
   - `offer.offer` is the **sale quote** (below).
 - `exp` is ms-epoch; hosts refuse artifacts whose `exp` is more than
   `MAX_LIFETIME_MS` (7d) out or already past.
@@ -66,8 +66,8 @@ Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
 
 - `offerSig` = seller's DER sig over `sha256(digest)` where
   `digest = sha256(fromHex(sellerPkh) ‖ fromHex(hWrapped) ‖ u64le(price) ‖
-  u64le(refundAfter) ‖ u64le(maxFee) ‖ fromHex(buyerPub || '00') ‖
-  fromHex(leaf || '00'.repeat(32)) ‖ u64le(expiresAt))`
+u64le(refundAfter) ‖ u64le(maxFee) ‖ fromHex(buyerPub || '00') ‖
+fromHex(leaf || '00'.repeat(32)) ‖ u64le(expiresAt))`
   (`identity/src/sale.ts:offerDigest` — binary concat, no text prefix).
 - `artifact.scriptHash` = `sha256` of the compiled covenant script bytes.
   **Buyers MUST refuse quotes whose artifact differs from the covenant they
@@ -82,7 +82,7 @@ Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
 
 - Covenant: `DisclosureSale` (stateless Rúnar, BIP-199 shape).
   Params: `sellerPkh, price, hWrapped, refundAfter, maxFee, depositorPkh,
-  verdictOutpoint` (36B; all-zero = ungated).
+verdictOutpoint` (36B; all-zero = ungated).
 - Buyer funds `DisclosureSaleHost.escrowScript(cfg, depositorPkh)` — the
   buyer rebuilds the script itself, so the funded utxo is the pinned
   covenant by construction.
@@ -120,8 +120,8 @@ by the funded output, not by a separate message field:
 Messages ride encrypted envelopes (`ls_bbox`, office-scoped), body
 `{market: <MarketMessage>}`:
 
-- `quote`     `{wantId, offerId, commitment, mode}` — proof bundle attach.
-- `accept`    `{wantId, offerId, utxo, depositorPkh, tx?}` — settlement
+- `quote` `{wantId, offerId, commitment, mode}` — proof bundle attach.
+- `accept` `{wantId, offerId, utxo, depositorPkh, tx?}` — settlement
   funded; `utxo.script` selects the rail (covenant ⇒ escrow, P2PKH ⇒
   direct when advertised). `tx` carries the funding tx (Atomic BEEF wire
   preferred) so the seller verifies without an indexer.
@@ -171,6 +171,7 @@ own cadence regardless; watches are latency optimizations, not correctness.
 disclosure_verified|refunded|uncertain → settled`
 
 Hard rules:
+
 - A buyer reaching `awaiting_disclosure` refunds at `refundAfter` — pure
   height, no counterparty needed.
 - A seller reaching `completing` broadcasts `buy` itself — no signature

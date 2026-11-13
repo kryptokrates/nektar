@@ -399,10 +399,10 @@ const up = async (url, name) => {
 }
 const tool = async (a, name, args) => {
   // agents can be mid-restart (Windows native-crash flake): retry transport-
-  // level failures briefly so the harness survives the restart window; real
-  // tool errors still throw immediately.
+  // level failures across the ~25-30s respawn window; real tool errors still
+  // throw immediately.
   let lastErr
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 70; i++) {
     try {
       const r = await fetch(`${a.url}/v1/tools/${name}`, {
         method: 'POST',
@@ -805,8 +805,17 @@ try {
       const winner = [alice, ben, cara].find((a) => a.pub === sel.split(':')[0])
       if (winner === undefined) throw new Error(`selected pub ${sel.split(':')[0].slice(0, 12)}… is not a scenario seller`)
       if (op.result?.text !== FINDING) throw new Error('deals.result.text differs from the sold finding')
-      if (op.journal?.counterparty?.complete !== true)
-        throw new Error(`counterparty journal incomplete: ${JSON.stringify(op.journal?.counterparty).slice(0, 300)}`)
+      // the seller's journal lines flush on her next deals/upkeep tick — a fast
+      // run can out-race the flush, so poll the buyer's view of her stream on a
+      // bounded ceiling before asserting completeness
+      const jUntil = Date.now() + 45_000
+      let jOp = op
+      while (jOp.journal?.counterparty?.complete !== true) {
+        if (Date.now() > jUntil)
+          throw new Error(`counterparty journal incomplete: ${JSON.stringify(jOp.journal?.counterparty).slice(0, 300)}`)
+        await delay(2000)
+        jOp = await tool(bob, 'deals', { operationId })
+      }
       // the seller holds her recovery note until the sale op settles (collect tx
       // proven) — on regtest wait for that settle before demanding an empty box,
       // so the assertion also verifies the collect-proof-settle chain. on testnet

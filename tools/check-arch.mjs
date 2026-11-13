@@ -169,11 +169,20 @@ for (const f of srcFiles) {
   pkgLoc[p] = (pkgLoc[p] ?? 0) + n
 }
 
+// Cross-package edges CANNOT come from depcruise's resolved paths: workspace
+// @nektar/x imports resolve through node_modules into dist/ and the exclude
+// filter drops them from the graph entirely (verified: 0 @nektar edges in the
+// cruise JSON). Measure them at the specifier level instead — which is also
+// where the layering contract actually lives.
+const IMPORT_RE = /(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]/g
+const NEKTAR_SPEC_RE = /^@nektar\/([a-z-]+)$/
+
 const pkgCa = {}
 const pkgCe = {}
 const pkgEdges = {} // pkg -> Set of target packages
 const fileFanout = {}
 const graph = {} // source -> [resolved] for SCC audit (ALL dep types incl. type-only)
+const specEdges = {} // pkg -> Map(targetPkg -> [specifier,...])
 for (const m of srcModules) {
   const src = m.source.replaceAll('\\', '/')
   const srcPkg = pkgOf(src)
@@ -183,15 +192,80 @@ for (const m of srcModules) {
     const r = (d.resolved ?? '').replaceAll('\\', '/')
     if (!r.startsWith('packages/')) continue
     graph[src].push(r)
-    const dstPkg = pkgOf(r)
-    if (dstPkg === undefined || dstPkg === srcPkg) continue
-    ;(pkgEdges[srcPkg] ??= new Set()).add(dstPkg)
-    pkgCa[dstPkg] = pkgCa[dstPkg] ?? 0 // touch for completeness
   }
+}
+// specifier-level package edges: @nektar/x imports add to fanout (they are
+// absent from the cruise graph) and build the real inter-package matrix
+for (const f of srcFiles) {
+  const srcPkg = pkgOf(f)
+  let text
+  try {
+    text = readFileSync(join(ROOT, f), 'utf8')
+  } catch {
+    continue
+  }
+  const nektarPkgs = new Set()
+  for (const mm of text.matchAll(IMPORT_RE)) {
+    const spec = mm[1] ?? mm[2] ?? mm[3]
+    const hit = spec !== undefined ? NEKTAR_SPEC_RE.exec(spec) : null
+    if (hit === null) continue
+    const dstPkg = hit[1]
+    if (dstPkg === srcPkg) continue
+    nektarPkgs.add(dstPkg)
+    ;(specEdges[srcPkg] ??= new Map()).set(dstPkg, [...(specEdges[srcPkg].get(dstPkg) ?? []), f])
+  }
+  fileFanout[f] = (fileFanout[f] ?? 0) + nektarPkgs.size
+  pkgEdges[srcPkg] = new Set([...(pkgEdges[srcPkg] ?? []), ...nektarPkgs])
 }
 for (const [p, targets] of Object.entries(pkgEdges)) {
   pkgCe[p] = targets.size
   for (const t of targets) pkgCa[t] = (pkgCa[t] ?? 0) + 1
+}
+
+// Hard layering contract — the sharp boundaries that must hold regardless of
+// baseline drift. depcruise can't see these edges (workspace imports resolve
+// into dist/ and drop out of its graph), so the contract is enforced here at
+// specifier level. Softer boundaries are covered by the edge ratchet below:
+// any NEW cross-package edge fails until admitted via --update.
+const ROOTS = new Set(['core', 'crypto', 'log'])
+const FORBIDDEN = [
+  {
+    name: 'nothing-imports-e2e',
+    test: (src, dst) => src !== 'e2e' && dst === 'e2e',
+    why: 'e2e is a test harness — shipping code must not depend on it'
+  },
+  {
+    name: 'automation-not-mcp',
+    test: (src, dst) => src === 'automation' && dst === 'mcp',
+    why: 'automation reaches its host only through the AutomationHost interface'
+  },
+  {
+    name: 'store-stays-leaf',
+    test: (src, dst) => src === 'store' && !ROOTS.has(dst),
+    why: 'store is leaf blob/pack persistence — only core-tier deps allowed'
+  },
+  {
+    name: 'roots-stay-roots',
+    test: (src, dst) => ROOTS.has(src) && !ROOTS.has(dst),
+    why: 'core/crypto/log are the foundation — they may only import each other'
+  },
+  {
+    name: 'chain-not-appward',
+    test: (src, dst) => src === 'chain' && ['bstack', 'reasoning', 'automation', 'mcp', 'watcher'].includes(dst),
+    why: 'chain is a lower-level lib — application packages sit above it'
+  }
+]
+const SPEC_GATED = /packages\/(?!e2e\/|watcher\/)/ // harness tier may reach anywhere
+for (const [p, targets] of Object.entries(specEdges)) {
+  if (!SPEC_GATED.test(`packages/${p}/`)) continue
+  for (const [t, filesHit] of targets) {
+    for (const rule of FORBIDDEN) {
+      if (!rule.test(p, t)) continue
+      console.error(`✗ ${rule.name}: ${p} → ${t} (${rule.why})`)
+      for (const f of filesHit.slice(0, 4)) console.error(`    ${f}`)
+      fail = true
+    }
+  }
 }
 
 const metrics = { packages: {}, files: {}, typeOnlyCycles: [] }
@@ -202,6 +276,7 @@ for (const p of new Set([...Object.keys(pkgLoc), ...Object.keys(pkgEdges)])) {
   metrics.packages[p] = {
     loc: pkgLoc[p] ?? 0,
     pkgFanout: ce,
+    edges: [...(pkgEdges[p] ?? [])].sort(),
     maxFileLoc: Math.max(0, ...pFiles.map((f) => fileLoc[f] ?? 0)),
     maxFileFanout: Math.max(0, ...pFiles.map((f) => fileFanout[f] ?? 0)),
     instability: ca + ce === 0 ? null : Number((ce / (ca + ce)).toFixed(3))
@@ -275,6 +350,11 @@ for (const [p, m] of Object.entries(metrics.packages)) {
       console.error(`✗ ${p}.${k} grew: ${b[k]} → ${m[k]}`)
       fail = true
     }
+  }
+  const newEdges = (m.edges ?? []).filter((e) => !(b.edges ?? []).includes(e))
+  for (const e of newEdges) {
+    console.error(`✗ new package edge ${p} → ${e} — admit it deliberately via --update`)
+    fail = true
   }
   if (m.instability !== null && b.instability !== null && Math.abs(m.instability - b.instability) > 0.25) {
     console.error(`✗ ${p}.instability drifted: ${b.instability} → ${m.instability}`)

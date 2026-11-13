@@ -1,6 +1,21 @@
 import type { AutomationStore } from './store.js'
 import type { MarketEngine } from './market.js'
-import type { PreflightReport } from './preflight.js'
+
+export interface PreflightCheck {
+  check: string
+  pass: boolean
+  detail: string
+  fix?: string
+}
+
+export interface PreflightReport {
+  pass: boolean
+  at: number
+  checks: PreflightCheck[]
+  /** hosts that failed the read probe — the runtime seeds its unreachable set
+   *  from here so a non-strict start still knows who is deaf */
+  downHosts: string[]
+}
 
 export interface Automation {
   store: AutomationStore

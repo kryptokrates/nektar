@@ -64,6 +64,7 @@ const DELTA_PREFIX = 'delta:'
 export class IngestError extends Error {}
 import { AnchorChain, type CheckpointBond, type BondUtxo } from '@nektar/anchor'
 import { BondOps } from './bonds.js'
+import { RevocationOps } from './revocations.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -495,6 +496,13 @@ export class NektarMemory {
       network: this.opts.network,
       persist: () => this.persistState()
     })
+    this.revocationOps = new RevocationOps({
+      store: this.store,
+      canEncrypt: () => this.canEncrypt(),
+      decryptRecord: (r) => this.decryptRecord(r),
+      prove: (s, seq) => this.prove(s, seq),
+      persistSecurityState: () => this.persistSecurityState()
+    })
     this.restoreSecurityState()
     this.restoreState()
     // push confirmations: backends that emit status events (regtest stack)
@@ -925,93 +933,28 @@ export class NektarMemory {
     return { txid: r.tx.id('hex'), n: r.head.data.n }
   }
 
-  /** revocation registry (IDN-007): SMT keyed by derive_key(pubkey); its root
-   *  is anchored with every revoke event */
-  readonly revocations = new idbind.Smt()
-  private revokedPubs: string[] = []
+  /** revocation registry (IDN-007): lives in revocations.ts — SMT keyed by
+   *  derive_key(pubkey); tests/server read the SMT directly via this getter */
+  private revocationOps!: RevocationOps
+  get revocations(): idbind.Smt {
+    return this.revocationOps.smt
+  }
   /** revoke a 33-byte pubkey: SMT key = derive_key(pubkey); persisted */
   revoke(pubHex: string): Uint8Array {
-    const pk = fromHex(pubHex)
-    if (pk.length !== 33) throw new Error('revoke: pubkey must be a 33-byte compressed public key')
-    const root = this.revocations.insert(idbind.deriveKey(pk), sha256(utf8('revoked')))
-    if (!this.revokedPubs.includes(pubHex)) this.revokedPubs.push(pubHex)
-    this.persistSecurityState()
-    return root
+    return this.revocationOps.revoke(pubHex)
   }
   isRevoked(pubHex: string): boolean {
-    return this.revocations.has(idbind.deriveKey(fromHex(pubHex)))
+    return this.revocationOps.isRevoked(pubHex)
   }
 
-  /** §19 third-party revocation proof: the `__revocation__` shard record for
-   *  `revoke:<pub>` plus its SPV-verifiable inclusion bundle — an external
-   *  verifier can check "key X was revoked" against chain data alone rather
-   *  than trusting an operator's local revocation list. Returns the record's
-   *  plaintext `data`, its `prov` and `E` so the verifier can recompute
-   *  `leaf = computeLeaf({d,p,E})` and bind the TEXT to the proven leaf —
-   *  an inclusion proof for a DIFFERENT record is not evidence. */
-  async revocationProof(pubHex: string): Promise<{
-    seq: number
-    data: string
-    prov?: import('@nektar/core').Provenance
-    E?: Bytes
-    leaf: string
-    bundle?: import('@nektar/verify').ProofBundle
-    anchored: boolean
-    root?: string
-    smtProof?: string
-  } | null> {
-    for (const rec of await this.store.all('__revocation__')) {
-      let data: string
-      if (rec.fragment.d.length) data = Buffer.from(rec.fragment.d).toString('utf8')
-      else if (rec.fragment.E?.length && this.canEncrypt()) {
-        // encrypted deployment — the operator holds the seed; decrypt to read
-        const t = await this.decryptRecord(rec)
-        if (t === undefined) continue
-        data = t
-      } else continue
-      const entry = idbind.parseRevocationRecord(data)
-      if (!entry || entry.pk.toLowerCase() !== pubHex.toLowerCase()) continue
-      const { bundle, result } = await this.prove('__revocation__', rec.seq)
-      return {
-        seq: rec.seq,
-        data,
-        prov: rec.fragment.p,
-        E: rec.fragment.E,
-        leaf: toHex(rec.leaf),
-        bundle,
-        anchored: result.ok === true,
-        root: entry.root,
-        smtProof: entry.proof ? idbind.serializeSmtProof(entry.proof) : undefined
-      }
-    }
-    return null
+  /** §19 third-party revocation proof — implemented in revocations.ts */
+  async revocationProof(pubHex: string) {
+    return await this.revocationOps.revocationProof(pubHex)
   }
 
-  /** §19 CRL status: is `pubHex` revoked, provable against the LATEST anchored
-   *  SMT root? The newest `revoke:` record's embedded root equals the current
-   *  SMT root only when no revoke happened after it — `matchesCurrent` says so;
-   *  a verifier recomputes via idbind.verifyRevocationStatus(pk, root, proof)
-   *  which accepts both membership (revoked) and non-membership proofs. */
-  async revocationStatus(
-    pubHex: string
-  ): Promise<{ revoked: boolean; root: string; matchesCurrent: boolean; smtProof: string; seq?: number; anchored: boolean }> {
-    const key = idbind.revocationKey(pubHex)
-    const smtProof = idbind.serializeSmtProof(this.revocations.prove(key))
-    const current = toHex(this.revocations.root())
-    let root = '',
-      seq: number | undefined,
-      anchored = false
-    for (const rec of await this.store.all('__revocation__')) {
-      if (!rec.fragment.d.length) continue
-      const data = Buffer.from(rec.fragment.d).toString('utf8')
-      const entry = idbind.parseRevocationRecord(data)
-      if (!entry) continue
-      const { result } = await this.prove('__revocation__', rec.seq)
-      root = entry.root
-      seq = rec.seq
-      anchored = result.ok === true
-    }
-    return { revoked: this.revocations.has(key), root, matchesCurrent: root === current, smtProof, seq, anchored }
+  /** §19 CRL status — implemented in revocations.ts */
+  async revocationStatus(pubHex: string) {
+    return await this.revocationOps.revocationStatus(pubHex)
   }
 
   // ── §12 SLA bond (NektarCheckpointBond) — lifecycle lives in bonds.ts ──
@@ -1196,7 +1139,7 @@ export class NektarMemory {
       zkQueries: [...this.zkQueries]
         .filter(([, e]) => e.expiry >= Date.now() || e.consumed === true)
         .map(([q, e]) => [q, e.expiry, e.nonce, e.verifierId, e.consumed === true]),
-      revocations: [...this.revokedPubs]
+      revocations: this.revocationOps.snapshot()
     })
   }
   private restoreSecurityState(): void {
@@ -1206,10 +1149,7 @@ export class NektarMemory {
     for (const k of s.zkSeen) this.zkSeen.add(k)
     for (const row of s.zkQueries ?? [])
       this.zkQueries.set(row[0], { expiry: row[1], nonce: row[2] ?? '', verifierId: row[3] ?? '', consumed: row[4] === true })
-    for (const pub of s.revocations) {
-      this.revocations.insert(idbind.deriveKey(fromHex(pub)), sha256(utf8('revoked')))
-      this.revokedPubs.push(pub)
-    }
+    this.revocationOps.restore(s.revocations)
   }
   /** verifier side: issue a single-use ZK membership query (default 10 min).
    *  queryId = dsha256('nektar:zkq:v2' ‖ nonce ‖ verifierId); the prover binds it into the STARK journal. */

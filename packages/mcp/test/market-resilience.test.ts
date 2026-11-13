@@ -272,9 +272,19 @@ test('R5: kill matrix — buyer respawn mid-deal from collecting / awaiting_disc
       const b2 = await respawn(b, [h1.url, h2.url], chain, logs, dir)
       const rounds = await until([b2.rt, s.rt], chain, async () => {
         const bo = await opFor(b2, w.wantId)
-        const so = (await saleOps(s)).find((o) => (o.data as { wantId?: string }).wantId === w.wantId)
+        const so = await saleFor(s, w.wantId)
         return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
       })
+      if (rounds <= 0) {
+        const bo = await opFor(b2, w.wantId)
+        const sos = await saleOps(s)
+        console.log(
+          `[${checkpoint}] STUCK buyer:`,
+          JSON.stringify({ state: bo?.state, lastError: bo?.lastError, dueAt: bo?.dueAt, rev: bo?.revision }),
+          'seller:',
+          JSON.stringify(sos.map((o) => ({ state: o.state, lastError: o.lastError })))
+        )
+      }
       assert.ok(rounds > 0, `[${checkpoint}] deal never recovered | ` + logs.slice(-20).join(' | '))
       const bo = (await opFor(b2, w.wantId))!
       assert.equal(bo.operationId, (await opFor(b, w.wantId))!.operationId, `[${checkpoint}] respawn spawned a duplicate op`)

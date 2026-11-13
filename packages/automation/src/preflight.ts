@@ -30,21 +30,10 @@ import { conformanceStatus } from './conformance.js'
 import { fetchObjectByRef } from '@nektar/store'
 import type { S3ObjectStore } from '@nektar/store'
 
-interface PreflightCheck {
-  check: string
-  pass: boolean
-  detail: string
-  fix?: string
-}
-
-export interface PreflightReport {
-  pass: boolean
-  at: number
-  checks: PreflightCheck[]
-  /** hosts that failed the read probe — the runtime seeds its unreachable set
-   *  from here so a non-strict start still knows who is deaf */
-  downHosts: string[]
-}
+// PreflightCheck/PreflightReport live in types.ts — the shared type barrel —
+// so the barrel never has to reach back into this module (type-only cycle).
+import type { PreflightCheck, PreflightReport } from './types.js'
+export type { PreflightCheck, PreflightReport }
 
 interface PreflightCfg {
   network: string

@@ -380,15 +380,32 @@ const up = async (url, name) => {
   throw new Error(`${name} at ${url} did not start`)
 }
 const tool = async (a, name, args) => {
-  const r = await fetch(`${a.url}/v1/tools/${name}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${a.token}` },
-    body: JSON.stringify(args),
-    signal: AbortSignal.timeout(30_000)
-  })
-  const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(`${a.name} ${name}: ${j.error ?? r.status}`)
-  return j
+  // agents can be mid-restart (Windows native-crash flake): retry transport-
+  // level failures briefly so the harness survives the restart window; real
+  // tool errors still throw immediately.
+  let lastErr
+  for (let i = 0; i < 40; i++) {
+    try {
+      const r = await fetch(`${a.url}/v1/tools/${name}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${a.token}` },
+        body: JSON.stringify(args),
+        signal: AbortSignal.timeout(30_000)
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        const e = new Error(`${a.name} ${name}: ${j.error ?? r.status}`)
+        e.toolError = true
+        throw e
+      }
+      return j
+    } catch (e) {
+      if (e?.toolError) throw e
+      lastErr = e
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  }
+  throw lastErr
 }
 function spawnInstance(a) {
   const err = createWriteStream(join(a.dataDir, 'stderr.log'), { flags: 'a' })

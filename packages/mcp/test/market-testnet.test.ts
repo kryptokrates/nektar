@@ -100,9 +100,9 @@ const mkagent = async (
   const fundKey = PrivateKey.fromWif(wif)
   const reserve = new ReserveFunder(fundKey, join(dataDir, 'reserve.json'))
   const chain = mkChain(mc)
-  // fresh identity: the WIF signs spends via the reserve; the operator pub is
-  // a NEW key — no finger-record seq conflicts with the retired live agents
-  const mem = new NektarMemory(chain, reserve as never, PrivateKey.fromRandom(), {
+  // fundKey IS the WIF — funding inputs pay the WIF's P2PKH and must be
+  // signed by it (anchor/provider path). Identity = WIF pub, same as live.
+  const mem = new NektarMemory(chain, reserve as never, PrivateKey.fromWif(wif), {
     network: 'testnet',
     modelId: 'test-model-1',
     feeRateSatPerKb: 1,

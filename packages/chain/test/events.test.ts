@@ -95,6 +95,19 @@ test('events: note() records pushed status + resolves waitFor without emitting t
   assert.equal(got.length, 1) // 'tx' emits on the verified path — !!prev.mp changed
 })
 
+test('events: a non-terminal delivery resolves a matching waiter; others stay parked', async () => {
+  let deliverable: TxStatusEvent | undefined
+  const ev = new ChainEvents({ observe: async () => deliverable })
+  const unconf = ev.waitFor('t1', 60_000, (e) => e.status === 'unconfirmed')
+  const minedW = ev.waitFor('t1', 60_000, (e) => e.status === 'mined')
+  deliverable = { txid: 't1', status: 'unconfirmed' }
+  await ev.tick()
+  assert.equal((await unconf)?.status, 'unconfirmed') // first-delivered-event waiters resolve
+  const r = await Promise.race([minedW.then(() => 'resolved'), new Promise((res) => setTimeout(() => res('parked'), 200))])
+  assert.equal(r, 'parked') // non-terminal: non-matching waiters keep waiting
+  ev.stop()
+})
+
 test('events: a terminal event resolves every waiter, matcher or not', async () => {
   const ev = new ChainEvents({ observe: async () => undefined })
   const ds = ev.waitFor('t1', 60_000, (e) => e.status === 'double-spent')
@@ -119,6 +132,15 @@ test('events: concurrent probes of one txid share a single observe', async () =>
   ev.watch('t1')
   await Promise.all([ev.probeNow('t1'), ev.probeNow('t1'), ev.probeNow('t1')])
   assert.equal(calls, 1)
+})
+
+test('events: retained statuses evict on the same ttl sweep as watches', async () => {
+  const ev = new ChainEvents({ observe: async () => undefined, ttlMs: 1 })
+  ev.report({ txid: 't1', status: 'mined' })
+  assert.equal(ev.statusOf('t1')?.status, 'mined')
+  await new Promise((r) => setTimeout(r, 5))
+  await ev.tick()
+  assert.equal(ev.statusOf('t1'), undefined) // catch-up cache, not permanent memory
 })
 
 test('events: report() is the trusted first-party path — emits tx', async () => {

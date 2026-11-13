@@ -100,8 +100,12 @@ export class ChainEvents extends EventEmitter {
    *  status whose BUMP didn't check out — keeps the poller's reconcile floor
    *  alive instead of stranding the wait. */
   note(ev: TxStatusEvent): void {
-    this.lastStatus.set(ev.txid, { ev, at: Date.now(), verified: false })
-    if (TERMINAL.has(ev.status)) this.resolve(ev)
+    const prev = this.lastStatus.get(ev.txid)
+    // a pushed hint never downgrades a verified record for the same status —
+    // otherwise hint-verified-hint would re-emit a duplicate 'tx'
+    const verified = prev?.verified === true && prev.ev.status === ev.status
+    this.lastStatus.set(ev.txid, { ev, at: Date.now(), verified })
+    this.resolve(ev, TERMINAL.has(ev.status))
   }
 
   /** a first-party observation (e.g. a definitive broadcast refusal): emits
@@ -253,18 +257,17 @@ export class ChainEvents extends EventEmitter {
     if (prev === undefined || !prev.verified || prev.ev.status !== ev.status || !!prev.ev.merklePath !== !!ev.merklePath) {
       this.emit('tx', ev)
     }
-    if (TERMINAL.has(ev.status)) {
-      this.watched.delete(ev.txid)
-      this.resolve(ev)
-    }
+    if (TERMINAL.has(ev.status)) this.watched.delete(ev.txid)
+    this.resolve(ev, TERMINAL.has(ev.status))
   }
 
-  private resolve(ev: TxStatusEvent | undefined): void {
+  private resolve(ev: TxStatusEvent | undefined, terminal = true): void {
     if (ev !== undefined) {
-      // resolve() only fires on terminal events — every waiter on the txid
-      // learns the actual outcome, matcher or not
-      for (const w of this.waiters.get(ev.txid) ?? []) w(ev, true)
-      this.waiters.delete(ev.txid)
+      // every waiter on the txid hears each delivered event: matching ones
+      // resolve; non-matching ones stay parked while the txid can still move —
+      // a terminal event ends the wait for EVERY waiter, matcher or not
+      for (const w of this.waiters.get(ev.txid) ?? []) w(ev, terminal)
+      if (terminal) this.waiters.delete(ev.txid)
       return
     }
     for (const ws of this.waiters.values()) for (const w of ws) w(undefined, true)

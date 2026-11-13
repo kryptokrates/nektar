@@ -16,6 +16,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, copyFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { PrivateKey, Transaction } from '@bsv/sdk'
@@ -44,7 +45,7 @@ const HOST_B = 'http://127.0.0.1:18292'
 const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
 const WOC = 'https://api.whatsonchain.com/v1/bsv/test'
 const COLLECT_MS = 15_000 // cold-seller margin measured live: want→offer ≈ 8-9s
-const STATE = join(__dirname, '../../../.state/testnet-agents')
+const STATE = fileURLToPath(new URL('../../../../.state/testnet-agents', import.meta.url))
 
 const WIF: Record<string, string> = {
   alice: 'cPfqX3j79L1QxVVv77C34Caq2hdRoUA61T5jfFZDGp1syWBNxd37',
@@ -62,14 +63,9 @@ interface A {
   name: string
 }
 
-const mcFor = (wif: string): MainnetConfig => ({
+const mcFor = (): MainnetConfig => ({
   broadcasterUrl: ARC,
-  wocUrl: WOC,
-  feeRateSatPerKb: 1,
-  maxFeePerTx: 1000,
-  maxSpendPerDay: 100_000,
-  minBroadcastIntervalMs: 250,
-  fundWif: wif
+  wocUrl: WOC
 })
 
 const mkChain = (mc: MainnetConfig): ChainTracker & Broadcaster => {
@@ -94,7 +90,7 @@ const mkagent = async (
   watch?: string
 ): Promise<A> => {
   const wif = WIF[wifName]
-  const mc = mcFor(wif)
+  const mc = mcFor()
   const dataDir = join(dir, name)
   mkdirSync(dataDir, { recursive: true })
   // custody snapshot: the live agent's reserve.json (entries + spent marks +
@@ -106,7 +102,7 @@ const mkagent = async (
   const chain = mkChain(mc)
   // fresh identity: the WIF signs spends via the reserve; the operator pub is
   // a NEW key — no finger-record seq conflicts with the retired live agents
-  const mem = new NektarMemory(chain, reserve, PrivateKey.fromRandom(), {
+  const mem = new NektarMemory(chain, reserve as never, PrivateKey.fromRandom(), {
     network: 'testnet',
     modelId: 'test-model-1',
     feeRateSatPerKb: 1,
@@ -218,10 +214,11 @@ const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
       const r = await fetch(`${u}/lookup`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ service: 'ls_nektar', query: { office: 'nektar_abcdefghij' } }),
+        body: '{}',
         signal: AbortSignal.timeout(5_000)
       })
-      if (!r.ok) throw new Error(`${u} → http ${r.status}`)
+      if (r.status >= 500) throw new Error(`${u} → http ${r.status}`)
+      await r.arrayBuffer() // drain — any HTTP response proves liveness
     }
     const h = await fetch(`${WOC}/chain/info`, { signal: AbortSignal.timeout(8_000) })
     if (!h.ok) throw new Error(`woc → http ${h.status}`)
@@ -283,8 +280,8 @@ test('T1: deal latency distribution — 3 sequential live deals', { timeout: 600
   let b!: A, s!: A
   const results: number[] = []
   try {
-    b = await mkagent('alice-b', [f1.url, f2.url], logs, dir)
-    s = await mkagent('ben-s', [f1.url, f2.url], logs, dir)
+    b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
+    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
     await drive([b.rt, s.rt], 6)
     for (let i = 0; i < 3; i++) {
@@ -311,7 +308,7 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 600_000 
   try {
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
-    for (const [i, w] of ['alice', 'bob'].entries()) buyers.push(await mkagent(`${w}-b${i}`, w, [f1.url, f2.url], logs, dir))
+    for (const [i, w] of (['alice', 'bob'] as const).entries()) buyers.push(await mkagent(`${w}-b${i}`, w, [f1.url, f2.url], logs, dir))
     await drive([s.rt, ...buyers.map((b) => b.rt)], 6)
     const t0 = Date.now()
     const wants = await Promise.all(
@@ -613,7 +610,7 @@ test('R7: late escrow rejection → funding_failed via txState event (live)', { 
     const bo = (await opFor(b, w.wantId))!
     const evts = await b.rt.store.events(bo.operationId)
     assert.ok(evts.some((e) => e.cause === 'escrow_rejected_late'), `expected escrow_rejected_late, got ${evts.map((e) => e.cause).join(',')}`)
-    b.mem.txState = orig as never
+    ;(b.mem as unknown as { txState: (txid: string) => Promise<string> }).txState = orig
     await drive([b.rt], 3)
     assert.equal((await opFor(b, w.wantId))!.state, 'funding_failed', 'rejected funding retried itself back to life')
   } finally {
@@ -633,7 +630,7 @@ test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settle
   try {
     s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
     await sellerize(s, 200)
-    for (const [i, w] of ['alice', 'bob'].entries()) buyers.push(await mkagent(`${w}-b${i}`, w, [f1.url, f2.url], logs, dir))
+    for (const [i, w] of (['alice', 'bob'] as const).entries()) buyers.push(await mkagent(`${w}-b${i}`, w, [f1.url, f2.url], logs, dir))
     await drive([s.rt, ...buyers.map((b) => b.rt)], 6)
     const wants = await Promise.all(
       buyers.map((b) => b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash))
@@ -691,7 +688,7 @@ test('R9: timeout truth — escrow refund vs direct dispute on real blocks', { t
     const boD = await opFor(bd, wD.wantId)
     assert.ok((boD!.data as { direct?: boolean }).direct === true, 'bob did not take the direct rail')
     // one real testnet block lapses refundAfter=1 on both escrows/payments
-    const h0 = await (be.mem as unknown as { chainHeight: () => Promise<number> }).chainHeight()
+    const h0 = await be.mem.chainHeight()
     console.log(`    funded at height ${h0} — waiting for one block…`)
     const ms = await until([be.rt, bd.rt], 1_500_000, async () =>
       (await opFor(be, wE.wantId))?.state === 'refunded' && (await opFor(bd, wD.wantId))?.state === 'disputed')

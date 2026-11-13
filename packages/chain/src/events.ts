@@ -43,8 +43,10 @@ interface WatchEntry {
 export class ChainEvents extends EventEmitter {
   private watched = new Map<string, WatchEntry>()
   /** retained statuses for statusOf/catch-up — timestamped and TTL-evicted on
-   *  the same sweep as `watched` (retention is for catch-up, not growth) */
-  private lastStatus = new Map<string, { ev: TxStatusEvent; at: number }>()
+   *  the same sweep as `watched` (retention is for catch-up, not growth).
+   *  `verified` marks observed/delivered truth vs pushed hints: a hint record
+   *  must never dedup-suppress the 'tx' emit of a later verified event. */
+  private lastStatus = new Map<string, { ev: TxStatusEvent; at: number; verified: boolean }>()
   private waiters = new Map<string, Array<(ev: TxStatusEvent | undefined, terminal: boolean) => void>>()
   /** in-flight observes by txid — the nudge loop and the tick coalesce onto
    *  one fetch instead of multiplying identical chain reads */
@@ -98,7 +100,7 @@ export class ChainEvents extends EventEmitter {
    *  status whose BUMP didn't check out — keeps the poller's reconcile floor
    *  alive instead of stranding the wait. */
   note(ev: TxStatusEvent): void {
-    this.lastStatus.set(ev.txid, { ev, at: Date.now() })
+    this.lastStatus.set(ev.txid, { ev, at: Date.now(), verified: false })
     if (TERMINAL.has(ev.status)) this.resolve(ev)
   }
 
@@ -160,7 +162,7 @@ export class ChainEvents extends EventEmitter {
     // than a quarter of it; floor 150ms, ceiling 5s) so a synchronous caller
     // doesn't stall a whole interval without hammering a live status API.
     let settled = false
-    const nudgeMs = Math.max(150, Math.min((this.opts.intervalMs ?? 5_000) / 4, 5_000))
+    const nudgeMs = Math.max(150, Math.min((this.opts.intervalMs ?? 5_000) / 4, timeoutMs / 4, 5_000))
     const nudge = (async () => {
       while (!settled && Date.now() < deadline && this.watched.has(txid)) {
         await this.probeNow(txid)
@@ -244,10 +246,11 @@ export class ChainEvents extends EventEmitter {
   }
 
   private deliver(ev: TxStatusEvent): void {
-    const prev = this.lastStatus.get(ev.txid)?.ev
-    this.lastStatus.set(ev.txid, { ev, at: Date.now() })
-    // re-emit only on change — mined→mined duplicates are suppressed
-    if (prev?.status !== ev.status || !!prev?.merklePath !== !!ev.merklePath) {
+    const prev = this.lastStatus.get(ev.txid)
+    this.lastStatus.set(ev.txid, { ev, at: Date.now(), verified: true })
+    // re-emit only on change — mined→mined duplicates are suppressed, but a
+    // hint record (verified:false) never suppresses the first verified emit
+    if (prev === undefined || !prev.verified || prev.ev.status !== ev.status || !!prev.ev.merklePath !== !!ev.merklePath) {
       this.emit('tx', ev)
     }
     if (TERMINAL.has(ev.status)) {

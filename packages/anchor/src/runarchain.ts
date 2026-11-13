@@ -101,6 +101,16 @@ export class NektarProvider implements Provider {
   lastAttempt?: Transaction
   async broadcast(tx: Transaction): Promise<string> {
     this.lastAttempt = tx
+    // EF source hydration — the broadcaster only accepts Extended Format when
+    // every input carries its sourceTransaction; the chosen funder UTXO lives
+    // in `taken`, prior anchor-chain txs in `recent`/`lastTx` (chained
+    // covenant spends). Mirrors the hydration in @nektar/automation market.ts.
+    for (const inp of tx.inputs) {
+      if (inp.sourceTransaction === undefined) {
+        const stx = inp.sourceTXID
+        if (stx != null) inp.sourceTransaction = this.taken.get(stx) ?? this.recent.get(stx) ?? (this.lastTx?.id('hex') === stx ? this.lastTx : undefined)
+      }
+    }
     this.onAttempt?.(tx) // record BEFORE the outcome — an ambiguous accept must be findable
     const res = await this.broadcaster.broadcast(tx)
     if (res.status !== 'success') throw new Error(res.description ?? 'broadcast failed')

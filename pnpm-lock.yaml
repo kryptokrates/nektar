@@ -87,9 +87,6 @@ importers:
       '@lightwebinc/bcommon':
         specifier: file:../../vendor/lightwebinc-bcommon-0.34.0.tgz
         version: file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)
-      '@lightwebinc/bfinger-host':
-        specifier: file:../../vendor/lightwebinc-bfinger-host-0.8.5.tgz
-        version: file:vendor/lightwebinc-bfinger-host-0.8.5.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))
       '@nektar/anchor':
         specifier: workspace:*
         version: link:../anchor
@@ -111,6 +108,9 @@ importers:
       knex:
         specifier: ^3.3.0
         version: 3.3.0(better-sqlite3@13.1.1)(mysql2@3.24.6(@types/node@24.19.2))(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
+      sqlite3:
+        specifier: ^5.1.7
+        version: 5.1.7(bluebird@3.7.2)(supports-color@7.2.0)
 
   packages/automaton:
     dependencies:
@@ -355,15 +355,9 @@ importers:
       '@bsv/sdk':
         specifier: 4.0.1
         version: 4.0.1
-      '@bsv/wallet-toolbox':
-        specifier: 2.15.0
-        version: 2.15.0(@bsv/sdk@4.0.1)(@types/node@24.19.2)(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
       '@lightwebinc/bcommon':
         specifier: file:../../vendor/lightwebinc-bcommon-0.34.0.tgz
         version: file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)
-      '@lightwebinc/bfinger-host':
-        specifier: file:../../vendor/lightwebinc-bfinger-host-0.8.5.tgz
-        version: file:vendor/lightwebinc-bfinger-host-0.8.5.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))
       '@lightwebinc/blogs-host':
         specifier: file:../../vendor/lightwebinc-blogs-host-0.6.4.tgz
         version: file:vendor/lightwebinc-blogs-host-0.6.4.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))

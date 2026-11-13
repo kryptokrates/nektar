@@ -66,6 +66,7 @@ import { AnchorChain, type CheckpointBond, type BondUtxo } from '@nektar/anchor'
 import { BondOps } from './bonds.js'
 import { RevocationOps } from './revocations.js'
 import { CustodyOps, type CustodyOpsDeps } from './custody.js'
+import { TxOps, type TxOpsDeps } from './txops.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -497,6 +498,19 @@ export class NektarMemory {
       network: this.opts.network,
       persist: () => this.persistState()
     })
+    this.txOps = new TxOps({
+      txs: () => this.txs,
+      anchorTxs: this.anchorTxs,
+      attestationTxs: this.attestationTxs,
+      txidShard: this.txidShard,
+      attachProof: (s, t, mp) => this.attachProof(s, t, mp),
+      chain: this.chain as TxOpsDeps['chain'],
+      sdkTracker: () => this.sdkTracker(),
+      txLookup: () => this.txLookup,
+      proofLookup: () => this.proofLookup,
+      network: this.opts.network,
+      broadcasterUrl: this.opts.broadcasterUrl
+    })
     this.custodyOps = new CustodyOps({
       funder: this.funder as CustodyOpsDeps['funder'],
       fundSigner: () => this.fundSigner(),
@@ -538,137 +552,51 @@ export class NektarMemory {
    *  Set by the live runtime; each is a single attempt and never sleeps. */
   txLookup?: (txid: string) => Promise<import('@bsv/sdk').Transaction | undefined>
   proofLookup?: (txid: string) => Promise<import('@bsv/sdk').MerklePath | undefined>
-  private lookupAt = new Map<string, number>()
-  private lookupDue(key: string, everyMs: number): boolean {
-    if (Date.now() - (this.lookupAt.get(key) ?? 0) <= everyMs) return false
-    if (this.lookupAt.size >= 4096) this.lookupAt.delete(this.lookupAt.keys().next().value!)
-    this.lookupAt.set(key, Date.now())
-    return true
-  }
+  private txOps!: TxOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
-    let tx: import('@bsv/sdk').Transaction | undefined = this.anchorTxs.get(txid) ?? this.txs.get(txid)
-    if (tx?.merklePath === undefined) {
-      // regtest backends answer for any transaction on their chain, proof included
-      const seen = await (
-        this.chain as { getTx?: (t: string) => import('@bsv/sdk').Transaction | undefined | Promise<import('@bsv/sdk').Transaction | undefined> }
-      ).getTx?.(txid)
-      if (seen?.merklePath !== undefined) {
-        this.txs.setProof(txid, seen.merklePath)
-        tx = seen
-      } else if (tx === undefined) tx = seen
-    }
-    if (tx === undefined && this.txLookup !== undefined && this.lookupDue(`tx:${txid}`, 30_000)) {
-      try {
-        tx = await this.txLookup(txid)
-      } catch {
-        tx = undefined
-      }
-      if (tx !== undefined) this.txs.put(tx)
-    }
-    if (tx === undefined) return undefined
-    // proofs arrive by push; this pull only covers one missed while the
-    // instance was down, so it is tried once and then rarely
-    if (tx.merklePath === undefined && this.proofLookup !== undefined && this.lookupDue(`proof:${txid}`, 600_000)) {
-      let mp: import('@bsv/sdk').MerklePath | undefined
-      try {
-        mp = await this.proofLookup(txid)
-      } catch {
-        mp = undefined
-      }
-      if (mp !== undefined) {
-        this.txs.setProof(txid, mp)
-        tx.merklePath = mp
-      }
-    }
-    return tx
+    return await this.txOps.fetchTx(txid)
   }
   /** keep a transaction (and the ancestry it carries) in the instance's graph */
   rememberTx(tx: import('@bsv/sdk').Transaction): void {
-    this.txs.put(tx)
+    this.txOps.rememberTx(tx)
   }
   /** hex to hand a counterparty: BEEF when the ancestry is proven, else EF, else raw */
   txWire(txid: string, maxBytes?: number): string | undefined {
-    return this.txs.wire(txid, maxBytes)
+    return this.txOps.txWire(txid, maxBytes)
   }
   /** read a counterparty's wire transaction and run SPV against our own headers */
   async readTxWire(hex: string): Promise<import('@nektar/chain').Ingested> {
-    return await TxStore.read(hex, this.sdkTracker())
+    return await this.txOps.readTxWire(hex)
   }
   /** state-change events for live surfaces (dashboard SSE, watchers) —
    *  emitted once per successful mutating tool call by the server layer */
   readonly events = new EventEmitter()
-  private txProofCbs: Array<(txid: string, mp: import('@bsv/sdk').MerklePath) => void> = []
   /** subscribe to verified tx proofs — fed by verified broadcaster callbacks
    *  (http layer checks the BUMP first) and by chain 'mined' status events */
   onTxProof(cb: (txid: string, mp: import('@bsv/sdk').MerklePath) => void): void {
-    this.txProofCbs.push(cb)
+    this.txOps.onTxProof(cb)
   }
-  /** a merkle proof that was already verified by the caller (callback BUMP
-   *  checked against our own tracker) or produced by the chain backend
-   *  itself: attach it to the anchor it belongs to, then notify subscribers */
+  /** a caller-verified or chain-observed merkle proof: attach to its anchor,
+   *  then notify subscribers */
   deliverTxProof(txid: string, mp: import('@bsv/sdk').MerklePath): void {
-    this.txs.setProof(txid, mp)
-    try {
-      const shard = this.txidShard.get(txid)
-      if (shard) this.attachProof(shard, txid, mp)
-    } catch {
-      /* proof not for us / malformed */
-    }
-    for (const cb of this.txProofCbs) {
-      try {
-        cb(txid, mp)
-      } catch {
-        /* listener errors are their own */
-      }
-    }
+    this.txOps.deliverTxProof(txid, mp)
   }
 
-  private txRejected = new Set<string>()
-  private txRejectCbs: Array<(txid: string) => void> = []
   /** subscribe to definitive transaction rejections — fed by verified
    *  broadcaster callbacks (REJECTED / DOUBLE_SPEND_ATTEMPTED) and by chain
    *  'rejected'/'double-spent' status events */
   onTxRejected(cb: (txid: string) => void): void {
-    this.txRejectCbs.push(cb)
+    this.txOps.onTxRejected(cb)
   }
   /** record a rejection the backend reported, then notify subscribers */
   deliverTxRejected(txid: string): void {
-    this.txRejected.add(txid)
-    for (const cb of this.txRejectCbs) {
-      try {
-        cb(txid)
-      } catch {
-        /* listener errors are their own */
-      }
-    }
+    this.txOps.deliverTxRejected(txid)
   }
 
-  /** what the chain view knows about a tx right now: mined (has a merkle
-   *  path), seen (known to the node), rejected (the backend explicitly said
-   *  so — REJECTED or DOUBLE_SPEND_ATTEMPTED), else unknown. On live networks
-   *  the broadcaster's /tx/{txid} verdict is the tiebreaker. */
+  /** what the chain view knows about a tx right now */
   async txState(txid: string): Promise<'mined' | 'seen' | 'rejected' | 'unknown'> {
-    if (this.txRejected.has(txid) || (this.chain as { isRejected?: (t: string) => boolean }).isRejected?.(txid) === true) return 'rejected'
-    const local = this.anchorTxs.get(txid) ?? (this.chain as { getTx?: (t: string) => import('@bsv/sdk').Transaction | undefined }).getTx?.(txid)
-    if (local?.merklePath !== undefined) return 'mined'
-    if (local !== undefined) return 'seen'
-    if (this.opts.network === 'regtest' || this.opts.network === undefined) return 'unknown'
-    try {
-      const st = await fetch(`${this.opts.broadcasterUrl ?? 'https://arcade.gorillapool.io'}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) }).then((r) =>
-        r.ok ? r.json() : null
-      )
-      const status = String(st?.txStatus ?? '').toUpperCase()
-      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) {
-        this.txRejected.add(txid)
-        return 'rejected'
-      }
-      if (status === 'MINED' || status === 'IMMUTABLE') return 'mined'
-      if (['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING'].includes(status)) return 'seen'
-    } catch {
-      /* undecidable — caller retries */
-    }
-    return 'unknown'
+    return await this.txOps.txState(txid)
   }
   /** the log signing key's pubkey (verifies promises and checkpoints) */
   async logPublicKey(): Promise<string> {
@@ -1244,7 +1172,7 @@ export class NektarMemory {
   /** any tx this instance broadcast and remembers — anchor or attestation
    *  (model-verifier deploy/spend land in attestationTxs too) */
   knownTx(txid: string) {
-    return this.anchorTxs.get(txid) ?? this.attestationTxs.get(txid)
+    return this.txOps.knownTx(txid)
   }
 
   /** deploy an in-script Groth16 verifier (lock) and spend it with the proof

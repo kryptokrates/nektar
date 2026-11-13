@@ -1,4 +1,4 @@
-import { decodePayload, verifyBody, bodyPub } from './market.js'
+import { decodePayload, verifyBody, bodyPub } from './market-wire.js'
 import { carrierLockingKey, checkCarrier } from './carrier.js'
 import type { ChainTracker } from '@bsv/sdk'
 
@@ -111,7 +111,7 @@ export async function lookupAll(
 }
 
 export interface ReadResult {
-  items: Array<{ txid: string; payload: import('./market.js').MarketPayload }>
+  items: Array<{ txid: string; payload: import('./market-wire.js').MarketPayload }>
   perHost: Record<string, string[]>
   withheld: Array<{ host: string; txid: string }>
   unreachable: string[]
@@ -121,10 +121,10 @@ export async function readItems(
   hosts: string[],
   service: string,
   query: unknown,
-  o: { tracker: ChainTracker; net: string; accept: (p: import('./market.js').MarketPayload) => boolean; now?: number; timeoutMs?: number }
+  o: { tracker: ChainTracker; net: string; accept: (p: import('./market-wire.js').MarketPayload) => boolean; now?: number; timeoutMs?: number }
 ): Promise<ReadResult> {
   const { answers } = await lookupAll(hosts, service, query, { timeoutMs: o.timeoutMs })
-  const items = new Map<string, { txid: string; payload: import('./market.js').MarketPayload }>()
+  const items = new Map<string, { txid: string; payload: import('./market-wire.js').MarketPayload }>()
   const seenBy = new Map<string, Set<string>>()
   const perHost: Record<string, string[]> = {}
   const unreachable: string[] = []

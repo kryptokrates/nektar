@@ -1,7 +1,7 @@
 import { sha256, toHex, type SignerLike } from '@nektar/core'
 import { fundingLock, type SigningWallet } from '@lightwebinc/bcommon'
 import { buildCarrier, carrierFundingLockHex, walletOrProto } from './carrier.js'
-import { encodePayload, lanesFor, bodyDomains, type MarketPayload } from './market.js'
+import { encodePayload, lanesFor, bodyDomains, type MarketPayload } from './market-wire.js'
 import { submitAll, type Quorum } from './hosts.js'
 import { DERIVATION, FUNDING_TAG, ORIGINATOR, type TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'

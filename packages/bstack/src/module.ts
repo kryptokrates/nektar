@@ -13,7 +13,7 @@ import {
   type TopicManager
 } from '@lightwebinc/bcommon'
 import { checkCarrier, checkSweep, carrierLockingKey } from './carrier.js'
-import { allLanes, decodePayload, lanesFor, verifyBody, bodyPub, bodyDomains, bodyExp, MAX_LIFETIME_MS, LS_NAME, type MarketPayload } from './market.js'
+import { allLanes, decodePayload, lanesFor, verifyBody, bodyPub, bodyDomains, bodyExp, MAX_LIFETIME_MS, LS_NAME, type MarketPayload } from './market-wire.js'
 
 interface Host extends Partial<ModuleHost> {
   log: ModuleHost['log']

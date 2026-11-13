@@ -15,7 +15,7 @@ import { RunarContract, LocalSigner, deserializeState } from 'runar-sdk'
 import { NektarProvider } from '@nektar/anchor'
 import { TeranodeBroadcaster, ReserveFunder, bootstrapReserve } from '@nektar/chain'
 import { loadClaims, proofFile, markClaimSpent, registerClaim } from '@nektar/chain'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -124,7 +124,7 @@ const watcherPkh = Buffer.from(Hash.hash160(Buffer.from(watcherPk, 'hex'))).toSt
 
 // fund the challenger: purge stale entries, rescan mature coinbases
 // (gettxout is unimplemented on Teranode — local marks go stale)
-for (const u of [...reserve.utxos]) reserve.markSpent(u.tx.id('hex'), u.vout)
+for (const u of reserve.utxos) reserve.markSpent(u.tx.id('hex'), u.vout)
 const tipH = (await rpc('getblockchaininfo')).blocks
 await reserve.scanCoinbases(cfg, rpc, Math.max(1, tipH - 150), tipH - 101)
 if (reserve.utxos.length < 2) {

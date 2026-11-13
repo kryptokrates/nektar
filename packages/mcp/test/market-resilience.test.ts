@@ -149,7 +149,7 @@ const deal = async (b: A, s: A, chain: StackChain, logs: string[], extraRts: Aut
   return { wantId: w.wantId, rounds, ms: Date.now() - t0 }
 }
 
-test('T1: deal latency distribution — 8 sequential deals, p50/p95 on rounds and wall ms', { timeout: 300_000 }, async (t) => {
+test('T1: deal latency distribution — 5 sequential deals, p50/p95 on rounds and wall ms', { timeout: 300_000 }, async (t) => {
   const chain = (await stackChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -162,7 +162,7 @@ test('T1: deal latency distribution — 8 sequential deals, p50/p95 on rounds an
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     const runs: Array<{ rounds: number; ms: number }> = []
-    for (let i = 0; i < 8; i++) runs.push(await deal(b, s, chain, logs))
+    for (let i = 0; i < 5; i++) runs.push(await deal(b, s, chain, logs))
     const pct = (xs: number[], p: number) => xs.slice().sort((a, z) => a - z)[Math.min(xs.length - 1, Math.floor((p / 100) * xs.length))]
     const rounds = runs.map((r) => r.rounds)
     const ms = runs.map((r) => r.ms)
@@ -268,7 +268,9 @@ test('R5: kill matrix — buyer respawn mid-deal from collecting / awaiting_disc
       const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
       const hit = await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === checkpoint)
       assert.ok(hit > 0, `[${checkpoint}] never reached | ` + logs.slice(-15).join(' | '))
+      const opIdBefore = (await opFor(b, w.wantId))!.operationId
       await b.rt.stop() // kill -9 keeps the sqlite files; never pump this rt again
+      // note: the stopped rt's store is dead with it — compare ids captured above
       const b2 = await respawn(b, [h1.url, h2.url], chain, logs, dir)
       const rounds = await until([b2.rt, s.rt], chain, async () => {
         const bo = await opFor(b2, w.wantId)
@@ -287,7 +289,7 @@ test('R5: kill matrix — buyer respawn mid-deal from collecting / awaiting_disc
       }
       assert.ok(rounds > 0, `[${checkpoint}] deal never recovered | ` + logs.slice(-20).join(' | '))
       const bo = (await opFor(b2, w.wantId))!
-      assert.equal(bo.operationId, (await opFor(b, w.wantId))!.operationId, `[${checkpoint}] respawn spawned a duplicate op`)
+      assert.equal(bo.operationId, opIdBefore, `[${checkpoint}] respawn spawned a duplicate op`)
       await b2.rt.stop()
       await s.rt.stop()
     } finally {

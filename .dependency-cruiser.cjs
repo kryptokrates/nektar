@@ -44,6 +44,12 @@ module.exports = {
         from: { path: `^packages/${pkg}/` },
         to: { path: `^packages/(?!${pkg}/)` }
       })),
+    // NOTE on the layering rules below: workspace @nektar/x imports resolve
+    // through node_modules into dist/, and the exclude filter drops them from
+    // this graph — these rules only catch resolution-visible edges (e.g. app
+    // packages without exports fail as unresolvable). The authoritative
+    // package-direction contract lives in tools/check-arch.mjs, which reads
+    // import specifiers directly and ratchets the whole edge matrix.
     {
       name: 'no-lower-to-upper',
       severity: 'error',

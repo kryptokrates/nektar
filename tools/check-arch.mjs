@@ -48,7 +48,13 @@ function globToRe(glob) {
       i += 1
     } else if (c === '{') {
       const end = glob.indexOf('}', i)
-      re += '(?:' + glob.slice(i + 1, end).split(',').join('|') + ')'
+      re +=
+        '(?:' +
+        glob
+          .slice(i + 1, end)
+          .split(',')
+          .join('|') +
+        ')'
       i = end + 1
     } else {
       re += c.replace(/[.+?^$()|[\]\\]/g, '\\$&')
@@ -59,6 +65,7 @@ function globToRe(glob) {
 }
 
 const pkgOf = (f) => (f.match(/^packages\/([^/]+)\//) ?? [])[1]
+const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 
 // ---------------------------------------------------------------------------
 // A) zero-tolerance grep gates — a hit in any non-allowlisted file fails
@@ -112,7 +119,7 @@ const GATES = [
     name: 'deep-package-specifier',
     re: /from\s+['"]@nektar\/[a-z-]+\//g,
     scope: /./,
-    // import packages via their index — @nektar/contracts/*.json is generated
+    // packages must be consumed via their index — @nektar/contracts/*.json is generated
     // artifacts addressed by file, not a package-internal deep import.
     allowSpecifier: /@nektar\/contracts\//
   }
@@ -130,9 +137,7 @@ for (const gate of GATES) {
     } catch {
       continue
     }
-    const n = (text.match(gate.re) ?? []).filter(
-      (m) => !(gate.allowSpecifier && gate.allowSpecifier.test(m))
-    ).length
+    const n = (text.match(gate.re) ?? []).filter((m) => !(gate.allowSpecifier && gate.allowSpecifier.test(m))).length
     if (n > 0) hits.push(`${f} (${n})`)
   }
   if (hits.length > 0) {
@@ -185,7 +190,6 @@ const graph = {} // source -> [resolved] for SCC audit (ALL dep types incl. type
 const specEdges = {} // pkg -> Map(targetPkg -> [specifier,...])
 for (const m of srcModules) {
   const src = m.source.replaceAll('\\', '/')
-  const srcPkg = pkgOf(src)
   fileFanout[src] = m.dependencies.length
   graph[src] = []
   for (const d of m.dependencies) {
@@ -206,7 +210,7 @@ for (const f of srcFiles) {
   }
   const nektarPkgs = new Set()
   for (const mm of text.matchAll(IMPORT_RE)) {
-    const spec = mm[1] ?? mm[2] ?? mm[3]
+    const spec = /** @type {string | undefined} */ (mm[1] ?? mm[2] ?? mm[3])
     const hit = spec !== undefined ? NEKTAR_SPEC_RE.exec(spec) : null
     if (hit === null) continue
     const dstPkg = hit[1]
@@ -276,7 +280,7 @@ for (const p of new Set([...Object.keys(pkgLoc), ...Object.keys(pkgEdges)])) {
   metrics.packages[p] = {
     loc: pkgLoc[p] ?? 0,
     pkgFanout: ce,
-    edges: [...(pkgEdges[p] ?? [])].sort(),
+    edges: [...(pkgEdges[p] ?? [])].sort(cmpStr),
     maxFileLoc: Math.max(0, ...pFiles.map((f) => fileLoc[f] ?? 0)),
     maxFileFanout: Math.max(0, ...pFiles.map((f) => fileFanout[f] ?? 0)),
     instability: ca + ce === 0 ? null : Number((ce / (ca + ce)).toFixed(3))
@@ -295,7 +299,10 @@ for (const f of srcFiles) {
 // type-only-inclusive cycle audit (Tarjan over the full module graph —
 // depcruise's no-circular rule exempts type-only edges; this sees them)
 {
-  const idx = {}, low = {}, onStack = new Set(), stack = []
+  const idx = {},
+    low = {},
+    onStack = new Set(),
+    stack = []
   let counter = 0
   const sccs = []
   function strongconnect(v) {
@@ -318,23 +325,25 @@ for (const f of srcFiles) {
         onStack.delete(w)
         scc.push(w)
       } while (w !== v)
-      if (scc.length > 1) sccs.push(scc.sort())
+      if (scc.length > 1) sccs.push(scc.sort(cmpStr))
     }
   }
   for (const v of Object.keys(graph)) if (!(v in idx)) strongconnect(v)
-  metrics.typeOnlyCycles = sccs.map((s) => s.join('|')).sort()
+  metrics.typeOnlyCycles = sccs.map((s) => s.join('|')).sort(cmpStr)
 }
 
 // ---------------------------------------------------------------------------
 // baseline compare — same shrink-only contract as check-leftovers
 // ---------------------------------------------------------------------------
-const baseline = existsSync(BASELINE)
-  ? JSON.parse(readFileSync(BASELINE, 'utf8'))
-  : { packages: {}, files: {}, typeOnlyCycles: [] }
+const baseline = existsSync(BASELINE) ? JSON.parse(readFileSync(BASELINE, 'utf8')) : { packages: {}, files: {}, typeOnlyCycles: [] }
 
 if (UPDATE) {
   writeFileSync(BASELINE, JSON.stringify(metrics, null, 2) + '\n')
-  console.log(`arch baseline written: ${Object.keys(metrics.packages).length} packages, ${Object.keys(metrics.files).length} tracked files, ${metrics.typeOnlyCycles.length} type-only cycles`)
+  // keep the baseline prettier-clean so --update never trips check:format
+  execSync(`npx prettier --write "${BASELINE}"`, { cwd: ROOT, stdio: 'ignore' })
+  console.log(
+    `arch baseline written: ${Object.keys(metrics.packages).length} packages, ${Object.keys(metrics.files).length} tracked files, ${metrics.typeOnlyCycles.length} type-only cycles`
+  )
   process.exit(0)
 }
 

@@ -5,6 +5,15 @@
 # auth injected. SHIM_RPC_USER/SHIM_RPC_PASS come from the environment
 # (NEKTAR_RPC_USER / NEKTAR_RPC_PASS in the repo .env — export or --env-file).
 name: nektar-bstack-regtest
+networks:
+  # the Teranode stack's own network — the shim joins it so RPC/asset calls go
+  # container-to-container (service names). The host-published ports bind
+  # 127.0.0.1 only, so host.docker.internal routing is fragile by design and
+  # was observed refusing connections for minutes under load while the
+  # services stayed healthy.
+  teranode:
+    external: true
+    name: teranode-quickstart-network
 services:
   db:
     image: mysql@sha256:df90258da46f6e7ff8574ff84f17618aba0765cac749928299c69fd4e7cb8ad8
@@ -26,12 +35,15 @@ services:
     image: node:22-alpine
     working_dir: /shim
     command: ['node', 'header-shim.mjs']
+    networks:
+      - default
+      - teranode
     environment:
       SHIM_PORT: 8080
-      SHIM_RPC_URL: http://host.docker.internal:9292/
+      SHIM_RPC_URL: http://rpc:9292/
       SHIM_RPC_USER: ${NEKTAR_RPC_USER:?set NEKTAR_RPC_USER (repo .env)}
       SHIM_RPC_PASS: ${NEKTAR_RPC_PASS:?set NEKTAR_RPC_PASS (repo .env)}
-      SHIM_ASSET_URL: http://host.docker.internal:8090/api/v1
+      SHIM_ASSET_URL: http://asset:8090/api/v1
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     volumes:

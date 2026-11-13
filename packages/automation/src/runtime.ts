@@ -4,7 +4,7 @@ import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
 import type { AutomationHost } from './host.js'
 import { AutomationStore } from './store.js'
-import { MarketEngine, type MarketMessage, type MarketTransport, type MarketOptions } from './market.js'
+import { MarketEngine, TERMINAL, type MarketMessage, type MarketTransport, type MarketOptions } from './market.js'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
@@ -620,6 +620,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             await poll()
             await engine.tick()
             pushAcks()
+            // a live deal keeps the loop hot — the 5s inbound window alone
+            // would let a deal cool to idle cadence between hops
+            if ((await store.operations({ notStates: TERMINAL })).length > 0) hotUntil = Date.now() + 5_000
             // new lanes appear as deals start — re-derive watch subs at the
             // end of a pass so a fresh want is subscribed within one cycle
             if (watchBases.length > 0) void refreshWatches().catch(() => undefined)

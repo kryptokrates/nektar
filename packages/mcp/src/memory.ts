@@ -74,6 +74,7 @@ import { CryptoOps } from './cryptoops.js'
 import { CatalogOps } from './catalogops.js'
 import { PackOps } from './packops.js'
 import { PackWire } from './packwire.js'
+import { AuthorshipOps } from './authorshipops.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -285,6 +286,23 @@ export class NektarMemory {
       storePack: (s, p, n) => this.storePack(s, p, n),
       metricsInc: (n) => this.metrics.inc(n)
     })
+    this.authorshipOps = new AuthorshipOps({
+      opts: this.opts,
+      anchors: this.anchors,
+      tails: this.tails,
+      anchorTxs: this.anchorTxs,
+      txidShard: this.txidShard,
+      anchorChain: (s) => this.anchorChain(s),
+      shardPubs: this._shardPubs,
+      storeAll: (s) => this.store.all(s),
+      storeBySeq: (s, seq) => this.store.bySeq(s, seq),
+      canEncrypt: () => this.canEncrypt(),
+      decryptRecord: (r) => this.decryptRecord(r),
+      prove: (s, seq) => this.prove(s, seq),
+      remember: (s, d) => this.remember(s, d),
+      anchorShard: (s) => this.anchorShard(s),
+      persistState: () => this.persistState()
+    })
     this.packWire = new PackWire({
       shardPrivate: (s) => this.shardPrivate(s),
       storeAll: (s) => this.store.all(s),
@@ -376,6 +394,7 @@ export class NektarMemory {
   private catalogOps!: CatalogOps
   private packOps!: PackOps
   private packWire!: PackWire
+  private authorshipOps!: AuthorshipOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     return await this.txOps.fetchTx(txid)
@@ -600,25 +619,7 @@ export class NektarMemory {
    *  D4 (§19): the cert is also written to the `__identity__` shard and anchored
    *  — a third party reconstructs the pk(0)→pk(i) ledger from chain data alone. */
   async rotateShard(shard: string, newKey: SignerLike): Promise<{ txid: string; n: number }> {
-    const ac = this.anchors.get(shard)
-    if (!ac) throw new Error(`no anchor for shard ${shard}`)
-    const r = await ac.rotate(newKey)
-    this.opts.shardKeys?.set(shard, newKey)
-    this._shardPubs.set(shard, await signerPubHex(newKey))
-    this.anchorTxs.set(r.tx.id('hex'), r.tx)
-    this.txidShard.set(r.tx.id('hex'), shard)
-    this.authorChainCache.delete(shard)
-    const cert = ac.rotationCerts.at(-1)
-    if (cert) {
-      await this.remember('__identity__', JSON.stringify({ type: 'rotation-cert', shard, cert }))
-      try {
-        await this.anchorShard('__identity__')
-      } catch {
-        /* best-effort: stays pending until the next anchor */
-      }
-    }
-    this.persistState()
-    return { txid: r.tx.id('hex'), n: r.head.data.n }
+    return await this.authorshipOps.rotateShard(shard, newKey)
   }
 
   /** revocation registry (IDN-007): lives in revocations.ts — SMT keyed by
@@ -711,30 +712,7 @@ export class NektarMemory {
       anchored: boolean
     }>
   } | null> {
-    if (!this.anchors.get(shard)) return null
-    const ac = await this.authorChain(shard)
-    const certs: NonNullable<Awaited<ReturnType<typeof this.rotationChainProof>>>['certs'] = []
-    for (const rec of await this.store.all('__identity__')) {
-      let data: string
-      if (rec.fragment.d.length) data = Buffer.from(rec.fragment.d).toString('utf8')
-      else if (rec.fragment.E?.length && this.canEncrypt()) {
-        const t = await this.decryptRecord(rec)
-        if (t === undefined) continue
-        data = t
-      } else continue
-      let cert: import('@nektar/identity').RotationCert
-      try {
-        const j = JSON.parse(data)
-        if (j.type !== 'rotation-cert' || j.shard !== shard) continue
-        cert = j.cert
-      } catch {
-        continue
-      }
-      const { bundle, result } = await this.prove('__identity__', rec.seq)
-      certs.push({ cert, seq: rec.seq, data, prov: rec.fragment.p, E: rec.fragment.E, leaf: toHex(rec.leaf), bundle, anchored: result.ok === true })
-    }
-    certs.sort((a, b) => a.cert.index - b.cert.index)
-    return { genesisPub: ac?.genesisPub ?? null, certs }
+    return await this.authorshipOps.rotationChainProof(shard)
   }
 
   // ── persisted replay-protection state (challenges, transcripts, issued ZK queries, revocations)
@@ -1333,26 +1311,13 @@ export class NektarMemory {
 
   /** resolve the shard's owner cert chain: genesis pub from the genesis
    *  anchor's decoded ownerPub + live rotation certs. Cached per shard. */
-  private authorChainCache = new Map<string, { genesisPub: string; certs: import('@nektar/identity').RotationCert[] } | null>()
   private async authorChain(shard: string): Promise<{ genesisPub: string; certs: import('@nektar/identity').RotationCert[] } | null> {
-    if (this.authorChainCache.has(shard)) return this.authorChainCache.get(shard)!
-    let out: { genesisPub: string; certs: import('@nektar/identity').RotationCert[] } | null = null
-    const genesis = (this.tails.get(shard) ?? []).find((l) => l.n === 0)
-    const gtx = genesis ? this.anchorTxs.get(genesis.txid) : undefined
-    if (gtx) {
-      const { decodeNektarAnchor } = await import('@nektar/contracts')
-      const dec = decodeNektarAnchor(gtx.outputs[0].lockingScript.toHex())
-      if (dec) out = { genesisPub: dec.ownerPub, certs: [...this.anchorChain(shard).rotationCerts] }
-    }
-    this.authorChainCache.set(shard, out)
-    return out
+    return await this.authorshipOps.authorChain(shard)
   }
 
   /** §19: was record seq written by the key of its recorded epoch, inside that key's window? */
   async authorship(shard: string, seq: number, genesisPub: string, certs: import('@nektar/identity').RotationCert[]) {
-    const r = await this.store.bySeq(shard, seq)
-    if (!r?.authorPub || r.authorEpoch === undefined) return { ok: false, reason: 'record carries no verified author epoch' }
-    return idbind.verifyAuthorship(r.authorPub, r.authorEpoch, r.fragment.p.time, genesisPub, certs)
+    return await this.authorshipOps.authorship(shard, seq, genesisPub, certs)
   }
 
   /** D6 (App E auditability): optional per-access log — decrypt/traverse events

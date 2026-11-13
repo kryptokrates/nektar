@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { PrivateKey, Transaction, UnlockingScript } from '@bsv/sdk'
 import { toHex, sha256 } from '@nektar/core'
 import {
+  offerDigest,
   offerDisclosure,
   wrapSaleValue,
   plainSaleValue,
@@ -93,6 +94,28 @@ test('sale: public quote carries no reveal credential yet still verifies', async
   const wire = JSON.parse(JSON.stringify(saleQuoteWire(q)))
   assert.equal(typeof wire.cfg.price, 'number')
   assert.ok(verifyOfferSig({ ...q, cfg: { ...q.cfg, price: BigInt(wire.cfg.price) } }, buyerPub), 'wire representation verifies')
+})
+test('sale: wallet-custody quote sig (verbatim digest) verifies too', async () => {
+  // the DigestSigner seam emits two wire forms for the same attestation:
+  // wallet custody signs the digest verbatim (hashToDirectlySign → ECDSA
+  // over sha256(digest)); key custody goes through PrivateKey.sign which
+  // hashes once more (ECDSA over sha256(sha256(digest))). The test's
+  // offerDisclosure above covers key custody; here we reproduce the wallet
+  // form — PrivateKey.sign hashes its arg once, so sign(digest) == ECDSA
+  // over sha256(digest).
+  const offer = await offerDisclosure({
+    sellerKey: seller,
+    value: VALUE,
+    price: 500n,
+    refundAfter: 1_000_000n,
+    maxFee: 10n,
+    buyerPub,
+    expiresAt: 700_000n
+  })
+  const q = publicSaleQuote(offer)
+  const digest = offerDigest(q.cfg, buyerPub, '', q.expiresAt ?? 0)
+  const walletForm = { ...q, offerSig: seller.sign(Array.from(digest)).toDER('hex') as string }
+  assert.ok(verifyOfferSig(walletForm, buyerPub), 'verbatim-digest (wallet custody) form verifies')
 })
 function fromHexForTest(s: string): Uint8Array {
   return new Uint8Array(s.match(/.{2}/g)!.map((b) => parseInt(b, 16)))

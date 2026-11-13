@@ -65,7 +65,7 @@ export interface SaleOffer {
 }
 
 /** canonical bytes the offer signature covers — every field a MITM could swap. */
-function offerDigest(
+export function offerDigest(
   cfg: { sellerPkh: string; price: bigint | number; hWrapped: string; refundAfter: bigint | number; maxFee: bigint | number },
   buyerPub: string,
   leaf: string,
@@ -129,7 +129,14 @@ export function verifyOfferSig(
   try {
     const digest = offerDigest(offer.cfg, buyerPub, leaf, offer.expiresAt ?? 0)
     const sig = Signature.fromDER(Array.from(Buffer.from(offer.offerSig, 'hex')))
-    return PublicKey.fromString(offer.sellerPub).verify(Array.from(Hash.sha256(Buffer.from(digest))), sig)
+    const pub = PublicKey.fromString(offer.sellerPub)
+    // the DigestSigner seam produces either form: walletSigner signs the
+    // digest verbatim (hashToDirectlySign → sig over sha256(digest), checked
+    // by verify(digest)) while keySigner goes through PrivateKey.sign which
+    // hashes once more (sig over sha256(sha256(digest)), checked by
+    // verify(sha256(digest))). Both are legitimate wire encodings — accept
+    // either so a sale verifies under any custody backend.
+    return pub.verify(Array.from(digest), sig) || pub.verify(Array.from(Hash.sha256(Buffer.from(digest))), sig)
   } catch {
     return false
   }

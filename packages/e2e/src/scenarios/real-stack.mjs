@@ -366,6 +366,9 @@ async function fundAgents() {
     mkdirSync(a.dataDir, { recursive: true })
     writeFileSync(join(a.dataDir, 'treasury.json'), JSON.stringify({ treasury: { txid: split.id('hex'), vout: i, txHex: split.toHex() } }))
   }
+  // regtest agent keys are ephemeral like the testnet ones — persist them so
+  // leftover coins in a dead run can be swept back into the treasury
+  writeFileSync(join(dir, 'agent-keys.json'), JSON.stringify(Object.fromEntries(agents.map((a) => [a.name, a.key.toWif([0xef])]))), { mode: 0o600 })
   log(`treasury split ${split.id('hex').slice(0, 12)}… → ${agents.length}×${per} sats + new treasury`)
 }
 

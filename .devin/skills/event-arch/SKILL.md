@@ -66,7 +66,11 @@ touches. For each, classify:
 Load [references/principles.md](references/principles.md) always; load
 [references/fabric.md](references/fabric.md) when the scope touches
 bstack/transport/delivery (lanes, finger, tree, journal, market-wire,
-watch-shim, host fanout, artifact publish/fetch).
+watch-shim, host fanout, artifact publish/fetch); load
+[references/spv.md](references/spv.md) when the scope touches
+proofs/status/inclusion (events observe paths, BUMP/BEEF handling,
+ChainTracker/header use, tx fetch/status, anything calling "is it
+mined/proven").
 
 For each wait/subscription/delivery — the event-loop questions:
 
@@ -113,6 +117,28 @@ For each wait/subscription/delivery — the event-loop questions:
 20. Does a subscriber re-pull per-read what its own watch delivered? →
     `fab/pull-what-you-subscribed`
 
+… and the SPV questions (proof/status/inclusion scope):
+
+21. Does app code fetch or scan a full block to answer "is it mined"? →
+    `spv/block-scan` — the answer arrives as BUMP + header check;
+    block-walking is proof-service work
+22. Does a 'mined' claim emit without a merkle path in hand (indexer
+    `blockheight>0`, "known", presence)? → `spv/pathless-mined`
+23. Does a status claim ride the verified path ('tx' emit, watch-drop,
+    money decision) without a proof object — including rejection
+    verdicts, which nothing can prove? → `spv/hint-as-verified`
+24. Is a txid trusted without the bytes (`hash(bytes)=txid` can't be
+    checked)? → `spv/txid-only`
+25. Is a path anchored to a header from the same party that served the
+    path? → `spv/circular-anchor` — header anchor must be independent
+26. Is a counterparty handed raw tx/txid where BEEF/EF would travel
+    self-verifying? → `spv/beefless-handoff`
+27. Is an indexer's presence/blockheight treated as chain truth, or is
+    global state reconstructed to serve one relationship? →
+    `spv/indexer-dependency`, `spv/world-state`
+28. Is 'mined' binary where the stake demands a depth policy? →
+    `spv/depth-blind` (advisory)
+
 ### 4. Suggest fixes — concrete, repo-seamed, ranked
 
 Every finding names: the principle violated, the in-repo precedent to
@@ -143,6 +169,9 @@ repair paths>
 - Fallbacks: every push path degrade to bounded poll? every poll bounded?
 - Fabric (if in scope): every stream numbered/cursored? every gap
   repairable by name? subscriptions derived from live interest?
+- SPV (if in scope): every 'mined' claim path-anchored to OUR headers?
+  every rejection provable or hint-only? zero block-fetches in client
+  code (proof-service work)? handoffs carry BEEF/EF, not bare txids?
 ```
 
 Suggest only — do not apply fixes unless asked. For each suggestion,
@@ -169,6 +198,17 @@ Before writing a wait/subscription/delivery:
    and who computes the join (narrow subscriptions, dead subs aborted).
 9. Name the STANDARD — the BRC/upstream spec the wire shape implements,
    or the one it deliberately diverges from.
+10. Name the PROOF OBJECT — what physical evidence carries the claim
+    (BUMP, BEEF, the conflicting tx's own proof)? If the answer is "a
+    status string", it is a hint and must route through `note()` — only
+    'mined' (BUMP) and 'double-spent' (the conflict's BUMP) are
+    provable claims.
+11. Name the HEADER ANCHOR — which `ChainTracker` checks the root, and
+    is it independent of whoever served the proof? Verifying against
+    the proof's own provider is circular trust.
+12. Name the EVIDENCE SHAPE — what the counterparty is handed:
+    AtomicBEEF > BEEF > EF > raw+lookup > txid-alone. Every rung down
+    moves work from sender-held proofs to receiver network queries.
 
 ## nektar-specific calibration
 
@@ -205,14 +245,27 @@ bstack pattern language, topic-lane sharding, the data carrier, frame
 sizing, single-source joins, NACK loss repair, provenance at scale);
 pattern briefs bfinger/bbox/borg/bsecret/blogs/bstore. See
 [references/fabric.md](references/fabric.md) for the paper→rule map.
-Wright's Substack essays (singulargrit.substack.com) are cited as
-posture only — see the posture section in
-[references/principles.md](references/principles.md).
+Wright's Substack essays (singulargrit.substack.com): the philosophical
+essays are cited as posture in
+[references/principles.md](references/principles.md); the SPV papers —
+"Safe Low Bandwidth SPV: A Formal Treatment", "The Protocol No
+Gatekeeper Wants" (evidence travels, MF-SPV), "A Mechanism of Honour"
+(txid-only proves nothing) — are the doctrine in
+[references/spv.md](references/spv.md) alongside the 1BSV SPV model
+(3 things: bytes + path + headers; inclusion ≠ currency; apps take
+BEEF+headers, never blocks) and BRC-62/74 (BEEF/BUMP).
 
 Repo mechanisms: `packages/chain/src/events.ts`, `interfaces.ts`
-(`onStatus`, `txStatus`, `onReorg`), `automation/src/runtime.ts`
-(watch-shim, hotUntil, unblockOutbox, notifyPeer),
+(`onStatus`, `txStatus`, `onReorg`, `ChainTracker` = header service),
+`mainnet.ts` (`merklePathMainnet`, `ChaintracksTracker`,
+`statusStream`), `regtest.ts` (`merklePathFor`/`merklePathAtHeight` —
+contained proof-service stand-in), `txstore.ts` (evidence store,
+BEEF/EF wire), `automation/src/runtime.ts` (watch-shim, hotUntil,
+unblockOutbox, notifyPeer), `automation/src/toolbox.ts` (wallet
+services = SPV services shape), `mcp/src/{runtime,http,txops}.ts`
+(observe/proofLookup/handleBroadcasterStatus/deliverTxProof),
+`anchor/src/runarchain.ts` (BEEF ancestry assembly),
 `bstack/src/{lanes,finger,tree,journal,market-wire,testing}.ts`. Rule
-IDs `ev/*` + `fab/*` are local to this skill; cross-map to `data/*`,
-`stab/*`, `struct/*` in `../code-review/references/*` where they
-overlap.
+IDs `ev/*` + `fab/*` + `spv/*` are local to this skill; cross-map to
+`data/*`, `stab/*`, `struct/*` in `../code-review/references/*` where
+they overlap.

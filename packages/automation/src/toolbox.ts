@@ -637,6 +637,29 @@ export class ToolboxReserveFunder {
     // `parent()` therefore recurses: an unconfirmed input parent carries its
     // own ancestry with it until the chain bottoms out at proven roots —
     // zeroconf spends internalize whole, not one level deep.
+    const txid = tx.id('hex')
+    const atomic = this.atomicBeefCache.get(txid) ?? (await this.buildAtomicBeef(tx))
+    this.atomicBeefCache.set(txid, atomic)
+    try {
+      await this.wallet.internalizeAction({
+        tx: atomic,
+        outputs: [{ outputIndex: vout, protocol: 'basket insertion', insertionRemittance: { basket: NEKTAR_BASKET } }],
+        description: 'nektar funding output'
+      })
+    } catch (e) {
+      // WERR_REVIEW_ACTIONS: the wallet re-broadcasts internalized txs — for
+      // outputs already on chain the sendWith result isn't 'unproven' and it
+      // demands review. The custody write happens either way; trust only the
+      // end state: if the output landed, the internalize succeeded.
+      if ((e as { code?: string }).code !== 'WERR_REVIEW_ACTIONS' || !(await this.has(tx.id('hex'), vout))) throw e
+    }
+  }
+
+  /** txid → completed atomic BEEF: outputs of one tx share the identical
+   *  ancestry closure, so seeding 60 utxos pays for the deep walk once. */
+  private atomicBeefCache = new Map<string, number[]>()
+
+  private async buildAtomicBeef(tx: Transaction): Promise<number[]> {
     const beef = new Beef()
     beef.mergeTransaction(tx)
     for (const i of tx.inputs) {
@@ -674,19 +697,7 @@ export class ToolboxReserveFunder {
       }
       if (!progress) break
     }
-    try {
-      await this.wallet.internalizeAction({
-        tx: beef.toBinaryAtomic(tx.id('hex')),
-        outputs: [{ outputIndex: vout, protocol: 'basket insertion', insertionRemittance: { basket: NEKTAR_BASKET } }],
-        description: 'nektar funding output'
-      })
-    } catch (e) {
-      // WERR_REVIEW_ACTIONS: the wallet re-broadcasts internalized txs — for
-      // outputs already on chain the sendWith result isn't 'unproven' and it
-      // demands review. The custody write happens either way; trust only the
-      // end state: if the output landed, the internalize succeeded.
-      if ((e as { code?: string }).code !== 'WERR_REVIEW_ACTIONS' || !(await this.has(tx.id('hex'), vout))) throw e
-    }
+    return beef.toBinaryAtomic(tx.id('hex'))
   }
 
   /** Fetch a parent tx with its merkle path attached when mined — what the

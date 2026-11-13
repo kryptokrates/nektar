@@ -2,6 +2,7 @@
 // discovery, merkle paths) + the BSV Broadcaster client. NO spend happens
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
+import { nektarEnv } from '@nektar/core'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
@@ -445,7 +446,8 @@ export async function importFundingTx(cfg: MainnetConfig | undefined, ref: strin
     if (wire.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(wire)) throw new Error(`malformed transaction hex (${wire.length} chars)`)
     return fundingOutputs((await TxStore.read(wire, undefined)).tx, pkhHex)
   }
-  if (!/^[0-9a-fA-F]{64}$/.test(ref)) throw new Error(`malformed txid — expected 64 hex chars, 'hex:<rawtx>', got "${ref.slice(0, 24)}${ref.length > 24 ? '…' : ''}"`)
+  if (!/^[0-9a-fA-F]{64}$/.test(ref))
+    throw new Error(`malformed txid — expected 64 hex chars, 'hex:<rawtx>', got "${ref.slice(0, 24)}${ref.length > 24 ? '…' : ''}"`)
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey

@@ -35,7 +35,7 @@ import {
   type TxStatusEvent
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
-import { walletSigner, FUND_SIGN_ARGS, type SignerWallet } from '@nektar/core'
+import { walletSigner, FUND_SIGN_ARGS, nektarEnv, setNektarEnv, type SignerWallet } from '@nektar/core'
 import { wireP2p, setupFeeVault } from './setup.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'

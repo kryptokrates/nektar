@@ -19,6 +19,7 @@
 // The key never leaves the gitignored .env; only the ADDRESS is printed.
 // The AI user never sees any of this — the server is the wallet holder
 // (operator-pays model).
+import { nektarEnv } from '@nektar/core'
 import { PrivateKey } from '@bsv/sdk'
 import { existsSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

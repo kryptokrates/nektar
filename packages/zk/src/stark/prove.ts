@@ -4,6 +4,7 @@
 //   otherwise → `docker run -i nektar-stark-build` with the cached target volume
 // Bounded by a timeout; the prover sees the private inputs — remote proving
 // means trusting that host with witnesses (use your own prover service).
+import { nektarEnv } from '@nektar/core'
 import { spawn } from 'node:child_process'
 import { encodeZkm2 } from './codec.js'
 

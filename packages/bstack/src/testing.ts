@@ -94,7 +94,11 @@ export async function faulthost(upstream: string): Promise<FaulthostHandle> {
     }
     if (fault.delayMs !== undefined && fault.delayMs > 0) await new Promise((r) => setTimeout(r, fault.delayMs))
     try {
-      const r = await fetch(upstream + (req.url ?? '/'), { method: req.method, headers: { 'content-type': String(req.headers['content-type'] ?? 'application/octet-stream'), 'x-topics': String(req.headers['x-topics'] ?? '') }, body: req.method === 'POST' ? body : undefined })
+      const r = await fetch(upstream + (req.url ?? '/'), {
+        method: req.method,
+        headers: { 'content-type': String(req.headers['content-type'] ?? 'application/octet-stream'), 'x-topics': String(req.headers['x-topics'] ?? '') },
+        body: req.method === 'POST' ? body : undefined
+      })
       fwd++
       const buf = Buffer.from(await r.arrayBuffer())
       if (req.url === '/lookup' && (fault.dropLookup === true || fault.corrupt === true || (fault.withholdTxids?.size ?? 0) > 0)) {

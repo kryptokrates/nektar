@@ -274,7 +274,7 @@ export async function merklePathFor(cfg: RegtestConfig, txid: string, tracker: T
 // change after each run.
 import { existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { writeFileAtomic } from '@nektar/core'
+import { writeFileAtomic, nektarEnv } from '@nektar/core'
 import type { PrivateKey } from '@bsv/sdk'
 
 interface ReserveEntry {

@@ -1,5 +1,6 @@
 // API-001: minimal versioned HTTP API (node:http, no framework). Same tools
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
+import { nektarEnv } from '@nektar/core'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { MerklePath } from '@bsv/sdk'

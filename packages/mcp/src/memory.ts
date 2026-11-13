@@ -39,6 +39,7 @@ import {
   signerPubHex,
   signerAddress,
   toSigner,
+  nektarEnv,
   type SignerLike,
   type DigestSigner,
   type SignerWallet

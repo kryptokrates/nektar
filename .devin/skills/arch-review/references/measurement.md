@@ -36,6 +36,7 @@ pnpm exec depcruise --output-type json packages/*/src > /tmp/depmap.json
 
 Aggregate package-to-package edges by mapping each resolved path to its
 `packages/<name>/` prefix. Compute per package:
+
 - **Ca** (afferent): distinct packages that import it
 - **Ce** (efferent): distinct packages it imports
 - **I** (instability) = `Ce / (Ca + Ce)`; `Ce+Ca=0` ⇒ orphan
@@ -126,16 +127,16 @@ three packages, is coupling that survives a package-graph rewrite — map it.
 
 Nektar already automates (run them, quote pass/fail):
 
-| Gate | What it enforces architecturally |
-|---|---|
-| `pnpm check:cruise` | no runtime cycles, no orphans, layering rules (lower→upper, bstack→mcp), no cross-package relative imports |
-| `pnpm check:knip` | dead files/deps/exports |
-| `pnpm check:dupes` | copy-paste structure >5% |
-| `pnpm check:leftovers` | per-package debt ratchet (only shrinks) |
-| `pnpm check:deps`/`syncpack` | undeclared imports / version drift |
-| `pnpm report:cold` | legacy inventory (report-only) |
+| Gate                         | What it enforces architecturally                                                                           |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `pnpm check:cruise`          | no runtime cycles, no orphans, layering rules (lower→upper, bstack→mcp), no cross-package relative imports |
+| `pnpm check:knip`            | dead files/deps/exports                                                                                    |
+| `pnpm check:dupes`           | copy-paste structure >5%                                                                                   |
+| `pnpm check:leftovers`       | per-package debt ratchet (only shrinks)                                                                    |
+| `pnpm check:deps`/`syncpack` | undeclared imports / version drift                                                                         |
+| `pnpm report:cold`           | legacy inventory (report-only)                                                                             |
 
-**The audit:** for each structural rule you *conclude* the system needs,
+**The audit:** for each structural rule you _conclude_ the system needs,
 check whether a gate exists. Rules enforced only by convention (e.g. "new
 packages must not hold keys", "SpendGuard must see every spend") belong in
 the findings as **unenforced invariants** — the highest-value gap class an

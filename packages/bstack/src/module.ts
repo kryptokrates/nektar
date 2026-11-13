@@ -1,3 +1,4 @@
+import { nektarEnv } from '@nektar/core'
 import { Transaction, type ChainTracker } from '@bsv/sdk'
 import {
   HeaderTracker,

@@ -4,6 +4,7 @@
 // pre-check cheaply; verification REQUIRES header == journal byte for byte.
 // The guest is tools/stark/methods/guest-datalog; the receipt is the same
 // RISC Zero succinct format verified by the same WASM verifier.
+import { nektarEnv } from '@nektar/core'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

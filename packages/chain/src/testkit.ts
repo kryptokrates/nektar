@@ -11,6 +11,7 @@
 //   NEKTAR_REGTEST_WIF                                  — treasury key; without
 //     it a generated key is persisted to .state/testkit-treasury.json and the
 //     first stackFunder() generates ~120 blocks to it for mature coinbases
+import { nektarEnv, setNektarEnv } from '@nektar/core'
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -44,7 +45,7 @@ function loadRepoEnv(): void {
     if (existsSync(f)) {
       for (const line of readFileSync(f, 'utf8').split(/\r?\n/)) {
         const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line)
-        if (m !== null && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+        if (m !== null && nektarEnv(m[1]) === undefined) setNektarEnv(m[1], m[2].replace(/^["']|["']$/g, ''))
       }
       return
     }
@@ -408,10 +409,8 @@ export class StackTreasury {
     file = join(STATE_DIR, 'treasury.json')
   ) {
     loadRepoEnv()
-    this.key =
-      nektarEnv('NEKTAR_REGTEST_WIF') !== undefined && nektarEnv('NEKTAR_REGTEST_WIF') !== ''
-        ? PrivateKey.fromWif(nektarEnv('NEKTAR_REGTEST_WIF'))
-        : this.loadOrMakeKey(file)
+    const wif = nektarEnv('NEKTAR_REGTEST_WIF')
+    this.key = wif !== undefined ? PrivateKey.fromWif(wif) : this.loadOrMakeKey(file)
     this.chain = new StackChain(cfg, this.key)
     this.reserve = new ReserveFunder(this.key, join(STATE_DIR, 'reserve.json'))
     // cross-process lease: takeReserve consults .state/leases.json so two

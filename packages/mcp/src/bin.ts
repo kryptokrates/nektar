@@ -4,6 +4,7 @@
 //   Streamable HTTP+REST:  NEKTAR_HTTP_PORT=8080 node dist/src/bin.js
 // Backend via NEKTAR_NETWORK=regtest (default, local Teranode stack) | ttn | main
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
+import { nektarEnv, setNektarEnv } from '@nektar/core'
 import { openRuntime, configFromEnv } from './runtime.js'
 import { serveStdio } from './mcp-server.js'
 import { createHttpApi } from './http.js'
@@ -16,7 +17,7 @@ const envFlag = argv.includes('--env') ? argv[argv.indexOf('--env') + 1] : undef
 if (existsSync('.env')) {
   for (const line of readFileSync('.env', 'utf8').split(/\r?\n/)) {
     const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
-    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].trim()
+    if (m && nektarEnv(m[1]) === undefined) setNektarEnv(m[1], m[2].trim())
   }
 }
 if (envFlag) {

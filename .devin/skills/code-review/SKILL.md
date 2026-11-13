@@ -20,12 +20,12 @@ Design, plus CRAP/package metrics and Google's three-layer review model.
 
 ## Reference lenses (load by what the diff touches)
 
-| File | Load when the diff… |
-|---|---|
-| [references/nektar.md](references/nektar.md) | **ALWAYS** — repo invariants: custody, escrow/payment semantics, SpendGuard, envelope/outbox limits, honesty rules. Outranks everything. |
-| [references/structure.md](references/structure.md) | …adds/moves/splits modules, exports, or abstraction boundaries; or is large enough that "where does this belong" is a real question. Deep-module + coupling + CRAP thresholds. |
-| [references/data-systems.md](references/data-systems.md) | …touches persistence (SQLite, ledgers, journals), messaging (outbox/inbox/lanes), chain interaction, or restartable work. Nothing is local, ordered, fresh, or exactly-once. |
-| [references/stability.md](references/stability.md) | …touches outbound I/O, timers/poll loops, retries, process lifecycle, or capacity limits. Design the failure mode; don't inherit it. |
+| File                                                     | Load when the diff…                                                                                                                                                            |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [references/nektar.md](references/nektar.md)             | **ALWAYS** — repo invariants: custody, escrow/payment semantics, SpendGuard, envelope/outbox limits, honesty rules. Outranks everything.                                       |
+| [references/structure.md](references/structure.md)       | …adds/moves/splits modules, exports, or abstraction boundaries; or is large enough that "where does this belong" is a real question. Deep-module + coupling + CRAP thresholds. |
+| [references/data-systems.md](references/data-systems.md) | …touches persistence (SQLite, ledgers, journals), messaging (outbox/inbox/lanes), chain interaction, or restartable work. Nothing is local, ordered, fresh, or exactly-once.   |
+| [references/stability.md](references/stability.md)       | …touches outbound I/O, timers/poll loops, retries, process lifecycle, or capacity limits. Design the failure mode; don't inherit it.                                           |
 
 Load every applicable file before writing findings — a money-path diff can
 trigger all four.
@@ -46,12 +46,12 @@ differs only in `buildTimestamp`, say so and skip it — that is normal churn.
 
 ## Severity Levels
 
-| Severity | Meaning | Merge impact |
-|---|---|---|
-| **BLOCKER** | Will cause loss of funds, security vulnerabilities, data loss, stuck automation, or production incidents | Must fix before merge |
-| **MAJOR** | Violates a core invariant, significant reliability/maintainability risk | Should fix before merge |
-| **MINOR** | Suboptimal but functional; missed opportunity | Fix recommended |
-| **NIT** | Style or minor improvement, no functional impact | Optional |
+| Severity    | Meaning                                                                                                  | Merge impact            |
+| ----------- | -------------------------------------------------------------------------------------------------------- | ----------------------- |
+| **BLOCKER** | Will cause loss of funds, security vulnerabilities, data loss, stuck automation, or production incidents | Must fix before merge   |
+| **MAJOR**   | Violates a core invariant, significant reliability/maintainability risk                                  | Should fix before merge |
+| **MINOR**   | Suboptimal but functional; missed opportunity                                                            | Fix recommended         |
+| **NIT**     | Style or minor improvement, no functional impact                                                         | Optional                |
 
 `--relaxed` skips NITs and only reports MINORs as patterns (3+ instances).
 
@@ -81,29 +81,29 @@ differs only in `buildTimestamp`, say so and skip it — that is normal churn.
 
 ## Common Rule Catalog
 
-| Rule ID | Severity | Rule |
-|---|---|---|
-| `common/ignored-error` | BLOCKER | A failure is discarded and execution continues unsafely |
-| `common/resource-leak` | BLOCKER | A resource (handle, subscription, lock) is not released on all paths |
-| `common/blocking-in-async` | BLOCKER | Blocking work runs on an async path |
-| `common/sql-injection` | BLOCKER | Untrusted input reaches a SQL statement |
-| `common/command-injection` | BLOCKER | Untrusted input reaches a shell/exec |
-| `common/unsafe-deserialization` | BLOCKER | Untrusted bytes reach an unsafe parser/deserializer |
-| `common/circular-dependency` | MAJOR | Module dependency cycle introduced (cruise gate will also catch) |
-| `common/layer-violation` | MAJOR | Domain code depends directly on an infrastructure detail |
-| `common/missing-input-validation` | MAJOR | Untrusted input crosses a boundary unvalidated (HTTP, inbox, wire envelope) |
-| `common/authorization-gap` | MAJOR | A protected action lacks an authorization/policy decision |
-| `common/unmanaged-concurrency` | MAJOR | Concurrent work lacks lifecycle/cancellation/error ownership |
-| `common/busy-wait` | MAJOR | Polls without blocking or backoff; burns CPU or API quota |
-| `common/shared-mutable-state` | MAJOR | Mutable state shared without ownership or synchronization |
-| `common/erased-failure` | MINOR | A boolean/null/untyped result discards meaningful failure information |
-| `common/missing-timeout` | MINOR | External work has no bounded completion time |
-| `common/speculative-abstraction` | MINOR | Abstraction built for a variant nobody has written |
-| `common/brittle-test` | MAJOR | Test asserts internals so it breaks on refactor or passes when wrong |
-| `common/assertion-free-test` | MAJOR | Test exercises code but asserts nothing about its result |
-| `common/magic-literal` | MINOR | Unexplained literal carries domain/operational meaning |
-| `common/dead-code` | MINOR | Unreachable or commented-out code remains (leftovers ratchet counts it) |
-| `common/weak-type-model` | MAJOR | Unstructured/over-broad types permit invalid states (`as any` counts here) |
+| Rule ID                           | Severity | Rule                                                                        |
+| --------------------------------- | -------- | --------------------------------------------------------------------------- |
+| `common/ignored-error`            | BLOCKER  | A failure is discarded and execution continues unsafely                     |
+| `common/resource-leak`            | BLOCKER  | A resource (handle, subscription, lock) is not released on all paths        |
+| `common/blocking-in-async`        | BLOCKER  | Blocking work runs on an async path                                         |
+| `common/sql-injection`            | BLOCKER  | Untrusted input reaches a SQL statement                                     |
+| `common/command-injection`        | BLOCKER  | Untrusted input reaches a shell/exec                                        |
+| `common/unsafe-deserialization`   | BLOCKER  | Untrusted bytes reach an unsafe parser/deserializer                         |
+| `common/circular-dependency`      | MAJOR    | Module dependency cycle introduced (cruise gate will also catch)            |
+| `common/layer-violation`          | MAJOR    | Domain code depends directly on an infrastructure detail                    |
+| `common/missing-input-validation` | MAJOR    | Untrusted input crosses a boundary unvalidated (HTTP, inbox, wire envelope) |
+| `common/authorization-gap`        | MAJOR    | A protected action lacks an authorization/policy decision                   |
+| `common/unmanaged-concurrency`    | MAJOR    | Concurrent work lacks lifecycle/cancellation/error ownership                |
+| `common/busy-wait`                | MAJOR    | Polls without blocking or backoff; burns CPU or API quota                   |
+| `common/shared-mutable-state`     | MAJOR    | Mutable state shared without ownership or synchronization                   |
+| `common/erased-failure`           | MINOR    | A boolean/null/untyped result discards meaningful failure information       |
+| `common/missing-timeout`          | MINOR    | External work has no bounded completion time                                |
+| `common/speculative-abstraction`  | MINOR    | Abstraction built for a variant nobody has written                          |
+| `common/brittle-test`             | MAJOR    | Test asserts internals so it breaks on refactor or passes when wrong        |
+| `common/assertion-free-test`      | MAJOR    | Test exercises code but asserts nothing about its result                    |
+| `common/magic-literal`            | MINOR    | Unexplained literal carries domain/operational meaning                      |
+| `common/dead-code`                | MINOR    | Unreachable or commented-out code remains (leftovers ratchet counts it)     |
+| `common/weak-type-model`          | MAJOR    | Unstructured/over-broad types permit invalid states (`as any` counts here)  |
 
 ## Output Format
 

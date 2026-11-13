@@ -1,5 +1,6 @@
 // Tool definitions (JSON Schema) + their single implementation (callTool),
 // shared by the MCP server (mcp-server.ts, official SDK) and the HTTP API.
+import { nektarEnv } from '@nektar/core'
 import { receiptToken } from './receipt.js'
 import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment } from './pay.js'
 import type { NektarMemory } from './memory.js'

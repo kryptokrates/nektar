@@ -13,6 +13,7 @@
 //     proof bytes via /v1/zkproof/<commit> and re-check both
 //   - consensus-checked: `onchain:true` deploys the ~398KB in-script
 //     verifier and spends it — the dispute/showcase rail, not the hot path
+import { nektarEnv } from '@nektar/core'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'

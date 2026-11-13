@@ -6,7 +6,11 @@ import { ToolboxReserveFunder } from '../src/toolbox.js'
 // Mock BRC-100 wallet: listOutputs serves a canned spendable set + the BEEF
 // the class rebuilds Transaction objects from. internalize/relinquish are
 // recorded so custody transitions are assertable.
-interface Out { outpoint: string; satoshis: number; spendable: boolean }
+interface Out {
+  outpoint: string
+  satoshis: number
+  spendable: boolean
+}
 const fundingTx = (sats: number): Transaction => {
   const tx = new Transaction()
   tx.addOutput({ lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toHash()), satoshis: sats })

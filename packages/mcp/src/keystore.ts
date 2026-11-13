@@ -3,6 +3,7 @@
 // On `main` every key file MUST be encrypted — a plaintext keys.json or a
 // missing passphrase refuses startup. Regtest only encrypts when a
 // passphrase is set.
+import { nektarEnv } from '@nektar/core'
 import { readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { scryptSync, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import { HD, Mnemonic, PrivateKey } from '@bsv/sdk'

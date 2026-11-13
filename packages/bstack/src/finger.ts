@@ -6,7 +6,7 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
 import { PublicKey, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
-import { toSigner, unlockP2PKH, signerAddress, type SignerLike } from '@nektar/core'
+import { toSigner, unlockP2PKH, signerAddress, nektarEnv, type SignerLike } from '@nektar/core'
 import {
   mintCarrier,
   fundingLock,

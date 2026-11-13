@@ -1,4 +1,4 @@
-import { sha256, utf8, toHex } from '@nektar/core'
+import { sha256, utf8, toHex, nektarEnv } from '@nektar/core'
 import { claimsRecord, recordReader } from '@lightwebinc/bcommon'
 import { marketJson, verifyWant, verifyOffer, type SignedWant, type SignedOffer } from './artifacts.js'
 

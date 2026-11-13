@@ -9,7 +9,7 @@ import { LedgerReceiver, spentOutpoints } from '@lightwebinc/bcommon/host'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { utf8, sha256, toHex, signerAddress, signerPubHex, toSigner } from '@nektar/core'
+import { utf8, sha256, toHex, signerAddress, signerPubHex, toSigner, nektarEnv } from '@nektar/core'
 import type { NektarMemory } from './memory.js'
 
 export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAYMENTS') ?? '')
@@ -71,7 +71,7 @@ export const requireOperatorWallet = (): void => {
 /** per-tool price: NEKTAR_PRICE_<TOOL>_SATS, falling back to NEKTAR_PRICE_SATS, then defaults */
 export const priceFor = (tool: string): number =>
   Number(
-    process.env[`NEKTAR_PRICE_${tool.toUpperCase()}_SATS`] ?? nektarEnv('NEKTAR_PRICE_SATS') ?? (tool === 'anchor' ? 100 : PROVER_TOOLS.has(tool) ? 500 : 250)
+    nektarEnv(`NEKTAR_PRICE_${tool.toUpperCase()}_SATS`) ?? nektarEnv('NEKTAR_PRICE_SATS') ?? (tool === 'anchor' ? 100 : PROVER_TOOLS.has(tool) ? 500 : 250)
   )
 
 interface Invoice {

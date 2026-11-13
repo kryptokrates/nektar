@@ -34,7 +34,7 @@ a linter dump.
   altitude too (e.g. "can a new package bypass SpendGuard?" is a structural
   question).
 - **Honor declared intent.** `.dependency-cruiser.cjs` encodes the declared
-  layering. Treat it as the architecture spec: violations it *cannot* express
+  layering. Treat it as the architecture spec: violations it _cannot_ express
   (social-only rules) are themselves a finding class.
 - **No feature work.** Deliver analysis + a remediation roadmap. Do not edit
   source unless explicitly asked.
@@ -44,13 +44,14 @@ a linter dump.
 ### Phase 0 — Frame (5 min, no tools needed beyond reading)
 
 From `AGENTS.md`, `.dependency-cruiser.cjs`, and `packages/*/package.json`:
+
 - Lifecycle stage + architecture style (pnpm monorepo, layered modular
   monolith, MCP app + transport host + test harnesses).
 - The **declared** layering: `core` is the root; `crypto/log/datalog/policy/
-  zk/graph/identity/contracts` are leaf libs; `chain` interacts with the
+zk/graph/identity/contracts` are leaf libs; `chain` interacts with the
   ledger; `anchor/verify/automaton` build on chain; `bstack` is transport;
   `mcp/watcher/reasoning` are applications; `e2e/fuzz` are harnesses.
-- Write down the *expected* shape before measuring — the review is partly
+- Write down the _expected_ shape before measuring — the review is partly
   "declared vs actual".
 
 ### Phase 1 — Measure

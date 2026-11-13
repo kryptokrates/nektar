@@ -162,7 +162,7 @@ test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async 
   const { chain } = w
   let n = 0
   let rejectedHex: string | undefined
-  let secondHex: string | undefined
+  const sentHexes: string[] = []
   const flaky: any = {
     broadcast: async (tx: import('@bsv/sdk').Transaction) => {
       n++
@@ -170,9 +170,7 @@ test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async 
         rejectedHex = tx.toHex()
         return { status: 'error', description: 'TX_MISSING_PARENT (34): error getting parent' }
       }
-      if (n === 3) {
-        secondHex = tx.toHex()
-      }
+      sentHexes.push(tx.toHex())
       return chain.broadcast(tx)
     }
   }
@@ -181,7 +179,10 @@ test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async 
   await ac.anchor(1, new Uint8Array(32).fill(1))
   await ac.anchor(1, new Uint8Array(32).fill(2)) // n=1: first broadcast rejected, re-broadcast identical
   assert.equal(ac.getHead()!.data.n, 1)
-  assert.equal(secondHex, rejectedHex, 're-broadcast must be byte-identical')
+  // the missing-parent heal may interleave ancestor re-supply before the
+  // retry — the invariant is that the retry still sends the IDENTICAL tx,
+  // not a rebuilt variant (a rebuild would break signatures/dedup)
+  assert.ok(rejectedHex !== undefined && sentHexes.includes(rejectedHex), 're-broadcast must be byte-identical')
 })
 
 test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async (t) => {

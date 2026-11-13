@@ -80,6 +80,18 @@ export interface AutomationConfig {
    *  counterparties can /notify our long-polls on outbound sends (requires
    *  publishFinger — records without it simply carry no watch field) */
   watchPublic?: string
+  /** per-read failure ceiling on lane/box host lookups (NEKTAR_LANE_READ_TIMEOUT_MS)
+   *  — a host that cannot answer inside this bound is treated as unreachable,
+   *  never waited on beyond it. Default 5000. */
+  laneReadTimeoutMs?: number
+  /** hot-path poll cadence while any op is non-terminal (NEKTAR_HOT_INTERVAL_MS)
+   *  — the loop runs min(hotMs, idleMs); a wake or inbound item keeps it hot.
+   *  Default 250. */
+  hotMs?: number
+  /** minimum time a want stays in `collecting` before an acceptable offer may
+   *  early-select (NEKTAR_MIN_COLLECT_MS) — a cheaper offer landing inside the
+   *  window still wins; collectMs stays the outer ceiling. Default 1000. */
+  minCollectMs?: number
   now?: () => number
 }
 
@@ -292,7 +304,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     ai: cfg.ai ?? aiFromEnv(),
     killed: () => killSwitchActive(cfg.dataDir).killed,
     deaf: deafNow,
-    opts: cfg.opts,
+    opts: { ...cfg.opts, ...(cfg.minCollectMs !== undefined ? { minCollectMs: cfg.minCollectMs } : {}) },
     logStream
   })
   const me = key.toPublicKey().toString()
@@ -493,33 +505,68 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             }
           }
         })
+  // items a previous pass's background full read delivered after the fast
+  // quorum-1 answer — drained at the top of the next pass so a slow host's
+  // exclusive items still arrive without ever gating this pass on it
+  const pendingLane = new Map<string, Array<{ seq: string; kind: 'want' | 'offer'; payload: unknown }>>()
   const lanePoll = async (): Promise<void> => {
     const { readWants, readOffers } = lanes!.mod
     const watch = await engine.watchList()
     const tracker = mem.sdkTracker()
     const net = cfg.network
+    const timeoutMs = cfg.laneReadTimeoutMs ?? 5_000
+    // two-tier read, same shape as the inbox collect: quorum-1 returns the
+    // fastest host's view so one slow host never gates the deal; the full
+    // fan-out lands behind it for withheld/unreachable bookkeeping and for
+    // items that only exist on the slow copy (merged next pass — store.ingest
+    // dedups by seq so double-delivery is free)
+    type ReadOpts = { timeoutMs: number; quorum?: number }
+    const subs = [
+      ...watch.sellerDomains.map((domain) => ({
+        tag: `lane:${net}:${domain}`,
+        kind: 'want' as const,
+        call: (o: ReadOpts) => readWants(marketHosts, { net, domain }, { tracker, net, now: cfg.now?.(), ...o })
+      })),
+      ...watch.collecting.map((c) => ({
+        tag: `offers:${c.wantId}`,
+        kind: 'offer' as const,
+        call: (o: ReadOpts) => readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: me }, { tracker, net, now: cfg.now?.(), ...o })
+      }))
+    ]
     // every lane read is independent — run them together, bounded, instead
     // of serially pricing the pass at the sum of all host latencies
-    await Promise.all([
-      ...watch.sellerDomains.map(async (domain) => {
-        const r = await readWants(marketHosts, { net, domain }, { tracker, net, now: cfg.now?.(), timeoutMs: 5_000 })
-        const events = r.items.map((i) => ({ seq: i.txid, kind: 'want', payload: i.payload.body }))
-        if (events.length) {
-          hotUntil = Date.now() + 5_000
-          await engine.ingestEvents(`lane:${net}:${domain}`, events, '')
+    await Promise.all(
+      subs.map(async (s) => {
+        const staged = pendingLane.get(s.tag) ?? []
+        pendingLane.delete(s.tag)
+        const toEvents = (items: { txid: string; payload: { body: unknown } }[]) =>
+          [...staged.splice(0), ...items.map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))]
+        if (marketHosts.length > 1) {
+          const fast = await s.call({ timeoutMs, quorum: 1 })
+          void s
+            .call({ timeoutMs })
+            .then((full) => {
+              laneNotes(full)
+              const rest = full.items.map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))
+              if (rest.length > 0) pendingLane.set(s.tag, [...(pendingLane.get(s.tag) ?? []), ...rest])
+            })
+            .catch(() => undefined)
+          const events = toEvents(fast.items as never)
+          if (events.length > 0) {
+            hotUntil = Date.now() + 5_000
+            await engine.ingestEvents(s.tag, events, '')
+          }
+        } else {
+          const r = await s.call({ timeoutMs })
+          laneNotes(r)
+          const events = toEvents(r.items as never)
+          if (events.length > 0) {
+            hotUntil = Date.now() + 5_000
+            await engine.ingestEvents(s.tag, events, '')
+          }
         }
-        laneNotes(r)
-      }),
-      ...watch.collecting.map(async (c) => {
-        const r = await readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: me }, { tracker, net, now: cfg.now?.(), timeoutMs: 5_000 })
-        const events = r.items.map((i) => ({ seq: i.txid, kind: 'offer', payload: i.payload.body }))
-        if (events.length) {
-          hotUntil = Date.now() + 5_000
-          await engine.ingestEvents(`offers:${c.wantId}`, events, '')
-        }
-        laneNotes(r)
       })
-    ])
+    )
   }
   const poll = async (): Promise<void> => {
     // discovery reads and the inbox are independent — a stalled lane lookup
@@ -1011,15 +1058,16 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
 
   const upkeepMs = cfg.upkeepMs ?? 10_000
   // A4 — a setTimeout chain, not a fixed interval: while the loop is hot
-  // (recent inbound activity) the deals cadence floors at 250ms so an
+  // (recent inbound activity) the deals cadence floors at hotMs so an
   // in-flight deal never waits a full interval for the next hop.
   const idleMs = cfg.intervalMs ?? 1000
+  const hotMs = cfg.hotMs ?? 250
   let timer: ReturnType<typeof setTimeout> | undefined
   const tick = (): void => {
     if (stopped) return
     void deals()
     if (Date.now() - upkeepAt >= upkeepMs) void upkeep().catch(() => {})
-    timer = setTimeout(tick, Date.now() < hotUntil ? Math.min(250, idleMs) : idleMs)
+    timer = setTimeout(tick, Date.now() < hotUntil ? Math.min(hotMs, idleMs) : idleMs)
     timer.unref()
   }
   if (cfg.intervalMs !== 0) {

@@ -121,9 +121,9 @@ export async function readItems(
   hosts: string[],
   service: string,
   query: unknown,
-  o: { tracker: ChainTracker; net: string; accept: (p: import('./market-wire.js').MarketPayload) => boolean; now?: number; timeoutMs?: number }
+  o: { tracker: ChainTracker; net: string; accept: (p: import('./market-wire.js').MarketPayload) => boolean; now?: number; timeoutMs?: number; quorum?: number }
 ): Promise<ReadResult> {
-  const { answers } = await lookupAll(hosts, service, query, { timeoutMs: o.timeoutMs })
+  const { answers } = await lookupAll(hosts, service, query, { timeoutMs: o.timeoutMs, quorum: o.quorum })
   const items = new Map<string, { txid: string; payload: import('./market-wire.js').MarketPayload }>()
   const seenBy = new Map<string, Set<string>>()
   const perHost: Record<string, string[]> = {}
@@ -171,7 +171,7 @@ export async function readItems(
 export const readWants = (
   hosts: string[],
   q: { net: string; domain: string; limit?: number },
-  o: { tracker: ChainTracker; net: string; now?: number; timeoutMs?: number }
+  o: { tracker: ChainTracker; net: string; now?: number; timeoutMs?: number; quorum?: number }
 ) =>
   readItems(
     hosts,
@@ -185,7 +185,7 @@ export const readWants = (
 export const readOffers = (
   hosts: string[],
   q: { net: string; wantId: string; buyerPub: string },
-  o: { tracker: ChainTracker; net: string; now?: number; timeoutMs?: number }
+  o: { tracker: ChainTracker; net: string; now?: number; timeoutMs?: number; quorum?: number }
 ) =>
   readItems(
     hosts,
@@ -199,7 +199,7 @@ export const readOffers = (
         (p.body as { offer: { buyerPub?: string } }).offer.buyerPub === q.buyerPub
     }
   )
-export const readWant = (hosts: string[], q: { net: string; pub: string; wantId: string }, o: { tracker: ChainTracker; net: string; now?: number }) =>
+export const readWant = (hosts: string[], q: { net: string; pub: string; wantId: string }, o: { tracker: ChainTracker; net: string; now?: number; timeoutMs?: number; quorum?: number }) =>
   readItems(
     hosts,
     'ls_nektar',

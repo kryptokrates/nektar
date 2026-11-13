@@ -36,6 +36,40 @@ services:
       - 'host.docker.internal:host-gateway'
     volumes:
       - ./header-shim.mjs:/shim/header-shim.mjs:ro
+  # watch-shim: long-poll wake layer in front of each stock host's /lookup —
+  # agents hold GET /watch subscriptions and senders POST /notify; every wake
+  # is only a hint (consumers re-verify via their own reads), so a shim being
+  # down degrades to ordinary polling. Ports mirror the host + 2.
+  watch-a:
+    image: node:22-alpine
+    working_dir: /shim
+    restart: unless-stopped
+    command: ['node', 'watch-shim.mjs']
+    environment:
+      BACKEND: http://host-a:8080
+      PORT: 8080
+    depends_on:
+      host-a:
+        condition: service_started
+    volumes:
+      - ./watch-shim.mjs:/shim/watch-shim.mjs:ro
+    ports:
+      - '127.0.0.1:18193:8080'
+  watch-b:
+    image: node:22-alpine
+    working_dir: /shim
+    restart: unless-stopped
+    command: ['node', 'watch-shim.mjs']
+    environment:
+      BACKEND: http://host-b:8080
+      PORT: 8080
+    depends_on:
+      host-b:
+        condition: service_started
+    volumes:
+      - ./watch-shim.mjs:/shim/watch-shim.mjs:ro
+    ports:
+      - '127.0.0.1:18194:8080'
   host-a: &host
     image: ghcr.io/lightwebinc/bbox-host@sha256:9e3579b24e35e853df3cf194bee33a1355e17f3c480fb0ccf9e17cd13997d0df
     depends_on:

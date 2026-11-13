@@ -86,6 +86,16 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     // our own shim's public URL — goes into the bfinger record so peers can
     // /notify our long-polls on outbound sends (needs NEKTAR_BFINGER_PUBLISH)
     watchPublic: nektarEnv('NEKTAR_WATCH_PUBLIC') !== undefined && nektarEnv('NEKTAR_WATCH_PUBLIC') !== '' ? nektarEnv('NEKTAR_WATCH_PUBLIC') : undefined,
+    // per-read failure ceiling on host lookups — a host slower than this is
+    // unreachable for the pass, never a wait on the hot path
+    laneReadTimeoutMs: nektarEnv('NEKTAR_LANE_READ_TIMEOUT_MS') ? Number(nektarEnv('NEKTAR_LANE_READ_TIMEOUT_MS')) : undefined,
+    // hot-path cadence while any deal is live — wakes and inbound items hold
+    // it; silence falls back to intervalMs
+    hotMs: nektarEnv('NEKTAR_HOT_INTERVAL_MS') ? Number(nektarEnv('NEKTAR_HOT_INTERVAL_MS')) : undefined,
+    // the smallest collecting window before an acceptable offer may
+    // early-select — a cheaper offer inside the window still wins; collectMs
+    // remains the outer ceiling
+    minCollectMs: nektarEnv('NEKTAR_MIN_COLLECT_MS') ? Number(nektarEnv('NEKTAR_MIN_COLLECT_MS')) : undefined,
     // chains without a status push (polled broadcasters) mark
     // funding trees proven only here — let ops tune the cadence
     upkeepMs: nektarEnv('NEKTAR_AUTOMATION_UPKEEP_MS') ? Number(nektarEnv('NEKTAR_AUTOMATION_UPKEEP_MS')) : undefined,

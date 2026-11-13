@@ -95,6 +95,16 @@ if (LIVE && liveHosts.length !== 2) {
 const HOST_A = LIVE ? liveHosts[0] : 'http://127.0.0.1:18191'
 const HOST_B = LIVE ? liveHosts[1] : 'http://127.0.0.1:18192'
 const HOSTS = [HOST_A, HOST_B]
+// watch-shim long-poll wake layer (deploy/bstack-sandbox/watch-shim.mjs fronts
+// each stock host; positional with HOSTS — watchShims[i] wraps liveHosts[i]).
+// Agents poll every shim (NEKTAR_WATCH_URLS) and publish the one fronting
+// their first host (NEKTAR_WATCH_PUBLIC) so a counterparty's /notify lands
+// where their waiters live. No shims configured → plain polling, unchanged.
+const watchShims = (process.env.NEKTAR_WATCH_SHIMS ?? (LIVE ? '' : 'http://127.0.0.1:18193,http://127.0.0.1:18194'))
+  .split(',')
+  .map((x) => x.trim())
+  .filter(Boolean)
+const shimFor = (host) => watchShims[HOSTS.indexOf(host)]
 const FINDING =
   'libfoo 3.0 renamed connect() to open(); callers must switch.\n```nektar-patch\n{"edits":[{"file":"src/app.js","find":"libfoo.connect(","replace":"libfoo.open("}]}\n```'
 const QUESTION = 'build fails after libfoo 3.0 upgrade: libfoo.connect is not a function'
@@ -130,10 +140,12 @@ const mineLoop = (async () => {
 })()
 
 // ---- fund the four instances from the shared treasury --------------------
-// The treasury chain (.state/treasury.json) is the same one e2e-regtest.ts
-// spends and bootstrapReserve consumes: one split pays each instance's own
-// fund key 5M sats plus a new treasury outpoint, mined before use.
-const TREASURY_FILE = join(root, '.state', 'treasury.json')
+// The scenario keeps its own treasury chain (.state/real-stack-treasury.json)
+// — the shared .state/treasury.json is consumed by e2e-regtest.ts, testkit
+// and bootstrapReserve, and a concurrent run can spend the recorded outpoint
+// out from under fundAgents. Seed once:
+//   NEKTAR_TREASURY_FILE=.state/real-stack-treasury.json node packages/e2e/src/scenarios/regtest-fund.mjs
+const TREASURY_FILE = process.env.NEKTAR_TREASURY_FILE ?? join(root, '.state', 'real-stack-treasury.json')
 const agents = [
   { name: 'alice', hosts: [HOST_A], seller: 450 },
   { name: 'ben', hosts: [HOST_B], seller: 300 },
@@ -400,6 +412,15 @@ function spawnInstance(a) {
       NEKTAR_BFINGER_PUBLISH: '1',
       NEKTAR_AUTOMATION_INTERVAL_MS: '1000',
       NEKTAR_OFFER_TTL_BLOCKS: '48',
+      // watch-shim wake layer: poll every configured shim; advertise the one
+      // fronting this agent's first host so counterparties' /notify reaches
+      // the shim holding its waiters (hints only — poll path is unchanged)
+      ...(watchShims.length > 0
+        ? {
+            NEKTAR_WATCH_URLS: watchShims.join(','),
+            ...(shimFor(a.hosts[0]) !== undefined ? { NEKTAR_WATCH_PUBLIC: shimFor(a.hosts[0]) } : {})
+          }
+        : {}),
       ...(LIVE
         ? {
             NEKTAR_FUND_WIF: a.key.toWif([0xef]),

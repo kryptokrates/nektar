@@ -144,6 +144,11 @@ export interface MarketOptions {
    *  evaluation — deals reach `useful` without an operator call. Default off:
    *  the consumer judges content. */
   autoUseful?: boolean
+  /** minimum time a want stays in `collecting` before an acceptable offer may
+   *  early-select — a cheaper offer landing inside the window still wins;
+   *  `scoring.collectMs` remains the outer ceiling. 0 = select on the first
+   *  recorded offer (previous behaviour). */
+  minCollectMs: number
 }
 
 const DEFAULTS: MarketOptions = {
@@ -152,7 +157,8 @@ const DEFAULTS: MarketOptions = {
   saleMaxFee: 10,
   escrowFeeReserveSats: 500,
   sellerSafetyBlocks: 2,
-  approvalTtlMs: 86_400_000
+  approvalTtlMs: 86_400_000,
+  minCollectMs: 1000
 }
 const pkhOf = (pub: string) => Buffer.from(PublicKey.fromString(pub).toHash() as number[]).toString('hex')
 /** a bstore ObjectRef → stock plaintext ref (digest-pinned locator). https
@@ -365,6 +371,7 @@ export class MarketEngine {
         await this.d.store.transition(operation.operationId, 1, 'collecting', {
           cause: 'want_signed',
           dueAt: now + p.scoring.collectMs,
+          data: { collectingSince: now },
           outbox: [{ actionId: `${operation.operationId}:want`, kind: 'publish-want', destination: 'feed', payload: sw }]
         })
       }
@@ -1820,9 +1827,13 @@ export class MarketEngine {
     if (op.role === 'buyer') {
       if (op.state === 'collecting') {
         const due = op.dueAt !== undefined && op.dueAt <= this.now()
-        // early-select: the first acceptable offer fires selection in the same
-        // tick it was ingested — collectMs stays as the collection ceiling
-        if (due || Object.keys((op.data.offers as Record<string, StoredOffer> | undefined) ?? {}).length > 0)
+        // early-select: the first acceptable offer fires selection once the
+        // minimum collect window has passed — a cheaper offer landing inside
+        // it still wins; collectMs stays as the collection ceiling. Ops from
+        // before collectingSince existed treat the window as already open.
+        const since = (op.data.collectingSince as number | undefined) ?? 0
+        const windowOpen = this.now() - since >= this.o.minCollectMs
+        if (due || (windowOpen && Object.keys((op.data.offers as Record<string, StoredOffer> | undefined) ?? {}).length > 0))
           return await this.select(op, height, { expire: due })
       }
       if (op.state === 'selected' || op.state === 'escalated') {

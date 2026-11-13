@@ -398,8 +398,10 @@ function stateDir(): string {
 }
 const STATE_DIR = stateDir()
 
-/** shared treasury: the same key/file real-stack + e2e-regtest use. Opens
- *  once per process; stackFunder splits reserve outputs into fresh keys. */
+/** shared treasury: the same KEY as real-stack + e2e-regtest, but its own
+ *  chain file (.state/testkit-treasury-chain.json) — each consumer tracks an
+ *  outpoint chain independently so a concurrent spend can't race the file.
+ *  Opens once per process; stackFunder splits reserve outputs into fresh keys. */
 export class StackTreasury {
   key: PrivateKey
   chain: StackChain
@@ -465,7 +467,7 @@ export class StackTreasury {
     // coinbases mature at +100 on regtest — generate enough to have ≥1 mature
     if (tip < 120) await this.chain.mine(120 - tip + 1)
     const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
-      treasuryFile: join(STATE_DIR, 'treasury.json')
+      treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json')
     })
     if (this.reserve.utxos.length === 0 && r === null) {
       // no mature coinbase found for our key — generate 110 to it, then split.
@@ -481,7 +483,7 @@ export class StackTreasury {
         await this.reserve.scanCoinbases(this.cfg, (m, ...p) => stackRpc(this.cfg, m, ...p), t0, t0 + 10)
         if (this.reserve.utxos.length === 0) await new Promise((r) => setTimeout(r, 500))
       }
-      await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), { treasuryFile: join(STATE_DIR, 'treasury.json') })
+      await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), { treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json') })
     }
     if (this.reserve.utxos.length === 0) throw new Error('testkit: treasury could not be funded — no mature coinbases')
   }
@@ -503,7 +505,7 @@ export class StackTreasury {
       const coverable = free.some((u) => u.satoshis >= need) || free.slice(0, 16).reduce((a, u) => a + u.satoshis, 0) >= need
       if (coverable) return
       const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
-        treasuryFile: join(STATE_DIR, 'treasury.json')
+        treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json')
       })
       if (r === null) throw new Error('testkit: treasury tail spent — cannot refill reserve')
       // zeroconf: the fresh reserve outputs are spendable as mempool children —

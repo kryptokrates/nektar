@@ -354,3 +354,86 @@ test('crash between escrow prepare and submit: restart resubmits the SAME bytes,
   assert.equal((st.data.utxo as any).txid, pending.utxo.txid, 'the SAME escrow transaction was used after restart — no rebuild, no double fund')
   assert.equal((await bob.store.approvals()).length, 0, 'no human needed for a deterministic crash')
 })
+
+test('minCollectMs: a cheaper offer inside the window still wins; a lone offer before the window does not select', async (t) => {
+  const w = await world(t)
+  if (w === undefined) return
+  t.after(w.close)
+  const a = await w.seller('alice', 450)
+  const c = await w.seller('cara', 200)
+  const bob = await w.add('bob')
+  const { operationId } = await bob.engine.publishWant({ domains: ['libfoo'], question: 'connect is not a function', maxSats: 500 }, bob.policyHash)
+  await w.round([bob])
+  await w.round([a]) // alice's 450-sat offer lands first
+  await w.round([bob])
+  let st = (await bob.engine.status(operationId))!.operation
+  assert.equal(st.state, 'collecting', 'inside minCollectMs a recorded offer does not early-select')
+  w.advance(400)
+  await w.round([c]) // cara's 200-sat offer lands inside the 1000ms window
+  await w.round([bob])
+  st = (await bob.engine.status(operationId))!.operation
+  assert.equal(st.state, 'collecting', 'still collecting until the window closes')
+  w.advance(700) // now ≥1100ms in — first acceptable offer may select
+  await w.round([bob])
+  st = (await bob.engine.status(operationId))!.operation
+  assert.equal(st.state, 'awaiting_disclosure', st.lastError)
+  assert.equal((st.data.selected as any).key.split(':')[0], c.pub, 'the cheaper inside-window offer wins')
+})
+
+test('quote commitment attaches in every live state and is ignored once terminal', async (t) => {
+  const w = await world(t)
+  if (w === undefined) return
+  t.after(w.close)
+  const c = await w.seller('cara', 200)
+  const bob = await w.add('bob')
+  const { operationId, wantId } = await bob.engine.publishWant({ domains: ['libfoo'], question: 'connect is not a function', maxSats: 500 }, bob.policyHash)
+  await w.round([bob])
+  await w.round([c]) // offer → feed AND the real quote → bob's inbox, before bob records anything
+  const sale = (await c.store.operations({ role: 'seller' })).find((o) => o.kind === 'sale')!
+  const key = `${c.pub}:${sale.operationId}`
+  const offersOf = (st: any) => st.data.offers as Record<string, { commitment?: unknown }>
+  // quote-before-offer is a retry, never a dead letter: at most two rounds and
+  // the commitment is attached while the op is still collecting
+  for (let i = 0; i < 4; i++) {
+    await w.round([bob])
+    const st = (await bob.engine.status(operationId))!.operation
+    if (offersOf(st)[key]?.commitment !== undefined) break
+  }
+  let st = (await bob.engine.status(operationId))!.operation
+  assert.ok(offersOf(st)[key]?.commitment !== undefined, 'the quote commitment attaches while collecting')
+  // ride the deal to awaiting_disclosure — a duplicate quote in a later state
+  // still attaches (post-selection attachment is what the claim needs)
+  w.advance(1500)
+  for (let i = 0; i < 6; i++) {
+    await w.round()
+    st = (await bob.engine.status(operationId))!.operation
+    if (st.state === 'awaiting_disclosure' || st.state === 'disclosure_verified') break
+  }
+  assert.equal(st.state, 'awaiting_disclosure', st.lastError)
+  const attached = (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length
+  const leaf = (offersOf(st)[key]!.commitment as { leaf?: string }).leaf
+  await bob.engine.ingestMessage(c.pub, { type: 'quote', wantId, offerId: sale.operationId, commitment: { leaf }, mode: 'key' })
+  await w.round([bob])
+  assert.ok(
+    (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length > attached,
+    'a quote landing after selection still attaches'
+  )
+  // settle the deal so the claim path proves the commitment did its job
+  for (let i = 0; i < 6; i++) {
+    await w.round()
+    st = (await bob.engine.status(operationId))!.operation
+    if (st.state === 'disclosure_verified') break
+  }
+  assert.equal(st.state, 'disclosure_verified', st.lastError)
+  assert.equal((st.data.result as any).verified, true)
+  // terminal: a quote that outlives its deal is ignored — no event, no mutation
+  await bob.store.transition(operationId, st.revision, 'refunded', { cause: 'test_forced_terminal' })
+  const attachedBefore = (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length
+  await bob.engine.ingestMessage(c.pub, { type: 'quote', wantId, offerId: sale.operationId, commitment: { leaf }, mode: 'key' })
+  await w.round([bob])
+  assert.equal(
+    (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length,
+    attachedBefore,
+    'a terminal op ignores a late quote'
+  )
+})

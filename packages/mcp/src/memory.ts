@@ -3066,8 +3066,9 @@ export class NektarMemory {
         records++
         if (r.anchorTxid !== undefined) anchoredRecords++
       }
-    const prover = nektarEnv('NEKTAR_STARK_PROVER')
-      ? existsSync(nektarEnv('NEKTAR_STARK_PROVER'))
+    const proverBin = nektarEnv('NEKTAR_STARK_PROVER')
+    const prover = proverBin
+      ? existsSync(proverBin)
         ? 'native binary'
         : 'NEKTAR_STARK_PROVER set but file missing'
       : await new Promise<string>((res) => {

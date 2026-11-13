@@ -19,7 +19,7 @@ export function nektarEnvNum(key: string, env: EnvSource = process.env): number 
 }
 
 /** flag read — '1'/'true'/'yes'/'on' → true; unset/empty → undefined so
- *  callers can still distinguish "explicitly off" from "unset" */
+ *  callers can still distinguish "explicitly off" vs "unset" */
 export function nektarEnvFlag(key: string, env: EnvSource = process.env): boolean | undefined {
   const v = nektarEnv(key, env)
   return v === undefined ? undefined : /^(1|true|yes|on)$/i.test(v)

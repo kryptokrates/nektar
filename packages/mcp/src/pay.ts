@@ -40,8 +40,9 @@ const networkTag = (): string => {
 let opKey: PrivateKey | undefined
 let opAddr: string | undefined
 const opWif = (): PrivateKey | undefined => {
-  if (opKey === undefined && nektarEnv('NEKTAR_OPERATOR_WIF')) {
-    opKey = PrivateKey.fromWif(nektarEnv('NEKTAR_OPERATOR_WIF'))
+  const wif = nektarEnv('NEKTAR_OPERATOR_WIF')
+  if (opKey === undefined && wif !== undefined) {
+    opKey = PrivateKey.fromWif(wif)
     opAddr = opKey.toPublicKey().toAddress(nektarEnv('NEKTAR_NETWORK') === 'main' ? [0x00] : [0x6f])
   }
   return opKey

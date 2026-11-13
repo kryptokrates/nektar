@@ -58,7 +58,14 @@ interface A {
   policyHash: string
   name: string
 }
-const mkagent = async (name: string, hosts: string[], chain: StackChain, logs: string[], dir: string, opts?: Partial<import('@nektar/automation').MarketOptions>): Promise<A> => {
+const mkagent = async (
+  name: string,
+  hosts: string[],
+  chain: StackChain,
+  logs: string[],
+  dir: string,
+  opts?: Partial<import('@nektar/automation').MarketOptions>
+): Promise<A> => {
   const funder = await StackFunder.fund(await stackTreasury(), 60)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
   const pub = mem.operatorKey().toPublicKey().toString()
@@ -192,10 +199,7 @@ test('R1: host dies mid-deal — fan-out still completes through the survivor', 
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(
-      (await until([b.rt, s.rt], chain, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
-      'no quote | ' + logs.slice(-15).join(' | ')
-    )
+    assert.ok((await until([b.rt, s.rt], chain, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0, 'no quote | ' + logs.slice(-15).join(' | '))
     await h1.close() // the want+offer carrier host dies before the accept is sent
     const rounds = await until([b.rt, s.rt], chain, async () => {
       const bo = await opFor(b, w.wantId)

@@ -276,6 +276,8 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
   if (paymentsEnabled()) requireOperatorWallet()
   const { objectStoreFromEnv } = await import('@nektar/store')
+  const bondEpoch = nektarEnv('NEKTAR_BOND_EPOCH')
+  const bondMaxFee = nektarEnv('NEKTAR_BOND_MAXFEE')
   const base: NektarMemoryOptions = {
     batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 },
     modelId: cfg.modelId ?? 'unspecified',
@@ -284,10 +286,10 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     broadcasterUrl: cfg.main?.broadcasterUrl,
     objectStore: objectStoreFromEnv(),
     bond:
-      nektarEnv('NEKTAR_BOND_EPOCH') || nektarEnv('NEKTAR_BOND_MAXFEE')
+      bondEpoch || bondMaxFee
         ? {
-            epochBlocks: Number(nektarEnv('NEKTAR_BOND_EPOCH') ?? 144),
-            ...(nektarEnv('NEKTAR_BOND_MAXFEE') ? { maxFee: BigInt(nektarEnv('NEKTAR_BOND_MAXFEE')) } : {})
+            epochBlocks: Number(bondEpoch ?? 144),
+            ...(bondMaxFee !== undefined ? { maxFee: BigInt(bondMaxFee) } : {})
           }
         : undefined
   }
@@ -1220,8 +1222,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       // the shared substrate already probed this txid — use its answer
       // instead of a second /tx fetch per watched tx per pass
       const seen = events.statusOf(txid)
-      if (seen?.status === 'rejected' || seen?.status === 'double-spent')
-        return { status: 'rejected', source: 'broadcaster', reason: seen.status }
+      if (seen?.status === 'rejected' || seen?.status === 'double-spent') return { status: 'rejected', source: 'broadcaster', reason: seen.status }
       if (seen?.status === 'mined') return { status: 'proven', source: 'broadcaster' }
       const status = await arcTxStatus(txid)
       const SEEN = ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE']

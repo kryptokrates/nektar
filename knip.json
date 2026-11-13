@@ -7,7 +7,8 @@
       "ignoreBinaries": ["gitleaks"]
     },
     "packages/mcp": {
-      "entry": ["src/payclient.ts", "demo/**/*.{ts,mts,mjs}"]
+      "entry": ["src/payclient.ts", "demo/**/*.{ts,mts,mjs}"],
+      "ignore": ["tn-*.mjs"]
     },
     "packages/e2e": {
       "entry": ["src/**/*.{ts,mts,mjs}"]

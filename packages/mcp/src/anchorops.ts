@@ -37,6 +37,13 @@ export interface AnchorOpsDeps {
 export class AnchorOps {
   constructor(private deps: AnchorOpsDeps) {}
 
+  /** subscribers (the confirmer) wake on a fresh unproven anchor instead of
+   *  discovering it at their interval floor — mirrors txOps.onTxProof */
+  private anchorQueuedCbs: Array<(txid: string, shard: string) => void> = []
+  onAnchorQueued(cb: (txid: string, shard: string) => void): void {
+    this.anchorQueuedCbs.push(cb)
+  }
+
   /** the shard's current anchor head (undefined before the first anchor) */
   anchorHead(shard: string) {
     return this.deps.anchors.get(shard)?.getHead()
@@ -131,6 +138,10 @@ export class AnchorOps {
     const tail = this.deps.tails.get(shard) ?? []
     tail.push(link)
     this.deps.tails.set(shard, tail)
+    // the anchor is now discoverable via unprovenAnchors() — wake the
+    // confirmer so it watches the txid (and its parents) and, on regtest,
+    // mines immediately rather than at the floor
+    for (const cb of this.anchorQueuedCbs) cb(txid, shard)
     // LOG-007: the log's signed checkpoint for this anchor
     const cps = this.deps.cps.get(shard) ?? []
     cps.push(

@@ -57,6 +57,8 @@ export class ChainEvents extends EventEmitter {
   private busy = false
   private rotate = 0
   private timer?: NodeJS.Timeout
+  private pokeTimer?: NodeJS.Timeout
+  private pokeAgain = false
 
   constructor(private opts: ChainEventsOpts) {
     super()
@@ -71,6 +73,9 @@ export class ChainEvents extends EventEmitter {
     if (!this.watched.has(txid)) {
       this.watched.set(txid, { since: Date.now(), atHeight })
       this.dirty = true
+      // new interest is itself an event — the first observe happens on the
+      // next macrotask, not at the interval floor
+      this.poke()
     }
   }
 
@@ -106,6 +111,10 @@ export class ChainEvents extends EventEmitter {
     const verified = prev?.verified === true && prev.ev.status === ev.status
     this.lastStatus.set(ev.txid, { ev, at: Date.now(), verified })
     this.resolve(ev, TERMINAL.has(ev.status))
+    // verify-on-hint: a pushed status (MINED from a status stream, a
+    // broadcaster callback) is checked by our own observe on the next
+    // macrotask — the 'tx' emit arrives in ms, not at the interval floor
+    this.poke()
   }
 
   /** a first-party observation (e.g. a definitive broadcast refusal): emits
@@ -181,6 +190,25 @@ export class ChainEvents extends EventEmitter {
     return ev
   }
 
+  /** schedule a tick on the next macrotask — producers (watch, note, pushed
+   *  statuses, post-mine) call this so the interval stays the reconcile
+   *  floor, never the delivery path. Coalesced: N pokes before the flush
+   *  run one tick. A poke during a running tick re-queues once so wakes are
+   *  lossless, while interval ticks during busy still drop — wakes shorten
+   *  latency, they never multiply overlapping sweeps. */
+  poke(): void {
+    if (this.busy) {
+      this.pokeAgain = true
+      return
+    }
+    if (this.pokeTimer !== undefined) return
+    this.pokeTimer = setTimeout(() => {
+      this.pokeTimer = undefined
+      void this.tick().catch(() => undefined)
+    }, 0)
+    this.pokeTimer.unref?.()
+  }
+
   start(): void {
     this.timer ??= setInterval(() => void this.tick().catch(() => undefined), this.opts.intervalMs ?? 5_000)
     this.timer.unref?.()
@@ -189,6 +217,9 @@ export class ChainEvents extends EventEmitter {
   stop(): void {
     if (this.timer !== undefined) clearInterval(this.timer)
     this.timer = undefined
+    if (this.pokeTimer !== undefined) clearTimeout(this.pokeTimer)
+    this.pokeTimer = undefined
+    this.pokeAgain = false
     this.watched.clear()
     this.resolve(undefined)
   }
@@ -242,6 +273,12 @@ export class ChainEvents extends EventEmitter {
       this.emit('tick')
     } finally {
       this.busy = false
+      // a wake that landed mid-sweep re-runs once — the new watch/hint is
+      // observed immediately after, not an interval later
+      if (this.pokeAgain) {
+        this.pokeAgain = false
+        this.poke()
+      }
     }
   }
 

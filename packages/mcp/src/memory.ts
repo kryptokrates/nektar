@@ -431,6 +431,12 @@ export class NektarMemory {
   onTxProof(cb: (txid: string, mp: import('@bsv/sdk').MerklePath) => void): void {
     this.txOps.onTxProof(cb)
   }
+  /** subscribe to fresh unproven anchors — emitted the moment an anchor
+   *  broadcast lands in the tail set, so the confirmer watches/mines now
+   *  rather than at its interval floor */
+  onAnchorQueued(cb: (txid: string, shard: string) => void): void {
+    this.anchorOps.onAnchorQueued(cb)
+  }
   /** a caller-verified or chain-observed merkle proof: attach to its anchor,
    *  then notify subscribers */
   deliverTxProof(txid: string, mp: import('@bsv/sdk').MerklePath): void {

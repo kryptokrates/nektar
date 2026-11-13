@@ -595,6 +595,9 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     void tick()
   }, cfg.confirmEveryMs ?? 5000)
   timer.unref()
+  // a fresh anchor is a producer event — rescan (watch + autoMine) now,
+  // not at the floor; the interval stays as the missed-wake backstop
+  mem.onAnchorQueued(() => void tick())
   return {
     mem,
     network: 'regtest',
@@ -1149,6 +1152,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     cfg.confirmEveryMs ?? (ttn ? 30_000 : 60_000)
   )
   timer.unref()
+  // same wake as regtest: a fresh anchor registers interest on the txid and
+  // its parents immediately — proof delivery rides the events substrate's
+  // own wakes (watch/note → poke), the floor only reconciles
+  mem.onAnchorQueued(() => void tick())
   const ops = {
     wallet: async () => {
       const balanceSats = utxoView.utxos.reduce((s, u) => s + u.satoshis, 0)

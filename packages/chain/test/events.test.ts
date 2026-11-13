@@ -199,3 +199,28 @@ test('events: maxPerTick rotates through an oversized interest set', async () =>
   await ev.tick()
   assert.equal(seen.size, 5)
 })
+
+test('events: watch() wakes the substrate — a mined observe arrives without an explicit tick', async () => {
+  const ev = new ChainEvents({ observe: async () => mined('t1') })
+  const got = new Promise<TxStatusEvent>((r) => ev.on('tx', r))
+  ev.watch('t1') // no start(), no tick() — the wake alone must deliver
+  const e = await Promise.race([got, new Promise<undefined>((r) => setTimeout(() => r(undefined), 500))])
+  assert.equal(e?.status, 'mined')
+  ev.stop()
+})
+
+test('events: note() verify-on-hint — a pushed mined hint is verified and promoted to tx, not an interval later', async () => {
+  let proven = false
+  const ev = new ChainEvents({ observe: async () => (proven ? mined('t1') : undefined) })
+  const got: TxStatusEvent[] = []
+  ev.on('tx', (e) => got.push(e))
+  ev.watch('t1')
+  ev.note(mined('t1')) // hint — no 'tx' emit on its own
+  assert.equal(got.length, 0)
+  proven = true // the proof is now servable — the wake's observe must deliver it
+  const e = await Promise.race([new Promise<TxStatusEvent>((r) => ev.on('tx', r)), new Promise<undefined>((r) => setTimeout(() => r(undefined), 500))])
+  assert.equal(e?.status, 'mined')
+  assert.equal(got.length, 1)
+  assert.equal(ev.watching('t1'), false) // verified observe ended interest
+  ev.stop()
+})

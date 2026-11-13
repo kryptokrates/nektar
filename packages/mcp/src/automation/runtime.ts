@@ -682,6 +682,8 @@ export async function openAutomation(mem: NektarMemory, cfg: AutomationConfig): 
                 const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
                 if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0)
               }
+              const n = tx.outputs.length - 1
+              if (n >= 1 && (tx.outputs[n].satoshis ?? 0) > 0) mem.addOwnedOut(tx, n)
             }
           })
           if (r.changed) log(`automation: finger seq ${r.seq} ${r.tokenTxid ?? ''}`)

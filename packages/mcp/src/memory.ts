@@ -72,6 +72,7 @@ import { IdentityOps } from './identityops.js'
 import { KeyOps } from './keyops.js'
 import { CryptoOps } from './cryptoops.js'
 import { CatalogOps } from './catalogops.js'
+import { PackOps } from './packops.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -519,6 +520,14 @@ export class NektarMemory {
       store: this.store,
       recordText: (r) => this.recordText(r)
     })
+    this.packOps = new PackOps({
+      opts: this.opts,
+      packStores: this.packStores,
+      savedPacksStore: () => this.savedPacksStore,
+      shardId: (s) => this.shardId(s),
+      persistState: () => this.persistState(),
+      metricsInc: (n) => this.metrics.inc(n)
+    })
     this.identityOps = new IdentityOps({
       challenges: this.challenges,
       zkSeen: this.zkSeen,
@@ -586,6 +595,7 @@ export class NektarMemory {
   private keyOps!: KeyOps
   private cryptoOps!: CryptoOps
   private catalogOps!: CatalogOps
+  private packOps!: PackOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     return await this.txOps.fetchTx(txid)
@@ -1942,57 +1952,13 @@ export class NektarMemory {
    *  Best-effort: a store failure never fails the caller. Returns the
    *  (possibly pre-existing) ref. */
   async storePack(shard: string, pack: ShardPack, network?: string): Promise<import('@nektar/store').ObjectRef | undefined> {
-    const st = this.opts.objectStore
-    if (st === undefined) return undefined
-    const bytes = utf8(JSON.stringify(pack))
-    const sha = toHex(sha256(bytes))
-    const existing = this.packStores.get(shard)
-    if (existing?.sha256 === sha) return existing
-    try {
-      const ref = await st.put(
-        `packs/${network ?? nektarEnv('NEKTAR_NETWORK') ?? 'regtest'}/${await this.shardId(shard)}/${sha}.json`,
-        bytes,
-        'application/json'
-      )
-      // the same bytes land content-addressed: chirp://<root> resolves the
-      // whole closure from any store holding chirp/<hash> objects, so an
-      // importer is not bound to this operator's bucket layout
-      try {
-        ref.chirp = await storeChirp(st, bytes)
-        ref.endpoint = st.endpoint
-      } catch {
-        // chirp publish is best-effort — the keyed ref alone still resolves
-      }
-      this.packStores.set(shard, ref)
-      this.persistState()
-      try {
-        await this.opts.packsStore?.add({
-          shard,
-          shardId: await this.shardId(shard),
-          network: network ?? 'regtest',
-          sha256: sha,
-          size: bytes.length,
-          ...(ref.chirp !== undefined ? { chirp: ref.chirp } : {}),
-          ...(ref.endpoint !== undefined ? { endpoint: ref.endpoint } : {}),
-          ...(ref.bucket !== undefined ? { bucket: ref.bucket } : {}),
-          ...(ref.key !== undefined ? { key: ref.key } : {})
-        })
-      } catch {
-        this.metrics.inc('nektar_pack_store_errors_total')
-      }
-      return ref
-    } catch {
-      this.metrics.inc('nektar_pack_store_errors_total')
-      return existing
-    }
+    return await this.packOps.storePack(shard, pack, network)
   }
   /** attach the bfinger packs store post-construction (the automation
    *  runtime builds it once lanes exist); restores members persisted by a
    *  previous run and binds state persistence. */
   attachPacksStore(store: import('@nektar/store').PacksStore): void {
-    this.opts.packsStore = store
-    store.bindPersist(() => this.persistState())
-    store.restore(this.savedPacksStore)
+    this.packOps.attachPacksStore(store)
   }
   /** the configured bstore/S3 object store (undefined = feature off) */
   get objectStore(): import('@nektar/store').S3ObjectStore | undefined {
@@ -2004,7 +1970,7 @@ export class NektarMemory {
   /** pack-store refs this instance PUT to bstore — the `.well-known` doc
    *  names them so importers can fetch through the store instead of HTTP. */
   packStoreRef(shard: string): import('@nektar/store').ObjectRef | undefined {
-    return this.packStores.get(shard)
+    return this.packOps.packStoreRef(shard)
   }
   /** fetch + verify a pack through the object store — every byte checks
    *  against the ref's digest or the CHIRP closure before importShardPack's
@@ -2013,8 +1979,7 @@ export class NektarMemory {
    *  (no credentials needed on a public-read gateway); the keyed object is
    *  the compatibility fallback, signed then unsigned. */
   async fetchStoredPack(ref: { bucket?: string; key?: string; sha256?: string; size?: number; chirp?: string; endpoint?: string }): Promise<ShardPack> {
-    const bytes = await fetchObjectByRef(this.opts.objectStore, ref, () => this.metrics.inc('nektar_pack_fetch_chirp_fallback_total'))
-    return JSON.parse(new TextDecoder().decode(bytes)) as ShardPack
+    return await this.packOps.fetchStoredPack(ref)
   }
   /** the committed hash + anchor of a fragment — for redacted (private) cites
    *  that carry the proof value without naming the shard. */

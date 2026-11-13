@@ -318,7 +318,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   let memRef: NektarMemory | undefined
   const { txStore, open: openTxStore } = persistedTxStore()
   const valueOf = (txid: string, vout: number): number | undefined =>
-    reserve.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
+    utxoView.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
     txStore.get(txid)?.outputs[vout]?.satoshis ??
     memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
   // D2 hard daily cap: default 10_000 sats/day of fees on regtest too —
@@ -392,15 +392,6 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     if (!s && reserve.utxos.length === 0) throw new Error('regtest: could not fund the reserve (no unspent treasury or early coinbase for the fund key)')
     if (s) await mineOne()
   }
-  const funder = {
-    keyPair: fundKey,
-    get utxos() {
-      return reserve.utxos
-    },
-    markSpent: (t: string, v: number) => reserve.markSpent(t, v),
-    addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v),
-    takeReserve: async (_sc?: unknown, minSats?: number) => await reserve.takeReserve(async (t, v) => (await utxoStatus(rc, t, v)) === 'spent', minSats)
-  }
   const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker)
   const chain = {
     broadcast: async (tx: Transaction) => {
@@ -445,12 +436,36 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   reserve.leased = leasePredicate(ledger)
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   chain.broadcast = txLogBroadcast(chain.broadcast)
-  // NEKTAR_WALLET=toolbox: the BRC-100 wallet owns the signing surface;
-  // its WalletServices view of this same Teranode node keeps it honest.
+  // NEKTAR_WALLET=toolbox: the BRC-100 wallet owns the signing surface AND
+  // the funding-UTXO lifecycle — reserve.json only seeds it once at boot,
+  // then the wallet's own storage is the custody view (selection, spent
+  // marks, internalized change). Legacy mode keeps the file-backed reserve.
   let toolboxWallet: import('@nektar/automation').ToolboxHandle | undefined
+  let tf: import('@nektar/automation').ToolboxReserveFunder | undefined
   if (process.env.NEKTAR_WALLET === 'toolbox') {
     const tb = await import('@nektar/automation')
-    toolboxWallet = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: 'regtest', services: new tb.RegtestWalletServices(rc, tracker) })
+    const services = new tb.RegtestWalletServices(rc, tracker)
+    toolboxWallet = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: 'regtest', services })
+    tf = new tb.ToolboxReserveFunder(toolboxWallet.wallet, services, (s) => process.stderr.write(`nektar regtest: ${s}\n`))
+    tf.leased = leasePredicate(ledger)
+    await tf.refresh()
+    for (const u of reserve.utxos) if (!(await tf.has(u.tx.id('hex'), u.vout))) await tf.addOwned(u.tx, u.vout)
+    process.stderr.write(`nektar regtest: wallet backend toolbox (wallet.sqlite) — ${tf.utxos.length} funding utxo(s)\n`)
+  }
+  // one custody view: consumers read utxoView regardless of backend — the
+  // same shape ReserveFunder always had, so nothing downstream changes
+  const utxoView = tf ?? reserve
+  const funder = {
+    keyPair: fundKey,
+    get utxos() {
+      return utxoView.utxos
+    },
+    markSpent: (t: string, v: number) => utxoView.markSpent(t, v),
+    addOwned: (tx: Transaction, v: number) => {
+      void utxoView.addOwned(tx, v)
+    },
+    takeReserve: async (_sc?: unknown, minSats?: number) =>
+      await utxoView.takeReserve(tf === undefined ? async (t, v) => (await utxoStatus(rc, t, v)) === 'spent' : undefined, minSats)
   }
   const mem = new NektarMemory(
     chain,

@@ -544,7 +544,7 @@ export class ToolboxReserveFunder {
   private cache: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
   constructor(
     private wallet: Wallet,
-    private services?: LiveWalletServices,
+    private services?: Pick<sdk.WalletServices, 'getRawTx' | 'getMerklePath'>,
     private log: (s: string) => void = () => {}
   ) {}
 

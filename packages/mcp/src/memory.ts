@@ -68,6 +68,7 @@ import { RevocationOps } from './revocations.js'
 import { CustodyOps, type CustodyOpsDeps } from './custody.js'
 import { TxOps, type TxOpsDeps } from './txops.js'
 import { AnchorOps } from './anchorops.js'
+import { IdentityOps } from './identityops.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -506,6 +507,13 @@ export class NektarMemory {
       shards: () => this.shards(),
       persistState: () => this.persistState()
     })
+    this.identityOps = new IdentityOps({
+      challenges: this.challenges,
+      zkSeen: this.zkSeen,
+      clearanceAuthorities: () => this.opts.clearanceAuthorities,
+      policy: () => this.opts.policy,
+      persistSecurityState: () => this.persistSecurityState()
+    })
     this.txOps = new TxOps({
       txs: () => this.txs,
       anchorTxs: this.anchorTxs,
@@ -562,6 +570,7 @@ export class NektarMemory {
   proofLookup?: (txid: string) => Promise<import('@bsv/sdk').MerklePath | undefined>
   private txOps!: TxOps
   private anchorOps!: AnchorOps
+  private identityOps!: IdentityOps
 
   async fetchTx(txid: string): Promise<import('@bsv/sdk').Transaction | undefined> {
     return await this.txOps.fetchTx(txid)
@@ -2178,42 +2187,22 @@ export class NektarMemory {
   /** The VERIFIER issues the challenge nonce; only nonces issued by this
    *  instance and still fresh (default 5 min) authenticate a caller. */
   issueChallenge(ttlMs = 300_000): string {
-    const n = idbind.issueChallenge()
-    this.challenges.set(n, Date.now() + ttlMs)
-    this.persistSecurityState()
-    return n
+    return this.identityOps.issueChallenge(ttlMs)
   }
   /** caller identity from VERIFIED inputs only: the binding is for this
    *  pubkey, the nonce was issued here and is fresh, the answer is signed.
    *  id = hash160(pubkey). Anything else → null (no principal → DENY). */
   verifiedCaller(identity?: CallerIdentity): { pubkey: string; id: string } | null {
-    if (!identity || identity.binding.pubkey !== identity.pubkey) return null
-    const exp = this.challenges.get(identity.challengeNonce)
-    if (exp === undefined || exp < Date.now()) return null
-    if (!idbind.verifyBinding(identity.binding) || !idbind.verifyChallenge(identity.pubkey, identity.challengeNonce, identity.challengeSig)) return null
-    return { pubkey: identity.pubkey, id: toHex(hash160(fromHex(identity.pubkey))) }
+    return this.identityOps.verifiedCaller(identity)
   }
   /** ZK clearance gate: issuer ∈ instance-trusted authorities, credential
    *  bound to the verified caller, transcript scoped to THIS read and unused. */
   verifyClearance(caller: { pubkey: string } | null, zk: ZkClearance | undefined, scope: string): { ok: boolean; reason?: string } {
-    if (!zk) return { ok: false, reason: 'no clearance proof' }
-    if (!caller) return { ok: false, reason: 'clearance needs a verified caller identity' }
-    const trusted = this.opts.clearanceAuthorities
-    if (!trusted?.length) return { ok: false, reason: 'no trusted clearance authority configured' }
-    if (!trusted.includes(zk.commitment.pub)) return { ok: false, reason: 'clearance issued by an untrusted authority' }
-    if (zk.commitment.holder !== caller.pubkey) return { ok: false, reason: 'clearance holder is not the verified caller' }
-    if (zk.transcript.fragmentId !== scope) return { ok: false, reason: `transcript scope ${zk.transcript.fragmentId} != ${scope}` }
-    const seen = `${zk.transcript.queryId}|${toHex(zk.transcript.nonce)}`
-    if (this.zkSeen.has(seen)) return { ok: false, reason: 'clearance transcript replayed' }
-    if (!idbind.verifyAccess(zk.commitment, zk.requiredLevel, zk.proof, zk.transcript, { trustedAuthorities: trusted, holder: caller.pubkey }))
-      return { ok: false, reason: 'clearance proof invalid' }
-    this.zkSeen.add(seen)
-    this.persistSecurityState()
-    return { ok: true }
+    return this.identityOps.verifyClearance(caller, zk, scope)
   }
   /** Cedar principal: verified id; level = the ZK-PROVEN bound, else 0. */
   private cedarPrincipal(caller: { id: string } | null, zkOk: boolean, requiredLevel?: bigint): { type: 'Agent' | 'User'; id: string; level: number } | null {
-    return caller ? { type: 'Agent', id: caller.id, level: zkOk ? Number(requiredLevel ?? 0n) : 0 } : null
+    return this.identityOps.cedarPrincipal(caller, zkOk, requiredLevel)
   }
 
   /** authorize an action for the MCP `authorize` tool with the same verified
@@ -2222,26 +2211,7 @@ export class NektarMemory {
     action: import('@nektar/policy').CedarAction,
     args: { identity?: CallerIdentity; zk?: ZkClearance; resource?: { id?: string; attrs?: { level?: number; shard?: string; class?: string } } }
   ) {
-    const pol = this.opts.policy
-    if (!pol) return { policySetHash: null, decision: 'not-required' as const, action }
-    const { authorize, canonicalizePolicySet } = await import('@nektar/policy')
-    const hash = canonicalizePolicySet('instance', pol.policyText).hash
-    if (hash !== pol.anchoredPolicySetHash) return { policySetHash: hash, decision: 'deny' as const, reason: 'policy hash mismatch' }
-    const caller = this.verifiedCaller(args.identity)
-    if (!caller) return { policySetHash: hash, decision: 'deny' as const, reason: 'unverified identity' }
-    const rid = args.resource?.id ?? 'frag'
-    const zk = args.zk ? this.verifyClearance(caller, args.zk, rid) : { ok: false }
-    const resource = {
-      type: 'Fragment' as const,
-      id: rid,
-      attrs: { level: args.resource?.attrs?.level ?? 0, shard: args.resource?.attrs?.shard ?? 'default', class: args.resource?.attrs?.class ?? 'fragment' }
-    }
-    const d = authorize(pol.policyText, this.cedarPrincipal(caller, zk.ok, args.zk?.requiredLevel)!, action, resource)
-    return {
-      policySetHash: hash,
-      decision: d.allow ? ('allow' as const) : ('deny' as const),
-      zkaccess: args.zk ? (zk.ok ? 'verified' : 'rejected') : 'not-required'
-    }
+    return await this.identityOps.authorizeAction(action, args)
   }
 
   /** broadcaster-callback path: a MINED push names only the txid — resolve the

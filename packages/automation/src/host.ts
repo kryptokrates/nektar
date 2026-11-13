@@ -24,6 +24,9 @@ export interface AutomationHost extends MarketMemory {
   readTxWire(hex: string): Promise<Ingested>
   onTxProof(cb: (txid: string, mp: MerklePath) => void): void
   onTxRejected(cb: (txid: string) => void): void
+  /** the chain observer's abandon horizon fired for a txid — the terminal
+   *  verdict for a mint that was resubmitted but never mined */
+  onTxAbandoned(cb: (txid: string) => void): void
   txState(txid: string): Promise<'mined' | 'seen' | 'rejected' | 'unknown'>
   broadcastTx(tx: Transaction): Promise<BroadcastResult>
   operatorKey(): PrivateKey

@@ -5,6 +5,7 @@ import type { SignedWant, SignedOffer } from '@nektar/bstack'
 import type { AutomationHost } from './host.js'
 import { AutomationStore } from './store.js'
 import { MarketEngine, type MarketMessage, type MarketTransport, type MarketOptions } from './market.js'
+import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
 import { runPreflight, WATCHDOG_CHECKS, type PreflightReport } from './preflight.js'
@@ -605,6 +606,50 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     await deals()
     if (!stopped) await upkeep()
   }
+  // dead-mint cleanup — nothing a reaped mint produced exists on-chain, so
+  // its ghost change output AND its inputs leave the spendable view: the
+  // change out would otherwise be re-selected into the next mint (cascade)
+  const ghostMint = (tree: import('@bsv/sdk').Transaction): void => {
+    const tid = tree.id('hex')
+    tree.outputs.forEach((_o, vout) => mem.markSpentOut(tid, vout))
+    for (const inp of tree.inputs) {
+      const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+      if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0)
+    }
+  }
+  // stuck-mint healing — a mint the chain observer can't see ('unknown') gets
+  // one resubmit per age window; only a definitive refusal counts toward the
+  // drop verdict — a dead endpoint must never reap a healthy mint.
+  // txStatus is throttled: ChainEvents polls these txids on its own watch
+  // floor and delivers rejections/proofs itself — this second read is only
+  // the mint-gate's heal/reap input, so a short cache loses no signal
+  const statusCache = new Map<string, { at: number; st: string }>()
+  const txStatus = async (txid: string): Promise<string> => {
+    const c = statusCache.get(txid)
+    if (c !== undefined && Date.now() - c.at < 15_000) return c.st
+    if (statusCache.size > 4096) statusCache.clear()
+    const st = await mem.txState(txid)
+    statusCache.set(txid, { at: Date.now(), st })
+    return st
+  }
+  const stuckMints = new Map<string, { first: number; tries: number }>()
+  const stuckMint = async (tree: import('@bsv/sdk').Transaction): Promise<'keep' | 'drop'> => {
+    const tid = tree.id('hex')
+    const now = Date.now()
+    if (stuckMints.size > 4096) stuckMints.clear()
+    const s = stuckMints.get(tid) ?? { first: now, tries: 0 }
+    stuckMints.set(tid, s)
+    if (now - s.first < 10 * 60_000) return 'keep'
+    const r = await mem.broadcastTx(tree).catch((e: unknown) => ({ status: 'error' as const, description: e instanceof Error ? e.message : String(e) }))
+    s.first = now // one heal attempt per window
+    if (r.status === 'success') {
+      s.tries = 0
+      return 'keep'
+    }
+    if (!BROADCAST_DEFINITIVE.test(r.description ?? '')) return 'keep'
+    s.tries++
+    return s.tries >= 2 ? 'drop' : 'keep'
+  }
   const runUpkeep = async (): Promise<void> => {
     try {
       if (lanes !== undefined) {
@@ -615,7 +660,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               wallet,
               ledger: lanes.ledger,
               kind,
-              lowWater: kind === 'finger' ? 1 : cfg.treeLowWater,
+              // non-market lanes can't serve zero-conf (vendored TMs demand
+              // the tree's own path) — keep a full tree's worth of proven
+              // stock ahead so a slot never waits on a block
+              lowWater: kind === 'finger' ? 2 : kind === 'market' ? cfg.treeLowWater : (cfg.treeLowWater ?? cfg.treeSize ?? 64),
               size: kind === 'finger' ? 4 : cfg.treeSize,
               satsPerOutput: kind === 'log' || kind === 'finger' ? 100 : undefined,
               lock:
@@ -629,18 +677,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0],
               broadcast: (tx) => mem.broadcastTx(tx),
               fetchTx: (txid) => mem.fetchTx(txid),
-              txStatus: (txid) => mem.txState(txid),
-              onReject: (tree) => {
-                // dead mint: nothing it produced exists on-chain — kill the
-                // ghost change output AND its inputs so fundingOuts can't
-                // re-select them into the next mint (cascade prevention)
-                const tid = tree.id('hex')
-                tree.outputs.forEach((_o, vout) => mem.markSpentOut(tid, vout))
-                for (const inp of tree.inputs) {
-                  const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-                  if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0)
-                }
-              },
+              txStatus,
+              onReject: (tree) => ghostMint(tree),
+              onStuck: (tree) => stuckMint(tree),
               onSpent: (tree) => {
                 for (const inp of tree.inputs) {
                   const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
@@ -660,6 +699,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               const tx = await mem.fetchTx(txid)
               if (tx !== undefined && logStream !== undefined)
                 await lanes.mod.publishMinedLog({ journal: lanes.journal, hosts: marketHosts, stream: logStream, tx })
+              // carriers minted on this tree while it was unproven carry a
+              // host-side eviction deadline that never clears on its own —
+              // re-announce them with the parent's BUMP attached (same txid)
+              if (kind === 'market' && tx?.merklePath !== undefined)
+                await lanes.mod
+                  .republishProved({ journal: lanes.journal, hosts: marketHosts, treeTxid: txid, merklePath: tx.merklePath })
+                  .catch(() => undefined)
             }
           }
         } catch (e) {
@@ -1051,6 +1097,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // slot-starved outbox item forward instead of letting it sit
             // out the retry backoff (measured: a want stalled ~15s on this)
             await store.unblockOutbox('funding slot')
+            // carriers minted on this tree while it was unproven carry a
+            // 10-minute host eviction deadline that never clears on its own —
+            // re-announce them with the parent's BUMP attached (same txid)
+            const rp = await lanes.mod.republishProved({ journal: lanes.journal, hosts: marketHosts, treeTxid: txid, merklePath: mp }).catch(() => undefined)
+            if (rp !== undefined && rp.republished > 0) log(`automation: republished ${rp.republished} carrier(s) anchored by ${txid.slice(0, 12)}`)
           } else if (await lanes.ledger.attachParentPath(txid, mp)) {
             // the proof was for a funding parent — stored tree beefs now
             // carry anchored ancestry, so their slots serve immediately
@@ -1075,6 +1126,30 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     const work = (async () => {
       engine.hint(txid)
       if (!stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
+    })()
+    inflight.add(work)
+    void work.finally(() => {
+      inflight.delete(work)
+    })
+  })
+  // the substrate's abandon horizon is the terminal verdict for a mint that
+  // resubmitted but never mined — drop the row so the kind's mint gate
+  // re-opens (same reap as a chain rejection, driven by the event)
+  mem.onTxAbandoned((txid: string) => {
+    if (stopped || lanes === undefined) return
+    const work = (async () => {
+      try {
+        const unproven = await lanes.ledger.unproven()
+        if (!unproven.some((u) => u.txid === txid)) return
+        const tx = await mem.fetchTx(txid)
+        await lanes.ledger.drop(txid)
+        if (tx !== undefined) ghostMint(tx)
+        log(`automation: dropped abandoned funding mint ${txid}`)
+        await store.unblockOutbox('funding slot')
+        if (!stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
+      } catch (e) {
+        log(`automation: txAbandoned: ${(e as Error).message}`)
+      }
     })()
     inflight.add(work)
     void work.finally(() => {

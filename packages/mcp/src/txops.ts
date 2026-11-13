@@ -159,8 +159,22 @@ export class TxOps {
       this.txRejected.add(txid)
       return 'rejected'
     }
-    if (status === 'MINED' || status === 'IMMUTABLE') return 'mined'
-    if (['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING'].includes(status)) return 'seen'
+    // a MINED/IMMUTABLE verdict is a strong hint but carries no proof
+    // object — 'mined' is reserved for "merkle path in hand" (the local
+    // branch above), so the strongest a status string earns is 'seen'
+    if (
+      [
+        'MINED',
+        'IMMUTABLE',
+        'RECEIVED',
+        'SENT_TO_NETWORK',
+        'ACCEPTED_BY_NETWORK',
+        'SEEN_ON_NETWORK',
+        'SEEN_MULTIPLE_NODES',
+        'STUMP_PROCESSING'
+      ].includes(status)
+    )
+      return 'seen'
     return 'unknown'
   }
 

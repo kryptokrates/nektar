@@ -31,14 +31,22 @@ const chain = {
 const fundKey = PrivateKey.fromWif(WIF)
 const reserve = new ReserveFunder(fundKey, join(dataDir, 'reserve.json'))
 const mem = new NektarMemory(chain, reserve, fundKey, {
-  network: 'testnet', modelId: 'm', feeRateSatPerKb: 1,
+  network: 'testnet',
+  modelId: 'm',
+  feeRateSatPerKb: 1,
   txStatus: (txid) => fetchTxStatus(mc, txid, { wocFallback: true }),
   batchPolicy: { maxLeaves: 1 }
 })
 const rt = await openAutomation(mem, {
-  network: 'testnet', localHosts: true, dataDir, marketHosts: ['http://127.0.0.1:18291', 'http://127.0.0.1:18292'],
-  intervalMs: 0, call: (t, a) => callTool(mem, t, a),
-  log: (l) => console.log('LOG', l), ai: new ScriptedExecutor(), publishFinger: true,
+  network: 'testnet',
+  localHosts: true,
+  dataDir,
+  marketHosts: ['http://127.0.0.1:18291', 'http://127.0.0.1:18292'],
+  intervalMs: 0,
+  call: (t, a) => callTool(mem, t, a),
+  log: (l) => console.log('LOG', l),
+  ai: new ScriptedExecutor(),
+  publishFinger: true,
   opts: { offerTtlBlocks: 48, refundBlocks: 1 }
 })
 mem.automation = rt
@@ -49,7 +57,11 @@ const kx = knex({ client: 'better-sqlite3', connection: { filename: join(dataDir
 const tables = await kx.raw("select name from sqlite_master where type='table'")
 console.log('tables:', tables.map((t) => t.name).join(', '))
 for (const t of tables.map((t) => t.name)) {
-  try { console.log(t, JSON.stringify(await kx(t).select('*').limit(8), null, 0).slice(0, 2000)) } catch (e) { console.log(t, 'ERR', e.message) }
+  try {
+    console.log(t, JSON.stringify(await kx(t).select('*').limit(8), null, 0).slice(0, 2000))
+  } catch (e) {
+    console.log(t, 'ERR', e.message)
+  }
 }
 await kx.destroy()
 await rt.stop()

@@ -31,30 +31,58 @@ const mk = async (wif, name, dir) => {
   const fundKey = PrivateKey.fromWif(WIFS[wif])
   const reserve = new ReserveFunder(fundKey, join(dataDir, 'reserve.json'))
   const mem = new NektarMemory(chain, reserve, fundKey, {
-    network: 'testnet', modelId: 'm', feeRateSatPerKb: 1,
+    network: 'testnet',
+    modelId: 'm',
+    feeRateSatPerKb: 1,
     txStatus: (txid) => fetchTxStatus(mc, txid, { wocFallback: true }),
     batchPolicy: { maxLeaves: 1 }
   })
   const logs = []
   const rt = await openAutomation(mem, {
-    network: 'testnet', localHosts: true, dataDir, marketHosts: HOSTS, intervalMs: 0,
+    network: 'testnet',
+    localHosts: true,
+    dataDir,
+    marketHosts: HOSTS,
+    intervalMs: 0,
     call: (t, a) => callTool(mem, t, a),
-    log: (l) => { logs.push(`${name}:${l}`); console.log(`LOG ${name}: ${l}`) },
-    ai: new ScriptedExecutor(), publishFinger: true,
+    log: (l) => {
+      logs.push(`${name}:${l}`)
+      console.log(`LOG ${name}: ${l}`)
+    },
+    ai: new ScriptedExecutor(),
+    publishFinger: true,
     opts: { offerTtlBlocks: 48, refundBlocks: 1 }
   })
   mem.automation = rt
   const pub = mem.operatorKey().toPublicKey().toString()
-  const policyHash = await rt.store.approvePolicy({
-    v: 1, policyId: 'probe', network: 'testnet', agentPub: pub,
-    roles: ['buyer', 'seller'], notBefore: 0, notAfter: 4_000_000_000_000, domains: ['libfoo'],
-    limits: { perPurchaseSats: 500, dailyPurchaseSats: 50_000, perTxFeeSats: 600, dailyFeeSats: 50_000, runTotalSats: 500_000, maxLockedSats: 5000, maxUnconfirmedSats: 5000, maxUnconfirmedCount: 16 },
-    scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 8_000 },
-    seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 50, sellableShards: ['guide'] },
-    disclosure: { allowPublic: false },
-    ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
-    sandbox: { mode: 'sandbox-only' }
-  }, 'test:operator')
+  const policyHash = await rt.store.approvePolicy(
+    {
+      v: 1,
+      policyId: 'probe',
+      network: 'testnet',
+      agentPub: pub,
+      roles: ['buyer', 'seller'],
+      notBefore: 0,
+      notAfter: 4_000_000_000_000,
+      domains: ['libfoo'],
+      limits: {
+        perPurchaseSats: 500,
+        dailyPurchaseSats: 50_000,
+        perTxFeeSats: 600,
+        dailyFeeSats: 50_000,
+        runTotalSats: 500_000,
+        maxLockedSats: 5000,
+        maxUnconfirmedSats: 5000,
+        maxUnconfirmedCount: 16
+      },
+      scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 8_000 },
+      seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 50, sellableShards: ['guide'] },
+      disclosure: { allowPublic: false },
+      ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
+      sandbox: { mode: 'sandbox-only' }
+    },
+    'test:operator'
+  )
   return { mem, rt, pub, policyHash, logs, name }
 }
 
@@ -82,14 +110,19 @@ for (let i = 0; i < 20; i++) {
   if (i % 5 === 4) {
     const ops = await b.rt.store.operations({ role: 'buyer' })
     const sops = await s.rt.store.operations({ role: 'seller' })
-    console.log(`i=${i} buyerOps=${ops.map((o) => `${o.kind}:${o.state}`).join(',') || 'none'} sellerOps=${sops.map((o) => `${o.kind}:${o.state}`).join(',') || 'none'}`)
+    console.log(
+      `i=${i} buyerOps=${ops.map((o) => `${o.kind}:${o.state}`).join(',') || 'none'} sellerOps=${sops.map((o) => `${o.kind}:${o.state}`).join(',') || 'none'}`
+    )
     // lane trees?
     try {
       const out = execSync(`sqlite3 "${join(dir, 'alice-b', 'lanes.sqlite')}" "select kind, count(*) from trees group by kind"`, { stdio: 'pipe' }).toString()
       console.log('  alice trees:', out.trim() || 'none')
-    } catch { console.log('  (no sqlite3 cli)') }
+    } catch {
+      console.log('  (no sqlite3 cli)')
+    }
   }
 }
 console.log('--- tail logs ---')
 for (const l of [...b.logs, ...s.logs].slice(-25)) console.log(' ', l)
-await b.rt.stop(); await s.rt.stop()
+await b.rt.stop()
+await s.rt.stop()

@@ -93,9 +93,12 @@ export class ChainEvents extends EventEmitter {
   }
 
   /** last status this instance delivered or was handed — for consumers
-   *  catching up without a fresh chain read. */
-  statusOf(txid: string): TxStatusEvent | undefined {
-    return this.lastStatus.get(txid)?.ev
+   *  catching up without a fresh chain read. `verified` splits observed
+   *  truth from pushed hints: a consumer that flips durable state must
+   *  gate terminal claims on it — a hinted 'mined' is a wake, never proof. */
+  statusOf(txid: string): { ev: TxStatusEvent; verified: boolean } | undefined {
+    const r = this.lastStatus.get(txid)
+    return r === undefined ? undefined : { ev: r.ev, verified: r.verified }
   }
 
   /** an externally pushed status (SSE, webhook, broadcast response): records

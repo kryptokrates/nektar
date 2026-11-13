@@ -27,6 +27,12 @@ export async function ensureTrees(p: {
    *  caller mark its ghost inputs/outputs spent so funding never re-selects
    *  them (the change output would otherwise cascade parent-rejected mints) */
   onReject?: (tx: Transaction) => void | Promise<void>
+  /** fired for an unproven mint the chain observer cannot see ('unknown' /
+   *  undecidable status — the silent-eviction case a rejection verdict never
+   *  covers): 'keep' leaves the row, 'drop' reaps it like a rejection. The
+   *  caller heals inside (resubmit) and answers 'drop' only on a definitive
+   *  failure — a row left here gates every later mint of its kind. */
+  onStuck?: (tx: Transaction) => Promise<'keep' | 'drop'>
   onSpent?: (tx: Transaction) => void | Promise<void>
 }): Promise<{ minted?: string; proven: string[]; remaining: number }> {
   // Hosts admit a carrier only from a funding tree that is proven in a block,
@@ -51,6 +57,13 @@ export async function ensureTrees(p: {
         // would gate out every later mint of this kind forever
         await p.ledger.drop(u.txid)
         if (p.onReject !== undefined && tx !== undefined) await p.onReject(tx)
+      } else if ((st === '' || st === 'UNKNOWN') && p.onStuck !== undefined && tx !== undefined) {
+        // silently vanished (never propagated, evicted) — resubmit or reap;
+        // without this the mint gate stays shut past any restart
+        if ((await p.onStuck(tx)) === 'drop') {
+          await p.ledger.drop(u.txid)
+          if (p.onReject !== undefined) await p.onReject(tx)
+        }
       }
     }
   }

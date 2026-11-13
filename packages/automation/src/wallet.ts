@@ -14,7 +14,8 @@ export type TxObservation =
   | { status: 'conflicted'; source: string; spentBy: string }
 
 const NEVER_LEFT = /SpendGuard refused/i
-const DEFINITIVE = /rejected|missing inputs|mempool-conflict|double.?spen|utxo already spent|bad-txns|non-mandatory|unlocking scripts invalid|fee too low/i
+export const DEFINITIVE =
+  /rejected|missing inputs|mempool-conflict|double.?spen|utxo already spent|bad-txns|non-mandatory|unlocking scripts invalid|fee too low/i
 const ALREADY = /already (known|in|mined|exists)|txn-already/i
 
 export class WalletCoordinator {

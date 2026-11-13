@@ -41,6 +41,11 @@ import type { AutomationPolicy } from '@nektar/automation'
 
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
 const NET = 'testnet'
+const RUN = Date.now().toString(36)
+let dseq = 0
+// fresh domain per sub-run: stale ls_nektar records on shared testnet hosts
+// must never win collection over this run's live offers
+let DOMAIN = 'libfoo'
 const HOST_A = 'http://127.0.0.1:18291'
 const HOST_B = 'http://127.0.0.1:18292'
 const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
@@ -74,15 +79,30 @@ interface A {
  *  already spent must be marked before any funding call can take them. Only
  *  runs when WoC answers — a failed probe must not zero the reserve. */
 const reconcileReserve = async (fundKey: PrivateKey, reserve: ReserveFunder, mc: MainnetConfig): Promise<void> => {
-  const addr = fundKey.toAddress()
+  const addr = fundKey.toAddress([0x6f]) // testnet pubkey-hash prefix
   const live = await fetch(`${mc.wocUrl}/address/${addr}/unspent`, { signal: AbortSignal.timeout(15_000) })
     .then(async (r) => (r.ok ? ((await r.json()) as Array<{ tx_hash: string; tx_pos: number }>) : undefined))
     .catch(() => undefined)
   if (live === undefined) return
   const liveSet = new Set(live.map((u) => `${u.tx_hash}:${u.tx_pos}`))
+  const known = new Set(((reserve as unknown as { entries: Array<{ txid: string; vout: number }> }).entries ?? []).map((e) => `${e.txid}:${e.vout}`))
   for (const u of [...reserve.utxos]) {
     const txid = u.tx.id('hex')
     if (!liveSet.has(`${txid}:${u.vout}`)) reserve.markSpent(txid, u.vout)
+  }
+  // import live UTXOs the file doesn't know (minted-tree change, settlement
+  // income from earlier runs) — fetch each parent tx hex and addOwned it
+  for (const u of live) {
+    const op = `${u.tx_hash}:${u.tx_pos}`
+    if (known.has(op)) continue
+    try {
+      const r = await fetch(`${mc.wocUrl}/tx/${u.tx_hash}/hex`, { signal: AbortSignal.timeout(10_000) })
+      if (!r.ok) continue
+      reserve.addOwned(Transaction.fromHex((await r.text()).trim()), u.tx_pos)
+      await new Promise((r2) => setTimeout(r2, 350)) // WoC ~3 req/s
+    } catch {
+      /* skip unparseable */
+    }
   }
 }
 
@@ -93,10 +113,9 @@ const treesReady = async (dataDir: string): Promise<boolean> => {
   if (!existsSync(f)) return false
   const kx = knex({ client: 'sqlite3', connection: { filename: f }, useNullAsDefault: true })
   try {
-    const kinds = (await kx('bstack_trees as t')
-      .join('bstack_tree_outputs as o', 'o.txid', 't.txid')
-      .where('t.proven', 1)
-      .distinct('o.kind')) as Array<{ kind: string }>
+    const kinds = (await kx('bstack_trees as t').join('bstack_tree_outputs as o', 'o.txid', 't.txid').where('t.proven', 1).distinct('o.kind')) as Array<{
+      kind: string
+    }>
     const have = new Set(kinds.map((r) => r.kind))
     return ['market', 'bbox', 'finger'].every((k) => have.has(k))
   } catch {
@@ -220,7 +239,7 @@ const policyFor = (pub: string): AutomationPolicy => ({
   roles: ['buyer', 'seller'],
   notBefore: 0,
   notAfter: 4_000_000_000_000,
-  domains: ['libfoo'],
+  domains: [DOMAIN],
   limits: {
     perPurchaseSats: 500,
     dailyPurchaseSats: 50_000,
@@ -240,7 +259,7 @@ const policyFor = (pub: string): AutomationPolicy => ({
 
 const sellerize = async (s: A, price: number) => {
   await s.mem.remember('guide', FINDING)
-  await s.mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'record', priceSats: price }] })
+  await s.mem.describeShard('guide', { domains: [DOMAIN], offers: [{ kind: 'record', priceSats: price }] })
   for (const l of s.mem.anchorLinks('guide')) s.mem.confirmAnchor('guide', l.txid)
   await s.rt.engine.enableSeller(s.policyHash)
 }
@@ -271,7 +290,7 @@ const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
 const BUYER_DONE = new Set(['disclosure_verified', 'useful'])
 
 const deal = async (b: A, s: A, logs: string[], ms = 180_000) => {
-  const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
+  const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
   const t0 = Date.now()
   const elapsed = await until([b.rt, s.rt], ms, async () => {
     const bo = await opFor(b, w.wantId)
@@ -288,7 +307,13 @@ const respawn = async (a: A, hosts: string[], logs: string[]): Promise<A> => {
 }
 
 const STOP_ALL = async (rts: Array<Automation | undefined>) => {
-  for (const r of rts) { try { await r?.stop() } catch { /* */ } }
+  for (const r of rts) {
+    try {
+      await r?.stop()
+    } catch {
+      /* */
+    }
+  }
 }
 
 /** gate: skip the file when the live hosts or the status endpoints are down —
@@ -328,7 +353,13 @@ const stubShim = async () => {
       const v = await new Promise<object>((r) => {
         const t = setTimeout(() => r({ changed: false }), Math.min(waitMs, 10_000))
         const list = waiters.get(service) ?? []
-        waiters.set(service, [...list, (x) => { clearTimeout(t); r(x) }])
+        waiters.set(service, [
+          ...list,
+          (x) => {
+            clearTimeout(t)
+            r(x)
+          }
+        ])
       })
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify(v))
@@ -356,7 +387,8 @@ const stubShim = async () => {
 
 // ───────────────────────────── speed ─────────────────────────────
 
-test('T1: deal latency distribution — 3 sequential live deals', { timeout: 600_000 }, async (t) => {
+test('T1: deal latency distribution — 3 sequential live deals', { timeout: 1_800_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -379,11 +411,13 @@ test('T1: deal latency distribution — 3 sequential live deals', { timeout: 600
     console.log(`    latency: p50=${results[1]}ms max=${results[2]}ms`)
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })
 
-test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 600_000 }, async (t) => {
+test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_200_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -398,9 +432,7 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 600_000 
     await warmup([s, ...buyers], logs)
     await drive([s.rt, ...buyers.map((b) => b.rt)], 6)
     const t0 = Date.now()
-    const wants = await Promise.all(
-      buyers.map((b) => b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash))
-    )
+    const wants = await Promise.all(buyers.map((b) => b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)))
     const all = [s.rt, ...buyers.map((b) => b.rt)]
     const ms = await until(all, 240_000, async () => {
       for (const [i, b] of buyers.entries()) {
@@ -415,13 +447,16 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 600_000 
     console.log(`    throughput: ${wants.length} live deals in ${ms}ms wall`)
   } finally {
     await STOP_ALL([s?.rt, ...buyers.map((b) => b.rt)])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })
 
 test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { timeout: 600_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const run = async (watch: boolean) => {
+    DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
     const dir = SUITE_DIR
     const logs: string[] = []
     const f1 = await faulthost(HOST_A)
@@ -433,7 +468,7 @@ test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { time
       s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir, undefined, shim?.url)
       await sellerize(s, 200)
       await drive([b.rt, s.rt], 8)
-      const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
+      const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
       const t0 = Date.now()
       const ms = await until([b.rt, s.rt], 180_000, async () => {
         const bo = await opFor(b, w.wantId)
@@ -444,7 +479,9 @@ test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { time
       return { ms, notifies: shim?.notifies() ?? 0 }
     } finally {
       await STOP_ALL([b?.rt, s?.rt])
-      await shim?.close(); await f1.close(); await f2.close()
+      await shim?.close()
+      await f1.close()
+      await f2.close()
     }
   }
   const poll = await run(false)
@@ -454,6 +491,7 @@ test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { time
 })
 
 test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly', { timeout: 600_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   for (const kb of [1, 32]) {
     const dir = SUITE_DIR
@@ -465,12 +503,12 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
       b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
       s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
       await s.mem.remember('guide', `libfoo 3.0 ${'x'.repeat(kb * 1024)}`)
-      await s.mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'record', priceSats: 200 }] })
+      await s.mem.describeShard('guide', { domains: [DOMAIN], offers: [{ kind: 'record', priceSats: 200 }] })
       for (const l of s.mem.anchorLinks('guide')) s.mem.confirmAnchor('guide', l.txid)
       await s.rt.engine.enableSeller(s.policyHash)
       await warmup([b, s], logs)
-    await drive([b.rt, s.rt], 6)
-      const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
+      await drive([b.rt, s.rt], 6)
+      const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
       const t0 = Date.now()
       if (kb === 1) {
         const ms = await until([b.rt, s.rt], 180_000, async () => {
@@ -499,7 +537,8 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
       }
     } finally {
       await STOP_ALL([b?.rt, s?.rt])
-      await f1.close(); await f2.close()
+      await f1.close()
+      await f2.close()
     }
   }
 })
@@ -507,6 +546,7 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
 // ───────────────────────────── resilience ─────────────────────────────
 
 test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 600_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -519,9 +559,11 @@ test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 60
     await sellerize(s, 200)
     await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
-    const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
-    assert.ok((await until([b.rt, s.rt], 90_000, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
-      'no quote | ' + logs.slice(-15).join(' | '))
+    const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
+    assert.ok(
+      (await until([b.rt, s.rt], 90_000, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
+      'no quote | ' + logs.slice(-15).join(' | ')
+    )
     f1.fault.down = true // kill host A mid-deal
     const ms = await until([b.rt, s.rt], 120_000, async () => {
       const bo = await opFor(b, w.wantId)
@@ -531,11 +573,13 @@ test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 60
     assert.ok(ms > 0, 'deal starved without host A | ' + logs.slice(-20).join(' | '))
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })
 
 test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeout: 600_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -553,11 +597,13 @@ test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeou
     console.log(`    deal under 3s-delayed host: ${ms}ms`)
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })
 
 test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (live)', { timeout: 600_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -570,9 +616,11 @@ test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (
     await sellerize(s, 200)
     await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
-    const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
-    assert.ok((await until([b.rt, s.rt], 90_000, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
-      'no quote | ' + logs.slice(-15).join(' | '))
+    const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
+    assert.ok(
+      (await until([b.rt, s.rt], 90_000, async () => (await saleFor(s, w.wantId))?.state === 'quoted')) > 0,
+      'no quote | ' + logs.slice(-15).join(' | ')
+    )
     // withhold everything the seller just fanned out to host A — the host
     // stays reachable but stops serving the new carriers
     f1.fault.dropLookup = true
@@ -582,14 +630,19 @@ test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (
       return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
     })
     assert.ok(ms > 0, 'withheld offer starved the deal | ' + logs.slice(-20).join(' | '))
-    assert.ok(logs.some((l) => l.includes('withheld') || l.includes('unreachable')), 'divergence never surfaced in logs')
+    assert.ok(
+      logs.some((l) => l.includes('withheld') || l.includes('unreachable')),
+      'divergence never surfaced in logs'
+    )
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })
 
 test('R4: partition both hosts → deaf window → heal → completes, no double-broadcast (live)', { timeout: 600_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -602,15 +655,19 @@ test('R4: partition both hosts → deaf window → heal → completes, no double
     await sellerize(s, 200)
     await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
-    const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
-    assert.ok((await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
-      'never funded | ' + logs.slice(-15).join(' | '))
-    f1.fault.down = true; f2.fault.down = true
+    const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
+    assert.ok(
+      (await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
+      'never funded | ' + logs.slice(-15).join(' | ')
+    )
+    f1.fault.down = true
+    f2.fault.down = true
     await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6) // deaf window — in-flight ops persist, no new work
     const mid = await opFor(b, w.wantId)
     assert.ok(mid !== undefined && mid.state !== 'useful' && mid.state !== 'disclosure_verified', 'deal progressed while deaf — impossible')
-    f1.fault.down = false; f2.fault.down = false
+    f1.fault.down = false
+    f2.fault.down = false
     const ms = await until([b.rt, s.rt], 120_000, async () => {
       const bo = await opFor(b, w.wantId)
       const so = await saleFor(s, w.wantId)
@@ -621,11 +678,13 @@ test('R4: partition both hosts → deaf window → heal → completes, no double
     assert.equal((bo!.data as { escrowTxid?: string }).escrowTxid, (mid.data as { escrowTxid?: string }).escrowTxid, 'escrow re-broadcast after heal')
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })
 
 test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)', { timeout: 600_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -638,9 +697,11 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
     await sellerize(s, 200)
     await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
-    const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
-    assert.ok((await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
-      'never funded | ' + logs.slice(-15).join(' | '))
+    const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
+    assert.ok(
+      (await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
+      'never funded | ' + logs.slice(-15).join(' | ')
+    )
     const opId = (await opFor(b, w.wantId))!.operationId
     await b.rt.stop() // kill -9 equivalent — store persists, respawn resumes
     b2 = await respawn(b, [f1.url, f2.url], logs)
@@ -654,11 +715,13 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
     assert.ok(bo !== undefined && BUYER_DONE.has(bo.state), `op ${opId} ended ${bo?.state}`)
   } finally {
     await STOP_ALL([b?.rt, b2?.rt, s?.rt])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })
 
 test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 600_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -677,11 +740,13 @@ test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 6
     assert.equal((await buyerOps(b)).length, 1, 'duplicate outputs spawned extra ops')
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })
 
 test('R7: late escrow rejection → funding_failed via txState event (live)', { timeout: 600_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -694,28 +759,34 @@ test('R7: late escrow rejection → funding_failed via txState event (live)', { 
     await sellerize(s, 200)
     await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
-    const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash)
-    assert.ok((await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
-      'escrow never funded | ' + logs.slice(-15).join(' | '))
+    const w = await b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)
+    assert.ok(
+      (await until([b.rt, s.rt], 120_000, async () => (await opFor(b, w.wantId))?.state === 'awaiting_disclosure')) > 0,
+      'escrow never funded | ' + logs.slice(-15).join(' | ')
+    )
     const escrowTxid = (await opFor(b, w.wantId))!.data.escrowTxid as string
     const orig = b.mem.txState.bind(b.mem)
-    ;(b.mem as unknown as { txState: (txid: string) => Promise<string> }).txState =
-      async (txid: string) => (txid === escrowTxid ? 'rejected' : orig(txid))
+    ;(b.mem as unknown as { txState: (txid: string) => Promise<string> }).txState = async (txid: string) => (txid === escrowTxid ? 'rejected' : orig(txid))
     const ms = await until([b.rt], 90_000, async () => (await opFor(b, w.wantId))?.state === 'funding_failed')
     assert.ok(ms > 0, 'rejected funding did not land funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await opFor(b, w.wantId))!
     const evts = await b.rt.store.events(bo.operationId)
-    assert.ok(evts.some((e) => e.cause === 'escrow_rejected_late'), `expected escrow_rejected_late, got ${evts.map((e) => e.cause).join(',')}`)
+    assert.ok(
+      evts.some((e) => e.cause === 'escrow_rejected_late'),
+      `expected escrow_rejected_late, got ${evts.map((e) => e.cause).join(',')}`
+    )
     ;(b.mem as unknown as { txState: (txid: string) => Promise<string> }).txState = orig
     await drive([b.rt], 3)
     assert.equal((await opFor(b, w.wantId))!.state, 'funding_failed', 'rejected funding retried itself back to life')
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })
 
 test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settlements (live)', { timeout: 600_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -729,9 +800,7 @@ test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settle
     for (const [i, w] of (['alice', 'bob'] as const).entries()) buyers.push(await mkagent(`${w}-b${i}`, w, [f1.url, f2.url], logs, dir))
     await warmup([s, ...buyers], logs)
     await drive([s.rt, ...buyers.map((b) => b.rt)], 6)
-    const wants = await Promise.all(
-      buyers.map((b) => b.rt.engine.publishWant({ domains: ['libfoo'], question: 'q?', maxSats: 450 }, b.policyHash))
-    )
+    const wants = await Promise.all(buyers.map((b) => b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)))
     const all = [s.rt, ...buyers.map((b) => b.rt)]
     const terminal = new Set([...BUYER_DONE, 'denied', 'expired', 'funding_failed', 'canceled', 'refunded', 'disputed', 'not_useful'])
     const ms = await until(all, 240_000, async () => {
@@ -749,7 +818,8 @@ test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settle
     console.log(`    race: ${won}/${buyers.length} buyers completed, ${sales.length} settlements`)
   } finally {
     await STOP_ALL([s?.rt, ...buyers.map((b) => b.rt)])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })
 
@@ -758,6 +828,7 @@ test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settle
 // rails' dueHeights; both deals run concurrently so a single block covers
 // the refund (escrow) AND the dispute (direct) — ~10-20min total.
 test('R9: timeout truth — escrow refund vs direct dispute on real blocks', { timeout: 1_800_000 }, async (t) => {
+  DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
   const logs: string[] = []
@@ -771,31 +842,41 @@ test('R9: timeout truth — escrow refund vs direct dispute on real blocks', { t
     bd = await mkagent('bob-d', 'bob', [f1.url, f2.url], logs, dir, { refundBlocks: 1, directMaxSats: 500 })
     await warmup([be, bd, s], logs)
     await drive([s.rt, be.rt, bd.rt], 6)
-    const wE = await be.rt.engine.publishWant({ domains: ['libfoo'], question: 'escrow?', maxSats: 450 }, be.policyHash)
-    const wD = await bd.rt.engine.publishWant({ domains: ['libfoo'], question: 'direct?', maxSats: 450 }, bd.policyHash)
+    const wE = await be.rt.engine.publishWant({ domains: [DOMAIN], question: 'escrow?', maxSats: 450 }, be.policyHash)
+    const wD = await bd.rt.engine.publishWant({ domains: [DOMAIN], question: 'direct?', maxSats: 450 }, bd.policyHash)
     const all = [s.rt, be.rt, bd.rt]
     // wait until BOTH sale ops are quoted, then ghost the seller — accepts it
     // never reads can never be delivered
-    assert.ok((await until(all, 120_000, async () => (await saleFor(s, wE.wantId))?.state === 'quoted' && (await saleFor(s, wD.wantId))?.state === 'quoted')) > 0,
-      'not both quoted | ' + logs.slice(-15).join(' | '))
+    assert.ok(
+      (await until(all, 120_000, async () => (await saleFor(s, wE.wantId))?.state === 'quoted' && (await saleFor(s, wD.wantId))?.state === 'quoted')) > 0,
+      'not both quoted | ' + logs.slice(-15).join(' | ')
+    )
     await s.rt.stop()
-    assert.ok((await until([be.rt, bd.rt], 180_000, async () =>
-      (await opFor(be, wE.wantId))?.state === 'awaiting_disclosure' &&
-      (await opFor(bd, wD.wantId))?.state === 'awaiting_disclosure')) > 0,
-      'rails never funded | ' + logs.slice(-15).join(' | '))
+    assert.ok(
+      (await until(
+        [be.rt, bd.rt],
+        180_000,
+        async () => (await opFor(be, wE.wantId))?.state === 'awaiting_disclosure' && (await opFor(bd, wD.wantId))?.state === 'awaiting_disclosure'
+      )) > 0,
+      'rails never funded | ' + logs.slice(-15).join(' | ')
+    )
     const boD = await opFor(bd, wD.wantId)
     assert.ok((boD!.data as { direct?: boolean }).direct === true, 'bob did not take the direct rail')
     // one real testnet block lapses refundAfter=1 on both escrows/payments
     const h0 = await be.mem.chainHeight()
     console.log(`    funded at height ${h0} — waiting for one block…`)
-    const ms = await until([be.rt, bd.rt], 1_500_000, async () =>
-      (await opFor(be, wE.wantId))?.state === 'refunded' && (await opFor(bd, wD.wantId))?.state === 'disputed')
+    const ms = await until(
+      [be.rt, bd.rt],
+      1_500_000,
+      async () => (await opFor(be, wE.wantId))?.state === 'refunded' && (await opFor(bd, wD.wantId))?.state === 'disputed'
+    )
     const eEnd = await opFor(be, wE.wantId)
     const dEnd = await opFor(bd, wD.wantId)
     assert.ok(ms > 0, `timeout truth failed — escrow=${eEnd?.state} direct=${dEnd?.state} | ` + logs.slice(-15).join(' | '))
     console.log(`    R9: escrow→${eEnd!.state} direct→${dEnd!.state} in ${ms}ms`)
   } finally {
     await STOP_ALL([be?.rt, bd?.rt, s?.rt])
-    await f1.close(); await f2.close()
+    await f1.close()
+    await f2.close()
   }
 })

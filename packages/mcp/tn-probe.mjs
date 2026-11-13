@@ -47,24 +47,44 @@ const rt = await openAutomation(mem, {
   marketHosts: HOSTS,
   intervalMs: 0,
   call: (t, a) => callTool(mem, t, a),
-  log: (l) => { logs.push(l); console.log('LOG', l) },
+  log: (l) => {
+    logs.push(l)
+    console.log('LOG', l)
+  },
   ai: new ScriptedExecutor(),
   publishFinger: true,
   opts: { offerTtlBlocks: 48, refundBlocks: 1 }
 })
 mem.automation = rt
 const pub = mem.operatorKey().toPublicKey().toString()
-const policyHash = await rt.store.approvePolicy({
-  v: 1, policyId: 'probe', network: 'testnet', agentPub: pub,
-  roles: ['buyer', 'seller'], notBefore: 0, notAfter: 4_000_000_000_000,
-  domains: ['libfoo'],
-  limits: { perPurchaseSats: 500, dailyPurchaseSats: 50_000, perTxFeeSats: 600, dailyFeeSats: 50_000, runTotalSats: 500_000, maxLockedSats: 5000, maxUnconfirmedSats: 5000, maxUnconfirmedCount: 16 },
-  scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 15_000 },
-  seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 50, sellableShards: ['guide'] },
-  disclosure: { allowPublic: false },
-  ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
-  sandbox: { mode: 'sandbox-only' }
-}, 'test:operator')
+const policyHash = await rt.store.approvePolicy(
+  {
+    v: 1,
+    policyId: 'probe',
+    network: 'testnet',
+    agentPub: pub,
+    roles: ['buyer', 'seller'],
+    notBefore: 0,
+    notAfter: 4_000_000_000_000,
+    domains: ['libfoo'],
+    limits: {
+      perPurchaseSats: 500,
+      dailyPurchaseSats: 50_000,
+      perTxFeeSats: 600,
+      dailyFeeSats: 50_000,
+      runTotalSats: 500_000,
+      maxLockedSats: 5000,
+      maxUnconfirmedSats: 5000,
+      maxUnconfirmedCount: 16
+    },
+    scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 15_000 },
+    seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 50, sellableShards: ['guide'] },
+    disclosure: { allowPublic: false },
+    ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
+    sandbox: { mode: 'sandbox-only' }
+  },
+  'test:operator'
+)
 
 console.log('--- sellerize ---')
 try {
@@ -72,10 +92,16 @@ try {
   await mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'record', priceSats: 200 }] })
   for (const l of mem.anchorLinks('guide')) mem.confirmAnchor('guide', l.txid)
   await rt.engine.enableSeller(policyHash)
-} catch (e) { console.log('SELLERIZE FAIL', e) }
+} catch (e) {
+  console.log('SELLERIZE FAIL', e)
+}
 console.log('--- 8 cycles ---')
 for (let i = 0; i < 8; i++) {
-  try { await rt.cycle() } catch (e) { console.log(`CYCLE ${i} FAIL`, (e).message) }
+  try {
+    await rt.cycle()
+  } catch (e) {
+    console.log(`CYCLE ${i} FAIL`, e.message)
+  }
 }
 console.log('--- done; last logs ---')
 for (const l of logs.slice(-30)) console.log(' ', l)

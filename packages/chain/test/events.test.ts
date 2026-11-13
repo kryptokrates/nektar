@@ -85,7 +85,8 @@ test('events: note() records pushed status + resolves waitFor without emitting t
   const ev_ = await p
   assert.equal(ev_?.status, 'mined')
   assert.equal(got.length, 0) // hints never emit — verified delivery is the caller's path
-  assert.equal(ev.statusOf('t1')?.status, 'mined')
+  assert.equal(ev.statusOf('t1')?.ev.status, 'mined')
+  assert.equal(ev.statusOf('t1')?.verified, false) // a pushed status stays a hint
   // a pushed terminal status must NOT end interest: an unverifiable MINED
   // keeps the reconcile floor alive — only a verified observe drops the watch
   assert.equal(ev.watching('t1'), true)
@@ -137,7 +138,8 @@ test('events: concurrent probes of one txid share a single observe', async () =>
 test('events: retained statuses evict on the same ttl sweep as watches', async () => {
   const ev = new ChainEvents({ observe: async () => undefined, ttlMs: 1 })
   ev.report({ txid: 't1', status: 'mined' })
-  assert.equal(ev.statusOf('t1')?.status, 'mined')
+  assert.equal(ev.statusOf('t1')?.ev.status, 'mined')
+  assert.equal(ev.statusOf('t1')?.verified, true) // report() is first-party truth
   await new Promise((r) => setTimeout(r, 5))
   await ev.tick()
   assert.equal(ev.statusOf('t1'), undefined) // catch-up cache, not permanent memory

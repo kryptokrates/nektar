@@ -65,6 +65,7 @@ export class IngestError extends Error {}
 import { AnchorChain, type CheckpointBond, type BondUtxo } from '@nektar/anchor'
 import { BondOps } from './bonds.js'
 import { RevocationOps } from './revocations.js'
+import { CustodyOps, type CustodyOpsDeps } from './custody.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import {
@@ -496,6 +497,15 @@ export class NektarMemory {
       network: this.opts.network,
       persist: () => this.persistState()
     })
+    this.custodyOps = new CustodyOps({
+      funder: this.funder as CustodyOpsDeps['funder'],
+      fundSigner: () => this.fundSigner(),
+      broadcast: (tx) => this.chain.broadcast(tx),
+      txs: (tx) => this.txs.put(tx),
+      ledger: () => this.ledger,
+      network: this.opts.network,
+      feeRateSatPerKb: this.opts.feeRateSatPerKb
+    })
     this.revocationOps = new RevocationOps({
       store: this.store,
       canEncrypt: () => this.canEncrypt(),
@@ -794,6 +804,7 @@ export class NektarMemory {
     const u = await this.takeFunding(satoshis)
     return [u]
   }
+  private custodyOps!: CustodyOps
   /** §7 key-sale (GOAL-v7 V3): re-derive the fragment key for an encrypted
    *  record — the decryption capability being sold. Caller must ensure the
    *  record's level is within this instance's maxLevel. Wallet custody: the
@@ -853,11 +864,11 @@ export class NektarMemory {
   }
   /** return a tx output to the reserve as owned (change/escrow outs) */
   addOwnedOut(tx: import('@bsv/sdk').Transaction, vout: number): void {
-    ;(this.funder as any).addOwned?.(tx, vout)
+    this.custodyOps.addOwnedOut(tx, vout)
   }
   /** mark a spent input against the reserve after broadcast */
   markSpentOut(txid: string, vout: number): void {
-    ;(this.funder as any).markSpent?.(txid, vout)
+    this.custodyOps.markSpentOut(txid, vout)
   }
   /** current chain height for locktime-gated covenant calls */
   async chainHeight(): Promise<number> {
@@ -986,48 +997,7 @@ export class NektarMemory {
     lockingScriptHex: string
     opReturn: string
   }): Promise<{ payment: { invoiceId: string; transaction: string }; txid: string }> {
-    const f = await this.takeFunding(inv.amount + 600)
-    const tx = new Transaction()
-    tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.fundSigner()) })
-    tx.addOutput({ satoshis: inv.amount, lockingScript: LockingScript.fromHex(inv.lockingScriptHex) })
-    // OP_FALSE OP_RETURN + ascii tag push — settlePayment parses '006a'+utf8(tag)
-    const tagHex = Buffer.from(inv.opReturn, 'utf8').toString('hex')
-    tx.addOutput({
-      satoshis: 0,
-      lockingScript: LockingScript.fromHex(
-        `006a${tagHex.length / 2 < 0x4c ? (tagHex.length / 2).toString(16).padStart(2, '0') : '4c' + (tagHex.length / 2).toString(16).padStart(2, '0')}${tagHex}`
-      )
-    })
-    tx.addOutput({
-      lockingScript: new P2PKH().lock(await signerAddress(this.fundSigner(), (this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])),
-      change: true
-    })
-    await tx.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
-    await tx.sign()
-    // atomic BEEF — carries the funding parent so the seller's script
-    // validation and broadcaster resolve input values (settlePayment's
-    // 0101010000 branch; "BEEF preferred" per the invoice docs).
-    // Serialize BEFORE marking the reserve spent — a throw here must not
-    // drain the funding UTXO.
-    const transaction = tx.toHexAtomicBEEF()
-    if (this.ledger) {
-      const txid = tx.id('hex')
-      await this.ledger.recordBroadcast(
-        {
-          txid,
-          rawHex: tx.toHex(),
-          parents: { [f.tx.id('hex')]: f.tx.toHex() },
-          feeSats: 0,
-          outs: [{ txid: f.tx.id('hex'), vout: f.vout, satoshis: f.satoshis }]
-        },
-        `owner:${txid}`,
-        'owner',
-        'exported-payment'
-      )
-      await this.ledger.setTxState(`owner:${txid}`, 'exported', { invoiceId: inv.invoiceId })
-    }
-    ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
-    return { payment: { invoiceId: inv.invoiceId, transaction }, txid: tx.id('hex') }
+    return await this.custodyOps.payInvoice(inv)
   }
 
   /** one-call payment: build + sign + broadcast a plain spend to a payee
@@ -1044,42 +1014,7 @@ export class NektarMemory {
     opReturn?: string
     buildOnly?: boolean
   }): Promise<{ txid: string; paidSats: number; tx?: Transaction; txHex?: string; utxo?: { txid: string; vout: number; satoshis: number; script: string } }> {
-    const { P2PKH, LockingScript, Transaction, SatoshisPerKilobyte } = await import('@bsv/sdk')
-    if (!args.address && !args.scriptHex) throw new Error('sendSats: address or scriptHex required')
-    const script = args.scriptHex ? LockingScript.fromHex(args.scriptHex) : new P2PKH().lock(args.address!)
-    const f = await this.takeFunding(args.amount + 600)
-    const tx = new Transaction()
-    tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.fundSigner()) })
-    tx.addOutput({ satoshis: args.amount, lockingScript: script })
-    if (args.opReturn) {
-      const tagHex = Buffer.from(args.opReturn, 'utf8').toString('hex')
-      tx.addOutput({
-        satoshis: 0,
-        lockingScript: LockingScript.fromHex(
-          `006a${tagHex.length / 2 < 0x4c ? (tagHex.length / 2).toString(16).padStart(2, '0') : '4c' + (tagHex.length / 2).toString(16).padStart(2, '0')}${tagHex}`
-        )
-      })
-    }
-    tx.addOutput({
-      lockingScript: new P2PKH().lock(await signerAddress(this.fundSigner(), (this.opts.network ?? 'main') === 'main' ? [0x00] : [0x6f])),
-      change: true
-    })
-    await tx.fee(new SatoshisPerKilobyte(this.opts.feeRateSatPerKb ?? 1))
-    // tx.id/toHex serialize the unlocking script, so nothing can be read off
-    // the tx until templates resolve in sign()
-    await tx.sign()
-    const utxo = { txid: tx.id('hex'), vout: 0, satoshis: args.amount, script: script.toHex() }
-    if (args.buildOnly === true) {
-      // wallet coordinator path: signed but not aired — prepare serializes
-      // the tx and submit does the broadcast + ownership marks
-      return { txid: utxo.txid, paidSats: args.amount, tx, txHex: tx.toHex(), utxo }
-    }
-    const br = await this.chain.broadcast(tx)
-    if (br.status !== 'success') throw new Error(`sendSats broadcast failed: ${br.description ?? 'unknown'}`)
-    this.txs.put(tx)
-    ;(this.funder as any).markSpent?.(f.tx.id('hex'), f.vout)
-    ;(this.funder as any).addOwned?.(tx, tx.outputs.length - 1)
-    return { txid: tx.id('hex'), paidSats: args.amount, txHex: tx.toHex(), utxo }
+    return await this.custodyOps.sendSats(args)
   }
 
   /** D4 (§19 M_U): the shard's anchored rotation ledger — genesis owner pub
@@ -1226,32 +1161,17 @@ export class NektarMemory {
   // anchor: no shard state, no contract. Off-chain WASM verify stays
   // authoritative; the chain only timestamps the commitment.
   private attestationTxs = new Map<string, import('@bsv/sdk').Transaction>()
-  /** one funding outpoint from the fee reserve (StackFunder.take / ReserveFunder.takeReserve / peeked utxo) */
+  /** one funding outpoint from the fee reserve — CustodyOps probes the
+   *  three funder shapes (StackFunder.take / takeReserve / peeked utxo) */
   private async takeFunding(satoshis: number): Promise<import('@nektar/chain').FundingOut> {
-    const f = this.funder as any
-    if (typeof f.take === 'function') return await f.take(satoshis)
-    if (typeof f.takeReserve === 'function') {
-      const u = await f.takeReserve(undefined, satoshis)
-      if (u) return u
-    }
-    const u = (f.utxos ?? []).find((u: { satoshis?: number }) => (u.satoshis ?? 0) >= satoshis)
-    if (!u) throw new Error('no funding UTXO available for the attestation tx')
-    return u
+    return await this.custodyOps.takeFunding(satoshis)
   }
 
   /** fee-reserve status for the fundingStatus MCP tool — mem-side view only
    *  (address + tracked UTXOs); spend caps/runway live in ops.wallet() which
    *  the tool prefers when the runtime passes it through. */
   async fundingStatus(): Promise<{ address: string; balanceSats: number; utxos: number; funded: boolean }> {
-    const f = this.funder as any
-    const utxos: { satoshis?: number }[] = f.utxos ?? []
-    const prefix = this.opts.network && this.opts.network !== 'main' ? [0x6f] : undefined
-    return {
-      address: await signerAddress(this.fundSigner(), prefix),
-      balanceSats: utxos.reduce((s, u) => s + (u.satoshis ?? 0), 0),
-      utxos: utxos.length,
-      funded: utxos.length > 0
-    }
+    return await this.custodyOps.fundingStatus()
   }
 
   /** anchor sha256(proofBytes) in an OP_FALSE OP_RETURN data tx funded by the

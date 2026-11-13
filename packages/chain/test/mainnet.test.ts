@@ -222,15 +222,21 @@ test('SpendGuard: caps, interval, unknown input, ledger persistence', async () =
   const pid = parent.id('hex')
   const mkTx = () => {
     const t = new Transaction()
-    t.addInput({ sourceTXID: pid, sourceOutputIndex: 0, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
+    t.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
     t.addOutput({ satoshis: 9000, lockingScript: parent.outputs[0].lockingScript })
     return t
   }
   const resolve = (id: string) => (id === pid ? 10_000 : undefined)
 
-  // unknown input → fail closed
+  // unknown input → fail closed: no tracked value AND no attached source
+  const noSourceTx = () => {
+    const t = new Transaction()
+    t.addInput({ sourceTXID: pid, sourceOutputIndex: 0, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
+    t.addOutput({ satoshis: 9000, lockingScript: parent.outputs[0].lockingScript })
+    return t
+  }
   const g0 = new SpendGuard(okBroadcast, () => undefined, { ledgerFile: ledger, maxFeePerTx: 5000, maxPerDay: 100_000 })
-  assert.match((await g0.broadcast(mkTx())).description!, /unknown input value/)
+  assert.match((await g0.broadcast(noSourceTx())).description!, /unknown input value/)
 
   // per-tx cap
   const g1 = new SpendGuard(okBroadcast, resolve, { ledgerFile: ledger, maxFeePerTx: 500, maxPerDay: 100_000 })
@@ -258,6 +264,48 @@ test('SpendGuard: caps, interval, unknown input, ledger persistence', async () =
   assert.equal((await g5.broadcast(mkTx())).status, 'success')
   assert.ok(Date.now() - t0 >= 250, 'second broadcast waited out the interval')
 })
+
+test('SpendGuard: daily cap counts committed value, not just fees (escrow spends; refunds do not)', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'sg-'))
+  const own = new P2PKH().lock('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa')
+  // own P2PKH utxo worth 5000
+  const parent = new Transaction()
+  parent.addOutput({ satoshis: 5000, lockingScript: own })
+  const pid = parent.id('hex')
+  const resolve = (id: string) => (id === pid ? 5000 : undefined)
+  // escrow-like: own utxo → covenant output (foreign script) + change to self.
+  // fee = 140, foreign = 210 → spend = 350 (a fee-only cap would miss the 210)
+  const covenantScript = (await import('@bsv/sdk')).LockingScript.fromHex('76009c637576ab547a21' + 'ab'.repeat(40))
+  const escrowTx = () => {
+    const t = new Transaction()
+    t.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
+    t.addOutput({ satoshis: 210, lockingScript: covenantScript })
+    t.addOutput({ satoshis: 4650, lockingScript: own })
+    return t
+  }
+  const g = new SpendGuard(okBroadcast, resolve, { ledgerFile: path.join(dir, 'l.json'), maxFeePerTx: 5000, maxPerDay: 400 })
+  assert.equal((await g.broadcast(escrowTx())).status, 'success')
+  assert.equal(g.spentToday(), 350, 'the covenant-committed value counts toward the daily cap')
+  assert.match((await g.broadcast(escrowTx())).description!, /daily cap/, 'second escrow exceeds the cap')
+
+  // a covenant-input tx (refund/claim/reveal) moves value BACK to self —
+  // its spend is fee only, so a due refund still clears an exhausted cap
+  const escParent = new Transaction()
+  escParent.addOutput({ satoshis: 210, lockingScript: covenantScript })
+  const refundTx = () => {
+    const t = new Transaction()
+    t.addInput({ sourceTransaction: escParent, sourceOutputIndex: 0, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
+    t.addOutput({ satoshis: 170, lockingScript: own })
+    return t
+  }
+  const g2 = new SpendGuard(okBroadcast, (id) => (id === escParent.id('hex') ? 210 : undefined), {
+    ledgerFile: path.join(dir, 'l2.json'),
+    maxPerDay: 50
+  })
+  assert.equal((await g2.broadcast(refundTx())).status, 'success', 'covenant-input spend counts fee only — refunds clear even a small cap')
+  assert.equal(g2.spentToday(), 40)
+})
+
 
 test('importFundingTx: hex: raw tx imports; empty/malformed refs fail with clear errors', async () => {
   const { importFundingTx } = await import('../src/mainnet.js')

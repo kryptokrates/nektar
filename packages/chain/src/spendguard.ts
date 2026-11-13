@@ -19,6 +19,10 @@ export interface CostRecord {
   txid: string
   bytes: number
   fee: number
+  /** fee + value committed to scripts foreign to all inputs — the daily-cap
+   *  metric. A covenant-input tx (refund/claim/reveal) moves value back to
+   *  self and counts fee only. */
+  spend: number
   at: string
 }
 type Ledger = { day: string; spentSats: number; lastBroadcastAt: number; records: CostRecord[] }
@@ -71,17 +75,17 @@ export class SpendGuard implements Broadcaster {
   }
 
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
-    const fee = this.feeOf(tx)
-    if (fee === undefined) return this.refuse('unknown input value — fee unresolvable (fail-closed)')
-    if (fee < 0) return this.refuse(`negative fee ${fee} — resolved input values are wrong (fail-closed)`)
+    const s = this.spendOf(tx)
+    if (s === undefined) return this.refuse('unknown input value — fee unresolvable (fail-closed)')
+    if (s.fee < 0) return this.refuse(`negative fee ${s.fee} — resolved input values are wrong (fail-closed)`)
     const now = Date.now()
     if (!this.unlimited) {
-      if (fee > this.opts.maxFeePerTx) return this.refuse(`fee ${fee} sats > maxFeePerTx ${this.opts.maxFeePerTx}`)
+      if (s.fee > this.opts.maxFeePerTx) return this.refuse(`fee ${s.fee} sats > maxFeePerTx ${this.opts.maxFeePerTx}`)
       if (this.ledger.day !== this.day()) {
         this.ledger.day = this.day()
         this.ledger.spentSats = 0
       }
-      if (this.ledger.spentSats + fee > this.opts.maxPerDay) return this.refuse(`daily cap: ${this.ledger.spentSats}+${fee} > ${this.opts.maxPerDay}`)
+      if (this.ledger.spentSats + s.spend > this.opts.maxPerDay) return this.refuse(`daily cap: ${this.ledger.spentSats}+${s.spend} > ${this.opts.maxPerDay}`)
       const wait = this.opts.minIntervalMs - (now - this.ledger.lastBroadcastAt)
       if (wait > 0) {
         // rate limit = delay, not failure (bounded by minIntervalMs); opt out → refuse
@@ -91,31 +95,47 @@ export class SpendGuard implements Broadcaster {
     }
     const res = await this.inner.broadcast(tx)
     if (res.status === 'success') {
-      this.ledger.spentSats += fee
+      this.ledger.spentSats += s.spend
       this.ledger.lastBroadcastAt = Date.now()
-      this.ledger.records.push({ txid: tx.id('hex'), bytes: tx.toBinary().length, fee, at: new Date(now).toISOString() })
+      this.ledger.records.push({ txid: tx.id('hex'), bytes: tx.toBinary().length, fee: s.fee, spend: s.spend, at: new Date(now).toISOString() })
       this.save()
     }
     return res
   }
 
-  private feeOf(tx: Transaction): number | undefined {
+  /** P2PKH lock shape: 76 a9 14 <20B pkh> 88 ac (25 bytes). Covenant inputs
+   *  are anything else — their spends return committed value, not new spend. */
+  private spendOf(tx: Transaction): { fee: number; spend: number } | undefined {
     let vin = 0
+    const inScripts = new Set<string>()
+    let covenantInput = false
     for (const inp of tx.inputs) {
       const txid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
       // tracked store first (our own spends); a foreign tx carrying its parent
       // (EF/BEEF) resolves from the attached source — the network validates
       // the real value at broadcast, the fee here is ledger bookkeeping only
+      const srcOut = inp.sourceTransaction?.outputs[inp.sourceOutputIndex ?? 0]
       const v =
         txid === undefined
           ? undefined
-          : (this.valueOf(txid, inp.sourceOutputIndex ?? 0) ?? inp.sourceTransaction?.outputs[inp.sourceOutputIndex ?? 0]?.satoshis)
-      if (v === undefined) return undefined
+          : (this.valueOf(txid, inp.sourceOutputIndex ?? 0) ?? srcOut?.satoshis)
+      if (v === undefined || srcOut === undefined) return undefined
       vin += v
+      const hex = srcOut.lockingScript.toHex()
+      inScripts.add(hex)
+      if (!/^76a914[0-9a-f]{40}88ac$/.test(hex)) covenantInput = true
     }
     let vout = 0
-    for (const o of tx.outputs) vout += o.satoshis ?? 0
-    return vin - vout
+    let foreign = 0
+    for (const o of tx.outputs) {
+      vout += o.satoshis ?? 0
+      if (!inScripts.has(o.lockingScript.toHex())) foreign += o.satoshis ?? 0
+    }
+    const fee = vin - vout
+    // spend = the cap metric: fee plus value committed to foreign outputs.
+    // Covenant-input txs (refund/claim/reveal) return committed value — fee
+    // only, so a due refund still broadcasts at an exhausted cap.
+    return { fee, spend: covenantInput ? fee : fee + foreign }
   }
 
   costs(): CostRecord[] {

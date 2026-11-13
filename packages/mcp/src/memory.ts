@@ -47,8 +47,6 @@ import {
   BatchLog,
   MemoryShardStore,
   verifyProvenance,
-  signCheckpoint,
-  checkpointDigest,
   PromiseMonitor,
   type ShardStore,
   type LogRecord,
@@ -261,7 +259,20 @@ export class NektarMemory {
       tails: this.tails,
       anchorTxs: this.anchorTxs,
       shards: () => this.shards(),
-      persistState: () => this.persistState()
+      persistState: () => this.persistState(),
+      log: this.log,
+      anchorChainFor: (s) => this.anchorChain(s),
+      txidShard: this.txidShard,
+      cps: this.cps,
+      logKey: () => toSigner(this.logKey),
+      metricsInc: (n, l, x, h) => this.metrics.inc(n, l, x, h),
+      covered: () => this.covered(),
+      getPromises: () => this.promises,
+      setPromises: (p) => {
+        this.promises = p
+      },
+      bondsActive: () => this.bonds.active,
+      bondsMirror: (r) => this.bonds.mirror(r)
     })
     this.cryptoOps = new CryptoOps({ opts: this.opts })
     this.catalogOps = new CatalogOps({
@@ -1169,89 +1180,9 @@ export class NektarMemory {
     return out
   }
 
-  /** per-shard anchor serialization: close→broadcast→markAnchored must not
-   *  overlap another anchorShard on the same shard — resetUnanchored could
-   *  otherwise return an in-flight batch's records to the pending pool and
-   *  commit the same leaves to two on-chain batches. */
-  private anchorQueues = new Map<string, Promise<unknown>>()
-  private enqueueAnchor<T>(shard: string, fn: () => Promise<T>): Promise<T> {
-    const tail = this.anchorQueues.get(shard) ?? Promise.resolve()
-    const p = (tail as Promise<void>).then(fn)
-    this.anchorQueues.set(
-      shard,
-      p.then(
-        () => undefined,
-        () => undefined
-      )
-    )
-    return p
-  }
-
   /** Close the pending batch of a shard and broadcast the anchor. */
   async anchorShard(shard: string): Promise<{ txid: string; n: number } | null> {
-    return await this.enqueueAnchor(shard, async () => await this.anchorShardInner(shard))
-  }
-  private async anchorShardInner(shard: string): Promise<{ txid: string; n: number } | null> {
-    // at-least-once: records marked batched by a batch whose anchor never
-    // landed (failed broadcast, or crash before markAnchored) go back into the
-    // pending pool — without this they are stranded and their signed promises
-    // breach the merge delay forever
-    await this.log.resetUnanchored(shard)
-    const batch = await this.log.closeBatch(shard)
-    if (!batch) return null
-    let res
-    try {
-      res = await this.anchorChain(shard).anchor(batch.size, batch.R)
-    } catch (e) {
-      this.metrics.inc('nektar_anchor_failures_total', { shard }, 1, 'anchor broadcasts that failed')
-      throw e
-    }
-    this.metrics.inc('nektar_anchors_total', {}, 1, 'anchors broadcast')
-    const txid = res.tx.id('hex')
-    this.anchorTxs.set(txid, res.tx)
-    this.txidShard.set(txid, shard)
-    await this.log.markAnchored(shard, batch.n, txid)
-    // record the link for chain tails / proofs
-    const link: AnchorLink = {
-      txid,
-      outputIndex: 0,
-      n: res.head.data.n,
-      size: res.head.data.size,
-      R: toHex(res.head.data.R),
-      Rp: toHex(res.head.data.Rp)
-    }
-    const tail = this.tails.get(shard) ?? []
-    tail.push(link)
-    this.tails.set(shard, tail)
-    // LOG-007: the log's signed checkpoint for this anchor
-    const cps = this.cps.get(shard) ?? []
-    cps.push(
-      await signCheckpoint(this.logKey, {
-        logId: this.anchorChain(shard).getShardId(),
-        size: tail.reduce((s, l) => s + l.size, 0),
-        n: link.n,
-        root: link.R,
-        chainedRoot: link.Rp,
-        time: Date.now(),
-        anchorTxid: txid
-      })
-    )
-    this.cps.set(shard, cps)
-    // compaction: a promise covered by a checkpoint can never violate — drop
-    // it so state.json, violations() and the lag gauge stay O(outstanding)
-    const cov = this.covered()
-    this.promises = this.promises.filter((x) => !cov(x))
-    this.persistState()
-    // §12 SLA: the bond covenant mirrors the checkpoint on-chain — lastRoot
-    // commits to the FULL signed checkpoint (digest binds logId+size+n+R+R'+
-    // time+txid), making the history unforkable and publicly replayable.
-    if (this.bonds.active) {
-      const cp = cps[cps.length - 1]
-      const lastRoot = toHex(Uint8Array.from(checkpointDigest(cp)))
-      const ok = await this.bonds.mirror(lastRoot)
-      if (!ok) this.metrics.inc('nektar_bond_commit_failures_total', {}, 1, 'bond commit broadcasts that failed')
-    }
-    return { txid, n: res.head.data.n }
+    return await this.anchorOps.anchorShard(shard)
   }
 
   private cps = new Map<string, Checkpoint[]>()

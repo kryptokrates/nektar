@@ -84,6 +84,12 @@ importers:
       '@bsv/wallet-toolbox':
         specifier: 2.15.0
         version: 2.15.0(@bsv/sdk@4.0.1)(@types/node@24.19.2)(sqlite3@5.1.7(bluebird@3.7.2)(supports-color@7.2.0))(supports-color@7.2.0)
+      '@lightwebinc/bcommon':
+        specifier: file:../../vendor/lightwebinc-bcommon-0.34.0.tgz
+        version: file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)
+      '@lightwebinc/bfinger-host':
+        specifier: file:../../vendor/lightwebinc-bfinger-host-0.8.5.tgz
+        version: file:vendor/lightwebinc-bfinger-host-0.8.5.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))
       '@nektar/anchor':
         specifier: workspace:*
         version: link:../anchor

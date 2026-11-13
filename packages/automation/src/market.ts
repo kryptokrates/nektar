@@ -75,7 +75,7 @@ export interface MarketTransport {
   send: (toPub: string, msg: MarketMessage, refs?: import('@nektar/bstack').BoxRef[]) => Promise<void>
 }
 
-interface MarketMemory {
+export interface MarketMemory {
   shardManifest: (shard: string) => Promise<{ shardId: string; domains: string[]; offers?: Array<{ kind: string; priceSats?: number }> } | undefined>
   records: (shard: string) => Promise<Array<{ seq: number; level?: number; fragment: { d: Uint8Array } }>>
   marketCandidates?: (shard: string) => Promise<Array<{ seq: number; text: string }>>

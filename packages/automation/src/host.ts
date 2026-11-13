@@ -2,6 +2,7 @@ import type { ChainTracker, MerklePath, PrivateKey, Transaction, WalletInterface
 import type { BroadcastResult, FundingOut, Ingested } from '@nektar/chain'
 import type { ObjectRef, PacksStore } from '@nektar/store'
 import type { BudgetAuthority } from './budget.js'
+import type { MarketMemory } from './market.js'
 import type { Automation } from './types.js'
 
 /** the wallet surface automation needs from the host — same structural Pick
@@ -16,7 +17,7 @@ export type OperatorWallet = Pick<WalletInterface, 'getPublicKey' | 'createSigna
  *  It is deliberately a wide facade today (the actual pre-extraction
  *  contract, measured from real call sites) — narrowing it is follow-up
  *  work that no longer requires touching the host package */
-export interface AutomationHost {
+export interface AutomationHost extends MarketMemory {
   fetchTx(txid: string): Promise<Transaction | undefined>
   rememberTx(tx: Transaction): void
   txWire(txid: string, maxBytes?: number): string | undefined

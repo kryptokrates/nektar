@@ -11,6 +11,8 @@
   "dependencies": {
     "@bsv/sdk": "4.0.1",
     "@bsv/wallet-toolbox": "2.15.0",
+    "@lightwebinc/bcommon": "file:../../vendor/lightwebinc-bcommon-0.34.0.tgz",
+    "@lightwebinc/bfinger-host": "file:../../vendor/lightwebinc-bfinger-host-0.8.5.tgz",
     "@nektar/anchor": "workspace:*",
     "@nektar/bstack": "workspace:*",
     "@nektar/chain": "workspace:*",

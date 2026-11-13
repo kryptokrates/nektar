@@ -5,7 +5,7 @@
 // resolves from any gateway copy and self-verifies on the digest).
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
-import { toHex, sha256, writeFileAtomic, nektarEnv } from '@nektar/core'
+import { toHex, sha256, writeFileAtomic } from '@nektar/core'
 import { storeChirp, type S3ObjectStore } from '@nektar/store'
 
 export interface ProofStoreDeps {

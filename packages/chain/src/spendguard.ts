@@ -79,19 +79,23 @@ export class SpendGuard implements Broadcaster {
     if (s === undefined) return this.refuse('unknown input value — fee unresolvable (fail-closed)')
     if (s.fee < 0) return this.refuse(`negative fee ${s.fee} — resolved input values are wrong (fail-closed)`)
     const now = Date.now()
+    // 'unlimited' opts out of the DAILY cap only — fee and interval are
+    // separate rails a soak still wants (a fat-fingered fee is catastrophic
+    // at any daily budget), and dropping them would make the preflight
+    // fee-probe unable to prove the path is guarded at all
+    if (s.fee > this.opts.maxFeePerTx) return this.refuse(`fee ${s.fee} sats > maxFeePerTx ${this.opts.maxFeePerTx}`)
     if (!this.unlimited) {
-      if (s.fee > this.opts.maxFeePerTx) return this.refuse(`fee ${s.fee} sats > maxFeePerTx ${this.opts.maxFeePerTx}`)
       if (this.ledger.day !== this.day()) {
         this.ledger.day = this.day()
         this.ledger.spentSats = 0
       }
       if (this.ledger.spentSats + s.spend > this.opts.maxPerDay) return this.refuse(`daily cap: ${this.ledger.spentSats}+${s.spend} > ${this.opts.maxPerDay}`)
-      const wait = this.opts.minIntervalMs - (now - this.ledger.lastBroadcastAt)
-      if (wait > 0) {
-        // rate limit = delay, not failure (bounded by minIntervalMs); opt out → refuse
-        if (this.refuseOnInterval) return this.refuse(`min interval ${this.opts.minIntervalMs}ms not elapsed`)
-        await new Promise((r) => setTimeout(r, wait))
-      }
+    }
+    const wait = this.opts.minIntervalMs - (now - this.ledger.lastBroadcastAt)
+    if (wait > 0) {
+      // rate limit = delay, not failure (bounded by minIntervalMs); opt out → refuse
+      if (this.refuseOnInterval) return this.refuse(`min interval ${this.opts.minIntervalMs}ms not elapsed`)
+      await new Promise((r) => setTimeout(r, wait))
     }
     const res = await this.inner.broadcast(tx)
     if (res.status === 'success') {

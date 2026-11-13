@@ -43,17 +43,19 @@ async function rpcOnce(method, ...params) {
 }
 
 // Teranode's legacy RPC fails transiently while the 2s-block rig churns —
-// retry transport/5xx-style failures (never a "not found" answer) a few times
+// retry transport/5xx-style failures (never a "not found" answer). Refused
+// connections are cheap, and observed blackouts run ~30-120s — cap the
+// backoff and give transport failures real coverage instead of ~6s.
 async function rpc(method, ...params) {
   let last
-  for (let t = 0; t < 6; t++) {
+  for (let t = 0; t < 60; t++) {
     try {
       return await rpcOnce(method, ...params)
     } catch (e) {
       if (e.code === -5 || e.code === -8) throw e
       last = e
       console.log(`${new Date().toISOString()} rpc ${method}${params.length ? ' ' + params : ''} retry ${t + 1}: ${String(e.message).slice(0, 160)}`)
-      await new Promise((r) => setTimeout(r, 400 * (t + 1)))
+      await new Promise((r) => setTimeout(r, Math.min(400 * (t + 1), 3000)))
     }
   }
   throw last

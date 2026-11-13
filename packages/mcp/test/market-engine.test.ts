@@ -391,7 +391,7 @@ test('quote commitment attaches in every live state and is ignored once terminal
   await w.round([c]) // offer → feed AND the real quote → bob's inbox, before bob records anything
   const sale = (await c.store.operations({ role: 'seller' })).find((o) => o.kind === 'sale')!
   const key = `${c.pub}:${sale.operationId}`
-  const offersOf = (st: any) => st.data.offers as Record<string, { commitment?: unknown }>
+  const offersOf = (st: any) => st.data.offers as Record<string, { commitment?: unknown; mode?: string }>
   // quote-before-offer is a retry, never a dead letter: at most two rounds and
   // the commitment is attached while the op is still collecting
   for (let i = 0; i < 4; i++) {
@@ -411,8 +411,27 @@ test('quote commitment attaches in every live state and is ignored once terminal
   }
   assert.equal(st.state, 'awaiting_disclosure', st.lastError)
   const attached = (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length
-  const leaf = (offersOf(st)[key]!.commitment as { leaf?: string }).leaf
-  await bob.engine.ingestMessage(c.pub, { type: 'quote', wantId, offerId: sale.operationId, commitment: { leaf }, mode: 'key' })
+  // a byte-identical duplicate is deduped at ingest — the wake can repeat
+  // without the op ever seeing it twice
+  const commitment = offersOf(st)[key]!.commitment as { leaf?: string }
+  const mode = offersOf(st)[key]!.mode
+  assert.ok(mode !== undefined, 'the attached quote carried its mode')
+  await bob.engine.ingestMessage(c.pub, { type: 'quote', wantId, offerId: sale.operationId, commitment, mode })
+  await w.round([bob])
+  assert.equal(
+    (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length,
+    attached,
+    'a byte-identical duplicate quote is deduped — no double processing'
+  )
+  // a quote delivery the store has NOT seen (fresh digest, same commitment)
+  // still attaches post-selection — the early-select gap this fixes
+  await bob.engine.ingestMessage(c.pub, {
+    type: 'quote',
+    wantId,
+    offerId: sale.operationId,
+    commitment: { ...commitment, redelivery: 1 },
+    mode
+  })
   await w.round([bob])
   assert.ok(
     (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length > attached,
@@ -429,7 +448,13 @@ test('quote commitment attaches in every live state and is ignored once terminal
   // terminal: a quote that outlives its deal is ignored — no event, no mutation
   await bob.store.transition(operationId, st.revision, 'refunded', { cause: 'test_forced_terminal' })
   const attachedBefore = (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length
-  await bob.engine.ingestMessage(c.pub, { type: 'quote', wantId, offerId: sale.operationId, commitment: { leaf }, mode: 'key' })
+  await bob.engine.ingestMessage(c.pub, {
+    type: 'quote',
+    wantId,
+    offerId: sale.operationId,
+    commitment: { ...commitment, redelivery: 2 },
+    mode
+  })
   await w.round([bob])
   assert.equal(
     (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length,

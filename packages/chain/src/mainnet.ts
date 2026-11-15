@@ -5,7 +5,7 @@
 import { nektarEnv } from '@nektar/core'
 import { sleep, withRetry, pacer } from './retry.js'
 import { TxStore } from './txstore.js'
-import { Transaction, MerklePath, Hash } from '@bsv/sdk'
+import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
 import { headerPowValid, linksTo } from './headers.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
@@ -691,13 +691,18 @@ function fundingOutputs(tx: Transaction, pkhHex: string): FundingOut[] {
 }
 
 // --- UTXO discovery -----------------------------------------------------------
-export async function discoverUtxos(cfg: MainnetConfig | undefined, address: string): Promise<FundingOut[]> {
+export async function discoverUtxos(cfg: MainnetConfig | undefined, address: string, onSkip?: (txid: string, reason: string) => void): Promise<FundingOut[]> {
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey
   const list = await (await getOk(c, `${c.wocUrl}/address/${address}/unspent`, h)).json()
   const out: FundingOut[] = []
   const pace = pacer(350)
+  // the index is discovery, not truth: an entry counts only once its own
+  // bytes confirm the txid, the vout exists, and the script pays `address`.
+  // satoshis come from the tx output, never from the index's `value`
+  const pkh = Utils.fromBase58Check(address).data
+  const want = `76a914${typeof pkh === 'string' ? pkh : Utils.toHex(Uint8Array.from(pkh))}88ac`
   for (const u of list) {
     await pace()
     // a just-broadcast tx may not be served as hex yet (404): skip it this round
@@ -705,7 +710,27 @@ export async function discoverUtxos(cfg: MainnetConfig | undefined, address: str
       .then((r) => r.text())
       .catch(() => null)
     if (hex === null) continue
-    out.push({ tx: Transaction.fromHex(hex.trim()), vout: u.tx_pos, satoshis: u.value })
+    let tx: Transaction
+    try {
+      tx = Transaction.fromHex(hex.trim())
+    } catch {
+      onSkip?.(String(u.tx_hash), 'served tx hex does not parse')
+      continue
+    }
+    if (tx.id('hex') !== u.tx_hash) {
+      onSkip?.(String(u.tx_hash), 'served hex hashes to a different txid')
+      continue
+    }
+    const o = tx.outputs[u.tx_pos]
+    if (o === undefined) {
+      onSkip?.(String(u.tx_hash), `index vout ${String(u.tx_pos)} does not exist`)
+      continue
+    }
+    if (o.lockingScript.toHex() !== want) {
+      onSkip?.(String(u.tx_hash), `vout ${String(u.tx_pos)} does not pay the address`)
+      continue
+    }
+    out.push({ tx, vout: u.tx_pos, satoshis: o.satoshis ?? 0 })
   }
   return out
 }

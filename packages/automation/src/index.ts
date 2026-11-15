@@ -3,7 +3,7 @@
 // consumers reach the app through AutomationHost and the runtime/store seams)
 export { type PreflightCheck, type PreflightReport, type Automation } from './types.js'
 export { type OperatorWallet, AutomationHost } from './host.js'
-export { type AutomationConfig, requeueAckItems, trackFanout, openAutomation } from './runtime.js'
+export { type AutomationConfig, requeueAckItems, trackFanout, queueRepairs, openAutomation } from './runtime.js'
 export {
   type Operation,
   type InboxItem,

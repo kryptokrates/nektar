@@ -196,18 +196,54 @@ test('tscToMerklePath: real tree roots verify for N=1..8', () => {
 
 test('merklePathMainnet (broadcaster BUMP) + discoverUtxos with recorded fixtures', async () => {
   const bumpHex = buildBump(['aa'.repeat(32), 'bb'.repeat(32)], 0, 850_000).toHex()
+  // the fixture tx is built in-test so the index entry is self-consistent —
+  // discover verifies hex → txid → P2PKH-to-address before trusting a row
+  const addr = '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'
+  const parent = new Transaction()
+  parent.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
+  parent.addOutput({ satoshis: 5000, lockingScript: new P2PKH().lock(addr) })
   const fetchImpl = stubFetch({
     'bcast.example/tx/aa': { body: { txStatus: 'IMMUTABLE', merklePath: bumpHex } },
-    '/address/addr/unspent': { body: [{ tx_hash: 'bb'.repeat(32), tx_pos: 0, value: 5000 }] },
-    '/tx/bb': {
-      raw: '01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01e8030000000000001976a914000000000000000000000000000000000000000088ac00000000'
-    }
+    [`/address/${addr}/unspent`]: { body: [{ tx_hash: parent.id('hex'), tx_pos: 0, value: 5000 }] },
+    '/tx/': { raw: parent.toHex() }
   })
   const mp = await merklePathMainnet({ fetchImpl, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc' }, 'aa'.repeat(32))
   assert.ok(mp?.merklePath, 'broadcaster BUMP hex parses')
-  const utxos = await discoverUtxos({ fetchImpl, wocUrl: 'http://woc' }, 'addr')
+  const utxos = await discoverUtxos({ fetchImpl, wocUrl: 'http://woc' }, addr)
   assert.equal(utxos.length, 1)
   assert.equal(utxos[0].satoshis, 5000)
+})
+
+test('discoverUtxos: index entries are checked against their own bytes', async () => {
+  const addr = '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'
+  const other = '12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S'
+  const mk = (to: string, sats: number) => {
+    const t = new Transaction()
+    t.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
+    t.addOutput({ satoshis: sats, lockingScript: new P2PKH().lock(to) })
+    return t
+  }
+  const good = mk(addr, 7777)
+  const wrongAddr = mk(other, 1000)
+  const fakeTxid = 'cc'.repeat(32)
+  const fetchImpl = stubFetch({
+    [`/address/${addr}/unspent`]: {
+      body: [
+        { tx_hash: good.id('hex'), tx_pos: 0, value: 5000 }, // index lies about the amount — tx output wins
+        { tx_hash: wrongAddr.id('hex'), tx_pos: 0, value: 1000 }, // pays someone else
+        { tx_hash: fakeTxid, tx_pos: 0, value: 1000 }, // served hex hashes to a different txid
+        { tx_hash: good.id('hex'), tx_pos: 5, value: 1000 } // vout does not exist
+      ]
+    },
+    [`/tx/${good.id('hex')}`]: { raw: good.toHex() },
+    [`/tx/${wrongAddr.id('hex')}`]: { raw: wrongAddr.toHex() },
+    [`/tx/${fakeTxid}`]: { raw: good.toHex() }
+  })
+  const skips: string[] = []
+  const utxos = await discoverUtxos({ fetchImpl, wocUrl: 'http://woc' }, addr, (t, why) => skips.push(`${t.slice(0, 8)} ${why}`))
+  assert.equal(utxos.length, 1)
+  assert.equal(utxos[0].satoshis, 7777, 'satoshis come from the tx output, not the index value')
+  assert.equal(skips.length, 3, 'wrong-address, wrong-txid, and missing-vout entries all skipped')
 })
 
 test('probeTxStatus: definitive answers vs "couldn\'t ask"', async () => {

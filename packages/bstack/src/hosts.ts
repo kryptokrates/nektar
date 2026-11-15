@@ -1,8 +1,36 @@
-import { decodePayload, verifyBody, bodyPub } from './market-wire.js'
+import { decodePayload, verifyBody, bodyPub, bodyExp, type MarketPayload } from './market-wire.js'
 import { carrierLockingKey, checkCarrier } from './carrier.js'
+import { sha256, toHex } from '@nektar/core'
 import type { ChainTracker } from '@bsv/sdk'
 
 export type Quorum = 'all' | 'majority' | 'one' | number
+
+/** positive-verdict memo keyed by carrier bytes: an identical BEEF re-checked
+ *  every poll skips SPV/parse/signature work, while a FAILED check is never
+ *  cached — a transient header miss must be retried next pass */
+export class VerifiedCache<T> {
+  private readonly m = new Map<string, T>()
+  constructor(private readonly max = 2048) {}
+  static key(beef: number[]): string {
+    return toHex(sha256(Uint8Array.from(beef)))
+  }
+  get(k: string): T | undefined {
+    const v = this.m.get(k)
+    if (v !== undefined) {
+      this.m.delete(k)
+      this.m.set(k, v)
+    }
+    return v
+  }
+  set(k: string, v: T): void {
+    this.m.delete(k)
+    this.m.set(k, v)
+    if (this.m.size > this.max) this.m.delete(this.m.keys().next().value!)
+  }
+  delete(k: string): void {
+    this.m.delete(k)
+  }
+}
 
 const need = (q: Quorum | undefined, n: number): number =>
   q === 'all' ? n : q === 'one' ? 1 : typeof q === 'number' ? Math.max(1, Math.min(q, n)) : Math.ceil(n / 2)
@@ -139,17 +167,28 @@ export interface ReadResult {
   unreachable: string[]
 }
 
-export async function readItems(
-  hosts: string[],
-  service: string,
-  query: unknown,
-  o: { tracker: ChainTracker; net: string; accept: (p: import('./market-wire.js').MarketPayload) => boolean; now?: number; timeoutMs?: number; quorum?: number }
-): Promise<ReadResult> {
+export interface ReadOpts {
+  tracker: ChainTracker
+  net: string
+  accept: (p: MarketPayload) => boolean
+  now?: number
+  timeoutMs?: number
+  quorum?: number
+  /** memo of carriers that already passed SPV + signature — a hit skips that
+   *  work; the time/query-dependent gates below are re-applied every read */
+  cache?: VerifiedCache<{ txid: string; payload: MarketPayload; lockingKey: string }>
+}
+
+export async function readItems(hosts: string[], service: string, query: unknown, o: ReadOpts): Promise<ReadResult> {
   const { answers } = await lookupAll(hosts, service, query, { timeoutMs: o.timeoutMs, quorum: o.quorum })
   const items = new Map<string, { txid: string; payload: import('./market-wire.js').MarketPayload }>()
   const seenBy = new Map<string, Set<string>>()
   const perHost: Record<string, string[]> = {}
   const unreachable: string[] = []
+  const netOf = (p: MarketPayload): string | undefined => {
+    const b = p.body as { want?: { net?: string }; offer?: { net?: string } }
+    return p.kind === 'want' ? b.want?.net : b.offer?.net
+  }
   for (const a of answers) {
     if ('error' in a || !('outputs' in a)) {
       unreachable.push(a.host)
@@ -157,25 +196,46 @@ export async function readItems(
     }
     perHost[a.host] = []
     // carriers verify in parallel — a host may answer many, and each check
-    // can mean a header fetch against the tracker
-    const checks = await Promise.all(a.outputs.map(async (o2) => await checkCarrier(o2.beef, { tracker: o.tracker }).catch(() => undefined)))
-    for (const c of checks) {
-      if (c === undefined || !c.ok) continue
-      const txid = c.carrier.id('hex')
+    // can mean a header fetch against the tracker; a VerifiedCache hit skips
+    // all of it (negative verdicts are never cached, so a transient miss is
+    // always retried)
+    type Check =
+      | { hit: { txid: string; payload: MarketPayload; lockingKey: string }; ck: string; c?: undefined }
+      | { c: Awaited<ReturnType<typeof checkCarrier>> & { ok: true }; ck: string; hit?: undefined }
+      | undefined
+    const checks: Check[] = await Promise.all(
+      a.outputs.map(async (o2): Promise<Check> => {
+        const ck = VerifiedCache.key(o2.beef)
+        const hit = o.cache?.get(ck)
+        if (hit !== undefined) return { hit, ck }
+        const c = await checkCarrier(o2.beef, { tracker: o.tracker }).catch(() => undefined)
+        if (c === undefined || !c.ok) return undefined
+        return { c, ck }
+      })
+    )
+    for (const r of checks) {
+      if (r === undefined) continue
+      const txid = r.hit !== undefined ? r.hit.txid : r.c.carrier.id('hex')
       if (!seenBy.has(txid)) {
-        try {
-          const p = decodePayload(c.payload)
-          const b = p.body as { want?: { net?: string }; offer?: { net?: string } }
-          const pnet = p.kind === 'want' ? b.want?.net : b.offer?.net
-          if (!verifyBody(p, o.now) || carrierLockingKey(bodyPub(p)) !== c.lockingKey || pnet !== o.net || !o.accept(p)) {
-            seenBy.set(txid, new Set())
-            continue
+        seenBy.set(txid, new Set())
+        if (r.hit !== undefined) {
+          // verified before — only re-apply what can change between reads:
+          // expiry (`now` gates nothing else in the shape checks), this
+          // read's net, and the caller's accept
+          const exp = bodyExp(r.hit.payload)
+          const expired = exp !== undefined && exp <= (o.now ?? Date.now())
+          if (expired) o.cache?.delete(r.ck)
+          if (!expired && netOf(r.hit.payload) === o.net && o.accept(r.hit.payload)) items.set(txid, { txid, payload: r.hit.payload })
+        } else {
+          try {
+            const p = decodePayload(r.c.payload)
+            if (verifyBody(p, o.now) && carrierLockingKey(bodyPub(p)) === r.c.lockingKey && netOf(p) === o.net && o.accept(p)) {
+              items.set(txid, { txid, payload: p })
+              o.cache?.set(r.ck, { txid, payload: p, lockingKey: r.c.lockingKey })
+            }
+          } catch {
+            // undecodable payload — the empty seenBy set already recorded
           }
-          items.set(txid, { txid, payload: p })
-          seenBy.set(txid, new Set())
-        } catch {
-          seenBy.set(txid, new Set())
-          continue
         }
       }
       if (items.has(txid)) {
@@ -190,11 +250,7 @@ export async function readItems(
   return { items: [...items.values()], perHost, withheld, unreachable }
 }
 
-export const readWants = (
-  hosts: string[],
-  q: { net: string; domain: string; limit?: number },
-  o: { tracker: ChainTracker; net: string; now?: number; timeoutMs?: number; quorum?: number }
-) =>
+export const readWants = (hosts: string[], q: { net: string; domain: string; limit?: number }, o: Omit<ReadOpts, 'accept'>) =>
   readItems(
     hosts,
     'ls_nektar',
@@ -204,11 +260,7 @@ export const readWants = (
       accept: (p) => p.kind === 'want' && (p.body as { want: { domains: string[] } }).want.domains.map((d) => d.toLowerCase()).includes(q.domain.toLowerCase())
     }
   )
-export const readOffers = (
-  hosts: string[],
-  q: { net: string; wantId: string; buyerPub: string },
-  o: { tracker: ChainTracker; net: string; now?: number; timeoutMs?: number; quorum?: number }
-) =>
+export const readOffers = (hosts: string[], q: { net: string; wantId: string; buyerPub: string }, o: Omit<ReadOpts, 'accept'>) =>
   readItems(
     hosts,
     'ls_nektar',
@@ -221,11 +273,7 @@ export const readOffers = (
         (p.body as { offer: { buyerPub?: string } }).offer.buyerPub === q.buyerPub
     }
   )
-export const readWant = (
-  hosts: string[],
-  q: { net: string; pub: string; wantId: string },
-  o: { tracker: ChainTracker; net: string; now?: number; timeoutMs?: number; quorum?: number }
-) =>
+export const readWant = (hosts: string[], q: { net: string; pub: string; wantId: string }, o: Omit<ReadOpts, 'accept'>) =>
   readItems(
     hosts,
     'ls_nektar',

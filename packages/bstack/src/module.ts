@@ -193,7 +193,10 @@ function makeLookup(nets: string[], lanes: string[], shared: Map<string, LaneInd
             bodyDomains(e.payload)
               .map((d) => d.toLowerCase())
               .includes(String(w.domain).toLowerCase())
-        ).slice(0, w.limit ?? 100)
+          // match() walks the index in admission (insertion) order — take
+          // the tail so a busy lane surfaces the newest wants, not the
+          // oldest 100 forever
+        ).slice(-(w.limit ?? 100))
       } else if (query.offers !== undefined) {
         const o = query.offers as { net: string; wantId: string; buyerPub: string }
         out = match(

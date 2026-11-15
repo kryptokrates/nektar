@@ -6,7 +6,7 @@ import { checkContent, verifyContentSignature } from '@lightwebinc/bbox-host/cod
 import { open as openPlaintext, parsePlaintext, MaxRefs } from '@lightwebinc/bbox-host/codec/payment.js'
 import { JObject, type JValue } from '@lightwebinc/bbox-host/codec/jcs.js'
 import { admit } from '@lightwebinc/bbox-host/codec/admit.js'
-import { submitAll, lookupAll, type Quorum } from './hosts.js'
+import { submitAll, lookupAll, VerifiedCache, type Quorum } from './hosts.js'
 import { carrierFundingLockHex, walletOrProto } from './carrier.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
@@ -202,6 +202,9 @@ export async function readBox(p: {
    *  path cares about the envelopes, not per-host coverage; withheld and
    *  unreachable are then reported only for hosts that did answer */
   quorum?: number
+  /** memo of envelopes that already admitted + opened — a hit skips the
+   *  decrypt; the expiry gate is re-applied every read */
+  cache?: VerifiedCache<BoxItem & { expires: number }>
 }): Promise<{ items: BoxItem[]; withheld: Array<{ host: string; txid: string }>; unreachable: string[]; answered: string[] }> {
   const office = p.office ?? DEFAULT_OFFICE
   const me = await signerPubHex(p.key)
@@ -217,13 +220,40 @@ export async function readBox(p: {
       unreachable.push(a.host)
       continue
     }
-    // envelopes open in parallel — each admit may fetch a header
-    const opened = await Promise.all(a.outputs.map(async (o) => await openEnvelope(o.beef, w, office, me, p.tracker).catch(() => undefined)))
+    // envelopes open in parallel — each admit may fetch a header; a cache hit
+    // skips the admit + decrypt entirely (failed opens are never cached)
+    const nowS = Math.floor(Date.now() / 1000)
+    const opened = await Promise.all(
+      a.outputs.map(async (o) => {
+        const ck = VerifiedCache.key(o.beef)
+        const hit = p.cache?.get(ck)
+        if (hit !== undefined) {
+          // expires is the only time-dependent gate in openEnvelope — the
+          // rest of the envelope is fixed bytes already admitted once
+          if (hit.expires !== 0 && hit.expires <= nowS) {
+            p.cache?.delete(ck)
+            return undefined
+          }
+          return hit
+        }
+        const it = await openEnvelope(o.beef, w, office, me, p.tracker).catch(() => undefined)
+        if (it !== undefined) p.cache?.set(ck, it)
+        return it
+      })
+    )
     const ids: string[] = []
     for (const it of opened) {
       if (it !== undefined) {
         ids.push(it.txid)
-        items.set(it.txid, it)
+        // expires rides the cache entry; the caller-facing BoxItem is unchanged
+        items.set(it.txid, {
+          txid: it.txid,
+          from: it.from,
+          body: it.body,
+          ...(it.refs !== undefined ? { refs: it.refs } : {}),
+          created: it.created,
+          commitment: it.commitment
+        })
       }
     }
     perHost.set(a.host, ids)
@@ -238,7 +268,13 @@ export async function readBox(p: {
   return { items: out, withheld, unreachable, answered: [...perHost.keys()] }
 }
 
-async function openEnvelope(beef: number[], w: BoxWallet, office: string, me: string, tracker: ChainTracker): Promise<BoxItem | undefined> {
+async function openEnvelope(
+  beef: number[],
+  w: BoxWallet,
+  office: string,
+  me: string,
+  tracker: ChainTracker
+): Promise<(BoxItem & { expires: number }) | undefined> {
   // spec §8.1 via the real codec verdict, then §4.7 recipient checks in order
   const adm = await admit(new Uint8Array(beef), [], { office, headers: tracker }).catch(() => undefined)
   if (adm === undefined || adm.kind !== 'envelope' || adm.carrier === undefined) return undefined
@@ -275,6 +311,7 @@ async function openEnvelope(beef: number[], w: BoxWallet, office: string, me: st
     body: fromJ(doc.get('nektar')!) as object,
     ...(refs !== undefined ? { refs } : {}),
     created: env.created,
-    commitment: Utils.toHex(Array.from(adm.carrier.commitment))
+    commitment: Utils.toHex(Array.from(adm.carrier.commitment)),
+    expires: env.expires
   }
 }

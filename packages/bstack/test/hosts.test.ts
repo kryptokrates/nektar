@@ -4,7 +4,7 @@ import { PrivateKey } from '@bsv/sdk'
 import { signWant } from '../src/artifacts.js'
 import { buildCarrier, buildSweep } from '../src/carrier.js'
 import { encodePayload, lanesFor } from '../src/market-wire.js'
-import { submitAll, readWants } from '../src/hosts.js'
+import { submitAll, readWants, VerifiedCache } from '../src/hosts.js'
 import { provenTree } from './helpers.js'
 import { FakeTracker, minihost, faulthost } from '../src/testing.js'
 
@@ -201,4 +201,54 @@ test('hosts: early resolve at quorum leaves the straggler in pending; settled re
     await b.close()
     await f.close()
   }
+})
+
+test('hosts: a VerifiedCache hit skips the tracker and still returns the item', async () => {
+  const tr = new FakeTracker()
+  let calls = 0
+  const orig = tr.isValidRootForHeight.bind(tr)
+  tr.isValidRootForHeight = async (root: string) => {
+    calls++
+    return orig(root)
+  }
+  const a = await minihost([NET], tr)
+  const k = PrivateKey.fromRandom()
+  const { beef } = await want(k)
+  await submitAll([a.url], beef, lanesFor(NET, ['compute']))
+  const cache: NonNullable<Parameters<typeof readWants>[2]['cache']> = new VerifiedCache()
+  const rd = (now?: number) => readWants([a.url], { net: NET, domain: 'compute' }, { tracker: tr, net: NET, now, cache })
+  assert.equal((await rd()).items.length, 1)
+  const afterFirst = calls
+  assert.ok(afterFirst > 0, 'the first read verified the carrier against the tracker')
+  assert.equal((await rd()).items.length, 1, 'the cached carrier still yields the item')
+  assert.equal(calls, afterFirst, 'a cache hit does not re-hit the tracker')
+  // the expiry gate stays live: a cached item whose exp lapses is dropped
+  assert.equal((await rd(Date.now() + 120_000)).items.length, 0, 'an expired cached item is dropped')
+  assert.equal(calls, afterFirst, 'the expired hit was rejected without re-verifying')
+  await a.close()
+})
+
+test('hosts: a failed verification is never cached — the next read re-checks', async () => {
+  const tr = new FakeTracker()
+  let calls = 0
+  const orig = tr.isValidRootForHeight.bind(tr)
+  tr.isValidRootForHeight = async (root: string) => {
+    calls++
+    return orig(root)
+  }
+  const a = await minihost([NET], tr)
+  const k = PrivateKey.fromRandom()
+  const { beef } = await want(k)
+  await submitAll([a.url], beef, lanesFor(NET, ['compute']))
+  const cache: NonNullable<Parameters<typeof readWants>[2]['cache']> = new VerifiedCache()
+  const rd = () => readWants([a.url], { net: NET, domain: 'compute' }, { tracker: tr, net: NET, cache })
+  // the tracker rejects the carrier's root — nothing may be cached for it
+  tr.strict = true
+  assert.equal((await rd()).items.length, 0)
+  const failed = calls
+  assert.ok(failed > 0, 'the read checked the root against the tracker')
+  tr.strict = false
+  assert.equal((await rd()).items.length, 1, 'the re-check passes once the tracker accepts')
+  assert.ok(calls > failed, 'a negative verdict was re-verified, not served from cache')
+  await a.close()
 })

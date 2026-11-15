@@ -23,6 +23,23 @@ export const requeueAckItems = (
 ): Array<{ txid: string; commitment: string; from: string; msg: undefined; created: number }> =>
   items.map((i) => ({ txid: i.txid, commitment: i.commitment, from: i.from, msg: undefined, created: 0 }))
 
+/** one repair-host row per host. `idSuffix` distinguishes rows enqueued at
+ *  different stages of the same carrier's life — a republish-time repair
+ *  must not collide with (or be swallowed by the dedup of) a row the submit
+ *  fan-out already wrote for the same hash+host. */
+export async function queueRepairs(
+  io: { enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => Promise<unknown> },
+  hash: string,
+  hosts: string[],
+  opts?: { delayMs?: number; idSuffix?: string }
+): Promise<void> {
+  for (const host of hosts)
+    await io.enqueue(
+      { actionId: `repair:${hash}:${host}${opts?.idSuffix ?? ''}`, operationId: 'lanes', kind: 'repair-host', destination: host, payload: { key: hash } },
+      opts?.delayMs === undefined ? undefined : { delayMs: opts.delayMs }
+    )
+}
+
 /** every fan-out leg gets its own repair row — quorum resolves the send,
  *  the journal carries the carrier, and a leg that lands late cancels its
  *  own repair via `settled`. Missed legs get an immediate row; still-unsettled
@@ -37,13 +54,12 @@ export async function trackFanout(
   },
   io: { enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => Promise<unknown>; ackOutbox: (actionId: string) => Promise<unknown> }
 ): Promise<void> {
-  for (const m of r.missed)
-    await io.enqueue({ actionId: `repair:${r.hash}:${m.host}`, operationId: 'lanes', kind: 'repair-host', destination: m.host, payload: { key: r.hash } })
-  for (const h of r.pending)
-    await io.enqueue(
-      { actionId: `repair:${r.hash}:${h}`, operationId: 'lanes', kind: 'repair-host', destination: h, payload: { key: r.hash } },
-      { delayMs: 20_000 }
-    )
+  await queueRepairs(
+    io,
+    r.hash,
+    r.missed.map((m) => m.host)
+  )
+  await queueRepairs(io, r.hash, r.pending, { delayMs: 20_000 })
   void r.settled
     .then(async (s) => {
       for (const h of s.took) await io.ackOutbox(`repair:${r.hash}:${h}`).catch(() => {})
@@ -207,6 +223,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   const logStream = lanes === undefined ? undefined : (cfg.logStream ?? 'nektar_abcdefghij')
   const logState = lanes === undefined || logStream === undefined ? undefined : lanes.logState
   const fingerState = lanes === undefined ? undefined : lanes.fingerState
+  // verified-carrier memos for the runtime's life: identical carrier bytes on
+  // the next poll skip SPV/parse/signature (lanes) and admit+decrypt (box);
+  // only positives are cached — a failed check always retries
+  const laneCache =
+    lanes === undefined ? undefined : new lanes.mod.VerifiedCache<{ txid: string; payload: import('@nektar/bstack').MarketPayload; lockingKey: string }>()
+  const boxCache = lanes === undefined ? undefined : new lanes.mod.VerifiedCache<import('@nektar/bstack').BoxItem & { expires: number }>()
   // bfinger packs store: packs describeShard PUTs to bstore also commit as
   // kind-5 sub-records under our identity; the finger record's refs then
   // resolve the whole pack set — no /.well-known dependency for readers
@@ -268,14 +290,23 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   }
   // every fan-out leg becomes a per-host repair row via trackFanout — see
   // the module-level doc; the io seam is just the store's own outbox
-  const fanoutIo = { enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => store.enqueue(o, opts), ackOutbox: (id: string) => store.ackOutbox(id) }
+  const fanoutIo = {
+    enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => store.enqueue(o, opts),
+    ackOutbox: (id: string) => store.ackOutbox(id)
+  }
   // a proven funding tree queues one republish row per journaled carrier it
   // anchors — each row's transport call attaches the BUMP, re-submits and
   // re-journals, so a dead host retries that leg alone instead of the whole
   // tree's fan-out
   const queueRepublish = async (treeTxid: string): Promise<void> => {
     for (const row of (await lanes?.journal.fundedBy?.(treeTxid)) ?? [])
-      await store.enqueue({ actionId: `reprove:${treeTxid}:${row.hash}`, operationId: 'lanes', kind: 'republish-proved', destination: 'hosts', payload: { treeTxid, hash: row.hash } })
+      await store.enqueue({
+        actionId: `reprove:${treeTxid}:${row.hash}`,
+        operationId: 'lanes',
+        kind: 'republish-proved',
+        destination: 'hosts',
+        payload: { treeTxid, hash: row.hash }
+      })
   }
   const transport: MarketTransport = {
     publishWant: async (sw: SignedWant) => {
@@ -323,7 +354,17 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       const tx = await mem.fetchTx(treeTxid)
       if (tx?.merklePath === undefined) throw new Error('tree not proven yet')
       const r = await lanes.mod.republishOne({ journal: lanes.journal, hosts: marketHosts, hash, treeTxid, merklePath: tx.merklePath })
-      if (!r.done || r.missed.length > 0) throw new Error(`republish ${hash.slice(0, 12)}: ${r.missed.map((m) => `${m.host} (${m.error})`).join(', ') || 'not done'}`)
+      if (!r.done) throw new Error(`republish ${hash.slice(0, 12)}: ${r.missed.map((m) => `${m.host} (${m.error})`).join(', ') || 'not done'}`)
+      // quorum held but a host missed: the enriched beef is journaled, so a
+      // repair row re-serves it — the republish row is acked, only the host
+      // lags. `:proved` keeps the actionId distinct from the submit fan-out's
+      // row, whose terminal state would make a plain `repair:` id a silent no-op
+      await queueRepairs(
+        fanoutIo,
+        hash,
+        r.missed.map((m) => m.host),
+        { idSuffix: ':proved' }
+      )
       if (r.submitted === true) log(`automation: republished carrier ${hash.slice(0, 12)} anchored by ${treeTxid.slice(0, 12)}`)
     }
   }
@@ -460,9 +501,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               const r =
                 marketHosts.length > 1
                   ? await (async () => {
-                      const fast = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, quorum: 1 })
+                      const fast = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, quorum: 1, cache: boxCache })
                       void lanes.mod
-                        .readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet })
+                        .readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, cache: boxCache })
                         .then((full) => {
                           laneNotes(full, full.answered)
                           pendingAcks = listAcks(full.items)
@@ -470,7 +511,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
                         .catch(() => undefined)
                       return fast
                     })()
-                  : await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet })
+                  : await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, cache: boxCache })
               laneNotes(r, r.answered)
               pendingAcks = listAcks(r.items)
               // self-notes restore lost operations — ingest them before any other message in the batch
@@ -600,12 +641,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       ...watch.sellerDomains.map((domain) => ({
         tag: `lane:${net}:${domain}`,
         kind: 'want' as const,
-        call: (o: ReadOpts) => readWants(marketHosts, { net, domain }, { tracker, net, now: cfg.now?.(), ...o })
+        call: (o: ReadOpts) => readWants(marketHosts, { net, domain }, { tracker, net, now: cfg.now?.(), cache: laneCache, ...o })
       })),
       ...watch.collecting.map((c) => ({
         tag: `offers:${c.wantId}`,
         kind: 'offer' as const,
-        call: (o: ReadOpts) => readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: me }, { tracker, net, now: cfg.now?.(), ...o })
+        call: (o: ReadOpts) => readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: me }, { tracker, net, now: cfg.now?.(), cache: laneCache, ...o })
       }))
     ]
     // every lane read is independent — run them together, bounded, instead
@@ -760,7 +801,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // would let a deal cool to idle cadence between hops. A settled
             // proof awaiting depth only waits on BLOCKS, so it is excluded —
             // holding the loop hot for it would burn cycles per confirmation
-            if ((await store.operations({ notStates: TERMINAL })).filter((o) => o.state !== 'completion_submitted' || o.data.provenHeight === undefined).length > 0)
+            if (
+              (await store.operations({ notStates: TERMINAL })).filter((o) => o.state !== 'completion_submitted' || o.data.provenHeight === undefined).length >
+              0
+            )
               hotUntil = Date.now() + 5_000
             // new lanes appear as deals start — re-derive watch subs at the
             // end of a pass so a fresh want is subscribed within one cycle
@@ -1175,8 +1219,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
                   downNow.add(h)
                   log(`automation: watchdog: host down ${h}`)
                 }
-              for (const h of [...downNow])
-                if (marketHosts.includes(h) && !r.downHosts.includes(h)) await hostBack(h)
+              for (const h of [...downNow]) if (marketHosts.includes(h) && !r.downHosts.includes(h)) await hostBack(h)
             } catch (e) {
               log(`automation: watchdog: ${(e as Error).message}`)
             }
@@ -1198,23 +1241,46 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   const watches = new Map<string, AbortController>()
   const watchOne = async (base: string, service: string, query: unknown, signal: AbortSignal): Promise<void> => {
     let cursor: string | undefined
+    // jittered backoff on consecutive failures, reset on any answered
+    // request — and the nap ends the moment the watch itself is dropped,
+    // so an aborted subscription never leaves a 30s zombie sleep
+    let backoff = 1_000
+    const nap = (ms: number): Promise<void> =>
+      new Promise((resolve) => {
+        const t = setTimeout(() => {
+          signal.removeEventListener('abort', done)
+          resolve()
+        }, ms)
+        const done = (): void => {
+          clearTimeout(t)
+          resolve()
+        }
+        signal.addEventListener('abort', done, { once: true })
+      })
+    const fail = async (): Promise<void> => {
+      await nap(Math.min(backoff, 30_000) * (0.5 + Math.random()))
+      backoff = Math.min(backoff * 2, 30_000)
+    }
     while (!stopped && !signal.aborted) {
       try {
-        const u = `${base}/watch?service=${encodeURIComponent(service)}&query=${encodeURIComponent(JSON.stringify(query))}${cursor !== undefined ? `&cursor=${cursor}` : ''}&waitMs=25000`
-        const r = await fetch(u, { signal })
+        const u = `${base}/watch?service=${encodeURIComponent(service)}&query=${encodeURIComponent(JSON.stringify(query))}${cursor !== undefined ? `&cursor=${encodeURIComponent(cursor)}` : ''}&waitMs=25000`
+        // the shim holds up to 25s; a shim that accepts and never answers
+        // must not pin this loop — a timeout is a retry, not an exit
+        const r = await fetch(u, { signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)]) })
         if (!r.ok) {
-          await new Promise((r2) => setTimeout(r2, 5_000))
+          await fail()
           continue
         }
         const j = (await r.json()) as { changed?: boolean; cursor?: string }
         cursor = j.cursor ?? cursor
+        backoff = 1_000
         if (j.changed === true && !stopped) {
           hotUntil = Date.now() + 5_000
           void deals().catch((e) => log(`automation: watch: ${(e as Error).message}`))
         }
       } catch {
         if (signal.aborted || stopped) return
-        await new Promise((r) => setTimeout(r, 5_000))
+        await fail()
       }
     }
   }

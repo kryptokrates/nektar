@@ -736,9 +736,14 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // association broadcaster that does.
   const requirePow = nektarEnvFlag('NEKTAR_HEADER_POW') !== false
   const tracker = new WitnessedTracker(
-    new ChaintracksTracker(mc, mc.chaintracksUrl ?? (ttn ? `${mc.broadcasterUrl}/chaintracks/v2` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'), undefined, {
-      requirePow
-    }),
+    new ChaintracksTracker(
+      mc,
+      mc.chaintracksUrl ?? (ttn ? `${mc.broadcasterUrl}/chaintracks/v2` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'),
+      undefined,
+      {
+        requirePow
+      }
+    ),
     new WocTracker(mc, { requirePow }),
     {
       strict: nektarEnvFlag('NEKTAR_STRICT_HEADERS'),
@@ -1109,7 +1114,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     // path is NEKTAR_FUND_TXIDS=<txid|hex:rawtx> (import above).
     if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') === '1') {
       try {
-        for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u)
+        for (const u of await discoverUtxos(mc, fundAddress, (t, why) =>
+          process.stderr.write(`nektar discover: index entry ${t.slice(0, 12)} skipped: ${why}\n`)
+        ))
+          addIfNew(u)
       } catch (e) {
         process.stderr.write(`nektar ${net}: UTXO discovery unavailable (${(e as Error).message}) — set NEKTAR_FUND_TXIDS=<funding txid>\n`)
       }
@@ -1167,7 +1175,10 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       }
       if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') === '1') {
         try {
-          for (const u of await discoverUtxos(mc, fundAddress)) addIfNew(u)
+          for (const u of await discoverUtxos(mc, fundAddress, (t, why) =>
+            process.stderr.write(`nektar discover: index entry ${t.slice(0, 12)} skipped: ${why}\n`)
+          ))
+            addIfNew(u)
         } catch {
           /* keep polling */
         }
@@ -1266,7 +1277,9 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
         await liveTf.refresh()
         let imported = 0
         try {
-          for (const u of await discoverUtxos(mc, fundAddress)) {
+          for (const u of await discoverUtxos(mc, fundAddress, (t, why) =>
+            process.stderr.write(`nektar discover: index entry ${t.slice(0, 12)} skipped: ${why}\n`)
+          )) {
             const before = utxoView.utxos.length
             addIfNew(u)
             if (utxoView.utxos.length > before) imported++
@@ -1301,7 +1314,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
         pending = 0
       let live = new Map<string, { tx: Transaction; vout: number }>()
       try {
-        const list = await discoverUtxos(mc, fundAddress)
+        const list = await discoverUtxos(mc, fundAddress, (t, why) => process.stderr.write(`nektar discover: index entry ${t.slice(0, 12)} skipped: ${why}\n`))
         live = new Map(list.map((u) => [op(u.tx.id('hex'), u.vout), u]))
       } catch {
         /* discovery down — still can drop rejected entries below */

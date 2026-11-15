@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { PrivateKey } from '@bsv/sdk'
 import { AutomationStore } from '@nektar/automation'
-import { MarketEngine, trackFanout, ScriptedExecutor } from '@nektar/automation'
+import { MarketEngine, trackFanout, queueRepairs, ScriptedExecutor } from '@nektar/automation'
 import type { MarketMessage } from '@nektar/automation'
 
 const open = async (now: () => number) => {
@@ -103,4 +103,31 @@ test('trackFanout: missed → immediate row, pending → delayed row, late succe
   }
   await new Promise((r) => setImmediate(r))
   assert.deepEqual(acked.sort(), ['repair:h:h1', 'repair:h:h2'], 'a leg that landed after quorum cancels its own repair row')
+})
+
+test('republish repair: a missed host gets a :proved repair row that survives a terminal submit-fanout row', async () => {
+  let now = 1_000_000
+  const { kx, store } = await open(() => now)
+  try {
+    // the submit fan-out already wrote repair:h:host1 — if that row is
+    // terminal, a plain repair: enqueue is a silent no-op, so the republish
+    // path uses a distinct :proved actionId
+    await store.enqueue({ actionId: 'repair:h:host1', operationId: 'lanes', kind: 'repair-host', destination: 'host1', payload: { key: 'h' } })
+    await store.ackOutbox('repair:h:host1')
+    const io = { enqueue: (o: Parameters<typeof store.enqueue>[0], opts?: { delayMs?: number }) => store.enqueue(o, opts) }
+    await queueRepairs(io, 'h', ['host1'], { idSuffix: ':proved' })
+    const due = await store.dueOutbox(10)
+    const row = due.find((r) => r.actionId === 'repair:h:host1:proved')
+    assert.ok(row !== undefined, 'a republish missed host gets its own repair row despite the terminal :submit one')
+    assert.equal(row.kind, 'repair-host')
+    assert.equal(row.destination, 'host1')
+    assert.deepEqual(row.payload, { key: 'h' })
+    // and the plain id confirms the dedup it is avoiding
+    assert.equal(
+      await io.enqueue({ actionId: 'repair:h:host1', operationId: 'lanes', kind: 'repair-host', destination: 'host1', payload: { key: 'h' } }),
+      false
+    )
+  } finally {
+    await kx.destroy()
+  }
 })

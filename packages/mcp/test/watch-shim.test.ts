@@ -17,15 +17,32 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function stack(t: test.TestContext): Promise<{
   watch: (qs: string) => Promise<{ changed: boolean; cursor: string; tookMs?: number; backend?: string }>
-  postNotify: (body: unknown) => Promise<Response>
+  postNotify: (body: unknown | string) => Promise<Response>
   setOutputs: (o: unknown) => void
+  setOutputsFor: (query: unknown, o: unknown) => void
+  lookups: () => number
   killBackend: () => Promise<void>
 }> {
   let outputs: unknown = [{ beef: [1], outputIndex: 0 }]
+  const perQuery = new Map<string, unknown>()
+  let lookups = 0
   let backend: Server | null = createServer((req, res) => {
     if (req.url === '/lookup') {
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ outputs }))
+      let body = ''
+      req.on('data', (c) => (body += c))
+      req.on('end', () => {
+        lookups++
+        let o = outputs
+        try {
+          const q = JSON.parse(body).query
+          const k = JSON.stringify(q)
+          if (perQuery.has(k)) o = perQuery.get(k)
+        } catch {
+          /* malformed lookup body — serve the default set */
+        }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ outputs: o }))
+      })
       return
     }
     res.writeHead(404)
@@ -71,10 +88,15 @@ async function stack(t: test.TestContext): Promise<{
   const watch = (qs: string) => get(`/watch?${qs}`).then((r) => r.json() as Promise<{ changed: boolean; cursor: string; tookMs?: number; backend?: string }>)
   return {
     watch,
-    postNotify: (body: unknown) => fetch(`${url}/notify`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    postNotify: (body: unknown | string) =>
+      fetch(`${url}/notify`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) }),
     setOutputs: (o) => {
       outputs = o
     },
+    setOutputsFor: (query, o) => {
+      perQuery.set(JSON.stringify(query), o)
+    },
+    lookups: () => lookups,
     killBackend: async () => {
       const b = backend
       backend = null
@@ -137,4 +159,60 @@ test('watch-shim: backend outage degrades — held watch returns changed:false, 
   const res = await watch(`service=ls_x&query=${q}&cursor=${cur}&waitMs=800`)
   assert.equal(res.changed, false, 'a dead backend holds to the ceiling and reports no change')
   assert.ok(Date.now() - t0 >= 700)
+})
+
+test('watch-shim: concurrent watchers on one key share one backend poller', async (t) => {
+  const { watch, lookups } = await stack(t)
+  const q = encodeURIComponent('{}')
+  const cur = (await watch(`service=ls_x&query=${q}`)).cursor
+  const start = lookups()
+  // two held watches on the SAME key for ~300ms — POLL_MS is 50, so a shared
+  // poller costs ~6 lookups; a poller-per-connection would cost ~12+
+  const w1 = watch(`service=ls_x&query=${q}&cursor=${cur}&waitMs=350`)
+  const w2 = watch(`service=ls_x&query=${q}&cursor=${cur}&waitMs=350`)
+  await sleep(300)
+  const n = lookups() - start
+  await Promise.all([w1, w2])
+  assert.ok(n >= 3, `poller actually ran (${n} lookups)`)
+  assert.ok(n <= 10, `two watchers on one key share one poller — ${n} lookups in 300ms, a per-connection poller would double it`)
+})
+
+test('watch-shim: nested query members key independent watches', async (t) => {
+  const { watch, setOutputsFor } = await stack(t)
+  // the old keyOf whitelisted top-level names at every depth, collapsing
+  // {wants:{net,domain}} for different domains into ONE key — a domain-b
+  // change would have woken (or masked) domain-a waiters
+  const qa = encodeURIComponent(JSON.stringify({ wants: { net: 'x', domain: 'a' } }))
+  const qb = encodeURIComponent(JSON.stringify({ wants: { net: 'x', domain: 'b' } }))
+  setOutputsFor({ wants: { net: 'x', domain: 'a' } }, [{ beef: [1], outputIndex: 0 }])
+  setOutputsFor({ wants: { net: 'x', domain: 'b' } }, [{ beef: [1], outputIndex: 0 }])
+  const curA = (await watch(`service=ls_x&query=${qa}`)).cursor
+  const curB = (await watch(`service=ls_x&query=${qb}`)).cursor
+  const heldA = watch(`service=ls_x&query=${qa}&cursor=${curA}&waitMs=5000`)
+  const heldB = watch(`service=ls_x&query=${qb}&cursor=${curB}&waitMs=800`)
+  await sleep(150)
+  // only the a-side fingerprint moves
+  setOutputsFor({ wants: { net: 'x', domain: 'a' } }, [{ beef: [7], outputIndex: 0 }])
+  const t0 = Date.now()
+  const resA = await heldA
+  assert.equal(resA.changed, true)
+  assert.ok(Date.now() - t0 < 3000, "the a waiter woke on its own lane's change")
+  const resB = await heldB
+  assert.equal(resB.changed, false, "the b waiter held — a different domain's change is not its change")
+})
+
+test('watch-shim: /notify requires service, bounded body, and a token bucket', async (t) => {
+  const { postNotify } = await stack(t)
+  assert.equal((await postNotify({})).status, 400, 'missing service → 400')
+  assert.equal((await postNotify({ service: 42 })).status, 400, 'non-string service → 400')
+  assert.equal((await postNotify('{not json')).status, 400, 'malformed json → 400')
+  assert.equal((await postNotify('x'.repeat(70 * 1024))).status, 413, 'body over 64KB → 413')
+  // burst over the 20-token bucket → some 429s
+  let saw429 = false
+  for (let i = 0; i < 28; i++) {
+    const st = (await postNotify({ service: 'ls_x' })).status
+    if (st === 429) saw429 = true
+    else assert.equal(st, 200)
+  }
+  assert.ok(saw429, 'a burst over the bucket is rate-limited')
 })

@@ -264,10 +264,15 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
     await b.rt.cycle() // flush the want to the hosts
     const { readOffers } = await import('@nektar/bstack')
     assert.ok(
-      await until([sA.rt, sB.rt, sC.rt], chain, async () => {
-        const r = await readOffers([h1.url, h2.url], { net: NET, wantId, buyerPub: b.pub }, { tracker: trackerFor(chain), net: NET, now: clock })
-        return r.items.length >= 3
-      }, 80),
+      await until(
+        [sA.rt, sB.rt, sC.rt],
+        chain,
+        async () => {
+          const r = await readOffers([h1.url, h2.url], { net: NET, wantId, buyerPub: b.pub }, { tracker: trackerFor(chain), net: NET, now: clock })
+          return r.items.length >= 3
+        },
+        80
+      ),
       'not all offers listed | ' + logs.slice(-20).join(' | ')
     )
     const all = [b.rt, sA.rt, sB.rt, sC.rt]

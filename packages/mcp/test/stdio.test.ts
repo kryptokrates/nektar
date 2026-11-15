@@ -62,7 +62,11 @@ test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resourc
     // block later — and this node does not co-mine unmined-parent chains, so
     // treasury split → anchor costs ~2 block seals plus index lag. Mine while
     // polling — each seal drains the next candidate batch toward the anchor.
-    let proof = text(await client.callTool({ name: 'prove', arguments: { shard: 'm', seq: 0 } })).result as { ok: boolean; settled: boolean; anchorState: string }
+    let proof = text(await client.callTool({ name: 'prove', arguments: { shard: 'm', seq: 0 } })).result as {
+      ok: boolean
+      settled: boolean
+      anchorState: string
+    }
     for (let i = 0; i < 90 && proof.anchorState !== 'mined'; i++) {
       await w.chain.mine(1).catch(() => undefined)
       await new Promise((r) => setTimeout(r, 700))

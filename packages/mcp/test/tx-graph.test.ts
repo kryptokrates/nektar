@@ -19,7 +19,11 @@ const liveMem = async (t: { skip: (m?: string) => void }): Promise<{ mem: Nektar
 /** parent → child, both signed; the parent is a REAL funded outpoint (a
  *  fabricated root can't broadcast — the validator refuses TX_MISSING_PARENT)
  *  and is mined on `chain` when asked. */
-const pair = async (chain: StackChain, funder: StackFunder, mineParent: boolean): Promise<{ parent: Transaction; child: Transaction; vout: number; sats: number; key: PrivateKey }> => {
+const pair = async (
+  chain: StackChain,
+  funder: StackFunder,
+  mineParent: boolean
+): Promise<{ parent: Transaction; child: Transaction; vout: number; sats: number; key: PrivateKey }> => {
   const key = funder.keyPair
   const u = await funder.take(10_000)
   const parent = u.tx // already broadcast by StackFunder.fund — zeroconf-spendable

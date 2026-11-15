@@ -76,9 +76,15 @@ test('bootstrapReserve: a treasury file namespaced for another consumer is refus
   writeFileSync(file, JSON.stringify({ namespace: 'testkit', treasury: { txid: 'ab'.repeat(32), vout: 0, txHex: 'aa' } }))
   const reserve = new ReserveFunder(PrivateKey.fromRandom(), join(dir, 'reserve.json'))
   await assert.rejects(
-    bootstrapReserve(cfg, PrivateKey.fromRandom(), reserve, async () => {
-      throw new Error('rpc must not be reached')
-    }, { treasuryFile: file, namespace: 'real-stack' }),
+    bootstrapReserve(
+      cfg,
+      PrivateKey.fromRandom(),
+      reserve,
+      async () => {
+        throw new Error('rpc must not be reached')
+      },
+      { treasuryFile: file, namespace: 'real-stack' }
+    ),
     /namespaced 'testkit'/
   )
 })

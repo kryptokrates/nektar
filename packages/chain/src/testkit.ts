@@ -468,7 +468,8 @@ export class StackTreasury {
     // coinbases mature at +100 on regtest — generate enough to have ≥1 mature
     if (tip < 120) await this.chain.mine(120 - tip + 1)
     const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
-      treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'), namespace: 'testkit'
+      treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'),
+      namespace: 'testkit'
     })
     if (this.reserve.utxos.length === 0 && r === null) {
       // a file tip that exists but can't split (under floor / spent) is the
@@ -506,7 +507,10 @@ export class StackTreasury {
         await this.reserve.scanCoinbases(this.cfg, (m, ...p) => stackRpc(this.cfg, m, ...p), t0, t0 + 10)
         if (this.reserve.utxos.length === 0) await new Promise((r) => setTimeout(r, 500))
       }
-      await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), { treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'), namespace: 'testkit' })
+      await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
+        treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'),
+        namespace: 'testkit'
+      })
     }
     if (this.reserve.utxos.length === 0) throw new Error('testkit: treasury could not be funded — no mature coinbases')
   }
@@ -528,7 +532,8 @@ export class StackTreasury {
       const coverable = free.some((u) => u.satoshis >= need) || free.slice(0, 16).reduce((a, u) => a + u.satoshis, 0) >= need
       if (coverable) return
       const r = await bootstrapReserve(this.cfg, this.key, this.reserve, (m, ...p) => stackRpc(this.cfg, m, ...p), {
-        treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'), namespace: 'testkit'
+        treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'),
+        namespace: 'testkit'
       })
       if (r === null) {
         // name the real cause: the file tip either drained below the split
@@ -542,7 +547,10 @@ export class StackTreasury {
             const parent = (await TxStore.read(t.treasury.txHex, undefined)).tx
             const sats = parent.outputs[t.treasury.vout]?.satoshis ?? 0
             const status = await this.chain.utxoStatus(t.treasury.txid, t.treasury.vout)
-            why = sats < 1e6 ? `treasury tail under the 1M-sat split floor (${sats} sats) — top up ${join(STATE_DIR, 'testkit-treasury-chain.json')}` : `treasury tail ${status}`
+            why =
+              sats < 1e6
+                ? `treasury tail under the 1M-sat split floor (${sats} sats) — top up ${join(STATE_DIR, 'testkit-treasury-chain.json')}`
+                : `treasury tail ${status}`
           }
         } catch {
           /* fall through to the generic cause */
@@ -714,10 +722,7 @@ export class StackFunder implements Funder {
         // the suite mints a key per world and discards it — on a zero-subsidy
         // chain parked coins are treasury loss. Persist WIF + funding txid +
         // output count so a sweep can find every outpoint and return them.
-        appendFileSync(
-          join(STATE_DIR, 'stackfunder-keys.jsonl'),
-          JSON.stringify({ wif: f.keyPair.toWif(), fundTxid: tx.id('hex'), outputs }) + '\n'
-        )
+        appendFileSync(join(STATE_DIR, 'stackfunder-keys.jsonl'), JSON.stringify({ wif: f.keyPair.toWif(), fundTxid: tx.id('hex'), outputs }) + '\n')
         for (let i = 0; i < outputs; i++) f.utxos.push({ tx, vout: i, satoshis: sats })
         // zeroconf: outputs are spendable while unconfirmed — tests mine only
         // where a proof is actually asserted

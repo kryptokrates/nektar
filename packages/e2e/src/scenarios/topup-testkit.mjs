@@ -60,10 +60,7 @@ await tx.sign()
 const r = await new TeranodeBroadcaster(E('NEKTAR_PROPAGATION_URL') ?? 'http://localhost:8833/tx').broadcast(tx)
 if (r.status !== 'success') throw new Error(`topup refused: ${r.description}`)
 await rpc('generatetoaddress', 1, addr)
-writeFileSync(
-  join(root, '.state', tkFile),
-  JSON.stringify({ namespace: 'testkit', treasury: { txid: tx.id('hex'), vout: 0, txHex: tx.toHex() } }, null, 1)
-)
+writeFileSync(join(root, '.state', tkFile), JSON.stringify({ namespace: 'testkit', treasury: { txid: tx.id('hex'), vout: 0, txHex: tx.toHex() } }, null, 1))
 rs.treasury = { txid: tx.id('hex'), vout: 1, txHex: tx.toHex() }
 writeFileSync(join(root, '.state', rsFile), JSON.stringify(rs, null, 1))
 console.log(`topup ${TOPUP} sats → testkit tip ${tx.id('hex').slice(0, 16)}:0; real-stack change ${tx.outputs[1].satoshis} sats`)

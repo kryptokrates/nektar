@@ -119,10 +119,7 @@ export class SpendGuard implements Broadcaster {
       // (EF/BEEF) resolves from the attached source — the network validates
       // the real value at broadcast, the fee here is ledger bookkeeping only
       const srcOut = inp.sourceTransaction?.outputs[inp.sourceOutputIndex ?? 0]
-      const v =
-        txid === undefined
-          ? undefined
-          : (this.valueOf(txid, inp.sourceOutputIndex ?? 0) ?? srcOut?.satoshis)
+      const v = txid === undefined ? undefined : (this.valueOf(txid, inp.sourceOutputIndex ?? 0) ?? srcOut?.satoshis)
       if (v === undefined || srcOut === undefined) return undefined
       vin += v
       const hex = srcOut.lockingScript.toHex()

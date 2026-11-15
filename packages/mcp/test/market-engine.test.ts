@@ -456,9 +456,5 @@ test('quote commitment attaches in every live state and is ignored once terminal
     mode
   })
   await w.round([bob])
-  assert.equal(
-    (await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length,
-    attachedBefore,
-    'a terminal op ignores a late quote'
-  )
+  assert.equal((await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length, attachedBefore, 'a terminal op ignores a late quote')
 })

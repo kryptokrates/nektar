@@ -37,7 +37,7 @@ async function stack(t: test.TestContext): Promise<{
   let shimErr = ''
   const shim: ChildProcess = spawn(process.execPath, [SHIM], {
     env: { ...process.env, BACKEND: `http://127.0.0.1:${bport}`, PORT: String(sport), POLL_MS: '50' },
-    stdio: ['ignore', 'ignore', 'pipe'],
+    stdio: ['ignore', 'ignore', 'pipe']
   })
   shim.stderr?.on('data', (d) => (shimErr += String(d)))
   t.after(() => {
@@ -79,7 +79,7 @@ async function stack(t: test.TestContext): Promise<{
       const b = backend
       backend = null
       await new Promise<void>((r) => b!.close(() => r()))
-    },
+    }
   }
 }
 

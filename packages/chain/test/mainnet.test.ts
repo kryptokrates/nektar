@@ -306,7 +306,6 @@ test('SpendGuard: daily cap counts committed value, not just fees (escrow spends
   assert.equal(g2.spentToday(), 40)
 })
 
-
 test('importFundingTx: hex: raw tx imports; empty/malformed refs fail with clear errors', async () => {
   const { importFundingTx } = await import('../src/mainnet.js')
   // vout 0 pays addr/pkh, vout 1 pays someone else — only the matching one imports

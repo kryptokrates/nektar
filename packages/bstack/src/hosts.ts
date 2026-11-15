@@ -199,7 +199,11 @@ export const readOffers = (
         (p.body as { offer: { buyerPub?: string } }).offer.buyerPub === q.buyerPub
     }
   )
-export const readWant = (hosts: string[], q: { net: string; pub: string; wantId: string }, o: { tracker: ChainTracker; net: string; now?: number; timeoutMs?: number; quorum?: number }) =>
+export const readWant = (
+  hosts: string[],
+  q: { net: string; pub: string; wantId: string },
+  o: { tracker: ChainTracker; net: string; now?: number; timeoutMs?: number; quorum?: number }
+) =>
   readItems(
     hosts,
     'ls_nektar',

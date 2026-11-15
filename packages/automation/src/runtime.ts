@@ -550,8 +550,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       subs.map(async (s) => {
         const staged = pendingLane.get(s.tag) ?? []
         pendingLane.delete(s.tag)
-        const toEvents = (items: { txid: string; payload: { body: unknown } }[]) =>
-          [...staged.splice(0), ...items.map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))]
+        const toEvents = (items: { txid: string; payload: { body: unknown } }[]) => [
+          ...staged.splice(0),
+          ...items.map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))
+        ]
         if (marketHosts.length > 1) {
           const fast = await s.call({ timeoutMs, quorum: 1 })
           void s
@@ -634,10 +636,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       const nextAt = await store.nextOutboxAt()
       if (nextAt === undefined || stopped) return
       clearTimeout(outboxTimer)
-      outboxTimer = setTimeout(() => {
-        outboxTimer = undefined
-        pumpOutbox()
-      }, Math.max(0, nextAt - Date.now()))
+      outboxTimer = setTimeout(
+        () => {
+          outboxTimer = undefined
+          pumpOutbox()
+        },
+        Math.max(0, nextAt - Date.now())
+      )
       outboxTimer.unref()
     } catch {
       /* the deals-pass floor covers a missed arm */

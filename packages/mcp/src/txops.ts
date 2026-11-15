@@ -166,16 +166,9 @@ export class TxOps {
     // object — 'mined' is reserved for "merkle path in hand" (the local
     // branch above), so the strongest a status string earns is 'seen'
     if (
-      [
-        'MINED',
-        'IMMUTABLE',
-        'RECEIVED',
-        'SENT_TO_NETWORK',
-        'ACCEPTED_BY_NETWORK',
-        'SEEN_ON_NETWORK',
-        'SEEN_MULTIPLE_NODES',
-        'STUMP_PROCESSING'
-      ].includes(status)
+      ['MINED', 'IMMUTABLE', 'RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING'].includes(
+        status
+      )
     )
       return 'seen'
     return 'unknown'

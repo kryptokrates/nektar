@@ -108,7 +108,8 @@ let from = Number(process.argv[2])
 if (!Number.isFinite(from)) {
   // default: last ~3h — binary-search the first block at that boundary
   const target = Math.floor(Date.now() / 1000) - 3 * 3600
-  let lo = 1, hi = tip
+  let lo = 1,
+    hi = tip
   while (lo < hi) {
     const mid = (lo + hi) >> 1
     const b = await rpc('getblock', await rpc('getblockhash', mid), 1)
@@ -221,8 +222,5 @@ const rc = await broadcaster.broadcast(combine)
 if (rc.status !== 'success') throw new Error(`combine refused: ${rc.description}`)
 await rpc('generatetoaddress', 1, treasuryAddr)
 const chainFile = join(root, '.state', 'testkit-treasury-chain.json')
-writeFileSync(
-  chainFile,
-  JSON.stringify({ namespace: 'testkit', treasury: { txid: combine.id('hex'), vout: 0, txHex: combine.toHex() } }, null, 1)
-)
+writeFileSync(chainFile, JSON.stringify({ namespace: 'testkit', treasury: { txid: combine.id('hex'), vout: 0, txHex: combine.toHex() } }, null, 1))
 console.log(`swept ${sweepTxs.length} chunks → ${combine.outputs[0].satoshis} sats; testkit tip → ${combine.id('hex').slice(0, 16)}…`)

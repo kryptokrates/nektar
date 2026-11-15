@@ -100,7 +100,13 @@ test('sale: wire quote carries payload mode (delivered can out-run the quote)', 
   // `quote` message, the claim ran with offerMode undefined — a key-mode
   // payload parsed as a fragment and a good sale false-disputed. The signed
   // quote must self-describe the payload encoding.
-  const offer = { cfg: { sellerPkh: 'aa'.repeat(20), price: 1n, hWrapped: 'bb'.repeat(32), refundAfter: 1n, maxFee: 1n }, wrapped: 'dd', sellerPub: '02' + 'ab'.repeat(32), offerSig: 'cc', mode: 'key' as const }
+  const offer = {
+    cfg: { sellerPkh: 'aa'.repeat(20), price: 1n, hWrapped: 'bb'.repeat(32), refundAfter: 1n, maxFee: 1n },
+    wrapped: 'dd',
+    sellerPub: '02' + 'ab'.repeat(32),
+    offerSig: 'cc',
+    mode: 'key' as const
+  }
   const wire = JSON.parse(JSON.stringify(saleQuoteWire(publicSaleQuote(offer))))
   assert.equal(wire.mode, 'key')
   const noMode = { ...offer, mode: undefined }

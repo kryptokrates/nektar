@@ -381,8 +381,7 @@ async function fundAgents() {
   writeFileSync(join(dir, 'agent-keys.json'), JSON.stringify(Object.fromEntries(agents.map((a) => [a.name, a.key.toWif([0xef])]))), { mode: 0o600 })
   const split = new Transaction()
   split.addInput({ sourceTransaction: parent, sourceOutputIndex: tip.vout, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
-  for (const a of agents)
-    split.addOutput({ lockingScript: new P2PKH().lock(a.key.toPublicKey().toAddress([0x6f])), satoshis: per })
+  for (const a of agents) split.addOutput({ lockingScript: new P2PKH().lock(a.key.toPublicKey().toAddress([0x6f])), satoshis: per })
   split.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), satoshis: change })
   await split.sign()
   const r = await broadcaster.broadcast(split)
@@ -553,11 +552,20 @@ async function ensurePortFree(port, name) {
   try {
     // locale-free — netstat's state column is translated (e.g. ABHÖREN on
     // German Windows) so the listener is found via Get-NetTCPConnection
-    out = execFileSync('powershell', ['-NoProfile', '-Command', `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue).OwningProcess`], { encoding: 'utf8' })
+    out = execFileSync(
+      'powershell',
+      ['-NoProfile', '-Command', `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue).OwningProcess`],
+      { encoding: 'utf8' }
+    )
   } catch {
     return
   }
-  const pids = new Set(out.split(/\r?\n/).map((s) => s.trim()).filter((s) => /^\d+$/.test(s) && s !== '0'))
+  const pids = new Set(
+    out
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => /^\d+$/.test(s) && s !== '0')
+  )
   for (const pid of pids)
     try {
       execFileSync('taskkill', ['/F', '/T', '/PID', pid])
@@ -686,7 +694,13 @@ try {
         // a crash-respawn cycle is ~25-30s — outlast it with the 3s cadence
         if (i >= 12 || !/seller policy|fetch failed/i.test(String(e))) throw e
         try {
-          JSON.parse(execFileSync(process.execPath, [join(root, 'tools/automation.mjs'), '--data', s.dataDir, '--json', 'policy', 'approve', join(s.dataDir, 'policy.json')], { encoding: 'utf8' }))
+          JSON.parse(
+            execFileSync(
+              process.execPath,
+              [join(root, 'tools/automation.mjs'), '--data', s.dataDir, '--json', 'policy', 'approve', join(s.dataDir, 'policy.json')],
+              { encoding: 'utf8' }
+            )
+          )
         } catch {
           /* approval write raced the sqlite — the retry loop re-attempts */
         }
@@ -801,7 +815,7 @@ try {
     {
       const sellerOp = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
       const bev = (await tool(bob, 'deals', { operationId })).events ?? []
-      const sev = sellerOp ? (await tool(cara, 'deals', { operationId: sellerOp.operationId })).events ?? [] : []
+      const sev = sellerOp ? ((await tool(cara, 'deals', { operationId: sellerOp.operationId })).events ?? []) : []
       steps = stepTable(bev, sev, wantAt)
       log('step table (anchored to want post):')
       printTable(steps)
@@ -874,8 +888,7 @@ try {
       const jUntil = Date.now() + 45_000
       let jOp = op
       while (jOp.journal?.counterparty?.complete !== true) {
-        if (Date.now() > jUntil)
-          throw new Error(`counterparty journal incomplete: ${JSON.stringify(jOp.journal?.counterparty).slice(0, 300)}`)
+        if (Date.now() > jUntil) throw new Error(`counterparty journal incomplete: ${JSON.stringify(jOp.journal?.counterparty).slice(0, 300)}`)
         await delay(2000)
         jOp = await tool(bob, 'deals', { operationId })
       }

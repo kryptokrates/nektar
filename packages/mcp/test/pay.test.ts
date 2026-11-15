@@ -117,7 +117,7 @@ test('payments: gated tool 402s → signed tx settles → receipt commits the pa
   const { mem, settle, payer } = _w
   await mem.remember('s', 'the fee is 250 sats')
   await mem.anchorShard('s')
-  settle('s')
+  await settle('s')
 
   // 1) unpaid call → 402 challenge with an invoice (x402-shaped)
   const denied = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'the fee is 250 sats', cites: [{ shard: 's', seq: 0 }] }] })
@@ -149,7 +149,7 @@ test('payments: gated tool 402s → signed tx settles → receipt commits the pa
   // (now consumed) invoice fails lookup
   await mem.remember('s', 'x')
   await mem.anchorShard('s')
-  settle('s')
+  await settle('s')
   const denied2 = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'x', cites: [{ shard: 's', seq: 1 }] }] })
   const acc2 = denied2.accepts[0]
   await assert.rejects(

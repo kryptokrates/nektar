@@ -90,17 +90,25 @@ test('paid disclosure: depositor refunds an unrevealed escrow after deadline', a
   try {
     const _w = await setup(t)
     if (_w === undefined) return
-    const { seller, buyer } = _w
-    const offer = await callTool(seller, 'sale', { op: 'offer', value: 'deadbeef', price: 1_000, refundAfter: 100, maxFee: 10 })
+    const { chain, seller, buyer } = _w
+    // locktimes are absolute heights — derive them off the live tip, not a
+    // hardcoded low number that only works on a freshly-reset chain
+    const h = await chain.currentHeight()
+    const offer = await callTool(seller, 'sale', { op: 'offer', value: 'deadbeef', price: 1_000, refundAfter: h + 2, maxFee: 10 })
     const esc = await callTool(buyer, 'sale', { op: 'escrow', cfg: offer.cfg, amount: 2_000 })
     assert.equal(esc.accepted, true)
-    // seller never completes — buyer reclaims at the deadline
-    const ref = await callTool(buyer, 'sale', { op: 'refund', cfg: esc.escrow, utxo: esc.utxo, lockTime: 100, changeSats: 1_990 })
+    // a second escrow while the offer is still fundable — used for the
+    // covenant-level early-refund refusal below
+    const esc2 = await callTool(buyer, 'sale', { op: 'escrow', cfg: offer.cfg, amount: 2_000 })
+    assert.equal(esc2.accepted, true)
+    // seller never completes — mine past the deadline, then the buyer reclaims
+    // (the refund tx's nLockTime must be ≥ refundAfter and < the tip)
+    await chain.mine(5)
+    const ref = await callTool(buyer, 'sale', { op: 'refund', cfg: esc.escrow, utxo: esc.utxo, lockTime: h + 2, changeSats: 1_990 })
     assert.equal(ref.accepted, true, `refund accepted: ${ref.reason ?? ''}`)
     assert.equal(ref.refundSats, 1_990)
     // a refund before the deadline is refused by the covenant
-    const esc2 = await callTool(buyer, 'sale', { op: 'escrow', cfg: offer.cfg, amount: 2_000 })
-    const early = await callTool(buyer, 'sale', { op: 'refund', cfg: esc2.escrow, utxo: esc2.utxo, lockTime: 50, changeSats: 1_990 })
+    const early = await callTool(buyer, 'sale', { op: 'refund', cfg: esc2.escrow, utxo: esc2.utxo, lockTime: h + 1, changeSats: 1_990 })
     assert.notEqual(early.accepted, true, 'early refund must be refused')
   } finally {
     delete process.env.NEKTAR_PAID_DISCLOSURE
@@ -207,11 +215,11 @@ test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before 
     const _w = await setup(t)
     if (_w === undefined) return
     const { chain, seller, buyer } = _w
-    await chain.mine(5) // push the tip forward
+    const h = await chain.currentHeight()
     const buyerPub = buyer.operatorKey().toPublicKey().toString()
     // D9 — offer expiry is inside the signed digest and enforced at escrow time
-    const expired = await callTool(seller, 'sale', { op: 'offer', value: 'aa', price: 100, refundAfter: 1_000_000, maxFee: 10, buyerPub, expiresAt: 3 })
-    assert.equal(expired.expiresAt, 3)
+    const expired = await callTool(seller, 'sale', { op: 'offer', value: 'aa', price: 100, refundAfter: 1_000_000, maxFee: 10, buyerPub, expiresAt: h })
+    assert.equal(expired.expiresAt, h)
     await assert.rejects(
       () =>
         callTool(buyer, 'sale', {
@@ -224,7 +232,7 @@ test('GOAL-v8 D9/D10: expired offers + past-deadline escrows are refused before 
       'a lapsed offer cannot be funded'
     )
     // a fresh horizon is accepted AND the expiry is inside the signature
-    const fresh = await callTool(seller, 'sale', { op: 'offer', value: 'aa', price: 100, refundAfter: 1_000_000, maxFee: 10, buyerPub, expiresAt: 50 })
+    const fresh = await callTool(seller, 'sale', { op: 'offer', value: 'aa', price: 100, refundAfter: 1_000_000, maxFee: 10, buyerPub, expiresAt: h + 50 })
     const esc = await callTool(buyer, 'sale', {
       op: 'escrow',
       cfg: fresh.cfg,

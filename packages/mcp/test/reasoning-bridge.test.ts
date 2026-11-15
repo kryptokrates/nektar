@@ -40,7 +40,7 @@ async function world(t: { skip: (m?: string) => void }) {
   }
   const r0 = await mem.remember('manual', 'requires(torque, 45).')
   const r1 = await mem.remember('manual', 'applies(port4, torque).')
-  settle('manual')
+  await settle('manual')
   const fetch: FragmentFetch = async (ref) => {
     const rec = (await mem.records(ref.shard)).find((r) => r.seq === ref.seq)
     if (!rec) return { verified: false }
@@ -100,7 +100,7 @@ test('AGT-011/012 model identity + committed, anchored receipt', async (t) => {
   assert.notEqual(a.receiptHash, (await commitReceipt({ ...base, modelId: local })).receiptHash, 'model identity is bound')
   assert.match(a.receipt.truthNote, /do not show the record is true/)
   const anchored = await commitReceipt(base, w.mem)
-  w.settle('__receipts__')
+  await w.settle('__receipts__')
   assert.ok(anchored.anchor?.txid, 'receipt anchored')
   assert.equal((await w.mem.prove('__receipts__', anchored.anchor.seq)).result.ok, true)
 })
@@ -129,14 +129,14 @@ test('AOR-008c/AGT-006 correction loop: revision withdraws a claim, correction a
   // the manual is revised: torque is now 55
   await w.mem.remember('manual', 'requires(torque, 55).')
   await w.mem.remember('manual', 'note(revision, 2).')
-  w.settle('manual')
+  await w.settle('manual')
   const older = await w.mem.prove('manual', 0)
   assert.equal(older.result.ok, true, `older batch still provable after a newer anchor: ${JSON.stringify(older.result)}`)
   const corr = await onRevision(idx, m(0), m(2), w.fetch, { rules: RULES, mem: w.mem })
   assert.equal(corr.length, 1)
   assert.equal(corr[0].stillGrounded, false)
   assert.deepEqual(corr[0].withdrawn, ['port 4 is torqued to 45'])
-  w.settle('__corrections__')
+  await w.settle('__corrections__')
   assert.equal((await w.mem.prove('__corrections__', corr[0].anchor!.seq)).result.ok, true, 'correction anchored + provable')
   assert.equal(new CitationIndex(idx['file']).citing(m(1)).length, 2, 'index persists')
 })
@@ -165,7 +165,7 @@ test('AGT-007 audit bundle verifies offline; 4 tamper cases rejected with reason
   if (w === undefined) return
   await w.mem.remember('manual', 'requires(torque, 55).')
   await w.mem.remember('manual', 'z.')
-  w.settle('manual')
+  await w.settle('manual')
   const b0 = (await w.mem.prove('manual', 0)).bundle!
   const b1 = (await w.mem.prove('manual', 1)).bundle!
   const b2 = (await w.mem.prove('manual', 2)).bundle!
@@ -251,7 +251,7 @@ test('GOAL-v8 D8: anchored revocation record convicts a signer — no local isRe
   w.mem.revoke(pub)
   const rr = await w.mem.remember('__revocation__', `revoke:${pub}:root=${'aa'.repeat(32)}`)
   await w.mem.anchorShard('__revocation__')
-  w.settle('__revocation__')
+  await w.settle('__revocation__')
   const rev = await w.mem.revocationProof(pub)
   assert.ok(rev && rev.anchored && rev.bundle, 'revocation record is anchored + provable')
   assert.equal(rev.seq, rr.seq)
@@ -305,7 +305,7 @@ test('GOAL-v8 D4: anchored rotation chain — third party replays pk(0)→pk(i) 
   if (w === undefined) return
   const k1 = PrivateKey.fromRandom()
   await w.mem.rotateShard('manual', k1)
-  w.settle('__identity__')
+  await w.settle('__identity__')
   const proof = await w.mem.rotationChainProof('manual')
   assert.ok(proof && proof.certs.length === 1, 'one anchored cert')
   assert.equal(proof.certs[0].cert.pubkey, k1.toPublicKey().toString())

@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test --test-timeout=60000 --test-force-exit --test-concurrency=6 dist/test/*.test.js",
+    "test": "node --test --test-timeout=300000 --test-force-exit --test-concurrency=6 dist/test/*.test.js",
     "prepublishOnly": "pnpm -r build"
   },
   "dependencies": {

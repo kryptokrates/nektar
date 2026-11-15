@@ -116,7 +116,7 @@ test('anchored attestation verifies end-to-end in a receipt', { timeout: 30_000 
     checkResult: 'verified',
     modelAttestation: a.attestation
   })
-  settle('__receipts__')
+  await settle('__receipts__')
   const v = await verifyReceipt(mem, { receiptHash: c.receiptHash })
   const model = v.checks.find((cc) => cc.name === 'model')
   assert.equal(model?.ok, true)
@@ -146,7 +146,7 @@ test('commitReceipt auto-attests in one call; exclusive with modelAttestation', 
     checkResult: 'verified',
     attestInference: {}
   })
-  settle('__receipts__')
+  await settle('__receipts__')
   const v = await verifyReceipt(mem, { receiptHash: r.receiptHash })
   const model = v.checks.find((c) => c.name === 'model')
   assert.equal(model?.ok, true)
@@ -205,7 +205,7 @@ test('commitReceipt embeds a validated attestation; verify shows model check', a
   const { mem, settle } = _w
   const r2 = await callTool(mem, 'remember', { shard: 'facts', data: 'the sky is blue' })
   await mem.anchorShard('facts')
-  settle('facts')
+  await settle('facts')
   const att = demoAttestation()
   const r = await callTool(mem, 'commitReceipt', {
     answer: 'the sky is blue',
@@ -214,7 +214,7 @@ test('commitReceipt embeds a validated attestation; verify shows model check', a
     modelAttestation: att
   })
   assert.ok(r.receiptHash)
-  settle('__receipts__')
+  await settle('__receipts__')
   const v = await verifyReceipt(mem, { receiptHash: r.receiptHash })
   const model = v.checks.find((c) => c.name === 'model')
   assert.ok(model, 'model check present')
@@ -248,13 +248,13 @@ test('a receipt without attestation shows declared model (info)', async (t) => {
   const { mem, settle } = _w
   const r2 = await callTool(mem, 'remember', { shard: 'facts', data: 'plain fact' })
   await mem.anchorShard('facts')
-  settle('facts')
+  await settle('facts')
   const r = await callTool(mem, 'commitReceipt', {
     answer: 'plain fact',
     fragmentRefs: [{ shard: 'facts', seq: r2.seq }],
     checkResult: 'verified'
   })
-  settle('__receipts__')
+  await settle('__receipts__')
   const v = await verifyReceipt(mem, { receiptHash: r.receiptHash })
   const model = v.checks.find((c) => c.name === 'model')
   assert.ok(model)

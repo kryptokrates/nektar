@@ -28,7 +28,7 @@ test('shard packs: export → import re-verifies every bundle; records provable 
   if (a === undefined) return
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
-  a.settle('guide')
+  await a.settle('guide')
 
   const pack = await a.mem.exportShardPack('guide')
   assert.equal(pack.v, 1)
@@ -80,7 +80,7 @@ test('shard packs: tampered data recomputes a different leaf → reported, never
   if (a === undefined) return
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
-  a.settle('guide')
+  await a.settle('guide')
   const pack = await a.mem.exportShardPack('guide')
 
   const b = await peerOf(a)
@@ -105,7 +105,7 @@ test('doctor: one-call diagnostic carries funding/shards/records/anchors/payment
   const { mem, settle } = _w
   await mem.remember('s', 'x')
   await mem.remember('s', 'y')
-  settle('s')
+  await settle('s')
   const d = await callTool(mem, 'doctor', {})
   assert.equal(d.network, 'main')
   assert.equal(d.shards, 1)
@@ -123,7 +123,7 @@ test('groundedAnswer/commitReceipt share block: token + verifyUrl + badgeUrl + m
   const { mem, settle } = _w
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   await mem.remember('manual', 'inspect belt every 10h')
-  settle('manual')
+  await settle('manual')
   const r = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] }] })
   assert.ok(r.share, 'share block present')
   assert.ok(r.share.token.startsWith('nektarr1.'))
@@ -138,7 +138,7 @@ test('pack endpoint + remote import: /.well-known/nektar lists offerable shards;
   if (a === undefined) return
   await a.mem.remember('guide', 'fact one')
   await a.mem.remember('guide', 'fact two')
-  a.settle('guide')
+  await a.settle('guide')
   a.mem.setShardPrivate('hr')
   await a.mem.remember('hr', 'secret') // private — must not leak
   const srv = createHttpApi(a.mem).listen(0)
@@ -230,7 +230,7 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
   try {
     await a.mem.remember('guide', 'fact one')
     await a.mem.remember('guide', 'fact two')
-    a.settle('guide')
+    await a.settle('guide')
     // committing the manifest for a public shard publishes the pack
     await a.mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'pack', priceSats: 50 }] })
     const ref = a.mem.packStoreRef('guide')
@@ -248,11 +248,13 @@ test('bstore packs: describeShard publishes the pack; .well-known carries store;
     const imp = (await callTool(b, 'importShard', { store: ref })) as { imported: number; anchored: number }
     assert.equal(imp.imported, 2)
     assert.equal(imp.anchored, 2)
-    // a tampered object is refused by getVerified (size/digest) before it can land
+    // a tampered object is refused by getVerified (size/digest) before it can
+    // land — strip chirp so the keyed path (the digest-checking one) is used
     const c = await peerOf(a, { objectStore: client })
     if (c === undefined) return
     objects.set(ref.key, new TextEncoder().encode('{"kind":"forged"}'))
-    await assert.rejects(callTool(c, 'importShard', { store: ref }) as Promise<unknown>, /objectstore/)
+    const keyed = { bucket: ref.bucket, key: ref.key, sha256: ref.sha256, size: ref.size, endpoint: ref.endpoint }
+    await assert.rejects(callTool(c, 'importShard', { store: keyed }) as Promise<unknown>, /objectstore/)
     // and a pack that passes the digest but fails re-verification is refused too
     const d2 = await peerOf(a, { objectStore: client })
     if (d2 === undefined) return

@@ -22,7 +22,7 @@ import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
-const AGENT_NINE = ['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor']
+const AGENT_TEN = ['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor']
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
 const NET = 'regtest'
 let clock = Date.now()
@@ -100,7 +100,7 @@ const trackerFor = (chain: StackChain) => ({
   currentHeight: () => chain.currentHeight()
 })
 
-test('profile: agent lists exactly the nine agent tools; operator lists all', () => {
+test('profile: agent lists exactly the ten agent tools; operator lists all', () => {
   const prev = process.env.NEKTAR_TOOL_PROFILE
   try {
     delete process.env.NEKTAR_TOOL_PROFILE
@@ -108,20 +108,20 @@ test('profile: agent lists exactly the nine agent tools; operator lists all', ()
       visibleTools()
         .map((t) => t.name)
         .sort(),
-      [...AGENT_NINE].sort()
+      [...AGENT_TEN].sort()
     )
     process.env.NEKTAR_TOOL_PROFILE = 'agent'
     assert.deepEqual(
       visibleTools()
         .map((t) => t.name)
         .sort(),
-      [...AGENT_NINE].sort()
+      [...AGENT_TEN].sort()
     )
     process.env.NEKTAR_TOOL_PROFILE = 'operator'
     const all = visibleTools().map((t) => t.name)
-    assert.ok(all.length > AGENT_NINE.length, `operator sees more than nine (${all.length})`)
+    assert.ok(all.length > AGENT_TEN.length, `operator sees more than ten (${all.length})`)
     const names: readonly string[] = all
-    for (const n of AGENT_NINE) assert.ok(names.includes(n), `operator keeps ${n}`)
+    for (const n of AGENT_TEN) assert.ok(names.includes(n), `operator keeps ${n}`)
     assert.ok(names.includes('describeShard') && names.includes('automation'), 'operator-only tools present')
   } finally {
     if (prev === undefined) delete process.env.NEKTAR_TOOL_PROFILE
@@ -142,7 +142,7 @@ test('profile: an operator-only tool is refused over HTTP and MCP in agent profi
     process.env.NEKTAR_TOOL_PROFILE = 'agent'
     assert.deepEqual(
       ((await (await fetch(`${base}/v1/tools`)).json()) as { tools: Array<{ name: string }> }).tools.map((t) => t.name).sort(),
-      [...AGENT_NINE].sort()
+      [...AGENT_TEN].sort()
     )
     const refused = await fetch(`${base}/v1/tools/fundingStatus`, { method: 'POST', body: '{}', signal: AbortSignal.timeout(5000) })
     assert.equal(refused.status, 404, 'HTTP refuses an operator tool under agent profile')

@@ -55,7 +55,7 @@ test('§8 delta: revisions stored as Δ; every version materialises from proven 
   await mem.remember('man', versions[0])
   for (let i = 1; i < versions.length; i++) await mem.revise('man', i - 1, versions[i])
   await mem.remember('man', 'filler')
-  settle('man')
+  await settle('man')
   const stored = (await mem.records('man')).map((r) => Buffer.from(r.fragment.d).toString())
   assert.ok(
     stored.slice(1, 5).every((s) => s.startsWith('delta:')),

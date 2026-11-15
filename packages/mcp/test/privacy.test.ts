@@ -74,7 +74,7 @@ test('private shards: recall reads them for the owner but marks the policy', asy
   const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
-  settle('hr')
+  await settle('hr')
   const r = await callTool(mem, 'recall', { shard: 'hr' })
   assert.equal(r.items[0].text, 'salary band E5 = 120k', 'owner still reads the record')
   assert.equal(r.shardPrivate, true, 'the policy travels with the answer')
@@ -86,14 +86,14 @@ test('private shards: plain merkle citations are refused (prove)', async (t) => 
   const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
-  settle('hr')
+  await settle('hr')
   const r = await callTool(mem, 'prove', { shard: 'hr', seq: 0 })
   assert.equal(r.ok, false)
   assert.match(r.reason, /private.*ZK|ZK.*membership/i)
   // public shards keep the ordinary path
   await callTool(mem, 'remember', { shard: 'pub', data: 'open fact' })
   await mem.anchorShard('pub')
-  settle('pub')
+  await settle('pub')
   const p = await callTool(mem, 'prove', { shard: 'pub', seq: 0 })
   assert.ok(p.bundle || p.result?.ok, 'public shard still proves plainly')
 })
@@ -114,7 +114,7 @@ test('private cites: groundedAnswer strips them when the proof cannot be produce
   const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
-  settle('hr')
+  await settle('hr')
   const restore = noProver()
   const r = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'salary band E5 = 120k', cites: [{ shard: 'hr', seq: 0 }] }] })
   restore()
@@ -133,7 +133,7 @@ test('private cites: AUTO-PROVE — groundedAnswer keeps a plain private cite wh
   const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
-  settle('hr')
+  await settle('hr')
   // no zk supplied — the service self-issues a queryId, proves, verifies, redacts
   const r = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'salary band E5 = 120k', cites: [{ shard: 'hr', seq: 0 }] }] })
   assert.equal(r.committed, true, `auto-proved cite should survive: ${JSON.stringify(r.flagged)}`)
@@ -154,7 +154,7 @@ test('private cites: a verified ZK proof keeps the claim; the shard name is reda
   const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
-  settle('hr')
+  await settle('hr')
   // stub the service-side ZK verify — the STARK machinery itself is covered by
   // zk-integration.test.ts; this test covers the privacy POLICY wiring.
   const orig = mem.verifyMembership.bind(mem)
@@ -188,12 +188,12 @@ test('private cites: a verified ZK proof keeps the claim; the shard name is reda
   assert.match(v2.checks.find((c) => c.name === 'fragment (private)')!.detail, /re-verify failed: stark invalid/)
   // a committed proof that is not fetchable fails closed too
   ;(mem as any).reverifyMembershipBytes = origRv
-  const origGet = mem.getProof.bind(mem)
-  ;(mem as any).getProof = () => undefined
+  const origFetch = mem.fetchProof.bind(mem)
+  ;(mem as any).fetchProof = async () => undefined
   const v3 = await verifyReceipt(mem, { token: r.receiptToken })
   assert.equal(v3.ok, false)
   assert.match(v3.checks.find((c) => c.name === 'fragment (private)')!.detail, /not fetchable.*cannot re-verify/)
-  ;(mem as any).getProof = origGet
+  ;(mem as any).fetchProof = origFetch
 })
 
 test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', async (t) => {
@@ -202,7 +202,7 @@ test('private cites: a FAILED ZK proof strips the claim too (fail-closed)', asyn
   const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
-  settle('hr')
+  await settle('hr')
   const orig = mem.verifyMembership.bind(mem)
   ;(mem as any).verifyMembership = async () => ({ ok: false, reason: 'stark invalid', statement: 'stub' })
   const r = await callTool(mem, 'groundedAnswer', {
@@ -219,7 +219,7 @@ test('private cites: commitReceipt redacts the shard name the same way — and d
   const { mem, settle } = _w
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await mem.anchorShard('hr')
-  settle('hr')
+  await settle('hr')
   // no zk → auto-prove is attempted; with the prover absent it refuses (fail-closed)
   const restore = noProver()
   await assert.rejects(() => callTool(mem, 'commitReceipt', { answer: 'x', fragmentRefs: [{ shard: 'hr', seq: 0 }] }), /auto-proven/)
@@ -278,7 +278,7 @@ test('private cites end-to-end: a REAL STARK keeps the private cite', { skip: pr
   await callTool(mem, 'remember', { shard: 'hr', data: 'salary band E5 = 120k', private: true })
   await callTool(mem, 'remember', { shard: 'hr', data: 'headcount 12' })
   await mem.anchorShard('hr')
-  settle('hr')
+  await settle('hr')
   const q = mem.issueZkQuery('answer-consumer')
   const { bytes } = await mem.proveMembership('hr', 0, q.queryId)
   const proof = Buffer.from(bytes).toString('hex')

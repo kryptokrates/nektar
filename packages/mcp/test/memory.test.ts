@@ -41,7 +41,7 @@ test('mcp memory: remember → anchor → prove (verified)', async (t) => {
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   const r = await mem.remember('manual', 'inspect belt every 10h')
   assert.ok(r.anchored, 'batch of 2 auto-anchored')
-  settle('manual')
+  await settle('manual')
   const { bundle, result } = await mem.prove('manual', 0)
   assert.ok(bundle)
   assert.deepEqual(result, { ok: true, settled: true, anchorState: 'mined' })
@@ -63,7 +63,7 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
   assert.equal(receipt.modelId, 'test-model-1')
   // once anchored and mined the same plaintext record is served + verified
   await mem.anchorShard('s')
-  settle('s')
+  await settle('s')
   const after = await mem.recall('s')
   assert.equal(after.items[0].text, 'fact one')
   assert.equal(after.items[0].unverifiable, undefined)
@@ -74,7 +74,7 @@ test('mcp memory: recall returns answer receipt; plaintext + encrypted modes', a
   await enc.mem.remember('s', 'classified fact')
   // decrypt requires the record to be anchored AND verified (KEY-008)
   await enc.mem.anchorShard('s')
-  enc.settle('s')
+  await enc.settle('s')
   assert.equal((await enc.mem.recall('s')).items[0].text, 'classified fact', 'decrypts with seed after verify')
   // unanchored encrypted record is never decrypted
   const enc2 = await setup(t, { agentSeed: seed })
@@ -91,7 +91,7 @@ test('S6.1 regression: plaintext items are SPV-verified like encrypted ones (bro
   const { mem, settle } = _w
   await mem.remember('s', 'fact one')
   await mem.remember('s', 'fact two') // anchored batch of 2
-  settle('s')
+  await settle('s')
   const good = await mem.recall('s')
   assert.equal(good.receipt.checkResult, 'verified', 'unencrypted anchored records verify')
   assert.deepEqual(
@@ -171,7 +171,7 @@ test('§18 terminal commitment: every receipt is signed; tampering breaks verifi
   const { mem, settle } = _w
   await mem.remember('s', 'fact one')
   await mem.anchorShard('s')
-  settle('s')
+  await settle('s')
   const { receipt } = await mem.recall('s')
   assert.ok(receipt.signature && receipt.signerPub && receipt.timestamp, 'receipt carries σ, signer and τ')
   const { verifyAnswerReceipt } = await import('../src/memory.js')
@@ -198,7 +198,7 @@ test('ZKA: clearance gate — trusted authority, holder-bound, scoped, single-us
   const { mem, settle } = _w
   await mem.remember('s', 'classified fact', undefined, 2)
   await mem.anchorShard('s')
-  settle('s')
+  await settle('s')
   const { key, identity } = callerOf(mem)
   const cred = issueClearance(authority, 3n, identity.pubkey)
   const read = async (zk: ZkClearance, id = identity) => (await mem.recall('s', { seq: 0, zk, identity: id })).items[0]
@@ -267,7 +267,7 @@ when { resource.level <= principal.level };
   const { mem, settle } = _w
   await mem.remember('s', 'fact two', undefined, 2)
   await mem.anchorShard('s')
-  settle('s') // S6.1: plaintext is served only after SPV verify
+  await settle('s') // S6.1: plaintext is served only after SPV verify
   const { key, identity } = callerOf(mem)
   assert.equal((await mem.recall('s', { identity })).receipt.cedar, 'deny', 'verified identity, no proven level → DENY')
   // a nonce the caller chose (not issued by the instance) authenticates nothing
@@ -367,7 +367,7 @@ test('§19 read-path: revoked author key withholds the record at recall', async 
   const signed = await signProvenance(author, new Uint8Array(Buffer.from('killed key test', 'utf8')), p0)
   await mem.remember('s', 'killed key test', { ...signed, sourcePub: author.toPublicKey().toString(), epoch: 0 })
   await mem.remember('s', 'filler record')
-  settle('s')
+  await settle('s')
   const ok = await mem.recall('s')
   assert.equal(ok.items[0].unverifiable, undefined, 'served before revoke')
   mem.revoke(author.toPublicKey().toString())
@@ -385,7 +385,7 @@ test('§19 CRL: embedded SMT proof makes the anchored revoke record self-convict
 
   const rev = await callTool(mem, 'revoke', { pkHex: pk })
   assert.equal(rev.revoked, true)
-  settle('__revocation__')
+  await settle('__revocation__')
 
   // third-party path — the record alone convicts; no operator SMT consulted
   const p = await callTool(mem, 'revocationProof', { pkHex: pk })
@@ -433,7 +433,7 @@ test('GOAL-v8 D1: delegation map is inside the signed receipt digest — post-ho
   const { verifyAnswerReceipt } = await import('../src/memory.js')
   await mem.remember('s', 'service manual fact')
   await mem.anchorShard('s')
-  settle('s')
+  await settle('s')
   // the caller's delegation map is supplied at recall time and bound by σ
   const sub = PrivateKey.fromRandom()
   const mkDel = async (answer: string) => {
@@ -465,7 +465,7 @@ test('GOAL-v8 D3: receipt carries the ZKAccess artifact — a third party re-ver
   const { decodePresentation } = await import('@nektar/identity')
   await mem.remember('s', 'classified fact', undefined, 2)
   await mem.anchorShard('s')
-  settle('s')
+  await settle('s')
   const { identity } = callerOf(mem)
   const cred = issueClearance(authority, 3n, identity.pubkey)
   const zk: ZkClearance = { commitment: cred.commitment, proof: proveAccess(cred, 2n, 8, tr('s/0', 11))!, transcript: tr('s/0', 11), requiredLevel: 2n }
@@ -496,7 +496,7 @@ test('GOAL-v8 D2: App E level floor — derived content cannot fall below its pr
   const p = await mem.remember('vault', 'classified premise', undefined, 5)
   assert.equal(p.level, 5)
   await mem.anchorShard('vault')
-  settle('vault')
+  await settle('vault')
   // a caller asking for level 0 with a level-5 premise is FLOORED, not served low
   const derived = await mem.remember('vault', 'conclusion drawn from the premise', undefined, 0, { premiseRefs: [{ shard: 'vault', seq: p.seq }] })
   assert.equal(derived.level, 5, 'App E: the floor raises the stored level to the max premise level')
@@ -511,7 +511,7 @@ test('GOAL-v8 D2: App E level floor — derived content cannot fall below its pr
   assert.equal(viaTool.level, 5, 'tool path floors identically')
   // a low-clearance reader cannot read the floored (derived) record
   await mem.anchorShard('vault')
-  settle('vault')
+  await settle('vault')
   const { identity } = callerOf(mem)
   const low = await mem.recall('vault', { seq: derived.seq, identity })
   assert.equal(low.items[0].text, undefined, 'derived record at floored level is not served to a level-0 reader')
@@ -532,7 +532,7 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
   if (off === undefined) return
   await off.mem.remember('s', 'classified', undefined, 1)
   await off.mem.anchorShard('s')
-  off.settle('s')
+  await off.settle('s')
   await off.mem.recall('s')
   assert.equal((await off.mem.records('__access__')).length, 0, 'no audit records when the flag is off')
   // enabled: every decrypt + delta traverse is recorded with a timestamp
@@ -543,7 +543,7 @@ test('GOAL-v8 D6: NEKTAR_ACCESS_LOG — timestamped per-decrypt/traverse audit r
     if (on === undefined) return
     await on.mem.remember('s', 'classified', undefined, 1)
     await on.mem.anchorShard('s')
-    on.settle('s')
+    await on.settle('s')
     const { identity } = callerOf(on.mem)
     const cred = issueClearance(authority, 1n, identity.pubkey)
     const zk: ZkClearance = { commitment: cred.commitment, proof: proveAccess(cred, 1n, 8, tr('s/0', 5))!, transcript: tr('s/0', 5), requiredLevel: 1n }
@@ -581,7 +581,7 @@ test('GOAL-v8 D7: receipt binds the model identity — id, params, weightsHash',
   const { mem, settle } = _w
   await mem.remember('s', 'a fact')
   await mem.anchorShard('s')
-  settle('s')
+  await settle('s')
   const { receipt } = await mem.recall('s', { modelParams: { seed: 42 } })
   assert.equal(receipt.model?.id, 'qwen-local-7b')
   assert.equal(receipt.model?.weightsHash, weightsHash)
@@ -606,7 +606,7 @@ test('groundedAnswer: strips ungrounded claims, anchors receipt; modelManifest d
   const { mem, settle } = _w
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   await mem.remember('manual', 'inspect belt every 10h')
-  settle('manual')
+  await settle('manual')
   const r = await callTool(mem, 'groundedAnswer', {
     claims: [
       { text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] },
@@ -637,12 +637,12 @@ test('verifyReceipt: token → found/hash/provenance/anchored/fragments; unknown
   const { mem, settle } = _w
   await mem.remember('manual', 'drain port 4 torque 45Nm')
   await mem.remember('manual', 'inspect belt every 10h')
-  settle('manual')
+  await settle('manual')
   const r = await callTool(mem, 'groundedAnswer', { claims: [{ text: 'drain port 4 torque 45Nm', cites: [{ shard: 'manual', seq: 0 }] }] })
   assert.equal(r.committed, true)
   assert.ok(r.receiptToken.startsWith('nektarr1.'), 'token emitted')
   assert.ok(r.verifyUrl.includes('/v1/verify?r='), 'verifyUrl emitted')
-  settle('__receipts__')
+  await settle('__receipts__')
 
   const v = await callTool(mem, 'verifyReceipt', { token: r.receiptToken })
   assert.equal(v.ok, true)

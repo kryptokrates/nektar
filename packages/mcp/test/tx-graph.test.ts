@@ -16,26 +16,24 @@ const liveMem = async (t: { skip: (m?: string) => void }): Promise<{ mem: Nektar
   return { mem: new NektarMemory(view, funder, funder.keyPair, { network: 'testnet' }), chain, funder }
 }
 
-/** parent → child, both signed; the parent is mined on `chain` when asked */
-const pair = async (chain: StackChain, mineParent: boolean): Promise<{ parent: Transaction; child: Transaction; key: PrivateKey }> => {
-  const key = PrivateKey.fromRandom()
-  const root = new Transaction()
-  root.addOutput({ satoshis: 20_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
-  const parent = new Transaction()
-  parent.addInput({ sourceTransaction: root, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
-  parent.addOutput({ satoshis: 10_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
-  await parent.sign()
+/** parent → child, both signed; the parent is a REAL funded outpoint (a
+ *  fabricated root can't broadcast — the validator refuses TX_MISSING_PARENT)
+ *  and is mined on `chain` when asked. */
+const pair = async (chain: StackChain, funder: StackFunder, mineParent: boolean): Promise<{ parent: Transaction; child: Transaction; vout: number; sats: number; key: PrivateKey }> => {
+  const key = funder.keyPair
+  const u = await funder.take(10_000)
+  const parent = u.tx // already broadcast by StackFunder.fund — zeroconf-spendable
+  const sats = u.satoshis
   if (mineParent) {
-    assert.equal((await chain.broadcast(parent)).status, 'success')
     await chain.mine(1)
     parent.merklePath = await chain.merklePathOf(parent.id('hex'))
     assert.ok(parent.merklePath !== undefined)
   }
   const child = new Transaction()
-  child.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
-  child.addOutput({ satoshis: 9_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
+  child.addInput({ sourceTransaction: parent, sourceOutputIndex: u.vout, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  child.addOutput({ satoshis: sats - 1_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
   await child.sign()
-  return { parent, child, key }
+  return { parent, child, vout: u.vout, sats, key }
 }
 
 const bumpFor = (txid: string): MerklePath =>
@@ -49,8 +47,8 @@ const bumpFor = (txid: string): MerklePath =>
 test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it', async (t) => {
   const _lm = await liveMem(t)
   if (_lm === undefined) return
-  const { mem, chain } = _lm
-  const { child } = await pair(chain, false)
+  const { mem, chain, funder } = _lm
+  const { child } = await pair(chain, funder, false)
   const txid = child.id('hex')
   mem.rememberTx(child)
   let lookups = 0
@@ -69,8 +67,8 @@ test('fetchTx: a remembered tx is served locally and a pushed proof sticks to it
 test('fetchTx: proof and tx lookups are single attempts, remembered when they hit', async (t) => {
   const _lm = await liveMem(t)
   if (_lm === undefined) return
-  const { mem, chain } = _lm
-  const { child } = await pair(chain, false)
+  const { mem, chain, funder } = _lm
+  const { child } = await pair(chain, funder, false)
   const txid = child.id('hex')
   let txHits = 0
   let proofHits = 0
@@ -96,18 +94,17 @@ test('fetchTx: proof and tx lookups are single attempts, remembered when they hi
 test('wire: BEEF when the ancestry is proven — the receiver verifies it against its own headers', async (t) => {
   const _lm = await liveMem(t)
   if (_lm === undefined) return
-  const { mem, chain } = _lm
-  const { child } = await pair(chain, true)
+  const { mem, chain, funder } = _lm
+  const { child } = await pair(chain, funder, true)
   mem.rememberTx(child)
   const wire = mem.txWire(child.id('hex'))!
   assert.equal(wire.slice(0, 8), '01010101', 'atomic BEEF')
-  const other = await liveMem(t)
-  if (other === undefined) return
   const got = await TxStore.read(wire, chain)
   assert.equal(got.tx.id('hex'), child.id('hex'))
   assert.equal(got.spv, true)
-  // a receiver on a different chain cannot verify the proof
-  assert.equal((await TxStore.read(wire, other.chain)).spv, false)
+  // a receiver whose headers don't contain this block cannot verify the proof
+  const foreign = { isValidRootForHeight: async () => false, currentHeight: async () => 0 }
+  assert.equal((await TxStore.read(wire, foreign)).spv, false)
   // a tampered child fails SPV
   const bad = Transaction.fromAtomicBEEF(Array.from(Buffer.from(wire, 'hex')))
   bad.outputs[0].satoshis = 9_999
@@ -117,8 +114,8 @@ test('wire: BEEF when the ancestry is proven — the receiver verifies it agains
 test('wire: Extended Format when the parent is unproven; raw when it is unknown', async (t) => {
   const _lm = await liveMem(t)
   if (_lm === undefined) return
-  const { mem, chain } = _lm
-  const { child } = await pair(chain, false)
+  const { mem, chain, funder } = _lm
+  const { child } = await pair(chain, funder, false)
   mem.rememberTx(child)
   const wire = mem.txWire(child.id('hex'))!
   assert.match(wire, /^[0-9a-f]{8}0000000000ef/)
@@ -131,8 +128,10 @@ test('wire: Extended Format when the parent is unproven; raw when it is unknown'
 })
 
 test('TxStore: a proof ends the stored ancestry and survives a reload', async (t) => {
-  const chain = (await stackChain(t))!
-  const { parent, child } = await pair(chain, true)
+  const w = await stackWorld(t, 2)
+  if (w === undefined) return
+  const { chain, funder } = w
+  const { parent, child } = await pair(chain, funder, true)
   const rows = new Map<string, { txid: string; raw: string; proof?: string }>()
   const persist = {
     load: async () => [...rows.values()],
@@ -153,9 +152,11 @@ test('TxStore: a proof ends the stored ancestry and survives a reload', async (t
 })
 
 test('spendValid: a real spend passes; a spend of another output or a broken signature does not', async (t) => {
-  const chain = (await stackChain(t))!
-  const { parent, child } = await pair(chain, false)
-  const src = { txid: parent.id('hex'), vout: 0, satoshis: 10_000, script: parent.outputs[0].lockingScript.toHex() }
+  const w = await stackWorld(t, 2)
+  if (w === undefined) return
+  const { chain, funder } = w
+  const { parent, child, vout, sats } = await pair(chain, funder, false)
+  const src = { txid: parent.id('hex'), vout, satoshis: sats, script: parent.outputs[vout].lockingScript.toHex() }
   assert.equal(spendValid(child, 0, src), true)
   assert.equal(spendValid(child, 0, { ...src, vout: 1 }), false)
   assert.equal(spendValid(child, 0, { ...src, satoshis: 10_001 }), false, 'the signature commits to the amount')

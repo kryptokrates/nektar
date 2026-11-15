@@ -471,7 +471,29 @@ export class StackTreasury {
       treasuryFile: join(STATE_DIR, 'testkit-treasury-chain.json'), namespace: 'testkit'
     })
     if (this.reserve.utxos.length === 0 && r === null) {
-      // no mature coinbase found for our key — generate 110 to it, then split.
+      // a file tip that exists but can't split (under floor / spent) is the
+      // real cause 9 times out of 10 — name it instead of burning minutes on
+      // the generate-110 + 800-height scan, which can never help on a chain
+      // whose subsidy already collapsed
+      const chainFile = join(STATE_DIR, 'testkit-treasury-chain.json')
+      try {
+        const t = JSON.parse(readFileSync(chainFile, 'utf8')) as {
+          treasury?: { txid: string; vout: number; txHex: string }
+        }
+        if (t.treasury !== undefined) {
+          const parent = (await TxStore.read(t.treasury.txHex, undefined)).tx
+          const sats = parent.outputs[t.treasury.vout]?.satoshis ?? 0
+          const status = await this.chain.utxoStatus(t.treasury.txid, t.treasury.vout)
+          if (sats < 1e6 || status !== 'unspent')
+            throw new Error(
+              `testkit: ${sats < 1e6 ? `treasury tail under the 1M-sat split floor (${sats} sats)` : `treasury tail ${status}`} — top up ${chainFile}`
+            )
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('testkit:')) throw e
+        /* unreadable/missing file → fall through to the generate path */
+      }
+      // no usable coinbase found for our key — generate 110 to it, then split.
       // Only the freshly generated range can hold usable coinbases — the
       // bootstrap scan above already ruled the older mature heights out.
       const t0 = await this.chain.currentHeight()
@@ -651,10 +673,6 @@ export class StackFunder implements Funder {
   }
   static async fund(t: StackTreasury, outputs: number, sats = 10_000): Promise<StackFunder> {
     const f = new StackFunder(PrivateKey.fromRandom())
-    // the suite mints a key per world and discards it — coins parked in dead
-    // worlds are unrecoverable on a zero-subsidy chain. Persist the WIF so a
-    // sweep can return them to the treasury.
-    appendFileSync(join(STATE_DIR, 'stackfunder-keys.jsonl'), JSON.stringify({ wif: f.keyPair.toWif() }) + '\n')
     const addr = f.keyPair.toPublicKey().toAddress([0x6f])
     // stale reserve entries (never-broadcast parents, already-spent) prune on
     // broadcast failure — allow enough attempts to walk past a rotten pool
@@ -693,6 +711,13 @@ export class StackFunder implements Funder {
           if ((tx.outputs[changeVout].satoshis ?? 0) > 0) t.reserve.addOwned(tx, changeVout)
         })
         f.fundingTx = tx
+        // the suite mints a key per world and discards it — on a zero-subsidy
+        // chain parked coins are treasury loss. Persist WIF + funding txid +
+        // output count so a sweep can find every outpoint and return them.
+        appendFileSync(
+          join(STATE_DIR, 'stackfunder-keys.jsonl'),
+          JSON.stringify({ wif: f.keyPair.toWif(), fundTxid: tx.id('hex'), outputs }) + '\n'
+        )
         for (let i = 0; i < outputs; i++) f.utxos.push({ tx, vout: i, satoshis: sats })
         // zeroconf: outputs are spendable while unconfirmed — tests mine only
         // where a proof is actually asserted

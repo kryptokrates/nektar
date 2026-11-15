@@ -53,6 +53,9 @@ export interface AutomationConfig {
   /** blogs deal-journal stream id (`<name>_<10 chars>`); every deal event is
    *  appended as a signed numbered batch to tm_log_<stream> - env NEKTAR_LOG_STREAM */
   logStream?: string
+  /** confirmations a settlement proof must carry before a completion may
+   *  settle (default 1) — regtest 1, live the memory's finality depth */
+  settleDepth?: number
   /** bstore/S3 object store for deal evidence — absent = feature off.
    *  Default: objectStoreFromEnv() (NEKTAR_BSTORE_*). */
   objectStore?: import('@nektar/store').S3ObjectStore
@@ -280,6 +283,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     key,
     network: cfg.network,
     now: cfg.now,
+    settleDepth: cfg.settleDepth,
     height: () => mem.chainHeight(),
     tip: () => mem.tipRef(),
     fetchTx: (txid) => mem.fetchTx(txid),
@@ -693,8 +697,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // tests: one call = all queued work attempted)
             await pumpDone
             // a live deal keeps the loop hot — the 5s inbound window alone
-            // would let a deal cool to idle cadence between hops
-            if ((await store.operations({ notStates: TERMINAL })).length > 0) hotUntil = Date.now() + 5_000
+            // would let a deal cool to idle cadence between hops. A settled
+            // proof awaiting depth only waits on BLOCKS, so it is excluded —
+            // holding the loop hot for it would burn cycles per confirmation
+            if ((await store.operations({ notStates: TERMINAL })).filter((o) => o.state !== 'completion_submitted' || o.data.provenHeight === undefined).length > 0)
+              hotUntil = Date.now() + 5_000
             // new lanes appear as deals start — re-derive watch subs at the
             // end of a pass so a fresh want is subscribed within one cycle
             if (watchBases.length > 0) void refreshWatches().catch(() => undefined)

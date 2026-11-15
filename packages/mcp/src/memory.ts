@@ -1277,6 +1277,11 @@ export class NektarMemory {
   get feeRateSatPerKb(): number {
     return this.opts.feeRateSatPerKb ?? 1
   }
+  /** confirmations before an anchor counts final — the same depth the
+   *  automation engine requires of a settlement proof */
+  get finalityDepth(): number {
+    return this.opts.finalityDepth ?? 1
+  }
   /** pack-store refs this instance PUT to bstore — the `.well-known` doc
    *  names them so importers can fetch through the store instead of HTTP. */
   packStoreRef(shard: string): import('@nektar/store').ObjectRef | undefined {

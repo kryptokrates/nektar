@@ -11,6 +11,9 @@ export interface BlockHeader {
   time: number
   bits: number
   nonce: number
+  /** absent from sources that don't serve it — a header without a version
+   *  cannot be serialized, so it can never pass headerPowValid */
+  version?: number
 }
 
 export interface ChainTracker {

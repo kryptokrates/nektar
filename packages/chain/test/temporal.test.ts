@@ -81,7 +81,7 @@ test('BTC source: a second WocTracker pointed at /v1/btc/main (read-only stub fe
       status: 200
     })
   }
-  const btc = new WocTracker({ wocUrl: 'https://api.whatsonchain.com/v1/btc/main', fetchImpl })
+  const btc = new WocTracker({ wocUrl: 'https://api.whatsonchain.com/v1/btc/main', fetchImpl }, { requirePow: false }) // fixture headers carry no real PoW
   const h = await btc.headerAtHeight(700_000)
   assert.equal(h!.time, 1_600_000_000)
   assert.ok(
@@ -100,7 +100,7 @@ test('BTC source is only read when enabled: bsv-only sources never touch it', as
     calls++
     return new Response('{}', { status: 404 })
   }
-  const btc = new WocTracker({ wocUrl: 'https://api.whatsonchain.com/v1/btc/main', fetchImpl })
+  const btc = new WocTracker({ wocUrl: 'https://api.whatsonchain.com/v1/btc/main', fetchImpl }, { requirePow: false }) // fixture headers carry no real PoW
   const t = new TemporalSources([{ name: 'bsv', tracker: stub({ 3: 42 }) }])
   await t.headerAtHeight(3)
   assert.equal(calls, 0, 'no BTC fetch when btc is not configured')

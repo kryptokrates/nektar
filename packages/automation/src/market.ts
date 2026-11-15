@@ -96,6 +96,10 @@ export interface MarketDeps {
   /** what the chain view knows about a tx — reconciles uncertain payment and
    *  settlement states without waiting on block heights */
   txState?: (txid: string) => Promise<'mined' | 'seen' | 'rejected' | 'unknown'>
+  /** confirmations a proof must carry before `completion_submitted` may
+   *  settle — a depth-1 proof sits one reorg away from vanishing (default 1:
+   *  settle on first sight, the regtest behaviour) */
+  settleDepth?: number
   broadcast?: (tx: Transaction) => Promise<import('@nektar/chain').BroadcastResult>
   /** the instance's transaction graph: `txWire` is what a counterparty is
    *  handed (BEEF when the ancestry is proven, else Extended Format, else
@@ -1961,12 +1965,22 @@ export class MarketEngine {
         await this.d.store.transition(op.operationId, op.revision, 'expired', { cause: 'quote_expired', dueHeight: null })
       if (op.state === 'completion_submitted') {
         const tx = await this.d.fetchTx(op.data.completeTxid as string)
-        if (tx?.merklePath)
-          await this.d.store.transition(op.operationId, op.revision, 'settled', {
-            cause: 'disclosure_proof_observed',
-            evidence: { blockHeight: tx.merklePath.blockHeight }
-          })
-        else if (
+        if (tx?.merklePath) {
+          // settlement is money-final — a proof only counts once it sits
+          // settleDepth blocks deep; shallower, the op parks and records the
+          // proven height once (a same-state note, not a settle)
+          const depth = height - tx.merklePath.blockHeight + 1
+          if (depth >= (this.d.settleDepth ?? 1))
+            await this.d.store.transition(op.operationId, op.revision, 'settled', {
+              cause: 'disclosure_proof_observed',
+              evidence: { blockHeight: tx.merklePath.blockHeight, depth }
+            })
+          else if (op.data.provenHeight !== tx.merklePath.blockHeight)
+            await this.d.store.transition(op.operationId, op.revision, 'completion_submitted', {
+              cause: 'disclosure_proof_awaiting_depth',
+              data: { provenHeight: tx.merklePath.blockHeight }
+            })
+        } else if (
           this.d.txState !== undefined &&
           this.reconcileGate(op.operationId, op.data.completeTxid as string) &&
           (await this.d.txState(op.data.completeTxid as string)) === 'rejected'

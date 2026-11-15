@@ -23,6 +23,7 @@ import {
   importFundingTx,
   utxoStatus,
   ChaintracksTracker,
+  WitnessedTracker,
   SpendGuard,
   TemporalSources,
   statusStream,
@@ -39,7 +40,7 @@ import {
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
 import { watcherObservation } from './txops.js'
-import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvNum, setNektarEnv, type SignerWallet } from '@nektar/core'
+import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvNum, nektarEnvFlag, setNektarEnv, type SignerWallet } from '@nektar/core'
 import { wireP2p, setupFeeVault } from './setup.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
@@ -724,13 +725,26 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     `nektar ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)\n`
   )
 
-  // headers via Chaintracks (public, no key, PoW-verifiable — the only global
-  // data SPV needs); WoC stays as fallback. GorillaPool's broadcaster doesn't mount
-  // the chaintracks listener, so mainnet uses the association broadcaster that does.
-  const tracker = new ChaintracksTracker(
-    mc,
-    mc.chaintracksUrl ?? (ttn ? `${mc.broadcasterUrl}/chaintracks/v2` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'),
-    new WocTracker(mc)
+  // headers via Chaintracks (public, no key — the only global data SPV
+  // needs), WITNESSED by WoC: each source now self-authenticates its answers
+  // via header PoW (NEKTAR_HEADER_POW=0 opts a private non-PoW net out), and
+  // the two must agree before a root is served — a sourced minority fork or
+  // a circular fallback pair can no longer pin a wrong root. NEKTAR_STRICT_
+  // HEADERS=1 fails closed whenever the witness can't answer; default
+  // degrades to the reachable source marked uncorroborated. GorillaPool's
+  // broadcaster doesn't mount the chaintracks listener, so mainnet uses the
+  // association broadcaster that does.
+  const requirePow = nektarEnvFlag('NEKTAR_HEADER_POW') !== false
+  const tracker = new WitnessedTracker(
+    new ChaintracksTracker(mc, mc.chaintracksUrl ?? (ttn ? `${mc.broadcasterUrl}/chaintracks/v2` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'), undefined, {
+      requirePow
+    }),
+    new WocTracker(mc, { requirePow }),
+    {
+      strict: nektarEnvFlag('NEKTAR_STRICT_HEADERS'),
+      onDisagree: (height, primaryHash, witnessHash) =>
+        process.stderr.write(`nektar ${net}: header sources disagree at ${height} (primary ${primaryHash}, witness ${witnessHash}) — serving no root\n`)
+    }
   )
   // per-instance callback token — tags our submissions so the broadcaster can
   // route their status updates back to us (configFromEnv leaves both fields
@@ -956,6 +970,17 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   memRef = mem
   mem.ledger = ledger
   healLedgerOnProof(mem, ledger, net)
+  // a reorg invalidates cached proofs at/above the fork: clear them and
+  // re-watch so the observe path re-fetches and re-verifies against the new
+  // headers. Un-anchoring shard records stays out of scope — finalityDepth
+  // already withholds shallow anchors from queries.
+  tracker.onReorg?.((removed, newTip) => {
+    const from = Math.min(...removed.map((h) => h.height))
+    process.stderr.write(`nektar ${net}: header reorg — ${removed.length} stale header(s) from height ${from}, new tip ${newTip.height}\n`)
+    mem.metrics.inc('nektar_reorgs_total', {}, 1, 'header-chain reorgs observed')
+    for (const txid of txStore.clearProofsFrom(from)) events.watch(txid)
+    mem.events.emit('reorg', { from, tip: newTip.height })
+  })
   // restart-recovery pull for proofs that never arrived by push — a fetched
   // BUMP counts only after its root verifies against our own headers (same
   // trust rule as the push path; push stays primary)

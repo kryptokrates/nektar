@@ -35,3 +35,25 @@ test('wire: an unproven fat EF falls back to the raw tx', async () => {
   const wide = store.wire(child.id('hex'), 100_000)
   assert.notEqual(wide, child.toHex(), 'wide budgets keep the EF shape')
 })
+
+
+// a reorg horizon drops only the proofs at/above it — survivors keep theirs
+test('TxStore.clearProofsFrom: proofs at/above the horizon drop, older keep', () => {
+  const store = new TxStore()
+  const mk = (vout: number): Transaction => {
+    const t = new Transaction()
+    t.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: vout, unlockingScript: new UnlockingScript() })
+    t.addOutput({ satoshis: 1_000, lockingScript: new P2PKH().lock(addr) })
+    return t
+  }
+  const t1 = mk(0),
+    t2 = mk(1)
+  store.put(t1)
+  store.put(t2)
+  store.setProof(t1.id('hex'), { blockHeight: 10 } as import('@bsv/sdk').MerklePath)
+  store.setProof(t2.id('hex'), { blockHeight: 20 } as import('@bsv/sdk').MerklePath)
+  assert.deepEqual(store.clearProofsFrom(15), [t2.id('hex')], 'only the ≥horizon proof is reported')
+  assert.ok(store.unproven().includes(t2.id('hex')), 'the cleared tx is unproven again — the observe loop re-proves it')
+  assert.ok(!store.unproven().includes(t1.id('hex')), 'a proof below the horizon is untouched')
+  assert.equal(store.get(t1.id('hex'))?.merklePath?.blockHeight, 10)
+})

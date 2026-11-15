@@ -7,6 +7,7 @@ import { sleep, withRetry, pacer } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
+import { headerPowValid, linksTo } from './headers.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 
 export interface MainnetConfig {
@@ -291,13 +292,83 @@ export async function fetchTxStatus(cfg: MainnetConfig | undefined, txid: string
 }
 
 // --- WoC tracker (rate-limited, cached headers) -------------------------------
+/** the per-tracker header cache + reorg machinery — ONE implementation so the
+ *  two header sources can't drift: linkage-gated admission, and on a mismatch
+ *  a bounded walk down to the common ancestor before subscribers hear of it. */
+class HeaderCache {
+  private headers = new Map<number, BlockHeader>()
+  private reorgCbs: Array<(removed: BlockHeader[], newTip: BlockHeader) => void> = []
+
+  get(height: number): BlockHeader | undefined {
+    return this.headers.get(height)
+  }
+  has(height: number): boolean {
+    return this.headers.has(height)
+  }
+  set(h: BlockHeader): void {
+    this.headers.set(h.height, h)
+  }
+  onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
+    this.reorgCbs.push(cb)
+  }
+
+  /** linkage gate — true when the fresh header sits cleanly beside what the
+   *  cache already holds; a mismatch runs the reorg walk and the caller must
+   *  NOT cache or silently serve the newcomer */
+  async admit(h: BlockHeader, refetch: (height: number) => Promise<BlockHeader | undefined>): Promise<boolean> {
+    const parent = this.headers.get(h.height - 1)
+    const child = this.headers.get(h.height + 1)
+    if ((parent !== undefined && !linksTo(h, parent)) || (child !== undefined && !linksTo(child, h))) {
+      await this.reorgAt(h, refetch)
+      return false
+    }
+    return true
+  }
+
+  /** walk DOWN from just under the mismatching header: each cached header is
+   *  re-fetched, and evicted while the fresh answer differs — the first
+   *  agreement is the common ancestor and stays cached. Everything above the
+   *  mismatch height is descendant-stale. `fresh` is the highest header we
+   *  could fetch, reported to subscribers as newTip. */
+  private async reorgAt(fresh: BlockHeader, refetch: (height: number) => Promise<BlockHeader | undefined>): Promise<void> {
+    const removed: BlockHeader[] = []
+    for (let h = fresh.height - 1, n = 0; n < 12; h--, n++) {
+      const cur = this.headers.get(h)
+      if (cur === undefined) break // cache gap — can't verify deeper
+      const ref = await refetch(h)
+      if (ref === undefined) break // couldn't confirm deeper
+      if (ref.hash === cur.hash) break // common ancestor — keep it
+      this.headers.delete(h)
+      removed.push(cur)
+    }
+    for (const [h, cur] of this.headers) {
+      if (h >= fresh.height) {
+        this.headers.delete(h)
+        removed.push(cur)
+      }
+    }
+    if (removed.length === 0) return
+    removed.sort((a, b) => b.height - a.height)
+    for (const cb of this.reorgCbs)
+      try {
+        cb(removed, fresh)
+      } catch {
+        /* listener errors are theirs */
+      }
+  }
+}
+
 export class WocTracker implements ChainTracker {
   private cfg
-  private headers = new Map<number, BlockHeader>()
+  private cache = new HeaderCache()
+  private readonly requirePow: boolean
   // ≥350 ms spacing — WoC is ~3 req/s unauthenticated
   private pace = pacer(350)
-  constructor(c?: MainnetConfig) {
+  constructor(c?: MainnetConfig, opts?: { requirePow?: boolean }) {
     this.cfg = def(c)
+    // PoW-per-header is on by default; a private non-PoW net opts out via the
+    // construction site (NEKTAR_HEADER_POW=0) — it is not a runtime flag here
+    this.requirePow = opts?.requirePow !== false
   }
 
   private async wocGet(path: string, retries = 3): Promise<any> {
@@ -317,6 +388,10 @@ export class WocTracker implements ChainTracker {
     const ms = this.cfg.tipCacheMs
     if (ms > 0 && Date.now() - this.tip.at < ms) return this.tip.height
     const height = (await this.wocGet('/chain/info')).blocks as number
+    // a tip advance over a cached previous tip is where a silent reorg shows
+    // up — the fresh tip's linkage check runs against the cached parent; no
+    // request is added when the height is unchanged
+    if (height > this.tip.height && this.cache.has(this.tip.height)) void this.headerAtHeight(height).catch(() => undefined)
     this.tip = { at: Date.now(), height }
     return height
   }
@@ -324,9 +399,9 @@ export class WocTracker implements ChainTracker {
     return await this.currentHeight()
   }
 
-  async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
-    const hit = this.headers.get(height)
-    if (hit) return hit
+  /** raw fetch + self-authentication — a PoW-invalid header is a miss, not
+   *  truth; never cached and never linkage-checked */
+  private async fetchHeader(height: number): Promise<BlockHeader | undefined> {
     const b = await this.wocGet(`/block/height/${height}`)
     if (!b) return undefined
     const h: BlockHeader = {
@@ -336,10 +411,25 @@ export class WocTracker implements ChainTracker {
       merkleRoot: b.merkleroot,
       time: b.time,
       bits: parseInt(String(b.bits), 16) || 0,
-      nonce: b.nonce ?? 0
+      nonce: b.nonce ?? 0,
+      version: b.version
     }
-    this.headers.set(height, h)
+    if (this.requirePow && !headerPowValid(h)) return undefined
     return h
+  }
+
+  async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
+    const hit = this.cache.get(height)
+    if (hit) return hit
+    const h = await this.fetchHeader(height)
+    if (h === undefined) return undefined
+    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return h
+    this.cache.set(h)
+    return h
+  }
+
+  onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
+    this.cache.onReorg(cb)
   }
 
   async isValidRootForHeight(root: string, height: number, signal?: AbortSignal): Promise<boolean> {
@@ -350,23 +440,31 @@ export class WocTracker implements ChainTracker {
 
 // --- Chaintracks header source (public, no key — PoW-verifiable data) --------
 /** Chaintracks serves the longest-chain block headers — the ONLY global chain
- *  data SPV verification needs, and self-authenticating via proof-of-work, so
- *  this is not an indexer dependency. v2 (`/chaintracks/v2`) returns bare JSON
- *  headers; v1 (`/chaintracks/v1`) wraps values and serves 80-byte hex.
- *  `fallback` (e.g. WocTracker) is tried only when chaintracks itself fails. */
+ *  data SPV verification needs, and each answer is now CHECKED to be
+ *  self-authenticating: hash256 over its serialization must equal the served
+ *  hash and satisfy its own declared difficulty, or the header is treated as
+ *  not served. PoW-per-header does NOT prove the answer sits on the most-work
+ *  chain — a sourced minority fork passes it too; corroboration against a
+ *  second source is WitnessedTracker's job. v2 (`/chaintracks/v2`) returns
+ *  bare JSON headers; v1 (`/chaintracks/v1`) wraps values and serves 80-byte
+ *  hex. `fallback` (e.g. WocTracker) is tried only when chaintracks itself
+ *  fails — prefer a WitnessedTracker over a silent fallback pair. */
 export class ChaintracksTracker implements ChainTracker {
-  private headers = new Map<number, BlockHeader>()
+  private cache = new HeaderCache()
   private base: string
   private readonly v1: boolean
+  private readonly requirePow: boolean
   private cfg: ReturnType<typeof def>
   constructor(
     c?: MainnetConfig,
     base?: string,
-    private fallback?: ChainTracker
+    private fallback?: ChainTracker,
+    opts?: { requirePow?: boolean }
   ) {
     this.cfg = def(c)
     this.base = (base ?? `${this.cfg.broadcasterUrl}/chaintracks/v2`).replace(/\/$/, '')
     this.v1 = this.base.endsWith('/v1')
+    this.requirePow = opts?.requirePow !== false
   }
 
   private async j(path: string): Promise<any> {
@@ -380,6 +478,9 @@ export class ChaintracksTracker implements ChainTracker {
     const ms = this.cfg.tipCacheMs
     if (ms > 0 && Date.now() - this.tip.at < ms) return this.tip.height
     const height = await this.loadHeight()
+    // same reorg trigger as WocTracker: a tip advance over a cached previous
+    // tip runs the linkage gate — silent when the height is unchanged
+    if (height > this.tip.height && this.cache.has(this.tip.height)) void this.headerAtHeight(height).catch(() => undefined)
     this.tip = { at: Date.now(), height }
     return height
   }
@@ -399,9 +500,9 @@ export class ChaintracksTracker implements ChainTracker {
     return await this.currentHeight()
   }
 
-  async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
-    const hit = this.headers.get(height)
-    if (hit) return hit
+  /** raw fetch + self-authentication — a PoW-invalid header counts as a miss
+   *  and falls through to `fallback` like any other primary failure */
+  private async fetchHeader(height: number): Promise<BlockHeader | undefined> {
     let h: BlockHeader | undefined
     try {
       if (this.v1) {
@@ -417,16 +518,31 @@ export class ChaintracksTracker implements ChainTracker {
             merkleRoot: b.merkleRoot,
             time: b.time ?? 0,
             bits: b.bits ?? 0,
-            nonce: b.nonce ?? 0
+            nonce: b.nonce ?? 0,
+            version: b.version
           }
         }
       }
     } catch {
       /* fall through to fallback */
     }
-    if (!h && this.fallback) h = await this.fallback.headerAtHeight(height)
-    if (h) this.headers.set(height, h)
+    if (h !== undefined && this.requirePow && !headerPowValid(h)) h = undefined
+    if (h === undefined && this.fallback) h = await this.fallback.headerAtHeight(height)
     return h
+  }
+
+  async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
+    const hit = this.cache.get(height)
+    if (hit) return hit
+    const h = await this.fetchHeader(height)
+    if (h === undefined) return undefined
+    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return h
+    this.cache.set(h)
+    return h
+  }
+
+  onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
+    this.cache.onReorg(cb)
   }
 
   async isValidRootForHeight(root: string, height: number, signal?: AbortSignal): Promise<boolean> {
@@ -449,7 +565,8 @@ export function parseHeaderHex(hex: string, height: number): BlockHeader {
     merkleRoot: b.slice(36, 68).reverse().toString('hex'),
     time: b.readUInt32LE(68),
     bits: b.readUInt32LE(72),
-    nonce: b.readUInt32LE(76)
+    nonce: b.readUInt32LE(76),
+    version: b.readUInt32LE(0)
   }
 }
 

@@ -103,6 +103,21 @@ export class TxStore {
     return true
   }
 
+  /** a reorg invalidated every proof at ≥ `height` — drop them so the
+   *  observe loop re-fetches and re-verifies against the new headers.
+   *  Persisted through the same put() path setProof uses. Returns the txids. */
+  clearProofsFrom(height: number): string[] {
+    const out: string[] = []
+    for (const [txid, r] of this.rows) {
+      if (r.proof !== undefined && r.proof.blockHeight >= height) {
+        delete r.proof
+        this.save(txid)
+        out.push(txid)
+      }
+    }
+    return out
+  }
+
   /** the transaction with its known ancestry linked, down to proven parents */
   get(txid: string, depth = 0): Transaction | undefined {
     const r = this.rows.get(txid)

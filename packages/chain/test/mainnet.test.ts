@@ -148,7 +148,7 @@ test('WocTracker: header cached; 429 retried', async () => {
     }
     return new Response('nf', { status: 404 })
   }
-  const t = new WocTracker({ fetchImpl, wocUrl: 'http://woc' })
+  const t = new WocTracker({ fetchImpl, wocUrl: 'http://woc' }, { requirePow: false }) // fixture headers carry no real PoW
   assert.equal(await t.currentHeight(), 850000)
   const h1 = await t.headerAtHeight(5)
   assert.equal(h1?.merkleRoot, 'mr')

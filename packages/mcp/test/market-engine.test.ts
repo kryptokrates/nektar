@@ -13,6 +13,7 @@ import { MarketEngine, type MarketMessage } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
+import { PrivateKey, Transaction } from '@bsv/sdk'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
@@ -457,4 +458,54 @@ test('quote commitment attaches in every live state and is ignored once terminal
   })
   await w.round([bob])
   assert.equal((await bob.store.events(operationId)).filter((e) => e.cause === 'quote_attached').length, attachedBefore, 'a terminal op ignores a late quote')
+})
+
+// finding 6a: a shallow proof must not settle — the op parks until depth
+test('settleDepth: a depth-1 proof parks completion_submitted, settles at depth', async () => {
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  try {
+    const store = new AutomationStore(kx, () => 1_800_000_000_000)
+    await store.init()
+    let height = 100
+    const engine = new MarketEngine({
+      store,
+      memory: { shardManifest: async () => undefined, records: async () => [] },
+      key: PrivateKey.fromRandom(),
+      network: 'testnet',
+      call: async () => ({}),
+      height: async () => height,
+      fetchTx: async () => ({ merklePath: { blockHeight: 100 } }) as Transaction,
+      transport: { publishWant: async () => {}, publishOffer: async () => {}, send: async () => {} },
+      ai: new ScriptedExecutor(),
+      settleDepth: 3
+    })
+    const { operation: op } = await store.createOperation({
+      role: 'seller',
+      kind: 'sale',
+      dedupeKey: 'settle-depth-test',
+      policyHash: 'p',
+      network: 'testnet',
+      state: 'completion_submitted',
+      data: { completeTxid: 'aa'.repeat(32) }
+    })
+    // depth 1: two ticks, one park event — same-state transitions dedupe
+    await engine.tick()
+    await engine.tick()
+    let cur = (await store.operation(op.operationId))!
+    assert.equal(cur.state, 'completion_submitted', 'a depth-1 proof does not settle at settleDepth 3')
+    assert.equal(cur.data.provenHeight, 100)
+    const evs = await store.events(op.operationId)
+    assert.equal(
+      evs.filter((e) => e.cause === 'disclosure_proof_awaiting_depth').length,
+      1,
+      'the park is recorded once, not re-emitted every tick'
+    )
+    // depth 3 (height H+2): settles
+    height = 102
+    await engine.tick()
+    cur = (await store.operation(op.operationId))!
+    assert.equal(cur.state, 'settled', 'the op settles once the proof is deep enough')
+  } finally {
+    await kx.destroy()
+  }
 })

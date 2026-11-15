@@ -96,6 +96,9 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     // early-select — a cheaper offer inside the window still wins; collectMs
     // remains the outer ceiling
     minCollectMs: nektarEnv('NEKTAR_MIN_COLLECT_MS') ? Number(nektarEnv('NEKTAR_MIN_COLLECT_MS')) : undefined,
+    // a settlement proof must sit this deep before a completion settles —
+    // the same finality depth the memory applies to anchor queries
+    settleDepth: rt.mem.finalityDepth,
     // chains without a status push (polled broadcasters) mark
     // funding trees proven only here — let ops tune the cadence
     upkeepMs: nektarEnv('NEKTAR_AUTOMATION_UPKEEP_MS') ? Number(nektarEnv('NEKTAR_AUTOMATION_UPKEEP_MS')) : undefined,

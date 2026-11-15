@@ -15,6 +15,7 @@ export {
   regtestMerkleProof
 } from './regtest.js'
 export { ChaintracksTracker, parseHeaderHex, DEFAULT_BROADCASTER_URL, DEFAULT_WOC_URL } from './mainnet.js'
+export { serializeHeader, headerPowValid, linksTo, WitnessedTracker } from './headers.js'
 export { P2PListener } from './p2p.js'
 export type { RegtestConfig } from './regtest.js'
 export {

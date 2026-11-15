@@ -16,14 +16,16 @@ test('tx log: two successful broadcasts → two lines with correct fee', async (
   if (w === undefined) return
   const { chain, funder } = w
   const broadcast = txLogBroadcast(chain.broadcast.bind(chain), logPath)
-  const spend = (parent: Transaction, sats: number): Transaction => {
+  const spend = (u: { tx: Transaction; vout: number }, sats: number): Transaction => {
     const tx = new Transaction()
-    tx.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })
+    tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })
     tx.addOutput({ lockingScript: new P2PKH().lock(funder.address()), satoshis: sats })
     return tx
   }
-  const t1 = spend(funder.parents[0], 9_000) // fee 1_000
-  const t2 = spend(funder.parents[1], 9_500) // fee 500
+  const u1 = await funder.take(10_000)
+  const u2 = await funder.take(10_000)
+  const t1 = spend(u1, 9_000) // fee 1_000
+  const t2 = spend(u2, 9_500) // fee 500
   await t1.sign()
   await t2.sign()
   assert.equal((await broadcast(t1)).status, 'success')
@@ -41,7 +43,7 @@ test('tx log: two successful broadcasts → two lines with correct fee', async (
   assert.equal(lines[1].feeSats, 500)
   assert.ok(lines[0].t > 0)
   // a failed broadcast writes nothing
-  const bad = spend(funder.parents[0], 100) // re-spends t1's outpoint
+  const bad = spend(u1, 100) // re-spends t1's outpoint
   await bad.sign()
   assert.equal((await broadcast(bad)).status, 'error')
   assert.equal(readFileSync(logPath, 'utf8').trim().split('\n').length, 2)

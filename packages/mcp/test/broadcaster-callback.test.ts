@@ -106,6 +106,25 @@ test('broadcaster callback: legacy /v1/arc-callback path still works', async (t)
   }
 })
 
+test('broadcaster callback: REJECTED is a hint — wakes subscribers, txState is not rejected', async (t) => {
+  const _w = await serve(t)
+  if (_w === undefined) return
+  const { mem, srv, base } = _w
+  try {
+    const txid = 'ab'.repeat(32)
+    let fires = 0
+    mem.onTxRejected(() => {
+      fires++
+    })
+    const r = await cb(base, '/v1/broadcaster-callback', { timestamp: new Date().toISOString(), txid, txStatus: 'REJECTED' })
+    assert.equal(r.status, 200)
+    assert.equal(fires, 1, 'the pushed status wakes subscribers (engine reconcile)')
+    assert.equal(await mem.txState(txid), 'unknown', 'a status string carries no proof object — never a durable verdict')
+  } finally {
+    srv.close()
+  }
+})
+
 test('broadcaster callback: NEKTAR_CALLBACK_TOKEN gates the webhook (Authorization: Bearer)', async (t) => {
   const _w = await serve(t)
   if (_w === undefined) return

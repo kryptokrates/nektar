@@ -130,8 +130,9 @@ export interface StatusStreamOpts {
  *  Parses `id:`/`event:`/`data:` fields (multi-line data joined with '\n'),
  *  skips `:` comments/keepalives, and reconnects with exponential backoff
  *  (1 s → 30 s) resuming via `Last-Event-ID`. When opts.cursor is given the
- *  last delivered id is persisted through get/set so a process restart
- *  resumes exactly where it left off. */
+ *  cursor advances only AFTER onEvent resolves — a process crash mid-handler
+ *  redelivers the event on restart. An onEvent throw routes to opts.onError
+ *  and the cursor still advances: a poison event must not wedge the stream. */
 export function statusStream(
   cfg: MainnetConfig | undefined,
   onEvent: (e: StatusStreamEvent) => void | Promise<void>,
@@ -171,11 +172,15 @@ export function statusStream(
           }
           const e = { id: ev.id, event: ev.event, data: ev.data.join('\n') }
           ev = { data: [] }
+          try {
+            await onEvent(e)
+          } catch (err) {
+            opts.onError?.(err as Error)
+          }
           if (e.id !== undefined) {
             lastId = e.id
             await opts.cursor?.set(e.id)
           }
-          await onEvent(e)
         }
         for (;;) {
           const { done, value } = await reader.read()
@@ -230,6 +235,51 @@ export async function fetchBroadcasterFeeRate(cfg?: MainnetConfig): Promise<numb
   return Math.ceil((f.satoshis * 1000) / f.bytes)
 }
 
+/** probeTxStatus — fetchTxStatus plus an `answered` flag: true when some
+ *  source gave a DEFINITIVE reply (a 2xx verdict, or a clean 404 — the host
+ *  knows it does not carry the tx); false when every reachable source
+ *  errored, rate-limited or timed out. "Couldn't ask" is not "not on the
+ *  network" — callers that age watches (the abandon clock) may only count
+ *  answered reads. */
+export async function probeTxStatus(
+  cfg: MainnetConfig | undefined,
+  txid: string,
+  opts?: { wocFallback?: boolean }
+): Promise<{ status: string; answered: boolean }> {
+  const c = def(cfg)
+  let answered = false
+  try {
+    const h: Record<string, string> = {}
+    if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
+    const r = await req(c, `${c.broadcasterUrl}/tx/${txid}`, { headers: h }, 10_000)
+    if (r.ok) {
+      const s = String(((await r.json().catch(() => undefined)) as { txStatus?: string } | undefined)?.txStatus ?? '').toUpperCase()
+      if (s !== '') return { status: s, answered: true }
+      // 2xx without a txStatus → not answered by the broadcaster
+    } else if (r.status === 404) {
+      answered = true // a clean "not found" is a real answer
+    }
+    // 429 / 5xx / other non-ok → the broadcaster never answered
+  } catch {
+    /* broadcaster undecidable — WoC may still answer mined */
+  }
+  const wocOk = opts?.wocFallback ?? (cfg?.wocUrl !== undefined || cfg?.broadcasterUrl === undefined || cfg.broadcasterUrl === DEFAULT_BROADCASTER_URL)
+  if (!wocOk) return { status: '', answered }
+  try {
+    const wh: Record<string, string> = {}
+    if (c.wocApiKey) wh['woc-api-key'] = c.wocApiKey
+    const wr = await req(c, `${c.wocUrl}/tx/${txid}`, { headers: wh }, 10_000)
+    if (wr.ok) {
+      const w = (await wr.json().catch(() => undefined)) as { blockheight?: unknown } | undefined
+      return typeof w?.blockheight === 'number' && w.blockheight > 0 ? { status: 'MINED', answered: true } : { status: '', answered: true }
+    }
+    if (wr.status === 404) return { status: '', answered: true }
+    return { status: '', answered } // 429/5xx → leaves answered as it was
+  } catch {
+    return { status: '', answered }
+  }
+}
+
 /** GET {broadcaster}/tx/{txid} → uppercase txStatus ('' when undecidable) —
  *  the single chain-observer seam for status reads (replaces three
  *  hand-rolled copies in mcp). `wocFallback` (default: public-default or
@@ -237,26 +287,7 @@ export async function fetchBroadcasterFeeRate(cfg?: MainnetConfig): Promise<numb
  *  WoC /tx/{txid}: blockheight > 0 → 'MINED' — rejection verdicts stay
  *  broadcaster-only (WoC serves no rejection semantics). */
 export async function fetchTxStatus(cfg: MainnetConfig | undefined, txid: string, opts?: { wocFallback?: boolean }): Promise<string> {
-  const c = def(cfg)
-  try {
-    const h: Record<string, string> = {}
-    if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
-    const st = await req(c, `${c.broadcasterUrl}/tx/${txid}`, { headers: h }, 10_000).then((x) => (x.ok ? x.json() : null))
-    const s = String(st?.txStatus ?? '').toUpperCase()
-    if (s !== '') return s
-  } catch {
-    /* broadcaster undecidable — WoC may still answer mined */
-  }
-  const wocOk = opts?.wocFallback ?? (cfg?.wocUrl !== undefined || cfg?.broadcasterUrl === undefined || cfg.broadcasterUrl === DEFAULT_BROADCASTER_URL)
-  if (!wocOk) return ''
-  try {
-    const wh: Record<string, string> = {}
-    if (c.wocApiKey) wh['woc-api-key'] = c.wocApiKey
-    const w = await req(c, `${c.wocUrl}/tx/${txid}`, { headers: wh }, 10_000).then((x) => (x.ok ? x.json() : null))
-    return typeof w?.blockheight === 'number' && w.blockheight > 0 ? 'MINED' : ''
-  } catch {
-    return ''
-  }
+  return (await probeTxStatus(cfg, txid, opts)).status
 }
 
 // --- WoC tracker (rate-limited, cached headers) -------------------------------

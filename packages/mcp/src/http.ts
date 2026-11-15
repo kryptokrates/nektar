@@ -157,9 +157,11 @@ export const OPENAPI = {
 
 /** One broadcaster tx-status payload → memory side effects. Shared by the
  *  inbound webhook route and the outbound-only /events SSE reader (runtime):
- *  REJECTED/DOUBLE_SPEND_ATTEMPTED → deliverTxRejected; MINED/IMMUTABLE →
- *  the carried/fetched BUMP must verify against our own tracker before
- *  deliverTxProof — a status is a hint, never proof on the broadcaster's word. */
+ *  REJECTED/DOUBLE_SPEND_ATTEMPTED → hintTxRejected (wake-only — a status
+ *  string carries no proof object and never lands a durable verdict);
+ *  MINED/IMMUTABLE → the carried/fetched BUMP must verify against our own
+ *  tracker before deliverTxProof — a status is a hint, never proof on the
+ *  broadcaster's word. */
 export async function handleBroadcasterStatus(
   mem: NektarMemory,
   j: { txid?: string; txStatus?: string; merklePath?: string; extraInfo?: string }
@@ -167,9 +169,10 @@ export async function handleBroadcasterStatus(
   const status = String(j.txStatus ?? '?')
   mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: status.toLowerCase() }, 1, 'broadcaster status callbacks received')
   mem.events.emit('broadcasterStatus', { txid: j.txid, status, detail: j.extraInfo })
-  // a definitive rejection is pushed down as a hint — the engine asks
-  // txState itself and acts only on that answer
-  if (typeof j.txid === 'string' && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status.toUpperCase())) mem.deliverTxRejected(j.txid)
+  // a pushed rejection is wake-only — it pokes subscribers into re-asking
+  // txState; the durable verdict belongs to verified chain events, a
+  // first-party refusal, or the abandon horizon
+  if (typeof j.txid === 'string' && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status.toUpperCase())) mem.hintTxRejected(j.txid)
   // N9 — the status is an unauthenticated input, not proof. A carried BUMP
   // must verify against our own tracker before it counts; without one we
   // fetch evidence; without evidence the tx stays unconfirmed.

@@ -172,7 +172,10 @@ export class StackChain implements ChainTracker, Broadcaster {
           headers: { Authorization: auth },
           signal: AbortSignal.timeout(4_000)
         }).catch(() => null)
-        if (r?.ok !== true) return undefined
+        // "couldn't ask" ≠ "not proven": a dead or rate-limited host throws
+        // so the abandon clock can't count silence; a 404 is a real answer
+        if (r === null || r.status === 429 || r.status >= 500) throw new Error(`merkle_proof probe failed for ${txid}`)
+        if (!r.ok) return undefined
         try {
           const merklePath = MerklePath.fromBinary([...new Uint8Array(await r.arrayBuffer())])
           // attach the proof to the cached tx so the sync getTx view answers

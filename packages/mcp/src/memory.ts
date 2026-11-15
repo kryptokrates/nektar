@@ -353,6 +353,9 @@ export class NektarMemory {
       proofLookup: () => this.proofLookup,
       network: this.opts.network,
       txStatus: this.opts.txStatus,
+      // the ledger's own verdict rows are first-party truth — wired lazily
+      // because mem.ledger is assigned post-construction by the runtime
+      ledgerState: async (txid) => (await this.ledger?.walletTx({ txid }))?.state,
       proofPullMs: Number(nektarEnv('NEKTAR_PROOF_PULL_MS') ?? 120_000)
     })
     this.custodyOps = new CustodyOps({
@@ -379,6 +382,9 @@ export class NektarMemory {
       if (ev.status === 'mined' && ev.merklePath) this.deliverTxProof(ev.txid, ev.merklePath)
       if (ev.status === 'rejected' || ev.status === 'double-spent') this.deliverTxRejected(ev.txid)
     })
+    // the abandon horizon is a real verdict (observer-computed terminal for
+    // a watched tx that never proved) — feed it to the same durable path
+    this.events.on('txAbandoned', ({ txid }: { txid: string }) => this.txOps.deliverTxAbandoned(txid))
   }
   private logKey: SignerLike
   private _logPub?: string
@@ -444,15 +450,22 @@ export class NektarMemory {
     this.txOps.deliverTxProof(txid, mp)
   }
 
-  /** subscribe to definitive transaction rejections — fed by verified
-   *  broadcaster callbacks (REJECTED / DOUBLE_SPEND_ATTEMPTED) and by chain
-   *  'rejected'/'double-spent' status events */
+  /** subscribe to rejection/abandonment wakes — verified chain events,
+   *  first-party refusals, abandon-horizon verdicts, and pushed status
+   *  hints all fire it; a wake is a poke to re-ask txState, not a verdict */
   onTxRejected(cb: (txid: string) => void): void {
     this.txOps.onTxRejected(cb)
   }
-  /** record a rejection the backend reported, then notify subscribers */
+  /** record a FIRST-PARTY verdict — verified chain 'tx' events and
+   *  definitive broadcast refusals only; pushed status strings go through
+   *  hintTxRejected (a hint carries no proof object) */
   deliverTxRejected(txid: string): void {
     this.txOps.deliverTxRejected(txid)
+  }
+  /** a pushed rejection STATUS (broadcaster webhook / SSE): wake-only —
+   *  pokes subscribers into re-asking txState, writes no durable verdict */
+  hintTxRejected(txid: string): void {
+    this.txOps.hintTxRejected(txid)
   }
 
   /** the chain observer's abandon horizon fired for a txid — the terminal

@@ -6,7 +6,8 @@
 // Proofs are pushed (events substrate/broadcaster callbacks); the lookups are
 // the single-attempt recovery path for what a push missed while down.
 import type { Transaction, MerklePath } from '@bsv/sdk'
-import { TxStore } from '@nektar/chain'
+import { TxStore, type TxStatusEvent } from '@nektar/chain'
+import type { TxObservationInput } from '@nektar/automation'
 
 export interface TxOpsDeps {
   /** the instance tx graph (parents + BEEF ancestry live here) */
@@ -33,6 +34,10 @@ export interface TxOpsDeps {
    *  (uppercase, '' = undecidable); injected by the runtime so TxOps never
    *  hand-rolls the /tx fetch or owns the endpoint default */
   txStatus?: (txid: string) => Promise<string>
+  /** the durable ledger's own row for a txid — 'rejected'/'conflicted'
+   *  states are first-party truth (our own writes), injected by memory
+   *  when a ledger exists; absent ledger → the check is skipped */
+  ledgerState?: (txid: string) => Promise<string | undefined>
   /** proof pull cadence — the missed-push recovery floor per txid
    *  (default 120_000; NEKTAR_PROOF_PULL_MS at the construction site) */
   proofPullMs?: number
@@ -42,6 +47,7 @@ export class TxOps {
   private lookupAt = new Map<string, number>()
   private txProofCbs: Array<(txid: string, mp: MerklePath) => void> = []
   private txRejected = new Set<string>()
+  private txAbandoned = new Set<string>()
   private txRejectCbs: Array<(txid: string) => void> = []
   constructor(private deps: TxOpsDeps) {}
 
@@ -112,6 +118,10 @@ export class TxOps {
    *  checked against our own tracker) or produced by the chain backend
    *  itself: attach it to the anchor it belongs to, then notify subscribers */
   deliverTxProof(txid: string, mp: MerklePath): void {
+    // a merkle path in hand outranks every recorded verdict — a rejected/
+    // abandoned mark that later proves still counts mined (conflict races)
+    this.txRejected.delete(txid)
+    this.txAbandoned.delete(txid)
     this.deps.txs().setProof(txid, mp)
     try {
       const shard = this.deps.txidShard.get(txid)
@@ -128,15 +138,14 @@ export class TxOps {
     }
   }
 
-  /** subscribe to definitive transaction rejections — fed by verified
-   *  broadcaster callbacks (REJECTED / DOUBLE_SPEND_ATTEMPTED) and by chain
-   *  'rejected'/'double-spent' status events */
+  /** subscribe to rejection/abandonment wakes — fired for verified chain
+   *  'rejected'/'double-spent' events, first-party refusals, abandon-horizon
+   *  verdicts AND pushed status hints. A wake is a poke to re-ask txState,
+   *  never a verdict in itself. */
   onTxRejected(cb: (txid: string) => void): void {
     this.txRejectCbs.push(cb)
   }
-  /** record a rejection the backend reported, then notify subscribers */
-  deliverTxRejected(txid: string): void {
-    this.txRejected.add(txid)
+  private notifyTxRejected(txid: string): void {
     for (const cb of this.txRejectCbs) {
       try {
         cb(txid)
@@ -145,23 +154,50 @@ export class TxOps {
       }
     }
   }
+  /** record a FIRST-PARTY verdict — fed only by verified chain 'tx' events
+   *  and definitive broadcast refusals, never by a pushed status string
+   *  (a hint carries no proof object; those go through hintTxRejected) */
+  deliverTxRejected(txid: string): void {
+    this.txRejected.add(txid)
+    this.notifyTxRejected(txid)
+  }
+  /** a pushed rejection STATUS (webhook / SSE): wake-only — it pokes
+   *  subscribers into re-asking txState but writes no durable verdict */
+  hintTxRejected(txid: string): void {
+    this.notifyTxRejected(txid)
+  }
+  /** the events substrate's abandon horizon fired — the observer-computed
+   *  terminal verdict for a watched tx that never proved */
+  deliverTxAbandoned(txid: string): void {
+    this.txAbandoned.add(txid)
+    this.notifyTxRejected(txid)
+  }
 
-  /** what the chain view knows about a tx right now: mined (has a merkle
-   *  path), seen (known to the node), rejected (the backend explicitly said
-   *  so — REJECTED or DOUBLE_SPEND_ATTEMPTED), else unknown. On live networks
-   *  the broadcaster's /tx/{txid} verdict is the tiebreaker. */
+  /** what the chain view knows about a tx right now: mined (merkle path in
+   *  hand — outranks every recorded verdict), rejected (first-party truth:
+   *  a verified chain event, a broadcast refusal, the abandon horizon, or
+   *  the ledger's own terminal row), seen (the node knows it), else unknown.
+   *  A broadcaster status STRING is a hint — it can wake a reconcile but
+   *  never lands 'rejected' on its own. */
   async txState(txid: string): Promise<'mined' | 'seen' | 'rejected' | 'unknown'> {
-    if (this.txRejected.has(txid) || this.deps.chain.isRejected?.(txid) === true) return 'rejected'
     const local = this.deps.anchorTxs.get(txid) ?? this.deps.chain.getTx?.(txid)
     const resolved = local instanceof Promise ? await local : local
-    if (resolved?.merklePath !== undefined) return 'mined'
+    // the tx store is consulted ONLY for the merkle-path check — a
+    // prepared-but-unbroadcast tx lives there and is not 'seen'
+    if (resolved?.merklePath !== undefined || this.deps.txs().get(txid)?.merklePath !== undefined) {
+      this.txRejected.delete(txid)
+      this.txAbandoned.delete(txid)
+      return 'mined'
+    }
+    if (this.txRejected.has(txid) || this.deps.chain.isRejected?.(txid) === true || this.txAbandoned.has(txid)) return 'rejected'
+    const ledger = await this.deps.ledgerState?.(txid).catch(() => undefined)
+    if (ledger === 'rejected' || ledger === 'conflicted') return 'rejected'
     if (resolved !== undefined) return 'seen'
     if (this.deps.network === 'regtest' || this.deps.network === undefined) return 'unknown'
     const status = await (this.deps.txStatus?.(txid).catch(() => '') ?? Promise.resolve(''))
-    if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) {
-      this.txRejected.add(txid)
-      return 'rejected'
-    }
+    // a rejection status string has no proof object — its terminal path is
+    // the abandon horizon or a first-party refusal, never a durable verdict
+    if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) return 'unknown'
     // a MINED/IMMUTABLE verdict is a strong hint but carries no proof
     // object — 'mined' is reserved for "merkle path in hand" (the local
     // branch above), so the strongest a status string earns is 'seen'
@@ -179,4 +215,28 @@ export class TxOps {
   knownTx(txid: string): Transaction | undefined {
     return this.deps.anchorTxs.get(txid) ?? this.deps.attestationTxs.get(txid)
   }
+}
+
+/** watcher-observe mapping — pure so both the runtime closure and tests
+ *  exercise the same verdict rules. Only a VERIFIED substrate record may
+ *  flip durable state: a pushed 'rejected'/'double-spent' hint and every
+ *  broadcaster status string are wake-only (no durable verdict from a hint
+ *  — the terminal path is the abandon horizon or a first-party refusal). */
+export function watcherObservation(
+  seen: { ev: TxStatusEvent; verified: boolean } | undefined,
+  status: string
+): TxObservationInput | undefined {
+  if (seen?.verified === true) {
+    if (seen.ev.status === 'rejected' || seen.ev.status === 'double-spent') return { status: 'rejected', source: 'chain', reason: seen.ev.status }
+    if (seen.ev.status === 'mined') return { status: 'proven', source: 'broadcaster' }
+  }
+  if (seen?.ev.status === 'rejected' || seen?.ev.status === 'double-spent') return undefined
+  if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) return undefined
+  if (
+    ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE'].includes(
+      status
+    )
+  )
+    return { status: 'seen', source: 'broadcaster' }
+  return undefined
 }

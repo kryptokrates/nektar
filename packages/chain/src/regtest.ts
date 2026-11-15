@@ -137,12 +137,28 @@ async function assetGet(cfg: RegtestConfig, path: string, binary = true): Promis
  *  the merklePathFor legacy-block scan (the fallback for when the asset
  *  endpoint can't answer). Served bytes are a claim — a caller that needs
  *  trust anchors computeRoot against its own ChainTracker. */
-export async function regtestMerkleProof(cfg: RegtestConfig, txid: string, fetchImpl: typeof fetch = fetch): Promise<MerklePath | undefined> {
+export async function regtestMerkleProof(
+  cfg: RegtestConfig,
+  txid: string,
+  fetchImpl: typeof fetch = fetch,
+  opts?: { strict?: boolean }
+): Promise<MerklePath | undefined> {
   const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
   const res = await fetchImpl(`${cfg.assetUrl}/merkle_proof/${txid}`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(15_000) }).catch(
     () => null
   )
-  if (res === null || !res.ok) return undefined
+  // strict (the events-observe contract): "couldn't ask" THROWS so the
+  // caller can tell it apart from a definitive "not proven" — a dead or
+  // rate-limited host must never count toward the abandon clock. A 404 or
+  // other non-ok is still a real answer: not proven.
+  if (res === null) {
+    if (opts?.strict === true) throw new Error(`merkle_proof fetch failed for ${txid}`)
+    return undefined
+  }
+  if (!res.ok) {
+    if (opts?.strict === true && (res.status === 429 || res.status >= 500)) throw new Error(`merkle_proof HTTP ${res.status} for ${txid}`)
+    return undefined
+  }
   try {
     return MerklePath.fromBinary([...new Uint8Array(await res.arrayBuffer())])
   } catch {

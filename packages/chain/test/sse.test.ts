@@ -69,6 +69,44 @@ test('statusStream: events in order, malformed skipped, reconnect sends Last-Eve
   assert.deepEqual(persisted, ['7', '8', '9', '10'], 'cursor.set persisted each id')
 })
 
+test('statusStream: cursor advances only after onEvent resolves', async () => {
+  const atDelivery: string[] = []
+  const persisted: string[] = []
+  const fetchImpl = (async () => stream(['id: 1\ndata: {"a":1}\n\n', 'id: 2\ndata: {"b":2}\n\n'], true)) as unknown as typeof fetch
+  const s = statusStream(
+    { broadcasterUrl: 'https://b.test', callbackToken: 'tok', fetchImpl },
+    (e) => {
+      atDelivery.push(`${e.id}:${persisted.at(-1) ?? 'none'}`)
+    },
+    { minBackoffMs: 10, cursor: { get: () => undefined, set: (id) => void persisted.push(id) } }
+  )
+  for (let i = 0; i < 100 && atDelivery.length < 2; i++) await sleep(10)
+  s.close()
+  // inside onEvent for id '2' the persisted cursor is still '1' — a crash
+  // mid-handler redelivers on restart
+  assert.deepEqual(atDelivery, ['1:none', '2:1'])
+  assert.deepEqual(persisted, ['1', '2'])
+})
+
+test('statusStream: a throwing onEvent reports via onError and the cursor still advances', async () => {
+  const errors: Error[] = []
+  const persisted: string[] = []
+  const seen: string[] = []
+  const fetchImpl = (async () => stream(['id: 1\ndata: x\n\n', 'id: 2\ndata: y\n\n'], true)) as unknown as typeof fetch
+  const s = statusStream(
+    { broadcasterUrl: 'https://b.test', callbackToken: 'tok', fetchImpl },
+    (e) => {
+      seen.push(e.id!)
+      if (e.id === '1') throw new Error('poison')
+    },
+    { minBackoffMs: 10, cursor: { get: () => undefined, set: (id) => void persisted.push(id) }, onError: (e) => errors.push(e) }
+  )
+  for (let i = 0; i < 100 && seen.length < 2; i++) await sleep(10)
+  s.close()
+  assert.equal(errors.length >= 1, true, 'the poison event surfaced through onError')
+  assert.deepEqual(persisted, ['1', '2'], 'a poison event must not wedge the stream')
+})
+
 test('statusStream: cursor.get seeds the first Last-Event-ID', async () => {
   let got: string | undefined
   const fetchImpl = (async (_input: unknown, init?: RequestInit) => {

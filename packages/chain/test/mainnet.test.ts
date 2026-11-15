@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { Transaction, P2PKH, UnlockingScript } from '@bsv/sdk'
 import type { Broadcaster } from '../src/interfaces.js'
 import { sha256 } from '@nektar/core'
-import { BsvBroadcaster, fetchBroadcasterFeeRate, WocTracker, tscToMerklePath, merklePathMainnet, discoverUtxos } from '../src/mainnet.js'
+import { BsvBroadcaster, fetchBroadcasterFeeRate, WocTracker, tscToMerklePath, merklePathMainnet, discoverUtxos, probeTxStatus } from '../src/mainnet.js'
 import { SpendGuard } from '../src/spendguard.js'
 import { buildBump } from '../src/bump.js'
 import { mkdtempSync } from 'node:fs'
@@ -208,6 +208,39 @@ test('merklePathMainnet (broadcaster BUMP) + discoverUtxos with recorded fixture
   const utxos = await discoverUtxos({ fetchImpl, wocUrl: 'http://woc' }, 'addr')
   assert.equal(utxos.length, 1)
   assert.equal(utxos[0].satoshis, 5000)
+})
+
+test('probeTxStatus: definitive answers vs "couldn\'t ask"', async () => {
+  // broadcaster 404 = a real answer ("we do not carry this tx")
+  const f404 = stubFetch({ 'bcast.example/tx/': { status: 404, body: { error: 'transaction not found' } } })
+  assert.deepEqual(await probeTxStatus({ fetchImpl: f404, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' }, 't1'), {
+    status: '',
+    answered: true
+  })
+  // every source rate-limited = nobody answered
+  const f429 = stubFetch({
+    'bcast.example/tx/': { status: 429, body: { error: 'slow down' } },
+    'woc.example/tx/': { status: 429, body: {} }
+  })
+  assert.deepEqual(await probeTxStatus({ fetchImpl: f429, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' }, 't1'), {
+    status: '',
+    answered: false
+  })
+  // broadcaster dead but WoC cross-check answers mined
+  const fWoc = stubFetch({
+    'bcast.example/tx/': { status: 500, body: {} },
+    'woc.example/tx/': { body: { blockheight: 5 } }
+  })
+  assert.deepEqual(await probeTxStatus({ fetchImpl: fWoc, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' }, 't1'), {
+    status: 'MINED',
+    answered: true
+  })
+  // a real status verdict answers at once
+  const fSeen = stubFetch({ 'bcast.example/tx/': { body: { txStatus: 'SEEN_ON_NETWORK' } } })
+  assert.deepEqual(await probeTxStatus({ fetchImpl: fSeen, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' }, 't1'), {
+    status: 'SEEN_ON_NETWORK',
+    answered: true
+  })
 })
 
 // -- SpendGuard ----------------------------------------------------------------

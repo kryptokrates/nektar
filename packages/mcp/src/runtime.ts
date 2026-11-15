@@ -27,6 +27,7 @@ import {
   TemporalSources,
   statusStream,
   fetchTxStatus,
+  probeTxStatus,
   DEFAULT_WOC_URL,
   TxStore,
   ChainEvents,
@@ -37,6 +38,7 @@ import {
   type TxStatusEvent
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
+import { watcherObservation } from './txops.js'
 import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvNum, setNektarEnv, type SignerWallet } from '@nektar/core'
 import { wireP2p, setupFeeVault } from './setup.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
@@ -318,6 +320,26 @@ async function openRecordsDb(dataDir: string) {
   return { knex, store, ledger, wrapBroadcast, leasePredicate }
 }
 
+/** heal hook: a verified proof arriving after a terminal-looking ledger
+ *  verdict ('conflicted' from the abandon horizon, 'rejected' from a
+ *  first-party refusal) flips the row back to 'confirmed' — those verdicts
+ *  are ceilings, not truth. Errors log to stderr, never crash. */
+function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/automation').AutomationStore, tag: string): void {
+  mem.onTxProof((txid) => {
+    void (async () => {
+      try {
+        const w = await ledger.walletTx({ txid })
+        if (w !== undefined && (w.state === 'conflicted' || w.state === 'rejected')) {
+          await ledger.setTxState(w.actionId, 'confirmed', { at: Date.now(), healed: true })
+          process.stderr.write(`nektar ${tag}: ${txid} proved after a terminal verdict — ledger healed to confirmed\n`)
+        }
+      } catch (e) {
+        process.stderr.write(`nektar ${tag}: proof-heal ${txid}: ${(e as Error).message}\n`)
+      }
+    })()
+  })
+}
+
 export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   // fail fast: paid tools need a valid operator wallet BEFORE the first 402 —
   // an invoice served to a missing address is a payment that can never settle.
@@ -405,7 +427,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     abandonAfterBlocks: 100,
     height: async () => Math.max(lastMined, await tracker.currentHeight()),
     observe: async (txid) => {
-      const mp = await regtestMerkleProof(rc, txid)
+      const mp = await regtestMerkleProof(rc, txid, undefined, { strict: true })
       if (mp === undefined) return undefined
       let root: string
       try {
@@ -534,6 +556,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   )
   memRef = mem
   mem.ledger = ledger
+  healLedgerOnProof(mem, ledger, 'regtest')
   // optimistic-claim surface: provider + signer over the regtest funder,
   // claims registry + proof store in the data dir (the watcher shares it)
   {
@@ -872,8 +895,12 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       // object — only a double-spend is provable (via the conflicting tx's
       // own BUMP). It lands as a hint (resolves waiters, keeps the floor),
       // never on the verified path — same treatment the push path gives it.
-      const st = await arcTxStatus(txid)
-      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(st)) events.note({ txid, status: 'rejected' })
+      const probe = await probeTxStatus(mc, txid, { wocFallback })
+      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(probe.status)) events.note({ txid, status: 'rejected' })
+      // an unanswered probe — or a 'mined' claim we hold no verified path
+      // for — is not "not mined": throwing keeps the abandon clock from
+      // counting a question nobody answered
+      if (!probe.answered || probe.status === 'MINED' || probe.status === 'IMMUTABLE') throw new Error(`cannot establish 'not mined' for ${txid}`)
       return undefined
     }
   })
@@ -928,6 +955,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   )
   memRef = mem
   mem.ledger = ledger
+  healLedgerOnProof(mem, ledger, net)
   // restart-recovery pull for proofs that never arrived by push — a fetched
   // BUMP counts only after its root verifies against our own headers (same
   // trust rule as the push path; push stays primary)
@@ -1281,22 +1309,22 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       return { revived, dropped, marked, pending, utxos: reserve.utxos.length, balanceSats, address: fundAddress }
     }
   }
+  // a dead funding mint may free its inputs — reconcile the reserve on the
+  // abandon verdict (replaces the watcher's onRejected refresh, which
+  // status-string hints no longer trigger). Registered post-`ops` on purpose:
+  // the mark/emit handler above can fire while the funding wait still runs.
+  events.on('abandoned', () => void ops.refreshFunding?.().catch(() => {}))
   const { TransactionWatcher } = await import('@nektar/automation')
   const watcher = new TransactionWatcher(
     ledger,
     async (txid) => {
       // the shared substrate already probed this txid — use its answer
-      // instead of a second /tx fetch per watched tx per pass
+      // instead of a second /tx fetch per watched tx per pass; a VERIFIED
+      // terminal record settles it without the network call at all
       const seen = events.statusOf(txid)
-      if (seen?.ev.status === 'rejected' || seen?.ev.status === 'double-spent') return { status: 'rejected', source: 'broadcaster', reason: seen.ev.status }
-      // a pushed MINED is a hint until our own observe verifies it — only a
-      // verified record (observe/deliver) may mark durable state 'proven'
-      if (seen?.ev.status === 'mined' && seen.verified) return { status: 'proven', source: 'broadcaster' }
-      const status = await arcTxStatus(txid)
-      const SEEN = ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE']
-      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) return { status: 'rejected', source: 'broadcaster', reason: status }
-      if (SEEN.includes(status)) return { status: 'seen', source: 'broadcaster' }
-      return undefined
+      const verdict = seen?.verified === true ? watcherObservation(seen, '') : undefined
+      if (verdict !== undefined) return verdict
+      return watcherObservation(seen, await arcTxStatus(txid))
     },
     async () => {
       await ops.refreshFunding?.().catch(() => {})

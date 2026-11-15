@@ -226,3 +226,46 @@ test('events: note() verify-on-hint — a pushed mined hint is verified and prom
   assert.equal(ev.watching('t1'), false) // verified observe ended interest
   ev.stop()
 })
+
+test('events: a throwing observe never advances the abandon clock', async () => {
+  let tip = 100
+  let fail = true
+  const ev = new ChainEvents({
+    observe: async () => {
+      if (fail) throw new Error('host down')
+      return undefined
+    },
+    height: async () => tip,
+    abandonAfterBlocks: 10
+  })
+  const abandoned: string[] = []
+  ev.on('abandoned', ({ txid }) => abandoned.push(txid))
+  ev.watch('t1')
+  await ev.tick() // first-seen height recorded at tip=100
+  tip = 111
+  await ev.tick() // 11 unanswered blocks — silence is not a verdict
+  tip = 130
+  await ev.tick()
+  assert.deepEqual(abandoned, [])
+  assert.equal(ev.watching('t1'), true)
+  fail = false // the host answers again — the clock can count now
+  tip = 131
+  await ev.tick()
+  assert.deepEqual(abandoned, ['t1'])
+})
+
+test('events: note() dirties the set — verify-on-hint runs under a static tip', async () => {
+  let proven = false
+  const ev = new ChainEvents({ observe: async () => (proven ? mined('t1') : undefined), height: async () => 100 })
+  const got: TxStatusEvent[] = []
+  ev.on('tx', (e) => got.push(e))
+  ev.watch('t1')
+  await ev.tick() // observe misses: scannedAtTip=100, the proof gate closes
+  assert.equal(got.length, 0)
+  proven = true
+  ev.note(mined('t1')) // the pushed hint must reopen the gate — no new block needed
+  await ev.tick()
+  assert.equal(got.length, 1)
+  assert.equal(got[0].status, 'mined')
+  ev.stop()
+})

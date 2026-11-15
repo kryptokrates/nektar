@@ -21,6 +21,7 @@ export {
   BsvBroadcaster,
   fetchBroadcasterFeeRate,
   fetchTxStatus,
+  probeTxStatus,
   WocTracker,
   merklePathMainnet,
   tscToMerklePath,

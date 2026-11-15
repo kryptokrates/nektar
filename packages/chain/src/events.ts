@@ -16,7 +16,10 @@ import type { TxStatusEvent } from './interfaces.js'
 const TERMINAL: ReadonlySet<string> = new Set(['mined', 'rejected', 'double-spent'])
 
 export interface ChainEventsOpts {
-  /** chain truth for one txid. undefined → still pending; never throws. */
+  /** chain truth for one txid. Resolving `undefined` = asked a reachable
+   *  source and it is definitively not terminal yet — the answer may feed
+   *  the abandon clock. THROWING = couldn't ask (host down, rate-limited):
+   *  a throw must never age silence into a verdict. */
   observe: (txid: string) => Promise<TxStatusEvent | undefined>
   /** tip probe — enables 'height' events and proof-gating: when the tip has
    *  not advanced and no new watches arrived, a tick skips the txid batch
@@ -38,6 +41,10 @@ interface WatchEntry {
   since: number
   /** first-seen tip height — filled lazily on the entry's first tick */
   atHeight?: number
+  /** last tip where an observe ANSWERED "not terminal" — the abandon clock
+   *  only counts definitive reads: a throwing observe never lets silence
+   *  age into a verdict */
+  answeredTip?: number
 }
 
 export class ChainEvents extends EventEmitter {
@@ -116,7 +123,10 @@ export class ChainEvents extends EventEmitter {
     this.resolve(ev, TERMINAL.has(ev.status))
     // verify-on-hint: a pushed status (MINED from a status stream, a
     // broadcaster callback) is checked by our own observe on the next
-    // macrotask — the 'tx' emit arrives in ms, not at the interval floor
+    // macrotask — the 'tx' emit arrives in ms, not at the interval floor.
+    // dirty re-opens the proof gate: under a static tip the batch would
+    // otherwise be skipped and the hint would wait for the next block.
+    this.dirty = true
     this.poke()
   }
 
@@ -140,11 +150,22 @@ export class ChainEvents extends EventEmitter {
     if (inflight !== undefined) return inflight
     const p = this.opts
       .observe(txid)
-      .catch(() => undefined)
       .then((ev) => {
         this.probing.delete(txid)
-        if (ev !== undefined) this.deliver(ev)
+        if (ev !== undefined) {
+          this.deliver(ev)
+        } else {
+          // a resolved undefined is a definitive "not terminal yet" — only
+          // an answered read may feed the abandon clock; a throw below is
+          // "couldn't ask" and must never advance it
+          const w = this.watched.get(txid)
+          if (w !== undefined && this.tip !== undefined) w.answeredTip = this.tip
+        }
         return ev
+      })
+      .catch(() => {
+        this.probing.delete(txid)
+        return undefined
       })
     this.probing.set(txid, p)
     return p
@@ -239,8 +260,8 @@ export class ChainEvents extends EventEmitter {
           this.emit('height', tip)
         }
       }
-      // ttl sweep + first-seen heights + abandonment; retained statuses age
-      // out on the same window (catch-up cache, not permanent memory)
+      // ttl sweep + first-seen heights; retained statuses age out on the
+      // same window (catch-up cache, not permanent memory)
       const staleAt = Date.now() - (this.opts.ttlMs ?? 2 * 60 * 60_000)
       for (const [txid, w] of this.watched) {
         if (w.since < staleAt) {
@@ -248,15 +269,6 @@ export class ChainEvents extends EventEmitter {
           continue
         }
         if (w.atHeight === undefined) w.atHeight = this.tip
-        if (
-          this.opts.abandonAfterBlocks !== undefined &&
-          this.tip !== undefined &&
-          w.atHeight !== undefined &&
-          this.tip - w.atHeight > this.opts.abandonAfterBlocks
-        ) {
-          this.watched.delete(txid)
-          this.emit('abandoned', { txid, tip: this.tip, seenAtHeight: w.atHeight })
-        }
       }
       for (const [txid, s] of this.lastStatus) {
         if (s.at < staleAt) this.lastStatus.delete(txid)
@@ -272,6 +284,17 @@ export class ChainEvents extends EventEmitter {
         await Promise.all(batch.map((txid) => this.probeOne(txid)))
         this.scannedAtTip = this.tip
         this.dirty = false
+      }
+      // abandonment is evaluated AFTER the batch so a probe that just
+      // answered lands in the same sweep — and only answered reads move the
+      // clock: an unreachable source must never become a money-state verdict
+      if (this.opts.abandonAfterBlocks !== undefined) {
+        for (const [txid, w] of this.watched) {
+          if (w.answeredTip !== undefined && w.atHeight !== undefined && w.answeredTip - w.atHeight > this.opts.abandonAfterBlocks) {
+            this.watched.delete(txid)
+            this.emit('abandoned', { txid, tip: this.tip, seenAtHeight: w.atHeight })
+          }
+        }
       }
       this.emit('tick')
     } finally {

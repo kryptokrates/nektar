@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import math
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -12,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "artifacts" / "nektar-video"
 FRAMES = OUT / "frames"
 FFMPEG = ROOT / ".tools" / "ffmpeg-7.0.2-amd64-static" / "ffmpeg"
-LOGO = ROOT / "logo.png"
+LOGO = ROOT / "logo.svg"
 W, H, FPS = 640, 360, 24
 BG = (11, 13, 16)
 PANEL = (22, 27, 32)
@@ -230,12 +232,40 @@ def encode(frame_dir: Path, output: Path, duration: float):
     ], check=True)
 
 
+def rasterize_logo(size: int) -> Image.Image:
+    """Render logo.svg via the first available SVG rasterizer (cairosvg,
+    rsvg-convert, magick, inkscape)."""
+    try:
+        import cairosvg
+
+        data = cairosvg.svg2png(url=str(LOGO), output_width=size, output_height=size)
+        return Image.open(io.BytesIO(data)).convert("RGBA")
+    except ImportError:
+        pass
+    for tool, args in (
+        ("rsvg-convert", ["-w", str(size), "-h", str(size), str(LOGO)]),
+        ("magick", ["-background", "none", str(LOGO), "-resize", f"{size}x{size}", "png:-"]),
+    ):
+        if shutil.which(tool):
+            data = subprocess.run([tool, *args], capture_output=True, check=True).stdout
+            return Image.open(io.BytesIO(data)).convert("RGBA")
+    if shutil.which("inkscape"):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "logo.png"
+            subprocess.run(
+                ["inkscape", str(LOGO), "-w", str(size), "--export-type=png", "--export-filename", str(out)],
+                check=True,
+            )
+            return Image.open(io.BytesIO(out.read_bytes())).convert("RGBA")
+    raise SystemExit("logo.svg needs an SVG rasterizer: pip install cairosvg, or put rsvg-convert / magick / inkscape on PATH")
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     if FRAMES.exists():
         shutil.rmtree(FRAMES)
     FRAMES.mkdir()
-    logo = Image.open(LOGO).convert("RGBA").resize((42, 42), Image.Resampling.LANCZOS)
+    logo = rasterize_logo(168).resize((42, 42), Image.Resampling.LANCZOS)
     for i in range(80 * FPS):
         frame = draw_frame(i / FPS, logo)
         frame.save(FRAMES / f"{i:06d}.png", optimize=True)

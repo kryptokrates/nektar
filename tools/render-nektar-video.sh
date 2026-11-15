@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ffmpeg_bin="${repo_dir}/.tools/ffmpeg-7.0.2-amd64-static/ffmpeg"
-logo="${repo_dir}/logo.png"
+logo="${repo_dir}/logo.svg"
 out_dir="${repo_dir}/artifacts/nektar-video"
 master="${out_dir}/nektar-explainer-70s.mp4"
 vertical="${out_dir}/nektar-explainer-15s-vertical.mp4"
@@ -18,6 +18,23 @@ if [[ ! -f "$logo" ]]; then
 fi
 
 mkdir -p "$out_dir"
+
+# ffmpeg can't decode SVG — rasterize the logo with whatever is on PATH.
+logo_png="${out_dir}/logo-512.png"
+if command -v rsvg-convert >/dev/null 2>&1; then
+  rsvg-convert -w 512 -h 512 "$logo" -o "$logo_png"
+elif command -v magick >/dev/null 2>&1; then
+  magick -background none "$logo" -resize 512x512 "$logo_png"
+elif command -v inkscape >/dev/null 2>&1; then
+  inkscape "$logo" -w 512 --export-type=png --export-filename "$logo_png"
+elif python3 -c 'import cairosvg' 2>/dev/null; then
+  python3 -c 'import cairosvg, sys; cairosvg.svg2png(url=sys.argv[1], write_to=sys.argv[2], output_width=512, output_height=512)' "$logo" "$logo_png"
+elif python -c 'import cairosvg' 2>/dev/null; then
+  python -c 'import cairosvg, sys; cairosvg.svg2png(url=sys.argv[1], write_to=sys.argv[2], output_width=512, output_height=512)' "$logo" "$logo_png"
+else
+  echo "logo.svg needs an SVG rasterizer (rsvg-convert, magick, inkscape, or python cairosvg)" >&2
+  exit 1
+fi
 
 font="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 mono="/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
@@ -97,7 +114,7 @@ filter+=",format=yuv420p[v]"
 echo "Rendering $master"
 "$ffmpeg_bin" -y -hide_banner -loglevel error \
   -f lavfi -i "color=c=#0d0d0d:s=1280x720:r=30:d=70" \
-  -loop 1 -i "$logo" \
+  -loop 1 -i "$logo_png" \
   -filter_complex "$filter" \
   -map "[v]" -t 70 -an -c:v libx264 -preset veryfast -crf 20 -movflags +faststart "$master"
 

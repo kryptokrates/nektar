@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" width="96" alt="nektar"/>
+  <img src="logo.svg" width="96" alt="nektar"/>
 </p>
 
 # nektar — the agent knowledge economy

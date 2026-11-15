@@ -20,7 +20,15 @@ export async function publishArtifact(p: {
   net: string
   payload: MarketPayload
   quorum?: Quorum
-}): Promise<{ txid: string; took: string[]; admitted: string[]; missed: Array<{ host: string; error: string }> }> {
+}): Promise<{
+  txid: string
+  hash: string
+  took: string[]
+  admitted: string[]
+  missed: Array<{ host: string; error: string }>
+  pending: string[]
+  settled: Promise<{ took: string[]; missed: Array<{ host: string; error: string }> }>
+}> {
   const hash = artifactHash(p.payload)
   const topics = lanesFor(p.net, bodyDomains(p.payload))
   const lockHex = (await fundingLock(walletOrProto(p.key, p.wallet), ORIGINATOR, DERIVATION, FUNDING_TAG)).toHex()
@@ -49,7 +57,49 @@ export async function publishArtifact(p: {
   // its own 15s timeout (observed: offers pending until the want expired)
   const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
   if (!r.ok) throw new Error(`publishArtifact: quorum failed ${JSON.stringify(r.missed)}`)
-  return { txid: txid, took: r.took, admitted: r.admitted, missed: r.missed }
+  return { txid, hash, took: r.took, admitted: r.admitted, missed: r.missed, pending: r.pending, settled: r.settled }
+}
+
+/** re-serve a journaled carrier to ONE host — the repair leg for a fan-out
+ *  that resolved at quorum while this host missed (or was still pending).
+ *  A missing journal row resolves: nothing left to repair. */
+export async function resubmitCarrier(p: { journal: CarrierJournal; host: string; key: string }): Promise<void> {
+  const row = await p.journal.get(p.key)
+  if (row === undefined) return
+  const r = await submitAll([p.host], row.beef, row.topics, { quorum: 'all', retryWaits: [] })
+  if (!r.ok) throw new Error(`resubmit ${p.host}: ${r.missed[0].error}`)
+}
+
+/** one journaled carrier whose funding tree just proved: attach the parent's
+ *  BUMP (same txid), re-submit, and persist the enriched beef once quorum is
+ *  reached — the per-row body of republishProved so a single hash can be
+ *  queued and retried on its own. `done` is also true when the row is gone
+ *  or its parent already carries a path (nothing to repair). `submitted`
+ *  distinguishes a real re-announce from those no-op cases. */
+export async function republishOne(p: {
+  journal: CarrierJournal
+  hosts: string[]
+  hash: string
+  treeTxid: string
+  merklePath: import('@bsv/sdk').MerklePath
+}): Promise<{ done: boolean; submitted?: boolean; missed: Array<{ host: string; error: string }> }> {
+  const row = await p.journal.get(p.hash)
+  if (row === undefined) return { done: true, missed: [] }
+  try {
+    const tx = Transaction.fromAtomicBEEF(row.beef)
+    const parent = tx.inputs[0]?.sourceTransaction
+    if (parent === undefined || parent.id('hex') !== p.treeTxid || parent.merklePath !== undefined) return { done: true, missed: [] }
+    parent.merklePath = p.merklePath
+    const beef = tx.toAtomicBEEF()
+    const r = await submitAll(p.hosts, beef, row.topics, { retryWaits: [] })
+    // persist the enriched beef only once quorum is reached — a row left
+    // unenriched retries on the next pass instead of stranding a missed host
+    // on its stale deadline-bound copy
+    if (r.ok) await p.journal.put(p.hash, { txid: row.txid, beef, topics: row.topics, fundingTxid: row.fundingTxid ?? p.treeTxid })
+    return { done: r.ok, submitted: r.ok, missed: r.missed }
+  } catch {
+    return { done: false, missed: [] }
+  }
 }
 
 /** after a funding tree's own BUMP lands, republish its journaled carriers
@@ -68,24 +118,9 @@ export async function republishProved(p: {
   let republished = 0
   const missed: Array<{ host: string; error: string }> = []
   for (const row of await p.journal.fundedBy(p.treeTxid)) {
-    try {
-      const tx = Transaction.fromAtomicBEEF(row.beef)
-      const parent = tx.inputs[0]?.sourceTransaction
-      if (parent === undefined || parent.id('hex') !== p.treeTxid || parent.merklePath !== undefined) continue
-      parent.merklePath = p.merklePath
-      const beef = tx.toAtomicBEEF()
-      const r = await submitAll(p.hosts, beef, row.topics, { retryWaits: [] })
-      // persist the enriched beef only once quorum is reached — a row left
-      // unenriched retries on the next pass instead of stranding a missed
-      // host on its stale deadline-bound copy
-      if (r.ok) {
-        await p.journal.put(row.hash, { txid: row.txid, beef, topics: row.topics, fundingTxid: p.treeTxid })
-        republished++
-      }
-      missed.push(...r.missed)
-    } catch {
-      /* a row that can't be enriched or re-sent retries on the next pass */
-    }
+    const r = await republishOne({ journal: p.journal, hosts: p.hosts, hash: row.hash, treeTxid: p.treeTxid, merklePath: p.merklePath })
+    if (r.submitted === true) republished++
+    missed.push(...r.missed)
   }
   return { republished, missed }
 }

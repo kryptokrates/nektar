@@ -6,7 +6,7 @@ import { buildCarrier, buildSweep } from '../src/carrier.js'
 import { encodePayload, lanesFor } from '../src/market-wire.js'
 import { submitAll, readWants } from '../src/hosts.js'
 import { provenTree } from './helpers.js'
-import { FakeTracker, minihost } from '../src/testing.js'
+import { FakeTracker, minihost, faulthost } from '../src/testing.js'
 
 const NET = 'regtest'
 
@@ -176,4 +176,29 @@ test('hosts: multi-net � a want on net A is not returned for net B', async () 
   const r = await readWants([a.url], { net: 'other', domain: 'compute' }, { tracker: tr, net: 'other' })
   assert.equal(r.items.length, 0)
   await a.close()
+})
+
+test('hosts: early resolve at quorum leaves the straggler in pending; settled reports its fate', async () => {
+  const tr = new FakeTracker()
+  const a = await minihost([NET], tr)
+  const b = await minihost([NET], tr)
+  // a proxy that delays then fails — the leg answers LATE and BADLY
+  const f = await faulthost('http://127.0.0.1:1')
+  f.fault.delayMs = 1200
+  const k = PrivateKey.fromRandom()
+  const { beef } = await want(k)
+  try {
+    const r = await submitAll([a.url, b.url, f.url], beef, lanesFor(NET, ['compute']), { retryWaits: [], early: true })
+    assert.ok(r.ok, 'quorum of two took it')
+    assert.deepEqual(r.missed, [], 'nothing had FAILED at resolve time')
+    assert.deepEqual(r.pending, [f.url], 'the unanswered leg is reported pending, not missed')
+    const s = await r.settled
+    assert.deepEqual(s.took.sort(), [a.url, b.url].sort())
+    assert.equal(s.missed.length, 1)
+    assert.equal(s.missed[0].host, f.url, 'settled reports the straggler leg as missed')
+  } finally {
+    await a.close()
+    await b.close()
+    await f.close()
+  }
 })

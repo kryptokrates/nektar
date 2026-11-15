@@ -1,7 +1,7 @@
 import type { Knex } from 'knex'
 
 export interface CarrierJournal {
-  get(hash: string): Promise<{ txid: string; beef: number[]; topics: string[] } | undefined>
+  get(hash: string): Promise<{ txid: string; beef: number[]; topics: string[]; fundingTxid?: string } | undefined>
   put(hash: string, c: { txid: string; beef: number[]; topics: string[]; fundingTxid?: string }): Promise<void>
   /** rows funded by a tree txid — lets a proof that just landed republish its
    *  carriers with the parent's BUMP attached (the same txid, so hosts
@@ -61,7 +61,9 @@ export class KnexCarrierJournal implements CarrierJournal {
   async get(hash: string) {
     await this.ensure()
     const r = await this.kx('bstack_carriers').where({ artifact_hash: hash }).first()
-    return r === undefined ? undefined : { txid: r.txid, beef: JSON.parse(r.beef), topics: JSON.parse(r.topics) }
+    return r === undefined
+      ? undefined
+      : { txid: r.txid, beef: JSON.parse(r.beef), topics: JSON.parse(r.topics), ...(r.funding_txid != null ? { fundingTxid: r.funding_txid } : {}) }
   }
   async put(hash: string, c: { txid: string; beef: number[]; topics: string[]; fundingTxid?: string }): Promise<void> {
     await this.ensure()

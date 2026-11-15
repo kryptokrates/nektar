@@ -974,8 +974,15 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
   // re-watch so the observe path re-fetches and re-verifies against the new
   // headers. Un-anchoring shard records stays out of scope — finalityDepth
   // already withholds shallow anchors from queries.
+  let lastReorgFrom: number | undefined
   tracker.onReorg?.((removed, newTip) => {
+    if (removed.length === 0) return
     const from = Math.min(...removed.map((h) => h.height))
+    // the same fork fires once per witnessed source — the effects are
+    // idempotent (clearProofsFrom returns [] the second time) but the log,
+    // the metric and the emit must not double-count a repeated `from`
+    if (from === lastReorgFrom) return
+    lastReorgFrom = from
     process.stderr.write(`nektar ${net}: header reorg — ${removed.length} stale header(s) from height ${from}, new tip ${newTip.height}\n`)
     mem.metrics.inc('nektar_reorgs_total', {}, 1, 'header-chain reorgs observed')
     for (const txid of txStore.clearProofsFrom(from)) events.watch(txid)

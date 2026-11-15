@@ -7,12 +7,25 @@ export type Quorum = 'all' | 'majority' | 'one' | number
 const need = (q: Quorum | undefined, n: number): number =>
   q === 'all' ? n : q === 'one' ? 1 : typeof q === 'number' ? Math.max(1, Math.min(q, n)) : Math.ceil(n / 2)
 
+export interface SubmitAllResult {
+  ok: boolean
+  took: string[]
+  admitted: string[]
+  missed: Array<{ host: string; error: string }>
+  /** legs that had not answered when an `early` call resolved at quorum —
+   *  they are neither success nor failure yet; `settled` reports their fate */
+  pending: string[]
+  /** every leg's final answer — resolves once all hosts have answered (for
+   *  non-early calls it is already resolved). Never rejects. */
+  settled: Promise<{ took: string[]; missed: Array<{ host: string; error: string }> }>
+}
+
 export async function submitAll(
   hosts: string[],
   beef: number[],
   topics: string[],
   opts?: { quorum?: Quorum; timeoutMs?: number; retryWaits?: number[]; early?: boolean }
-): Promise<{ ok: boolean; took: string[]; admitted: string[]; missed: Array<{ host: string; error: string }> }> {
+): Promise<SubmitAllResult> {
   const timeoutMs = opts?.timeoutMs ?? 15000
   // journaled callers pass retryWaits:[] — their own journal is the retry layer,
   // so a dead host costs one refused fetch instead of ~7s of sleeps per cycle
@@ -43,10 +56,17 @@ export async function submitAll(
     return { host, ok: false, error: 'retries exhausted' }
   }
   const jobs = hosts.map(per)
+  // every leg's final answer — never rejects; an early caller uses it to
+  // learn what the stragglers did after quorum was declared
+  const settled = Promise.all(jobs).then((rs) => ({
+    took: rs.filter((r) => r.ok).map((r) => r.host),
+    missed: rs.filter((r) => !r.ok).map((r) => ({ host: r.host, error: r.error! }))
+  }))
   // early: resolve the moment `n` hosts took it — a slow straggler no longer
   // prices every send at its own latency; its leg still completes in the
   // background so the object lands on every host anyway. Failure can only be
   // known once all legs answered, so a failed call still waits for all.
+  const answered = new Set<string>()
   const rs =
     opts?.early === true
       ? await new Promise<Leg[]>((resolve) => {
@@ -55,6 +75,7 @@ export async function submitAll(
           for (const j of jobs)
             void j.then((r) => {
               acc.push(r)
+              answered.add(r.host)
               if (r.ok) ok++
               if (ok >= n || acc.length === hosts.length) resolve([...acc])
             })
@@ -63,7 +84,8 @@ export async function submitAll(
   const took = rs.filter((r) => r.ok).map((r) => r.host)
   const admitted = rs.filter((r) => r.ok && r.admitted === true).map((r) => r.host)
   const missed = rs.filter((r) => !r.ok).map((r) => ({ host: r.host, error: r.error! }))
-  return { ok: took.length >= n, took, admitted, missed }
+  const pending = hosts.filter((h) => !answered.has(h))
+  return { ok: took.length >= n, took, admitted, missed, pending, settled }
 }
 
 export async function lookupAll(

@@ -3,7 +3,7 @@
 // consumers reach the app through AutomationHost and the runtime/store seams)
 export { type PreflightCheck, type PreflightReport, type Automation } from './types.js'
 export { type OperatorWallet, AutomationHost } from './host.js'
-export { type AutomationConfig, requeueAckItems, openAutomation } from './runtime.js'
+export { type AutomationConfig, requeueAckItems, trackFanout, openAutomation } from './runtime.js'
 export {
   type Operation,
   type InboxItem,
@@ -13,8 +13,10 @@ export {
   type TxState,
   type WalletTx,
   type Approval,
+  type DeferClass,
   RevisionConflict,
-  AutomationStore
+  AutomationStore,
+  classifyDeliveryError
 } from './store.js'
 export { type TxObservationInput, wrapBroadcast, leasePredicate, TransactionWatcher } from './ledger.js'
 export {

@@ -62,7 +62,15 @@ export async function sendBox(p: {
   refs?: BoxRef[]
   expiresAt?: number
   quorum?: 'all' | 'majority' | 'one' | number
-}): Promise<{ txid: string; took: string[]; admitted: string[]; missed: Array<{ host: string; error: string }> }> {
+}): Promise<{
+  txid: string
+  hash: string
+  took: string[]
+  admitted: string[]
+  missed: Array<{ host: string; error: string }>
+  pending: string[]
+  settled: Promise<{ took: string[]; missed: Array<{ host: string; error: string }> }>
+}> {
   const office = p.office ?? DEFAULT_OFFICE
   checkOffice(office)
   checkBox(BOX)
@@ -104,7 +112,7 @@ export async function sendBox(p: {
   // sleeps on the message path, and a send is done when quorum answered
   const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
   if (!r.ok) throw new Error(`box submit failed: ${JSON.stringify(r.missed).slice(0, 200)}`)
-  return { txid, took: r.took, admitted: r.admitted, missed: r.missed }
+  return { txid, hash: artifactHash, took: r.took, admitted: r.admitted, missed: r.missed, pending: r.pending, settled: r.settled }
 }
 
 export interface BoxItem {
@@ -194,7 +202,7 @@ export async function readBox(p: {
    *  path cares about the envelopes, not per-host coverage; withheld and
    *  unreachable are then reported only for hosts that did answer */
   quorum?: number
-}): Promise<{ items: BoxItem[]; withheld: Array<{ host: string; txid: string }>; unreachable: string[] }> {
+}): Promise<{ items: BoxItem[]; withheld: Array<{ host: string; txid: string }>; unreachable: string[]; answered: string[] }> {
   const office = p.office ?? DEFAULT_OFFICE
   const me = await signerPubHex(p.key)
   const w = walletOrProto(p.key, p.wallet)
@@ -224,7 +232,10 @@ export async function readBox(p: {
   for (const [host, ids] of perHost) for (const txid of items.keys()) if (!ids.includes(txid)) withheld.push({ host, txid })
   let out = [...items.values()]
   if (p.limit !== undefined) out = out.slice(0, p.limit)
-  return { items: out, withheld, unreachable }
+  // perHost's keys are the hosts that ANSWERED this read — a quorum-short
+  // read leaves the skipped hosts out entirely, which is what lets a caller
+  // distinguish an answered-healthy host from one the read never reached
+  return { items: out, withheld, unreachable, answered: [...perHost.keys()] }
 }
 
 async function openEnvelope(beef: number[], w: BoxWallet, office: string, me: string, tracker: ChainTracker): Promise<BoxItem | undefined> {

@@ -5,6 +5,7 @@ import { DisclosureSaleHost, CheckpointBond, COVENANT_ID } from '@nektar/anchor'
 import { parseFragment, fromHex } from '@nektar/core'
 import { TxStore, spendValid, type Ingested } from '@nektar/chain'
 import type { AutomationStore, InboxItem, Operation, OutboxItem } from './store.js'
+import { classifyDeliveryError } from './store.js'
 import { WalletCoordinator } from './wallet.js'
 import { decidePurchase, decideOffer, digestOf, type AutomationPolicy, type ActionContext } from './policy.js'
 import { rankOffers, type ScoreCandidate } from './scoring.js'
@@ -73,6 +74,12 @@ export interface MarketTransport {
   /** refs: stock plaintext object references riding the envelope — digest-
    *  pinned locators for external objects (evidence bundles, packs) */
   send: (toPub: string, msg: MarketMessage, refs?: import('@nektar/bstack').BoxRef[]) => Promise<void>
+  /** repair a single missed fan-out leg: re-serve the journaled carrier
+   *  under `journalKey` to `host` */
+  repair?: (host: string, journalKey: string) => Promise<void>
+  /** re-announce one journaled carrier (key `hash`) with its funding tree's
+   *  BUMP attached — queued per row when `treeTxid` proves */
+  republish?: (treeTxid: string, hash: string) => Promise<void>
 }
 
 export interface MarketMemory {
@@ -584,8 +591,11 @@ export class MarketEngine {
         let msg = (e as Error).message
         // resource starvation (a funding-tree slot being empty) is not a
         // delivery fault — defer without consuming attempts; unblockOutbox
-        // wakes it the moment a topup proof frees a slot
-        if (/funding slot/.test(msg)) await this.d.store.deferOutbox(item.actionId, msg)
+        // wakes it the moment a topup proof frees a slot. The class rides
+        // the row so a message that merely CONTAINS the keyword can't be
+        // pulled forward by an unrelated wake.
+        const cls = classifyDeliveryError(msg)
+        if (cls === 'funding-slot') await this.d.store.deferOutbox(item.actionId, msg)
         else {
           // a persisted payload can outgrow the box cap — built under an older
           // bound, or an escrow wire that came out larger than expected. The
@@ -604,7 +614,7 @@ export class MarketEngine {
               }
             }
           }
-          await this.d.store.retryOutbox(item.actionId, msg)
+          await this.d.store.retryOutbox(item.actionId, msg, undefined, cls)
         }
       }
     }
@@ -622,6 +632,15 @@ export class MarketEngine {
   private async deliver(i: OutboxItem): Promise<void> {
     if (i.kind === 'publish-want') return await this.d.transport.publishWant(i.payload as SignedWant)
     if (i.kind === 'publish-offer') return await this.d.transport.publishOffer(i.payload as SignedOffer)
+    if (i.kind === 'repair-host') {
+      if (this.d.transport.repair === undefined) throw new Error('transport cannot repair a missed host leg')
+      return await this.d.transport.repair(i.destination, (i.payload as { key: string }).key)
+    }
+    if (i.kind === 'republish-proved') {
+      if (this.d.transport.republish === undefined) throw new Error('transport cannot republish a proved carrier')
+      const p = i.payload as { treeTxid: string; hash: string }
+      return await this.d.transport.republish(p.treeTxid, p.hash)
+    }
     if (i.kind === 'message') return await this.d.transport.send(i.destination, i.payload as MarketMessage, i.refs)
     throw new Error(`unknown outbox kind ${i.kind}`)
   }

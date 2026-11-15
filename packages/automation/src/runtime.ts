@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
 import type { AutomationHost } from './host.js'
-import { AutomationStore } from './store.js'
+import { AutomationStore, type OutboxItem } from './store.js'
 import { MarketEngine, TERMINAL, type MarketMessage, type MarketTransport, type MarketOptions } from './market.js'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
@@ -22,6 +22,34 @@ export const requeueAckItems = (
   items: Array<{ txid: string; commitment: string; from: string }>
 ): Array<{ txid: string; commitment: string; from: string; msg: undefined; created: number }> =>
   items.map((i) => ({ txid: i.txid, commitment: i.commitment, from: i.from, msg: undefined, created: 0 }))
+
+/** every fan-out leg gets its own repair row — quorum resolves the send,
+ *  the journal carries the carrier, and a leg that lands late cancels its
+ *  own repair via `settled`. Missed legs get an immediate row; still-unsettled
+ *  (pending) legs get the same row delayed, so a straggler that never lands
+ *  is repaired and one that does cancels itself. */
+export async function trackFanout(
+  r: {
+    hash: string
+    missed: Array<{ host: string; error: string }>
+    pending: string[]
+    settled: Promise<{ took: string[]; missed: Array<{ host: string; error: string }> }>
+  },
+  io: { enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => Promise<unknown>; ackOutbox: (actionId: string) => Promise<unknown> }
+): Promise<void> {
+  for (const m of r.missed)
+    await io.enqueue({ actionId: `repair:${r.hash}:${m.host}`, operationId: 'lanes', kind: 'repair-host', destination: m.host, payload: { key: r.hash } })
+  for (const h of r.pending)
+    await io.enqueue(
+      { actionId: `repair:${r.hash}:${h}`, operationId: 'lanes', kind: 'repair-host', destination: h, payload: { key: r.hash } },
+      { delayMs: 20_000 }
+    )
+  void r.settled
+    .then(async (s) => {
+      for (const h of s.took) await io.ackOutbox(`repair:${r.hash}:${h}`).catch(() => {})
+    })
+    .catch(() => {})
+}
 
 export interface AutomationConfig {
   network: string
@@ -238,6 +266,17 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       signal: AbortSignal.timeout(2_000)
     }).catch(() => undefined)
   }
+  // every fan-out leg becomes a per-host repair row via trackFanout — see
+  // the module-level doc; the io seam is just the store's own outbox
+  const fanoutIo = { enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => store.enqueue(o, opts), ackOutbox: (id: string) => store.ackOutbox(id) }
+  // a proven funding tree queues one republish row per journaled carrier it
+  // anchors — each row's transport call attaches the BUMP, re-submits and
+  // re-journals, so a dead host retries that leg alone instead of the whole
+  // tree's fan-out
+  const queueRepublish = async (treeTxid: string): Promise<void> => {
+    for (const row of (await lanes?.journal.fundedBy?.(treeTxid)) ?? [])
+      await store.enqueue({ actionId: `reprove:${treeTxid}:${row.hash}`, operationId: 'lanes', kind: 'republish-proved', destination: 'hosts', payload: { treeTxid, hash: row.hash } })
+  }
   const transport: MarketTransport = {
     publishWant: async (sw: SignedWant) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -250,7 +289,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         net: cfg.network,
         payload: { v: 1, kind: 'want', body: sw }
       })
-      if (r.missed.length > 0) throw new Error(`want missed host(s): ${r.missed.map((m) => `${m.host} (${m.error})`).join(', ')}`)
+      await trackFanout(r, fanoutIo)
     },
     publishOffer: async (so: SignedOffer) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -266,7 +305,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         net: cfg.network,
         payload: { v: 1, kind: 'offer', body: so }
       })
-      if (r.missed.length > 0) throw new Error(`offer missed host(s): ${r.missed.map((m) => `${m.host} (${m.error})`).join(', ')}`)
+      await trackFanout(r, fanoutIo)
       // the buyer's watch shim (if it advertises one) gets a wake hint — the
       // offer publish is only visible to its polls once they re-check anyway
       if (so.offer.buyerPub !== undefined) notifyPeer(await resolveRecord(so.offer.buyerPub), 'ls_nektar')
@@ -274,6 +313,18 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     send: async (to: string, msg: MarketMessage) => {
       if (msgs === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
       await msgs.send(to, msg)
+    },
+    repair: async (host: string, journalKey: string) => {
+      if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
+      await lanes.mod.resubmitCarrier({ journal: lanes.journal, host, key: journalKey })
+    },
+    republish: async (treeTxid: string, hash: string) => {
+      if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
+      const tx = await mem.fetchTx(treeTxid)
+      if (tx?.merklePath === undefined) throw new Error('tree not proven yet')
+      const r = await lanes.mod.republishOne({ journal: lanes.journal, hosts: marketHosts, hash, treeTxid, merklePath: tx.merklePath })
+      if (!r.done || r.missed.length > 0) throw new Error(`republish ${hash.slice(0, 12)}: ${r.missed.map((m) => `${m.host} (${m.error})`).join(', ') || 'not done'}`)
+      if (r.submitted === true) log(`automation: republished carrier ${hash.slice(0, 12)} anchored by ${treeTxid.slice(0, 12)}`)
     }
   }
   const engine = new MarketEngine({
@@ -313,7 +364,17 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   })
   const me = key.toPublicKey().toString()
   const withheldSeen = new Set<string>()
-  const laneNotes = (r: { withheld: Array<{ host: string; txid: string }>; unreachable: string[] }): void => {
+  // a host's recovery frees every transport-deferred outbox item — the
+  // backoff was waiting on reachability, not delivery logic, so pull it
+  // forward instead of waiting it out. One helper: the watchdog's recovery
+  // branch and laneNotes take the same path
+  const hostBack = async (h: string): Promise<void> => {
+    downNow.delete(h)
+    log(`automation: host back ${h}`)
+    const n = await store.unblockOutbox('transport')
+    if (n > 0) log(`automation: outbox unblocked ×${n} (transport)`)
+  }
+  const laneNotes = (r: { withheld: Array<{ host: string; txid: string }>; unreachable: string[] }, answered: string[]): void => {
     for (const w of r.withheld) {
       const k2 = `${w.host}:${w.txid}`
       if (!withheldSeen.has(k2)) {
@@ -326,11 +387,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         downNow.add(h)
         log(`automation: unreachable ${h}`)
       }
-    for (const h of [...downNow])
-      if (!r.unreachable.includes(h)) {
-        downNow.delete(h)
-        log(`automation: host back ${h}`)
-      }
+    // "back" means THIS READ got an answer — a quorum-short read that skipped
+    // a host says nothing about it, so it stays down until a read reaches it
+    for (const h of [...downNow]) if (answered.includes(h)) void hostBack(h)
   }
   let pendingAcks: Array<{
     txid: string
@@ -359,7 +418,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               // record) — reading stays on our own office, configured set included
               const rec = await resolveRecord(to)
               const office = rec?.office ?? cfg.boxOffice
-              await lanes.mod.sendBox({
+              const r = await lanes.mod.sendBox({
                 key,
                 wallet,
                 ledger: lanes.ledger,
@@ -371,6 +430,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
                 refs,
                 expiresAt: Math.floor(Date.now() / 1000) + ttl
               })
+              await trackFanout(r, fanoutIo)
               // wake the recipient's box watch with the exact query their
               // shim holds — ls_bbox {office,to} is the subscription's shape
               notifyPeer(rec, 'ls_bbox', { office: office ?? lanes.mod.officeFor(), to })
@@ -404,14 +464,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
                       void lanes.mod
                         .readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet })
                         .then((full) => {
-                          laneNotes(full)
+                          laneNotes(full, full.answered)
                           pendingAcks = listAcks(full.items)
                         })
                         .catch(() => undefined)
                       return fast
                     })()
                   : await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet })
-              laneNotes(r)
+              laneNotes(r, r.answered)
               pendingAcks = listAcks(r.items)
               // self-notes restore lost operations — ingest them before any other message in the batch
               const selfNote = (p: { from: string; msg?: MarketMessage }) => p.from === me && (p.msg?.type === 'note' || p.msg?.type === 'sellerNote')
@@ -563,7 +623,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
           void s
             .call({ timeoutMs })
             .then((full) => {
-              laneNotes(full)
+              laneNotes(full, Object.keys(full.perHost))
               const rest = full.items.map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))
               if (rest.length > 0) pendingLane.set(s.tag, [...(pendingLane.get(s.tag) ?? []), ...rest])
             })
@@ -575,7 +635,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
           }
         } else {
           const r = await s.call({ timeoutMs })
-          laneNotes(r)
+          laneNotes(r, Object.keys(r.perHost))
           const events = toEvents(r.items as never)
           if (events.length > 0) {
             hotUntil = Date.now() + 5_000
@@ -819,7 +879,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // a fresh market tree's slots are usable the moment it's added —
             // anchored ancestry — so wake slot-deferred work now instead of
             // letting the defer window lapse
-            if (r.minted !== undefined && kind === 'market') await store.unblockOutbox('funding slot')
+            if (r.minted !== undefined && kind === 'market') await store.unblockOutbox('funding-slot')
             // a proven log tree's BEEF must reach tm_log before hosts can
             // admit carriers spending it - journaled, publishes once
             for (const txid of r.proven) {
@@ -828,11 +888,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
                 await lanes.mod.publishMinedLog({ journal: lanes.journal, hosts: marketHosts, stream: logStream, tx })
               // carriers minted on this tree while it was unproven carry a
               // host-side eviction deadline that never clears on its own —
-              // re-announce them with the parent's BUMP attached (same txid)
-              if (kind === 'market' && tx?.merklePath !== undefined)
-                await lanes.mod
-                  .republishProved({ journal: lanes.journal, hosts: marketHosts, treeTxid: txid, merklePath: tx.merklePath })
-                  .catch(() => undefined)
+              // queue a per-row re-announce with the parent's BUMP attached
+              if (kind === 'market' && tx?.merklePath !== undefined) await queueRepublish(txid)
             }
           }
         } catch (e) {
@@ -1119,17 +1176,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
                   log(`automation: watchdog: host down ${h}`)
                 }
               for (const h of [...downNow])
-                if (marketHosts.includes(h) && !r.downHosts.includes(h)) {
-                  downNow.delete(h)
-                  log(`automation: watchdog: host back ${h}`)
-                  // a recovered host frees every transport-deferred outbox
-                  // item — the backoff was waiting on reachability, not on
-                  // delivery logic, so pull it forward instead of waiting it out
-                  for (const pat of ['fetch failed', 'unreachable', 'http 5', 'timed out']) {
-                    const n = await store.unblockOutbox(pat)
-                    if (n > 0) log(`automation: outbox unblocked ×${n} (${pat})`)
-                  }
-                }
+                if (marketHosts.includes(h) && !r.downHosts.includes(h)) await hostBack(h)
             } catch (e) {
               log(`automation: watchdog: ${(e as Error).message}`)
             }
@@ -1224,16 +1271,15 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // a proven topup frees funding-tree slots — pull any
             // slot-starved outbox item forward instead of letting it sit
             // out the retry backoff (measured: a want stalled ~15s on this)
-            await store.unblockOutbox('funding slot')
+            await store.unblockOutbox('funding-slot')
             // carriers minted on this tree while it was unproven carry a
             // 10-minute host eviction deadline that never clears on its own —
-            // re-announce them with the parent's BUMP attached (same txid)
-            const rp = await lanes.mod.republishProved({ journal: lanes.journal, hosts: marketHosts, treeTxid: txid, merklePath: mp }).catch(() => undefined)
-            if (rp !== undefined && rp.republished > 0) log(`automation: republished ${rp.republished} carrier(s) anchored by ${txid.slice(0, 12)}`)
+            // queue a per-row re-announce with the parent's BUMP attached
+            await queueRepublish(txid)
           } else if (await lanes.ledger.attachParentPath(txid, mp)) {
             // the proof was for a funding parent — stored tree beefs now
             // carry anchored ancestry, so their slots serve immediately
-            await store.unblockOutbox('funding slot')
+            await store.unblockOutbox('funding-slot')
           }
         }
       } catch (e) {
@@ -1273,7 +1319,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         await lanes.ledger.drop(txid)
         if (tx !== undefined) ghostMint(tx)
         log(`automation: dropped abandoned funding mint ${txid}`)
-        await store.unblockOutbox('funding slot')
+        await store.unblockOutbox('funding-slot')
         if (!stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
       } catch (e) {
         log(`automation: txAbandoned: ${(e as Error).message}`)

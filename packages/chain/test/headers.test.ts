@@ -162,6 +162,63 @@ test('reorg: a fresh header that does not link to the cached parent fires onReor
   assert.equal(served?.hash, h101b.hash, 'the cache now serves the replacement 101')
 })
 
+// a tracker stub with a real (if trivial) cache — refreshHeader bypasses it,
+// like the concrete trackers do
+const cacheTracker = (upstream: () => BlockHeader | undefined): ChainTracker => {
+  const cache = new Map<number, BlockHeader>()
+  return {
+    currentHeight: async () => 999,
+    headerAtHeight: async (h) => {
+      const hit = cache.get(h)
+      if (hit !== undefined) return hit
+      const x = upstream()
+      if (x !== undefined) cache.set(h, x)
+      return x
+    },
+    refreshHeader: async (h) => {
+      const x = upstream()
+      if (x !== undefined) cache.set(h, x)
+      return x
+    },
+    isValidRootForHeight: async () => true
+  }
+}
+
+test('WitnessedTracker: a stale witness cache heals through refreshHeader', async () => {
+  const a = fakeHeader(800000, 'aa'.repeat(32))
+  const b = fakeHeader(800000, 'aa'.repeat(32), '22'.repeat(32)) // the replacement block
+  let pUp: BlockHeader | undefined = a,
+    wUp: BlockHeader | undefined = a
+  const primary = cacheTracker(() => pUp),
+    witness = cacheTracker(() => wUp)
+  let disagreements = 0
+  const wt = new WitnessedTracker(primary, witness, { onDisagree: () => disagreements++ })
+  assert.equal((await wt.headerAtHeight(800000))?.hash, a.hash)
+  assert.equal(wt.corroborated(800000), true)
+  // the chain reorgs at 800000: the primary's own cache refreshes to B (its
+  // reorg machinery already ran), the witness upstream serves B but its
+  // cache still holds A — the stale answer must NOT become a disagreement
+  pUp = b
+  wUp = b
+  await primary.refreshHeader!(800000)
+  const h = await wt.headerAtHeight(800000)
+  assert.equal(h?.hash, b.hash, 'the refreshed witness answer agrees — the stale cache was healed, not trusted')
+  assert.equal(wt.corroborated(800000), true)
+  assert.equal(disagreements, 0, 'a healed mismatch never reaches onDisagree')
+})
+
+test('WitnessedTracker: a disagreement that survives refresh still fails closed', async () => {
+  const a = fakeHeader(800000, 'aa'.repeat(32))
+  const b = fakeHeader(800000, 'bb'.repeat(32))
+  let disagreements = ''
+  const wt = new WitnessedTracker(cacheTracker(() => a), cacheTracker(() => b), { onDisagree: (h2, ph, wh) => (disagreements += `${h2}:${ph === a.hash}:${wh === b.hash};`) })
+  assert.equal(await wt.headerAtHeight(800000), undefined, 'a real split serves no root')
+  assert.equal(disagreements, '800000:true:true;', 'onDisagree fired once with both hashes')
+  // inside the retry window a second read fails closed without re-refreshing
+  assert.equal(await wt.headerAtHeight(800000), undefined)
+  assert.equal(disagreements, '800000:true:true;', 'still once — the verdict holds for retryMs')
+})
+
 test('linksTo: parent-child linkage is hash + adjacent height', () => {
   const a = fakeHeader(10, 'aa'.repeat(32))
   const b = fakeHeader(11, a.hash)

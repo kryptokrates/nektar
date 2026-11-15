@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
 import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
-import { AutomationStore, RevisionConflict } from '../src/store.js'
+import { AutomationStore, RevisionConflict, classifyDeliveryError } from '../src/store.js'
 import { WalletCoordinator } from '../src/wallet.js'
 import { policyHash, policyError, decidePurchase, decideOffer, type AutomationPolicy, type ActionContext } from '../src/policy.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
@@ -319,4 +319,45 @@ test('wallet: one outpoint, one live action; guard refusal releases, network rej
   await w2.prepare(ctx('h', 'a'), 'send', t1)
   assert.equal((await w2.submit('a')).state, 'rejected')
   assert.equal((await w2.prepare(ctx('h', 'b'), 'send', t2)).state, 'prepared', 'a tx that never left the process frees its inputs')
+})
+
+test('classifyDeliveryError: funding starvation vs transport vs unclassed', () => {
+  assert.equal(classifyDeliveryError('no funding slot'), 'funding-slot')
+  assert.equal(classifyDeliveryError('The operation was aborted due to timeout'), 'transport')
+  assert.equal(classifyDeliveryError('fetch failed'), 'transport')
+  assert.equal(classifyDeliveryError('getaddrinfo ENOTFOUND host'), 'transport')
+  assert.equal(classifyDeliveryError('http 503: down'), 'transport')
+  assert.equal(classifyDeliveryError('socket hang up'), 'transport')
+  assert.equal(classifyDeliveryError('range: content too large'), undefined, 'a payload-size fault is not a delivery class')
+  assert.equal(classifyDeliveryError('policy denied'), undefined)
+})
+
+test('outbox defer classes: unblockOutbox keys on the class, not the error text', async (t) => {
+  let now = 1_000
+  const { kx, store } = await open(':memory:', () => now)
+  t.after(() => kx.destroy())
+  await store.enqueue({ actionId: 'a', operationId: 'lanes', kind: 'repair-host', destination: 'h1', payload: { key: 'k' } })
+  await store.enqueue({ actionId: 'b', operationId: 'lanes', kind: 'repair-host', destination: 'h2', payload: { key: 'k' } })
+  await store.enqueue({ actionId: 'c', operationId: 'lanes', kind: 'repair-host', destination: 'h3', payload: { key: 'k' } })
+  await store.retryOutbox('a', 'fetch failed', undefined, 'transport')
+  await store.retryOutbox('b', 'net down') // classless
+  await store.deferOutbox('c', 'no funding slot')
+  assert.equal((await store.dueOutbox()).length, 0, 'all three rows deferred')
+  assert.equal(await store.unblockOutbox('transport'), 1, 'only the transport-classed row wakes')
+  assert.deepEqual((await store.dueOutbox()).map((o) => o.actionId), ['a'])
+  await store.ackOutbox('a')
+  assert.equal(await store.unblockOutbox('transport'), 0, 'classless and funding-slot rows are not transport')
+  assert.equal(await store.unblockOutbox('funding-slot'), 1)
+  assert.deepEqual((await store.dueOutbox()).map((o) => o.actionId), ['c'])
+})
+
+test('enqueue delayMs: a delayed row is not due until the delay passes', async (t) => {
+  let now = 1_000
+  const { kx, store } = await open(':memory:', () => now)
+  t.after(() => kx.destroy())
+  await store.enqueue({ actionId: 'now', operationId: 'lanes', kind: 'repair-host', destination: 'h', payload: { key: 'k' } })
+  await store.enqueue({ actionId: 'later', operationId: 'lanes', kind: 'repair-host', destination: 'h', payload: { key: 'k' } }, { delayMs: 20_000 })
+  assert.deepEqual((await store.dueOutbox()).map((o) => o.actionId), ['now'], 'the delayed row waits')
+  now += 20_001
+  assert.deepEqual((await store.dueOutbox()).map((o) => o.actionId).sort(), ['later', 'now'].sort())
 })

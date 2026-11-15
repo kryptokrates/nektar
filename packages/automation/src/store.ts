@@ -15,6 +15,20 @@ const T = {
   txs: 'wallet_transactions'
 } as const
 
+/** why an outbox row is deferred — the column replaces the error-text LIKE
+ *  pattern callers used to re-derive it (a message that merely CONTAINS a
+ *  transport keyword no longer changes the row's class) */
+export type DeferClass = 'transport' | 'funding-slot'
+
+/** classify a delivery failure once — funding starvation is a resource wait
+ *  (no attempts consumed), everything transport-shaped retries with backoff,
+ *  anything else stays classless (dead-letters on the normal path) */
+export function classifyDeliveryError(msg: string): DeferClass | undefined {
+  if (/funding slot/.test(msg)) return 'funding-slot'
+  if (/fetch failed|unreachable|http 5\d\d|timed out|timeout|aborted|ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|network/i.test(msg)) return 'transport'
+  return undefined
+}
+
 export interface Operation {
   operationId: string
   role: 'buyer' | 'seller' | 'observer'
@@ -161,8 +175,15 @@ export class AutomationStore {
       t.integer('attempts').notNullable()
       t.bigInteger('next_at').notNullable()
       t.text('last_error')
+      t.text('defer_class')
     })
     if (!(await this.kx.schema.hasColumn(T.outbox, 'refs'))) await this.kx.schema.alterTable(T.outbox, (t) => t.text('refs'))
+    if (!(await this.kx.schema.hasColumn(T.outbox, 'defer_class'))) {
+      await this.kx.schema.alterTable(T.outbox, (t) => t.text('defer_class'))
+      // rows deferred before the column existed carry the class only in
+      // their error text — backfill so unblockOutbox keys on the column alone
+      await this.kx(T.outbox).where({ status: 'pending' }).where('last_error', 'like', '%funding slot%').update({ defer_class: 'funding-slot' })
+    }
     await mk(T.policies, (t) => {
       t.string('policy_hash').primary()
       t.string('policy_id').notNullable()
@@ -479,7 +500,7 @@ export class AutomationStore {
   }
 
   // ── outbox ──────────────────────────────────────────────────────────────
-  async enqueue(o: Omit<OutboxItem, 'attempts'>): Promise<boolean> {
+  async enqueue(o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }): Promise<boolean> {
     const added = await this.kx.transaction(async (trx) => {
       if (await trx(T.outbox).where({ action_id: o.actionId }).first()) return false
       await trx(T.outbox).insert({
@@ -491,7 +512,7 @@ export class AutomationStore {
         refs: o.refs !== undefined ? canonicalJson(o.refs) : null,
         status: 'pending',
         attempts: 0,
-        next_at: this.now()
+        next_at: this.now() + (opts?.delayMs ?? 0)
       })
       return true
     })
@@ -522,13 +543,15 @@ export class AutomationStore {
     await this.kx(T.outbox).where({ action_id: actionId }).update({ status: 'acked' })
   }
 
-  /** pull a due-future retry forward to now — used when an event (a proven
-   *  funding-tree topup, a slot freeing) removes the cause the backoff was
-   *  waiting on. Attempts are untouched: this never hastens a dead-letter. */
-  async unblockOutbox(lastErrorLike: string): Promise<number> {
+  /** pull every due-future row of one defer class forward to now — used when
+   *  an event (a proven funding-tree topup, a host coming back) removes the
+   *  cause the backoff was waiting on. Class, not error text: a message that
+   *  happens to contain the keyword can't pull an unrelated row forward.
+   *  Attempts are untouched: this never hastens a dead-letter. */
+  async unblockOutbox(cls: DeferClass): Promise<number> {
     return await this.kx(T.outbox)
       .where({ status: 'pending' })
-      .where('last_error', 'like', `%${lastErrorLike}%`)
+      .where('defer_class', cls)
       .where('next_at', '>', this.now())
       .update({ next_at: this.now() })
   }
@@ -537,13 +560,13 @@ export class AutomationStore {
    *  a delivery failure), so attempts are NOT consumed toward dead-letter.
    *  Short fixed re-check; the real wake-up is unblockOutbox on a freeing
    *  event (topup proven → slots appear). */
-  async deferOutbox(actionId: string, error: string, checkInMs = 2_000): Promise<void> {
+  async deferOutbox(actionId: string, error: string, checkInMs = 2_000, cls: DeferClass = 'funding-slot'): Promise<void> {
     await this.kx(T.outbox)
       .where({ action_id: actionId, status: 'pending' })
-      .update({ last_error: error.slice(0, 500), next_at: this.now() + checkInMs })
+      .update({ last_error: error.slice(0, 500), defer_class: cls, next_at: this.now() + checkInMs })
   }
 
-  async retryOutbox(actionId: string, error: string, maxAttempts = 10): Promise<void> {
+  async retryOutbox(actionId: string, error: string, maxAttempts = 10, cls?: DeferClass): Promise<void> {
     await this.kx.transaction(async (trx) => {
       const r = await trx(T.outbox).where({ action_id: actionId }).first()
       if (!r || r.status !== 'pending') return
@@ -553,6 +576,7 @@ export class AutomationStore {
         .update({
           attempts,
           last_error: error.slice(0, 500),
+          defer_class: cls ?? null,
           status: attempts >= maxAttempts ? 'dead' : 'pending',
           next_at: this.now() + Math.min(300_000, 1000 * 2 ** attempts)
         })

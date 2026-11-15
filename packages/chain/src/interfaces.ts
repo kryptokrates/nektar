@@ -22,6 +22,11 @@ export interface ChainTracker {
   headerAtHeight: (height: number) => Promise<BlockHeader | undefined>
   /** subscribe to tip changes; reorg: blocks removed from tip */
   onReorg?: (cb: (removed: BlockHeader[], newTip: BlockHeader) => void) => void
+  /** bypass the header cache and re-ask the source — a witnessed pair uses
+   *  this when two sources disagree, so a STALE CACHE cannot masquerade as a
+   *  chain split: a same-height hash change runs the reorg walk (onReorg
+   *  fires, neighbours evict) before the fresh answer is served */
+  refreshHeader?: (height: number) => Promise<BlockHeader | undefined>
   /** the real tip height (currentHeight may carry an offset
    *  100 for the SDK coinbase-maturity rule) — used for confirmation counts */
   tipHeight?: () => Promise<number>

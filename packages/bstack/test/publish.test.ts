@@ -4,11 +4,11 @@ import { PrivateKey, Transaction } from '@bsv/sdk'
 import { signWant } from '../src/artifacts.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
 import { MemoryTreeLedger } from '../src/tree.js'
-import { publishArtifact, republishProved, artifactHash } from '../src/publish.js'
+import { publishArtifact, republishProved, republishOne, resubmitCarrier, artifactHash } from '../src/publish.js'
 import { checkCarrier } from '../src/carrier.js'
 import { ensureTrees } from '../src/trees.js'
 import { provenTree, anchoredTree, fund, prove } from './helpers.js'
-import { FakeTracker, minihost } from '../src/testing.js'
+import { FakeTracker, minihost, faulthost } from '../src/testing.js'
 
 const NET = 'regtest'
 const wantPayload = async (k: PrivateKey) => ({
@@ -181,4 +181,72 @@ test('republishProved: journal beef gains the funding parent BUMP under the same
   const rp2 = await republishProved({ journal: j, hosts: [h.url], treeTxid: tree.id('hex'), merklePath: tree.merklePath! })
   assert.equal(rp2.republished, 0)
   await h.close()
+})
+
+test('resubmitCarrier: dead host throws, live host holds it, missing row resolves', async () => {
+  const tr = new FakeTracker()
+  const h1 = await minihost([NET], tr)
+  const h2 = await minihost([NET], tr)
+  const k = PrivateKey.fromRandom()
+  const ledger = new MemoryTreeLedger()
+  const tree = await provenTree(k)
+  await ledger.add(tree, 2)
+  await ledger.markProven(tree.id('hex'))
+  const j = new MemoryCarrierJournal()
+  const p = { key: k, ledger, journal: j, hosts: [h1.url], net: NET }
+  const payload = await wantPayload(k)
+  const r1 = await publishArtifact({ ...p, payload })
+  const hash = artifactHash(payload)
+  try {
+    // a missing row is a no-op — nothing left to repair
+    await resubmitCarrier({ journal: j, host: h2.url, key: 'never-journaled' })
+    // a dead host throws so its repair row retries
+    await assert.rejects(resubmitCarrier({ journal: j, host: 'http://127.0.0.1:1', key: hash }), /resubmit http:\/\/127\.0\.0\.1:1:/)
+    // a live host takes the journaled carrier — its repair leg lands
+    await resubmitCarrier({ journal: j, host: h2.url, key: hash })
+    assert.ok(
+      h2.raw().some((b) => Transaction.fromAtomicBEEF(b).id('hex') === r1.txid),
+      'the repaired host now holds the carrier it missed'
+    )
+  } finally {
+    await h1.close()
+    await h2.close()
+  }
+})
+
+test('republishOne: quorum fail leaves the row unenriched; retry carries the parent BUMP', async () => {
+  const tr = new FakeTracker()
+  const h = await minihost([NET], tr)
+  const f = await faulthost(h.url)
+  const k = PrivateKey.fromRandom()
+  const ledger = new MemoryTreeLedger()
+  const tree = await anchoredTree(k, 2)
+  await ledger.add(tree, 2)
+  const j = new MemoryCarrierJournal()
+  const payload = await wantPayload(k)
+  await publishArtifact({ key: k, ledger, journal: j, hosts: [h.url], net: NET, payload })
+  const hash = artifactHash(payload)
+  prove(tree)
+  try {
+    // the only host is down — quorum fails, the journal row is untouched
+    f.fault.down = true
+    const r1 = await republishOne({ journal: j, hosts: [f.url], hash, treeTxid: tree.id('hex'), merklePath: tree.merklePath! })
+    assert.equal(r1.done, false)
+    const held1 = (await j.get(hash))!
+    assert.equal(Transaction.fromAtomicBEEF(held1.beef).inputs[0].sourceTransaction!.merklePath, undefined, 'unenriched — retries next pass')
+    // host back — the row enriches and re-serves
+    f.fault.down = false
+    const r2 = await republishOne({ journal: j, hosts: [f.url], hash, treeTxid: tree.id('hex'), merklePath: tree.merklePath! })
+    assert.equal(r2.done, true)
+    assert.equal(r2.submitted, true)
+    const held2 = (await j.get(hash))!
+    assert.notEqual(Transaction.fromAtomicBEEF(held2.beef).inputs[0].sourceTransaction!.merklePath, undefined, 'stored beef now carries the parent path')
+    // already-enriched rows are done without another submit
+    const r3 = await republishOne({ journal: j, hosts: [f.url], hash, treeTxid: tree.id('hex'), merklePath: tree.merklePath! })
+    assert.equal(r3.done, true)
+    assert.notEqual(r3.submitted, true)
+  } finally {
+    await h.close()
+    await f.close()
+  }
 })

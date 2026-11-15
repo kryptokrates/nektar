@@ -330,7 +330,7 @@ class HeaderCache {
    *  agreement is the common ancestor and stays cached. Everything above the
    *  mismatch height is descendant-stale. `fresh` is the highest header we
    *  could fetch, reported to subscribers as newTip. */
-  private async reorgAt(fresh: BlockHeader, refetch: (height: number) => Promise<BlockHeader | undefined>): Promise<void> {
+  async reorgAt(fresh: BlockHeader, refetch: (height: number) => Promise<BlockHeader | undefined>): Promise<void> {
     const removed: BlockHeader[] = []
     for (let h = fresh.height - 1, n = 0; n < 12; h--, n++) {
       const cur = this.headers.get(h)
@@ -425,6 +425,21 @@ export class WocTracker implements ChainTracker {
     if (h === undefined) return undefined
     if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return h
     this.cache.set(h)
+    return h
+  }
+
+  /** bypass the cache and re-ask — a witnessed pair calls this when sources
+   *  disagree, so a stale cache can't masquerade as a chain split. A fresh
+   *  header that reorgs a same-height cached one runs the walk (onReorg
+   *  fires, neighbours evict) before the answer is served. */
+  async refreshHeader(height: number): Promise<BlockHeader | undefined> {
+    const h = await this.fetchHeader(height)
+    if (h === undefined) return undefined // source down — leave the cache alone
+    const cur = this.cache.get(height)
+    if (cur !== undefined && cur.hash !== h.hash) {
+      await this.cache.reorgAt(h, (x) => this.fetchHeader(x))
+      this.cache.set(h)
+    } else if (await this.cache.admit(h, (x) => this.fetchHeader(x))) this.cache.set(h)
     return h
   }
 
@@ -538,6 +553,21 @@ export class ChaintracksTracker implements ChainTracker {
     if (h === undefined) return undefined
     if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return h
     this.cache.set(h)
+    return h
+  }
+
+  /** bypass the cache and re-ask — a witnessed pair calls this when sources
+   *  disagree, so a stale cache can't masquerade as a chain split. A fresh
+   *  header that reorgs a same-height cached one runs the walk (onReorg
+   *  fires, neighbours evict) before the answer is served. */
+  async refreshHeader(height: number): Promise<BlockHeader | undefined> {
+    const h = await this.fetchHeader(height)
+    if (h === undefined) return undefined // source down — leave the cache alone
+    const cur = this.cache.get(height)
+    if (cur !== undefined && cur.hash !== h.hash) {
+      await this.cache.reorgAt(h, (x) => this.fetchHeader(x))
+      this.cache.set(h)
+    } else if (await this.cache.admit(h, (x) => this.fetchHeader(x))) this.cache.set(h)
     return h
   }
 

@@ -115,15 +115,32 @@ export class WitnessedTracker implements ChainTracker {
     // the SAME hash: a primary answer that changed (reorg) re-verifies
     const m = this.marks.get(height)
     if (p !== undefined && m?.state === 'ok' && m.hash === p.hash) return p
+    // inside the retry window a known split fails closed immediately — the
+    // refresh path below re-runs only once per retryMs so a persistent fork
+    // can't turn every read into two forced re-fetches
+    if (m?.state === 'mismatch' && Date.now() - m.at <= this.retryMs) return undefined
     const w = await this.bounded(this.askWitness(height))
     if (p !== undefined && w !== undefined) {
       if (p.hash === w.hash) {
         this.marks.set(height, { at: Date.now(), state: 'ok', hash: p.hash })
         return p
       }
+      // a hash split can be a STALE CACHE on either side, not a chain split —
+      // force both to re-ask their source; only a disagreement that survives
+      // the refresh fails closed
+      const [p2, w2] = await Promise.all([
+        this.primary.refreshHeader?.(height).catch(() => undefined),
+        this.witness.refreshHeader?.(height).catch(() => undefined)
+      ])
+      const p3 = p2 ?? p
+      const w3 = w2 ?? w
+      if (p3.hash === w3.hash) {
+        this.marks.set(height, { at: Date.now(), state: 'ok', hash: p3.hash })
+        return p3
+      }
       // fail closed: disagreement at a height serves no root until it resolves
-      this.marks.set(height, { at: Date.now(), state: 'mismatch', hash: `${p.hash}|${w.hash}` })
-      this.opts.onDisagree?.(height, p.hash, w.hash)
+      this.marks.set(height, { at: Date.now(), state: 'mismatch', hash: `${p3.hash}|${w3.hash}` })
+      this.opts.onDisagree?.(height, p3.hash, w3.hash)
       return undefined
     }
     if (p !== undefined) {
@@ -149,6 +166,16 @@ export class WitnessedTracker implements ChainTracker {
   async tipHeight(): Promise<number> {
     const tip = (t: ChainTracker) => (t.tipHeight !== undefined ? t.tipHeight() : t.currentHeight())
     return await tip(this.primary).catch(() => tip(this.witness))
+  }
+
+  /** force both sources to re-ask a height — clears the corroboration mark
+   *  and the pending witness ask, so the next read re-attests rather than
+   *  serving the previous verdict */
+  async refreshHeader(height: number): Promise<BlockHeader | undefined> {
+    this.marks.delete(height)
+    this.asks.delete(height)
+    const [p, w] = await Promise.all([this.primary.refreshHeader?.(height).catch(() => undefined), this.witness.refreshHeader?.(height).catch(() => undefined)])
+    return p ?? w
   }
 
   onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {

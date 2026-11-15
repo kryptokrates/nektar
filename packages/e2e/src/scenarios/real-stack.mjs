@@ -853,6 +853,7 @@ try {
         // (a respawn that lost the write re-broadcasts identical bytes — same
         // txid, one payment), and every broadcast on the tx log is conserved
         // (inSats = outSats + fee). Terminal state is already asserted above.
+        const bev = (await tool(bob, 'deals', { operationId })).events ?? []
         const esc = bev.filter((e) => e.cause === 'escrow_broadcast')
         if (esc.length !== 1) throw new Error(`D6: ${esc.length} escrow_broadcast events — payment must be exactly-once per txid`)
         const escTxid = op.data.escrowTxid

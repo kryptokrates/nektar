@@ -63,7 +63,7 @@ const addr = key.toPublicKey().toAddress([0x6f])
 // mines the split, and persists the new treasury immediately after acceptance.
 // This run's reserve is only those fresh outputs — nothing from earlier runs.
 import { ReserveFunder } from '@nektar/chain'
-import { writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
 // Two separate files: the treasury (the ONLY state carried across runs) and
 // the per-run reserve pool, which is recreated empty on every run so stale
 // entries from earlier runs can never be handed out.

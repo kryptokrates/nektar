@@ -111,7 +111,7 @@ if (!Number.isFinite(from)) {
   let lo = 1, hi = tip
   while (lo < hi) {
     const mid = (lo + hi) >> 1
-    const b = (await rpc('getblock', await rpc('getblockhash', mid), 1)).result
+    const b = await rpc('getblock', await rpc('getblockhash', mid), 1)
     if (b.time < target) lo = mid + 1
     else hi = mid
   }
@@ -186,21 +186,43 @@ for (const c of found) {
 }
 console.log(`${live.length} live (${live.reduce((a, c) => a + c.sats, 0)} sats)`)
 if (live.length === 0) process.exit(0)
-const inputs = live.slice(0, 150)
-const tx = new Transaction()
-for (const c of inputs) {
-  tx.addInput({ sourceTransaction: c.tx, sourceOutputIndex: c.vout, unlockingScriptTemplate: new P2PKH().unlock(c.key) })
+const broadcaster = new TeranodeBroadcaster(E('NEKTAR_PROPAGATION_URL') ?? 'http://localhost:8833/tx')
+const CHUNK = 120
+const sweepTxs = [] // one output each, all paying treasuryAddr
+for (let i = 0; i < live.length; i += CHUNK) {
+  const part = live.slice(i, i + CHUNK)
+  const tx = new Transaction()
+  for (const c of part) {
+    tx.addInput({ sourceTransaction: c.tx, sourceOutputIndex: c.vout, unlockingScriptTemplate: new P2PKH().unlock(c.key) })
+  }
+  tx.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), change: true })
+  await tx.fee(new SatoshisPerKilobyte(100))
+  await tx.sign()
+  const r = await broadcaster.broadcast(tx)
+  if (r.status !== 'success') {
+    console.log(`chunk ${i / CHUNK}: refused — ${r.description}; continuing`)
+    continue
+  }
+  sweepTxs.push(tx)
+  if (sweepTxs.length % 10 === 0) console.log(`  ${sweepTxs.length} sweep txs broadcast…`)
 }
-tx.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), change: true })
-await tx.fee(new SatoshisPerKilobyte(100))
-await tx.sign()
-const r = await new TeranodeBroadcaster(E('NEKTAR_PROPAGATION_URL') ?? 'http://localhost:8833/tx').broadcast(tx)
-if (r.status !== 'success') throw new Error(`sweep refused: ${r.description}`)
+if (sweepTxs.length === 0) throw new Error('every sweep chunk was refused')
+console.log(`${sweepTxs.length} sweep txs broadcast; mining before combine`)
+await rpc('generatetoaddress', 2, treasuryAddr)
+// combine: every sweep output → one tip
+const combine = new Transaction()
+for (const s of sweepTxs) {
+  combine.addInput({ sourceTransaction: s, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
+}
+combine.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), change: true })
+await combine.fee(new SatoshisPerKilobyte(100))
+await combine.sign()
+const rc = await broadcaster.broadcast(combine)
+if (rc.status !== 'success') throw new Error(`combine refused: ${rc.description}`)
 await rpc('generatetoaddress', 1, treasuryAddr)
-// the single sweep output becomes the testkit tip — bootstrapReserve splits it
 const chainFile = join(root, '.state', 'testkit-treasury-chain.json')
 writeFileSync(
   chainFile,
-  JSON.stringify({ namespace: 'testkit', treasury: { txid: tx.id('hex'), vout: 0, txHex: tx.toHex() } }, null, 1)
+  JSON.stringify({ namespace: 'testkit', treasury: { txid: combine.id('hex'), vout: 0, txHex: combine.toHex() } }, null, 1)
 )
-console.log(`swept ${inputs.length} outpoints → ${tx.outputs[0].satoshis} sats; testkit tip → ${tx.id('hex').slice(0, 16)}…`)
+console.log(`swept ${sweepTxs.length} chunks → ${combine.outputs[0].satoshis} sats; testkit tip → ${combine.id('hex').slice(0, 16)}…`)

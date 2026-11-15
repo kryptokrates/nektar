@@ -222,10 +222,7 @@ export class TxOps {
  *  flip durable state: a pushed 'rejected'/'double-spent' hint and every
  *  broadcaster status string are wake-only (no durable verdict from a hint
  *  — the terminal path is the abandon horizon or a first-party refusal). */
-export function watcherObservation(
-  seen: { ev: TxStatusEvent; verified: boolean } | undefined,
-  status: string
-): TxObservationInput | undefined {
+export function watcherObservation(seen: { ev: TxStatusEvent; verified: boolean } | undefined, status: string): TxObservationInput | undefined {
   if (seen?.verified === true) {
     if (seen.ev.status === 'rejected' || seen.ev.status === 'double-spent') return { status: 'rejected', source: 'chain', reason: seen.ev.status }
     if (seen.ev.status === 'mined') return { status: 'proven', source: 'broadcaster' }
@@ -233,9 +230,7 @@ export function watcherObservation(
   if (seen?.ev.status === 'rejected' || seen?.ev.status === 'double-spent') return undefined
   if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) return undefined
   if (
-    ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE'].includes(
-      status
-    )
+    ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE'].includes(status)
   )
     return { status: 'seen', source: 'broadcaster' }
   return undefined

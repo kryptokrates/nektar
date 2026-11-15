@@ -344,11 +344,17 @@ test('outbox defer classes: unblockOutbox keys on the class, not the error text'
   await store.deferOutbox('c', 'no funding slot')
   assert.equal((await store.dueOutbox()).length, 0, 'all three rows deferred')
   assert.equal(await store.unblockOutbox('transport'), 1, 'only the transport-classed row wakes')
-  assert.deepEqual((await store.dueOutbox()).map((o) => o.actionId), ['a'])
+  assert.deepEqual(
+    (await store.dueOutbox()).map((o) => o.actionId),
+    ['a']
+  )
   await store.ackOutbox('a')
   assert.equal(await store.unblockOutbox('transport'), 0, 'classless and funding-slot rows are not transport')
   assert.equal(await store.unblockOutbox('funding-slot'), 1)
-  assert.deepEqual((await store.dueOutbox()).map((o) => o.actionId), ['c'])
+  assert.deepEqual(
+    (await store.dueOutbox()).map((o) => o.actionId),
+    ['c']
+  )
 })
 
 test('enqueue delayMs: a delayed row is not due until the delay passes', async (t) => {
@@ -357,7 +363,11 @@ test('enqueue delayMs: a delayed row is not due until the delay passes', async (
   t.after(() => kx.destroy())
   await store.enqueue({ actionId: 'now', operationId: 'lanes', kind: 'repair-host', destination: 'h', payload: { key: 'k' } })
   await store.enqueue({ actionId: 'later', operationId: 'lanes', kind: 'repair-host', destination: 'h', payload: { key: 'k' } }, { delayMs: 20_000 })
-  assert.deepEqual((await store.dueOutbox()).map((o) => o.actionId), ['now'], 'the delayed row waits')
+  assert.deepEqual(
+    (await store.dueOutbox()).map((o) => o.actionId),
+    ['now'],
+    'the delayed row waits'
+  )
   now += 20_001
   assert.deepEqual((await store.dueOutbox()).map((o) => o.actionId).sort(), ['later', 'now'].sort())
 })

@@ -36,7 +36,6 @@ test('wire: an unproven fat EF falls back to the raw tx', async () => {
   assert.notEqual(wide, child.toHex(), 'wide budgets keep the EF shape')
 })
 
-
 // a reorg horizon drops only the proofs at/above it — survivors keep theirs
 test('TxStore.clearProofsFrom: proofs at/above the horizon drop, older keep', () => {
   const store = new TxStore()

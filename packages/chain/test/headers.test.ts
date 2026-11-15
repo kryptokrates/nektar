@@ -211,7 +211,11 @@ test('WitnessedTracker: a disagreement that survives refresh still fails closed'
   const a = fakeHeader(800000, 'aa'.repeat(32))
   const b = fakeHeader(800000, 'bb'.repeat(32))
   let disagreements = ''
-  const wt = new WitnessedTracker(cacheTracker(() => a), cacheTracker(() => b), { onDisagree: (h2, ph, wh) => (disagreements += `${h2}:${ph === a.hash}:${wh === b.hash};`) })
+  const wt = new WitnessedTracker(
+    cacheTracker(() => a),
+    cacheTracker(() => b),
+    { onDisagree: (h2, ph, wh) => (disagreements += `${h2}:${ph === a.hash}:${wh === b.hash};`) }
+  )
   assert.equal(await wt.headerAtHeight(800000), undefined, 'a real split serves no root')
   assert.equal(disagreements, '800000:true:true;', 'onDisagree fired once with both hashes')
   // inside the retry window a second read fails closed without re-refreshing

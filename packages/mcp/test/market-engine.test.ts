@@ -495,11 +495,7 @@ test('settleDepth: a depth-1 proof parks completion_submitted, settles at depth'
     assert.equal(cur.state, 'completion_submitted', 'a depth-1 proof does not settle at settleDepth 3')
     assert.equal(cur.data.provenHeight, 100)
     const evs = await store.events(op.operationId)
-    assert.equal(
-      evs.filter((e) => e.cause === 'disclosure_proof_awaiting_depth').length,
-      1,
-      'the park is recorded once, not re-emitted every tick'
-    )
+    assert.equal(evs.filter((e) => e.cause === 'disclosure_proof_awaiting_depth').length, 1, 'the park is recorded once, not re-emitted every tick')
     // depth 3 (height H+2): settles
     height = 102
     await engine.tick()

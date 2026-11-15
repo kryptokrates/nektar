@@ -254,18 +254,19 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
     await sellerize(sB, 300)
     await sellerize(sC, 200)
     await drive([b.rt, sA.rt, sB.rt, sC.rt], chain, 8)
-    await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 500 }, b.policyHash)
+    const { wantId } = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 500 }, b.policyHash)
     // under immediate-select the first offer the buyer ingests wins — so the
     // offer envelopes must all be LISTED on the hosts before the buyer's next
     // poll, which lands all three in a single ingest batch and select() still
     // scores the 200-sat one highest. 'quoted' fires at build time, before the
-    // outbox pump posts the envelope — gate on the buyer's box instead.
+    // outbox pump posts the envelope — gate on the buyer's own offer lookup
+    // (ls_nektar {offers}), the exact read its collect pass runs.
     await b.rt.cycle() // flush the want to the hosts
-    const { readBox } = await import('@nektar/bstack')
+    const { readOffers } = await import('@nektar/bstack')
     assert.ok(
       await until([sA.rt, sB.rt, sC.rt], chain, async () => {
-        const box = await readBox({ key: b.mem.operatorKey(), hosts: [h1.url, h2.url], office: OFFICE, tracker: trackerFor(chain) })
-        return box.items.length >= 3
+        const r = await readOffers([h1.url, h2.url], { net: NET, wantId, buyerPub: b.pub }, { tracker: trackerFor(chain), net: NET, now: clock })
+        return r.items.length >= 3
       }, 80),
       'not all offers listed | ' + logs.slice(-20).join(' | ')
     )

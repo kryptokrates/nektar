@@ -219,8 +219,7 @@ export class TxStore {
       if (tracker !== undefined) {
         try {
           spv = await tx.verify(tracker)
-        } catch (e) {
-          if (process.env.TXSTORE_DEBUG !== undefined) console.error('txstore: verify failed for', tx.id('hex'), e)
+        } catch {
           spv = false
         }
       }

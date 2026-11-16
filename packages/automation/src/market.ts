@@ -1105,8 +1105,8 @@ export class MarketEngine {
    *  the covenant script + fields already cost ~4KiB of it. Over budget the
    *  tx field is omitted and the seller falls back to fetchTx. */
   private escrowWire(txid: string, rawHex?: string): { tx: string } | {} {
-    const w = this.d.txWire?.(txid, 4000) ?? rawHex
-    return w !== undefined && w.length <= 8000 ? { tx: w } : {}
+    const w = this.d.txWire?.(txid, 5500) ?? rawHex
+    return w !== undefined && w.length <= 11200 ? { tx: w } : {}
   }
 
   private noteFor(

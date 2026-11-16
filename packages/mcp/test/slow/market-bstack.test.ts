@@ -212,8 +212,8 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
     }
   })
   try {
-    const b = await mkagent('buyer', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
-    const s = await mkagent('seller', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
+    const b = await mkagent('buyer', { hosts: [h1.url, h2.url], msgs, chain, logs, dir, treeLowWater: 1 })
+    const s = await mkagent('seller', { hosts: [h1.url, h2.url], msgs, chain, logs, dir, treeLowWater: 1 })
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 8)
     // market-kind slots only — the runtime also keeps bbox + log trees

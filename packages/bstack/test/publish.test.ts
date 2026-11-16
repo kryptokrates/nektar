@@ -19,6 +19,16 @@ const wantPayload = async (k: PrivateKey) => ({
   body: await signWant(k, { domains: ['compute'], question: 'q', net: NET, ts: Date.now(), exp: Date.now() + 60000 })
 })
 
+/** legacy status word → TxFacts: keeps the old fixtures readable — 'rejected'
+ *  is an outside-word hint (verdict stays pending); 'dead' models a
+ *  first-party verdict (abandon horizon / ledger terminal row) */
+const factsFor = (status: string): import('@nektar/chain').TxFacts =>
+  status === 'dead'
+    ? { verdict: 'dead', source: 'first-party' }
+    : status === 'abandoned'
+      ? { verdict: 'dead', source: 'abandon' }
+      : { verdict: 'pending', hint: { status: status === 'rejected' ? 'REJECTED' : status === 'seen' ? 'SEEN_ON_NETWORK' : '', answered: true } }
+
 test('journal: round-trip', async () => {
   const j = new MemoryCarrierJournal()
   assert.equal(await j.get('x'), undefined)
@@ -105,10 +115,7 @@ test('ensureTrees: stuck mint — keep while healing, drop on definitive verdict
     takeFunding: async () => fund(k, 1_000_000),
     broadcast: bc,
     fetchTx,
-    txFacts: async () => ({
-      verdict: status === 'rejected' ? ('dead' as const) : ('pending' as const),
-      hint: { status: status === 'rejected' ? 'REJECTED' : status === 'seen' ? 'SEEN_ON_NETWORK' : 'UNKNOWN', answered: true }
-    }),
+    facts: async () => factsFor(status),
     onReject: (t: Transaction) => {
       rejected.push(t.id('hex'))
     },
@@ -324,10 +331,7 @@ test('ensureTrees: a rejected provision tree is reaped without onReject', async 
     takeFunding: async () => fund(k, 1_000_000),
     broadcast: async () => ({ status: 'success' as const }),
     fetchTx: async () => undefined,
-    txFacts: async (id: string) =>
-      id === prov.id('hex')
-        ? { verdict: 'dead' as const, hint: { status: 'REJECTED', answered: true } }
-        : { verdict: 'pending' as const, hint: { status: 'SEEN_ON_NETWORK', answered: true } },
+    facts: async (id: string) => factsFor(id === prov.id('hex') ? 'rejected' : 'seen'),
     onReject: async () => {
       rejected++
     }

@@ -60,12 +60,13 @@ export interface NektarMemoryOptions {
   /** network the instance runs on — used for the funding-address prefix in
    *  fundingStatus (testnet-family → 0x6f). Optional; absent = mainnet prefix. */
   network?: 'regtest' | 'testnet' | 'main'
-  /** the outside status read (live networks) — the broadcaster's /tx/{txid}
-   *  word plus whether a source answered; injected by the runtime
-   *  (`mainnetHint` in @nektar/chain). A hint, never a verdict. */
-  hintOf?: (txid: string) => Promise<import('@nektar/chain').TxHint | undefined>
-  /** the caller's tip height — fills txFacts.depth when a proof exists */
-  heightOf?: () => Promise<number>
+  /** the outside status word (live networks) — feeds txFacts' hint field
+   *  only; injected by the runtime (the broadcaster adapter's `statusHint`).
+   *  Never a verdict: first-party records and proofs decide, not this word. */
+  statusHint?: (txid: string) => Promise<import('@nektar/chain').StatusHint>
+  /** chain height for txFacts.depth — injected by the runtime when a tracker
+   *  exists; absent leaves depth unset */
+  height?: () => number | Promise<number>
   /** the instance's transaction graph — the live runtime passes a persisted
    *  one; default is in-memory */
   txStore?: TxStore
@@ -107,6 +108,13 @@ export interface NektarMemoryOptions {
     /** fee bound enforced by the covenant (default 10) */
     maxFee?: bigint
   }
+  /** the instance's funds pool — the one owner of spent/owned bookkeeping.
+   *  Absent: `fundsOf(funder, dealFloorSats)` adapts the constructor's
+   *  funder (test tiers); the runtime always injects a real impl. */
+  funds?: import('@nektar/chain').Funds
+  /** sats one affordable deal needs — `publish`/`upkeep` takes refuse when
+   *  they'd drop the pool below this (default 0: no floor) */
+  dealFloorSats?: number
 }
 
 /** persisted anchor state: per shard the head, the succession, checkpoints,

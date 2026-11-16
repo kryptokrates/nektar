@@ -2,7 +2,7 @@ import { Transaction } from '@bsv/sdk'
 import { mintTree, PROVISION_KIND, type TreeLedger } from './tree.js'
 import type { SigningWallet } from '@lightwebinc/bcommon'
 import type { SignerLike } from '@nektar/core'
-import type { FundingOut, BroadcastResult } from '@nektar/chain'
+import { hintRejected, hintSilent, type FundingOut, type BroadcastResult } from '@nektar/chain'
 
 /** outputs per funding tree unless the caller sizes it */
 export const TREE_SIZE = 64
@@ -19,10 +19,10 @@ export async function ensureTrees(p: {
   takeFunding: (sats: number) => Promise<FundingOut>
   broadcast: (tx: Transaction) => Promise<BroadcastResult>
   fetchTx: (txid: string) => Promise<Transaction | undefined>
-  /** chain-observer verdict for a txid (broadcaster/overlay status) — when
-   *  given, an unproven mint whose status is a definitive rejection is
-   *  dropped so the kind's `unproven === 0` mint gate re-opens */
-  txFacts?: (txid: string) => Promise<import('@nektar/chain').TxFacts>
+  /** the one transaction-facts answer — a dead verdict OR a rejected-family
+   *  hint drops an unproven mint so the kind's `unproven === 0` mint gate
+   *  re-opens; a silent hint routes to onStuck for heal/reap */
+  facts?: (txid: string) => Promise<import('@nektar/chain').TxFacts>
   /** fired when an unproven tree is dropped as chain-rejected — lets the
    *  caller mark its ghost inputs/outputs spent so funding never re-selects
    *  them (the change output would otherwise cascade parent-rejected mints) */
@@ -56,20 +56,16 @@ export async function ensureTrees(p: {
     if (tx !== undefined && tx.merklePath !== undefined) {
       await p.ledger.markProven(u.txid, tx.merklePath)
       proven.push(u.txid)
-    } else if (p.txFacts !== undefined) {
-      const f = await p.txFacts(u.txid)
-      const st = (f.hint?.status ?? '').toUpperCase()
-      // a 'dead' verdict is first-party truth; a REJECTED hint is the
-      // outside observer's word — either may reap an unproven row (a gate
-      // left shut forever otherwise), never a proven one
-      if (f.verdict === 'dead' || st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')) {
+    } else if (p.facts !== undefined) {
+      const f = await p.facts(u.txid)
+      if (f.verdict === 'dead' || hintRejected(f.hint)) {
         // the mint was refused/lost a competing spend — an unproven row
         // would gate out every later mint of this kind forever. A provision
         // row is reaped the same way, but never tombstones: its inputs are
         // the payer's, not ours
         await p.ledger.drop(u.txid)
         if (u.kind !== PROVISION_KIND && p.onReject !== undefined && tx !== undefined) await p.onReject(tx)
-      } else if (u.kind !== PROVISION_KIND && f.verdict === 'pending' && (st === '' || st === 'UNKNOWN') && p.onStuck !== undefined && tx !== undefined) {
+      } else if (u.kind !== PROVISION_KIND && hintSilent(f.hint) && p.onStuck !== undefined && tx !== undefined) {
         // silently vanished (never propagated, evicted) — resubmit or reap;
         // without this the mint gate stays shut past any restart
         if ((await p.onStuck(tx)) === 'drop') {

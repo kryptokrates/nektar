@@ -23,7 +23,6 @@ export {
   BsvBroadcaster,
   fetchBroadcasterFeeRate,
   fetchRawTx,
-  mainnetHint,
   WocTracker,
   merklePathMainnet,
   tscToMerklePath,
@@ -31,8 +30,8 @@ export {
   importFundingTx,
   statusStream
 } from './mainnet.js'
-export { txFacts } from './txfacts.js'
-export type { TxFacts, TxFactsDeps, TxHint, TxVerdict, TxVerdictFrom } from './txfacts.js'
+export { txFactsOf, hintSeen, hintRejected, hintSilent, SEEN_HINTS } from './txfacts.js'
+export type { StatusHint, TxFacts, TxFactsDeps, TxVerdict, TxVerdictSource } from './txfacts.js'
 export type { StatusStreamEvent, StatusStreamOpts } from './mainnet.js'
 export type { MainnetConfig } from './mainnet.js'
 export { StackChain, StackFunder, StackTreasury, stackCfgFromEnv, stackTreasury, stackUp, stackWorld, stackChain, skipUnlessStack } from './testkit.js'

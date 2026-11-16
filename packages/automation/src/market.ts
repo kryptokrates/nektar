@@ -3,7 +3,7 @@ import { signWant, verifyWant, signOffer, verifyOffer, type SignedWant, type Sig
 import { verifyOfferSig, publicSaleQuote, saleQuoteWire } from '@nektar/identity'
 import { DisclosureSaleHost, CheckpointBond, COVENANT_ID } from '@nektar/anchor'
 import { parseFragment, fromHex } from '@nektar/core'
-import { TxStore, spendValid, type Ingested } from '@nektar/chain'
+import { TxStore, spendValid, hintSeen, type Ingested } from '@nektar/chain'
 import type { AutomationStore, InboxItem, Operation, OutboxItem } from './store.js'
 import { classifyDeliveryError } from './store.js'
 import { WalletCoordinator } from './wallet.js'
@@ -100,8 +100,9 @@ export interface MarketDeps {
   height: () => Promise<number>
   tip?: () => Promise<{ tip: string; tipHeight: number } | undefined>
   fetchTx: (txid: string) => Promise<Transaction | undefined>
-  /** what the chain view knows about a tx — reconciles uncertain payment and
-   *  settlement states without waiting on block heights */
+  /** the one transaction-facts answer — reconciles uncertain payment and
+   *  settlement states without waiting on block heights; money decisions
+   *  read `verdict`, the outside word stays in `hint` */
   txFacts?: (txid: string) => Promise<import('@nektar/chain').TxFacts>
   /** confirmations a proof must carry before `completion_submitted` may
    *  settle — a depth-1 proof sits one reorg away from vanishing (default 1:
@@ -117,8 +118,8 @@ export interface MarketDeps {
   rememberTx?: (tx: Transaction) => void
   /** mark an output of an accepted transaction as ours — direct-rail payments
    *  become the seller's custody the moment the payment verifies */
-  ownOutput?: (tx: Transaction, vout: number) => void
-  settleEscrow?: (tx: Transaction) => void
+  ownOutput?: (tx: Transaction, vout: number) => void | Promise<void>
+  settleEscrow?: (tx: Transaction) => void | Promise<void>
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
   ai: AIExecutor
@@ -862,7 +863,7 @@ export class MarketEngine {
       data: direct ? { direct: true, utxo: m.utxo } : { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } },
       evidence: { spv, spends }
     })
-    if (direct) this.d.ownOutput?.(tx, m.utxo.vout)
+    if (direct) await this.d.ownOutput?.(tx, m.utxo.vout)
     await this.complete(next)
   }
 
@@ -1451,7 +1452,7 @@ export class MarketEngine {
               )
             return
           }
-          this.d.settleEscrow(tx)
+          await this.d.settleEscrow(tx)
           this.d.rememberTx?.(tx)
           pay = { accepted: true, txid: built.utxo.txid, utxo: built.utxo }
         } else {
@@ -1573,7 +1574,7 @@ export class MarketEngine {
             )
           return
         }
-        this.d.settleEscrow(tx)
+        await this.d.settleEscrow(tx)
         this.d.rememberTx?.(tx)
         r = { accepted: true, txid: built.utxo.txid, utxo: built.utxo, escrow: built.escrow }
       } else
@@ -1690,19 +1691,19 @@ export class MarketEngine {
       return
     }
     if (this.d.txFacts === undefined || !this.reconcileGate(op.operationId, txid)) return
-    const f = await this.d.txFacts(txid)
-    if (f.verdict === 'pending' && f.tx === undefined) {
-      if (op.data.reconcilePing !== true)
-        await this.d.store.transition(op.operationId, op.revision, 'uncertain', { cause: 'reconcile_pending', data: { reconcilePing: true } })
-      return
-    }
-    if (f.verdict === 'dead') {
+    const facts = await this.d.txFacts(txid)
+    if (facts.verdict === 'dead') {
       if (actionId !== undefined) await this.d.store.releaseBudget(actionId)
       await cancel()
       await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected' })
       return
     }
-    // mined | observable — the escrow is on the wire: commit and resume the normal path
+    if (facts.verdict === 'pending' && facts.tx === undefined && !hintSeen(facts.hint)) {
+      if (op.data.reconcilePing !== true)
+        await this.d.store.transition(op.operationId, op.revision, 'uncertain', { cause: 'reconcile_pending', data: { reconcilePing: true } })
+      return
+    }
+    // mined | seen — the escrow is observable: commit and resume the normal path
     const sel = op.data.selected as { key: string }
     const s = (op.data.offers as Record<string, StoredOffer>)[sel.key]
     if (s === undefined) return
@@ -1728,7 +1729,7 @@ export class MarketEngine {
       utxo = { txid, vout, satoshis: tx.outputs[vout].satoshis ?? 0, script }
     }
     if (escrow === undefined || utxo === undefined) return
-    if (wtx !== undefined) this.d.settleEscrow?.(Transaction.fromHex(wtx.rawHex))
+    if (wtx !== undefined) await this.d.settleEscrow?.(Transaction.fromHex(wtx.rawHex))
     if (actionId !== undefined) await this.d.store.commitBudget(actionId)
     await cancel()
     await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
@@ -1900,7 +1901,7 @@ export class MarketEngine {
           const sub = await this.wallet.submit(op.data.escrowAction as string)
           if (sub.state === 'submitted' || sub.state === 'observed' || sub.state === 'confirmed') {
             const wtx = await this.d.store.walletTx({ actionId: op.data.escrowAction as string })
-            if (wtx) this.d.settleEscrow(Transaction.fromHex(wtx.rawHex))
+            if (wtx) await this.d.settleEscrow(Transaction.fromHex(wtx.rawHex))
             await this.d.store.commitBudget(op.data.escrowAction as string)
             const sel2 = op.data.selected as { key: string }
             const s2 = (op.data.offers as Record<string, StoredOffer>)[sel2.key]

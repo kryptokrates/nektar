@@ -92,7 +92,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
         height: () => mem.chainHeight(),
         fetchTx: async (id) => chain.getTx(id),
         broadcast: (tx) => mem.broadcastTx(tx),
-        settleEscrow: (tx) => void mem.spentTx(tx),
+        settleEscrow: (tx) => mem.funds.spent(tx),
         transport,
         ai: new ScriptedExecutor(),
         opts: { refundBlocks: 8 }

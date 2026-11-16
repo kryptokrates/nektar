@@ -19,7 +19,7 @@
 // across the boundary by serialization only.
 
 import { createRequire } from 'node:module'
-import { Beef, Hash, MerklePath, PrivateKey, Transaction, Utils, type ChainTracker } from '@bsv/sdk'
+import { Beef, Hash, MerklePath, PrivateKey, Transaction, Utils, type ChainTracker, type WalletInterface } from '@bsv/sdk'
 import { Services, Setup, StorageKnex, Wallet, WalletStorageManager, randomBytesHex, sdk } from '@bsv/wallet-toolbox'
 import {
   TeranodeRPCTracker,
@@ -598,7 +598,7 @@ export class WalletFunds extends FundsBase {
   protected readonly store: FundsStore
 
   constructor(
-    private wallet: Wallet,
+    private wallet: Pick<WalletInterface, 'listOutputs' | 'internalizeAction' | 'relinquishOutput' | 'getPublicKey'>,
     private services: Pick<sdk.WalletServices, 'getRawTx' | 'getMerklePath'> | undefined,
     deps: FundsDeps & { log?: (s: string) => void }
   ) {
@@ -629,6 +629,22 @@ export class WalletFunds extends FundsBase {
 
   get utxos(): FundingOut[] {
     return this.cache
+  }
+
+  /** identity comes from the wallet itself — the BRC-100 identity key
+   *  derives our receive address and the P2PKH lock that marks change */
+  async address(): Promise<string> {
+    const pub = await this.wallet.getPublicKey({ identityKey: true }, 'nektar')
+    return sdkc.PublicKey.fromString(pub.publicKey).toAddress()
+  }
+
+  private lockCache?: string
+  protected async ourLock(): Promise<string> {
+    if (this.lockCache === undefined) {
+      const pub = await this.wallet.getPublicKey({ identityKey: true }, 'nektar')
+      this.lockCache = new sdkc.P2PKH().lock(sdkc.PublicKey.fromString(pub.publicKey).toAddress()).toHex()
+    }
+    return this.lockCache
   }
 
   async refresh(): Promise<void> {

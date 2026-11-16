@@ -9,7 +9,7 @@ import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
 import { headerPowValid, linksTo } from './headers.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
-import type { TxHint } from './txfacts.js'
+import type { StatusHint } from './txfacts.js'
 
 export interface MainnetConfig {
   broadcasterUrl?: string // BSV Broadcaster base (no trailing slash)
@@ -108,10 +108,10 @@ export class BsvBroadcaster implements Broadcaster {
     }
   }
 
-  /** broadcaster's current verdict for a txid (uppercase, '' = undecidable) —
+  /** the broadcaster's current word for a txid — a HINT, never a verdict:
    *  routes through the shared observer seam incl. the WoC mined-fallback */
-  async txStatus(txid: string): Promise<string> {
-    return await fetchTxStatus(this.cfg, txid, { wocFallback: this.wocFallback })
+  async statusHint(txid: string): Promise<StatusHint> {
+    return await probeTxStatus(this.cfg, txid, { wocFallback: this.wocFallback })
   }
 }
 
@@ -329,15 +329,6 @@ export async function fetchRawTx(cfg: MainnetConfig | undefined, txid: string): 
 
 export async function fetchTxStatus(cfg: MainnetConfig | undefined, txid: string, opts?: { wocFallback?: boolean }): Promise<string> {
   return (await probeTxStatus(cfg, txid, opts)).status
-}
-
-/** the live-net hint filler for txFacts: one throttled probe of the
- *  broadcaster (+ optional WoC cross-check), returning the raw status word
- *  and whether a source actually answered. The status word is a hint — it
- *  never lands a verdict on its own. `fetchTxStatus`/`probeTxStatus` are
- *  private to this adapter; outsiders ask for the hint, not the probe. */
-export function mainnetHint(cfg: MainnetConfig | undefined, opts?: { wocFallback?: boolean }): (txid: string) => Promise<TxHint> {
-  return async (txid) => await probeTxStatus(cfg, txid, opts)
 }
 
 // --- WoC tracker (rate-limited, cached headers) -------------------------------

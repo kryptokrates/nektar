@@ -30,7 +30,7 @@ import {
   type RegtestConfig
 } from './regtest.js'
 import { TxStore } from './txstore.js'
-import { txFacts, type TxFacts } from './txfacts.js'
+import { txFactsOf, type TxFacts } from './txfacts.js'
 import { testTier, type TestChain } from './testtier.js'
 
 // ---------------------------------------------------------------------------
@@ -237,17 +237,17 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
   /** the one status answer — the adapter fills every dep from its own view;
    *  the hint is its own verdict word (the node is the only observer here) */
   async txFacts(txid: string): Promise<TxFacts> {
-    return await txFacts(txid, {
-      txOf: (t) => this.getTx(t),
-      proofOf: (t) => this.getTx(t)?.merklePath,
-      rejected: (t) => this.isRejected(t),
-      hintOf: async (t) => {
+    return await txFactsOf({
+      held: (t: string) => this.getTx(t),
+      proof: (t: string) => this.getTx(t)?.merklePath,
+      rejected: (t: string) => this.isRejected(t),
+      hint: async (t: string) => {
         const tx = this.getTx(t)
         const status = this.isRejected(t) ? 'REJECTED' : tx?.merklePath !== undefined ? 'MINED' : tx !== undefined ? 'SEEN_ON_NETWORK' : 'UNKNOWN'
         return { status, answered: true }
       },
-      depthOf: async (mp) => (await this.tipHeight()) - mp.blockHeight + 1
-    })
+      height: () => this.tipHeight()
+    })(txid)
   }
   /** status push, the same shape statusStream gives live networks: Teranode
    *  has no per-tx event feed, so the shared events substrate polls watched

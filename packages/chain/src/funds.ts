@@ -51,19 +51,24 @@ export interface FundsDeps {
   /** sats kept affordable for one deal — non-deal takes never dip below.
    *  Default 25_000. */
   dealFloor?: number
-  /** durable cross-process lease — the automation ledger's outpoint lease */
+  /** durable cross-process lease — the automation ledger's outpoint lease.
+   *  Seeds the same-named field on the impl — late-bound seams assign
+   *  `funds.leased = …` after construction. */
   leased?: (txid: string, vout: number) => Promise<boolean> | boolean
   /** resolve a txid to its tx — `died` needs the dead tx's inputs/outputs */
   txOf?: (txid: string) => Promise<Transaction | undefined> | Transaction | undefined
-  /** candidate's parent is dead — never selected (a hint, not a verdict) */
-  deadParent?: (tx: Transaction) => Promise<boolean>
+  /** candidate's parent is dead — never selected (a hint, not a verdict).
+   *  Seeds the `hintSkip` field. */
+  hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
   /** attach the proof we hold for a candidate's parent tx */
   proofOf?: (tx: Transaction) => Promise<void>
-  /** first-party spend record — we already spent this outpoint ourselves */
-  spentByUs?: (txid: string, vout: number) => Promise<boolean> | boolean
+  /** first-party spend probe — a 'spent' answer burns the candidate during
+   *  selection. Seeds the `spendCheck` field. */
+  spendCheck?: (txid: string, vout: number) => Promise<boolean>
   /** a purpose's take served by a dedicated pool instead of the shared set —
    *  the fee-vault covenant mints capped outs for `publish` takes; it returns
-   *  undefined when it has nothing to serve (fall through to the pool) */
+   *  undefined when it has nothing to serve (fall through to the pool).
+   *  Seeds the `takeOverride` field. */
   takeOverride?: (purpose: FundPurpose, sats: number) => Promise<FundingOut | undefined>
   log?: (s: string) => void
 }
@@ -78,12 +83,33 @@ export abstract class FundsBase implements Funds {
   private queue: Promise<unknown> = Promise.resolve()
   protected abstract readonly store: FundsStore
 
-  /** mutable so late-bound seams can be wired after construction — the
+  /** late-bound behavior hooks — interface-level fields so callers that
+   *  only know `Funds` (never the impl's deps) can still wire the lease,
+   *  hint and spend-probe seams after construction */
+  public leased?: (txid: string, vout: number) => Promise<boolean> | boolean
+  public hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
+  public spendCheck?: (txid: string, vout: number) => Promise<boolean>
+  public takeOverride?: (purpose: FundPurpose, sats: number) => Promise<FundingOut | undefined>
+  /** sats kept affordable for one deal — non-deal takes never dip below;
+   *  seeded from deps.dealFloor, re-tunable post-construction */
+  public dealFloor?: number
+
+  /** deps holds construction-time config (identity, floor, tx view); the
+   *  hook fields above are seeded from it but remain mutable — the
    *  ledger's lease predicate and first-party spend record only exist once
    *  the records db opens, after the impl is already assembled */
-  constructor(public deps: FundsDeps) {}
+  constructor(public deps: FundsDeps) {
+    this.leased = deps.leased
+    this.hintSkip = deps.hintSkip
+    this.spendCheck = deps.spendCheck
+    this.takeOverride = deps.takeOverride
+    this.dealFloor = deps.dealFloor
+  }
 
-  private get ourLock(): string {
+  /** the locking script that marks an output as ours (change, adoptions).
+   *  Deps-supplied lock or pkhHex-derived P2PKH; wallet impls override to
+   *  derive it from the wallet itself. */
+  protected async ourLock(): Promise<string> {
     return this.deps.lock ?? `76a914${this.deps.pkhHex}88ac`
   }
 
@@ -118,7 +144,7 @@ export abstract class FundsBase implements Funds {
     return await this.store.list()
   }
 
-  async available(): Promise<FundingOut[]> {
+  async outs(): Promise<FundingOut[]> {
     return (await this.store.list()).filter((u) => !this.reserved.has(op(u.tx.id('hex'), u.vout)))
   }
 
@@ -126,34 +152,36 @@ export abstract class FundsBase implements Funds {
    *  in-memory stores */
   async refresh(): Promise<void> {}
 
-  /** an observed spend consumed this outpoint on-chain — drop it from the
-   *  owned set (a spend we did not build gets the same mark ours would) */
-  async drop(txid: string, vout: number): Promise<void> {
+  /** an outpoint is spent for good — observed on-chain spend or a
+   *  first-party probe answer; tombstoned, never offered again */
+  async burn(txid: string, vout: number): Promise<void> {
     await this.store.drop(txid, vout)
     this.reserved.delete(op(txid, vout))
   }
 
-  /** a resolved candidate's outpoint id */
+  /** a resolved candidate's outpoint id — the hint side of selection
+   *  (reservation, tombstone, lease, dead-parent hint): pass-over only,
+   *  never writes bookkeeping */
   private async unusable(u: FundingOut): Promise<boolean> {
     const id = u.tx.id('hex')
     if (this.reserved.has(op(id, u.vout))) return true
     if ((await this.store.tombstoned?.(id, u.vout)) === true) return true
-    if ((await this.deps.leased?.(id, u.vout)) === true) return true
+    if ((await this.leased?.(id, u.vout)) === true) return true
     // a proven parent cannot be a dead parent — the hint is never consulted
-    if (u.tx.merklePath === undefined && (await this.deps.deadParent?.(u.tx)) === true) return true
+    if (u.tx.merklePath === undefined && (await this.hintSkip?.(u.tx, u.vout)) === true) return true
     return false
   }
 
   take(purpose: FundPurpose, sats: number): Promise<FundingOut> {
     const run = this.queue.then(async () => {
-      const override = await this.deps.takeOverride?.(purpose, sats)
+      const override = await this.takeOverride?.(purpose, sats)
       if (override !== undefined) {
         this.reserved.add(op(override.tx.id('hex'), override.vout))
         if (override.tx.merklePath === undefined) await this.deps.proofOf?.(override.tx)
         return override
       }
       const all = await this.store.list()
-      const floor = this.deps.dealFloor ?? 25_000
+      const floor = this.dealFloor ?? 25_000
       if (purpose !== 'deal') {
         let owned = 0
         for (const u of all) if (!this.reserved.has(op(u.tx.id('hex'), u.vout))) owned += u.satoshis
@@ -165,11 +193,19 @@ export abstract class FundsBase implements Funds {
         candidates.push(u)
       }
       candidates.sort((a, b) => a.satoshis - b.satoshis)
-      const pick = candidates[0]
-      if (pick === undefined) throw new Error(`funds: no spendable output ≥ ${sats} sats`)
-      this.reserved.add(op(pick.tx.id('hex'), pick.vout))
-      if (pick.tx.merklePath === undefined) await this.deps.proofOf?.(pick.tx)
-      return pick
+      // first-party truth side: a 'spent' answer burns the candidate for
+      // good and selection moves on — a hint only passes over, this drops
+      for (const pick of candidates) {
+        const id = pick.tx.id('hex')
+        if ((await this.spendCheck?.(id, pick.vout)) === true) {
+          await this.burn(id, pick.vout)
+          continue
+        }
+        this.reserved.add(op(id, pick.vout))
+        if (pick.tx.merklePath === undefined) await this.deps.proofOf?.(pick.tx)
+        return pick
+      }
+      throw new Error(`funds: no spendable output ≥ ${sats} sats`)
     })
     this.queue = run.catch(() => {})
     return run
@@ -189,8 +225,9 @@ export abstract class FundsBase implements Funds {
       await this.store.drop(txid, Number(v))
       this.reserved.delete(io)
     }
+    const lock = await this.ourLock()
     for (const [vout, o] of tx.outputs.entries()) {
-      if (o.lockingScript.toHex() !== this.ourLock) continue
+      if (o.lockingScript.toHex() !== lock) continue
       if ((await this.store.has?.(tx.id('hex'), vout)) === true) continue
       await this.store.add(tx, vout)
     }
@@ -209,8 +246,9 @@ export abstract class FundsBase implements Funds {
     }
   }
 
-  async died(txid: string): Promise<void> {
-    const tx = await this.deps.txOf?.(txid)
+  async died(x: Transaction | string): Promise<void> {
+    const txid = typeof x === 'string' ? x : x.id('hex')
+    const tx = typeof x === 'string' ? await this.deps.txOf?.(x) : x
     if (tx === undefined) {
       this.deps.log?.(`funds: died(${txid.slice(0, 16)}…) — tx not held, nothing to free`)
       return
@@ -224,12 +262,13 @@ export abstract class FundsBase implements Funds {
       if ((await this.store.has?.(pid, vout)) === true) continue
       if ((await this.store.tombstoned?.(pid, vout)) !== true) continue
       const parent = inp.sourceTransaction ?? (await this.deps.txOf?.(pid))
-      if (parent === undefined || (await this.deps.deadParent?.(parent)) === true) continue
+      if (parent === undefined || (await this.hintSkip?.(parent, vout)) === true) continue
       if (this.store.revive !== undefined) await this.store.revive(parent, vout)
       else await this.store.add(parent, vout)
     }
+    const lock = await this.ourLock()
     for (const [vout, o] of tx.outputs.entries()) {
-      if (o.lockingScript.toHex() === this.ourLock) await this.store.drop(txid, vout)
+      if (o.lockingScript.toHex() === lock) await this.store.drop(txid, vout)
     }
   }
 
@@ -243,12 +282,13 @@ export abstract class FundsBase implements Funds {
     this.reserved.delete(op(txid, vout))
   }
 
-  async adopt(tx: Transaction, vout: number): Promise<void> {
+  async adopt(tx: Transaction, vout: number): Promise<boolean> {
     const txid = tx.id('hex')
-    if ((await this.store.tombstoned?.(txid, vout)) === true) return
-    if ((await this.deps.spentByUs?.(txid, vout)) === true) return
-    if ((await this.store.has?.(txid, vout)) === true) return
+    if ((await this.store.tombstoned?.(txid, vout)) === true) return false
+    if ((await this.spendCheck?.(txid, vout)) === true) return false
+    if ((await this.store.has?.(txid, vout)) === true) return false
     await this.store.add(tx, vout)
+    return true
   }
 }
 
@@ -342,13 +382,18 @@ export interface FunderLike {
  *  shared state machine still owns selection and reservations. The owned
  *  lock comes from a synchronous `address()` or `deps.lock`/`pkhHex` —
  *  without it change could never be recognized as ours. */
-export function fundsOf(f: FunderLike, deps?: Partial<FundsDeps>): Funds {
+export function fundsOf(f: FunderLike, depsOrFloor?: Partial<FundsDeps> | number): Funds {
   if (f.funds !== undefined) return f.funds
+  // already the owner — a bare Funds passes through untouched (the
+  // lifecycle verbs distinguish it from a funder-shaped object) */
+  const maybeFunds = f as Partial<Funds>
+  if (typeof maybeFunds.spent === 'function' && typeof maybeFunds.died === 'function') return maybeFunds as Funds
+  const deps: Partial<FundsDeps> = typeof depsOrFloor === 'number' ? { dealFloor: depsOrFloor } : (depsOrFloor ?? {})
   if (f.utxos === undefined) throw new Error('fundsOf: funder carries no Funds owner and no utxos view')
   const addr = f.address?.()
   const lock =
-    deps?.lock ??
-    (deps?.pkhHex !== undefined ? `76a914${deps.pkhHex}88ac` : undefined) ??
+    deps.lock ??
+    (deps.pkhHex !== undefined ? `76a914${deps.pkhHex}88ac` : undefined) ??
     (addr !== undefined && !(addr instanceof Promise) ? new P2PKH().lock(addr).toHex() : undefined)
   if (lock === undefined) throw new Error('fundsOf: no owned lock — pass deps.lock/deps.pkhHex or a synchronous address()')
   const store: FundsStore = {

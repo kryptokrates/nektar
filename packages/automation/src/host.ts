@@ -1,5 +1,5 @@
 import type { ChainTracker, MerklePath, PrivateKey, Transaction, WalletInterface } from '@bsv/sdk'
-import type { BroadcastResult, Funds, Ingested } from '@nektar/chain'
+import type { BroadcastResult, FundingOut, Funds, FundsPurpose, Ingested } from '@nektar/chain'
 import type { ObjectRef, PacksStore } from '@nektar/store'
 import type { BudgetAuthority } from './budget.js'
 import type { MarketMemory } from './market.js'
@@ -31,14 +31,17 @@ export interface AutomationHost extends MarketMemory {
    *  paid by another agent) with the chain-event substrate so proof delivery
    *  and the abandon horizon cover it */
   watchTx?(txid: string): void
-  /** THE one status answer — bytes/proof/depth/verdict + outside hint */
+  /** the one transaction-facts answer — verdict (mined|pending|dead) with
+   *  its source, held bytes/proof/depth, and the outside hint in a separate
+   *  field that can never be mistaken for the verdict */
   txFacts(txid: string): Promise<import('@nektar/chain').TxFacts>
   broadcastTx(tx: Transaction): Promise<BroadcastResult>
   operatorKey(): PrivateKey
   operatorWallet(): OperatorWallet
-  /** the single owner of the agent's coin state — purpose-labeled takes,
-   *  spent/died/adopt bookkeeping */
-  readonly funds: Funds
+  /** the one coin book — takes, spend/death/adoption bookkeeping route
+   *  through it; callers never mark outpoints themselves */
+  funds: Funds
+  fundingOuts(satoshis: number, purpose?: FundsPurpose): Promise<FundingOut[]>
   fundingStatus(): Promise<{ address: string; balanceSats: number; utxos: number; funded: boolean }>
   chainHeight(): Promise<number>
   sdkTracker(): ChainTracker

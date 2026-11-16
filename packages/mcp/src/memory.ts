@@ -61,8 +61,8 @@ import { ProofStore } from './proofstore.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import { encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@nektar/crypto'
-import { TxStore, fundsAsFunder } from '@nektar/chain'
-import type { Broadcaster, ChainTracker, Funder, Funds, FundPurpose } from '@nektar/chain'
+import { TxStore, fundsOf } from '@nektar/chain'
+import type { Broadcaster, ChainTracker, FunderLike, Funds, FundsPurpose } from '@nektar/chain'
 import * as idbind from '@nektar/identity'
 import { ZkProveOps } from './zkprove.js'
 
@@ -199,28 +199,20 @@ export class NektarMemory {
   private anchors = new Map<string, AnchorChain>()
   private tails = new Map<string, AnchorLink[]>()
   private anchorTxs = new Map<string, import('@bsv/sdk').Transaction>()
-  /** 'publish'-labeled Funder view over the Funds owner — feeds the
-   *  Funder-shaped chain wrappers (AnchorChain, AutomatonChain) */
-  private readonly funder: Funder
   private txidShard = new Map<string, string>()
-
-  readonly funds: Funds
 
   constructor(
     private chain: ChainTracker & Broadcaster,
-    /** the single owner of this instance's coin state — a Funds impl, or a
-     *  test funder carrying one (its `funds` member is unwrapped). Takes are
-     *  purpose-labeled; spent/died/adopt carry the whole transaction */
-    owner: Funds | { funds: Funds },
+    private funder: FunderLike | undefined,
     private fundKey: PrivateKey | undefined,
     private opts: NektarMemoryOptions = {},
     private store: ShardStore = new MemoryShardStore()
   ) {
-    this.funds = 'funds' in owner ? owner.funds : owner
-    // the Funder-shaped consumers (AnchorChain, AutomatonChain) see a
-    // purpose-labeled view — every take lands in 'publish' allocation class
-    this.funder = fundsAsFunder(this.funds, 'publish')
     if (opts.shardPubs !== undefined) this._shardPubs = opts.shardPubs instanceof Map ? new Map(opts.shardPubs) : new Map(Object.entries(opts.shardPubs))
+    // the one coin book — take/spent/died/adopt all route here; absent an
+    // injected impl the funder is adapted (test tiers)
+    if (opts.funds === undefined && this.funder === undefined) throw new Error('NektarMemory: no coin book — pass opts.funds or a funder')
+    this.funds = opts.funds ?? fundsOf(this.funder!, opts.dealFloorSats ?? 0)
     this.keyOps = new KeyOps({
       opts: this.opts,
       fundKey: () => this.fundKey,
@@ -234,7 +226,7 @@ export class NektarMemory {
       chain: this.chain,
       txs: () => this.txs,
       fetchTx: (t) => this.fetchTx(t),
-      takeFunding: (s) => this.takeFunding('deal', s),
+      takeFunding: (s) => this.takeFunding(s, 'publish'),
       fundKey: this.fundSigner(),
       bondOpts: () => this.opts.bond,
       network: this.opts.network,
@@ -314,12 +306,10 @@ export class NektarMemory {
     this.attestOps = new AttestOps({
       attestationTxs: this.attestationTxs,
       anchorTxs: this.anchorTxs,
-      takeFunding: (s) => this.takeFunding('publish', s),
+      funds: this.funds,
       fundSigner: () => this.fundSigner(),
       chain: this.chain,
       feeRateSatPerKb: () => this.opts.feeRateSatPerKb ?? 1,
-      spentTx: (tx) => this.spentTx(tx),
-      adoptOut: (tx, v) => this.adoptOut(tx, v),
       metricsInc: (n, l, x, h) => this.metrics.inc(n, l, x, h),
       proveMembership: (s, q, qid) => this.proveMembership(s, q, qid)
     })
@@ -363,9 +353,8 @@ export class NektarMemory {
       sdkTracker: () => this.sdkTracker(),
       txLookup: () => this.txLookup,
       proofLookup: () => this.proofLookup,
-      network: this.opts.network,
-      hintOf: this.opts.hintOf,
-      heightOf: this.opts.heightOf,
+      statusHint: this.opts.statusHint,
+      height: this.opts.height,
       // the ledger's own verdict rows are first-party truth — wired lazily
       // because mem.ledger is assigned post-construction by the runtime
       ledgerState: async (txid) => (await this.ledger?.walletTx({ txid }))?.state,
@@ -376,7 +365,8 @@ export class NektarMemory {
       fundSigner: () => this.fundSigner(),
       broadcast: (tx) => this.chain.broadcast(tx),
       txs: (tx) => this.txs.put(tx),
-      hintOf: this.opts.hintOf,
+      proofOf: (txid) => this.txs.get(txid)?.merklePath,
+      facts: (txid) => this.txOps.txFacts(txid),
       ledger: () => this.ledger,
       network: this.opts.network,
       feeRateSatPerKb: this.opts.feeRateSatPerKb
@@ -402,6 +392,9 @@ export class NektarMemory {
   }
   private logKey: SignerLike
   private _logPub?: string
+  /** the one coin book — the Funds impl the runtime chose (or the
+   *  funder-adapting fundsOf on test tiers) */
+  public funds!: Funds
   public budget?: import('@nektar/automation').BudgetAuthority
   public automation?: Automation
   public ledger?: import('@nektar/automation').AutomationStore
@@ -470,7 +463,7 @@ export class NektarMemory {
 
   /** subscribe to rejection/abandonment wakes — verified chain events,
    *  first-party refusals, abandon-horizon verdicts, and pushed status
-   *  hints all fire it; a wake is a poke to re-ask txFacts, not a verdict */
+   *  hints all fire it; a wake is a poke to re-ask txState, not a verdict */
   onTxRejected(cb: (txid: string) => void): void {
     this.txOps.onTxRejected(cb)
   }
@@ -481,7 +474,7 @@ export class NektarMemory {
     this.txOps.deliverTxRejected(txid)
   }
   /** a pushed rejection STATUS (broadcaster webhook / SSE): wake-only —
-   *  pokes subscribers into re-asking txFacts, writes no durable verdict */
+   *  pokes subscribers into re-asking txState, writes no durable verdict */
   hintTxRejected(txid: string): void {
     this.txOps.hintTxRejected(txid)
   }
@@ -493,7 +486,8 @@ export class NektarMemory {
     this.events.on('txAbandoned', ({ txid }: { txid: string }) => cb(txid))
   }
 
-  /** THE one status answer — bytes/proof/depth/verdict + outside hint */
+  /** the one answer about a transaction — bytes, proof, depth, verdict with
+   *  its source, and the outside status word as a separate hint */
   async txFacts(txid: string): Promise<import('@nektar/chain').TxFacts> {
     return await this.txOps.txFacts(txid)
   }
@@ -523,7 +517,7 @@ export class NektarMemory {
     if (!this.anchors.has(shard)) {
       this.anchors.set(
         shard,
-        new AnchorChain(shard, this.shardKey(shard), this.funder, this.fundSigner(), this.chain, {
+        new AnchorChain(shard, this.shardKey(shard), this.funds, this.fundSigner(), this.chain, {
           burstLimit: this.opts.burstLimit,
           feeRateSatPerKb: this.opts.feeRateSatPerKb,
           shardPub: this._shardPubs.get(shard)
@@ -592,10 +586,10 @@ export class NektarMemory {
     return this.keyOps.wrapCustody()
   }
   /** funding outs for covenant hosts (escrow deposits, covenant inputs) —
-   *  purpose-labeled so the deal floor shields live settlements from
-   *  background work */
-  async fundingOuts(purpose: FundPurpose, satoshis: number): Promise<import('@nektar/chain').FundingOut[]> {
-    const u = await this.takeFunding(purpose, satoshis)
+   *  callers record the broadcast via funds.spent() like anchorAttestation
+   *  does. Purpose defaults to 'publish' — covenant callers pass their own. */
+  async fundingOuts(satoshis: number, purpose: FundsPurpose = 'publish'): Promise<import('@nektar/chain').FundingOut[]> {
+    const u = await this.takeFunding(satoshis, purpose)
     return [u]
   }
   private custodyOps!: CustodyOps
@@ -620,14 +614,6 @@ export class NektarMemory {
   }
   private canEncrypt(): boolean {
     return this.cryptoOps.canEncrypt()
-  }
-  /** a successful broadcast consumed our inputs and made our change */
-  async spentTx(tx: import('@bsv/sdk').Transaction): Promise<void> {
-    await this.custodyOps.spentTx(tx)
-  }
-  /** coins sent to us by someone else */
-  async adoptOut(tx: import('@bsv/sdk').Transaction, vout: number): Promise<void> {
-    await this.custodyOps.adoptOut(tx, vout)
   }
   /** current chain height for locktime-gated covenant calls */
   async chainHeight(): Promise<number> {
@@ -860,10 +846,10 @@ export class NektarMemory {
   // anchor: no shard state, no contract. Off-chain WASM verify stays
   // authoritative; the chain only timestamps the commitment.
   private attestationTxs = new Map<string, import('@bsv/sdk').Transaction>()
-  /** one reserved funding outpoint — purpose-labeled, held by take() until
-   *  spent() consumes it or died()/release() frees it */
-  private async takeFunding(purpose: FundPurpose, satoshis: number): Promise<import('@nektar/chain').FundingOut> {
-    return await this.custodyOps.takeFunding(purpose, satoshis)
+  /** one funding outpoint reserved for `purpose` — the Funds impl owns
+   *  selection and the reservation */
+  private async takeFunding(satoshis: number, purpose: FundsPurpose = 'publish'): Promise<import('@nektar/chain').FundingOut> {
+    return await this.custodyOps.takeFunding(satoshis, purpose)
   }
 
   /** fee-reserve status for the fundingStatus MCP tool — mem-side view only

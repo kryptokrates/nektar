@@ -9,10 +9,10 @@ import type { Transaction } from '@bsv/sdk'
 import { unlockP2PKH, type SignerLike } from '@nektar/core'
 
 /** the sync view wireP2p and the fee vault need over the Funds owner:
- *  current owned set + a drop verb for observed spends */
+ *  current owned set + a burn verb for observed spends */
 export interface UtxoView {
   readonly utxos: Array<{ tx: Transaction; vout: number; satoshis: number }>
-  drop(txid: string, vout: number): void | Promise<void>
+  burn(txid: string, vout: number): void | Promise<void>
 }
 
 /** optional p2p eyes: watched outpoints fire 'spend', the fee-key script
@@ -36,7 +36,7 @@ export function wireP2p(opts: {
   })
   p2p.on('spend', (t, v, by) => {
     if (opts.reserve.utxos.some((u) => u.tx.id('hex') === t && u.vout === v)) {
-      void opts.reserve.drop(t, v)
+      void opts.reserve.burn(t, v)
       opts.log(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`)
     }
   })
@@ -97,9 +97,9 @@ export async function setupFeeVault(opts: {
   const saveVault = () => writeFileSync(vutxoFile, JSON.stringify({ current: vaultUtxo, minted: [...vaultMinted] }))
   const deployVault = async () => {
     const sats = vcfg.vaultSats ?? 50_000
-    const u = opts.funds.utxos.find((x) => x.satoshis > sats + 600)
-    if (!u) throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + 600} sats — fund ${opts.fundAddress}`)
-    opts.funds.hold(u.tx.id('hex'), u.vout)
+    const u = await opts.funds.take('upkeep', sats + 601).catch(() => {
+      throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + 600} sats — fund ${opts.fundAddress}`)
+    })
     const tx = new Tx()
     tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: unlockP2PKH(opts.fundKey) })
     tx.addOutput({ satoshis: sats, lockingScript: LScript.fromHex(vault.lockingScript(0n, 0n)) })

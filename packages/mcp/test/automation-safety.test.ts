@@ -327,7 +327,7 @@ async function world(
       transport: transportFor(mem.operatorKey().toPublicKey().toString()),
       ai: new ScriptedExecutor(),
       broadcast: (tx) => mem.broadcastTx(tx),
-      settleEscrow: (tx) => void mem.spentTx(tx),
+      settleEscrow: (tx) => mem.funds.spent(tx),
       killed: opts.killed,
       deaf: opts.deaf,
       opts: { refundBlocks: opts.refundBlocks ?? 144 }

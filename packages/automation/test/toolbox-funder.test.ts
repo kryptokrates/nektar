@@ -103,13 +103,13 @@ test('WalletFunds: take honors lease, deadParent and the sats bound', async () =
   )
   // c is below the sats bound; a is leased; b wins as smallest eligible
   const f = mkFunds(w.wallet)
-  f.deps.leased = async (txid: string) => txid === a.id('hex')
+  f.leased = async (txid: string) => txid === a.id('hex')
   const pick = await f.take('deal', 500)
   assert.equal(pick.tx.id('hex'), b.id('hex'))
   // a dead-parent hint skips the candidate but never relinquishes it —
   // permanent drops are the reconcile path's job
   const g = mkFunds(w.wallet)
-  g.deps.deadParent = async (tx: Transaction) => tx.id('hex') === a.id('hex')
+  g.hintSkip = async (tx: Transaction) => tx.id('hex') === a.id('hex')
   const pick2 = await g.take('deal', 500)
   assert.equal(pick2.tx.id('hex'), b.id('hex'))
   assert.equal(w.relinquished.length, 0)
@@ -120,7 +120,7 @@ test('WalletFunds: drop relinquishes; adopt dedups; revive lifts the mark', asyn
   const w = mkWallet([{ outpoint: `${a.id('hex')}.0`, satoshis: 800, spendable: true }], a.toBEEF())
   const f = mkFunds(w.wallet)
   await f.refresh()
-  await f.drop(a.id('hex'), 0)
+  await f.burn(a.id('hex'), 0)
   assert.equal(f.utxos.length, 0)
   await new Promise((r) => setTimeout(r, 10))
   assert.deepEqual(w.relinquished, [`${a.id('hex')}.0`])

@@ -110,7 +110,7 @@ export interface AutomationConfig {
    *  honored only while the token validates. Implies strict when set. */
   unattended?: boolean
   /** stronger broadcaster liveness probe (the transport knows the endpoint —
-   *  an HTTP answer proves the socket where txFacts can.t) */
+   *  an HTTP answer proves the socket where txState can't) */
   broadcasterProbe?: () => Promise<boolean>
   /** publish our bfinger identity record in upkeep — opt-in (it costs sats
    *  and makes this agent publicly discoverable; NEKTAR_BFINGER_PUBLISH=1) */
@@ -400,14 +400,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     rememberTx: (tx) => {
       mem.rememberTx(tx)
     },
-    ownOutput: (tx, vout) => {
-      void mem.funds.adopt(tx, vout)
+    ownOutput: async (tx, vout) => {
+      await mem.funds.adopt(tx, vout)
     },
-    settleEscrow: (tx) => {
-      void (async () => {
-        await mem.funds.spent(tx)
-        if (tx.outputs[1]) await mem.funds.adopt(tx, 1)
-      })()
+    settleEscrow: async (tx) => {
+      await mem.funds.spent(tx)
     },
     transport,
     ai: cfg.ai ?? aiFromEnv(),
@@ -849,21 +846,20 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     await deals()
     if (!stopped) await upkeep()
   }
-  // dead-mint cleanup — nothing a reaped mint produced exists on-chain, so
-  // its ghost change output AND its inputs leave the spendable view: the
-  // change out would otherwise be re-selected into the next mint (cascade)
+  // dead-mint cleanup — a reaped mint never landed: its outputs tombstone
+  // and its inputs return to the spendable pool (a truly-spent one is
+  // re-caught by the take-time spend check)
   const ghostMint = (tree: import('@bsv/sdk').Transaction): void => {
-    void mem.funds.died(tree.id('hex'))
+    void mem.funds.died(tree)
   }
   // stuck-mint healing — a mint the chain observer can't see ('unknown') gets
   // one resubmit per age window; only a definitive refusal counts toward the
   // drop verdict — a dead endpoint must never reap a healthy mint.
-  // the mint-gate's heal/reap read is throttled: ChainEvents polls these
-  // txids on its own watch floor and delivers rejections/proofs itself —
-  // this second facts read is only the heal/reap input, so a short cache
-  // loses no signal
+  // txFacts is throttled: ChainEvents polls these txids on its own watch
+  // floor and delivers rejections/proofs itself — this second read is only
+  // the mint-gate's heal/reap input, so a short cache loses no signal
   const statusCache = new Map<string, { at: number; f: import('@nektar/chain').TxFacts }>()
-  const txFactsOf = async (txid: string): Promise<import('@nektar/chain').TxFacts> => {
+  const facts = async (txid: string): Promise<import('@nektar/chain').TxFacts> => {
     const c = statusCache.get(txid)
     if (c !== undefined && Date.now() - c.at < 15_000) return c.f
     if (statusCache.size > 4096) statusCache.clear()
@@ -930,19 +926,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               size: spec.size,
               satsPerOutput: spec.satsPerOutput,
               lock: kind === 'market' ? undefined : spec.lock,
-              takeFunding: async (sats: number) => await mem.funds.take('upkeep', sats),
+              takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],
               broadcast: (tx) => mem.broadcastTx(tx),
               fetchTx: (txid) => mem.fetchTx(txid),
-              txFacts: txFactsOf,
+              facts,
               onReject: (tree) => ghostMint(tree),
               onStuck: (tree) => stuckMint(tree),
-              onSpent: (tree) => {
-                void (async () => {
-                  await mem.funds.spent(tree)
-                  const n = tree.outputs.length - 1
-                  if (n >= 1 && (tree.outputs[n].satoshis ?? 0) > 0) await mem.funds.adopt(tree, n)
-                })()
-              }
+              onSpent: (tree) => void mem.funds.spent(tree)
             })
             // a fresh market tree's slots are usable the moment it's added —
             // anchored ancestry — so wake slot-deferred work now instead of
@@ -987,18 +977,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               ...(cfg.watchPublic !== undefined ? { watch: cfg.watchPublic } : {})
             },
             refs: packsRef !== undefined ? [packsRef] : undefined,
-            takeFunding: async (sats: number) => await mem.funds.take('publish', sats),
+            takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],
             broadcast: (tx) => mem.broadcastTx(tx),
             fetchTx: (txid) => mem.fetchTx(txid),
             allowHttp: localNet,
             now: cfg.now,
-            onSpent: (tx) => {
-              void (async () => {
-                await mem.funds.spent(tx)
-                const n = tx.outputs.length - 1
-                if (n >= 1 && (tx.outputs[n].satoshis ?? 0) > 0) await mem.funds.adopt(tx, n)
-              })()
-            }
+            onSpent: (tx) => void mem.funds.spent(tx)
           })
           if (r.changed) log(`automation: finger seq ${r.seq} ${r.tokenTxid ?? ''}`)
         } catch (e) {
@@ -1383,7 +1367,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     })
   })
   // a rejection callback is only a hint: clear the reconcile throttle for the
-  // affected operation and run a cycle — the engine consults txFacts itself
+  // affected operation and run a cycle — the engine consults txState itself
   mem.onTxRejected((txid: string) => {
     if (stopped) return
     const work = (async () => {

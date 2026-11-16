@@ -1,11 +1,13 @@
-// tx-verdict.test.ts — the hint-vs-verdict split in TxOps: a pushed status
-// string is a wake, never a durable verdict; only first-party deliveries
-// (verified chain events, the abandon horizon, a broadcast refusal) and the
-// ledger's own rows land terminal state. Unit-level — no chain stack needed.
+// tx-verdict.test.ts — the hint-vs-verdict split in TxOps.txFacts: a pushed
+// status string is a wake, never a durable verdict; only first-party
+// deliveries (verified chain events, the abandon horizon, a broadcast
+// refusal) and the ledger's own rows land terminal state. The outside word
+// sits in facts.hint — it can inform 'seen' but can never become a verdict.
+// Unit-level — no chain stack needed.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, UnlockingScript } from '@bsv/sdk'
-import { TxStore, type TxStatusEvent } from '@nektar/chain'
+import { TxStore, hintSeen, type TxStatusEvent } from '@nektar/chain'
 import { TxOps, watcherObservation, type TxOpsDeps } from '../src/txops.js'
 
 const mk = (over: Partial<TxOpsDeps> = {}) => {
@@ -35,7 +37,7 @@ const mkTx = (): Transaction => {
 }
 
 test('tx-verdict: a rejection HINT wakes subscribers but writes no verdict', async () => {
-  const { ops } = mk({ network: 'testnet', hintOf: async () => ({ status: 'REJECTED', answered: true }) })
+  const { ops } = mk({ statusHint: async () => ({ status: 'REJECTED', answered: true }) })
   let fires = 0
   ops.onTxRejected(() => {
     fires++
@@ -44,53 +46,56 @@ test('tx-verdict: a rejection HINT wakes subscribers but writes no verdict', asy
   assert.equal(fires, 1, 'the hint wakes the engine reconcile')
   const f = await ops.txFacts('t1')
   assert.equal(f.verdict, 'pending', 'a status string never lands a durable verdict')
-  assert.equal(f.hint?.status, 'REJECTED', 'the word rides along as the hint')
+  assert.equal(f.hint?.status, 'REJECTED', 'the outside word stays visible in the hint field')
 })
 
 test('tx-verdict: first-party rejection is durable — and a later proof still wins', async () => {
-  const { ops, store } = mk({ network: 'testnet' })
+  const { ops, store } = mk()
   const tx = mkTx()
   const txid = tx.id('hex')
   store.put(tx)
   ops.deliverTxRejected(txid)
   assert.equal((await ops.txFacts(txid)).verdict, 'dead')
-  assert.equal((await ops.txFacts(txid)).verdictFrom, 'first-party')
+  assert.equal((await ops.txFacts(txid)).source, 'first-party')
   ops.deliverTxProof(txid, { blockHeight: 7 } as never)
   assert.equal((await ops.txFacts(txid)).verdict, 'mined', 'a merkle path in hand outranks a recorded verdict')
   assert.equal((await ops.txFacts(txid)).verdict, 'mined', 'the verdict set was cleared — no flip back')
+  assert.equal((await ops.txFacts(txid)).source, 'proof')
 })
 
 test('tx-verdict: abandon + ledger rows are terminal; a stored tx alone is not "seen"', async () => {
-  const { ops } = mk({ network: 'testnet' })
+  const { ops } = mk()
   let fires = 0
   ops.onTxRejected(() => {
     fires++
   })
   ops.deliverTxAbandoned('t1')
   assert.equal(fires, 1, 'the abandon verdict wakes the engine')
-  const fa = await ops.txFacts('t1')
-  assert.equal(fa.verdict, 'dead', 'the abandon horizon IS a terminal verdict')
-  assert.equal(fa.verdictFrom, 'abandon')
+  const f1 = await ops.txFacts('t1')
+  assert.equal(f1.verdict, 'dead', 'the abandon horizon IS a terminal verdict')
+  assert.equal(f1.source, 'abandon')
 
-  const { ops: ops2 } = mk({ network: 'testnet', ledgerState: async () => 'conflicted' })
-  assert.equal((await ops2.txFacts('t2')).verdict, 'dead', "ledger 'conflicted' is first-party truth")
+  const { ops: ops2 } = mk({ ledgerState: async () => 'conflicted' })
+  const f2 = await ops2.txFacts('t2')
+  assert.equal(f2.verdict, 'dead', "ledger 'conflicted' is first-party truth")
+  assert.equal(f2.source, 'first-party')
 
   let status = ''
   const { ops: ops3, store: store3 } = mk({
-    network: 'testnet',
     ledgerState: async () => 'submitted',
-    hintOf: async () => ({ status, answered: true })
+    statusHint: async () => ({ status, answered: true })
   })
   const tx3 = mkTx()
   store3.put(tx3) // prepared-but-unbroadcast sits in the graph
   const txid3 = tx3.id('hex')
   const f3 = await ops3.txFacts(txid3)
-  assert.equal(f3.verdict, 'pending', 'the tx store alone must never answer "seen"')
-  assert.equal(f3.tx, undefined)
+  assert.equal(f3.verdict, 'pending')
+  assert.equal(f3.tx, undefined, 'the tx store alone must never answer "held"')
+  assert.ok(!hintSeen(f3.hint), 'an empty status word is not "seen"')
   status = 'SEEN_ON_NETWORK'
   const f4 = await ops3.txFacts(txid3)
   assert.equal(f4.verdict, 'pending')
-  assert.equal(f4.hint?.status, 'SEEN_ON_NETWORK', 'the seen word is a hint — never a verdict')
+  assert.ok(hintSeen(f4.hint), 'a seen-family status word is the "seen" hint')
 })
 
 test('tx-verdict: watcherObservation — only verified terminal records land durable verdicts', () => {

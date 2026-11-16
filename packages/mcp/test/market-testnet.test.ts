@@ -25,7 +25,6 @@ import {
   WitnessedTracker,
   WocTracker,
   BsvBroadcaster,
-  mainnetHint,
   merklePathMainnet,
   ReserveFunder,
   testTier,
@@ -199,11 +198,11 @@ const mkagent = async (
   } as ChainTracker & Broadcaster
   // fundKey IS the WIF — funding inputs pay the WIF's P2PKH and must be
   // signed by it (anchor/provider path). Identity = WIF pub, same as live.
-  const mem = new NektarMemory(chain, reserve as never, PrivateKey.fromWif(wif), {
+  const mem = new NektarMemory(chain, reserve, PrivateKey.fromWif(wif), {
     network: 'testnet',
     modelId: 'test-model-1',
     feeRateSatPerKb: 1,
-    hintOf: mainnetHint(mc, { wocFallback: true }),
+    statusHint: (txid: string) => bcast.statusHint(txid),
     batchPolicy: { maxLeaves: 1 }
   })
   // live-runtime parity: pull-based proof + tx lookups so mined txs get their

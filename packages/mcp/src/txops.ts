@@ -2,11 +2,11 @@
 // NektarMemory: fetchTx (graph → backend → throttled network lookups),
 // rememberTx/txWire/readTxWire (BEEF/EF wire in+out), verified-proof delivery
 // (deliverTxProof attaches to the owning anchor then notifies), rejection
-// bookkeeping (txRejected + subscribers), and the txFacts status read.
+// bookkeeping (txRejected + subscribers), and the txState tri-state read.
 // Proofs are pushed (events substrate/broadcaster callbacks); the lookups are
 // the single-attempt recovery path for what a push missed while down.
 import type { Transaction, MerklePath } from '@bsv/sdk'
-import { TxStore, txFacts, type TxFacts, type TxHint, type TxStatusEvent } from '@nektar/chain'
+import { TxStore, txFactsOf, type TxFacts, type TxStatusEvent, type StatusHint } from '@nektar/chain'
 import type { TxObservationInput } from '@nektar/automation'
 
 export interface TxOpsDeps {
@@ -29,17 +29,17 @@ export interface TxOpsDeps {
    *  so these are getters, each a single attempt and never a sleep */
   txLookup: () => ((txid: string) => Promise<Transaction | undefined>) | undefined
   proofLookup: () => ((txid: string) => Promise<MerklePath | undefined>) | undefined
-  network?: string
-  /** the outside status read — injected by the runtime (mainnetHint on live
-   *  networks, the adapter's own view on test tiers). The word it returns is
-   *  a hint: it may wake a reconcile, never lands a verdict. */
-  hintOf?: (txid: string) => Promise<TxHint | undefined>
-  /** the caller's tip height — fills facts.depth when a proof exists */
-  heightOf?: () => Promise<number>
+  /** the outside status word for a txid — a HINT, never a verdict; injected
+   *  by the runtime (the broadcaster adapter's `statusHint`) so TxOps never
+   *  hand-rolls the /tx fetch or owns the endpoint default */
+  statusHint?: (txid: string) => Promise<StatusHint>
   /** the durable ledger's own row for a txid — 'rejected'/'conflicted'
    *  states are first-party truth (our own writes), injected by memory
    *  when a ledger exists; absent ledger → the check is skipped */
   ledgerState?: (txid: string) => Promise<string | undefined>
+  /** chain height for facts.depth — injected by the runtime when a tracker
+   *  exists; absent leaves depth unset */
+  height?: () => number | Promise<number>
   /** proof pull cadence — the missed-push recovery floor per txid
    *  (default 120_000; NEKTAR_PROOF_PULL_MS at the construction site) */
   proofPullMs?: number
@@ -51,7 +51,30 @@ export class TxOps {
   private txRejected = new Set<string>()
   private txAbandoned = new Set<string>()
   private txRejectCbs: Array<(txid: string) => void> = []
-  constructor(private deps: TxOpsDeps) {}
+  /** the one transaction-facts answer — held bytes + proof + first-party
+   *  verdicts + abandon horizon compose the verdict; the outside status word
+   *  only ever lands in the separate hint field */
+  private facts: (txid: string) => Promise<TxFacts>
+  constructor(private deps: TxOpsDeps) {
+    this.facts = txFactsOf({
+      // 'seen' basis: anchor set + backend answers only — a prepared-but-
+      // unbroadcast tx in the store is not 'held' (not on the network)
+      held: async (t) => {
+        const local = this.deps.anchorTxs.get(t) ?? this.deps.chain.getTx?.(t)
+        return local instanceof Promise ? await local : local
+      },
+      // proofs held in the tx store count too — a verified path attached by
+      // the push path lives there even when held() has no copy
+      proof: (t) => this.deps.txs().get(t)?.merklePath,
+      rejected: async (t) =>
+        this.txRejected.has(t) ||
+        this.deps.chain.isRejected?.(t) === true ||
+        ['rejected', 'conflicted'].includes((await this.deps.ledgerState?.(t).catch(() => undefined)) ?? ''),
+      abandoned: (t) => this.txAbandoned.has(t),
+      hint: this.deps.statusHint,
+      height: this.deps.height
+    })
+  }
 
   private lookupDue(key: string, everyMs: number): boolean {
     if (Date.now() - (this.lookupAt.get(key) ?? 0) <= everyMs) return false
@@ -142,7 +165,7 @@ export class TxOps {
 
   /** subscribe to rejection/abandonment wakes — fired for verified chain
    *  'rejected'/'double-spent' events, first-party refusals, abandon-horizon
-   *  verdicts AND pushed status hints. A wake is a poke to re-ask txFacts,
+   *  verdicts AND pushed status hints. A wake is a poke to re-ask txState,
    *  never a verdict in itself. */
   onTxRejected(cb: (txid: string) => void): void {
     this.txRejectCbs.push(cb)
@@ -164,7 +187,7 @@ export class TxOps {
     this.notifyTxRejected(txid)
   }
   /** a pushed rejection STATUS (webhook / SSE): wake-only — it pokes
-   *  subscribers into re-asking txFacts but writes no durable verdict */
+   *  subscribers into re-asking txState but writes no durable verdict */
   hintTxRejected(txid: string): void {
     this.notifyTxRejected(txid)
   }
@@ -175,41 +198,19 @@ export class TxOps {
     this.notifyTxRejected(txid)
   }
 
-  /** THE one status answer: mined (merkle path in hand — outranks every
-   *  recorded verdict), dead (first-party truth: a verified chain event, a
-   *  broadcast refusal, the abandon horizon, or the ledger's own terminal
-   *  row), else pending. The outside status word rides along as `hint` —
-   *  a poke to re-ask, never evidence. */
+  /** the one answer about a transaction — bytes held, proof held, depth,
+   *  verdict (mined | pending | dead) with its source, and the outside status
+   *  word as a separate hint that can never travel back into the verdict.
+   *  'rejected'/'conflicted' ledger rows and the recorded reject/abandon
+   *  flags are first-party truth; a merkle path in hand still outranks them. */
   async txFacts(txid: string): Promise<TxFacts> {
-    return await txFacts(txid, {
-      txOf: async (t) => {
-        // anchor bytes and the backend's view only — the tx store is
-        // consulted ONLY for the merkle-path check below, since a
-        // prepared-but-unbroadcast tx lives there and is not 'seen'
-        const local = this.deps.anchorTxs.get(t) ?? this.deps.chain.getTx?.(t)
-        return local instanceof Promise ? await local : local
-      },
-      proofOf: (t) => this.deps.txs().get(t)?.merklePath,
-      rejected: async (t) => {
-        if (this.txRejected.has(t) || this.deps.chain.isRejected?.(t) === true) return true
-        const ledger = await this.deps.ledgerState?.(t).catch(() => undefined)
-        return ledger === 'rejected' || ledger === 'conflicted'
-      },
-      abandoned: (t) => this.txAbandoned.has(t),
-      hintOf: this.deps.hintOf,
-      depthOf: async (mp) => {
-        const tip = await this.deps.heightOf?.()
-        return tip === undefined ? undefined : tip - mp.blockHeight + 1
-      }
-    }).then((f) => {
-      // a proof in hand outranks every recorded verdict — a rejected or
-      // abandoned mark that later proves still counts mined (conflict races)
-      if (f.verdict === 'mined') {
-        this.txRejected.delete(txid)
-        this.txAbandoned.delete(txid)
-      }
-      return f
-    })
+    const f = await this.facts(txid)
+    if (f.verdict === 'mined') {
+      // a proof in hand clears recorded verdicts — conflict races resolve to mined
+      this.txRejected.delete(txid)
+      this.txAbandoned.delete(txid)
+    }
+    return f
   }
 
   /** any tx this instance broadcast and remembers — anchor or attestation
@@ -245,14 +246,4 @@ export function watcherObservation(seen: { ev: TxStatusEvent; verified: boolean 
  *  frees the outpoint again because that spend never landed. */
 export function importable(spender: string | undefined, spenderLedgerState: string | undefined): boolean {
   return spender === undefined || spenderLedgerState === 'rejected' || spenderLedgerState === 'conflicted'
-}
-
-/** refreshFunding reconcile — first-party records only: a stored spender
- *  whose ledger row is live marks the entry spent; the entry's own dead
- *  row (rejected/conflicted) drops it and revives its inputs; no live
- *  record means pending. A broadcaster status word decides nothing. */
-export const reserveVerdict = (spender: string | undefined, spenderState: string | undefined, ownState: string | undefined): 'spent' | 'dead' | 'pending' => {
-  if (ownState === 'rejected' || ownState === 'conflicted') return 'dead'
-  if (spender !== undefined && spenderState !== 'rejected' && spenderState !== 'conflicted') return 'spent'
-  return 'pending'
 }

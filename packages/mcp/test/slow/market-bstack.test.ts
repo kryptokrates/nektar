@@ -581,10 +581,10 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
     const { Transaction, P2PKH } = await import('@bsv/sdk')
     // leave the buyer exactly one coin, mined on this chain: what it pays from
     // it carries a proof, so the escrow travels as BEEF
-    const coin = await b.mem.fundingOuts('deal', 9_000)
+    const coin = await b.mem.fundingOuts(9_000, 'deal')
     for (;;) {
       try {
-        await b.mem.fundingOuts('deal', 1)
+        await b.mem.fundingOuts(1, 'deal')
       } catch {
         break
       }
@@ -598,7 +598,7 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
     await chain.mine(1)
     const proven = await chain.waitProof(mined.id('hex'))
     assert.ok(proven?.merklePath !== undefined)
-    await b.mem.adoptOut(proven, 0)
+    await b.mem.funds.adopt(proven, 0)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     let done = false
     for (let i = 0; i < 100 && !done; i++) {

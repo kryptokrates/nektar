@@ -68,7 +68,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
       transport: transportFor(mem.operatorKey().toPublicKey().toString()),
       ai: new ScriptedExecutor(),
       broadcast: (tx) => mem.broadcastTx(tx),
-      settleEscrow: (tx) => void mem.spentTx(tx),
+      settleEscrow: (tx) => mem.funds.spent(tx),
       afterPrepare: (id) => hooks.afterPrepare?.(id),
       opts: { refundBlocks: opts.refundBlocks ?? 144 }
     })

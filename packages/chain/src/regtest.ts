@@ -534,7 +534,7 @@ export class ReserveFunds extends FundsBase {
 export async function bootstrapReserve(
   cfg: RegtestConfig,
   key: PrivateKey,
-  reserve: ReserveFunder,
+  reserve: { addOwned(tx: Transaction, vout: number): unknown },
   rpc: (m: string, ...p: unknown[]) => Promise<any>,
   opts: { treasuryFile: string; outputs?: number; maxCandidates?: number; maxScan?: number; namespace?: string }
 ): Promise<Transaction | null> {

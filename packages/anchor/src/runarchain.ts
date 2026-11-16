@@ -11,7 +11,7 @@ import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 import { NEKTAR_ANCHOR_ARTIFACT, NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX, contractRp, decodeNektarAnchor, TAG_RPRIME } from '@nektar/contracts'
 const TAG_HEX = toHex(TAG_RPRIME)
 import { toHex, runarSigner, signerPubHex, toSigner, type AnchorData, type Bytes, type SignerLike } from '@nektar/core'
-import type { Broadcaster, Funder } from '@nektar/chain'
+import type { Broadcaster, Funder, FundingOut } from '@nektar/chain'
 
 export interface Head {
   tx: Transaction
@@ -173,10 +173,10 @@ export class NektarProvider implements Provider {
     // one funding input. smallest-first starved on a small change output
     // while big reserve entries sat unused; a list >1 makes runar add every
     // entry as an input (wasteful).
-    const cands = await funds.available()
+    const cands = await funds.outs()
     for (const u of cands) this.known.set(u.tx.id('hex'), u.tx)
     while (cands.length > 0) {
-      const u = cands.reduce((a, b) => (b.satoshis > a.satoshis ? b : a))
+      const u = cands.reduce((a: FundingOut, b: FundingOut) => (b.satoshis > a.satoshis ? b : a))
       if (funds.hold(u.tx.id('hex'), u.vout)) {
         this.held = {
           txid: u.tx.id('hex'),
@@ -367,7 +367,7 @@ export class AnchorChain {
         const sm = /([0-9a-f]{64}):(\d+) utxo already spent/.exec(msg)
         const h = this.getHead()
         if (sm && (!h || `${sm[1]}:${sm[2]}` !== `${h.tx.id('hex')}:${h.vout}`)) {
-          void this.provider.funds?.drop(sm[1], Number(sm[2]))
+          void this.provider.funds?.burn(sm[1], Number(sm[2]))
           if (this.provider.held?.txid === sm[1] && this.provider.held.outputIndex === Number(sm[2])) this.provider.held = undefined
           this.contract = undefined
           if (attempt >= 5) throw e

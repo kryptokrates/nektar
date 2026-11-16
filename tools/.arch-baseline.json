@@ -33,7 +33,7 @@
       "instability": 0.667
     },
     "chain": {
-      "loc": 6355,
+      "loc": 5745,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 854,
@@ -105,7 +105,7 @@
       "instability": 0.333
     },
     "mcp": {
-      "loc": 12035,
+      "loc": 9788,
       "pkgFanout": 16,
       "edges": [
         "anchor",
@@ -125,7 +125,7 @@
         "verify",
         "zk"
       ],
-      "maxFileLoc": 2015,
+      "maxFileLoc": 1976,
       "maxFileFanout": 35,
       "instability": 0.941
     },
@@ -215,12 +215,8 @@
       "loc": 1976,
       "fanout": 35
     },
-    "packages/mcp/src/runtime.ts": {
-      "loc": 570,
-      "fanout": 24
-    },
     "packages/mcp/src/server.ts": {
-      "loc": 2015,
+      "loc": 905,
       "fanout": 14
     }
   },

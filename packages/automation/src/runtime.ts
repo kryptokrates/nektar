@@ -4,7 +4,7 @@ import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
 import type { AutomationHost } from './host.js'
 import { AutomationStore, type OutboxItem } from './store.js'
-import { MarketEngine, TERMINAL, type MarketTransport } from './market.js'
+import { MarketEngine, NONTERMINAL, type MarketTransport } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
 import { runPreflight, WATCHDOG_CHECKS, type PreflightReport } from './preflight.js'
@@ -311,7 +311,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // proof awaiting depth only waits on BLOCKS, so it is excluded —
             // holding the loop hot for it would burn cycles per confirmation
             if (
-              (await store.operations({ notStates: TERMINAL })).filter((o) => o.state !== 'completion_submitted' || o.data.provenHeight === undefined).length >
+              (await store.operations({ states: NONTERMINAL })).filter((o) => o.state !== 'completion_submitted' || o.data.provenHeight === undefined).length >
               0
             )
               rt.hotUntil = Date.now() + 5_000
@@ -539,7 +539,6 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     stop: async () => {
       rt.stopped = true
       if (rt.scheduler !== undefined) await rt.scheduler.stop()
-      if (rt.outboxTimer) clearTimeout(rt.outboxTimer)
       for (const ac of rt.watches.values()) ac.abort()
       rt.watches.clear()
       await Promise.allSettled(rt.inflight)

@@ -210,6 +210,7 @@ export const STATE_LIMITS: Record<string, { maxAgeMs: number; exit: StuckExit }>
   watching: { maxAgeMs: 90 * 86_400_000, exit: 'escalate:human' },
   seizing: { maxAgeMs: 30 * 60_000, exit: 'escalate:human' }
 }
+export const NONTERMINAL = Object.keys(STATE_LIMITS)
 export const TERMINAL = [
   'expired',
   'denied',

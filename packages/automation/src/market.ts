@@ -5,7 +5,7 @@
 // engine class, so no import site changes.
 import { BuyerOps } from './market/buyer.js'
 
-export { STATE_LIMITS, TERMINAL } from './market/types.js'
+export { STATE_LIMITS, NONTERMINAL } from './market/types.js'
 export type { MarketDeps, MarketMemory, MarketMessage, MarketOptions, MarketTransport, StuckExit } from './market/types.js'
 
 export class MarketEngine extends BuyerOps {}

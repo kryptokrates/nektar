@@ -56,7 +56,7 @@ test('custody: takeFunding never overwrites a proof the funder already carried',
 // this call only — a status hint is never written to custody state
 const reserveOps = (
   candidates: Array<{ tx: Transaction; vout: number; satoshis: number }>,
-  txStatus?: (txid: string) => Promise<string>
+  facts?: (txid: string) => Promise<import('@nektar/chain').TxFacts>
 ): { ops: CustodyOps; spent: string[] } => {
   const spent: string[] = []
   const ops = new CustodyOps({
@@ -73,10 +73,15 @@ const reserveOps = (
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},
     proofOf: () => undefined,
-    txStatus
+    facts
   } as CustodyOpsDeps)
   return { ops, spent }
 }
+
+const hintFacts = (status: string): import('@nektar/chain').TxFacts => ({
+  verdict: 'pending',
+  hint: { status, answered: true }
+})
 
 test('custody: takeFunding skips a broadcaster-rejected parent for this call only', async () => {
   const bad = parent()
@@ -91,7 +96,7 @@ test('custody: takeFunding skips a broadcaster-rejected parent for this call onl
     ],
     async (txid) => {
       statuses.push(txid)
-      return txid === bad.id('hex') ? 'REJECTED' : 'SEEN_ON_NETWORK'
+      return hintFacts(txid === bad.id('hex') ? 'REJECTED' : 'SEEN_ON_NETWORK')
     }
   )
   const u = await ops.takeFunding(1000)
@@ -106,7 +111,7 @@ test('custody: a proven candidate is never status-queried', async () => {
   const statuses: string[] = []
   const { ops } = reserveOps([{ tx: p, vout: 0, satoshis: 100_000 }], async (txid) => {
     statuses.push(txid)
-    return 'REJECTED'
+    return hintFacts('REJECTED')
   })
   const u = await ops.takeFunding(1000)
   assert.equal(u.tx, p)
@@ -125,7 +130,7 @@ test('custody: provisionPay throws when the broadcaster rejects right after subm
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},
-    txStatus: async () => 'REJECTED'
+    facts: async () => hintFacts('REJECTED')
   } as CustodyOpsDeps)
   await assert.rejects(
     ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 }),
@@ -147,9 +152,9 @@ test('custody: a seen status returns after one read — bounded confirmation, no
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},
-    txStatus: async () => {
+    facts: async () => {
       reads++
-      return 'SEEN_ON_NETWORK'
+      return hintFacts('SEEN_ON_NETWORK')
     }
   } as CustodyOpsDeps)
   await ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 })

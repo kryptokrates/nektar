@@ -105,7 +105,7 @@
       "instability": 0.333
     },
     "mcp": {
-      "loc": 11090,
+      "loc": 11239,
       "pkgFanout": 16,
       "edges": [
         "anchor",
@@ -125,8 +125,8 @@
         "verify",
         "zk"
       ],
-      "maxFileLoc": 1976,
-      "maxFileFanout": 35,
+      "maxFileLoc": 854,
+      "maxFileFanout": 28,
       "instability": 0.941
     },
     "policy": {
@@ -212,8 +212,12 @@
       "fanout": 10
     },
     "packages/mcp/src/memory.ts": {
-      "loc": 1976,
-      "fanout": 35
+      "loc": 315,
+      "fanout": 25
+    },
+    "packages/mcp/src/memory/base.ts": {
+      "loc": 149,
+      "fanout": 28
     }
   },
   "typeOnlyCycles": []

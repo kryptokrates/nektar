@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 400" role="img" aria-label="Links: jeder Zuhörer braucht eine eigene Kopie. Rechts: einmal senden, das Netz verteilt" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect width="1080" height="400" fill="#fbf8f1"/>
+  <line x1="540" y1="20" x2="540" y2="380" stroke="#d9dee7" stroke-width="3"/>
+
+  <!-- left: one copy per listener -->
+  <text x="270" y="44" text-anchor="middle" font-size="30" font-weight="700" fill="#c2410c">Telefon-Prinzip (heute)</text>
+  <g stroke="#c2410c" stroke-width="5">
+    <line x1="110" y1="200" x2="420" y2="90"/>
+    <line x1="110" y1="200" x2="420" y2="145"/>
+    <line x1="110" y1="200" x2="420" y2="200"/>
+    <line x1="110" y1="200" x2="420" y2="255"/>
+    <line x1="110" y1="200" x2="420" y2="310"/>
+  </g>
+  <circle cx="90" cy="200" r="40" fill="#14213d"/>
+  <text x="90" y="210" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">Sender</text>
+  <g fill="#ffffff" stroke="#14213d" stroke-width="4">
+    <circle cx="440" cy="90" r="18"/>
+    <circle cx="440" cy="145" r="18"/>
+    <circle cx="440" cy="200" r="18"/>
+    <circle cx="440" cy="255" r="18"/>
+    <circle cx="440" cy="310" r="18"/>
+  </g>
+  <text x="270" y="376" text-anchor="middle" font-size="26" fill="#475569">1000 Zuhörer = 1000 Kopien</text>
+
+  <!-- right: send once, the network fans out -->
+  <text x="810" y="44" text-anchor="middle" font-size="30" font-weight="700" fill="#0f766e">Rundfunk-Prinzip</text>
+  <line x1="650" y1="200" x2="800" y2="200" stroke="#0f766e" stroke-width="10"/>
+  <text x="724" y="184" text-anchor="middle" font-size="26" font-weight="700" fill="#0f766e">1×</text>
+  <g stroke="#0f766e" stroke-width="4">
+    <line x1="810" y1="200" x2="980" y2="90"/>
+    <line x1="810" y1="200" x2="980" y2="145"/>
+    <line x1="810" y1="200" x2="980" y2="200"/>
+    <line x1="810" y1="200" x2="980" y2="255"/>
+    <line x1="810" y1="200" x2="980" y2="310"/>
+  </g>
+  <circle cx="630" cy="200" r="40" fill="#14213d"/>
+  <text x="630" y="210" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">Sender</text>
+  <circle cx="810" cy="200" r="34" fill="#0f766e"/>
+  <text x="810" y="209" text-anchor="middle" font-size="24" font-weight="700" fill="#ffffff">Netz</text>
+  <g fill="#ffffff" stroke="#14213d" stroke-width="4">
+    <circle cx="1000" cy="90" r="18"/>
+    <circle cx="1000" cy="145" r="18"/>
+    <circle cx="1000" cy="200" r="18"/>
+    <circle cx="1000" cy="255" r="18"/>
+    <circle cx="1000" cy="310" r="18"/>
+  </g>
+  <text x="810" y="376" text-anchor="middle" font-size="26" fill="#475569">einmal senden – Kosten bleiben gleich</text>
+</svg>

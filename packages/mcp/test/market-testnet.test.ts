@@ -28,6 +28,7 @@ import {
   fetchTxStatus,
   merklePathMainnet,
   ReserveFunder,
+  testTier,
   type MainnetConfig,
   type ChainTracker,
   type Broadcaster
@@ -331,6 +332,10 @@ const STOP_ALL = async (rts: Array<Automation | undefined>) => {
 /** gate: skip the file when the live hosts or the status endpoints are down —
  *  the suite must never fail a CI run just because testnet is unreachable. */
 const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
+  if (testTier() !== 'stack') {
+    t.skip('live testnet suite — opt in with NEKTAR_TEST_TIER=stack')
+    return false
+  }
   if (['alice', 'ben', 'bob'].some((n) => WIF[n] === undefined)) {
     t.skip(`no agent keys at ${KEYS_FILE}`)
     return false

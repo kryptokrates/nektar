@@ -448,9 +448,19 @@ export class MemoryTreasury {
     return outs
   }
 
+  /** splits serialize: parallel testWorld() calls would otherwise pick the
+   *  same candidate outpoints and collide on UTXO_SPENT */
+  private splitQueue: Promise<unknown> = Promise.resolve()
+
   /** one P2PKH split tx paying `outputs` × `sats` to `address`, change back to
    *  the treasury — the memory-tier counterpart of a reserve bootstrap */
   async split(address: string, outputs: number, sats: number): Promise<Transaction> {
+    const run = this.splitQueue.then(() => this.doSplit(address, outputs, sats))
+    this.splitQueue = run.catch(() => undefined)
+    return run
+  }
+
+  private async doSplit(address: string, outputs: number, sats: number): Promise<Transaction> {
     const need = outputs * sats + 5_000
     const tx = new Transaction()
     let inSats = 0

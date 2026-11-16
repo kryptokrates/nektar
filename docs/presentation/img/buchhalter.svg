@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 720" role="img" aria-label="A bezahlt B, indem ein Buchhalter zwei Zeilen in seinem Buch ändert" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect width="540" height="720" fill="#fbf8f1"/>
+
+  <!-- payer and payee -->
+  <circle cx="80" cy="120" r="46" fill="#ffffff" stroke="#14213d" stroke-width="4"/>
+  <text x="80" y="134" text-anchor="middle" font-size="40" font-weight="700" fill="#14213d">A</text>
+  <circle cx="460" cy="120" r="46" fill="#ffffff" stroke="#14213d" stroke-width="4"/>
+  <text x="460" y="134" text-anchor="middle" font-size="40" font-weight="700" fill="#14213d">B</text>
+
+  <!-- arrows via the book -->
+  <path d="M 80 170 L 80 330 L 150 330" fill="none" stroke="#14213d" stroke-width="5"/>
+  <polygon points="150,318 174,330 150,342" fill="#14213d"/>
+  <text x="96" y="250" font-size="26" fill="#475569">bittet</text>
+  <path d="M 390 330 L 460 330 L 460 194" fill="none" stroke="#14213d" stroke-width="5"/>
+  <polygon points="448,194 460,170 472,194" fill="#14213d"/>
+  <text x="334" y="250" font-size="26" fill="#475569">erlaubt?</text>
+
+  <!-- the keeper -->
+  <circle cx="270" cy="196" r="26" fill="#c2410c"/>
+  <path d="M 222 262 Q 270 206 318 262 Z" fill="#c2410c"/>
+  <text x="270" y="150" text-anchor="middle" font-size="26" font-weight="700" fill="#c2410c">Buchhalter</text>
+
+  <!-- the book -->
+  <rect x="174" y="262" width="216" height="200" rx="8" fill="#ffffff" stroke="#14213d" stroke-width="4"/>
+  <rect x="174" y="262" width="216" height="50" rx="8" fill="#14213d"/>
+  <text x="282" y="298" text-anchor="middle" font-size="28" font-weight="700" fill="#ffffff">DAS BUCH</text>
+  <text x="200" y="364" font-size="30" fill="#14213d">A</text>
+  <text x="364" y="364" text-anchor="end" font-size="30" fill="#c2410c">− 10 €</text>
+  <line x1="194" y1="384" x2="370" y2="384" stroke="#d9dee7" stroke-width="3"/>
+  <text x="200" y="428" font-size="30" fill="#14213d">B</text>
+  <text x="364" y="428" text-anchor="end" font-size="30" fill="#0f766e">+ 10 €</text>
+
+  <!-- the stamp -->
+  <g transform="rotate(-10 270 580)">
+    <rect x="150" y="540" width="240" height="84" rx="10" fill="none" stroke="#c2410c" stroke-width="6"/>
+    <text x="270" y="600" text-anchor="middle" font-size="50" font-weight="700" fill="#c2410c">NEIN</text>
+  </g>
+  <text x="270" y="690" text-anchor="middle" font-size="26" fill="#475569">Wer ändern kann, kann ablehnen.</text>
+</svg>

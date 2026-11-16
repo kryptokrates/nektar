@@ -381,3 +381,51 @@ test('abandonedReap: provision rows drop without ghost-mint; self-minted kinds g
   assert.deepEqual(mod.abandonedReap!('market'), { drop: true, ghost: true })
   assert.deepEqual(mod.abandonedReap!('bbox'), { drop: true, ghost: true })
 })
+
+// Stage 7 gate — a silent wait must carry its reason: the deferred outbox
+// row is what 'deals {operationId}' renders as the waiting-on line
+test('waitingOn: deferred rows surface their class and plain reason', async () => {
+  const { store, kx } = await open()
+  await store.enqueue({ actionId: 'a1', operationId: 'op1', kind: 'offer', destination: 'host:x', payload: { hi: 1 } })
+  await store.enqueue({ actionId: 'a2', operationId: 'op1', kind: 'pay', destination: 'host:y', payload: {} })
+  await store.deferOutbox('a1', 'no spendable funding slot', 2_000, 'funding-slot')
+  const w = await store.waitingOn('op1')
+  assert.equal(w.length, 2)
+  const slot = w.find((r) => r.actionId === 'a1')!
+  assert.equal(slot.status, 'pending')
+  assert.equal(slot.deferClass, 'funding-slot')
+  assert.equal(slot.lastError, 'no spendable funding slot')
+  assert.ok(slot.nextAt > 0)
+  const plain = w.find((r) => r.actionId === 'a2')!
+  assert.equal(plain.deferClass, undefined)
+  // acked rows drop out; dead rows stay (a dead row's error IS the reason)
+  await store.ackOutbox('a2')
+  assert.equal((await store.waitingOn('op1')).length, 1)
+  for (let i = 0; i < 10; i++) await store.retryOutbox('a1', 'host unreachable', 2)
+  const dead = (await store.waitingOn('op1'))[0]
+  assert.equal(dead.status, 'dead')
+  assert.equal(dead.lastError, 'host unreachable')
+  await kx.destroy()
+})
+
+test('market: refund window inside the seller safety margin refuses at construction', async () => {
+  const { MarketEngine } = await import('../src/market.js')
+  const { store, kx } = await open()
+  const deps = (opts: { refundBlocks: number; sellerSafetyBlocks?: number }) =>
+    ({
+      store,
+      call: async () => ({}),
+      memory: {} as never,
+      key: PrivateKey.fromRandom(),
+      network: 'regtest',
+      height: async () => 1,
+      fetchTx: async () => undefined,
+      transport: {} as never,
+      ai: {} as never,
+      opts
+    }) as never
+  assert.throws(() => new MarketEngine(deps({ refundBlocks: 2 })), /refundBlocks.*sellerSafetyBlocks/)
+  assert.throws(() => new MarketEngine(deps({ refundBlocks: 5, sellerSafetyBlocks: 5 })), /refundBlocks.*sellerSafetyBlocks/)
+  assert.doesNotThrow(() => new MarketEngine(deps({ refundBlocks: 3, sellerSafetyBlocks: 2 })))
+  await kx.destroy()
+})

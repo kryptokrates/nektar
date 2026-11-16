@@ -19,8 +19,8 @@ import { createHttpApi } from '../src/http.js'
 import { createMcpServer } from '../src/mcp-server.js'
 import { openAutomation, type Automation } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
-import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
+import { testAgent, testPolicyFor, type TestAgent, type TestPolicyOpts } from './agentkit.js'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const AGENT_TEN = ['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor']
@@ -28,58 +28,18 @@ const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replac
 const NET = 'regtest'
 let clock = Date.now()
 
-const policyFor = (pub: string, policyId = 'demo'): AutomationPolicy => ({
-  v: 1,
-  policyId,
-  network: NET,
-  agentPub: pub,
-  roles: ['buyer', 'seller'],
-  notBefore: 0,
-  notAfter: 4_000_000_000_000,
-  domains: ['libfoo'],
-  limits: {
-    perPurchaseSats: 500,
-    dailyPurchaseSats: 1500,
-    perTxFeeSats: 600,
-    dailyFeeSats: 3000,
-    runTotalSats: 6000,
-    maxLockedSats: 1200,
-    maxUnconfirmedSats: 1200,
-    maxUnconfirmedCount: 3
-  },
-  scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 8000 },
-  seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 10, sellableShards: ['guide'] },
-  disclosure: { allowPublic: false },
-  ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
-  sandbox: { mode: 'sandbox-only' }
-})
+const POLICY: TestPolicyOpts = {
+  collectMs: 8000,
+  maxPreparationsPerDay: 10,
+  limits: { dailyPurchaseSats: 1500, dailyFeeSats: 3000, runTotalSats: 6000, maxLockedSats: 1200, maxUnconfirmedSats: 1200 }
+}
+const policyFor = (pub: string, policyId = 'demo'): AutomationPolicy => testPolicyFor(pub, { ...POLICY, policyId })
 
-interface A {
-  mem: NektarMemory
-  rt: Automation
-  pub: string
-  policyHash: string
-}
-const mkagent = async (name: string, o: { hosts: string[]; chain: TestChain; dir: string }): Promise<A> => {
-  const funder = await testFunder(30)
-  const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
-  const pub = mem.operatorKey().toPublicKey().toString()
-  const rt = await openAutomation(mem, {
-    network: NET,
-    dataDir: join(o.dir, name),
-    marketHosts: o.hosts,
-    intervalMs: 0,
-    call: (t2, a) => callTool(mem, t2, a),
-    ai: new ScriptedExecutor(),
-    now: () => clock,
-    // slot-conservation is asserted mid-deal — refill-ahead would mint a
-    // second 64-slot tree the moment the want consumes one leaf
-    treeLowWater: 1,
-    opts: { offerTtlBlocks: 10000, refundBlocks: 10000 }
-  })
-  mem.automation = rt
-  return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator') }
-}
+type A = TestAgent
+const mkagent = async (name: string, o: { hosts: string[]; chain: TestChain; dir: string }): Promise<A> =>
+  // slot-conservation is asserted mid-deal — refill-ahead would mint a
+  // second 64-slot tree the moment the want consumes one leaf (treeLowWater:1)
+  testAgent(name, { ...o, now: () => clock, funderOutputs: 30, treeLowWater: 1, policy: POLICY })
 // real-time yield: want/sell/onTxProof kick a detached cycle that holds `busy`
 // for ~hundreds of ms of real work — without a delay the manual cycles all
 // no-op on `busy` and the loop finishes before any detached work lands

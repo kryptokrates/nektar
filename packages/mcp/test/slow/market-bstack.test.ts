@@ -10,9 +10,9 @@ import { NektarMemory } from '../../src/memory.js'
 import { callTool } from '../../src/server.js'
 import { openAutomation, type Automation } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
-import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 import type { MarketMessage } from '@nektar/automation'
+import { testAgent, respawnAgent, testPolicyFor, type TestAgent, type TestAgentOpts } from '../agentkit.js'
 
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 const FINDING = 'breaking change: libfoo 3.0 renamed connect() to open(); replace connect( with open( to fix the build'
@@ -37,80 +37,18 @@ const bus = () => {
 }
 
 const COLLECT_MS = 2500
-const policyFor = (pub: string): AutomationPolicy => ({
-  v: 1,
-  policyId: 'demo',
-  network: NET,
-  agentPub: pub,
-  roles: ['buyer', 'seller'],
-  notBefore: 0,
-  notAfter: 4_000_000_000_000,
-  domains: ['libfoo'],
-  limits: {
-    perPurchaseSats: 500,
-    dailyPurchaseSats: 1000,
-    perTxFeeSats: 600,
-    dailyFeeSats: 2000,
-    runTotalSats: 5000,
-    maxLockedSats: 1000,
-    maxUnconfirmedSats: 1000,
-    maxUnconfirmedCount: 3
-  },
-  // collectMs is on cfg.now() — the virtual clock only advances 500ms per
-  // pumped round, so 8000 cost 16 rounds (~25s) of every deal before scoring.
-  // 2500 (5 rounds) still lets multi-seller offers land before select().
-  scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: COLLECT_MS },
-  seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 5, sellableShards: ['guide'] },
-  disclosure: { allowPublic: false },
-  ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
-  sandbox: { mode: 'sandbox-only' }
-})
+// collectMs is on cfg.now() — the virtual clock only advances 500ms per
+// pumped round, so 8000 cost 16 rounds (~25s) of every deal before scoring.
+// 2500 (5 rounds) still lets multi-seller offers land before select().
+const policyFor = (pub: string): AutomationPolicy => testPolicyFor(pub, { collectMs: COLLECT_MS })
 
-interface A {
-  mem: NektarMemory
-  rt: Automation
-  pub: string
-  policyHash: string
-  name: string
-}
-interface MkOpts {
-  hosts: string[]
-  msgs?: ReturnType<typeof bus>
-  chain: TestChain
-  logs: string[]
-  dir: string
-  opts?: Partial<import('@nektar/automation').MarketOptions>
-  call?: (tool: string, args: any) => Promise<any>
-  objectStore?: import('@nektar/store').S3ObjectStore
-  /** lane refill floor — leave unset for production-like refill-ahead; set 1
-   *  to keep every leaf's parent tree proven through a deal (BEEF-path tests) */
-  treeLowWater?: number
-}
-const mkagent = async (name: string, o: MkOpts): Promise<A> => {
-  // real upkeep spends across 4 tree lanes + finger + evidence every cycle —
-  // 30 funded outputs ran dry mid-deal ('no utxo of that size' log storms);
-  // change recycles, but trees lock outputs for their lifetime
-  const funder = await testFunder(60)
-  const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1', objectStore: o.objectStore })
-  const pub = mem.operatorKey().toPublicKey().toString()
-  const rt = await openAutomation(mem, {
-    network: NET,
-    dataDir: join(o.dir, name),
-    marketHosts: o.hosts,
-    intervalMs: 0,
-    call: o.call ?? ((t2, a) => callTool(mem, t2, a)),
-    log: (l) => o.logs.push(`${name}:${l}`),
-    ai: new ScriptedExecutor(),
-    now: () => clock,
-    messages: o.msgs?.for(pub),
-    objectStore: o.objectStore,
-    publishFinger: true, // production gates it on NEKTAR_BFINGER_PUBLISH; tests exercise both record-present and record-absent paths via the hosts' finger flag
-    ...(o.treeLowWater !== undefined ? { treeLowWater: o.treeLowWater } : {}),
-    opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts }
-  })
-  mem.automation = rt // bin.ts does the same in production
-  return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name }
-}
+type A = TestAgent
+type MkOpts = TestAgentOpts
+// real upkeep spends across 4 tree lanes + finger + evidence every cycle —
+// the shared builder's 60-output funder; change recycles, but trees lock
+// outputs for their lifetime
+const mkagent = async (name: string, o: MkOpts): Promise<A> =>
+  testAgent(name, { ...o, now: () => clock, publishFinger: true, policy: { collectMs: COLLECT_MS } })
 const sellerize = async (s: A, price: number) => {
   await s.mem.remember('guide', FINDING)
   await s.mem.remember('guide', 'unrelated note about gardening and tomatoes')
@@ -725,23 +663,21 @@ const respawn = async (
     opts?: MkOpts['opts']
     objectStore?: import('@nektar/store').S3ObjectStore
   }
-): Promise<A> => {
-  const rt = await openAutomation(a.mem, {
-    network: NET,
-    dataDir: join(o.dir, o.name),
-    marketHosts: o.hosts,
-    intervalMs: 0,
-    call: (t2, args) => callTool(a.mem, t2, args),
-    log: (l) => o.logs.push(`${o.name}:${l}`),
-    ai: new ScriptedExecutor(),
-    now: () => clock,
-    objectStore: o.objectStore,
-    publishFinger: true,
-    opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts }
-  })
-  a.mem.automation = rt
-  return { mem: a.mem, rt, pub: a.pub, policyHash: await rt.store.approvePolicy(policyFor(a.pub), 'test:operator'), name: o.name }
-}
+): Promise<A> =>
+  await respawnAgent(
+    { ...a, name: o.name },
+    {
+      hosts: o.hosts,
+      chain: o.chain,
+      dir: o.dir,
+      logs: o.logs,
+      now: () => clock,
+      objectStore: o.objectStore,
+      publishFinger: true,
+      opts: o.opts,
+      policy: { collectMs: COLLECT_MS }
+    }
+  )
 const OFFICE = 'nektar_abcdefghij'
 const readBuyer = async (key: import('@bsv/sdk').PrivateKey, hosts: string[], chain: TestChain) => {
   const { readBox } = await import('@nektar/bstack')

@@ -5,14 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { testChain, testFunder, type TestFunder, type TestChain } from '@nektar/chain'
+import { testChain, type TestChain } from '@nektar/chain'
 import { minihost, faulthost } from '@nektar/bstack/testing'
-import { NektarMemory } from '../../src/memory.js'
-import { callTool } from '../../src/server.js'
-import { openAutomation, type Automation } from '@nektar/automation'
-import { ScriptedExecutor } from '@nektar/automation'
-import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
-import type { AutomationPolicy } from '@nektar/automation'
+import type { Automation, AutomationPolicy } from '@nektar/automation'
+import { testAgent, respawnAgent, testPolicyFor, type TestAgent, type TestPolicyOpts } from '../agentkit.js'
 
 // DDIA ch.5/8 resilience plane: deals must survive dead hosts, slow hosts,
 // withholding hosts and mid-deal process kills — and T1 puts numbers on the
@@ -27,39 +23,15 @@ const OFFICE = 'nektar_abcdefghij'
 let clock = Date.now()
 
 const COLLECT_MS = 2500
-const policyFor = (pub: string): AutomationPolicy => ({
-  v: 1,
-  policyId: 'demo',
-  network: NET,
-  agentPub: pub,
-  roles: ['buyer', 'seller'],
-  notBefore: 0,
-  notAfter: 4_000_000_000_000,
-  domains: ['libfoo'],
-  limits: {
-    perPurchaseSats: 500,
-    dailyPurchaseSats: 50_000, // bench runs back-to-back deals — cap is for operators, not the harness
-    perTxFeeSats: 600,
-    dailyFeeSats: 50_000,
-    runTotalSats: 500_000,
-    maxLockedSats: 5000,
-    maxUnconfirmedSats: 5000,
-    maxUnconfirmedCount: 16
-  },
-  scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: COLLECT_MS },
-  seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 50, sellableShards: ['guide'] },
-  disclosure: { allowPublic: false },
-  ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
-  sandbox: { mode: 'sandbox-only' }
-})
-
-interface A {
-  mem: NektarMemory
-  rt: Automation
-  pub: string
-  policyHash: string
-  name: string
+// bench runs back-to-back deals — caps are for operators, not the harness
+const POLICY: TestPolicyOpts = {
+  collectMs: COLLECT_MS,
+  maxPreparationsPerDay: 50,
+  limits: { dailyPurchaseSats: 50_000, dailyFeeSats: 50_000, runTotalSats: 500_000, maxLockedSats: 5000, maxUnconfirmedSats: 5000, maxUnconfirmedCount: 16 }
 }
+const policyFor = (pub: string): AutomationPolicy => testPolicyFor(pub, POLICY)
+
+type A = TestAgent
 const mkagent = async (
   name: string,
   hosts: string[],
@@ -68,45 +40,12 @@ const mkagent = async (
   dir: string,
   opts?: Partial<import('@nektar/automation').MarketOptions>,
   watch?: string
-): Promise<A> => {
-  const funder = await testFunder(60)
-  const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
-  const pub = mem.operatorKey().toPublicKey().toString()
-  const rt = await openAutomation(mem, {
-    network: NET,
-    dataDir: join(dir, name),
-    marketHosts: hosts,
-    intervalMs: 0,
-    call: (t2, a) => callTool(mem, t2, a),
-    log: (l) => logs.push(`${name}:${l}`),
-    ai: new ScriptedExecutor(),
-    now: () => clock,
-    publishFinger: true,
-    ...(watch !== undefined ? { watchHosts: [watch], watchPublic: watch } : {}),
-    opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...opts }
-  })
-  mem.automation = rt
-  return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name }
-}
+): Promise<A> => testAgent(name, { hosts, chain, logs, dir, opts, watch, now: () => clock, publishFinger: true, policy: POLICY })
 // respawn = restart on the SAME memory + dataDir (sqlite survives: kill -9
 // keeps files). The op records rebuild from automation.sqlite; identity and
 // keys come from the unchanged NektarMemory.
-const respawn = async (a: A, hosts: string[], chain: TestChain, logs: string[], dir: string): Promise<A> => {
-  const rt = await openAutomation(a.mem, {
-    network: NET,
-    dataDir: join(dir, a.name),
-    marketHosts: hosts,
-    intervalMs: 0,
-    call: (t2, args) => callTool(a.mem, t2, args),
-    log: (l) => logs.push(`${a.name}:${l}`),
-    ai: new ScriptedExecutor(),
-    now: () => clock,
-    publishFinger: true,
-    opts: { offerTtlBlocks: 10000, refundBlocks: 10000 }
-  })
-  a.mem.automation = rt
-  return { mem: a.mem, rt, pub: a.pub, policyHash: await rt.store.approvePolicy(policyFor(a.pub), 'test:operator'), name: a.name }
-}
+const respawn = async (a: A, hosts: string[], chain: TestChain, logs: string[], dir: string): Promise<A> =>
+  respawnAgent(a, { hosts, chain, logs, dir, now: () => clock, publishFinger: true, policy: POLICY })
 const sellerize = async (s: A, price: number) => {
   await s.mem.remember('guide', FINDING)
   await s.mem.describeShard('guide', { domains: ['libfoo'], offers: [{ kind: 'record', priceSats: price }] })

@@ -23,6 +23,7 @@ import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 import { killSwitchActive } from '@nektar/automation'
 import { requeueAckItems } from '@nektar/automation'
+import { testPolicyFor } from './agentkit.js'
 import { runPreflight } from '@nektar/automation'
 import { issueToken, verifyToken, conformanceStatus, conformanceConfigHash, suiteDigest, TOKEN_TTL_MS } from '@nektar/automation'
 
@@ -332,31 +333,7 @@ async function world(
       deaf: opts.deaf,
       opts: { refundBlocks: opts.refundBlocks ?? 144 }
     })
-  const policyFor = (pub: string): AutomationPolicy => ({
-    v: 1,
-    policyId: 'demo',
-    network: 'regtest',
-    agentPub: pub,
-    roles: ['buyer', 'seller'],
-    notBefore: 0,
-    notAfter: 4_000_000_000_000,
-    domains: ['libfoo'],
-    limits: {
-      perPurchaseSats: 500,
-      dailyPurchaseSats: 1000,
-      perTxFeeSats: 600,
-      dailyFeeSats: 2000,
-      runTotalSats: 5000,
-      maxLockedSats: 1000,
-      maxUnconfirmedSats: 1000,
-      maxUnconfirmedCount: 3
-    },
-    scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 1000 },
-    seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 5, sellableShards: ['guide'] },
-    disclosure: { allowPublic: false },
-    ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
-    sandbox: { mode: 'sandbox-only' }
-  })
+  const policyFor = (pub: string): AutomationPolicy => testPolicyFor(pub)
   const everyone: Agent[] = []
   const add = async (name: string): Promise<Agent> => {
     const funder = await testFunder(30)

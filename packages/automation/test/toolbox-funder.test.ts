@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Beef, MerklePath, PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
-import { ToolboxReserveFunder } from '../src/toolbox.js'
+import { LiveWalletServices, ToolboxReserveFunder } from '../src/toolbox.js'
 
 // Mock BRC-100 wallet: listOutputs serves a canned spendable set + the BEEF
 // the class rebuilds Transaction objects from. internalize/relinquish are
@@ -102,6 +102,35 @@ test('ToolboxReserveFunder: markSpent relinquishes + addOwned dedups', async () 
   await f.addOwned(a, 0)
   assert.equal(f.utxos.length, 1)
   assert.equal(w.internalized.length, 1)
+})
+
+test('LiveWalletServices.postBeef: the relayed tx keeps its input sources — the guard can price it', async () => {
+  // the wallet re-relays its own unconfirmed txs; rebuilt from bare hex the
+  // inputs carried no source outputs and SpendGuard refused every one
+  const key = PrivateKey.fromRandom()
+  const parent = fundingTx(1000)
+  parent.outputs[0].lockingScript = new P2PKH().lock(key.toPublicKey().toHash())
+  const child = new Transaction()
+  child.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  child.addOutput({ lockingScript: new P2PKH().lock(key.toPublicKey().toHash()), satoshis: 900 })
+  await child.sign()
+  const beef = new Beef()
+  beef.mergeTransaction(child)
+  const seen: Transaction[] = []
+  const svc = new LiveWalletServices({
+    chain: 'test',
+    mc: {},
+    tracker: { currentHeight: async () => 1, isValidRootForHeight: async () => true },
+    broadcast: async (tx) => {
+      seen.push(tx)
+      return { status: 'success', txid: tx.id('hex') }
+    }
+  })
+  const r = await svc.postBeef(beef as never, [child.id('hex')])
+  assert.equal(r[0].status, 'success')
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].id('hex'), child.id('hex'))
+  assert.equal(seen[0].inputs[0].sourceTransaction?.outputs[0].satoshis, 1000)
 })
 
 test('ToolboxReserveFunder: a mined funding tx internalizes on its own proof — no parent fetches', async () => {

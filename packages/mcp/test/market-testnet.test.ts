@@ -13,7 +13,7 @@
 // UTXOs exclusively — respawn them afterwards with .state/respawn-agents.sh.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, copyFileSync, existsSync } from 'node:fs'
+import { mkdirSync, copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import knex from 'knex'
@@ -58,11 +58,10 @@ const STATE = fileURLToPath(new URL('../../../../.state/testnet-agents', import.
  *  ahead so publishing never waits on a block. */
 const SUITE_DIR = fileURLToPath(new URL('../../../../.state/tn-suite', import.meta.url))
 
-const WIF: Record<string, string> = {
-  alice: 'cPfqX3j79L1QxVVv77C34Caq2hdRoUA61T5jfFZDGp1syWBNxd37',
-  ben: 'cRJ9mNASGGJ4kTAf2HhN8CjPkbCwJ6xDiWp5DnvL9xveuM9PtuiF',
-  bob: 'cRRCAmoRuN8o5VZo3jWeSf9XjcqeJSSoZ17wUTNSveRyKJHbvyxH'
-}
+// keys live in the gitignored state dir, never in source — the suite skips
+// when they are absent (see `live`)
+const KEYS_FILE = join(STATE, 'agent-keys.json')
+const WIF: Record<string, string> = existsSync(KEYS_FILE) ? (JSON.parse(readFileSync(KEYS_FILE, 'utf8')) as Record<string, string>) : {}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -322,6 +321,10 @@ const STOP_ALL = async (rts: Array<Automation | undefined>) => {
 /** gate: skip the file when the live hosts or the status endpoints are down —
  *  the suite must never fail a CI run just because testnet is unreachable. */
 const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
+  if (['alice', 'ben', 'bob'].some((n) => WIF[n] === undefined)) {
+    t.skip(`no agent keys at ${KEYS_FILE}`)
+    return false
+  }
   try {
     for (const u of [HOST_A, HOST_B]) {
       const r = await fetch(`${u}/lookup`, {

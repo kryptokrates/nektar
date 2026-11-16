@@ -486,7 +486,14 @@ export class LiveWalletServices implements sdk.WalletServices {
       try {
         const tx = beef.findAtomicTransaction(txid)
         if (tx === undefined) throw new Error('txid not in BEEF')
-        const r = await this.opts.broadcast(Transaction.fromHex(tx.toHex()))
+        // rebuilt from hex the inputs carry no source outputs, and the guard
+        // refuses a spend it cannot price — link each parent the BEEF holds
+        const relay = Transaction.fromHex(tx.toHex())
+        for (const inp of relay.inputs) {
+          const src = inp.sourceTXID === undefined ? undefined : beef.findTxid(inp.sourceTXID)?.tx
+          if (src !== undefined) inp.sourceTransaction = Transaction.fromHex(src.toHex())
+        }
+        const r = await this.opts.broadcast(relay)
         if (r.status !== 'success') throw new Error(r.description ?? 'broadcast failed')
         txidResults.push({ txid, status: 'success' })
       } catch (e) {

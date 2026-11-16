@@ -3,16 +3,9 @@
 // NEKTAR_FEE_VAULT) and both only wire side-effects — no deal-path logic.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { P2PListener } from '@nektar/chain'
+import { P2PListener, type Funds } from '@nektar/chain'
 import type { Transaction } from '@bsv/sdk'
 import { unlockP2PKH, type SignerLike } from '@nektar/core'
-
-export interface ReserveLike {
-  utxos: Array<{ tx: Transaction; vout: number; satoshis: number }>
-  isSpent: (txid: string, vout: number) => boolean
-  markSpent: (txid: string, vout: number) => void
-  addOwned: (tx: Transaction, vout: number) => void
-}
 
 /** optional p2p eyes: watched outpoints fire 'spend', the fee-key script
  *  fires 'pay'; matched txs credit fee-key outputs straight from the wire
@@ -20,24 +13,29 @@ export interface ReserveLike {
 export function wireP2p(opts: {
   peers: string[]
   pkhHex: string
-  reserve: ReserveLike
+  funds: Funds
   addIfNew: (u: { tx: Transaction; vout: number }) => void
   log: (s: string) => void
 }): P2PListener | undefined {
   if (opts.peers.length === 0) return undefined
   const fundPkhScript = `76a914${opts.pkhHex}88ac`
+  const watched = new Set<string>()
   const p2p = new P2PListener({
     peers: opts.peers,
     fetchAll: true,
     maxTxFetchPerSec: 200,
-    outpoints: new Set(opts.reserve.utxos.map((u) => `${u.tx.id('hex')}:${u.vout}`)),
+    outpoints: watched,
     scripts: new Set([fundPkhScript])
   })
+  void opts.funds
+    .outs()
+    .then((outs) => {
+      for (const u of outs) watched.add(`${u.tx.id('hex')}:${u.vout}`)
+    })
+    .catch(() => undefined)
   p2p.on('spend', (t, v, by) => {
-    if (!opts.reserve.isSpent(t, v)) {
-      opts.reserve.markSpent(t, v)
-      opts.log(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`)
-    }
+    void opts.funds.burn(t, v)
+    opts.log(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`)
   })
   p2p.on('pay', (t, v, s) => opts.log(`nektar p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v}\n`))
   p2p.on('tx', (tx) => {
@@ -55,7 +53,7 @@ export function wireP2p(opts: {
  *  enforced by node script eval, and SpendGuard stays in front (defense in
  *  depth). Value: inline JSON or "@/path/to.json" with
  *  {perTxCap,windowCap,windowBlocks,maxFee,fundSats?,vaultSats?}.
- *  Returns a takeReserve for the funder: serve an already-minted vault out
+ *  Returns the funder's vault-backed take: serve an already-minted vault out
  *  sitting in the pool, else mint a fresh capped one through the covenant. */
 export async function setupFeeVault(opts: {
   vaultSpec: string
@@ -137,7 +135,7 @@ export async function setupFeeVault(opts: {
     return { tx, vout: 1, satoshis: tx.outputs[1].satoshis! }
   }
   let minting: Promise<unknown> = Promise.resolve()
-  const takeReserve = async () => {
+  const nextVaultOut = async () => {
     // prefer an already-minted vault out sitting in the pool (e.g. orphaned
     // by a failed anchor build); otherwise mint a fresh capped one through
     // the covenant. Non-vault pool entries are never served for anchoring.
@@ -147,5 +145,5 @@ export async function setupFeeVault(opts: {
     return (await minting) as { tx: Transaction; vout: number; satoshis: number }
   }
   opts.log(`nektar ${opts.net}: NEKTAR_FEE_VAULT set — anchor funding minted through the fee-vault covenant\n`)
-  return takeReserve
+  return nextVaultOut
 }

@@ -229,7 +229,7 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   // raw hex OR BEEF: BEEF carries the funding parents — needed by script
   // validation and supplied to Teranode as Extended
   // Format. Bare legacy hex is fine when the network already knows the
-  // parents (mainnet/ttn broadcasts, tests with registered parents).
+  // parents (mainnet/testnet broadcasts, tests with registered parents).
   let tx: Transaction
   try {
     const h = String(payment.transaction ?? '').replace(/^0x/, '')

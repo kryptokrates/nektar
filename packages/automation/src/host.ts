@@ -40,8 +40,6 @@ export interface AutomationHost extends MarketMemory {
   funds: Funds
   fundingOuts(satoshis: number, purpose?: FundsPurpose): Promise<FundingOut[]>
   fundingStatus(): Promise<{ address: string; balanceSats: number; utxos: number; funded: boolean }>
-  addOwnedOut(tx: Transaction, vout: number): Promise<boolean>
-  markSpentOut(txid: string, vout: number): Promise<void>
   chainHeight(): Promise<number>
   sdkTracker(): ChainTracker
   tipRef(): Promise<{ tip: string; tipHeight: number } | undefined>

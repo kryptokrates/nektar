@@ -125,6 +125,26 @@ const GATES = [
     // packages must be consumed via their index — @nektar/contracts/*.json is generated
     // artifacts addressed by file, not a package-internal deep import.
     allowSpecifier: /@nektar\/contracts\//
+  },
+  {
+    name: 'funds-bookkeeping',
+    re: /(markSpent|addOwned|markSpentOut|addOwnedOut|isSpent|takeReserve)\s*[=(]/g,
+    scope: GATED,
+    // spent/owned/take bookkeeping lives ONLY in the Funds implementations +
+    // the fundsOf adapter. Callers use take/spent/exported/died/adopt/burn on
+    // the Funds surface. Allowlisted seams: the impls themselves, the adapter,
+    // the testtier funder contract, init's scan scratch (it writes no product
+    // state), and runtime's bootstrap-seed/vault-patch wiring.
+    allow: [
+      'packages/chain/src/funds.ts',
+      'packages/chain/src/regtest.ts',
+      'packages/chain/src/memchain.ts',
+      'packages/chain/src/testkit.ts',
+      'packages/chain/src/testtier.ts',
+      'packages/automation/src/toolbox.ts',
+      'packages/mcp/src/init.ts',
+      'packages/mcp/src/runtime.ts'
+    ]
   }
 ]
 

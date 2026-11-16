@@ -1,19 +1,19 @@
-// Read-only TTN smoke: Arcade policy fee, WoC tip, header check, and a real
-// merkle path for a recent coinbase txid verified against TTN headers.
-// NEVER broadcasts — GETs only.
+// Read-only testnet smoke: Arcade policy fee, WoC tip, header check, and a
+// real merkle path for a recent coinbase txid verified against testnet
+// headers. NEVER broadcasts — GETs only.
 import { fetchBroadcasterFeeRate, WocTracker, merklePathMainnet } from '@nektar/chain'
 
 const cfg = {
-  broadcasterUrl: 'https://arcade-v2-ttn-us-1.bsvblockchain.tech',
-  wocUrl: 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test'
+  broadcasterUrl: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech',
+  wocUrl: 'https://api.whatsonchain.com/v1/bsv/test'
 }
 
 const fee = await fetchBroadcasterFeeRate(cfg)
-console.log(`Arcade TTN policy miningFee → ${fee} sat/kB`)
+console.log(`Arcade testnet policy miningFee → ${fee} sat/kB`)
 
 const tracker = new WocTracker(cfg)
 const tip = await tracker.currentHeight()
-console.log(`WoC TTN tip height: ${tip}`)
+console.log(`WoC testnet tip height: ${tip}`)
 const h = await tracker.headerAtHeight(tip - 1)
 console.log(
   `header @${tip - 1}: hash=${h?.hash?.slice(0, 20)}… merkleRoot=${h?.merkleRoot?.slice(0, 20)}… time=${new Date((h?.time ?? 0) * 1000).toISOString()}`

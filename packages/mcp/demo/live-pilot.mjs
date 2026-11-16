@@ -1,5 +1,5 @@
-// Live test-network pilot (BROADCASTS test coins): NEKTAR_NETWORK=testnet|ttn
-//   NEKTAR_DATA_DIR=… NEKTAR_KEY_PASSPHRASE(_FILE)=… [NEKTAR_FUND_TXIDS=…] pnpm ttn:pilot
+// Live test-network pilot (BROADCASTS test coins): NEKTAR_NETWORK=testnet
+//   NEKTAR_DATA_DIR=… NEKTAR_KEY_PASSPHRASE(_FILE)=… [NEKTAR_FUND_TXIDS=…] pnpm live:pilot
 // genesis anchor → BUMP → SPV prove vs live headers → append → rotate →
 // restart (no fork) → STARK membership vs the live anchor; explorer links + fees.
 import { mkdtempSync } from 'node:fs'
@@ -17,7 +17,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const env = {
   ...process.env,
-  NEKTAR_NETWORK: process.env.NEKTAR_NETWORK === 'testnet' ? 'testnet' : 'ttn', // never main here
+  NEKTAR_NETWORK: process.env.NEKTAR_NETWORK === 'main' ? 'main' : 'testnet', // live nets only — never regtest here
   NEKTAR_DATA_DIR: process.env.NEKTAR_DATA_DIR ?? mkdtempSync(path.join(tmpdir(), 'nektar-live-')),
   NEKTAR_BATCH: process.env.NEKTAR_BATCH ?? '8', // pilot closes batches explicitly
   NEKTAR_CONFIRM_MS: process.env.NEKTAR_CONFIRM_MS ?? '20000'
@@ -27,7 +27,8 @@ if (!env.NEKTAR_KEY_PASSPHRASE && !env.NEKTAR_KEY_PASSPHRASE_FILE) {
   process.exit(1)
 }
 const cfg = configFromEnv(env)
-const link = (txid) => `${env.NEKTAR_NETWORK === 'testnet' ? 'https://test.whatsonchain.com' : 'https://woc-ttn.bsvblockchain.tech'}/tx/${txid}`
+const link = (txid) =>
+  `${env.NEKTAR_NETWORK === 'main' ? 'https://whatsonchain.com' : 'https://test.whatsonchain.com'}/tx/${txid}`
 const shard = process.env.NEKTAR_PILOT_SHARD ?? `pilot-${Date.now().toString(36)}`
 
 /** poll prove() until the anchor of `seq` carries a BUMP verified against live headers */

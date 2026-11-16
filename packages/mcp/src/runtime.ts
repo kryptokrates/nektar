@@ -805,18 +805,6 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
     await utxoView.refresh()
     process.stderr.write(`nektar ${net}: wallet backend toolbox (wallet.sqlite) — ${utxoView.utxos.length} funding utxo(s)\n`)
   }
-  /** ReserveLike facade for the sync-only consumers (wireP2p, fee vault) —
-   *  toolbox addOwned returns a promise; swallow it at the boundary */
-  const utxoSync = {
-    get utxos() {
-      return utxoView.utxos
-    },
-    isSpent: (t: string, v: number) => utxoView.isSpent(t, v),
-    markSpent: (t: string, v: number) => utxoView.markSpent(t, v),
-    addOwned: (tx: Transaction, v: number) => {
-      void utxoView.addOwned(tx, v)
-    }
-  }
   // funding wake: every producer that lands a utxo (p2p 'pay', FUND_TXIDS
   // import, indexer discovery, fee-vault mint) signals through addIfNew so
   // waitForFunding's poll can sleep event-driven instead of fixed-cadence
@@ -850,7 +838,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-  wireP2p({ peers: p2pPeers, pkhHex, reserve: utxoSync, addIfNew, log: (s) => process.stderr.write(s) })
+  wireP2p({ peers: p2pPeers, pkhHex, funds: utxoView, addIfNew, log: (s) => process.stderr.write(s) })
   const floor = testNet ? 1 : 100
   const feeRate = Math.max(mc.feeRateSatPerKb ?? floor, await fetchBroadcasterFeeRate(mc).catch(() => floor))
   // utxoView IS the Funds impl — the one coin book for this runtime
@@ -1082,7 +1070,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       pkhHex,
       fundKey: fundKey ?? walletSigner(clientWallet as SignerWallet, FUND_SIGN_ARGS),
       fundAddress,
-      reserve: utxoSync,
+      funds: utxoView,
       broadcast: async (tx) => await chain.broadcast(tx),
       currentHeight: async () => await tracker.currentHeight(),
       net,

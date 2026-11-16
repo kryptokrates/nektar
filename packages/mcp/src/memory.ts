@@ -614,16 +614,6 @@ export class NektarMemory {
   private canEncrypt(): boolean {
     return this.cryptoOps.canEncrypt()
   }
-  /** return a tx output to the reserve as owned (change/escrow outs) —
-   *  tombstones live in the Funds impl; a refused adopt returns false */
-  async addOwnedOut(tx: import('@bsv/sdk').Transaction, vout: number): Promise<boolean> {
-    return await this.funds.adopt(tx, vout)
-  }
-  /** tombstone an outpoint the chain reports spent — or mark one of ours
-   *  consumed after a spend we recorded piecemeal */
-  async markSpentOut(txid: string, vout: number): Promise<void> {
-    await this.funds.burn(txid, vout)
-  }
   /** current chain height for locktime-gated covenant calls */
   async chainHeight(): Promise<number> {
     return this.chain.tipHeight ? await this.chain.tipHeight() : await this.chain.currentHeight()

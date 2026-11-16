@@ -79,7 +79,10 @@ export interface TreeLedger {
    *  its slots are consumed and skipped instead of handed out.
    */
   take(kind?: string, expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined>
-  markProven(txid: string, merklePath?: MerklePath): Promise<void>
+  /** proven means evidenced: the caller must hold the BUMP it claims — a
+   *  pathless mark would label stock proven while its beef carries no
+   *  anchor, which host admission refuses */
+  markProven(txid: string, merklePath: MerklePath): Promise<void>
   /** a funding parent's own proof: write it into every stored tree whose
    *  input ancestry still shows that parent unproven — after this the tree
    *  is ancestry-anchored and its slots serve. true when a beef changed. */
@@ -153,16 +156,14 @@ export class MemoryTreeLedger implements TreeLedger {
     }
     return undefined
   }
-  async markProven(txid: string, merklePath?: MerklePath): Promise<void> {
+  async markProven(txid: string, merklePath: MerklePath): Promise<void> {
     const t = this.trees.get(txid)
     if (t) {
       t.proven = true
-      if (merklePath !== undefined) {
-        t.tree.merklePath = merklePath
-        // a BUMP-anchored tx terminates BEEF ancestry: unproven parents left
-        // attached would be refused by hosts for missing source transactions
-        for (const i of t.tree.inputs) i.sourceTransaction = undefined
-      }
+      t.tree.merklePath = merklePath
+      // a BUMP-anchored tx terminates BEEF ancestry: unproven parents left
+      // attached would be refused by hosts for missing source transactions
+      for (const i of t.tree.inputs) i.sourceTransaction = undefined
     }
   }
   async attachParentPath(txid: string, merklePath: MerklePath): Promise<boolean> {
@@ -327,22 +328,20 @@ export class KnexTreeLedger implements TreeLedger {
     }
     return undefined
   }
-  async markProven(txid: string, merklePath?: MerklePath): Promise<void> {
+  async markProven(txid: string, merklePath: MerklePath): Promise<void> {
     await this.ensure()
     await this.kx.transaction(async (trx) => {
       await trx('bstack_trees').where({ txid }).update({ proven: 1 })
-      if (merklePath !== undefined) {
-        const t = await trx('bstack_trees').where({ txid }).first()
-        if (t) {
-          const tree = Transaction.fromBEEF(JSON.parse(t.beef))
-          tree.merklePath = merklePath
-          // a BUMP-anchored tx terminates BEEF ancestry: unproven parents left
-          // attached would be refused by hosts for missing source transactions
-          for (const i of tree.inputs) i.sourceTransaction = undefined
-          await trx('bstack_trees')
-            .where({ txid })
-            .update({ beef: JSON.stringify(tree.toBEEF()) })
-        }
+      const t = await trx('bstack_trees').where({ txid }).first()
+      if (t) {
+        const tree = Transaction.fromBEEF(JSON.parse(t.beef))
+        tree.merklePath = merklePath
+        // a BUMP-anchored tx terminates BEEF ancestry: unproven parents left
+        // attached would be refused by hosts for missing source transactions
+        for (const i of tree.inputs) i.sourceTransaction = undefined
+        await trx('bstack_trees')
+          .where({ txid })
+          .update({ beef: JSON.stringify(tree.toBEEF()) })
       }
     })
   }

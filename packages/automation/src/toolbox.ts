@@ -24,6 +24,7 @@ import { Services, Setup, StorageKnex, Wallet, WalletStorageManager, randomBytes
 import {
   TeranodeRPCTracker,
   FundsBase,
+  headerPowValid,
   merklePathFor,
   merklePathAtHeight,
   merklePathMainnet,
@@ -423,6 +424,22 @@ export class LiveWalletServices implements sdk.WalletServices {
     const j = (await r.json()) as WocHeader | WocHeader[]
     const h = Array.isArray(j) ? j[0] : j
     if (h === undefined || h.merkleroot === undefined) throw new Error(`woc header ${height}: empty`)
+    // a served header must prove itself — the indexer is a source, not an
+    // authority: hash256(serialization) must equal the claimed hash and sit
+    // under its own declared difficulty before the SDK sees it
+    if (h.hash !== undefined && h.bits !== undefined && h.previousblockhash !== undefined && h.nonce !== undefined) {
+      const hdr = {
+        version: h.version,
+        prevHash: h.previousblockhash,
+        merkleRoot: h.merkleroot,
+        time: h.time,
+        bits: parseInt(h.bits, 16),
+        nonce: h.nonce,
+        height: h.height,
+        hash: h.hash
+      }
+      if (!headerPowValid(hdr)) throw new Error(`woc header ${height}: fails PoW check`)
+    }
     return {
       version: h.version,
       previousHash: h.previousblockhash ?? '0'.repeat(64),

@@ -414,7 +414,7 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
     ])
     const gl = new MemoryTreeLedger()
     await gl.add(gTree, 4, 'bbox')
-    await gl.markProven(gTree.id('hex'))
+    await gl.markProven(gTree.id('hex'), gTree.merklePath!)
     await sendBox({
       key: ghost,
       ledger: gl,
@@ -894,7 +894,7 @@ test('bstack N: a note from a foreign key is ignored and still acked', { timeout
     ])
     const gl = new MemoryTreeLedger()
     await gl.add(gTree, 4, 'bbox')
-    await gl.markProven(gTree.id('hex'))
+    await gl.markProven(gTree.id('hex'), gTree.merklePath!)
     const forged = {
       type: 'note',
       v: 1,
@@ -1486,7 +1486,7 @@ test('bstack W: a sellerNote from a foreign key is ignored and still acked', { t
     ])
     const gl = new MemoryTreeLedger()
     await gl.add(gTree, 4, 'bbox')
-    await gl.markProven(gTree.id('hex'))
+    await gl.markProven(gTree.id('hex'), gTree.merklePath!)
     const sw = await signWant(ghost, { domains: ['libfoo'], maxSats: 500, ts: Date.now(), exp: Date.now() + 3_600_000, net: NET })
     const forged = {
       type: 'sellerNote',

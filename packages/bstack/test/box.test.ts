@@ -14,7 +14,7 @@ const boxLedger = async (key: PrivateKey, n = 8) => {
   const t = await mintTree({ key, funding: fund(key), n, satsPerOutput: 1000, lock: await boxFundingLock(key) })
   prove(t)
   await l.add(t, n, 'bbox')
-  await l.markProven(t.id('hex'))
+  await l.markProven(t.id('hex'), t.merklePath!)
   return l
 }
 
@@ -195,9 +195,9 @@ test('ledger kind: market and bbox slots are separate; 4a schema migrates', asyn
   prove(t1)
   prove(t2)
   await l.add(t1, 4, 'market')
-  await l.markProven(t1.id('hex'))
+  await l.markProven(t1.id('hex'), t1.merklePath!)
   await l.add(t2, 4, 'bbox')
-  await l.markProven(t2.id('hex'))
+  await l.markProven(t2.id('hex'), t2.merklePath!)
   assert.equal(await l.remaining('market'), 4)
   assert.equal(await l.remaining('bbox'), 4)
   const slot = await l.take('bbox')

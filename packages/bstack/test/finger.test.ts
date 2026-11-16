@@ -72,7 +72,7 @@ async function rig(
   const tree = await mintTree({ key, funding: fund(key), n: 8, satsPerOutput: 100, lock: await fingerFundingLock(key) })
   prove(tree)
   await ledger.add(tree, 8, FINGER_KIND)
-  await ledger.markProven(tree.id('hex'))
+  await ledger.markProven(tree.id('hex'), tree.merklePath!)
   const mined = new Map<string, Transaction>()
   const broadcasts: Transaction[] = []
   const hosts = [h1.url, h2.url]

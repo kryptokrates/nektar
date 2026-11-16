@@ -25,7 +25,7 @@ test('ledger: unproven tree is not handed out; once proven it is', async () => {
   await l.add(t, 2)
   assert.equal(await l.take(), undefined)
   prove(t)
-  await l.markProven(t.id('hex'))
+  await l.markProven(t.id('hex'), t.merklePath!)
   assert.ok(await l.take())
 })
 
@@ -51,7 +51,8 @@ test('ledger: anchored ancestry serves only the market lane — bbox still waits
   await l.add(t, 2, 'bbox')
   assert.equal(await l.remaining('bbox'), 0, 'unproven bbox tree must not serve')
   assert.equal(await l.take('bbox'), undefined)
-  await l.markProven(t.id('hex'))
+  prove(t)
+  await l.markProven(t.id('hex'), t.merklePath!)
   assert.equal(await l.remaining('bbox'), 2)
 })
 
@@ -90,7 +91,7 @@ test('ledger.stock: reports proven leaves, anchored leaves and waiting trees', a
     const unanchored = await mintTree({ key, funding: fund(key), n: 5, satsPerOutput: 1000 })
     for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(kx)]) {
       await l.add(mined, 2)
-      await l.markProven(mined.id('hex'))
+      await l.markProven(mined.id('hex'), mined.merklePath!)
       await l.add(anchored, 3)
       await l.add(unanchored, 5)
       assert.deepEqual(await stockOf(l), { proven: 2, anchored: 3, unprovenTrees: 2 })
@@ -402,7 +403,7 @@ test('ledger.adopt: lane-locked outputs of a provision tx become slots', async (
       assert.equal(await l.take('bbox', bboxLock.toHex()), undefined, 'unproven provision stock must not serve bbox')
       assert.equal(await l.take('market'), undefined, 'unanchored provision stock must not serve market zero-conf either')
       prove(tx)
-      await l.markProven(tx.id('hex'), tx.merklePath)
+      await l.markProven(tx.id('hex'), tx.merklePath!)
       const slot = await l.take('bbox', bboxLock.toHex())
       assert.ok(slot !== undefined, 'proven provision tree must serve a bbox slot')
       assert.ok([2, 3].includes(slot.vout), `real output index, got ${slot.vout}`)

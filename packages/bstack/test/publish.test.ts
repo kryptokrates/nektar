@@ -43,7 +43,7 @@ test('publish: same payload twice burns one slot, same txid, both submits ok', a
   const ledger = new MemoryTreeLedger()
   const tree = await provenTree(k)
   await ledger.add(tree, 2)
-  await ledger.markProven(tree.id('hex'))
+  await ledger.markProven(tree.id('hex'), tree.merklePath!)
   const j = new MemoryCarrierJournal()
   const p = { key: k, ledger, journal: j, hosts: [h.url], net: NET }
   const payload = await wantPayload(k)
@@ -203,7 +203,7 @@ test('resubmitCarrier: dead host throws, live host holds it, missing row resolve
   const ledger = new MemoryTreeLedger()
   const tree = await provenTree(k)
   await ledger.add(tree, 2)
-  await ledger.markProven(tree.id('hex'))
+  await ledger.markProven(tree.id('hex'), tree.merklePath!)
   const j = new MemoryCarrierJournal()
   const p = { key: k, ledger, journal: j, hosts: [h1.url], net: NET }
   const payload = await wantPayload(k)

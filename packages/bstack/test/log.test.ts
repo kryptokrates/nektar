@@ -42,7 +42,7 @@ async function rig(o: { drop?: (txid: string) => boolean; h2fail?: () => boolean
   const tree = await mintTree({ key, funding: fund(key), n, satsPerOutput: 100, lock: await logFundingLock(key) })
   prove(tree)
   await ledger.add(tree, n, LOG_KIND)
-  await ledger.markProven(tree.id('hex'))
+  await ledger.markProven(tree.id('hex'), tree.merklePath!)
   const hosts = [h1.url, h2.url]
   await publishMinedLog({ journal, hosts, stream: STREAM, tx: tree, quorum: 'all' })
   return { tracker, h1, h2, key, ledger, journal, state, hosts }
@@ -229,7 +229,7 @@ test('log: one host withholds a batch — the sibling fills it, withheld names i
     const tree = await mintTree({ key, funding: fund(key), n: 8, satsPerOutput: 100, lock: await logFundingLock(key) })
     prove(tree)
     await ledger.add(tree, 8, LOG_KIND)
-    await ledger.markProven(tree.id('hex'))
+    await ledger.markProven(tree.id('hex'), tree.merklePath!)
     const hosts = [h1.url, h2.url]
     await publishMinedLog({ journal, hosts, stream: STREAM, tx: tree, quorum: 'all' })
     for (const n of [1, 2, 3]) await appendLog({ key, ledger, journal, state, hosts, stream: STREAM, lines: lines(n), now: () => n * 1000, quorum: 'all' })

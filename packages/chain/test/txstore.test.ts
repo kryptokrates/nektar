@@ -36,6 +36,35 @@ test('wire: an unproven fat EF falls back to the raw tx', async () => {
   assert.notEqual(wide, child.toHex(), 'wide budgets keep the EF shape')
 })
 
+// spv/reimport-spent: a stored tx marks the outpoints it consumes — the
+// index survives a reload because it derives from the stored raw txs
+test('TxStore.spender: indexes spent outpoints and rebuilds them on load', async () => {
+  const rows: Array<{ txid: string; raw: string; proof?: string }> = []
+  const persist = {
+    load: async () => rows,
+    put: async (r: { txid: string; raw: string; proof?: string }): Promise<void> => {
+      rows.push(r)
+    }
+  }
+  const store = new TxStore(persist)
+  const parent = coinbase(0)
+  const child = new Transaction()
+  child.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  child.addOutput({ satoshis: 80_000, lockingScript: new P2PKH().lock(addr) })
+  await child.sign()
+  store.put(parent)
+  const s = store as TxStore & { spender?: (txid: string, vout: number) => string | undefined }
+  assert.equal(s.spender?.(parent.id('hex'), 0), undefined, 'nothing recorded spends it yet')
+  store.put(child)
+  assert.equal(s.spender?.(parent.id('hex'), 0), child.id('hex'))
+  assert.equal(s.spender?.(parent.id('hex'), 1), undefined)
+  await store.flushed()
+  const reloaded = new TxStore(persist)
+  await reloaded.load()
+  const r2 = reloaded as TxStore & { spender?: (txid: string, vout: number) => string | undefined }
+  assert.equal(r2.spender?.(parent.id('hex'), 0), child.id('hex'), 'the index must rebuild from the stored raw txs')
+})
+
 // a reorg horizon drops only the proofs at/above it — survivors keep theirs
 test('TxStore.clearProofsFrom: proofs at/above the horizon drop, older keep', () => {
   const store = new TxStore()

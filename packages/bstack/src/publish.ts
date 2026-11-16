@@ -4,7 +4,7 @@ import { Transaction } from '@bsv/sdk'
 import { buildCarrier, carrierFundingLockHex, walletOrProto } from './carrier.js'
 import { encodePayload, lanesFor, bodyDomains, type MarketPayload } from './market-wire.js'
 import { submitAll, type Quorum } from './hosts.js'
-import { DERIVATION, FUNDING_TAG, ORIGINATOR, type TreeLedger } from './tree.js'
+import { DERIVATION, FUNDING_TAG, ORIGINATOR, fundingSlotReason, type TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 
 export function artifactHash(payload: MarketPayload): string {
@@ -45,7 +45,7 @@ export async function publishArtifact(p: {
     txid = held.txid
   } else {
     const slot = await p.ledger.take('market', lockHex)
-    if (slot === undefined) throw new Error('no funding slot')
+    if (slot === undefined) throw new Error(await fundingSlotReason(p.ledger, 'market'))
     const c = await buildCarrier({ key: p.key, wallet: p.wallet, payload: encodePayload(p.payload), slot })
     beef = c.beef
     txid = c.carrier.id('hex')

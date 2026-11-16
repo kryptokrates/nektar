@@ -890,11 +890,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               wallet,
               ledger: lanes.ledger,
               kind,
-              // non-market lanes can't serve zero-conf (vendored TMs demand
-              // the tree's own path) — keep a full tree's worth of proven
-              // stock ahead so a slot never waits on a block
-              lowWater: kind === 'finger' ? 2 : kind === 'market' ? cfg.treeLowWater : (cfg.treeLowWater ?? cfg.treeSize ?? 64),
-              maxUnproven: kind === 'market' ? cfg.treeMaxUnproven : (cfg.treeMaxUnproven ?? 2),
+              // every lane refills a whole tree ahead: with the proof now
+              // travelling on the FundingOut, an anchored tree serves the
+              // market lane at once, and proven stock is already there when
+              // the vendored-codec lanes (which demand the tree's own mined
+              // path) need it
+              lowWater: kind === 'finger' ? 2 : (cfg.treeLowWater ?? cfg.treeSize ?? 64),
+              maxUnproven: cfg.treeMaxUnproven ?? 2,
               size: kind === 'finger' ? 4 : cfg.treeSize,
               satsPerOutput: kind === 'log' || kind === 'finger' ? 100 : undefined,
               lock:
@@ -1422,6 +1424,15 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             bbox: await lanes.ledger.remaining('bbox'),
             log: await lanes.ledger.remaining('log'),
             finger: await lanes.ledger.remaining('finger')
+          },
+    laneStock: async (): Promise<Record<string, { proven: number; anchored: number; unprovenTrees: number }>> =>
+      lanes === undefined
+        ? {}
+        : {
+            market: await lanes.ledger.stock('market'),
+            bbox: await lanes.ledger.stock('bbox'),
+            log: await lanes.ledger.stock('log'),
+            finger: await lanes.ledger.stock('finger')
           },
     stop: async () => {
       stopped = true

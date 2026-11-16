@@ -250,3 +250,13 @@ test('republishOne: quorum fail leaves the row unenriched; retry carries the par
     await f.close()
   }
 })
+
+// spv/opaque-wait: a stocked-out lane names its state, not just 'no slot'
+test('publish: an empty ledger reports why the lane is stocked out', async () => {
+  const k = PrivateKey.fromRandom()
+  const payload = await wantPayload(k)
+  await assert.rejects(
+    publishArtifact({ key: k, ledger: new MemoryTreeLedger(), journal: new MemoryCarrierJournal(), hosts: ['http://127.0.0.1:1'], net: NET, payload }),
+    /funding slot \(market: 0 proven, 0 anchored, 0 tree\(s\) awaiting a block\)/
+  )
+})

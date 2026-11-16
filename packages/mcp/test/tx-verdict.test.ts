@@ -95,3 +95,23 @@ test('tx-verdict: watcherObservation — only verified terminal records land dur
     'a hinted MINED is still only seen — no proof in hand'
   )
 })
+
+// spv/reimport-spent gate: a first-party spend record blocks re-import
+// while the spender is live or unrecorded; rejected/conflicted frees it
+test('importable: live spenders block re-import, dead spenders reopen it', async () => {
+  const { importable } = (await import('../src/txops.js')) as {
+    importable?: (spender: string | undefined, spenderLedgerState: string | undefined) => boolean
+  }
+  assert.ok(importable !== undefined, 'txops must export importable')
+  const cases: Array<[string | undefined, string | undefined, boolean]> = [
+    [undefined, undefined, true],
+    [undefined, 'submitted', true],
+    ['aa'.repeat(32), 'submitted', false],
+    ['aa'.repeat(32), 'confirmed', false],
+    ['aa'.repeat(32), 'observed', false],
+    ['aa'.repeat(32), undefined, false],
+    ['aa'.repeat(32), 'rejected', true],
+    ['aa'.repeat(32), 'conflicted', true]
+  ]
+  for (const [spender, st, want] of cases) assert.equal(importable(spender, st), want, 'spender=' + spender + ' state=' + st)
+})

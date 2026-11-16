@@ -235,3 +235,12 @@ export function watcherObservation(seen: { ev: TxStatusEvent; verified: boolean 
     return { status: 'seen', source: 'broadcaster' }
   return undefined
 }
+
+/** re-import gate (spv/reimport-spent): may this outpoint be imported given
+ *  the txid a stored tx spends it with, and that spender's ledger row state?
+ *  A live or unrecorded spender blocks the import — a first-party record
+ *  beats any index answer; a definitively rejected or conflicted spender
+ *  frees the outpoint again because that spend never landed. */
+export function importable(spender: string | undefined, spenderLedgerState: string | undefined): boolean {
+  return spender === undefined || spenderLedgerState === 'rejected' || spenderLedgerState === 'conflicted'
+}

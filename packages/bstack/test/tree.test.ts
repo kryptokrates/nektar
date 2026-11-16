@@ -6,7 +6,7 @@ import knex from 'knex'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mintTree, DERIVATION, FUNDING_TAG, ORIGINATOR, KnexTreeLedger, MemoryTreeLedger } from '../src/tree.js'
+import { mintTree, DERIVATION, FUNDING_TAG, ORIGINATOR, KnexTreeLedger, MemoryTreeLedger, anchoredTree as anchoredPred } from '../src/tree.js'
 import { anchoredTree, fakeParent, fund, prove } from './helpers.js'
 
 test('tree: n=8 mints 8 funding outputs + change, each decodes our tag', async () => {
@@ -51,6 +51,51 @@ test('ledger: anchored ancestry serves only the market lane — bbox still waits
   assert.equal(await l.take('bbox'), undefined)
   await l.markProven(t.id('hex'))
   assert.equal(await l.remaining('bbox'), 2)
+})
+
+// E1: a funding tx carrying its own proof anchors the fresh tree — the
+// market lane serves it at once while the vendored-codec lanes still wait
+test('ledger: a tree minted on a proven funding parent serves market, never bbox', async () => {
+  const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  try {
+    const key = PrivateKey.fromRandom()
+    const t = await anchoredTree(key, 4)
+    assert.equal(t.merklePath, undefined)
+    assert.equal(anchoredPred(t), true, 'the funding parent proof must anchor the fresh tree')
+    for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(kx)]) {
+      await l.add(t, 4, 'market')
+      assert.ok((await l.take('market')) !== undefined, 'anchored tree must serve the market lane')
+      assert.equal(await l.take('bbox'), undefined)
+    }
+  } finally {
+    await kx.destroy()
+  }
+})
+
+type Stock = { proven: number; anchored: number; unprovenTrees: number }
+// stock() lands on the TreeLedger interface — the cast keeps this file
+// compiling ahead of it
+const stockOf = (l: MemoryTreeLedger | KnexTreeLedger, kind = 'market'): Promise<Stock | undefined> =>
+  (l as unknown as { stock?: (kind: string) => Promise<Stock> }).stock?.(kind) ?? Promise.resolve(undefined)
+
+test('ledger.stock: reports proven leaves, anchored leaves and waiting trees', async () => {
+  const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  try {
+    const key = PrivateKey.fromRandom()
+    const mined = await mintTree({ key, funding: fund(key), n: 2, satsPerOutput: 1000 })
+    prove(mined)
+    const anchored = await anchoredTree(key, 3)
+    const unanchored = await mintTree({ key, funding: fund(key), n: 5, satsPerOutput: 1000 })
+    for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(kx)]) {
+      await l.add(mined, 2)
+      await l.markProven(mined.id('hex'))
+      await l.add(anchored, 3)
+      await l.add(unanchored, 5)
+      assert.deepEqual(await stockOf(l), { proven: 2, anchored: 3, unprovenTrees: 2 })
+    }
+  } finally {
+    await kx.destroy()
+  }
 })
 
 test('ledger (knex): unproven tree with anchored ancestry hands out zero-conf slots', async () => {

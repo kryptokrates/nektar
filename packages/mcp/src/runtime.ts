@@ -39,7 +39,7 @@ import {
   type TxStatusEvent
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
-import { watcherObservation } from './txops.js'
+import { watcherObservation, importable } from './txops.js'
 import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvNum, nektarEnvFlag, setNektarEnv, type SignerWallet } from '@nektar/core'
 import { wireP2p, setupFeeVault } from './setup.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
@@ -831,8 +831,25 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     // legacy tombstone: a marked-spent outpoint must not be revived. Toolbox
     // has no spent-set — the wallet's spendable flag is the truth there.
     if (liveTf === undefined && reserve.isSpent(u.tx.id('hex'), u.vout)) return
-    void utxoView.addOwned(u.tx, u.vout)
-    fundingWake?.()
+    // first-party spend record beats any index or operator-named txid: an
+    // outpoint a stored tx of ours already spends is never re-imported — a
+    // definitively rejected/conflicted spender excepted, since that spend
+    // never landed and the outpoint is genuinely unspent again
+    const spender = txStore.spender(u.tx.id('hex'), u.vout)
+    if (spender === undefined) {
+      void utxoView.addOwned(u.tx, u.vout)
+      fundingWake?.()
+      return
+    }
+    void ledger
+      .walletTx({ txid: spender })
+      .then((w) => {
+        if (importable(spender, w?.state)) {
+          void utxoView.addOwned(u.tx, u.vout)
+          fundingWake?.()
+        }
+      })
+      .catch(() => undefined) // unreadable ledger → stay skipped; the next import pass retries
   }
   // optional p2p eyes: NEKTAR_P2P_PEERS='ip:port,...' — first-hand inv stream
   // watching our reserve outpoints (spend events by ANYONE) and the fee-key

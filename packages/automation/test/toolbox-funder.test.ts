@@ -61,6 +61,34 @@ test('ToolboxReserveFunder: refresh maps spendable basket outputs to txs', async
   assert.equal(await f.has(a.id('hex'), 0), true)
 })
 
+// spv/proofless-funding: a BEEF whose entry carries the tx BUMP hands the
+// utxo out WITH its merkle path — the bare-hex rebuild used to strip it, and
+// every tree minted on that utxo lost its zero-conf anchor
+test('ToolboxReserveFunder: refresh keeps the merkle path a proven BEEF carries', async () => {
+  const a = fundingTx(1000)
+  a.merklePath = new MerklePath(7, [
+    [
+      { offset: 0, hash: '00'.repeat(32) },
+      { offset: 1, hash: a.id('hex'), txid: true }
+    ]
+  ])
+  const w = mkWallet([{ outpoint: `${a.id('hex')}.0`, satoshis: 1000, spendable: true }], a.toBEEF())
+  const f = new ToolboxReserveFunder(w.wallet as never)
+  await f.refresh()
+  assert.equal(f.utxos.length, 1)
+  assert.ok(f.utxos[0].tx.merklePath !== undefined, 'the BEEF-carried proof must survive refresh')
+  assert.equal(f.utxos[0].tx.merklePath?.blockHeight, 7)
+})
+
+test('ToolboxReserveFunder: refresh leaves an unproven tx pathless', async () => {
+  const a = fundingTx(1000)
+  const w = mkWallet([{ outpoint: `${a.id('hex')}.0`, satoshis: 1000, spendable: true }], a.toBEEF())
+  const f = new ToolboxReserveFunder(w.wallet as never)
+  await f.refresh()
+  assert.equal(f.utxos.length, 1)
+  assert.equal(f.utxos[0].tx.merklePath, undefined)
+})
+
 test('ToolboxReserveFunder: takeReserve honors lease, spendCheck and minSats', async () => {
   const a = fundingTx(700)
   const b = fundingTx(900)

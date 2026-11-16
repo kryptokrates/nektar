@@ -8,7 +8,7 @@ import { JObject, type JValue } from '@lightwebinc/bbox-host/codec/jcs.js'
 import { admit } from '@lightwebinc/bbox-host/codec/admit.js'
 import { submitAll, lookupAll, VerifiedCache, type Quorum } from './hosts.js'
 import { carrierFundingLockHex, walletOrProto } from './carrier.js'
-import type { TreeLedger } from './tree.js'
+import { fundingSlotReason, type TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 
 export const BOX = 'market'
@@ -98,7 +98,7 @@ export async function sendBox(p: {
     txid = hit.txid
   } else {
     const slot = await p.ledger.take('bbox', bboxLockHex)
-    if (slot === undefined) throw new Error('no funding slot')
+    if (slot === undefined) throw new Error(await fundingSlotReason(p.ledger, 'bbox'))
     const nowSec = Math.floor(Date.now() / 1000)
     const content = await sealEnvelope(w, ORIGINATOR, from, to, plain, nowSec)
     const env = { office, to, box: BOX, from, created: nowSec, expires: p.expiresAt ?? nowSec + 86400, content, extra: [] }
@@ -139,7 +139,7 @@ export async function ackBox(p: {
   office?: string
   items: Array<{ txid: string; commitment: string }>
   quorum?: Quorum
-}): Promise<{ receipts: string[]; acked: number; resent: number; skipped: number }> {
+}): Promise<{ receipts: string[]; acked: number; resent: number; skipped: number; stockReason?: string }> {
   const office = p.office ?? DEFAULT_OFFICE
   checkOffice(office)
   const topics = [`tm_bbox_${office}`]
@@ -162,12 +162,14 @@ export async function ackBox(p: {
   }
   let acked = 0,
     skipped = 0
+  let stockOut: string | undefined
   const receipts: string[] = []
   for (let c = 0; c < fresh.length; c += MaxAcks) {
     const chunk = fresh.slice(c, c + MaxAcks)
     const slot = await p.ledger.take('bbox', bboxLock)
     if (slot === undefined) {
       skipped += chunk.length
+      stockOut ??= await fundingSlotReason(p.ledger, 'bbox')
       continue
     }
     const acks = [...new Map(chunk.map((i) => [i.commitment, new Uint8Array(Utils.toArray(i.commitment, 'hex'))])).values()].sort(bytewise)
@@ -187,7 +189,7 @@ export async function ackBox(p: {
       if (s.ok) receipts.push(r.txid)
     })
   )
-  return { receipts, acked, resent, skipped }
+  return { receipts, acked, resent, skipped, ...(stockOut !== undefined ? { stockReason: stockOut } : {}) }
 }
 
 export async function readBox(p: {

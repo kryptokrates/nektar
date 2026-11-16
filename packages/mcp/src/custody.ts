@@ -5,7 +5,7 @@
 // sendSats (one-call on-chain spend, wallet-custody buildOnly path), and the
 // fundingStatus read. The funder itself is the custody view chosen by the
 // runtime — file-backed reserve or the toolbox wallet.
-import { Transaction, LockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
+import { Transaction, LockingScript, MerklePath, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import { unlockP2PKH, signerAddress, type SignerLike } from '@nektar/core'
 import type { FundingOut } from '@nektar/chain'
 
@@ -42,6 +42,10 @@ export interface CustodyOpsDeps {
     | undefined
   network?: string
   feeRateSatPerKb?: number
+  /** the proof the instance already holds for a txid (verified on delivery
+   *  into TxStore) — attached to a funding parent so a tree minted on it can
+   *  serve zero-conf. Never a network lookup: hand over only what we hold. */
+  proofOf?: (txid: string) => MerklePath | undefined
 }
 
 const opReturnScript = (opReturn: string): LockingScript => {
@@ -62,13 +66,18 @@ export class CustodyOps {
   /** one funding outpoint from the fee reserve (StackFunder.take / ReserveFunder.takeReserve / peeked utxo) */
   async takeFunding(satoshis: number): Promise<FundingOut> {
     const f = this.deps.funder
-    if (typeof f.take === 'function') return await f.take(satoshis)
-    if (typeof f.takeReserve === 'function') {
-      const u = await f.takeReserve(undefined, satoshis)
-      if (u) return u
+    let u: FundingOut | undefined
+    if (typeof f.take === 'function') u = await f.take(satoshis)
+    else if (typeof f.takeReserve === 'function') u = (await f.takeReserve(undefined, satoshis)) ?? undefined
+    u ??= (f.utxos ?? []).find((x) => (x.satoshis ?? 0) >= satoshis)
+    if (u === undefined) throw new Error('no funding UTXO available for the attestation tx')
+    // the proof travels with the funds: a path the instance already holds for
+    // the funding parent attaches here so a tree minted on it is anchored.
+    // Held stock only — never fetched, never overwritten.
+    if (u.tx.merklePath === undefined) {
+      const mp = this.deps.proofOf?.(u.tx.id('hex'))
+      if (mp !== undefined) u.tx.merklePath = MerklePath.fromBinary(mp.toBinary())
     }
-    const u = (f.utxos ?? []).find((u) => (u.satoshis ?? 0) >= satoshis)
-    if (!u) throw new Error('no funding UTXO available for the attestation tx')
     return u
   }
 

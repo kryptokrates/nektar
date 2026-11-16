@@ -81,6 +81,10 @@ export interface TreeLedger {
    *  out every future mint of that kind */
   drop(txid: string): Promise<void>
   remaining(kind?: string): Promise<number>
+  /** why a lane came up empty: free leaves on proven trees, free leaves on
+   *  anchored (zero-conf-admissible) unproven trees, and unproven trees of
+   *  the kind still awaiting a block */
+  stock(kind?: string): Promise<{ proven: number; anchored: number; unprovenTrees: number }>
 }
 
 // a tree hosts may fund-accept before it mines: proven, or one unconfirmed
@@ -155,6 +159,19 @@ export class MemoryTreeLedger implements TreeLedger {
       if (serves(t, kind) && t.kind === kind) n++
     }
     return n
+  }
+  async stock(kind = 'market'): Promise<{ proven: number; anchored: number; unprovenTrees: number }> {
+    let proven = 0,
+      anchored = 0,
+      unprovenTrees = 0
+    for (const t of this.trees.values()) if (t.kind === kind && !t.proven) unprovenTrees++
+    for (const k of this.free) {
+      const t = this.trees.get(k.split(':')[0])!
+      if (t.kind !== kind) continue
+      if (t.proven) proven++
+      else if (anchoredTree(t.tree)) anchored++
+    }
+    return { proven, anchored, unprovenTrees }
   }
 }
 
@@ -335,6 +352,38 @@ export class KnexTreeLedger implements TreeLedger {
     }
     return n
   }
+  async stock(kind = 'market'): Promise<{ proven: number; anchored: number; unprovenTrees: number }> {
+    await this.ensure()
+    const r = await this.kx('bstack_tree_outputs as o')
+      .join('bstack_trees as t', 'o.txid', 't.txid')
+      .where('t.proven', 1)
+      .where('o.kind', kind)
+      .count('o.key as c')
+      .first()
+    let anchored = 0
+    for (const row of await this.kx('bstack_tree_outputs as o')
+      .join('bstack_trees as t', 'o.txid', 't.txid')
+      .where('t.proven', 0)
+      .where('o.kind', kind)
+      .groupBy('t.txid', 't.beef')
+      .select('t.beef')
+      .count('o.key as c')) {
+      if (anchoredTree(Transaction.fromBEEF(JSON.parse(row.beef as string)))) anchored += Number(row.c)
+    }
+    const u = await this.kx('bstack_trees').where({ proven: 0, kind }).count('txid as c').first()
+    return { proven: Number(r?.c ?? 0), anchored, unprovenTrees: Number(u?.c ?? 0) }
+  }
+}
+
+/** the stock-out line every funding-slot consumer reports — keeps the
+ *  'funding slot' substring classifyDeliveryError keys on, and says why:
+ *  proven stock, anchored zero-conf stock and trees still awaiting a block.
+ *  A foreign ledger without stock() gets the plain message. */
+export const fundingSlotReason = async (ledger: { stock?: TreeLedger['stock'] }, kind: string): Promise<string> => {
+  const s = await ledger.stock?.(kind)
+  return s === undefined
+    ? 'no funding slot'
+    : `no funding slot (${kind}: ${s.proven} proven, ${s.anchored} anchored, ${s.unprovenTrees} tree(s) awaiting a block)`
 }
 
 export { feeFor, type Fees }

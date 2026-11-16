@@ -287,6 +287,16 @@ export async function openToolboxWallet(args: {
  *  output ≥ sats and materializes its source transaction from the wallet's
  *  own BEEF store; the returned tx is re-parsed into OUR sdk build so
  *  downstream code sees one class identity. */
+// findAtomicTransaction returns the BEEF tx with its merkle path already
+// attached (_Beef_addInputProof) — rebuilding through bare hex strips it and
+// a pathless funding parent can never anchor a tree. Re-attach by copy, the
+// same pattern buildAtomicBeef uses.
+const withPath = (found: Transaction): Transaction => {
+  const tx = Transaction.fromHex(found.toHex())
+  if (found.merklePath !== undefined) tx.merklePath = MerklePath.fromBinary(found.merklePath.toBinary())
+  return tx
+}
+
 export class ToolboxFunder implements Funder {
   constructor(private wallet: Wallet) {}
   async address(): Promise<string> {
@@ -300,7 +310,7 @@ export class ToolboxFunder implements Funder {
     for (const o of candidates) {
       const [txid, vout] = o.outpoint.split('.')
       const tx = beef?.findAtomicTransaction(txid)
-      if (tx !== undefined) return { tx: Transaction.fromHex(tx.toHex()), vout: Number(vout), satoshis: o.satoshis }
+      if (tx !== undefined) return { tx: withPath(tx), vout: Number(vout), satoshis: o.satoshis }
     }
     throw new Error(`toolbox funder: no spendable output >= ${satoshis} sats — top up via fundToolbox()`)
   }
@@ -596,7 +606,7 @@ export class ToolboxReserveFunder {
       .flatMap((o) => {
         const [txid, vout] = o.outpoint.split('.')
         const tx = beef?.findAtomicTransaction(txid)
-        return tx === undefined ? [] : [{ tx: Transaction.fromHex(tx.toHex()), vout: Number(vout), satoshis: o.satoshis }]
+        return tx === undefined ? [] : [{ tx: withPath(tx), vout: Number(vout), satoshis: o.satoshis }]
       })
   }
 

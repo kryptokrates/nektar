@@ -24,6 +24,9 @@ export interface Automation {
   /** free funding-tree slots per kind — { market, bbox, log, finger }; zeros
    *  when no market hosts are configured */
   marketSlots: () => Promise<{ market: number; bbox: number; log: number; finger: number }>
+  /** the stock breakdown behind marketSlots — proven leaves, anchored
+   *  zero-conf leaves and trees still awaiting a block, per kind */
+  laneStock: () => Promise<Record<string, { proven: number; anchored: number; unprovenTrees: number }>>
   /** this agent's blogs deal-journal stream id (undefined when journal off) */
   logStream?: string
   /** on-demand journal view for `deals { operationId }` — own head plus the

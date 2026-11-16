@@ -1899,6 +1899,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
       const w = ctx.ops?.wallet ? ((await ctx.ops.wallet()) as Record<string, unknown>) : ((await mem.fundingStatus()) as unknown as Record<string, unknown>)
       const slots = await au.marketSlots()
+      const laneStock = await au.laneStock()
       const live = (await au.store.policies()).filter((x) => x.revokedAt === undefined)
       return {
         address: w.address,
@@ -1906,6 +1907,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         spendableSats: Number(w.balanceSats ?? 0),
         utxos: Number(w.utxos ?? 0),
         marketSlots: slots,
+        laneStock,
         ...(live.length === 1 ? { budget: await au.store.budgetStatus(live[0].policyHash) } : {})
       }
     }

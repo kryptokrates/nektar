@@ -363,6 +363,7 @@ export class NektarMemory {
       fundSigner: () => this.fundSigner(),
       broadcast: (tx) => this.chain.broadcast(tx),
       txs: (tx) => this.txs.put(tx),
+      proofOf: (txid) => this.txs.get(txid)?.merklePath,
       ledger: () => this.ledger,
       network: this.opts.network,
       feeRateSatPerKb: this.opts.feeRateSatPerKb

@@ -28,6 +28,9 @@ export interface Ingested {
 
 export class TxStore {
   private rows = new Map<string, { raw: string; proof?: MerklePath }>()
+  // outpoint -> txid of a stored tx consuming it — the first-party spend
+  // record the restart re-import gate reads (never an indexer's answer)
+  private spends = new Map<string, string>()
   private writes: Array<Promise<void>> = []
   constructor(
     private readonly persist?: TxPersistence,
@@ -38,6 +41,10 @@ export class TxStore {
     for (const r of (await this.persist?.load()) ?? []) {
       try {
         this.rows.set(r.txid, { raw: r.raw, ...(r.proof !== undefined ? { proof: MerklePath.fromHex(r.proof) } : {}) })
+        const t = Transaction.fromHex(r.raw)
+        for (const i of t.inputs) {
+          if (i.sourceTXID !== undefined) this.spends.set(`${i.sourceTXID}:${i.sourceOutputIndex}`, r.txid)
+        }
       } catch {
         /* unreadable row */
       }
@@ -63,13 +70,36 @@ export class TxStore {
     return this.rows.has(txid)
   }
 
+  /** the txid of a stored transaction whose input spends this outpoint —
+   *  first-party proof the instance already consumed it */
+  spender(txid: string, vout: number): string | undefined {
+    return this.spends.get(`${txid}:${vout}`)
+  }
+
   /** keep `tx` and every ancestor it carries; a proof already held is never dropped */
   put(tx: Transaction, depth = 0): void {
     const txid = tx.id('hex')
+    // every stored tx records the outpoints its inputs consume — subject and
+    // ancestry alike (the recursive ancestor puts below index themselves)
+    for (const i of tx.inputs) {
+      let src = i.sourceTXID
+      if (src === undefined) {
+        try {
+          src = i.sourceTransaction?.id('hex')
+        } catch {
+          src = undefined // EF stand-in: not a real prevout reference
+        }
+      }
+      if (src !== undefined && i.sourceOutputIndex !== undefined) this.spends.set(`${src}:${i.sourceOutputIndex}`, txid)
+    }
     const cur = this.rows.get(txid)
     const proof = cur?.proof ?? tx.merklePath
     if (cur === undefined || (cur.proof === undefined && proof !== undefined)) {
-      if (cur === undefined && this.rows.size >= this.max) this.rows.delete(this.rows.keys().next().value!)
+      if (cur === undefined && this.rows.size >= this.max) {
+        const evicted = this.rows.keys().next().value!
+        this.rows.delete(evicted)
+        for (const [k, v] of this.spends) if (v === evicted) this.spends.delete(k)
+      }
       this.rows.set(txid, { raw: cur?.raw ?? tx.toHex(), ...(proof !== undefined ? { proof } : {}) })
       this.save(txid)
     }

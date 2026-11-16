@@ -385,7 +385,13 @@ export async function readLog(p: { hosts: string[]; stream: string; producer: st
 
 /** Publish one mined transaction's BEEF (with proof) to the log topic —
  *  exactly once per (stream, txid), journaled under `logpub:`. */
-export async function publishMinedLog(p: { journal: CarrierJournal; hosts: string[]; stream: string; tx: Transaction; quorum?: Quorum }): Promise<SubmitAllResult & { txid: string }> {
+export async function publishMinedLog(p: {
+  journal: CarrierJournal
+  hosts: string[]
+  stream: string
+  tx: Transaction
+  quorum?: Quorum
+}): Promise<SubmitAllResult & { txid: string }> {
   const txid = p.tx.id('hex')
   const jkey = `logpub:${p.stream}:${txid}`
   const topics = [logTopic(p.stream)]

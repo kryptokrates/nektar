@@ -25,8 +25,6 @@ const COINBASE_MATURITY = 100
 /** same TTL the stack tier gives watched broadcasts (see testkit WATCH_TTL_MS) */
 const WATCH_TTL_MS = 60_000
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
-
 /** BIP34 coinbase scriptSig: the block height, minimally LE-encoded */
 function pushHeight(h: number): string {
   if (h === 0) return '00'
@@ -330,12 +328,11 @@ export class MemoryChain implements TestChain {
   async mine(n = 1): Promise<void> {
     const minedHere = this.mineSync(n)
     // proofs travel through the observe path, exactly like the stack tier —
-    // tick until every watched txid mined in this call has been delivered
-    for (let i = 0; i < 10; i++) {
-      if (!minedHere.some((id) => this.events.watching(id))) break
-      await this.events.tick()
-      if (minedHere.some((id) => this.events.watching(id))) await sleep(5)
-    }
+    // every tx sealed here that a watcher waits on gets its delivery now:
+    // the rotating tick batch probes a bounded slice per sweep, so a large
+    // interest set can outlast the budget and leave sealed txids unwatched-
+    // pending past the point callers mine for
+    await Promise.all(minedHere.filter((id) => this.events.watching(id)).map(async (id) => await this.events.probeNow(id)))
   }
 
   /** drop the last `n` blocks: their non-coinbase txs return to the mempool

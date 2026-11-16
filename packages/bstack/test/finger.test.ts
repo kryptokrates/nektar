@@ -500,13 +500,24 @@ test('finger: publishSubRecord names the dead host; the journaled row repairs it
   let down = true
   const s = await rig({ failH1: () => down })
   try {
-    const body = new CborMap([{ key: 'v', val: 1n }, { key: 'shard', val: 'smoke' }])
+    const body = new CborMap([
+      { key: 'v', val: 1n },
+      { key: 'shard', val: 'smoke' }
+    ])
     const p = { key: s.key, ledger: s.ledger, journal: s.journal, hosts: s.hosts, kind: 5 as const, id: 1, body }
     const r1 = await publishSubRecord(p)
-    assert.deepEqual(r1.missed.map((m) => m.host), [s.h1.url], 'fresh submit names the dead leg')
+    assert.deepEqual(
+      r1.missed.map((m) => m.host),
+      [s.h1.url],
+      'fresh submit names the dead leg'
+    )
     const r2 = await publishSubRecord(p)
     assert.equal(r2.txid, r1.txid, 'journal hit re-serves the same carrier')
-    assert.deepEqual(r2.missed.map((m) => m.host), [s.h1.url], 'resubmit path names it too')
+    assert.deepEqual(
+      r2.missed.map((m) => m.host),
+      [s.h1.url],
+      'resubmit path names it too'
+    )
     down = false
     // the repair dispatcher hands journal key `finger:sub:{kind}:{id}` to
     // resubmitCarrier — same key publishSubRecord journaled under

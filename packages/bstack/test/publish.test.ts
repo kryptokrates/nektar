@@ -107,7 +107,20 @@ test('ensureTrees: fills to the in-flight bound in one pass, then parks until pr
     return { status: 'success' as const, txid: tx.id('hex') }
   }
   const fetchTx = async (txid: string) => broadcasted.find((t) => t.id('hex') === txid)
-  const p = { key: k, ledger, lowWater: 4, size: 4, satsPerOutput: 100, maxUnproven: 2, takeFunding: async (s: number) => fund(k, 1_000_000), broadcast: bc, fetchTx }
+  // distinct funding per mint — a deterministic fake parent would mint the
+  // same txid twice and the ledger's idempotent add would collapse them
+  let mints = 0
+  const p = {
+    key: k,
+    ledger,
+    lowWater: 4,
+    size: 4,
+    satsPerOutput: 100,
+    maxUnproven: 2,
+    takeFunding: async (s: number) => fund(k, 1_000_000 + 1000 * mints++),
+    broadcast: bc,
+    fetchTx
+  }
   const r1 = await ensureTrees(p)
   assert.equal(r1.minted.length, 2, 'empty stock + headroom -> back-to-back mints to maxUnproven, not one per pass')
   assert.equal(broadcasted.length, 2)

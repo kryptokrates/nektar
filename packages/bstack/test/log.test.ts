@@ -261,7 +261,11 @@ test('log: missed host is named on the append leg; resubmitCarrier re-serves it'
       lines: lines(1),
       now: () => 1000
     })
-    assert.deepEqual(r.missed.map((m) => m.host), [s.h2.url], 'the dead leg is named, not silently dropped')
+    assert.deepEqual(
+      r.missed.map((m) => m.host),
+      [s.h2.url],
+      'the dead leg is named, not silently dropped'
+    )
     assert.deepEqual((await readLog({ hosts: [s.h2.url], stream: STREAM, producer: s.key.toPublicKey().toString(), tracker: s.tracker })).batches, [])
     // the repair dispatcher hands journal key `log:{stream}:{seq}` to
     // resubmitCarrier — same key appendLog journaled under
@@ -286,7 +290,11 @@ test('log: publishMinedLog names the dead host; the journaled row repairs it', a
     prove(tree)
     const pub = await publishMinedLog({ journal: s.journal, hosts: s.hosts, stream: STREAM, tx: tree })
     assert.equal(pub.txid, tree.id('hex'))
-    assert.deepEqual(pub.missed.map((m) => m.host), [s.h2.url], 'the dead leg is named, not silently dropped')
+    assert.deepEqual(
+      pub.missed.map((m) => m.host),
+      [s.h2.url],
+      'the dead leg is named, not silently dropped'
+    )
     down = false
     await resubmitCarrier({ journal: s.journal, host: s.h2.url, key: `logpub:${STREAM}:${pub.txid}` })
     const pub2 = await publishMinedLog({ journal: s.journal, hosts: s.hosts, stream: STREAM, tx: tree })

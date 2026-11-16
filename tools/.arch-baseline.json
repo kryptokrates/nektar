@@ -6,15 +6,15 @@
       "edges": ["chain", "contracts", "core", "identity"],
       "maxFileLoc": 619,
       "maxFileFanout": 8,
-      "instability": 0.444
+      "instability": 0.4
     },
     "automation": {
-      "loc": 7537,
+      "loc": 7577,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1061,
       "maxFileFanout": 20,
-      "instability": 0.857
+      "instability": 0.75
     },
     "automaton": {
       "loc": 375,
@@ -22,23 +22,23 @@
       "edges": ["anchor", "chain", "contracts", "core"],
       "maxFileLoc": 195,
       "maxFileFanout": 5,
-      "instability": 0.667
+      "instability": 0.571
     },
     "bstack": {
-      "loc": 3964,
+      "loc": 4163,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
-      "maxFileLoc": 814,
+      "maxFileLoc": 817,
       "maxFileFanout": 13,
       "instability": 0.667
     },
     "chain": {
-      "loc": 5745,
+      "loc": 5742,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 854,
       "maxFileFanout": 29,
-      "instability": 0.1
+      "instability": 0.091
     },
     "contracts": {
       "loc": 184,
@@ -62,7 +62,7 @@
       "edges": ["core"],
       "maxFileLoc": 117,
       "maxFileFanout": 2,
-      "instability": 0.333
+      "instability": 0.25
     },
     "datalog": {
       "loc": 392,
@@ -70,7 +70,7 @@
       "edges": ["core"],
       "maxFileLoc": 171,
       "maxFileFanout": 4,
-      "instability": 0.2
+      "instability": 0.167
     },
     "e2e": {
       "loc": 5685,
@@ -86,7 +86,7 @@
       "edges": ["core", "datalog"],
       "maxFileLoc": 316,
       "maxFileFanout": 7,
-      "instability": 0.4
+      "instability": 0.333
     },
     "identity": {
       "loc": 1672,
@@ -94,7 +94,7 @@
       "edges": ["core", "crypto"],
       "maxFileLoc": 324,
       "maxFileFanout": 9,
-      "instability": 0.286
+      "instability": 0.25
     },
     "log": {
       "loc": 551,
@@ -102,11 +102,11 @@
       "edges": ["core"],
       "maxFileLoc": 195,
       "maxFileFanout": 6,
-      "instability": 0.333
+      "instability": 0.25
     },
     "mcp": {
-      "loc": 11239,
-      "pkgFanout": 16,
+      "loc": 9138,
+      "pkgFanout": 17,
       "edges": [
         "anchor",
         "automation",
@@ -119,6 +119,7 @@
         "graph",
         "identity",
         "log",
+        "memory",
         "policy",
         "reasoning",
         "store",
@@ -126,8 +127,31 @@
         "zk"
       ],
       "maxFileLoc": 854,
-      "maxFileFanout": 28,
-      "instability": 0.941
+      "maxFileFanout": 24,
+      "instability": 0.944
+    },
+    "memory": {
+      "loc": 2394,
+      "pkgFanout": 14,
+      "edges": [
+        "anchor",
+        "automation",
+        "automaton",
+        "chain",
+        "core",
+        "crypto",
+        "datalog",
+        "graph",
+        "identity",
+        "log",
+        "policy",
+        "reasoning",
+        "store",
+        "verify"
+      ],
+      "maxFileLoc": 467,
+      "maxFileFanout": 12,
+      "instability": 0.933
     },
     "policy": {
       "loc": 122,
@@ -135,7 +159,7 @@
       "edges": ["core"],
       "maxFileLoc": 122,
       "maxFileFanout": 2,
-      "instability": 0.333
+      "instability": 0.25
     },
     "reasoning": {
       "loc": 575,
@@ -143,7 +167,7 @@
       "edges": ["chain", "core", "datalog", "graph", "identity", "verify"],
       "maxFileLoc": 528,
       "maxFileFanout": 9,
-      "instability": 0.75
+      "instability": 0.667
     },
     "store": {
       "loc": 451,
@@ -151,7 +175,7 @@
       "edges": ["core"],
       "maxFileLoc": 192,
       "maxFileFanout": 3,
-      "instability": 0.333
+      "instability": 0.25
     },
     "verify": {
       "loc": 154,
@@ -159,7 +183,7 @@
       "edges": ["chain", "contracts", "core"],
       "maxFileLoc": 151,
       "maxFileFanout": 3,
-      "instability": 0.5
+      "instability": 0.429
     },
     "watcher": {
       "loc": 274,
@@ -170,7 +194,7 @@
       "instability": 1
     },
     "zk": {
-      "loc": 1204,
+      "loc": 1202,
       "pkgFanout": 2,
       "edges": ["contracts", "core"],
       "maxFileLoc": 338,
@@ -184,7 +208,7 @@
       "fanout": 11
     },
     "packages/automation/src/runtime.ts": {
-      "loc": 557,
+      "loc": 567,
       "fanout": 20
     },
     "packages/automation/src/store.ts": {
@@ -192,7 +216,7 @@
       "fanout": 3
     },
     "packages/bstack/src/finger.ts": {
-      "loc": 814,
+      "loc": 817,
       "fanout": 8
     },
     "packages/chain/src/index.ts": {
@@ -213,11 +237,7 @@
     },
     "packages/mcp/src/memory.ts": {
       "loc": 315,
-      "fanout": 25
-    },
-    "packages/mcp/src/memory/base.ts": {
-      "loc": 149,
-      "fanout": 28
+      "fanout": 24
     }
   },
   "typeOnlyCycles": []

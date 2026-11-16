@@ -86,6 +86,10 @@ export async function ensureTrees(p: {
     if ((await p.ledger.remaining(kind)) >= lowWater || unprovenKind >= (p.maxUnproven ?? 1)) break
     const funding = await p.takeFunding(size * satsPerOutput + 2000)
     const tree = await mintTree({ key: p.key, wallet: p.wallet, funding, n: size, satsPerOutput, lock: p.lock })
+    // a funder re-issuing the same UTXO mints the identical tree — the
+    // ledger's idempotent add would leave unprovenKind flat and the loop
+    // would never reach its bound; treat a repeat as the bound itself
+    if (minted.includes(tree.id('hex'))) break
     const r = await p.broadcast(tree)
     if (r.status !== 'success') throw new Error(`ensureTrees: broadcast failed ${JSON.stringify(r).slice(0, 120)}`)
     await p.ledger.add(tree, size, kind)

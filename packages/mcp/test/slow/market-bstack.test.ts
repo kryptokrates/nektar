@@ -1648,15 +1648,17 @@ test('bstack Y: a journal batch dropped by every host shows the gap — complete
     await drive([b.rt, s.rt], chain, 3)
     const bo = (await buyerOp(b))!
 
-    // find the seller batch whose lines mention this deal and drop it
-    // everywhere — `complete` only sees gaps inside the surviving entries'
-    // [lo,hi] window and `gaps` is by construction blind to a missing tail
-    // (head is defined by served data), so the dropped batch must be the
-    // earliest deal batch: interior whenever the journal has a later batch
+    // find a seller batch whose lines mention this deal and drop it
+    // everywhere. `gaps` covers only seqs strictly inside the served
+    // [first,head] window — head is defined by served data, so a leading-
+    // or trailing-edge drop is invisible. A deal seq strictly inside the
+    // deal seqs' own [lo,hi] is interior to the stream by construction.
     const sj = await dealJournal(b, bo.operationId)
-    const seqs = [...new Set((sj.counterparty as { entries: Array<{ seq: number }> }).entries.map((e) => e.seq))]
-    assert.ok(seqs.length >= 1, 'deal entries exist in the seller journal')
-    const mid = seqs[0]
+    const seqs = [...new Set((sj.counterparty as { entries: Array<{ seq: number }> }).entries.map((e) => e.seq))].sort((a, b) => a - b)
+    const lo = seqs[0]!
+    const hi = seqs[seqs.length - 1]!
+    const mid = seqs.find((s) => s > lo && s < hi)
+    assert.ok(mid !== undefined, `deal journal needs an interior batch to drop (got seqs ${seqs.join(',')})`)
     dropped.add(await jTxid(dir, 'seller', mid))
     const bj = await dealJournal(b, bo.operationId)
     const cp = bj.counterparty as { complete: boolean; gaps: Array<{ from: number; to: number }>; entries?: Array<{ seq: number }> }
@@ -1767,7 +1769,10 @@ test('bstack AA: disjoint host sets — records find each other over the shared 
     const { resolveFinger } = await import('@nektar/bstack')
     const tracker = trackerFor(chain)
     const brec = await resolveFinger({ hosts: [h2.url], pub: b.pub, tracker, allowHttp: true })
-    assert.ok(brec !== undefined && brec.body.hosts.includes(h1.url), 'buyer record resolvable on the shared host')
+    assert.ok(
+      brec !== undefined && brec.body.hosts.includes(h1.url),
+      'buyer record resolvable on the shared host | brec=' + JSON.stringify(brec) + ' | logs=' + logs.slice(-15).join(' | ')
+    )
     const srec = await resolveFinger({ hosts: [h2.url], pub: s.pub, tracker, allowHttp: true })
     assert.ok(srec !== undefined && srec.body.hosts.includes(h3.url), 'seller record resolvable on the shared host')
 

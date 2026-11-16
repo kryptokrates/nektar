@@ -2,7 +2,7 @@
 // NektarMemory: fetchTx (graph → backend → throttled network lookups),
 // rememberTx/txWire/readTxWire (BEEF/EF wire in+out), verified-proof delivery
 // (deliverTxProof attaches to the owning anchor then notifies), rejection
-// bookkeeping (txRejected + subscribers), and the txState tri-state read.
+// bookkeeping (txRejected + subscribers), and the txFacts verdict+hint read.
 // Proofs are pushed (events substrate/broadcaster callbacks); the lookups are
 // the single-attempt recovery path for what a push missed while down.
 import type { Transaction, MerklePath } from '@bsv/sdk'
@@ -69,7 +69,7 @@ export class TxOps {
       rejected: async (t) =>
         this.txRejected.has(t) ||
         this.deps.chain.isRejected?.(t) === true ||
-        ['rejected', 'conflicted'].includes(await this.deps.ledgerState?.(t).catch(() => undefined) ?? ''),
+        ['rejected', 'conflicted'].includes((await this.deps.ledgerState?.(t).catch(() => undefined)) ?? ''),
       abandoned: (t) => this.txAbandoned.has(t),
       hint: this.deps.statusHint,
       height: this.deps.height
@@ -165,7 +165,7 @@ export class TxOps {
 
   /** subscribe to rejection/abandonment wakes — fired for verified chain
    *  'rejected'/'double-spent' events, first-party refusals, abandon-horizon
-   *  verdicts AND pushed status hints. A wake is a poke to re-ask txState,
+   *  verdicts AND pushed status hints. A wake is a poke to re-ask txFacts,
    *  never a verdict in itself. */
   onTxRejected(cb: (txid: string) => void): void {
     this.txRejectCbs.push(cb)
@@ -187,7 +187,7 @@ export class TxOps {
     this.notifyTxRejected(txid)
   }
   /** a pushed rejection STATUS (webhook / SSE): wake-only — it pokes
-   *  subscribers into re-asking txState but writes no durable verdict */
+   *  subscribers into re-asking txFacts but writes no durable verdict */
   hintTxRejected(txid: string): void {
     this.notifyTxRejected(txid)
   }

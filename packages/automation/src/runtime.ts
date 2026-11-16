@@ -110,7 +110,7 @@ export interface AutomationConfig {
    *  honored only while the token validates. Implies strict when set. */
   unattended?: boolean
   /** stronger broadcaster liveness probe (the transport knows the endpoint —
-   *  an HTTP answer proves the socket where txState can't) */
+   *  an HTTP answer proves the socket where txFacts can't) */
   broadcasterProbe?: () => Promise<boolean>
   /** publish our bfinger identity record in upkeep — opt-in (it costs sats
    *  and makes this agent publicly discoverable; NEKTAR_BFINGER_PUBLISH=1) */
@@ -1367,7 +1367,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     })
   })
   // a rejection callback is only a hint: clear the reconcile throttle for the
-  // affected operation and run a cycle — the engine consults txState itself
+  // affected operation and run a cycle — the engine consults txFacts itself
   mem.onTxRejected((txid: string) => {
     if (stopped) return
     const work = (async () => {

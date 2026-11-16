@@ -127,6 +127,15 @@ const GATES = [
     allowSpecifier: /@nektar\/contracts\//
   },
   {
+    name: 'status-hint-seam',
+    re: /\b(fetchTxStatus|probeTxStatus|arcTxStatus)\s*\(/g,
+    scope: GATED,
+    // broadcaster status reads are adapter-internal: the outside word reaches
+    // product code only as TxFacts.hint via BsvBroadcaster.statusHint. No new
+    // call site may hand-roll a /tx status fetch outside packages/chain.
+    allow: ['packages/chain/src/mainnet.ts']
+  },
+  {
     name: 'funds-bookkeeping',
     re: /(markSpent|addOwned|markSpentOut|addOwnedOut|isSpent|takeReserve)\s*[=(]/g,
     scope: GATED,

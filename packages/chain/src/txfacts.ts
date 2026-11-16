@@ -77,14 +77,10 @@ export function txFactsOf(deps: TxFactsDeps): (txid: string) => Promise<TxFacts>
       verdict = 'dead'
       source = 'abandon'
     }
-    const depth =
-      proof !== undefined && deps.height !== undefined ? Math.max(0, (await deps.height()) - proof.blockHeight + 1) : undefined
+    const depth = proof !== undefined && deps.height !== undefined ? Math.max(0, (await deps.height()) - proof.blockHeight + 1) : undefined
     // sealed before the hint is asked: the outside word can inform a caller
     // but can never travel back into the verdict above
-    const hint =
-      verdict === 'pending' && deps.hint !== undefined
-        ? await deps.hint(txid).catch(() => ({ status: '', answered: false }))
-        : undefined
+    const hint = verdict === 'pending' && deps.hint !== undefined ? await deps.hint(txid).catch(() => ({ status: '', answered: false })) : undefined
     return { tx, proof, depth, verdict, source, hint }
   }
 }
@@ -106,8 +102,7 @@ export const SEEN_HINTS = [
 export const hintSeen = (h?: StatusHint): boolean => h !== undefined && h.answered && SEEN_HINTS.includes(h.status)
 
 /** an answered rejection-family status — a wake to reap, still not a verdict */
-export const hintRejected = (h?: StatusHint): boolean =>
-  h !== undefined && h.answered && (h.status === 'REJECTED' || h.status.startsWith('DOUBLE_SPEND'))
+export const hintRejected = (h?: StatusHint): boolean => h !== undefined && h.answered && (h.status === 'REJECTED' || h.status.startsWith('DOUBLE_SPEND'))
 
 /** nobody outside could tell us anything — undecidable, unanswered, or no
  *  hint source at all (the silent-eviction case a rejection never covers) */

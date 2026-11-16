@@ -323,7 +323,7 @@ async function world(
       call: (tool, args) => callTool(mem, tool, args),
       height: () => mem.chainHeight(),
       fetchTx: async (txid) => chain.getTx(txid),
-      txState: (txid) => mem.txState(txid),
+      txFacts: (txid) => mem.txFacts(txid),
       transport: transportFor(mem.operatorKey().toPublicKey().toString()),
       ai: new ScriptedExecutor(),
       broadcast: (tx) => mem.broadcastTx(tx),

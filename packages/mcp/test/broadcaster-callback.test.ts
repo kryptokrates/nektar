@@ -106,7 +106,7 @@ test('broadcaster callback: legacy /v1/arc-callback path still works', async (t)
   }
 })
 
-test('broadcaster callback: REJECTED is a hint — wakes subscribers, txState is not rejected', async (t) => {
+test('broadcaster callback: REJECTED is a hint — wakes subscribers, txFacts verdict stays pending', async (t) => {
   const _w = await serve(t)
   if (_w === undefined) return
   const { mem, srv, base } = _w
@@ -119,7 +119,7 @@ test('broadcaster callback: REJECTED is a hint — wakes subscribers, txState is
     const r = await cb(base, '/v1/broadcaster-callback', { timestamp: new Date().toISOString(), txid, txStatus: 'REJECTED' })
     assert.equal(r.status, 200)
     assert.equal(fires, 1, 'the pushed status wakes subscribers (engine reconcile)')
-    assert.equal(await mem.txState(txid), 'unknown', 'a status string carries no proof object — never a durable verdict')
+    assert.equal((await mem.txFacts(txid)).verdict, 'pending', 'a status string carries no proof object — never a durable verdict')
   } finally {
     srv.close()
   }

@@ -54,7 +54,7 @@ export interface PreflightDeps {
   /** per-dependency ceilings (D1 budgets): host ≤5s, chain ≤3s, store ≤10s */
   ceilings?: { hostMs?: number; chainMs?: number; storeMs?: number }
   /** stronger liveness probes the transport can supply when it knows the
-   *  endpoints (a raw HTTP answer proves the socket; txState alone can't
+   *  endpoints (a raw HTTP answer proves the socket; txFacts alone can't
    *  distinguish a dead endpoint vs an unrecognized txid) */
   probes?: { broadcaster?: () => Promise<boolean> }
   /** which checks to run — the watchdog re-runs only the cheap probe tier */
@@ -292,8 +292,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     const stale: string[] = []
     for (const w of inflight.slice(0, 4)) {
       const f = await bounded(mem.txFacts(w.txid), ceil.chainMs, 'txFacts').catch(() => undefined)
-      if (f === undefined || (f.verdict === 'pending' && f.tx === undefined && !hintSeen(f.hint)))
-        stale.push(`${w.txid.slice(0, 12)} (${w.state})`)
+      if (f === undefined || (f.verdict === 'pending' && f.tx === undefined && !hintSeen(f.hint))) stale.push(`${w.txid.slice(0, 12)} (${w.state})`)
     }
     return stale.length === 0
       ? { check: 'watch', pass: true, detail: `${inflight.length} in-flight tx(s) all resolve a chain state` }

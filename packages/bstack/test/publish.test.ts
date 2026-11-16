@@ -339,3 +339,39 @@ test('ensureTrees: a rejected provision tree is reaped without onReject', async 
   assert.equal(rejected, 0, 'provision rows are reaped without tombstoning foreign inputs')
   assert.equal(await led.adopt!(prov, [{ vout: 0, kind: 'market' }]), 1, 'the dropped provision row is gone — re-adopt registers it')
 })
+
+// F5 regression (memory tier): the tree upkeep used to ask a status word that
+// could never carry 'rejected', so a refused provision mint gated the lane
+// forever. Under txFacts a first-party dead verdict — abandon horizon or a
+// ledger terminal row — must reap the row exactly like a rejection hint.
+test('ensureTrees: a provision tree dead on a first-party verdict is reaped', async () => {
+  const k = PrivateKey.fromRandom()
+  const ledger = new MemoryTreeLedger()
+  const marketLock = await fundingLock(new ProtoWallet(k), ORIGINATOR, DERIVATION, FUNDING_TAG)
+  const prov = new Transaction()
+  prov.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromASM('OP_1') })
+  prov.addOutput({ satoshis: 100, lockingScript: marketLock })
+  const led = ledger as unknown as { adopt?: (t: Transaction, s: { vout: number; kind: string }[]) => Promise<number> }
+  assert.equal(await led.adopt!(prov, [{ vout: 0, kind: 'market' }]), 1)
+  let rejected = 0
+  await ensureTrees({
+    key: k,
+    ledger,
+    lowWater: 4,
+    size: 4,
+    satsPerOutput: 100,
+    takeFunding: async () => fund(k, 1_000_000),
+    broadcast: async () => ({ status: 'success' as const }),
+    fetchTx: async () => undefined,
+    facts: async () => ({ verdict: 'dead', source: 'abandon' }),
+    onReject: async () => {
+      rejected++
+    }
+  })
+  assert.equal(rejected, 0, 'provision rows are reaped without tombstoning foreign inputs')
+  assert.ok(
+    (await ledger.unproven()).every((u) => u.txid !== prov.id('hex')),
+    'the dead provision row was reaped, not left gating the lane'
+  )
+  assert.equal(await led.adopt!(prov, [{ vout: 0, kind: 'market' }]), 1, 're-adopt registers the row again')
+})

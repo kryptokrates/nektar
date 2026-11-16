@@ -38,6 +38,8 @@ export { testTier, testWorld, testChain, testFunder, dryFunder, stackOnly } from
 export type { TestTier, TestChain, TestFunder } from './testworld.js'
 export { MemoryChain, MemoryTreasury, MemoryFunder, memoryTreasury } from './memchain.js'
 export type { MemoryChainFaults } from './memchain.js'
+export { pickSpendable } from './funds.js'
+export type { Funds, FundsPurpose } from './funds.js'
 export { SpendGuard } from './spendguard.js'
 export type { SpendGuardOpts, CostRecord } from './spendguard.js'
 export type { PathResult } from './mainnet.js'

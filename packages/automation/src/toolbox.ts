@@ -19,7 +19,7 @@
 // across the boundary by serialization only.
 
 import { createRequire } from 'node:module'
-import { Beef, Hash, MerklePath, PrivateKey, Transaction, Utils, type ChainTracker } from '@bsv/sdk'
+import { Beef, Hash, MerklePath, PrivateKey, Transaction, Utils, type ChainTracker, type WalletInterface } from '@bsv/sdk'
 import { Services, Setup, StorageKnex, Wallet, WalletStorageManager, randomBytesHex, sdk } from '@bsv/wallet-toolbox'
 import {
   TeranodeRPCTracker,
@@ -30,6 +30,8 @@ import {
   utxoStatus,
   type BroadcastResult,
   type Funder,
+  type Funds,
+  type FundsPurpose,
   type FundingOut,
   type MainnetConfig,
   type RegtestConfig
@@ -585,11 +587,19 @@ export class LiveWalletServices implements sdk.WalletServices {
  *  broadcast and relinquishes the output from the wallet's default basket;
  *  `addOwned` internalizes a freshly-created own output. `utxos` is a sync
  *  cache refreshed on every `take` — the async wallet list is the truth. */
-export class ToolboxReserveFunder {
+export class ToolboxReserveFunder implements Funds {
   leased?: (txid: string, vout: number) => Promise<boolean>
+  hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
+  spendCheck?: (txid: string, vout: number) => Promise<boolean>
+  /** upkeep/publish takes refuse below this balance — one deal stays
+   *  affordable; set by the runtime (0 disables the floor) */
+  dealFloor = 0
   private cache: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
+  /** outputs of spends that died before landing — tombstoned for the session
+   *  so a stale index can never re-import a ghost */
+  private deadOuts = new Set<string>()
   constructor(
-    private wallet: Wallet,
+    private wallet: Pick<WalletInterface, 'listOutputs' | 'internalizeAction' | 'relinquishOutput' | 'getPublicKey'>,
     private services?: Pick<sdk.WalletServices, 'getRawTx' | 'getMerklePath'>,
     private log: (s: string) => void = () => {}
   ) {}

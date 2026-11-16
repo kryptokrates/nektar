@@ -1,11 +1,12 @@
 // Real regtest adapters — Teranode propagation /tx for broadcast and
 // Teranode JSON-RPC for headers. Compiled but only exercised on a live stack
 // (NEKTAR_NETWORK=regtest). No tests depend on these.
-import { Transaction, MerklePath } from '@bsv/sdk'
+import { Transaction, MerklePath, Utils } from '@bsv/sdk'
 import { dsha256 } from '@nektar/core'
 import { withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
-import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker } from './interfaces.js'
+import type { Funds, FundsPurpose } from './funds.js'
+import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 
 export interface RegtestConfig {
   rpcUrl: string // http://localhost:9292/
@@ -313,7 +314,7 @@ interface ReserveEntry {
   height?: number
 }
 
-export class ReserveFunder {
+export class ReserveFunder implements Funds {
   keyPair: PrivateKey | undefined
   utxos: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
   private entries: ReserveEntry[] = []
@@ -321,6 +322,11 @@ export class ReserveFunder {
   private file: string
   private pkhHex: string
   heights = new Map<string, number>()
+  /** upkeep/publish takes refuse below this balance — one deal stays
+   *  affordable; set by the runtime (0 disables the floor) */
+  dealFloor = 0
+  hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
+  spendCheck?: (txid: string, vout: number) => Promise<boolean>
 
   /** key custody for signing is NOT needed here — the reserve only tracks
    *  ownership by pubkey hash. Pass `{pkhHex}` under external-wallet custody. */
@@ -447,6 +453,72 @@ export class ReserveFunder {
       }
       return u
     }
+  }
+
+  // ── Funds ────────────────────────────────────────────────────────────────
+
+  private lockHex(): string {
+    return `76a914${this.pkhHex}88ac`
+  }
+
+  address(): string {
+    if (this.keyPair !== undefined) return this.keyPair.toPublicKey().toAddress([0x6f])
+    return Utils.toBase58Check(Array.from(Buffer.from(this.pkhHex, 'hex')), [0x6f])
+  }
+
+  async balance(): Promise<number> {
+    return this.utxos.filter((u) => !this.spent.has(this.op(u.tx.id('hex'), u.vout))).reduce((s, u) => s + u.satoshis, 0)
+  }
+
+  async outs(): Promise<FundingOut[]> {
+    return this.utxos.filter((u) => !this.spent.has(this.op(u.tx.id('hex'), u.vout)))
+  }
+
+  async take(purpose: FundsPurpose, sats: number): Promise<FundingOut> {
+    if (purpose !== 'deal' && this.dealFloor > 0 && (await this.balance()) - sats < this.dealFloor)
+      throw new Error(`funds: ${purpose} take of ${sats} sats would drop the balance below the deal floor (${this.dealFloor})`)
+    const u = await this.takeReserve(this.spendCheck, sats, this.hintSkip)
+    if (u === null) throw new Error(`funds: no outpoint of ${sats} sats or more`)
+    return u
+  }
+
+  /** a broadcast we made: consume its inputs, adopt outputs paying us */
+  spent(tx: Transaction): void {
+    for (const inp of tx.inputs) {
+      const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+      if (id !== undefined) this.markSpent(id, inp.sourceOutputIndex ?? 0)
+    }
+    const lock = this.lockHex()
+    tx.outputs.forEach((o, vout) => {
+      if (o.lockingScript.toHex() === lock) this.addOwned(tx, vout)
+    })
+  }
+
+  /** rejected/abandoned — it never landed: inputs free again (a stale mark
+   *  survives reconcile only when the chain agrees it is spent), the tx's own
+   *  outputs are tombstoned so a later re-import can't revive them */
+  died(tx: Transaction): void {
+    const tid = tx.id('hex')
+    tx.outputs.forEach((_o, vout) => this.markSpent(tid, vout))
+    for (const inp of tx.inputs) {
+      const src = inp.sourceTransaction
+      const id = inp.sourceTXID ?? src?.id('hex')
+      const vout = inp.sourceOutputIndex ?? 0
+      if (id === undefined || src === undefined || !this.spent.has(this.op(id, vout))) continue
+      this.spent.delete(this.op(id, vout))
+      if (!this.utxos.some((u) => this.op(u.tx.id('hex'), u.vout) === this.op(id, vout)))
+        this.utxos.push({ tx: src, vout, satoshis: src.outputs[vout]?.satoshis ?? 0 })
+    }
+    this.save()
+  }
+
+  /** coins sent by someone else — a spent tombstone or a live duplicate is
+   *  refused, everything else becomes spendable stock */
+  adopt(tx: Transaction, vout: number): boolean {
+    if (this.spent.has(this.op(tx.id('hex'), vout))) return false
+    if (this.utxos.some((u) => this.op(u.tx.id('hex'), u.vout) === this.op(tx.id('hex'), vout))) return false
+    this.addOwned(tx, vout)
+    return true
   }
 
   /** Scan generated block coinbases for outputs to our key; add mature ones. */

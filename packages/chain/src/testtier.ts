@@ -3,7 +3,7 @@
 // those three may depend on this file without an import cycle.
 import { nektarEnv } from '@nektar/core'
 import type { MerklePath, PrivateKey, Transaction } from '@bsv/sdk'
-import type { BlockHeader, BroadcastResult, Broadcaster, ChainTracker, Funder, TxStatusEvent } from './interfaces.js'
+import type { BlockHeader, BroadcastResult, Broadcaster, ChainTracker, Funder, FundingOut, TxStatusEvent } from './interfaces.js'
 import type { ChainEvents } from './events.js'
 
 export type TestTier = 'memory' | 'stack' | 'testnet'
@@ -40,6 +40,8 @@ export interface TestFunder extends Funder {
   markSpent(txid: string, vout: number): void
   addOwned(tx: Transaction, vout: number): void
   readonly parents: Transaction[]
+  /** live pool view — Funds adapters observe this; callers must not mutate */
+  readonly utxos: FundingOut[]
 }
 
 export type TestT = { skip: (m?: string) => void; after?: (fn: () => void) => void }

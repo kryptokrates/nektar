@@ -595,6 +595,10 @@ export class ToolboxReserveFunder implements Funds {
    *  affordable; set by the runtime (0 disables the floor) */
   dealFloor = 0
   private cache: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
+  /** in-session holds — a take() reserves the outpoint it returns so a second
+   *  take before the first spend broadcasts can't re-pick it, and the deal
+   *  floor counts them as already committed */
+  private reserved = new Map<string, number>()
   /** outputs of spends that died before landing — tombstoned for the session
    *  so a stale index can never re-import a ghost */
   private deadOuts = new Set<string>()
@@ -629,6 +633,7 @@ export class ToolboxReserveFunder implements Funds {
     await this.refresh()
     for (const u of this.cache.filter((x) => x.satoshis >= floor).sort((a, b) => a.satoshis - b.satoshis)) {
       const txid = u.tx.id('hex')
+      if (this.reserved.has(`${txid}:${u.vout}`)) continue
       if (this.leased !== undefined && (await this.leased(txid, u.vout))) continue
       // a hint-only pass-over — nothing is relinquished or marked
       if (skip !== undefined && (await skip(u.tx, u.vout))) continue
@@ -642,6 +647,7 @@ export class ToolboxReserveFunder implements Funds {
   }
 
   markSpent(txid: string, vout: number): void {
+    this.reserved.delete(`${txid}:${vout}`)
     this.cache = this.cache.filter((u) => !(u.tx.id('hex') === txid && u.vout === vout))
     // basket removal is the honest equivalent — a spent wallet outpoint must
     // never be offered again. Fire-and-forget: the automation ledger's
@@ -661,6 +667,90 @@ export class ToolboxReserveFunder implements Funds {
   async has(txid: string, vout: number): Promise<boolean> {
     const r = await this.wallet.listOutputs({ basket: NEKTAR_BASKET, limit: 1000 })
     return r.outputs.some((o) => o.outpoint === `${txid}.${vout}`)
+  }
+
+  // ── Funds ────────────────────────────────────────────────────────────────
+
+  async address(): Promise<string> {
+    const pub = await this.wallet.getPublicKey({ identityKey: true }, 'nektar')
+    return sdkc.PublicKey.fromString(pub.publicKey).toAddress()
+  }
+
+  private async lockHex(): Promise<string> {
+    const pub = await this.wallet.getPublicKey({ identityKey: true }, 'nektar')
+    return new sdkc.P2PKH().lock(sdkc.PublicKey.fromString(pub.publicKey).toAddress()).toHex()
+  }
+
+  async balance(): Promise<number> {
+    return (await this.outs()).reduce((s, u) => s + u.satoshis, 0)
+  }
+
+  async outs(): Promise<FundingOut[]> {
+    await this.refresh()
+    return this.cache.filter((u) => !this.reserved.has(`${u.tx.id('hex')}:${u.vout}`))
+  }
+
+  async take(purpose: FundsPurpose, sats: number): Promise<FundingOut> {
+    const committed = [...this.reserved.values()].reduce((s, v) => s + v, 0)
+    if (purpose !== 'deal' && this.dealFloor > 0 && (await this.balance()) - committed - sats < this.dealFloor)
+      throw new Error(`funds: ${purpose} take of ${sats} sats would drop the balance below the deal floor (${this.dealFloor})`)
+    const u = await this.takeReserve(this.spendCheck, sats, this.hintSkip)
+    if (u === null) throw new Error(`funds: no outpoint of ${sats} sats or more`)
+    this.reserved.set(`${u.tx.id('hex')}:${u.vout}`, u.satoshis)
+    return u
+  }
+
+  /** a broadcast we made: relinquish its inputs, internalize outputs paying us */
+  async spent(tx: Transaction): Promise<void> {
+    for (const inp of tx.inputs) {
+      const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+      if (id !== undefined) this.markSpent(id, inp.sourceOutputIndex ?? 0)
+    }
+    const lock = await this.lockHex()
+    for (const [vout, o] of tx.outputs.entries()) {
+      if (o.lockingScript.toHex() === lock) await this.addOwned(tx, vout)
+    }
+  }
+
+  /** signed away for someone else to air — inputs are consumed, outputs are
+   *  left for discovery to adopt if the spend ever lands */
+  exported(tx: Transaction): void {
+    for (const inp of tx.inputs) {
+      const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+      if (id !== undefined) this.markSpent(id, inp.sourceOutputIndex ?? 0)
+    }
+  }
+
+  /** rejected/abandoned — it never landed: the tx's own outputs are
+   *  relinquished + tombstoned; inputs that still pay us are re-internalized
+   *  (the wallet's spendable flag remains the truth for what came back) */
+  async died(tx: Transaction): Promise<void> {
+    const lock = await this.lockHex()
+    const tid = tx.id('hex')
+    for (const [vout, o] of tx.outputs.entries()) {
+      this.deadOuts.add(`${tid}:${vout}`)
+      if (o.lockingScript.toHex() === lock || (await this.has(tid, vout))) this.markSpent(tid, vout)
+    }
+    for (const inp of tx.inputs) {
+      const src = inp.sourceTransaction
+      const id = inp.sourceTXID ?? src?.id('hex')
+      const vout = inp.sourceOutputIndex ?? 0
+      if (id === undefined || src === undefined) continue
+      this.reserved.delete(`${id}:${vout}`)
+      if ((src.outputs[vout]?.lockingScript.toHex() ?? '') !== lock) continue
+      if (!(await this.has(id, vout))) await this.internalize(src, vout).catch((e) => this.log(`funds revive ${id}.${vout}: ${e instanceof Error ? e.message : String(e)}`))
+      if ((await this.has(id, vout)) && !this.cache.some((u) => u.tx.id('hex') === id && u.vout === vout))
+        this.cache.push({ tx: src, vout, satoshis: src.outputs[vout].satoshis ?? 0 })
+    }
+  }
+
+  /** coins sent by someone else — a tombstoned ghost or an outpoint the
+   *  wallet already records (spent or not) is refused, never re-imported */
+  async adopt(tx: Transaction, vout: number): Promise<boolean> {
+    if (this.deadOuts.has(`${tx.id('hex')}:${vout}`)) return false
+    if (await this.has(tx.id('hex'), vout)) return false
+    await this.addOwned(tx, vout)
+    return await this.has(tx.id('hex'), vout)
   }
 
   /** Returns the internalize promise so boot-seeding can serialize (WoC rate

@@ -687,7 +687,7 @@ export function stackTreasury(cfg?: RegtestConfig): Promise<StackTreasury> {
  *  needs registering, the node already validated and mined them. */
 export class StackFunder implements Funder {
   keyPair: PrivateKey
-  private utxos: FundingOut[] = []
+  utxos: FundingOut[] = []
   private fundingTx?: Transaction
   private constructor(key: PrivateKey) {
     this.keyPair = key

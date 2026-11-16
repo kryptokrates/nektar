@@ -10,6 +10,7 @@
 // delivered" exactly.
 import { Transaction, MerklePath, PrivateKey, P2PKH, Hash, UnlockingScript, Spend } from '@bsv/sdk'
 import type { BlockHeader, BroadcastResult, FundingOut, TxStatusEvent } from './interfaces.js'
+import { pickSpendable, fundsOf, type FunderLike, type Funds, type FundsPurpose } from './funds.js'
 import { ChainEvents } from './events.js'
 import { buildBump } from './bump.js'
 import { serializeHeader, headerPowValid } from './headers.js'
@@ -523,7 +524,7 @@ export class MemoryTreasury {
  *  it, so its outputs carry proofs only once mined (zeroconf parity) */
 export class MemoryFunder implements TestFunder {
   keyPair: PrivateKey
-  private utxos: FundingOut[] = []
+  utxos: FundingOut[] = []
   private fundingTx?: Transaction
 
   private constructor(key: PrivateKey) {
@@ -573,8 +574,11 @@ export class MemoryFunder implements TestFunder {
   }
 }
 
-/** per-process shared treasury, like stackTreasury() — tests in one file
- *  share one chain, as they share one node today */
+/** the memory-tier Funds — a fundsOf adapter over the TestFunder surface:
+ *  take() reserves via the funder's destructive take, spent()/died()/adopt()
+ *  map to markSpent/addOwned with tombstones the base funder doesn't track. */
+export const memoryFunds = (f: TestFunder, dealFloor = 0): Funds => fundsOf(f, dealFloor)
+
 let memTreasury: MemoryTreasury | undefined
 export function memoryTreasury(): MemoryTreasury {
   memTreasury ??= new MemoryTreasury()

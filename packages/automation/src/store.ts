@@ -539,6 +539,24 @@ export class AutomationStore {
     return r?.n === null || r?.n === undefined ? undefined : Number(r.n)
   }
 
+  /** the outbox rows an operation is sitting behind — the `deals` detail
+   *  "waiting on" line: pending rows say what it waits for, dead rows say
+   *  why it stopped. deferClass is the machine-readable cause, lastError
+   *  the plain one. */
+  async waitingOn(
+    operationId: string
+  ): Promise<Array<{ actionId: string; kind: string; status: string; deferClass?: DeferClass; lastError?: string; nextAt: number; attempts: number }>> {
+    return (await this.kx(T.outbox).where({ operation_id: operationId }).whereNot({ status: 'acked' }).orderBy('next_at')).map((r) => ({
+      actionId: r.action_id,
+      kind: r.kind,
+      status: r.status,
+      ...(r.defer_class ? { deferClass: r.defer_class as DeferClass } : {}),
+      ...(r.last_error ? { lastError: r.last_error } : {}),
+      nextAt: Number(r.next_at),
+      attempts: r.attempts
+    }))
+  }
+
   async ackOutbox(actionId: string): Promise<void> {
     await this.kx(T.outbox).where({ action_id: actionId }).update({ status: 'acked' })
   }

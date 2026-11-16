@@ -263,6 +263,14 @@ export class MarketEngine {
 
   constructor(private d: MarketDeps) {
     this.o = { ...DEFAULTS, ...d.opts }
+    // contradictory configuration is a loud refusal, not a quiet deal that
+    // can never settle: a refund unlocking inside the seller's safety
+    // margin means the counterparty can pull the escrow back while the
+    // seller still treats the settlement as unconfirmed.
+    if (this.o.refundBlocks <= this.o.sellerSafetyBlocks)
+      throw new Error(
+        `market: refundBlocks (${this.o.refundBlocks}) must exceed sellerSafetyBlocks (${this.o.sellerSafetyBlocks}) — the refund window sits inside the seller's safety margin`
+      )
     this.now = d.now ?? Date.now
     this.me = d.key.toPublicKey().toString()
     this.network = d.network

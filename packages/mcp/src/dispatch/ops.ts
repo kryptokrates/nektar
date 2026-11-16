@@ -1,5 +1,5 @@
 // operator/automation surface tools — extracted verbatim from the server.ts dispatchTool switch
-import { singlePolicy } from './shared.js'
+import { paidSaleEnabled, singlePolicy } from './shared.js'
 import type { ToolHandler } from './shared.js'
 
 export const handlers: Record<string, ToolHandler> = {
@@ -36,6 +36,10 @@ export const handlers: Record<string, ToolHandler> = {
   sell: async (mem, args) => {
     const au = mem.automation
     if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
+    // selling without paid disclosure can never settle — the buyer-side
+    // sale# rail is gated off, so arming a seller would publish offers
+    // that no counterparty may pay
+    if (!paidSaleEnabled()) throw new Error('sell: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1')
     if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('sell: shard required')
     if (!Array.isArray(args?.domains)) throw new Error('sell: domains[] required')
     const priceSats = Number(args?.priceSats)
@@ -69,6 +73,7 @@ export const handlers: Record<string, ToolHandler> = {
         disclosureTxid: (d.result as { disclosureTxid?: string } | undefined)?.disclosureTxid,
         refundTxid: d.refundTxid,
         ...(d.evidenceRef !== undefined ? { evidence: { ref: d.evidenceRef, stored: true } } : {}),
+        ...(o.lastError ? { reason: o.lastError } : {}),
         updatedAt: o.updatedAt
       }
     }
@@ -88,6 +93,19 @@ export const handlers: Record<string, ToolHandler> = {
       const e = detail(st.operation, st.events)
       const j = await au.dealJournal?.(st.operation)
       if (j !== undefined) e.journal = j
+      const waiting = await au.store.waitingOn(st.operation.operationId)
+      const pending = waiting.filter((w) => w.status === 'pending')
+      if (pending.length)
+        e.waitingOn = pending.map((w) => ({
+          action: w.kind,
+          ...(w.deferClass ? { class: w.deferClass } : {}),
+          ...(w.lastError ? { reason: w.lastError } : {}),
+          nextAt: w.nextAt
+        }))
+      else if (e.reason === undefined) {
+        const dead = waiting.find((w) => w.status === 'dead' && w.lastError !== undefined)
+        if (dead) e.reason = dead.lastError
+      }
       return e
     }
     const ops = (await au.store.operations())
@@ -115,6 +133,7 @@ export const handlers: Record<string, ToolHandler> = {
       return { ok: true, ...r }
     }
     if (op === 'enableSeller') {
+      if (!paidSaleEnabled()) throw new Error('automation enableSeller: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1')
       await au.engine.enableSeller(String(args?.policyHash ?? ''))
       void au.cycle()
       return { ok: true }

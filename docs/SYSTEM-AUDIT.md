@@ -312,3 +312,43 @@ Four causes explain the twelve findings:
 3. Reset the local regtest chain: **yes**.
 4. Save this audit into the repo as `docs/SYSTEM-AUDIT.md`: **yes**.
 5. Start with the in-memory test world: **yes**.
+
+## 12. Stage 0 baseline
+
+Run on 2026-11-16 at commit `eb48a6e`, WSL checkout, Node 22.22.2, against the local regtest stack after a data reset (`clean.sh --data-only`). The old treasury and reserve files were moved to `.state/pre-reset-20261116/`. The three testnet agents were stopped. The test treasury was refunded from early coinbases and spent from during the run. Each package ran `pnpm --filter <pkg> test`; `mcp` ran every test file except `market-testnet.test.js`, six files at a time.
+
+Totals: **581 tests, 556 pass, 14 fail, 5 cancelled, 6 skipped.** A cancelled entry is a whole test file that hit its time limit, so tests in it that had not started are not counted.
+
+| Package      | Tests | Pass | Fail | Cancelled | Skipped | Wall time |
+| ------------ | ----- | ---- | ---- | --------- | ------- | --------- |
+| `core`       | 14    | 10   | 4    | 0         | 0       | 2 s       |
+| `crypto`     | 7     | 7    | 0    | 0         | 0       | 1 s       |
+| `log`        | 11    | 11   | 0    | 0         | 0       | 1 s       |
+| `datalog`    | 11    | 11   | 0    | 0         | 0       | 1 s       |
+| `policy`     | 5     | 5    | 0    | 0         | 0       | 12 s      |
+| `graph`      | 14    | 14   | 0    | 0         | 0       | 1 s       |
+| `identity`   | 34    | 34   | 0    | 0         | 0       | 2 s       |
+| `zk`         | 23    | 22   | 0    | 0         | 1       | 2 s       |
+| `store`      | 8     | 8    | 0    | 0         | 0       | 1 s       |
+| `verify`     | 4     | 3    | 0    | 1         | 0       | 60 s      |
+| `contracts`  | 4     | 4    | 0    | 0         | 0       | 1 s       |
+| `chain`      | 63    | 62   | 0    | 1         | 0       | 60 s      |
+| `anchor`     | 27    | 26   | 1    | 0         | 0       | 33 s      |
+| `automaton`  | 9     | 5    | 4    | 0         | 0       | 2 s       |
+| `bstack`     | 101   | 100  | 0    | 1         | 0       | 60 s      |
+| `automation` | 36    | 36   | 0    | 0         | 0       | 13 s      |
+| `fuzz`       | 8     | 8    | 0    | 0         | 0       | 26 s      |
+| `mcp`        | 202   | 190  | 5    | 2         | 5       | 344 s     |
+
+`reasoning` and `watcher` have no test-runner suites (the reasoning suite lives in `mcp`; the watcher script ran once and exited 0).
+
+Failing tests:
+
+- `core` (4, no chain involved): `signer: walletSigner over a WalletClient substrate — identity pub is the root key`; `signer: walletSigner signatures verify through the same client surface`; `signer: unlockP2PKH(walletSigner) rejects when the substrate lacks pub/sig parity`; `signer: custodySigner uses the held keyDeriver root key when present`.
+- `anchor` (1): `DIS-006: disclosure event logged as a leaf and anchored`.
+- `automaton` (4): `AUT-005 negatives: wrong from / not-in-δ / tampered path / wrong signer rejected by script`; `AUT-005: wrong deltaRoot — a path for another δ is rejected`; `AUT-005: halt from non-final state fails; from final passes`; `AUT-005: step reads the CURRENT on-chain q (not the deploy-time value)`. In each, the node refused the spend as intended (`Script failed an OP_EQUALVERIFY operation`), and the assertion on the error text did not match the node's wording.
+- `mcp` (5): `MCP Streamable HTTP: session, tools, call, resource; unknown session rejected` and `MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts` (both expect 52 tools, the server lists 54); `bstack A: buyer+seller over two minihosts — journal+slot conservation, dedupe, both hosts hold` (slot count off: expected 1, got -47); `bstack C: withheld offer still completes via other host; withheld logged naming h2`; `profile: sell → want → deals drives a full deal; fund reports slot counts`.
+
+Files that hit their time limit: `chain/events.test.js`, `bstack/finger.test.js` and `verify/verify.test.js` (60 s each), `mcp/market-bstack.test.js` and `mcp/market-resilience.test.js` (300 s each).
+
+Compared with the last run before the reset (226 `mcp` tests, 49 pass, 166 fail): the dead shared wallet accounted for the difference. On a fresh chain the wallet works, and the remaining failures are the ones listed above.

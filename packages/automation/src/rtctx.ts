@@ -136,6 +136,9 @@ export interface Rt {
   }
   // shared loop state — written by one region, read by others (and by stop)
   stopped: boolean
+  /** the one timer wheel — every recurring job registers a name + ceiling
+   *  here instead of owning a private interval (Stage 6) */
+  scheduler?: import('./scheduler.js').Scheduler
   inflight: Set<Promise<void>>
   downNow: Set<string>
   hotUntil: number

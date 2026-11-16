@@ -13,6 +13,7 @@ import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
 import { openLanes } from './lanes.js'
 import { openOutbox } from './outbox.js'
 import { openUpkeep } from './upkeep.js'
+import { Scheduler } from './scheduler.js'
 import { openWatches } from './watches.js'
 import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
 import type { Automation } from './types.js'
@@ -174,6 +175,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     watchBases: (cfg.watchHosts ?? []).map((u) => u.replace(/\/+$/, '')),
     watches: new Map<string, AbortController>()
   } as unknown as Rt
+  // the one timer wheel — deals/outbox/upkeep/watches/watchdog register
+  // named jobs with their own ceilings; wakes (chain events, enqueues,
+  // inbound items) pull a job to due-now instead of each job polling alone
+  rt.scheduler = new Scheduler()
   openLanes(rt)
   const transport: MarketTransport = {
     publishWant: async (sw: SignedWant) => {
@@ -327,59 +332,51 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   }
   rt.cycle = cycle
   const upkeepMs = cfg.upkeepMs ?? 10_000
-  // A4 — a setTimeout chain, not a fixed interval: while the loop is hot
-  // (recent inbound activity) the deals cadence floors at hotMs so an
-  // in-flight deal never waits a full interval for the next hop.
+  // A4 — while the loop is hot (recent inbound activity) the deals cadence
+  // floors at hotMs so an in-flight deal never waits a full interval for
+  // the next hop; the ceiling fn re-reads hotUntil on every fire.
   const idleMs = cfg.intervalMs ?? 1000
   const hotMs = cfg.hotMs ?? 250
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const tick = (): void => {
-    if (rt.stopped) return
-    void deals()
-    if (Date.now() - rt.upkeepAt >= upkeepMs) void rt.upkeep().catch(() => {})
-    timer = setTimeout(tick, Date.now() < rt.hotUntil ? Math.min(hotMs, idleMs) : idleMs)
-    timer.unref()
-  }
   if (cfg.intervalMs !== 0) {
-    timer = setTimeout(tick, idleMs)
-    timer.unref()
+    rt.scheduler!.add({ name: 'deals', run: () => void deals(), ceilingMs: () => (Date.now() < rt.hotUntil ? Math.min(hotMs, idleMs) : idleMs) })
+    rt.scheduler!.add({ name: 'upkeep', run: () => rt.upkeep().catch(() => {}), ceilingMs: () => upkeepMs })
   }
   // A10 — the watchdog: the cheap probe tier (chain/broadcaster/hosts/kill
   // state) re-runs on a slow tick; host losses update the deaf flag the
   // engine consults at every new-deal entry point
   const watchdogMs = cfg.watchdogMs ?? 60_000
-  const watchdog =
-    watchdogMs <= 0
-      ? undefined
-      : setInterval(() => {
-          const work = (async () => {
-            try {
-              const r = await runChecks([...WATCHDOG_CHECKS])
-              if (lastReport !== undefined) {
-                const byName = new Map(lastReport.checks.map((c) => [c.check, c]))
-                for (const c of r.checks) byName.set(c.check, c)
-                lastReport = { ...r, checks: [...byName.values()], pass: [...byName.values()].every((c) => c.pass) }
-              } else lastReport = r
-              for (const h of r.downHosts)
-                if (!downNow.has(h)) {
-                  downNow.add(h)
-                  log(`automation: watchdog: host down ${h}`)
-                }
-              for (const h of [...downNow]) if (marketHosts.includes(h) && !r.downHosts.includes(h)) await rt.hostBack(h)
-            } catch (e) {
-              log(`automation: watchdog: ${(e as Error).message}`)
-            }
-          })()
-          rt.inflight.add(work)
-          void work.finally(() => {
-            rt.inflight.delete(work)
-          })
-        }, watchdogMs)
-  watchdog?.unref()
+  if (watchdogMs > 0)
+    rt.scheduler!.add({
+      name: 'watchdog',
+      run: () => {
+        const work = (async () => {
+          try {
+            const r = await runChecks([...WATCHDOG_CHECKS])
+            if (lastReport !== undefined) {
+              const byName = new Map(lastReport.checks.map((c) => [c.check, c]))
+              for (const c of r.checks) byName.set(c.check, c)
+              lastReport = { ...r, checks: [...byName.values()], pass: [...byName.values()].every((c) => c.pass) }
+            } else lastReport = r
+            for (const h of r.downHosts)
+              if (!downNow.has(h)) {
+                downNow.add(h)
+                log(`automation: watchdog: host down ${h}`)
+              }
+            for (const h of [...downNow]) if (marketHosts.includes(h) && !r.downHosts.includes(h)) await rt.hostBack(h)
+          } catch (e) {
+            log(`automation: watchdog: ${(e as Error).message}`)
+          }
+        })()
+        rt.inflight.add(work)
+        void work.finally(() => {
+          rt.inflight.delete(work)
+        })
+      },
+      ceilingMs: () => watchdogMs
+    })
   // watch queries derive from the engine's live watch-list — re-derive on a
   // slow tick plus after every deals pass so new wants appear in ≤1 cycle
-  const watchTimer = rt.watchBases.length === 0 ? undefined : setInterval(() => void rt.refreshWatches().catch(() => undefined), 15_000)
-  watchTimer?.unref()
+  if (rt.watchBases.length !== 0) rt.scheduler!.add({ name: 'watches', run: () => rt.refreshWatches().catch(() => undefined), ceilingMs: () => 15_000 })
   void rt.refreshWatches().catch(() => undefined)
   // push-driven progress: a verified tx proof (broadcaster callback or the
   // chain's own mined event) may make a funding tree provable and advance
@@ -535,10 +532,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     },
     stop: async () => {
       rt.stopped = true
-      if (timer) clearTimeout(timer)
+      if (rt.scheduler !== undefined) await rt.scheduler.stop()
       if (rt.outboxTimer) clearTimeout(rt.outboxTimer)
-      if (watchdog) clearInterval(watchdog)
-      if (watchTimer) clearInterval(watchTimer)
       for (const ac of rt.watches.values()) ac.abort()
       rt.watches.clear()
       await Promise.allSettled(rt.inflight)

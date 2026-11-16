@@ -29,14 +29,19 @@ export function openOutbox(rt: Rt): void {
       const nextAt = await store.nextOutboxAt()
       if (nextAt === undefined || rt.stopped) return
       clearTimeout(rt.outboxTimer)
-      rt.outboxTimer = setTimeout(
-        () => {
-          rt.outboxTimer = undefined
-          rt.pumpOutbox()
-        },
-        Math.max(0, nextAt - Date.now())
-      )
-      rt.outboxTimer.unref()
+      if (rt.scheduler !== undefined) {
+        // the shared wheel owns the ceiling — this arm is the exact next_at wake
+        rt.scheduler.dueIn('outbox', Math.max(0, nextAt - Date.now()))
+      } else {
+        rt.outboxTimer = setTimeout(
+          () => {
+            rt.outboxTimer = undefined
+            rt.pumpOutbox()
+          },
+          Math.max(0, nextAt - Date.now())
+        )
+        rt.outboxTimer.unref()
+      }
     } catch {
       /* the deals-pass floor covers a missed arm */
     }
@@ -62,5 +67,9 @@ export function openOutbox(rt: Rt): void {
       })
   }
   store.outboxReady = () => rt.pumpOutbox()
+  // register the job once — exact-at wakes come from dueIn() on each arm;
+  // the 60s ceiling is only the missed-wake backstop (the end-of-tick pump
+  // is already the correctness floor)
+  rt.scheduler?.add({ name: 'outbox', run: () => rt.pumpOutbox(), ceilingMs: () => 60_000 })
   rt.pushAcks = pushAcks
 }

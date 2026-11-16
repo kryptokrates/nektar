@@ -149,7 +149,6 @@ export interface Rt {
   pumping: boolean
   pumpAgain: boolean
   pumpDone?: Promise<void>
-  outboxTimer?: ReturnType<typeof setTimeout>
   watchBases: string[]
   watches: Map<string, AbortController>
   // cross-region doors — assigned by the region openers (and the assembler

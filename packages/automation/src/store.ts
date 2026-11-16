@@ -138,6 +138,9 @@ export class AutomationStore {
       t.bigInteger('created_at').notNullable()
       t.bigInteger('updated_at').notNullable()
     })
+    // the live-op scan (notStates/state IN) runs every hot tick — it must
+    // seek, not table-scan, as terminal rows accumulate over an agent's life
+    await this.kx.raw(`CREATE INDEX IF NOT EXISTS ${T.ops}_state_index ON ${T.ops} (state)`)
     await mk(T.events, (t) => {
       t.increments('seq')
       t.string('operation_id').notNullable().index()

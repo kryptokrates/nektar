@@ -2,7 +2,7 @@ import type { BoxRef, SignedOffer, SignedWant } from '@nektar/bstack'
 import { digestOf } from '../policy.js'
 import { classifyDeliveryError, type InboxItem, type Operation, type OutboxItem } from '../store.js'
 import { MarketBase } from './base.js'
-import { TERMINAL } from './types.js'
+import { NONTERMINAL } from './types.js'
 import type { MarketMessage } from './types.js'
 
 export abstract class IngressOps extends MarketBase {
@@ -58,7 +58,7 @@ export abstract class IngressOps extends MarketBase {
         }
       }
       const height = await this.d.height()
-      for (const op of await this.d.store.operations({ notStates: TERMINAL })) {
+      for (const op of await this.d.store.operations({ states: NONTERMINAL })) {
         try {
           await this.advance(op, height)
         } catch (e) {

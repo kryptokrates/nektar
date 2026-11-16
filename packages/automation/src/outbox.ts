@@ -28,20 +28,8 @@ export function openOutbox(rt: Rt): void {
     try {
       const nextAt = await store.nextOutboxAt()
       if (nextAt === undefined || rt.stopped) return
-      clearTimeout(rt.outboxTimer)
-      if (rt.scheduler !== undefined) {
-        // the shared wheel owns the ceiling — this arm is the exact next_at wake
-        rt.scheduler.dueIn('outbox', Math.max(0, nextAt - Date.now()))
-      } else {
-        rt.outboxTimer = setTimeout(
-          () => {
-            rt.outboxTimer = undefined
-            rt.pumpOutbox()
-          },
-          Math.max(0, nextAt - Date.now())
-        )
-        rt.outboxTimer.unref()
-      }
+      // the shared wheel owns the ceiling — this arm is the exact next_at wake
+      rt.scheduler?.dueIn('outbox', Math.max(0, nextAt - Date.now()))
     } catch {
       /* the deals-pass floor covers a missed arm */
     }

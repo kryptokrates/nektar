@@ -219,26 +219,29 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   const port =
     ports.chain ??
     (net === 'regtest'
-      ? regtestPort({ ...cfg.regtest!, fundAddress: PrivateKey.fromWif(cfg.regtest!.fundWif).toPublicKey().toAddress([0x6f]) }, {
-          valueOf,
-          guard: {
-            // D2 hard daily cap: default 10_000 sats/day of fees on regtest
-            // too — 'unlimited' is an explicit opt-out for soak/stress runs,
-            // and only when EVERY set cap agrees (mixed signals never
-            // silently un-guard the spend path)
-            ...(() => {
-              const caps = [nektarEnv('NEKTAR_DAILY_CAP_SATS'), nektarEnv('NEKTAR_MAX_SPEND_SATS_PER_DAY')].filter((x) => x !== undefined)
-              const unlimited = caps.length > 0 && caps.every((x) => x === 'unlimited')
-              return {
-                unlimited,
-                maxPerDay: unlimited ? Number.MAX_SAFE_INTEGER : Math.min(...caps.filter((x) => x !== 'unlimited').map((x) => Number(x)), 10_000),
-                maxFeePerTx: Number(nektarEnv('NEKTAR_MAX_FEE_SATS_PER_TX') ?? 1_000),
-                minIntervalMs: Number(nektarEnv('NEKTAR_MIN_BROADCAST_INTERVAL_MS') ?? 0)
-              }
-            })(),
-            ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
+      ? regtestPort(
+          { ...cfg.regtest!, fundAddress: PrivateKey.fromWif(cfg.regtest!.fundWif).toPublicKey().toAddress([0x6f]) },
+          {
+            valueOf,
+            guard: {
+              // D2 hard daily cap: default 10_000 sats/day of fees on regtest
+              // too — 'unlimited' is an explicit opt-out for soak/stress runs,
+              // and only when EVERY set cap agrees (mixed signals never
+              // silently un-guard the spend path)
+              ...(() => {
+                const caps = [nektarEnv('NEKTAR_DAILY_CAP_SATS'), nektarEnv('NEKTAR_MAX_SPEND_SATS_PER_DAY')].filter((x) => x !== undefined)
+                const unlimited = caps.length > 0 && caps.every((x) => x === 'unlimited')
+                return {
+                  unlimited,
+                  maxPerDay: unlimited ? Number.MAX_SAFE_INTEGER : Math.min(...caps.filter((x) => x !== 'unlimited').map((x) => Number(x)), 10_000),
+                  maxFeePerTx: Number(nektarEnv('NEKTAR_MAX_FEE_SATS_PER_TX') ?? 1_000),
+                  minIntervalMs: Number(nektarEnv('NEKTAR_MIN_BROADCAST_INTERVAL_MS') ?? 0)
+                }
+              })(),
+              ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
+            }
           }
-        })
+        )
       : await livePort(mc!, net, {
           valueOf,
           guard: {

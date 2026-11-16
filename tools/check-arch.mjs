@@ -86,16 +86,17 @@ const GATES = [
     name: 'raw-key-material',
     re: /(PrivateKey\.fromWif|PrivateKey\.fromHex|new\s+PrivateKey\s*\()/g,
     scope: GATED,
-    // keystore bootstrap + composition roots. server.ts rotate keeps a legacy
-    // WIF arg flagged for removal; toolbox re-wraps a PrivateKey for the SDK
-    // key deriver. No NEW site may introduce key material into app code.
+    // keystore bootstrap + composition roots. dispatch/identity.ts rotate
+    // keeps a legacy WIF arg flagged for removal; toolbox re-wraps a
+    // PrivateKey for the SDK key deriver. No NEW site may introduce key
+    // material into app code.
     allow: [
       'packages/mcp/src/init.ts',
       'packages/mcp/src/runtime.ts',
       'packages/mcp/src/rtsupport.ts',
       'packages/mcp/src/funding.ts',
       'packages/mcp/src/pay.ts',
-      'packages/mcp/src/server.ts',
+      'packages/mcp/src/dispatch/identity.ts',
       'packages/automation/src/toolbox.ts',
       'packages/chain/src/port.ts',
       'packages/chain/src/testkit.ts',

@@ -108,6 +108,16 @@ export interface NektarMemoryOptions {
     /** fee bound enforced by the covenant (default 10) */
     maxFee?: bigint
   }
+  /** network lookups for what the instance was never handed — injected by
+   *  the runtime's chain port (constructor inputs; never assigned after). */
+  txLookup?: (txid: string) => Promise<import('@bsv/sdk').Transaction | undefined>
+  proofLookup?: (txid: string) => Promise<import('@bsv/sdk').MerklePath | undefined>
+  /** registers interest with the chain-event substrate so proof delivery
+   *  and the abandon horizon cover a tx this instance did not broadcast */
+  watchTx?: (txid: string) => void
+  /** the durable automation ledger — its terminal rows are first-party
+   *  verdict sources inside txFacts */
+  ledger?: import('@nektar/automation').AutomationStore
   /** the instance's funds pool — the one owner of spent/owned bookkeeping.
    *  Absent: `fundsOf(funder, dealFloorSats)` adapts the constructor's
    *  funder (test tiers); the runtime always injects a real impl. */

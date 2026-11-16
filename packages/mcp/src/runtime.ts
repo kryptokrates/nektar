@@ -1,50 +1,36 @@
-// openRuntime: one production entry for the MCP / HTTP servers.
-//   NEKTAR_NETWORK=regtest  Teranode regtest: persistent records (sqlite), anchor
-//                          state, security state, funding reserve and keys in
-//                          NEKTAR_DATA_DIR; a confirmer attaches BUMPs.
-//   NEKTAR_NETWORK=testnet  same shape as regtest; refused until an endpoint and
-//                          funding are configured (no real funds without approval).
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, rmSync } from 'node:fs'
+// openRuntime: the ONE assembly for the MCP / HTTP servers. cfg picks the
+// network; a ChainPort answers every chain-side question (spend path,
+// witnessed headers, proof + raw-tx lookups, the status-hint stream, height)
+// and openCustody answers the coin side — the spine below is identical on
+// every network. Tests inject {chain: memoryPort(...), funds} for the
+// memory tier; production builds the port from cfg (regtest | live).
+//   NEKTAR_NETWORK=regtest  Teranode regtest stack: persistent records
+//                          (sqlite), anchor state, security state, funding
+//                          reserve and keys in NEKTAR_DATA_DIR.
+//   NEKTAR_NETWORK=testnet|main  live nets — same shape, real custody.
+import { existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
-import { randomBytes } from 'node:crypto'
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import {
-  TeranodeBroadcaster,
-  TeranodeRPCTracker,
-  bootstrapReserve,
-  regtestTx,
-  regtestMerkleProof,
-  BsvBroadcaster,
-  WocTracker,
-  fetchBroadcasterFeeRate,
-  merklePathMainnet,
-  discoverUtxos,
-  importFundingTx,
-  ChaintracksTracker,
-  WitnessedTracker,
-  SpendGuard,
-  TemporalSources,
-  statusStream,
-  fetchRawTx,
-  DEFAULT_WOC_URL,
-  TxStore,
+  regtestPort,
+  livePort,
+  temporalSourcesFor,
   ChainEvents,
-  type TemporalSource,
-  type ChainTracker,
+  type ChainPort,
+  type Funds,
   type RegtestConfig,
   type MainnetConfig,
   type TxStatusEvent
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
-import { watcherObservation, importable } from './txops.js'
-import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvNum, nektarEnvFlag, setNektarEnv, type SignerWallet } from '@nektar/core'
-import { wireP2p, setupFeeVault } from './setup.js'
-import { KnexShardStore, type ShardStore } from '@nektar/log'
+import { watcherObservation } from './txops.js'
+import { nektarEnv, nektarEnvNum } from '@nektar/core'
 import { NektarMemory, type NektarMemoryOptions } from './memory.js'
 import { FileSecurityStore, FileStateStore } from './securitystore.js'
-import { readKeyFile, writeKeyFile, passphraseFromEnv, fundKeyFromMnemonic, KeystoreError } from './keystore.js'
+import { passphraseFromEnv, KeystoreError } from './keystore.js'
 import { fileURLToPath } from 'node:url'
+import { loadKeys, txLogBroadcast, acquireLock, keyLockFile, acquireInstanceLock, openRecordsDb, healLedgerOnProof, persistedTxStore } from './rtsupport.js'
+import { openCustody, regtestSeed, liveFunding, type CustodyResult } from './funding.js'
 
 export interface RuntimeConfig {
   network: 'regtest' | 'testnet' | 'main'
@@ -81,25 +67,6 @@ function temporalSourceNames(env = process.env): string[] {
     .filter(Boolean)
   for (const n of names) if (n !== 'bsv' && n !== 'btc') throw new Error(`unknown temporal source "${n}" (supported: bsv,btc)`)
   return names.length === 0 ? ['bsv'] : names
-}
-
-/** TemporalSources over the primary tracker + optional BTC WoC tracker (read-only).
- *  `NEKTAR_BTC_WOC_URL` overrides the BTC endpoint (tests point it at a stub). */
-function temporalSourcesFor(names: string[], primary: ChainTracker, opts: { wocApiKey?: string; fetchImpl?: typeof fetch } = {}): TemporalSources {
-  const sources: TemporalSource[] = [{ name: 'bsv', tracker: primary }]
-  for (const n of names) {
-    if (n === 'bsv') continue
-    if (n === 'btc')
-      sources.push({
-        name: 'btc',
-        tracker: new WocTracker({
-          wocUrl: nektarEnv('NEKTAR_BTC_WOC_URL') ?? 'https://api.whatsonchain.com/v1/btc/main',
-          wocApiKey: opts.wocApiKey,
-          fetchImpl: opts.fetchImpl
-        })
-      })
-  }
-  return new TemporalSources(sources)
 }
 
 export function configFromEnv(env = process.env): RuntimeConfig {
@@ -168,91 +135,6 @@ export function configFromEnv(env = process.env): RuntimeConfig {
   return cfg
 }
 
-interface KeyFile {
-  agentSeed: string
-  logKey: string
-  shardKeys: Record<string, string>
-}
-/** keys are generated once into the data dir (0600) unless supplied; never logged.
- *  Encrypted at rest when a passphrase is set; mandatory on main.
- *  `create=false` (external-wallet custody): an absent file is NOT generated —
- *  the wallet covers seed/log/shard custody; an existing file is still read
- *  for legacy shard owners and old records. */
-function loadKeys(dataDir: string, pass: string | undefined, requireEnc = false, create = true): { keys: KeyFile; save: () => void } {
-  const file = join(dataDir, 'keys.json')
-  if (!existsSync(file) && !create) return { keys: { agentSeed: '', logKey: '', shardKeys: {} }, save: () => undefined }
-  const keys: KeyFile = existsSync(file)
-    ? (JSON.parse(readKeyFile(file, pass, requireEnc)) as KeyFile)
-    : { agentSeed: PrivateKey.fromRandom().toHex(), logKey: PrivateKey.fromRandom().toHex(), shardKeys: {} }
-  const save = () => writeKeyFile(file, JSON.stringify(keys), pass)
-  if (!existsSync(file)) save()
-  return { keys, save }
-}
-
-/** operator fee key (pays all anchor fees): NEKTAR_FUND_WIF wins; otherwise a
- *  dedicated fee.key.json generated once in the data dir — encrypted on main. */
-function loadFeeKey(dataDir: string, wif: string | undefined, pass: string | undefined, requireEnc: boolean): PrivateKey {
-  if (wif) return PrivateKey.fromWif(wif)
-  // NEKTAR_FUND_MNEMONIC (or _FILE): BIP-39 custody-of-record — recoverable,
-  // one string to protect. Derived at m/44'/236'/0'/0/0; feeds the same
-  // keyDeriver the WIF path uses.
-  const mn =
-    nektarEnv('NEKTAR_FUND_MNEMONIC') ??
-    (existsSync(nektarEnv('NEKTAR_FUND_MNEMONIC_FILE') ?? '') ? readFileSync(nektarEnv('NEKTAR_FUND_MNEMONIC_FILE')!, 'utf8').trim() : undefined)
-  if (mn) return fundKeyFromMnemonic(mn)
-  const file = join(dataDir, 'fee.key.json')
-  if (existsSync(file)) {
-    const j = JSON.parse(readKeyFile(file, pass, requireEnc)) as { wif: string }
-    return PrivateKey.fromWif(j.wif)
-  }
-  const key = PrivateKey.fromRandom()
-  writeKeyFile(file, JSON.stringify({ wif: key.toWif() }), pass)
-  return key
-}
-
-// NEKTAR_TX_LOG: when set to a file path, append one JSON line per SUCCESSFUL
-// broadcast — {t, txid, bytes, inSats, outSats, feeSats} — so operator cost
-// accounting comes from the wire, not from estimates. inSats/feeSats are null
-// when a source transaction is missing. Write failures are ignored; no
-// behaviour change otherwise.
-export function txLogBroadcast<B extends (tx: Transaction) => Promise<import('@nektar/chain').BroadcastResult>>(
-  inner: B,
-  logPath: string | undefined = nektarEnv('NEKTAR_TX_LOG')
-): B {
-  if (logPath === undefined || logPath === '') return inner
-  return (async (tx: Transaction) => {
-    const r = await inner(tx)
-    if (r.status === 'success') {
-      try {
-        let inSats: number | null = 0
-        for (const i of tx.inputs) {
-          const src = i.sourceTransaction?.outputs[i.sourceOutputIndex ?? 0]
-          if (src?.satoshis === undefined) {
-            inSats = null
-            break
-          }
-          inSats += src.satoshis
-        }
-        const outSats = tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)
-        appendFileSync(
-          logPath,
-          JSON.stringify({
-            t: Date.now(),
-            txid: tx.id('hex'),
-            bytes: tx.toBinary().length,
-            inSats,
-            outSats,
-            feeSats: inSats === null ? null : inSats - outSats
-          }) + '\n'
-        )
-      } catch {
-        /* logging must never break a broadcast */
-      }
-    }
-    return r
-  }) as B
-}
-
 export interface Runtime {
   mem: NektarMemory
   close: () => Promise<void>
@@ -269,91 +151,42 @@ export interface Runtime {
       runwayAnchors: number | null
     }>
     costs: () => Array<{ txid: string; bytes: number; fee: number; at: string }>
+    /** fundingImport tool: credit a tx paying the fee address */
+    importFunding?: (txid: string) => Promise<unknown>
+    /** fundingRefresh tool: reconcile the wallet view against chain truth */
+    refreshFunding?: () => Promise<unknown>
   }
 }
 
-/** single holder per lock file: a live heartbeat (<20s old) from another
- *  process refuses acquisition; a stale or dead one is taken over.
- *  release() stops the beat and removes the file. */
-export async function acquireLock(file: string, label: string): Promise<() => Promise<void>> {
-  const me = `${process.pid}@${(await import('node:os')).hostname()}`
-  if (existsSync(file)) {
-    const l = JSON.parse(readFileSync(file, 'utf8')) as { owner: string; beat: number }
-    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`${label} is in use by another nektar process (${l.owner}) — stop it first`)
-    rmSync(file)
-  }
-  const beat = () => writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }))
-  writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
-  const beatTimer = setInterval(beat, 5_000)
-  beatTimer.unref()
-  return async () => {
-    clearInterval(beatTimer)
-    try {
-      rmSync(file)
-    } catch {
-      /* already gone */
-    }
-  }
+/** the injected assembly surface — the memory/test tier supplies both;
+ *  production supplies neither (the port is built from cfg.network) */
+export interface RuntimePorts {
+  chain?: ChainPort
+  /** injected coin book — bypasses wallet custody entirely. Production tiers
+   *  always build custody; only the in-memory/test tier injects one. */
+  funds?: Funds
+  wallet?: NektarMemoryOptions['wallet']
 }
 
-/** tmpdir, not the data dir — the same fund key must not be live in any
- *  two nektar processes on this machine, wherever their data dirs sit. */
-export const keyLockFile = (pkhHex: string): string => join(tmpdir(), `nektar-key-${pkhHex}.lock`)
-
-const acquireInstanceLock = async (dataDir: string): Promise<{ release: () => Promise<void> }> => ({
-  release: await acquireLock(join(dataDir, 'instance.lock'), `data dir ${dataDir}`)
-})
-
-/** records.sqlite + shard store + automation ledger — the one opener for the
- *  data dir's durable state (WAL + busy_timeout), was two verbatim copies. */
-async function openRecordsDb(dataDir: string) {
-  const knexMod = (await import('knex')).default
-  const knex = knexMod({ client: 'sqlite3', connection: { filename: join(dataDir, 'records.sqlite') }, useNullAsDefault: true })
-  // WAL: readers don't queue behind the writer; busy_timeout turns a
-  // contended SQLITE_BUSY into a wait instead of a surfaced error
-  await knex.raw('PRAGMA journal_mode=WAL')
-  await knex.raw('PRAGMA busy_timeout=5000')
-  const store: ShardStore = new KnexShardStore(knex)
-  await store.init?.()
-  const { AutomationStore, wrapBroadcast, leasePredicate } = await import('@nektar/automation')
-  const ledger = new AutomationStore(knex)
-  await ledger.init()
-  return { knex, store, ledger, wrapBroadcast, leasePredicate }
-}
-
-/** heal hook: a verified proof arriving after a terminal-looking ledger
- *  verdict ('conflicted' from the abandon horizon, 'rejected' from a
- *  first-party refusal) flips the row back to 'confirmed' — those verdicts
- *  are ceilings, not truth. Errors log to stderr, never crash. */
-function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/automation').AutomationStore, tag: string): void {
-  mem.onTxProof((txid) => {
-    void (async () => {
-      try {
-        const w = await ledger.walletTx({ txid })
-        if (w !== undefined && (w.state === 'conflicted' || w.state === 'rejected')) {
-          await ledger.setTxState(w.actionId, 'confirmed', { at: Date.now(), healed: true })
-          process.stderr.write(`nektar ${tag}: ${txid} proved after a terminal verdict — ledger healed to confirmed\n`)
-        }
-      } catch (e) {
-        process.stderr.write(`nektar ${tag}: proof-heal ${txid}: ${(e as Error).message}\n`)
-      }
-    })()
-  })
-}
-
-export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
+export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}): Promise<Runtime> {
   // fail fast: paid tools need a valid operator wallet BEFORE the first 402 —
   // an invoice served to a missing address is a payment that can never settle.
   const { paymentsEnabled, requireOperatorWallet } = await import('./pay.js')
   if (paymentsEnabled()) requireOperatorWallet()
   const { objectStoreFromEnv } = await import('@nektar/store')
+  if (ports.funds !== undefined && ports.chain === undefined)
+    throw new Error('openRuntime: injected funds need an injected chain port — custody and chain answers must come from the same world')
+  const injected = ports.funds !== undefined
+  const net = ports.chain?.network ?? cfg.network
+  const live = net === 'main' || net === 'testnet'
+  const mc = cfg.main
   const bondEpoch = nektarEnv('NEKTAR_BOND_EPOCH')
   const bondMaxFee = nektarEnv('NEKTAR_BOND_MAXFEE')
   const base: NektarMemoryOptions = {
     batchPolicy: { maxLeaves: cfg.batchLeaves ?? 4, maxAgeMs: 60_000 },
     modelId: cfg.modelId ?? 'unspecified',
     clearanceAuthorities: cfg.clearanceAuthorities,
-    network: cfg.network,
+    network: net,
     objectStore: objectStoreFromEnv(),
     bond:
       bondEpoch || bondMaxFee
@@ -363,552 +196,94 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
           }
         : undefined
   }
-  if (cfg.network === 'main' || cfg.network === 'testnet') {
-    return await openLiveRuntime(cfg, cfg.network, base)
-  }
-  const rc = cfg.regtest!
   mkdirSync(cfg.dataDir, { recursive: true })
+  // live custody needs the passphrase BEFORE keys/decrypt; the injected tier
+  // has no encrypted material
+  const pass = live ? mc?.passphrase : passphraseFromEnv()
+  if (live && !pass) throw new KeystoreError(`${net} requires NEKTAR_KEY_PASSPHRASE (or _FILE) for keys at rest`)
+  const externalWallet = live && !injected && nektarEnv('NEKTAR_WALLET') === 'client'
   const { release: releaseLock } = await acquireInstanceLock(cfg.dataDir)
-  const { keys, save } = loadKeys(cfg.dataDir, passphraseFromEnv())
-  const fundKey = PrivateKey.fromWif(rc.fundWif)
-  const tracker = new TeranodeRPCTracker(rc)
-  // input-value resolver for the guard's fee check — same closure as the
-  // live runtime: reserve entries, guarded broadcasts, anchor txs (fail-closed)
-  let memRef: NektarMemory | undefined
+  const { keys, save } = loadKeys(cfg.dataDir, pass, live, !externalWallet)
+  // input-value resolver for the guard's fee check — custody outs (read
+  // live each call: a refresh may swap the array), stored txs, anchor txs
   const { txStore, open: openTxStore } = persistedTxStore()
+  let memRef: NektarMemory | undefined
+  let fundsRef: CustodyResult['funds'] | undefined
+  const utxosOf = () => fundsRef?.utxos
   const valueOf = (txid: string, vout: number): number | undefined =>
-    utxoView.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
+    utxosOf()?.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
     txStore.get(txid)?.outputs[vout]?.satoshis ??
     memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
-  // D2 hard daily cap: default 10_000 sats/day of fees on regtest too —
-  // 'unlimited' is an explicit opt-out for soak/stress runs, never the
-  // default, because an unattended agent must always have a provable guard.
-  // NEKTAR_DAILY_CAP_SATS is the plan's hard cap; NEKTAR_MAX_SPEND_SATS_PER_DAY
-  // (the live env) sets it too — the smaller of the two wins.
-  const caps = [nektarEnv('NEKTAR_DAILY_CAP_SATS'), nektarEnv('NEKTAR_MAX_SPEND_SATS_PER_DAY')].filter((x) => x !== undefined)
-  // opt-out only when every set value agrees — a stray numeric cap keeps the
-  // guard on (mixed signals never silently un-guard the spend path)
-  const unlimited = caps.length > 0 && caps.every((x) => x === 'unlimited')
-  const maxPerDay = unlimited ? Number.MAX_SAFE_INTEGER : Math.min(...caps.filter((x) => x !== 'unlimited').map((x) => Number(x)), 10_000)
-  const broadcaster = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), valueOf, {
-    unlimited,
-    maxPerDay,
-    maxFeePerTx: Number(nektarEnv('NEKTAR_MAX_FEE_SATS_PER_TX') ?? 1_000),
-    minIntervalMs: Number(nektarEnv('NEKTAR_MIN_BROADCAST_INTERVAL_MS') ?? 0),
-    ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
-  })
-  const auth = 'Basic ' + Buffer.from(`${rc.rpcUser}:${rc.rpcPass}`).toString('base64')
-  const rpc = async (method: string, ...params: unknown[]): Promise<any> => {
-    const r = await fetch(rc.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: auth },
-      body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }),
-      signal: AbortSignal.timeout(15_000)
-    })
-    const j = (await r.json()) as { result?: unknown; error?: unknown }
-    if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
-    return j.result
-  }
-  let lastMined = 0
-  const mineOne = async () => {
-    const [hash] = (await rpc('generatetoaddress', 1, fundKey.toPublicKey().toAddress([0x6f]))) as string[]
-    const hdr = (await rpc('getblockheader', hash, true)) as { height: number }
-    lastMined = Math.max(lastMined, hdr.height)
-  }
-  // the one chain-event substrate for this process: every "is it proven?"
-  // consumer (confirmer, anchor parents, ledger) registers interest here and
-  // receives 'tx' pushes instead of running a private poll loop. Its height
-  // probe makes proof fetches impossible-but-cheap misses free: a static tip
-  // and no new watches skips the batch entirely. Self-observed BUMPs come
-  // from the asset proof endpoint — served bytes are claims until their
-  // root anchors to our own header chain (the SPV kernel, not "the node
-  // said so").
-  const events = new ChainEvents({
-    intervalMs: 2_000,
-    abandonAfterBlocks: 100,
-    height: async () => Math.max(lastMined, await tracker.currentHeight()),
-    observe: async (txid) => {
-      const mp = await regtestMerkleProof(rc, txid, undefined, { strict: true })
-      if (mp === undefined) return undefined
-      let root: string
-      try {
-        root = mp.computeRoot(txid)
-      } catch {
-        return undefined // served path doesn't contain the txid — a claim, not a proof
+  // the chain port — built from cfg on production, injected on test tiers
+  let eventsRef: ChainEvents | undefined
+  const port =
+    ports.chain ??
+    (net === 'regtest'
+      ? regtestPort({ ...cfg.regtest!, fundAddress: PrivateKey.fromWif(cfg.regtest!.fundWif).toPublicKey().toAddress([0x6f]) }, {
+          valueOf,
+          guard: {
+            // D2 hard daily cap: default 10_000 sats/day of fees on regtest
+            // too — 'unlimited' is an explicit opt-out for soak/stress runs,
+            // and only when EVERY set cap agrees (mixed signals never
+            // silently un-guard the spend path)
+            ...(() => {
+              const caps = [nektarEnv('NEKTAR_DAILY_CAP_SATS'), nektarEnv('NEKTAR_MAX_SPEND_SATS_PER_DAY')].filter((x) => x !== undefined)
+              const unlimited = caps.length > 0 && caps.every((x) => x === 'unlimited')
+              return {
+                unlimited,
+                maxPerDay: unlimited ? Number.MAX_SAFE_INTEGER : Math.min(...caps.filter((x) => x !== 'unlimited').map((x) => Number(x)), 10_000),
+                maxFeePerTx: Number(nektarEnv('NEKTAR_MAX_FEE_SATS_PER_TX') ?? 1_000),
+                minIntervalMs: Number(nektarEnv('NEKTAR_MIN_BROADCAST_INTERVAL_MS') ?? 0)
+              }
+            })(),
+            ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
+          }
+        })
+      : await livePort(mc!, net, {
+          valueOf,
+          guard: {
+            maxFeePerTx: mc!.maxFeePerTx,
+            maxPerDay: mc!.maxSpendPerDay,
+            minIntervalMs: mc!.minBroadcastIntervalMs,
+            ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
+          },
+          held: async (txid) => await memRef?.fetchTx(txid),
+          note: (ev) => eventsRef?.note(ev),
+          dataDir: cfg.dataDir,
+          log: (s) => process.stderr.write(s)
+        }))
+  // custody — an injected coin book skips the whole wallet assembly
+  const custody: CustodyResult = injected
+    ? {
+        funds: ports.funds!,
+        wallet: ports.wallet,
+        fundKey: cfg.regtest?.fundWif ? PrivateKey.fromWif(cfg.regtest.fundWif) : undefined,
+        fundAddress: '',
+        pkhHex: ''
       }
-      if (!(await tracker.isValidRootForHeight(root, mp.blockHeight))) return undefined
-      return { txid, status: 'mined', blockHeight: mp.blockHeight, merklePath: mp }
-    }
-  })
-  events.on('abandoned', ({ txid, tip, seenAtHeight }) => {
-    process.stderr.write(`nektar confirmer: anchor ${txid} not mined after 100 blocks — abandoned (check for a conflicting spend)\n`)
-    // repair-by-name, not just a log line: mark the durable intent
-    // 'conflicted' so boot-time re-watch doesn't resurrect a dead tx
-    // forever, and surface it on mem.events for live consumers
-    void (async () => {
-      try {
-        const hit = (await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])).find((w) => w.txid === txid)
-        if (hit !== undefined) {
-          await ledger.setTxState(hit.actionId, 'conflicted', { reason: `not mined after 100 blocks (tip ${tip}, watched since height ${seenAtHeight})` })
-        }
-        memRef?.events.emit('txAbandoned', { txid, tip, seenAtHeight })
-      } catch (e) {
-        process.stderr.write(`nektar confirmer: abandoned ${txid} mark failed: ${(e as Error).message}\n`)
-      }
-    })()
-  })
-  // NEKTAR_WALLET=toolbox (the only regtest custody): the BRC-100 wallet owns
-  // the signing surface AND the funding-UTXO lifecycle — selection, spent
-  // marks, internalized change all live in wallet.sqlite. `legacy` (file
-  // reserve) is gone; `client` has no regtest path.
-  const walletMode = nektarEnv('NEKTAR_WALLET') ?? 'toolbox'
-  if (walletMode !== 'toolbox')
-    throw new Error(`regtest custody is NEKTAR_WALLET=toolbox — got '${walletMode}' (legacy was removed; client has no regtest path)`)
-  const tb = await import('@nektar/automation')
-  // D2: wallet-relayed txs go through the SAME SpendGuard — postBeef is a
-  // spend entry point, not a side channel around the caps
-  const services = new tb.RegtestWalletServices(rc, tracker, (tx) => broadcaster.broadcast(tx))
-  const toolboxWallet = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: 'regtest', services })
-  const tf = new tb.WalletFunds(toolboxWallet.wallet, services, { log: (s) => process.stderr.write(`nektar regtest: ${s}\n`) })
-  await tf.refresh()
-  if (tf.utxos.length < 5) {
-    // own treasury chain in the data dir; split mined before use. Bootstrap
-    // writes straight into the wallet via addOwned (internalize).
-    const seed = { addOwned: (tx: Transaction, vout: number) => void tf.adopt(tx, vout) }
-    const s = await bootstrapReserve(rc, fundKey, seed, rpc, { treasuryFile: join(cfg.dataDir, 'treasury.json') })
-    if (!s && tf.utxos.length === 0) throw new Error('regtest: could not fund the reserve (no unspent treasury or early coinbase for the fund key)')
-    if (s) await mineOne()
-    await tf.refresh()
-  }
-  process.stderr.write(`nektar regtest: wallet backend toolbox (wallet.sqlite) — ${tf.utxos.length} funding utxo(s)\n`)
-  // one custody view: utxoView IS the Funds impl — consumers take/spend/adopt
-  // through it, never around it
-  const utxoView = tf
-  utxoView.dealFloor = nektarEnvNum('NEKTAR_DEAL_FLOOR_SATS') ?? 0
-  const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker)
-  const chain = {
-    broadcast: async (tx: Transaction) => {
-      const r = await broadcaster.broadcast(tx)
-      if (r.status === 'success') {
-        txStore.put(tx)
-        events.watch(tx.id('hex'))
-      }
-      return r
-    },
-    // push contract: mem's onStatus listener delivers proofs/rejects the
-    // events substrate emits — the same shape statusStream gives live nets
-    onStatus: (cb: (ev: TxStatusEvent) => void) => {
-      events.on('tx', cb)
-      events.start()
-    },
-    currentHeight: () => tracker.currentHeight(),
-    isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
-    // mem.fetchTx's only regtest source: mempool/mined tx bytes + sealed BUMP
-    // so bstack funding trees (and escrow fetches) can be marked proven
-    getTx: async (txid: string) => await regtestTx(rc, txid),
-    // §12: header TIMES are the weighted median across temporal sources;
-    // single-source (default) is bit-identical to the raw tracker
-    headerAtHeight: (h: number) => temporal.headerAtHeight(h),
-    tipHeight: async () => Math.max(lastMined, await tracker.currentHeight())
+    : await openCustody(cfg, port, pass)
+  fundsRef = custody.funds
+  // regtest seeds its treasury before the tx-store snapshot so the minted
+  // funding outs land in the parent graph like every other utxo
+  if (!injected && port.network === 'regtest') {
+    await regtestSeed({ rc: cfg.regtest!, port, funds: custody.funds as import('@nektar/automation').WalletFunds, dataDir: cfg.dataDir })
+    process.stderr.write(`nektar regtest: wallet backend toolbox (wallet.sqlite) — ${custody.funds.utxos?.length ?? 0} funding utxo(s)\n`)
   }
   const { knex, store, ledger, wrapBroadcast, leasePredicate } = await openRecordsDb(cfg.dataDir)
   await openTxStore(knex)
-  for (const u of utxoView.utxos) txStore.put(u.tx)
+  for (const u of await custody.funds.outs()) txStore.put(u.tx)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
-  // watch intent is a durable record, not an in-memory accident: any tx the
-  // journal knows was broadcast-but-not-final gets re-watched on boot, so a
-  // crash in the broadcast→watch window can't strand a proof wait
-  for (const t of await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])) events.watch(t.txid)
-  tf.leased = leasePredicate(ledger)
-  chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
-  chain.broadcast = txLogBroadcast(chain.broadcast)
-  const mem = new NektarMemory(
-    chain,
-    undefined,
-    fundKey,
-    {
-      ...base,
-      funds: utxoView,
-      wallet: toolboxWallet?.wallet,
-      txStore,
-      height: () => tracker.currentHeight(),
-      agentSeed: PrivateKey.fromHex(keys.agentSeed),
-      signingKey: PrivateKey.fromHex(keys.logKey),
-      shardKeys,
-      maxLevel: Number(nektarEnv('NEKTAR_MAX_LEVEL') ?? 3),
-      securityStore: new FileSecurityStore(join(cfg.dataDir, 'security.json')),
-      stateStore: new FileStateStore(join(cfg.dataDir, 'state.json')),
-      finalityDepth: 1
-    },
-    store
-  )
-  memRef = mem
-  mem.watchTx = (txid) => events.watch(txid)
-  mem.ledger = ledger
-  healLedgerOnProof(mem, ledger, 'regtest')
-  // optimistic-claim surface: provider + signer over the regtest funder,
-  // claims registry + proof store in the data dir (the watcher shares it)
-  {
-    const { ClaimService } = await import('./claims.js')
-    const contractsDir = fileURLToPath(new URL('../../../contracts', import.meta.url))
-    mem.attachClaims(
-      new ClaimService(mem, {
-        dataDir: cfg.dataDir,
-        contractsDir,
-        fetchTx: async (txid: string) => await rpc('getrawtransaction', txid).catch(() => undefined)
-      })
-    )
-  }
-  // persist newly generated shard keys (rotation replaces the entry)
-  // only legacy PrivateKey entries persist — wallet-mode shard keys are
-  // deterministic (re-derived from the wallet each boot, nothing to store)
-  const persistKeys = () => {
-    let changed = false
-    for (const [s, k] of shardKeys)
-      if (k instanceof PrivateKey && keys.shardKeys[s] !== k.toHex()) {
-        keys.shardKeys[s] = k.toHex()
-        changed = true
-      }
-    if (changed) save()
-  }
-  // confirmer: timed flush + optional auto-mine; proof attachment itself is
-  // push-shaped — this loop only registers interest with the events
-  // substrate, which observes /merkle_proof once for every watched txid and
-  // emits 'tx' → chain.onStatus → mem.deliverTxProof. Parents of unproven
-  // anchors are watched too: a funding tree is ancestry-anchored the moment
-  // its own inputs prove. Height-gating lives inside the substrate — a
-  // static tip skips the batch like the old proofScanTip gate did.
-  let busy = false
-  const rescan = async () => {
-    const waiting = mem.unprovenAnchors()
-    if (waiting.length === 0) return
-    if (cfg.autoMine) await mineOne()
-    for (const { txid } of waiting) {
-      events.watch(txid)
-      const tx = await mem.fetchTx(txid)
-      for (const i of tx?.inputs ?? []) {
-        const src = i.sourceTransaction
-        if (src !== undefined && src.merklePath === undefined) events.watch(src.id('hex'))
-      }
-    }
-    if (waiting.length) process.stderr.write(`nektar confirmer: waiting=${waiting.length} (watched=${events.pending})\n`)
-  }
-  const tick = async () => {
-    if (busy) return
-    busy = true
-    try {
-      persistKeys()
-      await mem.flushDue()
-      await rescan()
-      persistKeys()
-    } catch (e) {
-      process.stderr.write(`nektar confirmer: ${(e as Error).message}\n`)
-    } finally {
-      busy = false
-    }
-  }
-  const timer = setInterval(() => {
-    void tick()
-  }, cfg.confirmEveryMs ?? 5000)
-  timer.unref()
-  // a fresh anchor is a producer event — rescan (watch + autoMine) now,
-  // not at the floor; the interval stays as the missed-wake backstop
-  mem.onAnchorQueued(() => void tick())
-  return {
-    mem,
-    network: 'regtest',
-    close: async () => {
-      events.stop()
-      clearInterval(timer)
-      await releaseLock()
-      await tick()
-      await toolboxWallet?.close()
-      await knex.destroy()
-    }
-  }
-}
-
-/** The instance's transaction graph — parents for spends, BEEF for
- *  counterparties, proofs as they are pushed — persisted next to the records
- *  once the database is open (nothing is broadcast before that). */
-function persistedTxStore(): { txStore: TxStore; open: (knex: import('knex').Knex) => Promise<void> } {
-  let kx: import('knex').Knex | undefined
-  const txStore = new TxStore({
-    load: async () =>
-      kx === undefined
-        ? []
-        : (await kx('tx_store').select('txid', 'raw', 'proof')).map((r: { txid: string; raw: string; proof: string | null }) => ({
-            txid: r.txid,
-            raw: r.raw,
-            ...(r.proof ? { proof: r.proof } : {})
-          })),
-    put: async (row) => {
-      if (kx !== undefined)
-        await kx('tx_store')
-          .insert({ txid: row.txid, raw: row.raw, proof: row.proof ?? null, at: Date.now() })
-          .onConflict('txid')
-          .merge(['proof'])
-    }
-  })
-  return {
-    txStore,
-    open: async (knex) => {
-      if (!(await knex.schema.hasTable('tx_store'))) {
-        await knex.schema.createTable('tx_store', (t) => {
-          t.string('txid', 64).primary()
-          t.text('raw').notNullable()
-          t.text('proof')
-          t.bigInteger('at').notNullable()
-        })
-      }
-      kx = knex
-      await txStore.load()
-    }
-  }
-}
-
-/** Shared live path for `main` (BSV mainnet) and `testnet` — test coins,
- * same code. Net-dependent bits: address prefix (0x6f test net, mainnet for
- * main), fee floor (100 vs 1 sat/kB), labels. */
-async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base: NektarMemoryOptions): Promise<Runtime> {
-  const mc = cfg.main!
-  const testNet = net !== 'main' // any test network: testnet encoding, 1 sat/kB floor
-  mkdirSync(cfg.dataDir, { recursive: true })
-  const pass = mc.passphrase
-  if (!pass) throw new KeystoreError(`${net} requires NEKTAR_KEY_PASSPHRASE (or _FILE) for keys at rest`)
-  const { release: releaseLock } = await acquireInstanceLock(cfg.dataDir)
-
-  // NEKTAR_WALLET=client: an external BRC-100 wallet (Metanet Desktop or any
-  // 'auto'-detected substrate) holds ALL signing material — no fund key, no
-  // agent seed, no log key, no new shard keys in-process. An existing
-  // keys.json is still READ (legacy shard owners + seed for old records) but
-  // nothing new is generated into it. Mutually exclusive with =toolbox.
-  const externalWallet = nektarEnv('NEKTAR_WALLET') === 'client'
-  const { keys, save } = loadKeys(cfg.dataDir, pass, true, !externalWallet)
-  let clientWallet: import('@bsv/sdk').WalletInterface | undefined
-  let fundAddress: string
-  let pkhHex: string
-  let fundKey: PrivateKey | undefined
-  if (externalWallet) {
-    if (mc.fundWif !== undefined) process.stderr.write(`nektar ${net}: NEKTAR_FUND_WIF ignored under NEKTAR_WALLET=client — the external wallet signs\n`)
-    const { WalletClient, PublicKey: SdkPublicKey } = await import('@bsv/sdk')
-    clientWallet = new WalletClient('auto', 'nektar')
-    // the reserve funds a stable self-derived wallet keyID (nektar-fund) —
-    // createSignature under the same derivation produces the matching sig, so
-    // P2PKH spends can be wallet-signed without the app holding key material.
-    // (identityKey cannot root-sign on sdk-4 — the derived pair is the only
-    // spendable surface external custody exposes.)
-    const fund = walletSigner(clientWallet, FUND_SIGN_ARGS)
-    const pk = SdkPublicKey.fromString(await fund.pubKeyHex())
-    fundAddress = pk.toAddress(testNet ? [0x6f] : undefined)
-    pkhHex = Buffer.from(pk.toHash()).toString('hex')
-    process.stderr.write(`nektar ${net}: NEKTAR_WALLET=client — signing via external wallet substrate (derived funding address ${fundAddress})\n`)
-  } else {
-    fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, true)
-    fundAddress = fundKey.toPublicKey().toAddress(testNet ? [0x6f] : undefined)
-    pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
-  }
-  // one process per fund key — a second instance spending the same reserve
-  // is how the earlier double spends happened. Harnesses that deliberately
-  // co-run set NEKTAR_ALLOW_SHARED_KEY=1 (warned on stderr).
-  let releaseKeyLock: (() => Promise<void>) | undefined
-  if (nektarEnvFlag('NEKTAR_ALLOW_SHARED_KEY')) {
-    process.stderr.write(`nektar ${net}: NEKTAR_ALLOW_SHARED_KEY=1 — fund-key lock skipped; two processes may spend this reserve
-`)
-  } else {
-    releaseKeyLock = await acquireLock(keyLockFile(pkhHex), `fund key ${fundAddress}`)
-  }
-  // TTN uses testnet encoding (prefix byte 0x6f → 'm'/'n' addresses); main '1…'
-  process.stderr.write(
-    `nektar ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)\n`
-  )
-
-  // headers via Chaintracks (public, no key — the only global data SPV
-  // needs), WITNESSED by WoC: each source now self-authenticates its answers
-  // via header PoW (NEKTAR_HEADER_POW=0 opts a private non-PoW net out), and
-  // the two must agree before a root is served — a sourced minority fork or
-  // a circular fallback pair can no longer pin a wrong root. NEKTAR_STRICT_
-  // HEADERS=1 fails closed whenever the witness can't answer; default
-  // degrades to the reachable source marked uncorroborated. GorillaPool's
-  // broadcaster doesn't mount the chaintracks listener, so mainnet uses the
-  // association broadcaster that does.
-  const requirePow = nektarEnvFlag('NEKTAR_HEADER_POW') !== false
-  const tracker = new WitnessedTracker(
-    new ChaintracksTracker(
-      mc,
-      mc.chaintracksUrl ?? (testNet ? `${mc.broadcasterUrl}/chaintracks/v2` : 'https://arcade-us-1.bsvblockchain.tech/chaintracks/v2'),
-      undefined,
-      {
-        requirePow
-      }
-    ),
-    new WocTracker(mc, { requirePow }),
-    {
-      strict: nektarEnvFlag('NEKTAR_STRICT_HEADERS'),
-      onDisagree: (height, primaryHash, witnessHash) =>
-        process.stderr.write(`nektar ${net}: header sources disagree at ${height} (primary ${primaryHash}, witness ${witnessHash}) — serving no root\n`)
-    }
-  )
-  // per-instance callback token — tags our submissions so the broadcaster can
-  // route their status updates back to us (configFromEnv leaves both fields
-  // to def()'s env fallback: NEKTAR_CALLBACK_TOKEN wins; else a persisted
-  // random token, also pushed into env so the webhook auth check sees it).
-  if (!mc.callbackToken && !nektarEnv('NEKTAR_CALLBACK_TOKEN')) {
-    const tokFile = join(cfg.dataDir, 'callback-token')
-    mc.callbackToken = existsSync(tokFile)
-      ? readFileSync(tokFile, 'utf8').trim()
-      : (() => {
-          const t = randomBytes(32).toString('hex')
-          writeFileSync(tokFile, t, { mode: 0o600 })
-          return t
-        })()
-    setNektarEnv('NEKTAR_CALLBACK_TOKEN', mc.callbackToken)
-  }
-  const callbackUrl = mc.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL')
-  const rawBroadcaster = new BsvBroadcaster(mc)
-  const { txStore, open: openTxStore } = persistedTxStore()
-  let memRef: NektarMemory | undefined
-  /** the one custody view — assigned once the wallet backend exists below;
-   *  the guard's input resolver reads it lazily so broadcasts resolve
-   *  against the wallet-backed set */
-  let utxoView: import('@nektar/automation').WalletFunds
-  const valueOf = (txid: string, vout: number): number | undefined =>
-    utxoView?.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis ??
-    txStore.get(txid)?.outputs[vout]?.satoshis ??
-    memRef?.anchorTx(txid)?.outputs[vout]?.satoshis
-  const spendGuard = new SpendGuard(rawBroadcaster, valueOf, {
-    maxFeePerTx: mc.maxFeePerTx,
-    maxPerDay: mc.maxSpendPerDay,
-    minIntervalMs: mc.minBroadcastIntervalMs,
-    ledgerFile: join(cfg.dataDir, 'spend-ledger.json')
-  })
-  // custody: NEKTAR_WALLET accepts 'toolbox' (embedded wallet, default) and
-  // 'client' (external BRC-100 substrate). Both custody coins through
-  // WalletFunds — a WalletInterface-backed Funds impl — so the file
-  // reserve is gone from product code entirely.
-  const walletMode = nektarEnv('NEKTAR_WALLET') ?? 'toolbox'
-  if (walletMode !== 'toolbox' && walletMode !== 'client') throw new Error(`NEKTAR_WALLET must be toolbox|client — got '${walletMode}' (legacy was removed)`)
-  const tb = await import('@nektar/automation')
-  // D2: the wallet's own postBeef relays through the SAME SpendGuard — a
-  // wallet-signed action is a spend entry point like any other
-  const services = new tb.LiveWalletServices({ chain: testNet ? 'test' : 'main', mc, tracker, broadcast: (tx) => spendGuard.broadcast(tx) })
-  let liveToolbox: import('@nektar/automation').ToolboxHandle | undefined
-  if (externalWallet) {
-    utxoView = new tb.WalletFunds(clientWallet!, services, { log: (s) => process.stderr.write(`nektar ${net}: ${s}\n`) })
-    await utxoView.refresh()
-    process.stderr.write(`nektar ${net}: wallet backend client (external BRC-100) — ${utxoView.utxos.length} funding utxo(s)\n`)
-  } else {
-    if (fundKey === undefined) throw new Error('NEKTAR_WALLET=toolbox embeds its keyDeriver from the fee key — =client is the keyless mode')
-    liveToolbox = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: testNet ? 'test' : 'main', services })
-    utxoView = new tb.WalletFunds(liveToolbox.wallet, services, { log: (s) => process.stderr.write(`nektar ${net}: ${s}\n`) })
-    await utxoView.refresh()
-    process.stderr.write(`nektar ${net}: wallet backend toolbox (wallet.sqlite) — ${utxoView.utxos.length} funding utxo(s)\n`)
-  }
-  // funding wake: every producer that lands a utxo (p2p 'pay', FUND_TXIDS
-  // import, indexer discovery, fee-vault mint) signals through addIfNew so
-  // waitForFunding's poll can sleep event-driven instead of fixed-cadence
-  let fundingWake: (() => void) | undefined
-  const addIfNew = (u: { tx: Transaction; vout: number }) => {
-    txStore.put(u.tx)
-    // first-party spend record beats any index or operator-named txid: an
-    // outpoint a stored tx of ours already spends is never re-imported — a
-    // definitively rejected/conflicted spender excepted, since that spend
-    // never landed and the outpoint is genuinely unspent again
-    const spender = txStore.spender(u.tx.id('hex'), u.vout)
-    if (spender === undefined) {
-      void utxoView.adopt(u.tx, u.vout)
-      fundingWake?.()
-      return
-    }
-    void ledger
-      .walletTx({ txid: spender })
-      .then((w) => {
-        if (importable(spender, w?.state)) {
-          void utxoView.adopt(u.tx, u.vout)
-          fundingWake?.()
-        }
-      })
-      .catch(() => undefined) // unreadable ledger → stay skipped; the next import pass retries
-  }
-  // optional p2p eyes: NEKTAR_P2P_PEERS='ip:port,...' — first-hand inv stream
-  // watching our reserve outpoints (spend events by ANYONE) and the fee-key
-  // script (unannounced funding). No index: watched set only, rest is dropped.
-  const p2pPeers = (nektarEnv('NEKTAR_P2P_PEERS') ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-  wireP2p({ peers: p2pPeers, pkhHex, reserve: utxoView, addIfNew, log: (s) => process.stderr.write(s) })
-  const floor = testNet ? 1 : 100
-  const feeRate = Math.max(mc.feeRateSatPerKb ?? floor, await fetchBroadcasterFeeRate(mc).catch(() => floor))
-  // utxoView IS the Funds impl — the one coin book for this runtime
-  utxoView.dealFloor = nektarEnvNum('NEKTAR_DEAL_FLOOR_SATS') ?? 0
-  const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], tracker, { wocApiKey: mc.wocApiKey, fetchImpl: mc.fetchImpl })
-  const chain = {
-    broadcast: async (tx: Transaction) => {
-      // attach parent txs so the broadcaster can send Extended Format (Arcade
-      // cannot resolve unconfirmed parents from raw txs)
-      for (const inp of tx.inputs) {
-        if (inp.sourceTransaction || !inp.sourceTXID) continue
-        const p = txStore.get(inp.sourceTXID) ?? utxoView.utxos.find((u) => u.tx.id('hex') === inp.sourceTXID)?.tx ?? memRef?.anchorTx(inp.sourceTXID)
-        if (p) inp.sourceTransaction = p
-      }
-      const r = await spendGuard.broadcast(tx)
-      if (r.status === 'success') {
-        txStore.put(tx)
-        events.watch(tx.id('hex'))
-        memRef?.metrics.inc('nektar_fee_sats_total', {}, spendGuard.costs().at(-1)?.fee ?? 0, 'total anchor fee spend (sats)')
-      } else if (r.description?.startsWith('SpendGuard refused')) {
-        memRef?.metrics.inc(
-          'nektar_spend_refused_total',
-          { reason: r.description.split(': ')[1]?.split(' ')[0] ?? 'unknown' },
-          1,
-          'broadcasts refused by SpendGuard'
-        )
-      }
-      return r
-    },
-    // push contract: mem's onStatus listener delivers proofs/rejects the
-    // events substrate emits — pushed SSE statuses stay hints (handleBroadcasterStatus)
-    onStatus: (cb: (ev: TxStatusEvent) => void) => {
-      events.on('tx', cb)
-      events.start()
-    },
-    currentHeight: () => tracker.currentHeight(),
-    isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
-    // §12: header TIMES are the weighted median across temporal sources;
-    // single-source (default) is bit-identical to the raw tracker
-    headerAtHeight: (h: number) => temporal.headerAtHeight(h),
-    tipHeight: () => tracker.currentHeight()
-  }
-  // the one chain-event substrate: pushed SSE/callback statuses land as
-  // notes (unverified hints), this pull probes what a push could not deliver
-  // — proofs missed while down, and txs handed rather than broadcast.
-  // status reads go through the chain-observer seam: the broadcaster adapter's
-  // statusHint (WoC cross-checks a dead broadcaster inside it)
-  const statusHint = (txid: string): Promise<import('@nektar/chain').StatusHint> => rawBroadcaster.statusHint(txid)
+  // the one chain-event substrate for this process: every "is it proven?"
+  // consumer (confirmer, anchor parents, ledger) registers interest here and
+  // receives 'tx' pushes instead of running a private poll loop. observe comes
+  // from the port — each adapter knows how ITS evidence is produced.
   const events = new ChainEvents({
-    intervalMs: cfg.confirmEveryMs ?? 30_000,
-    height: () => tracker.currentHeight(),
-    // a tx unwatched after this many blocks without a terminal status emits
-    // 'abandoned' — the terminal verdict for funding-tree mints that were
-    // resubmitted but never mined (silently evicted, never propagated)
-    abandonAfterBlocks: nektarEnvNum('NEKTAR_ABANDON_BLOCKS') ?? 6,
-    observe: async (txid) => {
-      const tx = await memRef?.fetchTx(txid).catch(() => undefined)
-      if (tx?.merklePath !== undefined) return { txid, status: 'mined', blockHeight: tx.merklePath.blockHeight, merklePath: tx.merklePath }
-      // a broadcaster rejection verdict is a claim with no possible proof
-      // object — only a double-spend is provable (via the conflicting tx's
-      // own BUMP). It lands as a hint (resolves waiters, keeps the floor),
-      // never on the verified path — same treatment the push path gives it.
-      const probe = await statusHint(txid)
-      if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(probe.status)) events.note({ txid, status: 'rejected' })
-      // an unanswered probe — or a 'mined' claim we hold no verified path
-      // for — is not "not mined": throwing keeps the abandon clock from
-      // counting a question nobody answered
-      if (!probe.answered || probe.status === 'MINED' || probe.status === 'IMMUTABLE') throw new Error(`cannot establish 'not mined' for ${txid}`)
-      return undefined
-    }
+    intervalMs: cfg.confirmEveryMs ?? (net === 'regtest' ? 2_000 : 30_000),
+    abandonAfterBlocks: port.abandonAfterBlocks,
+    height: async () => await port.height(),
+    observe: port.observe
   })
+  eventsRef = events
   events.on('abandoned', ({ txid, tip, seenAtHeight }) => {
     process.stderr.write(`nektar ${net}: tx ${txid} not mined after abandon horizon — abandoned (tip ${tip}, watched since ${seenAtHeight})\n`)
     // repair-by-name: mark the durable intent 'conflicted' so boot-time
@@ -926,54 +301,92 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       }
     })()
   })
-  const { knex, store, ledger, wrapBroadcast, leasePredicate } = await openRecordsDb(cfg.dataDir)
-  await openTxStore(knex)
-  for (const u of utxoView.utxos) txStore.put(u.tx)
-  const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
+  // §12: header TIMES are the weighted median across temporal sources;
+  // single-source (default) is bit-identical to the raw tracker
+  const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], port.tracker, live ? { wocApiKey: mc?.wocApiKey, fetchImpl: mc?.fetchImpl } : {})
+  const chain = {
+    broadcast: async (tx: Transaction) => {
+      // attach parent txs so the broadcaster can send Extended Format (nodes
+      // cannot resolve unconfirmed parents from raw txs) — local sources only
+      for (const inp of tx.inputs) {
+        if (inp.sourceTransaction || !inp.sourceTXID) continue
+        const p = txStore.get(inp.sourceTXID) ?? utxosOf()?.find((u) => u.tx.id('hex') === inp.sourceTXID)?.tx ?? memRef?.anchorTx(inp.sourceTXID)
+        if (p) inp.sourceTransaction = p
+      }
+      const r = await port.broadcast(tx)
+      if (r.status === 'success') {
+        txStore.put(tx)
+        events.watch(tx.id('hex'))
+        memRef?.metrics.inc('nektar_fee_sats_total', {}, port.guard?.costs().at(-1)?.fee ?? 0, 'total anchor fee spend (sats)')
+      } else if (r.description?.startsWith('SpendGuard refused')) {
+        memRef?.metrics.inc(
+          'nektar_spend_refused_total',
+          { reason: r.description.split(': ')[1]?.split(' ')[0] ?? 'unknown' },
+          1,
+          'broadcasts refused by SpendGuard'
+        )
+      }
+      return r
+    },
+    // push contract: mem's onStatus listener delivers proofs/rejects the
+    // events substrate emits — pushed SSE statuses stay hints
+    onStatus: (cb: (ev: TxStatusEvent) => void) => {
+      events.on('tx', cb)
+      events.start()
+    },
+    currentHeight: async () => await port.height(),
+    isValidRootForHeight: (r: string, h: number) => port.tracker.isValidRootForHeight(r, h),
+    getTx: port.getTx,
+    isRejected: port.isRejected,
+    headerAtHeight: (h: number) => temporal.headerAtHeight(h),
+    tipHeight: async () => await port.height()
+  }
   // watch intent is a durable record, not an in-memory accident: any tx the
   // journal knows was broadcast-but-not-final gets re-watched on boot, so a
   // crash in the broadcast→watch window can't strand a proof wait
   for (const t of await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])) events.watch(t.txid)
-  utxoView.leased = leasePredicate(ledger)
+  custody.funds.leased = leasePredicate(ledger)
+  if ('dealFloor' in custody.funds) custody.funds.dealFloor = nektarEnvNum('NEKTAR_DEAL_FLOOR_SATS') ?? 0
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   chain.broadcast = txLogBroadcast(chain.broadcast)
   const mem = new NektarMemory(
     chain,
     undefined,
-    fundKey,
+    custody.fundKey,
     {
       ...base,
-      funds: utxoView,
-      wallet: clientWallet ?? liveToolbox?.wallet,
+      funds: custody.funds,
+      wallet: custody.wallet,
       txStore,
-      statusHint,
-      height: () => tracker.currentHeight(),
+      statusHint: port.statusHint,
+      height: () => port.height(),
+      proofLookup: port.proofLookup,
+      txLookup: port.txLookup,
+      watchTx: (txid) => events.watch(txid),
+      ledger,
       agentSeed: keys.agentSeed ? PrivateKey.fromHex(keys.agentSeed) : undefined,
       signingKey: keys.logKey ? PrivateKey.fromHex(keys.logKey) : undefined,
       shardKeys,
       maxLevel: Number(nektarEnv('NEKTAR_MAX_LEVEL') ?? 3),
-      feeRateSatPerKb: feeRate,
+      feeRateSatPerKb: port.feeRateSatPerKb,
       securityStore: new FileSecurityStore(join(cfg.dataDir, 'security.json')),
       stateStore: new FileStateStore(join(cfg.dataDir, 'state.json')),
-      finalityDepth: Number(nektarEnv('NEKTAR_FINALITY_DEPTH') ?? 6)
+      finalityDepth: live ? Number(nektarEnv('NEKTAR_FINALITY_DEPTH') ?? 6) : 1
     },
     store
   )
   memRef = mem
-  mem.watchTx = (txid) => events.watch(txid)
-  mem.ledger = ledger
   healLedgerOnProof(mem, ledger, net)
   // a reorg invalidates cached proofs at/above the fork: clear them and
   // re-watch so the observe path re-fetches and re-verifies against the new
   // headers. Un-anchoring shard records stays out of scope — finalityDepth
   // already withholds shallow anchors from queries.
   let lastReorgFrom: number | undefined
-  tracker.onReorg?.((removed, newTip) => {
+  port.tracker.onReorg?.((removed, newTip) => {
     if (removed.length === 0) return
     const from = Math.min(...removed.map((h) => h.height))
     // the same fork fires once per witnessed source — the effects are
-    // idempotent (clearProofsFrom returns [] the second time) but the log,
-    // the metric and the emit must not double-count a repeated `from`
+    // idempotent but the log, the metric and the emit must not double-count
     if (from === lastReorgFrom) return
     lastReorgFrom = from
     process.stderr.write(`nektar ${net}: header reorg — ${removed.length} stale header(s) from height ${from}, new tip ${newTip.height}\n`)
@@ -981,72 +394,55 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
     for (const txid of txStore.clearProofsFrom(from)) events.watch(txid)
     mem.events.emit('reorg', { from, tip: newTip.height })
   })
-  // restart-recovery pull for proofs that never arrived by push — a fetched
-  // BUMP counts only after its root verifies against our own headers (same
-  // trust rule as the push path; push stays primary)
-  mem.proofLookup = async (txid) => {
-    const r = await merklePathMainnet(mc, txid)
-    if (!r) return undefined
-    const root = r.merklePath.computeRoot(txid)
-    return (await tracker.isValidRootForHeight(root, r.merklePath.blockHeight)) ? r.merklePath : undefined
-  }
-  mem.txLookup = async (txid) => await fetchRawTx(mc, txid)
-  mem.metrics.gauge('nektar_fee_balance_sats', () => utxoView.utxos.reduce((s, u) => s + u.satoshis, 0), 'operator fee-key balance (sats)')
-  // outbound-only status push: no callback URL → pull tx statuses from the
-  // broadcaster's /events SSE stream into the same handler the webhook uses.
-  // Needs no inbound port; Last-Event-ID cursor persists across restarts.
-  let stream: { close: () => void } | undefined
-  if (!callbackUrl && (mc.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'))) {
-    const cursorFile = join(cfg.dataDir, 'sse-cursor')
-    stream = statusStream(
-      mc,
-      async (ev) => {
-        if (ev.data === undefined) return
-        let j: { txid?: string; txStatus?: string; merklePath?: string; extraInfo?: string }
-        try {
-          j = JSON.parse(ev.data)
-        } catch {
-          return
-        } // malformed data line — skip
-        mem.metrics.inc(
-          'nektar_broadcaster_stream_events_total',
-          { status: String(j.txStatus ?? '?').toLowerCase() },
-          1,
-          'broadcaster status stream events received'
-        )
-        await handleBroadcasterStatus(mem, j)
-        // the pushed status is a wake hint: note() records it for
-        // statusOf/waitFor, but interest only drops when a verified observe
-        // delivers — a push whose BUMP failed verification keeps the pull
-        // probe's reconcile floor
-        if (typeof j.txid === 'string') {
-          const s = String(j.txStatus ?? '').toUpperCase()
-          if (s === 'MINED' || s === 'IMMUTABLE') events.note({ txid: j.txid, status: 'mined' })
-          else if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(s)) events.note({ txid: j.txid, status: 'rejected' })
-        }
-      },
-      {
-        cursor: {
-          get: () => {
-            try {
-              const v = readFileSync(cursorFile, 'utf8').trim()
-              return v === '' ? undefined : v
-            } catch {
-              return undefined
-            }
-          },
-          set: (id) => {
-            try {
-              writeFileSync(cursorFile, id)
-            } catch {
-              /* best effort */
-            }
-          }
-        },
-        onError: (e) => process.stderr.write(`nektar ${net}: status stream: ${e.message}\n`)
-      }
+  mem.metrics.gauge('nektar_fee_balance_sats', () => utxosOf()?.reduce((s, u) => s + (u.satoshis ?? 0), 0) ?? 0, 'operator fee-key balance (sats)')
+  // pushed status hints (the port's SSE channel) → the same handler the
+  // webhook uses, plus a substrate note so waiters see the hint
+  const stream = port.openHintStream?.(async (j) => {
+    const w = j as { txid?: string; txStatus?: string }
+    mem.metrics.inc(
+      'nektar_broadcaster_stream_events_total',
+      { status: String(w.txStatus ?? '?').toLowerCase() },
+      1,
+      'broadcaster status stream events received'
     )
-    process.stderr.write(`nektar ${net}: no callback URL — pulling tx statuses from the broadcaster /events stream\n`)
+    await handleBroadcasterStatus(mem, w)
+    // the pushed status is a wake hint: note() records it for statusOf/
+    // waitFor, but interest only drops when a verified observe delivers — a
+    // push whose BUMP failed verification keeps the pull probe's floor
+    if (typeof w.txid === 'string') {
+      const s = String(w.txStatus ?? '').toUpperCase()
+      if (s === 'MINED' || s === 'IMMUTABLE') events.note({ txid: w.txid, status: 'mined' })
+      else if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(s)) events.note({ txid: w.txid, status: 'rejected' })
+    }
+  })
+  // funding — the reserve fills per-network: regtest bootstraps a treasury
+  // split; live nets run imports/discovery/vault/p2p + the funding wait and
+  // expose the /v1 ops surface
+  let fundingRefresh: (() => Promise<void>) | undefined
+  let topUp: (() => Promise<void>) | undefined
+  let ops: Runtime['ops'] | undefined
+  if (!injected && live) {
+    const lf = await liveFunding({ cfg, mc: mc!, net, custody, txStore, ledger, port, broadcast: chain.broadcast })
+    ops = lf.ops
+    fundingRefresh = lf.refresh
+    topUp = lf.topUp
+  }
+  // a dead funding mint may free its inputs — reconcile the reserve on the
+  // abandon verdict (replaces the old watcher-status refresh, which
+  // status-string hints no longer trigger)
+  events.on('abandoned', () => void (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve()))
+  // optimistic-claim surface: provider + signer over the funding view,
+  // claims registry + proof store in the data dir (the watcher shares it)
+  if (port.network === 'regtest' && port.getTx !== undefined) {
+    const { ClaimService } = await import('./claims.js')
+    const contractsDir = fileURLToPath(new URL('../../../contracts', import.meta.url))
+    mem.attachClaims(
+      new ClaimService(mem, {
+        dataDir: cfg.dataDir,
+        contractsDir,
+        fetchTx: async (txid: string) => (await port.getTx!(txid))?.toHex()
+      })
+    )
   }
   // only legacy PrivateKey entries persist — wallet-mode shard keys are
   // deterministic (re-derived from the wallet each boot, nothing to store)
@@ -1059,231 +455,80 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       }
     if (changed) save()
   }
-  // NEKTAR_FEE_VAULT (testnet/main): anchor funding minted through the
-  // fee-vault covenant — setupFeeVault returns the funder's takeReserve
-  const vaultSpec = nektarEnv('NEKTAR_FEE_VAULT')
-  if (vaultSpec) {
-    const vaultTake = await setupFeeVault({
-      vaultSpec,
-      dataDir: cfg.dataDir,
-      pkhHex,
-      fundKey: fundKey ?? walletSigner(clientWallet as SignerWallet, FUND_SIGN_ARGS),
-      fundAddress,
-      funds: utxoView,
-      broadcast: async (tx) => await chain.broadcast(tx),
-      currentHeight: async () => await tracker.currentHeight(),
-      net,
-      log: (s) => process.stderr.write(s)
-    })
-    // the covenant mints capped publish stock — deal and upkeep takes still
-    // draw from the shared pool
-    utxoView.takeOverride = async (purpose) => (purpose === 'publish' ? await vaultTake() : undefined)
-  }
-  // NEKTAR_FUND_TXIDS: funding txs to import directly (no address index needed)
-  for (const txid of (nektarEnv('NEKTAR_FUND_TXIDS') ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)) {
-    try {
-      for (const u of await importFundingTx(mc, txid, pkhHex)) addIfNew(u)
-    } catch (e) {
-      process.stderr.write(`nektar ${net}: funding import ${txid}: ${(e as Error).message}\n`)
-    }
-  }
-  const topUp = async () => {
-    // tracked-set model: we spend only what we made or were handed. Address-
-    // index discovery (WoC) is OPT-IN — NEKTAR_INDEXER_DISCOVERY=1 — because it
-    // creates an indexer dependency that doesn't scale. The default funding
-    // path is NEKTAR_FUND_TXIDS=<txid|hex:rawtx> (import above).
-    if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') === '1') {
-      try {
-        for (const u of await discoverUtxos(mc, fundAddress, (t, why) =>
-          process.stderr.write(`nektar discover: index entry ${t.slice(0, 12)} skipped: ${why}\n`)
-        ))
-          addIfNew(u)
-      } catch (e) {
-        process.stderr.write(`nektar ${net}: UTXO discovery unavailable (${(e as Error).message}) — set NEKTAR_FUND_TXIDS=<funding txid>\n`)
-      }
-    }
-    if (utxoView.utxos.length === 0)
-      process.stderr.write(
-        `nektar ${net}: reserve empty — send coins to ${fundAddress} and set NEKTAR_FUND_TXIDS (or NEKTAR_WAIT_FUNDING=1 to hold for funds)\n`
-      )
-  }
-  // bootstrap UX (NEKTAR_WAIT_FUNDING=1): QR the funding address and hold
-  // startup until a few sats land — ONCE, not per tick (the tick loop re-runs
-  // topUp every confirmEveryMs and must not block). Detection during the
-  // wait: indexer discovery when enabled, p2p 'pay' auto-import, or the
-  // operator setting NEKTAR_FUND_TXIDS. NEKTAR_WAIT_FUNDING_MS caps it (30 min).
-  const waitForFunding = async () => {
-    if (utxoView.utxos.length > 0 || nektarEnv('NEKTAR_WAIT_FUNDING') !== '1') return
-    try {
-      const QR = await import('qrcode')
-      process.stderr.write('\n' + (await QR.toString(fundAddress, { type: 'terminal', small: true })) + '\n')
-    } catch {
-      /* QR optional — the address prints either way */
-    }
-    process.stderr.write(`nektar ${net}: waiting for funding — send a few sats to ${fundAddress}\n`)
-    const deadline = Date.now() + Number(nektarEnv('NEKTAR_WAIT_FUNDING_MS') ?? 30 * 60_000)
-    const pollMs = Number(nektarEnv('NEKTAR_FUND_POLL_MS') ?? 15_000)
-    while (utxoView.utxos.length === 0 && Date.now() < deadline) {
-      await utxoView.refresh().catch(() => undefined)
-      // event-driven wait: addIfNew resolves the sleep the moment a utxo
-      // lands; re-check first so a just-landed utxo can't sleep past us,
-      // and a missed signal degrades to the bounded poll, never a hang
-      await new Promise<void>((r) => {
-        if (utxoView.utxos.length > 0) return r()
-        const t = setTimeout(
-          () => {
-            fundingWake = undefined
-            r()
-          },
-          Math.min(pollMs, Math.max(0, deadline - Date.now()))
-        )
-        fundingWake = () => {
-          fundingWake = undefined
-          clearTimeout(t)
-          r()
-        }
-      })
-      for (const txid of (nektarEnv('NEKTAR_FUND_TXIDS') ?? '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)) {
-        try {
-          for (const u of await importFundingTx(mc, txid, pkhHex)) addIfNew(u)
-        } catch {
-          /* keep polling */
-        }
-      }
-      if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') === '1') {
-        try {
-          for (const u of await discoverUtxos(mc, fundAddress, (t, why) =>
-            process.stderr.write(`nektar discover: index entry ${t.slice(0, 12)} skipped: ${why}\n`)
-          ))
-            addIfNew(u)
-        } catch {
-          /* keep polling */
-        }
-      }
-    }
-    if (utxoView.utxos.length > 0) {
-      process.stderr.write(`nektar ${net}: funded ✓ — ${utxoView.utxos.reduce((s, u) => s + u.satoshis, 0)} sats across ${utxoView.utxos.length} utxo(s)\n`)
-    } else {
-      process.stderr.write(`nektar ${net}: funding wait timed out — booting unfunded (anchors fail until ${fundAddress} has a utxo; use NEKTAR_FUND_TXIDS)\n`)
-    }
-  }
-  await waitForFunding()
-  await topUp()
+  // confirmer: timed flush + optional auto-mine; proof attachment itself is
+  // push-shaped — this loop only registers interest with the events
+  // substrate, which delivers via chain.onStatus → mem.deliverTxProof.
+  // Parents of unproven anchors are watched too: a funding tree is
+  // ancestry-anchored the moment its own inputs prove. Height-gating lives
+  // inside the substrate — a static tip skips the batch entirely.
   let busy = false
+  let inflight: Promise<void> | undefined
   let proofPullAt = 0
   const tick = async () => {
-    if (busy) return
+    if (busy) return await inflight
     busy = true
-    try {
-      persistKeys()
-      await mem.flushDue()
-      // proofs are pushed (webhook or status stream); the events substrate's
-      // pull picks up what a push could not deliver — a proof missed while
-      // the instance was down, or a tx handed rather than broadcast. This
-      // pass registers interest; delivery arrives via chain.onStatus.
-      for (const { txid } of mem.unprovenAnchors()) events.watch(txid)
-      // ledger txs too: one shared probe per txid serves the watcher's
-      // statusOf short-circuit — no second /tx fetch per inflight tx
-      for (const w of await ledger.walletTxs(['submitted', 'submission_unknown', 'observed'])) events.watch(w.txid)
-      // a bounded, rotating pull: each tick tries a few unproven txs so a
-      // long list can never serialize minutes of lookups inside one pass —
-      // push (callbacks/status stream) stays the primary proof channel
-      {
-        const unproven = txStore.unproven()
-        const pull = unproven.length <= 8 ? unproven : Array.from({ length: 8 }, (_, i) => unproven[(proofPullAt + i) % unproven.length])
-        proofPullAt = unproven.length > 0 ? (proofPullAt + 8) % unproven.length : 0
-        for (const txid of pull) await mem.fetchTx(txid)
-      }
-      await topUp()
-      persistKeys()
-    } catch (e) {
-      process.stderr.write(`nektar confirmer(${net}): ${(e as Error).message}\n`)
-    } finally {
-      busy = false
-    }
-  }
-  const timer = setInterval(
-    () => {
-      void tick()
-    },
-    cfg.confirmEveryMs ?? (testNet ? 30_000 : 60_000)
-  )
-  timer.unref()
-  // same wake as regtest: a fresh anchor registers interest on the txid and
-  // its parents immediately — proof delivery rides the events substrate's
-  // own wakes (watch/note → poke), the floor only reconciles
-  mem.onAnchorQueued(() => void tick())
-  const ops = {
-    wallet: async () => {
-      const balanceSats = utxoView.utxos.reduce((s, u) => s + u.satoshis, 0)
-      const costs = spendGuard.costs()
-      const avg = costs.length ? Math.round(costs.reduce((s, c) => s + c.fee, 0) / costs.length) : 0
-      return {
-        address: fundAddress,
-        balanceSats,
-        utxos: utxoView.utxos.length,
-        spentTodaySats: spendGuard.spentToday(),
-        caps: { maxFeePerTx: mc.maxFeePerTx!, maxPerDay: mc.maxSpendPerDay!, minIntervalMs: mc.minBroadcastIntervalMs! },
-        avgFeePerAnchorSats: avg,
-        runwayAnchors: avg > 0 ? Math.floor(balanceSats / avg) : null
-      }
-    },
-    costs: () => spendGuard.costs(),
-    // fundingImport MCP tool: credit a tx paying the fee address into the
-    // reserve without a restart (same path as NEKTAR_FUND_TXIDS)
-    importFunding: async (txid: string) => {
-      const added = await importFundingTx(mc, txid, pkhHex)
-      for (const u of added) addIfNew(u)
-      const balanceSats = utxoView.utxos.reduce((s, u) => s + u.satoshis, 0)
-      return { imported: added.length, utxos: utxoView.utxos.length, balanceSats, address: fundAddress, txids: [...new Set(added.map((u) => u.tx.id('hex')))] }
-    },
-    // fundingRefresh MCP tool: reconcile the wallet's funding view against
-    // chain truth — the wallet's spendable view IS the reconcile; a refresh
-    // re-queries listOutputs, then adopts whatever the index reports live
-    // at the fee address. Fixes the phantom-entry/dust-pick class.
-    refreshFunding: async () => {
-      await utxoView.refresh()
-      let imported = 0
+    inflight = (async () => {
       try {
-        for (const u of await discoverUtxos(mc, fundAddress, (t, why) =>
-          process.stderr.write(`nektar discover: index entry ${t.slice(0, 12)} skipped: ${why}\n`)
-        )) {
-          const before = utxoView.utxos.length
-          addIfNew(u)
-          if (utxoView.utxos.length > before) imported++
+        persistKeys()
+        await mem.flushDue()
+        const waiting = mem.unprovenAnchors()
+        if (waiting.length > 0 && cfg.autoMine) await port.mine?.()
+        for (const { txid } of waiting) {
+          events.watch(txid)
+          const tx = await mem.fetchTx(txid)
+          for (const i of tx?.inputs ?? []) {
+            const src = i.sourceTransaction
+            if (src !== undefined && src.merklePath === undefined) events.watch(src.id('hex'))
+          }
         }
-      } catch {
-        /* discovery down — wallet view still refreshed */
+        // ledger txs too: one shared probe per txid serves the watcher's
+        // statusOf short-circuit — no second fetch per inflight tx
+        for (const w of await ledger.walletTxs(['submitted', 'submission_unknown', 'observed'])) events.watch(w.txid)
+        // a bounded, rotating pull: each tick tries a few unproven txs so a
+        // long list can never serialize minutes of lookups inside one pass —
+        // push (callbacks/status stream) stays the primary proof channel
+        {
+          const unproven = txStore.unproven()
+          const pull = unproven.length <= 8 ? unproven : Array.from({ length: 8 }, (_, i) => unproven[(proofPullAt + i) % unproven.length])
+          proofPullAt = unproven.length > 0 ? (proofPullAt + 8) % unproven.length : 0
+          for (const txid of pull) await mem.fetchTx(txid)
+        }
+        if (waiting.length) process.stderr.write(`nektar confirmer(${net}): waiting=${waiting.length} (watched=${events.pending})\n`)
+        await topUp?.()
+        persistKeys()
+      } catch (e) {
+        process.stderr.write(`nektar confirmer(${net}): ${(e as Error).message}\n`)
+      } finally {
+        busy = false
+        inflight = undefined
       }
-      const balanceSats = utxoView.utxos.reduce((s, u) => s + u.satoshis, 0)
-      return { refreshed: true, imported, utxos: utxoView.utxos.length, balanceSats, address: fundAddress }
-    }
+    })()
+    await inflight
   }
-  // a dead funding mint may free its inputs — reconcile the reserve on the
-  // abandon verdict (replaces the watcher's onRejected refresh, which
-  // status-string hints no longer trigger). Registered post-`ops` on purpose:
-  // the mark/emit handler above can fire while the funding wait still runs.
-  events.on('abandoned', () => void ops.refreshFunding?.().catch(() => {}))
+  const timer = setInterval(() => {
+    void tick()
+  }, cfg.confirmEveryMs ?? 5000)
+  timer.unref()
+  // a fresh anchor is a producer event — rescan (watch + autoMine) now,
+  // not at the floor; the interval stays as the missed-wake backstop
+  mem.onAnchorQueued(() => void tick())
+  // the ledger watcher — event-driven off the shared substrate's sweeps,
+  // height advances and pushed broadcaster statuses; no private interval
   const { TransactionWatcher } = await import('@nektar/automation')
   const watcher = new TransactionWatcher(
     ledger,
     async (txid) => {
       // the shared substrate already probed this txid — use its answer
-      // instead of a second /tx fetch per watched tx per pass; a VERIFIED
+      // instead of a second fetch per watched tx per pass; a VERIFIED
       // terminal record settles it without the network call at all
       const seen = events.statusOf(txid)
       const verdict = seen?.verified === true ? watcherObservation(seen, '') : undefined
       if (verdict !== undefined) return verdict
-      return watcherObservation(seen, (await statusHint(txid).catch(() => ({ status: '', answered: false }))).status)
+      const hint = await port.statusHint?.(txid).catch(() => ({ status: '', answered: false }))
+      return watcherObservation(seen, hint?.status ?? '')
     },
     async () => {
-      await ops.refreshFunding?.().catch(() => {})
+      await (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
     }
   )
   let watching = false
@@ -1297,8 +542,6 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
         watching = false
       })
   }
-  // event-driven: the shared substrate's sweeps, height advances and pushed
-  // broadcaster statuses may each settle a watched tx — no private interval
   events.on('tick', watchOnce)
   events.on('height', watchOnce)
   mem.events.on('broadcasterStatus', watchOnce)
@@ -1311,11 +554,16 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       events.stop()
       mem.events.off('broadcasterStatus', watchOnce)
       clearInterval(timer)
+      await inflight // drain an in-flight tick before the final pass + knex.destroy
       await releaseLock()
-      await releaseKeyLock?.()
+      await custody.releaseKeyLock?.()
       await tick()
-      await liveToolbox?.close()
+      await custody.closeWallet?.()
       await knex.destroy()
     }
   }
 }
+
+// public surface preserved through index.ts — the helpers moved to
+// rtsupport.ts; callers importing them from './runtime.js' keep working.
+export { acquireLock, keyLockFile, txLogBroadcast }

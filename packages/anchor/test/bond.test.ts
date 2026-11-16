@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, LockingScript, P2PKH } from '@bsv/sdk'
-import { stackWorld, type StackChain, type StackFunder } from '@nektar/chain'
+import { testWorld, type TestChain, type TestFunder } from '@nektar/chain'
 import { CheckpointBond, type BondUtxo } from '../src/bond.js'
 import { buildP2PKHScript } from '@nektar/anchor'
 
@@ -14,9 +14,9 @@ const cfg = { operatorPkh, bondReleaseHeight: 100n, maxFee: 10n, epochLen: 10n }
 const R1 = 'aa'.repeat(32)
 const R2 = 'bb'.repeat(32)
 
-type World = { chain: StackChain; funder: StackFunder; bond: CheckpointBond }
+type World = { chain: TestChain; funder: TestFunder; bond: CheckpointBond }
 async function setup(t: { skip: (m?: string) => void }): Promise<World | undefined> {
-  const w = await stackWorld(t, 8, 20_000)
+  const w = await testWorld(t, 8, 20_000)
   if (w === undefined) return undefined
   return { chain: w.chain, funder: w.funder, bond: new CheckpointBond(cfg) }
 }

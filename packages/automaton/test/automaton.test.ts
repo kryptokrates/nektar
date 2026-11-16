@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { utf8, dsha256, toHex } from '@nektar/core'
-import { stackWorld } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import {
   Automaton,
   AutomatonError,
@@ -36,14 +36,14 @@ const OUT = toHex(dsha256(utf8('out')))
 // production path: NektarProvider over the regtest stack with real node script
 // evaluation — the chain is the oracle; owner key ≠ funding key.
 async function deployed(t: { skip: (m?: string) => void }, def = DEF) {
-  const w = await stackWorld(t, 24)
+  const w = await testWorld(t, 24)
   if (w === undefined) return undefined
   const { chain, funder } = w
   const ac = new AutomatonChain(def, PrivateKey.fromRandom(), funder, funder.keyPair, chain)
   await ac.deploy()
   return ac
 }
-const SCRIPT_INVALID = /SCRIPT_INVALID/
+const SCRIPT_INVALID = /SCRIPT_INVALID|Script evaluation error/
 
 test('AUT-005: deploy + valid steps accepted by script evaluation; head decoded from chain', async (t) => {
   const ac = await deployed(t)

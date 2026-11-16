@@ -4,16 +4,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { stackWorld, stackChain, stackTreasury, StackFunder } from '@nektar/chain'
+import { testChain, testFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { visibleTools, callTool } from '../src/server.js'
 
 const SALE_TOOLS = ['sale']
 
 async function setup(t: { skip: (m?: string) => void }) {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const mk = async (opts: any = {}) => {
-    const funder = await StackFunder.fund(await stackTreasury(), 50)
+    const funder = await testFunder(50)
     return new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })
   }
   return { chain, seller: await mk(), buyer: await mk(), mk }

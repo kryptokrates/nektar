@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { parseProgram } from '@nektar/datalog'
 import { PolicyDAG } from '@nektar/graph'
 import { encodeZkder } from '@nektar/zk'
@@ -36,7 +36,7 @@ pair(P) :- member(P, verified), member(P, verified).
 const dag = () => new PolicyDAG([{ name: 'base', rules: parseProgram(PROG).rules }])
 
 async function world(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
-  const w = await stackWorld(t, 4)
+  const w = await testWorld(t, 4)
   if (w === undefined) return
   const { chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 10 }, ...opts })

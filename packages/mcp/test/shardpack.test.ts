@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import type { AddressInfo } from 'node:net'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 
 async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
-  const w = await stackWorld(t, 50)
+  const w = await testWorld(t, 50)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test-model-1', ...opts })

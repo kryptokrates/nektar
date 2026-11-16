@@ -4,7 +4,7 @@
 // and the NEKTAR_PROOF_SHARDING opt-out.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stackWorld } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { dsha256, utf8, merkleRoot } from '@nektar/core'
@@ -15,7 +15,7 @@ const leaves = (n: number) => Array.from({ length: n }, (_, i) => dsha256(utf8(`
 const subsetBytes = (n: number, idx: number[]) => encodeZkdis(buildSubsetProof(leaves(n), idx))
 
 async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, size: number, mine = true) {
-  const w = await stackWorld(t, 6)
+  const w = await testWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w
   const ac = new AnchorChain('dis', f.keyPair, f, f.keyPair, chain)
@@ -100,7 +100,7 @@ test('subset proof NEGATIVES (each check fails closed with a specific reason)', 
 })
 
 test('NektarMemory: proveSubset + verifySubset over its own anchored batch; NEKTAR_PROOF_SHARDING=0 → disabled', async (t) => {
-  const w = await stackWorld(t, 20)
+  const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 100 } })

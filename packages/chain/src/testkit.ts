@@ -56,6 +56,12 @@ function loadRepoEnv(): void {
   }
 }
 
+/** the active test tier: the in-memory world by default, the real regtest
+ *  stack when NEKTAR_TEST_TIER=stack (see testworld.ts) */
+export function testTier(): 'memory' | 'stack' {
+  return nektarEnv('NEKTAR_TEST_TIER') === 'stack' ? 'stack' : 'memory'
+}
+
 export function stackCfgFromEnv(): RegtestConfig | undefined {
   loadRepoEnv()
   const pass = nektarEnv('NEKTAR_RPC_PASS')
@@ -133,8 +139,13 @@ export async function stackUp(
   return false
 }
 
-/** node:test gate — call first thing in a test that needs the chain */
+/** node:test gate — call first thing in a test that needs the real node.
+ *  On the memory tier it skips before loading .env or probing the stack. */
 export async function skipUnlessStack(t: { skip: (msg?: string) => void }, cfg?: RegtestConfig): Promise<RegtestConfig | undefined> {
+  if (testTier() !== 'stack') {
+    t.skip('stack tier only — run with NEKTAR_TEST_TIER=stack')
+    return undefined
+  }
   const c = cfg ?? stackCfgFromEnv()
   if (c === undefined || !(await stackUp(c))) {
     t.skip('regtest stack unreachable (NEKTAR_RPC_*)')

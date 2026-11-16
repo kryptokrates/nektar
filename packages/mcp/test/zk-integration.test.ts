@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { PrivateKey } from '@bsv/sdk'
-import { stackWorld, stackTreasury, StackFunder } from '@nektar/chain'
+import { testWorld, testFunder } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { fromHex, dsha256, utf8 } from '@nektar/core'
@@ -29,7 +29,7 @@ const issued = (...q: string[]): QueryRegistry => {
 }
 
 async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, size: number, mine = true) {
-  const w = await stackWorld(t, 6)
+  const w = await testWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w
   const ac = new AnchorChain('stark', f.keyPair, f, f.keyPair, chain)
@@ -136,7 +136,7 @@ test('NektarMemory: issued ZK queries are single use and survive a restart (pers
       saved = JSON.parse(JSON.stringify(s))
     }
   }
-  const w = await stackWorld(t, 2)
+  const w = await testWorld(t, 2)
   if (w === undefined) return
   const { chain, funder: f } = w
   const m1 = new NektarMemory(chain, f, f.keyPair, { securityStore: store })
@@ -152,7 +152,7 @@ test('NektarMemory: issued ZK queries are single use and survive a restart (pers
 })
 
 test('end-to-end: NektarMemory proves (RISC Zero) and verifies its own anchored batch', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
-  const w = await stackWorld(t, 20)
+  const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 3 } })
@@ -175,7 +175,7 @@ async function memWithFixtureAnchor(t: { skip: (m?: string) => void }) {
   if (_w === undefined) return
   const { chain, tx, ac } = _w
   const authority = PrivateKey.fromRandom()
-  const f = await StackFunder.fund(await stackTreasury(), 2)
+  const f = await testFunder(2)
   // the record stub rides in as the ctor store: post-ctor `mem.store =`
   // doesn't reach the ops (they hold the ctor-passed store) — and a stub
   // must implement the whole interface consumers touch, not just `all`
@@ -240,7 +240,7 @@ test('§13 combined Π: the Π binding rejects proofs paired with an unrelated c
 })
 
 test('end-to-end §13 Π: membership STARK + ZKAccess clearance under ONE verifier query', { skip: process.env.NEKTAR_STARK_PROVE !== '1' }, async (t) => {
-  const w = await stackWorld(t, 20)
+  const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder: f } = w
   const authority = PrivateKey.fromRandom()

@@ -126,3 +126,7 @@ must never appear on a mainnet path.
   intermediate wire when ancestry exists but paths don't yet.
 - Lightwebinc reference impls: `retry-endpoint`, `teranode-bridge`,
   `overlay-bridge`, `bstore` on github.com/lightwebinc.
+
+> The dedicated, strict audit for this material is the  skill
+> (): same rules with no advisory tier, plus the
+> latency half — block waits, lane stock, proofs travelling with funds.

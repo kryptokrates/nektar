@@ -248,7 +248,7 @@ export abstract class MemRead extends MemRecords {
         const { result } = await this.prove(shard, r.seq)
         if (!result.ok) {
           item.unverifiable = true
-          item.reason = `verify: ${(result as any).reason}`
+          item.reason = `verify: ${result.reason}`
           verifyFailed = true
         } else if (this.canEncrypt()) {
           try {
@@ -311,7 +311,7 @@ export abstract class MemRead extends MemRecords {
         const { result } = await this.prove(shard, r.seq)
         if (!result.ok) {
           item.unverifiable = true
-          item.reason = `verify: ${(result as any).reason}`
+          item.reason = `verify: ${result.reason}`
           verifyFailed = true
         } else {
           item.text = r.fragment.d.length ? Buffer.from(r.fragment.d).toString('utf8') : undefined

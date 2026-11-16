@@ -172,7 +172,11 @@ test('restore: skips spent rows, dead payloads, foreign topics and expired artif
   // restored while valid, then the artifact's own exp passes -> dropped
   assert.equal(await svc.restore!([engineRow(beef.beef, lane)], { findOutput: async () => null }), 1)
   clock += 120_000
-  assert.equal((await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })).length, 0, 'expired restored entry evicts on read')
+  assert.equal(
+    (await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })).length,
+    0,
+    'expired restored entry evicts on read'
+  )
 })
 
 test('restore: script-only row rebuilds from the locking script with a fresh proof deadline', async () => {

@@ -261,7 +261,11 @@ test('log: missed host is named on the append leg; resubmitCarrier re-serves it'
       lines: lines(1),
       now: () => 1000
     })
-    assert.deepEqual(r.missed.map((m) => m.host), [s.h2.url], 'the dead leg is named, not silently dropped')
+    assert.deepEqual(
+      r.missed.map((m) => m.host),
+      [s.h2.url],
+      'the dead leg is named, not silently dropped'
+    )
     assert.deepEqual((await readLog({ hosts: [s.h2.url], stream: STREAM, producer: s.key.toPublicKey().toString(), tracker: s.tracker })).batches, [])
     // the repair dispatcher hands journal key `log:{stream}:{seq}` to
     // resubmitCarrier — same key appendLog journaled under

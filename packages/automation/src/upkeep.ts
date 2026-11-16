@@ -155,7 +155,12 @@ export function openUpkeep(rt: Rt): void {
           log(`automation: log anchor interval ${r.interval} ${r.txid}`)
           // a host that missed the mined-anchor publish gets a repair row
           // keyed `logpub:{stream}:{txid}` — the journaled BEEF re-serves it
-          if (r.missed !== undefined && r.missed.length > 0) await queueRepairs(rt.fanoutIo, `logpub:${logStream}:${r.txid}`, r.missed.map((m) => m.host))
+          if (r.missed !== undefined && r.missed.length > 0)
+            await queueRepairs(
+              rt.fanoutIo,
+              `logpub:${logStream}:${r.txid}`,
+              r.missed.map((m) => m.host)
+            )
         }
       } catch (e) {
         log(`automation: log anchor: ${(e as Error).message.slice(0, 200)}`)
@@ -206,7 +211,11 @@ export function openUpkeep(rt: Rt): void {
         // a host that missed this batch keeps a numbered gap in its replica —
         // repair row per missed leg re-serves the journaled carrier
         // (`log:{stream}:{seq}`), same contract as every other fan-out
-        await queueRepairs(rt.fanoutIo, `log:${logStream}:${r.seq}`, r.missed.map((m) => m.host))
+        await queueRepairs(
+          rt.fanoutIo,
+          `log:${logStream}:${r.seq}`,
+          r.missed.map((m) => m.host)
+        )
       }
       // the cursor moves only after the batch reached quorum: a crash between
       // tick and append replays the same lines on the next cycle, and the
@@ -262,7 +271,11 @@ export function openUpkeep(rt: Rt): void {
               const tx = await mem.fetchTx(txid)
               if (tx !== undefined && logStream !== undefined) {
                 const pub = await lanes.mod.publishMinedLog({ journal: lanes.journal, hosts: marketHosts, stream: logStream, tx })
-                await queueRepairs(rt.fanoutIo, `logpub:${logStream}:${txid}`, pub.missed.map((m) => m.host))
+                await queueRepairs(
+                  rt.fanoutIo,
+                  `logpub:${logStream}:${txid}`,
+                  pub.missed.map((m) => m.host)
+                )
               }
               // carriers minted on this tree while it was unproven carry a
               // host-side eviction deadline that never clears on its own —

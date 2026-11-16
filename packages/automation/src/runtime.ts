@@ -136,7 +136,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         const r = await lanes.mod.publishSubRecord({ key, wallet, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, kind, id, body })
         // the journaled `finger:sub:{kind}:{id}` key lets a repair row re-serve
         // a missed host — a pack PUT now converges like every other fan-out
-        await queueRepairs(fanoutIo, `finger:sub:${kind}:${id}`, r.missed.map((m) => m.host))
+        await queueRepairs(
+          fanoutIo,
+          `finger:sub:${kind}:${id}`,
+          r.missed.map((m) => m.host)
+        )
         return { commitment: r.commitment, txid: r.txid }
       }
     })

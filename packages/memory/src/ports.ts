@@ -158,10 +158,7 @@ export interface ZkProveOpsPort {
     bytes: Uint8Array
   ): Promise<{ ok: boolean; reason?: string; anchorTxid?: string; size?: number; indices?: number[]; seqs?: number[]; statement: string }>
   proveDerivation(shard: string, query: { pred: string; args: string[]; edb?: Fact[] }, queryIdHex: string): Promise<{ bytes: Uint8Array; ms: number }>
-  verifyDerivation(
-    shard: string,
-    bytes: Uint8Array
-  ): Promise<{ ok: boolean; reason?: string; policyRoot?: string; conclusionHash?: string; statement: string }>
+  verifyDerivation(shard: string, bytes: Uint8Array): Promise<{ ok: boolean; reason?: string; policyRoot?: string; conclusionHash?: string; statement: string }>
 }
 
 export interface CustodyOpsPort {

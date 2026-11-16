@@ -129,7 +129,13 @@ function makeTopicManager(
   }
 }
 
-function makeLookup(nets: string[], lanes: string[], shared: Map<string, LaneIndex>, tracker: ChainTracker, now: () => number): LookupService & {
+function makeLookup(
+  nets: string[],
+  lanes: string[],
+  shared: Map<string, LaneIndex>,
+  tracker: ChainTracker,
+  now: () => number
+): LookupService & {
   restore?: (outputs: Output[], storage: RestoreStorage) => number | Promise<number>
 } {
   const idxOf = (topic: string): LaneIndex | undefined => shared.get(topic)

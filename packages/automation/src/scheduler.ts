@@ -1,6 +1,6 @@
 // scheduler.ts — the one timer in the automation runtime. Every recurring
 // job (deals, outbox, upkeep, watches, watchdog) registers a name, a run
-// function and a ceiling: the longest it may go without firing. Wakes are
+// body and a ceiling: the longest it may go without firing. Wakes are
 // event sources calling wake(name) or dueIn(name, ms); the wheel itself is
 // a single setTimeout aimed at the earliest due job — no job owns a private
 // interval and no two jobs race a shared clock.

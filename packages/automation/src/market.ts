@@ -1,7 +1,7 @@
 // MarketEngine split — the engine is layered by phase under ./market/ as a
 // chain of abstract classes (types → MarketBase → IngressOps → SellerOps →
 // BuyerOps), each extending the last. This file is the stable './market.js'
-// import path: it re-exports the shared types/constants and the concrete
+// specifier: it re-exports the shared types/constants and the concrete
 // engine class, so no import site changes.
 import { BuyerOps } from './market/buyer.js'
 

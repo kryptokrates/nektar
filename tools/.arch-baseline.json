@@ -9,7 +9,7 @@
       "instability": 0.444
     },
     "automation": {
-      "loc": 7221,
+      "loc": 7220,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 2014,
@@ -33,11 +33,11 @@
       "instability": 0.667
     },
     "chain": {
-      "loc": 5168,
+      "loc": 5489,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 828,
-      "maxFileFanout": 27,
+      "maxFileFanout": 29,
       "instability": 0.1
     },
     "contracts": {
@@ -105,7 +105,7 @@
       "instability": 0.333
     },
     "mcp": {
-      "loc": 11036,
+      "loc": 10304,
       "pkgFanout": 16,
       "edges": [
         "anchor",
@@ -200,8 +200,8 @@
       "fanout": 8
     },
     "packages/chain/src/index.ts": {
-      "loc": 68,
-      "fanout": 27
+      "loc": 71,
+      "fanout": 29
     },
     "packages/chain/src/testkit.ts": {
       "loc": 828,
@@ -216,12 +216,8 @@
       "fanout": 10
     },
     "packages/mcp/src/memory.ts": {
-      "loc": 1969,
+      "loc": 1976,
       "fanout": 35
-    },
-    "packages/mcp/src/runtime.ts": {
-      "loc": 1319,
-      "fanout": 20
     },
     "packages/mcp/src/server.ts": {
       "loc": 2021,

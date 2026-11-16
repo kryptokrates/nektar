@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Transaction, P2PKH } from '@bsv/sdk'
 import { testWorld, testChain, type TestFunder } from '@nektar/chain'
-import { txLogBroadcast } from '../src/runtime.js'
+import { txLogBroadcast } from '../src/rtsupport.js'
 
 test('tx log: two successful broadcasts → two lines with correct fee', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-txlog-'))

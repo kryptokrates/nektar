@@ -356,7 +356,7 @@ export class NektarMemory {
       statusHint: this.opts.statusHint,
       height: this.opts.height,
       // the ledger's own verdict rows are first-party truth — wired lazily
-      // because mem.ledger is assigned post-construction by the runtime
+      // because ledger is optional on tiers without durable state
       ledgerState: async (txid) => (await this.ledger?.walletTx({ txid }))?.state,
       proofPullMs: Number(nektarEnv('NEKTAR_PROOF_PULL_MS') ?? 120_000)
     })
@@ -378,6 +378,12 @@ export class NektarMemory {
       prove: (s, seq) => this.prove(s, seq),
       persistSecurityState: () => this.persistSecurityState()
     })
+    // constructor-input hooks (chain port answers + durable ledger) — the
+    // runtime injects them here; nothing is assigned post-construction
+    this.txLookup = opts.txLookup
+    this.proofLookup = opts.proofLookup
+    this.watchTx = opts.watchTx
+    this.ledger = opts.ledger
     this.restoreSecurityState()
     this.restoreState()
     // push confirmations: backends that emit status events (regtest stack)
@@ -406,7 +412,8 @@ export class NektarMemory {
   }
   /** network lookups for what the instance was never handed (a foreign bond,
    *  a transaction from before a database loss, a proof missed while down).
-   *  Set by the live runtime; each is a single attempt and never sleeps. */
+   *  Constructor inputs from the chain port; each is a single attempt and
+   *  never sleeps. */
   txLookup?: (txid: string) => Promise<import('@bsv/sdk').Transaction | undefined>
   proofLookup?: (txid: string) => Promise<import('@bsv/sdk').MerklePath | undefined>
   /** registers interest with the chain-event substrate so proof delivery

@@ -128,6 +128,23 @@ async function assetGet(cfg: RegtestConfig, path: string, binary = true): Promis
   return res
 }
 
+/** JSON-RPC client for the regtest node — the one helper so the port and
+ *  the funding bootstrap don't keep private copies. Throws on rpc error. */
+export function regtestRpc(cfg: RegtestConfig): (method: string, ...params: unknown[]) => Promise<any> {
+  const auth = 'Basic ' + Buffer.from(`${cfg.rpcUser}:${cfg.rpcPass}`).toString('base64')
+  return async (method, ...params) => {
+    const r = await fetch(cfg.rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: auth },
+      body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }),
+      signal: AbortSignal.timeout(15_000)
+    })
+    const j = (await r.json()) as { result?: unknown; error?: unknown }
+    if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
+    return j.result
+  }
+}
+
 /** Tx + (when sealed) BUMP lookup for the regtest runtime's chain.getTx —
  * `getrawtransaction` serves mempool and mined txs as hex; the asset API's
  * `/merkle_proof` answers the binary MerklePath once the tx is sealed in a

@@ -78,9 +78,9 @@ const GATES = [
     name: 'raw-broadcaster-construction',
     re: /new\s+(TeranodeBroadcaster|BsvBroadcaster|GorillaPoolBroadcaster|WhatsOnChainBroadcaster)\s*\(/g,
     scope: GATED,
-    // composition roots only: mcp runtime (SpendGuard-wrapped), chain regtest
-    // factory + testkit (harness support). Anything else bypasses SpendGuard.
-    allow: ['packages/mcp/src/runtime.ts', 'packages/chain/src/regtest.ts', 'packages/chain/src/testkit.ts']
+    // composition roots only: the chain port factories (SpendGuard-wrapped),
+    // regtest factory + testkit (harness support). Anything else bypasses SpendGuard.
+    allow: ['packages/chain/src/port.ts', 'packages/chain/src/regtest.ts', 'packages/chain/src/testkit.ts']
   },
   {
     name: 'raw-key-material',
@@ -92,9 +92,12 @@ const GATES = [
     allow: [
       'packages/mcp/src/init.ts',
       'packages/mcp/src/runtime.ts',
+      'packages/mcp/src/rtsupport.ts',
+      'packages/mcp/src/funding.ts',
       'packages/mcp/src/pay.ts',
       'packages/mcp/src/server.ts',
       'packages/automation/src/toolbox.ts',
+      'packages/chain/src/port.ts',
       'packages/chain/src/testkit.ts',
       // custody signer's own keygen — derives scalars into keys internally
       'packages/identity/src/custody.ts',
@@ -152,7 +155,7 @@ const GATES = [
       'packages/chain/src/testtier.ts',
       'packages/automation/src/toolbox.ts',
       'packages/mcp/src/init.ts',
-      'packages/mcp/src/runtime.ts'
+      'packages/mcp/src/funding.ts'
     ]
   }
 ]

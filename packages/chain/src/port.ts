@@ -14,15 +14,15 @@ import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { PrivateKey, type Transaction, type MerklePath } from '@bsv/sdk'
 import { nektarEnv, nektarEnvFlag, setNektarEnv } from '@nektar/core'
-import type { Broadcaster, BroadcastResult, ChainTracker, TxStatusEvent } from './interfaces.js'
+import type { BroadcastResult, ChainTracker, TxStatusEvent } from './interfaces.js'
 import type { StatusHint } from './txfacts.js'
 import { SpendGuard, type SpendGuardOpts } from './spendguard.js'
-import { TeranodeBroadcaster, TeranodeRPCTracker, regtestTx, regtestMerkleProof, type RegtestConfig } from './regtest.js'
+import { TeranodeBroadcaster, TeranodeRPCTracker, regtestTx, regtestMerkleProof, regtestRpc, type RegtestConfig } from './regtest.js'
+import { WitnessedTracker } from './headers.js'
 import {
   BsvBroadcaster,
   WocTracker,
   ChaintracksTracker,
-  WitnessedTracker,
   merklePathMainnet,
   fetchRawTx,
   fetchBroadcasterFeeRate,
@@ -30,7 +30,7 @@ import {
   type MainnetConfig
 } from './mainnet.js'
 import { TemporalSources, type TemporalSource } from './temporal.js'
-import type { MemoryChain } from './memchain.js'
+import type { TestChain } from './testtier.js'
 
 /** every chain question the runtime asks, one object */
 export interface ChainPort {
@@ -104,10 +104,10 @@ export function temporalSourcesFor(names: string[], primary: ChainTracker, opts:
 
 // --- memory adapter -----------------------------------------------------------
 
-/** the test-tier port: a MemoryChain is already the whole answer — no
+/** the test-tier port: a memory chain is already the whole answer — no
  *  outside voice exists, so statusHint/hintStream stay absent and the proof
  *  a seal writes is the only evidence path. */
-export function memoryPort(chain: MemoryChain): ChainPort {
+export function memoryPort(chain: TestChain): ChainPort {
   return {
     network: 'regtest',
     broadcast: (tx) => chain.broadcast(tx),
@@ -132,21 +132,10 @@ export function memoryPort(chain: MemoryChain): ChainPort {
 
 // --- regtest adapter ----------------------------------------------------------
 
-export function regtestPort(rc: RegtestConfig & { fundWif?: string }, deps: PortDeps = {}): ChainPort {
+export function regtestPort(rc: RegtestConfig & { fundWif?: string }, deps?: PortDeps): ChainPort {
   const tracker = new TeranodeRPCTracker(rc)
-  const guard = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), deps.valueOf ?? (() => undefined), deps.guard ?? {})
-  const auth = 'Basic ' + Buffer.from(`${rc.rpcUser}:${rc.rpcPass}`).toString('base64')
-  const rpc = async (method: string, ...params: unknown[]): Promise<any> => {
-    const r = await fetch(rc.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: auth },
-      body: JSON.stringify({ jsonrpc: '1.0', id: 1, method, params }),
-      signal: AbortSignal.timeout(15_000)
-    })
-    const j = (await r.json()) as { result?: unknown; error?: unknown }
-    if (j.error) throw new Error(`rpc ${method}: ${JSON.stringify(j.error)}`)
-    return j.result
-  }
+  const guard = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), deps?.valueOf ?? (() => undefined), deps?.guard ?? {})
+  const rpc = regtestRpc(rc)
   let lastMined = 0
   const fundKey = rc.fundWif !== undefined ? PrivateKey.fromWif(rc.fundWif) : undefined
   return {
@@ -197,7 +186,7 @@ export interface LivePortDeps extends PortDeps {
 /** Shared live path for `main` (BSV mainnet) and `testnet` — test coins,
  *  same code. Net-dependent bits: address prefix + fee floor live in the
  *  custody/config layer, not here. */
-export async function livePort(mc: MainnetConfig, net: 'main' | 'testnet', deps: LivePortDeps): Promise<ChainPort> {
+export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number }, net: 'main' | 'testnet', deps: LivePortDeps): Promise<ChainPort> {
   const testNet = net !== 'main'
   const log = deps.log ?? (() => undefined)
   // headers via Chaintracks (public, no key) WITNESSED by WoC: each source

@@ -12,7 +12,8 @@ export {
   bootstrapReserve,
   utxoStatus,
   regtestTx,
-  regtestMerkleProof
+  regtestMerkleProof,
+  regtestRpc
 } from './regtest.js'
 export { ChaintracksTracker, parseHeaderHex, DEFAULT_BROADCASTER_URL, DEFAULT_WOC_URL } from './mainnet.js'
 export { serializeHeader, headerPowValid, linksTo, WitnessedTracker } from './headers.js'

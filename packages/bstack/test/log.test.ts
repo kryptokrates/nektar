@@ -275,6 +275,28 @@ test('log: missed host is named on the append leg; resubmitCarrier re-serves it'
   }
 })
 
+// 3d. a mined-object publish reports its missed legs too — the repair row
+// upkeep queues is `logpub:{stream}:{txid}` (same journal key the publish
+// wrote), and resubmitCarrier re-serves the journaled BEEF
+test('log: publishMinedLog names the dead host; the journaled row repairs it', async () => {
+  let down = true
+  const s = await rig({ h2fail: () => down })
+  try {
+    const tree = await mintTree({ key: s.key, funding: fund(s.key), n: 2, satsPerOutput: 100, lock: await logFundingLock(s.key) })
+    prove(tree)
+    const pub = await publishMinedLog({ journal: s.journal, hosts: s.hosts, stream: STREAM, tx: tree })
+    assert.equal(pub.txid, tree.id('hex'))
+    assert.deepEqual(pub.missed.map((m) => m.host), [s.h2.url], 'the dead leg is named, not silently dropped')
+    down = false
+    await resubmitCarrier({ journal: s.journal, host: s.h2.url, key: `logpub:${STREAM}:${pub.txid}` })
+    const pub2 = await publishMinedLog({ journal: s.journal, hosts: s.hosts, stream: STREAM, tx: tree })
+    assert.deepEqual(pub2.missed, [], 'repaired host takes the same journaled BEEF')
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
+})
+
 // 4. a foreign producer's batch never lists for our producer; a wrong-prev
 // batch reports broken positions
 test('log: foreign batches filtered by producer; wrong-prev reports a break', async () => {

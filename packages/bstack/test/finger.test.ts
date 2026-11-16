@@ -7,6 +7,7 @@ import {
   MemoryFingerState,
   KnexFingerState,
   publishFinger,
+  publishSubRecord,
   resolveFinger,
   fingerFundingLock,
   checkFingerBody,
@@ -14,6 +15,7 @@ import {
   type FingerBody,
   type FingerState
 } from '../src/finger.js'
+import { resubmitCarrier } from '../src/publish.js'
 import { mintCarrier } from '@lightwebinc/bcommon'
 import { encodeRecord, MagicV1, type CommittedRecord } from '@lightwebinc/bfinger-host/dist/record.js'
 
@@ -484,6 +486,34 @@ test('finger: knex state dedupes an unchanged republish', async () => {
     assert.equal(r3.seq, 2, 'a real body change still advances')
   } finally {
     await s.kx?.destroy()
+    await s.h1.close()
+    await s.h2.close()
+  }
+})
+
+// a host down at publish time is named in `missed` on BOTH submit paths
+// (fresh mint and journal-hit resubmit), and the journaled row repairs it —
+// the contract the packs publish callback's queueRepairs relies on
+// (`finger:sub:{kind}:{id}`). A dropped leg used to vanish: no quorum check,
+// no tracking, a pack PUT could "succeed" with zero hosts answering.
+test('finger: publishSubRecord names the dead host; the journaled row repairs it', async () => {
+  let down = true
+  const s = await rig({ failH1: () => down })
+  try {
+    const body = new CborMap([{ key: 'v', val: 1n }, { key: 'shard', val: 'smoke' }])
+    const p = { key: s.key, ledger: s.ledger, journal: s.journal, hosts: s.hosts, kind: 5 as const, id: 1, body }
+    const r1 = await publishSubRecord(p)
+    assert.deepEqual(r1.missed.map((m) => m.host), [s.h1.url], 'fresh submit names the dead leg')
+    const r2 = await publishSubRecord(p)
+    assert.equal(r2.txid, r1.txid, 'journal hit re-serves the same carrier')
+    assert.deepEqual(r2.missed.map((m) => m.host), [s.h1.url], 'resubmit path names it too')
+    down = false
+    // the repair dispatcher hands journal key `finger:sub:{kind}:{id}` to
+    // resubmitCarrier — same key publishSubRecord journaled under
+    await resubmitCarrier({ journal: s.journal, host: s.h1.url, key: 'finger:sub:5:1' })
+    const r3 = await publishSubRecord(p)
+    assert.deepEqual(r3.missed, [], 'repaired host takes the next submit')
+  } finally {
     await s.h1.close()
     await s.h2.close()
   }

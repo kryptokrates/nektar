@@ -103,7 +103,7 @@ export const handlers: Record<string, ToolHandler> = {
       attestation = (await attestInference(mem, args.attestInference ?? {})).attestation
     }
     if (attestation !== undefined) {
-      const { validateAttestation } = await import('@nektar/zk')
+      const { validateAttestation } = await import('@nektar/zk/aiinf-demo')
       const v = validateAttestation(attestation)
       if (!v.ok) throw new Error(`modelAttestation rejected: ${v.reason}`)
     }
@@ -186,7 +186,7 @@ export const handlers: Record<string, ToolHandler> = {
       attestation = (await attestInference(mem, args.attestInference ?? {})).attestation
     }
     if (attestation !== undefined) {
-      const { validateAttestation } = await import('@nektar/zk')
+      const { validateAttestation } = await import('@nektar/zk/aiinf-demo')
       const v = validateAttestation(attestation)
       if (!v.ok) throw new Error(`modelAttestation rejected: ${v.reason}`)
     }

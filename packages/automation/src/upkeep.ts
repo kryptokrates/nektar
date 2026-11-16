@@ -238,8 +238,10 @@ export function openUpkeep(rt: Rt): void {
               // travelling on the FundingOut, an anchored tree serves the
               // market lane at once, and proven stock is already there when
               // the vendored-codec lanes (which demand the tree's own mined
-              // path) need it
-              lowWater: kind === 'finger' ? 2 : (cfg.treeLowWater ?? cfg.treeSize ?? 64),
+              // path) need it. Proven-only kinds default lowWater to the
+              // full tree — a shallower buffer is a ~1 block stall on
+              // stock-out since they cannot dip into anchored stock
+              lowWater: kind === 'finger' ? 2 : kind === 'market' ? (cfg.treeLowWater ?? cfg.treeSize ?? 64) : (cfg.treeLowWater ?? spec.size),
               maxUnproven: cfg.treeMaxUnproven ?? 2,
               size: spec.size,
               satsPerOutput: spec.satsPerOutput,
@@ -275,7 +277,9 @@ export function openUpkeep(rt: Rt): void {
         }
       }
       // own bfinger record: (re)publishes on the current host list, no-ops
-      // when nothing changed, resubmits to any host that missed the objects.
+      // when nothing changed, resubmits to any host that missed the objects —
+      // finger self-heals by reconcile each pass, not by repair rows (the
+      // log/fan-out streams queue `repair-host` rows instead).
       // B1 — opt-in only: it costs sats and makes this agent publicly
       // discoverable, so it is never automatic (NEKTAR_BFINGER_PUBLISH=1).
       if (lanes !== undefined && fingerState !== undefined && logStream !== undefined && cfg.publishFinger === true) {

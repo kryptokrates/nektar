@@ -1659,10 +1659,10 @@ test('bstack Y: a journal batch dropped by every host shows the gap — complete
     const mid = seqs[0]
     dropped.add(await jTxid(dir, 'seller', mid))
     const bj = await dealJournal(b, bo.operationId)
-    const cp = bj.counterparty as { complete: boolean; gaps: Array<{ from: number; to: number }> }
+    const cp = bj.counterparty as { complete: boolean; gaps: Array<{ from: number; to: number }>; entries?: Array<{ seq: number }> }
     assert.equal(cp.complete, false, 'the withheld batch breaks completeness | ' + JSON.stringify(bj).slice(0, 400))
     assert.ok(
-      cp.entries.length === 0 || cp.gaps.some((g) => g.from <= mid && g.to >= mid),
+      (cp.entries?.length ?? 0) === 0 || cp.gaps.some((g) => g.from <= mid && g.to >= mid),
       `gap at seq ${mid} listed (or entries emptied) | ` + JSON.stringify(cp.gaps)
     )
   } finally {

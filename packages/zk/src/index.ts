@@ -3,4 +3,5 @@
 // ZK-STARK (RISC Zero succinct receipt; Fiat–Shamir, FRI, no trusted setup),
 // verified off-chain (WASM) against the SPV-verified anchor. See ADR-020.
 export * from './stark/index.js'
-export * from './aiinf-demo.js'
+// demo vectors (poseidon-toy, aiinf-demo) are importable by subpath only —
+// they are the dev-rail codec, not the wire surface

@@ -17,7 +17,7 @@ import { nektarEnv, sha256, toHex } from '@nektar/core'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { AIINF_DEMO, demoAttestation, type InferenceAttestation } from '@nektar/zk'
+import { AIINF_DEMO, demoAttestation, type InferenceAttestation } from '@nektar/zk/aiinf-demo'
 import type { NektarMemory } from './memory.js'
 
 /** emitted verifier artifacts — dev-local output of spike_groth16_aiinf.py

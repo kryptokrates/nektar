@@ -202,7 +202,7 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
       | undefined
   )?.modelAttestation
   if (att) {
-    const { validateAttestation } = await import('@nektar/zk')
+    const { validateAttestation } = await import('@nektar/zk/aiinf-demo')
     const v = att.input
       ? validateAttestation({ modelPoseidon: att.modelPoseidon, input: att.input, output: att.output, publicStatement: att.publicStatement })
       : { ok: false, reason: 'attestation carries no input — statement not re-derivable' }

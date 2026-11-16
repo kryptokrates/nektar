@@ -463,7 +463,7 @@ export class NektarMemory {
 
   /** subscribe to rejection/abandonment wakes — verified chain events,
    *  first-party refusals, abandon-horizon verdicts, and pushed status
-   *  hints all fire it; a wake is a poke to re-ask txState, not a verdict */
+   *  hints all fire it; a wake is a poke to re-ask txFacts, not a verdict */
   onTxRejected(cb: (txid: string) => void): void {
     this.txOps.onTxRejected(cb)
   }
@@ -474,7 +474,7 @@ export class NektarMemory {
     this.txOps.deliverTxRejected(txid)
   }
   /** a pushed rejection STATUS (broadcaster webhook / SSE): wake-only —
-   *  pokes subscribers into re-asking txState, writes no durable verdict */
+   *  pokes subscribers into re-asking txFacts, writes no durable verdict */
   hintTxRejected(txid: string): void {
     this.txOps.hintTxRejected(txid)
   }

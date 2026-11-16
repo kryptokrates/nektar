@@ -79,8 +79,10 @@ const GATES = [
     re: /new\s+(TeranodeBroadcaster|BsvBroadcaster|GorillaPoolBroadcaster|WhatsOnChainBroadcaster)\s*\(/g,
     scope: GATED,
     // composition roots only: mcp runtime (SpendGuard-wrapped), chain regtest
-    // factory + testkit (harness support). Anything else bypasses SpendGuard.
-    allow: ['packages/mcp/src/runtime.ts', 'packages/chain/src/regtest.ts', 'packages/chain/src/testkit.ts']
+    // factory + testkit (harness support), and port.ts — THE adapter assembly
+    // point (every construction it wraps sits inside a SpendGuard). Anything
+    // else bypasses SpendGuard.
+    allow: ['packages/mcp/src/runtime.ts', 'packages/chain/src/regtest.ts', 'packages/chain/src/testkit.ts', 'packages/chain/src/port.ts']
   },
   {
     name: 'raw-key-material',
@@ -125,6 +127,15 @@ const GATES = [
     // packages must be consumed via their index — @nektar/contracts/*.json is generated
     // artifacts addressed by file, not a package-internal deep import.
     allowSpecifier: /@nektar\/contracts\//
+  },
+  {
+    name: 'status-hint-seam',
+    re: /\b(fetchTxStatus|probeTxStatus|arcTxStatus)\s*\(/g,
+    scope: GATED,
+    // broadcaster status reads are adapter-internal: the outside word reaches
+    // product code only as TxFacts.hint via BsvBroadcaster.statusHint. No new
+    // call site may hand-roll a /tx status fetch outside packages/chain.
+    allow: ['packages/chain/src/mainnet.ts']
   },
   {
     name: 'funds-bookkeeping',

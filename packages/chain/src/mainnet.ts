@@ -20,6 +20,7 @@ export interface MainnetConfig {
   wocApiKey?: string
   chaintracksUrl?: string // chaintracks base incl. /v1|/v2 — header source for BUMP verification
   tipCacheMs?: number // currentHeight() cache TTL — heights only grow, so a stale-low answer only delays gates by ≤TTL; NEKTAR_TIP_CACHE_MS overrides (default 3000)
+  feeRateSatPerKb?: number // caller-pinned fee rate — otherwise livePort takes max(floor, broadcaster-policy quote)
   fetchImpl?: typeof fetch // injectable — tests pass a recorded stub
 }
 
@@ -237,12 +238,17 @@ export async function fetchBroadcasterFeeRate(cfg?: MainnetConfig): Promise<numb
   return Math.ceil((f.satoshis * 1000) / f.bytes)
 }
 
-/** probeTxStatus — fetchTxStatus plus an `answered` flag: true when some
- *  source gave a DEFINITIVE reply (a 2xx verdict, or a clean 404 — the host
- *  knows it does not carry the tx); false when every reachable source
- *  errored, rate-limited or timed out. "Couldn't ask" is not "not on the
- *  network" — callers that age watches (the abandon clock) may only count
- *  answered reads. */
+/** the broadcaster's current word for a txid — the single status-hint seam:
+ *  uppercase txStatus ('' when undecidable) plus an `answered` flag, true
+ *  when some source gave a DEFINITIVE reply (a 2xx verdict, or a clean 404 —
+ *  the host knows it does not carry the tx); false when every reachable
+ *  source errored, rate-limited or timed out. "Couldn't ask" is not "not on
+ *  the network" — callers that age watches (the abandon clock) may only
+ *  count answered reads. `wocFallback` (default: public-default or
+ *  explicitly-WoC configs) cross-checks a dead/erroring broadcaster against
+ *  WoC /tx/{txid}: blockheight > 0 → 'MINED' — rejection verdicts stay
+ *  broadcaster-only (WoC serves no rejection semantics). Adapter-internal:
+ *  callers consume it through BsvBroadcaster.statusHint / TxFacts.hint. */
 export async function probeTxStatus(
   cfg: MainnetConfig | undefined,
   txid: string,
@@ -282,12 +288,6 @@ export async function probeTxStatus(
   }
 }
 
-/** GET {broadcaster}/tx/{txid} → uppercase txStatus ('' when undecidable) —
- *  the single chain-observer seam for status reads (replaces three
- *  hand-rolled copies in mcp). `wocFallback` (default: public-default or
- *  explicitly-WoC configs) cross-checks a dead/erroring broadcaster against
- *  WoC /tx/{txid}: blockheight > 0 → 'MINED' — rejection verdicts stay
- *  broadcaster-only (WoC serves no rejection semantics). */
 /** Raw tx bytes from the best available source — WoC `/tx/{txid}/hex`
  *  first, then the broadcaster's `GET /tx/{txid}` rawTx (plain hex, or
  *  Extended Format when the 0000000000ef marker is present). Whatever the
@@ -325,10 +325,6 @@ export async function fetchRawTx(cfg: MainnetConfig | undefined, txid: string): 
     /* no source answered */
   }
   return undefined
-}
-
-export async function fetchTxStatus(cfg: MainnetConfig | undefined, txid: string, opts?: { wocFallback?: boolean }): Promise<string> {
-  return (await probeTxStatus(cfg, txid, opts)).status
 }
 
 // --- WoC tracker (rate-limited, cached headers) -------------------------------

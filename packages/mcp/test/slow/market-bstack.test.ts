@@ -1068,7 +1068,7 @@ const sabotageEscrowBroadcast = (b: A, chain: TestChain, script: string, reject:
     if (reject) {
       // REAL rejection on a first-seen-wins mempool: spend the escrow's funding
       // inputs first, then let the node itself refuse the escrow (UTXO_SPENT) —
-      // a fake 'transport' error can never make txState answer 'rejected'
+      // a fake 'transport' error can never make txFacts answer 'dead'
       const { Transaction, P2PKH } = await import('@bsv/sdk')
       const conflict = new Transaction()
       for (const inp of tx.inputs)

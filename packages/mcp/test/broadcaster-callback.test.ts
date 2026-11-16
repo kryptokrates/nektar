@@ -106,7 +106,7 @@ test('broadcaster callback: legacy /v1/arc-callback path still works', async (t)
   }
 })
 
-test('broadcaster callback: REJECTED is a hint — wakes subscribers, txFacts verdict is not dead', async (t) => {
+test('broadcaster callback: REJECTED is a hint — wakes subscribers, txFacts verdict stays pending', async (t) => {
   const _w = await serve(t)
   if (_w === undefined) return
   const { mem, srv, base } = _w

@@ -688,9 +688,9 @@ test('R6: duplicate lookup outputs — deal completes once, no double-ingest', {
 })
 
 // R7 — rejection honesty: the escrow broadcast was accepted at submit, then the
-// network rejects it (double-spend event). txState must drive the op to
+// network rejects it (double-spend event). txFacts must drive the op to
 // funding_failed with the budget released — not uncertain, not silent, not retry.
-test('R7: late escrow rejection — funding_failed via txState event, budget released', { timeout: 300_000 }, async (t) => {
+test('R7: late escrow rejection — funding_failed via txFacts verdict, budget released', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
@@ -710,7 +710,7 @@ test('R7: late escrow rejection — funding_failed via txState event, budget rel
     const escrowTxid = (await opFor(b, w.wantId))!.data.escrowTxid as string
     const orig = b.mem.txFacts.bind(b.mem)
     ;(b.mem as unknown as { txFacts: (txid: string) => Promise<import('@nektar/chain').TxFacts> }).txFacts = async (txid: string) =>
-      txid === escrowTxid ? { verdict: 'dead' as const } : orig(txid)
+      txid === escrowTxid ? { verdict: 'dead', source: 'first-party' } : orig(txid)
     const rounds = await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'funding_failed')
     assert.ok(rounds > 0, 'rejected funding did not land funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await opFor(b, w.wantId))!

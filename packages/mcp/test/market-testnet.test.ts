@@ -801,7 +801,7 @@ test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', 
     const escrowTxid = (await opFor(b, w.wantId))!.data.escrowTxid as string
     const orig = b.mem.txFacts.bind(b.mem)
     ;(b.mem as unknown as { txFacts: (txid: string) => Promise<import('@nektar/chain').TxFacts> }).txFacts = async (txid: string) =>
-      txid === escrowTxid ? { verdict: 'dead' as const } : orig(txid)
+      txid === escrowTxid ? { verdict: 'dead', source: 'first-party' } : orig(txid)
     const ms = await until([b.rt], 90_000, async () => (await opFor(b, w.wantId))?.state === 'funding_failed')
     assert.ok(ms > 0, 'rejected funding did not land funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await opFor(b, w.wantId))!

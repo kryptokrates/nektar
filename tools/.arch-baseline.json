@@ -33,11 +33,11 @@
       "instability": 0.667
     },
     "chain": {
-      "loc": 5424,
+      "loc": 5738,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 854,
-      "maxFileFanout": 27,
+      "maxFileFanout": 29,
       "instability": 0.1
     },
     "contracts": {
@@ -196,8 +196,8 @@
       "fanout": 8
     },
     "packages/chain/src/index.ts": {
-      "loc": 69,
-      "fanout": 27
+      "loc": 71,
+      "fanout": 29
     },
     "packages/chain/src/testkit.ts": {
       "loc": 854,

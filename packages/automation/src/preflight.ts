@@ -54,7 +54,7 @@ export interface PreflightDeps {
   /** per-dependency ceilings (D1 budgets): host ≤5s, chain ≤3s, store ≤10s */
   ceilings?: { hostMs?: number; chainMs?: number; storeMs?: number }
   /** stronger liveness probes the transport can supply when it knows the
-   *  endpoints (a raw HTTP answer proves the socket; txState alone can't
+   *  endpoints (a raw HTTP answer proves the socket; txFacts alone can't
    *  distinguish a dead endpoint vs an unrecognized txid) */
   probes?: { broadcaster?: () => Promise<boolean> }
   /** which checks to run — the watchdog re-runs only the cheap probe tier */

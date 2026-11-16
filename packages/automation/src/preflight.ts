@@ -29,6 +29,7 @@ import { killSwitchActive } from './kill.js'
 import { conformanceStatus } from './conformance.js'
 import { fetchObjectByRef } from '@nektar/store'
 import type { S3ObjectStore } from '@nektar/store'
+import { hintSeen } from '@nektar/chain'
 
 // PreflightCheck/PreflightReport live in types.ts — the shared type barrel —
 // so the barrel never has to reach back into this module (type-only cycle).
@@ -140,11 +141,11 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
             fix: 'broadcasts will black-hole — check the propagation/broadcaster URL'
           }
     }
-    const st = await bounded(mem.txState(ZERO), ceil.chainMs, 'txState probe')
+    const f = await bounded(mem.txFacts(ZERO), ceil.chainMs, 'txFacts probe')
     return {
       check: 'broadcaster',
       pass: true,
-      detail: `chain view answered the tx probe ('${st}') — no stronger broadcaster endpoint configured`
+      detail: `chain view answered the tx probe ('${f.verdict}') — no stronger broadcaster endpoint configured`
     }
   })
 
@@ -290,8 +291,9 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     if (inflight.length === 0) return { check: 'watch', pass: true, detail: 'nothing in flight — watcher idle' }
     const stale: string[] = []
     for (const w of inflight.slice(0, 4)) {
-      const st = await bounded(mem.txState(w.txid), ceil.chainMs, 'txState').catch(() => 'timeout')
-      if (st === 'unknown' || st === 'timeout') stale.push(`${w.txid.slice(0, 12)} (${w.state})`)
+      const f = await bounded(mem.txFacts(w.txid), ceil.chainMs, 'txFacts').catch(() => undefined)
+      if (f === undefined || (f.verdict === 'pending' && f.tx === undefined && !hintSeen(f.hint)))
+        stale.push(`${w.txid.slice(0, 12)} (${w.state})`)
     }
     return stale.length === 0
       ? { check: 'watch', pass: true, detail: `${inflight.length} in-flight tx(s) all resolve a chain state` }

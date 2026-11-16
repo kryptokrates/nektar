@@ -51,7 +51,7 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   const unattended = /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_UNATTENDED') ?? '')
   const strict = unattended || /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION_STRICT') ?? '')
   // the transport knows the broadcast endpoint — an HTTP answer proves the
-  // socket where a txState 'unknown' cannot
+  // socket where a txFacts 'pending' cannot
   const broadcasterProbe = async (): Promise<boolean> => {
     try {
       if (rt.network === 'regtest') {

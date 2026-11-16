@@ -6,7 +6,7 @@
 // toolbox wallet, or the test-tier adapter.
 import { Transaction, LockingScript, MerklePath, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import { unlockP2PKH, signerAddress, type SignerLike } from '@nektar/core'
-import type { FundingOut, Funds, FundsPurpose } from '@nektar/chain'
+import { hintRejected, hintSeen, type FundingOut, type Funds, type FundsPurpose } from '@nektar/chain'
 
 export interface CustodyOpsDeps {
   funds: Funds
@@ -35,7 +35,10 @@ export interface CustodyOpsDeps {
    *  into TxStore) — attached to a funding parent so a tree minted on it can
    *  serve zero-conf. Never a network lookup: hand over only what we hold. */
   proofOf?: (txid: string) => MerklePath | undefined
-  txStatus?: (txid: string) => Promise<string>
+  /** the one transaction-facts answer — verdict and the outside hint; the
+   *  submit-confirmation and spend-hint checks read the hint field, verdict
+   *  checks read only the first-party verdict (never the hint) */
+  facts?: (txid: string) => Promise<import('@nektar/chain').TxFacts>
 }
 
 const opReturnScript = (opReturn: string): LockingScript => {
@@ -49,17 +52,17 @@ const opReturnScript = (opReturn: string): LockingScript => {
 export class CustodyOps {
   constructor(private deps: CustodyOpsDeps) {
     // hint-only pass-over plugs into the Funds selection: a candidate whose
-    // parent the broadcaster calls REJECTED/DOUBLE_SPEND is skipped for this
-    // take, but the hint writes nothing — custody state stays first-party.
-    const txStatus = deps.txStatus
-    if (txStatus !== undefined) {
+    // parent is first-party dead or hinted REJECTED/DOUBLE_SPEND is skipped
+    // for this take — neither writes anything; custody state stays first-party.
+    const facts = deps.facts
+    if (facts !== undefined) {
       deps.funds.hintSkip = async (tx: Transaction): Promise<boolean> => {
         if (tx.merklePath !== undefined) return false
         const txid = tx.id('hex')
         if (deps.proofOf?.(txid) !== undefined) return false
         try {
-          const st = (await txStatus(txid)).toUpperCase()
-          return st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')
+          const f = await facts(txid)
+          return f.verdict === 'dead' || hintRejected(f.hint)
         } catch {
           return false
         }
@@ -88,22 +91,23 @@ export class CustodyOps {
   /** Bounded submit confirmation, not a wait loop: up to 3 reads (now,
    *  +700ms, +1500ms). A rejection-family answer is returned immediately, a
    *  seen-family answer settles at once, anything else resolves after the
-   *  third read. Without a txStatus dep the check is a no-op. */
+   *  third read. Without a facts dep the check is a no-op. */
   private async accepted(txid: string): Promise<string | undefined> {
-    const txStatus = this.deps.txStatus
-    if (txStatus === undefined) return undefined
-    const SEEN = ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE']
+    const facts = this.deps.facts
+    if (facts === undefined) return undefined
     for (let i = 0; i < 3; i++) {
       if (i === 1) await new Promise((r) => setTimeout(r, 700))
       if (i === 2) await new Promise((r) => setTimeout(r, 1500))
-      let st = ''
+      let f: import('@nektar/chain').TxFacts | undefined
       try {
-        st = (await txStatus(txid)).toUpperCase()
+        f = await facts(txid)
       } catch {
-        st = ''
+        f = undefined
       }
-      if (st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')) return st
-      if (SEEN.includes(st)) return undefined
+      if (f === undefined) continue
+      if (f.verdict === 'dead') return f.hint?.status || 'dead'
+      if (hintRejected(f.hint)) return f.hint!.status
+      if (f.verdict === 'mined' || f.tx !== undefined || hintSeen(f.hint)) return undefined
     }
     return undefined
   }

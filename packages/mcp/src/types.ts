@@ -60,10 +60,13 @@ export interface NektarMemoryOptions {
   /** network the instance runs on — used for the funding-address prefix in
    *  fundingStatus (testnet-family → 0x6f). Optional; absent = mainnet prefix. */
   network?: 'regtest' | 'testnet' | 'main'
-  /** chain-observer seam (live networks) — lets txState ask the
-   *  broadcaster's /tx/{txid} verdict when the local view can't decide;
-   *  injected by the runtime (`fetchTxStatus` in @nektar/chain) */
-  txStatus?: (txid: string) => Promise<string>
+  /** the outside status word (live networks) — feeds txFacts' hint field
+   *  only; injected by the runtime (the broadcaster adapter's `statusHint`).
+   *  Never a verdict: first-party records and proofs decide, not this word. */
+  statusHint?: (txid: string) => Promise<import('@nektar/chain').StatusHint>
+  /** chain height for txFacts.depth — injected by the runtime when a tracker
+   *  exists; absent leaves depth unset */
+  height?: () => number | Promise<number>
   /** the instance's transaction graph — the live runtime passes a persisted
    *  one; default is in-memory */
   txStore?: TxStore

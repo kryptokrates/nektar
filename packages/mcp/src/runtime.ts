@@ -27,8 +27,6 @@ import {
   TemporalSources,
   statusStream,
   fetchRawTx,
-  fetchTxStatus,
-  probeTxStatus,
   DEFAULT_WOC_URL,
   TxStore,
   ChainEvents,
@@ -533,6 +531,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
       funds: utxoView,
       wallet: toolboxWallet?.wallet,
       txStore,
+      height: () => tracker.currentHeight(),
       agentSeed: PrivateKey.fromHex(keys.agentSeed),
       signingKey: PrivateKey.fromHex(keys.logKey),
       shardKeys,
@@ -884,10 +883,9 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
   // the one chain-event substrate: pushed SSE/callback statuses land as
   // notes (unverified hints), this pull probes what a push could not deliver
   // — proofs missed while down, and txs handed rather than broadcast.
-  // status reads go through the chain-observer seam; WoC cross-checks a dead
-  // broadcaster on main, or whenever the operator configured a WoC URL
-  const wocFallback = net === 'main' || mc.wocUrl !== undefined
-  const arcTxStatus = (txid: string): Promise<string> => fetchTxStatus(mc, txid, { wocFallback })
+  // status reads go through the chain-observer seam: the broadcaster adapter's
+  // statusHint (WoC cross-checks a dead broadcaster inside it)
+  const statusHint = (txid: string): Promise<import('@nektar/chain').StatusHint> => rawBroadcaster.statusHint(txid)
   const events = new ChainEvents({
     intervalMs: cfg.confirmEveryMs ?? 30_000,
     height: () => tracker.currentHeight(),
@@ -902,7 +900,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       // object — only a double-spend is provable (via the conflicting tx's
       // own BUMP). It lands as a hint (resolves waiters, keeps the floor),
       // never on the verified path — same treatment the push path gives it.
-      const probe = await probeTxStatus(mc, txid, { wocFallback })
+      const probe = await statusHint(txid)
       if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(probe.status)) events.note({ txid, status: 'rejected' })
       // an unanswered probe — or a 'mined' claim we hold no verified path
       // for — is not "not mined": throwing keeps the abandon clock from
@@ -948,7 +946,8 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       funds: utxoView,
       wallet: clientWallet ?? liveToolbox?.wallet,
       txStore,
-      txStatus: arcTxStatus,
+      statusHint,
+      height: () => tracker.currentHeight(),
       agentSeed: keys.agentSeed ? PrivateKey.fromHex(keys.agentSeed) : undefined,
       signingKey: keys.logKey ? PrivateKey.fromHex(keys.logKey) : undefined,
       shardKeys,
@@ -1278,7 +1277,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       const seen = events.statusOf(txid)
       const verdict = seen?.verified === true ? watcherObservation(seen, '') : undefined
       if (verdict !== undefined) return verdict
-      return watcherObservation(seen, await arcTxStatus(txid))
+      return watcherObservation(seen, (await statusHint(txid).catch(() => ({ status: '', answered: false }))).status)
     },
     async () => {
       await ops.refreshFunding?.().catch(() => {})

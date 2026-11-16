@@ -3,7 +3,7 @@ import { signWant, verifyWant, signOffer, verifyOffer, type SignedWant, type Sig
 import { verifyOfferSig, publicSaleQuote, saleQuoteWire } from '@nektar/identity'
 import { DisclosureSaleHost, CheckpointBond, COVENANT_ID } from '@nektar/anchor'
 import { parseFragment, fromHex } from '@nektar/core'
-import { TxStore, spendValid, type Ingested } from '@nektar/chain'
+import { TxStore, spendValid, hintSeen, type Ingested } from '@nektar/chain'
 import type { AutomationStore, InboxItem, Operation, OutboxItem } from './store.js'
 import { classifyDeliveryError } from './store.js'
 import { WalletCoordinator } from './wallet.js'
@@ -100,9 +100,10 @@ export interface MarketDeps {
   height: () => Promise<number>
   tip?: () => Promise<{ tip: string; tipHeight: number } | undefined>
   fetchTx: (txid: string) => Promise<Transaction | undefined>
-  /** what the chain view knows about a tx — reconciles uncertain payment and
-   *  settlement states without waiting on block heights */
-  txState?: (txid: string) => Promise<'mined' | 'seen' | 'rejected' | 'unknown'>
+  /** the one transaction-facts answer — reconciles uncertain payment and
+   *  settlement states without waiting on block heights; money decisions
+   *  read `verdict`, the outside word stays in `hint` */
+  txFacts?: (txid: string) => Promise<import('@nektar/chain').TxFacts>
   /** confirmations a proof must carry before `completion_submitted` may
    *  settle — a depth-1 proof sits one reorg away from vanishing (default 1:
    *  settle on first sight, the regtest behaviour) */
@@ -285,7 +286,7 @@ export class MarketEngine {
 
   /** a pushed transaction status (broadcaster callback / node event) — only a
    *  hint: the next cycle runs the reconcile check immediately for operations
-   *  watching this txid, and the engine still consults txState itself */
+   *  watching this txid, and the engine still consults txFacts itself */
   hint(txid: string): void {
     this.hintedTxids.add(txid)
   }
@@ -562,9 +563,9 @@ export class MarketEngine {
       for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'] })) {
         try {
           const txid = op.data.refundTxid as string | undefined
-          if (txid === undefined || this.d.txState === undefined || this.now() - op.updatedAt > 60 * 60_000) continue
+          if (txid === undefined || this.d.txFacts === undefined || this.now() - op.updatedAt > 60 * 60_000) continue
           if (!this.reconcileGate(op.operationId, txid)) continue
-          if ((await this.d.txState(txid)) === 'rejected')
+          if ((await this.d.txFacts(txid)).verdict === 'dead')
             await this.d.store.transition(op.operationId, op.revision, 'uncertain', {
               cause: 'refund_rejected',
               data: { refundTxid: txid },
@@ -1689,17 +1690,17 @@ export class MarketEngine {
       await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_never_built' })
       return
     }
-    if (this.d.txState === undefined || !this.reconcileGate(op.operationId, txid)) return
-    const st = await this.d.txState(txid)
-    if (st === 'unknown') {
-      if (op.data.reconcilePing !== true)
-        await this.d.store.transition(op.operationId, op.revision, 'uncertain', { cause: 'reconcile_pending', data: { reconcilePing: true } })
-      return
-    }
-    if (st === 'rejected') {
+    if (this.d.txFacts === undefined || !this.reconcileGate(op.operationId, txid)) return
+    const facts = await this.d.txFacts(txid)
+    if (facts.verdict === 'dead') {
       if (actionId !== undefined) await this.d.store.releaseBudget(actionId)
       await cancel()
       await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected' })
+      return
+    }
+    if (facts.verdict === 'pending' && facts.tx === undefined && !hintSeen(facts.hint)) {
+      if (op.data.reconcilePing !== true)
+        await this.d.store.transition(op.operationId, op.revision, 'uncertain', { cause: 'reconcile_pending', data: { reconcilePing: true } })
       return
     }
     // mined | seen — the escrow is observable: commit and resume the normal path
@@ -1958,7 +1959,7 @@ export class MarketEngine {
         // a late rejection beats the refund path: the escrow never settled, so
         // the locked amount never left — releaseBudget frees the committed row
         const txid = op.data.escrowTxid as string | undefined
-        if (txid !== undefined && this.d.txState !== undefined && this.reconcileGate(op.operationId, txid) && (await this.d.txState(txid)) === 'rejected') {
+        if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid) && (await this.d.txFacts(txid)).verdict === 'dead') {
           await this.d.store.releaseBudget(op.data.escrowAction as string)
           await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected_late', dueHeight: null })
           return
@@ -2000,9 +2001,9 @@ export class MarketEngine {
               data: { provenHeight: tx.merklePath.blockHeight }
             })
         } else if (
-          this.d.txState !== undefined &&
+          this.d.txFacts !== undefined &&
           this.reconcileGate(op.operationId, op.data.completeTxid as string) &&
-          (await this.d.txState(op.data.completeTxid as string)) === 'rejected'
+          (await this.d.txFacts(op.data.completeTxid as string)).verdict === 'dead'
         ) {
           await this.d.store.transition(op.operationId, op.revision, 'completion_failed', { cause: 'disclosure_rejected_late' })
         }

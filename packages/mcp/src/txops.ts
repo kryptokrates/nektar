@@ -29,7 +29,6 @@ export interface TxOpsDeps {
    *  so these are getters, each a single attempt and never a sleep */
   txLookup: () => ((txid: string) => Promise<Transaction | undefined>) | undefined
   proofLookup: () => ((txid: string) => Promise<MerklePath | undefined>) | undefined
-  network?: string
   /** the outside status word for a txid — a HINT, never a verdict; injected
    *  by the runtime (the broadcaster adapter's `statusHint`) so TxOps never
    *  hand-rolls the /tx fetch or owns the endpoint default */
@@ -38,6 +37,9 @@ export interface TxOpsDeps {
    *  states are first-party truth (our own writes), injected by memory
    *  when a ledger exists; absent ledger → the check is skipped */
   ledgerState?: (txid: string) => Promise<string | undefined>
+  /** chain height for facts.depth — injected by the runtime when a tracker
+   *  exists; absent leaves depth unset */
+  height?: () => number | Promise<number>
   /** proof pull cadence — the missed-push recovery floor per txid
    *  (default 120_000; NEKTAR_PROOF_PULL_MS at the construction site) */
   proofPullMs?: number
@@ -196,41 +198,19 @@ export class TxOps {
     this.notifyTxRejected(txid)
   }
 
-  /** what the chain view knows about a tx right now: mined (merkle path in
-   *  hand — outranks every recorded verdict), rejected (first-party truth:
-   *  a verified chain event, a broadcast refusal, the abandon horizon, or
-   *  the ledger's own terminal row), seen (the node knows it), else unknown.
-   *  A broadcaster status STRING is a hint — it can wake a reconcile but
-   *  never lands 'rejected' on its own. */
-  async txState(txid: string): Promise<'mined' | 'seen' | 'rejected' | 'unknown'> {
-    const local = this.deps.anchorTxs.get(txid) ?? this.deps.chain.getTx?.(txid)
-    const resolved = local instanceof Promise ? await local : local
-    // the tx store is consulted ONLY for the merkle-path check — a
-    // prepared-but-unbroadcast tx lives there and is not 'seen'
-    if (resolved?.merklePath !== undefined || this.deps.txs().get(txid)?.merklePath !== undefined) {
+  /** the one answer about a transaction — bytes held, proof held, depth,
+   *  verdict (mined | pending | dead) with its source, and the outside status
+   *  word as a separate hint that can never travel back into the verdict.
+   *  'rejected'/'conflicted' ledger rows and the recorded reject/abandon
+   *  flags are first-party truth; a merkle path in hand still outranks them. */
+  async txFacts(txid: string): Promise<TxFacts> {
+    const f = await this.facts(txid)
+    if (f.verdict === 'mined') {
+      // a proof in hand clears recorded verdicts — conflict races resolve to mined
       this.txRejected.delete(txid)
       this.txAbandoned.delete(txid)
-      return 'mined'
     }
-    if (this.txRejected.has(txid) || this.deps.chain.isRejected?.(txid) === true || this.txAbandoned.has(txid)) return 'rejected'
-    const ledger = await this.deps.ledgerState?.(txid).catch(() => undefined)
-    if (ledger === 'rejected' || ledger === 'conflicted') return 'rejected'
-    if (resolved !== undefined) return 'seen'
-    if (this.deps.network === 'regtest' || this.deps.network === undefined) return 'unknown'
-    const status = await (this.deps.txStatus?.(txid).catch(() => '') ?? Promise.resolve(''))
-    // a rejection status string has no proof object — its terminal path is
-    // the abandon horizon or a first-party refusal, never a durable verdict
-    if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) return 'unknown'
-    // a MINED/IMMUTABLE verdict is a strong hint but carries no proof
-    // object — 'mined' is reserved for "merkle path in hand" (the local
-    // branch above), so the strongest a status string earns is 'seen'
-    if (
-      ['MINED', 'IMMUTABLE', 'RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING'].includes(
-        status
-      )
-    )
-      return 'seen'
-    return 'unknown'
+    return f
   }
 
   /** any tx this instance broadcast and remembers — anchor or attestation

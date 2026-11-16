@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, copyFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey } from '@bsv/sdk'
-import { ChaintracksTracker, WocTracker, BsvBroadcaster, fetchTxStatus, ReserveFunder } from '@nektar/chain'
+import { ChaintracksTracker, WocTracker, BsvBroadcaster, ReserveFunder } from '@nektar/chain'
 import { NektarMemory } from './dist/src/memory.js'
 import { callTool } from './dist/src/server.js'
 import { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
@@ -34,7 +34,7 @@ const mk = async (wif, name, dir) => {
     network: 'testnet',
     modelId: 'm',
     feeRateSatPerKb: 1,
-    txStatus: (txid) => fetchTxStatus(mc, txid, { wocFallback: true }),
+    statusHint: (txid) => bcast.statusHint(txid),
     batchPolicy: { maxLeaves: 1 }
   })
   const logs = []

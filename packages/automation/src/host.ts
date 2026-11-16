@@ -31,7 +31,10 @@ export interface AutomationHost extends MarketMemory {
    *  paid by another agent) with the chain-event substrate so proof delivery
    *  and the abandon horizon cover it */
   watchTx?(txid: string): void
-  txState(txid: string): Promise<'mined' | 'seen' | 'rejected' | 'unknown'>
+  /** the one transaction-facts answer — verdict (mined|pending|dead) with
+   *  its source, held bytes/proof/depth, and the outside hint in a separate
+   *  field that can never be mistaken for the verdict */
+  txFacts(txid: string): Promise<import('@nektar/chain').TxFacts>
   broadcastTx(tx: Transaction): Promise<BroadcastResult>
   operatorKey(): PrivateKey
   operatorWallet(): OperatorWallet

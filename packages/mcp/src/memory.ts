@@ -353,8 +353,8 @@ export class NektarMemory {
       sdkTracker: () => this.sdkTracker(),
       txLookup: () => this.txLookup,
       proofLookup: () => this.proofLookup,
-      network: this.opts.network,
-      txStatus: this.opts.txStatus,
+      statusHint: this.opts.statusHint,
+      height: this.opts.height,
       // the ledger's own verdict rows are first-party truth — wired lazily
       // because mem.ledger is assigned post-construction by the runtime
       ledgerState: async (txid) => (await this.ledger?.walletTx({ txid }))?.state,
@@ -366,7 +366,7 @@ export class NektarMemory {
       broadcast: (tx) => this.chain.broadcast(tx),
       txs: (tx) => this.txs.put(tx),
       proofOf: (txid) => this.txs.get(txid)?.merklePath,
-      txStatus: this.opts.txStatus,
+      facts: (txid) => this.txOps.txFacts(txid),
       ledger: () => this.ledger,
       network: this.opts.network,
       feeRateSatPerKb: this.opts.feeRateSatPerKb
@@ -486,9 +486,10 @@ export class NektarMemory {
     this.events.on('txAbandoned', ({ txid }: { txid: string }) => cb(txid))
   }
 
-  /** what the chain view knows about a tx right now */
-  async txState(txid: string): Promise<'mined' | 'seen' | 'rejected' | 'unknown'> {
-    return await this.txOps.txState(txid)
+  /** the one answer about a transaction — bytes, proof, depth, verdict with
+   *  its source, and the outside status word as a separate hint */
+  async txFacts(txid: string): Promise<import('@nektar/chain').TxFacts> {
+    return await this.txOps.txFacts(txid)
   }
   /** the log signing key's pubkey (verifies promises and checkpoints) */
   async logPublicKey(): Promise<string> {

@@ -474,7 +474,9 @@ export class LiveWalletServices implements sdk.WalletServices {
     return {
       name: 'woc-live',
       merklePath: sdkc.MerklePath.fromBinary(r.merklePath.toBinary()) as unknown as sdk.GetMerklePathResult['merklePath'],
-      header: await this.headerAtHeight(r.merklePath.blockHeight)
+      // the header is supplementary — a rate-limited index must not throw
+      // away a path we already hold (the wallet anchors it via its tracker)
+      header: await this.headerAtHeight(r.merklePath.blockHeight).catch(() => undefined)
     }
   }
 
@@ -674,8 +676,16 @@ export class ToolboxReserveFunder {
   private atomicBeefCache = new Map<string, number[]>()
 
   private async buildAtomicBeef(tx: Transaction): Promise<number[]> {
+    // a mined subject anchors itself: its own BUMP is the whole proof, so no
+    // input ancestry is needed. Walking the parents of a many-input tx was
+    // pure indexer load — and one rate-limited parent failed the whole import
+    if (tx.merklePath === undefined) {
+      const own = await this.services?.getMerklePath(tx.id('hex')).catch(() => undefined)
+      if (own?.merklePath !== undefined) tx.merklePath = MerklePath.fromBinary((own.merklePath as unknown as MerklePath).toBinary())
+    }
     const beef = new Beef()
     beef.mergeTransaction(tx)
+    if (tx.merklePath !== undefined) return beef.toBinaryAtomic(tx.id('hex'))
     for (const i of tx.inputs) {
       if (i.sourceTXID === undefined) continue
       const parent = i.sourceTransaction ?? (await this.parent(i.sourceTXID))

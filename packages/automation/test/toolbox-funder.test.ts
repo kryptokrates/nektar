@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Beef, PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
+import { Beef, MerklePath, PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
 import { ToolboxReserveFunder } from '../src/toolbox.js'
 
 // Mock BRC-100 wallet: listOutputs serves a canned spendable set + the BEEF
@@ -100,6 +100,37 @@ test('ToolboxReserveFunder: markSpent relinquishes + addOwned dedups', async () 
   // addOwned pushes into the spendable cache once; duplicates are no-ops
   await f.addOwned(a, 0)
   await f.addOwned(a, 0)
+  assert.equal(f.utxos.length, 1)
+  assert.equal(w.internalized.length, 1)
+})
+
+test('ToolboxReserveFunder: a mined funding tx internalizes on its own proof — no parent fetches', async () => {
+  // a many-input sweep: fetching every parent is pure indexer load, and one
+  // rate-limited parent used to fail the whole import
+  const tx = fundingTx(5000)
+  for (let i = 1; i <= 12; i++)
+    tx.addInput({ sourceTXID: i.toString(16).padStart(2, '0').repeat(32), sourceOutputIndex: 0, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
+  const txid = tx.id('hex')
+  const mp = new MerklePath(100, [
+    [
+      { offset: 0, hash: txid, txid: true },
+      { offset: 1, hash: '00'.repeat(32) }
+    ]
+  ])
+  let rawCalls = 0
+  const services = {
+    getRawTx: async () => {
+      rawCalls++
+      return { txid: '', rawTx: undefined }
+    },
+    getMerklePath: async (id: string) => (id === txid ? { merklePath: mp } : {})
+  }
+  const w = mkWallet([], [])
+  const logs: string[] = []
+  const f = new ToolboxReserveFunder(w.wallet as never, services as never, (s) => logs.push(s))
+  await f.addOwned(tx, 0)
+  assert.deepEqual(logs, [])
+  assert.equal(rawCalls, 0, 'a proven subject needs no ancestry')
   assert.equal(f.utxos.length, 1)
   assert.equal(w.internalized.length, 1)
 })

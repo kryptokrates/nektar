@@ -86,7 +86,6 @@ export class CustodyOps {
     return u
   }
 
-  /** return a tx output to the reserve as owned (change/escrow outs) */
   /** Hint-only pass-over for this take call: a candidate whose parent the
    *  broadcaster calls REJECTED/DOUBLE_SPEND is skipped, but the hint writes
    *  nothing — custody state stays with first-party records. A proven tx (or
@@ -130,6 +129,7 @@ export class CustodyOps {
     return undefined
   }
 
+  /** return a tx output to the reserve as owned (change/escrow outs) */
   addOwnedOut(tx: Transaction, vout: number): void {
     this.deps.funder.addOwned?.(tx, vout)
   }

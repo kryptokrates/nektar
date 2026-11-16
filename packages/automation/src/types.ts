@@ -27,6 +27,12 @@ export interface Automation {
   /** the stock breakdown behind marketSlots — proven leaves, anchored
    *  zero-conf leaves and trees still awaiting a block, per kind */
   laneStock: () => Promise<Record<string, { proven: number; anchored: number; unprovenTrees: number }>>
+  /** lane outputs a provisioning transaction should carry — one entry per
+   *  lane with its funding lock, per-slot value and a whole tree's count */
+  provisionPlan: () => Promise<{ outputs: Array<{ kind: string; lockingScriptHex: string; satoshis: number; count: number }> }>
+  /** adopt the lane-locked outputs of a funding tx as slot stock —
+   *  adopted count per kind ({} when nothing matched or lanes off) */
+  adoptProvision: (tx: import('@bsv/sdk').Transaction) => Promise<Record<string, number>>
   /** this agent's blogs deal-journal stream id (undefined when journal off) */
   logStream?: string
   /** on-demand journal view for `deals { operationId }` — own head plus the

@@ -5,6 +5,10 @@ import type { FundingOut } from '@nektar/chain'
 import type { Knex } from 'knex'
 
 export const DERIVATION: Derivation = { protocol: [2, 'nektar market'], keyID: '1' }
+/** tree-row kind for adopted provision transactions — a tx that funds the
+ *  instance AND carries lane-locked outputs; its slots serve every lane
+ *  once proven */
+export const PROVISION_KIND = 'provision'
 export const FUNDING_TAG = new TextEncoder().encode('nektar-fund')
 export const ORIGINATOR = 'nektar'
 export const MAX_TREE_OUTPUTS = 1023
@@ -33,6 +37,11 @@ export async function mintTree(p: {
   await tx.sign()
   return tx
 }
+
+// the market lane's default funding lock — mintTree computes it inline
+// when no explicit lock is passed; provisioning needs the concrete script
+export const marketFundingLock = async (wallet: SigningWallet): Promise<import('@bsv/sdk').LockingScript> =>
+  fundingLock(wallet, ORIGINATOR, DERIVATION, FUNDING_TAG)
 
 // A broadcaster BUMP can prove several transactions of one block at once, and
 // marks a sibling leaf as a txid when it is another of the client's own
@@ -85,6 +94,10 @@ export interface TreeLedger {
    *  anchored (zero-conf-admissible) unproven trees, and unproven trees of
    *  the kind still awaiting a block */
   stock(kind?: string): Promise<{ proven: number; anchored: number; unprovenTrees: number }>
+  /** register a foreign provision tx: the tree row once (kind 'provision'),
+   *  and one free slot per entry carrying its own kind at its real vout.
+   *  Idempotent — re-adopting the same tx adds nothing and returns 0. */
+  adopt(tx: Transaction, slots: Array<{ vout: number; kind: string }>): Promise<number>
 }
 
 // a tree hosts may fund-accept before it mines: proven, or one unconfirmed
@@ -100,19 +113,40 @@ export const anchoredTree = (tree: Transaction): boolean =>
 // they refuse (and submitAll would count the refusal as delivered)
 const serves = (tree: { tree: Transaction; proven: boolean }, kind: string): boolean => tree.proven || (kind === 'market' && anchoredTree(tree.tree))
 
+/** outputs of `tx` that carry a lane's funding lock at ≥ its slot value —
+ *  the slots a provision tx donates to each lane, at their real vouts */
+export const matchProvision = (tx: Transaction, lanes: Array<{ kind: string; lockHex: string; minSats: number }>): Array<{ vout: number; kind: string }> => {
+  const out: Array<{ vout: number; kind: string }> = []
+  tx.outputs.forEach((o, vout) => {
+    const hex = o.lockingScript?.toHex()
+    const lane = lanes.find((l) => l.lockHex === hex && (o.satoshis ?? 0) >= l.minSats)
+    if (lane) out.push({ vout, kind: lane.kind })
+  })
+  return out
+}
+
 export class MemoryTreeLedger implements TreeLedger {
   private trees = new Map<string, { tree: Transaction; proven: boolean; kind: string }>()
-  private free = new Set<string>()
+  // free slot key -> lane kind; adopt() writes per-slot kinds, add() the
+  // tree's single kind — provisioning makes trees mixed-kind
+  private free = new Map<string, string>()
   async add(tree: Transaction, n: number, kind = 'market'): Promise<void> {
     const txid = tree.id('hex')
     this.trees.set(txid, { tree, proven: false, kind })
-    for (let i = 0; i < n; i++) this.free.add(`${txid}:${i}`)
+    for (let i = 0; i < n; i++) this.free.set(`${txid}:${i}`, kind)
+  }
+  async adopt(tx: Transaction, slots: Array<{ vout: number; kind: string }>): Promise<number> {
+    const txid = tx.id('hex')
+    if (this.trees.has(txid)) return 0
+    this.trees.set(txid, { tree: tx, proven: tx.merklePath !== undefined, kind: PROVISION_KIND })
+    for (const s of slots) this.free.set(`${txid}:${s.vout}`, s.kind)
+    return slots.length
   }
   async take(kind = 'market', expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined> {
-    for (const k of this.free) {
+    for (const [k, slotKind] of this.free) {
       const [txid, v] = k.split(':')
       const t = this.trees.get(txid)!
-      if (!serves(t, kind) || t.kind !== kind) continue
+      if (slotKind !== kind || !serves(t, kind)) continue
       this.free.delete(k)
       if (expectedLockHex !== undefined && t.tree.outputs[Number(v)]?.lockingScript.toHex() !== expectedLockHex) continue
       return { tree: ownPath(t.tree), vout: Number(v) }
@@ -150,28 +184,31 @@ export class MemoryTreeLedger implements TreeLedger {
   }
   async drop(txid: string): Promise<void> {
     this.trees.delete(txid)
-    for (const k of [...this.free]) if (k.startsWith(`${txid}:`)) this.free.delete(k)
+    for (const k of [...this.free.keys()]) if (k.startsWith(`${txid}:`)) this.free.delete(k)
   }
   async remaining(kind = 'market'): Promise<number> {
     let n = 0
-    for (const k of this.free) {
+    for (const [k, slotKind] of this.free) {
       const t = this.trees.get(k.split(':')[0])!
-      if (serves(t, kind) && t.kind === kind) n++
+      if (slotKind === kind && serves(t, kind)) n++
     }
     return n
   }
   async stock(kind = 'market'): Promise<{ proven: number; anchored: number; unprovenTrees: number }> {
     let proven = 0,
-      anchored = 0,
-      unprovenTrees = 0
-    for (const t of this.trees.values()) if (t.kind === kind && !t.proven) unprovenTrees++
-    for (const k of this.free) {
-      const t = this.trees.get(k.split(':')[0])!
-      if (t.kind !== kind) continue
+      anchored = 0
+    const waiting = new Set<string>()
+    for (const [k, slotKind] of this.free) {
+      const txid = k.split(':')[0]
+      const t = this.trees.get(txid)!
+      if (slotKind !== kind) continue
       if (t.proven) proven++
-      else if (anchoredTree(t.tree)) anchored++
+      else {
+        waiting.add(txid)
+        if (anchoredTree(t.tree)) anchored++
+      }
     }
-    return { proven, anchored, unprovenTrees }
+    return { proven, anchored, unprovenTrees: waiting.size }
   }
 }
 
@@ -227,6 +264,20 @@ export class KnexTreeLedger implements TreeLedger {
       const rows = Array.from({ length: n }, (_, i) => ({ key: `${txid}:${i}`, txid, vout: i, kind }))
       if (rows.length) await trx('bstack_tree_outputs').insert(rows).onConflict('key').ignore()
     })
+  }
+  async adopt(tx: Transaction, slots: Array<{ vout: number; kind: string }>): Promise<number> {
+    await this.ensure()
+    const txid = tx.id('hex')
+    if (await this.kx('bstack_trees').where({ txid }).first()) return 0
+    await this.kx.transaction(async (trx) => {
+      await trx('bstack_trees')
+        .insert({ txid, n: slots.length, proven: tx.merklePath ? 1 : 0, beef: JSON.stringify(tx.toBEEF()), kind: PROVISION_KIND })
+        .onConflict('txid')
+        .ignore()
+      const rows = slots.map((s) => ({ key: `${txid}:${s.vout}`, txid, vout: s.vout, kind: s.kind }))
+      if (rows.length) await trx('bstack_tree_outputs').insert(rows).onConflict('key').ignore()
+    })
+    return slots.length
   }
   async take(kind = 'market', expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined> {
     await this.ensure()
@@ -370,7 +421,13 @@ export class KnexTreeLedger implements TreeLedger {
       .count('o.key as c')) {
       if (anchoredTree(Transaction.fromBEEF(JSON.parse(row.beef as string)))) anchored += Number(row.c)
     }
-    const u = await this.kx('bstack_trees').where({ proven: 0, kind }).count('txid as c').first()
+    // a provision tree counts toward every kind it still holds slots for
+    const u = await this.kx('bstack_trees as t')
+      .join('bstack_tree_outputs as o', 'o.txid', 't.txid')
+      .where('t.proven', 0)
+      .where('o.kind', kind)
+      .countDistinct('t.txid as c')
+      .first()
     return { proven: Number(r?.c ?? 0), anchored, unprovenTrees: Number(u?.c ?? 0) }
   }
 }

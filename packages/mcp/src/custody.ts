@@ -184,4 +184,37 @@ export class CustodyOps {
     this.addOwnedOut(tx, tx.outputs.length - 1)
     return { txid: tx.id('hex'), paidSats: args.amount, txHex: tx.toHex(), utxo }
   }
+
+  /** one transaction that provisions a new identity: arbitrary lane-locked
+   *  outputs plus a plain P2PKH funds leg — same funding/sign/guarded
+   *  broadcast path as sendSats */
+  async provisionPay(args: {
+    outputs: Array<{ satoshis: number; scriptHex: string }>
+    address?: string
+    fundsSats?: number
+  }): Promise<{ txid: string; hex: string; outputs: number; fee: number }> {
+    if (args.outputs.length === 0) throw new Error('provisionPay: at least one output required')
+    if (args.outputs.length > 1000) throw new Error('provisionPay: too many outputs (max 1000)')
+    for (const o of args.outputs) {
+      if (!Number.isInteger(o.satoshis) || o.satoshis < 1 || o.satoshis > 10_000) throw new Error('provisionPay: output satoshis must be an integer 1..10000')
+    }
+    if (args.fundsSats !== undefined && (!Number.isInteger(args.fundsSats) || args.fundsSats < 546))
+      throw new Error('provisionPay: fundsSats must be an integer >= 546')
+    const total = args.outputs.reduce((s, o) => s + o.satoshis, 0) + (args.fundsSats ?? 0)
+    const f = await this.takeFunding(total + 600)
+    const tx = new Transaction()
+    tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.deps.fundSigner()) })
+    for (const o of args.outputs) tx.addOutput({ satoshis: o.satoshis, lockingScript: LockingScript.fromHex(o.scriptHex) })
+    if (args.fundsSats !== undefined && args.address !== undefined) tx.addOutput({ satoshis: args.fundsSats, lockingScript: new P2PKH().lock(args.address) })
+    tx.addOutput({ lockingScript: new P2PKH().lock(await signerAddress(this.deps.fundSigner(), this.changePrefix())), change: true })
+    await tx.fee(new SatoshisPerKilobyte(this.deps.feeRateSatPerKb ?? 1))
+    await tx.sign()
+    const br = await this.deps.broadcast(tx)
+    if (br.status !== 'success') throw new Error(`provisionPay broadcast failed: ${br.description ?? 'unknown'}`)
+    this.deps.txs(tx)
+    this.markSpentOut(f.tx.id('hex'), f.vout)
+    this.addOwnedOut(tx, tx.outputs.length - 1)
+    const fee = (f.tx.outputs[f.vout].satoshis ?? 0) - (tx.outputs[tx.outputs.length - 1].satoshis ?? 0) - total
+    return { txid: tx.id('hex'), hex: tx.toHex(), outputs: tx.outputs.length - 1, fee }
+  }
 }

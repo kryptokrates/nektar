@@ -1,7 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PrivateKey, Transaction } from '@bsv/sdk'
+import { PrivateKey, ProtoWallet, Transaction, UnlockingScript } from '@bsv/sdk'
 import { signWant } from '../src/artifacts.js'
+import { fundingLock } from '@lightwebinc/bcommon'
+import { DERIVATION, FUNDING_TAG, ORIGINATOR } from '../src/tree.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
 import { MemoryTreeLedger } from '../src/tree.js'
 import { publishArtifact, republishProved, republishOne, resubmitCarrier, artifactHash } from '../src/publish.js'
@@ -259,4 +261,41 @@ test('publish: an empty ledger reports why the lane is stocked out', async () =>
     publishArtifact({ key: k, ledger: new MemoryTreeLedger(), journal: new MemoryCarrierJournal(), hosts: ['http://127.0.0.1:1'], net: NET, payload }),
     /funding slot \(market: 0 proven, 0 anchored, 0 tree\(s\) awaiting a block\)/
   )
+})
+
+// a provision tree in the ledger must not block the mint gate, and it still
+// gets proven when fetchTx delivers its path
+test('ensureTrees: unproven provision tree does not gate the mint, and gets proven', async () => {
+  const k = PrivateKey.fromRandom()
+  const ledger = new MemoryTreeLedger()
+  const marketLock = await fundingLock(new ProtoWallet(k), ORIGINATOR, DERIVATION, FUNDING_TAG)
+  const prov = new Transaction()
+  prov.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromASM('OP_1') })
+  prov.addOutput({ satoshis: 100, lockingScript: marketLock })
+  const led = ledger as unknown as { adopt?: (t: Transaction, s: { vout: number; kind: string }[]) => Promise<number> }
+  assert.ok(led.adopt !== undefined, 'ledger must implement adopt')
+  assert.equal(await led.adopt(prov, [{ vout: 0, kind: 'market' }]), 1)
+  const broadcasted: Transaction[] = []
+  const p = {
+    key: k,
+    ledger,
+    lowWater: 4,
+    size: 4,
+    satsPerOutput: 100,
+    takeFunding: async () => fund(k, 1_000_000),
+    broadcast: async (t: Transaction) => {
+      broadcasted.push(t)
+      return { status: 'success' as const }
+    },
+    fetchTx: async (id: string) => (id === prov.id('hex') ? prov : undefined)
+  }
+  const r1 = await ensureTrees(p)
+  assert.ok(r1.minted !== undefined, 'a pending provision tree must not block the market refill')
+  assert.equal(broadcasted.length, 1)
+  // once the provision tx is proven, the proving loop marks it even though
+  // its tree kind is 'provision', not 'market'
+  prove(prov)
+  const r2 = await ensureTrees(p)
+  assert.ok(r2.proven.includes(prov.id('hex')), 'provision tree must be marked proven by the upkeep loop')
+  assert.deepEqual((await ledger.unproven()).map((u) => u.txid).sort(), [r1.minted!], 'only the freshly minted tree remains unproven')
 })

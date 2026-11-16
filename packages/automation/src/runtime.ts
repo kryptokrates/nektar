@@ -880,11 +880,32 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     s.tries++
     return s.tries >= 2 ? 'drop' : 'keep'
   }
+  // per-lane funding shape — the same table provisions stock:
+  // every lane-locked output of the funding tx is a slot
+  const laneSpec = async (kind: string): Promise<{ lock: import('@bsv/sdk').LockingScript | undefined; satsPerOutput: number; size: number }> => {
+    const mod = lanes?.mod
+    return {
+      lock:
+        mod === undefined
+          ? undefined
+          : kind === 'bbox'
+            ? await mod.boxFundingLock(key, wallet)
+            : kind === 'log'
+              ? await mod.logFundingLock(key, wallet)
+              : kind === 'finger'
+                ? await mod.fingerFundingLock(key, wallet)
+                : await mod.marketFundingLock(wallet),
+      satsPerOutput: kind === 'log' || kind === 'finger' ? 100 : 1,
+      size: kind === 'finger' ? 4 : (cfg.treeSize ?? 64)
+    }
+  }
+
   const runUpkeep = async (): Promise<void> => {
     try {
       if (lanes !== undefined) {
         try {
           for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger'] as const) {
+            const spec = await laneSpec(kind)
             const r = await lanes.mod.ensureTrees({
               key,
               wallet,
@@ -897,16 +918,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               // path) need it
               lowWater: kind === 'finger' ? 2 : (cfg.treeLowWater ?? cfg.treeSize ?? 64),
               maxUnproven: cfg.treeMaxUnproven ?? 2,
-              size: kind === 'finger' ? 4 : cfg.treeSize,
-              satsPerOutput: kind === 'log' || kind === 'finger' ? 100 : undefined,
-              lock:
-                kind === 'bbox'
-                  ? await lanes.mod.boxFundingLock(key, wallet)
-                  : kind === 'log'
-                    ? await lanes.mod.logFundingLock(key, wallet)
-                    : kind === 'finger'
-                      ? await lanes.mod.fingerFundingLock(key, wallet)
-                      : undefined,
+              size: spec.size,
+              satsPerOutput: spec.satsPerOutput,
+              lock: kind === 'market' ? undefined : spec.lock,
               takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0],
               broadcast: (tx) => mem.broadcastTx(tx),
               fetchTx: (txid) => mem.fetchTx(txid),
@@ -1434,6 +1448,42 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             log: await lanes.ledger.stock('log'),
             finger: await lanes.ledger.stock('finger')
           },
+    // what a provisioning transaction should carry: one lane-locked output
+    // per slot, a whole tree's worth per lane — the block confirming the
+    // money then also proves the first stock
+    provisionPlan: async () => {
+      if (lanes === undefined) return { outputs: [] }
+      const outputs: Array<{ kind: string; lockingScriptHex: string; satoshis: number; count: number }> = []
+      for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger']) {
+        const spec = await laneSpec(kind)
+        if (spec.lock === undefined) continue
+        outputs.push({ kind, lockingScriptHex: spec.lock.toHex(), satoshis: spec.satsPerOutput, count: spec.size })
+      }
+      return { outputs }
+    },
+    // a funding tx that already carries lane-locked outputs donates them as
+    // slot stock — proven or not; the upkeep loop attaches the BUMP later
+    adoptProvision: async (tx: import('@bsv/sdk').Transaction) => {
+      if (lanes === undefined) return {}
+      if (tx.merklePath === undefined) {
+        const seen = await mem.fetchTx(tx.id('hex'))
+        if (seen?.merklePath !== undefined) tx.merklePath = seen.merklePath
+      }
+      const laneTable: Array<{ kind: string; lockHex: string; minSats: number }> = []
+      for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger']) {
+        const spec = await laneSpec(kind)
+        if (spec.lock !== undefined) laneTable.push({ kind, lockHex: spec.lock.toHex(), minSats: spec.satsPerOutput })
+      }
+      const matched = lanes.mod.matchProvision(tx, laneTable)
+      if (matched.length === 0) return {}
+      const n = await lanes.ledger.adopt(tx, matched)
+      if (n === 0) return {}
+      // adopted slots are usable the moment the tx proves — wake deferred work
+      await store.unblockOutbox('funding-slot')
+      const counts: Record<string, number> = {}
+      for (const s of matched) counts[s.kind] = (counts[s.kind] ?? 0) + 1
+      return counts
+    },
     stop: async () => {
       stopped = true
       if (timer) clearTimeout(timer)

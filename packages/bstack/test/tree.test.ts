@@ -1,12 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PrivateKey, ProtoWallet } from '@bsv/sdk'
+import { PrivateKey, ProtoWallet, Transaction, UnlockingScript, P2PKH } from '@bsv/sdk'
 import { decodeFunding, fundingLock } from '@lightwebinc/bcommon'
 import knex from 'knex'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mintTree, DERIVATION, FUNDING_TAG, ORIGINATOR, KnexTreeLedger, MemoryTreeLedger, anchoredTree as anchoredPred } from '../src/tree.js'
+import * as treemod from '../src/tree.js'
+import { boxFundingLock } from '../src/box.js'
 import { anchoredTree, fakeParent, fund, prove } from './helpers.js'
 
 test('tree: n=8 mints 8 funding outputs + change, each decodes our tag', async () => {
@@ -358,3 +360,57 @@ for (const mk of [
     }
   })
 }
+
+// spv/unstocked-lane: a funding tx that already carries lane-locked outputs
+// provisions stock for the block that confirms the money — adopted slots
+// behave like tree slots but live at their real output index
+test('ledger.adopt: lane-locked outputs of a provision tx become slots', async () => {
+  const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  try {
+    const key = PrivateKey.fromRandom()
+    const marketLock = await fundingLock(new ProtoWallet(key), ORIGINATOR, DERIVATION, FUNDING_TAG)
+    const bboxLock = await boxFundingLock(key, new ProtoWallet(key))
+    const tx = new Transaction()
+    tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromASM('OP_1') })
+    tx.addOutput({ satoshis: 100, lockingScript: marketLock })
+    tx.addOutput({ satoshis: 100, lockingScript: marketLock })
+    tx.addOutput({ satoshis: 100, lockingScript: bboxLock })
+    tx.addOutput({ satoshis: 100, lockingScript: bboxLock })
+    tx.addOutput({ satoshis: 5000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
+    const lanes = [
+      { kind: 'market', lockHex: marketLock.toHex(), minSats: 1 },
+      { kind: 'bbox', lockHex: bboxLock.toHex(), minSats: 100 }
+    ]
+    const mod = treemod as unknown as {
+      matchProvision?: (t: Transaction, l: typeof lanes) => { vout: number; kind: string }[]
+    }
+    assert.ok(mod.matchProvision !== undefined, 'tree.ts must export matchProvision')
+    const matched = mod.matchProvision(tx, lanes)
+    assert.deepEqual(
+      matched.map((m) => `${m.kind}:${m.vout}`).sort(),
+      ['bbox:2', 'bbox:3', 'market:0', 'market:1'],
+      'the four lane-locked outputs at their real vouts'
+    )
+    for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(kx)]) {
+      // each ledger must see the tx unproven — prove() below mutates it
+      tx.merklePath = undefined
+      const ledger = l as unknown as { adopt?: (t: Transaction, s: typeof matched) => Promise<number> }
+      assert.ok(ledger.adopt !== undefined, 'ledger must implement adopt')
+      assert.equal(await ledger.adopt(tx, matched), 4)
+      assert.equal(await ledger.adopt(tx, matched), 0, 're-adopt is idempotent')
+      assert.deepEqual(await stockOf(l, 'bbox'), { proven: 0, anchored: 0, unprovenTrees: 1 }, 'provision tree counts toward bbox stock')
+      assert.equal(await l.take('bbox', bboxLock.toHex()), undefined, 'unproven provision stock must not serve bbox')
+      assert.equal(await l.take('market'), undefined, 'unanchored provision stock must not serve market zero-conf either')
+      prove(tx)
+      await l.markProven(tx.id('hex'), tx.merklePath)
+      const slot = await l.take('bbox', bboxLock.toHex())
+      assert.ok(slot !== undefined, 'proven provision tree must serve a bbox slot')
+      assert.ok([2, 3].includes(slot.vout), `real output index, got ${slot.vout}`)
+      assert.ok(slot.tree.merklePath !== undefined, 'served tree carries the proof')
+      const m = await l.take('market')
+      assert.ok(m !== undefined && [0, 1].includes(m.vout), `market slot from provision tree, got ${m?.vout}`)
+    }
+  } finally {
+    await kx.destroy()
+  }
+})

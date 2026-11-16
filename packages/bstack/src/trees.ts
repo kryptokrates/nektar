@@ -1,5 +1,5 @@
 import { Transaction } from '@bsv/sdk'
-import { mintTree, type TreeLedger } from './tree.js'
+import { mintTree, PROVISION_KIND, type TreeLedger } from './tree.js'
 import type { SigningWallet } from '@lightwebinc/bcommon'
 import type { SignerLike } from '@nektar/core'
 import type { FundingOut, BroadcastResult } from '@nektar/chain'
@@ -49,12 +49,14 @@ export async function ensureTrees(p: {
   const kind = p.kind ?? 'market'
   const proven: string[] = []
   for (const u of await p.ledger.unproven()) {
-    if (u.kind !== kind) continue
+    // a provision row matches every kind's proving pass — it carries slots
+    // for several lanes, so whichever upkeep runs first may attach its path
+    if (u.kind !== kind && u.kind !== PROVISION_KIND) continue
     const tx = await p.fetchTx(u.txid)
     if (tx !== undefined && tx.merklePath !== undefined) {
       await p.ledger.markProven(u.txid, tx.merklePath)
       proven.push(u.txid)
-    } else if (p.txStatus !== undefined) {
+    } else if (p.txStatus !== undefined && u.kind !== PROVISION_KIND) {
       const st = (await p.txStatus(u.txid)).toUpperCase()
       if (st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')) {
         // the mint was refused/lost a competing spend — an unproven row

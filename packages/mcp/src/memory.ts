@@ -735,6 +735,14 @@ export class NektarMemory {
     return await this.custodyOps.sendSats(args)
   }
 
+  async provisionPay(args: {
+    outputs: Array<{ satoshis: number; scriptHex: string }>
+    address?: string
+    fundsSats?: number
+  }): Promise<{ txid: string; hex: string; outputs: number; fee: number }> {
+    return await this.custodyOps.provisionPay(args)
+  }
+
   /** D4 (§19 M_U): the shard's anchored rotation ledger — genesis owner pub
    *  plus every `rotation-cert` record in `__identity__` with its inclusion
    *  bundle. A verifier replays verifyCertChain over certs it can each prove

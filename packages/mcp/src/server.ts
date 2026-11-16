@@ -601,6 +601,26 @@ export const TOOLS = [
     }
   },
   {
+    name: 'provisionPlan',
+    description:
+      'List the lane-locked outputs a provisioning transaction should carry — one entry per lane with its funding lock, per-slot value and a whole tree of slots. Hand the plan to provisionPay on the paying instance, then the block confirming the money also proves the first lane stock.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'provisionPay',
+    description:
+      'Build, sign and BROADCAST one provisioning transaction from the fee reserve: the lane-locked outputs from a provisionPlan plus a P2PKH payment to the recipient funding address — same guarded path as sendSats.',
+    inputSchema: {
+      type: 'object',
+      required: ['plan', 'address', 'fundsSats'],
+      properties: {
+        plan: { type: 'object', description: 'provisionPlan result: {outputs: [{kind, lockingScriptHex, satoshis, count}]}' },
+        address: { type: 'string', description: 'recipient funding address (from provisionPlan)' },
+        fundsSats: { type: 'number', description: 'plain funding sats to include (>=546)' }
+      }
+    }
+  },
+  {
     name: 'exportShard',
     description:
       "Export a PUBLIC shard as a portable pack: every record's plaintext + provenance + its anchor proof bundle. Private shards and level>0 records refuse — a pack never carries gated content. importShard on another instance re-verifies everything.",
@@ -847,7 +867,8 @@ const MUTATING_TOOLS = new Set([
   'attestInference',
   'fundingImport',
   'sendSats',
-  'fundingRefresh'
+  'fundingRefresh',
+  'provisionPay'
 ])
 
 function settleEscrow(mem: NektarMemory, funding: Array<{ tx: import('@bsv/sdk').Transaction; vout: number }>, tx: import('@bsv/sdk').Transaction): void {
@@ -1709,10 +1730,41 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       }
       return await mem.fundingStatus()
     }
+    case 'provisionPlan': {
+      const au = mem.automation
+      if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
+      const plan = await au.provisionPlan()
+      const w = await mem.fundingStatus()
+      return { ...plan, address: w.address }
+    }
+    case 'provisionPay': {
+      const plan = args?.plan as { outputs?: Array<{ lockingScriptHex?: string; satoshis?: number; count?: number }> } | undefined
+      const outputs: Array<{ satoshis: number; scriptHex: string }> = []
+      for (const e of plan?.outputs ?? []) {
+        if (typeof e.lockingScriptHex !== 'string' || typeof e.satoshis !== 'number' || !Number.isInteger(e.count) || e.count! < 1)
+          throw new Error('provisionPay: bad plan entry (lockingScriptHex, satoshis, count required)')
+        for (let i = 0; i < e.count!; i++) outputs.push({ satoshis: e.satoshis, scriptHex: e.lockingScriptHex })
+      }
+      if (outputs.length === 0) throw new Error('provisionPay: empty plan')
+      if (typeof args?.address !== 'string') throw new Error('provisionPay: address required')
+      const r = await mem.provisionPay({ outputs, address: args.address, fundsSats: Number(args.fundsSats) })
+      return { txid: r.txid, hex: mem.txWire(r.txid) ?? r.hex, outputs: r.outputs, fee: r.fee }
+    }
     case 'fundingImport': {
       if (!ctx.ops?.importFunding) throw new Error('fundingImport: live network only (regtest funds via the test harness)')
       if (typeof args?.txid !== 'string' || args.txid.length < 8) throw new Error('fundingImport: txid required')
-      return await ctx.ops.importFunding(args.txid)
+      const res = (await ctx.ops.importFunding(args.txid)) as Record<string, unknown>
+      // a provisioning tx carries lane-locked outputs — adopt them as slot stock
+      if (mem.automation !== undefined) {
+        const adopted: Record<string, number> = {}
+        for (const txid of (res as { txids?: string[] }).txids ?? []) {
+          const tx = await mem.fetchTx(txid)
+          if (tx === undefined) continue
+          for (const [k, n] of Object.entries(await mem.automation.adoptProvision(tx))) adopted[k] = (adopted[k] ?? 0) + n
+        }
+        if (Object.keys(adopted).length > 0) return { ...res, adopted }
+      }
+      return res
     }
     case 'fundingRefresh': {
       if (!ctx.ops?.refreshFunding) throw new Error('fundingRefresh: live network only')

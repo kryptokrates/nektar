@@ -1275,7 +1275,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       const added = await importFundingTx(mc, txid, pkhHex)
       for (const u of added) addIfNew(u)
       const balanceSats = utxoView.utxos.reduce((s, u) => s + u.satoshis, 0)
-      return { imported: added.length, utxos: utxoView.utxos.length, balanceSats, address: fundAddress }
+      return { imported: added.length, utxos: utxoView.utxos.length, balanceSats, address: fundAddress, txids: [...new Set(added.map((u) => u.tx.id('hex')))] }
     },
     // fundingRefresh MCP tool: reconcile the reserve against chain truth.
     //   - outputs the unspent index reports live at the fee address are

@@ -9,6 +9,7 @@ import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
 import { headerPowValid, linksTo } from './headers.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
+import type { StatusHint } from './txfacts.js'
 
 export interface MainnetConfig {
   broadcasterUrl?: string // BSV Broadcaster base (no trailing slash)
@@ -107,10 +108,10 @@ export class BsvBroadcaster implements Broadcaster {
     }
   }
 
-  /** broadcaster's current verdict for a txid (uppercase, '' = undecidable) —
+  /** the broadcaster's current word for a txid — a HINT, never a verdict:
    *  routes through the shared observer seam incl. the WoC mined-fallback */
-  async txStatus(txid: string): Promise<string> {
-    return await fetchTxStatus(this.cfg, txid, { wocFallback: this.wocFallback })
+  async statusHint(txid: string): Promise<StatusHint> {
+    return await probeTxStatus(this.cfg, txid, { wocFallback: this.wocFallback })
   }
 }
 

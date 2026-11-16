@@ -6,7 +6,7 @@
 // Proofs are pushed (events substrate/broadcaster callbacks); the lookups are
 // the single-attempt recovery path for what a push missed while down.
 import type { Transaction, MerklePath } from '@bsv/sdk'
-import { TxStore, type TxStatusEvent } from '@nektar/chain'
+import { TxStore, txFactsOf, type TxFacts, type TxStatusEvent, type StatusHint } from '@nektar/chain'
 import type { TxObservationInput } from '@nektar/automation'
 
 export interface TxOpsDeps {
@@ -30,10 +30,10 @@ export interface TxOpsDeps {
   txLookup: () => ((txid: string) => Promise<Transaction | undefined>) | undefined
   proofLookup: () => ((txid: string) => Promise<MerklePath | undefined>) | undefined
   network?: string
-  /** chain-observer seam — the broadcaster's current verdict for a txid
-   *  (uppercase, '' = undecidable); injected by the runtime so TxOps never
+  /** the outside status word for a txid — a HINT, never a verdict; injected
+   *  by the runtime (the broadcaster adapter's `statusHint`) so TxOps never
    *  hand-rolls the /tx fetch or owns the endpoint default */
-  txStatus?: (txid: string) => Promise<string>
+  statusHint?: (txid: string) => Promise<StatusHint>
   /** the durable ledger's own row for a txid — 'rejected'/'conflicted'
    *  states are first-party truth (our own writes), injected by memory
    *  when a ledger exists; absent ledger → the check is skipped */
@@ -49,7 +49,30 @@ export class TxOps {
   private txRejected = new Set<string>()
   private txAbandoned = new Set<string>()
   private txRejectCbs: Array<(txid: string) => void> = []
-  constructor(private deps: TxOpsDeps) {}
+  /** the one transaction-facts answer — held bytes + proof + first-party
+   *  verdicts + abandon horizon compose the verdict; the outside status word
+   *  only ever lands in the separate hint field */
+  private facts: (txid: string) => Promise<TxFacts>
+  constructor(private deps: TxOpsDeps) {
+    this.facts = txFactsOf({
+      // 'seen' basis: anchor set + backend answers only — a prepared-but-
+      // unbroadcast tx in the store is not 'held' (not on the network)
+      held: async (t) => {
+        const local = this.deps.anchorTxs.get(t) ?? this.deps.chain.getTx?.(t)
+        return local instanceof Promise ? await local : local
+      },
+      // proofs held in the tx store count too — a verified path attached by
+      // the push path lives there even when held() has no copy
+      proof: (t) => this.deps.txs().get(t)?.merklePath,
+      rejected: async (t) =>
+        this.txRejected.has(t) ||
+        this.deps.chain.isRejected?.(t) === true ||
+        ['rejected', 'conflicted'].includes(await this.deps.ledgerState?.(t).catch(() => undefined) ?? ''),
+      abandoned: (t) => this.txAbandoned.has(t),
+      hint: this.deps.statusHint,
+      height: this.deps.height
+    })
+  }
 
   private lookupDue(key: string, everyMs: number): boolean {
     if (Date.now() - (this.lookupAt.get(key) ?? 0) <= everyMs) return false

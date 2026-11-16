@@ -22,8 +22,6 @@ export {
   BsvBroadcaster,
   fetchBroadcasterFeeRate,
   fetchRawTx,
-  fetchTxStatus,
-  probeTxStatus,
   WocTracker,
   merklePathMainnet,
   tscToMerklePath,
@@ -40,6 +38,8 @@ export { MemoryChain, MemoryTreasury, MemoryFunder, memoryTreasury } from './mem
 export type { MemoryChainFaults } from './memchain.js'
 export { pickSpendable, fundsOf } from './funds.js'
 export type { Funds, FundsPurpose, FunderLike } from './funds.js'
+export { txFactsOf, hintSeen, hintRejected, hintSilent, SEEN_HINTS } from './txfacts.js'
+export type { StatusHint, TxFacts, TxFactsDeps, TxVerdict, TxVerdictSource } from './txfacts.js'
 export { SpendGuard } from './spendguard.js'
 export type { SpendGuardOpts, CostRecord } from './spendguard.js'
 export type { PathResult } from './mainnet.js'

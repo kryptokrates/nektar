@@ -6,7 +6,8 @@
   "types": "dist/src/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test dist/test/*.test.js"
+    "test": "node --test dist/test/*.test.js",
+    "test:stack": "NEKTAR_TEST_TIER=stack node --test dist/test/*.test.js"
   },
   "dependencies": {
     "@bsv/sdk": "4.0.1",

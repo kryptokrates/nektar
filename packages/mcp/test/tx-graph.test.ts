@@ -4,14 +4,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
-import { TxStore, spendValid, stackWorld, stackChain, StackChain, StackFunder } from '@nektar/chain'
+import { TxStore, spendValid, testWorld, testChain, type TestChain, type TestFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/index.js'
 
-const liveMem = async (t: { skip: (m?: string) => void }): Promise<{ mem: NektarMemory; chain: StackChain; funder: StackFunder } | undefined> => {
-  const w = await stackWorld(t, 4)
+const liveMem = async (t: { skip: (m?: string) => void }): Promise<{ mem: NektarMemory; chain: TestChain; funder: TestFunder } | undefined> => {
+  const w = await testWorld(t, 4)
   if (w === undefined) return
   const { chain, funder } = w
-  const view = Object.create(chain) as StackChain
+  const view = Object.create(chain) as TestChain
   ;(view as { getTx?: unknown }).getTx = undefined // live backends have no getTx
   return { mem: new NektarMemory(view, funder, funder.keyPair, { network: 'testnet' }), chain, funder }
 }
@@ -20,13 +20,13 @@ const liveMem = async (t: { skip: (m?: string) => void }): Promise<{ mem: Nektar
  *  fabricated root can't broadcast — the validator refuses TX_MISSING_PARENT)
  *  and is mined on `chain` when asked. */
 const pair = async (
-  chain: StackChain,
-  funder: StackFunder,
+  chain: TestChain,
+  funder: TestFunder,
   mineParent: boolean
 ): Promise<{ parent: Transaction; child: Transaction; vout: number; sats: number; key: PrivateKey }> => {
   const key = funder.keyPair
   const u = await funder.take(10_000)
-  const parent = u.tx // already broadcast by StackFunder.fund — zeroconf-spendable
+  const parent = u.tx // already broadcast by TestFunder.fund — zeroconf-spendable
   const sats = u.satoshis
   if (mineParent) {
     await chain.mine(1)
@@ -132,7 +132,7 @@ test('wire: Extended Format when the parent is unproven; raw when it is unknown'
 })
 
 test('TxStore: a proof ends the stored ancestry and survives a reload', async (t) => {
-  const w = await stackWorld(t, 2)
+  const w = await testWorld(t, 2)
   if (w === undefined) return
   const { chain, funder } = w
   const { parent, child } = await pair(chain, funder, true)
@@ -156,7 +156,7 @@ test('TxStore: a proof ends the stored ancestry and survives a reload', async (t
 })
 
 test('spendValid: a real spend passes; a spend of another output or a broken signature does not', async (t) => {
-  const w = await stackWorld(t, 2)
+  const w = await testWorld(t, 2)
   if (w === undefined) return
   const { chain, funder } = w
   const { parent, child, vout, sats } = await pair(chain, funder, false)

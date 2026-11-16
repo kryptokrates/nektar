@@ -29,6 +29,7 @@ import {
   type RegtestConfig
 } from './regtest.js'
 import { TxStore } from './txstore.js'
+import { testTier, type TestChain } from './testtier.js'
 
 // ---------------------------------------------------------------------------
 // stack connection
@@ -56,7 +57,14 @@ function loadRepoEnv(): void {
   }
 }
 
+// memory tier must never reach the Docker stack — reaching any of these is a
+// structural bug in a test's tier usage, so fail loudly rather than degrade
+const stackOnlyFn = (name: string): void => {
+  if (testTier() === 'memory') throw new Error(`${name}: stack tier only (NEKTAR_TEST_TIER=memory)`)
+}
+
 export function stackCfgFromEnv(): RegtestConfig | undefined {
+  stackOnlyFn('stackCfgFromEnv')
   loadRepoEnv()
   const pass = nektarEnv('NEKTAR_RPC_PASS')
   if (pass === undefined || pass === '') return undefined
@@ -146,7 +154,7 @@ export async function skipUnlessStack(t: { skip: (msg?: string) => void }, cfg?:
 // ---------------------------------------------------------------------------
 // chain surface — the same shape tests used on the in-memory stub, backed by the node
 
-export class StackChain implements ChainTracker, Broadcaster {
+export class StackChain implements ChainTracker, Broadcaster, TestChain {
   private tracker: TeranodeRPCTracker
   private submit: TeranodeBroadcaster
   private treasuryAddr?: string
@@ -657,6 +665,7 @@ let treasuryPromise: Promise<StackTreasury> | undefined
  *  DIFFERENT stack would silently fund itself from the wrong treasury —
  *  refuse instead of mixing. */
 export function stackTreasury(cfg?: RegtestConfig): Promise<StackTreasury> {
+  stackOnlyFn('stackTreasury')
   const c = cfg ?? stackCfgFromEnv()
   if (c === undefined) throw new Error('testkit: no regtest stack env (NEKTAR_RPC_*)')
   treasuryPromise ??= StackTreasury.open(c)
@@ -683,6 +692,7 @@ export class StackFunder implements Funder {
     return new StackFunder(key)
   }
   static async fund(t: StackTreasury, outputs: number, sats = 10_000): Promise<StackFunder> {
+    stackOnlyFn('StackFunder.fund')
     const f = new StackFunder(PrivateKey.fromRandom())
     const addr = f.keyPair.toPublicKey().toAddress([0x6f])
     // stale reserve entries (never-broadcast parents, already-spent) prune on

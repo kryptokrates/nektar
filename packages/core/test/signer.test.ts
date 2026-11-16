@@ -17,11 +17,16 @@ import { custodySigner, keySigner, unlockP2PKH, walletSigner, FUND_SIGN_ARGS } f
 // under createSignature(args). unlockP2PKH self-verifies the pair at sign
 // time so a non-conformant substrate fails loudly instead of broadcasting a
 // script that can never evaluate — asserted below.
-test('signer: walletSigner over a WalletClient substrate — identity pub is the root key', async () => {
+test('signer: walletSigner over a WalletClient substrate — identity surface is the self-derived pair', async () => {
+  // db7ba47: sdk-4 createSignature cannot root-sign — the identity surface is
+  // the deterministic 'nektar signer'/identity derivation, NOT the wallet's
+  // root pub (only held-key custody reaches the root, via custodySigner)
   const key = new PrivateKey(7)
   const wallet = new WalletClient(new ProtoWallet(key) as unknown as WalletInterface, 'nektar')
   const s = walletSigner(wallet)
-  assert.equal(await s.pubKeyHex(), key.toPublicKey().toString())
+  const pub = await s.pubKeyHex()
+  assert.notEqual(pub, key.toPublicKey().toString())
+  assert.equal(await s.pubKeyHex(), pub) // stable across calls
 })
 
 test('signer: walletSigner signatures verify through the same client surface', async () => {
@@ -31,9 +36,11 @@ test('signer: walletSigner signatures verify through the same client surface', a
   const s = walletSigner(wallet, keyArgs)
   const digest = Hash.sha256(Utils.toArray('digest', 'utf8'))
   const sig = await s.sign(digest)
+  // sign() signs hashToDirectlySign = sha256(digest) raw — verify that value,
+  // not the digest itself
   const r = await wallet.verifySignature({
     ...keyArgs,
-    hashToDirectlyVerify: Array.from(digest),
+    hashToDirectlyVerify: Array.from(Hash.sha256(digest)),
     signature: Array.from(sig.toDER() as number[]),
     forSelf: true
   } as never)
@@ -85,20 +92,37 @@ test('signer: unlockP2PKH(keySigner) emits a self-consistent unlocking script', 
 })
 
 test('signer: unlockP2PKH(walletSigner) rejects when the substrate lacks pub/sig parity', async () => {
-  // ProtoWallet's derived createSignature/getPublicKey pair is not raw-ECDSA
-  // consistent — the self-verify must throw rather than emit a dead script.
-  const key = new PrivateKey(42)
-  const wallet = new WalletClient(new ProtoWallet(key) as unknown as WalletInterface, 'nektar')
-  await assert.rejects(spendOf(walletSigner(wallet, FUND_SIGN_ARGS), key), /does not verify under its public key/)
+  // db7ba47's explicit counterparty:'self' makes ProtoWallet conformant — to
+  // exercise the self-verify, stub a substrate whose pub/sig pair genuinely
+  // does not match (getPublicKey names key A; createSignature signs with B)
+  const payTo = new PrivateKey(42)
+  const keyA = new PrivateKey(43)
+  const keyB = new PrivateKey(44)
+  const mismatched = {
+    getPublicKey: async () => ({ publicKey: keyA.toPublicKey().toString() }),
+    createSignature: async (a: { hashToDirectlySign: number[] }) => ({ signature: keyB.sign(a.hashToDirectlySign).toDER() }),
+    createHmac: async () => ({ hmac: [] })
+  }
+  await assert.rejects(spendOf(walletSigner(mismatched as unknown as WalletClient, FUND_SIGN_ARGS), payTo), /does not verify under its public key/)
 })
 
-test('signer: custodySigner uses the held keyDeriver root key when present', async () => {
+test('signer: custodySigner uses the held keyDeriver — root for identity, local derivation otherwise', async () => {
   const key = new PrivateKey(7)
   const toolboxLike = { keyDeriver: { rootKey: key } } as unknown as Parameters<typeof custodySigner>[0]
-  const s = custodySigner(toolboxLike, FUND_SIGN_ARGS)
-  assert.equal(await s.pubKeyHex(), key.toPublicKey().toString())
+  // identity args → the literal root key (byte-exact legacy semantics)
+  const id = custodySigner(toolboxLike, { identityKey: true })
+  assert.equal(await id.pubKeyHex(), key.toPublicKey().toString())
   const digest = Hash.sha256(Utils.toArray('x', 'utf8'))
-  assert.ok(key.toPublicKey().verify(Array.from(digest), await s.sign(digest)))
+  assert.ok(key.toPublicKey().verify(Array.from(digest), await id.sign(digest)))
+  // derived args → d4d5e82: local keyDeriver.derivePrivateKey when the held
+  // key carries it — no remote createSignature round-trip
+  const derived = new PrivateKey(99)
+  const deriving = {
+    keyDeriver: { rootKey: key, derivePrivateKey: () => derived }
+  } as unknown as Parameters<typeof custodySigner>[0]
+  const s = custodySigner(deriving, FUND_SIGN_ARGS)
+  assert.equal(await s.pubKeyHex(), derived.toPublicKey().toString())
+  assert.ok(derived.toPublicKey().verify(Array.from(digest), await s.sign(digest)))
 })
 
 test('signer: custodySigner falls back to the wallet derivation without a held key', async () => {

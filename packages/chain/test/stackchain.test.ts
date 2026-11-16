@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey } from '@bsv/sdk'
 import { stackWorld, type StackFunder } from '../src/testkit.js'
+import { stackOnly } from '../src/testworld.js'
 
 const spend = async (f: StackFunder, sats: number, parent?: { tx: Transaction; vout: number }): Promise<Transaction> => {
   const src = parent ?? (await f.take(sats))
@@ -18,6 +19,7 @@ const spend = async (f: StackFunder, sats: number, parent?: { tx: Transaction; v
 }
 
 test('chain: mined BUMP root matches the block header root and verifies', async (t) => {
+  if (stackOnly(t, 'conformance against the real node')) return
   const w = await stackWorld(t, 3, 4_000)
   if (w === undefined) return
   const { chain, funder } = w
@@ -38,6 +40,7 @@ test('chain: mined BUMP root matches the block header root and verifies', async 
 })
 
 test('chain: chained unconfirmed spends admit, then prove together', async (t) => {
+  if (stackOnly(t, 'conformance against the real node')) return
   const w = await stackWorld(t, 3, 4_000)
   if (w === undefined) return
   const { chain, funder } = w
@@ -66,6 +69,7 @@ test('chain: chained unconfirmed spends admit, then prove together', async (t) =
 })
 
 test('chain: a second spend of the same outpoint is refused', async (t) => {
+  if (stackOnly(t, 'conformance against the real node')) return
   const w = await stackWorld(t, 2, 4_000)
   if (w === undefined) return
   const { chain, funder } = w
@@ -89,6 +93,7 @@ test('chain: a second spend of the same outpoint is refused', async (t) => {
 })
 
 test('StackFunder: take, markSpent, addOwned manage the pool like the faucet did', async (t) => {
+  if (stackOnly(t, 'StackFunder pool semantics on the real treasury')) return
   const w = await stackWorld(t, 3, 10_000)
   if (w === undefined) return
   const { funder } = w

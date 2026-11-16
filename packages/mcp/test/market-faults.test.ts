@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory, { type Knex } from 'knex'
-import { stackWorld, stackChain, stackTreasury, StackFunder } from '@nektar/chain'
+import { testWorld, testChain, testFunder, type TestFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { AutomationStore } from '@nektar/automation'
@@ -27,7 +27,7 @@ function rng(seed: number) {
 test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes never double-pay or overrun the budget', async (t) => {
   for (let seed = 1; seed <= 20; seed++) {
     const rand = rng(seed)
-    const chain = (await stackChain(t))!
+    const chain = (await testChain(t))!
     const dir = mkdtempSync(join(tmpdir(), `nektar-fault-${seed}-`))
     const kxs: Knex[] = []
     const feed: Array<{ seq: number; kind: string; payload: unknown }> = []
@@ -35,7 +35,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
     const agents = new Map<string, { mem: NektarMemory; store: AutomationStore; engine: MarketEngine; pub: string; policyHash: string; name: string }>()
     const now = () => 1_800_000_000_000
     const mk = async (name: string, seller = false) => {
-      const funder = await StackFunder.fund(await stackTreasury(), 30)
+      const funder = await testFunder(30)
       const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test', network: 'regtest' })
       const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, `${name}.sqlite`) }, useNullAsDefault: true })
       kxs.push(kx)

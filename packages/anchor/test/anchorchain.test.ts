@@ -3,11 +3,11 @@ import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8, chainRp, eq } from '@nektar/core'
 import { decodeNektarAnchor } from '@nektar/contracts'
-import { stackWorld, StackFunder } from '@nektar/chain'
+import { testWorld, dryFunder, type TestFunder } from '@nektar/chain'
 import { AnchorChain } from '../src/index.js'
 
 const setup = async (t: { skip: (m?: string) => void }, burstLimit = Infinity) => {
-  const w = await stackWorld(t, 16, 10_000)
+  const w = await testWorld(t, 16, 10_000)
   if (w === undefined) return undefined
   const { chain, funder } = w
   const ac = new AnchorChain('s1', PrivateKey.fromRandom(), funder, funder.keyPair, chain, { burstLimit })
@@ -52,7 +52,7 @@ test('anchor: genesis then successor spends the head UTXO', async (t) => {
 })
 
 test('anchor: failed broadcast does not advance the head', async (t) => {
-  const w = await stackWorld(t, 16, 10_000)
+  const w = await testWorld(t, 16, 10_000)
   if (w === undefined) return
   const { chain, funder } = w
   // wrap the broadcaster: fail exactly once (the 3rd broadcast = 2nd append)
@@ -95,7 +95,7 @@ test('anchor: unconfirmed chain + burst back-pressure', async (t) => {
 })
 
 test('burst: 20 anchors with reserve-style funder pass script verification', async (t) => {
-  const w = await stackWorld(t, 30, 10_000)
+  const w = await testWorld(t, 30, 10_000)
   if (w === undefined) return
   const { chain, funder: f } = w
   // emulate ReserveFunder: hand out each parent exactly once
@@ -135,7 +135,7 @@ test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', asyn
   // (regtest propagation race). Before the fix, lastTx was set to the FAILED
   // child, so the retry's parent fetch returned '' → partial sourceTransaction
   // → preimage mismatch → TX_INVALID on the retry.
-  const w = await stackWorld(t, 10, 10_000)
+  const w = await testWorld(t, 10, 10_000)
   if (w === undefined) return
   const { chain } = w
   const inner = chain
@@ -157,7 +157,7 @@ test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', asyn
 })
 
 test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async (t) => {
-  const w = await stackWorld(t, 10, 10_000)
+  const w = await testWorld(t, 10, 10_000)
   if (w === undefined) return
   const { chain } = w
   let n = 0
@@ -186,7 +186,7 @@ test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async 
 })
 
 test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async (t) => {
-  const w = await stackWorld(t, 10, 10_000)
+  const w = await testWorld(t, 10, 10_000)
   if (w === undefined) return
   const { chain } = w
   let n = 0
@@ -220,7 +220,7 @@ test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async (t) 
 
 test('anchorOnce fails fast on dry funding — never broadcasts a contract-only tx', async () => {
   // no chain needed: funding emptiness must abort before any broadcast
-  const f = StackFunder.dry()
+  const f = dryFunder()
   let calls = 0
   const probe = {
     broadcast: async () => {
@@ -234,7 +234,7 @@ test('anchorOnce fails fast on dry funding — never broadcasts a contract-only 
 })
 
 test('every AnchorChain tx produces a BEEF with all inputs resolved', async (t) => {
-  const w = await stackWorld(t, 10, 10_000)
+  const w = await testWorld(t, 10, 10_000)
   if (w === undefined) return
   const { chain } = w
   const { funder: f } = w
@@ -250,7 +250,7 @@ test('every AnchorChain tx produces a BEEF with all inputs resolved', async (t) 
 })
 
 test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent stays decodable', async (t) => {
-  const w = await stackWorld(t, 10, 10_000)
+  const w = await testWorld(t, 10, 10_000)
   if (w === undefined) return
   const { chain } = w
   const { funder: f } = w

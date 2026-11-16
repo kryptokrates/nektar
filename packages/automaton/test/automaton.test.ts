@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { utf8, dsha256, toHex } from '@nektar/core'
-import { stackWorld } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import {
   Automaton,
   AutomatonError,
@@ -36,14 +36,14 @@ const OUT = toHex(dsha256(utf8('out')))
 // production path: NektarProvider over the regtest stack with real node script
 // evaluation — the chain is the oracle; owner key ≠ funding key.
 async function deployed(t: { skip: (m?: string) => void }, def = DEF) {
-  const w = await stackWorld(t, 24)
+  const w = await testWorld(t, 24)
   if (w === undefined) return undefined
   const { chain, funder } = w
   const ac = new AutomatonChain(def, PrivateKey.fromRandom(), funder, funder.keyPair, chain)
   await ac.deploy()
   return ac
 }
-const SCRIPT_INVALID = /SCRIPT_INVALID/
+const SCRIPT_INVALID = /TX_INVALID \(31\)/
 
 test('AUT-005: deploy + valid steps accepted by script evaluation; head decoded from chain', async (t) => {
   const ac = await deployed(t)
@@ -101,7 +101,7 @@ test('AUT-005: halt from non-final state fails; from final passes', async (t) =>
   await assert.rejects(() => ac.halt(), AutomatonError, 'halted: refused locally')
   ac.unguarded = true
   await assert.rejects(() => ac.halt(), SCRIPT_INVALID, 'halted: contract refuses a second halt')
-  await assert.rejects(() => ac.step(0, 1, OUT, { from: 2, ...pathOf(2, 0, 0) }), /SCRIPT_INVALID|not in δ/, 'halted: no step')
+  await assert.rejects(() => ac.step(0, 1, OUT, { from: 2, ...pathOf(2, 0, 0) }), /TX_INVALID \(31\)|not in δ/, 'halted: no step')
 })
 const pathOf = async (f: number, s: number, t: number) => {
   const d = deltaTable({ ...DEF, delta: [...DEF.delta, [f, s, t]] })

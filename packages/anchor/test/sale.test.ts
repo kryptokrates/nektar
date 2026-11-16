@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, LockingScript, UnlockingScript } from '@bsv/sdk'
 import { Hash } from '@bsv/sdk'
-import { stackWorld, type StackChain, type StackFunder } from '@nektar/chain'
+import { testWorld, type TestChain, type TestFunder } from '@nektar/chain'
 import { DisclosureSaleHost } from '../src/sale.js'
 
 const seller = PrivateKey.fromRandom()
@@ -16,9 +16,9 @@ const H_WRAPPED = Buffer.from(Hash.sha256(Buffer.from(WRAPPED, 'hex'))).toString
 // the seller's published offer — no depositor; the buyer completes it
 const cfg = { sellerPkh, price: 5_000n, hWrapped: H_WRAPPED, refundAfter: 100n, maxFee: 10n }
 
-type World = { chain: StackChain; funder: StackFunder; host: DisclosureSaleHost; buyer: PrivateKey }
+type World = { chain: TestChain; funder: TestFunder; host: DisclosureSaleHost; buyer: PrivateKey }
 async function setup(t: { skip: (m?: string) => void }): Promise<World | undefined> {
-  const w = await stackWorld(t, 8, 20_000)
+  const w = await testWorld(t, 8, 20_000)
   if (w === undefined) return undefined
   const buyer = w.funder.keyPair
   const buyerPkh = Buffer.from(buyer.toPublicKey().toHash()).toString('hex')

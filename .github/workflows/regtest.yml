@@ -21,6 +21,9 @@ jobs:
       - name: start the local Teranode stack
         run: pnpm stack:up
         timeout-minutes: 20
+      - name: smoke (stack tier)
+        run: pnpm test:smoke
+        timeout-minutes: 15
       - name: regtest e2e
         run: node packages/e2e/src/e2e-regtest.ts
         timeout-minutes: 20

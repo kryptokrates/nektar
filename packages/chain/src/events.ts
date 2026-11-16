@@ -206,9 +206,15 @@ export class ChainEvents extends EventEmitter {
         await new Promise((r) => setTimeout(r, nudgeMs))
       }
     })()
-    const timeout = new Promise<undefined>((r) => setTimeout(() => r(undefined), timeoutMs))
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<undefined>((r) => {
+      timeoutTimer = setTimeout(() => r(undefined), timeoutMs)
+    })
     const ev = await Promise.race([pending, timeout])
     settled = true
+    // a wait resolved early (delivery or stop()) must not leave its timer
+    // holding the process for the remaining timeoutMs
+    if (timeoutTimer !== undefined) clearTimeout(timeoutTimer)
     if (ev === undefined) done(undefined, true) // timeout: drop the waiter, don't leak it
     void nudge.catch(() => undefined)
     return ev

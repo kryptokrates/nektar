@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { diff, apply, revert, decodeDelta, encodeDelta, DeltaError, utf8 } from '@nektar/core'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld, testChain, type TestFunder } from '@nektar/chain'
 import { signProvenance } from '@nektar/log'
 import { makeRotationCert, verifyAuthorship } from '@nektar/identity'
 import { always, eventually, obligation, causalClosure, type TimedFact } from '@nektar/reasoning'
@@ -12,7 +12,7 @@ import { axiomHash, ontologyEntails, Jurisdictions, validByPrecedent, type Axiom
 import { NektarMemory } from '@nektar/mcp'
 
 async function world(t: { skip: (m?: string) => void }) {
-  const w = await stackWorld(t, 20)
+  const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })

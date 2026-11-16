@@ -2,13 +2,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8 } from '@nektar/core'
-import { stackWorld } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { AnchorChain } from '../src/runarchain.js'
 import { Smt, verifyProof } from '@nektar/identity'
 import { verifyCertChain, makeRotationCert, type RotationCert } from '@nektar/identity'
 
 test('smt revocation: anchored root verifies a status proof; stale root fails', async (t) => {
-  const w = await stackWorld(t, 6)
+  const w = await testWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w
   const smt = new Smt()
@@ -29,7 +29,7 @@ test('smt revocation: anchored root verifies a status proof; stale root fails', 
 })
 
 test('rotated anchor chain verifies alongside the cert chain', async (t) => {
-  const w = await stackWorld(t, 10)
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
   const ac = new AnchorChain('s', f.keyPair, f, f.keyPair, chain)
@@ -46,7 +46,7 @@ import { BatchLog, MemoryShardStore } from '@nektar/log'
 import { reconstructRoot } from '@nektar/core'
 
 test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusion', async (t) => {
-  const w = await stackWorld(t, 6)
+  const w = await testWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
@@ -76,7 +76,7 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
 import { issueDisclosure, fieldPath, randSalt, fieldsCommitment, type FieldCommitment } from '@nektar/identity'
 
 test('DIS-006: disclosure event logged as a leaf and anchored', async (t) => {
-  const w = await stackWorld(t, 6)
+  const w = await testWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())

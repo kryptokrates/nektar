@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH } from '@bsv/sdk'
-import { stackChain, skipUnlessStack, stackTreasury, StackFunder } from '@nektar/chain'
+import { stackChain, skipUnlessStack, stackTreasury, StackFunder, stackOnly } from '@nektar/chain'
 import { openRuntime } from '../src/runtime.js'
 import { mkdtempSync, writeFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -21,6 +21,7 @@ test('toolbox custody: openRuntime defaults to the wallet — anchor spends thro
   t.after(() => {
     delete process.env.NEKTAR_OPERATOR_WIF
   })
+  if (stackOnly(t, 'openRuntime boots a real regtest reserve from treasury.json')) return
   const rc = await skipUnlessStack(t)
   if (rc === undefined) return
   const chain = await stackChain(t)

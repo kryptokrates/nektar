@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { stackChain, stackTreasury, StackFunder, StackChain } from '@nektar/chain'
+import { testChain, testFunder, type TestFunder, type TestChain } from '@nektar/chain'
 import { minihost, faulthost } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -63,13 +63,13 @@ interface A {
 const mkagent = async (
   name: string,
   hosts: string[],
-  chain: StackChain,
+  chain: TestChain,
   logs: string[],
   dir: string,
   opts?: Partial<import('@nektar/automation').MarketOptions>,
   watch?: string
 ): Promise<A> => {
-  const funder = await StackFunder.fund(await stackTreasury(), 60)
+  const funder = await testFunder(60)
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
   const pub = mem.operatorKey().toPublicKey().toString()
   const rt = await openAutomation(mem, {
@@ -91,7 +91,7 @@ const mkagent = async (
 // respawn = restart on the SAME memory + dataDir (sqlite survives: kill -9
 // keeps files). The op records rebuild from automation.sqlite; identity and
 // keys come from the unchanged NektarMemory.
-const respawn = async (a: A, hosts: string[], chain: StackChain, logs: string[], dir: string): Promise<A> => {
+const respawn = async (a: A, hosts: string[], chain: TestChain, logs: string[], dir: string): Promise<A> => {
   const rt = await openAutomation(a.mem, {
     network: NET,
     dataDir: join(dir, a.name),
@@ -113,21 +113,21 @@ const sellerize = async (s: A, price: number) => {
   for (const l of s.mem.anchorLinks('guide')) s.mem.confirmAnchor('guide', l.txid)
   await s.rt.engine.enableSeller(s.policyHash)
 }
-const drive = async (rts: Automation[], chain: StackChain, n = 1) => {
+const drive = async (rts: Automation[], chain: TestChain, n = 1) => {
   for (let i = 0; i < n; i++) {
     clock += 500
     await Promise.all(rts.map((rt) => rt.cycle()))
     if ((await chain.pendingBroadcasts()) > 0) await chain.mine(1)
   }
 }
-const until = async (rts: Automation[], chain: StackChain, ok: () => Promise<boolean>, n = 100): Promise<number> => {
+const until = async (rts: Automation[], chain: TestChain, ok: () => Promise<boolean>, n = 100): Promise<number> => {
   for (let i = 0; i < n; i++) {
     await drive(rts, chain, 1)
     if (await ok()) return i + 1
   }
   return -1
 }
-const trackerFor = (chain: StackChain) => ({
+const trackerFor = (chain: TestChain) => ({
   isValidRootForHeight: (r: string, h: number) => chain.isValidRootForHeight(r, h),
   currentHeight: () => chain.currentHeight()
 })
@@ -140,7 +140,7 @@ const saleFor = async (s: A, wantId: string) =>
 const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
 const BUYER_DONE = new Set(['disclosure_verified', 'useful'])
 
-const deal = async (b: A, s: A, chain: StackChain, logs: string[], extraRts: Automation[] = []) => {
+const deal = async (b: A, s: A, chain: TestChain, logs: string[], extraRts: Automation[] = []) => {
   const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
   const all = [b.rt, s.rt, ...extraRts]
   const t0 = Date.now()
@@ -154,7 +154,7 @@ const deal = async (b: A, s: A, chain: StackChain, logs: string[], extraRts: Aut
 }
 
 test('T1: deal latency distribution — 5 sequential deals, p50/p95 on rounds and wall ms', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -191,7 +191,7 @@ test('T1: deal latency distribution — 5 sequential deals, p50/p95 on rounds an
 })
 
 test('R1: host dies mid-deal — fan-out still completes through the survivor', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -224,7 +224,7 @@ test('R1: host dies mid-deal — fan-out still completes through the survivor', 
 })
 
 test('R2: one host delayed 1.5s — quorum-1 rides the fast host, deal does not stall', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -257,7 +257,7 @@ test('R2: one host delayed 1.5s — quorum-1 rides the fast host, deal does not 
 })
 
 test('R5: kill matrix — buyer respawn mid-deal from collecting / awaiting_disclosure reaches terminal state', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   for (const checkpoint of ['collecting', 'awaiting_disclosure'] as const) {
     const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
     const logs: string[] = []
@@ -311,7 +311,7 @@ test('R5: kill matrix — buyer respawn mid-deal from collecting / awaiting_disc
 })
 
 test('R5b: seller killed after quoting respawns and settles; withholding host cannot starve the deal', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -412,7 +412,7 @@ const STOP_ALL = async (rts: Array<Automation | undefined>) => {
 
 // T2 — throughput: K buyers race one seller's shard; every deal must land
 test('T2: throughput — 3 concurrent buyers on one seller, all deals land', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -452,7 +452,7 @@ test('T2: throughput — 3 concurrent buyers on one seller, all deals land', { t
 // T3 — watch vs poll A/B: the shim notify must fire and the deal must complete;
 // rounds are reported so the push layer's contribution is measurable.
 test('T3: watch-shim A/B — notify fires, deal completes at-or-below poll rounds', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const run = async (watch: boolean) => {
     const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
     const logs: string[] = []
@@ -504,7 +504,7 @@ test('T3: watch-shim A/B — notify fires, deal completes at-or-below poll round
 // the buyer in a visible terminal/escalated state (refunded | uncertain |
 // verified) once the refund covenant gate lapses — NEVER a silent hang.
 test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   for (const kb of [1, 32, 128]) {
     const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
     const logs: string[] = []
@@ -578,7 +578,7 @@ test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { t
 // R3 — host divergence: f1 withholds the offer record while accepting the
 // submit; quorum-1 reads h2, the withheld bookkeeping must surface it.
 test('R3: withholding host loses the offer — deal completes + withheld is logged', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -617,7 +617,7 @@ test('R3: withholding host loses the offer — deal completes + withheld is logg
 // R4 — partition & heal: both hosts down mid-deal, ops pause not die, heal
 // completes it; exactly one funding tx ever broadcast.
 test('R4: partition heals — ops resume after deaf window, no double-broadcast', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -662,7 +662,7 @@ test('R4: partition heals — ops resume after deaf window, no double-broadcast'
 // R6 — idempotent redelivery: a host that returns every output twice must not
 // double-ingest — one op, one claim, no double spend.
 test('R6: duplicate lookup outputs — deal completes once, no double-ingest', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -691,7 +691,7 @@ test('R6: duplicate lookup outputs — deal completes once, no double-ingest', {
 // network rejects it (double-spend event). txState must drive the op to
 // funding_failed with the budget released — not uncertain, not silent, not retry.
 test('R7: late escrow rejection — funding_failed via txState event, budget released', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -732,7 +732,7 @@ test('R7: late escrow rejection — funding_failed via txState event, budget rel
 // R8 — no-loss invariant: concurrent buyers race; every op ends in a valid
 // terminal state and no two settlement txids collide.
 test('R8: concurrency invariant — 3 buyers race, all terminal, settlement txids distinct', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -776,7 +776,7 @@ test('R8: concurrency invariant — 3 buyers race, all terminal, settlement txid
 // R9 — timeout truth: seller takes the money and ghosts. Escrow rail refunds
 // the buyer; the direct rail disputes — payment-final is honest.
 test('R9: timeout truth — escrow refund vs direct dispute on seller ghosting', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   // (a) escrow rail → refunded
   {
     const dir = mkdtempSync(join(tmpdir(), 'nektar-res-'))

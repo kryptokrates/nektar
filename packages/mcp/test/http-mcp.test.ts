@@ -4,14 +4,14 @@ import assert from 'node:assert/strict'
 import type { AddressInfo } from 'node:net'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld, testChain, type TestFunder } from '@nektar/chain'
 import { NektarMemory, createHttpApi } from '../src/index.js'
 
 process.env.NEKTAR_TOOL_PROFILE = 'operator'
 process.env.NEKTAR_PAID_DISCLOSURE = '1'
 
 test('MCP Streamable HTTP: session, tools, call, resource; unknown session rejected', { timeout: 30_000 }, async (t) => {
-  const w = await stackWorld(t, 10)
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
@@ -21,7 +21,7 @@ test('MCP Streamable HTTP: session, tools, call, resource; unknown session rejec
   const client = new Client({ name: 'http-test', version: '1.0.0' })
   try {
     await client.connect(new StreamableHTTPClientTransport(url))
-    assert.equal((await client.listTools()).tools.length, 52)
+    assert.equal((await client.listTools()).tools.length, 54)
     await client.callTool({ name: 'remember', arguments: { shard: 'h', data: 'a' } })
     await client.callTool({ name: 'remember', arguments: { shard: 'h', data: 'b' } })
     const rr = await client.readResource({ uri: 'nektar://record/h/0' })

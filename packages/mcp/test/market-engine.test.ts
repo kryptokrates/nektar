@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory, { type Knex } from 'knex'
-import { stackWorld, stackChain, stackTreasury, StackFunder } from '@nektar/chain'
+import { testWorld, testChain, testFunder, type TestFunder } from '@nektar/chain'
 import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/bstack'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -30,7 +30,7 @@ interface Agent {
 }
 
 async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: number } = {}) {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-market-'))
   const agents = new Map<string, Agent>()
   const feed: Array<{ seq: number; kind: string; payload: unknown }> = []
@@ -107,7 +107,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
   const add = async (name: string, limits: Partial<AutomationPolicy['limits']> = {}): Promise<Agent> => {
     // real funding: anchors, escrows and refunds all broadcast real txs — a
     // dry funder fails at the first remember() (mid-migration regression)
-    const funder = await StackFunder.fund(await stackTreasury(), 40)
+    const funder = await testFunder(40)
     const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
     const file = join(dir, `${name}.sqlite`)
     const kx = knexFactory({ client: 'sqlite3', connection: { filename: file }, useNullAsDefault: true })

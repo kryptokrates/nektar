@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey, ProtoWallet, MerklePath } from '@bsv/sdk'
 import { fundingLock } from '@lightwebinc/bcommon'
-import { stackWorld, TeranodeRPCTracker, merklePathFor } from '@nektar/chain'
+import { stackWorld, stackOnly, TeranodeRPCTracker, merklePathFor } from '@nektar/chain'
 import { DERIVATION, FUNDING_TAG, ORIGINATOR } from '@nektar/bstack'
 import { openToolboxWallet, RegtestWalletServices, fundToolbox, ToolboxFunder, NEKTAR_BASKET, type ToolboxHandle } from '../src/toolbox.js'
 
@@ -13,6 +13,7 @@ import { openToolboxWallet, RegtestWalletServices, fundToolbox, ToolboxFunder, N
 // createAction funding path (broadcast through RegtestWalletServices), output
 // listing via ToolboxFunder, and SigningWallet conformance for carrier locks.
 test('toolbox wallet: fund, list, sign against Teranode', async (t) => {
+  if (stackOnly(t, 'needs the node treasury cfg + RPC for the spawned toolbox')) return
   try {
     const world = await stackWorld(t, 4, 5_000)
     if (world === undefined) return

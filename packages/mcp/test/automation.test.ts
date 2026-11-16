@@ -3,7 +3,7 @@
 // one-call broadcast sends, and bond covenant spend serialization.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ReserveFunder, stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { ReserveFunder, testWorld, testChain, type TestFunder } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { PrivateKey, Transaction, P2PKH, Script } from '@bsv/sdk'
 import { mkdtempSync } from 'node:fs'
@@ -70,7 +70,7 @@ test('takeReserve: spendCheck prunes chain-spent candidates and tries the next',
 })
 
 test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change', async (t) => {
-  const w = await stackWorld(t, 3, 50_000)
+  const w = await testWorld(t, 3, 50_000)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
@@ -83,7 +83,7 @@ test('sendSats: one call broadcasts a P2PKH spend to the payee + tracks change',
 })
 
 test('sendSats: scriptHex target + opReturn tag', async (t) => {
-  const w = await stackWorld(t, 1, 50_000)
+  const w = await testWorld(t, 1, 50_000)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
@@ -99,7 +99,7 @@ test('sendSats: scriptHex target + opReturn tag', async (t) => {
 })
 
 test('bond ops serialize: a second covenant spend while one is in flight throws', async (t) => {
-  const w = await stackWorld(t, 5, 100_000)
+  const w = await testWorld(t, 5, 100_000)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { bond: { sats: 5_000, epochBlocks: 3, horizonBlocks: 4 } })

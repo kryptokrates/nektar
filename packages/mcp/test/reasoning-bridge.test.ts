@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey } from '@bsv/sdk'
-import { type ChainTracker, stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { type ChainTracker, testWorld, testChain, type TestFunder } from '@nektar/chain'
 import { NektarMemory } from '@nektar/mcp'
 import { parseProgram } from '@nektar/datalog'
 import { PolicyDAG } from '@nektar/graph'
@@ -28,7 +28,7 @@ spec(S, V) :- requires(P, V), applies(S, P).`).rules
 
 /** one anchored manual batch [requires(torque,45), applies(port4,torque)] + helpers */
 async function world(t: { skip: (m?: string) => void }) {
-  const w = await stackWorld(t, 20)
+  const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder } = w
   const sk = PrivateKey.fromRandom()

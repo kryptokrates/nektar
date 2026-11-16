@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, LockingScript, P2PKH } from '@bsv/sdk'
 import { buildP2PKHScript } from 'runar-sdk'
-import { stackWorld, type StackChain, type StackFunder } from '@nektar/chain'
+import { testWorld, type TestChain, type TestFunder } from '@nektar/chain'
 import { FeeVault, VaultFunder, type VaultUtxo } from '../src/vault.js'
 
 const owner = PrivateKey.fromRandom()
@@ -16,9 +16,9 @@ const dest = PrivateKey.fromRandom()
 const destPkh = Buffer.from(dest.toPublicKey().toHash()).toString('hex')
 const params = { destPkh, ownerPkh, perTxCap: 1_000n, windowCap: 3_000n, windowBlocks: 5n, maxFee: 10n }
 
-type World = { chain: StackChain; funder: StackFunder; vault: FeeVault }
+type World = { chain: TestChain; funder: TestFunder; vault: FeeVault }
 async function setup(t: { skip: (m?: string) => void }): Promise<World | undefined> {
-  const w = await stackWorld(t, 16, 20_000)
+  const w = await testWorld(t, 16, 20_000)
   if (w === undefined) return undefined
   return { chain: w.chain, funder: w.funder, vault: new FeeVault(params) }
 }

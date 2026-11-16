@@ -313,6 +313,50 @@ Four causes explain the twelve findings:
 4. Save this audit into the repo as `docs/SYSTEM-AUDIT.md`: **yes**.
 5. Start with the in-memory test world: **yes**.
 
+## 12. Results by stage
+
+### Stage 0 — baseline on a freshly reset regtest chain (2026-11-16)
+
+The local chain was reset and the shared test treasury refunded, then every suite ran once against the real node. Logs: `/tmp/gate3/`.
+
+| Suite                                                                                                   | Pass | Fail | Cancelled    | Note                                                                                 |
+| ------------------------------------------------------------------------------------------------------- | ---- | ---- | ------------ | ------------------------------------------------------------------------------------ |
+| `mcp` (without the testnet file)                                                                        | 190  | 5    | 2            | 343 s; two market files hit the 300 s file timeout, so most of their tests never ran |
+| `chain`                                                                                                 | 62   | 0    | 1            | `events.test` never exited                                                           |
+| `bstack`                                                                                                | 100  | 0    | 1            | `finger.test` never exited                                                           |
+| `anchor`                                                                                                | 26   | 1    | 0            | a proof assertion that raced the block seal                                          |
+| `automaton`                                                                                             | 5    | 4    | 0            | expected an error string of the deleted mock chain                                   |
+| `core`                                                                                                  | 10   | 4    | 0            | signer tests not updated after three signer changes on Nov 13                        |
+| `automation`                                                                                            | 36   | 0    | 0            |                                                                                      |
+| `identity`, `zk`, `graph`, `datalog`, `log`, `store`, `fuzz`, `crypto`, `policy`, `contracts`, `verify` | all  | 0    | 1 (`verify`) |                                                                                      |
+
+### Stage 1 — in-memory test world (2026-11-16)
+
+`NEKTAR_TEST_TIER` selects the tier: `memory` (default), `stack` (`pnpm test:stack`, `pnpm test:smoke`), `testnet` (`pnpm test:testnet`). The memory tier is `MemoryChain` in `packages/chain/src/memchain.ts`: real admission rules, scripts always run through the SDK interpreter, real merkle trees and proof-of-work-valid headers, reorg and fault switches. Logs: `/tmp/gate5/`.
+
+| Suite, memory tier | Tests | Pass | Fail | Skipped | Time  |
+| ------------------ | ----- | ---- | ---- | ------- | ----- |
+| `mcp`              | 257   | 234  | 0    | 23      | 299 s |
+| `chain`            | 73    | 69   | 0    | 4       | 6 s   |
+| `bstack`           | 100   | 100  | 0    | 0       | 17 s  |
+| `anchor`           | 27    | 27   | 0    | 0       | 5 s   |
+| `automation`       | 36    | 35   | 0    | 1       | 5 s   |
+| `core`             | 14    | 14   | 0    | 0       | 2 s   |
+| `automaton`        | 9     | 9    | 0    | 0       | 2 s   |
+| `fuzz`, `policy`   | 13    | 13   | 0    | 0       | 9 s   |
+
+Real-node smoke set (`pnpm test:smoke`): 30 of 30 in 183 s. The tier-conformance test passes on both tiers.
+
+The 23 skipped `mcp` tests: 13 are the testnet file, 3 start the whole runtime against the node (they move to the memory tier in stage 4), 5 need a real STARK or RISC Zero prover, and 2 (`bstack R`, `bstack S`) were disabled earlier because a real node cannot produce an accepted-then-rejected transaction. `MemoryChain.reject()` can, so those two come back in stage 3.
+
+What running the tests for the first time in days turned up:
+
+- **One product leak fixed:** `ChainEvents.waitFor` left its timeout timer running after an early result, holding the process for up to 60 s.
+- **One product problem confirmed, not yet fixed:** background upkeep can spend the one proven coin a deal needs. The deal then pays from an unconfirmed tree mint and its escrow no longer travels with proofs (`bstack H`). This is finding F6; stages 2 and 6 fix it. The test pins `treeLowWater: 1` until then.
+- **Stale tests corrected:** slot accounting assumed 16-slot trees and no refill ahead; two tests counted 52 tools where there are 54; `automaton` expected the deleted mock's error text; four `core` signer tests predated the Nov 13 signer changes.
+
+Not met: the plan said money tests would run "in seconds". They run without Docker or a chain, but a single deal test takes 10 to 15 s and the `mcp` suite takes 5 minutes, because the tests drive the engine in rounds. Stage 6 is where that changes.
+
 ## 12. Stage 0 baseline
 
 Run on 2026-11-16 at commit `eb48a6e`, WSL checkout, Node 22.22.2, against the local regtest stack after a data reset (`clean.sh --data-only`). The old treasury and reserve files were moved to `.state/pre-reset-20261116/`. The three testnet agents were stopped. The test treasury was refunded from early coinbases and spent from during the run. Each package ran `pnpm --filter <pkg> test`; `mcp` ran every test file except `market-testnet.test.js`, six files at a time.

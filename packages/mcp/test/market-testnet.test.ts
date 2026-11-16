@@ -30,7 +30,8 @@ import {
   ReserveFunder,
   type MainnetConfig,
   type ChainTracker,
-  type Broadcaster
+  type Broadcaster,
+  testTier
 } from '@nektar/chain'
 import { faulthost } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
@@ -331,6 +332,11 @@ const STOP_ALL = async (rts: Array<Automation | undefined>) => {
 /** gate: skip the file when the live hosts or the status endpoints are down —
  *  the suite must never fail a CI run just because testnet is unreachable. */
 const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
+  // testnet coins move — only an explicit testnet tier may run this file
+  if (testTier() !== 'testnet') {
+    t.skip('testnet tier only — set NEKTAR_TEST_TIER=testnet to run')
+    return false
+  }
   if (['alice', 'ben', 'bob'].some((n) => WIF[n] === undefined)) {
     t.skip(`no agent keys at ${KEYS_FILE}`)
     return false

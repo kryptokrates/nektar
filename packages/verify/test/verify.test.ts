@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8, computeLeaf, merkleRoot, merkleProof, toHex } from '@nektar/core'
-import { stackWorld, stackChain } from '@nektar/chain'
+import { testWorld, testChain } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { buildProofBundle, verifyFragment, type AnchorLink } from '../src/bundle.js'
 
@@ -12,7 +12,7 @@ const frag = (s: string) => ({
 })
 
 async function scenario(t: { skip: (m?: string) => void }) {
-  const w = await stackWorld(t, 10)
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w
   await chain.mine(1)
@@ -74,7 +74,7 @@ test('verify: unmined anchor still verifies locally (settled=false)', async (t) 
   const tx = Transaction.fromAtomicBEEF(bundle.anchorBEEF)
   tx.merklePath = undefined as any
   bundle.anchorBEEF = tx.toAtomicBEEF()
-  const res = await verifyFragment(bundle, (await stackChain(t))!)
+  const res = await verifyFragment(bundle, (await testChain(t))!)
   // mining is settlement, not validity: leaf path + anchor fields + chain
   // consistency all verify without a BUMP — the result reports unsettled
   assert.equal(res.ok, true)
@@ -125,7 +125,7 @@ test('verify: path one missing sibling rejected', async (t) => {
 test('verify: odd-batch duplicate-last-leaf claim rejected', async (t) => {
   // 3 leaves: merkleProof(leaves,2) path includes the self-paired sibling.
   // Claiming index = size (3) must fail binding even though the sibling exists.
-  const w = await stackWorld(t, 10)
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain: chain2, funder: f2 } = w
   chain2.mine(1)

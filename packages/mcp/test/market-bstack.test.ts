@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory from 'knex'
-import { stackWorld, stackChain, stackTreasury, StackFunder, StackChain } from '@nektar/chain'
+import { testChain, testFunder, type TestFunder, type TestChain } from '@nektar/chain'
 import { minihost, type MinihostHandle } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -76,18 +76,21 @@ interface A {
 interface MkOpts {
   hosts: string[]
   msgs?: ReturnType<typeof bus>
-  chain: StackChain
+  chain: TestChain
   logs: string[]
   dir: string
   opts?: Partial<import('@nektar/automation').MarketOptions>
   call?: (tool: string, args: any) => Promise<any>
   objectStore?: import('@nektar/store').S3ObjectStore
+  /** lane refill floor — leave unset for production-like refill-ahead; set 1
+   *  to keep every leaf's parent tree proven through a deal (BEEF-path tests) */
+  treeLowWater?: number
 }
 const mkagent = async (name: string, o: MkOpts): Promise<A> => {
   // real upkeep spends across 4 tree lanes + finger + evidence every cycle —
   // 30 funded outputs ran dry mid-deal ('no utxo of that size' log storms);
   // change recycles, but trees lock outputs for their lifetime
-  const funder = await StackFunder.fund(await stackTreasury(), 60)
+  const funder = await testFunder(60)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1', objectStore: o.objectStore })
   const pub = mem.operatorKey().toPublicKey().toString()
   const rt = await openAutomation(mem, {
@@ -102,6 +105,7 @@ const mkagent = async (name: string, o: MkOpts): Promise<A> => {
     messages: o.msgs?.for(pub),
     objectStore: o.objectStore,
     publishFinger: true, // production gates it on NEKTAR_BFINGER_PUBLISH; tests exercise both record-present and record-absent paths via the hosts' finger flag
+    ...(o.treeLowWater !== undefined ? { treeLowWater: o.treeLowWater } : {}),
     opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts }
   })
   mem.automation = rt // bin.ts does the same in production
@@ -114,7 +118,7 @@ const sellerize = async (s: A, price: number) => {
   for (const l of s.mem.anchorLinks('guide')) s.mem.confirmAnchor('guide', l.txid)
   await s.rt.engine.enableSeller(s.policyHash)
 }
-const drive = async (rts: Automation[], chain: StackChain, n = 2) => {
+const drive = async (rts: Automation[], chain: TestChain, n = 2) => {
   for (let i = 0; i < n; i++) {
     clock += 500
     // the parties' cycles are independent per round — they rendezvous through
@@ -126,7 +130,7 @@ const drive = async (rts: Automation[], chain: StackChain, n = 2) => {
     if ((await chain.pendingBroadcasts()) > 0) await chain.mine(1)
   }
 }
-const until = async (rts: Automation[], chain: StackChain, ok: () => Promise<boolean>, n = 60) => {
+const until = async (rts: Automation[], chain: TestChain, ok: () => Promise<boolean>, n = 60) => {
   for (let i = 0; i < n; i++) {
     await drive(rts, chain, 1)
     if (await ok()) return true
@@ -136,7 +140,7 @@ const until = async (rts: Automation[], chain: StackChain, ok: () => Promise<boo
 // like until but checks right after the buyer's cycle, before the seller gets
 // another turn — so a test can freeze the buyer before the seller can react to
 // the accept it just flushed (a delivered the dead runtime consumes is lost)
-const untilBuyer = async (b: A, s: A, chain: StackChain, ok: () => Promise<boolean>, n = 60): Promise<boolean> => {
+const untilBuyer = async (b: A, s: A, chain: TestChain, ok: () => Promise<boolean>, n = 60): Promise<boolean> => {
   for (let i = 0; i < n; i++) {
     clock += 500
     await b.rt.cycle()
@@ -147,7 +151,7 @@ const untilBuyer = async (b: A, s: A, chain: StackChain, ok: () => Promise<boole
   }
   return false
 }
-const trackerFor = (chain: StackChain) => ({
+const trackerFor = (chain: TestChain) => ({
   isValidRootForHeight: (r: string, h: number) => chain.isValidRootForHeight(r, h),
   currentHeight: () => chain.currentHeight()
 })
@@ -163,6 +167,19 @@ const countWhere = async (dir: string, name: string, table: string, col: string,
     await kx.destroy()
   }
 }
+const sumWhere = async (dir: string, name: string, table: string, col: string, val: string, sumCol: string): Promise<number> => {
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: dbFor(dir, name, table) }, useNullAsDefault: true })
+  try {
+    const r = await kx(table).sum(`${sumCol} as s`).where(col, val).first()
+    return Number((r as { s: number | null }).s ?? 0)
+  } finally {
+    await kx.destroy()
+  }
+}
+/** used market funding slots = slots minted (sum of tree sizes) − free outputs
+ *  remaining. `n` is the per-tree size column — never a hard-coded tree size. */
+const usedMarketSlots = async (dir: string, name = 'buyer'): Promise<number> =>
+  (await sumWhere(dir, name, 'bstack_trees', 'kind', 'market', 'n')) - (await countWhere(dir, name, 'bstack_tree_outputs', 'kind', 'market'))
 const countLike = async (dir: string, name: string, table: string, col: string, pat: string): Promise<number> => {
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: dbFor(dir, name, table) }, useNullAsDefault: true })
   try {
@@ -177,7 +194,7 @@ const saleOps = async (s: A) => (await s.rt.store.operations({ role: 'seller' })
 const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
 
 test('bstack A: buyer+seller over two minihosts — journal+slot conservation, dedupe, both hosts hold', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -200,9 +217,7 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 8)
     // market-kind slots only — the runtime also keeps bbox + log trees
-    const marketSlots = async () =>
-      (await countWhere(dir, 'buyer', 'bstack_trees', 'kind', 'market')) * 16 - (await countWhere(dir, 'buyer', 'bstack_tree_outputs', 'kind', 'market'))
-    const slotsBefore = await marketSlots()
+    const slotsBefore = await usedMarketSlots(dir)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => {
       const bo = await buyerOp(b)
@@ -221,7 +236,7 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
     // journal: exactly one market carrier row (the want), one market slot —
     // log-journal batches live in the same tables under tm_log topics/kind
     assert.equal(await countLike(dir, 'buyer', 'bstack_carriers', 'topics', '%tm_nektar%'), 1)
-    const slotsAfter = await marketSlots()
+    const slotsAfter = await usedMarketSlots(dir)
     assert.equal(slotsAfter - slotsBefore, 1, 'one funding slot for the want')
     // dedupe: 5+ more cycles, still ONE sale op and ONE inbox row for the want txid
     await drive([b.rt, s.rt], chain, 5)
@@ -239,7 +254,7 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
 })
 
 test('bstack B: competing sellers — buyer completes with the 200-sat offer', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -291,7 +306,7 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
 })
 
 test('bstack C: withheld offer still completes via other host; withheld logged naming h2', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -329,13 +344,13 @@ test('bstack C: withheld offer still completes via other host; withheld logged n
 })
 
 test('bstack D: restart — journal+ledger prevent second carrier, purchase completes', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   try {
-    const funderB = await StackFunder.fund(await stackTreasury(), 60)
+    const funderB = await testFunder(60)
     const memB = new NektarMemory(chain, funderB, funderB.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
     const pubB = memB.operatorKey().toPublicKey().toString()
     const open = async () =>
@@ -360,8 +375,7 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
     await drive([bRt, s.rt], chain, 6)
     // market-kind only — log journal batches keep accruing in the same tables
     const carriersBefore = await countLike(dir, 'buyer', 'bstack_carriers', 'topics', '%tm_nektar%')
-    const slotsBefore =
-      (await countWhere(dir, 'buyer', 'bstack_trees', 'kind', 'market')) * 16 - (await countWhere(dir, 'buyer', 'bstack_tree_outputs', 'kind', 'market'))
+    const slotsBefore = await usedMarketSlots(dir)
     await bRt.stop()
     bRt = await open()
     const all = [bRt, s.rt]
@@ -372,8 +386,7 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
     const bo = (await bRt.store.operations({ role: 'buyer' })).find((o) => o.kind === 'purchase')
     assert.equal(bo?.state, 'disclosure_verified')
     assert.equal(await countLike(dir, 'buyer', 'bstack_carriers', 'topics', '%tm_nektar%'), carriersBefore, 'no second want carrier after restart')
-    const slotsAfter =
-      (await countWhere(dir, 'buyer', 'bstack_trees', 'kind', 'market')) * 16 - (await countWhere(dir, 'buyer', 'bstack_tree_outputs', 'kind', 'market'))
+    const slotsAfter = await usedMarketSlots(dir)
     assert.equal(slotsAfter - slotsBefore, 0, 'zero funding slots consumed for the want after restart')
     for (const r of all) await r.stop()
   } finally {
@@ -382,7 +395,7 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
 })
 
 test('bstack E: hosts down after escrow funded — chain advance still refunds the buyer', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -421,7 +434,7 @@ test('bstack E: hosts down after escrow funded — chain advance still refunds t
 })
 
 test('bstack F: default bbox channel � no injected bus; forged delivered ignored', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const office = 'nektar_abcdefghij'
@@ -496,7 +509,7 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
 })
 
 test('bstack G: read envelopes are acked off the hosts; want+offer carry signed expiry', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const office = 'nektar_abcdefghij'
@@ -529,7 +542,7 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
 })
 
 test('bstack H: seller takes the escrow from the accept and broadcasts it itself', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -537,8 +550,11 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
   let b!: Awaited<ReturnType<typeof mkagent>>
   let s!: Awaited<ReturnType<typeof mkagent>>
   try {
-    b = await mkagent('buyer', { hosts: [h1.url], msgs, chain, logs, dir })
-    s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir })
+    // this test isolates the BEEF path: refill-ahead would mint a tree
+    // mid-deal whose leaf the escrow then draws while the mint is still
+    // unconfirmed — the wire falls back to EF and spv:false
+    b = await mkagent('buyer', { hosts: [h1.url], msgs, chain, logs, dir, treeLowWater: 1 })
+    s = await mkagent('seller', { hosts: [h1.url], msgs, chain, logs, dir, treeLowWater: 1 })
     // the seller never looks the escrow up while deciding on the accept: it
     // takes it from the message, verifies it against its own headers and
     // broadcasts it itself. After the op leaves 'quoted' the same local graph
@@ -614,7 +630,7 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
 })
 
 test('bstack I: tampered accept — txHex of a different transaction → seller stays quoted with accept_refused', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -665,7 +681,7 @@ test('bstack I: tampered accept — txHex of a different transaction → seller 
 })
 
 test('bstack J: push — a mined funding tree is proven and a cycle runs without cycle()', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
@@ -705,7 +721,7 @@ const respawn = async (
     name: string
     hosts: string[]
     logs: string[]
-    chain: StackChain
+    chain: TestChain
     opts?: MkOpts['opts']
     objectStore?: import('@nektar/store').S3ObjectStore
   }
@@ -727,14 +743,14 @@ const respawn = async (
   return { mem: a.mem, rt, pub: a.pub, policyHash: await rt.store.approvePolicy(policyFor(a.pub), 'test:operator'), name: o.name }
 }
 const OFFICE = 'nektar_abcdefghij'
-const readBuyer = async (key: import('@bsv/sdk').PrivateKey, hosts: string[], chain: StackChain) => {
+const readBuyer = async (key: import('@bsv/sdk').PrivateKey, hosts: string[], chain: TestChain) => {
   const { readBox } = await import('@nektar/bstack')
   return await readBox({ key, hosts, office: OFFICE, tracker: trackerFor(chain) })
 }
 const noteItems = <T extends { body: object }>(items: T[]): T[] => items.filter((i) => (i.body as { market?: { type?: string } }).market?.type === 'note')
 
 test('bstack K: buyer loses its database — the inbox note rebuilds the deal and the refund still fires', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -815,7 +831,7 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
 })
 
 test('bstack L: buyer loses its database — delivery still completes after restore', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -869,7 +885,7 @@ test('bstack L: buyer loses its database — delivery still completes after rest
 })
 
 test('bstack M: no loss — one operation; the note is listed while the deal is open and acked when it ends', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -913,7 +929,7 @@ test('bstack M: no loss — one operation; the note is listed while the deal is 
 })
 
 test('bstack N: a note from a foreign key is ignored and still acked', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -972,7 +988,7 @@ test('bstack N: a note from a foreign key is ignored and still acked', { timeout
 })
 
 test('bstack O: the recovery note fits the 16 KiB box content limit', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1040,7 +1056,7 @@ const escrowScriptFor = async (s: A, buyerPub: string): Promise<string | undefin
 
 // broadcast that lets the escrow onto the chain but reports a transport error
 // — the wallet records submission_unknown and the op escalates to `uncertain`
-const sabotageEscrowBroadcast = (b: A, chain: StackChain, script: string, reject: boolean): { txid: () => string | undefined } => {
+const sabotageEscrowBroadcast = (b: A, chain: TestChain, script: string, reject: boolean): { txid: () => string | undefined } => {
   let txid: string | undefined
   let armed = true
   const orig = b.mem.broadcastTx.bind(b.mem)
@@ -1074,7 +1090,7 @@ const sabotageEscrowBroadcast = (b: A, chain: StackChain, script: string, reject
 }
 
 test('bstack P: uncertain + escrow observable — reconcile resumes the deal with no operator action', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1120,7 +1136,7 @@ test('bstack P: uncertain + escrow observable — reconcile resumes the deal wit
 })
 
 test('bstack Q: uncertain + rejected escrow — budget released, approval canceled, funding_failed', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1182,7 +1198,7 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
 // accepted escrow is a mock-only state — real coverage: Q (broadcast-time
 // refusal → escrow_rejected) + the 'unknown → escrow_unconfirmed_timeout' path.
 test.skip('bstack R: escrow rejected while awaiting_disclosure — late rejection frees the budget before the refund height', async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1227,7 +1243,7 @@ test.skip('bstack R: escrow rejected while awaiting_disclosure — late rejectio
 // same first-seen-wins constraint as R: the completion tx is broadcast-accepted
 // before completion_submitted — a late 'rejected' state cannot occur on regtest.
 test.skip('bstack S: disclosure rejected after completion_submitted — seller moves to completion_failed', async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1278,7 +1294,7 @@ test.skip('bstack S: disclosure rejected after completion_submitted — seller m
 
 test('bstack T: refused refund retries on reconcile — succeeds after one refusal; five refusals stay uncertain', { timeout: 300_000 }, async (t) => {
   for (const refuse of [1, 10]) {
-    const chain = (await stackChain(t))!
+    const chain = (await testChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
     const logs: string[] = []
     const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1358,7 +1374,7 @@ test('bstack T: refused refund retries on reconcile — succeeds after one refus
 })
 
 test('bstack U: seller loses its database — the sellerNote rebuilds the quoted sale and the deal completes', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1437,7 +1453,7 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
 })
 
 test('bstack V: delivered collected but not yet processed — the held envelope survives a buyer database loss', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1505,7 +1521,7 @@ test('bstack V: delivered collected but not yet processed — the held envelope 
 })
 
 test('bstack W: a sellerNote from a foreign key is ignored and still acked', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE })
@@ -1567,7 +1583,7 @@ test('bstack W: a sellerNote from a foreign key is ignored and still acked', { t
 })
 
 const LOG_STREAM = 'nektar_abcdefghij'
-const journalLines = async (hosts: MinihostHandle[], chain: StackChain, stream: string, producer: string) => {
+const journalLines = async (hosts: MinihostHandle[], chain: TestChain, stream: string, producer: string) => {
   const { readLog } = await import('@nektar/bstack')
   return await readLog({ hosts: hosts.map((h) => h.url), stream, producer, tracker: trackerFor(chain) })
 }
@@ -1591,7 +1607,7 @@ test(
   'bstack X: a full deal journals every state on both streams — complete for the counterparty, nothing sensitive in the lines',
   { timeout: 300_000 },
   async (t) => {
-    const chain = (await stackChain(t))!
+    const chain = (await testChain(t))!
     const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
     const logs: string[] = []
     const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM })
@@ -1677,7 +1693,7 @@ test(
 )
 
 test('bstack Y: a journal batch dropped by every host shows the gap — complete:false', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const dropped = new Set<string>()
@@ -1726,7 +1742,7 @@ test('bstack Y: a journal batch dropped by every host shows the gap — complete
 })
 
 test('bstack Z: restart between tick and append — events land exactly once', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   let armed = false
@@ -1793,7 +1809,7 @@ test('bstack Z: restart between tick and append — events land exactly once', {
 })
 
 test('bstack AA: disjoint host sets — records find each other over the shared host', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office: OFFICE, logStream: LOG_STREAM, finger: true })
@@ -1850,7 +1866,7 @@ test('bstack AA: disjoint host sets — records find each other over the shared 
 })
 
 test('bstack AB: no counterparty record — the deal completes over the shared host', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   // no finger on either host: every resolve is a quiet miss, the configured set is the fallback
@@ -1960,7 +1976,7 @@ const fakeS3 = async () => {
 }
 
 test('bstack AD: a full deal stores redacted evidence — verified read, one event, journal line', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const s3 = await fakeS3()
@@ -2027,7 +2043,7 @@ test('bstack AD: a full deal stores redacted evidence — verified read, one eve
 })
 
 test('bstack AE: store down — the deal completes; evidence lands once the store returns', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const s3 = await fakeS3()
@@ -2078,7 +2094,7 @@ test('bstack AE: store down — the deal completes; evidence lands once the stor
 })
 
 test('bstack AF: crash between the put and the transition — one event, one object', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const logs: string[] = []
   const s3 = await fakeS3()
@@ -2156,7 +2172,7 @@ test('bstack AF: crash between the put and the transition — one event, one obj
 })
 
 test('bstack AG: direct rail — policy-gated P2PKH payment settles the deal without a covenant', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []
@@ -2208,7 +2224,7 @@ test('bstack AG: direct rail — policy-gated P2PKH payment settles the deal wit
 })
 
 test('bstack AH: direct rail gated off without opts — same deal still settles via escrow covenant', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-'))
   const msgs = bus()
   const logs: string[] = []

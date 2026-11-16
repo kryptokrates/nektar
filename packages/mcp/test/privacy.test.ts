@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld, testChain, type TestFunder } from '@nektar/chain'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
-  const w = await stackWorld(t, 20)
+  const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-priv-')), ...opts })
@@ -54,7 +54,7 @@ test('private flag persists across a restart (stateStore round-trip)', async (t)
       saved = JSON.parse(JSON.stringify(s))
     }
   }
-  const w = await stackWorld(t, 2)
+  const w = await testWorld(t, 2)
   if (w === undefined) return
   const { chain, funder: f } = w
   const m1 = new NektarMemory(chain, f, f.keyPair, { stateStore: store })

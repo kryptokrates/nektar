@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld, testChain, dryFunder, type TestFunder } from '@nektar/chain'
 import { AutomationStore, RevisionConflict, classifyDeliveryError } from '../src/store.js'
 import { WalletCoordinator } from '../src/wallet.js'
 import { policyHash, policyError, decidePurchase, decideOffer, type AutomationPolicy, type ActionContext } from '../src/policy.js'
@@ -235,7 +235,7 @@ test('approvals: bound to the exact action digest, single use, expiry enforced',
   await assert.rejects(store.decideApproval(b.approvalId, true, 'x'), /expired/)
 })
 
-async function payment(funder: StackFunder, sats = 500) {
+async function payment(funder: TestFunder, sats = 500) {
   const f = await funder.take(sats + 200)
   const tx = new Transaction()
   tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })
@@ -247,7 +247,7 @@ async function payment(funder: StackFunder, sats = 500) {
 
 test('wallet: bytes persisted before submission; a crash between prepare and submit resumes the SAME tx', async (t) => {
   const file = join(mkdtempSync(join(tmpdir(), 'nektar-auto-')), 'a.sqlite')
-  const w = await stackWorld(t, 3)
+  const w = await testWorld(t, 3)
   if (w === undefined) return
   const { chain, funder } = w
   const tx = await payment(funder)
@@ -284,7 +284,7 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
 test('wallet: one outpoint, one live action; guard refusal releases, network rejection does not', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
-  const funder = StackFunder.dry()
+  const funder = dryFunder()
   // fabricated coinbase parent — the tx below is never broadcast; the wallet
   // test only exercises lease + persistence semantics
   const ftx = new Transaction()

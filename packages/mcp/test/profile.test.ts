@@ -7,10 +7,11 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import knexFactory from 'knex'
 import type { AddressInfo } from 'node:net'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { stackWorld, stackChain, stackTreasury, StackFunder, StackChain } from '@nektar/chain'
+import { testWorld, testChain, testFunder, type TestFunder, type TestChain } from '@nektar/chain'
 import { minihost } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
 import { callTool, visibleTools } from '../src/server.js'
@@ -59,8 +60,8 @@ interface A {
   pub: string
   policyHash: string
 }
-const mkagent = async (name: string, o: { hosts: string[]; chain: StackChain; dir: string }): Promise<A> => {
-  const funder = await StackFunder.fund(await stackTreasury(), 30)
+const mkagent = async (name: string, o: { hosts: string[]; chain: TestChain; dir: string }): Promise<A> => {
+  const funder = await testFunder(30)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
   const pub = mem.operatorKey().toPublicKey().toString()
   const rt = await openAutomation(mem, {
@@ -79,7 +80,7 @@ const mkagent = async (name: string, o: { hosts: string[]; chain: StackChain; di
 // real-time yield: want/sell/onTxProof kick a detached cycle that holds `busy`
 // for ~hundreds of ms of real work — without a delay the manual cycles all
 // no-op on `busy` and the loop finishes before any detached work lands
-const drive = async (rts: Automation[], chain: StackChain, n = 2) => {
+const drive = async (rts: Automation[], chain: TestChain, n = 2) => {
   for (let i = 0; i < n; i++) {
     clock += 500
     for (const rt of rts) await rt.cycle()
@@ -88,17 +89,29 @@ const drive = async (rts: Automation[], chain: StackChain, n = 2) => {
     for (const rt of rts) await rt.cycle()
   }
 }
-const until = async (rts: Automation[], chain: StackChain, ok: () => Promise<boolean>, n = 80) => {
+const until = async (rts: Automation[], chain: TestChain, ok: () => Promise<boolean>, n = 80) => {
   for (let i = 0; i < n; i++) {
     await drive(rts, chain, 1)
     if (await ok()) return true
   }
   return false
 }
-const trackerFor = (chain: StackChain) => ({
+const trackerFor = (chain: TestChain) => ({
   isValidRootForHeight: (r: string, h: number) => chain.isValidRootForHeight(r, h),
   currentHeight: () => chain.currentHeight()
 })
+/** used market funding slots = slots minted (sum of tree sizes `n`) − free
+ *  outputs remaining in lanes.sqlite — the same accounting market-bstack uses */
+const usedMarketSlots = async (dir: string, name: string): Promise<number> => {
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'lanes.sqlite') }, useNullAsDefault: true })
+  try {
+    const trees = await kx('bstack_trees').sum('n as s').where('kind', 'market').first()
+    const free = await kx('bstack_tree_outputs').count('* as c').where('kind', 'market').first()
+    return Number((trees as { s: number | null }).s ?? 0) - Number((free as { c: number }).c)
+  } finally {
+    await kx.destroy()
+  }
+}
 
 test('profile: agent lists exactly the ten agent tools; operator lists all', () => {
   const prev = process.env.NEKTAR_TOOL_PROFILE
@@ -130,7 +143,7 @@ test('profile: agent lists exactly the ten agent tools; operator lists all', () 
 })
 
 test('profile: an operator-only tool is refused over HTTP and MCP in agent profile, allowed in operator profile', async (t) => {
-  const w = await stackWorld(t, 10)
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 } })
@@ -169,12 +182,12 @@ test('profile: an operator-only tool is refused over HTTP and MCP in agent profi
 })
 
 test('profile: want refuses zero or several buyer policies; exactly one publishes', async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
   const h = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   let rt: Automation | undefined
   try {
-    const funder = await StackFunder.fund(await stackTreasury(), 30)
+    const funder = await testFunder(30)
     const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test' })
     const pub = mem.operatorKey().toPublicKey().toString()
     rt = await openAutomation(mem, {
@@ -207,7 +220,7 @@ test('profile: want refuses zero or several buyer policies; exactly one publishe
 })
 
 test('profile: sell → want → deals drives a full deal; fund reports slot counts', { timeout: 300_000 }, async (t) => {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-profile-'))
   const office = 'nektar_abcdefghij'
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
@@ -228,6 +241,7 @@ test('profile: sell → want → deals drives a full deal; fund reports slot cou
       await until([bb.rt], chain, async () => ((await callTool(bb.mem, 'fund', {})) as { marketSlots: { market: number } }).marketSlots.market > 0, 30),
       'no market slots minted'
     )
+    const used0 = await usedMarketSlots(dir, 'buyer')
     const slots0 = (await callTool(bb.mem, 'fund', {})) as {
       marketSlots: { market: number; bbox: number }
       spendableSats: number
@@ -253,10 +267,9 @@ test('profile: sell → want → deals drives a full deal; fund reports slot cou
     assert.equal(list.deals.length, 1)
     assert.equal(list.deals[0].wantId, w.wantId)
     const slots1 = (await callTool(bb.mem, 'fund', {})) as { marketSlots: { market: number; bbox: number } }
-    assert.ok(
-      slots1.marketSlots.market < slots0.marketSlots.market,
-      `market slot consumed by the want (${slots0.marketSlots.market} → ${slots1.marketSlots.market})`
-    )
+    assert.ok(slots1.marketSlots.market > 0, 'fund still reports market slots')
+    const used1 = await usedMarketSlots(dir, 'buyer')
+    assert.equal(used1 - used0, 1, `market slot consumed by the want (${used0} → ${used1} used)`)
   } finally {
     try {
       if (b) await b.rt.stop()

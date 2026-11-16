@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory, { type Knex } from 'knex'
 import { PrivateKey, Transaction, P2PKH, Script } from '@bsv/sdk'
-import { stackChain, stackTreasury, StackFunder } from '@nektar/chain'
+import { testChain, testFunder, type TestFunder } from '@nektar/chain'
 import { SpendGuard } from '@nektar/chain'
 import { verifyWant, verifyOffer, type SignedWant, type SignedOffer } from '@nektar/bstack'
 import { NektarMemory } from '../src/memory.js'
@@ -292,7 +292,7 @@ async function world(
   t: { skip: (m?: string) => void },
   opts: { refundBlocks?: number; sellerPrice?: number; killed?: () => boolean; deaf?: () => boolean; finding?: string } = {}
 ) {
-  const chain = (await stackChain(t))!
+  const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-safe-'))
   const agents = new Map<string, Agent>()
   const feed: Array<{ seq: number; kind: string; payload: unknown }> = []
@@ -365,7 +365,7 @@ async function world(
   })
   const everyone: Agent[] = []
   const add = async (name: string): Promise<Agent> => {
-    const funder = await StackFunder.fund(await stackTreasury(), 30)
+    const funder = await testFunder(30)
     const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 1 }, modelId: 'test-model-1' })
     const file = join(dir, `${name}.sqlite`)
     const kx = knexFactory({ client: 'sqlite3', connection: { filename: file }, useNullAsDefault: true })
@@ -547,8 +547,8 @@ test('D7 stuck injection: a collecting op older than its bound exits by the decl
 })
 
 test('preflight on a live stack: dependency checks green; spendguard detects an unguarded broadcast path', async (t) => {
-  const chain = (await stackChain(t))!
-  const funder = await StackFunder.fund(await stackTreasury(), 10)
+  const chain = (await testChain(t))!
+  const funder = await testFunder(10)
   const dir = mkdtempSync(join(tmpdir(), 'nektar-pf-'))
   const mem = new NektarMemory(chain, funder, funder.keyPair, { dataDir: dir, network: 'regtest' })
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'a.sqlite') }, useNullAsDefault: true })

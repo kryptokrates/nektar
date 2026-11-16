@@ -1,14 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, type MerklePath } from '@bsv/sdk'
-import { buildBump, stackWorld, stackChain, StackFunder, StackChain } from '@nektar/chain'
+import { buildBump, testWorld, testChain, type TestFunder, type TestChain } from '@nektar/chain'
 import { NektarMemory, createHttpApi } from '../src/index.js'
 import type { Server } from 'node:http'
 
 const serve = async (t: {
   skip: (m?: string) => void
-}): Promise<{ chain: StackChain; funder: StackFunder; mem: NektarMemory; srv: Server; base: string } | undefined> => {
-  const w = await stackWorld(t, 10)
+}): Promise<{ chain: TestChain; funder: TestFunder; mem: NektarMemory; srv: Server; base: string } | undefined> => {
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair)
@@ -19,7 +19,7 @@ const serve = async (t: {
 }
 
 // a real spend mined on the chain — returns the txid and its true BUMP
-const minedTx = async (chain: StackChain, funder: StackFunder): Promise<{ txid: string; mp: MerklePath }> => {
+const minedTx = async (chain: TestChain, funder: TestFunder): Promise<{ txid: string; mp: MerklePath }> => {
   const parent = funder.parents[0]
   const tx = new Transaction()
   tx.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })

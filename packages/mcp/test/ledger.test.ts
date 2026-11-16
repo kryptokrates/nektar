@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction, Script } from '@bsv/sdk'
-import { ReserveFunder, stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { ReserveFunder, testWorld, testChain, type TestFunder } from '@nektar/chain'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,7 +19,7 @@ async function open() {
 
 test('ledger: every owner broadcast is recorded with bytes before the outcome is known', async (t) => {
   const { kx, store } = await open()
-  const w = await stackWorld(t, 2)
+  const w = await testWorld(t, 2)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})
@@ -39,7 +39,7 @@ test('ledger: every owner broadcast is recorded with bytes before the outcome is
 
 test('ledger: payInvoice exports a signed tx whose input stays leased — no phantom change, no second spend of the same outpoint', async (t) => {
   const { kx, store } = await open()
-  const w = await stackWorld(t, 1)
+  const w = await testWorld(t, 1)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})

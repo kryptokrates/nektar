@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { skipUnlessStack, stackWorld } from '@nektar/chain'
+import { stackOnly, stackWorld } from '@nektar/chain'
 import { Transaction, P2PKH, PrivateKey } from '@bsv/sdk'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -14,7 +14,7 @@ import { join } from 'node:path'
 const text = (r: unknown) => JSON.parse((r as { content: Array<{ text: string }> }).content[0].text)
 
 test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resources, prompts', { timeout: 140_000 }, async (t) => {
-  if ((await skipUnlessStack(t)) === undefined) return
+  if (stackOnly(t, 'spawns the bin on regtest seeded from the shared treasury')) return
   // the spawned bin bootstraps its reserve from <dataDir>/treasury.json —
   // on an aged chain there is no address index to discover funds, so seed a
   // real treasury outpoint from the shared pool (same REGTEST_WIF key)
@@ -50,7 +50,7 @@ test('MCP stdio (SDK client): instructions, annotated tools, tool calls, resourc
     assert.equal(client.getServerVersion()?.name, 'nektar')
     assert.match(client.getInstructions() ?? '', /recall/)
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 52)
+    assert.equal(tools.length, 54)
     const by = new Map(tools.map((t) => [t.name, t]))
     assert.equal(by.get('recall')!.annotations?.readOnlyHint, true)
     assert.equal(by.get('revoke')!.annotations?.destructiveHint, true)

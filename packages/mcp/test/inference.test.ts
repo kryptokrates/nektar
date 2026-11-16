@@ -6,7 +6,7 @@
 // other (input,output) is refused before it can enter a receipt.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld, testChain, type TestFunder } from '@nektar/chain'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 import { verifyReceipt } from '../src/receipt.js'
@@ -19,7 +19,7 @@ import { join } from 'node:path'
 process.env.NEKTAR_GROTH16_OUT = '/nonexistent-nektar-aiinf'
 
 async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
-  const w = await stackWorld(t, 20)
+  const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-inf-')), ...opts })
@@ -166,7 +166,7 @@ test('commitReceipt auto-attests in one call; exclusive with modelAttestation', 
 
 test('attestInference: on-chain when artifacts + funding exist (the node evaluates the 398KB verifier)', { timeout: 120_000 }, async (t) => {
   delete process.env.NEKTAR_GROTH16_OUT
-  const w = await stackWorld(t, 5, 100_000)
+  const w = await testWorld(t, 5, 100_000)
   if (w === undefined) return
   const { chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 2 }, dataDir: mkdtempSync(join(tmpdir(), 'nektar-inf-on-')) })

@@ -708,8 +708,9 @@ test('R7: late escrow rejection — funding_failed via txState event, budget rel
       'escrow never funded | ' + logs.slice(-15).join(' | ')
     )
     const escrowTxid = (await opFor(b, w.wantId))!.data.escrowTxid as string
-    const orig = b.mem.txState.bind(b.mem)
-    ;(b.mem as unknown as { txState: (txid: string) => Promise<string> }).txState = async (txid: string) => (txid === escrowTxid ? 'rejected' : orig(txid))
+    const orig = b.mem.txFacts.bind(b.mem)
+    ;(b.mem as unknown as { txFacts: (txid: string) => Promise<import('@nektar/chain').TxFacts> }).txFacts = async (txid: string) =>
+      txid === escrowTxid ? { verdict: 'dead' as const } : orig(txid)
     const rounds = await until([b.rt, s.rt], chain, async () => (await opFor(b, w.wantId))?.state === 'funding_failed')
     assert.ok(rounds > 0, 'rejected funding did not land funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await opFor(b, w.wantId))!
@@ -719,7 +720,7 @@ test('R7: late escrow rejection — funding_failed via txState event, budget rel
       evts.some((e) => e.cause === 'escrow_rejected_late'),
       `expected an escrow_rejected_late event, got: ${evts.map((e) => e.cause).join(', ')}`
     )
-    b.mem.txState = orig as never
+    b.mem.txFacts = orig as never
     await drive([b.rt], chain, 4) // settled state must stick — no retry resurrection
     assert.equal((await opFor(b, w.wantId))!.state, 'funding_failed', 'rejected funding retried itself back to life')
   } finally {

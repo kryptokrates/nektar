@@ -53,7 +53,7 @@ export interface PreflightDeps {
   /** per-dependency ceilings (D1 budgets): host ≤5s, chain ≤3s, store ≤10s */
   ceilings?: { hostMs?: number; chainMs?: number; storeMs?: number }
   /** stronger liveness probes the transport can supply when it knows the
-   *  endpoints (a raw HTTP answer proves the socket; txState alone can't
+   *  endpoints (a raw HTTP answer proves the socket; txFacts alone can.t
    *  distinguish a dead endpoint vs an unrecognized txid) */
   probes?: { broadcaster?: () => Promise<boolean> }
   /** which checks to run — the watchdog re-runs only the cheap probe tier */
@@ -140,11 +140,11 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
             fix: 'broadcasts will black-hole — check the propagation/broadcaster URL'
           }
     }
-    const st = await bounded(mem.txState(ZERO), ceil.chainMs, 'txState probe')
+    const f = await bounded(mem.txFacts(ZERO), ceil.chainMs, 'txFacts probe')
     return {
       check: 'broadcaster',
       pass: true,
-      detail: `chain view answered the tx probe ('${st}') — no stronger broadcaster endpoint configured`
+      detail: `chain view answered the tx probe ('${f.verdict}') — no stronger broadcaster endpoint configured`
     }
   })
 
@@ -290,7 +290,11 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
     if (inflight.length === 0) return { check: 'watch', pass: true, detail: 'nothing in flight — watcher idle' }
     const stale: string[] = []
     for (const w of inflight.slice(0, 4)) {
-      const st = await bounded(mem.txState(w.txid), ceil.chainMs, 'txState').catch(() => 'timeout')
+      const st = await bounded(
+        mem.txFacts(w.txid).then((f) => (f.verdict === 'pending' && f.tx === undefined ? 'unknown' : f.verdict)),
+        ceil.chainMs,
+        'txFacts'
+      ).catch(() => 'timeout')
       if (st === 'unknown' || st === 'timeout') stale.push(`${w.txid.slice(0, 12)} (${w.state})`)
     }
     return stale.length === 0

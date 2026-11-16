@@ -4,6 +4,7 @@
 import { nektarEnv } from '@nektar/core'
 import type { MerklePath, PrivateKey, Transaction } from '@bsv/sdk'
 import type { BlockHeader, BroadcastResult, Broadcaster, ChainTracker, Funder, Funds, TxStatusEvent } from './interfaces.js'
+import type { TxFacts } from './txfacts.js'
 import type { ChainEvents } from './events.js'
 
 export type TestTier = 'memory' | 'stack' | 'testnet'
@@ -19,6 +20,8 @@ export interface TestChain extends ChainTracker, Broadcaster {
   broadcast(tx: Transaction): Promise<BroadcastResult>
   getTx(txid: string): Transaction | undefined // sync; merklePath attached once mined
   isRejected(txid: string): boolean
+  /** THE one status answer — bytes/proof/depth/verdict + outside hint */
+  txFacts(txid: string): Promise<TxFacts>
   onStatus(cb: (ev: TxStatusEvent) => void): void
   readonly chainEvents: ChainEvents
   stopWatching(): void

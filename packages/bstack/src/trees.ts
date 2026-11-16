@@ -22,7 +22,7 @@ export async function ensureTrees(p: {
   /** chain-observer verdict for a txid (broadcaster/overlay status) — when
    *  given, an unproven mint whose status is a definitive rejection is
    *  dropped so the kind's `unproven === 0` mint gate re-opens */
-  txStatus?: (txid: string) => Promise<string>
+  txFacts?: (txid: string) => Promise<import('@nektar/chain').TxFacts>
   /** fired when an unproven tree is dropped as chain-rejected — lets the
    *  caller mark its ghost inputs/outputs spent so funding never re-selects
    *  them (the change output would otherwise cascade parent-rejected mints) */
@@ -56,16 +56,20 @@ export async function ensureTrees(p: {
     if (tx !== undefined && tx.merklePath !== undefined) {
       await p.ledger.markProven(u.txid, tx.merklePath)
       proven.push(u.txid)
-    } else if (p.txStatus !== undefined) {
-      const st = (await p.txStatus(u.txid)).toUpperCase()
-      if (st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')) {
+    } else if (p.txFacts !== undefined) {
+      const f = await p.txFacts(u.txid)
+      const st = (f.hint?.status ?? '').toUpperCase()
+      // a 'dead' verdict is first-party truth; a REJECTED hint is the
+      // outside observer's word — either may reap an unproven row (a gate
+      // left shut forever otherwise), never a proven one
+      if (f.verdict === 'dead' || st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')) {
         // the mint was refused/lost a competing spend — an unproven row
         // would gate out every later mint of this kind forever. A provision
         // row is reaped the same way, but never tombstones: its inputs are
         // the payer's, not ours
         await p.ledger.drop(u.txid)
         if (u.kind !== PROVISION_KIND && p.onReject !== undefined && tx !== undefined) await p.onReject(tx)
-      } else if (u.kind !== PROVISION_KIND && (st === '' || st === 'UNKNOWN') && p.onStuck !== undefined && tx !== undefined) {
+      } else if (u.kind !== PROVISION_KIND && f.verdict === 'pending' && (st === '' || st === 'UNKNOWN') && p.onStuck !== undefined && tx !== undefined) {
         // silently vanished (never propagated, evicted) — resubmit or reap;
         // without this the mint gate stays shut past any restart
         if ((await p.onStuck(tx)) === 'drop') {

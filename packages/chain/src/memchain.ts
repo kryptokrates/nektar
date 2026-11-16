@@ -11,6 +11,7 @@
 import { Transaction, MerklePath, PrivateKey, P2PKH, Hash, UnlockingScript, Spend } from '@bsv/sdk'
 import type { BlockHeader, BroadcastResult, FundingOut, TxStatusEvent } from './interfaces.js'
 import { MemoryFunds, listFundsStore, type ListFundsStore } from './funds.js'
+import { txFacts, type TxFacts } from './txfacts.js'
 import { ChainEvents } from './events.js'
 import { buildBump } from './bump.js'
 import { serializeHeader, headerPowValid } from './headers.js'
@@ -393,6 +394,22 @@ export class MemoryChain implements TestChain {
 
   isRejected(txid: string): boolean {
     return this.rejectedSet.has(txid)
+  }
+
+  /** the one status answer — the adapter fills every dep from its own view;
+   *  the hint is its own verdict word (no outside observer exists here) */
+  async txFacts(txid: string): Promise<TxFacts> {
+    return await txFacts(txid, {
+      txOf: (t) => this.getTx(t),
+      proofOf: (t) => this.known.get(t)?.mp,
+      rejected: (t) => this.isRejected(t),
+      hintOf: async (t) => {
+        const rec = this.known.get(t)
+        const status = this.isRejected(t) ? 'REJECTED' : rec?.mp !== undefined ? 'MINED' : rec !== undefined ? 'SEEN_ON_NETWORK' : 'UNKNOWN'
+        return { status, answered: true }
+      },
+      depthOf: (mp) => this.tip() - mp.blockHeight + 1
+    })
   }
 
   onStatus(cb: (ev: TxStatusEvent) => void): void {

@@ -33,7 +33,7 @@ export interface CustodyOpsDeps {
     | undefined
   network?: string
   feeRateSatPerKb?: number
-  txStatus?: (txid: string) => Promise<string>
+  hintOf?: (txid: string) => Promise<import('@nektar/chain').TxHint | undefined>
 }
 
 const opReturnScript = (opReturn: string): LockingScript => {
@@ -57,20 +57,20 @@ export class CustodyOps {
     return await this.deps.funds.take(purpose, satoshis)
   }
 
-  /** Bounded submit confirmation, not a wait loop: up to 3 reads (now,
-   *  +700ms, +1500ms). A rejection-family answer is returned immediately, a
-   *  seen-family answer settles at once, anything else resolves after the
-   *  third read. Without a txStatus dep the check is a no-op. */
+  /** Bounded submit confirmation, not a wait loop: up to 3 hint reads (now,
+   *  +700ms, +1500ms). A rejection-family word is returned immediately, a
+   *  seen-family word settles at once, anything else resolves after the
+   *  third read. Without a hintOf dep the check is a no-op. */
   private async accepted(txid: string): Promise<string | undefined> {
-    const txStatus = this.deps.txStatus
-    if (txStatus === undefined) return undefined
+    const hintOf = this.deps.hintOf
+    if (hintOf === undefined) return undefined
     const SEEN = ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE']
     for (let i = 0; i < 3; i++) {
       if (i === 1) await new Promise((r) => setTimeout(r, 700))
       if (i === 2) await new Promise((r) => setTimeout(r, 1500))
       let st = ''
       try {
-        st = (await txStatus(txid)).toUpperCase()
+        st = ((await hintOf(txid))?.status ?? '').toUpperCase()
       } catch {
         st = ''
       }

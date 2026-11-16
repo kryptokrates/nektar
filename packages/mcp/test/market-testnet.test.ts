@@ -25,7 +25,7 @@ import {
   WitnessedTracker,
   WocTracker,
   BsvBroadcaster,
-  fetchTxStatus,
+  mainnetHint,
   merklePathMainnet,
   ReserveFunder,
   testTier,
@@ -203,7 +203,7 @@ const mkagent = async (
     network: 'testnet',
     modelId: 'test-model-1',
     feeRateSatPerKb: 1,
-    txStatus: (txid: string) => fetchTxStatus(mc, txid, { wocFallback: true }),
+    hintOf: mainnetHint(mc, { wocFallback: true }),
     batchPolicy: { maxLeaves: 1 }
   })
   // live-runtime parity: pull-based proof + tx lookups so mined txs get their
@@ -780,7 +780,7 @@ test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 6
   }
 })
 
-test('R7: late escrow rejection → funding_failed via txState event (live)', { timeout: 600_000 }, async (t) => {
+test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', { timeout: 600_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -800,8 +800,9 @@ test('R7: late escrow rejection → funding_failed via txState event (live)', { 
       'escrow never funded | ' + logs.slice(-15).join(' | ')
     )
     const escrowTxid = (await opFor(b, w.wantId))!.data.escrowTxid as string
-    const orig = b.mem.txState.bind(b.mem)
-    ;(b.mem as unknown as { txState: (txid: string) => Promise<string> }).txState = async (txid: string) => (txid === escrowTxid ? 'rejected' : orig(txid))
+    const orig = b.mem.txFacts.bind(b.mem)
+    ;(b.mem as unknown as { txFacts: (txid: string) => Promise<import('@nektar/chain').TxFacts> }).txFacts = async (txid: string) =>
+      txid === escrowTxid ? { verdict: 'dead' as const } : orig(txid)
     const ms = await until([b.rt], 90_000, async () => (await opFor(b, w.wantId))?.state === 'funding_failed')
     assert.ok(ms > 0, 'rejected funding did not land funding_failed | ' + logs.slice(-20).join(' | '))
     const bo = (await opFor(b, w.wantId))!
@@ -810,7 +811,7 @@ test('R7: late escrow rejection → funding_failed via txState event (live)', { 
       evts.some((e) => e.cause === 'escrow_rejected_late'),
       `expected escrow_rejected_late, got ${evts.map((e) => e.cause).join(',')}`
     )
-    ;(b.mem as unknown as { txState: (txid: string) => Promise<string> }).txState = orig
+    ;(b.mem as unknown as { txFacts: (txid: string) => Promise<import('@nektar/chain').TxFacts> }).txFacts = orig
     await drive([b.rt], 3)
     assert.equal((await opFor(b, w.wantId))!.state, 'funding_failed', 'rejected funding retried itself back to life')
   } finally {

@@ -121,7 +121,7 @@ test('custody: provisionPay throws when the broadcaster rejects right after subm
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},
-    txStatus: async () => 'REJECTED'
+    hintOf: async () => ({ status: 'REJECTED', answered: true })
   })
   await assert.rejects(
     ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 }),
@@ -140,9 +140,9 @@ test('custody: a seen status returns after one read — bounded confirmation, no
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},
-    txStatus: async () => {
+    hintOf: async () => {
       reads++
-      return 'SEEN_ON_NETWORK'
+      return { status: 'SEEN_ON_NETWORK', answered: true }
     }
   })
   await ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 })

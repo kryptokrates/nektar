@@ -29,8 +29,7 @@ import {
   TemporalSources,
   statusStream,
   fetchRawTx,
-  fetchTxStatus,
-  probeTxStatus,
+  mainnetHint,
   DEFAULT_WOC_URL,
   TxStore,
   ChainEvents,
@@ -906,7 +905,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
   // status reads go through the chain-observer seam; WoC cross-checks a dead
   // broadcaster on main, or whenever the operator configured a WoC URL
   const wocFallback = net === 'main' || mc.wocUrl !== undefined
-  const arcTxStatus = (txid: string): Promise<string> => fetchTxStatus(mc, txid, { wocFallback })
+  const txHint = mainnetHint(mc, { wocFallback })
   const events = new ChainEvents({
     intervalMs: cfg.confirmEveryMs ?? 30_000,
     height: () => tracker.currentHeight(),
@@ -921,7 +920,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       // object — only a double-spend is provable (via the conflicting tx's
       // own BUMP). It lands as a hint (resolves waiters, keeps the floor),
       // never on the verified path — same treatment the push path gives it.
-      const probe = await probeTxStatus(mc, txid, { wocFallback })
+      const probe = await txHint(txid)
       if (['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(probe.status)) events.note({ txid, status: 'rejected' })
       // an unanswered probe — or a 'mined' claim we hold no verified path
       // for — is not "not mined": throwing keeps the abandon clock from
@@ -974,7 +973,8 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       ...base,
       wallet: clientWallet ?? liveToolbox?.wallet,
       txStore,
-      txStatus: arcTxStatus,
+      hintOf: txHint,
+      heightOf: () => tracker.currentHeight(),
       agentSeed: keys.agentSeed ? PrivateKey.fromHex(keys.agentSeed) : undefined,
       signingKey: keys.logKey ? PrivateKey.fromHex(keys.logKey) : undefined,
       shardKeys,
@@ -1349,7 +1349,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       const seen = events.statusOf(txid)
       const verdict = seen?.verified === true ? watcherObservation(seen, '') : undefined
       if (verdict !== undefined) return verdict
-      return watcherObservation(seen, await arcTxStatus(txid))
+      return watcherObservation(seen, (await txHint(txid)).status)
     },
     async () => {
       await ops.refreshFunding?.().catch(() => {})

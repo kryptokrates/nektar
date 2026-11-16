@@ -125,6 +125,15 @@ const GATES = [
     // packages must be consumed via their index — @nektar/contracts/*.json is generated
     // artifacts addressed by file, not a package-internal deep import.
     allowSpecifier: /@nektar\/contracts\//
+  },
+  {
+    name: 'broadcaster-status-read',
+    re: /\b(fetchTxStatus|probeTxStatus)\b/g,
+    scope: GATED,
+    // THE one status answer is txFacts — the broadcaster status functions are
+    // private to the chain adapters that fill `hint` (mainnet.ts, its unit
+    // test). Nothing outside @nektar/chain may import or call them.
+    allow: ['packages/chain/src/mainnet.ts', 'packages/chain/test/mainnet.test.ts']
   }
 ]
 

@@ -110,7 +110,7 @@ export interface AutomationConfig {
    *  honored only while the token validates. Implies strict when set. */
   unattended?: boolean
   /** stronger broadcaster liveness probe (the transport knows the endpoint —
-   *  an HTTP answer proves the socket where txState can't) */
+   *  an HTTP answer proves the socket where txFacts can.t) */
   broadcasterProbe?: () => Promise<boolean>
   /** publish our bfinger identity record in upkeep — opt-in (it costs sats
    *  and makes this agent publicly discoverable; NEKTAR_BFINGER_PUBLISH=1) */
@@ -393,7 +393,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     height: () => mem.chainHeight(),
     tip: () => mem.tipRef(),
     fetchTx: (txid) => mem.fetchTx(txid),
-    txState: (txid) => mem.txState(txid),
+    txFacts: (txid) => mem.txFacts(txid),
     broadcast: (tx) => mem.broadcastTx(tx),
     txWire: (txid, maxBytes) => mem.txWire(txid, maxBytes),
     readTx: (hex) => mem.readTxWire(hex),
@@ -858,17 +858,18 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // stuck-mint healing — a mint the chain observer can't see ('unknown') gets
   // one resubmit per age window; only a definitive refusal counts toward the
   // drop verdict — a dead endpoint must never reap a healthy mint.
-  // txStatus is throttled: ChainEvents polls these txids on its own watch
-  // floor and delivers rejections/proofs itself — this second read is only
-  // the mint-gate's heal/reap input, so a short cache loses no signal
-  const statusCache = new Map<string, { at: number; st: string }>()
-  const txStatus = async (txid: string): Promise<string> => {
+  // the mint-gate's heal/reap read is throttled: ChainEvents polls these
+  // txids on its own watch floor and delivers rejections/proofs itself —
+  // this second facts read is only the heal/reap input, so a short cache
+  // loses no signal
+  const statusCache = new Map<string, { at: number; f: import('@nektar/chain').TxFacts }>()
+  const txFactsOf = async (txid: string): Promise<import('@nektar/chain').TxFacts> => {
     const c = statusCache.get(txid)
-    if (c !== undefined && Date.now() - c.at < 15_000) return c.st
+    if (c !== undefined && Date.now() - c.at < 15_000) return c.f
     if (statusCache.size > 4096) statusCache.clear()
-    const st = await mem.txState(txid)
-    statusCache.set(txid, { at: Date.now(), st })
-    return st
+    const f = await mem.txFacts(txid)
+    statusCache.set(txid, { at: Date.now(), f })
+    return f
   }
   const stuckMints = new Map<string, { first: number; tries: number }>()
   const stuckMint = async (tree: import('@bsv/sdk').Transaction): Promise<'keep' | 'drop'> => {
@@ -932,7 +933,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               takeFunding: async (sats: number) => await mem.funds.take('upkeep', sats),
               broadcast: (tx) => mem.broadcastTx(tx),
               fetchTx: (txid) => mem.fetchTx(txid),
-              txStatus,
+              txFacts: txFactsOf,
               onReject: (tree) => ghostMint(tree),
               onStuck: (tree) => stuckMint(tree),
               onSpent: (tree) => {
@@ -1382,7 +1383,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     })
   })
   // a rejection callback is only a hint: clear the reconcile throttle for the
-  // affected operation and run a cycle — the engine consults txState itself
+  // affected operation and run a cycle — the engine consults txFacts itself
   mem.onTxRejected((txid: string) => {
     if (stopped) return
     const work = (async () => {

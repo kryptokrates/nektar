@@ -364,7 +364,8 @@ export class NektarMemory {
       txLookup: () => this.txLookup,
       proofLookup: () => this.proofLookup,
       network: this.opts.network,
-      txStatus: this.opts.txStatus,
+      hintOf: this.opts.hintOf,
+      heightOf: this.opts.heightOf,
       // the ledger's own verdict rows are first-party truth — wired lazily
       // because mem.ledger is assigned post-construction by the runtime
       ledgerState: async (txid) => (await this.ledger?.walletTx({ txid }))?.state,
@@ -375,7 +376,7 @@ export class NektarMemory {
       fundSigner: () => this.fundSigner(),
       broadcast: (tx) => this.chain.broadcast(tx),
       txs: (tx) => this.txs.put(tx),
-      txStatus: this.opts.txStatus,
+      hintOf: this.opts.hintOf,
       ledger: () => this.ledger,
       network: this.opts.network,
       feeRateSatPerKb: this.opts.feeRateSatPerKb
@@ -469,7 +470,7 @@ export class NektarMemory {
 
   /** subscribe to rejection/abandonment wakes — verified chain events,
    *  first-party refusals, abandon-horizon verdicts, and pushed status
-   *  hints all fire it; a wake is a poke to re-ask txState, not a verdict */
+   *  hints all fire it; a wake is a poke to re-ask txFacts, not a verdict */
   onTxRejected(cb: (txid: string) => void): void {
     this.txOps.onTxRejected(cb)
   }
@@ -480,7 +481,7 @@ export class NektarMemory {
     this.txOps.deliverTxRejected(txid)
   }
   /** a pushed rejection STATUS (broadcaster webhook / SSE): wake-only —
-   *  pokes subscribers into re-asking txState, writes no durable verdict */
+   *  pokes subscribers into re-asking txFacts, writes no durable verdict */
   hintTxRejected(txid: string): void {
     this.txOps.hintTxRejected(txid)
   }
@@ -492,9 +493,9 @@ export class NektarMemory {
     this.events.on('txAbandoned', ({ txid }: { txid: string }) => cb(txid))
   }
 
-  /** what the chain view knows about a tx right now */
-  async txState(txid: string): Promise<'mined' | 'seen' | 'rejected' | 'unknown'> {
-    return await this.txOps.txState(txid)
+  /** THE one status answer — bytes/proof/depth/verdict + outside hint */
+  async txFacts(txid: string): Promise<import('@nektar/chain').TxFacts> {
+    return await this.txOps.txFacts(txid)
   }
   /** the log signing key's pubkey (verifies promises and checkpoints) */
   async logPublicKey(): Promise<string> {

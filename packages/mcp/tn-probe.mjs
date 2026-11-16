@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, copyFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey, Transaction } from '@bsv/sdk'
-import { ChaintracksTracker, WocTracker, BsvBroadcaster, fetchTxStatus, ReserveFunder } from '@nektar/chain'
+import { ChaintracksTracker, WocTracker, BsvBroadcaster, mainnetHint, ReserveFunder } from '@nektar/chain'
 import { NektarMemory } from './dist/src/memory.js'
 import { callTool } from './dist/src/server.js'
 import { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
@@ -36,7 +36,7 @@ const mem = new NektarMemory(chain, reserve, fundKey, {
   network: 'testnet',
   modelId: 'test-model-1',
   feeRateSatPerKb: 1,
-  txStatus: (txid) => fetchTxStatus(mc, txid, { wocFallback: true }),
+  hintOf: mainnetHint(mc, { wocFallback: true }),
   batchPolicy: { maxLeaves: 1 }
 })
 const logs = []

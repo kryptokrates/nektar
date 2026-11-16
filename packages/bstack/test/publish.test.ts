@@ -105,7 +105,10 @@ test('ensureTrees: stuck mint — keep while healing, drop on definitive verdict
     takeFunding: async () => fund(k, 1_000_000),
     broadcast: bc,
     fetchTx,
-    txStatus: async () => status,
+    txFacts: async () => ({
+      verdict: status === 'rejected' ? ('dead' as const) : ('pending' as const),
+      hint: { status: status === 'rejected' ? 'REJECTED' : status === 'seen' ? 'SEEN_ON_NETWORK' : 'UNKNOWN', answered: true }
+    }),
     onReject: (t: Transaction) => {
       rejected.push(t.id('hex'))
     },
@@ -321,7 +324,10 @@ test('ensureTrees: a rejected provision tree is reaped without onReject', async 
     takeFunding: async () => fund(k, 1_000_000),
     broadcast: async () => ({ status: 'success' as const }),
     fetchTx: async () => undefined,
-    txStatus: async (id: string) => (id === prov.id('hex') ? 'REJECTED' : 'SEEN_ON_NETWORK'),
+    txFacts: async (id: string) =>
+      id === prov.id('hex')
+        ? { verdict: 'dead' as const, hint: { status: 'REJECTED', answered: true } }
+        : { verdict: 'pending' as const, hint: { status: 'SEEN_ON_NETWORK', answered: true } },
     onReject: async () => {
       rejected++
     }

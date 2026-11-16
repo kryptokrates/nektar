@@ -30,6 +30,7 @@ import {
   type RegtestConfig
 } from './regtest.js'
 import { TxStore } from './txstore.js'
+import { txFacts, type TxFacts } from './txfacts.js'
 import { testTier, type TestChain } from './testtier.js'
 
 // ---------------------------------------------------------------------------
@@ -193,7 +194,7 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
         try {
           const merklePath = MerklePath.fromBinary([...new Uint8Array(await r.arrayBuffer())])
           // attach the proof to the cached tx so the sync getTx view answers
-          // 'mined', not 'seen' — txState consumers rely on it
+          // 'mined' — txFacts verdicts rely on it
           const cached = this.known.get(txid)
           if (cached !== undefined) cached.merklePath = merklePath
           if (dbgTimings()) dbgLog(`proof pushed for ${txid.slice(0, 12)}…`)
@@ -223,7 +224,7 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
   }
   /** sync chain view — the same contract the in-memory stack carried: txs
    *  this chain broadcast, merklePath attached when the subtree seals.
-   *  NektarMemory.txState calls this WITHOUT await — an async signature
+   *  NektarMemory.txFacts calls this WITHOUT await — an async signature
    *  returns a Promise (≠undefined) and every query would read 'seen',
    *  which is exactly the regtest reconcile failure this must not hide. */
   getTx(txid: string): Transaction | undefined {
@@ -232,6 +233,21 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
   /** definitive broadcast rejection, sync — feed to engine reconcile gates */
   isRejected(txid: string): boolean {
     return this.rejectedSet.has(txid)
+  }
+  /** the one status answer — the adapter fills every dep from its own view;
+   *  the hint is its own verdict word (the node is the only observer here) */
+  async txFacts(txid: string): Promise<TxFacts> {
+    return await txFacts(txid, {
+      txOf: (t) => this.getTx(t),
+      proofOf: (t) => this.getTx(t)?.merklePath,
+      rejected: (t) => this.isRejected(t),
+      hintOf: async (t) => {
+        const tx = this.getTx(t)
+        const status = this.isRejected(t) ? 'REJECTED' : tx?.merklePath !== undefined ? 'MINED' : tx !== undefined ? 'SEEN_ON_NETWORK' : 'UNKNOWN'
+        return { status, answered: true }
+      },
+      depthOf: async (mp) => (await this.tipHeight()) - mp.blockHeight + 1
+    })
   }
   /** status push, the same shape statusStream gives live networks: Teranode
    *  has no per-tx event feed, so the shared events substrate polls watched

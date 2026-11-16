@@ -117,8 +117,8 @@ export interface MarketDeps {
   rememberTx?: (tx: Transaction) => void
   /** mark an output of an accepted transaction as ours — direct-rail payments
    *  become the seller's custody the moment the payment verifies */
-  ownOutput?: (tx: Transaction, vout: number) => void
-  settleEscrow?: (tx: Transaction) => void
+  ownOutput?: (tx: Transaction, vout: number) => void | Promise<void>
+  settleEscrow?: (tx: Transaction) => void | Promise<void>
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
   ai: AIExecutor
@@ -862,7 +862,7 @@ export class MarketEngine {
       data: direct ? { direct: true, utxo: m.utxo } : { escrow: { cfg: { ...offer.cfg, depositorPkh: m.depositorPkh }, utxo: m.utxo } },
       evidence: { spv, spends }
     })
-    if (direct) this.d.ownOutput?.(tx, m.utxo.vout)
+    if (direct) await this.d.ownOutput?.(tx, m.utxo.vout)
     await this.complete(next)
   }
 
@@ -1451,7 +1451,7 @@ export class MarketEngine {
               )
             return
           }
-          this.d.settleEscrow(tx)
+          await this.d.settleEscrow(tx)
           this.d.rememberTx?.(tx)
           pay = { accepted: true, txid: built.utxo.txid, utxo: built.utxo }
         } else {
@@ -1573,7 +1573,7 @@ export class MarketEngine {
             )
           return
         }
-        this.d.settleEscrow(tx)
+        await this.d.settleEscrow(tx)
         this.d.rememberTx?.(tx)
         r = { accepted: true, txid: built.utxo.txid, utxo: built.utxo, escrow: built.escrow }
       } else
@@ -1728,7 +1728,7 @@ export class MarketEngine {
       utxo = { txid, vout, satoshis: tx.outputs[vout].satoshis ?? 0, script }
     }
     if (escrow === undefined || utxo === undefined) return
-    if (wtx !== undefined) this.d.settleEscrow?.(Transaction.fromHex(wtx.rawHex))
+    if (wtx !== undefined) await this.d.settleEscrow?.(Transaction.fromHex(wtx.rawHex))
     if (actionId !== undefined) await this.d.store.commitBudget(actionId)
     await cancel()
     await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
@@ -1900,7 +1900,7 @@ export class MarketEngine {
           const sub = await this.wallet.submit(op.data.escrowAction as string)
           if (sub.state === 'submitted' || sub.state === 'observed' || sub.state === 'confirmed') {
             const wtx = await this.d.store.walletTx({ actionId: op.data.escrowAction as string })
-            if (wtx) this.d.settleEscrow(Transaction.fromHex(wtx.rawHex))
+            if (wtx) await this.d.settleEscrow(Transaction.fromHex(wtx.rawHex))
             await this.d.store.commitBudget(op.data.escrowAction as string)
             const sel2 = op.data.selected as { key: string }
             const s2 = (op.data.offers as Record<string, StoredOffer>)[sel2.key]

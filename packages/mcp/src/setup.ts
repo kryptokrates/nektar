@@ -94,11 +94,9 @@ export async function setupFeeVault(opts: {
   const saveVault = () => writeFileSync(vutxoFile, JSON.stringify({ current: vaultUtxo, minted: [...vaultMinted] }))
   const deployVault = async () => {
     const sats = vcfg.vaultSats ?? 50_000
-    const u = await opts.funds
-      .take('upkeep', sats + 601)
-      .catch(() => {
-        throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + 600} sats — fund ${opts.fundAddress}`)
-      })
+    const u = await opts.funds.take('upkeep', sats + 601).catch(() => {
+      throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + 600} sats — fund ${opts.fundAddress}`)
+    })
     const tx = new Tx()
     tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: unlockP2PKH(opts.fundKey) })
     tx.addOutput({ satoshis: sats, lockingScript: LScript.fromHex(vault.lockingScript(0n, 0n)) })

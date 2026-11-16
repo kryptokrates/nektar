@@ -27,8 +27,7 @@ if (!env.NEKTAR_KEY_PASSPHRASE && !env.NEKTAR_KEY_PASSPHRASE_FILE) {
   process.exit(1)
 }
 const cfg = configFromEnv(env)
-const link = (txid) =>
-  `${env.NEKTAR_NETWORK === 'main' ? 'https://whatsonchain.com' : 'https://test.whatsonchain.com'}/tx/${txid}`
+const link = (txid) => `${env.NEKTAR_NETWORK === 'main' ? 'https://whatsonchain.com' : 'https://test.whatsonchain.com'}/tx/${txid}`
 const shard = process.env.NEKTAR_PILOT_SHARD ?? `pilot-${Date.now().toString(36)}`
 
 /** poll prove() until the anchor of `seq` carries a BUMP verified against live headers */

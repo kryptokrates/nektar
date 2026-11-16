@@ -53,7 +53,7 @@ export interface Funds {
   spendCheck?: (txid: string, vout: number) => Promise<boolean>
 }
 
-export const op = (txid: string, vout: number): string => `${txid}:${vout}`
+const op = (txid: string, vout: number): string => `${txid}:${vout}`
 
 /** the funder shapes existing code hands us — take(), takeReserve(), or a
  *  bare utxos list; probed, not widened */
@@ -109,8 +109,14 @@ export function fundsOf(f: FunderLike, dealFloor = 0): Funds {
   }
   const funds: Funds = {
     address: () => f.address?.() ?? Promise.reject(new Error('funds: funder has no address()')),
-    balance: async () => (f.utxos ?? []).filter((u) => !dead.has(op(u.tx.id('hex'), u.vout)) && !spentLog.has(op(u.tx.id('hex'), u.vout)) && !reserved.has(op(u.tx.id('hex'), u.vout))).reduce((s, u) => s + (u.satoshis ?? 0), 0),
-    outs: async () => (f.utxos ?? []).filter((u) => !dead.has(op(u.tx.id('hex'), u.vout)) && !spentLog.has(op(u.tx.id('hex'), u.vout)) && !reserved.has(op(u.tx.id('hex'), u.vout))).map((u) => ({ tx: u.tx, vout: u.vout, satoshis: u.satoshis ?? 0 })),
+    balance: async () =>
+      (f.utxos ?? [])
+        .filter((u) => !dead.has(op(u.tx.id('hex'), u.vout)) && !spentLog.has(op(u.tx.id('hex'), u.vout)) && !reserved.has(op(u.tx.id('hex'), u.vout)))
+        .reduce((s, u) => s + (u.satoshis ?? 0), 0),
+    outs: async () =>
+      (f.utxos ?? [])
+        .filter((u) => !dead.has(op(u.tx.id('hex'), u.vout)) && !spentLog.has(op(u.tx.id('hex'), u.vout)) && !reserved.has(op(u.tx.id('hex'), u.vout)))
+        .map((u) => ({ tx: u.tx, vout: u.vout, satoshis: u.satoshis ?? 0 })),
     async take(purpose: FundsPurpose, sats: number): Promise<FundingOut> {
       const committed = [...reserved.values()].reduce((s, v) => s + v, 0)
       if (purpose !== 'deal' && dealFloor > 0 && (await funds.balance()) - committed - sats < dealFloor)
@@ -140,10 +146,14 @@ export function fundsOf(f: FunderLike, dealFloor = 0): Funds {
               )
         if (u === undefined) throw new Error(`funds: no outpoint of ${sats} sats or more`)
         const id = u.tx.id('hex')
-        if (dead.has(op(id, u.vout)) || spentLog.has(op(id, u.vout)) || (await merged(id, u.vout)) || (funds.hintSkip !== undefined && (await funds.hintSkip(u.tx, u.vout)))) {
-          f.addOwned?.(u.tx, u.vout)
+        if (dead.has(op(id, u.vout)) || spentLog.has(op(id, u.vout)) || (await merged(id, u.vout))) {
+          if (f.take !== undefined) f.addOwned?.(u.tx, u.vout) // restore a consumed pick
           continue
         }
+        // hintSkip is peek-only: a destructive take can't pass a candidate
+        // over without a custody write, so the hint applies where the base
+        // lets us look before taking (takeReserve / bare utxos list)
+        if (f.take === undefined && funds.hintSkip !== undefined && (await funds.hintSkip(u.tx, u.vout))) continue
         if (funds.spendCheck !== undefined && (await funds.spendCheck(id, u.vout))) {
           spentLog.add(op(id, u.vout))
           f.markSpent?.(id, u.vout)

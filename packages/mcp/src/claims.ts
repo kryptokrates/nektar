@@ -49,10 +49,7 @@ export class ClaimService {
     if (this.pubKeyHex === undefined) {
       this.pubKeyHex = await signerPubHex(this.signerLike)
       this.pkh = Buffer.from(Hash.hash160(Buffer.from(this.pubKeyHex, 'hex'))).toString('hex')
-      this.provider = new NektarProvider(
-        { broadcast: (t: Transaction) => this.mem.broadcastTx(t) },
-        this.mem.funds
-      )
+      this.provider = new NektarProvider({ broadcast: (t: Transaction) => this.mem.broadcastTx(t) }, this.mem.funds)
     }
   }
 
@@ -265,7 +262,7 @@ export class ClaimService {
     }
     const r = await this.mem.broadcastTx(tx)
     if (r.status !== 'success') throw new Error(`buyGated: ${r.description?.slice(0, 120)}`)
-    this.provider.markAccepted(tx)
+    await this.provider.markAccepted(tx)
     return { txid: tx.id('hex'), statement: 'gated buy executed — the verdict was consumed atomically with the payment' }
   }
 }

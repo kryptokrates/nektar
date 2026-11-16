@@ -445,7 +445,9 @@ export class ReserveFunder implements Funds {
       // (e.g. a 1-sat change output) can never fund a tx, so it is never picked.
       const floor = minSats ?? 546
       const candidates = []
-      for (const x of this.utxos.filter((x) => !this.spentOuts.has(this.op(x.tx.id('hex'), x.vout)) && !this.reserved.has(this.op(x.tx.id('hex'), x.vout)) && x.satoshis >= floor)) {
+      for (const x of this.utxos.filter(
+        (x) => !this.spentOuts.has(this.op(x.tx.id('hex'), x.vout)) && !this.reserved.has(this.op(x.tx.id('hex'), x.vout)) && x.satoshis >= floor
+      )) {
         if (this.leased && (await this.leased(x.tx.id('hex'), x.vout))) continue
         // a hint-only pass-over (e.g. parent rejected) — non-destructive:
         // the candidate stays live for the next call

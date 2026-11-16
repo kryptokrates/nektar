@@ -107,7 +107,7 @@ function temporalSourcesFor(names: string[], primary: ChainTracker, opts: { wocA
 export function configFromEnv(env = process.env): RuntimeConfig {
   const network = (env.NEKTAR_NETWORK ?? 'regtest') as RuntimeConfig['network']
   if (network !== 'regtest' && network !== 'testnet' && network !== 'main')
-    throw new Error(`NEKTAR_NETWORK must be regtest|testnet|main — got '${network}'`)
+    throw new Error(`NEKTAR_NETWORK must be regtest|testnet|main — got '${String(env.NEKTAR_NETWORK)}'`)
   const dataDir = env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar')
   const secret = (k: string) => env[k] ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
   const cfg: RuntimeConfig = {
@@ -145,9 +145,7 @@ export function configFromEnv(env = process.env): RuntimeConfig {
     // testNet = any test network (testnet encoding, test coins, low fee floor)
     const testNet = network !== 'main'
     const urls =
-      network === 'testnet'
-        ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', woc: 'https://api.whatsonchain.com/v1/bsv/test' }
-        : undefined
+      network === 'testnet' ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', woc: 'https://api.whatsonchain.com/v1/bsv/test' } : undefined
     cfg.confirmEveryMs = Number(env.NEKTAR_CONFIRM_MS ?? (testNet ? 30_000 : 60_000))
     cfg.main = {
       fundWif: secret('NEKTAR_FUND_WIF'),
@@ -466,7 +464,8 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
   // marks, internalized change all live in wallet.sqlite. `legacy` (file
   // reserve) is gone; `client` has no regtest path.
   const walletMode = nektarEnv('NEKTAR_WALLET') ?? 'toolbox'
-  if (walletMode !== 'toolbox') throw new Error(`regtest custody is NEKTAR_WALLET=toolbox — got '${walletMode}' (legacy was removed; client has no regtest path)`)
+  if (walletMode !== 'toolbox')
+    throw new Error(`regtest custody is NEKTAR_WALLET=toolbox — got '${walletMode}' (legacy was removed; client has no regtest path)`)
   const tb = await import('@nektar/automation')
   // D2: wallet-relayed txs go through the SAME SpendGuard — postBeef is a
   // spend entry point, not a side channel around the caps
@@ -789,8 +788,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
   // ToolboxReserveFunder — a WalletInterface-backed Funds impl — so the file
   // reserve is gone from product code entirely.
   const walletMode = nektarEnv('NEKTAR_WALLET') ?? 'toolbox'
-  if (walletMode !== 'toolbox' && walletMode !== 'client')
-    throw new Error(`NEKTAR_WALLET must be toolbox|client — got '${walletMode}' (legacy was removed)`)
+  if (walletMode !== 'toolbox' && walletMode !== 'client') throw new Error(`NEKTAR_WALLET must be toolbox|client — got '${walletMode}' (legacy was removed)`)
   const tb = await import('@nektar/automation')
   // D2: the wallet's own postBeef relays through the SAME SpendGuard — a
   // wallet-signed action is a spend entry point like any other
@@ -1251,7 +1249,9 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'testnet', base
       await utxoView.refresh()
       let imported = 0
       try {
-        for (const u of await discoverUtxos(mc, fundAddress, (t, why) => process.stderr.write(`nektar discover: index entry ${t.slice(0, 12)} skipped: ${why}\n`))) {
+        for (const u of await discoverUtxos(mc, fundAddress, (t, why) =>
+          process.stderr.write(`nektar discover: index entry ${t.slice(0, 12)} skipped: ${why}\n`)
+        )) {
           const before = utxoView.utxos.length
           addIfNew(u)
           if (utxoView.utxos.length > before) imported++

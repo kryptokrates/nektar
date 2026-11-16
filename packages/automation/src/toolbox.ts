@@ -738,7 +738,8 @@ export class ToolboxReserveFunder implements Funds {
       if (id === undefined || src === undefined) continue
       this.reserved.delete(`${id}:${vout}`)
       if ((src.outputs[vout]?.lockingScript.toHex() ?? '') !== lock) continue
-      if (!(await this.has(id, vout))) await this.internalize(src, vout).catch((e) => this.log(`funds revive ${id}.${vout}: ${e instanceof Error ? e.message : String(e)}`))
+      if (!(await this.has(id, vout)))
+        await this.internalize(src, vout).catch((e) => this.log(`funds revive ${id}.${vout}: ${e instanceof Error ? e.message : String(e)}`))
       if ((await this.has(id, vout)) && !this.cache.some((u) => u.tx.id('hex') === id && u.vout === vout))
         this.cache.push({ tx: src, vout, satoshis: src.outputs[vout].satoshis ?? 0 })
     }

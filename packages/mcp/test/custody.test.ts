@@ -138,7 +138,12 @@ test('custody: provisionPay throws when the broadcaster rejects right after subm
 test('custody: a seen status returns after one read — bounded confirmation, not a wait loop', async () => {
   let reads = 0
   const ops = new CustodyOps({
-    funds: fundsOf({ take: async () => ({ tx: parent(), vout: 0, satoshis: 100_000 }), markSpent: () => {}, addOwned: () => {}, address: () => key.toAddress() }),
+    funds: fundsOf({
+      take: async () => ({ tx: parent(), vout: 0, satoshis: 100_000 }),
+      markSpent: () => {},
+      addOwned: () => {},
+      address: () => key.toAddress()
+    }),
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},

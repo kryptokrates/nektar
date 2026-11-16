@@ -4,6 +4,7 @@
 // want-responder loop once the instance reports healthy.
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -23,6 +24,10 @@ if (!existsSync(binJs)) {
   process.exit(1)
 }
 
+// the service keeps its state out of the repo checkout — NEKTAR_DATA_DIR
+// defaults to ~/.nektar here so the spawned server never lands data in the
+// tree just because its WorkingDirectory is the clone (explicit env wins)
+if (process.env.NEKTAR_DATA_DIR === undefined) process.env.NEKTAR_DATA_DIR = join(homedir(), '.nektar')
 const child = spawn(process.execPath, [binJs], { cwd: root, stdio: 'inherit' })
 child.on('exit', (c) => process.exit(c ?? 0))
 const stop = () => child.kill('SIGTERM')

@@ -2,7 +2,7 @@
 // proof store. Also owns the replay-protection persistence pair
 // (persistSecurityState/restoreSecurityState) since every map it saves is
 // challenge/ZK/revocation state.
-import type { CallerIdentity, ZkClearance } from '../types.js'
+import type { CallerIdentity, ZkClearance } from './types.js'
 import { MemPacks } from './packs.js'
 
 export abstract class MemZk extends MemPacks {

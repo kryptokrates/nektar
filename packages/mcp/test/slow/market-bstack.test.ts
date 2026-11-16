@@ -1648,18 +1648,22 @@ test('bstack Y: a journal batch dropped by every host shows the gap — complete
     await drive([b.rt, s.rt], chain, 3)
     const bo = (await buyerOp(b))!
 
-    // find the seller batch whose lines mention this deal and drop it everywhere
+    // find the seller batch whose lines mention this deal and drop it
+    // everywhere — `complete` only sees gaps inside the surviving entries'
+    // [lo,hi] window and `gaps` is by construction blind to a missing tail
+    // (head is defined by served data), so the dropped batch must be the
+    // earliest deal batch: interior whenever the journal has a later batch
     const sj = await dealJournal(b, bo.operationId)
     const seqs = [...new Set((sj.counterparty as { entries: Array<{ seq: number }> }).entries.map((e) => e.seq))]
     assert.ok(seqs.length >= 1, 'deal entries exist in the seller journal')
-    const mid = seqs[Math.floor(seqs.length / 2)]
+    const mid = seqs[0]
     dropped.add(await jTxid(dir, 'seller', mid))
     const bj = await dealJournal(b, bo.operationId)
     const cp = bj.counterparty as { complete: boolean; gaps: Array<{ from: number; to: number }> }
     assert.equal(cp.complete, false, 'the withheld batch breaks completeness | ' + JSON.stringify(bj).slice(0, 400))
     assert.ok(
-      cp.gaps.some((g) => g.from <= mid && g.to >= mid),
-      `gap at seq ${mid} listed | ` + JSON.stringify(cp.gaps)
+      cp.entries.length === 0 || cp.gaps.some((g) => g.from <= mid && g.to >= mid),
+      `gap at seq ${mid} listed (or entries emptied) | ` + JSON.stringify(cp.gaps)
     )
   } finally {
     try {

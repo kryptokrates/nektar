@@ -13,24 +13,26 @@ import type { ProofBundle, AnchorLink } from '@nektar/verify'
 import type { Broadcaster, ChainTracker, FunderLike, Funds } from '@nektar/chain'
 import { TxStore } from '@nektar/chain'
 import type { SignerLike } from '@nektar/core'
-import type { Metrics } from '../metrics.js'
-import type { BondOps } from '../bonds.js'
-import type { RevocationOps } from '../revocations.js'
-import type { CustodyOps } from '../custody.js'
-import type { TxOps } from '../txops.js'
-import type { AnchorOps } from '../anchorops.js'
-import type { IdentityOps } from '../identityops.js'
-import type { KeyOps } from '../keyops.js'
-import type { CryptoOps } from '../cryptoops.js'
-import type { CatalogOps } from '../catalogops.js'
-import type { PackOps } from '../packops.js'
-import type { PackWire } from '../packwire.js'
-import type { AuthorshipOps } from '../authorshipops.js'
-import type { ZkQueryOps } from '../zkquery.js'
-import type { AttestOps } from '../attestops.js'
-import type { ProofStore } from '../proofstore.js'
-import type { ZkProveOps } from '../zkprove.js'
-import type { NektarMemoryOptions } from '../types.js'
+import type {
+  AnchorOpsPort,
+  AttestOpsPort,
+  AuthorshipOpsPort,
+  BondOpsPort,
+  CatalogOpsPort,
+  CryptoOpsPort,
+  CustodyOpsPort,
+  IdentityOpsPort,
+  KeyOpsPort,
+  MetricsPort,
+  PackOpsPort,
+  PackWirePort,
+  ProofStorePort,
+  RevocationOpsPort,
+  TxOpsPort,
+  ZkProveOpsPort,
+  ZkQueryOpsPort
+} from './ports.js'
+import type { NektarMemoryOptions } from './types.js'
 
 /** write refused at ingest (COM-003) */
 export class IngestError extends Error {}
@@ -85,25 +87,25 @@ export abstract class MemBase {
   readonly events = new EventEmitter()
   /** OPS-002 metrics (Prometheus text via metrics.render()) — the gauges are
    *  registered by the NektarMemory ctor (they read lazy instance state) */
-  public metrics!: Metrics
+  public metrics!: MetricsPort
 
   // ops-module slots — constructed in the NektarMemory ctor
-  protected txOps!: TxOps
-  protected anchorOps!: AnchorOps
-  protected identityOps!: IdentityOps
-  protected keyOps!: KeyOps
-  protected cryptoOps!: CryptoOps
-  protected catalogOps!: CatalogOps
-  protected packOps!: PackOps
-  protected packWire!: PackWire
-  protected authorshipOps!: AuthorshipOps
-  protected zkQueryOps!: ZkQueryOps
-  protected attestOps!: AttestOps
-  protected zkProveOps!: ZkProveOps
-  protected custodyOps!: CustodyOps
-  protected revocationOps!: RevocationOps
-  protected bonds!: BondOps
-  protected proofStore!: ProofStore
+  protected txOps!: TxOpsPort
+  protected anchorOps!: AnchorOpsPort
+  protected identityOps!: IdentityOpsPort
+  protected keyOps!: KeyOpsPort
+  protected cryptoOps!: CryptoOpsPort
+  protected catalogOps!: CatalogOpsPort
+  protected packOps!: PackOpsPort
+  protected packWire!: PackWirePort
+  protected authorshipOps!: AuthorshipOpsPort
+  protected zkQueryOps!: ZkQueryOpsPort
+  protected attestOps!: AttestOpsPort
+  protected zkProveOps!: ZkProveOpsPort
+  protected custodyOps!: CustodyOpsPort
+  protected revocationOps!: RevocationOpsPort
+  protected bonds!: BondOpsPort
+  protected proofStore!: ProofStorePort
 
   // shared mutable state
   protected anchors = new Map<string, AnchorChain>()

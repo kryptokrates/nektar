@@ -75,7 +75,7 @@ await ledger.add(tree, 8, LOG_KIND)
 await ledger.markProven(tree.id('hex'))
 const journal = new MemoryCarrierJournal()
 const state = new MemoryLogState()
-ok('funding tree BEEF published to tm_log', await publishMinedLog({ journal, hosts: HOSTS, stream: STREAM, tx: tree, quorum: 'all' }))
+ok('funding tree BEEF published to tm_log', (await publishMinedLog({ journal, hosts: HOSTS, stream: STREAM, tx: tree, quorum: 'all' })).ok)
 
 const seqs = []
 for (const n of [1, 2, 3]) {

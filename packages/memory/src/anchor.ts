@@ -8,8 +8,8 @@ import { PromiseMonitor, type Checkpoint } from '@nektar/log'
 import type { AnchorLink } from '@nektar/verify'
 import type { SignerLike } from '@nektar/core'
 import * as idbind from '@nektar/identity'
-import type { BondOps } from '../bonds.js'
-import type { PersistedMemoryState } from '../types.js'
+import type { BondOpsPort } from './ports.js'
+import type { PersistedMemoryState } from './types.js'
 import { MemTx } from './tx.js'
 
 export abstract class MemAnchor extends MemTx {
@@ -133,7 +133,7 @@ export abstract class MemAnchor extends MemTx {
   async bondDeploy(sats = this.opts.bond?.sats ?? 5_000, releaseHeight?: bigint, force = false): Promise<{ txid: string; releaseHeight: bigint }> {
     return await this.bonds.deploy(sats, releaseHeight, force)
   }
-  bondStatus(): ReturnType<BondOps['status']> {
+  bondStatus(): ReturnType<BondOpsPort['status']> {
     return this.bonds.status()
   }
   async bondSeize(payToScript?: string, bond?: { cfg: ConstructorParameters<typeof CheckpointBond>[0]; utxo: BondUtxo }): Promise<{ txid: string } | null> {

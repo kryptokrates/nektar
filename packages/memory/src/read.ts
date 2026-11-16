@@ -8,7 +8,7 @@ import { utf8, toHex, dsha256, concat, field, TAG_RECEIPT_SIG, toSigner, nektarE
 import { verifyProvenance } from '@nektar/log'
 import { decryptFragment, shredKey } from '@nektar/crypto'
 import * as idbind from '@nektar/identity'
-import type { AnswerReceipt, CallerIdentity, ZkClearance } from '../types.js'
+import type { AnswerReceipt, CallerIdentity, ZkClearance } from './types.js'
 import { MemRecords } from './records.js'
 
 /** recursive canonical JSON (sorted keys) — same scheme as reasoning/canonicalJson

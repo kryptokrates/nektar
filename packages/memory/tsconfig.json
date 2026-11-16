@@ -1,0 +1,51 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  },
+  "include": ["src", "test"],
+  "references": [
+    {
+      "path": "../anchor"
+    },
+    {
+      "path": "../automation"
+    },
+    {
+      "path": "../automaton"
+    },
+    {
+      "path": "../chain"
+    },
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../crypto"
+    },
+    {
+      "path": "../datalog"
+    },
+    {
+      "path": "../graph"
+    },
+    {
+      "path": "../identity"
+    },
+    {
+      "path": "../log"
+    },
+    {
+      "path": "../policy"
+    },
+    {
+      "path": "../reasoning"
+    },
+    {
+      "path": "../store"
+    },
+    {
+      "path": "../verify"
+    }
+  ]
+}

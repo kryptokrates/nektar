@@ -20,7 +20,7 @@ import { verifyProvenance, type LogRecord } from '@nektar/log'
 import { buildProofBundle, verifyFragment, type ProofBundle, type VerifyResult } from '@nektar/verify'
 import { encryptFragment, shredKey } from '@nektar/crypto'
 import * as idbind from '@nektar/identity'
-import type { RememberResult } from '../types.js'
+import type { RememberResult } from './types.js'
 import { IngestError } from './base.js'
 import { MemZk } from './zk.js'
 

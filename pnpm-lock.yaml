@@ -400,6 +400,9 @@ importers:
       '@nektar/log':
         specifier: workspace:*
         version: link:../log
+      '@nektar/memory':
+        specifier: workspace:*
+        version: link:../memory
       '@nektar/policy':
         specifier: workspace:*
         version: link:../policy
@@ -434,6 +437,54 @@ importers:
       '@types/qrcode':
         specifier: ^1.5.6
         version: 1.5.6
+
+  packages/memory:
+    dependencies:
+      '@bsv/sdk':
+        specifier: 4.0.1
+        version: 4.0.1
+      '@nektar/anchor':
+        specifier: workspace:*
+        version: link:../anchor
+      '@nektar/automation':
+        specifier: workspace:*
+        version: link:../automation
+      '@nektar/automaton':
+        specifier: workspace:*
+        version: link:../automaton
+      '@nektar/chain':
+        specifier: workspace:*
+        version: link:../chain
+      '@nektar/core':
+        specifier: workspace:*
+        version: link:../core
+      '@nektar/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      '@nektar/datalog':
+        specifier: workspace:*
+        version: link:../datalog
+      '@nektar/graph':
+        specifier: workspace:*
+        version: link:../graph
+      '@nektar/identity':
+        specifier: workspace:*
+        version: link:../identity
+      '@nektar/log':
+        specifier: workspace:*
+        version: link:../log
+      '@nektar/policy':
+        specifier: workspace:*
+        version: link:../policy
+      '@nektar/reasoning':
+        specifier: workspace:*
+        version: link:../reasoning
+      '@nektar/store':
+        specifier: workspace:*
+        version: link:../store
+      '@nektar/verify':
+        specifier: workspace:*
+        version: link:../verify
 
   packages/policy:
     dependencies:

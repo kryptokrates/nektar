@@ -1,0 +1,43 @@
+{
+  "name": "@nektar/memory",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test --test-timeout=60000 dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@nektar/anchor": "workspace:*",
+    "@nektar/automation": "workspace:*",
+    "@nektar/automaton": "workspace:*",
+    "@nektar/chain": "workspace:*",
+    "@nektar/core": "workspace:*",
+    "@nektar/crypto": "workspace:*",
+    "@nektar/datalog": "workspace:*",
+    "@nektar/graph": "workspace:*",
+    "@nektar/identity": "workspace:*",
+    "@nektar/log": "workspace:*",
+    "@nektar/policy": "workspace:*",
+    "@nektar/reasoning": "workspace:*",
+    "@nektar/store": "workspace:*",
+    "@nektar/verify": "workspace:*",
+    "@bsv/sdk": "4.0.1"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kryptokrates/nektar.git",
+    "directory": "packages/memory"
+  }
+}

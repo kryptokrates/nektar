@@ -38,7 +38,7 @@ export async function ensureTrees(p: {
    *  keeps a refill minting while an earlier mint still waits on its block,
    *  so the proof wait never gates the next refill */
   maxUnproven?: number
-}): Promise<{ minted?: string; proven: string[]; remaining: number }> {
+}): Promise<{ minted: string[]; proven: string[]; remaining: number }> {
   // Hosts admit a carrier only from a funding tree that is proven in a block,
   // so the stock is what keeps publishing free of block times: the next tree
   // is minted when half of the current one is still unused and has a whole
@@ -75,15 +75,21 @@ export async function ensureTrees(p: {
       }
     }
   }
-  const remaining = await p.ledger.remaining(kind)
-  let minted: string | undefined
-  if (remaining < lowWater && (await p.ledger.unproven()).filter((u) => u.kind === kind).length < (p.maxUnproven ?? 1)) {
+  // fill to target, not one per pass: a burst that just drained stock needs
+  // refill depth now (proven-only lanes have no anchored stock to dip into),
+  // and `maxUnproven` is the in-flight bound that keeps a stuck block from
+  // minting unboundedly. `remaining` counts anchored stock on the market
+  // lane, so a fresh anchored mint may already satisfy the target.
+  const minted: string[] = []
+  for (;;) {
+    const unprovenKind = (await p.ledger.unproven()).filter((u) => u.kind === kind).length
+    if ((await p.ledger.remaining(kind)) >= lowWater || unprovenKind >= (p.maxUnproven ?? 1)) break
     const funding = await p.takeFunding(size * satsPerOutput + 2000)
     const tree = await mintTree({ key: p.key, wallet: p.wallet, funding, n: size, satsPerOutput, lock: p.lock })
     const r = await p.broadcast(tree)
     if (r.status !== 'success') throw new Error(`ensureTrees: broadcast failed ${JSON.stringify(r).slice(0, 120)}`)
     await p.ledger.add(tree, size, kind)
-    minted = tree.id('hex')
+    minted.push(tree.id('hex'))
     if (p.onSpent !== undefined) await p.onSpent(tree)
   }
   return { minted, proven, remaining: await p.ledger.remaining(kind) }

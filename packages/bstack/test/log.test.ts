@@ -4,6 +4,7 @@ import { PrivateKey, ProtoWallet, Transaction, P2PKH } from '@bsv/sdk'
 import { MemoryTreeLedger, mintTree } from '../src/tree.js'
 import { MemoryCarrierJournal } from '../src/journal.js'
 import { MemoryLogState, appendLog, readLog, anchorLog, publishMinedLog, logFundingLock, logTopic, LOG_KIND } from '../src/log.js'
+import { resubmitCarrier } from '../src/publish.js'
 import { submitAll } from '../src/hosts.js'
 import { mintCarrier, lockFields, unlocker } from '@lightwebinc/bcommon'
 import { EncodingLines, ProfileFull, TagAnchor, encodeAnchor, encodeBatch, fromHex, toHex } from '@lightwebinc/blogs-host/dist/index.js'
@@ -241,6 +242,36 @@ test('log: one host withholds a batch — the sibling fills it, withheld names i
   } finally {
     await h1.close()
     await h2.close()
+  }
+})
+
+// 3c. a dead host leg reports `missed`, and the journaled row repairs it —
+// the contract upkeep's queueRepairs(rt.fanoutIo, `log:{stream}:{seq}`) relies on
+test('log: missed host is named on the append leg; resubmitCarrier re-serves it', async () => {
+  let down = true
+  const s = await rig({ h2fail: () => down })
+  try {
+    const r = await appendLog({
+      key: s.key,
+      ledger: s.ledger,
+      journal: s.journal,
+      state: s.state,
+      hosts: s.hosts,
+      stream: STREAM,
+      lines: lines(1),
+      now: () => 1000
+    })
+    assert.deepEqual(r.missed.map((m) => m.host), [s.h2.url], 'the dead leg is named, not silently dropped')
+    assert.deepEqual((await readLog({ hosts: [s.h2.url], stream: STREAM, producer: s.key.toPublicKey().toString(), tracker: s.tracker })).batches, [])
+    // the repair dispatcher hands journal key `log:{stream}:{seq}` to
+    // resubmitCarrier — same key appendLog journaled under
+    down = false
+    await resubmitCarrier({ journal: s.journal, host: s.h2.url, key: `log:${STREAM}:${r.seq}` })
+    const healed = await readLog({ hosts: [s.h2.url], stream: STREAM, producer: s.key.toPublicKey().toString(), tracker: s.tracker })
+    assert.equal(healed.batches.length, 1, 'the repaired host now serves the missed batch')
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
   }
 })
 

@@ -1,8 +1,8 @@
 // MemPacks — the catalog/pack surface: CatalogOps, PackOps and PackWire
 // delegates, shard privacy flags and the public-pack listing gates.
 import type { LogRecord } from '@nektar/log'
-import type { CatalogOps } from '../catalogops.js'
-import type { ManifestOffer, ShardManifest, ShardPack } from '../types.js'
+import type { CatalogOpsPort } from './ports.js'
+import type { ManifestOffer, ShardManifest, ShardPack } from './types.js'
 import { MemCustody } from './custody.js'
 
 export abstract class MemPacks extends MemCustody {
@@ -44,7 +44,7 @@ export abstract class MemPacks extends MemCustody {
    *  only stores what was already checked). The record keeps the seller's
    *  provenance fields; an __imports__ audit record commits the acquisition
    *   *  (source shard:seq, leaf, settlement txid) so the lineage is anchored. */
-  async importRecord(args: Parameters<CatalogOps['importRecord']>[0]): Promise<{ seq: number }> {
+  async importRecord(args: Parameters<CatalogOpsPort['importRecord']>[0]): Promise<{ seq: number }> {
     return await this.catalogOps.importRecord(args)
   }
 

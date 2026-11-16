@@ -3,8 +3,8 @@
 // → verify (proof bundles) → crypto (BRC-42/AES-GCM), all behind the chain
 // interfaces so it runs identically on regtest and live networks.
 //
-// The class surface lives in ./memory/ as a layer chain — each layer extends
-// the last so `this.*` resolves exactly as the single file did:
+// The class surface lives in @nektar/memory as a layer chain — each layer
+// extends the last so `this.*` resolves exactly as the single file did:
 //   base (state + ops slots) → keys → tx → anchor → custody → packs → zk
 //   → records (write path) → read (recall/doctor) → NektarMemory (ctor wiring)
 import { join } from 'node:path'
@@ -31,12 +31,13 @@ import { ProofStore } from './proofstore.js'
 import { ZkProveOps } from './zkprove.js'
 import { fundsOf } from '@nektar/chain'
 import type { Broadcaster, ChainTracker, FunderLike } from '@nektar/chain'
-import { MemRead, verifyAnswerReceipt, verifyReceiptZk } from './memory/read.js'
-import { IngestError } from './memory/base.js'
+import { MemRead, verifyAnswerReceipt, verifyReceiptZk } from '@nektar/memory'
+import { IngestError } from '@nektar/memory'
 
-// the domain vocabulary lives in ./types.js — a leaf module so the *ops
-// modules can share these types with NektarMemory without a memory↔ops
-// type cycle. Re-exported here so existing './memory.js' imports keep working.
+// the domain vocabulary lives in @nektar/memory (re-exported via ./types.js)
+// so the *ops modules share these types with NektarMemory without a
+// memory↔ops type cycle. Re-exported here so existing './memory.js' imports
+// keep working.
 import {
   CATALOG_SHARD,
   type OperatorWallet,

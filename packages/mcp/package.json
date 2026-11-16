@@ -43,7 +43,8 @@
     "qrcode": "1.5.4",
     "runar-sdk": "0.4.6",
     "sqlite3": "^5.1.7",
-    "zod": "^4.6.7"
+    "zod": "^4.6.7",
+    "@nektar/memory": "workspace:*"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6"

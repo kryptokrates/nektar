@@ -28,7 +28,7 @@ import {
 } from '@lightwebinc/blogs-host/dist/index.js'
 import { intervalRoot } from '@lightwebinc/blogs-host/dist/merkle.js'
 import { readPushDrop } from '@lightwebinc/blogs-host/dist/script.js'
-import { submitAll, lookupAll, type Quorum } from './hosts.js'
+import { submitAll, lookupAll, type Quorum, type SubmitAllResult } from './hosts.js'
 import { ancestorsOf } from './finger.js'
 import { carrierFundingLockHex, walletOrProto } from './carrier.js'
 import { fundingSlotReason } from './tree.js'
@@ -385,7 +385,7 @@ export async function readLog(p: { hosts: string[]; stream: string; producer: st
 
 /** Publish one mined transaction's BEEF (with proof) to the log topic —
  *  exactly once per (stream, txid), journaled under `logpub:`. */
-export async function publishMinedLog(p: { journal: CarrierJournal; hosts: string[]; stream: string; tx: Transaction; quorum?: Quorum }): Promise<boolean> {
+export async function publishMinedLog(p: { journal: CarrierJournal; hosts: string[]; stream: string; tx: Transaction; quorum?: Quorum }): Promise<SubmitAllResult & { txid: string }> {
   const txid = p.tx.id('hex')
   const jkey = `logpub:${p.stream}:${txid}`
   const topics = [logTopic(p.stream)]
@@ -399,8 +399,10 @@ export async function publishMinedLog(p: { journal: CarrierJournal; hosts: strin
     beef = p.tx.toAtomicBEEF()
     await p.journal.put(jkey, { txid, beef, topics })
   }
+  // the caller owns the legs: a host that missed this publish gets a repair
+  // row keyed `logpub:{stream}:{txid}` like every other fanned-out carrier
   const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum ?? 'one', retryWaits: [] })
-  return r.ok
+  return { ...r, txid }
 }
 
 // ── anchor ────────────────────────────────────────────────────────────────
@@ -427,7 +429,7 @@ export async function anchorLog(p: {
   maxAgeMs?: number
   quorum?: Quorum
   log?: (s: string) => void
-}): Promise<{ interval: number; first: number; count: number; root: string; txid: string } | undefined> {
+}): Promise<{ interval: number; first: number; count: number; root: string; txid: string; missed?: Array<{ host: string; error: string }> } | undefined> {
   checkStream(p.stream)
   const now = p.now ?? Date.now
   const head = await p.state.get(p.stream)
@@ -439,14 +441,14 @@ export async function anchorLog(p: {
   if (flight !== undefined) {
     const tx = await p.fetchTx(flight.prev)
     if (tx?.merklePath === undefined) return undefined
-    await publishMinedLog({ journal: p.journal, hosts: p.hosts, stream: p.stream, tx, quorum: p.quorum })
+    const pub = await publishMinedLog({ journal: p.journal, hosts: p.hosts, stream: p.stream, tx, quorum: p.quorum })
     const ex = flight.extra as { first: number; count: number }
     const a = await p.state.get(anchorKey(p.stream))
     await p.state.set(anchorKey(p.stream), { seq: flight.seq, prev: toHex(new Uint8Array(tx.hash() as number[])), extra: { first: ex.first, count: ex.count } })
     await p.state.set(coverKey(p.stream), { seq: ex.first + ex.count - 1, prev: '' })
     await p.state.set(flightKey(p.stream), { seq: 0, prev: '' })
     void a
-    return { interval: flight.seq, first: ex.first, count: ex.count, root: '', txid: flight.prev }
+    return { interval: flight.seq, first: ex.first, count: ex.count, root: '', txid: flight.prev, ...(pub.missed.length > 0 ? { missed: pub.missed } : {}) }
   }
 
   const cover = (await p.state.get(coverKey(p.stream)))?.seq ?? 0

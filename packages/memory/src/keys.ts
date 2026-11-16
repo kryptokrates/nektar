@@ -6,7 +6,7 @@ import type { PrivateKey } from '@bsv/sdk'
 import { signerPubHex, type SignerLike, type DigestSigner } from '@nektar/core'
 import type { LogRecord } from '@nektar/log'
 import type { FragmentContext } from '@nektar/crypto'
-import type { OperatorWallet } from '../types.js'
+import type { OperatorWallet } from './types.js'
 import { MemBase } from './base.js'
 
 export abstract class MemKeys extends MemBase {

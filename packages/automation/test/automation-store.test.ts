@@ -371,3 +371,13 @@ test('enqueue delayMs: a delayed row is not due until the delay passes', async (
   now += 20_001
   assert.deepEqual((await store.dueOutbox()).map((o) => o.actionId).sort(), ['later', 'now'].sort())
 })
+
+// Batch H: the abandon reap drops every unproven row, but only self-minted
+// trees ghost-mint — a provision row's inputs are the payer's, not ours
+test('abandonedReap: provision rows drop without ghost-mint; self-minted kinds ghost', async () => {
+  const mod = (await import('../src/runtime.js')) as { abandonedReap?: (kind: string) => { drop: boolean; ghost: boolean } }
+  assert.ok(mod.abandonedReap !== undefined, 'runtime must export abandonedReap')
+  assert.deepEqual(mod.abandonedReap!('provision'), { drop: true, ghost: false })
+  assert.deepEqual(mod.abandonedReap!('market'), { drop: true, ghost: true })
+  assert.deepEqual(mod.abandonedReap!('bbox'), { drop: true, ghost: true })
+})

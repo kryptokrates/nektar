@@ -153,6 +153,10 @@ function aiFromEnv(env = process.env): AIExecutor {
   return new HttpChatExecutor({ provider: env.NEKTAR_AI_PROVIDER ?? 'http', baseUrl, modelId: env.NEKTAR_AI_MODEL, apiKey, egress })
 }
 
+/** which abandoned-tree rows the reap ghost-mints: self-minted kinds only.
+ *  A provision row's inputs are the payer's — reaped, never recycled. */
+export const abandonedReap = (kind: string): { drop: boolean; ghost: boolean } => ({ drop: true, ghost: kind !== 'provision' })
+
 export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig): Promise<Automation> {
   const knexFactory = (await import('knex')).default
   if (cfg.dataDir) mkdirSync(cfg.dataDir, { recursive: true })
@@ -223,6 +227,16 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   const logStream = lanes === undefined ? undefined : (cfg.logStream ?? 'nektar_abcdefghij')
   const logState = lanes === undefined || logStream === undefined ? undefined : lanes.logState
   const fingerState = lanes === undefined ? undefined : lanes.fingerState
+  // restart continuity: pending provision rows keep their chain watch —
+  // without it the abandon horizon never reaps a rejected provision tx
+  if (lanes !== undefined) {
+    void lanes.ledger
+      .unproven()
+      .then((rows) => {
+        for (const u of rows) if (u.kind === lanes.mod.PROVISION_KIND) mem.watchTx?.(u.txid)
+      })
+      .catch(() => {})
+  }
   // verified-carrier memos for the runtime's life: identical carrier bytes on
   // the next poll skip SPV/parse/signature (lanes) and admit+decrypt (box);
   // only positives are cached — a failed check always retries
@@ -1396,11 +1410,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     const work = (async () => {
       try {
         const unproven = await lanes.ledger.unproven()
-        if (!unproven.some((u) => u.txid === txid)) return
+        const row = unproven.find((u) => u.txid === txid)
+        if (row === undefined) return
         const tx = await mem.fetchTx(txid)
         await lanes.ledger.drop(txid)
-        if (tx !== undefined) ghostMint(tx)
-        log(`automation: dropped abandoned funding mint ${txid}`)
+        const reap = abandonedReap(row.kind)
+        if (reap.ghost && tx !== undefined) ghostMint(tx)
+        log(reap.ghost ? `automation: dropped abandoned funding mint ${txid}` : `automation: dropped abandoned provision tx ${txid}`)
         await store.unblockOutbox('funding-slot')
         if (!stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
       } catch (e) {
@@ -1478,6 +1494,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       if (matched.length === 0) return {}
       const n = await lanes.ledger.adopt(tx, matched)
       if (n === 0) return {}
+      // an unproven provision tx needs a chain watch: it is not one of this
+      // instance's wallet txs, so nothing else registers it with the event
+      // substrate — without this the abandon horizon can never reap it
+      if (tx.merklePath === undefined) mem.watchTx?.(tx.id('hex'))
       // adopted slots are usable the moment the tx proves — wake deferred work
       await store.unblockOutbox('funding-slot')
       const counts: Record<string, number> = {}

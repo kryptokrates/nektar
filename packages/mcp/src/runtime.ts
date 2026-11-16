@@ -563,6 +563,7 @@ export async function openRuntime(cfg: RuntimeConfig): Promise<Runtime> {
     store
   )
   memRef = mem
+  mem.watchTx = (txid) => events.watch(txid)
   mem.ledger = ledger
   healLedgerOnProof(mem, ledger, 'regtest')
   // optimistic-claim surface: provider + signer over the regtest funder,
@@ -1007,6 +1008,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     store
   )
   memRef = mem
+  mem.watchTx = (txid) => events.watch(txid)
   mem.ledger = ledger
   healLedgerOnProof(mem, ledger, net)
   // a reorg invalidates cached proofs at/above the fork: clear them and

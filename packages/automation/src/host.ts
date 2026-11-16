@@ -27,6 +27,10 @@ export interface AutomationHost extends MarketMemory {
   /** the chain observer's abandon horizon fired for a txid — the terminal
    *  verdict for a mint that was resubmitted but never mined */
   onTxAbandoned(cb: (txid: string) => void): void
+  /** register a txid this instance did not broadcast (e.g. a provision tx
+   *  paid by another agent) with the chain-event substrate so proof delivery
+   *  and the abandon horizon cover it */
+  watchTx?(txid: string): void
   txState(txid: string): Promise<'mined' | 'seen' | 'rejected' | 'unknown'>
   broadcastTx(tx: Transaction): Promise<BroadcastResult>
   operatorKey(): PrivateKey

@@ -404,6 +404,10 @@ export class NektarMemory {
    *  Set by the live runtime; each is a single attempt and never sleeps. */
   txLookup?: (txid: string) => Promise<import('@bsv/sdk').Transaction | undefined>
   proofLookup?: (txid: string) => Promise<import('@bsv/sdk').MerklePath | undefined>
+  /** registers interest with the chain-event substrate so proof delivery
+   *  and the abandon horizon cover a tx this instance did not broadcast
+   *  (an externally-paid provision tx, say) */
+  watchTx?: (txid: string) => void
   private txOps!: TxOps
   private anchorOps!: AnchorOps
   private identityOps!: IdentityOps

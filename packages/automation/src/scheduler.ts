@@ -96,7 +96,7 @@ export class Scheduler {
   async stop(): Promise<void> {
     this.stopped = true
     clearTimeout(this.timer)
-    await Promise.allSettled([...this.jobs.values()].map((e) => e.running))
+    await Promise.allSettled([...this.jobs.values()].flatMap((e) => (e.running !== undefined ? [e.running] : [])))
   }
 
   get isStopped(): boolean {

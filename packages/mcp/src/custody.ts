@@ -1,30 +1,17 @@
 // custody.ts — funding-UTXO lifecycle + spend construction extracted from
-// NektarMemory: takeFunding over the three funder shapes (StackFunder.take /
-// ReserveFunder.takeReserve / plain utxo peek), markSpent/addOwned
-// notifications, payInvoice (BEEF hand-off to a seller's settlePayment),
-// sendSats (one-call on-chain spend, wallet-custody buildOnly path), and the
-// fundingStatus read. The funder itself is the custody view chosen by the
-// runtime — file-backed reserve or the toolbox wallet.
-import { Transaction, LockingScript, MerklePath, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
+// NektarMemory: purpose-labeled takes over the Funds owner, payInvoice
+// (BEEF hand-off to a seller's settlePayment), sendSats (one-call on-chain
+// spend, wallet-custody buildOnly path), and the fundingStatus read. The
+// Funds impl is the custody view chosen by the runtime — wallet basket or
+// memory pool — and callers never mark spent or owned directly.
+import { Transaction, LockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import { unlockP2PKH, signerAddress, type SignerLike } from '@nektar/core'
-import type { FundingOut } from '@nektar/chain'
-
-/** the funder shapes callers hand us: testkit take(), reserve
- *  takeReserve(), or a bare utxos list — probed, not widened */
-interface FunderLike {
-  take?: (satoshis: number) => Promise<FundingOut>
-  takeReserve?: (
-    spendCheck?: (txid: string, vout: number) => Promise<boolean>,
-    minSats?: number,
-    skip?: (tx: Transaction, vout: number) => Promise<boolean>
-  ) => Promise<FundingOut | null>
-  utxos?: FundingOut[]
-  markSpent?: (txid: string, vout: number) => void
-  addOwned?: (tx: Transaction, vout: number) => void
-}
+import type { FundingOut, Funds, FundPurpose } from '@nektar/chain'
 
 export interface CustodyOpsDeps {
-  funder: FunderLike
+  /** the single owner of coin state — selection, reservation, spend marks,
+   *  abandonment and adoption live behind take/spent/died/adopt */
+  funds: Funds
   fundSigner: () => SignerLike
   broadcast: (tx: Transaction) => Promise<{ status: string; description?: string }>
   /** the instance's tx graph — broadcast spends land here so change/spend
@@ -46,10 +33,6 @@ export interface CustodyOpsDeps {
     | undefined
   network?: string
   feeRateSatPerKb?: number
-  /** the proof the instance already holds for a txid (verified on delivery
-   *  into TxStore) — attached to a funding parent so a tree minted on it can
-   *  serve zero-conf. Never a network lookup: hand over only what we hold. */
-  proofOf?: (txid: string) => MerklePath | undefined
   txStatus?: (txid: string) => Promise<string>
 }
 
@@ -68,42 +51,10 @@ export class CustodyOps {
     return (this.deps.network ?? 'main') === 'main' ? [0x00] : [0x6f]
   }
 
-  /** one funding outpoint from the fee reserve (StackFunder.take / ReserveFunder.takeReserve / peeked utxo) */
-  async takeFunding(satoshis: number): Promise<FundingOut> {
-    const f = this.deps.funder
-    let u: FundingOut | undefined
-    if (typeof f.take === 'function') u = await f.take(satoshis)
-    else if (typeof f.takeReserve === 'function') u = (await f.takeReserve(undefined, satoshis, this.deadParentSkip())) ?? undefined
-    u ??= (f.utxos ?? []).find((x) => (x.satoshis ?? 0) >= satoshis)
-    if (u === undefined) throw new Error('no funding UTXO available for the attestation tx')
-    // the proof travels with the funds: a path the instance already holds for
-    // the funding parent attaches here so a tree minted on it is anchored.
-    // Held stock only — never fetched, never overwritten.
-    if (u.tx.merklePath === undefined) {
-      const mp = this.deps.proofOf?.(u.tx.id('hex'))
-      if (mp !== undefined) u.tx.merklePath = MerklePath.fromBinary(mp.toBinary())
-    }
-    return u
-  }
-
-  /** Hint-only pass-over for this take call: a candidate whose parent the
-   *  broadcaster calls REJECTED/DOUBLE_SPEND is skipped, but the hint writes
-   *  nothing — custody state stays with first-party records. A proven tx (or
-   *  one we hold a proof for) is never queried. Errors don't skip. */
-  private deadParentSkip(): ((tx: Transaction, vout: number) => Promise<boolean>) | undefined {
-    const txStatus = this.deps.txStatus
-    if (txStatus === undefined) return undefined
-    return async (tx: Transaction): Promise<boolean> => {
-      if (tx.merklePath !== undefined) return false
-      const txid = tx.id('hex')
-      if (this.deps.proofOf?.(txid) !== undefined) return false
-      try {
-        const st = (await txStatus(txid)).toUpperCase()
-        return st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')
-      } catch {
-        return false
-      }
-    }
+  /** one reserved funding outpoint — take() holds it until spent() consumes
+   *  it or died()/release() frees it; purpose labels the allocation class */
+  async takeFunding(purpose: FundPurpose, satoshis: number): Promise<FundingOut> {
+    return await this.deps.funds.take(purpose, satoshis)
   }
 
   /** Bounded submit confirmation, not a wait loop: up to 3 reads (now,
@@ -129,26 +80,37 @@ export class CustodyOps {
     return undefined
   }
 
-  /** return a tx output to the reserve as owned (change/escrow outs) */
-  addOwnedOut(tx: Transaction, vout: number): void {
-    this.deps.funder.addOwned?.(tx, vout)
+  /** a successful broadcast consumed our inputs and made our change */
+  async spentTx(tx: Transaction): Promise<void> {
+    await this.deps.funds.spent(tx)
   }
-  /** mark a spent input against the reserve after broadcast */
-  markSpentOut(txid: string, vout: number): void {
-    this.deps.funder.markSpent?.(txid, vout)
+
+  /** the tx left our hands unbroadcast (an exported payment) — its inputs
+   *  are gone, but its change must NOT come back: an unbroadcast spend that
+   *  adopted its own change would mint phantom coins. If the tx ever lands,
+   *  the reconcile path adopts the live outputs. */
+  private async consumedInputs(tx: Transaction): Promise<void> {
+    for (const inp of tx.inputs) {
+      const txid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+      if (txid !== undefined) await this.deps.funds.drop(txid, inp.sourceOutputIndex)
+    }
+  }
+  /** coins sent to us by someone else */
+  async adoptOut(tx: Transaction, vout: number): Promise<void> {
+    await this.deps.funds.adopt(tx, vout)
   }
 
   /** fee-reserve status for the fundingStatus MCP tool — mem-side view only
    *  (address + tracked UTXOs); spend caps/runway live in ops.wallet() which
    *  the tool prefers when the runtime passes it through. */
   async fundingStatus(): Promise<{ address: string; balanceSats: number; utxos: number; funded: boolean }> {
-    const utxos = this.deps.funder.utxos ?? []
     const prefix = this.deps.network && this.deps.network !== 'main' ? [0x6f] : undefined
+    const balanceSats = await this.deps.funds.balance()
     return {
       address: await signerAddress(this.deps.fundSigner(), prefix),
-      balanceSats: utxos.reduce((s, u) => s + (u.satoshis ?? 0), 0),
-      utxos: utxos.length,
-      funded: utxos.length > 0
+      balanceSats,
+      utxos: (await this.deps.funds.list()).length,
+      funded: balanceSats > 0
     }
   }
 
@@ -158,7 +120,7 @@ export class CustodyOps {
     lockingScriptHex: string
     opReturn: string
   }): Promise<{ payment: { invoiceId: string; transaction: string }; txid: string }> {
-    const f = await this.takeFunding(inv.amount + 600)
+    const f = await this.takeFunding('deal', inv.amount + 600)
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.deps.fundSigner()) })
     tx.addOutput({ satoshis: inv.amount, lockingScript: LockingScript.fromHex(inv.lockingScriptHex) })
@@ -189,7 +151,7 @@ export class CustodyOps {
       )
       await ledger.setTxState(`owner:${txid}`, 'exported', { invoiceId: inv.invoiceId })
     }
-    this.markSpentOut(f.tx.id('hex'), f.vout)
+    await this.consumedInputs(tx)
     return { payment: { invoiceId: inv.invoiceId, transaction }, txid: tx.id('hex') }
   }
 
@@ -209,7 +171,7 @@ export class CustodyOps {
   }): Promise<{ txid: string; paidSats: number; tx?: Transaction; txHex?: string; utxo?: { txid: string; vout: number; satoshis: number; script: string } }> {
     if (!args.address && !args.scriptHex) throw new Error('sendSats: address or scriptHex required')
     const script = args.scriptHex ? LockingScript.fromHex(args.scriptHex) : new P2PKH().lock(args.address!)
-    const f = await this.takeFunding(args.amount + 600)
+    const f = await this.takeFunding('deal', args.amount + 600)
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.deps.fundSigner()) })
     tx.addOutput({ satoshis: args.amount, lockingScript: script })
@@ -226,12 +188,17 @@ export class CustodyOps {
       return { txid: utxo.txid, paidSats: args.amount, tx, txHex: tx.toHex(), utxo }
     }
     const br = await this.deps.broadcast(tx)
-    if (br.status !== 'success') throw new Error(`sendSats broadcast failed: ${br.description ?? 'unknown'}`)
+    if (br.status !== 'success') {
+      this.deps.funds.release(f.tx.id('hex'), f.vout)
+      throw new Error(`sendSats broadcast failed: ${br.description ?? 'unknown'}`)
+    }
     const rejected = await this.accepted(tx.id('hex'))
-    if (rejected !== undefined) throw new Error(`sendSats rejected after submit: ${rejected}`)
+    if (rejected !== undefined) {
+      this.deps.funds.release(f.tx.id('hex'), f.vout)
+      throw new Error(`sendSats rejected after submit: ${rejected}`)
+    }
     this.deps.txs(tx)
-    this.markSpentOut(f.tx.id('hex'), f.vout)
-    this.addOwnedOut(tx, tx.outputs.length - 1)
+    await this.spentTx(tx)
     return { txid: tx.id('hex'), paidSats: args.amount, txHex: tx.toHex(), utxo }
   }
 
@@ -251,7 +218,7 @@ export class CustodyOps {
     if (args.fundsSats !== undefined && (!Number.isInteger(args.fundsSats) || args.fundsSats < 546))
       throw new Error('provisionPay: fundsSats must be an integer >= 546')
     const total = args.outputs.reduce((s, o) => s + o.satoshis, 0) + (args.fundsSats ?? 0)
-    const f = await this.takeFunding(total + 600)
+    const f = await this.takeFunding('deal', total + 600)
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.deps.fundSigner()) })
     for (const o of args.outputs) tx.addOutput({ satoshis: o.satoshis, lockingScript: LockingScript.fromHex(o.scriptHex) })
@@ -260,12 +227,17 @@ export class CustodyOps {
     await tx.fee(new SatoshisPerKilobyte(this.deps.feeRateSatPerKb ?? 1))
     await tx.sign()
     const br = await this.deps.broadcast(tx)
-    if (br.status !== 'success') throw new Error(`provisionPay broadcast failed: ${br.description ?? 'unknown'}`)
+    if (br.status !== 'success') {
+      this.deps.funds.release(f.tx.id('hex'), f.vout)
+      throw new Error(`provisionPay broadcast failed: ${br.description ?? 'unknown'}`)
+    }
     const rejected = await this.accepted(tx.id('hex'))
-    if (rejected !== undefined) throw new Error(`provisionPay rejected after submit: ${rejected}`)
+    if (rejected !== undefined) {
+      this.deps.funds.release(f.tx.id('hex'), f.vout)
+      throw new Error(`provisionPay rejected after submit: ${rejected}`)
+    }
     this.deps.txs(tx)
-    this.markSpentOut(f.tx.id('hex'), f.vout)
-    this.addOwnedOut(tx, tx.outputs.length - 1)
+    await this.spentTx(tx)
     const fee = (f.tx.outputs[f.vout].satoshis ?? 0) - (tx.outputs[tx.outputs.length - 1].satoshis ?? 0) - total
     return { txid: tx.id('hex'), hex: tx.toHex(), outputs: tx.outputs.length - 1, fee }
   }

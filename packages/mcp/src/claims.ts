@@ -266,7 +266,7 @@ export class ClaimService {
     }
     const r = await this.mem.broadcastTx(tx)
     if (r.status !== 'success') throw new Error(`buyGated: ${r.description?.slice(0, 120)}`)
-    this.provider.markAccepted(tx)
+    await this.provider.markAccepted(tx)
     return { txid: tx.id('hex'), statement: 'gated buy executed — the verdict was consumed atomically with the payment' }
   }
 }

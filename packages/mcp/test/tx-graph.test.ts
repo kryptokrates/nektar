@@ -1,5 +1,5 @@
 // tx-graph.test.ts — the instance's transaction graph (TxStore) behind fetchTx.
-// On testnet/ttn/main the chain stub has no getTx: parents, BEEF for
+// On testnet/main the chain stub has no getTx: parents, BEEF for
 // counterparties and proofs all come from what the instance itself holds.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

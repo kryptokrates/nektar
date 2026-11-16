@@ -67,3 +67,49 @@ export interface Funder {
   take: (satoshis: number) => Promise<FundingOut>
   address: () => Promise<string> | string
 }
+
+/** Why a coin is being spent — the allocation floor differs by class: a
+ *  `deal` is a live settlement that must always find a spendable input;
+ *  `publish`/`upkeep` are background work that yields to deals. */
+export type FundPurpose = 'deal' | 'publish' | 'upkeep'
+
+/** The single owner of coin state: selection, reservation, spend marks,
+ *  abandonment and adoption. Callers never mark spent or owned directly —
+ *  they hand the whole transaction to `spent`/`died`/`adopt` and the
+ *  implementation decides which outpoints live or die. */
+export interface Funds {
+  /** address new funds are paid to */
+  address: () => Promise<string> | string
+  /** spendable balance in sats (spent and reserved outpoints excluded) */
+  balance: () => Promise<number>
+  /** reserve an output of ≥ `sats` for a `purpose` spend and hand over the
+   *  proof we hold. `upkeep`/`publish` may not dip the balance below the
+   *  floor that keeps one deal affordable. Throws when nothing fits. */
+  take: (purpose: FundPurpose, sats: number) => Promise<FundingOut>
+  /** one call after a successful broadcast: consumes our inputs, adopts
+   *  outputs that pay us (change and escrow returns). */
+  spent: (tx: Transaction) => void | Promise<void>
+  /** the spend was rejected or abandoned: its inputs free again where the
+   *  parent still lives, its outputs leave us for good. */
+  died: (txid: string) => void | Promise<void>
+  /** coins sent to us by someone else; refuses outpoints we already spent */
+  adopt: (tx: Transaction, vout: number) => void | Promise<void>
+  /** deliberately bring a tombstoned outpoint back — the caller verified it
+   *  is live on-chain (reconcile), so the spend-mark is lifted */
+  revive: (tx: Transaction, vout: number) => void | Promise<void>
+  /** the owned unspent set — for status views and watchlist seeding */
+  list: () => Promise<FundingOut[]>
+  /** owned unspent AND unreserved — the set take() may choose from */
+  available: () => Promise<FundingOut[]>
+  /** pull the backend's spendable view — wallet custody re-queries its
+   *  basket; in-memory stores are a no-op */
+  refresh?: () => Promise<void>
+  /** reserve a specific outpoint — named-output holds (fee vault, imports)
+   *  rather than letting take() choose. Returns false when another spend
+   *  already holds it — the caller must pick a different outpoint */
+  hold: (txid: string, vout: number) => boolean
+  /** un-reserve an outpoint — the spend built on it was never broadcast */
+  release: (txid: string, vout: number) => void
+  /** an outpoint left the owned set — observed spend consumed it on-chain */
+  drop: (txid: string, vout: number) => void | Promise<void>
+}

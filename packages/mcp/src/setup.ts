@@ -4,14 +4,15 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { P2PListener } from '@nektar/chain'
+import type { Funds } from '@nektar/chain'
 import type { Transaction } from '@bsv/sdk'
 import { unlockP2PKH, type SignerLike } from '@nektar/core'
 
-export interface ReserveLike {
-  utxos: Array<{ tx: Transaction; vout: number; satoshis: number }>
-  isSpent: (txid: string, vout: number) => boolean
-  markSpent: (txid: string, vout: number) => void
-  addOwned: (tx: Transaction, vout: number) => void
+/** the sync view wireP2p and the fee vault need over the Funds owner:
+ *  current owned set + a drop verb for observed spends */
+export interface UtxoView {
+  readonly utxos: Array<{ tx: Transaction; vout: number; satoshis: number }>
+  drop(txid: string, vout: number): void | Promise<void>
 }
 
 /** optional p2p eyes: watched outpoints fire 'spend', the fee-key script
@@ -20,7 +21,7 @@ export interface ReserveLike {
 export function wireP2p(opts: {
   peers: string[]
   pkhHex: string
-  reserve: ReserveLike
+  reserve: UtxoView
   addIfNew: (u: { tx: Transaction; vout: number }) => void
   log: (s: string) => void
 }): P2PListener | undefined {
@@ -34,8 +35,8 @@ export function wireP2p(opts: {
     scripts: new Set([fundPkhScript])
   })
   p2p.on('spend', (t, v, by) => {
-    if (!opts.reserve.isSpent(t, v)) {
-      opts.reserve.markSpent(t, v)
+    if (opts.reserve.utxos.some((u) => u.tx.id('hex') === t && u.vout === v)) {
+      void opts.reserve.drop(t, v)
       opts.log(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`)
     }
   })
@@ -63,7 +64,7 @@ export async function setupFeeVault(opts: {
   pkhHex: string
   fundKey: SignerLike
   fundAddress: string
-  reserve: ReserveLike
+  funds: Funds & UtxoView
   broadcast: (tx: Transaction) => Promise<{ status: string; description?: string }>
   currentHeight: () => Promise<number>
   net: string
@@ -96,8 +97,9 @@ export async function setupFeeVault(opts: {
   const saveVault = () => writeFileSync(vutxoFile, JSON.stringify({ current: vaultUtxo, minted: [...vaultMinted] }))
   const deployVault = async () => {
     const sats = vcfg.vaultSats ?? 50_000
-    const u = opts.reserve.utxos.find((x) => x.satoshis > sats + 600 && !opts.reserve.isSpent(x.tx.id('hex'), x.vout))
+    const u = opts.funds.utxos.find((x) => x.satoshis > sats + 600)
     if (!u) throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + 600} sats — fund ${opts.fundAddress}`)
+    opts.funds.hold(u.tx.id('hex'), u.vout)
     const tx = new Tx()
     tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: unlockP2PKH(opts.fundKey) })
     tx.addOutput({ satoshis: sats, lockingScript: LScript.fromHex(vault.lockingScript(0n, 0n)) })
@@ -105,8 +107,7 @@ export async function setupFeeVault(opts: {
     await tx.sign()
     const r = await opts.broadcast(tx)
     if (r.status !== 'success') throw new Error(`vault deploy refused: ${r.description}`)
-    opts.reserve.markSpent(u.tx.id('hex'), u.vout)
-    opts.reserve.addOwned(tx, 1)
+    await opts.funds.spent(tx)
     vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: sats, script: vault.lockingScript(0n, 0n) }
     saveVault()
     opts.log(
@@ -119,10 +120,10 @@ export async function setupFeeVault(opts: {
     const { tx } = await vault.buildSpend(vaultUtxo!, opts.fundKey, pay, await opts.currentHeight(), 2n)
     const r = await opts.broadcast(tx)
     if (r.status !== 'success') throw new Error(`vault spend refused: ${r.description}`)
-    opts.reserve.addOwned(tx, 2) // the 1-sat covenant change — reclaimable
+    await opts.funds.spent(tx)
+    await opts.funds.adopt(tx, 2) // the 1-sat covenant change — reclaimable
     const cont = tx.outputs[0]
     vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: cont.satoshis!, script: cont.lockingScript.toHex() }
-    opts.reserve.addOwned(tx, 1)
     vaultMinted.add(`${tx.id('hex')}:1`)
     saveVault()
     return { tx, vout: 1, satoshis: tx.outputs[1].satoshis! }
@@ -132,8 +133,11 @@ export async function setupFeeVault(opts: {
     // prefer an already-minted vault out sitting in the pool (e.g. orphaned
     // by a failed anchor build); otherwise mint a fresh capped one through
     // the covenant. Non-vault pool entries are never served for anchoring.
-    const pooled = opts.reserve.utxos.find((u) => vaultMinted.has(`${u.tx.id('hex')}:${u.vout}`) && !opts.reserve.isSpent(u.tx.id('hex'), u.vout))
-    if (pooled) return pooled
+    const pooled = opts.funds.utxos.find((u) => vaultMinted.has(`${u.tx.id('hex')}:${u.vout}`))
+    if (pooled) {
+      opts.funds.hold(pooled.tx.id('hex'), pooled.vout)
+      return pooled
+    }
     minting = minting.then(mint, mint)
     return (await minting) as { tx: Transaction; vout: number; satoshis: number }
   }

@@ -401,14 +401,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       mem.rememberTx(tx)
     },
     ownOutput: (tx, vout) => {
-      mem.addOwnedOut(tx, vout)
+      void mem.funds.adopt(tx, vout)
     },
     settleEscrow: (tx) => {
-      for (const inp of tx.inputs) {
-        const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-        if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0)
-      }
-      if (tx.outputs[1]) mem.addOwnedOut(tx, 1)
+      void (async () => {
+        await mem.funds.spent(tx)
+        if (tx.outputs[1]) await mem.funds.adopt(tx, 1)
+      })()
     },
     transport,
     ai: cfg.ai ?? aiFromEnv(),
@@ -854,12 +853,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // its ghost change output AND its inputs leave the spendable view: the
   // change out would otherwise be re-selected into the next mint (cascade)
   const ghostMint = (tree: import('@bsv/sdk').Transaction): void => {
-    const tid = tree.id('hex')
-    tree.outputs.forEach((_o, vout) => mem.markSpentOut(tid, vout))
-    for (const inp of tree.inputs) {
-      const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0)
-    }
+    void mem.funds.died(tree.id('hex'))
   }
   // stuck-mint healing — a mint the chain observer can't see ('unknown') gets
   // one resubmit per age window; only a definitive refusal counts toward the
@@ -935,19 +929,18 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               size: spec.size,
               satsPerOutput: spec.satsPerOutput,
               lock: kind === 'market' ? undefined : spec.lock,
-              takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0],
+              takeFunding: async (sats: number) => await mem.funds.take('upkeep', sats),
               broadcast: (tx) => mem.broadcastTx(tx),
               fetchTx: (txid) => mem.fetchTx(txid),
               txStatus,
               onReject: (tree) => ghostMint(tree),
               onStuck: (tree) => stuckMint(tree),
               onSpent: (tree) => {
-                for (const inp of tree.inputs) {
-                  const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-                  if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0)
-                }
-                const n = tree.outputs.length - 1
-                if (n >= 1 && (tree.outputs[n].satoshis ?? 0) > 0) mem.addOwnedOut(tree, n)
+                void (async () => {
+                  await mem.funds.spent(tree)
+                  const n = tree.outputs.length - 1
+                  if (n >= 1 && (tree.outputs[n].satoshis ?? 0) > 0) await mem.funds.adopt(tree, n)
+                })()
               }
             })
             // a fresh market tree's slots are usable the moment it's added —
@@ -993,18 +986,17 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               ...(cfg.watchPublic !== undefined ? { watch: cfg.watchPublic } : {})
             },
             refs: packsRef !== undefined ? [packsRef] : undefined,
-            takeFunding: async (sats: number) => (await mem.fundingOuts(sats))[0],
+            takeFunding: async (sats: number) => await mem.funds.take('publish', sats),
             broadcast: (tx) => mem.broadcastTx(tx),
             fetchTx: (txid) => mem.fetchTx(txid),
             allowHttp: localNet,
             now: cfg.now,
             onSpent: (tx) => {
-              for (const inp of tx.inputs) {
-                const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-                if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0)
-              }
-              const n = tx.outputs.length - 1
-              if (n >= 1 && (tx.outputs[n].satoshis ?? 0) > 0) mem.addOwnedOut(tx, n)
+              void (async () => {
+                await mem.funds.spent(tx)
+                const n = tx.outputs.length - 1
+                if (n >= 1 && (tx.outputs[n].satoshis ?? 0) > 0) await mem.funds.adopt(tx, n)
+              })()
             }
           })
           if (r.changed) log(`automation: finger seq ${r.seq} ${r.tokenTxid ?? ''}`)

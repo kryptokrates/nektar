@@ -9,7 +9,16 @@ const dsha256utf8 = (s: string) => dsha256(utf8(s))
 import { NektarMemory } from '@nektar/mcp'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
-import { TeranodeBroadcaster, TeranodeRPCTracker, merklePathFor, merklePathAtHeight, parseLegacyBlock, type RegtestConfig } from '@nektar/chain'
+import {
+  TeranodeBroadcaster,
+  TeranodeRPCTracker,
+  merklePathFor,
+  merklePathAtHeight,
+  parseLegacyBlock,
+  ReserveFunds,
+  fundsAsFunder,
+  type RegtestConfig
+} from '@nektar/chain'
 
 let failures = 0
 const check = (cond: boolean, name: string) => {
@@ -161,13 +170,17 @@ let treasuryTx: Transaction | null = null
     }
   }
 }
-const funder: any = {
+// one Funds owner over the file reserve — the funder-shaped surface below is
+// a harness adapter (take/markSpent/addOwned), not the contract
+const funds = new ReserveFunds(reserve, { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') })
+const funder = {
   keyPair: key,
-  get utxos() {
-    return reserve.utxos
-  },
+  funds,
+  parents: [] as Transaction[],
+  address: () => key.toPublicKey().toAddress([0x6f]),
+  take: async (s: number) => await funds.take('publish', s),
   markSpent: (t: string, v: number) => reserve.markSpent(t, v),
-  takeReserve: (sc?: unknown, min?: number) => reserve.takeReserve(sc as any, min)
+  addOwned: (tx: Transaction, v: number) => reserve.addOwned(tx, v)
 }
 const burstPool = reserve.utxos.slice(40) // own half of the pool
 
@@ -222,14 +235,9 @@ console.log('anchors broadcast + block mined')
 
 // --- ~20 anchor burst -------------------------------------------------------
 console.log('— 20-anchor burst —')
-const bF: any = {
-  keyPair: key,
-  get utxos() {
-    return reserve.utxos.slice(40)
-  },
-  markSpent: (t: string, v: number) => reserve.markSpent(t, v),
-  takeReserve: (sc?: unknown, min?: number) => reserve.takeReserve(sc as any, min)
-}
+// the burst pool slices the reserve's tail so its anchors never compete for
+// the main pool's coins — spent marks still land on the shared reserve
+const bF = fundsAsFunder(new ReserveFunds(reserve, { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') }, (outs) => outs.slice(40)), 'publish')
 const burst = new AnchorChain('burst', key, bF, key, chain)
 const t0 = Date.now()
 const burstIds: string[] = []

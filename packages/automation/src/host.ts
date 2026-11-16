@@ -1,5 +1,5 @@
 import type { ChainTracker, MerklePath, PrivateKey, Transaction, WalletInterface } from '@bsv/sdk'
-import type { BroadcastResult, FundingOut, Ingested } from '@nektar/chain'
+import type { BroadcastResult, Funds, Ingested } from '@nektar/chain'
 import type { ObjectRef, PacksStore } from '@nektar/store'
 import type { BudgetAuthority } from './budget.js'
 import type { MarketMemory } from './market.js'
@@ -35,10 +35,10 @@ export interface AutomationHost extends MarketMemory {
   broadcastTx(tx: Transaction): Promise<BroadcastResult>
   operatorKey(): PrivateKey
   operatorWallet(): OperatorWallet
-  fundingOuts(satoshis: number): Promise<FundingOut[]>
+  /** the single owner of the agent's coin state — purpose-labeled takes,
+   *  spent/died/adopt bookkeeping */
+  readonly funds: Funds
   fundingStatus(): Promise<{ address: string; balanceSats: number; utxos: number; funded: boolean }>
-  addOwnedOut(tx: Transaction, vout: number): void
-  markSpentOut(txid: string, vout: number): void
   chainHeight(): Promise<number>
   sdkTracker(): ChainTracker
   tipRef(): Promise<{ tip: string; tipHeight: number } | undefined>

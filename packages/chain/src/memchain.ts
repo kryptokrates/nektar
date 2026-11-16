@@ -10,6 +10,7 @@
 // delivered" exactly.
 import { Transaction, MerklePath, PrivateKey, P2PKH, Hash, UnlockingScript, Spend } from '@bsv/sdk'
 import type { BlockHeader, BroadcastResult, FundingOut, TxStatusEvent } from './interfaces.js'
+import { MemoryFunds, listFundsStore, type ListFundsStore } from './funds.js'
 import { ChainEvents } from './events.js'
 import { buildBump } from './bump.js'
 import { serializeHeader, headerPowValid } from './headers.js'
@@ -523,11 +524,16 @@ export class MemoryTreasury {
  *  it, so its outputs carry proofs only once mined (zeroconf parity) */
 export class MemoryFunder implements TestFunder {
   keyPair: PrivateKey
-  private utxos: FundingOut[] = []
+  /** the single owner of this funder's coin state — purpose-aware takes,
+   *  reservations, spent/died/adopt bookkeeping */
+  readonly funds: MemoryFunds
+  private readonly store: ListFundsStore
   private fundingTx?: Transaction
 
   private constructor(key: PrivateKey) {
     this.keyPair = key
+    this.store = listFundsStore()
+    this.funds = new MemoryFunds(this.store, { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') })
   }
 
   /** a funder with no utxos — take() always throws; no chain needed */
@@ -543,25 +549,32 @@ export class MemoryFunder implements TestFunder {
     // merklePathOf). Pre-mining here would hide the unproven-parent paths
     // production hits constantly.
     f.fundingTx = tx
-    for (let i = 0; i < outputs; i++) f.utxos.push({ tx, vout: i, satoshis: sats })
+    for (let i = 0; i < outputs; i++) await f.store.add(tx, i)
     return f
   }
 
+  /** harness take — a destructive grab ('deal'-purpose takes are exempt from
+   *  the floor). Purpose-aware callers go through `.funds`. */
   async take(satoshis: number): Promise<FundingOut> {
-    const i = this.utxos.findIndex((u) => u.satoshis >= satoshis)
+    const outs = this.store.list() as FundingOut[]
+    const i = outs.findIndex((u) => u.satoshis >= satoshis)
     if (i < 0) throw new Error('MemoryFunder: no utxo of that size')
-    return this.utxos.splice(i, 1)[0]!
+    const u = outs[i]!
+    await this.store.drop(u.tx.id('hex'), u.vout)
+    return u
   }
 
   markSpent(txid: string, vout: number): void {
-    const i = this.utxos.findIndex((u) => u.tx.id('hex') === txid && u.vout === vout)
-    if (i >= 0) this.utxos.splice(i, 1)
+    void this.store.drop(txid, vout)
   }
 
   /** return a broadcast tx's output to the pool (change/escrow outs) */
   addOwned(tx: Transaction, vout: number): void {
-    const o = tx.outputs[vout]
-    if (o !== undefined) this.utxos.push({ tx, vout, satoshis: o.satoshis ?? 0 })
+    void this.store.add(tx, vout)
+  }
+
+  get utxos(): FundingOut[] {
+    return this.store.list() as FundingOut[]
   }
 
   address(): string {

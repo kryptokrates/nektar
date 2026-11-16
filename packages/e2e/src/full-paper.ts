@@ -3,7 +3,7 @@
 // and the regtest e2e (Teranode) with the same code; only `settle` differs.
 import { PrivateKey, type Transaction } from '@bsv/sdk'
 import { utf8, toHex, hash160 } from '@nektar/core'
-import type { Broadcaster, ChainTracker, Funder } from '@nektar/chain'
+import type { Broadcaster, ChainTracker, TestFunder } from '@nektar/chain'
 import { NektarMemory } from '@nektar/mcp'
 import { canonicalizePolicySet } from '@nektar/policy'
 import { parseProgram } from '@nektar/datalog'
@@ -36,7 +36,7 @@ import {
 
 export interface PaperEnv {
   chain: Broadcaster & ChainTracker
-  funder: Funder
+  funder: TestFunder
   fundKey: PrivateKey
   /** mine and make the latest anchor of each shard provable (BUMP + confirm) */
   settle: (mem: NektarMemory, shards: string[]) => Promise<void>

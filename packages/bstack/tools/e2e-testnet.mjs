@@ -11,9 +11,9 @@
 // (bbox-host + nektar/blogs/finger modules, tracker=live chain shim):
 //   docker compose -p nektar-bstack-testnet -f deploy/bstack-sandbox/compose.testnet.yaml up -d
 //
-// Funding: NEKTAR_FUND_WIF wins; else .state/ttn-wif.txt; else the ttn-data
-//   keystore (.state/ttn-data/fee.key.json + NEKTAR_KEY_PASSPHRASE /
-//   .state/ttn-passphrase). The key must hold testnet UTXOs (~10k sats).
+// Funding: NEKTAR_FUND_WIF wins; else .state/testnet-wif.txt; else the
+//   testnet keystore (.state/testnet-data/fee.key.json + NEKTAR_KEY_PASSPHRASE /
+//   .state/testnet-passphrase). The key must hold testnet UTXOs (~10k sats).
 // Run: node packages/bstack/tools/e2e-testnet.mjs
 import { PrivateKey, Transaction, P2PKH } from '@bsv/sdk'
 import { BsvBroadcaster, WocTracker, discoverUtxos, merklePathMainnet } from '@nektar/chain'
@@ -64,12 +64,12 @@ const tracker = new WocTracker(cfg)
 
 function loadWif() {
   if (process.env.NEKTAR_FUND_WIF) return process.env.NEKTAR_FUND_WIF
-  const wifFile = fileURLToPath(stateFile('ttn-wif.txt'))
+  const wifFile = fileURLToPath(stateFile('testnet-wif.txt'))
   if (existsSync(wifFile)) return readFileSync(wifFile, 'utf8').trim()
-  const passFile = fileURLToPath(stateFile('ttn-passphrase'))
+  const passFile = fileURLToPath(stateFile('testnet-passphrase'))
   const pass = process.env.NEKTAR_KEY_PASSPHRASE ?? (existsSync(passFile) ? readFileSync(passFile, 'utf8').trim() : undefined)
-  const keyFile = fileURLToPath(stateFile('ttn-data/fee.key.json'))
-  if (!existsSync(keyFile)) throw new Error('no NEKTAR_FUND_WIF, no .state/ttn-wif.txt, no key file')
+  const keyFile = fileURLToPath(stateFile('testnet-data/fee.key.json'))
+  if (!existsSync(keyFile)) throw new Error('no NEKTAR_FUND_WIF, no .state/testnet-wif.txt, no key file')
   return import('../../mcp/dist/src/keystore.js').then((m) => JSON.parse(m.readKeyFile(keyFile, pass, true)).wif)
 }
 

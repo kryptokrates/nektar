@@ -304,6 +304,8 @@ import { existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { writeFileAtomic, nektarEnv } from '@nektar/core'
 import type { PrivateKey } from '@bsv/sdk'
+import { FundsBase, type FundsDeps, type FundsStore } from './funds.js'
+import type { FundingOut } from './interfaces.js'
 
 interface ReserveEntry {
   txid: string
@@ -374,6 +376,19 @@ export class ReserveFunder {
   markSpent(txid: string, vout: number): void {
     this.spent.add(this.op(txid, vout))
     this.utxos = this.utxos.filter((u) => this.op(u.tx.id('hex'), u.vout) !== this.op(txid, vout))
+    this.save()
+  }
+
+  /** Lift a spent mark and restore the recorded entry — the caller verified
+   *  the outpoint is live on-chain (a dead unbroadcast spend or an older
+   *  blanket purge must not lose a live output). */
+  unmark(txid: string, vout: number): void {
+    const op = this.op(txid, vout)
+    if (!this.spent.delete(op)) return
+    const e = this.entries.find((x) => this.op(x.txid, x.vout) === op)
+    if (e !== undefined && !this.utxos.some((u) => this.op(u.tx.id('hex'), u.vout) === op)) {
+      this.utxos.push({ tx: Transaction.fromHex(e.txHex), vout: e.vout, satoshis: e.satoshis })
+    }
     this.save()
   }
 
@@ -480,6 +495,34 @@ export class ReserveFunder {
     }
     this.save()
     return added
+  }
+}
+
+/** Funds owner over a file-backed ReserveFunder — the reserve's spent set is
+ *  the tombstone record, its entries the durable store. `pick` narrows which
+ *  candidates take() sees (e.g. the e2e burst pool slices the tail of the
+ *  reserve so its anchors never compete for the main pool's coins); spent
+ *  marks still land on the shared reserve. */
+export class ReserveFunds extends FundsBase {
+  protected readonly store: FundsStore
+  private reserve: ReserveFunder
+
+  constructor(reserve: ReserveFunder, deps: FundsDeps, pick?: (outs: FundingOut[]) => FundingOut[]) {
+    super(deps)
+    this.reserve = reserve
+    this.store = {
+      list: () => (pick !== undefined ? pick(reserve.utxos) : reserve.utxos),
+      has: (txid, vout) => reserve.utxos.some((u) => u.tx.id('hex') === txid && u.vout === vout),
+      add: (tx, vout) => reserve.addOwned(tx, vout),
+      drop: (txid, vout) => reserve.markSpent(txid, vout),
+      revive: (tx, vout) => reserve.unmark(tx.id('hex'), vout),
+      tombstoned: (txid, vout) => reserve.isSpent(txid, vout)
+    }
+  }
+
+  /** the custody view — the reserve's unspent candidates */
+  get utxos(): FundingOut[] {
+    return this.reserve.utxos
   }
 }
 

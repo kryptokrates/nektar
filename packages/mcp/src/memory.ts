@@ -61,8 +61,8 @@ import { ProofStore } from './proofstore.js'
 import { AutomatonChain, type AutomatonDef, type AutomatonHead } from '@nektar/automaton'
 import { buildProofBundle, verifyFragment, type ProofBundle, type AnchorLink, type VerifyResult } from '@nektar/verify'
 import { encryptFragment, decryptFragment, shredKey, type FragmentContext } from '@nektar/crypto'
-import { TxStore } from '@nektar/chain'
-import type { Broadcaster, ChainTracker, Funder } from '@nektar/chain'
+import { TxStore, fundsAsFunder } from '@nektar/chain'
+import type { Broadcaster, ChainTracker, Funder, Funds, FundPurpose } from '@nektar/chain'
 import * as idbind from '@nektar/identity'
 import { ZkProveOps } from './zkprove.js'
 
@@ -199,15 +199,27 @@ export class NektarMemory {
   private anchors = new Map<string, AnchorChain>()
   private tails = new Map<string, AnchorLink[]>()
   private anchorTxs = new Map<string, import('@bsv/sdk').Transaction>()
+  /** 'publish'-labeled Funder view over the Funds owner — feeds the
+   *  Funder-shaped chain wrappers (AnchorChain, AutomatonChain) */
+  private readonly funder: Funder
   private txidShard = new Map<string, string>()
+
+  readonly funds: Funds
 
   constructor(
     private chain: ChainTracker & Broadcaster,
-    private funder: Funder,
+    /** the single owner of this instance's coin state — a Funds impl, or a
+     *  test funder carrying one (its `funds` member is unwrapped). Takes are
+     *  purpose-labeled; spent/died/adopt carry the whole transaction */
+    owner: Funds | { funds: Funds },
     private fundKey: PrivateKey | undefined,
     private opts: NektarMemoryOptions = {},
     private store: ShardStore = new MemoryShardStore()
   ) {
+    this.funds = 'funds' in owner ? owner.funds : owner
+    // the Funder-shaped consumers (AnchorChain, AutomatonChain) see a
+    // purpose-labeled view — every take lands in 'publish' allocation class
+    this.funder = fundsAsFunder(this.funds, 'publish')
     if (opts.shardPubs !== undefined) this._shardPubs = opts.shardPubs instanceof Map ? new Map(opts.shardPubs) : new Map(Object.entries(opts.shardPubs))
     this.keyOps = new KeyOps({
       opts: this.opts,
@@ -222,7 +234,7 @@ export class NektarMemory {
       chain: this.chain,
       txs: () => this.txs,
       fetchTx: (t) => this.fetchTx(t),
-      takeFunding: (s) => this.takeFunding(s),
+      takeFunding: (s) => this.takeFunding('deal', s),
       fundKey: this.fundSigner(),
       bondOpts: () => this.opts.bond,
       network: this.opts.network,
@@ -302,12 +314,12 @@ export class NektarMemory {
     this.attestOps = new AttestOps({
       attestationTxs: this.attestationTxs,
       anchorTxs: this.anchorTxs,
-      takeFunding: (s) => this.takeFunding(s),
+      takeFunding: (s) => this.takeFunding('publish', s),
       fundSigner: () => this.fundSigner(),
       chain: this.chain,
       feeRateSatPerKb: () => this.opts.feeRateSatPerKb ?? 1,
-      markSpentOut: (t, v) => this.markSpentOut(t, v),
-      addOwnedOut: (tx, v) => this.addOwnedOut(tx, v),
+      spentTx: (tx) => this.spentTx(tx),
+      adoptOut: (tx, v) => this.adoptOut(tx, v),
       metricsInc: (n, l, x, h) => this.metrics.inc(n, l, x, h),
       proveMembership: (s, q, qid) => this.proveMembership(s, q, qid)
     })
@@ -359,11 +371,10 @@ export class NektarMemory {
       proofPullMs: Number(nektarEnv('NEKTAR_PROOF_PULL_MS') ?? 120_000)
     })
     this.custodyOps = new CustodyOps({
-      funder: this.funder as CustodyOpsDeps['funder'],
+      funds: this.funds,
       fundSigner: () => this.fundSigner(),
       broadcast: (tx) => this.chain.broadcast(tx),
       txs: (tx) => this.txs.put(tx),
-      proofOf: (txid) => this.txs.get(txid)?.merklePath,
       txStatus: this.opts.txStatus,
       ledger: () => this.ledger,
       network: this.opts.network,
@@ -580,10 +591,10 @@ export class NektarMemory {
     return this.keyOps.wrapCustody()
   }
   /** funding outs for covenant hosts (escrow deposits, covenant inputs) —
-   *  callers markSpent/addOwned after a successful broadcast like
-   *  anchorAttestation does. */
-  async fundingOuts(satoshis: number): Promise<import('@nektar/chain').FundingOut[]> {
-    const u = await this.takeFunding(satoshis)
+   *  purpose-labeled so the deal floor shields live settlements from
+   *  background work */
+  async fundingOuts(purpose: FundPurpose, satoshis: number): Promise<import('@nektar/chain').FundingOut[]> {
+    const u = await this.takeFunding(purpose, satoshis)
     return [u]
   }
   private custodyOps!: CustodyOps
@@ -609,13 +620,13 @@ export class NektarMemory {
   private canEncrypt(): boolean {
     return this.cryptoOps.canEncrypt()
   }
-  /** return a tx output to the reserve as owned (change/escrow outs) */
-  addOwnedOut(tx: import('@bsv/sdk').Transaction, vout: number): void {
-    this.custodyOps.addOwnedOut(tx, vout)
+  /** a successful broadcast consumed our inputs and made our change */
+  async spentTx(tx: import('@bsv/sdk').Transaction): Promise<void> {
+    await this.custodyOps.spentTx(tx)
   }
-  /** mark a spent input against the reserve after broadcast */
-  markSpentOut(txid: string, vout: number): void {
-    this.custodyOps.markSpentOut(txid, vout)
+  /** coins sent to us by someone else */
+  async adoptOut(tx: import('@bsv/sdk').Transaction, vout: number): Promise<void> {
+    await this.custodyOps.adoptOut(tx, vout)
   }
   /** current chain height for locktime-gated covenant calls */
   async chainHeight(): Promise<number> {
@@ -848,10 +859,10 @@ export class NektarMemory {
   // anchor: no shard state, no contract. Off-chain WASM verify stays
   // authoritative; the chain only timestamps the commitment.
   private attestationTxs = new Map<string, import('@bsv/sdk').Transaction>()
-  /** one funding outpoint from the fee reserve — CustodyOps probes the
-   *  three funder shapes (StackFunder.take / takeReserve / peeked utxo) */
-  private async takeFunding(satoshis: number): Promise<import('@nektar/chain').FundingOut> {
-    return await this.custodyOps.takeFunding(satoshis)
+  /** one reserved funding outpoint — purpose-labeled, held by take() until
+   *  spent() consumes it or died()/release() frees it */
+  private async takeFunding(purpose: FundPurpose, satoshis: number): Promise<import('@nektar/chain').FundingOut> {
+    return await this.custodyOps.takeFunding(purpose, satoshis)
   }
 
   /** fee-reserve status for the fundingStatus MCP tool — mem-side view only

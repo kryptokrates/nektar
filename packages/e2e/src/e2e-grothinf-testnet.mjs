@@ -3,8 +3,8 @@
 //   broadcast:  BSV Broadcaster testnet (NEKTAR_BROADCASTER_URL overridable)
 //   discovery:  WhatsOnChain testnet index (NEKTAR_WOC_URL overridable)
 //
-// Funding: NEKTAR_FUND_WIF wins; otherwise the encrypted ttn-data keystore
-//   (.state/ttn-data/fee.key.json + .state/ttn-passphrase, or
+// Funding: NEKTAR_FUND_WIF wins; otherwise the encrypted testnet keystore
+//   (.state/testnet-data/fee.key.json + .state/testnet-passphrase, or
 //   NEKTAR_KEY_PASSPHRASE) — the key must hold a testnet UTXO.
 //
 // Unlike regtest we CANNOT mine: after broadcast we poll WoC for block
@@ -42,8 +42,9 @@ const tracker = new WocTracker(cfg)
 // --- key -------------------------------------------------------------------
 function loadWif() {
   if (process.env.NEKTAR_FUND_WIF) return process.env.NEKTAR_FUND_WIF
-  const pass = process.env.NEKTAR_KEY_PASSPHRASE ?? (existsSync('.state/ttn-passphrase') ? readFileSync('.state/ttn-passphrase', 'utf8').trim() : undefined)
-  const keyFile = process.env.NEKTAR_FEE_KEY_FILE ?? '.state/ttn-data/fee.key.json'
+  const pass =
+    process.env.NEKTAR_KEY_PASSPHRASE ?? (existsSync('.state/testnet-passphrase') ? readFileSync('.state/testnet-passphrase', 'utf8').trim() : undefined)
+  const keyFile = process.env.NEKTAR_FEE_KEY_FILE ?? '.state/testnet-data/fee.key.json'
   if (!existsSync(keyFile)) throw new Error(`no NEKTAR_FUND_WIF and no key file at ${keyFile}`)
   return JSON.parse(readKeyFile(keyFile, pass, true)).wif
 }

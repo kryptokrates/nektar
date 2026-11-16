@@ -1,15 +1,15 @@
 {
   "packages": {
     "anchor": {
-      "loc": 1199,
+      "loc": 1194,
       "pkgFanout": 4,
       "edges": ["chain", "contracts", "core", "identity"],
-      "maxFileLoc": 622,
+      "maxFileLoc": 617,
       "maxFileFanout": 8,
       "instability": 0.444
     },
     "automation": {
-      "loc": 7130,
+      "loc": 7118,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 2013,
@@ -33,11 +33,11 @@
       "instability": 0.667
     },
     "chain": {
-      "loc": 4724,
+      "loc": 4841,
       "pkgFanout": 1,
       "edges": ["core"],
-      "maxFileLoc": 828,
-      "maxFileFanout": 23,
+      "maxFileLoc": 838,
+      "maxFileFanout": 25,
       "instability": 0.1
     },
     "contracts": {
@@ -73,7 +73,7 @@
       "instability": 0.2
     },
     "e2e": {
-      "loc": 5710,
+      "loc": 5581,
       "pkgFanout": 14,
       "edges": ["anchor", "automaton", "chain", "contracts", "core", "datalog", "graph", "identity", "log", "mcp", "policy", "reasoning", "verify", "zk"],
       "maxFileLoc": 1006,
@@ -105,7 +105,7 @@
       "instability": 0.333
     },
     "mcp": {
-      "loc": 11147,
+      "loc": 11084,
       "pkgFanout": 16,
       "edges": [
         "anchor",
@@ -125,7 +125,7 @@
         "verify",
         "zk"
       ],
-      "maxFileLoc": 2016,
+      "maxFileLoc": 2015,
       "maxFileFanout": 35,
       "instability": 0.941
     },
@@ -184,7 +184,7 @@
       "fanout": 11
     },
     "packages/automation/src/runtime.ts": {
-      "loc": 1532,
+      "loc": 1524,
       "fanout": 16
     },
     "packages/automation/src/store.ts": {
@@ -196,12 +196,12 @@
       "fanout": 8
     },
     "packages/chain/src/index.ts": {
-      "loc": 66,
-      "fanout": 23
+      "loc": 69,
+      "fanout": 25
     },
     "packages/chain/src/testkit.ts": {
-      "loc": 828,
-      "fanout": 8
+      "loc": 838,
+      "fanout": 9
     },
     "packages/e2e/src/scenarios/real-stack.mjs": {
       "loc": 1006,
@@ -212,15 +212,15 @@
       "fanout": 10
     },
     "packages/mcp/src/memory.ts": {
-      "loc": 1971,
+      "loc": 1982,
       "fanout": 35
     },
     "packages/mcp/src/runtime.ts": {
-      "loc": 1441,
+      "loc": 1391,
       "fanout": 20
     },
     "packages/mcp/src/server.ts": {
-      "loc": 2016,
+      "loc": 2015,
       "fanout": 14
     }
   },

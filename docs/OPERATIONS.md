@@ -373,22 +373,18 @@ publicShards:[{shard, records, packUrl, import}]}` enumerating what the
   the same way.
   Verified on real chains by `packages/e2e/src/e2e-pay.mjs`:
   `NEKTAR_NETWORK=regtest node packages/e2e/src/e2e-pay.mjs` (local
-  Teranode) and `NEKTAR_NETWORK=ttn NEKTAR_DATA_DIR=<funded dir>
+  Teranode) and `NEKTAR_NETWORK=testnet NEKTAR_DATA_DIR=<funded dir>
 NEKTAR_KEY_PASSPHRASE=… node packages/e2e/src/e2e-pay.mjs` (public
   testnet) — payer funding tx, 402 invoice, signed settlement broadcast
   by real consensus, receipt commits the txid, `paid` check green,
   replay rejected.
-  `packages/e2e/src/e2e-pay-remote.mjs` drives a DEPLOYED server over
-  the public wire (`NEKTAR_REMOTE_URL` + `NEKTAR_HTTP_TOKEN`): MCP
-  remember → auto-anchor → 402 → locally signed BEEF settlement →
-  public `/v1/verify` → tx visible via BSV Broadcaster.
   Hosted demo: the Hetzner box (`nektar.run`) runs
-  `NEKTAR_NETWORK=ttn` with a funded `fee.key.json` reserve (3M sats,
+  `NEKTAR_NETWORK=testnet` with a funded `fee.key.json` reserve (3M sats,
   `NEKTAR_FUND_TXIDS=hex:<rawtx>` offline import — the tx wasn't indexed
   at the lookup endpoints yet) and `NEKTAR_PAYMENTS=1`. Anchors are real
   public testnet txs; payments settle to the operator address for real.
   Regtest caveat: settlement is recorded on the local chain, not
-  consensus-validated — real payment semantics need regtest/ttn/main.
+  consensus-validated — real payment semantics need regtest/testnet/main.
 - **Access audit log (GOAL-v8 D6, opt-in):** `NEKTAR_ACCESS_LOG=1`
   appends timestamped `{event:'decrypt'|'traverse', shard, seq, caller}`
   records to the `__access__` shard, which anchors like any other shard.
@@ -410,13 +406,11 @@ NEKTAR_KEY_PASSPHRASE=… node packages/e2e/src/e2e-pay.mjs` (public
 - **Receipt model binding (GOAL-v8 D7):** configure
   `model:{id, params, weightsHash}` on the instance; receipts carry it
   (plus per-call `modelParams`) inside the signed digest.
-- TTN (Teranode Test Net — test coins, `NEKTAR_NETWORK=ttn`):
-  - Endpoints: BSV Broadcaster (ARC-compatible) `https://arcade-v2-ttn-us-1.bsvblockchain.tech`, WoC-TTN `https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` (`openLiveRuntime`) — SpendGuard caps, encrypted keys, WoC merkle paths.
+- Public testnet (test coins, `NEKTAR_NETWORK=testnet`):
+  - Endpoints: BSV Broadcaster (ARC-compatible) `https://arcade-v2-testnet-us-1.bsvblockchain.tech`, WoC `https://api.whatsonchain.com/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` (`openLiveRuntime`) — SpendGuard caps, encrypted keys, WoC merkle paths.
   - Differences from main: **no** `NEKTAR_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (broadcaster policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); no broadcast fallback beyond WoC `/tx/raw`; confirm interval 30 s.
-  - No faucet on TTN — coins come from the community/bsv.dev testcoin channel. The fee-key address is printed to stderr at startup.
-  - Read-only smoke (no spend): `pnpm ttn:readonly` — broadcaster policy, WoC tip, header root check, and a real merkle path for a recent coinbase verified with `merklePath.verify(txid, tracker)`.
-  - Funded pilot: `NEKTAR_DATA_DIR=.ttn-pilot NEKTAR_KEY_PASSPHRASE=… NEKTAR_NETWORK=ttn pnpm ttn:pilot` — remember→anchor→BUMP→prove→append→rotate→restart-no-fork, with explorer links and per-tx fees from `ops.costs()`.
-  - Docker MCP profile: `pnpm mcp:install --ttn` registers `nektar_ttn`.
+  - No faucet — coins come from a testnet faucet or the community testcoin channel. The fee-key address is printed to stderr at startup.
+  - Funded run: `NEKTAR_DATA_DIR=.testnet NEKTAR_KEY_PASSPHRASE=… NEKTAR_NETWORK=testnet node packages/mcp/dist/src/bin.js`.
 - ZK proving:
   - **The nektar Docker image ships the prover** (`/usr/local/bin/nektar-stark` + `r0vm`, `NEKTAR_STARK_PROVER` preset). Its build stage fails if the rebuilt program id differs from the pinned one.
   - Outside Docker, use the `nektar-stark-build` image (`pnpm stark:image` + `pnpm stark:build`) or point `NEKTAR_STARK_PROVER` at a native binary.

@@ -631,7 +631,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
             return send(200, {
               x402Version: 2,
               scheme: 'exact',
-              network: n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest',
+              network: n === 'main' ? 'bsv:mainnet' : n === 'testnet' ? 'bsv:testnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest',
               resources: [...PAID_TOOLS].map((t) => ({
                 url: `tool://${t}`,
                 description: `nektar ${t}`,
@@ -752,7 +752,7 @@ async function verifyPage(
   const netLabel =
     net === 'main'
       ? 'BSV mainnet — real coins'
-      : net === 'ttn'
+      : net === 'testnet'
         ? 'BSV public testnet — real transactions, test coins'
         : net === 'regtest'
           ? 'local Teranode regtest'
@@ -807,7 +807,7 @@ async function verifyPage(
       ? 'https://whatsonchain.com'
       : net === 'stn'
         ? 'https://stn.whatsonchain.com'
-        : net === 'ttn' || net === 'test'
+        : net === 'testnet' || net === 'test'
           ? 'https://test.whatsonchain.com'
           : null
   const anchorUrl = explorer && r.anchorTxid ? `${explorer}/tx/${r.anchorTxid}` : null

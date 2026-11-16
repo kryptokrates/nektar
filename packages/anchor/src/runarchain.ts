@@ -28,22 +28,10 @@ export interface AnchorOptions {
   feeRateSatPerKb?: number
 }
 
-// Spent outpoints and spendable change are tracked PER FUNDER, not per
-// provider: several AnchorChains (one per shard) share one funder, and each
-// must see what the others already spent.
-interface FunderBook {
-  spent: Set<string>
-  owned: Map<string, RUTXO>
-}
-const books = new WeakMap<object, FunderBook>()
-function bookFor(funder: object): FunderBook {
-  let b = books.get(funder)
-  if (!b) {
-    b = { spent: new Set(), owned: new Map() }
-    books.set(funder, b)
-  }
-  return b
-}
+// Coin state has ONE owner — the Funds behind the funder: selection,
+// reservations and spend marks live in take/hold/spent/died there. The
+// provider only keeps which outpoint IT currently holds so repeated
+// getUtxos calls for one build hand back the same coin.
 
 /** every ancestor of tx in dependency order (parents before children) via
  *  sourceTransaction links — the order a missing-ancestors broadcast heal
@@ -74,9 +62,11 @@ export class NektarProvider implements Provider {
   lastTx?: Transaction
   constructor(
     public broadcaster: Broadcaster,
-    private funder: Funder,
+    private funder: Funder & { funds?: import('@nektar/chain').Funds },
     public funderAddress?: string
-  ) {}
+  ) {
+    this.funds = (funder as { funds?: import('@nektar/chain').Funds }).funds
+  }
   /** called on every broadcast attempt AND again on success. */
   onAttempt?: (tx: Transaction) => void
   onSuccess?: (tx: Transaction) => void
@@ -113,12 +103,7 @@ export class NektarProvider implements Provider {
     if (this.lastTx && this.lastTx.id('hex') === txid) return this.lastTx.toHex()
     return this.recent.get(txid)?.toHex() ?? ''
   }
-  private get spent(): Set<string> {
-    return bookFor(this.funder).spent
-  }
-  private get owned(): Map<string, RUTXO> {
-    return bookFor(this.funder).owned
-  } // outpoint -> spendable output we created
+  readonly funds?: import('@nektar/chain').Funds
 
   /** the tx as it was last presented for broadcast — success or failure. */
   lastAttempt?: Transaction
@@ -137,33 +122,23 @@ export class NektarProvider implements Provider {
     this.onAttempt?.(tx) // record BEFORE the outcome — an ambiguous accept must be findable
     const res = await this.broadcaster.broadcast(tx)
     if (res.status !== 'success') throw new Error(res.description ?? 'broadcast failed')
-    return this.markAccepted(tx)
+    return await this.markAccepted(tx)
   }
 
   /** Book-keeping for a tx the network accepted — on a direct success AND
-   *  when an earlier ambiguous attempt is adopted or re-broadcast: its inputs
-   *  are spent (in the shared per-funder book and the funder itself) and our
-   *  own P2PKH change outputs become spendable. */
-  markAccepted(tx: Transaction): string {
-    // record spent outpoints + our own spendable change outputs — mark them in
-    // the funder too, so a peeking reserve stops handing them out
-    for (const inp of tx.inputs) {
-      const stx = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      if (stx != null) {
-        this.spent.add(`${stx}:${inp.sourceOutputIndex ?? 0}`)
-        ;(this.funder as any).markSpent?.(stx, inp.sourceOutputIndex ?? 0)
+   *  when an earlier ambiguous attempt is adopted or re-broadcast: custody
+   *  records the whole tx at once (inputs leave the owned set, our P2PKH
+   *  change returns), and the provider's own hold clears. */
+  async markAccepted(tx: Transaction): Promise<string> {
+    const held = this.held
+    if (held !== undefined) {
+      for (const inp of tx.inputs) {
+        const stx = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+        if (stx === held.txid && (inp.sourceOutputIndex ?? 0) === held.outputIndex) this.held = undefined
       }
     }
+    await this.funds?.spent(tx)
     const txid = tx.id('hex')
-    const fundScript = new P2PKH().lock(this.funderAddress ?? '').toHex()
-    tx.outputs.forEach((o, vout) => {
-      const script = o.lockingScript.toHex()
-      // spendable only if it's the funder's own P2PKH script
-      if (script === fundScript) {
-        this.owned.set(`${txid}:${vout}`, { txid, outputIndex: vout, satoshis: o.satoshis ?? 0, script })
-        ;(this.funder as any).addOwned?.(tx, vout) // return change to the reserve
-      }
-    })
     // record AFTER success only — a failed tx must never shadow its own parent.
     // Keep the ORIGINAL object (mine()/confirm() attach merklePath to it); the
     // 2.8.11→4.0.1 normalization happens in beefOf().
@@ -172,30 +147,49 @@ export class NektarProvider implements Provider {
     this.onSuccess?.(tx)
     return txid
   }
+  /** the outpoint this provider holds for its in-flight build — runar calls
+   *  getUtxos repeatedly per tx, and a fresh take each call would starve the
+   *  reserve and strand earlier reservations. The hold is released by
+   *  markAccepted (the spend consumed it) or when the out leaves the owned
+   *  set (a reconcile found it spent). */
+  held?: { txid: string; outputIndex: number; satoshis: number; script: string; tx: Transaction }
+  /** every candidate a getUtxos scan returned — EF source hydration for
+   *  funding inputs whose outpoint came through this provider */
+  readonly known = new Map<string, Transaction>()
   async getUtxos(_address: string): Promise<RUTXO[]> {
-    // hand runar the single largest live candidate — it becomes exactly one
-    // funding input. smallest-first starved on a small change output while
-    // big reserve entries sat unused; a list >1 makes runar add every entry
-    // as an input (wasteful), and change lives in BOTH the funder and the
-    // owned book, so the merge must dedupe by outpoint or the tx repeats
-    // inputs and is invalid.
-    const all = ((this.funder as any).utxos as Array<{ tx: Transaction; vout: number; satoshis: number }> | undefined) ?? []
-    const byOut = new Map<string, { txid: string; outputIndex: number; satoshis: number; script: string; tx?: Transaction }>()
-    for (const u of all) {
-      byOut.set(`${u.tx.id('hex')}:${u.vout}`, {
-        txid: u.tx.id('hex'),
-        outputIndex: u.vout,
-        satoshis: u.satoshis ?? u.tx.outputs[u.vout].satoshis!,
-        script: u.tx.outputs[u.vout].lockingScript.toHex(),
-        tx: u.tx
-      })
+    const funds = this.funds
+    if (funds === undefined) throw new Error('NektarProvider: the funder carries no Funds owner — pass a Funds-backed funder')
+    if (this.held !== undefined) {
+      const { txid, outputIndex, satoshis, script } = this.held
+      const live = await funds.list()
+      if (live.some((u) => u.tx.id('hex') === txid && u.vout === outputIndex)) {
+        return [{ txid, outputIndex, satoshis, script }]
+      }
+      this.held = undefined // consumed or dropped — pick anew
     }
-    for (const u of this.owned.values()) if (!byOut.has(`${u.txid}:${u.outputIndex}`)) byOut.set(`${u.txid}:${u.outputIndex}`, u)
-    const free = [...byOut.values()].filter((u) => !this.spent.has(`${u.txid}:${u.outputIndex}`))
-    if (free.length === 0) return []
-    const u = free.reduce((a, b) => (b.satoshis > a.satoshis ? b : a))
-    if (u.tx) this.taken.set(u.txid, u.tx)
-    return [{ txid: u.txid, outputIndex: u.outputIndex, satoshis: u.satoshis, script: u.script }]
+    // hand runar the single largest available candidate — it becomes exactly
+    // one funding input. smallest-first starved on a small change output
+    // while big reserve entries sat unused; a list >1 makes runar add every
+    // entry as an input (wasteful).
+    const cands = await funds.available()
+    for (const u of cands) this.known.set(u.tx.id('hex'), u.tx)
+    while (cands.length > 0) {
+      const u = cands.reduce((a, b) => (b.satoshis > a.satoshis ? b : a))
+      if (funds.hold(u.tx.id('hex'), u.vout)) {
+        this.held = {
+          txid: u.tx.id('hex'),
+          outputIndex: u.vout,
+          satoshis: u.satoshis,
+          script: u.tx.outputs[u.vout].lockingScript.toHex(),
+          tx: u.tx
+        }
+        this.taken.set(u.tx.id('hex'), u.tx)
+        const { txid, outputIndex, satoshis, script } = this.held
+        return [{ txid, outputIndex, satoshis, script }]
+      }
+      cands.splice(cands.indexOf(u), 1) // another chain leased it — next largest
+    }
+    return []
   }
   taken = new Map<string, Transaction>()
   async getContractUtxo(_scriptHash: string): Promise<RUTXO | null> {
@@ -334,8 +328,8 @@ export class AnchorChain {
   /** Accept a tx as the new head: mark its inputs spent / change spendable,
    *  register it, decode its continuation output. Used for direct successes,
    *  identical re-broadcasts and adopted earlier attempts alike. */
-  private acceptHead(tx: Transaction): AnchorResult {
-    this.provider.markAccepted(tx)
+  private async acceptHead(tx: Transaction): Promise<AnchorResult> {
+    await this.provider.markAccepted(tx)
     this.register(tx)
     const dec = decodeNektarAnchor(tx.outputs[0].lockingScript.toHex())
     if (!dec) throw new Error('accepted tx: continuation output did not decode')
@@ -367,12 +361,12 @@ export class AnchorChain {
       } catch (e) {
         const msg = String((e as Error).message)
         const adopted = this.ownSpenderOfHead(msg)
-        if (adopted) return this.acceptHead(adopted)
+        if (adopted) return await this.acceptHead(adopted)
         const sm = /([0-9a-f]{64}):(\d+) utxo already spent/.exec(msg)
         const h = this.getHead()
         if (sm && (!h || `${sm[1]}:${sm[2]}` !== `${h.tx.id('hex')}:${h.vout}`)) {
-          ;(this.funder as any).markSpent?.(sm[1], Number(sm[2]))
-          bookFor(this.funder).spent.add(`${sm[1]}:${sm[2]}`)
+          void this.provider.funds?.drop(sm[1], Number(sm[2]))
+          if (this.provider.held?.txid === sm[1] && this.provider.held.outputIndex === Number(sm[2])) this.provider.held = undefined
           this.contract = undefined
           if (attempt >= 5) throw e
           continue
@@ -399,10 +393,10 @@ export class AnchorChain {
           } catch {
             res = undefined
           }
-          if (res?.status === 'success') return this.acceptHead(attemptTx)
+          if (res?.status === 'success') return await this.acceptHead(attemptTx)
           const inner = res?.status === 'error' ? (res.description ?? '') : ''
           const adoptedInner = this.ownSpenderOfHead(inner)
-          if (adoptedInner) return this.acceptHead(adoptedInner)
+          if (adoptedInner) return await this.acceptHead(adoptedInner)
           if (inner && !/TX_MISSING_PARENT/.test(inner)) throw new Error(inner, { cause: e })
         }
         throw e
@@ -569,9 +563,10 @@ export class AnchorChain {
   }
   private register(tx: Transaction): void {
     // attach source parents for BEEF completeness: funding inputs come from
-    // the funder; the contract input comes from the tracked head chain
-    const fundUtxos = new Map<string, Transaction>(this.provider.taken)
-    for (const u of ((this.funder as any).utxos ?? []) as Array<{ tx: Transaction; vout: number }>) fundUtxos.set(u.tx.id('hex'), u.tx)
+    // what the provider handed out or saw; the contract input comes from
+    // the tracked head chain
+    const fundUtxos = new Map<string, Transaction>(this.provider.known)
+    for (const [id, t] of this.provider.taken) fundUtxos.set(id, t)
     for (const inp of tx.inputs) {
       if (inp.sourceTransaction) continue
       const txid = inp.sourceTXID

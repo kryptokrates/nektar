@@ -30,7 +30,7 @@ const PROVER_TOOLS = new Set(['proveMembership', 'proveSubset', 'proveDerivation
 
 const networkTag = (): string => {
   const n = nektarEnv('NEKTAR_NETWORK') ?? 'regtest'
-  return n === 'main' ? 'bsv:mainnet' : n === 'ttn' ? 'bsv:teratestnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest'
+  return n === 'main' ? 'bsv:mainnet' : n === 'testnet' ? 'bsv:testnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest'
 }
 
 /** the operator's settlement key when NEKTAR_OPERATOR_WIF is set — its
@@ -229,7 +229,7 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   // raw hex OR BEEF: BEEF carries the funding parents — needed by script
   // validation and supplied to Teranode as Extended
   // Format. Bare legacy hex is fine when the network already knows the
-  // parents (mainnet/ttn broadcasts, tests with registered parents).
+  // parents (mainnet/testnet broadcasts, tests with registered parents).
   let tx: Transaction
   try {
     const h = String(payment.transaction ?? '').replace(/^0x/, '')

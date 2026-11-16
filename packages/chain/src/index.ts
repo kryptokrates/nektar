@@ -8,6 +8,7 @@ export {
   parseLegacyBlock,
   merkleRootOf,
   ReserveFunder,
+  ReserveFunds,
   merklePathAtHeight,
   bootstrapReserve,
   utxoStatus,
@@ -38,6 +39,8 @@ export { testTier, testWorld, testChain, testFunder, dryFunder, stackOnly } from
 export type { TestTier, TestChain, TestFunder } from './testworld.js'
 export { MemoryChain, MemoryTreasury, MemoryFunder, memoryTreasury } from './memchain.js'
 export type { MemoryChainFaults } from './memchain.js'
+export { FundsBase, MemoryFunds, listFundsStore, fundsAsFunder } from './funds.js'
+export type { FundsStore, FundsDeps, ListFundsStore } from './funds.js'
 export { SpendGuard } from './spendguard.js'
 export type { SpendGuardOpts, CostRecord } from './spendguard.js'
 export type { PathResult } from './mainnet.js'

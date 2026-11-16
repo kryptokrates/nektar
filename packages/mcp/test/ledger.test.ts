@@ -57,7 +57,7 @@ test('ledger: payInvoice exports a signed tx whose input stays leased — no pha
   assert.equal(await store.leasedOutpoint(inputTxid, 0), true, 'the exported input is leased')
   assert.equal((await store.leasedOutpoint(r.txid, 2)) ?? false, false)
   assert.equal((funder as any).utxos.length, 0, 'no unbroadcast change was added back to the reserve')
-  await assert.rejects(mem.payInvoice({ ...inv, invoiceId: 'i2' }), /no utxo|no funding UTXO/)
+  await assert.rejects(mem.payInvoice({ ...inv, invoiceId: 'i2' }), /no utxo|no funding UTXO|no spendable output/)
   await kx.destroy()
 })
 

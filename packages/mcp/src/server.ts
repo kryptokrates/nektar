@@ -872,8 +872,7 @@ const MUTATING_TOOLS = new Set([
 ])
 
 function settleEscrow(mem: NektarMemory, funding: Array<{ tx: import('@bsv/sdk').Transaction; vout: number }>, tx: import('@bsv/sdk').Transaction): void {
-  for (const inp of funding) mem.markSpentOut(inp.tx.id('hex'), inp.vout)
-  if (tx.outputs[1]) mem.addOwnedOut(tx, 1)
+  void mem.spentTx(tx)
 }
 
 export async function callTool(mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
@@ -1128,7 +1127,7 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
         refundAfter: BigInt(args.cfg.refundAfter),
         maxFee: BigInt(args.cfg.maxFee)
       })
-      const funding = await mem.fundingOuts(args.amount + 500)
+      const funding = await mem.fundingOuts('deal', args.amount + 500)
       const { tx, utxo, feeSats } = await host.buildEscrow(funding, mem.operatorKey(), args.amount, undefined, mem.feeRateSatPerKb)
       if (isBuild) return { tx, txHex: tx.toHex(), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh }, feeSats }
       const r = await mem.broadcastTx(tx)

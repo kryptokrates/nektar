@@ -1,6 +1,6 @@
 # Demo — a paid, provable AI answer in five minutes
 
-Live deployment: `https://nektar.run` — `NEKTAR_NETWORK=ttn`
+Live deployment: `https://nektar.run` — `NEKTAR_NETWORK=testnet`
 (public BSV testnet: real transactions, test coins), `NEKTAR_PAYMENTS=1`.
 
 What the audience sees: an AI answers a question, pays the operator in
@@ -72,6 +72,6 @@ A worked example minted on 2026-11-03 (still verifiable):
 ## If the demo box is down
 
 `systemctl status nektar-http` on the box, or `journalctl -u
-nektar-http -n 50`. The data dir `/opt/nektar/.nektar-ttn` persists
+nektar-http -n 50`. The data dir `/opt/nektar/.nektar-testnet` persists
 records, anchors, keys and the reserve across restarts — a restart
 loses nothing.

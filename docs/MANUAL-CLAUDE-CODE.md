@@ -143,7 +143,7 @@ claude mcp add --transport http nektar http://localhost:8080/mcp
 and verify, anchors exist on the regtest ledger (honest caveat: they
 aren't on a public chain). Every feature works; it's the right way to
 explore before touching real coins. `NEKTAR_NETWORK=regtest` upgrades to
-a local Teranode; `ttn` to the public testnet.
+a local Teranode; `testnet` to the public testnet.
 
 ---
 

@@ -2,7 +2,7 @@
 // NEKTAR_WALLET=toolbox → the BRC-100 wallet owns the funding-UTXO lifecycle
 // (reserve.json seeds once, then selection/spent/change live in wallet
 // storage) → mem.remember → mem.anchorShard broadcasts through
-// ToolboxReserveFunder.takeReserve, not the file-backed ReserveFunder.
+// WalletFunds.take, not the file-backed ReserveFunder.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH } from '@bsv/sdk'
@@ -56,8 +56,8 @@ test('toolbox custody: openRuntime defaults to the wallet — anchor spends thro
   )
 
   // the money path: remember → close batch → anchor broadcast — the anchor's
-  // funding input is taken through ToolboxReserveFunder.takeReserve (the
-  // wallet's own UTXO selection), not the legacy file reserve
+  // funding input is taken through WalletFunds.take (the wallet's own UTXO
+  // selection), not the legacy file reserve
   const r = await rt.mem.remember('s', 'toolbox-funded record')
   assert.equal(r.seq, 0, 'remember commits seq 0')
   const a = await rt.mem.anchorShard('s')

@@ -94,24 +94,13 @@ test('anchor: unconfirmed chain + burst back-pressure', async (t) => {
   assert.equal(ac.getHead()!.data.n, 3)
 })
 
-test('burst: 20 anchors with reserve-style funder pass script verification', async (t) => {
+test('burst: 20 anchors with Funds-backed funder pass script verification', async (t) => {
   const w = await testWorld(t, 30, 10_000)
   if (w === undefined) return
   const { chain, funder: f } = w
-  // emulate ReserveFunder: hand out each parent exactly once
-  const pool = [...(f as any).utxos]
-  const spentSet = new Set<string>()
-  const bf: any = {
-    keyPair: f.keyPair,
-    takeReserve: async () => pool.find((u) => !spentSet.has(u.tx.id('hex') + ':' + u.vout)) ?? null,
-    markSpent: (t: string, v: number) => {
-      spentSet.add(t + ':' + v)
-    },
-    get utxos() {
-      return pool
-    }
-  }
-  const ac = new AnchorChain('b', f.keyPair, bf, f.keyPair, chain)
+  // the provider resolves f.funds — take is a non-destructive hold, spent(tx)
+  // consumes the accepted parent, so each anchor gets a distinct outpoint
+  const ac = new AnchorChain('b', f.keyPair, f, f.keyPair, chain)
   for (let i = 0; i < 20; i++) {
     try {
       await ac.anchor(1, new Uint8Array(32).fill(i))

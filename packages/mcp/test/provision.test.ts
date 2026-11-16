@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
-import { CustodyOps, type CustodyOpsDeps } from '../src/custody.js'
+import { MemoryFunds, listFundsStore } from '@nektar/chain'
+import { CustodyOps } from '../src/custody.js'
 
 const key = PrivateKey.fromRandom()
 const addr = key.toPublicKey().toAddress()
@@ -14,33 +15,25 @@ const parent = (sats: number): Transaction => {
 
 const laneLock = (): string => new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress()).toHex()
 
-// fake custody deps; provisionPay may not exist yet — the cast keeps the
-// file compiling ahead of the method
-interface ProvisionPay {
-  provisionPay?: (args: { outputs: Array<{ satoshis: number; scriptHex: string }>; address?: string; fundsSats?: number }) => Promise<{
-    txid: string
-    hex: string
-    outputs: number
-    fee: number
-  }>
-}
-const mk = (): { ops: CustodyOps & ProvisionPay; aired: () => Transaction | undefined } => {
+const mk = (): { ops: CustodyOps; aired: () => Transaction | undefined } => {
   let aired: Transaction | undefined
+  const store = listFundsStore()
+  const coin = parent(1_000_000)
+  store.add(coin, 0)
   const ops = new CustodyOps({
-    funder: { take: async () => ({ tx: parent(1_000_000), vout: 0, satoshis: 1_000_000 }) },
+    funds: new MemoryFunds(store, { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') }),
     fundSigner: () => key,
     broadcast: async (tx: Transaction) => {
       aired = tx
       return { status: 'success' }
     },
     txs: () => {}
-  } as CustodyOpsDeps) as CustodyOps & ProvisionPay
+  })
   return { ops, aired: () => aired }
 }
 
 test('provisionPay: plan bounds are enforced', async () => {
   const { ops } = mk()
-  assert.ok(ops.provisionPay !== undefined, 'custody must expose provisionPay')
   const pay = ops.provisionPay.bind(ops)
   await assert.rejects(pay({ outputs: [] }), /at least one output/)
   await assert.rejects(pay({ outputs: Array.from({ length: 1001 }, () => ({ satoshis: 1, scriptHex: laneLock() })) }), /1000/)
@@ -59,7 +52,7 @@ test('provisionPay: one tx carries every lane output plus the P2PKH funds leg an
     { satoshis: 100, scriptHex: lockA },
     { satoshis: 100, scriptHex: lockB }
   ]
-  const r = await ops.provisionPay!({ outputs, address: addr, fundsSats: 10_000 })
+  const r = await ops.provisionPay({ outputs, address: addr, fundsSats: 10_000 })
   const tx = aired()!
   assert.ok(tx !== undefined, 'tx must reach broadcast')
   assert.equal(tx.id('hex'), r.txid)

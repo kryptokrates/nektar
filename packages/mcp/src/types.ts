@@ -59,7 +59,7 @@ export interface NektarMemoryOptions {
   requireSignedProvenance?: boolean
   /** network the instance runs on — used for the funding-address prefix in
    *  fundingStatus (testnet-family → 0x6f). Optional; absent = mainnet prefix. */
-  network?: 'regtest' | 'testnet' | 'main' | 'ttn'
+  network?: 'regtest' | 'testnet' | 'main'
   /** chain-observer seam (live networks) — lets txState ask the
    *  broadcaster's /tx/{txid} verdict when the local view can't decide;
    *  injected by the runtime (`fetchTxStatus` in @nektar/chain) */

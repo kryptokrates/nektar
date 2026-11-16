@@ -152,7 +152,7 @@ env = { NEKTAR_NETWORK = "regtest" }
 `regtest` runs on the local Teranode stack (`pnpm stack:up`) — receipts mint
 and verify, anchors exist on the regtest ledger (honest caveat: they
 aren't on a public chain). `NEKTAR_NETWORK=regtest` upgrades to a local
-Teranode; `ttn` to the public testnet.
+Teranode; `testnet` to the public testnet.
 
 ## The receipt auto-check (optional, local runs)
 

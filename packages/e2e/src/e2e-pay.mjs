@@ -1,10 +1,10 @@
-// Real-chain payment e2e. Spins the full runtime (regtest or ttn),
+// Real-chain payment e2e. Spins the full runtime (regtest or testnet),
 // funds an INDEPENDENT payer key on-chain, runs the paid-call flow:
 //   402 invoice → signed tx paying the operator + OP_RETURN tag → settled by
 //   real consensus → receipt commits the settlement txid → /v1/verify green.
 // Run:
 //   regtest: node packages/e2e/src/e2e-pay.mjs           (local Teranode stack)
-//   ttn:     NEKTAR_NETWORK=ttn node packages/e2e/src/e2e-pay.mjs  (public testnet)
+//   testnet: NEKTAR_NETWORK=testnet node packages/e2e/src/e2e-pay.mjs  (public testnet)
 import { PrivateKey } from '@bsv/sdk'
 import { configFromEnv, openRuntime } from '../../mcp/dist/src/runtime.js'
 import { createHttpApi } from '../../mcp/dist/src/http.js'
@@ -113,12 +113,12 @@ if (net === 'regtest') {
   payerUtxos.push({ tx: send, vout: 0, satoshis: paySats })
   console.log(` payer ${payerAddr} funded by regtest tx ${send.id('hex').slice(0, 20)}…`)
 } else {
-  // ttn: payer is funded by a real send from the runtime's fund key — the
+  // testnet: payer is funded by a real send from the runtime's fund key — the
   // funding tx itself is a real public testnet tx. The live funder must be
   // told the entry is spent and the change is owned again, else the next
   // anchor hits UTXO_SPENT on a drained reserve.
   const { readKeyFile } = await import('../../mcp/dist/src/keystore.js')
-  const pass = process.env.NEKTAR_KEY_PASSPHRASE ?? readFileSync(new URL('../../../.state/ttn-passphrase', import.meta.url), 'utf8').trim()
+  const pass = process.env.NEKTAR_KEY_PASSPHRASE ?? readFileSync(new URL('../../../.state/testnet-passphrase', import.meta.url), 'utf8').trim()
   const rawKey = process.env.NEKTAR_FUND_WIF ?? readKeyFile(`${process.env.NEKTAR_DATA_DIR}/fee.key.json`, pass, true)
   const fundWif = rawKey.trim().startsWith('{') ? JSON.parse(rawKey).wif : rawKey.trim()
   const fundKey = PrivateKey.fromWif(fundWif)
@@ -127,7 +127,7 @@ if (net === 'regtest') {
   const reserve = JSON.parse(readFileSync(`${process.env.NEKTAR_DATA_DIR}/reserve.json`, 'utf8'))
   const spent = new Set(reserve.spent ?? [])
   const entry = (reserve.entries ?? []).find((e) => !spent.has(`${e.txid}:${e.vout}`) && e.satoshis > 5000)
-  if (!entry) throw new Error('no spendable reserve entry in ttn data dir')
+  if (!entry) throw new Error('no spendable reserve entry in testnet data dir')
   const ftx = Transaction.fromHex(entry.txHex)
   const send = new Transaction()
   send.addInput({ sourceTransaction: ftx, sourceOutputIndex: entry.vout, unlockingScriptTemplate: new P2PKH().unlock(fundKey) })
@@ -136,12 +136,15 @@ if (net === 'regtest') {
   await send.fee()
   await send.sign()
   const bc = await rt.mem.broadcastTx(send)
-  check(bc.status === 'success', `payer funding broadcast — ${send.id('hex').slice(0, 16)}… ${bc.status === 'success' ? '(public ttn tx)' : bc.description}`)
+  check(
+    bc.status === 'success',
+    `payer funding broadcast — ${send.id('hex').slice(0, 16)}… ${bc.status === 'success' ? '(public testnet tx)' : bc.description}`
+  )
   const fund = rt.mem.funder
   fund.markSpent(entry.txid, entry.vout)
   fund.addOwned(send, send.outputs.length - 1)
   payerUtxos.push({ tx: send, vout: 0, satoshis: 3000 })
-  console.log(` payer ${payerAddr} funded by ttn tx ${send.id('hex').slice(0, 20)}…`)
+  console.log(` payer ${payerAddr} funded by testnet tx ${send.id('hex').slice(0, 20)}…`)
 }
 
 // ── a fragment to cite, anchored for real
@@ -186,11 +189,11 @@ if (net === 'regtest') {
   const res = await fetch(`${rc.assetUrl}/tx/${txid}`).catch(() => null)
   check(!!res?.ok, `payment tx resolvable via Teranode asset API (${res?.status ?? 'unreachable'})`)
 } else {
-  const bcast = process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
+  const bcast = process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
   const st = await fetch(`${bcast}/tx/${txid}`)
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null)
-  check(!!st?.txid || !!st?.txStatus, `payment tx visible on TTN (${st?.txStatus ?? 'pending'})`)
+  check(!!st?.txid || !!st?.txStatus, `payment tx visible on testnet (${st?.txStatus ?? 'pending'})`)
 }
 
 // ── 4) independent verify → 'paid' line green

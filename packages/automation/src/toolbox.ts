@@ -23,6 +23,7 @@ import { Beef, Hash, MerklePath, PrivateKey, Transaction, Utils, type ChainTrack
 import { Services, Setup, StorageKnex, Wallet, WalletStorageManager, randomBytesHex, sdk } from '@bsv/wallet-toolbox'
 import {
   TeranodeRPCTracker,
+  FundsBase,
   merklePathFor,
   merklePathAtHeight,
   merklePathMainnet,
@@ -31,6 +32,8 @@ import {
   type BroadcastResult,
   type Funder,
   type FundingOut,
+  type FundsDeps,
+  type FundsStore,
   type MainnetConfig,
   type RegtestConfig
 } from '@nektar/chain'
@@ -579,22 +582,52 @@ export class LiveWalletServices implements sdk.WalletServices {
 
 // ── reserve-funder shape over wallet storage ────────────────────────────────
 
-/** Drop-in for the `funder` object openLiveRuntime builds over reserve.json.
- *  Same semantics: `take`/`takeReserve` is a NON-destructive peek (smallest
- *  sufficient, lease-filtered, optional spendCheck); `markSpent` lands after
- *  broadcast and relinquishes the output from the wallet's default basket;
- *  `addOwned` internalizes a freshly-created own output. `utxos` is a sync
- *  cache refreshed on every `take` — the async wallet list is the truth. */
-export class ToolboxReserveFunder {
-  leased?: (txid: string, vout: number) => Promise<boolean>
-  private cache: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
+/** The wallet-backed `Funds` owner: `take` reserves a non-destructive peek
+ *  (smallest sufficient, lease-filtered, optional spendCheck) over the
+ *  wallet's default basket; `spent(tx)` relinquishes consumed outputs and
+ *  internalizes our change via `internalizeAction`; `adopt`/`revive`
+ *  internalize live outputs; `drop` relinquishes dead weight. `utxos` is a
+ *  sync cache refreshed on every `take` — the async wallet list is the
+ *  truth. */
+export class WalletFunds extends FundsBase {
+  private cache: FundingOut[] = []
+  /** outpoints we dropped this process — lets `died` tell "consumed by the
+   *  dead spend" (revive) vs "never ours" (leave). Restart honesty comes
+   *  from the first-party spentByUs check, not a persisted tombstone. */
+  private readonly dropped = new Set<string>()
+  protected readonly store: FundsStore
+
   constructor(
     private wallet: Wallet,
-    private services?: Pick<sdk.WalletServices, 'getRawTx' | 'getMerklePath'>,
-    private log: (s: string) => void = () => {}
-  ) {}
+    private services: Pick<sdk.WalletServices, 'getRawTx' | 'getMerklePath'> | undefined,
+    deps: FundsDeps & { log?: (s: string) => void }
+  ) {
+    super(deps)
+    const log = deps.log ?? (() => {})
+    this.store = {
+      list: async () => {
+        await this.refresh()
+        return this.cache
+      },
+      has: async (txid, vout) => this.cache.some((u) => u.tx.id('hex') === txid && u.vout === vout) || (await this.has(txid, vout)),
+      add: (tx, vout) => this.internalizePush(tx, vout, log),
+      drop: (txid, vout) => {
+        this.cache = this.cache.filter((u) => !(u.tx.id('hex') === txid && u.vout === vout))
+        this.dropped.add(`${txid}:${vout}`)
+        // basket removal is the honest equivalent — a spent wallet outpoint
+        // must never be offered again. Fire-and-forget: the automation
+        // ledger's outpoint lease covers the async gap.
+        void this.wallet.relinquishOutput({ basket: NEKTAR_BASKET, output: `${txid}.${vout}` }).catch(() => {})
+      },
+      revive: async (tx, vout) => {
+        this.dropped.delete(`${tx.id('hex')}:${vout}`)
+        await this.internalizePush(tx, vout, log)
+      },
+      tombstoned: (txid, vout) => this.dropped.has(`${txid}:${vout}`)
+    }
+  }
 
-  get utxos(): Array<{ tx: Transaction; vout: number; satoshis: number }> {
+  get utxos(): FundingOut[] {
     return this.cache
   }
 
@@ -610,42 +643,6 @@ export class ToolboxReserveFunder {
       })
   }
 
-  async takeReserve(
-    spendCheck?: (txid: string, vout: number) => Promise<boolean>,
-    minSats?: number,
-    skip?: (tx: Transaction, vout: number) => Promise<boolean>
-  ): Promise<{ tx: Transaction; vout: number; satoshis: number } | null> {
-    const floor = minSats ?? 546
-    await this.refresh()
-    for (const u of this.cache.filter((x) => x.satoshis >= floor).sort((a, b) => a.satoshis - b.satoshis)) {
-      const txid = u.tx.id('hex')
-      if (this.leased !== undefined && (await this.leased(txid, u.vout))) continue
-      // a hint-only pass-over — nothing is relinquished or marked
-      if (skip !== undefined && (await skip(u.tx, u.vout))) continue
-      if (spendCheck !== undefined && (await spendCheck(txid, u.vout))) {
-        this.markSpent(txid, u.vout)
-        continue
-      }
-      return u
-    }
-    return null
-  }
-
-  markSpent(txid: string, vout: number): void {
-    this.cache = this.cache.filter((u) => !(u.tx.id('hex') === txid && u.vout === vout))
-    // basket removal is the honest equivalent — a spent wallet outpoint must
-    // never be offered again. Fire-and-forget: the automation ledger's
-    // outpoint lease covers the async gap.
-    void this.wallet.relinquishOutput({ basket: NEKTAR_BASKET, output: `${txid}.${vout}` }).catch(() => {})
-  }
-
-  /** ReserveLike parity: "not custody-known" ≈ "spent" — the wallet's
-   *  spendable set is the truth, so an outpoint absent from it is never a
-   *  candidate. Matches ReserveFunder's isSpent for every watched outpoint. */
-  isSpent(txid: string, vout: number): boolean {
-    return !this.cache.some((u) => u.tx.id('hex') === txid && u.vout === vout)
-  }
-
   /** Whether the wallet already custodies this outpoint — lets boot seeding
    *  skip re-internalizing outputs that survived a restart. */
   async has(txid: string, vout: number): Promise<boolean> {
@@ -653,18 +650,17 @@ export class ToolboxReserveFunder {
     return r.outputs.some((o) => o.outpoint === `${txid}.${vout}`)
   }
 
-  /** Returns the internalize promise so boot-seeding can serialize (WoC rate
-   *  limits) and callers that don't care can ignore it fire-and-forget. */
-  addOwned(tx: Transaction, vout: number): Promise<void> {
+  private internalizePush(tx: Transaction, vout: number, log: (s: string) => void): Promise<void> {
     if (this.cache.some((u) => u.tx.id('hex') === tx.id('hex') && u.vout === vout)) return Promise.resolve()
     // cache only what the wallet actually accepted — an optimistic add made
     // utxos report funding the wallet never held (the 60-utxo silent-fail
     // class: internalize errors were logged while the cache lied)
     return this.internalize(tx, vout)
       .then(() => {
+        this.dropped.delete(`${tx.id('hex')}:${vout}`)
         this.cache.push({ tx, vout, satoshis: tx.outputs[vout].satoshis ?? 0 })
       })
-      .catch((e) => this.log(`toolbox internalize ${tx.id('hex')}.${vout}: ${e instanceof Error ? e.message : String(e)}`))
+      .catch((e) => log(`walletfunds internalize ${tx.id('hex')}.${vout}: ${e instanceof Error ? e.message : String(e)}`))
   }
 
   private async internalize(tx: Transaction, vout: number): Promise<void> {

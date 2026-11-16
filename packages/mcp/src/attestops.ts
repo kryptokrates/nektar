@@ -15,8 +15,11 @@ export interface AttestOpsDeps {
   fundSigner: () => DigestSigner
   chain: Broadcaster
   feeRateSatPerKb: () => number
-  markSpentOut: (txid: string, vout: number) => void
-  addOwnedOut: (tx: Transaction, vout: number) => void
+  /** one call after a successful broadcast: consumes our inputs, adopts our
+   *  change — replaces the old markSpentOut/addOwnedOut pair */
+  spentTx: (tx: Transaction) => void | Promise<void>
+  /** coins sent to us by someone else */
+  adoptOut: (tx: Transaction, vout: number) => void | Promise<void>
   metricsInc: (name: string, labels?: Record<string, string>, n?: number, help?: string) => void
   proveMembership: (shard: string, seq: number, queryIdHex: string) => Promise<{ bytes: Uint8Array; ms: number }>
 }
@@ -30,12 +33,11 @@ export class AttestOps {
     const { buildAttestationTx, attestationCommitment } = await import('./onchain.js')
     const commitment = attestationCommitment(proofBytes)
     const f = await this.deps.takeFunding(5_000)
-    const { tx, changeVout } = await buildAttestationTx(f, this.deps.fundSigner(), commitment, this.deps.feeRateSatPerKb())
+    const { tx } = await buildAttestationTx(f, this.deps.fundSigner(), commitment, this.deps.feeRateSatPerKb())
     const r = await this.deps.chain.broadcast(tx)
     if (r.status !== 'success') throw new Error(`attestation broadcast failed: ${r.description}`)
     this.deps.attestationTxs.set(tx.id('hex'), tx)
-    this.deps.markSpentOut(f.tx.id('hex'), f.vout)
-    this.deps.addOwnedOut(tx, changeVout)
+    await this.deps.spentTx(tx)
     this.deps.metricsInc('nektar_anchors_total', {}, 1, 'anchors broadcast')
     return { txid: tx.id('hex'), commitment: toHex(commitment) }
   }
@@ -77,15 +79,14 @@ export class AttestOps {
     await tx1.sign()
     const b1 = await this.deps.chain.broadcast(tx1)
     if (b1.status !== 'success') throw new Error(`verifier deploy failed: ${b1.description}`)
-    this.deps.markSpentOut(f.tx.id('hex'), f.vout)
-    this.deps.addOwnedOut(tx1, 1)
+    await this.deps.spentTx(tx1)
     this.deps.attestationTxs.set(tx1.id('hex'), tx1)
     const tx2 = new Transaction()
     tx2.addInput({ sourceTransaction: tx1, sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(unlockHex) })
     tx2.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: LOCK_SATS - 5_000 })
     const b2 = await this.deps.chain.broadcast(tx2)
     if (b2.status !== 'success') throw new Error(`proof spend failed: ${b2.description}`)
-    this.deps.addOwnedOut(tx2, 0)
+    await this.deps.spentTx(tx2)
     this.deps.attestationTxs.set(tx2.id('hex'), tx2)
     return { deployTxid: tx1.id('hex'), spendTxid: tx2.id('hex') }
   }

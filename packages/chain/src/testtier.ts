@@ -3,7 +3,7 @@
 // those three may depend on this file without an import cycle.
 import { nektarEnv } from '@nektar/core'
 import type { MerklePath, PrivateKey, Transaction } from '@bsv/sdk'
-import type { BlockHeader, BroadcastResult, Broadcaster, ChainTracker, Funder, TxStatusEvent } from './interfaces.js'
+import type { BlockHeader, BroadcastResult, Broadcaster, ChainTracker, Funder, Funds, TxStatusEvent } from './interfaces.js'
 import type { ChainEvents } from './events.js'
 
 export type TestTier = 'memory' | 'stack' | 'testnet'
@@ -37,6 +37,10 @@ export interface TestChain extends ChainTracker, Broadcaster {
 export interface TestFunder extends Funder {
   keyPair: PrivateKey
   address(): string
+  /** the single owner of this funder's coin state — purpose-aware takes and
+   *  spent/died/adopt bookkeeping; `take`/`markSpent`/`addOwned` below are
+   *  the harness shorthand, not the contract */
+  readonly funds: Funds
   markSpent(txid: string, vout: number): void
   addOwned(tx: Transaction, vout: number): void
   readonly parents: Transaction[]

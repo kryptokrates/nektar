@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Beef, MerklePath, PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
-import { LiveWalletServices, ToolboxReserveFunder } from '../src/toolbox.js'
+import { LiveWalletServices, WalletFunds } from '../src/toolbox.js'
 
 // Mock BRC-100 wallet: listOutputs serves a canned spendable set + the BEEF
 // the class rebuilds Transaction objects from. internalize/relinquish are
@@ -40,8 +40,10 @@ const mkWallet = (outs: Out[], beef: number[]) => {
     }
   }
 }
+const PKH = '00'.repeat(20)
+const mkFunds = (wallet: unknown, services?: unknown, log?: (s: string) => void) => new WalletFunds(wallet as never, services as never, { pkhHex: PKH, log })
 
-test('ToolboxReserveFunder: refresh maps spendable basket outputs to txs', async () => {
+test('WalletFunds: refresh maps spendable basket outputs to txs', async () => {
   const a = fundingTx(1000)
   const b = fundingTx(500)
   const beef = a.toBEEF()
@@ -52,19 +54,17 @@ test('ToolboxReserveFunder: refresh maps spendable basket outputs to txs', async
     ],
     beef
   )
-  const f = new ToolboxReserveFunder(w.wallet as never)
+  const f = mkFunds(w.wallet)
   await f.refresh()
   assert.equal(f.utxos.length, 1) // non-spendable filtered out
   assert.equal(f.utxos[0].tx.id('hex'), a.id('hex'))
-  assert.equal(f.isSpent(a.id('hex'), 0), false)
-  assert.equal(f.isSpent(b.id('hex'), 0), true) // absent from spendable set
   assert.equal(await f.has(a.id('hex'), 0), true)
 })
 
 // spv/proofless-funding: a BEEF whose entry carries the tx BUMP hands the
 // utxo out WITH its merkle path — the bare-hex rebuild used to strip it, and
 // every tree minted on that utxo lost its zero-conf anchor
-test('ToolboxReserveFunder: refresh keeps the merkle path a proven BEEF carries', async () => {
+test('WalletFunds: refresh keeps the merkle path a proven BEEF carries', async () => {
   const a = fundingTx(1000)
   a.merklePath = new MerklePath(7, [
     [
@@ -73,23 +73,23 @@ test('ToolboxReserveFunder: refresh keeps the merkle path a proven BEEF carries'
     ]
   ])
   const w = mkWallet([{ outpoint: `${a.id('hex')}.0`, satoshis: 1000, spendable: true }], a.toBEEF())
-  const f = new ToolboxReserveFunder(w.wallet as never)
+  const f = mkFunds(w.wallet)
   await f.refresh()
   assert.equal(f.utxos.length, 1)
   assert.ok(f.utxos[0].tx.merklePath !== undefined, 'the BEEF-carried proof must survive refresh')
   assert.equal(f.utxos[0].tx.merklePath?.blockHeight, 7)
 })
 
-test('ToolboxReserveFunder: refresh leaves an unproven tx pathless', async () => {
+test('WalletFunds: refresh leaves an unproven tx pathless', async () => {
   const a = fundingTx(1000)
   const w = mkWallet([{ outpoint: `${a.id('hex')}.0`, satoshis: 1000, spendable: true }], a.toBEEF())
-  const f = new ToolboxReserveFunder(w.wallet as never)
+  const f = mkFunds(w.wallet)
   await f.refresh()
   assert.equal(f.utxos.length, 1)
   assert.equal(f.utxos[0].tx.merklePath, undefined)
 })
 
-test('ToolboxReserveFunder: takeReserve honors lease, spendCheck and minSats', async () => {
+test('WalletFunds: take honors lease, deadParent and the sats bound', async () => {
   const a = fundingTx(700)
   const b = fundingTx(900)
   const c = fundingTx(300)
@@ -101,33 +101,38 @@ test('ToolboxReserveFunder: takeReserve honors lease, spendCheck and minSats', a
     ],
     mergedBeef(a, b, c)
   )
-  const f = new ToolboxReserveFunder(w.wallet as never)
-  await f.refresh()
-  // c is below the 546 floor; a is leased; b wins as smallest eligible
-  f.leased = async (txid) => txid === a.id('hex')
-  const pick = await f.takeReserve()
-  assert.equal(pick?.tx.id('hex'), b.id('hex'))
-  // spendCheck-marked outputs are dropped and relinquished, never returned
-  const g = new ToolboxReserveFunder(w.wallet as never)
-  await g.refresh()
-  const pick2 = await g.takeReserve(async (txid) => txid === a.id('hex'))
-  assert.equal(pick2?.tx.id('hex'), b.id('hex')) // a spend-checked out, c below floor
-  assert.ok(w.relinquished.includes(`${a.id('hex')}.0`))
+  // c is below the sats bound; a is leased; b wins as smallest eligible
+  const f = mkFunds(w.wallet)
+  f.deps.leased = async (txid: string) => txid === a.id('hex')
+  const pick = await f.take('deal', 500)
+  assert.equal(pick.tx.id('hex'), b.id('hex'))
+  // a dead-parent hint skips the candidate but never relinquishes it —
+  // permanent drops are the reconcile path's job
+  const g = mkFunds(w.wallet)
+  g.deps.deadParent = async (tx: Transaction) => tx.id('hex') === a.id('hex')
+  const pick2 = await g.take('deal', 500)
+  assert.equal(pick2.tx.id('hex'), b.id('hex'))
+  assert.equal(w.relinquished.length, 0)
 })
 
-test('ToolboxReserveFunder: markSpent relinquishes + addOwned dedups', async () => {
+test('WalletFunds: drop relinquishes; adopt dedups; revive lifts the mark', async () => {
   const a = fundingTx(800)
   const w = mkWallet([{ outpoint: `${a.id('hex')}.0`, satoshis: 800, spendable: true }], a.toBEEF())
-  const f = new ToolboxReserveFunder(w.wallet as never)
+  const f = mkFunds(w.wallet)
   await f.refresh()
-  f.markSpent(a.id('hex'), 0)
+  await f.drop(a.id('hex'), 0)
   assert.equal(f.utxos.length, 0)
-  assert.equal(f.isSpent(a.id('hex'), 0), true)
   await new Promise((r) => setTimeout(r, 10))
   assert.deepEqual(w.relinquished, [`${a.id('hex')}.0`])
-  // addOwned pushes into the spendable cache once; duplicates are no-ops
-  await f.addOwned(a, 0)
-  await f.addOwned(a, 0)
+  // adopt respects the tombstone — an index re-announce can't resurrect it
+  await f.adopt(a, 0)
+  assert.equal(f.utxos.length, 0)
+  // revive is the deliberate re-own — the caller verified it live
+  await f.revive(a, 0)
+  assert.equal(f.utxos.length, 1)
+  // duplicates are no-ops
+  await f.adopt(a, 0)
+  await f.adopt(a, 0)
   assert.equal(f.utxos.length, 1)
   assert.equal(w.internalized.length, 1)
 })
@@ -161,7 +166,7 @@ test('LiveWalletServices.postBeef: the relayed tx keeps its input sources — th
   assert.equal(seen[0].inputs[0].sourceTransaction?.outputs[0].satoshis, 1000)
 })
 
-test('ToolboxReserveFunder: a mined funding tx internalizes on its own proof — no parent fetches', async () => {
+test('WalletFunds: a mined funding tx internalizes on its own proof — no parent fetches', async () => {
   // a many-input sweep: fetching every parent is pure indexer load, and one
   // rate-limited parent used to fail the whole import
   const tx = fundingTx(5000)
@@ -184,32 +189,33 @@ test('ToolboxReserveFunder: a mined funding tx internalizes on its own proof —
   }
   const w = mkWallet([], [])
   const logs: string[] = []
-  const f = new ToolboxReserveFunder(w.wallet as never, services as never, (s) => logs.push(s))
-  await f.addOwned(tx, 0)
+  const f = mkFunds(w.wallet, services, (s: string) => logs.push(s))
+  await f.adopt(tx, 0)
   assert.deepEqual(logs, [])
   assert.equal(rawCalls, 0, 'a proven subject needs no ancestry')
   assert.equal(f.utxos.length, 1)
   assert.equal(w.internalized.length, 1)
 })
 
-// G1: skip is non-destructive — the basket output is NOT relinquished
-test('ToolboxReserveFunder: takeReserve skip passes a candidate over without relinquishing it', async () => {
+// take() reserves the picked outpoint — a second take can't receive it
+test('WalletFunds: take reserves the pick until spent or released', async () => {
   const a = fundingTx(1000)
   const b = fundingTx(2000)
-  const { wallet, relinquished } = mkWallet(
+  const { wallet } = mkWallet(
     [
       { outpoint: `${a.id('hex')}.0`, satoshis: 1000, spendable: true },
       { outpoint: `${b.id('hex')}.0`, satoshis: 2000, spendable: true }
     ],
     mergedBeef(a, b)
   )
-  const f = new ToolboxReserveFunder(wallet as never)
-  const take = f.takeReserve.bind(f) as unknown as (
-    sc?: unknown,
-    min?: unknown,
-    skip?: (tx: Transaction, vout: number) => Promise<boolean>
-  ) => Promise<{ tx: Transaction } | null>
-  const u = await take(undefined, undefined, async (tx) => tx.id('hex') === a.id('hex'))
-  assert.equal(u?.tx.id('hex'), b.id('hex'))
-  assert.equal(relinquished.length, 0, 'skip is a hint — nothing is relinquished or marked')
+  const f = mkFunds(wallet)
+  const u1 = await f.take('deal', 500)
+  assert.equal(u1.tx.id('hex'), a.id('hex'))
+  const u2 = await f.take('deal', 500)
+  assert.equal(u2.tx.id('hex'), b.id('hex')) // a is reserved
+  await assert.rejects(() => f.take('deal', 500), /no spendable output/)
+  // release frees the reservation; spent() frees by consuming the input
+  f.release(a.id('hex'), 0)
+  const u3 = await f.take('deal', 500)
+  assert.equal(u3.tx.id('hex'), a.id('hex'))
 })

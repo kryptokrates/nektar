@@ -14,4 +14,4 @@ bugs, market-flow ideas, overlay-object-plane work, docs — all welcome.
 - `tm_presence`/`ls_presence` artifacts (new kinds, new indexes)
 - escrow/sale ops and the ZKCP rail
 - object-plane transport (BRC-148/149 adapters)
-- smoke coverage on live networks (regtest/ttn)
+- smoke coverage on live networks (regtest/testnet)

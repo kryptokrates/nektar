@@ -170,7 +170,7 @@ export async function handleBroadcasterStatus(
   mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: status.toLowerCase() }, 1, 'broadcaster status callbacks received')
   mem.events.emit('broadcasterStatus', { txid: j.txid, status, detail: j.extraInfo })
   // a pushed rejection is wake-only — it pokes subscribers into re-asking
-  // txState; the durable verdict belongs to verified chain events, a
+  // txFacts; the durable verdict belongs to verified chain events, a
   // first-party refusal, or the abandon horizon
   if (typeof j.txid === 'string' && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status.toUpperCase())) mem.hintTxRejected(j.txid)
   // N9 — the status is an unauthenticated input, not proof. A carried BUMP
@@ -631,7 +631,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
             return send(200, {
               x402Version: 2,
               scheme: 'exact',
-              network: n === 'main' ? 'bsv:mainnet' : n === 'testnet' ? 'bsv:testnet' : 'bsv:regtest',
+              network: n === 'main' ? 'bsv:mainnet' : n === 'testnet' ? 'bsv:testnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest',
               resources: [...PAID_TOOLS].map((t) => ({
                 url: `tool://${t}`,
                 description: `nektar ${t}`,

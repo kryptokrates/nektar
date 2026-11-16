@@ -30,7 +30,7 @@ const PROVER_TOOLS = new Set(['proveMembership', 'proveSubset', 'proveDerivation
 
 const networkTag = (): string => {
   const n = nektarEnv('NEKTAR_NETWORK') ?? 'regtest'
-  return n === 'main' ? 'bsv:mainnet' : n === 'testnet' ? 'bsv:testnet' : 'bsv:regtest'
+  return n === 'main' ? 'bsv:mainnet' : n === 'testnet' ? 'bsv:testnet' : n === 'regtest' ? 'bsv:regtest' : 'bsv:regtest'
 }
 
 /** the operator's settlement key when NEKTAR_OPERATOR_WIF is set — its

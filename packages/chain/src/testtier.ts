@@ -3,7 +3,8 @@
 // those three may depend on this file without an import cycle.
 import { nektarEnv } from '@nektar/core'
 import type { MerklePath, PrivateKey, Transaction } from '@bsv/sdk'
-import type { BlockHeader, BroadcastResult, Broadcaster, ChainTracker, Funder, FundingOut, TxStatusEvent } from './interfaces.js'
+import type { BlockHeader, BroadcastResult, Broadcaster, ChainTracker, Funder, Funds, TxStatusEvent } from './interfaces.js'
+import type { TxFacts } from './txfacts.js'
 import type { ChainEvents } from './events.js'
 
 export type TestTier = 'memory' | 'stack' | 'testnet'
@@ -19,6 +20,8 @@ export interface TestChain extends ChainTracker, Broadcaster {
   broadcast(tx: Transaction): Promise<BroadcastResult>
   getTx(txid: string): Transaction | undefined // sync; merklePath attached once mined
   isRejected(txid: string): boolean
+  /** THE one status answer — bytes/proof/depth/verdict + outside hint */
+  txFacts(txid: string): Promise<TxFacts>
   onStatus(cb: (ev: TxStatusEvent) => void): void
   readonly chainEvents: ChainEvents
   stopWatching(): void
@@ -37,11 +40,13 @@ export interface TestChain extends ChainTracker, Broadcaster {
 export interface TestFunder extends Funder {
   keyPair: PrivateKey
   address(): string
+  /** the single owner of this funder's coin state — purpose-aware takes and
+   *  spent/died/adopt bookkeeping; `take`/`markSpent`/`addOwned` below are
+   *  the harness shorthand, not the contract */
+  readonly funds: Funds
   markSpent(txid: string, vout: number): void
   addOwned(tx: Transaction, vout: number): void
   readonly parents: Transaction[]
-  /** live pool view — Funds adapters observe this; callers must not mutate */
-  readonly utxos: FundingOut[]
 }
 
 export type TestT = { skip: (m?: string) => void; after?: (fn: () => void) => void }

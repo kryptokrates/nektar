@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { PrivateKey } from '@bsv/sdk'
 import { utf8 } from '@nektar/core'
-import type { Broadcaster, ChainTracker, Funder } from '@nektar/chain'
+import type { Broadcaster, ChainTracker, TestFunder } from '@nektar/chain'
 import { NektarMemory, FileSecurityStore, createHttpApi } from '@nektar/mcp'
 import { signProvenance, verifyCheckpoint } from '@nektar/log'
 import { signBinding, answerChallenge, issueClearance, proveAccess, makeRotationCert } from '@nektar/identity'
@@ -16,7 +16,7 @@ import { timeBounds, eventually, causalClosure } from '@nektar/reasoning'
 
 export interface V4Env {
   chain: Broadcaster & ChainTracker
-  funder: Funder
+  funder: TestFunder
   fundKey: PrivateKey
   settle: (mem: NektarMemory, shards: string[]) => Promise<void>
   mineMore: (n: number) => Promise<void>

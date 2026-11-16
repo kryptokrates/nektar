@@ -198,7 +198,7 @@ const mkagent = async (
   } as ChainTracker & Broadcaster
   // fundKey IS the WIF — funding inputs pay the WIF's P2PKH and must be
   // signed by it (anchor/provider path). Identity = WIF pub, same as live.
-  const mem = new NektarMemory(chain, reserve as never, PrivateKey.fromWif(wif), {
+  const mem = new NektarMemory(chain, reserve, PrivateKey.fromWif(wif), {
     network: 'testnet',
     modelId: 'test-model-1',
     feeRateSatPerKb: 1,

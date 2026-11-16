@@ -143,7 +143,7 @@ const GATES = [
     re: /(markSpent|addOwned|markSpentOut|addOwnedOut|isSpent|takeReserve)\s*[=(]/g,
     scope: GATED,
     // spent/owned/take bookkeeping lives ONLY in the Funds implementations +
-    // the fundsOf adapter. Callers use take/spent/exported/died/adopt/burn on
+    // the fundsOf adapter. Callers use take/spent/exported/died/adopt/drop on
     // the Funds surface. Allowlisted seams: the impls themselves, the adapter,
     // the testtier funder contract, init's scan scratch (it writes no product
     // state), and runtime's bootstrap-seed/vault-patch wiring.
@@ -157,6 +157,15 @@ const GATES = [
       'packages/mcp/src/init.ts',
       'packages/mcp/src/funding.ts'
     ]
+  },
+  {
+    name: 'broadcaster-status-read',
+    re: /\b(fetchTxStatus|probeTxStatus)\b/g,
+    scope: GATED,
+    // THE one status answer is txFacts — the broadcaster status functions are
+    // private to the chain adapters that fill `hint` (mainnet.ts, its unit
+    // test). Nothing outside @nektar/chain may import or call them.
+    allow: ['packages/chain/src/mainnet.ts', 'packages/chain/test/mainnet.test.ts']
   }
 ]
 

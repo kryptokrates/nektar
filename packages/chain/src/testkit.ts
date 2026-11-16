@@ -13,6 +13,7 @@
 //     first stackFunder() generates ~120 blocks to it for mature coinbases
 import { nektarEnv, setNektarEnv } from '@nektar/core'
 import { PrivateKey, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
+import { MemoryFunds, listFundsStore, type ListFundsStore } from './funds.js'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync, appendFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut, Funder, TxStatusEvent } from './interfaces.js'
@@ -29,6 +30,7 @@ import {
   type RegtestConfig
 } from './regtest.js'
 import { TxStore } from './txstore.js'
+import { txFactsOf, type TxFacts } from './txfacts.js'
 import { testTier, type TestChain } from './testtier.js'
 
 // ---------------------------------------------------------------------------
@@ -231,6 +233,21 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
   /** definitive broadcast rejection, sync — feed to engine reconcile gates */
   isRejected(txid: string): boolean {
     return this.rejectedSet.has(txid)
+  }
+  /** the one status answer — the adapter fills every dep from its own view;
+   *  the hint is its own verdict word (the node is the only observer here) */
+  async txFacts(txid: string): Promise<TxFacts> {
+    return await txFactsOf({
+      held: (t: string) => this.getTx(t),
+      proof: (t: string) => this.getTx(t)?.merklePath,
+      rejected: (t: string) => this.isRejected(t),
+      hint: async (t: string) => {
+        const tx = this.getTx(t)
+        const status = this.isRejected(t) ? 'REJECTED' : tx?.merklePath !== undefined ? 'MINED' : tx !== undefined ? 'SEEN_ON_NETWORK' : 'UNKNOWN'
+        return { status, answered: true }
+      },
+      height: () => this.tipHeight()
+    })(txid)
   }
   /** status push, the same shape statusStream gives live networks: Teranode
    *  has no per-tx event feed, so the shared events substrate polls watched
@@ -687,10 +704,18 @@ export function stackTreasury(cfg?: RegtestConfig): Promise<StackTreasury> {
  *  needs registering, the node already validated and mined them. */
 export class StackFunder implements Funder {
   keyPair: PrivateKey
-  utxos: FundingOut[] = []
+  /** the single owner of this funder's coin state — same Funds contract the
+   *  memory tier and production share */
+  readonly funds: MemoryFunds
+  private readonly store: ListFundsStore
   private fundingTx?: Transaction
   private constructor(key: PrivateKey) {
     this.keyPair = key
+    this.store = listFundsStore()
+    this.funds = new MemoryFunds(this.store, { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') })
+  }
+  get utxos(): FundingOut[] {
+    return this.store.list() as FundingOut[]
   }
   /** a funder with no utxos — take() always throws; no stack needed */
   static dry(key: PrivateKey = PrivateKey.fromRandom()): StackFunder {
@@ -741,7 +766,7 @@ export class StackFunder implements Funder {
         // chain parked coins are treasury loss. Persist WIF + funding txid +
         // output count so a sweep can find every outpoint and return them.
         appendFileSync(join(STATE_DIR, 'stackfunder-keys.jsonl'), JSON.stringify({ wif: f.keyPair.toWif(), fundTxid: tx.id('hex'), outputs }) + '\n')
-        for (let i = 0; i < outputs; i++) f.utxos.push({ tx, vout: i, satoshis: sats })
+        for (let i = 0; i < outputs; i++) await f.store.add(tx, i)
         // zeroconf: outputs are spendable while unconfirmed — tests mine only
         // where a proof is actually asserted
         return f
@@ -768,20 +793,21 @@ export class StackFunder implements Funder {
     }
     throw new Error('testkit: fund broadcast raced 8 times')
   }
+  /** harness take — a destructive grab; purpose-aware callers use `.funds` */
   async take(satoshis: number): Promise<FundingOut> {
-    const i = this.utxos.findIndex((u) => u.satoshis >= satoshis)
+    const outs = this.store.list() as FundingOut[]
+    const i = outs.findIndex((u) => u.satoshis >= satoshis)
     if (i < 0) throw new Error('StackFunder: no utxo of that size')
-    const u = this.utxos.splice(i, 1)[0]
+    const u = outs[i]!
+    await this.store.drop(u.tx.id('hex'), u.vout)
     return u
   }
   markSpent(txid: string, vout: number): void {
-    const i = this.utxos.findIndex((u) => u.tx.id('hex') === txid && u.vout === vout)
-    if (i >= 0) this.utxos.splice(i, 1)
+    void this.store.drop(txid, vout)
   }
   /** return a broadcast tx's output to the pool (change/escrow outs) */
   addOwned(tx: Transaction, vout: number): void {
-    const o = tx.outputs[vout]
-    if (o !== undefined) this.utxos.push({ tx, vout, satoshis: o.satoshis ?? 0 })
+    void this.store.add(tx, vout)
   }
   address(): string {
     return this.keyPair.toPublicKey().toAddress([0x6f])

@@ -12,7 +12,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { PrivateKey, type Transaction, type MerklePath } from '@bsv/sdk'
+import { type Transaction, type MerklePath } from '@bsv/sdk'
 import { nektarEnv, nektarEnvFlag, setNektarEnv } from '@nektar/core'
 import type { BroadcastResult, ChainTracker, TxStatusEvent } from './interfaces.js'
 import type { StatusHint } from './txfacts.js'
@@ -132,12 +132,11 @@ export function memoryPort(chain: TestChain): ChainPort {
 
 // --- regtest adapter ----------------------------------------------------------
 
-export function regtestPort(rc: RegtestConfig & { fundWif?: string }, deps?: PortDeps): ChainPort {
+export function regtestPort(rc: RegtestConfig & { fundAddress?: string }, deps?: PortDeps): ChainPort {
   const tracker = new TeranodeRPCTracker(rc)
   const guard = new SpendGuard(new TeranodeBroadcaster(rc.propagationUrl), deps?.valueOf ?? (() => undefined), deps?.guard ?? {})
   const rpc = regtestRpc(rc)
   let lastMined = 0
-  const fundKey = rc.fundWif !== undefined ? PrivateKey.fromWif(rc.fundWif) : undefined
   return {
     network: 'regtest',
     broadcast: (tx) => guard.broadcast(tx),
@@ -159,10 +158,10 @@ export function regtestPort(rc: RegtestConfig & { fundWif?: string }, deps?: Por
     abandonAfterBlocks: 100,
     guard,
     mine:
-      fundKey === undefined
+      rc.fundAddress === undefined
         ? undefined
         : async () => {
-            const [hash] = (await rpc('generatetoaddress', 1, fundKey.toPublicKey().toAddress([0x6f]))) as string[]
+            const [hash] = (await rpc('generatetoaddress', 1, rc.fundAddress)) as string[]
             const hdr = (await rpc('getblockheader', hash, true)) as { height: number }
             lastMined = Math.max(lastMined, hdr.height)
           }

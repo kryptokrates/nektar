@@ -8,6 +8,7 @@ export {
   parseLegacyBlock,
   merkleRootOf,
   ReserveFunder,
+  ReserveFunds,
   merklePathAtHeight,
   bootstrapReserve,
   utxoStatus,
@@ -30,6 +31,8 @@ export {
   importFundingTx,
   statusStream
 } from './mainnet.js'
+export { txFactsOf, hintSeen, hintRejected, hintSilent, SEEN_HINTS } from './txfacts.js'
+export type { StatusHint, TxFacts, TxFactsDeps, TxVerdict, TxVerdictSource } from './txfacts.js'
 export type { StatusStreamEvent, StatusStreamOpts } from './mainnet.js'
 export type { MainnetConfig } from './mainnet.js'
 export { StackChain, StackFunder, StackTreasury, stackCfgFromEnv, stackTreasury, stackUp, stackWorld, stackChain, skipUnlessStack } from './testkit.js'
@@ -37,10 +40,8 @@ export { testTier, testWorld, testChain, testFunder, dryFunder, stackOnly } from
 export type { TestTier, TestChain, TestFunder } from './testworld.js'
 export { MemoryChain, MemoryTreasury, MemoryFunder, memoryTreasury } from './memchain.js'
 export type { MemoryChainFaults } from './memchain.js'
-export { pickSpendable, fundsOf } from './funds.js'
-export type { Funds, FundsPurpose, FunderLike } from './funds.js'
-export { txFactsOf, hintSeen, hintRejected, hintSilent, SEEN_HINTS } from './txfacts.js'
-export type { StatusHint, TxFacts, TxFactsDeps, TxVerdict, TxVerdictSource } from './txfacts.js'
+export { FundsBase, MemoryFunds, listFundsStore, fundsAsFunder, fundsOf } from './funds.js'
+export type { FundsStore, FundsDeps, ListFundsStore, FunderLike } from './funds.js'
 export { SpendGuard } from './spendguard.js'
 export type { SpendGuardOpts, CostRecord } from './spendguard.js'
 export type { PathResult } from './mainnet.js'

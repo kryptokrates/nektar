@@ -12,7 +12,7 @@ flowchart LR
   end
   gw["Docker MCP Gateway (profile: nektar)"]
   srv["nektar MCP server (container, /data volume)"]
-  bsv[("BSV: regtest | ttn | main")]
+  bsv[("BSV: regtest | testnet | main")]
   cd & cu --> gw --> srv
   lm -- "chat.mjs (MCP client)" --> srv
   app -- "/v1 REST · /mcp Streamable HTTP" --> srv
@@ -117,7 +117,7 @@ OpenAI/Anthropic function-calling apps can call `/v1/tools/{name}` directly.
 
 | env                                                                                         | meaning                                                                                            |
 | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `NEKTAR_NETWORK`                                                                            | `regtest` (default) · `testnet` · `ttn` · `main`                                                   |
+| `NEKTAR_NETWORK`                                                                            | `regtest` (default) · `testnet` · `main`                                                           |
 | `NEKTAR_DATA_DIR`                                                                           | records (sqlite), anchor state, security state, funding reserve, keys (0600). `/data` in the image |
 | `NEKTAR_FUND_WIF` / `_FILE`                                                                 | fee-paying key (regtest: the miner key)                                                            |
 | `NEKTAR_RPC_PASS` / `_FILE`, `NEKTAR_RPC_URL`, `NEKTAR_PROPAGATION_URL`, `NEKTAR_ASSET_URL` | Teranode endpoints (from a container: `http://host.docker.internal:…`)                             |

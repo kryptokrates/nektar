@@ -219,7 +219,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   const port =
     ports.chain ??
     (net === 'regtest'
-      ? regtestPort(cfg.regtest!, {
+      ? regtestPort({ ...cfg.regtest!, fundAddress: PrivateKey.fromWif(cfg.regtest!.fundWif).toPublicKey().toAddress([0x6f]) }, {
           valueOf,
           guard: {
             // D2 hard daily cap: default 10_000 sats/day of fees on regtest
@@ -266,7 +266,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // regtest seeds its treasury before the tx-store snapshot so the minted
   // funding outs land in the parent graph like every other utxo
   if (!injected && port.network === 'regtest') {
-    await regtestSeed({ rc: cfg.regtest!, port, funds: custody.funds as import('@nektar/automation').ToolboxReserveFunder, dataDir: cfg.dataDir })
+    await regtestSeed({ rc: cfg.regtest!, port, funds: custody.funds as import('@nektar/automation').WalletFunds, dataDir: cfg.dataDir })
     process.stderr.write(`nektar regtest: wallet backend toolbox (wallet.sqlite) — ${custody.funds.utxos?.length ?? 0} funding utxo(s)\n`)
   }
   const { knex, store, ledger, wrapBroadcast, leasePredicate } = await openRecordsDb(cfg.dataDir)

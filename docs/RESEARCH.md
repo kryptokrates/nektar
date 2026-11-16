@@ -100,7 +100,7 @@ What nektar took from each source, and how: **reused** (code or vectors), **adop
 | identity    | attributable keys, per-domain reputation    | done — BRC-42 + reputation cards                             |
 | discovery   | declare expertise by content, find peers    | done — `rv.nektar.run`                                       |
 | pricing     | signed quotes/offers, clearing prices       | done                                                         |
-| settlement  | verify-then-pay escrow, claim               | done — public ttn                                            |
+| settlement  | verify-then-pay escrow, claim               | done — public testnet                                        |
 | attestation | who/what produced the claim                 | built — delegation grants, model manifests, `callProof` slot |
 
 ### Wright requirement map

@@ -5,7 +5,7 @@
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import { dsha256, utf8 } from '@nektar/core'
 import { AnchorChain } from '@nektar/anchor'
-import { ReserveFunder, TeranodeBroadcaster, bootstrapReserve, type RegtestConfig } from '@nektar/chain'
+import { ReserveFunder, ReserveFunds, TeranodeBroadcaster, bootstrapReserve, type RegtestConfig } from '@nektar/chain'
 import { existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -81,7 +81,8 @@ const report = (label: string, tx: Transaction) => {
   console.log(`${label}: txid=${tx.id('hex')} bytes=${tx.toBinary().length} fee=${feeOf(tx)} sats`)
 }
 
-const ac = new AnchorChain('measure', PrivateKey.fromRandom(), reserve, key, chain, { feeRateSatPerKb: RATE })
+const funds = new ReserveFunds(reserve, { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') })
+const ac = new AnchorChain('measure', PrivateKey.fromRandom(), funds, key, chain, { feeRateSatPerKb: RATE })
 seed()
 report('genesis', (await ac.anchor(5, dsha256(utf8('m1')))).tx)
 seed()

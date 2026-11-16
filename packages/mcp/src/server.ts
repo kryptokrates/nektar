@@ -1129,15 +1129,9 @@ async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: Too
       })
       const funding = await mem.fundingOuts(args.amount + 500, 'deal')
       const { tx, utxo, feeSats } = await host.buildEscrow(funding, mem.operatorKey(), args.amount, undefined, mem.feeRateSatPerKb)
-      if (isBuild) {
-        await mem.funds.exported(tx)
-        return { tx, txHex: tx.toHex(), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh }, feeSats }
-      }
+      if (isBuild) return { tx, txHex: tx.toHex(), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh }, feeSats }
       const r = await mem.broadcastTx(tx)
-      if (r.status !== 'success') {
-        await mem.funds.died(tx)
-        return { accepted: false, reason: r.description }
-      }
+      if (r.status !== 'success') return { accepted: false, reason: r.description }
       await settleEscrow(mem, tx)
       return { accepted: true, txid: tx.id('hex'), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh } }
     }

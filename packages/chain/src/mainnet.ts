@@ -20,6 +20,7 @@ export interface MainnetConfig {
   wocApiKey?: string
   chaintracksUrl?: string // chaintracks base incl. /v1|/v2 — header source for BUMP verification
   tipCacheMs?: number // currentHeight() cache TTL — heights only grow, so a stale-low answer only delays gates by ≤TTL; NEKTAR_TIP_CACHE_MS overrides (default 3000)
+  feeRateSatPerKb?: number // caller-pinned fee rate — otherwise livePort takes max(floor, broadcaster-policy quote)
   fetchImpl?: typeof fetch // injectable — tests pass a recorded stub
 }
 

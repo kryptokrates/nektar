@@ -3,9 +3,17 @@
 // NEKTAR_FEE_VAULT) and both only wire side-effects — no deal-path logic.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { P2PListener, type Funds } from '@nektar/chain'
+import { P2PListener } from '@nektar/chain'
+import type { Funds } from '@nektar/chain'
 import type { Transaction } from '@bsv/sdk'
 import { unlockP2PKH, type SignerLike } from '@nektar/core'
+
+/** the sync view wireP2p and the fee vault need over the Funds owner:
+ *  current owned set + a burn verb for observed spends */
+export interface UtxoView {
+  readonly utxos: Array<{ tx: Transaction; vout: number; satoshis: number }>
+  burn(txid: string, vout: number): void | Promise<void>
+}
 
 /** optional p2p eyes: watched outpoints fire 'spend', the fee-key script
  *  fires 'pay'; matched txs credit fee-key outputs straight from the wire
@@ -13,29 +21,24 @@ import { unlockP2PKH, type SignerLike } from '@nektar/core'
 export function wireP2p(opts: {
   peers: string[]
   pkhHex: string
-  funds: Funds
+  reserve: UtxoView
   addIfNew: (u: { tx: Transaction; vout: number }) => void
   log: (s: string) => void
 }): P2PListener | undefined {
   if (opts.peers.length === 0) return undefined
   const fundPkhScript = `76a914${opts.pkhHex}88ac`
-  const watched = new Set<string>()
   const p2p = new P2PListener({
     peers: opts.peers,
     fetchAll: true,
     maxTxFetchPerSec: 200,
-    outpoints: watched,
+    outpoints: new Set(opts.reserve.utxos.map((u) => `${u.tx.id('hex')}:${u.vout}`)),
     scripts: new Set([fundPkhScript])
   })
-  void opts.funds
-    .outs()
-    .then((outs) => {
-      for (const u of outs) watched.add(`${u.tx.id('hex')}:${u.vout}`)
-    })
-    .catch(() => undefined)
   p2p.on('spend', (t, v, by) => {
-    void opts.funds.burn(t, v)
-    opts.log(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`)
+    if (opts.reserve.utxos.some((u) => u.tx.id('hex') === t && u.vout === v)) {
+      void opts.reserve.burn(t, v)
+      opts.log(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`)
+    }
   })
   p2p.on('pay', (t, v, s) => opts.log(`nektar p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v}\n`))
   p2p.on('tx', (tx) => {
@@ -53,7 +56,7 @@ export function wireP2p(opts: {
  *  enforced by node script eval, and SpendGuard stays in front (defense in
  *  depth). Value: inline JSON or "@/path/to.json" with
  *  {perTxCap,windowCap,windowBlocks,maxFee,fundSats?,vaultSats?}.
- *  Returns the funder's vault-backed take: serve an already-minted vault out
+ *  Returns a vault-take for the funder: serve an already-minted vault out
  *  sitting in the pool, else mint a fresh capped one through the covenant. */
 export async function setupFeeVault(opts: {
   vaultSpec: string
@@ -61,7 +64,7 @@ export async function setupFeeVault(opts: {
   pkhHex: string
   fundKey: SignerLike
   fundAddress: string
-  funds: Funds
+  funds: Funds & UtxoView
   broadcast: (tx: Transaction) => Promise<{ status: string; description?: string }>
   currentHeight: () => Promise<number>
   net: string
@@ -103,10 +106,7 @@ export async function setupFeeVault(opts: {
     tx.addOutput({ satoshis: u.satoshis - sats - 100, lockingScript: LScript.fromHex(buildP2PKHScript(opts.pkhHex)) })
     await tx.sign()
     const r = await opts.broadcast(tx)
-    if (r.status !== 'success') {
-      await opts.funds.died(tx)
-      throw new Error(`vault deploy refused: ${r.description}`)
-    }
+    if (r.status !== 'success') throw new Error(`vault deploy refused: ${r.description}`)
     await opts.funds.spent(tx)
     vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: sats, script: vault.lockingScript(0n, 0n) }
     saveVault()
@@ -119,13 +119,9 @@ export async function setupFeeVault(opts: {
     const pay = BigInt(vcfg.fundSats ?? vcfg.perTxCap)
     const { tx } = await vault.buildSpend(vaultUtxo!, opts.fundKey, pay, await opts.currentHeight(), 2n)
     const r = await opts.broadcast(tx)
-    if (r.status !== 'success') {
-      await opts.funds.died(tx)
-      throw new Error(`vault spend refused: ${r.description}`)
-    }
-    // spent(tx): consumes the vault input and adopts both our-locked outputs
-    // (the minted funding out + the 1-sat covenant change — reclaimable)
+    if (r.status !== 'success') throw new Error(`vault spend refused: ${r.description}`)
     await opts.funds.spent(tx)
+    await opts.funds.adopt(tx, 2) // the 1-sat covenant change — reclaimable
     const cont = tx.outputs[0]
     vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: cont.satoshis!, script: cont.lockingScript.toHex() }
     vaultMinted.add(`${tx.id('hex')}:1`)
@@ -133,15 +129,18 @@ export async function setupFeeVault(opts: {
     return { tx, vout: 1, satoshis: tx.outputs[1].satoshis! }
   }
   let minting: Promise<unknown> = Promise.resolve()
-  const nextVaultOut = async () => {
+  const vaultTake = async () => {
     // prefer an already-minted vault out sitting in the pool (e.g. orphaned
     // by a failed anchor build); otherwise mint a fresh capped one through
     // the covenant. Non-vault pool entries are never served for anchoring.
-    const pooled = (await opts.funds.outs()).find((u) => vaultMinted.has(`${u.tx.id('hex')}:${u.vout}`))
-    if (pooled) return pooled
+    const pooled = opts.funds.utxos.find((u) => vaultMinted.has(`${u.tx.id('hex')}:${u.vout}`))
+    if (pooled) {
+      opts.funds.hold(pooled.tx.id('hex'), pooled.vout)
+      return pooled
+    }
     minting = minting.then(mint, mint)
     return (await minting) as { tx: Transaction; vout: number; satoshis: number }
   }
   opts.log(`nektar ${opts.net}: NEKTAR_FEE_VAULT set — anchor funding minted through the fee-vault covenant\n`)
-  return nextVaultOut
+  return vaultTake
 }

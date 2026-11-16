@@ -23,7 +23,7 @@ const pathFor = (tx: Transaction): MerklePath =>
 // field is added; a pathless funder tx should pick up the held proof
 const ops = (u: { tx: Transaction; vout: number; satoshis: number }, proofOf?: (txid: string) => MerklePath | undefined): CustodyOps =>
   new CustodyOps({
-    funds: fundsOf({ take: async () => u, address: () => key.toAddress() }),
+    funds: fundsOf({ utxos: [u], address: () => key.toAddress() }),
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},
@@ -61,10 +61,6 @@ const reserveOps = (
   const spent: string[] = []
   const ops = new CustodyOps({
     funds: fundsOf({
-      takeReserve: async (_sc: unknown, _min: unknown, skip?: (tx: Transaction, vout: number) => Promise<boolean>) => {
-        for (const u of candidates) if (skip === undefined || !(await skip(u.tx, u.vout))) return u
-        return null
-      },
       markSpent: (txid: string, vout: number) => spent.push(`${txid}:${vout}`),
       utxos: candidates,
       address: () => key.toAddress()
@@ -120,9 +116,11 @@ test('custody: a proven candidate is never status-queried', async () => {
 
 test('custody: provisionPay throws when the broadcaster rejects right after submit', async () => {
   const marks: string[] = []
+  const p = parent()
+  p.merklePath = pathFor(p)
   const ops = new CustodyOps({
     funds: fundsOf({
-      take: async () => ({ tx: parent(), vout: 0, satoshis: 100_000 }),
+      utxos: [{ tx: p, vout: 0, satoshis: 100_000 }],
       markSpent: () => marks.push('markSpent'),
       addOwned: () => marks.push('addOwned'),
       address: () => key.toAddress()
@@ -136,15 +134,19 @@ test('custody: provisionPay throws when the broadcaster rejects right after subm
     ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 }),
     /rejected after submit/
   )
-  // rejection is a death: the reserved input is revived, never marked spent
-  assert.deepEqual(marks, ['addOwned'], 'the taken input returns to the reserve')
+  // rejection is a death: the dead tx's two owned outputs (payment-to-self +
+  // change) are tombstoned so they can never be handed out — but the taken
+  // parent was never marked spent; its hold is released back into the pool
+  assert.deepEqual(marks, ['markSpent', 'markSpent'], 'the taken input returns to the reserve')
 })
 
 test('custody: a seen status returns after one read — bounded confirmation, not a wait loop', async () => {
   let reads = 0
+  const p = parent()
+  p.merklePath = pathFor(p)
   const ops = new CustodyOps({
     funds: fundsOf({
-      take: async () => ({ tx: parent(), vout: 0, satoshis: 100_000 }),
+      utxos: [{ tx: p, vout: 0, satoshis: 100_000 }],
       markSpent: () => {},
       addOwned: () => {},
       address: () => key.toAddress()

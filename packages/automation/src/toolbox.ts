@@ -23,6 +23,7 @@ import { Beef, Hash, MerklePath, PrivateKey, Transaction, Utils, type ChainTrack
 import { Services, Setup, StorageKnex, Wallet, WalletStorageManager, randomBytesHex, sdk } from '@bsv/wallet-toolbox'
 import {
   TeranodeRPCTracker,
+  FundsBase,
   merklePathFor,
   merklePathAtHeight,
   merklePathMainnet,
@@ -30,9 +31,9 @@ import {
   utxoStatus,
   type BroadcastResult,
   type Funder,
-  type Funds,
-  type FundsPurpose,
   type FundingOut,
+  type FundsDeps,
+  type FundsStore,
   type MainnetConfig,
   type RegtestConfig
 } from '@nektar/chain'
@@ -581,35 +582,69 @@ export class LiveWalletServices implements sdk.WalletServices {
 
 // ── reserve-funder shape over wallet storage ────────────────────────────────
 
-/** Drop-in for the `funder` object openLiveRuntime builds over reserve.json.
- *  Same semantics: `take`/`takeReserve` is a NON-destructive peek (smallest
- *  sufficient, lease-filtered, optional spendCheck); `markSpent` lands after
- *  broadcast and relinquishes the output from the wallet's default basket;
- *  `addOwned` internalizes a freshly-created own output. `utxos` is a sync
- *  cache refreshed on every `take` — the async wallet list is the truth. */
-export class ToolboxReserveFunder implements Funds {
-  leased?: (txid: string, vout: number) => Promise<boolean>
-  hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
-  spendCheck?: (txid: string, vout: number) => Promise<boolean>
-  /** upkeep/publish takes refuse below this balance — one deal stays
-   *  affordable; set by the runtime (0 disables the floor) */
-  dealFloor = 0
-  private cache: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
-  /** in-session holds — a take() reserves the outpoint it returns so a second
-   *  take before the first spend broadcasts can't re-pick it, and the deal
-   *  floor counts them as already committed */
-  private reserved = new Map<string, number>()
-  /** outputs of spends that died before landing — tombstoned for the session
-   *  so a stale index can never re-import a ghost */
-  private deadOuts = new Set<string>()
+/** The wallet-backed `Funds` owner: `take` reserves a non-destructive peek
+ *  (smallest sufficient, lease-filtered, optional spendCheck) over the
+ *  wallet's default basket; `spent(tx)` relinquishes consumed outputs and
+ *  internalizes our change via `internalizeAction`; `adopt`/`revive`
+ *  internalize live outputs; `drop` relinquishes dead weight. `utxos` is a
+ *  sync cache refreshed on every `take` — the async wallet list is the
+ *  truth. */
+export class WalletFunds extends FundsBase {
+  private cache: FundingOut[] = []
+  /** outpoints we dropped this process — lets `died` tell "consumed by the
+   *  dead spend" (revive) vs "never ours" (leave). Restart honesty comes
+   *  from the first-party spentByUs check, not a persisted tombstone. */
+  private readonly dropped = new Set<string>()
+  protected readonly store: FundsStore
+
   constructor(
     private wallet: Pick<WalletInterface, 'listOutputs' | 'internalizeAction' | 'relinquishOutput' | 'getPublicKey'>,
-    private services?: Pick<sdk.WalletServices, 'getRawTx' | 'getMerklePath'>,
-    private log: (s: string) => void = () => {}
-  ) {}
+    private services: Pick<sdk.WalletServices, 'getRawTx' | 'getMerklePath'> | undefined,
+    deps: FundsDeps & { log?: (s: string) => void }
+  ) {
+    super(deps)
+    const log = deps.log ?? (() => {})
+    this.store = {
+      list: async () => {
+        await this.refresh()
+        return this.cache
+      },
+      has: async (txid, vout) => this.cache.some((u) => u.tx.id('hex') === txid && u.vout === vout) || (await this.has(txid, vout)),
+      add: (tx, vout) => this.internalizePush(tx, vout, log),
+      drop: (txid, vout) => {
+        this.cache = this.cache.filter((u) => !(u.tx.id('hex') === txid && u.vout === vout))
+        this.dropped.add(`${txid}:${vout}`)
+        // basket removal is the honest equivalent — a spent wallet outpoint
+        // must never be offered again. Fire-and-forget: the automation
+        // ledger's outpoint lease covers the async gap.
+        void this.wallet.relinquishOutput({ basket: NEKTAR_BASKET, output: `${txid}.${vout}` }).catch(() => {})
+      },
+      revive: async (tx, vout) => {
+        this.dropped.delete(`${tx.id('hex')}:${vout}`)
+        await this.internalizePush(tx, vout, log)
+      },
+      tombstoned: (txid, vout) => this.dropped.has(`${txid}:${vout}`)
+    }
+  }
 
-  get utxos(): Array<{ tx: Transaction; vout: number; satoshis: number }> {
+  get utxos(): FundingOut[] {
     return this.cache
+  }
+
+  /** identity comes from the wallet itself — the BRC-100 identity key
+   *  derives our receive address and the P2PKH lock that marks change */
+  async address(): Promise<string> {
+    const pub = await this.wallet.getPublicKey({ identityKey: true }, 'nektar')
+    return sdkc.PublicKey.fromString(pub.publicKey).toAddress()
+  }
+
+  private lockCache?: string
+  protected async ourLock(): Promise<string> {
+    if (this.lockCache === undefined) {
+      const pub = await this.wallet.getPublicKey({ identityKey: true }, 'nektar')
+      this.lockCache = new sdkc.P2PKH().lock(sdkc.PublicKey.fromString(pub.publicKey).toAddress()).toHex()
+    }
+    return this.lockCache
   }
 
   async refresh(): Promise<void> {
@@ -624,44 +659,6 @@ export class ToolboxReserveFunder implements Funds {
       })
   }
 
-  async takeReserve(
-    spendCheck?: (txid: string, vout: number) => Promise<boolean>,
-    minSats?: number,
-    skip?: (tx: Transaction, vout: number) => Promise<boolean>
-  ): Promise<{ tx: Transaction; vout: number; satoshis: number } | null> {
-    const floor = minSats ?? 546
-    await this.refresh()
-    for (const u of this.cache.filter((x) => x.satoshis >= floor).sort((a, b) => a.satoshis - b.satoshis)) {
-      const txid = u.tx.id('hex')
-      if (this.reserved.has(`${txid}:${u.vout}`)) continue
-      if (this.leased !== undefined && (await this.leased(txid, u.vout))) continue
-      // a hint-only pass-over — nothing is relinquished or marked
-      if (skip !== undefined && (await skip(u.tx, u.vout))) continue
-      if (spendCheck !== undefined && (await spendCheck(txid, u.vout))) {
-        this.markSpent(txid, u.vout)
-        continue
-      }
-      return u
-    }
-    return null
-  }
-
-  markSpent(txid: string, vout: number): void {
-    this.reserved.delete(`${txid}:${vout}`)
-    this.cache = this.cache.filter((u) => !(u.tx.id('hex') === txid && u.vout === vout))
-    // basket removal is the honest equivalent — a spent wallet outpoint must
-    // never be offered again. Fire-and-forget: the automation ledger's
-    // outpoint lease covers the async gap.
-    void this.wallet.relinquishOutput({ basket: NEKTAR_BASKET, output: `${txid}.${vout}` }).catch(() => {})
-  }
-
-  /** ReserveLike parity: "not custody-known" ≈ "spent" — the wallet's
-   *  spendable set is the truth, so an outpoint absent from it is never a
-   *  candidate. Matches ReserveFunder's isSpent for every watched outpoint. */
-  isSpent(txid: string, vout: number): boolean {
-    return !this.cache.some((u) => u.tx.id('hex') === txid && u.vout === vout)
-  }
-
   /** Whether the wallet already custodies this outpoint — lets boot seeding
    *  skip re-internalizing outputs that survived a restart. */
   async has(txid: string, vout: number): Promise<boolean> {
@@ -669,109 +666,17 @@ export class ToolboxReserveFunder implements Funds {
     return r.outputs.some((o) => o.outpoint === `${txid}.${vout}`)
   }
 
-  // ── Funds ────────────────────────────────────────────────────────────────
-
-  async address(): Promise<string> {
-    const pub = await this.wallet.getPublicKey({ identityKey: true }, 'nektar')
-    return sdkc.PublicKey.fromString(pub.publicKey).toAddress()
-  }
-
-  private async lockHex(): Promise<string> {
-    const pub = await this.wallet.getPublicKey({ identityKey: true }, 'nektar')
-    return new sdkc.P2PKH().lock(sdkc.PublicKey.fromString(pub.publicKey).toAddress()).toHex()
-  }
-
-  async balance(): Promise<number> {
-    return (await this.outs()).reduce((s, u) => s + u.satoshis, 0)
-  }
-
-  async outs(): Promise<FundingOut[]> {
-    await this.refresh()
-    return this.cache.filter((u) => !this.reserved.has(`${u.tx.id('hex')}:${u.vout}`))
-  }
-
-  async take(purpose: FundsPurpose, sats: number): Promise<FundingOut> {
-    const committed = [...this.reserved.values()].reduce((s, v) => s + v, 0)
-    if (purpose !== 'deal' && this.dealFloor > 0 && (await this.balance()) - committed - sats < this.dealFloor)
-      throw new Error(`funds: ${purpose} take of ${sats} sats would drop the balance below the deal floor (${this.dealFloor})`)
-    const u = await this.takeReserve(this.spendCheck, sats, this.hintSkip)
-    if (u === null) throw new Error(`funds: no outpoint of ${sats} sats or more`)
-    this.reserved.set(`${u.tx.id('hex')}:${u.vout}`, u.satoshis)
-    return u
-  }
-
-  /** a broadcast we made: relinquish its inputs, internalize outputs paying us */
-  async spent(tx: Transaction): Promise<void> {
-    for (const inp of tx.inputs) {
-      const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      if (id !== undefined) this.markSpent(id, inp.sourceOutputIndex ?? 0)
-    }
-    const lock = await this.lockHex()
-    for (const [vout, o] of tx.outputs.entries()) {
-      if (o.lockingScript.toHex() === lock) await this.addOwned(tx, vout)
-    }
-  }
-
-  /** signed away for someone else to air — inputs are consumed, outputs are
-   *  left for discovery to adopt if the spend ever lands */
-  exported(tx: Transaction): void {
-    for (const inp of tx.inputs) {
-      const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      if (id !== undefined) this.markSpent(id, inp.sourceOutputIndex ?? 0)
-    }
-  }
-
-  /** rejected/abandoned — it never landed: the tx's own outputs are
-   *  relinquished + tombstoned; inputs that still pay us are re-internalized
-   *  (the wallet's spendable flag remains the truth for what came back) */
-  async died(tx: Transaction): Promise<void> {
-    const lock = await this.lockHex()
-    const tid = tx.id('hex')
-    for (const [vout, o] of tx.outputs.entries()) {
-      this.deadOuts.add(`${tid}:${vout}`)
-      if (o.lockingScript.toHex() === lock || (await this.has(tid, vout))) this.markSpent(tid, vout)
-    }
-    for (const inp of tx.inputs) {
-      const src = inp.sourceTransaction
-      const id = inp.sourceTXID ?? src?.id('hex')
-      const vout = inp.sourceOutputIndex ?? 0
-      if (id === undefined || src === undefined) continue
-      this.reserved.delete(`${id}:${vout}`)
-      if ((src.outputs[vout]?.lockingScript.toHex() ?? '') !== lock) continue
-      if (!(await this.has(id, vout)))
-        await this.internalize(src, vout).catch((e) => this.log(`funds revive ${id}.${vout}: ${e instanceof Error ? e.message : String(e)}`))
-      if ((await this.has(id, vout)) && !this.cache.some((u) => u.tx.id('hex') === id && u.vout === vout))
-        this.cache.push({ tx: src, vout, satoshis: src.outputs[vout].satoshis ?? 0 })
-    }
-  }
-
-  /** coins sent by someone else — a tombstoned ghost or an outpoint the
-   *  wallet already records (spent or not) is refused, never re-imported */
-  async adopt(tx: Transaction, vout: number): Promise<boolean> {
-    if (this.deadOuts.has(`${tx.id('hex')}:${vout}`)) return false
-    if (await this.has(tx.id('hex'), vout)) return false
-    await this.addOwned(tx, vout)
-    return await this.has(tx.id('hex'), vout)
-  }
-
-  /** the chain reports this outpoint spent — tombstoned so it is never
-   *  offered to a take again */
-  burn(txid: string, vout: number): void {
-    this.markSpent(txid, vout)
-  }
-
-  /** Returns the internalize promise so boot-seeding can serialize (WoC rate
-   *  limits) and callers that don't care can ignore it fire-and-forget. */
-  addOwned(tx: Transaction, vout: number): Promise<void> {
+  private internalizePush(tx: Transaction, vout: number, log: (s: string) => void): Promise<void> {
     if (this.cache.some((u) => u.tx.id('hex') === tx.id('hex') && u.vout === vout)) return Promise.resolve()
     // cache only what the wallet actually accepted — an optimistic add made
     // utxos report funding the wallet never held (the 60-utxo silent-fail
     // class: internalize errors were logged while the cache lied)
     return this.internalize(tx, vout)
       .then(() => {
+        this.dropped.delete(`${tx.id('hex')}:${vout}`)
         this.cache.push({ tx, vout, satoshis: tx.outputs[vout].satoshis ?? 0 })
       })
-      .catch((e) => this.log(`toolbox internalize ${tx.id('hex')}.${vout}: ${e instanceof Error ? e.message : String(e)}`))
+      .catch((e) => log(`walletfunds internalize ${tx.id('hex')}.${vout}: ${e instanceof Error ? e.message : String(e)}`))
   }
 
   private async internalize(tx: Transaction, vout: number): Promise<void> {

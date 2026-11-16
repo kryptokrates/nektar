@@ -60,7 +60,7 @@ export {
   ToolboxFunder,
   fundToolbox,
   LiveWalletServices,
-  ToolboxReserveFunder
+  WalletFunds
 } from './toolbox.js'
 export { type PreflightDeps, WATCHDOG_CHECKS, runPreflight } from './preflight.js'
 export { type TradeEvidence, type RedactedTradeEvidence, redactTradeEvidence, collectTradeEvidence, verifyTradeEvidence } from './evidence.js'

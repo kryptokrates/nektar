@@ -10,6 +10,8 @@
 // delivered" exactly.
 import { Transaction, MerklePath, PrivateKey, P2PKH, Hash, UnlockingScript, Spend } from '@bsv/sdk'
 import type { BlockHeader, BroadcastResult, FundingOut, TxStatusEvent } from './interfaces.js'
+import { MemoryFunds, listFundsStore, type ListFundsStore } from './funds.js'
+import { txFactsOf, type TxFacts } from './txfacts.js'
 import { ChainEvents } from './events.js'
 import { buildBump } from './bump.js'
 import { serializeHeader, headerPowValid } from './headers.js'
@@ -394,6 +396,22 @@ export class MemoryChain implements TestChain {
     return this.rejectedSet.has(txid)
   }
 
+  /** the one status answer — the adapter fills every dep from its own view;
+   *  the hint is its own verdict word (no outside observer exists here) */
+  async txFacts(txid: string): Promise<TxFacts> {
+    return await txFactsOf({
+      held: (t: string) => this.getTx(t),
+      proof: (t: string) => this.known.get(t)?.mp,
+      rejected: (t: string) => this.isRejected(t),
+      hint: async (t: string) => {
+        const rec = this.known.get(t)
+        const status = this.isRejected(t) ? 'REJECTED' : rec?.mp !== undefined ? 'MINED' : rec !== undefined ? 'SEEN_ON_NETWORK' : 'UNKNOWN'
+        return { status, answered: true }
+      },
+      height: () => this.tip()
+    })(txid)
+  }
+
   onStatus(cb: (ev: TxStatusEvent) => void): void {
     this.events.on('tx', cb)
     this.events.start()
@@ -523,11 +541,16 @@ export class MemoryTreasury {
  *  it, so its outputs carry proofs only once mined (zeroconf parity) */
 export class MemoryFunder implements TestFunder {
   keyPair: PrivateKey
-  utxos: FundingOut[] = []
+  /** the single owner of this funder's coin state — purpose-aware takes,
+   *  reservations, spent/died/adopt bookkeeping */
+  readonly funds: MemoryFunds
+  private readonly store: ListFundsStore
   private fundingTx?: Transaction
 
   private constructor(key: PrivateKey) {
     this.keyPair = key
+    this.store = listFundsStore()
+    this.funds = new MemoryFunds(this.store, { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') })
   }
 
   /** a funder with no utxos — take() always throws; no chain needed */
@@ -543,25 +566,32 @@ export class MemoryFunder implements TestFunder {
     // merklePathOf). Pre-mining here would hide the unproven-parent paths
     // production hits constantly.
     f.fundingTx = tx
-    for (let i = 0; i < outputs; i++) f.utxos.push({ tx, vout: i, satoshis: sats })
+    for (let i = 0; i < outputs; i++) await f.store.add(tx, i)
     return f
   }
 
+  /** harness take — a destructive grab ('deal'-purpose takes are exempt from
+   *  the floor). Purpose-aware callers go through `.funds`. */
   async take(satoshis: number): Promise<FundingOut> {
-    const i = this.utxos.findIndex((u) => u.satoshis >= satoshis)
+    const outs = this.store.list() as FundingOut[]
+    const i = outs.findIndex((u) => u.satoshis >= satoshis)
     if (i < 0) throw new Error('MemoryFunder: no utxo of that size')
-    return this.utxos.splice(i, 1)[0]!
+    const u = outs[i]!
+    await this.store.drop(u.tx.id('hex'), u.vout)
+    return u
   }
 
   markSpent(txid: string, vout: number): void {
-    const i = this.utxos.findIndex((u) => u.tx.id('hex') === txid && u.vout === vout)
-    if (i >= 0) this.utxos.splice(i, 1)
+    void this.store.drop(txid, vout)
   }
 
   /** return a broadcast tx's output to the pool (change/escrow outs) */
   addOwned(tx: Transaction, vout: number): void {
-    const o = tx.outputs[vout]
-    if (o !== undefined) this.utxos.push({ tx, vout, satoshis: o.satoshis ?? 0 })
+    void this.store.add(tx, vout)
+  }
+
+  get utxos(): FundingOut[] {
+    return this.store.list() as FundingOut[]
   }
 
   address(): string {
@@ -573,6 +603,8 @@ export class MemoryFunder implements TestFunder {
   }
 }
 
+/** per-process shared treasury, like stackTreasury() — tests in one file
+ *  share one chain, as they share one node today */
 let memTreasury: MemoryTreasury | undefined
 export function memoryTreasury(): MemoryTreasury {
   memTreasury ??= new MemoryTreasury()

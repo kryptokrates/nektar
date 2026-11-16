@@ -1,12 +1,11 @@
 // Real regtest adapters — Teranode propagation /tx for broadcast and
 // Teranode JSON-RPC for headers. Compiled but only exercised on a live stack
 // (NEKTAR_NETWORK=regtest). No tests depend on these.
-import { Transaction, MerklePath, Utils } from '@bsv/sdk'
+import { Transaction, MerklePath } from '@bsv/sdk'
 import { dsha256 } from '@nektar/core'
 import { withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
-import type { Funds, FundsPurpose } from './funds.js'
-import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
+import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker } from './interfaces.js'
 
 export interface RegtestConfig {
   rpcUrl: string // http://localhost:9292/
@@ -322,6 +321,8 @@ import { existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { writeFileAtomic, nektarEnv } from '@nektar/core'
 import type { PrivateKey } from '@bsv/sdk'
+import { FundsBase, type FundsDeps, type FundsStore } from './funds.js'
+import type { FundingOut } from './interfaces.js'
 
 interface ReserveEntry {
   txid: string
@@ -331,25 +332,14 @@ interface ReserveEntry {
   height?: number
 }
 
-export class ReserveFunder implements Funds {
+export class ReserveFunder {
   keyPair: PrivateKey | undefined
   utxos: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
   private entries: ReserveEntry[] = []
-  private spentOuts = new Set<string>()
-  /** in-session holds — a take() reserves the outpoint it returns so a second
-   *  take before the first spend broadcasts can't re-pick it, and the deal
-   *  floor counts them as already committed. spent() turns the hold into a
-   *  durable mark; died() frees it. Session-only on purpose: a restart means
-   *  the spend never aired, so the output IS available */
-  private reserved = new Map<string, number>()
+  private spent = new Set<string>()
   private file: string
   private pkhHex: string
   heights = new Map<string, number>()
-  /** upkeep/publish takes refuse below this balance — one deal stays
-   *  affordable; set by the runtime (0 disables the floor) */
-  dealFloor = 0
-  hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
-  spendCheck?: (txid: string, vout: number) => Promise<boolean>
 
   /** key custody for signing is NOT needed here — the reserve only tracks
    *  ownership by pubkey hash. Pass `{pkhHex}` under external-wallet custody. */
@@ -367,13 +357,13 @@ export class ReserveFunder implements Funds {
   private load(): void {
     try {
       const j = JSON.parse(readFileSync(this.file, 'utf8'))
-      this.spentOuts = new Set(j.spent ?? [])
+      this.spent = new Set(j.spent ?? [])
       for (const e of (j.entries ?? []) as ReserveEntry[]) {
         try {
           const tx = Transaction.fromHex(e.txHex)
           this.entries.push(e) // spent marks keep their record — reconcile() can revive
           if (e.height) this.heights.set(e.txid, e.height)
-          if (!this.spentOuts.has(this.op(e.txid, e.vout))) this.utxos.push({ tx, vout: e.vout, satoshis: e.satoshis })
+          if (!this.spent.has(this.op(e.txid, e.vout))) this.utxos.push({ tx, vout: e.vout, satoshis: e.satoshis })
         } catch {
           /* skip unparseable */
         }
@@ -388,22 +378,34 @@ export class ReserveFunder implements Funds {
   reload(): void {
     this.utxos = []
     this.entries = []
-    this.spentOuts = new Set()
+    this.spent = new Set()
     this.heights = new Map()
     this.load()
   }
   private save(): void {
     mkdirSync(dirname(this.file), { recursive: true })
-    writeFileAtomic(this.file, JSON.stringify({ spent: [...this.spentOuts], entries: this.entries }, null, 1))
+    writeFileAtomic(this.file, JSON.stringify({ spent: [...this.spent], entries: this.entries }, null, 1))
   }
 
   isSpent(txid: string, vout: number): boolean {
-    return this.spentOuts.has(this.op(txid, vout))
+    return this.spent.has(this.op(txid, vout))
   }
   markSpent(txid: string, vout: number): void {
-    this.spentOuts.add(this.op(txid, vout))
-    this.reserved.delete(this.op(txid, vout))
+    this.spent.add(this.op(txid, vout))
     this.utxos = this.utxos.filter((u) => this.op(u.tx.id('hex'), u.vout) !== this.op(txid, vout))
+    this.save()
+  }
+
+  /** Lift a spent mark and restore the recorded entry — the caller verified
+   *  the outpoint is live on-chain (a dead unbroadcast spend or an older
+   *  blanket purge must not lose a live output). */
+  unmark(txid: string, vout: number): void {
+    const op = this.op(txid, vout)
+    if (!this.spent.delete(op)) return
+    const e = this.entries.find((x) => this.op(x.txid, x.vout) === op)
+    if (e !== undefined && !this.utxos.some((u) => this.op(u.tx.id('hex'), u.vout) === op)) {
+      this.utxos.push({ tx: Transaction.fromHex(e.txHex), vout: e.vout, satoshis: e.satoshis })
+    }
     this.save()
   }
 
@@ -417,12 +419,12 @@ export class ReserveFunder implements Funds {
     for (const e of this.entries) {
       const status = await statusOf(e.txid, e.vout)
       const op = this.op(e.txid, e.vout)
-      if (status === 'spent' && !this.spentOuts.has(op)) {
-        this.spentOuts.add(op)
+      if (status === 'spent' && !this.spent.has(op)) {
+        this.spent.add(op)
         this.utxos = this.utxos.filter((u) => this.op(u.tx.id('hex'), u.vout) !== op)
         pruned++
-      } else if (status === 'unspent' && this.spentOuts.has(op)) {
-        this.spentOuts.delete(op)
+      } else if (status === 'unspent' && this.spent.has(op)) {
+        this.spent.delete(op)
         this.utxos.push({ tx: Transaction.fromHex(e.txHex), vout: e.vout, satoshis: e.satoshis })
         revived++
       }
@@ -435,7 +437,7 @@ export class ReserveFunder implements Funds {
   addOwned(tx: Transaction, vout: number): void {
     const hex = tx.toHex()
     const e: ReserveEntry = { txid: tx.id('hex'), vout, satoshis: tx.outputs[vout].satoshis ?? 0, txHex: hex }
-    if (this.spentOuts.has(this.op(e.txid, e.vout))) return
+    if (this.spent.has(this.op(e.txid, e.vout))) return
     if (this.utxos.some((x) => this.op(x.tx.id('hex'), x.vout) === this.op(e.txid, e.vout))) return
     this.entries.push(e)
     this.utxos.push({ tx, vout: e.vout, satoshis: e.satoshis })
@@ -462,9 +464,7 @@ export class ReserveFunder implements Funds {
       // (e.g. a 1-sat change output) can never fund a tx, so it is never picked.
       const floor = minSats ?? 546
       const candidates = []
-      for (const x of this.utxos.filter(
-        (x) => !this.spentOuts.has(this.op(x.tx.id('hex'), x.vout)) && !this.reserved.has(this.op(x.tx.id('hex'), x.vout)) && x.satoshis >= floor
-      )) {
+      for (const x of this.utxos.filter((x) => !this.spent.has(this.op(x.tx.id('hex'), x.vout)) && x.satoshis >= floor)) {
         if (this.leased && (await this.leased(x.tx.id('hex'), x.vout))) continue
         // a hint-only pass-over (e.g. parent rejected) — non-destructive:
         // the candidate stays live for the next call
@@ -479,91 +479,6 @@ export class ReserveFunder implements Funds {
       }
       return u
     }
-  }
-
-  // ── Funds ────────────────────────────────────────────────────────────────
-
-  private lockHex(): string {
-    return `76a914${this.pkhHex}88ac`
-  }
-
-  address(): string {
-    if (this.keyPair !== undefined) return this.keyPair.toPublicKey().toAddress([0x6f])
-    return Utils.toBase58Check(Array.from(Buffer.from(this.pkhHex, 'hex')), [0x6f])
-  }
-
-  async balance(): Promise<number> {
-    return (await this.outs()).reduce((s, u) => s + u.satoshis, 0)
-  }
-
-  async outs(): Promise<FundingOut[]> {
-    return this.utxos.filter((u) => !this.spentOuts.has(this.op(u.tx.id('hex'), u.vout)) && !this.reserved.has(this.op(u.tx.id('hex'), u.vout)))
-  }
-
-  async take(purpose: FundsPurpose, sats: number): Promise<FundingOut> {
-    const committed = [...this.reserved.values()].reduce((s, v) => s + v, 0)
-    if (purpose !== 'deal' && this.dealFloor > 0 && (await this.balance()) - committed - sats < this.dealFloor)
-      throw new Error(`funds: ${purpose} take of ${sats} sats would drop the balance below the deal floor (${this.dealFloor})`)
-    const u = await this.takeReserve(this.spendCheck, sats, this.hintSkip)
-    if (u === null) throw new Error(`funds: no outpoint of ${sats} sats or more`)
-    this.reserved.set(this.op(u.tx.id('hex'), u.vout), u.satoshis)
-    return u
-  }
-
-  /** a broadcast we made: consume its inputs, adopt outputs paying us */
-  spent(tx: Transaction): void {
-    for (const inp of tx.inputs) {
-      const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      if (id !== undefined) this.markSpent(id, inp.sourceOutputIndex ?? 0)
-    }
-    const lock = this.lockHex()
-    tx.outputs.forEach((o, vout) => {
-      if (o.lockingScript.toHex() === lock) this.addOwned(tx, vout)
-    })
-  }
-
-  /** signed away for someone else to air — inputs are consumed, outputs are
-   *  left for discovery to adopt if the spend ever lands */
-  exported(tx: Transaction): void {
-    for (const inp of tx.inputs) {
-      const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      if (id !== undefined) this.markSpent(id, inp.sourceOutputIndex ?? 0)
-    }
-  }
-
-  /** rejected/abandoned — it never landed: inputs free again (a stale mark
-   *  survives reconcile only when the chain agrees it is spent), the tx's own
-   *  outputs are tombstoned so a later re-import can't revive them */
-  died(tx: Transaction): void {
-    const tid = tx.id('hex')
-    tx.outputs.forEach((_o, vout) => this.markSpent(tid, vout))
-    for (const inp of tx.inputs) {
-      const src = inp.sourceTransaction
-      const id = inp.sourceTXID ?? src?.id('hex')
-      const vout = inp.sourceOutputIndex ?? 0
-      if (id === undefined || src === undefined) continue
-      this.reserved.delete(this.op(id, vout))
-      if (!this.spentOuts.has(this.op(id, vout))) continue
-      this.spentOuts.delete(this.op(id, vout))
-      if (!this.utxos.some((u) => this.op(u.tx.id('hex'), u.vout) === this.op(id, vout)))
-        this.utxos.push({ tx: src, vout, satoshis: src.outputs[vout]?.satoshis ?? 0 })
-    }
-    this.save()
-  }
-
-  /** coins sent by someone else — a spent tombstone or a live duplicate is
-   *  refused, everything else becomes spendable stock */
-  adopt(tx: Transaction, vout: number): boolean {
-    if (this.spentOuts.has(this.op(tx.id('hex'), vout))) return false
-    if (this.utxos.some((u) => this.op(u.tx.id('hex'), u.vout) === this.op(tx.id('hex'), vout))) return false
-    this.addOwned(tx, vout)
-    return true
-  }
-
-  /** the chain reports this outpoint spent — tombstoned so it is never
-   *  offered to a take again */
-  burn(txid: string, vout: number): void {
-    this.markSpent(txid, vout)
   }
 
   /** Scan generated block coinbases for outputs to our key; add mature ones. */
@@ -584,7 +499,7 @@ export class ReserveFunder implements Funds {
         const cb = Transaction.fromHex(Buffer.from(txs[0]).toString('hex'))
         cb.outputs.forEach((o, v) => {
           const s = o.satoshis ?? 0
-          if (o.lockingScript.toHex().includes(want) && s > 2000 && !this.spentOuts.has(this.op(cb.id('hex'), v))) {
+          if (o.lockingScript.toHex().includes(want) && s > 2000 && !this.spent.has(this.op(cb.id('hex'), v))) {
             this.entries.push({ txid: cb.id('hex'), vout: v, satoshis: s, txHex: cb.toHex(), height: h })
             this.heights.set(cb.id('hex'), h)
             this.utxos.push({ tx: cb, vout: v, satoshis: s })
@@ -597,6 +512,34 @@ export class ReserveFunder implements Funds {
     }
     this.save()
     return added
+  }
+}
+
+/** Funds owner over a file-backed ReserveFunder — the reserve's spent set is
+ *  the tombstone record, its entries the durable store. `pick` narrows which
+ *  candidates take() sees (e.g. the e2e burst pool slices the tail of the
+ *  reserve so its anchors never compete for the main pool's coins); spent
+ *  marks still land on the shared reserve. */
+export class ReserveFunds extends FundsBase {
+  protected readonly store: FundsStore
+  private reserve: ReserveFunder
+
+  constructor(reserve: ReserveFunder, deps: FundsDeps, pick?: (outs: FundingOut[]) => FundingOut[]) {
+    super(deps)
+    this.reserve = reserve
+    this.store = {
+      list: () => (pick !== undefined ? pick(reserve.utxos) : reserve.utxos),
+      has: (txid, vout) => reserve.utxos.some((u) => u.tx.id('hex') === txid && u.vout === vout),
+      add: (tx, vout) => reserve.addOwned(tx, vout),
+      drop: (txid, vout) => reserve.markSpent(txid, vout),
+      revive: (tx, vout) => reserve.unmark(tx.id('hex'), vout),
+      tombstoned: (txid, vout) => reserve.isSpent(txid, vout)
+    }
+  }
+
+  /** the custody view — the reserve's unspent candidates */
+  get utxos(): FundingOut[] {
+    return this.reserve.utxos
   }
 }
 

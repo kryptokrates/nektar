@@ -3,7 +3,7 @@
 // script: locking/unlocking is built by runar-sdk; funding inputs use the
 // SDK P2PKH template (plain fee funding is allowed).
 import { makeRotationCert } from '@nektar/identity'
-import { Transaction, PrivateKey } from '@bsv/sdk'
+import { Transaction, PrivateKey, P2PKH } from '@bsv/sdk'
 import { RunarContract, LocalSigner, type Signer } from 'runar-sdk'
 import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 // default burstLimit=100: measured 100 unconfirmed contract anchors on
@@ -11,7 +11,7 @@ import type { Provider, UTXO as RUTXO, TransactionData } from 'runar-sdk'
 import { NEKTAR_ANCHOR_ARTIFACT, NEKTAR_ANCHOR_V3_ARTIFACT, META_FLAG_HEX, contractRp, decodeNektarAnchor, TAG_RPRIME } from '@nektar/contracts'
 const TAG_HEX = toHex(TAG_RPRIME)
 import { toHex, runarSigner, signerPubHex, toSigner, type AnchorData, type Bytes, type SignerLike } from '@nektar/core'
-import type { Broadcaster, Funds } from '@nektar/chain'
+import type { Broadcaster, Funder, FundingOut } from '@nektar/chain'
 
 export interface Head {
   tx: Transaction
@@ -28,10 +28,10 @@ export interface AnchorOptions {
   feeRateSatPerKb?: number
 }
 
-// Spent outpoints and spendable change are tracked PER FUNDER, not per
-// provider: several AnchorChains (one per shard) share one funds pool, and
-// each must see what the others already spent. The Funds impl IS that
-// shared book — spent()/died()/adopt()/burn() are its lifecycle.
+// Coin state has ONE owner — the Funds behind the funder: selection,
+// reservations and spend marks live in take/hold/spent/died there. The
+// provider only keeps which outpoint IT currently holds so repeated
+// getUtxos calls for one build hand back the same coin.
 
 /** every ancestor of tx in dependency order (parents before children) via
  *  sourceTransaction links — the order a missing-ancestors broadcast heal
@@ -56,14 +56,19 @@ function ancestorsOf(tx: Transaction): Transaction[] {
   return out
 }
 
-/** runar-sdk Provider backed by our Broadcaster/Funds (+ optional utxo feed). */
+/** runar-sdk Provider backed by our Broadcaster/Funder (+ optional utxo feed). */
 export class NektarProvider implements Provider {
   network = 'testnet' as const
   lastTx?: Transaction
   constructor(
     public broadcaster: Broadcaster,
-    private funds: Funds
-  ) {}
+    private funder: (Funder & { funds?: import('@nektar/chain').Funds }) | import('@nektar/chain').Funds,
+    public funderAddress?: string
+  ) {
+    // a bare Funds is the owner itself; a Funder carrier exposes it as .funds
+    const f = funder as { funds?: import('@nektar/chain').Funds; spent?: unknown; adopt?: unknown }
+    this.funds = f.funds ?? (typeof f.spent === 'function' && typeof f.adopt === 'function' ? (f as unknown as import('@nektar/chain').Funds) : undefined)
+  }
   /** called on every broadcast attempt AND again on success. */
   onAttempt?: (tx: Transaction) => void
   onSuccess?: (tx: Transaction) => void
@@ -100,8 +105,7 @@ export class NektarProvider implements Provider {
     if (this.lastTx && this.lastTx.id('hex') === txid) return this.lastTx.toHex()
     return this.recent.get(txid)?.toHex() ?? ''
   }
-  /** the pool's reserved-but-unbroadcast takes — runar re-picks via getUtxos
-   *  so a take only commits on broadcast; tombstones live in the Funds impl */
+  readonly funds?: import('@nektar/chain').Funds
 
   /** the tx as it was last presented for broadcast — success or failure. */
   lastAttempt?: Transaction
@@ -124,11 +128,18 @@ export class NektarProvider implements Provider {
   }
 
   /** Book-keeping for a tx the network accepted — on a direct success AND
-   *  when an earlier ambiguous attempt is adopted or re-broadcast: its inputs
-   *  are spent and our own change outputs become spendable. The Funds impl
-   *  owns both halves — shared across every AnchorChain on this pool. */
+   *  when an earlier ambiguous attempt is adopted or re-broadcast: custody
+   *  records the whole tx at once (inputs leave the owned set, our P2PKH
+   *  change returns), and the provider's own hold clears. */
   async markAccepted(tx: Transaction): Promise<string> {
-    await this.funds.spent(tx)
+    const held = this.held
+    if (held !== undefined) {
+      for (const inp of tx.inputs) {
+        const stx = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+        if (stx === held.txid && (inp.sourceOutputIndex ?? 0) === held.outputIndex) this.held = undefined
+      }
+    }
+    await this.funds?.spent(tx)
     const txid = tx.id('hex')
     // record AFTER success only — a failed tx must never shadow its own parent.
     // Keep the ORIGINAL object (mine()/confirm() attach merklePath to it); the
@@ -138,18 +149,49 @@ export class NektarProvider implements Provider {
     this.onSuccess?.(tx)
     return txid
   }
+  /** the outpoint this provider holds for its in-flight build — runar calls
+   *  getUtxos repeatedly per tx, and a fresh take each call would starve the
+   *  reserve and strand earlier reservations. The hold is released by
+   *  markAccepted (the spend consumed it) or when the out leaves the owned
+   *  set (a reconcile found it spent). */
+  held?: { txid: string; outputIndex: number; satoshis: number; script: string; tx: Transaction }
+  /** every candidate a getUtxos scan returned — EF source hydration for
+   *  funding inputs whose outpoint came through this provider */
+  readonly known = new Map<string, Transaction>()
   async getUtxos(_address: string): Promise<RUTXO[]> {
-    // hand runar the single largest live candidate — it becomes exactly one
-    // funding input. smallest-first starved on a small change output while
-    // big reserve entries sat unused; a list >1 makes runar add every entry
-    // as an input (wasteful). The Funds impl's spendable view already
-    // excludes reserved/spent/dead outpoints.
-    const all = await this.funds.outs()
-    if (all.length === 0) return []
-    const u = all.reduce((a, b) => ((b.satoshis ?? 0) > (a.satoshis ?? 0) ? b : a))
-    const txid = u.tx.id('hex')
-    this.taken.set(txid, u.tx)
-    return [{ txid, outputIndex: u.vout, satoshis: u.satoshis ?? u.tx.outputs[u.vout].satoshis!, script: u.tx.outputs[u.vout].lockingScript.toHex() }]
+    const funds = this.funds
+    if (funds === undefined) throw new Error('NektarProvider: the funder carries no Funds owner — pass a Funds-backed funder')
+    if (this.held !== undefined) {
+      const { txid, outputIndex, satoshis, script } = this.held
+      const live = await funds.list()
+      if (live.some((u) => u.tx.id('hex') === txid && u.vout === outputIndex)) {
+        return [{ txid, outputIndex, satoshis, script }]
+      }
+      this.held = undefined // consumed or dropped — pick anew
+    }
+    // hand runar the single largest available candidate — it becomes exactly
+    // one funding input. smallest-first starved on a small change output
+    // while big reserve entries sat unused; a list >1 makes runar add every
+    // entry as an input (wasteful).
+    const cands = await funds.outs()
+    for (const u of cands) this.known.set(u.tx.id('hex'), u.tx)
+    while (cands.length > 0) {
+      const u = cands.reduce((a: FundingOut, b: FundingOut) => (b.satoshis > a.satoshis ? b : a))
+      if (funds.hold(u.tx.id('hex'), u.vout)) {
+        this.held = {
+          txid: u.tx.id('hex'),
+          outputIndex: u.vout,
+          satoshis: u.satoshis,
+          script: u.tx.outputs[u.vout].lockingScript.toHex(),
+          tx: u.tx
+        }
+        this.taken.set(u.tx.id('hex'), u.tx)
+        const { txid, outputIndex, satoshis, script } = this.held
+        return [{ txid, outputIndex, satoshis, script }]
+      }
+      cands.splice(cands.indexOf(u), 1) // another chain leased it — next largest
+    }
+    return []
   }
   taken = new Map<string, Transaction>()
   async getContractUtxo(_scriptHash: string): Promise<RUTXO | null> {
@@ -183,7 +225,7 @@ export class AnchorChain {
   constructor(
     shard: string,
     shardKey: SignerLike,
-    private funds: Funds,
+    private funder: Funder | import('@nektar/chain').Funds,
     fundKey: SignerLike,
     broadcaster: Broadcaster,
     private opts: AnchorOptions & { shardPub?: string } = {}
@@ -203,7 +245,7 @@ export class AnchorChain {
       : signerPubHex(shardKey).then((p) => {
           this._shardPub = p
         })
-    this.provider = new NektarProvider(broadcaster, funds)
+    this.provider = new NektarProvider(broadcaster, funder)
     if (opts.feeRateSatPerKb !== undefined) this.provider.feeRate = opts.feeRateSatPerKb
     const rec = (tx: Transaction) => {
       this.ownAttempts.add(tx.id('hex'))
@@ -211,6 +253,9 @@ export class AnchorChain {
     }
     this.provider.onAttempt = rec
     this.provider.onSuccess = rec
+    void this.signer.getAddress().then((a) => {
+      this.provider.funderAddress = a
+    })
   }
 
   private _shardId?: string
@@ -322,9 +367,8 @@ export class AnchorChain {
         const sm = /([0-9a-f]{64}):(\d+) utxo already spent/.exec(msg)
         const h = this.getHead()
         if (sm && (!h || `${sm[1]}:${sm[2]}` !== `${h.tx.id('hex')}:${h.vout}`)) {
-          // the chain reports the funding input spent — tombstone it so the
-          // next take never offers it again
-          await this.funds.burn(sm[1], Number(sm[2]))
+          void this.provider.funds?.burn(sm[1], Number(sm[2]))
+          if (this.provider.held?.txid === sm[1] && this.provider.held.outputIndex === Number(sm[2])) this.provider.held = undefined
           this.contract = undefined
           if (attempt >= 5) throw e
           continue
@@ -520,15 +564,16 @@ export class AnchorChain {
     return h ? h.tx.toAtomicBEEF() : undefined
   }
   private register(tx: Transaction): void {
-    // attach source parents for BEEF completeness: the funding input's tx is
-    // the one getUtxos just handed out (provider.taken); the contract input
-    // comes from the tracked head chain (txById/recent)
-    const parents = new Map<string, Transaction>(this.provider.taken)
+    // attach source parents for BEEF completeness: funding inputs come from
+    // what the provider handed out or saw; the contract input comes from
+    // the tracked head chain
+    const fundUtxos = new Map<string, Transaction>(this.provider.known)
+    for (const [id, t] of this.provider.taken) fundUtxos.set(id, t)
     for (const inp of tx.inputs) {
       if (inp.sourceTransaction) continue
       const txid = inp.sourceTXID
       if (!txid) continue
-      const parent = parents.get(txid) ?? this.txById.get(txid) ?? this.provider.recentOf(txid)
+      const parent = fundUtxos.get(txid) ?? this.txById.get(txid)
       if (parent) inp.sourceTransaction = parent
     }
     this.txById.set(tx.id('hex'), tx)

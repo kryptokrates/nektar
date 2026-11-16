@@ -8,7 +8,7 @@
 // port.broadcast/tracker/mine/guard.
 import { join } from 'node:path'
 import { PrivateKey, Transaction, WalletClient, PublicKey as SdkPublicKey } from '@bsv/sdk'
-import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvFlag, type SignerWallet } from '@nektar/core'
+import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvFlag, nektarEnvNum, type SignerWallet } from '@nektar/core'
 import {
   bootstrapReserve,
   regtestRpc,
@@ -32,12 +32,11 @@ const log = (net: string) => (s: string) => process.stderr.write(`nektar ${net}:
  *  of them; an injected test-tier Funds may carry none) */
 interface CoinBook extends Funds {
   utxos?: Array<{ tx: Transaction; vout: number; satoshis?: number }>
-  refresh?: () => Promise<unknown>
   dealFloor?: number
 }
 
 export interface CustodyResult {
-  /** the one coin book (ToolboxReserveFunder on every real wallet path) */
+  /** the one coin book (WalletFunds on every real wallet path) */
   funds: CoinBook
   /** injected signing surface for lanes/bstack protocol calls */
   wallet?: import('@bsv/sdk').WalletInterface | import('./types.js').OperatorWallet
@@ -61,6 +60,9 @@ export async function openCustody(
   const tb = await import('@nektar/automation')
   const net = port.network
   const walletMode = nektarEnv('NEKTAR_WALLET') ?? 'toolbox'
+  // upkeep/publish takes may not dip the book below what keeps one deal
+  // affordable — the impl's take() enforces it on every pick
+  const dealFloor = nektarEnvNum('NEKTAR_DEAL_FLOOR_SATS') ?? 0
   if (net === 'regtest') {
     if (walletMode !== 'toolbox')
       throw new Error(`regtest custody is NEKTAR_WALLET=toolbox — got '${walletMode}' (legacy was removed; client has no regtest path)`)
@@ -70,7 +72,7 @@ export async function openCustody(
     // spend entry point, not a side channel around the caps
     const services = new tb.RegtestWalletServices(rc, port.tracker as import('@nektar/chain').TeranodeRPCTracker, (tx) => port.broadcast(tx))
     const toolbox = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: 'regtest', services })
-    const funds = new tb.ToolboxReserveFunder(toolbox.wallet, services, log(net))
+    const funds = new tb.WalletFunds(toolbox.wallet, services, { log: log(net), dealFloor })
     await funds.refresh()
     const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
     return {
@@ -125,16 +127,16 @@ export async function openCustody(
   const services = new tb.LiveWalletServices({ chain: testNet ? 'test' : 'main', mc, tracker: port.tracker, broadcast: (tx) => port.broadcast(tx) })
   let closeWallet: (() => Promise<void>) | undefined
   let wallet: import('@bsv/sdk').WalletInterface | undefined
-  let funds: import('@nektar/automation').ToolboxReserveFunder
+  let funds: import('@nektar/automation').WalletFunds
   if (externalWallet) {
-    funds = new tb.ToolboxReserveFunder(clientWallet!, services, log(net))
+    funds = new tb.WalletFunds(clientWallet!, services, { log: log(net), dealFloor })
     wallet = clientWallet
     await funds.refresh()
     process.stderr.write(`nektar ${net}: wallet backend client (external BRC-100) — ${funds.utxos.length} funding utxo(s)\n`)
   } else {
     if (fundKey === undefined) throw new Error('NEKTAR_WALLET=toolbox embeds its keyDeriver from the fee key — =client is the keyless mode')
     const toolbox = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: testNet ? 'test' : 'main', services })
-    funds = new tb.ToolboxReserveFunder(toolbox.wallet, services, log(net))
+    funds = new tb.WalletFunds(toolbox.wallet, services, { log: log(net), dealFloor })
     wallet = toolbox.wallet
     closeWallet = () => toolbox.close()
     await funds.refresh()
@@ -144,18 +146,18 @@ export async function openCustody(
 }
 
 /** regtest treasury bootstrap — the funder's own chain in the data dir; split
- *  mined before use. Bootstrap writes straight into the wallet via addOwned
- *  (internalize). Only runs while the wallet holds <5 utxos. */
+ *  mined before use. Bootstrap writes straight into the wallet via the seed's
+ *  addOwned hook (internalize). Only runs while the wallet holds <5 utxos. */
 export async function regtestSeed(deps: {
   rc: RegtestConfig & { fundWif: string }
   port: ChainPort
-  funds: import('@nektar/automation').ToolboxReserveFunder
+  funds: import('@nektar/automation').WalletFunds
   dataDir: string
 }): Promise<void> {
   const { rc, port, funds, dataDir } = deps
   if (funds.utxos.length >= 5) return
   const fundKey = PrivateKey.fromWif(rc.fundWif)
-  const seed = { addOwned: (tx: Transaction, vout: number) => void funds.addOwned(tx, vout) }
+  const seed = { addOwned: (tx: Transaction, vout: number) => void funds.adopt(tx, vout) }
   const s = await bootstrapReserve(rc, fundKey, seed, regtestRpc(rc), { treasuryFile: join(dataDir, 'treasury.json') })
   if (!s && funds.utxos.length === 0) throw new Error('regtest: could not fund the reserve (no unspent treasury or early coinbase for the fund key)')
   if (s) await port.mine?.()
@@ -201,9 +203,9 @@ export interface LiveFunding {
 export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
   const { cfg, mc, net, custody, txStore, ledger, port } = deps
   const { fundAddress, pkhHex } = custody
-  // the live path only ever builds the toolbox impl — the fields the UX
-  // pokes (takeReserve/addOwned/refresh/utxos) are its real surface
-  const funds = custody.funds as import('@nektar/automation').ToolboxReserveFunder
+  // the live path only ever builds the wallet impl — the fields the UX
+  // pokes (utxos/refresh/adopt) are its real surface
+  const funds = custody.funds as import('@nektar/automation').WalletFunds
   const l = log(net)
   // funding wake: every producer that lands a utxo (p2p 'pay', FUND_TXIDS
   // import, indexer discovery, fee-vault mint) signals through addIfNew so
@@ -238,12 +240,13 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-  wireP2p({ peers: p2pPeers, pkhHex, funds, addIfNew, log: (s) => process.stderr.write(s) })
+  wireP2p({ peers: p2pPeers, pkhHex, reserve: funds, addIfNew, log: (s) => process.stderr.write(s) })
   // NEKTAR_FEE_VAULT: anchor funding minted through the fee-vault covenant —
-  // setupFeeVault returns the funder's vault-backed takeReserve
+  // setupFeeVault returns a vault-take; the covenant mints capped publish
+  // stock while deal and upkeep takes still draw from the shared pool
   const vaultSpec = nektarEnv('NEKTAR_FEE_VAULT')
   if (vaultSpec) {
-    funds.takeReserve = await setupFeeVault({
+    const vaultTake = await setupFeeVault({
       vaultSpec,
       dataDir: cfg.dataDir,
       pkhHex,
@@ -255,6 +258,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
       net,
       log: (s) => process.stderr.write(s)
     })
+    funds.takeOverride = async (purpose) => (purpose === 'publish' ? await vaultTake() : undefined)
   }
   // NEKTAR_FUND_TXIDS: funding txs to import directly (no address index needed)
   for (const txid of (nektarEnv('NEKTAR_FUND_TXIDS') ?? '')

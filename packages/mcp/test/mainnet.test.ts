@@ -42,7 +42,7 @@ test('runtime testnet: no confirm flag required; testnet-encoded fee address', (
   assert.equal(cfg.main?.wocUrl, 'https://api.whatsonchain.com/v1/bsv/test')
   assert.equal(cfg.main?.feeRateSatPerKb, 1)
   assert.equal(cfg.confirmEveryMs, 30_000)
-  // test net addresses encode with testnet prefix (m/n…), mainnet with 1…
+  // testnet address encodes with testnet prefix (m/n…), mainnet with 1…
   const k = PrivateKey.fromRandom()
   assert.match(k.toPublicKey().toAddress([0x6f]), /^[mn]/)
   assert.match(k.toPublicKey().toAddress(), /^1/)

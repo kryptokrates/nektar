@@ -1,232 +1,410 @@
-// funds.ts — the one owner of "which coins do I have". Every piece of
-// spent/owned bookkeeping in the system lives behind this interface: take
-// reserves an outpoint for a spend, spent() consumes a broadcast tx's inputs
-// and adopts its change, died() frees a spend that never landed, adopt()
-// imports outputs someone else paid us. Selection (smallest-sufficient,
-// lease/hint filters) is inside the implementations — callers never pick
-// outpoints themselves. check-arch fails on spent/owned bookkeeping outside
-// the Funds implementations.
-import { P2PKH, type Transaction } from '@bsv/sdk'
-import type { FundingOut } from './interfaces.js'
+// funds.ts — the single owner of coin state (Stage 2): selection,
+// reservation, spend marks, abandonment, adoption. Callers never mark
+// spent or owned directly — they hand whole transactions to `spent`,
+// `died` and `adopt` and the implementation decides which outpoints live
+// or die. FundsBase holds the shared semantics (purpose floor, reserved
+// set, serialized takes, change detection); a FundsStore supplies the
+// backend — wallet basket, in-memory pool, or test treasury.
+import { Transaction, P2PKH } from '@bsv/sdk'
+import type { Funder, FundingOut, Funds, FundPurpose } from './interfaces.js'
 
-/** why an output is being taken — allocation policy, not bookkeeping:
- *  a `deal` spend takes freely; `publish`/`upkeep` must leave the deal floor
- *  untouched so an order can always afford to settle */
-export type FundsPurpose = 'deal' | 'publish' | 'upkeep'
+/** a narrow Funder view over a Funds owner — every take is purpose-labeled.
+ *  Anchor/AutomatonChain and other `Funder`-shaped consumers sit behind
+ *  this; the label travels through to the allocation floor. */
+export function fundsAsFunder(funds: Funds, purpose: FundPurpose): Funder & { funds: Funds } {
+  return {
+    take: async (sats) => await funds.take(purpose, sats),
+    address: () => funds.address(),
+    funds
+  }
+}
 
-export interface Funds {
-  /** our receive address — funding and change outputs lock to it */
-  address(): Promise<string> | string
-  /** spendable sats right now */
-  balance(): Promise<number>
-  /** the spendable view — fundingStatus and tests read it */
-  outs(): Promise<FundingOut[]>
-  /** reserve an outpoint of at least `sats` for `purpose`. Non-destructive:
-   *  the outpoint is consumed only when the built tx broadcasts and spent()
-   *  lands. Throws when nothing eligible exists; `publish`/`upkeep` takes
-   *  also refuse when the take would drop the balance below dealFloorSats. */
-  take(purpose: FundsPurpose, sats: number): Promise<FundingOut>
-  /** one call after a successful broadcast: the tx's inputs are consumed and
-   *  its outputs paying our address are adopted */
-  spent(tx: Transaction): void | Promise<void>
-  /** the tx was signed and exported for someone ELSE to air (e.g. a BEEF
-   *  payment handed to a seller): the inputs are consumed — they are signed
-   *  away either way — but outputs paying us are NOT adopted; if the spend
-   *  lands, discovery adopts the change then */
-  exported(tx: Transaction): void | Promise<void>
-  /** the spend was rejected or abandoned — it never landed: its inputs are
-   *  free again and its outputs are tombstoned (adopt refuses them later) */
-  died(tx: Transaction): void | Promise<void>
-  /** coins sent by someone else; refuses outpoints we already spent */
-  adopt(tx: Transaction, vout: number): Promise<boolean> | boolean
-  /** tombstone one outpoint the chain reports spent (a broadcast reject,
-   *  a first-party probe): never offered again */
-  burn(txid: string, vout: number): void | Promise<void>
-  /** outpoint lease hook — the automation ledger's prepared-tx leases plug in
-   *  here so concurrent takes never pick an input a prepared tx claims */
-  leased?: (txid: string, vout: number) => Promise<boolean>
-  /** hint-only pass-over (e.g. a broadcaster says this candidate's parent
-   *  was rejected) — never writes bookkeeping, only skips this take */
+/** what the backend owes the shared semantics — four primitive verbs over
+ *  the owned-outpoint set. Implementations: wallet basket (automation's
+ *  WalletFunds), in-memory pool (MemoryFunds), test treasury (StackFunder). */
+export interface FundsStore {
+  /** owned unspent candidates — the impl decides what 'unspent' means */
+  list: () => Promise<FundingOut[]> | FundingOut[]
+  /** record an owned output (internalize / persist / pool-push) */
+  add: (tx: Transaction, vout: number) => Promise<void> | void
+  /** remove an owned output — spent on-chain or dead record */
+  drop: (txid: string, vout: number) => Promise<void> | void
+  /** bring a previously-owned input back — the spend consuming it died
+   *  while its parent still lives. Default: re-add via tx+vout. */
+  revive?: (tx: Transaction, vout: number) => Promise<void> | void
+  /** persistent tombstone — an outpoint we deliberately marked spent */
+  tombstoned?: (txid: string, vout: number) => Promise<boolean> | boolean
+  /** already in the owned set? Default: a list() scan. */
+  has?: (txid: string, vout: number) => Promise<boolean> | boolean
+}
+
+export interface FundsDeps {
+  /** our pubkey-hash hex — identifies owned outputs and change
+   *  (every adopted/change output is P2PKH-to-us). Optional when `lock`
+   *  is supplied. */
+  pkhHex?: string
+  /** explicit locking-script hex override (adapters that only hold an
+   *  address) — wins over the pkhHex-derived P2PKH script */
+  lock?: string
+  /** pre-encoded address override; derived from pkhHex (0x6f) otherwise */
+  address?: string
+  /** sats kept affordable for one deal — non-deal takes never dip below.
+   *  Default 25_000. */
+  dealFloor?: number
+  /** durable cross-process lease — the automation ledger's outpoint lease.
+   *  Seeds the same-named field on the impl — late-bound seams assign
+   *  `funds.leased = …` after construction. */
+  leased?: (txid: string, vout: number) => Promise<boolean> | boolean
+  /** resolve a txid to its tx — `died` needs the dead tx's inputs/outputs */
+  txOf?: (txid: string) => Promise<Transaction | undefined> | Transaction | undefined
+  /** candidate's parent is dead — never selected (a hint, not a verdict).
+   *  Seeds the `hintSkip` field. */
   hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
-  /** first-party spend probe (chain utxo status / wallet truth): a 'spent'
-   *  answer drops the candidate permanently */
+  /** attach the proof we hold for a candidate's parent tx */
+  proofOf?: (tx: Transaction) => Promise<void>
+  /** first-party spend probe — a 'spent' answer burns the candidate during
+   *  selection. Seeds the `spendCheck` field. */
   spendCheck?: (txid: string, vout: number) => Promise<boolean>
+  /** a purpose's take served by a dedicated pool instead of the shared set —
+   *  the fee-vault covenant mints capped outs for `publish` takes; it returns
+   *  undefined when it has nothing to serve (fall through to the pool).
+   *  Seeds the `takeOverride` field. */
+  takeOverride?: (purpose: FundPurpose, sats: number) => Promise<FundingOut | undefined>
+  log?: (s: string) => void
 }
 
 const op = (txid: string, vout: number): string => `${txid}:${vout}`
 
-/** the funder shapes existing code hands us — take(), takeReserve(), or a
- *  bare utxos list; probed, not widened */
+export abstract class FundsBase implements Funds {
+  /** in-process reservations: take() holds the outpoint until spent/died/
+   *  release — two concurrent spends can never receive the same input */
+  protected readonly reserved = new Set<string>()
+  /** serialized take() — the async list/lease/proof gap must not interleave */
+  private queue: Promise<unknown> = Promise.resolve()
+  protected abstract readonly store: FundsStore
+
+  /** late-bound behavior hooks — interface-level fields so callers that
+   *  only know `Funds` (never the impl's deps) can still wire the lease,
+   *  hint and spend-probe seams after construction */
+  public leased?: (txid: string, vout: number) => Promise<boolean> | boolean
+  public hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
+  public spendCheck?: (txid: string, vout: number) => Promise<boolean>
+  public takeOverride?: (purpose: FundPurpose, sats: number) => Promise<FundingOut | undefined>
+  /** sats kept affordable for one deal — non-deal takes never dip below;
+   *  seeded from deps.dealFloor, re-tunable post-construction */
+  public dealFloor?: number
+
+  /** deps holds construction-time config (identity, floor, tx view); the
+   *  hook fields above are seeded from it but remain mutable — the
+   *  ledger's lease predicate and first-party spend record only exist once
+   *  the records db opens, after the impl is already assembled */
+  constructor(public deps: FundsDeps) {
+    this.leased = deps.leased
+    this.hintSkip = deps.hintSkip
+    this.spendCheck = deps.spendCheck
+    this.takeOverride = deps.takeOverride
+    this.dealFloor = deps.dealFloor
+  }
+
+  /** the locking script that marks an output as ours (change, adoptions).
+   *  Deps-supplied lock or pkhHex-derived P2PKH; wallet impls override to
+   *  derive it from the wallet itself. */
+  protected async ourLock(): Promise<string> {
+    return this.deps.lock ?? `76a914${this.deps.pkhHex}88ac`
+  }
+
+  address(): Promise<string> | string {
+    return this.deps.address ?? `1${this.deps.pkhHex?.slice(0, 24)}`
+  }
+
+  async balance(): Promise<number> {
+    let sum = 0
+    for (const u of await this.store.list()) {
+      if (!this.reserved.has(op(u.tx.id('hex'), u.vout))) sum += u.satoshis
+    }
+    return sum
+  }
+
+  /** un-reserve an outpoint — the spend built on it was never broadcast */
+  release(txid: string, vout: number): void {
+    this.reserved.delete(op(txid, vout))
+  }
+
+  /** reserve a specific outpoint — the fee-vault pool and funding-import
+   *  paths hold a named output rather than letting take() choose. Atomic:
+   *  returns false when the outpoint is already held by another spend. */
+  hold(txid: string, vout: number): boolean {
+    const o = op(txid, vout)
+    if (this.reserved.has(o)) return false
+    this.reserved.add(o)
+    return true
+  }
+
+  async list(): Promise<FundingOut[]> {
+    return await this.store.list()
+  }
+
+  async outs(): Promise<FundingOut[]> {
+    return (await this.store.list()).filter((u) => !this.reserved.has(op(u.tx.id('hex'), u.vout)))
+  }
+
+  /** backends with a remote store re-query here — default no-op covers
+   *  in-memory stores */
+  async refresh(): Promise<void> {}
+
+  /** an outpoint is spent for good — observed on-chain spend or a
+   *  first-party probe answer; tombstoned, never offered again */
+  async burn(txid: string, vout: number): Promise<void> {
+    await this.store.drop(txid, vout)
+    this.reserved.delete(op(txid, vout))
+  }
+
+  /** a resolved candidate's outpoint id — the hint side of selection
+   *  (reservation, tombstone, lease, dead-parent hint): pass-over only,
+   *  never writes bookkeeping */
+  private async unusable(u: FundingOut): Promise<boolean> {
+    const id = u.tx.id('hex')
+    if (this.reserved.has(op(id, u.vout))) return true
+    if ((await this.store.tombstoned?.(id, u.vout)) === true) return true
+    if ((await this.leased?.(id, u.vout)) === true) return true
+    // a proven parent cannot be a dead parent — the hint is never consulted
+    if (u.tx.merklePath === undefined && (await this.hintSkip?.(u.tx, u.vout)) === true) return true
+    return false
+  }
+
+  take(purpose: FundPurpose, sats: number): Promise<FundingOut> {
+    const run = this.queue.then(async () => {
+      const override = await this.takeOverride?.(purpose, sats)
+      if (override !== undefined) {
+        this.reserved.add(op(override.tx.id('hex'), override.vout))
+        if (override.tx.merklePath === undefined) await this.deps.proofOf?.(override.tx)
+        return override
+      }
+      const all = await this.store.list()
+      const floor = this.dealFloor ?? 25_000
+      if (purpose !== 'deal') {
+        let owned = 0
+        for (const u of all) if (!this.reserved.has(op(u.tx.id('hex'), u.vout))) owned += u.satoshis
+        if (owned - sats < floor) throw new Error(`funds: ${purpose} take of ${sats} sats would leave ${owned - sats} < deal floor ${floor}`)
+      }
+      const candidates: FundingOut[] = []
+      for (const u of all) {
+        if (u.satoshis < sats || (await this.unusable(u))) continue
+        candidates.push(u)
+      }
+      candidates.sort((a, b) => a.satoshis - b.satoshis)
+      // first-party truth side: a 'spent' answer burns the candidate for
+      // good and selection moves on — a hint only passes over, this drops
+      for (const pick of candidates) {
+        const id = pick.tx.id('hex')
+        if ((await this.spendCheck?.(id, pick.vout)) === true) {
+          await this.burn(id, pick.vout)
+          continue
+        }
+        this.reserved.add(op(id, pick.vout))
+        if (pick.tx.merklePath === undefined) await this.deps.proofOf?.(pick.tx)
+        return pick
+      }
+      throw new Error(`funds: no spendable output ≥ ${sats} sats`)
+    })
+    this.queue = run.catch(() => {})
+    return run
+  }
+
+  /** input outpoint id — sourceTXID or the held sourceTransaction's id */
+  private static inputOp(inp: Transaction['inputs'][number]): string | undefined {
+    const txid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+    return txid !== undefined ? op(txid, inp.sourceOutputIndex) : undefined
+  }
+
+  async spent(tx: Transaction): Promise<void> {
+    for (const inp of tx.inputs) {
+      const io = FundsBase.inputOp(inp)
+      if (io === undefined) continue
+      const [txid, v] = io.split(':')
+      await this.store.drop(txid, Number(v))
+      this.reserved.delete(io)
+    }
+    const lock = await this.ourLock()
+    for (const [vout, o] of tx.outputs.entries()) {
+      if (o.lockingScript.toHex() !== lock) continue
+      if ((await this.store.has?.(tx.id('hex'), vout)) === true) continue
+      await this.store.add(tx, vout)
+    }
+  }
+
+  /** a signed tx left our hands for someone else to air — the inputs are
+   *  consumed (signed away either way) but its outputs are NOT adopted:
+   *  discovery adopts the change when the spend lands on-chain. */
+  async exported(tx: Transaction): Promise<void> {
+    for (const inp of tx.inputs) {
+      const io = FundsBase.inputOp(inp)
+      if (io === undefined) continue
+      const [txid, v] = io.split(':')
+      await this.store.drop(txid, Number(v))
+      this.reserved.delete(io)
+    }
+  }
+
+  async died(x: Transaction | string): Promise<void> {
+    const txid = typeof x === 'string' ? x : x.id('hex')
+    const tx = typeof x === 'string' ? await this.deps.txOf?.(x) : x
+    if (tx === undefined) {
+      this.deps.log?.(`funds: died(${txid.slice(0, 16)}…) — tx not held, nothing to free`)
+      return
+    }
+    for (const inp of tx.inputs) {
+      const io = FundsBase.inputOp(inp)
+      if (io === undefined) continue
+      this.reserved.delete(io)
+      const [pid, v] = io.split(':')
+      const vout = Number(v)
+      if ((await this.store.has?.(pid, vout)) === true) continue
+      if ((await this.store.tombstoned?.(pid, vout)) !== true) continue
+      const parent = inp.sourceTransaction ?? (await this.deps.txOf?.(pid))
+      if (parent === undefined || (await this.hintSkip?.(parent, vout)) === true) continue
+      if (this.store.revive !== undefined) await this.store.revive(parent, vout)
+      else await this.store.add(parent, vout)
+    }
+    const lock = await this.ourLock()
+    for (const [vout, o] of tx.outputs.entries()) {
+      if (o.lockingScript.toHex() === lock) await this.store.drop(txid, vout)
+    }
+  }
+
+  /** verified-live re-ownership of a tombstoned out — reconcile's verb.
+   *  `adopt` respects tombstones; `revive` lifts one the caller proved is
+   *  still live on-chain. */
+  async revive(tx: Transaction, vout: number): Promise<void> {
+    const txid = tx.id('hex')
+    if (this.store.revive !== undefined) await this.store.revive(tx, vout)
+    else await this.store.add(tx, vout)
+    this.reserved.delete(op(txid, vout))
+  }
+
+  async adopt(tx: Transaction, vout: number): Promise<boolean> {
+    const txid = tx.id('hex')
+    if ((await this.store.tombstoned?.(txid, vout)) === true) return false
+    if ((await this.spendCheck?.(txid, vout)) === true) return false
+    if ((await this.store.has?.(txid, vout)) === true) return false
+    await this.store.add(tx, vout)
+    return true
+  }
+}
+
+/** array-backed store — in-memory pools and test treasuries share it. The
+ *  returned object is the durable record: two MemoryFunds over one store
+ *  is a "restart" — the new instance sees the same outpoints with no
+ *  re-import. */
+export interface ListFundsStore extends FundsStore {
+  readonly outs: FundingOut[]
+  readonly tombstones: Set<string>
+}
+
+export function listFundsStore(): ListFundsStore {
+  const outs: FundingOut[] = []
+  const tombstones = new Set<string>()
+  return {
+    outs,
+    tombstones,
+    list: () => outs.filter((u) => !tombstones.has(op(u.tx.id('hex'), u.vout))),
+    has: (txid, vout) => outs.some((u) => u.tx.id('hex') === txid && u.vout === vout),
+    add: (tx, vout) => {
+      const o = tx.outputs[vout]
+      if (o === undefined) throw new Error(`funds: adopt out-of-range vout ${vout}`)
+      tombstones.delete(op(tx.id('hex'), vout))
+      if (!outs.some((u) => u.tx.id('hex') === tx.id('hex') && u.vout === vout)) {
+        outs.push({ tx, vout, satoshis: o.satoshis ?? 0 })
+      }
+    },
+    drop: (txid, vout) => {
+      const i = outs.findIndex((u) => u.tx.id('hex') === txid && u.vout === vout)
+      // tombstone only what was ours — a foreign input consumed by our tx
+      // must not become revivable (it was never ours to bring back)
+      if (i >= 0) {
+        outs.splice(i, 1)
+        tombstones.add(op(txid, vout))
+      }
+    },
+    revive: (tx, vout) => {
+      tombstones.delete(op(tx.id('hex'), vout))
+      const o = tx.outputs[vout]
+      if (o !== undefined && !outs.some((u) => u.tx.id('hex') === tx.id('hex') && u.vout === vout)) {
+        outs.push({ tx, vout, satoshis: o.satoshis ?? 0 })
+      }
+    },
+    tombstoned: (txid, vout) => tombstones.has(op(txid, vout))
+  }
+}
+
+/** the generic FundsBase over an arbitrary FundsStore — what adapters hand
+ *  out when the backend is a foreign funder shape */
+class AdaptedFunds extends FundsBase {
+  constructor(
+    protected readonly store: FundsStore,
+    deps: FundsDeps
+  ) {
+    super(deps)
+  }
+}
+
+/** in-memory Funds — the default test tier's coin owner. Pass a shared
+ *  `listFundsStore()` to two instances to simulate restart persistence. */
+export class MemoryFunds extends FundsBase {
+  protected readonly store: ListFundsStore
+
+  constructor(store: ListFundsStore | undefined, deps: FundsDeps) {
+    super(deps)
+    this.store = store ?? listFundsStore()
+  }
+
+  /** the mutable record — for restart simulations and direct inspection */
+  get records(): ListFundsStore {
+    return this.store
+  }
+}
+
+/** the funder shapes older call sites hand us: a real Funds carrier
+ *  (`.funds`) or a utxos-shaped treasury with mark/add verbs. New code
+ *  should construct a Funds impl directly — this adapts, never widens. */
 export interface FunderLike {
-  take?: (satoshis: number) => Promise<FundingOut>
-  takeReserve?: (
-    spendCheck?: (txid: string, vout: number) => Promise<boolean>,
-    minSats?: number,
-    skip?: (tx: Transaction, vout: number) => Promise<boolean>
-  ) => Promise<FundingOut | null>
+  funds?: Funds
   utxos?: Array<{ tx: Transaction; vout: number; satoshis?: number }>
   markSpent?: (txid: string, vout: number) => void
   addOwned?: (tx: Transaction, vout: number) => void
+  unmark?: (txid: string, vout: number) => void
   address?: () => Promise<string> | string
 }
 
-/** Adapt any legacy funder shape into Funds. Tombstones (consumed inputs,
- *  died outputs) live here — bases like MemoryFunder only know their live
- *  pool, so adopt() consults the tombstones first. When the base offers
- *  takeReserve, reservations ride its `leased` filter; a base with only a
- *  destructive take is already the reservation. */
-export function fundsOf(f: FunderLike, dealFloor = 0): Funds {
-  const spentLog = new Set<string>()
-  const dead = new Set<string>()
-  const reserved = new Map<string, number>()
-  const lockOf = async (): Promise<string> => {
-    const a = await f.address?.()
-    if (a === undefined) throw new Error('funds: funder has no address()')
-    return new P2PKH().lock(a).toHex()
-  }
-  const consume = (tx: Transaction): void => {
-    for (const inp of tx.inputs) {
-      const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      if (id === undefined) continue
-      const vout = inp.sourceOutputIndex ?? 0
-      spentLog.add(op(id, vout))
-      reserved.delete(op(id, vout))
-      f.markSpent?.(id, vout)
+/** Adapt a funder-shaped object into Funds. A carrier's own `.funds` wins;
+ *  a utxos-shaped funder becomes a FundsStore view (live `utxos` getter,
+ *  markSpent=drop, addOwned=add, unmark=revive) under one MemoryFunds — the
+ *  shared state machine still owns selection and reservations. The owned
+ *  lock comes from a synchronous `address()` or `deps.lock`/`pkhHex` —
+ *  without it change could never be recognized as ours. */
+export function fundsOf(f: FunderLike, depsOrFloor?: Partial<FundsDeps> | number): Funds {
+  if (f.funds !== undefined) return f.funds
+  // already the owner — a bare Funds passes through untouched (the
+  // lifecycle verbs distinguish it from a funder-shaped object) */
+  const maybeFunds = f as Partial<Funds>
+  if (typeof maybeFunds.spent === 'function' && typeof maybeFunds.died === 'function') return maybeFunds as Funds
+  const deps: Partial<FundsDeps> = typeof depsOrFloor === 'number' ? { dealFloor: depsOrFloor } : (depsOrFloor ?? {})
+  if (f.utxos === undefined) throw new Error('fundsOf: funder carries no Funds owner and no utxos view')
+  const addr = f.address?.()
+  const lock =
+    deps.lock ??
+    (deps.pkhHex !== undefined ? `76a914${deps.pkhHex}88ac` : undefined) ??
+    (addr !== undefined && !(addr instanceof Promise) ? new P2PKH().lock(addr).toHex() : undefined)
+  if (lock === undefined) throw new Error('fundsOf: no owned lock — pass deps.lock/deps.pkhHex or a synchronous address()')
+  const store: FundsStore = {
+    list: () => (f.utxos ?? []).map((u) => ({ tx: u.tx, vout: u.vout, satoshis: u.satoshis ?? 0 })),
+    add: (tx, vout) => f.addOwned?.(tx, vout),
+    drop: (txid, vout) => f.markSpent?.(txid, vout),
+    revive: (tx, vout) => {
+      const txid = tx.id('hex')
+      if (f.unmark !== undefined) f.unmark(txid, vout)
+      else f.addOwned?.(tx, vout)
     }
   }
-  const revive = (tx: Transaction, lock: string): void => {
-    for (const inp of tx.inputs) {
-      const src = inp.sourceTransaction
-      const id = inp.sourceTXID ?? src?.id('hex')
-      const vout = inp.sourceOutputIndex ?? 0
-      if (id === undefined || src === undefined) continue
-      reserved.delete(op(id, vout))
-      spentLog.delete(op(id, vout))
-      if ((src.outputs[vout]?.lockingScript.toHex() ?? '') !== lock) continue
-      if ((f.utxos ?? []).some((u) => op(u.tx.id('hex'), u.vout) === op(id, vout))) continue
-      f.addOwned?.(src, vout)
-    }
-  }
-  const funds: Funds = {
-    address: () => f.address?.() ?? Promise.reject(new Error('funds: funder has no address()')),
-    balance: async () =>
-      (f.utxos ?? [])
-        .filter((u) => !dead.has(op(u.tx.id('hex'), u.vout)) && !spentLog.has(op(u.tx.id('hex'), u.vout)) && !reserved.has(op(u.tx.id('hex'), u.vout)))
-        .reduce((s, u) => s + (u.satoshis ?? 0), 0),
-    outs: async () =>
-      (f.utxos ?? [])
-        .filter((u) => !dead.has(op(u.tx.id('hex'), u.vout)) && !spentLog.has(op(u.tx.id('hex'), u.vout)) && !reserved.has(op(u.tx.id('hex'), u.vout)))
-        .map((u) => ({ tx: u.tx, vout: u.vout, satoshis: u.satoshis ?? 0 })),
-    async take(purpose: FundsPurpose, sats: number): Promise<FundingOut> {
-      const committed = [...reserved.values()].reduce((s, v) => s + v, 0)
-      if (purpose !== 'deal' && dealFloor > 0 && (await funds.balance()) - committed - sats < dealFloor)
-        throw new Error(`funds: ${purpose} take of ${sats} sats would drop the balance below the deal floor (${dealFloor})`)
-      const leased = funds.leased
-      const merged = (t: string, v: number): Promise<boolean> => Promise.resolve(reserved.has(op(t, v)) || (leased?.(t, v) ?? false))
-      if (f.takeReserve !== undefined) {
-        const u = await f.takeReserve(funds.spendCheck, sats, async (tx, v) => (await merged(tx.id('hex'), v)) || (funds.hintSkip?.(tx, v) ?? false))
-        if (u === null) throw new Error(`funds: no outpoint of ${sats} sats or more`)
-        reserved.set(op(u.tx.id('hex'), u.vout), u.satoshis)
-        return u
-      }
-      // destructive-take base (MemoryFunder/StackFunder): the take IS the
-      // reservation — lease/hint filters retry a bounded few picks; a refused
-      // pick goes straight back. A bare utxos peek must skip tombstones +
-      // reserved outpoints itself — the base has no exclusion channel.
-      for (let i = 0; i < 8; i++) {
-        const u =
-          f.take !== undefined
-            ? await f.take(sats)
-            : (f.utxos ?? []).find(
-                (x) =>
-                  (x.satoshis ?? 0) >= sats &&
-                  !reserved.has(op(x.tx.id('hex'), x.vout)) &&
-                  !dead.has(op(x.tx.id('hex'), x.vout)) &&
-                  !spentLog.has(op(x.tx.id('hex'), x.vout))
-              )
-        if (u === undefined) throw new Error(`funds: no outpoint of ${sats} sats or more`)
-        const id = u.tx.id('hex')
-        if (dead.has(op(id, u.vout)) || spentLog.has(op(id, u.vout)) || (await merged(id, u.vout))) {
-          if (f.take !== undefined) f.addOwned?.(u.tx, u.vout) // restore a consumed pick
-          continue
-        }
-        // hintSkip is peek-only: a destructive take can't pass a candidate
-        // over without a custody write, so the hint applies where the base
-        // lets us look before taking (takeReserve / bare utxos list)
-        if (f.take === undefined && funds.hintSkip !== undefined && (await funds.hintSkip(u.tx, u.vout))) continue
-        if (funds.spendCheck !== undefined && (await funds.spendCheck(id, u.vout))) {
-          spentLog.add(op(id, u.vout))
-          f.markSpent?.(id, u.vout)
-          continue
-        }
-        const uSat = u.satoshis ?? 0
-        reserved.set(op(id, u.vout), uSat)
-        return { tx: u.tx, vout: u.vout, satoshis: uSat }
-      }
-      throw new Error(`funds: no eligible outpoint of ${sats} sats or more`)
-    },
-    async spent(tx: Transaction): Promise<void> {
-      consume(tx)
-      const lock = await lockOf()
-      const tid = tx.id('hex')
-      tx.outputs.forEach((o, vout) => {
-        if (o.lockingScript.toHex() !== lock) return
-        if (dead.has(op(tid, vout)) || spentLog.has(op(tid, vout))) return
-        if ((f.utxos ?? []).some((u) => op(u.tx.id('hex'), u.vout) === op(tid, vout))) return
-        f.addOwned?.(tx, vout)
-      })
-    },
-    exported(tx: Transaction): void {
-      consume(tx)
-    },
-    async died(tx: Transaction): Promise<void> {
-      const tid = tx.id('hex')
-      // the dead tx's outputs tombstone in the adapter — the base never held
-      // them, so there's nothing to mark there
-      tx.outputs.forEach((_o, vout) => dead.add(op(tid, vout)))
-      revive(tx, await lockOf())
-    },
-    adopt(tx: Transaction, vout: number): boolean {
-      const k = op(tx.id('hex'), vout)
-      if (dead.has(k) || spentLog.has(k)) return false
-      if ((f.utxos ?? []).some((u) => op(u.tx.id('hex'), u.vout) === k)) return false
-      f.addOwned?.(tx, vout)
-      return true
-    },
-    burn(txid: string, vout: number): void {
-      spentLog.add(op(txid, vout))
-      reserved.delete(op(txid, vout))
-      f.markSpent?.(txid, vout)
-    }
-  }
-  return funds
-}
-
-/** shared selection: smallest-sufficient candidate ≥ floor, skipping leased
- *  and hint-dead outpoints. The `skip` callback is hint-only — it never
- *  marks or drops (a rejected-parent hint is not first-party truth) */
-export const pickSpendable = async (
-  utxos: FundingOut[],
-  floor: number,
-  leased: ((txid: string, vout: number) => Promise<boolean>) | undefined,
-  skip: ((tx: Transaction, vout: number) => Promise<boolean>) | undefined,
-  spendCheck: ((txid: string, vout: number) => Promise<boolean>) | undefined,
-  onSpent: (txid: string, vout: number) => void | Promise<void>
-): Promise<FundingOut | undefined> => {
-  const eligible: FundingOut[] = []
-  for (const u of utxos.filter((x) => x.satoshis >= floor).sort((a, b) => a.satoshis - b.satoshis)) {
-    const txid = u.tx.id('hex')
-    if (leased !== undefined && (await leased(txid, u.vout))) continue
-    if (skip !== undefined && (await skip(u.tx, u.vout))) continue
-    eligible.push(u)
-  }
-  for (const u of eligible) {
-    const txid = u.tx.id('hex')
-    if (spendCheck !== undefined && (await spendCheck(txid, u.vout))) {
-      await onSpent(txid, u.vout)
-      continue
-    }
-    return u
-  }
-  return undefined
+  return new AdaptedFunds(store, { ...deps, lock })
 }

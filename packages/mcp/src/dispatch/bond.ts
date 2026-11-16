@@ -1,20 +1,16 @@
-// bonds.ts — the operator checkpoint bond: deploy, status, seize, commit and
-// close. BigInt cfg fields cross the wire as numbers and re-widen here.
-import type { ToolHandler } from './ctx.js'
+// bond covenant tools — extracted verbatim from the server.ts dispatchTool switch
+import type { ToolHandler } from './shared.js'
 
-export const BOND_HANDLERS: Record<string, ToolHandler> = {
-  bondDeploy: async (d) => {
-    const { mem, args } = d
+export const handlers: Record<string, ToolHandler> = {
+  bondDeploy: async (mem, args) => {
     const r = await mem.bondDeploy(args.sats, args.releaseHeight === undefined ? undefined : BigInt(args.releaseHeight), args.force === true)
     return { ...r, releaseHeight: r.releaseHeight.toString(), receipt: { decision: 'allow', action: 'bondDeploy' } }
   },
-  bondStatus: async (d) => {
-    const { mem } = d
+  bondStatus: async (mem) => {
     const s = mem.bondStatus()
     return s ? { ...s, releaseHeight: s.releaseHeight.toString(), deadline: s.deadline.toString() } : { deployed: false }
   },
-  bondSeize: async (d) => {
-    const { mem, args } = d
+  bondSeize: async (mem, args) => {
     const bond = args.bond
       ? {
           ...args.bond,
@@ -29,13 +25,11 @@ export const BOND_HANDLERS: Record<string, ToolHandler> = {
     const r = await mem.bondSeize(args.payToScript, bond)
     return r ? { ...r, receipt: { decision: 'allow', action: 'bondSeize' } } : { deployed: false }
   },
-  bondCommit: async (d) => {
-    const { mem, args } = d
+  bondCommit: async (mem, args) => {
     const r = await mem.bondCommit(args.root)
     return r ? { ...r, n: r.n.toString(), receipt: { decision: 'allow', action: 'bondCommit' } } : { deployed: false }
   },
-  bondClose: async (d) => {
-    const { mem } = d
+  bondClose: async (mem) => {
     const r = await mem.bondClose()
     return r ? { ...r, receipt: { decision: 'allow', action: 'bondClose' } } : { deployed: false }
   }

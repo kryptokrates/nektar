@@ -78,6 +78,20 @@ stream). Every broadcaster construction sits inside `SpendGuard`; `port.ts`
 is the allowlisted composition root, and `openRuntime` converges on this
 shape as the remaining startup paths migrate onto it.
 
+## The two deal state tables
+
+Deal state is durable in the automation store (`packages/automation/src/store.ts`) — memory-tier runs use the same schema in-process, so behavior is identical under restart:
+
+- **`ops`** — one row per deal (`role` buyer|seller, `kind` purchase|sale, monotonically `revision`-guarded `state`, JSON `data`, `lastError`). Every transition lands in `events` (`seq`, `from`, `to`, `cause`, `evidence`) — the deal journal is replayable, and optimistic-concurrency on `revision` is what keeps two pumps from double-settling. Buyer states run `collecting → quoted/selected → funding → escrow… → disclosure_verified → useful|not_useful`; seller states run `enabled → quoted → escrow… → completing → completed`, with `refunded`, `disputed`, `uncertain` and `escalated` as the failure vocabulary (`uncertain` means a broadcast may have escaped — only a person may close it).
+- **`outbox`** — one row per pending delivery action (`operation_id`, `kind`, `destination`, `payload`, `attempts`, `next_at`, `last_error`, `defer_class`, `status` pending|acked|dead). Retries back off exponentially; `defer_class` is the machine-readable wait cause (`funding-slot` = starved for a funding out — does not burn attempts; `transport` = counterparty/host unreachable). `unblockOutbox(class)` pulls a class forward when its cause clears, so wakes stay event-driven. `store.waitingOn(operationId)` is what `deals {operationId}` renders as its "waiting on" line.
+
+## The schedule
+
+Wake sources are events first, intervals only as ceilings:
+
+- The chain observer (`ChainEvents` in the mcp runtime) is the single chain-side loop — height advances and pushed broadcaster statuses emit `tick`/`height`/`broadcasterStatus`, which fan out to the transaction watcher and the confirmer. The confirmer's `setInterval` is a missed-wake backstop, not the driver.
+- The automation pump is a hot `setTimeout` chain while deals are live (wakes and inbound items keep it hot) falling back to `intervalMs` when silent, plus a slower watch-refresh pass — converging on one named scheduler with named jobs (`deals`, `outbox`, `upkeep`, `watches`, `watchdog`), each with its wake sources and a bounded ceiling rather than independent timers competing for the wallet.
+
 ## Custody modes
 
 `NEKTAR_WALLET=toolbox` (regtest default) — embedded wallet-toolbox; the

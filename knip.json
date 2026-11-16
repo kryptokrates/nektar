@@ -3,12 +3,11 @@
   "workspaces": {
     ".": {
       "entry": ["tools/**/*.mjs", "integrations/**/*.{js,mjs}", "circuits/**/*.mjs", "docs/**/*.mjs", "deploy/**/*.mjs"],
-      "ignore": ["spikes/**", "test/fixtures/**"],
+      "ignore": ["spikes/**", "test/fixtures/**", "scratch/**"],
       "ignoreBinaries": ["gitleaks"]
     },
     "packages/mcp": {
-      "entry": ["src/payclient.ts", "demo/**/*.{ts,mts,mjs}"],
-      "ignore": ["tn-*.mjs"]
+      "entry": ["src/payclient.ts", "demo/**/*.{ts,mts,mjs}"]
     },
     "packages/e2e": {
       "entry": ["src/**/*.{ts,mts,mjs}"]

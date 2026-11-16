@@ -1,21 +1,16 @@
-// sale.ts — the paid-disclosure lane: offer/offerMemory, covenant escrow
-// (escrow + build-only variant), the direct-pay rail, complete/refund, and
-// the buyer-side claim that verifies purchased payloads against the anchored
-// commitment. All ops are gated by PAID_SALE_TOOLS in the dispatcher.
+// paid-disclosure sale ops — extracted verbatim from the server.ts dispatchTool switch
 import type { NektarMemory } from '../memory.js'
-import type { ToolHandler } from './ctx.js'
+import type { ToolHandler } from './shared.js'
 
-// consolidated state machine: op → internal 'sale#<op>' handler (never
-// listed in TOOLS — reachable only through the 'sale' dispatcher, which keeps
-// the paid-disclosure gate on BOTH the tool and the resolved op)
 const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'])
 
 async function settleEscrow(mem: NektarMemory, tx: import('@bsv/sdk').Transaction): Promise<void> {
   await mem.funds.spent(tx)
 }
 
-const escrowOrBuild: ToolHandler = async (d) => {
-  const { mem, name, args } = d
+// sale#escrow and sale#escrowBuild share one body — the build variant is
+// selected by the tool name, so the handler receives it as the 4th param
+const escrow: ToolHandler = async (mem, args, _d, name) => {
   const isBuild = name === 'sale#escrowBuild'
   const { DisclosureSaleHost } = await import('@nektar/anchor')
   // §16/17 delegation-sig check: refuse to fund an escrow for a cfg the
@@ -73,8 +68,8 @@ const escrowOrBuild: ToolHandler = async (d) => {
   return { accepted: true, txid: tx.id('hex'), utxo: { ...utxo, txid: tx.id('hex') }, escrow: { ...args.cfg, depositorPkh } }
 }
 
-const payOrBuild: ToolHandler = async (d) => {
-  const { mem, name, args } = d
+// same pair for the direct rail: sale#pay / sale#payBuild
+const payBuild: ToolHandler = async (mem, args, _d, name) => {
   // the direct rail: an outright P2PKH payment to the quote's sellerPkh —
   // payment-final, so the same delegation-sig guard applies (a swapped
   // cfg would point the payment at a substituted key)
@@ -100,9 +95,9 @@ const payOrBuild: ToolHandler = async (d) => {
   return { accepted: true, txid: pr.txid, utxo: pr.utxo, txHex: pr.txHex }
 }
 
-export const SALE_HANDLERS: Record<string, ToolHandler> = {
-  sale: async (d) => {
-    const { mem, args, ctx, callTool } = d
+export const handlers: Record<string, ToolHandler> = {
+  sale: async (mem, args, d) => {
+    const callTool = d.call
     const op = String(args?.op ?? '')
     if (!SALE_OPS.has(op)) throw new Error('sale: op required — offer|offerMemory|escrow|escrowBuild|complete|refund|claim')
     // F3 — escrow funding under a grant goes through the cumulative ledger;
@@ -115,7 +110,7 @@ export const SALE_HANDLERS: Record<string, ToolHandler> = {
       if (r === 'exists') throw new Error(`sale: action already recorded for grant ${gid} � idempotent replay refused`)
       if (r !== 'ok') throw new Error(`sale: grant ${gid} budget ${r}`)
       try {
-        const out = await callTool(mem, `sale#${op}`, args, ctx)
+        const out = await callTool(mem, `sale#${op}`, args, d.ctx)
         mem.budget.commit(gid, actionId)
         return out
       } catch (e) {
@@ -123,10 +118,9 @@ export const SALE_HANDLERS: Record<string, ToolHandler> = {
         throw e
       }
     }
-    return await callTool(mem, `sale#${op}`, args, ctx)
+    return await callTool(mem, `sale#${op}`, args, d.ctx)
   },
-  'sale#offer': async (d) => {
-    const { mem, args } = d
+  'sale#offer': async (mem, args) => {
     const { offerDisclosure } = await import('@nektar/identity')
     const { COVENANT_ID } = await import('@nektar/anchor')
     const r = await offerDisclosure({
@@ -148,8 +142,7 @@ export const SALE_HANDLERS: Record<string, ToolHandler> = {
       artifact: COVENANT_ID
     }
   },
-  'sale#offerMemory': async (d) => {
-    const { mem, args } = d
+  'sale#offerMemory': async (mem, args) => {
     const { offerDisclosure, encodeKeySale } = await import('@nektar/identity')
     const { COVENANT_ID } = await import('@nektar/anchor')
     const { serializeFragment, computeLeaf, toHex } = await import('@nektar/core')
@@ -204,12 +197,11 @@ export const SALE_HANDLERS: Record<string, ToolHandler> = {
       }
     }
   },
-  'sale#escrow': escrowOrBuild,
-  'sale#escrowBuild': escrowOrBuild,
-  'sale#pay': payOrBuild,
-  'sale#payBuild': payOrBuild,
-  'sale#complete': async (d) => {
-    const { mem, args } = d
+  'sale#escrow': escrow,
+  'sale#escrowBuild': escrow,
+  'sale#pay': payBuild,
+  'sale#payBuild': payBuild,
+  'sale#complete': async (mem, args) => {
     const { DisclosureSaleHost } = await import('@nektar/anchor')
     // depositorPkh is always the LOCAL depositor (operator key) — the offer's
     // cfg never carries it; fill it here so callers can pass the raw offer cfg.
@@ -236,8 +228,7 @@ export const SALE_HANDLERS: Record<string, ToolHandler> = {
     if (r.status !== 'success') return { accepted: false, reason: r.description }
     return { accepted: true, txid: tx.id('hex'), sellerSats: tx.outputs[0].satoshis, txHex: tx.toHex() }
   },
-  'sale#refund': async (d) => {
-    const { mem, args } = d
+  'sale#refund': async (mem, args) => {
     const { DisclosureSaleHost } = await import('@nektar/anchor')
     const depositorPkh = args.cfg.depositorPkh ?? Buffer.from(mem.operatorKey().toPublicKey().toHash()).toString('hex')
     const host = new DisclosureSaleHost({
@@ -259,8 +250,7 @@ export const SALE_HANDLERS: Record<string, ToolHandler> = {
     if (r.status !== 'success') return { accepted: false, reason: r.description }
     return { accepted: true, txid: tx.id('hex'), refundSats: tx.outputs[0].satoshis }
   },
-  'sale#claim': async (d) => {
-    const { mem, args } = d
+  'sale#claim': async (mem, args) => {
     const { Transaction } = await import('@bsv/sdk')
     const { claimDisclosure, claimValue } = await import('@nektar/identity')
     const { fromHex: fh2 } = await import('@nektar/core')

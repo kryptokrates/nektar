@@ -27,6 +27,41 @@ if (envFlag) {
   }
   setNektarEnv('NEKTAR_NETWORK', envFlag)
 }
+// NEKTAR_PROFILE — one name fills the conventional defaults for a role.
+// The profile only sets variables that are still unset: .env entries,
+// exported vars and the flags above always win. An unknown name is a
+// loud refusal — silently booting the wrong shape is how agents end up
+// on mainnet with regtest assumptions (or the reverse).
+const PROFILES: Record<string, Record<string, string>> = {
+  'regtest-dev': {
+    NEKTAR_NETWORK: 'regtest',
+    NEKTAR_HTTP_PORT: '8080',
+    NEKTAR_AUTOMATION: '1',
+    NEKTAR_DATA_DIR: '.nektar'
+  },
+  'testnet-agent': {
+    NEKTAR_NETWORK: 'testnet',
+    NEKTAR_HTTP_PORT: '8080',
+    NEKTAR_AUTOMATION: '1',
+    NEKTAR_WALLET: 'toolbox'
+  },
+  'mainnet-agent': {
+    NEKTAR_NETWORK: 'main',
+    NEKTAR_HTTP_PORT: '8080',
+    NEKTAR_AUTOMATION: '1',
+    NEKTAR_AUTOMATION_STRICT: '1',
+    NEKTAR_WALLET: 'toolbox'
+  }
+}
+const profile = nektarEnv('NEKTAR_PROFILE')
+if (profile !== undefined) {
+  const defs = PROFILES[profile]
+  if (defs === undefined) {
+    process.stderr.write(`nektar: NEKTAR_PROFILE must be one of ${Object.keys(PROFILES).join('|')}, got "${profile}"\n`)
+    process.exit(2)
+  }
+  for (const [k, v] of Object.entries(defs)) if (nektarEnv(k) === undefined) setNektarEnv(k, v)
+}
 const portFlag = argv.includes('--port') ? argv[argv.indexOf('--port') + 1] : undefined
 if (portFlag) setNektarEnv('NEKTAR_HTTP_PORT', portFlag)
 const hostFlag = argv.includes('--host') ? argv[argv.indexOf('--host') + 1] : undefined

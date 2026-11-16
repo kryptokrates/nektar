@@ -6,6 +6,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod'
 import type { NektarMemory } from './memory.js'
 import { visibleTools, callTool } from './server.js'
+import type { ToolCtx } from './server.js'
 
 export const INSTRUCTIONS = [
   'nektar is verifiable, encrypted agent memory anchored on BSV.',
@@ -33,7 +34,7 @@ const DESTRUCTIVE = new Set(['rotate', 'revoke'])
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
 
-export function createMcpServer(mem: NektarMemory, ops?: import('./server.js').ToolCtx['ops']): McpServer {
+export function createMcpServer(mem: NektarMemory, ops?: ToolCtx['ops']): McpServer {
   const server = new McpServer({ name: 'nektar', version: '0.2.0' }, { instructions: INSTRUCTIONS, capabilities: { tools: {}, resources: {}, prompts: {} } })
   const low = server.server
   low.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -146,7 +147,7 @@ export function createMcpServer(mem: NektarMemory, ops?: import('./server.js').T
 
 /** MCP over stdio (official SDK) — the entry bin.ts uses. Lives here (not
  *  server.ts) so the tool layer never imports the transport layer. */
-export async function serveStdio(mem: import('./memory.js').NektarMemory, ops?: import('./server.js').ToolCtx['ops']): Promise<void> {
+export async function serveStdio(mem: import('./memory.js').NektarMemory, ops?: ToolCtx['ops']): Promise<void> {
   const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js')
   await createMcpServer(mem, ops).connect(new StdioServerTransport())
 }

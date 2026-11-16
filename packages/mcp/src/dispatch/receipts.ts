@@ -1,17 +1,11 @@
-// answers.ts — the outward-facing answer surface: model manifest, grounded
-// answers (ZK-cited private shards), receipt commits/verification and
-// inference attestation.
+// answer-grounding + receipt tools — extracted verbatim from the server.ts dispatchTool switch
 import { nektarEnv } from '@nektar/core'
 import { receiptToken } from '../receipt.js'
-import { shareBlock, verifyBase, type ToolHandler } from './ctx.js'
+import { shareBlock, verifyBase } from './shared.js'
+import type { ToolHandler } from './shared.js'
 
-export const ANSWER_HANDLERS: Record<string, ToolHandler> = {
-  modelManifest: async (d) => {
-    const { mem, args } = d
-    return mem.modelManifest(args)
-  },
-  groundedAnswer: async (d) => {
-    const { mem, args, paid } = d
+export const handlers: Record<string, ToolHandler> = {
+  groundedAnswer: async (mem, args, d) => {
     const { ground, commitReceipt } = await import('@nektar/reasoning')
     const { Buffer } = await import('node:buffer')
     const fetch: import('@nektar/reasoning').FragmentFetch = async (ref) => {
@@ -122,7 +116,7 @@ export const ANSWER_HANDLERS: Record<string, ToolHandler> = {
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
         groundingReportHash: report.reportHash,
         ...(attestation ? { modelAttestation: attestation } : {}),
-        ...(paid ? { payment: paid } : {}),
+        ...(d.paid ? { payment: d.paid } : {}),
         ...(typeof args?.caller === 'string' ? { caller: args.caller } : {}),
         ...(typeof args?.delegationId === 'string' ? { delegationId: args.delegationId } : {}),
         ...(typeof (args?.manifestId ?? nektarEnv('NEKTAR_LAST_MANIFEST')) === 'string'
@@ -147,8 +141,7 @@ export const ANSWER_HANDLERS: Record<string, ToolHandler> = {
       checkResult: 'verified'
     }
   },
-  commitReceipt: async (d) => {
-    const { mem, args, paid } = d
+  commitReceipt: async (mem, args, d) => {
     const { commitReceipt } = await import('@nektar/reasoning')
     const { Buffer } = await import('node:buffer')
     // private shards: same fail-closed rule as groundedAnswer — a private
@@ -206,20 +199,18 @@ export const ANSWER_HANDLERS: Record<string, ToolHandler> = {
         modelId: args.model ?? mem.declaredModel ?? { kind: 'api', provider: 'undeclared', release: 'undeclared' },
         groundingReportHash: args.groundingReportHash,
         ...(attestation ? { modelAttestation: attestation } : {}),
-        ...(paid ? { payment: paid } : {})
+        ...(d.paid ? { payment: d.paid } : {})
       },
       mem
     )
     const token = receiptToken(out.receiptHash)
     return { ...out, receiptToken: token, verifyUrl: `${verifyBase()}/v1/verify?r=${token}`, share: shareBlock(token) }
   },
-  attestInference: async (d) => {
-    const { mem, args } = d
+  attestInference: async (mem, args) => {
     const { attestInference } = await import('../inference.js')
     return await attestInference(mem, args)
   },
-  verifyReceipt: async (d) => {
-    const { mem, args } = d
+  verifyReceipt: async (mem, args) => {
     const { verifyReceipt } = await import('../receipt.js')
     return await verifyReceipt(mem, args)
   }

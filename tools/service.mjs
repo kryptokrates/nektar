@@ -19,7 +19,7 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const cmd = process.argv[2] ?? 'status'
 const node = process.execPath
 const runner = join(root, 'tools/service-run.mjs')
-const dataDir = process.env.NEKTAR_DATA_DIR ?? join(root, '.nektar')
+const dataDir = process.env.NEKTAR_DATA_DIR ?? join(homedir(), '.nektar')
 const logFile = join(dataDir, 'service.log')
 const os = platform() // linux | win32 | darwin
 const run = (c, a, quiet = false) => {

@@ -1,25 +1,24 @@
-// automation.ts — the market-engine lane: want/sell entry points, deals
-// views, the fund surface, and the raw 'automation' op dispatcher.
-import type { NektarMemory } from '../memory.js'
-import type { ToolHandler } from './ctx.js'
+// operator/automation surface tools — extracted verbatim from the server.ts dispatchTool switch
+import { paidSaleEnabled, singlePolicy } from './shared.js'
+import type { ToolHandler } from './shared.js'
 
-/** the single non-revoked policy carrying `role` for this agent+network —
- *  exactly-one is an operator decision: none means "approve one first",
- *  several means "revoke down to one" — the agent never picks silently */
-async function singlePolicy(au: NonNullable<NektarMemory['automation']>, role: 'buyer' | 'seller', tool: string): Promise<string> {
-  const found: string[] = []
-  for (const r of await au.store.policies()) {
-    if (r.revokedAt !== undefined) continue
-    const p = await au.store.activePolicy(r.policyHash)
-    if (p && p.roles.includes(role) && p.agentPub === au.engine.agentPub && p.network === au.engine.network) found.push(r.policyHash)
-  }
-  if (found.length !== 1) throw new Error(`${tool}: operator must approve exactly one ${role} policy (pnpm automation policy approve …)`)
-  return found[0]
-}
-
-export const AUTOMATION_HANDLERS: Record<string, ToolHandler> = {
-  want: async (d) => {
-    const { mem, args } = d
+export const handlers: Record<string, ToolHandler> = {
+  // NOTE: the body below declares its own `d` (the doctor result) — the
+  // dispatch ctx param is `dd` here so the verbatim body still compiles
+  doctor: async (mem, args, dd) => {
+    const d = await mem.doctor()
+    if (dd.ctx.ops?.wallet) {
+      const w = (await dd.ctx.ops.wallet()) as Record<string, unknown>
+      d.funding = { ...w, funded: Number(w.balanceSats ?? 0) > 0 }
+    }
+    // B3 — bootstrap state: 'sealed' = the agent publishes its bfinger
+    // record and is discoverable; 'unsealed' = it still needs a configured
+    // host set for counterparties to reach it
+    const out: Record<string, unknown> = { ...d, bootstrap: mem.automation?.bootstrap?.() ?? 'unsealed' }
+    if (args?.fix) return { ...out, repair: await mem.doctorRepair() }
+    return out
+  },
+  want: async (mem, args) => {
     const au = mem.automation
     if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
     const ph = await singlePolicy(au, 'buyer', 'want')
@@ -34,10 +33,13 @@ export const AUTOMATION_HANDLERS: Record<string, ToolHandler> = {
     void au.cycle()
     return { wantId: r.wantId, operationId: r.operationId }
   },
-  sell: async (d) => {
-    const { mem, args } = d
+  sell: async (mem, args) => {
     const au = mem.automation
     if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
+    // selling without paid disclosure can never settle — the buyer-side
+    // sale# rail is gated off, so arming a seller would publish offers
+    // that no counterparty may pay
+    if (!paidSaleEnabled()) throw new Error('sell: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1')
     if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('sell: shard required')
     if (!Array.isArray(args?.domains)) throw new Error('sell: domains[] required')
     const priceSats = Number(args?.priceSats)
@@ -48,14 +50,12 @@ export const AUTOMATION_HANDLERS: Record<string, ToolHandler> = {
     void au.cycle()
     return { shard: args.shard, domains: args.domains, priceSats, policyHash: ph }
   },
-  automationDoctor: async (d) => {
-    const { mem } = d
+  automationDoctor: async (mem) => {
     const au = mem.automation
     if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
     return await au.preflight()
   },
-  deals: async (d) => {
-    const { mem, args } = d
+  deals: async (mem, args) => {
     const au = mem.automation
     if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
     const entry = (o: import('@nektar/automation').Operation): Record<string, unknown> => {
@@ -73,6 +73,7 @@ export const AUTOMATION_HANDLERS: Record<string, ToolHandler> = {
         disclosureTxid: (d.result as { disclosureTxid?: string } | undefined)?.disclosureTxid,
         refundTxid: d.refundTxid,
         ...(d.evidenceRef !== undefined ? { evidence: { ref: d.evidenceRef, stored: true } } : {}),
+        ...(o.lastError ? { reason: o.lastError } : {}),
         updatedAt: o.updatedAt
       }
     }
@@ -92,6 +93,19 @@ export const AUTOMATION_HANDLERS: Record<string, ToolHandler> = {
       const e = detail(st.operation, st.events)
       const j = await au.dealJournal?.(st.operation)
       if (j !== undefined) e.journal = j
+      const waiting = await au.store.waitingOn(st.operation.operationId)
+      const pending = waiting.filter((w) => w.status === 'pending')
+      if (pending.length)
+        e.waitingOn = pending.map((w) => ({
+          action: w.kind,
+          ...(w.deferClass ? { class: w.deferClass } : {}),
+          ...(w.lastError ? { reason: w.lastError } : {}),
+          nextAt: w.nextAt
+        }))
+      else if (e.reason === undefined) {
+        const dead = waiting.find((w) => w.status === 'dead' && w.lastError !== undefined)
+        if (dead) e.reason = dead.lastError
+      }
       return e
     }
     const ops = (await au.store.operations())
@@ -101,26 +115,7 @@ export const AUTOMATION_HANDLERS: Record<string, ToolHandler> = {
       .map(entry)
     return { deals: ops }
   },
-  fund: async (d) => {
-    const { mem, ctx } = d
-    const au = mem.automation
-    if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
-    const w = ctx.ops?.wallet ? ((await ctx.ops.wallet()) as Record<string, unknown>) : ((await mem.fundingStatus()) as unknown as Record<string, unknown>)
-    const slots = await au.marketSlots()
-    const laneStock = await au.laneStock()
-    const live = (await au.store.policies()).filter((x) => x.revokedAt === undefined)
-    return {
-      address: w.address,
-      network: au.engine.network,
-      spendableSats: Number(w.balanceSats ?? 0),
-      utxos: Number(w.utxos ?? 0),
-      marketSlots: slots,
-      laneStock,
-      ...(live.length === 1 ? { budget: await au.store.budgetStatus(live[0].policyHash) } : {})
-    }
-  },
-  automation: async (d) => {
-    const { mem, args } = d
+  automation: async (mem, args) => {
     const au = mem.automation
     if (!au) throw new Error('automation: not enabled — start the instance with NEKTAR_AUTOMATION=1')
     const op = String(args?.op ?? '')
@@ -138,6 +133,7 @@ export const AUTOMATION_HANDLERS: Record<string, ToolHandler> = {
       return { ok: true, ...r }
     }
     if (op === 'enableSeller') {
+      if (!paidSaleEnabled()) throw new Error('automation enableSeller: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1')
       await au.engine.enableSeller(String(args?.policyHash ?? ''))
       void au.cycle()
       return { ok: true }

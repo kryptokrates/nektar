@@ -1,21 +1,12 @@
 // Tool definitions (JSON Schema) + their single implementation (callTool),
 // shared by the MCP server (mcp-server.ts, official SDK) and the HTTP API.
-// Handler bodies live in src/tools/*.ts — this file owns the schemas, the
-// visibility/payment gates and the dispatch orchestration.
+// The dispatch machinery lives in ./dispatch/ — callTool and the ToolCtx
+// type are re-exported here so the public surface of this module is unchanged.
 import { nektarEnv } from '@nektar/core'
-import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment } from './pay.js'
-import type { NektarMemory } from './memory.js'
-import type { ToolCtx, ToolHandler } from './tools/ctx.js'
-import { PAY_HANDLERS } from './tools/pay.js'
-import { SALE_HANDLERS } from './tools/sale.js'
-import { RECORD_HANDLERS } from './tools/records.js'
-import { ZK_HANDLERS } from './tools/zk.js'
-import { IDENTITY_HANDLERS } from './tools/identity.js'
-import { BOND_HANDLERS } from './tools/bonds.js'
-import { CLAIM_HANDLERS } from './tools/claims.js'
-import { ANSWER_HANDLERS } from './tools/answers.js'
-import { PACK_HANDLERS } from './tools/packs.js'
-import { AUTOMATION_HANDLERS } from './tools/automation.js'
+import { PAID_SALE_TOOLS, paidSaleEnabled } from './dispatch/shared.js'
+
+export { callTool } from './dispatch/index.js'
+export type { ToolCtx } from './dispatch/shared.js'
 
 export const TOOLS = [
   {
@@ -788,117 +779,11 @@ export const TOOLS = [
   }
 ] as const
 
-// consolidated state machines: op → internal case label (never listed in
-// TOOLS — reachable only through the 'sale'/'claim' dispatchers, which keep
-// the paid-disclosure gate on BOTH the tool and the resolved op)
-const PAID_SALE_TOOLS = new Set([
-  'sale',
-  'sale#offer',
-  'sale#offerMemory',
-  'sale#escrow',
-  'sale#escrowBuild',
-  'sale#complete',
-  'sale#refund',
-  'sale#claim',
-  'sale#pay',
-  'sale#payBuild'
-])
-const paidSaleEnabled = () => /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAID_DISCLOSURE') ?? '')
 /** tools visible to clients right now — paid-disclosure tools are gated by env */
 const AGENT_TOOLS = new Set(['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor'])
 const toolProfile = (): 'agent' | 'operator' => ((nektarEnv('NEKTAR_TOOL_PROFILE') ?? 'agent').toLowerCase() === 'operator' ? 'operator' : 'agent')
 export const visibleTools = () =>
   TOOLS.filter((t) => (toolProfile() === 'operator' || AGENT_TOOLS.has(t.name)) && (!PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled()))
-
-export type { ToolCtx }
-
-/** tools that change instance state — a successful call emits 'change' on
- *  mem.events so live surfaces (dashboard SSE) refresh instantly */
-const MUTATING_TOOLS = new Set([
-  'automation',
-  'remember',
-  'describeShard',
-  'groundedAnswer',
-  'commitReceipt',
-  'importRecord',
-  'importShard',
-  'disclose',
-  'rotate',
-  'revoke',
-  'payInvoice',
-  'payQuote',
-  'authorize',
-  'challenge',
-  'bondDeploy',
-  'bondSeize',
-  'bondCommit',
-  'bondClose',
-  'anchor',
-  'automaton',
-  'claim',
-  'sale',
-  'attestInference',
-  'fundingImport',
-  'sendSats',
-  'fundingRefresh',
-  'provisionPay'
-])
-
-export async function callTool(mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
-  const r = await dispatchTool(mem, name, args, ctx)
-  if (MUTATING_TOOLS.has(name) || name.includes('#')) mem.events.emit('change', name)
-  return r
-}
-
-/** every tool name → its group handler. Built once from the tools/* modules;
- *  internal '<group>#<op>' names live here too — never listed in TOOLS, only
- *  reachable when a group dispatcher re-enters through callTool */
-const HANDLERS: Record<string, ToolHandler> = {
-  ...PAY_HANDLERS,
-  ...SALE_HANDLERS,
-  ...RECORD_HANDLERS,
-  ...ZK_HANDLERS,
-  ...IDENTITY_HANDLERS,
-  ...BOND_HANDLERS,
-  ...CLAIM_HANDLERS,
-  ...ANSWER_HANDLERS,
-  ...PACK_HANDLERS,
-  ...AUTOMATION_HANDLERS
-}
-
-async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
-  if (PAID_SALE_TOOLS.has(name) && !paidSaleEnabled()) throw new Error(`${name}: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1`)
-  // NEKTAR_PAYMENTS=1 (BRC-166-style): anchor/groundedAnswer/commitReceipt need a
-  // settled payment tx before they run — atomic, one tx per call, publicly
-  // auditable. No payment → return the invoice (the 402 challenge) as data.
-  let paid: import('./pay.js').PaymentRecord | undefined
-  // paid content paths: a manifest's offers price recall ('answer' → read
-  // sats) and pack downloads ('pack' sats) for EXTERNAL callers. Priced
-  // shards join the PAID_TOOLS gate with the manifest's amount.
-  const pricedTool = async (): Promise<{ tool: string; amount: number } | undefined> => {
-    if (!paymentsEnabled() || !ctx.external) return undefined
-    if (name === 'recall' && args?.shard) {
-      const p = await mem.contentPrice(String(args.shard), 'read').catch(() => 0)
-      if (p > 0) return { tool: 'recall', amount: p }
-    }
-    if (name === 'exportShard' && args?.shard) {
-      const p = await mem.contentPrice(String(args.shard), 'pack').catch(() => 0)
-      if (p > 0) return { tool: 'exportShard', amount: p }
-    }
-    return undefined
-  }
-  const gated = paymentsEnabled() ? (PAID_TOOLS.has(name) ? { tool: name, amount: priceFor(name) } : await pricedTool()) : undefined
-  if (gated) {
-    if (typeof args?.payment?.transaction !== 'string') {
-      const { required } = await paymentRequired(mem, gated.tool, gated.amount)
-      return { ok: false, error: `payment required — ${gated.tool} costs ${gated.amount} sats`, ...required }
-    }
-    paid = await settlePayment(mem, gated.tool, args.payment)
-  }
-  const handler = HANDLERS[name]
-  if (handler === undefined) throw new Error(`unknown tool ${name}`)
-  return await handler({ mem, name, args, ctx, paid, callTool })
-}
 
 /** MCP over stdio lives in mcp-server.ts (it owns the SDK wiring — server.ts
  *  stays dependency-free of it; bin.ts + index.ts import from there) */

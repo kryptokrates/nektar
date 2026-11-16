@@ -106,6 +106,8 @@ function temporalSourcesFor(names: string[], primary: ChainTracker, opts: { wocA
 
 export function configFromEnv(env = process.env): RuntimeConfig {
   const network = (env.NEKTAR_NETWORK ?? 'regtest') as RuntimeConfig['network']
+  if (network !== 'regtest' && network !== 'testnet' && network !== 'main')
+    throw new Error(`NEKTAR_NETWORK must be regtest|testnet|main — got '${network}'`)
   const dataDir = env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar')
   const secret = (k: string) => env[k] ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
   const cfg: RuntimeConfig = {

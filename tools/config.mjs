@@ -83,7 +83,7 @@ const KNOWN = new Set([
   'NEKTAR_AI_API_KEY_FILE'
 ])
 const SECRET = /WIF|PASS|KEY|TOKEN|SECRET/i
-const NETWORKS = ['regtest', 'testnet', 'ttn', 'main']
+const NETWORKS = ['regtest', 'testnet', 'main']
 
 const read = () => (existsSync(envPath) ? readFileSync(envPath, 'utf8') : '')
 const parse = (txt) =>
@@ -164,7 +164,7 @@ switch (cmd) {
       get('NEKTAR_FUND_WIF', env) || get('NEKTAR_FUND_WIF_FILE', env) ? ok('fund key') : warn('main needs NEKTAR_FUND_WIF (or _FILE)')
       get('NEKTAR_KEY_PASSPHRASE', env) ? ok('key passphrase') : warn('main needs NEKTAR_KEY_PASSPHRASE')
     }
-    if (net === 'ttn') get('NEKTAR_KEY_PASSPHRASE', env) ? ok('key passphrase') : warn('ttn: NEKTAR_KEY_PASSPHRASE recommended')
+    if (net === 'testnet') get('NEKTAR_KEY_PASSPHRASE', env) ? ok('key passphrase') : warn('testnet: NEKTAR_KEY_PASSPHRASE recommended')
     if (net === 'regtest')
       (get('NEKTAR_FUND_WIF', env) ?? get('NEKTAR_REGTEST_WIF', env)) && get('NEKTAR_RPC_PASS', env)
         ? ok('regtest secrets')

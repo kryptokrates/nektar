@@ -4,7 +4,7 @@
 //
 //   node tools/init.mjs            interactive
 //   node tools/init.mjs --yes      accept all defaults (regtest, ./.nektar, stdio)
-//   node tools/init.mjs --env ttn --dir .ttn --port 8080
+//   node tools/init.mjs --env testnet --dir .testnet --port 8080
 import { createInterface } from 'node:readline'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -63,7 +63,7 @@ console.log(
 // ─── 1. network ─────────────────────────────────────────────────────────────
 const networks = [
   { id: 'regtest', label: 'regtest — local Teranode stack, zero real cost (best first run)' },
-  { id: 'ttn', label: 'ttn — Teranode Test Net, test coins, real market' },
+  { id: 'testnet', label: 'testnet — public test coins, real market' },
   { id: 'main', label: 'main — real BSV. Read docs/OPERATIONS.md first' }
 ]
 const net =
@@ -105,7 +105,7 @@ const port = arg('--port') ?? prev.NEKTAR_HTTP_PORT
 const lines = [`# nektar init — ${new Date().toISOString().slice(0, 10)} (${net})`, `NEKTAR_NETWORK=${net}`, `NEKTAR_DATA_DIR=${dataDir}`]
 if (pass) lines.push(`NEKTAR_KEY_PASSPHRASE=${pass}`)
 if (port) lines.push(`NEKTAR_HTTP_PORT=${port}`)
-if (net === 'ttn') lines.push(`NEKTAR_VERIFY_BASE=https://nektar.run`)
+if (net === 'testnet') lines.push(`NEKTAR_VERIFY_BASE=https://nektar.run`)
 const body = lines.join('\n') + '\n'
 if (existsSync(envPath)) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
@@ -132,9 +132,9 @@ if (net === 'regtest') {
   console.log('  pnpm stack:up      — local Teranode stack (regtest coins, free)')
   console.log('  pnpm demo          — first verified receipt in <60s on the stack')
   console.log('  pnpm setup:claude  — wire Claude Code (or: pnpm setup:codex)')
-} else if (net === 'ttn') {
-  console.log(`  node packages/mcp/dist/src/bin.js            # starts on ttn (port: ${port ?? 'stdio only'})`)
-  console.log('  → call fundingStatus, send TTN coins to the address, then fundingImport <txid>')
+} else if (net === 'testnet') {
+  console.log(`  node packages/mcp/dist/src/bin.js            # starts on testnet (port: ${port ?? 'stdio only'})`)
+  console.log('  → call fundingStatus, send testnet coins to the address, then fundingImport <txid>')
   console.log('  → then want → deals → your first purchase on the public market')
   console.log('  pnpm setup:claude                            # wire your agent client')
 } else if (net === 'main') {

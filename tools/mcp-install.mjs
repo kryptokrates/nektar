@@ -103,24 +103,24 @@ if (args.includes('--main')) {
   console.log(`    (optional) docker mcp secret set nektar-main.arc_api_key / nektar-main.fund_wif`)
   console.log(`  the fee-key address is printed to stderr on first start — fund it deliberately.`)
 }
-if (args.includes('--ttn')) {
-  // Teranode Test Net — test coins only; secrets + config are operator actions.
-  const TP = `${PROFILE}_ttn`
-  const tyaml = staged('nektar-ttn.yaml')
+if (args.includes('--testnet')) {
+  // public BSV testnet — test coins only; secrets + config are operator actions.
+  const TP = `${PROFILE}_testnet`
+  const tyaml = staged('nektar-testnet.yaml')
   if (!out(['mcp', 'profile', 'list']).split(/\s+/).includes(TP)) run(['mcp', 'profile', 'create', '--name', TP, '--id', TP])
-  if (/\bnektar-ttn\b/.test(out(['mcp', 'profile', 'server', 'ls', '--filter', `profile=${TP}`])))
-    run(['mcp', 'profile', 'server', 'remove', TP, '--name', 'nektar-ttn'])
+  if (/\bnektar-testnet\b/.test(out(['mcp', 'profile', 'server', 'ls', '--filter', `profile=${TP}`])))
+    run(['mcp', 'profile', 'server', 'remove', TP, '--name', 'nektar-testnet'])
   run(['mcp', 'profile', 'server', 'add', TP, '--server', `file://${tyaml}`])
-  console.log(`profile "${TP}": nektar on Teranode Test Net (TTN test coins).`)
-  console.log(`  required next step: docker mcp secret set nektar-ttn.key_passphrase`)
-  console.log(`  the fee-key address is printed to stderr on first start — fund it with TTN coins.`)
+  console.log(`profile "${TP}": nektar on BSV testnet (test coins).`)
+  console.log(`  required next step: docker mcp secret set nektar-testnet.key_passphrase`)
+  console.log(`  the fee-key address is printed to stderr on first start — fund it with testnet coins.`)
 }
 const target = args.includes('--regtest')
   ? `${PROFILE}_regtest`
   : args.includes('--main')
     ? `${PROFILE}_main`
-    : args.includes('--ttn')
-      ? `${PROFILE}_ttn`
+    : args.includes('--testnet')
+      ? `${PROFILE}_testnet`
       : PROFILE
 for (const client of args.filter((a) => !a.startsWith('--'))) run(['mcp', 'client', 'connect', client, '--profile', target])
 console.log(`\nnektar is in Docker MCP profile "${PROFILE}".`)

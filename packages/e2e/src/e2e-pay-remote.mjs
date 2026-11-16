@@ -13,7 +13,7 @@ import { readKeyFile } from '../../mcp/dist/src/keystore.js'
 
 const BASE = process.env.NEKTAR_REMOTE_URL ?? 'https://nektar.run'
 const TOKEN = process.env.NEKTAR_HTTP_TOKEN ?? ''
-const BROADCASTER = process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade-v2-ttn-us-1.bsvblockchain.tech'
+const BROADCASTER = process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
 const check = (ok, label) => {
   console.log(` ${ok ? '✔' : '✗ FAIL'} ${label}`)
   if (!ok) process.exit(1)

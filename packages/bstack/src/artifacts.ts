@@ -52,12 +52,12 @@ export interface WantAd {
   endpoint?: string // where sellers can answer back
   ts: number
   exp?: number
-  /** signed network binding — 'ttn'|'main'|etc; sig covers it (can't replay cross-net) */
+  /** signed network binding — 'testnet'|'main'|etc; sig covers it (can't replay cross-net) */
   net?: string
   /** the publisher's chain tip height at publish — a verifiable timeline claim */
   tipHeight?: number
   /** SPV binding — the blockhash at tipHeight on the claimed chain; verifiable
-   *  against real headers, so a ttn-signed artifact can't fake being mainnet */
+   *  against real headers, so a testnet-signed artifact can't fake being mainnet */
   tip?: string
   /** F2 producer stream — monotonic seq + predecessor hash (signature-covered) */
   streamSeq?: number
@@ -183,12 +183,12 @@ export interface OfferAd {
   offer?: Record<string, unknown> // the public DisclosureSale quote (cfg/sellerPub/offerSig/expiresAt) — never `wrapped`
   ts: number
   exp?: number
-  /** signed network binding — 'ttn'|'main'|etc; sig covers it (can't replay cross-net) */
+  /** signed network binding — 'testnet'|'main'|etc; sig covers it (can't replay cross-net) */
   net?: string
   /** the publisher's chain tip height at publish — a verifiable timeline claim */
   tipHeight?: number
   /** SPV binding — the blockhash at tipHeight on the claimed chain; verifiable
-   *  against real headers, so a ttn-signed artifact can't fake being mainnet */
+   *  against real headers, so a testnet-signed artifact can't fake being mainnet */
   tip?: string
   streamSeq?: number
   prevHash?: string

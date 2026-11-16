@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 720" role="img" aria-label="Zeitstrahl: Vier Erfindungen, die Kosten verschoben haben" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect width="540" height="720" fill="#fbf8f1"/>
+  <line x1="70" y1="70" x2="70" y2="660" stroke="#14213d" stroke-width="6" stroke-linecap="round"/>
+
+  <g>
+    <circle cx="70" cy="100" r="16" fill="#c2410c"/>
+    <text x="110" y="96" font-size="34" font-weight="700" fill="#14213d">1450 · Buchdruck</text>
+    <text x="110" y="132" font-size="26" fill="#475569">Text kopieren wird billig</text>
+    <text x="110" y="166" font-size="26" font-weight="600" fill="#0f766e">→ Monopol der Kirche fällt</text>
+  </g>
+  <g>
+    <circle cx="70" cy="260" r="16" fill="#c2410c"/>
+    <text x="110" y="256" font-size="34" font-weight="700" fill="#14213d">1453 · Kanonen</text>
+    <text x="110" y="292" font-size="26" fill="#475569">Mauern schützen nicht mehr</text>
+    <text x="110" y="326" font-size="26" font-weight="600" fill="#0f766e">→ Burgen fallen, Staaten wachsen</text>
+  </g>
+  <g>
+    <circle cx="70" cy="420" r="16" fill="#c2410c"/>
+    <text x="110" y="416" font-size="34" font-weight="700" fill="#14213d">1840 · Briefmarke</text>
+    <text x="110" y="452" font-size="26" fill="#475569">Senden wird billig</text>
+    <text x="110" y="486" font-size="26" font-weight="600" fill="#0f766e">→ doppelt so viele Briefe</text>
+  </g>
+  <g>
+    <circle cx="70" cy="580" r="16" fill="#c2410c"/>
+    <text x="110" y="576" font-size="34" font-weight="700" fill="#14213d">1991 · Web</text>
+    <text x="110" y="612" font-size="26" fill="#475569">Kopieren wird gratis</text>
+    <text x="110" y="646" font-size="26" font-weight="600" fill="#0f766e">→ und was folgt daraus?</text>
+  </g>
+</svg>

@@ -26,7 +26,7 @@ const pair = async (
 ): Promise<{ parent: Transaction; child: Transaction; vout: number; sats: number; key: PrivateKey }> => {
   const key = funder.keyPair
   const u = await funder.take(10_000)
-  const parent = u.tx // already broadcast by TestFunder.fund — zeroconf-spendable
+  const parent = u.tx // already broadcast by the funder — zeroconf-spendable
   const sats = u.satoshis
   if (mineParent) {
     await chain.mine(1)

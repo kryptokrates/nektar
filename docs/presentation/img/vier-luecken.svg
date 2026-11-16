@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 400" role="img" aria-label="Vier Lücken im Fundament des Internets und wer darin wohnt" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect width="1080" height="400" fill="#fbf8f1"/>
+
+  <!-- what is missing -->
+  <g font-size="30" font-weight="700" fill="#14213d" text-anchor="middle">
+    <text x="150" y="50">kein Bargeld</text>
+    <text x="410" y="50">kein Beweis</text>
+    <text x="670" y="50">kein Rundfunk</text>
+    <text x="930" y="50">keine Identität</text>
+  </g>
+  <g stroke="#14213d" stroke-width="4">
+    <line x1="150" y1="68" x2="150" y2="150"/>
+    <line x1="410" y1="68" x2="410" y2="150"/>
+    <line x1="670" y1="68" x2="670" y2="150"/>
+    <line x1="930" y1="68" x2="930" y2="150"/>
+  </g>
+  <g fill="#14213d">
+    <polygon points="138,150 162,150 150,172"/>
+    <polygon points="398,150 422,150 410,172"/>
+    <polygon points="658,150 682,150 670,172"/>
+    <polygon points="918,150 942,150 930,172"/>
+  </g>
+
+  <!-- the foundation with four holes -->
+  <g fill="#14213d">
+    <rect x="0" y="250" width="40" height="60"/>
+    <rect x="260" y="250" width="40" height="60"/>
+    <rect x="520" y="250" width="40" height="60"/>
+    <rect x="780" y="250" width="40" height="60"/>
+    <rect x="1040" y="250" width="40" height="60"/>
+  </g>
+
+  <!-- the tenants of the holes -->
+  <g fill="#c2410c">
+    <rect x="46" y="184" width="208" height="126" rx="10"/>
+    <rect x="306" y="184" width="208" height="126" rx="10"/>
+    <rect x="566" y="184" width="208" height="126" rx="10"/>
+    <rect x="826" y="184" width="208" height="126" rx="10"/>
+  </g>
+  <g font-size="26" font-weight="700" fill="#ffffff" text-anchor="middle">
+    <text x="150" y="236">Werbung</text>
+    <text x="150" y="272">Kartenformular</text>
+    <text x="410" y="236">Marken</text>
+    <text x="410" y="272">AGB</text>
+    <text x="670" y="236">Plattformen</text>
+    <text x="670" y="272">CDNs</text>
+    <text x="930" y="236">Logins</text>
+    <text x="930" y="272">Konten</text>
+  </g>
+
+  <!-- the consequence -->
+  <g font-size="23" fill="#475569" text-anchor="middle">
+    <text x="150" y="356">Aufmerksamkeit</text>
+    <text x="150" y="384">wird Währung</text>
+    <text x="410" y="356">Ruf ersetzt</text>
+    <text x="410" y="384">Nachrechnen</text>
+    <text x="670" y="356">Wer zahlt, dem</text>
+    <text x="670" y="384">gehört der Saal</text>
+    <text x="930" y="356">Aussperren</text>
+    <text x="930" y="384">ist möglich</text>
+  </g>
+</svg>

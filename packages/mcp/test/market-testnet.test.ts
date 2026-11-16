@@ -28,10 +28,10 @@ import {
   fetchTxStatus,
   merklePathMainnet,
   ReserveFunder,
+  testTier,
   type MainnetConfig,
   type ChainTracker,
-  type Broadcaster,
-  testTier
+  type Broadcaster
 } from '@nektar/chain'
 import { faulthost } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'

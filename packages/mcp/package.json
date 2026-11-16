@@ -13,8 +13,8 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test --test-timeout=300000 --test-force-exit --test-concurrency=6 dist/test/*.test.js",
-    "test:stack": "NEKTAR_TEST_TIER=stack node --test --test-timeout=300000 --test-force-exit --test-concurrency=6 dist/test/*.test.js",
+    "test": "node --test --test-timeout=300000 --test-force-exit --test-concurrency=6 dist/test/*.test.js && node --test --test-timeout=1800000 --test-force-exit --test-concurrency=6 dist/test/slow/*.test.js",
+    "test:stack": "NEKTAR_TEST_TIER=stack node --test --test-timeout=300000 --test-force-exit --test-concurrency=6 dist/test/*.test.js && node --test --test-timeout=1800000 --test-force-exit --test-concurrency=6 dist/test/slow/*.test.js",
     "prepublishOnly": "pnpm -r build"
   },
   "dependencies": {

@@ -9,10 +9,10 @@
       "instability": 0.444
     },
     "automation": {
-      "loc": 6832,
+      "loc": 7130,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
-      "maxFileLoc": 1980,
+      "maxFileLoc": 2013,
       "maxFileFanout": 17,
       "instability": 0.857
     },
@@ -25,19 +25,19 @@
       "instability": 0.667
     },
     "bstack": {
-      "loc": 3693,
+      "loc": 3965,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
-      "maxFileLoc": 813,
+      "maxFileLoc": 814,
       "maxFileFanout": 13,
       "instability": 0.667
     },
     "chain": {
-      "loc": 3431,
+      "loc": 4724,
       "pkgFanout": 1,
       "edges": ["core"],
-      "maxFileLoc": 810,
-      "maxFileFanout": 18,
+      "maxFileLoc": 828,
+      "maxFileFanout": 23,
       "instability": 0.1
     },
     "contracts": {
@@ -73,10 +73,10 @@
       "instability": 0.2
     },
     "e2e": {
-      "loc": 5709,
+      "loc": 5710,
       "pkgFanout": 14,
       "edges": ["anchor", "automaton", "chain", "contracts", "core", "datalog", "graph", "identity", "log", "mcp", "policy", "reasoning", "verify", "zk"],
-      "maxFileLoc": 1005,
+      "maxFileLoc": 1006,
       "maxFileFanout": 14,
       "instability": 1
     },
@@ -105,7 +105,7 @@
       "instability": 0.333
     },
     "mcp": {
-      "loc": 10783,
+      "loc": 11147,
       "pkgFanout": 16,
       "edges": [
         "anchor",
@@ -125,7 +125,7 @@
         "verify",
         "zk"
       ],
-      "maxFileLoc": 1962,
+      "maxFileLoc": 2016,
       "maxFileFanout": 35,
       "instability": 0.941
     },
@@ -180,43 +180,47 @@
   },
   "files": {
     "packages/automation/src/market.ts": {
-      "loc": 1980,
-      "fanout": 10
+      "loc": 2013,
+      "fanout": 11
     },
     "packages/automation/src/runtime.ts": {
-      "loc": 1332,
+      "loc": 1532,
       "fanout": 16
     },
     "packages/automation/src/store.ts": {
-      "loc": 882,
+      "loc": 902,
       "fanout": 3
     },
     "packages/bstack/src/finger.ts": {
-      "loc": 813,
-      "fanout": 7
+      "loc": 814,
+      "fanout": 8
+    },
+    "packages/chain/src/index.ts": {
+      "loc": 66,
+      "fanout": 23
     },
     "packages/chain/src/testkit.ts": {
-      "loc": 810,
-      "fanout": 7
+      "loc": 828,
+      "fanout": 8
     },
     "packages/e2e/src/scenarios/real-stack.mjs": {
-      "loc": 1005,
+      "loc": 1006,
       "fanout": 5
     },
     "packages/mcp/src/http.ts": {
-      "loc": 851,
+      "loc": 854,
       "fanout": 10
     },
     "packages/mcp/src/memory.ts": {
-      "loc": 1939,
+      "loc": 1971,
       "fanout": 35
     },
     "packages/mcp/src/runtime.ts": {
-      "loc": 1337,
-      "fanout": 19
+      "loc": 1441,
+      "fanout": 20
     },
     "packages/mcp/src/server.ts": {
-      "loc": 1962,
+      "loc": 2016,
       "fanout": 14
     }
   },

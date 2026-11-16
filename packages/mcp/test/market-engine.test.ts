@@ -64,7 +64,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
       now,
       call: (tool, args) => callTool(mem, tool, args),
       height: () => mem.chainHeight(),
-      fetchTx: async (txid) => (chain as any).known.get(txid),
+      fetchTx: async (txid) => chain.getTx(txid),
       transport: transportFor(mem.operatorKey().toPublicKey().toString()),
       ai: new ScriptedExecutor(),
       broadcast: (tx) => mem.broadcastTx(tx),
@@ -211,7 +211,7 @@ test('S1 regtest: three sellers quote 450/300/200, buyer scores, pays the best, 
   assert.equal(result.verified, true)
   const sale = (await c.store.operations({ role: 'seller' })).find((o) => o.kind === 'sale')!
   assert.equal(sale.state, 'completion_submitted')
-  const reveal = (w.chain as any).known.get(sale.data.completeTxid)
+  const reveal = w.chain.getTx(sale.data.completeTxid as string)!
   assert.equal(reveal.outputs[0].satoshis, 200, 'the seller was paid exactly its quoted price on-chain')
   for (const loser of [a, b]) assert.equal((await loser.store.operations({ role: 'seller' })).find((o) => o.kind === 'sale')!.state, 'quoted')
   const budget = await bob.store.budgetStatus(bob.policyHash)

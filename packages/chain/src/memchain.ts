@@ -1,429 +1,547 @@
-// MemoryChain — an in-memory chain that behaves like the node for everything
-// the test world uses. Broadcasts go through real admission rules (parents
-// resolved from the chain's own store, UTXO spent set, finality, value and a
-// ALWAYS-on SDK interpreter run) and mined txs get real BUMPs against real
-// 80-byte headers whose PoW passes headerPowValid. The pre-mined 101 blocks
-// mean currentHeight() === tipHeight() with genuinely mature coinbases — no
-// +100 offset hack, no fake proofs, and nothing the memory tier accepts that
-// the node would refuse.
-import { Hash, MerklePath, P2PKH, PrivateKey, Script, Spend, Transaction } from '@bsv/sdk'
-import { buildBump } from './bump.js'
+// memchain.ts — the in-memory tier of the test world (NEKTAR_TEST_TIER
+// unset). The contract is StackChain's, backed by in-process state: real
+// 80-byte headers that pass headerPowValid, real merkle trees and BUMPs via
+// buildBump/merkleRootOf, and admission that mirrors the node — scripts are
+// always evaluated through the SDK interpreter against THIS chain's own
+// record of the parent output (never caller-attached sourceTransaction
+// objects). Proofs reach consumers through the same ChainEvents substrate
+// StackChain uses: mine() writes them, the observe path delivers them, so
+// fault injection (faults.observer) can reproduce "proven on-chain but not
+// delivered" exactly.
+import { Transaction, MerklePath, PrivateKey, P2PKH, Hash, UnlockingScript, Spend } from '@bsv/sdk'
+import type { BlockHeader, BroadcastResult, FundingOut, TxStatusEvent } from './interfaces.js'
 import { ChainEvents } from './events.js'
-import { headerPowValid, serializeHeader } from './headers.js'
-import type { BlockHeader, BroadcastResult, Broadcaster, ChainTracker, Funder, FundingOut, TxStatusEvent } from './interfaces.js'
+import { buildBump } from './bump.js'
+import { serializeHeader, headerPowValid } from './headers.js'
+import { merkleRootOf } from './regtest.js'
 import type { TestChain, TestFunder } from './testtier.js'
 
 const ZERO = '0'.repeat(64)
-const COINBASE_SATS = 5_000_000_000
-const FAUCET_KEY = PrivateKey.fromRandom()
+const GENESIS_BITS = 0x207fffff
+const SUBSIDY = 5_000_000_000
+const COINBASE_MATURITY = 100
+/** same TTL the stack tier gives watched broadcasts (see testkit WATCH_TTL_MS) */
+const WATCH_TTL_MS = 60_000
 
-// the same definitive-reject split StackChain.broadcast applies: spent/script/
-// invalid classes are terminal, missing-parent and non-final are transient
-const DEFINITIVE_REJECT = /double.?spend|conflict|already.*spent|UTXO_SPENT|mandatory|invalid|reject/i
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-const rev = (b: Uint8Array) => Uint8Array.from(b).reverse()
-const toInternal = (txid: string) => rev(new Uint8Array(Buffer.from(txid, 'hex')))
-const toDisplay = (internal: Uint8Array) => Buffer.from(rev(internal)).toString('hex')
-
-function nodeHash(l: Uint8Array, r: Uint8Array): Uint8Array {
-  return new Uint8Array(Hash.hash256([...l, ...r]))
+/** BIP34 coinbase scriptSig: the block height, minimally LE-encoded */
+function pushHeight(h: number): string {
+  if (h === 0) return '00'
+  const b: number[] = []
+  for (let v = h; v > 0; v >>= 8) b.push(v & 0xff)
+  if ((b[b.length - 1]! & 0x80) !== 0) b.push(0)
+  return b.length.toString(16).padStart(2, '0') + Buffer.from(b).toString('hex')
 }
 
-/** display-order merkle root over display-order txids (same tree buildBump walks) */
-function merkleRoot(txids: string[]): string {
-  let level = txids.map(toInternal)
-  if (level.length === 0) return toDisplay(new Uint8Array(Hash.hash256([0])))
-  while (level.length > 1) {
-    const next: Uint8Array[] = []
-    for (let i = 0; i < level.length; i += 2) {
-      const l = level[i]!
-      const r = i + 1 < level.length ? level[i + 1]! : l
-      next.push(nodeHash(l, r))
-    }
-    level = next
-  }
-  return toDisplay(level[0]!)
+interface TxRec {
+  /** the caller's own object for broadcast txs (getTx returns it — the same
+   *  contract StackChain keeps); the chain's object for coinbases */
+  stored: Transaction
+  /** frozen chain-side copy — admission and script eval resolve parents
+   *  from THIS, never from fields a caller may have mutated */
+  snapshot: Transaction
+  coinbase: boolean
+  /** set once the tx is in a block; cleared on reorg */
+  height?: number
+  /** the chain's record of the proof — set at mine time; the caller object
+   *  only receives it through the observe path (observer faults hold it) */
+  mp?: MerklePath
 }
 
-/** height as exactly 4 little-endian bytes — the push len is always valid
- *  (a raw hex string goes odd-length at height 256) */
-const le4 = (height: number): string => {
-  const b = height.toString(16).padStart(8, '0')
-  return b.slice(6, 8) + b.slice(4, 6) + b.slice(2, 4) + b.slice(0, 2)
+interface MemBlock {
+  header: BlockHeader
+  /** every txid in the block, coinbase at index 0 */
+  txids: string[]
 }
 
-const coinbaseTx = (height: number, key: PrivateKey): Transaction => {
-  const tx = new Transaction()
-  tx.addInput({
-    sourceTXID: ZERO,
-    sourceOutputIndex: 0xffffffff,
-    unlockingScript: Script.fromHex('04' + le4(height)),
-    sequence: 0xffffffff
-  })
-  tx.addOutput({ lockingScript: new P2PKH().lock(key.toPublicKey().toAddress([0x6f])), satoshis: COINBASE_SATS })
-  return tx
-}
-
-export interface MemoryFaults {
-  /** accepted but never mined until release */
-  hold(txid: string): void
-  release(txid: string): void
-  /** the next broadcast whose txid matches is refused with this description */
-  refuseNext(match: string | RegExp, description: string): void
-  /** 'timeout' | 'rate-limit' — the events observe throws ("couldn't ask") */
-  observe: undefined | 'timeout' | 'rate-limit'
+export interface MemoryChainFaults {
+  /** return a description to refuse this broadcast as a definitive rejection */
+  reject?: (tx: Transaction) => string | undefined
+  /** true = accepted into the mempool but never mined (nor its descendants) */
+  hold?: (txid: string) => boolean
+  /** the events observer throws ("couldn't ask") as a timeout or an HTTP 429 */
+  observer?: 'timeout' | 'rate-limit'
 }
 
 export class MemoryChain implements TestChain {
-  private headers: BlockHeader[] = []
-  private mempool = new Map<string, Transaction>()
-  private mined = new Map<string, { height: number; bump: MerklePath }>()
-  /** every tx the chain has ever accepted (mempool + mined + coinbases) —
-   *  input parents resolve from HERE, never from caller-attached objects */
-  private known = new Map<string, Transaction>()
+  readonly treasuryKey: PrivateKey
+  private known = new Map<string, TxRec>()
+  /** admission-ordered mempool txids (Map preserves insertion order) */
+  private mempool = new Map<string, true>()
+  /** outpoints consumed by accepted txs, mempool or mined */
   private spent = new Set<string>()
-  private spentBy = new Map<string, Set<string>>()
+  private spentBy = new Map<string, string[]>()
+  /** coinbase txid → the height it was mined at (for the maturity rule) */
+  private coinbases = new Map<string, number>()
   private rejectedSet = new Set<string>()
-  private held = new Set<string>()
-  private refuseQueue: Array<{ match: string | RegExp; description: string }> = []
+  private blocks: MemBlock[] = []
   private reorgCbs: Array<(removed: BlockHeader[], newTip: BlockHeader) => void> = []
-  /** mature + immature faucet coinbase outputs (fund() draws mature only) */
-  readonly faucetUtxos: Array<{ tx: Transaction; vout: number; atHeight: number }> = []
+  private events: ChainEvents
 
-  readonly faults: MemoryFaults
-  readonly chainEvents: ChainEvents
+  faults: MemoryChainFaults = {}
 
-  constructor() {
-    this.faults = {
-      observe: undefined,
-      hold: (txid) => this.held.add(txid),
-      release: (txid) => this.held.delete(txid),
-      refuseNext: (match, description) => this.refuseQueue.push({ match, description })
-    }
-    this.chainEvents = new ChainEvents({
+  constructor(opts: { treasuryKey?: PrivateKey; premine?: number } = {}) {
+    this.treasuryKey = opts.treasuryKey ?? PrivateKey.fromRandom()
+    this.events = new ChainEvents({
       intervalMs: 50,
-      ttlMs: 30_000,
-      height: () => Promise.resolve(this.tip()),
+      ttlMs: WATCH_TTL_MS,
+      height: async () => this.tip(),
       observe: async (txid) => {
-        if (this.faults.observe === 'timeout') throw new Error(`observe timeout for ${txid}`)
-        if (this.faults.observe === 'rate-limit') throw new Error(`observe rate-limited for ${txid}`)
-        const rec = this.mined.get(txid)
-        if (rec === undefined) return undefined
-        const tx = this.known.get(txid)
-        if (tx !== undefined && tx.merklePath === undefined) tx.merklePath = rec.bump
-        return { txid, status: 'mined', blockHeight: rec.height, merklePath: rec.bump }
+        if (this.faults.observer !== undefined)
+          throw new Error(`memchain: observer ${this.faults.observer === 'timeout' ? 'timed out' : 'returned 429'} for ${txid}`)
+        const rec = this.known.get(txid)
+        if (rec?.mp === undefined) return undefined
+        // proofs attach on delivery, like StackChain's observe — not at mine
+        rec.stored.merklePath ??= MerklePath.fromBinary(rec.mp.toBinary())
+        return { txid, status: 'mined', blockHeight: rec.height!, merklePath: rec.mp }
       }
     })
-    // pre-mine 101 blocks: the first coinbase is mature and tipHeight is real
-    for (let h = 0; h < 101; h++) this.sealBlock([])
+    // genesis + premine so treasury coinbases are mature before any test runs
+    this.mineSync((opts.premine ?? 110) + 1)
   }
+
+  // --- chain state -------------------------------------------------------
 
   private tip(): number {
-    return this.headers.length
+    return this.blocks.length - 1
   }
 
-  private coinbaseMature(atHeight: number): boolean {
-    return this.tip() - atHeight >= 100
+  /** the block list — treasury reads mature coinbases from it */
+  get blockList(): ReadonlyArray<MemBlock> {
+    return this.blocks
   }
 
-  /** seal one block: real coinbase at index 0 + the given mempool txs */
-  private sealBlock(txids: string[]): BlockHeader {
-    const height = this.tip() + 1
-    const cb = coinbaseTx(height, FAUCET_KEY)
-    this.known.set(cb.id('hex'), cb)
-    this.faucetUtxos.push({ tx: cb, vout: 0, atHeight: height })
-    const all = [cb.id('hex'), ...txids]
-    const prev = this.headers[this.headers.length - 1]
-    const header: BlockHeader = {
-      height,
+  /** coinbases mined so far — a re-mined height must not repeat a txid */
+  private coinbaseCount = 0
+
+  private coinbaseTx(height: number): Transaction {
+    const t = new Transaction()
+    t.addInput({
+      sourceTXID: ZERO,
+      sourceOutputIndex: 0xffffffff,
+      // BIP34 height push + an extranonce counter: a block re-mined after a
+      // reorg gets a different coinbase txid, hence a different header
+      unlockingScript: UnlockingScript.fromHex(pushHeight(height) + pushHeight(this.coinbaseCount++))
+    })
+    t.addOutput({ lockingScript: new P2PKH().lock(this.treasuryKey.toPublicKey().toAddress([0x6f])), satoshis: SUBSIDY })
+    return t
+  }
+
+  /** nonce-grind at regtest difficulty — a handful of hashes per block */
+  private buildHeader(merkleRoot: string): BlockHeader {
+    const prev = this.blocks[this.blocks.length - 1]
+    const h: BlockHeader = {
+      height: this.blocks.length,
       hash: '',
-      prevHash: prev?.hash ?? ZERO,
-      merkleRoot: merkleRoot(all),
-      time: Math.max(Math.floor(Date.now() / 1000), (prev?.time ?? 0) + 1),
-      bits: 0x207fffff,
+      prevHash: prev?.header.hash ?? ZERO,
+      merkleRoot,
+      time: Math.max(Math.floor(Date.now() / 1000), prev?.header.time ?? 0),
+      bits: GENESIS_BITS,
       nonce: 0,
-      version: 4
+      version: 0x20000000
     }
-    for (let n = 0; ; n++) {
-      header.nonce = n
-      header.hash = Buffer.from(Hash.hash256([...serializeHeader(header)!]))
+    for (let nonce = 0; ; nonce++) {
+      h.nonce = nonce
+      const raw = serializeHeader(h)
+      if (raw === undefined) throw new Error('memchain: header could not serialize')
+      h.hash = Buffer.from(Hash.hash256([...raw]))
         .reverse()
         .toString('hex')
-      if (headerPowValid(header)) break
+      if (headerPowValid(h)) return h
     }
-    this.headers.push(header)
-    // BUMPs attach to the stored txs; the coinbase gets one too (funding
-    // parents carry their proof like a real node's mined parents do)
-    all.forEach((txid, i) => {
-      const bump = buildBump(all, i, height)
-      this.mined.set(txid, { height, bump })
-      const tx = this.known.get(txid)
-      if (tx !== undefined) tx.merklePath = bump
-    })
-    return header
   }
 
+  // --- admission ---------------------------------------------------------
+
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
-    const txid = tx.id('hex')
-    const refuse = (description: string): BroadcastResult => {
-      if (DEFINITIVE_REJECT.test(description)) {
-        // definitive refuses are terminal: same signal StackChain pushes so
-        // reconcile gates clear immediately; transient refusals stay retryable
+    let txid: string
+    let copy: Transaction
+    try {
+      txid = tx.id('hex')
+      copy = Transaction.fromBinary(tx.toBinary())
+    } catch (e) {
+      return { status: 'error', description: `TX_INVALID (31): unserializable: ${String((e as Error).message).slice(0, 90)}` }
+    }
+    // idempotent resubmit, like the node's 202 for a known tx
+    const known = this.known.get(txid)
+    if (this.mempool.has(txid) || known?.height !== undefined) return { status: 'success', txid }
+
+    const fail = (description: string, definitive: boolean): BroadcastResult => {
+      if (definitive) {
         this.rejectedSet.add(txid)
-        this.chainEvents.report({ txid, status: 'rejected' })
+        // a broadcast-time refusal is a final state — push it like 'mined' so
+        // reconcile gates clear immediately (same as StackChain.broadcast)
+        this.events.report({ txid, status: 'rejected' })
       }
-      return { status: 'error', description }
+      return { status: 'error', txid, description }
     }
-    const staged = this.refuseQueue.findIndex((r) => (typeof r.match === 'string' ? txid.startsWith(r.match) : r.match.test(txid)))
-    if (staged >= 0) {
-      const { description } = this.refuseQueue.splice(staged, 1)[0]!
-      return refuse(description)
+
+    const custom = this.faults.reject?.(copy)
+    if (custom !== undefined) return fail(custom, true)
+
+    // parents resolve from the chain's own store — missing parents are
+    // transient (lagging ingestion), spent outpoints are definitive
+    let inSats = 0
+    const inputs: Array<{ rec: TxRec; vout: number }> = []
+    for (const inp of copy.inputs) {
+      const ptxid = inp.sourceTXID
+      const vout = inp.sourceOutputIndex
+      if (ptxid === undefined || vout === undefined) return fail(`TX_MISSING_PARENT: input without a source outpoint`, false)
+      if (ptxid === ZERO || vout === 0xffffffff) return fail(`TX_INVALID (18): coinbase-style input in a mempool tx`, true)
+      const rec = this.known.get(ptxid)
+      const out = rec?.snapshot.outputs[vout]
+      if (rec === undefined || out === undefined) return fail(`TX_MISSING_PARENT: ${ptxid}`, false)
+      const op = `${ptxid}:${vout}`
+      if (this.spent.has(op)) return fail(`UTXO_SPENT: ${op} already spent`, true)
+      const cbh = this.coinbases.get(ptxid)
+      // mature when the tip is at least 99 blocks above the coinbase's block
+      // (confirmations = tip - height + 1 ≥ 100)
+      if (cbh !== undefined && this.tip() - cbh < COINBASE_MATURITY - 1) return fail(`premature spend of coinbase ${ptxid}`, true)
+      inSats += out.satoshis ?? 0
+      inputs.push({ rec, vout })
     }
-    // idempotent resubmit — the same bytes can only produce the same txid
-    if (this.mempool.has(txid) || this.mined.has(txid)) return { status: 'success', txid }
-    // admission rules, node order: parents → spent → finality → value → scripts
-    const parents: Array<{ tx: Transaction; vout: number }> = []
-    for (const inp of tx.inputs) {
-      const ptxid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      const vout = inp.sourceOutputIndex ?? 0
-      if (ptxid === undefined || ptxid === ZERO || vout === 0xffffffff) {
-        return refuse(`TX_INVALID (18): coinbase-style input in a mempool tx`)
-      }
-      const parent = this.known.get(ptxid)
-      if (parent === undefined || parent.outputs[vout] === undefined) {
-        return refuse(`TX_MISSING_PARENT: ${ptxid}:${vout}`)
-      }
-      parents.push({ tx: parent, vout })
+    const outSats = copy.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)
+    if (inSats < outSats) return fail(`TX_INVALID (31): [ProcessTransaction][${txid}] outputs exceed inputs`, true)
+
+    // nLockTime: final when every sequence is final, or the lock is at/below
+    // the threshold — height for <500M, the tip header's time above (the
+    // node's MTP is approximated by the tip time; regtest tests never sit on
+    // the boundary)
+    const lt = copy.lockTime ?? 0
+    const anyNonFinal = copy.inputs.some((i) => (i.sequence ?? 0xffffffff) !== 0xffffffff)
+    if (lt !== 0 && anyNonFinal) {
+      const threshold = lt < 500_000_000 ? this.tip() : (this.blocks[this.blocks.length - 1]?.header.time ?? 0)
+      if (lt > threshold) return fail(`non-final: lockTime ${lt} not reached`, false)
     }
-    const ours = new Set<string>()
-    for (let i = 0; i < tx.inputs.length; i++) {
-      const ptxid = tx.inputs[i]!.sourceTXID ?? tx.inputs[i]!.sourceTransaction!.id('hex')
-      const op = `${ptxid}:${parents[i]!.vout}`
-      if (this.spent.has(op)) return refuse(`UTXO_SPENT: ${op} — utxo already spent`)
-      ours.add(op)
-    }
-    if ((tx.lockTime ?? 0) !== 0 && tx.inputs.some((i) => (i.sequence ?? 0xffffffff) !== 0xffffffff)) {
-      const tip = this.tip()
-      const tipTime = this.headers[tip - 1]?.time ?? 0
-      const final = tx.lockTime! < 500_000_000 ? tx.lockTime! < tip + 1 : tx.lockTime! < tipTime
-      if (!final) return refuse(`TX_NON_FINAL: lockTime ${tx.lockTime} not reached`)
-    }
-    const inSats = parents.reduce((s, p) => s + (p.tx.outputs[p.vout].satoshis ?? 0), 0)
-    const outSats = tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0)
-    if (inSats < outSats) {
-      return refuse(`TX_INVALID (4): bad-txns-in-belowout (${inSats} < ${outSats})`)
-    }
-    // script validation is NOT optional — every input runs the SDK
-    // interpreter against the real parent output, exactly like the node
-    for (let ix = 0; ix < tx.inputs.length; ix++) {
-      const inp = tx.inputs[ix]!
-      const p = parents[ix]!
-      const ptxid = inp.sourceTXID ?? inp.sourceTransaction!.id('hex')
+
+    // script admission — the SDK interpreter on the chain's record of each
+    // parent output, one input at a time, strict mode
+    for (let ix = 0; ix < copy.inputs.length; ix++) {
+      const inp = copy.inputs[ix]!
+      const src = inputs[ix]!.rec.snapshot.outputs[inputs[ix]!.vout]!
       try {
         const spend = new Spend({
-          sourceTXID: ptxid,
-          sourceSatoshis: p.tx.outputs[p.vout].satoshis ?? 0,
-          sourceOutputIndex: p.vout,
-          lockingScript: p.tx.outputs[p.vout].lockingScript,
-          transactionVersion: tx.version,
-          otherInputs: tx.inputs
-            .filter((_, j) => j !== ix)
-            .map((i) => ({
-              sourceTXID: i.sourceTXID ?? i.sourceTransaction?.id('hex') ?? '',
-              sourceOutputIndex: i.sourceOutputIndex ?? 0,
-              sequence: i.sequence ?? 0xffffffff
-            })),
+          sourceTXID: inp.sourceTXID!,
+          sourceOutputIndex: inp.sourceOutputIndex!,
+          sourceSatoshis: src.satoshis ?? 0,
+          lockingScript: src.lockingScript,
+          transactionVersion: copy.version,
+          otherInputs: copy.inputs.filter((_, j) => j !== ix),
+          outputs: copy.outputs,
           inputIndex: ix,
-          unlockingScript: inp.unlockingScript,
-          outputs: tx.outputs,
+          unlockingScript: inp.unlockingScript ?? UnlockingScript.fromHex(''),
           inputSequence: inp.sequence ?? 0xffffffff,
-          lockTime: tx.lockTime ?? 0
-        } as ConstructorParameters<typeof Spend>[0])
-        if (!spend.validate()) {
-          return refuse(`TX_INVALID (31): Script failed an OP_EQUALVERIFY operation (input ${ix})`)
-        }
+          lockTime: lt
+        })
+        if (!spend.validate()) throw new Error('script evaluated false')
       } catch (e) {
-        return refuse(`TX_INVALID (31): Script evaluation threw on input ${ix}: ${String((e as Error).message).slice(0, 90)}`)
+        return fail(`400: Failed to process transaction: TX_INVALID (31): [ProcessTransaction][${txid}] ${String((e as Error).message).slice(0, 200)}`, true)
       }
     }
-    for (const op of ours) this.spent.add(op)
-    this.spentBy.set(txid, ours)
-    this.mempool.set(txid, tx)
-    this.known.set(txid, tx)
-    this.chainEvents.watch(txid)
+
+    for (const inp of copy.inputs) this.spent.add(`${inp.sourceTXID}:${inp.sourceOutputIndex}`)
+    this.spentBy.set(
+      txid,
+      copy.inputs.map((i) => `${i.sourceTXID}:${i.sourceOutputIndex}`)
+    )
+    this.mempool.set(txid, true)
+    this.known.set(txid, { stored: tx, snapshot: copy, coinbase: false })
+    this.events.watch(txid)
     return { status: 'success', txid }
   }
 
-  /** mine n blocks; when this resolves, 'tx' mined events for every watched
-   *  tx sealed in them have already been delivered (probeNow, not a timer) */
-  async mine(n = 1): Promise<void> {
-    for (let b = 0; b < n; b++) {
-      const txids = [...this.mempool.keys()].filter((t) => !this.held.has(t))
-      this.sealBlock(txids)
-      for (const txid of txids) this.mempool.delete(txid)
-      // deliver proofs now — callers must see 'mined' + merklePath before
-      // mine() resolves, and no interval tick may be left owning the wait
-      for (const txid of txids) await this.chainEvents.probeNow(txid)
-    }
-  }
-
-  /** drop the last n blocks: txs return to the mempool unproven, onReorg
-   *  fires with the removed headers and the new tip */
-  reorg(n: number): void {
-    const removed = this.headers.splice(this.headers.length - n, n)
-    for (const h of removed) {
-      for (const [txid, rec] of [...this.mined]) {
-        if (rec.height !== h.height) continue
-        this.mined.delete(txid)
-        const tx = this.known.get(txid)
-        if (tx !== undefined) {
-          // coinbases die with their block; real txs go back to the mempool
-          if (tx.inputs.some((i) => (i.sourceTXID ?? '') === ZERO)) {
-            this.known.delete(txid)
-            for (const op of this.spentBy.get(txid) ?? []) this.spent.delete(op)
-            this.spentBy.delete(txid)
-            const fi = this.faucetUtxos.findIndex((u) => u.tx.id('hex') === txid)
-            if (fi >= 0) this.faucetUtxos.splice(fi, 1)
-          } else {
-            delete tx.merklePath
-            this.mempool.set(txid, tx)
-            // the chain itself knows the tx regressed to the mempool — a
-            // verified unconfirmed supersedes the stale mined status so the
-            // re-mine delivers a fresh event instead of deduping away
-            this.chainEvents.report({ txid, status: 'unconfirmed' })
-            this.chainEvents.watch(txid)
-          }
+  /** evict an accepted mempool tx and every mempool tx that descends from it:
+   *  the freed inputs are spendable again and the txids are reported rejected —
+   *  the accepted-then-rejected case. A block must never hold an orphan, so a
+   *  child of the evicted tx goes with it (transitively). */
+  reject(txid: string): boolean {
+    if (!this.mempool.has(txid)) return false
+    const doomed = new Set<string>([txid])
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const id of this.mempool.keys()) {
+        if (doomed.has(id)) continue
+        const rec = this.known.get(id)
+        if (rec?.snapshot.inputs.some((i) => i.sourceTXID !== undefined && doomed.has(i.sourceTXID))) {
+          doomed.add(id)
+          grew = true
         }
       }
     }
-    if (removed.length > 0) {
-      const tip = this.headers[this.headers.length - 1]!
-      for (const cb of this.reorgCbs) cb(removed, tip)
+    for (const id of doomed) {
+      this.mempool.delete(id)
+      this.known.delete(id)
+      this.rejectedSet.add(id)
+      for (const op of this.spentBy.get(id) ?? []) this.spent.delete(op)
+      this.spentBy.delete(id)
+      this.events.report({ txid: id, status: 'rejected' })
     }
-  }
-
-  /** evict an accepted mempool tx, free its inputs, report rejected — the
-   *  accepted-then-rejected case */
-  reject(txid: string): boolean {
-    if (!this.mempool.has(txid)) return false
-    this.mempool.delete(txid)
-    this.known.delete(txid)
-    this.rejectedSet.add(txid)
-    for (const op of this.spentBy.get(txid) ?? []) this.spent.delete(op)
-    this.spentBy.delete(txid)
-    this.chainEvents.report({ txid, status: 'rejected' })
     return true
   }
 
-  getTx(txid: string): Transaction | undefined {
-    return this.known.get(txid)
+  // --- mining ------------------------------------------------------------
+
+  /** the synchronous core — the constructor pre-mines without async */
+  private mineSync(n: number): string[] {
+    const minedHere: string[] = []
+    for (let b = 0; b < n; b++) {
+      const height = this.blocks.length
+      const cb = this.coinbaseTx(height)
+      const cbid = cb.id('hex')
+      // included = every mempool tx that is not held and does not descend
+      // from an excluded tx (admission order keeps parents before children)
+      const excluded = new Set<string>()
+      const included: string[] = []
+      for (const txid of this.mempool.keys()) {
+        if (this.faults.hold?.(txid) === true) {
+          excluded.add(txid)
+          continue
+        }
+        const blocked = this.known.get(txid)!.snapshot.inputs.some((i) => i.sourceTXID !== undefined && excluded.has(i.sourceTXID))
+        if (blocked) {
+          excluded.add(txid)
+          continue
+        }
+        included.push(txid)
+      }
+      const txids = [cbid, ...included]
+      const header = this.buildHeader(merkleRootOf(txids))
+      this.blocks.push({ header, txids })
+      const cbMp = buildBump(txids, 0, height)
+      cb.merklePath = cbMp
+      this.known.set(cbid, { stored: cb, snapshot: cb, coinbase: true, height, mp: cbMp })
+      this.coinbases.set(cbid, height)
+      included.forEach((txid, i) => {
+        const rec = this.known.get(txid)!
+        rec.height = height
+        rec.mp = buildBump(txids, i + 1, height)
+        this.mempool.delete(txid)
+        minedHere.push(txid)
+      })
+    }
+    return minedHere
   }
-  isRejected(txid: string): boolean {
-    return this.rejectedSet.has(txid)
+
+  /** mine `n` blocks; the first takes every admissible mempool tx */
+  async mine(n = 1): Promise<void> {
+    const minedHere = this.mineSync(n)
+    // proofs travel through the observe path, exactly like the stack tier —
+    // tick until every watched txid mined in this call has been delivered
+    for (let i = 0; i < 10; i++) {
+      if (!minedHere.some((id) => this.events.watching(id))) break
+      await this.events.tick()
+      if (minedHere.some((id) => this.events.watching(id))) await sleep(5)
+    }
   }
-  onStatus(cb: (ev: TxStatusEvent) => void): void {
-    this.chainEvents.on('tx', cb)
-    this.chainEvents.start()
+
+  /** drop the last `n` blocks: their non-coinbase txs return to the mempool
+   *  (their outpoints stay spent — the spends are still pending), coinbases
+   *  are forgotten, onReorg fires with the removed headers (deepest first).
+   *  Refuses to reorg past genesis or a block whose coinbase was spent. */
+  reorg(n = 1): void {
+    if (n < 1 || n >= this.blocks.length) throw new Error(`memchain: reorg(${n}) out of range (height ${this.tip()})`)
+    const removed = this.blocks.slice(this.blocks.length - n)
+    for (const b of removed) if (this.spent.has(`${b.txids[0]}:0`)) throw new Error(`memchain: cannot reorg block ${b.header.height} — its coinbase is spent`)
+    this.blocks.length -= n
+    // requeue in original order — oldest removed block first keeps
+    // parent-before-child admission order in the mempool
+    for (const b of removed) {
+      this.coinbases.delete(b.txids[0]!)
+      for (const txid of b.txids.slice(1)) {
+        const rec = this.known.get(txid)!
+        rec.height = undefined
+        rec.mp = undefined
+        delete rec.stored.merklePath
+        this.mempool.set(txid, true)
+      }
+    }
+    const tip = this.blocks[this.blocks.length - 1]!.header
+    const headers = [...removed].reverse().map((b) => b.header)
+    for (const cb of this.reorgCbs) cb(headers, tip)
+    for (const b of removed) {
+      for (const txid of b.txids.slice(1)) {
+        this.events.watch(txid)
+        this.events.report({ txid, status: 'unconfirmed' })
+      }
+    }
   }
+
   onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
     this.reorgCbs.push(cb)
   }
+
+  // --- reads -------------------------------------------------------------
+
+  /** sync view: caller objects for broadcast txs (merklePath attaches on
+   *  proof delivery), chain objects for coinbases — the StackChain contract */
+  getTx(txid: string): Transaction | undefined {
+    return this.known.get(txid)?.stored
+  }
+
+  /** chain-side copy with the proof attached when mined — the
+   *  getrawtransaction+merkle_proof lookup, for txids not broadcast by us */
+  async fetchTx(txid: string): Promise<Transaction | undefined> {
+    const rec = this.known.get(txid)
+    if (rec === undefined) return undefined
+    const t = Transaction.fromBinary(rec.snapshot.toBinary())
+    if (rec.mp !== undefined) t.merklePath = rec.mp
+    return t
+  }
+
+  isRejected(txid: string): boolean {
+    return this.rejectedSet.has(txid)
+  }
+
+  onStatus(cb: (ev: TxStatusEvent) => void): void {
+    this.events.on('tx', cb)
+    this.events.start()
+  }
+
+  get chainEvents(): ChainEvents {
+    return this.events
+  }
+
   stopWatching(): void {
-    this.chainEvents.stop()
+    this.events.stop()
   }
+
   async waitProof(txid: string, timeoutMs = 30_000): Promise<Transaction | undefined> {
-    await this.chainEvents.waitFor(txid, timeoutMs)
-    return this.known.get(txid)
+    await this.events.waitFor(txid, timeoutMs)
+    return this.known.get(txid)?.stored
   }
+
   async currentHeight(): Promise<number> {
     return this.tip()
   }
+
   async tipHeight(): Promise<number> {
     return this.tip()
   }
+
   async isValidRootForHeight(root: string, height: number): Promise<boolean> {
-    return this.headers[height - 1]?.merkleRoot === root
+    return this.blocks[height]?.header.merkleRoot === root
   }
+
   async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
-    return this.headers[height - 1]
+    return this.blocks[height]?.header
   }
-  async fetchTx(txid: string): Promise<Transaction | undefined> {
-    return this.known.get(txid)
-  }
+
   async merklePathOf(txid: string): Promise<MerklePath | undefined> {
-    return this.mined.get(txid)?.bump
+    return this.known.get(txid)?.mp
   }
+
   async utxoStatus(txid: string, vout: number): Promise<'unspent' | 'spent' | 'unknown'> {
-    if (this.spent.has(`${txid}:${vout}`)) return 'spent'
-    const tx = this.known.get(txid)
-    if (tx === undefined || tx.outputs[vout] === undefined) return 'unknown'
-    return 'unspent'
+    const rec = this.known.get(txid)
+    if (rec === undefined || vout < 0 || vout >= rec.snapshot.outputs.length) return 'unknown'
+    return this.spent.has(`${txid}:${vout}`) ? 'spent' : 'unspent'
   }
+
   async pendingBroadcasts(): Promise<number> {
     return this.mempool.size
   }
+}
 
-  /** the faucet's mature, unspent coinbase outputs */
-  matureFaucet(): Array<{ tx: Transaction; vout: number; atHeight: number }> {
-    return this.faucetUtxos.filter((u) => this.coinbaseMature(u.atHeight) && !this.spent.has(`${u.tx.id('hex')}:${u.vout}`))
+// ---------------------------------------------------------------------------
+// treasury + funder — the memory-tier counterparts of StackTreasury/StackFunder
+
+export class MemoryTreasury {
+  readonly key: PrivateKey
+  readonly chain: MemoryChain
+
+  constructor(chain?: MemoryChain, key: PrivateKey = PrivateKey.fromRandom()) {
+    this.key = key
+    this.chain = chain ?? new MemoryChain({ treasuryKey: key })
   }
-  /** track a faucet-side change outpoint (spendable immediately — only
-   *  coinbase outputs carry the maturity rule) */
-  addFaucetUtxo(tx: Transaction, vout: number): void {
-    this.faucetUtxos.push({ tx, vout, atHeight: -10_000 })
+
+  /** change outputs this treasury owns (index = last output of each split) */
+  private change: Array<{ tx: Transaction; vout: number }> = []
+
+  /** mature, unspent treasury outputs — coinbases at +100 plus adopted change */
+  private async candidates(): Promise<FundingOut[]> {
+    const mine = new P2PKH().lock(this.key.toPublicKey().toAddress([0x6f])).toHex()
+    const outs: FundingOut[] = []
+    for (const b of this.chain.blockList) {
+      const cbid = b.txids[0]!
+      if (b.header.height + COINBASE_MATURITY - 1 > this.chain.blockList.length - 1) break
+      const rec = this.chain.getTx(cbid)
+      // only coinbases paying THIS key — a treasury on another key's chain
+      // would sign inputs it cannot unlock
+      if (rec === undefined || rec.outputs[0]?.lockingScript.toHex() !== mine) continue
+      if ((await this.chain.utxoStatus(cbid, 0)) === 'unspent') outs.push({ tx: rec, vout: 0, satoshis: rec.outputs[0]!.satoshis ?? 0 })
+    }
+    for (const c of this.change) {
+      const txid = c.tx.id('hex')
+      if ((await this.chain.utxoStatus(txid, c.vout)) === 'unspent') outs.push({ tx: c.tx, vout: c.vout, satoshis: c.tx.outputs[c.vout]!.satoshis ?? 0 })
+    }
+    return outs
+  }
+
+  /** splits serialize: parallel testWorld() calls would otherwise pick the
+   *  same candidate outpoints and collide on UTXO_SPENT */
+  private splitQueue: Promise<unknown> = Promise.resolve()
+
+  /** one P2PKH split tx paying `outputs` × `sats` to `address`, change back to
+   *  the treasury — the memory-tier counterpart of a reserve bootstrap */
+  async split(address: string, outputs: number, sats: number): Promise<Transaction> {
+    const run = this.splitQueue.then(() => this.doSplit(address, outputs, sats))
+    this.splitQueue = run.catch(() => undefined)
+    return run
+  }
+
+  private async doSplit(address: string, outputs: number, sats: number): Promise<Transaction> {
+    const need = outputs * sats + 5_000
+    const tx = new Transaction()
+    let inSats = 0
+    for (const src of await this.candidates()) {
+      if (inSats >= need) break
+      // proof-less copy: StackFunder spends treasury parents that carry no
+      // proofs (reserve entries reload from hex), so children of a fresh
+      // funder output travel as Extended Format, not pre-proven BEEF
+      tx.addInput({
+        sourceTransaction: Transaction.fromHex(src.tx.toHex()),
+        sourceOutputIndex: src.vout,
+        unlockingScriptTemplate: new P2PKH().unlock(this.key)
+      })
+      inSats += src.satoshis
+    }
+    if (inSats < need) throw new Error(`memchain: treasury cannot cover ${need} sats`)
+    for (let i = 0; i < outputs; i++) tx.addOutput({ lockingScript: new P2PKH().lock(address), satoshis: sats })
+    tx.addOutput({ lockingScript: new P2PKH().lock(this.key.toPublicKey().toAddress([0x6f])), change: true })
+    await tx.fee()
+    await tx.sign()
+    const r = await this.chain.broadcast(tx)
+    if (r.status !== 'success') throw new Error(`memchain: treasury split refused: ${r.description ?? ''}`)
+    this.change.push({ tx, vout: tx.outputs.length - 1 })
+    return tx
   }
 }
 
-/** a funder backed by the chain's faucet — same zero-conf semantics as
- *  StackFunder.fund: one funding tx with `outputs` P2PKH outputs to a fresh
- *  key, broadcast and left unconfirmed; the faucet parent is attached
- *  proof-less so a child of a fresh funder output travels as Extended Format —
- *  tier parity with StackFunder's unproven treasury parents. Concurrent fund
- *  calls serialise (the faucet change is a chain). Nothing is written to disk. */
+/** the memory-tier funder — same surface as StackFunder: the funding parent
+ *  is a real split tx broadcast to the chain, unconfirmed until a test mines
+ *  it, so its outputs carry proofs only once mined (zeroconf parity) */
 export class MemoryFunder implements TestFunder {
   keyPair: PrivateKey
   private utxos: FundingOut[] = []
   private fundingTx?: Transaction
-  private static queue: Promise<unknown> = Promise.resolve()
 
   private constructor(key: PrivateKey) {
     this.keyPair = key
   }
 
+  /** a funder with no utxos — take() always throws; no chain needed */
   static dry(key: PrivateKey = PrivateKey.fromRandom()): MemoryFunder {
     return new MemoryFunder(key)
   }
 
-  static async fund(chain: MemoryChain, outputs: number, sats = 10_000): Promise<MemoryFunder> {
-    const run = MemoryFunder.queue.then(() => MemoryFunder.fundNow(chain, outputs, sats))
-    MemoryFunder.queue = run.catch(() => undefined)
-    return run
-  }
-
-  private static async fundNow(chain: MemoryChain, outputs: number, sats: number): Promise<MemoryFunder> {
+  static async fund(t: MemoryTreasury, outputs: number, sats = 10_000): Promise<MemoryFunder> {
     const f = new MemoryFunder(PrivateKey.fromRandom())
-    const addr = f.keyPair.toPublicKey().toAddress([0x6f])
-    const need = outputs * sats + 5_000
-    const tx = new Transaction()
-    let inSats = 0
-    const used: Array<{ tx: Transaction; vout: number }> = []
-    for (const u of chain.matureFaucet()) {
-      // proof-less copy: StackFunder spends treasury parents that carry no
-      // proofs, so children of a fresh funder output travel as Extended Format
-      tx.addInput({ sourceTransaction: Transaction.fromHex(u.tx.toHex()), sourceOutputIndex: u.vout, unlockingScriptTemplate: new P2PKH().unlock(FAUCET_KEY) })
-      used.push(u)
-      inSats += u.tx.outputs[u.vout].satoshis ?? 0
-      if (inSats >= need) break
-    }
-    if (inSats < need) throw new Error('MemoryFunder: faucet dry — mine blocks first')
-    for (let i = 0; i < outputs; i++) tx.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: sats })
-    tx.addOutput({ lockingScript: new P2PKH().lock(FAUCET_KEY.toPublicKey().toAddress([0x6f])), change: true })
-    await tx.fee()
-    await tx.sign()
-    const r = await chain.broadcast(tx)
-    if (r.status !== 'success') throw new Error(`MemoryFunder: fund broadcast failed ${r.description ?? ''}`.slice(0, 160))
-    const changeVout = tx.outputs.length - 1
-    if ((tx.outputs[changeVout].satoshis ?? 0) > 0) chain.addFaucetUtxo(tx, changeVout)
+    const tx = await t.split(f.address(), outputs, sats)
+    // zeroconf, like StackFunder: the split is broadcast but unconfirmed —
+    // tests mine only where a proof is actually asserted (chain.mine +
+    // merklePathOf). Pre-mining here would hide the unproven-parent paths
+    // production hits constantly.
     f.fundingTx = tx
     for (let i = 0; i < outputs; i++) f.utxos.push({ tx, vout: i, satoshis: sats })
     return f
@@ -434,18 +552,31 @@ export class MemoryFunder implements TestFunder {
     if (i < 0) throw new Error('MemoryFunder: no utxo of that size')
     return this.utxos.splice(i, 1)[0]!
   }
+
   markSpent(txid: string, vout: number): void {
     const i = this.utxos.findIndex((u) => u.tx.id('hex') === txid && u.vout === vout)
     if (i >= 0) this.utxos.splice(i, 1)
   }
+
+  /** return a broadcast tx's output to the pool (change/escrow outs) */
   addOwned(tx: Transaction, vout: number): void {
     const o = tx.outputs[vout]
     if (o !== undefined) this.utxos.push({ tx, vout, satoshis: o.satoshis ?? 0 })
   }
+
   address(): string {
     return this.keyPair.toPublicKey().toAddress([0x6f])
   }
+
   get parents(): Transaction[] {
     return this.fundingTx !== undefined ? [this.fundingTx] : []
   }
+}
+
+/** per-process shared treasury, like stackTreasury() — tests in one file
+ *  share one chain, as they share one node today */
+let memTreasury: MemoryTreasury | undefined
+export function memoryTreasury(): MemoryTreasury {
+  memTreasury ??= new MemoryTreasury()
+  return memTreasury
 }

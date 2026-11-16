@@ -1,14 +1,13 @@
-// Real-node conformance — the semantic guarantees the chain backend must hold,
-// verified against the actual regtest node: mined BUMPs match the header's
-// merkle root, chained unconfirmed spends are admitted, and a double-spend is
-// refused. Requires the Teranode stack (skipUnlessStack).
+// Chain conformance — the semantic guarantees every chain backend must hold,
+// on both tiers: mined BUMPs match the header's merkle root, chained
+// unconfirmed spends are admitted, and a double-spend is refused. Runs on the
+// in-memory chain by default; NEKTAR_TEST_TIER=stack runs it on the node.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Transaction, P2PKH, PrivateKey } from '@bsv/sdk'
-import { stackWorld, type StackFunder } from '../src/testkit.js'
-import { stackOnly } from '../src/testworld.js'
+import { Transaction, P2PKH } from '@bsv/sdk'
+import { testWorld, type TestFunder } from '../src/testworld.js'
 
-const spend = async (f: StackFunder, sats: number, parent?: { tx: Transaction; vout: number }): Promise<Transaction> => {
+const spend = async (f: TestFunder, sats: number, parent?: { tx: Transaction; vout: number }): Promise<Transaction> => {
   const src = parent ?? (await f.take(sats))
   const t = new Transaction()
   t.addInput({ sourceTransaction: src.tx, sourceOutputIndex: src.vout, unlockingScriptTemplate: new P2PKH().unlock(f.keyPair) })
@@ -19,8 +18,7 @@ const spend = async (f: StackFunder, sats: number, parent?: { tx: Transaction; v
 }
 
 test('chain: mined BUMP root matches the block header root and verifies', async (t) => {
-  if (stackOnly(t, 'conformance against the real node')) return
-  const w = await stackWorld(t, 3, 4_000)
+  const w = await testWorld(t, 3, 4_000)
   if (w === undefined) return
   const { chain, funder } = w
   const t1 = await spend(funder, 2_000)
@@ -29,19 +27,18 @@ test('chain: mined BUMP root matches the block header root and verifies', async 
   assert.equal((await chain.broadcast(t2)).status, 'success')
   await chain.mine(1)
   for (const tx of [t1, t2]) {
-    const mined = await chain.getTx(tx.id('hex'))
-    assert.ok(mined?.merklePath, 'node has no proof for a mined tx')
+    const mined = chain.getTx(tx.id('hex'))
+    assert.ok(mined?.merklePath, 'chain has no proof for a mined tx')
     const hdr = await chain.headerAtHeight(mined.merklePath.blockHeight)
     assert.ok(hdr)
     assert.equal(mined.merklePath.computeRoot(tx.id('hex')), hdr.merkleRoot)
-    assert.equal(await mined.verify(chain), true, 'SDK SPV verify failed on a real node proof')
+    assert.equal(await mined.verify(chain), true, 'SDK SPV verify failed on the chain proof')
     assert.equal(await chain.isValidRootForHeight(hdr.merkleRoot, hdr.height), true)
   }
 })
 
 test('chain: chained unconfirmed spends admit, then prove together', async (t) => {
-  if (stackOnly(t, 'conformance against the real node')) return
-  const w = await stackWorld(t, 3, 4_000)
+  const w = await testWorld(t, 3, 4_000)
   if (w === undefined) return
   const { chain, funder } = w
   const a = await spend(funder, 2_000)
@@ -55,22 +52,21 @@ test('chain: chained unconfirmed spends admit, then prove together', async (t) =
   c.addOutput({ lockingScript: new P2PKH().lock(funder.keyPair.toPublicKey().toAddress([0x6f])), satoshis: 1_000 })
   await c.fee()
   await c.sign()
-  // zero-conf chain: the node admits children of mempool parents
+  // zero-conf chain: children of mempool parents are admitted
   assert.equal((await chain.broadcast(a)).status, 'success', `a: ${(await chain.broadcast(a)).description ?? ''}`)
   assert.equal((await chain.broadcast(b)).status, 'success')
   assert.equal((await chain.broadcast(c)).status, 'success')
   // children of mempool parents can land a block later — mine until all prove
   for (let i = 0; i < 6; i++) {
     await chain.mine(1)
-    const proofs = await Promise.all([a, b, c].map((tx) => chain.getTx(tx.id('hex'))))
+    const proofs = [a, b, c].map((tx) => chain.getTx(tx.id('hex')))
     if (proofs.every((p) => p?.merklePath !== undefined)) break
   }
-  for (const tx of [a, b, c]) assert.ok((await chain.getTx(tx.id('hex')))?.merklePath, `no proof for ${tx.id('hex').slice(0, 8)}`)
+  for (const tx of [a, b, c]) assert.ok(chain.getTx(tx.id('hex'))?.merklePath, `no proof for ${tx.id('hex').slice(0, 8)}`)
 })
 
 test('chain: a second spend of the same outpoint is refused', async (t) => {
-  if (stackOnly(t, 'conformance against the real node')) return
-  const w = await stackWorld(t, 2, 4_000)
+  const w = await testWorld(t, 2, 4_000)
   if (w === undefined) return
   const { chain, funder } = w
   const u = await funder.take(3_000)
@@ -92,9 +88,8 @@ test('chain: a second spend of the same outpoint is refused', async (t) => {
   assert.equal(r3.status, 'error', 'mined spend was re-admitted')
 })
 
-test('StackFunder: take, markSpent, addOwned manage the pool like the faucet did', async (t) => {
-  if (stackOnly(t, 'StackFunder pool semantics on the real treasury')) return
-  const w = await stackWorld(t, 3, 10_000)
+test('funder: take, markSpent, addOwned manage the pool', async (t) => {
+  const w = await testWorld(t, 3, 10_000)
   if (w === undefined) return
   const { funder } = w
   await funder.take(1_000)

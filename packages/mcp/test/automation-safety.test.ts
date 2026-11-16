@@ -327,13 +327,7 @@ async function world(
       transport: transportFor(mem.operatorKey().toPublicKey().toString()),
       ai: new ScriptedExecutor(),
       broadcast: (tx) => mem.broadcastTx(tx),
-      settleEscrow: (tx) => {
-        for (const inp of tx.inputs) {
-          const id = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-          if (id) mem.markSpentOut(id, inp.sourceOutputIndex ?? 0)
-        }
-        if (tx.outputs[1]) mem.addOwnedOut(tx, 1)
-      },
+      settleEscrow: (tx) => mem.funds.spent(tx),
       killed: opts.killed,
       deaf: opts.deaf,
       opts: { refundBlocks: opts.refundBlocks ?? 144 }

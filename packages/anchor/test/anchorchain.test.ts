@@ -3,14 +3,14 @@ import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8, chainRp, eq } from '@nektar/core'
 import { decodeNektarAnchor } from '@nektar/contracts'
-import { testWorld, dryFunder, type TestFunder } from '@nektar/chain'
+import { testWorld, dryFunder, fundsOf, type TestFunder } from '@nektar/chain'
 import { AnchorChain } from '../src/index.js'
 
 const setup = async (t: { skip: (m?: string) => void }, burstLimit = Infinity) => {
   const w = await testWorld(t, 16, 10_000)
   if (w === undefined) return undefined
   const { chain, funder } = w
-  const ac = new AnchorChain('s1', PrivateKey.fromRandom(), funder, funder.keyPair, chain, { burstLimit })
+  const ac = new AnchorChain('s1', PrivateKey.fromRandom(), fundsOf(funder), funder.keyPair, chain, { burstLimit })
   return { chain, funder, ac }
 }
 
@@ -64,7 +64,7 @@ test('anchor: failed broadcast does not advance the head', async (t) => {
       return chain.broadcast(tx)
     }
   }
-  const ac = new AnchorChain('s1', PrivateKey.fromRandom(), funder, funder.keyPair, flaky)
+  const ac = new AnchorChain('s1', PrivateKey.fromRandom(), fundsOf(funder), funder.keyPair, flaky)
   const R = (i: number) => dsha256(utf8(`rb${i}`))
   const g = await ac.anchor(1, R(0))
   const a1 = await ac.anchor(1, R(1))
@@ -103,6 +103,7 @@ test('burst: 20 anchors with reserve-style funder pass script verification', asy
   const spentSet = new Set<string>()
   const bf: any = {
     keyPair: f.keyPair,
+    address: () => f.address(),
     takeReserve: async () => pool.find((u) => !spentSet.has(u.tx.id('hex') + ':' + u.vout)) ?? null,
     markSpent: (t: string, v: number) => {
       spentSet.add(t + ':' + v)
@@ -111,7 +112,7 @@ test('burst: 20 anchors with reserve-style funder pass script verification', asy
       return pool
     }
   }
-  const ac = new AnchorChain('b', f.keyPair, bf, f.keyPair, chain)
+  const ac = new AnchorChain('b', f.keyPair, fundsOf(bf), f.keyPair, chain)
   for (let i = 0; i < 20; i++) {
     try {
       await ac.anchor(1, new Uint8Array(32).fill(i))
@@ -150,7 +151,7 @@ test('retry after TX_MISSING_PARENT resolves the parent (no stale lastTx)', asyn
     }
   }
   const { funder: f } = w
-  const ac = new AnchorChain('r', f.keyPair, f, f.keyPair, flaky)
+  const ac = new AnchorChain('r', f.keyPair, fundsOf(f), f.keyPair, flaky)
   await ac.anchor(1, new Uint8Array(32).fill(1)) // genesis ok
   await ac.anchor(1, new Uint8Array(32).fill(2)) // n=1: first broadcast fails, retry must succeed
   assert.equal(ac.getHead()!.data.n, 1, 'chain advanced despite the failed attempt')
@@ -175,7 +176,7 @@ test('retry: ambiguous TX_MISSING_PARENT re-broadcasts the IDENTICAL tx', async 
     }
   }
   const { funder: f } = w
-  const ac = new AnchorChain('r', f.keyPair, f, f.keyPair, flaky)
+  const ac = new AnchorChain('r', f.keyPair, fundsOf(f), f.keyPair, flaky)
   await ac.anchor(1, new Uint8Array(32).fill(1))
   await ac.anchor(1, new Uint8Array(32).fill(2)) // n=1: first broadcast rejected, re-broadcast identical
   assert.equal(ac.getHead()!.data.n, 1)
@@ -210,7 +211,7 @@ test('retry: UTXO_SPENT on head spent by our own attempt is adopted', async (t) 
     }
   }
   const { funder: f } = w
-  const ac = new AnchorChain('r', f.keyPair, f, f.keyPair, flaky)
+  const ac = new AnchorChain('r', f.keyPair, fundsOf(f), f.keyPair, flaky)
   await ac.anchor(1, new Uint8Array(32).fill(1))
   headOp = ac.getHead()!.tx.id('hex') + ':0'
   const r = await ac.anchor(1, new Uint8Array(32).fill(2))
@@ -228,7 +229,7 @@ test('anchorOnce fails fast on dry funding — never broadcasts a contract-only 
       return { status: 'error' as const }
     }
   }
-  const ac = new AnchorChain('d', f.keyPair, f, f.keyPair, probe)
+  const ac = new AnchorChain('d', f.keyPair, fundsOf(f), f.keyPair, probe)
   await assert.rejects(() => ac.anchor(1, new Uint8Array(32).fill(1)), /reserve dry|no utxo/i)
   assert.equal(calls, 0, 'nothing was broadcast')
 })
@@ -238,7 +239,7 @@ test('every AnchorChain tx produces a BEEF with all inputs resolved', async (t) 
   if (w === undefined) return
   const { chain } = w
   const { funder: f } = w
-  const ac = new AnchorChain('b', f.keyPair, f, f.keyPair, chain)
+  const ac = new AnchorChain('b', f.keyPair, fundsOf(f), f.keyPair, chain)
   const { Transaction } = await import('@bsv/sdk')
   for (let i = 0; i < 4; i++) {
     const r = await ac.anchor(1, new Uint8Array(32).fill(i + 1))
@@ -254,7 +255,7 @@ test('NektarAnchor v3 + ANC-006: META flag leads the data payload; flag-absent s
   if (w === undefined) return
   const { chain } = w
   const { funder: f } = w
-  const ac = new AnchorChain('v3', f.keyPair, f, f.keyPair, chain)
+  const ac = new AnchorChain('v3', f.keyPair, fundsOf(f), f.keyPair, chain)
   await ac.anchor(3, dsha256(utf8('batch')))
   await ac.anchor(2, dsha256(utf8('batch2'))) // append passes script verification
   const d = decodeNektarAnchor(ac.getHead()!.tx.outputs[0].lockingScript.toHex())!

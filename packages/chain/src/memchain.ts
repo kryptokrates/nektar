@@ -10,7 +10,6 @@
 // delivered" exactly.
 import { Transaction, MerklePath, PrivateKey, P2PKH, Hash, UnlockingScript, Spend } from '@bsv/sdk'
 import type { BlockHeader, BroadcastResult, FundingOut, TxStatusEvent } from './interfaces.js'
-import { pickSpendable, fundsOf, type FunderLike, type Funds, type FundsPurpose } from './funds.js'
 import { ChainEvents } from './events.js'
 import { buildBump } from './bump.js'
 import { serializeHeader, headerPowValid } from './headers.js'
@@ -573,11 +572,6 @@ export class MemoryFunder implements TestFunder {
     return this.fundingTx !== undefined ? [this.fundingTx] : []
   }
 }
-
-/** the memory-tier Funds — a fundsOf adapter over the TestFunder surface:
- *  take() reserves via the funder's destructive take, spent()/died()/adopt()
- *  map to markSpent/addOwned with tombstones the base funder doesn't track. */
-export const memoryFunds = (f: TestFunder, dealFloor = 0): Funds => fundsOf(f, dealFloor)
 
 let memTreasury: MemoryTreasury | undefined
 export function memoryTreasury(): MemoryTreasury {

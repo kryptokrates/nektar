@@ -39,6 +39,9 @@ export interface Funds {
   died(tx: Transaction): void | Promise<void>
   /** coins sent by someone else; refuses outpoints we already spent */
   adopt(tx: Transaction, vout: number): Promise<boolean> | boolean
+  /** tombstone one outpoint the chain reports spent (a broadcast reject,
+   *  a first-party probe): never offered again */
+  burn(txid: string, vout: number): void | Promise<void>
   /** outpoint lease hook — the automation ledger's prepared-tx leases plug in
    *  here so concurrent takes never pick an input a prepared tx claims */
   leased?: (txid: string, vout: number) => Promise<boolean>
@@ -122,9 +125,19 @@ export function fundsOf(f: FunderLike, dealFloor = 0): Funds {
       }
       // destructive-take base (MemoryFunder/StackFunder): the take IS the
       // reservation — lease/hint filters retry a bounded few picks; a refused
-      // pick goes straight back
+      // pick goes straight back. A bare utxos peek must skip tombstones +
+      // reserved outpoints itself — the base has no exclusion channel.
       for (let i = 0; i < 8; i++) {
-        const u = f.take !== undefined ? await f.take(sats) : (f.utxos ?? []).find((x) => (x.satoshis ?? 0) >= sats)
+        const u =
+          f.take !== undefined
+            ? await f.take(sats)
+            : (f.utxos ?? []).find(
+                (x) =>
+                  (x.satoshis ?? 0) >= sats &&
+                  !reserved.has(op(x.tx.id('hex'), x.vout)) &&
+                  !dead.has(op(x.tx.id('hex'), x.vout)) &&
+                  !spentLog.has(op(x.tx.id('hex'), x.vout))
+              )
         if (u === undefined) throw new Error(`funds: no outpoint of ${sats} sats or more`)
         const id = u.tx.id('hex')
         if (dead.has(op(id, u.vout)) || spentLog.has(op(id, u.vout)) || (await merged(id, u.vout)) || (funds.hintSkip !== undefined && (await funds.hintSkip(u.tx, u.vout)))) {
@@ -136,8 +149,9 @@ export function fundsOf(f: FunderLike, dealFloor = 0): Funds {
           f.markSpent?.(id, u.vout)
           continue
         }
-        reserved.set(op(id, u.vout), u.satoshis)
-        return u
+        const uSat = u.satoshis ?? 0
+        reserved.set(op(id, u.vout), uSat)
+        return { tx: u.tx, vout: u.vout, satoshis: uSat }
       }
       throw new Error(`funds: no eligible outpoint of ${sats} sats or more`)
     },
@@ -157,10 +171,9 @@ export function fundsOf(f: FunderLike, dealFloor = 0): Funds {
     },
     async died(tx: Transaction): Promise<void> {
       const tid = tx.id('hex')
-      tx.outputs.forEach((_o, vout) => {
-        dead.add(op(tid, vout))
-        f.markSpent?.(tid, vout)
-      })
+      // the dead tx's outputs tombstone in the adapter — the base never held
+      // them, so there's nothing to mark there
+      tx.outputs.forEach((_o, vout) => dead.add(op(tid, vout)))
       revive(tx, await lockOf())
     },
     adopt(tx: Transaction, vout: number): boolean {
@@ -169,6 +182,11 @@ export function fundsOf(f: FunderLike, dealFloor = 0): Funds {
       if ((f.utxos ?? []).some((u) => op(u.tx.id('hex'), u.vout) === k)) return false
       f.addOwned?.(tx, vout)
       return true
+    },
+    burn(txid: string, vout: number): void {
+      spentLog.add(op(txid, vout))
+      reserved.delete(op(txid, vout))
+      f.markSpent?.(txid, vout)
     }
   }
   return funds

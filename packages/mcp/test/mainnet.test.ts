@@ -36,13 +36,13 @@ test('runtime main gate: confirm flag required', () => {
   assert.equal(cfg.confirmEveryMs, 60_000)
 })
 
-test('runtime ttn: no confirm flag required; testnet-encoded fee address', () => {
-  const cfg = configFromEnv(env({ NEKTAR_NETWORK: 'ttn', NEKTAR_KEY_PASSPHRASE: 'x' }))
-  assert.equal(cfg.main?.broadcasterUrl, 'https://arcade-v2-ttn-us-1.bsvblockchain.tech')
-  assert.equal(cfg.main?.wocUrl, 'https://api.woc-ttn.bsvblockchain.tech/v1/bsv/test')
+test('runtime testnet: no confirm flag required; testnet-encoded fee address', () => {
+  const cfg = configFromEnv(env({ NEKTAR_NETWORK: 'testnet', NEKTAR_KEY_PASSPHRASE: 'x' }))
+  assert.equal(cfg.main?.broadcasterUrl, 'https://arcade-v2-testnet-us-1.bsvblockchain.tech')
+  assert.equal(cfg.main?.wocUrl, 'https://api.whatsonchain.com/v1/bsv/test')
   assert.equal(cfg.main?.feeRateSatPerKb, 1)
   assert.equal(cfg.confirmEveryMs, 30_000)
-  // ttn address encodes with testnet prefix (m/n…), mainnet with 1…
+  // test net addresses encode with testnet prefix (m/n…), mainnet with 1…
   const k = PrivateKey.fromRandom()
   assert.match(k.toPublicKey().toAddress([0x6f]), /^[mn]/)
   assert.match(k.toPublicKey().toAddress(), /^1/)

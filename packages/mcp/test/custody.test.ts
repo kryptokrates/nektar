@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { MerklePath, PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
+import { fundsOf } from '@nektar/chain'
 import { CustodyOps, type CustodyOpsDeps } from '../src/custody.js'
 
 const key = PrivateKey.fromRandom()
@@ -22,7 +23,7 @@ const pathFor = (tx: Transaction): MerklePath =>
 // field is added; a pathless funder tx should pick up the held proof
 const ops = (u: { tx: Transaction; vout: number; satoshis: number }, proofOf?: (txid: string) => MerklePath | undefined): CustodyOps =>
   new CustodyOps({
-    funder: { take: async () => u },
+    funds: fundsOf({ take: async () => u, address: () => key.toAddress() }),
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},
@@ -59,13 +60,15 @@ const reserveOps = (
 ): { ops: CustodyOps; spent: string[] } => {
   const spent: string[] = []
   const ops = new CustodyOps({
-    funder: {
+    funds: fundsOf({
       takeReserve: async (_sc: unknown, _min: unknown, skip?: (tx: Transaction, vout: number) => Promise<boolean>) => {
         for (const u of candidates) if (skip === undefined || !(await skip(u.tx, u.vout))) return u
         return null
       },
-      markSpent: (txid: string, vout: number) => spent.push(`${txid}:${vout}`)
-    },
+      markSpent: (txid: string, vout: number) => spent.push(`${txid}:${vout}`),
+      utxos: candidates,
+      address: () => key.toAddress()
+    }),
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},
@@ -113,11 +116,12 @@ test('custody: a proven candidate is never status-queried', async () => {
 test('custody: provisionPay throws when the broadcaster rejects right after submit', async () => {
   const marks: string[] = []
   const ops = new CustodyOps({
-    funder: {
+    funds: fundsOf({
       take: async () => ({ tx: parent(), vout: 0, satoshis: 100_000 }),
       markSpent: () => marks.push('markSpent'),
-      addOwned: () => marks.push('addOwned')
-    },
+      addOwned: () => marks.push('addOwned'),
+      address: () => key.toAddress()
+    }),
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},
@@ -127,13 +131,14 @@ test('custody: provisionPay throws when the broadcaster rejects right after subm
     ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 }),
     /rejected after submit/
   )
-  assert.deepEqual(marks, [], 'rejection leaves the reserve untouched')
+  // rejection is a death: the reserved input is revived, never marked spent
+  assert.deepEqual(marks, ['addOwned'], 'the taken input returns to the reserve')
 })
 
 test('custody: a seen status returns after one read — bounded confirmation, not a wait loop', async () => {
   let reads = 0
   const ops = new CustodyOps({
-    funder: { take: async () => ({ tx: parent(), vout: 0, satoshis: 100_000 }), markSpent: () => {}, addOwned: () => {} },
+    funds: fundsOf({ take: async () => ({ tx: parent(), vout: 0, satoshis: 100_000 }), markSpent: () => {}, addOwned: () => {}, address: () => key.toAddress() }),
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},

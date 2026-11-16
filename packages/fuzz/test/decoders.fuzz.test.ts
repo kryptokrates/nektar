@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8, toHex } from '@nektar/core'
-import { testWorld, testChain, type TestFunder } from '@nektar/chain'
+import { testWorld, testChain, fundsOf, type TestFunder } from '@nektar/chain'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { verifyFragment } from '@nektar/verify'
 import {
@@ -265,7 +265,7 @@ test('fuzz: NektarAutomaton decoder is byte-authenticated', async (t) => {
   const ac = new AutomatonChain(
     { Q: ['a', 'b'], Sigma: ['x'], delta: [[0, 0, 1]], q0: 0, F: [1], O: [] },
     PrivateKey.fromRandom(),
-    funder,
+    fundsOf(funder),
     funder.keyPair,
     chain
   )

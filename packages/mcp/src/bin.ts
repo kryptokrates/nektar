@@ -2,7 +2,7 @@
 // nektar MCP server.
 //   stdio (default):      node dist/src/bin.js
 //   Streamable HTTP+REST:  NEKTAR_HTTP_PORT=8080 node dist/src/bin.js
-// Backend via NEKTAR_NETWORK=regtest (default, local Teranode stack) | ttn | main
+// Backend via NEKTAR_NETWORK=regtest (default, local Teranode stack) | testnet | main
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
 import { nektarEnv, setNektarEnv } from '@nektar/core'
 import { openRuntime, configFromEnv } from './runtime.js'
@@ -10,7 +10,7 @@ import { serveStdio } from './mcp-server.js'
 import { createHttpApi } from './http.js'
 import { existsSync, readFileSync } from 'node:fs'
 
-// --env <regtest|ttn|main> + optional .env beside cwd → minimal-typing boot.
+// --env <regtest|testnet|main> + optional .env beside cwd → minimal-typing boot.
 // .env lines are applied only where the var isn't already set (shell wins).
 const argv = process.argv.slice(2)
 const envFlag = argv.includes('--env') ? argv[argv.indexOf('--env') + 1] : undefined
@@ -21,8 +21,8 @@ if (existsSync('.env')) {
   }
 }
 if (envFlag) {
-  if (!/^(regtest|ttn|main)$/.test(envFlag)) {
-    process.stderr.write(`nektar: --env must be regtest|ttn|main, got "${envFlag}"\n`)
+  if (!/^(regtest|testnet|main)$/.test(envFlag)) {
+    process.stderr.write(`nektar: --env must be regtest|testnet|main, got "${envFlag}"\n`)
     process.exit(2)
   }
   setNektarEnv('NEKTAR_NETWORK', envFlag)

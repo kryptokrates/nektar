@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
+import { fundsOf } from '@nektar/chain'
 import { CustodyOps, type CustodyOpsDeps } from '../src/custody.js'
 
 const key = PrivateKey.fromRandom()
@@ -27,7 +28,7 @@ interface ProvisionPay {
 const mk = (): { ops: CustodyOps & ProvisionPay; aired: () => Transaction | undefined } => {
   let aired: Transaction | undefined
   const ops = new CustodyOps({
-    funder: { take: async () => ({ tx: parent(1_000_000), vout: 0, satoshis: 1_000_000 }) },
+    funds: fundsOf({ take: async () => ({ tx: parent(1_000_000), vout: 0, satoshis: 1_000_000 }), address: () => addr }),
     fundSigner: () => key,
     broadcast: async (tx: Transaction) => {
       aired = tx

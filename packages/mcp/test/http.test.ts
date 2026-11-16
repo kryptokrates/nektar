@@ -133,7 +133,7 @@ test('verify page: OG unfurl meta + install CTA + copyable badge markdown', asyn
     assert.doesNotMatch(html, /this operator: \d+ anchors/, 'no counters')
     // on a real network the page links the anchor tx to a block explorer
     const savedNet = process.env.NEKTAR_NETWORK
-    process.env.NEKTAR_NETWORK = 'ttn'
+    process.env.NEKTAR_NETWORK = 'testnet'
     try {
       const htmlTtn = await (await fetch(`${base}/v1/verify?r=${encodeURIComponent(g.share!.token)}`, { headers: { accept: 'text/html' } })).text()
       assert.match(htmlTtn, /test\.whatsonchain\.com\/tx\/[0-9a-f]{64}/, 'anchor tx links to the testnet explorer')

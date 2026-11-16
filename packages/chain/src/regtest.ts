@@ -541,6 +541,12 @@ export class ReserveFunder implements Funds {
     return true
   }
 
+  /** the chain reports this outpoint spent — tombstoned so it is never
+   *  offered to a take again */
+  burn(txid: string, vout: number): void {
+    this.markSpent(txid, vout)
+  }
+
   /** Scan generated block coinbases for outputs to our key; add mature ones. */
   async scanCoinbases(cfg: RegtestConfig, rpc: (m: string, ...p: unknown[]) => Promise<any>, fromHeight: number, toHeight: number): Promise<number> {
     let added = 0
@@ -583,7 +589,7 @@ export class ReserveFunder implements Funds {
 export async function bootstrapReserve(
   cfg: RegtestConfig,
   key: PrivateKey,
-  reserve: ReserveFunder,
+  reserve: { addOwned(tx: Transaction, vout: number): unknown },
   rpc: (m: string, ...p: unknown[]) => Promise<any>,
   opts: { treasuryFile: string; outputs?: number; maxCandidates?: number; maxScan?: number; namespace?: string }
 ): Promise<Transaction | null> {

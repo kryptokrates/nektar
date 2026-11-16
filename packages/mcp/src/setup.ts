@@ -63,7 +63,7 @@ export async function setupFeeVault(opts: {
   pkhHex: string
   fundKey: SignerLike
   fundAddress: string
-  reserve: ReserveLike
+  funds: Funds
   broadcast: (tx: Transaction) => Promise<{ status: string; description?: string }>
   currentHeight: () => Promise<number>
   net: string
@@ -96,17 +96,22 @@ export async function setupFeeVault(opts: {
   const saveVault = () => writeFileSync(vutxoFile, JSON.stringify({ current: vaultUtxo, minted: [...vaultMinted] }))
   const deployVault = async () => {
     const sats = vcfg.vaultSats ?? 50_000
-    const u = opts.reserve.utxos.find((x) => x.satoshis > sats + 600 && !opts.reserve.isSpent(x.tx.id('hex'), x.vout))
-    if (!u) throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + 600} sats — fund ${opts.fundAddress}`)
+    const u = await opts.funds
+      .take('upkeep', sats + 601)
+      .catch(() => {
+        throw new Error(`vault deploy needs a reserve utxo ≥ ${sats + 600} sats — fund ${opts.fundAddress}`)
+      })
     const tx = new Tx()
     tx.addInput({ sourceTransaction: u.tx, sourceOutputIndex: u.vout, unlockingScriptTemplate: unlockP2PKH(opts.fundKey) })
     tx.addOutput({ satoshis: sats, lockingScript: LScript.fromHex(vault.lockingScript(0n, 0n)) })
     tx.addOutput({ satoshis: u.satoshis - sats - 100, lockingScript: LScript.fromHex(buildP2PKHScript(opts.pkhHex)) })
     await tx.sign()
     const r = await opts.broadcast(tx)
-    if (r.status !== 'success') throw new Error(`vault deploy refused: ${r.description}`)
-    opts.reserve.markSpent(u.tx.id('hex'), u.vout)
-    opts.reserve.addOwned(tx, 1)
+    if (r.status !== 'success') {
+      await opts.funds.died(tx)
+      throw new Error(`vault deploy refused: ${r.description}`)
+    }
+    await opts.funds.spent(tx)
     vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: sats, script: vault.lockingScript(0n, 0n) }
     saveVault()
     opts.log(
@@ -118,11 +123,15 @@ export async function setupFeeVault(opts: {
     const pay = BigInt(vcfg.fundSats ?? vcfg.perTxCap)
     const { tx } = await vault.buildSpend(vaultUtxo!, opts.fundKey, pay, await opts.currentHeight(), 2n)
     const r = await opts.broadcast(tx)
-    if (r.status !== 'success') throw new Error(`vault spend refused: ${r.description}`)
-    opts.reserve.addOwned(tx, 2) // the 1-sat covenant change — reclaimable
+    if (r.status !== 'success') {
+      await opts.funds.died(tx)
+      throw new Error(`vault spend refused: ${r.description}`)
+    }
+    // spent(tx): consumes the vault input and adopts both our-locked outputs
+    // (the minted funding out + the 1-sat covenant change — reclaimable)
+    await opts.funds.spent(tx)
     const cont = tx.outputs[0]
     vaultUtxo = { txid: tx.id('hex'), vout: 0, satoshis: cont.satoshis!, script: cont.lockingScript.toHex() }
-    opts.reserve.addOwned(tx, 1)
     vaultMinted.add(`${tx.id('hex')}:1`)
     saveVault()
     return { tx, vout: 1, satoshis: tx.outputs[1].satoshis! }
@@ -132,7 +141,7 @@ export async function setupFeeVault(opts: {
     // prefer an already-minted vault out sitting in the pool (e.g. orphaned
     // by a failed anchor build); otherwise mint a fresh capped one through
     // the covenant. Non-vault pool entries are never served for anchoring.
-    const pooled = opts.reserve.utxos.find((u) => vaultMinted.has(`${u.tx.id('hex')}:${u.vout}`) && !opts.reserve.isSpent(u.tx.id('hex'), u.vout))
+    const pooled = (await opts.funds.outs()).find((u) => vaultMinted.has(`${u.tx.id('hex')}:${u.vout}`))
     if (pooled) return pooled
     minting = minting.then(mint, mint)
     return (await minting) as { tx: Transaction; vout: number; satoshis: number }

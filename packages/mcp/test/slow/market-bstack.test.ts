@@ -598,7 +598,7 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
     await chain.mine(1)
     const proven = await chain.waitProof(mined.id('hex'))
     assert.ok(proven?.merklePath !== undefined)
-    b.mem.addOwnedOut(proven, 0)
+    await b.mem.funds.spent(proven)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     let done = false
     for (let i = 0; i < 100 && !done; i++) {

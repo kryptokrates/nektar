@@ -3,6 +3,7 @@
 import { PrivateKey, Transaction, P2PKH } from '@bsv/sdk'
 import { AnchorChain } from '../../packages/anchor/dist/src/anchorchain.js'
 import { TeranodeBroadcaster, TeranodeRPCTracker } from '../../packages/chain/dist/src/regtest.js'
+import { fundsOf } from '../../packages/chain/dist/src/index.js'
 import { dsha256, utf8 } from '../../packages/core/dist/src/index.js'
 import { loadState, saveState, WIF, PROPAGATION_URL, RPC } from './../lib/regtest.mjs'
 
@@ -39,13 +40,21 @@ if (s.splitTxid) {
 
 // 2) chain anchors until rejected
 class SplitFunder {
-  constructor(tx) {
+  constructor(tx, key) {
     this.tx = tx
     this.i = 0
+    this.utxos = []
+    this._key = key
+  }
+  address() {
+    return this._key.toAddress([0x6f])
   }
   async take(n) {
     if (this.i >= this.tx.outputs.length - 1) throw new Error('funder exhausted')
-    return { tx: this.tx, vout: this.i++ }
+    const u = { tx: this.tx, vout: this.i, satoshis: this.tx.outputs[this.i].satoshis }
+    this.i++
+    this.utxos.push(u)
+    return u
   }
 }
 const tracker = new TeranodeRPCTracker({
@@ -56,7 +65,7 @@ const tracker = new TeranodeRPCTracker({
   assetUrl: 'http://localhost:8090/api/v1'
 })
 const broadcaster = new TeranodeBroadcaster(PROPAGATION_URL)
-const ac = new AnchorChain('depth', PrivateKey.fromRandom(), new SplitFunder(splitTx), key, broadcaster)
+const ac = new AnchorChain('depth', PrivateKey.fromRandom(), fundsOf(new SplitFunder(splitTx, key)), key, broadcaster)
 let i = 0,
   lastErr = null
 try {

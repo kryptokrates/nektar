@@ -5,18 +5,16 @@
 // by reference with TxOps/restore.
 import { Transaction, LockingScript, UnlockingScript, P2PKH, SatoshisPerKilobyte } from '@bsv/sdk'
 import { toHex, signerAddress, unlockP2PKH, type DigestSigner } from '@nektar/core'
-import type { FundingOut, Broadcaster } from '@nektar/chain'
+import type { Broadcaster, Funds } from '@nektar/chain'
 
 export interface AttestOpsDeps {
   /** txid → attestation/model-verifier tx this instance broadcast (shared map) */
   attestationTxs: Map<string, Transaction>
   anchorTxs: Map<string, Transaction>
-  takeFunding: (satoshis: number) => Promise<FundingOut>
+  funds: Funds
   fundSigner: () => DigestSigner
   chain: Broadcaster
   feeRateSatPerKb: () => number
-  markSpentOut: (txid: string, vout: number) => void
-  addOwnedOut: (tx: Transaction, vout: number) => void
   metricsInc: (name: string, labels?: Record<string, string>, n?: number, help?: string) => void
   proveMembership: (shard: string, seq: number, queryIdHex: string) => Promise<{ bytes: Uint8Array; ms: number }>
 }
@@ -29,13 +27,15 @@ export class AttestOps {
   async anchorAttestation(proofBytes: Uint8Array): Promise<{ txid: string; commitment: string }> {
     const { buildAttestationTx, attestationCommitment } = await import('./onchain.js')
     const commitment = attestationCommitment(proofBytes)
-    const f = await this.deps.takeFunding(5_000)
-    const { tx, changeVout } = await buildAttestationTx(f, this.deps.fundSigner(), commitment, this.deps.feeRateSatPerKb())
+    const f = await this.deps.funds.take('upkeep', 5_000)
+    const { tx } = await buildAttestationTx(f, this.deps.fundSigner(), commitment, this.deps.feeRateSatPerKb())
     const r = await this.deps.chain.broadcast(tx)
-    if (r.status !== 'success') throw new Error(`attestation broadcast failed: ${r.description}`)
+    if (r.status !== 'success') {
+      await this.deps.funds.died(tx)
+      throw new Error(`attestation broadcast failed: ${r.description}`)
+    }
     this.deps.attestationTxs.set(tx.id('hex'), tx)
-    this.deps.markSpentOut(f.tx.id('hex'), f.vout)
-    this.deps.addOwnedOut(tx, changeVout)
+    await this.deps.funds.spent(tx)
     this.deps.metricsInc('nektar_anchors_total', {}, 1, 'anchors broadcast')
     return { txid: tx.id('hex'), commitment: toHex(commitment) }
   }
@@ -68,7 +68,7 @@ export class AttestOps {
   async attestInferenceOnchain(lockHex: string, unlockHex: string): Promise<{ deployTxid: string; spendTxid: string }> {
     const LOCK_SATS = 20_000
     const addr = await signerAddress(this.deps.fundSigner(), [0x6f])
-    const f = await this.deps.takeFunding(LOCK_SATS + 5_000)
+    const f = await this.deps.funds.take('upkeep', LOCK_SATS + 5_000)
     const tx1 = new Transaction()
     tx1.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: unlockP2PKH(this.deps.fundSigner()) })
     tx1.addOutput({ lockingScript: LockingScript.fromHex(lockHex), satoshis: LOCK_SATS })
@@ -76,16 +76,21 @@ export class AttestOps {
     await tx1.fee(new SatoshisPerKilobyte(this.deps.feeRateSatPerKb()))
     await tx1.sign()
     const b1 = await this.deps.chain.broadcast(tx1)
-    if (b1.status !== 'success') throw new Error(`verifier deploy failed: ${b1.description}`)
-    this.deps.markSpentOut(f.tx.id('hex'), f.vout)
-    this.deps.addOwnedOut(tx1, 1)
+    if (b1.status !== 'success') {
+      await this.deps.funds.died(tx1)
+      throw new Error(`verifier deploy failed: ${b1.description}`)
+    }
+    await this.deps.funds.spent(tx1)
     this.deps.attestationTxs.set(tx1.id('hex'), tx1)
     const tx2 = new Transaction()
     tx2.addInput({ sourceTransaction: tx1, sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromHex(unlockHex) })
     tx2.addOutput({ lockingScript: new P2PKH().lock(addr), satoshis: LOCK_SATS - 5_000 })
     const b2 = await this.deps.chain.broadcast(tx2)
-    if (b2.status !== 'success') throw new Error(`proof spend failed: ${b2.description}`)
-    this.deps.addOwnedOut(tx2, 0)
+    if (b2.status !== 'success') {
+      await this.deps.funds.died(tx2)
+      throw new Error(`proof spend failed: ${b2.description}`)
+    }
+    await this.deps.funds.spent(tx2)
     this.deps.attestationTxs.set(tx2.id('hex'), tx2)
     return { deployTxid: tx1.id('hex'), spendTxid: tx2.id('hex') }
   }

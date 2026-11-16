@@ -753,6 +753,12 @@ export class ToolboxReserveFunder implements Funds {
     return await this.has(tx.id('hex'), vout)
   }
 
+  /** the chain reports this outpoint spent — tombstoned so it is never
+   *  offered to a take again */
+  burn(txid: string, vout: number): void {
+    this.markSpent(txid, vout)
+  }
+
   /** Returns the internalize promise so boot-seeding can serialize (WoC rate
    *  limits) and callers that don't care can ignore it fire-and-forget. */
   addOwned(tx: Transaction, vout: number): Promise<void> {

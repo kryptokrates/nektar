@@ -116,19 +116,6 @@ test('importable: live spenders block re-import, dead spenders reopen it', async
   for (const [spender, st, want] of cases) assert.equal(importable(spender, st), want, 'spender=' + spender + ' state=' + st)
 })
 
-// G2: refreshFunding's legacy reserve reconcile — verdicts come from
-// first-party records (spender index + ledger rows), never a status word
-test('reserveVerdict: spent only on a live first-party spender; dead only on an own dead row', async () => {
-  const mod = (await import('../src/txops.js')) as {
-    reserveVerdict?: (spender: string | undefined, spenderState: string | undefined, ownState: string | undefined) => string
-  }
-  assert.ok(mod.reserveVerdict !== undefined, 'txops must export reserveVerdict')
-  const v = mod.reserveVerdict!
-  assert.equal(v('sp1', undefined, 'rejected'), 'dead', 'own rejected row wins over any spender')
-  assert.equal(v(undefined, undefined, 'conflicted'), 'dead')
-  assert.equal(v('sp1', 'seen', undefined), 'spent')
-  assert.equal(v('sp1', undefined, undefined), 'spent', 'a spender with no ledger row was built here — live')
-  assert.equal(v('sp1', 'rejected', undefined), 'pending', 'a dead spender spends nothing')
-  assert.equal(v('sp1', 'conflicted', undefined), 'pending')
-  assert.equal(v(undefined, undefined, undefined), 'pending', 'no record is no verdict')
-})
+// the legacy reserve reconcile was removed with the file reserve — refresh
+// now asks the wallet's spendable view; `importable` is the re-import gate
+// that survives: a live first-party spender blocks re-import

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { testWorld } from '@nektar/chain'
+import { testWorld, fundsOf } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { BatchLog, MemoryShardStore } from '@nektar/log'
 import { utf8 } from '@nektar/core'
@@ -51,7 +51,7 @@ test('cedar: policy set + receipts anchored via AnchorChain', async (t) => {
   if (w === undefined) return
   const { chain, funder: f } = w
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
-  const ac = new AnchorChain('policy', f.keyPair, f, f.keyPair, chain)
+  const ac = new AnchorChain('policy', f.keyPair, fundsOf(f), f.keyPair, chain)
   const ps = canonicalizePolicySet('p1', POLICY)
   // anchor the policy-set hash as a log leaf → batch root → anchor tx
   await log.remember('policy', { d: utf8(ps.hash), p: { source: 'policy', time: 1, signature: new Uint8Array(0), modelId: 'm1' } })

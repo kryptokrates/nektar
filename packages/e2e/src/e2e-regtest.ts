@@ -62,7 +62,7 @@ const addr = key.toPublicKey().toAddress([0x6f])
 // Each run splits it into ~120 fresh 50k-sat outputs + a NEW treasury output,
 // mines the split, and persists the new treasury immediately after acceptance.
 // This run's reserve is only those fresh outputs — nothing from earlier runs.
-import { ReserveFunder } from '@nektar/chain'
+import { ReserveFunder, fundsOf } from '@nektar/chain'
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
 // Two separate files: the treasury (the ONLY state carried across runs) and
 // the per-run reserve pool, which is recreated empty on every run so stale
@@ -224,13 +224,14 @@ console.log('anchors broadcast + block mined')
 console.log('— 20-anchor burst —')
 const bF: any = {
   keyPair: key,
+  address: () => key.toAddress([0x6f]),
   get utxos() {
     return reserve.utxos.slice(40)
   },
   markSpent: (t: string, v: number) => reserve.markSpent(t, v),
   takeReserve: (sc?: unknown, min?: number) => reserve.takeReserve(sc as any, min)
 }
-const burst = new AnchorChain('burst', key, bF, key, chain)
+const burst = new AnchorChain('burst', key, fundsOf(bF), key, chain)
 const t0 = Date.now()
 const burstIds: string[] = []
 for (let i = 0; i < 20; i++) {

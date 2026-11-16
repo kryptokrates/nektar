@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8 } from '@nektar/core'
-import { testWorld } from '@nektar/chain'
+import { testWorld, fundsOf } from '@nektar/chain'
 import { AnchorChain } from '../src/runarchain.js'
 import { Smt, verifyProof } from '@nektar/identity'
 import { verifyCertChain, makeRotationCert, type RotationCert } from '@nektar/identity'
@@ -13,7 +13,7 @@ test('smt revocation: anchored root verifies a status proof; stale root fails', 
   const { chain, funder: f } = w
   const smt = new Smt()
   const pk = new Uint8Array(32).fill(9)
-  const ac = new AnchorChain('revoke', f.keyPair, f, f.keyPair, chain)
+  const ac = new AnchorChain('revoke', f.keyPair, fundsOf(f), f.keyPair, chain)
   const h0 = await ac.anchor(1, smt.root()) // R = empty revocation root
   const v = new Uint8Array(32).fill(1)
   smt.insert(pk, v) // revoke(pk)
@@ -32,7 +32,7 @@ test('rotated anchor chain verifies alongside the cert chain', async (t) => {
   const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
-  const ac = new AnchorChain('s', f.keyPair, f, f.keyPair, chain)
+  const ac = new AnchorChain('s', f.keyPair, fundsOf(f), f.keyPair, chain)
   await ac.anchor(1, dsha256(utf8('d')))
   const newKey = PrivateKey.fromRandom()
   await ac.rotate(newKey)
@@ -50,7 +50,7 @@ test('rotation-cert log: batch root anchored on-chain; cert verifies via inclusi
   if (w === undefined) return
   const { chain, funder: f } = w
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
-  const ac = new AnchorChain('rotlog', f.keyPair, f, f.keyPair, chain)
+  const ac = new AnchorChain('rotlog', f.keyPair, fundsOf(f), f.keyPair, chain)
   const k0 = PrivateKey.fromRandom(),
     k1 = PrivateKey.fromRandom()
   const cert = await makeRotationCert(k0, k1.toPublicKey().toString(), 1000, 3600)
@@ -80,7 +80,7 @@ test('DIS-006: disclosure event logged as a leaf and anchored', async (t) => {
   if (w === undefined) return
   const { chain, funder: f } = w
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())
-  const ac = new AnchorChain('discl', f.keyPair, f, f.keyPair, chain)
+  const ac = new AnchorChain('discl', f.keyPair, fundsOf(f), f.keyPair, chain)
   const owner = PrivateKey.fromRandom(),
     verifier = PrivateKey.fromRandom()
   const fields: FieldCommitment[] = [

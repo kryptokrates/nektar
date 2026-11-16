@@ -2,6 +2,7 @@
 // mine a fresh coinbase, split it into funding outputs to self, fund only
 // from that fresh split (each output marked used when handed out).
 import { AnchorChain } from '../packages/anchor/dist/src/index.js'
+import { fundsOf } from '../packages/chain/dist/src/index.js'
 import { Transaction, PrivateKey, P2PKH } from './lib/sdk.mjs'
 import { WIF, RPC, rpc, broadcastEF, loadState, saveState } from './lib/regtest.mjs'
 import { dsha256, utf8 } from '../packages/core/dist/src/index.js'
@@ -70,6 +71,7 @@ let cursor = 0
 const funder = {
   keyPair: key,
   utxos: [],
+  address: () => addr,
   async take() {
     const vout = cursor++
     const u = { tx: split, vout, satoshis: split.outputs[vout].satoshis }
@@ -77,11 +79,11 @@ const funder = {
     return u
   }
 }
-// runar's getUtxos reads funder.utxos — prefill all
+// the funds pool reads funder.utxos — prefill all
 for (let i = 0; i < N; i++) funder.utxos.push({ tx: split, vout: i, satoshis: split.outputs[i].satoshis })
 
 const broadcaster = new TeranodeBroadcaster('http://localhost:8833/tx')
-const ac = new AnchorChain('live', key, funder, key, broadcaster)
+const ac = new AnchorChain('live', key, fundsOf(funder), key, broadcaster)
 
 const R = (i) => dsha256(utf8(`live-${i}`))
 const txids = []

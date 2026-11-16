@@ -59,7 +59,7 @@ export interface NektarMemoryOptions {
   requireSignedProvenance?: boolean
   /** network the instance runs on — used for the funding-address prefix in
    *  fundingStatus (testnet-family → 0x6f). Optional; absent = mainnet prefix. */
-  network?: 'regtest' | 'testnet' | 'main' | 'ttn'
+  network?: 'regtest' | 'testnet' | 'main'
   /** chain-observer seam (live networks) — lets txState ask the
    *  broadcaster's /tx/{txid} verdict when the local view can't decide;
    *  injected by the runtime (`fetchTxStatus` in @nektar/chain) */
@@ -105,6 +105,13 @@ export interface NektarMemoryOptions {
     /** fee bound enforced by the covenant (default 10) */
     maxFee?: bigint
   }
+  /** the instance's funds pool — the one owner of spent/owned bookkeeping.
+   *  Absent: `fundsOf(funder, dealFloorSats)` adapts the constructor's
+   *  funder (test tiers); the runtime always injects a real impl. */
+  funds?: import('@nektar/chain').Funds
+  /** sats one affordable deal needs — `publish`/`upkeep` takes refuse when
+   *  they'd drop the pool below this (default 0: no floor) */
+  dealFloorSats?: number
 }
 
 /** persisted anchor state: per shard the head, the succession, checkpoints,

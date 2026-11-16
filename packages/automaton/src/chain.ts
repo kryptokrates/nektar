@@ -8,7 +8,7 @@ import { RunarContract, LocalSigner, extractStateFromScript, type Provider, type
 import { NEKTAR_AUTOMATON_ARTIFACT } from '@nektar/contracts'
 import { NektarProvider } from '@nektar/anchor'
 import { hash160, toHex, fromHex, runarSigner, signerPubHex, toSigner, type SignerLike } from '@nektar/core'
-import type { Broadcaster, Funder } from '@nektar/chain'
+import type { Broadcaster, Funds } from '@nektar/chain'
 import { AutomatonError, deltaTable, deltaPath, finalTable, finalPath, type AutomatonDef, type FinalTable } from './core.js'
 
 export interface DecodedAutomaton {
@@ -69,14 +69,14 @@ export class AutomatonChain {
   constructor(
     readonly def: AutomatonDef,
     private ownerKey: SignerLike,
-    private funder: Funder,
+    private funds: Funds,
     fundKey: SignerLike,
     broadcaster: Broadcaster
   ) {
     this.tbl = deltaTable(def)
     this.ftbl = finalTable(def)
     this.signer = fundKey instanceof PrivateKey ? new LocalSigner(fundKey.toHex()) : runarSigner(fundKey)
-    this.provider = new NektarProvider(broadcaster, funder)
+    this.provider = new NektarProvider(broadcaster, funds)
     this.provider.onSuccess = (tx) => {
       this.txById.set(tx.id('hex'), tx)
     }
@@ -91,7 +91,6 @@ export class AutomatonChain {
 
   async deploy(): Promise<AutomatonHead> {
     if (this.head) throw new AutomatonError('automaton already deployed')
-    this.provider.funderAddress = await this.signer.getAddress()
     await this.requireFunding()
     const pub = await signerPubHex(this.ownerKey)
     const c = new RunarContract(NEKTAR_AUTOMATON_ARTIFACT, [BigInt(this.def.q0), toHex(this.tbl.root), pkhOf(pub), 0n, '', toHex(this.ftbl.root), 0n])
@@ -154,8 +153,7 @@ export class AutomatonChain {
     this.txById.set(tx.id('hex'), tx)
     for (const inp of tx.inputs) {
       if (inp.sourceTransaction || !inp.sourceTXID) continue
-      const fund = ((this.funder as unknown as { utxos?: Array<{ tx: Transaction }> }).utxos ?? []).find((u) => u.tx.id('hex') === inp.sourceTXID)?.tx
-      const parent = this.txById.get(inp.sourceTXID) ?? this.provider.taken.get(inp.sourceTXID) ?? fund
+      const parent = this.txById.get(inp.sourceTXID) ?? this.provider.taken.get(inp.sourceTXID) ?? this.provider.recentOf(inp.sourceTXID)
       if (parent) inp.sourceTransaction = parent
     }
     const state = decodeNektarAutomaton(tx.outputs[0].lockingScript.toHex())

@@ -4,7 +4,7 @@
 import { PrivateKey } from '@bsv/sdk'
 import { utf8, toHex, dsha256, hash160 } from '@nektar/core'
 const dsha256utf8 = (s: string) => dsha256(utf8(s))
-import { StackChain, StackFunder, stackTreasury, stackCfgFromEnv, stackUp, testTier } from '@nektar/chain'
+import { StackChain, StackFunder, stackTreasury, stackCfgFromEnv, stackUp, testTier, fundsOf } from '@nektar/chain'
 import { NektarMemory } from '@nektar/mcp'
 
 if (testTier() === 'memory') {
@@ -128,7 +128,7 @@ await bChain.mine(1)
 // AnchorChain import for the burst
 import { AnchorChain } from '@nektar/anchor'
 function AnchorChainBurst(shard: string, c: StackChain, f: StackFunder, k: PrivateKey) {
-  return new AnchorChain(shard, k, f, k, c)
+  return new AnchorChain(shard, k, fundsOf(f), k, c)
 }
 
 // --- reorg rollback + re-anchor ---

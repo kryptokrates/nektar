@@ -51,8 +51,7 @@ export class ClaimService {
       this.pkh = Buffer.from(Hash.hash160(Buffer.from(this.pubKeyHex, 'hex'))).toString('hex')
       this.provider = new NektarProvider(
         { broadcast: (t: Transaction) => this.mem.broadcastTx(t) },
-        (this.mem as any).funder,
-        await signerAddress(this.signerLike, [0x6f])
+        this.mem.funds
       )
     }
   }

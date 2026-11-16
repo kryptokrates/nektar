@@ -137,9 +137,7 @@ if (net === 'regtest') {
   await send.sign()
   const bc = await rt.mem.broadcastTx(send)
   check(bc.status === 'success', `payer funding broadcast — ${send.id('hex').slice(0, 16)}… ${bc.status === 'success' ? '(public ttn tx)' : bc.description}`)
-  const fund = rt.mem.funder
-  fund.markSpent(entry.txid, entry.vout)
-  fund.addOwned(send, send.outputs.length - 1)
+  await rt.mem.funds.spent(send)
   payerUtxos.push({ tx: send, vout: 0, satoshis: 3000 })
   console.log(` payer ${payerAddr} funded by ttn tx ${send.id('hex').slice(0, 20)}…`)
 }

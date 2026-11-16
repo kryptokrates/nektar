@@ -9,13 +9,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import knexFactory from 'knex'
 import { PrivateKey, type Transaction } from '@bsv/sdk'
-import { stackWorld } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { KnexShardStore } from '@nektar/log'
 import { NektarMemory, FileStateStore } from '../src/index.js'
 
 test('restart: resume from persisted head, no fork, proofs + level gate survive', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-restart-'))
-  const w = await stackWorld(t, 20)
+  const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder } = w
   const knex = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'records.sqlite') }, useNullAsDefault: true })
@@ -59,7 +59,7 @@ test('restart: resume from persisted head, no fork, proofs + level gate survive'
 
 test('recovery: a failed anchor broadcast re-batches and anchors (at-least-once)', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'nektar-recover-'))
-  const w = await stackWorld(t, 20)
+  const w = await testWorld(t, 20)
   if (w === undefined) return
   const { chain, funder } = w
   const knex = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'records.sqlite') }, useNullAsDefault: true })

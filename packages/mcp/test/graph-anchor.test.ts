@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { NektarMemory } from '../src/index.js'
 import { AORGraph, GraphAnchor, PolicyDAG } from '@nektar/graph'
 import { parseProgram } from '@nektar/datalog'
@@ -12,7 +12,7 @@ const rules = () =>
 spec(S,V) :- requires(P,V), applies(S,P).`).rules
 
 test('AOR-006: GraphAnchor records + anchors vertex hashes; tamper detected', async (t) => {
-  const w = await stackWorld(t, 10)
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
   const mem = new NektarMemory(chain, f, f.keyPair, { batchPolicy: { maxLeaves: 10 } })
@@ -29,7 +29,7 @@ test('AOR-006: GraphAnchor records + anchors vertex hashes; tamper detected', as
 })
 
 test('POL-016: policy DAG gates recall — ALLOW only when Cedar+DAG agree; conflict DENY; caller facts ignored', async (t) => {
-  const w = await stackWorld(t, 10)
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
   const dag = new PolicyDAG([
@@ -49,7 +49,7 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
 })
 
 test('POL-016b: per-item DAG permit — mixed batch withholds only the unpermitted fragment', async (t) => {
-  const w = await stackWorld(t, 10)
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
   // DAG permits ONLY 's/0' — 's/1' has no permit rule
@@ -84,7 +84,7 @@ permit(P, read, 's/0') :- member(P, verified).`).rules
 })
 
 test('POL-016c: anchoredPolicyRoot mismatch denies everything', async (t) => {
-  const w = await stackWorld(t, 10)
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder: f } = w
   const dag = new PolicyDAG([

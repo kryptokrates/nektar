@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, PrivateKey, P2PKH, Script, LockingScript } from '@bsv/sdk'
-import { stackWorld, stackChain, skipUnlessStack, StackFunder, stackTreasury } from '@nektar/chain'
+import { testWorld, testFunder, stackChain, skipUnlessStack, StackFunder, stackTreasury, type TestFunder } from '@nektar/chain'
 import { utf8 } from '@nektar/core'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
-  const w = await stackWorld(t, 50)
+  const w = await testWorld(t, 50)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts })
@@ -26,14 +26,14 @@ async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOption
   }
   // real funding: the payer signs real settlement txs that actually broadcast —
   // a dry funder throws at the first take() (mid-migration leftover)
-  const payer = await StackFunder.fund(await stackTreasury(), 6)
+  const payer = await testFunder(6)
 
   return { chain, funder, mem, settle, payer }
 }
 
 /** sign a real payment tx satisfying the invoice: pays payTo ≥ amount + carries the OP_RETURN tag */
 async function payTx(
-  payer: StackFunder,
+  payer: TestFunder,
   inv: { amount: number; lockingScriptHex: string; opReturn: string },
   opts: { sats?: number; skipTag?: boolean } = {}
 ): Promise<string> {

@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { AddressInfo } from 'node:net'
 import knexFactory from 'knex'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { NektarMemory } from '../src/memory.js'
 import { createHttpApi } from '../src/http.js'
 import { AutomationStore } from '@nektar/automation'
@@ -10,7 +10,7 @@ import { AutomationStore } from '@nektar/automation'
 test('dashboard automation inbox: agent bearer cannot approve; operator token can; origin and expiry enforced', async (t) => {
   process.env.NEKTAR_HTTP_TOKEN = 'agent-token'
   process.env.NEKTAR_OPERATOR_TOKEN = 'operator-token'
-  const w = await stackWorld(t, 1)
+  const w = await testWorld(t, 1)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, {})

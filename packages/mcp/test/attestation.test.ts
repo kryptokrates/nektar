@@ -2,7 +2,7 @@
 // sha256(proof) in a fee-key-funded data tx (unit codec + real-node spend).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { utf8, dsha256, toHex } from '@nektar/core'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -12,7 +12,7 @@ const fakeProof = () => dsha256(utf8('lzkmem-stand-in')) // any ≥32B payload; 
 const proofBytes = () => new Uint8Array([...fakeProof(), 1, 2, 3])
 
 async function setup(t: { skip: (m?: string) => void }) {
-  const w = await stackWorld(t, 10)
+  const w = await testWorld(t, 10)
   if (w === undefined) return
   const { chain, funder } = w
   const mem = new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, modelId: 'test' })

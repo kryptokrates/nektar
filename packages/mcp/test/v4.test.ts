@@ -5,13 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PrivateKey } from '@bsv/sdk'
 import { utf8 } from '@nektar/core'
-import { stackWorld, stackChain, StackFunder } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { signProvenance, verifyCheckpoint, PromiseMonitor } from '@nektar/log'
 import { signBinding, answerChallenge, issueClearance, proveAccess } from '@nektar/identity'
 import { NektarMemory, IngestError, FileSecurityStore, type NektarMemoryOptions } from '../src/index.js'
 
 async function world(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}, shared?: { chain: any; funder: any }) {
-  const w = shared ?? (await stackWorld(t, 20))
+  const w = shared ?? (await testWorld(t, 20))
   if (w === undefined) return undefined
   const { chain, funder } = w
   return { chain, funder, mem: new NektarMemory(chain, funder, funder.keyPair, { batchPolicy: { maxLeaves: 2 }, ...opts }) }

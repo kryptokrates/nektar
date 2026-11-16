@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
-import { stackWorld } from '@nektar/chain'
+import { testWorld } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { BatchLog, MemoryShardStore } from '@nektar/log'
 import { utf8 } from '@nektar/core'
@@ -47,7 +47,7 @@ test('cedar: ALLOW/DENY decisions + level isolation (bounded exhaustive)', () =>
 })
 
 test('cedar: policy set + receipts anchored via AnchorChain', async (t) => {
-  const w = await stackWorld(t, 6)
+  const w = await testWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w
   const log = new BatchLog(new MemoryShardStore(), PrivateKey.fromRandom())

@@ -123,7 +123,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // the module-level doc; the io seam is just the store's own outbox
   const fanoutIo = {
     enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => store.enqueue(o, opts),
-    ackOutbox: (id: string) => store.ackOutbox(id)
+    ackOutbox: (id: string) => store.ackOutbox(id),
+    pullOutbox: (id: string) => store.pullOutbox(id)
   }
   // bfinger packs store: packs describeShard PUTs to bstore also commit as
   // kind-5 sub-records under our identity; the finger record's refs then

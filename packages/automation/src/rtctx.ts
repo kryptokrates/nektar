@@ -133,6 +133,7 @@ export interface Rt {
   fanoutIo: {
     enqueue: (o: Omit<import('./store.js').OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => Promise<unknown>
     ackOutbox: (id: string) => Promise<unknown>
+    pullOutbox: (id: string) => Promise<unknown>
   }
   // shared loop state — written by one region, read by others (and by stop)
   stopped: boolean

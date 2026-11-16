@@ -573,6 +573,14 @@ export class AutomationStore {
     return await this.kx(T.outbox).where({ status: 'pending' }).where('defer_class', cls).where('next_at', '>', this.now()).update({ next_at: this.now() })
   }
 
+  /** pull ONE pending row forward to now — a delayed repair whose straggler
+   *  leg just resolved missed shouldn't wait out the defer ceiling; the wake
+   *  goes through outboxReady like every enqueue. Attempts untouched. */
+  async pullOutbox(actionId: string): Promise<void> {
+    const n = await this.kx(T.outbox).where({ action_id: actionId, status: 'pending' }).where('next_at', '>', this.now()).update({ next_at: this.now() })
+    if (n > 0) this.outboxReady?.()
+  }
+
   /** a resource-gated defer — the cause is starvation (a funding slot, not
    *  a delivery failure), so attempts are NOT consumed toward dead-letter.
    *  Short fixed re-check; the real wake-up is unblockOutbox on a freeing

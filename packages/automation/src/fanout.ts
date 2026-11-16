@@ -41,7 +41,11 @@ export async function trackFanout(
     pending: string[]
     settled: Promise<{ took: string[]; missed: Array<{ host: string; error: string }> }>
   },
-  io: { enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => Promise<unknown>; ackOutbox: (actionId: string) => Promise<unknown> }
+  io: {
+    enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => Promise<unknown>
+    ackOutbox: (actionId: string) => Promise<unknown>
+    pullOutbox?: (actionId: string) => Promise<unknown>
+  }
 ): Promise<void> {
   await queueRepairs(
     io,
@@ -52,6 +56,9 @@ export async function trackFanout(
   void r.settled
     .then(async (s) => {
       for (const h of s.took) await io.ackOutbox(`repair:${r.hash}:${h}`).catch(() => {})
+      // a pending leg that resolves missed shouldn't wait out the 20s
+      // straggler ceiling — the repair is owed now, so pull its row forward
+      for (const m of s.missed) await io.pullOutbox?.(`repair:${r.hash}:${m.host}`).catch(() => {})
     })
     .catch(() => {})
 }

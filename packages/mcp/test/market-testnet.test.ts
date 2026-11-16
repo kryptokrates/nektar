@@ -232,7 +232,7 @@ const mkagent = async (
     ai: new ScriptedExecutor(),
     publishFinger: true,
     ...(watch !== undefined ? { watchHosts: [watch], watchPublic: watch } : {}),
-    opts: { offerTtlBlocks: 48, refundBlocks: 1, ...opts }
+    opts: { offerTtlBlocks: 48, ...opts }
   })
   mem.automation = rt
   const stopRt = rt.stop.bind(rt)

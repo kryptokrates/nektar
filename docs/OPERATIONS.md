@@ -178,6 +178,15 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
 ## Backups
 
 - `.state/` (treasury, reserve) must be backed up per environment; it holds funded outpoints.
+- **Wallet custody migration (reserve.json → wallet.sqlite).** The file
+  reserve (`reserve.json`) is no longer the coin book — `NEKTAR_WALLET=toolbox`
+  (default) holds funding UTXOs in `wallet.sqlite` and `NEKTAR_WALLET=client`
+  holds them in the external wallet. The file only seeds the wallet once at
+  boot. Operators moving an existing data dir forward: stop the server,
+  delete `reserve.json`, restart — the wallet re-discovers its spendable set
+  from chain (funding imports are idempotent). `NEKTAR_WALLET=legacy` was
+  removed; starting with it fails fast. Back up `wallet.sqlite` the way you
+  backed up `reserve.json`.
 - Shard stores: `MemoryShardStore` is in-process. For persistence use the file/sqlite stores (`packages/log`) and back them up with the overlay sqlite files. The anchored roots let you detect any restore that lost or altered records.
 - Revocations, the challenge registry and issued ZK membership queries persist via `FileSecurityStore` in the runtime (`NEKTAR_DATA_DIR`). The in-process demo server keeps them in memory.
 - **Mainnet (MVP) runbook.** The operator pays all anchor fees from a capped fee key; readers and verifiers pay nothing.
@@ -371,20 +380,17 @@ publicShards:[{shard, records, packUrl, import}]}` enumerating what the
   `payclient.ts` (`buildPaymentTx`) is the reference client: payer WIF +
   spendable utxos in → signed BEEF hex out; any WIF-capable signer works
   the same way.
-  Verified on real chains by `packages/e2e/src/e2e-pay.mjs`:
+  Verified on a real chain by `packages/e2e/src/e2e-pay.mjs`:
   `NEKTAR_NETWORK=regtest node packages/e2e/src/e2e-pay.mjs` (local
-  Teranode) and `NEKTAR_NETWORK=testnet NEKTAR_DATA_DIR=<funded dir>
-NEKTAR_KEY_PASSPHRASE=… node packages/e2e/src/e2e-pay.mjs` (public
-  testnet) — payer funding tx, 402 invoice, signed settlement broadcast
+  Teranode) — payer funding tx, 402 invoice, signed settlement broadcast
   by real consensus, receipt commits the txid, `paid` check green,
   replay rejected.
-  Hosted demo: the Hetzner box (`nektar.run`) runs
-  `NEKTAR_NETWORK=testnet` with a funded `fee.key.json` reserve (3M sats,
-  `NEKTAR_FUND_TXIDS=hex:<rawtx>` offline import — the tx wasn't indexed
-  at the lookup endpoints yet) and `NEKTAR_PAYMENTS=1`. Anchors are real
-  public testnet txs; payments settle to the operator address for real.
+  `packages/e2e/src/e2e-pay-remote.mjs` drives a DEPLOYED server over
+  the public wire (`NEKTAR_REMOTE_URL` + `NEKTAR_HTTP_TOKEN`): MCP
+  remember → auto-anchor → 402 → locally signed BEEF settlement →
+  public `/v1/verify` → tx visible via BSV Broadcaster.
   Regtest caveat: settlement is recorded on the local chain, not
-  consensus-validated — real payment semantics need regtest/testnet/main.
+  consensus-validated — real payment semantics need a live network.
 - **Access audit log (GOAL-v8 D6, opt-in):** `NEKTAR_ACCESS_LOG=1`
   appends timestamped `{event:'decrypt'|'traverse', shard, seq, caller}`
   records to the `__access__` shard, which anchors like any other shard.
@@ -406,11 +412,11 @@ NEKTAR_KEY_PASSPHRASE=… node packages/e2e/src/e2e-pay.mjs` (public
 - **Receipt model binding (GOAL-v8 D7):** configure
   `model:{id, params, weightsHash}` on the instance; receipts carry it
   (plus per-call `modelParams`) inside the signed digest.
-- Public testnet (test coins, `NEKTAR_NETWORK=testnet`):
-  - Endpoints: BSV Broadcaster (ARC-compatible) `https://arcade-v2-testnet-us-1.bsvblockchain.tech`, WoC `https://api.whatsonchain.com/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` (`openLiveRuntime`) — SpendGuard caps, encrypted keys, WoC merkle paths.
-  - Differences from main: **no** `NEKTAR_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (broadcaster policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); no broadcast fallback beyond WoC `/tx/raw`; confirm interval 30 s.
-  - No faucet — coins come from a testnet faucet or the community testcoin channel. The fee-key address is printed to stderr at startup.
-  - Funded run: `NEKTAR_DATA_DIR=.testnet NEKTAR_KEY_PASSPHRASE=… NEKTAR_NETWORK=testnet node packages/mcp/dist/src/bin.js`.
+- Testnet (`NEKTAR_NETWORK=testnet` — test coins):
+  - Endpoints: BSV Broadcaster (ARC-compatible) `https://arcade-v2-testnet-us-1.bsvblockchain.tech`, WoC testnet `https://api.whatsonchain.com/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` — SpendGuard caps, encrypted keys, WoC merkle paths.
+  - Differences from main: **no** `NEKTAR_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (broadcaster policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); confirm interval 30 s.
+  - Read-only smoke (no spend): `pnpm testnet:readonly` — broadcaster policy, WoC tip, header root check, and a real merkle path for a recent coinbase verified with `merklePath.verify(txid, tracker)`.
+  - Funded pilot: `NEKTAR_DATA_DIR=.live-pilot NEKTAR_KEY_PASSPHRASE=… NEKTAR_NETWORK=testnet pnpm live:pilot` — remember→anchor→BUMP→prove→append→rotate→restart-no-fork, with explorer links and per-tx fees from `ops.costs()`.
 - ZK proving:
   - **The nektar Docker image ships the prover** (`/usr/local/bin/nektar-stark` + `r0vm`, `NEKTAR_STARK_PROVER` preset). Its build stage fails if the rebuilt program id differs from the pinned one.
   - Outside Docker, use the `nektar-stark-build` image (`pnpm stark:image` + `pnpm stark:build`) or point `NEKTAR_STARK_PROVER` at a native binary.

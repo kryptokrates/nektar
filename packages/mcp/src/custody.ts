@@ -90,10 +90,7 @@ export class CustodyOps {
    *  adopted its own change would mint phantom coins. If the tx ever lands,
    *  the reconcile path adopts the live outputs. */
   private async consumedInputs(tx: Transaction): Promise<void> {
-    for (const inp of tx.inputs) {
-      const txid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
-      if (txid !== undefined) await this.deps.funds.drop(txid, inp.sourceOutputIndex)
-    }
+    await this.deps.funds.exported(tx)
   }
   /** coins sent to us by someone else */
   async adoptOut(tx: Transaction, vout: number): Promise<void> {

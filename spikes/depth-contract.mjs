@@ -2,6 +2,7 @@
 // node rejects or 30 s cap. Measures the real unconfirmed-depth limit for the
 // Rúnar contract path.
 import { AnchorChain } from '../packages/anchor/dist/src/index.js'
+import { fundsOf } from '../packages/chain/dist/src/index.js'
 import { Transaction, PrivateKey, P2PKH } from './lib/sdk.mjs'
 import { WIF, RPC, rpc, broadcastEF } from './lib/regtest.mjs'
 import { dsha256, utf8 } from '../packages/core/dist/src/index.js'
@@ -58,10 +59,10 @@ await split.fee()
 await split.sign()
 await broadcastEF(split)
 await rpc('generatetoaddress', 1, addr)
-const funder = { keyPair: key, utxos: [] }
+const funder = { keyPair: key, utxos: [], address: () => addr }
 for (let i = 0; i < N; i++) funder.utxos.push({ tx: split, vout: i, satoshis: sats })
 
-const ac = new AnchorChain('depth', key, funder, key, new TeranodeBroadcaster('http://localhost:8833/tx'))
+const ac = new AnchorChain('depth', key, fundsOf(funder), key, new TeranodeBroadcaster('http://localhost:8833/tx'))
 const t0 = Date.now()
 let count = 0,
   lastErr = ''

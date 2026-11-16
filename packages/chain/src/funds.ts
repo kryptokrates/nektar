@@ -5,7 +5,7 @@
 // or die. FundsBase holds the shared semantics (purpose floor, reserved
 // set, serialized takes, change detection); a FundsStore supplies the
 // backend — wallet basket, in-memory pool, or test treasury.
-import { Transaction } from '@bsv/sdk'
+import { Transaction, P2PKH } from '@bsv/sdk'
 import type { Funder, FundingOut, Funds, FundPurpose } from './interfaces.js'
 
 /** a narrow Funder view over a Funds owner — every take is purpose-labeled.
@@ -40,8 +40,12 @@ export interface FundsStore {
 
 export interface FundsDeps {
   /** our pubkey-hash hex — identifies owned outputs and change
-   *  (every adopted/change output is P2PKH-to-us) */
-  pkhHex: string
+   *  (every adopted/change output is P2PKH-to-us). Optional when `lock`
+   *  is supplied. */
+  pkhHex?: string
+  /** explicit locking-script hex override (adapters that only hold an
+   *  address) — wins over the pkhHex-derived P2PKH script */
+  lock?: string
   /** pre-encoded address override; derived from pkhHex (0x6f) otherwise */
   address?: string
   /** sats kept affordable for one deal — non-deal takes never dip below.
@@ -80,11 +84,11 @@ export abstract class FundsBase implements Funds {
   constructor(public deps: FundsDeps) {}
 
   private get ourLock(): string {
-    return `76a914${this.deps.pkhHex}88ac`
+    return this.deps.lock ?? `76a914${this.deps.pkhHex}88ac`
   }
 
   address(): Promise<string> | string {
-    return this.deps.address ?? `1${this.deps.pkhHex.slice(0, 24)}`
+    return this.deps.address ?? `1${this.deps.pkhHex?.slice(0, 24)}`
   }
 
   async balance(): Promise<number> {
@@ -192,6 +196,19 @@ export abstract class FundsBase implements Funds {
     }
   }
 
+  /** a signed tx left our hands for someone else to air — the inputs are
+   *  consumed (signed away either way) but its outputs are NOT adopted:
+   *  discovery adopts the change when the spend lands on-chain. */
+  async exported(tx: Transaction): Promise<void> {
+    for (const inp of tx.inputs) {
+      const io = FundsBase.inputOp(inp)
+      if (io === undefined) continue
+      const [txid, v] = io.split(':')
+      await this.store.drop(txid, Number(v))
+      this.reserved.delete(io)
+    }
+  }
+
   async died(txid: string): Promise<void> {
     const tx = await this.deps.txOf?.(txid)
     if (tx === undefined) {
@@ -280,6 +297,17 @@ export function listFundsStore(): ListFundsStore {
   }
 }
 
+/** the generic FundsBase over an arbitrary FundsStore — what adapters hand
+ *  out when the backend is a foreign funder shape */
+class AdaptedFunds extends FundsBase {
+  constructor(
+    protected readonly store: FundsStore,
+    deps: FundsDeps
+  ) {
+    super(deps)
+  }
+}
+
 /** in-memory Funds — the default test tier's coin owner. Pass a shared
  *  `listFundsStore()` to two instances to simulate restart persistence. */
 export class MemoryFunds extends FundsBase {
@@ -294,4 +322,44 @@ export class MemoryFunds extends FundsBase {
   get records(): ListFundsStore {
     return this.store
   }
+}
+
+/** the funder shapes older call sites hand us: a real Funds carrier
+ *  (`.funds`) or a utxos-shaped treasury with mark/add verbs. New code
+ *  should construct a Funds impl directly — this adapts, never widens. */
+export interface FunderLike {
+  funds?: Funds
+  utxos?: Array<{ tx: Transaction; vout: number; satoshis?: number }>
+  markSpent?: (txid: string, vout: number) => void
+  addOwned?: (tx: Transaction, vout: number) => void
+  unmark?: (txid: string, vout: number) => void
+  address?: () => Promise<string> | string
+}
+
+/** Adapt a funder-shaped object into Funds. A carrier's own `.funds` wins;
+ *  a utxos-shaped funder becomes a FundsStore view (live `utxos` getter,
+ *  markSpent=drop, addOwned=add, unmark=revive) under one MemoryFunds — the
+ *  shared state machine still owns selection and reservations. The owned
+ *  lock comes from a synchronous `address()` or `deps.lock`/`pkhHex` —
+ *  without it change could never be recognized as ours. */
+export function fundsOf(f: FunderLike, deps?: Partial<FundsDeps>): Funds {
+  if (f.funds !== undefined) return f.funds
+  if (f.utxos === undefined) throw new Error('fundsOf: funder carries no Funds owner and no utxos view')
+  const addr = f.address?.()
+  const lock =
+    deps?.lock ??
+    (deps?.pkhHex !== undefined ? `76a914${deps.pkhHex}88ac` : undefined) ??
+    (addr !== undefined && !(addr instanceof Promise) ? new P2PKH().lock(addr).toHex() : undefined)
+  if (lock === undefined) throw new Error('fundsOf: no owned lock — pass deps.lock/deps.pkhHex or a synchronous address()')
+  const store: FundsStore = {
+    list: () => (f.utxos ?? []).map((u) => ({ tx: u.tx, vout: u.vout, satoshis: u.satoshis ?? 0 })),
+    add: (tx, vout) => f.addOwned?.(tx, vout),
+    drop: (txid, vout) => f.markSpent?.(txid, vout),
+    revive: (tx, vout) => {
+      const txid = tx.id('hex')
+      if (f.unmark !== undefined) f.unmark(txid, vout)
+      else f.addOwned?.(tx, vout)
+    }
+  }
+  return new AdaptedFunds(store, { ...deps, lock })
 }

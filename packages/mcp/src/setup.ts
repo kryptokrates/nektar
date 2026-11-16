@@ -56,7 +56,7 @@ export function wireP2p(opts: {
  *  enforced by node script eval, and SpendGuard stays in front (defense in
  *  depth). Value: inline JSON or "@/path/to.json" with
  *  {perTxCap,windowCap,windowBlocks,maxFee,fundSats?,vaultSats?}.
- *  Returns a takeReserve for the funder: serve an already-minted vault out
+ *  Returns a vault-take for the funder: serve an already-minted vault out
  *  sitting in the pool, else mint a fresh capped one through the covenant. */
 export async function setupFeeVault(opts: {
   vaultSpec: string
@@ -129,7 +129,7 @@ export async function setupFeeVault(opts: {
     return { tx, vout: 1, satoshis: tx.outputs[1].satoshis! }
   }
   let minting: Promise<unknown> = Promise.resolve()
-  const takeReserve = async () => {
+  const vaultTake = async () => {
     // prefer an already-minted vault out sitting in the pool (e.g. orphaned
     // by a failed anchor build); otherwise mint a fresh capped one through
     // the covenant. Non-vault pool entries are never served for anchoring.
@@ -142,5 +142,5 @@ export async function setupFeeVault(opts: {
     return (await minting) as { tx: Transaction; vout: number; satoshis: number }
   }
   opts.log(`nektar ${opts.net}: NEKTAR_FEE_VAULT set — anchor funding minted through the fee-vault covenant\n`)
-  return takeReserve
+  return vaultTake
 }

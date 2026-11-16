@@ -103,7 +103,25 @@ if (args.includes('--main')) {
   console.log(`    (optional) docker mcp secret set nektar-main.arc_api_key / nektar-main.fund_wif`)
   console.log(`  the fee-key address is printed to stderr on first start — fund it deliberately.`)
 }
-const target = args.includes('--regtest') ? `${PROFILE}_regtest` : args.includes('--main') ? `${PROFILE}_main` : PROFILE
+if (args.includes('--testnet')) {
+  // public BSV testnet — test coins only; secrets + config are operator actions.
+  const TP = `${PROFILE}_testnet`
+  const tyaml = staged('nektar-testnet.yaml')
+  if (!out(['mcp', 'profile', 'list']).split(/\s+/).includes(TP)) run(['mcp', 'profile', 'create', '--name', TP, '--id', TP])
+  if (/\bnektar-testnet\b/.test(out(['mcp', 'profile', 'server', 'ls', '--filter', `profile=${TP}`])))
+    run(['mcp', 'profile', 'server', 'remove', TP, '--name', 'nektar-testnet'])
+  run(['mcp', 'profile', 'server', 'add', TP, '--server', `file://${tyaml}`])
+  console.log(`profile "${TP}": nektar on BSV testnet (test coins).`)
+  console.log(`  required next step: docker mcp secret set nektar-testnet.key_passphrase`)
+  console.log(`  the fee-key address is printed to stderr on first start — fund it with testnet coins.`)
+}
+const target = args.includes('--regtest')
+  ? `${PROFILE}_regtest`
+  : args.includes('--main')
+    ? `${PROFILE}_main`
+    : args.includes('--testnet')
+      ? `${PROFILE}_testnet`
+      : PROFILE
 for (const client of args.filter((a) => !a.startsWith('--'))) run(['mcp', 'client', 'connect', client, '--profile', target])
 console.log(`\nnektar is in Docker MCP profile "${PROFILE}".`)
 console.log(`Any client: command "docker", args ["mcp","gateway","run","--profile","${PROFILE}"]`)

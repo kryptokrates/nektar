@@ -72,6 +72,8 @@ export interface Funder {
  *  `deal` is a live settlement that must always find a spendable input;
  *  `publish`/`upkeep` are background work that yields to deals. */
 export type FundPurpose = 'deal' | 'publish' | 'upkeep'
+/** upstream/test call sites name it FundsPurpose — same labels */
+export type FundsPurpose = FundPurpose
 
 /** The single owner of coin state: selection, reservation, spend marks,
  *  abandonment and adoption. Callers never mark spent or owned directly —
@@ -89,6 +91,11 @@ export interface Funds {
   /** one call after a successful broadcast: consumes our inputs, adopts
    *  outputs that pay us (change and escrow returns). */
   spent: (tx: Transaction) => void | Promise<void>
+  /** the tx was signed and exported for someone ELSE to air (a BEEF
+   *  payment handed to a seller): inputs are consumed — they are signed
+   *  away either way — but outputs paying us are NOT adopted; if the
+   *  spend lands, discovery adopts the change then. */
+  exported: (tx: Transaction) => void | Promise<void>
   /** the spend was rejected or abandoned: its inputs free again where the
    *  parent still lives, its outputs leave us for good. */
   died: (txid: string) => void | Promise<void>

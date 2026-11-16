@@ -4,7 +4,7 @@
 // and the NEKTAR_PROOF_SHARDING opt-out.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { testWorld, type TestChain } from '@nektar/chain'
+import { testWorld, fundsOf, type TestChain } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { decodeNektarAnchor } from '@nektar/contracts'
 import { dsha256, utf8, merkleRoot } from '@nektar/core'
@@ -18,7 +18,7 @@ async function anchoredBatch(t: { skip: (m?: string) => void }, R: Uint8Array, s
   const w = await testWorld(t, 6)
   if (w === undefined) return
   const { chain, funder: f } = w
-  const ac = new AnchorChain('dis', f.keyPair, f, f.keyPair, chain)
+  const ac = new AnchorChain('dis', f.keyPair, fundsOf(f), f.keyPair, chain)
   await ac.anchor(size, R)
   const tx = ac.getHead()!.tx
   if (mine) {

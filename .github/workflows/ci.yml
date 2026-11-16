@@ -71,7 +71,7 @@ jobs:
             sh -c 'ls -la /work /work/test && cat /work/test/build.test.js'
           rm -rf "$d"
       - name: isolated purchased-patch evaluation (real container, no network)
-        run: node --test --test-force-exit packages/mcp/dist/test/automation-sandbox.test.js
+        run: node --test --test-force-exit packages/automation/dist/test/automation-sandbox.test.js
         timeout-minutes: 10
         env:
           NEKTAR_SANDBOX_E2E: '1'

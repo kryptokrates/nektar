@@ -1,10 +1,10 @@
 {
   "packages": {
     "anchor": {
-      "loc": 1194,
+      "loc": 1196,
       "pkgFanout": 4,
       "edges": ["chain", "contracts", "core", "identity"],
-      "maxFileLoc": 617,
+      "maxFileLoc": 619,
       "maxFileFanout": 8,
       "instability": 0.444
     },
@@ -17,7 +17,7 @@
       "instability": 0.857
     },
     "automaton": {
-      "loc": 377,
+      "loc": 375,
       "pkgFanout": 4,
       "edges": ["anchor", "chain", "contracts", "core"],
       "maxFileLoc": 195,
@@ -33,7 +33,7 @@
       "instability": 0.667
     },
     "chain": {
-      "loc": 5186,
+      "loc": 5334,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 854,
@@ -73,7 +73,7 @@
       "instability": 0.2
     },
     "e2e": {
-      "loc": 5581,
+      "loc": 5685,
       "pkgFanout": 14,
       "edges": ["anchor", "automaton", "chain", "contracts", "core", "datalog", "graph", "identity", "log", "mcp", "policy", "reasoning", "verify", "zk"],
       "maxFileLoc": 1006,
@@ -105,7 +105,7 @@
       "instability": 0.333
     },
     "mcp": {
-      "loc": 11089,
+      "loc": 11082,
       "pkgFanout": 16,
       "edges": [
         "anchor",

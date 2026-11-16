@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { utf8, dsha256, toHex } from '@nektar/core'
-import { testWorld } from '@nektar/chain'
+import { testWorld, fundsOf } from '@nektar/chain'
 import {
   Automaton,
   AutomatonError,
@@ -39,7 +39,7 @@ async function deployed(t: { skip: (m?: string) => void }, def = DEF) {
   const w = await testWorld(t, 24)
   if (w === undefined) return undefined
   const { chain, funder } = w
-  const ac = new AutomatonChain(def, PrivateKey.fromRandom(), funder, funder.keyPair, chain)
+  const ac = new AutomatonChain(def, PrivateKey.fromRandom(), fundsOf(funder), funder.keyPair, chain)
   await ac.deploy()
   return ac
 }

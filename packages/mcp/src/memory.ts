@@ -834,7 +834,7 @@ export class NektarMemory {
       (this.opts.wallet !== undefined
         ? custodySigner(this.opts.wallet as SignerWallet, { protocolID: [2, 'nektar'], keyID: `nektar-automaton:${id}`, counterparty: 'self' })
         : PrivateKey.fromRandom())
-    const ac = new AutomatonChain(def, owner, this.funder, this.fundSigner(), this.chain)
+    const ac = new AutomatonChain(def, owner, this.funds, this.fundSigner(), this.chain)
     const h = await ac.deploy()
     this.automata.set(id, ac)
     return h

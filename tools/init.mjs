@@ -63,7 +63,7 @@ console.log(
 // ─── 1. network ─────────────────────────────────────────────────────────────
 const networks = [
   { id: 'regtest', label: 'regtest — local Teranode stack, zero real cost (best first run)' },
-  { id: 'testnet', label: 'testnet — public testnet, test coins, real market' },
+  { id: 'testnet', label: 'testnet — public test coins, real market' },
   { id: 'main', label: 'main — real BSV. Read docs/OPERATIONS.md first' }
 ]
 const net =

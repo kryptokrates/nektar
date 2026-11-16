@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey } from '@bsv/sdk'
 import { dsha256, utf8, computeLeaf, merkleRoot, merkleProof, toHex } from '@nektar/core'
-import { testWorld, testChain } from '@nektar/chain'
+import { testWorld, testChain, fundsOf } from '@nektar/chain'
 import { AnchorChain } from '@nektar/anchor'
 import { buildProofBundle, verifyFragment, type AnchorLink } from '../src/bundle.js'
 
@@ -16,7 +16,7 @@ async function scenario(t: { skip: (m?: string) => void }) {
   if (w === undefined) return
   const { chain, funder } = w
   await chain.mine(1)
-  const ac = new AnchorChain('s1', PrivateKey.fromRandom(), funder, funder.keyPair, chain)
+  const ac = new AnchorChain('s1', PrivateKey.fromRandom(), fundsOf(funder), funder.keyPair, chain)
   const leaves = [frag('oil change'), frag('belt inspection')].map(computeLeaf)
   const R = merkleRoot(leaves)
   const g = await ac.anchor(leaves.length, R)
@@ -132,7 +132,7 @@ test('verify: odd-batch duplicate-last-leaf claim rejected', async (t) => {
   const { PrivateKey: PK } = await import('@bsv/sdk')
   const { AnchorChain: AC } = await import('@nektar/anchor')
   const { merkleProof: mp, merkleRoot: mr, computeLeaf: cl } = await import('@nektar/core')
-  const ac = new AC('odd', PK.fromRandom(), f2, f2.keyPair, chain2)
+  const ac = new AC('odd', PK.fromRandom(), fundsOf(f2), f2.keyPair, chain2)
   const leaves = ['a', 'b', 'c'].map((s) => cl({ d: utf8(s), p: { source: 'm', time: 1, signature: new Uint8Array(0), modelId: 'm' } }))
   const R = mr(leaves)
   const g = await ac.anchor(3, R)

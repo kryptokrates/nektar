@@ -16,7 +16,7 @@ export interface AttestOpsDeps {
   chain: Broadcaster
   feeRateSatPerKb: () => number
   /** one call after a successful broadcast: consumes our inputs, adopts our
-   *  change — replaces the old markSpentOut/addOwnedOut pair */
+   *  change — replaces the old per-outpoint spent/owned marks */
   spentTx: (tx: Transaction) => void | Promise<void>
   /** coins sent to us by someone else */
   adoptOut: (tx: Transaction, vout: number) => void | Promise<void>

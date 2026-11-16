@@ -6,7 +6,7 @@
   "main": "./dist/src/e2e.js",
   "scripts": {
     "build": "tsc -b",
-    "test": "NEKTAR_TEST_TIER=stack node dist/src/e2e.js"
+    "test": "node dist/src/e2e.js"
   },
   "dependencies": {
     "@nektar/anchor": "workspace:*",

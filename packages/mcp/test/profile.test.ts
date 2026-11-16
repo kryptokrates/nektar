@@ -72,6 +72,9 @@ const mkagent = async (name: string, o: { hosts: string[]; chain: TestChain; dir
     call: (t2, a) => callTool(mem, t2, a),
     ai: new ScriptedExecutor(),
     now: () => clock,
+    // slot-conservation is asserted mid-deal — refill-ahead would mint a
+    // second 64-slot tree the moment the want consumes one leaf
+    treeLowWater: 1,
     opts: { offerTtlBlocks: 10000, refundBlocks: 10000 }
   })
   mem.automation = rt

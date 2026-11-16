@@ -62,10 +62,12 @@ export class NektarProvider implements Provider {
   lastTx?: Transaction
   constructor(
     public broadcaster: Broadcaster,
-    private funder: Funder & { funds?: import('@nektar/chain').Funds },
+    private funder: (Funder & { funds?: import('@nektar/chain').Funds }) | import('@nektar/chain').Funds,
     public funderAddress?: string
   ) {
-    this.funds = (funder as { funds?: import('@nektar/chain').Funds }).funds
+    // a bare Funds is the owner itself; a Funder carrier exposes it as .funds
+    const f = funder as { funds?: import('@nektar/chain').Funds; spent?: unknown; adopt?: unknown }
+    this.funds = f.funds ?? (typeof f.spent === 'function' && typeof f.adopt === 'function' ? (f as unknown as import('@nektar/chain').Funds) : undefined)
   }
   /** called on every broadcast attempt AND again on success. */
   onAttempt?: (tx: Transaction) => void
@@ -223,7 +225,7 @@ export class AnchorChain {
   constructor(
     shard: string,
     shardKey: SignerLike,
-    private funder: Funder,
+    private funder: Funder | import('@nektar/chain').Funds,
     fundKey: SignerLike,
     broadcaster: Broadcaster,
     private opts: AnchorOptions & { shardPub?: string } = {}

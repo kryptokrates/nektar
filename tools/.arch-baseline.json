@@ -9,11 +9,11 @@
       "instability": 0.444
     },
     "automation": {
-      "loc": 7125,
+      "loc": 6179,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 2014,
-      "maxFileFanout": 17,
+      "maxFileFanout": 19,
       "instability": 0.857
     },
     "automaton": {
@@ -105,7 +105,7 @@
       "instability": 0.333
     },
     "mcp": {
-      "loc": 9788,
+      "loc": 11109,
       "pkgFanout": 16,
       "edges": [
         "anchor",
@@ -182,10 +182,6 @@
     "packages/automation/src/market.ts": {
       "loc": 2014,
       "fanout": 11
-    },
-    "packages/automation/src/runtime.ts": {
-      "loc": 1509,
-      "fanout": 17
     },
     "packages/automation/src/store.ts": {
       "loc": 902,

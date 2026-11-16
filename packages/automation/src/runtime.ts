@@ -4,143 +4,22 @@ import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
 import type { AutomationHost } from './host.js'
 import { AutomationStore, type OutboxItem } from './store.js'
-import { MarketEngine, TERMINAL, type MarketMessage, type MarketTransport, type MarketOptions } from './market.js'
-import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
+import { MarketEngine, TERMINAL, type MarketTransport } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
 import { runPreflight, WATCHDOG_CHECKS, type PreflightReport } from './preflight.js'
 import { killSwitchActive } from './kill.js'
+import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
+import { openLanes } from './lanes.js'
+import { openOutbox } from './outbox.js'
+import { openUpkeep } from './upkeep.js'
+import { openWatches } from './watches.js'
+import type { Rt, LaneInfra, AutomationConfig } from './rtctx.js'
 import type { Automation } from './types.js'
 
 export type { Automation } from './types.js'
-
-/** requeue envelope receipts after a failed ackBox push — the retry MUST
- *  keep `from`: the next ack() pass resolves the SENDER's finger record to
- *  reach every copy of the envelope, and dropping it would silently lose the
- *  retry for hosts only the sender knows */
-export const requeueAckItems = (
-  items: Array<{ txid: string; commitment: string; from: string }>
-): Array<{ txid: string; commitment: string; from: string; msg: undefined; created: number }> =>
-  items.map((i) => ({ txid: i.txid, commitment: i.commitment, from: i.from, msg: undefined, created: 0 }))
-
-/** one repair-host row per host. `idSuffix` distinguishes rows enqueued at
- *  different stages of the same carrier's life — a republish-time repair
- *  must not collide with (or be swallowed by the dedup of) a row the submit
- *  fan-out already wrote for the same hash+host. */
-export async function queueRepairs(
-  io: { enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => Promise<unknown> },
-  hash: string,
-  hosts: string[],
-  opts?: { delayMs?: number; idSuffix?: string }
-): Promise<void> {
-  for (const host of hosts)
-    await io.enqueue(
-      { actionId: `repair:${hash}:${host}${opts?.idSuffix ?? ''}`, operationId: 'lanes', kind: 'repair-host', destination: host, payload: { key: hash } },
-      opts?.delayMs === undefined ? undefined : { delayMs: opts.delayMs }
-    )
-}
-
-/** every fan-out leg gets its own repair row — quorum resolves the send,
- *  the journal carries the carrier, and a leg that lands late cancels its
- *  own repair via `settled`. Missed legs get an immediate row; still-unsettled
- *  (pending) legs get the same row delayed, so a straggler that never lands
- *  is repaired and one that does cancels itself. */
-export async function trackFanout(
-  r: {
-    hash: string
-    missed: Array<{ host: string; error: string }>
-    pending: string[]
-    settled: Promise<{ took: string[]; missed: Array<{ host: string; error: string }> }>
-  },
-  io: { enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => Promise<unknown>; ackOutbox: (actionId: string) => Promise<unknown> }
-): Promise<void> {
-  await queueRepairs(
-    io,
-    r.hash,
-    r.missed.map((m) => m.host)
-  )
-  await queueRepairs(io, r.hash, r.pending, { delayMs: 20_000 })
-  void r.settled
-    .then(async (s) => {
-      for (const h of s.took) await io.ackOutbox(`repair:${r.hash}:${h}`).catch(() => {})
-    })
-    .catch(() => {})
-}
-
-export interface AutomationConfig {
-  network: string
-  dataDir?: string
-  ai?: AIExecutor
-  intervalMs?: number
-  /** how often the timer runs upkeep (trees, identity record, journal); push events run it at once */
-  upkeepMs?: number
-  call: (tool: string, args: any) => Promise<any>
-  opts?: Partial<MarketOptions>
-  log?: (line: string) => void
-  marketHosts?: string[]
-  /** the operator's own hosts: accept http and loopback/private addresses in
-   *  identity records (env NEKTAR_MARKET_LOCAL_HOSTS=1). Off, a record may
-   *  only name public https hosts. */
-  localHosts?: boolean
-  messages?: {
-    send: (toPub: string, msg: MarketMessage, refs?: import('@nektar/bstack').BoxRef[]) => Promise<void>
-    collect: () => Promise<Array<{ from: string; msg: MarketMessage; refs?: import('@nektar/bstack').BoxRef[] }>>
-    ack?: () => Promise<void>
-  }
-  treeSize?: number
-  boxOffice?: string
-  treeLowWater?: number
-  /** unproven mints allowed in flight per kind — non-market lanes default 2
-   *  so one mint's block-wait never gates the next refill (market stays 1:
-   *  its slots serve on anchored ancestry anyway) */
-  treeMaxUnproven?: number
-  /** blogs deal-journal stream id (`<name>_<10 chars>`); every deal event is
-   *  appended as a signed numbered batch to tm_log_<stream> - env NEKTAR_LOG_STREAM */
-  logStream?: string
-  /** confirmations a settlement proof must carry before a completion may
-   *  settle (default 1) — regtest 1, live the memory's finality depth */
-  settleDepth?: number
-  /** bstore/S3 object store for deal evidence — absent = feature off.
-   *  Default: objectStoreFromEnv() (NEKTAR_BSTORE_*). */
-  objectStore?: import('@nektar/store').S3ObjectStore
-  /** A9 — strict startup: refuse to open the runtime unless preflight is
-   *  green. Non-strict starts anyway, seeded with the checks' down-host set. */
-  strict?: boolean
-  /** NEKTAR_UNATTENDED — the A11 conformance token becomes a required check;
-   *  honored only while the token validates. Implies strict when set. */
-  unattended?: boolean
-  /** stronger broadcaster liveness probe (the transport knows the endpoint —
-   *  an HTTP answer proves the socket where txFacts can't) */
-  broadcasterProbe?: () => Promise<boolean>
-  /** publish our bfinger identity record in upkeep — opt-in (it costs sats
-   *  and makes this agent publicly discoverable; NEKTAR_BFINGER_PUBLISH=1) */
-  publishFinger?: boolean
-  /** watchdog cadence — the cheap checks (chain/broadcaster/hosts) re-run on
-   *  this tick (default 60s; 0 disables) */
-  watchdogMs?: number
-  /** watch-shim base URLs (NEKTAR_WATCH_URLS) — long-poll wake in front of
-   *  ordinary BRC-24 hosts. Each subscription mirrors a query the poll loop
-   *  already issues; a changed result-set runs deals() at once. Optional:
-   *  absent/down shim = plain polling. */
-  watchHosts?: string[]
-  /** this agent's own watch-shim URL, advertised in the bfinger record so
-   *  counterparties can /notify our long-polls on outbound sends (requires
-   *  publishFinger — records without it simply carry no watch field) */
-  watchPublic?: string
-  /** per-read failure ceiling on lane/box host lookups (NEKTAR_LANE_READ_TIMEOUT_MS)
-   *  — a host that cannot answer inside this bound is treated as unreachable,
-   *  never waited on beyond it. Default 5000. */
-  laneReadTimeoutMs?: number
-  /** hot-path poll cadence while any op is non-terminal (NEKTAR_HOT_INTERVAL_MS)
-   *  — the loop runs min(hotMs, idleMs); a wake or inbound item keeps it hot.
-   *  Default 250. */
-  hotMs?: number
-  /** minimum time a want stays in `collecting` before an acceptable offer may
-   *  early-select (NEKTAR_MIN_COLLECT_MS) — a cheaper offer landing inside the
-   *  window still wins; collectMs stays the outer ceiling. Default 1000. */
-  minCollectMs?: number
-  now?: () => number
-}
+export type { AutomationConfig } from './rtctx.js'
+export { requeueAckItems, queueRepairs, trackFanout, abandonedReap } from './fanout.js'
 
 function aiFromEnv(env = process.env): AIExecutor {
   const baseUrl = env.NEKTAR_AI_BASE_URL
@@ -153,10 +32,12 @@ function aiFromEnv(env = process.env): AIExecutor {
   return new HttpChatExecutor({ provider: env.NEKTAR_AI_PROVIDER ?? 'http', baseUrl, modelId: env.NEKTAR_AI_MODEL, apiKey, egress })
 }
 
-/** which abandoned-tree rows the reap ghost-mints: self-minted kinds only.
- *  A provision row's inputs are the payer's — reaped, never recycled. */
-export const abandonedReap = (kind: string): { drop: boolean; ghost: boolean } => ({ drop: true, ghost: kind !== 'provision' })
-
+// the assembler: store/wallet/preflight/lane-infra construction, the
+// MarketEngine + transport wiring, the deal loop (deals/cycle/tick/watchdog),
+// the push hooks, and the Automation surface. The four regions —
+// openLanes/openOutbox/openUpkeep/openWatches — own their own machinery and
+// meet through the Rt context; every cross-region call resolves at call time
+// exactly as the old closure's lets did.
 export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig): Promise<Automation> {
   const knexFactory = (await import('knex')).default
   if (cfg.dataDir) mkdirSync(cfg.dataDir, { recursive: true })
@@ -204,7 +85,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // envelope. Lanes live in their own store; a pre-split deployment's lane
   // tables sit inside automation.sqlite, so seed lanes.sqlite with a copy.
   let kxLanes: Knex | undefined
-  const lanes =
+  const lanes: LaneInfra | undefined =
     marketHosts.length === 0
       ? undefined
       : await (async () => {
@@ -237,12 +118,6 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       })
       .catch(() => {})
   }
-  // verified-carrier memos for the runtime's life: identical carrier bytes on
-  // the next poll skip SPV/parse/signature (lanes) and admit+decrypt (box);
-  // only positives are cached — a failed check always retries
-  const laneCache =
-    lanes === undefined ? undefined : new lanes.mod.VerifiedCache<{ txid: string; payload: import('@nektar/bstack').MarketPayload; lockingKey: string }>()
-  const boxCache = lanes === undefined ? undefined : new lanes.mod.VerifiedCache<import('@nektar/bstack').BoxItem & { expires: number }>()
   // bfinger packs store: packs describeShard PUTs to bstore also commit as
   // kind-5 sub-records under our identity; the finger record's refs then
   // resolve the whole pack set — no /.well-known dependency for readers
@@ -254,74 +129,52 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     })
     mem.attachPacksStore(packsStore)
   }
-  // bfinger counterparty resolution: an agent publishes {hosts, office, stream,
-  // nets} signed under its identity; a counterparty resolves it lazily on the
-  // first send and unions the record's hosts over its own configured set.
-  // Positive resolutions cache 10 min, negatives 1 min. Resolved hosts are
-  // accepted only when the record names this network, and screened through
-  // fingerHostAllowed — https only off regtest/local rigs and never loopback,
-  // private or link-local literals (the SSRF guard for dynamic hosts).
   // identity records may name http and loopback/private hosts on the test
   // lanes, and anywhere the operator runs its own hosts and says so
   const localNet = cfg.network === 'regtest' || cfg.localHosts === true
-  const fingerCache = new Map<string, { at: number; rec?: { hosts: string[]; office: string; stream: string; watch?: string } }>()
-  const resolveRecord = async (pub: string, fresh = false): Promise<{ hosts: string[]; office: string; stream: string; watch?: string } | undefined> => {
-    if (lanes === undefined) return undefined
-    const t = cfg.now?.() ?? Date.now()
-    const c = fingerCache.get(pub)
-    // fresh callers (ack retries on deferred envelopes) bypass a cached miss —
-    // a stale negative entry would otherwise strand receipts for a minute
-    if (c !== undefined && t - c.at < (c.rec === undefined ? (fresh ? 0 : 60_000) : 600_000)) return c.rec
-    let rec: { hosts: string[]; office: string; stream: string; watch?: string } | undefined
-    try {
-      const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: mem.sdkTracker(), allowHttp: localNet, now: cfg.now, timeoutMs: 5_000 })
-      if (r !== undefined && (r.body.nets.length === 0 || r.body.nets.includes(cfg.network))) {
-        const hosts = r.body.hosts.filter((u) => lanes.mod.fingerHostAllowed(u, { allowHttp: localNet, allowLocal: localNet })).slice(0, 8)
-        rec = { hosts, office: r.body.office, stream: r.body.stream, watch: r.body.watch }
-      }
-    } catch {
-      /* no record (or no host serves one) — the configured set is the fallback */
-    }
-    fingerCache.set(pub, { at: t, rec })
-    // event-driven deferred acks: an envelope deferred on an unresolved
-    // sender record receipt-waits the next ack pass — the resolution IS the
-    // event it was waiting on, so fire the pass now instead of on the tick
-    if (rec !== undefined && deferredAcks.some((d) => d.from === pub)) void msgs?.ack?.().catch(() => undefined)
-    return rec
-  }
-  const hostsFor = async (pub: string): Promise<string[]> => [...new Set([...marketHosts, ...((await resolveRecord(pub))?.hosts ?? [])])]
-  // a counterparty's advertised watch shim: POST {service,query} → the shim
-  // wakes their long-polls early. Best-effort only — the shim re-verifies
-  // real state and our own polling covers a miss, so it's fire-and-forget
-  const notifyPeer = (rec: { watch?: string } | undefined, service: string, query?: unknown): void => {
-    if (rec?.watch === undefined) return
-    fetch(`${rec.watch.replace(/\/+$/, '')}/notify`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(query === undefined ? { service } : { service, query }),
-      signal: AbortSignal.timeout(2_000)
-    }).catch(() => undefined)
-  }
+  const me = key.toPublicKey().toString()
   // every fan-out leg becomes a per-host repair row via trackFanout — see
   // the module-level doc; the io seam is just the store's own outbox
   const fanoutIo = {
     enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => store.enqueue(o, opts),
     ackOutbox: (id: string) => store.ackOutbox(id)
   }
-  // a proven funding tree queues one republish row per journaled carrier it
-  // anchors — each row's transport call attaches the BUMP, re-submits and
-  // re-journals, so a dead host retries that leg alone instead of the whole
-  // tree's fan-out
-  const queueRepublish = async (treeTxid: string): Promise<void> => {
-    for (const row of (await lanes?.journal.fundedBy?.(treeTxid)) ?? [])
-      await store.enqueue({
-        actionId: `reprove:${treeTxid}:${row.hash}`,
-        operationId: 'lanes',
-        kind: 'republish-proved',
-        destination: 'hosts',
-        payload: { treeTxid, hash: row.hash }
-      })
-  }
+  // the shared context the regions meet through — door fields (resolveRecord,
+  // poll, upkeep, ...) are assigned by the region openers and the deal loop
+  // below; every call site reaches them lazily, so nothing can invoke a door
+  // before assembly finishes
+  const rt = {
+    cfg,
+    mem,
+    kx,
+    kxLanes,
+    store,
+    key,
+    wallet,
+    objectStore,
+    marketHosts,
+    log,
+    lanes,
+    logStream,
+    logState,
+    fingerState,
+    packsStore,
+    localNet,
+    me,
+    fanoutIo,
+    stopped: false,
+    inflight: new Set<Promise<void>>(),
+    downNow,
+    hotUntil: 0,
+    busy: false,
+    upkeepAt: 0,
+    acking: false,
+    pumping: false,
+    pumpAgain: false,
+    watchBases: (cfg.watchHosts ?? []).map((u) => u.replace(/\/+$/, '')),
+    watches: new Map<string, AbortController>()
+  } as unknown as Rt
+  openLanes(rt)
   const transport: MarketTransport = {
     publishWant: async (sw: SignedWant) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -340,7 +193,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
       // the offer goes where the BUYER's record says it keeps its artifacts —
       // this is also the seller's lazy resolution of the buyer
-      const hosts = so.offer.buyerPub !== undefined ? await hostsFor(so.offer.buyerPub) : marketHosts
+      const hosts = so.offer.buyerPub !== undefined ? await rt.hostsFor(so.offer.buyerPub) : marketHosts
       const r = await lanes.mod.publishArtifact({
         key,
         wallet,
@@ -353,11 +206,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       await trackFanout(r, fanoutIo)
       // the buyer's watch shim (if it advertises one) gets a wake hint — the
       // offer publish is only visible to its polls once they re-check anyway
-      if (so.offer.buyerPub !== undefined) notifyPeer(await resolveRecord(so.offer.buyerPub), 'ls_nektar')
+      if (so.offer.buyerPub !== undefined) rt.notifyPeer(await rt.resolveRecord(so.offer.buyerPub), 'ls_nektar')
     },
-    send: async (to: string, msg: MarketMessage) => {
-      if (msgs === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
-      await msgs.send(to, msg)
+    send: async (to: string, msg: import('./market.js').MarketMessage) => {
+      if (rt.msgs === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
+      await rt.msgs.send(to, msg)
     },
     repair: async (host: string, journalKey: string) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -413,400 +266,35 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     opts: { ...cfg.opts, ...(cfg.minCollectMs !== undefined ? { minCollectMs: cfg.minCollectMs } : {}) },
     logStream
   })
-  const me = key.toPublicKey().toString()
-  const withheldSeen = new Set<string>()
-  // a host's recovery frees every transport-deferred outbox item — the
-  // backoff was waiting on reachability, not delivery logic, so pull it
-  // forward instead of waiting it out. One helper: the watchdog's recovery
-  // branch and laneNotes take the same path
-  const hostBack = async (h: string): Promise<void> => {
-    downNow.delete(h)
-    log(`automation: host back ${h}`)
-    const n = await store.unblockOutbox('transport')
-    if (n > 0) log(`automation: outbox unblocked ×${n} (transport)`)
-  }
-  const laneNotes = (r: { withheld: Array<{ host: string; txid: string }>; unreachable: string[] }, answered: string[]): void => {
-    for (const w of r.withheld) {
-      const k2 = `${w.host}:${w.txid}`
-      if (!withheldSeen.has(k2)) {
-        withheldSeen.add(k2)
-        log(`automation: withheld ${w.host} ${w.txid}`)
-      }
-    }
-    for (const h of r.unreachable)
-      if (!downNow.has(h)) {
-        downNow.add(h)
-        log(`automation: unreachable ${h}`)
-      }
-    // "back" means THIS READ got an answer — a quorum-short read that skipped
-    // a host says nothing about it, so it stays down until a read reaches it
-    for (const h of [...downNow]) if (answered.includes(h)) void hostBack(h)
-  }
-  let pendingAcks: Array<{
-    txid: string
-    commitment: string
-    from: string
-    msg: MarketMessage | undefined
-    refs?: import('@nektar/bstack').BoxRef[]
-    created: number
-  }> = []
-  // envelopes pushed for ack whose sender's finger record hadn't resolved —
-  // they leave pendingAcks once our own hosts drop their copy, but the copies
-  // fanned out to the sender's hosts still need a receipt, so they retry here
-  // until the record resolves (bounded, same window as the delivered rule)
-  let deferredAcks: Array<{ txid: string; commitment: string; from: string; until: number }> = []
-  let lastAckSkipped = -1
-  const msgs =
-    cfg.messages ??
-    (lanes === undefined
-      ? undefined
-      : {
-          send: async (to: string, msg: MarketMessage, refs?: import('@nektar/bstack').BoxRef[]): Promise<void> => {
-            try {
-              // recovery notes live as long as a deal can — everything else 24h
-              const ttl = (msg as { type?: string }).type === 'note' || (msg as { type?: string }).type === 'sellerNote' ? 7 * 86400 : 86400
-              // the envelope rides the RECIPIENT's office and hosts (its finger
-              // record) — reading stays on our own office, configured set included
-              const rec = await resolveRecord(to)
-              const office = rec?.office ?? cfg.boxOffice
-              const r = await lanes.mod.sendBox({
-                key,
-                wallet,
-                ledger: lanes.ledger,
-                journal: lanes.journal,
-                hosts: rec === undefined ? marketHosts : await hostsFor(to),
-                office,
-                to,
-                body: { market: msg },
-                refs,
-                expiresAt: Math.floor(Date.now() / 1000) + ttl
-              })
-              await trackFanout(r, fanoutIo)
-              // wake the recipient's box watch with the exact query their
-              // shim holds — ls_bbox {office,to} is the subscription's shape
-              notifyPeer(rec, 'ls_bbox', { office: office ?? lanes.mod.officeFor(), to })
-            } catch (e) {
-              log(`automation: box: ${(e as Error).message}`)
-              throw e
-            }
-          },
-          collect: async (): Promise<Array<{ from: string; msg: MarketMessage; refs?: import('@nektar/bstack').BoxRef[] }>> => {
-            try {
-              const tracker = mem.sdkTracker()
-              const listAcks = (items: Awaited<ReturnType<typeof lanes.mod.readBox>>['items']) =>
-                items.map((i) => ({
-                  txid: i.txid,
-                  commitment: i.commitment,
-                  from: i.from,
-                  msg: (i.body as { market?: MarketMessage }).market,
-                  refs: i.refs,
-                  created: i.created
-                }))
-              // quorum-1 read first: envelopes are content-addressed, so the
-              // fastest host's answer delivers the items — a single slow or
-              // dead host no longer gates message delivery by its timeout.
-              // The full fan-out runs right behind it for completeness: an
-              // envelope a missed submit left off that host still arrives
-              // this cycle, and withheld/unreachable bookkeeping stays whole.
-              const r =
-                marketHosts.length > 1
-                  ? await (async () => {
-                      const fast = await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, quorum: 1, cache: boxCache })
-                      void lanes.mod
-                        .readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, cache: boxCache })
-                        .then((full) => {
-                          laneNotes(full, full.answered)
-                          pendingAcks = listAcks(full.items)
-                        })
-                        .catch(() => undefined)
-                      return fast
-                    })()
-                  : await lanes.mod.readBox({ key, hosts: marketHosts, office: cfg.boxOffice, tracker, wallet, cache: boxCache })
-              laneNotes(r, r.answered)
-              pendingAcks = listAcks(r.items)
-              // self-notes restore lost operations — ingest them before any other message in the batch
-              const selfNote = (p: { from: string; msg?: MarketMessage }) => p.from === me && (p.msg?.type === 'note' || p.msg?.type === 'sellerNote')
-              pendingAcks.sort((a, b) => Number(selfNote(b)) - Number(selfNote(a)))
-              const out: Array<{ from: string; msg: MarketMessage; refs?: import('@nektar/bstack').BoxRef[] }> = []
-              for (const p of pendingAcks) if (p.msg !== undefined && typeof p.msg === 'object') out.push({ from: p.from, msg: p.msg, refs: p.refs })
-              return out
-            } catch (e) {
-              log(`automation: box: ${(e as Error).message}`)
-              return []
-            }
-          },
-          ack: async (): Promise<void> => {
-            const items: Array<{ txid: string; commitment: string; from: string }> = []
-            const held: typeof pendingAcks = []
-            for (const p of pendingAcks) {
-              // a recovery note from our own key stays listed until its deal is over
-              if (
-                p.from === me &&
-                p.msg?.type === 'note' &&
-                typeof (p.msg as { wantId?: unknown }).wantId === 'string' &&
-                !(await engine.noteSettled((p.msg as { wantId: string }).wantId))
-              ) {
-                held.push(p)
-                continue
-              }
-              if (
-                p.from === me &&
-                p.msg?.type === 'sellerNote' &&
-                typeof (p.msg as { offerId?: unknown }).offerId === 'string' &&
-                !(await engine.noteSettled((p.msg as { offerId: string }).offerId, 'seller'))
-              ) {
-                held.push(p)
-                continue
-              }
-              // `accept` funds a quoted sale — keep the envelope until the
-              // sellerNote settles so a database loss after processing does
-              // not leave the rebuilt 'quoted' sale with nothing to ingest;
-              // junk with no matching sale is released once it is old
-              if (p.msg?.type === 'accept' && typeof (p.msg as { offerId?: unknown }).offerId === 'string') {
-                const offerId = (p.msg as { offerId: string }).offerId
-                if (!(await engine.noteSettled(offerId, 'seller')) && ((await engine.hasSale(offerId)) || Date.now() / 1000 - p.created < 600)) {
-                  held.push(p)
-                  continue
-                }
-              }
-              // `delivered` is ingested to the inbox but processed on the next tick —
-              // keep the envelope until the purchase settles so a database loss in
-              // between does not lose the disclosure; junk with no matching purchase
-              // is released once it is older than ten minutes
-              if (p.msg?.type === 'delivered' && typeof (p.msg as { wantId?: unknown }).wantId === 'string') {
-                const wantId = (p.msg as { wantId: string }).wantId
-                if (!(await engine.noteSettled(wantId)) && ((await engine.hasPurchase(wantId)) || Date.now() / 1000 - p.created < 600)) {
-                  held.push(p)
-                  continue
-                }
-              }
-              items.push({ txid: p.txid, commitment: p.commitment, from: p.from })
-            }
-            pendingAcks = held
-            // re-merge still-valid deferred items — they retry until their
-            // sender's record resolves (or their window lapses)
-            const now = Math.floor(Date.now() / 1000)
-            deferredAcks = deferredAcks.filter((d) => d.until > now)
-            for (const d of deferredAcks) {
-              if (!items.some((i) => i.txid === d.txid && i.commitment === d.commitment)) items.push(d)
-            }
-            if (items.length === 0) return
-            try {
-              // senders fan envelopes out to their own hosts ∪ our record's hosts —
-              // the receipt has to reach every copy, not only the ones we read.
-              // A sender whose record hasn't resolved yet only narrows this pass's
-              // host set — its envelopes are re-deferred so a later pass receipts
-              // the copies we never read instead of stranding them.
-              const ackHosts = new Set(marketHosts)
-              const priorUntil = new Map(deferredAcks.map((d) => [`${d.txid}:${d.commitment}`, d.until]))
-              const retriedFrom = new Set(deferredAcks.map((d) => d.from))
-              const retry: typeof deferredAcks = []
-              for (const f of [...new Set(items.map((i) => i.from).filter((f) => f !== me))]) {
-                const rec = await resolveRecord(f, retriedFrom.has(f)).catch(() => undefined)
-                if (rec !== undefined) {
-                  for (const h of rec.hosts) ackHosts.add(h)
-                  continue
-                }
-                for (const i of items)
-                  if (i.from === f)
-                    retry.push({ txid: i.txid, commitment: i.commitment, from: i.from, until: priorUntil.get(`${i.txid}:${i.commitment}`) ?? now + 600 })
-              }
-              deferredAcks = retry
-              const r = await lanes.mod.ackBox({
-                key,
-                wallet,
-                ledger: lanes.ledger,
-                journal: lanes.journal,
-                hosts: [...ackHosts],
-                office: cfg.boxOffice,
-                items
-              })
-              if (r.skipped > 0 && r.skipped !== lastAckSkipped) {
-                lastAckSkipped = r.skipped
-                log(`automation: box ack: ${r.skipped} envelope(s) skipped — no bbox funding slot`)
-              }
-            } catch (e) {
-              pendingAcks = pendingAcks.concat(requeueAckItems(items))
-              log(`automation: box ack: ${(e as Error).message}`)
-            }
-          }
-        })
-  // items a previous pass's background full read delivered after the fast
-  // quorum-1 answer — drained at the top of the next pass so a slow host's
-  // exclusive items still arrive without ever gating this pass on it
-  const pendingLane = new Map<string, Array<{ seq: string; kind: 'want' | 'offer'; payload: unknown }>>()
-  const lanePoll = async (): Promise<void> => {
-    const { readWants, readOffers } = lanes!.mod
-    const watch = await engine.watchList()
-    const tracker = mem.sdkTracker()
-    const net = cfg.network
-    const timeoutMs = cfg.laneReadTimeoutMs ?? 5_000
-    // two-tier read, same shape as the inbox collect: quorum-1 returns the
-    // fastest host's view so one slow host never gates the deal; the full
-    // fan-out lands behind it for withheld/unreachable bookkeeping and for
-    // items that only exist on the slow copy (merged next pass — store.ingest
-    // dedups by seq so double-delivery is free)
-    type ReadOpts = { timeoutMs: number; quorum?: number }
-    const subs = [
-      ...watch.sellerDomains.map((domain) => ({
-        tag: `lane:${net}:${domain}`,
-        kind: 'want' as const,
-        call: (o: ReadOpts) => readWants(marketHosts, { net, domain }, { tracker, net, now: cfg.now?.(), cache: laneCache, ...o })
-      })),
-      ...watch.collecting.map((c) => ({
-        tag: `offers:${c.wantId}`,
-        kind: 'offer' as const,
-        call: (o: ReadOpts) => readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: me }, { tracker, net, now: cfg.now?.(), cache: laneCache, ...o })
-      }))
-    ]
-    // every lane read is independent — run them together, bounded, instead
-    // of serially pricing the pass at the sum of all host latencies
-    await Promise.all(
-      subs.map(async (s) => {
-        const staged = pendingLane.get(s.tag) ?? []
-        pendingLane.delete(s.tag)
-        const toEvents = (items: { txid: string; payload: { body: unknown } }[]) => [
-          ...staged.splice(0),
-          ...items.map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))
-        ]
-        if (marketHosts.length > 1) {
-          const fast = await s.call({ timeoutMs, quorum: 1 })
-          void s
-            .call({ timeoutMs })
-            .then((full) => {
-              laneNotes(full, Object.keys(full.perHost))
-              const rest = full.items.map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))
-              if (rest.length > 0) pendingLane.set(s.tag, [...(pendingLane.get(s.tag) ?? []), ...rest])
-            })
-            .catch(() => undefined)
-          const events = toEvents(fast.items as never)
-          if (events.length > 0) {
-            hotUntil = Date.now() + 5_000
-            await engine.ingestEvents(s.tag, events, '')
-          }
-        } else {
-          const r = await s.call({ timeoutMs })
-          laneNotes(r, Object.keys(r.perHost))
-          const events = toEvents(r.items as never)
-          if (events.length > 0) {
-            hotUntil = Date.now() + 5_000
-            await engine.ingestEvents(s.tag, events, '')
-          }
-        }
-      })
-    )
-  }
-  const poll = async (): Promise<void> => {
-    // discovery reads and the inbox are independent — a stalled lane lookup
-    // must not delay message collection, and receipts are pushed by the deal
-    // loop after the tick, never before it
-    await Promise.all([
-      lanes !== undefined ? lanePoll().catch((e) => log(`automation: lanes: ${(e as Error).message}`)) : Promise.resolve(),
-      msgs !== undefined
-        ? (async () => {
-            try {
-              const collected = await msgs.collect()
-              if (collected.length > 0) hotUntil = Date.now() + 5_000
-              for (const m of collected) await engine.ingestMessage(m.from, m.msg, m.refs)
-            } catch (e) {
-              log(`automation: messages: ${(e as Error).message}`)
-            }
-          })()
-        : Promise.resolve()
-    ])
-  }
-  let busy = false
+  rt.engine = engine
+  openOutbox(rt)
+  openUpkeep(rt)
+  openWatches(rt)
   let again = false
   let running: Promise<void> | undefined
-  // A4 — adaptive floor: any inbound activity (lane events, inbox messages,
-  // a watch-shim wake) keeps the loop hot for 5s — mid-deal polls run at
-  // the fast cadence; silence falls back to intervalMs.
-  let hotUntil = 0
-  // envelope receipts ride the journaled ack path — submitted AFTER the
-  // engine's tick under their own busy guard, so a slow or dead host can
-  // never delay the processing of messages that just arrived
-  let acking = false
-  const pushAcks = (): void => {
-    if (acking || stopped || msgs?.ack === undefined) return
-    acking = true
-    void msgs
-      .ack()
-      .catch((e) => log(`automation: box ack: ${(e as Error).message}`))
-      .finally(() => {
-        acking = false
-      })
-  }
-  // outbox delivery is detached under its own busy guard — the store's
-  // outboxReady hook wakes it on every enqueue (so a want/accept/message
-  // hits the wire mid-tick, not at the next one), a next_at timer covers
-  // deferred rows exactly, and the end-of-tick poke is the correctness
-  // floor. Deliveries never touch op state — safe off the engine mutex.
-  let pumping = false
-  let pumpAgain = false
-  let pumpDone: Promise<void> | undefined
-  let outboxTimer: ReturnType<typeof setTimeout> | undefined
-  const armOutboxTimer = async (): Promise<void> => {
-    if (stopped) return
-    try {
-      const nextAt = await store.nextOutboxAt()
-      if (nextAt === undefined || stopped) return
-      clearTimeout(outboxTimer)
-      outboxTimer = setTimeout(
-        () => {
-          outboxTimer = undefined
-          pumpOutbox()
-        },
-        Math.max(0, nextAt - Date.now())
-      )
-      outboxTimer.unref()
-    } catch {
-      /* the deals-pass floor covers a missed arm */
-    }
-  }
-  const pumpOutbox = (): void => {
-    if (stopped) return
-    if (pumping) {
-      pumpAgain = true
-      return
-    }
-    pumping = true
-    pumpDone = engine
-      .pumpOutbox()
-      .catch((e) => log(`automation: outbox pump: ${(e as Error).message}`))
-      .finally(() => {
-        pumping = false
-        if (pumpAgain) {
-          pumpAgain = false
-          pumpOutbox()
-          return
-        }
-        void armOutboxTimer()
-      })
-  }
-  store.outboxReady = () => pumpOutbox()
   // Two loops. The deal loop reads the hosts and advances operations; it
   // does nothing else, so a deal never queues behind housekeeping. Upkeep
   // (funding trees, the identity record, the journal, evidence) runs beside
   // it under its own guard.
   const deals = async (): Promise<void> => {
-    if (busy) {
+    if (rt.busy) {
       again = true
       await running
       return
     }
-    busy = true
+    rt.busy = true
     const run = (async () => {
       try {
         do {
           again = false
           try {
-            await poll()
+            await rt.poll()
             await engine.tick()
-            pushAcks()
+            rt.pushAcks()
             // join the detached drain before ending the pass — a pass isn't
             // complete while a delivery is in flight (cycle() semantics in
             // tests: one call = all queued work attempted)
-            await pumpDone
+            await rt.pumpDone
             // a live deal keeps the loop hot — the 5s inbound window alone
             // would let a deal cool to idle cadence between hops. A settled
             // proof awaiting depth only waits on BLOCKS, so it is excluded —
@@ -815,378 +303,29 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
               (await store.operations({ notStates: TERMINAL })).filter((o) => o.state !== 'completion_submitted' || o.data.provenHeight === undefined).length >
               0
             )
-              hotUntil = Date.now() + 5_000
+              rt.hotUntil = Date.now() + 5_000
             // new lanes appear as deals start — re-derive watch subs at the
             // end of a pass so a fresh want is subscribed within one cycle
-            if (watchBases.length > 0) void refreshWatches().catch(() => undefined)
+            if (rt.watchBases.length > 0) void rt.refreshWatches().catch(() => undefined)
           } catch (e) {
             log(`automation: ${(e as Error).message}`)
           }
-        } while (again && !stopped)
+        } while (again && !rt.stopped)
       } finally {
-        busy = false
-        if (again && !stopped) void deals()
+        rt.busy = false
+        if (again && !rt.stopped) void deals()
       }
     })()
     running = run
     await run
   }
-  let upkeepRun: Promise<void> | undefined
-  let upkeepAt = 0
-  const upkeep = async (): Promise<void> => {
-    if (upkeepRun !== undefined) return await upkeepRun
-    upkeepAt = Date.now()
-    upkeepRun = runUpkeep().finally(() => {
-      upkeepRun = undefined
-    })
-    await upkeepRun
-  }
+  rt.deals = deals
   /** one full pass: deals, then upkeep — what tests and push events drive */
   const cycle = async (): Promise<void> => {
     await deals()
-    if (!stopped) await upkeep()
+    if (!rt.stopped) await rt.upkeep()
   }
-  // dead-mint cleanup — a reaped mint never landed: its outputs tombstone
-  // and its inputs return to the spendable pool (a truly-spent one is
-  // re-caught by the take-time spend check)
-  const ghostMint = (tree: import('@bsv/sdk').Transaction): void => {
-    void mem.funds.died(tree)
-  }
-  // stuck-mint healing — a mint the chain observer can't see ('unknown') gets
-  // one resubmit per age window; only a definitive refusal counts toward the
-  // drop verdict — a dead endpoint must never reap a healthy mint.
-  // txFacts is throttled: ChainEvents polls these txids on its own watch
-  // floor and delivers rejections/proofs itself — this second read is only
-  // the mint-gate's heal/reap input, so a short cache loses no signal
-  const statusCache = new Map<string, { at: number; f: import('@nektar/chain').TxFacts }>()
-  const facts = async (txid: string): Promise<import('@nektar/chain').TxFacts> => {
-    const c = statusCache.get(txid)
-    if (c !== undefined && Date.now() - c.at < 15_000) return c.f
-    if (statusCache.size > 4096) statusCache.clear()
-    const f = await mem.txFacts(txid)
-    statusCache.set(txid, { at: Date.now(), f })
-    return f
-  }
-  const stuckMints = new Map<string, { first: number; tries: number }>()
-  const stuckMint = async (tree: import('@bsv/sdk').Transaction): Promise<'keep' | 'drop'> => {
-    const tid = tree.id('hex')
-    const now = Date.now()
-    if (stuckMints.size > 4096) stuckMints.clear()
-    const s = stuckMints.get(tid) ?? { first: now, tries: 0 }
-    stuckMints.set(tid, s)
-    if (now - s.first < 10 * 60_000) return 'keep'
-    const r = await mem.broadcastTx(tree).catch((e: unknown) => ({ status: 'error' as const, description: e instanceof Error ? e.message : String(e) }))
-    s.first = now // one heal attempt per window
-    if (r.status === 'success') {
-      s.tries = 0
-      return 'keep'
-    }
-    if (!BROADCAST_DEFINITIVE.test(r.description ?? '')) return 'keep'
-    s.tries++
-    return s.tries >= 2 ? 'drop' : 'keep'
-  }
-  // per-lane funding shape — the same table provisions stock:
-  // every lane-locked output of the funding tx is a slot
-  const laneSpec = async (kind: string): Promise<{ lock: import('@bsv/sdk').LockingScript | undefined; satsPerOutput: number; size: number }> => {
-    const mod = lanes?.mod
-    return {
-      lock:
-        mod === undefined
-          ? undefined
-          : kind === 'bbox'
-            ? await mod.boxFundingLock(key, wallet)
-            : kind === 'log'
-              ? await mod.logFundingLock(key, wallet)
-              : kind === 'finger'
-                ? await mod.fingerFundingLock(key, wallet)
-                : await mod.marketFundingLock(wallet),
-      satsPerOutput: kind === 'log' || kind === 'finger' ? 100 : 1,
-      size: kind === 'finger' ? 4 : (cfg.treeSize ?? 64)
-    }
-  }
-
-  const runUpkeep = async (): Promise<void> => {
-    try {
-      if (lanes !== undefined) {
-        try {
-          for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger'] as const) {
-            const spec = await laneSpec(kind)
-            const r = await lanes.mod.ensureTrees({
-              key,
-              wallet,
-              ledger: lanes.ledger,
-              kind,
-              // every lane refills a whole tree ahead: with the proof now
-              // travelling on the FundingOut, an anchored tree serves the
-              // market lane at once, and proven stock is already there when
-              // the vendored-codec lanes (which demand the tree's own mined
-              // path) need it
-              lowWater: kind === 'finger' ? 2 : (cfg.treeLowWater ?? cfg.treeSize ?? 64),
-              maxUnproven: cfg.treeMaxUnproven ?? 2,
-              size: spec.size,
-              satsPerOutput: spec.satsPerOutput,
-              lock: kind === 'market' ? undefined : spec.lock,
-              takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],
-              broadcast: (tx) => mem.broadcastTx(tx),
-              fetchTx: (txid) => mem.fetchTx(txid),
-              facts,
-              onReject: (tree) => ghostMint(tree),
-              onStuck: (tree) => stuckMint(tree),
-              onSpent: (tree) => void mem.funds.spent(tree)
-            })
-            // a fresh market tree's slots are usable the moment it's added —
-            // anchored ancestry — so wake slot-deferred work now instead of
-            // letting the defer window lapse
-            if (r.minted !== undefined && kind === 'market') await store.unblockOutbox('funding-slot')
-            // a proven log tree's BEEF must reach tm_log before hosts can
-            // admit carriers spending it - journaled, publishes once
-            for (const txid of r.proven) {
-              const tx = await mem.fetchTx(txid)
-              if (tx !== undefined && logStream !== undefined)
-                await lanes.mod.publishMinedLog({ journal: lanes.journal, hosts: marketHosts, stream: logStream, tx })
-              // carriers minted on this tree while it was unproven carry a
-              // host-side eviction deadline that never clears on its own —
-              // queue a per-row re-announce with the parent's BUMP attached
-              if (kind === 'market' && tx?.merklePath !== undefined) await queueRepublish(txid)
-            }
-          }
-        } catch (e) {
-          log(`automation: ensureTrees: ${(e as Error).message}`)
-        }
-      }
-      // own bfinger record: (re)publishes on the current host list, no-ops
-      // when nothing changed, resubmits to any host that missed the objects.
-      // B1 — opt-in only: it costs sats and makes this agent publicly
-      // discoverable, so it is never automatic (NEKTAR_BFINGER_PUBLISH=1).
-      if (lanes !== undefined && fingerState !== undefined && logStream !== undefined && cfg.publishFinger === true) {
-        try {
-          const packsRef = packsStore?.ref()
-          const r = await lanes.mod.publishFinger({
-            key,
-            wallet,
-            state: fingerState,
-            ledger: lanes.ledger,
-            journal: lanes.journal,
-            hosts: marketHosts,
-            body: {
-              v: 1,
-              hosts: marketHosts,
-              office: cfg.boxOffice ?? lanes.mod.officeFor(),
-              stream: logStream,
-              nets: [cfg.network],
-              ...(cfg.watchPublic !== undefined ? { watch: cfg.watchPublic } : {})
-            },
-            refs: packsRef !== undefined ? [packsRef] : undefined,
-            takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],
-            broadcast: (tx) => mem.broadcastTx(tx),
-            fetchTx: (txid) => mem.fetchTx(txid),
-            allowHttp: localNet,
-            now: cfg.now,
-            onSpent: (tx) => void mem.funds.spent(tx)
-          })
-          if (r.changed) log(`automation: finger seq ${r.seq} ${r.tokenTxid ?? ''}`)
-        } catch (e) {
-          // 'no funding slot' is transient while the finger tree matures — retried next cycle, not worth a line
-          if (!(e as Error).message.includes('no funding slot')) {
-            const m = `automation: finger: ${(e as Error).message.slice(0, 160)}`
-            if (m !== fingerError) {
-              fingerError = m
-              log(m)
-            }
-          }
-        }
-      }
-      await storeEvidence()
-      await appendLogEvents()
-    } catch (e) {
-      log(`automation: ${(e as Error).message}`)
-    }
-  }
-  // bstore evidence: once a buyer op verifies the disclosure, the redacted
-  // bundle (question + disclosure tx out, digests in) goes to the object
-  // store under a deterministic key, and a same-state 'evidence_stored'
-  // transition commits the {bucket,key,sha256,size} ref into the op — the
-  // blogs journal then anchors the ref's digest. Deterministic bytes + key
-  // make a crash-and-retry idempotent: same put, exactly one event. A store
-  // failure is logged once per distinct message and retried next cycle; it
-  // never blocks the deal. Sellers store nothing (the buyer's bundle is the
-  // record).
-  let evidenceError = ''
-  const storeEvidence = async (): Promise<void> => {
-    if (objectStore === undefined) return
-    const { collectTradeEvidence, redactTradeEvidence } = await import('./evidence.js')
-    for (const op of await store.operations({ role: 'buyer', states: ['disclosure_verified', 'useful'] })) {
-      if (op.data.evidenceRef !== undefined) continue
-      try {
-        const bundle = redactTradeEvidence(await collectTradeEvidence(store, op, (txid) => mem.fetchTx(txid)))
-        const bytes = new TextEncoder().encode(JSON.stringify(bundle))
-        const key = `evidence/${cfg.network}/${op.operationId}.json`
-        const digest = Buffer.from(await crypto.subtle.digest('SHA-256', bytes)).toString('hex')
-        const head = await objectStore.head(key).catch(() => undefined)
-        const ref: import('@nektar/store').ObjectRef =
-          head?.sha256 === digest ? { bucket: objectStore.bucket, key, sha256: digest, size: head.size } : await objectStore.put(key, bytes, 'application/json')
-        try {
-          // content-addressed like packs: chirp://<root> resolves the bundle
-          // from any store holding chirp/<hash> objects, not just our bucket.
-          // A retry after a crash only republishes when the root object is
-          // actually missing — same keys otherwise, so head-before-put keeps
-          // the crash-and-retry idempotent instead of counting second puts
-          const { chirpRefFor, storeChirp } = await import('@nektar/store')
-          const c = chirpRefFor(bytes)
-          if ((await objectStore.head(c.rootKey).catch(() => undefined)) === undefined) await storeChirp(objectStore, bytes)
-          ref.chirp = c.url
-          ref.endpoint = objectStore.endpoint
-        } catch {
-          /* chirp publish is best-effort — the keyed ref alone still resolves */
-        }
-        const cur = await store.operation(op.operationId)
-        if (cur === undefined || cur.data.evidenceRef !== undefined) continue
-        await store.transition(op.operationId, cur.revision, cur.state, { cause: 'evidence_stored', data: { evidenceRef: ref }, evidence: { ref } })
-        evidenceError = ''
-      } catch (e) {
-        const m = `automation: evidence ${op.operationId}: ${(e as Error).message.slice(0, 160)}`
-        if (m !== evidenceError) {
-          evidenceError = m
-          log(m)
-        }
-      }
-    }
-  }
-  // blogs deal journal: every market event becomes one line in one batch
-  const EV_CURSOR = 'log#events'
-  let logError = ''
-  let fingerError = ''
-  const wantIdOf = (op: { data: Record<string, unknown> }): string | null => (op.data.want as SignedWant | undefined)?.want?.wantId ?? null
-  const appendLogEvents = async (): Promise<void> => {
-    if (lanes === undefined || logState === undefined || logStream === undefined) return
-    const cursor = (await logState.get(EV_CURSOR))?.seq ?? 0
-    const rows = await store.eventsAfter(cursor, 500)
-    if (rows.length === 0) {
-      await maybeAnchor()
-      return
-    }
-    const { sha256, utf8, toHex } = await import('@nektar/core')
-    const ns = new Map<string, number>()
-    const lines: string[] = []
-    let lastSeq = cursor
-    for (const r of rows) {
-      const op = await store.operation(r.operationId)
-      if (op === undefined) {
-        lastSeq = r.seq
-        continue
-      }
-      const n = (ns.get(op.operationId) ?? (await store.eventCount(op.operationId, cursor))) + 1
-      ns.set(op.operationId, n)
-      const ev = r.evidence === undefined ? null : toHex(Uint8Array.from(sha256(utf8(lanes.mod.marketJson(r.evidence)))))
-      lines.push(JSON.stringify({ v: 1, op: op.operationId, want: wantIdOf(op), role: op.role, n, state: r.to, cause: r.cause, t: r.at, ev }))
-      lastSeq = r.seq
-    }
-    try {
-      if (lines.length > 0)
-        await lanes.mod.appendLog({
-          key,
-          wallet,
-          ledger: lanes.ledger,
-          journal: lanes.journal,
-          state: logState,
-          hosts: marketHosts,
-          stream: logStream,
-          lines,
-          now: cfg.now
-        })
-      // the cursor moves only after the batch reached quorum: a crash between
-      // tick and append replays the same lines on the next cycle, and the
-      // journal keeps the resubmitted carrier identical (same txid, same seq)
-      await logState.set(EV_CURSOR, { seq: lastSeq, prev: '' })
-      logError = ''
-      await maybeAnchor()
-    } catch (e) {
-      const m = (e as Error).message
-      if (m !== logError) {
-        logError = m
-        log(`automation: log append: ${m.slice(0, 200)}`)
-      }
-    }
-  }
-  // anchors never block a cycle: they run on the inflight set like pushed work
-  const maybeAnchor = async (): Promise<void> => {
-    if (lanes === undefined || logState === undefined || logStream === undefined) return
-    const work = (async () => {
-      try {
-        const r = await lanes.mod.anchorLog({
-          key,
-          wallet,
-          ledger: lanes.ledger,
-          journal: lanes.journal,
-          state: logState,
-          hosts: marketHosts,
-          stream: logStream,
-          broadcast: (tx) => mem.broadcastTx(tx),
-          fetchTx: (txid) => mem.fetchTx(txid),
-          now: cfg.now,
-          log: (line) => log(`automation: ${line}`)
-        })
-        if (r !== undefined) log(`automation: log anchor interval ${r.interval} ${r.txid}`)
-      } catch (e) {
-        log(`automation: log anchor: ${(e as Error).message.slice(0, 200)}`)
-      }
-    })()
-    inflight.add(work)
-    void work.finally(() => {
-      inflight.delete(work)
-    })
-  }
-
-  // deal journal view for `deals { operationId }`: own stream head + the
-  // counterparty's stream filtered to this deal. The counterparty's stream
-  // id rides its signed artifact (want.journal / offer.journal).
-  const dealJournal = async (op: import('./store.js').Operation): Promise<Record<string, unknown> | undefined> => {
-    if (lanes === undefined || logState === undefined || logStream === undefined) return undefined
-    const own = { stream: logStream, lastSeq: (await logState.get(logStream))?.seq ?? 0 }
-    const cp =
-      op.role === 'buyer'
-        ? (() => {
-            const sel = (op.data.selected as { key?: string } | undefined)?.key
-            const so = sel !== undefined ? (op.data.offers as Record<string, { so: SignedOffer }> | undefined)?.[sel]?.so : undefined
-            return so?.offer.journal?.stream !== undefined && sel !== undefined ? { stream: so.offer.journal.stream, producer: sel.split(':')[0] } : undefined
-          })()
-        : (() => {
-            const w = op.data.want as SignedWant | undefined
-            return w?.want.journal?.stream !== undefined ? { stream: w.want.journal.stream, producer: w.want.pub } : undefined
-          })()
-    if (cp === undefined) return { own }
-    try {
-      // the counterparty's journal lives on ITS hosts and stream: the finger
-      // record wins over the artifact's journal.stream hint when present
-      const rec = await resolveRecord(cp.producer)
-      const r = await lanes.mod.readLog({
-        hosts: await hostsFor(cp.producer),
-        stream: rec?.stream ?? cp.stream,
-        producer: cp.producer,
-        tracker: mem.sdkTracker()
-      })
-      const wantId = wantIdOf(op)
-      const entries: Array<{ seq: number; n: number; state: string; cause: string; t: number }> = []
-      for (const b of r.batches)
-        for (const l of b.lines) {
-          try {
-            const j = JSON.parse(l) as { want?: string | null; op?: string; n?: number; state?: string; cause?: string; t?: number }
-            if (j.want === wantId && typeof j.n === 'number') entries.push({ seq: b.seq, n: j.n, state: j.state ?? '', cause: j.cause ?? '', t: j.t ?? 0 })
-          } catch {
-            /* not a journal line */
-          }
-        }
-      const base = { stream: cp.stream, producer: cp.producer, gaps: r.gaps, anchoredThrough: r.anchoredThrough, entries }
-      if (entries.length === 0) return { own, counterparty: { ...base, complete: false } }
-      const lo = Math.min(...entries.map((e) => e.seq))
-      const hi = Math.max(...entries.map((e) => e.seq))
-      const complete = !r.gaps.some((g) => g.to >= lo && g.from <= hi) && entries.every((e, i) => e.n === i + 1)
-      return { own, counterparty: { ...base, complete } }
-    } catch (e) {
-      return { own, counterparty: { error: (e as Error).message.slice(0, 200) } }
-    }
-  }
-
+  rt.cycle = cycle
   const upkeepMs = cfg.upkeepMs ?? 10_000
   // A4 — a setTimeout chain, not a fixed interval: while the loop is hot
   // (recent inbound activity) the deals cadence floors at hotMs so an
@@ -1195,10 +334,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   const hotMs = cfg.hotMs ?? 250
   let timer: ReturnType<typeof setTimeout> | undefined
   const tick = (): void => {
-    if (stopped) return
+    if (rt.stopped) return
     void deals()
-    if (Date.now() - upkeepAt >= upkeepMs) void upkeep().catch(() => {})
-    timer = setTimeout(tick, Date.now() < hotUntil ? Math.min(hotMs, idleMs) : idleMs)
+    if (Date.now() - rt.upkeepAt >= upkeepMs) void rt.upkeep().catch(() => {})
+    timer = setTimeout(tick, Date.now() < rt.hotUntil ? Math.min(hotMs, idleMs) : idleMs)
     timer.unref()
   }
   if (cfg.intervalMs !== 0) {
@@ -1226,119 +365,32 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
                   downNow.add(h)
                   log(`automation: watchdog: host down ${h}`)
                 }
-              for (const h of [...downNow]) if (marketHosts.includes(h) && !r.downHosts.includes(h)) await hostBack(h)
+              for (const h of [...downNow]) if (marketHosts.includes(h) && !r.downHosts.includes(h)) await rt.hostBack(h)
             } catch (e) {
               log(`automation: watchdog: ${(e as Error).message}`)
             }
           })()
-          inflight.add(work)
+          rt.inflight.add(work)
           void work.finally(() => {
-            inflight.delete(work)
+            rt.inflight.delete(work)
           })
         }, watchdogMs)
   watchdog?.unref()
-  let stopped = false
-  const inflight = new Set<Promise<void>>()
-  // A2 — push wake: optional watch-shim endpoints. Each subscription mirrors
-  // a query the poll loop already issues; a changed result-set fires deals()
-  // at once instead of waiting out the poll interval. Every failure mode
-  // (no shim configured, shim down, backend down) degrades to the ordinary
-  // poll path — a wake is only ever a hint, never the load path.
-  const watchBases = (cfg.watchHosts ?? []).map((u) => u.replace(/\/+$/, ''))
-  const watches = new Map<string, AbortController>()
-  const watchOne = async (base: string, service: string, query: unknown, signal: AbortSignal): Promise<void> => {
-    let cursor: string | undefined
-    // jittered backoff on consecutive failures, reset on any answered
-    // request — and the nap ends the moment the watch itself is dropped,
-    // so an aborted subscription never leaves a 30s zombie sleep
-    let backoff = 1_000
-    const nap = (ms: number): Promise<void> =>
-      new Promise((resolve) => {
-        const t = setTimeout(() => {
-          signal.removeEventListener('abort', done)
-          resolve()
-        }, ms)
-        const done = (): void => {
-          clearTimeout(t)
-          resolve()
-        }
-        signal.addEventListener('abort', done, { once: true })
-      })
-    const fail = async (): Promise<void> => {
-      await nap(Math.min(backoff, 30_000) * (0.5 + Math.random()))
-      backoff = Math.min(backoff * 2, 30_000)
-    }
-    while (!stopped && !signal.aborted) {
-      try {
-        const u = `${base}/watch?service=${encodeURIComponent(service)}&query=${encodeURIComponent(JSON.stringify(query))}${cursor !== undefined ? `&cursor=${encodeURIComponent(cursor)}` : ''}&waitMs=25000`
-        // the shim holds up to 25s; a shim that accepts and never answers
-        // must not pin this loop — a timeout is a retry, not an exit
-        const r = await fetch(u, { signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)]) })
-        if (!r.ok) {
-          await fail()
-          continue
-        }
-        const j = (await r.json()) as { changed?: boolean; cursor?: string }
-        cursor = j.cursor ?? cursor
-        backoff = 1_000
-        if (j.changed === true && !stopped) {
-          hotUntil = Date.now() + 5_000
-          void deals().catch((e) => log(`automation: watch: ${(e as Error).message}`))
-        }
-      } catch {
-        if (signal.aborted || stopped) return
-        await fail()
-      }
-    }
-  }
-  const refreshWatches = async (): Promise<void> => {
-    if (watchBases.length === 0 || stopped) return
-    const want = new Map<string, { base: string; service: string; query: unknown }>()
-    try {
-      const w = await engine.watchList()
-      const net = cfg.network
-      for (const domain of w.sellerDomains)
-        for (const base of watchBases) want.set(`${base}|ls_nektar|wants:${domain}`, { base, service: 'ls_nektar', query: { wants: { net, domain } } })
-      for (const c of w.collecting)
-        for (const base of watchBases)
-          want.set(`${base}|ls_nektar|offers:${c.wantId}`, { base, service: 'ls_nektar', query: { offers: { net, wantId: c.wantId, buyerPub: me } } })
-      // office watch only when envelopes ride lanes (cfg.messages bypasses)
-      if (lanes !== undefined && cfg.messages === undefined) {
-        const q = { office: cfg.boxOffice ?? lanes.mod.officeFor(), to: me }
-        for (const base of watchBases) want.set(`${base}|ls_bbox|office`, { base, service: 'ls_bbox', query: q })
-      }
-    } catch {
-      return
-    }
-    for (const [k, ac] of watches)
-      if (!want.has(k)) {
-        ac.abort()
-        watches.delete(k)
-      }
-    for (const [k, w] of want)
-      if (!watches.has(k)) {
-        const ac = new AbortController()
-        watches.set(k, ac)
-        const work = watchOne(w.base, w.service, w.query, ac.signal).catch(() => undefined)
-        inflight.add(work)
-        void work.finally(() => inflight.delete(work))
-      }
-  }
   // watch queries derive from the engine's live watch-list — re-derive on a
   // slow tick plus after every deals pass so new wants appear in ≤1 cycle
-  const watchTimer = watchBases.length === 0 ? undefined : setInterval(() => void refreshWatches().catch(() => undefined), 15_000)
+  const watchTimer = rt.watchBases.length === 0 ? undefined : setInterval(() => void rt.refreshWatches().catch(() => undefined), 15_000)
   watchTimer?.unref()
-  void refreshWatches().catch(() => undefined)
+  void rt.refreshWatches().catch(() => undefined)
   // push-driven progress: a verified tx proof (broadcaster callback or the
   // chain's own mined event) may make a funding tree provable and advance
   // completion_submitted → settled — run a cycle now, not at the next interval
   mem.onTxProof((txid, mp) => {
-    if (stopped) return
+    if (rt.stopped) return
     const work = (async () => {
       try {
         if (lanes !== undefined) {
           const unproven = await lanes.ledger.unproven()
-          if (stopped) return
+          if (rt.stopped) return
           if (unproven.some((u) => u.txid === txid)) {
             await lanes.ledger.markProven(txid, mp)
             // a proven topup frees funding-tree slots — pull any
@@ -1348,7 +400,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // carriers minted on this tree while it was unproven carry a
             // 10-minute host eviction deadline that never clears on its own —
             // queue a per-row re-announce with the parent's BUMP attached
-            await queueRepublish(txid)
+            await rt.queueRepublish(txid)
           } else if (await lanes.ledger.attachParentPath(txid, mp)) {
             // the proof was for a funding parent — stored tree beefs now
             // carry anchored ancestry, so their slots serve immediately
@@ -1359,31 +411,31 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         log(`automation: txproof: ${(e as Error).message}`)
       }
       engine.hint(txid)
-      if (!stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
+      if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
     })()
-    inflight.add(work)
+    rt.inflight.add(work)
     void work.finally(() => {
-      inflight.delete(work)
+      rt.inflight.delete(work)
     })
   })
   // a rejection callback is only a hint: clear the reconcile throttle for the
   // affected operation and run a cycle — the engine consults txFacts itself
   mem.onTxRejected((txid: string) => {
-    if (stopped) return
+    if (rt.stopped) return
     const work = (async () => {
       engine.hint(txid)
-      if (!stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
+      if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
     })()
-    inflight.add(work)
+    rt.inflight.add(work)
     void work.finally(() => {
-      inflight.delete(work)
+      rt.inflight.delete(work)
     })
   })
   // the substrate's abandon horizon is the terminal verdict for a mint that
   // resubmitted but never mined — drop the row so the kind's mint gate
   // re-opens (same reap as a chain rejection, driven by the event)
   mem.onTxAbandoned((txid: string) => {
-    if (stopped || lanes === undefined) return
+    if (rt.stopped || lanes === undefined) return
     const work = (async () => {
       try {
         const unproven = await lanes.ledger.unproven()
@@ -1392,17 +444,17 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         const tx = await mem.fetchTx(txid)
         await lanes.ledger.drop(txid)
         const reap = abandonedReap(row.kind)
-        if (reap.ghost && tx !== undefined) ghostMint(tx)
+        if (reap.ghost && tx !== undefined) rt.ghostMint(tx)
         log(reap.ghost ? `automation: dropped abandoned funding mint ${txid}` : `automation: dropped abandoned provision tx ${txid}`)
         await store.unblockOutbox('funding-slot')
-        if (!stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
+        if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
       } catch (e) {
         log(`automation: txAbandoned: ${(e as Error).message}`)
       }
     })()
-    inflight.add(work)
+    rt.inflight.add(work)
     void work.finally(() => {
-      inflight.delete(work)
+      rt.inflight.delete(work)
     })
   })
   return {
@@ -1410,7 +462,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     engine,
     cycle,
     logStream,
-    dealJournal,
+    dealJournal: rt.dealJournal,
     objectStore,
     /** the latest full preflight report — health surfaces read this, the
      *  watchdog keeps its cheap tier fresh between full runs */
@@ -1448,7 +500,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       if (lanes === undefined) return { outputs: [] }
       const outputs: Array<{ kind: string; lockingScriptHex: string; satoshis: number; count: number }> = []
       for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger']) {
-        const spec = await laneSpec(kind)
+        const spec = await rt.laneSpec(kind)
         if (spec.lock === undefined) continue
         outputs.push({ kind, lockingScriptHex: spec.lock.toHex(), satoshis: spec.satsPerOutput, count: spec.size })
       }
@@ -1464,7 +516,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       }
       const laneTable: Array<{ kind: string; lockHex: string; minSats: number }> = []
       for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger']) {
-        const spec = await laneSpec(kind)
+        const spec = await rt.laneSpec(kind)
         if (spec.lock !== undefined) laneTable.push({ kind, lockHex: spec.lock.toHex(), minSats: spec.satsPerOutput })
       }
       const matched = lanes.mod.matchProvision(tx, laneTable)
@@ -1482,20 +534,22 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       return counts
     },
     stop: async () => {
-      stopped = true
+      rt.stopped = true
       if (timer) clearTimeout(timer)
-      if (outboxTimer) clearTimeout(outboxTimer)
+      if (rt.outboxTimer) clearTimeout(rt.outboxTimer)
       if (watchdog) clearInterval(watchdog)
       if (watchTimer) clearInterval(watchTimer)
-      for (const ac of watches.values()) ac.abort()
-      watches.clear()
-      await Promise.allSettled(inflight)
+      for (const ac of rt.watches.values()) ac.abort()
+      rt.watches.clear()
+      await Promise.allSettled(rt.inflight)
       // drain in-flight work with a bound — a wedged producer must not hang
       // teardown forever (was an unbounded spin)
       const drainDeadline = Date.now() + 30_000
-      while (busy || upkeepRun !== undefined || acking || pumping) {
+      while (rt.busy || rt.upkeepRun !== undefined || rt.acking || rt.pumping) {
         if (Date.now() >= drainDeadline) {
-          log(`automation: stop: drain deadline hit (busy=${busy} upkeep=${upkeepRun !== undefined} acking=${acking} pumping=${pumping}) — proceeding`)
+          log(
+            `automation: stop: drain deadline hit (busy=${rt.busy} upkeep=${rt.upkeepRun !== undefined} acking=${rt.acking} pumping=${rt.pumping}) — proceeding`
+          )
           break
         }
         await new Promise((r) => setTimeout(r, 25))

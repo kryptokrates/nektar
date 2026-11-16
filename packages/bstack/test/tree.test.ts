@@ -414,3 +414,36 @@ test('ledger.adopt: lane-locked outputs of a provision tx become slots', async (
     await kx.destroy()
   }
 })
+
+// G3: a rejected provision tx is reaped — drop removes its slot rows of
+// every kind and the same tx can be adopted again afterwards
+test('ledger.adopt: drop frees provision slots of every kind and re-adopt registers again', async () => {
+  const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  try {
+    const key = PrivateKey.fromRandom()
+    const marketLock = await fundingLock(new ProtoWallet(key), ORIGINATOR, DERIVATION, FUNDING_TAG)
+    const bboxLock = await boxFundingLock(key, new ProtoWallet(key))
+    const tx = new Transaction()
+    tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromASM('OP_1') })
+    tx.addOutput({ satoshis: 100, lockingScript: marketLock })
+    tx.addOutput({ satoshis: 100, lockingScript: bboxLock })
+    const lanes = [
+      { kind: 'market', lockHex: marketLock.toHex(), minSats: 1 },
+      { kind: 'bbox', lockHex: bboxLock.toHex(), minSats: 100 }
+    ]
+    const mod = treemod as unknown as { matchProvision?: (t: Transaction, l: typeof lanes) => { vout: number; kind: string }[] }
+    const matched = mod.matchProvision!(tx, lanes)
+    for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(kx)]) {
+      const ledger = l as unknown as { adopt?: (t: Transaction, s: typeof matched) => Promise<number> }
+      await ledger.adopt!(tx, matched)
+      assert.deepEqual(await stockOf(l, 'bbox'), { proven: 0, anchored: 0, unprovenTrees: 1 })
+      await l.drop(tx.id('hex'))
+      assert.deepEqual(await stockOf(l, 'bbox'), { proven: 0, anchored: 0, unprovenTrees: 0 }, 'drop removes bbox slot rows')
+      assert.deepEqual(await stockOf(l, 'market'), { proven: 0, anchored: 0, unprovenTrees: 0 }, 'drop removes market slot rows')
+      assert.equal(await ledger.adopt!(tx, matched), 2, 're-adopt after a drop registers the same tx again')
+      await l.drop(tx.id('hex'))
+    }
+  } finally {
+    await kx.destroy()
+  }
+})

@@ -21,6 +21,7 @@ export type { RegtestConfig } from './regtest.js'
 export {
   BsvBroadcaster,
   fetchBroadcasterFeeRate,
+  fetchRawTx,
   fetchTxStatus,
   probeTxStatus,
   WocTracker,

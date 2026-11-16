@@ -50,3 +50,98 @@ test('custody: takeFunding never overwrites a proof the funder already carried',
   const out = await ops({ tx, vout: 0, satoshis: 100_000 }, () => pathFor(tx)).takeFunding(1000)
   assert.equal(out.tx.merklePath, own)
 })
+
+// G1: a candidate whose parent the broadcaster rejected is passed over for
+// this call only — a status hint is never written to custody state
+const reserveOps = (
+  candidates: Array<{ tx: Transaction; vout: number; satoshis: number }>,
+  txStatus?: (txid: string) => Promise<string>
+): { ops: CustodyOps; spent: string[] } => {
+  const spent: string[] = []
+  const ops = new CustodyOps({
+    funder: {
+      takeReserve: async (_sc: unknown, _min: unknown, skip?: (tx: Transaction, vout: number) => Promise<boolean>) => {
+        for (const u of candidates) if (skip === undefined || !(await skip(u.tx, u.vout))) return u
+        return null
+      },
+      markSpent: (txid: string, vout: number) => spent.push(`${txid}:${vout}`)
+    },
+    fundSigner: () => key,
+    broadcast: async () => ({ status: 'success' }),
+    txs: () => {},
+    proofOf: () => undefined,
+    txStatus
+  } as CustodyOpsDeps)
+  return { ops, spent }
+}
+
+test('custody: takeFunding skips a broadcaster-rejected parent for this call only', async () => {
+  const bad = parent()
+  const good = parent()
+  // parent() is deterministic — an extra dust output makes the txids differ
+  good.addOutput({ satoshis: 1, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
+  const statuses: string[] = []
+  const { ops, spent } = reserveOps(
+    [
+      { tx: bad, vout: 0, satoshis: 100_000 },
+      { tx: good, vout: 0, satoshis: 100_000 }
+    ],
+    async (txid) => {
+      statuses.push(txid)
+      return txid === bad.id('hex') ? 'REJECTED' : 'SEEN_ON_NETWORK'
+    }
+  )
+  const u = await ops.takeFunding(1000)
+  assert.equal(u.tx.id('hex'), good.id('hex'))
+  assert.deepEqual(statuses, [bad.id('hex'), good.id('hex')])
+  assert.deepEqual(spent, [], 'a skipped candidate is not marked spent')
+})
+
+test('custody: a proven candidate is never status-queried', async () => {
+  const p = parent()
+  p.merklePath = pathFor(p)
+  const statuses: string[] = []
+  const { ops } = reserveOps([{ tx: p, vout: 0, satoshis: 100_000 }], async (txid) => {
+    statuses.push(txid)
+    return 'REJECTED'
+  })
+  const u = await ops.takeFunding(1000)
+  assert.equal(u.tx, p)
+  assert.deepEqual(statuses, [], 'a proof-carrying parent needs no status hint')
+})
+
+test('custody: provisionPay throws when the broadcaster rejects right after submit', async () => {
+  const marks: string[] = []
+  const ops = new CustodyOps({
+    funder: {
+      take: async () => ({ tx: parent(), vout: 0, satoshis: 100_000 }),
+      markSpent: () => marks.push('markSpent'),
+      addOwned: () => marks.push('addOwned')
+    },
+    fundSigner: () => key,
+    broadcast: async () => ({ status: 'success' }),
+    txs: () => {},
+    txStatus: async () => 'REJECTED'
+  } as CustodyOpsDeps)
+  await assert.rejects(
+    ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 }),
+    /rejected after submit/
+  )
+  assert.deepEqual(marks, [], 'rejection leaves the reserve untouched')
+})
+
+test('custody: a seen status returns after one read — bounded confirmation, not a wait loop', async () => {
+  let reads = 0
+  const ops = new CustodyOps({
+    funder: { take: async () => ({ tx: parent(), vout: 0, satoshis: 100_000 }), markSpent: () => {}, addOwned: () => {} },
+    fundSigner: () => key,
+    broadcast: async () => ({ status: 'success' }),
+    txs: () => {},
+    txStatus: async () => {
+      reads++
+      return 'SEEN_ON_NETWORK'
+    }
+  } as CustodyOpsDeps)
+  await ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 })
+  assert.equal(reads, 1, 'first live read settles the check')
+})

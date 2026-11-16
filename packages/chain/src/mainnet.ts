@@ -287,6 +287,45 @@ export async function probeTxStatus(
  *  explicitly-WoC configs) cross-checks a dead/erroring broadcaster against
  *  WoC /tx/{txid}: blockheight > 0 → 'MINED' — rejection verdicts stay
  *  broadcaster-only (WoC serves no rejection semantics). */
+/** Raw tx bytes from the best available source — WoC `/tx/{txid}/hex`
+ *  first, then the broadcaster's `GET /tx/{txid}` rawTx (plain hex, or
+ *  Extended Format when the 0000000000ef marker is present). Whatever the
+ *  source, the bytes are returned only when they hash to `txid`. */
+export async function fetchRawTx(cfg: MainnetConfig | undefined, txid: string): Promise<Transaction | undefined> {
+  const f = cfg?.fetchImpl ?? fetch
+  const parse = (hex: string | undefined): Transaction | undefined => {
+    if (hex === undefined || hex.length < 20) return undefined
+    try {
+      const tx = hex.slice(8, 20) === '0000000000ef' ? Transaction.fromHexEF(hex) : Transaction.fromHex(hex)
+      return tx.id('hex') === txid ? tx : undefined
+    } catch {
+      return undefined
+    }
+  }
+  try {
+    const h: Record<string, string> = {}
+    if (cfg?.wocApiKey !== undefined) h['woc-api-key'] = cfg.wocApiKey
+    const r = await f(`${cfg?.wocUrl ?? DEFAULT_WOC_URL}/tx/${txid}/hex`, { headers: h, signal: AbortSignal.timeout(10_000) })
+    if (r.ok) {
+      const tx = parse((await r.text()).trim())
+      if (tx !== undefined) return tx
+    }
+  } catch {
+    /* fall through to the broadcaster source */
+  }
+  try {
+    const r = await f(`${cfg?.broadcasterUrl ?? DEFAULT_BROADCASTER_URL}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) })
+    if (r.ok) {
+      const j = (await r.json()) as { rawTx?: string }
+      const tx = parse(j?.rawTx)
+      if (tx !== undefined) return tx
+    }
+  } catch {
+    /* no source answered */
+  }
+  return undefined
+}
+
 export async function fetchTxStatus(cfg: MainnetConfig | undefined, txid: string, opts?: { wocFallback?: boolean }): Promise<string> {
   return (await probeTxStatus(cfg, txid, opts)).status
 }

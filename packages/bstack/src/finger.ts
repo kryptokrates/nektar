@@ -42,6 +42,7 @@ import { checkOffice } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { checkStream } from '@lightwebinc/blogs-host/dist/index.js'
 import { submitAll, lookupAll } from './hosts.js'
 import { carrierFundingLockHex, walletOrProto } from './carrier.js'
+import { fundingSlotReason } from './tree.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 import type { Knex } from 'knex'
@@ -393,7 +394,7 @@ export async function publishFinger(p: {
   if (carrierBeef === undefined) {
     validateRecord(record)
     const slot = await p.ledger.take(FINGER_KIND, (await fingerFundingLock(s, w)).toHex())
-    if (slot === undefined) throw new Error('publishFinger: no funding slot')
+    if (slot === undefined) throw new Error(`publishFinger: ${await fundingSlotReason(p.ledger, FINGER_KIND)}`)
     const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_RECORD, encodeRecord(record), slot.tree, slot.vout)
     carrierBeef = carrier.toAtomicBEEF()
     carrierTxid = carrier.id('hex')
@@ -507,7 +508,7 @@ export async function publishSubRecord(p: {
   }
   validateRecord(record)
   const slot = await p.ledger.take(FINGER_KIND, (await fingerFundingLock(s, w)).toHex())
-  if (slot === undefined) throw new Error('publishSubRecord: no funding slot')
+  if (slot === undefined) throw new Error(`publishSubRecord: ${await fundingSlotReason(p.ledger, FINGER_KIND)}`)
   const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_RECORD, encodeRecord(record), slot.tree, slot.vout)
   const beef = carrier.toAtomicBEEF()
   const txid = carrier.id('hex')

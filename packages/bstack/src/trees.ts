@@ -56,14 +56,16 @@ export async function ensureTrees(p: {
     if (tx !== undefined && tx.merklePath !== undefined) {
       await p.ledger.markProven(u.txid, tx.merklePath)
       proven.push(u.txid)
-    } else if (p.txStatus !== undefined && u.kind !== PROVISION_KIND) {
+    } else if (p.txStatus !== undefined) {
       const st = (await p.txStatus(u.txid)).toUpperCase()
       if (st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')) {
         // the mint was refused/lost a competing spend — an unproven row
-        // would gate out every later mint of this kind forever
+        // would gate out every later mint of this kind forever. A provision
+        // row is reaped the same way, but never tombstones: its inputs are
+        // the payer's, not ours
         await p.ledger.drop(u.txid)
-        if (p.onReject !== undefined && tx !== undefined) await p.onReject(tx)
-      } else if ((st === '' || st === 'UNKNOWN') && p.onStuck !== undefined && tx !== undefined) {
+        if (u.kind !== PROVISION_KIND && p.onReject !== undefined && tx !== undefined) await p.onReject(tx)
+      } else if (u.kind !== PROVISION_KIND && (st === '' || st === 'UNKNOWN') && p.onStuck !== undefined && tx !== undefined) {
         // silently vanished (never propagated, evicted) — resubmit or reap;
         // without this the mint gate stays shut past any restart
         if ((await p.onStuck(tx)) === 'drop') {

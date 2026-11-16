@@ -364,6 +364,7 @@ export class NektarMemory {
       broadcast: (tx) => this.chain.broadcast(tx),
       txs: (tx) => this.txs.put(tx),
       proofOf: (txid) => this.txs.get(txid)?.merklePath,
+      txStatus: this.opts.txStatus,
       ledger: () => this.ledger,
       network: this.opts.network,
       feeRateSatPerKb: this.opts.feeRateSatPerKb

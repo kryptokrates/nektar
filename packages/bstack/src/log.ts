@@ -31,6 +31,7 @@ import { readPushDrop } from '@lightwebinc/blogs-host/dist/script.js'
 import { submitAll, lookupAll, type Quorum } from './hosts.js'
 import { ancestorsOf } from './finger.js'
 import { carrierFundingLockHex, walletOrProto } from './carrier.js'
+import { fundingSlotReason } from './tree.js'
 import type { TreeLedger } from './tree.js'
 import type { CarrierJournal } from './journal.js'
 import type { Knex } from 'knex'
@@ -162,7 +163,7 @@ export async function appendLog(p: {
       extra: []
     })
     const slot = await p.ledger.take(LOG_KIND, logLockHex)
-    if (slot === undefined) throw new Error('no funding slot')
+    if (slot === undefined) throw new Error(await fundingSlotReason(p.ledger, LOG_KIND))
     // boundary: the wallet only signs the record lock — the carrier itself is
     // unmineable and must never be routed through a wallet action
     const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_BATCH, record, slot.tree, slot.vout)
@@ -510,7 +511,7 @@ export async function anchorLog(p: {
   for (let i = 0; i < 8; i++) {
     const slot = await p.ledger.take(LOG_KIND, logLock)
     if (slot === undefined) {
-      log('log anchor: no funding slot for the fee')
+      log(`log anchor: ${await fundingSlotReason(p.ledger, LOG_KIND)} for the fee`)
       return undefined
     }
     tx.addInput({ sourceTransaction: slot.tree, sourceOutputIndex: slot.vout, unlockingScriptTemplate: unlocker(w, ORIGINATOR, DERIVATION_BATCH) })

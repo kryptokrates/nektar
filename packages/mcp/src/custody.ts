@@ -13,7 +13,11 @@ import type { FundingOut } from '@nektar/chain'
  *  takeReserve(), or a bare utxos list — probed, not widened */
 interface FunderLike {
   take?: (satoshis: number) => Promise<FundingOut>
-  takeReserve?: (spendCheck?: (txid: string, vout: number) => Promise<boolean>, minSats?: number) => Promise<FundingOut | null>
+  takeReserve?: (
+    spendCheck?: (txid: string, vout: number) => Promise<boolean>,
+    minSats?: number,
+    skip?: (tx: Transaction, vout: number) => Promise<boolean>
+  ) => Promise<FundingOut | null>
   utxos?: FundingOut[]
   markSpent?: (txid: string, vout: number) => void
   addOwned?: (tx: Transaction, vout: number) => void
@@ -46,6 +50,7 @@ export interface CustodyOpsDeps {
    *  into TxStore) — attached to a funding parent so a tree minted on it can
    *  serve zero-conf. Never a network lookup: hand over only what we hold. */
   proofOf?: (txid: string) => MerklePath | undefined
+  txStatus?: (txid: string) => Promise<string>
 }
 
 const opReturnScript = (opReturn: string): LockingScript => {
@@ -68,7 +73,7 @@ export class CustodyOps {
     const f = this.deps.funder
     let u: FundingOut | undefined
     if (typeof f.take === 'function') u = await f.take(satoshis)
-    else if (typeof f.takeReserve === 'function') u = (await f.takeReserve(undefined, satoshis)) ?? undefined
+    else if (typeof f.takeReserve === 'function') u = (await f.takeReserve(undefined, satoshis, this.deadParentSkip())) ?? undefined
     u ??= (f.utxos ?? []).find((x) => (x.satoshis ?? 0) >= satoshis)
     if (u === undefined) throw new Error('no funding UTXO available for the attestation tx')
     // the proof travels with the funds: a path the instance already holds for
@@ -82,6 +87,49 @@ export class CustodyOps {
   }
 
   /** return a tx output to the reserve as owned (change/escrow outs) */
+  /** Hint-only pass-over for this take call: a candidate whose parent the
+   *  broadcaster calls REJECTED/DOUBLE_SPEND is skipped, but the hint writes
+   *  nothing — custody state stays with first-party records. A proven tx (or
+   *  one we hold a proof for) is never queried. Errors don't skip. */
+  private deadParentSkip(): ((tx: Transaction, vout: number) => Promise<boolean>) | undefined {
+    const txStatus = this.deps.txStatus
+    if (txStatus === undefined) return undefined
+    return async (tx: Transaction): Promise<boolean> => {
+      if (tx.merklePath !== undefined) return false
+      const txid = tx.id('hex')
+      if (this.deps.proofOf?.(txid) !== undefined) return false
+      try {
+        const st = (await txStatus(txid)).toUpperCase()
+        return st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')
+      } catch {
+        return false
+      }
+    }
+  }
+
+  /** Bounded submit confirmation, not a wait loop: up to 3 reads (now,
+   *  +700ms, +1500ms). A rejection-family answer is returned immediately, a
+   *  seen-family answer settles at once, anything else resolves after the
+   *  third read. Without a txStatus dep the check is a no-op. */
+  private async accepted(txid: string): Promise<string | undefined> {
+    const txStatus = this.deps.txStatus
+    if (txStatus === undefined) return undefined
+    const SEEN = ['RECEIVED', 'SENT_TO_NETWORK', 'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'STUMP_PROCESSING', 'MINED', 'IMMUTABLE']
+    for (let i = 0; i < 3; i++) {
+      if (i === 1) await new Promise((r) => setTimeout(r, 700))
+      if (i === 2) await new Promise((r) => setTimeout(r, 1500))
+      let st = ''
+      try {
+        st = (await txStatus(txid)).toUpperCase()
+      } catch {
+        st = ''
+      }
+      if (st === 'REJECTED' || st.startsWith('DOUBLE_SPEND')) return st
+      if (SEEN.includes(st)) return undefined
+    }
+    return undefined
+  }
+
   addOwnedOut(tx: Transaction, vout: number): void {
     this.deps.funder.addOwned?.(tx, vout)
   }
@@ -179,6 +227,8 @@ export class CustodyOps {
     }
     const br = await this.deps.broadcast(tx)
     if (br.status !== 'success') throw new Error(`sendSats broadcast failed: ${br.description ?? 'unknown'}`)
+    const rejected = await this.accepted(tx.id('hex'))
+    if (rejected !== undefined) throw new Error(`sendSats rejected after submit: ${rejected}`)
     this.deps.txs(tx)
     this.markSpentOut(f.tx.id('hex'), f.vout)
     this.addOwnedOut(tx, tx.outputs.length - 1)
@@ -211,6 +261,8 @@ export class CustodyOps {
     await tx.sign()
     const br = await this.deps.broadcast(tx)
     if (br.status !== 'success') throw new Error(`provisionPay broadcast failed: ${br.description ?? 'unknown'}`)
+    const rejected = await this.accepted(tx.id('hex'))
+    if (rejected !== undefined) throw new Error(`provisionPay rejected after submit: ${rejected}`)
     this.deps.txs(tx)
     this.markSpentOut(f.tx.id('hex'), f.vout)
     this.addOwnedOut(tx, tx.outputs.length - 1)

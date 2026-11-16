@@ -422,7 +422,8 @@ export class ReserveFunder {
   leased?: (txid: string, vout: number) => Promise<boolean>
   async takeReserve(
     spendCheck?: (txid: string, vout: number) => Promise<boolean>,
-    minSats?: number
+    minSats?: number,
+    skip?: (tx: Transaction, vout: number) => Promise<boolean>
   ): Promise<{ tx: Transaction; vout: number; satoshis: number } | null> {
     while (true) {
       // smallest-sufficient: skip spent entries AND entries too small for the
@@ -433,6 +434,9 @@ export class ReserveFunder {
       const candidates = []
       for (const x of this.utxos.filter((x) => !this.spent.has(this.op(x.tx.id('hex'), x.vout)) && x.satoshis >= floor)) {
         if (this.leased && (await this.leased(x.tx.id('hex'), x.vout))) continue
+        // a hint-only pass-over (e.g. parent rejected) — non-destructive:
+        // the candidate stays live for the next call
+        if (skip !== undefined && (await skip(x.tx, x.vout))) continue
         candidates.push(x)
       }
       const u = candidates.sort((a, b) => a.satoshis - b.satoshis)[0]

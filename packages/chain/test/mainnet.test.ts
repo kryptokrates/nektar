@@ -398,3 +398,81 @@ test('importFundingTx: hex: raw tx imports; empty/malformed refs fail with clear
   await assert.rejects(() => importFundingTx(undefined, 'hex:0', pkh), /malformed transaction hex/)
   await assert.rejects(() => importFundingTx(undefined, 'not-a-txid', pkh), /malformed txid/)
 })
+
+// G5: a second raw-tx source — WoC first, broadcaster rawTx fallback; the
+// returned bytes must hash to the asked txid whatever the source
+import { PrivateKey } from '@bsv/sdk'
+const k = PrivateKey.fromRandom()
+const withFetch = async (f: typeof fetch, fn: () => Promise<void>): Promise<void> => {
+  const saved = globalThis.fetch
+  ;(globalThis as { fetch: typeof fetch }).fetch = f
+  try {
+    await fn()
+  } finally {
+    ;(globalThis as { fetch: typeof fetch }).fetch = saved
+  }
+}
+
+test('fetchRawTx: WoC hex serves, broadcaster rawTx backs it up', async () => {
+  const mod = (await import('../src/mainnet.js')) as { fetchRawTx?: (c: unknown, t: string) => Promise<Transaction | undefined> }
+  assert.ok(mod.fetchRawTx !== undefined, 'mainnet must export fetchRawTx')
+  const tx = new Transaction()
+  tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
+  tx.addOutput({ satoshis: 1000, lockingScript: new P2PKH().lock(k.toPublicKey().toAddress()) })
+  const txid = tx.id('hex')
+  const cfg = { wocUrl: 'http://woc', broadcasterUrl: 'http://arc' }
+  await withFetch(
+    stubFetch({
+      [`http://woc/tx/${txid}/hex`]: { raw: tx.toHex() }
+    }),
+    async () => {
+      const r = await mod.fetchRawTx!(cfg, txid)
+      assert.equal(r?.id('hex'), txid)
+    }
+  )
+  await withFetch(
+    stubFetch({
+      [`http://woc/tx/${txid}/hex`]: { status: 429, body: 'rate limited' },
+      [`http://arc/tx/${txid}`]: { body: { rawTx: tx.toHex() } }
+    }),
+    async () => {
+      const r = await mod.fetchRawTx!(cfg, txid)
+      assert.equal(r?.id('hex'), txid, 'broadcaster rawTx is the fallback source')
+    }
+  )
+})
+
+test('fetchRawTx: EF-form rawTx parses; both sources down is undefined; wrong txid is refused', async () => {
+  const mod = (await import('../src/mainnet.js')) as { fetchRawTx?: (c: unknown, t: string) => Promise<Transaction | undefined> }
+  const srcTx = new Transaction()
+  srcTx.addOutput({ satoshis: 2000, lockingScript: new P2PKH().lock(k.toPublicKey().toAddress()) })
+  const tx = new Transaction()
+  tx.addInput({
+    sourceTXID: srcTx.id('hex'),
+    sourceOutputIndex: 0,
+    unlockingScript: UnlockingScript.fromASM('OP_1'),
+    sourceTransaction: srcTx
+  })
+  tx.addOutput({ satoshis: 1000, lockingScript: new P2PKH().lock(k.toPublicKey().toAddress()) })
+  const txid = tx.id('hex')
+  const other = new Transaction()
+  other.addInput({ sourceTXID: '11'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
+  other.addOutput({ satoshis: 500, lockingScript: new P2PKH().lock(k.toPublicKey().toAddress()) })
+  const cfg = { wocUrl: 'http://woc', broadcasterUrl: 'http://arc' }
+  await withFetch(
+    stubFetch({
+      [`http://woc/tx/${txid}/hex`]: { status: 404 },
+      [`http://arc/tx/${txid}`]: { body: { rawTx: Buffer.from(tx.toEF()).toString('hex') } }
+    }),
+    async () => {
+      const r = await mod.fetchRawTx!(cfg, txid)
+      assert.equal(r?.id('hex'), txid, 'extended-format rawTx parses')
+    }
+  )
+  await withFetch(stubFetch({}), async () => {
+    assert.equal(await mod.fetchRawTx!(cfg, txid), undefined, 'no source answers → undefined')
+  })
+  await withFetch(stubFetch({ [`http://woc/tx/${txid}/hex`]: { raw: other.toHex() } }), async () => {
+    assert.equal(await mod.fetchRawTx!(cfg, txid), undefined, 'bytes that hash to another txid are refused')
+  })
+})

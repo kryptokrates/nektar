@@ -612,13 +612,16 @@ export class ToolboxReserveFunder {
 
   async takeReserve(
     spendCheck?: (txid: string, vout: number) => Promise<boolean>,
-    minSats?: number
+    minSats?: number,
+    skip?: (tx: Transaction, vout: number) => Promise<boolean>
   ): Promise<{ tx: Transaction; vout: number; satoshis: number } | null> {
     const floor = minSats ?? 546
     await this.refresh()
     for (const u of this.cache.filter((x) => x.satoshis >= floor).sort((a, b) => a.satoshis - b.satoshis)) {
       const txid = u.tx.id('hex')
       if (this.leased !== undefined && (await this.leased(txid, u.vout))) continue
+      // a hint-only pass-over — nothing is relinquished or marked
+      if (skip !== undefined && (await skip(u.tx, u.vout))) continue
       if (spendCheck !== undefined && (await spendCheck(txid, u.vout))) {
         this.markSpent(txid, u.vout)
         continue

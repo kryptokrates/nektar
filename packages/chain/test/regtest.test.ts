@@ -88,3 +88,31 @@ test('bootstrapReserve: a treasury file namespaced for another consumer is refus
     /namespaced 'testkit'/
   )
 })
+
+// G1: skip is a per-call pass-over, not a spend mark — a rejected parent
+// must never be funded from, but the hint writes nothing
+test('ReserveFunder.takeReserve: skip passes a candidate over for this call only', async () => {
+  const { mkdtempSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { Transaction: SdkTx, P2PKH: SdkP2PKH } = await import('@bsv/sdk')
+  const { ReserveFunder } = await import('../src/regtest.js')
+  const dir = mkdtempSync(join(tmpdir(), 'nektar-skip-'))
+  const r = new ReserveFunder(PrivateKey.fromRandom(), join(dir, 'reserve.json'))
+  const mk = (s: number) => {
+    const tx = new SdkTx()
+    tx.addOutput({ lockingScript: new SdkP2PKH().lock(PrivateKey.fromRandom().toPublicKey().toHash()), satoshis: s })
+    return tx
+  }
+  const a = mk(1000)
+  const b = mk(2000)
+  ;(r.utxos as Array<{ tx: typeof a; vout: number; satoshis: number }>).push({ tx: a, vout: 0, satoshis: 1000 }, { tx: b, vout: 0, satoshis: 2000 })
+  const take = r.takeReserve.bind(r) as unknown as (
+    sc?: unknown,
+    min?: unknown,
+    skip?: (tx: typeof a, vout: number) => Promise<boolean>
+  ) => Promise<{ tx: typeof a } | null>
+  const u = await take(undefined, undefined, async (tx) => tx === a)
+  assert.equal(u?.tx, b)
+  assert.equal((await take())?.tx, a, 'a skipped candidate is handed out later, not consumed')
+})

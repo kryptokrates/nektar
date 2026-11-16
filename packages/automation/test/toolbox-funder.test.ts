@@ -191,3 +191,25 @@ test('ToolboxReserveFunder: a mined funding tx internalizes on its own proof —
   assert.equal(f.utxos.length, 1)
   assert.equal(w.internalized.length, 1)
 })
+
+// G1: skip is non-destructive — the basket output is NOT relinquished
+test('ToolboxReserveFunder: takeReserve skip passes a candidate over without relinquishing it', async () => {
+  const a = fundingTx(1000)
+  const b = fundingTx(2000)
+  const { wallet, relinquished } = mkWallet(
+    [
+      { outpoint: `${a.id('hex')}.0`, satoshis: 1000, spendable: true },
+      { outpoint: `${b.id('hex')}.0`, satoshis: 2000, spendable: true }
+    ],
+    mergedBeef(a, b)
+  )
+  const f = new ToolboxReserveFunder(wallet as never)
+  const take = f.takeReserve.bind(f) as unknown as (
+    sc?: unknown,
+    min?: unknown,
+    skip?: (tx: Transaction, vout: number) => Promise<boolean>
+  ) => Promise<{ tx: Transaction } | null>
+  const u = await take(undefined, undefined, async (tx) => tx.id('hex') === a.id('hex'))
+  assert.equal(u?.tx.id('hex'), b.id('hex'))
+  assert.equal(relinquished.length, 0, 'skip is a hint — nothing is relinquished or marked')
+})

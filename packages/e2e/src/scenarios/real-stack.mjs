@@ -24,6 +24,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { PrivateKey, Transaction, P2PKH, SatoshisPerKilobyte, Beef } from '@bsv/sdk'
 import { TeranodeBroadcaster, TeranodeRPCTracker, utxoStatus, regtestMerkleProof } from '../../../chain/dist/src/regtest.js'
 import { BsvBroadcaster, ChaintracksTracker, WocTracker } from '../../../chain/dist/src/mainnet.js'
+import { WitnessedTracker } from '../../../chain/dist/src/headers.js'
 import { readBox } from '../../../bstack/dist/src/index.js'
 import { resolveFinger } from '../../../bstack/dist/src/finger.js'
 
@@ -81,7 +82,7 @@ const rpc = async (method, ...params) => {
 }
 const broadcaster = LIVE ? new BsvBroadcaster(TESTNET) : new TeranodeBroadcaster(cfg.propagationUrl)
 const tracker = LIVE
-  ? new ChaintracksTracker(TESTNET, `${TESTNET.broadcasterUrl}/chaintracks/v2`, new WocTracker(TESTNET))
+  ? new WitnessedTracker(new ChaintracksTracker(TESTNET, `${TESTNET.broadcasterUrl}/chaintracks/v2`), new WocTracker(TESTNET))
   : new TeranodeRPCTracker({ ...cfg, rpcUser: E('NEKTAR_RPC_USER'), rpcPass: E('NEKTAR_RPC_PASS') })
 // The testnet run uses the local host pair; the instances are told these are
 // the operator's own hosts (NEKTAR_MARKET_LOCAL_HOSTS=1), so they publish

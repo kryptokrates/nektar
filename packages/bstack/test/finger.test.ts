@@ -488,3 +488,13 @@ test('finger: knex state dedupes an unchanged republish', async () => {
     await s.h2.close()
   }
 })
+
+// G6: the identity lane names why it is stocked out, not just 'no slot'
+test('finger: a stocked-out lane reports proven/anchored/waiting counts', async () => {
+  const mod = (await import('../src/tree.js')) as { fundingSlotReason?: (l: unknown, k: string) => Promise<string> }
+  assert.ok(mod.fundingSlotReason !== undefined)
+  assert.equal(await mod.fundingSlotReason!(new MemoryTreeLedger(), 'finger'), 'no funding slot (finger: 0 proven, 0 anchored, 0 tree(s) awaiting a block)')
+  const s = await rig()
+  await s.ledger.drop(s.tree.id('hex'))
+  await assert.rejects(s.publish(body1()), /publishFinger: no funding slot \(finger: 0 proven/)
+})

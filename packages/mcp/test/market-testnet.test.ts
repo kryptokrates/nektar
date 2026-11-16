@@ -22,6 +22,7 @@ import type { AddressInfo } from 'node:net'
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import {
   ChaintracksTracker,
+  WitnessedTracker,
   WocTracker,
   BsvBroadcaster,
   fetchTxStatus,
@@ -33,6 +34,7 @@ import {
 } from '@nektar/chain'
 import { faulthost } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
+import { acquireLock, keyLockFile } from '../src/index.js'
 import { callTool } from '../src/server.js'
 import { openAutomation, type Automation } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
@@ -145,7 +147,7 @@ const mcFor = (): MainnetConfig => ({
 })
 
 const mkChain = (mc: MainnetConfig): ChainTracker & Broadcaster => {
-  const tracker = new ChaintracksTracker(mc, `${mc.broadcasterUrl}/chaintracks/v2`, new WocTracker(mc))
+  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${mc.broadcasterUrl}/chaintracks/v2`), new WocTracker(mc))
   const bcast = new BsvBroadcaster(mc)
   return {
     broadcast: (tx: Transaction) => bcast.broadcast(tx),
@@ -172,6 +174,9 @@ const mkagent = async (
   const dataDir = join(dir, wifName)
   mkdirSync(dataDir, { recursive: true })
   const fundKey = PrivateKey.fromWif(wif)
+  // one process per fund key — refuses while a live agent (tmux) holds it;
+  // the live() gate below is the earlier, friendlier skip
+  const keyRelease = await acquireLock(keyLockFile(Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')), `fund key ${wifName}`)
   const reserveFile = join(dataDir, 'reserve.json')
   // custody snapshot on first use only — afterwards the file is live custody
   const src = join(STATE, wifName, 'reserve.json')
@@ -182,7 +187,7 @@ const mkagent = async (
   // broadcast) must never be handed out — that is exactly how the
   // UTXO_SPENT double-mint wedge happened
   await reconcileReserve(fundKey, reserve, mc)
-  const tracker = new ChaintracksTracker(mc, `${ARC}/chaintracks/v2`, new WocTracker(mc))
+  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${ARC}/chaintracks/v2`), new WocTracker(mc))
   const bcast = new BsvBroadcaster(mc)
   const chain = {
     broadcast: (tx: Transaction) => bcast.broadcast(tx),
@@ -230,6 +235,11 @@ const mkagent = async (
     opts: { offerTtlBlocks: 48, refundBlocks: 1, ...opts }
   })
   mem.automation = rt
+  const stopRt = rt.stop.bind(rt)
+  rt.stop = async () => {
+    await stopRt()
+    await keyRelease()
+  }
   return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name, dir: dataDir }
 }
 
@@ -324,6 +334,19 @@ const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
   if (['alice', 'ben', 'bob'].some((n) => WIF[n] === undefined)) {
     t.skip(`no agent keys at ${KEYS_FILE}`)
     return false
+  }
+  // one process per fund key — a live tmux agent holds the lock file
+  for (const n of ['alice', 'ben', 'bob'] as const) {
+    const lf = keyLockFile(Buffer.from(PrivateKey.fromWif(WIF[n]).toPublicKey().toHash()).toString('hex'))
+    try {
+      const l = JSON.parse(readFileSync(lf, 'utf8')) as { beat: number }
+      if (Date.now() - l.beat < 20_000) {
+        t.skip(`live agent holds ${n}'s key — stop it before running this suite`)
+        return false
+      }
+    } catch {
+      /* no lock held */
+    }
   }
   try {
     for (const u of [HOST_A, HOST_B]) {

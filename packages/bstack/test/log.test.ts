@@ -447,3 +447,10 @@ test('log: golden — batch record matches the upstream vector byte for byte', (
   })
   assert.equal(toHex(rec), v.record)
 })
+
+// G6: the log lane names why it is stocked out, not just 'no slot'
+test('log: a stocked-out lane reports proven/anchored/waiting counts', async () => {
+  const mod = (await import('../src/tree.js')) as { fundingSlotReason?: (l: unknown, k: string) => Promise<string> }
+  assert.ok(mod.fundingSlotReason !== undefined)
+  assert.equal(await mod.fundingSlotReason!(new MemoryTreeLedger(), 'log'), 'no funding slot (log: 0 proven, 0 anchored, 0 tree(s) awaiting a block)')
+})

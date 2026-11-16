@@ -6,6 +6,7 @@
 //                          funding are configured (no real funds without approval).
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import {
@@ -27,6 +28,7 @@ import {
   SpendGuard,
   TemporalSources,
   statusStream,
+  fetchRawTx,
   fetchTxStatus,
   probeTxStatus,
   DEFAULT_WOC_URL,
@@ -39,7 +41,7 @@ import {
   type TxStatusEvent
 } from '@nektar/chain'
 import { handleBroadcasterStatus } from './http.js'
-import { watcherObservation, importable } from './txops.js'
+import { watcherObservation, importable, reserveVerdict } from './txops.js'
 import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvNum, nektarEnvFlag, setNektarEnv, type SignerWallet } from '@nektar/core'
 import { wireP2p, setupFeeVault } from './setup.js'
 import { KnexShardStore, type ShardStore } from '@nektar/log'
@@ -277,32 +279,37 @@ export interface Runtime {
   }
 }
 
-/** single writer per data dir: a live heartbeat from another instance
- *  refuses startup. release() stops the beat and removes the lock —
- *  was duplicated verbatim across both open paths. */
-async function acquireInstanceLock(dataDir: string): Promise<{ release: () => Promise<void> }> {
-  const lockFile = join(dataDir, 'instance.lock')
+/** single holder per lock file: a live heartbeat (<20s old) from another
+ *  process refuses acquisition; a stale or dead one is taken over.
+ *  release() stops the beat and removes the file. */
+export async function acquireLock(file: string, label: string): Promise<() => Promise<void>> {
   const me = `${process.pid}@${(await import('node:os')).hostname()}`
-  if (existsSync(lockFile)) {
-    const l = JSON.parse(readFileSync(lockFile, 'utf8')) as { owner: string; beat: number }
-    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`data dir ${dataDir} is in use by another nektar instance (${l.owner}); stop it first`)
-    rmSync(lockFile)
+  if (existsSync(file)) {
+    const l = JSON.parse(readFileSync(file, 'utf8')) as { owner: string; beat: number }
+    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`${label} is in use by another nektar process (${l.owner}) — stop it first`)
+    rmSync(file)
   }
-  const beat = () => writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }))
-  writeFileSync(lockFile, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
+  const beat = () => writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }))
+  writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
   const beatTimer = setInterval(beat, 5_000)
   beatTimer.unref()
-  return {
-    release: async () => {
-      clearInterval(beatTimer)
-      try {
-        rmSync(lockFile)
-      } catch {
-        /* already gone */
-      }
+  return async () => {
+    clearInterval(beatTimer)
+    try {
+      rmSync(file)
+    } catch {
+      /* already gone */
     }
   }
 }
+
+/** tmpdir, not the data dir — the same fund key must not be live in any
+ *  two nektar processes on this machine, wherever their data dirs sit. */
+export const keyLockFile = (pkhHex: string): string => join(tmpdir(), `nektar-key-${pkhHex}.lock`)
+
+const acquireInstanceLock = async (dataDir: string): Promise<{ release: () => Promise<void> }> => ({
+  release: await acquireLock(join(dataDir, 'instance.lock'), `data dir ${dataDir}`)
+})
 
 /** records.sqlite + shard store + automation ledger — the one opener for the
  *  data dir's durable state (WAL + busy_timeout), was two verbatim copies. */
@@ -720,6 +727,16 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     fundAddress = fundKey.toPublicKey().toAddress(ttn ? [0x6f] : undefined)
     pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
   }
+  // one process per fund key — a second instance spending the same reserve
+  // is how the earlier double spends happened. Harnesses that deliberately
+  // co-run set NEKTAR_ALLOW_SHARED_KEY=1 (warned on stderr).
+  let releaseKeyLock: (() => Promise<void>) | undefined
+  if (nektarEnvFlag('NEKTAR_ALLOW_SHARED_KEY')) {
+    process.stderr.write(`nektar ${net}: NEKTAR_ALLOW_SHARED_KEY=1 — fund-key lock skipped; two processes may spend this reserve
+`)
+  } else {
+    releaseKeyLock = await acquireLock(keyLockFile(pkhHex), `fund key ${fundAddress}`)
+  }
   // TTN uses testnet encoding (prefix byte 0x6f → 'm'/'n' addresses); main '1…'
   process.stderr.write(
     `nektar ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)\n`
@@ -1019,15 +1036,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
     const root = r.merklePath.computeRoot(txid)
     return (await tracker.isValidRootForHeight(root, r.merklePath.blockHeight)) ? r.merklePath : undefined
   }
-  mem.txLookup = async (txid) => {
-    const h: Record<string, string> = {}
-    if (mc.wocApiKey) h['woc-api-key'] = mc.wocApiKey
-    const r = await (mc.fetchImpl ?? fetch)(`${mc.wocUrl ?? DEFAULT_WOC_URL}/tx/${txid}/hex`, {
-      headers: h,
-      signal: AbortSignal.timeout(10_000)
-    })
-    return r.ok ? Transaction.fromHex((await r.text()).trim()) : undefined
-  }
+  mem.txLookup = async (txid) => await fetchRawTx(mc, txid)
   mem.metrics.gauge('nektar_fee_balance_sats', () => utxoView.utxos.reduce((s, u) => s + u.satoshis, 0), 'operator fee-key balance (sats)')
   // outbound-only status push: no callback URL → pull tx statuses from the
   // broadcaster's /events SSE stream into the same handler the webhook uses.
@@ -1343,17 +1352,19 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
         const o = op(u.tx.id('hex'), u.vout)
         if (live.has(o)) continue
         const txid = u.tx.id('hex')
-        // the broadcaster's verdict decides: known live status (mempool or
-        // mined) → the output is spent since it is absent from the unspent
-        // set; an explicit rejection → the parent is dead, drop and revive
-        // inputs; undecidable → leave for the next reconcile
-        const status = await arcTxStatus(txid)
-        if (status !== '' && !['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status)) {
+        // first-party records decide, not a status word: a live stored
+        // spender marks the entry spent; the entry's own dead ledger row
+        // drops it and revives its inputs; anything else stays pending
+        const spender = txStore.spender(txid, u.vout)
+        const spenderState = spender === undefined ? undefined : (await ledger.walletTx({ txid: spender }))?.state
+        const ownState = (await ledger.walletTx({ txid }))?.state
+        const verdict = reserveVerdict(spender, spenderState, ownState)
+        if (verdict === 'spent') {
           reserve.markSpent(txid, u.vout)
           marked++
           continue
         }
-        if (status === '') {
+        if (verdict === 'pending') {
           pending++
           continue
         }
@@ -1418,6 +1429,7 @@ async function openLiveRuntime(cfg: RuntimeConfig, net: 'main' | 'ttn' | 'testne
       mem.events.off('broadcasterStatus', watchOnce)
       clearInterval(timer)
       await releaseLock()
+      await releaseKeyLock?.()
       await tick()
       await liveToolbox?.close()
       await knex.destroy()

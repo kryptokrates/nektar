@@ -241,6 +241,16 @@ export function watcherObservation(seen: { ev: TxStatusEvent; verified: boolean 
  *  A live or unrecorded spender blocks the import — a first-party record
  *  beats any index answer; a definitively rejected or conflicted spender
  *  frees the outpoint again because that spend never landed. */
+/** legacy refreshFunding reconcile — first-party records only: a stored
+ *  spender whose ledger row is live marks the entry spent; the entry's own
+ *  dead row (rejected/conflicted) drops it and revives its inputs; no live
+ *  record means pending. A broadcaster status word decides nothing. */
+export const reserveVerdict = (spender: string | undefined, spenderState: string | undefined, ownState: string | undefined): 'spent' | 'dead' | 'pending' => {
+  if (ownState === 'rejected' || ownState === 'conflicted') return 'dead'
+  if (spender !== undefined && spenderState !== 'rejected' && spenderState !== 'conflicted') return 'spent'
+  return 'pending'
+}
+
 export function importable(spender: string | undefined, spenderLedgerState: string | undefined): boolean {
   return spender === undefined || spenderLedgerState === 'rejected' || spenderLedgerState === 'conflicted'
 }

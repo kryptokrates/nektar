@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PrivateKey } from '@bsv/sdk'
-import { claimsRecord, decodeValue, encode as cborEncode, CborMap } from '@lightwebinc/bcommon'
+import { PrivateKey, Transaction } from '@bsv/sdk'
+import { claimsRecord, decodeValue, encode as cborEncode, CborMap, type Output } from '@lightwebinc/bcommon'
 import { signWant, signOffer } from '../src/artifacts.js'
 import { buildCarrier } from '../src/carrier.js'
 import { decodePayload, encodePayload, lanesFor, laneOf } from '../src/market-wire.js'
@@ -110,6 +110,84 @@ test('market: expired artifacts leave the index — lookup returns nothing and t
   // the freed outpoint admits a different carrier — proof the entry was dropped
   const second = await wantCarrierExp(k, k, clock + 3_600_000, tree)
   assert.deepEqual((await tm.identifyAdmissibleOutputs(second.beef, [])).outputsToAdmit, [0], 'expired entry released its outpoint')
+})
+
+// ── restore — boot rehydration of LaneIndex from persisted engine rows ──
+const engineRow = (beef: number[], topic: string, spent = false): Output => {
+  const tx = Transaction.fromAtomicBEEF(beef)
+  return {
+    txid: tx.id('hex'),
+    outputIndex: 0,
+    outputScript: tx.outputs[0].lockingScript.toBinary(),
+    satoshis: tx.outputs[0].satoshis ?? 1,
+    topic,
+    spent,
+    outputsConsumed: tx.inputs.map((i) => ({ txid: i.sourceTXID ?? i.sourceTransaction?.id('hex') ?? '', outputIndex: i.sourceOutputIndex })),
+    consumedBy: [],
+    beef
+  }
+}
+
+test('restore: rehydrated rows serve lookups and hold their outpoint claim', async () => {
+  const k = PrivateKey.fromRandom()
+  const t = new FakeTracker()
+  const m = mod(t)
+  const lane = laneOf(NET, 'compute')
+  const tree = await provenTree(k)
+  const beef = await wantCarrier(k, k, ['compute'], NET, tree)
+  const svc = m.lookups['ls_nektar']
+  // no admission ever ran — the index rebuild comes only from engine rows
+  const n = await svc.restore!([engineRow(beef, lane)], { findOutput: async () => null })
+  assert.equal(n, 1)
+  const wants = (await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })) as Array<{ txid: string }>
+  assert.equal(wants.length, 1, 'restored want is served')
+  // the claim survives: a *different* carrier on the same funding outpoint
+  // is refused exactly as if the original admission had happened live
+  const other = await wantCarrier(k, k, ['compute'], NET, tree)
+  assert.deepEqual((await m.topics[lane].identifyAdmissibleOutputs(other, [])).outputsToAdmit, [])
+  // and the restored claim dedupes the same carrier
+  assert.deepEqual((await m.topics[lane].identifyAdmissibleOutputs(beef, [])).outputsToAdmit, [0])
+  // a second restore is a no-op, not a duplicate
+  assert.equal(await svc.restore!([engineRow(beef, lane)], { findOutput: async () => null }), 1)
+  assert.equal((await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })).length, 1)
+})
+
+test('restore: skips spent rows, dead payloads, foreign topics and expired artifacts', async () => {
+  let clock = Date.now()
+  const k = PrivateKey.fromRandom()
+  const m = createNektarModule({ log: () => {}, chainTracker: new FakeTracker(), engine: { submit: async () => ({}) } }, [NET], { now: () => clock })
+  const lane = laneOf(NET, 'compute')
+  const svc = m.lookups['ls_nektar']
+  const beef = await wantCarrierExp(k, k, clock + 60_000)
+  const deadBeef = engineRow(beef.beef, lane)
+  deadBeef.beef = [9, 9, 9]
+  const rows: Output[] = [
+    { ...engineRow(beef.beef, lane), spent: true },
+    { ...engineRow(beef.beef, 'tm_unrelated'), beef: undefined },
+    deadBeef,
+    { ...engineRow(beef.beef, lane), outputScript: [0, 81, 0], beef: undefined }
+  ]
+  assert.equal(await svc.restore!(rows, { findOutput: async () => null }), 0)
+  assert.equal((await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })).length, 0)
+  // restored while valid, then the artifact's own exp passes -> dropped
+  assert.equal(await svc.restore!([engineRow(beef.beef, lane)], { findOutput: async () => null }), 1)
+  clock += 120_000
+  assert.equal((await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })).length, 0, 'expired restored entry evicts on read')
+})
+
+test('restore: script-only row rebuilds from the locking script with a fresh proof deadline', async () => {
+  const k = PrivateKey.fromRandom()
+  const t = new FakeTracker()
+  const m = mod(t)
+  const lane = laneOf(NET, 'compute')
+  const tree = await provenTree(k)
+  const beef = await wantCarrier(k, k, ['compute'], NET, tree)
+  const row = engineRow(beef, lane)
+  row.beef = undefined
+  const svc = m.lookups['ls_nektar']
+  assert.equal(await svc.restore!([row], { findOutput: async () => null }), 1)
+  assert.equal((await svc.lookup({ service: 'ls_nektar', query: { wants: { net: NET, domain: 'compute' } } })).length, 1)
+  assert.deepEqual((await m.topics[lane].identifyAdmissibleOutputs(await wantCarrier(k, k, ['compute'], NET, tree), [])).outputsToAdmit, [])
 })
 
 // ── wire format — v2 canonical record, dual decode ─────────────────────

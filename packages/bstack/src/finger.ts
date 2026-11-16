@@ -40,7 +40,7 @@ import { decodeCarrier } from '@lightwebinc/bfinger-host/dist/carrier.js'
 import { FundingTag, decodeFunding } from '@lightwebinc/bfinger-host/dist/funding.js'
 import { checkOffice } from '@lightwebinc/bbox-host/codec/boxrec.js'
 import { checkStream } from '@lightwebinc/blogs-host/dist/index.js'
-import { submitAll, lookupAll } from './hosts.js'
+import { submitAll, lookupAll, type SubmitAllResult } from './hosts.js'
 import { carrierFundingLockHex, walletOrProto } from './carrier.js'
 import { fundingSlotReason } from './tree.js'
 import type { TreeLedger } from './tree.js'
@@ -482,13 +482,16 @@ export async function publishSubRecord(p: {
    *  record's seq, which is always 1 */
   id: number
   body: CborMap
-}): Promise<{ commitment: string; txid: string }> {
+}): Promise<{ commitment: string; txid: string; missed: SubmitAllResult['missed']; pending: string[]; settled: SubmitAllResult['settled'] }> {
   const jkey = `finger:sub:${p.kind}:${p.id}`
   const hit = await p.journal.get(jkey)
   if (hit !== undefined) {
-    await submitAll(p.hosts, hit.beef, [FINGER_TOPIC], { retryWaits: [] })
+    // legs come back to the caller — a missed host gets a repair row like
+    // every other fanned-out carrier (was silently dropped: no quorum, no
+    // tracking, a pack PUT could "succeed" with zero hosts answering)
+    const r = await submitAll(p.hosts, hit.beef, [FINGER_TOPIC], { retryWaits: [] })
     const c = Utils.toHex(Array.from(commitment(Transaction.fromAtomicBEEF(hit.beef))))
-    return { commitment: c, txid: hit.txid }
+    return { commitment: c, txid: hit.txid, missed: r.missed, pending: r.pending, settled: r.settled }
   }
   const s = toSigner(p.key)
   const w = walletOrProto(p.key, p.wallet)
@@ -513,8 +516,8 @@ export async function publishSubRecord(p: {
   const beef = carrier.toAtomicBEEF()
   const txid = carrier.id('hex')
   await p.journal.put(jkey, { txid, beef, topics: [FINGER_TOPIC] })
-  await submitAll(p.hosts, beef, [FINGER_TOPIC], { retryWaits: [] })
-  return { commitment: Utils.toHex(Array.from(commitment(carrier))), txid }
+  const r = await submitAll(p.hosts, beef, [FINGER_TOPIC], { retryWaits: [] })
+  return { commitment: Utils.toHex(Array.from(commitment(carrier))), txid, missed: r.missed, pending: r.pending, settled: r.settled }
 }
 
 /** Repair the ancestry a BEEF carries for `tx` so it passes SPV while `tx`

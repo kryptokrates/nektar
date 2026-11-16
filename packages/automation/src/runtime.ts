@@ -119,6 +119,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       })
       .catch(() => {})
   }
+  // every fan-out leg becomes a per-host repair row via trackFanout — see
+  // the module-level doc; the io seam is just the store's own outbox
+  const fanoutIo = {
+    enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => store.enqueue(o, opts),
+    ackOutbox: (id: string) => store.ackOutbox(id)
+  }
   // bfinger packs store: packs describeShard PUTs to bstore also commit as
   // kind-5 sub-records under our identity; the finger record's refs then
   // resolve the whole pack set — no /.well-known dependency for readers
@@ -126,7 +132,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   if (lanes !== undefined) {
     const { PacksStore } = await import('@nektar/store')
     packsStore = new PacksStore({
-      publish: (kind, id, body) => lanes.mod.publishSubRecord({ key, wallet, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, kind, id, body })
+      publish: async (kind, id, body) => {
+        const r = await lanes.mod.publishSubRecord({ key, wallet, ledger: lanes.ledger, journal: lanes.journal, hosts: marketHosts, kind, id, body })
+        // the journaled `finger:sub:{kind}:{id}` key lets a repair row re-serve
+        // a missed host — a pack PUT now converges like every other fan-out
+        await queueRepairs(fanoutIo, `finger:sub:${kind}:${id}`, r.missed.map((m) => m.host))
+        return { commitment: r.commitment, txid: r.txid }
+      }
     })
     mem.attachPacksStore(packsStore)
   }
@@ -134,12 +146,6 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // lanes, and anywhere the operator runs its own hosts and says so
   const localNet = cfg.network === 'regtest' || cfg.localHosts === true
   const me = key.toPublicKey().toString()
-  // every fan-out leg becomes a per-host repair row via trackFanout — see
-  // the module-level doc; the io seam is just the store's own outbox
-  const fanoutIo = {
-    enqueue: (o: Omit<OutboxItem, 'attempts'>, opts?: { delayMs?: number }) => store.enqueue(o, opts),
-    ackOutbox: (id: string) => store.ackOutbox(id)
-  }
   // the shared context the regions meet through — door fields (resolveRecord,
   // poll, upkeep, ...) are assigned by the region openers and the deal loop
   // below; every call site reaches them lazily, so nothing can invoke a door

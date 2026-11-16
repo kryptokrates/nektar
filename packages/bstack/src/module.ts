@@ -1,6 +1,7 @@
 import { nektarEnv } from '@nektar/core'
-import { Transaction, type ChainTracker } from '@bsv/sdk'
+import { Transaction, Script, type ChainTracker } from '@bsv/sdk'
 import {
+  decodeStrictPushDrop,
   HeaderTracker,
   isNativeSource,
   type LookupFormula,
@@ -8,8 +9,10 @@ import {
   type LookupService,
   type Module,
   type ModuleHost,
+  type Output,
   type OutputAdmittedByTopic,
   type OutputSpent,
+  type RestoreStorage,
   type TopicManager
 } from '@lightwebinc/bcommon'
 import { checkCarrier, checkSweep, carrierLockingKey } from './carrier.js'
@@ -126,7 +129,9 @@ function makeTopicManager(
   }
 }
 
-function makeLookup(nets: string[], lanes: string[], shared: Map<string, LaneIndex>, tracker: ChainTracker, now: () => number): LookupService {
+function makeLookup(nets: string[], lanes: string[], shared: Map<string, LaneIndex>, tracker: ChainTracker, now: () => number): LookupService & {
+  restore?: (outputs: Output[], storage: RestoreStorage) => number | Promise<number>
+} {
   const idxOf = (topic: string): LaneIndex | undefined => shared.get(topic)
   const match = (f: (e: { payload: MarketPayload }) => boolean): Array<{ txid: string; outputIndex: number }> => {
     const out: Array<{ txid: string; outputIndex: number }> = []
@@ -175,6 +180,61 @@ function makeLookup(nets: string[], lanes: string[], shared: Map<string, LaneInd
     },
     outputEvicted: (txid: string) => {
       for (const l of lanes) shared.get(l)!.spent(txid)
+    },
+    // the engine hands back its persisted unspent rows on boot — without
+    // this the LaneIndex restarts empty and the host serves nothing until
+    // new admissions land (and a second carrier can re-claim an outpoint it
+    // already holds). Entries whose funding got spent while the host was
+    // down are evicted by the spend rows the engine reports on its own.
+    restore: async (outputs: Output[], _storage: RestoreStorage): Promise<number> => {
+      let restored = 0
+      for (const o of outputs) {
+        if (o.spent === true) continue
+        const idx = idxOf(o.topic)
+        if (idx === undefined) continue
+        try {
+          let payload: MarketPayload | undefined
+          let fundingOutpoint: string | undefined
+          let fundingDeadline: number | undefined
+          let beef = o.beef
+          if (beef !== undefined) {
+            // full re-check — re-derives the funding outpoint and the
+            // unproven-ancestry flag that sets the eviction deadline
+            const c = await checkCarrier(beef, { tracker })
+            if (!c.ok) continue
+            fundingOutpoint = c.fundingOutpoint
+            fundingDeadline = c.unprovenFunding ? now() + FUNDING_PROOF_MS : undefined
+            try {
+              payload = decodePayload(c.payload)
+            } catch {
+              continue
+            }
+          } else {
+            // script-only row: the record push is still in the locking
+            // script; the funding outpoint is the row's own consumed input;
+            // the deadline is conservative — a fresh window extends an
+            // eviction that may have been near, never drops a claim early
+            const fields = decodeStrictPushDrop(Script.fromBinary(o.outputScript))?.fields
+            if (fields === undefined || fields.length < 1) continue
+            try {
+              payload = decodePayload(new Uint8Array(fields[0]))
+            } catch {
+              continue
+            }
+            const cons = o.outputsConsumed?.[0]
+            if (cons === undefined) continue
+            fundingOutpoint = `${cons.txid}:${cons.outputIndex}`
+            fundingDeadline = now() + FUNDING_PROOF_MS
+          }
+          const exp = bodyExp(payload)
+          if (exp === undefined || exp <= now()) continue
+          idx.record(o.txid, beef ?? [], payload, fundingOutpoint, fundingDeadline)
+          restored++
+        } catch {
+          /* one bad row must not abort the restore of the rest */
+        }
+      }
+      return restored
     },
     lookup: async (q: LookupQuestion): Promise<LookupFormula> => {
       if (q.service !== LS_NAME) throw new Error(`unknown service ${q.service}`)

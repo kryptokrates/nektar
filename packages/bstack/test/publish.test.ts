@@ -78,7 +78,7 @@ test('ensureTrees: mints once, no double-mint while unproven, proven then low-wa
   const p = { key: k, ledger, lowWater: 4, size: 4, satsPerOutput: 100, takeFunding: async (s: number) => fund(k, 1_000_000), broadcast: bc, fetchTx }
   const r1 = await ensureTrees(p)
   assert.equal(broadcasted.length, 1)
-  assert.ok(r1.minted)
+  assert.equal(r1.minted.length, 1)
   await ensureTrees(p)
   assert.equal(broadcasted.length, 1, 'no second mint while unproven')
   prove(broadcasted[0])
@@ -87,10 +87,10 @@ test('ensureTrees: mints once, no double-mint while unproven, proven then low-wa
   assert.equal(await ledger.remaining(), 4)
   for (let i = 0; i < 2; i++) await ledger.take()
   const r4 = await ensureTrees(p)
-  assert.ok(r4.minted, 'below low-water with all proven -> mints another')
+  assert.equal(r4.minted.length, 1, 'below low-water with all proven -> mints another')
   assert.equal(broadcasted.length, 2)
   const r5 = await ensureTrees(p)
-  assert.equal(r5.minted, undefined, 'second tree still unproven -> no third mint')
+  assert.equal(r5.minted.length, 0, 'second tree still unproven -> no third mint')
   assert.equal(broadcasted.length, 2)
 })
 
@@ -139,7 +139,7 @@ test('ensureTrees: stuck mint — keep while healing, drop on definitive verdict
   verdict = 'drop'
   const r = await ensureTrees(p)
   assert.deepEqual(rejected, [broadcasted[0].id('hex')])
-  assert.ok(r.minted, 'mint gate re-opens the same pass')
+  assert.equal(r.minted.length, 1, 'mint gate re-opens the same pass')
   assert.equal((await ledger.unproven()).length, 1, 'the replacement mint is now the unproven row')
   // a chain rejection never reaches onStuck — dropped outright, re-minted
   status = 'rejected'
@@ -300,14 +300,14 @@ test('ensureTrees: unproven provision tree does not gate the mint, and gets prov
     fetchTx: async (id: string) => (id === prov.id('hex') ? prov : undefined)
   }
   const r1 = await ensureTrees(p)
-  assert.ok(r1.minted !== undefined, 'a pending provision tree must not block the market refill')
+  assert.ok(r1.minted.length > 0, 'a pending provision tree must not block the market refill')
   assert.equal(broadcasted.length, 1)
   // once the provision tx is proven, the proving loop marks it even though
   // its tree kind is 'provision', not 'market'
   prove(prov)
   const r2 = await ensureTrees(p)
   assert.ok(r2.proven.includes(prov.id('hex')), 'provision tree must be marked proven by the upkeep loop')
-  assert.deepEqual((await ledger.unproven()).map((u) => u.txid).sort(), [r1.minted!], 'only the freshly minted tree remains unproven')
+  assert.deepEqual((await ledger.unproven()).map((u) => u.txid).sort(), [...r1.minted].sort(), 'only the freshly minted tree remains unproven')
 })
 
 // G3: a rejected provision tx is dropped like any unproven row — without

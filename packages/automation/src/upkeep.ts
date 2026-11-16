@@ -3,6 +3,7 @@
 // (append + anchor), and the deal-journal view `deals {operationId}` reads.
 // The `upkeep` guard serializes it; the assembler's cycle() and tick drive it.
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
+import { queueRepairs } from './fanout.js'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Rt } from './rtctx.js'
 
@@ -150,7 +151,12 @@ export function openUpkeep(rt: Rt): void {
           now: cfg.now,
           log: (line) => log(`automation: ${line}`)
         })
-        if (r !== undefined) log(`automation: log anchor interval ${r.interval} ${r.txid}`)
+        if (r !== undefined) {
+          log(`automation: log anchor interval ${r.interval} ${r.txid}`)
+          // a host that missed the mined-anchor publish gets a repair row
+          // keyed `logpub:{stream}:{txid}` — the journaled BEEF re-serves it
+          if (r.missed !== undefined && r.missed.length > 0) await queueRepairs(rt.fanoutIo, `logpub:${logStream}:${r.txid}`, r.missed.map((m) => m.host))
+        }
       } catch (e) {
         log(`automation: log anchor: ${(e as Error).message.slice(0, 200)}`)
       }
@@ -185,8 +191,8 @@ export function openUpkeep(rt: Rt): void {
       lastSeq = r.seq
     }
     try {
-      if (lines.length > 0)
-        await lanes.mod.appendLog({
+      if (lines.length > 0) {
+        const r = await lanes.mod.appendLog({
           key,
           wallet,
           ledger: lanes.ledger,
@@ -197,6 +203,11 @@ export function openUpkeep(rt: Rt): void {
           lines,
           now: cfg.now
         })
+        // a host that missed this batch keeps a numbered gap in its replica —
+        // repair row per missed leg re-serves the journaled carrier
+        // (`log:{stream}:{seq}`), same contract as every other fan-out
+        await queueRepairs(rt.fanoutIo, `log:${logStream}:${r.seq}`, r.missed.map((m) => m.host))
+      }
       // the cursor moves only after the batch reached quorum: a crash between
       // tick and append replays the same lines on the next cycle, and the
       // journal keeps the resubmitted carrier identical (same txid, same seq)
@@ -244,13 +255,15 @@ export function openUpkeep(rt: Rt): void {
             // a fresh market tree's slots are usable the moment it's added —
             // anchored ancestry — so wake slot-deferred work now instead of
             // letting the defer window lapse
-            if (r.minted !== undefined && kind === 'market') await store.unblockOutbox('funding-slot')
+            if (r.minted.length > 0 && kind === 'market') await store.unblockOutbox('funding-slot')
             // a proven log tree's BEEF must reach tm_log before hosts can
             // admit carriers spending it - journaled, publishes once
             for (const txid of r.proven) {
               const tx = await mem.fetchTx(txid)
-              if (tx !== undefined && logStream !== undefined)
-                await lanes.mod.publishMinedLog({ journal: lanes.journal, hosts: marketHosts, stream: logStream, tx })
+              if (tx !== undefined && logStream !== undefined) {
+                const pub = await lanes.mod.publishMinedLog({ journal: lanes.journal, hosts: marketHosts, stream: logStream, tx })
+                await queueRepairs(rt.fanoutIo, `logpub:${logStream}:${txid}`, pub.missed.map((m) => m.host))
+              }
               // carriers minted on this tree while it was unproven carry a
               // host-side eviction deadline that never clears on its own —
               // queue a per-row re-announce with the parent's BUMP attached

@@ -128,6 +128,15 @@ jobs:
             printf "%s\n" "[Unit]" "Description=nektar STARK prover HTTP shim" "After=network.target docker.service" "Requires=docker.service" "" "[Service]" "EnvironmentFile=/etc/nektar-prover.env" "WorkingDirectory=/opt/nektar/tools/stark" "ExecStart=/usr/local/bin/node prover-server.mjs" "Restart=always" "RestartSec=5" "" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/nektar-prover.service
             systemctl daemon-reload
             systemctl enable --now nektar-prover
+            # --- debug: what does this session actually see? ---
+            echo "=== mountinfo /etc ==="
+            grep -E " /etc| / " /proc/self/mountinfo | head -6
+            echo "=== unit dir (inodes) ==="
+            ls -lai /etc/systemd/system/ | grep -E "nektar|total" || true
+            echo "=== stat units ==="
+            stat -c "%i %s %n" /etc/systemd/system/nektar-*.service 2>&1 || true
+            echo "=== systemctl view ==="
+            systemctl list-unit-files "nektar-*" --no-pager 2>&1 | head -8
             # restart races the instance lock's 20s heartbeat TTL — stop first,
             # wait for the lock file to free, then start cleanly
             sudo -n systemctl stop nektar-http nektar-watch || true
@@ -163,7 +172,7 @@ jobs:
             journalctl -u nektar-http -n 5 --no-pager | grep -E "nektar:|Error|error" || true
             # the service binds NEKTAR_HTTP_PORT (env file), not necessarily
             # 8080 — read it there first, fall back to the journal banner
-            PORT=$(grep -oE '^NEKTAR_HTTP_PORT=[0-9]+' /etc/nektar-http.env 2>/dev/null | cut -d= -f2)
+            PORT=$(grep -oE "^NEKTAR_HTTP_PORT=[0-9]+" /etc/nektar-http.env 2>/dev/null | cut -d= -f2)
             [ -n "$PORT" ] || PORT=$(journalctl -u nektar-http -n 20 --no-pager | grep -oE "HTTP \+ MCP on :[0-9]+" | grep -oE "[0-9]+" | tail -1)
             echo "detected port: ${PORT:-none}"
             # a booting service needs a few seconds before the banner lands —

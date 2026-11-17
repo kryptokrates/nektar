@@ -78,7 +78,11 @@ interface A {
 
 /** live-UTXO reconcile: entries the file still shows free but the network
  *  already spent must be marked before any funding call can take them. Only
- *  runs when WoC answers — a failed probe must not zero the reserve. */
+ *  runs when WoC answers — a failed probe must not zero the reserve.
+ *  Absence from the unspent list is NOT proof of spend: the honest mark
+ *  needs the parent proven mined (BUMP verified against our headers) plus
+ *  one block of depth so a just-sealed block's utxo-set lag can't zero a
+ *  live entry. An unproven parent is inconclusive — the entry stays. */
 const reconcileReserve = async (fundKey: PrivateKey, reserve: ReserveFunder, mc: MainnetConfig): Promise<void> => {
   const addr = fundKey.toAddress([0x6f]) // testnet pubkey-hash prefix
   const live = await fetch(`${mc.wocUrl}/address/${addr}/unspent`, { signal: AbortSignal.timeout(15_000) })
@@ -87,9 +91,18 @@ const reconcileReserve = async (fundKey: PrivateKey, reserve: ReserveFunder, mc:
   if (live === undefined) return
   const liveSet = new Set(live.map((u) => `${u.tx_hash}:${u.tx_pos}`))
   const known = new Set(((reserve as unknown as { entries: Array<{ txid: string; vout: number }> }).entries ?? []).map((e) => `${e.txid}:${e.vout}`))
+  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${mc.broadcasterUrl}/chaintracks/v2`), new WocTracker(mc))
+  const tip = await tracker.currentHeight().catch(() => 0)
+  /** parent proven mined with ≥1 confirmation → absence really means spent */
+  const minedDeep = async (txid: string): Promise<boolean> => {
+    const r = await merklePathMainnet(mc, txid).catch(() => null)
+    if (!r || tip <= 0 || r.merklePath.blockHeight > tip - 1) return false
+    const root = r.merklePath.computeRoot(txid)
+    return await tracker.isValidRootForHeight(root, r.merklePath.blockHeight)
+  }
   for (const u of [...reserve.utxos]) {
     const txid = u.tx.id('hex')
-    if (!liveSet.has(`${txid}:${u.vout}`)) reserve.markSpent(txid, u.vout)
+    if (!liveSet.has(`${txid}:${u.vout}`) && (await minedDeep(txid))) reserve.markSpent(txid, u.vout)
   }
   // import live UTXOs the file doesn't know (minted-tree change, settlement
   // income from earlier runs) — fetch each parent tx hex and addOwned it

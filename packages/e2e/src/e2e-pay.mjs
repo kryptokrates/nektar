@@ -15,6 +15,13 @@ const check = (ok, label) => {
   console.log(` ${ok ? '✔' : '✗ FAIL'} ${label}`)
   if (!ok) process.exit(1)
 }
+const _t0 = Date.now()
+let _lap = _t0
+const lap = (n) => {
+  const now = Date.now()
+  console.log(`  [${n}: ${now - _lap}ms]`)
+  _lap = now
+}
 
 // regtest connection — same env resolution as the sibling e2e scripts
 function readEnvFile(p) {
@@ -111,6 +118,7 @@ if (net === 'regtest') {
   await rpc('generatetoaddress', 1, fundAddr)
   payerUtxos.push({ tx: send, vout: 0, satoshis: paySats })
   console.log(` payer ${payerAddr} funded by regtest tx ${send.id('hex').slice(0, 20)}…`)
+  lap('payer funded on-chain')
 } else {
   // live-network payer funding is not wired — the toolbox wallet path holds
   // no operator-readable key to build the send from. Regtest is the funded
@@ -122,13 +130,20 @@ if (net === 'regtest') {
 const SHARD = 'pay-e2e'
 for (let i = 0; i < 4; i++) await call('remember', { shard: SHARD, data: `paid answers settle on a real chain — record ${i}` })
 console.log(' fragment committed — waiting for anchor…')
+const anchorT0 = Date.now()
+let f
 for (let i = 0; i < 60; i++) {
   const r = await call('recall', { shard: SHARD, seq: 0 })
-  if (!r.items?.[0]?.unverifiable) break
+  f = r.items?.[0]
+  if (f && !f.unverifiable) break
   await new Promise((r) => setTimeout(r, 5000))
 }
-const f = (await call('recall', { shard: SHARD, seq: 0 })).items[0]
-check(f && !f.unverifiable, `${SHARD}:0 anchored + verified on ${net}`)
+const anchorLag = Date.now() - anchorT0
+check(
+  f && !f.unverifiable,
+  `${SHARD}:0 anchored + verified on ${net} (anchor lag ${Math.round(anchorLag / 1000)}s${f && !f.unverifiable ? '' : ` — TIMEOUT, unverifiable=${f?.unverifiable}`})`
+)
+lap('anchor→proof wait')
 
 // ── 1) catalog + unpaid call → the 402 invoice
 const catalog = await (await fetch(`${base}/.well-known/x402`)).json()
@@ -138,6 +153,7 @@ check(
 )
 const denied = await call('groundedAnswer', { claims: [{ text: 'paid answers settle on a real chain — record 0', cites: [{ shard: SHARD, seq: 0 }] }] })
 check(denied.ok === false && denied.accepts?.[0]?.scheme === 'exact', 'unpaid call refused with x402 invoice')
+lap('402 invoice')
 const extra = denied.accepts[0].extra
 
 // ── 2) pay it for real: signed tx → server verifies + broadcasts → mined by consensus
@@ -154,6 +170,7 @@ if (r.committed !== true) console.log('  paid call response:', JSON.stringify(r)
 check(r.committed === true, `paid call committed — payment tx ${txid.slice(0, 20)}… settled by real consensus`)
 check(r.receipt.payment?.txid === txid, 'receipt commits the settlement txid')
 check(r.receipt.payment?.payTo === opAddr, `payment pays the operator ${opAddr}`)
+lap('sign+broadcast+commit')
 
 // ── 3) the payment tx exists ON THE REAL CHAIN
 {
@@ -173,7 +190,8 @@ const again = await call('groundedAnswer', {
   payment: { invoiceId: denied2.accepts[0].extra.invoiceId, transaction: hex }
 })
 check(!!again.error || !!again.paymentRequired === false, 'reused payment tx rejected')
-console.log(`\n receipt: ${r.receiptToken}\n verify:  ${r.verifyUrl}\n`)
+lap('verify+replay')
+console.log(`\n receipt: ${r.receiptToken}\n verify:  ${r.verifyUrl}\n  [total: ${Date.now() - _t0}ms — anchor lag ${Math.round(anchorLag / 1000)}s]`)
 srv.close()
 await rt.close()
 process.exit(0)

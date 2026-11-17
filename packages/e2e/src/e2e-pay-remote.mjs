@@ -52,10 +52,18 @@ const call = async (name, args) => {
 }
 
 console.log(`═══ remote paid-flow e2e → ${BASE} ═══`)
+const _t0 = Date.now()
+let _lap = _t0
+const lap = (n) => {
+  const now = Date.now()
+  console.log(`  [${n}: ${now - _lap}ms]`)
+  _lap = now
+}
 
 // MCP Streamable HTTP session: initialize → notifications/initialized → calls
 await mcp('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'e2e-pay-remote', version: '1' } })
 await mcp('notifications/initialized', {}).catch(() => {})
+lap('mcp session')
 
 // ── 0) the server is on a real network (not mock) and payments are on
 const x402 = await fetch(`${BASE}/.well-known/x402`)
@@ -77,6 +85,7 @@ const entry = res.entries.filter((e) => !spent.has(`${e.txid}:${e.vout}`)).sort(
 check(!!entry, 'payer has a spendable utxo in the local ttn reserve')
 const payerUtxos = [{ tx: Transaction.fromHex(entry.txHex), vout: entry.vout, satoshis: entry.satoshis }]
 console.log(` payer ${payer.toPublicKey().toAddress([0x6f])} spends ${entry.satoshis} sats (${entry.txid.slice(0, 16)}…)`)
+lap('payer utxo loaded')
 
 // ── 2) remember a record on the box; its shard auto-anchors on ttn
 const SHARD = `remote-${Date.now().toString(36)}`
@@ -86,16 +95,25 @@ for (const c of claims) {
   check(!!r, `remember "${c.slice(0, 40)}…"`)
 }
 console.log(` batch anchors automatically; waiting for the ttn proof to attach…`)
+lap('remembers')
 
-// ── 3) wait until recall verifies seq 0 — i.e. the anchor is proven on the real chain
-let proven = false
-for (let i = 0; i < 40 && !proven; i++) {
+// ── 3) wait until recall verifies seq 0 — i.e. the anchor is proven on the real chain.
+// The ceiling must outlive TWO slow live-network blocks (~20-40min on testnet
+// is not unusual) — this is the one real block wait the flow pays; everything
+// before and after it runs on broadcast acceptance.
+const anchorT0 = Date.now()
+let proven = false,
+  lastSeen = 'no item'
+for (let i = 0; i < 120 && !proven; i++) {
   await sleep(15_000)
   const r = await call('recall', { shard: SHARD, seq: 0 }).catch(() => null)
+  lastSeen = r?.items?.[0] ? `unverifiable=${!!r.items[0].unverifiable}` : (r?.error ?? 'no item')
   proven = !!(r?.items?.[0] && !r.items[0].unverifiable)
-  if (i % 4 === 3) console.log(` …still waiting (${(i + 1) * 15}s)`)
+  if (!proven && i % 4 === 3) console.log(` …still waiting (${Math.round((Date.now() - anchorT0) / 1000)}s, last: ${lastSeen})`)
 }
-check(proven, 'fragment anchored + provable on the real network')
+const anchorLag = Date.now() - anchorT0
+check(proven, `fragment anchored + provable on the real network (anchor lag ${Math.round(anchorLag / 1000)}s${proven ? '' : ` — TIMEOUT, last: ${lastSeen}`})`)
+lap('anchor→proof wait')
 
 // ── 4) unpaid call → 402 invoice
 const ga = { claims: claims.map((text, i) => ({ text, cites: [{ shard: SHARD, seq: i }] })) }
@@ -103,6 +121,7 @@ const denied = await call('groundedAnswer', ga)
 check(denied.ok === false && !!denied.accepts?.[0]?.extra?.invoiceId, 'unpaid call refused with x402 invoice')
 const inv = denied.accepts[0]
 console.log(` invoice ${inv.extra.invoiceId} — ${inv.amount} sats → ${inv.payTo} + tag "${inv.extra.opReturn}"`)
+lap('402 invoice')
 
 // ── 5) sign the settlement tx locally (WIF only), retry paid
 const { hex, txid } = await buildPaymentTx(
@@ -124,6 +143,7 @@ if (existsSync('.state/ttn-data/reserve.json')) {
 check(r.committed === true, `paid call committed — settlement tx ${txid.slice(0, 16)}… broadcast by the box`)
 check(r.receipt?.payment?.txid === txid, 'receipt commits the settlement txid')
 check(r.receipt?.payment?.payTo === inv.payTo, `payment pays the operator ${inv.payTo}`)
+lap('sign+broadcast+commit')
 
 // ── 6) the tx exists on the real public network
 const st = await fetch(`${BROADCASTER}/tx/${txid}`)
@@ -135,6 +155,9 @@ check(!!st?.txid || !!st?.txStatus, `settlement tx visible on the network (${st?
 const v = await fetch(`${BASE}/v1/verify?r=${r.receiptToken}`).then((x) => x.json())
 check(v.ok === true, 'receipt verifies publicly')
 check(v.checks.find((c) => c.name === 'paid')?.ok === true, `'paid' check green — ${v.checks.find((c) => c.name === 'paid')?.detail}`)
+lap('public verify')
 
-console.log(`\n receipt: ${r.receiptToken}\n verify:  ${r.verifyUrl}\n tx:      ${txid}\n`)
+console.log(
+  `\n receipt: ${r.receiptToken}\n verify:  ${r.verifyUrl}\n tx:      ${txid}\n  [total: ${Date.now() - _t0}ms — anchor lag ${Math.round(anchorLag / 1000)}s]`
+)
 process.exit(0)

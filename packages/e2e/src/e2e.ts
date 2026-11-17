@@ -58,7 +58,7 @@ const lap = (n: string) => {
 }
 const w1 = await mem.remember('manual', 'drain port 4 torque 45Nm')
 await mem.remember('manual', 'inspect belt every 10h')
-check(!!w1.anchored || true, 'write accepted')
+check(w1.seq === 0, 'write accepted')
 await mem.anchorShard('manual')
 await chain.mine(1)
 

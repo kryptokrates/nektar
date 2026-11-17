@@ -25,6 +25,13 @@ const check = (cond: boolean, name: string) => {
   console.log(`${cond ? '✔' : '✖'} ${name}`)
   if (!cond) failures++
 }
+const _t0 = Date.now()
+let _lap = _t0
+const lap = (n: string) => {
+  const now = Date.now()
+  console.log(`  [${n}: ${now - _lap}ms]`)
+  _lap = now
+}
 
 // Load secrets from gitignored env files (never printed): nektar/.env holds
 // NEKTAR_REGTEST_WIF; the teranode quickstart .env holds rpc_user/rpc_pass.
@@ -107,6 +114,25 @@ async function mineOne(): Promise<number> {
   lastMinedHeight = Math.max(lastMinedHeight, hdr.height)
   return hdr.height
 }
+/** BUMP fetch with lag measurement: the asset API indexes a just-mined block
+ *  with a short lag. Poll bounded — the poll is the ceiling, the recorded
+ *  number is the real mine→proof lag this run paid. */
+const bumpLags: number[] = []
+async function fetchBump(txid: string, label: string, tries = 20, delayMs = 1500): Promise<MerklePath | null> {
+  const t0 = Date.now()
+  for (let t = 0; t < tries; t++) {
+    const r = await merklePathFor(cfg, txid, tracker).catch(() => null)
+    if (r) {
+      const d = Date.now() - t0
+      bumpLags.push(d)
+      console.log(`  [bump ${label}: ${txid.slice(0, 12)}… index lag ${d}ms/${t + 1} polls]`)
+      return new MerklePath(r.blockHeight, r.path)
+    }
+    if (t + 1 < tries) await new Promise((r) => setTimeout(r, delayMs))
+  }
+  console.log(`  [bump ${label}: ${txid.slice(0, 12)}… NO proof after ${Date.now() - t0}ms/${tries} polls]`)
+  return null
+}
 /** spend `u` into ~120×50k outputs + a new treasury output. Returns the split tx. */
 async function splitTreasury(parentTx: Transaction, vout: number, sats: number): Promise<Transaction | null> {
   const split = new Transaction()
@@ -145,7 +171,7 @@ let treasuryTx: Transaction | null = null
     console.log('treasury missing/spent — scanning early coinbases')
     const want = Buffer.from(key.toPublicKey().toHash()).toString('hex')
     let done = false
-    for (let h = 1; h <= 800 && !done; h++) {
+    for (let h = 1; h <= 100 && !done; h++) {
       try {
         const hash = await rpc('getblockhash', h)
         const res = await fetch(`${cfg.assetUrl}/block_legacy/${hash}`)
@@ -166,7 +192,6 @@ let treasuryTx: Transaction | null = null
       } catch {
         break
       }
-      if (h > 100) break // bounded: ≤100 candidates
     }
   }
 }
@@ -211,11 +236,14 @@ for (const u of reserve.utxos) chain.mempool.set(u.tx.id('hex'), u.tx)
     // the asset API indexes a just-mined block with a short lag — retry briefly,
     // and fail fast: an unproven funding parent breaks every BEEF built on it
     let mp = null as Awaited<ReturnType<typeof merklePathAtHeight>>
+    const t0 = Date.now()
     for (let a = 0; a < 10 && !mp; a++) {
       mp = await merklePathAtHeight(cfg, id, tracker, h).catch(() => null)
       if (!mp) await new Promise((r) => setTimeout(r, 300))
     }
     if (!mp) throw new Error(`funding parent ${id} has no merkle proof at height ${h}`)
+    bumpLags.push(Date.now() - t0)
+    console.log(`  [bump funding-parent ${id.slice(0, 12)}… h=${h}: ${Date.now() - t0}ms]`)
     u.tx.merklePath = new MerklePath(mp.blockHeight, mp.path)
   }
 }
@@ -232,6 +260,7 @@ const corr = await mem.remember('manual', 'CORRECTION: torque is 42Nm (supersede
 await mem.anchorShard('manual')
 await rpc('generatetoaddress', 1, addr)
 console.log('anchors broadcast + block mined')
+lap('story+anchors broadcast')
 
 // --- ~20 anchor burst -------------------------------------------------------
 console.log('— 20-anchor burst —')
@@ -268,33 +297,26 @@ check(
 // --- verifyFragment on real headers -----------------------------------------
 console.log('— verifyFragment (real headers) —')
 // attach real BUMPs to every broadcast anchor tx (offline mine() does this).
-// The asset API lags briefly indexing a just-mined block — retry a few times.
+// The asset API lags briefly indexing a just-mined block — fetchBump polls
+// and records the lag.
 const txMap: Map<string, Transaction> = (mem as any).anchorTxs
-await new Promise((r) => setTimeout(r, 2500))
 for (const [txid, tx] of txMap) {
-  let mp0 = null
-  for (let t = 0; t < 6 && !mp0; t++) {
-    mp0 = await merklePathFor(cfg, txid, tracker).catch(() => null)
-    if (!mp0) await new Promise((r) => setTimeout(r, 1000))
-  }
-  if (mp0) tx.merklePath = new MerklePath(mp0.blockHeight, mp0.path)
+  const mp = await fetchBump(txid, 'story-anchor', 8, 1000)
+  if (mp) tx.merklePath = mp
 }
 const { result } = await mem.prove('manual', corr.seq)
 check(result.ok === true, `correction proof verifies against real headers ${JSON.stringify(result)}`)
 // SPV check on the burst chain too
 const btx = burstIds[burstIds.length - 1]
-let mp = null as Awaited<ReturnType<typeof merklePathFor>>
-for (let t = 0; t < 6 && !mp; t++) {
-  mp = await merklePathFor(cfg, btx, tracker).catch(() => null)
-  if (!mp) await new Promise((r) => setTimeout(r, 1000))
-}
-check(!!mp, `BUMP built for ${btx.slice(0, 12)}… (block ${mp?.blockHeight ?? '?'})`)
-if (mp) {
+const bmp = await fetchBump(btx, 'burst-anchor', 8, 1000)
+check(!!bmp, `BUMP built for ${btx.slice(0, 12)}… (block ${bmp?.blockHeight ?? '?'})`)
+if (bmp) {
   const btxRaw = await rpc('getrawtransaction', btx)
   const btxObj = Transaction.fromHex(btxRaw)
-  btxObj.merklePath = new MerklePath(mp.blockHeight, mp.path)
-  check(await btxObj.merklePath.verify(btx, tracker), 'burst anchor SPV verified against real header')
+  btxObj.merklePath = bmp
+  check(await bmp.verify(btx, tracker), 'burst anchor SPV verified against real header')
 }
+lap('verifyFragment+BUMP')
 
 // --- v2 scenario on regtest -------------------------------------------------
 console.log('— v2 scenario (regtest) —')
@@ -333,14 +355,10 @@ console.log('— v2 scenario (regtest) —')
   // other mined-anchor paths in this file
   {
     const txid = (vm as any).tails.get('v2r')?.at(-1)?.txid
-    let mp = null
-    for (let t = 0; t < 20 && !mp; t++) {
-      mp = await merklePathFor(cfg, txid, tracker).catch(() => null)
-      if (!mp) await new Promise((r) => setTimeout(r, 1500))
-    }
+    const mp = await fetchBump(txid, 'v2r-anchor')
     const tx = (vm as any).anchorTxs.get(txid)
     if (mp && tx) {
-      tx.merklePath = new MerklePath(mp.blockHeight, mp.path)
+      tx.merklePath = mp
       ;(vm as any).confirmAnchor?.('v2r', txid)
     }
   }
@@ -403,9 +421,9 @@ console.log('— v2 scenario (regtest) —')
       const txid = (vm as any).tails.get('v2r')?.find?.(() => true)?.txid ?? (vm as any).tails.get('v2r')?.at(-1)?.txid
       const atx = (vm as any).anchorTxs.get(txid)
       if (atx && !atx.merklePath) {
-        const mp = await merklePathFor(cfg, txid, tracker).catch(() => null)
+        const mp = await fetchBump(txid, 'v2r-audit', 1, 0)
         if (mp) {
-          atx.merklePath = new MerklePath(mp.blockHeight, mp.path)
+          atx.merklePath = mp
           ;(vm as any).confirmAnchor?.('v2r', txid)
         }
       }
@@ -457,12 +475,10 @@ console.log('— v2 scenario (regtest) —')
       // attach the BUMP like verifyAnchor does — asset index lags behind mining
       const atx = vm.anchorTx(ZKM_TXID)
       if (atx && !atx.merklePath) {
-        for (let t = 0; t < 20 && !atx.merklePath; t++) {
-          const mp = await merklePathFor(cfg, ZKM_TXID, tracker).catch(() => null)
-          if (mp) {
-            atx.merklePath = new MerklePath(mp.blockHeight, mp.path)
-            vm.confirmAnchor('zkm', ZKM_TXID)
-          } else await new Promise((r) => setTimeout(r, 1500))
+        const mp = await fetchBump(ZKM_TXID, 'zkm-anchor')
+        if (mp) {
+          atx.merklePath = mp
+          vm.confirmAnchor('zkm', ZKM_TXID)
         }
       }
       const q = vm.issueZkQuery('regtest-verifier')
@@ -476,6 +492,8 @@ console.log('— v2 scenario (regtest) —')
       check(false, `regtest P10 zk block: ${String((e as Error).message).slice(0, 160)}`)
     }
 }
+
+lap('v2 scenario')
 
 // — v4 AORG / policy DAG on regtest —
 console.log('— v4 AORG / policy DAG (regtest) —')
@@ -505,12 +523,10 @@ spec(S, V) :- requires(P, V), applies(S, P).`).rules
     await mineOne()
     const atx = ga.proveVertex(d45.h).anchorTx
     if (atx && !atx.merklePath) {
-      for (let t = 0; t < 20 && !atx.merklePath; t++) {
-        const mp = await merklePathFor(cfg, gtx, tracker).catch(() => null)
-        if (mp) {
-          atx.merklePath = new MerklePath(mp.blockHeight, mp.path)
-          v4m.confirmAnchor('aorg', gtx)
-        } else await new Promise((r) => setTimeout(r, 1500))
+      const mp = await fetchBump(gtx, 'aorg-anchor')
+      if (mp) {
+        atx.merklePath = mp
+        v4m.confirmAnchor('aorg', gtx)
       }
     }
     const GRAPH_TXID = gtx
@@ -540,6 +556,8 @@ permit(P, read, R) :- member(P, verified), fragment(R).`).rules
     check(false, `regtest v4 block: ${String((e as Error).message).slice(0, 160)}`)
   }
 }
+
+lap('v4 aorg')
 
 // — P14 Merkle Automaton on regtest: Teranode/Chronicle enforces δ —
 console.log('— P14 Merkle Automaton (regtest) —')
@@ -585,6 +603,8 @@ console.log('— P14 Merkle Automaton (regtest) —')
   }
 }
 
+lap('P14 automaton')
+
 // — full paper scenario on regtest (same code as offline; real headers/BUMPs) —
 console.log('— full paper scenario (regtest) —')
 {
@@ -603,11 +623,8 @@ console.log('— full paper scenario (regtest) —')
         for (const s of shards) {
           for (const l of m.anchorLinks(s)) {
             const atx = m.anchorTx(l.txid)
-            for (let t = 0; t < 20 && atx && !atx.merklePath; t++) {
-              const mp = await merklePathFor(cfg, l.txid, tracker).catch(() => null)
-              if (mp) atx.merklePath = new MerklePath(mp.blockHeight, mp.path)
-              else await new Promise((r) => setTimeout(r, 500))
-            }
+            const mp = atx && !atx.merklePath ? await fetchBump(l.txid, `${s}-settle`, 20, 500) : null
+            if (mp && atx) atx.merklePath = mp
             if (atx && !atx.merklePath) throw new Error(`settle: no BUMP for ${s} anchor ${l.txid.slice(0, 12)}…`)
           }
           const last = m.tailLink(s)
@@ -630,6 +647,7 @@ console.log('— full paper scenario (regtest) —')
     )
   }
 }
+lap('full paper')
 
 // — GOAL-v4 production block on regtest —
 console.log('— v4 production block (regtest) —')
@@ -641,11 +659,8 @@ console.log('— v4 production block (regtest) —')
       for (const s of shards) {
         for (const l of m.anchorLinks(s)) {
           const atx = m.anchorTx(l.txid)
-          for (let t = 0; t < 20 && atx && !atx.merklePath; t++) {
-            const mp = await merklePathFor(cfg, l.txid, tracker).catch(() => null)
-            if (mp) atx.merklePath = new MerklePath(mp.blockHeight, mp.path)
-            else await new Promise((r) => setTimeout(r, 500))
-          }
+          const mp = atx && !atx.merklePath ? await fetchBump(l.txid, `${s}-v4`, 20, 500) : null
+          if (mp && atx) atx.merklePath = mp
           if (atx && !atx.merklePath) throw new Error(`settle: no BUMP for ${s} anchor ${l.txid.slice(0, 12)}…`)
         }
         const last = m.tailLink(s)
@@ -679,5 +694,11 @@ console.log('— v4 production block (regtest) —')
   }
 }
 
+lap('v4 production')
+{
+  const sorted = [...bumpLags].sort((a, b) => a - b)
+  if (sorted.length) console.log(`  [bump index lag: n=${sorted.length} p50=${sorted[Math.floor(sorted.length / 2)]}ms max=${sorted[sorted.length - 1]}ms]`)
+  console.log(`  [total: ${Date.now() - _t0}ms]`)
+}
 console.log(failures === 0 ? '\nREGTEST E2E PASS' : `\nREGTEST E2E FAIL: ${failures} checks failed`)
 process.exit(failures === 0 ? 0 : 1)

@@ -6,7 +6,7 @@
 // carriers, funding trees and unlock scripts are bcommon's, as for artifacts
 // and log batches.
 import { PublicKey, Transaction, P2PKH, Hash, Utils, type ChainTracker, type LockingScript } from '@bsv/sdk'
-import { toSigner, unlockP2PKH, signerAddress, nektarEnv, type SignerLike } from '@nektar/core'
+import { toSigner, unlockP2PKH, signerAddress, nektarEnv, egressAllowed, type SignerLike } from '@nektar/core'
 import {
   mintCarrier,
   fundingLock,
@@ -826,25 +826,7 @@ function parseBeef(beef: number[]): Transaction | undefined {
  *  lives here so `resolveFinger` stays transport-agnostic and every consumer
  *  (runtime hostsFor) screens through one place. */
 export function fingerHostAllowed(url: string, opts?: { allowHttp?: boolean; allowLocal?: boolean }): boolean {
-  let u: URL
-  try {
-    u = new URL(url)
-  } catch {
-    return false
-  }
-  if (u.protocol !== 'https:' && !(opts?.allowHttp === true && u.protocol === 'http:')) return false
-  if (opts?.allowLocal === true) return true // regtest/local rigs: hosts are the rig's
-  const h = u.hostname.toLowerCase()
-  if (h === 'localhost' || h.endsWith('.localhost')) return false
-  const ip = /^\d{1,3}(\.\d{1,3}){3}$/.test(h) ? h.split('.').map(Number) : undefined
-  if (ip !== undefined) {
-    const [a, b] = ip
-    if (a === 127 || a === 0) return false // loopback / this-host
-    if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return false // private
-    if (a === 169 && b === 254) return false // link-local (metadata endpoint)
-    if (a >= 224) return false // multicast/reserved
-    if (ip.some((o) => o > 255)) return false
-  }
-  if (h === '::1' || h === '[::1]' || h.startsWith('fe80') || h.startsWith('[fe80')) return false
-  return true
+  // shared implementation lives in @nektar/core — every outbound-fetch
+  // surface screens through egressAllowed, not just lanes
+  return egressAllowed(url, opts)
 }

@@ -1,7 +1,15 @@
 # RISC Zero build/prove image (Linux; Windows has no native toolchain).
 # Pinned: rust 1.94 (host), risc0 3.0.3 (stable). Used by `pnpm stark:build` and as the prover.
-FROM rust:1.94-bookworm
+FROM rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 ENV RISC0_HOME=/opt/risc0 PATH=/opt/risc0/bin:/root/.risc0/bin:$PATH
-RUN curl -fsSL https://risczero.com/install | bash && /root/.risc0/bin/rzup install rust 1.97.0 && /root/.risc0/bin/rzup install cargo-risczero 3.0.3 && /root/.risc0/bin/rzup install r0vm 3.0.3
+# installer bytes verified against a committed digest before they execute
+ARG RISC0_INSTALL_SHA256=e0a0c1ab3a86ce33efc566a0c9a24ac5eba688769d124d3a510337853b051a3c
+RUN curl -fsSL https://risczero.com/install -o /tmp/rzup-install.sh \
+ && echo "$RISC0_INSTALL_SHA256  /tmp/rzup-install.sh" | sha256sum -c - \
+ && bash /tmp/rzup-install.sh \
+ && /root/.risc0/bin/rzup install rust 1.97.0 \
+ && /root/.risc0/bin/rzup install cargo-risczero 3.0.3 \
+ && /root/.risc0/bin/rzup install r0vm 3.0.3 \
+ && rm /tmp/rzup-install.sh
 WORKDIR /work

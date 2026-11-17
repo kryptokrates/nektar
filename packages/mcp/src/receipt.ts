@@ -103,7 +103,11 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
   })
 
   if (receipt?.fragmentRefs?.length) {
-    for (const ref of receipt.fragmentRefs as Array<{
+    // cite cap: each private cite costs a ~85ms blocking STARK re-verify and
+    // possibly an outbound fetch — a planted receipt with K cites turns one
+    // public /v1/verify hit into K× work. Beyond the cap the verdict stays
+    // honest ('unverifiable — too many cites') rather than silently paid.
+    const refs = receipt.fragmentRefs as Array<{
       shard?: string
       seq?: number
       private?: true
@@ -111,7 +115,12 @@ export async function verifyReceipt(mem: NektarMemory, arg: { token?: string; re
       anchorTxid?: string
       proofCommit?: string
       proofStore?: { endpoint?: string; bucket?: string }
-    }>) {
+    }>
+    if (refs.length > 64) {
+      checks.push({ name: 'fragments', ok: 'skip', detail: `${refs.length} fragment refs exceeds the 64-cite verification cap` })
+      return { ok: false, receiptHash: parsed.receiptHash, checks, receipt }
+    }
+    for (const ref of refs) {
       if (ref.private === true) {
         // private shard: the cite is redacted — when the receipt commits
         // proofCommit and the proof is fetchable, the STARK is RE-RUN here:

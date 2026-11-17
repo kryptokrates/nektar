@@ -70,7 +70,10 @@ export function readKeyFile(file: string, pass: string | undefined, requireEnc: 
 }
 
 export function writeKeyFile(file: string, plain: string, pass: string | undefined): void {
-  writeFileSync(file, pass ? enc(pass, plain) : plain, { mode: 0o600 })
+  // never encrypt under a sentinel/empty passphrase — the file would read as
+  // encrypted while its key is a public constant
+  const p = pass === undefined || pass === '' || pass === '<UNKNOWN>' ? undefined : pass
+  writeFileSync(file, p ? enc(p, plain) : plain, { mode: 0o600 })
   try {
     chmodSync(file, 0o600)
   } catch {

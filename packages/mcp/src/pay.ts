@@ -93,6 +93,19 @@ interface Invoice {
 
 const invoices = new Map<string, Invoice>()
 const INVOICE_TTL_MS = 10 * 60_000
+// expiry is lazy (evaluated per settle attempt) — minted-but-never-settled
+// invoices would otherwise pin the map for the process lifetime. Sweep on
+// mint and hard-cap size.
+const INVOICE_MAX = 4096
+const sweepInvoices = () => {
+  const now = Date.now()
+  for (const [id, inv] of invoices) if (inv.expires <= now) invoices.delete(id)
+  while (invoices.size > INVOICE_MAX) {
+    const oldest = invoices.keys().next().value
+    if (oldest === undefined) break
+    invoices.delete(oldest)
+  }
+}
 
 /** canonical string the quote signature covers — anything a cheaper-signed
  *  quote could be doctored on is inside the digest */
@@ -159,6 +172,7 @@ const getReceiver = (): LedgerReceiver => {
 /** issue an invoice for a paid tool call — signed so the quote travels as an
  *  attributable offer (a doctored amount/payTo fails quoteSig verification) */
 const issueInvoice = async (mem: NektarMemory, tool: string, amount?: number): Promise<Invoice> => {
+  sweepInvoices()
   const signer = toSigner(opWif() ?? mem.operatorSigner())
   const payTo = await operatorAddress(mem)
   const inv: Invoice = {

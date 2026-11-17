@@ -62,6 +62,12 @@ export abstract class MarketBase {
    *  hint: the next cycle runs the reconcile check immediately for operations
    *  watching this txid, and the engine still consults txFacts itself */
   hint(txid: string): void {
+    // foreign txids are never consumed by reconcileGate — cap the set so an
+    // unbounded hint stream can't grow it forever (oldest evicted first)
+    if (this.hintedTxids.size >= 4096) {
+      const oldest = this.hintedTxids.values().next().value
+      if (oldest !== undefined) this.hintedTxids.delete(oldest)
+    }
     this.hintedTxids.add(txid)
   }
 

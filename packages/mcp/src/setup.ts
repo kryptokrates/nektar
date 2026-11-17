@@ -24,6 +24,9 @@ export function wireP2p(opts: {
   reserve: UtxoView
   addIfNew: (u: { tx: Transaction; vout: number }) => void
   log: (s: string) => void
+  /** the chain's own spend oracle — a peer's spend claim is a hint, never
+   *  proof; the outpoint burns only when the oracle says 'spent' */
+  spendStatus?: (txid: string, vout: number) => Promise<'spent' | 'unspent' | 'unknown'>
 }): P2PListener | undefined {
   if (opts.peers.length === 0) return undefined
   const fundPkhScript = `76a914${opts.pkhHex}88ac`
@@ -35,10 +38,20 @@ export function wireP2p(opts: {
     scripts: new Set([fundPkhScript])
   })
   p2p.on('spend', (t, v, by) => {
-    if (opts.reserve.utxos.some((u) => u.tx.id('hex') === t && u.vout === v)) {
-      void opts.reserve.burn(t, v)
-      opts.log(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}…\n`)
-    }
+    if (!opts.reserve.utxos.some((u) => u.tx.id('hex') === t && u.vout === v)) return
+    // an unsolicited peer claim must never burn a reserve outpoint on its
+    // word — burn only when our own spend oracle verifies it (SPV on live,
+    // first-party utxo set on regtest/memory). 'unknown' keeps the outpoint;
+    // the claim replays on the next hint or the durable lease settles it.
+    void (async () => {
+      const st = opts.spendStatus ? await opts.spendStatus(t, v).catch(() => 'unknown' as const) : 'unknown'
+      if (st === 'spent') {
+        await opts.reserve.burn(t, v)
+        opts.log(`nektar p2p: reserve outpoint ${t.slice(0, 12)}…:${v} spent by ${by.slice(0, 12)}… (verified)\n`)
+      } else {
+        opts.log(`nektar p2p: spend claim for ${t.slice(0, 12)}…:${v} unverified (${st}) — keeping the outpoint\n`)
+      }
+    })()
   })
   p2p.on('pay', (t, v, s) => opts.log(`nektar p2p: incoming ${s}sat to fee key — tx ${t.slice(0, 12)}…:${v}\n`))
   p2p.on('tx', (tx) => {

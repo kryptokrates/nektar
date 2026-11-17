@@ -36,7 +36,9 @@ export class PackWire {
   constructor(private deps: PackWireDeps) {}
 
   async exportShardPack(shard: string): Promise<ShardPack> {
-    if (this.deps.shardPrivate(shard)) throw new Error(`exportShard: shard "${shard}" is private — private shards refuse export`)
+    // `__*` is the reserved system namespace (__receipts__, __imports__,
+    // __revocation__, …) — system records are never shareable via packs
+    if (shard.startsWith('__') || this.deps.shardPrivate(shard)) throw new Error(`exportShard: shard "${shard}" is private or system-reserved — refuses export`)
     const recs = (await this.deps.storeAll(shard)).sort((a, b) => a.seq - b.seq)
     if (recs.length === 0) throw new Error(`exportShard: shard "${shard}" is empty or unknown`)
     if (recs.some((r) => (r.level ?? 0) > 0)) throw new Error(`exportShard: shard "${shard}" holds level>0 records — refuses export`)
@@ -97,6 +99,9 @@ export class PackWire {
     if (p?.v !== 1 || p?.kind !== 'nektar-shard-pack' || typeof p.shard !== 'string' || !Array.isArray(p.records)) {
       throw new Error('importShard: malformed pack — expected {v:1, kind:"nektar-shard-pack", shard, records[]}')
     }
+    // `__*` is the reserved system namespace — a pack carrying one would
+    // forge __receipts__/__revocation__ records on import
+    if (p.shard.startsWith('__')) throw new Error(`importShard: shard names starting with "__" are reserved for system records`)
     if ((await this.deps.storeAll(p.shard)).length > 0) throw new Error(`importShard: shard "${p.shard}" already has records — import needs an empty shard`)
     // R10 — consume the evidence map: each anchor's AtomicBEEF (with BUMP once
     // mined) lands in anchorTxs, so verifyFragment checks inclusion offline
@@ -120,6 +125,14 @@ export class PackWire {
       skipped = 0
     const unverifiable: string[] = []
     for (const rec of [...p.records].sort((a, b) => a.seq - b.seq)) {
+      // refuse malformed levels — a stored non-integer throws in the recall
+      // loop's BigInt() and poisons the shard permanently
+      const lvl = rec.level ?? 0
+      if (!Number.isInteger(lvl) || lvl < 0) {
+        skipped++
+        unverifiable.push(`${p.shard}:${rec.seq}: malformed record level — refused`)
+        continue
+      }
       const prov =
         typeof rec.prov === 'object' && rec.prov !== null
           ? ({
@@ -135,7 +148,7 @@ export class PackWire {
         // verbatim fragment — preserves E/hdp so the re-landed record's leaf
         // recomputes exactly to the exporter's committed bundle (S3)
         const frag = parseFragment(fromHex(rec.frag))
-        const { rec: lr } = await this.deps.logRemember(p.shard, frag, { level: rec.level ?? 0 })
+        const { rec: lr } = await this.deps.logRemember(p.shard, frag, { level: lvl })
         this.deps.touched.add(p.shard)
         r = { seq: lr.seq, leaf: toHex(lr.leaf) }
         if (frag.d.length > 0 && typeof rec.data === 'string' && Buffer.from(frag.d).toString('utf8') !== rec.data) {
@@ -148,7 +161,7 @@ export class PackWire {
           continue
         }
       } else {
-        r = await this.deps.remember(p.shard, rec.data, prov, rec.level ?? 0)
+        r = await this.deps.remember(p.shard, rec.data, prov, lvl)
       }
       if (r.seq !== rec.seq) {
         skipped++

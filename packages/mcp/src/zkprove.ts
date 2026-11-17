@@ -107,8 +107,24 @@ export class ZkProveOps {
    *  the queryId must already be CONSUMED, i.e. this exact proof verified
    *  once at commit. The shard is resolved from the anchor's own script data
    *  (private cites never carry the shard name); the cite's hdp stays
-   *  unverifiable-by-design — ZK hides which leaf it was. */
+   *  unverifiable-by-design — ZK hides which leaf it was.
+   *  Memoized on (proof bytes, anchorTxid): the WASM verify costs ~85ms of
+   *  blocking CPU — /v1/verify replays it once per cite per request without it. */
+  private static reverifyCache = new Map<string, { ok: boolean; reason?: string; anchorTxid?: string }>()
   async reverifyMembershipBytes(bytes: Uint8Array, anchorTxid: string): Promise<{ ok: boolean; reason?: string; anchorTxid?: string }> {
+    const ckey = `${toHex(Uint8Array.from((await import('node:crypto')).createHash('sha256').update(bytes).digest()))}:${anchorTxid}`
+    const hit = ZkProveOps.reverifyCache.get(ckey)
+    if (hit) return hit
+    const out = await this.reverifyMembershipBytesUncached(bytes, anchorTxid)
+    if (ZkProveOps.reverifyCache.size >= 1024) {
+      const oldest = ZkProveOps.reverifyCache.keys().next().value
+      if (oldest !== undefined) ZkProveOps.reverifyCache.delete(oldest)
+    }
+    ZkProveOps.reverifyCache.set(ckey, out)
+    return out
+  }
+
+  private async reverifyMembershipBytesUncached(bytes: Uint8Array, anchorTxid: string): Promise<{ ok: boolean; reason?: string; anchorTxid?: string }> {
     const anchorTx = this.deps.anchorTxs.get(anchorTxid)
     if (!anchorTx) return { ok: false, reason: 'committed anchor tx unknown to this instance' }
     const { decodeNektarAnchor } = await import('@nektar/contracts')

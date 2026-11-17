@@ -16,7 +16,7 @@
 
 import { createHmac } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { sha256, toHex } from '@nektar/core'
+import { sha256, toHex, nektarEnv, egressAllowed } from '@nektar/core'
 
 export interface ObjectRef {
   bucket: string
@@ -163,8 +163,14 @@ export class S3ObjectStore {
  *  Content integrity is never delegated to this fetch: callers verify the
  *  returned bytes against a digest (getVerified-style) or a CHIRP closure. */
 export async function getObjectUnsigned(endpoint: string, bucket: string, key: string): Promise<Uint8Array> {
+  // every caller of the unsigned path carries an artifact-ref endpoint
+  // (receipt/pack/ref fields) — screen it: loopback/private/link-local hosts
+  // and redirects into unscreened targets are refused. Local rigs opt out
+  // via the network flag (a regtest bstore IS a loopback service).
+  if (!egressAllowed(endpoint, { allowHttp: true, allowLocal: nektarEnv('NEKTAR_NETWORK') === 'regtest' }))
+    throw new Error(`objectstore: endpoint refused by egress policy`)
   const url = `${endpoint.replace(/\/+$/, '')}/${uriEncode(bucket)}/${encodeKey(key)}`
-  const r = await fetch(url)
+  const r = await fetch(url, { signal: AbortSignal.timeout(15_000), redirect: 'error' })
   if (!r.ok) throw new Error(`s3 unsigned GET ${bucket}/${key} → ${r.status}`)
   const bytes = new Uint8Array(await r.arrayBuffer())
   if (bytes.length > OBJECT_MAX_BYTES) throw new Error(`objectstore: object ${key} is ${bytes.length} bytes, over the ${OBJECT_MAX_BYTES} byte bound`)

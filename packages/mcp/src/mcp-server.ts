@@ -34,7 +34,7 @@ const DESTRUCTIVE = new Set(['rotate', 'revoke'])
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x))
 
-export function createMcpServer(mem: NektarMemory, ops?: ToolCtx['ops']): McpServer {
+export function createMcpServer(mem: NektarMemory, ops?: ToolCtx['ops'], transport?: { external?: boolean }): McpServer {
   const server = new McpServer({ name: 'nektar', version: '0.2.0' }, { instructions: INSTRUCTIONS, capabilities: { tools: {}, resources: {}, prompts: {} } })
   const low = server.server
   low.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -46,7 +46,7 @@ export function createMcpServer(mem: NektarMemory, ops?: ToolCtx['ops']): McpSer
   low.setRequestHandler(CallToolRequestSchema, async (req) => {
     try {
       if (!visibleTools().some((t) => t.name === req.params.name)) throw new Error(`unknown tool ${req.params.name}`)
-      const result = await callTool(mem, req.params.name, (req.params.arguments ?? {}) as Record<string, any>, { ops })
+      const result = await callTool(mem, req.params.name, (req.params.arguments ?? {}) as Record<string, any>, { ops, external: transport?.external })
       const text = json(result ?? null)
       const parsed = JSON.parse(text) as unknown
       // structuredContent must be a JSON object (spec); null/arrays go as text only

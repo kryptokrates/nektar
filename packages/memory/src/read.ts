@@ -213,7 +213,17 @@ export abstract class MemRead extends MemRecords {
       out.push(ref)
       const item: { seq: number; state: string; text?: string; unverifiable?: boolean; reason?: string; zk?: string } = { seq: r.seq, state: r.state }
       if (opts?.zk) item.zk = zkOk ? 'verified' : 'rejected'
-      const level = BigInt(r.level ?? 0)
+      // fail-soft per record: a stored malformed level (a poisoned write from
+      // before input validation) must withhold this item, not reject the
+      // whole recall — the store is append-only with no delete path
+      const level = Number.isInteger(r.level) && (r.level as number) >= 0 ? BigInt(r.level as number) : undefined
+      if (level === undefined) {
+        item.unverifiable = true
+        item.reason = 'malformed record level'
+        texts.push(item)
+        verifyFailed = true
+        continue
+      }
       const fin = opts?.requireFinal ? await this.anchorStatus(shard, r.seq) : undefined
       // §19 author guard: revocation + epoch-window authorship, evaluated once
       // per record before the serve guards. Local check uses the live SMT;

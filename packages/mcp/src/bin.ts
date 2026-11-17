@@ -172,6 +172,14 @@ let srv: ReturnType<typeof createHttpApi> | undefined
 if (port) {
   srv = createHttpApi(rt.mem, rt.ops)
   const host = nektarEnv('NEKTAR_HTTP_HOST') ?? '127.0.0.1'
+  // fail-closed: a non-loopback bind with no bearer exposes every tool and
+  // operator route unauthenticated — refuse unless the operator explicitly
+  // opts into open serving
+  const loopbackBind = host === '127.0.0.1' || host === 'localhost' || host === '::1'
+  if (!loopbackBind && nektarEnv('NEKTAR_HTTP_TOKEN') === undefined && !nektarEnv('NEKTAR_INSECURE_NO_AUTH'))
+    throw new Error(
+      `refusing to bind ${host}:${port} without NEKTAR_HTTP_TOKEN — the tool surface would be unauthenticated (set NEKTAR_INSECURE_NO_AUTH=1 to override)`
+    )
   // a crashing-then-respawned agent briefly loses its port to the dying
   // process (WER holds it on Windows); retry the bind on a bounded ceiling
   // instead of letting an unhandled 'error' event kill the whole agent

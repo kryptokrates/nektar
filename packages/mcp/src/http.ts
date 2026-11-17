@@ -2,7 +2,7 @@
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
 import { nektarEnv } from '@nektar/core'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
-import { randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { MerklePath } from '@bsv/sdk'
 import type { NektarMemory } from './memory.js'
 import { TOOLS, visibleTools, callTool } from './server.js'
@@ -167,39 +167,49 @@ export async function handleBroadcasterStatus(
   j: { txid?: string; txStatus?: string; merklePath?: string; extraInfo?: string }
 ): Promise<void> {
   const status = String(j.txStatus ?? '?')
-  mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: status.toLowerCase() }, 1, 'broadcaster status callbacks received')
+  // the raw status/txid are unbounded unauth input — normalize before they
+  // become metric labels / hintedTxids entries (both retain forever)
+  const KNOWN_STATUSES = new Set([
+    'QUEUED', 'RECEIVED', 'STORED', 'ANNOUNCED_TO_NETWORK', 'SENT_TO_NETWORK',
+    'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'MINED', 'SEEN_IN_ORPHAN_MEMPOOL',
+    'CONFIRMED', 'REJECTED', 'DOUBLE_SPEND_ATTEMPTED', 'IMMUTABLE'
+  ])
+  const norm = KNOWN_STATUSES.has(status.toUpperCase()) ? status.toUpperCase() : 'OTHER'
+  mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: norm.toLowerCase() }, 1, 'broadcaster status callbacks received')
   mem.events.emit('broadcasterStatus', { txid: j.txid, status, detail: j.extraInfo })
   // a pushed rejection is wake-only — it pokes subscribers into re-asking
   // txFacts; the durable verdict belongs to verified chain events, a
   // first-party refusal, or the abandon horizon
-  if (typeof j.txid === 'string' && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(status.toUpperCase())) mem.hintTxRejected(j.txid)
+  const txidOk = typeof j.txid === 'string' && /^[0-9a-f]{64}$/i.test(j.txid)
+  const txid = txidOk ? (j.txid as string) : undefined
+  if (txid !== undefined && ['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'].includes(norm)) mem.hintTxRejected(txid)
   // N9 — the status is an unauthenticated input, not proof. A carried BUMP
   // must verify against our own tracker before it counts; without one we
   // fetch evidence; without evidence the tx stays unconfirmed.
-  if ((status === 'MINED' || status === 'IMMUTABLE') && typeof j.txid === 'string') {
+  if ((norm === 'MINED' || norm === 'IMMUTABLE') && txid !== undefined) {
     try {
       let mp: import('@bsv/sdk').MerklePath | undefined
       if (typeof j.merklePath === 'string' && j.merklePath.length > 0) {
         try {
           const cand = MerklePath.fromHex(j.merklePath)
-          if (await cand.verify(j.txid, mem.sdkTracker())) mp = cand
+          if (await cand.verify(txid, mem.sdkTracker())) mp = cand
         } catch {
           /* unusable — fetch evidence instead */
         }
       }
       if (mp === undefined) {
-        const cand2 = await (mem as any).chain?.merklePathOf?.(j.txid)
+        const cand2 = await (mem as any).chain?.merklePathOf?.(txid)
         // the fetched path must verify against our own tracker too —
         // the broadcaster's word alone is a hint, never a proof
         if (cand2 !== undefined) {
           try {
-            if (await cand2.verify(j.txid, mem.sdkTracker())) mp = cand2
+            if (await cand2.verify(txid, mem.sdkTracker())) mp = cand2
           } catch {
             /* unverifiable */
           }
         }
       }
-      if (mp) mem.deliverTxProof(j.txid, mp)
+      if (mp) mem.deliverTxProof(txid, mp)
       // no fallback: a status without retrievable evidence is a hint, not a confirmation
     } catch {
       /* evidence fetch failed — leave unconfirmed, reconcile later */
@@ -207,47 +217,92 @@ export async function handleBroadcasterStatus(
   }
 }
 
+const BODY_MAX = 16_000_000
+// aggregate bounds — a per-request cap alone lets N concurrent senders buffer
+// N×BODY_MAX; the pair below keeps total buffered bytes + concurrent readers
+// bounded regardless of connection count
+const BODY_INFLIGHT_MAX = 64
+const BODY_BYTES_MAX = 256_000_000
+let bodyInflight = 0
+let bodyBytes = 0
+
 async function body(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = []
-  let size = 0
-  for await (const c of req) {
-    size += (c as Buffer).length
-    if (size > 16_000_000) throw new Error('body too large')
-    chunks.push(c as Buffer)
+  const declared = Number(req.headers['content-length'] ?? 0)
+  if (declared > BODY_MAX) throw new Error('body too large')
+  if (bodyInflight >= BODY_INFLIGHT_MAX || bodyBytes + Math.min(declared, BODY_MAX) > BODY_BYTES_MAX) throw new Error('server busy')
+  bodyInflight++
+  let read = 0
+  try {
+    const chunks: Buffer[] = []
+    for await (const c of req) {
+      read += (c as Buffer).length
+      bodyBytes += (c as Buffer).length
+      if (read > BODY_MAX) throw new Error('body too large')
+      chunks.push(c as Buffer)
+    }
+    return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
+  } finally {
+    bodyInflight--
+    bodyBytes -= read
   }
-  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
 }
 
 export function createHttpApi(
   mem: NektarMemory,
   ops?: { wallet: () => Promise<unknown>; costs: () => unknown; importFunding?: (txid: string) => Promise<unknown> }
 ): Server {
-  // MCP Streamable HTTP: one transport + McpServer per session (mcp-session-id)
-  const sessions = new Map<string, import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport>()
-  const mcp = async (req: IncomingMessage, res: import('node:http').ServerResponse) => {
+  // MCP Streamable HTTP: one transport + McpServer per session (mcp-session-id).
+  // Idle sessions are reaped — a session survives a dropped socket by design,
+  // so nothing else bounds the map.
+  const sessions = new Map<string, { t: import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport; lastSeen: number }>()
+  const SESSION_IDLE_MS = 10 * 60_000
+  const SESSION_MAX = 256
+  const sessionReaper = setInterval(() => {
+    const now = Date.now()
+    for (const [id, s] of sessions) if (now - s.lastSeen > SESSION_IDLE_MS) void s.t.close()
+  }, 60_000)
+  sessionReaper.unref()
+  // /v1/pack memoization — keyed on shard content (head+count); concurrent
+  // full exports are capped
+  const packCache = new Map<string, { key: string; pack: unknown }>()
+  let packInflight = 0
+  // /dashboard/events subscriber cap
+  let sseClients = 0
+  const SSE_MAX = 32
+  const mcp = async (req: IncomingMessage, res: import('node:http').ServerResponse, authed: boolean) => {
     const { StreamableHTTPServerTransport } = await import('@modelcontextprotocol/sdk/server/streamableHttp.js')
     const { createMcpServer } = await import('./mcp-server.js')
     const sid = req.headers['mcp-session-id']
     const parsed = req.method === 'POST' ? await body(req) : undefined
-    let transport = typeof sid === 'string' ? sessions.get(sid) : undefined
-    if (!transport) {
+    let entry = typeof sid === 'string' ? sessions.get(sid) : undefined
+    if (!entry) {
       if (req.method !== 'POST' || typeof sid === 'string') {
         res.writeHead(404, { 'content-type': 'application/json' })
         res.end(json({ jsonrpc: '2.0', error: { code: -32001, message: 'unknown MCP session' }, id: null }))
         return
       }
+      if (sessions.size >= SESSION_MAX) {
+        res.writeHead(503, { 'content-type': 'application/json' })
+        res.end(json({ jsonrpc: '2.0', error: { code: -32000, message: 'too many MCP sessions' }, id: null }))
+        return
+      }
       const t: import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
-          sessions.set(id, t)
+          sessions.set(id, { t, lastSeen: Date.now() })
         }
       })
       t.onclose = () => {
         if (t.sessionId) sessions.delete(t.sessionId)
       }
-      await createMcpServer(mem, ops).connect(t)
-      transport = t
+      // manifest-priced recall/exportShard must invoice unauthenticated MCP
+      // callers exactly like REST — the external flag is the caller's actual
+      // auth state, not the transport
+      await createMcpServer(mem, ops, { external: !authed }).connect(t)
+      entry = { t, lastSeen: Date.now() }
     }
+    entry.lastSeen = Date.now()
+    const transport = entry.t
     await transport.handleRequest(req, res, parsed)
   }
   const server = createServer(
@@ -286,11 +341,19 @@ export function createHttpApi(
           url.pathname.startsWith('/v1/automation/approvals/') &&
           nektarEnv('NEKTAR_OPERATOR_TOKEN') &&
           req.headers.authorization === `Bearer ${nektarEnv('NEKTAR_OPERATOR_TOKEN')}`
-        if (tok && !publicPath && !operatorApproval && req.headers.authorization !== `Bearer ${tok}`) {
+        // enforcement, not just documentation: "localhost-trusted" means the
+        // peer address actually IS loopback — a no-token server still answers
+        // tool/write routes for local callers only. Non-loopback binds must
+        // carry a token (bin.ts refuses to start without one unless an
+        // explicit insecure flag is passed)
+        const authed = tok !== undefined && req.headers.authorization === `Bearer ${tok}`
+        const peer = req.socket.remoteAddress ?? ''
+        const loopback = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
+        if (!publicPath && !operatorApproval && !authed && !(tok === undefined && loopback)) {
           return send(401, { error: 'unauthorized' })
         }
         try {
-          if (url.pathname === '/mcp') return await mcp(req, res)
+          if (url.pathname === '/mcp') return await mcp(req, res, authed)
           if (req.method === 'GET' && url.pathname === '/v1/health') return send(200, { ok: true })
           if (req.method === 'POST' && url.pathname === '/v1/lane') {
             // direct carrier push — the same bytes a box/lane read would
@@ -308,6 +371,8 @@ export function createHttpApi(
           if (req.method === 'GET' && url.pathname === '/v1/metrics') return send(200, mem.metrics.render(), 'text/plain; version=0.0.4')
           if (req.method === 'GET' && url.pathname === '/dashboard/events') {
             // SSE — one line per state change; the page swaps its blocks on each
+            if (sseClients >= SSE_MAX) return send(429, { error: 'too many dashboard subscribers' })
+            sseClients++
             res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
             res.write(': connected\n\n')
             const push = (name: string) => {
@@ -322,6 +387,7 @@ export function createHttpApi(
               } catch {}
             }, 15_000)
             req.on('close', () => {
+              sseClients--
               clearInterval(beat)
               mem.events.off('change', push)
             })
@@ -532,7 +598,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
             if (!visibleTools().some((t) => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
             try {
-              return send(200, await callTool(mem, p[2], await body(req), { ops, external: !tok }))
+              return send(200, await callTool(mem, p[2], await body(req), { ops, external: !authed }))
             } catch (e) {
               return send(400, { error: (e as Error).message })
             }
@@ -544,7 +610,12 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
             return res.end(Buffer.from(bytes))
           }
           if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'proof' && p.length === 4) {
-            const r = await mem.prove(decodeURIComponent(p[2]), Number(p[3]))
+            // parity with the prove tool — a private shard's plain merkle
+            // citation is a leak even on this public route
+            const shard = decodeURIComponent(p[2])
+            if (mem.shardPrivate(shard) || shard.startsWith('__'))
+              return send(403, { error: 'private shard — plain citations refused; verify via proveMembership' })
+            const r = await mem.prove(shard, Number(p[3]))
             return send(200, { result: r.result, bundle: r.bundle ?? null })
           }
           if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'checkpoint' && p.length === 3) {
@@ -662,7 +733,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           if (req.method === 'GET' && url.pathname === '/.well-known/nektar') {
             if (/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
             const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${req.headers.host ?? 'localhost'}`
-            const pub = await mem.publicShards()
+            const pub = (await mem.publicShards()).filter((s) => !s.startsWith('__'))
             const catalog = await mem.shardCatalog().catch(() => [] as import('./memory.js').ShardManifest[])
             return send(200, {
               v: 1,
@@ -703,10 +774,34 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           }
           if (req.method === 'GET' && p[0] === 'v1' && p[1] === 'pack' && p.length === 3) {
             if (/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
+            const shard = decodeURIComponent(p[2])
+            // system + private shards never travel via packs — the public
+            // export surface is for shareable public shards only
+            if (shard.startsWith('__') || mem.shardPrivate(shard)) return send(403, { error: 'shard not shareable via pack' })
             try {
-              const pack = await mem.exportShardPack(decodeURIComponent(p[2]))
+              // memoize on the shard's content key — export re-runs a full
+              // prove+verify per record, so repeat/concurrent hits must not
+              // pay it again. A shifted head/record count busts the entry.
+              const head = mem.tailLink(shard)?.txid ?? ''
+              const n = (await mem.records(shard)).length
+              const ckey = `${shard}|${head}|${n}`
+              const etag = `W/"${createHash('sha256').update(ckey).digest('hex').slice(0, 32)}"`
+              if (req.headers['if-none-match'] === etag && packCache.get(shard)?.key === ckey)
+                return send(304, '', 'text/plain')
+              if (packInflight >= 2) return send(429, { error: 'pack export busy — retry shortly' })
+              let cached = packCache.get(shard)
+              if (cached?.key !== ckey) {
+                packInflight++
+                try {
+                  cached = { key: ckey, pack: await mem.exportShardPack(shard) }
+                  packCache.set(shard, cached)
+                } finally {
+                  packInflight--
+                }
+              }
               mem.metrics.inc('nektar_packs_served_total', {}, 1, 'public shard packs served')
-              return send(200, pack)
+              res.writeHead(200, { 'content-type': 'application/json', etag })
+              return res.end(json(cached.pack))
             } catch (e) {
               const m = (e as Error).message
               return send(/private|level>0/.test(m) ? 403 : 404, { error: m })
@@ -734,7 +829,8 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
       })()
   )
   server.on('close', () => {
-    for (const t of sessions.values()) void t.close()
+    clearInterval(sessionReaper)
+    for (const s of sessions.values()) void s.t.close()
   })
   return server
 }

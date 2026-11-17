@@ -76,7 +76,7 @@ export function configFromEnv(env = process.env): RuntimeConfig {
       `NEKTAR_NETWORK must be regtest|testnet|main — got '${String(env.NEKTAR_NETWORK)}'${env.NEKTAR_NETWORK === 'mock' ? ' (the in-process mock chain was removed — testnet is the zero-infra option)' : ''}`
     )
   const dataDir = env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar')
-  const secret = (k: string) => env[k] ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
+  const secret = (k: string) => nektarEnv(k, env) ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
   const cfg: RuntimeConfig = {
     network,
     dataDir,

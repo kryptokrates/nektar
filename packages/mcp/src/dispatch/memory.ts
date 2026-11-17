@@ -5,11 +5,25 @@ import type { ToolHandler } from './shared.js'
 export const handlers: Record<string, ToolHandler> = {
   remember: async (mem, args) => {
     if (args.private === false && mem.shardPrivate(args.shard)) throw new Error(`shard "${args.shard}" is private — the flag is monotone and cannot be unset`)
-    const r = await mem.remember(args.shard, args.data, { source: args.source, modality: args.modality }, args.level ?? 0, { premiseRefs: args.premiseRefs })
+    // `__*` is the reserved system namespace (__receipts__, __revocation__,
+    // __catalog__, __imports__, __identity__, __model__, __corrections__,
+    // __access__) — caller writes there forge receipts/revocations or poison
+    // recall; only internal modules may write system shards
+    if (typeof args.shard !== 'string' || args.shard.startsWith('__')) throw new Error('remember: shard names starting with "__" are reserved for system records')
+    const level = args.level ?? 0
+    // a stored non-integer/negative level throws in the recall loop's BigInt()
+    // and permanently poisons the shard on the append-only store
+    if (!Number.isInteger(level) || level < 0) throw new Error('remember: level must be a non-negative integer')
+    const r = await mem.remember(args.shard, args.data, { source: args.source, modality: args.modality }, level, { premiseRefs: args.premiseRefs })
     if (args.private === true) mem.setShardPrivate(args.shard)
     return { ...r, private: mem.shardPrivate(args.shard) || undefined }
   },
-  recall: async (mem, args) => {
+  recall: async (mem, args, d) => {
+    // parity with the prove tool's refusal: private/system shards are not
+    // served to external callers (the private flag gates citations, packs and
+    // listings — it must gate reads too)
+    if (d.ctx.external && (mem.shardPrivate(args.shard) || String(args.shard).startsWith('__')))
+      return { ok: false, reason: `shard "${args.shard}" is private — contents refused; verify via a ZK membership proof (zkQuery → proveMembership → verifyMembership)` }
     const { decodePresentation } = await import('@nektar/identity')
     const r = await mem.recall(args.shard, { seq: args.seq, identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk) })
     // tell the model how to recover from a wrong seq instead of an empty answer
@@ -87,7 +101,10 @@ export const handlers: Record<string, ToolHandler> = {
             : undefined
       if (!url) throw new Error('importShard: give {pack}, {from,shard}, {packUrl}, or {store}')
       if (!/^https?:\/\//i.test(url)) throw new Error('importShard: pack URL must be http(s)')
-      const r = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+      const { egressAllowed, nektarEnv } = await import('@nektar/core')
+      if (!egressAllowed(url, { allowHttp: true, allowLocal: nektarEnv('NEKTAR_NETWORK') === 'regtest' }))
+        throw new Error('importShard: pack URL host refused by egress policy')
+      const r = await fetch(url, { signal: AbortSignal.timeout(15_000), redirect: 'error' })
       if (!r.ok) throw new Error(`importShard: fetch ${url} → ${r.status}`)
       pack = await r.json()
     }
@@ -127,6 +144,7 @@ export const handlers: Record<string, ToolHandler> = {
     // claimed payload; lineage (from shard:seq, leaf, settlement txid)
     // commits on __imports__
     if (typeof args?.data !== 'string') throw new Error('importRecord: data required (the verified claim payload)')
+    if (typeof args.shard === 'string' && args.shard.startsWith('__')) throw new Error('importRecord: shard names starting with "__" are reserved for system records')
     return await mem.importRecord({
       data: args.data,
       provenance: args.provenance,

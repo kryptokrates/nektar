@@ -41,7 +41,9 @@ export function openLanes(rt: Rt): void {
         const hosts = r.body.hosts.filter((u) => lanes.mod.fingerHostAllowed(u, { allowHttp: rt.localNet, allowLocal: rt.localNet })).slice(0, 8)
         const push =
           r.body.push !== undefined && lanes.mod.fingerHostAllowed(r.body.push, { allowHttp: rt.localNet, allowLocal: rt.localNet }) ? r.body.push : undefined
-        rec = { hosts, office: r.body.office, stream: r.body.stream, watch: r.body.watch, ...(push !== undefined ? { push } : {}) }
+        const watch =
+          r.body.watch !== undefined && lanes.mod.fingerHostAllowed(r.body.watch, { allowHttp: rt.localNet, allowLocal: rt.localNet }) ? r.body.watch : undefined
+        rec = { hosts, office: r.body.office, stream: r.body.stream, ...(watch !== undefined ? { watch } : {}), ...(push !== undefined ? { push } : {}) }
       }
     } catch {
       /* no record (or no host serves one) — the configured set is the fallback */
@@ -63,7 +65,8 @@ export function openLanes(rt: Rt): void {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(query === undefined ? { service } : { service, query }),
-      signal: AbortSignal.timeout(2_000)
+      signal: AbortSignal.timeout(2_000),
+      redirect: 'error' // a redirect into an unscreened host is still an egress bypass
     }).catch(() => undefined)
   }
   // direct push: POST the journaled carrier BEEF to the recipient's own

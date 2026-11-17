@@ -128,18 +128,9 @@ jobs:
             printf "%s\n" "[Unit]" "Description=nektar STARK prover HTTP shim" "After=network.target docker.service" "Requires=docker.service" "" "[Service]" "EnvironmentFile=/etc/nektar-prover.env" "WorkingDirectory=/opt/nektar/tools/stark" "ExecStart=/usr/local/bin/node prover-server.mjs" "Restart=always" "RestartSec=5" "" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/nektar-prover.service
             systemctl daemon-reload
             systemctl enable --now nektar-prover
-            # --- debug: what does this session actually see? ---
-            echo "=== mountinfo /etc ==="
-            grep -E " /etc| / " /proc/self/mountinfo | head -6
-            echo "=== unit dir (inodes) ==="
-            ls -lai /etc/systemd/system/ | grep -E "nektar|total" || true
-            echo "=== stat units ==="
-            stat -c "%i %s %n" /etc/systemd/system/nektar-*.service 2>&1 || true
-            echo "=== systemctl view ==="
-            systemctl list-unit-files "nektar-*" --no-pager 2>&1 | head -8
             # restart races the instance lock's 20s heartbeat TTL — stop first,
             # wait for the lock file to free, then start cleanly
-            sudo -n systemctl stop nektar-http nektar-watch || true
+            sudo -n systemctl stop nektar-http nektar-watch 2>/dev/null || true
             DATA_DIR=$(grep -oE "^NEKTAR_DATA_DIR=.*" /etc/nektar-http.env 2>/dev/null | cut -d= -f2)
             DATA_DIR=${DATA_DIR:-/opt/nektar/.nektar}
             for i in 1 2 3 4 5 6 7 8; do
@@ -148,18 +139,21 @@ jobs:
             done
             rm -f "$DATA_DIR/instance.lock"
             sudo -n systemctl start nektar-watch nektar-http || {
+              echo "=== ns comparison: PID1 vs this session ==="
+              wc -l < /proc/1/mountinfo
+              wc -l < /proc/self/mountinfo
+              diff /proc/1/mountinfo /proc/self/mountinfo | head -20 || true
+              echo "=== mounts on /etc right now ==="
+              grep -nE " /etc|systemd" /proc/self/mountinfo | head -10
+              echo "=== unit dir at failure time ==="
+              ls -lai /etc/systemd/system/ | grep -E "nektar|total" || true
               for s in nektar-http nektar-watch; do
                 echo "=== unit $s ==="
                 cat "/etc/systemd/system/$s.service" || true
-                echo "=== status $s ==="
                 systemctl status "$s" --no-pager -l || true
-                journalctl -u "$s" -n 10 --no-pager || true
               done
               echo "=== fs scan ==="
               ls -la /opt/ | grep -iE "nektar|mamem|watch|http" || true
-              ls /var/lib/ /etc/ 2>/dev/null | grep -iE "nektar|mamem" || true
-              echo "=== leftover mamem units ==="
-              systemctl list-units --all "*mamem*" --no-pager || true
               exit 1
             }
             sleep 3

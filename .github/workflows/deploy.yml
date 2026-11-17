@@ -142,14 +142,17 @@ jobs:
             done
             rm -f "$DATA_DIR/instance.lock"
             sudo -n systemctl start nektar-watch nektar-http || {
+              echo "=== root device vs expectations ==="
+              stat -c "%d %D %i %n" / /etc /etc/systemd /etc/systemd/system 2>&1
+              grep -E " / |overlay" /proc/self/mountinfo | head -5
               echo "=== ns comparison: PID1 vs this session ==="
               wc -l < /proc/1/mountinfo
               wc -l < /proc/self/mountinfo
               diff /proc/1/mountinfo /proc/self/mountinfo | head -20 || true
-              echo "=== mounts on /etc right now ==="
-              grep -nE " /etc|systemd" /proc/self/mountinfo | head -10
-              echo "=== unit dir at failure time ==="
-              ls -lai /etc/systemd/system/ | grep -E "nektar|total" || true
+              echo "=== FULL unit dir at failure time ==="
+              ls -la /etc/systemd/system/ | head -40 || true
+              echo "=== mounts touching /etc ==="
+              grep -nE " /etc|systemd/system" /proc/self/mountinfo | head -10
               for s in nektar-http nektar-watch; do
                 echo "=== unit $s ==="
                 cat "/etc/systemd/system/$s.service" || true

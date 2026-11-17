@@ -102,12 +102,13 @@ jobs:
             # it lists; box-local keys (secrets, DATA_DIR, PORT…) untouched
             if [ -f deploy/hetzner/nektar-http.env ]; then
               while IFS= read -r kv; do
-                case "$kv" in ''|\#*) continue ;; esac
+                case "$kv" in \#*) continue ;; esac
+                [ -n "$kv" ] || continue
                 k="${kv%%=*}"
                 if grep -q "^$k=" /etc/nektar-http.env; then
                   sed -i "s|^$k=.*|$kv|" /etc/nektar-http.env
                 else
-                  printf '%s\n' "$kv" >> /etc/nektar-http.env
+                  printf "%s\n" "$kv" >> /etc/nektar-http.env
                 fi
               done < deploy/hetzner/nektar-http.env
             fi

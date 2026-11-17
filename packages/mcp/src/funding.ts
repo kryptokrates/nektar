@@ -106,7 +106,7 @@ export async function openCustody(
     pkhHex = Buffer.from(pk.toHash()).toString('hex')
     process.stderr.write(`nektar ${net}: NEKTAR_WALLET=client — signing via external wallet substrate (derived funding address ${fundAddress})\n`)
   } else {
-    fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, true)
+    fundKey = loadFeeKey(cfg.dataDir, mc.fundWif, pass, net === 'main')
     fundAddress = fundKey.toPublicKey().toAddress(testNet ? [0x6f] : undefined)
     pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
   }

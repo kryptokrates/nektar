@@ -200,10 +200,12 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // live custody needs the passphrase BEFORE keys/decrypt; the injected tier
   // has no encrypted material
   const pass = live ? mc?.passphrase : passphraseFromEnv()
-  if (live && !pass) throw new KeystoreError(`${net} requires NEKTAR_KEY_PASSPHRASE (or _FILE) for keys at rest`)
+  if (net === 'main' && !pass) throw new KeystoreError(`${net} requires NEKTAR_KEY_PASSPHRASE (or _FILE) for keys at rest`)
   const externalWallet = live && !injected && nektarEnv('NEKTAR_WALLET') === 'client'
   const { release: releaseLock } = await acquireInstanceLock(cfg.dataDir)
-  const { keys, save } = loadKeys(cfg.dataDir, pass, live, !externalWallet)
+  // encryption is mandatory on main only — test-coin keys are mode-0600
+  // plaintext when no passphrase is set (set it and they encrypt the same)
+  const { keys, save } = loadKeys(cfg.dataDir, pass, net === 'main', !externalWallet)
   // input-value resolver for the guard's fee check — custody outs (read
   // live each call: a refresh may swap the array), stored txs, anchor txs
   const { txStore, open: openTxStore } = persistedTxStore()

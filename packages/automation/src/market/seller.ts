@@ -214,13 +214,17 @@ export abstract class SellerOps extends IngressOps {
         return await refuse('escrow input does not spend its claimed parent output')
       spends++
     }
-    if (typeof m.tx === 'string' && this.d.broadcast !== undefined) {
-      const br = await this.d.broadcast(tx)
-      if (br.status !== 'success') return await refuse(`escrow not accepted by the network: ${br.description ?? br.status}`)
-    }
+    // escrow rebroadcast starts before the bookkeeping — the 'completing'
+    // transition, height fetch and custody mark all happen inside the
+    // broadcaster RTT. The verdict is still joined before complete(): a
+    // refused escrow never produces a 'delivered' claim.
+    const escrowBroadcastP = typeof m.tx === 'string' && this.d.broadcast !== undefined ? this.d.broadcast(tx) : undefined
     this.d.rememberTx?.(tx)
     const h = await this.d.height()
-    if (!direct && h + this.o.sellerSafetyBlocks >= Number(offer.cfg.refundAfter)) return await refuse('too close to the refund deadline')
+    if (!direct && h + this.o.sellerSafetyBlocks >= Number(offer.cfg.refundAfter)) {
+      await escrowBroadcastP?.catch(() => undefined)
+      return await refuse('too close to the refund deadline')
+    }
     const next = await this.d.store.transition(op.operationId, op.revision, 'completing', {
       cause: direct ? 'payment_verified' : 'escrow_verified',
       // a direct payment is already the seller's money — mark it owned so the
@@ -229,6 +233,18 @@ export abstract class SellerOps extends IngressOps {
       evidence: { spv, spends }
     })
     if (direct) await this.d.ownOutput?.(tx, m.utxo.vout)
+    if (escrowBroadcastP !== undefined) {
+      const br = await escrowBroadcastP
+      if (br.status !== 'success') {
+        // back to 'quoted' like a refused accept — the buyer's outbox
+        // redelivers until acked, and the next attempt re-verifies fresh
+        await this.d.store.transition(next.operationId, next.revision, 'quoted', {
+          cause: 'accept_refused',
+          evidence: { reason: `escrow not accepted by the network: ${br.description ?? br.status}` }
+        })
+        return
+      }
+    }
     await this.complete(next)
   }
 

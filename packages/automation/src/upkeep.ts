@@ -311,7 +311,8 @@ export function openUpkeep(rt: Rt): void {
               office: cfg.boxOffice ?? lanes.mod.officeFor(),
               stream: logStream,
               nets: [cfg.network],
-              ...(cfg.watchPublic !== undefined ? { watch: cfg.watchPublic } : {})
+              ...(cfg.watchPublic !== undefined ? { watch: cfg.watchPublic } : {}),
+              ...(cfg.pushPublic !== undefined ? { push: cfg.pushPublic } : {})
             },
             refs: packsRef !== undefined ? [packsRef] : undefined,
             takeFunding: async (sats: number) => (await mem.fundingOuts(sats, 'upkeep'))[0],

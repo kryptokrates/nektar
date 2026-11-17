@@ -270,7 +270,7 @@ export async function readBox(p: {
   return { items: out, withheld, unreachable, answered: [...perHost.keys()] }
 }
 
-async function openEnvelope(
+export async function openEnvelope(
   beef: number[],
   w: BoxWallet,
   office: string,

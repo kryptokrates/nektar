@@ -70,6 +70,11 @@ export interface AutomationConfig {
    *  counterparties can /notify our long-polls on outbound sends (requires
    *  publishFinger — records without it simply carry no watch field) */
   watchPublic?: string
+  /** this agent's own push base URL, advertised in the bfinger record so
+   *  counterparties POST a signed carrier BEEF to `${push}/v1/lane` for
+   *  immediate ingest (requires publishFinger — records without it simply
+   *  carry no push field; senders fall back to store-and-forward) */
+  pushPublic?: string
   /** per-read failure ceiling on lane/box host lookups (NEKTAR_LANE_READ_TIMEOUT_MS)
    *  — a host that cannot answer inside this bound is treated as unreachable,
    *  never waited on beyond it. Default 5000. */
@@ -103,6 +108,9 @@ export interface FingerRec {
   office: string
   stream: string
   watch?: string
+  /** direct-push base URL — POST signed carriers to `${push}/v1/lane`;
+   *  absent = this peer only answers store-and-forward reads */
+  push?: string
 }
 
 type Msgs = NonNullable<AutomationConfig['messages']>
@@ -157,6 +165,13 @@ export interface Rt {
   resolveRecord: (pub: string, fresh?: boolean) => Promise<FingerRec | undefined>
   hostsFor: (pub: string) => Promise<string[]>
   notifyPeer: (rec: { watch?: string } | undefined, service: string, query?: unknown) => void
+  /** a signed carrier pushed straight to us by its sender — verify + ingest
+   *  exactly like the box/lane read it precedes (deduped by the same hashes).
+   *  Returns the carrier kind ingested, or false when nothing verified. */
+  pushIngest?: (beef: number[]) => Promise<'envelope' | 'artifact' | false>
+  /** fire-and-forget carrier push to a counterparty's advertised /v1/lane —
+   *  the durable host copy is already submitted when this runs */
+  pushCarrier?: (rec: { push?: string } | undefined, beef: number[]) => void
   hostBack: (h: string) => Promise<void>
   queueRepublish: (treeTxid: string) => Promise<void>
   poll: () => Promise<void>

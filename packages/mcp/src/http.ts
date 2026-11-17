@@ -277,7 +277,11 @@ export function createHttpApi(
           url.pathname.startsWith('/v1/proof/') ||
           url.pathname.startsWith('/v1/zkproof/') ||
           url.pathname === '/v1/broadcaster-callback' ||
-          url.pathname === '/v1/arc-callback'
+          url.pathname === '/v1/arc-callback' ||
+          // counterparty push: the carrier's own signature/encryption is the
+          // auth — a peer can't hold our bearer; verification is identical to
+          // a host read, so no trust is added
+          url.pathname === '/v1/lane'
         const operatorApproval =
           url.pathname.startsWith('/v1/automation/approvals/') &&
           nektarEnv('NEKTAR_OPERATOR_TOKEN') &&
@@ -288,6 +292,18 @@ export function createHttpApi(
         try {
           if (url.pathname === '/mcp') return await mcp(req, res)
           if (req.method === 'GET' && url.pathname === '/v1/health') return send(200, { ok: true })
+          if (req.method === 'POST' && url.pathname === '/v1/lane') {
+            // direct carrier push — the same bytes a box/lane read would
+            // fetch, admitted through the same verify+dedupe before ingest
+            const au = mem.automation
+            if (au?.pushCarrier === undefined) return send(404, { error: 'no automation host' })
+            const laneBody = (await body(req).catch(() => ({}))) as { beef?: string }
+            const beef = typeof laneBody.beef === 'string' ? Buffer.from(laneBody.beef, 'hex') : undefined
+            if (beef === undefined || beef.length === 0 || beef.length > 128 * 1024 || beef.toString('hex') !== laneBody.beef)
+              return send(400, { error: 'a hex carrier beef is required (<= 128 KiB)' })
+            const kind = await au.pushCarrier([...beef]).catch(() => false)
+            return kind === false ? send(422, { error: 'carrier failed verification' }) : send(200, { ok: true, kind })
+          }
           if (req.method === 'GET' && url.pathname === '/v1/openapi.json') return send(200, OPENAPI)
           if (req.method === 'GET' && url.pathname === '/v1/metrics') return send(200, mem.metrics.render(), 'text/plain; version=0.0.4')
           if (req.method === 'GET' && url.pathname === '/dashboard/events') {

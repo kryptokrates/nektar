@@ -39,7 +39,9 @@ export function openLanes(rt: Rt): void {
       const r = await lanes.mod.resolveFinger({ hosts: marketHosts, pub, tracker: mem.sdkTracker(), allowHttp: rt.localNet, now: cfg.now, timeoutMs: 5_000 })
       if (r !== undefined && (r.body.nets.length === 0 || r.body.nets.includes(cfg.network))) {
         const hosts = r.body.hosts.filter((u) => lanes.mod.fingerHostAllowed(u, { allowHttp: rt.localNet, allowLocal: rt.localNet })).slice(0, 8)
-        rec = { hosts, office: r.body.office, stream: r.body.stream, watch: r.body.watch }
+        const push =
+          r.body.push !== undefined && lanes.mod.fingerHostAllowed(r.body.push, { allowHttp: rt.localNet, allowLocal: rt.localNet }) ? r.body.push : undefined
+        rec = { hosts, office: r.body.office, stream: r.body.stream, watch: r.body.watch, ...(push !== undefined ? { push } : {}) }
       }
     } catch {
       /* no record (or no host serves one) — the configured set is the fallback */
@@ -63,6 +65,66 @@ export function openLanes(rt: Rt): void {
       body: JSON.stringify(query === undefined ? { service } : { service, query }),
       signal: AbortSignal.timeout(2_000)
     }).catch(() => undefined)
+  }
+  // direct push: POST the journaled carrier BEEF to the recipient's own
+  // /v1/lane — the same bytes the box/artifact submit carries, verified by
+  // the same code on the far side (P2P for the present peer; the host copy
+  // stays the store-and-forward fallback). Fire-and-forget — any failure
+  // just means delivery happens on the ordinary read.
+  const pushCarrier = (rec: { push?: string } | undefined, beef: number[]): void => {
+    if (rec?.push === undefined || beef.length === 0) return
+    fetch(rec.push, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ beef: Buffer.from(beef).toString('hex') }),
+      signal: AbortSignal.timeout(2_000)
+    }).catch(() => undefined)
+  }
+  rt.pushCarrier = pushCarrier
+  // a carrier pushed straight to us by its sender — verify + ingest exactly
+  // like the box/lane read it precedes (the durable copy still travels the
+  // hosts and dedupes by artifactHash/seq on arrival)
+  rt.pushIngest = async (beef: number[]): Promise<'envelope' | 'artifact' | false> => {
+    if (lanes === undefined || beef.length === 0 || beef.length > 128 * 1024) return false
+    const tracker = mem.sdkTracker()
+    const w = lanes.mod.walletOrProto(key, wallet)
+    const office = cfg.boxOffice ?? lanes.mod.officeFor()
+    // sealed box envelope — the same admit/decrypt/verify as readBox's
+    // openEnvelope (wrong-recipient pushes drop at the `to` check inside)
+    const env = await lanes.mod.openEnvelope(beef, w, office, rt.me, tracker).catch(() => undefined)
+    if (env !== undefined) {
+      const msg = (env.body as { market?: MarketMessage }).market
+      if (msg !== undefined && typeof msg === 'object') {
+        rt.hotUntil = Date.now() + 5_000
+        await rt.engine.ingestMessage(env.from, msg, env.refs)
+        void rt.deals().catch((e) => log(`automation: push: ${(e as Error).message}`))
+        return 'envelope'
+      }
+    }
+    // ls_nektar artifact (offer) — the same checkCarrier + payload/body/
+    // locking-key verification readOffers runs, then the same ingestEvents
+    const chk = await lanes.mod.checkCarrier(beef, { tracker }).catch(() => undefined)
+    if (chk === undefined || !chk.ok) return false
+    try {
+      const p = lanes.mod.decodePayload(new Uint8Array(chk.payload))
+      const body = p.body as { offer?: { wantId?: string; buyerPub?: string; net?: string } }
+      if (
+        p.kind === 'offer' &&
+        lanes.mod.verifyBody(p, cfg.now?.()) &&
+        lanes.mod.carrierLockingKey(lanes.mod.bodyPub(p)) === chk.lockingKey &&
+        body.offer?.buyerPub === rt.me &&
+        body.offer.net === cfg.network &&
+        typeof body.offer.wantId === 'string'
+      ) {
+        rt.hotUntil = Date.now() + 5_000
+        await rt.engine.ingestEvents(`offers:${body.offer.wantId}`, [{ seq: chk.carrier.id('hex'), kind: 'offer', payload: p.body }], '')
+        void rt.deals().catch((e) => log(`automation: push: ${(e as Error).message}`))
+        return 'artifact'
+      }
+    } catch {
+      /* undecodable — false below */
+    }
+    return false
   }
   // a proven funding tree queues one republish row per journaled carrier it
   // anchors — each row's transport call attaches the BUMP, re-submits and
@@ -146,6 +208,12 @@ export function openLanes(rt: Rt): void {
                 expiresAt: Math.floor(Date.now() / 1000) + ttl
               })
               await trackFanout(r, rt.fanoutIo)
+              // the durable box copy is on its hosts — now the fast leg:
+              // push the same sealed carrier straight to the recipient's
+              // advertised /v1/lane (no field or unreachable = the box read)
+              void lanes.journal.get(r.hash).then((row) => {
+                if (row !== undefined) pushCarrier(rec, row.beef)
+              })
               // wake the recipient's box watch with the exact query their
               // shim holds — ls_bbox {office,to} is the subscription's shape
               notifyPeer(rec, 'ls_bbox', { office: office ?? lanes.mod.officeFor(), to })

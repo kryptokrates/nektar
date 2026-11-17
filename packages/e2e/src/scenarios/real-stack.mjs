@@ -470,6 +470,9 @@ function spawnInstance(a) {
       NEKTAR_DATA_DIR: a.dataDir,
       NEKTAR_HTTP_PORT: String(a.port),
       NEKTAR_HTTP_TOKEN: a.token,
+      // advertise our own /v1/lane in the bfinger record — counterparties push
+      // signed carriers straight here while the host copy stays durable
+      NEKTAR_PUSH_PUBLIC: `http://127.0.0.1:${a.port}/v1/lane`,
       NEKTAR_TX_LOG: join(a.dataDir, 'tx-log.jsonl'),
       NODE_OPTIONS: `--report-on-fatalerror --report-directory=${a.dataDir}`,
       NEKTAR_MARKET_HOSTS: a.hosts.join(','),

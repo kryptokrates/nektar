@@ -121,6 +121,9 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     // our own shim's public URL — goes into the bfinger record so peers can
     // /notify our long-polls on outbound sends (needs NEKTAR_BFINGER_PUBLISH)
     watchPublic: nektarEnv('NEKTAR_WATCH_PUBLIC') !== undefined && nektarEnv('NEKTAR_WATCH_PUBLIC') !== '' ? nektarEnv('NEKTAR_WATCH_PUBLIC') : undefined,
+    // our own push base URL — goes into the bfinger record so peers POST
+    // carriers to /v1/lane instead of waiting for our next host read
+    pushPublic: nektarEnv('NEKTAR_PUSH_PUBLIC') !== undefined && nektarEnv('NEKTAR_PUSH_PUBLIC') !== '' ? nektarEnv('NEKTAR_PUSH_PUBLIC') : undefined,
     // per-read failure ceiling on host lookups — a host slower than this is
     // unreachable for the pass, never a wait on the hot path
     laneReadTimeoutMs: nektarEnv('NEKTAR_LANE_READ_TIMEOUT_MS') ? Number(nektarEnv('NEKTAR_LANE_READ_TIMEOUT_MS')) : undefined,

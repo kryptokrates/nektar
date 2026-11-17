@@ -70,6 +70,11 @@ export interface FingerBody {
    *  the shim answers changed/not-changed from real backend state, so a
    *  stale or forged notify just causes a re-check, never a false positive) */
   watch?: string
+  /** optional direct-push endpoint on this identity's own agent — senders
+   *  POST a signed carrier BEEF to it and the recipient ingests it
+   *  immediately (same verify/decrypt as a host read). Store-and-forward
+   *  boxes/hosts stay the fallback when absent or unreachable. */
+  push?: string
 }
 
 const NET_LABEL = /^[a-z][a-z0-9-]{0,15}$/
@@ -113,6 +118,17 @@ export function checkFingerBody(body: FingerBody, opts?: { allowHttp?: boolean }
       throw new Error(`finger body: watch must be https ${u.protocol}//`)
     }
   }
+  if (body.push !== undefined) {
+    let u: URL
+    try {
+      u = new URL(body.push)
+    } catch {
+      throw new Error('finger body: bad push URL')
+    }
+    if (u.protocol !== 'https:' && !(opts?.allowHttp === true && u.protocol === 'http:')) {
+      throw new Error(`finger body: push must be https ${u.protocol}//`)
+    }
+  }
 }
 
 function bodyToMap(body: FingerBody): CborMap {
@@ -124,19 +140,22 @@ function bodyToMap(body: FingerBody): CborMap {
     { key: 'nets', val: body.nets }
   ]
   if (body.watch !== undefined) pairs.push({ key: 'watch', val: body.watch })
+  if (body.push !== undefined) pairs.push({ key: 'push', val: body.push })
   return new CborMap(pairs)
 }
 
 function mapToBody(m: CborMap): FingerBody {
   const v = m.get('v')
   const w = m.get('watch')
+  const p = m.get('push')
   const body = {
     v: typeof v === 'bigint' ? Number(v) : v,
     hosts: m.get('hosts'),
     office: m.get('office'),
     stream: m.get('stream'),
     nets: m.get('nets'),
-    ...(typeof w === 'string' ? { watch: w } : {})
+    ...(typeof w === 'string' ? { watch: w } : {}),
+    ...(typeof p === 'string' ? { push: p } : {})
   } as FingerBody
   return body
 }

@@ -231,6 +231,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       const rec = so.offer.buyerPub !== undefined ? await rt.resolveRecord(so.offer.buyerPub) : undefined
       rt.notifyPeer(rec, 'ls_nektar')
       if (rec?.watch === undefined) for (const base of rt.watchBases) rt.notifyPeer({ watch: base }, 'ls_nektar')
+      // a buyer advertising push gets the offer carrier directly — the host
+      // copies it just submitted stay the durable/discovery path
+      if (rec?.push !== undefined) {
+        const row = await lanes.journal.get(r.hash)
+        if (row !== undefined) rt.pushCarrier?.(rec, row.beef)
+      }
     },
     send: async (to: string, msg: import('./market.js').MarketMessage) => {
       if (rt.msgs === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -491,6 +497,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       for (const h of lastReport.downHosts) downNow.add(h)
       return lastReport
     },
+    // a counterparty's direct push lands here — same carriers a host read
+    // would yield, verified by the same code, deduped by the same hashes
+    pushCarrier: async (beef: number[]) => (rt.pushIngest !== undefined ? await rt.pushIngest(beef) : false),
     marketSlots: async () =>
       lanes === undefined
         ? { market: 0, bbox: 0, log: 0, finger: 0 }

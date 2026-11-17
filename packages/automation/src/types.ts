@@ -38,6 +38,9 @@ export interface Automation {
   /** on-demand journal view for `deals { operationId }` — own head plus the
    *  counterparty's stream filtered to this deal */
   dealJournal?: (op: import('./store.js').Operation) => Promise<Record<string, unknown> | undefined>
+  /** a signed carrier pushed straight to /v1/lane — same verify+ingest as a
+   *  box/lane read (deduped by the same hashes). The kind ingested, or false */
+  pushCarrier?: (beef: number[]) => Promise<'envelope' | 'artifact' | false>
   /** bstore/S3 object store in use (undefined = evidence/pack storage off) */
   objectStore?: import('@nektar/store').S3ObjectStore
   /** the latest preflight verdict — pass + the doctor-style report behind it */

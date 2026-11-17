@@ -22,7 +22,7 @@ export {
   bodyExp,
   type MarketPayload
 } from './market-wire.js'
-export { BOX, DEFAULT_OFFICE, officeFor, boxFundingLock, sendBox, ackBox, readBox, type BoxRef, type BoxItem } from './box.js'
+export { BOX, DEFAULT_OFFICE, officeFor, boxFundingLock, sendBox, ackBox, readBox, openEnvelope, type BoxRef, type BoxItem } from './box.js'
 export {
   LOG_KIND,
   DEFAULT_STREAM,

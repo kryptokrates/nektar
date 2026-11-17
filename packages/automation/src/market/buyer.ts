@@ -444,6 +444,10 @@ export abstract class BuyerOps extends SellerOps {
       // sits inside the operator's no-recourse ceiling. Same policy, budget
       // and wallet-custody mechanics; what changes is the settlement itself:
       // a P2PKH output to the seller, payment-final, instead of a covenant
+      // a live (non-'sale#*') broadcast started but not yet joined — the
+      // accept envelope queues/flies during the broadcaster RTT, then the
+      // verdict is applied to the post-transition op below
+      let pendingSubmit: Promise<{ state: string; txid: string; detail?: string }> | undefined
       const direct = q.direct === true && this.o.directMaxSats !== undefined && this.o.directMaxSats > 0 && price <= this.o.directMaxSats
       if (direct) {
         const payScript = new P2PKH().lock(Array.from(fromHex(q.cfg.sellerPkh))).toHex()
@@ -475,30 +479,14 @@ export abstract class BuyerOps extends SellerOps {
             })
           )
           await this.wallet.prepare(ctx, 'payment', tx)
-          const st = await this.d.store.transition(funding.operationId, funding.revision, 'funding', {
+          await this.d.store.transition(funding.operationId, funding.revision, 'funding', {
             cause: 'payment_prepared',
             data: { pendingEscrow: { cfg: { direct: true, refundAfter: q.cfg.refundAfter, depositorPkh: pkhOf(this.me) }, utxo: built.utxo } }
           })
           await this.d.afterPrepare?.(ctx.actionId)
-          const sub = await this.wallet.submit(ctx.actionId)
-          if (sub.state !== 'submitted' && sub.state !== 'observed' && sub.state !== 'confirmed') {
-            if (sub.state === 'rejected' && /SpendGuard refused/i.test(sub.detail ?? '')) {
-              await this.d.store.releaseBudget(ctx.actionId)
-              await this.d.store.transition(st.operationId, st.revision, 'funding_failed', {
-                cause: 'spend_guard_refused',
-                lastError: (sub.detail ?? '').slice(0, 500)
-              })
-            } else
-              await this.escalate(
-                st,
-                'unresolved_payment',
-                digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }),
-                0,
-                { reason: sub.detail ?? sub.state },
-                'uncertain'
-              )
-            return
-          }
+          // broadcast starts now; the accept flies while the RTT is out —
+          // the verdict is joined after the awaiting_disclosure transition
+          pendingSubmit = this.wallet.submit(ctx.actionId)
           await this.d.settleEscrow(tx)
           this.d.rememberTx?.(tx)
           pay = { accepted: true, txid: built.utxo.txid, utxo: built.utxo }
@@ -597,30 +585,14 @@ export abstract class BuyerOps extends SellerOps {
           })
         )
         await this.wallet.prepare(ctx, 'escrow', tx)
-        const st = await this.d.store.transition(funding.operationId, funding.revision, 'funding', {
+        await this.d.store.transition(funding.operationId, funding.revision, 'funding', {
           cause: 'escrow_prepared',
           data: { pendingEscrow: { cfg: built.escrow, utxo: built.utxo, feeSats: built.feeSats } }
         })
         await this.d.afterPrepare?.(ctx.actionId)
-        const sub = await this.wallet.submit(ctx.actionId)
-        if (sub.state !== 'submitted' && sub.state !== 'observed' && sub.state !== 'confirmed') {
-          if (sub.state === 'rejected' && /SpendGuard refused/i.test(sub.detail ?? '')) {
-            await this.d.store.releaseBudget(ctx.actionId)
-            await this.d.store.transition(st.operationId, st.revision, 'funding_failed', {
-              cause: 'spend_guard_refused',
-              lastError: (sub.detail ?? '').slice(0, 500)
-            })
-          } else
-            await this.escalate(
-              st,
-              'unresolved_payment',
-              digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }),
-              0,
-              { reason: sub.detail ?? sub.state },
-              'uncertain'
-            )
-          return
-        }
+        // broadcast starts now; the accept flies while the RTT is out —
+        // the verdict is joined after the awaiting_disclosure transition
+        pendingSubmit = this.wallet.submit(ctx.actionId)
         await this.d.settleEscrow(tx)
         this.d.rememberTx?.(tx)
         r = { accepted: true, txid: built.utxo.txid, utxo: built.utxo, escrow: built.escrow }
@@ -690,6 +662,31 @@ export abstract class BuyerOps extends SellerOps {
           }
         ]
       })
+      // join the broadcast that overlapped the transition above — on refusal
+      // the state machine unwinds honestly: SpendGuard means the sats never
+      // left (release covers the committed row); anything else stays
+      // 'uncertain' for a human, since the wire may still confirm
+      if (pendingSubmit !== undefined) {
+        const sub = await pendingSubmit
+        if (sub.state !== 'submitted' && sub.state !== 'observed' && sub.state !== 'confirmed') {
+          const live = (await this.d.store.operation(op.operationId))!
+          if (sub.state === 'rejected' && /SpendGuard refused/i.test(sub.detail ?? '')) {
+            await this.d.store.releaseBudget(ctx.actionId)
+            await this.d.store.transition(live.operationId, live.revision, 'funding_failed', {
+              cause: 'spend_guard_refused',
+              lastError: (sub.detail ?? '').slice(0, 500)
+            })
+          } else
+            await this.escalate(
+              live,
+              'unresolved_payment',
+              digestOf('nektar:automation:action:1', { op: op.operationId, kind: 'resolve-escrow' }),
+              0,
+              { reason: sub.detail ?? sub.state },
+              'uncertain'
+            )
+        }
+      }
     } finally {
       this.inflight.delete(op.operationId)
     }

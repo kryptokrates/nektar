@@ -324,14 +324,21 @@ export async function publishFinger(p: {
   }
 
   if (prev !== undefined && prev.bodyHash === hash && prev.refsHash === refsHash) {
-    const ch = await p.journal.get(`finger:carrier:${prev.seq}`)
     const tokenBeef = latestBeef ?? prev.tokenBeef ?? (await p.journal.get(`finger:token:${prev.seq}`))?.beef
-    // independent objects, same hosts — one pass, not two round-trips
-    await Promise.all([
-      ch !== undefined ? submitAll(p.hosts, ch.beef, topics, { retryWaits: [] }) : Promise.resolve(),
-      tokenBeef !== undefined ? submitAll(p.hosts, tokenBeef, topics, { retryWaits: [] }) : Promise.resolve()
-    ])
-    return { changed: false, seq: prev.seq, carrierTxid: ch?.txid, tokenTxid: prev.tokenTxid }
+    // re-serve the WHOLE chain, not just the head: a host that never joined
+    // (or lost) the create refuses a head-only resubmit 'no-current' and the
+    // record stays unresolvable there forever. Journal rows are the idempotent
+    // objects — hosts dedupe what they already hold. Seq order, carriers
+    // before tokens, so parents land before the members that reference them.
+    for (let n = 1; n <= prev.seq; n++) {
+      const c = await p.journal.get(`finger:carrier:${n}`)
+      if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
+    }
+    for (let n = 1; n <= prev.seq; n++) {
+      const t = n === prev.seq && tokenBeef !== undefined ? { beef: tokenBeef } : await p.journal.get(`finger:token:${n}`)
+      if (t !== undefined) await submitAll(p.hosts, t.beef, topics, { retryWaits: [] })
+    }
+    return { changed: false, seq: prev.seq, carrierTxid: (await p.journal.get(`finger:carrier:${prev.seq}`))?.txid, tokenTxid: prev.tokenTxid }
   }
 
   // build the record. Salt and witness derive from (key, seq) so a retried
@@ -432,6 +439,14 @@ export async function publishFinger(p: {
     await p.journal.put(tkey, { txid: tokenTxid, beef: tokenBeefOut, topics })
   }
 
+  // a host missing earlier chain members refuses the head 'no-current' —
+  // re-serve the journaled chain before the head (idempotent on the host)
+  for (let n = 1; n < seq; n++) {
+    const c = await p.journal.get(`finger:carrier:${n}`)
+    if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
+    const t = await p.journal.get(`finger:token:${n}`)
+    if (t !== undefined) await submitAll(p.hosts, t.beef, t.topics ?? topics, { retryWaits: [] })
+  }
   // independent objects, same hosts — carrier and token beef each carry
   // their own ancestry, so admission needs no ordering between them
   await Promise.all([submitAll(p.hosts, carrierBeef, topics, { retryWaits: [] }), submitAll(p.hosts, tokenBeefOut, topics, { retryWaits: [] })])

@@ -756,7 +756,9 @@ try {
         log(`bfinger records resolve for all four agents after ${((Date.now() - t0) / 1000).toFixed(1)}s`)
         break
       }
-      if (Date.now() - t0 > 600_000) throw new Error(`finger records do not name the agents' hosts after 10 min: ${JSON.stringify(recs)}`)
+      // a fresh record's carrier joins once its ancestry proves in a block —
+      // testnet's long dead gaps make 10 min too tight; share the tree ceiling
+      if (Date.now() - t0 > (LIVE ? 3 * 3600_000 : 600_000)) throw new Error(`finger records do not name the agents' hosts: ${JSON.stringify(recs)}`)
       await delay(500)
     }
   }

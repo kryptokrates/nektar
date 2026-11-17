@@ -1,11 +1,11 @@
 node_modules/
 .env
+.env.bak*
 *.db
 *.sqlite*
 .state.json
 .state/
-.nektar
-.nektar.*
+.nektar*
 tools/stark/target/
 tools/stark/verifier-wasm/target/
 tools/stark/vectors.jsonl

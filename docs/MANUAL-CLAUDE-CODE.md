@@ -130,7 +130,7 @@ The flow in-session:
 
 One tx pays for exactly one call — invoice-tagged, replay-protected.
 
-### D — Your own instance (offline, zero funds)
+### D — Your own instance
 
 ```sh
 git clone https://github.com/kryptokrates/nektar && cd merkle-automaton
@@ -142,8 +142,9 @@ claude mcp add --transport http nektar http://localhost:8080/mcp
 `regtest` runs on the local Teranode stack (`pnpm stack:up`) — receipts mint
 and verify, anchors exist on the regtest ledger (honest caveat: they
 aren't on a public chain). Every feature works; it's the right way to
-explore before touching real coins. `NEKTAR_NETWORK=regtest` upgrades to
-a local Teranode; `testnet` to the public testnet.
+explore before touching real coins. `NEKTAR_NETWORK=testnet` skips the
+local stack — `NEKTAR_KEY_PASSPHRASE` is optional here (it encrypts keys
+at rest; required on main). Fund the printed fee address with test coins.
 
 ---
 

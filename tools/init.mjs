@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { randomBytes } from 'node:crypto'
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const arg = (f) => {
@@ -90,13 +91,27 @@ const dataDir = resolve(dir)
 mkdirSync(dataDir, { recursive: true })
 
 // ─── 3. passphrase ──────────────────────────────────────────────────────────
+// encryption is mandatory on main only — testnet/regtest boot with mode-0600
+// plaintext keys when no passphrase is set (set one and they encrypt the same)
+const mustEnc = net === 'main'
+// a regtest-era data dir carries plaintext key files — main refuses them,
+// so say so here instead of letting the first boot die on KeystoreError
+for (const f of ['keys.json', 'fee.key.json']) {
+  const p = join(dataDir, f)
+  if (mustEnc && existsSync(p) && !readFileSync(p, 'utf8').includes('"kdf"'))
+    console.log(`  note: ${p} is plaintext — main requires encrypted keys at rest; use a fresh --dir or remove it`)
+}
 let pass = arg('--passphrase')
 if (pass === undefined && !YES) {
   pass = await askSecret(
-    `3/4 — key passphrase (encrypts your identity at rest; unrecoverable)\n  ${net === 'main' ? 'REQUIRED on main.' : 'empty = skip (regtest is fine without)'}${prev.NEKTAR_KEY_PASSPHRASE ? ' — Enter keeps the current one' : ''}\n> `
+    `3/4 — key passphrase (encrypts your identity at rest; unrecoverable)\n  ${mustEnc ? 'REQUIRED — empty = one is generated into .env' : 'empty = skip (testnet/regtest boot plaintext; set one to encrypt)'}${prev.NEKTAR_KEY_PASSPHRASE ? ' — Enter keeps the current one' : ''}\n> `
   )
   if (!pass && prev.NEKTAR_KEY_PASSPHRASE) pass = prev.NEKTAR_KEY_PASSPHRASE
 } else pass ??= prev.NEKTAR_KEY_PASSPHRASE ?? ''
+// main won't boot without one — generate rather than write a .env the
+// runtime will refuse (same shape as `mcp:install --ghcr`)
+const generatedPass = mustEnc && !pass
+if (generatedPass) pass = randomBytes(24).toString('hex')
 
 // ─── 4. port ────────────────────────────────────────────────────────────
 const port = arg('--port') ?? prev.NEKTAR_HTTP_PORT
@@ -125,6 +140,7 @@ if (existsSync(envPath)) {
   writeFileSync(envPath, (kept ? kept + '\n\n' : '') + body)
 } else writeFileSync(envPath, body)
 console.log(`\nwrote ${envPath}`)
+if (generatedPass) console.log('  generated NEKTAR_KEY_PASSPHRASE — .env + the data dir ARE the agent; back up both')
 
 // ─── next steps ─────────────────────────────────────────────────────────────
 console.log('\nNext:')

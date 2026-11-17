@@ -8,9 +8,12 @@ hooks that can block.
 
 ```sh
 # 1. one server: MCP + verify endpoint on :8080
-NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=mock node packages/mcp/dist/src/bin.js
-#    mock = offline zero-setup, anchors auto-mine → receipts fully verifiable
-#    regtest = real chain (needs NEKTAR_REGTEST_WIF + rpc pass in .env)
+NEKTAR_HTTP_PORT=8080 NEKTAR_NETWORK=testnet NEKTAR_KEY_PASSPHRASE=<pick-one> node packages/mcp/dist/src/bin.js
+#    testnet = public test coins, zero local infra; the passphrase encrypts keys
+#    at rest (optional on testnet, required on main). `pnpm init:nektar` writes
+#    .env — set one there if you want the keys encrypted.
+#    regtest = local Teranode stack (`pnpm stack:up` + NEKTAR_REGTEST_WIF/rpc pass)
+#    → fund the printed fee address with test coins so anchors can land
 
 # 2. ~/.codex/config.toml — merge config-snippet.toml:
 #    [mcp_servers.nektar] url = "http://localhost:8080/mcp"

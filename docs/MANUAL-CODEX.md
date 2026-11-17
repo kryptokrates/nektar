@@ -122,7 +122,7 @@ The flow in-session:
 
 One tx pays for exactly one call — invoice-tagged, replay-protected.
 
-### D — Your own instance (offline, zero funds)
+### D — Your own instance
 
 ```sh
 git clone https://github.com/kryptokrates/nektar && cd merkle-automaton
@@ -151,8 +151,10 @@ env = { NEKTAR_NETWORK = "regtest" }
 
 `regtest` runs on the local Teranode stack (`pnpm stack:up`) — receipts mint
 and verify, anchors exist on the regtest ledger (honest caveat: they
-aren't on a public chain). `NEKTAR_NETWORK=regtest` upgrades to a local
-Teranode; `testnet` to the public testnet.
+aren't on a public chain). `NEKTAR_NETWORK=testnet` skips the local stack —
+`NEKTAR_KEY_PASSPHRASE` is optional here (it encrypts keys at rest;
+required on main). Fund the printed fee address with test coins for
+anchors to land.
 
 ## The receipt auto-check (optional, local runs)
 

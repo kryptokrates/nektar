@@ -16,6 +16,8 @@ secrets:
     env: NEKTAR_KEY_PASSPHRASE
     example: <long random passphrase>
     description: Encrypts keys.json and fee.key.json at rest (required)
+  # optional: the toolkit injects '<UNKNOWN>' when unset — nektarEnv treats
+  # that sentinel as absent, so leaving them unset is safe
   - name: nektar-testnet.broadcaster_api_key
     env: NEKTAR_BROADCASTER_API_KEY
     example: <broadcaster api key — optional>

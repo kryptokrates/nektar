@@ -4,10 +4,13 @@
 // number, and tri-state flag.
 export type EnvSource = Record<string, string | undefined>
 
-/** raw read — undefined when unset or empty ('' is never a value here) */
+/** raw read — undefined when unset or empty ('' is never a value here).
+ *  '<UNKNOWN>' is the Docker MCP toolkit's sentinel for a declared-but-
+ *  unset secret — an optional secret it injects verbatim would otherwise
+ *  be parsed as a real value (a '<UNKNOWN>' WIF crashes the wallet) */
 export function nektarEnv(key: string, env: EnvSource = process.env): string | undefined {
   const v = env[key]
-  return v === undefined || v === '' ? undefined : v
+  return v === undefined || v === '' || v === '<UNKNOWN>' ? undefined : v
 }
 
 /** numeric read — undefined when unset, empty, or non-finite */

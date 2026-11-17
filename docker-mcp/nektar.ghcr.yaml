@@ -19,14 +19,11 @@ secrets:
     env: NEKTAR_KEY_PASSPHRASE
     example: <long random passphrase>
     description: Encrypts keys.json and fee.key.json at rest (required)
-  - name: nektar.broadcaster_api_key
-    env: NEKTAR_BROADCASTER_API_KEY
-    example: <broadcaster api key — optional>
-    description: BSV Broadcaster API key (optional; public endpoints work without one)
-  - name: nektar.fund_wif
-    env: NEKTAR_FUND_WIF
-    example: <testnet WIF — optional>
-    description: Operator fee key as testnet WIF. If unset, a fee.key.json key is generated.
+  # optional operator envs (NEKTAR_FUND_WIF — else a fee.key.json key is
+  # generated; NEKTAR_BROADCASTER_API_KEY) stay undeclared for now: the
+  # toolkit injects '<UNKNOWN>' for declared-but-unset secrets and images
+  # tagged before the nektarEnv sentinel fix can't tolerate it. Re-add here
+  # once the published image carries the fix.
 env:
   - name: NEKTAR_NETWORK
     value: testnet

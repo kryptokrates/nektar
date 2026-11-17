@@ -102,7 +102,16 @@ const reconcileReserve = async (fundKey: PrivateKey, reserve: ReserveFunder, mc:
   for (const u of [...reserve.utxos]) {
     const txid = u.tx.id('hex')
     if (liveSet.has(`${txid}:${u.vout}`)) continue
-    if ((await utxoSpendStatus(mc, tracker, txid, u.vout)) === 'spent') reserve.markSpent(txid, u.vout)
+    if ((await utxoSpendStatus(mc, tracker, txid, u.vout)) === 'spent') {
+      reserve.markSpent(txid, u.vout)
+      continue
+    }
+    // dead drafts — change outputs of own broadcasts that never landed (the
+    // index has never served the parent): the outpoint does not exist on
+    // chain, so every take on it is a guaranteed broadcast failure. The mark
+    // is offer bookkeeping, not a chain claim — the heal pass lifts it if
+    // the parent ever becomes servable.
+    if ((await index.txHex(txid).catch(() => undefined)) === undefined) reserve.markSpent(txid, u.vout)
   }
   // adopt live UTXOs the file doesn't know (minted-tree change, settlement
   // income from earlier runs) — fetch each parent tx hex and addOwned it

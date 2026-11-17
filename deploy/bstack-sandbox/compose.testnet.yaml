@@ -29,7 +29,7 @@ services:
       SHIM_PORT: 8080
       SHIM_MODE: live
       SHIM_BROADCASTER: https://arcade-v2-testnet-us-1.bsvblockchain.tech
-      SHIM_WOC: https://api.whatsonchain.com/v1/bsv/test
+      SHIM_INDEX: https://test.bananablocks.com/api/v1
       SHIM_CHAINTRACKS: https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v2
     volumes:
       - ./header-shim.mjs:/shim/header-shim.mjs:ro

@@ -6,12 +6,13 @@
 // SHIM_MODE=regtest (default): headers via Teranode legacy RPC; asset paths
 // proxied to the Teranode asset API with basic-auth injected.
 // SHIM_MODE=live (testnet): headers from the broadcaster's chaintracks
-// (/height, /header/height/<h>) with WoC fallback; proofs from broadcaster
-// GET /tx/<txid> merklePath (BUMP hex) or the WoC TSC proof; the utxos view is
-// assembled per-output from WoC /tx/<txid>/<vout>/spent (200=SPENT, 404=OK).
+// (/height, /header/height/<h>) with a chain-index fallback; proofs from
+// broadcaster GET /tx/<txid> merklePath (BUMP hex) or the index's TSC proof;
+// the utxos view is assembled per-output from the index's tx record
+// (outputs[].spent/spent_txid — true=SPENT, false=OK, absent=NOT_FOUND).
 // env: SHIM_PORT (8080), SHIM_MODE (regtest|live); regtest: SHIM_RPC_URL,
 // SHIM_RPC_USER, SHIM_RPC_PASS, SHIM_ASSET_URL; live: SHIM_BROADCASTER,
-// SHIM_WOC, SHIM_CHAINTRACKS (default $SHIM_BROADCASTER/chaintracks/v2)
+// SHIM_INDEX, SHIM_CHAINTRACKS (default $SHIM_BROADCASTER/chaintracks/v2)
 import { createServer } from 'node:http'
 
 const PORT = Number(process.env.SHIM_PORT ?? 8080)
@@ -22,7 +23,7 @@ const PASS = process.env.SHIM_RPC_PASS ?? ''
 const ASSET = (process.env.SHIM_ASSET_URL ?? 'http://host.docker.internal:8090/api/v1').replace(/\/+$/, '')
 const AUTH = 'Basic ' + Buffer.from(`${USER}:${PASS}`).toString('base64')
 const BCAST = (process.env.SHIM_BROADCASTER ?? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech').replace(/\/+$/, '')
-const WOC = (process.env.SHIM_WOC ?? 'https://api.whatsonchain.com/v1/bsv/test').replace(/\/+$/, '')
+const INDEX = (process.env.SHIM_INDEX ?? 'https://test.bananablocks.com/api/v1').replace(/\/+$/, '')
 const CT = (process.env.SHIM_CHAINTRACKS ?? `${BCAST}/chaintracks/v2`).replace(/\/+$/, '')
 let rpcId = 0
 
@@ -61,20 +62,28 @@ async function rpc(method, ...params) {
   throw last
 }
 
-// WoC free tier is ~3 req/s — space reads and retry 429s; 404 answers undefined
-let wocLast = 0
-async function wocGet(path, retries = 3) {
+// free index tiers rate-limit — space reads and retry 429/5xx; 404 answers
+// undefined (never an error — absence is an answer, not a failure)
+let idxLast = 0
+async function idxGet(path, retries = 4) {
   for (let i = 0; i <= retries; i++) {
-    const wait = 350 - (Date.now() - wocLast)
+    const wait = 300 - (Date.now() - idxLast)
     if (wait > 0) await new Promise((r) => setTimeout(r, wait))
-    wocLast = Date.now()
-    const r = await fetch(`${WOC}${path}`, { signal: AbortSignal.timeout(15_000) })
-    if (r.status === 429 && i < retries) {
+    idxLast = Date.now()
+    const r = await fetch(`${INDEX}${path}`, { signal: AbortSignal.timeout(15_000) }).catch(() => undefined)
+    if (r === undefined) {
+      if (i < retries) {
+        await new Promise((rs) => setTimeout(rs, 1200 * (i + 1)))
+        continue
+      }
+      return undefined
+    }
+    if ((r.status === 429 || r.status >= 500) && i < retries) {
       await new Promise((rs) => setTimeout(rs, 1200 * (i + 1)))
       continue
     }
     if (r.status === 404 || r.status === 400) return undefined
-    if (!r.ok) throw new Error(`woc ${path}: HTTP ${r.status}`)
+    if (!r.ok) throw new Error(`index ${path}: HTTP ${r.status}`)
     return await r.json()
   }
   return undefined
@@ -125,7 +134,7 @@ function tscToBump(tsc, txid, blockHeight) {
   return Buffer.from(out)
 }
 
-// live mode: txid → binary BUMP from the broadcaster, else the WoC TSC proof
+// live mode: txid → binary BUMP from the broadcaster, else the index TSC proof
 async function liveProof(txid) {
   const r = await fetch(`${BCAST}/tx/${txid}`, { signal: AbortSignal.timeout(15_000) })
   if (r.ok) {
@@ -133,25 +142,23 @@ async function liveProof(txid) {
     if (typeof b.merklePath === 'string' && b.merklePath.length > 0) return Buffer.from(b.merklePath, 'hex')
     if (!['MINED', 'IMMUTABLE'].includes(String(b.txStatus ?? '').toUpperCase())) return undefined
   }
-  const t = await wocGet(`/tx/hash/${txid}`)
-  if (!t?.blockheight || t.blockheight <= 0) return undefined
-  const p = await wocGet(`/tx/${txid}/proof/tsc`)
-  if (!p?.[0]) return undefined
-  return tscToBump(p[0], txid, t.blockheight)
+  const t = await idxGet(`/tx/${txid}`)
+  if (!t?.block_height || t.block_height <= 0) return undefined
+  const p = await idxGet(`/tx/${txid}/proof`)
+  if (!p || !Array.isArray(p.nodes)) return undefined
+  return tscToBump(p, txid, t.block_height)
 }
 
-// live mode: per-output spend view — one WoC /spent read per output
+// live mode: per-output spend view — one index tx read answers every output
+// (bb serves spent=true + spent_txid per output; absent flag = undecided)
 async function liveUtxos(txid) {
-  const t = await wocGet(`/tx/hash/${txid}`)
+  const t = await idxGet(`/tx/${txid}`)
   if (t === undefined) return undefined
-  const n = Array.isArray(t.vout) ? t.vout.length : 0
   const outs = []
-  for (let vout = 0; vout < n; vout++) {
-    const s = await fetch(`${WOC}/tx/${txid}/${vout}/spent`, { signal: AbortSignal.timeout(15_000) }).catch(() => undefined)
-    if (s?.status === 200) {
-      const j = await s.json().catch(() => ({}))
-      outs.push({ txid, vout, status: 'SPENT', spendingData: { txId: j.txid } })
-    } else if (s?.status === 404) outs.push({ txid, vout, status: 'OK' })
+  for (const [i, o] of (t.outputs ?? []).entries()) {
+    const vout = o?.index ?? i
+    if (o?.spent === true) outs.push({ txid, vout, status: 'SPENT', spendingData: { txId: o.spent_txid } })
+    else if (o?.spent === false) outs.push({ txid, vout, status: 'OK' })
     else outs.push({ txid, vout, status: 'NOT_FOUND' }) // undecided — not evidence, per bcommon/nodeapi
   }
   return outs
@@ -175,7 +182,7 @@ async function handle(req, res) {
         const h = await fetch(`${CT}/height`, { signal: AbortSignal.timeout(15_000) })
           .then((r) => (r.ok ? r.json() : undefined))
           .catch(() => undefined)
-        const height = h?.height ?? (await wocGet('/chain/info'))?.blocks
+        const height = h?.height ?? (await idxGet('/block/tip'))?.height
         if (height === undefined) throw new Error('no header source answered')
         json(res, 200, { height })
         return
@@ -191,7 +198,7 @@ async function handle(req, res) {
         const b = await fetch(`${CT}/header/height/${h}`, { signal: AbortSignal.timeout(15_000) })
           .then((r) => (r.ok ? r.json() : undefined))
           .catch(() => undefined)
-        const root = b?.merkleRoot ?? (await wocGet(`/block/height/${h}`))?.merkleroot
+        const root = b?.merkleRoot ?? (await idxGet(`/block/${h}`))?.merkle_root
         if (root === undefined) {
           json(res, 404, { error: 'unknown height' })
           return
@@ -254,4 +261,4 @@ createServer((req, res) => {
       /* closed */
     }
   })
-}).listen(PORT, () => console.log(`header-shim on :${PORT} mode=${MODE} -> ${MODE === 'live' ? `${CT} / ${WOC}` : `${RPC} / ${ASSET}`}`))
+}).listen(PORT, () => console.log(`header-shim on :${PORT} mode=${MODE} -> ${MODE === 'live' ? `${CT} / ${INDEX}` : `${RPC} / ${ASSET}`}`))

@@ -290,7 +290,11 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     ai: cfg.ai ?? aiFromEnv(),
     killed: () => killSwitchActive(cfg.dataDir).killed,
     deaf: deafNow,
-    opts: { ...cfg.opts, ...(cfg.minCollectMs !== undefined ? { minCollectMs: cfg.minCollectMs } : {}) },
+    opts: {
+      ...cfg.opts,
+      ...(cfg.minCollectMs !== undefined ? { minCollectMs: cfg.minCollectMs } : {}),
+      ...(cfg.collectQuietMs !== undefined ? { collectQuietMs: cfg.collectQuietMs } : {})
+    },
     logStream
   })
   rt.engine = engine

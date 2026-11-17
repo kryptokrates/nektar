@@ -87,6 +87,9 @@ export interface AutomationConfig {
    *  early-select (NEKTAR_MIN_COLLECT_MS) — a cheaper offer landing inside the
    *  window still wins; collectMs stays the outer ceiling. Default 1000. */
   minCollectMs?: number
+  /** quiet-extended collect window (NEKTAR_COLLECT_QUIET_MS) — opt-in; see
+   *  MarketOptions.collectQuietMs. Default 0 (off). */
+  collectQuietMs?: number
   now?: () => number
 }
 

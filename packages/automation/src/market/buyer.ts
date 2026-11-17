@@ -53,7 +53,7 @@ export abstract class BuyerOps extends SellerOps {
     offers[key] = { so, ...(reject ? { reject } : {}), ...(prev?.commitment ? { commitment: prev.commitment, mode: prev.mode } : {}) }
     await this.d.store.transition(op.operationId, op.revision, 'collecting', {
       cause: reject ? 'offer_rejected' : 'offer_recorded',
-      data: { offers },
+      data: { offers, lastOfferAt: this.now() },
       evidence: { offerKey: key, ...(reject ? { reject } : {}) }
     })
   }
@@ -938,8 +938,13 @@ export abstract class BuyerOps extends SellerOps {
         // before collectingSince existed treat the window as already open.
         const since = (op.data.collectingSince as number | undefined) ?? 0
         const windowOpen = this.now() - since >= this.o.minCollectMs
-        if (due || (windowOpen && Object.keys((op.data.offers as Record<string, StoredOffer> | undefined) ?? {}).length > 0))
-          return await this.select(op, height, { expire: due })
+        const hasOffers = Object.keys((op.data.offers as Record<string, StoredOffer> | undefined) ?? {}).length > 0
+        // quiet window (opt-in): while offers keep arriving the window stays
+        // open past minCollectMs; it closes collectQuietMs after the last
+        // offer. collectMs remains the hard ceiling either way.
+        const quiet = this.o.collectQuietMs
+        const quietDone = quiet > 0 && hasOffers && this.now() - ((op.data.lastOfferAt as number | undefined) ?? since) >= quiet
+        if (due || (windowOpen && hasOffers && (quiet === 0 || quietDone))) return await this.select(op, height, { expire: due })
       }
       if (op.state === 'selected' || op.state === 'escalated') {
         const p = await this.d.store.activePolicy(op.policyHash)

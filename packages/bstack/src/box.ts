@@ -231,20 +231,28 @@ export async function readBox(p: {
     const nowS = Math.floor(Date.now() / 1000)
     const opened = await Promise.all(
       a.outputs.map(async (o) => {
-        const ck = VerifiedCache.key(o.beef)
-        const hit = p.cache?.get(ck)
-        if (hit !== undefined) {
-          // expires is the only time-dependent gate in openEnvelope — the
-          // rest of the envelope is fixed bytes already admitted once
-          if (hit.expires !== 0 && hit.expires <= nowS) {
-            p.cache?.delete(ck)
-            return undefined
+        // a malformed/error output (host-reported, e.g. an unevaluatable
+        // record with no beef) must not poison the whole listing — one bad
+        // item yields undefined, the rest of the inbox still opens
+        if (!Array.isArray(o.beef) || o.beef.length === 0) return undefined
+        try {
+          const ck = VerifiedCache.key(o.beef)
+          const hit = p.cache?.get(ck)
+          if (hit !== undefined) {
+            // expires is the only time-dependent gate in openEnvelope — the
+            // rest of the envelope is fixed bytes already admitted once
+            if (hit.expires !== 0 && hit.expires <= nowS) {
+              p.cache?.delete(ck)
+              return undefined
+            }
+            return hit
           }
-          return hit
+          const it = await openEnvelope(o.beef, w, office, me, p.tracker).catch(() => undefined)
+          if (it !== undefined) p.cache?.set(ck, it)
+          return it
+        } catch {
+          return undefined
         }
-        const it = await openEnvelope(o.beef, w, office, me, p.tracker).catch(() => undefined)
-        if (it !== undefined) p.cache?.set(ck, it)
-        return it
       })
     )
     const ids: string[] = []

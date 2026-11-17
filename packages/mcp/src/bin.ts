@@ -134,6 +134,9 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     // early-select — a cheaper offer inside the window still wins; collectMs
     // remains the outer ceiling
     minCollectMs: nektarEnv('NEKTAR_MIN_COLLECT_MS') ? Number(nektarEnv('NEKTAR_MIN_COLLECT_MS')) : undefined,
+    // opt-in: the collect window stays open while offers keep arriving and
+    // closes collectQuietMs after the last one (collectMs stays the ceiling)
+    collectQuietMs: nektarEnv('NEKTAR_COLLECT_QUIET_MS') ? Number(nektarEnv('NEKTAR_COLLECT_QUIET_MS')) : undefined,
     // a settlement proof must sit this deep before a completion settles —
     // the same finality depth the memory applies to anchor queries
     settleDepth: rt.mem.finalityDepth,

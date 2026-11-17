@@ -22,6 +22,8 @@ export interface MinihostOpts {
   drop?: (txid: string) => boolean
   office?: string
   corrupt?: boolean
+  /** append malformed rows (missing/non-array beef) to every lookup answer */
+  poisonOutputs?: boolean
   port?: number
   now?: () => number
   logStream?: string
@@ -54,6 +56,8 @@ export interface FaultSpec {
   duplicateOutputs?: boolean
   /** flip a byte in every returned beef — a corrupt host */
   corrupt?: boolean
+  /** append outputs whose beef is missing/not an array — a poisoned listing */
+  poisonOutputs?: boolean
 }
 export interface FaulthostHandle {
   url: string
@@ -105,7 +109,11 @@ export async function faulthost(upstream: string): Promise<FaulthostHandle> {
       const buf = Buffer.from(await r.arrayBuffer())
       if (
         req.url === '/lookup' &&
-        (fault.dropLookup === true || fault.duplicateOutputs === true || fault.corrupt === true || (fault.withholdTxids?.size ?? 0) > 0)
+        (fault.dropLookup === true ||
+          fault.duplicateOutputs === true ||
+          fault.corrupt === true ||
+          fault.poisonOutputs === true ||
+          (fault.withholdTxids?.size ?? 0) > 0)
       ) {
         const parsed = JSON.parse(buf.toString('utf8')) as { outputs?: Array<{ beef: number[]; outputIndex: number }> }
         if (fault.dropLookup === true) parsed.outputs = []
@@ -117,6 +125,12 @@ export async function faulthost(upstream: string): Promise<FaulthostHandle> {
               return id === undefined || !fault.withholdTxids!.has(id)
             })
           if (fault.corrupt === true) for (const o of parsed.outputs ?? []) if (o.beef.length > 10) o.beef[10] = o.beef[10] ^ 0xff
+          if (fault.poisonOutputs === true)
+            parsed.outputs = [
+              ...(parsed.outputs ?? []),
+              { outputIndex: 97 } as { beef: number[]; outputIndex: number },
+              { beef: 'zz' as unknown as number[], outputIndex: 98 }
+            ]
         }
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(parsed))
@@ -150,6 +164,7 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
   const logStream = 'logStream' in opts ? opts.logStream : undefined
   const finger = 'finger' in opts ? (opts.finger ?? false) : false
   const corrupt = 'corrupt' in opts ? (opts.corrupt ?? false) : false
+  const poisonOutputs = 'poisonOutputs' in opts ? (opts.poisonOutputs ?? false) : false
   const port = 'port' in opts ? opts.port : undefined
   const now = 'now' in opts ? opts.now : undefined
   const host = { log: () => {}, chainTracker: tracker, engine: { submit: async () => ({}) } }
@@ -337,11 +352,14 @@ export async function minihost(nets: string[], opts: MinihostOpts | FakeTracker)
         res.end(
           JSON.stringify({
             type: 'output-list',
-            outputs: a.map((o) => {
-              const b = [...(stored.get(o.txid) ?? [])]
-              if (corrupt && b.length > 10) b[10] = b[10] ^ 0xff
-              return { beef: b, outputIndex: o.outputIndex }
-            })
+            outputs: [
+              ...a.map((o) => {
+                const b = [...(stored.get(o.txid) ?? [])]
+                if (corrupt && b.length > 10) b[10] = b[10] ^ 0xff
+                return { beef: b, outputIndex: o.outputIndex }
+              }),
+              ...(poisonOutputs ? [{ outputIndex: 97 }, { beef: 'zz', outputIndex: 98 }] : [])
+            ]
           })
         )
       } else {

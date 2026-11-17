@@ -205,12 +205,19 @@ export async function readItems(hosts: string[], service: string, query: unknown
       | undefined
     const checks: Check[] = await Promise.all(
       a.outputs.map(async (o2): Promise<Check> => {
-        const ck = VerifiedCache.key(o2.beef)
-        const hit = o.cache?.get(ck)
-        if (hit !== undefined) return { hit, ck }
-        const c = await checkCarrier(o2.beef, { tracker: o.tracker }).catch(() => undefined)
-        if (c === undefined || !c.ok) return undefined
-        return { c, ck }
+        // a malformed/error output (host-reported, no beef) must not poison
+        // the whole listing — skip it, the rest of the lane still verifies
+        if (!Array.isArray(o2.beef) || o2.beef.length === 0) return undefined
+        try {
+          const ck = VerifiedCache.key(o2.beef)
+          const hit = o.cache?.get(ck)
+          if (hit !== undefined) return { hit, ck }
+          const c = await checkCarrier(o2.beef, { tracker: o.tracker }).catch(() => undefined)
+          if (c === undefined || !c.ok) return undefined
+          return { c, ck }
+        } catch {
+          return undefined
+        }
       })
     )
     for (const r of checks) {

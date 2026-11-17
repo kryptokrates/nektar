@@ -154,6 +154,12 @@ export interface MarketOptions {
    *  `scoring.collectMs` remains the outer ceiling. 0 = select on the first
    *  recorded offer (previous behaviour). */
   minCollectMs: number
+  /** quiet-extended collect window — opt-in. While offers keep arriving the
+   *  window stays open past `minCollectMs` (early-select is deferred); it
+   *  closes `collectQuietMs` after the last recorded offer, or at
+   *  `scoring.collectMs`, whichever first. 0 = off (select at minCollectMs +
+   *  first offer — the default, unchanged). */
+  collectQuietMs: number
 }
 
 export const DEFAULTS: MarketOptions = {
@@ -163,7 +169,8 @@ export const DEFAULTS: MarketOptions = {
   escrowFeeReserveSats: 500,
   sellerSafetyBlocks: 2,
   approvalTtlMs: 86_400_000,
-  minCollectMs: 1000
+  minCollectMs: 1000,
+  collectQuietMs: 0
 }
 export const pkhOf = (pub: string) => Buffer.from(PublicKey.fromString(pub).toHash() as number[]).toString('hex')
 /** a bstore ObjectRef → stock plaintext ref (digest-pinned locator). https

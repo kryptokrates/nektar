@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { PrivateKey, Transaction, P2PKH, SatoshisPerKilobyte, Beef } from '@bsv/sdk'
 import { TeranodeBroadcaster, TeranodeRPCTracker, utxoStatus, regtestMerkleProof } from '../../../chain/dist/src/regtest.js'
-import { BsvBroadcaster, ChaintracksTracker, WocTracker } from '../../../chain/dist/src/mainnet.js'
+import { BsvBroadcaster, ChaintracksTracker, WocTracker, merklePathMainnet } from '../../../chain/dist/src/mainnet.js'
 import { WitnessedTracker } from '../../../chain/dist/src/headers.js'
 import { readBox } from '../../../bstack/dist/src/index.js'
 import { resolveFinger } from '../../../bstack/dist/src/finger.js'
@@ -101,7 +101,9 @@ const HOSTS = [HOST_A, HOST_B]
 // Agents poll every shim (NEKTAR_WATCH_URLS) and publish the one fronting
 // their first host (NEKTAR_WATCH_PUBLIC) so a counterparty's /notify lands
 // where their waiters live. No shims configured → plain polling, unchanged.
-const watchShims = (process.env.NEKTAR_WATCH_SHIMS ?? (LIVE ? '' : 'http://127.0.0.1:18193,http://127.0.0.1:18194'))
+const watchShims = (
+  process.env.NEKTAR_WATCH_SHIMS ?? (LIVE ? 'http://127.0.0.1:18293,http://127.0.0.1:18294' : 'http://127.0.0.1:18193,http://127.0.0.1:18194')
+)
   .split(',')
   .map((x) => x.trim())
   .filter(Boolean)
@@ -302,7 +304,11 @@ async function fundAgentsLive() {
   }
   const conf = await (await woc(`/address/${treasuryAddr}/unspent`)).json()
   const unconf = (await (await woc(`/address/${treasuryAddr}/unconfirmed/unspent`)).json()).result ?? []
-  const per = 10_000
+  // 150k/agent runway: the lane stock model pre-mints ~8 trees (fee+pad each)
+  // plus the deal's escrow/disclosure/collect — 60k starved the finger publish
+  // below a 5k take. No single treasury UTXO covers it (~297k max), so the
+  // split accumulates top outpoints as inputs until the need is met.
+  const per = 25_000
   const outs = 6
   const need = agents.length * per * outs + 10_000
   for (const a of agents) a.key = PrivateKey.fromRandom()
@@ -310,11 +316,34 @@ async function fundAgentsLive() {
   // an aborted run can leave one of our own prior splits holding the outpoint
   // WoC still lists — the broadcaster accepts the submit then REJECTS once the
   // mempool conflict resolves, so settle-watch the status before trusting it
-  for (const best of [...conf, ...unconf].sort((x, y) => y.value - x.value)) {
-    if (best.value < need) break
-    const parent = Transaction.fromHex((await (await woc(`/tx/${best.tx_hash}/hex`)).text()).trim())
+  // confirmed outpoints first: an unconfirmed input's ancestors must all
+  // resolve at internalize time, and a stale unconfirmed ancestor can be
+  // unservable forever. Unconfirmed candidates are a coverage fallback only.
+  const byValue = (x, y) => y.value - x.value
+  const candidates = [...conf.sort(byValue), ...unconf.sort(byValue)]
+  for (let skip = 0; skip < candidates.length; skip++) {
+    const inputs = []
+    let covered = 0
+    for (const c of candidates.slice(skip)) {
+      inputs.push(c)
+      covered += c.value
+      if (covered >= need) break
+    }
+    if (covered < need) break
     const split = new Transaction()
-    split.addInput({ sourceTransaction: parent, sourceOutputIndex: best.tx_pos, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
+    const parents = []
+    for (const c of inputs) {
+      const parent = Transaction.fromHex((await (await woc(`/tx/${c.tx_hash}/hex`)).text()).trim())
+      // attach the parent's BUMP where it's already mined — a proven parent
+      // anchors the BEEF closure so the wallet's fixpoint never has to walk
+      // (and fetch) deeper ancestry
+      if (parent.merklePath === undefined) {
+        const mp = await merklePathMainnet(TESTNET, c.tx_hash).catch(() => null)
+        if (mp?.merklePath !== undefined) parent.merklePath = mp.merklePath
+      }
+      parents.push(parent)
+      split.addInput({ sourceTransaction: parent, sourceOutputIndex: c.tx_pos, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
+    }
     for (const a of agents)
       for (let i = 0; i < outs; i++) split.addOutput({ lockingScript: new P2PKH().lock(a.key.toPublicKey().toAddress([0x6f])), satoshis: per })
     split.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), change: true })
@@ -337,10 +366,18 @@ async function fundAgentsLive() {
       log(`split ${split.id('hex').slice(0, 12)}… rejected: ${rejected.slice(0, 100)} — next candidate`)
       continue
     }
+    // the funding payload must carry its ancestry: a raw multi-input tx
+    // leaves the wallet's internalize with no source tx for each input.
+    // BEEF ships the split + every parent inline, self-contained (same
+    // reason the regtest branch hands beef, not raw hex).
+    const beef = new Beef()
+    beef.mergeTransaction(split)
+    for (const p of parents) beef.mergeTransaction(p)
+    const fundHex = Buffer.from(beef.toBinaryAtomic(split.id('hex'))).toString('hex')
     for (const a of agents) {
       a.dataDir = join(AGENTS_DIR, a.name)
       mkdirSync(a.dataDir, { recursive: true })
-      a.fundHex = split.toHex()
+      a.fundHex = fundHex
     }
     log(`treasury split ${split.id('hex')} (${split.toBinary().length} bytes, fee ${split.getFee()} sats) → ${agents.length}×${outs}×${per} sats`)
     return split.id('hex')
@@ -666,13 +703,17 @@ async function waitState(a, operationId, states, ms = LIVE ? 3 * 3600_000 : 900_
 // every copy of an envelope is receipted: recipients learn the sender's hosts
 // from its identity record, so the check covers both hosts on every lane.
 // Only this deal's envelopes count — provisioned agents carry earlier deals.
-async function inboxEmpty(a, wantId, allowOwnSellerNote = false) {
+// allowPostDealNotes: on live nets the winner's box legitimately still holds
+// the settle-gated bookkeeping — her own sellerNote AND the buyer's accept
+// (both held until the collect tx proves, which is a block away; lanes.ts
+// releases them on the same noteSettled edge the regtest path waits for).
+async function inboxEmpty(a, wantId, allowPostDealNotes = false) {
   const key = a.key
   for (const h of HOSTS) {
     const r = await readBox({ key, hosts: [h], tracker })
     const items = r.items
       .map((i) => ({ from: i.from, m: i.body.market ?? i.body }))
-      .filter((i) => i.m.wantId === wantId && !(allowOwnSellerNote && i.from === a.pub && i.m.type === 'sellerNote'))
+      .filter((i) => i.m.wantId === wantId && !(allowPostDealNotes && ((i.from === a.pub && i.m.type === 'sellerNote') || i.m.type === 'accept')))
     if (items.length !== 0)
       return { empty: false, host: h, items: items.length, detail: items.map((i) => `${i.m.type ?? '?'}@${i.from.slice(0, 10)}`).join(',') }
   }

@@ -644,6 +644,13 @@ export class WalletFunds extends FundsBase {
     }
   }
 
+  /** local store of already-seen transactions — funding imports arrive with
+   *  their ancestry attached and `TxStore` keeps it, so a descendant
+   *  internalize resolves parents locally instead of re-fetching what the
+   *  import already carried (one indexer call saved per ancestor, and a
+   *  rate-limited indexer can no longer fail a self-contained import) */
+  txLookup: ((txid: string) => Transaction | undefined) | undefined
+
   get utxos(): FundingOut[] {
     return this.cache
   }
@@ -779,6 +786,8 @@ export class WalletFunds extends FundsBase {
    *  the ancestry anchors at proven roots (`depth` bounds pathological
    *  zeroconf chains). */
   private async parent(txid: string, depth = 8): Promise<Transaction | undefined> {
+    const local = this.txLookup?.(txid)
+    if (local !== undefined) return local
     if (this.services === undefined) return undefined
     const r = await this.services.getRawTx(txid)
     if (r.rawTx === undefined) return undefined

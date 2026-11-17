@@ -275,6 +275,11 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   const { knex, store, ledger, wrapBroadcast, leasePredicate } = await openRecordsDb(cfg.dataDir)
   await openTxStore(knex)
   for (const u of await custody.funds.outs()) txStore.put(u.tx)
+  // internalize resolves ancestry locally first: imported funding arrives
+  // with parents attached and put() keeps them, so a descendant's atomic
+  // beef never re-fetches what the store already proved (an indexer hiccup
+  // can no longer fail a self-contained import)
+  if ('txLookup' in custody.funds) custody.funds.txLookup = (txid: string) => txStore.get(txid)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
   // the one chain-event substrate for this process: every "is it proven?"
   // consumer (confirmer, anchor parents, ledger) registers interest here and

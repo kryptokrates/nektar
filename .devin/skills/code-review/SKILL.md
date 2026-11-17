@@ -60,13 +60,13 @@ differs only in `buildTimestamp`, say so and skip it — that is normal churn.
 - **Inline** (default) — run all four passes yourself, in order. Right
   shape for most diffs.
 - **Swarm** — deep/comprehensive requests, diffs spanning ≥3 packages or
-  >~400 changed lines, or money-path changes that deserve independent
-  eyes per pass. Fan out per
-  [references/orchestration.md](references/orchestration.md): one
-  reviewer per pass (split further by file group on large diffs), a
-  `file × pass` coverage matrix so nothing is silently unreviewed, and a
-  fresh verifier that tries to disprove every BLOCKER/MAJOR candidate —
-  reviewers never verify their own findings.
+  > ~400 changed lines, or money-path changes that deserve independent
+  > eyes per pass. Fan out per
+  > [references/orchestration.md](references/orchestration.md): one
+  > reviewer per pass (split further by file group on large diffs), a
+  > `file × pass` coverage matrix so nothing is silently unreviewed, and a
+  > fresh verifier that tries to disprove every BLOCKER/MAJOR candidate —
+  > reviewers never verify their own findings.
 
 ## Process
 

@@ -136,7 +136,7 @@ test('verify page: OG unfurl meta + install CTA + copyable badge markdown', asyn
     process.env.NEKTAR_NETWORK = 'testnet'
     try {
       const htmlTtn = await (await fetch(`${base}/v1/verify?r=${encodeURIComponent(g.share!.token)}`, { headers: { accept: 'text/html' } })).text()
-      assert.match(htmlTtn, /test\.whatsonchain\.com\/tx\/[0-9a-f]{64}/, 'anchor tx links to the testnet explorer')
+      assert.match(htmlTtn, /test\.bananablocks\.com\/tx\/[0-9a-f]{64}/, 'anchor tx links to the testnet explorer')
     } finally {
       if (savedNet === undefined) delete process.env.NEKTAR_NETWORK
       else process.env.NEKTAR_NETWORK = savedNet

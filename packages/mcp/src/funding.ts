@@ -240,7 +240,14 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-  wireP2p({ peers: p2pPeers, pkhHex, reserve: funds, addIfNew, log: (s) => process.stderr.write(s), spendStatus: (txid, vout) => port.spendStatus?.(txid, vout) ?? Promise.resolve('unknown' as const) })
+  wireP2p({
+    peers: p2pPeers,
+    pkhHex,
+    reserve: funds,
+    addIfNew,
+    log: (s) => process.stderr.write(s),
+    spendStatus: (txid, vout) => port.spendStatus?.(txid, vout) ?? Promise.resolve('unknown' as const)
+  })
   // NEKTAR_FEE_VAULT: anchor funding minted through the fee-vault covenant —
   // setupFeeVault returns a vault-take; the covenant mints capped publish
   // stock while deal and upkeep takes still draw from the shared pool
@@ -273,7 +280,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
   }
   const discover = async () => {
     // tracked-set model: we spend only what we made or were handed. Address-
-    // index discovery (WoC) is OPT-IN — NEKTAR_INDEXER_DISCOVERY=1 — because it
+    // index discovery is OPT-IN — NEKTAR_INDEXER_DISCOVERY=1 — because it
     // creates an indexer dependency that doesn't scale. The default funding
     // path is NEKTAR_FUND_TXIDS=<txid|hex:rawtx> (import above).
     if (nektarEnv('NEKTAR_INDEXER_DISCOVERY') !== '1') return

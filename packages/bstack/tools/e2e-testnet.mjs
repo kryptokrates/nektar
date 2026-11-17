@@ -16,7 +16,7 @@
 //   .state/testnet-passphrase). The key must hold testnet UTXOs (~10k sats).
 // Run: node packages/bstack/tools/e2e-testnet.mjs
 import { PrivateKey, Transaction, P2PKH } from '@bsv/sdk'
-import { BsvBroadcaster, WocTracker, discoverUtxos, merklePathMainnet } from '@nektar/chain'
+import { BsvBroadcaster, IndexTracker, discoverUtxos, merklePathMainnet } from '@nektar/chain'
 import {
   mintTree,
   MemoryTreeLedger,
@@ -50,9 +50,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // ── config ──────────────────────────────────────────────────────────────────
 const cfg = {
   broadcasterUrl: process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech',
-  wocUrl: process.env.NEKTAR_WOC_URL ?? 'https://api.whatsonchain.com/v1/bsv/test',
+  indexerUrl: process.env.NEKTAR_INDEXER_URL ?? process.env.NEKTAR_WOC_URL ?? 'https://test.bananablocks.com/api/v1',
   broadcasterApiKey: process.env.NEKTAR_BROADCASTER_API_KEY,
-  wocApiKey: process.env.NEKTAR_WOC_API_KEY
+  indexerApiKey: process.env.NEKTAR_INDEXER_API_KEY ?? process.env.NEKTAR_WOC_API_KEY
 }
 const HOSTS = (process.env.NEKTAR_MARKET_HOSTS ?? 'http://127.0.0.1:18291,http://127.0.0.1:18292')
   .split(',')
@@ -60,7 +60,7 @@ const HOSTS = (process.env.NEKTAR_MARKET_HOSTS ?? 'http://127.0.0.1:18291,http:/
   .filter(Boolean)
 const NET = 'testnet'
 const broadcaster = new BsvBroadcaster(cfg)
-const tracker = new WocTracker(cfg)
+const tracker = new IndexTracker(cfg)
 
 function loadWif() {
   if (process.env.NEKTAR_FUND_WIF) return process.env.NEKTAR_FUND_WIF
@@ -178,7 +178,7 @@ const sent = await sendBox({
 // the background, so `took` (answered ok) is the honest claim, not `admitted`
 check(sent.missed.length === 0, `envelope submitted to ${sent.took.length}/${HOSTS.length} hosts (${sent.txid.slice(0, 16)}…)`)
 // the carrier is a fresh chain tx — admit() verifies its BEEF ancestry against
-// chain headers, so ls_bbox can't open it until the next block seals + WoC
+// chain headers, so ls_bbox can't open it until the next block seals + the index
 // indexes it. Wait for the proof like the finger token, not a blind poll.
 console.log('waiting for the envelope carrier to mine (~10 min)…')
 {
@@ -239,7 +239,7 @@ check(!!manifest.commitment, `kind-6 manifest admitted (commitment ${manifest.co
 // ── 6. finger record → mined token → ls_finger resolution ───────────────────
 const state = new MemoryFingerState()
 const fetchTx = async (txid) => {
-  const r = await fetch(`${cfg.wocUrl}/tx/${txid}/hex`, { signal: AbortSignal.timeout(15_000) }).catch(() => null)
+  const r = await fetch(`${cfg.indexerUrl}/tx/${txid}/hex`, { signal: AbortSignal.timeout(15_000) }).catch(() => null)
   if (r === null || !r.ok) return undefined
   return Transaction.fromHex((await r.text()).trim())
 }

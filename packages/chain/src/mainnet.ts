@@ -39,7 +39,7 @@ export const DEFAULT_BROADCASTER_URL = 'https://arcade.gorillapool.io'
  *  indexerUrl: 'https://test.bananablocks.com/api/v1' */
 export const DEFAULT_INDEXER_URL = 'https://bananablocks.com/api/v1'
 /** @deprecated alias kept for external consumers — use DEFAULT_INDEXER_URL */
-export const DEFAULT_WOC_URL = DEFAULT_INDEXER_URL
+export const DEFAULT_WOC_URL: string = DEFAULT_INDEXER_URL
 
 const def = (c?: MainnetConfig) => {
   const indexerUrl = c?.indexerUrl ?? c?.wocUrl ?? DEFAULT_INDEXER_URL
@@ -81,7 +81,8 @@ export class BsvBroadcaster implements Broadcaster {
     this.cfg = def(c)
     // index cross-check on status reads engages for public-default configs or
     // an explicit index URL — a custom broadcaster alone isn't assumed public-net
-    this.indexFallback = c?.indexerUrl !== undefined || c?.wocUrl !== undefined || c?.broadcasterUrl === undefined || c.broadcasterUrl === DEFAULT_BROADCASTER_URL
+    this.indexFallback =
+      c?.indexerUrl !== undefined || c?.wocUrl !== undefined || c?.broadcasterUrl === undefined || c.broadcasterUrl === DEFAULT_BROADCASTER_URL
   }
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
     const { broadcasterUrl } = this.cfg
@@ -674,18 +675,7 @@ export async function merklePathMainnet(cfg: MainnetConfig | undefined, txid: st
   }
 }
 
-/** GET with 429/5xx backoff (WoC rate-limits ~3 req/s); throws on a final non-2xx */
-async function getOk(c: ReturnType<typeof def>, url: string, headers: Record<string, string>): Promise<Response> {
-  const r = await withRetry(() => req(c, url, { headers }), {
-    attempts: 5,
-    delay: (i) => 800 * 2 ** i,
-    retryIf: (x) => x.status === 429 || x.status >= 500
-  })
-  if (!r.ok) throw new Error(`${url.split('/').slice(-3).join('/')}: HTTP ${r.status}`)
-  return r
-}
-
-// --- funding import by txid (address indexes can be unavailable, e.g. WoC-TTN) ---
+// --- funding import by txid (address indexes can be unavailable) ---
 /** fetch a funding tx and return its P2PKH outputs locked to `pkhHex` */
 export async function importFundingTx(cfg: MainnetConfig | undefined, ref: string, pkhHex: string): Promise<FundingOut[]> {
   // 'hex:<tx>' = fully offline import — the operator hands us the funding

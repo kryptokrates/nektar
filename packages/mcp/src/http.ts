@@ -170,9 +170,19 @@ export async function handleBroadcasterStatus(
   // the raw status/txid are unbounded unauth input — normalize before they
   // become metric labels / hintedTxids entries (both retain forever)
   const KNOWN_STATUSES = new Set([
-    'QUEUED', 'RECEIVED', 'STORED', 'ANNOUNCED_TO_NETWORK', 'SENT_TO_NETWORK',
-    'ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'MINED', 'SEEN_IN_ORPHAN_MEMPOOL',
-    'CONFIRMED', 'REJECTED', 'DOUBLE_SPEND_ATTEMPTED', 'IMMUTABLE'
+    'QUEUED',
+    'RECEIVED',
+    'STORED',
+    'ANNOUNCED_TO_NETWORK',
+    'SENT_TO_NETWORK',
+    'ACCEPTED_BY_NETWORK',
+    'SEEN_ON_NETWORK',
+    'MINED',
+    'SEEN_IN_ORPHAN_MEMPOOL',
+    'CONFIRMED',
+    'REJECTED',
+    'DOUBLE_SPEND_ATTEMPTED',
+    'IMMUTABLE'
   ])
   const norm = KNOWN_STATUSES.has(status.toUpperCase()) ? status.toUpperCase() : 'OTHER'
   mem.metrics.inc('nektar_broadcaster_callbacks_total', { status: norm.toLowerCase() }, 1, 'broadcaster status callbacks received')
@@ -786,8 +796,7 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
               const n = (await mem.records(shard)).length
               const ckey = `${shard}|${head}|${n}`
               const etag = `W/"${createHash('sha256').update(ckey).digest('hex').slice(0, 32)}"`
-              if (req.headers['if-none-match'] === etag && packCache.get(shard)?.key === ckey)
-                return send(304, '', 'text/plain')
+              if (req.headers['if-none-match'] === etag && packCache.get(shard)?.key === ckey) return send(304, '', 'text/plain')
               if (packInflight >= 2) return send(429, { error: 'pack export busy — retry shortly' })
               let cached = packCache.get(shard)
               if (cached?.key !== ckey) {
@@ -927,11 +936,11 @@ async function verifyPage(
     : `receipt failed verification — ${r.checks.filter((c) => c.ok === false).length} check(s) broken`
   const explorer =
     net === 'main'
-      ? 'https://whatsonchain.com'
+      ? 'https://bananablocks.com'
       : net === 'stn'
-        ? 'https://stn.whatsonchain.com'
+        ? null // no bananablocks equivalent on STN
         : net === 'testnet' || net === 'test'
-          ? 'https://test.whatsonchain.com'
+          ? 'https://test.bananablocks.com'
           : null
   const anchorUrl = explorer && r.anchorTxid ? `${explorer}/tx/${r.anchorTxid}` : null
   return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>${r.ok ? '✓ verified answer' : '✗ receipt failed'}${rec?.answer ? ` — ${esc(rec.answer.slice(0, 60))}` : ''}</title>

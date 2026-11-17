@@ -5,6 +5,11 @@ import type { AddressInfo } from 'node:net'
 import { NektarMemory, type NektarMemoryOptions } from '../src/memory.js'
 import { callTool } from '../src/server.js'
 
+// peer packs are pulled from an in-process HTTP server on 127.0.0.1 — the
+// local-rig case. The egress screen only allows loopback endpoints under
+// the regtest network flag, so declare it for these tests.
+process.env.NEKTAR_NETWORK ??= 'regtest'
+
 async function setup(t: { skip: (m?: string) => void }, opts: NektarMemoryOptions = {}) {
   const w = await testWorld(t, 50)
   if (w === undefined) return

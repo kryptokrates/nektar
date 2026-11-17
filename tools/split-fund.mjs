@@ -7,7 +7,7 @@ const AGENTS =
   )
 // committed WIFs were swept — source keys come from the environment now.
 // NEKTAR_SPLIT_SOURCE_WIF_1 / _2 for the two outpoints below.
-const wifEnv = n => {
+const wifEnv = (n) => {
   const w = process.env[`NEKTAR_SPLIT_SOURCE_WIF_${n}`]
   if (!w) throw new Error(`set NEKTAR_SPLIT_SOURCE_WIF_${n}`)
   return w

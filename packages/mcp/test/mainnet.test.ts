@@ -39,7 +39,7 @@ test('runtime main gate: confirm flag required', () => {
 test('runtime testnet: no confirm flag required; testnet-encoded fee address', () => {
   const cfg = configFromEnv(env({ NEKTAR_NETWORK: 'testnet', NEKTAR_KEY_PASSPHRASE: 'x' }))
   assert.equal(cfg.main?.broadcasterUrl, 'https://arcade-v2-testnet-us-1.bsvblockchain.tech')
-  assert.equal(cfg.main?.wocUrl, 'https://api.whatsonchain.com/v1/bsv/test')
+  assert.equal(cfg.main?.indexerUrl, 'https://test.bananablocks.com/api/v1')
   assert.equal(cfg.main?.feeRateSatPerKb, 1)
   assert.equal(cfg.confirmEveryMs, 30_000)
   // testnet address encodes with testnet prefix (m/n…), mainnet with 1…

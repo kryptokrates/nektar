@@ -76,7 +76,8 @@ export function configFromEnv(env = process.env): RuntimeConfig {
       `NEKTAR_NETWORK must be regtest|testnet|main — got '${String(env.NEKTAR_NETWORK)}'${env.NEKTAR_NETWORK === 'mock' ? ' (the in-process mock chain was removed — testnet is the zero-infra option)' : ''}`
     )
   const dataDir = env.NEKTAR_DATA_DIR ?? join(process.cwd(), '.nektar')
-  const secret = (k: string) => nektarEnv(k, env) ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
+  const secret = (k: string) =>
+    nektarEnv(k, env) ?? (env[`${k}_FILE`] && existsSync(env[`${k}_FILE`]!) ? readFileSync(env[`${k}_FILE`]!, 'utf8').trim() : undefined)
   const cfg: RuntimeConfig = {
     network,
     dataDir,
@@ -112,9 +113,7 @@ export function configFromEnv(env = process.env): RuntimeConfig {
     // testNet = any test network (testnet encoding, test coins, low fee floor)
     const testNet = network !== 'main'
     const urls =
-      network === 'testnet'
-        ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', indexer: 'https://test.bananablocks.com/api/v1' }
-        : undefined
+      network === 'testnet' ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', indexer: 'https://test.bananablocks.com/api/v1' } : undefined
     cfg.confirmEveryMs = Number(env.NEKTAR_CONFIRM_MS ?? (testNet ? 30_000 : 60_000))
     cfg.main = {
       fundWif: secret('NEKTAR_FUND_WIF'),
@@ -317,11 +316,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   })
   // §12: header TIMES are the weighted median across temporal sources;
   // single-source (default) is bit-identical to the raw tracker
-  const temporal = temporalSourcesFor(
-    cfg.temporalSources ?? ['bsv'],
-    port.tracker,
-    live ? { indexerApiKey: mc?.indexerApiKey, fetchImpl: mc?.fetchImpl } : {}
-  )
+  const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], port.tracker, live ? { indexerApiKey: mc?.indexerApiKey, fetchImpl: mc?.fetchImpl } : {})
   const chain = {
     broadcast: async (tx: Transaction) => {
       // attach parent txs so the broadcaster can send Extended Format (nodes

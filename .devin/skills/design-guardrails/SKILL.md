@@ -25,12 +25,13 @@ has two jobs:
 
 Audit mode runs **inline** by default — one pass over the scope. It runs
 as a **swarm** on full-audit requests, `--pkg` audits of packages with
->~10 src files, or diffs creating more units than one pass can walk
-honestly: fan out per
-[references/orchestration.md](references/orchestration.md) — auditors own
-`unit × {8-question walk, red-flag sweep}` coverage, fresh verifiers
-challenge every BLOCKER/MAJOR candidate, and the parent runs the gates
-itself. Checkpoint mode never delegates.
+
+> ~10 src files, or diffs creating more units than one pass can walk
+> honestly: fan out per
+> [references/orchestration.md](references/orchestration.md) — auditors own
+> `unit × {8-question walk, red-flag sweep}` coverage, fresh verifiers
+> challenge every BLOCKER/MAJOR candidate, and the parent runs the gates
+> itself. Checkpoint mode never delegates.
 
 ## Audit mode — process
 

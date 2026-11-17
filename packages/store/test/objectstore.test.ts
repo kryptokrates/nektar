@@ -8,6 +8,11 @@ import { createHash, createHmac } from 'node:crypto'
 import { S3ObjectStore, objectStoreFromEnv, OBJECT_MAX_BYTES } from '../src/objectstore.js'
 import { fetchObjectByRef } from '../src/chirp.js'
 
+// these tests run the S3 client against an in-process fake on 127.0.0.1 —
+// the local-rig case. The egress screen only allows loopback endpoints under
+// the regtest network flag, so declare it.
+process.env.NEKTAR_NETWORK ??= 'regtest'
+
 const SECRET = 'quickstart-secret-not-secret'
 const ACCESS = 'QUICKSTARTACCESSKEY'
 const REGION = 'us-east-1'

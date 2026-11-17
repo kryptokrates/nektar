@@ -99,7 +99,7 @@ const reconcileReserve = async (fundKey: PrivateKey, reserve: ReserveFunder, mc:
     if (liveSet.has(`${txid}:${u.vout}`)) continue
     if ((await utxoSpendStatus(mc, tracker, txid, u.vout)) === 'spent') reserve.markSpent(txid, u.vout)
   }
-  // import live UTXOs the file doesn't know (minted-tree change, settlement
+  // adopt live UTXOs the file doesn't know (minted-tree change, settlement
   // income from earlier runs) — fetch each parent tx hex and addOwned it
   for (const u of live) {
     const op = `${u.txid}:${u.vout}`

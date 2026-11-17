@@ -9,7 +9,8 @@ export const handlers: Record<string, ToolHandler> = {
     // __catalog__, __imports__, __identity__, __model__, __corrections__,
     // __access__) — caller writes there forge receipts/revocations or poison
     // recall; only internal modules may write system shards
-    if (typeof args.shard !== 'string' || args.shard.startsWith('__')) throw new Error('remember: shard names starting with "__" are reserved for system records')
+    if (typeof args.shard !== 'string' || args.shard.startsWith('__'))
+      throw new Error('remember: shard names starting with "__" are reserved for system records')
     const level = args.level ?? 0
     // a stored non-integer/negative level throws in the recall loop's BigInt()
     // and permanently poisons the shard on the append-only store
@@ -23,7 +24,10 @@ export const handlers: Record<string, ToolHandler> = {
     // served to external callers (the private flag gates citations, packs and
     // listings — it must gate reads too)
     if (d.ctx.external && (mem.shardPrivate(args.shard) || String(args.shard).startsWith('__')))
-      return { ok: false, reason: `shard "${args.shard}" is private — contents refused; verify via a ZK membership proof (zkQuery → proveMembership → verifyMembership)` }
+      return {
+        ok: false,
+        reason: `shard "${args.shard}" is private — contents refused; verify via a ZK membership proof (zkQuery → proveMembership → verifyMembership)`
+      }
     const { decodePresentation } = await import('@nektar/identity')
     const r = await mem.recall(args.shard, { seq: args.seq, identity: args.identity, zk: args.zk === undefined ? undefined : decodePresentation(args.zk) })
     // tell the model how to recover from a wrong seq instead of an empty answer
@@ -144,7 +148,8 @@ export const handlers: Record<string, ToolHandler> = {
     // claimed payload; lineage (from shard:seq, leaf, settlement txid)
     // commits on __imports__
     if (typeof args?.data !== 'string') throw new Error('importRecord: data required (the verified claim payload)')
-    if (typeof args.shard === 'string' && args.shard.startsWith('__')) throw new Error('importRecord: shard names starting with "__" are reserved for system records')
+    if (typeof args.shard === 'string' && args.shard.startsWith('__'))
+      throw new Error('importRecord: shard names starting with "__" are reserved for system records')
     return await mem.importRecord({
       data: args.data,
       provenance: args.provenance,

@@ -11,7 +11,11 @@ import { openAutomation, ScriptedExecutor } from '@nektar/automation'
 
 const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
 const WOC = 'https://api.whatsonchain.com/v1/bsv/test'
-const WIF = process.env.NEKTAR_TESTNET_WIF ?? (() => { throw new Error('set NEKTAR_TESTNET_WIF — committed keys were swept') })()
+const WIF =
+  process.env.NEKTAR_TESTNET_WIF ??
+  (() => {
+    throw new Error('set NEKTAR_TESTNET_WIF — committed keys were swept')
+  })()
 
 const dir = mkdtempSync(join(tmpdir(), 'tn-trees-'))
 const dataDir = join(dir, 'ben')

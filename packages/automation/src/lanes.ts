@@ -42,7 +42,9 @@ export function openLanes(rt: Rt): void {
         const push =
           r.body.push !== undefined && lanes.mod.fingerHostAllowed(r.body.push, { allowHttp: rt.localNet, allowLocal: rt.localNet }) ? r.body.push : undefined
         const watch =
-          r.body.watch !== undefined && lanes.mod.fingerHostAllowed(r.body.watch, { allowHttp: rt.localNet, allowLocal: rt.localNet }) ? r.body.watch : undefined
+          r.body.watch !== undefined && lanes.mod.fingerHostAllowed(r.body.watch, { allowHttp: rt.localNet, allowLocal: rt.localNet })
+            ? r.body.watch
+            : undefined
         rec = { hosts, office: r.body.office, stream: r.body.stream, ...(watch !== undefined ? { watch } : {}), ...(push !== undefined ? { push } : {}) }
       }
     } catch {
@@ -306,7 +308,10 @@ export function openLanes(rt: Rt): void {
               // junk with no matching sale is released once it is old
               if (p.msg?.type === 'accept' && typeof (p.msg as { offerId?: unknown }).offerId === 'string') {
                 const offerId = (p.msg as { offerId: string }).offerId
-                if (!(await rt.engine.noteSettled(offerId, 'seller')) && ((await rt.engine.hasSale(offerId)) || Math.max(0, Date.now() / 1000 - p.created) < 600)) {
+                if (
+                  !(await rt.engine.noteSettled(offerId, 'seller')) &&
+                  ((await rt.engine.hasSale(offerId)) || Math.max(0, Date.now() / 1000 - p.created) < 600)
+                ) {
                   held.push(p)
                   continue
                 }

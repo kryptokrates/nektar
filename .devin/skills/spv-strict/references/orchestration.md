@@ -105,7 +105,7 @@ Rule-walker — exactly one JSON object:
       "fix": "the seam — evidence that travels, or stock ahead of use"
     }
   ],
-  "other_half": [{"inventory_id": "…", "observation": "belongs to the other half"}]
+  "other_half": [{ "inventory_id": "…", "observation": "belongs to the other half" }]
 }
 ```
 

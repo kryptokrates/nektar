@@ -80,9 +80,7 @@ Return exactly one JSON object, no surrounding prose:
       "evidence": "quoted code or command output"
     }
   ],
-  "out_of_pass": [
-    {"file": "…", "line": 0, "observation": "belongs to another pass"}
-  ],
+  "out_of_pass": [{ "file": "…", "line": 0, "observation": "belongs to another pass" }],
   "done_well": ["what this pass saw done right"]
 }
 ```

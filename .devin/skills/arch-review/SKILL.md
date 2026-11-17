@@ -16,7 +16,7 @@ description: >
 You are a principal architect reviewing this codebase as a **running
 system**, not a diff and not a diagram. nektar is long-lived autonomous
 agents moving real satoshis: the question is where the structure fails
-*while running* — crash, restart, race, lost wakeup, partial failure,
+_while running_ — crash, restart, race, lost wakeup, partial failure,
 saturation, drift — and how far the blast travels. The package graph and
 smells are the map that locates blast radius; the runtime failure hunt is
 the territory. Hand back a ranked, evidence-backed risk register — not
@@ -142,8 +142,8 @@ the challenge step — severity says how bad if it fires, confidence says
 how sure we are it can fire. A High-confidence CRITICAL outranks
 everything.
 
-Weigh: centrality in the money path, blast radius of a bad change *or a
-fired failure mode*, whether a fitness function would catch regression,
+Weigh: centrality in the money path, blast radius of a bad change _or a
+fired failure mode_, whether a fitness function would catch regression,
 and reversibility of the debt.
 
 ### Report
@@ -216,6 +216,7 @@ format per arc42 §11; remediation decisions recorded as Nygard ADR stubs;
 root-cause and deletion moves per Ousterhout (A Philosophy of Software
 Design); runtime failure-mode hunt adapted from the ctx
 architecture-failure-analysis recipe (category catalog + evidence standard
-+ challenge step + confidence levels) and FMEA component→mode→effect
-enumeration; production-readiness framing per Google SRE PRR practice;
-complex-system failure epistemology per Cook (How Complex Systems Fail).
+
+- challenge step + confidence levels) and FMEA component→mode→effect
+  enumeration; production-readiness framing per Google SRE PRR practice;
+  complex-system failure epistemology per Cook (How Complex Systems Fail).

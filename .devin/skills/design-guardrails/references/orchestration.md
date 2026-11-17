@@ -74,9 +74,7 @@ Return exactly one JSON object, no surrounding prose:
     {
       "unit": "packages/x/src/foo.ts#FooStore",
       "disposition": "audited|blocked",
-      "questions_answered": ["depth", "hidden-decision", "caller-knowledge",
-                             "change-amplification", "layering", "red-flags",
-                             "persistence", "enforcement"],
+      "questions_answered": ["depth", "hidden-decision", "caller-knowledge", "change-amplification", "layering", "red-flags", "persistence", "enforcement"],
       "unresolved": ["what blocked a blocked unit"]
     }
   ],
@@ -91,10 +89,8 @@ Return exactly one JSON object, no surrounding prose:
       "evidence": "quoted code"
     }
   ],
-  "unenforced_invariants": [
-    {"invariant": "the rule the code relies on", "missing_gate": "what would catch it"}
-  ],
-  "out_of_scope": [{"file": "…", "observation": "belongs to a peer unit"}]
+  "unenforced_invariants": [{ "invariant": "the rule the code relies on", "missing_gate": "what would catch it" }],
+  "out_of_scope": [{ "file": "…", "observation": "belongs to a peer unit" }]
 }
 ```
 

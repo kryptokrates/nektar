@@ -47,7 +47,7 @@ Per-network primitives, all O(1) per known outpoint/txid:
 | outpoint spent? | `asset /utxo/<txid>?vout=N` (binary record; 0x01 = spent + spending txid) — wired into `takeReserve` | our ledger: we're the only spender — a spend is spent iff _our_ spend tx mined (broadcaster status) |
 | funding         | `init --fund-txid` → `getrawtransaction` → record outputs paying our key                             | `NEKTAR_FUND_TXIDS=<txid>` or `hex:<rawtx>` (fully offline)                                         |
 
-`NEKTAR_INDEXER_DISCOVERY=1` re-enables WoC address-index lookup as an opt-in
+`NEKTAR_INDEXER_DISCOVERY=1` re-enables chain-index (bananablocks) address lookup as an opt-in
 convenience — off by default. Broadcasting is the one unavoidable external
 service (public BSV Broadcaster endpoints are no-key: `arcade-*-1.bsvblockchain.tech`,
 `arcade.gorillapool.io`); running your own Teranode (e.g. a Hetzner box) makes
@@ -202,7 +202,7 @@ Nektar can keep deal-evidence bundles and public shard packs in **bstore** (Ligh
      - `POST /tx`; Extended Format when every parent is known, raw otherwise;
      - falls back to WhatsOnChain only on network/5xx errors;
      - fee rate `max(100 sat/kB, broadcaster policy)`;
-     - headers and SPV from Chaintracks (PoW-verifiable, no key) with WhatsOnChain as fallback; BUMPs from the broadcaster first, else the WoC TSC proof; raw-tx pulls (`/tx/{txid}/hex`) are WoC's only remaining first-class role — everything else reaches it only as fallback, and `hex:` funding imports + `NEKTAR_FUND_TXIDS` bypass it entirely; finality depth 6;
+     - headers and SPV from Chaintracks (PoW-verifiable, no key) with the chain index as second source; BUMPs from the broadcaster first, else the index TSC proof; raw-tx pulls (`/tx/{txid}/hex`) come from the index, and `hex:` funding imports + `NEKTAR_FUND_TXIDS` bypass it entirely; finality depth 6;
      - a 200/202 means accepted. The anchor chain continues immediately, and the BUMP is attached in the background once the transaction is mined.
 
      **Status delivery — webhook mode.** With `NEKTAR_CALLBACK_URL` set, every broadcast carries `X-CallbackUrl`; the broadcaster pushes each status transition (`SEEN_ON_NETWORK` → `MINED`/`IMMUTABLE`, or `REJECTED`/`DOUBLE_SPEND_ATTEMPTED`) to `POST {url}/v1/broadcaster-callback`. When `NEKTAR_CALLBACK_TOKEN` is set it is sent as `X-CallbackToken` and the route requires it back as `Authorization: Bearer`. The URL must be publicly routable.
@@ -413,9 +413,9 @@ publicShards:[{shard, records, packUrl, import}]}` enumerating what the
   `model:{id, params, weightsHash}` on the instance; receipts carry it
   (plus per-call `modelParams`) inside the signed digest.
 - Testnet (`NEKTAR_NETWORK=testnet` — test coins):
-  - Endpoints: BSV Broadcaster (ARC-compatible) `https://arcade-v2-testnet-us-1.bsvblockchain.tech`, WoC testnet `https://api.whatsonchain.com/v1/bsv/test`, optional ChainTracks for the tip. Same live code path as `main` — SpendGuard caps, encrypted keys, WoC merkle paths.
+  - Endpoints: BSV Broadcaster (ARC-compatible) `https://arcade-v2-testnet-us-1.bsvblockchain.tech`, bananablocks index `https://test.bananablocks.com/api/v1`, optional ChainTracks for the tip. Same live code path as `main` — SpendGuard caps, encrypted keys, index merkle paths.
   - Differences from main: **no** `NEKTAR_MAINNET_CONFIRM` needed; fee floor is 1 sat/kB (broadcaster policy is 0 — we never send zero-fee txs); testnet address/WIF encoding (fee key prints as `m…`/`n…`); confirm interval 30 s.
-  - Read-only smoke (no spend): `pnpm testnet:readonly` — broadcaster policy, WoC tip, header root check, and a real merkle path for a recent coinbase verified with `merklePath.verify(txid, tracker)`.
+  - Read-only smoke (no spend): `pnpm testnet:readonly` — broadcaster policy, index tip, header root check, and a real merkle path for a txid passed as argv verified with `merklePath.verify(txid, tracker)`.
   - Funded pilot: `NEKTAR_DATA_DIR=.live-pilot NEKTAR_KEY_PASSPHRASE=… NEKTAR_NETWORK=testnet pnpm live:pilot` — remember→anchor→BUMP→prove→append→rotate→restart-no-fork, with explorer links and per-tx fees from `ops.costs()`.
 - ZK proving:
   - **The nektar Docker image ships the prover** (`/usr/local/bin/nektar-stark` + `r0vm`, `NEKTAR_STARK_PROVER` preset). Its build stage fails if the rebuilt program id differs from the pinned one.

@@ -329,7 +329,7 @@ a signaler with no waiter is dead signaling machinery.
 
 ## 14. Runtime census — failure-hunt substrate
 
-The greps that feed `failure-modes.md`'s catalog. These find *candidates*;
+The greps that feed `failure-modes.md`'s catalog. These find _candidates_;
 each still needs the evidence standard (code path → trigger → failure path
 → blast → silence) and the challenge step before it's a finding.
 
@@ -360,7 +360,7 @@ rg -n "keep-?alive|connection:|new (WebSocket|EventSource)|Agent\(" packages/*/s
 ```
 
 Zero hits is still a command failure, not a clean bill (see the playbook
-header) — but "exists and is covered" is a *pass*, record it: e.g.
+header) — but "exists and is covered" is a _pass_, record it: e.g.
 `void relinquishOutput().catch(() => {})` is covered by the ledger lease,
 so it's evidence the pattern is deliberate, not a finding.
 

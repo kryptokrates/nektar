@@ -111,9 +111,15 @@ export class BananaIndex implements ChainIndex {
     return (await this.get<{ height?: number }>('/block/tip').catch(() => undefined))?.height
   }
   async header(height: number): Promise<BlockHeader | undefined> {
-    const b = await this.get<{ hash?: string; prev_hash?: string; merkle_root?: string; time?: number; bits?: string | number; nonce?: number; version?: number }>(
-      `/block/${height}`
-    )
+    const b = await this.get<{
+      hash?: string
+      prev_hash?: string
+      merkle_root?: string
+      time?: number
+      bits?: string | number
+      nonce?: number
+      version?: number
+    }>(`/block/${height}`)
     if (b?.hash === undefined) return undefined
     // a just-sealed tip is served with prev_hash:"" until the link is
     // backfilled — an unusable parent must miss, never poison the linkage
@@ -131,7 +137,11 @@ export class BananaIndex implements ChainIndex {
     }
   }
   async txJson(txid: string): Promise<IndexTx | undefined> {
-    const j = await this.get<{ block_height?: number; confirmations?: number; outputs?: Array<{ spent?: boolean; spent_txid?: string; spend_scope?: string }> }>(`/tx/${txid}`)
+    const j = await this.get<{
+      block_height?: number
+      confirmations?: number
+      outputs?: Array<{ spent?: boolean; spent_txid?: string; spend_scope?: string }>
+    }>(`/tx/${txid}`)
     if (j === undefined) return undefined
     return {
       blockHeight: j.block_height,
@@ -161,7 +171,8 @@ export class BananaIndex implements ChainIndex {
         `/address/${address}/utxos?limit=200&offset=${page * 200}`
       )
       if (j === undefined) return page === 0 ? undefined : out
-      for (const u of j.items ?? []) if (u.txid !== undefined && u.vout !== undefined) out.push({ txid: u.txid, vout: u.vout, satoshis: u.value, blockHeight: u.block_height })
+      for (const u of j.items ?? [])
+        if (u.txid !== undefined && u.vout !== undefined) out.push({ txid: u.txid, vout: u.vout, satoshis: u.value, blockHeight: u.block_height })
       if (j.hasMore !== true) return out
     }
     return out
@@ -191,9 +202,15 @@ export class WocIndex implements ChainIndex {
     return (await this.get<{ blocks?: number }>('/chain/info'))?.blocks
   }
   async header(height: number): Promise<BlockHeader | undefined> {
-    const b = await this.get<{ hash?: string; previousblockhash?: string; merkleroot?: string; time?: number; bits?: string | number; nonce?: number; version?: number }>(
-      `/block/height/${height}`
-    )
+    const b = await this.get<{
+      hash?: string
+      previousblockhash?: string
+      merkleroot?: string
+      time?: number
+      bits?: string | number
+      nonce?: number
+      version?: number
+    }>(`/block/height/${height}`)
     if (b?.hash === undefined) return undefined
     return {
       height,
@@ -207,7 +224,9 @@ export class WocIndex implements ChainIndex {
     }
   }
   async txJson(txid: string): Promise<IndexTx | undefined> {
-    const j = await this.get<{ blockheight?: number; confirmations?: number; vout?: Array<{ spent?: boolean; spentTxId?: string; spender?: string }> }>(`/tx/${txid}`)
+    const j = await this.get<{ blockheight?: number; confirmations?: number; vout?: Array<{ spent?: boolean; spentTxId?: string; spender?: string }> }>(
+      `/tx/${txid}`
+    )
     if (j === undefined) return undefined
     return {
       blockHeight: typeof j.blockheight === 'number' ? j.blockheight : undefined,
@@ -234,7 +253,9 @@ export class WocIndex implements ChainIndex {
     return list?.flatMap((u) => (u.tx_hash !== undefined && u.tx_pos !== undefined ? [{ txid: u.tx_hash, vout: u.tx_pos, satoshis: u.value }] : []))
   }
   async broadcast(rawHex: string): Promise<{ ok: boolean; detail?: string }> {
-    const r = await this.req('/tx/raw', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ txhex: rawHex }) }).catch((e) => ({ ok: false, status: 0 }) as unknown as Response)
+    const r = await this.req('/tx/raw', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ txhex: rawHex }) }).catch(
+      (e) => ({ ok: false, status: 0 }) as unknown as Response
+    )
     if (!r.ok) return { ok: false, detail: `HTTP ${r.status}` }
     return { ok: true }
   }

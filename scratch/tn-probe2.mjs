@@ -86,7 +86,7 @@ const mk = async (wif, name, dir) => {
   return { mem, rt, pub, policyHash, logs, name }
 }
 
-const wifEnv = n => {
+const wifEnv = (n) => {
   const w = process.env[`NEKTAR_TESTNET_WIF_${n.toUpperCase()}`]
   if (!w) throw new Error(`set NEKTAR_TESTNET_WIF_${n.toUpperCase()} — committed keys were swept`)
   return w

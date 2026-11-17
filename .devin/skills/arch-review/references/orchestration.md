@@ -26,13 +26,13 @@ instead of writing shared state, and no agent verifies its own finding.
 
 A unit is **subsystem slice × lens**. Canonical slices for this repo:
 
-| Slice | Packages |
-|---|---|
-| `satoshi-path` | `chain`, `anchor`, `automation` (funding/toolbox/market), `mcp` (funding/txops/runtime) |
-| `event-fabric` | `bstack/*`, `automation` runtime (watch-shim, outbox, notify) |
-| `apps` | `mcp` (host/http/memory), `watcher`, `reasoning`, `memory` |
-| `libs` | `core`, `crypto`, `log`, `datalog`, `policy`, `zk`, `graph`, `identity`, `contracts`, `store`, `verify`, `automaton` |
-| `harnesses` | `e2e`, `fuzz`, `testkit`, `tools` |
+| Slice          | Packages                                                                                                             |
+| -------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `satoshi-path` | `chain`, `anchor`, `automation` (funding/toolbox/market), `mcp` (funding/txops/runtime)                              |
+| `event-fabric` | `bstack/*`, `automation` runtime (watch-shim, outbox, notify)                                                        |
+| `apps`         | `mcp` (host/http/memory), `watcher`, `reasoning`, `memory`                                                           |
+| `libs`         | `core`, `crypto`, `log`, `datalog`, `policy`, `zk`, `graph`, `identity`, `contracts`, `store`, `verify`, `automaton` |
+| `harnesses`    | `e2e`, `fuzz`, `testkit`, `tools`                                                                                    |
 
 Lenses: `smells` ([references/smells.md](smells.md)) and `failure`
 ([references/failure-modes.md](failure-modes.md) — the F-catalog).
@@ -109,12 +109,8 @@ Return exactly one JSON object, no surrounding prose:
       "recommendation": "smallest structural move"
     }
   ],
-  "hypotheses": [
-    {"claim": "unsettled candidate", "settling_check": "the test/measurement"}
-  ],
-  "uncovered": [
-    {"area": "…", "reason": "why it needs its own unit next wave"}
-  ]
+  "hypotheses": [{ "claim": "unsettled candidate", "settling_check": "the test/measurement" }],
+  "uncovered": [{ "area": "…", "reason": "why it needs its own unit next wave" }]
 }
 ```
 
@@ -132,7 +128,7 @@ source and returns:
 
 ```json
 {
-  "missing_units": [{"slice": "…", "lens": "…", "reason": "source-backed gap"}],
+  "missing_units": [{ "slice": "…", "lens": "…", "reason": "source-backed gap" }],
   "reopen": ["coverage_id closed without evidence"],
   "stop": false
 }

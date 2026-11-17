@@ -49,6 +49,11 @@ if (NET !== 'regtest' && NET !== 'testnet') {
   process.exit(2)
 }
 const LIVE = NET === 'testnet'
+// --mcp: drive every tool call through the agent's Streamable-HTTP MCP
+// transport (/mcp, the endpoint Codex uses) instead of the /v1/tools REST
+// shortcut — same callTool engine either way, but the session/protocol path
+// only gets exercised here.
+const MCP_TRANSPORT = process.argv.includes('--mcp')
 const TESTNET = { broadcasterUrl: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', wocUrl: 'https://api.whatsonchain.com/v1/bsv/test' }
 const TESTNET_TREASURY = join(root, '.state', 'testnet-treasury.json')
 if (LIVE && !existsSync(TESTNET_TREASURY)) {
@@ -116,6 +121,7 @@ const runId = `${LIVE ? 'testnet' : 'real'}-${Date.now().toString(36)}`
 const dir = mkdtempSync(join(root, '.state', `run-${runId}-`))
 console.log(`run directory: ${dir}`)
 const log = (m) => console.log(`[${runId}] ${m}`)
+if (MCP_TRANSPORT) log('driving tools over /mcp (streamable-http — the codex transport)')
 const procs = []
 let stopping = false
 
@@ -220,21 +226,29 @@ const stepAt = (evs, cause, t0) => {
   const ts = evs.filter((e) => e.cause === cause).map((e) => e.at)
   return ts.length === 0 ? NaN : Math.min(...ts) - t0
 }
+// the verify step is rail-dependent: seller.ts records `escrow_verified` on
+// the covenant rail and `payment_verified` only on the direct-P2PKH rail —
+// the inapplicable row renders n/a (never a wait), `—` stays the "applicable
+// but never observed" signal.
 const STEP_ROWS = [
   ['want signed', (b, s, t0) => stepAt(b, 'want_signed', t0), 'want tx build + broadcast'],
   ['seller prepared offer', (b, s, t0) => stepAt(s, 'offer_prepared', t0), 'want propagates to seller + offer build'],
   ['offer recorded (buyer)', (b, s, t0) => stepAt(b, 'offer_recorded', t0), 'host write → buyer lane read'],
   ['offer selected', (b, s, t0) => stepAt(b, 'offer_selected', t0), 'scoring collectMs window'],
   ['escrow broadcast', (b, s, t0) => stepAt(b, 'escrow_broadcast', t0), 'spend guard + escrow build + broadcast'],
-  ['escrow verified (seller)', (b, s, t0) => stepAt(s, 'escrow_verified', t0), 'host write → seller read + verify'],
+  ['escrow verified (seller)', (b, s, t0) => stepAt(s, 'escrow_verified', t0), 'host write → seller read + verify', (op) => op?.data?.direct !== true],
   ['disclosure broadcast', (b, s, t0) => stepAt(s, 'disclosure_broadcast', t0), 'delivery build + broadcast'],
   ['disclosure verified (buyer)', (b, s, t0) => stepAt(b, 'disclosure_verified', t0), 'host write → buyer read + payload verify'],
-  ['payment verified (seller)', (b, s, t0) => stepAt(s, 'payment_verified', t0), 'seller observe + collect build']
+  ['payment verified (seller)', (b, s, t0) => stepAt(s, 'payment_verified', t0), 'seller observe + collect build', (op) => op?.data?.direct === true]
 ]
-function stepTable(bev, sev, wantAt) {
+function stepTable(bev, sev, wantAt, sellerOp) {
   const rows = [['step', 't (s)', 'Δ (s)', 'waited on']]
   let prev = 0
-  for (const [label, fn, waited] of STEP_ROWS) {
+  for (const [label, fn, waited, applies] of STEP_ROWS) {
+    if (applies !== undefined && !applies(sellerOp)) {
+      rows.push([label, 'n/a', 'n/a', waited])
+      continue
+    }
     const t = fn(bev, sev, wantAt)
     if (typeof t !== 'number' || Number.isNaN(t)) {
       rows.push([label, '—', '—', waited])
@@ -471,6 +485,53 @@ const up = async (url, name) => {
   }
   throw new Error(`${name} at ${url} did not start`)
 }
+const toolHttp = async (a, name, args) => {
+  const r = await fetch(`${a.url}/v1/tools/${name}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${a.token}` },
+    body: JSON.stringify(args),
+    signal: AbortSignal.timeout(30_000)
+  })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    const e = new Error(`${a.name} ${name}: ${j.error ?? r.status}`)
+    e.toolError = true
+    throw e
+  }
+  return j
+}
+// one MCP session per agent — lazily connected, dropped on transport failure
+// so a respawned agent gets a fresh session on the next call (the server
+// holds per-session transports keyed by mcp-session-id)
+const mcpClients = new Map()
+const mcpCall = async (a, name, args) => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
+  const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js')
+  let c = mcpClients.get(a.name)
+  if (c === undefined) {
+    c = new Client({ name: 'real-stack-e2e', version: '1.0.0' })
+    await c.connect(new StreamableHTTPClientTransport(new URL(`${a.url}/mcp`), { requestInit: { headers: { authorization: `Bearer ${a.token}` } } }))
+    mcpClients.set(a.name, c)
+  }
+  try {
+    const r = await c.callTool({ name, arguments: args })
+    if (r.isError === true) {
+      const e = new Error(`${a.name} ${name}: ${(r.content?.[0] ?? {}).text ?? 'tool error'}`)
+      e.toolError = true
+      throw e
+    }
+    return JSON.parse((r.content?.[0] ?? {}).text ?? 'null')
+  } catch (e) {
+    if (e?.toolError) throw e
+    mcpClients.delete(a.name)
+    await c.close().catch(() => {})
+    throw e
+  }
+}
+const closeMcpClients = async () => {
+  for (const c of mcpClients.values()) await c.close().catch(() => {})
+  mcpClients.clear()
+}
 const tool = async (a, name, args) => {
   // agents can be mid-restart (Windows native-crash flake): retry transport-
   // level failures across the ~25-30s respawn window; real tool errors still
@@ -478,19 +539,7 @@ const tool = async (a, name, args) => {
   let lastErr
   for (let i = 0; i < 70; i++) {
     try {
-      const r = await fetch(`${a.url}/v1/tools/${name}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${a.token}` },
-        body: JSON.stringify(args),
-        signal: AbortSignal.timeout(30_000)
-      })
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok) {
-        const e = new Error(`${a.name} ${name}: ${j.error ?? r.status}`)
-        e.toolError = true
-        throw e
-      }
-      return j
+      return await (MCP_TRANSPORT ? mcpCall(a, name, args) : toolHttp(a, name, args))
     } catch (e) {
       if (e?.toolError) throw e
       lastErr = e
@@ -542,7 +591,11 @@ function spawnInstance(a) {
             NEKTAR_FUND_WIF: a.key.toWif([0xef]),
             ...(a.fundHex ? { NEKTAR_FUND_TXIDS: `hex:${a.fundHex}` } : {}),
             NEKTAR_KEY_PASSPHRASE: a.pass ?? `testnet-agent-${a.name}`,
-            NEKTAR_MIN_BROADCAST_INTERVAL_MS: '250'
+            NEKTAR_MIN_BROADCAST_INTERVAL_MS: '250',
+            // the buyer holds the collect window open ~3s so all three sellers'
+            // offers compete — hops are ~1s, so the default 1s window closes on
+            // the first arrival and the cheapest-of-three ranking goes untested
+            ...(a.name === 'bob' ? { NEKTAR_MIN_COLLECT_MS: process.env.NEKTAR_MIN_COLLECT_MS ?? '3000' } : {})
           }
         : {
             NEKTAR_FUND_WIF: a.key.toWif(),
@@ -853,12 +906,18 @@ try {
     const verifiedMs = Date.now() - wantAt
     const dealBlocks = blocksMined - wantAtBlocks
     // ---- per-step table (before assertions — timing survives a later fail) --
+    // the seller journal must come from whoever actually won — the selected
+    // offer's pub picks the agent (early-select means any of the three can
+    // win); on paths that never selected, the row content is moot anyway.
+    const selKey = op.data.selected?.key
+    const winner = selKey !== undefined ? [alice, ben, cara].find((a) => a.pub === selKey.split(':')[0]) : undefined
+    const sellerAgent = winner ?? cara
     let steps
     {
-      const sellerOp = ((await tool(cara, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
+      const sellerOp = ((await tool(sellerAgent, 'deals', {})).deals ?? []).find((d) => d.wantId === op.wantId)
       const bev = (await tool(bob, 'deals', { operationId })).events ?? []
-      const sev = sellerOp ? ((await tool(cara, 'deals', { operationId: sellerOp.operationId })).events ?? []) : []
-      steps = stepTable(bev, sev, wantAt)
+      const sev = sellerOp ? ((await tool(sellerAgent, 'deals', { operationId: sellerOp.operationId })).events ?? []) : []
+      steps = stepTable(bev, sev, wantAt, sellerOp)
       log('step table (anchored to want post):')
       printTable(steps)
       if (EXPECT === 'refunded') {
@@ -889,19 +948,18 @@ try {
       const offers = Object.values(op.data.offers ?? {}).map((o) => ({ pub: o.so?.offer?.pub, price: Number(o.so?.offer?.priceSats) }))
       const prices = offers.map((o) => o.price).sort((x, y) => x - y)
       // early-select semantics (market.ts): the first acceptable offer fires
-      // selection in the tick it lands, so `offers` is whoever arrived before
-      // that tick — require ≥1 of the three sellers and a selected key drawn
-      // from that set; when all three made the window the ranking must still
-      // pick cara's 200-sat bid
+      // selection once minCollectMs opens the window, so `offers` is whoever
+      // landed by then — require ≥1 of the three sellers and a selected key
+      // drawn from that set; when all three made the window the ranking must
+      // still pick cara's 200-sat bid. `winner`/`selKey` were resolved above
+      // for the step table — every seller-side assertion follows them, not a
+      // hardcoded agent.
       if (prices.length < 1 || prices.some((p) => ![200, 300, 450].includes(p)))
         throw new Error(`recorded offers ${JSON.stringify(prices)} — expected a non-empty subset of [200,300,450]`)
-      const sel = op.data.selected.key
+      if (prices.length < 3) log(`note: only ${prices.length}/3 offers made the collect window — network variance, not a selection error`)
+      const sel = selKey
       if (!offers.some((o) => sel.split(':')[0] === o.pub)) throw new Error(`selected key ${sel.slice(0, 24)}… is not one of the recorded offers`)
       if (prices.length === 3 && sel.split(':')[0] !== cara.pub) throw new Error(`selected ${sel.split(':')[0].slice(0, 12)}… — expected cara's 200-sat offer`)
-      // early-select: the winner is whichever seller's offer landed first —
-      // every seller-side assertion below follows the selected key, not a
-      // hardcoded agent
-      const winner = [alice, ben, cara].find((a) => a.pub === sel.split(':')[0])
       if (winner === undefined) throw new Error(`selected pub ${sel.split(':')[0].slice(0, 12)}… is not a scenario seller`)
       if (FAULT) {
         // D6 — a crash between escrow broadcast and journal write must stay
@@ -1002,6 +1060,7 @@ try {
         instances: agents.map((a) => ({ name: a.name, pub: a.pub, dataDir: a.dataDir, port: Number(a.url.split(':').pop()) })),
         buyerOperationId: operationId,
         wantId: op.wantId,
+        transport: MCP_TRANSPORT ? 'mcp' : 'http',
         escrowTxid: op.escrowTxid,
         disclosureTxid: op.disclosureTxid,
         sellerState,
@@ -1034,6 +1093,7 @@ try {
   mining = false
   await mineLoop.catch(() => {})
   await txLogScan.catch(() => {})
+  await closeMcpClients()
   for (const p of procs)
     try {
       p.kill('SIGTERM')

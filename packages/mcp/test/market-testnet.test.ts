@@ -27,6 +27,7 @@ import {
   BsvBroadcaster,
   merklePathMainnet,
   ReserveFunder,
+  fundsOf,
   testTier,
   type MainnetConfig,
   type ChainTracker,
@@ -187,9 +188,10 @@ const mkagent = async (
   const dataDir = join(dir, wifName)
   mkdirSync(dataDir, { recursive: true })
   const fundKey = PrivateKey.fromWif(wif)
+  const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
   // one process per fund key — refuses while a live agent (tmux) holds it;
   // the live() gate below is the earlier, friendlier skip
-  const keyRelease = await acquireLock(keyLockFile(Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')), `fund key ${wifName}`)
+  const keyRelease = await acquireLock(keyLockFile(pkhHex), `fund key ${wifName}`)
   const reserveFile = join(dataDir, 'reserve.json')
   // custody snapshot on first use only — afterwards the file is live custody
   const src = join(STATE, wifName, 'reserve.json')
@@ -216,7 +218,10 @@ const mkagent = async (
     modelId: 'test-model-1',
     feeRateSatPerKb: 1,
     statusHint: (txid: string) => bcast.statusHint(txid),
-    batchPolicy: { maxLeaves: 1 }
+    batchPolicy: { maxLeaves: 1 },
+    // fundsOf needs the owned lock — ReserveFunder keeps pkhHex private, so
+    // the suite hands it the same hash the key lock is filed under
+    funds: fundsOf(reserve, { pkhHex })
   })
   // live-runtime parity: pull-based proof + tx lookups so mined txs get their
   // BUMP attached (tree provenance, carrier admission, covenant refund gates)

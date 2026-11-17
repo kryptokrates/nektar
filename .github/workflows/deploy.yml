@@ -32,6 +32,8 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" "DEPLOY_REF='$DEPLOY_REF' REF_TYPE='$REF_TYPE'"'
+            id
+            hostname
             set -e
             # one-time mamem → nektar migration (idempotent, every step self-guarded)
             for u in /etc/systemd/system/mamem-*.service; do

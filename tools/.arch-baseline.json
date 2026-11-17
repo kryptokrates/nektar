@@ -25,7 +25,7 @@
       "instability": 0.571
     },
     "bstack": {
-      "loc": 4238,
+      "loc": 4258,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
       "maxFileLoc": 851,

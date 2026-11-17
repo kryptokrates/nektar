@@ -515,3 +515,42 @@ test('log: a stocked-out lane reports proven/anchored/waiting counts', async () 
   assert.ok(mod.fundingSlotReason !== undefined)
   assert.equal(await mod.fundingSlotReason!(new MemoryTreeLedger(), 'log'), 'no funding slot (log: 0 proven, 0 anchored, 0 tree(s) awaiting a block)')
 })
+
+// chain heal: an append re-serves every journaled batch, so a host that
+// missed an earlier seq is caught up by the next publish — head-only
+// publishes leave mid-chain holes a reader can never scan past (scanAhead
+// dies inside an 8-seq gap). same contract as publishFinger's chain heal.
+test('log heal: a host that missed seq 1 catches up when seq 2 appends', async () => {
+  const s = await rig()
+  try {
+    await appendLog({
+      key: s.key,
+      ledger: s.ledger,
+      journal: s.journal,
+      state: s.state,
+      hosts: [s.h1.url],
+      stream: STREAM,
+      lines: lines(1),
+      now: () => 1000,
+      quorum: 'all'
+    })
+    const r2 = await appendLog({
+      key: s.key,
+      ledger: s.ledger,
+      journal: s.journal,
+      state: s.state,
+      hosts: s.hosts,
+      stream: STREAM,
+      lines: lines(2),
+      now: () => 2000,
+      quorum: 'all'
+    })
+    assert.equal(r2.seq, 2)
+    const read = await readLog({ hosts: [s.h2.url], stream: STREAM, producer: s.key.toPublicKey().toString(), tracker: s.tracker })
+    assert.equal(read.head, 2, 'h2 holds both seqs after the heal')
+    assert.deepEqual(read.gaps, [])
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
+})

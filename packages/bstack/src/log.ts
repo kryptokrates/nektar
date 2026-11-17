@@ -175,7 +175,27 @@ export async function appendLog(p: {
   const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [] })
   if (!r.ok) throw new Error(`log submit failed: ${JSON.stringify(r.missed).slice(0, 200)}`)
   await p.state.set(p.stream, { seq, prev: commitment })
-  return { seq, txid, commitment, took: r.took, missed: r.missed }
+  // chain heal, same contract as publishFinger: a host that lost mid-chain
+  // batches can never re-sync from head-only publishes — re-serve every
+  // journaled batch on each append; hosts dedupe what they already hold and
+  // the misses ride back through the same repair-row contract
+  const healMissed = new Set<string>()
+  const heals: Promise<void>[] = []
+  for (let s = 1; s < seq; s++) {
+    const held = await p.journal.get(`log:${p.stream}:${s}`)
+    if (held === undefined || !Array.isArray(held.beef) || held.beef.length === 0) continue
+    heals.push(
+      submitAll(p.hosts, held.beef, held.topics ?? topics, { retryWaits: [] })
+        .then((rr) => {
+          for (const m of rr.missed) healMissed.add(m.host)
+        })
+        .catch(() => undefined)
+    )
+  }
+  await Promise.all(heals)
+  const missed = [...r.missed]
+  for (const h of healMissed) if (!missed.some((m) => m.host === h)) missed.push({ host: h, error: 'heal' })
+  return { seq, txid, commitment, took: r.took, missed }
 }
 
 // ── read ──────────────────────────────────────────────────────────────────

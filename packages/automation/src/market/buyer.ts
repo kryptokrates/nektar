@@ -130,10 +130,20 @@ export abstract class BuyerOps extends SellerOps {
           const t = await this.d.fetchTx(m.txid)
           if (t !== undefined) got = { tx: t, spv: false }
         } catch {
-          return
+          /* unresolvable yet — parked below */
         }
       }
-      if (got === undefined) return
+      if (got === undefined) {
+        // a direct-pushed delivered can land before the disclosure tx is
+        // fetchable anywhere; the envelope is one-shot, so park it on the op —
+        // advance() re-runs this handler every tick, bounded by the refund
+        // deadline that already guards this state
+        await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
+          cause: 'delivered_unresolvable',
+          data: { pendingDelivered: { from, m, refs } }
+        })
+        return
+      }
       const tx = got.tx
       // the reveal must be a valid spend of OUR escrow output — checked by
       // running the script here, so the disclosure is accepted the moment it
@@ -173,7 +183,7 @@ export abstract class BuyerOps extends SellerOps {
     const bad = claim.verified !== true
     const next = await this.d.store.transition(op.operationId, op.revision, bad ? 'disputed' : 'disclosure_verified', {
       cause: bad ? 'payload_does_not_match_commitment' : 'disclosure_verified',
-      data: { result },
+      data: { result, pendingDelivered: null },
       dueHeight: null,
       evidence: {
         txid: m.txid,
@@ -1000,6 +1010,12 @@ export abstract class BuyerOps extends SellerOps {
       }
       if (op.state === 'uncertain') return await this.reconcileUncertain(op)
       if (op.state === 'awaiting_disclosure') {
+        // a pushed 'delivered' can outrun tx propagation — its parked copy
+        // re-runs the same verification until it resolves or the deal
+        // deadline (refund) closes the state
+        const pd = op.data.pendingDelivered as
+          { from: string; m: Extract<MarketMessage, { type: 'delivered' }>; refs?: import('@nektar/bstack').BoxRef[] } | null | undefined
+        if (pd != null) await this.onDelivered(pd.from, pd.m, pd.refs).catch(() => undefined)
         // a late rejection beats the refund path: the escrow never settled, so
         // the locked amount never left — releaseBudget frees the committed row
         const txid = op.data.escrowTxid as string | undefined

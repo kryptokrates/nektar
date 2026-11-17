@@ -213,7 +213,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
       // the offer goes where the BUYER's record says it keeps its artifacts —
       // this is also the seller's lazy resolution of the buyer
-      const hosts = so.offer.buyerPub !== undefined ? await rt.hostsFor(so.offer.buyerPub) : marketHosts
+      const rec = so.offer.buyerPub !== undefined ? await rt.resolveRecord(so.offer.buyerPub) : undefined
+      const hosts = rec === undefined ? marketHosts : [...new Set([...marketHosts, ...rec.hosts])]
       const r = await lanes.mod.publishArtifact({
         key,
         wallet,
@@ -221,22 +222,18 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         journal: lanes.journal,
         hosts,
         net: cfg.network,
-        payload: { v: 1, kind: 'offer', body: so }
+        payload: { v: 1, kind: 'offer', body: so },
+        // a buyer advertising push gets the offer carrier the moment it is
+        // minted — concurrent with the durable host fanout
+        ...(rec?.push !== undefined ? { push: (beef: number[]) => rt.pushCarrier?.(rec, beef) } : {})
       })
       await trackFanout(r, fanoutIo)
       // the buyer's watch shim (if it advertises one) gets a wake hint — the
       // offer publish is only visible to its polls once they re-check anyway.
       // No advertised shim → shared-infra fallback: our own bases may front
       // their watchers too.
-      const rec = so.offer.buyerPub !== undefined ? await rt.resolveRecord(so.offer.buyerPub) : undefined
       rt.notifyPeer(rec, 'ls_nektar')
       if (rec?.watch === undefined) for (const base of rt.watchBases) rt.notifyPeer({ watch: base }, 'ls_nektar')
-      // a buyer advertising push gets the offer carrier directly — the host
-      // copies it just submitted stay the durable/discovery path
-      if (rec?.push !== undefined) {
-        const row = await lanes.journal.get(r.hash)
-        if (row !== undefined) rt.pushCarrier?.(rec, row.beef)
-      }
     },
     send: async (to: string, msg: import('./market.js').MarketMessage) => {
       if (rt.msgs === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')

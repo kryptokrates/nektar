@@ -62,6 +62,9 @@ export async function sendBox(p: {
   refs?: BoxRef[]
   expiresAt?: number
   quorum?: 'all' | 'majority' | 'one' | number
+  /** fired the moment the signed carrier exists (journaled, before the host
+   *  fanout) — direct-push to a present peer overlaps the submitAll RTT */
+  push?: (beef: number[]) => void
 }): Promise<{
   txid: string
   hash: string
@@ -110,6 +113,7 @@ export async function sendBox(p: {
   }
   // the journal is the retry layer — a dead host must not put seconds of
   // sleeps on the message path, and a send is done when quorum answered
+  p.push?.(beef)
   const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
   if (!r.ok) throw new Error(`box submit failed: ${JSON.stringify(r.missed).slice(0, 200)}`)
   return { txid, hash: artifactHash, took: r.took, admitted: r.admitted, missed: r.missed, pending: r.pending, settled: r.settled }

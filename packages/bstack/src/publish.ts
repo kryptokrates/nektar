@@ -20,6 +20,9 @@ export async function publishArtifact(p: {
   net: string
   payload: MarketPayload
   quorum?: Quorum
+  /** fired the moment the signed carrier exists (journaled, before the host
+   *  fanout) — direct-push to a present peer overlaps the submitAll RTT */
+  push?: (beef: number[]) => void
 }): Promise<{
   txid: string
   hash: string
@@ -55,6 +58,7 @@ export async function publishArtifact(p: {
   // resolve at quorum: a straggler host leg completes in the background and
   // the journal still carries it, so one slow host can't price every send at
   // its own 15s timeout (observed: offers pending until the want expired)
+  p.push?.(beef)
   const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [], early: true })
   if (!r.ok) throw new Error(`publishArtifact: quorum failed ${JSON.stringify(r.missed)}`)
   return { txid, hash, took: r.took, admitted: r.admitted, missed: r.missed, pending: r.pending, settled: r.settled }

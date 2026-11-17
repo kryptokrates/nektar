@@ -78,7 +78,11 @@ export function openLanes(rt: Rt): void {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ beef: Buffer.from(beef).toString('hex') }),
       signal: AbortSignal.timeout(2_000)
-    }).catch(() => undefined)
+    })
+      .then((r) => {
+        if (!r.ok) log(`automation: push → ${rec.push}: ${r.status}`)
+      })
+      .catch(() => undefined)
   }
   rt.pushCarrier = pushCarrier
   // a carrier pushed straight to us by its sender — verify + ingest exactly
@@ -97,6 +101,7 @@ export function openLanes(rt: Rt): void {
       if (msg !== undefined && typeof msg === 'object') {
         rt.hotUntil = Date.now() + 5_000
         await rt.engine.ingestMessage(env.from, msg, env.refs)
+        log(`automation: push: ingested envelope ${env.txid.slice(0, 12)} from ${env.from.slice(0, 12)}`)
         void rt.deals().catch((e) => log(`automation: push: ${(e as Error).message}`))
         return 'envelope'
       }
@@ -118,6 +123,7 @@ export function openLanes(rt: Rt): void {
       ) {
         rt.hotUntil = Date.now() + 5_000
         await rt.engine.ingestEvents(`offers:${body.offer.wantId}`, [{ seq: chk.carrier.id('hex'), kind: 'offer', payload: p.body }], '')
+        log(`automation: push: ingested offer ${chk.carrier.id('hex').slice(0, 12)}`)
         void rt.deals().catch((e) => log(`automation: push: ${(e as Error).message}`))
         return 'artifact'
       }
@@ -205,15 +211,12 @@ export function openLanes(rt: Rt): void {
                 to,
                 body: { market: msg },
                 refs,
-                expiresAt: Math.floor(Date.now() / 1000) + ttl
+                expiresAt: Math.floor(Date.now() / 1000) + ttl,
+                // the fast leg fires the moment the carrier exists — the push
+                // and the durable host fanout race each other, either is fine
+                ...(rec?.push !== undefined ? { push: (beef: number[]) => pushCarrier(rec, beef) } : {})
               })
               await trackFanout(r, rt.fanoutIo)
-              // the durable box copy is on its hosts — now the fast leg:
-              // push the same sealed carrier straight to the recipient's
-              // advertised /v1/lane (no field or unreachable = the box read)
-              void lanes.journal.get(r.hash).then((row) => {
-                if (row !== undefined) pushCarrier(rec, row.beef)
-              })
               // wake the recipient's box watch with the exact query their
               // shim holds — ls_bbox {office,to} is the subscription's shape
               notifyPeer(rec, 'ls_bbox', { office: office ?? lanes.mod.officeFor(), to })

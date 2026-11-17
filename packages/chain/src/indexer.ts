@@ -90,8 +90,13 @@ export class BananaIndex implements ChainIndex {
     this.req = mkreq(o)
   }
   private async get<T>(path: string): Promise<T | undefined> {
-    await this.pace()
-    const r = await this.req(path).catch(() => undefined)
+    const r = await withRetry(
+      async () => {
+        await this.pace()
+        return await this.req(path)
+      },
+      { attempts: 4, delay: (i) => 1000 * (i + 1), retryIf: (x) => x.status === 429 || x.status >= 500 }
+    ).catch(() => undefined)
     if (r === undefined || r.status === 404) return undefined
     if (!r.ok) throw new Error(`bananablocks ${path}: HTTP ${r.status}`)
     return (await r.json()) as T
@@ -139,8 +144,13 @@ export class BananaIndex implements ChainIndex {
     }
   }
   async txHex(txid: string): Promise<string | undefined> {
-    await this.pace()
-    const r = await this.req(`/tx/${txid}/hex`).catch(() => undefined)
+    const r = await withRetry(
+      async () => {
+        await this.pace()
+        return await this.req(`/tx/${txid}/hex`)
+      },
+      { attempts: 4, delay: (i) => 1000 * (i + 1), retryIf: (x) => x.status === 429 || x.status >= 500 }
+    ).catch(() => undefined)
     if (r === undefined || !r.ok) return undefined
     return (await r.text()).trim()
   }

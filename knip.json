@@ -3,7 +3,7 @@
   "workspaces": {
     ".": {
       "entry": ["tools/**/*.mjs", "integrations/**/*.{js,mjs}", "circuits/**/*.mjs", "docs/**/*.mjs", "deploy/**/*.mjs"],
-      "ignore": ["spikes/**", "test/fixtures/**", "scratch/**", ".devin/**"],
+      "ignore": ["spikes/**", "test/fixtures/**", "scratch/**", ".devin/**", "deploy/bstack-sandbox/modules/**"],
       "ignoreBinaries": ["gitleaks"]
     },
     "packages/mcp": {
@@ -23,7 +23,7 @@
       "entry": ["*.mjs"]
     },
     "packages/bstack": {
-      "entry": ["src/module.ts", "demo/**/*.mjs", "test/**/*.ts", "tools/**/*.mjs"]
+      "entry": ["demo/**/*.mjs", "test/**/*.ts", "tools/**/*.mjs"]
     }
   },
   "rules": {

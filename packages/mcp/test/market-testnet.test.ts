@@ -92,8 +92,13 @@ const reconcileReserve = async (fundKey: PrivateKey, reserve: ReserveFunder, mc:
   const live = await index.utxos(addr).catch(() => undefined)
   if (live === undefined) return
   const liveSet = new Set(live.map((u) => `${u.txid}:${u.vout}`))
-  const known = new Set(((reserve as unknown as { entries: Array<{ txid: string; vout: number }> }).entries ?? []).map((e) => `${e.txid}:${e.vout}`))
+  const entries = (reserve as unknown as { entries: Array<{ txid: string; vout: number }> }).entries ?? []
+  const known = new Set(entries.map((e) => `${e.txid}:${e.vout}`))
   const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${mc.broadcasterUrl}/chaintracks/v2`), new IndexTracker(mc))
+  // heal stale spent-marks: the index positively lists the outpoint as live —
+  // a mark left by a stale/absent listing (or an aborted run) is unprovable
+  // and must not starve the reserve silently
+  for (const e of entries) if (liveSet.has(`${e.txid}:${e.vout}`) && reserve.isSpent(e.txid, e.vout)) reserve.unmark(e.txid, e.vout)
   for (const u of [...reserve.utxos]) {
     const txid = u.tx.id('hex')
     if (liveSet.has(`${txid}:${u.vout}`)) continue

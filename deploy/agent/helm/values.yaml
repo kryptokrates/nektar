@@ -1,0 +1,71 @@
+image:
+  repository: ghcr.io/kryptokrates/nektar
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# regtest | testnet | main
+network: testnet
+
+# comma-separated market hosts the agent publishes/reads through — REQUIRED.
+# Any operator works; run your own with deploy/bstack-sandbox.
+marketHosts: ''
+
+automation: true
+# auto-decide policy approvals. false = approvals queue for the operator token.
+unattended: false
+modelId: unspecified
+
+# publish the bfinger finger record so peers can resolve hosts/office/stream.
+bfingerPublish: false
+# public URL peers POST pushed carriers to — set once ingress is up, e.g.
+# https://agent.example.com/v1/lane
+pushPublic: ''
+# comma-separated long-poll watch shims (optional — plain polls are the
+# correct-by-design fallback)
+watchUrls: ''
+watchPublic: ''
+# operator-only approval token for the loopback approval endpoints
+operatorToken: ''
+# public base used to render receipt-verify links (default: this instance)
+verifyBase: ''
+
+secrets:
+  # encrypts keys.json at rest — required unless existingSecret is set
+  keyPassphrase: ''
+  # bearer for /mcp + private /v1 endpoints — required
+  httpToken: ''
+  # WIF the embedded toolbox wallet derives from (empty = fund the printed
+  # fee address after first boot)
+  fundWif: ''
+  # bring your own Secret instead: must carry NEKTAR_KEY_PASSPHRASE,
+  # NEKTAR_HTTP_TOKEN and optionally NEKTAR_FUND_WIF
+  existingSecret: ''
+
+persistence:
+  size: 5Gi
+  storageClass: ''
+  # existingClaim: ""
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ''
+  host: agent.example.com
+  tls: false
+  # tlsSecretName: ""   # set for a manually-provisioned cert
+
+# market tuning — blank = library default
+minCollectMs: ''
+collectQuietMs: ''
+
+# SpendGuard caps — recommended on any box holding real keys
+maxFeeSatsPerTx: ''
+maxSpendSatsPerDay: ''
+
+resources: {}
+  # requests:
+  #   cpu: 250m
+  #   memory: 512Mi

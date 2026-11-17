@@ -25,3 +25,4 @@ packages/zk/stark/**
 **/vectors/**
 .spikes
 coverage
+deploy/agent/helm/templates/

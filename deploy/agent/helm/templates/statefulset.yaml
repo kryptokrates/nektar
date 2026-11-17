@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "nektar-agent.fullname" . }}
+  labels:
+    {{- include "nektar-agent.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "nektar-agent.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nektar-agent.labels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nektar-agent.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: NEKTAR_NETWORK
+              value: {{ .Values.network | quote }}
+            - name: NEKTAR_DATA_DIR
+              value: /data
+            - name: NEKTAR_HTTP_PORT
+              value: "8080"
+            - name: NEKTAR_HTTP_HOST
+              value: "0.0.0.0"
+            - name: NEKTAR_MODEL_ID
+              value: {{ .Values.modelId | quote }}
+            - name: NEKTAR_AUTOMATION
+              value: {{ ternary "1" "" .Values.automation | quote }}
+            - name: NEKTAR_UNATTENDED
+              value: {{ ternary "1" "" .Values.unattended | quote }}
+            - name: NEKTAR_MARKET_HOSTS
+              value: {{ required "marketHosts is required" .Values.marketHosts | quote }}
+            - name: NEKTAR_BFINGER_PUBLISH
+              value: {{ ternary "1" "" .Values.bfingerPublish | quote }}
+            - name: NEKTAR_PUSH_PUBLIC
+              value: {{ .Values.pushPublic | quote }}
+            - name: NEKTAR_WATCH_URLS
+              value: {{ .Values.watchUrls | quote }}
+            - name: NEKTAR_WATCH_PUBLIC
+              value: {{ .Values.watchPublic | quote }}
+            - name: NEKTAR_OPERATOR_TOKEN
+              value: {{ .Values.operatorToken | quote }}
+            - name: NEKTAR_VERIFY_BASE
+              value: {{ .Values.verifyBase | quote }}
+            - name: NEKTAR_MIN_COLLECT_MS
+              value: {{ .Values.minCollectMs | quote }}
+            - name: NEKTAR_COLLECT_QUIET_MS
+              value: {{ .Values.collectQuietMs | quote }}
+            - name: NEKTAR_MAX_FEE_SATS_PER_TX
+              value: {{ .Values.maxFeeSatsPerTx | quote }}
+            - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
+              value: {{ .Values.maxSpendSatsPerDay | quote }}
+            - name: NEKTAR_KEY_PASSPHRASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nektar-agent.secretName" . }}
+                  key: NEKTAR_KEY_PASSPHRASE
+            - name: NEKTAR_HTTP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nektar-agent.secretName" . }}
+                  key: NEKTAR_HTTP_TOKEN
+            - name: NEKTAR_FUND_WIF
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nektar-agent.secretName" . }}
+                  key: NEKTAR_FUND_WIF
+                  optional: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}

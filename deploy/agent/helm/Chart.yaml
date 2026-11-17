@@ -1,0 +1,9 @@
+apiVersion: v2
+name: nektar-agent
+description: >-
+  A nektar market agent — self-certifying memory and market automation on BSV.
+  Everything it publishes is signed + SPV-verified peer-side; the market hosts
+  it talks to are untrusted plumbing.
+type: application
+version: 0.1.0
+appVersion: latest

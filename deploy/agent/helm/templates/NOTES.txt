@@ -1,0 +1,17 @@
+nektar agent "{{ .Release.Name }}" is coming up.
+
+  pod:    kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  logs:   kubectl -n {{ .Release.Namespace }} logs -f sts/{{ include "nektar-agent.fullname" . }}
+  local:  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "nektar-agent.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+Then:
+  health:    curl http://localhost:{{ .Values.service.port }}/.well-known/nektar
+  MCP:       http://<host>/mcp  with  Authorization: Bearer 
+  first boot prints a fee address — fund it (or set secrets.fundWif)
+
+{{- if .Values.ingress.enabled }}
+public:  {{ ternary "https" "http" .Values.ingress.tls }}://{{ .Values.ingress.host }}
+         set pushPublic=https://{{ .Values.ingress.host }}/v1/lane for direct push
+{{- end }}
+
+/data is the agent — the PVC holds identity, wallet and journals.

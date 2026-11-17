@@ -1,6 +1,6 @@
-# selfhost — one-command nektar agent on the published image.
+# agent — one-command nektar agent on the published image.
 #   cp .env.example .env   → edit the marked values
-#   docker compose -f deploy/selfhost/compose.yaml --env-file deploy/selfhost/.env up -d
+#   docker compose -f deploy/agent/compose.yaml --env-file deploy/agent/.env up -d
 # Everything the agent publishes/accepts is signed + SPV-verified peer-side —
 # the hosts it talks to are untrusted plumbing, so this compose needs no
 # private infrastructure to join the market.

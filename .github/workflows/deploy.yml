@@ -95,7 +95,9 @@ jobs:
             fi
             git reset --hard FETCH_HEAD
             pnpm install --frozen-lockfile
-            pnpm -r build
+            # bounded concurrency — parallel tsc OOMs this 4GB box once the
+            # host pair + services are resident
+            pnpm -r --workspace-concurrency=2 build
             # host-pair module artifact (compose mounts ../../packages/bstack/bundle)
             pnpm --filter @nektar/bstack bundle
             # managed instance config — repo file is authoritative for the keys

@@ -1,0 +1,40 @@
+# selfhost — one-command nektar agent on the published image.
+#   cp .env.example .env   → edit the marked values
+#   docker compose -f deploy/selfhost/compose.yaml --env-file deploy/selfhost/.env up -d
+# Everything the agent publishes/accepts is signed + SPV-verified peer-side —
+# the hosts it talks to are untrusted plumbing, so this compose needs no
+# private infrastructure to join the market.
+name: nektar-agent
+services:
+  agent:
+    image: ghcr.io/kryptokrates/nektar:latest
+    restart: unless-stopped
+    ports:
+      # HTTP + MCP surface. /v1/lane (peer push), /.well-known/nektar, /v1/pack
+      # and /v1/verify are public by design; everything else needs the bearer.
+      - '${NEKTAR_HTTP_PORT:-8080}:8080'
+    environment:
+      NEKTAR_NETWORK: ${NEKTAR_NETWORK:-testnet}
+      NEKTAR_DATA_DIR: /data
+      NEKTAR_HTTP_PORT: '8080'
+      NEKTAR_HTTP_HOST: '0.0.0.0'
+      NEKTAR_KEY_PASSPHRASE: ${NEKTAR_KEY_PASSPHRASE:?set NEKTAR_KEY_PASSPHRASE in .env}
+      NEKTAR_HTTP_TOKEN: ${NEKTAR_HTTP_TOKEN:?set NEKTAR_HTTP_TOKEN in .env}
+      NEKTAR_MODEL_ID: ${NEKTAR_MODEL_ID:-unspecified}
+      NEKTAR_AUTOMATION: ${NEKTAR_AUTOMATION:-1}
+      NEKTAR_UNATTENDED: ${NEKTAR_UNATTENDED:-}
+      NEKTAR_FUND_WIF: ${NEKTAR_FUND_WIF:-}
+      NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:?set NEKTAR_MARKET_HOSTS in .env}
+      NEKTAR_WATCH_URLS: ${NEKTAR_WATCH_URLS:-}
+      NEKTAR_WATCH_PUBLIC: ${NEKTAR_WATCH_PUBLIC:-}
+      NEKTAR_BFINGER_PUBLISH: ${NEKTAR_BFINGER_PUBLISH:-}
+      NEKTAR_PUSH_PUBLIC: ${NEKTAR_PUSH_PUBLIC:-}
+      NEKTAR_COLLECT_QUIET_MS: ${NEKTAR_COLLECT_QUIET_MS:-}
+      NEKTAR_MIN_COLLECT_MS: ${NEKTAR_MIN_COLLECT_MS:-}
+      NEKTAR_MAX_FEE_SATS_PER_TX: ${NEKTAR_MAX_FEE_SATS_PER_TX:-}
+      NEKTAR_MAX_SPEND_SATS_PER_DAY: ${NEKTAR_MAX_SPEND_SATS_PER_DAY:-}
+    volumes:
+      # durable identity + wallet + journals — this volume IS the agent
+      - agent-data:/data
+volumes:
+  agent-data:

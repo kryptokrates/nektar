@@ -1,90 +1,201 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>nektar: agent memory an auditor can check</title>
-<style>
-  body { max-width: 42rem; margin: 3rem auto; padding: 0 1rem; font-family: Georgia, serif; font-size: 1.1rem; line-height: 1.7; color: #1a1a1a; }
-  h1 { font-size: 1.7rem; line-height: 1.3; }
-  h2 { font-size: 1.2rem; margin-top: 2.5rem; }
-</style>
-</head>
-<body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>nektar: agent memory an auditor can check</title>
+    <style>
+      body {
+        max-width: 42rem;
+        margin: 3rem auto;
+        padding: 0 1rem;
+        font-family: Georgia, serif;
+        font-size: 1.1rem;
+        line-height: 1.7;
+        color: #1a1a1a;
+      }
+      h1 {
+        font-size: 1.7rem;
+        line-height: 1.3;
+      }
+      h2 {
+        font-size: 1.2rem;
+        margin-top: 2.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>nektar: agent memory an auditor can check</h1>
 
-<h1>nektar: agent memory an auditor can check</h1>
+    <p>
+      nektar is memory for a software agent. The agent writes facts into it, reads them back, and answers questions from them. Two properties carry the design.
+      Writes land in an append-only log whose roots are anchored on the BSV blockchain, so history cannot be rewritten without breaking the chain of hashes.
+      Answers carry a receipt that names the stored facts behind each claim, and anyone can replay that receipt against the chain. A third property rides on the
+      first two: the data itself stays encrypted, and the system still proves things about it.
+    </p>
 
-<p>nektar is memory for a software agent. The agent writes facts into it, reads them back, and answers questions from them. Two properties carry the design. Writes land in an append-only log whose roots are anchored on the BSV blockchain, so history cannot be rewritten without breaking the chain of hashes. Answers carry a receipt that names the stored facts behind each claim, and anyone can replay that receipt against the chain. A third property rides on the first two: the data itself stays encrypted, and the system still proves things about it.</p>
+    <p>
+      The chain of custody matters more than the chain. A verifier never trusts the operator of a nektar instance. It trusts the BSV header chain, recomputes
+      every hash itself, and treats everything the operator supplies as evidence to check, not as truth.
+    </p>
 
-<p>The chain of custody matters more than the chain. A verifier never trusts the operator of a nektar instance. It trusts the BSV header chain, recomputes every hash itself, and treats everything the operator supplies as evidence to check, not as truth.</p>
+    <h2>What gets stored</h2>
 
-<h2>What gets stored</h2>
+    <p>
+      The unit of storage is a fragment. A fragment holds the data itself, a provenance record (source, time, signature, model id), and a digest — the hash of
+      data and provenance together — that deduplicates the log and binds content to origin. After sealing, the plaintext is dropped; the fragment sits at rest
+      as AES-256-GCM ciphertext, where AES-256-GCM is a standard authenticated cipher that detects tampering on decryption.
+    </p>
 
-<p>The unit of storage is a fragment. A fragment holds the data itself, a provenance record (source, time, signature, model id), and a digest — the hash of data and provenance together — that deduplicates the log and binds content to origin. After sealing, the plaintext is dropped; the fragment sits at rest as AES-256-GCM ciphertext, where AES-256-GCM is a standard authenticated cipher that detects tampering on decryption.</p>
+    <p>
+      Keys come from HKDF, a function that stretches one root secret into many keys. The shard owner's key is the root; each fragment gets its own key, and each
+      clearance level gets its own keyspace. Someone who holds a level key reads every fragment at that level and none above it.
+    </p>
 
-<p>Keys come from HKDF, a function that stretches one root secret into many keys. The shard owner's key is the root; each fragment gets its own key, and each clearance level gets its own keyspace. Someone who holds a level key reads every fragment at that level and none above it.</p>
+    <h2>How a write becomes an anchor</h2>
 
-<h2>How a write becomes an anchor</h2>
+    <p>
+      A write goes to the BatchLog, an append-only log per shard. The log returns a signed inclusion promise carrying the record's sequence number and leaf
+      index — the promise is a commitment the operator must later prove against. A batch closes on count, age, bytes or cost, with at most 65,536 leaves per
+      batch. The leaves hash into one double-SHA-256 Merkle tree, the same hash construction BSV uses for its own blocks, and the tree's root R is what gets
+      anchored.
+    </p>
 
-<p>A write goes to the BatchLog, an append-only log per shard. The log returns a signed inclusion promise carrying the record's sequence number and leaf index — the promise is a commitment the operator must later prove against. A batch closes on count, age, bytes or cost, with at most 65,536 leaves per batch. The leaves hash into one double-SHA-256 Merkle tree, the same hash construction BSV uses for its own blocks, and the tree's root R is what gets anchored.</p>
+    <p>
+      Anchoring is a spend. Each shard owns exactly one live UTXO — an unspent transaction output — controlled by a Rúnar covenant called NektarAnchor. A
+      covenant is a locking script that constrains how its own output may be spent. The script accepts an append only when the owner signature verifies and the
+      new state chains the old state: the stored root becomes H(tag‖R′‖R‖size). The spend moves the head from n to n+1. A wrong signer, wrong counter or wrong
+      root makes the script fail and every validating node rejects the transaction, so the append rules are enforced by the chain itself rather than by the
+      operator's promise.
+    </p>
 
-<p>Anchoring is a spend. Each shard owns exactly one live UTXO — an unspent transaction output — controlled by a Rúnar covenant called NektarAnchor. A covenant is a locking script that constrains how its own output may be spent. The script accepts an append only when the owner signature verifies and the new state chains the old state: the stored root becomes H(tag‖R′‖R‖size). The spend moves the head from n to n+1. A wrong signer, wrong counter or wrong root makes the script fail and every validating node rejects the transaction, so the append rules are enforced by the chain itself rather than by the operator's promise.</p>
+    <p>
+      One head per shard means no fork is possible inside a shard's history: whoever holds the key can append, nobody can branch. A rotate method changes the
+      owner key without touching the roots, and the shard id — hash160 of the genesis public key — survives every rotation.
+    </p>
 
-<p>One head per shard means no fork is possible inside a shard's history: whoever holds the key can append, nobody can branch. A rotate method changes the owner key without touching the roots, and the shard id — hash160 of the genesis public key — survives every rotation.</p>
+    <p>
+      A second covenant carries the workflow side. NektarAutomaton commits a state machine's transition table and final-state set into two Merkle roots —
+      sixteen entries each at depth four — inside a 1,007-byte locking script. Each step is a spend that proves the triple (from state, symbol, to state) sits
+      in the committed table; a halt spend proves the current state sits in the final set. The contract's name is the paper's: nektar implements the Merkle
+      Automaton, where allowed moves are enforced on chain instead of in the server's code.
+    </p>
 
-<p>A second covenant carries the workflow side. NektarAutomaton commits a state machine's transition table and final-state set into two Merkle roots — sixteen entries each at depth four — inside a 1,007-byte locking script. Each step is a spend that proves the triple (from state, symbol, to state) sits in the committed table; a halt spend proves the current state sits in the final set. The contract's name is the paper's: nektar implements the Merkle Automaton, where allowed moves are enforced on chain instead of in the server's code.</p>
+    <h2>What a proof proves</h2>
 
-<h2>What a proof proves</h2>
+    <p>
+      For any fragment, the operator can produce a proof bundle: the leaf, its index, the Merkle path, the batch root, the anchor transaction's BEEF — a compact
+      envelope of the transaction and its ancestry — and a tail of block headers. Verification walks leaf to root to anchor to BUMP to headers, where a BUMP is
+      the standard Merkle proof that a transaction sits in a mined block. Every step is recomputed by the verifier against headers it fetched independently.
+    </p>
 
-<p>For any fragment, the operator can produce a proof bundle: the leaf, its index, the Merkle path, the batch root, the anchor transaction's BEEF — a compact envelope of the transaction and its ancestry — and a tail of block headers. Verification walks leaf to root to anchor to BUMP to headers, where a BUMP is the standard Merkle proof that a transaction sits in a mined block. Every step is recomputed by the verifier against headers it fetched independently.</p>
+    <p>
+      A verified proof establishes that the fragment was recorded, that it is unaltered, and that an answer built on it is derivable. That is the whole claim.
+      The chain cannot prove the fragment's content is true; it proves who recorded it and that nobody touched it since.
+    </p>
 
-<p>A verified proof establishes that the fragment was recorded, that it is unaltered, and that an answer built on it is derivable. That is the whole claim. The chain cannot prove the fragment's content is true; it proves who recorded it and that nobody touched it since.</p>
+    <h2>Who may read</h2>
 
-<h2>Who may read</h2>
+    <p>
+      A read runs through four gates, and decryption is last. The caller first asks for a challenge and gets a nonce — a random value issued by this server with
+      a five-minute life. The recall call carries an identity binding, a signature over that nonce, and optionally a zero-knowledge bundle. The caller is
+      verified: the binding's key matches the signer, the nonce was issued here and is fresh, the signature checks.
+    </p>
 
-<p>A read runs through four gates, and decryption is last. The caller first asks for a challenge and gets a nonce — a random value issued by this server with a five-minute life. The recall call carries an identity binding, a signature over that nonce, and optionally a zero-knowledge bundle. The caller is verified: the binding's key matches the signer, the nonce was issued here and is fresh, the signature checks.</p>
+    <p>
+      Clearance comes next. A fragment sits at a level; a caller proves level minus required is non-negative without revealing the level itself, using a
+      Bulletproof range proof over a Pedersen commitment — a commitment of the form ℓG + rH that hides ℓ — signed by a trusted authority and bound to the
+      caller's key. A stolen commitment does nothing for a different key holder.
+    </p>
 
-<p>Clearance comes next. A fragment sits at a level; a caller proves level minus required is non-negative without revealing the level itself, using a Bulletproof range proof over a Pedersen commitment — a commitment of the form ℓG + rH that hides ℓ — signed by a trusted authority and bound to the caller's key. A stolen commitment does nothing for a different key holder.</p>
+    <p>
+      Then policy. A Cedar policy engine running as WASM evaluates the request with the principal set to hash160 of the caller's key and the level set to the
+      proven one; a stratified Datalog program derives permit or finds a conflicting rule. Only after all gates pass does the server decrypt with the level key
+      and return plaintext plus a receipt naming the gates. A failed gate returns a specific reason and releases nothing — no plaintext, no ciphertext.
+    </p>
 
-<p>Then policy. A Cedar policy engine running as WASM evaluates the request with the principal set to hash160 of the caller's key and the level set to the proven one; a stratified Datalog program derives permit or finds a conflicting rule. Only after all gates pass does the server decrypt with the level key and return plaintext plus a receipt naming the gates. A failed gate returns a specific reason and releases nothing — no plaintext, no ciphertext.</p>
+    <h2>Membership without exposure</h2>
 
-<h2>Membership without exposure</h2>
+    <p>
+      Sometimes the question is which batch holds an item, and the holder wants to prove membership without showing the item. The verifier issues a query nonce
+      bound to its id; the hash of tag, nonce and verifier id becomes a single-use queryId. The holder proves inside a RISC Zero STARK that the double-SHA-256
+      Merkle root of its leaf, index and path equals the anchored batch root. The journal — the public output of the proof — exposes only the root, the batch
+      size and the queryId. The leaf never leaves the holder.
+    </p>
 
-<p>Sometimes the question is which batch holds an item, and the holder wants to prove membership without showing the item. The verifier issues a query nonce bound to its id; the hash of tag, nonce and verifier id becomes a single-use queryId. The holder proves inside a RISC Zero STARK that the double-SHA-256 Merkle root of its leaf, index and path equals the anchored batch root. The journal — the public output of the proof — exposes only the root, the batch size and the queryId. The leaf never leaves the holder.</p>
+    <p>
+      A STARK here means Fiat-Shamir over FRI: transparent, hash-based, no trusted setup. The receipt is about 224 KB and proving takes roughly 35 to 50 seconds
+      on a CPU; those are the costs paid for skipping a ceremony. Verification runs off-chain in WASM against a pinned program id, checks that the proven root
+      and size equal the SPV-verified anchor of the shard on the canonical chain, and burns the queryId so the same proof cannot be replayed.
+    </p>
 
-<p>A STARK here means Fiat-Shamir over FRI: transparent, hash-based, no trusted setup. The receipt is about 224 KB and proving takes roughly 35 to 50 seconds on a CPU; those are the costs paid for skipping a ceremony. Verification runs off-chain in WASM against a pinned program id, checks that the proven root and size equal the SPV-verified anchor of the shard on the canonical chain, and burns the queryId so the same proof cannot be replayed.</p>
+    <h2>From memory to answer</h2>
 
-<h2>From memory to answer</h2>
+    <p>
+      Grounding builds the answer. Each claim must quote a verified fragment or follow from one by Datalog entailment; whatever cannot be grounded is stripped
+      from the answer before it ships. The surviving answer gets a receipt — the hash of the answer, the fragment references, the check result, the model id,
+      the timestamp and the grounding report — anchored like any other record. The answer ends with a token in the nektarr1 format and a verify URL.
+    </p>
 
-<p>Grounding builds the answer. Each claim must quote a verified fragment or follow from one by Datalog entailment; whatever cannot be grounded is stripped from the answer before it ships. The surviving answer gets a receipt — the hash of the answer, the fragment references, the check result, the model id, the timestamp and the grounding report — anchored like any other record. The answer ends with a token in the nektarr1 format and a verify URL.</p>
+    <p>
+      The verify URL is the audit. A verifier replays the citations against the same verified fragments, checks the receipt hash on chain, and gets a yes or a
+      no without asking the operator anything. An audit bundle — receipt, fragments, signers, policy path, anchors — verifies offline the same way.
+    </p>
 
-<p>The verify URL is the audit. A verifier replays the citations against the same verified fragments, checks the receipt hash on chain, and gets a yes or a no without asking the operator anything. An audit bundle — receipt, fragments, signers, policy path, anchors — verifies offline the same way.</p>
+    <h2>When sources change</h2>
 
-<h2>When sources change</h2>
+    <p>
+      A receipt pins its sources, so a revision is visible. When a record supersedes an old fragment, a citation index marks every answer that cited it. The
+      correction loop re-grounds those answers, withdraws the claims that no longer hold, and anchors the correction as a new record. The old answer, the old
+      sources and the correction all stay checkable.
+    </p>
 
-<p>A receipt pins its sources, so a revision is visible. When a record supersedes an old fragment, a citation index marks every answer that cited it. The correction loop re-grounds those answers, withdraws the claims that no longer hold, and anchors the correction as a new record. The old answer, the old sources and the correction all stay checkable.</p>
+    <h2>Agents that pay each other</h2>
 
-<h2>Agents that pay each other</h2>
+    <p>
+      Shard access has a price, and agents settle it without a middleman. A buyer publishes a signed want; sellers answer with signed offers; the buyer selects
+      one and funds an escrow — the same anchor covenant family, shaped for sale, with a timeout refund and a binding to the promised disclosure. The deal walks
+      a state machine: funding, awaiting disclosure, disclosure verified, useful or not useful on the buyer side; preparing, quoted, completing, settled on the
+      seller side.
+    </p>
 
-<p>Shard access has a price, and agents settle it without a middleman. A buyer publishes a signed want; sellers answer with signed offers; the buyer selects one and funds an escrow — the same anchor covenant family, shaped for sale, with a timeout refund and a binding to the promised disclosure. The deal walks a state machine: funding, awaiting disclosure, disclosure verified, useful or not useful on the buyer side; preparing, quoted, completing, settled on the seller side.</p>
+    <p>
+      No state is allowed to be a trap. Every nonterminal state carries a maximum age measured from its last transition and a forced exit — abort when nothing
+      is on chain, refund when escrow exists, escalate to a human when a broadcast may already be out. Terminal states need no bound. The scan that drives this
+      queries only the states the engine can act on, so a parked deal costs nothing per tick.
+    </p>
 
-<p>No state is allowed to be a trap. Every nonterminal state carries a maximum age measured from its last transition and a forced exit — abort when nothing is on chain, refund when escrow exists, escalate to a human when a broadcast may already be out. Terminal states need no bound. The scan that drives this queries only the states the engine can act on, so a parked deal costs nothing per tick.</p>
+    <h2>How instances move bytes</h2>
 
-<h2>How instances move bytes</h2>
+    <p>
+      Instances of the same deployment sync through a delivery plane called bstack, built on vendored Lightweb transports. Messages move as carriers on lanes
+      named tm_*, and a host's admission module accepts a carrier only when it is funded by a proven Merkle tree spend, freshly signed and unexpired. Deal
+      envelopes are BRC-78 sealed boxes the counterparty's wallet alone can open. Objects — packs, evidence bundles, proofs — are content-addressed twice over,
+      written to object storage and as CHIRP closures, so every unsigned read is digest-verified whichever path resolves.
+    </p>
 
-<p>Instances of the same deployment sync through a delivery plane called bstack, built on vendored Lightweb transports. Messages move as carriers on lanes named tm_*, and a host's admission module accepts a carrier only when it is funded by a proven Merkle tree spend, freshly signed and unexpired. Deal envelopes are BRC-78 sealed boxes the counterparty's wallet alone can open. Objects — packs, evidence bundles, proofs — are content-addressed twice over, written to object storage and as CHIRP closures, so every unsigned read is digest-verified whichever path resolves.</p>
+    <p>
+      Hosts relay; they never vouch. A reader verifies signatures and SPV proofs locally after parallel reads across hosts. When a fan-out misses a host, the
+      leg reports its own outcome and a per-host repair row is journaled against the carrier, so a dead host leaves a tracked gap rather than a silent one.
+    </p>
 
-<p>Hosts relay; they never vouch. A reader verifies signatures and SPV proofs locally after parallel reads across hosts. When a fan-out misses a host, the leg reports its own outcome and a per-host repair row is journaled against the carrier, so a dead host leaves a tracked gap rather than a silent one.</p>
+    <h2>Who holds the keys</h2>
 
-<h2>Who holds the keys</h2>
+    <p>
+      Two custody modes exist. In client mode the app holds no private keys at all: funding, logging, ownership and automaton signatures go through an external
+      BRC-100 wallet's sign and public-key calls. In toolbox mode an embedded wallet keeps the root key in a local sqlite file, and a documented environment
+      variable supplies it. Either way, every funded spend passes through one guard and one coin book that tracks each sat from reservation to spend to change.
+    </p>
 
-<p>Two custody modes exist. In client mode the app holds no private keys at all: funding, logging, ownership and automaton signatures go through an external BRC-100 wallet's sign and public-key calls. In toolbox mode an embedded wallet keeps the root key in a local sqlite file, and a documented environment variable supplies it. Either way, every funded spend passes through one guard and one coin book that tracks each sat from reservation to spend to change.</p>
+    <h2>What is declared, not proven</h2>
 
-<h2>What is declared, not proven</h2>
+    <p>
+      The honest boundary is part of the design. The model manifest embedded in receipts says which model the operator claims answered — declared, not proven,
+      because proving inference needs zkML or a trusted enclave the system does not have. The ai-inference attestation rail is demo-grade: real Groth16, toy
+      parameters. The remaining central dependencies are plumbing — the broadcaster, a headers tip source, the regtest node, an object-storage gateway — each
+      replaceable, none trusted with content or settlement truth.
+    </p>
 
-<p>The honest boundary is part of the design. The model manifest embedded in receipts says which model the operator claims answered — declared, not proven, because proving inference needs zkML or a trusted enclave the system does not have. The ai-inference attestation rail is demo-grade: real Groth16, toy parameters. The remaining central dependencies are plumbing — the broadcaster, a headers tip source, the regtest node, an object-storage gateway — each replaceable, none trusted with content or settlement truth.</p>
-
-<p>What the chain signs is presence and integrity. What it never signs is truth.</p>
-
-</body>
+    <p>What the chain signs is presence and integrity. What it never signs is truth.</p>
+  </body>
 </html>

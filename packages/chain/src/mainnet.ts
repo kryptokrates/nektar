@@ -401,36 +401,27 @@ class HeaderCache {
   }
 }
 
-export class WocTracker implements ChainTracker {
+/** the index-backed tracker — the dialect (bananablocks default, WoC for the
+ *  BTC temporal source/legacy configs) comes from the MainnetConfig URL. */
+export class IndexTracker implements ChainTracker {
   private cfg
+  private index: ChainIndex
   private cache = new HeaderCache()
   private readonly requirePow: boolean
-  // ≥350 ms spacing — WoC is ~3 req/s unauthenticated
-  private pace = pacer(350)
   constructor(c?: MainnetConfig, opts?: { requirePow?: boolean }) {
     this.cfg = def(c)
+    this.index = this.cfg.index
     // PoW-per-header is on by default; a private non-PoW net opts out via the
     // construction site (NEKTAR_HEADER_POW=0) — it is not a runtime flag here
     this.requirePow = opts?.requirePow !== false
-  }
-
-  private async wocGet(path: string, retries = 3): Promise<any> {
-    const h: Record<string, string> = {}
-    if (this.cfg.wocApiKey) h['woc-api-key'] = this.cfg.wocApiKey
-    const r = await withRetry(() => this.pace().then(() => req(this.cfg, `${this.cfg.wocUrl}${path}`, { headers: h }, 15_000)), {
-      attempts: retries + 1,
-      delay: (i) => 1200 * (i + 1),
-      retryIf: (x) => x.status === 429
-    })
-    if (r.status === 404) return undefined
-    return await j(r)
   }
 
   private tip = { at: 0, height: 0 }
   async currentHeight(): Promise<number> {
     const ms = this.cfg.tipCacheMs
     if (ms > 0 && Date.now() - this.tip.at < ms) return this.tip.height
-    const height = (await this.wocGet('/chain/info')).blocks as number
+    const height = await this.index.tip()
+    if (height === undefined) throw new Error('index tip unreachable')
     // a tip advance over a cached previous tip is where a silent reorg shows
     // up — the fresh tip's linkage check runs against the cached parent; no
     // request is added when the height is unchanged
@@ -445,18 +436,8 @@ export class WocTracker implements ChainTracker {
   /** raw fetch + self-authentication — a PoW-invalid header is a miss, not
    *  truth; never cached and never linkage-checked */
   private async fetchHeader(height: number): Promise<BlockHeader | undefined> {
-    const b = await this.wocGet(`/block/height/${height}`)
-    if (!b) return undefined
-    const h: BlockHeader = {
-      height,
-      hash: b.hash,
-      prevHash: b.previousblockhash ?? '',
-      merkleRoot: b.merkleroot,
-      time: b.time,
-      bits: parseInt(String(b.bits), 16) || 0,
-      nonce: b.nonce ?? 0,
-      version: b.version
-    }
+    const h = await this.index.header(height)
+    if (h === undefined) return undefined
     if (this.requirePow && !headerPowValid(h)) return undefined
     return h
   }
@@ -733,9 +714,8 @@ function fundingOutputs(tx: Transaction, pkhHex: string): FundingOut[] {
 // --- UTXO discovery -----------------------------------------------------------
 export async function discoverUtxos(cfg: MainnetConfig | undefined, address: string, onSkip?: (txid: string, reason: string) => void): Promise<FundingOut[]> {
   const c = def(cfg)
-  const h: Record<string, string> = {}
-  if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey
-  const list = await (await getOk(c, `${c.wocUrl}/address/${address}/unspent`, h)).json()
+  const list = await c.index.utxos(address)
+  if (list === undefined) throw new Error(`${address}: index could not serve unspents`)
   const out: FundingOut[] = []
   const pace = pacer(350)
   // the index is discovery, not truth: an entry counts only once its own
@@ -745,32 +725,30 @@ export async function discoverUtxos(cfg: MainnetConfig | undefined, address: str
   const want = `76a914${typeof pkh === 'string' ? pkh : Utils.toHex(Uint8Array.from(pkh))}88ac`
   for (const u of list) {
     await pace()
-    // a just-broadcast tx may not be served as hex yet (404): skip it this round
-    const hex = await getOk(c, `${c.wocUrl}/tx/${u.tx_hash}/hex`, h)
-      .then((r) => r.text())
-      .catch(() => null)
-    if (hex === null) continue
+    // a just-broadcast tx may not be served as hex yet: skip it this round
+    const hex = await c.index.txHex(u.txid).catch(() => undefined)
+    if (hex === undefined) continue
     let tx: Transaction
     try {
-      tx = Transaction.fromHex(hex.trim())
+      tx = Transaction.fromHex(hex)
     } catch {
-      onSkip?.(String(u.tx_hash), 'served tx hex does not parse')
+      onSkip?.(u.txid, 'served tx hex does not parse')
       continue
     }
-    if (tx.id('hex') !== u.tx_hash) {
-      onSkip?.(String(u.tx_hash), 'served hex hashes to a different txid')
+    if (tx.id('hex') !== u.txid) {
+      onSkip?.(u.txid, 'served hex hashes to a different txid')
       continue
     }
-    const o = tx.outputs[u.tx_pos]
+    const o = tx.outputs[u.vout]
     if (o === undefined) {
-      onSkip?.(String(u.tx_hash), `index vout ${String(u.tx_pos)} does not exist`)
+      onSkip?.(u.txid, `index vout ${u.vout} does not exist`)
       continue
     }
     if (o.lockingScript.toHex() !== want) {
-      onSkip?.(String(u.tx_hash), `vout ${String(u.tx_pos)} does not pay the address`)
+      onSkip?.(u.txid, `vout ${u.vout} does not pay the address`)
       continue
     }
-    out.push({ tx, vout: u.tx_pos, satoshis: o.satoshis ?? 0 })
+    out.push({ tx, vout: u.vout, satoshis: o.satoshis ?? 0 })
   }
   return out
 }
@@ -790,13 +768,10 @@ export async function utxoSpendStatus(
   vout: number
 ): Promise<'spent' | 'unknown'> {
   const c = def(cfg)
-  const h: Record<string, string> = {}
-  if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey
   try {
-    const j = (await (await getOk(c, `${c.wocUrl}/tx/${txid}`, h)).json()) as {
-      vout?: Array<{ spent?: boolean; spentTxId?: string; spender?: string }>
-    }
-    const claim = j.vout?.[vout]?.spentTxId ?? j.vout?.[vout]?.spender
+    const j = await c.index.txJson(txid)
+    if (j === undefined) return 'unknown'
+    const claim = j.outputs?.[vout]?.spentTxId
     if (typeof claim !== 'string' || !/^[0-9a-fA-F]{64}$/.test(claim)) return 'unknown'
     const spending = await fetchRawTx(c, claim)
     if (spending === undefined) return 'unknown'

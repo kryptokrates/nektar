@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Beef, MerklePath, PrivateKey, P2PKH, Transaction, UnlockingScript } from '@bsv/sdk'
-import { LiveWalletServices, WalletFunds } from '../src/toolbox.js'
+import { LiveWalletServices } from '../src/toolbox.js'
+import { WalletFunds } from '../src/wallettfunds.js'
 
 // Mock BRC-100 wallet: listOutputs serves a canned spendable set + the BEEF
 // the class rebuilds Transaction objects from. internalize/relinquish are

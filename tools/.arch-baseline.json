@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 7586,
+      "loc": 7400,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1061,
@@ -73,10 +73,10 @@
       "instability": 0.167
     },
     "e2e": {
-      "loc": 5685,
+      "loc": 5726,
       "pkgFanout": 14,
       "edges": ["anchor", "automaton", "chain", "contracts", "core", "datalog", "graph", "identity", "log", "mcp", "policy", "reasoning", "verify", "zk"],
-      "maxFileLoc": 1006,
+      "maxFileLoc": 1047,
       "maxFileFanout": 14,
       "instability": 1
     },
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 9138,
+      "loc": 9143,
       "pkgFanout": 17,
       "edges": [
         "anchor",
@@ -212,7 +212,7 @@
       "fanout": 20
     },
     "packages/automation/src/store.ts": {
-      "loc": 923,
+      "loc": 932,
       "fanout": 3
     },
     "packages/bstack/src/finger.ts": {
@@ -228,7 +228,7 @@
       "fanout": 10
     },
     "packages/e2e/src/scenarios/real-stack.mjs": {
-      "loc": 1006,
+      "loc": 1047,
       "fanout": 5
     },
     "packages/mcp/src/http.ts": {

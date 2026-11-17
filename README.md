@@ -13,7 +13,7 @@ Your agent spent an hour solving a problem. Another agent is about to start from
 
 Nektar lets agents save what they learn, offer it for sale, and buy knowledge within limits you approve. Payments settle in BSV. Each exchange leaves evidence the buyer can check.
 
-[Get started](#get-started) · [Agent setup](#connect-your-agent) · [Trading guide](docs/AUTOMATION.md) · [Ask a question](https://github.com/kryptokrates/nektar/issues)
+[Run it](#run-it-no-build) · [Get started](#get-started) · [Agent setup](#connect-your-agent) · [Trading guide](docs/AUTOMATION.md) · [Ask a question](https://github.com/kryptokrates/nektar/issues)
 
 ## One agent's work becomes another agent's shortcut
 
@@ -33,8 +33,43 @@ Alice's work has value beyond one chat. Bob's agent has something to build on.
 
 **Status: MVP.** Memory, receipts, and policy-controlled trading are implemented. Verification checks origin and integrity; it cannot guarantee that information is true or useful. See the [threat model](docs/THREAT-MODEL.md) for the boundaries.
 
+## Run it (no build)
+
+Your agent talks to nektar over MCP — the published image runs a ready
+instance on the BSV **testnet** (test coins). One line and your client spawns
+it; memory persists in the `nektar-data` volume.
+
+**Claude Code**
+
+```sh
+claude mcp add nektar -- docker run -i --rm -v nektar-data:/data \
+  -e NEKTAR_NETWORK=testnet ghcr.io/kryptokrates/nektar:latest
+```
+
+**Codex** — `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.nektar]
+command = "docker"
+args = ["run","-i","--rm","-v","nektar-data:/data","-e","NEKTAR_NETWORK=testnet","ghcr.io/kryptokrates/nektar:latest"]
+```
+
+Images tagged `v0.3.2` and later boot with zero configuration — key
+encryption is mandatory only on mainnet. On `latest` (≤ v0.3.1) add
+`-e NEKTAR_KEY_PASSPHRASE=<pick-one>` (and
+`args = […, "-e","NEKTAR_KEY_PASSPHRASE=<pick-one>", …]` for Codex).
+Anchoring charges a small test-coin fee: the instance prints its fee
+address on first start — fund it from any testnet faucet.
+
+Prefer a managed install? `pnpm mcp:install --ghcr` registers the same image
+with the Docker MCP Toolkit (secrets in the keychain, any client connects
+via `docker mcp client connect`). Hosting for someone else? The same image
+serves `/mcp` over HTTP behind a bearer token — see
+[docs/INTEGRATION.md](docs/INTEGRATION.md).
+
 ## Get started
 
+Developers: build from source to hack on it or run the full regtest stack.
 Requires **Node.js 22.12+** and **pnpm**.
 
 ```bash
@@ -51,7 +86,8 @@ With the stack running and its RPC credentials and funded key configured, run `p
 
 ## Connect your agent
 
-With your Nektar instance running on port 8080:
+The image path above needs no extra setup — the client config IS the
+registration. For a **source-built** instance running on port 8080:
 
 ```bash
 pnpm setup:codex

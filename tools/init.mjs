@@ -2,14 +2,14 @@
 // tools/init.mjs — first-run wizard: pick a network → where your agent
 // lives → passphrase → write .env → print the exact next command.
 //
-//   node tools/init.mjs            interactive
+//   node tools/init.mjs            interactive (@clack/prompts wizard)
 //   node tools/init.mjs --yes      accept all defaults (regtest, ./.nektar, stdio)
 //   node tools/init.mjs --env testnet --dir .testnet --port 8080
-import { createInterface } from 'node:readline'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes } from 'node:crypto'
+import { intro, outro, select, text, password, confirm, spinner, note, isCancel, cancel } from '@clack/prompts'
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const arg = (f) => {
@@ -18,24 +18,13 @@ const arg = (f) => {
 }
 const YES = process.argv.includes('--yes') || !process.stdin.isTTY // piped/non-interactive → defaults
 
-// ─── prompt helpers ─────────────────────────────────────────────────────────
-const rl = createInterface({ input: process.stdin, output: process.stdout })
-const ask = (q) => new Promise((res) => rl.question(q, (a) => res(a.trim())))
-const askSecret = (q) =>
-  new Promise((res) => {
-    const out = rl.output
-    const orig = out.write.bind(out)
-    out.write = (chunk, ...rest) => (typeof chunk === 'string' && chunk.includes('\n') ? orig(chunk, ...rest) : true)
-    rl.question(q, (a) => {
-      out.write = orig
-      res(a.trim())
-    })
-  })
-const pick = async (q, opts) => {
-  if (YES) return opts[0]
-  const line = await ask(`${q}\n${opts.map((o, i) => `  ${i + 1}) ${o.label}`).join('\n')}\n> `)
-  const n = Number(line)
-  return n >= 1 && n <= opts.length ? opts[n - 1] : (opts.find((o) => o.label.toLowerCase().startsWith(line.toLowerCase())) ?? opts[0])
+/** every prompt resolves to clack's cancel symbol on Ctrl+C — bail cleanly */
+const req = (v) => {
+  if (isCancel(v)) {
+    cancel('bailed — nothing written')
+    process.exit(0)
+  }
+  return v
 }
 
 // ─── existing config → reconfigure defaults (Hermes pattern: current values
@@ -54,30 +43,29 @@ const readEnv = (p) =>
 const prev = readEnv(envPath)
 const reconfigure = Boolean(prev.NEKTAR_NETWORK)
 
-console.log('\nnektar init — your agent, your keys, verifiable memory.\n')
-console.log(
-  reconfigure
-    ? 'Existing config found — press Enter to keep each current value.\n'
-    : 'This walks the four decisions a fresh install needs, writes .env,\nand prints the one command to run next. Ctrl+C to bail anytime.\n'
+intro('nektar init — your agent, your keys, verifiable memory')
+note(
+  reconfigure ? 'Existing config found — defaults are your current values.' : 'Four decisions, then .env + the one command to run next. Ctrl+C to bail anytime.'
 )
 
 // ─── 1. network ─────────────────────────────────────────────────────────────
 const networks = [
-  { id: 'regtest', label: 'regtest — local Teranode stack, zero real cost (best first run)' },
-  { id: 'testnet', label: 'testnet — public test coins, real market' },
-  { id: 'main', label: 'main — real BSV. Read docs/OPERATIONS.md first' }
+  { value: 'regtest', label: 'regtest — local Teranode stack, zero real cost (best first run)' },
+  { value: 'testnet', label: 'testnet — public test coins, real market' },
+  { value: 'main', label: 'main — real BSV. Read docs/OPERATIONS.md first' }
 ]
 const net =
   arg('--env') ??
-  (prev.NEKTAR_NETWORK && YES
-    ? prev.NEKTAR_NETWORK
-    : (
-        await pick(
-          '1/4 — which network?',
-          prev.NEKTAR_NETWORK ? [...networks.filter((n) => n.id === prev.NEKTAR_NETWORK), ...networks.filter((n) => n.id !== prev.NEKTAR_NETWORK)] : networks
-        )
-      ).id)
-if (!networks.some((n) => n.id === net)) {
+  (YES
+    ? (prev.NEKTAR_NETWORK ?? 'regtest')
+    : req(
+        await select({
+          message: '1/4 — which network?',
+          options: networks,
+          initialValue: networks.some((n) => n.value === prev.NEKTAR_NETWORK) ? prev.NEKTAR_NETWORK : 'regtest'
+        })
+      ))
+if (!networks.some((n) => n.value === net)) {
   console.error(`unknown network "${net}"`)
   process.exit(2)
 }
@@ -86,7 +74,16 @@ if (!networks.some((n) => n.id === net)) {
 const defDir = prev.NEKTAR_DATA_DIR ?? '.nektar'
 const dir =
   arg('--dir') ??
-  ((YES ? defDir : await ask(`2/4 — where does your agent live? (identity + memory)\n  This directory IS the agent — back it up.\n[${defDir}] > `)) || defDir)
+  ((YES
+    ? defDir
+    : req(
+        await text({
+          message: '2/4 — where does your agent live? (identity + memory — this directory IS the agent, back it up)',
+          placeholder: defDir,
+          defaultValue: defDir
+        })
+      )) ||
+    defDir)
 const dataDir = resolve(dir)
 mkdirSync(dataDir, { recursive: true })
 
@@ -99,12 +96,14 @@ const mustEnc = net === 'main'
 for (const f of ['keys.json', 'fee.key.json']) {
   const p = join(dataDir, f)
   if (mustEnc && existsSync(p) && !readFileSync(p, 'utf8').includes('"kdf"'))
-    console.log(`  note: ${p} is plaintext — main requires encrypted keys at rest; use a fresh --dir or remove it`)
+    note(`${p} is plaintext — main requires encrypted keys at rest; use a fresh --dir or remove it`, 'heads-up')
 }
 let pass = arg('--passphrase')
 if (pass === undefined && !YES) {
-  pass = await askSecret(
-    `3/4 — key passphrase (encrypts your identity at rest; unrecoverable)\n  ${mustEnc ? 'REQUIRED — empty = one is generated into .env' : 'empty = skip (testnet/regtest boot plaintext; set one to encrypt)'}${prev.NEKTAR_KEY_PASSPHRASE ? ' — Enter keeps the current one' : ''}\n> `
+  pass = req(
+    await password({
+      message: `3/4 — key passphrase (encrypts your identity at rest; unrecoverable)${mustEnc ? ' — REQUIRED, empty generates one into .env' : ' — empty = skip (plaintext keys; set one to encrypt)'}${prev.NEKTAR_KEY_PASSPHRASE ? ' — empty keeps the current one' : ''}`
+    })
   )
   if (!pass && prev.NEKTAR_KEY_PASSPHRASE) pass = prev.NEKTAR_KEY_PASSPHRASE
 } else pass ??= prev.NEKTAR_KEY_PASSPHRASE ?? ''
@@ -127,20 +126,19 @@ if (existsSync(envPath)) {
   const bak = `${envPath}.bak-${stamp}`
   const old = (await import('node:fs')).readFileSync(envPath, 'utf8')
   writeFileSync(bak, old)
-  console.log(`(existing .env backed up → ${bak})`)
+  note(`existing .env backed up → ${bak}`)
   // drop only the vars init manages — bin.js takes the first occurrence, so
   // a re-init must replace those; operator vars (WIFs, tokens) stay
   const managed = ['NEKTAR_NETWORK', 'NEKTAR_DATA_DIR', 'NEKTAR_KEY_PASSPHRASE', 'NEKTAR_HTTP_PORT', 'NEKTAR_VERIFY_BASE', 'NEKTAR_MODEL_ID']
   const kept = old
     .split(/\r?\n/)
-    .filter((l) => !managed.some((k) => new RegExp(`^\\s*${k}\\s*=`).test(l)))
+    .filter((l) => !/^# nektar init/.test(l.trim()) && !managed.some((k) => new RegExp(`^\\s*${k}\\s*=`).test(l)))
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trimEnd()
   writeFileSync(envPath, (kept ? kept + '\n\n' : '') + body)
 } else writeFileSync(envPath, body)
-console.log(`\nwrote ${envPath}`)
-if (generatedPass) console.log('  generated NEKTAR_KEY_PASSPHRASE — .env + the data dir ARE the agent; back up both')
+note(`wrote ${envPath}` + (generatedPass ? '\ngenerated NEKTAR_KEY_PASSPHRASE — .env + the data dir ARE the agent; back up both' : ''))
 
 // ─── next steps ─────────────────────────────────────────────────────────────
 console.log('\nNext:')
@@ -168,6 +166,8 @@ const binJs = join(root, 'packages/mcp/dist/src/bin.js')
 if (existsSync(binJs) && net !== 'main') {
   const alivePort = 18190 + Math.floor(Math.random() * 800)
   const { spawn } = await import('node:child_process')
+  const s = spinner()
+  s.start(`alive-check — booting on ${net}`)
   const child = spawn(process.execPath, [binJs], {
     env: { ...process.env, NEKTAR_NETWORK: net, NEKTAR_DATA_DIR: dataDir, NEKTAR_KEY_PASSPHRASE: pass || undefined, NEKTAR_HTTP_PORT: String(alivePort) },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -186,13 +186,10 @@ if (existsSync(binJs) && net !== 'main') {
     await new Promise((r) => setTimeout(r, 300))
   }
   child.kill()
-  console.log(
-    alive
-      ? `alive-check: instance booted on ${net} with your config — your agent is alive.\n`
-      : `alive-check: instance did NOT come up — run doctor for diagnostics.\n`
-  )
+  if (alive) s.stop('alive-check: instance booted — your agent is alive')
+  else s.error('alive-check: instance did NOT come up — run doctor for diagnostics')
 } else if (!existsSync(binJs)) {
-  console.log('(skipping alive-check — run pnpm -r build first)\n')
+  note('skipping alive-check — run pnpm -r build first')
 }
 
 // ─── client detection (Hermes: find existing agent setups) ──────────────────
@@ -205,8 +202,8 @@ if (clients.length) {
   console.log(`found agent clients: ${clients.map((c) => c.label).join(', ')}\n`)
   for (const c of clients) {
     if (!YES) {
-      const a = await ask(`wire ${c.label} into nektar now? [Y/n] > `)
-      if (a === '' || /^y/i.test(a)) {
+      const a = req(await confirm({ message: `wire ${c.label} into nektar now?`, initialValue: true }))
+      if (a) {
         const { spawnSync } = await import('node:child_process')
         spawnSync(process.execPath, [join(root, c.script)], { stdio: 'inherit' })
       }
@@ -214,4 +211,4 @@ if (clients.length) {
   }
   console.log('')
 }
-rl.close()
+outro('done')

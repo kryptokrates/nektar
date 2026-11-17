@@ -60,6 +60,7 @@
   },
   "devDependencies": {
     "@bsv/sdk": "4.0.1",
+    "@clack/prompts": "1.8.1",
     "@types/node": "24.19.2",
     "dependency-cruiser": "^18.7.1",
     "esbuild": "~0.25.12",

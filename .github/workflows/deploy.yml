@@ -95,7 +95,7 @@ jobs:
               git checkout -b "$b"
               git add -A
               git -c user.name=box -c user.email=box@local commit -qm "auto-backup before deploy" || true
-              git checkout master 2>/dev/null || git checkout -
+              git checkout -f master 2>/dev/null || git checkout -f -
             fi
             git reset --hard FETCH_HEAD
             pnpm install --frozen-lockfile

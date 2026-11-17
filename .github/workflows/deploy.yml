@@ -31,14 +31,11 @@ jobs:
           printf '%s\n' "$KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" "DEPLOY_REF='$DEPLOY_REF' REF_TYPE='$REF_TYPE'"'
-            id
-            hostname
-            echo "MACHINE_ID=$(cat /etc/machine-id 2>/dev/null)"
-            echo "BOOT_ID=$(cat /proc/sys/kernel/boot_id 2>/dev/null)"
-            echo "PID1_COMM=$(cat /proc/1/comm)"
-            echo "PID1_CGROUP=$(cat /proc/1/cgroup | head -1)"
-            echo "PID1_NSID=$(readlink /proc/1/ns/mnt) SELF_NSID=$(readlink /proc/self/ns/mnt)"
+          # the remote script goes over stdin via `bash -s` — a single-quoted
+          # argument would split on any stray apostrophe and leak the tail of
+          # the script onto the runner (the "units not found" incident)
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" \
+            "DEPLOY_REF='$DEPLOY_REF' REF_TYPE='$REF_TYPE' BUILD_STARK='$BUILD_STARK' bash -s" <<'REMOTE_SCRIPT'
             set -e
             # one-time mamem → nektar migration (idempotent, every step self-guarded)
             for u in /etc/systemd/system/mamem-*.service; do
@@ -133,9 +130,9 @@ jobs:
             printf "%s\n" "[Unit]" "Description=nektar STARK prover HTTP shim" "After=network.target docker.service" "Requires=docker.service" "" "[Service]" "EnvironmentFile=/etc/nektar-prover.env" "WorkingDirectory=/opt/nektar/tools/stark" "ExecStart=/usr/local/bin/node prover-server.mjs" "Restart=always" "RestartSec=5" "" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/nektar-prover.service
             systemctl daemon-reload
             systemctl enable --now nektar-prover
-            # restart races the instance lock's 20s heartbeat TTL — stop first,
+            # restart races the instance lock heartbeat TTL — stop first,
             # wait for the lock file to free, then start cleanly
-            sudo -n systemctl stop nektar-http nektar-watch 2>/dev/null || true
+            systemctl stop nektar-http nektar-watch 2>/dev/null || true
             DATA_DIR=$(grep -oE "^NEKTAR_DATA_DIR=.*" /etc/nektar-http.env 2>/dev/null | cut -d= -f2)
             DATA_DIR=${DATA_DIR:-/opt/nektar/.nektar}
             for i in 1 2 3 4 5 6 7 8; do
@@ -143,25 +140,9 @@ jobs:
               sleep 3
             done
             rm -f "$DATA_DIR/instance.lock"
-            sudo -n systemctl start nektar-watch nektar-http || {
-              echo "=== root device vs expectations ==="
-              stat -c "%d %D %i %n" / /etc /etc/systemd /etc/systemd/system 2>&1
-              grep -E " / |overlay" /proc/self/mountinfo | head -5
-              echo "=== ns comparison: PID1 vs this session ==="
-              wc -l < /proc/1/mountinfo
-              wc -l < /proc/self/mountinfo
-              diff /proc/1/mountinfo /proc/self/mountinfo | head -20 || true
-              echo "=== FULL unit dir at failure time ==="
-              ls -la /etc/systemd/system/ | head -40 || true
-              echo "=== mounts touching /etc ==="
-              grep -nE " /etc|systemd/system" /proc/self/mountinfo | head -10
-              for s in nektar-http nektar-watch; do
-                echo "=== unit $s ==="
-                cat "/etc/systemd/system/$s.service" || true
-                systemctl status "$s" --no-pager -l || true
-              done
-              echo "=== fs scan ==="
-              ls -la /opt/ | grep -iE "nektar|mamem|watch|http" || true
+            systemctl start nektar-watch nektar-http || {
+              systemctl status nektar-watch nektar-http --no-pager -l || true
+              journalctl -u nektar-http -u nektar-watch -n 20 --no-pager || true
               exit 1
             }
             sleep 3
@@ -196,7 +177,7 @@ jobs:
             else
               echo "skipped (set build_stark=true on dispatch to rebuild the prover image)"
             fi
-          '
+          REMOTE_SCRIPT
       - name: verify the public endpoint from outside
         env:
           HOST: ${{ secrets.HETZNER_HOST }}

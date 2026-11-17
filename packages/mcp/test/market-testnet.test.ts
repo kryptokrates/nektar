@@ -206,8 +206,10 @@ const mkagent = async (
     statusHint: (txid: string) => bcast.statusHint(txid),
     batchPolicy: { maxLeaves: 1 },
     // fundsOf needs the owned lock — ReserveFunder keeps pkhHex private, so
-    // the suite hands it the same hash the key lock is filed under
-    funds: fundsOf(reserve, { pkhHex })
+    // the suite hands it the same hash the key lock is filed under. The
+    // spendCheck (production wires it at runtime.ts) lets take() burn phantom
+    // change entries — broadcast churn the chain already consumed elsewhere
+    funds: fundsOf(reserve, { pkhHex, spendCheck: async (txid, vout) => (await utxoSpendStatus(mc, tracker, txid, vout)) === 'spent' })
   })
   // live-runtime parity: pull-based proof + tx lookups so mined txs get their
   // BUMP attached (tree provenance, carrier admission, covenant refund gates)

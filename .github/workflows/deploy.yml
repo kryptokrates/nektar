@@ -128,7 +128,7 @@ jobs:
             systemctl enable --now nektar-prover
             # restart races the instance lock's 20s heartbeat TTL — stop first,
             # wait for the lock file to free, then start cleanly
-            systemctl stop nektar-http nektar-watch || true
+            sudo -n systemctl stop nektar-http nektar-watch || true
             DATA_DIR=$(grep -oE "^NEKTAR_DATA_DIR=.*" /etc/nektar-http.env 2>/dev/null | cut -d= -f2)
             DATA_DIR=${DATA_DIR:-/opt/nektar/.nektar}
             for i in 1 2 3 4 5 6 7 8; do
@@ -136,7 +136,7 @@ jobs:
               sleep 3
             done
             rm -f "$DATA_DIR/instance.lock"
-            systemctl start nektar-watch nektar-http || {
+            sudo -n systemctl start nektar-watch nektar-http || {
               for s in nektar-http nektar-watch; do
                 echo "=== unit $s ==="
                 cat "/etc/systemd/system/$s.service" || true

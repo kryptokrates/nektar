@@ -77,7 +77,7 @@ jobs:
             # branch pushes deploy master; tag pushes deploy the release tag
             if [ "$REF_TYPE" = "tag" ]; then
               echo "deploying release tag: $DEPLOY_REF"
-              git fetch https://github.com/kryptokrates/nektar.git "tag $DEPLOY_REF"
+              git fetch https://github.com/kryptokrates/nektar.git "refs/tags/$DEPLOY_REF"
             else
               echo "deploying master"
               git fetch https://github.com/kryptokrates/nektar.git master

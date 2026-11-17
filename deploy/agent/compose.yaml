@@ -7,7 +7,9 @@
 name: nektar-agent
 services:
   agent:
-    image: ghcr.io/kryptokrates/nektar:latest
+    # tag is human-readable only — set NEKTAR_IMAGE_DIGEST=sha256:<hex> in .env
+    # to pin the exact image bits (recommended on any box holding real keys)
+    image: ghcr.io/kryptokrates/nektar:${NEKTAR_IMAGE_TAG:-latest}${NEKTAR_IMAGE_DIGEST:+@${NEKTAR_IMAGE_DIGEST}}
     restart: unless-stopped
     ports:
       # HTTP + MCP surface. /v1/lane (peer push), /.well-known/nektar, /v1/pack

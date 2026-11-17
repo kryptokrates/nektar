@@ -7,13 +7,15 @@
 
 name: nektar-bstore
 
+# default tags are human-readable only — set the *_DIGEST envs (sha256:hex)
+# to pin exact image bits; the full BSTORE_*_IMAGE overrides still work.
 x-cli: &cli
-  image: ${BSTORE_IMAGE:-ghcr.io/lightwebinc/bstore:latest}
+  image: ${BSTORE_IMAGE:-ghcr.io/lightwebinc/bstore:latest}${BSTORE_IMAGE_DIGEST:+@${BSTORE_IMAGE_DIGEST}}
 
 services:
   # storage host — carries ls_bstore advertisements, serves lookups
   host:
-    image: ${BSTORE_HOST_IMAGE:-ghcr.io/lightwebinc/bstore-host:latest}
+    image: ${BSTORE_HOST_IMAGE:-ghcr.io/lightwebinc/bstore-host:latest}${BSTORE_HOST_IMAGE_DIGEST:+@${BSTORE_HOST_IMAGE_DIGEST}}
     depends_on:
       db:
         condition: service_healthy
@@ -33,7 +35,7 @@ services:
   # storage provider — the bounty-taker; holds pieces against its terms
   provider:
     <<: *cli
-    image: ${BSTORE_PROVIDER_IMAGE:-ghcr.io/lightwebinc/bstore-provider:latest}
+    image: ${BSTORE_PROVIDER_IMAGE:-ghcr.io/lightwebinc/bstore-provider:latest}${BSTORE_PROVIDER_IMAGE_DIGEST:+@${BSTORE_PROVIDER_IMAGE_DIGEST}}
     depends_on:
       - host
     restart: unless-stopped
@@ -51,7 +53,7 @@ services:
   # these certs sign the private Docker-network name — never public TLS)
   certs:
     <<: *cli
-    image: ${BSTORE_DEVCHAIN_IMAGE:-ghcr.io/lightwebinc/bstore-devchain:latest}
+    image: ${BSTORE_DEVCHAIN_IMAGE:-ghcr.io/lightwebinc/bstore-devchain:latest}${BSTORE_DEVCHAIN_IMAGE_DIGEST:+@${BSTORE_DEVCHAIN_IMAGE_DIGEST}}
     profiles: [setup]
     entrypoint: ['/usr/local/bin/devchain', 'certs', '-dir', '/certs', '-names', 'provider']
     volumes:
@@ -86,7 +88,7 @@ services:
       - certs:/certs:ro
 
   db:
-    image: mysql:8.4
+    image: mysql:8.4@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: overlay

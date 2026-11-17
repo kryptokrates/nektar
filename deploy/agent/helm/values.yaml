@@ -1,6 +1,9 @@
 image:
   repository: ghcr.io/kryptokrates/nektar
   tag: latest
+  # sha256:<hex> — when set, pulls repository@digest and ignores tag.
+  # Recommended on any box holding real keys.
+  digest: ''
   pullPolicy: IfNotPresent
 
 # regtest | testnet | main

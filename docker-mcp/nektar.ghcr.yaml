@@ -1,7 +1,9 @@
 name: nektar
 title: nektar — verifiable agent memory (BSV testnet)
 type: server
-image: ghcr.io/kryptokrates/nektar:latest
+# digest-pinned at release time — the tag is documentation, the digest is
+# what actually pulls. Bump both together when publishing a new image.
+image: ghcr.io/kryptokrates/nektar:latest@sha256:34516320f2e5e5bc3e150f2383b4dfeb731e38fb2c4017047f8bec39f6c9b66d
 longLived: true
 volumes:
   - nektar-data:/data

@@ -23,6 +23,7 @@ jobs:
         env:
           KEY: ${{ secrets.HETZNER_SSH_KEY }}
           HOST: ${{ secrets.HETZNER_HOST }}
+          HOSTKEY: ${{ secrets.HETZNER_HOST_KEY }}
           BUILD_STARK: ${{ inputs.build_stark }}
           DEPLOY_REF: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
@@ -30,11 +31,13 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+          # pinned host key (secrets.HETZNER_HOST_KEY = output of
+          # `ssh-keyscan <host>` taken once over a trusted path) — no TOFU
+          printf '%s\n' "$HOSTKEY" > ~/.ssh/known_hosts
           # the remote script goes over stdin via `bash -s` — a single-quoted
           # argument would split on any stray apostrophe and leak the tail of
           # the script onto the runner (the "units not found" incident)
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" \
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" \
             "DEPLOY_REF='$DEPLOY_REF' REF_TYPE='$REF_TYPE' BUILD_STARK='$BUILD_STARK' bash -s" <<'REMOTE_SCRIPT'
             set -e
             # one-time mamem → nektar migration (idempotent, every step self-guarded)
@@ -181,6 +184,7 @@ jobs:
       - name: verify the public endpoint from outside
         env:
           HOST: ${{ secrets.HETZNER_HOST }}
+          HOSTKEY: ${{ secrets.HETZNER_HOST_KEY }}
           KEY: ${{ secrets.HETZNER_SSH_KEY }}
         # warning-only: the deploy + service-local health check above already
         # proved the units run — a timeout here is the box's public port
@@ -190,12 +194,12 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
-          PORT=$(ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" "grep -oE '^NEKTAR_HTTP_PORT=[0-9]+' /etc/nektar-http.env | cut -d= -f2")
+          printf '%s\n' "$HOSTKEY" > ~/.ssh/known_hosts
+          PORT=$(ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" "grep -oE '^NEKTAR_HTTP_PORT=[0-9]+' /etc/nektar-http.env | cut -d= -f2")
           PORT=${PORT:-8080}
           # the real public surface is Caddy's vhost on 443 — the first site
           # block in the Caddyfile names the domain the app lives behind
-          DOMAIN=$(ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" "grep -m1 -oE '^[a-z0-9.-]+ \{' /etc/caddy/Caddyfile | tr -d ' {'" 2>/dev/null || true)
+          DOMAIN=$(ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" "grep -m1 -oE '^[a-z0-9.-]+ \{' /etc/caddy/Caddyfile | tr -d ' {'" 2>/dev/null || true)
           if [ -n "$DOMAIN" ]; then
             curl -sf -m 10 "https://$DOMAIN/.well-known/nektar" >/dev/null \
               && echo "public OK: https://$DOMAIN/.well-known/nektar" \

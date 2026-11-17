@@ -5,19 +5,26 @@ const AGENTS =
   'mkGWdCoVMNTFMPUGXzTgKmrxCYQGYmPiyH,mtGqhiiZEK9TyhLmhFv1M9xQZoEwuxPbnH,mhuvW4NGyZBbUgbJcXBYi3Xt3Tgta59TDk,n4HaV6Ha3eudFTSRKu3fv1CYVPUWFD6BCH,mhCDX2yzzJNwVnqCgbLfVG9PLuKoiYca7j,n3yjQRAom44eiNbqCXkYGmxCYFVpVZ8Zqc,mmQ1kNVQj7UVYmmXz7KDK4qzs1cmyiyaof,mrMZWw9qXR3yNbPBSRRKpjtbVKgywfzsmY,msVabQTMdb5YowktR9kMyRtZJyDuxGyGv4,mthsxEBA8hgmsfXxxB9mXgVeRznvBc1BJV'.split(
     ','
   )
+// committed WIFs were swept — source keys come from the environment now.
+// NEKTAR_SPLIT_SOURCE_WIF_1 / _2 for the two outpoints below.
+const wifEnv = n => {
+  const w = process.env[`NEKTAR_SPLIT_SOURCE_WIF_${n}`]
+  if (!w) throw new Error(`set NEKTAR_SPLIT_SOURCE_WIF_${n}`)
+  return w
+}
 const SOURCES = [
   {
     txid: 'c0f9050565e06125be9cd222f8e2c0f2f0e59164a2ba1e6d06deeb842f3b9012',
     vout: 0,
     sats: 6503879,
-    wif: 'L2T13mFKAppVNesNMNzVLP98jbbNPqkbvJokPd9EFsg6q52QE6c1',
+    wif: wifEnv(1),
     changeAddr: 'mqjkNt5ScrzwRc1fKnNygUV4hcCmWF2hGW'
   },
   {
     txid: '40f77ac68fc043ecc8756184528224ec897c1e5a43bf4e769913d991409a2d99',
     vout: 0,
     sats: 4612917,
-    wif: 'L3SjXVjncPMrDTNH3669ASJPfUq2PNY3Z4xf2HW5BXwaybpTfadE'
+    wif: wifEnv(2)
   }
 ]
 const PER = 1_000_000,

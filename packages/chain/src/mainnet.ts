@@ -8,6 +8,7 @@ import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
 import { headerPowValid, linksTo } from './headers.js'
+import { indexFor, type ChainIndex } from './indexer.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 import type { StatusHint } from './txfacts.js'
 
@@ -16,7 +17,14 @@ export interface MainnetConfig {
   broadcasterApiKey?: string
   callbackUrl?: string // our public base — the broadcaster pushes tx-status updates here (X-CallbackUrl)
   callbackToken?: string // sent as X-CallbackToken; webhooks carry it as Authorization: Bearer
-  wocUrl?: string // WhatsOnChain base (no trailing slash)
+  /** chain-index base (no trailing slash) — bananablocks /api/v1 is the
+   *  default index on both live nets; kind is guessed from the URL */
+  indexerUrl?: string
+  indexerApiKey?: string
+  indexerKind?: 'banana' | 'woc'
+  /** @deprecated use indexerUrl — honoured as an alias */
+  wocUrl?: string
+  /** @deprecated use indexerApiKey — honoured as an alias */
   wocApiKey?: string
   chaintracksUrl?: string // chaintracks base incl. /v1|/v2 — header source for BUMP verification
   tipCacheMs?: number // currentHeight() cache TTL — heights only grow, so a stale-low answer only delays gates by ≤TTL; NEKTAR_TIP_CACHE_MS overrides (default 3000)
@@ -27,19 +35,27 @@ export interface MainnetConfig {
 /** default BSV Broadcaster instance — the single place the fallback URL
  *  lives (was redeclared at five call sites in mcp/chain). */
 export const DEFAULT_BROADCASTER_URL = 'https://arcade.gorillapool.io'
-export const DEFAULT_WOC_URL = 'https://api.whatsonchain.com/v1/bsv/main'
+/** default chain index — bananablocks /api/v1 on main; testnet configs pass
+ *  indexerUrl: 'https://test.bananablocks.com/api/v1' */
+export const DEFAULT_INDEXER_URL = 'https://bananablocks.com/api/v1'
+/** @deprecated alias kept for external consumers — use DEFAULT_INDEXER_URL */
+export const DEFAULT_WOC_URL = DEFAULT_INDEXER_URL
 
-const def = (c?: MainnetConfig) => ({
-  // BSV Broadcaster (formerly Arcade; the ARC successor) — GorillaPool instance
-  broadcasterUrl: c?.broadcasterUrl ?? DEFAULT_BROADCASTER_URL,
-  callbackUrl: c?.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL'),
-  callbackToken: c?.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'),
-  wocUrl: c?.wocUrl ?? DEFAULT_WOC_URL,
-  fetch: c?.fetchImpl ?? fetch,
-  broadcasterApiKey: c?.broadcasterApiKey,
-  wocApiKey: c?.wocApiKey,
-  tipCacheMs: c?.tipCacheMs ?? Number(nektarEnv('NEKTAR_TIP_CACHE_MS') ?? 3_000)
-})
+const def = (c?: MainnetConfig) => {
+  const indexerUrl = c?.indexerUrl ?? c?.wocUrl ?? DEFAULT_INDEXER_URL
+  return {
+    // BSV Broadcaster (formerly Arcade; the ARC successor) — GorillaPool instance
+    broadcasterUrl: c?.broadcasterUrl ?? DEFAULT_BROADCASTER_URL,
+    callbackUrl: c?.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL'),
+    callbackToken: c?.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'),
+    indexerUrl,
+    index: indexFor({ url: indexerUrl, apiKey: c?.indexerApiKey ?? c?.wocApiKey, kind: c?.indexerKind, fetchImpl: c?.fetchImpl }),
+    fetch: c?.fetchImpl ?? fetch,
+    broadcasterApiKey: c?.broadcasterApiKey,
+    indexerApiKey: c?.indexerApiKey ?? c?.wocApiKey,
+    tipCacheMs: c?.tipCacheMs ?? Number(nektarEnv('NEKTAR_TIP_CACHE_MS') ?? 3_000)
+  }
+}
 
 const req = async (c: ReturnType<typeof def>, url: string, init: RequestInit = {}, ms = 20_000): Promise<Response> => {
   const ctl = new AbortController()
@@ -60,12 +76,12 @@ const j = async (r: Response): Promise<any> => {
 // does not serve, and the sdk Teranode class has no callback support.
 export class BsvBroadcaster implements Broadcaster {
   private cfg
-  private readonly wocFallback: boolean
+  private readonly indexFallback: boolean
   constructor(c?: MainnetConfig) {
     this.cfg = def(c)
-    // WoC cross-check on status reads engages for public-default configs or
-    // an explicit WoC URL — a custom broadcaster alone isn't assumed public-net
-    this.wocFallback = c?.wocUrl !== undefined || c?.broadcasterUrl === undefined || c.broadcasterUrl === DEFAULT_BROADCASTER_URL
+    // index cross-check on status reads engages for public-default configs or
+    // an explicit index URL — a custom broadcaster alone isn't assumed public-net
+    this.indexFallback = c?.indexerUrl !== undefined || c?.wocUrl !== undefined || c?.broadcasterUrl === undefined || c.broadcasterUrl === DEFAULT_BROADCASTER_URL
   }
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
     const { broadcasterUrl, wocUrl } = this.cfg
@@ -96,23 +112,18 @@ export class BsvBroadcaster implements Broadcaster {
       }
       return { status: 'error', description: `broadcaster ${st || `HTTP ${r.status}`}: ${body.reason ?? body.detail ?? body.extraInfo ?? ''}`.trim() }
     } catch (e) {
-      // network error / 5xx → WoC fallback (policy rejections already returned)
-      try {
-        const wh: Record<string, string> = { 'Content-Type': 'application/json' }
-        if (this.cfg.wocApiKey) wh['woc-api-key'] = this.cfg.wocApiKey
-        const wr = await req(this.cfg, `${wocUrl}/tx/raw`, { method: 'POST', headers: wh, body: JSON.stringify({ txhex: tx.toHex() }) })
-        if (!wr.ok) return { status: 'error', description: `WoC HTTP ${wr.status}: ${await wr.text().catch(() => '')}`.slice(0, 200) }
-        return { status: 'success', txid: tx.id('hex') }
-      } catch (we) {
-        return { status: 'error', description: `broadcast failed: broadcaster ${(e as Error).message}; WoC ${(we as Error).message}` }
-      }
+      // network error / 5xx → index broadcast fallback when the dialect has
+      // one (WoC does; bananablocks serves no push path)
+      const r = await this.cfg.index.broadcast?.(tx.toHex()).catch(() => undefined)
+      if (r?.ok === true) return { status: 'success', txid: tx.id('hex') }
+      return { status: 'error', description: `broadcast failed: ${(e as Error).message}${r?.detail !== undefined ? `; index ${r.detail}` : ''}` }
     }
   }
 
   /** the broadcaster's current word for a txid — a HINT, never a verdict:
-   *  routes through the shared observer seam incl. the WoC mined-fallback */
+   *  routes through the shared observer seam incl. the index mined-fallback */
   async statusHint(txid: string): Promise<StatusHint> {
-    return await probeTxStatus(this.cfg, txid, { wocFallback: this.wocFallback })
+    return await probeTxStatus(this.cfg, txid, { indexerFallback: this.indexFallback })
   }
 }
 
@@ -252,7 +263,7 @@ export async function fetchBroadcasterFeeRate(cfg?: MainnetConfig): Promise<numb
 export async function probeTxStatus(
   cfg: MainnetConfig | undefined,
   txid: string,
-  opts?: { wocFallback?: boolean }
+  opts?: { wocFallback?: boolean; indexerFallback?: boolean }
 ): Promise<{ status: string; answered: boolean }> {
   const c = def(cfg)
   let answered = false
@@ -271,18 +282,15 @@ export async function probeTxStatus(
   } catch {
     /* broadcaster undecidable — WoC may still answer mined */
   }
-  const wocOk = opts?.wocFallback ?? (cfg?.wocUrl !== undefined || cfg?.broadcasterUrl === undefined || cfg.broadcasterUrl === DEFAULT_BROADCASTER_URL)
-  if (!wocOk) return { status: '', answered }
+  const indexOk =
+    opts?.indexerFallback ??
+    opts?.wocFallback ??
+    (cfg?.indexerUrl !== undefined || cfg?.wocUrl !== undefined || cfg?.broadcasterUrl === undefined || cfg.broadcasterUrl === DEFAULT_BROADCASTER_URL)
+  if (!indexOk) return { status: '', answered }
   try {
-    const wh: Record<string, string> = {}
-    if (c.wocApiKey) wh['woc-api-key'] = c.wocApiKey
-    const wr = await req(c, `${c.wocUrl}/tx/${txid}`, { headers: wh }, 10_000)
-    if (wr.ok) {
-      const w = (await wr.json().catch(() => undefined)) as { blockheight?: unknown } | undefined
-      return typeof w?.blockheight === 'number' && w.blockheight > 0 ? { status: 'MINED', answered: true } : { status: '', answered: true }
-    }
-    if (wr.status === 404) return { status: '', answered: true }
-    return { status: '', answered } // 429/5xx → leaves answered as it was
+    const w = await c.index.txJson(txid)
+    if (w === undefined) return { status: '', answered } // couldn't-ask / not found per dialect semantics
+    return typeof w.blockHeight === 'number' && w.blockHeight > 0 ? { status: 'MINED', answered: true } : { status: '', answered: true }
   } catch {
     return { status: '', answered }
   }
@@ -293,7 +301,8 @@ export async function probeTxStatus(
  *  Extended Format when the 0000000000ef marker is present). Whatever the
  *  source, the bytes are returned only when they hash to `txid`. */
 export async function fetchRawTx(cfg: MainnetConfig | undefined, txid: string): Promise<Transaction | undefined> {
-  const f = cfg?.fetchImpl ?? fetch
+  const c = def(cfg)
+  const f = c.fetch
   const parse = (hex: string | undefined): Transaction | undefined => {
     if (hex === undefined || hex.length < 20) return undefined
     try {
@@ -304,11 +313,9 @@ export async function fetchRawTx(cfg: MainnetConfig | undefined, txid: string): 
     }
   }
   try {
-    const h: Record<string, string> = {}
-    if (cfg?.wocApiKey !== undefined) h['woc-api-key'] = cfg.wocApiKey
-    const r = await f(`${cfg?.wocUrl ?? DEFAULT_WOC_URL}/tx/${txid}/hex`, { headers: h, signal: AbortSignal.timeout(10_000) })
-    if (r.ok) {
-      const tx = parse((await r.text()).trim())
+    const hex = await c.index.txHex(txid)
+    if (hex !== undefined) {
+      const tx = parse(hex)
       if (tx !== undefined) return tx
     }
   } catch {
@@ -673,19 +680,17 @@ export async function merklePathMainnet(cfg: MainnetConfig | undefined, txid: st
       return null // still pending / rejected upstream
     }
   }
-  // WoC TSC fallback
-  const wh: Record<string, string> = {}
-  if (c.wocApiKey) wh['woc-api-key'] = c.wocApiKey
-  const tr = await req(c, `${c.wocUrl}/tx/hash/${txid}`, { headers: wh })
-  if (!tr.ok) return null
-  const txj = await tr.json()
-  const height = txj.blockheight
-  if (!height || height <= 0) return null
-  const pr = await req(c, `${c.wocUrl}/tx/${txid}/proof/tsc`, { headers: wh })
-  if (!pr.ok) return null
-  const tsc = (await pr.json())[0]
-  if (!tsc) return null
-  return { merklePath: tscToMerklePath(tsc, txid, height), status: 'mined' }
+  // index TSC-proof fallback — the root it claims is still verified against
+  // the witnessed tracker by the caller before the proof is trusted
+  try {
+    const pr = await c.index.proof(txid)
+    if (pr === undefined) return null
+    const p = tscToMerklePath({ index: pr.index, txOrId: pr.txOrId, target: pr.target, nodes: pr.nodes }, txid, pr.blockHeight)
+    if (p === undefined) return null
+    return { merklePath: p, status: 'mined' }
+  } catch {
+    return null
+  }
 }
 
 /** GET with 429/5xx backoff (WoC rate-limits ~3 req/s); throws on a final non-2xx */
@@ -715,10 +720,9 @@ export async function importFundingTx(cfg: MainnetConfig | undefined, ref: strin
   if (!/^[0-9a-fA-F]{64}$/.test(ref))
     throw new Error(`malformed txid — expected 64 hex chars, 'hex:<rawtx>', got "${ref.slice(0, 24)}${ref.length > 24 ? '…' : ''}"`)
   const c = def(cfg)
-  const h: Record<string, string> = {}
-  if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey
-  const r = await getOk(c, `${c.wocUrl}/tx/${ref}/hex`, h)
-  return fundingOutputs(Transaction.fromHex((await r.text()).trim()), pkhHex)
+  const hex = await c.index.txHex(ref)
+  if (hex === undefined) throw new Error(`${ref}: index could not serve the tx`)
+  return fundingOutputs(Transaction.fromHex(hex), pkhHex)
 }
 
 function fundingOutputs(tx: Transaction, pkhHex: string): FundingOut[] {

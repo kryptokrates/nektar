@@ -86,10 +86,12 @@ const mk = async (wif, name, dir) => {
   return { mem, rt, pub, policyHash, logs, name }
 }
 
-const WIFS = {
-  alice: 'cPfqX3j79L1QxVVv77C34Caq2hdRoUA61T5jfFZDGp1syWBNxd37',
-  ben: 'cRJ9mNASGGJ4kTAf2HhN8CjPkbCwJ6xDiWp5DnvL9xveuM9PtuiF'
+const wifEnv = n => {
+  const w = process.env[`NEKTAR_TESTNET_WIF_${n.toUpperCase()}`]
+  if (!w) throw new Error(`set NEKTAR_TESTNET_WIF_${n.toUpperCase()} — committed keys were swept`)
+  return w
 }
+const WIFS = { alice: wifEnv('alice'), ben: wifEnv('ben') }
 
 const dir = mkdtempSync(join(tmpdir(), 'tn-probe2-'))
 const b = await mk('alice', 'alice-b', dir)

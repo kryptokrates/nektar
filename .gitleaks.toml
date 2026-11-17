@@ -8,14 +8,26 @@
 [extend]
 useDefault = true
 
+# WIF private keys — gitleaks' generic rules miss base58. Mainnet: 5/K/L;
+# testnet: 9/c. 51-52 chars total on the base58 alphabet.
+[[rules]]
+id = "bitcoin-wif"
+description = "Bitcoin WIF private key (mainnet or testnet, compressed or not)"
+regex = '''\b[5KL9c][1-9A-HJ-NP-Za-km-z]{50,51}\b'''
+
 [allowlist]
 paths = [
-  '''^\.env''',
-  '''^\.nektar''',
-  '''^\.state''',
-  '''^\.mod''',
-  '''dist-bundle/''',
-  '''tools/groth16-spike/''',
+  '''^\.env$''',
+  '''^\.env\.bak''',
+  '''^\.env\.local''',
+  '''^\.env\.production''',
+  '''^\.env\.development''',
+  '''^\.env\.test''',
+  '''^\.nektar($|/)''',
+  '''^\.state($|/)''',
+  '''^\.mod($|/)''',
+  '''^dist-bundle($|/)''',
+  '''^tools/groth16-spike($|/)''',
 ]
 regexTarget = "line"
 regexes = [

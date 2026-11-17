@@ -12,7 +12,7 @@ import { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS } from '@nektar
 const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
 const WOC = 'https://api.whatsonchain.com/v1/bsv/test'
 const HOSTS = ['http://127.0.0.1:18291', 'http://127.0.0.1:18292']
-const WIF = 'cRJ9mNASGGJ4kTAf2HhN8CjPkbCwJ6xDiWp5DnvL9xveuM9PtuiF' // ben
+const WIF = process.env.NEKTAR_TESTNET_WIF ?? (() => { throw new Error('set NEKTAR_TESTNET_WIF — committed keys were swept') })() // ben
 
 const dir = mkdtempSync(join(tmpdir(), 'tn-probe-'))
 const dataDir = join(dir, 'ben-s')

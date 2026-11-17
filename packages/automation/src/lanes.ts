@@ -149,6 +149,10 @@ export function openLanes(rt: Rt): void {
               // wake the recipient's box watch with the exact query their
               // shim holds — ls_bbox {office,to} is the subscription's shape
               notifyPeer(rec, 'ls_bbox', { office: office ?? lanes.mod.officeFor(), to })
+              // the recipient advertises no shim → shared-infra fallback:
+              // their watcher may be co-hosted on a shim we already poll
+              if (rec?.watch === undefined)
+                for (const base of rt.watchBases) notifyPeer({ watch: base }, 'ls_bbox', { office: office ?? lanes.mod.officeFor(), to })
             } catch (e) {
               log(`automation: box: ${(e as Error).message}`)
               throw e

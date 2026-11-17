@@ -21,12 +21,13 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
-import { PrivateKey, Transaction, P2PKH, SatoshisPerKilobyte, Beef } from '@bsv/sdk'
+import { PrivateKey, Transaction, P2PKH, Beef } from '@bsv/sdk'
 import { TeranodeBroadcaster, TeranodeRPCTracker, utxoStatus, regtestMerkleProof } from '../../../chain/dist/src/regtest.js'
-import { BsvBroadcaster, ChaintracksTracker, WocTracker, merklePathMainnet } from '../../../chain/dist/src/mainnet.js'
+import { BsvBroadcaster, ChaintracksTracker, WocTracker } from '../../../chain/dist/src/mainnet.js'
 import { WitnessedTracker } from '../../../chain/dist/src/headers.js'
 import { readBox } from '../../../bstack/dist/src/index.js'
 import { resolveFinger } from '../../../bstack/dist/src/finger.js'
+import { fundAgentsLive as fundAgentsLiveTestnet } from './testnet-funding.mjs'
 
 const root = resolve(fileURLToPath(new URL('../../../..', import.meta.url)))
 const envFile = join(root, '.env')
@@ -200,6 +201,9 @@ const txLogScan = (async () => {
 // with no block in the path — pass --fresh to provision a new set.
 const AGENTS_DIR = join(root, '.state', 'testnet-agents')
 const REUSE = LIVE && !process.argv.includes('--fresh') && existsSync(join(AGENTS_DIR, 'agent-keys.json'))
+// outpoints our accepted treasury splits consumed — survives AGENTS_DIR
+// wipes, pre-filters the stale listings WoC keeps serving as unspent
+const SPENT_FILE = join(root, '.state', 'testnet-treasury-spends.json')
 // --fault <trigger>:<verb>:<arg> injects a failure mid-deal:
 //   triggers: 'want' (right after the want posts), 'funded' (buyer reaches
 //   awaiting_disclosure — escrow broadcast, before delivery can land)
@@ -292,112 +296,17 @@ async function restoreFault() {
   await docker(['start', hostDowned])
   hostDowned = undefined
 }
-async function fundAgentsLive() {
-  if (REUSE) {
-    const keys = JSON.parse(readFileSync(join(AGENTS_DIR, 'agent-keys.json'), 'utf8'))
-    const passFile = join(AGENTS_DIR, 'agent-pass.json')
-    const pass = existsSync(passFile) ? JSON.parse(readFileSync(passFile, 'utf8')) : {}
-    for (const a of agents) {
-      a.key = PrivateKey.fromWif(keys[a.name])
-      a.dataDir = join(AGENTS_DIR, a.name)
-      a.pass = pass[a.name]
-    }
-    log(`reusing provisioned agents in ${AGENTS_DIR}`)
-    return
-  }
-  rmSync(AGENTS_DIR, { recursive: true, force: true })
-  mkdirSync(AGENTS_DIR, { recursive: true })
-  // WoC lists a fresh unconfirmed output a few seconds before it serves its hex
-  const woc = async (path) => {
-    for (let i = 0; ; i++) {
-      const r = await fetch(`${TESTNET.wocUrl}${path}`, { signal: AbortSignal.timeout(20_000) })
-      if (r.ok) return r
-      if (i >= 8) throw new Error(`woc ${path}: ${r.status}`)
-      await delay(3000)
-    }
-  }
-  const conf = await (await woc(`/address/${treasuryAddr}/unspent`)).json()
-  const unconf = (await (await woc(`/address/${treasuryAddr}/unconfirmed/unspent`)).json()).result ?? []
-  // 150k/agent runway: the lane stock model pre-mints ~8 trees (fee+pad each)
-  // plus the deal's escrow/disclosure/collect — 60k starved the finger publish
-  // below a 5k take. No single treasury UTXO covers it (~297k max), so the
-  // split accumulates top outpoints as inputs until the need is met.
-  const per = 25_000
-  const outs = 6
-  const need = agents.length * per * outs + 10_000
-  for (const a of agents) a.key = PrivateKey.fromRandom()
-  writeFileSync(join(AGENTS_DIR, 'agent-keys.json'), JSON.stringify(Object.fromEntries(agents.map((a) => [a.name, a.key.toWif([0xef])]))), { mode: 0o600 })
-  // an aborted run can leave one of our own prior splits holding the outpoint
-  // WoC still lists — the broadcaster accepts the submit then REJECTS once the
-  // mempool conflict resolves, so settle-watch the status before trusting it
-  // confirmed outpoints first: an unconfirmed input's ancestors must all
-  // resolve at internalize time, and a stale unconfirmed ancestor can be
-  // unservable forever. Unconfirmed candidates are a coverage fallback only.
-  const byValue = (x, y) => y.value - x.value
-  const candidates = [...conf.sort(byValue), ...unconf.sort(byValue)]
-  for (let skip = 0; skip < candidates.length; skip++) {
-    const inputs = []
-    let covered = 0
-    for (const c of candidates.slice(skip)) {
-      inputs.push(c)
-      covered += c.value
-      if (covered >= need) break
-    }
-    if (covered < need) break
-    const split = new Transaction()
-    const parents = []
-    for (const c of inputs) {
-      const parent = Transaction.fromHex((await (await woc(`/tx/${c.tx_hash}/hex`)).text()).trim())
-      // attach the parent's BUMP where it's already mined — a proven parent
-      // anchors the BEEF closure so the wallet's fixpoint never has to walk
-      // (and fetch) deeper ancestry
-      if (parent.merklePath === undefined) {
-        const mp = await merklePathMainnet(TESTNET, c.tx_hash).catch(() => null)
-        if (mp?.merklePath !== undefined) parent.merklePath = mp.merklePath
-      }
-      parents.push(parent)
-      split.addInput({ sourceTransaction: parent, sourceOutputIndex: c.tx_pos, unlockingScriptTemplate: new P2PKH().unlock(treasuryKey) })
-    }
-    for (const a of agents)
-      for (let i = 0; i < outs; i++) split.addOutput({ lockingScript: new P2PKH().lock(a.key.toPublicKey().toAddress([0x6f])), satoshis: per })
-    split.addOutput({ lockingScript: new P2PKH().lock(treasuryAddr), change: true })
-    await split.fee(new SatoshisPerKilobyte(100))
-    await split.sign()
-    const r = await broadcaster.broadcast(split)
-    if (r.status !== 'success') {
-      log(`treasury split refused (${r.description}) — next candidate`)
-      continue
-    }
-    let rejected = ''
-    for (let i = 0; i < 3 && rejected === ''; i++) {
-      await delay(5000)
-      const st = await fetch(`${TESTNET.broadcasterUrl}/tx/${split.id('hex')}`, { signal: AbortSignal.timeout(10_000) })
-        .then((x) => (x.ok ? x.json() : null))
-        .catch(() => null)
-      if (st?.txStatus === 'REJECTED') rejected = st.extraInfo ?? ''
-    }
-    if (rejected !== '') {
-      log(`split ${split.id('hex').slice(0, 12)}… rejected: ${rejected.slice(0, 100)} — next candidate`)
-      continue
-    }
-    // the funding payload must carry its ancestry: a raw multi-input tx
-    // leaves the wallet's internalize with no source tx for each input.
-    // BEEF ships the split + every parent inline, self-contained (same
-    // reason the regtest branch hands beef, not raw hex).
-    const beef = new Beef()
-    beef.mergeTransaction(split)
-    for (const p of parents) beef.mergeTransaction(p)
-    const fundHex = Buffer.from(beef.toBinaryAtomic(split.id('hex'))).toString('hex')
-    for (const a of agents) {
-      a.dataDir = join(AGENTS_DIR, a.name)
-      mkdirSync(a.dataDir, { recursive: true })
-      a.fundHex = fundHex
-    }
-    log(`treasury split ${split.id('hex')} (${split.toBinary().length} bytes, fee ${split.getFee()} sats) → ${agents.length}×${outs}×${per} sats`)
-    return split.id('hex')
-  }
-  throw new Error(`testnet treasury ${treasuryAddr} underfunded or every candidate UTXO contested`)
-}
+const fundAgentsLive = () =>
+  fundAgentsLiveTestnet({
+    agents,
+    reuse: REUSE,
+    agentsDir: AGENTS_DIR,
+    treasury: { addr: treasuryAddr, key: treasuryKey },
+    testnet: TESTNET,
+    broadcaster,
+    spentFile: SPENT_FILE,
+    log
+  })
 async function fundAgents() {
   if (LIVE) return await fundAgentsLive()
   const saved = JSON.parse(readFileSync(TREASURY_FILE, 'utf8'))

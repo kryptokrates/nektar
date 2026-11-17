@@ -204,6 +204,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         payload: { v: 1, kind: 'want', body: sw }
       })
       await trackFanout(r, fanoutIo)
+      // a topic publish has no addressee to resolve — wake the shims we
+      // hold instead: every ls_nektar watcher co-hosted on the same infra
+      // re-polls its wants lanes now, not on the shim's poll cadence
+      for (const base of rt.watchBases) rt.notifyPeer({ watch: base }, 'ls_nektar')
     },
     publishOffer: async (so: SignedOffer) => {
       if (lanes === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')
@@ -221,8 +225,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       })
       await trackFanout(r, fanoutIo)
       // the buyer's watch shim (if it advertises one) gets a wake hint — the
-      // offer publish is only visible to its polls once they re-check anyway
-      if (so.offer.buyerPub !== undefined) rt.notifyPeer(await rt.resolveRecord(so.offer.buyerPub), 'ls_nektar')
+      // offer publish is only visible to its polls once they re-check anyway.
+      // No advertised shim → shared-infra fallback: our own bases may front
+      // their watchers too.
+      const rec = so.offer.buyerPub !== undefined ? await rt.resolveRecord(so.offer.buyerPub) : undefined
+      rt.notifyPeer(rec, 'ls_nektar')
+      if (rec?.watch === undefined) for (const base of rt.watchBases) rt.notifyPeer({ watch: base }, 'ls_nektar')
     },
     send: async (to: string, msg: import('./market.js').MarketMessage) => {
       if (rt.msgs === undefined) throw new Error('no market hosts configured (NEKTAR_MARKET_HOSTS)')

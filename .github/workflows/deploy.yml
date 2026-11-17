@@ -103,8 +103,9 @@ jobs:
             git reset --hard FETCH_HEAD
             pnpm install --frozen-lockfile
             # build only what the services run — the 4GB box OOM-kills full
-            # parallel tsc; contracts/zk/fuzz/e2e are dev-time, not runtime
-            pnpm --filter "@nektar/mcp..." --workspace-concurrency=2 build
+            # parallel tsc; contracts/zk/fuzz/e2e are dev-time, not runtime.
+            # serial: two concurrent tsc trees still peak ~1.6GB under k3s+mysql
+            pnpm --filter "@nektar/mcp..." --workspace-concurrency=1 build
             # host-pair module artifact (compose mounts ../../packages/bstack/bundle)
             pnpm --filter @nektar/bstack bundle
             # managed instance config — repo file is authoritative for the keys

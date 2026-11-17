@@ -94,7 +94,7 @@ test('BsvBroadcaster: 202 terminal status is an error; 400 carries the reason; N
   assert.ok(!(fetchImpl2 as any).calls.some((c: string) => c.includes('whatsonchain.example')), 'terminal 400 must NOT fall back to the index')
 })
 
-test('BsvBroadcaster: 503 twice then 202 → success, index never called; network error → index fallback', async () => {
+test('BsvBroadcaster: 503 twice then 202 → success, index never called; network error is an error, index never called', async () => {
   let n = 0
   const fetchImpl = stubFetchHdrs({
     'bcast.example/tx': () => (++n <= 2 ? { status: 503, body: { detail: 'busy' } } : { status: 202, body: { txStatus: 'RECEIVED' } }),
@@ -104,7 +104,7 @@ test('BsvBroadcaster: 503 twice then 202 → success, index never called; networ
   const res = await b.broadcast(tx())
   assert.equal(res.status, 'success')
   assert.equal((fetchImpl as any).calls.filter((c: any) => c.url === 'http://bcast.example/tx').length, 3, 'two 503 retries then accepted')
-  assert.ok(!(fetchImpl as any).calls.some((c: any) => c.url.includes('whatsonchain.example')), 'WoC index never called')
+  assert.ok(!(fetchImpl as any).calls.some((c: any) => c.url.includes('whatsonchain.example')), 'index never called')
 
   const fetchImpl2: typeof fetch = async (input: any) => {
     if (String(input).includes('whatsonchain.example')) return new Response(JSON.stringify({ txid: 'x' }), { status: 200 })
@@ -112,20 +112,22 @@ test('BsvBroadcaster: 503 twice then 202 → success, index never called; networ
   }
   const b2 = new BsvBroadcaster({ fetchImpl: fetchImpl2, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' })
   const res2 = await b2.broadcast(tx())
-  assert.equal(res2.status, 'success', 'network error → index fallback')
+  assert.equal(res2.status, 'error', 'network error → error, the broadcaster is the only write path')
+  const calls2: string[] = (fetchImpl2 as any).calls ?? []
+  assert.ok(!calls2.some((c) => c.includes('whatsonchain.example')), 'index never called')
 })
 
-test('BsvBroadcaster: 5xx (non-503) falls back to WoC', async () => {
+test('BsvBroadcaster: 5xx (non-503) is an error — the index has no write path', async () => {
   const fetchImpl = stubFetch({
     'bcast.example/tx': { status: 500, raw: 'oops' },
     'whatsonchain.example/tx/raw': { body: 'deadbeef', raw: '"deadbeef"' }
   })
   const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' })
   const res = await b.broadcast(tx())
-  assert.equal(res.status, 'success')
+  assert.equal(res.status, 'error')
   assert.ok(
-    (fetchImpl as any).calls.some((c: string) => c.includes('whatsonchain.example/tx/raw')),
-    'index fallback used'
+    !(fetchImpl as any).calls.some((c: string) => c.includes('whatsonchain.example/tx/raw')),
+    'no index write path exists'
   )
 })
 

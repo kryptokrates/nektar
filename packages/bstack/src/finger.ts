@@ -303,6 +303,11 @@ export async function publishFinger(p: {
   fetchTx: (txid: string) => Promise<Transaction | undefined>
   allowHttp?: boolean
   onSpent?: (tx: Transaction) => void | Promise<void>
+  /** broadcast refused after the ancestor-heal retry — the token is dead:
+   *  its funding input unreserves, its own outputs tombstone. Without this
+   *  the take's reservation leaks for the process lifetime and the next
+   *  cycle finds 'no spendable output' with the file showing free sats. */
+  onDied?: (tx: Transaction) => void | Promise<void>
   now?: () => number
 }): Promise<{ changed: boolean; seq: number; carrierTxid?: string; tokenTxid?: string }> {
   checkFingerBody(p.body, { allowHttp: p.allowHttp })
@@ -490,7 +495,10 @@ export async function publishFinger(p: {
     }
     br = await p.broadcast(tokenTx)
   }
-  if (br.status !== 'success') throw new Error(`publishFinger: token broadcast refused ${JSON.stringify(br).slice(0, 120)}`)
+  if (br.status !== 'success') {
+    if (p.onDied !== undefined) await p.onDied(tokenTx)
+    throw new Error(`publishFinger: token broadcast refused ${JSON.stringify(br).slice(0, 120)}`)
+  }
   if (p.onSpent !== undefined) await p.onSpent(tokenTx)
   await p.state.set({ seq, tokenTxid, tokenBeef: tokenBeefOut, bodyHash: hash, refsHash, witness: Utils.toHex(Array.from(await derived(s, 'witness', seq))) })
   return { changed: true, seq, carrierTxid, tokenTxid }

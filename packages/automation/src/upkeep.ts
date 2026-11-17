@@ -320,7 +320,8 @@ export function openUpkeep(rt: Rt): void {
             fetchTx: (txid) => mem.fetchTx(txid),
             allowHttp: localNet,
             now: cfg.now,
-            onSpent: (tx) => void mem.funds.spent(tx)
+            onSpent: (tx) => void mem.funds.spent(tx),
+            onDied: (tx) => void mem.funds.died(tx)
           })
           if (r.changed) log(`automation: finger seq ${r.seq} ${r.tokenTxid ?? ''}`)
         } catch (e) {

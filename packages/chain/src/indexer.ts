@@ -43,8 +43,7 @@ export interface ChainIndex {
   txHex(txid: string): Promise<string | undefined>
   proof(txid: string): Promise<IndexProof | undefined>
   utxos(address: string): Promise<IndexUtxo[] | undefined>
-  /** push a raw tx — undefined when the index has no broadcast path */
-  broadcast?(rawHex: string): Promise<{ ok: boolean; detail?: string }>
+  /** indexes are read-only — the broadcaster is the only write path */
 }
 
 export type IndexerKind = 'banana' | 'woc'
@@ -250,12 +249,5 @@ export class WocIndex implements ChainIndex {
   async utxos(address: string): Promise<IndexUtxo[] | undefined> {
     const list = await this.get<Array<{ tx_hash?: string; tx_pos?: number; value?: number }>>(`/address/${address}/unspent`)
     return list?.flatMap((u) => (u.tx_hash !== undefined && u.tx_pos !== undefined ? [{ txid: u.tx_hash, vout: u.tx_pos, satoshis: u.value }] : []))
-  }
-  async broadcast(rawHex: string): Promise<{ ok: boolean; detail?: string }> {
-    const r = await this.req('/tx/raw', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ txhex: rawHex }) }).catch(
-      () => ({ ok: false, status: 0 }) as unknown as Response
-    )
-    if (!r.ok) return { ok: false, detail: `HTTP ${r.status}` }
-    return { ok: true }
   }
 }

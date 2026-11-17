@@ -103,7 +103,7 @@ export class BsvBroadcaster implements Broadcaster {
         delay: (i) => 500 * 2 ** i,
         retryIf: (x) => x.status === 503
       })
-      if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`) // → WoC fallback
+      if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`)
       const body = await r.json().catch(() => ({}))
       const st = String(body.txStatus ?? '').toUpperCase()
       if (r.ok && st !== 'REJECTED' && st !== 'DOUBLE_SPEND_ATTEMPTED') {
@@ -111,11 +111,9 @@ export class BsvBroadcaster implements Broadcaster {
       }
       return { status: 'error', description: `broadcaster ${st || `HTTP ${r.status}`}: ${body.reason ?? body.detail ?? body.extraInfo ?? ''}`.trim() }
     } catch (e) {
-      // network error / 5xx → index broadcast fallback when the dialect has
-      // one (WoC does; bananablocks serves no push path)
-      const r = await this.cfg.index.broadcast?.(tx.toHex()).catch(() => undefined)
-      if (r?.ok === true) return { status: 'success', txid: tx.id('hex') }
-      return { status: 'error', description: `broadcast failed: ${(e as Error).message}${r?.detail !== undefined ? `; index ${r.detail}` : ''}` }
+      // the broadcaster is the only write path — a transport failure is an
+      // error answer, never a detour through the index
+      return { status: 'error', description: `broadcast failed: ${(e as Error).message}` }
     }
   }
 

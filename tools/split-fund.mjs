@@ -1,6 +1,7 @@
 import { Transaction, PrivateKey, P2PKH } from '@bsv/sdk'
 
-const WOC = 'https://api.whatsonchain.com/v1/bsv/test'
+const INDEX = 'https://test.bananablocks.com/api/v1'
+const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
 const AGENTS =
   'mkGWdCoVMNTFMPUGXzTgKmrxCYQGYmPiyH,mtGqhiiZEK9TyhLmhFv1M9xQZoEwuxPbnH,mhuvW4NGyZBbUgbJcXBYi3Xt3Tgta59TDk,n4HaV6Ha3eudFTSRKu3fv1CYVPUWFD6BCH,mhCDX2yzzJNwVnqCgbLfVG9PLuKoiYca7j,n3yjQRAom44eiNbqCXkYGmxCYFVpVZ8Zqc,mmQ1kNVQj7UVYmmXz7KDK4qzs1cmyiyaof,mrMZWw9qXR3yNbPBSRRKpjtbVKgywfzsmY,msVabQTMdb5YowktR9kMyRtZJyDuxGyGv4,mthsxEBA8hgmsfXxxB9mXgVeRznvBc1BJV'.split(
     ','
@@ -32,7 +33,7 @@ const PER = 1_000_000,
 
 const tx = new Transaction()
 for (const s of SOURCES) {
-  const raw = await (await fetch(`${WOC}/tx/${s.txid}/hex`)).text()
+  const raw = await (await fetch(`${INDEX}/tx/${s.txid}/hex`)).text()
   tx.addInput({
     sourceTXID: s.txid,
     sourceOutputIndex: s.vout,
@@ -46,7 +47,8 @@ const total = SOURCES.reduce((t, s) => t + s.sats, 0)
 tx.addOutput({ lockingScript: p2.lock(SOURCES[0].changeAddr), satoshis: total - AGENTS.length * PER - FEE })
 await tx.fee()
 await tx.sign()
-const hex = tx.toHex()
-const r = await fetch(`${WOC}/tx/raw`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ txhex: hex }) })
+// the BSV broadcaster is the only write path — Extended Format so the
+// source parents travel with the spend
+const r = await fetch(`${ARC}/tx`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: Buffer.from(tx.toEF()) })
 console.log('txid:', tx.id('hex'))
 console.log('broadcast:', await r.text())

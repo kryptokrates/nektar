@@ -2,6 +2,7 @@ name: deploy
 on:
   push:
     branches: [master]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       build_stark:
@@ -23,12 +24,14 @@ jobs:
           KEY: ${{ secrets.HETZNER_SSH_KEY }}
           HOST: ${{ secrets.HETZNER_HOST }}
           BUILD_STARK: ${{ inputs.build_stark }}
+          DEPLOY_REF: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" '
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@$HOST" "DEPLOY_REF='$DEPLOY_REF' REF_TYPE='$REF_TYPE'"'
             set -e
             # one-time mamem → nektar migration (idempotent, every step self-guarded)
             for u in /etc/systemd/system/mamem-*.service; do
@@ -71,7 +74,14 @@ jobs:
             done
             nginx -t 2>/dev/null && systemctl reload nginx || true
             cd /opt/nektar
-            git fetch https://github.com/kryptokrates/nektar.git master
+            # branch pushes deploy master; tag pushes deploy the release tag
+            if [ "$REF_TYPE" = "tag" ]; then
+              echo "deploying release tag: $DEPLOY_REF"
+              git fetch https://github.com/kryptokrates/nektar.git "tag $DEPLOY_REF"
+            else
+              echo "deploying master"
+              git fetch https://github.com/kryptokrates/nektar.git master
+            fi
             # the box sometimes carries local commits/dirty work — reset
             # would destroy it silently. Park everything (local commits +
             # dirty tree) on a timestamped backup branch first.

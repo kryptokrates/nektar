@@ -81,17 +81,6 @@ const mkreq = (o: IndexOpts) => {
   }
 }
 
-/** GET with 429/5xx backoff — public indexers rate-limit; throws on a final non-2xx */
-const getOk = async (req: ReturnType<typeof mkreq>, path: string): Promise<Response> => {
-  const r = await withRetry(() => req(path), {
-    attempts: 5,
-    delay: (i) => 800 * 2 ** i,
-    retryIf: (x) => x.status === 429 || x.status >= 500
-  })
-  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`)
-  return r
-}
-
 // --- bananablocks -------------------------------------------------------------
 /** https://{test.}bananablocks.com/api/v1 — the default BSV index. */
 export class BananaIndex implements ChainIndex {
@@ -254,7 +243,7 @@ export class WocIndex implements ChainIndex {
   }
   async broadcast(rawHex: string): Promise<{ ok: boolean; detail?: string }> {
     const r = await this.req('/tx/raw', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ txhex: rawHex }) }).catch(
-      (e) => ({ ok: false, status: 0 }) as unknown as Response
+      () => ({ ok: false, status: 0 }) as unknown as Response
     )
     if (!r.ok) return { ok: false, detail: `HTTP ${r.status}` }
     return { ok: true }

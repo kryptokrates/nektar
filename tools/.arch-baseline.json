@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 7835,
+      "loc": 7836,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1079,
@@ -25,19 +25,19 @@
       "instability": 0.571
     },
     "bstack": {
-      "loc": 4258,
+      "loc": 4252,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
-      "maxFileLoc": 851,
+      "maxFileLoc": 833,
       "maxFileFanout": 13,
       "instability": 0.667
     },
     "chain": {
-      "loc": 5792,
+      "loc": 6027,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 854,
-      "maxFileFanout": 29,
+      "maxFileFanout": 31,
       "instability": 0.091
     },
     "contracts": {
@@ -49,11 +49,11 @@
       "instability": 0.143
     },
     "core": {
-      "loc": 797,
+      "loc": 844,
       "pkgFanout": 0,
       "edges": [],
       "maxFileLoc": 301,
-      "maxFileFanout": 10,
+      "maxFileFanout": 11,
       "instability": 0
     },
     "crypto": {
@@ -73,7 +73,7 @@
       "instability": 0.167
     },
     "e2e": {
-      "loc": 5906,
+      "loc": 5908,
       "pkgFanout": 14,
       "edges": ["anchor", "automaton", "chain", "contracts", "core", "datalog", "graph", "identity", "log", "mcp", "policy", "reasoning", "verify", "zk"],
       "maxFileLoc": 1021,
@@ -89,7 +89,7 @@
       "instability": 0.333
     },
     "identity": {
-      "loc": 1672,
+      "loc": 1677,
       "pkgFanout": 2,
       "edges": ["core", "crypto"],
       "maxFileLoc": 324,
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 9238,
+      "loc": 9454,
       "pkgFanout": 17,
       "edges": [
         "anchor",
@@ -126,12 +126,12 @@
         "verify",
         "zk"
       ],
-      "maxFileLoc": 870,
+      "maxFileLoc": 975,
       "maxFileFanout": 24,
       "instability": 0.944
     },
     "memory": {
-      "loc": 2394,
+      "loc": 2404,
       "pkgFanout": 14,
       "edges": [
         "anchor",
@@ -149,7 +149,7 @@
         "store",
         "verify"
       ],
-      "maxFileLoc": 467,
+      "maxFileLoc": 477,
       "maxFileFanout": 12,
       "instability": 0.933
     },
@@ -170,10 +170,10 @@
       "instability": 0.667
     },
     "store": {
-      "loc": 451,
+      "loc": 457,
       "pkgFanout": 1,
       "edges": ["core"],
-      "maxFileLoc": 192,
+      "maxFileLoc": 198,
       "maxFileFanout": 3,
       "instability": 0.25
     },
@@ -216,16 +216,12 @@
       "fanout": 3
     },
     "packages/bstack/src/finger.ts": {
-      "loc": 851,
+      "loc": 833,
       "fanout": 8
     },
     "packages/chain/src/index.ts": {
-      "loc": 72,
-      "fanout": 29
-    },
-    "packages/chain/src/mainnet.ts": {
-      "loc": 812,
-      "fanout": 6
+      "loc": 76,
+      "fanout": 31
     },
     "packages/chain/src/testkit.ts": {
       "loc": 854,
@@ -236,7 +232,7 @@
       "fanout": 6
     },
     "packages/mcp/src/http.ts": {
-      "loc": 870,
+      "loc": 975,
       "fanout": 10
     },
     "packages/mcp/src/memory.ts": {

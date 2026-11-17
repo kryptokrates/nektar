@@ -153,18 +153,6 @@ const mcFor = (): MainnetConfig => ({
   indexerUrl: INDEX
 })
 
-const mkChain = (mc: MainnetConfig): ChainTracker & Broadcaster => {
-  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${mc.broadcasterUrl}/chaintracks/v2`), new IndexTracker(mc))
-  const bcast = new BsvBroadcaster(mc)
-  return {
-    broadcast: (tx: Transaction) => bcast.broadcast(tx),
-    currentHeight: () => tracker.currentHeight(),
-    isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
-    headerAtHeight: (h: number) => tracker.headerAtHeight(h),
-    tipHeight: () => tracker.currentHeight()
-  }
-}
-
 const mkagent = async (
   name: string,
   wifName: 'alice' | 'ben' | 'bob',

@@ -38,8 +38,6 @@ export const DEFAULT_BROADCASTER_URL = 'https://arcade.gorillapool.io'
 /** default chain index — bananablocks /api/v1 on main; testnet configs pass
  *  indexerUrl: 'https://test.bananablocks.com/api/v1' */
 export const DEFAULT_INDEXER_URL = 'https://bananablocks.com/api/v1'
-/** @deprecated alias kept for external consumers — use DEFAULT_INDEXER_URL */
-export const DEFAULT_WOC_URL: string = DEFAULT_INDEXER_URL
 
 const def = (c?: MainnetConfig) => {
   const indexerUrl = c?.indexerUrl ?? c?.wocUrl ?? DEFAULT_INDEXER_URL

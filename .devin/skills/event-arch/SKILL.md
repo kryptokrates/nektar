@@ -40,6 +40,17 @@ architecture, per the BSV stack model:
   on-chain carries the commitment (`hash + url + expiry`), never the
   payload. Anyone holding `{endpoint, bucket, digest}` self-verifies.
 
+## Operating modes
+
+Audit runs **inline** by default — one pass over the scope's event
+surface. It runs as a **swarm** on whole-repo/subsystem runs and
+explicit full audits per
+[references/orchestration.md](references/orchestration.md): inventory
+agents enumerate the surface per slice, one auditor per question family
+(`ev`/`fab`/`spv`) walks the merged inventory, and fresh verifiers
+challenge every BLOCKER and every absence claim. Design mode never
+delegates — it is pre-writing reflection, not a review.
+
 ## Audit mode — process
 
 ### 1. Scope
@@ -49,7 +60,9 @@ or default → in-flight diff + untracked `packages/*/src`.
 
 ### 2. Inventory the event surface
 
-List every wait/sleep/poll/subscription/outbox-row/fetch-loop the scope
+In swarm mode this inventory is produced by delegated agents per slice
+(orchestration.md stage 1) and merged by the parent. Inline mode: list
+every wait/sleep/poll/subscription/outbox-row/fetch-loop the scope
 touches. For each, classify:
 
 - **What is it waiting on?** (chain event, host recovery, counterparty
@@ -63,7 +76,9 @@ touches. For each, classify:
 
 ### 3. Walk the principle tables
 
-Load [references/principles.md](references/principles.md) always; load
+In swarm mode each question family (`ev`, `fab`, `spv`) is a delegated
+auditor walking the merged inventory (orchestration.md stage 2). Inline
+mode: load [references/principles.md](references/principles.md) always; load
 [references/fabric.md](references/fabric.md) when the scope touches
 bstack/transport/delivery (lanes, finger, tree, journal, market-wire,
 watch-shim, host fanout, artifact publish/fetch); load

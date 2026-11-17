@@ -55,6 +55,19 @@ differs only in `buildTimestamp`, say so and skip it — that is normal churn.
 
 `--relaxed` skips NITs and only reports MINORs as patterns (3+ instances).
 
+## Operating modes
+
+- **Inline** (default) — run all four passes yourself, in order. Right
+  shape for most diffs.
+- **Swarm** — deep/comprehensive requests, diffs spanning ≥3 packages or
+  >~400 changed lines, or money-path changes that deserve independent
+  eyes per pass. Fan out per
+  [references/orchestration.md](references/orchestration.md): one
+  reviewer per pass (split further by file group on large diffs), a
+  `file × pass` coverage matrix so nothing is silently unreviewed, and a
+  fresh verifier that tries to disprove every BLOCKER/MAJOR candidate —
+  reviewers never verify their own findings.
+
 ## Process
 
 1. Gather the diff (above). Identify every touched package.
@@ -62,7 +75,8 @@ differs only in `buildTimestamp`, say so and skip it — that is normal churn.
    — money paths usually trigger all of them.
 3. Run the review in four passes, in this order (Google's three-layer model
    plus nektar's money layer — a beautiful design on broken semantics is
-   still broken):
+   still broken). In swarm mode each pass is a delegated reviewer per
+   orchestration.md — same order, same lenses, independent agents:
    - **Pass 0 — Money & invariants** (`nektar.md`): custody, escrow/payment
      semantics, SpendGuard coverage, envelope bounds, persisted-state compat.
    - **Pass 1 — Correctness**: does it do what it claims? Edge cases, error

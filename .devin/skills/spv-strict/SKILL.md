@@ -33,6 +33,16 @@ check their work, and compute everything else from bytes in hand
 A finding in either half is a defect. Waiting on a block mid-deal is not
 caution; it is a missing proof or missing stock.
 
+## Operating modes
+
+Audits run **inline** by default — a diff's claims and waits fit in one
+pass. They run as a **swarm** on whole-repo runs and explicit full
+audits per [references/orchestration.md](references/orchestration.md):
+two inventory agents map claims and waits in parallel, trust-half and
+latency-half rule-walkers work the merged maps, and a fresh verifier
+challenges every candidate — there is no advisory tier, so every
+finding is worth the check.
+
 ## Process
 
 ### 1. Scope
@@ -42,6 +52,9 @@ untracked `packages/*/src`. A whole-repo run covers `packages/chain`,
 `bstack`, `automation`, `mcp`, `anchor` and `deploy/bstack-sandbox`.
 
 ### 2. Inventory — two lists
+
+In swarm mode these two lists come from parallel inventory agents and
+the rule walk is delegated per half (orchestration.md). Inline mode:
 
 **Claims.** Every place code concludes mined / proven / rejected /
 spent / unspent / final / funded. For each: what object carries the

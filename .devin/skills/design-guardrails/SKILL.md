@@ -23,6 +23,15 @@ has two jobs:
 - **CHECKPOINT** — the same rules applied before/during writing, so the
   audit finds nothing.
 
+Audit mode runs **inline** by default — one pass over the scope. It runs
+as a **swarm** on full-audit requests, `--pkg` audits of packages with
+>~10 src files, or diffs creating more units than one pass can walk
+honestly: fan out per
+[references/orchestration.md](references/orchestration.md) — auditors own
+`unit × {8-question walk, red-flag sweep}` coverage, fresh verifiers
+challenge every BLOCKER/MAJOR candidate, and the parent runs the gates
+itself. Checkpoint mode never delegates.
+
 ## Audit mode — process
 
 ### 1. Scope
@@ -50,7 +59,9 @@ has two jobs:
 
 ### 3. Run the audit pass — per touched module/file
 
-For each new or re-shaped module, export, or boundary, ask:
+In swarm mode this pass is delegated per orchestration.md — each auditor
+owns a cluster of units and answers the same questions. Inline mode:
+for each new or re-shaped module, export, or boundary, ask:
 
 1. **Depth** — is the interface much simpler than what it hides? Would a
    caller do better inlining it? (shallow-module)

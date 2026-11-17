@@ -51,6 +51,18 @@ style nits, not a linter dump.
 - **No feature work.** Deliver analysis + a remediation roadmap. Do not edit
   source unless explicitly asked.
 
+## Operating modes
+
+- **Inline** — a focused question: one package, one failure mode, one
+  metric. Run the process below yourself.
+- **Swarm** — whole-system reviews, explicit "deep/full" requests, or any
+  run where Phases 1–2 would otherwise take one pass over everything.
+  Fan out with [references/orchestration.md](references/orchestration.md):
+  parent frames + measures, delegated hunters own `slice × lens` coverage
+  units, a coverage critic checks for gaps, and fresh verifiers challenge
+  every CRITICAL/HIGH finding. The swarm model exists because one pass is
+  never complete — the coverage matrix, not agent count, is the claim.
+
 ## Process
 
 ### Phase 0 — Frame (5 min, no tools needed beyond reading)
@@ -83,6 +95,12 @@ subscriptions, recovery surface). Capture outputs — they go in the report
 verbatim.
 
 ### Phase 2 — Detect
+
+In swarm mode this phase fans out per
+[references/orchestration.md](references/orchestration.md): hunters take
+`slice × lens` units (Pass A and Pass B below are the lenses), a coverage
+critic runs after the wave, and verification is delegated. Inline mode
+runs both passes yourself.
 
 **Pass A — structural smells.** Apply
 [references/smells.md](references/smells.md): the seven-smell catalog plus

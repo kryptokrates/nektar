@@ -73,7 +73,7 @@
       "instability": 0.167
     },
     "e2e": {
-      "loc": 5900,
+      "loc": 5906,
       "pkgFanout": 14,
       "edges": ["anchor", "automaton", "chain", "contracts", "core", "datalog", "graph", "identity", "log", "mcp", "policy", "reasoning", "verify", "zk"],
       "maxFileLoc": 1021,

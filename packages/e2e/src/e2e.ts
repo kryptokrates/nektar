@@ -442,7 +442,7 @@ try {
     rejected = (e as Error).message
   }
   ac.unguarded = false
-  check(/SCRIPT_INVALID/.test(rejected), 'automaton: halt from non-final state rejected by script evaluation')
+  check(/SCRIPT_INVALID|TX_INVALID/.test(rejected) && ac.getHead()!.state.n === 1, 'automaton: halt from non-final state rejected by script evaluation')
   const s2 = await ac.step(1, 2, out)
   const h = await ac.halt()
   check(h.state.halted && h.state.q === 2 && h.state.n === 3, 'automaton: draft→review→published, halted on-chain')

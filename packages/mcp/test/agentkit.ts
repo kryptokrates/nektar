@@ -3,7 +3,7 @@
 // were knob values only. The testnet suite keeps its own live-custody
 // builder — this is the memory-tier one.
 import { join } from 'node:path'
-import { testFunder, type TestChain } from '@nektar/chain'
+import { testFunder, memoryPort, type TestChain } from '@nektar/chain'
 import { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { Automation, AutomationPolicy, MarketOptions, MarketMessage } from '@nektar/automation'
 import { NektarMemory } from '../src/memory.js'
@@ -82,9 +82,17 @@ export interface TestAgentOpts {
 
 export const testAgent = async (name: string, o: TestAgentOpts): Promise<TestAgent> => {
   const funder = await testFunder(o.funderOutputs ?? 60)
+  // the port's pull answers — every production assembly wires these from the
+  // ChainPort; without proofLookup the memory tier's only proof path is the
+  // events rotation, which freezes once the tip idles (tip-gated ticks)
+  const port = memoryPort(o.chain)
   const mem = new NektarMemory(o.chain, funder, funder.keyPair, {
     batchPolicy: { maxLeaves: 1 },
     modelId: 'test-model-1',
+    proofLookup: port.proofLookup,
+    txLookup: port.txLookup,
+    height: () => port.height(),
+    watchTx: (txid) => o.chain.chainEvents.watch(txid),
     ...(o.objectStore !== undefined ? { objectStore: o.objectStore } : {})
   })
   return await wireAgent(name, mem, o)

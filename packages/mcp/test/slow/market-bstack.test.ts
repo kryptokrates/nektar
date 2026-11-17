@@ -48,7 +48,7 @@ type MkOpts = TestAgentOpts
 // the shared builder's 60-output funder; change recycles, but trees lock
 // outputs for their lifetime
 const mkagent = async (name: string, o: MkOpts): Promise<A> =>
-  testAgent(name, { ...o, now: () => clock, publishFinger: true, policy: { collectMs: COLLECT_MS } })
+  testAgent(name, { ...o, now: () => clock, publishFinger: true, policy: { collectMs: COLLECT_MS, ...o.policy } })
 const sellerize = async (s: A, price: number) => {
   await s.mem.remember('guide', FINDING)
   await s.mem.remember('guide', 'unrelated note about gardening and tomatoes')
@@ -252,7 +252,11 @@ test('bstack C: withheld offer still completes via other host; withheld logged n
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), drop: (txid) => txid === dropTxid })
   try {
-    const b = await mkagent('buyer', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
+    // the withheld notice can only fire while the buyer still polls the offers
+    // lane — early-select fires once minCollectMs elapses with an offer in
+    // hand, so BOTH gates must outlive the dropTxid discovery loop below:
+    // minCollectMs holds selection back, collectMs stays the outer ceiling
+    const b = await mkagent('buyer', { hosts: [h1.url, h2.url], msgs, chain, logs, dir, opts: { minCollectMs: 12_000 }, policy: { collectMs: 15_000 } })
     const s = await mkagent('seller', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 8)
@@ -265,15 +269,15 @@ test('bstack C: withheld offer still completes via other host; withheld logged n
       if (r.items.length > 0) dropTxid = r.items[0].txid
     }
     assert.notEqual(dropTxid, '', 'offer carrier landed on h1')
+    assert.ok(
+      await until(all, chain, async () => logs.some((l) => l.includes('withheld') && l.includes(h2.url)), 40),
+      'withheld notice naming h2 | ' + logs.filter((l) => l.includes('withheld')).join(';')
+    )
     assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = await buyerOp(b)
     assert.equal(bo?.state, 'disclosure_verified')
     const sel = (bo?.data.selected as { key?: string } | undefined)?.key ?? ''
     assert.ok(sel.startsWith(s.pub + ':'), 'dropped offer is the selected one')
-    assert.ok(
-      logs.some((l) => l.includes('withheld') && l.includes(h2.url)),
-      'withheld notice naming h2 | ' + logs.filter((l) => l.includes('withheld')).join(';')
-    )
     for (const r of all) await r.stop()
   } finally {
     await h1.close()
@@ -581,7 +585,12 @@ test('bstack I: tampered accept — txHex of a different transaction → seller 
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
-    assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
+    await drive([b.rt], chain, 2) // flush the want carrier to the hosts
+    // freeze the buyer before the offer exists — otherwise the real accept
+    // can fund + deliver inside the same round 'quoted' lands and the fake
+    // one is ignored (op no longer 'quoted'), which is the race this guards
+    await b.rt.stop()
+    assert.ok(await until([s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
     const op = (await saleOps(s))[0]
     const want = (op.data.want as { want: { wantId: string; pub: string } }).want
     const offer = op.data.offer as { cfg: { price: number | string; refundAfter: number | string; maxFee: number | string } }
@@ -991,13 +1000,20 @@ const escrowScriptFor = async (s: A, buyerPub: string): Promise<string | undefin
 }
 
 // broadcast that lets the escrow onto the chain but reports a transport error
-// — the wallet records submission_unknown and the op escalates to `uncertain`
-const sabotageEscrowBroadcast = (b: A, chain: TestChain, script: string, reject: boolean): { txid: () => string | undefined } => {
+// — the wallet records submission_unknown and the op escalates to `uncertain`.
+// Arm it BEFORE the want is published: under immediate-select the buyer can
+// fund + broadcast the escrow inside the same drive round the seller's
+// 'quoted' first lands, so a hook installed after 'quoted' is observed can
+// already be too late. The covenant script needs the offer, so it is resolved
+// lazily — no escrow can exist before the offer it quotes.
+const sabotageEscrowBroadcast = (b: A, s: A, chain: TestChain, reject: boolean): { txid: () => string | undefined } => {
   let txid: string | undefined
   let armed = true
+  let script: string | undefined
   const orig = b.mem.broadcastTx.bind(b.mem)
   b.mem.broadcastTx = async (tx: import('@bsv/sdk').Transaction) => {
-    const hit = tx.outputs.some((o) => o.lockingScript.toHex() === script)
+    script ??= await escrowScriptFor(s, b.pub)
+    const hit = script !== undefined && tx.outputs.some((o) => o.lockingScript.toHex() === script)
     if (!hit || !armed) return await orig(tx)
     armed = false
     txid = tx.id('hex')
@@ -1037,10 +1053,9 @@ test('bstack P: uncertain + escrow observable — reconcile resumes the deal wit
     s = await mkagent('seller', { hosts: [h1.url], chain, logs, dir })
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
+    const sab = sabotageEscrowBroadcast(b, s, chain, false)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
-    const script = (await escrowScriptFor(s, b.pub))!
-    const sab = sabotageEscrowBroadcast(b, chain, script, false)
     const all = [b.rt, s.rt]
     assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 120), 'no deal | ' + logs.slice(-25).join(' | '))
     assert.ok(sab.txid() !== undefined, 'the sabotaged escrow broadcast happened')
@@ -1083,10 +1098,9 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
     s = await mkagent('seller', { hosts: [h1.url], chain, logs, dir })
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
+    const sab = sabotageEscrowBroadcast(b, s, chain, true)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 80), 'no quote | ' + logs.slice(-20).join(' | '))
-    const script = (await escrowScriptFor(s, b.pub))!
-    const sab = sabotageEscrowBroadcast(b, chain, script, true)
     // the rejected push can reconcile uncertain → funding_failed inside one
     // round — a once-per-round sampler legitimately never observes 'uncertain',
     // so accept either state here; the events below prove the path was taken
@@ -1329,11 +1343,17 @@ test('bstack U: seller loses its database — the sellerNote rebuilds the quoted
     // measure the sealed sellerNote on the wire — must fit the 12 KiB budget.
     // Seller-only rounds: under immediate-select a full drive can run the deal
     // to settlement before the note is even listed, and a settled note acks —
-    // the wipe must happen while the sale is still live.
-    await drive([s.rt], chain, 2)
-    const items = (await readBuyer(s.mem.operatorKey(), [h1.url, h2.url], chain)).items
-    const note = items.find((i) => (i.body as { market?: { type?: string } }).market?.type === 'sellerNote')
-    assert.ok(note, 'sellerNote is listed in the seller inbox')
+    // the wipe must happen while the sale is still live. The note send defers
+    // on a proven bbox slot, so wait for it rather than a fixed round count.
+    const noteOf = async () =>
+      (await readBuyer(s.mem.operatorKey(), [h1.url, h2.url], chain)).items.find(
+        (i) => (i.body as { market?: { type?: string } }).market?.type === 'sellerNote'
+      )
+    assert.ok(
+      await until([s.rt], chain, async () => (await noteOf()) !== undefined, 40),
+      'sellerNote is listed in the seller inbox | ' + logs.slice(-20).join(' | ')
+    )
+    const note = (await noteOf())!
     const { Transaction } = await import('@bsv/sdk')
     const noteTxidDisplay = note.txid.match(/../g)!.reverse().join('')
     let recordBytes = -1
@@ -1659,11 +1679,17 @@ test('bstack Y: a journal batch dropped by every host shows the gap — complete
     const mid = seqs[0]
     dropped.add(await jTxid(dir, 'seller', mid))
     const bj = await dealJournal(b, bo.operationId)
-    const cp = bj.counterparty as { complete: boolean; entries: unknown[]; gaps: Array<{ from: number; to: number }> }
+    const cp = bj.counterparty as {
+      complete: boolean
+      entries: Array<{ seq: number }>
+      gaps: Array<{ from: number; to: number }>
+    }
     assert.equal(cp.complete, false, 'the withheld batch breaks completeness | ' + JSON.stringify(bj).slice(0, 400))
+    // the withheld seq sits below the surviving window's lo — `gaps` only
+    // lists interior holes, so the honest check is that seq `mid` isn't served
     assert.ok(
-      cp.entries.length === 0 || cp.gaps.some((g) => g.from <= mid && g.to >= mid),
-      `gap at seq ${mid} listed (or entries emptied) | ` + JSON.stringify(cp.gaps)
+      cp.entries.every((e) => e.seq !== mid),
+      `seq ${mid} not served | entries=[${cp.entries.map((e) => e.seq).join(',')}] gaps=${JSON.stringify(cp.gaps)}`
     )
   } finally {
     try {
@@ -1763,13 +1789,28 @@ test('bstack AA: disjoint host sets — records find each other over the shared 
     s = await mkagent('seller', { hosts: [h2.url, h3.url], chain, logs, dir })
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
-    // both agents have published their own record: buyer on {H1,H2}, seller on {H2,H3}
+    // both agents have published their own record: buyer on {H1,H2}, seller on
+    // {H2,H3}. The fan-out can straggle (missed-leg repair / resubmit passes),
+    // so wait for the records to converge on the shared host.
     const { resolveFinger } = await import('@nektar/bstack')
     const tracker = trackerFor(chain)
-    const brec = await resolveFinger({ hosts: [h2.url], pub: b.pub, tracker, allowHttp: true })
-    assert.ok(brec !== undefined && brec.body.hosts.includes(h1.url), 'buyer record resolvable on the shared host')
-    const srec = await resolveFinger({ hosts: [h2.url], pub: s.pub, tracker, allowHttp: true })
-    assert.ok(srec !== undefined && srec.body.hosts.includes(h3.url), 'seller record resolvable on the shared host')
+    let brec: Awaited<ReturnType<typeof resolveFinger>> | undefined
+    let srec: Awaited<ReturnType<typeof resolveFinger>> | undefined
+    assert.ok(
+      await until(
+        [b.rt, s.rt],
+        chain,
+        async () => {
+          brec = await resolveFinger({ hosts: [h2.url], pub: b.pub, tracker, allowHttp: true })
+          srec = await resolveFinger({ hosts: [h2.url], pub: s.pub, tracker, allowHttp: true })
+          return brec !== undefined && srec !== undefined
+        },
+        60
+      ),
+      'records resolvable on the shared host | ' + logs.slice(-15).join(' | ')
+    )
+    assert.ok(brec!.body.hosts.includes(h1.url), 'buyer record resolvable on the shared host')
+    assert.ok(srec!.body.hosts.includes(h3.url), 'seller record resolvable on the shared host')
 
     const w = await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => (await buyerOp(b))?.state === 'disclosure_verified' && COMPLETE.has((await saleOps(s))[0]?.state ?? '')

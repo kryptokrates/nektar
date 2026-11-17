@@ -368,7 +368,7 @@ flowchart LR
 | 020 | ZK membership as Wright §13 specifies: **one** double-SHA-256 tree (the anchored R_n), proven with a transparent **ZK-STARK** (RISC Zero 3.0.3 succinct receipt; Fiat–Shamir, FRI, no trusted setup), verified off-chain (WASM) against the SPV-verified anchor with a pinned program ID and a verifier-issued single-use queryId. See below. |
 | 021 | One repair substrate: every multi-host fan-out leg produces per-host repair rows via `trackFanout`/`queueRepairs` keyed on the journaled carrier — envelopes, artifacts, log batches, mined-log publishes and finger sub-records alike. See below.                                                                                            |
 | 022 | `@nektar/bstack` surface grouped by consumer: the wire contract a counterparty implements (envelopes, codecs, queries), the delivery plane that runs it (lanes, trees, hosts, journal), and the sandbox-host module — named exports, no star surface. See below.                                                                              |
-| 023 | The memory domain gets a package boundary (`@nektar/memory`) once its internal layer chain is settled — deferred until the subtree's dependency on `mcp` ops modules is severed or moved with it. See below.                                                                                                                                  |
+| 023 | The memory domain sits behind a package boundary (`@nektar/memory`): the layer chain and ops port interfaces live in the package; the concrete `*Ops` impls and composition stay in `mcp`. See below.                                                                                                                                         |
 
 ### ADR-020 — hash-based STARK over the anchored SHA-256 tree
 
@@ -425,6 +425,6 @@ flowchart LR
 
 **Context.** `@nektar/mcp` concentrated three subsystems — the memory domain (`memory/` + the `*ops` modules it wires, ≈5k LOC), the protocol surface (`server`/`http`/`dispatch`), and runtime assembly — carrying ~40% of all churn with the widest fan-out in the repo. The god-file is already gone (`memory.ts` 1976→315-line facade over a layer chain); the remaining hazard is that the most-changed package is also the widest blast-radius.
 
-**Decision.** Extract `@nektar/memory` once the `memory/` subtree's 18 imports of `mcp`-root ops modules are resolved — either the ops move with the domain (the honest read: they _are_ the domain) or a stable ops seam is defined first. Extracting before that boundary exists moves files, not coupling.
+**Decision.** `@nektar/memory` is the domain boundary — executed. The seam resolved the second way: the ops port interfaces moved with the domain (`ports.ts`) while the concrete `*Ops` impls stayed in `mcp`, wired at the composition root (`mcp/src/memory.ts`). The subtree's `mcp`-root imports went to zero, so the extraction moved coupling, not just files.
 
-**Consequences.** When executed: `mcp` drops ≈5k LOC and the memory model becomes importable without the app tier; until then the layer chain keeps the internal boundary honest and `check:arch` tracks the residual.
+**Consequences.** `mcp` sheds the layer chain (11239→9138 LOC; `@nektar/memory` enters at 2394) and the memory model is importable without the app tier; `check:arch` carries the new package's edges and `mcp`'s residual is the composition root plus the concrete `*Ops` impls, not domain coupling.

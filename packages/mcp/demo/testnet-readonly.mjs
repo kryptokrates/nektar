@@ -1,32 +1,30 @@
-// Read-only testnet smoke: Arcade policy fee, WoC tip, header check, and a
-// real merkle path for a recent coinbase txid verified against testnet
-// headers. NEVER broadcasts — GETs only.
-import { fetchBroadcasterFeeRate, WocTracker, merklePathMainnet } from '@nektar/chain'
+// Read-only testnet smoke: Arcade policy fee, bananablocks tip, header check,
+// and a real merkle path for a txid passed as argv[2] verified against
+// testnet headers. NEVER broadcasts — GETs only.
+import { fetchBroadcasterFeeRate, IndexTracker, merklePathMainnet } from '@nektar/chain'
 
 const cfg = {
   broadcasterUrl: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech',
-  wocUrl: 'https://api.whatsonchain.com/v1/bsv/test'
+  indexerUrl: 'https://test.bananablocks.com/api/v1'
 }
 
 const fee = await fetchBroadcasterFeeRate(cfg)
 console.log(`Arcade testnet policy miningFee → ${fee} sat/kB`)
 
-const tracker = new WocTracker(cfg)
+const tracker = new IndexTracker(cfg)
 const tip = await tracker.currentHeight()
-console.log(`WoC testnet tip height: ${tip}`)
+console.log(`index testnet tip height: ${tip}`)
 const h = await tracker.headerAtHeight(tip - 1)
 console.log(
   `header @${tip - 1}: hash=${h?.hash?.slice(0, 20)}… merkleRoot=${h?.merkleRoot?.slice(0, 20)}… time=${new Date((h?.time ?? 0) * 1000).toISOString()}`
 )
 console.log(`isValidRootForHeight(own root): ${await tracker.isValidRootForHeight(h.merkleRoot, tip - 1)}`)
 
-// a recent coinbase txid: WoC /block/height → first txid in the block
-const block = await (await fetch(`${cfg.wocUrl}/block/height/${tip - 1}`)).json()
-const coinbaseTxid = block.tx?.[0]
-console.log(`recent coinbase txid: ${coinbaseTxid}`)
-const mp = coinbaseTxid ? await merklePathMainnet(cfg, coinbaseTxid) : null
+// bananablocks serves no block→txids list; pass a txid to prove the path
+const txid = process.argv[2]
+const mp = txid ? await merklePathMainnet(cfg, txid) : null
 if (mp) {
-  console.log(`merklePath: height=${mp.merklePath.blockHeight} status=${mp.status} verify=${mp.merklePath.verify(coinbaseTxid, tracker) ? 'PASS' : 'FAIL'}`)
+  console.log(`merklePath: height=${mp.merklePath.blockHeight} status=${mp.status} verify=${mp.merklePath.verify(txid, tracker) ? 'PASS' : 'FAIL'}`)
 } else {
-  console.log('merklePathMainnet: no path (tx may not be mined yet)')
+  console.log('no txid arg — skipping merkle-path check')
 }

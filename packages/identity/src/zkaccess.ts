@@ -206,6 +206,11 @@ export function verifyAccess(
   if (opts.trustedAuthorities && !opts.trustedAuthorities.includes(c.pub)) return false
   if (opts.holder !== undefined && opts.holder !== c.holder) return false
   if (!verifyClearanceSig(c)) return false
+  // requiredLevel is caller-supplied and only enters the math reduced mod N —
+  // a claim of N (or ℓ+kN) proves C unshifted yet reads back unreduced, so a
+  // level-0 holder could claim an astronomical level. The level domain is a
+  // small int (NEKTAR_MAX_LEVEL, default 3) — bound it well under N.
+  if (requiredLevel < 0n || requiredLevel > 0xffffffffn) return false
   const Cp = PublicKey.fromString(c.hex) as any
   const C = new Point(Cp.x, Cp.y)
   // the claim is about C·g^(−ℓ_j) — the commitment to (ℓ−ℓ_j)

@@ -306,7 +306,7 @@ export function openLanes(rt: Rt): void {
               // junk with no matching sale is released once it is old
               if (p.msg?.type === 'accept' && typeof (p.msg as { offerId?: unknown }).offerId === 'string') {
                 const offerId = (p.msg as { offerId: string }).offerId
-                if (!(await rt.engine.noteSettled(offerId, 'seller')) && ((await rt.engine.hasSale(offerId)) || Date.now() / 1000 - p.created < 600)) {
+                if (!(await rt.engine.noteSettled(offerId, 'seller')) && ((await rt.engine.hasSale(offerId)) || Math.max(0, Date.now() / 1000 - p.created) < 600)) {
                   held.push(p)
                   continue
                 }
@@ -317,7 +317,7 @@ export function openLanes(rt: Rt): void {
               // is released once it is older than ten minutes
               if (p.msg?.type === 'delivered' && typeof (p.msg as { wantId?: unknown }).wantId === 'string') {
                 const wantId = (p.msg as { wantId: string }).wantId
-                if (!(await rt.engine.noteSettled(wantId)) && ((await rt.engine.hasPurchase(wantId)) || Date.now() / 1000 - p.created < 600)) {
+                if (!(await rt.engine.noteSettled(wantId)) && ((await rt.engine.hasPurchase(wantId)) || Math.max(0, Date.now() / 1000 - p.created) < 600)) {
                   held.push(p)
                   continue
                 }

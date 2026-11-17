@@ -115,6 +115,10 @@ export class BananaIndex implements ChainIndex {
       `/block/${height}`
     )
     if (b?.hash === undefined) return undefined
+    // a just-sealed tip is served with prev_hash:"" until the link is
+    // backfilled — an unusable parent must miss, never poison the linkage
+    // walk (an absent/empty prev_hash is "not yet indexed", not "reorg")
+    if (height > 0 && !/^[0-9a-f]{64}$/i.test(b.prev_hash ?? '')) return undefined
     return {
       height,
       hash: b.hash,

@@ -22,14 +22,17 @@ import { createRequire } from 'node:module'
 import { Beef, Hash, MerklePath, PrivateKey, Transaction, Utils, type ChainTracker } from '@bsv/sdk'
 import { Services, Setup, StorageKnex, Wallet, WalletStorageManager, randomBytesHex, sdk } from '@bsv/wallet-toolbox'
 import {
+  DEFAULT_INDEXER_URL,
   TeranodeRPCTracker,
   headerPowValid,
+  indexFor,
   merklePathFor,
   merklePathAtHeight,
   merklePathMainnet,
   regtestMerkleProof,
   utxoStatus,
   type BroadcastResult,
+  type ChainIndex,
   type Funder,
   type FundingOut,
   type MainnetConfig,
@@ -386,16 +389,15 @@ export async function fundToolbox(
 
 // ── live-net (testnet/main) ──────────────────────────────────────────────────
 
-interface WocHeader {
-  hash: string
-  height: number
-  version: number
-  previousblockhash?: string
-  merkleroot: string
-  time: number
-  bits: string
-  nonce: number
-}
+/** the chain-index dialect for this config — bananablocks by default;
+ *  normalization + per-dialect pacing live in @nektar/chain's indexer */
+const indexOf = (mc: Pick<MainnetConfig, 'indexerUrl' | 'indexerApiKey' | 'indexerKind' | 'wocUrl' | 'wocApiKey' | 'fetchImpl'>): ChainIndex =>
+  indexFor({
+    url: mc.indexerUrl ?? mc.wocUrl ?? DEFAULT_INDEXER_URL,
+    apiKey: mc.indexerApiKey ?? mc.wocApiKey,
+    kind: mc.indexerKind,
+    fetchImpl: mc.fetchImpl
+  })
 
 /** WalletServices over WoC + the configured broadcaster — same endpoints the
  *  rest of the runtime trusts, so the wallet's view inherits our outage and
@@ -413,45 +415,27 @@ export class LiveWalletServices implements sdk.WalletServices {
     this.chain = opts.chain
   }
 
-  private woc(path: string): Promise<Response> {
-    const h: Record<string, string> = {}
-    if (this.opts.mc.wocApiKey) h['woc-api-key'] = this.opts.mc.wocApiKey
-    return (this.opts.mc.fetchImpl ?? fetch)(`${this.opts.mc.wocUrl ?? 'https://api.whatsonchain.com/v1/bsv/main'}${path}`, {
-      headers: h,
-      signal: AbortSignal.timeout(15_000)
-    })
+  private index?: ChainIndex
+  private get idx(): ChainIndex {
+    this.index ??= indexOf(this.opts.mc)
+    return this.index
   }
 
   private async headerAtHeight(height: number): Promise<sdk.BlockHeader> {
-    const r = await this.woc(`/block/height/${height}`)
-    if (!r.ok) throw new Error(`woc header ${height}: ${r.status}`)
-    const j = (await r.json()) as WocHeader | WocHeader[]
-    const h = Array.isArray(j) ? j[0] : j
-    if (h === undefined || h.merkleroot === undefined) throw new Error(`woc header ${height}: empty`)
-    // a served header must prove itself — the indexer is a source, not an
+    const h = await this.idx.header(height)
+    if (h === undefined) throw new Error(`index header ${height}: unavailable`)
+    // a served header must prove itself — the index is a source, not an
     // authority: hash256(serialization) must equal the claimed hash and sit
     // under its own declared difficulty before the SDK sees it
-    if (h.hash !== undefined && h.bits !== undefined && h.previousblockhash !== undefined && h.nonce !== undefined) {
-      const hdr = {
-        version: h.version,
-        prevHash: h.previousblockhash,
-        merkleRoot: h.merkleroot,
-        time: h.time,
-        bits: parseInt(h.bits, 16),
-        nonce: h.nonce,
-        height: h.height,
-        hash: h.hash
-      }
-      if (!headerPowValid(hdr)) throw new Error(`woc header ${height}: fails PoW check`)
-    }
+    if (!headerPowValid(h)) throw new Error(`index header ${height}: fails PoW check`)
     return {
-      version: h.version,
-      previousHash: h.previousblockhash ?? '0'.repeat(64),
-      merkleRoot: h.merkleroot,
+      version: h.version ?? 0, // headerPowValid above already rejected a missing version
+      previousHash: h.prevHash,
+      merkleRoot: h.merkleRoot,
       time: h.time,
-      bits: parseInt(h.bits, 16),
+      bits: h.bits,
       nonce: h.nonce,
-      height: h.height,
+      height: h.height ?? height,
       hash: h.hash
     }
   }
@@ -494,11 +478,11 @@ export class LiveWalletServices implements sdk.WalletServices {
 
   getRawTx = async (txid: string): Promise<sdk.GetRawTxResult> => {
     try {
-      const r = await this.woc(`/tx/${txid}/hex`)
-      if (!r.ok) throw new Error(`${r.status}`)
-      return { txid, name: 'woc-live', rawTx: Array.from(Utils.toArray((await r.text()).trim(), 'hex')) }
+      const hex = await this.idx.txHex(txid)
+      if (hex === undefined) throw new Error('index could not serve the tx')
+      return { txid, name: 'index-live', rawTx: Array.from(Utils.toArray(hex, 'hex')) }
     } catch (e) {
-      return { txid, name: 'woc-live', error: werr(e) }
+      return { txid, name: 'index-live', error: werr(e) }
     }
   }
 
@@ -543,11 +527,9 @@ export class LiveWalletServices implements sdk.WalletServices {
     const results: sdk.StatusForTxidResult[] = []
     for (const txid of txids) {
       try {
-        const r = await this.woc(`/tx/${txid}`)
-        if (!r.ok) throw new Error(`${r.status}`)
-        const j = (await r.json()) as { confirmations?: number }
-        const depth = j.confirmations ?? 0
-        results.push({ txid, depth, status: depth > 0 ? 'mined' : 'known' })
+        const j = await this.idx.txJson(txid)
+        const depth = j?.confirmations ?? 0
+        results.push({ txid, depth, status: j === undefined ? 'unknown' : depth > 0 ? 'mined' : 'known' })
       } catch {
         results.push({ txid, depth: undefined, status: 'unknown' })
       }
@@ -557,9 +539,12 @@ export class LiveWalletServices implements sdk.WalletServices {
 
   isUtxo = async (o: { txid?: string; vout: number }): Promise<boolean> => {
     if (o.txid === undefined) return false
-    const r = await this.woc(`/tx/${o.txid}/oindex/${o.vout}`)
-    if (!r.ok) return false
-    return ((await r.json()) as { spendable?: boolean }).spendable === true
+    // the index's per-output `spent` flag answers the utxo question — a HINT
+    // for the wallet's own bookkeeping, not proof (utxoSpendStatus is the
+    // positive-evidence path when the answer decides money)
+    const j = await this.idx.txJson(o.txid)
+    const out = j?.outputs?.[o.vout]
+    return out !== undefined && out.spent !== true
   }
 
   getUtxoStatus = async (_output: string, _format?: sdk.GetUtxoStatusOutputFormat, outpoint?: string): Promise<sdk.GetUtxoStatusResult> => {

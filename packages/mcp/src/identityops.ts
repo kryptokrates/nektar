@@ -41,6 +41,10 @@ export class IdentityOps {
   verifyClearance(caller: { pubkey: string } | null, zk: ZkClearance | undefined, scope: string): { ok: boolean; reason?: string } {
     if (!zk) return { ok: false, reason: 'no clearance proof' }
     if (!caller) return { ok: false, reason: 'clearance needs a verified caller identity' }
+    // requiredLevel is caller-chosen and only enters the proof math reduced
+    // mod N — reject anything outside the small-int domain before it reaches
+    // provenLevel/Cedar (verifyAccess bounds too; belt & suspenders)
+    if (zk.requiredLevel < 0n || zk.requiredLevel > 0xffffffffn) return { ok: false, reason: 'clearance level outside the domain' }
     const trusted = this.deps.clearanceAuthorities()
     if (!trusted?.length) return { ok: false, reason: 'no trusted clearance authority configured' }
     if (!trusted.includes(zk.commitment.pub)) return { ok: false, reason: 'clearance issued by an untrusted authority' }

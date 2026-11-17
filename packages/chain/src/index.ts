@@ -22,12 +22,14 @@ export { P2PListener } from './p2p.js'
 export type { RegtestConfig } from './regtest.js'
 export {
   BsvBroadcaster,
+  DEFAULT_INDEXER_URL,
   fetchBroadcasterFeeRate,
   fetchRawTx,
   IndexTracker,
   merklePathMainnet,
   tscToMerklePath,
   discoverUtxos,
+  utxoSpendStatus,
   importFundingTx,
   statusStream
 } from './mainnet.js'

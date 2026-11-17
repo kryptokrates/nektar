@@ -26,6 +26,11 @@ export interface BoxRef {
 }
 const ORIGINATOR = 'nektar'
 
+/** spec §8.3 answer window — hosts refuse `created` further ahead than this */
+const ENVELOPE_CREATED_SKEW_S = 3600
+/** recipient-side cap on sender-declared envelope lifetime (7d) */
+const ENVELOPE_MAX_HOLD_S = 7 * 24 * 3600
+
 const toJ = (v: unknown): JValue => {
   if (v === null || typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') return v
   if (Array.isArray(v)) return v.map(toJ)
@@ -295,7 +300,14 @@ export async function openEnvelope(
   const env = decodeEnvelope(new Uint8Array(adm.carrier.record))
   if (env.office !== office) return undefined
   if (Utils.toHex(Array.from(env.to)) !== me) return undefined
-  if (env.expires !== 0 && env.expires <= Math.floor(Date.now() / 1000)) return undefined
+  // spec §8.3 recipient-side window — the codec bounds only `expires > created`
+  // (and 0 = "never"), so a hostile sender can pin an envelope in our queues by
+  // postdating `created` or declaring `expires=0`/year-9999. created beyond the
+  // §8.3 answer window is refused; a missing/far expiry is clamped to MAX_HOLD.
+  const nowS = Math.floor(Date.now() / 1000)
+  if (env.created > nowS + ENVELOPE_CREATED_SKEW_S) return undefined
+  const expires = env.expires === 0 || env.expires > nowS + ENVELOPE_MAX_HOLD_S ? nowS + ENVELOPE_MAX_HOLD_S : env.expires
+  if (expires <= nowS) return undefined
   const c = checkContent(env)
   verifyContentSignature(c, new Uint8Array(env.from))
   // §4.7 check 1 undecryptable → BRC-78 open (stock codec: the cipher bytes
@@ -326,6 +338,6 @@ export async function openEnvelope(
     ...(refs !== undefined ? { refs } : {}),
     created: env.created,
     commitment: Utils.toHex(Array.from(adm.carrier.commitment)),
-    expires: env.expires
+    expires
   }
 }

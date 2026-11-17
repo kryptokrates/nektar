@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Hash } from '@bsv/sdk'
 import { serializeHeader, headerPowValid, linksTo, WitnessedTracker } from '../src/headers.js'
-import { ChaintracksTracker, WocTracker } from '../src/mainnet.js'
+import { ChaintracksTracker, IndexTracker } from '../src/mainnet.js'
 import type { BlockHeader, ChainTracker } from '../src/interfaces.js'
 
 // real mainnet header at height 800000 — the ground-truth PoW vector
@@ -136,7 +136,7 @@ test('reorg: a fresh header that does not link to the cached parent fires onReor
     '/block/height/101': { body: wocJson(h101) },
     '/block/height/102': { body: wocJson(h102) }
   }
-  const t = new WocTracker({ fetchImpl: stubFetch(routes) })
+  const t = new IndexTracker({ fetchImpl: stubFetch(routes), indexerUrl: 'http://whatsonchain' })
   let fired = 0
   let removed: BlockHeader[] = []
   let tip: BlockHeader | undefined

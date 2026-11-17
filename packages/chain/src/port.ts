@@ -21,7 +21,7 @@ import { TeranodeBroadcaster, TeranodeRPCTracker, regtestTx, regtestMerkleProof,
 import { WitnessedTracker } from './headers.js'
 import {
   BsvBroadcaster,
-  WocTracker,
+  IndexTracker,
   ChaintracksTracker,
   merklePathMainnet,
   fetchRawTx,
@@ -93,16 +93,17 @@ export interface PortDeps {
 
 /** TemporalSources over the primary tracker + optional BTC WoC tracker
  *  (read-only). `NEKTAR_BTC_WOC_URL` overrides the BTC endpoint. */
-export function temporalSourcesFor(names: string[], primary: ChainTracker, opts: { wocApiKey?: string; fetchImpl?: typeof fetch } = {}): TemporalSources {
+export function temporalSourcesFor(names: string[], primary: ChainTracker, opts: { indexerApiKey?: string; fetchImpl?: typeof fetch } = {}): TemporalSources {
   const sources: TemporalSource[] = [{ name: 'bsv', tracker: primary }]
   for (const n of names) {
     if (n === 'bsv') continue
     if (n === 'btc')
       sources.push({
         name: 'btc',
-        tracker: new WocTracker({
-          wocUrl: nektarEnv('NEKTAR_BTC_WOC_URL') ?? 'https://api.whatsonchain.com/v1/btc/main',
-          wocApiKey: opts.wocApiKey,
+        tracker: new IndexTracker({
+          // bananablocks is BSV-only — BTC temporal headers still come from WoC
+          indexerUrl: nektarEnv('NEKTAR_BTC_WOC_URL') ?? 'https://api.whatsonchain.com/v1/btc/main',
+          indexerApiKey: opts.indexerApiKey,
           fetchImpl: opts.fetchImpl
         })
       })
@@ -211,7 +212,7 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
       undefined,
       { requirePow }
     ),
-    new WocTracker(mc, { requirePow }),
+    new IndexTracker(mc, { requirePow }),
     {
       strict: nektarEnvFlag('NEKTAR_STRICT_HEADERS'),
       onDisagree: (height, primaryHash, witnessHash) =>

@@ -23,7 +23,9 @@ import { PrivateKey, Transaction } from '@bsv/sdk'
 import {
   ChaintracksTracker,
   WitnessedTracker,
-  WocTracker,
+  IndexTracker,
+  indexFor,
+  utxoSpendStatus,
   BsvBroadcaster,
   merklePathMainnet,
   ReserveFunder,
@@ -52,7 +54,7 @@ let DOMAIN = 'libfoo'
 const HOST_A = 'http://127.0.0.1:18291'
 const HOST_B = 'http://127.0.0.1:18292'
 const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
-const WOC = 'https://api.whatsonchain.com/v1/bsv/test'
+const INDEX = 'https://test.bananablocks.com/api/v1'
 const COLLECT_MS = 15_000 // cold-seller margin measured live: want→offer ≈ 8-9s
 const STATE = fileURLToPath(new URL('../../../../.state/testnet-agents', import.meta.url))
 /** persistent per-WIF suite dirs — lanes.sqlite + reserve.json survive across
@@ -79,42 +81,33 @@ interface A {
 
 /** live-UTXO reconcile: entries the file still shows free but the network
  *  already spent must be marked before any funding call can take them. Only
- *  runs when WoC answers — a failed probe must not zero the reserve.
- *  Absence from the unspent list is NOT proof of spend: the honest mark
- *  needs the parent proven mined (BUMP verified against our headers) plus
- *  one block of depth so a just-sealed block's utxo-set lag can't zero a
- *  live entry. An unproven parent is inconclusive — the entry stays. */
+ *  runs when the index answers — a failed probe must not zero the reserve.
+ *  Absence from the unspent list is NOT proof of spend: an entry is marked
+ *  only when `utxoSpendStatus` proves it — the index's named spender served
+ *  its own bytes, and they name this outpoint as an input (with a witnessed-
+ *  header-checked BUMP when the spender is mined). Unproven = still free. */
 const reconcileReserve = async (fundKey: PrivateKey, reserve: ReserveFunder, mc: MainnetConfig): Promise<void> => {
   const addr = fundKey.toAddress([0x6f]) // testnet pubkey-hash prefix
-  const live = await fetch(`${mc.wocUrl}/address/${addr}/unspent`, { signal: AbortSignal.timeout(15_000) })
-    .then(async (r) => (r.ok ? ((await r.json()) as Array<{ tx_hash: string; tx_pos: number }>) : undefined))
-    .catch(() => undefined)
+  const index = indexFor({ url: mc.indexerUrl ?? '', apiKey: mc.indexerApiKey })
+  const live = await index.utxos(addr).catch(() => undefined)
   if (live === undefined) return
-  const liveSet = new Set(live.map((u) => `${u.tx_hash}:${u.tx_pos}`))
+  const liveSet = new Set(live.map((u) => `${u.txid}:${u.vout}`))
   const known = new Set(((reserve as unknown as { entries: Array<{ txid: string; vout: number }> }).entries ?? []).map((e) => `${e.txid}:${e.vout}`))
-  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${mc.broadcasterUrl}/chaintracks/v2`), new WocTracker(mc))
-  const tip = await tracker.currentHeight().catch(() => 0)
-  /** parent proven mined with ≥1 confirmation → absence really means spent */
-  const minedDeep = async (txid: string): Promise<boolean> => {
-    const r = await merklePathMainnet(mc, txid).catch(() => null)
-    if (!r || tip <= 0 || r.merklePath.blockHeight > tip - 1) return false
-    const root = r.merklePath.computeRoot(txid)
-    return await tracker.isValidRootForHeight(root, r.merklePath.blockHeight)
-  }
+  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${mc.broadcasterUrl}/chaintracks/v2`), new IndexTracker(mc))
   for (const u of [...reserve.utxos]) {
     const txid = u.tx.id('hex')
-    if (!liveSet.has(`${txid}:${u.vout}`) && (await minedDeep(txid))) reserve.markSpent(txid, u.vout)
+    if (liveSet.has(`${txid}:${u.vout}`)) continue
+    if ((await utxoSpendStatus(mc, tracker, txid, u.vout)) === 'spent') reserve.markSpent(txid, u.vout)
   }
   // import live UTXOs the file doesn't know (minted-tree change, settlement
   // income from earlier runs) — fetch each parent tx hex and addOwned it
   for (const u of live) {
-    const op = `${u.tx_hash}:${u.tx_pos}`
+    const op = `${u.txid}:${u.vout}`
     if (known.has(op)) continue
+    const hex = await index.txHex(u.txid).catch(() => undefined)
+    if (hex === undefined) continue
     try {
-      const r = await fetch(`${mc.wocUrl}/tx/${u.tx_hash}/hex`, { signal: AbortSignal.timeout(10_000) })
-      if (!r.ok) continue
-      reserve.addOwned(Transaction.fromHex((await r.text()).trim()), u.tx_pos)
-      await new Promise((r2) => setTimeout(r2, 350)) // WoC ~3 req/s
+      reserve.addOwned(Transaction.fromHex(hex), u.vout)
     } catch {
       /* skip unparseable */
     }
@@ -157,11 +150,11 @@ const warmup = async (agents: A[], logs: string[], ms = 1_500_000): Promise<void
 
 const mcFor = (): MainnetConfig => ({
   broadcasterUrl: ARC,
-  wocUrl: WOC
+  indexerUrl: INDEX
 })
 
 const mkChain = (mc: MainnetConfig): ChainTracker & Broadcaster => {
-  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${mc.broadcasterUrl}/chaintracks/v2`), new WocTracker(mc))
+  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${mc.broadcasterUrl}/chaintracks/v2`), new IndexTracker(mc))
   const bcast = new BsvBroadcaster(mc)
   return {
     broadcast: (tx: Transaction) => bcast.broadcast(tx),
@@ -202,7 +195,7 @@ const mkagent = async (
   // broadcast) must never be handed out — that is exactly how the
   // UTXO_SPENT double-mint wedge happened
   await reconcileReserve(fundKey, reserve, mc)
-  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${ARC}/chaintracks/v2`), new WocTracker(mc))
+  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${ARC}/chaintracks/v2`), new IndexTracker(mc))
   const bcast = new BsvBroadcaster(mc)
   const chain = {
     broadcast: (tx: Transaction) => bcast.broadcast(tx),
@@ -232,7 +225,7 @@ const mkagent = async (
     return (await tracker.isValidRootForHeight(root, r.merklePath.blockHeight)) ? r.merklePath : undefined
   }
   mem.txLookup = async (txid: string) => {
-    const r = await fetch(`${WOC}/tx/${txid}/hex`, { signal: AbortSignal.timeout(10_000) })
+    const r = await fetch(`${INDEX}/tx/${txid}/hex`, { signal: AbortSignal.timeout(10_000) })
     return r.ok ? Transaction.fromHex((await r.text()).trim()) : undefined
   }
   const pub = mem.operatorKey().toPublicKey().toString()
@@ -382,8 +375,8 @@ const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
       if (r.status >= 500) throw new Error(`${u} → http ${r.status}`)
       await r.arrayBuffer() // drain — any HTTP response proves liveness
     }
-    const h = await fetch(`${WOC}/chain/info`, { signal: AbortSignal.timeout(8_000) })
-    if (!h.ok) throw new Error(`woc → http ${h.status}`)
+    const h = await fetch(`${INDEX}/block/tip`, { signal: AbortSignal.timeout(8_000) })
+    if (!h.ok) throw new Error(`index → http ${h.status}`)
     return true
   } catch (e) {
     t.skip(`testnet stack unreachable: ${(e as Error).message}`)

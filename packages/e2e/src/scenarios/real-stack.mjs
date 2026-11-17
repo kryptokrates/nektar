@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { PrivateKey, Transaction, P2PKH, Beef } from '@bsv/sdk'
 import { TeranodeBroadcaster, TeranodeRPCTracker, utxoStatus, regtestMerkleProof } from '../../../chain/dist/src/regtest.js'
-import { BsvBroadcaster, ChaintracksTracker, WocTracker } from '../../../chain/dist/src/mainnet.js'
+import { BsvBroadcaster, ChaintracksTracker, IndexTracker } from '../../../chain/dist/src/mainnet.js'
 import { WitnessedTracker } from '../../../chain/dist/src/headers.js'
 import { readBox } from '../../../bstack/dist/src/index.js'
 import { resolveFinger } from '../../../bstack/dist/src/finger.js'
@@ -55,7 +55,7 @@ const LIVE = NET === 'testnet'
 // shortcut — same callTool engine either way, but the session/protocol path
 // only gets exercised here.
 const MCP_TRANSPORT = process.argv.includes('--mcp')
-const TESTNET = { broadcasterUrl: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', wocUrl: 'https://api.whatsonchain.com/v1/bsv/test' }
+const TESTNET = { broadcasterUrl: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', indexerUrl: 'https://test.bananablocks.com/api/v1' }
 const TESTNET_TREASURY = join(root, '.state', 'testnet-treasury.json')
 if (LIVE && !existsSync(TESTNET_TREASURY)) {
   console.error(`real-stack: ${TESTNET_TREASURY} missing`)
@@ -88,7 +88,7 @@ const rpc = async (method, ...params) => {
 }
 const broadcaster = LIVE ? new BsvBroadcaster(TESTNET) : new TeranodeBroadcaster(cfg.propagationUrl)
 const tracker = LIVE
-  ? new WitnessedTracker(new ChaintracksTracker(TESTNET, `${TESTNET.broadcasterUrl}/chaintracks/v2`), new WocTracker(TESTNET))
+  ? new WitnessedTracker(new ChaintracksTracker(TESTNET, `${TESTNET.broadcasterUrl}/chaintracks/v2`), new IndexTracker(TESTNET))
   : new TeranodeRPCTracker({ ...cfg, rpcUser: E('NEKTAR_RPC_USER'), rpcPass: E('NEKTAR_RPC_PASS') })
 // The testnet run uses the local host pair; the instances are told these are
 // the operator's own hosts (NEKTAR_MARKET_LOCAL_HOSTS=1), so they publish
@@ -202,7 +202,7 @@ const txLogScan = (async () => {
 const AGENTS_DIR = join(root, '.state', 'testnet-agents')
 const REUSE = LIVE && !process.argv.includes('--fresh') && existsSync(join(AGENTS_DIR, 'agent-keys.json'))
 // outpoints our accepted treasury splits consumed — survives AGENTS_DIR
-// wipes, pre-filters the stale listings WoC keeps serving as unspent
+// wipes, pre-filters the stale listings the index keeps serving as unspent
 const SPENT_FILE = join(root, '.state', 'testnet-treasury-spends.json')
 // --fault <trigger>:<verb>:<arg> injects a failure mid-deal:
 //   triggers: 'want' (right after the want posts), 'funded' (buyer reaches
@@ -843,11 +843,11 @@ try {
       if (op.state !== 'refunded') throw new Error(`expected refund — buyer ended in ${op.state}: ${op.lastError ?? ''}`)
       const rtx = op.data?.refundTxid
       if (typeof rtx !== 'string' || rtx.length !== 64) throw new Error(`refunded op carries no refundTxid: ${JSON.stringify(op.data).slice(0, 200)}`)
-      const seen = await fetch(`${TESTNET.wocUrl}/tx/${rtx}`)
+      const seen = await fetch(`${TESTNET.indexerUrl}/tx/${rtx}`)
         .then((r) => r.ok)
         .catch(() => false)
       log(
-        `PASS — refund fired: op refunded, refund tx ${rtx.slice(0, 12)}… broadcast${seen === true ? ' (WoC-visible)' : ' (WoC lookup pending)'} after ${(verifiedMs / 1000).toFixed(0)}s`
+        `PASS — refund fired: op refunded, refund tx ${rtx.slice(0, 12)}… broadcast${seen === true ? ' (index-visible)' : ' (index lookup pending)'} after ${(verifiedMs / 1000).toFixed(0)}s`
       )
       writeFileSync(
         join(dir, 'summary.json'),

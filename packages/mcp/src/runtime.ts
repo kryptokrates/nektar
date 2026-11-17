@@ -112,7 +112,9 @@ export function configFromEnv(env = process.env): RuntimeConfig {
     // testNet = any test network (testnet encoding, test coins, low fee floor)
     const testNet = network !== 'main'
     const urls =
-      network === 'testnet' ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', woc: 'https://api.whatsonchain.com/v1/bsv/test' } : undefined
+      network === 'testnet'
+        ? { broadcaster: 'https://arcade-v2-testnet-us-1.bsvblockchain.tech', indexer: 'https://test.bananablocks.com/api/v1' }
+        : undefined
     cfg.confirmEveryMs = Number(env.NEKTAR_CONFIRM_MS ?? (testNet ? 30_000 : 60_000))
     cfg.main = {
       fundWif: secret('NEKTAR_FUND_WIF'),
@@ -121,8 +123,8 @@ export function configFromEnv(env = process.env): RuntimeConfig {
       // keeps the built-in GorillaPool/WoC defaults when env vars are unset
       broadcasterUrl: env.NEKTAR_BROADCASTER_URL ?? urls?.broadcaster,
       broadcasterApiKey: secret('NEKTAR_BROADCASTER_API_KEY'),
-      wocUrl: env.NEKTAR_WOC_URL ?? urls?.woc,
-      wocApiKey: secret('NEKTAR_WOC_API_KEY'),
+      indexerUrl: env.NEKTAR_INDEXER_URL ?? env.NEKTAR_WOC_URL ?? urls?.indexer,
+      indexerApiKey: secret('NEKTAR_INDEXER_API_KEY') ?? secret('NEKTAR_WOC_API_KEY'),
       chaintracksUrl: env.NEKTAR_CHAINTRACKS_URL,
       // fee floor: 100 sat/kB main (GorillaPool policy), 1 sat/kB test nets
       // (a zero fee rate would produce free-of-fee txs miners may reject)
@@ -315,7 +317,11 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   })
   // §12: header TIMES are the weighted median across temporal sources;
   // single-source (default) is bit-identical to the raw tracker
-  const temporal = temporalSourcesFor(cfg.temporalSources ?? ['bsv'], port.tracker, live ? { wocApiKey: mc?.wocApiKey, fetchImpl: mc?.fetchImpl } : {})
+  const temporal = temporalSourcesFor(
+    cfg.temporalSources ?? ['bsv'],
+    port.tracker,
+    live ? { indexerApiKey: mc?.indexerApiKey, fetchImpl: mc?.fetchImpl } : {}
+  )
   const chain = {
     broadcast: async (tx: Transaction) => {
       // attach parent txs so the broadcaster can send Extended Format (nodes

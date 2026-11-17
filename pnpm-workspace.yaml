@@ -17,5 +17,6 @@ overrides:
 
 allowBuilds:
   sqlite3: true
+  esbuild: true
 
 strictDepBuilds: true

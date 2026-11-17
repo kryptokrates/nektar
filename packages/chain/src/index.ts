@@ -24,13 +24,15 @@ export {
   BsvBroadcaster,
   fetchBroadcasterFeeRate,
   fetchRawTx,
-  WocTracker,
+  IndexTracker,
   merklePathMainnet,
   tscToMerklePath,
   discoverUtxos,
   importFundingTx,
   statusStream
 } from './mainnet.js'
+export { indexFor, guessIndexKind, BananaIndex, WocIndex } from './indexer.js'
+export type { ChainIndex, IndexTx, IndexProof, IndexUtxo, IndexerKind, IndexOpts } from './indexer.js'
 export { txFactsOf, hintSeen, hintRejected, hintSilent, SEEN_HINTS } from './txfacts.js'
 export type { StatusHint, TxFacts, TxFactsDeps, TxVerdict, TxVerdictSource } from './txfacts.js'
 export type { StatusStreamEvent, StatusStreamOpts } from './mainnet.js'

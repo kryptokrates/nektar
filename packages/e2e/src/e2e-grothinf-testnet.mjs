@@ -1,19 +1,19 @@
 // ai_inference Groth16 verifier deploy+spend on PUBLIC BSV testnet.
 // Same txs as e2e-grothinf-regtest.mjs, pointed at the live network:
 //   broadcast:  BSV Broadcaster testnet (NEKTAR_BROADCASTER_URL overridable)
-//   discovery:  WhatsOnChain testnet index (NEKTAR_WOC_URL overridable)
+//   discovery:  bananablocks testnet index (NEKTAR_INDEXER_URL overridable)
 //
 // Funding: NEKTAR_FUND_WIF wins; otherwise the encrypted testnet keystore
 //   (.state/testnet-data/fee.key.json + .state/testnet-passphrase, or
 //   NEKTAR_KEY_PASSPHRASE) — the key must hold a testnet UTXO.
 //
-// Unlike regtest we CANNOT mine: after broadcast we poll WoC for block
+// Unlike regtest we CANNOT mine: after broadcast we poll the index for block
 // inclusion and report honestly — RECEIVED on the testnet mempool is a
 // propagation status; MINED is what makes it real.
 //
 // Run: node packages/e2e/src/e2e-grothinf-testnet.mjs
 import { PrivateKey, Transaction, LockingScript, UnlockingScript, P2PKH } from '@bsv/sdk'
-import { BsvBroadcaster, WocTracker, discoverUtxos, fetchBroadcasterFeeRate } from '@nektar/chain'
+import { BsvBroadcaster, IndexTracker, discoverUtxos, fetchBroadcasterFeeRate } from '@nektar/chain'
 import { readKeyFile } from '../../mcp/dist/src/keystore.js'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -32,12 +32,12 @@ const check = (cond, name) => {
 // --- config ----------------------------------------------------------------
 const cfg = {
   broadcasterUrl: process.env.NEKTAR_BROADCASTER_URL ?? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech',
-  wocUrl: process.env.NEKTAR_WOC_URL ?? 'https://api.whatsonchain.com/v1/bsv/test',
+  indexerUrl: process.env.NEKTAR_INDEXER_URL ?? process.env.NEKTAR_WOC_URL ?? 'https://test.bananablocks.com/api/v1',
   broadcasterApiKey: process.env.NEKTAR_BROADCASTER_API_KEY,
-  wocApiKey: process.env.NEKTAR_WOC_API_KEY
+  indexerApiKey: process.env.NEKTAR_INDEXER_API_KEY ?? process.env.NEKTAR_WOC_API_KEY
 }
 const broadcaster = new BsvBroadcaster(cfg)
-const tracker = new WocTracker(cfg)
+const tracker = new IndexTracker(cfg)
 
 // --- key -------------------------------------------------------------------
 function loadWif() {
@@ -67,11 +67,11 @@ const broadcast = async (tx) => {
   const r = await broadcaster.broadcast(tx)
   return r.status === 'success' ? { ok: true, txid: tx.id('hex') } : { ok: false, error: r.description ?? r.status }
 }
-const wocStatus = async (txid) => {
+const indexStatus = async (txid) => {
   try {
-    const r = await fetch(`${cfg.wocUrl}/tx/hash/${txid}`, { signal: AbortSignal.timeout(15_000) })
+    const r = await fetch(`${cfg.indexerUrl}/tx/${txid}`, { signal: AbortSignal.timeout(15_000) })
     const j = await r.json()
-    return j.blockheight > 0 ? `MINED h${j.blockheight}` : 'in mempool (unconfirmed)'
+    return j.block_height > 0 ? `MINED h${j.block_height}` : 'in mempool (unconfirmed)'
   } catch (e) {
     return `status unknown (${e.message})`
   }
@@ -98,7 +98,7 @@ if (!b1.ok) {
   console.log('network-acceptance test, not a new claim about the script.')
   process.exit(1)
 }
-console.log(`  https://test.whatsonchain.com/tx/${b1.txid}`)
+console.log(`  https://test.bananablocks.com/tx/${b1.txid}`)
 
 // --- tx2: spend it with the inference proof ---------------------------------
 const tx2 = new Transaction()
@@ -107,7 +107,7 @@ tx2.addOutput({ lockingScript: p2pkh(), satoshis: LOCK_SATS - feeFor(unlockHex.l
 console.log(`tx2 size: ${tx2.toHex().length / 2} bytes, fee≈${LOCK_SATS - (LOCK_SATS - feeFor(unlockHex.length / 2 + 400))} sats`)
 const b2 = await broadcast(tx2)
 check(b2.ok, `tx2 (inference Groth16 proof spend) broadcast${b2.ok ? ` ${b2.txid}` : ` — ${b2.error}`}`)
-if (b2.ok) console.log(`  https://test.whatsonchain.com/tx/${b2.txid}`)
+if (b2.ok) console.log(`  https://test.bananablocks.com/tx/${b2.txid}`)
 
 // --- negative: tampered unlock must be rejected ------------------------------
 if (b2.ok) {
@@ -125,13 +125,13 @@ if (b1.ok) {
   const deadline = Date.now() + Number(process.env.NEKTAR_CONFIRM_WAIT_MS ?? 120_000)
   let s1 = 'in mempool (unconfirmed)'
   while (Date.now() < deadline) {
-    s1 = await wocStatus(b1.txid)
+    s1 = await indexStatus(b1.txid)
     if (s1.startsWith('MINED')) break
     await new Promise((r) => setTimeout(r, 15_000))
   }
   console.log(`tx1 status after polling: ${s1}`)
-  if (b2.ok) console.log(`tx2 status: ${await wocStatus(b2.txid)}`)
-  console.log('(testnet blocks land when miners land them — re-run `wocStatus` later or check the links)')
+  if (b2.ok) console.log(`tx2 status: ${await indexStatus(b2.txid)}`)
+  console.log('(testnet blocks land when miners land them — re-run `indexStatus` later or check the links)')
 }
 
 console.log(failures === 0 ? '\nAI-INFERENCE-ON-TESTNET PASS' : `\n${failures} FAILURE(S)`)

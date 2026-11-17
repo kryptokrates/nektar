@@ -16,9 +16,9 @@ import { PrivateKey, Transaction, P2PKH, SatoshisPerKilobyte, Beef } from '@bsv/
 import { merklePathMainnet } from '../../../chain/dist/src/mainnet.js'
 
 // agents: [{name, key?, dataDir?, pass?, fundHex?}] — key/dataDir/fundHex are
-// written back. treasury = { addr, key }. testnet = { wocUrl, broadcasterUrl }.
+// written back. treasury = { addr, key }. testnet = { indexerUrl, broadcasterUrl }.
 // spentFile: JSON map outpoint→splitTxid of inputs OUR accepted splits
-// consumed — survives the agentsDir wipe, filters the stale WoC listings.
+// consumed — survives the agentsDir wipe, filters the stale index listings.
 export async function fundAgentsLive({ agents, reuse, agentsDir, treasury, testnet, broadcaster, spentFile, log }) {
   if (reuse) {
     const keys = JSON.parse(readFileSync(join(agentsDir, 'agent-keys.json'), 'utf8'))
@@ -35,16 +35,18 @@ export async function fundAgentsLive({ agents, reuse, agentsDir, treasury, testn
   rmSync(agentsDir, { recursive: true, force: true })
   mkdirSync(agentsDir, { recursive: true })
   // WoC lists a fresh unconfirmed output a few seconds before it serves its hex
-  const woc = async (path) => {
+  const index = async (path) => {
     for (let i = 0; ; i++) {
-      const r = await fetch(`${testnet.wocUrl}${path}`, { signal: AbortSignal.timeout(20_000) })
+      const r = await fetch(`${testnet.indexerUrl}${path}`, { signal: AbortSignal.timeout(20_000) })
       if (r.ok) return r
-      if (i >= 8) throw new Error(`woc ${path}: ${r.status}`)
+      if (i >= 8) throw new Error(`index ${path}: ${r.status}`)
       await delay(3000)
     }
   }
-  const conf = await (await woc(`/address/${treasury.addr}/unspent`)).json()
-  const unconf = (await (await woc(`/address/${treasury.addr}/unconfirmed/unspent`)).json()).result ?? []
+  // bananablocks /utxos: one list carrying block_height per item — >0 confirmed
+  const items = (await (await index(`/address/${treasury.addr}/utxos?limit=200`)).json()).items ?? []
+  const conf = items.filter((u) => (u.block_height ?? 0) > 0).map((u) => ({ tx_hash: u.txid, tx_pos: u.vout, value: u.value }))
+  const unconf = items.filter((u) => !(u.block_height > 0)).map((u) => ({ tx_hash: u.txid, tx_pos: u.vout, value: u.value }))
   // the first-party ledger: an aborted run can leave one of our own prior
   // splits holding an outpoint WoC still lists — the broadcaster accepts the
   // submit then REJECTS once the mempool conflict resolves. Filtering known-
@@ -80,7 +82,7 @@ export async function fundAgentsLive({ agents, reuse, agentsDir, treasury, testn
     const split = new Transaction()
     const parents = []
     for (const c of inputs) {
-      const parent = Transaction.fromHex((await (await woc(`/tx/${c.tx_hash}/hex`)).text()).trim())
+      const parent = Transaction.fromHex((await (await index(`/tx/${c.tx_hash}/hex`)).text()).trim())
       // attach the parent's BUMP where it's already mined — a proven parent
       // anchors the BEEF closure so the wallet's fixpoint never has to walk
       // (and fetch) deeper ancestry

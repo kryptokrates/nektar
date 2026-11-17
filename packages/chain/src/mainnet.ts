@@ -84,7 +84,7 @@ export class BsvBroadcaster implements Broadcaster {
     this.indexFallback = c?.indexerUrl !== undefined || c?.wocUrl !== undefined || c?.broadcasterUrl === undefined || c.broadcasterUrl === DEFAULT_BROADCASTER_URL
   }
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
-    const { broadcasterUrl, wocUrl } = this.cfg
+    const { broadcasterUrl } = this.cfg
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }
     if (this.cfg.broadcasterApiKey) headers.Authorization = `Bearer ${this.cfg.broadcasterApiKey}`
     // tx-status updates: pushed to our webhook when a callback URL is
@@ -641,7 +641,7 @@ export function tscToMerklePath(
 
 export type PathResult = { merklePath: MerklePath; status: string }
 
-/** BSV Broadcaster /tx (BUMP hex) → MerklePath; else WoC TSC proof → MerklePath. */
+/** BSV Broadcaster /tx (BUMP hex) → MerklePath; else index TSC proof → MerklePath. */
 export async function merklePathMainnet(cfg: MainnetConfig | undefined, txid: string): Promise<PathResult | null> {
   const c = def(cfg)
   const h: Record<string, string> = {}

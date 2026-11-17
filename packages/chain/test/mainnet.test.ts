@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { Transaction, P2PKH, UnlockingScript } from '@bsv/sdk'
 import type { Broadcaster } from '../src/interfaces.js'
 import { sha256 } from '@nektar/core'
-import { BsvBroadcaster, fetchBroadcasterFeeRate, WocTracker, tscToMerklePath, merklePathMainnet, discoverUtxos, probeTxStatus } from '../src/mainnet.js'
+import { BsvBroadcaster, fetchBroadcasterFeeRate, IndexTracker, tscToMerklePath, merklePathMainnet, discoverUtxos, probeTxStatus } from '../src/mainnet.js'
 import { SpendGuard } from '../src/spendguard.js'
 import { buildBump } from '../src/bump.js'
 import { mkdtempSync } from 'node:fs'
@@ -72,60 +72,60 @@ test('BsvBroadcaster: posts /tx with callback headers; 202 RECEIVED → success'
 test('BsvBroadcaster: 202 terminal status is an error; 400 carries the reason; NO WoC fallback', async () => {
   const fetchImpl = stubFetch({
     'bcast.example/tx': { status: 202, body: { txStatus: 'DOUBLE_SPEND_ATTEMPTED' } },
-    'woc.example/tx/raw': { body: { txid: 'x' } }
+    'whatsonchain.example/tx/raw': { body: { txid: 'x' } }
   })
-  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' })
+  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' })
   const res = await b.broadcast(tx())
   assert.equal(res.status, 'error')
   assert.match(res.description!, /DOUBLE_SPEND_ATTEMPTED/)
-  assert.ok(!(fetchImpl as any).calls.some((c: string) => c.includes('woc.example')), 'terminal status must NOT fall back')
+  assert.ok(!(fetchImpl as any).calls.some((c: string) => c.includes('whatsonchain.example')), 'terminal status must NOT fall back to the index')
 
   const fetchImpl2 = stubFetch({
     'bcast.example/tx': {
       status: 400,
       body: { error: 'ERR_BAD_FEE', reason: 'fee too low', txid: 'aa', status: 400, title: 'bad', detail: 'fee below minimum', type: 'broadcaster' }
     },
-    'woc.example/tx/raw': { body: { txid: 'x' } }
+    'whatsonchain.example/tx/raw': { body: { txid: 'x' } }
   })
-  const b2 = new BsvBroadcaster({ fetchImpl: fetchImpl2, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' })
+  const b2 = new BsvBroadcaster({ fetchImpl: fetchImpl2, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' })
   const res2 = await b2.broadcast(tx())
   assert.equal(res2.status, 'error')
   assert.match(res2.description!, /fee too low/)
-  assert.ok(!(fetchImpl2 as any).calls.some((c: string) => c.includes('woc.example')), 'terminal 400 must NOT fall back')
+  assert.ok(!(fetchImpl2 as any).calls.some((c: string) => c.includes('whatsonchain.example')), 'terminal 400 must NOT fall back to the index')
 })
 
-test('BsvBroadcaster: 503 twice then 202 → success, WoC never called; network error → WoC fallback', async () => {
+test('BsvBroadcaster: 503 twice then 202 → success, index never called; network error → index fallback', async () => {
   let n = 0
   const fetchImpl = stubFetchHdrs({
     'bcast.example/tx': () => (++n <= 2 ? { status: 503, body: { detail: 'busy' } } : { status: 202, body: { txStatus: 'RECEIVED' } }),
-    'woc.example/tx/raw': { body: { txid: 'x' } }
+    'whatsonchain.example/tx/raw': { body: { txid: 'x' } }
   })
-  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' })
+  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' })
   const res = await b.broadcast(tx())
   assert.equal(res.status, 'success')
   assert.equal((fetchImpl as any).calls.filter((c: any) => c.url === 'http://bcast.example/tx').length, 3, 'two 503 retries then accepted')
-  assert.ok(!(fetchImpl as any).calls.some((c: any) => c.url.includes('woc.example')), 'WoC never called')
+  assert.ok(!(fetchImpl as any).calls.some((c: any) => c.url.includes('whatsonchain.example')), 'WoC index never called')
 
   const fetchImpl2: typeof fetch = async (input: any) => {
-    if (String(input).includes('woc.example')) return new Response(JSON.stringify({ txid: 'x' }), { status: 200 })
+    if (String(input).includes('whatsonchain.example')) return new Response(JSON.stringify({ txid: 'x' }), { status: 200 })
     throw new Error('ECONNREFUSED')
   }
-  const b2 = new BsvBroadcaster({ fetchImpl: fetchImpl2, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' })
+  const b2 = new BsvBroadcaster({ fetchImpl: fetchImpl2, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' })
   const res2 = await b2.broadcast(tx())
-  assert.equal(res2.status, 'success', 'network error → WoC fallback')
+  assert.equal(res2.status, 'success', 'network error → index fallback')
 })
 
 test('BsvBroadcaster: 5xx (non-503) falls back to WoC', async () => {
   const fetchImpl = stubFetch({
     'bcast.example/tx': { status: 500, raw: 'oops' },
-    'woc.example/tx/raw': { body: 'deadbeef', raw: '"deadbeef"' }
+    'whatsonchain.example/tx/raw': { body: 'deadbeef', raw: '"deadbeef"' }
   })
-  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' })
+  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' })
   const res = await b.broadcast(tx())
   assert.equal(res.status, 'success')
   assert.ok(
-    (fetchImpl as any).calls.some((c: string) => c.includes('woc.example/tx/raw')),
-    'WoC fallback used'
+    (fetchImpl as any).calls.some((c: string) => c.includes('whatsonchain.example/tx/raw')),
+    'index fallback used'
   )
 })
 
@@ -134,7 +134,7 @@ test('fetchBroadcasterFeeRate: /policy 100sat/1000B → 100 sat/kB', async () =>
   assert.equal(await fetchBroadcasterFeeRate({ fetchImpl, broadcasterUrl: 'http://bcast' }), 100)
 })
 
-test('WocTracker: header cached; 429 retried', async () => {
+test('IndexTracker: header cached; 429 retried', async () => {
   let headerCalls = 0
   const fetchImpl: typeof fetch = async (input: any) => {
     const url = String(input)
@@ -148,7 +148,7 @@ test('WocTracker: header cached; 429 retried', async () => {
     }
     return new Response('nf', { status: 404 })
   }
-  const t = new WocTracker({ fetchImpl, wocUrl: 'http://woc' }, { requirePow: false }) // fixture headers carry no real PoW
+  const t = new IndexTracker({ fetchImpl, indexerUrl: 'http://whatsonchain' }, { requirePow: false }) // fixture headers carry no real PoW
   assert.equal(await t.currentHeight(), 850000)
   const h1 = await t.headerAtHeight(5)
   assert.equal(h1?.merkleRoot, 'mr')
@@ -207,9 +207,9 @@ test('merklePathMainnet (broadcaster BUMP) + discoverUtxos with recorded fixture
     [`/address/${addr}/unspent`]: { body: [{ tx_hash: parent.id('hex'), tx_pos: 0, value: 5000 }] },
     '/tx/': { raw: parent.toHex() }
   })
-  const mp = await merklePathMainnet({ fetchImpl, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc' }, 'aa'.repeat(32))
+  const mp = await merklePathMainnet({ fetchImpl, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain' }, 'aa'.repeat(32))
   assert.ok(mp?.merklePath, 'broadcaster BUMP hex parses')
-  const utxos = await discoverUtxos({ fetchImpl, wocUrl: 'http://woc' }, addr)
+  const utxos = await discoverUtxos({ fetchImpl, indexerUrl: 'http://whatsonchain' }, addr)
   assert.equal(utxos.length, 1)
   assert.equal(utxos[0].satoshis, 5000)
 })
@@ -240,7 +240,7 @@ test('discoverUtxos: index entries are checked against their own bytes', async (
     [`/tx/${fakeTxid}`]: { raw: good.toHex() }
   })
   const skips: string[] = []
-  const utxos = await discoverUtxos({ fetchImpl, wocUrl: 'http://woc' }, addr, (t, why) => skips.push(`${t.slice(0, 8)} ${why}`))
+  const utxos = await discoverUtxos({ fetchImpl, indexerUrl: 'http://whatsonchain' }, addr, (t, why) => skips.push(`${t.slice(0, 8)} ${why}`))
   assert.equal(utxos.length, 1)
   assert.equal(utxos[0].satoshis, 7777, 'satoshis come from the tx output, not the index value')
   assert.equal(skips.length, 3, 'wrong-address, wrong-txid, and missing-vout entries all skipped')
@@ -249,31 +249,31 @@ test('discoverUtxos: index entries are checked against their own bytes', async (
 test('probeTxStatus: definitive answers vs "couldn\'t ask"', async () => {
   // broadcaster 404 = a real answer ("we do not carry this tx")
   const f404 = stubFetch({ 'bcast.example/tx/': { status: 404, body: { error: 'transaction not found' } } })
-  assert.deepEqual(await probeTxStatus({ fetchImpl: f404, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' }, 't1'), {
+  assert.deepEqual(await probeTxStatus({ fetchImpl: f404, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' }, 't1'), {
     status: '',
     answered: true
   })
   // every source rate-limited = nobody answered
   const f429 = stubFetch({
     'bcast.example/tx/': { status: 429, body: { error: 'slow down' } },
-    'woc.example/tx/': { status: 429, body: {} }
+    'whatsonchain.example/tx/': { status: 429, body: {} }
   })
-  assert.deepEqual(await probeTxStatus({ fetchImpl: f429, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' }, 't1'), {
+  assert.deepEqual(await probeTxStatus({ fetchImpl: f429, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' }, 't1'), {
     status: '',
     answered: false
   })
   // broadcaster dead but WoC cross-check answers mined
   const fWoc = stubFetch({
     'bcast.example/tx/': { status: 500, body: {} },
-    'woc.example/tx/': { body: { blockheight: 5 } }
+    'whatsonchain.example/tx/': { body: { blockheight: 5 } }
   })
-  assert.deepEqual(await probeTxStatus({ fetchImpl: fWoc, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' }, 't1'), {
+  assert.deepEqual(await probeTxStatus({ fetchImpl: fWoc, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' }, 't1'), {
     status: 'MINED',
     answered: true
   })
   // a real status verdict answers at once
   const fSeen = stubFetch({ 'bcast.example/tx/': { body: { txStatus: 'SEEN_ON_NETWORK' } } })
-  assert.deepEqual(await probeTxStatus({ fetchImpl: fSeen, broadcasterUrl: 'http://bcast.example', wocUrl: 'http://woc.example' }, 't1'), {
+  assert.deepEqual(await probeTxStatus({ fetchImpl: fSeen, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' }, 't1'), {
     status: 'SEEN_ON_NETWORK',
     answered: true
   })
@@ -399,7 +399,7 @@ test('importFundingTx: hex: raw tx imports; empty/malformed refs fail with clear
   await assert.rejects(() => importFundingTx(undefined, 'not-a-txid', pkh), /malformed txid/)
 })
 
-// G5: a second raw-tx source — WoC first, broadcaster rawTx fallback; the
+// G5: a second raw-tx source — index first, broadcaster rawTx fallback; the
 // returned bytes must hash to the asked txid whatever the source
 import { PrivateKey } from '@bsv/sdk'
 const k = PrivateKey.fromRandom()
@@ -413,17 +413,17 @@ const withFetch = async (f: typeof fetch, fn: () => Promise<void>): Promise<void
   }
 }
 
-test('fetchRawTx: WoC hex serves, broadcaster rawTx backs it up', async () => {
+test('fetchRawTx: index hex serves, broadcaster rawTx backs it up', async () => {
   const mod = (await import('../src/mainnet.js')) as { fetchRawTx?: (c: unknown, t: string) => Promise<Transaction | undefined> }
   assert.ok(mod.fetchRawTx !== undefined, 'mainnet must export fetchRawTx')
   const tx = new Transaction()
   tx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
   tx.addOutput({ satoshis: 1000, lockingScript: new P2PKH().lock(k.toPublicKey().toAddress()) })
   const txid = tx.id('hex')
-  const cfg = { wocUrl: 'http://woc', broadcasterUrl: 'http://arc' }
+  const cfg = { indexerUrl: 'http://whatsonchain', broadcasterUrl: 'http://arc' }
   await withFetch(
     stubFetch({
-      [`http://woc/tx/${txid}/hex`]: { raw: tx.toHex() }
+      [`http://whatsonchain/tx/${txid}/hex`]: { raw: tx.toHex() }
     }),
     async () => {
       const r = await mod.fetchRawTx!(cfg, txid)
@@ -432,7 +432,7 @@ test('fetchRawTx: WoC hex serves, broadcaster rawTx backs it up', async () => {
   )
   await withFetch(
     stubFetch({
-      [`http://woc/tx/${txid}/hex`]: { status: 429, body: 'rate limited' },
+      [`http://whatsonchain/tx/${txid}/hex`]: { status: 429, body: 'rate limited' },
       [`http://arc/tx/${txid}`]: { body: { rawTx: tx.toHex() } }
     }),
     async () => {
@@ -458,10 +458,10 @@ test('fetchRawTx: EF-form rawTx parses; both sources down is undefined; wrong tx
   const other = new Transaction()
   other.addInput({ sourceTXID: '11'.repeat(32), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
   other.addOutput({ satoshis: 500, lockingScript: new P2PKH().lock(k.toPublicKey().toAddress()) })
-  const cfg = { wocUrl: 'http://woc', broadcasterUrl: 'http://arc' }
+  const cfg = { indexerUrl: 'http://whatsonchain', broadcasterUrl: 'http://arc' }
   await withFetch(
     stubFetch({
-      [`http://woc/tx/${txid}/hex`]: { status: 404 },
+      [`http://whatsonchain/tx/${txid}/hex`]: { status: 404 },
       [`http://arc/tx/${txid}`]: { body: { rawTx: Buffer.from(tx.toEF()).toString('hex') } }
     }),
     async () => {
@@ -472,7 +472,7 @@ test('fetchRawTx: EF-form rawTx parses; both sources down is undefined; wrong tx
   await withFetch(stubFetch({}), async () => {
     assert.equal(await mod.fetchRawTx!(cfg, txid), undefined, 'no source answers → undefined')
   })
-  await withFetch(stubFetch({ [`http://woc/tx/${txid}/hex`]: { raw: other.toHex() } }), async () => {
+  await withFetch(stubFetch({ [`http://whatsonchain/tx/${txid}/hex`]: { raw: other.toHex() } }), async () => {
     assert.equal(await mod.fetchRawTx!(cfg, txid), undefined, 'bytes that hash to another txid are refused')
   })
 })

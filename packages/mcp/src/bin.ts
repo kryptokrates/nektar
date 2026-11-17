@@ -168,27 +168,41 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
 `)
 }
 const port = nektarEnv('NEKTAR_HTTP_PORT')
+let srv: ReturnType<typeof createHttpApi> | undefined
 if (port) {
-  const srv = createHttpApi(rt.mem, rt.ops)
+  srv = createHttpApi(rt.mem, rt.ops)
   const host = nektarEnv('NEKTAR_HTTP_HOST') ?? '127.0.0.1'
   // a crashing-then-respawned agent briefly loses its port to the dying
   // process (WER holds it on Windows); retry the bind on a bounded ceiling
   // instead of letting an unhandled 'error' event kill the whole agent
   let tries = 0
-  srv.on('error', (err: NodeJS.ErrnoException) => {
+  const server = srv
+  server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE' && tries < 15) {
       tries++
-      setTimeout(() => srv.listen(Number(port), host), 1000)
+      setTimeout(() => server.listen(Number(port), host), 1000)
     } else {
       throw err
     }
   })
-  srv.listen(Number(port), host, () => process.stderr.write(`nektar: HTTP + MCP on :${port} (/v1, /mcp)\n`))
+  server.listen(Number(port), host, () => process.stderr.write(`nektar: HTTP + MCP on :${port} (/v1, /mcp)\n`))
 }
 let stopping = false
 const stop = async () => {
   if (stopping) return
   stopping = true
+  // the whole teardown is bounded: a wedged close must not hang the
+  // process — on Windows a lingering socket keeps the port hostage for
+  // the respawned agent, and open sockets at process.exit trip the libuv
+  // teardown assert (0xC0000409). Force-exit past the deadline.
+  setTimeout(() => {
+    process.stderr.write('nektar: stop deadline exceeded — forcing exit\n')
+    process.exit(1)
+  }, 20_000).unref()
+  if (srv !== undefined) {
+    srv.close() // stop accepting; in-flight requests finish
+    srv.closeIdleConnections() // sever idle keep-alives so the socket count drains
+  }
   await rt.mem.automation?.stop().catch(() => {})
   await rt.close().catch(() => {})
   process.exit(0)

@@ -71,7 +71,19 @@ export interface BudgetAmounts {
   lockedSats: number
 }
 export type BudgetResult = { ok: true; existing: boolean } | { ok: false; code: string }
-export type TxState = 'prepared' | 'exported' | 'submission_unknown' | 'submitted' | 'observed' | 'confirmed' | 'rejected' | 'conflicted'
+export type TxState =
+  | 'prepared'
+  | 'exported'
+  | 'submission_unknown'
+  | 'submitted'
+  | 'observed'
+  | 'confirmed'
+  | 'rejected'
+  | 'conflicted'
+  /** an exported tx whose counterparty never aired it past the TTL —
+   *  leases released, custody revives whatever stays live; not a chain
+   *  verdict */
+  | 'expired'
 export interface WalletTx {
   actionId: string
   operationId: string
@@ -82,6 +94,8 @@ export interface WalletTx {
   feeSats: number
   state: TxState
   attempts: number
+  /** row creation ms — the export-expiry clock reads it */
+  at: number
   lastObservation?: unknown
 }
 export interface Approval {
@@ -747,11 +761,12 @@ export class AutomationStore {
       feeSats: Number(r.fee_sats),
       state: r.state,
       attempts: r.attempts,
+      at: Number(r.at),
       ...(r.last_observation ? { lastObservation: JSON.parse(r.last_observation) } : {})
     }
   }
 
-  async recordPrepared(t: Omit<WalletTx, 'state' | 'attempts' | 'lastObservation'>): Promise<WalletTx> {
+  async recordPrepared(t: Omit<WalletTx, 'state' | 'attempts' | 'lastObservation' | 'at'>): Promise<WalletTx> {
     return await this.kx.transaction(async (trx) => {
       const prev = await trx(T.txs).where({ action_id: t.actionId }).first()
       if (prev) {

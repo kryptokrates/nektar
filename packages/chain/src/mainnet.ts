@@ -770,3 +770,42 @@ export async function discoverUtxos(cfg: MainnetConfig | undefined, address: str
   }
   return out
 }
+
+/** The spend question answered with evidence, never trust: an index's
+ *  "spent" flag is only a CLAIM — 'spent' is reported once the claimed
+ *  spending transaction's own bytes name the outpoint as an input, hash to
+ *  the claimed txid, and (when mined) its BUMP computes a root our
+ *  witnessed tracker confirms. Mempool spends count as 'spent': a signed
+ *  spend that provably exists will land, and offering the outpoint under
+ *  it only buys conflicts. 'unspent' is unprovable by a third party —
+ *  every negative and every couldn't-ask is 'unknown'. */
+export async function utxoSpendStatus(
+  cfg: MainnetConfig | undefined,
+  tracker: Pick<ChainTracker, 'isValidRootForHeight'>,
+  txid: string,
+  vout: number
+): Promise<'spent' | 'unknown'> {
+  const c = def(cfg)
+  const h: Record<string, string> = {}
+  if (c.wocApiKey) h['woc-api-key'] = c.wocApiKey
+  try {
+    const j = (await (await getOk(c, `${c.wocUrl}/tx/${txid}`, h)).json()) as {
+      vout?: Array<{ spent?: boolean; spentTxId?: string; spender?: string }>
+    }
+    const claim = j.vout?.[vout]?.spentTxId ?? j.vout?.[vout]?.spender
+    if (typeof claim !== 'string' || !/^[0-9a-fA-F]{64}$/.test(claim)) return 'unknown'
+    const spending = await fetchRawTx(c, claim)
+    if (spending === undefined) return 'unknown'
+    // the spend claim is only evidence when the served bytes name OUR
+    // outpoint as an input — anything else is the index's word, ignored
+    if (!spending.inputs.some((i) => String(i.sourceTXID).toLowerCase() === txid && i.sourceOutputIndex === vout)) return 'unknown'
+    const proof = await merklePathMainnet(c, claim)
+    if (proof !== undefined && proof !== null) {
+      const root = proof.merklePath.computeRoot(claim)
+      if (!(await tracker.isValidRootForHeight(root, proof.merklePath.blockHeight))) return 'unknown'
+    }
+    return 'spent'
+  } catch {
+    return 'unknown'
+  }
+}

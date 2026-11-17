@@ -327,9 +327,48 @@ only on its happy path is a lost-wakeup (`data/lost-wakeup` raised to arch
 altitude: map it, don't grep-hunt it). The reverse check matters too:
 a signaler with no waiter is dead signaling machinery.
 
+## 14. Runtime census — failure-hunt substrate
+
+The greps that feed `failure-modes.md`'s catalog. These find *candidates*;
+each still needs the evidence standard (code path → trigger → failure path
+→ blast → silence) and the challenge step before it's a finding.
+
+```bash
+# fire-and-forget async — work nobody awaits (F5): every site needs a
+# covering mechanism (lease, retry, reconcile) or it's a silence finding
+rg -n "void [a-zA-Z_]|\.catch\(\(\) ?=> ?\{\}\)|\.catch\(\(\) ?=> ?(null|undefined|0|false)" packages/*/src
+
+# catch→default on money paths (F5) — sites where failure returns a value
+# indistinguishable from a legitimate answer
+rg -n "catch[^}]*return (null|undefined|false|\[\]|0)" packages/*/src
+
+# long-lived unbounded collections (F6) — each needs an eviction/bound story
+rg -n "= new (Map|Set)\(|readonly.*(Map|Set)" packages/*/src
+
+# process lifecycle — who handles shutdown vs who leaks handles (F2/F6)
+rg -n "process\.(on|once|exit)|SIGINT|SIGTERM|unhandledRejection" packages/*/src
+
+# event subscriptions vs emissions (F4) — pair every consumer to a producer
+rg -n "\.on\(|\.once\(|addEventListener|EventSource|new WebSocket" packages/*/src
+
+# recovery surface (F3) — where restart rebuilds vs assumes
+rg -n "replay|resume|recover|reconcile|rebuild" packages/*/src
+
+# connection discipline (F6/F7) — keep-alive sockets held at exit are the
+# 0xC0000409 incident class
+rg -n "keep-?alive|connection:|new (WebSocket|EventSource)|Agent\(" packages/*/src
+```
+
+Zero hits is still a command failure, not a clean bill (see the playbook
+header) — but "exists and is covered" is a *pass*, record it: e.g.
+`void relinquishOutput().catch(() => {})` is covered by the ledger lease,
+so it's evidence the pattern is deliberate, not a finding.
+
 ## Timeboxing
 
 A monorepo this size: inventory+graph ≈10 min, hotspots ≈5, coupling ≈5,
-cold/debt ≈5, fitness audit ≈10, censuses (#9-#13) ≈20, smell pass
-≈20-30. If a step stalls, mark it "not measured" in the report — never
+cold/debt ≈5, fitness audit ≈10, censuses (#9-#14) ≈25, smell pass
+≈20-30, runtime failure hunt ≈30-45 (the topology map + evidence-standard
+write-ups are the expensive part — do not skip the challenge step to save
+time). If a step stalls, mark it "not measured" in the report — never
 fabricate the number.

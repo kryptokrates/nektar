@@ -305,13 +305,20 @@ export class ToolboxFunder implements Funder {
     return sdkc.PublicKey.fromString(pub.publicKey).toAddress()
   }
   async take(satoshis: number): Promise<FundingOut> {
-    const r = await this.wallet.listOutputs({ basket: NEKTAR_BASKET, include: 'entire transactions', limit: 1000 })
-    const beef = r.BEEF !== undefined ? sdkc.Beef.fromBinary(r.BEEF) : undefined
-    const candidates = r.outputs.filter((o) => o.spendable && o.satoshis >= satoshis).sort((a, b) => a.satoshis - b.satoshis)
-    for (const o of candidates) {
-      const [txid, vout] = o.outpoint.split('.')
-      const tx = beef?.findAtomicTransaction(txid)
-      if (tx !== undefined) return { tx: withPath(tx), vout: Number(vout), satoshis: o.satoshis }
+    // page the basket — listOutputs truncates at its limit, so a single
+    // 1000-row read would miss candidates past it (fails as "no spendable"
+    // while funded). Per-page smallest-sufficient keeps the common case
+    // to one call; the cap bounds pathological baskets.
+    for (let page = 0; page < 20; page++) {
+      const r = await this.wallet.listOutputs({ basket: NEKTAR_BASKET, include: 'entire transactions', limit: 1000, offset: page * 1000 })
+      const beef = r.BEEF !== undefined ? sdkc.Beef.fromBinary(r.BEEF) : undefined
+      const candidates = r.outputs.filter((o) => o.spendable && o.satoshis >= satoshis).sort((a, b) => a.satoshis - b.satoshis)
+      for (const o of candidates) {
+        const [txid, vout] = o.outpoint.split('.')
+        const tx = beef?.findAtomicTransaction(txid)
+        if (tx !== undefined) return { tx: withPath(tx), vout: Number(vout), satoshis: o.satoshis }
+      }
+      if (r.outputs.length < 1000) break
     }
     throw new Error(`toolbox funder: no spendable output >= ${satoshis} sats — top up via fundToolbox()`)
   }

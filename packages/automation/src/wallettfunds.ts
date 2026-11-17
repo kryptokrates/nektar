@@ -25,6 +25,12 @@ const withPath = (found: Transaction): Transaction => {
  *  internalize live outputs; `drop` relinquishes dead weight. `utxos` is a
  *  sync cache refreshed on every `take` — the async wallet list is the
  *  truth. */
+/** basket listing page size + cap — listOutputs truncates silently at its
+ *  limit, so every basket read pages until a short page or the cap; the
+ *  cap is a load ceiling, never a correct cut-off, so hitting it logs */
+const PAGE = 1000
+const MAX_PAGES = 20
+
 export class WalletFunds extends FundsBase {
   private cache: FundingOut[] = []
   /** outpoints we dropped this process — lets `died` tell "consumed by the
@@ -91,22 +97,33 @@ export class WalletFunds extends FundsBase {
   }
 
   async refresh(): Promise<void> {
-    const r = await this.wallet.listOutputs({ basket: NEKTAR_BASKET, include: 'entire transactions', limit: 1000 })
-    const beef = r.BEEF !== undefined ? sdkc.Beef.fromBinary(r.BEEF) : undefined
-    this.cache = r.outputs
-      .filter((o) => o.spendable)
-      .flatMap((o) => {
+    const outs: FundingOut[] = []
+    let paged = false
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const r = await this.wallet.listOutputs({ basket: NEKTAR_BASKET, include: 'entire transactions', limit: PAGE, offset: page * PAGE })
+      const beef = r.BEEF !== undefined ? sdkc.Beef.fromBinary(r.BEEF) : undefined
+      for (const o of r.outputs) {
+        if (!o.spendable) continue
         const [txid, vout] = o.outpoint.split('.')
         const tx = beef?.findAtomicTransaction(txid)
-        return tx === undefined ? [] : [{ tx: withPath(tx), vout: Number(vout), satoshis: o.satoshis }]
-      })
+        if (tx !== undefined) outs.push({ tx: withPath(tx), vout: Number(vout), satoshis: o.satoshis })
+      }
+      if (r.outputs.length < PAGE) break
+      paged = true
+    }
+    if (paged && outs.length >= PAGE * MAX_PAGES) this.deps.log?.(`walletfunds: basket listing hit the ${PAGE * MAX_PAGES}-output cap — refresh sees a subset`)
+    this.cache = outs
   }
 
   /** Whether the wallet already custodies this outpoint — lets boot seeding
    *  skip re-internalizing outputs that survived a restart. */
   async has(txid: string, vout: number): Promise<boolean> {
-    const r = await this.wallet.listOutputs({ basket: NEKTAR_BASKET, limit: 1000 })
-    return r.outputs.some((o) => o.outpoint === `${txid}.${vout}`)
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const r = await this.wallet.listOutputs({ basket: NEKTAR_BASKET, limit: PAGE, offset: page * PAGE })
+      if (r.outputs.some((o) => o.outpoint === `${txid}.${vout}`)) return true
+      if (r.outputs.length < PAGE) return false
+    }
+    return false
   }
 
   private internalizePush(tx: Transaction, vout: number, log: (s: string) => void): Promise<void> {

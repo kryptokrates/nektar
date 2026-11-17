@@ -17,7 +17,15 @@ import { nektarEnv, nektarEnvFlag, setNektarEnv } from '@nektar/core'
 import type { BroadcastResult, ChainTracker, TxStatusEvent } from './interfaces.js'
 import type { StatusHint } from './txfacts.js'
 import { SpendGuard, type SpendGuardOpts } from './spendguard.js'
-import { TeranodeBroadcaster, TeranodeRPCTracker, regtestTx, regtestMerkleProof, regtestRpc, type RegtestConfig } from './regtest.js'
+import {
+  TeranodeBroadcaster,
+  TeranodeRPCTracker,
+  regtestTx,
+  regtestMerkleProof,
+  regtestRpc,
+  utxoStatus,
+  type RegtestConfig
+} from './regtest.js'
 import { WitnessedTracker } from './headers.js'
 import {
   BsvBroadcaster,
@@ -27,6 +35,7 @@ import {
   fetchRawTx,
   fetchBroadcasterFeeRate,
   statusStream,
+  utxoSpendStatus,
   type MainnetConfig
 } from './mainnet.js'
 import { TemporalSources, type TemporalSource } from './temporal.js'
@@ -57,6 +66,13 @@ export interface ChainPort {
    *  a verified event, `undefined` (definitively not terminal — feeds the
    *  abandon clock), or a throw (couldn't ask — the clock must not move) */
   observe: (txid: string) => Promise<TxStatusEvent | undefined>
+  /** outpoint-level spend truth — 'spent' is a burn verdict the port
+   *  verified itself (own utxo set, or an index claim proven against our
+   *  witnessed headers). 'unspent' is only answerable where the utxo view
+   *  is first-party (regtest node, memory chain) — live indexes can never
+   *  prove absence, so they answer 'spent' or 'unknown'. Callers burn on
+   *  'spent' only; 'unknown' must never burn or block. */
+  spendStatus?: (txid: string, vout: number) => Promise<'spent' | 'unspent' | 'unknown'>
   /** chain height — ports that mine fold mined heights in themselves */
   height: () => number | Promise<number>
   /** open the pushed-hint channel (SSE status stream) — returns its closer,
@@ -122,6 +138,7 @@ export function memoryPort(chain: TestChain): ChainPort {
       if (chain.isRejected(txid)) return { txid, status: 'rejected' }
       return undefined
     },
+    spendStatus: (txid, vout) => chain.utxoStatus(txid, vout),
     height: () => chain.currentHeight(),
     abandonAfterBlocks: 100,
     mine: async () => {
@@ -154,6 +171,7 @@ export function regtestPort(rc: RegtestConfig & { fundAddress?: string }, deps?:
       if (!(await tracker.isValidRootForHeight(root, mp.blockHeight))) return undefined
       return { txid, status: 'mined', blockHeight: mp.blockHeight, merklePath: mp }
     },
+    spendStatus: (txid, vout) => utxoStatus(rc, txid, vout),
     height: async () => Math.max(lastMined, await tracker.currentHeight()),
     abandonAfterBlocks: 100,
     guard,
@@ -255,6 +273,7 @@ export async function livePort(mc: MainnetConfig & { feeRateSatPerKb?: number },
       if (!probe.answered || probe.status === 'MINED' || probe.status === 'IMMUTABLE') throw new Error(`cannot establish 'not mined' for ${txid}`)
       return undefined
     },
+    spendStatus: (txid, vout) => utxoSpendStatus(mc, tracker, txid, vout),
     height: () => tracker.currentHeight(),
     abandonAfterBlocks: Number(nektarEnv('NEKTAR_ABANDON_BLOCKS') ?? 6),
     openHintStream:

@@ -358,6 +358,14 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // crash in the broadcast→watch window can't strand a proof wait
   for (const t of await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])) events.watch(t.txid)
   custody.funds.leased = leasePredicate(ledger)
+  // wire the first-party spend probe: a chain-VERIFIED 'spent' burns the
+  // candidate at selection (port-verified — never an index's word).
+  // 'unknown' can't burn or block: the lease guards concurrency and the
+  // broadcaster's reject stays the backstop for a spend the probe missed
+  if (port.spendStatus !== undefined) {
+    const spendStatus = port.spendStatus
+    custody.funds.spendCheck = async (txid, vout) => (await spendStatus(txid, vout).catch(() => 'unknown' as const)) === 'spent'
+  }
   if ('dealFloor' in custody.funds) custody.funds.dealFloor = nektarEnvNum('NEKTAR_DEAL_FLOOR_SATS') ?? 0
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)
   chain.broadcast = txLogBroadcast(chain.broadcast)
@@ -541,6 +549,39 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     },
     async () => {
       await (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
+    },
+    {
+      // the counterparty's window to air a signed payment (x402 export);
+      // past it the watcher releases the leases and hands custody back
+      // every input the chain still shows unspent — the one-way-door fix
+      exportedTtlMs: nektarEnvNum('NEKTAR_EXPORT_TTL_MS') ?? 24 * 60 * 60_000,
+      onExportExpired: async (w) => {
+        let freed = 0
+        let inputs = 0
+        try {
+          const tx = Transaction.fromHex(w.rawHex)
+          inputs = tx.inputs.length
+          for (const inp of tx.inputs) {
+            const srcTxid = inp.sourceTXID
+            const vout = inp.sourceOutputIndex
+            if (srcTxid === undefined || vout === undefined) continue
+            // provably-spent inputs stay dead — the export landed late or
+            // something else consumed them. 'unknown' still frees: the
+            // export had its window and the take-time probe burns a
+            // later-landing spend anyway
+            if ((await port.spendStatus?.(srcTxid, vout).catch(() => 'unknown' as const)) === 'spent') continue
+            const parentHex = w.parents[srcTxid]
+            const parent = parentHex !== undefined ? Transaction.fromHex(parentHex) : await port.txLookup?.(srcTxid).catch(() => undefined)
+            if (parent === undefined) continue
+            await custody.funds.revive(parent, vout)
+            freed++
+          }
+        } catch (e) {
+          process.stderr.write(`nektar ${net}: expired export ${w.txid}: revive failed: ${(e as Error).message}\n`)
+          return
+        }
+        process.stderr.write(`nektar ${net}: export ${w.txid} expired unaired — ${freed}/${inputs} input(s) returned to custody\n`)
+      }
     }
   )
   let watching = false
@@ -549,7 +590,9 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     watching = true
     void watcher
       .tick()
-      .catch(() => {})
+      // the only bare catch in the sweep chain: a failing tick stalls all
+      // durable settlement — log it; the next event retries regardless
+      .catch((e) => process.stderr.write(`nektar ${net}: ledger watcher: ${(e as Error).message}\n`))
       .finally(() => {
         watching = false
       })
@@ -566,12 +609,24 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       events.stop()
       mem.events.off('broadcasterStatus', watchOnce)
       clearInterval(timer)
-      await inflight // drain an in-flight tick before the final pass + knex.destroy
+      // every teardown await carries a ceiling — a wedged chain/db call
+      // must not hang the exit (bin.ts's hard deadline is the outer backstop)
+      const bounded = async (p: Promise<unknown>, ms: number, what: string): Promise<void> => {
+        const r = await Promise.race([
+          Promise.resolve(p).then(
+            () => 'done',
+            () => 'done'
+          ),
+          new Promise<'timeout'>((res) => setTimeout(() => res('timeout'), ms))
+        ])
+        if (r === 'timeout') process.stderr.write(`nektar ${net}: close: ${what} exceeded ${ms}ms — proceeding\n`)
+      }
+      await bounded(inflight ?? Promise.resolve(), 15_000, 'inflight confirmer pass')
       await releaseLock()
       await custody.releaseKeyLock?.()
-      await tick()
-      await custody.closeWallet?.()
-      await knex.destroy()
+      await bounded(tick(), 20_000, 'final confirmer pass')
+      await bounded(custody.closeWallet?.() ?? Promise.resolve(), 10_000, 'wallet close')
+      await bounded(knex.destroy(), 10_000, 'records db')
     }
   }
 }

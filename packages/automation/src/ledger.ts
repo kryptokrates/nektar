@@ -1,6 +1,6 @@
 import { Transaction } from '@bsv/sdk'
 import type { BroadcastResult } from '@nektar/chain'
-import type { AutomationStore, TxState } from './store.js'
+import type { AutomationStore, TxState, WalletTx } from './store.js'
 import { WalletCoordinator } from './wallet.js'
 
 export interface TxObservationInput {
@@ -74,20 +74,43 @@ export class TransactionWatcher {
   constructor(
     private store: AutomationStore,
     private observeFn: (txid: string) => Promise<TxObservationInput | undefined>,
-    private onRejected?: (txid: string, reason: string) => Promise<void> | void
+    private onRejected?: (txid: string, reason: string) => Promise<void> | void,
+    private opts?: {
+      /** ms an 'exported' row may sit unaired before its leases release and
+       *  custody takes its inputs back — the counterparty's window to air */
+      exportedTtlMs?: number
+      /** fired once when an export expires — the caller revives whatever
+       *  inputs the chain still shows live */
+      onExportExpired?: (w: WalletTx) => Promise<void> | void
+    }
   ) {}
 
   async tick(): Promise<number> {
     let changed = 0
-    for (const w of await this.store.walletTxs(['submitted', 'submission_unknown', 'observed'])) {
+    for (const w of await this.store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])) {
       try {
         const o = await this.observeFn(w.txid)
-        if (!o) continue
-        const next: TxState = o.status === 'proven' ? 'confirmed' : o.status === 'seen' ? (w.state === 'confirmed' ? 'confirmed' : 'observed') : o.status
-        if (next === w.state) continue
-        await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
-        changed++
-        if (o.status === 'rejected' || o.status === 'conflicted') await this.onRejected?.(w.txid, o.reason ?? o.spentBy ?? o.status)
+        if (o !== undefined) {
+          const next: TxState = o.status === 'proven' ? 'confirmed' : o.status === 'seen' ? (w.state === 'confirmed' ? 'confirmed' : 'observed') : o.status
+          if (next !== w.state) {
+            await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
+            changed++
+            if (o.status === 'rejected' || o.status === 'conflicted') await this.onRejected?.(w.txid, o.reason ?? o.spentBy ?? o.status)
+          }
+          continue
+        }
+        // a signed payment handed to a counterparty gets one window to air —
+        // without this 'exported' is a one-way door: the inputs sit in the
+        // wallet as relinquished AND leased, stranded silently forever
+        if (w.state === 'exported' && this.opts?.exportedTtlMs !== undefined && Date.now() - w.at >= this.opts.exportedTtlMs) {
+          await this.store.releaseLeases(w.actionId)
+          await this.store.setTxState(w.actionId, 'expired', {
+            at: Date.now(),
+            reason: `exported tx unaired for ${Math.round((Date.now() - w.at) / 60000)}min`
+          })
+          changed++
+          await this.opts.onExportExpired?.(w)
+        }
       } catch {
         /* unknown, not failed — try again next tick */
       }

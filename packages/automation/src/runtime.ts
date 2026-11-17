@@ -564,7 +564,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       if (rt.scheduler !== undefined) await rt.scheduler.stop()
       for (const ac of rt.watches.values()) ac.abort()
       rt.watches.clear()
-      await Promise.allSettled(rt.inflight)
+      // bounded like the drain below — a wedged inflight item must not
+      // stall teardown before the deadline loop even starts
+      {
+        const settled = Promise.allSettled(rt.inflight).then(() => 'done' as const)
+        const r = await Promise.race([settled, new Promise<'timeout'>((res) => setTimeout(() => res('timeout'), 15_000))])
+        if (r === 'timeout') log(`automation: stop: inflight settle deadline hit (${rt.inflight.size} pending) — proceeding`)
+      }
       // drain in-flight work with a bound — a wedged producer must not hang
       // teardown forever (was an unbounded spin)
       const drainDeadline = Date.now() + 30_000

@@ -563,14 +563,14 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
           inputs = tx.inputs.length
           for (const inp of tx.inputs) {
             const srcTxid = inp.sourceTXID
+            if (srcTxid === undefined) continue
             const vout = inp.sourceOutputIndex
-            if (srcTxid === undefined || vout === undefined) continue
             // provably-spent inputs stay dead — the export landed late or
             // something else consumed them. 'unknown' still frees: the
             // export had its window and the take-time probe burns a
             // later-landing spend anyway
             if ((await port.spendStatus?.(srcTxid, vout).catch(() => 'unknown' as const)) === 'spent') continue
-            const parentHex = w.parents[srcTxid]
+            const parentHex: string | undefined = w.parents[srcTxid]
             const parent = parentHex !== undefined ? Transaction.fromHex(parentHex) : await port.txLookup?.(srcTxid).catch(() => undefined)
             if (parent === undefined) continue
             await custody.funds.revive(parent, vout)

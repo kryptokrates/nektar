@@ -98,30 +98,37 @@ test('ledger: EF relay with sparse parent outputs — bookkeeping must not veto 
 test('ledger: an exported row the counterparty aired settles; an unaired one expires and frees its input', async (t) => {
   const { kx, store } = await open()
   const key = PrivateKey.fromRandom()
-  const parent = new Transaction()
-  parent.addInput({ sourceTXID: 'd'.repeat(64), sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })
-  parent.addOutput({ satoshis: 1000, lockingScript: new P2PKH().lock(key.toPublicKey().toHash()) })
+  let seed = 0
   const mk = async (suffix: string) => {
+    const parent = new Transaction()
+    parent.addInput({ sourceTXID: (++seed).toString(16).padStart(64, '0'), sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })
+    parent.addOutput({ satoshis: 1000, lockingScript: new P2PKH().lock(key.toPublicKey().toHash()) })
     const tx = new Transaction()
     tx.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })
     tx.addOutput({ satoshis: 100, lockingScript: new P2PKH().lock(key.toPublicKey().toHash()) })
     await store.recordBroadcast(
-      { txid: tx.id('hex'), rawHex: tx.toHex(), parents: { [parent.id('hex')]: parent.toHex() }, feeSats: 0, outs: [{ txid: parent.id('hex'), vout: 0, satoshis: 1000 }] },
+      {
+        txid: tx.id('hex'),
+        rawHex: tx.toHex(),
+        parents: { [parent.id('hex')]: parent.toHex() },
+        feeSats: 0,
+        outs: [{ txid: parent.id('hex'), vout: 0, satoshis: 1000 }]
+      },
       `owner:${suffix}`,
       'owner',
       'exported-payment'
     )
     await store.setTxState(`owner:${suffix}`, 'exported', { invoiceId: suffix })
-    return tx.id('hex')
+    return parent.id('hex')
   }
   // an aired export settles like any broadcast — 'confirmed' burns its leases
-  const aired = await mk('aired')
+  const airedParent = await mk('aired')
   const settled = new TransactionWatcher(store, async () => ({ status: 'proven', source: 'test' }))
   await settled.tick()
   assert.equal((await store.walletTx({ actionId: 'owner:aired' }))!.state, 'confirmed', 'a landed export confirms')
-  assert.equal((await store.leaseState(parent.id('hex'), 0))!.state, 'spent')
+  assert.equal((await store.leaseState(airedParent, 0))!.state, 'spent')
   // an unaired export past its TTL releases the lease and fires the revive hook once
-  const stale = await mk('stale')
+  const staleParent = await mk('stale')
   let revived = 0
   const expiring = new TransactionWatcher(store, async () => undefined, undefined, {
     exportedTtlMs: 0,
@@ -132,18 +139,15 @@ test('ledger: an exported row the counterparty aired settles; an unaired one exp
   await expiring.tick()
   assert.equal((await store.walletTx({ actionId: 'owner:stale' }))!.state, 'expired', 'unaired export past TTL expires')
   assert.equal(revived, 1, 'the revive hook fired')
-  assert.equal((await store.leaseState(parent.id('hex'), 0))!.state, 'released', 'the stranded lease released')
+  assert.equal((await store.leaseState(staleParent, 0))!.state, 'released', 'the stranded lease released')
   const again = await expiring.tick()
   assert.equal(revived, 1, 'expired rows leave the sweep — the hook is not re-fired')
   assert.equal(again, 0)
   // a fresh export inside its window is untouched
-  const fresh = await mk('fresh')
+  await mk('fresh')
   const waiting = new TransactionWatcher(store, async () => undefined, undefined, { exportedTtlMs: 60_000 })
   await waiting.tick()
   assert.equal((await store.walletTx({ actionId: 'owner:fresh' }))!.state, 'exported', 'inside the window the row waits')
-  void aired
-  void stale
-  void fresh
   await kx.destroy()
 })
 

@@ -17,15 +17,7 @@ import { nektarEnv, nektarEnvFlag, setNektarEnv } from '@nektar/core'
 import type { BroadcastResult, ChainTracker, TxStatusEvent } from './interfaces.js'
 import type { StatusHint } from './txfacts.js'
 import { SpendGuard, type SpendGuardOpts } from './spendguard.js'
-import {
-  TeranodeBroadcaster,
-  TeranodeRPCTracker,
-  regtestTx,
-  regtestMerkleProof,
-  regtestRpc,
-  utxoStatus,
-  type RegtestConfig
-} from './regtest.js'
+import { TeranodeBroadcaster, TeranodeRPCTracker, regtestTx, regtestMerkleProof, regtestRpc, utxoStatus, type RegtestConfig } from './regtest.js'
 import { WitnessedTracker } from './headers.js'
 import {
   BsvBroadcaster,

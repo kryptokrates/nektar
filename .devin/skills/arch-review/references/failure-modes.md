@@ -50,13 +50,13 @@ The package graph is compile-time; this is the execution shape. Map:
 
 ## Evidence standard (every runtime finding)
 
-| Field          | Question                                                              |
-| -------------- | --------------------------------------------------------------------- |
-| Code path      | `file:line` of the mechanism — you read it this session               |
-| Trigger        | what has to happen (restart, 429, two takes at once, host flap)       |
-| Failure path   | what the code actually does next — not what it should do              |
-| Blast radius   | what else corrupts or stalls when it fires (use the package graph)    |
-| Silence reason | why nobody sees it — no log, no metric, swallowed, no waiter          |
+| Field          | Question                                                           |
+| -------------- | ------------------------------------------------------------------ |
+| Code path      | `file:line` of the mechanism — you read it this session            |
+| Trigger        | what has to happen (restart, 429, two takes at once, host flap)    |
+| Failure path   | what the code actually does next — not what it should do           |
+| Blast radius   | what else corrupts or stalls when it fires (use the package graph) |
+| Silence reason | why nobody sees it — no log, no metric, swallowed, no waiter       |
 
 Then the **challenge step**: try to kill the finding. Is there a lock,
 queue, lease, tombstone, or bounded retry that already prevents it? Does a

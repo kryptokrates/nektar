@@ -98,7 +98,7 @@ export class WalletFunds extends FundsBase {
 
   async refresh(): Promise<void> {
     const outs: FundingOut[] = []
-    let paged = false
+    let truncated = true
     for (let page = 0; page < MAX_PAGES; page++) {
       const r = await this.wallet.listOutputs({ basket: NEKTAR_BASKET, include: 'entire transactions', limit: PAGE, offset: page * PAGE })
       const beef = r.BEEF !== undefined ? sdkc.Beef.fromBinary(r.BEEF) : undefined
@@ -108,10 +108,12 @@ export class WalletFunds extends FundsBase {
         const tx = beef?.findAtomicTransaction(txid)
         if (tx !== undefined) outs.push({ tx: withPath(tx), vout: Number(vout), satoshis: o.satoshis })
       }
-      if (r.outputs.length < PAGE) break
-      paged = true
+      if (r.outputs.length < PAGE) {
+        truncated = false
+        break
+      }
     }
-    if (paged && outs.length >= PAGE * MAX_PAGES) this.deps.log?.(`walletfunds: basket listing hit the ${PAGE * MAX_PAGES}-output cap — refresh sees a subset`)
+    if (truncated) this.deps.log?.(`walletfunds: basket listing hit the ${PAGE * MAX_PAGES}-output page cap — refresh sees a subset`)
     this.cache = outs
   }
 

@@ -1,12 +1,62 @@
 name: nektar
-title: nektar — verifiable agent memory (BSV)
+title: nektar — verifiable agent memory (BSV testnet)
 type: server
-image: ghcr.io/nedzof/nektar:latest
+image: ghcr.io/kryptokrates/nektar:latest
 longLived: true
 volumes:
   - nektar-data:/data
 description: >-
-  Encrypted, provenance-bearing agent memory whose history is anchored on BSV.
-  Tools: remember, recall, prove, anchor, ZK membership/clearance, rotate,
-  revoke, disclose, authorize, automaton. Proofs show what was recorded and
-  unaltered — never that it is true.
+  Encrypted, provenance-bearing agent memory whose history is anchored on the
+  public BSV testnet (test coins, no monetary value). Tools: remember, recall,
+  prove, anchor, ZK membership/clearance, rotate, revoke, disclose, authorize,
+  automaton. Proofs show what was recorded and unaltered — never that it is
+  true. Anchor fees are paid by a dedicated operator fee key (generated on
+  first start; its address is printed to stderr — fund it with testnet coins).
+  All broadcasts pass a SpendGuard (per-tx fee cap, per-day spend cap, min
+  interval, persisted ledger). Keys are encrypted at rest.
+secrets:
+  - name: nektar.key_passphrase
+    env: NEKTAR_KEY_PASSPHRASE
+    example: <long random passphrase>
+    description: Encrypts keys.json and fee.key.json at rest (required)
+  - name: nektar.broadcaster_api_key
+    env: NEKTAR_BROADCASTER_API_KEY
+    example: <broadcaster api key — optional>
+    description: BSV Broadcaster API key (optional; public endpoints work without one)
+  - name: nektar.fund_wif
+    env: NEKTAR_FUND_WIF
+    example: <testnet WIF — optional>
+    description: Operator fee key as testnet WIF. If unset, a fee.key.json key is generated.
+env:
+  - name: NEKTAR_NETWORK
+    value: testnet
+  - name: NEKTAR_MAX_FEE_SATS_PER_TX
+    value: '{{nektar.max_fee_sats_per_tx}}'
+  - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
+    value: '{{nektar.max_spend_sats_per_day}}'
+  - name: NEKTAR_MIN_BROADCAST_INTERVAL_MS
+    value: '{{nektar.min_broadcast_interval_ms}}'
+  - name: NEKTAR_MODEL_ID
+    value: '{{nektar.model_id}}'
+  - name: NEKTAR_CLEARANCE_AUTHORITIES
+    value: '{{nektar.clearance_authorities}}'
+config:
+  - name: nektar
+    description: BSV testnet deployment — test coins only
+    type: object
+    properties:
+      max_fee_sats_per_tx:
+        type: integer
+        description: Per-transaction fee cap in sats (default 1000)
+      max_spend_sats_per_day:
+        type: integer
+        description: Daily fee spend cap in sats, UTC day (default 20000)
+      min_broadcast_interval_ms:
+        type: integer
+        description: Minimum ms between broadcasts (default 10000)
+      model_id:
+        type: string
+        description: Exact model identity bound into answer receipts
+      clearance_authorities:
+        type: string
+        description: Comma-separated pubkeys trusted to issue clearance credentials (level > 0 reads)

@@ -39,6 +39,14 @@ const listed = out(['mcp', 'profile', 'server', 'ls', '--filter', `profile=${PRO
 // re-register so the profile snapshot matches the chosen image (local vs GHCR)
 if (/\bnektar\b/.test(listed)) run(['mcp', 'profile', 'server', 'remove', PROFILE, '--name', 'nektar'])
 run(['mcp', 'profile', 'server', 'add', PROFILE, '--server', `file://${yaml}`])
+// the ghcr profile is testnet-shaped: it needs a key passphrase to boot.
+// Generate once on a fresh install — NEVER overwrite (existing keys in the
+// volume become unreadable if the passphrase changes).
+if (GHCR && !/\bnektar\.key_passphrase\b/.test(out(['mcp', 'secret', 'ls']))) {
+  const { randomBytes } = await import('node:crypto')
+  execFileSync('docker', ['mcp', 'secret', 'set', 'nektar.key_passphrase'], { input: randomBytes(24).toString('hex'), stdio: ['pipe', 'ignore', 'inherit'] })
+  console.log('  generated nektar.key_passphrase (kept in the Docker MCP keychain)')
+}
 const args = process.argv.slice(2)
 if (args.includes('--regtest')) {
   // secrets from the gitignored env files → Docker MCP keychain via stdin (never printed)

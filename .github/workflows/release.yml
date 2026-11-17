@@ -73,18 +73,24 @@ jobs:
       - run: node tools/bundle-mcp.mjs
       - name: tar the self-contained bundle
         run: tar -czf nektar-mcp-bundle.tar.gz -C dist-bundle .
+      - name: tar the agent deployment bundle
+        run: tar -czf nektar-agent-deploy.tar.gz -C deploy/agent --exclude='.env' .
       - name: upload run artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: nektar-mcp-bundle
-          path: nektar-mcp-bundle.tar.gz
+          name: nektar-bundles
+          path: |
+            nektar-mcp-bundle.tar.gz
+            nektar-agent-deploy.tar.gz
           if-no-files-found: error
       - name: attach to the GitHub release (tags)
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" nektar-mcp-bundle.tar.gz --clobber
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
+          gh release upload "$TAG" nektar-mcp-bundle.tar.gz nektar-agent-deploy.tar.gz --clobber
 
       # npm-publish removed — the bundle ships as a release asset
       # (nektar-mcp-bundle.tar.gz) and via the GHCR image instead

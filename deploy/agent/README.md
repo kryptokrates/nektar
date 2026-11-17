@@ -4,7 +4,9 @@ Runs the published `ghcr.io/kryptokrates/nektar` image as a market-capable
 testnet agent: own keys (passphrase-encrypted at rest), SpendGuard on every
 spend, bfinger-discoverable, direct-push lane open.
 
-Three ways in — pick the one your platform speaks:
+Three ways in — pick the one your platform speaks. (This directory also
+ships as the `nektar-agent-deploy.tar.gz` asset on every GitHub release —
+grab that instead of master if you want a pinned version.)
 
 ## Bare Linux box: one command
 

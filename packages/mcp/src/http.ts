@@ -670,6 +670,17 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
               verifyBase: `${base}/v1/verify`,
               logPublicKey: await mem.logPublicKey(),
               operatorPub: mem.operatorKey()?.toPublicKey().toString(),
+              // self-describing market config — is this instance a quorum
+              // participant, and through which hosts? Report the live engine
+              // state (mem.automation) not just the env flag.
+              market: {
+                automation: mem.automation != null,
+                hosts: (nektarEnv('NEKTAR_MARKET_HOSTS') ?? '')
+                  .split(',')
+                  .map((h) => h.trim())
+                  .filter(Boolean),
+                push: nektarEnv('NEKTAR_PUSH_PUBLIC') ?? null
+              },
               publicShards: await Promise.all(
                 pub.map(async (s) => {
                   const manifest = catalog.find((m) => m.shard === s)

@@ -96,6 +96,23 @@ jobs:
             git reset --hard FETCH_HEAD
             pnpm install --frozen-lockfile
             pnpm -r build
+            # host-pair module artifact (compose mounts ../../packages/bstack/bundle)
+            pnpm --filter @nektar/bstack bundle
+            # managed instance config — repo file is authoritative for the keys
+            # it lists; box-local keys (secrets, DATA_DIR, PORT…) untouched
+            if [ -f deploy/hetzner/nektar-http.env ]; then
+              while IFS= read -r kv; do
+                case "$kv" in ''|\#*) continue ;; esac
+                k="${kv%%=*}"
+                if grep -q "^$k=" /etc/nektar-http.env; then
+                  sed -i "s|^$k=.*|$kv|" /etc/nektar-http.env
+                else
+                  printf '%s\n' "$kv" >> /etc/nektar-http.env
+                fi
+              done < deploy/hetzner/nektar-http.env
+            fi
+            # the public host pair this agent (and any other operator) uses
+            docker compose -p nektar-bstack-testnet -f deploy/bstack-sandbox/compose.testnet.yaml up -d
             # public endpoint: nektar-http must bind 0.0.0.0 (default is 127.0.0.1)
             grep -q "^NEKTAR_HTTP_HOST=" /etc/nektar-http.env 2>/dev/null || echo "NEKTAR_HTTP_HOST=0.0.0.0" >> /etc/nektar-http.env
             # --- nektar-prover: STARK HTTP shim (loopback only + token) ---

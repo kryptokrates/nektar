@@ -5,7 +5,9 @@
   "type": "module",
   "main": "./dist/src/index.js",
   "exports": {
-    ".": "./dist/src/index.js"
+    ".": "./dist/src/index.js",
+    "./aiinf-demo": "./dist/src/aiinf-demo.js",
+    "./poseidon-toy": "./dist/src/poseidon-toy.js"
   },
   "scripts": {
     "build": "tsc -b",

@@ -138,9 +138,9 @@ export class AutomationStore {
       t.bigInteger('created_at').notNullable()
       t.bigInteger('updated_at').notNullable()
     })
-    // the live-op scan (states/notStates filter) runs every hot tick — it
-    // must seek, not table-scan, on DBs that predate the createTable index
-    await this.kx.raw(`CREATE INDEX IF NOT EXISTS ${T.ops}_state_index ON ${T.ops}(state)`)
+    // the live-op scan (notStates/state IN) runs every hot tick — it must
+    // seek, not table-scan, as terminal rows accumulate over an agent's life
+    await this.kx.raw(`CREATE INDEX IF NOT EXISTS ${T.ops}_state_index ON ${T.ops} (state)`)
     await mk(T.events, (t) => {
       t.increments('seq')
       t.string('operation_id').notNullable().index()
@@ -564,6 +564,15 @@ export class AutomationStore {
     await this.kx(T.outbox).where({ action_id: actionId }).update({ status: 'acked' })
   }
 
+  /** pull one deferred row forward to now — used when the wait's cause
+   *  resolved early (a pending fan-out leg that settled missed). Attempts
+   *  are untouched: this never hastens a dead-letter. */
+  async pullOutbox(actionId: string): Promise<unknown> {
+    const n = await this.kx(T.outbox).where({ action_id: actionId, status: 'pending' }).where('next_at', '>', this.now()).update({ next_at: this.now() })
+    if (n > 0) this.outboxReady?.()
+    return n
+  }
+
   /** pull every due-future row of one defer class forward to now — used when
    *  an event (a proven funding-tree topup, a host coming back) removes the
    *  cause the backoff was waiting on. Class, not error text: a message that
@@ -571,14 +580,6 @@ export class AutomationStore {
    *  Attempts are untouched: this never hastens a dead-letter. */
   async unblockOutbox(cls: DeferClass): Promise<number> {
     return await this.kx(T.outbox).where({ status: 'pending' }).where('defer_class', cls).where('next_at', '>', this.now()).update({ next_at: this.now() })
-  }
-
-  /** pull ONE pending row forward to now — a delayed repair whose straggler
-   *  leg just resolved missed shouldn't wait out the defer ceiling; the wake
-   *  goes through outboxReady like every enqueue. Attempts untouched. */
-  async pullOutbox(actionId: string): Promise<void> {
-    const n = await this.kx(T.outbox).where({ action_id: actionId, status: 'pending' }).where('next_at', '>', this.now()).update({ next_at: this.now() })
-    if (n > 0) this.outboxReady?.()
   }
 
   /** a resource-gated defer — the cause is starvation (a funding slot, not

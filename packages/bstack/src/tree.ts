@@ -113,7 +113,11 @@ export const anchoredTree = (tree: Transaction): boolean =>
 // only the market lane tolerates unproven funding: the nektar module accepts
 // anchored ancestry, but the vendored bbox/blogs/finger modules still demand
 // the tree's own path — serving them zero-conf slots would mint carriers
-// they refuse (and submitAll would count the refusal as delivered)
+// they refuse (and submitAll would count the refusal as delivered). ADR
+// note: the asymmetry is vendored-codec admission policy — the upstream fix
+// (anchored zero-conf admission in @lightwebinc/bbox-host / blogs-host) is
+// deferred to a separate session; until then the mitigation is stocking
+// those lanes ahead (see ensureTrees' per-kind lowWater)
 const serves = (tree: { tree: Transaction; proven: boolean }, kind: string): boolean => tree.proven || (kind === 'market' && anchoredTree(tree.tree))
 
 /** outputs of `tx` that carry a lane's funding lock at ≥ its slot value —

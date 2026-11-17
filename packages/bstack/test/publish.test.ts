@@ -94,6 +94,45 @@ test('ensureTrees: mints once, no double-mint while unproven, proven then low-wa
   assert.equal(broadcasted.length, 2)
 })
 
+// a burst that drains a tree needs refill depth in the same pass, not one
+// mint per upkeep tick — proven-only lanes (bbox/log/finger codecs demand
+// the tree's own BUMP) have no anchored stock to dip into, so the fill loop
+// mints back-to-back until lowWater or the maxUnproven in-flight bound
+test('ensureTrees: fills to the in-flight bound in one pass, then parks until proven', async () => {
+  const k = PrivateKey.fromRandom()
+  const ledger = new MemoryTreeLedger()
+  const broadcasted: Transaction[] = []
+  const bc = async (tx: Transaction) => {
+    broadcasted.push(tx)
+    return { status: 'success' as const, txid: tx.id('hex') }
+  }
+  const fetchTx = async (txid: string) => broadcasted.find((t) => t.id('hex') === txid)
+  // distinct funding per mint — a deterministic fake parent would mint the
+  // same txid twice and the ledger's idempotent add would collapse them
+  let mints = 0
+  const p = {
+    key: k,
+    ledger,
+    lowWater: 4,
+    size: 4,
+    satsPerOutput: 100,
+    maxUnproven: 2,
+    takeFunding: async (s: number) => fund(k, 1_000_000 + 1000 * mints++),
+    broadcast: bc,
+    fetchTx
+  }
+  const r1 = await ensureTrees(p)
+  assert.equal(r1.minted.length, 2, 'empty stock + headroom -> back-to-back mints to maxUnproven, not one per pass')
+  assert.equal(broadcasted.length, 2)
+  const r2 = await ensureTrees(p)
+  assert.equal(r2.minted.length, 0, 'in-flight bound reached -> parks')
+  for (const tx of broadcasted) prove(tx)
+  const r3 = await ensureTrees(p)
+  assert.equal(r3.proven.length, 2)
+  assert.equal(await ledger.remaining(), 8)
+  assert.equal(r3.minted.length, 0, 'stock above low-water -> no mint')
+})
+
 test('ensureTrees: stuck mint — keep while healing, drop on definitive verdict, gate re-opens', async () => {
   const k = PrivateKey.fromRandom()
   const ledger = new MemoryTreeLedger()

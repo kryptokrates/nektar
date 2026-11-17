@@ -31,8 +31,7 @@ import { ProofStore } from './proofstore.js'
 import { ZkProveOps } from './zkprove.js'
 import { fundsOf } from '@nektar/chain'
 import type { Broadcaster, ChainTracker, FunderLike } from '@nektar/chain'
-import { MemRead, verifyAnswerReceipt, verifyReceiptZk } from '@nektar/memory'
-import { IngestError } from '@nektar/memory'
+import { IngestError, MemRead, verifyAnswerReceipt, verifyReceiptZk } from '@nektar/memory'
 
 // the domain vocabulary lives in @nektar/memory (re-exported via ./types.js)
 // so the *ops modules share these types with NektarMemory without a

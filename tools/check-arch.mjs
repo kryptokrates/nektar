@@ -124,11 +124,14 @@ const GATES = [
   },
   {
     name: 'deep-package-specifier',
-    re: /from\s+['"]@nektar\/[a-z-]+\//g,
+    re: /from\s+['"]@nektar\/[a-z-]+\/[^'"]*/g,
     scope: /./,
     // packages must be consumed via their index — @nektar/contracts/*.json is generated
-    // artifacts addressed by file, not a package-internal deep import.
-    allowSpecifier: /@nektar\/contracts\//
+    // artifacts addressed by file, not a package-internal deep import. The
+    // @nektar/zk demo subpaths are declared `exports` entries (the demo surface
+    // was deliberately pulled off the root index — ADR), so they are package
+    // entry points, not deep reaches.
+    allowSpecifier: /@nektar\/contracts\/|@nektar\/zk\/(aiinf-demo|poseidon-toy)/
   },
   {
     name: 'status-hint-seam',

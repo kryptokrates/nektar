@@ -28,6 +28,7 @@ paths = [
   '''^\.mod($|/)''',
   '''^dist-bundle($|/)''',
   '''^tools/groth16-spike($|/)''',
+  '''(^|/)target($|/)''',
 ]
 regexTarget = "line"
 regexes = [

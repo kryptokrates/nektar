@@ -4,6 +4,21 @@ import type { ToolHandler } from './shared.js'
 
 const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund', 'claim'])
 
+// the covenant's maxFee must cover the disclosure tx's relay fee AND still
+// leave a spendable change for the buyer — a flat floor underpays a big
+// payload into an arithmetically un-settleable quote: even zeroing change,
+// utxo − price = maxFee < the tx's relay cost, so complete() can only fail.
+// Sized to the payload: ~1 sat/KB (BSV relay floor) over an estimated
+// wrapped+script size, plus a change margin so the depositor's return
+// output is real money, not dust.
+const saleFeeBound = (payloadBytes: number, floor: number): number =>
+  Math.max(floor, Math.ceil((payloadBytes + 4096) / 1000) + 100)
+
+// the complete/refund spend should pay the relay fee its size actually
+// needs — a flat cap overpays small spends and starves big ones, both
+// inside the same covenant bound
+const relayNeed = (payloadBytes: number): number => Math.ceil((payloadBytes + 2048) / 1000)
+
 async function settleEscrow(mem: NektarMemory, tx: import('@bsv/sdk').Transaction): Promise<void> {
   await mem.funds.spent(tx)
 }
@@ -123,12 +138,13 @@ export const handlers: Record<string, ToolHandler> = {
   'sale#offer': async (mem, args) => {
     const { offerDisclosure } = await import('@nektar/identity')
     const { COVENANT_ID } = await import('@nektar/anchor')
+    const value = new Uint8Array(Buffer.from(args.value, 'hex'))
     const r = await offerDisclosure({
       sellerKey: mem.wrapCustody(),
-      value: new Uint8Array(Buffer.from(args.value, 'hex')),
+      value,
       price: BigInt(args.price),
       refundAfter: BigInt(args.refundAfter),
-      maxFee: BigInt(args.maxFee),
+      maxFee: BigInt(saleFeeBound(value.length, Number(args.maxFee))),
       buyerPub: args.buyerPub,
       expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined
     })
@@ -169,7 +185,7 @@ export const handlers: Record<string, ToolHandler> = {
       value: payload,
       price: BigInt(args.price),
       refundAfter: BigInt(args.refundAfter),
-      maxFee: BigInt(args.maxFee),
+      maxFee: BigInt(saleFeeBound(payload.length, Number(args.maxFee))),
       buyerPub: args.buyerPub,
       leaf: leafHex,
       expiresAt: args.expiresAt !== undefined ? BigInt(args.expiresAt) : undefined,
@@ -214,12 +230,15 @@ export const handlers: Record<string, ToolHandler> = {
       maxFee: BigInt(args.cfg.maxFee)
     })
     // covenant bound: utxo − price − change ≤ maxFee → change ≥ utxo − price − maxFee.
-    // Default the change so the spend pays ~350 sats (≈mainnet relay for ~1.5KB),
-    // never more than the bound allows.
+    // Fee sized to the wrapped payload the unlocking script carries — a flat
+    // ~350 overpays small spends and still starves big ones into
+    // insufficient-fee; the bound itself stays the ceiling.
     const changeSats =
       args.changeSats !== undefined
         ? BigInt(args.changeSats)
-        : BigInt(args.utxo.satoshis) - BigInt(args.cfg.price) - BigInt(Math.min(Number(args.cfg.maxFee) - 2, 350))
+        : BigInt(args.utxo.satoshis) -
+          BigInt(args.cfg.price) -
+          BigInt(Math.min(Number(args.cfg.maxFee) - 2, Math.max(10, relayNeed(args.wrapped.length / 2))))
     // the remembered escrow is the reveal's real parent — with it attached
     // the tx broadcasts as proper EF and the buyer receives BEEF/EF, not a
     // synthetic stub that cannot carry ancestry
@@ -238,7 +257,9 @@ export const handlers: Record<string, ToolHandler> = {
       refundAfter: BigInt(args.cfg.refundAfter),
       maxFee: BigInt(args.cfg.maxFee)
     })
-    const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats) : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(args.cfg.maxFee), 350))
+    // a refund carries no payload — ~2KB worst case; pay its real size, not
+    // the covenant bound (which now scales with the payload it never had)
+    const changeSats = args.changeSats !== undefined ? BigInt(args.changeSats) : BigInt(args.utxo.satoshis) - BigInt(Math.min(Number(args.cfg.maxFee), 10))
     const { tx } = await host.buildRefund(
       args.utxo,
       mem.operatorKey(),

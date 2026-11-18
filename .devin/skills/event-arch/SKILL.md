@@ -153,6 +153,11 @@ For each wait/subscription/delivery — the event-loop questions:
     `spv/indexer-dependency`, `spv/world-state`
 28. Is 'mined' binary where the stake demands a depth policy? →
     `spv/depth-blind` (advisory)
+29. Does an unconfirmed-chain handoff carry its full ancestry BEEF with
+    every input chain reaching a BUMP (or a named issuer-class bound) —
+    and does a step stall on the subject's own block when verified
+    first-party ancestry would advance the flow? → `spv/thin-ancestry`,
+    `spv/zeroconf-overreach`, `spv/zeroconf-unused`
 
 ### 4. Suggest fixes — concrete, repo-seamed, ranked
 

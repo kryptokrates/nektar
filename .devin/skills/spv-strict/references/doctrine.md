@@ -50,17 +50,42 @@ drops a held merkle path (wallet → funding → tree mint) is the same
 defect as an external one: the receiver must go back to the network
 for what the sender had.
 
-## D4 — Verifiable does not mean mined
+## D4 — Verifiable does not mean mined: carried ancestry is the zeroconf proof
 
 _Paper 011 short version, §2.3, §3.2:_ "A transaction that is never
 mined is still verifiable when it spends an output of one that was."
 The carrier's proof is its parent's merkle path plus one script check.
 
 Demands: an unmined transaction is provable exactly as far as its
-ancestry reaches a merkle path. One unconfirmed hop above a proven
-parent is verifiable ancestry; an unmined tx with unmined parents is
-not. This is the only legitimate "zero-conf": carried, checked
-ancestry — never an early belief.
+carried ancestry reaches merkle paths. The general form is the BEEF
+ancestry chain: every input's source transaction carried, each checked
+(txid recomputed from bytes, input linkage, signatures where the flow
+moves value), and every chain terminating at a BUMP-anchored mined
+parent. One unconfirmed hop is the degenerate case, not the bound —
+the bound is the ancestor-policy limit (chain length, total
+unconfirmed value) the verifier sets. An ancestry that ends in unmined
+transactions with uncarried inputs proves nothing past the verified
+prefix.
+
+Two risk classes, priced differently:
+
+- **First-party ancestry** — ancestors we issued (our funding trees,
+  our carrier chains, our own change). Only we can double-spend them,
+  so verified linkage plus our own spend records is the whole check;
+  chains may run to the policy cap.
+- **Counterparty ancestry** — unconfirmed ancestors the peer issued.
+  Verified ancestry proves provenance, not exclusivity: the issuer can
+  still double-spend. Bound it — ancestor-chain cap, unconfirmed-value
+  cap — and escalate toward mined-depth requirements as value grows
+  (D9), with conflict watches (a conflicting spend's own BUMP, the
+  `abandoned` event) as the trip wire.
+
+Zero-conf acceptance is a progression decision, never a settlement
+decision: verified carried ancestry advances want → offer → escrow →
+disclosure; value-final state still waits for depth (D7). This is the
+only legitimate "zero-conf": carried, checked ancestry within a named
+policy — never an early belief, and never a wait for a block the
+ancestry already made unnecessary.
 
 ## D5 — Postage is paid once, ahead of use
 
@@ -119,7 +144,12 @@ faster during rapid growth or suspected reorgs, slower in stability.
 
 Demands: the default path is fast and proof-carrying; waiting, deeper
 proofs and extra sources are the escalation path, entered on a named
-anomaly.
+anomaly. For zeroconf specifically: first-seen acceptance plus a
+conflict watch is the default risk posture for first-party chains and
+small counterparty ones; what escalates to mined-depth requirements is
+a named anomaly — an unverified ancestor, a conflicting spend, value
+over the zeroconf cap, a chain past the ancestor bound — never the
+clock alone.
 
 ## D10 — Proofs are a provider-tier product; apps take objects + headers
 

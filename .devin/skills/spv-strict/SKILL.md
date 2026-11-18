@@ -29,6 +29,10 @@ check their work, and compute everything else from bytes in hand
   that the deal path only ever needs things that are ALREADY proven:
   evidence that travels with the transaction, and stock that was mined
   ahead of use ("the patterns do not wait for the network", paper 009).
+  Carried, checked ancestry is what makes an unconfirmed transaction
+  "already proven" — maximal safe zeroconf serves the whole deal path
+  from verified BEEF chains up to the ancestor-policy bound, and only
+  value-final settlement waits for depth (D4, D7).
 
 A finding in either half is a defect. Waiting on a block mid-deal is not
 caution; it is a missing proof or missing stock.
@@ -96,7 +100,11 @@ imports).
 - Header independence: sources, PoW-checked, never the proof's provider
 - Evidence travels: handoffs carrying BEEF / EF / raw / txid
 - Block waits on the deal path: N (target 0) — each listed with its cause
+- Zeroconf utilization: deal-path steps served by verified carried
+  ancestry vs those still waiting on blocks; first-party chain lengths
+  vs the ancestor-policy bound; counterparty caps present and enforced
 - Stock: per lane, proven slots vs refill threshold; lanes that can reach 0
+  or reach the chain-length cap before refill
 ```
 
 Every finding states its evidence: the line that shows it, or the
@@ -130,9 +138,17 @@ There is no advisory tier. If it is not worth fixing it is not a finding.
 - Funding trees are postage (paper 011 §6): one mined tree admits M
   carriers. `TreeLedger.take` serving zero slots while the wallet holds
   funds is `spv/unstocked-lane`, not a normal state.
-- The market lane may serve from a tree one unconfirmed hop above a
-  mined parent (`anchoredTree`). That only works when the parent's
-  merkle path is IN the tree's BEEF — check the bytes, not the comment.
+- First-party unconfirmed ancestry is the repo's zeroconf ceiling: a
+  chain of our own spends is verifiable to the ancestor-policy bound,
+  not to a hardcoded one hop. `anchoredTree` (one unconfirmed hop above
+  a mined parent) is the implemented floor — extending it toward the
+  policy cap is a stocking question; every hop still requires the
+  parent's merkle path IN the BEEF, checked against bytes not comments.
+- Counterparty unconfirmed ancestry is bounded trust: provenance
+  verified, exclusivity not. Caps (`maxUnconfirmedAncestors`,
+  unconfirmed-value limits) plus conflict watches (a conflicting tx's
+  own BUMP, `abandoned` events) are the trip wires; escalation to
+  depth is the anomaly path, not the default.
 - The vendored bbox / bfinger / blogs host codecs require the carrier's
   funding tree itself to be mined (one BUMP, two transactions). Do not
   propose weakening them; stock those lanes ahead instead.

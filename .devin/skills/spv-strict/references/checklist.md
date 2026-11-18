@@ -44,7 +44,28 @@ unverified and retried; it is not a refusal and not an acceptance.
 - When step 11 cannot be answered, does the item stay retryable, or is
   it dropped / accepted?
 - For our own carriers: is the tree handed to `buildCarrier` proven or
-  one hop above a path that is actually present in the bytes?
+  above a path that is actually present in the bytes — and when the
+  chain runs past one hop, does every ancestor in the BEEF terminate at
+  a BUMP within the ancestor-policy bound?
+
+## Unconfirmed chains (zeroconf accepts)
+
+When the accepted object is not the carrier pattern but a BEEF
+ancestry chain — counterparty or first-party — the eleven steps become:
+
+1. Every ancestor's bytes carried (txid recomputed, input linkage
+   verified) — an absent ancestor is an unverified hop, not a detail.
+2. Every input chain terminates at a BUMP-anchored mined parent, OR the
+   unconfirmed tail is within the named policy bound for that issuer
+   class (first-party → policy cap; counterparty → ancestor + value
+   caps, escalation on breach).
+3. The BUMPs still anchor to OUR headers (step 11 unchanged — the
+   terminal parents are just further back).
+4. A conflict watch is registered for counterparty chains that advance
+   the deal: the trip wire is the conflicting transaction's own mined
+   BUMP or the `abandoned` event, and what it triggers is escalation —
+   never an automatic "rejected" verdict, since no proof of rejection
+   exists.
 
 ## Mined data (the short list)
 

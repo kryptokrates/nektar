@@ -26,4 +26,5 @@ packages/zk/stark/**
 .spikes
 coverage
 deploy/agent/helm/templates/
+deploy/hub/helm/templates/
 deploy/bstack-sandbox/modules/

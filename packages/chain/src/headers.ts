@@ -55,6 +55,73 @@ export function linksTo(child: BlockHeader, parent: BlockHeader): boolean {
   return child.prevHash === parent.hash && child.height === parent.height + 1
 }
 
+/** the per-tracker header cache + reorg machinery — ONE implementation so
+ *  every header source shares the same rules: linkage-gated admission, and
+ *  on a mismatch a bounded walk down to the common ancestor before
+ *  subscribers hear of it. */
+export class HeaderCache {
+  private headers = new Map<number, BlockHeader>()
+  private reorgCbs: Array<(removed: BlockHeader[], newTip: BlockHeader) => void> = []
+
+  get(height: number): BlockHeader | undefined {
+    return this.headers.get(height)
+  }
+  has(height: number): boolean {
+    return this.headers.has(height)
+  }
+  set(h: BlockHeader): void {
+    this.headers.set(h.height, h)
+  }
+  onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
+    this.reorgCbs.push(cb)
+  }
+
+  /** linkage gate — true when the fresh header sits cleanly beside what the
+   *  cache already holds; a mismatch runs the reorg walk and the caller must
+   *  NOT cache or silently serve the newcomer */
+  async admit(h: BlockHeader, refetch: (height: number) => Promise<BlockHeader | undefined>): Promise<boolean> {
+    const parent = this.headers.get(h.height - 1)
+    const child = this.headers.get(h.height + 1)
+    if ((parent !== undefined && !linksTo(h, parent)) || (child !== undefined && !linksTo(child, h))) {
+      await this.reorgAt(h, refetch)
+      return false
+    }
+    return true
+  }
+
+  /** walk DOWN from just under the mismatching header: each cached header is
+   *  re-fetched, and evicted while the fresh answer differs — the first
+   *  agreement is the common ancestor and stays cached. Everything above the
+   *  mismatch height is descendant-stale. `fresh` is the highest header we
+   *  could fetch, reported to subscribers as newTip. */
+  async reorgAt(fresh: BlockHeader, refetch: (height: number) => Promise<BlockHeader | undefined>): Promise<void> {
+    const removed: BlockHeader[] = []
+    for (let h = fresh.height - 1, n = 0; n < 12; h--, n++) {
+      const cur = this.headers.get(h)
+      if (cur === undefined) break // cache gap — can't verify deeper
+      const ref = await refetch(h)
+      if (ref === undefined) break // couldn't confirm deeper
+      if (ref.hash === cur.hash) break // common ancestor — keep it
+      this.headers.delete(h)
+      removed.push(cur)
+    }
+    for (const [h, cur] of this.headers) {
+      if (h >= fresh.height) {
+        this.headers.delete(h)
+        removed.push(cur)
+      }
+    }
+    if (removed.length === 0) return
+    removed.sort((a, b) => b.height - a.height)
+    for (const cb of this.reorgCbs)
+      try {
+        cb(removed, fresh)
+      } catch {
+        /* listener errors are theirs */
+      }
+  }
+}
+
 interface WitMark {
   at: number
   state: 'ok' | 'mismatch' | 'uncorroborated'

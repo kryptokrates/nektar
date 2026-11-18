@@ -115,7 +115,9 @@ export class CustodyOps {
       }
       if (f === undefined) continue
       if (f.verdict === 'dead') return f.hint?.status || 'dead'
-      if (hintRejected(f.hint)) return f.hint!.status
+      // a rejection-family hint is a wake, not a verdict: keep probing to the
+      // bound — died() must only ever fire on 'dead' (or the caller's own
+      // broadcast refusal), never on a broadcaster's word alone
       if (f.verdict === 'mined' || f.tx !== undefined || hintSeen(f.hint)) return undefined
     }
     return undefined

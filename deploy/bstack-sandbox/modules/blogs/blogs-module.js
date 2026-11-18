@@ -1998,8 +1998,12 @@ var Unrecorded = class extends Error {
   }
   reason;
 };
+// fail closed, not open: when the engine never wires a real header source
+// (OVERLAY_CHAIN_TRACKER_URL unset), 'true' would let any claimed root mint
+// 'mined' verdicts. An engine without headers cannot attest inclusion —
+// mined() defers the admission instead of forging it.
 var engineVerified = {
-  isValidRootForHeight: async () => true,
+  isValidRootForHeight: async () => false,
   currentHeight: async () => 0
 };
 var LogTopicManager = class {

@@ -5,11 +5,12 @@
 // enough). Settlement is publicly auditable from the tx alone: (pays payTo ≥
 // amount) ∧ (carries `nektarpay:<invoiceId>`) — the receipt commits the txid.
 import { Transaction, PrivateKey, PublicKey, Signature, P2PKH, Beef } from '@bsv/sdk'
+import type { ChainTracker } from '@bsv/sdk'
 import { LedgerReceiver, spentOutpoints } from '@lightwebinc/bcommon/host'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { utf8, sha256, toHex, signerAddress, signerPubHex, toSigner, nektarEnv } from '@nektar/core'
+import { utf8, sha256, toHex, signerAddress, signerPubHex, toSigner, nektarEnv, nektarEnvNum } from '@nektar/core'
 import type { NektarMemory } from './memory.js'
 
 export const paymentsEnabled = (): boolean => /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAYMENTS') ?? '')
@@ -74,6 +75,35 @@ export const priceFor = (tool: string): number =>
   Number(
     nektarEnv(`NEKTAR_PRICE_${tool.toUpperCase()}_SATS`) ?? nektarEnv('NEKTAR_PRICE_SATS') ?? (tool === 'anchor' ? 100 : PROVER_TOOLS.has(tool) ? 500 : 250)
   )
+
+/** walk the tx's carried ancestry: every served BUMP must verify against
+ * `tracker`; unproven ancestry may run at most `NEKTAR_PAY_ANCESTRY` hops
+ * (default 4) and at most `NEKTAR_PAY_ANCESTRY_NODES` total parents
+ * (default 64) — absent parents don't count (the broadcaster validates
+ * them), a carried-but-unproven one does, and an invalid BUMP refuses. */
+const carriedAncestryOk = async (tx: Transaction, tracker: ChainTracker): Promise<boolean> => {
+  const maxHops = Math.max(0, nektarEnvNum('NEKTAR_PAY_ANCESTRY') ?? 4)
+  const maxNodes = Math.max(1, nektarEnvNum('NEKTAR_PAY_ANCESTRY_NODES') ?? 64)
+  const seen = new Set([tx.id('hex')])
+  let frontier = tx.inputs.map((i) => i.sourceTransaction).filter((p): p is Transaction => p !== undefined)
+  for (let hops = 0; frontier.length > 0; hops++) {
+    if (hops >= maxHops) return false
+    const next: Transaction[] = []
+    for (const p of frontier) {
+      const id = p.id('hex')
+      if (seen.has(id)) continue
+      seen.add(id)
+      if (seen.size > maxNodes) return false
+      if (p.merklePath !== undefined) {
+        if (!(await p.merklePath.verify(id, tracker))) return false
+        continue // a proven parent terminates its branch
+      }
+      for (const i of p.inputs) if (i.sourceTransaction !== undefined) next.push(i.sourceTransaction)
+    }
+    frontier = next
+  }
+  return true
+}
 
 interface Invoice {
   invoiceId: string
@@ -279,6 +309,12 @@ export const settlePayment = async (mem: NektarMemory, tool: string, payment: { 
   })
   if (!paid) throw new Error(`payment tx does not pay ${inv.payTo} ≥ ${inv.amount} sats`)
   if (!tagged) throw new Error(`payment tx is missing the invoice tag output — needs OP_FALSE OP_RETURN "${inv.opReturn}"`)
+  // counterparty-carried ancestry: every BUMP in the bundle verifies against
+  // OUR tracker, and the unproven chain it hangs off is bounded — a carried
+  // parent is our risk surface (double-spend room grows with unconfirmed
+  // depth); an absent one is the network's — broadcast rejects it
+  if (!(await carriedAncestryOk(tx, mem.sdkTracker())))
+    throw new Error('payment ancestry fails verification or exceeds the unproven-depth cap — provide proven parents')
   const txid = tx.id('hex')
   // stock claim check BEFORE broadcast: replayed txid, or a conflict with a
   // coin an accepted payment already spent — two verifying txs sharing a coin

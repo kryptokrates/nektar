@@ -276,7 +276,9 @@ export function openUpkeep(rt: Rt): void {
               reaped++
             }
             await store.unblockOutbox('funding-slot')
-            log(`automation: dead-ancestry: dropped ${u.kind} tree ${u.txid.slice(0, 12)} — unservable parent ${struck[0].slice(0, 12)}; reaped ${reaped} journaled carrier(s)`)
+            log(
+              `automation: dead-ancestry: dropped ${u.kind} tree ${u.txid.slice(0, 12)} — unservable parent ${struck[0].slice(0, 12)}; reaped ${reaped} journaled carrier(s)`
+            )
           }
           for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger'] as const) {
             // stop() drains upkeep with a bound — bail between phases so a

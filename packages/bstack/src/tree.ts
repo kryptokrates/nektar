@@ -87,6 +87,14 @@ export interface TreeLedger {
    *  input ancestry still shows that parent unproven — after this the tree
    *  is ancestry-anchored and its slots serve. true when a beef changed. */
   attachParentPath(txid: string, merklePath: MerklePath): Promise<boolean>
+  /** a reorg orphaned every proof anchored at >= `height`: strip those paths
+   *  — the tree's own BUMP AND any parent BUMP inside its carried ancestry —
+   *  and flip affected rows back to unproven so the proving pass re-anchors
+   *  them against the surviving fork (mirrors CarrierJournal.clearPaths).
+   *  Without this a proven row is permanently stale: markProven only touches
+   *  unproven() rows, so a re-mined proof on the new fork can never heal it.
+   *  Returns the txids that were demoted. */
+  unproveFrom(height: number): Promise<string[]>
   unproven(): Promise<Array<{ txid: string; kind: string }>>
   /** remove a tree + all its slots — a mint that never landed on-chain
    *  (rejected / evicted) would otherwise sit in unproven() forever and gate
@@ -122,11 +130,7 @@ export const anchoredTree = (tree: Transaction): boolean =>
  *  txids; the caller owns strike/eviction policy. Walks unproven ancestry
  *  only — a BUMP-anchored ancestor terminates the chain — and is bounded
  *  so a deep or cyclic graph can't spin the audit. */
-export const deadAncestry = async (
-  tree: Transaction,
-  resolveTx: (txid: string) => Promise<Transaction | undefined>,
-  maxNodes = 32
-): Promise<string[]> => {
+export const deadAncestry = async (tree: Transaction, resolveTx: (txid: string) => Promise<Transaction | undefined>, maxNodes = 32): Promise<string[]> => {
   const dead = new Set<string>()
   const seen = new Set<string>([tree.id('hex')])
   const queue: Transaction[] = tree.merklePath === undefined ? [tree] : []
@@ -224,6 +228,21 @@ export class MemoryTreeLedger implements TreeLedger {
       }
     }
     return changed
+  }
+  async unproveFrom(height: number): Promise<string[]> {
+    const out: string[] = []
+    for (const [txid, t] of this.trees) {
+      if (t.proven && t.tree.merklePath !== undefined && t.tree.merklePath.blockHeight >= height) {
+        delete t.tree.merklePath
+        t.proven = false
+        out.push(txid)
+      }
+      for (const i of t.tree.inputs) {
+        const src = i.sourceTransaction
+        if (src?.merklePath !== undefined && src.merklePath.blockHeight >= height) delete src.merklePath
+      }
+    }
+    return out
   }
   async unproven(): Promise<Array<{ txid: string; kind: string }>> {
     return [...this.trees].filter(([, t]) => !t.proven).map(([id, t]) => ({ txid: id, kind: t.kind }))
@@ -422,6 +441,37 @@ export class KnexTreeLedger implements TreeLedger {
       }
     }
     return changed
+  }
+  async unproveFrom(height: number): Promise<string[]> {
+    await this.ensure()
+    const out: string[] = []
+    for (const row of await this.kx('bstack_trees').select('txid', 'proven', 'beef')) {
+      const tree = Transaction.fromBEEF(JSON.parse(row.beef as string))
+      let touched = false
+      // a dead-fork BUMP on the tree itself demotes the row: slots stop
+      // serving (proven:0, path stripped) and the proving pass re-anchors it
+      const deadRoot = tree.merklePath !== undefined && tree.merklePath.blockHeight >= height
+      if (deadRoot) {
+        delete tree.merklePath
+        touched = true
+        if (Number(row.proven) === 1) out.push(row.txid)
+      }
+      for (const i of tree.inputs) {
+        const src = i.sourceTransaction
+        if (src?.merklePath !== undefined && src.merklePath.blockHeight >= height) {
+          delete src.merklePath
+          touched = true
+        }
+      }
+      if (!touched) continue
+      // proven:<read> is the race guard (same shape attachParentPath uses):
+      // a markProven that committed between our SELECT and this write already
+      // re-anchored the row on the new fork — leave it alone
+      await this.kx('bstack_trees')
+        .where({ txid: row.txid, proven: Number(row.proven) })
+        .update({ ...(deadRoot ? { proven: 0 } : {}), beef: JSON.stringify(tree.toBEEF()) })
+    }
+    return out
   }
   async unproven(): Promise<Array<{ txid: string; kind: string }>> {
     await this.ensure()

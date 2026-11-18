@@ -333,6 +333,8 @@ export function openLanes(rt: Rt): void {
             // re-merge still-valid deferred items — they retry until their
             // sender's record resolves (or their window lapses)
             const now = Math.floor(Date.now() / 1000)
+            const lapsed = deferredAcks.filter((d) => d.until <= now).length
+            if (lapsed > 0) log(`automation: box ack: ${lapsed} deferred receipt(s) expired unsent — sender record never resolved`)
             deferredAcks = deferredAcks.filter((d) => d.until > now)
             for (const d of deferredAcks) {
               if (!items.some((i) => i.txid === d.txid && i.commitment === d.commitment)) items.push(d)

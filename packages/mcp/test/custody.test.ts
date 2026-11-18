@@ -131,7 +131,7 @@ test('custody: a proven candidate is never status-queried', async () => {
   assert.deepEqual(statuses, [], 'a proof-carrying parent needs no status hint')
 })
 
-test('custody: provisionPay throws when the broadcaster rejects right after submit', async () => {
+test('custody: a rejection-family hint after submit is a wake, not a verdict — nothing dies', async () => {
   const marks: string[] = []
   const p = parent()
   p.merklePath = pathFor(p)
@@ -147,13 +147,36 @@ test('custody: provisionPay throws when the broadcaster rejects right after subm
     txs: () => {},
     facts: async () => hintFacts('REJECTED')
   } as CustodyOpsDeps)
+  const r = await ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 })
+  assert.ok(r.txid.length > 0)
+  // a pushed status word must never reach died(): the tx stays submitted and
+  // its spend is recorded — a later sealed verdict is what heals
+  assert.deepEqual(marks, ['markSpent', 'addOwned', 'addOwned'], 'the spend settles, no tombstones')
+})
+
+test('custody: a sealed dead verdict after submit throws and tombstones', async () => {
+  const marks: string[] = []
+  const p = parent()
+  p.merklePath = pathFor(p)
+  const ops = new CustodyOps({
+    funds: fundsOf({
+      utxos: [{ tx: p, vout: 0, satoshis: 100_000 }],
+      markSpent: () => marks.push('markSpent'),
+      addOwned: () => marks.push('addOwned'),
+      address: () => key.toAddress()
+    }),
+    fundSigner: () => key,
+    broadcast: async () => ({ status: 'success' }),
+    txs: () => {},
+    facts: async (): Promise<import('@nektar/chain').TxFacts> => ({ verdict: 'dead', hint: { status: 'REJECTED' } })
+  } as CustodyOpsDeps)
   await assert.rejects(
     ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 }),
     /rejected after submit/
   )
-  // rejection is a death: the dead tx's two owned outputs (payment-to-self +
-  // change) are tombstoned so they can never be handed out — but the taken
-  // parent was never marked spent; its hold is released back into the pool
+  // the dead tx's two owned outputs (payment-to-self + change) are tombstoned
+  // so they can never be handed out — but the taken parent was never marked
+  // spent; its hold is released back into the pool
   assert.deepEqual(marks, ['markSpent', 'markSpent'], 'the taken input returns to the reserve')
 })
 

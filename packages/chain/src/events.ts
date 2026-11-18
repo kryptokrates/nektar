@@ -54,7 +54,7 @@ export class ChainEvents extends EventEmitter {
    *  `verified` marks observed/delivered truth vs pushed hints: a hint record
    *  must never dedup-suppress the 'tx' emit of a later verified event. */
   private lastStatus = new Map<string, { ev: TxStatusEvent; at: number; verified: boolean }>()
-  private waiters = new Map<string, Array<(ev: TxStatusEvent | undefined, terminal: boolean) => void>>()
+  private waiters = new Map<string, Array<(ev: TxStatusEvent | undefined, terminal: boolean, verified: boolean) => void>>()
   /** in-flight observes by txid — the nudge loop and the tick coalesce onto
    *  one fetch instead of multiplying identical chain reads */
   private probing = new Map<string, Promise<TxStatusEvent | undefined>>()
@@ -120,7 +120,7 @@ export class ChainEvents extends EventEmitter {
     // otherwise hint-verified-hint would re-emit a duplicate 'tx'
     const verified = prev?.verified === true && prev.ev.status === ev.status
     this.lastStatus.set(ev.txid, { ev, at: Date.now(), verified })
-    this.resolve(ev, TERMINAL.has(ev.status))
+    this.resolve(ev, TERMINAL.has(ev.status), verified)
     // verify-on-hint: a pushed status (MINED from a status stream, a
     // broadcaster callback) is checked by our own observe on the next
     // macrotask — the 'tx' emit arrives in ms, not at the interval floor.
@@ -171,16 +171,22 @@ export class ChainEvents extends EventEmitter {
     return p
   }
 
-  /** resolve with the txid's terminal event (or first delivered event), or
-   *  undefined on timeout. */
-  async waitFor(txid: string, timeoutMs = 30_000, match: (ev: TxStatusEvent) => boolean = () => true): Promise<TxStatusEvent | undefined> {
-    const existing = this.lastStatus.get(txid)?.ev
-    if (existing !== undefined && match(existing)) return existing
+  /** resolve with the txid's terminal event (or first delivered event) plus
+   *  its verification bit — the same `{ev, verified}` split statusOf keeps:
+   *  a pushed hint answers `verified:false`, only an observed/reported
+   *  delivery carries true. undefined on timeout, abandon or TTL drop. */
+  async waitFor(
+    txid: string,
+    timeoutMs = 30_000,
+    match: (ev: TxStatusEvent) => boolean = () => true
+  ): Promise<{ ev: TxStatusEvent; verified: boolean } | undefined> {
+    const existing = this.lastStatus.get(txid)
+    if (existing !== undefined && match(existing.ev)) return { ev: existing.ev, verified: existing.verified }
     this.watch(txid)
     const deadline = Date.now() + timeoutMs
-    let done!: (ev: TxStatusEvent | undefined, terminal: boolean) => void
-    const pending = new Promise<TxStatusEvent | undefined>((resolve) => {
-      done = (ev, terminal) => {
+    let done!: (ev: TxStatusEvent | undefined, terminal: boolean, verified: boolean) => void
+    const pending = new Promise<{ ev: TxStatusEvent; verified: boolean } | undefined>((resolve) => {
+      done = (ev, terminal, verified) => {
         // a non-matching event parks the waiter only while the txid can still
         // move — a terminal event ends the wait for EVERY waiter on it,
         // matcher or not, and must answer them rather than stranding them
@@ -190,7 +196,7 @@ export class ChainEvents extends EventEmitter {
           txid,
           (this.waiters.get(txid) ?? []).filter((w) => w !== done)
         )
-        resolve(ev)
+        resolve(ev === undefined ? undefined : { ev, verified })
       }
       this.waiters.set(txid, [...(this.waiters.get(txid) ?? []), done])
     })
@@ -215,7 +221,7 @@ export class ChainEvents extends EventEmitter {
     // a wait resolved early (delivery or stop()) must not leave its timer
     // holding the process for the remaining timeoutMs
     if (timeoutTimer !== undefined) clearTimeout(timeoutTimer)
-    if (ev === undefined) done(undefined, true) // timeout: drop the waiter, don't leak it
+    if (ev === undefined) done(undefined, true, false) // timeout: drop the waiter, don't leak it
     void nudge.catch(() => undefined)
     return ev
   }
@@ -272,6 +278,11 @@ export class ChainEvents extends EventEmitter {
       for (const [txid, w] of this.watched) {
         if (w.since < staleAt) {
           this.watched.delete(txid)
+          // a watch that ends without a terminal answer is still an ending:
+          // the abandoned signal + a waiter flush — a failure path that
+          // leaves waiters parked on their own timeout is a lost wakeup
+          this.emit('abandoned', { txid, tip: this.tip, seenAtHeight: w.atHeight })
+          this.end(txid)
           continue
         }
         if (w.atHeight === undefined) w.atHeight = this.tip
@@ -299,6 +310,7 @@ export class ChainEvents extends EventEmitter {
           if (w.answeredTip !== undefined && w.atHeight !== undefined && w.answeredTip - w.atHeight > this.opts.abandonAfterBlocks) {
             this.watched.delete(txid)
             this.emit('abandoned', { txid, tip: this.tip, seenAtHeight: w.atHeight })
+            this.end(txid)
           }
         }
       }
@@ -327,19 +339,27 @@ export class ChainEvents extends EventEmitter {
       this.emit('tx', ev)
     }
     if (TERMINAL.has(ev.status)) this.watched.delete(ev.txid)
-    this.resolve(ev, TERMINAL.has(ev.status))
+    this.resolve(ev, TERMINAL.has(ev.status), true)
   }
 
-  private resolve(ev: TxStatusEvent | undefined, terminal = true): void {
+  /** the watch on `txid` ended without a terminal event (abandon, TTL drop):
+   *  answer its waiters with undefined — the same answer a timeout gives —
+   *  instead of leaving them parked on a watch that no longer exists */
+  private end(txid: string): void {
+    for (const w of this.waiters.get(txid) ?? []) w(undefined, true, false)
+    this.waiters.delete(txid)
+  }
+
+  private resolve(ev: TxStatusEvent | undefined, terminal = true, verified = false): void {
     if (ev !== undefined) {
       // every waiter on the txid hears each delivered event: matching ones
       // resolve; non-matching ones stay parked while the txid can still move —
       // a terminal event ends the wait for EVERY waiter, matcher or not
-      for (const w of this.waiters.get(ev.txid) ?? []) w(ev, terminal)
+      for (const w of this.waiters.get(ev.txid) ?? []) w(ev, terminal, verified)
       if (terminal) this.waiters.delete(ev.txid)
       return
     }
-    for (const ws of this.waiters.values()) for (const w of ws) w(undefined, true)
+    for (const ws of this.waiters.values()) for (const w of ws) w(undefined, true, false)
     this.waiters.clear()
   }
 }

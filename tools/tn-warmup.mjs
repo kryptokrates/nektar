@@ -38,7 +38,9 @@ const FLOOR = Number(process.env.TN_TREE_FLOOR ?? 8)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const WIF = existsSync(KEYS_FILE) ? JSON.parse(readFileSync(KEYS_FILE, 'utf8')) : {}
-const names = (process.argv.slice(2).filter((a) => !a.startsWith('-')).length > 0 ? process.argv.slice(2) : ['alice', 'ben', 'bob']).filter((n) => WIF[n] !== undefined)
+const names = (process.argv.slice(2).filter((a) => !a.startsWith('-')).length > 0 ? process.argv.slice(2) : ['alice', 'ben', 'bob']).filter(
+  (n) => WIF[n] !== undefined
+)
 if (names.length === 0) {
   console.error(`no suite WIFs — expected ${KEYS_FILE} with alice/ben/bob`)
   process.exit(1)
@@ -62,7 +64,11 @@ const mkagent = async (wifName) => {
   const reserve = new ReserveFunder(fundKey, reserveFile)
   const addr = fundKey.toAddress([0x6f])
   const mc = { broadcasterUrl: ARC, indexerUrl: INDEX }
-  const port = await livePort(mc, 'testnet', { dataDir, log: (l) => console.log(`${wifName}:${l}`), valueOf: (txid, vout) => reserve.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis })
+  const port = await livePort(mc, 'testnet', {
+    dataDir,
+    log: (l) => console.log(`${wifName}:${l}`),
+    valueOf: (txid, vout) => reserve.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis
+  })
   const spendStatus = port.spendStatus ?? (async () => 'unknown')
   const rec = await reconcileLiveReserve(reserve, addr, mc, spendStatus)
   console.log(`${wifName}: reconcile ${JSON.stringify(rec)}`)
@@ -111,9 +117,24 @@ const mkagent = async (wifName) => {
   const pub = mem.operatorKey().toPublicKey().toString()
   await rt.store.approvePolicy(
     {
-      v: 1, policyId: 'tn-warmup', network: 'testnet', agentPub: pub, roles: ['buyer', 'seller'],
-      notBefore: 0, notAfter: 4_000_000_000_000, domains: ['tn-warmup'],
-      limits: { perPurchaseSats: 500, dailyPurchaseSats: 50_000, perTxFeeSats: 1200, dailyFeeSats: 50_000, runTotalSats: 500_000, maxLockedSats: 5000, maxUnconfirmedSats: 5000, maxUnconfirmedCount: 16 },
+      v: 1,
+      policyId: 'tn-warmup',
+      network: 'testnet',
+      agentPub: pub,
+      roles: ['buyer', 'seller'],
+      notBefore: 0,
+      notAfter: 4_000_000_000_000,
+      domains: ['tn-warmup'],
+      limits: {
+        perPurchaseSats: 500,
+        dailyPurchaseSats: 50_000,
+        perTxFeeSats: 1200,
+        dailyFeeSats: 50_000,
+        runTotalSats: 500_000,
+        maxLockedSats: 5000,
+        maxUnconfirmedSats: 5000,
+        maxUnconfirmedCount: 16
+      },
       scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: 800 },
       seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 5000, sellableShards: ['guide'] },
       disclosure: { allowPublic: false },
@@ -122,7 +143,14 @@ const mkagent = async (wifName) => {
     },
     'tn-warmup'
   )
-  return { name: wifName, rt, stop: async () => { await rt.stop(); await keyRelease() } }
+  return {
+    name: wifName,
+    rt,
+    stop: async () => {
+      await rt.stop()
+      await keyRelease()
+    }
+  }
 }
 
 const agents = []

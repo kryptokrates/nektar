@@ -195,6 +195,16 @@ export class StackChain implements ChainTracker, Broadcaster, TestChain {
         if (!r.ok) return undefined
         try {
           const merklePath = MerklePath.fromBinary([...new Uint8Array(await r.arrayBuffer())])
+          // same gate regtestPort.observe runs: the served bytes are a claim
+          // until the computed root validates against our own headers — a
+          // path that can't recompute its txid's root is not a proof
+          let root: string
+          try {
+            root = merklePath.computeRoot(txid)
+          } catch {
+            return undefined // served path doesn't contain the txid
+          }
+          if (!(await this.tracker.isValidRootForHeight(root, merklePath.blockHeight))) return undefined
           // attach the proof to the cached tx so the sync getTx view answers
           // 'mined', not 'seen' — txFacts consumers rely on it
           const cached = this.known.get(txid)

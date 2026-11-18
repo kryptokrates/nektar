@@ -183,7 +183,7 @@ export async function callTerminal(
 }
 
 // ── file-backed claim registry + proof store (shared by watcher + MCP) ──
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdirSync, statSync, rmSync } from 'node:fs'
 import { writeFileAtomic } from '@nektar/core'
 import { join } from 'node:path'
 
@@ -199,24 +199,65 @@ export const loadClaims = (file: string): ClaimEntry[] => {
     return []
   }
 }
-export function registerClaim(file: string, e: ClaimEntry): void {
-  const list = loadClaims(file)
-  if (!list.some((x) => x.txid === e.txid && x.vout === e.vout)) {
-    list.push(e)
-    // tmp+rename: a torn registry reads as [] — the honest challenger goes blind
-    writeFileAtomic(file, JSON.stringify(list, null, 1))
+
+// The registry is mutated from TWO processes (the MCP server registers, the
+// watcher marks spent) — an unsynchronized read-modify-write loses whichever
+// update interleaves, and a lost registration is a claim the watcher never
+// sees. mkdir is the atomic-acquire primitive (same shape as the testkit
+// treasury lock); stale-mtime breaks a dead holder's lock.
+const spin = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+function withClaimsLock<T>(file: string, fn: () => T): T {
+  const lock = `${file}.lock`
+  const deadline = Date.now() + 30_000
+  for (;;) {
+    try {
+      mkdirSync(lock)
+      break
+    } catch {
+      if (Date.now() > deadline) throw new Error(`claims registry lock wait exceeded: ${file}`)
+      try {
+        const st = statSync(lock)
+        if (Date.now() - st.mtimeMs > 60_000) {
+          rmSync(lock, { recursive: true })
+          continue
+        }
+      } catch {
+        /* raced */
+      }
+      spin(25)
+    }
   }
+  try {
+    return fn()
+  } finally {
+    rmSync(lock, { recursive: true })
+  }
+}
+
+export function registerClaim(file: string, e: ClaimEntry): void {
+  withClaimsLock(file, () => {
+    const list = loadClaims(file)
+    if (!list.some((x) => x.txid === e.txid && x.vout === e.vout)) {
+      list.push(e)
+      // tmp+rename: a torn registry reads as [] — the honest challenger goes blind
+      writeFileAtomic(file, JSON.stringify(list, null, 1))
+    }
+  })
 }
 // The outpoint is consumed (by our challenge or any spend). The claim's
 // continuation UTXO gets a new txid the registry cannot follow without a
 // tx-index — marking spent just stops retrying the dead outpoint.
 export function markClaimSpent(file: string, txid: string, vout: number): void {
-  const list = loadClaims(file)
-  const e = list.find((x) => x.txid === txid && x.vout === vout)
-  if (e && !e.spent) {
-    e.spent = true
-    writeFileAtomic(file, JSON.stringify(list, null, 1))
-  }
+  withClaimsLock(file, () => {
+    const list = loadClaims(file)
+    const e = list.find((x) => x.txid === txid && x.vout === vout)
+    if (e && !e.spent) {
+      e.spent = true
+      writeFileAtomic(file, JSON.stringify(list, null, 1))
+    }
+  })
 }
 export const proofFile = (dir: string, receiptHash: string): string => join(dir, `${receiptHash}.bin`)
 export function storeProof(dir: string, receiptHash: string, bytes: Uint8Array): string {

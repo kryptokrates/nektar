@@ -273,7 +273,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     .map((s) => s.trim())
     .filter(Boolean)) {
     try {
-      for (const u of await importFundingTx(mc, txid, pkhHex)) addIfNew(u)
+      for (const u of await importFundingTx(mc, txid, pkhHex, port.tracker)) addIfNew(u)
     } catch (e) {
       l(`funding import ${txid}: ${(e as Error).message}`)
     }
@@ -335,7 +335,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
         .map((s) => s.trim())
         .filter(Boolean)) {
         try {
-          for (const u of await importFundingTx(mc, txid, pkhHex)) addIfNew(u)
+          for (const u of await importFundingTx(mc, txid, pkhHex, port.tracker)) addIfNew(u)
         } catch {
           /* keep polling */
         }
@@ -369,7 +369,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     // fundingImport MCP tool: credit a tx paying the fee address into the
     // reserve without a restart (same path as NEKTAR_FUND_TXIDS)
     importFunding: async (txid: string) => {
-      const added = await importFundingTx(mc, txid, pkhHex)
+      const added = await importFundingTx(mc, txid, pkhHex, port.tracker)
       for (const u of added) addIfNew(u)
       const balanceSats = funds.utxos.reduce((s, u) => s + u.satoshis, 0)
       return { imported: added.length, utxos: funds.utxos.length, balanceSats, address: fundAddress, txids: [...new Set(added.map((u) => u.tx.id('hex')))] }

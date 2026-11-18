@@ -83,7 +83,8 @@ test('events: note() records pushed status + resolves waitFor without emitting t
   const p = ev.waitFor('t1', 5000)
   ev.note(mined('t1'))
   const ev_ = await p
-  assert.equal(ev_?.status, 'mined')
+  assert.equal(ev_?.ev.status, 'mined')
+  assert.equal(ev_?.verified, false) // a hint answers the wait — marked unverified
   assert.equal(got.length, 0) // hints never emit — verified delivery is the caller's path
   assert.equal(ev.statusOf('t1')?.ev.status, 'mined')
   assert.equal(ev.statusOf('t1')?.verified, false) // a pushed status stays a hint
@@ -103,7 +104,7 @@ test('events: a non-terminal delivery resolves a matching waiter; others stay pa
   const minedW = ev.waitFor('t1', 60_000, (e) => e.status === 'mined')
   deliverable = { txid: 't1', status: 'unconfirmed' }
   await ev.tick()
-  assert.equal((await unconf)?.status, 'unconfirmed') // first-delivered-event waiters resolve
+  assert.equal((await unconf)?.ev.status, 'unconfirmed') // first-delivered-event waiters resolve
   const r = await Promise.race([minedW.then(() => 'resolved'), new Promise((res) => setTimeout(() => res('parked'), 200))])
   assert.equal(r, 'parked') // non-terminal: non-matching waiters keep waiting
   ev.stop()
@@ -117,8 +118,9 @@ test('events: a terminal event resolves every waiter, matcher or not', async () 
   const r1 = await Promise.race([ds, new Promise((r) => setTimeout(() => r('HANG'), 500))])
   const r2 = await mn
   assert.notEqual(r1, 'HANG') // no parked-on-the-clock: the wait was over
-  assert.equal((r1 as TxStatusEvent).status, 'mined') // learns the actual outcome
-  assert.equal(r2?.status, 'mined')
+  assert.equal((r1 as { ev: TxStatusEvent }).ev.status, 'mined') // learns the actual outcome
+  assert.equal(r2?.ev.status, 'mined')
+  assert.equal(r2?.verified, true) // report() is first-party truth
 })
 
 test('events: concurrent probes of one txid share a single observe', async () => {
@@ -162,7 +164,7 @@ test('events: waitFor resolves from a self-observed probe; times out clean', asy
     prove = true
   }, 50)
   const ev_ = await slow
-  assert.equal(ev_?.status, 'mined')
+  assert.equal(ev_?.ev.status, 'mined')
   const miss = await ev.waitFor('nope', 100)
   assert.equal(miss, undefined)
 })
@@ -225,6 +227,23 @@ test('events: note() verify-on-hint — a pushed mined hint is verified and prom
   assert.equal(got.length, 1)
   assert.equal(ev.watching('t1'), false) // verified observe ended interest
   ev.stop()
+})
+
+test('events: abandon and ttl flush parked waiters — no sleep-to-own-timeout', async () => {
+  let tip = 100
+  const ev = new ChainEvents({ observe: async () => undefined, height: async () => tip, abandonAfterBlocks: 10, ttlMs: 60_000 })
+  const p = ev.waitFor('t1', 60_000)
+  await ev.tick() // first-seen at tip=100
+  tip = 111
+  await ev.tick()
+  assert.equal(await p, undefined) // the abandoned watch answered the waiter
+  const ev2 = new ChainEvents({ observe: async () => undefined, ttlMs: 1 })
+  const p2 = ev2.waitFor('t1', 60_000)
+  await new Promise((r) => setTimeout(r, 5))
+  await ev2.tick()
+  assert.equal(await p2, undefined) // ttl drop answered the waiter too
+  ev.stop()
+  ev2.stop()
 })
 
 test('events: a throwing observe never advances the abandon clock', async () => {

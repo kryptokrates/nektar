@@ -1,5 +1,5 @@
 import { P2PKH, type Transaction } from '@bsv/sdk'
-import { signOffer, verifyOffer, verifyWant, type SignedWant } from '@nektar/bstack'
+import { signOffer, verifyOffer, verifyWant, deadAncestry, type SignedWant } from '@nektar/bstack'
 import { publicSaleQuote, saleQuoteWire, verifyOfferSig } from '@nektar/identity'
 import { DisclosureSaleHost } from '@nektar/anchor'
 import { fromHex } from '@nektar/core'
@@ -95,7 +95,9 @@ export abstract class SellerOps extends IngressOps {
         maxFee: this.o.saleMaxFee,
         expiresAt: h + this.o.offerTtlBlocks,
         ...(p.disclosure.allowPublic ? {} : { buyerPub: w.pub }),
-        ...(this.o.directAccept === true ? { direct: true } : {})
+        // the direct rail ships `wrapped` with an unproven payment — cap the
+        // no-recourse exposure at directAcceptMaxSats when the operator set one
+        ...(this.o.directAccept === true && (this.o.directAcceptMaxSats === undefined || pick.price <= this.o.directAcceptMaxSats) ? { direct: true } : {})
       })
       const c = offer.commitment
       const so = await signOffer(this.d.key, {
@@ -164,7 +166,20 @@ export abstract class SellerOps extends IngressOps {
     const w = (op.data.want as SignedWant).want
     const offer = op.data.offer as any
     const refuse = async (reason: string) => {
-      await this.d.store.transition(op.operationId, op.revision, 'quoted', { cause: 'accept_refused', evidence: { reason } })
+      // a deterministic refusal must reach the buyer — 'quoted' alone leaves
+      // them waiting for a delivery that can never come until refundAfter
+      await this.d.store.transition(op.operationId, op.revision, 'quoted', {
+        cause: 'accept_refused',
+        evidence: { reason },
+        outbox: [
+          {
+            actionId: `${op.operationId}:decline:${op.revision}`,
+            kind: 'message',
+            destination: w.pub,
+            payload: { type: 'decline', wantId: w.wantId, offerId: op.operationId, reason }
+          }
+        ]
+      })
     }
     if (from !== w.pub || m.wantId !== w.wantId) return
     if (m.depositorPkh !== pkhOf(from)) return await refuse('depositor is not the buyer key')
@@ -203,16 +218,28 @@ export abstract class SellerOps extends IngressOps {
     if (out.lockingScript.toHex() !== m.utxo.script || out.satoshis !== m.utxo.satoshis)
       return await refuse('on-chain escrow output differs from the claimed one')
     // every escrow input whose parent we can resolve is evaluated locally —
-    // a bogus or unsigned spend is refused before the network is even asked
+    // a bogus or unsigned spend is refused before the network is even asked.
+    // Parents the carry didn't include are fetched the same way readTx
+    // resolves BEEF ancestry — a fetched parent attaches and evaluates
     let spends = 0
     for (let ix = 0; ix < tx.inputs.length; ix++) {
       const i = tx.inputs[ix]
-      const src = i.sourceTransaction?.outputs[i.sourceOutputIndex ?? -1]
       const ptxid = i.sourceTXID ?? i.sourceTransaction?.id('hex')
+      if (i.sourceTransaction === undefined && ptxid !== undefined) i.sourceTransaction = await this.d.fetchTx(ptxid).catch(() => undefined)
+      const src = i.sourceTransaction?.outputs[i.sourceOutputIndex ?? -1]
       if (!src || i.sourceOutputIndex === undefined || ptxid === undefined) continue
       if (!spendValid(tx, ix, { txid: ptxid, vout: i.sourceOutputIndex, satoshis: src.satoshis ?? 0, script: src.lockingScript.toHex() }))
         return await refuse('escrow input does not spend its claimed parent output')
       spends++
+    }
+    // an UNPROVEN escrow must carry resolvable ancestry — a skipped input is
+    // dead ancestry the network rejects as missing-parent, so 'completing'
+    // on it mints a deal that can never settle. A proven escrow's inputs
+    // were validated by the network at inclusion; unresolved parents are
+    // fine there.
+    if (!spv && tx.merklePath === undefined) {
+      const dead = await deadAncestry(tx, (id) => this.d.fetchTx(id).catch(() => undefined))
+      if (dead.length > 0) return await refuse(`escrow ancestry unresolvable: ${dead.length} input(s) have no reachable parent`)
     }
     // escrow rebroadcast starts before the bookkeeping — the 'completing'
     // transition, height fetch and custody mark all happen inside the

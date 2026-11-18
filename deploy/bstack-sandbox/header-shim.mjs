@@ -6,13 +6,19 @@
 // SHIM_MODE=regtest (default): headers via Teranode legacy RPC; asset paths
 // proxied to the Teranode asset API with basic-auth injected.
 // SHIM_MODE=live (testnet): headers from the broadcaster's chaintracks
-// (/height, /header/height/<h>) with a chain-index fallback; proofs from
-// broadcaster GET /tx/<txid> merklePath (BUMP hex) or the index's TSC proof;
-// the utxos view is assembled per-output from the index's tx record
-// (outputs[].spent/spent_txid — true=SPENT, false=OK, absent=NOT_FOUND).
+// (/height, /header/height/<h>) AND the chain index — the two are independent
+// sources and must AGREE before an answer is served (this shim is the header
+// anchor behind host-side SPV admission, and the same shim serves the merkle
+// proofs those roots check: first-success-wins would make one lying source a
+// forged-root oracle). Disagreement or silence from either -> 404; set
+// SHIM_SINGLE_OK=1 to serve a lone source's answer (non-strict, logged).
+// proofs from broadcaster GET /tx/<txid> merklePath (BUMP hex) or the index's
+// TSC proof; the utxos view is assembled per-output from the index's tx
+// record (outputs[].spent/spent_txid — true=SPENT, false=OK, absent=NOT_FOUND).
 // env: SHIM_PORT (8080), SHIM_MODE (regtest|live); regtest: SHIM_RPC_URL,
 // SHIM_RPC_USER, SHIM_RPC_PASS, SHIM_ASSET_URL; live: SHIM_BROADCASTER,
-// SHIM_INDEX, SHIM_CHAINTRACKS (default $SHIM_BROADCASTER/chaintracks/v2)
+// SHIM_INDEX, SHIM_CHAINTRACKS (default $SHIM_BROADCASTER/chaintracks/v2),
+// SHIM_SINGLE_OK=1 to allow uncorroborated live answers
 import { createServer } from 'node:http'
 
 const PORT = Number(process.env.SHIM_PORT ?? 8080)
@@ -25,6 +31,14 @@ const AUTH = 'Basic ' + Buffer.from(`${USER}:${PASS}`).toString('base64')
 const BCAST = (process.env.SHIM_BROADCASTER ?? 'https://arcade-v2-testnet-us-1.bsvblockchain.tech').replace(/\/+$/, '')
 const INDEX = (process.env.SHIM_INDEX ?? 'https://test.bananablocks.com/api/v1').replace(/\/+$/, '')
 const CT = (process.env.SHIM_CHAINTRACKS ?? `${BCAST}/chaintracks/v2`).replace(/\/+$/, '')
+// live header answers are only as strong as their corroboration: with both
+// sources configured an answer must agree across them; a lone-source answer
+// is a 404 unless the operator explicitly opts in to non-strict service
+const SINGLE_OK = process.env.SHIM_SINGLE_OK === '1'
+const ctJson = async (path) =>
+  await fetch(`${CT}${path}`, { signal: AbortSignal.timeout(15_000) })
+    .then((r) => (r.ok ? r.json() : undefined))
+    .catch(() => undefined)
 let rpcId = 0
 
 async function rpcOnce(method, ...params) {
@@ -179,11 +193,19 @@ async function handle(req, res) {
   try {
     if (url.pathname === '/v1/tip') {
       if (MODE === 'live') {
-        const h = await fetch(`${CT}/height`, { signal: AbortSignal.timeout(15_000) })
-          .then((r) => (r.ok ? r.json() : undefined))
-          .catch(() => undefined)
-        const height = h?.height ?? (await idxGet('/block/tip'))?.height
-        if (height === undefined) throw new Error('no header source answered')
+        const [ct, idx] = await Promise.all([ctJson('/height'), idxGet('/block/tip')])
+        const a = ct?.height
+        const b = idx?.height
+        // both answered: serve the lowest — the strongest claim EITHER source
+        // corroborates (a skewed tip is propagation lag or a stuck source;
+        // never report height one of them has not seen)
+        const height = a !== undefined && b !== undefined ? Math.min(a, b) : SINGLE_OK ? (a ?? b) : undefined
+        if (height === undefined) {
+          if (a !== undefined || b !== undefined)
+            console.log(`tip: only ${a !== undefined ? 'chaintracks' : 'index'} answered — refusing uncorroborated answer`)
+          json(res, 404, { error: 'no corroborated tip' })
+          return
+        }
         json(res, 200, { height })
         return
       }
@@ -195,11 +217,17 @@ async function handle(req, res) {
     if (m !== null) {
       const h = Number(m[1])
       if (MODE === 'live') {
-        const b = await fetch(`${CT}/header/height/${h}`, { signal: AbortSignal.timeout(15_000) })
-          .then((r) => (r.ok ? r.json() : undefined))
-          .catch(() => undefined)
-        const root = b?.merkleRoot ?? (await idxGet(`/block/${h}`))?.merkle_root
+        const [ct, idx] = await Promise.all([ctJson(`/header/height/${h}`), idxGet(`/block/${h}`)])
+        const a = ct?.merkleRoot
+        const b = idx?.merkle_root
+        // same chain -> same root: two independent answers that differ mean a
+        // fork or a lying source — refuse; silence from one side corroborates
+        // nothing either (SHIM_SINGLE_OK=1 serves a lone answer, logged)
+        const root = a !== undefined && b !== undefined ? (a === b ? a : undefined) : SINGLE_OK ? (a ?? b) : undefined
         if (root === undefined) {
+          if (a !== undefined && b !== undefined) console.log(`root ${h}: chaintracks ${a} != index ${b} — refusing`)
+          else if (a !== undefined || b !== undefined)
+            console.log(`root ${h}: only ${a !== undefined ? 'chaintracks' : 'index'} answered — refusing uncorroborated answer`)
           json(res, 404, { error: 'unknown height' })
           return
         }

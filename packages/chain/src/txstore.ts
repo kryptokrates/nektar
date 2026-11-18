@@ -76,7 +76,12 @@ export class TxStore {
     return this.spends.get(`${txid}:${vout}`)
   }
 
-  /** keep `tx` and every ancestor it carries; a proof already held is never dropped */
+  /** keep `tx` and every ancestor it carries; a proof already held is never
+   *  dropped. An attached `tx.merklePath` is adopted as the stored proof — the
+   *  caller MUST only put transactions whose carried path was verified against
+   *  our own headers (`read` deletes every path it cannot verify; proofs also
+   *  enter through `setProof`, whose callers verify). Unvetted bytes must go
+   *  through `TxStore.read` first. */
   put(tx: Transaction, depth = 0): void {
     const txid = tx.id('hex')
     // every stored tx records the outpoints its inputs consume — subject and
@@ -223,11 +228,33 @@ export class TxStore {
           spv = false
         }
       }
+      await dropUnverified(tx, tracker)
       return { tx, spv }
     }
     if (/^[0-9a-f]{8}0000000000ef/i.test(hex)) return { tx: Transaction.fromHexEF(hex), spv: false }
     return { tx: Transaction.fromHex(hex), spv: false }
   }
+}
+
+/** every carried merkle path is checked against `tracker` itself — a forged or
+ *  unverifiable path is deleted so `put` can never adopt what we did not
+ *  compute. With no tracker nothing is verifiable: same outcome. Valid
+ *  ancestor BUMPs survive even when the subject itself is unproven — zeroconf
+ *  ancestry keeps traveling; `spv` stays the whole-chain verdict for callers. */
+const dropUnverified = async (tx: Transaction, tracker: ChainTracker | undefined, seen = new Set<string>(), depth = 0): Promise<void> => {
+  if (depth > MAX_DEPTH) return
+  let txid: string
+  try {
+    txid = tx.id('hex')
+  } catch {
+    return
+  }
+  if (seen.has(txid)) return
+  seen.add(txid)
+  if (tx.merklePath !== undefined && (tracker === undefined || !(await tx.merklePath.verify(txid, tracker)))) {
+    delete tx.merklePath
+  }
+  for (const i of tx.inputs) if (i.sourceTransaction !== undefined) await dropUnverified(i.sourceTransaction, tracker, seen, depth + 1)
 }
 
 /** does input `vin` of `tx` satisfy the output it spends — run locally, no node */

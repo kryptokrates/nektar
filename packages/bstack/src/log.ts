@@ -479,7 +479,7 @@ export async function anchorLog(p: {
 
   const cover = (await p.state.get(coverKey(p.stream)))?.seq ?? 0
   const first = cover + 1
-  const count = head.seq - cover
+  let count = head.seq - cover
   if (count === 0) return undefined
   if (count < (p.minBatches ?? 32)) {
     const hit = await p.journal.get(`log:${p.stream}:${first}`)
@@ -490,11 +490,18 @@ export async function anchorLog(p: {
     const ts = decodeBatch(recordOf(Transaction.fromAtomicBEEF(hit.beef))).timestamp
     if (now() - ts < (p.maxAgeMs ?? 3_600_000)) return undefined
   }
-  if (count > MaxIntervalBatches) return undefined
+  // backlog over the protocol cap used to return silently — a permanent
+  // stall nothing could drain. Split instead: this interval anchors the
+  // oldest cap-full and the next interval picks up the remainder.
+  if (count > MaxIntervalBatches) {
+    log(`log anchor: ${p.stream} backlog ${count} exceeds the ${MaxIntervalBatches}-batch cap — anchoring the oldest ${MaxIntervalBatches}, remainder follows`)
+    count = MaxIntervalBatches
+  }
+  const last = first + count - 1
 
   // commitments of every covered batch, from the journaled carriers
   const covered: Uint8Array[] = []
-  for (let s = first; s <= head.seq; s++) {
+  for (let s = first; s <= last; s++) {
     const hit = await p.journal.get(`log:${p.stream}:${s}`)
     if (hit === undefined) {
       log(`log anchor: journaled carrier missing for seq ${s}`)

@@ -115,8 +115,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   if (lanes !== undefined) lanes.journal.enrich = async (txid) => (await mem.fetchTx(txid))?.merklePath
   // a reorg orphans every journaled path ≥ the fork — strip them so the
   // enrich seam re-attaches against the new headers instead of serving the
-  // dead fork's evidence to counterparties
-  if (lanes !== undefined) mem.onReorg?.((from) => void lanes.journal.clearPaths?.(from).catch(() => undefined))
+  // dead fork's evidence to counterparties. The tree ledger demotes the same
+  // way: a proven row whose BUMP was orphaned flips back to unproven so the
+  // proving pass re-anchors it (proven is otherwise sticky forever)
+  if (lanes !== undefined)
+    mem.onReorg?.((from) => {
+      void lanes.journal.clearPaths?.(from).catch(() => undefined)
+      void lanes.ledger.unproveFrom?.(from).catch(() => undefined)
+    })
   // restart continuity: pending provision rows keep their chain watch —
   // without it the abandon horizon never reaps a rejected provision tx
   if (lanes !== undefined) {

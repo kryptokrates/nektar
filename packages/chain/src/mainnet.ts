@@ -7,7 +7,7 @@ import { sleep, withRetry, pacer } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
-import { headerPowValid, linksTo } from './headers.js'
+import { headerPowValid, HeaderCache } from './headers.js'
 import { indexFor, type ChainIndex } from './indexer.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 import type { StatusHint } from './txfacts.js'
@@ -332,72 +332,6 @@ export async function fetchRawTx(cfg: MainnetConfig | undefined, txid: string): 
 }
 
 // --- WoC tracker (rate-limited, cached headers) -------------------------------
-/** the per-tracker header cache + reorg machinery — ONE implementation so the
- *  two header sources can't drift: linkage-gated admission, and on a mismatch
- *  a bounded walk down to the common ancestor before subscribers hear of it. */
-class HeaderCache {
-  private headers = new Map<number, BlockHeader>()
-  private reorgCbs: Array<(removed: BlockHeader[], newTip: BlockHeader) => void> = []
-
-  get(height: number): BlockHeader | undefined {
-    return this.headers.get(height)
-  }
-  has(height: number): boolean {
-    return this.headers.has(height)
-  }
-  set(h: BlockHeader): void {
-    this.headers.set(h.height, h)
-  }
-  onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
-    this.reorgCbs.push(cb)
-  }
-
-  /** linkage gate — true when the fresh header sits cleanly beside what the
-   *  cache already holds; a mismatch runs the reorg walk and the caller must
-   *  NOT cache or silently serve the newcomer */
-  async admit(h: BlockHeader, refetch: (height: number) => Promise<BlockHeader | undefined>): Promise<boolean> {
-    const parent = this.headers.get(h.height - 1)
-    const child = this.headers.get(h.height + 1)
-    if ((parent !== undefined && !linksTo(h, parent)) || (child !== undefined && !linksTo(child, h))) {
-      await this.reorgAt(h, refetch)
-      return false
-    }
-    return true
-  }
-
-  /** walk DOWN from just under the mismatching header: each cached header is
-   *  re-fetched, and evicted while the fresh answer differs — the first
-   *  agreement is the common ancestor and stays cached. Everything above the
-   *  mismatch height is descendant-stale. `fresh` is the highest header we
-   *  could fetch, reported to subscribers as newTip. */
-  async reorgAt(fresh: BlockHeader, refetch: (height: number) => Promise<BlockHeader | undefined>): Promise<void> {
-    const removed: BlockHeader[] = []
-    for (let h = fresh.height - 1, n = 0; n < 12; h--, n++) {
-      const cur = this.headers.get(h)
-      if (cur === undefined) break // cache gap — can't verify deeper
-      const ref = await refetch(h)
-      if (ref === undefined) break // couldn't confirm deeper
-      if (ref.hash === cur.hash) break // common ancestor — keep it
-      this.headers.delete(h)
-      removed.push(cur)
-    }
-    for (const [h, cur] of this.headers) {
-      if (h >= fresh.height) {
-        this.headers.delete(h)
-        removed.push(cur)
-      }
-    }
-    if (removed.length === 0) return
-    removed.sort((a, b) => b.height - a.height)
-    for (const cb of this.reorgCbs)
-      try {
-        cb(removed, fresh)
-      } catch {
-        /* listener errors are theirs */
-      }
-  }
-}
-
 /** the index-backed tracker — the dialect (bananablocks default, WoC for the
  *  BTC temporal source/legacy configs) comes from the MainnetConfig URL. */
 export class IndexTracker implements ChainTracker {
@@ -672,8 +606,10 @@ export async function merklePathMainnet(cfg: MainnetConfig | undefined, txid: st
 }
 
 // --- funding import by txid (address indexes can be unavailable) ---
-/** fetch a funding tx and return its P2PKH outputs locked to `pkhHex` */
-export async function importFundingTx(cfg: MainnetConfig | undefined, ref: string, pkhHex: string): Promise<FundingOut[]> {
+/** fetch a funding tx and return its P2PKH outputs locked to `pkhHex`.
+ *  `tracker` verifies any carried proof against our own headers — without it a
+ *  BEEF import's BUMPs are unverifiable and get stripped at `TxStore.read`. */
+export async function importFundingTx(cfg: MainnetConfig | undefined, ref: string, pkhHex: string, tracker?: ChainTracker): Promise<FundingOut[]> {
   // 'hex:<tx>' = fully offline import — the operator hands us the funding
   // transaction itself, no network fetch and no index involved. Handed as
   // BEEF it brings its proof or proven ancestry, so what is paid from it can
@@ -682,14 +618,18 @@ export async function importFundingTx(cfg: MainnetConfig | undefined, ref: strin
     const wire = ref.slice(4).replace(/\s+/g, '')
     if (wire.length === 0) throw new Error('empty transaction payload — check $HEX / the funding file')
     if (wire.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(wire)) throw new Error(`malformed transaction hex (${wire.length} chars)`)
-    return fundingOutputs((await TxStore.read(wire, undefined)).tx, pkhHex)
+    return fundingOutputs((await TxStore.read(wire, tracker)).tx, pkhHex)
   }
   if (!/^[0-9a-fA-F]{64}$/.test(ref))
     throw new Error(`malformed txid — expected 64 hex chars, 'hex:<rawtx>', got "${ref.slice(0, 24)}${ref.length > 24 ? '…' : ''}"`)
   const c = def(cfg)
   const hex = await c.index.txHex(ref)
   if (hex === undefined) throw new Error(`${ref}: index could not serve the tx`)
-  return fundingOutputs(Transaction.fromHex(hex), pkhHex)
+  const tx = Transaction.fromHex(hex)
+  // the index is discovery, not truth: the served bytes must name the ref —
+  // same gate discoverUtxos applies to its candidates
+  if (tx.id('hex') !== ref) throw new Error(`${ref}: index served a transaction hashing to a different txid`)
+  return fundingOutputs(tx, pkhHex)
 }
 
 function fundingOutputs(tx: Transaction, pkhHex: string): FundingOut[] {

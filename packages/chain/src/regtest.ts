@@ -5,6 +5,7 @@ import { Transaction, MerklePath } from '@bsv/sdk'
 import { dsha256 } from '@nektar/core'
 import { withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
+import { HeaderCache } from './headers.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker } from './interfaces.js'
 
 export interface RegtestConfig {
@@ -32,7 +33,7 @@ export class TeranodeBroadcaster implements Broadcaster {
 }
 
 export class TeranodeRPCTracker implements ChainTracker {
-  private headers = new Map<number, BlockHeader>()
+  private cache = new HeaderCache()
   private rpcId = 0
   constructor(private cfg: RegtestConfig) {}
 
@@ -69,16 +70,49 @@ export class TeranodeRPCTracker implements ChainTracker {
     if (ms > 0 && Date.now() - this.tip.at < ms) return this.tip.height
     // getblockchaininfo.blocks lags seconds behind generate on Teranode;
     // bestblockhash+getblockheader reflect the real tip almost immediately.
-    const height = await (async (): Promise<number> => {
-      const best = await this.rpc('getbestblockhash').catch(() => undefined)
-      if (best) {
-        const h = await this.rpc('getblockheader', best).catch(() => undefined)
-        if (typeof h?.height === 'number') return h.height
+    const best = await this.rpc('getbestblockhash').catch(() => undefined)
+    const tipHeader = best !== undefined ? await this.headerByHash(best) : undefined
+    const height = tipHeader?.height ?? ((await this.rpc('getblockchaininfo')).blocks as number)
+    if (tipHeader !== undefined) {
+      const cur = this.cache.get(tipHeader.height)
+      if (cur !== undefined && cur.hash !== tipHeader.hash) {
+        // tip regression or a same-height replacement — the node's new best
+        // contradicts a cached row: run the reorg walk (onReorg fires, the
+        // stale suffix evicts) before the height answer goes out
+        await this.cache.reorgAt(tipHeader, (x) => this.fetchHeader(x)).catch(() => undefined)
+        this.cache.set(tipHeader)
+      } else if (height > this.tip.height && this.cache.has(this.tip.height)) {
+        // a tip advance over a cached previous tip is where a silent reorg
+        // shows up — the fresh tip's linkage check runs against the cached
+        // parent; no request is added when the height is unchanged
+        void this.headerAtHeight(height).catch(() => undefined)
       }
-      return (await this.rpc('getblockchaininfo')).blocks as number
-    })()
+    }
     this.tip = { at: Date.now(), height }
     return height
+  }
+
+  /** getblockheader by hash → BlockHeader (the RPC answers by hash; callers
+   *  asking by height resolve getblockhash first) */
+  private async headerByHash(hash: string): Promise<BlockHeader | undefined> {
+    const b = await this.rpc('getblockheader', hash).catch(() => undefined)
+    if (b === undefined || typeof b.height !== 'number') return undefined
+    return {
+      height: b.height,
+      hash,
+      prevHash: b.previousblockhash ?? '',
+      merkleRoot: b.merkleroot,
+      time: b.time,
+      bits: typeof b.bits === 'string' ? parseInt(b.bits, 16) : b.bits,
+      nonce: b.nonce,
+      ...(typeof b.version === 'number' ? { version: b.version } : {})
+    }
+  }
+
+  private async fetchHeader(height: number): Promise<BlockHeader | undefined> {
+    const hash = await this.rpc('getblockhash', height).catch(() => undefined)
+    if (!hash) return undefined
+    return await this.headerByHash(hash)
   }
 
   async isValidRootForHeight(root: string, height: number): Promise<boolean> {
@@ -87,22 +121,34 @@ export class TeranodeRPCTracker implements ChainTracker {
   }
 
   async headerAtHeight(height: number): Promise<BlockHeader | undefined> {
-    const cached = this.headers.get(height)
+    const cached = this.cache.get(height)
     if (cached) return cached
-    const hash = await this.rpc('getblockhash', height).catch(() => undefined)
-    if (!hash) return undefined
-    const b = await this.rpc('getblockheader', hash)
-    const header: BlockHeader = {
-      height,
-      hash,
-      prevHash: b.previousblockhash ?? '',
-      merkleRoot: b.merkleroot,
-      time: b.time,
-      bits: typeof b.bits === 'string' ? parseInt(b.bits, 16) : b.bits,
-      nonce: b.nonce
-    }
-    this.headers.set(height, header)
-    return header
+    const h = await this.fetchHeader(height)
+    if (h === undefined) return undefined
+    if (!(await this.cache.admit(h, (x) => this.fetchHeader(x)))) return h
+    this.cache.set(h)
+    return h
+  }
+
+  /** bypass the cache and re-ask — a same-height hash change is a reorg
+   *  signature: the walk evicts the stale rows and fires onReorg before the
+   *  fresh answer is served (same contract the live trackers carry) */
+  async refreshHeader(height: number): Promise<BlockHeader | undefined> {
+    const h = await this.fetchHeader(height)
+    if (h === undefined) return undefined // node unreachable — leave the cache alone
+    const cur = this.cache.get(height)
+    if (cur !== undefined && cur.hash !== h.hash) {
+      await this.cache.reorgAt(h, (x) => this.fetchHeader(x))
+      this.cache.set(h)
+    } else if (await this.cache.admit(h, (x) => this.fetchHeader(x))) this.cache.set(h)
+    return h
+  }
+
+  /** regtest reorgs are real — test workflows invalidate blocks, and a stale
+   *  proof cache would keep dead-fork BUMPs alive. The runtime wires this to
+   *  clearProofsFrom/journal clearing exactly like the live trackers. */
+  onReorg(cb: (removed: BlockHeader[], newTip: BlockHeader) => void): void {
+    this.cache.onReorg(cb)
   }
 }
 

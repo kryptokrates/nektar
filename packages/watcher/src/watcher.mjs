@@ -165,9 +165,12 @@ async function checkClaim(entry) {
   const open = st.deadline < 500000000n ? tip < Number(st.deadline) : Math.floor(Date.now() / 1000) < Number(st.deadline)
   if (!open) return // window closed — settle will handle it
 
-  // re-verify the proof off-chain — in a worker process (see top of file)
+  // re-verify the proof off-chain — in a worker process (see top of file).
+  // A MISSING bundle is inconclusive, never fraud: a local store gap
+  // (register/storeProof race, moved proof dir) must not stake the
+  // challenger's bond — only a bundle that exists and fails can challenge
   const pf = proofFileFor(st.receiptHash)
-  const verdict = existsSync(pf) ? await verifyProof(pf) : { ok: false, reason: 'no proof bundle in store' }
+  const verdict = existsSync(pf) ? await verifyProof(pf) : { inconclusive: 'no proof bundle in store' }
   if (verdict.inconclusive) {
     const n = (inconclusiveStreaks.get(txid) ?? 0) + 1
     inconclusiveStreaks.set(txid, n)

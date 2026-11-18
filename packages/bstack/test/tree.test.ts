@@ -283,6 +283,68 @@ for (const mk of [
     }
   })
 
+  const pathAt = (tx: Transaction, height: number): MerklePath =>
+    new MerklePath(height, [
+      [
+        { offset: 0, hash: '00'.repeat(32) },
+        { offset: 1, hash: tx.id('hex'), txid: true }
+      ]
+    ])
+
+  // B1 regression: a reorg must demote proofs anchored at/above the horizon —
+  // the tree's own BUMP and the parent BUMPs inside its carried ancestry —
+  // so the row re-enters unproven() and markProven can re-anchor it on the
+  // surviving fork (markProven only touches unproven rows)
+  test(`unproveFrom (${mk.name}): horizon demotes the proven row and it re-anchors`, async () => {
+    const key = PrivateKey.fromRandom()
+    const parent = fakeParent(key)
+    const parentMp = pathAt(parent, 3)
+    const tree = await mintTree({ key, funding: { tx: parent, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
+    const { l, done } = await mk.ledger()
+    try {
+      await l.add(tree, 2, 'bbox')
+      await l.attachParentPath(parent.id('hex'), parentMp)
+      await l.markProven(tree.id('hex'), pathAt(tree, 5))
+      assert.equal(await l.remaining('bbox'), 2, 'proven tree serves')
+      // a shallow reorg below the path changes nothing
+      assert.deepEqual(await l.unproveFrom(6), [])
+      assert.equal(await l.remaining('bbox'), 2)
+      // reorg at height 4: the tree's height-5 BUMP dies. markProven severed
+      // the input ancestry when the proof landed (a BUMP terminates the
+      // carrier graph), so the demoted row has nothing to anchor on — it
+      // waits unproven until the re-mined proof arrives
+      assert.deepEqual(await l.unproveFrom(4), [tree.id('hex')])
+      assert.deepEqual(await l.unproven(), [{ txid: tree.id('hex'), kind: 'bbox' }])
+      assert.equal(await l.remaining('bbox'), 0)
+      assert.equal(await l.take('bbox'), undefined)
+      // re-minted on the new fork: markProven heals the row again — before
+      // unproveFrom existed this row was permanently stale
+      await l.markProven(tree.id('hex'), pathAt(tree, 7))
+      assert.equal(await l.remaining('bbox'), 2, 're-anchored proof serves the mined-only lane')
+    } finally {
+      await done()
+    }
+  })
+
+  test(`unproveFrom (${mk.name}): a dead parent path de-anchors the tree`, async () => {
+    const key = PrivateKey.fromRandom()
+    const parent = fakeParent(key)
+    const tree = await mintTree({ key, funding: { tx: parent, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
+    const { l, done } = await mk.ledger()
+    try {
+      await l.add(tree, 2)
+      await l.attachParentPath(parent.id('hex'), pathAt(parent, 5))
+      assert.equal(await l.remaining(), 2, 'anchored via the height-5 parent')
+      // the parent block orphaned — the strip leaves the tree pathless and
+      // unanchored: it stops serving even though its own row was never proven
+      assert.deepEqual(await l.unproveFrom(5), [])
+      assert.equal(await l.remaining(), 0)
+      assert.equal(await l.take(), undefined)
+    } finally {
+      await done()
+    }
+  })
+
   test(`ownPath (${mk.name}): compound broadcaster BUMP → minimal path for the tree alone`, async () => {
     const key = PrivateKey.fromRandom()
     const t2 = await mintTree({ key, funding: fund(key), n: 4, satsPerOutput: 1000 })
@@ -504,7 +566,10 @@ test('deadAncestry: resolvable unproven ancestors are not dead — bound stays i
   mid.addInput({ sourceTXID: f.id('hex'), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
   mid.addOutput({ satoshis: 1_000_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
   const t = await mintTree({ key, funding: { tx: mid, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
-  const byId = new Map([[mid.id('hex'), mid], [f.id('hex'), f]])
+  const byId = new Map([
+    [mid.id('hex'), mid],
+    [f.id('hex'), f]
+  ])
   const gaps = await deadAncestry(t, async (id) => byId.get(id))
   assert.deepEqual(gaps, [])
 })

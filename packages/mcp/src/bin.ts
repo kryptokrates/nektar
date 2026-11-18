@@ -182,6 +182,10 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
       // it on our quotes. Both off by default: escrow stays the default rail.
       ...(nektarEnv('NEKTAR_DIRECT_MAX_SATS') ? { directMaxSats: Number(nektarEnv('NEKTAR_DIRECT_MAX_SATS')) } : {}),
       ...(nektarEnv('NEKTAR_DIRECT_ACCEPT') === '1' ? { directAccept: true } : {}),
+      // NEKTAR_DIRECT_ACCEPT_MAX_SATS caps which quotes advertise the direct
+      // rail — disclosure ships against an unproven payment, so this bounds
+      // the seller's no-recourse exposure (unset = any price)
+      ...(nektarEnv('NEKTAR_DIRECT_ACCEPT_MAX_SATS') ? { directAcceptMaxSats: Number(nektarEnv('NEKTAR_DIRECT_ACCEPT_MAX_SATS')) } : {}),
       // NEKTAR_AUTO_USEFUL=1 — a verified disclosure closes the deal as
       // `useful` without waiting on an operator markUsefulness call
       ...(nektarEnv('NEKTAR_AUTO_USEFUL') === '1' ? { autoUseful: true } : {})

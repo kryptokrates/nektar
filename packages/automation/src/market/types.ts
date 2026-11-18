@@ -14,6 +14,9 @@ export type MarketMessage =
       depositorPkh: string
       tx?: string
     }
+  // a deterministic accept-refusal — without it the buyer only learns the
+  // deal is dead when its own refund deadline arrives
+  | { type: 'decline'; wantId: string; offerId: string; reason?: string }
   | {
       type: 'delivered'
       wantId: string
@@ -145,6 +148,12 @@ export interface MarketOptions {
   /** seller-side opt-in: quotes carry `direct: true` so counterparties may
    *  choose the direct rail for this sale */
   directAccept?: boolean
+  /** seller-side direct-rail ceiling — `direct` is advertised only when the
+   *  price is at or under this. The direct rail ships the disclosure with an
+   *  unproven payment: a post-fact dead verdict can't claw the secret back,
+   *  so this cap is the operator's no-recourse exposure (the mirror of the
+   *  buyer's directMaxSats). Absent = any price (opt-in already accepts it). */
+  directAcceptMaxSats?: number
   /** buyer-side opt-in: a verified disclosure counts as the usefulness
    *  evaluation — deals reach `useful` without an operator call. Default off:
    *  the consumer judges content. */

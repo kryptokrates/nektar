@@ -3,7 +3,7 @@ import { verifyOffer, verifyWant, type BoxRef, type SignedOffer, type SignedWant
 import { verifyOfferSig } from '@nektar/identity'
 import { COVENANT_ID, DisclosureSaleHost } from '@nektar/anchor'
 import { fromHex, parseFragment } from '@nektar/core'
-import { hintSeen, spendValid, FundsStarvedError, type Ingested } from '@nektar/chain'
+import { spendValid, FundsStarvedError, type Ingested } from '@nektar/chain'
 import type { Operation } from '../store.js'
 import { decidePurchase, digestOf, type ActionContext, type AutomationPolicy } from '../policy.js'
 import { rankOffers, type ScoreCandidate } from '../scoring.js'
@@ -353,10 +353,26 @@ export abstract class BuyerOps extends SellerOps {
     })
   }
 
+  /** the seller's deterministic accept-refusal — the deal cannot complete;
+   *  mark it declined and let the armed refund path reclaim at refundAfter
+   *  (the covenant gates the unwind, the signal just ends the blind wait) */
+  private async onDecline(from: string, m: Extract<MarketMessage, { type: 'decline' }>): Promise<void> {
+    const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${m.wantId}`)
+    if (op === undefined || op.state !== 'awaiting_disclosure') return
+    const sel = op.data.selected as { key: string } | undefined
+    const s = sel === undefined ? undefined : (op.data.offers as Record<string, StoredOffer>)[sel.key]
+    if (s === undefined || s.so.offer.pub !== from || s.so.offer.offerId !== m.offerId) return
+    await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
+      cause: 'seller_declined',
+      evidence: { reason: m.reason }
+    })
+  }
+
   protected async onMessage(from: string, m: MarketMessage, refs?: BoxRef[]): Promise<void> {
     if (m?.type === 'quote') return await this.onQuote(from, m)
     if (m?.type === 'accept') return await this.onAccept(from, m)
     if (m?.type === 'delivered') return await this.onDelivered(from, m, refs)
+    if (m?.type === 'decline') return await this.onDecline(from, m)
     // recovery notes are only ever handled when they came from our own key
     if (m?.type === 'note' && from === this.me) return await this.onNote(m)
     if (m?.type === 'sellerNote' && from === this.me) return await this.onSellerNote(m)
@@ -799,12 +815,13 @@ export abstract class BuyerOps extends SellerOps {
       await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected' })
       return
     }
-    if (facts.verdict === 'pending' && facts.tx === undefined && !hintSeen(facts.hint)) {
+    if (facts.verdict === 'pending' && facts.tx === undefined) {
       if (op.data.reconcilePing !== true)
         await this.d.store.transition(op.operationId, op.revision, 'uncertain', { cause: 'reconcile_pending', data: { reconcilePing: true } })
       return
     }
-    // mined | seen — the escrow is observable: commit and resume the normal path
+    // mined | held — the escrow is observable: commit and resume the normal
+    // path (a broadcaster seen-hint is a wake signal, never escrow evidence)
     const sel = op.data.selected as { key: string }
     const s = (op.data.offers as Record<string, StoredOffer>)[sel.key]
     if (s === undefined) return

@@ -5,7 +5,7 @@
 // seller settled while the buyer waited forever)
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Transaction, PrivateKey, P2PKH, Script, UnlockingScript } from '@bsv/sdk'
+import { Transaction, PrivateKey, P2PKH, Script, UnlockingScript, MerklePath } from '@bsv/sdk'
 import { TxStore } from '../src/txstore.js'
 
 const key = PrivateKey.fromRandom()
@@ -63,6 +63,59 @@ test('TxStore.spender: indexes spent outpoints and rebuilds them on load', async
   await reloaded.load()
   const r2 = reloaded as TxStore & { spender?: (txid: string, vout: number) => string | undefined }
   assert.equal(r2.spender?.(parent.id('hex'), 0), child.id('hex'), 'the index must rebuild from the stored raw txs')
+})
+
+// A1: a counterparty-attached merkle path is evidence we must compute — read
+// deletes every path that fails verification against OUR tracker (or any path
+// when no tracker answers), so put can never adopt an unverified BUMP. A path
+// that does verify survives even on an unproven subject — zeroconf ancestry
+// keeps traveling.
+const pathOn = (tx: Transaction, height: number): MerklePath =>
+  new MerklePath(height, [
+    [
+      { offset: 0, hash: 'aa'.repeat(32) },
+      { offset: 1, hash: tx.id('hex'), txid: true }
+    ]
+  ])
+const yesTracker = { isValidRootForHeight: async () => true, currentHeight: async () => 0 }
+const noTracker = { isValidRootForHeight: async () => false, currentHeight: async () => 0 }
+
+test('TxStore.read: a forged merkle path is stripped at ingest, never adopted', async () => {
+  const parent = coinbase(0)
+  const child = new Transaction()
+  child.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  child.addOutput({ satoshis: 80_000, lockingScript: new P2PKH().lock(addr) })
+  await child.sign()
+  // the unproven-subject shape: the wire links the carried parent — a forged
+  // ancestor BUMP is exactly the adoption vector A1 closed
+  parent.merklePath = pathOn(parent, 9)
+  const beef = Buffer.from(child.toBEEF()).toString('hex')
+
+  // a tracker that recognizes no root: the carried parent path is deleted
+  // before the caller's put() could adopt it
+  const { tx } = await TxStore.read(beef, noTracker)
+  const src = tx.inputs[0].sourceTransaction
+  assert.equal(src?.merklePath, undefined, 'a forged ancestor path is stripped at read')
+  const store = new TxStore()
+  store.put(tx)
+  assert.ok(store.unproven().includes(parent.id('hex')), 'no proof adopted — the observe loop must prove it itself')
+  assert.equal(store.get(parent.id('hex'))?.merklePath, undefined)
+
+  // with no tracker at all nothing is verifiable: same strip
+  const { tx: blind } = await TxStore.read(beef, undefined)
+  assert.equal(blind.inputs[0].sourceTransaction?.merklePath, undefined)
+})
+
+test('TxStore.read: verified paths survive the gate — evidence keeps traveling', async () => {
+  const parent = coinbase(0)
+  const child = new Transaction()
+  child.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  child.addOutput({ satoshis: 80_000, lockingScript: new P2PKH().lock(addr) })
+  await child.sign()
+  parent.merklePath = pathOn(parent, 9)
+  const beef = Buffer.from(child.toBEEF()).toString('hex')
+  const { tx } = await TxStore.read(beef, yesTracker)
+  assert.equal(tx.inputs[0].sourceTransaction?.merklePath?.blockHeight, 9, 'a valid ancestor path keeps traveling')
 })
 
 // a reorg horizon drops only the proofs at/above it — survivors keep theirs

@@ -876,6 +876,12 @@ export async function resolveStoreMembers(p: {
     for (const o of a.outputs) {
       const tx = parseBeef(o.beef)
       if (tx === undefined) continue
+      // the tracker param is not decorative: the host only ASSERTS it holds
+      // this carrier — the carried beef is evidence only once its proofs
+      // check against our own headers (the same gate token resolution runs:
+      // a proven subject's BUMP directly, carried ancestry via verify)
+      if (tx.merklePath !== undefined && !(await tx.merklePath.verify(tx.id('hex'), p.tracker))) continue
+      if (!(await tx.verify(p.tracker))) continue
       const d = decodeCarrier(tx)
       if (typeof d === 'string') continue
       const rec = d.record

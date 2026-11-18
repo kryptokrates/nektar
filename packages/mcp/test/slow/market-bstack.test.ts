@@ -205,9 +205,7 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
         async () => {
           const r = await readOffers([h1.url, h2.url], { net: NET, wantId, buyerPub: b.pub }, { tracker: trackerFor(chain), net: NET, now: clock })
           if (r.items.length < 3) return false
-          for (const s of [sA, sB, sC])
-            for (const op of await saleOps(s))
-              if ((await s.rt.store.waitingOn(op.operationId)).length > 0) return false
+          for (const s of [sA, sB, sC]) for (const op of await saleOps(s)) if ((await s.rt.store.waitingOn(op.operationId)).length > 0) return false
           return true
         },
         80

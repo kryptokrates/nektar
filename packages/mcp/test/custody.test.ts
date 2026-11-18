@@ -52,9 +52,9 @@ test('custody: takeFunding never overwrites a proof the funder already carried',
   assert.equal(out.tx.merklePath, own)
 })
 
-// G1: a candidate whose parent the broadcaster rejected is passed over and
-// healed — a status hint is never written to custody state, but died()
-// tombstones the phantom output and frees the refused tx's inputs
+// G1: a candidate whose parent the broadcaster rejected is passed over, and
+// ONLY a sealed dead verdict heals — a pushed status word is read-only:
+// died() frees live pending inputs, so a hint must never reach it
 const reserveOps = (
   candidates: Array<{ tx: Transaction; vout: number; satoshis: number }>,
   facts?: (txid: string) => Promise<import('@nektar/chain').TxFacts>
@@ -80,27 +80,43 @@ const hintFacts = (status: string): import('@nektar/chain').TxFacts => ({
   hint: { status, answered: true }
 })
 
-test('custody: takeFunding skips a broadcaster-rejected parent and heals its phantom', async () => {
+test('custody: a broadcaster-rejected parent is passed over, never healed', async () => {
   const bad = parent()
   const good = parent()
   // parent() is deterministic — an extra dust output makes the txids differ
   good.addOutput({ satoshis: 1, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
-  const statuses: string[] = []
   const { ops, spent } = reserveOps(
     [
       { tx: bad, vout: 0, satoshis: 100_000 },
       { tx: good, vout: 0, satoshis: 100_000 }
     ],
-    async (txid) => {
-      statuses.push(txid)
-      return hintFacts(txid === bad.id('hex') ? 'REJECTED' : 'SEEN_ON_NETWORK')
-    }
+    async (txid) => hintFacts(txid === bad.id('hex') ? 'REJECTED' : 'SEEN_ON_NETWORK')
   )
   const u = await ops.takeFunding(1000)
   assert.equal(u.tx.id('hex'), good.id('hex'))
-  assert.deepEqual(statuses, [bad.id('hex'), good.id('hex')], 'one refusal probe per candidate')
-  // a refusal-class parent heals by death: its output can never exist on
-  // chain, so the phantom is tombstoned rather than re-served forever
+  // a pushed status word passes the candidate over — read-only. It must
+  // NEVER reach died(): healing frees the refused tx's inputs and
+  // tombstones the phantom's outputs, so a hint alone cannot write
+  assert.deepEqual(spent, [], 'a hint is not a verdict — nothing writes')
+  assert.equal((await ops.takeFunding(1)).tx.id('hex'), good.id('hex'), 'the hinted parent stays skipped, not burned')
+})
+
+test('custody: a sealed dead verdict heals the phantom parent', async () => {
+  const bad = parent()
+  const good = parent()
+  good.addOutput({ satoshis: 1, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
+  const { ops, spent } = reserveOps(
+    [
+      { tx: bad, vout: 0, satoshis: 100_000 },
+      { tx: good, vout: 0, satoshis: 100_000 }
+    ],
+    async (txid): Promise<import('@nektar/chain').TxFacts> =>
+      txid === bad.id('hex') ? { verdict: 'dead' } : hintFacts('SEEN_ON_NETWORK')
+  )
+  const u = await ops.takeFunding(1000)
+  assert.equal(u.tx.id('hex'), good.id('hex'))
+  // a sealed verdict heals: the phantom can never exist on chain, so its
+  // output is tombstoned rather than re-served forever
   assert.deepEqual(spent, [`${bad.id('hex')}:0`])
 })
 

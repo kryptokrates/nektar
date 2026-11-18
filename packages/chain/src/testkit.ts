@@ -30,6 +30,8 @@ import {
   type RegtestConfig
 } from './regtest.js'
 import { TxStore } from './txstore.js'
+import { indexFor } from './indexer.js'
+import type { MainnetConfig } from './mainnet.js'
 import { txFactsOf, type TxFacts } from './txfacts.js'
 import { testTier, type TestChain } from './testtier.js'
 
@@ -850,4 +852,69 @@ export async function stackWorld(
   })
   const funder = await StackFunder.fund(treasury, outputs, sats)
   return { chain: treasury.chain, funder, treasury }
+}
+
+/** live-UTXO reconcile for a persisted testnet/mainnet treasury: entries the
+ *  file still shows free but the network already spent must be marked before
+ *  any funding call can take them (a stale entry is exactly how the
+ *  UTXO_SPENT double-mint wedge happens). Only runs when the index answers —
+ *  a failed probe must not zero the reserve. Absence from the unspent list
+ *  is NOT proof of spend: an entry is marked only when `spendStatus` proves
+ *  it — the indexer named a spender whose own served bytes name this
+ *  outpoint as an input (with a witnessed-header-checked BUMP when the
+ *  spender is mined). Unproven = still free. */
+export async function reconcileLiveReserve(
+  reserve: ReserveFunder,
+  addr: string,
+  mc: MainnetConfig,
+  spendStatus: (txid: string, vout: number) => Promise<'spent' | 'unspent' | 'unknown'>
+): Promise<{ marked: number; adopted: number; healed: number }> {
+  const index = indexFor({ url: mc.indexerUrl ?? '', apiKey: mc.indexerApiKey })
+  const live = await index.utxos(addr).catch(() => undefined)
+  if (live === undefined) return { marked: 0, adopted: 0, healed: 0 }
+  const liveSet = new Set(live.map((u) => `${u.txid}:${u.vout}`))
+  const entries = reserve.utxos.map((u) => ({ txid: u.tx.id('hex'), vout: u.vout }))
+  const known = new Set(entries.map((e) => `${e.txid}:${e.vout}`))
+  let marked = 0,
+    adopted = 0,
+    healed = 0
+  // heal stale spent-marks: the index positively lists the outpoint as live —
+  // a mark left by a stale/absent listing (or an aborted run) is unprovable
+  // and must not starve the reserve silently
+  for (const e of entries)
+    if (liveSet.has(`${e.txid}:${e.vout}`) && reserve.isSpent(e.txid, e.vout)) {
+      reserve.unmark(e.txid, e.vout)
+      healed++
+    }
+  for (const e of entries) {
+    if (liveSet.has(`${e.txid}:${e.vout}`)) continue
+    if ((await spendStatus(e.txid, e.vout)) === 'spent') {
+      reserve.markSpent(e.txid, e.vout)
+      marked++
+      continue
+    }
+    // dead drafts — change outputs of own broadcasts that never landed (the
+    // index has never served the parent): the outpoint does not exist on
+    // chain, so every take on it is a guaranteed broadcast failure. The mark
+    // is offer bookkeeping, not a chain claim — the heal pass lifts it if
+    // the parent ever becomes servable.
+    if ((await index.txHex(e.txid).catch(() => undefined)) === undefined) {
+      reserve.markSpent(e.txid, e.vout)
+      marked++
+    }
+  }
+  // adopt live UTXOs the file doesn't know (minted-tree change, settlement
+  // income from earlier runs) — fetch each parent tx hex and addOwned it
+  for (const u of live) {
+    if (known.has(`${u.txid}:${u.vout}`)) continue
+    const hex = await index.txHex(u.txid).catch(() => undefined)
+    if (hex === undefined) continue
+    try {
+      reserve.addOwned(Transaction.fromHex(hex), u.vout)
+      adopted++
+    } catch {
+      /* skip unparseable */
+    }
+  }
+  return { marked, adopted, healed }
 }

@@ -3,7 +3,7 @@ import { verifyOffer, verifyWant, type BoxRef, type SignedOffer, type SignedWant
 import { verifyOfferSig } from '@nektar/identity'
 import { COVENANT_ID, DisclosureSaleHost } from '@nektar/anchor'
 import { fromHex, parseFragment } from '@nektar/core'
-import { hintSeen, spendValid, type Ingested } from '@nektar/chain'
+import { hintSeen, spendValid, FundsStarvedError, type Ingested } from '@nektar/chain'
 import type { Operation } from '../store.js'
 import { decidePurchase, digestOf, type ActionContext, type AutomationPolicy } from '../policy.js'
 import { rankOffers, type ScoreCandidate } from '../scoring.js'
@@ -13,8 +13,11 @@ import type { MarketMessage, StoredOffer, StuckExit } from './types.js'
 
 // a take that lost the race to a concurrent spend is not a deal fault —
 // 'selected' re-enters fund() next tick and the funding window bounds the
-// retry. Only starvation-class errors qualify; refusals stay terminal
+// retry. Only starvation-class errors qualify; refusals stay terminal. The
+// typed code is the contract across the package boundary; the text match
+// stays as the compat floor for impls that still throw plain errors
 function starved(e: unknown): boolean {
+  if (e instanceof FundsStarvedError || (e as { code?: string }).code === 'STARVED') return true
   return /no spendable output|deal floor/i.test(e instanceof Error ? e.message : String(e))
 }
 
@@ -784,11 +787,14 @@ export abstract class BuyerOps extends SellerOps {
     if (this.d.txFacts === undefined || !this.reconcileGate(op.operationId, txid)) return
     const facts = await this.d.txFacts(txid)
     if (facts.verdict === 'dead') {
-      // the prepared tx never aired — drop its input leases too, or a retry
-      // collides with its own dead sibling ('already leased to another action')
+      // the prepared tx never aired — drop its input leases AND mark the row
+      // dead, or the pair disagrees: a released lease beside a live-looking
+      // 'prepared' row is exactly the wedge the lease-liveness check reads
       if (actionId !== undefined) {
         await this.d.store.releaseBudget(actionId)
         await this.d.store.releaseLeases(actionId)
+        if (wtx !== undefined && (wtx.state === 'prepared' || wtx.state === 'submission_unknown'))
+          await this.d.store.setTxState(actionId, 'rejected')
       }
       await cancel()
       await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected' })

@@ -39,7 +39,7 @@ export { txFactsOf, hintSeen, hintRejected, hintSilent, SEEN_HINTS } from './txf
 export type { StatusHint, TxFacts, TxFactsDeps, TxVerdict, TxVerdictSource } from './txfacts.js'
 export type { StatusStreamEvent, StatusStreamOpts } from './mainnet.js'
 export type { MainnetConfig } from './mainnet.js'
-export { StackChain, StackFunder, StackTreasury, stackCfgFromEnv, stackTreasury, stackUp, stackWorld, stackChain, skipUnlessStack } from './testkit.js'
+export { StackChain, StackFunder, StackTreasury, stackCfgFromEnv, stackTreasury, stackUp, stackWorld, stackChain, skipUnlessStack, reconcileLiveReserve } from './testkit.js'
 export { testTier, testWorld, testChain, testFunder, dryFunder, stackOnly } from './testworld.js'
 export type { TestTier, TestChain, TestFunder } from './testworld.js'
 export { MemoryChain, MemoryTreasury, MemoryFunder, memoryTreasury } from './memchain.js'

@@ -281,8 +281,11 @@ export function openUpkeep(rt: Rt): void {
               }
               // carriers minted on this tree while it was unproven carry a
               // host-side eviction deadline that never clears on its own —
-              // queue a per-row re-announce with the parent's BUMP attached
-              if (kind === 'market' && tx?.merklePath !== undefined) await rt.queueRepublish(txid)
+              // queue a per-row re-announce with the parent's BUMP attached;
+              // every tree kind carries carriers (market offers, finger
+              // records, log batches, box envelopes) — fundedBy() finds only
+              // rows that recorded the tree they spend
+              if (tx?.merklePath !== undefined) await rt.queueRepublish(txid)
             }
           }
         } catch (e) {

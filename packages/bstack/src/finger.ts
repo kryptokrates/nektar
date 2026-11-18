@@ -429,7 +429,7 @@ export async function publishFinger(p: {
     const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_RECORD, encodeRecord(record), slot.tree, slot.vout)
     carrierBeef = carrier.toAtomicBEEF()
     carrierTxid = carrier.id('hex')
-    await p.journal.put(`finger:carrier:${seq}`, { txid: carrierTxid, beef: carrierBeef, topics })
+    await p.journal.put(`finger:carrier:${seq}`, { txid: carrierTxid, beef: carrierBeef, topics, fundingTxid: slot.tree.id('hex') })
   }
 
   // the state token: spends the previous token (update) plus wallet funding
@@ -460,7 +460,7 @@ export async function publishFinger(p: {
     await healAncestry(tokenTx, p.fetchTx)
     tokenTxid = tokenTx.id('hex')
     tokenBeefOut = tokenTx.toBEEF()
-    await p.journal.put(tkey, { txid: tokenTxid, beef: tokenBeefOut, topics })
+    await p.journal.put(tkey, { txid: tokenTxid, beef: tokenBeefOut, topics, fundingTxid: fund.tx.id('hex') })
   }
 
   // a host missing earlier chain members refuses the head 'no-current' —
@@ -557,7 +557,7 @@ export async function publishSubRecord(p: {
   const carrier = await mintCarrier(w, ORIGINATOR, DERIVATION_RECORD, encodeRecord(record), slot.tree, slot.vout)
   const beef = carrier.toAtomicBEEF()
   const txid = carrier.id('hex')
-  await p.journal.put(jkey, { txid, beef, topics: [FINGER_TOPIC] })
+  await p.journal.put(jkey, { txid, beef, topics: [FINGER_TOPIC], fundingTxid: slot.tree.id('hex') })
   const r = await submitAll(p.hosts, beef, [FINGER_TOPIC], { retryWaits: [] })
   return { commitment: Utils.toHex(Array.from(commitment(carrier))), txid, missed: r.missed, pending: r.pending, settled: r.settled }
 }

@@ -109,6 +109,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   const logStream = lanes === undefined ? undefined : (cfg.logStream ?? 'nektar_abcdefghij')
   const logState = lanes === undefined || logStream === undefined ? undefined : lanes.logState
   const fingerState = lanes === undefined ? undefined : lanes.fingerState
+  // journaled carriers serve with their funding parent's BUMP attached the
+  // moment fetchTx can answer it — rows journaled while the tree was still
+  // unproven heal at read instead of re-serving stale ancestry forever
+  if (lanes !== undefined) lanes.journal.enrich = async (txid) => (await mem.fetchTx(txid))?.merklePath
   // restart continuity: pending provision rows keep their chain watch —
   // without it the abandon horizon never reaps a rejected provision tx
   if (lanes !== undefined) {

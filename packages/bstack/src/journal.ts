@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { Transaction } from '@bsv/sdk'
+import type { MerklePath } from '@bsv/sdk'
 
 export interface CarrierJournal {
   get(hash: string): Promise<{ txid: string; beef: number[]; topics: string[]; fundingTxid?: string } | undefined>
@@ -7,13 +9,70 @@ export interface CarrierJournal {
    *  carriers with the parent's BUMP attached (the same txid, so hosts
    *  re-record the entry free of the unproven-funding eviction deadline) */
   fundedBy?(txid: string): Promise<Array<{ hash: string; txid: string; beef: number[]; topics: string[] }>>
+  /** proof seam — the lanes runtime wires fetchTx here; reads then hand back
+   *  a BEEF with the funding parent's BUMP attached (and persist it) instead
+   *  of re-serving stale ancestry forever */
+  enrich?(txid: string): Promise<MerklePath | undefined>
   del?(hash: string): Promise<void>
 }
 
+/** stored beef is either subject form — carriers journal atomic, token rows
+ *  journal plain; try both before calling a row unparseable */
+const parseBeef = (beef: number[]): Transaction | undefined => {
+  try {
+    return Transaction.fromAtomicBEEF(beef)
+  } catch {
+    try {
+      return Transaction.fromBEEF(beef)
+    } catch {
+      return undefined
+    }
+  }
+}
+
+/** enrich a row's stored beef with every ancestor BUMP the proof seam can
+ *  now answer — the funding parent is only the shallowest level; trees
+ *  funded by a previous tree's change sit deeper and are what the host
+ *  walks into next. Returns the enriched beef or undefined */
+const enrichBeef = async (row: { beef: number[]; fundingTxid?: string }, enrich?: (txid: string) => Promise<MerklePath | undefined>): Promise<number[] | undefined> => {
+  if (enrich === undefined) return undefined
+  const tx = parseBeef(row.beef)
+  if (tx === undefined) return undefined
+  let changed = false
+  const seen = new Set<string>()
+  const walk = async (t: Transaction): Promise<void> => {
+    for (const i of t.inputs) {
+      const s = i.sourceTransaction
+      if (s === undefined) continue
+      const id = s.id('hex')
+      if (seen.has(id)) continue
+      seen.add(id)
+      if (s.merklePath === undefined) {
+        const mp = await enrich(id)
+        if (mp !== undefined) {
+          s.merklePath = mp
+          changed = true
+          continue
+        }
+        await walk(s)
+      }
+    }
+  }
+  await walk(tx)
+  return changed ? tx.toAtomicBEEF() : undefined
+}
+
 export class MemoryCarrierJournal implements CarrierJournal {
+  public enrich?: (txid: string) => Promise<MerklePath | undefined>
   private m = new Map<string, { txid: string; beef: number[]; topics: string[]; fundingTxid?: string }>()
   async get(hash: string) {
-    return this.m.get(hash)
+    const row = this.m.get(hash)
+    const beef = row === undefined ? undefined : await enrichBeef(row, this.enrich)
+    if (row !== undefined && beef !== undefined) {
+      row.beef = beef
+      this.m.set(hash, row)
+    }
+    return row
   }
   async put(hash: string, c: { txid: string; beef: number[]; topics: string[]; fundingTxid?: string }) {
     this.m.set(hash, c)
@@ -27,6 +86,7 @@ export class MemoryCarrierJournal implements CarrierJournal {
 }
 
 export class KnexCarrierJournal implements CarrierJournal {
+  public enrich?: (txid: string) => Promise<MerklePath | undefined>
   constructor(private kx: Knex) {}
   private ensured?: Promise<void>
   /** create the table up front (migrations/seed copies need the DDL before
@@ -47,23 +107,36 @@ export class KnexCarrierJournal implements CarrierJournal {
           t.string('funding_txid').nullable()
         })
       }
-      return
+    } else {
+      await this.kx.schema.createTable('bstack_carriers', (t) => {
+        t.string('artifact_hash').primary()
+        t.string('txid').notNullable()
+        t.text('beef').notNullable()
+        t.text('topics').notNullable()
+        t.string('funding_txid').nullable()
+        t.bigInteger('created_at').notNullable()
+      })
     }
-    await this.kx.schema.createTable('bstack_carriers', (t) => {
-      t.string('artifact_hash').primary()
-      t.string('txid').notNullable()
-      t.text('beef').notNullable()
-      t.text('topics').notNullable()
-      t.string('funding_txid').nullable()
-      t.bigInteger('created_at').notNullable()
-    })
+    // one-time migration for pre-fundingTxid journals: the parent a row's
+    // input-0 spends IS its funding txid — recover it from the stored beef
+    // so legacy rows become republishable/enrichable instead of re-serving
+    // stale ancestry forever
+    for (const r of await this.kx('bstack_carriers').whereNull('funding_txid').select('artifact_hash', 'beef')) {
+      const parent = parseBeef(JSON.parse(r.beef as string) as number[])?.inputs[0]?.sourceTransaction?.id('hex')
+      if (parent !== undefined) await this.kx('bstack_carriers').where({ artifact_hash: r.artifact_hash as string }).update({ funding_txid: parent })
+    }
   }
   async get(hash: string) {
     await this.ensure()
     const r = await this.kx('bstack_carriers').where({ artifact_hash: hash }).first()
-    return r === undefined
-      ? undefined
-      : { txid: r.txid, beef: JSON.parse(r.beef), topics: JSON.parse(r.topics), ...(r.funding_txid != null ? { fundingTxid: r.funding_txid } : {}) }
+    if (r === undefined) return undefined
+    const row = { txid: r.txid, beef: JSON.parse(r.beef), topics: JSON.parse(r.topics), ...(r.funding_txid != null ? { fundingTxid: r.funding_txid } : {}) }
+    const beef = await enrichBeef(row, this.enrich).catch(() => undefined)
+    if (beef !== undefined) {
+      await this.put(hash, { ...row, beef })
+      row.beef = beef
+    }
+    return row
   }
   async put(hash: string, c: { txid: string; beef: number[]; topics: string[]; fundingTxid?: string }): Promise<void> {
     await this.ensure()

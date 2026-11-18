@@ -65,6 +65,13 @@ export interface FundsDeps {
   /** first-party spend probe — a 'spent' answer burns the candidate during
    *  selection. Seeds the `spendCheck` field. */
   spendCheck?: (txid: string, vout: number) => Promise<boolean>
+  /** the candidate's parent tx is refusal-class dead — a first-party
+   *  verdict or the broadcaster's own REJECTED word on a tx that left our
+   *  hands. `take` answers it with died(): the phantom's inputs revive
+   *  (each re-heals on its own evaluation), the dead tx's owned outputs
+   *  drop. Bookkeeping only — no chain verdict is written. Seeds the
+   *  `deadParent` field. */
+  deadParent?: (tx: Transaction) => Promise<boolean>
   /** a purpose's take served by a dedicated pool instead of the shared set —
    *  the fee-vault covenant mints capped outs for `publish` takes; it returns
    *  undefined when it has nothing to serve (fall through to the pool).
@@ -88,6 +95,7 @@ export abstract class FundsBase implements Funds {
    *  hint and spend-probe seams after construction */
   public leased?: (txid: string, vout: number) => Promise<boolean> | boolean
   public hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
+  public deadParent?: (tx: Transaction) => Promise<boolean>
   public spendCheck?: (txid: string, vout: number) => Promise<boolean>
   public takeOverride?: (purpose: FundPurpose, sats: number) => Promise<FundingOut | undefined>
   /** sats kept affordable for one deal — non-deal takes never dip below;
@@ -101,6 +109,7 @@ export abstract class FundsBase implements Funds {
   constructor(public deps: FundsDeps) {
     this.leased = deps.leased
     this.hintSkip = deps.hintSkip
+    this.deadParent = deps.deadParent
     this.spendCheck = deps.spendCheck
     this.takeOverride = deps.takeOverride
     this.dealFloor = deps.dealFloor
@@ -189,7 +198,15 @@ export abstract class FundsBase implements Funds {
       }
       const candidates: FundingOut[] = []
       for (const u of all) {
-        if (u.satoshis < sats || (await this.unusable(u))) continue
+        if (u.satoshis < sats) continue
+        if (await this.unusable(u)) {
+          // a veto whose parent is refusal-class dead heals for good:
+          // died() frees the phantom's inputs and drops the owned outputs
+          // it adopted — an in-flight outpoint is left to its own take
+          const pid = u.tx.id('hex')
+          if (u.tx.merklePath === undefined && !this.reserved.has(op(pid, u.vout)) && (await this.deadParent?.(u.tx)) === true) await this.died(u.tx)
+          continue
+        }
         candidates.push(u)
       }
       candidates.sort((a, b) => a.satoshis - b.satoshis)

@@ -134,6 +134,13 @@ export interface Funds {
   /** first-party spend probe (chain utxo status / wallet truth): a 'spent'
    *  answer burns the candidate permanently during selection */
   spendCheck?: (txid: string, vout: number) => Promise<boolean>
+  /** refusal-class dead parent — the candidate's parent tx is first-party
+   *  dead or broadcaster-REJECTED. `take` answers with died(): the
+   *  phantom's inputs revive, its owned outputs drop — so stock stranded
+   *  by an accepted-then-evicted broadcast recycles instead of leaking.
+   *  Unlike hintSkip this seam DOES write (it heals), but only custody
+   *  bookkeeping — never a chain verdict */
+  deadParent?: (tx: Transaction) => Promise<boolean>
   /** a purpose's take served by a dedicated pool instead of the shared set —
    *  the fee-vault covenant mints capped outs for `publish` takes; returns
    *  undefined when it has nothing to serve (fall through to the pool) */

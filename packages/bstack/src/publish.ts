@@ -91,8 +91,8 @@ export async function republishOne(p: {
   if (row === undefined) return { done: true, missed: [] }
   try {
     const tx = Transaction.fromAtomicBEEF(row.beef)
-    const parent = tx.inputs[0]?.sourceTransaction
-    if (parent === undefined || parent.id('hex') !== p.treeTxid || parent.merklePath !== undefined) return { done: true, missed: [] }
+    const parent = tx.inputs.find((i) => i.sourceTransaction?.id('hex') === p.treeTxid)?.sourceTransaction
+    if (parent === undefined || parent.merklePath !== undefined) return { done: true, missed: [] }
     parent.merklePath = p.merklePath
     const beef = tx.toAtomicBEEF()
     const r = await submitAll(p.hosts, beef, row.topics, { retryWaits: [] })

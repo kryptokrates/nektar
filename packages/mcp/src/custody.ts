@@ -56,7 +56,13 @@ export class CustodyOps {
     // for this take — neither writes anything; custody state stays first-party.
     const facts = deps.facts
     if (facts !== undefined) {
-      deps.funds.hintSkip = async (tx: Transaction): Promise<boolean> => {
+      // one evidence bar, two actions: a candidate whose parent is
+      // first-party dead or broadcaster-REJECTED is skipped for the take
+      // (hintSkip — pass-over only, writes nothing) and, when that veto
+      // lands, healed via died() (deadParent — frees the phantom's inputs
+      // and drops its adopted outputs). Bookkeeping only — a pushed status
+      // word still never writes a chain verdict.
+      const refusedParent = async (tx: Transaction): Promise<boolean> => {
         if (tx.merklePath !== undefined) return false
         const txid = tx.id('hex')
         if (deps.proofOf?.(txid) !== undefined) return false
@@ -67,6 +73,8 @@ export class CustodyOps {
           return false
         }
       }
+      deps.funds.hintSkip = async (tx: Transaction): Promise<boolean> => refusedParent(tx)
+      deps.funds.deadParent = refusedParent
     }
   }
 

@@ -114,7 +114,7 @@ export async function sendBox(p: {
     const carrier = await envelopeCarrier(w, ORIGINATOR, record, slot.tree, slot.vout)
     beef = carrier.toAtomicBEEF()
     txid = carrier.id('hex')
-    await p.journal.put(artifactHash, { txid, beef, topics })
+    await p.journal.put(artifactHash, { txid, beef, topics, fundingTxid: slot.tree.id('hex') })
   }
   // the journal is the retry layer — a dead host must not put seconds of
   // sleeps on the message path, and a send is done when quorum answered
@@ -186,7 +186,7 @@ export async function ackBox(p: {
     const carrier = await envelopeCarrier(w, ORIGINATOR, record, slot.tree, slot.vout)
     const beef = carrier.toAtomicBEEF()
     const txid = carrier.id('hex')
-    for (const i of chunk) await p.journal.put(`ack:${i.txid}`, { txid, beef, topics })
+    for (const i of chunk) await p.journal.put(`ack:${i.txid}`, { txid, beef, topics, fundingTxid: slot.tree.id('hex') })
     resend.set(txid, { txid, beef })
     acked += chunk.length
   }

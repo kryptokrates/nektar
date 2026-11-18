@@ -170,7 +170,7 @@ export async function appendLog(p: {
     beef = carrier.toAtomicBEEF()
     txid = carrier.id('hex')
     commitment = toHex(new Uint8Array(carrier.hash() as number[]))
-    await p.journal.put(jkey, { txid, beef, topics })
+    await p.journal.put(jkey, { txid, beef, topics, fundingTxid: slot.tree.id('hex') })
   }
   const r = await submitAll(p.hosts, beef, topics, { quorum: p.quorum, retryWaits: [] })
   if (!r.ok) throw new Error(`log submit failed: ${JSON.stringify(r.missed).slice(0, 200)}`)
@@ -423,7 +423,7 @@ export async function publishMinedLog(p: {
     // atomic BEEF — the canonical single-subject form an engine hands a
     // whole-tx lookup service; non-atomic BEEF parses as garbage there
     beef = p.tx.toAtomicBEEF()
-    await p.journal.put(jkey, { txid, beef, topics })
+    await p.journal.put(jkey, { txid, beef, topics, fundingTxid: p.tx.inputs.find((i) => i.sourceTransaction !== undefined)?.sourceTransaction?.id('hex') })
   }
   // the caller owns the legs: a host that missed this publish gets a repair
   // row keyed `logpub:{stream}:{txid}` like every other fanned-out carrier
@@ -567,7 +567,7 @@ export async function anchorLog(p: {
         return undefined
       }
       const aHit = `log-anchor:${p.stream}:${interval}`
-      await p.journal.put(aHit, { txid, beef: tx.toBEEF(), topics: [logTopic(p.stream)] })
+      await p.journal.put(aHit, { txid, beef: tx.toBEEF(), topics: [logTopic(p.stream)], fundingTxid: slot.tree.id('hex') })
       await p.state.set(flightKey(p.stream), { seq: interval, prev: txid, extra: { first, count } })
       return { interval, first, count, root: toHex(root), txid }
     } catch (e) {

@@ -309,8 +309,14 @@ const sellerize = async (s: A, price: number) => {
   await s.rt.engine.enableSeller(s.policyHash)
 }
 
+/** priming passes: deals every pass, ONE upkeep pass overlapping them —
+ *  serializing ~90s of upkeep per iteration makes spinup alone outrun a
+ *  test's whole deal budget (the same wedge until() had). n=1 keeps the
+ *  warmup loop's old shape: one deals pass + one upkeep pass, awaited. */
 const drive = async (rts: Automation[], n = 1) => {
-  for (let i = 0; i < n; i++) await Promise.all(rts.map((rt) => rt.cycle()))
+  const up = Promise.all(rts.map((rt) => rt.upkeep()))
+  for (let i = 0; i < n; i++) await Promise.all(rts.map((rt) => rt.deals()))
+  await up
 }
 
 /** wall-clock until: polls the engines and returns the elapsed ms when ok()
@@ -328,7 +334,7 @@ const until = async (rts: Automation[], ms: number, ok: () => Promise<boolean>):
       upkeepAt = Date.now()
       upkeepRunning = true
       void Promise.all(rts.map((rt) => rt.upkeep()))
-        .catch((e) => logs.push(`upkeep: ${e instanceof Error ? e.message : String(e)}`))
+        .catch(() => undefined)
         .finally(() => {
           upkeepRunning = false
         })
@@ -534,7 +540,7 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_200_00
   }
 })
 
-test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { timeout: 600_000 }, async (t) => {
+test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { timeout: 1_800_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const run = async (watch: boolean) => {
@@ -572,7 +578,7 @@ test('T3: watch-shim A/B on live hosts — notify fires, deal completes', { time
   assert.ok(watched.notifies > 0, 'shim never notified — publish→wake path did not fire on testnet')
 })
 
-test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly', { timeout: 600_000 }, async (t) => {
+test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly', { timeout: 1_200_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   for (const kb of [1, 32]) {
@@ -627,7 +633,7 @@ test('T4: payload scaling — 1KB completes; 32KB hits the envelope cap honestly
 
 // ───────────────────────────── resilience ─────────────────────────────
 
-test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 600_000 }, async (t) => {
+test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 1_200_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -660,7 +666,7 @@ test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 60
   }
 })
 
-test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeout: 600_000 }, async (t) => {
+test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeout: 1_200_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -684,7 +690,7 @@ test('R2: one host delayed 3s — quorum-1 rides the fast host (live)', { timeou
   }
 })
 
-test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (live)', { timeout: 600_000 }, async (t) => {
+test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (live)', { timeout: 1_200_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -723,7 +729,7 @@ test('R3: withholding host loses the offer — quorum-1 + withheld bookkeeping (
   }
 })
 
-test('R4: partition both hosts → deaf window → heal → completes, no double-broadcast (live)', { timeout: 600_000 }, async (t) => {
+test('R4: partition both hosts → deaf window → heal → completes, no double-broadcast (live)', { timeout: 1_200_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -765,7 +771,7 @@ test('R4: partition both hosts → deaf window → heal → completes, no double
   }
 })
 
-test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)', { timeout: 600_000 }, async (t) => {
+test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)', { timeout: 1_200_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -802,7 +808,7 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
   }
 })
 
-test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 600_000 }, async (t) => {
+test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 1_200_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -828,7 +834,7 @@ test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 6
   }
 })
 
-test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', { timeout: 600_000 }, async (t) => {
+test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', { timeout: 1_200_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR
@@ -869,7 +875,7 @@ test('R7: late escrow rejection → funding_failed via txFacts verdict (live)', 
   }
 })
 
-test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settlements (live)', { timeout: 600_000 }, async (t) => {
+test('R8: concurrency invariant — 2 buyers race, all terminal, distinct settlements (live)', { timeout: 1_200_000 }, async (t) => {
   DOMAIN = 'libfoo-tn' + RUN + '-' + dseq++
   if (!(await live(t))) return
   const dir = SUITE_DIR

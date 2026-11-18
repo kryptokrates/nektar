@@ -340,6 +340,22 @@ export async function publishFinger(p: {
   const topics = [FINGER_TOPIC]
   const prev = await p.state.get()
 
+  // a bundle hosts refuse structurally can never be admitted — serving it
+  // is pure retry waste. Journaled beefs freeze at mint time, so serve
+  // paths heal first (an ancestor that mined since gets its path through
+  // fetchTx), then skip what still cannot close
+  const servable = async (beef: number[]): Promise<number[] | undefined> => {
+    let tx: Transaction
+    try {
+      tx = Transaction.fromBEEF(beef)
+    } catch {
+      return undefined
+    }
+    if (!beefGaps(tx)) return beef
+    if (!(await healAncestry(tx, p.fetchTx)) || beefGaps(tx)) return undefined
+    return tx.toBEEF()
+  }
+
   // proof propagation for an in-flight token: attach the mined proof to the
   // stored tx (which still carries its full ancestry) and re-submit. The
   // proven copy lives in STATE, not the journal — the journal is insert-only
@@ -383,7 +399,8 @@ export async function publishFinger(p: {
       }
       for (let n = 1; n <= prev.seq; n++) {
         const t = n === prev.seq && tokenBeef !== undefined ? { beef: tokenBeef } : await p.journal.get(`finger:token:${n}`)
-        if (t !== undefined) await submitAll(p.hosts, t.beef, topics, { retryWaits: [] })
+        const sv = t === undefined ? undefined : await servable(t.beef)
+        if (sv !== undefined) await submitAll(p.hosts, sv, topics, { retryWaits: [] })
       }
       await p.state.set({ ...prev, served: { at: Date.now(), hosts: hostSig } })
     } else if (tokenBeef !== undefined) {
@@ -391,7 +408,8 @@ export async function publishFinger(p: {
       // host that somehow lost just the tip still heals between serves
       const c = await p.journal.get(`finger:carrier:${prev.seq}`)
       if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
-      await submitAll(p.hosts, tokenBeef, topics, { retryWaits: [] })
+      const sv = await servable(tokenBeef)
+      if (sv !== undefined) await submitAll(p.hosts, sv, topics, { retryWaits: [] })
     }
     return { changed: false, seq: prev.seq, carrierTxid: (await p.journal.get(`finger:carrier:${prev.seq}`))?.txid, tokenTxid: prev.tokenTxid }
   }
@@ -505,12 +523,16 @@ export async function publishFinger(p: {
       const c = await p.journal.get(`finger:carrier:${n}`)
       if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
       const t = await p.journal.get(`finger:token:${n}`)
-      if (t !== undefined) await submitAll(p.hosts, t.beef, t.topics ?? topics, { retryWaits: [] })
+      const sv = t === undefined ? undefined : await servable(t.beef)
+      if (sv !== undefined) await submitAll(p.hosts, sv, t.topics ?? topics, { retryWaits: [] })
     }
   }
   // independent objects, same hosts — carrier and token beef each carry
   // their own ancestry, so admission needs no ordering between them
-  await Promise.all([submitAll(p.hosts, carrierBeef, topics, { retryWaits: [] }), submitAll(p.hosts, tokenBeefOut, topics, { retryWaits: [] })])
+  await Promise.all([
+    submitAll(p.hosts, carrierBeef, topics, { retryWaits: [] }),
+    servable(tokenBeefOut).then((sv) => (sv === undefined ? undefined : submitAll(p.hosts, sv, topics, { retryWaits: [] })))
+  ])
   // broadcast on EVERY publish, not just the mint: a journaled token whose
   // first broadcast was refused (or crashed before it) must not commit
   // locally — descendants would chain on a tx the network never saw and fail
@@ -664,6 +686,36 @@ export async function publishSubRecord(p: {
  *  stays unproven, fill input sources missing from the graph via their
  *  sourceTXID and keep walking. Depth-capped, visited-guarded; never touches
  *  `tx` itself. Returns whether anything changed. */
+/** a bundle's structural refusal: an unproven entry names a parent the
+ *  beef doesn't carry — no amount of re-serving makes the host's source
+ *  check pass, so the serve path heals first and skips what stays open.
+ *  BUMP-anchored entries terminate the walk; a coinbase-shaped input is a
+ *  terminal, not a hole. */
+function beefGaps(tx: Transaction): boolean {
+  const seen = new Set<string>()
+  const q: Transaction[] = [tx]
+  while (q.length > 0) {
+    const t = q.shift()!
+    let id: string | undefined
+    try {
+      id = t.id('hex')
+    } catch {
+      continue
+    }
+    if (id === undefined || seen.has(id)) continue
+    seen.add(id)
+    if (t.merklePath !== undefined) continue
+    for (const i of t.inputs) {
+      if (i.sourceTransaction === undefined) {
+        if (i.sourceTXID !== undefined && i.sourceTXID !== '00'.repeat(32)) return true
+        continue
+      }
+      q.push(i.sourceTransaction)
+    }
+  }
+  return false
+}
+
 async function healAncestry(tx: Transaction, fetchTx: (txid: string) => Promise<Transaction | undefined>): Promise<boolean> {
   let changed = false
   const seen = new Set<string>([tx.id('hex')])

@@ -281,7 +281,7 @@ test('wallet: bytes persisted before submission; a crash between prepare and sub
   assert.equal(await w2.observe('f'.repeat(64), { status: 'seen', source: 'arc' }), undefined, 'untracked txids change nothing')
 })
 
-test('wallet: one outpoint, one live action; guard refusal releases, network rejection does not', async (t) => {
+test('wallet: one outpoint, one live action; guard refusal and network rejection both release', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())
   const funder = dryFunder()
@@ -306,7 +306,9 @@ test('wallet: one outpoint, one live action; guard refusal releases, network rej
   await assert.rejects(w.prepare(ctx('h', 'b'), 'send', t2), /already leased/)
   await assert.rejects(w.prepare(ctx('h', 'a'), 'send', t2), /different transaction/)
   assert.equal((await w.submit('a')).state, 'rejected')
-  await assert.rejects(w.prepare(ctx('h', 'b'), 'send', t2), /already leased/, 'a signed tx that reached the network keeps its inputs encumbered')
+  // a definitively-rejected tx is dead-in-mempool — the lease follows it;
+  // outpoint liveness is custody's call (spendCheck/liveSet), not the lease's
+  assert.equal((await w.prepare(ctx('h', 'b'), 'send', t2)).state, 'prepared', 'a dead tx frees its inputs for the next attempt')
   const bare = new Transaction()
   bare.addInput({ sourceTXID: 'a'.repeat(64), sourceOutputIndex: 0 })
   bare.addOutput({ satoshis: 1, lockingScript: new P2PKH().lock(funder.address()) })

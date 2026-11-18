@@ -123,6 +123,10 @@ export class WalletCoordinator {
     }
     const state: TxState = DEFINITIVE.test(detail) && !detail.startsWith('transport:') ? 'rejected' : 'submission_unknown'
     await this.store.setTxState(actionId, state, { at: Date.now(), result: res }, true)
+    // a definitively-rejected tx never airs — its inputs are either spent
+    // (custody already knows) or still live; holding the lease only blocks
+    // the next attempt with a phantom 'already leased' collision
+    if (state === 'rejected') await this.store.releaseLeases(actionId)
     return { state, txid: w.txid, detail }
   }
 

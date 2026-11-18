@@ -9,10 +9,10 @@ const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund'
 // payload into an arithmetically un-settleable quote: even zeroing change,
 // utxo − price = maxFee < the tx's relay cost, so complete() can only fail.
 // Sized to the payload: ~1 sat/KB (BSV relay floor) over an estimated
-// wrapped+script size, plus a change margin so the depositor's return
-// output is real money, not dust.
+// wrapped+script size, plus a change margin above the dust floor (~135
+// sats) so the depositor's return output is standard, not dust.
 const saleFeeBound = (payloadBytes: number, floor: number): number =>
-  Math.max(floor, Math.ceil((payloadBytes + 4096) / 1000) + 100)
+  Math.max(floor, Math.ceil((payloadBytes + 4096) / 1000) + 150)
 
 // the complete/refund spend should pay the relay fee its size actually
 // needs — a flat cap overpays small spends and starves big ones, both

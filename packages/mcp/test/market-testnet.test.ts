@@ -295,7 +295,7 @@ const policyFor = (pub: string): AutomationPolicy => ({
   limits: {
     perPurchaseSats: 500,
     dailyPurchaseSats: 50_000,
-    perTxFeeSats: 600,
+    perTxFeeSats: 1200, // 500 escrow reserve + payload-sized maxFee headroom
     dailyFeeSats: 50_000,
     runTotalSats: 500_000,
     maxLockedSats: 5000,

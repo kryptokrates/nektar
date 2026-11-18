@@ -773,7 +773,10 @@ export abstract class BuyerOps extends SellerOps {
     const txid = pending?.utxo?.txid ?? wtx?.txid
     if (txid === undefined) {
       // stopped before the escrow was ever prepared — nothing was broadcast
-      if (actionId !== undefined) await this.d.store.releaseBudget(actionId)
+      if (actionId !== undefined) {
+        await this.d.store.releaseBudget(actionId)
+        await this.d.store.releaseLeases(actionId)
+      }
       await cancel()
       await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_never_built' })
       return
@@ -781,7 +784,12 @@ export abstract class BuyerOps extends SellerOps {
     if (this.d.txFacts === undefined || !this.reconcileGate(op.operationId, txid)) return
     const facts = await this.d.txFacts(txid)
     if (facts.verdict === 'dead') {
-      if (actionId !== undefined) await this.d.store.releaseBudget(actionId)
+      // the prepared tx never aired — drop its input leases too, or a retry
+      // collides with its own dead sibling ('already leased to another action')
+      if (actionId !== undefined) {
+        await this.d.store.releaseBudget(actionId)
+        await this.d.store.releaseLeases(actionId)
+      }
       await cancel()
       await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected' })
       return
@@ -1060,6 +1068,7 @@ export abstract class BuyerOps extends SellerOps {
         const txid = op.data.escrowTxid as string | undefined
         if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid) && (await this.d.txFacts(txid)).verdict === 'dead') {
           await this.d.store.releaseBudget(op.data.escrowAction as string)
+          await this.d.store.releaseLeases(op.data.escrowAction as string)
           await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected_late', dueHeight: null })
           return
         }

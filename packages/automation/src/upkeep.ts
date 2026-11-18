@@ -265,7 +265,14 @@ export function openUpkeep(rt: Rt): void {
               if (mediums.length < wantOuts) {
                 const src = (await mem.fundingOuts(outSats * wantOuts + 600, 'upkeep'))[0]
                 if (src !== undefined) {
-                  const dtx = await lanes.mod.mintTree({ key, wallet, funding: src, n: wantOuts, satsPerOutput: outSats, lock: new P2PKH().lock(await signerAddress(key)) })
+                  const dtx = await lanes.mod.mintTree({
+                    key,
+                    wallet,
+                    funding: src,
+                    n: wantOuts,
+                    satsPerOutput: outSats,
+                    lock: new P2PKH().lock(await signerAddress(key))
+                  })
                   const br = await mem.broadcastTx(dtx)
                   if (br.status === 'success') {
                     await mem.funds.spent(dtx)

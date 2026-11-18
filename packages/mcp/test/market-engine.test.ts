@@ -284,7 +284,8 @@ test('hostile offers are rejected with reasons and never funded', async (t) => {
   const { operationId } = await bob.engine.publishWant({ domains: ['libfoo'], question: 'connect is not a function', maxSats: 150 }, bob.policyHash)
   await w.round()
   await w.round()
-  w.advance(1500)
+  // past the want's own exp — collectMs only re-arms a still-live want now
+  w.advance(125_000)
   await w.round([bob])
   const st = (await bob.engine.status(operationId))!.operation
   assert.equal(st.state, 'expired', 'a seller priced above the ceiling stays silent → no qualifying offer')
@@ -492,7 +493,10 @@ test('want-TTL race: a live want republishes at the collection boundary instead 
   await w.round([bob])
   assert.equal(w.feed.filter((e) => e.kind === 'want').length, 2, 'the same signed want is republished, not re-minted')
   const evs = await bob.store.events(operationId)
-  assert.ok(evs.some((e) => e.cause === 'want_republished'), 'the republish is journaled')
+  assert.ok(
+    evs.some((e) => e.cause === 'want_republished'),
+    'the republish is journaled'
+  )
   // still live inside the extension — a second empty boundary republishes again
   w.advance(1100)
   await w.round([bob])

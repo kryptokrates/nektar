@@ -428,7 +428,8 @@ test('D3 silent seller: the want expires with zero sats moved', async (t) => {
   const bob = await w.add('bob')
   const { operationId } = await bob.engine.publishWant({ domains: ['libfoo'], question: 'connect is not a function', maxSats: 500 }, bob.policyHash)
   await w.round([bob]) // flush the want to the feed; nobody sells
-  w.advance(1500)
+  // past the want's own exp — collectMs only re-arms a still-live want now
+  w.advance(125_000)
   await w.round([bob])
   const op = (await bob.store.operation(operationId))!
   assert.equal(op.state, 'expired', `silent market must end terminal — got ${op.state}`)

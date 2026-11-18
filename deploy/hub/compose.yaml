@@ -135,6 +135,7 @@ services:
       OVERLAY_KNEX_URL: mysql://overlay:${OVERLAY_DB_PASSWORD}@db:3306/overlay
     volumes:
       - ../../packages/bstack/bundle:/app/modules/nektar:ro
+      - ../bstack-sandbox/modules/bbox/bbox-module.js:/app/modules/bbox/bbox-module.js:ro
       - ../bstack-sandbox/modules/blogs:/app/modules/blogs:ro
       - ../bstack-sandbox/modules/finger:/app/modules/finger:ro
       - host-state-a:/var/lib/bbox
@@ -147,6 +148,7 @@ services:
       OVERLAY_KNEX_URL: mysql://overlay:${OVERLAY_DB_PASSWORD}@db:3306/overlay_b
     volumes:
       - ../../packages/bstack/bundle:/app/modules/nektar:ro
+      - ../bstack-sandbox/modules/bbox/bbox-module.js:/app/modules/bbox/bbox-module.js:ro
       - ../bstack-sandbox/modules/blogs:/app/modules/blogs:ro
       - ../bstack-sandbox/modules/finger:/app/modules/finger:ro
       - host-state-b:/var/lib/bbox

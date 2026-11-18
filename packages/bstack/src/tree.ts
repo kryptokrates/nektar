@@ -188,12 +188,18 @@ export const deadAncestry = async (tree: Transaction, resolveTx: (txid: string) 
 // admit it; elsewhere a refused carrier would only cost a broadcast.
 const anchoredKinds = (env: NodeJS.ProcessEnv = process.env): Set<string> => {
   const v = nektarEnv('NEKTAR_ANCHORED_LANES', env) ?? ''
-  const kinds = new Set(v === 'all' || v === '1' ? ['bbox', 'log', 'finger'] : v.split(',').map((s) => s.trim()).filter(Boolean))
+  const kinds = new Set(
+    v === 'all' || v === '1'
+      ? ['bbox', 'log', 'finger']
+      : v
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+  )
   kinds.add('market')
   return kinds
 }
-const serves = (tree: { tree: Transaction; proven: boolean }, kind: string): boolean =>
-  tree.proven || (anchoredKinds().has(kind) && anchoredTree(tree.tree))
+const serves = (tree: { tree: Transaction; proven: boolean }, kind: string): boolean => tree.proven || (anchoredKinds().has(kind) && anchoredTree(tree.tree))
 
 /** outputs of `tx` that carry a lane's funding lock at ≥ its slot value —
  *  the slots a provision tx donates to each lane, at their real vouts */

@@ -16,6 +16,26 @@ bfinger module on `tm_finger` + `ls_finger` (identity records).
 The host mounts `packages/bstack/bundle/` read-only; after rebundling run
 `docker compose -f deploy/bstack-sandbox/compose.yaml restart host`.
 
+### Bbox module bundle (patched — anchored admission)
+
+`modules/bbox/bbox-module.js` is the image's own 0.6.4 bundle with
+`checkCarrierBEEF` patched: the one BUMP may anchor any ancestor of the
+carrier, not only the direct parent — every BEEF entry must still be the
+carrier or on its ancestry (carry-whole, descendancy, minimality and the
+engine's SPV check are unchanged). `bbox-module.js.orig` is the pristine
+bundle extracted from `ghcr.io/lightwebinc/bbox-host` for diff reference.
+The same change lives as a `pnpm patch` (`patches/@lightwebinc__bbox-host.patch`)
+for local consumers and as a source diff in the sibling `../bbox` checkout
+(`host/src/admit.ts`), which is the upstream PR.
+
+Agents opt anchored trees into vendored lanes with
+`NEKTAR_ANCHORED_LANES=all` (or a comma list); without it only the `market`
+lane draws anchored slots, since unpatched hosts still refuse them.
+
+Verify with `node tools/tn-anchored-probe.mjs` — anchored 3-tx carrier
+admits, unrelated-tx padding refuses `beef: does not descend`, foreign-chain
+carrier still fails engine SPV.
+
 ### Blogs module bundle
 
 The blogs host module bundle is a gitignored build artifact like

@@ -799,7 +799,17 @@ export class AutomationStore {
 
   async leasedOutpoint(txid: string, vout: number): Promise<boolean> {
     const r = await this.leaseState(txid, vout)
-    return r !== undefined && r.state !== 'released'
+    if (r === undefined || r.state === 'released') return false
+    // 'spent' stays blocking — the outpoint is provably consumed. A 'leased'
+    // row is a concurrency claim while the tx is unaired; once its action's
+    // wallet_tx is broadcast-or-closed (or gone — a crashed prepare), the
+    // claim is stale bookkeeping: custody's own liveness layer decides what
+    // may be taken next
+    if (r.state === 'spent') return true
+    const w = await this.kx(T.txs).where({ action_id: r.actionId }).first()
+    // exported keeps its claim too — the counterparty's air window is
+    // lease-protected until ledger.tick's exportedTtlMs releases it
+    return w === undefined || w.state === 'prepared' || w.state === 'submission_unknown' || w.state === 'exported'
   }
 
   async recordBroadcast(

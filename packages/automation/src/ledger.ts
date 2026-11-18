@@ -89,6 +89,10 @@ export class TransactionWatcher {
     let changed = 0
     for (const w of await this.store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])) {
       try {
+        // a lease means 'we may still air these bytes' — once the tx is
+        // seen or submitted its inputs belong to custody's bookkeeping,
+        // and stale leases from killed runs only wedge the change chain
+        if (w.state === 'submitted' || w.state === 'observed') await this.store.releaseLeases(w.actionId)
         const o = await this.observeFn(w.txid)
         if (o !== undefined) {
           const next: TxState = o.status === 'proven' ? 'confirmed' : o.status === 'seen' ? (w.state === 'confirmed' ? 'confirmed' : 'observed') : o.status
@@ -96,6 +100,7 @@ export class TransactionWatcher {
             await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
             changed++
             if (o.status === 'rejected' || o.status === 'conflicted') await this.onRejected?.(w.txid, o.reason ?? o.spentBy ?? o.status)
+            if (next === 'confirmed' || next === 'rejected' || next === 'conflicted') await this.store.releaseLeases(w.actionId)
           }
           continue
         }

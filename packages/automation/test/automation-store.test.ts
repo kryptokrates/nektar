@@ -298,7 +298,7 @@ test('wallet: one outpoint, one live action; guard refusal and network rejection
     await tx.sign()
     return tx
   }
-  let reply = { status: 'error' as const, description: 'broadcaster: REJECTED — missing inputs' }
+  let reply: import('@nektar/chain').BroadcastResult = { status: 'error', description: 'broadcaster: REJECTED — missing inputs' }
   const w = new WalletCoordinator(store, { broadcast: async () => reply })
   const t1 = await build(),
     t2 = await build()
@@ -309,6 +309,12 @@ test('wallet: one outpoint, one live action; guard refusal and network rejection
   // a definitively-rejected tx is dead-in-mempool — the lease follows it;
   // outpoint liveness is custody's call (spendCheck/liveSet), not the lease's
   assert.equal((await w.prepare(ctx('h', 'b'), 'send', t2)).state, 'prepared', 'a dead tx frees its inputs for the next attempt')
+  // once bytes air the inputs' fate is the tx's fate — custody tracks it.
+  // A lease that outlives its broadcast wedges the change chain it consumed
+  reply = { status: 'success' }
+  assert.equal((await w.submit('b')).state, 'submitted')
+  const t3 = await build()
+  assert.equal((await w.prepare(ctx('h', 'c'), 'send', t3)).state, 'prepared', 'an aired tx releases its claim to custody')
   const bare = new Transaction()
   bare.addInput({ sourceTXID: 'a'.repeat(64), sourceOutputIndex: 0 })
   bare.addOutput({ satoshis: 1, lockingScript: new P2PKH().lock(funder.address()) })

@@ -110,6 +110,10 @@ export class WalletCoordinator {
     const detail = res.description ?? ''
     if (res.status === 'success' || ALREADY.test(detail)) {
       await this.store.setTxState(actionId, 'submitted', { at: Date.now(), result: res }, true)
+      // the bytes aired — the inputs' fate is now this tx's fate, tracked by
+      // custody (spent-marks, spendCheck, the tombstone sweep). A lease that
+      // outlives its broadcast only wedges the change chain it consumed.
+      await this.store.releaseLeases(actionId)
       return { state: 'submitted', txid: w.txid }
     }
     if (w.state === 'submitted') {
@@ -135,6 +139,9 @@ export class WalletCoordinator {
     if (!w) return undefined
     const next: TxState = o.status === 'proven' ? 'confirmed' : o.status === 'seen' ? (w.state === 'confirmed' ? 'confirmed' : 'observed') : o.status
     await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
+    // every observed verdict closes the tx's story — the lease has said all
+    // it can; liveness verdicts belong to custody from here
+    if (next === 'confirmed' || next === 'rejected' || next === 'conflicted') await this.store.releaseLeases(w.actionId)
     return next
   }
 

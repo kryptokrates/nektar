@@ -11,6 +11,12 @@
 // seeded from the live agent's reserve.json snapshot (entries + spent marks
 // + deal income). The codex agents must be down so the suite owns the WIFs'
 // UTXOs exclusively — respawn them afterwards with .state/respawn-agents.sh.
+//
+// Workflow: warm lane stock FIRST — `node tools/tn-warmup.mjs` (unbounded,
+// resumeable, owns the block wait). Tests then fail fast on cold stock
+// instead of paying a 25-min block lottery inside their timeout; opt back
+// in with TN_WARMUP=1. Iterate single tests with
+// `node --test --test-name-pattern='R5' ...`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, copyFileSync, existsSync, readFileSync } from 'node:fs'
@@ -106,6 +112,13 @@ const warmup = async (agents: A[], logs: string[], ms = 1_500_000): Promise<void
     const pending = [] as A[]
     for (const a of agents) if (!(await treesReady(a.rt))) pending.push(a)
     if (pending.length === 0) return
+    // cold stock is a block wait, not test work — it belongs in the standalone
+    // warmer (tools/tn-warmup.mjs, unbounded, resumeable) unless the operator
+    // explicitly opts back into paying it in-test.
+    if (process.env.TN_WARMUP !== '1')
+      throw new Error(
+        `lane stock unproven (${pending.map((a) => a.name).join(', ')}) — run \`node tools/tn-warmup.mjs\` first, or set TN_WARMUP=1 to pay the block wait inside this test`
+      )
     await drive(agents.map((a) => a.rt))
     await sleep(15_000) // give the mints time to reach a block
   }

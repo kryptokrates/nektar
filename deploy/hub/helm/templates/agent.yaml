@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "nektar-hub.fullname" . }}-agent
+  labels:
+    {{- include "nektar-hub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  serviceName: {{ include "nektar-hub.fullname" . }}-agent
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nektar-hub.labels" . | nindent 6 }}
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        {{- include "nektar-hub.labels" . | nindent 8 }}
+        app.kubernetes.io/component: agent
+    spec:
+      containers:
+        - name: agent
+          image: {{ include "nektar-hub.image" (dict "root" . "component" "agent") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          env:
+            - name: NEKTAR_NETWORK
+              value: {{ .Values.network | quote }}
+            - name: NEKTAR_DATA_DIR
+              value: /data
+            - name: NEKTAR_HTTP_PORT
+              value: "8080"
+            - name: NEKTAR_HTTP_HOST
+              value: "0.0.0.0"
+            - name: NEKTAR_MODEL_ID
+              value: {{ .Values.agent.modelId | quote }}
+            - name: NEKTAR_AUTOMATION
+              value: {{ ternary "1" "" .Values.agent.automation | quote }}
+            - name: NEKTAR_UNATTENDED
+              value: {{ ternary "1" "" .Values.agent.unattended | quote }}
+            - name: NEKTAR_ANNOUNCE
+              value: {{ ternary "1" "" .Values.agent.announce | quote }}
+            - name: NEKTAR_BFINGER_PUBLISH
+              value: {{ ternary "1" "" .Values.agent.bfingerPublish | quote }}
+            # PUBLIC urls — verbatim into the announce + finger record
+            - name: NEKTAR_MARKET_HOSTS
+              value: {{ required "marketHosts is required (the hosts' PUBLIC URLs)" .Values.marketHosts | quote }}
+            # internal traffic path — defaults to this release's own host pair
+            - name: NEKTAR_MARKET_LOCAL_HOSTS
+              value: {{ .Values.agent.marketLocalHosts | default (printf "http://%s-host-a:8080,http://%s-host-b:8080" (include "nektar-hub.fullname" .) (include "nektar-hub.fullname" .)) | quote }}
+            - name: NEKTAR_WATCH_URLS
+              value: {{ .Values.agent.watchUrls | default (printf "http://%s-host-a:8081,http://%s-host-b:8081" (include "nektar-hub.fullname" .) (include "nektar-hub.fullname" .)) | quote }}
+            - name: NEKTAR_WATCH_PUBLIC
+              value: {{ .Values.agent.watchPublic | quote }}
+            - name: NEKTAR_PUSH_PUBLIC
+              value: {{ .Values.agent.pushPublic | quote }}
+            - name: NEKTAR_SEED_DOMAINS
+              value: {{ .Values.agent.seedDomains | quote }}
+            - name: NEKTAR_OPERATOR_TOKEN
+              value: {{ .Values.agent.operatorToken | quote }}
+            - name: NEKTAR_VERIFY_BASE
+              value: {{ .Values.agent.verifyBase | quote }}
+            - name: NEKTAR_MIN_COLLECT_MS
+              value: {{ .Values.agent.minCollectMs | quote }}
+            - name: NEKTAR_COLLECT_QUIET_MS
+              value: {{ .Values.agent.collectQuietMs | quote }}
+            - name: NEKTAR_MAX_FEE_SATS_PER_TX
+              value: {{ .Values.agent.maxFeeSatsPerTx | quote }}
+            - name: NEKTAR_MAX_SPEND_SATS_PER_DAY
+              value: {{ .Values.agent.maxSpendSatsPerDay | quote }}
+            - name: NEKTAR_MIN_BROADCAST_INTERVAL_MS
+              value: {{ .Values.agent.minBroadcastIntervalMs | quote }}
+            - name: NEKTAR_MAINNET_CONFIRM
+              value: {{ .Values.agent.mainnetConfirm | quote }}
+            - name: NEKTAR_PAYMENTS
+              value: {{ .Values.agent.payments | quote }}
+            - name: NEKTAR_PAID_DISCLOSURE
+              value: {{ .Values.agent.paidDisclosure | quote }}
+            - name: NEKTAR_KEY_PASSPHRASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nektar-hub.secretName" . }}
+                  key: NEKTAR_KEY_PASSPHRASE
+            - name: NEKTAR_HTTP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nektar-hub.secretName" . }}
+                  key: NEKTAR_HTTP_TOKEN
+            - name: NEKTAR_FUND_WIF
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nektar-hub.secretName" . }}
+                  key: NEKTAR_FUND_WIF
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            {{- toYaml (.Values.resources.agent | default .Values.resources) | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.agentSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nektar-hub.fullname" . }}-agent
+  labels:
+    {{- include "nektar-hub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    {{- include "nektar-hub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent

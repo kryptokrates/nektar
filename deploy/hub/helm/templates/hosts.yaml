@@ -1,0 +1,125 @@
+{{- $root := . }}
+{{- range $h := .Values.hosts }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "nektar-hub.fullname" $root }}-host-{{ $h.name }}
+  labels:
+    {{- include "nektar-hub.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: host
+spec:
+  serviceName: {{ include "nektar-hub.fullname" $root }}-host-{{ $h.name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nektar-hub.labels" $root | nindent 6 }}
+      app.kubernetes.io/component: host
+      app.kubernetes.io/part: {{ $h.name }}
+  template:
+    metadata:
+      labels:
+        {{- include "nektar-hub.labels" $root | nindent 8 }}
+        app.kubernetes.io/component: host
+        app.kubernetes.io/part: {{ $h.name }}
+    spec:
+      containers:
+        - name: engine
+          image: {{ include "nektar-hub.image" (dict "root" $root "component" "host") }}
+          imagePullPolicy: {{ $root.Values.images.pullPolicy }}
+          env:
+            - name: BBOX_OFFICES
+              value: {{ $root.Values.topics | quote }}
+            - name: BLOGS_STREAMS
+              value: "{{ $root.Values.topics }}=open"
+            - name: BLOGS_STATE_DIR
+              value: /var/lib/bbox/blogs
+            - name: BLOGS_KEEP_DAYS
+              value: "90"
+            - name: OVERLAY_TOPICS
+              value: "tm_bbox_{{ $root.Values.topics }},tm_log_{{ $root.Values.topics }},tm_finger{{ range $i := until 16 }},tm_nektar_{{ $root.Values.network }}_{{ printf "%x" $i }}{{ end }}"
+            - name: OVERLAY_MODULES
+              value: /app/modules/bbox/bbox-module.js,/app/modules/nektar/nektar-module.js,/app/modules/blogs/blogs-module.js,/app/modules/finger/finger-module.js
+            - name: OVERLAY_CHAIN_TRACKER_URL
+              value: http://{{ include "nektar-hub.fullname" $root }}-shim:8080
+            - name: BBOX_ASSET_URL
+              value: http://{{ include "nektar-hub.fullname" $root }}-shim:8080
+            - name: NEKTAR_NETS
+              value: {{ $root.Values.network | quote }}
+            - name: OVERLAY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nektar-hub.secretName" $root }}
+                  key: OVERLAY_ADMIN_TOKEN
+            # declared before KNEX_URL — env refs expand $(VAR) in order
+            - name: OVERLAY_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nektar-hub.secretName" $root }}
+                  key: OVERLAY_DB_PASSWORD
+            - name: OVERLAY_KNEX_URL
+              value: mysql://overlay:$(OVERLAY_DB_PASSWORD)@{{ include "nektar-hub.fullname" $root }}-db:3306/{{ $h.db }}
+          ports:
+            - name: engine
+              containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: engine
+            periodSeconds: 3
+            failureThreshold: 40
+          resources:
+            {{- toYaml ($root.Values.resources.host | default $root.Values.resources) | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/bbox
+        - name: watch
+          image: {{ include "nektar-hub.image" (dict "root" $root "component" "shim") }}
+          imagePullPolicy: {{ $root.Values.images.pullPolicy }}
+          args: ['node', 'watch-shim.mjs']
+          env:
+            - name: BACKEND
+              value: http://localhost:8080
+            - name: PORT
+              value: "8081"
+          ports:
+            - name: watch
+              containerPort: 8081
+          readinessProbe:
+            tcpSocket:
+              port: watch
+            periodSeconds: 3
+            failureThreshold: 20
+          resources:
+            {{- toYaml ($root.Values.resources.watch | default $root.Values.resources) | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if $root.Values.persistence.storageClass }}
+        storageClassName: {{ $root.Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $root.Values.persistence.hostSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nektar-hub.fullname" $root }}-host-{{ $h.name }}
+  labels:
+    {{- include "nektar-hub.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: host
+spec:
+  ports:
+    - name: engine
+      port: 8080
+      targetPort: engine
+    - name: watch
+      port: 8081
+      targetPort: watch
+  selector:
+    {{- include "nektar-hub.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: host
+    app.kubernetes.io/part: {{ $h.name }}
+---
+{{- end }}

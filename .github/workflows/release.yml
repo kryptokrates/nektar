@@ -58,6 +58,55 @@ jobs:
             console.log('smoke: ' + files.length + ' packaged modules resolve')
           "
         timeout-minutes: 3
+
+  # hub surfaces — derived images carrying the modules/shims/schema the
+  # compose used to bind-mount. One Dockerfile, one target per image, same
+  # tag line as the agent image so a release aligns every surface.
+  hub-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        target: [bbox-host, shim, hub-db]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/nektar-${{ matrix.target }}
+          tags: |
+            type=raw,value=edge,enable=${{ github.ref_type == 'branch' }}
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: deploy/images/hub.Dockerfile
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=hub-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=hub-${{ matrix.target }}
+      - name: smoke — the image carries what compose used to mount
+        run: |
+          case "${{ matrix.target }}" in
+            bbox-host) test="test -f /app/modules/nektar/nektar-module.js && test -f /app/modules/bbox/bbox-module.js && test -d /app/modules/finger" ;;
+            shim) test="test -f /shim/header-shim.mjs && test -f /shim/watch-shim.mjs" ;;
+            hub-db) test="ls /docker-entrypoint-initdb.d/*.sql" ;;
+          esac
+          docker run --rm --entrypoint sh ghcr.io/${{ github.repository_owner }}/nektar-${{ matrix.target }}:edge -c "$test"
+
   bundle:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -82,6 +131,8 @@ jobs:
         run: tar -czf nektar-mcp-bundle.tar.gz -C dist-bundle .
       - name: tar the agent deployment bundle
         run: tar -czf nektar-agent-deploy.tar.gz -C deploy/agent --exclude='.env' .
+      - name: tar the hub deployment bundle (compose + helm)
+        run: tar -czf nektar-hub-deploy.tar.gz -C deploy/hub --exclude='.env' .
       - name: upload run artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -89,6 +140,7 @@ jobs:
           path: |
             nektar-mcp-bundle.tar.gz
             nektar-agent-deploy.tar.gz
+            nektar-hub-deploy.tar.gz
           if-no-files-found: error
       - name: attach to the GitHub release (tags)
         if: startsWith(github.ref, 'refs/tags/')
@@ -97,7 +149,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
-          gh release upload "$TAG" nektar-mcp-bundle.tar.gz nektar-agent-deploy.tar.gz --clobber
+          gh release upload "$TAG" nektar-mcp-bundle.tar.gz nektar-agent-deploy.tar.gz nektar-hub-deploy.tar.gz --clobber
 
       # npm-publish removed — the bundle ships as a release asset
       # (nektar-mcp-bundle.tar.gz) and via the GHCR image instead

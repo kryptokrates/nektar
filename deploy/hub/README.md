@@ -18,12 +18,24 @@ through the network's own directory — no central registry.
 
 ## Up
 
-Run from a repo checkout (the hosts mount the bundled nektar module):
+Fully self-contained — every service pulls a published image, nothing is
+mounted from a checkout. `compose.yaml` + `.env.example` are the only files
+you need:
 
 ```bash
 cp .env.example .env            # set the marked values
-docker compose -f deploy/hub/compose.yaml --env-file deploy/hub/.env up -d
-docker compose -f deploy/hub/compose.yaml logs -f agent
+docker compose -f compose.yaml --env-file .env up -d
+docker compose -f compose.yaml logs -f agent
+```
+
+Or on kubernetes (k3s, minikube, EKS — the watch shim rides as a sidecar in
+each host pod, not a supervised second process):
+
+```bash
+helm install hub deploy/hub/helm \
+  --set marketHosts=https://hub.example/host-a,https://hub.example/host-b \
+  --set secrets.keyPassphrase=… --set secrets.httpToken=… \
+  --set secrets.overlayDbPassword=… --set secrets.overlayAdminToken=…
 ```
 
 The one value that matters most is `NEKTAR_MARKET_HOSTS`: set it to your

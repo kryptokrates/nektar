@@ -14,4 +14,8 @@ docs
 *.log
 .env
 .env.*
-deploy
+# deploy stays out of the build context EXCEPT bstack-sandbox — the hub
+# images (deploy/images/hub.Dockerfile) COPY the shims/modules/initdb from
+# it. Secrets in deploy are covered by the *.env patterns, not this list.
+deploy/*
+!deploy/bstack-sandbox

@@ -3,7 +3,8 @@
 // (append + anchor), and the deal-journal view `deals {operationId}` reads.
 // The `upkeep` guard serializes it; the assembler's cycle() and tick drive it.
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
-import { queueRepairs, trackFanout } from './fanout.js'
+import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
+import { deadAncestry } from '@nektar/bstack'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Rt } from './rtctx.js'
 
@@ -40,6 +41,10 @@ export function openUpkeep(rt: Rt): void {
     statusCache.set(txid, { at: Date.now(), f })
     return f
   }
+  // dead-ancestry strikes — treeTxid:parentTxid → first-seen; the same gap
+  // on two upkeep passes evicts (a single fetch miss must not reap stock
+  // whose parent was simply between propagation hops)
+  const deadSuspects = new Map<string, number>()
   const stuckMints = new Map<string, { first: number; tries: number }>()
   const stuckMint = async (tree: import('@bsv/sdk').Transaction): Promise<'keep' | 'drop'> => {
     const tid = tree.id('hex')
@@ -241,6 +246,38 @@ export function openUpkeep(rt: Rt): void {
     try {
       if (lanes !== undefined) {
         try {
+          // dead-ancestry reap — an unproven tree whose input chain has a gap
+          // the network cannot serve (a killed parent mint, a dropped draft)
+          // can neither prove nor anchor: it wedges the mint gate and strands
+          // journaled carriers on an endless resubmit. Two strikes on the
+          // same gap guards lookup flakes; the reap drops the tree AND the
+          // carriers it funded so stock refills instead of retrying poison.
+          for (const u of await lanes.ledger.unproven()) {
+            if (rt.stopped) return
+            const tree = await mem.fetchTx(u.txid).catch(() => undefined)
+            if (tree === undefined || tree.merklePath !== undefined) continue
+            const gaps = await deadAncestry(tree, (txid) => mem.fetchTx(txid).catch(() => undefined))
+            if (gaps.length === 0) {
+              for (const k2 of [...deadSuspects.keys()]) if (k2.startsWith(`${u.txid}:`)) deadSuspects.delete(k2)
+              continue
+            }
+            const struck = gaps.filter((g) => {
+              const k2 = `${u.txid}:${g}`
+              if (deadSuspects.has(k2)) return true
+              deadSuspects.set(k2, Date.now())
+              return false
+            })
+            if (struck.length === 0) continue
+            if (abandonedReap(u.kind).ghost) ghostMint(tree)
+            await lanes.ledger.drop(u.txid)
+            let reaped = 0
+            for (const row of (await lanes.journal.fundedBy?.(u.txid)) ?? []) {
+              await lanes.journal.del?.(row.hash)
+              reaped++
+            }
+            await store.unblockOutbox('funding-slot')
+            log(`automation: dead-ancestry: dropped ${u.kind} tree ${u.txid.slice(0, 12)} — unservable parent ${struck[0].slice(0, 12)}; reaped ${reaped} journaled carrier(s)`)
+          }
           for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger'] as const) {
             // stop() drains upkeep with a bound — bail between phases so a
             // late pass doesn't outlive the pool it's about to write to

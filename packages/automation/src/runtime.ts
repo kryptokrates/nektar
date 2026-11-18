@@ -481,6 +481,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         if (row === undefined) return
         const tx = await mem.fetchTx(txid)
         await lanes.ledger.drop(txid)
+        // carriers minted on the dead tree are unadmittable forever — reap
+        // their journal rows too, else the repair leg resubmits them endlessly
+        for (const j of (await lanes.journal.fundedBy?.(txid)) ?? []) await lanes.journal.del?.(j.hash)
         const reap = abandonedReap(row.kind)
         if (reap.ghost && tx !== undefined) rt.ghostMint(tx)
         log(reap.ghost ? `automation: dropped abandoned funding mint ${txid}` : `automation: dropped abandoned provision tx ${txid}`)

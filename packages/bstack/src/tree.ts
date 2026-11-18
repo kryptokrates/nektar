@@ -113,6 +113,40 @@ export interface TreeLedger {
 export const anchoredTree = (tree: Transaction): boolean =>
   tree.merklePath !== undefined || (tree.inputs.length > 0 && tree.inputs.every((i) => i.sourceTransaction?.merklePath !== undefined))
 
+/** the ancestry gaps that kill a tree's carriers: every input on the
+ *  unproven chain must resolve — carried bytes or a fetched copy. An input
+ *  whose sourceTXID the resolver cannot serve is dead ancestry: the tree
+ *  can neither prove (its own broadcast needs the parent's UTXO store) nor
+ *  anchor, and carriers minted on it are refused by host SPV verification
+ *  forever (`missing an associated source transaction`). Returns the dead
+ *  txids; the caller owns strike/eviction policy. Walks unproven ancestry
+ *  only — a BUMP-anchored ancestor terminates the chain — and is bounded
+ *  so a deep or cyclic graph can't spin the audit. */
+export const deadAncestry = async (
+  tree: Transaction,
+  resolveTx: (txid: string) => Promise<Transaction | undefined>,
+  maxNodes = 32
+): Promise<string[]> => {
+  const dead = new Set<string>()
+  const seen = new Set<string>([tree.id('hex')])
+  const queue: Transaction[] = tree.merklePath === undefined ? [tree] : []
+  while (queue.length > 0 && seen.size <= maxNodes) {
+    const t = queue.shift()!
+    for (const i of t.inputs) {
+      const id = i.sourceTransaction?.id('hex') ?? i.sourceTXID
+      if (id === undefined || seen.has(id)) continue
+      seen.add(id)
+      const p = i.sourceTransaction ?? (await resolveTx(id))
+      if (p === undefined) {
+        dead.add(id)
+        continue
+      }
+      if (p.merklePath === undefined) queue.push(p)
+    }
+  }
+  return [...dead]
+}
+
 // only the market lane tolerates unproven funding: the nektar module accepts
 // anchored ancestry, but the vendored bbox/blogs/finger modules still demand
 // the tree's own path — serving them zero-conf slots would mint carriers

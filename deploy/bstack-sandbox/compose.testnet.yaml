@@ -107,6 +107,7 @@ services:
       OVERLAY_KNEX_URL: mysql://overlay:spike@db:3306/overlay
     volumes:
       - ../../packages/bstack/bundle:/app/modules/nektar:ro
+      - ./modules/bbox/bbox-module.js:/app/modules/bbox/bbox-module.js:ro
       - ./modules/blogs:/app/modules/blogs:ro
       - ./modules/finger:/app/modules/finger:ro
       - host-state-a:/var/lib/bbox
@@ -119,6 +120,7 @@ services:
       OVERLAY_KNEX_URL: mysql://overlay:spike@db:3306/overlay_b
     volumes:
       - ../../packages/bstack/bundle:/app/modules/nektar:ro
+      - ./modules/bbox/bbox-module.js:/app/modules/bbox/bbox-module.js:ro
       - ./modules/blogs:/app/modules/blogs:ro
       - ./modules/finger:/app/modules/finger:ro
       - host-state-b:/var/lib/bbox

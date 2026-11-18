@@ -1,6 +1,6 @@
 import { PrivateKey, ProtoWallet, Transaction, P2PKH, MerklePath } from '@bsv/sdk'
 import { fundingLock, feeFor, type Derivation, type Fees, type SigningWallet } from '@lightwebinc/bcommon'
-import { unlockP2PKH, signerAddress, type SignerLike } from '@nektar/core'
+import { unlockP2PKH, signerAddress, nektarEnv, type SignerLike } from '@nektar/core'
 import type { FundingOut } from '@nektar/chain'
 import type { Knex } from 'knex'
 
@@ -179,15 +179,21 @@ export const deadAncestry = async (tree: Transaction, resolveTx: (txid: string) 
   return [...dead]
 }
 
-// only the market lane tolerates unproven funding: the nektar module accepts
-// anchored ancestry, but the vendored bbox/blogs/finger modules still demand
-// the tree's own path — serving them zero-conf slots would mint carriers
-// they refuse (and submitAll would count the refusal as delivered). ADR
-// note: the asymmetry is vendored-codec admission policy — the upstream fix
-// (anchored zero-conf admission in @lightwebinc/bbox-host / blogs-host) is
-// deferred to a separate session; until then the mitigation is stocking
-// those lanes ahead (see ensureTrees' per-kind lowWater)
-const serves = (tree: { tree: Transaction; proven: boolean }, kind: string): boolean => tree.proven || (kind === 'market' && anchoredTree(tree.tree))
+// only the market lane tolerates unproven funding by default: the nektar
+// module accepts anchored ancestry, and vendored hosts do so only where
+// their admission allows it. blogs/finger carriers carry ancestry natively;
+// bbox admits it once the host runs the anchored-admission patch (one BUMP
+// may anchor a deeper ancestor). NEKTAR_ANCHORED_LANES names the kinds an
+// anchored tree may serve — 'all' or a comma list — for hosts known to
+// admit it; elsewhere a refused carrier would only cost a broadcast.
+const anchoredKinds = (env: NodeJS.ProcessEnv = process.env): Set<string> => {
+  const v = nektarEnv('NEKTAR_ANCHORED_LANES', env) ?? ''
+  const kinds = new Set(v === 'all' || v === '1' ? ['bbox', 'log', 'finger'] : v.split(',').map((s) => s.trim()).filter(Boolean))
+  kinds.add('market')
+  return kinds
+}
+const serves = (tree: { tree: Transaction; proven: boolean }, kind: string): boolean =>
+  tree.proven || (anchoredKinds().has(kind) && anchoredTree(tree.tree))
 
 /** outputs of `tx` that carry a lane's funding lock at ≥ its slot value —
  *  the slots a provision tx donates to each lane, at their real vouts */

@@ -20,3 +20,6 @@ allowBuilds:
   esbuild: true
 
 strictDepBuilds: true
+
+patchedDependencies:
+  '@lightwebinc/bbox-host': patches/@lightwebinc__bbox-host.patch

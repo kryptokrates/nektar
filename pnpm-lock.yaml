@@ -14,6 +14,9 @@ overrides:
   tar: '>=7.5.21'
   minimatch: '>=11.0.1'
 
+patchedDependencies:
+  '@lightwebinc/bbox-host': 42bf184fa95c07712bbb7e06f42ca993e0a4216d2fd2d02ed38f7ed10d1f03e1
+
 importers:
 
   .:
@@ -143,7 +146,7 @@ importers:
         version: 4.0.1
       '@lightwebinc/bbox-host':
         specifier: file:../../vendor/lightwebinc-bbox-host-0.6.8.tgz
-        version: file:vendor/lightwebinc-bbox-host-0.6.8.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))
+        version: file:vendor/lightwebinc-bbox-host-0.6.8.tgz(patch_hash=42bf184fa95c07712bbb7e06f42ca993e0a4216d2fd2d02ed38f7ed10d1f03e1)(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))
       '@lightwebinc/bcommon':
         specifier: file:../../vendor/lightwebinc-bcommon-0.34.0.tgz
         version: file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)
@@ -3130,7 +3133,7 @@ snapshots:
       reprism: 0.0.11
       spark-md5: 3.0.2
 
-  '@lightwebinc/bbox-host@file:vendor/lightwebinc-bbox-host-0.6.8.tgz(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))':
+  '@lightwebinc/bbox-host@file:vendor/lightwebinc-bbox-host-0.6.8.tgz(patch_hash=42bf184fa95c07712bbb7e06f42ca993e0a4216d2fd2d02ed38f7ed10d1f03e1)(@lightwebinc/bcommon@file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1))':
     dependencies:
       '@bsv/sdk': 4.0.1
       '@lightwebinc/bcommon': file:vendor/lightwebinc-bcommon-0.34.0.tgz(@bsv/sdk@4.0.1)

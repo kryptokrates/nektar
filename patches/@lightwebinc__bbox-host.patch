@@ -1,0 +1,63 @@
+diff --git a/dist/admit.js b/dist/admit.js
+index 146122f2ca857c3775a7e2dd9815c6881150f8eb..3c7c3ca37aa7e3a808e0e5f1393019c10c81775d 100644
+--- a/dist/admit.js
++++ b/dist/admit.js
+@@ -171,23 +171,48 @@ function checkCarrier(raw, beef, tx, claim, h) {
+     return c;
+ }
+ /**
+- * Rule 2: the BEEF declares exactly one BUMP and two transactions, which are
+- * the carrier (unproven) and the transaction its input spends (proven by
+- * that BUMP, minimally).
++ * Rule 2: the BEEF declares exactly one BUMP and the carrier's ancestry,
++ * carried whole: the carrier itself unproven, exactly one transaction
++ * proven by the BUMP minimally, and every transaction in the BEEF the
++ * carrier or an ancestor of it — walking input sources from the carrier
++ * reaches the BUMPed root and every other entry. The classic form is the
++ * two-transaction case, carrier and its proven funding tree; the anchored
++ * form lets the proof sit on a deeper ancestor so an unproven funding
++ * tree's carriers are admissible while its own proof is still in flight.
+  */
+ function checkCarrierBEEF(raw, beef, tx) {
+     const n = beefCounts(raw);
+-    if (n === undefined || n.bumps !== 1 || n.txs !== 2 || beef.bumps.length !== 1 || beef.txs.length !== 2) {
++    if (n === undefined || n.bumps !== 1 || n.txs !== beef.txs.length || beef.bumps.length !== 1 || beef.txs.length < 2) {
+         throw new Refusal('beef', `${n?.bumps} BUMPs and ${n?.txs} transactions`);
+     }
+-    const input = tx.inputs[0];
+-    const parent = input.sourceTXID ?? input.sourceTransaction.id('hex');
+     const self = beef.findTxid(tx.id('hex'));
+-    const fund = beef.findTxid(parent);
+-    if (self?.tx === undefined || fund?.tx === undefined)
++    if (self?.tx === undefined || self.bumpIndex !== undefined)
+         throw new Refusal('beef', 'not the carrier and its funding tree');
+-    if (self.bumpIndex !== undefined || fund.bumpIndex !== 0)
++    const bumped = beef.txs.filter((e) => e.bumpIndex !== undefined);
++    if (bumped.length !== 1 || bumped[0].bumpIndex !== 0 || bumped[0].tx === undefined)
+         throw new Refusal('beef', "the proof is not the funding tree's alone");
+-    if (!minimalPath(beef.bumps[0], parent))
++    if (!minimalPath(beef.bumps[0], bumped[0].txid))
+         throw new Refusal('beef', "the proof holds more than the funding tree's path");
++    const seen = new Set([tx.id('hex')]);
++    let frontier = [tx];
++    while (frontier.length !== 0) {
++        const next = [];
++        for (const c of frontier) {
++            if (c.merklePath !== undefined)
++                continue;
++            for (const i of c.inputs) {
++                const p = i.sourceTXID ?? i.sourceTransaction?.id('hex');
++                if (p === undefined || p === '' || seen.has(p))
++                    continue;
++                seen.add(p);
++                const e = beef.findTxid(p);
++                if (e?.tx === undefined)
++                    throw new Refusal('beef', 'the funding ancestry is not carried whole');
++                next.push(e.tx);
++            }
++        }
++        frontier = next;
++    }
++    if (seen.size !== beef.txs.length)
++        throw new Refusal('beef', 'transactions the carrier does not descend from');
+ }

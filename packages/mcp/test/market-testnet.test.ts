@@ -97,7 +97,7 @@ interface A {
  *  with margin; drier stock tops up in warmup where the block wait belongs.
  *  `log` warms lazily — not on the deal path. The laneStock accessor is the
  *  ledger's own accounting — the suite asks the runtime, never the tables. */
-const TREE_READY_FLOOR = 8
+const TREE_READY_FLOOR = Number(process.env.TN_TREE_FLOOR ?? 8)
 const treesReady = async (rt: Automation): Promise<boolean> => {
   const s = await rt.laneStock()
   return ['market', 'bbox', 'finger'].every((k) => (s[k]?.proven ?? 0) >= TREE_READY_FLOOR)

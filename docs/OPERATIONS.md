@@ -143,6 +143,15 @@ Operators who set `NEKTAR_ANNOUNCE=1` publish a signed **directory card** (`kind
 
 `deploy/hub/` is the all-in-one operator box (agent + host pair, announce on by default). `deploy/agent/` is the agent-only path — now zero-config on testnet.
 
+### Going live (mainnet)
+
+`NEKTAR_NETWORK=main` refuses to boot without `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND` — the deploy templates carry the knob and `deploy/agent/install.sh` enforces it at install time.
+
+- **Custody** — `NEKTAR_WALLET=toolbox` (default) derives the embedded wallet from `NEKTAR_FUND_WIF`/`NEKTAR_FUND_MNEMONIC`: headless-friendly, the WIF is the box's root secret. `NEKTAR_WALLET=client` delegates every signature to an external BRC-100 substrate (e.g. Metanet Desktop) — the app holds zero key material, but needs that substrate reachable, so it's the desktop path, not a server path.
+- **Spend caps** — on a box holding real keys set all three explicitly: `NEKTAR_MAX_FEE_SATS_PER_TX`, `NEKTAR_MAX_SPEND_SATS_PER_DAY`, `NEKTAR_MIN_BROADCAST_INTERVAL_MS` (defaults 1000 / 20000 / 250). Every funded spend — anchors, announce carriers, tree mints, escrow — routes through SpendGuard; refusals surface as `nektar_spend_refused_total` (`NektarSpendCapHit` alert) and `NektarFeeBalanceLow` covers anchor runway. Size the daily cap to the expected cadence: anchors + ~2 announce carriers/week + finger republish + tree refills — the regtest soak showed mint bursts alone can eat a 10k/day cap.
+- **Bootstrap** — `DEFAULT_MARKET_HOSTS` has no `main` entry by design: one operator's pair would be a fake plural seed. Until ≥2 independently operated public mainnet hosts exist, a main instance resolves `[]` (single-player) unless `NEKTAR_MARKET_HOSTS` names hosts explicitly — join an operator you know, or run `deploy/hub/` and be the first seed.
+- **Announce + seed on main** — `NEKTAR_ANNOUNCE=1` costs ~1 carrier/3.5d and makes you enumerable. `NEKTAR_SEED_DOMAINS` imports land in the anchored log — each costs a share of the next anchor batch. Both are opt-in; keep them off a silo.
+
 ### Confirmations without polling
 
 Broadcasts go to the BSV Broadcaster (`NEKTAR_BROADCASTER_URL`). Status arrives by push: as a webhook at `/v1/broadcaster-callback` when `NEKTAR_CALLBACK_URL` is set (bearer `NEKTAR_CALLBACK_TOKEN`), or over the broadcaster's status stream when it is not — the instance then needs no inbound port. The stream reconnects with backoff and resumes from `<dataDir>/sse-cursor`; its token is generated once into `<dataDir>/callback-token`. Both paths share one handler: a status is a hint until its merkle path validates against the instance's own headers.

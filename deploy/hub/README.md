@@ -60,3 +60,18 @@ the seeds even though you're not baked in.
 Hosts are untrusted plumbing: they can censor or withhold (detected by
 quorum reads) but never forge — every artifact they serve is signature +
 SPV-verified client-side.
+
+## Mainnet
+
+`NEKTAR_NETWORK=main` is the one knob — it retargets the agent, the hosts'
+served lanes (`NEKTAR_NETS`) and every `tm_nektar_main_*` topic together.
+Two things must be true first:
+
+- `NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND` — the runtime's real-sats ack gate.
+- `SHIM_BROADCASTER` / `SHIM_INDEX` / `SHIM_CHAINTRACKS` — your own chain
+  endpoints (self-hosted Teranode or an ARC-compatible service); the baked
+  defaults are testnet and serve the wrong headers on main.
+- Set all three SpendGuard caps (`NEKTAR_MAX_*`) — see `docs/OPERATIONS.md`
+  "Going live" for sizing. There are no baked-in `main` seed hosts yet:
+  until a second independent hub exists, main instances join via an
+  explicit `NEKTAR_MARKET_HOSTS` — a main hub _is_ the first seed.

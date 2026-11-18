@@ -49,7 +49,7 @@
       "instability": 0.143
     },
     "core": {
-      "loc": 866,
+      "loc": 872,
       "pkgFanout": 0,
       "edges": [],
       "maxFileLoc": 301,

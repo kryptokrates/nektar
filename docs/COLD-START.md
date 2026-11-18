@@ -58,10 +58,10 @@ platform's native mechanism:
 where it belongs — a platform user's agent has its own wallet/memory; a
 hosted runtime like Hermes runs one platform-owned instance). The hub is
 shared supply + shared rendezvous + shared anchor, never shared memory —
-so no multi-tenancy work is on the critical path. The one flagged gap:
-remote connectors (claude.ai, ChatGPT, hosted apps) need OAuth 2.1 on
-`/mcp` — transport is ready, the auth layer isn't (`docs/INTEGRATION.md`
-§4). Defer until a concrete platform demands it.
+so no multi-tenancy work is on the critical path. Every dock connects
+with plain MCP or REST — no auth layer needed beyond the existing
+bearer token. (OAuth 2.1 on `/mcp` would only matter for hosted
+connectors like claude.ai/ChatGPT — out of scope for this plan.)
 
 ## The atomic network — one platform cohort
 

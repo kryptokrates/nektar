@@ -21,7 +21,7 @@ export interface CarrierJournal {
 
 /** stored beef is either subject form — carriers journal atomic, token rows
  *  journal plain; try both before calling a row unparseable */
-const parseBeef = (beef: number[]): Transaction | undefined => {
+export const parseBeef = (beef: number[]): Transaction | undefined => {
   try {
     return Transaction.fromAtomicBEEF(beef)
   } catch {

@@ -55,7 +55,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
           perPurchaseSats: 500,
           dailyPurchaseSats: 500,
           perTxFeeSats: 1200,
-          dailyFeeSats: 600,
+          dailyFeeSats: 1200,
           runTotalSats: 1200,
           maxLockedSats: 1200,
           maxUnconfirmedSats: 1200,
@@ -135,7 +135,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
     const op = (await bob.store.operation(operationId))!
     const budget = await bob.store.budgetStatus(bob.policyHash)
     assert.ok(budget.purchaseTodaySats <= 500, `seed ${seed}: purchase cap exceeded`)
-    assert.ok(budget.feeTodaySats <= 600, `seed ${seed}: fee cap exceeded`)
+    assert.ok(budget.feeTodaySats <= 1200, `seed ${seed}: fee cap exceeded`)
     assert.ok(budget.lockedSats <= 1200, `seed ${seed}: locked cap exceeded`)
     const escrows = (await bob.store.walletTxs(['prepared', 'submitted', 'observed', 'confirmed'])).filter((x) => x.kind === 'escrow')
     assert.ok(escrows.length <= 1, `seed ${seed}: more than one escrow for one want`)

@@ -5,7 +5,7 @@ import { buildCarrier, carrierFundingLockHex, walletOrProto } from './carrier.js
 import { encodePayload, lanesFor, bodyDomains, type MarketPayload } from './market-wire.js'
 import { submitAll, type Quorum } from './hosts.js'
 import { DERIVATION, FUNDING_TAG, ORIGINATOR, fundingSlotReason, type TreeLedger } from './tree.js'
-import type { CarrierJournal } from './journal.js'
+import { parseBeef, type CarrierJournal } from './journal.js'
 
 export function artifactHash(payload: MarketPayload): string {
   return toHex(Uint8Array.from(sha256(encodePayload(payload))))
@@ -90,7 +90,9 @@ export async function republishOne(p: {
   const row = await p.journal.get(p.hash)
   if (row === undefined) return { done: true, missed: [] }
   try {
-    const tx = Transaction.fromAtomicBEEF(row.beef)
+    // log-anchor rows journal plain beef — fromAtomicBEEF dead-letters them
+    const tx = parseBeef(row.beef)
+    if (tx === undefined) return { done: false, missed: [] }
     const parent = tx.inputs.find((i) => i.sourceTransaction?.id('hex') === p.treeTxid)?.sourceTransaction
     if (parent === undefined || parent.merklePath !== undefined) return { done: true, missed: [] }
     parent.merklePath = p.merklePath

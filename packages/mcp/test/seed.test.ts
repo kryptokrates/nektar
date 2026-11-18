@@ -40,6 +40,21 @@ test('seed: domain filter + newest announce wins', async () => {
   assert.deepEqual(calls, [{ tool: 'importShard', args: { store: { key: 'k', sha256: 's' } } }])
 })
 
+test('seed: post-restart card (low seq, new ts) beats an unexpired stale card', async () => {
+  calls.length = 0
+  const read: SeedRead = async () => ({
+    items: [
+      // producer restarted: streamState reset → the fresh card carries seq 1
+      // while the pre-restart seq-9 card is still live on the lane
+      item({ streamSeq: 9, ts: 5, packs: [{ shard: 'stale', packUrl: 'https://p/stale' }] }),
+      item({ streamSeq: 1, ts: 9, packs: [{ shard: 'fresh', packUrl: 'https://p/fresh' }] })
+    ]
+  })
+  const r = await seedFromDirectory({ mem, call, hosts: ['https://seed'], net: 'testnet', domains: [], all: true, read })
+  assert.equal(r.imported, 1)
+  assert.deepEqual(calls, [{ tool: 'importShard', args: { packUrl: 'https://p/fresh' } }])
+})
+
 test('seed: wildcard imports everything; store beats packUrl; refless packs skip', async () => {
   calls.length = 0
   const read: SeedRead = async () => ({

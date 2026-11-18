@@ -56,7 +56,11 @@ const HOST_B = process.env.NEKTAR_TN_HOST_B ?? 'http://127.0.0.1:18292'
 process.env.NEKTAR_PAID_DISCLOSURE ??= '1'
 const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
 const INDEX = 'https://test.bananablocks.com/api/v1'
-const COLLECT_MS = 15_000 // cold-seller margin measured live: want→offer ≈ 8-9s
+// happy path is unaffected — early-select fires at minCollectMs (1s) once an
+// offer lands; this ceiling only bounds the degraded path: a withholding
+// host leaves one carrier route, and single-host submit→collect→decode
+// measured ~16-20s live, over the old 15s line (R3's expired-in-collecting).
+const COLLECT_MS = 45_000 // cold-seller margin measured live: want→offer ≈ 8-9s healthy, ~20s single-host
 const STATE = fileURLToPath(new URL('../../../../.state/testnet-agents', import.meta.url))
 /** persistent per-WIF suite dirs — lanes.sqlite + reserve.json survive across
  *  tests AND runs: funding trees mint+prove ONCE (one block), then every deal

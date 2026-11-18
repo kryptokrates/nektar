@@ -16,7 +16,9 @@ export interface SeedResult {
 
 /** one directory read against a host set — injectable so tests exercise the
  *  orchestration without a live overlay */
-export type SeedRead = (hosts: string[]) => Promise<{ items: Array<{ txid: string; payload: { body: unknown } }> }>
+export type SeedRead = (
+  hosts: string[]
+) => Promise<{ items: Array<{ txid: string; payload: { body: unknown } }>; withheld?: Array<{ host: string; txid: string }>; unreachable?: string[] }>
 
 const MAX_EXTRA_HOSTS = 8
 const MAX_ATTEMPTS = 64
@@ -24,16 +26,18 @@ const MAX_ATTEMPTS = 64
 const packMatches = (pack: AnnouncePack, domainSet: Set<string>, all: boolean): boolean =>
   all || (pack.domains ?? []).some((d) => domainSet.has(d.toLowerCase()))
 
-/** newest announce per publisher — streamSeq orders a producer's stream
- *  (ts is the fallback for a missing seq, which verifyAnnounce refuses
- *  anyway, so every accepted announce carries it) */
+/** newest announce per publisher — ts orders a producer's cards. streamSeq
+ *  is process-scoped (streamState resets on restart), so seq-first ordering
+ *  would shadow a fresh post-restart card behind an unexpired higher-seq one
+ *  for up to MAX_LIFETIME_MS. ts can't be replayed upward and the only
+ *  signer is the operator itself; seq breaks same-ms ties. */
 function latestAnnounces(items: Array<{ payload: { body: unknown } }>): AnnounceAd[] {
   const byPub = new Map<string, AnnounceAd>()
   for (const i of items) {
     const a = (i.payload.body as { announce?: AnnounceAd }).announce
     if (a === undefined) continue
     const cur = byPub.get(a.pub)
-    if (cur === undefined || (a.streamSeq ?? 0) > (cur.streamSeq ?? 0) || ((a.streamSeq ?? 0) === (cur.streamSeq ?? 0) && a.ts > cur.ts)) byPub.set(a.pub, a)
+    if (cur === undefined || a.ts > cur.ts || (a.ts === cur.ts && (a.streamSeq ?? 0) > (cur.streamSeq ?? 0))) byPub.set(a.pub, a)
   }
   return [...byPub.values()]
 }
@@ -56,6 +60,10 @@ export async function seedFromDirectory(p: {
   const read: SeedRead =
     p.read ?? (async (hosts) => await readAnnounces(hosts, { net: p.net }, { tracker: p.mem.sdkTracker(), net: p.net, timeoutMs: p.timeoutMs ?? 8_000 }))
   const first = await read(p.hosts)
+  // a host that answered but lacked an announce another served is withholding
+  // — untrusted relays can't forge, but their censorship should be visible
+  for (const w of first.withheld ?? []) log(`seed: host ${w.host} withheld announce ${w.txid.slice(0, 12)}`)
+  for (const u of first.unreachable ?? []) log(`seed: host ${u} unreachable`)
   // one hop of union: announced hosts (screened like a finger record's)
   // get their own directory read — a fresh instance finds operators the
   // baked-in seeds never announced

@@ -359,11 +359,20 @@ export function openUpkeep(rt: Rt): void {
           const catalog = (await mem.shardCatalog?.().catch(() => [])) ?? []
           const announcePacks: import('@nektar/bstack').AnnouncePack[] = []
           for (const s of mem.shards()) {
-            if (s.startsWith('__')) continue
+            if (s.startsWith('__') || mem.shardPrivate?.(s) === true) continue
             const store = mem.packStoreRef(s)
-            if (store === undefined) continue
+            // no bstore ref — fall back to the operator's public /v1/pack
+            // URL when it has one (pushPublic is the same public surface);
+            // a shard with neither can't be imported at all, so skip it
+            const packUrl = cfg.pushPublic !== undefined ? `${cfg.pushPublic.replace(/\/+$/, '')}/v1/pack/${encodeURIComponent(s)}` : undefined
+            if (store === undefined && packUrl === undefined) continue
             const domains = catalog.find((m) => m.shard === s)?.domains
-            announcePacks.push({ shard: s, ...(domains !== undefined && domains.length > 0 ? { domains } : {}), store })
+            announcePacks.push({
+              shard: s,
+              ...(domains !== undefined && domains.length > 0 ? { domains } : {}),
+              ...(store !== undefined ? { store } : {}),
+              ...(packUrl !== undefined ? { packUrl } : {})
+            })
           }
           const announceCanon = lanes.mod.marketJson({ hosts: marketHosts, packs: announcePacks })
           const now = cfg.now?.() ?? Date.now()
@@ -390,13 +399,13 @@ export function openUpkeep(rt: Rt): void {
             log(`automation: announce ${r.txid.slice(0, 12)} packs=${announcePacks.length}`)
           }
         } catch (e) {
-          // 'no funding slot' is transient while the market tree matures
-          if (!(e as Error).message.includes('no funding slot')) {
-            const m = `automation: announce: ${(e as Error).message.slice(0, 160)}`
-            if (m !== announceError) {
-              announceError = m
-              log(m)
-            }
+          // 'no funding slot' is transient while the market tree matures, but
+          // a stock-out must leave a trace — dedupe like every other cause
+          const msg = (e as Error).message.includes('no funding slot') ? 'no funding slot' : (e as Error).message.slice(0, 160)
+          const m = `automation: announce: ${msg}`
+          if (m !== announceError) {
+            announceError = m
+            log(m)
           }
         }
       }

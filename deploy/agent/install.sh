@@ -12,6 +12,9 @@
 # Optional passthroughs: NEKTAR_PUSH_PUBLIC, NEKTAR_FUND_WIF, NEKTAR_NETWORK,
 # NEKTAR_SEED_DOMAINS, NEKTAR_ANNOUNCE,
 # NEKTAR_AGENT_DIR (default ~/nektar-agent), NEKTAR_AGENT_BRANCH.
+#
+# NEKTAR_NETWORK=main additionally requires NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND
+# in the environment — the install refuses to write a mainnet .env without it.
 set -euo pipefail
 
 DEST="${NEKTAR_AGENT_DIR:-$HOME/nektar-agent}"
@@ -65,6 +68,15 @@ fi
 [ -n "${NEKTAR_PUSH_PUBLIC:-}" ] && set_kv NEKTAR_PUSH_PUBLIC "$NEKTAR_PUSH_PUBLIC"
 [ -n "${NEKTAR_FUND_WIF:-}" ] && set_kv NEKTAR_FUND_WIF "$NEKTAR_FUND_WIF"
 [ -n "${NEKTAR_NETWORK:-}" ] && set_kv NEKTAR_NETWORK "$NEKTAR_NETWORK"
+# mainnet ack gate — same refusal the runtime enforces, caught at install time
+if grep -qE '^NEKTAR_NETWORK=main' .env; then
+  if [ "${NEKTAR_MAINNET_CONFIRM:-}" != "I_UNDERSTAND" ]; then
+    echo "refusing: NEKTAR_NETWORK=main spends REAL BSV."
+    echo "re-run with NEKTAR_MAINNET_CONFIRM=I_UNDERSTAND to acknowledge."
+    exit 1
+  fi
+  set_kv NEKTAR_MAINNET_CONFIRM "I_UNDERSTAND"
+fi
 [ -n "${NEKTAR_SEED_DOMAINS:-}" ] && set_kv NEKTAR_SEED_DOMAINS "$NEKTAR_SEED_DOMAINS"
 [ -n "${NEKTAR_ANNOUNCE:-}" ] && set_kv NEKTAR_ANNOUNCE "$NEKTAR_ANNOUNCE"
 

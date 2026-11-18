@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 8112,
+      "loc": 8124,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1127,
@@ -30,7 +30,7 @@
       "edges": ["chain", "core"],
       "maxFileLoc": 936,
       "maxFileFanout": 13,
-      "instability": 0.667
+      "instability": 0.5
     },
     "chain": {
       "loc": 6308,
@@ -105,12 +105,13 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 9542,
-      "pkgFanout": 17,
+      "loc": 9644,
+      "pkgFanout": 18,
       "edges": [
         "anchor",
         "automation",
         "automaton",
+        "bstack",
         "chain",
         "contracts",
         "core",
@@ -128,7 +129,7 @@
       ],
       "maxFileLoc": 985,
       "maxFileFanout": 24,
-      "instability": 0.944
+      "instability": 0.947
     },
     "memory": {
       "loc": 2410,

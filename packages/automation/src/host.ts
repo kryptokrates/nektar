@@ -53,6 +53,9 @@ export interface AutomationHost extends MarketMemory {
   shards(): string[]
   attachPacksStore(store: PacksStore): void
   packStoreRef(shard: string): ObjectRef | undefined
+  /** private shards must never be named in an announce — a URL-ref pack
+   *  offer would leak the shard name even when the pack endpoint refuses */
+  shardPrivate?(shard: string): boolean
   /** latest committed shard manifests — the domain tags an announce
    *  advertises per offered pack. Optional: announces carry no domain
    *  hints when the host can't project the catalog. */

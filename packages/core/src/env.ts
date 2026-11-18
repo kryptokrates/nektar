@@ -48,7 +48,13 @@ export function readNektarEnv(env: EnvSource = process.env): EnvSource {
  *  whose lanes verify everything they serve (signature + SPV + funding
  *  binding), so a seed host is untrusted by design: the worst it does is
  *  withhold, which quorum reads detect — it can never forge. Operators who
- *  run a public host pair on a given network can be added here. */
+ *  run a public host pair on a given network can be added here.
+ *
+ *  'main' is deliberately absent: a seed list with a single operator pair is
+ *  the exact centralization the plural-seed design exists to avoid, so main
+ *  stays empty until ≥2 independently operated public hosts exist. On main a
+ *  bare instance resolves [] and runs single-player until the operator sets
+ *  NEKTAR_MARKET_HOSTS — an honest empty join, not a fake plural one. */
 export const DEFAULT_MARKET_HOSTS: Record<string, string[]> = {
   testnet: ['https://nektar.run/hosts/a', 'https://nektar.run/hosts/b']
 }

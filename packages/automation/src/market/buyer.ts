@@ -462,7 +462,12 @@ export abstract class BuyerOps extends SellerOps {
     // fresh one, so the id carries the attempt number (released rows never
     // count against caps; data.escrowAction tracks the live attempt)
     const tries = (op.data.fundingTries as number | undefined) ?? 0
-    const ctx: ActionContext = { operationId: op.operationId, actionId: `${op.operationId}:escrow:${tries}`, policyHash: op.policyHash, networkId: this.d.network }
+    const ctx: ActionContext = {
+      operationId: op.operationId,
+      actionId: `${op.operationId}:escrow:${tries}`,
+      policyHash: op.policyHash,
+      networkId: this.d.network
+    }
     const b = await this.d.store.reserveBudget(ctx, amounts, approved)
     if (!b.ok) {
       if (CAP.test(b.code)) return await this.escalate(op, b.code, actionDigest, amounts.purchaseSats + amounts.feeSats, { offerKey: sel.key, amounts })

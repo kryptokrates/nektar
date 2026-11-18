@@ -34,7 +34,10 @@ const parseBeef = (beef: number[]): Transaction | undefined => {
  *  now answer — the funding parent is only the shallowest level; trees
  *  funded by a previous tree's change sit deeper and are what the host
  *  walks into next. Returns the enriched beef or undefined */
-const enrichBeef = async (row: { beef: number[]; fundingTxid?: string }, enrich?: (txid: string) => Promise<MerklePath | undefined>): Promise<number[] | undefined> => {
+const enrichBeef = async (
+  row: { beef: number[]; fundingTxid?: string },
+  enrich?: (txid: string) => Promise<MerklePath | undefined>
+): Promise<number[] | undefined> => {
   if (enrich === undefined) return undefined
   const tx = parseBeef(row.beef)
   if (tx === undefined) return undefined
@@ -123,7 +126,10 @@ export class KnexCarrierJournal implements CarrierJournal {
     // stale ancestry forever
     for (const r of await this.kx('bstack_carriers').whereNull('funding_txid').select('artifact_hash', 'beef')) {
       const parent = parseBeef(JSON.parse(r.beef as string) as number[])?.inputs[0]?.sourceTransaction?.id('hex')
-      if (parent !== undefined) await this.kx('bstack_carriers').where({ artifact_hash: r.artifact_hash as string }).update({ funding_txid: parent })
+      if (parent !== undefined)
+        await this.kx('bstack_carriers')
+          .where({ artifact_hash: r.artifact_hash as string })
+          .update({ funding_txid: parent })
     }
   }
   async get(hash: string) {

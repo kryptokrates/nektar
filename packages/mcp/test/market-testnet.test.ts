@@ -513,8 +513,7 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_200_00
     const t0 = Date.now()
     const wants = await Promise.all(buyers.map((b) => b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)))
     const all = [s.rt, ...buyers.map((b) => b.rt)]
-    const settledFor = async () =>
-      (await Promise.all(wants.map((w) => saleFor(s, w.wantId)))).filter((o) => o !== undefined && COMPLETE.has(o.state))
+    const settledFor = async () => (await Promise.all(wants.map((w) => saleFor(s, w.wantId)))).filter((o) => o !== undefined && COMPLETE.has(o.state))
     const ms = await until(all, 240_000, async () => {
       for (const [i, b] of buyers.entries()) {
         const bo = await opFor(b, wants[i].wantId)
@@ -818,9 +817,7 @@ test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 6
     await drive([b.rt, s.rt], 6)
     const r = await deal(b, s, logs)
     assert.ok(r.ms > 0)
-    const dupes = (await buyerOps(b)).filter(
-      (o) => (o.data.want as { want?: { wantId?: string } } | undefined)?.want?.wantId === r.wantId
-    )
+    const dupes = (await buyerOps(b)).filter((o) => (o.data.want as { want?: { wantId?: string } } | undefined)?.want?.wantId === r.wantId)
     assert.equal(dupes.length, 1, 'duplicate outputs spawned extra ops')
   } finally {
     await STOP_ALL([b?.rt, s?.rt])

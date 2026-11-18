@@ -125,10 +125,7 @@ test('BsvBroadcaster: 5xx (non-503) is an error — the index has no write path'
   const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', indexerUrl: 'http://whatsonchain.example' })
   const res = await b.broadcast(tx())
   assert.equal(res.status, 'error')
-  assert.ok(
-    !(fetchImpl as any).calls.some((c: string) => c.includes('whatsonchain.example/tx/raw')),
-    'no index write path exists'
-  )
+  assert.ok(!(fetchImpl as any).calls.some((c: string) => c.includes('whatsonchain.example/tx/raw')), 'no index write path exists')
 })
 
 test('fetchBroadcasterFeeRate: /policy 100sat/1000B → 100 sat/kB', async () => {

@@ -434,7 +434,8 @@ export function openLanes(rt: Rt): void {
               if (rest.length > 0) pendingLane.set(s.tag, [...(pendingLane.get(s.tag) ?? []), ...rest])
             })
             .catch(() => undefined)
-          if ((fast.items as unknown[]).length > 0 || staged.length > 0) log(`lanes: ${s.tag} items=${(fast.items as unknown[]).length} staged=${staged.length}`)
+          if ((fast.items as unknown[]).length > 0 || staged.length > 0)
+            log(`lanes: ${s.tag} items=${(fast.items as unknown[]).length} staged=${staged.length}`)
           const events = toEvents(fast.items as never)
           if (events.length > 0) {
             rt.hotUntil = Date.now() + 5_000

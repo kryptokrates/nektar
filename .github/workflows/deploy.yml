@@ -106,8 +106,6 @@ jobs:
             # parallel tsc; contracts/zk/fuzz/e2e are dev-time, not runtime.
             # serial: two concurrent tsc trees still peak ~1.6GB under k3s+mysql
             pnpm --filter "@nektar/mcp..." --workspace-concurrency=1 build
-            # host-pair module artifact (compose mounts ../../packages/bstack/bundle)
-            pnpm --filter @nektar/bstack bundle
             # managed instance config — repo file is authoritative for the keys
             # it lists; box-local keys (secrets, DATA_DIR, PORT…) untouched
             if [ -f deploy/hetzner/nektar-http.env ]; then
@@ -122,7 +120,9 @@ jobs:
                 fi
               done < deploy/hetzner/nektar-http.env
             fi
-            # the public host pair this agent (and any other operator) uses
+            # the public host pair this agent (and any other operator) uses —
+            # pulls refresh :edge to the release job's latest published images
+            docker compose -p nektar-bstack-testnet -f deploy/bstack-sandbox/compose.testnet.yaml pull
             docker compose -p nektar-bstack-testnet -f deploy/bstack-sandbox/compose.testnet.yaml up -d
             # public endpoint: nektar-http must bind 0.0.0.0 (default is 127.0.0.1)
             grep -q "^NEKTAR_HTTP_HOST=" /etc/nektar-http.env 2>/dev/null || echo "NEKTAR_HTTP_HOST=0.0.0.0" >> /etc/nektar-http.env

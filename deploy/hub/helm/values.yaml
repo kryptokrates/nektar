@@ -64,9 +64,9 @@ shim:
   chaintracks: https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v2
 
 secrets:
-  keyPassphrase: ''   # encrypts keys.json at rest — required
-  httpToken: ''       # bearer for /mcp + private /v1 — required
-  fundWif: ''         # embedded toolbox wallet root (empty = fund printed address)
+  keyPassphrase: '' # encrypts keys.json at rest — required
+  httpToken: '' # bearer for /mcp + private /v1 — required
+  fundWif: '' # embedded toolbox wallet root (empty = fund printed address)
   overlayDbPassword: '' # knex login for BOTH host schemas — required
   overlayAdminToken: '' # host admin surface — required
   # bring your own Secret instead — must carry all five keys above
@@ -86,8 +86,8 @@ ingress:
   enabled: false
   className: ''
   # one host rule per surface; annotate TLS via your controller
-  agentHost: ''        # e.g. hub.example → agent :8080 (bearer-gated)
-  hostAHost: ''        # e.g. host-a.hub.example → host-a svc (8080+8081)
+  agentHost: '' # e.g. hub.example → agent :8080 (bearer-gated)
+  hostAHost: '' # e.g. host-a.hub.example → host-a svc (8080+8081)
   hostBHost: ''
   tls: false
   tlsSecretName: ''

@@ -54,7 +54,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
         limits: {
           perPurchaseSats: 500,
           dailyPurchaseSats: 500,
-          perTxFeeSats: 600,
+          perTxFeeSats: 1200,
           dailyFeeSats: 600,
           runTotalSats: 1200,
           maxLockedSats: 1200,

@@ -40,7 +40,7 @@ export const testPolicyFor = (pub: string, o: TestPolicyOpts = {}): AutomationPo
   limits: {
     perPurchaseSats: 500,
     dailyPurchaseSats: 1000,
-    perTxFeeSats: 600,
+    perTxFeeSats: 1200, // 500 escrow reserve + payload-sized maxFee headroom (same bound as market-testnet)
     dailyFeeSats: 2000,
     runTotalSats: 5000,
     maxLockedSats: 1000,

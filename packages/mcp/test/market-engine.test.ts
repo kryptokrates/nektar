@@ -168,7 +168,7 @@ test('S1 regtest: three sellers quote 450/300/200, buyer scores, pays the best, 
   assert.equal((st.data.selected as any).key.split(':')[0], c.pub, 'the 200-sat offer wins when quality is equal')
   assert.deepEqual(
     (st.data.ranking as any).ranked.map((r: any) => r.maxAllInSats),
-    [710, 810, 960]
+    [855, 955, 1105] // price + maxFee(~155 covenant bound) + 500 escrow reserve
   )
   await w.restart(bob)
   await w.round()
@@ -230,7 +230,7 @@ test('outside policy → paused for a human; approval is bound to the exact acti
   assert.equal((await bob.engine.status(op1))!.operation.state, 'escalated')
   const [pending] = await bob.store.approvals('pending')
   assert.equal(pending.reason, 'locked_capital_above_policy')
-  assert.equal(pending.maxExtraSats, 710)
+  assert.equal(pending.maxExtraSats, 855)
   await w.round([bob])
   assert.equal((await bob.engine.status(op1))!.operation.state, 'escalated', 'nothing is spent while the approval is pending')
   assert.equal((await bob.store.budgetStatus(bob.policyHash)).purchaseTodaySats, 0)
@@ -259,7 +259,7 @@ test('seller goes dark after quoting → buyer refunds itself at the deadline; r
   await w.round([bob])
   let st = (await bob.engine.status(operationId))!.operation
   assert.equal(st.state, 'awaiting_disclosure')
-  assert.equal((await bob.store.budgetStatus(bob.policyHash)).lockedSats, 210)
+  assert.equal((await bob.store.budgetStatus(bob.policyHash)).lockedSats, 355) // 200 price + ~155 maxFee bound
   await w.round([bob])
   assert.equal((await bob.engine.status(operationId))!.operation.state, 'awaiting_disclosure', 'no early refund')
   // mine until the indexed tip the engine polls actually passes the refund
@@ -314,7 +314,7 @@ test('crash between escrow prepare and submit: restart resubmits the SAME bytes,
   assert.equal(st.state, 'funding')
   const pending = st.data.pendingEscrow as any
   assert.ok(pending?.utxo?.txid, 'the signed escrow was persisted before the crash')
-  const recorded = await bob.store.walletTx({ actionId: `${operationId}:escrow` })
+  const recorded = await bob.store.walletTx({ actionId: `${operationId}:escrow:0` })
   assert.equal(recorded!.state, 'prepared', 'bytes persisted, never submitted')
   w.hooks.afterPrepare = undefined
   await w.restart(bob)

@@ -119,19 +119,66 @@ verified memory for their agents and authorship of the platform's
 integration. Build for them: the adapter spec above IS their tool —
 keep it to one file, one config block, one verification step.
 
+## Zero-config join — no nektar.run dependency
+
+The two remaining frictions (required `NEKTAR_MARKET_HOSTS`, empty
+shelf) must be killed by the network's own machinery, not by hardcoding
+nektar.run as a default — that would just rename the dependency. Design
+in three layers:
+
+```
+Layer 0  BOOTSTRAP  — a few baked-in seed hosts (untrusted by design)
+Layer 1  DISCOVERY  — a directory lane on the lanes themselves
+Layer 2  SEEDING    — packs discovered through the market, not a URL
+```
+
+**Layer 0 — seeds, plural.** Bake `DEFAULT_MARKET_HOSTS` into the image
+— a small list of independently-operated hosts; nektar.run is one
+entry, and any operator who runs `compose.testnet.yaml` can be added
+(Bitcoin's seed-node pattern). `NEKTAR_MARKET_HOSTS` becomes optional:
+unset → the seed list. A bad seed can censor, never forge — the same
+threat model hosts already carry.
+
+**Layer 1 — a directory lane.** New wire kind `announce` on a fixed
+topic `tm_nektar_<net>_dir`: every agent/hub publishes a signed carrier
+on a cadence — `{pub, hosts[], office, streams, packsStoreRef,
+domains, ts, exp}`. A new instance quorum-reads the lane on the seeds,
+verifies signatures + SPV (existing `readItems` machinery), and unions
+every announced host — including operators that joined yesterday. The
+network describes itself; nektar.run is merely announcer #1.
+
+**Layer 2 — seed via the market.** The announce's `packsStoreRef`
+resolves the publisher's `nektar-packs` store through `ls_finger` →
+`importShard {store}` (content-addressed, no origin). Boot flag
+`NEKTAR_SEED_DOMAINS=ops,teranode`: first boot reads the directory and
+imports matching packs — zero URLs anywhere.
+
+Failure modes: all seeds down → env override still works and the
+instance degrades to single-player; spoofed announces → signatures +
+quorum reads; censoring seed → host union + existing withholding
+detection; stale announces → `exp` (hosts already refuse expired
+artifacts).
+
+Build deltas: `DEFAULT_MARKET_HOSTS` (small) → wire kind `announce` +
+directory lane + republish cadence (medium) → `seedDomains` boot task
+(medium) → `deploy/hub/` compose = agent + host pair + seed domains in
+one box (small) → "run a hub, get added to the seed list" doc.
+
 ## Onboarding flow per platform
 
 ```
 install adapter (one command/file) →
-  instance boots with seed defaults →
-    importShard {packUrl} × seed set → populated memory on session 1 →
-      recall-first + receipt loop live immediately →
-        wants fill against hub sellers (Loop B) →
-          agent's own work → describeShard/sell → organic supply
+  instance boots on the seed hosts →
+    directory-lane read → joins the announced host union →
+      seed-domain pack imports → populated memory on session 1 →
+        recall-first + receipt loop live immediately →
+          wants fill against live sellers (Loop B) →
+            agent's own work → describeShard/sell → organic supply
 ```
 
-Session one must never be empty: the seed import and the hub's armed
-sellers guarantee it.
+Session one must never be empty: directory-discovered packs and armed
+sellers guarantee it — and none of it routes through nektar.run
+specifically.
 
 ## Instrumentation — per platform cohort
 
@@ -157,8 +204,8 @@ supply. The durable output of each dock is the kit: the adapter file,
 the platform's champion notes, join defaults, what seeding cost, and
 the bars — so each next adapter is a config clone, not a new build.
 Candidate order by adjacency: Codex (same MCP shape) → OpenClaw/gateway
-platforms (MCP http / REST) → hosted runtimes (REST `/v1`, needs the
-OAuth decision) → mainnet when testnet economics prove out.
+platforms (MCP http / REST) → hosted runtimes (REST `/v1/tools`) →
+mainnet when testnet economics prove out.
 
 ## Scaling on the Hetzner box
 

@@ -206,7 +206,7 @@ const mkEngine = async (opts: { killed?: () => boolean; deaf?: () => boolean }) 
       limits: {
         perPurchaseSats: 500,
         dailyPurchaseSats: 1000,
-        perTxFeeSats: 600,
+        perTxFeeSats: 1200,
         dailyFeeSats: 2000,
         runTotalSats: 5000,
         maxLockedSats: 1000,
@@ -540,7 +540,7 @@ test('preflight on a live stack: dependency checks green; spendguard detects an 
         limits: {
           perPurchaseSats: 500,
           dailyPurchaseSats: 1000,
-          perTxFeeSats: 600,
+          perTxFeeSats: 1200,
           dailyFeeSats: 2000,
           runTotalSats: 5000,
           maxLockedSats: 1000,

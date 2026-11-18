@@ -2204,9 +2204,7 @@ test('bstack AH: direct rail gated off without opts — same deal still settles 
 test('reserve: one dominant UTXO denominates into medium outputs so mints and deals never contend for the same coin', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-reserve-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
-  t.after(() => h1.close())
   // the contention fixture: a single 500k coin — before the reserve policy a
   // mint's take leaves a deal escrow queuing behind it for a whole pass
   const a = await testAgent('a', {
@@ -2220,37 +2218,62 @@ test('reserve: one dominant UTXO denominates into medium outputs so mints and de
     reserveOutSats: 25_000,
     now: () => clock
   })
-  const mediums = async () => (await a.mem.funds.outs()).filter((u) => u.satoshis >= 25_000).length
-  const ok = await until([a.rt], chain, async () => (await mediums()) >= 3, 40)
-  assert.ok(ok, 'upkeep splits the dominant coin until 3 medium outputs sit in the pool')
-  // the point: a deal can fund at once while mediums remain for the next mint
-  const deal = await a.mem.funds.take('deal', 25_000)
-  assert.ok(deal.satoshis >= 25_000)
-  a.mem.funds.release(deal.tx.id('hex'), deal.vout)
+  try {
+    const mediums = async () => (await a.mem.funds.outs()).filter((u) => u.satoshis >= 25_000).length
+    const ok = await until([a.rt], chain, async () => (await mediums()) >= 3, 40)
+    assert.ok(ok, 'upkeep splits the dominant coin until 3 medium outputs sit in the pool')
+    // the point: a deal can fund at once while mediums remain for the next mint
+    const deal = await a.mem.funds.take('deal', 25_000)
+    assert.ok(deal.satoshis >= 25_000)
+    a.mem.funds.release(deal.tx.id('hex'), deal.vout)
+  } finally {
+    await a.rt.stop()
+    await h1.close()
+  }
 })
 
 test('announce keep-alive: an unproven-funding card re-announces inside the eviction window, then stops once the tree proves', { timeout: 300_000 }, async (t) => {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-bstack-announce-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
-  t.after(() => h1.close())
-  const a = await testAgent('a', { hosts: [h1.url], chain, dir, msgs: bus(), announce: true, now: () => clock })
-  const rows = async () => ((await a.rt.carriers?.list?.()) ?? []).length
-  const first = await until([a.rt], chain, async () => (await rows()) >= 1, 40)
-  assert.ok(first, 'the directory card publishes')
-  const n1 = await rows()
-  // the card's funding tree is still in the mempool — the keep-alive must
-  // re-announce inside the host's FUNDING_PROOF_MS window instead of letting
-  // the entry evict. The vendored window is 10 min; the keep-alive is 4.
-  clock += 5 * 60_000
-  const second = await until([a.rt], chain, async () => (await rows()) > n1, 10)
-  assert.ok(second, 'unproven funding re-announces inside the eviction window')
-  // let the funding tree prove — republishProved re-records the same txid and
-  // the keep-alive stops: no further announce carriers without a canon change
+  const logs: string[] = []
+  const a = await testAgent('a', { hosts: [h1.url], chain, dir, msgs: bus(), announce: true, logs, now: () => clock })
+  // mine the funder's deposit — the market lane takes only ANCHORED trees
+  // (their funding parent proven), so the tree must mint on proven stock.
+  // The tree itself is left unmined: unproven funding is what the keep-alive
+  // is for.
   await chain.mine(1)
-  for (let i = 0; i < 8; i++) await drive([a.rt], chain, 1)
-  const settled = await rows()
-  for (let i = 0; i < 4; i++) await drive([a.rt], chain, 1)
-  assert.equal(await rows(), settled, 'a proven card stops re-minting carriers')
+  try {
+    const rows = async () => ((await a.rt.carriers?.list?.()) ?? []).length
+    // bare cycles — drive() mines every pending broadcast each round and a
+    // proven funding tree correctly keeps the keep-alive silent; the fixture
+    // needs the card's tree to STAY in the mempool
+    let first = false
+    for (let i = 0; i < 40 && !first; i++) {
+      await a.rt.cycle()
+      first = (await rows()) >= 1
+    }
+    assert.ok(first, `the directory card publishes — ${logs.filter((l) => /announce|automation/.test(l)).join(' | ') || '(no automation lines)'}`)
+    const n1 = await rows()
+    // the card's funding tree is still in the mempool — the keep-alive must
+    // re-announce inside the host's FUNDING_PROOF_MS window instead of letting
+    // the entry evict. The vendored window is 10 min; the keep-alive is 4.
+    clock += 5 * 60_000
+    let second = false
+    for (let i = 0; i < 10 && !second; i++) {
+      await a.rt.cycle()
+      second = (await rows()) > n1
+    }
+    assert.ok(second, 'unproven funding re-announces inside the eviction window')
+    // let the funding tree prove — republishProved re-records the same txid and
+    // the keep-alive stops: no further announce carriers without a canon change
+    await chain.mine(1)
+    for (let i = 0; i < 8; i++) await drive([a.rt], chain, 1)
+    const settled = await rows()
+    for (let i = 0; i < 4; i++) await drive([a.rt], chain, 1)
+    assert.equal(await rows(), settled, 'a proven card stops re-minting carriers')
+  } finally {
+    await a.rt.stop()
+    await h1.close()
+  }
 })

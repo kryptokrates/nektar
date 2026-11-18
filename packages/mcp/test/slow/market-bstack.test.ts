@@ -189,7 +189,13 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
     // poll, which lands all three in a single ingest batch and select() still
     // scores the 200-sat one highest. 'quoted' fires at build time, before the
     // outbox pump posts the envelope — gate on the buyer's own offer lookup
-    // (ls_nektar {offers}), the exact read its collect pass runs.
+    // (ls_nektar {offers}), the exact read its collect pass runs. The offers
+    // listing alone is NOT enough: the provenance evidence rides the separate
+    // `quote` message leg, which lags the feed leg in the seller's outbox — a
+    // select inside that gap scores an offer's provenance 0 and the cheapest
+    // can lose (observed on CI). Gate on each sale op's outbox being fully
+    // acked too, so the quotes are already on the wire for the buyer's first
+    // pass.
     await b.rt.cycle() // flush the want to the hosts
     const { readOffers } = await import('@nektar/bstack')
     assert.ok(
@@ -198,11 +204,15 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
         chain,
         async () => {
           const r = await readOffers([h1.url, h2.url], { net: NET, wantId, buyerPub: b.pub }, { tracker: trackerFor(chain), net: NET, now: clock })
-          return r.items.length >= 3
+          if (r.items.length < 3) return false
+          for (const s of [sA, sB, sC])
+            for (const op of await saleOps(s))
+              if ((await s.rt.store.waitingOn(op.operationId)).length > 0) return false
+          return true
         },
         80
       ),
-      'not all offers listed | ' + logs.slice(-20).join(' | ')
+      'not all offers+quotes delivered | ' + logs.slice(-20).join(' | ')
     )
     const all = [b.rt, sA.rt, sB.rt, sC.rt]
     assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'logs: ' + logs.slice(-20).join(' | '))

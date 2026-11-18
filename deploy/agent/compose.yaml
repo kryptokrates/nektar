@@ -26,6 +26,8 @@ services:
       NEKTAR_AUTOMATION: ${NEKTAR_AUTOMATION:-1}
       NEKTAR_UNATTENDED: ${NEKTAR_UNATTENDED:-}
       NEKTAR_FUND_WIF: ${NEKTAR_FUND_WIF:-}
+      NEKTAR_FUND_TXIDS: ${NEKTAR_FUND_TXIDS:-}
+      NEKTAR_MARKET_LOCAL_HOSTS: ${NEKTAR_MARKET_LOCAL_HOSTS:-}
       # unset = the baked-in seed hosts for this network (testnet defaults
       # join the public quorum); set to pin your own host pair
       NEKTAR_MARKET_HOSTS: ${NEKTAR_MARKET_HOSTS:-}

@@ -113,8 +113,19 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: build image (clean-checkout gate)
-        run: docker build -t nektar:ci .
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          load: true
+          tags: nektar:ci
+          # rzup's GitHub API calls get a real token (secret-mounted — not in
+          # layers); gha cache restores the pinned stark toolchain layer
+          # instead of re-installing it per run
+          secrets: GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: smoke — every packaged module resolves inside the image
         run: |
           docker run --rm --entrypoint node nektar:ci --input-type=module -e "

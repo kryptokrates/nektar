@@ -9,7 +9,14 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # against a committed digest before running; an upstream change fails the
 # build loudly instead of executing unseen code
 ARG RISC0_INSTALL_SHA256=e0a0c1ab3a86ce33efc566a0c9a24ac5eba688769d124d3a510337853b051a3c
-RUN for i in 1 2 3 4 5; do \
+# rzup resolves risc0 releases over the GitHub API — unauthenticated calls
+# share a 60/hr IP budget and GH runners flake on it (403 mid-build).
+# GITHUB_TOKEN mounts as a build secret (never lands in a layer); absent
+# locally → falls back to the anonymous path as before. The type=gha layer
+# cache in CI makes this layer a restore on repeat runs anyway.
+RUN --mount=type=secret,id=GITHUB_TOKEN,required=false \
+    GITHUB_TOKEN="$(cat /run/secrets/GITHUB_TOKEN 2>/dev/null || true)" && export GITHUB_TOKEN; \
+    for i in 1 2 3 4 5; do \
       curl -fsSL https://risczero.com/install -o /tmp/rzup-install.sh \
       && echo "$RISC0_INSTALL_SHA256  /tmp/rzup-install.sh" | sha256sum -c - \
       && bash /tmp/rzup-install.sh \

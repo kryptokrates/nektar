@@ -88,6 +88,7 @@ export {
   mintTree,
   marketFundingLock,
   anchoredTree,
+  deadAncestry,
   matchProvision,
   fundingSlotReason,
   MemoryTreeLedger,

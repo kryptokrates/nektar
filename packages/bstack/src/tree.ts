@@ -134,7 +134,9 @@ export const deadAncestry = async (
     const t = queue.shift()!
     for (const i of t.inputs) {
       const id = i.sourceTransaction?.id('hex') ?? i.sourceTXID
-      if (id === undefined || seen.has(id)) continue
+      // a null prevout (coinbase-shaped input) is a structural terminal,
+      // not an ancestry gap — there is no parent to resolve
+      if (id === undefined || id === '00'.repeat(32) || seen.has(id)) continue
       seen.add(id)
       const p = i.sourceTransaction ?? (await resolveTx(id))
       if (p === undefined) {

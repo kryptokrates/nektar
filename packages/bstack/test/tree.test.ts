@@ -6,10 +6,10 @@ import knex from 'knex'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mintTree, DERIVATION, FUNDING_TAG, ORIGINATOR, KnexTreeLedger, MemoryTreeLedger, anchoredTree as anchoredPred } from '../src/tree.js'
+import { mintTree, DERIVATION, FUNDING_TAG, ORIGINATOR, KnexTreeLedger, MemoryTreeLedger, anchoredTree as anchoredPred, deadAncestry } from '../src/tree.js'
 import * as treemod from '../src/tree.js'
 import { boxFundingLock } from '../src/box.js'
-import { anchoredTree, fakeParent, fund, prove } from './helpers.js'
+import { anchoredTree, fakeParent, fund, prove, provenTree } from './helpers.js'
 
 test('tree: n=8 mints 8 funding outputs + change, each decodes our tag', async () => {
   const key = PrivateKey.fromRandom()
@@ -455,4 +455,56 @@ test('ledger.adopt: drop frees provision slots of every kind and re-adopt regist
   } finally {
     await kx.destroy()
   }
+})
+
+// dead-ancestry audit — the carrier-refusal detector: an unproven tree whose
+// input chain has a gap the network cannot serve can neither prove nor
+// anchor; hosts refuse its carriers on missing source transactions forever
+test('deadAncestry: proven subject skips the walk — no gap reported', async () => {
+  const key = PrivateKey.fromRandom()
+  const t = await provenTree(key, 2)
+  const gaps = await deadAncestry(t, async () => undefined)
+  assert.deepEqual(gaps, [])
+})
+
+test('deadAncestry: anchored ancestry (carried, proven parents) reports nothing', async () => {
+  const key = PrivateKey.fromRandom()
+  const t = await anchoredTree(key, 2)
+  assert.equal(t.merklePath, undefined, 'fixture is the unproven-but-anchored shape')
+  const gaps = await deadAncestry(t, async () => undefined)
+  assert.deepEqual(gaps, [])
+})
+
+test('deadAncestry: unlinked input + unservable parent is the direct gap (hex round-trip shape)', async () => {
+  const key = PrivateKey.fromRandom()
+  const f = fakeParent(key)
+  const t = await mintTree({ key, funding: { tx: f, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
+  // strip the in-memory link the way a serialized reload loses it
+  t.inputs[0].sourceTransaction = undefined
+  const gaps = await deadAncestry(t, async () => undefined)
+  assert.deepEqual(gaps, [f.id('hex')])
+})
+
+test('deadAncestry: a dead grandparent is found through a live unproven parent', async () => {
+  const key = PrivateKey.fromRandom()
+  const g = fakeParent(key)
+  // mid spends g but carries only its txid — the thin-beef shape the host refused
+  const mid = new Transaction()
+  mid.addInput({ sourceTXID: g.id('hex'), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
+  mid.addOutput({ satoshis: 1_000_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
+  const t = await mintTree({ key, funding: { tx: mid, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
+  const gaps = await deadAncestry(t, async (id) => (id === mid.id('hex') ? mid : undefined))
+  assert.deepEqual(gaps, [g.id('hex')])
+})
+
+test('deadAncestry: resolvable unproven ancestors are not dead — bound stays intact', async () => {
+  const key = PrivateKey.fromRandom()
+  const f = fakeParent(key)
+  const mid = new Transaction()
+  mid.addInput({ sourceTXID: f.id('hex'), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
+  mid.addOutput({ satoshis: 1_000_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
+  const t = await mintTree({ key, funding: { tx: mid, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
+  const byId = new Map([[mid.id('hex'), mid], [f.id('hex'), f]])
+  const gaps = await deadAncestry(t, async (id) => byId.get(id))
+  assert.deepEqual(gaps, [])
 })

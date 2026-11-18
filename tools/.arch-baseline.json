@@ -9,10 +9,10 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 7836,
+      "loc": 7960,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
-      "maxFileLoc": 1079,
+      "maxFileLoc": 1122,
       "maxFileFanout": 20,
       "instability": 0.75
     },
@@ -25,15 +25,15 @@
       "instability": 0.571
     },
     "bstack": {
-      "loc": 4252,
+      "loc": 4371,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
-      "maxFileLoc": 833,
+      "maxFileLoc": 873,
       "maxFileFanout": 13,
       "instability": 0.667
     },
     "chain": {
-      "loc": 6016,
+      "loc": 6189,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 854,
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 9465,
+      "loc": 9514,
       "pkgFanout": 17,
       "edges": [
         "anchor",
@@ -204,19 +204,19 @@
   },
   "files": {
     "packages/automation/src/market/buyer.ts": {
-      "loc": 1079,
+      "loc": 1122,
       "fanout": 11
     },
     "packages/automation/src/runtime.ts": {
-      "loc": 592,
+      "loc": 605,
       "fanout": 20
     },
     "packages/automation/src/store.ts": {
-      "loc": 947,
+      "loc": 960,
       "fanout": 3
     },
     "packages/bstack/src/finger.ts": {
-      "loc": 833,
+      "loc": 873,
       "fanout": 8
     },
     "packages/chain/src/index.ts": {
@@ -236,7 +236,7 @@
       "fanout": 10
     },
     "packages/mcp/src/memory.ts": {
-      "loc": 315,
+      "loc": 319,
       "fanout": 24
     }
   },

@@ -279,9 +279,16 @@ const mkagent = async (
   rt.stop = async () => {
     await stopRt()
     await keyRelease()
+    liveRuntimes.delete(rt)
   }
+  liveRuntimes.add(rt)
   return { mem, rt, pub, policyHash: await rt.store.approvePolicy(policyFor(pub), 'test:operator'), name, dir: dataDir }
 }
+
+/** every runtime this suite has live — a timed-out test keeps its agents
+ *  (and their key beats) running in-process until its function settles, so
+ *  live() drains same-pid leftovers instead of cascade-skipping the file */
+const liveRuntimes = new Set<Automation>()
 
 const policyFor = (pub: string): AutomationPolicy => ({
   v: 1,
@@ -303,7 +310,7 @@ const policyFor = (pub: string): AutomationPolicy => ({
     maxUnconfirmedCount: 16
   },
   scoring: { minimumScoreBps: 0, weights: { ...DEFAULT_SCORE_WEIGHTS }, collectMs: COLLECT_MS },
-  seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 50, sellableShards: ['guide'] },
+  seller: { minPriceSats: 100, maxPriceSats: 1000, maxPreparationsPerDay: 5000, sellableShards: ['guide'] },
   disclosure: { allowPublic: false },
   ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 200, timeoutMs: 5000 },
   sandbox: { mode: 'sandbox-only' }
@@ -400,17 +407,28 @@ const live = async (t: { skip: (m?: string) => void }): Promise<boolean> => {
     t.skip(`no agent keys at ${KEYS_FILE}`)
     return false
   }
-  // one process per fund key — a live tmux agent holds the lock file
+  // one process per fund key — a live tmux agent holds the lock file. A beat
+  // <20s old can also be THIS suite's own timed-out test still running its
+  // agents in-process (a node:test timeout reports the test but cannot cancel
+  // the function): owner "pid@host" distinguishes the two — same-pid beats get
+  // force-drained, external owners get a bounded wait for the beat to go stale
   for (const n of ['alice', 'ben', 'bob'] as const) {
     const lf = keyLockFile(Buffer.from(PrivateKey.fromWif(WIF[n]).toPublicKey().toHash()).toString('hex'))
-    try {
-      const l = JSON.parse(readFileSync(lf, 'utf8')) as { beat: number }
-      if (Date.now() - l.beat < 20_000) {
+    const waitUntil = Date.now() + 45_000
+    for (;;) {
+      let l: { owner?: string; beat: number } | undefined
+      try {
+        l = JSON.parse(readFileSync(lf, 'utf8')) as { owner?: string; beat: number }
+      } catch {
+        break /* no lock held */
+      }
+      if (l === undefined || Date.now() - l.beat >= 20_000) break // stale beat — no live owner
+      if (Number(l.owner?.split('@')[0]) === process.pid) await STOP_ALL([...liveRuntimes])
+      if (Date.now() >= waitUntil) {
         t.skip(`live agent holds ${n}'s key — stop it before running this suite`)
         return false
       }
-    } catch {
-      /* no lock held */
+      await new Promise((r) => setTimeout(r, 3_000))
     }
   }
   try {
@@ -933,10 +951,13 @@ test('R9: timeout truth — escrow refund vs direct dispute on real blocks', { t
   const f2 = await faulthost(HOST_B)
   let be!: A, bd!: A, s!: A
   try {
-    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir, { refundBlocks: 1, directAccept: true })
+    // refundBlocks=1 exercises the real height gate on one block; a matching
+    // sellerSafetyBlocks=0 keeps refund > safety so the config is consistent
+    // (0-conf settlement for the seller, refund unlocks at +1)
+    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir, { refundBlocks: 1, sellerSafetyBlocks: 0, directAccept: true })
     await sellerize(s, 200)
-    be = await mkagent('alice-e', 'alice', [f1.url, f2.url], logs, dir, { refundBlocks: 1 })
-    bd = await mkagent('bob-d', 'bob', [f1.url, f2.url], logs, dir, { refundBlocks: 1, directMaxSats: 500 })
+    be = await mkagent('alice-e', 'alice', [f1.url, f2.url], logs, dir, { refundBlocks: 1, sellerSafetyBlocks: 0 })
+    bd = await mkagent('bob-d', 'bob', [f1.url, f2.url], logs, dir, { refundBlocks: 1, sellerSafetyBlocks: 0, directMaxSats: 500 })
     await warmup([be, bd, s], logs)
     await drive([s.rt, be.rt, bd.rt], 6)
     const wE = await be.rt.engine.publishWant({ domains: [DOMAIN], question: 'escrow?', maxSats: 450 }, be.policyHash)

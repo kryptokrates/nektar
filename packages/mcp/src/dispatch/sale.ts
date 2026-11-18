@@ -11,8 +11,7 @@ const SALE_OPS = new Set(['offer', 'offerMemory', 'escrow', 'complete', 'refund'
 // Sized to the payload: ~1 sat/KB (BSV relay floor) over an estimated
 // wrapped+script size, plus a change margin above the dust floor (~135
 // sats) so the depositor's return output is standard, not dust.
-const saleFeeBound = (payloadBytes: number, floor: number): number =>
-  Math.max(floor, Math.ceil((payloadBytes + 4096) / 1000) + 150)
+const saleFeeBound = (payloadBytes: number, floor: number): number => Math.max(floor, Math.ceil((payloadBytes + 4096) / 1000) + 150)
 
 // the complete/refund spend should pay the relay fee its size actually
 // needs — a flat cap overpays small spends and starves big ones, both
@@ -236,9 +235,7 @@ export const handlers: Record<string, ToolHandler> = {
     const changeSats =
       args.changeSats !== undefined
         ? BigInt(args.changeSats)
-        : BigInt(args.utxo.satoshis) -
-          BigInt(args.cfg.price) -
-          BigInt(Math.min(Number(args.cfg.maxFee) - 2, Math.max(10, relayNeed(args.wrapped.length / 2))))
+        : BigInt(args.utxo.satoshis) - BigInt(args.cfg.price) - BigInt(Math.min(Number(args.cfg.maxFee) - 2, Math.max(10, relayNeed(args.wrapped.length / 2))))
     // the remembered escrow is the reveal's real parent — with it attached
     // the tx broadcasts as proper EF and the buyer receives BEEF/EF, not a
     // synthetic stub that cannot carry ancestry

@@ -231,7 +231,9 @@ const mkagent = async (
       // names live outpoints (same oracle reconcileReserve trusts at boot);
       // an unanswered call revives nothing, never a chain claim
       liveSet: async () => {
-        const live = await indexFor({ url: mc.indexerUrl ?? '', apiKey: mc.indexerApiKey }).utxos(fundKey.toAddress([0x6f])).catch(() => undefined)
+        const live = await indexFor({ url: mc.indexerUrl ?? '', apiKey: mc.indexerApiKey })
+          .utxos(fundKey.toAddress([0x6f]))
+          .catch(() => undefined)
         return live === undefined ? undefined : new Set(live.map((u) => `${u.txid}:${u.vout}`))
       },
       // take() attaches the funding parent's witnessed BUMP — without it the

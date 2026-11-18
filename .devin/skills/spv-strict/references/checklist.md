@@ -22,7 +22,27 @@ broken.
 
 "No answer from the header sources is an error, never a verdict"
 (step 11). A header source that cannot answer leaves the item
-unverified and retried; it is not a refusal and not an acceptance.
+unverified and retried; it is not a refusal and not an acceptance —
+beefcat's exit-1 ("no verdict") is the reference behaviour: an outage
+is never reported as a forgery, and a forgery never as an outage.
+
+Two traps the steps alone do not state, both named by
+lightwebinc/beefcat's `docs/verification.md` (the reference
+implementation of this checklist):
+
+- **Anchored ≠ resolvable (beefcat check 9).** A transaction that
+  spends a mined coin SPV-verifies _through that coin_ even if the
+  transaction itself was never broadcast — a sender could sign postage
+  and never pay for it. Steps 2–11 must require the funding parent to
+  carry its own BUMP in the BEEF, not merely be resolvable or
+  broadcast. Here: `provenParent` demands the path; an accept that
+  settles for "the parent exists on-chain" is `spv/thin-ancestry`.
+- **Freshness is not proven.** A verified carrier proves the sender
+  signed the data at some time — a replayed older-but-complete object
+  verifies again. Freshness lives in the payload (expiry, sequence,
+  challenge), not in the proof. Here: `verifyBody(p, o.now)` expiry on
+  wants/offers, claim `seq` numbering, `until` windows — any accept
+  path without a freshness field is the gap.
 
 ## What the checklist does not cover (paper 011 §8)
 
@@ -33,6 +53,9 @@ unverified and retried; it is not a refusal and not an acceptance.
    disagree.
 3. **Header honesty.** PoW-check, several sources, never the answerer.
 4. **Truth of the content.** A signature proves who said it.
+5. **Cost accounting.** The proof says the sender's key paid to exist
+   on-chain; a receiver keeping no memory cannot tell whether an output
+   backed an earlier stream to someone else.
 
 ## Audit questions per step
 

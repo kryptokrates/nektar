@@ -164,5 +164,8 @@ _Arcade on the multicast fabric_. Wright (singulargrit.substack.com):
 _Safe Low Bandwidth SPV: A Formal Treatment_; _The Protocol No
 Gatekeeper Wants_; _A Mechanism of Honour_; _The Audit of Fools_;
 _Verification Without Enforcement_. Whitepaper §8. BRC-9/67 (SPV),
-BRC-62/95 (BEEF), BRC-74 (BUMP). The Substack essays are partly
-subscriber-only: rules cite only what the public text states.
+BRC-62/95 (BEEF), BRC-74 (BUMP). Reference implementation:
+`lightwebinc/beefcat` (netcat for the BEEF data carrier, with SPV —
+its `docs/verification.md` is the REFUSED-* vocabulary and documents
+its own header-source limits; see rules.md). The Substack essays are
+partly subscriber-only: rules cite only what the public text states.

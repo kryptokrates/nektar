@@ -107,7 +107,11 @@ must never appear on a mainnet path.
 - **EF** — extended format: tx + source outputs inline, no proofs; the
   intermediate wire when ancestry exists but paths don't yet.
 - Lightwebinc reference impls: `retry-endpoint`, `teranode-bridge`,
-  `overlay-bridge`, `bstore` on github.com/lightwebinc.
+  `overlay-bridge`, `bstore`, `beefcat` on github.com/lightwebinc.
+  `beefcat/docs/verification.md` is the carrier-check reference
+  (REFUSED-* codes) and self-documents its header-source limits —
+  PoW-over-floor, no linkage — which are findings under this ruleset
+  (witnessed sources + PoW + linkage is the bar here).
 
 > The dedicated, strict audit for this material is the `spv-strict` skill
 > (`.devin/skills/spv-strict`): same rules with no advisory tier, plus

@@ -37,6 +37,25 @@ state; it never drops below MED.
 | `spv/reimport-spent`             | An output is (re)imported without checking this instance already spent it, creating double-spend attempts on restart.                                                                                                              | D8         | import paths (`NEKTAR_FUND_TXIDS`, discovery, `addOwned`) vs the wallet's/ledger's own spend records                                                                                                      | HIGH | first-party spent set consulted before import                                                                                                     |
 | `spv/opaque-wait`                | A wait reports no cause ("no funding slot") so nothing can tell stock-out from fault.                                                                                                                                              | D9         | error strings and `doctor`/`fund` output                                                                                                                                                                  | MED  | report per lane: proven slots, unproven trees, what each waits on                                                                                 |
 
+## Reference implementation — lightwebinc/beefcat
+
+`github.com/lightwebinc/beefcat` is the carrier pattern's second
+implementation (Go; netcat over BEEF). Its `docs/verification.md` is
+the canonical REFUSED-* vocabulary — `REFUSED-MINEABLE`,
+`REFUSED-UNLOCKING`, `REFUSED-KEY-DERIVE`, `REFUSED-SIG`,
+`REFUSED-BUMP`, `REFUSED-FORK`, `REFUSED-SEQ`/`TRUNCATED`,
+`REFUSED-UNTRUSTED`, and exit 1 "no verdict". When auditing a
+third-party accept, name the failure with these codes where they fit.
+
+It also documents its own header-source limit precisely: PoW checked
+against a stated target plus a difficulty floor on mainnet, **no chain
+linkage, no most-work check, and a bare Merkle-root source taken at its
+word**. That is the FLOOR, not the bar — in this repo each of those
+gaps is a finding (`spv/unanchored-header`, `spv/circular-anchor`): our
+standard is two witnessed sources, PoW-checked and linked
+(`WitnessedTracker`, `HeaderCache`). A new header path that meets only
+the beefcat-documented level fails this ruleset.
+
 ## Reading the result
 
 - A `spv/block-wait` finding always names its cause as one of: missing

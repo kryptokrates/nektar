@@ -64,3 +64,47 @@ update → mine → resolve the newer seq):
 Ports: devchain 127.0.0.1:18344, host 127.0.0.1:18091 (no public bind).
 Tear down: `docker compose -f deploy/bstack-sandbox/compose.yaml down -v`.
 Never point NEKTAR_* or the demo at mainnet/testnet — devchain only.
+
+## beefcat — the reference implementation as a conformance client
+
+`deploy/bstack-sandbox/beefcat/` builds `lightwebinc/beefcat` v0.1.1 from
+pinned source — Lightweb's second implementation of the same carrier
+pattern our TS code vendored. Its verifier accepts a generic header source
+of exactly the shape our shim serves (`GET /v1/tip` → `{height}`,
+`GET /v1/root/<h>` → `{merkleRoot}`, 404 = unknown), so pointing it at the
+shim makes an independent implementation a client of our witnessed anchor:
+any drift in the shim's contract shows up as their verifier failing, not
+ours.
+
+Opt-in `conformance` profile on both sandbox composes:
+
+    # regtest (needs the Teranode stack + NEKTAR_RPC_* exported):
+    docker compose -f deploy/bstack-sandbox/compose.regtest.yaml \
+      --profile conformance run --rm beefcat
+
+    # testnet:
+    docker compose -f deploy/bstack-sandbox/compose.testnet.yaml \
+      --profile conformance run --rm beefcat
+
+The smoke phases:
+
+1. mint a carrier stream on a **devchain inside the container** (nothing
+   real) and verify it against devchain's own headers — proves the tool;
+2. verify the same stream **against our shim** — must refuse: the devchain
+   parent's BUMP is foreign to our chain. An exit 0 here means the shim
+   lied or the verifier skipped its anchor check; both fail loudly;
+3. (regtest only, `BEEFCAT_NODE_RPC`/`BEEFCAT_ASSET` wired) mint real
+   postage on our Teranode and verify through the shim — a second
+   implementation's carrier workload against our node + anchor. If the
+   node's `generatetoaddress` is unavailable it reports a skip, not a
+   failure.
+
+Operator shell for real flows (persistent identity/pool on the
+`beefcat-home` volume):
+
+    docker compose -f ... --profile conformance run --rm --entrypoint sh beefcat
+    beefcat init -network test -headers http://shim:8080   # prints the fund address
+    beefcat status                                        # sources + postage
+
+The repo-side counterpart is `packages/bstack/tools/beefcat-probe.mjs`,
+which runs OUR seams on THEIR stream bytes (same vectors, both directions).

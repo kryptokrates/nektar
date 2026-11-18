@@ -112,7 +112,7 @@ test('outbox pump: a wedged deliver cannot starve the rows behind it', async () 
     assert.equal(rows.find((r) => r.action_id === 'op:accept')!.status, 'acked')
     const rep = rows.find((r) => r.action_id === 'repair:h:dead')!
     assert.equal(rep.status, 'pending', 'the wedged leg retries, it is not dead-lettered')
-    assert.match(rep.last_error ?? '', /deliver bound/)
+    assert.match(rep.last_error ?? '', /deliver timed out/)
   } finally {
     await kx.destroy()
   }

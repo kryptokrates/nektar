@@ -157,7 +157,8 @@ export abstract class IngressOps extends MarketBase {
   /** one deliver gets one bound: the legs inside it (host submits, record
    *  lookups) are timeout-capped already, but a leg that never settles
    *  would park its worker for as long as it hangs — the row retries
-   *  transport-classed instead of the queue starving behind it. The
+   *  transport-classed instead of the queue starving behind it (and a
+   *  recovered host pulls it forward with every other waiting row). The
    *  late-settling deliver's outcome is swallowed: the row already moved on. */
   private async deliverBounded(item: OutboxItem): Promise<void> {
     const d = this.deliver(item)
@@ -167,7 +168,7 @@ export abstract class IngressOps extends MarketBase {
       await Promise.race([
         d,
         new Promise<never>((_res, rej) => {
-          t = setTimeout(() => rej(new Error(`deliver bound ${this.o.deliverBoundMs}ms exceeded`)), this.o.deliverBoundMs)
+          t = setTimeout(() => rej(new Error(`deliver timed out (bound ${this.o.deliverBoundMs}ms)`)), this.o.deliverBoundMs)
         })
       ])
     } finally {

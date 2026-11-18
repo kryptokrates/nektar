@@ -51,8 +51,14 @@ let dseq = 0
 // fresh domain per sub-run: stale ls_nektar records on shared testnet hosts
 // must never win collection over this run's live offers
 let DOMAIN = 'libfoo'
-const HOST_A = 'http://127.0.0.1:18291'
-const HOST_B = 'http://127.0.0.1:18292'
+// the compose publishes 18291/18292 by default; a stack started with a
+// port-override map (or a stale process squatting the defaults) answers on
+// different ports — NEKTAR_TN_HOST_A/B override
+const HOST_A = process.env.NEKTAR_TN_HOST_A ?? 'http://127.0.0.1:18291'
+const HOST_B = process.env.NEKTAR_TN_HOST_B ?? 'http://127.0.0.1:18292'
+// the suite exercises the paid-disclosure deal path end-to-end — without the
+// flag every sale#* op throws and offers never leave the seller
+process.env.NEKTAR_PAID_DISCLOSURE ??= '1'
 const ARC = 'https://arcade-v2-testnet-us-1.bsvblockchain.tech'
 const INDEX = 'https://test.bananablocks.com/api/v1'
 const COLLECT_MS = 15_000 // cold-seller margin measured live: want→offer ≈ 8-9s
@@ -218,7 +224,18 @@ const mkagent = async (
     // the suite hands it the same hash the key lock is filed under. The
     // spendCheck (production wires it at runtime.ts) lets take() burn phantom
     // change entries — broadcast churn the chain already consumed elsewhere
-    funds: fundsOf(reserve, { pkhHex, spendCheck: async (txid, vout) => (await utxoSpendStatus(mc, tracker, txid, vout)) === 'spent' })
+    funds: fundsOf(reserve, {
+      pkhHex,
+      spendCheck: async (txid, vout) => (await utxoSpendStatus(mc, tracker, txid, vout)) === 'spent',
+      // take() attaches the funding parent's witnessed BUMP — without it the
+      // host's SPV verify walks to parent-of-parent and refuses every submit
+      proofOf: async (tx) => {
+        const txid = tx.id('hex')
+        const r = await merklePathMainnet(mc, txid)
+        if (r === undefined || r === null) return
+        if (await tracker.isValidRootForHeight(r.merklePath.computeRoot(txid), r.merklePath.blockHeight)) tx.merklePath = r.merklePath
+      }
+    })
   })
   // live-runtime parity: pull-based proof + tx lookups so mined txs get their
   // BUMP attached (tree provenance, carrier admission, covenant refund gates)

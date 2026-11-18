@@ -180,10 +180,12 @@ test('ensureTrees: stuck mint — keep while healing, drop on definitive verdict
   assert.deepEqual(rejected, [broadcasted[0].id('hex')])
   assert.equal(r.minted.length, 1, 'mint gate re-opens the same pass')
   assert.equal((await ledger.unproven()).length, 1, 'the replacement mint is now the unproven row')
-  // a chain rejection never reaches onStuck — dropped outright, re-minted
+  // a REJECTED status word routes through onStuck — a pushed hint escalates
+  // to the heal path, never to an outright drop; the healer's own 'drop'
+  // verdict still reaps the row
   status = 'rejected'
   await ensureTrees(p)
-  assert.equal(stuckCalls, 2)
+  assert.equal(stuckCalls, 3)
   assert.deepEqual(rejected, [broadcasted[0].id('hex'), broadcasted[1].id('hex')])
   assert.equal((await ledger.unproven()).length, 1)
 })
@@ -349,9 +351,10 @@ test('ensureTrees: unproven provision tree does not gate the mint, and gets prov
   assert.deepEqual((await ledger.unproven()).map((u) => u.txid).sort(), [...r1.minted].sort(), 'only the freshly minted tree remains unproven')
 })
 
-// G3: a rejected provision tx is dropped like any unproven row — without
-// onReject, since its inputs are not ours to tombstone
-test('ensureTrees: a rejected provision tree is reaped without onReject', async () => {
+// G3: a pushed REJECTED word can never reap a row — a provision tree held on
+// the hint waits for the first-party verdict (the 'dead' sibling test below
+// covers that reap)
+test('ensureTrees: a rejected provision tree waits for the verdict — a hint never reaps', async () => {
   const k = PrivateKey.fromRandom()
   const ledger = new MemoryTreeLedger()
   const marketLock = await fundingLock(new ProtoWallet(k), ORIGINATOR, DERIVATION, FUNDING_TAG)
@@ -375,8 +378,8 @@ test('ensureTrees: a rejected provision tree is reaped without onReject', async 
       rejected++
     }
   })
-  assert.equal(rejected, 0, 'provision rows are reaped without tombstoning foreign inputs')
-  assert.equal(await led.adopt!(prov, [{ vout: 0, kind: 'market' }]), 1, 'the dropped provision row is gone — re-adopt registers it')
+  assert.equal(rejected, 0, 'no tombstone either way — the inputs are foreign')
+  assert.equal(await led.adopt!(prov, [{ vout: 0, kind: 'market' }]), 0, 'the row stays registered on a hint — re-adopt dedupes to nothing')
 })
 
 // F5 regression (memory tier): the tree upkeep used to ask a status word that

@@ -16,18 +16,13 @@ import assert from 'node:assert/strict'
 import { mkdirSync, copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import knex from 'knex'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { PrivateKey, Transaction } from '@bsv/sdk'
+import { PrivateKey } from '@bsv/sdk'
 import {
-  ChaintracksTracker,
-  WitnessedTracker,
-  IndexTracker,
   indexFor,
-  utxoSpendStatus,
-  BsvBroadcaster,
-  merklePathMainnet,
+  livePort,
+  reconcileLiveReserve,
   ReserveFunder,
   fundsOf,
   testTier,
@@ -85,80 +80,17 @@ interface A {
   dir: string
 }
 
-/** live-UTXO reconcile: entries the file still shows free but the network
- *  already spent must be marked before any funding call can take them. Only
- *  runs when the index answers — a failed probe must not zero the reserve.
- *  Absence from the unspent list is NOT proof of spend: an entry is marked
- *  only when `utxoSpendStatus` proves it — the index's named spender served
- *  its own bytes, and they name this outpoint as an input (with a witnessed-
- *  header-checked BUMP when the spender is mined). Unproven = still free. */
-const reconcileReserve = async (fundKey: PrivateKey, reserve: ReserveFunder, mc: MainnetConfig): Promise<void> => {
-  const addr = fundKey.toAddress([0x6f]) // testnet pubkey-hash prefix
-  const index = indexFor({ url: mc.indexerUrl ?? '', apiKey: mc.indexerApiKey })
-  const live = await index.utxos(addr).catch(() => undefined)
-  if (live === undefined) return
-  const liveSet = new Set(live.map((u) => `${u.txid}:${u.vout}`))
-  const entries = (reserve as unknown as { entries: Array<{ txid: string; vout: number }> }).entries ?? []
-  const known = new Set(entries.map((e) => `${e.txid}:${e.vout}`))
-  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${mc.broadcasterUrl}/chaintracks/v2`), new IndexTracker(mc))
-  // heal stale spent-marks: the index positively lists the outpoint as live —
-  // a mark left by a stale/absent listing (or an aborted run) is unprovable
-  // and must not starve the reserve silently
-  for (const e of entries) if (liveSet.has(`${e.txid}:${e.vout}`) && reserve.isSpent(e.txid, e.vout)) reserve.unmark(e.txid, e.vout)
-  for (const u of [...reserve.utxos]) {
-    const txid = u.tx.id('hex')
-    if (liveSet.has(`${txid}:${u.vout}`)) continue
-    if ((await utxoSpendStatus(mc, tracker, txid, u.vout)) === 'spent') {
-      reserve.markSpent(txid, u.vout)
-      continue
-    }
-    // dead drafts — change outputs of own broadcasts that never landed (the
-    // index has never served the parent): the outpoint does not exist on
-    // chain, so every take on it is a guaranteed broadcast failure. The mark
-    // is offer bookkeeping, not a chain claim — the heal pass lifts it if
-    // the parent ever becomes servable.
-    if ((await index.txHex(txid).catch(() => undefined)) === undefined) reserve.markSpent(txid, u.vout)
-  }
-  // adopt live UTXOs the file doesn't know (minted-tree change, settlement
-  // income from earlier runs) — fetch each parent tx hex and addOwned it
-  for (const u of live) {
-    const op = `${u.txid}:${u.vout}`
-    if (known.has(op)) continue
-    const hex = await index.txHex(u.txid).catch(() => undefined)
-    if (hex === undefined) continue
-    try {
-      reserve.addOwned(Transaction.fromHex(hex), u.vout)
-    } catch {
-      /* skip unparseable */
-    }
-  }
-}
-
-/** all deal-path lanes hold free slots on a proven funding tree in
- *  lanes.sqlite — counted, not just present: a run that opens with one free
- *  bbox slot burns it on the first carrier, then every disclosure rides a
- *  block wait inside the deal's own deadline. Eight free slots covers a
- *  test's carrier traffic with margin; drier stock tops up in warmup where
- *  the block wait belongs. `log` warms lazily — not on the deal path. */
+/** all deal-path lanes hold free slots on a proven funding tree — counted,
+ *  not just present: a run that opens with one free bbox slot burns it on
+ *  the first carrier, then every disclosure rides a block wait inside the
+ *  deal's own deadline. Eight free slots covers a test's carrier traffic
+ *  with margin; drier stock tops up in warmup where the block wait belongs.
+ *  `log` warms lazily — not on the deal path. The laneStock accessor is the
+ *  ledger's own accounting — the suite asks the runtime, never the tables. */
 const TREE_READY_FLOOR = 8
-const treesReady = async (dataDir: string): Promise<boolean> => {
-  const f = join(dataDir, 'lanes.sqlite')
-  if (!existsSync(f)) return false
-  const kx = knex({ client: 'sqlite3', connection: { filename: f }, useNullAsDefault: true })
-  try {
-    const kinds = (await kx('bstack_trees as t')
-      .join('bstack_tree_outputs as o', 'o.txid', 't.txid')
-      .where('t.proven', 1)
-      .groupBy('o.kind')
-      .select('o.kind')
-      .count('o.key as c')) as Array<{ kind: string; c: number }>
-    const have = new Map(kinds.map((r) => [r.kind, Number(r.c)]))
-    return ['market', 'bbox', 'finger'].every((k) => (have.get(k) ?? 0) >= TREE_READY_FLOOR)
-  } catch {
-    return false
-  } finally {
-    await kx.destroy()
-  }
+const treesReady = async (rt: Automation): Promise<boolean> => {
+  const s = await rt.laneStock()
+  return ['market', 'bbox', 'finger'].every((k) => (s[k]?.proven ?? 0) >= TREE_READY_FLOOR)
 }
 
 /** cycle agents until every deal-path funding tree is proven — the one real
@@ -168,7 +100,7 @@ const warmup = async (agents: A[], logs: string[], ms = 1_500_000): Promise<void
   const t0 = Date.now()
   while (Date.now() - t0 < ms) {
     const pending = [] as A[]
-    for (const a of agents) if (!(await treesReady(a.dir))) pending.push(a)
+    for (const a of agents) if (!(await treesReady(a.rt))) pending.push(a)
     if (pending.length === 0) return
     await drive(agents.map((a) => a.rt))
     await sleep(15_000) // give the mints time to reach a block
@@ -206,19 +138,30 @@ const mkagent = async (
   const src = join(STATE, wifName, 'reserve.json')
   if (!existsSync(reserveFile) && existsSync(src)) copyFileSync(src, reserveFile)
   const reserve = new ReserveFunder(fundKey, reserveFile)
+  const addr = fundKey.toAddress([0x6f]) // testnet pubkey-hash prefix
+  // the live port — the same witnessed-tracker + SpendGuard-wrapped
+  // broadcaster + proof/tx/spend lookups the production runtime composes
+  // (port.ts); the suite adapts it, it does not rebuild it
+  const port = await livePort(mc, 'testnet', {
+    dataDir,
+    log: (l) => logs.push(`${name}:${l}`),
+    // SpendGuard's spend metric — the reserve prices its own funding inputs;
+    // covenant/foreign inputs return undefined and count fee-only
+    valueOf: (txid, vout) => reserve.utxos.find((u) => u.tx.id('hex') === txid && u.vout === vout)?.satoshis
+  })
+  const spendStatus = port.spendStatus ?? (async () => 'unknown' as const)
   // reconcile against chain truth: entries the file still shows free but the
   // network already spent (a prior run's tree mint, a killed agent's last
   // broadcast) must never be handed out — that is exactly how the
   // UTXO_SPENT double-mint wedge happened
-  await reconcileReserve(fundKey, reserve, mc)
-  const tracker = new WitnessedTracker(new ChaintracksTracker(mc, `${ARC}/chaintracks/v2`), new IndexTracker(mc))
-  const bcast = new BsvBroadcaster(mc)
+  await reconcileLiveReserve(reserve, addr, mc, spendStatus)
+  const index = indexFor({ url: mc.indexerUrl ?? '', apiKey: mc.indexerApiKey })
   const chain = {
-    broadcast: (tx: Transaction) => bcast.broadcast(tx),
-    currentHeight: () => tracker.currentHeight(),
-    isValidRootForHeight: (r: string, h: number) => tracker.isValidRootForHeight(r, h),
-    headerAtHeight: (h: number) => tracker.headerAtHeight(h),
-    tipHeight: () => tracker.currentHeight()
+    broadcast: port.broadcast,
+    currentHeight: () => port.height(),
+    isValidRootForHeight: (r: string, h: number) => port.tracker.isValidRootForHeight(r, h),
+    headerAtHeight: (h: number) => port.tracker.headerAtHeight(h),
+    tipHeight: () => port.height()
   } as ChainTracker & Broadcaster
   // fundKey IS the WIF — funding inputs pay the WIF's P2PKH and must be
   // signed by it (anchor/provider path). Identity = WIF pub, same as live.
@@ -226,46 +169,35 @@ const mkagent = async (
     network: 'testnet',
     modelId: 'test-model-1',
     feeRateSatPerKb: 1,
-    statusHint: (txid: string) => bcast.statusHint(txid),
+    statusHint: port.statusHint,
     batchPolicy: { maxLeaves: 1 },
     // fundsOf needs the owned lock — ReserveFunder keeps pkhHex private, so
     // the suite hands it the same hash the key lock is filed under. The
-    // spendCheck (production wires it at runtime.ts) lets take() burn phantom
-    // change entries — broadcast churn the chain already consumed elsewhere
+    // oracles are the port's own lookups (production wires the same at
+    // runtime.ts): spendCheck lets take() burn phantom change entries —
+    // broadcast churn the chain already consumed elsewhere
     funds: fundsOf(reserve, {
       pkhHex,
-      spendCheck: async (txid, vout) => (await utxoSpendStatus(mc, tracker, txid, vout)) === 'spent',
+      spendCheck: async (txid, vout) => (await spendStatus(txid, vout)) === 'spent',
       // starve sweep's revive oracle — the index's address listing positively
-      // names live outpoints (same oracle reconcileReserve trusts at boot);
-      // an unanswered call revives nothing, never a chain claim
+      // names live outpoints (the same oracle reconcileLiveReserve trusts at
+      // boot); an unanswered call revives nothing, never a chain claim
       liveSet: async () => {
-        const live = await indexFor({ url: mc.indexerUrl ?? '', apiKey: mc.indexerApiKey })
-          .utxos(fundKey.toAddress([0x6f]))
-          .catch(() => undefined)
+        const live = await index.utxos(addr).catch(() => undefined)
         return live === undefined ? undefined : new Set(live.map((u) => `${u.txid}:${u.vout}`))
       },
       // take() attaches the funding parent's witnessed BUMP — without it the
       // host's SPV verify walks to parent-of-parent and refuses every submit
       proofOf: async (tx) => {
-        const txid = tx.id('hex')
-        const r = await merklePathMainnet(mc, txid)
-        if (r === undefined || r === null) return
-        if (await tracker.isValidRootForHeight(r.merklePath.computeRoot(txid), r.merklePath.blockHeight)) tx.merklePath = r.merklePath
+        const mp = await port.proofLookup?.(tx.id('hex'))
+        if (mp !== undefined) tx.merklePath = mp
       }
     })
   })
   // live-runtime parity: pull-based proof + tx lookups so mined txs get their
   // BUMP attached (tree provenance, carrier admission, covenant refund gates)
-  mem.proofLookup = async (txid: string) => {
-    const r = await merklePathMainnet(mc, txid)
-    if (!r) return undefined
-    const root = r.merklePath.computeRoot(txid)
-    return (await tracker.isValidRootForHeight(root, r.merklePath.blockHeight)) ? r.merklePath : undefined
-  }
-  mem.txLookup = async (txid: string) => {
-    const r = await fetch(`${INDEX}/tx/${txid}/hex`, { signal: AbortSignal.timeout(10_000) })
-    return r.ok ? Transaction.fromHex((await r.text()).trim()) : undefined
-  }
+  if (port.proofLookup !== undefined) mem.proofLookup = port.proofLookup
+  if (port.txLookup !== undefined) mem.txLookup = port.txLookup
   const pub = mem.operatorKey().toPublicKey().toString()
   const rt = await openAutomation(mem, {
     network: 'testnet',

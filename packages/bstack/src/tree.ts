@@ -95,8 +95,11 @@ export interface TreeLedger {
   remaining(kind?: string): Promise<number>
   /** why a lane came up empty: free leaves on proven trees, free leaves on
    *  anchored (zero-conf-admissible) unproven trees, and unproven trees of
-   *  the kind still awaiting a block */
-  stock(kind?: string): Promise<{ proven: number; anchored: number; unprovenTrees: number }>
+   *  the kind still awaiting a block. `taken` is the consumed count —
+   *  minted outputs of the kind minus free outputs remaining (provision
+   *  trees record under 'provision' kind, so their slots are neither
+   *  minted-of-kind nor free-of-kind here). */
+  stock(kind?: string): Promise<{ proven: number; anchored: number; unprovenTrees: number; taken: number }>
   /** register a foreign provision tx: the tree row once (kind 'provision'),
    *  and one free slot per entry carrying its own kind at its real vout.
    *  Idempotent — re-adopting the same tx adds nothing and returns 0. */
@@ -133,19 +136,21 @@ export const matchProvision = (tx: Transaction, lanes: Array<{ kind: string; loc
 }
 
 export class MemoryTreeLedger implements TreeLedger {
-  private trees = new Map<string, { tree: Transaction; proven: boolean; kind: string }>()
+  private trees = new Map<string, { tree: Transaction; proven: boolean; kind: string; n: number }>()
   // free slot key -> lane kind; adopt() writes per-slot kinds, add() the
   // tree's single kind — provisioning makes trees mixed-kind
   private free = new Map<string, string>()
   async add(tree: Transaction, n: number, kind = 'market'): Promise<void> {
     const txid = tree.id('hex')
-    this.trees.set(txid, { tree, proven: false, kind })
+    this.trees.set(txid, { tree, proven: false, kind, n })
     for (let i = 0; i < n; i++) this.free.set(`${txid}:${i}`, kind)
   }
   async adopt(tx: Transaction, slots: Array<{ vout: number; kind: string }>): Promise<number> {
     const txid = tx.id('hex')
     if (this.trees.has(txid)) return 0
-    this.trees.set(txid, { tree: tx, proven: tx.merklePath !== undefined, kind: PROVISION_KIND })
+    // provision trees minted nothing on this ledger — n:0 keeps stock()'s
+    // `taken` (own-kind minted minus own-kind free) out of foreign stock
+    this.trees.set(txid, { tree: tx, proven: tx.merklePath !== undefined, kind: PROVISION_KIND, n: 0 })
     for (const s of slots) this.free.set(`${txid}:${s.vout}`, s.kind)
     return slots.length
   }
@@ -199,21 +204,28 @@ export class MemoryTreeLedger implements TreeLedger {
     }
     return n
   }
-  async stock(kind = 'market'): Promise<{ proven: number; anchored: number; unprovenTrees: number }> {
+  async stock(kind = 'market'): Promise<{ proven: number; anchored: number; unprovenTrees: number; taken: number }> {
     let proven = 0,
-      anchored = 0
+      anchored = 0,
+      minted = 0,
+      freeMine = 0
     const waiting = new Set<string>()
+    for (const t of this.trees.values()) if (t.kind === kind) minted += t.n
     for (const [k, slotKind] of this.free) {
       const txid = k.split(':')[0]
       const t = this.trees.get(txid)!
       if (slotKind !== kind) continue
+      if (t.kind === kind) freeMine++
       if (t.proven) proven++
       else {
         waiting.add(txid)
         if (anchoredTree(t.tree)) anchored++
       }
     }
-    return { proven, anchored, unprovenTrees: waiting.size }
+    // `taken` is own-kind consumed: slots this ledger minted minus the ones
+    // still free on its own trees — adopted provision slots are foreign
+    // stock and must neither inflate (change outputs) nor underflow it
+    return { proven, anchored, unprovenTrees: waiting.size, taken: minted - freeMine }
   }
 }
 
@@ -406,7 +418,7 @@ export class KnexTreeLedger implements TreeLedger {
     }
     return n
   }
-  async stock(kind = 'market'): Promise<{ proven: number; anchored: number; unprovenTrees: number }> {
+  async stock(kind = 'market'): Promise<{ proven: number; anchored: number; unprovenTrees: number; taken: number }> {
     await this.ensure()
     const r = await this.kx('bstack_tree_outputs as o')
       .join('bstack_trees as t', 'o.txid', 't.txid')
@@ -431,7 +443,20 @@ export class KnexTreeLedger implements TreeLedger {
       .where('o.kind', kind)
       .countDistinct('t.txid as c')
       .first()
-    return { proven: Number(r?.c ?? 0), anchored, unprovenTrees: Number(u?.c ?? 0) }
+    const [m, f] = await Promise.all([
+      this.kx('bstack_trees').sum('n as s').where('kind', kind).first(),
+      // free slots on the ledger's OWN trees of this kind — adopted provision
+      // rows carry their leaf kind but the tree kind is 'provision', so the
+      // join keeps foreign stock out of the consumed count
+      this.kx('bstack_tree_outputs as o')
+        .join('bstack_trees as t', 'o.txid', 't.txid')
+        .where('o.kind', kind)
+        .where('t.kind', kind)
+        .count('o.key as c')
+        .first()
+    ])
+    const taken = Number((m as { s: number | null } | undefined)?.s ?? 0) - Number((f as { c: number } | undefined)?.c ?? 0)
+    return { proven: Number(r?.c ?? 0), anchored, unprovenTrees: Number(u?.c ?? 0), taken }
   }
 }
 

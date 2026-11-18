@@ -45,6 +45,40 @@ test('openRuntime: injected ChainPort + funds boot the whole spine on memory', a
   }
 })
 
+test('openRuntime: liveCheck wires only where the port proves unspent', async (t) => {
+  const w = await testWorld(t, 8)
+  if (w === undefined) return
+  const cfg = (funder: typeof w.funder) => ({
+    network: 'testnet' as const,
+    dataDir: mkdtempSync(join(tmpdir(), 'nektar-port-')),
+    confirmEveryMs: 100,
+    regtest: { rpcUrl: '', rpcUser: '', rpcPass: '', propagationUrl: '', assetUrl: '', fundWif: funder.keyPair.toWif() }
+  })
+  // a port whose spendStatus can never answer 'unspent' — the live-index
+  // shape: spendCheck still wires (a verified 'spent' burns), liveCheck
+  // must not — futile retried probes inside the serialized take queue
+  // under a degraded index were the regression
+  const liveLike = { ...memoryPort(w.chain), provesUnspent: undefined }
+  const funds = fundsOf(w.funder)
+  const rt = await openRuntime(cfg(w.funder), { chain: liveLike, funds })
+  try {
+    assert.equal(funds.liveCheck, undefined, 'no unspent oracle where the port cannot prove it')
+    assert.equal(typeof funds.spendCheck, 'function', 'spend burns still wire on every spendStatus port')
+  } finally {
+    await rt.close()
+  }
+  const w2 = await testWorld(t, 8)
+  if (w2 === undefined) return
+  const funds2 = fundsOf(w2.funder)
+  const rt2 = await openRuntime(cfg(w2.funder), { chain: memoryPort(w2.chain), funds: funds2 })
+  try {
+    assert.equal(typeof funds2.liveCheck, 'function', 'a first-party utxo view wires the revive oracle')
+    assert.equal(await funds2.liveCheck!('f'.repeat(64), 0), false, 'an unknown outpoint answers unknown, never live')
+  } finally {
+    await rt2.close()
+  }
+})
+
 test('openRuntime: injected funds without a chain port refuses to assemble', async () => {
   const f = await (await import('@nektar/chain')).testFunder(1)
   await assert.rejects(openRuntime({ network: 'regtest', dataDir: mkdtempSync(join(tmpdir(), 'nektar-port-')) }, { funds: fundsOf(f) }), /injected chain port/)

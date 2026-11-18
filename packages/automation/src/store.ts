@@ -501,6 +501,14 @@ export class AutomationStore {
     }))
   }
 
+  /** inbox rows seen for these message ids, any status — the delivery-dedup
+   *  diagnostic: a message ingested twice shows up as two rows */
+  async inboxCount(messageIds: string[]): Promise<number> {
+    if (messageIds.length === 0) return 0
+    const r = await this.kx(T.inbox).whereIn('message_id', messageIds).count('* as n').first()
+    return Number((r as { n: number } | undefined)?.n ?? 0)
+  }
+
   async completeInbox(source: string, messageId: string): Promise<void> {
     await this.kx(T.inbox).where({ source, message_id: messageId, status: 'pending' }).update({ status: 'done' })
   }

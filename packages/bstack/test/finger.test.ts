@@ -491,6 +491,51 @@ test('finger: knex state dedupes an unchanged republish', async () => {
   }
 })
 
+// a walk-back to an older head must clear the dead head's body fingerprint
+// too — the carrier/token rows it deduped to are deleted, so republishing
+// that body hitting the dedup gate would silently never re-air
+test('finger: republishing the dead head’s body after walk-back mints fresh', async () => {
+  // walk-back probes re-broadcast JOURNALED tokens through the same
+  // broadcast seam — `dead` refuses a seen txid (the killed head), `live`
+  // gates only fresh mints
+  const seen = new Set<string>()
+  const dead = new Set<string>()
+  let refuseNew = false
+  const s = await rig({
+    noproof: true,
+    provenFunding: true,
+    refuseBroadcast: (tx) => {
+      const id = tx.id('hex')
+      if (seen.has(id)) return dead.has(id) ? 'rejected' : undefined
+      seen.add(id)
+      return refuseNew ? 'rejected' : undefined
+    }
+  })
+  try {
+    await s.publish(body1())
+    const b2 = body1(['https://three.example.com'])
+    const r2 = await s.publish(b2)
+    assert.equal(r2.seq, 2)
+    // kill the seq-2 head and refuse every new mint: the seq-3 publish fails,
+    // the walk-back finds seq-1 still airs, deletes seq-2/3 rows and
+    // re-anchors the state at seq 1
+    dead.add(r2.tokenTxid!)
+    refuseNew = true
+    await assert.rejects(s.publish(body1(['https://four.example.com'])), /refused/i)
+    assert.equal((await s.state.get())?.seq, 1, 'the state re-anchored at the airing head')
+    // republish the dead head's body — the fingerprint must not dedupe it
+    // away (its carrier rows are gone): a fresh token + carrier mint
+    refuseNew = false
+    const r3 = await s.publish(b2)
+    assert.equal(r3.changed, true, 'the deleted seq’s body must mint fresh — its rows are gone')
+    assert.equal(r3.seq, 2)
+    assert.notEqual(r3.tokenTxid, r2.tokenTxid, 'a fresh token, not the deleted corpse')
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
+})
+
 // a host down at publish time is named in `missed` on BOTH submit paths
 // (fresh mint and journal-hit resubmit), and the journaled row repairs it —
 // the contract the packs publish callback's queueRepairs relies on

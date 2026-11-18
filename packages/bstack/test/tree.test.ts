@@ -94,7 +94,7 @@ test('ledger.stock: reports proven leaves, anchored leaves and waiting trees', a
       await l.markProven(mined.id('hex'), mined.merklePath!)
       await l.add(anchored, 3)
       await l.add(unanchored, 5)
-      assert.deepEqual(await stockOf(l), { proven: 2, anchored: 3, unprovenTrees: 2 })
+      assert.deepEqual(await stockOf(l), { proven: 2, anchored: 3, unprovenTrees: 2, taken: 0 }, 'nothing consumed — the change outputs must not count as taken')
     }
   } finally {
     await kx.destroy()
@@ -399,7 +399,7 @@ test('ledger.adopt: lane-locked outputs of a provision tx become slots', async (
       assert.ok(ledger.adopt !== undefined, 'ledger must implement adopt')
       assert.equal(await ledger.adopt(tx, matched), 4)
       assert.equal(await ledger.adopt(tx, matched), 0, 're-adopt is idempotent')
-      assert.deepEqual(await stockOf(l, 'bbox'), { proven: 0, anchored: 0, unprovenTrees: 1 }, 'provision tree counts toward bbox stock')
+      assert.deepEqual(await stockOf(l, 'bbox'), { proven: 0, anchored: 0, unprovenTrees: 1, taken: 0 }, 'provision tree counts toward bbox stock; its foreign slots stay out of taken')
       assert.equal(await l.take('bbox', bboxLock.toHex()), undefined, 'unproven provision stock must not serve bbox')
       assert.equal(await l.take('market'), undefined, 'unanchored provision stock must not serve market zero-conf either')
       prove(tx)
@@ -437,10 +437,10 @@ test('ledger.adopt: drop frees provision slots of every kind and re-adopt regist
     for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(kx)]) {
       const ledger = l as unknown as { adopt?: (t: Transaction, s: typeof matched) => Promise<number> }
       await ledger.adopt!(tx, matched)
-      assert.deepEqual(await stockOf(l, 'bbox'), { proven: 0, anchored: 0, unprovenTrees: 1 })
+      assert.deepEqual(await stockOf(l, 'bbox'), { proven: 0, anchored: 0, unprovenTrees: 1, taken: 0 })
       await l.drop(tx.id('hex'))
-      assert.deepEqual(await stockOf(l, 'bbox'), { proven: 0, anchored: 0, unprovenTrees: 0 }, 'drop removes bbox slot rows')
-      assert.deepEqual(await stockOf(l, 'market'), { proven: 0, anchored: 0, unprovenTrees: 0 }, 'drop removes market slot rows')
+      assert.deepEqual(await stockOf(l, 'bbox'), { proven: 0, anchored: 0, unprovenTrees: 0, taken: 0 }, 'drop removes bbox slot rows')
+      assert.deepEqual(await stockOf(l, 'market'), { proven: 0, anchored: 0, unprovenTrees: 0, taken: 0 }, 'drop removes market slot rows')
       assert.equal(await ledger.adopt!(tx, matched), 2, 're-adopt after a drop registers the same tx again')
       await l.drop(tx.id('hex'))
     }

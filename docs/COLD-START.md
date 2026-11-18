@@ -1,208 +1,197 @@
-# nektar cold-start plan — network #1
+# nektar cold-start plan — the hub and the dock
 
-Applying the `.devin/skills/cold-start` framework to nektar's own
-marketplace. Goal: one atomic network that delivers the magic moment
-reliably, then a repeatable kit for network #2. Everything below uses only
-surfaces that already exist (`want`/`sell`/`describeShard`, pack sharing,
-`/.well-known/nektar`, deals journal) — this is a seeding + measurement +
-defaults plan, not a feature build.
+Applying the `.devin/skills/cold-start` framework to nektar's growth.
+Strategy in one line: **nektar.run is the permanent live node of the
+network; every agent application docks to it through one universal
+adapter; each platform's cohort is an atomic network, and the adapter is
+the launch kit that makes docking the next platform cheap.**
 
-## The first three people
+## Why the hub-first shape
 
-Networks are built one person at a time, so that's how this starts.
+The naive cold start for nektar is peer-to-peer (hand someone a pack
+URL) — it works but it makes every new user depend on a volunteer's
+uptime. nektar.run removes that: a Hetzner box that is _always_ person
+#1 — seeded seller, market host pair, pack origin, identity anchor,
+verify endpoint. No user ever lands in an empty room, because the room
+is permanently occupied by us. That is honest flintstoning at
+infrastructure level: real supply, real hosts, real anchor — not fake
+activity.
 
-**Person #1 (the founder/operator).** Runs an instance for its
-single-player value: `remember`/`recall` keeps the agent's work between
-sessions, receipts prove it — zero network needed, the wedge does its
-job. Two calls turn that into reachable supply: `describeShard` (the
-manifest lands on `/.well-known/nektar`) plus `exportShard`/`sell`. The
-accumulated knowledge is now discoverable at a URL. Cost of becoming
-node #1: two tool calls and a reachable instance.
+What the box already serves (`deploy/hetzner/`):
 
-**Person #2 (one person you hand a link).** The entire invite is a URL.
-Person #2 runs the image, funds a testnet key, calls
-`importShard {from: <person #1's URL>}`. Every record re-verifies against
-the chain — a hostile pack yields unverifiable entries, never trusted
-records. Their magic moment: _my agent now knows what yours learned —
-and I can prove it came from you._ That handshake already runs today:
-`tools/demo-two-ais.mjs` is person #1 → person #2 on regtest. Their own
-work then accumulates → `describeShard` → they're supply for person #3.
-Consumer→supplier conversion is one tool call.
+- `/.well-known/nektar` + `GET /v1/pack/{shard}` — public shard packs,
+  trustless (`importShard` re-verifies; a hostile pack yields
+  unverifiable entries, never trusted records)
+- `https://nektar.run/hosts/{a,b}` — the public bstack host pair: market
+  wants/offers, bbox envelopes, journals, bfinger — the Loop-B
+  rendezvous _by default_, not by configuration
+- `/v1/lane` push, `/mcp` Streamable HTTP + `/v1/*` REST
+- The hub's own automation agent (`NEKTAR_UNATTENDED=1`, SpendGuard
+  caps) — a permanent armed seller/buyer under an approved policy
 
-**Person #3 (the first real density).** Two reachable knowledge sources
-now exist; person #3 imports from either, and wants can fill from two
-sellers. Each new person's _distinct_ work adds coverage the others
-don't have — that's density forming. At this scale you count health by
-hand: did #2's import land? did #3's first `want` fill or hit zero?
+## The universal adapter
 
-Two loops emerge, in order:
+One spec, N platform mappings. The invariant part — the same for every
+application:
 
-- **Loop A — knowledge transfer (the density loop).** link → import →
-  own work → new link. Needs only a URL; works today with no shared
-  infrastructure. This is the cold-start engine.
-- **Loop B — the market.** `want` → offer → escrow → disclosure needs
-  shared `NEKTAR_MARKET_HOSTS`, armed sellers, and funding. It emerges
-  _on top of_ Loop A once two instances share a host — it cannot be the
-  cold-start mechanism, because it's the thing that needs density to
-  exist.
+```
+seed:    https://nektar.run/.well-known/nektar → packUrls   (importShard {packUrl})
+hosts:   https://nektar.run/hosts/a, /hosts/b               (NEKTAR_MARKET_HOSTS)
+verify:  https://nektar.run/v1/verify                        (receipt checks)
+tools:   remember · recall · groundedAnswer · verifyReceipt · want · sell · deals
+loop:    recall-first → groundedAnswer → receipt footer (the CLAUDE.md snippet)
+```
 
-The only missing piece for Loop A to be default rather than manual:
-package the invite as a join step — one base URL → fetch
-`/.well-known/nektar` → import offerable shards (+ adopt the same market
-hosts when Loop B turns on). That's docs/onboarding work, not protocol.
+The per-platform adapter is only the mapping of that spec onto the
+platform's native mechanism:
 
-## The atomic network
+| Platform                      | Transport                                    | The adapter is…                                                                          | Status                |
+| ----------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------- | --------------------- |
+| Claude Code                   | MCP stdio/http                               | `claude mcp add` + settings.json hooks + CLAUDE.md snippet (`integrations/claude-code/`) | exists — the template |
+| Codex                         | MCP stdio                                    | `config.toml` snippet + verify-notify hook (`integrations/codex/`)                       | exists                |
+| Docker MCP clients (16)       | MCP via `docker mcp gateway`                 | `pnpm mcp:install <client>` profiles (`docker-mcp/`)                                     | exists                |
+| OpenClaw-style gateways       | MCP http or REST `/v1/tools/{name}`          | tool-router entry pointing at a platform-owned instance                                  | to write              |
+| Hermes / other agent runtimes | MCP http or REST `/v1/tools/{name}`          | platform-level tool registration + join defaults                                         | to write              |
+| Function-calling apps         | REST `/v1/tools/{name}` + `/v1/openapi.json` | a tool manifest — no MCP needed at all                                                   | transport ready       |
 
-**Who:** agents and operators who run BSV/Teranode or nektar
-infrastructure — the people (and their agents) who hit the same ops
-failures this repo already documents.
+**Who runs the memory:** each dock keeps its own instance (custody stays
+where it belongs — a platform user's agent has its own wallet/memory; a
+hosted runtime like Hermes runs one platform-owned instance). The hub is
+shared supply + shared rendezvous + shared anchor, never shared memory —
+so no multi-tenancy work is on the critical path. The one flagged gap:
+remote connectors (claude.ai, ChatGPT, hosted apps) need OAuth 2.1 on
+`/mcp` — transport is ready, the auth layer isn't (`docs/INTEGRATION.md`
+§4). Defer until a concrete platform demands it.
 
-**Where:** the public **testnet** lane. Loop A needs no shared
-infrastructure at all (a URL suffices); Loop B adds a small set of
-shared market hosts once it activates. One lane, one domain cluster —
-density before breadth.
+## The atomic network — one platform cohort
 
-**How many:** Loop A tips at 2 people — the import handshake IS the
-network working. Loop B's bar is ~3-5 armed seller instances covering
-the domain, such that a `want` for a covered question reliably returns
-a verified offer. Below that, `want`s hit zero and the market repels —
-which is why the market is the second loop, not the first.
+**Network #1 = the Claude Code cohort.** Not because it's the biggest,
+but because it satisfies the selection scorecard best:
 
-**Why this niche:** the content already exists and decays slowly —
-`AGENTS.md`'s "Regtest stack gotchas," `docs/AUTOMATION.md`'s mainnet
-field report, the threat-model boundaries are literally curated,
-hard-won operational memory. Selling your own runbook is the dogfood
-network: seeding is cheap because the hard side is us.
+- _Density achievable_: the adapter already exists and `pnpm
+setup:claude` installs it in one command
+- _Founder access_: its users are operators who run agents daily — they
+  ARE us and the people around us
+- _Burning problem_: agents re-solve the same ops failures repeatedly —
+  the seeded corpus answers exactly that
+- _Adjacency_: Codex is the same adapter shape; Hermes/OpenClaw cohorts
+  are next-door networks once the pattern is proven
 
-Runner-up niche for network #2: library breaking-change/migration fixes
-(the README's Alice/Bob story — `libfoo` migration memory).
+Minimum viable cohort: ~3-5 docked agents beyond the hub, each having
+imported the seed packs, such that a `want` in the seeded domains
+reliably fills. Everything below it is person #1 → #2 → #3 on one
+platform.
 
 ## The magic moment
 
-> When a buyer's agent posts `want {domains, question, maxSats}`, a
-> disclosure-verified deal completes and the answer's receipt verifies —
-> inside 5 minutes.
+Two of them, one per tier:
 
-The **zero state** is the other half of the definition: a `recall` or
-`want` that returns no offer / no purchasable knowledge in a covered
-domain. Zero rate is a first-class health metric, same weight as fill
-rate.
+> **Read tier:** an agent on platform X calls `groundedAnswer` (or
+> imports a pack and `recall`s) and gets an answer whose claims cite
+> verified fragments with a receipt that checks at
+> `nektar.run/v1/verify` — sourced from knowledge it never had.
 
-## Seeding plan (honest flintstoning)
+> **Market tier:** that agent's `want {domains, question, maxSats}`
+> completes a disclosure-verified deal inside ~5 minutes.
 
-Loop A seeds itself as people join; this is the deliberate supply that
-makes person #2's first session non-empty before their own work
-accumulates.
+Zero state = the read/want returning nothing in a covered domain, or a
+dock that never reaches a first grounded answer. Track it per cohort.
 
-Seed the supply side with real curated memory — never fabricated offers
-or synthetic seller activity (repo honesty rule: proofs establish
-recorded + unaltered + derivable, and fake supply would be detectable
-anyway since packs re-verify on import).
+## Seeding the hub's supply (the hard side, honestly)
 
-1. **Cut the ops corpus into public shards.** Suggested set:
-   - `ops/regtest-gotchas` — rpc_max_clients, txmeta retention, docker
-     proxy staleness, subsidy collapse (AGENTS.md)
-   - `ops/automation-field-report` — the `[done]`/`[ ]` mainnet debt list
-   - `ops/threat-model` — honesty boundaries, what proofs do/don't mean
-   - `ops/market-mechanics` — funding trees, lanes, escrow lifecycle
-2. **Publish them for sale as packs.** `describeShard` on each with
-   `domains: ['nektar-ops','teranode','regtest','bsv-infra']` and
-   `offers: [{kind:'pack'},{kind:'record',priceSats:<symbolic>}]` —
-   packs carry the bootstrap supply (free, instant density); priced
-   record offers exercise the real deal path.
-3. **Keep 2-3 seller instances armed** via `automation enableSeller`
-   under a permissive policy so wants get answered unattended. These
-   instances ARE the flintstoned supply — their manual share declines as
-   organic sellers join; track it and target under ~20% of completed
-   deals before calling the niche tipped.
-4. **Seed every new instance.** Ship a default seed step in onboarding:
-   `importShard {from: <seed operator base URL>, shard}` for the pack
-   set — one call, zero trust required (hostile packs yield unverifiable
-   entries, never trusted records). Fresh instances then arrive with the
-   domain already populated on the read side and a live catalog on the
-   buy side.
+The hub must never be a relay with nothing on it. Cut the repo's own
+ops corpus into public shards and put them up for sale:
 
-## Hard-side plan
+- `ops/regtest-gotchas`, `ops/automation-field-report`,
+  `ops/threat-model`, `ops/market-mechanics` — `describeShard` with
+  `domains: ['nektar-ops','teranode','regtest','bsv-infra']`, offers
+  `{kind:'pack'}` (free density) + `{kind:'record', priceSats:<symbolic>}`
+  (exercises the real deal path)
+- Keep the hub agent armed (`automation enableSeller` on those shards)
+  so wants fill unattended
+- **Taper metric:** the hub's share of completed deals. Declining share
+  as organic sellers appear is the flintstoning exit — target <20%
+  before calling the network tipped.
 
-Hard side = shard sellers/operators (curation, uptime, pricing, host
-reachability). Secondary hard side = market host operators.
+The second hard side is the **platform champion** — the one person who
+lands each adapter. Motivation is utility + status, not sats: they get
+verified memory for their agents and authorship of the platform's
+integration. Build for them: the adapter spec above IS their tool —
+keep it to one file, one config block, one verification step.
 
-Motivation map today — **utility first, status second, money last**: the
-seller's agent already holds the memory (selling is ~zero marginal
-cost); anchored authorship + verified trade history is genuine
-attribution; sat prices are symbolic, so don't build the pitch on
-earnings.
+## Onboarding flow per platform
 
-Product investments to make, in order:
+```
+install adapter (one command/file) →
+  instance boots with seed defaults →
+    importShard {packUrl} × seed set → populated memory on session 1 →
+      recall-first + receipt loop live immediately →
+        wants fill against hub sellers (Loop B) →
+          agent's own work → describeShard/sell → organic supply
+```
 
-1. **Seller profile from existing primitives** — aggregate `deals` +
-   receipt/attestation records into a per-identity view: verified sales
-   count, disclosure-success rate, domains covered. Status made
-   verifiable is the retention mechanism (this is also the moat — see
-   below).
-2. **`describeShard` quality guidance** — a good manifest (specific
-   domains, honest desc, right offer kinds) is the seller's storefront;
-   document what converts, ship an example manifest in onboarding.
-3. **Seller-visible outcomes** — offers-won / rejected-reasons stats so
-   sellers can tune; `deals` already has the event trail, it needs a
-   roll-up.
-4. Money-side polish (pro tooling, payout analytics) is deferred — it's
-   network #2+ work, when volume makes the motive real.
+Session one must never be empty: the seed import and the hub's armed
+sellers guarantee it.
 
-## Onboarding / clustering
+## Instrumentation — per platform cohort
 
-Every new instance must land inside the niche, not in empty space:
+| Metric              | Definition                                                 | Source                             |
+| ------------------- | ---------------------------------------------------------- | ---------------------------------- |
+| Docked installs     | adapter runs reaching a first tool call                    | hub access log / instance bfinger  |
+| Activation          | % of docks reaching first grounded answer / pack import    | hub: pack GETs + well-known reads  |
+| Fill rate           | % of wants reaching verified deals                         | `deals` journal, hub carriers      |
+| Time-to-first-offer | want publish → first valid offer                           | `deals` event trail                |
+| Zero rate           | % of recall/want sessions in covered domains returning nil | instance-side counter (new, small) |
+| Hub supply share    | % of deals where hub identity is the seller                | `deals` journal                    |
+| Organic sellers     | non-hub identities with ≥1 completed offer                 | `deals` + bfinger records          |
 
-- **Default market hosts** for the seed lane in the image/README so
-  buyers and seeded sellers share a rendezvous by default
-  (`NEKTAR_MARKET_HOSTS` today; a curated default changes the first-run
-  experience).
-- **`/.well-known/nektar` as the discovery graph** — seeded sellers
-  advertise their offerable shards there; onboarding docs point new
-  instances at it (`NEKTAR_PACK_SHARE` stays on).
-- **setup hooks seed too** — `pnpm setup:claude`/`setup:codex` merge
-  agent instructions; add the `importShard {from}` step so the agent's
-  first session has populated memory and a visible market.
+**Live bars for a cohort:** fill >80% sustained, median time-to-offer
+<5 min, zero rate <10%, ≥3 non-hub sellers closing deals, hub supply
+share declining. Dead = 4+ weeks below fill bar — fix the domain or the
+adapter before touching another platform.
 
-## Instrumentation (the missing layer today)
+## Expansion gate and the launch kit
 
-Per shard-domain, not global — live/forming/dead:
+Platform #N+1 docks only when cohort #N holds its bars without manual
+supply. The durable output of each dock is the kit: the adapter file,
+the platform's champion notes, join defaults, what seeding cost, and
+the bars — so each next adapter is a config clone, not a new build.
+Candidate order by adjacency: Codex (same MCP shape) → OpenClaw/gateway
+platforms (MCP http / REST) → hosted runtimes (REST `/v1`, needs the
+OAuth decision) → mainnet when testnet economics prove out.
 
-| Metric              | Definition                                                         | Source                            |
-| ------------------- | ------------------------------------------------------------------ | --------------------------------- |
-| Fill rate           | % of `want`s reaching a verified deal                              | `deals` operation journal         |
-| Time-to-first-offer | want publish → first valid offer                                   | `deals` event trail               |
-| Zero rate           | % of `recall`/`want` sessions in covered domains returning nothing | recall/want counters (new, small) |
-| Active sellers      | identities with ≥1 completed or attempted offer this period        | `deals` + bfinger records         |
-| Manual share        | % of deals closed by seeded instances                              | seller identity list              |
+## Scaling on the Hetzner box
 
-Bars for "live": **fill >80% sustained, median time-to-first-offer <5
-min, zero rate <10%, ≥3 non-seeded sellers closing deals.** Dead =
-4+ weeks below fill bar with no manual rescue — merge or retire the
-domain, don't let a dead niche greet arrivals.
+The hub's load is deliberately cheap: pack GETs are memoized stateless
+reads, host lanes are untrusted relays (all verification client-side),
+`deals`/`wants` volume is bounded by cohort size. Scaling in order:
 
-## Expansion gate and launch kit
-
-Do not open niche #2 (the `libfoo` migration-fixes cluster is the
-adjacency pick) until network #1 holds its bars without manual seeding.
-The durable output of this launch is the kit: seed sequence, shard cut,
-default hosts, seed URLs, bar values, and what manual effort it actually
-took — write it down as it happens, that's the playbook for #2..#N.
+1. **Reads** — pack GETs behind the CDN-cacheable URL space; packs are
+   content-addressed, cache forever
+2. **Lanes** — more public hosts (anyone can run one; that's federation,
+   not hub scaling) — the quorum grows, the box doesn't
+3. **The agent itself** — hub automation is one agent; more seller
+   capacity = more instances, not a bigger one
+4. **Never scale by** collapsing docks into shared hub memory — custody
+   and identity are per-instance by design
 
 ## Moat
 
-Anchored provenance + verified trade history is the honest lock-in: a
-rival can copy the tools but not the corpus, the receipts, or a seller's
-settled track record. Make that history portable-verifiable (it already
-is, via `deals` + `evidence` + receipts) and surface it as the seller
-profile — that's density as moat, not feature count.
+Anchored provenance + verified trade history accumulates on the shared
+lanes — a rival copies the adapter shape but not the corpus, the
+receipts, or sellers' settled track records. The hub's identity
+reputation is the network's first asset; organic sellers' histories are
+the second.
 
 ## Anti-checklist (what kills this)
 
-- Announcing "the agent knowledge economy" broadly before the niche is
-  live — big-bang into empty rooms
-- Treating buyers and sellers as equal priorities in docs and effort
-- Seeding fake offers or activity — dishonest _and_ detectable (packs
-  re-verify)
-- Counting instances/downloads instead of fill rate and zero rate
-- Opening niche #2 because the code is ready, not because #1 holds bars
+- Docking platforms before the seed supply is live — empty market, same
+  as a big-bang launch
+- Writing adapter #2 before cohort #1 holds bars — clones a broken loop
+- Treating all platforms as one launch — Hermes users and Claude Code
+  users are different networks with different champions
+- Faking supply or activity — dishonest and detectable (packs re-verify)
+- Counting docker pulls/adapters shipped instead of fill rate, zero
+  rate, and organic sellers
+- Building multi-tenant hub memory to "scale" — breaks the custody model
+  the network exists on

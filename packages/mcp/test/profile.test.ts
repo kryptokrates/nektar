@@ -7,7 +7,6 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import knexFactory from 'knex'
 import type { AddressInfo } from 'node:net'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
@@ -63,18 +62,9 @@ const trackerFor = (chain: TestChain) => ({
   isValidRootForHeight: (r: string, h: number) => chain.isValidRootForHeight(r, h),
   currentHeight: () => chain.currentHeight()
 })
-/** used market funding slots = slots minted (sum of tree sizes `n`) − free
- *  outputs remaining in lanes.sqlite — the same accounting market-bstack uses */
-const usedMarketSlots = async (dir: string, name: string): Promise<number> => {
-  const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'lanes.sqlite') }, useNullAsDefault: true })
-  try {
-    const trees = await kx('bstack_trees').sum('n as s').where('kind', 'market').first()
-    const free = await kx('bstack_tree_outputs').count('* as c').where('kind', 'market').first()
-    return Number((trees as { s: number | null }).s ?? 0) - Number((free as { c: number }).c)
-  } finally {
-    await kx.destroy()
-  }
-}
+/** used market funding slots = minted outputs − free remaining — the
+ *  ledger's own `taken` counter via laneStock, not a table read */
+const usedMarketSlots = async (rt: Automation): Promise<number> => (await rt.laneStock()).market?.taken ?? 0
 
 test('profile: agent lists exactly the ten agent tools; operator lists all', () => {
   const prev = process.env.NEKTAR_TOOL_PROFILE
@@ -204,7 +194,7 @@ test('profile: sell → want → deals drives a full deal; fund reports slot cou
       await until([bb.rt], chain, async () => ((await callTool(bb.mem, 'fund', {})) as { marketSlots: { market: number } }).marketSlots.market > 0, 30),
       'no market slots minted'
     )
-    const used0 = await usedMarketSlots(dir, 'buyer')
+    const used0 = await usedMarketSlots(bb.rt)
     const slots0 = (await callTool(bb.mem, 'fund', {})) as {
       marketSlots: { market: number; bbox: number }
       spendableSats: number
@@ -231,7 +221,7 @@ test('profile: sell → want → deals drives a full deal; fund reports slot cou
     assert.equal(list.deals[0].wantId, w.wantId)
     const slots1 = (await callTool(bb.mem, 'fund', {})) as { marketSlots: { market: number; bbox: number } }
     assert.ok(slots1.marketSlots.market > 0, 'fund still reports market slots')
-    const used1 = await usedMarketSlots(dir, 'buyer')
+    const used1 = await usedMarketSlots(bb.rt)
     assert.equal(used1 - used0, 1, `market slot consumed by the want (${used0} → ${used1} used)`)
   } finally {
     try {

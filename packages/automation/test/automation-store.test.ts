@@ -329,6 +329,62 @@ test('wallet: one outpoint, one live action; guard refusal and network rejection
   assert.equal((await w2.prepare(ctx('h', 'b'), 'send', t2)).state, 'prepared', 'a tx that never left the process frees its inputs')
 })
 
+test('wallet leases: a released row is dead to take() and prepare() readers alike', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const txid = (c: string) => c.repeat(64)
+  // arm 1 — released lease with NO tx row (the escrow_never_built shape:
+  // releaseLeases ran before any record existed)
+  assert.equal(await store.leaseOutpoints('act-a', [{ txid: txid('a'), vout: 0, satoshis: 100 }]), true)
+  await store.releaseLeases('act-a')
+  // arm 2 — released lease beside a live-looking 'prepared' tx row
+  await store.recordPrepared(
+    { actionId: 'act-b', operationId: 'op', kind: 'send', txid: txid('b'), rawHex: '00', parents: {}, feeSats: 1 },
+    [{ txid: txid('b'), vout: 0, satoshis: 100 }]
+  )
+  await store.releaseLeases('act-b')
+  // arm 3 — released lease beside 'submission_unknown' — the wedge that used
+  // to read live forever while the observer waited on an unaired tx
+  await store.recordPrepared(
+    { actionId: 'act-c', operationId: 'op', kind: 'send', txid: txid('c'), rawHex: '00', parents: {}, feeSats: 1 },
+    [{ txid: txid('c'), vout: 0, satoshis: 100 }]
+  )
+  await store.setTxState('act-c', 'submission_unknown')
+  await store.releaseLeases('act-c')
+  // take()'s reader and prepare()'s reader MUST agree — a released row freed
+  // by one but not the other was the terminal funding_failed wedge
+  for (const c of ['a', 'b', 'c']) {
+    const id = txid(c)
+    assert.equal(await store.leasedOutpoint(id, 0), false, `${c}: released lease is not live to take()`)
+    assert.equal(await store.leaseOutpoints(`act-next-${c}`, [{ txid: id, vout: 0, satoshis: 100 }]), true, `${c}: released lease does not block prepare()`)
+  }
+  // control — a live lease still blocks both readers
+  assert.equal(await store.leaseOutpoints('act-live', [{ txid: txid('d'), vout: 0, satoshis: 100 }]), true)
+  assert.equal(await store.leasedOutpoint(txid('d'), 0), true, 'a live lease stays live to take()')
+  assert.equal(await store.leaseOutpoints('act-other', [{ txid: txid('d'), vout: 0, satoshis: 100 }]), false, 'a live lease still blocks prepare()')
+})
+
+test('wallet: lease+record are atomic — a lease conflict leaves no tx row behind', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const txid = (c: string) => c.repeat(64)
+  // act-a holds the live lease on 'a':0
+  assert.equal(await store.leaseOutpoints('act-a', [{ txid: txid('a'), vout: 0, satoshis: 100 }]), true)
+  // act-b tries to prepare over it — the conflict must refuse AND roll the
+  // tx row back with the lease (the old split write could commit one and
+  // crash before the other: a 'leased'-with-no-tx wedge either way)
+  await assert.rejects(
+    store.recordPrepared(
+      { actionId: 'act-b', operationId: 'op', kind: 'send', txid: txid('b'), rawHex: '00', parents: {}, feeSats: 1 },
+      [{ txid: txid('a'), vout: 0, satoshis: 100 }]
+    ),
+    /already leased/
+  )
+  assert.equal(await store.walletTx({ actionId: 'act-b' }), undefined, 'a refused prepare leaves no tx row')
+  // and the lease survives intact — the failed attempt didn't touch it
+  assert.equal((await store.leaseState(txid('a'), 0))?.actionId, 'act-a')
+})
+
 test('classifyDeliveryError: funding starvation vs transport vs unclassed', () => {
   assert.equal(classifyDeliveryError('no funding slot'), 'funding-slot')
   assert.equal(classifyDeliveryError('The operation was aborted due to timeout'), 'transport')

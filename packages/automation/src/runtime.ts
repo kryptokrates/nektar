@@ -523,7 +523,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             log: await lanes.ledger.remaining('log'),
             finger: await lanes.ledger.remaining('finger')
           },
-    laneStock: async (): Promise<Record<string, { proven: number; anchored: number; unprovenTrees: number }>> =>
+    laneStock: async (): Promise<Record<string, { proven: number; anchored: number; unprovenTrees: number; taken: number }>> =>
       lanes === undefined
         ? {}
         : {
@@ -532,6 +532,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             log: await lanes.ledger.stock('log'),
             finger: await lanes.ledger.stock('finger')
           },
+    // the durable carrier journal — delivered lane envelopes by artifact;
+    // tests and operator diagnostics read delivery evidence through the same
+    // interface production writes it (no second knex handle on the file)
+    carriers: lanes?.journal,
     // what a provisioning transaction should carry: one lane-locked output
     // per slot, a whole tree's worth per lane — the block confirming the
     // money then also proves the first stock

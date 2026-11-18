@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import knexFactory from 'knex'
 import { testChain, testFunder, type TestFunder, type TestChain } from '@nektar/chain'
 import { minihost, type MinihostHandle } from '@nektar/bstack/testing'
 import { NektarMemory } from '../../src/memory.js'
@@ -93,40 +92,15 @@ const trackerFor = (chain: TestChain) => ({
   isValidRootForHeight: (r: string, h: number) => chain.isValidRootForHeight(r, h),
   currentHeight: () => chain.currentHeight()
 })
-// bstack lane tables (trees/outputs/carriers/fingers) live in lanes.sqlite
-// since the lane-split; market tables stay in automation.sqlite
-const dbFor = (dir: string, name: string, table: string) => join(dir, name, table.startsWith('bstack_') ? 'lanes.sqlite' : 'automation.sqlite')
-const countWhere = async (dir: string, name: string, table: string, col: string, val: string): Promise<number> => {
-  const kx = knexFactory({ client: 'sqlite3', connection: { filename: dbFor(dir, name, table) }, useNullAsDefault: true })
-  try {
-    const r = await kx(table).count('* as n').where(col, val).first()
-    return Number((r as { n: number }).n)
-  } finally {
-    await kx.destroy()
-  }
-}
-const sumWhere = async (dir: string, name: string, table: string, col: string, val: string, sumCol: string): Promise<number> => {
-  const kx = knexFactory({ client: 'sqlite3', connection: { filename: dbFor(dir, name, table) }, useNullAsDefault: true })
-  try {
-    const r = await kx(table).sum(`${sumCol} as s`).where(col, val).first()
-    return Number((r as { s: number | null }).s ?? 0)
-  } finally {
-    await kx.destroy()
-  }
-}
-/** used market funding slots = slots minted (sum of tree sizes) − free outputs
- *  remaining. `n` is the per-tree size column — never a hard-coded tree size. */
-const usedMarketSlots = async (dir: string, name = 'buyer'): Promise<number> =>
-  (await sumWhere(dir, name, 'bstack_trees', 'kind', 'market', 'n')) - (await countWhere(dir, name, 'bstack_tree_outputs', 'kind', 'market'))
-const countLike = async (dir: string, name: string, table: string, col: string, pat: string): Promise<number> => {
-  const kx = knexFactory({ client: 'sqlite3', connection: { filename: dbFor(dir, name, table) }, useNullAsDefault: true })
-  try {
-    const r = await kx(table).count('* as n').where(col, 'like', pat).first()
-    return Number((r as { n: number }).n)
-  } finally {
-    await kx.destroy()
-  }
-}
+// slot/carrier assertions go through the runtime's own accessors — the
+// ledger's stock accounting and the carrier journal's index, never a second
+// handle on the tables (a schema rename fails the package build, not the test)
+/** used market funding slots = minted outputs − free remaining — the
+ *  ledger's own `taken` counter, same accounting the lanes runtime reports. */
+const usedMarketSlots = async (rt: Automation): Promise<number> => (await rt.laneStock()).market?.taken ?? 0
+const carriersWith = async (rt: Automation, topic: string): Promise<number> =>
+  ((await rt.carriers?.list?.()) ?? []).filter((c) => c.topics.includes(topic)).length
+const unprovenTrees = async (rt: Automation): Promise<number> => Object.values(await rt.laneStock()).reduce((n, s) => n + s.unprovenTrees, 0)
 const buyerOp = async (b: A) => (await b.rt.store.operations({ role: 'buyer' })).find((o) => o.kind === 'purchase')
 const saleOps = async (s: A) => (await s.rt.store.operations({ role: 'seller' })).filter((o) => o.kind === 'sale')
 const COMPLETE = new Set(['completion_submitted', 'settled', 'useful'])
@@ -155,7 +129,7 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 8)
     // market-kind slots only — the runtime also keeps bbox + log trees
-    const slotsBefore = await usedMarketSlots(dir)
+    const slotsBefore = await usedMarketSlots(b.rt)
     await b.rt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 450 }, b.policyHash)
     const done = async () => {
       const bo = await buyerOp(b)
@@ -171,18 +145,15 @@ test('bstack A: buyer+seller over two minihosts — journal+slot conservation, d
     // both hosts hold the want carrier
     const wantTxid = [...h1.txids()].filter((t) => h2.has(t))
     assert.ok(wantTxid.length >= 1, `both hosts hold want; h1=${h1.txids().length} h2=${h2.txids().length}`)
-    // journal: exactly one market carrier row (the want), one market slot —
-    // log-journal batches live in the same tables under tm_log topics/kind
-    assert.equal(await countLike(dir, 'buyer', 'bstack_carriers', 'topics', '%tm_nektar%'), 1)
-    const slotsAfter = await usedMarketSlots(dir)
+    // journal: exactly one market carrier (the want), one market slot —
+    // log-journal batches live in the same store under tm_log topics/kind
+    assert.equal(await carriersWith(b.rt, 'tm_nektar'), 1)
+    const slotsAfter = await usedMarketSlots(b.rt)
     assert.equal(slotsAfter - slotsBefore, 1, 'one funding slot for the want')
     // dedupe: 5+ more cycles, still ONE sale op and ONE inbox row for the want txid
     await drive([b.rt, s.rt], chain, 5)
     assert.equal((await saleOps(s)).length, 1)
-    const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'seller', 'automation.sqlite') }, useNullAsDefault: true })
-    const inboxRows = await kx('market_inbox').select('*').whereIn('message_id', wantTxid)
-    await kx.destroy()
-    assert.equal(inboxRows.length, 1)
+    assert.equal(await s.rt.store.inboxCount(wantTxid), 1)
     await b.rt.stop()
     await s.rt.stop()
   } finally {
@@ -315,9 +286,9 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
     await drive([bRt, s.rt], chain, 8)
     await bRt.engine.publishWant({ domains: ['libfoo'], question: 'libfoo 3.0 migration?', maxSats: 500 }, policyHash)
     await drive([bRt, s.rt], chain, 6)
-    // market-kind only — log journal batches keep accruing in the same tables
-    const carriersBefore = await countLike(dir, 'buyer', 'bstack_carriers', 'topics', '%tm_nektar%')
-    const slotsBefore = await usedMarketSlots(dir)
+    // market-kind only — log journal batches keep accruing in the same store
+    const carriersBefore = await carriersWith(bRt, 'tm_nektar')
+    const slotsBefore = await usedMarketSlots(bRt)
     await bRt.stop()
     bRt = await open()
     const all = [bRt, s.rt]
@@ -327,8 +298,8 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
     )
     const bo = (await bRt.store.operations({ role: 'buyer' })).find((o) => o.kind === 'purchase')
     assert.equal(bo?.state, 'disclosure_verified')
-    assert.equal(await countLike(dir, 'buyer', 'bstack_carriers', 'topics', '%tm_nektar%'), carriersBefore, 'no second want carrier after restart')
-    const slotsAfter = await usedMarketSlots(dir)
+    assert.equal(await carriersWith(bRt, 'tm_nektar'), carriersBefore, 'no second want carrier after restart')
+    const slotsAfter = await usedMarketSlots(bRt)
     assert.equal(slotsAfter - slotsBefore, 0, 'zero funding slots consumed for the want after restart')
     for (const r of all) await r.stop()
   } finally {
@@ -436,13 +407,7 @@ test('bstack F: default bbox channel � no injected bus; forged delivered ignor
     assert.ok(await until(all, chain, done, 100), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = await buyerOp(b)
     assert.equal(bo?.state, 'disclosure_verified', 'forged delivered did not derail the purchase')
-    const envs = async (name: string) => {
-      const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'lanes.sqlite') }, useNullAsDefault: true })
-      const n = ((await kx('bstack_carriers').where('topics', 'like', '%tm_bbox%').count('* as c').first()) as { c: number }).c
-      await kx.destroy()
-      return Number(n)
-    }
-    assert.ok((await envs('buyer')) + (await envs('seller')) >= 3, 'quote+accept+delivered envelopes were sent')
+    assert.ok((await carriersWith(b.rt, 'tm_bbox')) + (await carriersWith(s.rt, 'tm_bbox')) >= 3, 'quote+accept+delivered envelopes were sent')
     for (const r of all) await r.stop()
   } finally {
     await h1.close()
@@ -633,14 +598,10 @@ test('bstack J: push — a mined funding tree is proven and a cycle runs without
   const logs: string[] = []
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   let a!: Awaited<ReturnType<typeof mkagent>>
-  let kx: ReturnType<typeof knexFactory> | undefined
   try {
     a = await mkagent('push', { hosts: [h1.url], chain, logs, dir })
     await a.rt.cycle() // broadcast market + bbox funding trees — still unproven
-    kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, 'push', 'lanes.sqlite') }, useNullAsDefault: true })
-    const { KnexTreeLedger } = await import('@nektar/bstack')
-    const ledger2 = new KnexTreeLedger(kx)
-    assert.ok((await ledger2.unproven()).length >= 2, 'funding trees broadcast but unproven')
+    assert.ok((await unprovenTrees(a.rt)) >= 2, 'funding trees broadcast but unproven')
     let ticks = 0
     const engine = a.rt.engine as unknown as { tick: () => Promise<void> }
     const origTick = engine.tick.bind(engine)
@@ -650,12 +611,11 @@ test('bstack J: push — a mined funding tree is proven and a cycle runs without
     }
     await chain.mine(1) // the push: mined events → proofs delivered → markProven + cycle
     const t0 = Date.now()
-    while ((ticks === 0 || (await ledger2.unproven()).length > 0) && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 25))
-    assert.equal((await ledger2.unproven()).length, 0, 'funding trees proven on the push — no manual cycle')
+    while ((ticks === 0 || (await unprovenTrees(a.rt)) > 0) && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 25))
+    assert.equal(await unprovenTrees(a.rt), 0, 'funding trees proven on the push — no manual cycle')
     assert.ok(ticks > 0, 'a cycle ran on the push (intervalMs was 0)')
   } finally {
     if (a !== undefined) await a.rt.stop() // unsubscribe proofs before pools close
-    if (kx !== undefined) await kx.destroy()
     await h1.close()
   }
 })
@@ -1543,17 +1503,9 @@ const journalLines = async (hosts: MinihostHandle[], chain: TestChain, stream: s
   const { readLog } = await import('@nektar/bstack')
   return await readLog({ hosts: hosts.map((h) => h.url), stream, producer, tracker: trackerFor(chain) })
 }
-const jTxid = async (dir: string, name: string, seq: number): Promise<string> => {
-  const kx = knexFactory({ client: 'sqlite3', connection: { filename: join(dir, name, 'lanes.sqlite') }, useNullAsDefault: true })
-  try {
-    const r = await kx('bstack_carriers')
-      .where({ artifact_hash: `log:${LOG_STREAM}:${seq}` })
-      .first()
-    return String(r.txid)
-  } finally {
-    await kx.destroy()
-  }
-}
+// the carrier txid under which a journal line shipped — the durable
+// journal's own index, not a table read
+const jTxid = async (rt: Automation, seq: number): Promise<string> => String((await rt.carriers?.get(`log:${LOG_STREAM}:${seq}`))?.txid)
 const dealJournal = async (a: A, opId: string): Promise<Record<string, any>> => {
   const op = await a.rt.store.operation(opId)
   return (await a.rt.dealJournal?.(op!)) ?? {}
@@ -1677,7 +1629,7 @@ test('bstack Y: a journal batch dropped by every host shows the gap — complete
     const seqs = [...new Set((sj.counterparty as { entries: Array<{ seq: number }> }).entries.map((e) => e.seq))]
     assert.ok(seqs.length >= 1, 'deal entries exist in the seller journal')
     const mid = seqs[0]
-    dropped.add(await jTxid(dir, 'seller', mid))
+    dropped.add(await jTxid(s.rt, mid))
     const bj = await dealJournal(b, bo.operationId)
     const cp = bj.counterparty as {
       complete: boolean

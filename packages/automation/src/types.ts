@@ -34,8 +34,12 @@ export interface Automation {
    *  when no market hosts are configured */
   marketSlots: () => Promise<{ market: number; bbox: number; log: number; finger: number }>
   /** the stock breakdown behind marketSlots — proven leaves, anchored
-   *  zero-conf leaves and trees still awaiting a block, per kind */
-  laneStock: () => Promise<Record<string, { proven: number; anchored: number; unprovenTrees: number }>>
+   *  zero-conf leaves, trees still awaiting a block and consumed slots,
+   *  per kind */
+  laneStock: () => Promise<Record<string, { proven: number; anchored: number; unprovenTrees: number; taken: number }>>
+  /** the durable carrier journal (delivered lane envelopes by artifact) —
+   *  undefined when no market hosts are configured */
+  carriers?: import('@nektar/bstack').CarrierJournal
   /** lane outputs a provisioning transaction should carry — one entry per
    *  lane with its funding lock, per-slot value and a whole tree's count */
   provisionPlan: () => Promise<{ outputs: Array<{ kind: string; lockingScriptHex: string; satoshis: number; count: number }> }>

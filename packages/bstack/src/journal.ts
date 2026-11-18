@@ -5,6 +5,9 @@ import type { MerklePath } from '@bsv/sdk'
 export interface CarrierJournal {
   get(hash: string): Promise<{ txid: string; beef: number[]; topics: string[]; fundingTxid?: string } | undefined>
   put(hash: string, c: { txid: string; beef: number[]; topics: string[]; fundingTxid?: string }): Promise<void>
+  /** every stored carrier's index — hash → txid/topics, no beef payload.
+   *  A delivery view for diagnostics and tests; get() fetches the payload. */
+  list?(): Promise<Array<{ hash: string; txid: string; topics: string[] }>>
   /** rows funded by a tree txid — lets a proof that just landed republish its
    *  carriers with the parent's BUMP attached (the same txid, so hosts
    *  re-record the entry free of the unproven-funding eviction deadline) */
@@ -79,6 +82,9 @@ export class MemoryCarrierJournal implements CarrierJournal {
   }
   async put(hash: string, c: { txid: string; beef: number[]; topics: string[]; fundingTxid?: string }) {
     this.m.set(hash, c)
+  }
+  async list() {
+    return [...this.m].map(([hash, c]) => ({ hash, txid: c.txid, topics: c.topics }))
   }
   async fundedBy(txid: string) {
     return [...this.m].filter(([, c]) => c.fundingTxid === txid).map(([hash, c]) => ({ hash, ...c }))
@@ -159,6 +165,14 @@ export class KnexCarrierJournal implements CarrierJournal {
       // (a funding parent's BUMP attached after the tree proved)
       .onConflict('artifact_hash')
       .merge(['txid', 'beef', 'funding_txid'])
+  }
+  async list() {
+    await this.ensure()
+    return (await this.kx('bstack_carriers').select('artifact_hash', 'txid', 'topics')).map((r) => ({
+      hash: r.artifact_hash as string,
+      txid: r.txid as string,
+      topics: JSON.parse(r.topics as string) as string[]
+    }))
   }
   async fundedBy(txid: string) {
     await this.ensure()

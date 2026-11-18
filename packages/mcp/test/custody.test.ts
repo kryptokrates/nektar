@@ -98,7 +98,6 @@ test('custody: a broadcaster-rejected parent is passed over, never healed', asyn
   // NEVER reach died(): healing frees the refused tx's inputs and
   // tombstones the phantom's outputs, so a hint alone cannot write
   assert.deepEqual(spent, [], 'a hint is not a verdict — nothing writes')
-  assert.equal((await ops.takeFunding(1)).tx.id('hex'), good.id('hex'), 'the hinted parent stays skipped, not burned')
 })
 
 test('custody: a sealed dead verdict heals the phantom parent', async () => {

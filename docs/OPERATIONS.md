@@ -54,6 +54,15 @@ service (public BSV Broadcaster endpoints are no-key: `arcade-*-1.bsvblockchain.
 the regtest path _literally_ the self-sovereign mainnet path — same endpoints,
 same code.
 
+**Index drift is real, and it is why the tracked set is the default.** On
+testnet we watched a public index's per-address utxo view serve a mined-spent
+output as unspent *and* drop an entire funded address to zero within the same
+hour (rate-limit windows included); the tx record's own `spent_txid` was the
+only honest field. Every nektar spend path treats an index answer as a hint:
+a positive spend claim is believed only after the named spender's bytes name
+the outpoint, and an unreachable index revives/adopts nothing — never a chain
+claim.
+
 **Bootstrap funding UX (live networks):** `NEKTAR_WAIT_FUNDING=1` prints a
 terminal QR of the operator fee address at startup and holds boot until a
 few sats land (`NEKTAR_WAIT_FUNDING_MS` caps it, default 30 min — then it
@@ -150,7 +159,7 @@ Images are pinned by digest. Module bundles are build artifacts; see `deploy/bst
 
 Operators who set `NEKTAR_ANNOUNCE=1` publish a signed **directory card** (`kind=3` announce, prefix `nektar:market:announce:1\n`) on the reserved `dir` lane `tm_nektar_<net>_<nibble('dir')>` — `{pub, hosts[], packs[{shard, domains?, store|packUrl}]}` — republished on content change or when `exp` enters its last half. `ls_nektar {announces: {net}}` enumerates live operators; a reader unions their hosts (https-screened on public nets) and can `importShard` offered packs — the zero-config join: seeds → announces → discovered hosts → seeded memory, no registry. `NEKTAR_SEED_DOMAINS=ops,teranode` (`*` = all) runs that import at boot; already-imported shards skip.
 
-Note on unproven funding ancestry: a carrier admitted before its funding tree's BUMP lands carries a 10-minute host-side deadline (`FUNDING_PROOF_MS`) — on a slow-mining stretch the entry evicts until the publisher re-pushes (keep-alive is automatic while the agent runs, and `republishProved` re-records the entry once the tree proves). Two announced operators on one box prove the wire and the union path; they do NOT prove operator independence — that gate is a second team running `deploy/hub/` on their own infrastructure.
+Note on unproven funding ancestry: a carrier admitted before its funding tree's BUMP lands carries a 10-minute host-side deadline (`FUNDING_PROOF_MS`) — on a slow-mining stretch the entry evicts until the publisher re-pushes (keep-alive is automatic while the agent runs, and `republishProved` re-records the entry once the tree proves). A carrier whose funding ancestry has a *permanent* gap — a parent mint that was killed before broadcast, a dropped draft — can never pass host SPV verification, so upkeep reaps it: after the same missing parent is observed on two consecutive passes, the tree is dropped from the ledger and every carrier it funded is deleted from the journal (logged `dead-ancestry: dropped <kind> tree … unservable parent …`) instead of retrying forever; stock then refills from live funding. One missed lookup never reaps — a transient index gap or a parent still propagating keeps its slot. Two announced operators on one box prove the wire and the union path; they do NOT prove operator independence — that gate is a second team running `deploy/hub/` on their own infrastructure.
 
 `deploy/hub/` is the all-in-one operator box (agent + host pair, announce on by default). `deploy/agent/` is the agent-only path — now zero-config on testnet.
 

@@ -13,6 +13,10 @@
 // UTXOs exclusively — respawn them afterwards with .state/respawn-agents.sh.
 //
 // Workflow: warm lane stock FIRST — `node tools/tn-warmup.mjs` (unbounded,
+// Targeted runs: `--test-name-pattern` + `TN_TREE_FLOOR=<n>` (gate floor,
+// default 8) + `TN_VERBOSE=1` (live per-agent logs — never run a live suite
+// silent: TAP buffers until exit, so a quiet process is indistinguishable
+// from a wedged one; the suite's own quiet-heartbeat prints past 90s silence)
 // resumeable, owns the block wait). Tests then fail fast on cold stock
 // instead of paying a 25-min block lottery inside their timeout; opt back
 // in with TN_WARMUP=1. Iterate single tests with
@@ -130,6 +134,16 @@ const mcFor = (): MainnetConfig => ({
   indexerUrl: INDEX
 })
 
+// liveness that survives TAP buffering: a long-running test writes nothing to
+// stdout until it ends, so silence is indistinguishable from a wedge. Any agent
+// log line refreshes the stamp; the interval re-prints it when >90s stale —
+// every pass/wake/transition keeps this beating, no per-test plumbing needed
+const LIVENESS = { at: 0, line: '' }
+setInterval(() => {
+  const quiet = Date.now() - LIVENESS.at
+  if (LIVENESS.at > 0 && quiet > 90_000) console.error(`[suite quiet ${(quiet / 1000) | 0}s] last: ${LIVENESS.line}`)
+}, 30_000).unref()
+
 const mkagent = async (
   name: string,
   wifName: 'alice' | 'ben' | 'bob',
@@ -226,6 +240,8 @@ const mkagent = async (
     log: (l) => {
       const line = `${new Date().toISOString().slice(11, 19)} ${name}:${l}`
       logs.push(line)
+      LIVENESS.at = Date.now()
+      LIVENESS.line = line
       if (process.env.TN_VERBOSE === '1') console.error(line)
     },
     ai: new ScriptedExecutor(),

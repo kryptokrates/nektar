@@ -725,13 +725,25 @@ export class AutomationStore {
   }
 
   // ── wallet leases + transactions ────────────────────────────────────────
+  /** a lease row is a live claim only while its action's tx is unaired —
+   *  prepared, unknown-outcome, or inside the counterparty's export window.
+   *  Broadcast-and-closed claims are stale bookkeeping; a 'spent' row keeps
+   *  blocking because its outpoint is provably consumed. take()'s unusable()
+   *  and prepare()'s conflict check MUST agree — a stale lease take() passes
+   *  but prepare() refuses was a real terminal funding_failed on testnet. */
+  private async leaseLive(q: Knex | Knex.Transaction, lease: { action_id: string; state: string }): Promise<boolean> {
+    if (lease.state === 'spent') return true
+    const w = await q(T.txs).where({ action_id: lease.action_id }).first()
+    return w === undefined || w.state === 'prepared' || w.state === 'submission_unknown' || w.state === 'exported'
+  }
+
   async leaseOutpoints(actionId: string, outs: Array<{ txid: string; vout: number; satoshis: number }>): Promise<boolean> {
     return await this.kx.transaction(async (trx) => {
       for (const o of outs) {
         const r = await trx(T.leases)
           .where({ outpoint: `${o.txid}:${o.vout}` })
           .first()
-        if (r && r.action_id !== actionId && r.state !== 'released') return false
+        if (r && r.action_id !== actionId && (await this.leaseLive(trx, r))) return false
       }
       const now = this.now()
       for (const o of outs)
@@ -800,16 +812,7 @@ export class AutomationStore {
   async leasedOutpoint(txid: string, vout: number): Promise<boolean> {
     const r = await this.leaseState(txid, vout)
     if (r === undefined || r.state === 'released') return false
-    // 'spent' stays blocking — the outpoint is provably consumed. A 'leased'
-    // row is a concurrency claim while the tx is unaired; once its action's
-    // wallet_tx is broadcast-or-closed (or gone — a crashed prepare), the
-    // claim is stale bookkeeping: custody's own liveness layer decides what
-    // may be taken next
-    if (r.state === 'spent') return true
-    const w = await this.kx(T.txs).where({ action_id: r.actionId }).first()
-    // exported keeps its claim too — the counterparty's air window is
-    // lease-protected until ledger.tick's exportedTtlMs releases it
-    return w === undefined || w.state === 'prepared' || w.state === 'submission_unknown' || w.state === 'exported'
+    return await this.leaseLive(this.kx, { action_id: r.actionId, state: r.state })
   }
 
   async recordBroadcast(

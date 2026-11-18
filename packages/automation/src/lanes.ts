@@ -382,6 +382,7 @@ export function openLanes(rt: Rt): void {
   // quorum-1 answer — drained at the top of the next pass so a slow host's
   // exclusive items still arrive without ever gating this pass on it
   const pendingLane = new Map<string, Array<{ seq: string; kind: 'want' | 'offer'; payload: unknown }>>()
+  let lastSubSig = ''
   const lanePoll = async (): Promise<void> => {
     const { readWants, readOffers } = lanes!.mod
     const watch = await rt.engine.watchList()
@@ -406,6 +407,13 @@ export function openLanes(rt: Rt): void {
         call: (o: ReadOpts) => readOffers(marketHosts, { net, wantId: c.wantId, buyerPub: rt.me }, { tracker, net, now: cfg.now?.(), cache: laneCache, ...o })
       }))
     ]
+    // the watch set changes as sellers enable and wants collect — log the
+    // transition once so a missed domain is visible without per-pass spam
+    const subSig = subs.map((s) => s.tag).join(',')
+    if (subSig !== lastSubSig) {
+      lastSubSig = subSig
+      log(`lanes: watching ${subs.length} subs ${subs.length <= 4 ? `(${subSig})` : ''}`)
+    }
     // every lane read is independent — run them together, bounded, instead
     // of serially pricing the pass at the sum of all host latencies
     await Promise.all(
@@ -426,6 +434,7 @@ export function openLanes(rt: Rt): void {
               if (rest.length > 0) pendingLane.set(s.tag, [...(pendingLane.get(s.tag) ?? []), ...rest])
             })
             .catch(() => undefined)
+          if ((fast.items as unknown[]).length > 0 || staged.length > 0) log(`lanes: ${s.tag} items=${(fast.items as unknown[]).length} staged=${staged.length}`)
           const events = toEvents(fast.items as never)
           if (events.length > 0) {
             rt.hotUntil = Date.now() + 5_000

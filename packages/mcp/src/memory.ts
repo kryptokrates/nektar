@@ -275,6 +275,10 @@ export class NektarMemory extends MemRead {
       ledgerState: async (txid) => (await this.ledger?.walletTx({ txid }))?.state,
       proofPullMs: Number(nektarEnv('NEKTAR_PROOF_PULL_MS') ?? 120_000)
     })
+    // died()'s input-revive walk resolves parents through the tx graph —
+    // hex-stored drafts carry no input sourceTransactions, so without this
+    // a dead spend's inputs stay tombstoned forever
+    this.funds.txOf ??= (txid) => this.fetchTx(txid)
     this.custodyOps = new CustodyOps({
       funds: this.funds,
       fundSigner: () => this.fundSigner(),

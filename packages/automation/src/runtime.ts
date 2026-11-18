@@ -323,13 +323,20 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         do {
           again = false
           try {
+            // phase timing: a pass that outruns the want collect window is a
+            // silent deal killer — name the segment that ate it
+            const t0 = Date.now()
             await rt.poll()
+            const t1 = Date.now()
             await engine.tick()
+            const t2 = Date.now()
             rt.pushAcks()
             // join the detached drain before ending the pass — a pass isn't
             // complete while a delivery is in flight (cycle() semantics in
             // tests: one call = all queued work attempted)
             await rt.pumpDone
+            const t3 = Date.now()
+            if (t3 - t0 > 2_000) log(`automation: pass ${t3 - t0}ms (poll ${t1 - t0} tick ${t2 - t1} pump ${t3 - t2})`)
             // a live deal keeps the loop hot — the 5s inbound window alone
             // would let a deal cool to idle cadence between hops. A settled
             // proof awaiting depth only waits on BLOCKS, so it is excluded —
@@ -488,6 +495,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     store,
     engine,
     cycle,
+    deals,
+    upkeep: () => rt.upkeep(),
     logStream,
     dealJournal: rt.dealJournal,
     objectStore,

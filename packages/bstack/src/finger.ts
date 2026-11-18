@@ -496,6 +496,38 @@ export async function publishFinger(p: {
     br = await p.broadcast(tokenTx)
   }
   if (br.status !== 'success') {
+    // the mint is dead — but the chain UNDER it may have died first: a
+    // persisted head (or an older token) that was evicted and never
+    // re-aired turns every later publish into an orphan that spends and
+    // re-marks a funding outpoint forever. Walk the journaled token rows
+    // back — the newest token that still airs is the true head — delete
+    // the forked rows and re-anchor the state there; the next pass mints
+    // on live ground instead of re-serving the corpse below.
+    if (prev !== undefined && p.journal.del !== undefined) {
+      let head: { seq: number; tokenTxid: string; tokenBeef: number[] } | undefined
+      for (let n = prev.seq; n >= 1; n--) {
+        const t = await p.journal.get(`finger:token:${n}`)
+        if (t === undefined) continue
+        const tx = Transaction.fromBEEF(t.beef)
+        if (tx.merklePath !== undefined || (await p.broadcast(tx).catch(() => ({ status: 'error' as const }))).status === 'success') {
+          head = { seq: n, tokenTxid: t.txid, tokenBeef: t.beef }
+          break
+        }
+      }
+      if (head !== undefined && head.seq < prev.seq) {
+        for (let n = head.seq + 1; n <= seq; n++) await p.journal.del(`finger:token:${n}`)
+        for (let n = head.seq + 1; n <= seq; n++) await p.journal.del(`finger:carrier:${n}`)
+        // the stored witness belongs to the dead head's seq — dropping it
+        // makes the next mint re-derive prevWitness for the new depth
+        await p.state.set({ ...prev, seq: head.seq, tokenTxid: head.tokenTxid, tokenBeef: head.tokenBeef, witness: undefined })
+      } else {
+        // the chain airs fine — the dead link was this mint's own input
+        // (fresh funding died or the heal never reached it): drop just
+        // this seq's token so the next pass re-mints instead of re-serving
+        // the same refused tx forever
+        await p.journal.del(`finger:token:${seq}`)
+      }
+    }
     if (p.onDied !== undefined) await p.onDied(tokenTx)
     throw new Error(`publishFinger: token broadcast refused ${JSON.stringify(br).slice(0, 120)}`)
   }

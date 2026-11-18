@@ -401,8 +401,11 @@ export function openUpkeep(rt: Rt): void {
   rt.upkeep = async (): Promise<void> => {
     if (rt.upkeepRun !== undefined) return await rt.upkeepRun
     rt.upkeepAt = Date.now()
+    const t0 = Date.now()
     rt.upkeepRun = runUpkeep().finally(() => {
       rt.upkeepRun = undefined
+      const ms = Date.now() - t0
+      if (ms > 2_000) log(`automation: upkeep ${ms}ms`)
     })
     await rt.upkeepRun
   }

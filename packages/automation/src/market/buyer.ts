@@ -11,7 +11,28 @@ import { SellerOps } from './seller.js'
 import { CAP, pkhOf, STATE_LIMITS, TERMINAL } from './types.js'
 import type { MarketMessage, StoredOffer, StuckExit } from './types.js'
 
+// a take that lost the race to a concurrent spend is not a deal fault —
+// 'selected' re-enters fund() next tick and the funding window bounds the
+// retry. Only starvation-class errors qualify; refusals stay terminal
+function starved(e: unknown): boolean {
+  return /no spendable output|deal floor/i.test(e instanceof Error ? e.message : String(e))
+}
+
 export abstract class BuyerOps extends SellerOps {
+  /** bounce a starved escrow build back to 'selected' for the next tick's
+   *  retake — but only inside the funding window: the per-state clocks reset
+   *  on each bounce, so the anchor rides in data.fundingSince and past the
+   *  bound starvation is terminal after all (nothing was broadcast — a
+   *  failed deal is honest here, 'uncertain' is not). */
+  private async starveBounce(op: Operation, e: unknown): Promise<void> {
+    const since = (op.data.fundingSince as number | undefined) ?? this.now()
+    const exhausted = this.now() - since > STATE_LIMITS.funding.maxAgeMs
+    await this.d.store.transition(op.operationId, op.revision, exhausted ? 'funding_failed' : 'selected', {
+      cause: exhausted ? 'funding_starved_exhausted' : 'funding_starved',
+      lastError: (e instanceof Error ? e.message : String(e)).slice(0, 500)
+    })
+  }
+
   // ── buyer ───────────────────────────────────────────────────────────────
   private offerReject(so: SignedOffer, w: SignedWant['want']): string | undefined {
     const o = so.offer
@@ -437,7 +458,11 @@ export abstract class BuyerOps extends SellerOps {
       if (decision.kind === 'escalate')
         return await this.escalate(op, decision.code, actionDigest, amounts.purchaseSats + amounts.feeSats, { offerKey: sel.key, amounts })
     }
-    const ctx: ActionContext = { operationId: op.operationId, actionId: `${op.operationId}:escrow`, policyHash: op.policyHash, networkId: this.d.network }
+    // a released action is a tombstone — a starvation retry must reserve a
+    // fresh one, so the id carries the attempt number (released rows never
+    // count against caps; data.escrowAction tracks the live attempt)
+    const tries = (op.data.fundingTries as number | undefined) ?? 0
+    const ctx: ActionContext = { operationId: op.operationId, actionId: `${op.operationId}:escrow:${tries}`, policyHash: op.policyHash, networkId: this.d.network }
     const b = await this.d.store.reserveBudget(ctx, amounts, approved)
     if (!b.ok) {
       if (CAP.test(b.code)) return await this.escalate(op, b.code, actionDigest, amounts.purchaseSats + amounts.feeSats, { offerKey: sel.key, amounts })
@@ -446,7 +471,7 @@ export abstract class BuyerOps extends SellerOps {
     }
     const funding = await this.d.store.transition(op.operationId, op.revision, 'funding', {
       cause: approved ? 'human_approved' : 'policy_allowed',
-      data: { escrowAction: ctx.actionId, amounts }
+      data: { escrowAction: ctx.actionId, amounts, fundingTries: tries + 1, fundingSince: (op.data.fundingSince as number | undefined) ?? this.now() }
     })
     this.inflight.add(op.operationId)
     try {
@@ -475,6 +500,7 @@ export abstract class BuyerOps extends SellerOps {
             built = await this.d.call('sale#payBuild', { amount: price, scriptHex: payScript, cfg: q.cfg, offer: payOffer })
           } catch (e) {
             await this.d.store.releaseBudget(ctx.actionId)
+            if (starved(e)) return await this.starveBounce(funding, e)
             await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', {
               cause: 'payment_build_refused',
               lastError: (e as Error).message.slice(0, 500)
@@ -505,6 +531,7 @@ export abstract class BuyerOps extends SellerOps {
             pay = await this.d.call('sale#pay', { amount: price, scriptHex: payScript, cfg: q.cfg, offer: payOffer })
           } catch (e) {
             await this.d.store.releaseBudget(ctx.actionId)
+            if (starved(e)) return await this.starveBounce(funding, e)
             await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', {
               cause: 'payment_refused_before_broadcast',
               lastError: (e as Error).message.slice(0, 500)
@@ -581,6 +608,7 @@ export abstract class BuyerOps extends SellerOps {
           })
         } catch (e) {
           await this.d.store.releaseBudget(ctx.actionId)
+          if (starved(e)) return await this.starveBounce(funding, e)
           await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', {
             cause: 'escrow_build_refused',
             lastError: (e as Error).message.slice(0, 500)
@@ -620,6 +648,7 @@ export abstract class BuyerOps extends SellerOps {
           })
         } catch (e) {
           await this.d.store.releaseBudget(ctx.actionId)
+          if (starved(e)) return await this.starveBounce(funding, e)
           await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', {
             cause: 'escrow_refused_before_broadcast',
             lastError: (e as Error).message.slice(0, 500)

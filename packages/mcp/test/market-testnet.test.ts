@@ -258,8 +258,9 @@ const mkagent = async (
     intervalMs: 0,
     call: (t2, a) => callTool(mem, t2, a),
     log: (l) => {
-      logs.push(`${name}:${l}`)
-      if (process.env.TN_VERBOSE === '1') console.error(`${name}:${l}`)
+      const line = `${new Date().toISOString().slice(11, 19)} ${name}:${l}`
+      logs.push(line)
+      if (process.env.TN_VERBOSE === '1') console.error(line)
     },
     ai: new ScriptedExecutor(),
     publishFinger: true,
@@ -312,12 +313,24 @@ const drive = async (rts: Automation[], n = 1) => {
   for (let i = 0; i < n; i++) await Promise.all(rts.map((rt) => rt.cycle()))
 }
 
-/** wall-clock until: cycles the engines and returns the elapsed ms when ok()
- *  holds, -1 on timeout. No virtual clock, no mining — real propagation. */
+/** wall-clock until: polls the engines and returns the elapsed ms when ok()
+ *  holds, -1 on timeout. No virtual clock, no mining — real propagation.
+ *  Polls run on the production cadence (deals every pass, upkeep on a ~10s
+ *  ceiling, detached): a slow upkeep — a starved reserve probing hundreds of
+ *  candidates — must never hold a want's 15s collect window hostage. */
 const until = async (rts: Automation[], ms: number, ok: () => Promise<boolean>): Promise<number> => {
   const t0 = Date.now()
+  let upkeepAt = 0
+  let upkeepRunning = false
   while (Date.now() - t0 < ms) {
-    await drive(rts)
+    await Promise.all(rts.map((rt) => rt.deals()))
+    if (!upkeepRunning && Date.now() - upkeepAt >= 10_000) {
+      upkeepAt = Date.now()
+      upkeepRunning = true
+      void Promise.all(rts.map((rt) => rt.upkeep())).finally(() => {
+        upkeepRunning = false
+      })
+    }
     if (await ok()) return Date.now() - t0
     await sleep(800)
   }
@@ -500,15 +513,17 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_200_00
     const t0 = Date.now()
     const wants = await Promise.all(buyers.map((b) => b.rt.engine.publishWant({ domains: [DOMAIN], question: 'q?', maxSats: 450 }, b.policyHash)))
     const all = [s.rt, ...buyers.map((b) => b.rt)]
+    const settledFor = async () =>
+      (await Promise.all(wants.map((w) => saleFor(s, w.wantId)))).filter((o) => o !== undefined && COMPLETE.has(o.state))
     const ms = await until(all, 240_000, async () => {
       for (const [i, b] of buyers.entries()) {
         const bo = await opFor(b, wants[i].wantId)
         if (bo === undefined || !BUYER_DONE.has(bo.state)) return false
       }
-      return (await saleOps(s)).filter((o) => COMPLETE.has(o.state)).length >= wants.length
+      return (await settledFor()).length >= wants.length
     })
     assert.ok(ms > 0, 'not all deals landed | ' + logs.slice(-25).join(' | '))
-    const settled = (await saleOps(s)).filter((o) => COMPLETE.has(o.state))
+    const settled = await settledFor()
     assert.equal(settled.length, wants.length)
     console.log(`    throughput: ${wants.length} live deals in ${ms}ms wall`)
   } finally {
@@ -803,7 +818,10 @@ test('R6: duplicate lookup outputs — deal completes once (live)', { timeout: 6
     await drive([b.rt, s.rt], 6)
     const r = await deal(b, s, logs)
     assert.ok(r.ms > 0)
-    assert.equal((await buyerOps(b)).length, 1, 'duplicate outputs spawned extra ops')
+    const dupes = (await buyerOps(b)).filter(
+      (o) => (o.data.want as { want?: { wantId?: string } } | undefined)?.want?.wantId === r.wantId
+    )
+    assert.equal(dupes.length, 1, 'duplicate outputs spawned extra ops')
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
     await f1.close()

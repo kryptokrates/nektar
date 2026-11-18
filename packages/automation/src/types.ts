@@ -21,6 +21,15 @@ export interface Automation {
   store: AutomationStore
   engine: MarketEngine
   cycle: () => Promise<void>
+  /** one deals pass (poll + tick + outbox join) — what the 1s scheduler job
+   *  runs. Drivers that need a fast want/offer cadence call this per pass
+   *  and keep upkeep on its own slower ceiling — cycle() = deals + upkeep
+   *  serially, so a grinding housekeeping pass would hold the collect
+   *  window hostage */
+  deals: () => Promise<void>
+  /** one housekeeping pass (funding trees, finger record, journals) —
+   *  serialized internally; safe to fire detached on a slow cadence */
+  upkeep: () => Promise<void>
   /** free funding-tree slots per kind — { market, bbox, log, finger }; zeros
    *  when no market hosts are configured */
   marketSlots: () => Promise<{ market: number; bbox: number; log: number; finger: number }>

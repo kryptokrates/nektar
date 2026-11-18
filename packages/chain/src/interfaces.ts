@@ -141,6 +141,11 @@ export interface Funds {
    *  Unlike hintSkip this seam DOES write (it heals), but only custody
    *  bookkeeping — never a chain verdict */
   deadParent?: (tx: Transaction) => Promise<boolean>
+  /** resolve a tx by id for died()'s input-revive walk — hex-stored drafts
+   *  lose input sourceTransactions, so reviving a tombstoned input needs a
+   *  lookup that can fetch the dead spend's parent (held store, index).
+   *  Late-bindable like hintSkip: the wiring instance owns the tx graph */
+  txOf?: (txid: string) => Promise<Transaction | undefined> | Transaction | undefined
   /** a purpose's take served by a dedicated pool instead of the shared set —
    *  the fee-vault covenant mints capped outs for `publish` takes; returns
    *  undefined when it has nothing to serve (fall through to the pool) */

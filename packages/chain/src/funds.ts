@@ -97,6 +97,7 @@ export abstract class FundsBase implements Funds {
   public hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
   public deadParent?: (tx: Transaction) => Promise<boolean>
   public spendCheck?: (txid: string, vout: number) => Promise<boolean>
+  public txOf?: (txid: string) => Promise<Transaction | undefined> | Transaction | undefined
   public takeOverride?: (purpose: FundPurpose, sats: number) => Promise<FundingOut | undefined>
   /** sats kept affordable for one deal — non-deal takes never dip below;
    *  seeded from deps.dealFloor, re-tunable post-construction */
@@ -111,6 +112,7 @@ export abstract class FundsBase implements Funds {
     this.hintSkip = deps.hintSkip
     this.deadParent = deps.deadParent
     this.spendCheck = deps.spendCheck
+    this.txOf = deps.txOf
     this.takeOverride = deps.takeOverride
     this.dealFloor = deps.dealFloor
   }
@@ -169,15 +171,30 @@ export abstract class FundsBase implements Funds {
   }
 
   /** a resolved candidate's outpoint id — the hint side of selection
-   *  (reservation, tombstone, lease, dead-parent hint): pass-over only,
-   *  never writes bookkeeping */
-  private async unusable(u: FundingOut): Promise<boolean> {
+   *  (reservation, tombstone, lease, dead-parent refusal): pass-over only,
+   *  never writes bookkeeping. 'dead' marks a refusal-class parent so take
+   *  can heal exactly once — the probe is asked a single time */
+  private async unusable(u: FundingOut, deadMemo: Map<string, boolean>): Promise<'dead' | true | false> {
     const id = u.tx.id('hex')
     if (this.reserved.has(op(id, u.vout))) return true
     if ((await this.store.tombstoned?.(id, u.vout)) === true) return true
     if ((await this.leased?.(id, u.vout)) === true) return true
     // a proven parent cannot be a dead parent — the hint is never consulted
-    if (u.tx.merklePath === undefined && (await this.hintSkip?.(u.tx, u.vout)) === true) return true
+    if (u.tx.merklePath === undefined) {
+      // deadParent is the heal oracle — a true verdict answers with died()
+      // below. hintSkip alone keeps the old pass-over-only behavior: a hint
+      // is not a verdict, and healing on one would free live pending inputs.
+      // The memo dedupes across a draft's many outputs — a 250-entry file
+      // costs a probe per distinct parent, not per outpoint
+      if (this.deadParent !== undefined) {
+        let dead = deadMemo.get(id)
+        if (dead === undefined) {
+          dead = await this.deadParent(u.tx)
+          deadMemo.set(id, dead)
+        }
+        if (dead) return 'dead'
+      } else if ((await this.hintSkip?.(u.tx, u.vout)) === true) return true
+    }
     return false
   }
 
@@ -191,23 +208,29 @@ export abstract class FundsBase implements Funds {
       }
       const all = await this.store.list()
       const floor = this.dealFloor ?? 25_000
-      if (purpose !== 'deal') {
-        let owned = 0
-        for (const u of all) if (!this.reserved.has(op(u.tx.id('hex'), u.vout))) owned += u.satoshis
-        if (owned - sats < floor) throw new Error(`funds: ${purpose} take of ${sats} sats would leave ${owned - sats} < deal floor ${floor}`)
-      }
       const candidates: FundingOut[] = []
+      const deadMemo = new Map<string, boolean>()
+      let healed = false
+      // the heal pass runs BEFORE the floor and ignores the take's size: a
+      // phantom-drained file looks starved until the dead drafts' inputs
+      // revive — 'owned' below is only honest on the healed set. A refusal-
+      // class parent heals for good: died() frees the phantom's inputs and
+      // drops the owned outputs it adopted — an in-flight outpoint is left
+      // to its own take
       for (const u of all) {
-        if (u.satoshis < sats) continue
-        if (await this.unusable(u)) {
-          // a veto whose parent is refusal-class dead heals for good:
-          // died() frees the phantom's inputs and drops the owned outputs
-          // it adopted — an in-flight outpoint is left to its own take
-          const pid = u.tx.id('hex')
-          if (u.tx.merklePath === undefined && !this.reserved.has(op(pid, u.vout)) && (await this.deadParent?.(u.tx)) === true) await this.died(u.tx)
+        const veto = await this.unusable(u, deadMemo)
+        if (veto === 'dead') {
+          healed = true
+          await this.died(u.tx)
           continue
         }
-        candidates.push(u)
+        if (veto === false && u.satoshis >= sats) candidates.push(u)
+      }
+      if (purpose !== 'deal') {
+        let owned = 0
+        const stock = healed ? await this.store.list() : all
+        for (const u of stock) if (!this.reserved.has(op(u.tx.id('hex'), u.vout))) owned += u.satoshis
+        if (owned - sats < floor) throw new Error(`funds: ${purpose} take of ${sats} sats would leave ${owned - sats} < deal floor ${floor}`)
       }
       candidates.sort((a, b) => a.satoshis - b.satoshis)
       // first-party truth side: a 'spent' answer burns the candidate for
@@ -265,7 +288,7 @@ export abstract class FundsBase implements Funds {
 
   async died(x: Transaction | string): Promise<void> {
     const txid = typeof x === 'string' ? x : x.id('hex')
-    const tx = typeof x === 'string' ? await this.deps.txOf?.(x) : x
+    const tx = typeof x === 'string' ? await this.txOf?.(x) : x
     if (tx === undefined) {
       this.deps.log?.(`funds: died(${txid.slice(0, 16)}…) — tx not held, nothing to free`)
       return
@@ -278,7 +301,7 @@ export abstract class FundsBase implements Funds {
       const vout = Number(v)
       if ((await this.store.has?.(pid, vout)) === true) continue
       if ((await this.store.tombstoned?.(pid, vout)) !== true) continue
-      const parent = inp.sourceTransaction ?? (await this.deps.txOf?.(pid))
+      const parent = inp.sourceTransaction ?? (await this.txOf?.(pid))
       if (parent === undefined || (await this.hintSkip?.(parent, vout)) === true) continue
       if (this.store.revive !== undefined) await this.store.revive(parent, vout)
       else await this.store.add(parent, vout)
@@ -390,6 +413,10 @@ export interface FunderLike {
   markSpent?: (txid: string, vout: number) => void
   addOwned?: (tx: Transaction, vout: number) => void
   unmark?: (txid: string, vout: number) => void
+  /** markSpent's read side — without it the adapter cannot tell a tombstoned
+   *  own outpoint from a foreign input, and died()'s revive guard skips
+   *  freeing the dead spend's inputs for good */
+  isSpent?: (txid: string, vout: number) => boolean
   address?: () => Promise<string> | string
 }
 
@@ -421,7 +448,8 @@ export function fundsOf(f: FunderLike, depsOrFloor?: Partial<FundsDeps> | number
       const txid = tx.id('hex')
       if (f.unmark !== undefined) f.unmark(txid, vout)
       else f.addOwned?.(tx, vout)
-    }
+    },
+    tombstoned: f.isSpent !== undefined ? (txid, vout) => f.isSpent!(txid, vout) : undefined
   }
   return new AdaptedFunds(store, { ...deps, lock })
 }

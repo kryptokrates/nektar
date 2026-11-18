@@ -52,8 +52,9 @@ test('custody: takeFunding never overwrites a proof the funder already carried',
   assert.equal(out.tx.merklePath, own)
 })
 
-// G1: a candidate whose parent the broadcaster rejected is passed over for
-// this call only — a status hint is never written to custody state
+// G1: a candidate whose parent the broadcaster rejected is passed over and
+// healed — a status hint is never written to custody state, but died()
+// tombstones the phantom output and frees the refused tx's inputs
 const reserveOps = (
   candidates: Array<{ tx: Transaction; vout: number; satoshis: number }>,
   facts?: (txid: string) => Promise<import('@nektar/chain').TxFacts>
@@ -79,7 +80,7 @@ const hintFacts = (status: string): import('@nektar/chain').TxFacts => ({
   hint: { status, answered: true }
 })
 
-test('custody: takeFunding skips a broadcaster-rejected parent for this call only', async () => {
+test('custody: takeFunding skips a broadcaster-rejected parent and heals its phantom', async () => {
   const bad = parent()
   const good = parent()
   // parent() is deterministic — an extra dust output makes the txids differ
@@ -97,8 +98,10 @@ test('custody: takeFunding skips a broadcaster-rejected parent for this call onl
   )
   const u = await ops.takeFunding(1000)
   assert.equal(u.tx.id('hex'), good.id('hex'))
-  assert.deepEqual(statuses, [bad.id('hex'), good.id('hex')])
-  assert.deepEqual(spent, [], 'a skipped candidate is not marked spent')
+  assert.deepEqual(statuses, [bad.id('hex'), good.id('hex')], 'one refusal probe per candidate')
+  // a refusal-class parent heals by death: its output can never exist on
+  // chain, so the phantom is tombstoned rather than re-served forever
+  assert.deepEqual(spent, [`${bad.id('hex')}:0`])
 })
 
 test('custody: a proven candidate is never status-queried', async () => {

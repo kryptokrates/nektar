@@ -29,7 +29,7 @@ interface Agent {
   file: string
 }
 
-async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: number } = {}) {
+async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: number; wantExtendMs?: number } = {}) {
   const chain = (await testChain(t))!
   const dir = mkdtempSync(join(tmpdir(), 'nektar-market-'))
   const agents = new Map<string, Agent>()
@@ -70,7 +70,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
       broadcast: (tx) => mem.broadcastTx(tx),
       settleEscrow: (tx) => mem.funds.spent(tx),
       afterPrepare: (id) => hooks.afterPrepare?.(id),
-      opts: { refundBlocks: opts.refundBlocks ?? 144 }
+      opts: { refundBlocks: opts.refundBlocks ?? 144, ...(opts.wantExtendMs !== undefined ? { wantExtendMs: opts.wantExtendMs } : {}) }
     })
   const policyFor = (pub: string, extra: Partial<AutomationPolicy['limits']> = {}): AutomationPolicy => testPolicyFor(pub, { limits: extra })
   const add = async (name: string, limits: Partial<AutomationPolicy['limits']> = {}): Promise<Agent> => {
@@ -473,4 +473,35 @@ test('settleDepth: a depth-1 proof parks completion_submitted, settles at depth'
   } finally {
     await kx.destroy()
   }
+})
+
+test('want-TTL race: a live want republishes at the collection boundary instead of expiring — only its own exp ends the deal', async (t) => {
+  const w = await world(t, { wantExtendMs: 3000 })
+  if (w === undefined) return
+  t.after(w.close)
+  const bob = await w.add('bob')
+  const { operationId } = await bob.engine.publishWant({ domains: ['libfoo'], question: 'slow seller race', maxSats: 500 }, bob.policyHash)
+  await w.round([bob])
+  assert.equal(w.feed.filter((e) => e.kind === 'want').length, 1, 'the first publish lands')
+  // collectMs (1000) elapses with zero offers — the want is still live, so the
+  // op must not die on no_qualifying_offer: it re-arms and republishes
+  w.advance(1100)
+  await w.round([bob])
+  let st = (await bob.engine.status(operationId))!.operation
+  assert.equal(st.state, 'collecting', 'a live want survives an empty collection window')
+  await w.round([bob])
+  assert.equal(w.feed.filter((e) => e.kind === 'want').length, 2, 'the same signed want is republished, not re-minted')
+  const evs = await bob.store.events(operationId)
+  assert.ok(evs.some((e) => e.cause === 'want_republished'), 'the republish is journaled')
+  // still live inside the extension — a second empty boundary republishes again
+  w.advance(1100)
+  await w.round([bob])
+  st = (await bob.engine.status(operationId))!.operation
+  assert.equal(st.state, 'collecting')
+  // the want's own exp is the deal's end — only then does it expire
+  w.advance(2000)
+  await w.round([bob])
+  st = (await bob.engine.status(operationId))!.operation
+  assert.equal(st.state, 'expired')
+  assert.equal(st.data.cause ?? (await bob.store.events(operationId)).at(-1)?.cause, 'no_qualifying_offer')
 })

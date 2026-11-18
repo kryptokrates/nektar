@@ -81,6 +81,9 @@ export type FundsPurpose = FundPurpose
  *  they hand the whole transaction to `spent`/`died`/`adopt` and the
  *  implementation decides which outpoints live or die. */
 export interface Funds {
+  /** the balance a non-deal take() must leave behind — callers sizing
+   *  housekeeping spends (upkeep reserve splits) read it; impls enforce it */
+  dealFloor?: number
   /** address new funds are paid to */
   address: () => Promise<string> | string
   /** spendable balance in sats (spent and reserved outpoints excluded) */

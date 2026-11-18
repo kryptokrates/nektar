@@ -95,6 +95,19 @@ export interface AutomationConfig {
   /** quiet-extended collect window (NEKTAR_COLLECT_QUIET_MS) — opt-in; see
    *  MarketOptions.collectQuietMs. Default 0 (off). */
   collectQuietMs?: number
+  /** extra want lifetime beyond the collection window
+   *  (NEKTAR_WANT_EXTEND_MS) — the buyer republishes a still-live want at each
+   *  deadline instead of expiring on `no_qualifying_offer`; a seller under
+   *  load that misses the first window can still land inside exp. Default
+   *  120000. */
+  wantExtendMs?: number
+  /** medium self-pay outputs upkeep keeps on hand so a tree mint and a deal
+   *  escrow never contend for one dominant UTXO (NEKTAR_RESERVE_OUTS).
+   *  0 = off. Default 2. */
+  reserveOuts?: number
+  /** satoshis per reserve output (NEKTAR_RESERVE_OUT_SATS) — sized so either
+   *  a mint or a deal can fund from one. Default 2x the deal floor. */
+  reserveOutSats?: number
   now?: () => number
 }
 

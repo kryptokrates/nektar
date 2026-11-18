@@ -168,7 +168,7 @@ test('custody: a sealed dead verdict after submit throws and tombstones', async 
     fundSigner: () => key,
     broadcast: async () => ({ status: 'success' }),
     txs: () => {},
-    facts: async (): Promise<import('@nektar/chain').TxFacts> => ({ verdict: 'dead', hint: { status: 'REJECTED' } })
+    facts: async (): Promise<import('@nektar/chain').TxFacts> => ({ verdict: 'dead', hint: { status: 'REJECTED', answered: true } })
   } as CustodyOpsDeps)
   await assert.rejects(
     ops.provisionPay({ outputs: [{ satoshis: 1, scriptHex: '51' }], address: key.toPublicKey().toAddress(), fundsSats: 1_000 }),

@@ -2,8 +2,10 @@
 // healing, own bfinger record, bstore evidence, blogs deal journal
 // (append + anchor), and the deal-journal view `deals {operationId}` reads.
 // The `upkeep` guard serializes it; the assembler's cycle() and tick drive it.
+import { P2PKH } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
+import { signerAddress } from '@nektar/core'
 import { deadAncestry } from '@nektar/bstack'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Rt } from './rtctx.js'
@@ -239,13 +241,50 @@ export function openUpkeep(rt: Rt): void {
 
   // the directory card's last-published state — the canon compare is what
   // makes republishing change-driven instead of a per-pass publish
-  let announceLast: { canon: string; exp: number } | undefined
+  let announceLast: { canon: string; exp: number; hash?: string; publishedAt?: number } | undefined
   let announceError = ''
+  let reserveError = ''
 
   const runUpkeep = async (): Promise<void> => {
     try {
       if (lanes !== undefined) {
         try {
+          // reserve policy: keep `reserveOuts` medium self-pay outputs on
+          // hand so one dominant UTXO is never the single coin a deal escrow
+          // and a tree mint both reach for — a mint burns one medium while a
+          // deal funds from another. mintTree with our own P2PKH lock is the
+          // denomination: spent() adopts every output the moment the tx
+          // broadcasts, so the reserve is spendable with no index round.
+          const wantOuts = cfg.reserveOuts ?? 2
+          if (wantOuts > 0 && !rt.stopped) {
+            try {
+              // dealFloor 0 = "no floor configured" — size the medium off
+              // the default, never off zero
+              const outSats = cfg.reserveOutSats ?? (mem.funds.dealFloor || 25_000) * 2
+              const mediums = (await mem.funds.outs()).filter((u) => u.satoshis >= outSats)
+              if (mediums.length < wantOuts) {
+                const src = (await mem.fundingOuts(outSats * wantOuts + 600, 'upkeep'))[0]
+                if (src !== undefined) {
+                  const dtx = await lanes.mod.mintTree({ key, wallet, funding: src, n: wantOuts, satsPerOutput: outSats, lock: new P2PKH().lock(await signerAddress(key)) })
+                  const br = await mem.broadcastTx(dtx)
+                  if (br.status === 'success') {
+                    await mem.funds.spent(dtx)
+                    log(`automation: reserve: split ${src.satoshis} into ${wantOuts}x${outSats} medium outputs`)
+                  } else {
+                    await mem.funds.died(dtx)
+                  }
+                }
+              }
+            } catch (e) {
+              // starvation is a state, not a fault — same posture as the
+              // funding-slot gate: log once per message and retry next pass
+              const m = `automation: reserve: ${(e as Error).message.slice(0, 160)}`
+              if (m !== reserveError) {
+                reserveError = m
+                log(m)
+              }
+            }
+          }
           // dead-ancestry reap — an unproven tree whose input chain has a gap
           // the network cannot serve (a killed parent mint, a dropped draft)
           // can neither prove nor anchor: it wedges the mint gate and strands
@@ -415,7 +454,24 @@ export function openUpkeep(rt: Rt): void {
           }
           const announceCanon = lanes.mod.marketJson({ hosts: marketHosts, packs: announcePacks })
           const now = cfg.now?.() ?? Date.now()
-          if (announceLast === undefined || announceLast.canon !== announceCanon || announceLast.exp - now <= lanes.mod.MAX_LIFETIME_MS / 2) {
+          // keep-alive while the card's funding tree is unproven: hosts evict
+          // an admitted carrier whose funding lacks its BUMP inside the
+          // FUNDING_PROOF_MS window (10 min, vendored constant) — a slow
+          // mempool stretch outlives it, so re-announce well inside the
+          // window while the tree still waits on a block. Once the tree
+          // proves, queueRepublish re-records the same txid and this stops.
+          let unprovenFunding = false
+          if (announceLast?.hash !== undefined) {
+            const row = await lanes.journal.get(announceLast.hash).catch(() => undefined)
+            const tree = row?.fundingTxid !== undefined ? await mem.fetchTx(row.fundingTxid).catch(() => undefined) : undefined
+            unprovenFunding = tree !== undefined && tree.merklePath === undefined
+          }
+          if (
+            announceLast === undefined ||
+            announceLast.canon !== announceCanon ||
+            announceLast.exp - now <= lanes.mod.MAX_LIFETIME_MS / 2 ||
+            (unprovenFunding && now - (announceLast.publishedAt ?? now) > 4 * 60_000)
+          ) {
             const sa = await lanes.mod.signAnnounce(key, {
               hosts: marketHosts,
               ...(announcePacks.length > 0 ? { packs: announcePacks } : {}),
@@ -433,7 +489,7 @@ export function openUpkeep(rt: Rt): void {
               payload: { v: 1, kind: 'announce', body: sa }
             })
             await trackFanout(r, rt.fanoutIo)
-            announceLast = { canon: announceCanon, exp: sa.announce.exp ?? now }
+            announceLast = { canon: announceCanon, exp: sa.announce.exp ?? now, hash: r.hash, publishedAt: now }
             announceError = ''
             log(`automation: announce ${r.txid.slice(0, 12)} packs=${announcePacks.length}`)
           }

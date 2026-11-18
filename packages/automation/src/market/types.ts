@@ -169,6 +169,12 @@ export interface MarketOptions {
    *  `scoring.collectMs`, whichever first. 0 = off (select at minCollectMs +
    *  first offer — the default, unchanged). */
   collectQuietMs: number
+  /** extra want lifetime beyond `scoring.collectMs` — the want stays valid
+   *  for sellers while the buyer republishes it at each collection boundary
+   *  instead of expiring on `no_qualifying_offer`. A seller under load that
+   *  misses the first window still lands inside the want's exp; the deal only
+   *  dies when the want itself does. 0 = old behaviour (exp == collectMs). */
+  wantExtendMs: number
 }
 
 export const DEFAULTS: MarketOptions = {
@@ -179,7 +185,8 @@ export const DEFAULTS: MarketOptions = {
   sellerSafetyBlocks: 2,
   approvalTtlMs: 86_400_000,
   minCollectMs: 1000,
-  collectQuietMs: 0
+  collectQuietMs: 0,
+  wantExtendMs: 120_000
 }
 export const pkhOf = (pub: string) => Buffer.from(PublicKey.fromString(pub).toHash() as number[]).toString('hex')
 /** a bstore ObjectRef → stock plaintext ref (digest-pinned locator). https

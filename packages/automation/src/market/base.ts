@@ -144,7 +144,9 @@ export abstract class MarketBase {
         ...(input.question ? { question: input.question } : {}),
         maxSats: input.maxSats,
         ts: now,
-        exp: now + p.scoring.collectMs,
+        // the want lives past one collection window — sellers under load may
+        // still answer while the buyer republishes at each boundary
+        exp: now + p.scoring.collectMs + this.o.wantExtendMs,
         net: this.d.network,
         ...(tip ? { tip: tip.tip, tipHeight: tip.tipHeight } : {}),
         ...(input.wantId ? { wantId: input.wantId } : {}),

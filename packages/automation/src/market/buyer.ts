@@ -426,6 +426,20 @@ export abstract class BuyerOps extends SellerOps {
     ]
     const top = ranking.ranked[0]
     if (!top) {
+      // a live want may still be answered — republish the same signed record
+      // (unchanged revision, so arriving offers still match) and collect one
+      // more window instead of expiring on a slow round. Only the want's own
+      // exp ends the deal — the collection window is not the want's lifetime.
+      const w = (op.data.want as SignedWant | undefined)?.want
+      if (opts?.expire === true && w?.exp !== undefined && w.exp > this.now()) {
+        await this.d.store.transition(op.operationId, op.revision, 'collecting', {
+          cause: 'want_republished',
+          dueAt: this.now() + p.scoring.collectMs,
+          evidence: { rejected },
+          outbox: [{ actionId: `${op.operationId}:want:r${op.revision}`, kind: 'publish-want', destination: 'feed', payload: op.data.want }]
+        })
+        return
+      }
       // early-select passes expire:false — a window full of failing offers
       // can't end the collection early; only reaching dueAt may expire it
       if (opts?.expire !== false)

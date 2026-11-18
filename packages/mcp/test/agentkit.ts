@@ -76,12 +76,19 @@ export interface TestAgentOpts {
   opts?: Partial<MarketOptions>
   /** funded outputs to mint — upkeep lanes + tree mints draw real stock */
   funderOutputs?: number
+  /** sats per funded output — one big output is the dominant-UTXO fixture */
+  funderSats?: number
+  /** upkeep's medium-output reserve policy (NEKTAR_RESERVE_OUTS/_SATS) */
+  reserveOuts?: number
+  reserveOutSats?: number
+  /** own directory card (NEKTAR_ANNOUNCE=1) */
+  announce?: boolean
   publishFinger?: boolean
   policy?: TestPolicyOpts
 }
 
 export const testAgent = async (name: string, o: TestAgentOpts): Promise<TestAgent> => {
-  const funder = await testFunder(o.funderOutputs ?? 60)
+  const funder = await testFunder(o.funderOutputs ?? 60, o.funderSats)
   // the port's pull answers — every production assembly wires these from the
   // ChainPort; without proofLookup the memory tier's only proof path is the
   // events rotation, which freezes once the tip idles (tip-gated ticks)
@@ -113,6 +120,9 @@ const wireAgent = async (name: string, mem: NektarMemory, o: TestAgentOpts): Pro
     ...(o.objectStore !== undefined ? { objectStore: o.objectStore } : {}),
     ...(o.publishFinger === true ? { publishFinger: true } : {}),
     ...(o.treeLowWater !== undefined ? { treeLowWater: o.treeLowWater } : {}),
+    ...(o.reserveOuts !== undefined ? { reserveOuts: o.reserveOuts } : {}),
+    ...(o.reserveOutSats !== undefined ? { reserveOutSats: o.reserveOutSats } : {}),
+    ...(o.announce === true ? { announce: true } : {}),
     ...(o.watch !== undefined ? { watchHosts: [o.watch], watchPublic: o.watch } : {}),
     opts: { offerTtlBlocks: 10000, refundBlocks: 10000, ...o.opts }
   })

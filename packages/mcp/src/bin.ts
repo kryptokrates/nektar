@@ -166,6 +166,14 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     // opt-in: the collect window stays open while offers keep arriving and
     // closes collectQuietMs after the last one (collectMs stays the ceiling)
     collectQuietMs: nektarEnv('NEKTAR_COLLECT_QUIET_MS') ? Number(nektarEnv('NEKTAR_COLLECT_QUIET_MS')) : undefined,
+    // extra want lifetime beyond the collection window — the buyer republishes
+    // a still-live want at each deadline instead of expiring; a seller under
+    // load that missed the first window can still answer inside exp
+    wantExtendMs: nektarEnv('NEKTAR_WANT_EXTEND_MS') ? Number(nektarEnv('NEKTAR_WANT_EXTEND_MS')) : undefined,
+    // upkeep keeps this many medium self-pay outputs on hand so a tree mint
+    // and a deal escrow never contend for one dominant UTXO
+    reserveOuts: nektarEnv('NEKTAR_RESERVE_OUTS') ? Number(nektarEnv('NEKTAR_RESERVE_OUTS')) : undefined,
+    reserveOutSats: nektarEnv('NEKTAR_RESERVE_OUT_SATS') ? Number(nektarEnv('NEKTAR_RESERVE_OUT_SATS')) : undefined,
     // a settlement proof must sit this deep before a completion settles —
     // the same finality depth the memory applies to anchor queries
     settleDepth: rt.mem.finalityDepth,

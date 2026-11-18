@@ -186,7 +186,13 @@ export abstract class FundsBase implements Funds {
   }
 
   async outs(): Promise<FundingOut[]> {
-    return (await this.store.list()).filter((u) => !this.reserved.has(op(u.tx.id('hex'), u.vout)))
+    return (await this.store.list()).filter((u) => {
+      try {
+        return !this.reserved.has(op(u.tx.id('hex'), u.vout))
+      } catch {
+        return false // a row that cannot serialize is not spendable stock
+      }
+    })
   }
 
   /** backends with a remote store re-query here — default no-op covers
@@ -205,7 +211,12 @@ export abstract class FundsBase implements Funds {
    *  never writes bookkeeping. 'dead' marks a refusal-class parent so take
    *  can heal exactly once — the probe is asked a single time */
   private async unusable(u: FundingOut, deadMemo: Map<string, boolean>): Promise<'dead' | true | false> {
-    const id = u.tx.id('hex')
+    let id: string
+    try {
+      id = u.tx.id('hex')
+    } catch {
+      return true // an unserializable parent can never fund a spend — pass over
+    }
     if (this.reserved.has(op(id, u.vout))) return true
     if ((await this.store.tombstoned?.(id, u.vout)) === true) return true
     if ((await this.leased?.(id, u.vout)) === true) return true
@@ -323,7 +334,25 @@ export abstract class FundsBase implements Funds {
       // first-party truth side: a 'spent' answer burns the candidate for
       // good and selection moves on — a hint only passes over, this drops
       for (const pick of candidates) {
-        const id = pick.tx.id('hex')
+        let id: string
+        try {
+          id = pick.tx.id('hex')
+        } catch {
+          continue // a stored tx that cannot serialize can never be spent
+        }
+        if (pick.tx.outputs[pick.vout]?.satoshis === undefined || pick.tx.outputs[pick.vout]?.lockingScript === undefined) {
+          // the carried parent is a stand-in at the spent vout — an input
+          // built on it cannot fee or sign. Repair from the full-tx source
+          // when one exists; otherwise the row is unspendable stock and the
+          // take moves to the next candidate rather than exploding in the
+          // consumer (mintTree/fee reads the same fields)
+          const full = await Promise.resolve(this.txOf?.(id)).catch(() => undefined)
+          if (full?.outputs[pick.vout]?.satoshis !== undefined && full?.outputs[pick.vout]?.lockingScript !== undefined) {
+            pick.tx = full
+          } else {
+            continue
+          }
+        }
         if ((await this.spendCheck?.(id, pick.vout)) === true) {
           await this.burn(id, pick.vout)
           continue
@@ -340,7 +369,14 @@ export abstract class FundsBase implements Funds {
 
   /** input outpoint id — sourceTXID or the held sourceTransaction's id */
   private static inputOp(inp: Transaction['inputs'][number]): string | undefined {
-    const txid = inp.sourceTXID ?? inp.sourceTransaction?.id('hex')
+    let txid = inp.sourceTXID
+    if (txid === undefined && inp.sourceTransaction !== undefined) {
+      try {
+        txid = inp.sourceTransaction.id('hex')
+      } catch {
+        txid = undefined // an EF/lazy stand-in cannot serialize — sourceTXID is its honest name
+      }
+    }
     return txid !== undefined ? op(txid, inp.sourceOutputIndex) : undefined
   }
 

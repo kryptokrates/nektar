@@ -132,17 +132,43 @@ export const anchoredTree = (tree: Transaction): boolean =>
  *  so a deep or cyclic graph can't spin the audit. */
 export const deadAncestry = async (tree: Transaction, resolveTx: (txid: string) => Promise<Transaction | undefined>, maxNodes = 32): Promise<string[]> => {
   const dead = new Set<string>()
-  const seen = new Set<string>([tree.id('hex')])
+  const seen = new Set<string>()
+  try {
+    seen.add(tree.id('hex'))
+  } catch {
+    // a subject that cannot serialize is itself a stand-in — walk its
+    // inputs by sourceTXID alone; they name what it cannot
+  }
   const queue: Transaction[] = tree.merklePath === undefined ? [tree] : []
   while (queue.length > 0 && seen.size <= maxNodes) {
     const t = queue.shift()!
     for (const i of t.inputs) {
-      const id = i.sourceTransaction?.id('hex') ?? i.sourceTXID
+      // the wire reference names the parent; sourceTransaction may be an
+      // EF/lazy stand-in whose id() throws — try it only as the fallback
+      let id = i.sourceTXID
+      if (id === undefined && i.sourceTransaction !== undefined) {
+        try {
+          id = i.sourceTransaction.id('hex')
+        } catch {
+          id = undefined
+        }
+      }
       // a null prevout (coinbase-shaped input) is a structural terminal,
       // not an ancestry gap — there is no parent to resolve
       if (id === undefined || id === '00'.repeat(32) || seen.has(id)) continue
       seen.add(id)
-      const p = i.sourceTransaction ?? (await resolveTx(id))
+      let p = i.sourceTransaction
+      if (p !== undefined) {
+        try {
+          p.id('hex')
+        } catch {
+          // a stand-in carries no ancestry — resolve the real parent;
+          // unresolvable IS dead ancestry (it can neither prove nor anchor)
+          p = await resolveTx(id)
+        }
+      } else {
+        p = await resolveTx(id)
+      }
       if (p === undefined) {
         dead.add(id)
         continue

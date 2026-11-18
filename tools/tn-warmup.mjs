@@ -111,6 +111,10 @@ const mkagent = async (wifName) => {
     log: (l) => console.log(`${wifName}:${l}`),
     ai: new ScriptedExecutor(),
     publishFinger: true,
+    // the suite gates on >=FLOOR proven free slots per lane — the runtime's
+    // own finger lowWater (2) would prove one tree and stop short of the
+    // floor forever; warm every lane to the suite's depth
+    treeLowWater: FLOOR,
     opts: { offerTtlBlocks: 48 }
   })
   mem.automation = rt

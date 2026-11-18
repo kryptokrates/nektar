@@ -237,6 +237,9 @@ export function openUpkeep(rt: Rt): void {
       if (lanes !== undefined) {
         try {
           for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger'] as const) {
+            // stop() drains upkeep with a bound — bail between phases so a
+            // late pass doesn't outlive the pool it's about to write to
+            if (rt.stopped) return
             const spec = await laneSpec(kind)
             const r = await lanes.mod.ensureTrees({
               key,
@@ -298,7 +301,7 @@ export function openUpkeep(rt: Rt): void {
       // log/fan-out streams queue `repair-host` rows instead).
       // B1 — opt-in only: it costs sats and makes this agent publicly
       // discoverable, so it is never automatic (NEKTAR_BFINGER_PUBLISH=1).
-      if (lanes !== undefined && fingerState !== undefined && logStream !== undefined && cfg.publishFinger === true) {
+      if (lanes !== undefined && fingerState !== undefined && logStream !== undefined && cfg.publishFinger === true && !rt.stopped) {
         try {
           const packsRef = packsStore?.ref()
           const r = await lanes.mod.publishFinger({
@@ -338,7 +341,9 @@ export function openUpkeep(rt: Rt): void {
           }
         }
       }
+      if (rt.stopped) return
       await storeEvidence()
+      if (rt.stopped) return
       await appendLogEvents()
     } catch (e) {
       log(`automation: ${(e as Error).message}`)
@@ -400,6 +405,9 @@ export function openUpkeep(rt: Rt): void {
   rt.dealJournal = dealJournal
   rt.upkeep = async (): Promise<void> => {
     if (rt.upkeepRun !== undefined) return await rt.upkeepRun
+    // a queued pass after stop() would only write into a destroyed pool —
+    // the drain already owns the one still running
+    if (rt.stopped) return
     rt.upkeepAt = Date.now()
     const t0 = Date.now()
     rt.upkeepRun = runUpkeep().finally(() => {

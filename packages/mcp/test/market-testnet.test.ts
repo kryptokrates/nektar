@@ -327,9 +327,11 @@ const until = async (rts: Automation[], ms: number, ok: () => Promise<boolean>):
     if (!upkeepRunning && Date.now() - upkeepAt >= 10_000) {
       upkeepAt = Date.now()
       upkeepRunning = true
-      void Promise.all(rts.map((rt) => rt.upkeep())).finally(() => {
-        upkeepRunning = false
-      })
+      void Promise.all(rts.map((rt) => rt.upkeep()))
+        .catch((e) => logs.push(`upkeep: ${e instanceof Error ? e.message : String(e)}`))
+        .finally(() => {
+          upkeepRunning = false
+        })
     }
     if (await ok()) return Date.now() - t0
     await sleep(800)

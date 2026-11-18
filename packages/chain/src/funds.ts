@@ -34,6 +34,13 @@ export interface FundsStore {
   revive?: (tx: Transaction, vout: number) => Promise<void> | void
   /** persistent tombstone — an outpoint we deliberately marked spent */
   tombstoned?: (txid: string, vout: number) => Promise<boolean> | boolean
+  /** enumerate owned tombstones — the starve-time sweep proves an orphaned
+   *  mark (its consuming draft left no candidate to heal through) unspent
+   *  and revives it directly. Entries may carry the retained FundingOut;
+   *  txOf resolves the rest. */
+  tombstonedList?: () =>
+    | Array<{ txid: string; vout: number; satoshis?: number; tx?: Transaction }>
+    | Promise<Array<{ txid: string; vout: number; satoshis?: number; tx?: Transaction }>>
   /** already in the owned set? Default: a list() scan. */
   has?: (txid: string, vout: number) => Promise<boolean> | boolean
 }
@@ -65,6 +72,19 @@ export interface FundsDeps {
   /** first-party spend probe — a 'spent' answer burns the candidate during
    *  selection. Seeds the `spendCheck` field. */
   spendCheck?: (txid: string, vout: number) => Promise<boolean>
+  /** starve-sweep revive oracle, listing form: positively-listed-live
+   *  outpoint ids ('txid:vout') — an index's address-utxos page or a
+   *  first-party utxo view. A tombstone the listing positively names is
+   *  lifted. This is a claim, not SPV — safe for self-bookkeeping: a
+   *  falsely-revived mark self-corrects at pick-time spendCheck or the
+   *  broadcaster's reject; a stuck one starves the pool for good. One call
+   *  per starved take, never per-outpoint. Seeds the `liveSet` field. */
+  liveSet?: () => Promise<Set<string> | undefined>
+  /** starve-sweep revive oracle, per-outpoint form — 'unspent' is only
+   *  honestly answerable where the utxo view is first-party (a node's own
+   *  utxo set, the wallet's spendable listing). Used when no `liveSet` is
+   *  wired; probes are capped. Seeds the `liveCheck` field. */
+  liveCheck?: (txid: string, vout: number) => Promise<boolean>
   /** the candidate's parent tx is refusal-class dead — a first-party
    *  verdict or the broadcaster's own REJECTED word on a tx that left our
    *  hands. `take` answers it with died(): the phantom's inputs revive
@@ -97,6 +117,8 @@ export abstract class FundsBase implements Funds {
   public hintSkip?: (tx: Transaction, vout: number) => Promise<boolean>
   public deadParent?: (tx: Transaction) => Promise<boolean>
   public spendCheck?: (txid: string, vout: number) => Promise<boolean>
+  public liveSet?: () => Promise<Set<string> | undefined>
+  public liveCheck?: (txid: string, vout: number) => Promise<boolean>
   public txOf?: (txid: string) => Promise<Transaction | undefined> | Transaction | undefined
   public takeOverride?: (purpose: FundPurpose, sats: number) => Promise<FundingOut | undefined>
   /** sats kept affordable for one deal — non-deal takes never dip below;
@@ -112,6 +134,8 @@ export abstract class FundsBase implements Funds {
     this.hintSkip = deps.hintSkip
     this.deadParent = deps.deadParent
     this.spendCheck = deps.spendCheck
+    this.liveSet = deps.liveSet
+    this.liveCheck = deps.liveCheck
     this.txOf = deps.txOf
     this.takeOverride = deps.takeOverride
     this.dealFloor = deps.dealFloor
@@ -225,6 +249,51 @@ export abstract class FundsBase implements Funds {
           continue
         }
         if (veto === false && u.satoshis >= sats) candidates.push(u)
+      }
+      // tombstone sweep — the starve last-resort, run only when the live
+      // set cannot cover the take. A spent-mark whose consuming draft left
+      // no candidate behind (exported carrier, killed process, dropped
+      // record) can never reach the heal pass above: list() hides it and
+      // no dead child calls died() for it. Here the index's own 'unspent'
+      // lifts the mark — probe largest-first, early-exit once covered,
+      // capped so a rotten pool can't turn a take into a scan. A falsely-
+      // revived mark self-corrects at pick-time spendCheck or the
+      // broadcaster's reject; a stuck one starves the book for good.
+      if (
+        !candidates.some((u) => u.satoshis >= sats) &&
+        (this.liveSet !== undefined || this.liveCheck !== undefined) &&
+        this.store.tombstonedList !== undefined
+      ) {
+        const tombs = (await this.store.tombstonedList()).sort((a, b) => (b.satoshis ?? 0) - (a.satoshis ?? 0))
+        // the listing oracle answers for the whole book in one call; the
+        // per-outpoint probe is the capped fallback where no listing exists
+        const set = await this.liveSet?.().catch(() => undefined)
+        // non-deal takes owe the floor too — keep reviving until the take's
+        // own need plus the reserved deal-floor is covered, not just `sats`
+        const want = sats + (purpose === 'deal' ? 0 : (this.dealFloor ?? 25_000))
+        let revived = 0,
+          probed = 0
+        for (const t of tombs) {
+          if (probed >= 48 || revived >= want) break
+          if (t.satoshis !== undefined && t.satoshis < sats) continue
+          if (this.reserved.has(op(t.txid, t.vout))) continue
+          if ((await this.leased?.(t.txid, t.vout)) === true) continue
+          if (set !== undefined) {
+            if (!set.has(op(t.txid, t.vout))) continue
+          } else {
+            probed++
+            if ((await this.liveCheck?.(t.txid, t.vout)) !== true) continue
+          }
+          const tx = t.tx ?? (await this.txOf?.(t.txid))
+          if (tx === undefined) continue
+          const fo: FundingOut = { tx, vout: t.vout, satoshis: t.satoshis ?? tx.outputs[t.vout]?.satoshis ?? 0 }
+          if (fo.satoshis < sats) continue
+          if (this.store.revive !== undefined) await this.store.revive(tx, t.vout)
+          else await this.store.add(tx, t.vout)
+          healed = true
+          revived += fo.satoshis
+          candidates.push(fo)
+        }
       }
       if (purpose !== 'deal') {
         let owned = 0
@@ -344,6 +413,15 @@ export interface ListFundsStore extends FundsStore {
 export function listFundsStore(): ListFundsStore {
   const outs: FundingOut[] = []
   const tombstones = new Set<string>()
+  // dropped outs retained for the starve sweep — the tombstone alone loses
+  // the out's tx and amount, and a dead draft's input mark is only
+  // revivable if the sweep can still name both
+  const tombOuts = new Map<string, FundingOut>()
+  const lift = (key: string): FundingOut | undefined => {
+    const u = tombOuts.get(key)
+    tombOuts.delete(key)
+    return u
+  }
   return {
     outs,
     tombstones,
@@ -352,6 +430,7 @@ export function listFundsStore(): ListFundsStore {
     add: (tx, vout) => {
       const o = tx.outputs[vout]
       if (o === undefined) throw new Error(`funds: adopt out-of-range vout ${vout}`)
+      lift(op(tx.id('hex'), vout))
       tombstones.delete(op(tx.id('hex'), vout))
       if (!outs.some((u) => u.tx.id('hex') === tx.id('hex') && u.vout === vout)) {
         outs.push({ tx, vout, satoshis: o.satoshis ?? 0 })
@@ -362,18 +441,25 @@ export function listFundsStore(): ListFundsStore {
       // tombstone only what was ours — a foreign input consumed by our tx
       // must not become revivable (it was never ours to bring back)
       if (i >= 0) {
-        outs.splice(i, 1)
+        const [u] = outs.splice(i, 1)
         tombstones.add(op(txid, vout))
+        tombOuts.set(op(txid, vout), u)
       }
     },
     revive: (tx, vout) => {
       tombstones.delete(op(tx.id('hex'), vout))
       const o = tx.outputs[vout]
+      const held = lift(op(tx.id('hex'), vout))
       if (o !== undefined && !outs.some((u) => u.tx.id('hex') === tx.id('hex') && u.vout === vout)) {
-        outs.push({ tx, vout, satoshis: o.satoshis ?? 0 })
+        outs.push({ tx, vout, satoshis: held?.satoshis ?? o.satoshis ?? 0 })
       }
     },
-    tombstoned: (txid, vout) => tombstones.has(op(txid, vout))
+    tombstoned: (txid, vout) => tombstones.has(op(txid, vout)),
+    tombstonedList: () =>
+      [...tombOuts.entries()].map(([key, u]) => {
+        const [txid, v] = key.split(':')
+        return { txid, vout: Number(v), satoshis: u.satoshis, tx: u.tx }
+      })
   }
 }
 
@@ -417,6 +503,10 @@ export interface FunderLike {
    *  own outpoint from a foreign input, and died()'s revive guard skips
    *  freeing the dead spend's inputs for good */
   isSpent?: (txid: string, vout: number) => boolean
+  /** enumerate spent-marked entries — the starve sweep proves orphaned
+   *  marks unspent and revives them. Without it a tombstoned outpoint whose
+   *  consuming draft left no candidate starves the pool for good */
+  spentList?: () => Array<{ tx: Transaction; vout: number; satoshis?: number }>
   address?: () => Promise<string> | string
 }
 
@@ -449,7 +539,9 @@ export function fundsOf(f: FunderLike, depsOrFloor?: Partial<FundsDeps> | number
       if (f.unmark !== undefined) f.unmark(txid, vout)
       else f.addOwned?.(tx, vout)
     },
-    tombstoned: f.isSpent !== undefined ? (txid, vout) => f.isSpent!(txid, vout) : undefined
+    tombstoned: f.isSpent !== undefined ? (txid, vout) => f.isSpent!(txid, vout) : undefined,
+    tombstonedList:
+      f.spentList !== undefined ? () => f.spentList!().map((u) => ({ txid: u.tx.id('hex'), vout: u.vout, satoshis: u.satoshis, tx: u.tx })) : undefined
   }
   return new AdaptedFunds(store, { ...deps, lock })
 }

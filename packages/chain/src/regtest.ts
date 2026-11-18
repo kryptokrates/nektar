@@ -390,6 +390,20 @@ export class ReserveFunder {
   isSpent(txid: string, vout: number): boolean {
     return this.spent.has(this.op(txid, vout))
   }
+  /** every spent-marked entry, tx resolved — the Funds starve sweep proves
+   *  orphaned marks unspent and revives them; utxos() alone hides them */
+  spentList(): Array<{ tx: Transaction; vout: number; satoshis: number }> {
+    const out: Array<{ tx: Transaction; vout: number; satoshis: number }> = []
+    for (const e of this.entries) {
+      if (!this.spent.has(this.op(e.txid, e.vout))) continue
+      try {
+        out.push({ tx: Transaction.fromHex(e.txHex), vout: e.vout, satoshis: e.satoshis })
+      } catch {
+        /* skip unparseable */
+      }
+    }
+    return out
+  }
   markSpent(txid: string, vout: number): void {
     this.spent.add(this.op(txid, vout))
     this.utxos = this.utxos.filter((u) => this.op(u.tx.id('hex'), u.vout) !== this.op(txid, vout))

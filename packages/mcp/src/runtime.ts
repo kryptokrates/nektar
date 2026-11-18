@@ -15,6 +15,7 @@ import {
   regtestPort,
   livePort,
   temporalSourcesFor,
+  indexFor,
   ChainEvents,
   type ChainPort,
   type Funds,
@@ -366,6 +367,21 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   if (port.spendStatus !== undefined) {
     const spendStatus = port.spendStatus
     custody.funds.spendCheck = async (txid, vout) => (await spendStatus(txid, vout).catch(() => 'unknown' as const)) === 'spent'
+    // starve-sweep revive oracles: 'unspent' is a real answer only on
+    // first-party utxo views (regtest node, memory chain) — live indexes
+    // can never prove absence, so the port's answer there stays unknown
+    custody.funds.liveCheck = async (txid, vout) => (await spendStatus(txid, vout).catch(() => 'unknown' as const)) === 'unspent'
+  }
+  // on live nets the starve sweep's oracle is the index's address listing —
+  // positive membership of a tombstoned outpoint lifts its mark. A listing
+  // claim, not SPV — safe for self-bookkeeping: a falsely-revived mark
+  // self-corrects at pick-time spendCheck or the broadcaster's reject
+  if (live && mc?.indexerUrl !== undefined) {
+    const idx = indexFor({ url: mc.indexerUrl, apiKey: mc.indexerApiKey })
+    custody.funds.liveSet = async () => {
+      const listing = await idx.utxos(custody.fundAddress).catch(() => undefined)
+      return listing === undefined ? undefined : new Set(listing.map((u) => `${u.txid}:${u.vout}`))
+    }
   }
   if ('dealFloor' in custody.funds) custody.funds.dealFloor = nektarEnvNum('NEKTAR_DEAL_FLOOR_SATS') ?? 0
   chain.broadcast = wrapBroadcast(ledger, chain.broadcast)

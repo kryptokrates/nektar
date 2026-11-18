@@ -65,7 +65,12 @@ export class WalletFunds extends FundsBase {
         this.dropped.delete(`${tx.id('hex')}:${vout}`)
         await this.internalizePush(tx, vout, log)
       },
-      tombstoned: (txid, vout) => this.dropped.has(`${txid}:${vout}`)
+      tombstoned: (txid, vout) => this.dropped.has(`${txid}:${vout}`),
+      tombstonedList: () =>
+        [...this.dropped].map((key) => {
+          const [txid, v] = key.split(':')
+          return { txid, vout: Number(v) }
+        })
     }
   }
 

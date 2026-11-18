@@ -146,6 +146,16 @@ export interface Funds {
    *  lookup that can fetch the dead spend's parent (held store, index).
    *  Late-bindable like hintSkip: the wiring instance owns the tx graph */
   txOf?: (txid: string) => Promise<Transaction | undefined> | Transaction | undefined
+  /** starve-sweep revive oracle, listing form: positively-listed-live
+   *  outpoint ids ('txid:vout') — an index's address page or a first-party
+   *  utxo view. One call per starved take; a tombstone the listing names
+   *  lifts its mark. A listing claim is not SPV — safe for self-bookkeeping
+   *  only, never a chain verdict. */
+  liveSet?: () => Promise<Set<string> | undefined>
+  /** starve-sweep revive oracle, per-outpoint form — 'unspent' is only
+   *  honestly answerable where the utxo view is first-party (a node's own
+   *  utxo set). Used when no liveSet is wired; probes are capped. */
+  liveCheck?: (txid: string, vout: number) => Promise<boolean>
   /** a purpose's take served by a dedicated pool instead of the shared set —
    *  the fee-vault covenant mints capped outs for `publish` takes; returns
    *  undefined when it has nothing to serve (fall through to the pool) */

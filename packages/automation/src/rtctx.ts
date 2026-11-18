@@ -101,6 +101,10 @@ export interface AutomationConfig {
    *  load that misses the first window can still land inside exp. Default
    *  120000. */
   wantExtendMs?: number
+  /** hard bound on one outbox deliver call (NEKTAR_DELIVER_BOUND_MS) — a leg
+   *  that never settles retries transport-classed instead of parking its
+   *  pump worker. Default 45000. */
+  deliverBoundMs?: number
   /** medium self-pay outputs upkeep keeps on hand so a tree mint and a deal
    *  escrow never contend for one dominant UTXO (NEKTAR_RESERVE_OUTS).
    *  0 = off. Default 2. */

@@ -308,7 +308,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       ...cfg.opts,
       ...(cfg.minCollectMs !== undefined ? { minCollectMs: cfg.minCollectMs } : {}),
       ...(cfg.collectQuietMs !== undefined ? { collectQuietMs: cfg.collectQuietMs } : {}),
-      ...(cfg.wantExtendMs !== undefined ? { wantExtendMs: cfg.wantExtendMs } : {})
+      ...(cfg.wantExtendMs !== undefined ? { wantExtendMs: cfg.wantExtendMs } : {}),
+      ...(cfg.deliverBoundMs !== undefined ? { deliverBoundMs: cfg.deliverBoundMs } : {})
     },
     logStream
   })

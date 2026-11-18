@@ -170,6 +170,9 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     // a still-live want at each deadline instead of expiring; a seller under
     // load that missed the first window can still answer inside exp
     wantExtendMs: nektarEnv('NEKTAR_WANT_EXTEND_MS') ? Number(nektarEnv('NEKTAR_WANT_EXTEND_MS')) : undefined,
+    // a deliver leg that never settles retries transport-classed instead of
+    // parking its outbox worker — bound covers the worst legit two-leg send
+    deliverBoundMs: nektarEnv('NEKTAR_DELIVER_BOUND_MS') ? Number(nektarEnv('NEKTAR_DELIVER_BOUND_MS')) : undefined,
     // upkeep keeps this many medium self-pay outputs on hand so a tree mint
     // and a deal escrow never contend for one dominant UTXO
     reserveOuts: nektarEnv('NEKTAR_RESERVE_OUTS') ? Number(nektarEnv('NEKTAR_RESERVE_OUTS')) : undefined,

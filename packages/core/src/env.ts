@@ -43,3 +43,25 @@ export function readNektarEnv(env: EnvSource = process.env): EnvSource {
   for (const [k, v] of Object.entries(env)) if (k.startsWith('NEKTAR_')) out[k] = v
   return out
 }
+
+/** baked-in bootstrap hosts — the plural Layer-0 entry points of a network
+ *  whose lanes verify everything they serve (signature + SPV + funding
+ *  binding), so a seed host is untrusted by design: the worst it does is
+ *  withhold, which quorum reads detect — it can never forge. Operators who
+ *  run a public host pair on a given network can be added here. */
+export const DEFAULT_MARKET_HOSTS: Record<string, string[]> = {
+  testnet: ['https://nektar.run/hosts/a', 'https://nektar.run/hosts/b']
+}
+
+/** the effective market-host set: an explicit NEKTAR_MARKET_HOSTS wins
+ *  outright — a private silo must be able to exclude the seeds — else the
+ *  baked-in seed hosts for NEKTAR_NETWORK, else [] (regtest always runs
+ *  its own hosts; nothing baked in). */
+export function marketHostsFromEnv(env: EnvSource = process.env): string[] {
+  const explicit = (nektarEnv('NEKTAR_MARKET_HOSTS', env) ?? '')
+    .split(',')
+    .map((s) => s.trim().replace(/\/+$/, ''))
+    .filter(Boolean)
+  if (explicit.length > 0) return explicit
+  return [...(DEFAULT_MARKET_HOSTS[nektarEnv('NEKTAR_NETWORK', env) ?? 'regtest'] ?? [])]
+}

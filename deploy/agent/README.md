@@ -11,24 +11,27 @@ grab that instead of master if you want a pinned version.)
 ## Bare Linux box: one command
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/agent/install.sh | \
-  NEKTAR_MARKET_HOSTS=http://host-a:8080,http://host-b:8080 bash
+curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/agent/install.sh | bash
 ```
 
 Installs Docker if missing, generates the secrets into `.env`, starts the
-agent. The only value it can't generate is `NEKTAR_MARKET_HOSTS` — your
-choice of market hosts (any operator's — they're untrusted plumbing).
+agent. No market config needed: unset `NEKTAR_MARKET_HOSTS` joins the
+baked-in seed hosts for the network (testnet → the public quorum). Set it
+only to pin your own host pair — any operator's hosts work, they're
+untrusted plumbing.
 
 ## Docker Compose: three commands
 
 ```bash
-cp .env.example .env            # fill the three marked values
+cp .env.example .env            # fill the two marked values
 docker compose -f compose.yaml --env-file .env up -d
 docker compose -f compose.yaml logs -f agent   # watch it come up
 ```
 
-Fill in `.env`: `NEKTAR_KEY_PASSPHRASE`, `NEKTAR_HTTP_TOKEN` (both
-`openssl rand -hex 32`), and `NEKTAR_MARKET_HOSTS`.
+Fill in `.env`: `NEKTAR_KEY_PASSPHRASE` and `NEKTAR_HTTP_TOKEN` (both
+`openssl rand -hex 32`). Optional: `NEKTAR_SEED_DOMAINS` imports starter
+packs from operator announces at boot; `NEKTAR_ANNOUNCE=1` publishes your
+directory card so others can find you.
 
 ## Kubernetes / k3s / EKS / GKE: Helm
 

@@ -17,10 +17,15 @@ export interface CarrierJournal {
    *  of re-serving stale ancestry forever */
   enrich?(txid: string): Promise<MerklePath | undefined>
   del?(hash: string): Promise<void>
+  /** a reorg orphaned every merkle path at ≥ fromHeight — strip them from
+   *  stored beefs so the enrich seam re-attaches proofs computed against
+   *  the new headers on next read. Returns the rows touched. */
+  clearPaths?(fromHeight: number): Promise<number>
 }
 
-/** stored beef is either subject form — carriers journal atomic, token rows
- *  journal plain; try both before calling a row unparseable */
+/** stored beef is either subject form — rows journal atomic today, but
+ *  legacy token rows journaled plain; try both before calling a row
+ *  unparseable */
 export const parseBeef = (beef: number[]): Transaction | undefined => {
   try {
     return Transaction.fromAtomicBEEF(beef)
@@ -68,12 +73,37 @@ const enrichBeef = async (
   return changed ? tx.toAtomicBEEF() : undefined
 }
 
+/** reorg companion to enrichBeef: drop every embedded path anchored at ≥
+ *  fromHeight — the block it proves against is gone, so the path is a stale
+ *  claim riding to counterparties. Clearing re-opens the enrich seam on the
+ *  next read instead of serving the dead fork's evidence. */
+const stripPaths = (beef: number[], fromHeight: number): number[] | undefined => {
+  const tx = parseBeef(beef)
+  if (tx === undefined) return undefined
+  let changed = false
+  const seen = new Set<string>()
+  const walk = (t: Transaction): void => {
+    const id = t.id('hex')
+    if (seen.has(id)) return
+    seen.add(id)
+    if (t.merklePath !== undefined && t.merklePath.blockHeight >= fromHeight) {
+      t.merklePath = undefined
+      changed = true
+    }
+    for (const i of t.inputs) if (i.sourceTransaction !== undefined) walk(i.sourceTransaction)
+  }
+  walk(tx)
+  return changed ? tx.toAtomicBEEF() : undefined
+}
+
 export class MemoryCarrierJournal implements CarrierJournal {
   public enrich?: (txid: string) => Promise<MerklePath | undefined>
   private m = new Map<string, { txid: string; beef: number[]; topics: string[]; fundingTxid?: string }>()
   async get(hash: string) {
     const row = this.m.get(hash)
-    const beef = row === undefined ? undefined : await enrichBeef(row, this.enrich)
+    // a failing enrich must not fail the read — same contract the Knex
+    // impl keeps: serve the stored beef, retry the attach next call
+    const beef = row === undefined ? undefined : await enrichBeef(row, this.enrich).catch(() => undefined)
     if (row !== undefined && beef !== undefined) {
       row.beef = beef
       this.m.set(hash, row)
@@ -91,6 +121,18 @@ export class MemoryCarrierJournal implements CarrierJournal {
   }
   async del(hash: string) {
     this.m.delete(hash)
+  }
+  async clearPaths(fromHeight: number) {
+    let n = 0
+    for (const [hash, row] of this.m) {
+      const beef = stripPaths(row.beef, fromHeight)
+      if (beef !== undefined) {
+        row.beef = beef
+        this.m.set(hash, row)
+        n++
+      }
+    }
+    return n
   }
 }
 
@@ -186,5 +228,21 @@ export class KnexCarrierJournal implements CarrierJournal {
   async del(hash: string): Promise<void> {
     await this.ensure()
     await this.kx('bstack_carriers').where({ artifact_hash: hash }).delete()
+  }
+  async clearPaths(fromHeight: number): Promise<number> {
+    await this.ensure()
+    let n = 0
+    // rows are few (one per artifact/finger token); a full pass at reorg
+    // time beats a stale path riding to every counterparty forever
+    for (const r of await this.kx('bstack_carriers').select('artifact_hash', 'beef')) {
+      const beef = stripPaths(JSON.parse(r.beef as string) as number[], fromHeight)
+      if (beef !== undefined) {
+        await this.kx('bstack_carriers')
+          .where({ artifact_hash: r.artifact_hash as string })
+          .update({ beef: JSON.stringify(beef) })
+        n++
+      }
+    }
+    return n
   }
 }

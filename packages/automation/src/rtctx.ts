@@ -58,6 +58,11 @@ export interface AutomationConfig {
   /** publish our bfinger identity record in upkeep — opt-in (it costs sats
    *  and makes this agent publicly discoverable; NEKTAR_BFINGER_PUBLISH=1) */
   publishFinger?: boolean
+  /** publish our directory announce on the reserved dir lane in upkeep —
+   *  opt-in (NEKTAR_ANNOUNCE=1): a signed card naming our hosts + offered
+   *  seed packs so fresh instances can enumerate live operators without a
+   *  baked-in registry */
+  announce?: boolean
   /** watchdog cadence — the cheap checks (chain/broadcaster/hosts) re-run on
    *  this tick (default 60s; 0 disables) */
   watchdogMs?: number

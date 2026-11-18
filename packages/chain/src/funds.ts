@@ -280,13 +280,24 @@ export abstract class FundsBase implements Funds {
         const want = sats + (purpose === 'deal' ? 0 : (this.dealFloor ?? 25_000))
         let revived = 0,
           probed = 0
+        // count bounds the scan; wall-time bounds the scan's *cost* — 48
+        // retried probes against a degraded index can exceed the caller's
+        // collect window even while the count stays legal
+        const sweepUntil = Date.now() + 5_000
         for (const t of tombs) {
-          if (probed >= 48 || revived >= want) break
+          if (probed >= 48 || revived >= want || Date.now() >= sweepUntil) break
           if (t.satoshis !== undefined && t.satoshis < sats) continue
           if (this.reserved.has(op(t.txid, t.vout))) continue
           if ((await this.leased?.(t.txid, t.vout)) === true) continue
           if (set !== undefined) {
             if (!set.has(op(t.txid, t.vout))) continue
+            // a listing is the index's bookkeeping claim — where a first-
+            // party utxo view exists it corroborates once before a durable
+            // tombstone lifts; disagreement is drift, not life
+            if (this.liveCheck !== undefined) {
+              probed++
+              if ((await this.liveCheck(t.txid, t.vout)) !== true) continue
+            }
           } else {
             probed++
             if ((await this.liveCheck?.(t.txid, t.vout)) !== true) continue

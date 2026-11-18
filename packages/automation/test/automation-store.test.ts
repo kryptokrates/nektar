@@ -338,17 +338,15 @@ test('wallet leases: a released row is dead to take() and prepare() readers alik
   assert.equal(await store.leaseOutpoints('act-a', [{ txid: txid('a'), vout: 0, satoshis: 100 }]), true)
   await store.releaseLeases('act-a')
   // arm 2 — released lease beside a live-looking 'prepared' tx row
-  await store.recordPrepared(
-    { actionId: 'act-b', operationId: 'op', kind: 'send', txid: txid('b'), rawHex: '00', parents: {}, feeSats: 1 },
-    [{ txid: txid('b'), vout: 0, satoshis: 100 }]
-  )
+  await store.recordPrepared({ actionId: 'act-b', operationId: 'op', kind: 'send', txid: txid('b'), rawHex: '00', parents: {}, feeSats: 1 }, [
+    { txid: txid('b'), vout: 0, satoshis: 100 }
+  ])
   await store.releaseLeases('act-b')
   // arm 3 — released lease beside 'submission_unknown' — the wedge that used
   // to read live forever while the observer waited on an unaired tx
-  await store.recordPrepared(
-    { actionId: 'act-c', operationId: 'op', kind: 'send', txid: txid('c'), rawHex: '00', parents: {}, feeSats: 1 },
-    [{ txid: txid('c'), vout: 0, satoshis: 100 }]
-  )
+  await store.recordPrepared({ actionId: 'act-c', operationId: 'op', kind: 'send', txid: txid('c'), rawHex: '00', parents: {}, feeSats: 1 }, [
+    { txid: txid('c'), vout: 0, satoshis: 100 }
+  ])
   await store.setTxState('act-c', 'submission_unknown')
   await store.releaseLeases('act-c')
   // take()'s reader and prepare()'s reader MUST agree — a released row freed
@@ -374,10 +372,9 @@ test('wallet: lease+record are atomic — a lease conflict leaves no tx row behi
   // tx row back with the lease (the old split write could commit one and
   // crash before the other: a 'leased'-with-no-tx wedge either way)
   await assert.rejects(
-    store.recordPrepared(
-      { actionId: 'act-b', operationId: 'op', kind: 'send', txid: txid('b'), rawHex: '00', parents: {}, feeSats: 1 },
-      [{ txid: txid('a'), vout: 0, satoshis: 100 }]
-    ),
+    store.recordPrepared({ actionId: 'act-b', operationId: 'op', kind: 'send', txid: txid('b'), rawHex: '00', parents: {}, feeSats: 1 }, [
+      { txid: txid('a'), vout: 0, satoshis: 100 }
+    ]),
     /already leased/
   )
   assert.equal(await store.walletTx({ actionId: 'act-b' }), undefined, 'a refused prepare leaves no tx row')

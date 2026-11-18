@@ -109,8 +109,7 @@ test('custody: a sealed dead verdict heals the phantom parent', async () => {
       { tx: bad, vout: 0, satoshis: 100_000 },
       { tx: good, vout: 0, satoshis: 100_000 }
     ],
-    async (txid): Promise<import('@nektar/chain').TxFacts> =>
-      txid === bad.id('hex') ? { verdict: 'dead' } : hintFacts('SEEN_ON_NETWORK')
+    async (txid): Promise<import('@nektar/chain').TxFacts> => (txid === bad.id('hex') ? { verdict: 'dead' } : hintFacts('SEEN_ON_NETWORK'))
   )
   const u = await ops.takeFunding(1000)
   assert.equal(u.tx.id('hex'), good.id('hex'))

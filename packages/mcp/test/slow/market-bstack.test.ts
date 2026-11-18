@@ -99,7 +99,7 @@ const trackerFor = (chain: TestChain) => ({
  *  ledger's own `taken` counter, same accounting the lanes runtime reports. */
 const usedMarketSlots = async (rt: Automation): Promise<number> => (await rt.laneStock()).market?.taken ?? 0
 const carriersWith = async (rt: Automation, topic: string): Promise<number> =>
-  ((await rt.carriers?.list?.()) ?? []).filter((c) => c.topics.includes(topic)).length
+  ((await rt.carriers?.list?.()) ?? []).filter((c) => c.topics.some((t2) => t2.includes(topic))).length
 const unprovenTrees = async (rt: Automation): Promise<number> => Object.values(await rt.laneStock()).reduce((n, s) => n + s.unprovenTrees, 0)
 const buyerOp = async (b: A) => (await b.rt.store.operations({ role: 'buyer' })).find((o) => o.kind === 'purchase')
 const saleOps = async (s: A) => (await s.rt.store.operations({ role: 'seller' })).filter((o) => o.kind === 'sale')

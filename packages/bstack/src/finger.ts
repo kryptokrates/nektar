@@ -173,6 +173,10 @@ export interface FingerStateRow {
    *  record even when the body is unchanged */
   refsHash?: string
   witness?: string
+  /** last full chain re-serve — the O(seq) pass is for hosts missing chain
+   *  members, so it runs per host-set at most once per CHAIN_SERVE_MS; a
+   *  changed host list resets the mark because a new host may hold nothing */
+  served?: { at: number; hosts: string }
 }
 
 export interface FingerState {
@@ -214,11 +218,19 @@ export class KnexFingerState implements FingerState {
         t.string('bodyHash').notNullable()
         t.string('refsHash').nullable()
         t.string('witness').nullable()
+        t.text('served').nullable()
       })
-    } else if (!(await this.kx.schema.hasColumn('bstack_finger_state', 'refsHash'))) {
-      await this.kx.schema.alterTable('bstack_finger_state', (t) => {
-        t.string('refsHash').nullable()
-      })
+    } else {
+      if (!(await this.kx.schema.hasColumn('bstack_finger_state', 'refsHash'))) {
+        await this.kx.schema.alterTable('bstack_finger_state', (t) => {
+          t.string('refsHash').nullable()
+        })
+      }
+      if (!(await this.kx.schema.hasColumn('bstack_finger_state', 'served'))) {
+        await this.kx.schema.alterTable('bstack_finger_state', (t) => {
+          t.text('served').nullable()
+        })
+      }
     }
   }
   async get() {
@@ -232,7 +244,8 @@ export class KnexFingerState implements FingerState {
           tokenBeef: JSON.parse(String(r.tokenBeef)) as number[],
           bodyHash: String(r.bodyHash),
           ...(r.refsHash !== null && r.refsHash !== undefined ? { refsHash: String(r.refsHash) } : {}),
-          ...(r.witness !== null && r.witness !== undefined ? { witness: String(r.witness) } : {})
+          ...(r.witness !== null && r.witness !== undefined ? { witness: String(r.witness) } : {}),
+          ...(r.served !== null && r.served !== undefined ? { served: JSON.parse(String(r.served)) as { at: number; hosts: string } } : {})
         }
   }
   async set(s: FingerStateRow): Promise<void> {
@@ -243,7 +256,8 @@ export class KnexFingerState implements FingerState {
       tokenBeef: JSON.stringify(s.tokenBeef),
       bodyHash: s.bodyHash,
       refsHash: s.refsHash ?? null,
-      witness: s.witness ?? null
+      witness: s.witness ?? null,
+      served: s.served === undefined ? null : JSON.stringify(s.served)
     }
     if ((await this.kx('bstack_finger_state').count('id as n').first())?.n === 0) {
       await this.kx('bstack_finger_state').insert(row)
@@ -254,6 +268,13 @@ export class KnexFingerState implements FingerState {
 }
 
 // ── publish ────────────────────────────────────────────────────────────────
+
+/** a full chain re-serve is O(seq) submits — worth it only when a host may
+ *  actually lack members, so it runs at most once per window per host set;
+ *  a changed host list always earns an immediate serve (it may hold nothing) */
+const CHAIN_SERVE_MS = 15 * 60_000
+const chainServeDue = (prev: FingerStateRow | undefined, hostSig: string, now: number): boolean =>
+  prev?.served === undefined || prev.served.hosts !== hostSig || now - prev.served.at >= CHAIN_SERVE_MS
 
 /** Publish (or re-publish) the identity's finger record. Journaled under
  *  `finger:<seq>` BEFORE submission so a retry reuses the same carrier and
@@ -349,18 +370,28 @@ export async function publishFinger(p: {
 
   if (prev !== undefined && prev.bodyHash === hash && prev.refsHash === refsHash) {
     const tokenBeef = latestBeef ?? prev.tokenBeef ?? (await p.journal.get(`finger:token:${prev.seq}`))?.beef
-    // re-serve the WHOLE chain, not just the head: a host that never joined
-    // (or lost) the create refuses a head-only resubmit 'no-current' and the
-    // record stays unresolvable there forever. Journal rows are the idempotent
-    // objects — hosts dedupe what they already hold. Seq order, carriers
-    // before tokens, so parents land before the members that reference them.
-    for (let n = 1; n <= prev.seq; n++) {
-      const c = await p.journal.get(`finger:carrier:${n}`)
+    const hostSig = p.hosts.join(',')
+    if (chainServeDue(prev, hostSig, Date.now())) {
+      // re-serve the WHOLE chain, not just the head: a host that never joined
+      // (or lost) the create refuses a head-only resubmit 'no-current' and the
+      // record stays unresolvable there forever. Journal rows are the idempotent
+      // objects — hosts dedupe what they already hold. Seq order, carriers
+      // before tokens, so parents land before the members that reference them.
+      for (let n = 1; n <= prev.seq; n++) {
+        const c = await p.journal.get(`finger:carrier:${n}`)
+        if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
+      }
+      for (let n = 1; n <= prev.seq; n++) {
+        const t = n === prev.seq && tokenBeef !== undefined ? { beef: tokenBeef } : await p.journal.get(`finger:token:${n}`)
+        if (t !== undefined) await submitAll(p.hosts, t.beef, topics, { retryWaits: [] })
+      }
+      await p.state.set({ ...prev, served: { at: Date.now(), hosts: hostSig } })
+    } else if (tokenBeef !== undefined) {
+      // inside the window the head alone re-touches every host — O(1), and a
+      // host that somehow lost just the tip still heals between serves
+      const c = await p.journal.get(`finger:carrier:${prev.seq}`)
       if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
-    }
-    for (let n = 1; n <= prev.seq; n++) {
-      const t = n === prev.seq && tokenBeef !== undefined ? { beef: tokenBeef } : await p.journal.get(`finger:token:${n}`)
-      if (t !== undefined) await submitAll(p.hosts, t.beef, topics, { retryWaits: [] })
+      await submitAll(p.hosts, tokenBeef, topics, { retryWaits: [] })
     }
     return { changed: false, seq: prev.seq, carrierTxid: (await p.journal.get(`finger:carrier:${prev.seq}`))?.txid, tokenTxid: prev.tokenTxid }
   }
@@ -464,12 +495,18 @@ export async function publishFinger(p: {
   }
 
   // a host missing earlier chain members refuses the head 'no-current' —
-  // re-serve the journaled chain before the head (idempotent on the host)
-  for (let n = 1; n < seq; n++) {
-    const c = await p.journal.get(`finger:carrier:${n}`)
-    if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
-    const t = await p.journal.get(`finger:token:${n}`)
-    if (t !== undefined) await submitAll(p.hosts, t.beef, t.topics ?? topics, { retryWaits: [] })
+  // re-serve the journaled chain before the head (idempotent on the host).
+  // Bounded: once per host-set per window — inside the window the fresh
+  // head's own prev carries the chain forward on hosts that hold it.
+  const hostSig = p.hosts.join(',')
+  const preServe = chainServeDue(prev, hostSig, Date.now())
+  if (preServe) {
+    for (let n = 1; n < seq; n++) {
+      const c = await p.journal.get(`finger:carrier:${n}`)
+      if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
+      const t = await p.journal.get(`finger:token:${n}`)
+      if (t !== undefined) await submitAll(p.hosts, t.beef, t.topics ?? topics, { retryWaits: [] })
+    }
   }
   // independent objects, same hosts — carrier and token beef each carry
   // their own ancestry, so admission needs no ordering between them
@@ -505,7 +542,11 @@ export async function publishFinger(p: {
     // on live ground instead of re-serving the corpse below.
     if (prev !== undefined && p.journal.del !== undefined) {
       let head: { seq: number; tokenTxid: string; tokenBeef: number[] } | undefined
-      for (let n = prev.seq; n >= 1; n--) {
+      // bounded walk: each probed-dead row is deleted as we go, so a fork
+      // deeper than the cap converges across passes instead of one publish
+      // paying hundreds of broadcast probes — or none when it dies first
+      let probes = 0
+      for (let n = prev.seq; n >= 1 && probes < 16; n--) {
         const t = await p.journal.get(`finger:token:${n}`)
         if (t === undefined) continue
         const tx = Transaction.fromBEEF(t.beef)
@@ -513,6 +554,9 @@ export async function publishFinger(p: {
           head = { seq: n, tokenTxid: t.txid, tokenBeef: t.beef }
           break
         }
+        probes++
+        await p.journal.del(`finger:token:${n}`)
+        await p.journal.del(`finger:carrier:${n}`)
       }
       if (head !== undefined && head.seq < prev.seq) {
         for (let n = head.seq + 1; n <= seq; n++) await p.journal.del(`finger:token:${n}`)
@@ -522,7 +566,15 @@ export async function publishFinger(p: {
         // silently never re-airs. The row type wants a string and a rewound
         // state has no honest fingerprint to restore, so '' — it can never
         // equal a real hash
-        await p.state.set({ ...prev, seq: head.seq, tokenTxid: head.tokenTxid, tokenBeef: head.tokenBeef, bodyHash: '', refsHash: undefined, witness: undefined })
+        await p.state.set({
+          ...prev,
+          seq: head.seq,
+          tokenTxid: head.tokenTxid,
+          tokenBeef: head.tokenBeef,
+          bodyHash: '',
+          refsHash: undefined,
+          witness: undefined
+        })
       } else {
         // the chain airs fine — the dead link was this mint's own input
         // (fresh funding died or the heal never reached it): drop just
@@ -535,7 +587,15 @@ export async function publishFinger(p: {
     throw new Error(`publishFinger: token broadcast refused ${JSON.stringify(br).slice(0, 120)}`)
   }
   if (p.onSpent !== undefined) await p.onSpent(tokenTx)
-  await p.state.set({ seq, tokenTxid, tokenBeef: tokenBeefOut, bodyHash: hash, refsHash, witness: Utils.toHex(Array.from(await derived(s, 'witness', seq))) })
+  await p.state.set({
+    seq,
+    tokenTxid,
+    tokenBeef: tokenBeefOut,
+    bodyHash: hash,
+    refsHash,
+    witness: Utils.toHex(Array.from(await derived(s, 'witness', seq))),
+    served: preServe ? { at: Date.now(), hosts: hostSig } : prev?.served
+  })
   return { changed: true, seq, carrierTxid, tokenTxid }
 }
 

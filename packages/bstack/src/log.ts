@@ -567,7 +567,7 @@ export async function anchorLog(p: {
         return undefined
       }
       const aHit = `log-anchor:${p.stream}:${interval}`
-      await p.journal.put(aHit, { txid, beef: tx.toBEEF(), topics: [logTopic(p.stream)], fundingTxid: slot.tree.id('hex') })
+      await p.journal.put(aHit, { txid, beef: tx.toAtomicBEEF(), topics: [logTopic(p.stream)], fundingTxid: slot.tree.id('hex') })
       await p.state.set(flightKey(p.stream), { seq: interval, prev: txid, extra: { first, count } })
       return { interval, first, count, root: toHex(root), txid }
     } catch (e) {

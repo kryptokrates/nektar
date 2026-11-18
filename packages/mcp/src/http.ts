@@ -1,6 +1,6 @@
 // API-001: minimal versioned HTTP API (node:http, no framework). Same tools
 // as MCP, plus public read endpoints. Every route is in OPENAPI (tested).
-import { nektarEnv } from '@nektar/core'
+import { nektarEnv, marketHostsFromEnv } from '@nektar/core'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { MerklePath } from '@bsv/sdk'
@@ -756,10 +756,9 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
               // state (mem.automation) not just the env flag.
               market: {
                 automation: mem.automation != null,
-                hosts: (nektarEnv('NEKTAR_MARKET_HOSTS') ?? '')
-                  .split(',')
-                  .map((h) => h.trim())
-                  .filter(Boolean),
+                // the effective set — env or baked-in seeds, same list the
+                // runtime reads through
+                hosts: marketHostsFromEnv(),
                 push: nektarEnv('NEKTAR_PUSH_PUBLIC') ?? null
               },
               publicShards: await Promise.all(

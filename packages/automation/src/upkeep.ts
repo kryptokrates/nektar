@@ -3,7 +3,7 @@
 // (append + anchor), and the deal-journal view `deals {operationId}` reads.
 // The `upkeep` guard serializes it; the assembler's cycle() and tick drive it.
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
-import { queueRepairs } from './fanout.js'
+import { queueRepairs, trackFanout } from './fanout.js'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Rt } from './rtctx.js'
 
@@ -232,6 +232,11 @@ export function openUpkeep(rt: Rt): void {
     }
   }
 
+  // the directory card's last-published state — the canon compare is what
+  // makes republishing change-driven instead of a per-pass publish
+  let announceLast: { canon: string; exp: number } | undefined
+  let announceError = ''
+
   const runUpkeep = async (): Promise<void> => {
     try {
       if (lanes !== undefined) {
@@ -336,6 +341,60 @@ export function openUpkeep(rt: Rt): void {
             const m = `automation: finger: ${(e as Error).message.slice(0, 160)}`
             if (m !== fingerError) {
               fingerError = m
+              log(m)
+            }
+          }
+        }
+      }
+      // own directory announce: a signed card on the reserved dir lane naming
+      // our hosts + offered seed packs — opt-in (NEKTAR_ANNOUNCE=1), same
+      // cost/discoverability posture as publishFinger. Republishes when the
+      // card content changes or exp enters its last half — steady-state is
+      // ~one carrier per 3.5 days, not one per upkeep pass.
+      if (lanes !== undefined && cfg.announce === true && !rt.stopped) {
+        try {
+          // the card mirrors what /.well-known/nektar offers: public shards
+          // with a store ref (bstore-backed → resolvable origin-free), tagged
+          // by their catalog domains so seeders can filter
+          const catalog = (await mem.shardCatalog?.().catch(() => [])) ?? []
+          const announcePacks: import('@nektar/bstack').AnnouncePack[] = []
+          for (const s of mem.shards()) {
+            if (s.startsWith('__')) continue
+            const store = mem.packStoreRef(s)
+            if (store === undefined) continue
+            const domains = catalog.find((m) => m.shard === s)?.domains
+            announcePacks.push({ shard: s, ...(domains !== undefined && domains.length > 0 ? { domains } : {}), store })
+          }
+          const announceCanon = lanes.mod.marketJson({ hosts: marketHosts, packs: announcePacks })
+          const now = cfg.now?.() ?? Date.now()
+          if (announceLast === undefined || announceLast.canon !== announceCanon || announceLast.exp - now <= lanes.mod.MAX_LIFETIME_MS / 2) {
+            const sa = await lanes.mod.signAnnounce(key, {
+              hosts: marketHosts,
+              ...(announcePacks.length > 0 ? { packs: announcePacks } : {}),
+              ts: now,
+              exp: now + lanes.mod.MAX_LIFETIME_MS,
+              net: cfg.network
+            })
+            const r = await lanes.mod.publishArtifact({
+              key,
+              wallet,
+              ledger: lanes.ledger,
+              journal: lanes.journal,
+              hosts: marketHosts,
+              net: cfg.network,
+              payload: { v: 1, kind: 'announce', body: sa }
+            })
+            await trackFanout(r, rt.fanoutIo)
+            announceLast = { canon: announceCanon, exp: sa.announce.exp ?? now }
+            announceError = ''
+            log(`automation: announce ${r.txid.slice(0, 12)} packs=${announcePacks.length}`)
+          }
+        } catch (e) {
+          // 'no funding slot' is transient while the market tree matures
+          if (!(e as Error).message.includes('no funding slot')) {
+            const m = `automation: announce: ${(e as Error).message.slice(0, 160)}`
+            if (m !== announceError) {
+              announceError = m
               log(m)
             }
           }

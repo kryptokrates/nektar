@@ -139,19 +139,22 @@ entry, and any operator who runs `compose.testnet.yaml` can be added
 unset → the seed list. A bad seed can censor, never forge — the same
 threat model hosts already carry.
 
-**Layer 1 — a directory lane.** New wire kind `announce` on a fixed
-topic `tm_nektar_<net>_dir`: every agent/hub publishes a signed carrier
-on a cadence — `{pub, hosts[], office, streams, packsStoreRef,
-domains, ts, exp}`. A new instance quorum-reads the lane on the seeds,
+**Layer 1 — a directory lane.** New wire kind `announce` (kind 3) on the
+reserved `dir` domain — every announce lands on the single lane
+`tm_nektar_<net>_<nibble('dir')>`, so `{announces: {net}}` enumerates
+live operators in one query. An agent/hub with `NEKTAR_ANNOUNCE=1`
+publishes a signed carrier `{pub, hosts[], packs[{shard, domains,
+store}]}`, republishing on content change or when `exp` runs down
+(~3.5-day cadence). A new instance quorum-reads the lane on the seeds,
 verifies signatures + SPV (existing `readItems` machinery), and unions
 every announced host — including operators that joined yesterday. The
 network describes itself; nektar.run is merely announcer #1.
 
-**Layer 2 — seed via the market.** The announce's `packsStoreRef`
-resolves the publisher's `nektar-packs` store through `ls_finger` →
-`importShard {store}` (content-addressed, no origin). Boot flag
-`NEKTAR_SEED_DOMAINS=ops,teranode`: first boot reads the directory and
-imports matching packs — zero URLs anywhere.
+**Layer 2 — seed via the market.** The announce's `packs[].store` is the
+publisher's bstore ref — `importShard {store}` resolves it
+content-addressed, no origin. Boot flag `NEKTAR_SEED_DOMAINS=ops,teranode`
+(`*` = everything): first boot reads the directory, unions announced
+hosts (one hop), and imports matching packs — zero URLs anywhere.
 
 Failure modes: all seeds down → env override still works and the
 instance degrades to single-player; spoofed announces → signatures +
@@ -159,10 +162,12 @@ quorum reads; censoring seed → host union + existing withholding
 detection; stale announces → `exp` (hosts already refuse expired
 artifacts).
 
-Build deltas: `DEFAULT_MARKET_HOSTS` (small) → wire kind `announce` +
-directory lane + republish cadence (medium) → `seedDomains` boot task
-(medium) → `deploy/hub/` compose = agent + host pair + seed domains in
-one box (small) → "run a hub, get added to the seed list" doc.
+**Shipped:** `DEFAULT_MARKET_HOSTS` in `core/env.ts` (testnet →
+nektar.run's pair; explicit `NEKTAR_MARKET_HOSTS` always wins) · wire
+kind `announce` + `{announces}` query + `readAnnounces` (`bstack`) ·
+upkeep publisher gated on `NEKTAR_ANNOUNCE=1` · `NEKTAR_SEED_DOMAINS`
+boot task (`mcp/src/seed.ts`) · `deploy/hub/` all-in-one compose ·
+MARKET-WIRE §2.1. Protocol docs updated; operators opt in per instance.
 
 ## Onboarding flow per platform
 

@@ -26,11 +26,12 @@ Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
   - `{wants:  {net, domain, limit?}}` — wants on a domain lane.
   - `{offers: {net, wantId, buyerPub}}` — offers answering a want.
   - `{want:   {net, pub, wantId}}` — a specific want.
+  - `{announces: {net, limit?}}` — operator directory cards (§2.1).
 - Payload (record `extra[0]` content): canonical-CBOR application record —
-  key `0` = magic `nkt1`, key `1` = kind (`1n` want, `2n` offer), key `2` =
-  the signed artifact as `marketJson` UTF-8 text. Keys >2 are reserved.
-  A legacy JSON `{v:1,kind,body}` form is accepted on read
-  (`NEKTAR_MARKET_V1=1` writes it).
+  key `0` = magic `nkt1`, key `1` = kind (`1n` want, `2n` offer, `3n`
+  announce), key `2` = the signed artifact as `marketJson` UTF-8 text.
+  Keys >2 are reserved. A legacy JSON `{v:1,kind,body}` form is accepted
+  on read (`NEKTAR_MARKET_V1=1` writes it).
 
 ## 2. Signed artifacts
 
@@ -41,6 +42,7 @@ Canonical source: `packages/bstack/src/{market,artifacts,finger,box,hosts}.ts`,
   - offer prefix: `nektar:market:offer:1\n`
 - `SignedWant  = {want: WantAd,  sig: hex}`
 - `SignedOffer = {offer: OfferAd, sig: hex}`
+- `SignedAnnounce = {announce: AnnounceAd, sig: hex}` (§2.1)
 - `WantAd`: `{v:1, wantId, pub, domains[], taskHash, maxSats?, revision,
 status, streamSeq?, previousHash?, exp?}`.
 - `OfferAd`: `{v:1, offerId, pub, shard, seq, shardId, domains[], leaf, hdp,
@@ -49,6 +51,31 @@ replyTo?, ts, exp?, net, tip?, tipHeight?, journal?}`.
   - `offer.offer` is the **sale quote** (below).
 - `exp` is ms-epoch; hosts refuse artifacts whose `exp` is more than
   `MAX_LIFETIME_MS` (7d) out or already past.
+
+### 2.1 Announces — the operator directory
+
+A `kind=3` payload whose `bodyDomains` is the reserved domain `dir` — every
+announce lands on the single lane `tm_nektar_<net>_<nibble('dir')>`, making
+the set of live operators enumerable with one `{announces: {net}}` query.
+The announce is a directory card, not a channel: counterparty delivery
+details (office/push/watch) still come from the publisher's `ls_finger`
+record keyed by `announce.pub`.
+
+- `AnnounceAd`: `{pub, hosts[], packs?[], ts, exp?, net?, streamSeq?,
+prevHash?}` — same stream + net bindings as want/offer; prefix
+  `nektar:market:announce:1\n`.
+- `hosts` (1..8, http(s) URLs) — the publisher's own market hosts, verbatim
+  from its `NEKTAR_MARKET_HOSTS`; a reader unions them (screened through
+  the same SSRF rule as finger hosts — https-only on public nets, no
+  loopback/private literals).
+- `packs[]` — `{shard, domains?, store?|packUrl?}`: seed packs the
+  publisher offers to newcomers. `store` is the `importShard {store}`
+  object ref (bstore/chirp — origin-free); `packUrl` the `/v1/pack/{shard}`
+  fallback. `domains` are the shard manifest's tags — the
+  `NEKTAR_SEED_DOMAINS` filter set.
+- Supersede: a reader keeps the newest announce per `pub` (`streamSeq`,
+  `ts` tiebreak). Publishers republish on content change or when `exp`
+  enters its last half — steady-state ~1 carrier per 3.5 days.
 
 ## 3. Sale quote (`offer.offer` → `saleQuoteWire`)
 

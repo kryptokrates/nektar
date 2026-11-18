@@ -1,10 +1,9 @@
 import { sha256, toHex, type SignerLike } from '@nektar/core'
 import { fundingLock, type SigningWallet } from '@lightwebinc/bcommon'
-import { Transaction } from '@bsv/sdk'
 import { buildCarrier, carrierFundingLockHex, walletOrProto } from './carrier.js'
 import { encodePayload, lanesFor, bodyDomains, type MarketPayload } from './market-wire.js'
 import { submitAll, type Quorum } from './hosts.js'
-import { DERIVATION, FUNDING_TAG, ORIGINATOR, fundingSlotReason, type TreeLedger } from './tree.js'
+import { DERIVATION, FUNDING_TAG, ORIGINATOR, fundingSlotReason, ownPath, type TreeLedger } from './tree.js'
 import { parseBeef, type CarrierJournal } from './journal.js'
 
 export function artifactHash(payload: MarketPayload): string {
@@ -86,7 +85,7 @@ export async function republishOne(p: {
   hash: string
   treeTxid: string
   merklePath: import('@bsv/sdk').MerklePath
-}): Promise<{ done: boolean; submitted?: boolean; missed: Array<{ host: string; error: string }> }> {
+}): Promise<{ done: boolean; submitted?: boolean; admitted?: string[]; missed: Array<{ host: string; error: string }> }> {
   const row = await p.journal.get(p.hash)
   if (row === undefined) return { done: true, missed: [] }
   try {
@@ -96,13 +95,17 @@ export async function republishOne(p: {
     const parent = tx.inputs.find((i) => i.sourceTransaction?.id('hex') === p.treeTxid)?.sourceTransaction
     if (parent === undefined || parent.merklePath !== undefined) return { done: true, missed: [] }
     parent.merklePath = p.merklePath
+    // extract this tree's own leaf out of a compound BUMP and drop the
+    // parent's source ancestry — a BUMP-anchored tx terminates BEEF, and
+    // strict hosts refuse carriers whose proven parents still carry inputs
+    ownPath(parent)
     const beef = tx.toAtomicBEEF()
     const r = await submitAll(p.hosts, beef, row.topics, { retryWaits: [] })
     // persist the enriched beef only once quorum is reached — a row left
     // unenriched retries on the next pass instead of stranding a missed host
     // on its stale deadline-bound copy
     if (r.ok) await p.journal.put(p.hash, { txid: row.txid, beef, topics: row.topics, fundingTxid: row.fundingTxid ?? p.treeTxid })
-    return { done: r.ok, submitted: r.ok, missed: r.missed }
+    return { done: r.ok, submitted: r.ok, admitted: r.admitted, missed: r.missed }
   } catch {
     return { done: false, missed: [] }
   }
@@ -119,14 +122,16 @@ export async function republishProved(p: {
   hosts: string[]
   treeTxid: string
   merklePath: import('@bsv/sdk').MerklePath
-}): Promise<{ republished: number; missed: Array<{ host: string; error: string }> }> {
-  if (p.journal.fundedBy === undefined) return { republished: 0, missed: [] }
+}): Promise<{ republished: number; admitted: string[]; missed: Array<{ host: string; error: string }> }> {
+  if (p.journal.fundedBy === undefined) return { republished: 0, missed: [], admitted: [] }
   let republished = 0
+  const admitted = new Set<string>()
   const missed: Array<{ host: string; error: string }> = []
   for (const row of await p.journal.fundedBy(p.treeTxid)) {
     const r = await republishOne({ journal: p.journal, hosts: p.hosts, hash: row.hash, treeTxid: p.treeTxid, merklePath: p.merklePath })
     if (r.submitted === true) republished++
+    for (const h of r.admitted ?? []) admitted.add(h)
     missed.push(...r.missed)
   }
-  return { republished, missed }
+  return { republished, admitted: [...admitted], missed }
 }

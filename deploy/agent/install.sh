@@ -4,12 +4,13 @@
 #   curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/agent/install.sh | bash
 #
 # Installs Docker if missing, fetches compose + env template, generates the
-# two secrets, and starts the agent. The only value that cannot be generated
-# is NEKTAR_MARKET_HOSTS — pass it in:
+# two secrets, and starts the agent. Unset NEKTAR_MARKET_HOSTS joins the
+# baked-in seed hosts for the network — pass it only to pin your own:
 #
 #   NEKTAR_MARKET_HOSTS=http://host-a:8080,http://host-b:8080 ./install.sh
 #
 # Optional passthroughs: NEKTAR_PUSH_PUBLIC, NEKTAR_FUND_WIF, NEKTAR_NETWORK,
+# NEKTAR_SEED_DOMAINS, NEKTAR_ANNOUNCE,
 # NEKTAR_AGENT_DIR (default ~/nektar-agent), NEKTAR_AGENT_BRANCH.
 set -euo pipefail
 
@@ -64,15 +65,8 @@ fi
 [ -n "${NEKTAR_PUSH_PUBLIC:-}" ] && set_kv NEKTAR_PUSH_PUBLIC "$NEKTAR_PUSH_PUBLIC"
 [ -n "${NEKTAR_FUND_WIF:-}" ] && set_kv NEKTAR_FUND_WIF "$NEKTAR_FUND_WIF"
 [ -n "${NEKTAR_NETWORK:-}" ] && set_kv NEKTAR_NETWORK "$NEKTAR_NETWORK"
-
-# 4 — the one value we cannot generate
-if grep -q "host-a.example" .env; then
-  echo
-  echo "Set NEKTAR_MARKET_HOSTS in $DEST/.env to real bstack hosts, then:"
-  echo "  cd $DEST && $DOCKER compose --env-file .env up -d"
-  echo "(or rerun with NEKTAR_MARKET_HOSTS=... ./install.sh)"
-  exit 0
-fi
+[ -n "${NEKTAR_SEED_DOMAINS:-}" ] && set_kv NEKTAR_SEED_DOMAINS "$NEKTAR_SEED_DOMAINS"
+[ -n "${NEKTAR_ANNOUNCE:-}" ] && set_kv NEKTAR_ANNOUNCE "$NEKTAR_ANNOUNCE"
 
 # 5 — up
 $DOCKER compose --env-file .env up -d

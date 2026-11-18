@@ -754,6 +754,20 @@ export async function utxoSpendStatus(
   vout: number
 ): Promise<'spent' | 'unknown'> {
   const c = def(cfg)
+  // a hint probe answers fast or not at all — 'unknown' is the designed
+  // negative, so a degraded index costs one bounded wait instead of the
+  // full retry ladder (~18s across three retried calls) inside a
+  // serialized take. 4s covers a healthy RTT plus one pacing retry and
+  // stays under the take-side sweep ceiling
+  return await Promise.race([spendProbe(c, tracker, txid, vout), sleep(4_000).then(() => 'unknown' as const)])
+}
+
+async function spendProbe(
+  c: ReturnType<typeof def>,
+  tracker: Pick<ChainTracker, 'isValidRootForHeight'>,
+  txid: string,
+  vout: number
+): Promise<'spent' | 'unknown'> {
   try {
     const j = await c.index.txJson(txid)
     if (j === undefined) return 'unknown'

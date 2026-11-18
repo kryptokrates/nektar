@@ -413,6 +413,11 @@ export function openLanes(rt: Rt): void {
     if (subSig !== lastSubSig) {
       lastSubSig = subSig
       log(`lanes: watching ${subs.length} subs ${subs.length <= 4 ? `(${subSig})` : ''}`)
+      // a retired sub's staged items can never be claimed — the tag leaves
+      // the watch set, so its pendingLane entry is garbage that otherwise
+      // never collects
+      const live = new Set(subs.map((s) => s.tag))
+      for (const tag of pendingLane.keys()) if (!live.has(tag)) pendingLane.delete(tag)
     }
     // every lane read is independent — run them together, bounded, instead
     // of serially pricing the pass at the sum of all host latencies
@@ -426,12 +431,21 @@ export function openLanes(rt: Rt): void {
         ]
         if (marketHosts.length > 1) {
           const fast = await s.call({ timeoutMs, quorum: 1 })
+          const seenFast = new Set(fast.items.map((i) => i.txid))
           void s
             .call({ timeoutMs })
             .then((full) => {
               laneNotes(full, Object.keys(full.perHost))
-              const rest = full.items.map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))
-              if (rest.length > 0) pendingLane.set(s.tag, [...(pendingLane.get(s.tag) ?? []), ...rest])
+              // stage only what the fast quorum didn't already deliver —
+              // re-delivering the full set makes every staged item a wasted
+              // ingest pass for an item already in the store
+              const rest = full.items.filter((i) => !seenFast.has(i.txid)).map((i) => ({ seq: i.txid, kind: s.kind, payload: i.payload.body }))
+              if (rest.length > 0) {
+                pendingLane.set(s.tag, [...(pendingLane.get(s.tag) ?? []), ...rest])
+                // staged items deserve the next pass NOW, not whenever the
+                // idle ceiling happens to fire — the same wake push uses
+                void rt.deals().catch(() => undefined)
+              }
             })
             .catch(() => undefined)
           if ((fast.items as unknown[]).length > 0 || staged.length > 0)

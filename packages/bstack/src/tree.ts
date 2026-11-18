@@ -50,7 +50,7 @@ export const marketFundingLock = async (wallet: SigningWallet): Promise<import('
 // duplicates the last leaf at the next offset — extract() re-flags that copy
 // because it finds the txid by hash, so the flag must be restored to the
 // offset the source path flagged.
-const ownPath = (tree: Transaction): Transaction => {
+export const ownPath = (tree: Transaction): Transaction => {
   if (tree.merklePath === undefined) return tree
   const txid = tree.id('hex')
   const own = tree.merklePath.path[0]?.find((e) => e.txid === true && e.hash === txid)?.offset ?? tree.merklePath.indexOf(txid)
@@ -448,12 +448,7 @@ export class KnexTreeLedger implements TreeLedger {
       // free slots on the ledger's OWN trees of this kind — adopted provision
       // rows carry their leaf kind but the tree kind is 'provision', so the
       // join keeps foreign stock out of the consumed count
-      this.kx('bstack_tree_outputs as o')
-        .join('bstack_trees as t', 'o.txid', 't.txid')
-        .where('o.kind', kind)
-        .where('t.kind', kind)
-        .count('o.key as c')
-        .first()
+      this.kx('bstack_tree_outputs as o').join('bstack_trees as t', 'o.txid', 't.txid').where('o.kind', kind).where('t.kind', kind).count('o.key as c').first()
     ])
     const taken = Number((m as { s: number | null } | undefined)?.s ?? 0) - Number((f as { c: number } | undefined)?.c ?? 0)
     return { proven: Number(r?.c ?? 0), anchored, unprovenTrees: Number(u?.c ?? 0), taken }

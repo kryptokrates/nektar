@@ -4,7 +4,7 @@
 //   Streamable HTTP+REST:  NEKTAR_HTTP_PORT=8080 node dist/src/bin.js
 // Backend via NEKTAR_NETWORK=regtest (default, local Teranode stack) | testnet | main
 // (persistent, see runtime.ts). Diagnostics go to stderr — stdout is the MCP channel.
-import { nektarEnv, setNektarEnv } from '@nektar/core'
+import { nektarEnv, setNektarEnv, marketHostsFromEnv } from '@nektar/core'
 import { openRuntime, configFromEnv } from './runtime.js'
 import { serveStdio } from './mcp-server.js'
 import { createHttpApi } from './http.js'
@@ -74,13 +74,39 @@ if (paymentsEnabled()) {
   requireOperatorWallet()
   process.stderr.write('nektar: payments on\n')
 }
+// the effective market-host set — NEKTAR_MARKET_HOSTS when set, else the
+// baked-in seed hosts for this network (the zero-config join's Layer 0)
+const mh = marketHostsFromEnv()
+const { callTool } = await import('./server.js')
+// zero-config join, Layer 2 — seed packs from operator announces on the
+// dir lane. Independent of NEKTAR_AUTOMATION: the path is host reads +
+// re-verified pack imports, no lane writes. Fire-and-forget — a dead seed
+// degrades to an empty start, never a boot failure.
+const seedDomains = (nektarEnv('NEKTAR_SEED_DOMAINS') ?? '')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean)
+if (seedDomains.length > 0 && mh.length > 0) {
+  const { seedFromDirectory } = await import('./seed.js')
+  void seedFromDirectory({
+    mem: rt.mem,
+    call: (t, a) => callTool(rt.mem, t, a, { ops: rt.ops }),
+    hosts: mh,
+    net: rt.network,
+    domains: seedDomains.filter((d) => d !== '*'),
+    all: seedDomains.includes('*'),
+    allowHttp: rt.network === 'regtest' || nektarEnv('NEKTAR_MARKET_LOCAL_HOSTS') === '1',
+    log: (line) => process.stderr.write(`nektar: ${line}\n`)
+  })
+    .then((r) =>
+      process.stderr.write(
+        `nektar: seed: ${r.imported} imported, ${r.skipped} already present, ${r.failed} failed from ${r.announces} announce(s) (+${r.hostsAdded} host(s))\n`
+      )
+    )
+    .catch((e) => process.stderr.write(`nektar: seed: ${(e as Error).message}\n`))
+}
 if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   const { openAutomation } = await import('@nektar/automation')
-  const { callTool } = await import('./server.js')
-  const mh = (nektarEnv('NEKTAR_MARKET_HOSTS') ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
   // unattended mode is honored ONLY behind a valid conformance token —
   // it implies the strict gate so a red preflight refuses to start
   const unattended = /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_UNATTENDED') ?? '')
@@ -112,6 +138,9 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     unattended,
     broadcasterProbe,
     publishFinger: /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_BFINGER_PUBLISH') ?? ''),
+    // NEKTAR_ANNOUNCE=1 — publish the directory card (hosts + offered seed
+    // packs) on the dir lane so fresh instances can enumerate this operator
+    announce: /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_ANNOUNCE') ?? ''),
     watchdogMs: nektarEnv('NEKTAR_WATCHDOG_MS') ? Number(nektarEnv('NEKTAR_WATCHDOG_MS')) : undefined,
     intervalMs: Number(nektarEnv('NEKTAR_AUTOMATION_INTERVAL_MS') ?? 1000),
     watchHosts: (nektarEnv('NEKTAR_WATCH_URLS') ?? '')
@@ -164,7 +193,7 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
   process.stderr.write(`nektar: automation on — ${mh.length} market host(s); policies and approvals via 'pnpm automation'
 `)
   if (mh.length === 0)
-    process.stderr.write(`nektar: automation: NEKTAR_MARKET_HOSTS is empty — wants and offers cannot be published
+    process.stderr.write(`nektar: automation: no market hosts (set NEKTAR_MARKET_HOSTS) — wants and offers cannot be published
 `)
 }
 const port = nektarEnv('NEKTAR_HTTP_PORT')

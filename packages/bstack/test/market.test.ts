@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrivateKey, Transaction } from '@bsv/sdk'
 import { claimsRecord, decodeValue, encode as cborEncode, CborMap, type Output } from '@lightwebinc/bcommon'
-import { signWant, signOffer } from '../src/artifacts.js'
+import { signWant, signOffer, signAnnounce, verifyAnnounce } from '../src/artifacts.js'
 import { buildCarrier } from '../src/carrier.js'
 import { decodePayload, encodePayload, lanesFor, laneOf } from '../src/market-wire.js'
 import { createNektarModule } from '../src/module.js'
@@ -248,4 +248,53 @@ test('market wire: extra keys above 2 are preserved-but-ignored on decode', asyn
   m.entries.push({ key: 9n, val: 'future-field' })
   const d = decodePayload(cborEncode(m))
   assert.equal(d.kind, 'want')
+})
+
+// ── announces — the operator directory card on the reserved dir lane ────
+const DIR_LANE = laneOf(NET, 'dir')
+
+async function announceCarrier(signer: PrivateKey, minter: PrivateKey, hosts = ['https://a.example'], net = NET, exp = Date.now() + 3_600_000) {
+  const sa = await signAnnounce(signer, {
+    hosts,
+    packs: [{ shard: 'ops', domains: ['ops'], store: { key: 'k', sha256: 'a'.repeat(64) } }],
+    ts: Date.now(),
+    exp,
+    net
+  })
+  return (await buildCarrier({ key: minter, payload: encodePayload({ v: 1, kind: 'announce', body: sa }), slot: { tree: await provenTree(minter), vout: 0 } }))
+    .beef
+}
+
+test('announce: sign/verify round-trips; bad pub/hosts/packs refuse at verify', async () => {
+  const k = PrivateKey.fromRandom()
+  const sa = await signAnnounce(k, { hosts: ['https://a.example'], ts: Date.now(), exp: Date.now() + 60_000, net: NET })
+  assert.ok(verifyAnnounce(sa.announce, sa.sig))
+  const bad = JSON.parse(JSON.stringify(sa)) as typeof sa
+  bad.announce.hosts = ['not-a-url']
+  assert.equal(verifyAnnounce(bad.announce, bad.sig), false, 'bad host shape refuses')
+  const foreign = { ...sa.announce, pub: PrivateKey.fromRandom().toPublicKey().toString() }
+  assert.equal(verifyAnnounce(foreign, sa.sig), false, 'signature binds the pub')
+})
+
+test('announce: wire round-trips as kind 3', async () => {
+  const k = PrivateKey.fromRandom()
+  const sa = await signAnnounce(k, { hosts: ['https://a.example'], ts: Date.now(), exp: Date.now() + 60_000, net: NET })
+  const b = encodePayload({ v: 1, kind: 'announce', body: sa })
+  assert.equal((decodeValue(b) as CborMap).get(1n), 3n)
+  assert.deepEqual(decodePayload(b), { v: 1, kind: 'announce', body: sa })
+  // the legacy v1 form decodes too — old hosts just refuse it
+  assert.deepEqual(decodePayload(encodePayload({ v: 1, kind: 'announce', body: sa }, { legacy: true })), { v: 1, kind: 'announce', body: sa })
+})
+
+test('announce: admits on the dir lane and lists under {announces}', async () => {
+  const k = PrivateKey.fromRandom()
+  const m = mod(new FakeTracker())
+  const beef = await announceCarrier(k, k)
+  assert.deepEqual((await m.topics[DIR_LANE].identifyAdmissibleOutputs(beef, [])).outputsToAdmit, [0])
+  await m.lookups['ls_nektar'].outputAdmittedByTopic({ mode: 'whole-tx', atomicBEEF: beef, outputIndex: 0, topic: DIR_LANE })
+  const got = (await m.lookups['ls_nektar'].lookup({ service: 'ls_nektar', query: { announces: { net: NET } } })) as Array<{ txid: string }>
+  assert.equal(got.length, 1, 'announces query returns the admitted card')
+  // a wrong-net announce is refused by the lane
+  const wrong = await announceCarrier(k, k, ['https://a.example'], 'other')
+  assert.deepEqual((await m.topics[DIR_LANE].identifyAdmissibleOutputs(wrong, [])).outputsToAdmit, [])
 })

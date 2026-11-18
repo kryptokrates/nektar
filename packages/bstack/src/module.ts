@@ -16,7 +16,19 @@ import {
   type TopicManager
 } from '@lightwebinc/bcommon'
 import { checkCarrier, checkSweep, carrierLockingKey } from './carrier.js'
-import { allLanes, decodePayload, lanesFor, verifyBody, bodyPub, bodyDomains, bodyExp, MAX_LIFETIME_MS, LS_NAME, type MarketPayload } from './market-wire.js'
+import {
+  allLanes,
+  decodePayload,
+  lanesFor,
+  verifyBody,
+  bodyPub,
+  bodyDomains,
+  bodyExp,
+  bodyNet,
+  MAX_LIFETIME_MS,
+  LS_NAME,
+  type MarketPayload
+} from './market-wire.js'
 
 interface Host extends Partial<ModuleHost> {
   log: ModuleHost['log']
@@ -107,8 +119,7 @@ function makeTopicManager(
         say('tm refuse', { lane, reason: 'binding' })
         return { outputsToAdmit: [], coinsToRetain: [] }
       }
-      const b = p.body as { want?: { net?: string }; offer?: { net?: string } }
-      if ((p.kind === 'want' ? b.want?.net : b.offer?.net) !== net) {
+      if (bodyNet(p) !== net) {
         say('tm refuse', { lane, reason: 'net' })
         return { outputsToAdmit: [], coinsToRetain: [] }
       }
@@ -153,10 +164,7 @@ function makeLookup(
     }
     return out
   }
-  const wantNet = (p: MarketPayload): string | undefined => {
-    const b = p.body as { want?: { net?: string }; offer?: { net?: string } }
-    return p.kind === 'want' ? b.want?.net : b.offer?.net
-  }
+  const wantNet = (p: MarketPayload): string | undefined => bodyNet(p)
   return {
     admissionMode: 'whole-tx',
     spendNotificationMode: 'txid',
@@ -245,8 +253,8 @@ function makeLookup(
     lookup: async (q: LookupQuestion): Promise<LookupFormula> => {
       if (q.service !== LS_NAME) throw new Error(`unknown service ${q.service}`)
       const query = q.query as Record<string, unknown>
-      for (const k of Object.keys(query ?? {})) if (!['wants', 'offers', 'want'].includes(k)) throw new Error(`unknown member ${k}`)
-      const member = (query.wants ?? query.offers ?? query.want) as { net?: string } | undefined
+      for (const k of Object.keys(query ?? {})) if (!['wants', 'offers', 'want', 'announces'].includes(k)) throw new Error(`unknown member ${k}`)
+      const member = (query.wants ?? query.offers ?? query.want ?? query.announces) as { net?: string } | undefined
       if (member === undefined || !nets.includes(String(member.net))) throw new Error(`unknown net ${String(member?.net)}`)
       const net = String(member.net)
       let out: Array<{ txid: string; outputIndex: number }>
@@ -263,6 +271,9 @@ function makeLookup(
           // the tail so a busy lane surfaces the newest wants, not the
           // oldest 100 forever
         ).slice(-(w.limit ?? 100))
+      } else if (query.announces !== undefined) {
+        const a = query.announces as { net: string; limit?: number }
+        out = match((e) => e.payload.kind === 'announce' && wantNet(e.payload) === net).slice(-(a.limit ?? 100))
       } else if (query.offers !== undefined) {
         const o = query.offers as { net: string; wantId: string; buyerPub: string }
         out = match(

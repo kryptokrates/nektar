@@ -113,6 +113,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // moment fetchTx can answer it — rows journaled while the tree was still
   // unproven heal at read instead of re-serving stale ancestry forever
   if (lanes !== undefined) lanes.journal.enrich = async (txid) => (await mem.fetchTx(txid))?.merklePath
+  // a reorg orphans every journaled path ≥ the fork — strip them so the
+  // enrich seam re-attaches against the new headers instead of serving the
+  // dead fork's evidence to counterparties
+  if (lanes !== undefined) mem.onReorg?.((from) => void lanes.journal.clearPaths?.(from).catch(() => undefined))
   // restart continuity: pending provision rows keep their chain watch —
   // without it the abandon horizon never reaps a rejected provision tx
   if (lanes !== undefined) {
@@ -331,12 +335,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             await engine.tick()
             const t2 = Date.now()
             rt.pushAcks()
-            // join the detached drain before ending the pass — a pass isn't
-            // complete while a delivery is in flight (cycle() semantics in
-            // tests: one call = all queued work attempted)
-            await rt.pumpDone
             const t3 = Date.now()
-            if (t3 - t0 > 2_000) log(`automation: pass ${t3 - t0}ms (poll ${t1 - t0} tick ${t2 - t1} pump ${t3 - t2})`)
+            if (t3 - t0 > 2_000) log(`automation: pass ${t3 - t0}ms (poll ${t1 - t0} tick ${t2 - t1} acks ${t3 - t2})`)
             // a live deal keeps the loop hot — the 5s inbound window alone
             // would let a deal cool to idle cadence between hops. A settled
             // proof awaiting depth only waits on BLOCKS, so it is excluded —
@@ -366,6 +366,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   const cycle = async (): Promise<void> => {
     await deals()
     if (!rt.stopped) await rt.upkeep()
+    // join the detached drain only at the cycle boundary — a scheduled
+    // deals pass must not serialize on delivery RTTs, but tests and
+    // event-driven cycles keep "one call = all queued work attempted"
+    await rt.pumpDone
   }
   rt.cycle = cycle
   const upkeepMs = cfg.upkeepMs ?? 10_000

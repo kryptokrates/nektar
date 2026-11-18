@@ -31,6 +31,10 @@ export interface AutomationHost extends MarketMemory {
    *  paid by another agent) with the chain-event substrate so proof delivery
    *  and the abandon horizon cover it */
   watchTx?(txid: string): void
+  /** a header reorg orphaned everything proven at ≥ fromHeight — lanes strip
+   *  stale paths from journaled evidence so the next read re-attaches proofs
+   *  computed against the new fork */
+  onReorg?(cb: (fromHeight: number) => void): void
   /** the one transaction-facts answer — verdict (mined|pending|dead) with
    *  its source, held bytes/proof/depth, and the outside hint in a separate
    *  field that can never be mistaken for the verdict */
@@ -49,6 +53,10 @@ export interface AutomationHost extends MarketMemory {
   shards(): string[]
   attachPacksStore(store: PacksStore): void
   packStoreRef(shard: string): ObjectRef | undefined
+  /** latest committed shard manifests — the domain tags an announce
+   *  advertises per offered pack. Optional: announces carry no domain
+   *  hints when the host can't project the catalog. */
+  shardCatalog?(): Promise<Array<{ shard: string; domains?: string[] }>>
   budget?: BudgetAuthority
   automation?: Automation
 }

@@ -793,8 +793,7 @@ export abstract class BuyerOps extends SellerOps {
       if (actionId !== undefined) {
         await this.d.store.releaseBudget(actionId)
         await this.d.store.releaseLeases(actionId)
-        if (wtx !== undefined && (wtx.state === 'prepared' || wtx.state === 'submission_unknown'))
-          await this.d.store.setTxState(actionId, 'rejected')
+        if (wtx !== undefined && (wtx.state === 'prepared' || wtx.state === 'submission_unknown')) await this.d.store.setTxState(actionId, 'rejected')
       }
       await cancel()
       await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected' })

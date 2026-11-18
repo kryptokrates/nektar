@@ -295,3 +295,80 @@ export function verifyOffer(offer: OfferAd, sigHex: string, opts?: { allowExpire
     return false
   }
 }
+
+// ── announces — the operator directory card: "I'm here, my hosts are H, my
+// seed packs are P" published on the reserved directory lane so a fresh
+// instance can enumerate live operators instead of trusting a seed URL ────
+export interface AnnouncePack {
+  shard: string
+  /** the shard manifest's domain tags — the NEKTAR_SEED_DOMAINS filter set */
+  domains?: string[]
+  /** object-store ref — importShard {store} takes it verbatim */
+  store?: { bucket?: string; key?: string; sha256?: string; size?: number; chirp?: string; endpoint?: string }
+  /** pack URL fallback for operators without a bstore ref */
+  packUrl?: string
+}
+export interface AnnounceAd {
+  pub: string // operator identity key
+  hosts: string[] // overlay hosts carrying this operator's artifacts (1..8)
+  packs?: AnnouncePack[] // seed packs offered to newcomers
+  ts: number
+  exp?: number
+  /** signed network binding — same cross-net replay guard as want/offer */
+  net?: string
+  streamSeq?: number
+  prevHash?: string
+}
+export interface SignedAnnounce {
+  announce: AnnounceAd
+  sig: string
+}
+
+const ANNOUNCE_PREFIX = 'nektar:market:announce:1\n'
+const announceCanonical = (a: AnnounceAd) => `${ANNOUNCE_PREFIX}${marketJson(a)}`
+const announceDigest = (a: AnnounceAd) => sha256(utf8(announceCanonical(a)))
+
+const URL_RE = /^https?:\/\/\S{2,300}$/i
+const packError = (p: unknown): string | null => {
+  if (p === null || typeof p !== 'object' || Array.isArray(p)) return 'bad pack'
+  const e = p as Record<string, unknown>
+  if (typeof e.shard !== 'string' || e.shard.length === 0 || e.shard.length > 64) return 'bad pack.shard'
+  if (e.domains !== undefined && (!Array.isArray(e.domains) || e.domains.length > 32 || !e.domains.every((d) => typeof d === 'string' && DOMAIN_RE.test(d))))
+    return 'bad pack.domains'
+  if (e.store !== undefined && (typeof e.store !== 'object' || e.store === null)) return 'bad pack.store'
+  if (e.packUrl !== undefined && (typeof e.packUrl !== 'string' || !URL_RE.test(e.packUrl))) return 'bad pack.packUrl'
+  return null
+}
+
+const announceShapeError = (a: AnnounceAd, allowExpired = false, now = Date.now()): string | null => {
+  if (typeof a?.pub !== 'string' || !/^[0-9a-f]{66}$/i.test(a.pub)) return 'bad pub'
+  if (!Array.isArray(a.hosts) || a.hosts.length < 1 || a.hosts.length > 8 || !a.hosts.every((h) => typeof h === 'string' && URL_RE.test(h))) return 'bad hosts'
+  if (a.packs !== undefined && (!Array.isArray(a.packs) || a.packs.length > 32 || a.packs.some((p) => packError(p) !== null))) return 'bad packs'
+  if (!Number.isSafeInteger(a.ts) || a.ts <= 0) return 'bad ts'
+  if (a.exp !== undefined && (!Number.isSafeInteger(a.exp) || (!allowExpired && a.exp <= now))) return 'expired'
+  return null
+}
+
+export type AnnounceInput = Omit<AnnounceAd, 'pub'>
+
+export async function signAnnounce(key: SignerLike, fields: AnnounceInput): Promise<SignedAnnounce> {
+  const pub = await signerPubHex(key)
+  const announce: AnnounceAd = { ...fields, pub }
+  const err = announceShapeError(announce, true)
+  if (err !== null) throw new Error(`signAnnounce: ${err}`)
+  const sr =
+    fields.streamSeq !== undefined && fields.prevHash !== undefined ? { streamSeq: fields.streamSeq, prevHash: fields.prevHash } : streamRef(pub, 'announce')
+  Object.assign(announce, sr)
+  streamCommit(pub, 'announce', toHex(Uint8Array.from(announceDigest(announce))))
+  return { announce, sig: await sigFor(key, announce, announceCanonical) }
+}
+
+export function verifyAnnounce(announce: AnnounceAd, sigHex: string, opts?: { allowExpired?: boolean; now?: number }): boolean {
+  if (announceShapeError(announce, opts?.allowExpired ?? false, opts?.now ?? Date.now()) !== null) return false
+  if (announce.streamSeq === undefined || announce.prevHash === undefined) return false
+  try {
+    return verifyDigest(announce.pub, announceDigest(announce), sigHex)
+  } catch {
+    return false
+  }
+}

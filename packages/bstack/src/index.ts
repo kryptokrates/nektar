@@ -10,6 +10,7 @@ export {
   MAX_DOMAINS,
   MAX_LIFETIME_MS,
   LS_NAME,
+  DIR_DOMAIN,
   encodePayload,
   decodePayload,
   laneNibble,
@@ -20,6 +21,7 @@ export {
   bodyPub,
   bodyDomains,
   bodyExp,
+  bodyNet,
   type MarketPayload
 } from './market-wire.js'
 export { BOX, DEFAULT_OFFICE, officeFor, boxFundingLock, sendBox, ackBox, readBox, openEnvelope, type BoxRef, type BoxItem } from './box.js'
@@ -62,12 +64,18 @@ export {
   publicQuoteError,
   signOffer,
   verifyOffer,
+  signAnnounce,
+  verifyAnnounce,
   type WantAd,
   type SignedWant,
   type WantInput,
   type OfferAd,
   type SignedOffer,
-  type OfferInput
+  type OfferInput,
+  type AnnounceAd,
+  type AnnouncePack,
+  type SignedAnnounce,
+  type AnnounceInput
 } from './artifacts.js'
 
 // ── delivery plane ─────────────────────────────────────────────────────────
@@ -96,6 +104,7 @@ export {
   readWants,
   readOffers,
   readWant,
+  readAnnounces,
   VerifiedCache,
   type Quorum,
   type SubmitAllResult,

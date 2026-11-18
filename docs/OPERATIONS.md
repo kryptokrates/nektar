@@ -135,6 +135,14 @@ Images are pinned by digest. Module bundles are build artifacts; see `deploy/bst
 
 `pnpm scenarios:real` runs the three-seller deal (four production instances, two hosts) against the regtest pair and writes `summary.json` plus a per-agent `tx-log.jsonl` under `.state/run-real-*`.
 
+### Directory + bootstrap
+
+`NEKTAR_MARKET_HOSTS` is optional: unset, the instance uses `DEFAULT_MARKET_HOSTS` (baked-in seed hosts per network — untrusted entry points; `packages/core/src/env.ts`). An explicit list wins outright so private silos can exclude the seeds.
+
+Operators who set `NEKTAR_ANNOUNCE=1` publish a signed **directory card** (`kind=3` announce, prefix `nektar:market:announce:1\n`) on the reserved `dir` lane `tm_nektar_<net>_<nibble('dir')>` — `{pub, hosts[], packs[{shard, domains?, store|packUrl}]}` — republished on content change or when `exp` enters its last half. `ls_nektar {announces: {net}}` enumerates live operators; a reader unions their hosts (https-screened on public nets) and can `importShard` offered packs — the zero-config join: seeds → announces → discovered hosts → seeded memory, no registry. `NEKTAR_SEED_DOMAINS=ops,teranode` (`*` = all) runs that import at boot; already-imported shards skip.
+
+`deploy/hub/` is the all-in-one operator box (agent + host pair, announce on by default). `deploy/agent/` is the agent-only path — now zero-config on testnet.
+
 ### Confirmations without polling
 
 Broadcasts go to the BSV Broadcaster (`NEKTAR_BROADCASTER_URL`). Status arrives by push: as a webhook at `/v1/broadcaster-callback` when `NEKTAR_CALLBACK_URL` is set (bearer `NEKTAR_CALLBACK_TOKEN`), or over the broadcaster's status stream when it is not — the instance then needs no inbound port. The stream reconnects with backoff and resumes from `<dataDir>/sse-cursor`; its token is generated once into `<dataDir>/callback-token`. Both paths share one handler: a status is a hint until its merkle path validates against the instance's own headers.

@@ -1,4 +1,4 @@
-import { decodePayload, verifyBody, bodyPub, bodyExp, type MarketPayload } from './market-wire.js'
+import { decodePayload, verifyBody, bodyPub, bodyExp, bodyNet, type MarketPayload } from './market-wire.js'
 import { carrierLockingKey, checkCarrier } from './carrier.js'
 import { sha256, toHex } from '@nektar/core'
 import type { ChainTracker } from '@bsv/sdk'
@@ -185,10 +185,7 @@ export async function readItems(hosts: string[], service: string, query: unknown
   const seenBy = new Map<string, Set<string>>()
   const perHost: Record<string, string[]> = {}
   const unreachable: string[] = []
-  const netOf = (p: MarketPayload): string | undefined => {
-    const b = p.body as { want?: { net?: string }; offer?: { net?: string } }
-    return p.kind === 'want' ? b.want?.net : b.offer?.net
-  }
+  const netOf = (p: MarketPayload): string | undefined => bodyNet(p)
   for (const a of answers) {
     if ('error' in a || !('outputs' in a)) {
       unreachable.push(a.host)
@@ -293,3 +290,7 @@ export const readWant = (hosts: string[], q: { net: string; pub: string; wantId:
         (p.body as { want: { wantId: string } }).want.wantId === q.wantId
     }
   )
+/** the operator directory — every signed announce the hosts hold for `net`,
+ *  SPV + signature + funding-binding verified like any lane read */
+export const readAnnounces = (hosts: string[], q: { net: string; limit?: number }, o: Omit<ReadOpts, 'accept'>) =>
+  readItems(hosts, 'ls_nektar', { announces: q }, { ...o, accept: (p) => p.kind === 'announce' })

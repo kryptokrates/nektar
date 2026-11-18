@@ -170,6 +170,17 @@ const GATES = [
     // private to the chain adapters that fill `hint` (mainnet.ts, its unit
     // test). Nothing outside @nektar/chain may import or call them.
     allow: ['packages/chain/src/mainnet.ts', 'packages/chain/test/mainnet.test.ts']
+  },
+  {
+    name: 'live-dead-oracle-write',
+    re: /\.(liveCheck|liveSet|deadParent|hintSkip)\s*=[^=]/g,
+    scope: GATED,
+    // the live/dead oracle family is late-bound wiring and every assignment
+    // is a custody-semantics decision: liveCheck only where the port's
+    // provesUnspent is true, deadParent only on first-party verdicts (a hint
+    // must never heal), liveSet/hintSkip read-only bookkeeping. funds.ts is
+    // the dep seam; custody.ts + runtime.ts are the sanctioned wirings.
+    allow: ['packages/chain/src/funds.ts', 'packages/mcp/src/custody.ts', 'packages/mcp/src/runtime.ts', 'packages/automation/test/toolbox-funder.test.ts']
   }
 ]
 

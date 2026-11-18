@@ -56,6 +56,12 @@ export abstract class MemTx extends MemKeys {
     this.events.on('txAbandoned', ({ txid }: { txid: string }) => cb(txid))
   }
 
+  /** a header reorg orphaned everything proven at ≥ fromHeight — emitted
+   *  on `events` by runtimes whose tracker detects a fork */
+  onReorg(cb: (fromHeight: number) => void): void {
+    this.events.on('reorg', ({ from }: { from: number }) => cb(from))
+  }
+
   /** the one answer about a transaction — bytes, proof, depth, verdict with
    *  its source, and the outside status word as a separate hint */
   async txFacts(txid: string): Promise<TxFacts> {

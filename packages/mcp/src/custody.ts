@@ -56,25 +56,26 @@ export class CustodyOps {
     // for this take — neither writes anything; custody state stays first-party.
     const facts = deps.facts
     if (facts !== undefined) {
-      // one evidence bar, two actions: a candidate whose parent is
-      // first-party dead or broadcaster-REJECTED is skipped for the take
-      // (hintSkip — pass-over only, writes nothing) and, when that veto
-      // lands, healed via died() (deadParent — frees the phantom's inputs
-      // and drops its adopted outputs). Bookkeeping only — a pushed status
-      // word still never writes a chain verdict.
-      const refusedParent = async (tx: Transaction): Promise<boolean> => {
-        if (tx.merklePath !== undefined) return false
+      // one probe, two evidence bars: hintSkip passes a dead-or-REJECTED
+      // parent over — read-only, a pushed status word never writes. The heal
+      // oracle deadParent fires ONLY on the sealed 'dead' verdict: died()
+      // frees the phantom's inputs and drops its adopted outputs, so a
+      // broadcaster's word must never reach it.
+      const parentFacts = async (tx: Transaction): Promise<import('@nektar/chain').TxFacts | undefined> => {
+        if (tx.merklePath !== undefined) return undefined
         const txid = tx.id('hex')
-        if (deps.proofOf?.(txid) !== undefined) return false
+        if (deps.proofOf?.(txid) !== undefined) return undefined
         try {
-          const f = await facts(txid)
-          return f.verdict === 'dead' || hintRejected(f.hint)
+          return await facts(txid)
         } catch {
-          return false
+          return undefined
         }
       }
-      deps.funds.hintSkip = async (tx: Transaction): Promise<boolean> => refusedParent(tx)
-      deps.funds.deadParent = refusedParent
+      deps.funds.hintSkip = async (tx: Transaction): Promise<boolean> => {
+        const f = await parentFacts(tx)
+        return f !== undefined && (f.verdict === 'dead' || hintRejected(f.hint))
+      }
+      deps.funds.deadParent = async (tx: Transaction): Promise<boolean> => (await parentFacts(tx))?.verdict === 'dead'
     }
   }
 

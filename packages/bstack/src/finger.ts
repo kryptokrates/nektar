@@ -517,9 +517,12 @@ export async function publishFinger(p: {
       if (head !== undefined && head.seq < prev.seq) {
         for (let n = head.seq + 1; n <= seq; n++) await p.journal.del(`finger:token:${n}`)
         for (let n = head.seq + 1; n <= seq; n++) await p.journal.del(`finger:carrier:${n}`)
-        // the stored witness belongs to the dead head's seq — dropping it
-        // makes the next mint re-derive prevWitness for the new depth
-        await p.state.set({ ...prev, seq: head.seq, tokenTxid: head.tokenTxid, tokenBeef: head.tokenBeef, witness: undefined })
+        // the stored witness AND body fingerprint belong to the dead head —
+        // keep either and republishing the same body hits the dedup gate and
+        // silently never re-airs. The row type wants a string and a rewound
+        // state has no honest fingerprint to restore, so '' — it can never
+        // equal a real hash
+        await p.state.set({ ...prev, seq: head.seq, tokenTxid: head.tokenTxid, tokenBeef: head.tokenBeef, bodyHash: '', refsHash: undefined, witness: undefined })
       } else {
         // the chain airs fine — the dead link was this mint's own input
         // (fresh funding died or the heal never reached it): drop just

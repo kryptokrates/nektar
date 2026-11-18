@@ -58,16 +58,18 @@ export async function ensureTrees(p: {
       proven.push(u.txid)
     } else if (p.facts !== undefined) {
       const f = await p.facts(u.txid)
-      if (f.verdict === 'dead' || hintRejected(f.hint)) {
-        // the mint was refused/lost a competing spend — an unproven row
-        // would gate out every later mint of this kind forever. A provision
-        // row is reaped the same way, but never tombstones: its inputs are
-        // the payer's, not ours
+      if (f.verdict === 'dead') {
+        // a sealed dead verdict — the mint provably lost a competing spend;
+        // an unproven row would gate out every later mint of this kind
+        // forever. A provision row is reaped the same way, but never
+        // tombstones: its inputs are the payer's, not ours. A REJECTED hint
+        // is NOT this — it routes to the heal arm below.
         await p.ledger.drop(u.txid)
         if (u.kind !== PROVISION_KIND && p.onReject !== undefined && tx !== undefined) await p.onReject(tx)
-      } else if (u.kind !== PROVISION_KIND && hintSilent(f.hint) && p.onStuck !== undefined && tx !== undefined) {
-        // silently vanished (never propagated, evicted) — resubmit or reap;
-        // without this the mint gate stays shut past any restart
+      } else if (u.kind !== PROVISION_KIND && (hintSilent(f.hint) || hintRejected(f.hint)) && p.onStuck !== undefined && tx !== undefined) {
+        // silently vanished or refused on a status word — resubmit or reap.
+        // The heal path decides on first-party evidence; a pushed hint alone
+        // never drops a row or writes a tombstone
         if ((await p.onStuck(tx)) === 'drop') {
           await p.ledger.drop(u.txid)
           if (p.onReject !== undefined) await p.onReject(tx)

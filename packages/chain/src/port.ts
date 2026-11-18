@@ -65,6 +65,12 @@ export interface ChainPort {
    *  prove absence, so they answer 'spent' or 'unknown'. Callers burn on
    *  'spent' only; 'unknown' must never burn or block. */
   spendStatus?: (txid: string, vout: number) => Promise<'spent' | 'unspent' | 'unknown'>
+  /** first-party utxo view — this port's spendStatus can answer 'unspent'
+   *  honestly. Live indexes can never prove absence and leave it unset;
+   *  consumers gate 'unspent'-oracles (Funds.liveCheck) on the flag instead
+   *  of inferring endpoint behavior — a probe that can never answer true
+   *  only burns retries inside the serialized take queue */
+  provesUnspent?: boolean
   /** chain height — ports that mine fold mined heights in themselves */
   height: () => number | Promise<number>
   /** open the pushed-hint channel (SSE status stream) — returns its closer,
@@ -132,6 +138,7 @@ export function memoryPort(chain: TestChain): ChainPort {
       return undefined
     },
     spendStatus: (txid, vout) => chain.utxoStatus(txid, vout),
+    provesUnspent: true,
     height: () => chain.currentHeight(),
     abandonAfterBlocks: 100,
     mine: async () => {
@@ -165,6 +172,7 @@ export function regtestPort(rc: RegtestConfig & { fundAddress?: string }, deps?:
       return { txid, status: 'mined', blockHeight: mp.blockHeight, merklePath: mp }
     },
     spendStatus: (txid, vout) => utxoStatus(rc, txid, vout),
+    provesUnspent: true,
     height: async () => Math.max(lastMined, await tracker.currentHeight()),
     abandonAfterBlocks: 100,
     guard,

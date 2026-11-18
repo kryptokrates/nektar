@@ -367,10 +367,12 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   if (port.spendStatus !== undefined) {
     const spendStatus = port.spendStatus
     custody.funds.spendCheck = async (txid, vout) => (await spendStatus(txid, vout).catch(() => 'unknown' as const)) === 'spent'
-    // starve-sweep revive oracles: 'unspent' is a real answer only on
-    // first-party utxo views (regtest node, memory chain) — live indexes
-    // can never prove absence, so the port's answer there stays unknown
-    custody.funds.liveCheck = async (txid, vout) => (await spendStatus(txid, vout).catch(() => 'unknown' as const)) === 'unspent'
+    // starve-sweep revive oracles: 'unspent' is a real answer only where the
+    // port declares a first-party utxo view — a live indexer's 'unknown' can
+    // never revive, so wiring it there would run futile retried probes
+    // inside the serialized take queue under a degraded index
+    if (port.provesUnspent === true)
+      custody.funds.liveCheck = async (txid, vout) => (await spendStatus(txid, vout).catch(() => 'unknown' as const)) === 'unspent'
   }
   // on live nets the starve sweep's oracle is the index's address listing —
   // positive membership of a tombstoned outpoint lifts its mark. A listing

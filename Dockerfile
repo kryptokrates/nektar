@@ -41,6 +41,9 @@ ENV npm_config_node_gyp=/usr/local/lib/node_modules/node-gyp/bin/node-gyp.js
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@12.16.1 --activate
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+# patchedDependencies resolve at install time — the patch files must land
+# before pnpm install or the frozen-lockfile gate dies ERR_PNPM_PATCH_NOT_FOUND
+COPY patches ./patches
 COPY packages ./packages
 COPY vendor ./vendor
 COPY vectors ./vectors

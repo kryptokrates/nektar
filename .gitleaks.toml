@@ -15,6 +15,17 @@ id = "bitcoin-wif"
 description = "Bitcoin WIF private key (mainnet or testnet, compressed or not)"
 regex = '''\b[5KL9c][1-9A-HJ-NP-Za-km-z]{50,51}\b'''
 
+# commits whose WIFs are already dead: the keys were swept and the files
+# either deleted or moved to env/gitignored key files. Scoping the skip to
+# this rule (not a global commit skip) keeps every other check live there.
+[rules.allowlist]
+commits = [
+  "853da4888c73f9614e4672bf17acd7eb32e44485", # tn-probe2.mjs + tn-trees.mjs (deleted)
+  "a1c8f1c7e9ce8e3abf408ad9ffceac3ec9803a5f", # tn-probe.mjs (deleted)
+  "ad097b2248a5e5f505fd9d2cef5fd29147598feb", # market-testnet.test.ts (now env keys)
+  "49078a6f6f467aefd52f52abf64ff4e38dc75d9f", # split-fund.mjs (WIFs swept -> env)
+]
+
 [allowlist]
 paths = [
   '''^\.env$''',

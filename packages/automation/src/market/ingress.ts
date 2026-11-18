@@ -5,6 +5,11 @@ import { MarketBase } from './base.js'
 import { NONTERMINAL } from './types.js'
 import type { MarketMessage } from './types.js'
 
+/** pump fan-out: deliveries are independent and off the engine mutex, so a
+ *  small pool overlaps legs instead of serializing the whole due batch
+ *  behind one slow host's timeout */
+const OUTBOX_POOL = 4
+
 export abstract class IngressOps extends MarketBase {
   // ── inputs ──────────────────────────────────────────────────────────────
   async ingestEvents(source: string, events: Array<{ seq: number | string; kind: string; payload: unknown }>, cursor: string): Promise<void> {
@@ -97,40 +102,76 @@ export abstract class IngressOps extends MarketBase {
   }
 
   async pumpOutbox(): Promise<void> {
-    for (const item of await this.d.store.dueOutbox()) {
-      try {
-        await this.deliver(item)
-        await this.d.store.ackOutbox(item.actionId)
-      } catch (e) {
-        let msg = (e as Error).message
-        // resource starvation (a funding-tree slot being empty) is not a
-        // delivery fault — defer without consuming attempts; unblockOutbox
-        // wakes it the moment a topup proof frees a slot. The class rides
-        // the row so a message that merely CONTAINS the keyword can't be
-        // pulled forward by an unrelated wake.
-        const cls = classifyDeliveryError(msg)
-        if (cls === 'funding-slot') await this.d.store.deferOutbox(item.actionId, msg)
-        else {
-          // a persisted payload can outgrow the box cap — built under an older
-          // bound, or an escrow wire that came out larger than expected. The
-          // `tx` field is advisory on every message that carries it (receivers
-          // fall back to fetchTx), so drop it once before burning attempts;
-          // an unshrinkable envelope dead-letters on the normal path.
-          if (item.kind === 'message' && /range: content/.test(msg)) {
-            const shrunk = this.shrinkWire(item.payload as MarketMessage)
-            if (shrunk !== undefined) {
-              try {
-                await this.deliver({ ...item, payload: shrunk })
-                await this.d.store.ackOutbox(item.actionId)
-                continue
-              } catch (e2) {
-                msg = (e2 as Error).message
-              }
+    const items = await this.d.store.dueOutbox()
+    // bounded fan-out: deliveries never touch op state and rows are
+    // independent, so lanes overlap — a dead host's full-timeout leg (or a
+    // leg that never settles) can't serialize the fresh sends queued
+    // behind it. Serial drain observed failing live: a buyer's accept sat
+    // unattempted behind dead-host repair rows for the whole deal window.
+    // items[i++] is synchronous — each row is claimed by exactly one worker.
+    let i = 0
+    await Promise.all(
+      Array.from({ length: Math.min(OUTBOX_POOL, items.length) }, async () => {
+        let item: OutboxItem | undefined
+        while ((item = items.at(i++)) !== undefined) await this.pumpItem(item)
+      })
+    )
+  }
+
+  private async pumpItem(item: OutboxItem): Promise<void> {
+    try {
+      await this.deliverBounded(item)
+      await this.d.store.ackOutbox(item.actionId)
+    } catch (e) {
+      let msg = (e as Error).message
+      // resource starvation (a funding-tree slot being empty) is not a
+      // delivery fault — defer without consuming attempts; unblockOutbox
+      // wakes it the moment a topup proof frees a slot. The class rides
+      // the row so a message that merely CONTAINS the keyword can't be
+      // pulled forward by an unrelated wake.
+      const cls = classifyDeliveryError(msg)
+      if (cls === 'funding-slot') await this.d.store.deferOutbox(item.actionId, msg)
+      else {
+        // a persisted payload can outgrow the box cap — built under an older
+        // bound, or an escrow wire that came out larger than expected. The
+        // `tx` field is advisory on every message that carries it (receivers
+        // fall back to fetchTx), so drop it once before burning attempts;
+        // an unshrinkable envelope dead-letters on the normal path.
+        if (item.kind === 'message' && /range: content/.test(msg)) {
+          const shrunk = this.shrinkWire(item.payload as MarketMessage)
+          if (shrunk !== undefined) {
+            try {
+              await this.deliverBounded({ ...item, payload: shrunk })
+              await this.d.store.ackOutbox(item.actionId)
+              return
+            } catch (e2) {
+              msg = (e2 as Error).message
             }
           }
-          await this.d.store.retryOutbox(item.actionId, msg, undefined, cls)
         }
+        await this.d.store.retryOutbox(item.actionId, msg, undefined, cls)
       }
+    }
+  }
+
+  /** one deliver gets one bound: the legs inside it (host submits, record
+   *  lookups) are timeout-capped already, but a leg that never settles
+   *  would park its worker for as long as it hangs — the row retries
+   *  transport-classed instead of the queue starving behind it. The
+   *  late-settling deliver's outcome is swallowed: the row already moved on. */
+  private async deliverBounded(item: OutboxItem): Promise<void> {
+    const d = this.deliver(item)
+    d.catch(() => {})
+    let t: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        d,
+        new Promise<never>((_res, rej) => {
+          t = setTimeout(() => rej(new Error(`deliver bound ${this.o.deliverBoundMs}ms exceeded`)), this.o.deliverBoundMs)
+        })
+      ])
+    } finally {
+      clearTimeout(t)
     }
   }
 

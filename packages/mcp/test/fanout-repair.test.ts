@@ -4,7 +4,7 @@ import knexFactory from 'knex'
 import { PrivateKey } from '@bsv/sdk'
 import { AutomationStore } from '@nektar/automation'
 import { MarketEngine, trackFanout, queueRepairs, ScriptedExecutor } from '@nektar/automation'
-import type { MarketMessage } from '@nektar/automation'
+import type { MarketMessage, MarketOptions } from '@nektar/automation'
 
 const open = async (now: () => number) => {
   const kx = knexFactory({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
@@ -15,7 +15,8 @@ const open = async (now: () => number) => {
 
 const engine = (
   store: AutomationStore,
-  transport: { send?: (to: string, m: MarketMessage) => Promise<void>; repair?: (h: string, k: string) => Promise<void> }
+  transport: { send?: (to: string, m: MarketMessage) => Promise<void>; repair?: (h: string, k: string) => Promise<void> },
+  opts?: Partial<MarketOptions>
 ) =>
   new MarketEngine({
     store,
@@ -31,7 +32,8 @@ const engine = (
       send: transport.send ?? (async () => {}),
       ...(transport.repair !== undefined ? { repair: transport.repair } : {})
     },
-    ai: new ScriptedExecutor()
+    ai: new ScriptedExecutor(),
+    ...(opts !== undefined ? { opts } : {})
   })
 
 test('fanout repair: a repair-host row calls transport.repair(host, key); a failing one retries transport-classed alone', async () => {
@@ -69,6 +71,48 @@ test('fanout repair: a repair-host row calls transport.repair(host, key); a fail
     const after = await kx('market_outbox').select('action_id', 'status', 'attempts')
     assert.equal(after.find((r) => r.action_id === 'repair:h:h1')!.status, 'dead')
     assert.equal(after.find((r) => r.action_id === 'msg:1')!.status, 'acked')
+  } finally {
+    await kx.destroy()
+  }
+})
+
+test('outbox pump: a wedged deliver cannot starve the rows behind it', async () => {
+  let now = 1_000_000
+  const { kx, store } = await open(() => now)
+  try {
+    const sent: string[] = []
+    // a deliver that never resolves — the live-R1 shape (a pass parked on a
+    // dead host's leg while the fresh accept queued unattempted behind it)
+    const never = new Promise<void>(() => {})
+    const eng = engine(
+      store,
+      {
+        send: async (to) => {
+          sent.push(to)
+        },
+        repair: async () => {
+          await never
+        }
+      },
+      { deliverBoundMs: 50 }
+    )
+    await store.enqueue({ actionId: 'repair:h:dead', operationId: 'lanes', kind: 'repair-host', destination: 'dead', payload: { key: 'h' } })
+    await store.enqueue({
+      actionId: 'op:accept',
+      operationId: 'op',
+      kind: 'message',
+      destination: 'seller',
+      payload: { type: 'accept' } as unknown as MarketMessage
+    })
+    // serial drain would hang forever on the repair; pooled dispatch must
+    // resolve once the accept lands and the wedged leg hits its bound
+    await eng.pumpOutbox()
+    assert.deepEqual(sent, ['seller'], 'the fresh send delivered despite the wedged repair ahead of it')
+    const rows = await kx('market_outbox').select('action_id', 'status', 'last_error')
+    assert.equal(rows.find((r) => r.action_id === 'op:accept')!.status, 'acked')
+    const rep = rows.find((r) => r.action_id === 'repair:h:dead')!
+    assert.equal(rep.status, 'pending', 'the wedged leg retries, it is not dead-lettered')
+    assert.match(rep.last_error ?? '', /deliver bound/)
   } finally {
     await kx.destroy()
   }

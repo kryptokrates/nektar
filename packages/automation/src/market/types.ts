@@ -175,6 +175,11 @@ export interface MarketOptions {
    *  misses the first window still lands inside the want's exp; the deal only
    *  dies when the want itself does. 0 = old behaviour (exp == collectMs). */
   wantExtendMs: number
+  /** hard bound on one outbox deliver call — every leg inside it is
+   *  timeout-capped already, but a leg that never settles must not park
+   *  its pump worker (and starve the queue behind it) for as long as it
+   *  hangs. The row retries transport-classed like any failed send. */
+  deliverBoundMs: number
 }
 
 export const DEFAULTS: MarketOptions = {
@@ -186,7 +191,8 @@ export const DEFAULTS: MarketOptions = {
   approvalTtlMs: 86_400_000,
   minCollectMs: 1000,
   collectQuietMs: 0,
-  wantExtendMs: 120_000
+  wantExtendMs: 120_000,
+  deliverBoundMs: 45_000
 }
 export const pkhOf = (pub: string) => Buffer.from(PublicKey.fromString(pub).toHash() as number[]).toString('hex')
 /** a bstore ObjectRef → stock plaintext ref (digest-pinned locator). https

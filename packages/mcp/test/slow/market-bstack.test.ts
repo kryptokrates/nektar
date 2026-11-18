@@ -423,7 +423,7 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
   const h1 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
   const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain), office })
   try {
-    const b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir })
+    const b = await mkagent('buyer', { hosts: [h1.url, h2.url], chain, logs, dir, opts: { wantExtendMs: 30_000 } })
     const s = await mkagent('seller', { hosts: [h1.url, h2.url], chain, logs, dir })
     await sellerize(s, 200)
     await drive([b.rt, s.rt], chain, 12)
@@ -432,7 +432,7 @@ test('bstack G: read envelopes are acked off the hosts; want+offer carry signed 
     assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'no deal | ' + logs.slice(-20).join(' | '))
     const bo = (await buyerOp(b))!
     const sw = (bo.data.want as { want: { ts: number; exp?: number } }).want
-    assert.equal(sw.exp, sw.ts + COLLECT_MS, 'want expires with its collect window')
+    assert.equal(sw.exp, sw.ts + COLLECT_MS + 30_000, 'want expires with its collect window plus the republish extension')
     const sel = (bo.data.selected as { key: string }).key
     const so = (bo.data.offers as Record<string, { so: { offer: { exp?: number } } }>)[sel].so
     assert.ok(Number.isSafeInteger(so.offer.exp), 'offer carries a signed expiry')

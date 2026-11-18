@@ -364,7 +364,8 @@ export function openUpkeep(rt: Rt): void {
               // path) need it. Proven-only kinds default lowWater to the
               // full tree — a shallower buffer is a ~1 block stall on
               // stock-out since they cannot dip into anchored stock
-              lowWater: kind === 'finger' ? (cfg.treeLowWater ?? 2) : kind === 'market' ? (cfg.treeLowWater ?? cfg.treeSize ?? 64) : (cfg.treeLowWater ?? spec.size),
+              lowWater:
+                kind === 'finger' ? (cfg.treeLowWater ?? 2) : kind === 'market' ? (cfg.treeLowWater ?? cfg.treeSize ?? 64) : (cfg.treeLowWater ?? spec.size),
               maxUnproven: cfg.treeMaxUnproven ?? 2,
               size: spec.size,
               satsPerOutput: spec.satsPerOutput,
@@ -447,7 +448,11 @@ export function openUpkeep(rt: Rt): void {
           if (!(e as Error).message.includes('no funding slot')) {
             // one stack frame names the throw site — 'null.satoshis'-class
             // crashes were invisible inside the dedupe before this
-            const site = (e as Error).stack?.split('\n').find((l) => l.includes('.js:'))?.trim() ?? ''
+            const site =
+              (e as Error).stack
+                ?.split('\n')
+                .find((l) => l.includes('.js:'))
+                ?.trim() ?? ''
             const m = `automation: finger: ${(e as Error).message.slice(0, 120)} @ ${site.slice(0, 80)}`
             if (m !== fingerError) {
               fingerError = m

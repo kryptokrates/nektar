@@ -35,7 +35,7 @@ services:
       # suite load); a refused corroboration stalls every host submit, so
       # lone-source answers get served in degraded mode — still verified
       # SPV, just not 2-of-2. Set '0' to restore strict corroboration.
-      SHIM_SINGLE_OK: "1"
+      SHIM_SINGLE_OK: '1'
     volumes:
       - ./header-shim.mjs:/shim/header-shim.mjs:ro
   # beefcat (the lightwebinc reference carrier impl, built from pinned source)

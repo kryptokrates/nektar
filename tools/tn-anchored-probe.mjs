@@ -17,7 +17,6 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { readdirSync, readFileSync } from 'node:fs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const dist = (p) => pathToFileURL(join(ROOT, p)).href

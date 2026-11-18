@@ -106,7 +106,11 @@ const TREE_READY_FLOOR = Number(process.env.TN_TREE_FLOOR ?? 8)
 // market is always anchored-capable. Servable = proven + anchored.
 const ANCHORED_V = process.env.NEKTAR_ANCHORED_LANES ?? ''
 const ANCHORED_KINDS = new Set(
-  ANCHORED_V === 'all' || ANCHORED_V === '1' ? ['bbox', 'log', 'finger'] : ANCHORED_V.split(',').map((s) => s.trim()).filter(Boolean)
+  ANCHORED_V === 'all' || ANCHORED_V === '1'
+    ? ['bbox', 'log', 'finger']
+    : ANCHORED_V.split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
 )
 ANCHORED_KINDS.add('market')
 const treesReady = async (rt: Automation): Promise<boolean> => {

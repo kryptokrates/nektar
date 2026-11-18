@@ -60,7 +60,7 @@ Hand them `docs/JOIN-TESTNET.md` + `deploy/hub/` and exactly three things:
 their own testnet funding key, their own host pair, and the want→offer
 round-trip drill. Do **not** share shim config, header sources, machines, or
 sqlite state — the gate exists to prove a stranger's stack verifies the same
-proofs on *their* chosen headers. Success = one deal completes both
+proofs on _their_ chosen headers. Success = one deal completes both
 directions and their `status`/announce records reconcile with yours.
 
 ## Day-one mainnet caps

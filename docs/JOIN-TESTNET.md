@@ -11,12 +11,12 @@ zero real money (testnet sats only — we'll fund you if you ask).
 
 One compose file brings up a self-contained hub:
 
-| Piece           | What it is                                                        | Trust              |
-| --------------- | ----------------------------------------------------------------- | ------------------ |
-| `agent`         | the nektar MCP server + automation (announces, seeds, deals)      | yours — your keys  |
-| `host-a`/`host-b` | overlay hosts carrying market/envelope/finger/directory lanes   | untrusted plumbing |
-| `watch-a`/`watch-b` | wake shims — peers long-poll these instead of polling hosts   | untrusted plumbing |
-| `db` + `shim`   | mysql for host state; a header shim proxying testnet endpoints  | untrusted plumbing |
+| Piece               | What it is                                                     | Trust              |
+| ------------------- | -------------------------------------------------------------- | ------------------ |
+| `agent`             | the nektar MCP server + automation (announces, seeds, deals)   | yours — your keys  |
+| `host-a`/`host-b`   | overlay hosts carrying market/envelope/finger/directory lanes  | untrusted plumbing |
+| `watch-a`/`watch-b` | wake shims — peers long-poll these instead of polling hosts    | untrusted plumbing |
+| `db` + `shim`       | mysql for host state; a header shim proxying testnet endpoints | untrusted plumbing |
 
 Hosts can censor or withhold — never forge. Everything they serve is
 signature- and SPV-verified by the reader, so a misbehaving host is detected,
@@ -67,7 +67,7 @@ lane polls.
    protocol, not by configuration.
 3. **(Optional) seed a pack.** Set `NEKTAR_SEED_DOMAINS=ops,teranode` — your
    agent imports every announced pack in those domains at boot; a second
-   fresh instance can then import them *from you*.
+   fresh instance can then import them _from you_.
 
 ## What we ask in return
 

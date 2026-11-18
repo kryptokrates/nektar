@@ -319,10 +319,23 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   openWatches(rt)
   let again = false
   let running: Promise<void> | undefined
-  // Two loops. The deal loop reads the hosts and advances operations; it
-  // does nothing else, so a deal never queues behind housekeeping. Upkeep
-  // (funding trees, the identity record, the journal, evidence) runs beside
-  // it under its own guard.
+  // a phase that never settles parks EVERY later pass behind `running` —
+  // bound each leg so the worst case is a logged timeout, not a silent
+  // wedge (observed live: an unbounded leg froze the whole suite)
+  const bound = async <T>(name: string, p: Promise<T>, ms = 120_000): Promise<T | undefined> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => {
+        log(`automation: ${name} exceeded ${ms}ms — abandoning leg`)
+        resolve(undefined)
+      }, ms)
+    })
+    try {
+      return await Promise.race([p, timeout])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
   const deals = async (): Promise<void> => {
     if (rt.busy) {
       again = true
@@ -338,9 +351,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             // phase timing: a pass that outruns the want collect window is a
             // silent deal killer — name the segment that ate it
             const t0 = Date.now()
-            await rt.poll()
+            await bound('poll', rt.poll())
             const t1 = Date.now()
-            await engine.tick()
+            await bound('tick', engine.tick())
             const t2 = Date.now()
             rt.pushAcks()
             const t3 = Date.now()

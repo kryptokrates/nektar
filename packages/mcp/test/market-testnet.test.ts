@@ -102,9 +102,16 @@ interface A {
  *  `log` warms lazily — not on the deal path. The laneStock accessor is the
  *  ledger's own accounting — the suite asks the runtime, never the tables. */
 const TREE_READY_FLOOR = Number(process.env.TN_TREE_FLOOR ?? 8)
+// mirrors anchoredKinds() in bstack/tree.ts: 'all'|'1' → every carrier kind,
+// market is always anchored-capable. Servable = proven + anchored.
+const ANCHORED_V = process.env.NEKTAR_ANCHORED_LANES ?? ''
+const ANCHORED_KINDS = new Set(
+  ANCHORED_V === 'all' || ANCHORED_V === '1' ? ['bbox', 'log', 'finger'] : ANCHORED_V.split(',').map((s) => s.trim()).filter(Boolean)
+)
+ANCHORED_KINDS.add('market')
 const treesReady = async (rt: Automation): Promise<boolean> => {
   const s = await rt.laneStock()
-  return ['market', 'bbox', 'finger'].every((k) => (s[k]?.proven ?? 0) >= TREE_READY_FLOOR)
+  return ['market', 'bbox', 'finger'].every((k) => (s[k]?.proven ?? 0) + (ANCHORED_KINDS.has(k) ? (s[k]?.anchored ?? 0) : 0) >= TREE_READY_FLOOR)
 }
 
 /** cycle agents until every deal-path funding tree is proven — the one real
@@ -329,7 +336,7 @@ const until = async (rts: Automation[], ms: number, ok: () => Promise<boolean>):
         })
     }
     if (await ok()) return Date.now() - t0
-    await sleep(800)
+    await sleep(150)
   }
   return -1
 }
@@ -355,9 +362,9 @@ const deal = async (b: A, s: A, logs: string[], ms = 180_000) => {
   return { wantId: w.wantId, ms: elapsed, wallTotal: Date.now() - t0 }
 }
 
-const respawn = async (a: A, hosts: string[], logs: string[]): Promise<A> => {
+const respawn = async (a: A, hosts: string[], logs: string[], watch?: string): Promise<A> => {
   const wifName = a.name.split('-')[0] as 'alice' | 'ben' | 'bob'
-  return await mkagent(a.name, wifName, hosts, logs, SUITE_DIR)
+  return await mkagent(a.name, wifName, hosts, logs, SUITE_DIR, undefined, watch)
 }
 
 const STOP_ALL = async (rts: Array<Automation | undefined>) => {
@@ -481,11 +488,12 @@ test('T1: deal latency distribution — 3 sequential live deals', { timeout: 1_8
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
+  const shim = await stubShim()
   let b!: A, s!: A
   const results: number[] = []
   try {
-    b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
-    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
+    b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir, undefined, shim.url)
+    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir, undefined, shim.url)
     await sellerize(s, 200)
     await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
@@ -498,6 +506,7 @@ test('T1: deal latency distribution — 3 sequential live deals', { timeout: 1_8
     console.log(`    latency: p50=${results[1]}ms max=${results[2]}ms`)
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
+    await shim.close()
     await f1.close()
     await f2.close()
   }
@@ -510,12 +519,13 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_200_00
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
+  const shim = await stubShim()
   const buyers: A[] = []
   let s!: A
   try {
-    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
+    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir, undefined, shim.url)
     await sellerize(s, 200)
-    for (const [i, w] of (['alice', 'bob'] as const).entries()) buyers.push(await mkagent(`${w}-b${i}`, w, [f1.url, f2.url], logs, dir))
+    for (const [i, w] of (['alice', 'bob'] as const).entries()) buyers.push(await mkagent(`${w}-b${i}`, w, [f1.url, f2.url], logs, dir, undefined, shim.url))
     await warmup([s, ...buyers], logs)
     await drive([s.rt, ...buyers.map((b) => b.rt)], 6)
     const t0 = Date.now()
@@ -535,6 +545,7 @@ test('T2: throughput — 2 concurrent buyers on one seller', { timeout: 1_200_00
     console.log(`    throughput: ${wants.length} live deals in ${ms}ms wall`)
   } finally {
     await STOP_ALL([s?.rt, ...buyers.map((b) => b.rt)])
+    await shim.close()
     await f1.close()
     await f2.close()
   }
@@ -640,10 +651,11 @@ test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 1_
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
+  const shim = await stubShim()
   let b!: A, s!: A
   try {
-    b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
-    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
+    b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir, undefined, shim.url)
+    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir, undefined, shim.url)
     await sellerize(s, 200)
     await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
@@ -661,6 +673,7 @@ test('R1: host dies mid-deal — survivor carries it home (live)', { timeout: 1_
     assert.ok(ms > 0, 'deal starved without host A | ' + logs.slice(-20).join(' | '))
   } finally {
     await STOP_ALL([b?.rt, s?.rt])
+    await shim.close()
     await f1.close()
     await f2.close()
   }
@@ -778,10 +791,11 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
   const logs: string[] = []
   const f1 = await faulthost(HOST_A)
   const f2 = await faulthost(HOST_B)
+  const shim = await stubShim()
   let b!: A, s!: A, b2!: A
   try {
-    b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir)
-    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir)
+    b = await mkagent('alice-b', 'alice', [f1.url, f2.url], logs, dir, undefined, shim.url)
+    s = await mkagent('ben-s', 'ben', [f1.url, f2.url], logs, dir, undefined, shim.url)
     await sellerize(s, 200)
     await warmup([b, s], logs)
     await drive([b.rt, s.rt], 6)
@@ -792,7 +806,7 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
     )
     const opId = (await opFor(b, w.wantId))!.operationId
     await b.rt.stop() // kill -9 equivalent — store persists, respawn resumes
-    b2 = await respawn(b, [f1.url, f2.url], logs)
+    b2 = await respawn(b, [f1.url, f2.url], logs, shim.url)
     const ms = await until([b2.rt, s.rt], 120_000, async () => {
       const bo = (await buyerOps(b2)).find((o) => o.operationId === opId)
       const so = await saleFor(s, w.wantId)
@@ -803,6 +817,7 @@ test('R5: buyer killed at awaiting_disclosure → respawn → completes (live)',
     assert.ok(bo !== undefined && BUYER_DONE.has(bo.state), `op ${opId} ended ${bo?.state}`)
   } finally {
     await STOP_ALL([b?.rt, b2?.rt, s?.rt])
+    await shim.close()
     await f1.close()
     await f2.close()
   }

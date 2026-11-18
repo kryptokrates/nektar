@@ -175,8 +175,10 @@ export interface FingerStateRow {
   witness?: string
   /** last full chain re-serve — the O(seq) pass is for hosts missing chain
    *  members, so it runs per host-set at most once per CHAIN_SERVE_MS; a
-   *  changed host list resets the mark because a new host may hold nothing */
-  served?: { at: number; hosts: string }
+   *  changed host list resets the mark because a new host may hold nothing.
+   *  `through` marks partial progress: the serve amortizes CHAIN_SERVE_BATCH
+   *  seqs per pass so a deep history can't park a whole upkeep. */
+  served?: { at: number; hosts: string; through?: number }
 }
 
 export interface FingerState {
@@ -273,8 +275,15 @@ export class KnexFingerState implements FingerState {
  *  actually lack members, so it runs at most once per window per host set;
  *  a changed host list always earns an immediate serve (it may hold nothing) */
 const CHAIN_SERVE_MS = 15 * 60_000
-const chainServeDue = (prev: FingerStateRow | undefined, hostSig: string, now: number): boolean =>
-  prev?.served === undefined || prev.served.hosts !== hostSig || now - prev.served.at >= CHAIN_SERVE_MS
+// a pass serves at most this many seqs (carriers AND tokens each) — a deep
+// history converges over a few upkeeps instead of parking one for minutes
+const CHAIN_SERVE_BATCH = 24
+const chainServeDue = (prev: FingerStateRow | undefined, hostSig: string, now: number): boolean => {
+  const s = prev?.served
+  if (s === undefined || s.hosts !== hostSig) return true
+  if ((s.through ?? prev?.seq ?? 0) < (prev?.seq ?? 0)) return true // partial serve resumes
+  return now - s.at >= CHAIN_SERVE_MS
+}
 
 /** Publish (or re-publish) the identity's finger record. Journaled under
  *  `finger:<seq>` BEFORE submission so a retry reuses the same carrier and
@@ -391,18 +400,33 @@ export async function publishFinger(p: {
       // re-serve the WHOLE chain, not just the head: a host that never joined
       // (or lost) the create refuses a head-only resubmit 'no-current' and the
       // record stays unresolvable there forever. Journal rows are the idempotent
-      // objects — hosts dedupe what they already hold. Seq order, carriers
-      // before tokens, so parents land before the members that reference them.
-      for (let n = 1; n <= prev.seq; n++) {
+      // objects — hosts dedupe what they already hold. Carriers land before
+      // tokens so parents precede the members that reference them; inside each
+      // phase every beef carries its own ancestry, so a bounded fan-out is
+      // safe — and the window is amortized: CHAIN_SERVE_BATCH seqs per pass,
+      // resuming at `through`, so a deep history can't park one upkeep for
+      // minutes (observed live: ~90 records held an upkeep >300s and the leg
+      // was abandoned). `through` only counts partial progress — a completed
+      // serve that's due again restarts from 1.
+      const done = prev.served?.hosts === hostSig && (prev.served.through ?? 0) < prev.seq ? (prev.served.through ?? 0) : 0
+      const upto = Math.min(done + CHAIN_SERVE_BATCH, prev.seq)
+      const seqs = Array.from({ length: upto - done }, (_, i) => done + i + 1)
+      const serve = async <T>(items: T[], fn: (x: T) => Promise<unknown>, width = 8): Promise<void> => {
+        for (let i = 0; i < items.length; i += width) await Promise.all(items.slice(i, i + width).map(fn))
+      }
+      await serve(seqs, async (n) => {
         const c = await p.journal.get(`finger:carrier:${n}`)
         if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
-      }
-      for (let n = 1; n <= prev.seq; n++) {
+      })
+      await serve(seqs, async (n) => {
         const t = n === prev.seq && tokenBeef !== undefined ? { beef: tokenBeef } : await p.journal.get(`finger:token:${n}`)
         const sv = t === undefined ? undefined : await servable(t.beef)
         if (sv !== undefined) await submitAll(p.hosts, sv, topics, { retryWaits: [] })
-      }
-      await p.state.set({ ...prev, served: { at: Date.now(), hosts: hostSig } })
+      })
+      // `at` moves only on completion — a partial pass leaves the original
+      // timestamp so chainServeDue keeps resuming until `through` reaches seq
+      const complete = upto >= prev.seq
+      await p.state.set({ ...prev, served: { at: complete ? Date.now() : (prev.served?.at ?? Date.now()), hosts: hostSig, through: upto } })
     } else if (tokenBeef !== undefined) {
       // inside the window the head alone re-touches every host — O(1), and a
       // host that somehow lost just the tip still heals between serves
@@ -524,7 +548,7 @@ export async function publishFinger(p: {
       if (c !== undefined) await submitAll(p.hosts, c.beef, c.topics ?? topics, { retryWaits: [] })
       const t = await p.journal.get(`finger:token:${n}`)
       const sv = t === undefined ? undefined : await servable(t.beef)
-      if (sv !== undefined) await submitAll(p.hosts, sv, t.topics ?? topics, { retryWaits: [] })
+      if (sv !== undefined) await submitAll(p.hosts, sv, t?.topics ?? topics, { retryWaits: [] })
     }
   }
   // independent objects, same hosts — carrier and token beef each carry
@@ -716,6 +740,18 @@ function beefGaps(tx: Transaction): boolean {
   return false
 }
 
+// an EF-sourced tx materializes each input's sourceTransaction as a stub:
+// zero inputs, outputs null-filled except the spent index. Serializing one
+// into a beef crashes the SDK writer (null.satoshis) — and a stub is a
+// claimed-data leaf, not a verifiable parent, so it was never a real source.
+// Detach stubs so gap detection sees (and fetches) the true ancestry.
+const dropStubs = (t: Transaction): void => {
+  for (const i of t.inputs) {
+    const st = i.sourceTransaction
+    if (st !== undefined && st.inputs.length === 0 && st.outputs.some((o) => o === null)) i.sourceTransaction = undefined
+  }
+}
+
 async function healAncestry(tx: Transaction, fetchTx: (txid: string) => Promise<Transaction | undefined>): Promise<boolean> {
   let changed = false
   const seen = new Set<string>([tx.id('hex')])
@@ -732,10 +768,12 @@ async function healAncestry(tx: Transaction, fetchTx: (txid: string) => Promise<
       changed = true
       return // do not descend past a proven tx
     }
+    dropStubs(a)
     for (const i of a.inputs) {
       if (i.sourceTransaction === undefined && i.sourceTXID !== undefined) {
         const src = await fetchTx(i.sourceTXID).catch(() => undefined)
         if (src !== undefined) {
+          dropStubs(src)
           i.sourceTransaction = src
           changed = true
         }
@@ -747,6 +785,7 @@ async function healAncestry(tx: Transaction, fetchTx: (txid: string) => Promise<
     if (i.sourceTransaction === undefined && i.sourceTXID !== undefined) {
       const src = await fetchTx(i.sourceTXID).catch(() => undefined)
       if (src !== undefined) {
+        dropStubs(src)
         i.sourceTransaction = src
         changed = true
       }

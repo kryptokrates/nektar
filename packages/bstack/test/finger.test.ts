@@ -348,6 +348,62 @@ test('finger: ancestry heal is a no-op when ancestry is already proven', async (
   }
 })
 
+// 4b6. an EF-parsed ancestor materializes each input's sourceTransaction as
+// a stub: zero inputs, outputs null-filled except the spent index. One
+// riding in the token's funding ancestry crashed the SDK beef writer on
+// serialize (live: 'Cannot read properties of null (reading satoshis)' in
+// writeTransactionBody, every ben upkeep). The heal detaches stubs — a stub
+// is claimed-data, never a verifiable parent — so the gap shows as an
+// ordinary missing source instead of a serialization crash.
+test('finger: EF-stub ancestry is detached before the token beef serializes', async () => {
+  const s = await rig()
+  try {
+    const lock = new P2PKH().lock(s.key.toPublicKey().toAddress())
+    const gp = fakeParent(s.key)
+    gp.addOutput({ satoshis: 100, lockingScript: lock }) // vout 1 — the spent index
+    const mid = new Transaction()
+    mid.addInput({ sourceTransaction: gp, sourceOutputIndex: 1, unlockingScriptTemplate: new P2PKH().unlock(s.key) })
+    mid.addOutput({ satoshis: 100, lockingScript: lock })
+    await mid.sign()
+    const stubbedParent = Transaction.fromHexEF(mid.toHexEF())
+    assert.equal(stubbedParent.inputs[0].sourceTransaction?.outputs[0], null, 'EF stub shape present')
+    const broadcasts: Transaction[] = []
+    const r = await publishFinger({
+      key: s.key,
+      state: s.state,
+      ledger: s.ledger,
+      journal: s.journal,
+      hosts: s.hosts,
+      body: body1(),
+      takeFunding: async () => ({ tx: stubbedParent, vout: 0, satoshis: 100 }),
+      broadcast: async (tx: Transaction) => {
+        broadcasts.push(tx)
+        return { status: 'success' }
+      },
+      fetchTx: async () => undefined
+    })
+    assert.equal(r.changed, true)
+    // the stored token beef parses and carries no stub anywhere in its
+    // ancestry — the detached input shows as sourceTXID-only instead
+    const stx = Transaction.fromBEEF([...(await s.state.get())!.tokenBeef])
+    const walk = (t: Transaction, seen = new Set<string>()): void => {
+      for (const o of t.outputs) assert.ok(o !== null, `${t.id('hex').slice(0, 12)} has a null output`)
+      for (const i of t.inputs) {
+        const src = i.sourceTransaction
+        if (src === undefined || seen.has(src.id('hex'))) continue
+        seen.add(src.id('hex'))
+        walk(src, seen)
+      }
+    }
+    walk(stx)
+    const feeSrc = stx.inputs.find((i) => i.sourceTXID !== '00'.repeat(32))?.sourceTransaction
+    assert.ok(feeSrc === undefined || feeSrc.inputs.every((i) => i.sourceTransaction === undefined || i.sourceTransaction.outputs.every((o) => o !== null)))
+  } finally {
+    await s.h1.close()
+    await s.h2.close()
+  }
+})
+
 // 4c. body validation: 9 hosts, a javascript: URL and a non-URL all refuse
 test('finger: body validation refuses too many or bad hosts', async () => {
   const s = await rig()

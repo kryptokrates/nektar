@@ -24,12 +24,44 @@ green the executable column is.
 
 ## Time/external gates — cannot be faked
 
+(Gate IDs are `X#` — `T#`/`R#` names belong to the testnet suite tests.)
+
 | #   | Gate                                            | Requirement                                                                                                       | Why it can't be skipped                                                                            |
 | --- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| T1  | **5-day soak**                                  | ≥120h continuous operation on testnet with deals flowing; no wedged ops, no reserve exhaustion, no lost announces | cadence bugs (eviction windows, TTL edges, keep-alive gaps) only surface on wall-clock time        |
-| T2  | **≥1 external independent operator**            | a second team runs `deploy/hub/` on their own infrastructure — NOT a second agent on the same box                 | same-box proves the wire, not independence: clock skew, NAT, real latency, independent key custody |
-| T3  | **≥2 announced hosts for DEFAULT_MARKET_HOSTS** | `DEFAULT_MARKET_HOSTS` stays empty on `main` until ≥2 independent operators announce                              | a hardcoded single bootstrap is a centralized registry with extra steps                            |
-| T4  | **One real escrow watched end-to-end**          | quote→accept→escrow→disclosure→settle (or refund) on live coins, logs kept                                        | every prior BLOCKER lived on this path                                                             |
+| X1  | **5-day soak**                                  | ≥120h continuous operation on testnet with deals flowing; no wedged ops, no reserve exhaustion, no lost announces | cadence bugs (eviction windows, TTL edges, keep-alive gaps) only surface on wall-clock time        |
+| X2  | **≥1 external independent operator**            | a second team runs `deploy/hub/` on their own infrastructure — NOT a second agent on the same box                 | same-box proves the wire, not independence: clock skew, NAT, real latency, independent key custody |
+| X3  | **≥2 announced hosts for DEFAULT_MARKET_HOSTS** | `DEFAULT_MARKET_HOSTS` stays empty on `main` until ≥2 independent operators announce                              | a hardcoded single bootstrap is a centralized registry with extra steps                            |
+| X4  | **One real escrow watched end-to-end**          | quote→accept→escrow→disclosure→settle (or refund) on live coins, logs kept                                        | every prior BLOCKER lived on this path                                                             |
+
+### Operating the X1 soak
+
+Two persistent agents with warmed lane stock (`node tools/tn-warmup.mjs`
+first), `NEKTAR_WATCH_URLS` pointed at each other's `/watch` endpoint, and a
+deal loop on a jittered cadence: publish a want, wait for `settled` (or a
+clean refund), repeat. Record per leg:
+
+- `deal N: <ms>` wall times — p50/max regressions are findings, not noise
+- `upkeep <ms>` lines — a leg over its bound logs `exceeded … abandoning`;
+  an abandon is a finding to file, not a pass
+- `box submit failed` / `unreachable` rates — one dead host is survivable
+  (suite R1 proves it), sustained refusal is not
+- reserve medium count over time — exhaustion means a funding-lane leak
+- outbox depth — rows should deliver or dead-letter (~10 attempts), never
+  accrue
+
+Abort and file when: a deal leg hits its 120s phase bound repeatedly on a
+healthy network, the same upkeep phase abandons three passes in a row, or an
+agent writes no sqlite/events for >10min (the suite's
+`[suite quiet <n>s]` heartbeat is the same signal, scaled).
+
+### Onboarding the X2 operator
+
+Hand them `docs/JOIN-TESTNET.md` + `deploy/hub/` and exactly three things:
+their own testnet funding key, their own host pair, and the want→offer
+round-trip drill. Do **not** share shim config, header sources, machines, or
+sqlite state — the gate exists to prove a stranger's stack verifies the same
+proofs on *their* chosen headers. Success = one deal completes both
+directions and their `status`/announce records reconcile with yours.
 
 ## Day-one mainnet caps
 
@@ -65,6 +97,23 @@ into `NEKTAR_RESERVE_OUTS` medium outputs so a tree mint and a deal escrow
 never contend for the same coin; a directory card whose funding tree sits
 unproven re-announces on a 4-minute keep-alive inside the host's 10-minute
 `FUNDING_PROOF_MS` eviction window and stops once the tree proves.
+
+**Event layer** — deal passes are wake-driven: each agent long-polls its
+`/watch` stream and an inbound lane item fires `rt.deals()` immediately;
+polling stays only as a bounded fallback (measured: T1 p50 41s→23s on
+testnet, T3 confirms notifies arrive and the watched path beats the polled
+one). Every deal leg and each upkeep phase is time-bounded — a hung leg logs
+its phase name and frees the single-flight instead of silently wedging the
+loop forever (`upkeep(finger) exceeded … abandoning` is how a live stall now
+surfaces).
+
+**Finger plane** — token bundles are gated on servability before submit:
+ancestry gaps heal against fetched sources and permanently-gapped bundles
+skip instead of resubmitting frozen-invalid beef forever (a poisoned journal
+starved live deals until evicted). EF-parsed sparse-output stubs are
+detached before BEEF serialization — the `null.satoshis` crash class. The
+full-chain re-serve amortizes to bounded batches per upkeep so a deep
+history can't park a pass for minutes.
 
 **Not guaranteed** — counterparty uptime, mempool/mining cadence on main,
 host-side admission policy beyond the vendored engines, and every

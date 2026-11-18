@@ -245,10 +245,29 @@ export function openUpkeep(rt: Rt): void {
   let announceError = ''
   let reserveError = ''
 
+  let upkeepPhase = 'start'
+  const bound = async <T>(p: Promise<T>, ms = 300_000): Promise<T | undefined> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => {
+        // a leg that never settles parks EVERY later upkeep on upkeepRun —
+        // a logged abandon frees the single-flight; the section name tells
+        // us which call site swallowed the wait
+        log(`automation: upkeep(${upkeepPhase}) exceeded ${ms}ms — abandoning`)
+        resolve(undefined)
+      }, ms)
+    })
+    try {
+      return await Promise.race([p, timeout])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
   const runUpkeep = async (): Promise<void> => {
     try {
       if (lanes !== undefined) {
         try {
+          upkeepPhase = 'reserve'
           // reserve policy: keep `reserveOuts` medium self-pay outputs on
           // hand so one dominant UTXO is never the single coin a deal escrow
           // and a tree mint both reach for — a mint burns one medium while a
@@ -292,6 +311,7 @@ export function openUpkeep(rt: Rt): void {
               }
             }
           }
+          upkeepPhase = 'reap'
           // dead-ancestry reap — an unproven tree whose input chain has a gap
           // the network cannot serve (a killed parent mint, a dropped draft)
           // can neither prove nor anchor: it wedges the mint gate and strands
@@ -326,6 +346,7 @@ export function openUpkeep(rt: Rt): void {
               `automation: dead-ancestry: dropped ${u.kind} tree ${u.txid.slice(0, 12)} — unservable parent ${struck[0].slice(0, 12)}; reaped ${reaped} journaled carrier(s)`
             )
           }
+          upkeepPhase = 'trees'
           for (const kind of ['market', 'bbox', ...(logStream !== undefined ? ['log'] : []), 'finger'] as const) {
             // stop() drains upkeep with a bound — bail between phases so a
             // late pass doesn't outlive the pool it's about to write to
@@ -385,6 +406,7 @@ export function openUpkeep(rt: Rt): void {
           log(`automation: ensureTrees: ${(e as Error).message}`)
         }
       }
+      upkeepPhase = 'finger'
       // own bfinger record: (re)publishes on the current host list, no-ops
       // when nothing changed, resubmits to any host that missed the objects —
       // finger self-heals by reconcile each pass, not by repair rows (the
@@ -423,7 +445,10 @@ export function openUpkeep(rt: Rt): void {
         } catch (e) {
           // 'no funding slot' is transient while the finger tree matures — retried next cycle, not worth a line
           if (!(e as Error).message.includes('no funding slot')) {
-            const m = `automation: finger: ${(e as Error).message.slice(0, 160)}`
+            // one stack frame names the throw site — 'null.satoshis'-class
+            // crashes were invisible inside the dedupe before this
+            const site = (e as Error).stack?.split('\n').find((l) => l.includes('.js:'))?.trim() ?? ''
+            const m = `automation: finger: ${(e as Error).message.slice(0, 120)} @ ${site.slice(0, 80)}`
             if (m !== fingerError) {
               fingerError = m
               log(m)
@@ -431,6 +456,7 @@ export function openUpkeep(rt: Rt): void {
           }
         }
       }
+      upkeepPhase = 'announce'
       // own directory announce: a signed card on the reserved dir lane naming
       // our hosts + offered seed packs — opt-in (NEKTAR_ANNOUNCE=1), same
       // cost/discoverability posture as publishFinger. Republishes when the
@@ -512,9 +538,12 @@ export function openUpkeep(rt: Rt): void {
         }
       }
       if (rt.stopped) return
+      upkeepPhase = 'evidence'
       await storeEvidence()
       if (rt.stopped) return
+      upkeepPhase = 'log-events'
       await appendLogEvents()
+      upkeepPhase = 'done'
     } catch (e) {
       log(`automation: ${(e as Error).message}`)
     }
@@ -580,7 +609,7 @@ export function openUpkeep(rt: Rt): void {
     if (rt.stopped) return
     rt.upkeepAt = Date.now()
     const t0 = Date.now()
-    rt.upkeepRun = runUpkeep().finally(() => {
+    rt.upkeepRun = bound(runUpkeep()).finally(() => {
       rt.upkeepRun = undefined
       const ms = Date.now() - t0
       if (ms > 2_000) log(`automation: upkeep ${ms}ms`)

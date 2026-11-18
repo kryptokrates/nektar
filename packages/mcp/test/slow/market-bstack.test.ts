@@ -171,9 +171,14 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
   const h2 = await minihost([NET], { now: () => clock, tracker: trackerFor(chain) })
   try {
     const b = await mkagent('buyer', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
-    const sA = await mkagent('sA', { hosts: [h1.url], msgs, chain, logs, dir })
-    const sB = await mkagent('sB', { hosts: [h2.url], msgs, chain, logs, dir })
-    const sC = await mkagent('sC', { hosts: [h1.url, h2.url], msgs, chain, logs, dir })
+    // offerTtlBlocks 40: sellers quote at different heights as the sellers-
+    // only until loop mines rounds — a 12-block TTL lets an early-quoting
+    // seller's offer die before select, and the assertion can't tell a dead
+    // offer from a wrong score. The gate asserts price-ordering, not expiry
+    // (expiry is covered by E/T).
+    const sA = await mkagent('sA', { hosts: [h1.url], msgs, chain, logs, dir, opts: { offerTtlBlocks: 40 } })
+    const sB = await mkagent('sB', { hosts: [h2.url], msgs, chain, logs, dir, opts: { offerTtlBlocks: 40 } })
+    const sC = await mkagent('sC', { hosts: [h1.url, h2.url], msgs, chain, logs, dir, opts: { offerTtlBlocks: 40 } })
     await sellerize(sA, 450)
     await sellerize(sB, 300)
     await sellerize(sC, 200)
@@ -203,7 +208,10 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
     assert.ok(await until(all, chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 100), 'logs: ' + logs.slice(-20).join(' | '))
     const bo = await buyerOp(b)
     const sel = bo?.data.selected as { key?: string; priceSats?: number } | undefined
-    assert.ok(sel?.key?.startsWith(sC.pub + ':'), `selected the 200-sat seller, got ${JSON.stringify(sel)}`)
+    assert.ok(
+      sel?.key?.startsWith(sC.pub + ':'),
+      `selected the 200-sat seller, got ${JSON.stringify(sel)} — ranking: ${JSON.stringify(bo?.data.ranking ?? null)}`
+    )
     const amounts = bo?.data.amounts as { priceSats?: number; purchaseSats?: number } | undefined
     assert.equal(amounts?.purchaseSats ?? amounts?.priceSats ?? sel?.priceSats, 200)
     for (const loser of [sA, sB]) for (const op of await saleOps(loser)) assert.ok(!COMPLETE.has(op.state), `${loser.name} sale op reached ${op.state}`)

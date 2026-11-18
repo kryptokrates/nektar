@@ -15,6 +15,8 @@ WORKDIR /app
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 # patchedDependencies resolve at install time — same gate as the main image
 COPY patches ./patches
+# bstack's @lightwebinc/* deps are file: tarballs out of vendor/
+COPY vendor ./vendor
 COPY packages ./packages
 RUN pnpm install --frozen-lockfile --filter '@nektar/bstack...' \
  && pnpm --filter '@nektar/bstack...' build \

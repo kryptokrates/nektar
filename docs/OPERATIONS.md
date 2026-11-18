@@ -62,6 +62,15 @@ whatever is configured: `NEKTAR_FUND_TXIDS`, indexer discovery, or the p2p
 `pay` listener (which now auto-imports funding to the fee key instead of
 only logging the txid). Once: the QR never re-fires on the confirm tick.
 
+**Funding imports ride SpendGuard.** An unmined `NEKTAR_FUND_TXIDS` import
+internalizes zeroconf — the wallet broadcasts the funding tx itself — and that
+broadcast counts the received value as foreign spend against
+`NEKTAR_MAX_SPEND_SATS_PER_DAY` (a 150k funding needs ≥150k headroom for that
+day). A refused internalize stays retryable (broadcast failure classifies as a
+service error, never a tx failure). `hex:<rawtx>` of an *already-mined* funding
+tx takes the proven path — no broadcast, no cap hit — so prefer pre-confirmed
+funding when the cap is tight.
+
 ## Gates (run in this order; each has a short, bounded runtime)
 
 ```sh
@@ -140,6 +149,8 @@ Images are pinned by digest. Module bundles are build artifacts; see `deploy/bst
 `NEKTAR_MARKET_HOSTS` is optional: unset, the instance uses `DEFAULT_MARKET_HOSTS` (baked-in seed hosts per network — untrusted entry points; `packages/core/src/env.ts`). An explicit list wins outright so private silos can exclude the seeds.
 
 Operators who set `NEKTAR_ANNOUNCE=1` publish a signed **directory card** (`kind=3` announce, prefix `nektar:market:announce:1\n`) on the reserved `dir` lane `tm_nektar_<net>_<nibble('dir')>` — `{pub, hosts[], packs[{shard, domains?, store|packUrl}]}` — republished on content change or when `exp` enters its last half. `ls_nektar {announces: {net}}` enumerates live operators; a reader unions their hosts (https-screened on public nets) and can `importShard` offered packs — the zero-config join: seeds → announces → discovered hosts → seeded memory, no registry. `NEKTAR_SEED_DOMAINS=ops,teranode` (`*` = all) runs that import at boot; already-imported shards skip.
+
+Note on unproven funding ancestry: a carrier admitted before its funding tree's BUMP lands carries a 10-minute host-side deadline (`FUNDING_PROOF_MS`) — on a slow-mining stretch the entry evicts until the publisher re-pushes (keep-alive is automatic while the agent runs, and `republishProved` re-records the entry once the tree proves). Two announced operators on one box prove the wire and the union path; they do NOT prove operator independence — that gate is a second team running `deploy/hub/` on their own infrastructure.
 
 `deploy/hub/` is the all-in-one operator box (agent + host pair, announce on by default). `deploy/agent/` is the agent-only path — now zero-config on testnet.
 

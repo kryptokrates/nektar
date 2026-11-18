@@ -515,7 +515,21 @@ export class LiveWalletServices implements sdk.WalletServices {
         if (r.status !== 'success') throw new Error(r.description ?? 'broadcast failed')
         txidResults.push({ txid, status: 'success' })
       } catch (e) {
-        txidResults.push({ txid, status: 'error', data: { error: String(e) } })
+        const msg = e instanceof Error ? e.message : String(e)
+        // the aggregator poisons on misclassification: a plain {status:'error'}
+        // lands as 'invalidTx' and the tx is marked 'failed' permanently —
+        // un-retryable even though nothing about the tx is invalid. A real
+        // double-spend gets the competingTxs machinery; a genuine rejection is
+        // the only case that should poison. Local SpendGuard refusals and
+        // transport failures are service errors — retryable by definition.
+        const doubleSpend = /double.?spend/i.test(msg)
+        const invalid = !doubleSpend && /\bREJECTED\b|missing input|malformed|invalid/i.test(msg) && !/SpendGuard|HTTP|fetch|timeout|abort/i.test(msg)
+        txidResults.push({
+          txid,
+          status: 'error',
+          ...(doubleSpend ? { doubleSpend: true } : invalid ? {} : { serviceError: true }),
+          data: { error: msg }
+        })
       }
     }
     return [{ name: 'woc-live', status: txidResults.every((r) => r.status === 'success') ? 'success' : 'error', txidResults }]

@@ -47,8 +47,9 @@ export class WalletCoordinator {
       if (prev.txid !== txid) throw new Error(`action ${ctx.actionId} already prepared a different transaction (${prev.txid})`)
       return prev
     }
-    if (!(await this.store.leaseOutpoints(ctx.actionId, outs))) throw new Error('prepare: an input is already leased to another action')
-    return await this.store.recordPrepared({ actionId: ctx.actionId, operationId: ctx.operationId, kind, txid, rawHex: tx.toHex(), parents, feeSats })
+    // lease+record in one transaction — a crash between the two manufactures
+    // a 'leased'-with-no-tx row take() frees but prepare() refuses forever
+    return await this.store.recordPrepared({ actionId: ctx.actionId, operationId: ctx.operationId, kind, txid, rawHex: tx.toHex(), parents, feeSats }, outs)
   }
 
   async prepareOwner(kind: string, tx: Transaction, actionId = `owner:${tx.id('hex')}`): Promise<WalletTx> {
@@ -67,8 +68,11 @@ export class WalletCoordinator {
     }
     const prev = await this.store.walletTx({ actionId })
     if (prev) return prev
-    return await this.store
-      .recordPrepared({
+    // atomic lease+record — the old shape recorded first then leased
+    // per-outpoint ignoring the result: a conflict left the tx row written
+    // with inputs still claimable elsewhere
+    return await this.store.recordPrepared(
+      {
         actionId,
         operationId: 'owner',
         kind,
@@ -76,11 +80,9 @@ export class WalletCoordinator {
         rawHex: tx.toHex(),
         parents,
         feeSats: Math.max(0, vin - tx.outputs.reduce((s, o) => s + (o.satoshis ?? 0), 0))
-      })
-      .then(async (w) => {
-        for (const o of outs) await this.store.leaseOutpoints(actionId, [o])
-        return w
-      })
+      },
+      outs
+    )
   }
 
   async rebuildTx(w: WalletTx): Promise<Transaction> {

@@ -134,18 +134,26 @@ const reconcileReserve = async (fundKey: PrivateKey, reserve: ReserveFunder, mc:
   }
 }
 
-/** all deal-path lanes have a proven funding tree in lanes.sqlite.
- *  `log` warms lazily — it is not on the deal path. */
+/** all deal-path lanes hold free slots on a proven funding tree in
+ *  lanes.sqlite — counted, not just present: a run that opens with one free
+ *  bbox slot burns it on the first carrier, then every disclosure rides a
+ *  block wait inside the deal's own deadline. Eight free slots covers a
+ *  test's carrier traffic with margin; drier stock tops up in warmup where
+ *  the block wait belongs. `log` warms lazily — not on the deal path. */
+const TREE_READY_FLOOR = 8
 const treesReady = async (dataDir: string): Promise<boolean> => {
   const f = join(dataDir, 'lanes.sqlite')
   if (!existsSync(f)) return false
   const kx = knex({ client: 'sqlite3', connection: { filename: f }, useNullAsDefault: true })
   try {
-    const kinds = (await kx('bstack_trees as t').join('bstack_tree_outputs as o', 'o.txid', 't.txid').where('t.proven', 1).distinct('o.kind')) as Array<{
-      kind: string
-    }>
-    const have = new Set(kinds.map((r) => r.kind))
-    return ['market', 'bbox', 'finger'].every((k) => have.has(k))
+    const kinds = (await kx('bstack_trees as t')
+      .join('bstack_tree_outputs as o', 'o.txid', 't.txid')
+      .where('t.proven', 1)
+      .groupBy('o.kind')
+      .select('o.kind')
+      .count('o.key as c')) as Array<{ kind: string; c: number }>
+    const have = new Map(kinds.map((r) => [r.kind, Number(r.c)]))
+    return ['market', 'bbox', 'finger'].every((k) => (have.get(k) ?? 0) >= TREE_READY_FLOOR)
   } catch {
     return false
   } finally {

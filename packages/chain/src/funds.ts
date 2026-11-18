@@ -102,6 +102,12 @@ export interface FundsDeps {
 
 const op = (txid: string, vout: number): string => `${txid}:${vout}`
 
+/** starvation is a typed signal — callers bounce the deal on it across a
+ *  package boundary, so it cannot ride message text that a refactor breaks */
+export class FundsStarvedError extends Error {
+  readonly code = 'STARVED' as const
+}
+
 export abstract class FundsBase implements Funds {
   /** in-process reservations: take() holds the outpoint until spent/died/
    *  release — two concurrent spends can never receive the same input */
@@ -205,11 +211,11 @@ export abstract class FundsBase implements Funds {
     if ((await this.leased?.(id, u.vout)) === true) return true
     // a proven parent cannot be a dead parent — the hint is never consulted
     if (u.tx.merklePath === undefined) {
-      // deadParent is the heal oracle — a true verdict answers with died()
-      // below. hintSkip alone keeps the old pass-over-only behavior: a hint
-      // is not a verdict, and healing on one would free live pending inputs.
-      // The memo dedupes across a draft's many outputs — a 250-entry file
-      // costs a probe per distinct parent, not per outpoint
+      // the oracles are independent, checked in order of evidence: deadParent
+      // (a sealed verdict) answers with died() below; hintSkip passes a hinted
+      // parent over — a hint is not a verdict and writes nothing. The memo
+      // dedupes across a draft's many outputs — a 250-entry file costs a probe
+      // per distinct parent, not per outpoint
       if (this.deadParent !== undefined) {
         let dead = deadMemo.get(id)
         if (dead === undefined) {
@@ -217,7 +223,8 @@ export abstract class FundsBase implements Funds {
           deadMemo.set(id, dead)
         }
         if (dead) return 'dead'
-      } else if ((await this.hintSkip?.(u.tx, u.vout)) === true) return true
+      }
+      if ((await this.hintSkip?.(u.tx, u.vout)) === true) return true
     }
     return false
   }
@@ -299,7 +306,7 @@ export abstract class FundsBase implements Funds {
         let owned = 0
         const stock = healed ? await this.store.list() : all
         for (const u of stock) if (!this.reserved.has(op(u.tx.id('hex'), u.vout))) owned += u.satoshis
-        if (owned - sats < floor) throw new Error(`funds: ${purpose} take of ${sats} sats would leave ${owned - sats} < deal floor ${floor}`)
+        if (owned - sats < floor) throw new FundsStarvedError(`funds: ${purpose} take of ${sats} sats would leave ${owned - sats} < deal floor ${floor}`)
       }
       candidates.sort((a, b) => a.satoshis - b.satoshis)
       // first-party truth side: a 'spent' answer burns the candidate for
@@ -314,7 +321,7 @@ export abstract class FundsBase implements Funds {
         if (pick.tx.merklePath === undefined) await this.deps.proofOf?.(pick.tx)
         return pick
       }
-      throw new Error(`funds: no spendable output ≥ ${sats} sats`)
+      throw new FundsStarvedError(`funds: no spendable output ≥ ${sats} sats`)
     })
     this.queue = run.catch(() => {})
     return run

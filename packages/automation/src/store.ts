@@ -732,6 +732,11 @@ export class AutomationStore {
    *  and prepare()'s conflict check MUST agree — a stale lease take() passes
    *  but prepare() refuses was a real terminal funding_failed on testnet. */
   private async leaseLive(q: Knex | Knex.Transaction, lease: { action_id: string; state: string }): Promise<boolean> {
+    // released is never live — without this arm a released row falls through
+    // to the tx-state check and a 'released'+live-tx (or no-tx) row blocks
+    // prepare() while take() frees it: the take↔prepare divergence this join
+    // exists to close, reopened on the released arm
+    if (lease.state === 'released') return false
     if (lease.state === 'spent') return true
     const w = await q(T.txs).where({ action_id: lease.action_id }).first()
     return w === undefined || w.state === 'prepared' || w.state === 'submission_unknown' || w.state === 'exported'
@@ -778,12 +783,33 @@ export class AutomationStore {
     }
   }
 
-  async recordPrepared(t: Omit<WalletTx, 'state' | 'attempts' | 'lastObservation' | 'at'>): Promise<WalletTx> {
+  async recordPrepared(
+    t: Omit<WalletTx, 'state' | 'attempts' | 'lastObservation' | 'at'>,
+    leaseOuts?: Array<{ txid: string; vout: number; satoshis: number }>
+  ): Promise<WalletTx> {
     return await this.kx.transaction(async (trx) => {
       const prev = await trx(T.txs).where({ action_id: t.actionId }).first()
       if (prev) {
         if (prev.txid !== t.txid) throw new Error(`action ${t.actionId} already prepared a different transaction (${prev.txid})`)
         return this.wtx(prev)
+      }
+      // lease+record must commit together: a crash between a committed lease
+      // and a failed record leaves 'leased'-with-no-tx — a wedge take() frees
+      // but prepare() refuses forever. Same conflict rule as leaseOutpoints.
+      if (leaseOuts !== undefined) {
+        for (const o of leaseOuts) {
+          const r = await trx(T.leases)
+            .where({ outpoint: `${o.txid}:${o.vout}` })
+            .first()
+          if (r && r.action_id !== t.actionId && (await this.leaseLive(trx, r)))
+            throw new Error('prepare: an input is already leased to another action')
+        }
+        const now = this.now()
+        for (const o of leaseOuts)
+          await trx(T.leases)
+            .insert({ outpoint: `${o.txid}:${o.vout}`, action_id: t.actionId, satoshis: o.satoshis, state: 'leased', at: now })
+            .onConflict('outpoint')
+            .merge()
       }
       const row = {
         action_id: t.actionId,

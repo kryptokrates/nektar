@@ -4,9 +4,52 @@ Applying the `.devin/skills/cold-start` framework to nektar's own
 marketplace. Goal: one atomic network that delivers the magic moment
 reliably, then a repeatable kit for network #2. Everything below uses only
 surfaces that already exist (`want`/`sell`/`describeShard`, pack sharing,
-`/.well-known/nektar`, deals journal) — this is a seeding + measurement
+`/.well-known/nektar`, deals journal) — this is a seeding + measurement +
+defaults plan, not a feature build.
 
-- defaults plan, not a feature build.
+## The first three people
+
+Networks are built one person at a time, so that's how this starts.
+
+**Person #1 (the founder/operator).** Runs an instance for its
+single-player value: `remember`/`recall` keeps the agent's work between
+sessions, receipts prove it — zero network needed, the wedge does its
+job. Two calls turn that into reachable supply: `describeShard` (the
+manifest lands on `/.well-known/nektar`) plus `exportShard`/`sell`. The
+accumulated knowledge is now discoverable at a URL. Cost of becoming
+node #1: two tool calls and a reachable instance.
+
+**Person #2 (one person you hand a link).** The entire invite is a URL.
+Person #2 runs the image, funds a testnet key, calls
+`importShard {from: <person #1's URL>}`. Every record re-verifies against
+the chain — a hostile pack yields unverifiable entries, never trusted
+records. Their magic moment: _my agent now knows what yours learned —
+and I can prove it came from you._ That handshake already runs today:
+`tools/demo-two-ais.mjs` is person #1 → person #2 on regtest. Their own
+work then accumulates → `describeShard` → they're supply for person #3.
+Consumer→supplier conversion is one tool call.
+
+**Person #3 (the first real density).** Two reachable knowledge sources
+now exist; person #3 imports from either, and wants can fill from two
+sellers. Each new person's _distinct_ work adds coverage the others
+don't have — that's density forming. At this scale you count health by
+hand: did #2's import land? did #3's first `want` fill or hit zero?
+
+Two loops emerge, in order:
+
+- **Loop A — knowledge transfer (the density loop).** link → import →
+  own work → new link. Needs only a URL; works today with no shared
+  infrastructure. This is the cold-start engine.
+- **Loop B — the market.** `want` → offer → escrow → disclosure needs
+  shared `NEKTAR_MARKET_HOSTS`, armed sellers, and funding. It emerges
+  _on top of_ Loop A once two instances share a host — it cannot be the
+  cold-start mechanism, because it's the thing that needs density to
+  exist.
+
+The only missing piece for Loop A to be default rather than manual:
+package the invite as a join step — one base URL → fetch
+`/.well-known/nektar` → import offerable shards (+ adopt the same market
+hosts when Loop B turns on). That's docs/onboarding work, not protocol.
 
 ## The atomic network
 
@@ -14,14 +57,16 @@ surfaces that already exist (`want`/`sell`/`describeShard`, pack sharing,
 infrastructure — the people (and their agents) who hit the same ops
 failures this repo already documents.
 
-**Where:** the public **testnet** lane, on a small set of shared market
-hosts. One lane, one domain cluster — density before breadth.
+**Where:** the public **testnet** lane. Loop A needs no shared
+infrastructure at all (a URL suffices); Loop B adds a small set of
+shared market hosts once it activates. One lane, one domain cluster —
+density before breadth.
 
-**How many:** the minimum complete network is ~3-5 seller instances with
-seeded shards covering the domain, such that a buyer's `want` for a
-covered question reliably returns a verified offer. Below that, recall
-returns zero and the network repels. Buyers arrive through normal
-onboarding; they don't need pre-commitment, the supply side does.
+**How many:** Loop A tips at 2 people — the import handshake IS the
+network working. Loop B's bar is ~3-5 armed seller instances covering
+the domain, such that a `want` for a covered question reliably returns
+a verified offer. Below that, `want`s hit zero and the market repels —
+which is why the market is the second loop, not the first.
 
 **Why this niche:** the content already exists and decays slowly —
 `AGENTS.md`'s "Regtest stack gotchas," `docs/AUTOMATION.md`'s mainnet
@@ -44,6 +89,10 @@ domain. Zero rate is a first-class health metric, same weight as fill
 rate.
 
 ## Seeding plan (honest flintstoning)
+
+Loop A seeds itself as people join; this is the deliberate supply that
+makes person #2's first session non-empty before their own work
+accumulates.
 
 Seed the supply side with real curated memory — never fabricated offers
 or synthetic seller activity (repo honesty rule: proofs establish

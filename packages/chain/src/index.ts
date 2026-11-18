@@ -44,7 +44,7 @@ export { testTier, testWorld, testChain, testFunder, dryFunder, stackOnly } from
 export type { TestTier, TestChain, TestFunder } from './testworld.js'
 export { MemoryChain, MemoryTreasury, MemoryFunder, memoryTreasury } from './memchain.js'
 export type { MemoryChainFaults } from './memchain.js'
-export { FundsBase, MemoryFunds, listFundsStore, fundsAsFunder, fundsOf } from './funds.js'
+export { FundsBase, FundsStarvedError, MemoryFunds, listFundsStore, fundsAsFunder, fundsOf } from './funds.js'
 export type { FundsStore, FundsDeps, ListFundsStore, FunderLike } from './funds.js'
 export { SpendGuard } from './spendguard.js'
 export type { SpendGuardOpts, CostRecord } from './spendguard.js'

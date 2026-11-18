@@ -33,6 +33,25 @@ services:
       SHIM_CHAINTRACKS: https://arcade-v2-testnet-us-1.bsvblockchain.tech/chaintracks/v2
     volumes:
       - ./header-shim.mjs:/shim/header-shim.mjs:ro
+  # beefcat (the lightwebinc reference carrier impl, built from pinned source)
+  # — an INDEPENDENT client of this shim: its verifier only accepts carrier
+  # postage anchored by roots this shim serves, so drift in the /v1/tip +
+  # /v1/root contract fails the reference implementation, not our code.
+  # Opt-in: `docker compose -f ... --profile conformance run --rm beefcat`
+  # runs the smoke (self-check on a local devchain, then a foreign-chain
+  # stream refused through this shim). `--entrypoint sh beefcat` opens an
+  # operator shell for real testnet flows (init/fund/verify) with a
+  # persistent home on the beefcat-home volume.
+  beefcat:
+    profiles: ['conformance']
+    build: ./beefcat
+    depends_on:
+      shim:
+        condition: service_started
+    environment:
+      BEEFCAT_SHIM: http://shim:8080
+    volumes:
+      - beefcat-home:/home/beefcat
   # watch-shim: long-poll wake layer in front of each stock host's /lookup —
   # agents hold GET /watch subscriptions and senders POST /notify; every wake
   # is only a hint (consumers re-verify via their own reads), so a shim being
@@ -109,3 +128,4 @@ volumes:
   db: {}
   host-state-a: {}
   host-state-b: {}
+  beefcat-home: {}

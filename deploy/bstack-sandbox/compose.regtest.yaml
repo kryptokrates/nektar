@@ -48,6 +48,26 @@ services:
       - 'host.docker.internal:host-gateway'
     volumes:
       - ./header-shim.mjs:/shim/header-shim.mjs:ro
+  # beefcat (the lightwebinc reference carrier impl, built from pinned source)
+  # — an INDEPENDENT client of this shim AND a real carrier workload on our
+  # Teranode: phase 4 of the smoke mints actual postage via the node RPC and
+  # verifies through this shim. Opt-in:
+  # `docker compose -f ... --profile conformance run --rm beefcat`
+  beefcat:
+    profiles: ['conformance']
+    build: ./beefcat
+    networks:
+      - default
+      - teranode
+    depends_on:
+      shim:
+        condition: service_started
+    environment:
+      BEEFCAT_SHIM: http://shim:8080
+      BEEFCAT_NODE_RPC: http://${NEKTAR_RPC_USER:?set NEKTAR_RPC_USER (repo .env)}:${NEKTAR_RPC_PASS:?set NEKTAR_RPC_PASS (repo .env)}@rpc:9292
+      BEEFCAT_ASSET: http://asset:8090
+    volumes:
+      - beefcat-home:/home/beefcat
   # watch-shim: long-poll wake layer in front of each stock host's /lookup —
   # agents hold GET /watch subscriptions and senders POST /notify; every wake
   # is only a hint (consumers re-verify via their own reads), so a shim being
@@ -124,3 +144,4 @@ volumes:
   db: {}
   host-state-a: {}
   host-state-b: {}
+  beefcat-home: {}

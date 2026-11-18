@@ -1,49 +1,25 @@
 # SPV + BEEF — the verification architecture, deep
 
-The reference for auditing any code that answers "is this transaction
-mined / proven / real." Sources: Wright's Substack essays
-(singulargrit.substack.com) — the formal SPV treatment, the gatekeeper
-essay, the mechanism-of-honour essay — the Bitcoin whitepaper §8, and
-the 1BSV/Lightweb papers (data-carrier, bstack, user guide) + BRC-62/74
-(BEEF/BUMP).
+The event-layer view of "is this transaction mined / proven / real": the
+component map, the `spv/*` rules with event-tier severities, and the
+repo seam index. **The doctrine itself (D-numbers, per-source demands)
+lives in [`../../spv-strict/references/doctrine.md`](../../spv-strict/references/doctrine.md)
+— read it there, it is the single source of truth.** Sources for both:
+Wright's Substack essays (singulargrit.substack.com), the Bitcoin
+whitepaper §8, the 1BSV/Lightweb papers (data-carrier, bstack, user
+guide) + BRC-62/74 (BEEF/BUMP).
 
-## The doctrine, stated precisely
+The five lines that matter for event work, compressed:
 
-**What SPV is (whitepaper §8 + "Safe Low Bandwidth SPV: A Formal
-Treatment"):** a block-header chain meeting proof-of-work criteria plus
-a valid Merkle path _probabilistically verifies_ a transaction's
-inclusion in the longest-PoW chain. The client need not verify scripts,
-hold blocks, or retain global state — the model is _stateless proof_.
-Security parameter is **depth** (confirmations), not byte volume:
-inclusion at depth N is safe under honest-majority mining; proofs stay
-logarithmic while throughput grows by orders of magnitude.
-
-**Evidence travels with the transaction ("The Protocol No Gatekeeper
-Wants"):** the recipient needs _the transaction being received, the
-relevant signatures and conditions, an inclusion proof, and a reliable
-chain of PoW headers_. Verification is **local to the relationship** —
-Bob never asks the network what Alice already has. MF-SPV = hierarchical
-Merkle commitments + sender-held proofs; the sender is responsible for
-handing over the evidence.
-
-**TXID alone proves nothing ("A Mechanism of Honour"):** providing only
-the TXID is insufficient — the verifier cannot confirm `hash(bytes) ==
-txid` without the full transaction data. A user maintains _their own
-transaction and its Merkle path to the block header_ — "traced,
-verified, and confirmed — not by trust, but by computation."
-
-**SPV proves inclusion, not currency (1BSV data-carrier):** three things
-suffice — the bytes, a short Merkle path, the chain's block headers
-(80 B each, ~4.2 MB/year, fits on a phone). SPV _cannot_ say whether an
-output is still unspent — unspentness is a watch/interest concern, not
-a proof concern. Verifiable ≠ mined: a tx riding an unmineable carrier
-that spends a mined parent is still provable.
-
-**The layered need-to-have (1BSV user guide):** miners take the
-settlement layer (tx stream + subtrees + block data); service providers
-take txs + subtrees + the header feed; **applications take objects
-(BEEF) by topic + a block-header feed only**. An app that pulls blocks
-has stepped into a layer it was never meant to see.
+- SPV = headers + Merkle path + computation by the verifier — stateless
+  proof; **depth** is the security parameter, not byte volume.
+- Evidence travels with the transaction; verification is local to the
+  relationship — never re-fetch what the sender already held.
+- A txid alone proves nothing — `hash(bytes) = txid` first, always.
+- SPV proves inclusion, not unspentness — unspentness is a
+  watch/bookkeeping concern, never a proof concern.
+- Applications take objects (BEEF) by topic + a header feed only — an
+  app that pulls blocks has stepped into the proof service's layer.
 
 ## The perfect architecture — five components, no more
 

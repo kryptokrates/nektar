@@ -11,79 +11,53 @@ quirk), so the commands below use `-- packages` + awk/rg path filtering
 instead. If a step returns empty, fix the command; never report "none found"
 from an empty result set.
 
-## 1. Package inventory
+## 1. Package inventory — the gate already computes this
+
+`tools/.arch-baseline.json` (regenerate: `node tools/check-arch.mjs --update`)
+carries per-package **files, LOC, fan-out, and instability I** — the numbers
+this section used to hand-roll. Read it, don't recompute:
 
 ```bash
-for p in packages/*/src; do
-  pkg=${p%/src}
-  echo "$(find $p -name '*.ts' | wc -l) $(find $p -name '*.ts' -exec cat {} + | wc -l) ${pkg#packages/}"
-done | sort -rn -k2
+node -e "const b=require('./tools/.arch-baseline.json');for(const[p,m]of Object.entries(b.packages))console.log(m.files??'',m.loc??'',p,'I='+(m.instability??'?'),'edges:',m.edges)"
 ```
 
-Produces: files, LOC, package. Also count exports per package as a surface proxy:
+Flag: any package >5k src LOC or >40 exports is a god-package candidate
+(exports proxy: `grep -c '^export' packages/*/src/index.ts`).
 
-```bash
-for p in packages/*/src/index.ts; do
-  echo "$(grep -c '^export' $p 2>/dev/null) ${p%/*}"
-done | sort -rn
-```
+Expected shape: `core` I≈0 (stable root), `mcp/e2e/watcher` I≈1 (volatile
+leaves). **Deviations from the declared shape are findings** — e.g. `chain`
+or `log` gaining upward deps is layering decay. `check:arch` fails on any
+_new_ edge until admitted via `--update`.
 
-Flag: any package >5k src LOC or >40 exports is a god-package candidate.
+## 2. Real dependency edges — gate first, spec-grep to verify
 
-## 2. Real dependency edges (package level)
-
-Declared edges come from each `package.json` (`@nektar/*` entries). Verify the
-declared graph matches imports, and catch undeclared/sneaked edges:
-
-```bash
-pnpm exec depcruise --output-type err packages/*/src --config .dependency-cruiser.cjs
-# machine-readable for your own aggregation:
-pnpm exec depcruise --output-type json packages/*/src > /tmp/depmap.json
-```
-
-**Known blind spot:** depcruise resolves workspace `@nektar/x` imports through
-node_modules into `dist/`, and `exclude: '(^|/)dist/'` then drops them — the
-cruise graph contains **zero cross-package edges**. App packages without lib
-`exports` fail as `couldNotResolve` (still an error), but resolvable lib
-imports vanish silently — so `to.path` layering rules can't see them. Measure
-package edges at the **specifier level** instead:
+`pnpm check:cruise` catches cycles/orphans/undeclared imports; `check:arch`
+ratchets the cross-package edge matrix. **Known blind spot:** depcruise
+resolves workspace `@nektar/x` imports into `dist/` and its own exclude
+drops them — the cruise graph contains **zero cross-package edges**;
+check-arch reads specifiers directly and is authoritative. To verify the
+declared graph (each `package.json`'s `@nektar/*` deps) matches real
+imports, count specifiers:
 
 ```bash
 rg -o "from '(@nektar/[a-z-]+)" packages/*/src --no-filename | sort | uniq -c | sort -rn
-# per-package edge matrix (what check-arch.mjs ratchets):
-node tools/check-arch.mjs --update && cat tools/.arch-baseline.json | node -e \
-  "const b=require('/dev/stdin');for(const[p,m]of Object.entries(b.packages))console.log(p,'→',m.edges)"
 ```
 
-Compute per package:
-
-- **Ca** (afferent): distinct packages that import it
-- **Ce** (efferent): distinct packages it imports
-- **I** (instability) = `Ce / (Ca + Ce)`; `Ce+Ca=0` ⇒ orphan
-
-Expected shape: `core` I≈0 (stable root), `mcp/e2e/watcher` I≈1 (volatile
-leaves). **Deviations from the declared shape are findings.** e.g. `chain` or
-`log` gaining upward deps is layering decay even if dep-cruiser still passes.
-`check:arch` fails on any _new_ edge until admitted via `--update`.
+Undeclared-but-imported edges are findings; declared-but-unused edges feed
+`check:knip`/`check:deps`.
 
 ## 3. Hub / boundary leak detection
 
 ```bash
-# who imports what from chain — the busiest lower-layer package
-rg -l "from '@nektar/chain'" packages/*/src | sed 's|/src/.*||' | sort -u
-# index surface: does a package re-export internals it shouldn't?
-rg "^export \* from" packages/*/src/index.ts
+rg -l "from '@nektar/chain'" packages/*/src | sed 's|/src/.*||' | sort -u   # who imports the busiest lower layer
+rg "^export \* from" packages/*/src/index.ts                               # whole-surface re-exports = ambiguous interface
 ```
-
-An `export *` that re-exposes another module's whole surface is an
-ambiguous-interface smell (consumers can't tell what the package promises).
 
 ## 4. Hotspots — churn × size (Tornhill)
 
-Exclude generated artifacts before measuring — `packages/contracts/Nektar*.json`
-(`buildTimestamp` churn), `stark/verifier.js`, `*.d.ts` and `vendor/` pollute
-the signal (a file that re-generates on every build is not architectural
-activity):
+No gate computes churn. Exclude generated artifacts (`Nektar*.json`
+timestamp churn, `stark/verifier.js`, `*.d.ts`, `vendor/`, `*.runar.ts`) —
+a regenerated file is not architectural activity:
 
 ```bash
 git log --since="6 months ago" --format="@@@%H" --numstat -- packages \
@@ -92,19 +66,10 @@ git log --since="6 months ago" --format="@@@%H" --numstat -- packages \
   | sort -rn | head -25
 ```
 
-Join with LOC (`wc -l` on each). **Hotspot = high revisions AND high LOC.**
-High-churn small files are normal; big files nobody touches are cold legacy
-(see #6) — the quadrant that matters is big AND hot.
-
-Then the same at **package** altitude:
-
-```bash
-git log --since="6 months ago" --name-only --format="@@@%H" -- packages \
-  | rg -o "packages/[^/]+/src/" | sort | uniq -c | sort -rn
-```
-
-A package with outsized change share + high instability (I) is where the
-architecture is fighting the work.
+Join with LOC. **Hotspot = high revisions AND high LOC** — the big-and-hot
+quadrant is what matters. Package-altitude version (`--name-only` +
+`rg -o "packages/[^/]+/src/" | sort | uniq -c`): a package with outsized
+change share + high I is where the architecture fights the work.
 
 ## 5. Temporal coupling (hidden coupling)
 
@@ -119,38 +84,31 @@ git log --since="6 months ago" --name-only --format="@@@%H" -- packages \
   | sort -rn | head -20
 ```
 
-Check each top pair: does a real import edge exist between them? Pairs that
-co-change constantly with **no** import = ambient coupling (shared schema,
-env contract, state-dir layout, or copy-pasted logic). These are shotgun-
-surgery sites and prime extraction candidates.
+Top pairs with **no** import edge = ambient coupling (shared schema, env
+contract, state-dir layout, copied logic) — shotgun-surgery sites and prime
+extraction candidates.
 
-## 6. Cold + debt inventory
+## 6. Cold + debt inventory — all gate-produced
 
 ```bash
-pnpm report:cold 40          # files by days-since-last-commit
-cat tools/.leftover-baseline.json   # per-package debt ratchet: any/ts-ignore/TODO/console
-pnpm exec jscpd packages/*/src --silent 2>/dev/null | tail -15   # dupes (also gated)
+pnpm report:cold 40                       # files by days-since-last-commit
+cat tools/.leftover-baseline.json         # per-package debt ratchet (any/ts-ignore/TODO/console)
+pnpm check:dupes                          # jscpd >5% gate
 ```
 
-Cold files that ARE imported = legacy to review. Cold files nothing imports
-= removal candidates (cross-check `check:knip`). A package whose baseline
-counts are high AND is in the money path = concentrated risk.
+Cold + imported = legacy to review. Cold + unimported = removal candidates
+(cross-check `check:knip`). High baseline counts in a money-path package =
+concentrated risk.
 
 ## 7. Shared-state coupling (not in the import graph)
 
 ```bash
-# env-var surface — every NEKTAR_* read is an ambient contract. Shipping code
-# reads through @nektar/core's nektarEnv() (check:arch gates raw process.env
-# reads); count BOTH patterns to map the contract:
+# env surface — every NEKTAR_* read is an ambient contract; count BOTH patterns
 rg -o "nektarEnv\('NEKTAR_[A-Z_]+'|process\.env\.NEKTAR_[A-Z_]+" packages/*/src --no-filename | sort | uniq -c | sort -rn
-# SQLite writers — who creates/opens the same DB files
+# SQLite writers + shared .state/ paths — coupling that survives a package-graph rewrite
 rg "better-sqlite3|new Database|new AutomationStore|new Knex" packages/*/src -l
-# state-dir paths — shared filesystem contracts
 rg -o "\.state/[a-z-]+" packages/*/src | sort -u
 ```
-
-Two packages writing the same DB file, or a `.state/` path understood by
-three packages, is coupling that survives a package-graph rewrite — map it.
 
 ## 8. Fitness-function audit
 
@@ -171,32 +129,25 @@ intra-package graph (cycles, orphans, resolution), check-arch sees the
 cross-package specifier graph cruise is blind to.
 
 **The audit:** for each structural rule you _conclude_ the system needs,
-check whether a gate exists. Rules enforced only by convention (e.g. "new
-packages must not hold keys", "SpendGuard must see every spend") belong in
-the findings as **unenforced invariants** — the highest-value gap class an
-architecture review can surface.
+check whether a gate exists. Rules enforced only by convention belong in
+the findings as **unenforced invariants** — the highest-value gap class.
 
 ## 9. Concept census — semantic duplication (type-4 clones)
 
 `check:dupes` (jscpd) only sees type-1..3 clones — copy-paste with minor
 edits. **Convergent implementations** (same concept, independently written,
 different syntax) are invisible to it and are the usual shape of "we have
-three versions of this". Count domain concepts per location:
+three versions of this". Count domain concepts per location — one `rg -l
+… | sed 's|/src.*||' | sort | uniq -c | sort -rn` per concept:
 
-```bash
-# remote-call wrappers — each site carrying its own timeout/error shape
-rg -l "await fetch\(|\.json\(\)" packages/*/src | sed 's|/src.*||' | sort | uniq -c | sort -rn
-# spend/broadcast construction — who builds txs vs who should
-rg -ln "new Transaction|\.addInput|\.addOutput|broadcast\(" packages/*/src | sed 's|/src.*||' | sort | uniq -c | sort -rn
-# retry/backoff helpers — duplicated resilience logic
-rg -l "attempt|backoff|retries" packages/*/src | sed 's|/src.*||' | sort | uniq -c | sort -rn
-# persistence openers — who opens the same stores
-rg -ln "new Database|\.sqlite|knex" packages/*/src | sed 's|/src.*||' | sort | uniq -c | sort -rn
-# hash/digest helpers — crypto primitives re-wrapped
-rg -l "createHash|sha256\(" packages/*/src | sed 's|/src.*||' | sort | uniq -c | sort -rn
-# sleep/promise-wait helpers
-rg -ln "function sleep|const sleep|setTimeout.*resolve" packages/*/src
-```
+| Concept                                        | Pattern          |
+| ---------------------------------------------- | ---------------- |
+| remote-call wrappers (own timeout/error shape) | `await fetch\(   | \.json\(\)` |
+| tx/broadcast construction vs who should        | `new Transaction | \.addInput  | \.addOutput          | broadcast\(` |
+| retry/backoff helpers                          | `attempt         | backoff     | retries`             |
+| persistence openers                            | `new Database    | \.sqlite    | knex`                |
+| hash/digest wrappers                           | `createHash      | sha256\(`   |
+| sleep/wait helpers                             | `function sleep  | const sleep | setTimeout.*resolve` |
 
 Same concept in 3+ locations = candidate cluster. **Compare contracts
 before calling it a dupe**: list each site's signature (inputs → outputs →
@@ -208,9 +159,8 @@ files that co-change without an import edge often duplicate knowledge.
 
 ## 10. Patch stratigraphy — fix-density
 
-Commits are labeled strata: a file whose history is mostly fix-keyword
-commits is accumulating patches on earlier patches, which means the
-abstraction underneath is wrong or missing:
+A file whose history is mostly fix-keyword commits is accumulating patches
+on patches — the abstraction underneath is wrong or missing:
 
 ```bash
 git log --since="6 months ago" --format="@@@%s" --name-only -- packages \
@@ -220,29 +170,27 @@ git log --since="6 months ago" --format="@@@%s" --name-only -- packages \
   | sort -rn | head -20
 ```
 
-> 40% fix commits with ≥5 touches = stratified site. Caveats: refactor
-> commits named "fix" mislead the ratio — read the cluster before confirming.
-> Short histories (<1 month) give high-resolution but thin signal; say so.
+> 40% fix commits with ≥5 touches = stratified. Caveats: refactors named
+> "fix" mislead; short histories give thin signal — say so.
 
-Also check **infant files** — created recently, already patched:
+**Infant files** (created recently, already patched — 3+ fixes within
+weeks of birth = wrong contract):
 
 ```bash
 for f in $(git log --since="30 days ago" --diff-filter=A --name-only --format= -- packages | rg "packages/[^/]+/src/" | sort -u); do
-  [ -f "$f" ] || continue   # skip files already deleted (migrations, renames)
+  [ -f "$f" ] || continue
   t=$(git log --oneline -- "$f" | wc -l); c=$(git log --format="%s" -- "$f" | rg -ci "fix|bug|regress|patch|broke" || echo 0)
   [ "${t:-0}" -gt 2 ] && echo "${c:-0}/$t $f"
 done | sort -rn | head -15
 ```
 
-A file needing 3+ fixes within weeks of birth was born with the wrong
-contract. Feed the top of both lists into the root-cause drill in
-[consolidation.md](consolidation.md) — the deliverable is the missing
-abstraction, not patch N+1.
+Feed both lists into [consolidation.md](consolidation.md) — the deliverable
+is the missing abstraction, not patch N+1.
 
 ## 11. Timer & wait census
 
-Every bounded wait is latency the system pays forever; every unbounded one
-is a hang it will eventually pay once. Census all of them:
+Every bounded wait is latency paid forever; every unbounded one is a hang
+paid once. Count per package:
 
 ```bash
 for p in packages/*/src; do
@@ -251,81 +199,52 @@ for p in packages/*/src; do
 done | sort -rn
 ```
 
-Then classify each site along four axes:
-
-- **Bounded?** `AbortSignal.timeout`/explicit deadline = bounded; a bare
-  `setTimeout(r, N)` promise with no sibling cancellation = unbounded.
-- **Event-driven or fixed poll?** A fixed sleep waiting on a condition that
-  already emits an event/wake = `nektar/fixed-sleep` raised to arch
-  altitude — it wastes the interval on every iteration.
-- **Configured or hardcoded?** `NEKTAR_*_MS`-style vars vs bare literals.
-  Bare literals at 3+ sites with different values for the same wait =
-  convention drift; none of the sites can be tuned together.
-- **Stacked?** Retry-in-loop inside retry-in-outbox inside retry-in-caller
-  multiplies effective attempts — multiply the layers for the real bound.
-
-Flag: fixed polls on money paths, unbounded waits that can pin a resource
-(`stab/hung-resource` is the diff-level cousin), and timer constants that
-disagree with the documented conventions.
+Classify each site on four axes — **bounded** (deadline present vs bare
+`setTimeout(r,N)`), **event vs fixed poll** (sleep on a condition that
+emits a wake = `nektar/fixed-sleep` at arch altitude), **configured vs
+literal** (bare literals at 3+ sites with different values = drift), and
+**stacked** (retry-in-loop inside retry-in-outbox inside retry-in-caller —
+multiply the layers for the real bound). Flag fixed polls on money paths
+and unbounded waits that pin a resource (`stab/hung-resource`).
 
 ## 12. SPoF & resilience inventory
 
-For each money/durability path, count the redundancy and name which
-failure layers exist. Release It!'s layers: per-call (timeout) → component
-(bulkhead / circuit-breaker) → system (load-shed / governor) → ops
-(steady-state recycler) → recovery (failover / rebuild-from-source).
+For each money/durability path, name the redundancy across Release It!'s
+layers: per-call (timeout) → component (bulkhead/breaker) → system
+(load-shed) → ops (recycler) → recovery (failover/rebuild-from-source).
 
 ```bash
-# spend-path implementations — how many, and who may construct them
-rg -ln "Broadcaster|SpendGuard|BudgetAuthority" packages/*/src tools/ | sed 's|/src.*||;s|tools/|tools|' | sort | uniq -c
-# store writers — one writer per DB or many?
-rg -ln "new Database|\.sqlite|knex" packages/*/src
-# host fanout — paths pinned to a single host vs N>1
-rg -n "broadcasterUrl|hostUrls|hosts\[" packages/*/src | head -25
+rg -ln "Broadcaster|SpendGuard|BudgetAuthority" packages/*/src tools/ | sed 's|/src.*||;s|tools/|tools|' | sort | uniq -c  # spend-path impls + who constructs
+rg -ln "new Database|\.sqlite|knex" packages/*/src                                                                      # store writers — one per DB?
+rg -n "broadcasterUrl|hostUrls|hosts\[" packages/*/src | head -25                                                        # single-host pins vs N>1 fanout
 ```
 
-For each path: if its one implementation/writer/host fails, does anything
-take over — active-active fanout (bstack multi-host is the existing
-example), hot standby, or rebuild-from-source — or does the system degrade
-to silent stall? A derived-state store with no rebuild path is a SPoF even
-with redundant readers. Feeds S9 in smells.md.
+If the one impl/writer/host fails: takeover (bstack multi-host fanout is
+the example), standby, rebuild — or silent stall? A derived-state store
+with no rebuild path is a SPoF even with redundant readers. Feeds S9 in
+smells.md.
 
 ## 13. Event & wake topology (EDA audit)
 
-An autonomous-agent system should be **event-driven end to end**: chain
-events, inbox deliveries, outbox drains, and producer signals drive all
-work — timers exist only as bounded ceilings and at the poll substrate.
-Audit whether that's true.
-
-First, inventory the primitives — who emits, who waits, who signals:
+An autonomous-agent system should be **event-driven end to end** — timers
+exist only as bounded ceilings and at the poll substrate. Inventory the
+primitives:
 
 ```bash
-# emission + wait points per package
 rg -ln "EventEmitter|\.emit\(|waiters|\.on\('|waitFor" packages/*/src | sed 's|/src.*||' | sort | uniq -c | sort -rn
-# wake/signal primitives — the producer→waiter couplings
 rg -n "unblock|wake|nudge|notify|signal|resolveWait|long-?poll" packages/*/src | head -30
 ```
 
-Then classify **every wait site from #11** into exactly one bucket:
+Then classify **every wait site from #11** into one bucket: **retry-on-
+failure** (legitimate; only duplicated impls feed #9), **event-substitute**
+(a poll waiting on a state change — the missing signal is the finding, not
+the poll), or **substrate** (the one place polling IS the design — exactly
+one per subsystem; N substrates = scheduling sprawl).
 
-- **Retry-on-failure** — backoff retrying an operation that FAILED
-  (429/503/5xx, SSE reconnect). Legitimate pattern; the only finding is
-  duplicated implementations (feed #9).
-- **Event-substitute** — a poll/sleep waiting for a STATE CHANGE: a UTXO
-  arriving, a flag clearing, a row appearing. If a producer signal exists
-  (`unblockOutbox`, `ChainEvents` emit, watch-shim wake) the wait is a bug
-  shaped like a loop; if no signal exists, the missing signal is the
-  finding — not the poll.
-- **Substrate** — the one place polling IS the design (ChainEvents' tick
-  scanning `watched`, the automation idle/hot tick). Exactly one substrate
-  per subsystem; N substrates = scheduling sprawl.
-
-Finally map **waiter→signaler pairs**: for each `waiters`/`unblock`/wake
-consumer, enumerate every path that can produce the awaited condition and
-check it signals on ALL paths — success AND error. A producer that signals
-only on its happy path is a lost-wakeup (`data/lost-wakeup` raised to arch
-altitude: map it, don't grep-hunt it). The reverse check matters too:
-a signaler with no waiter is dead signaling machinery.
+Finally map **waiter→signaler pairs**: every producer of an awaited
+condition must signal on ALL paths — success AND error. A producer that
+signals only on its happy path is a lost-wakeup; a signaler with no waiter
+is dead machinery.
 
 ## 14. Runtime census — failure-hunt substrate
 
@@ -334,35 +253,25 @@ each still needs the evidence standard (code path → trigger → failure path
 → blast → silence) and the challenge step before it's a finding.
 
 ```bash
-# fire-and-forget async — work nobody awaits (F5): every site needs a
-# covering mechanism (lease, retry, reconcile) or it's a silence finding
+# F5 fire-and-forget — every site needs a covering mechanism (lease/retry/reconcile)
 rg -n "void [a-zA-Z_]|\.catch\(\(\) ?=> ?\{\}\)|\.catch\(\(\) ?=> ?(null|undefined|0|false)" packages/*/src
-
-# catch→default on money paths (F5) — sites where failure returns a value
-# indistinguishable from a legitimate answer
+# F5 catch→default on money paths — failure returns a value indistinguishable from an answer
 rg -n "catch[^}]*return (null|undefined|false|\[\]|0)" packages/*/src
-
-# long-lived unbounded collections (F6) — each needs an eviction/bound story
+# F6 unbounded collections — each needs an eviction/bound story
 rg -n "= new (Map|Set)\(|readonly.*(Map|Set)" packages/*/src
-
-# process lifecycle — who handles shutdown vs who leaks handles (F2/F6)
+# F2/F6 lifecycle — shutdown handling vs leaked handles
 rg -n "process\.(on|once|exit)|SIGINT|SIGTERM|unhandledRejection" packages/*/src
-
-# event subscriptions vs emissions (F4) — pair every consumer to a producer
+# F4 subscriptions vs emissions — pair every consumer to a producer
 rg -n "\.on\(|\.once\(|addEventListener|EventSource|new WebSocket" packages/*/src
-
-# recovery surface (F3) — where restart rebuilds vs assumes
+# F3 recovery surface — where restart rebuilds vs assumes
 rg -n "replay|resume|recover|reconcile|rebuild" packages/*/src
-
-# connection discipline (F6/F7) — keep-alive sockets held at exit are the
-# 0xC0000409 incident class
+# F6/F7 connection discipline — keep-alive sockets held at exit are the 0xC0000409 class
 rg -n "keep-?alive|connection:|new (WebSocket|EventSource)|Agent\(" packages/*/src
 ```
 
-Zero hits is still a command failure, not a clean bill (see the playbook
-header) — but "exists and is covered" is a _pass_, record it: e.g.
-`void relinquishOutput().catch(() => {})` is covered by the ledger lease,
-so it's evidence the pattern is deliberate, not a finding.
+"Exists and is covered" is a _pass_ — record it: e.g. `void
+relinquishOutput().catch(() => {})` is covered by the ledger lease, so
+it's evidence the pattern is deliberate, not a finding.
 
 ## Timeboxing
 

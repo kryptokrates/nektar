@@ -122,6 +122,13 @@ export async function openToolboxWallet(args: {
   dataDir: string
   chain: sdk.Chain
   services?: sdk.WalletServices
+  /** BRC-100 conformance surface: serve privileged key usages from a real
+   *  manager (docs: `PrivilegedKeyManager(async () => rootKey)`). Undefined
+   *  keeps the embedded wallet's default derive-from-root behaviour. */
+  privilegedKeyManager?: sdk.PrivilegedKeyManager
+  /** Certificate-lookup seam: the wallet builds a SLAP-tracker resolver by
+   *  default; callers that want deterministic discovery inject their own. */
+  lookupResolver?: { query: (question: unknown) => Promise<unknown> }
 }): Promise<ToolboxHandle> {
   // the deriver must see a cjs PrivateKey — the wallet consumes it
   const keyDeriver = new sdkc.CachedKeyDeriver(sdkc.PrivateKey.fromWif(args.fundKey.toWif()))
@@ -130,7 +137,14 @@ export async function openToolboxWallet(args: {
   const storage = new WalletStorageManager(keyDeriver.identityKey)
   await storage.addWalletStorageProvider(activeStorage)
   if (storage.canMakeAvailable()) await storage.makeAvailable()
-  const wallet = new Wallet({ chain: args.chain, keyDeriver: keyDeriver as never, storage, services })
+  const wallet = new Wallet({
+    chain: args.chain,
+    keyDeriver: keyDeriver as never,
+    storage,
+    services,
+    privilegedKeyManager: args.privilegedKeyManager,
+    lookupResolver: args.lookupResolver as never
+  })
   return { wallet, services, storage, activeStorage, funder: new ToolboxFunder(wallet), close }
 }
 
@@ -237,7 +251,6 @@ export async function fundToolbox(
   const sar = await tb.wallet.signAction({ reference: st.reference, spends })
   return outpoints.map((o) => ({ outpoint: `${o.txid}.${o.vout}`, txid: sar.txid, success: sar.txid !== undefined }))
 }
-
 
 // ── custody ─────────────────────────────────────────────────────────────────
 // NEKTAR_FUND_MNEMONIC derivation lives in keystore.ts (fundKeyFromMnemonic) —

@@ -70,24 +70,34 @@ async function closureBeef(
   if (subject.merklePath === undefined) {
     for (let h = 0; h < hops; h++) {
       let progress = false
-      for (const bt of [...beef.txs]) {
-        if (bt.isTxidOnly || bt.hasProof || bt.tx === undefined) continue
-        const mp = await merklePath(bt.txid)
-        if (mp.merklePath !== undefined) {
-          bt.tx.merklePath = mp.merklePath as unknown as typeof bt.tx.merklePath
-          beef.mergeTransaction(bt.tx)
-          progress = true
-          continue
-        }
-        for (const dep of bt.inputTxids) {
-          if (beef.findTxid(dep) == null) {
-            const p = await resolveTx(dep)
-            if (p === undefined) throw new Error(`beef ancestry: unproven ${bt.txid} has unresolvable input ${dep}`)
-            beef.mergeTransaction(p)
-            progress = true
+      // a level's proof probes and parent resolves run together — the
+      // closure costs depth RTTs, not one RTT per ancestor; bounded
+      // workers keep the index polite
+      const todo = [...beef.txs].filter((bt) => !(bt.isTxidOnly || bt.hasProof || bt.tx === undefined))
+      let next = 0
+      await Promise.all(
+        Array.from({ length: Math.min(4, todo.length) }, async () => {
+          while (next < todo.length) {
+            const bt = todo[next++]
+            const mp = await merklePath(bt.txid)
+            if (mp.merklePath !== undefined) {
+              const tx = bt.tx!
+              tx.merklePath = mp.merklePath as unknown as typeof tx.merklePath
+              beef.mergeTransaction(tx)
+              progress = true
+              continue
+            }
+            for (const dep of bt.inputTxids) {
+              if (beef.findTxid(dep) == null) {
+                const p = await resolveTx(dep)
+                if (p === undefined) throw new Error(`beef ancestry: unproven ${bt.txid} has unresolvable input ${dep}`)
+                beef.mergeTransaction(p)
+                progress = true
+              }
+            }
           }
-        }
-      }
+        })
+      )
       if (!progress) break
     }
   }

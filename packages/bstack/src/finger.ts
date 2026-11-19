@@ -755,42 +755,55 @@ const dropStubs = (t: Transaction): void => {
 async function healAncestry(tx: Transaction, fetchTx: (txid: string) => Promise<Transaction | undefined>): Promise<boolean> {
   let changed = false
   const seen = new Set<string>([tx.id('hex')])
-  const walk = async (a: Transaction, depth: number): Promise<void> => {
-    if (depth > 8) return
-    const id = a.id('hex')
-    if (seen.has(id)) return
-    seen.add(id)
-    if (a.merklePath !== undefined) return // proven — ancestry terminates here
-    const fetched = await fetchTx(id).catch(() => undefined)
-    if (fetched?.merklePath !== undefined) {
-      a.merklePath = fetched.merklePath
-      for (const i of a.inputs) i.sourceTransaction = undefined
-      changed = true
-      return // do not descend past a proven tx
-    }
-    dropStubs(a)
-    for (const i of a.inputs) {
-      if (i.sourceTransaction === undefined && i.sourceTXID !== undefined) {
-        const src = await fetchTx(i.sourceTXID).catch(() => undefined)
-        if (src !== undefined) {
-          dropStubs(src)
-          i.sourceTransaction = src
-          changed = true
+  // stub links fill concurrently — an input's missing parent fetch no longer
+  // queues behind its siblings' RTTs
+  const fill = async (a: Transaction): Promise<void> => {
+    await Promise.all(
+      a.inputs.map(async (i) => {
+        if (i.sourceTransaction === undefined && i.sourceTXID !== undefined) {
+          const src = await fetchTx(i.sourceTXID).catch(() => undefined)
+          if (src !== undefined) {
+            dropStubs(src)
+            i.sourceTransaction = src
+            changed = true
+          }
         }
-      }
-      if (i.sourceTransaction !== undefined) await walk(i.sourceTransaction, depth + 1)
-    }
+      })
+    )
   }
-  for (const i of tx.inputs) {
-    if (i.sourceTransaction === undefined && i.sourceTXID !== undefined) {
-      const src = await fetchTx(i.sourceTXID).catch(() => undefined)
-      if (src !== undefined) {
-        dropStubs(src)
-        i.sourceTransaction = src
+  await fill(tx)
+  let frontier = tx.inputs.filter((i) => i.sourceTransaction !== undefined).map((i) => i.sourceTransaction!)
+  let depth = 1
+  // the DFS walked one node at a time — proof probes and stub fills now
+  // run per-level in parallel; the heal costs depth RTTs, not per-input serial
+  while (frontier.length > 0 && depth <= 8) {
+    const level = frontier
+    frontier = []
+    const results = await Promise.all(
+      level.map(async (a) => {
+        const id = a.id('hex')
+        if (seen.has(id)) return { a, fetched: undefined, done: true }
+        seen.add(id)
+        if (a.merklePath !== undefined) return { a, fetched: undefined, done: true } // proven — ancestry terminates here
+        const fetched = await fetchTx(id).catch(() => undefined)
+        if (fetched?.merklePath === undefined) {
+          dropStubs(a)
+          await fill(a)
+        }
+        return { a, fetched, done: false }
+      })
+    )
+    for (const r of results) {
+      if (r.done) continue
+      if (r.fetched?.merklePath !== undefined) {
+        r.a.merklePath = r.fetched.merklePath
+        for (const i of r.a.inputs) i.sourceTransaction = undefined
         changed = true
+        continue // do not descend past a proven tx
       }
+      for (const i of r.a.inputs) if (i.sourceTransaction !== undefined) frontier.push(i.sourceTransaction)
     }
-    if (i.sourceTransaction !== undefined) await walk(i.sourceTransaction, 1)
+    depth++
   }
   return changed
 }

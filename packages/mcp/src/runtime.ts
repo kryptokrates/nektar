@@ -266,6 +266,10 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
           dataDir: cfg.dataDir,
           log: (s) => process.stderr.write(s)
         }))
+  // records db + tx store open before custody — SqlFunds binds the `utxos`
+  // table on the same knex and rehydrates coins from tx_store
+  const { knex, store, ledger, wrapBroadcast, leasePredicate } = await openRecordsDb(cfg.dataDir)
+  await openTxStore(knex)
   // custody — an injected coin book skips the whole wallet assembly
   const custody: CustodyResult = injected
     ? {
@@ -275,25 +279,15 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
         fundAddress: '',
         pkhHex: ''
       }
-    : await openCustody(cfg, port, pass)
+    : await openCustody(cfg, port, pass, { knex, txStore })
   fundsRef = custody.funds
   // regtest seeds its treasury before the tx-store snapshot so the minted
   // funding outs land in the parent graph like every other utxo
   if (!injected && port.network === 'regtest') {
-    await regtestSeed({ rc: cfg.regtest!, port, funds: custody.funds as import('@nektar/automation').WalletFunds, dataDir: cfg.dataDir })
-    process.stderr.write(`nektar regtest: wallet backend toolbox (wallet.sqlite) — ${custody.funds.utxos?.length ?? 0} funding utxo(s)\n`)
+    await regtestSeed({ rc: cfg.regtest!, port, funds: custody.funds, dataDir: cfg.dataDir })
+    process.stderr.write(`nektar regtest: coin book sqlite utxos — ${custody.funds.utxos?.length ?? 0} funding utxo(s)\n`)
   }
-  const { knex, store, ledger, wrapBroadcast, leasePredicate } = await openRecordsDb(cfg.dataDir)
-  await openTxStore(knex)
   for (const u of await custody.funds.outs()) txStore.put(u.tx)
-  // internalize resolves ancestry locally first: imported funding arrives
-  // with parents attached and put() keeps them, so a descendant's atomic
-  // beef never re-fetches what the store already proved (an indexer hiccup
-  // can no longer fail a self-contained import). The wallet's own service
-  // calls get the same seam — a just-broadcast tx answers 'unknown' on the
-  // index for minutes while txStore has it already.
-  if ('txLookup' in custody.funds) custody.funds.txLookup = (txid: string) => txStore.get(txid)
-  if (custody.services !== undefined && 'txLookup' in custody.services) custody.services.txLookup = async (txid: string) => await txStore.get(txid)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
   // the one chain-event substrate for this process: every "is it proven?"
   // consumer (confirmer, anchor parents, ledger) registers interest here and

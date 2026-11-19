@@ -94,3 +94,25 @@ src where it gets reviewed, gated, and shipped, then test _it_.
   (test-only surface on the public API).
 - `check:dupes` (jscpd) — clones across test files are T2's mechanical
   signature when scoped to `test/**`.
+
+## Harness friction — traps that eat time, not correctness
+
+- **dist vs src**: `pnpm --filter @nektar/mcp test` runs
+  `dist/test/*.test.js` — source edits are invisible until rebuild. A
+  red test after a fix is stale build until proven otherwise; rebuild
+  before reading the result as signal.
+- **Fixtures must respect the domain's own invariants.** A test that
+  re-leases one outpoint across two submissions is arranging a custody
+  violation, not a scenario — `take()`'s lease conflict is correct
+  behavior. When an arrange needs two spends, fund two outpoints.
+- **TS narrowing traps in asserts**: `assert.deepEqual(arr, [])` narrows
+  `arr` to `never[]` under strict mode — later `push` calls in closures
+  fail typecheck. Assert `arr.length === 0` instead.
+- **Heavy arrange is a dormant-path incubator.** If exercising a
+  refusal/fallback needs a full wallet + coin book + real tx, the path
+  stays untested and rots (`data/dormant-path`). Prefer extracting the
+  seam the path needs over skipping the test.
+- **`assert.equal`/`deepEqual` on enum verdicts**: check the real union
+  first (`TxVerdict` is `mined|pending|dead`, no `'held'`) — an
+  assertion written against an imagined value passes the arrange and
+  dies at runtime.

@@ -84,6 +84,29 @@ question that could come from memory:
   into phases writing checkpoint files, and use `connection: close` so no
   sockets linger.
 
+## Windows/MSYS toolchain gotchas (learned the hard way)
+
+- **`rg -r <str>` is replace-mode, not recursive** — ripgrep is recursive by
+  default; `-rn` makes every match print as the literal `n`. Use `rg -n`.
+- **Git Bash mangles leading-slash args** — `docker run -w /repo` becomes
+  `C:/Program Files/Git/repo` and the run fails with "working directory
+  invalid". Double-slash defeats MSYS conversion: `-w //repo`, `-v //host`
+  (or `MSYS_NO_PATHCONV=1`).
+- **`netstat`/`ps`/service output is locale-dependent** — a German box
+  prints `ABHÖREN`, not `LISTENING`. Grep for PIDs/ports/process names,
+  never for English state words.
+- **mcp tests run compiled output** — `pnpm --filter @nektar/mcp test`
+  executes `dist/test/*.test.js`; a red/green result on a stale `dist` is
+  fiction. Rebuild before reading results. Same for `dist/` instrumentation:
+  patch compiled files only for diagnosis, never as the fix.
+- **Root `tsc -b` floods ambient `@types/node` errors** unrelated to the
+  edit — the only build/verify path is `pnpm -r build` (or
+  `pnpm --filter <pkg> build` for a scoped check).
+- **`assert.deepEqual(arr, [])` narrows `arr` to `never[]`** under strict TS
+  — later `arr.push(...)` becomes a type error. Assert `arr.length === 0`.
+- **`rg --glob` and brace quoting differ from Unix** — prefer the built-in
+  search tools / `fd` for file ops; keep shell greps simple and quoted.
+
 Honesty rule: proofs establish recorded + unaltered + derivable — never
 that a memory's content is true, and the model manifest is _declared_, not
 zkML-proven.

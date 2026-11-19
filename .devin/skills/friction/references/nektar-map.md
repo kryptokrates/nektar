@@ -131,3 +131,10 @@ Ranked by leverage — where the next friction dollar goes:
 4. **`doctor` → next-command mapping** (J5) — health output that names
    the unblock command per finding.
 5. **The grant/faucet link** — a funding ask that isn't a conversation.
+6. **Hidden authority** — behavior gates that live in env vars instead
+   of the approvable policy surface (`NEKTAR_PAID_DISCLOSURE` was one —
+   `sell` simply wasn't in the tool list and no approved policy could
+   grant it). An agent can't discover them and an operator can't grant
+   them without a restart and a docs dive. Rule: a capability gate that
+   an operator should be able to grant belongs in the policy schema;
+   env is an override, never the only lever.

@@ -105,6 +105,18 @@ to absorb their mistakes:
 - **Recovery is a designed path.** Rollback, dead-letter review,
   recompute-from-source — every latch needs a documented way back.
   `stab/latch-unrecoverable` is a design defect, not an ops problem.
+- **Every failure mode needs a named owner.** For each resource class
+  you add — ledger rows, txs in flight, locks, envelopes — enumerate
+  its failure modes and name which mechanism owns each: a reconcile
+  loop, an FSM state, a sweep, or a deliberate discard.
+  `data/failure-mode-orphan` — an unowned failure mode is the bug;
+  it doesn't stay theoretical, it accumulates rows.
+- **Dormant paths are broken paths.** A recovery/rollback/fallback
+  path with no production caller AND no exercising test does not
+  work — it just hasn't failed yet. `data/dormant-path`: every
+  `died`/`revive`/`resubmit`/`shrink`/`reconcile`/`rollback` verb
+  needs both a call site and a test that walks it, or it's a
+  finding.
 
 ## Failure-mode checklist — before declaring done
 

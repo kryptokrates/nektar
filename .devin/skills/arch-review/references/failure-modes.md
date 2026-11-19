@@ -218,6 +218,27 @@ or convention is an **unenforced guard** — that's the finding (S2-adjacent).
   never be observed settling, stranding their inputs as leased-
   forever. Found 2026-11 review; the sharper rule than generic F8.
 
+### F12. Restart-durability inventory
+
+- **Rule**: for every in-memory `Map`/`Set`/flag that a flow treats as
+  durable, name its restart home: persisted where, rebuilt how, or
+  deliberately discarded (with the discard's consequence named). "It
+  rebuilds" without a rebuild path is the finding — and every
+  "submitted"/"touched"/"seen" set counts: the phantom-parent and
+  lost-shard incidents were both sets whose writes were journaled but
+  whose _membership_ was in-memory only.
+- **Detect**: the durable-vs-memory map from the topology, then for
+  each in-memory structure the question "kill -9 now, what does boot
+  believe?" — walked end-to-end, not hand-waved. `touched` shards and
+  `reserved` outpoints are the exemplars: each needed a persisted
+  record or a covering lease, and the finding was the path where
+  neither existed.
+- **Nektar**: `restoreState` rebuilt `touched` only from shards that had
+  _anchored_ — a written-but-unanchored shard left no entry and was
+  silently gone on restart. The general rule: the restore path must
+  cover every write path, not just the ones that reached the durable
+  layer.
+
 ## Reporting
 
 Runtime findings go in the report's **Danger zones** table, ranked by

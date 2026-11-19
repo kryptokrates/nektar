@@ -122,6 +122,11 @@ export function configFromEnv(env = process.env): RuntimeConfig {
       // testnet defaults: BSV Broadcaster + WoC endpoints (probed live); main
       // keeps the built-in GorillaPool/WoC defaults when env vars are unset
       broadcasterUrl: env.NEKTAR_BROADCASTER_URL ?? urls?.broadcaster,
+      // NEKTAR_BROADCASTER_URLS: comma-separated extra routes — the same
+      // tx is submitted to all endpoints concurrently, first acceptance wins
+      broadcasterUrls: env.NEKTAR_BROADCASTER_URLS?.split(',')
+        .map((s) => s.trim().replace(/\/+$/, ''))
+        .filter(Boolean),
       broadcasterApiKey: secret('NEKTAR_BROADCASTER_API_KEY'),
       indexerUrl: env.NEKTAR_INDEXER_URL ?? env.NEKTAR_WOC_URL ?? urls?.indexer,
       indexerApiKey: secret('NEKTAR_INDEXER_API_KEY') ?? secret('NEKTAR_WOC_API_KEY'),

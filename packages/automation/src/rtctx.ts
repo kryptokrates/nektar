@@ -30,17 +30,6 @@ export interface AutomationConfig {
     collect: () => Promise<Array<{ from: string; msg: MarketMessage; refs?: import('@nektar/bstack').BoxRef[] }>>
     ack?: () => Promise<void>
   }
-  /** opt into the standard MessageBox lane (@bsv/message-box-client) —
-   *  NEKTAR_MSGBOX=1. Composites with the lightweb lane: send fans to both,
-   *  collect merges + dedups. The peer needs no nektar host. */
-  msgbox?: boolean
-  /** standard-box host override (NEKTAR_MSGBOX_HOST) — required on regtest
-   *  (no public boxes exist there), else the client resolves by preset. */
-  msgboxHost?: string
-  /** box name override (NEKTAR_MSGBOX_NAME) — default `nektar-market`. */
-  msgboxName?: string
-  /** client injection for tests/embedders — skips package construction. */
-  msgboxClient?: import('./msgbox.js').MsgBoxClientLike
   treeSize?: number
   boxOffice?: string
   treeLowWater?: number

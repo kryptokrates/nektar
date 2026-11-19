@@ -149,33 +149,13 @@ nosend, sending}` — **unproven parents are spendable by default**;
 
 ## Standard MessageBox (`@bsv/message-box-client`)
 
-Identity-to-identity encrypted messaging, the ecosystem-standard inbox
-(any BRC-100 wallet can talk to any other — no shared hosts needed).
-Messages ride authenticated HTTP to the recipient's box host — **no
-on-chain tx, no sats, no carrier**; store-and-forward covers absent peers.
-
-- `MessageBoxClient({walletClient, networkPreset, host?})` —
-  `sendMessage({recipient, messageBox, body})`,
-  `listMessages({messageBox})` → `{messageId, sender, body, createdAt}`,
-  `acknowledgeMessage({messageIds})` **deletes** the rows (acknowledge
-  only what was handled — the protocol's own receipt),
-  `sendMessageToRecipients` (≤100, needs `skipEncryption`),
-  `listenForLiveMessages` (push socket — the online-peers fast path).
-- Host: default `https://message-box-us-1.bsvb.tech` (both nets); the
-  client also resolves the **recipient's** preferred host via overlay
-  lookup (SLAP `ls_messagebox`) — `networkPreset` must match the net.
-  No public boxes exist on regtest — name `host` explicitly there.
-- `walletClient` needs the standard crypto surface — `getPublicKey` /
-  `encrypt` / `decrypt` / `createSignature` — exactly `OperatorWallet`'s
-  Pick. `PeerPayClient` (payments-over-box) additionally requires a FULL
-  wallet recipient (`internalizeAction`) — a `ProtoWallet` counterparty
-  gets `paymentOutcome: 'failed'`; keep PeerPay off the deal path.
-- Shared default hosts are NOT for sensitive payloads — self-host or use
-  the encrypted lightweb envelope for anything confidential.
-- Our seam: `msgbox.ts` — `msgboxMsgs` adapts the client to the `msgs`
-  surface `{send,collect,ack}`, `compositeMsgs` fans send across both
-  lanes + merges/dedups collect, `msgboxLane` is the env/config factory
-  (`NEKTAR_MSGBOX=1`, `NEKTAR_MSGBOX_HOST`, `NEKTAR_MSGBOX_NAME`).
+Ecosystem inbox — identity-to-identity encrypted messaging over
+authenticated HTTP to the recipient's box host (no on-chain tx).
+Evaluated for the market-message path and **rejected**: nektar
+counterparties stay on the lightweb box plane; the package exists in the
+catalog if a public interop channel is ever wanted. Note for that day:
+`acknowledgeMessage` deletes host-side (ack only what was handled), and
+`PeerPayClient` fails against `ProtoWallet` recipients.
 
 ## Network naming (docs §networks)
 

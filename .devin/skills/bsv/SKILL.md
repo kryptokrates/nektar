@@ -85,7 +85,6 @@ completed`, Monitor `unmined → completed`); **unproven parents are
 | Funding stock         | `TreeLedger` (market/bbox/log/finger) — `anchoredTree` admissibility + `NEKTAR_ANCHORED_LANES`               |
 | Coin book             | `funds.ts` — the one `take/spent/died/adopt` lifecycle; `utxoSpendStatus` burn oracle                        |
 | Counterparty evidence | escrow wire carried in the deal note (`m.tx`); `deadAncestry` audit; seller rebroadcasts                     |
-| Message transport     | `rt.msgs` — lightweb box lane (default) + standard MessageBox lane (`msgbox.ts`, `NEKTAR_MSGBOX`) composite  |
 
 ## Anti-patterns (find these on sight)
 

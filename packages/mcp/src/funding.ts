@@ -44,6 +44,10 @@ export interface CustodyResult {
   fundKey?: PrivateKey
   /** external BRC-100 substrate when NEKTAR_WALLET=client */
   clientWallet?: import('@bsv/sdk').WalletInterface
+  /** the wallet's chain-view services — carries the txLookup seam runtime
+   *  binds to txStore (own txs visible before the index catches up). The
+   *  structural type is the seam, not the toolbox's WalletServices iface. */
+  services?: { txLookup?: (txid: string) => Promise<import('@bsv/sdk').Transaction | undefined> }
   fundAddress: string
   pkhHex: string
   releaseKeyLock?: () => Promise<void>
@@ -79,6 +83,7 @@ export async function openCustody(
       funds,
       wallet: toolbox.wallet,
       fundKey,
+      services,
       fundAddress: fundKey.toPublicKey().toAddress([0x6f]),
       pkhHex,
       closeWallet: () => toolbox.close()
@@ -142,7 +147,7 @@ export async function openCustody(
     await funds.refresh()
     process.stderr.write(`nektar ${net}: wallet backend toolbox (wallet.sqlite) — ${funds.utxos.length} funding utxo(s)\n`)
   }
-  return { funds, wallet, fundKey, clientWallet, fundAddress, pkhHex, releaseKeyLock, closeWallet }
+  return { funds, wallet, fundKey, clientWallet, services, fundAddress, pkhHex, releaseKeyLock, closeWallet }
 }
 
 /** regtest treasury bootstrap — the funder's own chain in the data dir; split

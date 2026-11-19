@@ -284,8 +284,11 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // internalize resolves ancestry locally first: imported funding arrives
   // with parents attached and put() keeps them, so a descendant's atomic
   // beef never re-fetches what the store already proved (an indexer hiccup
-  // can no longer fail a self-contained import)
+  // can no longer fail a self-contained import). The wallet's own service
+  // calls get the same seam — a just-broadcast tx answers 'unknown' on the
+  // index for minutes while txStore has it already.
   if ('txLookup' in custody.funds) custody.funds.txLookup = (txid: string) => txStore.get(txid)
+  if (custody.services !== undefined && 'txLookup' in custody.services) custody.services.txLookup = async (txid: string) => await txStore.get(txid)
   const shardKeys = new Map(Object.entries(keys.shardKeys).map(([s, h]) => [s, PrivateKey.fromHex(h)]))
   // the one chain-event substrate for this process: every "is it proven?"
   // consumer (confirmer, anchor parents, ledger) registers interest here and

@@ -54,6 +54,9 @@ const werr = (e: unknown): sdk.WalletError => ({ code: 'WERR_INTERNAL', descript
  *  the toolbox's default `Services` (ARC/WoC/chaintracks) instead. */
 export class RegtestWalletServices implements sdk.WalletServices {
   chain: sdk.Chain = 'regtest'
+  /** same seam LiveWalletServices.txLookup uses — runtime binds txStore;
+   *  serves txs the node never saw (unmineable carriers, adopted ancestry) */
+  txLookup?: (txid: string) => Promise<Transaction | undefined>
   constructor(
     private cfg: RegtestConfig,
     private tracker: TeranodeRPCTracker,
@@ -110,6 +113,13 @@ export class RegtestWalletServices implements sdk.WalletServices {
   getFiatExchangeRate = async (): Promise<number> => 0
 
   getRawTx = async (txid: string): Promise<sdk.GetRawTxResult> => {
+    // txStore first — unmineable carriers and adopted ancestry never reach
+    // the node's mempool, and our own txs save an RPC round-trip
+    const local = await this.txLookup?.(txid).catch(() => undefined)
+    if (local !== undefined) {
+      const t = sdkc.Transaction.fromHex(local.toHex())
+      return { txid, name: 'txstore', rawTx: Array.from(t.toBinary()) }
+    }
     try {
       // Teranode's verbose flag is an int — a bool fails with -32602
       const hex = (await this.rpc('getrawtransaction', txid, 0)) as string
@@ -421,6 +431,33 @@ export class LiveWalletServices implements sdk.WalletServices {
     return this.index
   }
 
+  /** our own tx store — txs we broadcast or adopted seconds ago exist but
+   *  the index hasn't caught up yet. Same seam WalletFunds.txLookup uses;
+   *  runtime binds both to txStore. Answers through it are LOCAL truth
+   *  (existence, bytes) — mined/spent status still comes from the index. */
+  txLookup?: (txid: string) => Promise<Transaction | undefined>
+
+  /** txid → cjs tx from our own store. Bytes cross the dual-build boundary;
+   *  hex drops merklePath, so a proven parent re-attaches its BUMP by copy —
+   *  the same pattern the `withPath` comment in this file documents. */
+  private async localTx(txid: string): Promise<Transaction | undefined> {
+    const local = await this.txLookup?.(txid).catch(() => undefined)
+    if (local === undefined) return undefined
+    const t = sdkc.Transaction.fromHex(local.toHex())
+    if (local.merklePath !== undefined) t.merklePath = sdkc.MerklePath.fromBinary(local.merklePath.toBinary())
+    return t
+  }
+
+  /** txid → cjs tx from the index */
+  private async indexTx(txid: string): Promise<Transaction | undefined> {
+    const hex = await this.idx.txHex(txid)
+    return hex === undefined ? undefined : sdkc.Transaction.fromHex(hex)
+  }
+
+  /** block hash → header memo: every header we serve is recorded so a later
+   *  hash-keyed lookup (merkle-proof resolution) resolves locally */
+  private servedHeaders = new Map<string, sdk.BlockHeader>()
+
   private async headerAtHeight(height: number): Promise<sdk.BlockHeader> {
     const h = await this.idx.header(height)
     if (h === undefined) throw new Error(`index header ${height}: unavailable`)
@@ -428,7 +465,7 @@ export class LiveWalletServices implements sdk.WalletServices {
     // authority: hash256(serialization) must equal the claimed hash and sit
     // under its own declared difficulty before the SDK sees it
     if (!headerPowValid(h)) throw new Error(`index header ${height}: fails PoW check`)
-    return {
+    const header = {
       version: h.version ?? 0, // headerPowValid above already rejected a missing version
       previousHash: h.prevHash,
       merkleRoot: h.merkleRoot,
@@ -438,6 +475,8 @@ export class LiveWalletServices implements sdk.WalletServices {
       height: h.height ?? height,
       hash: h.hash
     }
+    this.servedHeaders.set(h.hash, header)
+    return header
   }
 
   getChainTracker = async (): Promise<ChainTracker> => this.opts.tracker as ChainTracker
@@ -445,8 +484,19 @@ export class LiveWalletServices implements sdk.WalletServices {
   getBsvExchangeRate = async (): Promise<number> => 0
   getFiatExchangeRate = async (): Promise<number> => 0
   getScriptHashHistory = async (_hash: string): Promise<sdk.GetScriptHashHistoryResult> => ({ name: 'woc-live', status: 'success', history: [] })
-  hashToHeader = async (_hash: string): Promise<sdk.BlockHeader> => {
-    throw new Error('hashToHeader: not indexed by hash — use getHeaderForHeight')
+  hashToHeader = async (hash: string): Promise<sdk.BlockHeader> => {
+    const served = this.servedHeaders.get(hash)
+    if (served !== undefined) return served
+    // the index has no hash-keyed block lookup — callers here are resolving
+    // a merkle proof, which names a recent block, so a shallow tip-anchored
+    // scan covers the reachable call shape without pretending the index
+    // can do the lookup
+    const tip = await this.getHeight().catch(() => 0)
+    for (let h = tip; h > tip - 8 && h >= 0; h--) {
+      const hdr = await this.idx.header(h).catch(() => undefined)
+      if (hdr?.hash === hash) return await this.headerAtHeight(h)
+    }
+    throw new Error(`hashToHeader: ${hash} outside served-header memo + 8-block tip window — index has no hash key`)
   }
   getServicesCallHistory = (_reset?: boolean): sdk.ServicesCallHistory => {
     const h = { serviceName: 'woc-live', historyByProvider: {} }
@@ -477,6 +527,11 @@ export class LiveWalletServices implements sdk.WalletServices {
   }
 
   getRawTx = async (txid: string): Promise<sdk.GetRawTxResult> => {
+    // txStore first — a tx we broadcast or adopted moments ago exists but the
+    // index answers 404 for minutes; 'index could not serve' on our own tx
+    // is self-inflicted lag
+    const local = await this.localTx(txid)
+    if (local !== undefined) return { txid, name: 'txstore', rawTx: Array.from(local.toBinary()) }
     try {
       const hex = await this.idx.txHex(txid)
       if (hex === undefined) throw new Error('index could not serve the tx')
@@ -543,7 +598,11 @@ export class LiveWalletServices implements sdk.WalletServices {
       try {
         const j = await this.idx.txJson(txid)
         const depth = j?.confirmations ?? 0
-        results.push({ txid, depth, status: j === undefined ? 'unknown' : depth > 0 ? 'mined' : 'known' })
+        let status: 'known' | 'mined' | 'unknown' = j === undefined ? 'unknown' : depth > 0 ? 'mined' : 'known'
+        // index-silent is not 'does not exist' — our own broadcast/adopted
+        // txs sit in txStore long before the index catches up
+        if (status === 'unknown' && (await this.localTx(txid)) !== undefined) status = 'known'
+        results.push({ txid, depth, status })
       } catch {
         results.push({ txid, depth: undefined, status: 'unknown' })
       }
@@ -557,7 +616,15 @@ export class LiveWalletServices implements sdk.WalletServices {
     // for the wallet's own bookkeeping, not proof (utxoSpendStatus is the
     // positive-evidence path when the answer decides money)
     const j = await this.idx.txJson(o.txid)
-    const out = j?.outputs?.[o.vout]
+    if (j === undefined) {
+      // index doesn't know the tx: if WE hold it, its outputs answer like
+      // any fresh unconfirmed tx would — the same thing the index reports
+      // once it catches up. A still-unindexed parent can't have an indexed
+      // spend either.
+      const local = await this.localTx(o.txid)
+      return local !== undefined && local.outputs[o.vout] !== undefined
+    }
+    const out = j.outputs?.[o.vout]
     return out !== undefined && out.spent !== true
   }
 
@@ -588,14 +655,54 @@ export class LiveWalletServices implements sdk.WalletServices {
     return allSeqFinal && Date.now() / 1000 >= lockTime
   }
 
+  /** Beef for a txid: whole-ancestry, not a bare tx — the wallet's own beef
+   *  consumers (sendWith relay, sync, storage validators) apply the same
+   *  closure rule as internalizeAction: every unproven entry must carry its
+   *  inputs back to a BUMP. A single-tx beef on an unconfirmed subject is a
+   *  rejection in a bag, so serve the proven form outright. Same walk
+   *  WalletFunds.buildAtomicBeef runs, on the cjs side of the boundary. */
   getBeefForTxid: sdk.WalletServices['getBeefForTxid'] = async (txid) => {
-    const r = await this.getRawTx(txid)
-    if (r.rawTx === undefined) throw new Error(`no raw tx for ${txid}`)
-    const tx = sdkc.Transaction.fromBinary(r.rawTx)
-    const mp = await merklePathMainnet(this.opts.mc, txid)
-    if (mp !== null) tx.merklePath = sdkc.MerklePath.fromBinary(mp.merklePath.toBinary())
+    const subject = (await this.localTx(txid)) ?? (await this.indexTx(txid))
+    if (subject === undefined) throw new Error(`no raw tx for ${txid}`)
     const beef = new sdkc.Beef()
-    beef.mergeTransaction(tx)
+    beef.mergeTransaction(subject)
+    // a mined subject anchors itself — its BUMP is the whole proof
+    if (subject.merklePath === undefined) {
+      const mp = await this.getMerklePath(txid)
+      if (mp.merklePath !== undefined) {
+        // same cjs instance at runtime — the cast only bridges the
+        // dual-build type split (built via sdkc in getMerklePath)
+        subject.merklePath = mp.merklePath as unknown as typeof subject.merklePath
+        beef.mergeTransaction(subject)
+      }
+    }
+    if (subject.merklePath === undefined) {
+      // closure walk: every unproven carried tx resolves its inputs —
+      // txStore first, index second — and every mined entry gets its BUMP.
+      // Fixpoint, bounded like WalletFunds.parent() (8 hops).
+      for (let hops = 0; hops < 8; hops++) {
+        let progress = false
+        for (const bt of [...beef.txs]) {
+          if (bt.isTxidOnly || bt.hasProof || bt.tx === undefined) continue
+          const mp = await this.getMerklePath(bt.txid)
+          if (mp.merklePath !== undefined) {
+            bt.tx.merklePath = mp.merklePath as unknown as typeof bt.tx.merklePath
+            beef.mergeTransaction(bt.tx)
+            progress = true
+            continue
+          }
+          for (const dep of bt.inputTxids) {
+            if (beef.findTxid(dep) == null) {
+              const p = (await this.localTx(dep)) ?? (await this.indexTx(dep))
+              if (p === undefined) throw new Error(`beef ancestry: unproven ${bt.txid} has unresolvable input ${dep}`)
+              beef.mergeTransaction(p)
+              progress = true
+            }
+          }
+        }
+        if (!progress) break
+      }
+    }
     return beef as unknown as Awaited<ReturnType<sdk.WalletServices['getBeefForTxid']>>
   }
 }

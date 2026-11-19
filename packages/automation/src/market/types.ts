@@ -120,6 +120,9 @@ export interface MarketDeps {
    *  itself declares the tx dead (SpendGuard refusal, definitive reject,
    *  conflicted): inputs revive, phantom outputs tombstone */
   txDied?: (tx: Transaction) => void | Promise<void>
+  /** a refused tx that aired anyway — retro-count its spend in the cap
+   *  ledger; the machine's revive edges carry this as a declared intent */
+  recordAired?: (tx: Transaction) => void | Promise<void>
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
   ai: AIExecutor

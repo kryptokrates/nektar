@@ -313,6 +313,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     txDied: async (tx) => {
       await mem.funds.died(tx)
     },
+    recordAired: (tx) => {
+      mem.recordAired?.(tx)
+    },
     transport,
     ai: cfg.ai ?? aiFromEnv(),
     killed: () => killSwitchActive(cfg.dataDir).killed,
@@ -362,6 +365,20 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
         // count them or tomorrow's headroom is overstated
         mem.recordAired?.(tx)
         log(`automation: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
+      },
+      // machine mode: the same custody semantics as declared intents —
+      // the table decides WHICH fire, the effector just executes
+      effects: {
+        txDied: async (w) => {
+          await mem.funds.died(rebuildStored(w))
+        },
+        txSpent: async (w) => {
+          await mem.funds.spent(rebuildStored(w))
+          log(`automation: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
+        },
+        recordAired: (w) => {
+          mem.recordAired?.(rebuildStored(w))
+        }
       }
     }
   )

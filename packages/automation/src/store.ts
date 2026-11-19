@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { randomUUID } from 'node:crypto'
 import { policyHash, policyError, canonicalJson, type AutomationPolicy, type ActionContext } from './policy.js'
+import { txStep } from './machines/tx.machine.js'
 
 const T = {
   ops: 'market_operations',
@@ -12,7 +13,8 @@ const T = {
   approvals: 'market_approvals',
   budget: 'budget_reservations',
   leases: 'wallet_reservations',
-  txs: 'wallet_transactions'
+  txs: 'wallet_transactions',
+  txEvents: 'wallet_tx_events'
 } as const
 
 /** why an outbox row is deferred — the column replaces the error-text LIKE
@@ -271,6 +273,23 @@ export class AutomationStore {
     await this.kx(T.txs)
       .whereNull('state_at')
       .update({ state_at: this.kx.ref('at') })
+    // the machine's event log — every txStep write records (from,event,guard,
+    // to,intents) so the driver's decisions replay and audit like market_events
+    if (!(await this.kx.schema.hasTable(T.txEvents)))
+      await this.kx.schema.createTable(T.txEvents, (t) => {
+        t.increments('id').primary()
+        t.string('action_id').notNullable().index()
+        t.bigInteger('at').notNullable()
+        t.string('from_state').notNullable()
+        t.string('event').notNullable()
+        t.string('guard')
+        t.string('to_state').notNullable()
+        t.text('intents').notNullable()
+        // post-commit intents run after the row commits; effected flips once
+        // every declared effect dispatched — a 0 row is an unfinished crash
+        // window that replayTxEffects re-runs (intents are idempotent)
+        t.integer('effected').notNullable().defaultTo(0)
+      })
   }
 
   // ── policies ────────────────────────────────────────────────────────────
@@ -939,6 +958,79 @@ export class AutomationStore {
 
   async releaseLeases(actionId: string): Promise<void> {
     await this.kx(T.leases).where({ action_id: actionId, state: 'leased' }).update({ state: 'released' })
+  }
+
+  /**
+   * The tx.machine write path: evaluate (row.state, event) → in ONE
+   * transaction write the state, the event row, and the in-tx intents
+   * (lease marks). Returns the step result — post-commit effects are the
+   * caller's (emitTxEvent). A rejected step writes nothing: the event log
+   * only ever holds real, accepted transitions.
+   */
+  async applyTxEvent(
+    actionId: string,
+    event: string,
+    payload: { guard?: string; observation?: unknown; attempt?: boolean } = {}
+  ): Promise<{ accepted: boolean; next: TxState; intents: string[]; eventId?: number }> {
+    return await this.kx.transaction(async (trx) => {
+      const r = await trx(T.txs).where({ action_id: actionId }).first()
+      if (!r) throw new Error(`unknown wallet action ${actionId}`)
+      const s = txStep(r.state, event, payload.guard !== undefined ? { guard: payload.guard } : {})
+      if (!s.accepted) return { accepted: false, next: r.state as TxState, intents: [] }
+      const now = this.now()
+      await trx(T.txs)
+        .where({ action_id: actionId })
+        .update({
+          state: s.next,
+          attempts: r.attempts + (payload.attempt === true ? 1 : 0),
+          ...(s.next !== r.state ? { state_at: now } : {}),
+          ...(payload.observation !== undefined ? { last_observation: canonicalJson(payload.observation) } : {})
+        })
+      const [eventId] = await trx(T.txEvents).insert({
+        action_id: actionId,
+        at: now,
+        from_state: r.state,
+        event,
+        guard: payload.guard ?? null,
+        to_state: s.next,
+        intents: JSON.stringify(s.intents)
+      })
+      for (const i of s.intents) {
+        if (i === 'release-leases') await trx(T.leases).where({ action_id: actionId, state: 'leased' }).update({ state: 'released' })
+        else if (i === 'leases->spent') await trx(T.leases).where({ action_id: actionId }).update({ state: 'spent' })
+      }
+      return { accepted: true, next: s.next as TxState, intents: s.intents, eventId }
+    })
+  }
+
+  /** mark an event's post-commit intents dispatched — called only after the
+   *  effect loop finishes clean */
+  async markTxEffects(eventId: number): Promise<void> {
+    await this.kx(T.txEvents).where({ id: eventId }).update({ effected: 1 })
+  }
+
+  /** committed transitions whose post-commit intents never finished — the
+   *  crash-between-commit-and-act window, replayed on the next tick */
+  async pendingTxEffects(): Promise<Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx }>> {
+    const rows = await this.kx(T.txEvents).where({ effected: 0 }).orderBy('id')
+    const out: Array<{ eventId: number; actionId: string; intents: string[]; tx?: WalletTx }> = []
+    for (const r of rows) {
+      const w = await this.walletTx({ actionId: r.action_id })
+      out.push({ eventId: Number(r.id), actionId: r.action_id, intents: JSON.parse(r.intents), tx: w })
+    }
+    return out
+  }
+
+  /** the machine's persisted event log for a wallet action */
+  async walletTxEvents(actionId: string): Promise<Array<{ at: number; from: string; event: string; guard?: string; to: string; intents: string[] }>> {
+    return (await this.kx(T.txEvents).where({ action_id: actionId }).orderBy('at')).map((r) => ({
+      at: Number(r.at),
+      from: r.from_state,
+      event: r.event,
+      guard: r.guard ?? undefined,
+      to: r.to_state,
+      intents: JSON.parse(r.intents)
+    }))
   }
 
   // ── approvals ───────────────────────────────────────────────────────────

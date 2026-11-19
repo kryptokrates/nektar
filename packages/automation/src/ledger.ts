@@ -2,6 +2,7 @@ import { Transaction } from '@bsv/sdk'
 import type { BroadcastResult } from '@nektar/chain'
 import type { AutomationStore, TxState, WalletTx } from './store.js'
 import { WalletCoordinator } from './wallet.js'
+import { emitTxEvent, obsEvent, replayTxEffects, txFsmLegacy, type TxEffects } from './machines/driver.js'
 
 export interface TxObservationInput {
   status: 'seen' | 'proven' | 'rejected' | 'conflicted' | 'abandoned'
@@ -56,11 +57,23 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
     }
     try {
       const r = await inner(tx)
-      if (recorded)
-        await store.setTxState(actionId, r.status === 'success' ? 'submitted' : 'submission_unknown', { at: Date.now(), result: r }, true).catch(() => {})
+      if (recorded) {
+        if (!txFsmLegacy()) {
+          const w = await store.walletTx({ actionId }).catch(() => undefined)
+          if (w !== undefined)
+            await emitTxEvent(store, w, r.status === 'success' ? 'submit.success' : 'submit.unknown', { observation: { at: Date.now(), result: r }, attempt: true }, {}).catch(
+              () => {}
+            )
+        } else await store.setTxState(actionId, r.status === 'success' ? 'submitted' : 'submission_unknown', { at: Date.now(), result: r }, true).catch(() => {})
+      }
       return r
     } catch (e) {
-      if (recorded) await store.setTxState(actionId, 'submission_unknown', { at: Date.now(), error: (e as Error).message }, true).catch(() => {})
+      if (recorded) {
+        if (!txFsmLegacy()) {
+          const w = await store.walletTx({ actionId }).catch(() => undefined)
+          if (w !== undefined) await emitTxEvent(store, w, 'submit.unknown', { observation: { at: Date.now(), error: (e as Error).message }, attempt: true }, {}).catch(() => {})
+        } else await store.setTxState(actionId, 'submission_unknown', { at: Date.now(), error: (e as Error).message }, true).catch(() => {})
+      }
       throw e
     }
   }
@@ -109,10 +122,15 @@ export class TransactionWatcher {
        *  accept ships the signed tx by design). died()/revive already ran
        *  against it; the handler re-marks inputs spent and re-owns outputs */
       onRevived?: (w: WalletTx, o: TxObservationInput) => Promise<void> | void
+      /** machine-mode effect implementations — the table's intent names
+       *  resolve to these post-commit calls. When set (and the legacy flag
+       *  is off) the watcher is a pure effector: observe → emit → intents */
+      effects?: TxEffects
     }
   ) {}
 
   async tick(): Promise<number> {
+    if (!txFsmLegacy() && this.opts?.effects !== undefined) return this.tickDriver()
     let changed = 0
     const live = await this.store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])
     // dead-verdict rows still get a window of re-observation: a refused tx
@@ -156,6 +174,46 @@ export class TransactionWatcher {
           })
           changed++
           await this.opts.onExportExpired?.(w)
+        }
+      } catch {
+        /* unknown, not failed — try again next tick */
+      }
+    }
+    return changed
+  }
+
+  /** driver mode: the watcher is a pure effector — enumerate, observe,
+   *  emit through txStep, let the table's intents run custody. The verdict
+   *  mapping lives in obsEvent; observation sources stay verified-only
+   *  upstream in observeFn exactly as before. */
+  private async tickDriver(): Promise<number> {
+    const fx = this.opts!.effects!
+    // every sweep retries committed-but-uneffected intents first — the
+    // crash window between commit and effect dispatch self-heals here
+    await replayTxEffects(this.store, fx).catch(() => 0)
+    let changed = 0
+    const live = await this.store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])
+    const ttl = this.opts?.exportedTtlMs ?? 24 * 60 * 60_000
+    const dead = (await this.store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => Date.now() - w.stateAt < ttl)
+    for (const w of [...live, ...dead]) {
+      try {
+        if (w.state === 'submitted' || w.state === 'observed') await this.store.releaseLeases(w.actionId)
+        const o = await this.observeFn(w.txid)
+        if (o !== undefined) {
+          const { event, guard } = obsEvent(o)
+          const r = await emitTxEvent(this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, fx)
+          if (r.next !== w.state) changed++
+          continue
+        }
+        if (w.state === 'exported' && this.opts?.exportedTtlMs !== undefined && Date.now() - w.at >= this.opts.exportedTtlMs) {
+          const r = await emitTxEvent(
+            this.store,
+            w,
+            'export.ttl',
+            { observation: { at: Date.now(), reason: `exported tx unaired for ${Math.round((Date.now() - w.at) / 60000)}min` } },
+            fx
+          )
+          if (r.next !== w.state) changed++
         }
       } catch {
         /* unknown, not failed — try again next tick */

@@ -19,6 +19,7 @@ export {
   classifyDeliveryError
 } from './store.js'
 export { type TxObservationInput, wrapBroadcast, leasePredicate, splitDailySpend, TransactionWatcher } from './ledger.js'
+export { emitTxEvent, obsEvent, txFsmLegacy, type TxEffects } from './machines/driver.js'
 export {
   type MarketMessage,
   type MarketTransport,

@@ -40,7 +40,8 @@ export abstract class MarketBase {
     this.now = d.now ?? Date.now
     this.me = d.key.toPublicKey().toString()
     this.network = d.network
-    if (d.broadcast) this.wallet = new WalletCoordinator(d.store, { broadcast: d.broadcast, txDied: d.txDied, txSpent: d.settleEscrow })
+    if (d.broadcast)
+      this.wallet = new WalletCoordinator(d.store, { broadcast: d.broadcast, txDied: d.txDied, txSpent: d.settleEscrow, recordAired: d.recordAired })
   }
 
   get pub(): string {

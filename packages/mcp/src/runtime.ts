@@ -328,8 +328,15 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       try {
         const hit = (await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])).find((w) => w.txid === txid)
         if (hit !== undefined) {
-          await ledger.setTxState(hit.actionId, 'abandoned', { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` })
-          await diedFromRow(hit, 'abandoned')
+          const { emitTxEvent, txFsmLegacy } = await import('@nektar/automation')
+          if (!txFsmLegacy()) {
+            await emitTxEvent(ledger, hit, 'abandon', { observation: { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` } }, {
+              txDied: (row) => diedFromRow(row, 'abandoned')
+            })
+          } else {
+            await ledger.setTxState(hit.actionId, 'abandoned', { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` })
+            await diedFromRow(hit, 'abandoned')
+          }
         }
         memRef?.events.emit('txAbandoned', { txid, tip, seenAtHeight })
       } catch (e) {
@@ -638,6 +645,41 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // the ledger watcher — event-driven off the shared substrate's sweeps,
   // height advances and pushed broadcaster statuses; no private interval
   const { TransactionWatcher } = await import('@nektar/automation')
+  const txFromRow = (w: { rawHex: string; parents: Record<string, string> }): Transaction => {
+    const tx = Transaction.fromHex(w.rawHex)
+    for (const inp of tx.inputs) {
+      const hex = inp.sourceTXID !== undefined ? w.parents[inp.sourceTXID] : undefined
+      if (hex !== undefined) inp.sourceTransaction = Transaction.fromHex(hex)
+    }
+    return tx
+  }
+  const exportExpired = async (w: { txid: string; rawHex: string; parents: Record<string, string> }): Promise<void> => {
+    let freed = 0
+    let inputs = 0
+    try {
+      const tx = Transaction.fromHex(w.rawHex)
+      inputs = tx.inputs.length
+      for (const inp of tx.inputs) {
+        const srcTxid = inp.sourceTXID
+        if (srcTxid === undefined) continue
+        const vout = inp.sourceOutputIndex
+        // provably-spent inputs stay dead — the export landed late or
+        // something else consumed them. 'unknown' still frees: the
+        // export had its window and the take-time probe burns a
+        // later-landing spend anyway
+        if ((await port.spendStatus?.(srcTxid, vout).catch(() => 'unknown' as const)) === 'spent') continue
+        const parentHex: string | undefined = w.parents[srcTxid]
+        const parent = parentHex !== undefined ? Transaction.fromHex(parentHex) : await port.txLookup?.(srcTxid).catch(() => undefined)
+        if (parent === undefined) continue
+        await custody.funds.revive(parent, vout)
+        freed++
+      }
+    } catch (e) {
+      process.stderr.write(`nektar ${net}: expired export ${w.txid}: revive failed: ${(e as Error).message}\n`)
+      return
+    }
+    process.stderr.write(`nektar ${net}: export ${w.txid} expired unaired — ${freed}/${inputs} input(s) returned to custody\n`)
+  }
   const watcher = new TransactionWatcher(
     ledger,
     async (txid) => {
@@ -678,31 +720,33 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
         await (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
       },
       onExportExpired: async (w) => {
-        let freed = 0
-        let inputs = 0
-        try {
-          const tx = Transaction.fromHex(w.rawHex)
-          inputs = tx.inputs.length
-          for (const inp of tx.inputs) {
-            const srcTxid = inp.sourceTXID
-            if (srcTxid === undefined) continue
-            const vout = inp.sourceOutputIndex
-            // provably-spent inputs stay dead — the export landed late or
-            // something else consumed them. 'unknown' still frees: the
-            // export had its window and the take-time probe burns a
-            // later-landing spend anyway
-            if ((await port.spendStatus?.(srcTxid, vout).catch(() => 'unknown' as const)) === 'spent') continue
-            const parentHex: string | undefined = w.parents[srcTxid]
-            const parent = parentHex !== undefined ? Transaction.fromHex(parentHex) : await port.txLookup?.(srcTxid).catch(() => undefined)
-            if (parent === undefined) continue
-            await custody.funds.revive(parent, vout)
-            freed++
+        await exportExpired(w)
+      },
+      // machine mode: the same custody semantics as declared intents — the
+      // table decides WHICH fire, the effector just executes. 'watch' /
+      // 'watch-trailing' map to nothing here: this watcher already rescans
+      // live + recently-dead rows every pass
+      effects: {
+        txDied: async (w) => diedFromRow(w, 'rejected'),
+        txSpent: async (w) => {
+          try {
+            await custody.funds.spent(txFromRow(w))
+            process.stderr.write(`nektar ${net}: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked\n`)
+          } catch (e) {
+            process.stderr.write(`nektar ${net}: revived tx ${w.txid}: spent() failed: ${(e as Error).message}\n`)
           }
-        } catch (e) {
-          process.stderr.write(`nektar ${net}: expired export ${w.txid}: revive failed: ${(e as Error).message}\n`)
-          return
+          await (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
+        },
+        recordAired: (w) => {
+          try {
+            port.guard?.recordAired(txFromRow(w))
+          } catch {
+            /* day-ledger accounting is best-effort — the custody mark above is the durable one */
+          }
+        },
+        exportExpired: async (w) => {
+          await exportExpired(w)
         }
-        process.stderr.write(`nektar ${net}: export ${w.txid} expired unaired — ${freed}/${inputs} input(s) returned to custody\n`)
       }
     }
   )

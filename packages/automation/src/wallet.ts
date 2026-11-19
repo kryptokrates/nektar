@@ -2,6 +2,7 @@ import { Transaction } from '@bsv/sdk'
 import type { BroadcastResult } from '@nektar/chain'
 import type { AutomationStore, WalletTx, TxState } from './store.js'
 import type { ActionContext } from './policy.js'
+import { emitTxEvent, obsEvent, replayTxEffects, txFsmLegacy, type TxEffects } from './machines/driver.js'
 
 export interface WalletDeps {
   broadcast: (tx: Transaction) => Promise<BroadcastResult>
@@ -16,6 +17,9 @@ export interface WalletDeps {
    *  dep is what lets a boot replay (resubmitPending) finish the custody
    *  half of a submit whose caller died between prepare and settle */
   txSpent?: (tx: Transaction) => void | Promise<void>
+  /** a refused tx that aired anyway — retro-count the spend in the day
+   *  ledger (SpendGuard.recordAired); the revive edges carry this intent */
+  recordAired?: (tx: Transaction) => void | Promise<void>
 }
 
 export type TxObservation =
@@ -111,6 +115,16 @@ export class WalletCoordinator {
     return tx
   }
 
+  /** the coordinator's custody deps as machine effects — the table owns the
+   *  'when', the deps only answer 'how' */
+  private fx(): TxEffects {
+    return {
+      txSpent: this.deps.txSpent ? (w: WalletTx) => this.deps.txSpent!(this.rebuild(w)) : undefined,
+      txDied: this.deps.txDied ? (w: WalletTx) => this.deps.txDied!(this.rebuild(w)) : undefined,
+      recordAired: this.deps.recordAired ? (w: WalletTx) => this.deps.recordAired!(this.rebuild(w)) : undefined
+    }
+  }
+
   async submit(actionId: string): Promise<{ state: TxState; txid: string; detail?: string }> {
     const w = await this.store.walletTx({ actionId })
     if (!w) throw new Error(`submit: nothing prepared for ${actionId}`)
@@ -122,6 +136,31 @@ export class WalletCoordinator {
       res = { status: 'error', description: `transport: ${(e as Error).message}` }
     }
     const detail = res.description ?? ''
+    if (!txFsmLegacy()) {
+      // driver mode: broadcast already ran above (the coordinator IS the
+      // 'broadcast' effect) — emit the verdict; the table carries custody
+      const obs = { at: Date.now(), result: res }
+      if (res.status === 'success' || ALREADY.test(detail)) {
+        await emitTxEvent(this.store, w, 'submit.success', { observation: obs, attempt: true }, this.fx())
+        return { state: 'submitted', txid: w.txid }
+      }
+      if (w.state === 'submitted') {
+        await emitTxEvent(this.store, w, 'resubmit', { observation: { ...obs, resubmission: true }, attempt: true }, this.fx())
+        return { state: 'submitted', txid: w.txid, detail }
+      }
+      if (NEVER_LEFT.test(detail) || (DEFINITIVE.test(detail) && !detail.startsWith('transport:'))) {
+        const r = await emitTxEvent(this.store, w, 'submit.refused', {
+          guard: 'definitive',
+          observation: { ...obs, ...(NEVER_LEFT.test(detail) ? { escaped: false } : {}) },
+          attempt: true
+        }, this.fx())
+        return { state: r.next, txid: w.txid, detail }
+      }
+      // 'submit.unknown' only exists from 'prepared' — a repeat unknown on an
+      // already-unknown row is a 'resubmit' self-edge (records the attempt)
+      const r = await emitTxEvent(this.store, w, w.state === 'prepared' ? 'submit.unknown' : 'resubmit', { observation: obs, attempt: true }, this.fx())
+      return { state: r.next, txid: w.txid, detail }
+    }
     if (res.status === 'success' || ALREADY.test(detail)) {
       await this.store.setTxState(actionId, 'submitted', { at: Date.now(), result: res }, true)
       // the bytes aired — the inputs' fate is now this tx's fate, tracked by
@@ -161,6 +200,14 @@ export class WalletCoordinator {
   async observe(txid: string, o: TxObservation): Promise<TxState | undefined> {
     const w = await this.store.walletTx({ txid })
     if (!w) return undefined
+    if (!txFsmLegacy()) {
+      // the observation contract: 'seen'/'proven'/'rejected'/'conflicted' are
+      // only ever emitted from verified sources (the watchers gate hints) —
+      // a raw hint belongs in the observeFn, never in this call
+      const { event, guard } = obsEvent(o)
+      const r = await emitTxEvent(this.store, w, event, { guard, observation: { at: Date.now(), ...o } }, this.fx())
+      return r.next
+    }
     const next: TxState = o.status === 'proven' ? 'confirmed' : o.status === 'seen' ? (w.state === 'confirmed' ? 'confirmed' : 'observed') : o.status
     await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
     // a tx our own verdict called dead still aired — 'SpendGuard refused'
@@ -183,6 +230,9 @@ export class WalletCoordinator {
   }
 
   async resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>> {
+    // boot replay also finishes committed-but-uneffected intents — a crash
+    // between persist and act replays custody here, not on a prayer
+    if (!txFsmLegacy()) await replayTxEffects(this.store, this.fx()).catch(() => 0)
     const out: Array<{ actionId: string; state: TxState }> = []
     for (const w of await this.store.walletTxs(['prepared', 'submission_unknown']))
       out.push({ actionId: w.actionId, state: (await this.submit(w.actionId)).state })

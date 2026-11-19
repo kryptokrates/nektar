@@ -627,3 +627,26 @@ test('deadAncestry: resolvable unproven ancestors are not dead — bound stays i
   const gaps = await deadAncestry(t, async (id) => byId.get(id))
   assert.deepEqual(gaps, [])
 })
+
+test('deadAncestry: a level of unresolved parents resolves concurrently — cost is depth, not width', async () => {
+  const key = PrivateKey.fromRandom()
+  // distinct amounts — fakeParent(key) is deterministic, identical params
+  // mint one txid and the dedup collapses the level to a single parent
+  const parents = [fakeParent(key, 1_000_001), fakeParent(key, 1_000_002), fakeParent(key, 1_000_003)]
+  const t = new Transaction()
+  for (const p of parents) t.addInput({ sourceTXID: p.id('hex'), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
+  t.addOutput({ satoshis: 1_000_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
+  // a resolver that reports its own concurrency: three unservable parents
+  // must be in flight together, not one RTT after another
+  let inflight = 0
+  let maxInflight = 0
+  const gaps = await deadAncestry(t, async () => {
+    inflight++
+    maxInflight = Math.max(maxInflight, inflight)
+    await new Promise((r) => setTimeout(r, 20))
+    inflight--
+    return undefined
+  })
+  assert.equal(gaps.length, 3)
+  assert.ok(maxInflight >= 2, `parents resolved serially (max in-flight ${maxInflight})`)
+})

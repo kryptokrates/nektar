@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 8851,
+      "loc": 8853,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1158,
@@ -25,7 +25,7 @@
       "instability": 0.571
     },
     "bstack": {
-      "loc": 4893,
+      "loc": 4917,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
       "maxFileLoc": 1033,
@@ -217,7 +217,7 @@
       "fanout": 20
     },
     "packages/automation/src/store.ts": {
-      "loc": 1007,
+      "loc": 1009,
       "fanout": 3
     },
     "packages/bstack/src/finger.ts": {

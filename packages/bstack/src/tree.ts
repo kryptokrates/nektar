@@ -141,36 +141,60 @@ export const deadAncestry = async (tree: Transaction, resolveTx: (txid: string) 
   }
   const queue: Transaction[] = tree.merklePath === undefined ? [tree] : []
   while (queue.length > 0 && seen.size <= maxNodes) {
-    const t = queue.shift()!
-    for (const i of t.inputs) {
-      // the wire reference names the parent; sourceTransaction may be an
-      // EF/lazy stand-in whose id() throws — try it only as the fallback
-      let id = i.sourceTXID
-      if (id === undefined && i.sourceTransaction !== undefined) {
-        try {
-          id = i.sourceTransaction.id('hex')
-        } catch {
-          id = undefined
+    const frontier = queue.splice(0)
+    const remote = new Set<string>()
+    for (const t of frontier) {
+      for (const i of t.inputs) {
+        // the wire reference names the parent; sourceTransaction may be an
+        // EF/lazy stand-in whose id() throws — try it only as the fallback
+        let id = i.sourceTXID
+        if (id === undefined && i.sourceTransaction !== undefined) {
+          try {
+            id = i.sourceTransaction.id('hex')
+          } catch {
+            id = undefined
+          }
         }
-      }
-      // a null prevout (coinbase-shaped input) is a structural terminal,
-      // not an ancestry gap — there is no parent to resolve
-      if (id === undefined || id === '00'.repeat(32) || seen.has(id)) continue
-      seen.add(id)
-      let p = i.sourceTransaction
-      if (p !== undefined) {
-        try {
-          p.id('hex')
-        } catch {
-          // a stand-in carries no ancestry — resolve the real parent;
-          // unresolvable IS dead ancestry (it can neither prove nor anchor)
-          p = await resolveTx(id)
+        // a null prevout (coinbase-shaped input) is a structural terminal,
+        // not an ancestry gap — there is no parent to resolve
+        if (id === undefined || id === '00'.repeat(32) || seen.has(id)) continue
+        // the audit bound holds inside a level too — a wide frontier can't
+        // push the walk past maxNodes in one pass
+        if (seen.size >= maxNodes) continue
+        seen.add(id)
+        let p = i.sourceTransaction
+        if (p !== undefined) {
+          try {
+            p.id('hex')
+          } catch {
+            // a stand-in carries no ancestry — resolve the real parent
+            p = undefined
+          }
         }
-      } else {
-        p = await resolveTx(id)
+        if (p === undefined) remote.add(id)
+        else if (p.merklePath === undefined) queue.push(p)
       }
+    }
+    // every unresolved parent of the whole level resolves together —
+    // the audit costs depth RTTs, not one RTT per input. Bounded workers
+    // overlap the fetches without bursting the index (the dialects pace
+    // themselves underneath anyway)
+    const ids = [...remote]
+    const found: Array<Transaction | undefined> = new Array(ids.length)
+    let next = 0
+    await Promise.all(
+      Array.from({ length: Math.min(4, ids.length) }, async () => {
+        while (next < ids.length) {
+          const i = next++
+          found[i] = await resolveTx(ids[i])
+        }
+      })
+    )
+    for (let i = 0; i < ids.length; i++) {
+      const p = found[i]
+      // unresolvable IS dead ancestry (it can neither prove nor anchor)
       if (p === undefined) {
-        dead.add(id)
+        dead.add(ids[i])
         continue
       }
       if (p.merklePath === undefined) queue.push(p)

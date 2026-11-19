@@ -5,7 +5,8 @@ export type { AnyStateMachine }
 
 /** Parsed machine-readable transition table — the library-agnostic spec. */
 interface TableRow {
-  state: string
+  /** source state, an explicit list of source states, or '*' for all */
+  state: string | string[]
   event: string
   guard?: string
   intents?: string[]
@@ -44,21 +45,27 @@ export interface StepResult {
 export function step(machine: AnyStateMachine, table: TransitionTable, from: string, event: string, payload: Record<string, unknown> = {}): StepResult {
   // Guarded sibling rows (same state+event, different guards) resolve via the
   // caller-supplied `guard` key on the payload — the effector owns guard truth.
-  const rows = table.transitions.filter((r) => (r.state === from || r.state === '*') && r.event === event)
+  const rows = table.transitions.filter((r) => rowSources(r, table.states).includes(from) && r.event === event)
   const row = rows.length > 1 && typeof payload.guard === 'string' ? (rows.find((r) => r.guard === payload.guard) ?? rows[0]) : rows[0]
   const snap = machine.resolveState({ value: from, context: {} })
   const next = getNextSnapshot(machine, snap, { ...payload, type: event } as AnyEventObject)
   const nextState = toStateValue(next.value)
+  // the row consistent with the machine's outcome owns the intents — a caller
+  // that omits the guard still resolves to the first machine-passing sibling
+  const matched = rows.find((r) => targetOf(r, from) === nextState)
+  if (matched) return { next: nextState, intents: matched.intents ?? [], accepted: true, guard: matched.guard }
   const accepted = nextState !== from || isSelfRow(row, from)
   if (!accepted) return { next: from, intents: [], accepted: false }
   const target = row ? targetOf(row, from) : nextState
-  if (row && nextState !== target) {
-    // Machine drifted from the spec — shadow mode surfaces this as a diff, never silently follows.
-    return { next: nextState, intents: row.intents ?? [], accepted: false, guard: `drift:machine=${nextState},table=${target}` }
-  }
-  return { next: target, intents: row?.intents ?? [], accepted: true, guard: row?.guard }
+  // Machine drifted from the spec — shadow mode surfaces this as a diff, never silently follows.
+  return { next: nextState, intents: row?.intents ?? [], accepted: false, guard: `drift:machine=${nextState},table=${target}` }
 }
 
+/** The concrete source states a row expands to — '*' stays symbolic here. */
+function rowSources(row: TableRow, all?: string[]): string[] {
+  if (row.state === '*') return all ?? ['*']
+  return ([] as string[]).concat(row.state)
+}
 function isSelfRow(row: TableRow | undefined, from: string): boolean {
   return !!row && targetOf(row, from) === from
 }
@@ -77,7 +84,7 @@ function configFromTable(table: TransitionTable) {
   const states: Record<string, { on: Record<string, { target: string; guard?: { type: string; params: { guard: string } } }[]> }> = {}
   for (const s of table.states) states[s] = { on: {} }
   for (const row of table.transitions) {
-    const sources = row.state === '*' ? table.states : [row.state]
+    const sources = rowSources(row, table.states)
     for (const src of sources) {
       const st = states[src]
       if (!st) continue
@@ -105,7 +112,7 @@ export function buildMachine(table: TransitionTable): AnyStateMachine {
 export function declaredTransitions(table: TransitionTable): { state: string; event: string; target: string }[] {
   const out: { state: string; event: string; target: string }[] = []
   for (const row of table.transitions) {
-    for (const src of row.state === '*' ? table.states : [row.state]) {
+    for (const src of rowSources(row, table.states)) {
       out.push({ state: src, event: row.event, target: row.target === 'self' ? src : row.target })
     }
   }

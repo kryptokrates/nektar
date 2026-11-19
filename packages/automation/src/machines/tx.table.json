@@ -8,6 +8,7 @@
   "notes": {
     "quiescent": "terminal modulo a bounded trailing watch — late evidence revives to observed/confirmed",
     "abandoned": "absence verdict (no competing spend) — distinct from conflicted; fires txDied and keeps the trailing watch",
+    "rejected": "provisional — a refused tx can still be aired by a counterparty holding the signed bytes; verified/proof revive it and re-run custody (tx-spent) + retro-count the spend (record-aired)",
     "event-source guards": "obs.proven is the ONLY event that may emit 'confirmed'; obs.* require verified observations — status words and hints may only feed 'hint' handling, never a verdict transition"
   },
   "transitions": [
@@ -46,11 +47,14 @@
     { "state": "exported", "event": "obs.rejected", "guard": "verified", "intents": ["release-leases", "tx-died"], "target": "rejected" },
     { "state": "exported", "event": "export.ttl", "intents": ["release-leases", "export-expired", "watch-trailing"], "target": "expired" },
 
-    { "state": "expired", "event": "obs.seen", "guard": "verified", "intents": ["tx-spent"], "target": "observed" },
-    { "state": "expired", "event": "obs.proven", "guard": "proof", "intents": ["tx-spent", "leases->spent"], "target": "confirmed" },
+    { "state": "rejected", "event": "obs.seen", "guard": "verified", "intents": ["tx-spent", "record-aired"], "target": "observed" },
+    { "state": "rejected", "event": "obs.proven", "guard": "proof", "intents": ["tx-spent", "leases->spent", "record-aired"], "target": "confirmed" },
+
+    { "state": "expired", "event": "obs.seen", "guard": "verified", "intents": ["tx-spent", "record-aired"], "target": "observed" },
+    { "state": "expired", "event": "obs.proven", "guard": "proof", "intents": ["tx-spent", "leases->spent", "record-aired"], "target": "confirmed" },
     { "state": "expired", "event": "obs.conflicted", "guard": "verified+spentBy", "intents": [], "target": "conflicted" },
-    { "state": "abandoned", "event": "obs.seen", "guard": "verified", "intents": ["tx-spent"], "target": "observed" },
-    { "state": "abandoned", "event": "obs.proven", "guard": "proof", "intents": ["tx-spent", "leases->spent"], "target": "confirmed" },
+    { "state": "abandoned", "event": "obs.seen", "guard": "verified", "intents": ["tx-spent", "record-aired"], "target": "observed" },
+    { "state": "abandoned", "event": "obs.proven", "guard": "proof", "intents": ["tx-spent", "leases->spent", "record-aired"], "target": "confirmed" },
     { "state": "abandoned", "event": "obs.conflicted", "guard": "verified+spentBy", "intents": [], "target": "conflicted" },
 
     { "state": "*", "event": "process.crash", "intents": ["boot-reconcile"], "target": "self" },

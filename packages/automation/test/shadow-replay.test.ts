@@ -1,12 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import knexFactory from 'knex'
 import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator } from '../src/wallet.js'
 import { MarketEngine } from '../src/market.js'
 import type { MarketDeps } from '../src/market/types.js'
-import { replayOps, replayTx, type Diff } from '../src/machines/shadow.js'
+import { OPS_NO_EDGE_CAUSES, opsCauseCandidates, replayOps, replayTx, type Diff } from '../src/machines/shadow.js'
 
 // state-audit Phase 3 — replay recorded live transitions through the shadow
 // machines and report every divergence. The machine never moves production
@@ -116,6 +117,67 @@ test('shadow: expired-then-landed is a live-silent edge the spec already covers'
   assert.equal(spec.next, 'observed')
   const live = await store.walletTx({ actionId: 'a1' })
   assert.equal(live?.state, 'expired', 'live still strands it — F5 confirmed as a live-silent edge')
+})
+
+test('shadow census: every cause literal emitted in src resolves to a modeled edge', async (t) => {
+  // a cause with no map entry and no no-edge classification replays 'unmodeled'
+  // forever — the census fails here the moment a new cause ships unclassified.
+  const srcDir = (() => {
+    // the test runs compiled (dist/test) — walk up to package.json, then src/
+    let dir = new URL('.', import.meta.url)
+    for (;;) {
+      if (existsSync(new URL('package.json', dir))) return new URL('src/', dir)
+      const up = new URL('../', dir)
+      if (up.href === dir.href) throw new Error('package.json not found')
+      dir = up
+    }
+  })()
+  const files: string[] = []
+  for (const dir of ['', 'market/'])
+    for (const f of readdirSync(new URL(dir, srcDir))) if (f.endsWith('.ts')) files.push(dir + f)
+  const literals = new Set<string>()
+  const expressions = new Set<string>()
+  for (const f of files) {
+    const src = readFileSync(new URL(f, srcDir), 'utf8')
+    for (const m of src.matchAll(/cause:\s*([^,}\n]+)/g)) {
+      const seg = m[1].trim()
+      if (/^(string|number|boolean|unknown|any)\b/.test(seg)) continue // type field, not an emission
+      const qs = [...seg.matchAll(/'([^']+)'/g)].map((q) => q[1])
+      if (qs.length > 0) for (const q of qs) literals.add(q)
+      else if (seg.includes('needs_human')) literals.add('needs_human:unresolved_payment') // template probe
+      else expressions.add(seg)
+    }
+  }
+  // bare-expression causes are forwardings — their VALUES surface as 'unmodeled'
+  // in replay when a live row lands (the real gate). The dynamic classes the
+  // resolver does own are probed here: needs_human:* and the deny-code set.
+  if (expressions.size > 0) t.diagnostic(`variable causes (forwardings — replay gates their values): ${[...expressions].join(', ')}`)
+  for (const probe of ['unknown_policy', 'needs_human:stuck_state_timeout', 'needs_human:unresolved_payment'])
+    assert.ok(opsCauseCandidates(probe) !== undefined, `dynamic cause class unhandled: ${probe}`)
+  const noEdge = new Set(OPS_NO_EDGE_CAUSES)
+  for (const c of literals) assert.ok(noEdge.has(c) || opsCauseCandidates(c) !== undefined, `cause '${c}' is unmodeled — add a map row or a no-edge classification`)
+})
+
+test('shadow: real-history replay — market_events from a live automation.sqlite', { skip: !existsSync(process.env.NEKTAR_REPLAY_DB ?? '') }, async (t) => {
+  const kx = knexFactory({ client: 'sqlite3', connection: { filename: process.env.NEKTAR_REPLAY_DB! }, useNullAsDefault: true })
+  t.after(() => kx.destroy())
+  const rows = (await kx('market_events').select('operation_id', 'from_state', 'to_state', 'cause').orderBy('at')) as {
+    operation_id: string
+    from_state: string | null
+    to_state: string
+    cause: string
+  }[]
+  const byOp = new Map<string, { from: string; to: string; cause: string }[]>()
+  for (const r of rows) {
+    const l = byOp.get(r.operation_id) ?? []
+    l.push({ from: r.from_state ?? '', to: r.to_state, cause: r.cause })
+    byOp.set(r.operation_id, l)
+  }
+  const diffs: Diff[] = []
+  for (const l of byOp.values()) diffs.push(...replayOps(l))
+  for (const d of diffs) console.log(`  ${d.kind.padEnd(17)} ${d.from} -> ${d.live} (live) | machine ${d.machine || '·'} | ${d.event}${d.guard ? ' @' + d.guard : ''} | ${d.cause}`)
+  assert.ok(diffs.length > 0, 'fixture db should contain at least one state-changing transition')
+  for (const d of diffs) assert.notEqual(d.kind, 'unmodeled', `unmodeled cause in real history: ${JSON.stringify(d)}`)
 })
 
 test('shadow report: dump the diff list', async () => {

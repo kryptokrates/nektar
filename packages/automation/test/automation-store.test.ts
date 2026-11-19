@@ -558,3 +558,24 @@ test('market: refund window inside the seller safety margin refuses at construct
   assert.doesNotThrow(() => new MarketEngine(deps({ refundBlocks: 3, sellerSafetyBlocks: 2 })))
   await kx.destroy()
 })
+
+test('splitDailySpend: escrow/payment kinds are deal spend; the rest is upkeep', async () => {
+  const { splitDailySpend } = await import('../src/ledger.js')
+  const { store, kx } = await open()
+  const tx = (id: string) => ({ txid: id, rawHex: '00', parents: {}, feeSats: 10 })
+  await store.recordPrepared({ ...tx('aa'.repeat(32)), actionId: 'a-esc', operationId: 'op', kind: 'escrow' })
+  await store.recordPrepared({ ...tx('bb'.repeat(32)), actionId: 'a-pay', operationId: 'op', kind: 'payment' })
+  await store.recordPrepared({ ...tx('cc'.repeat(32)), actionId: 'a-mint', operationId: 'op', kind: 'anchor' })
+  const today = new Date().toISOString()
+  const costs = [
+    { txid: 'aa'.repeat(32), spend: 300, at: today },
+    { txid: 'bb'.repeat(32), spend: 200, at: today },
+    { txid: 'cc'.repeat(32), spend: 150, at: today },
+    { txid: 'dd'.repeat(32), spend: 50, at: today }, // no wallet row — upkeep by default
+    { txid: 'ee'.repeat(32), spend: 999, at: '2000-01-01T00:00:00Z' } // other day — ignored
+  ]
+  const { deal, upkeep } = await splitDailySpend(store, costs)
+  assert.equal(deal, 500)
+  assert.equal(upkeep, 200)
+  await kx.destroy()
+})

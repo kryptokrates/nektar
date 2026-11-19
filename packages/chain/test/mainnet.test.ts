@@ -433,6 +433,29 @@ test('SpendGuard: daily cap counts committed value, not just fees (escrow spends
   assert.equal(g2.spentToday(), 40)
 })
 
+test('SpendGuard: cost record shape carries spend — the ops costs() contract', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'sg-'))
+  const own = new P2PKH().lock('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa')
+  const parent = new Transaction()
+  parent.addOutput({ satoshis: 10_000, lockingScript: own })
+  const pid = parent.id('hex')
+  const t = new Transaction()
+  t.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScript: new UnlockingScript(), sequence: 0xffffffff })
+  t.addOutput({ satoshis: 9000, lockingScript: own })
+  const g = new SpendGuard(okBroadcast, (id) => (id === pid ? 10_000 : undefined), { ledgerFile: path.join(dir, 'l.json') })
+  assert.equal((await g.broadcast(t)).status, 'success')
+  const [r] = g.costs()
+  assert.match(r.txid, /^[0-9a-f]{64}$/)
+  assert.equal(typeof r.bytes, 'number')
+  assert.equal(typeof r.fee, 'number')
+  assert.equal(
+    typeof r.spend,
+    'number',
+    'spend — the daily-cap metric splitDailySpend sums; a dropped field degrades to NaN behind the `as` casts at the consumers'
+  )
+  assert.match(r.at, /^\d{4}-\d{2}-\d{2}T/)
+})
+
 test('importFundingTx: hex: raw tx imports; empty/malformed refs fail with clear errors', async () => {
   const { importFundingTx } = await import('../src/mainnet.js')
   // vout 0 pays addr/pkh, vout 1 pays someone else — only the matching one imports

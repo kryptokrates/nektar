@@ -44,6 +44,11 @@ services:
       NEKTAR_PUSH_PUBLIC: ${NEKTAR_PUSH_PUBLIC:-}
       NEKTAR_WATCH_URLS: ${NEKTAR_WATCH_URLS:-}
       NEKTAR_WATCH_PUBLIC: ${NEKTAR_WATCH_PUBLIC:-}
+      # our bbox-host image runs the anchored-admission patch — anchored
+      # (unproven, ancestry-anchored) funding trees serve every lane, so a
+      # fresh agent's first carrier doesn't wait on a block. Override to
+      # 'market' or a comma-list against unpatched host software.
+      NEKTAR_ANCHORED_LANES: ${NEKTAR_ANCHORED_LANES:-all}
     volumes:
       - agent-data:/data
     depends_on:

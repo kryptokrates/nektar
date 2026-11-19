@@ -65,10 +65,11 @@ journey fails at the value moment regardless of speed.
 | Hermes / function-calling | needs `/v1/tools` + HTTP bearer | **MOVE → thin shim doc + OpenAPI stanza** |
 | raw HTTP | `/v1/tools/{name}` + bearer | keep |
 
-**Score:** ~6/10. The MCP surface is conforming (Jakob's law working);
-the missing piece is the **frozen tool contract doc** + per-platform
-stanzas. Right now the surface is "whatever the server happens to
-expose" — that's invisible friction for the second integrator.
+**Score:** ~8/10 (was ~6 — `docs/ADAPTERS.md` now freezes the minimal
+contract (remember/recall/groundedAnswer/verifyReceipt/doctor/
+automation + want/sell/deals) and ships every stanza: Claude Code,
+Codex, OpenClaw mcpServers JSON, Hermes HTTP-shim recipe over
+`/v1/openapi.json`, raw curl).
 
 ## J4 · Agent → settled deal
 
@@ -104,8 +105,10 @@ error → legible cause in logs, instantly. **Artifact:** log surface +
 | poisoned journal | retries forever, 80 poisoned rows | dead-ancestry eviction + `beefGaps` skip |
 | suite quiet = wedge? | indistinguishable | `[suite quiet <n>s] last: <line>` |
 
-**Score:** ~7/10. Remaining: `doctor` output shape needs to name the
-*next command* per finding, not just the state — the bumper pattern.
+**Score:** ~8/10 (was ~7 — `doctor` now returns `hints[]`: each
+degraded check names its unblock command — unsealed → set
+MARKET_HOSTS, unfunded → address + fundingImport, anchors proving →
+nothing to do).
 
 ## Cross-cutting walls
 
@@ -115,9 +118,11 @@ Ranked by leverage — where the next friction dollar goes:
    complete without outside action. A grant-link or faucet name in the
    doc converts a stall into a step.
 2. **Lane-stock cold start** (J4, internal) — a fresh agent pays a
-   block-wait before its first carrier. Pre-proven seed stock in the
-   image, or `NEKTAR_ANCHORED_LANES=all` on patched hosts, converts a
-   wait into zero-conf serving.
+   block-wait before its first carrier. `NEKTAR_ANCHORED_LANES=all` is
+   now the hub compose default (our `nektar-bbox-host` image carries
+   the anchored-admission patch) — anchored trees serve every lane
+   while their proof is in flight. Pre-proven seed stock remains the
+   further lever if a fully cold start still waits.
 3. **Tool contract freeze** (J3) — integrators can't pin against
    "whatever the server exposes". A named minimal contract
    (`recall`/`commit`/`verify` + `automation`) is the adapter MVP's

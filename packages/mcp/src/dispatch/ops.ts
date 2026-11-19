@@ -15,6 +15,18 @@ export const handlers: Record<string, ToolHandler> = {
     // record and is discoverable; 'unsealed' = it still needs a configured
     // host set for counterparties to reach it
     const out: Record<string, unknown> = { ...d, bootstrap: mem.automation?.bootstrap?.() ?? 'unsealed' }
+    // bumper layer — each degraded check names the unblock command, not just
+    // the state; the caller should never need docs to take the next step
+    const hints: string[] = []
+    if (out.bootstrap === 'unsealed')
+      hints.push('unsealed — set NEKTAR_MARKET_HOSTS to this instance\'s public host pair so counterparties can reach it')
+    const funding = out.funding as Record<string, unknown> | undefined
+    if (funding?.funded === false)
+      hints.push(
+        `unfunded — send ${out.network === 'main' ? '' : 'testnet '}sats to ${funding.address}, then POST /v1/tools/fundingImport {"txid":"<txid>"} (or boot with NEKTAR_WAIT_FUNDING=1)`
+      )
+    if (typeof out.unprovenAnchors === 'number' && out.unprovenAnchors > 0) hints.push(`${out.unprovenAnchors} anchor(s) proving — safe to use meanwhile; nothing to do`)
+    if (hints.length > 0) out.hints = hints
     if (args?.fix) return { ...out, repair: await mem.doctorRepair() }
     return out
   },

@@ -153,8 +153,7 @@ export class WalletFunds extends FundsBase {
     // own ancestry with it until the chain bottoms out at proven roots —
     // zeroconf spends internalize whole, not one level deep.
     const txid = tx.id('hex')
-    const atomic = this.atomicBeefCache.get(txid) ?? (await this.buildAtomicBeef(tx))
-    this.atomicBeefCache.set(txid, atomic)
+    const atomic = await this.buildAtomicBeefCached(tx)
     try {
       await this.wallet.internalizeAction({
         tx: atomic,
@@ -170,9 +169,25 @@ export class WalletFunds extends FundsBase {
     }
   }
 
-  /** txid → completed atomic BEEF: outputs of one tx share the identical
-   *  ancestry closure, so seeding 60 utxos pays for the deep walk once. */
-  private atomicBeefCache = new Map<string, number[]>()
+  /** txid → in-flight/completed atomic BEEF build: outputs of one tx share
+   *  the identical ancestry closure, so seeding 60 utxos pays for the deep
+   *  walk once — and concurrent adopts must not each rebuild it (a five-way
+   *  build herd multiplies indexer calls and starves on rate limits). A
+   *  rejected build evicts itself so the next adopt can retry. */
+  private atomicBeefCache = new Map<string, Promise<number[]>>()
+
+  private buildAtomicBeefCached(tx: Transaction): Promise<number[]> {
+    const txid = tx.id('hex')
+    let p = this.atomicBeefCache.get(txid)
+    if (p === undefined) {
+      p = this.buildAtomicBeef(tx).catch((e) => {
+        this.atomicBeefCache.delete(txid)
+        throw e
+      })
+      this.atomicBeefCache.set(txid, p)
+    }
+    return p
+  }
 
   private async buildAtomicBeef(tx: Transaction): Promise<number[]> {
     // a mined subject anchors itself: its own BUMP is the whole proof, so no

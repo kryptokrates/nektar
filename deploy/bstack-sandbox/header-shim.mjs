@@ -184,6 +184,17 @@ const json = (res, code, body) => {
   res.end(b)
 }
 
+// verified-answer cache: the upstream tiers rate-limit hard — a corroborated
+// answer stays honest for its natural lifetime (tip ~ block pace, roots and
+// BUMPs immutable, spend views ~seconds). Caching PASSED answers only; a
+// cache hit never bypasses verification, it just isn't re-run per request.
+const TIP_TTL = 20_000
+const SPEND_TTL = 15_000
+const tipCache = { at: 0, height: undefined }
+const rootCache = new Map() // height -> merkleRoot (immutable once corroborated)
+const proofCache = new Map() // txid -> Buffer (immutable once served)
+const spendCache = new Map() // txid -> { at, outs }
+
 async function handle(req, res) {
   const url = new URL(req.url ?? '/', 'http://x')
   if (req.method !== 'GET') {
@@ -193,19 +204,35 @@ async function handle(req, res) {
   try {
     if (url.pathname === '/v1/tip') {
       if (MODE === 'live') {
-        const [ct, idx] = await Promise.all([ctJson('/height'), idxGet('/block/tip')])
-        const a = ct?.height
-        const b = idx?.height
-        // both answered: serve the lowest — the strongest claim EITHER source
-        // corroborates (a skewed tip is propagation lag or a stuck source;
-        // never report height one of them has not seen)
-        const height = a !== undefined && b !== undefined ? Math.min(a, b) : SINGLE_OK ? (a ?? b) : undefined
-        if (height === undefined) {
-          if (a !== undefined || b !== undefined)
+        if (tipCache.height !== undefined && Date.now() - tipCache.at < TIP_TTL) {
+          json(res, 200, { height: tipCache.height })
+          return
+        }
+        const ctP = ctJson('/height').then((v) => v?.height)
+        const idxP = idxGet('/block/tip').then((v) => v?.height)
+        let height
+        if (SINGLE_OK) {
+          // degraded mode serves the first real answer — a throttled peer
+          // must not hold the response for its whole retry budget. Raced
+          // against both-settled so a double-undefined still resolves.
+          const firstDefined = Promise.race([ctP, idxP].map((p) => p.then((h) => (h === undefined ? new Promise(() => {}) : h))))
+          const bothSettled = Promise.all([ctP, idxP]).then(([a, b]) => (a !== undefined && b !== undefined ? Math.min(a, b) : (a ?? b)))
+          height = await Promise.race([firstDefined, bothSettled])
+        } else {
+          // both answered: serve the lowest — the strongest claim EITHER source
+          // corroborates (a skewed tip is propagation lag or a stuck source;
+          // never report height one of them has not seen)
+          const [a, b] = await Promise.all([ctP, idxP])
+          height = a !== undefined && b !== undefined ? Math.min(a, b) : undefined
+          if (height === undefined && (a !== undefined || b !== undefined))
             console.log(`tip: only ${a !== undefined ? 'chaintracks' : 'index'} answered — refusing uncorroborated answer`)
+        }
+        if (height === undefined) {
           json(res, 404, { error: 'no corroborated tip' })
           return
         }
+        tipCache.at = Date.now()
+        tipCache.height = height
         json(res, 200, { height })
         return
       }
@@ -217,20 +244,38 @@ async function handle(req, res) {
     if (m !== null) {
       const h = Number(m[1])
       if (MODE === 'live') {
-        const [ct, idx] = await Promise.all([ctJson(`/header/height/${h}`), idxGet(`/block/${h}`)])
-        const a = ct?.merkleRoot
-        const b = idx?.merkle_root
-        // same chain -> same root: two independent answers that differ mean a
-        // fork or a lying source — refuse; silence from one side corroborates
-        // nothing either (SHIM_SINGLE_OK=1 serves a lone answer, logged)
-        const root = a !== undefined && b !== undefined ? (a === b ? a : undefined) : SINGLE_OK ? (a ?? b) : undefined
+        const cached = rootCache.get(h)
+        if (cached !== undefined) {
+          json(res, 200, { merkleRoot: cached })
+          return
+        }
+        const ctP = ctJson(`/header/height/${h}`).then((v) => v?.merkleRoot)
+        const idxP = idxGet(`/block/${h}`).then((v) => v?.merkle_root)
+        let root
+        if (SINGLE_OK) {
+          const firstDefined = Promise.race([ctP, idxP].map((p) => p.then((r) => (r === undefined ? new Promise(() => {}) : r))))
+          const bothSettled = Promise.all([ctP, idxP]).then(([a, b]) => {
+            if (a !== undefined && b !== undefined && a !== b) console.log(`root ${h}: chaintracks ${a} != index ${b} — refusing`)
+            return a !== undefined && b !== undefined ? (a === b ? a : undefined) : (a ?? b)
+          })
+          root = await Promise.race([firstDefined, bothSettled])
+        } else {
+          // same chain -> same root: two independent answers that differ mean a
+          // fork or a lying source — refuse; silence from one side corroborates
+          // nothing either (SHIM_SINGLE_OK=1 serves a lone answer, logged)
+          const [a, b] = await Promise.all([ctP, idxP])
+          root = a !== undefined && b !== undefined ? (a === b ? a : undefined) : undefined
+          if (root === undefined) {
+            if (a !== undefined && b !== undefined) console.log(`root ${h}: chaintracks ${a} != index ${b} — refusing`)
+            else if (a !== undefined || b !== undefined)
+              console.log(`root ${h}: only ${a !== undefined ? 'chaintracks' : 'index'} answered — refusing uncorroborated answer`)
+          }
+        }
         if (root === undefined) {
-          if (a !== undefined && b !== undefined) console.log(`root ${h}: chaintracks ${a} != index ${b} — refusing`)
-          else if (a !== undefined || b !== undefined)
-            console.log(`root ${h}: only ${a !== undefined ? 'chaintracks' : 'index'} answered — refusing uncorroborated answer`)
           json(res, 404, { error: 'unknown height' })
           return
         }
+        rootCache.set(h, root)
         json(res, 200, { merkleRoot: root })
         return
       }
@@ -248,10 +293,14 @@ async function handle(req, res) {
     }
     m = /^\/api\/v1\/merkle_proof\/([0-9a-fA-F]{64})$/.exec(url.pathname)
     if (m !== null && MODE === 'live') {
-      const bump = await liveProof(m[1])
+      let bump = proofCache.get(m[1])
       if (bump === undefined) {
-        json(res, 404, { error: 'no proof' })
-        return
+        bump = await liveProof(m[1])
+        if (bump === undefined) {
+          json(res, 404, { error: 'no proof' })
+          return
+        }
+        proofCache.set(m[1], bump)
       }
       res.writeHead(200, { 'content-type': 'application/octet-stream' })
       res.end(bump)
@@ -259,11 +308,13 @@ async function handle(req, res) {
     }
     m = /^\/api\/v1\/utxos\/([0-9a-fA-F]{64})\/json$/.exec(url.pathname)
     if (m !== null && MODE === 'live') {
-      const outs = await liveUtxos(m[1])
+      const c = spendCache.get(m[1])
+      const outs = c !== undefined && Date.now() - c.at < SPEND_TTL ? c.outs : await liveUtxos(m[1])
       if (outs === undefined) {
         json(res, 404, { error: 'unknown tx' })
         return
       }
+      if (c === undefined || Date.now() - c.at >= SPEND_TTL) spendCache.set(m[1], { at: Date.now(), outs })
       json(res, 200, outs)
       return
     }

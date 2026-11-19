@@ -55,6 +55,12 @@ export interface AutomationConfig {
   /** stronger broadcaster liveness probe (the transport knows the endpoint —
    *  an HTTP answer proves the socket where txFacts can't) */
   broadcasterProbe?: () => Promise<boolean>
+  /** the guarded-broadcaster's day ledger, when the runtime composes one —
+   *  the doctor's 'budget' check reads today's committed spend + caps and
+   *  splits upkeep vs deal sats against the wallet ledger */
+  spendProbe?: () => Promise<
+    { spentTodaySats: number; maxPerDay: number; maxFeePerTx: number; costs?: Array<{ txid: string; spend: number; at: string }> } | undefined
+  >
   /** publish our bfinger identity record in upkeep — opt-in (it costs sats
    *  and makes this agent publicly discoverable; NEKTAR_BFINGER_PUBLISH=1) */
   publishFinger?: boolean
@@ -112,6 +118,10 @@ export interface AutomationConfig {
   /** satoshis per reserve output (NEKTAR_RESERVE_OUT_SATS) — sized so either
    *  a mint or a deal can fund from one. Default 2x the deal floor. */
   reserveOutSats?: number
+  /** change outputs each tree mint fans its remainder across
+   *  (NEKTAR_CHANGE_FANOUT) — later spends draw distinct vouts off the same
+   *  broadcast mint, keeping unconfirmed ancestry one hop deep. Default 4. */
+  changeFanout?: number
   now?: () => number
 }
 

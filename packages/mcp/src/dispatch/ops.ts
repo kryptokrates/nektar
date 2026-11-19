@@ -1,5 +1,5 @@
 // operator/automation surface tools — extracted verbatim from the server.ts dispatchTool switch
-import { paidSaleEnabled, singlePolicy } from './shared.js'
+import { paidSaleAuthorized, singlePolicy } from './shared.js'
 import type { ToolHandler } from './shared.js'
 
 export const handlers: Record<string, ToolHandler> = {
@@ -51,7 +51,7 @@ export const handlers: Record<string, ToolHandler> = {
     // selling without paid disclosure can never settle — the buyer-side
     // sale# rail is gated off, so arming a seller would publish offers
     // that no counterparty may pay
-    if (!paidSaleEnabled()) throw new Error('sell: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1')
+    if (!(await paidSaleAuthorized(au))) throw new Error('sell: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1 or approve a policy with disclosure.paid')
     if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('sell: shard required')
     if (!Array.isArray(args?.domains)) throw new Error('sell: domains[] required')
     const priceSats = Number(args?.priceSats)
@@ -70,9 +70,29 @@ export const handlers: Record<string, ToolHandler> = {
   deals: async (mem, args) => {
     const au = mem.automation
     if (!au) throw new Error('automation is off (NEKTAR_AUTOMATION=1)')
+    // first-party chain truth: the wallet ledger's per-txid states are the
+    // record the labels can't lag — 'submitted' broadcast-accepted,
+    // 'observed'/'confirmed' network-seen/proven, 'rejected'/'conflicted'
+    // dead. One scan joins into every entry
+    const ledger = new Map(
+      (
+        await au.store.walletTxs(['prepared', 'exported', 'submission_unknown', 'submitted', 'observed', 'confirmed', 'rejected', 'conflicted', 'expired'])
+      ).map((w) => [w.txid, w.state])
+    )
+    const chainOf = (txid: unknown): string | undefined => (typeof txid === 'string' ? ledger.get(txid) : undefined)
     const entry = (o: import('@nektar/automation').Operation): Record<string, unknown> => {
       const d = o.data
       const selKey = typeof (d.selected as { key?: string } | undefined)?.key === 'string' ? (d.selected as { key: string }).key : undefined
+      const disclosureTxid = (d.result as { disclosureTxid?: string } | undefined)?.disclosureTxid
+      const chain: Record<string, string> = {}
+      for (const [k, txid] of [
+        ['escrow', d.escrowTxid],
+        ['disclosure', disclosureTxid ?? d.completeTxid],
+        ['refund', d.refundTxid]
+      ] as const) {
+        const s = chainOf(txid)
+        if (s !== undefined) chain[k] = s
+      }
       return {
         operationId: o.operationId,
         role: o.role,
@@ -82,8 +102,11 @@ export const handlers: Record<string, ToolHandler> = {
         priceSats: (d.amounts as { purchaseSats?: number } | undefined)?.purchaseSats ?? d.priceSats,
         counterparty: o.role === 'seller' ? (d.want as { want?: { pub?: string } } | undefined)?.want?.pub : selKey?.split(':')[0],
         escrowTxid: d.escrowTxid,
-        disclosureTxid: (d.result as { disclosureTxid?: string } | undefined)?.disclosureTxid,
+        disclosureTxid,
+        completeTxid: d.completeTxid,
+        sellerSats: d.sellerSats,
         refundTxid: d.refundTxid,
+        ...(Object.keys(chain).length > 0 ? { chain } : {}),
         ...(d.evidenceRef !== undefined ? { evidence: { ref: d.evidenceRef, stored: true } } : {}),
         ...(o.lastError ? { reason: o.lastError } : {}),
         updatedAt: o.updatedAt
@@ -145,7 +168,7 @@ export const handlers: Record<string, ToolHandler> = {
       return { ok: true, ...r }
     }
     if (op === 'enableSeller') {
-      if (!paidSaleEnabled()) throw new Error('automation enableSeller: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1')
+      if (!(await paidSaleAuthorized(au))) throw new Error('automation enableSeller: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1 or approve a policy with disclosure.paid')
       await au.engine.enableSeller(String(args?.policyHash ?? ''))
       void au.cycle()
       return { ok: true }

@@ -19,6 +19,18 @@ test('tree: n=8 mints 8 funding outputs + change, each decodes our tag', async (
   for (let i = 0; i < 8; i++) assert.ok(decodeFunding(t.outputs[i].lockingScript, Array.from(FUNDING_TAG)))
 })
 
+test('tree: changeOutputs fans the remainder — later spends share one broadcast parent', async () => {
+  const key = PrivateKey.fromRandom()
+  const t = await mintTree({ key, funding: fund(key), n: 4, satsPerOutput: 1000, changeOutputs: 4 })
+  assert.equal(t.outputs.length, 8, '4 stock outs + 4 change outs')
+  for (let i = 0; i < 4; i++) assert.ok(decodeFunding(t.outputs[i].lockingScript, Array.from(FUNDING_TAG)))
+  const change = t.outputs.slice(4)
+  for (const o of change) assert.ok((o.satoshis ?? 0) > 0, 'fee() must split the remainder across every change out')
+  const sum = change.reduce((s, o) => s + (o.satoshis ?? 0), 0)
+  assert.ok(sum > 0, 'change exists at all')
+  await assert.rejects(mintTree({ key, funding: fund(key), n: 2, changeOutputs: 0 }), /changeOutputs/)
+})
+
 test('ledger: unproven tree is not handed out; once proven it is', async () => {
   const key = PrivateKey.fromRandom()
   const t = await mintTree({ key, funding: fund(key), n: 2, satsPerOutput: 1000 })

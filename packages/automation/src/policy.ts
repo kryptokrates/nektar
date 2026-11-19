@@ -31,7 +31,10 @@ export interface AutomationPolicy {
   }
   scoring: { minimumScoreBps: number; weights: ScoreWeights; collectMs: number }
   seller: { minPriceSats: number; maxPriceSats: number; maxPreparationsPerDay: number; sellableShards: string[] }
-  disclosure: { allowPublic: boolean }
+  /** allowPublic: plaintext disclosure allowed. paid: paid-disclosure deals
+   *  authorized (optional — absent reads false so pre-field policies stay
+   *  valid) */
+  disclosure: { allowPublic: boolean; paid?: boolean }
   ai: { providers: string[]; allowSensitiveEgress: boolean; maxOutputTokens: number; timeoutMs: number }
   sandbox: { mode: 'sandbox-only' | 'never' }
 }
@@ -93,7 +96,8 @@ export function policyError(p: unknown): string | undefined {
     !strings(q.seller.sellableShards, /^[^\s]{1,64}$/, 256)
   )
     return 'seller'
-  if (!exact(q.disclosure, ['allowPublic']) || typeof q.disclosure.allowPublic !== 'boolean') return 'disclosure'
+  if (!exact(q.disclosure, ['allowPublic']) && !exact(q.disclosure, ['allowPublic', 'paid'])) return 'disclosure'
+  if (typeof q.disclosure.allowPublic !== 'boolean' || (q.disclosure.paid !== undefined && typeof q.disclosure.paid !== 'boolean')) return 'disclosure'
   if (
     !exact(q.ai, ['providers', 'allowSensitiveEgress', 'maxOutputTokens', 'timeoutMs']) ||
     !strings(q.ai.providers, ID_RE, 16) ||

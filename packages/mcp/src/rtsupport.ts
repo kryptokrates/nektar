@@ -1,7 +1,7 @@
 // rtsupport.ts — openRuntime boot plumbing: key files, instance/fund-key
 // locks, the records db opener, the tx-store persister, the broadcast log
 // hook and the ledger proof-heal. No chain or custody decisions live here.
-import { existsSync, readFileSync, writeFileSync, appendFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { PrivateKey, Transaction } from '@bsv/sdk'
@@ -96,18 +96,58 @@ export function txLogBroadcast<B extends (tx: Transaction) => Promise<import('@n
   }) as B
 }
 
-/** single holder per lock file: a live heartbeat (<20s old) from another
- *  process refuses acquisition; a stale or dead one is taken over.
- *  release() stops the beat and removes the file. */
+/** single holder per lock file: PID liveness proves a dead local holder at
+ *  once (no 20s wait on a stale-looking beat); a live/unverifiable holder
+ *  yields only when its heartbeat goes stale (>20s). A corrupt file's mtime
+ *  stands in for the beat — a live process rewrites it every 5s. */
 export async function acquireLock(file: string, label: string): Promise<() => Promise<void>> {
-  const me = `${process.pid}@${(await import('node:os')).hostname()}`
+  const host = (await import('node:os')).hostname()
+  const me = `${process.pid}@${host}`
+  /** true/false on this host (kill(pid,0)); undefined when the owner is
+   *  remote — a shared-fs lock has no probeable pid, the beat decides */
+  const pidAlive = (owner: string): boolean | undefined => {
+    const m = /^(\d+)@(.*)$/.exec(owner)
+    if (m === null || m[2] !== host) return undefined
+    try {
+      process.kill(Number(m[1]), 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const inUse = (owner: string) => new Error(`${label} is in use by another nektar process (${owner}) — stop it first`)
   if (existsSync(file)) {
-    const l = JSON.parse(readFileSync(file, 'utf8')) as { owner: string; beat: number }
-    if (l.owner !== me && Date.now() - l.beat < 20_000) throw new Error(`${label} is in use by another nektar process (${l.owner}) — stop it first`)
-    rmSync(file)
+    let refuse = false
+    let owner = 'unknown'
+    try {
+      const l = JSON.parse(readFileSync(file, 'utf8')) as { owner: string; beat: number }
+      owner = l.owner
+      // a dead local pid is displaced now; a live or unverifiable one only
+      // after the heartbeat went silent
+      refuse = l.owner !== me && pidAlive(l.owner) !== false && Date.now() - l.beat < 20_000
+    } catch {
+      // unreadable or corrupt — the file mtime is the freshest beat a live
+      // writer could have left; only an old corpse yields the lock. A file
+      // that vanished mid-check is no lock at all
+      try {
+        refuse = Date.now() - statSync(file).mtimeMs < 20_000
+      } catch {
+        refuse = false
+      }
+    }
+    if (refuse) throw inUse(owner)
+    try {
+      rmSync(file)
+    } catch {
+      /* a racing acquirer removed it first — the wx create below decides */
+    }
   }
   const beat = () => writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }))
-  writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
+  try {
+    writeFileSync(file, JSON.stringify({ owner: me, beat: Date.now() }), { flag: 'wx' })
+  } catch {
+    throw inUse('lock race')
+  }
   const beatTimer = setInterval(beat, 5_000)
   beatTimer.unref()
   return async () => {

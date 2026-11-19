@@ -38,6 +38,10 @@ export async function ensureTrees(p: {
    *  keeps a refill minting while an earlier mint still waits on its block,
    *  so the proof wait never gates the next refill */
   maxUnproven?: number
+  /** change outputs each mint fans its remainder across (default 4) — later
+   *  spends draw distinct vouts off the SAME broadcast mint, keeping their
+   *  unconfirmed ancestry one hop deep instead of chaining mint-to-mint */
+  changeFanout?: number
 }): Promise<{ minted: string[]; proven: string[]; remaining: number }> {
   // Hosts admit a carrier only from a funding tree that is proven in a block,
   // so the stock is what keeps publishing free of block times: the next tree
@@ -87,7 +91,7 @@ export async function ensureTrees(p: {
     const unprovenKind = (await p.ledger.unproven()).filter((u) => u.kind === kind).length
     if ((await p.ledger.remaining(kind)) >= lowWater || unprovenKind >= (p.maxUnproven ?? 1)) break
     const funding = await p.takeFunding(size * satsPerOutput + 2000)
-    const tree = await mintTree({ key: p.key, wallet: p.wallet, funding, n: size, satsPerOutput, lock: p.lock })
+    const tree = await mintTree({ key: p.key, wallet: p.wallet, funding, n: size, satsPerOutput, lock: p.lock, changeOutputs: p.changeFanout ?? 4 })
     // a funder re-issuing the same UTXO mints the identical tree — the
     // ledger's idempotent add would leave unprovenKind flat and the loop
     // would never reach its bound; treat a repeat as the bound itself

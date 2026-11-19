@@ -40,6 +40,7 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
     // every implemented route prefix is documented, and vice versa
     const documented = Object.keys(OPENAPI.paths).sort()
     assert.deepEqual(documented, [
+      '/.well-known/agent.json',
       '/.well-known/nektar',
       '/.well-known/x402',
       '/dashboard',

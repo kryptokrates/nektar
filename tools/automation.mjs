@@ -80,6 +80,10 @@ if (!cmd || cmd === 'help' || cmd === '--help') {
 }
 
 const file = join(dataDir, 'automation.sqlite')
+// the resolved path is the #1 silent footgun — /tmp vs .state vs .nektar
+// divergence approves a policy into a database the runtime never reads.
+// stderr keeps --json stdout clean
+console.error(`automation: data dir ${dataDir}`)
 if (!existsSync(file) && !(cmd === 'policy' && a === 'approve'))
   die(`no automation state at ${file} — start the instance with NEKTAR_AUTOMATION=1 or approve a policy first`)
 const kx = knexFactory({ client: 'sqlite3', connection: { filename: file }, useNullAsDefault: true })

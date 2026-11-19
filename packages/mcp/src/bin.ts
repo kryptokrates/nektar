@@ -53,13 +53,26 @@ const PROFILES: Record<string, Record<string, string>> = {
     NEKTAR_WALLET: 'toolbox'
   }
 }
+// the names people actually type — an explicit table, not fuzzy matching:
+// a guessed profile would silently boot the wrong shape, which is exactly
+// what the loud refusal below exists to prevent
+const PROFILE_ALIASES: Record<string, string> = {
+  regtest: 'regtest-dev',
+  dev: 'regtest-dev',
+  local: 'regtest-dev',
+  testnet: 'testnet-agent',
+  main: 'mainnet-agent',
+  mainnet: 'mainnet-agent'
+}
 const profile = nektarEnv('NEKTAR_PROFILE')
 if (profile !== undefined) {
-  const defs = PROFILES[profile]
+  const resolved = PROFILE_ALIASES[profile] ?? profile
+  const defs = PROFILES[resolved]
   if (defs === undefined) {
     process.stderr.write(`nektar: NEKTAR_PROFILE must be one of ${Object.keys(PROFILES).join('|')}, got "${profile}"\n`)
     process.exit(2)
   }
+  if (resolved !== profile) process.stderr.write(`nektar: profile "${profile}" → "${resolved}"\n`)
   for (const [k, v] of Object.entries(defs)) if (nektarEnv(k) === undefined) setNektarEnv(k, v)
 }
 const portFlag = argv.includes('--port') ? argv[argv.indexOf('--port') + 1] : undefined
@@ -137,6 +150,18 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     strict,
     unattended,
     broadcasterProbe,
+    // the guarded broadcaster's day ledger — the doctor's 'budget' check
+    // reads today's committed spend + caps and splits upkeep vs deal sats
+    spendProbe: async () => {
+      const w = (await rt.ops?.wallet?.()) as { spentTodaySats?: number; caps?: { maxPerDay?: number; maxFeePerTx?: number } } | undefined
+      if (w === undefined) return undefined
+      return {
+        spentTodaySats: w.spentTodaySats ?? 0,
+        maxPerDay: w.caps?.maxPerDay ?? Number.MAX_SAFE_INTEGER,
+        maxFeePerTx: w.caps?.maxFeePerTx ?? Number.MAX_SAFE_INTEGER,
+        costs: ((await rt.ops?.costs?.()) ?? []) as Array<{ txid: string; spend: number; at: string }>
+      }
+    },
     publishFinger: /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_BFINGER_PUBLISH') ?? ''),
     // NEKTAR_ANNOUNCE=1 — publish the directory card (hosts + offered seed
     // packs) on the dir lane so fresh instances can enumerate this operator
@@ -177,6 +202,9 @@ if (/^(1|true|yes)$/i.test(nektarEnv('NEKTAR_AUTOMATION') ?? '')) {
     // and a deal escrow never contend for one dominant UTXO
     reserveOuts: nektarEnv('NEKTAR_RESERVE_OUTS') ? Number(nektarEnv('NEKTAR_RESERVE_OUTS')) : undefined,
     reserveOutSats: nektarEnv('NEKTAR_RESERVE_OUT_SATS') ? Number(nektarEnv('NEKTAR_RESERVE_OUT_SATS')) : undefined,
+    // change outputs a mint fans its remainder across — depth-1 ancestry for
+    // the next few spends instead of a serial mint-to-mint chain
+    changeFanout: nektarEnv('NEKTAR_CHANGE_FANOUT') ? Number(nektarEnv('NEKTAR_CHANGE_FANOUT')) : undefined,
     // a settlement proof must sit this deep before a completion settles —
     // the same finality depth the memory applies to anchor queries
     settleDepth: rt.mem.finalityDepth,

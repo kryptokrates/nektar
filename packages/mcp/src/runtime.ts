@@ -159,7 +159,7 @@ export interface Runtime {
       avgFeePerAnchorSats: number
       runwayAnchors: number | null
     }>
-    costs: () => Array<{ txid: string; bytes: number; fee: number; at: string }>
+    costs: () => Array<{ txid: string; bytes: number; fee: number; spend: number; at: string }>
     /** fundingImport tool: credit a tx paying the fee address */
     importFunding?: (txid: string) => Promise<unknown>
     /** fundingRefresh tool: reconcile the wallet view against chain truth */
@@ -525,6 +525,63 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
         // ledger txs too: one shared probe per txid serves the watcher's
         // statusOf short-circuit — no second fetch per inflight tx
         for (const w of await ledger.walletTxs(['submitted', 'submission_unknown', 'observed'])) events.watch(w.txid)
+        // stalled-submission heal: a row parked missing-parent (or vanished
+        // after acceptance — clean 404) can never settle, and nothing else
+        // will put the absent ancestor on the wire. Walk stored ancestry —
+        // the row's parents first, deeper links via the instance tx graph
+        // and the ledger itself — and re-air every ancestor the network
+        // honestly answers "not found" for. A refused parent can never be a
+        // missing ancestor: died() tombstones its outputs so no child ever
+        // chains on it. Bounded per pass; deep chains heal one level a tick.
+        {
+          let healBudget = 8
+          const healSeen = new Set<string>()
+          const resolveTx = async (txid: string): Promise<Transaction | undefined> => {
+            const inGraph = txStore.get(txid)
+            if (inGraph !== undefined) return inGraph
+            const inLedger = (await ledger.walletTx({ txid }).catch(() => undefined))?.rawHex
+            if (inLedger !== undefined) return Transaction.fromHex(inLedger)
+            return await port.txLookup?.(txid).catch(() => undefined)
+          }
+          const hintOf = async (txid: string): Promise<{ status: string; answered: boolean } | undefined> =>
+            port.statusHint?.(txid).catch(() => undefined)
+          const reair = async (tx: Transaction): Promise<void> => {
+            for (const i of tx.inputs) {
+              if (i.sourceTransaction !== undefined || i.sourceTXID === undefined) continue
+              i.sourceTransaction = await resolveTx(i.sourceTXID)
+            }
+            const r = await chain.broadcast(tx)
+            if (r.status === 'success') process.stderr.write(`nektar ${net}: re-aired ${tx.id('hex')} — wire gap self-healed\n`)
+          }
+          const healWalk = async (tx: Transaction): Promise<void> => {
+            for (const i of tx.inputs) {
+              const pid = i.sourceTXID
+              if (pid === undefined || healSeen.has(pid) || healBudget <= 0) continue
+              healSeen.add(pid)
+              healBudget--
+              const parent = i.sourceTransaction ?? (await resolveTx(pid))
+              if (parent === undefined || parent.merklePath !== undefined) continue
+              const st = await hintOf(pid)
+              if (st?.answered === true && st.status === '') await reair(parent)
+              else if (st?.answered !== true || st.status !== '') await healWalk(parent) // parent on the wire (or unanswerable) — its own ancestry may still be parked
+            }
+          }
+          for (const w of await ledger.walletTxs(['submitted', 'submission_unknown'])) {
+            if (healBudget <= 0) break
+            const st = await hintOf(w.txid)
+            if (st?.answered !== true) continue
+            const parked = /PENDING|MISSING|RETRY/i.test(st.status)
+            if (!parked && st.status !== '') continue
+            const tx = Transaction.fromHex(w.rawHex)
+            for (const i of tx.inputs) {
+              if (i.sourceTransaction !== undefined || i.sourceTXID === undefined) continue
+              const hex = w.parents[i.sourceTXID]
+              if (hex !== undefined) i.sourceTransaction = Transaction.fromHex(hex)
+            }
+            await healWalk(tx)
+            if (st.status === '') await reair(tx) // the row itself vanished — re-air its own bytes
+          }
+        }
         // a bounded, rotating pull: each tick tries a few unproven txs so a
         // long list can never serialize minutes of lookups inside one pass —
         // push (callbacks/status stream) stays the primary proof channel
@@ -568,7 +625,20 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       const hint = await port.statusHint?.(txid).catch(() => ({ status: '', answered: false }))
       return watcherObservation(seen, hint?.status ?? '')
     },
-    async () => {
+    async (w) => {
+      // a tracked tx the network calls rejected/conflicted can never land —
+      // its adopted outputs are phantom: died() tombstones them and revives
+      // whatever inputs the chain still shows live
+      try {
+        const tx = Transaction.fromHex(w.rawHex)
+        for (const inp of tx.inputs) {
+          const hex = inp.sourceTXID !== undefined ? w.parents[inp.sourceTXID] : undefined
+          if (hex !== undefined) inp.sourceTransaction = Transaction.fromHex(hex)
+        }
+        await custody.funds.died(tx)
+      } catch (e) {
+        process.stderr.write(`nektar ${net}: rejected tx ${w.txid}: died() failed: ${(e as Error).message}\n`)
+      }
       await (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
     },
     {

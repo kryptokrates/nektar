@@ -5,7 +5,7 @@
 // DispatchCtx.call without a ../server.js import cycle (depcruise no-circular).
 import { PAID_TOOLS, paymentsEnabled, paymentRequired, priceFor, settlePayment } from '../pay.js'
 import type { NektarMemory } from '../memory.js'
-import { PAID_SALE_TOOLS, paidSaleEnabled } from './shared.js'
+import { PAID_SALE_TOOLS, paidSaleAuthorized } from './shared.js'
 import type { DispatchCtx, ToolCtx, ToolHandler } from './shared.js'
 import { handlers as payHandlers } from './pay.js'
 import { handlers as saleHandlers } from './sale.js'
@@ -73,7 +73,7 @@ const ALL: Record<string, ToolHandler> = {
 // shared bodies (sale#escrow/sale#escrowBuild, sale#pay/sale#payBuild)
 // can still branch on it
 async function dispatchTool(mem: NektarMemory, name: string, args: any, ctx: ToolCtx = {}): Promise<any> {
-  if (PAID_SALE_TOOLS.has(name) && !paidSaleEnabled()) throw new Error(`${name}: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1`)
+  if (PAID_SALE_TOOLS.has(name) && !(await paidSaleAuthorized(mem.automation))) throw new Error(`${name}: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1 or approve a policy with disclosure.paid`)
   // NEKTAR_PAYMENTS=1 (BRC-166-style): anchor/groundedAnswer/commitReceipt need a
   // settled payment tx before they run — atomic, one tx per call, publicly
   // auditable. No payment → return the invoice (the 402 challenge) as data.

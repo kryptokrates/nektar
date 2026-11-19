@@ -36,6 +36,29 @@ export abstract class BuyerOps extends SellerOps {
     })
   }
 
+  /** a SpendGuard refusal splits on permanence: 'daily cap' is a window —
+   *  the UTC-midnight reset or an operator raise lets the same deal fund —
+   *  so it defers instead of dying; every other refusal is a policy no.
+   *  The refused attempt's pendingEscrow is tombstone data (died() already
+   *  freed its custody) — cleared so a retry prepares a fresh tx */
+  private async spendRefused(funding: Operation, detail: string): Promise<void> {
+    if (/daily cap/i.test(detail)) {
+      const midnight = new Date()
+      midnight.setUTCHours(24, 0, 0, 0)
+      await this.d.store.transition(funding.operationId, funding.revision, 'funding_deferred', {
+        cause: 'spend_cap_deferred',
+        lastError: detail.slice(0, 500),
+        data: { pendingEscrow: null },
+        dueAt: midnight.getTime()
+      })
+      return
+    }
+    await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', {
+      cause: 'spend_guard_refused',
+      lastError: detail.slice(0, 500)
+    })
+  }
+
   // ── buyer ───────────────────────────────────────────────────────────────
   private offerReject(so: SignedOffer, w: SignedWant['want']): string | undefined {
     const o = so.offer
@@ -230,12 +253,14 @@ export abstract class BuyerOps extends SellerOps {
   }
 
   /** what the seller is handed for an escrow this instance funded — bounded
-   *  so the whole envelope stays under the box's MaxContent cap (16KiB):
-   *  the covenant script + fields already cost ~4KiB of it. Over budget the
-   *  tx field is omitted and the seller falls back to fetchTx. */
+   *  so the whole envelope stays under the box's MaxContent cap (16KiB sealed
+   *  — roughly ~8KiB of payload once encoded/encrypted): the covenant script
+   *  + fields already cost a chunk of it, and an EF carrying a fat parent
+   *  (a mint tx) is exactly what blows the seal. Over budget the tx field is
+   *  omitted and the seller falls back to fetchTx. */
   private escrowWire(txid: string, rawHex?: string): { tx: string } | {} {
-    const w = this.d.txWire?.(txid, 5500) ?? rawHex
-    return w !== undefined && w.length <= 11200 ? { tx: w } : {}
+    const w = this.d.txWire?.(txid, 3000) ?? rawHex
+    return w !== undefined && w.length <= 6000 ? { tx: w } : {}
   }
 
   private noteFor(
@@ -580,10 +605,7 @@ export abstract class BuyerOps extends SellerOps {
         if (pay.accepted !== true) {
           if (/SpendGuard refused/i.test(String(pay.reason))) {
             await this.d.store.releaseBudget(ctx.actionId)
-            await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', {
-              cause: 'spend_guard_refused',
-              lastError: String(pay.reason).slice(0, 500)
-            })
+            await this.spendRefused(funding, String(pay.reason))
           } else
             await this.escalate(
               funding,
@@ -696,10 +718,7 @@ export abstract class BuyerOps extends SellerOps {
       if (r.accepted !== true) {
         if (/SpendGuard refused/i.test(String(r.reason))) {
           await this.d.store.releaseBudget(ctx.actionId)
-          await this.d.store.transition(funding.operationId, funding.revision, 'funding_failed', {
-            cause: 'spend_guard_refused',
-            lastError: String(r.reason).slice(0, 500)
-          })
+          await this.spendRefused(funding, String(r.reason))
         } else
           await this.escalate(
             funding,
@@ -749,10 +768,7 @@ export abstract class BuyerOps extends SellerOps {
           const live = (await this.d.store.operation(op.operationId))!
           if (sub.state === 'rejected' && /SpendGuard refused/i.test(sub.detail ?? '')) {
             await this.d.store.releaseBudget(ctx.actionId)
-            await this.d.store.transition(live.operationId, live.revision, 'funding_failed', {
-              cause: 'spend_guard_refused',
-              lastError: (sub.detail ?? '').slice(0, 500)
-            })
+            await this.spendRefused(live, sub.detail ?? '')
           } else
             await this.escalate(
               live,
@@ -1092,6 +1108,27 @@ export abstract class BuyerOps extends SellerOps {
         )
       }
       if (op.state === 'uncertain') return await this.reconcileUncertain(op)
+      if (op.state === 'funding_deferred') {
+        // parked on a spend-policy window — resume at dueAt into a fresh
+        // funding window (the parked span was never 'funding' time)
+        if (op.dueAt !== undefined && op.dueAt <= this.now())
+          await this.d.store.transition(op.operationId, op.revision, 'selected', {
+            cause: 'spend_window_reset',
+            data: { fundingSince: null }
+          })
+        return
+      }
+      if (op.state === 'refund_pending') {
+        // armed by the funding_failed rescan — a covenant that vanished
+        // after landing (reorg) has nothing left to reclaim
+        const txid = op.data.escrowTxid as string | undefined
+        if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid) && (await this.d.txFacts(txid)).verdict === 'dead') {
+          await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'landed_escrow_gone', dueHeight: null })
+          return
+        }
+        if (op.dueHeight !== undefined && height >= op.dueHeight) return await this.refund(op)
+        return
+      }
       if (op.state === 'awaiting_disclosure') {
         // a pushed 'delivered' can outrun tx propagation — its parked copy
         // re-runs the same verification until it resolves or the deal

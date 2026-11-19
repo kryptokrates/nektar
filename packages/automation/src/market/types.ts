@@ -116,6 +116,10 @@ export interface MarketDeps {
    *  become the seller's custody the moment the payment verifies */
   ownOutput?: (tx: Transaction, vout: number) => void | Promise<void>
   settleEscrow?: (tx: Transaction) => void | Promise<void>
+  /** rollback of settleEscrow's optimistic adoption when the wallet ledger
+   *  itself declares the tx dead (SpendGuard refusal, definitive reject,
+   *  conflicted): inputs revive, phantom outputs tombstone */
+  txDied?: (tx: Transaction) => void | Promise<void>
   afterPrepare?: (actionId: string) => void | Promise<void>
   transport: MarketTransport
   ai: AIExecutor
@@ -227,7 +231,16 @@ export const STATE_LIMITS: Record<string, { maxAgeMs: number; exit: StuckExit }>
   selected: { maxAgeMs: 15 * 60_000, exit: 'abort' },
   escalated: { maxAgeMs: 7 * 86_400_000, exit: 'escalate:human' },
   funding: { maxAgeMs: 30 * 60_000, exit: 'escalate:human' },
+  // a SpendGuard daily-cap refusal is a window, not a no — park the deal
+  // until the UTC-midnight reset (or an operator raise that lands first)
+  // instead of dying 'funding_failed'. Two days is the stuck bound; the
+  // deferral itself lapses at dueAt
+  funding_deferred: { maxAgeMs: 2 * 86_400_000, exit: 'escalate:human' },
   awaiting_disclosure: { maxAgeMs: 6 * 3600_000, exit: 'refund' },
+  // a refused escrow that landed anyway is a live covenant on our sats —
+  // park here until refundAfter, then reclaim. The exit is only the stuck
+  // bound: dueHeight is the real driver and can sit months out
+  refund_pending: { maxAgeMs: 180 * 86_400_000, exit: 'escalate:human' },
   refunding: { maxAgeMs: 15 * 60_000, exit: 'escalate:human' },
   uncertain: { maxAgeMs: 86_400_000, exit: 'escalate:human' },
   // seller

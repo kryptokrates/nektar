@@ -38,14 +38,14 @@ export function createMcpServer(mem: NektarMemory, ops?: ToolCtx['ops'], transpo
   const server = new McpServer({ name: 'nektar', version: '0.2.0' }, { instructions: INSTRUCTIONS, capabilities: { tools: {}, resources: {}, prompts: {} } })
   const low = server.server
   low.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: visibleTools().map((t) => ({
+    tools: (await visibleTools(mem)).map((t) => ({
       ...t,
       annotations: { readOnlyHint: READ_ONLY.has(t.name), destructiveHint: DESTRUCTIVE.has(t.name), idempotentHint: t.name === 'prove', openWorldHint: false }
     }))
   }))
   low.setRequestHandler(CallToolRequestSchema, async (req) => {
     try {
-      if (!visibleTools().some((t) => t.name === req.params.name)) throw new Error(`unknown tool ${req.params.name}`)
+      if (!(await visibleTools(mem)).some((t) => t.name === req.params.name)) throw new Error(`unknown tool ${req.params.name}`)
       const result = await callTool(mem, req.params.name, (req.params.arguments ?? {}) as Record<string, any>, { ops, external: transport?.external })
       const text = json(result ?? null)
       const parsed = JSON.parse(text) as unknown

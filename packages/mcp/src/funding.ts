@@ -253,7 +253,7 @@ export interface LiveFunding {
       avgFeePerAnchorSats: number
       runwayAnchors: number | null
     }>
-    costs: () => Array<{ txid: string; bytes: number; fee: number; at: string }>
+    costs: () => Array<{ txid: string; bytes: number; fee: number; spend: number; at: string }>
     importFunding: (txid: string) => Promise<unknown>
     refreshFunding: () => Promise<unknown>
   }
@@ -277,6 +277,24 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
   // import, indexer discovery, fee-vault mint) signals through addIfNew so
   // waitForFunding's poll can sleep event-driven instead of fixed-cadence
   let fundingWake: (() => void) | undefined
+  // adopt is fire-and-forget for latency, but never silently: a refusal names
+  // the outpoint and (via the chain-verified oracle, not an index) whether the
+  // coin is already spent — the difference between "dead funding tx, send
+  // another" and "already on the book"
+  const adopt = (u: { tx: Transaction; vout: number }): void => {
+    const tag = `${u.tx.id('hex').slice(0, 12)}…:${u.vout}`
+    void funds
+      .adopt(u.tx, u.vout)
+      .then(async (ok) => {
+        if (ok) return fundingWake?.()
+        const why =
+          (await funds.spendCheck?.(u.tx.id('hex'), u.vout).catch(() => undefined)) === true
+            ? 'outpoint already spent on-chain'
+            : 'already held or tombstoned'
+        l(`funding ${tag} refused — ${why}`)
+      })
+      .catch((e) => l(`funding ${tag} adopt failed: ${(e as Error).message}`))
+  }
   const addIfNew = (u: { tx: Transaction; vout: number }) => {
     txStore.put(u.tx)
     // first-party spend record beats any index or operator-named txid: an
@@ -285,17 +303,13 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
     // never landed and the outpoint is genuinely unspent again
     const spender = txStore.spender(u.tx.id('hex'), u.vout)
     if (spender === undefined) {
-      void funds.adopt(u.tx, u.vout)
-      fundingWake?.()
+      adopt(u)
       return
     }
     void ledger
       .walletTx({ txid: spender })
       .then((w) => {
-        if (importable(spender, w?.state)) {
-          void funds.adopt(u.tx, u.vout)
-          fundingWake?.()
-        }
+        if (importable(spender, w?.state)) adopt(u)
       })
       .catch(() => undefined) // unreadable ledger → stay skipped; the next import pass retries
   }

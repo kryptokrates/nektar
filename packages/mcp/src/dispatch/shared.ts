@@ -33,6 +33,22 @@ export const PAID_SALE_TOOLS = new Set([
 ])
 export const paidSaleEnabled = () => /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAID_DISCLOSURE') ?? '')
 
+/** the paid-sale authority: an explicit NEKTAR_PAID_DISCLOSURE decides
+ *  (truthy on, any other set value a hard off that outranks policy); unset,
+ *  an approved policy carrying `disclosure.paid` is the grant — `policy
+ *  approve` arms paid deals with no env and no restart */
+export async function paidSaleAuthorized(au: NektarMemory['automation'] | undefined): Promise<boolean> {
+  const env = nektarEnv('NEKTAR_PAID_DISCLOSURE')
+  if (env !== undefined && env !== '') return paidSaleEnabled()
+  if (au === undefined) return false
+  for (const r of await au.store.policies().catch(() => [])) {
+    if (r.revokedAt !== undefined) continue
+    const p = await au.store.activePolicy(r.policyHash).catch(() => undefined)
+    if (p !== undefined && p.disclosure.paid === true && p.agentPub === au.engine.agentPub && p.network === au.engine.network) return true
+  }
+  return false
+}
+
 /** live-network runtime surface handed in by the MCP/HTTP transport layer —
  *  absent under stdio-less callers (tests, hooks), in which case the funding
  *  tools fall back to mem's own reserve view */

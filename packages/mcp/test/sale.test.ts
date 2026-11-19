@@ -26,12 +26,12 @@ test('paid disclosure tools: hidden + refused unless NEKTAR_PAID_DISCLOSURE is s
   process.env.NEKTAR_TOOL_PROFILE = 'operator'
   try {
     delete process.env.NEKTAR_PAID_DISCLOSURE
-    const vis = new Set(visibleTools().map((t) => t.name as string))
+    const vis = new Set((await visibleTools()).map((t) => t.name as string))
     for (const n of SALE_TOOLS) assert.ok(!vis.has(n), `${n} must be hidden when unset`)
     await assert.rejects(() => callTool(seller, 'sale', { op: 'offer', value: 'aa', price: 100, refundAfter: 1, maxFee: 10 }), /paid disclosure is disabled/)
     process.env.NEKTAR_PAID_DISCLOSURE = '1'
     try {
-      const vis2 = new Set(visibleTools().map((t) => t.name as string))
+      const vis2 = new Set((await visibleTools()).map((t) => t.name as string))
       for (const n of SALE_TOOLS) assert.ok(vis2.has(n), `${n} must be listed when enabled`)
     } finally {
       delete process.env.NEKTAR_PAID_DISCLOSURE

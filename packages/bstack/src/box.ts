@@ -35,7 +35,10 @@ const toJ = (v: unknown): JValue => {
   if (v === null || typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') return v
   if (Array.isArray(v)) return v.map(toJ)
   const o = new JObject()
-  for (const [k, x] of Object.entries(v as Record<string, unknown>)) o.set(k, toJ(x))
+  // undefined members serialize the JSON.stringify way — dropped, not a
+  // crash: optional envelope fields ({...m, tx: undefined} shrink wires,
+  // sparse message records) must never poison the whole send
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) if (x !== undefined) o.set(k, toJ(x))
   return o
 }
 const fromJ = (v: JValue): unknown => {

@@ -58,6 +58,10 @@ test('policy: strict shape, stable hash, unknown constraints rejected', () => {
   assert.ok(policyError({ ...p, limits: { ...p.limits, perPurchaseSats: 9999 } }), 'per-action cap above daily cap')
   assert.ok(policyError({ ...p, sandbox: { mode: 'host' } }))
   assert.throws(() => policyHash({ ...p, v: 2 } as never))
+  // disclosure.paid is optional for pre-field policies but strict when present
+  assert.equal(policyError({ ...p, disclosure: { allowPublic: false, paid: true } }), undefined)
+  assert.ok(policyError({ ...p, disclosure: { allowPublic: false, paid: 'yes' } as never }))
+  assert.ok(policyError({ ...p, disclosure: { allowPublic: false, paid: true, extra: 1 } as never }))
 })
 
 test('policy decisions: allow inside, escalate over a limit, deny wrong agent/network/role', () => {
@@ -327,6 +331,67 @@ test('wallet: one outpoint, one live action; guard refusal and network rejection
   await w2.prepare(ctx('h', 'a'), 'send', t1)
   assert.equal((await w2.submit('a')).state, 'rejected')
   assert.equal((await w2.prepare(ctx('h', 'b'), 'send', t2)).state, 'prepared', 'a tx that never left the process frees its inputs')
+})
+
+test('wallet: first-party deaths run custody hooks — txDied on refusal/rejection, txSpent on air', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const funder = dryFunder()
+  const mkfund = (seed: string) => {
+    const ftx = new Transaction()
+    ftx.addInput({ sourceTXID: seed, sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromHex('51') })
+    ftx.addOutput({ satoshis: 50_000, lockingScript: new P2PKH().lock(funder.keyPair.toPublicKey().toAddress()) })
+    return { tx: ftx, vout: 0, satoshis: 50_000 }
+  }
+  const f = mkfund('00'.repeat(32))
+  const f2 = mkfund('11'.repeat(32))
+  const build = async (src = f) => {
+    const tx = new Transaction()
+    tx.addInput({ sourceTransaction: src.tx, sourceOutputIndex: src.vout, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })
+    tx.addOutput({ satoshis: src.satoshis - 100, lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])) })
+    await tx.sign()
+    return tx
+  }
+  // the SpendGuard-refused shape that leaked phantom change: refused at the
+  // gate → txDied gets the rebuilt tx so custody drops its outputs
+  const died: string[] = []
+  const spent: string[] = []
+  const w = new WalletCoordinator(store, {
+    broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }),
+    txDied: (tx) => void died.push(tx.id('hex')),
+    txSpent: (tx) => void spent.push(tx.id('hex'))
+  })
+  const t1 = await build()
+  await w.prepare(ctx('h', 'a'), 'send', t1)
+  assert.equal((await w.submit('a')).state, 'rejected')
+  assert.deepEqual(died, [t1.id('hex')], 'the refusal hands custody the tx to un-spend')
+  assert.equal(spent.length, 0)
+  // a transport failure is NOT a death — undecidable, no hooks
+  const w2 = new WalletCoordinator(store, {
+    broadcast: async () => {
+      throw new Error('socket died')
+    },
+    txDied: (tx) => void died.push(tx.id('hex')),
+    txSpent: (tx) => void spent.push(tx.id('hex'))
+  })
+  const t2 = await build()
+  await w2.prepare(ctx('h', 'b'), 'send', t2)
+  assert.equal((await w2.submit('b')).state, 'submission_unknown')
+  assert.deepEqual(died, [t1.id('hex')], 'submission_unknown must not kill custody')
+  // a network-observed rejection/conflict is a death too
+  const w3 = new WalletCoordinator(store, {
+    broadcast: async () => ({ status: 'success' }),
+    txDied: (tx) => void died.push(tx.id('hex')),
+    txSpent: (tx) => void spent.push(tx.id('hex'))
+  })
+  // t2's input stays leased to 'b' — submission_unknown is undecidable, so a
+  // new attempt must draw on a different coin (exactly custody's contract)
+  const t3 = await build(f2)
+  await w3.prepare(ctx('h', 'c'), 'send', t3)
+  assert.equal((await w3.submit('c')).state, 'submitted')
+  assert.deepEqual(spent, [t3.id('hex')], 'a successful submit settles custody')
+  assert.equal(await w3.observe(t3.id('hex'), { status: 'rejected', source: 'arc', reason: 'double spend' }), 'rejected')
+  assert.deepEqual(died, [t1.id('hex'), t3.id('hex')], 'a late chain rejection also returns custody')
 })
 
 test('wallet leases: a released row is dead to take() and prepare() readers alike', async (t) => {

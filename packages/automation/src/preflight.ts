@@ -55,8 +55,14 @@ export interface PreflightDeps {
   ceilings?: { hostMs?: number; chainMs?: number; storeMs?: number }
   /** stronger liveness probes the transport can supply when it knows the
    *  endpoints (a raw HTTP answer proves the socket; txFacts alone can't
-   *  distinguish a dead endpoint vs an unrecognized txid) */
-  probes?: { broadcaster?: () => Promise<boolean> }
+   *  distinguish a dead endpoint vs an unrecognized txid). `spend` reads
+   *  the guarded broadcaster's day ledger for the budget check */
+  probes?: {
+    broadcaster?: () => Promise<boolean>
+    spend?: () => Promise<
+      { spentTodaySats: number; maxPerDay: number; maxFeePerTx: number; costs?: Array<{ txid: string; spend: number; at: string }> } | undefined
+    >
+  }
   /** which checks to run — the watchdog re-runs only the cheap probe tier */
   only?: string[]
 }
@@ -283,6 +289,36 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
       : { check: 'funds', pass: false, detail: `${f.balanceSats} sats — needs ≥${need} for one deal + fees`, fix: `fund ${f.address}` }
   })
 
+  // A7b — budget headroom: the daily cap is one shared meter — upkeep mints
+  // count against it the same as deal escrows, so a fresh agent that already
+  // spent its day on trees/anchors cannot buy until midnight. Report the
+  // upkeep/deal split; gate on one deal's lock fitting inside the headroom.
+  push('budget', async () => {
+    const s = await deps.probes?.spend?.().catch(() => undefined)
+    if (s === undefined) return { check: 'budget', pass: true, detail: 'no spend-guard ledger on this instance — nothing to meter' }
+    if (s.maxPerDay >= Number.MAX_SAFE_INTEGER) return { check: 'budget', pass: true, detail: 'daily cap unbounded' }
+    let need = 2000
+    if (store !== undefined)
+      for (const row of await store.policies()) {
+        const p = row.revokedAt === undefined ? await store.activePolicy(row.policyHash) : undefined
+        if (p !== undefined) need = Math.max(need, p.limits.maxLockedSats + p.limits.perTxFeeSats)
+      }
+    const { splitDailySpend } = await import('./ledger.js')
+    const { deal, upkeep } =
+      store !== undefined && s.costs !== undefined ? await splitDailySpend(store, s.costs, now) : { deal: -1, upkeep: -1 }
+    const split = deal >= 0 ? ` — deals ${deal}, upkeep ${upkeep}` : ''
+    const headroom = s.maxPerDay - s.spentTodaySats
+    const detail = `today ${s.spentTodaySats}/${s.maxPerDay} sats${split}; one deal needs ~${need}`
+    return headroom >= need
+      ? { check: 'budget', pass: true, detail }
+      : {
+          check: 'budget',
+          pass: false,
+          detail: `${detail} — headroom ${headroom} short`,
+          fix: 'raise the daily cap (NEKTAR_MAX_SPEND_SATS_PER_DAY) or wait for the UTC-midnight reset'
+        }
+  })
+
   // A8 — watch liveness: in-flight wallet txids must still resolve a chain
   // state — a watched map that never drains stalls refund automation quietly.
   push('watch', async () => {
@@ -366,8 +402,8 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
   await Promise.all(pending)
   checks.sort(
     (a, b) =>
-      ['chain', 'broadcaster', 'hosts', 'store', 'payments', 'policy', 'funds', 'watch', 'spendguard', 'killswitch', 'conformance'].indexOf(a.check) -
-      ['chain', 'broadcaster', 'hosts', 'store', 'payments', 'policy', 'funds', 'watch', 'spendguard', 'killswitch', 'conformance'].indexOf(b.check)
+      ['chain', 'broadcaster', 'hosts', 'store', 'payments', 'policy', 'funds', 'budget', 'watch', 'spendguard', 'killswitch', 'conformance'].indexOf(a.check) -
+      ['chain', 'broadcaster', 'hosts', 'store', 'payments', 'policy', 'funds', 'budget', 'watch', 'spendguard', 'killswitch', 'conformance'].indexOf(b.check)
   )
   return { pass: checks.every((c) => c.pass), at: now, checks, downHosts }
 }

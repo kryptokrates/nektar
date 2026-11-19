@@ -66,25 +66,25 @@ const trackerFor = (chain: TestChain) => ({
  *  ledger's own `taken` counter via laneStock, not a table read */
 const usedMarketSlots = async (rt: Automation): Promise<number> => (await rt.laneStock()).market?.taken ?? 0
 
-test('profile: agent lists exactly the ten agent tools; operator lists all', () => {
+test('profile: agent lists exactly the ten agent tools; operator lists all', async () => {
   const prev = process.env.NEKTAR_TOOL_PROFILE
   try {
     delete process.env.NEKTAR_TOOL_PROFILE
     assert.deepEqual(
-      visibleTools()
+      (await visibleTools())
         .map((t) => t.name)
         .sort(),
       [...AGENT_TEN].sort()
     )
     process.env.NEKTAR_TOOL_PROFILE = 'agent'
     assert.deepEqual(
-      visibleTools()
+      (await visibleTools())
         .map((t) => t.name)
         .sort(),
       [...AGENT_TEN].sort()
     )
     process.env.NEKTAR_TOOL_PROFILE = 'operator'
-    const all = visibleTools().map((t) => t.name)
+    const all = (await visibleTools()).map((t) => t.name)
     assert.ok(all.length > AGENT_TEN.length, `operator sees more than ten (${all.length})`)
     const names: readonly string[] = all
     for (const n of AGENT_TEN) assert.ok(names.includes(n), `operator keeps ${n}`)

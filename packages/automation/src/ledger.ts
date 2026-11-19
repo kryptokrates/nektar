@@ -70,11 +70,33 @@ export function leasePredicate(store: AutomationStore): (txid: string, vout: num
   return (txid, vout) => store.leasedOutpoint(txid, vout)
 }
 
+/** today's SpendGuard records split by purpose: txids the wallet ledger
+ *  knows as escrow/payment are deal spend; everything else is upkeep
+ *  (mints, anchors, provisions). Doctor + `fund` report the split so an
+ *  upkeep-heavy day can't silently eat the deal budget */
+export async function splitDailySpend(
+  store: AutomationStore,
+  costs: Array<{ txid: string; spend: number; at: string }>,
+  now = Date.now()
+): Promise<{ deal: number; upkeep: number }> {
+  const day = new Date(now).toISOString().slice(0, 10)
+  let deal = 0,
+    upkeep = 0
+  for (const c of costs.filter((c) => c.at.startsWith(day))) {
+    const w = await store.walletTx({ txid: c.txid }).catch(() => undefined)
+    if (w !== undefined && (w.kind === 'escrow' || w.kind === 'payment')) deal += c.spend
+    else upkeep += c.spend
+  }
+  return { deal, upkeep }
+}
+
 export class TransactionWatcher {
   constructor(
     private store: AutomationStore,
     private observeFn: (txid: string) => Promise<TxObservationInput | undefined>,
-    private onRejected?: (txid: string, reason: string) => Promise<void> | void,
+    /** terminal death of a tracked tx — the row travels so the handler can
+     *  rebuild the tx (parents are stored) and free its custody */
+    private onRejected?: (w: WalletTx, reason: string) => Promise<void> | void,
     private opts?: {
       /** ms an 'exported' row may sit unaired before its leases release and
        *  custody takes its inputs back — the counterparty's window to air */
@@ -99,7 +121,7 @@ export class TransactionWatcher {
           if (next !== w.state) {
             await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
             changed++
-            if (o.status === 'rejected' || o.status === 'conflicted') await this.onRejected?.(w.txid, o.reason ?? o.spentBy ?? o.status)
+            if (o.status === 'rejected' || o.status === 'conflicted') await this.onRejected?.(w, o.reason ?? o.spentBy ?? o.status)
             if (next === 'confirmed' || next === 'rejected' || next === 'conflicted') await this.store.releaseLeases(w.actionId)
           }
           continue

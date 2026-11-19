@@ -145,6 +145,10 @@ export interface PersistedMemoryState {
   /** proof bundles for records imported via importShard — keyed 'shard:seq';
    *  these verify against the SOURCE chain's anchors (prove() fast-path) */
   importedBundles?: Record<string, ProofBundle>
+  /** shards written but possibly never anchored — shards() is anchors ∪
+   *  touched, so the write set itself must survive the restart or unanchored
+   *  shards go unnamed (sell/describeShard resolve by it) */
+  touched?: string[]
   promises: Array<{ shard: string; seq: number; issuedAt: number }>
   /** owner-declared shard policy: `private` shards refuse plain merkle
    *  citations — records on them may only be cited via a ZK proof.

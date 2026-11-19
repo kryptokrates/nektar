@@ -18,7 +18,7 @@ export {
   AutomationStore,
   classifyDeliveryError
 } from './store.js'
-export { type TxObservationInput, wrapBroadcast, leasePredicate, TransactionWatcher } from './ledger.js'
+export { type TxObservationInput, wrapBroadcast, leasePredicate, splitDailySpend, TransactionWatcher } from './ledger.js'
 export {
   type MarketMessage,
   type MarketTransport,

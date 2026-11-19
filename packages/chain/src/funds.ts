@@ -330,11 +330,22 @@ export abstract class FundsBase implements Funds {
         for (const u of stock) if (!this.reserved.has(op(u.tx.id('hex'), u.vout))) owned += u.satoshis
         if (owned - sats < floor) throw new FundsStarvedError(`funds: ${purpose} take of ${sats} sats would leave ${owned - sats} < deal floor ${floor}`)
       }
-      // proven parents first, then smallest-cover — the toolbox planner's
-      // documented order (completed → unproven → sending): an input whose
-      // parent carries a BUMP terminates its BEEF ancestry at the anchor
-      // instead of dragging unconfirmed parents into every spend
-      candidates.sort((a, b) => (b.tx.merklePath !== undefined ? 1 : 0) - (a.tx.merklePath !== undefined ? 1 : 0) || a.satoshis - b.satoshis)
+      // proven parents first, then shallowest unconfirmed ancestry, then
+      // smallest-cover — the toolbox planner's documented order (completed →
+      // unproven → sending): an input whose parent carries a BUMP terminates
+      // its BEEF ancestry at the anchor instead of dragging unconfirmed
+      // parents into every spend. The depth term ranks change outs of an
+      // already-broadcast tx (whose own inputs are proven) ahead of deeper
+      // chains, so fanned-out mint change gets consumed before any later
+      // mint's single-output remainder
+      const depth = (u: FundingOut): number => {
+        if (u.tx.merklePath !== undefined) return 0
+        const ins = u.tx.inputs
+        if (ins.length === 0) return 2
+        for (const i of ins) if (i.sourceTransaction?.merklePath === undefined) return 2
+        return 1
+      }
+      candidates.sort((a, b) => depth(a) - depth(b) || a.satoshis - b.satoshis)
       // first-party truth side: a 'spent' answer burns the candidate for
       // good and selection moves on — a hint only passes over, this drops
       for (const pick of candidates) {

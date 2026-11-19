@@ -290,7 +290,8 @@ export function openUpkeep(rt: Rt): void {
                     funding: src,
                     n: wantOuts,
                     satsPerOutput: outSats,
-                    lock: new P2PKH().lock(await signerAddress(key))
+                    lock: new P2PKH().lock(await signerAddress(key)),
+                    changeOutputs: cfg.changeFanout ?? 4
                   })
                   const br = await mem.broadcastTx(dtx)
                   if (br.status === 'success') {
@@ -367,6 +368,7 @@ export function openUpkeep(rt: Rt): void {
               lowWater:
                 kind === 'finger' ? (cfg.treeLowWater ?? 2) : kind === 'market' ? (cfg.treeLowWater ?? cfg.treeSize ?? 64) : (cfg.treeLowWater ?? spec.size),
               maxUnproven: cfg.treeMaxUnproven ?? 2,
+              changeFanout: cfg.changeFanout,
               size: spec.size,
               satsPerOutput: spec.satsPerOutput,
               lock: kind === 'market' ? undefined : spec.lock,

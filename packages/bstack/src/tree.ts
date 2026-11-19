@@ -21,6 +21,10 @@ export async function mintTree(p: {
   satsPerOutput?: number
   lock?: import('@bsv/sdk').LockingScript
   changeScript?: import('@bsv/sdk').LockingScript
+  /** change outputs to fan the remainder across — each later spend takes a
+   *  distinct vout off THIS tx, so its unconfirmed ancestry stays one hop
+   *  deep instead of chaining mint-to-mint (default 1 = a serial chain) */
+  changeOutputs?: number
 }): Promise<Transaction> {
   const { key, funding, n } = p
   const sats = p.satsPerOutput ?? 1
@@ -28,11 +32,14 @@ export async function mintTree(p: {
   if (!Number.isSafeInteger(sats) || sats < 1) throw new Error('mintTree: bad satsPerOutput')
   const w = p.wallet ?? (key instanceof PrivateKey ? new ProtoWallet(key) : undefined)
   if (!w) throw new Error('mintTree: wallet required when key is a signer')
+  const changeOuts = p.changeOutputs ?? 1
+  if (!Number.isInteger(changeOuts) || changeOuts < 1) throw new Error('mintTree: bad changeOutputs')
   const tx = new Transaction()
   tx.addInput({ sourceTransaction: funding.tx, sourceOutputIndex: funding.vout, unlockingScriptTemplate: unlockP2PKH(key) })
   const lock = p.lock ?? (await fundingLock(w, ORIGINATOR, DERIVATION, FUNDING_TAG))
   for (let i = 0; i < n; i++) tx.addOutput({ satoshis: sats, lockingScript: lock })
-  tx.addOutput({ lockingScript: p.changeScript ?? new P2PKH().lock(await signerAddress(key)), change: true })
+  const changeLock = p.changeScript ?? new P2PKH().lock(await signerAddress(key))
+  for (let i = 0; i < changeOuts; i++) tx.addOutput({ lockingScript: changeLock, change: true })
   await tx.fee()
   await tx.sign()
   return tx

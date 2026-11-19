@@ -5,6 +5,17 @@ import type { ActionContext } from './policy.js'
 
 export interface WalletDeps {
   broadcast: (tx: Transaction) => Promise<BroadcastResult>
+  /** first-party death of a tracked tx — frees live inputs, tombstones its
+   *  adopted outputs (funds.died). Fires when THIS ledger learns the tx
+   *  never aired or was rejected: a SpendGuard-refused tx has no chain
+   *  presence for `deadParent` to read, so the wallet-ledger verdict is
+   *  the only first-party signal a phantom parent's children can wedge on */
+  txDied?: (tx: Transaction) => void | Promise<void>
+  /** first-party custody mark for an aired tx — consumes inputs, adopts
+   *  owned outputs (funds.spent). The deal path still settles inline; this
+   *  dep is what lets a boot replay (resubmitPending) finish the custody
+   *  half of a submit whose caller died between prepare and settle */
+  txSpent?: (tx: Transaction) => void | Promise<void>
 }
 
 export type TxObservation =
@@ -116,6 +127,10 @@ export class WalletCoordinator {
       // custody (spent-marks, spendCheck, the tombstone sweep). A lease that
       // outlives its broadcast only wedges the change chain it consumed.
       await this.store.releaseLeases(actionId)
+      // custody settles here too, not only at the call site: a replayed row
+      // whose caller died between prepare and settle still drops its inputs
+      // and adopts its change — idempotent where the deal already settled
+      await Promise.resolve(this.deps.txSpent?.(this.rebuild(w))).catch(() => undefined)
       return { state: 'submitted', txid: w.txid }
     }
     if (w.state === 'submitted') {
@@ -125,6 +140,9 @@ export class WalletCoordinator {
     if (NEVER_LEFT.test(detail)) {
       await this.store.setTxState(actionId, 'rejected', { at: Date.now(), result: res, escaped: false }, true)
       await this.store.releaseLeases(actionId)
+      // the tx never left the process — any optimistic spent() adoption is a
+      // phantom: died() tombstones its owned outputs, revives live inputs
+      await Promise.resolve(this.deps.txDied?.(this.rebuild(w))).catch(() => undefined)
       return { state: 'rejected', txid: w.txid, detail }
     }
     const state: TxState = DEFINITIVE.test(detail) && !detail.startsWith('transport:') ? 'rejected' : 'submission_unknown'
@@ -132,7 +150,10 @@ export class WalletCoordinator {
     // a definitively-rejected tx never airs — its inputs are either spent
     // (custody already knows) or still live; holding the lease only blocks
     // the next attempt with a phantom 'already leased' collision
-    if (state === 'rejected') await this.store.releaseLeases(actionId)
+    if (state === 'rejected') {
+      await this.store.releaseLeases(actionId)
+      await Promise.resolve(this.deps.txDied?.(this.rebuild(w))).catch(() => undefined)
+    }
     return { state, txid: w.txid, detail }
   }
 
@@ -143,7 +164,13 @@ export class WalletCoordinator {
     await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
     // every observed verdict closes the tx's story — the lease has said all
     // it can; liveness verdicts belong to custody from here
-    if (next === 'confirmed' || next === 'rejected' || next === 'conflicted') await this.store.releaseLeases(w.actionId)
+    if (next === 'confirmed' || next === 'rejected' || next === 'conflicted') {
+      await this.store.releaseLeases(w.actionId)
+      // a rejected/conflicted tx's adopted outputs are phantom — the change
+      // belongs to whatever spend won (or to nobody); drop it and revive
+      // the inputs that are still provably live
+      if (next !== 'confirmed') await Promise.resolve(this.deps.txDied?.(this.rebuild(w))).catch(() => undefined)
+    }
     return next
   }
 

@@ -3,7 +3,7 @@
 // The dispatch machinery lives in ./dispatch/ — callTool and the ToolCtx
 // type are re-exported here so the public surface of this module is unchanged.
 import { nektarEnv } from '@nektar/core'
-import { PAID_SALE_TOOLS, paidSaleEnabled } from './dispatch/shared.js'
+import { PAID_SALE_TOOLS, paidSaleAuthorized } from './dispatch/shared.js'
 
 export { callTool } from './dispatch/index.js'
 export type { ToolCtx } from './dispatch/shared.js'
@@ -349,7 +349,7 @@ export const TOOLS = [
   {
     name: 'sale',
     description:
-      'V3 DisclosureSale (GOAL-v7, BIP-199 escrow) — paid disclosure as one state machine. op=offer {value,price,refundAfter,maxFee,buyerPub?,expiresAt?}: seller wraps a payload (BRC-42 to buyerPub, or public) → {cfg,wrapped,sellerPub,offerSig}. op=offerMemory {shard,seq,price,refundAfter,maxFee,buyerPub?,expiresAt?}: sell one memory record — encrypted goes as its fragment key + ciphertext, plaintext as the canonical fragment; returns commitment {leaf,anchorTxid,hdp,authorPub,proof} so the buyer verifies inclusion BEFORE funding. op=escrow {cfg,amount,offer?}: buyer funds; pass offer={sellerPub,offerSig,expiresAt,commitment} for pre-funding sig + leaf-path + expiry checks. op=complete {cfg,utxo,wrapped,changeSats}: the buy tx — reveals wrapped on-chain, pays the seller price, returns change. op=refund {cfg,utxo,lockTime,changeSats}: depositor reclaim after cfg.refundAfter (locktime-gated). op=claim {txHex,hWrapped,sellerPub?,offerMode?,commitment?}: buyer extracts + verifies the payload (leaf-commitment + provenance check when commitment given). Requires NEKTAR_PAID_DISCLOSURE.',
+      'V3 DisclosureSale (GOAL-v7, BIP-199 escrow) — paid disclosure as one state machine. op=offer {value,price,refundAfter,maxFee,buyerPub?,expiresAt?}: seller wraps a payload (BRC-42 to buyerPub, or public) → {cfg,wrapped,sellerPub,offerSig}. op=offerMemory {shard,seq,price,refundAfter,maxFee,buyerPub?,expiresAt?}: sell one memory record — encrypted goes as its fragment key + ciphertext, plaintext as the canonical fragment; returns commitment {leaf,anchorTxid,hdp,authorPub,proof} so the buyer verifies inclusion BEFORE funding. op=escrow {cfg,amount,offer?}: buyer funds; pass offer={sellerPub,offerSig,expiresAt,commitment} for pre-funding sig + leaf-path + expiry checks. op=complete {cfg,utxo,wrapped,changeSats}: the buy tx — reveals wrapped on-chain, pays the seller price, returns change. op=refund {cfg,utxo,lockTime,changeSats}: depositor reclaim after cfg.refundAfter (locktime-gated). op=claim {txHex,hWrapped,sellerPub?,offerMode?,commitment?}: buyer extracts + verifies the payload (leaf-commitment + provenance check when commitment given). Requires paid-sale authority: NEKTAR_PAID_DISCLOSURE=1 or an approved policy with disclosure.paid.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -782,8 +782,10 @@ export const TOOLS = [
 /** tools visible to clients right now — paid-disclosure tools are gated by env */
 const AGENT_TOOLS = new Set(['remember', 'recall', 'groundedAnswer', 'verifyReceipt', 'want', 'sell', 'deals', 'fund', 'doctor', 'automationDoctor'])
 const toolProfile = (): 'agent' | 'operator' => ((nektarEnv('NEKTAR_TOOL_PROFILE') ?? 'agent').toLowerCase() === 'operator' ? 'operator' : 'agent')
-export const visibleTools = () =>
-  TOOLS.filter((t) => (toolProfile() === 'operator' || AGENT_TOOLS.has(t.name)) && (!PAID_SALE_TOOLS.has(t.name) || paidSaleEnabled()))
+export const visibleTools = async (mem?: import('./memory.js').NektarMemory) => {
+  const paid = await paidSaleAuthorized(mem?.automation)
+  return TOOLS.filter((t) => (toolProfile() === 'operator' || AGENT_TOOLS.has(t.name)) && (!PAID_SALE_TOOLS.has(t.name) || paid))
+}
 
 /** MCP over stdio lives in mcp-server.ts (it owns the SDK wiring — server.ts
  *  stays dependency-free of it; bin.ts + index.ts import from there) */

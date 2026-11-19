@@ -78,6 +78,36 @@ export abstract class IngressOps extends MarketBase {
       // reconcile late rejections; this is the same watch for refundTxid,
       // bounded to the 60 min after the transition — post-submit rejections
       // surface within a couple of blocks on a slow chain
+      // a refused escrow that lands anyway (manual reair, a peer that
+      // relayed it before the refusal returned) is a live covenant holding
+      // our sats — funding_failed is dead but the money is not. Arm the
+      // refund path at refundAfter; 'dead' verdicts leave the op alone.
+      // Direct rails are skipped: a landed P2PKH went to the seller —
+      // nothing locked on our side for refund() to reclaim.
+      for (const op of await this.d.store.operations({ role: 'buyer', states: ['funding_failed'] })) {
+        try {
+          const pending = op.data.pendingEscrow as { cfg?: { direct?: boolean; refundAfter?: string | number }; utxo?: { txid?: string } } | undefined
+          const txid = (op.data.escrowTxid as string | undefined) ?? pending?.utxo?.txid
+          if (txid === undefined || this.d.txFacts === undefined || pending?.cfg?.direct === true) continue
+          if (!this.reconcileGate(op.operationId, txid)) continue
+          const facts = await this.d.txFacts(txid)
+          // proof in hand — the covenant provably exists. A seen-hint alone
+          // never arms: the tx can still die unconfirmed, and refund_pending
+          // claims locked sats a hint cannot establish
+          if (facts.verdict !== 'mined') continue
+          const cfg = (op.data.escrow as Record<string, unknown> | undefined) ?? pending?.cfg
+          const utxo = (op.data.utxo as Record<string, unknown> | undefined) ?? pending?.utxo
+          if (cfg === undefined || utxo === undefined) continue
+          const refundAfter = Number(cfg.refundAfter ?? 0)
+          await this.d.store.transition(op.operationId, op.revision, 'refund_pending', {
+            cause: 'refused_escrow_landed',
+            data: { escrow: cfg, utxo, escrowTxid: txid },
+            dueHeight: refundAfter > 0 ? refundAfter : null
+          })
+        } catch {
+          /* status probes must not stall the tick */
+        }
+      }
       for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'] })) {
         try {
           const txid = op.data.refundTxid as string | undefined
@@ -180,8 +210,13 @@ export abstract class IngressOps extends MarketBase {
    *  reader falls back to `fetchTx` when `tx` is absent */
   private shrinkWire(m: MarketMessage): MarketMessage | undefined {
     const w = m as { type: string; tx?: string }
-    if ((w.type === 'accept' || w.type === 'delivered' || w.type === 'note' || w.type === 'sellerNote') && typeof w.tx === 'string')
-      return { ...m, tx: undefined } as MarketMessage
+    if ((w.type === 'accept' || w.type === 'delivered' || w.type === 'note' || w.type === 'sellerNote') && typeof w.tx === 'string') {
+      // the key must GO, not go undefined — a tx:undefined member still
+      // serializes where a missing key doesn't, and the shrunk envelope is
+      // the oversized-envelope recovery path
+      const { tx: _drop, ...rest } = w
+      return rest as MarketMessage
+    }
     return undefined
   }
 

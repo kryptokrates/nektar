@@ -40,7 +40,7 @@ export abstract class MarketBase {
     this.now = d.now ?? Date.now
     this.me = d.key.toPublicKey().toString()
     this.network = d.network
-    if (d.broadcast) this.wallet = new WalletCoordinator(d.store, { broadcast: d.broadcast })
+    if (d.broadcast) this.wallet = new WalletCoordinator(d.store, { broadcast: d.broadcast, txDied: d.txDied, txSpent: d.settleEscrow })
   }
 
   get pub(): string {
@@ -56,6 +56,14 @@ export abstract class MarketBase {
   /** resolves once every unit of work queued so far has settled */
   idle(): Promise<void> {
     return this.chain.then(() => undefined)
+  }
+
+  /** boot replay: rows a crashed process left 'prepared' or
+   *  'submission_unknown' re-submit from their stored bytes — the ledger row
+   *  is the intent and 'already known' answers settle rows that actually
+   *  made the wire. Queued behind in-flight work, never racing a live deal */
+  resubmitPending(): Promise<Array<{ actionId: string; state: import('../store.js').TxState }>> {
+    return this.run(async () => (await this.wallet?.resubmitPending()) ?? [])
   }
 
   /** a pushed transaction status (broadcaster callback / node event) — only a

@@ -59,7 +59,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // the host-health set the lane readers maintain.
   const pfCfg = { network: cfg.network, dataDir: cfg.dataDir, marketHosts, boxOffice: cfg.boxOffice, unattended: cfg.unattended, now: cfg.now }
   const runChecks = (only?: string[]) =>
-    runPreflight({ mem, store, objectStore, cfg: pfCfg, probes: { broadcaster: cfg.broadcasterProbe }, ...(only !== undefined ? { only } : {}) })
+    runPreflight({ mem, store, objectStore, cfg: pfCfg, probes: { broadcaster: cfg.broadcasterProbe, spend: cfg.spendProbe }, ...(only !== undefined ? { only } : {}) })
   let lastReport: PreflightReport | undefined = await runChecks()
   if (cfg.strict === true && !lastReport.pass) {
     const failed = lastReport.checks
@@ -300,6 +300,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     settleEscrow: async (tx) => {
       await mem.funds.spent(tx)
     },
+    txDied: async (tx) => {
+      await mem.funds.died(tx)
+    },
     transport,
     ai: cfg.ai ?? aiFromEnv(),
     killed: () => killSwitchActive(cfg.dataDir).killed,
@@ -314,6 +317,16 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     logStream
   })
   rt.engine = engine
+  // boot replay: 'prepared'/'submission_unknown' rows are signed intents a
+  // crashed process never got a verdict for — re-air them from stored bytes
+  // before the first deal tick. Fire-and-forget behind the engine's chain;
+  // idempotent on the wire ('already known' → submitted)
+  void engine
+    .resubmitPending()
+    .then((rs) => {
+      for (const r of rs) log(`automation: boot replay ${r.actionId} → ${r.state}`)
+    })
+    .catch((e) => log(`automation: boot replay failed: ${(e as Error).message}`))
   openOutbox(rt)
   openUpkeep(rt)
   openWatches(rt)

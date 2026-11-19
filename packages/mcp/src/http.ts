@@ -96,6 +96,12 @@ export const OPENAPI = {
         responses: { 200: { description: 'catalog' }, 404: { description: 'payments disabled' } }
       }
     },
+    '/.well-known/agent.json': {
+      get: {
+        summary: 'agent card — MCP/REST endpoints, auth requirement, capability + market flags (the join surface a foreign agent reads first)',
+        responses: { 200: { description: 'agent card' } }
+      }
+    },
     '/dashboard': {
       get: {
         summary: 'operator audit surface — one HTML page: identity, money, receipts, market. Token-gated (non-public route).',
@@ -333,11 +339,16 @@ export function createHttpApi(
         const tok = nektarEnv('NEKTAR_HTTP_TOKEN')
         const publicPath =
           url.pathname === '/v1/health' ||
+          // bare aliases — container/orchestrator probes hit /health and
+          // /healthz verbatim; liveness is a read-only signal either way
+          url.pathname === '/health' ||
+          url.pathname === '/healthz' ||
           url.pathname === '/v1/automation/health' ||
           url.pathname === '/v1/verify' ||
           url.pathname === '/v1/badge' ||
           url.pathname === '/.well-known/x402' ||
           url.pathname === '/.well-known/nektar' ||
+          url.pathname === '/.well-known/agent.json' ||
           url.pathname.startsWith('/v1/pack/') ||
           url.pathname.startsWith('/v1/proof/') ||
           url.pathname.startsWith('/v1/zkproof/') ||
@@ -364,7 +375,7 @@ export function createHttpApi(
         }
         try {
           if (url.pathname === '/mcp') return await mcp(req, res, authed)
-          if (req.method === 'GET' && url.pathname === '/v1/health') return send(200, { ok: true })
+          if (req.method === 'GET' && (url.pathname === '/v1/health' || url.pathname === '/health' || url.pathname === '/healthz')) return send(200, { ok: true })
           if (req.method === 'POST' && url.pathname === '/v1/lane') {
             // direct carrier push — the same bytes a box/lane read would
             // fetch, admitted through the same verify+dedupe before ingest
@@ -604,9 +615,9 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
             mem.events.emit('change', 'automation')
             return send(200, r)
           }
-          if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: visibleTools() })
+          if (req.method === 'GET' && url.pathname === '/v1/tools') return send(200, { tools: await visibleTools(mem) })
           if (req.method === 'POST' && p[0] === 'v1' && p[1] === 'tools' && p.length === 3) {
-            if (!visibleTools().some((t) => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
+            if (!(await visibleTools(mem)).some((t) => t.name === p[2])) return send(404, { error: `unknown tool ${p[2]}` })
             try {
               return send(200, await callTool(mem, p[2], await body(req), { ops, external: !authed }))
             } catch (e) {
@@ -740,6 +751,38 @@ es.onopen = () => { document.getElementById('live').style.background = '#4cc26b'
           // pack sharing: any visitor may fetch a public shard's pack + discover
           // what's offered — the viral cold-start edge (importShard re-verifies
           // every bundle, so serving adds zero trust). NEKTAR_PACK_SHARE=0 opts out.
+          // the agent card — what a foreign agent fetches to learn how to
+          // call this instance: endpoints, auth requirement, capability
+          // flags. Read-only discovery, safe unauthenticated.
+          if (req.method === 'GET' && url.pathname === '/.well-known/agent.json') {
+            const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${req.headers.host ?? 'localhost'}`
+            return send(200, {
+              name: 'nektar',
+              version: '0.2.0',
+              description: 'Verifiable, encrypted agent memory anchored on BSV — recall, proofs, and an autonomous sats marketplace over MCP',
+              network: nektarEnv('NEKTAR_NETWORK') ?? 'regtest',
+              endpoints: {
+                mcp: `${base}/mcp`,
+                tools: `${base}/v1/tools`,
+                call: `${base}/v1/tools/{name}`,
+                openapi: `${base}/v1/openapi.json`,
+                health: `${base}/v1/health`,
+                discovery: `${base}/.well-known/nektar`
+              },
+              authentication: { scheme: 'bearer', header: 'Authorization', required: nektarEnv('NEKTAR_HTTP_TOKEN') !== undefined },
+              capabilities: {
+                memory: true,
+                receipts: true,
+                market: mem.automation != null,
+                marketHosts: marketHostsFromEnv()
+              },
+              join: {
+                mcp: 'any streamable-HTTP MCP client: url <mcp>, header Authorization: Bearer <token>',
+                rest: 'GET /v1/tools then POST /v1/tools/{name} with a JSON body',
+                doc: 'docs/JOIN-AGENT.md'
+              }
+            })
+          }
           if (req.method === 'GET' && url.pathname === '/.well-known/nektar') {
             if (/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')) return send(404, { error: 'pack sharing disabled (NEKTAR_PACK_SHARE=0)' })
             const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${req.headers.host ?? 'localhost'}`

@@ -58,6 +58,15 @@ export const handlers: Record<string, ToolHandler> = {
     const slots = await au.marketSlots()
     const laneStock = await au.laneStock()
     const live = (await au.store.policies()).filter((x) => x.revokedAt === undefined)
+    // one shared daily meter — surface today's upkeep/deal split so an
+    // upkeep-heavy day never reads as 'funded' while deal headroom is gone
+    let spendToday: Record<string, unknown> | undefined
+    if (d.ctx.ops?.costs !== undefined && w.caps !== undefined) {
+      const { splitDailySpend } = await import('@nektar/automation')
+      const caps = w.caps as { maxPerDay?: number }
+      const { deal, upkeep } = await splitDailySpend(au.store, d.ctx.ops.costs() as Array<{ txid: string; spend: number; at: string }>)
+      spendToday = { dealSats: deal, upkeepSats: upkeep, capSats: caps.maxPerDay, headroomSats: (caps.maxPerDay ?? 0) - deal - upkeep }
+    }
     return {
       address: w.address,
       network: au.engine.network,
@@ -65,6 +74,7 @@ export const handlers: Record<string, ToolHandler> = {
       utxos: Number(w.utxos ?? 0),
       marketSlots: slots,
       laneStock,
+      ...(spendToday !== undefined ? { spendToday } : {}),
       ...(live.length === 1 ? { budget: await au.store.budgetStatus(live[0].policyHash) } : {})
     }
   }

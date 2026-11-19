@@ -235,6 +235,10 @@ export abstract class MemAnchor extends MemTx {
     st.save({
       version: 1,
       shards,
+      // shards with records but no anchor yet live nowhere else — persist
+      // the write set itself or a restart orphans them (sell/describeShard
+      // resolve shards() = anchors ∪ touched)
+      touched: [...this.touched],
       promises: this.promises,
       flags: Object.fromEntries(this.flags),
       importedBundles: Object.fromEntries(this.importedBundles),
@@ -262,6 +266,9 @@ export abstract class MemAnchor extends MemTx {
       this.touched.add(shard)
     }
     this.promises.push(...s.promises)
+    // written-but-never-anchored shards — the shard store still holds their
+    // records; rejoin the set so shards() can name them again
+    for (const shard of s.touched ?? []) this.touched.add(shard)
     // state files written before the transaction graph kept parents here
     for (const hex of Object.values(s.txHex ?? {})) {
       try {

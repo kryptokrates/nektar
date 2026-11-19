@@ -37,6 +37,8 @@
     "config:nektar": "node tools/config.mjs",
     "service": "node tools/service.mjs",
     "automation": "node tools/automation.mjs",
+    "agent:new": "node tools/agent-new.mjs",
+    "demo:market:testnet": "node tools/demo-market.mjs",
     "setup:codex": "node tools/setup-codex.mjs",
     "demo": "node tools/demo.mjs",
     "mcp:smoke": "node packages/mcp/demo/gateway-smoke.mjs",

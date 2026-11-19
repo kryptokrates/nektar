@@ -30,5 +30,20 @@ test('key lock: a live holder refuses the second acquire; release frees it; a st
   writeFileSync(file, JSON.stringify({ owner: '99999@elsewhere', beat: Date.now() - 60_000 }))
   const release3 = await acquireLock(file, 'key')
   await release3()
+  // a dead LOCAL pid is displaced at once even with a fresh-looking beat —
+  // the killed-process case a 20s heartbeat cannot see
+  const deadLocal = join(dir, 'dead.lock')
+  writeFileSync(deadLocal, JSON.stringify({ owner: `99999999@${(await import('node:os')).hostname()}`, beat: Date.now() }))
+  const release4 = await acquireLock(deadLocal, 'key')
+  await release4()
+  // a corrupt lock file: fresh mtime refuses (a live writer could have left
+  // it), an old corpse yields
+  const corrupt = join(dir, 'corrupt.lock')
+  writeFileSync(corrupt, 'not json {{{')
+  const { utimesSync } = await import('node:fs')
+  const old = new Date(Date.now() - 120_000)
+  utimesSync(corrupt, old, old)
+  const release5 = await acquireLock(corrupt, 'key')
+  await release5()
   assert.ok(keyLockFile('ab'.repeat(20)).includes('nektar-key-'), 'lock file names the key')
 })

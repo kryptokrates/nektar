@@ -1,0 +1,129 @@
+# nektar — Live Friction Map
+
+The five journeys that decide whether an underdog network gets adopted,
+what each pays in the three currencies today, and where the wall is.
+Re-score after every friction PR. (Baseline: the user's quote — "any
+competing underdog system needs less friction to adoption, rather than
+more.")
+
+## Table of Contents
+
+- [J1 · Stranger → announced operator](#j1--stranger--announced-operator)
+- [J2 · Fresh instance → non-empty first run](#j2--fresh-instance--non-empty-first-run)
+- [J3 · External AI client → first tool call](#j3--external-ai-client--first-tool-call)
+- [J4 · Agent → settled deal](#j4--agent--settled-deal)
+- [J5 · Broken thing → named cause](#j5--broken-thing--named-cause)
+- [Cross-cutting walls](#cross-cutting-walls)
+
+## J1 · Stranger → announced operator
+
+**First value:** their signed card visible on the dir lane +
+`doctor` green. **Target:** <30 min. **Artifact:** `docs/JOIN-TESTNET.md`
++ `deploy/hub/` + `deploy/agent/`.
+
+| Step | Time | Effort | Knowledge | Triage |
+| ---- | ---- | ------ | --------- | ------ |
+| clone + `.env` copy | 1 min | trivial | git, docker | keep |
+| four secrets | 2 min | invent ×4 | openssl exists | **MOVE → `install.sh` generates** |
+| `NEKTAR_MARKET_HOSTS` | — | decide | "what are my public URLs?" | **MOVE → default discovery** |
+| funding WIF + sats | ~20 min | wallet+faucet or grant ask | BSV, WIF, testnet | **MOVE → auto-WIF + grant link** |
+| public URL/TLS | 10–30 min | DNS+proxy | DNS, TLS, ports | KEEP (real world) — but doc offers plain-IP testnet exception |
+| `compose up` | 5 min | one command | — | keep (image-only now) |
+| verify card | 1 min | one curl | — | keep |
+
+**Score:** ~7/10 (was ~4 before image-only compose + JOIN-TESTNET).
+**Biggest remaining wall:** the funding WIF — the only step where a
+stranger can stall indefinitely without us. Fix: the grant flow ("ask
+us and we send 500k testnet sats") must be a *link in the doc*, not a
+conversation — a funding-request endpoint or a faucet name.
+
+## J2 · Fresh instance → non-empty first run
+
+**First value:** `recall` returns real content. **Target:** <5 min.
+**Artifact:** `openRuntime` boot path, dir-lane announce import.
+
+| Step | Time | Effort | Knowledge | Triage |
+| ---- | ---- | ------ | --------- | ------ |
+| start container | 1 min | none | — | keep |
+| bootstrap host union | <1 min | none (automatic) | — | keep — done |
+| pack import | ~1 min | none (seed domains) | — | keep — done |
+| `recall` answers | — | one call | — | keep |
+
+**Score:** ~8/10 — zero-config discovery + seed import landed; the
+remaining question is *what packs ship* and whether a stranger's domain
+list matches. If the first answer is "we ship nothing yet", the whole
+journey fails at the value moment regardless of speed.
+
+## J3 · External AI client → first tool call
+
+**First value:** `recall` from Claude Code/Codex/OpenClaw/Hermes.
+**Target:** <3 min. **Artifact:** MCP stdio/HTTP + `/v1` surface.
+
+| Client | Path | Friction |
+| ------ | ---- | -------- |
+| Claude Code | `setup:claude` merges config | keep — one command |
+| Codex | `setup:codex` | keep — one command |
+| OpenClaw / any MCP-native | MCP stanza paste | **MOVE → publish per-platform snippet** |
+| Hermes / function-calling | needs `/v1/tools` + HTTP bearer | **MOVE → thin shim doc + OpenAPI stanza** |
+| raw HTTP | `/v1/tools/{name}` + bearer | keep |
+
+**Score:** ~6/10. The MCP surface is conforming (Jakob's law working);
+the missing piece is the **frozen tool contract doc** + per-platform
+stanzas. Right now the surface is "whatever the server happens to
+expose" — that's invisible friction for the second integrator.
+
+## J4 · Agent → settled deal
+
+**First value:** `want → quote → escrow → disclosure → settled`.
+**Target:** bounded by watch+poll; p50 visible. **Artifact:** the whole
+deal path (this suite's battleground).
+
+| Phase | Live wall hit | Fix landed |
+| ----- | ------------- | ---------- |
+| want dies before slow quote | T2 failure | `wantExtendMs` republish — keep-alive at collect boundary |
+| mint + escrow share one UTXO | T1/T4 starvation | `reserveOuts` fan-out — medium outputs on hand |
+| card evicted before tree proves | announce loss | keep-alive every 4 min inside host's 10-min window |
+| accept parks behind dead-host repair | R1 starvation | pooled outbox pump + `deliverBoundMs` |
+| host refuses carrier — thin ancestry | carrier refusal | `NEKTAR_ANCHORED_LANES` + vendored bbox patch |
+| wedged leg parks whole pump | silent wedge | `deliverBoundMs`, `bound()` on upkeep legs |
+
+**Score:** ~6/10 — every class has a fix shipped or in-flight; the
+score goes to 8+ when the full suite passes clean in a single run.
+**The honest note:** deal friction is physics-limited (block cadence,
+mining), but every *unnecessary* wait inside that physics has been
+named and bounded.
+
+## J5 · Broken thing → named cause
+
+**First value:** an operator can self-diagnose without us. **Target:**
+error → legible cause in logs, instantly. **Artifact:** log surface +
+`doctor` + phase tagging.
+
+| Failure | Before | Now |
+| ------- | ------ | --- |
+| wedged upkeep | silent `pumping` forever | `upkeep(finger) exceeded …` |
+| dead host stalls sends | serial pump wedged | bounded delivery, transport-class retry |
+| poisoned journal | retries forever, 80 poisoned rows | dead-ancestry eviction + `beefGaps` skip |
+| suite quiet = wedge? | indistinguishable | `[suite quiet <n>s] last: <line>` |
+
+**Score:** ~7/10. Remaining: `doctor` output shape needs to name the
+*next command* per finding, not just the state — the bumper pattern.
+
+## Cross-cutting walls
+
+Ranked by leverage — where the next friction dollar goes:
+
+1. **Funding acquisition** (J1) — the one journey a stranger cannot
+   complete without outside action. A grant-link or faucet name in the
+   doc converts a stall into a step.
+2. **Lane-stock cold start** (J4, internal) — a fresh agent pays a
+   block-wait before its first carrier. Pre-proven seed stock in the
+   image, or `NEKTAR_ANCHORED_LANES=all` on patched hosts, converts a
+   wait into zero-conf serving.
+3. **Tool contract freeze** (J3) — integrators can't pin against
+   "whatever the server exposes". A named minimal contract
+   (`recall`/`commit`/`verify` + `automation`) is the adapter MVP's
+   actual deliverable.
+4. **`doctor` → next-command mapping** (J5) — health output that names
+   the unblock command per finding.
+5. **The grant/faucet link** — a funding ask that isn't a conversation.

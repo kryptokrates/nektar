@@ -163,7 +163,11 @@ test('ledger: proven stock is served before anchored stock (knex parity)', async
   try {
     const key = PrivateKey.fromRandom()
     const anchored = await anchoredTree(key, 1)
-    const proven = await provenTree(key, 1)
+    // a different funding amount — fakeParent(key) is deterministic, so
+    // identical mint params would mint the SAME txid and the second add
+    // would silently overwrite the first tree
+    const proven = await mintTree({ key, funding: fund(key, 2_000_000), n: 1, satsPerOutput: 1000 })
+    prove(proven)
     for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(kx)]) {
       // anchored first in insertion order — ordering, not arrival, must decide
       await l.add(anchored, 1)

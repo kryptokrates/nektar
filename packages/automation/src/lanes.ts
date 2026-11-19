@@ -2,6 +2,7 @@
 // inbox msgs surface (sendBox/readBox/ackBox), host-health notes, the
 // republish queue, and the want/offer/inbox poll passes.
 import { requeueAckItems, trackFanout } from './fanout.js'
+import { compositeMsgs, msgboxLane } from './msgbox.js'
 import type { MarketMessage } from './market.js'
 import type { FingerRec, Rt } from './rtctx.js'
 
@@ -380,6 +381,16 @@ export function openLanes(rt: Rt): void {
             }
           }
         })
+  // the standard MessageBox reach plane (@bsv/message-box-client) — a deal
+  // note can reach any BRC-100 identity on the ecosystem hosts, no shared
+  // nektar hosts needed. Opt-in (NEKTAR_MSGBOX=1 / cfg.msgbox*); composite
+  // with the lightweb lane when both are up: send fans to both, collect
+  // merges + dedups, ack covers both. cfg.messages injected stays untouched.
+  const stdMsgs =
+    cfg.messages === undefined
+      ? msgboxLane({ wallet, network: cfg.network, enabled: cfg.msgbox, host: cfg.msgboxHost, client: cfg.msgboxClient, box: cfg.msgboxName })
+      : undefined
+  if (stdMsgs !== undefined) rt.msgs = rt.msgs === undefined ? stdMsgs : compositeMsgs(rt.msgs, stdMsgs)
   // items a previous pass's background full read delivered after the fast
   // quorum-1 answer — drained at the top of the next pass so a slow host's
   // exclusive items still arrive without ever gating this pass on it

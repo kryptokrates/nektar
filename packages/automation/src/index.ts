@@ -57,14 +57,13 @@ export {
   type ToolboxStoreHandle,
   type BasketRow,
   NEKTAR_BASKET,
-  RegtestWalletServices,
   openToolboxWallet,
   openToolboxStore,
   basketRows,
   ToolboxFunder,
-  fundToolbox,
-  LiveWalletServices
+  fundToolbox
 } from './toolbox.js'
+export { RegtestWalletServices, LiveWalletServices } from './toolbox-services.js'
 export { WalletFunds } from './wallettfunds.js'
 export { SqlFunds } from './sqlfunds.js'
 export { type PreflightDeps, WATCHDOG_CHECKS, runPreflight } from './preflight.js'

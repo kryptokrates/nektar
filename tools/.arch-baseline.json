@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 8253,
+      "loc": 8252,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1158,
@@ -204,6 +204,10 @@
     }
   },
   "files": {
+    "packages/automation/src/index.ts": {
+      "loc": 97,
+      "fanout": 20
+    },
     "packages/automation/src/market/buyer.ts": {
       "loc": 1158,
       "fanout": 11

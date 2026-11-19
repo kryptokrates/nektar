@@ -26,7 +26,8 @@ const die = (m, code = 1) => {
   console.error(`demo-market: ${m}`)
   process.exit(code)
 }
-const log = (m) => console.log(`demo-market: ${m}`)
+const ts = () => new Date().toISOString().slice(11, 23)
+const log = (m) => console.log(`demo-market ${ts()} ${m}`)
 const req = createRequire(join(root, 'packages/mcp/package.json'))
 const { PrivateKey, Transaction, P2PKH } = req('@bsv/sdk')
 
@@ -42,7 +43,7 @@ const wifFile = join(root, '.state', 'testnet-wif.txt')
 const wif = wifArg ?? (existsSync(wifFile) ? readFileSync(wifFile, 'utf8').trim().split(/\s+/)[0] : undefined)
 if (wif === undefined) die('no treasury — pass --treasury-wif <wif> or write .state/testnet-wif.txt')
 const treasury = PrivateKey.fromWif(wif)
-const treasAddr = treasury.toAddress()
+const treasAddr = treasury.toAddress([0x6f]) // testnet — a mainnet-shaped addr fails the index lookup
 
 // --- agents ------------------------------------------------------------------
 const mkAgent = (name, port, domains) => {
@@ -182,13 +183,21 @@ log('wants published — deals drive themselves now (zeroconf escrow + carried a
 const DONE_BUYER = new Set(['disclosure_verified', 'useful'])
 const DONE_SELLER = new Set(['completion_submitted', 'settled', 'collected'])
 const deadline = Date.now() + timeoutMs
+// per-deal transition timeline — every (deal, state) pair's first-seen time,
+// so the settle report shows where the deal actually waited
+const firstSeen = new Map()
 let last = ''
 while (Date.now() < deadline) {
   const [sd, nd] = await Promise.all([call(sports, 'deals', {}), call(nutrition, 'deals', {})])
   const all = [...(sd.deals ?? []), ...(nd.deals ?? [])]
+  for (const d of all) {
+    const k = `${d.role}:${String(d.operationId ?? d.escrowTxid ?? '?').slice(-8)}:${d.state}`
+    if (!firstSeen.has(k)) firstSeen.set(k, Date.now())
+  }
   const buys = all.filter((d) => d.role === 'buyer' && DONE_BUYER.has(d.state)).length
   const sales = all.filter((d) => d.role === 'seller' && DONE_SELLER.has(d.state)).length
-  const line = `  deals: ${all.map((d) => `${d.role}:${d.state}`).join('  ') || 'none yet'}`
+  const chainStr = (d) => (d.chain !== undefined ? `<${Object.entries(d.chain).map(([k, v]) => `${k}=${v}`).join(',')}>` : '')
+  const line = `  deals: ${all.map((d) => `${d.role}:${d.state}${chainStr(d)}`).join('  ') || 'none yet'}`
   if (line !== last) {
     log(line)
     last = line
@@ -199,6 +208,9 @@ while (Date.now() < deadline) {
       console.log(
         `  ${d.role}  ${d.state}  escrow ${d.escrowTxid ?? '-'}  disclosure ${d.disclosureTxid ?? d.completeTxid ?? '-'}  sats ${d.sellerSats ?? d.priceSats ?? '-'}`
       )
+    console.log('\n# transition timeline (first-seen, ms-since-wants)')
+    const t0 = [...firstSeen.values()].sort()[0] ?? Date.now()
+    for (const [k, t] of [...firstSeen.entries()].sort((a, b) => a[1] - b[1])) console.log(`  +${String(t - t0).padStart(6)}ms  ${k}`)
     console.log('\nagents still running:')
     console.log(`  sports    MCP ${sports.mcp}  bearer ${sports.bearer}  log ${sports.dataDir}\\agent.log`)
     console.log(`  nutrition MCP ${nutrition.mcp}  bearer ${nutrition.bearer}  log ${nutrition.dataDir}\\agent.log`)
@@ -206,4 +218,7 @@ while (Date.now() < deadline) {
   }
   await new Promise((r) => setTimeout(r, 4000))
 }
+const t0 = [...firstSeen.values()].sort()[0] ?? Date.now()
+console.error('\n# partial timeline at timeout (ms-since-wants)')
+for (const [k, t] of [...firstSeen.entries()].sort((a, b) => a[1] - b[1])) console.error(`  +${String(t - t0).padStart(6)}ms  ${k}`)
 die(`deals did not settle inside ${timeoutMs / 1000}s — agents still running, check deals on each instance`)

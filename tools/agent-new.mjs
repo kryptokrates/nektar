@@ -68,9 +68,11 @@ if (fundWif === undefined && existsSync(envFile)) {
   if (m !== null) fundWif = m[1]
 }
 const key = fundWif !== undefined ? PrivateKey.fromWif(fundWif) : PrivateKey.fromRandom()
-fundWif = key.toWif()
+fundWif = key.toWif(net === 'main' ? undefined : [0xef]) // 0xef = testnet WIF prefix
 const agentPub = key.toPublicKey().toString()
-const address = key.toAddress()
+// testnet prefix matters — indexers reject a mainnet-shaped address, so the
+// printed funding target must match the network or discovery never finds it
+const address = key.toAddress(net === 'main' ? undefined : [0x6f])
 const token = randomBytes(32).toString('hex')
 const operatorToken = randomBytes(32).toString('hex')
 

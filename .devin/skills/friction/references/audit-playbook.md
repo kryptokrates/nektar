@@ -50,7 +50,7 @@ progress; the same wait silent reads as broken.
 
 **Effort** — decisions, context switches, and motor work. Each
 decision costs attention and creates a bail point. A field that asks
-for a value is effort; a field that asks the user to *invent* a value
+for a value is effort; a field that asks the user to _invent_ a value
 (generate a secret, pick a topology) is effort squared. Copy-paste is
 cheap; composing a command is expensive; reasoning about tradeoffs is
 the most expensive.
@@ -92,8 +92,8 @@ conform (Jakob's law) or moves behind the value moment.
 - [ ] Are secrets generatable (`openssl rand -hex 32`) rather than
       sourced externally?
 - [ ] Are fields sequenced — nothing required before it's needed?
-- [ ] Does every comment tell the reader what to *do*, not what the
-      field *is*?
+- [ ] Does every comment tell the reader what to _do_, not what the
+      field _is_?
 
 ### Compose / install audit
 
@@ -157,9 +157,9 @@ Before killing a step, run it through the keepers:
   user to the next step, **A**dd value/personalization, or
   **D**elight? Any yes → it might stay, tightened.
 - **Load-bearing test**: does the step carry safety, consent, or
-  verification the system is *for*? (Confirmation gates, SpendGuard
+  verification the system is _for_? (Confirmation gates, SpendGuard
   caps, SPV checks, refund windows.) Yes → keep-legible, never remove.
 - **Abuse test**: does the step price out abusers more than users?
-  Rate limits, funding proofs, small stakes — friction *for abusers*,
+  Rate limits, funding proofs, small stakes — friction _for abusers_,
   none for the good, is a feature (see cold-start §5). Keep — and keep
   it asymmetric.

@@ -72,8 +72,9 @@ fill the marked values (`openssl rand -hex 32` ×4 for the secrets), then
 Healthy boot looks like: `automation: preflight` green, then
 `automation: announce` within the first upkeep pass, then quiet periodic
 lane polls. If `NEKTAR_WAIT_FUNDING=1` is set, the agent first prints a QR
-+ `operator fee key <address>` and waits for sats — that wait is the only
-step that can stall, and it's the one thing we can help with instantly.
+
+- `operator fee key <address>` and waits for sats — that wait is the only
+  step that can stall, and it's the one thing we can help with instantly.
 
 ## Verify you joined
 

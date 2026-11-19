@@ -87,7 +87,10 @@ const up = async (port) => {
 }
 const portFree = (port) =>
   new Promise((r) => {
-    const s = net.createServer().once('error', () => r(false)).once('listening', () => s.close(() => r(true)))
+    const s = net
+      .createServer()
+      .once('error', () => r(false))
+      .once('listening', () => s.close(() => r(true)))
     s.listen(port, '127.0.0.1')
   })
 
@@ -210,7 +213,10 @@ const spawnAgent = (name, port, dirA_, wif) => {
 }
 spawnAgent('agent-a', 8091, dirA, keys[SELLER])
 spawnAgent('agent-b', 8092, dirB, keys[BUYER])
-for (const [name, port] of [['agent-a', 8091], ['agent-b', 8092]]) {
+for (const [name, port] of [
+  ['agent-a', 8091],
+  ['agent-b', 8092]
+]) {
   // up-wait is generous: a first-boot discovery pass grinds through the
   // agent's whole on-chain history at index pace before the HTTP bind
   for (let i = 0; i < 600 && !(await up(port)); i++) await sleep(1000)
@@ -244,7 +250,10 @@ const policy = (who, wif) => ({
   ai: { providers: ['scripted'], allowSensitiveEgress: false, maxOutputTokens: 500, timeoutMs: 10_000 },
   sandbox: { mode: 'sandbox-only' }
 })
-for (const [who, wif, d] of [[SELLER, keys[SELLER], dirA], [BUYER, keys[BUYER], dirB]]) {
+for (const [who, wif, d] of [
+  [SELLER, keys[SELLER], dirA],
+  [BUYER, keys[BUYER], dirB]
+]) {
   const f = join(d, 'policy.json')
   writeFileSync(f, JSON.stringify(policy(who, wif), null, 1))
   console.log(await run(process.execPath, [join(root, 'tools/automation.mjs'), 'policy', 'approve', f, '--data', d]))

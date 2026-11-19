@@ -55,8 +55,8 @@ move-off-the-clock decision.
 (Dooley). It is countable, comparable, and — for an underdog — the
 whole game. The incumbent's product can be worse and still win if our
 path is harder to start than theirs is to keep. So the discipline is:
-make the happy path require *zero knowledge, zero decisions, and
-bounded waits*; spend the complexity on our side of the clock
+make the happy path require _zero knowledge, zero decisions, and
+bounded waits_; spend the complexity on our side of the clock
 (pre-building, pre-warming, pre-seeding); and never make the user wait
 for work we could have done earlier.
 
@@ -92,7 +92,7 @@ user must already hold). You cannot remove what you have not counted.
 **Why it works:** Dooley's observation — once you wear the goggles you
 see friction everywhere, and the expensive kind is never where the
 builders guessed. Builders know why each step exists, so none of them
-*feel* like friction. The stranger pays them all anyway. Auditing the
+_feel_ like friction. The stranger pays them all anyway. Auditing the
 actual journey — not the intended one — is the only reliable method.
 
 **Key insights:**
@@ -111,13 +111,13 @@ actual journey — not the intended one — is the only reliable method.
 
 **Applications:**
 
-| Surface            | What to walk                                     | Currency hot spots                        |
-| ------------------ | ------------------------------------------------ | ----------------------------------------- |
-| Join doc           | clone → announced → unioned                      | secrets, TLS/DNS, funding key             |
-| `.env.example`     | every field: does it have a correct default?     | decisions = drop-offs                     |
-| Compose/install    | commands run, prompts answered, waits endured    | image pulls, db warmup, lock ordering     |
-| Adapter attach     | config paste → first tool call                   | which platforms get a one-line stanza     |
-| Error path         | broken thing → named cause → next command        | log legibility, searchable error text     |
+| Surface         | What to walk                                  | Currency hot spots                    |
+| --------------- | --------------------------------------------- | ------------------------------------- |
+| Join doc        | clone → announced → unioned                   | secrets, TLS/DNS, funding key         |
+| `.env.example`  | every field: does it have a correct default?  | decisions = drop-offs                 |
+| Compose/install | commands run, prompts answered, waits endured | image pulls, db warmup, lock ordering |
+| Adapter attach  | config paste → first tool call                | which platforms get a one-line stanza |
+| Error path      | broken thing → named cause → next command     | log legibility, searchable error text |
 
 ### 2. Kill / keep-legible / move — the triage
 
@@ -138,7 +138,7 @@ three buckets, and the skill's job is sorting, not blanket removal:
 friction: a step earns its place only if it **D**irects the user toward
 value, **A**dds personalization or trust, or **D**elights. Everything
 else is dead weight. Meanwhile load-bearing checks exist precisely
-*because* the system distrusts them — removing them is not
+_because_ the system distrusts them — removing them is not
 optimization, it is a defect.
 
 **Key insights:**
@@ -148,7 +148,7 @@ optimization, it is a defect.
 - Pre-pay the cost on our side: we compile the bundle, bake the image,
   warm the lane stock, seed the packs — the user never waits for work
   we could have done earlier
-- Verification stays, the *wait* goes: SPV checks run async; the user
+- Verification stays, the _wait_ goes: SPV checks run async; the user
   is told "proving — safe to use meanwhile" rather than being parked
 - "Documented" is not "removed": a paragraph that explains a step still
   makes the user do it — a snippet, default, or pre-baked artifact
@@ -192,12 +192,12 @@ config wizard.
 
 **Applications:**
 
-| Pattern                | In this repo                                                  |
-| ---------------------- | ------------------------------------------------------------- |
-| Correct default        | `NEKTAR_MARKET_HOSTS` optional — discovery is the default       |
-| Generator, not essay   | `install.sh`, `.env.example` comments that *generate* secrets   |
-| Straight line          | JOIN-TESTNET: up → verify card → union — three acts             |
-| Bumper                 | `doctor` tool, preflight gate, phase-named upkeep errors        |
+| Pattern              | In this repo                                                  |
+| -------------------- | ------------------------------------------------------------- |
+| Correct default      | `NEKTAR_MARKET_HOSTS` optional — discovery is the default     |
+| Generator, not essay | `install.sh`, `.env.example` comments that _generate_ secrets |
+| Straight line        | JOIN-TESTNET: up → verify card → union — three acts           |
+| Bumper               | `doctor` tool, preflight gate, phase-named upkeep errors      |
 
 ### 4. Jakob's law — conform to known shapes
 
@@ -221,7 +221,7 @@ concept we must sell, while a known shape sells itself.
   Claude Code, OpenAPI routes for HTTP clients, compose for ops
 - Name things what the ecosystem names them: `tools`, `health`,
   `token`, `compose.yaml` — not bespoke vocabulary
-- The universal adapter strategy *is* Jakob's law: one integration
+- The universal adapter strategy _is_ Jakob's law: one integration
   shape every platform already knows, instead of one adapter per
   platform
 
@@ -231,7 +231,7 @@ concept we must sell, while a known shape sells itself.
 good-enough system spreads before the right thing finishes, and the
 thing that spreads gets improved into the right thing. For an
 underdog, the bar is not the incumbent's feature list — it is their
-*switching cost*. Our path only needs to beat "keep what they have",
+_switching cost_. Our path only needs to beat "keep what they have",
 which is a much lower bar — if the first step isn't frictionless, we
 never get to compete on quality at all.
 
@@ -267,18 +267,18 @@ measured gets removed.
 
 **Metrics per journey (this repo):**
 
-| Journey              | First-value moment                     | Metric                        | Target   |
-| -------------------- | -------------------------------------- | ----------------------------- | -------- |
-| Operator (hub)       | card visible on dir lane               | clone → announce              | < 30 min |
-| Fresh instance       | `recall` returns seeded content        | start → non-empty answer      | < 5 min  |
-| Adapter client       | first successful tool call             | config paste → `recall`       | < 3 min  |
-| Deal                 | want → quote seen                      | publish → first offer (watch) | bounded  |
-| Recovery             | named cause + next command in logs     | error → legible cause         | instant  |
-| Suite (internal)     | first green verdict                    | launch → first pass           | minutes  |
+| Journey          | First-value moment                 | Metric                        | Target   |
+| ---------------- | ---------------------------------- | ----------------------------- | -------- |
+| Operator (hub)   | card visible on dir lane           | clone → announce              | < 30 min |
+| Fresh instance   | `recall` returns seeded content    | start → non-empty answer      | < 5 min  |
+| Adapter client   | first successful tool call         | config paste → `recall`       | < 3 min  |
+| Deal             | want → quote seen                  | publish → first offer (watch) | bounded  |
+| Recovery         | named cause + next command in logs | error → legible cause         | instant  |
+| Suite (internal) | first green verdict                | launch → first pass           | minutes  |
 
 Instrumentation rules: log the step the user was on, not just the
 error; errors name what they are waiting on and the next command; and
-once per milestone, *ask the stranger* — "how hard was that, what
+once per milestone, _ask the stranger_ — "how hard was that, what
 surprised you" beats any dashboard (CES).
 
 See [references/audit-playbook.md](references/audit-playbook.md) for
@@ -290,25 +290,25 @@ today.
 
 ## Common Mistakes
 
-| Mistake                                       | Why It Fails                                              | Fix                                                              |
-| --------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------- |
-| Removing the check instead of the wait        | Verification is load-bearing; a skipped SPV is a defect   | Keep the check; parallelize, pre-warm, or background the wait    |
-| Front-loading decisions                       | Config questions before value = abandoned installs        | Sequence: ask only when the input is actually needed             |
-| "Documented, therefore removed"               | A paragraph describing a step still makes the user do it  | Snippets, defaults, generated artifacts — remove the step itself |
-| Silent waits                                  | Unnamed waiting reads as broken; users quit or retry wrong | Every wait gets a name, a bound, and visible progress            |
-| New surface shapes                            | Custom formats charge learning-cost at the door           | Conform to MCP/compose/OpenAPI/bearer shapes users know          |
-| Treating drop-off as a marketing problem      | More traffic into a leaky funnel scales nothing           | Fix the earliest drop-off first; measure the funnel              |
-| Gate-keeping by domain knowledge              | Requiring BSV/SPV/TLS literacy is an admission fee        | Hide the expertise; surface it only on opt-in                    |
-| Friction for everyone, trust for no one       | Removing *all* friction invites spam and abuse            | Friction for abusers, none for the good — asymmetric by design   |
+| Mistake                                  | Why It Fails                                               | Fix                                                              |
+| ---------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------- |
+| Removing the check instead of the wait   | Verification is load-bearing; a skipped SPV is a defect    | Keep the check; parallelize, pre-warm, or background the wait    |
+| Front-loading decisions                  | Config questions before value = abandoned installs         | Sequence: ask only when the input is actually needed             |
+| "Documented, therefore removed"          | A paragraph describing a step still makes the user do it   | Snippets, defaults, generated artifacts — remove the step itself |
+| Silent waits                             | Unnamed waiting reads as broken; users quit or retry wrong | Every wait gets a name, a bound, and visible progress            |
+| New surface shapes                       | Custom formats charge learning-cost at the door            | Conform to MCP/compose/OpenAPI/bearer shapes users know          |
+| Treating drop-off as a marketing problem | More traffic into a leaky funnel scales nothing            | Fix the earliest drop-off first; measure the funnel              |
+| Gate-keeping by domain knowledge         | Requiring BSV/SPV/TLS literacy is an admission fee         | Hide the expertise; surface it only on opt-in                    |
+| Friction for everyone, trust for no one  | Removing _all_ friction invites spam and abuse             | Friction for abusers, none for the good — asymmetric by design   |
 
 ## Quick Diagnostic
 
-| Question                                                    | If No                                            | Action                                                        |
-| ----------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------- |
-| Is there a named first-value moment with a measured time?   | Friction work is unmeasured                      | Define the moment; instrument the clock                       |
-| Does the happy path need zero decisions?                    | Each decision is a drop-off                      | Convert to correct defaults; sequence the rest                |
-| Does every env field have a working default or generator?   | Required reasoning = required abandonment        | Default it, generate it, or delete the field                  |
-| Does first value arrive before any external dependency?     | Gated on strangers = gated forever               | Ship seeded/provable content; flintstone honestly             |
-| Do errors say what they wait on + the next command?         | Silent waits read as broken                      | Name the phase, bound it, print the bumper                    |
-| Does the surface match shapes users already know?           | Learning cost charged at the door                | Conform to MCP/compose/OpenAPI conventions                    |
-| Is every load-bearing check still present and legible?      | Friction removed where safety lived              | Restore the gate; make it named and progress-visible          |
+| Question                                                  | If No                                     | Action                                               |
+| --------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------- |
+| Is there a named first-value moment with a measured time? | Friction work is unmeasured               | Define the moment; instrument the clock              |
+| Does the happy path need zero decisions?                  | Each decision is a drop-off               | Convert to correct defaults; sequence the rest       |
+| Does every env field have a working default or generator? | Required reasoning = required abandonment | Default it, generate it, or delete the field         |
+| Does first value arrive before any external dependency?   | Gated on strangers = gated forever        | Ship seeded/provable content; flintstone honestly    |
+| Do errors say what they wait on + the next command?       | Silent waits read as broken               | Name the phase, bound it, print the bumper           |
+| Does the surface match shapes users already know?         | Learning cost charged at the door         | Conform to MCP/compose/OpenAPI conventions           |
+| Is every load-bearing check still present and legible?    | Friction removed where safety lived       | Restore the gate; make it named and progress-visible |

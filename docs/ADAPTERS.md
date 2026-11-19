@@ -10,15 +10,15 @@ surface.
 Tools in the first block are the stable surface — names and required
 parameters are frozen; new fields and tools arrive additively only.
 
-| Tool             | Purpose                                                       | Minimal args                              |
-| ---------------- | ------------------------------------------------------------- | ----------------------------------------- |
-| `recall`         | read memory — fragments with provenance                       | `question` / shard filters                |
-| `remember`       | write memory — anchored, signed                               | `data`, `shard`                           |
-| `groundedAnswer` | answer citing verified fragments + receipt footer             | `question`                                |
-| `verifyReceipt`  | check a receipt token offline/online                          | `token`                                   |
-| `doctor`         | one-call health: funding, counts, bootstrap, `hints[]` next   | —                                         |
-| `automation`     | marketplace ops: `publishWant`, `enableSeller`, `status`, …   | `op` + op args                            |
-| `want` / `sell` / `deals` | ergonomic market entry points                         | want: `domains`, `maxSats`                |
+| Tool                      | Purpose                                                     | Minimal args               |
+| ------------------------- | ----------------------------------------------------------- | -------------------------- |
+| `recall`                  | read memory — fragments with provenance                     | `question` / shard filters |
+| `remember`                | write memory — anchored, signed                             | `data`, `shard`            |
+| `groundedAnswer`          | answer citing verified fragments + receipt footer           | `question`                 |
+| `verifyReceipt`           | check a receipt token offline/online                        | `token`                    |
+| `doctor`                  | one-call health: funding, counts, bootstrap, `hints[]` next | —                          |
+| `automation`              | marketplace ops: `publishWant`, `enableSeller`, `status`, … | `op` + op args             |
+| `want` / `sell` / `deals` | ergonomic market entry points                               | want: `domains`, `maxSats` |
 
 Everything else on the surface (`prove`, `anchor`, `exportShard`,
 `importShard`, `fundingImport`, `sendSats`, `evidence`, …) is extended
@@ -26,12 +26,12 @@ surface — stable in practice, not part of the frozen floor.
 
 ## Transports
 
-| Transport            | Endpoint / command                                  | Auth                       | For                            |
-| -------------------- | --------------------------------------------------- | -------------------------- | ------------------------------ |
-| MCP Streamable HTTP  | `https://<host>/mcp`                                 | `Authorization: Bearer`    | remote clients, hosted runtimes |
-| MCP stdio            | `docker run -i --rm … ghcr.io/kryptokrates/nektar`  | —                          | local agents, per-project      |
-| REST tools           | `GET /v1/tools`, `POST /v1/tools/{name}`            | `Authorization: Bearer`    | non-MCP platforms              |
-| OpenAPI              | `GET /v1/openapi.json`                               | `Authorization: Bearer`    | manifest-driven registration   |
+| Transport           | Endpoint / command                                 | Auth                    | For                             |
+| ------------------- | -------------------------------------------------- | ----------------------- | ------------------------------- |
+| MCP Streamable HTTP | `https://<host>/mcp`                               | `Authorization: Bearer` | remote clients, hosted runtimes |
+| MCP stdio           | `docker run -i --rm … ghcr.io/kryptokrates/nektar` | —                       | local agents, per-project       |
+| REST tools          | `GET /v1/tools`, `POST /v1/tools/{name}`           | `Authorization: Bearer` | non-MCP platforms               |
+| OpenAPI             | `GET /v1/openapi.json`                             | `Authorization: Bearer` | manifest-driven registration    |
 
 `NEKTAR_HTTP_TOKEN` is the bearer on every remote path.
 

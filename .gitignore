@@ -45,3 +45,6 @@ packages/bstack/bundle/
 labs/bstack-spike/
 # rendered media pipeline output (tools/render-nektar-* regenerates on demand)
 artifacts/nektar-video/
+
+# local research checkouts (linked worktrees — never ship)
+scratch/

@@ -155,6 +155,30 @@ test('ledger: NEKTAR_ANCHORED_LANES opens anchored stock to the named lanes (kne
   }
 })
 
+// B11 parity: the durable ledger's proven=1 query always outranks its
+// anchored fallback — the memory ledger must tier the same way, or the
+// test tier hands out an unproven leaf while proven stock sits idle.
+test('ledger: proven stock is served before anchored stock (knex parity)', async () => {
+  const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  try {
+    const key = PrivateKey.fromRandom()
+    const anchored = await anchoredTree(key, 1)
+    const proven = await provenTree(key, 1)
+    for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(kx)]) {
+      // anchored first in insertion order — ordering, not arrival, must decide
+      await l.add(anchored, 1)
+      await l.add(proven, 1)
+      await l.markProven(proven.id('hex'), proven.merklePath!)
+      const first = await l.take('market')
+      assert.equal(first?.tree.id('hex'), proven.id('hex'), `${l.constructor.name}: a proven leaf beats the anchored sibling`)
+      const second = await l.take('market')
+      assert.equal(second?.tree.id('hex'), anchored.id('hex'), `${l.constructor.name}: anchored stock is the fallback`)
+    }
+  } finally {
+    await kx.destroy()
+  }
+})
+
 test('ledger: a stale tree minted under another identity is skipped, not handed out', async () => {
   const key = PrivateKey.fromRandom()
   const other = PrivateKey.fromRandom()

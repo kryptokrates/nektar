@@ -233,13 +233,20 @@ export class MemoryTreeLedger implements TreeLedger {
     return slots.length
   }
   async take(kind = 'market', expectedLockHex?: string): Promise<{ tree: Transaction; vout: number } | undefined> {
-    for (const [k, slotKind] of this.free) {
-      const [txid, v] = k.split(':')
-      const t = this.trees.get(txid)!
-      if (slotKind !== kind || !serves(t, kind)) continue
-      this.free.delete(k)
-      if (expectedLockHex !== undefined && t.tree.outputs[Number(v)]?.lockingScript.toHex() !== expectedLockHex) continue
-      return { tree: ownPath(t.tree), vout: Number(v) }
+    // proven trees first, anchored-unproven as the fallback — the same
+    // two tiers the durable ledger's proven=1 query applies before its
+    // anchoredKinds fallback; a BUMP-anchored carrier is strictly better
+    // stock, so an unproven sibling never wins while one exists
+    for (const proven of [true, false]) {
+      for (const [k, slotKind] of this.free) {
+        const [txid, v] = k.split(':')
+        const t = this.trees.get(txid)!
+        if (t.proven !== proven) continue
+        if (slotKind !== kind || !serves(t, kind)) continue
+        this.free.delete(k)
+        if (expectedLockHex !== undefined && t.tree.outputs[Number(v)]?.lockingScript.toHex() !== expectedLockHex) continue
+        return { tree: ownPath(t.tree), vout: Number(v) }
+      }
     }
     return undefined
   }

@@ -233,7 +233,15 @@ export class WocIndex implements ChainIndex {
     }
   }
   async txHex(txid: string): Promise<string | undefined> {
-    const r = await this.req(`/tx/${txid}/hex`).catch(() => undefined)
+    // paced + retried like get() — the only WoC read that bypassed both,
+    // which is why discoverUtxos once carried its own pacing wrapper
+    const r = await withRetry(
+      async () => {
+        await this.pace()
+        return await this.req(`/tx/${txid}/hex`)
+      },
+      { attempts: 4, delay: (i) => 1200 * (i + 1), retryIf: (x) => x.status === 429 }
+    ).catch(() => undefined)
     if (r === undefined || !r.ok) return undefined
     return (await r.text()).trim()
   }

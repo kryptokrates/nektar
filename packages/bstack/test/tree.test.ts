@@ -6,6 +6,7 @@ import knex from 'knex'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setNektarEnv } from '@nektar/core'
 import { mintTree, DERIVATION, FUNDING_TAG, ORIGINATOR, KnexTreeLedger, MemoryTreeLedger, anchoredTree as anchoredPred, deadAncestry } from '../src/tree.js'
 import * as treemod from '../src/tree.js'
 import { boxFundingLock } from '../src/box.js'
@@ -125,6 +126,31 @@ test('ledger (knex): unproven tree with anchored ancestry hands out zero-conf sl
     assert.equal(await l.take('bbox'), undefined)
     assert.equal(await l.remaining('bbox'), 0)
   } finally {
+    await kx.destroy()
+  }
+})
+
+// the durable ledger used to gate the zero-conf path on kind === 'market'
+// while stock() counted anchored leaves for every lane — NEKTAR_ANCHORED_LANES
+// was dead on the ledger that actually ships. Both impls must serve the
+// lanes the env names, and refuse the ones it does not.
+test('ledger: NEKTAR_ANCHORED_LANES opens anchored stock to the named lanes (knex parity)', async () => {
+  const kx = knex({ client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true })
+  setNektarEnv('NEKTAR_ANCHORED_LANES', 'bbox')
+  try {
+    const key = PrivateKey.fromRandom()
+    const t = await anchoredTree(key, 2)
+    const b = await anchoredTree(key, 1)
+    for (const l of [new MemoryTreeLedger(), new KnexTreeLedger(kx)]) {
+      await l.add(t, 2, 'bbox')
+      await l.add(b, 1, 'log')
+      assert.equal(await l.remaining('bbox'), 2, `${l.constructor.name}: a named lane serves anchored stock`)
+      assert.ok((await l.take('bbox')) !== undefined, `${l.constructor.name}: take('bbox') hands an anchored slot`)
+      assert.equal(await l.take('log'), undefined, `${l.constructor.name}: an unnamed lane still waits for mined`)
+      assert.equal(await l.remaining('log'), 0)
+    }
+  } finally {
+    setNektarEnv('NEKTAR_ANCHORED_LANES', undefined)
     await kx.destroy()
   }
 })

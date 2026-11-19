@@ -128,6 +128,65 @@ test('BsvBroadcaster: 5xx (non-503) is an error — the index has no write path'
   assert.ok(!(fetchImpl as any).calls.some((c: string) => c.includes('whatsonchain.example/tx/raw')), 'no index write path exists')
 })
 
+test('BsvBroadcaster fanout: every route gets the same bytes + token; first acceptance wins', async () => {
+  const fetchImpl = stubFetchHdrs({
+    'bcast.example/tx': { status: 500, raw: 'dead' },
+    'arc2.example/tx': { status: 202, body: { txStatus: 'ACCEPTED' } }
+  })
+  const b = new BsvBroadcaster({
+    fetchImpl,
+    broadcasterUrl: 'http://bcast.example',
+    broadcasterUrls: ['http://arc2.example'],
+    callbackToken: 'tok'
+  })
+  const res = await b.broadcast(tx())
+  assert.equal(res.status, 'success')
+  const posts = (fetchImpl as any).calls.filter((c: any) => c.url.endsWith('/tx'))
+  assert.equal(posts.length, 2, 'the same tx goes to every configured route')
+  assert.ok(posts.some((c: any) => c.url === 'http://bcast.example/tx'))
+  assert.ok(posts.some((c: any) => c.url === 'http://arc2.example/tx'))
+  assert.ok(
+    posts.every((c: any) => c.headers['X-CallbackToken'] === 'tok'),
+    'one token tags every route — statuses merge'
+  )
+})
+
+test('BsvBroadcaster fanout: a wire refusal anywhere outranks a bare transport failure', async () => {
+  const fetchImpl: typeof fetch = async (input: any) => {
+    const url = String(input)
+    if (url.includes('arc2.example')) return new Response(JSON.stringify({ txStatus: 'REJECTED', reason: 'double spend' }), { status: 202 })
+    throw new Error('ECONNREFUSED')
+  }
+  const b = new BsvBroadcaster({ fetchImpl, broadcasterUrl: 'http://bcast.example', broadcasterUrls: ['http://arc2.example'] })
+  const res = await b.broadcast(tx())
+  assert.equal(res.status, 'error')
+  assert.match(res.description!, /REJECTED.*double spend/, 'the verdict explains the failure, not the dead route')
+})
+
+test('probeTxStatus: a secondary route answers when the primary errors; all-404 still lets the index say MINED', async () => {
+  const fetchImpl = stubFetch({
+    'bcast.example/tx': { status: 500, raw: 'dead' },
+    'arc2.example/tx': { body: { txStatus: 'SEEN_ON_NETWORK' } }
+  })
+  assert.deepEqual(
+    await probeTxStatus(
+      { fetchImpl, broadcasterUrl: 'http://bcast.example', broadcasterUrls: ['http://arc2.example'], indexerUrl: 'http://whatsonchain.example' },
+      't1'
+    ),
+    { status: 'SEEN_ON_NETWORK', answered: true }
+  )
+  // every route 404s (no stub) — 'not carried' answers the broadcaster leg,
+  // but the index can still report the tx mined
+  const fetchImpl2 = stubFetch({ 'whatsonchain.example': { body: { blockheight: 5 } } })
+  assert.deepEqual(
+    await probeTxStatus(
+      { fetchImpl: fetchImpl2, broadcasterUrl: 'http://bcast.example', broadcasterUrls: ['http://arc2.example'], indexerUrl: 'http://whatsonchain.example' },
+      't2'
+    ),
+    { status: 'MINED', answered: true }
+  )
+})
+
 test('fetchBroadcasterFeeRate: /policy 100sat/1000B → 100 sat/kB', async () => {
   const fetchImpl = stubFetch({ '/policy': { body: { policy: { miningFee: { bytes: 1000, satoshis: 100 } } } } })
   assert.equal(await fetchBroadcasterFeeRate({ fetchImpl, broadcasterUrl: 'http://bcast' }), 100)

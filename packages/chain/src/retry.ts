@@ -30,12 +30,19 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOpts<T>): Pr
 }
 
 /** minimum-spacing limiter — each call waits until `minMs` since the last
- *  release (e.g. WoC ~3 req/s unauthenticated). */
+ *  release (e.g. WoC ~3 req/s unauthenticated). Concurrent callers queue:
+ *  releases are spaced minMs apart — without the chain, two callers both
+ *  compute their wait off the same `last` and burst out together. */
 export const pacer = (minMs: number): (() => Promise<void>) => {
   let last = 0
-  return async () => {
-    const wait = minMs - (Date.now() - last)
-    if (wait > 0) await sleep(wait)
-    last = Date.now()
+  let tail: Promise<void> = Promise.resolve()
+  return () => {
+    const p = tail.then(async () => {
+      const wait = minMs - (Date.now() - last)
+      if (wait > 0) await sleep(wait)
+      last = Date.now()
+    })
+    tail = p
+    return p
   }
 }

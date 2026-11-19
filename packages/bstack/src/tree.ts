@@ -312,7 +312,10 @@ export class MemoryTreeLedger implements TreeLedger {
       if (t.proven) proven++
       else {
         waiting.add(txid)
-        if (anchoredTree(t.tree)) anchored++
+        // 'anchored' counts servable zero-conf stock — the same
+        // anchoredKinds gate take()/remaining() apply, or the counter
+        // claims leaves this lane cannot hand out
+        if (anchoredKinds().has(kind) && anchoredTree(t.tree)) anchored++
       }
     }
     // `taken` is own-kind consumed: slots this ledger minted minus the ones
@@ -419,9 +422,13 @@ export class KnexTreeLedger implements TreeLedger {
       if (r !== false && r !== null) return r
       if (r !== false) break
     }
-    // zero-conf path (market lane only): an unproven tree whose ancestry is
-    // anchored is host-admissible — carriers step back to a mined anchor
-    if (kind !== 'market') return undefined
+    // zero-conf path: an unproven tree whose ancestry is anchored is
+    // host-admissible for the lanes NEKTAR_ANCHORED_LANES names ('market'
+    // always) — carriers step back to a mined anchor. The memory ledger
+    // serves by the same anchoredKinds predicate; before this gate widened
+    // the durable ledger counted anchored stock for every lane but could
+    // only hand it to market.
+    if (!anchoredKinds().has(kind)) return undefined
     for (const row of await this.kx('bstack_tree_outputs as o')
       .join('bstack_trees as t', 'o.txid', 't.txid')
       .where('t.proven', 0)
@@ -529,7 +536,7 @@ export class KnexTreeLedger implements TreeLedger {
       .count('o.key as c')
       .first()
     let n = Number(r?.c ?? 0)
-    if (kind === 'market') {
+    if (anchoredKinds().has(kind)) {
       for (const row of await this.kx('bstack_tree_outputs as o')
         .join('bstack_trees as t', 'o.txid', 't.txid')
         .where('t.proven', 0)
@@ -551,14 +558,16 @@ export class KnexTreeLedger implements TreeLedger {
       .count('o.key as c')
       .first()
     let anchored = 0
-    for (const row of await this.kx('bstack_tree_outputs as o')
-      .join('bstack_trees as t', 'o.txid', 't.txid')
-      .where('t.proven', 0)
-      .where('o.kind', kind)
-      .groupBy('t.txid', 't.beef')
-      .select('t.beef')
-      .count('o.key as c')) {
-      if (anchoredTree(Transaction.fromBEEF(JSON.parse(row.beef as string)))) anchored += Number(row.c)
+    if (anchoredKinds().has(kind)) {
+      for (const row of await this.kx('bstack_tree_outputs as o')
+        .join('bstack_trees as t', 'o.txid', 't.txid')
+        .where('t.proven', 0)
+        .where('o.kind', kind)
+        .groupBy('t.txid', 't.beef')
+        .select('t.beef')
+        .count('o.key as c')) {
+        if (anchoredTree(Transaction.fromBEEF(JSON.parse(row.beef as string)))) anchored += Number(row.c)
+      }
     }
     // a provision tree counts toward every kind it still holds slots for
     const u = await this.kx('bstack_trees as t')

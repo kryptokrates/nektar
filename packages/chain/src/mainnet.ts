@@ -3,17 +3,22 @@
 // here: BsvBroadcaster is the only write path and it is wrapped by SpendGuard
 // in the runtime before any tx reaches it.
 import { nektarEnv } from '@nektar/core'
-import { sleep, withRetry, pacer } from './retry.js'
+import { sleep, withRetry } from './retry.js'
 import { TxStore } from './txstore.js'
 import { Transaction, MerklePath, Hash, Utils } from '@bsv/sdk'
 import { tscMerklePath } from '@lightwebinc/bcommon'
 import { headerPowValid, HeaderCache } from './headers.js'
-import { indexFor, type ChainIndex } from './indexer.js'
+import { indexFor, type ChainIndex, type IndexUtxo } from './indexer.js'
 import type { BlockHeader, Broadcaster, BroadcastResult, ChainTracker, FundingOut } from './interfaces.js'
 import type { StatusHint } from './txfacts.js'
 
 export interface MainnetConfig {
-  broadcasterUrl?: string // BSV Broadcaster base (no trailing slash)
+  broadcasterUrl?: string // primary BSV Broadcaster base (no trailing slash)
+  /** additional broadcaster endpoints the same tx is submitted to
+   *  concurrently — first acceptance wins ('have a second route ready'
+   *  per the ARC docs). broadcasterUrl stays primary: /events, /policy
+   *  and reads prefer it; statuses merge under the one callback token */
+  broadcasterUrls?: string[]
   broadcasterApiKey?: string
   callbackUrl?: string // our public base — the broadcaster pushes tx-status updates here (X-CallbackUrl)
   callbackToken?: string // sent as X-CallbackToken; webhooks carry it as Authorization: Bearer
@@ -41,9 +46,13 @@ export const DEFAULT_INDEXER_URL = 'https://bananablocks.com/api/v1'
 
 const def = (c?: MainnetConfig) => {
   const indexerUrl = c?.indexerUrl ?? c?.wocUrl ?? DEFAULT_INDEXER_URL
+  // primary = explicit broadcasterUrl, else the first listed extra, else
+  // the GorillaPool default; extras append in order, deduped
+  const broadcasterUrls = [...new Set([c?.broadcasterUrl ?? c?.broadcasterUrls?.[0] ?? DEFAULT_BROADCASTER_URL, ...(c?.broadcasterUrls ?? [])])]
   return {
     // BSV Broadcaster (formerly Arcade; the ARC successor) — GorillaPool instance
-    broadcasterUrl: c?.broadcasterUrl ?? DEFAULT_BROADCASTER_URL,
+    broadcasterUrl: broadcasterUrls[0],
+    broadcasterUrls,
     callbackUrl: c?.callbackUrl ?? nektarEnv('NEKTAR_CALLBACK_URL'),
     callbackToken: c?.callbackToken ?? nektarEnv('NEKTAR_CALLBACK_TOKEN'),
     indexerUrl,
@@ -79,11 +88,12 @@ export class BsvBroadcaster implements Broadcaster {
     this.cfg = def(c)
     // index cross-check on status reads engages for public-default configs or
     // an explicit index URL — a custom broadcaster alone isn't assumed public-net
-    this.indexFallback =
-      c?.indexerUrl !== undefined || c?.wocUrl !== undefined || c?.broadcasterUrl === undefined || c.broadcasterUrl === DEFAULT_BROADCASTER_URL
+    // 'public-default' means the EFFECTIVE primary is the baked-in URL —
+    // a custom first entry in broadcasterUrls counts as a private config
+    const primary = c?.broadcasterUrl ?? c?.broadcasterUrls?.[0]
+    this.indexFallback = c?.indexerUrl !== undefined || c?.wocUrl !== undefined || primary === undefined || primary === DEFAULT_BROADCASTER_URL
   }
   async broadcast(tx: Transaction): Promise<BroadcastResult> {
-    const { broadcasterUrl } = this.cfg
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }
     if (this.cfg.broadcasterApiKey) headers.Authorization = `Bearer ${this.cfg.broadcasterApiKey}`
     // tx-status updates: pushed to our webhook when a callback URL is
@@ -92,29 +102,42 @@ export class BsvBroadcaster implements Broadcaster {
     if (this.cfg.callbackUrl) headers['X-CallbackUrl'] = `${this.cfg.callbackUrl}/v1/broadcaster-callback`
     if (this.cfg.callbackUrl || this.cfg.callbackToken) headers['X-FullStatusUpdates'] = 'true'
     if (this.cfg.callbackToken) headers['X-CallbackToken'] = this.cfg.callbackToken
-    try {
-      // Extended Format when every input carries its source tx (the broadcaster
-      // resolves unconfirmed parents from it); plain raw otherwise
-      const payload = new Uint8Array(tx.inputs.every((i) => i.sourceTransaction !== undefined) ? tx.toEF() : tx.toBinary())
-      const post = () => req(this.cfg, `${broadcasterUrl}/tx`, { method: 'POST', headers, body: payload })
-      // 503 = backpressure, nothing queued — retry the same instance shortly
-      const r = await withRetry(post, {
-        attempts: 4,
-        delay: (i) => 500 * 2 ** i,
-        retryIf: (x) => x.status === 503
-      })
-      if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`)
-      const body = await r.json().catch(() => ({}))
-      const st = String(body.txStatus ?? '').toUpperCase()
-      if (r.ok && st !== 'REJECTED' && st !== 'DOUBLE_SPEND_ATTEMPTED') {
-        return { status: 'success', txid: tx.id('hex') }
+    // Extended Format when every input carries its source tx (the broadcaster
+    // resolves unconfirmed parents from it); plain raw otherwise. One payload
+    // serves every endpoint — same bytes, same txid, resubmission idempotent.
+    const payload = new Uint8Array(tx.inputs.every((i) => i.sourceTransaction !== undefined) ? tx.toEF() : tx.toBinary())
+    const submit = async (base: string): Promise<BroadcastResult> => {
+      try {
+        const post = () => req(this.cfg, `${base}/tx`, { method: 'POST', headers, body: payload })
+        // 503 = backpressure, nothing queued — retry the same instance shortly
+        const r = await withRetry(post, {
+          attempts: 4,
+          delay: (i) => 500 * 2 ** i,
+          retryIf: (x) => x.status === 503
+        })
+        if (r.status >= 500) throw new Error(`broadcaster HTTP ${r.status}`)
+        const body = await r.json().catch(() => ({}))
+        const st = String(body.txStatus ?? '').toUpperCase()
+        if (r.ok && st !== 'REJECTED' && st !== 'DOUBLE_SPEND_ATTEMPTED') {
+          return { status: 'success', txid: tx.id('hex') }
+        }
+        return { status: 'error', description: `broadcaster ${st || `HTTP ${r.status}`}: ${body.reason ?? body.detail ?? body.extraInfo ?? ''}`.trim() }
+      } catch (e) {
+        // the broadcaster is the only write path — a transport failure is an
+        // error answer, never a detour through the index
+        return { status: 'error', description: `broadcast failed: ${(e as Error).message}` }
       }
-      return { status: 'error', description: `broadcaster ${st || `HTTP ${r.status}`}: ${body.reason ?? body.detail ?? body.extraInfo ?? ''}`.trim() }
-    } catch (e) {
-      // the broadcaster is the only write path — a transport failure is an
-      // error answer, never a detour through the index
-      return { status: 'error', description: `broadcast failed: ${(e as Error).message}` }
     }
+    // every configured endpoint gets the same bytes at once — first
+    // acceptance wins. Among all-failed answers a wire verdict ('broadcaster
+    // REJECTED: …' / a 4xx reason) outranks a bare transport failure: it
+    // names why the tx was refused instead of just that a route was down.
+    const results = await Promise.all(this.cfg.broadcasterUrls.map(submit))
+    return (
+      results.find((r) => r.status === 'success') ??
+      results.find((r) => r.description?.startsWith('broadcaster ')) ??
+      results[0] ?? { status: 'error', description: 'broadcast failed: no broadcaster endpoints configured' }
+    )
   }
 
   /** the broadcaster's current word for a txid — a HINT, never a verdict:
@@ -241,9 +264,17 @@ export async function fetchBroadcasterFeeRate(cfg?: MainnetConfig): Promise<numb
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
-  const p = await j(await req(c, `${c.broadcasterUrl}/policy`, { headers: h }))
-  const f = p.policy?.miningFee ?? p.miningFee
-  return Math.ceil((f.satoshis * 1000) / f.bytes)
+  // primary first; a dead route falls through to the next configured one
+  for (const base of c.broadcasterUrls) {
+    try {
+      const p = await j(await req(c, `${base}/policy`, { headers: h }))
+      const f = p.policy?.miningFee ?? p.miningFee
+      return Math.ceil((f.satoshis * 1000) / f.bytes)
+    } catch {
+      /* next endpoint */
+    }
+  }
+  throw new Error('broadcaster /policy unreachable on every configured endpoint')
 }
 
 /** the broadcaster's current word for a txid — the single status-hint seam:
@@ -263,26 +294,41 @@ export async function probeTxStatus(
   opts?: { wocFallback?: boolean; indexerFallback?: boolean }
 ): Promise<{ status: string; answered: boolean }> {
   const c = def(cfg)
-  let answered = false
-  try {
-    const h: Record<string, string> = {}
-    if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
-    const r = await req(c, `${c.broadcasterUrl}/tx/${txid}`, { headers: h }, 10_000)
-    if (r.ok) {
-      const s = String(((await r.json().catch(() => undefined)) as { txStatus?: string } | undefined)?.txStatus ?? '').toUpperCase()
-      if (s !== '') return { status: s, answered: true }
-      // 2xx without a txStatus → not answered by the broadcaster
-    } else if (r.status === 404) {
-      answered = true // a clean "not found" is a real answer
-    }
-    // 429 / 5xx / other non-ok → the broadcaster never answered
-  } catch {
-    /* broadcaster undecidable — WoC may still answer mined */
-  }
+  const h: Record<string, string> = {}
+  if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
+  // every configured endpoint is asked at once — the primary's answer is
+  // preferred (list order), a clean 404 on any route is still a real answer
+  const answers = await Promise.all(
+    c.broadcasterUrls.map(async (base) => {
+      try {
+        const r = await req(c, `${base}/tx/${txid}`, { headers: h }, 10_000)
+        if (r.ok) {
+          const s = String(((await r.json().catch(() => undefined)) as { txStatus?: string } | undefined)?.txStatus ?? '').toUpperCase()
+          if (s !== '') return { status: s, answered: true }
+          // 2xx without a txStatus → not answered by the broadcaster
+        } else if (r.status === 404) {
+          return { status: '', answered: true } // a clean "not found" is a real answer
+        }
+        // 429 / 5xx / other non-ok → the broadcaster never answered
+      } catch {
+        /* endpoint undecidable — another route may still answer */
+      }
+      return { status: '', answered: false }
+    })
+  )
+  // a nonempty status from any route short-circuits; 'not found' answers
+  // only mark the question answered and still let the index say MINED —
+  // a mined tx ages out of broadcaster memory
+  const verdict = answers.find((a) => a.answered && a.status !== '')
+  if (verdict !== undefined) return verdict
+  const answered = answers.some((a) => a.answered)
   const indexOk =
     opts?.indexerFallback ??
     opts?.wocFallback ??
-    (cfg?.indexerUrl !== undefined || cfg?.wocUrl !== undefined || cfg?.broadcasterUrl === undefined || cfg.broadcasterUrl === DEFAULT_BROADCASTER_URL)
+    (cfg?.indexerUrl !== undefined ||
+      cfg?.wocUrl !== undefined ||
+      (cfg?.broadcasterUrl ?? cfg?.broadcasterUrls?.[0]) === undefined ||
+      (cfg?.broadcasterUrl ?? cfg?.broadcasterUrls?.[0]) === DEFAULT_BROADCASTER_URL)
   if (!indexOk) return { status: '', answered }
   try {
     const w = await c.index.txJson(txid)
@@ -318,15 +364,17 @@ export async function fetchRawTx(cfg: MainnetConfig | undefined, txid: string): 
   } catch {
     /* fall through to the broadcaster source */
   }
-  try {
-    const r = await f(`${cfg?.broadcasterUrl ?? DEFAULT_BROADCASTER_URL}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) })
-    if (r.ok) {
-      const j = (await r.json()) as { rawTx?: string }
-      const tx = parse(j?.rawTx)
-      if (tx !== undefined) return tx
+  for (const base of c.broadcasterUrls) {
+    try {
+      const r = await f(`${base}/tx/${txid}`, { signal: AbortSignal.timeout(10_000) })
+      if (r.ok) {
+        const j = (await r.json()) as { rawTx?: string }
+        const tx = parse(j?.rawTx)
+        if (tx !== undefined) return tx
+      }
+    } catch {
+      /* next endpoint */
     }
-  } catch {
-    /* no source answered */
   }
   return undefined
 }
@@ -577,20 +625,22 @@ export async function merklePathMainnet(cfg: MainnetConfig | undefined, txid: st
   const c = def(cfg)
   const h: Record<string, string> = {}
   if (c.broadcasterApiKey) h.Authorization = `Bearer ${c.broadcasterApiKey}`
-  const ar = await req(c, `${c.broadcasterUrl}/tx/${txid}`, { headers: h })
-  if (ar.ok) {
+  for (const base of c.broadcasterUrls) {
+    const ar = await req(c, `${base}/tx/${txid}`, { headers: h }).catch(() => undefined)
+    if (ar === undefined || !ar.ok) continue // dead route — try the next one
     const b = await ar.json()
     if (b.merklePath) {
       try {
         return { merklePath: MerklePath.fromHex(b.merklePath), status: String(b.txStatus ?? 'mined') }
       } catch {
-        /* fall through to WoC */
+        break // a malformed path is a claim, not a proof — index fallback
       }
     }
     const st = String(b.txStatus ?? '').toUpperCase()
     if (st !== 'MINED' && st !== 'IMMUTABLE') {
       return null // still pending / rejected upstream
     }
+    break // an answering endpoint that reports mined-without-path → TSC proof
   }
   // index TSC-proof fallback — the root it claims is still verified against
   // the witnessed tracker by the caller before the proof is trusted
@@ -642,41 +692,52 @@ export async function discoverUtxos(cfg: MainnetConfig | undefined, address: str
   const c = def(cfg)
   const list = await c.index.utxos(address)
   if (list === undefined) throw new Error(`${address}: index could not serve unspents`)
-  const out: FundingOut[] = []
-  const pace = pacer(350)
+  const out: Array<FundingOut | undefined> = new Array(list.length)
   // the index is discovery, not truth: an entry counts only once its own
   // bytes confirm the txid, the vout exists, and the script pays `address`.
-  // satoshis come from the tx output, never from the index's `value`
+  // satoshis come from the tx output, never from the index's `value`.
+  // Request pacing lives inside the index dialects (pace + 429-retry) —
+  // bounded workers overlap each candidate's RTT; a funded address with
+  // N coins no longer pays N × (pace + fetch) inside WAIT_FUNDING.
   const pkh = Utils.fromBase58Check(address).data
   const want = `76a914${typeof pkh === 'string' ? pkh : Utils.toHex(Uint8Array.from(pkh))}88ac`
-  for (const u of list) {
-    await pace()
+  const verify = async (u: IndexUtxo, i: number): Promise<void> => {
     // a just-broadcast tx may not be served as hex yet: skip it this round
     const hex = await c.index.txHex(u.txid).catch(() => undefined)
-    if (hex === undefined) continue
+    if (hex === undefined) return
     let tx: Transaction
     try {
       tx = Transaction.fromHex(hex)
     } catch {
       onSkip?.(u.txid, 'served tx hex does not parse')
-      continue
+      return
     }
     if (tx.id('hex') !== u.txid) {
       onSkip?.(u.txid, 'served hex hashes to a different txid')
-      continue
+      return
     }
     const o = tx.outputs[u.vout]
     if (o === undefined) {
       onSkip?.(u.txid, `index vout ${u.vout} does not exist`)
-      continue
+      return
     }
     if (o.lockingScript.toHex() !== want) {
       onSkip?.(u.txid, `vout ${u.vout} does not pay the address`)
-      continue
+      return
     }
-    out.push({ tx, vout: u.vout, satoshis: o.satoshis ?? 0 })
+    out[i] = { tx, vout: u.vout, satoshis: o.satoshis ?? 0 }
   }
-  return out
+  let next = 0
+  const WORKERS = 4
+  await Promise.all(
+    Array.from({ length: Math.min(WORKERS, list.length) }, async () => {
+      while (next < list.length) {
+        const i = next++
+        await verify(list[i], i)
+      }
+    })
+  )
+  return out.flatMap((o) => (o === undefined ? [] : [o]))
 }
 
 /** The spend question answered with evidence, never trust: an index's

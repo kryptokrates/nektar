@@ -7,7 +7,8 @@
 // Chain questions are already answered by the ChainPort; this file only sees
 // port.broadcast/tracker/mine/guard.
 import { join } from 'node:path'
-import { PrivateKey, Transaction, WalletClient, PublicKey as SdkPublicKey } from '@bsv/sdk'
+import { existsSync, renameSync } from 'node:fs'
+import { PrivateKey, Transaction, WalletClient, ProtoWallet, PublicKey as SdkPublicKey } from '@bsv/sdk'
 import { walletSigner, FUND_SIGN_ARGS, nektarEnv, nektarEnvFlag, nektarEnvNum, type SignerWallet } from '@nektar/core'
 import {
   bootstrapReserve,
@@ -36,18 +37,16 @@ interface CoinBook extends Funds {
 }
 
 export interface CustodyResult {
-  /** the one coin book (WalletFunds on every real wallet path) */
+  /** the one coin book (SqlFunds on every real wallet path) */
   funds: CoinBook
-  /** injected signing surface for lanes/bstack protocol calls */
+  /** injected signing surface for lanes/bstack protocol calls — ProtoWallet
+   *  under held-key custody, WalletClient under NEKTAR_WALLET=client. Both
+   *  expose the same getPublicKey/createSignature/createHmac surface. */
   wallet?: import('@bsv/sdk').WalletInterface | import('./types.js').OperatorWallet
   /** absent under client custody — the external wallet signs instead */
   fundKey?: PrivateKey
   /** external BRC-100 substrate when NEKTAR_WALLET=client */
   clientWallet?: import('@bsv/sdk').WalletInterface
-  /** the wallet's chain-view services — carries the txLookup seam runtime
-   *  binds to txStore (own txs visible before the index catches up). The
-   *  structural type is the seam, not the toolbox's WalletServices iface. */
-  services?: { txLookup?: (txid: string) => Promise<import('@bsv/sdk').Transaction | undefined> }
   fundAddress: string
   pkhHex: string
   releaseKeyLock?: () => Promise<void>
@@ -59,7 +58,8 @@ export interface CustodyResult {
 export async function openCustody(
   cfg: { network: string; dataDir: string; regtest?: RegtestConfig & { fundWif: string }; main?: MainnetConfig & { fundWif?: string } },
   port: ChainPort,
-  pass: string | undefined
+  pass: string | undefined,
+  persistence: { knex: import('knex').Knex; txStore: TxStore }
 ): Promise<CustodyResult> {
   const tb = await import('@nektar/automation')
   const net = port.network
@@ -67,26 +67,22 @@ export async function openCustody(
   // upkeep/publish takes may not dip the book below what keeps one deal
   // affordable — the impl's take() enforces it on every pick
   const dealFloor = nektarEnvNum('NEKTAR_DEAL_FLOOR_SATS') ?? 0
+  const { knex, txStore } = persistence
   if (net === 'regtest') {
     if (walletMode !== 'toolbox')
       throw new Error(`regtest custody is NEKTAR_WALLET=toolbox — got '${walletMode}' (legacy was removed; client has no regtest path)`)
     const rc = cfg.regtest!
     const fundKey = PrivateKey.fromWif(rc.fundWif)
-    // D2: wallet-relayed txs go through the SAME SpendGuard — postBeef is a
-    // spend entry point, not a side channel around the caps
-    const services = new tb.RegtestWalletServices(rc, port.tracker as import('@nektar/chain').TeranodeRPCTracker, (tx) => port.broadcast(tx))
-    const toolbox = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: 'regtest', services })
-    const funds = new tb.WalletFunds(toolbox.wallet, services, { log: log(net), dealFloor })
-    await funds.refresh()
     const pkhHex = Buffer.from(fundKey.toPublicKey().toHash()).toString('hex')
+    const fundAddress = fundKey.toPublicKey().toAddress([0x6f])
+    const funds = await tb.SqlFunds.open(knex, txStore, { log: log(net), dealFloor, pkhHex, address: fundAddress })
+    await sweepBasket({ tb, dataDir: cfg.dataDir, chain: 'regtest', port, funds, log: log(net) })
     return {
       funds,
-      wallet: toolbox.wallet,
+      wallet: new ProtoWallet(fundKey),
       fundKey,
-      services,
-      fundAddress: fundKey.toPublicKey().toAddress([0x6f]),
-      pkhHex,
-      closeWallet: () => toolbox.close()
+      fundAddress,
+      pkhHex
     }
   }
   const mc = cfg.main!
@@ -127,46 +123,111 @@ export async function openCustody(
   process.stderr.write(
     `nektar ${net}: operator fee key ${fundAddress} — fund this address to enable anchoring (then set NEKTAR_FUND_TXIDS=<txid|hex:rawtx>, or NEKTAR_WAIT_FUNDING=1 to QR + hold for funds)\n`
   )
-  // D2: the wallet's own postBeef relays through the SAME SpendGuard — a
-  // wallet-signed action is a spend entry point like any other
-  const services = new tb.LiveWalletServices({ chain: testNet ? 'test' : 'main', mc, tracker: port.tracker, broadcast: (tx) => port.broadcast(tx) })
-  let closeWallet: (() => Promise<void>) | undefined
-  let wallet: import('@bsv/sdk').WalletInterface | undefined
-  let funds: import('@nektar/automation').WalletFunds
-  if (externalWallet) {
-    funds = new tb.WalletFunds(clientWallet!, services, { log: log(net), dealFloor })
-    wallet = clientWallet
-    await funds.refresh()
-    process.stderr.write(`nektar ${net}: wallet backend client (external BRC-100) — ${funds.utxos.length} funding utxo(s)\n`)
-  } else {
-    if (fundKey === undefined) throw new Error('NEKTAR_WALLET=toolbox embeds its keyDeriver from the fee key — =client is the keyless mode')
-    const toolbox = await tb.openToolboxWallet({ fundKey, dataDir: cfg.dataDir, chain: testNet ? 'test' : 'main', services })
-    funds = new tb.WalletFunds(toolbox.wallet, services, { log: log(net), dealFloor })
-    wallet = toolbox.wallet
-    closeWallet = () => toolbox.close()
-    await funds.refresh()
-    process.stderr.write(`nektar ${net}: wallet backend toolbox (wallet.sqlite) — ${funds.utxos.length} funding utxo(s)\n`)
+  // the one coin book for both custody modes — signing differs (held key via
+  // ProtoWallet, external via WalletClient), coin state does not
+  const funds = await tb.SqlFunds.open(knex, txStore, { log: log(net), dealFloor, pkhHex, address: fundAddress })
+  const wallet = externalWallet ? clientWallet! : new ProtoWallet(fundKey!)
+  if (!externalWallet && fundKey !== undefined) {
+    await sweepBasket({ tb, dataDir: cfg.dataDir, chain: testNet ? 'test' : 'main', port, funds, log: log(net) })
   }
-  return { funds, wallet, fundKey, clientWallet, services, fundAddress, pkhHex, releaseKeyLock, closeWallet }
+  process.stderr.write(`nektar ${net}: coin book sqlite utxos (${funds.utxos.length} funding utxo(s), custody ${externalWallet ? 'client' : 'held key'})\n`)
+  return { funds, wallet, fundKey, clientWallet, fundAddress, pkhHex, releaseKeyLock }
+}
+
+/** one-time migration: an existing wallet.sqlite basket is swept into the
+ *  `utxos` table, then renamed aside so the sweep never re-runs. Enumerates
+ *  STORAGE-level rows (openToolboxStore + basketRows — no Wallet, no
+ *  services): the wallet-layer `listOutputs` hides outputs under
+ *  `unsigned`/`failed`/`unprocessed` parents (toolbox utxo-lifecycle doc),
+ *  which is exactly where a stalled delayed broadcast leaves them. Parents
+ *  that never aired get a broadcast recovery before adoption; `unsigned`/
+ *  `failed` parents and dead broadcasts are skipped without blocking the
+ *  rename; any other blocked row keeps wallet.sqlite for a next-boot retry.
+ *  `adopt` respects tombstones, so a re-run is idempotent.
+ *  NEKTAR_SKIP_BASKET_SWEEP=1 opts out. Exported for the migration test. */
+export async function sweepBasket(deps: {
+  tb: typeof import('@nektar/automation')
+  dataDir: string
+  chain: 'regtest' | 'test' | 'main'
+  port: ChainPort
+  funds: { adopt: (tx: Transaction, vout: number) => Promise<boolean>; utxos?: unknown[] }
+  log: (s: string) => void
+}): Promise<void> {
+  const { tb, dataDir, chain, port, funds, log: l } = deps
+  const file = join(dataDir, 'wallet.sqlite')
+  if (nektarEnvFlag('NEKTAR_SKIP_BASKET_SWEEP') || !existsSync(file)) return
+  try {
+    const store = await tb.openToolboxStore({ dataDir, chain })
+    let swept = 0
+    let blocked = 0
+    try {
+      for (const r of await tb.basketRows(store.activeStorage, tb.NEKTAR_BASKET)) {
+        // dead parents: never aired or abandoned — the output was never real
+        // money; skip without holding the rename
+        if (r.parentStatus === 'unsigned' || r.parentStatus === 'failed') continue
+        if (r.txid === undefined) {
+          blocked++
+          continue
+        }
+        // bytes come from the storage's own resolver first — proven_txs
+        // (mined) or proven_tx_reqs (the send queue) — first-party evidence,
+        // zero network calls; the port lookups are the fallback for rows
+        // whose bytes never landed in wallet storage.
+        const { proven, rawTx } = await store.activeStorage.getProvenOrRawTx(r.txid)
+        const bytes = rawTx ?? proven?.rawTx
+        let tx = bytes !== undefined ? Transaction.fromBinary(bytes) : undefined
+        tx ??= (await port.getTx?.(r.txid)) ?? (await port.txLookup?.(r.txid))
+        if (tx === undefined) {
+          l(`basket sweep: ${r.txid.slice(0, 12)}…:${r.vout} — no tx bytes anywhere; retry next boot`)
+          blocked++
+          continue
+        }
+        // `completed`/`unproven` (and any proven record) aired by definition —
+        // adopt as-is. The genuinely-stalled send states get one broadcast
+        // recovery: the delayed-broadcast casualty this migration exists for.
+        const stalled = r.parentStatus !== 'completed' && r.parentStatus !== 'unproven' && proven === undefined
+        if (stalled) {
+          const br = await port.broadcast(tx)
+          const ok = br.status === 'success' || /already/i.test(br.description ?? '')
+          const dead = /double.?spend|missing inputs|bad-txns|non-final/i.test(br.description ?? '')
+          if (!ok && !dead) {
+            l(`basket sweep: ${r.txid.slice(0, 12)}…:${r.vout} parent broadcast failed (${br.description ?? 'rejected'}) — retry next boot`)
+            blocked++
+          }
+          if (!ok) continue
+        }
+        if (await funds.adopt(tx, r.vout)) swept++
+      }
+    } finally {
+      await store.close()
+    }
+    if (swept > 0) l(`basket sweep: ${swept} outpoint(s) migrated wallet.sqlite → utxos`)
+    if (blocked > 0) {
+      l(`basket sweep: ${blocked} outpoint(s) blocked — wallet.sqlite kept for next-boot retry`)
+    } else {
+      try {
+        renameSync(file, `${file}.migrated`)
+      } catch {
+        /* rename failed — the sweep is idempotent, next boot re-runs it */
+      }
+    }
+  } catch (e) {
+    l(`basket sweep skipped: ${(e as Error).message}`)
+  }
 }
 
 /** regtest treasury bootstrap — the funder's own chain in the data dir; split
  *  mined before use. Bootstrap writes straight into the wallet via the seed's
  *  addOwned hook (internalize). Only runs while the wallet holds <5 utxos. */
-export async function regtestSeed(deps: {
-  rc: RegtestConfig & { fundWif: string }
-  port: ChainPort
-  funds: import('@nektar/automation').WalletFunds
-  dataDir: string
-}): Promise<void> {
+export async function regtestSeed(deps: { rc: RegtestConfig & { fundWif: string }; port: ChainPort; funds: CoinBook; dataDir: string }): Promise<void> {
   const { rc, port, funds, dataDir } = deps
-  if (funds.utxos.length >= 5) return
+  if ((funds.utxos?.length ?? 0) >= 5) return
   const fundKey = PrivateKey.fromWif(rc.fundWif)
   const seed = { addOwned: (tx: Transaction, vout: number) => void funds.adopt(tx, vout) }
   const s = await bootstrapReserve(rc, fundKey, seed, regtestRpc(rc), { treasuryFile: join(dataDir, 'treasury.json') })
-  if (!s && funds.utxos.length === 0) throw new Error('regtest: could not fund the reserve (no unspent treasury or early coinbase for the fund key)')
+  if (!s && (funds.utxos?.length ?? 0) === 0) throw new Error('regtest: could not fund the reserve (no unspent treasury or early coinbase for the fund key)')
   if (s) await port.mine?.()
-  await funds.refresh()
+  await funds.refresh?.()
 }
 
 export interface LiveFundingDeps {
@@ -208,9 +269,9 @@ export interface LiveFunding {
 export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
   const { cfg, mc, net, custody, txStore, ledger, port } = deps
   const { fundAddress, pkhHex } = custody
-  // the live path only ever builds the wallet impl — the fields the UX
+  // the live path only ever builds the sqlite impl — the fields the UX
   // pokes (utxos/refresh/adopt) are its real surface
-  const funds = custody.funds as import('@nektar/automation').WalletFunds
+  const funds = custody.funds as import('@nektar/automation').SqlFunds
   const l = log(net)
   // funding wake: every producer that lands a utxo (p2p 'pay', FUND_TXIDS
   // import, indexer discovery, fee-vault mint) signals through addIfNew so

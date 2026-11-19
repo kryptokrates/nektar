@@ -52,8 +52,21 @@ export {
   rankOffers
 } from './scoring.js'
 export { type WalletDeps, type TxObservation, WalletCoordinator } from './wallet.js'
-export { type ToolboxHandle, NEKTAR_BASKET, RegtestWalletServices, openToolboxWallet, ToolboxFunder, fundToolbox, LiveWalletServices } from './toolbox.js'
+export {
+  type ToolboxHandle,
+  type ToolboxStoreHandle,
+  type BasketRow,
+  NEKTAR_BASKET,
+  RegtestWalletServices,
+  openToolboxWallet,
+  openToolboxStore,
+  basketRows,
+  ToolboxFunder,
+  fundToolbox,
+  LiveWalletServices
+} from './toolbox.js'
 export { WalletFunds } from './wallettfunds.js'
+export { SqlFunds } from './sqlfunds.js'
 export { type PreflightDeps, WATCHDOG_CHECKS, runPreflight } from './preflight.js'
 export { type TradeEvidence, type RedactedTradeEvidence, redactTradeEvidence, collectTradeEvidence, verifyTradeEvidence } from './evidence.js'
 export {

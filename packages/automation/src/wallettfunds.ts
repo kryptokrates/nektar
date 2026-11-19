@@ -27,7 +27,11 @@ const withPath = (found: Transaction): Transaction => {
  *  truth. */
 /** basket listing page size + cap — listOutputs truncates silently at its
  *  limit, so every basket read pages until a short page or the cap; the
- *  cap is a load ceiling, never a correct cut-off, so hitting it logs */
+ *  cap is a load ceiling, never a correct cut-off, so hitting it logs.
+ *  listOutputs ALSO hides outputs whose parent tx is `unsigned`/`failed`/
+ *  `unprocessed` (toolbox utxo-lifecycle doc): a stalled delayed broadcast
+ *  leaves exactly that state — the storage-level `basketRows` sweep is the
+ *  recovery path for anything this view can't show. */
 const PAGE = 1000
 const MAX_PAGES = 20
 

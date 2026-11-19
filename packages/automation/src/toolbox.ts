@@ -346,19 +346,18 @@ export interface ToolboxHandle {
   close: () => Promise<void>
 }
 
-/** Wallet + SQLite storage over `dataDir/wallet.sqlite`, keyed by `fundKey`.
- *  `services` injects the chain view — pass `RegtestWalletServices` on regtest,
- *  omit on live nets (toolbox defaults: ARC/WoC/chaintracks). */
-export async function openToolboxWallet(args: {
-  fundKey: PrivateKey
-  dataDir: string
-  chain: sdk.Chain
-  services?: sdk.WalletServices
-}): Promise<ToolboxHandle> {
-  // the deriver must see a cjs PrivateKey — the wallet consumes it
-  const keyDeriver = new sdkc.CachedKeyDeriver(sdkc.PrivateKey.fromWif(args.fundKey.toWif()))
-  const services = args.services ?? new Services(args.chain)
-  const storage = new WalletStorageManager(keyDeriver.identityKey)
+export interface ToolboxStoreHandle {
+  activeStorage: StorageKnex
+  /** drains the wallet.sqlite knex pool — without it the process can't exit */
+  close: () => Promise<void>
+}
+
+/** Storage-only open of `dataDir/wallet.sqlite` — no Wallet, no services.
+ *  The basket sweep enumerates storage-level rows because the wallet-layer
+ *  `listOutputs` hides outputs whose parent tx is `unsigned`/`failed`/
+ *  `unprocessed` (toolbox utxo-lifecycle doc) — exactly the state a stalled
+ *  delayed broadcast leaves, and exactly the rows a migration must not miss. */
+export async function openToolboxStore(args: { dataDir: string; chain: sdk.Chain }): Promise<ToolboxStoreHandle> {
   const activeStorage = new StorageKnex({
     chain: args.chain,
     knex: Setup.createSQLiteKnex(join(args.dataDir, 'wallet.sqlite')),
@@ -368,10 +367,75 @@ export async function openToolboxWallet(args: {
   })
   await activeStorage.migrate('nektar_wallet', randomBytesHex(33))
   await activeStorage.makeAvailable()
+  return { activeStorage, close: async () => await activeStorage.destroy() }
+}
+
+export interface BasketRow {
+  /** the output's parent txid — the output row's `txid` when set, else the
+   *  transaction row's */
+  txid: string | undefined
+  vout: number
+  satoshis: number
+  /** parent transaction status (toolbox utxo-lifecycle doc): `unprocessed`/
+   *  `nosend`/`sending`/`unfail` mean the parent may never have aired;
+   *  `unsigned`/`failed` rows are dead. Parent BYTES are not here — the
+   *  transactions.rawTx column is unused; resolve bytes via the storage's
+   *  `getProvenOrRawTx(txid)` (proven_txs / proven_tx_reqs), like the
+   *  toolbox's own BEEF assembly does. */
+  parentStatus: string
+}
+
+/** Storage-level basket enumeration — every spendable row in `basket`,
+ *  regardless of parent-transaction status. The wallet-layer `listOutputs`
+ *  hides outputs under `unsigned`/`failed`/`unprocessed` parents, so a
+ *  migration/recovery path must read the tables. */
+export async function basketRows(store: Pick<StorageKnex, 'knex'>, basket: string): Promise<BasketRow[]> {
+  const rows = (await store
+    .knex('outputs as o')
+    .join('transactions as t', 'o.transactionId', 't.transactionId')
+    .join('output_baskets as b', 'o.basketId', 'b.basketId')
+    .where('b.name', basket)
+    .where('o.spendable', true)
+    .select('o.txid', 'o.vout', 'o.satoshis', 't.status', 't.txid as parentTxid')) as Array<{
+    txid: string | null
+    vout: number
+    satoshis: number
+    status: string
+    parentTxid: string | null
+  }>
+  return rows.map((r) => ({
+    txid: r.txid ?? r.parentTxid ?? undefined,
+    vout: r.vout,
+    satoshis: r.satoshis,
+    parentStatus: r.status
+  }))
+}
+
+/** Wallet + SQLite storage over `dataDir/wallet.sqlite`, keyed by `fundKey`.
+ *  `services` injects the chain view — pass `RegtestWalletServices` on regtest,
+ *  omit on live nets (toolbox defaults: ARC/WoC/chaintracks).
+ *  NO MONITOR RUNS: nothing here starts the toolbox Monitor, so —
+ *  - every send must pass `acceptDelayedBroadcast: false` (the documented
+ *    default would queue it for a Monitor that never broadcasts),
+ *  - wallet-side `unproven`→`completed` settlement never runs — our tracker
+ *    is the truth source; `unproven` parents still list, so reads are fine,
+ *  - `signableTransaction` references live in wallet memory only — create
+ *    and sign in the same call (`fundToolbox` already does). */
+export async function openToolboxWallet(args: {
+  fundKey: PrivateKey
+  dataDir: string
+  chain: sdk.Chain
+  services?: sdk.WalletServices
+}): Promise<ToolboxHandle> {
+  // the deriver must see a cjs PrivateKey — the wallet consumes it
+  const keyDeriver = new sdkc.CachedKeyDeriver(sdkc.PrivateKey.fromWif(args.fundKey.toWif()))
+  const services = args.services ?? new Services(args.chain)
+  const { activeStorage, close } = await openToolboxStore({ dataDir: args.dataDir, chain: args.chain })
+  const storage = new WalletStorageManager(keyDeriver.identityKey)
   await storage.addWalletStorageProvider(activeStorage)
   if (storage.canMakeAvailable()) await storage.makeAvailable()
   const wallet = new Wallet({ chain: args.chain, keyDeriver: keyDeriver as never, storage, services })
-  return { wallet, services, storage, activeStorage, funder: new ToolboxFunder(wallet), close: async () => await activeStorage.destroy() }
+  return { wallet, services, storage, activeStorage, funder: new ToolboxFunder(wallet), close }
 }
 
 /** Funder over wallet outputs — read-only. `take` picks the smallest spendable
@@ -452,7 +516,11 @@ export async function fundToolbox(
     ],
     labels: ['nektar-funding'],
     description: `nektar funding top-up (${outpoints.length} outpoints)`,
-    options: { trustSelf: 'known' }
+    // no Monitor runs in this process — the documented default (delayed)
+    // would queue the tx `unprocessed`/`unsent` forever, and its basket
+    // output stays hidden from listOutputs under an unprocessed parent.
+    // Broadcast synchronously through our own services.postBeef instead.
+    options: { trustSelf: 'known', acceptDelayedBroadcast: false }
   })
   const st = car.signableTransaction
   if (st === undefined) return outpoints.map((o) => ({ outpoint: `${o.txid}.${o.vout}`, txid: car.txid, success: true }))

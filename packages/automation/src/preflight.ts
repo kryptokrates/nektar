@@ -304,8 +304,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport
         if (p !== undefined) need = Math.max(need, p.limits.maxLockedSats + p.limits.perTxFeeSats)
       }
     const { splitDailySpend } = await import('./ledger.js')
-    const { deal, upkeep } =
-      store !== undefined && s.costs !== undefined ? await splitDailySpend(store, s.costs, now) : { deal: -1, upkeep: -1 }
+    const { deal, upkeep } = store !== undefined && s.costs !== undefined ? await splitDailySpend(store, s.costs, now) : { deal: -1, upkeep: -1 }
     const split = deal >= 0 ? ` — deals ${deal}, upkeep ${upkeep}` : ''
     const headroom = s.maxPerDay - s.spentTodaySats
     const detail = `today ${s.spentTodaySats}/${s.maxPerDay} sats${split}; one deal needs ~${need}`

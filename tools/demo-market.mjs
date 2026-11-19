@@ -46,10 +46,14 @@ const treasAddr = treasury.toAddress()
 
 // --- agents ------------------------------------------------------------------
 const mkAgent = (name, port, domains) => {
-  const out = execFileSync(process.execPath, [join(root, 'tools', 'agent-new.mjs'), '--testnet', '--name', name, '--port', String(port), '--domains', domains.join(','), '--json'], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'inherit']
-  })
+  const out = execFileSync(
+    process.execPath,
+    [join(root, 'tools', 'agent-new.mjs'), '--testnet', '--name', name, '--port', String(port), '--domains', domains.join(','), '--json'],
+    {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'inherit']
+    }
+  )
   return JSON.parse(out)
 }
 log('creating agents (agent-new)…')
@@ -129,7 +133,9 @@ for (const c of [sports, nutrition]) {
   const deadline = Date.now() + 60_000
   let up = false
   while (Date.now() < deadline) {
-    const ok = await fetch(`http://127.0.0.1:${c.port}/v1/health`).then((r) => r.ok).catch(() => false)
+    const ok = await fetch(`http://127.0.0.1:${c.port}/v1/health`)
+      .then((r) => r.ok)
+      .catch(() => false)
     if (ok) {
       up = true
       break
@@ -151,8 +157,16 @@ for (const c of [sports, nutrition]) {
 
 // --- seed + trade --------------------------------------------------------------
 const FACTS = {
-  [sports.fundingAddress]: { card: sports, shard: 'sports', data: 'Recovery note: Zone-2 volume under 150bpm rebuilds aerobic base without taxing glycogen stores needed for match day.' },
-  [nutrition.fundingAddress]: { card: nutrition, shard: 'nutrition', data: 'Fuel note: 30-60g carbohydrate per hour keeps blood glucose steady across a 90-minute effort; fat adaptation shifts the ceiling, not the floor.' }
+  [sports.fundingAddress]: {
+    card: sports,
+    shard: 'sports',
+    data: 'Recovery note: Zone-2 volume under 150bpm rebuilds aerobic base without taxing glycogen stores needed for match day.'
+  },
+  [nutrition.fundingAddress]: {
+    card: nutrition,
+    shard: 'nutrition',
+    data: 'Fuel note: 30-60g carbohydrate per hour keeps blood glucose steady across a 90-minute effort; fat adaptation shifts the ceiling, not the floor.'
+  }
 }
 for (const f of Object.values(FACTS)) {
   await call(f.card, 'remember', { shard: f.shard, data: f.data })
@@ -181,7 +195,10 @@ while (Date.now() < deadline) {
   }
   if (buys >= 2 && sales >= 2) {
     console.log('\n# BOTH DEALS SETTLED — live testnet, peer-carried ancestry, zeroconf')
-    for (const d of all) console.log(`  ${d.role}  ${d.state}  escrow ${d.escrowTxid ?? '-'}  disclosure ${d.disclosureTxid ?? d.completeTxid ?? '-'}  sats ${d.sellerSats ?? d.priceSats ?? '-'}`)
+    for (const d of all)
+      console.log(
+        `  ${d.role}  ${d.state}  escrow ${d.escrowTxid ?? '-'}  disclosure ${d.disclosureTxid ?? d.completeTxid ?? '-'}  sats ${d.sellerSats ?? d.priceSats ?? '-'}`
+      )
     console.log('\nagents still running:')
     console.log(`  sports    MCP ${sports.mcp}  bearer ${sports.bearer}  log ${sports.dataDir}\\agent.log`)
     console.log(`  nutrition MCP ${nutrition.mcp}  bearer ${nutrition.bearer}  log ${nutrition.dataDir}\\agent.log`)

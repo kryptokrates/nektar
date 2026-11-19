@@ -70,19 +70,9 @@ test('profile: agent lists exactly the ten agent tools; operator lists all', asy
   const prev = process.env.NEKTAR_TOOL_PROFILE
   try {
     delete process.env.NEKTAR_TOOL_PROFILE
-    assert.deepEqual(
-      (await visibleTools())
-        .map((t) => t.name)
-        .sort(),
-      [...AGENT_TEN].sort()
-    )
+    assert.deepEqual((await visibleTools()).map((t) => t.name).sort(), [...AGENT_TEN].sort())
     process.env.NEKTAR_TOOL_PROFILE = 'agent'
-    assert.deepEqual(
-      (await visibleTools())
-        .map((t) => t.name)
-        .sort(),
-      [...AGENT_TEN].sort()
-    )
+    assert.deepEqual((await visibleTools()).map((t) => t.name).sort(), [...AGENT_TEN].sort())
     process.env.NEKTAR_TOOL_PROFILE = 'operator'
     const all = (await visibleTools()).map((t) => t.name)
     assert.ok(all.length > AGENT_TEN.length, `operator sees more than ten (${all.length})`)

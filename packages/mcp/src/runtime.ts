@@ -543,8 +543,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
             if (inLedger !== undefined) return Transaction.fromHex(inLedger)
             return await port.txLookup?.(txid).catch(() => undefined)
           }
-          const hintOf = async (txid: string): Promise<{ status: string; answered: boolean } | undefined> =>
-            port.statusHint?.(txid).catch(() => undefined)
+          const hintOf = async (txid: string): Promise<{ status: string; answered: boolean } | undefined> => port.statusHint?.(txid).catch(() => undefined)
           const reair = async (tx: Transaction): Promise<void> => {
             for (const i of tx.inputs) {
               if (i.sourceTransaction !== undefined || i.sourceTXID === undefined) continue

@@ -40,6 +40,10 @@ paths = [
   '''^dist-bundle($|/)''',
   '''^tools/groth16-spike($|/)''',
   '''(^|/)target($|/)''',
+  '''(^|/)scratch($|/)''',
+  # BRC-100 conformance vectors — 'wallet/primary/self|anyone' derivation
+  # identifiers trip generic-api-key; they are protocol names, not secrets
+  '''(^|/)test/vectors($|/)''',
 ]
 regexTarget = "line"
 regexes = [

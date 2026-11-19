@@ -31,7 +31,7 @@ export const PAID_SALE_TOOLS = new Set([
   'sale#pay',
   'sale#payBuild'
 ])
-export const paidSaleEnabled = () => /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAID_DISCLOSURE') ?? '')
+const paidSaleEnabled = () => /^(1|true|yes)$/i.test(nektarEnv('NEKTAR_PAID_DISCLOSURE') ?? '')
 
 /** the paid-sale authority: an explicit NEKTAR_PAID_DISCLOSURE decides
  *  (truthy on, any other set value a hard off that outranks policy); unset,

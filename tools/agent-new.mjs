@@ -122,7 +122,12 @@ const env = {
   // notice a fresh UTXO
   NEKTAR_INDEXER_DISCOVERY: '1'
 }
-writeFileSync(envFile, Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n') + '\n')
+writeFileSync(
+  envFile,
+  Object.entries(env)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('\n') + '\n'
+)
 writeFileSync(policyFile, JSON.stringify(policy, null, 1) + '\n')
 
 // approve the policy directly into the data dir — no running instance needed

@@ -59,7 +59,14 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // the host-health set the lane readers maintain.
   const pfCfg = { network: cfg.network, dataDir: cfg.dataDir, marketHosts, boxOffice: cfg.boxOffice, unattended: cfg.unattended, now: cfg.now }
   const runChecks = (only?: string[]) =>
-    runPreflight({ mem, store, objectStore, cfg: pfCfg, probes: { broadcaster: cfg.broadcasterProbe, spend: cfg.spendProbe }, ...(only !== undefined ? { only } : {}) })
+    runPreflight({
+      mem,
+      store,
+      objectStore,
+      cfg: pfCfg,
+      probes: { broadcaster: cfg.broadcasterProbe, spend: cfg.spendProbe },
+      ...(only !== undefined ? { only } : {})
+    })
   let lastReport: PreflightReport | undefined = await runChecks()
   if (cfg.strict === true && !lastReport.pass) {
     const failed = lastReport.checks

@@ -288,9 +288,7 @@ export async function liveFunding(deps: LiveFundingDeps): Promise<LiveFunding> {
       .then(async (ok) => {
         if (ok) return fundingWake?.()
         const why =
-          (await funds.spendCheck?.(u.tx.id('hex'), u.vout).catch(() => undefined)) === true
-            ? 'outpoint already spent on-chain'
-            : 'already held or tombstoned'
+          (await funds.spendCheck?.(u.tx.id('hex'), u.vout).catch(() => undefined)) === true ? 'outpoint already spent on-chain' : 'already held or tombstoned'
         l(`funding ${tag} refused — ${why}`)
       })
       .catch((e) => l(`funding ${tag} adopt failed: ${(e as Error).message}`))

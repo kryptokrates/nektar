@@ -692,7 +692,7 @@ export async function discoverUtxos(cfg: MainnetConfig | undefined, address: str
   const c = def(cfg)
   const list = await c.index.utxos(address)
   if (list === undefined) throw new Error(`${address}: index could not serve unspents`)
-  const out: Array<FundingOut | undefined> = new Array(list.length)
+  const out: Array<FundingOut | undefined> = Array.from({ length: list.length })
   // the index is discovery, not truth: an entry counts only once its own
   // bytes confirm the txid, the vout exists, and the script pays `address`.
   // satoshis come from the tx output, never from the index's `value`.

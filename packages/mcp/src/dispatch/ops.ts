@@ -51,7 +51,8 @@ export const handlers: Record<string, ToolHandler> = {
     // selling without paid disclosure can never settle — the buyer-side
     // sale# rail is gated off, so arming a seller would publish offers
     // that no counterparty may pay
-    if (!(await paidSaleAuthorized(au))) throw new Error('sell: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1 or approve a policy with disclosure.paid')
+    if (!(await paidSaleAuthorized(au)))
+      throw new Error('sell: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1 or approve a policy with disclosure.paid')
     if (typeof args?.shard !== 'string' || args.shard.length === 0) throw new Error('sell: shard required')
     if (!Array.isArray(args?.domains)) throw new Error('sell: domains[] required')
     const priceSats = Number(args?.priceSats)
@@ -75,9 +76,9 @@ export const handlers: Record<string, ToolHandler> = {
     // 'observed'/'confirmed' network-seen/proven, 'rejected'/'conflicted'
     // dead. One scan joins into every entry
     const ledger = new Map(
-      (
-        await au.store.walletTxs(['prepared', 'exported', 'submission_unknown', 'submitted', 'observed', 'confirmed', 'rejected', 'conflicted', 'expired'])
-      ).map((w) => [w.txid, w.state])
+      (await au.store.walletTxs(['prepared', 'exported', 'submission_unknown', 'submitted', 'observed', 'confirmed', 'rejected', 'conflicted', 'expired'])).map(
+        (w) => [w.txid, w.state]
+      )
     )
     const chainOf = (txid: unknown): string | undefined => (typeof txid === 'string' ? ledger.get(txid) : undefined)
     const entry = (o: import('@nektar/automation').Operation): Record<string, unknown> => {
@@ -168,7 +169,8 @@ export const handlers: Record<string, ToolHandler> = {
       return { ok: true, ...r }
     }
     if (op === 'enableSeller') {
-      if (!(await paidSaleAuthorized(au))) throw new Error('automation enableSeller: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1 or approve a policy with disclosure.paid')
+      if (!(await paidSaleAuthorized(au)))
+        throw new Error('automation enableSeller: paid disclosure is disabled — set NEKTAR_PAID_DISCLOSURE=1 or approve a policy with disclosure.paid')
       await au.engine.enableSeller(String(args?.policyHash ?? ''))
       void au.cycle()
       return { ok: true }

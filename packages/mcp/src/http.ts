@@ -375,7 +375,8 @@ export function createHttpApi(
         }
         try {
           if (url.pathname === '/mcp') return await mcp(req, res, authed)
-          if (req.method === 'GET' && (url.pathname === '/v1/health' || url.pathname === '/health' || url.pathname === '/healthz')) return send(200, { ok: true })
+          if (req.method === 'GET' && (url.pathname === '/v1/health' || url.pathname === '/health' || url.pathname === '/healthz'))
+            return send(200, { ok: true })
           if (req.method === 'POST' && url.pathname === '/v1/lane') {
             // direct carrier push — the same bytes a box/lane read would
             // fetch, admitted through the same verify+dedupe before ingest

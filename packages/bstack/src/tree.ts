@@ -187,7 +187,7 @@ export const deadAncestry = async (tree: Transaction, resolveTx: (txid: string) 
     // overlap the fetches without bursting the index (the dialects pace
     // themselves underneath anyway)
     const ids = [...remote]
-    const found: Array<Transaction | undefined> = new Array(ids.length)
+    const found: Array<Transaction | undefined> = Array.from({ length: ids.length })
     let next = 0
     await Promise.all(
       Array.from({ length: Math.min(4, ids.length) }, async () => {

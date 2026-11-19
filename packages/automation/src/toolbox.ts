@@ -50,6 +50,69 @@ export const NEKTAR_BASKET = 'nektar-funding'
 
 const werr = (e: unknown): sdk.WalletError => ({ code: 'WERR_INTERNAL', description: String(e) }) as sdk.WalletError
 
+/** txid → cjs tx from the runtime's own store. Bytes cross the dual-build
+ *  boundary; hex drops merklePath, so a proven parent re-attaches its BUMP
+ *  by copy — the same pattern the `withPath` comment in this file documents. */
+const localTxOf = async (lookup: ((txid: string) => Promise<Transaction | undefined>) | undefined, txid: string): Promise<Transaction | undefined> => {
+  const local = await lookup?.(txid).catch(() => undefined)
+  if (local === undefined) return undefined
+  const t = sdkc.Transaction.fromHex(local.toHex())
+  if (local.merklePath !== undefined) t.merklePath = sdkc.MerklePath.fromBinary(local.merklePath.toBinary())
+  return t
+}
+
+/** Whole-ancestry beef for a subject tx — the wallet's beef consumers
+ *  (sendWith relay, sync, storage validators) apply the same closure rule
+ *  as internalizeAction: every unproven entry must carry its inputs back to
+ *  a BUMP. A bare tx with dangling inputs is a rejection in a bag. Same
+ *  walk WalletFunds.buildAtomicBeef runs, on the cjs side of the boundary:
+ *  mined subject anchors itself; every unproven entry resolves inputs via
+ *  `resolveTx` (local store first, chain second); mined entries get BUMPs;
+ *  fixpoint bounded like WalletFunds.parent(). */
+async function closureBeef(
+  subject: Transaction,
+  resolveTx: (txid: string) => Promise<Transaction | undefined>,
+  merklePath: (txid: string) => Promise<{ merklePath?: unknown }>,
+  hops = 8
+): Promise<InstanceType<typeof sdkc.Beef>> {
+  const beef = new sdkc.Beef()
+  beef.mergeTransaction(subject)
+  if (subject.merklePath === undefined) {
+    const mp = await merklePath(subject.id('hex'))
+    if (mp.merklePath !== undefined) {
+      // same cjs instance at runtime — the cast only bridges the
+      // dual-build type split (built via sdkc in the services layer)
+      subject.merklePath = mp.merklePath as unknown as typeof subject.merklePath
+      beef.mergeTransaction(subject)
+    }
+  }
+  if (subject.merklePath === undefined) {
+    for (let h = 0; h < hops; h++) {
+      let progress = false
+      for (const bt of [...beef.txs]) {
+        if (bt.isTxidOnly || bt.hasProof || bt.tx === undefined) continue
+        const mp = await merklePath(bt.txid)
+        if (mp.merklePath !== undefined) {
+          bt.tx.merklePath = mp.merklePath as unknown as typeof bt.tx.merklePath
+          beef.mergeTransaction(bt.tx)
+          progress = true
+          continue
+        }
+        for (const dep of bt.inputTxids) {
+          if (beef.findTxid(dep) == null) {
+            const p = await resolveTx(dep)
+            if (p === undefined) throw new Error(`beef ancestry: unproven ${bt.txid} has unresolvable input ${dep}`)
+            beef.mergeTransaction(p)
+            progress = true
+          }
+        }
+      }
+      if (!progress) break
+    }
+  }
+  return beef
+}
+
 /** WalletServices over the local Teranode stack — regtest only. Live nets use
  *  the toolbox's default `Services` (ARC/WoC/chaintracks) instead. */
 export class RegtestWalletServices implements sdk.WalletServices {
@@ -112,16 +175,25 @@ export class RegtestWalletServices implements sdk.WalletServices {
   getBsvExchangeRate = async (): Promise<number> => 0
   getFiatExchangeRate = async (): Promise<number> => 0
 
+  /** txid → cjs tx from txStore (unmineable carriers, adopted ancestry —
+   *  things the node never saw) */
+  private async localTx(txid: string): Promise<Transaction | undefined> {
+    return await localTxOf(this.txLookup, txid)
+  }
+
+  /** txid → cjs tx from the node */
+  private async nodeTx(txid: string): Promise<Transaction | undefined> {
+    // Teranode's verbose flag is an int — a bool fails with -32602
+    const hex = (await this.rpc('getrawtransaction', txid, 0).catch(() => undefined)) as string | undefined
+    return hex === undefined ? undefined : sdkc.Transaction.fromHex(hex)
+  }
+
   getRawTx = async (txid: string): Promise<sdk.GetRawTxResult> => {
     // txStore first — unmineable carriers and adopted ancestry never reach
     // the node's mempool, and our own txs save an RPC round-trip
-    const local = await this.txLookup?.(txid).catch(() => undefined)
-    if (local !== undefined) {
-      const t = sdkc.Transaction.fromHex(local.toHex())
-      return { txid, name: 'txstore', rawTx: Array.from(t.toBinary()) }
-    }
+    const local = await this.localTx(txid)
+    if (local !== undefined) return { txid, name: 'txstore', rawTx: Array.from(local.toBinary()) }
     try {
-      // Teranode's verbose flag is an int — a bool fails with -32602
       const hex = (await this.rpc('getrawtransaction', txid, 0)) as string
       return { txid, name: NAME, rawTx: Array.from(Utils.toArray(hex, 'hex')) }
     } catch (e) {
@@ -190,7 +262,10 @@ export class RegtestWalletServices implements sdk.WalletServices {
         await this.rpc('getrawtransaction', txid, 0)
         results.push({ txid, depth: 0, status: 'known' })
       } catch {
-        results.push({ txid, depth: undefined, status: 'unknown' })
+        // the node doesn't know it — but an unmineable carrier or adopted
+        // tx can still be held locally: 'known' asserts bytes, not validity
+        const local = await this.localTx(txid)
+        results.push({ txid, depth: undefined, status: local === undefined ? 'unknown' : 'known' })
       }
     }
     return { name: NAME, status: 'success', results }
@@ -232,15 +307,17 @@ export class RegtestWalletServices implements sdk.WalletServices {
     return allSeqFinal && Date.now() / 1000 >= lockTime
   }
 
-  /** Beef for a txid: raw tx + merkle path when mined — enough for the wallet
-   *  to internalize or verify. */
+  /** Beef for a txid: whole-ancestry — same closure rule LiveWalletServices
+   *  serves: the wallet's beef consumers reject dangling inputs on arrival,
+   *  and txStore holds what the node never saw (unmineable carriers). */
   getBeefForTxid: sdk.WalletServices['getBeefForTxid'] = async (txid) => {
-    const hex = (await this.rpc('getrawtransaction', txid, 0)) as string
-    const tx = sdkc.Transaction.fromHex(hex)
-    const r = (await regtestMerkleProof(this.cfg, txid)) ?? (await merklePathFor(this.cfg, txid, this.tracker, 50))
-    if (r !== null) tx.merklePath = new sdkc.MerklePath(r.blockHeight, r.path)
-    const beef = new sdkc.Beef()
-    beef.mergeTransaction(tx)
+    const subject = (await this.localTx(txid)) ?? (await this.nodeTx(txid))
+    if (subject === undefined) throw new Error(`no raw tx for ${txid}`)
+    const beef = await closureBeef(
+      subject,
+      async (id) => (await this.localTx(id)) ?? (await this.nodeTx(id)),
+      async (id) => await this.getMerklePath(id)
+    )
     return beef as unknown as Awaited<ReturnType<sdk.WalletServices['getBeefForTxid']>>
   }
 
@@ -437,15 +514,10 @@ export class LiveWalletServices implements sdk.WalletServices {
    *  (existence, bytes) — mined/spent status still comes from the index. */
   txLookup?: (txid: string) => Promise<Transaction | undefined>
 
-  /** txid → cjs tx from our own store. Bytes cross the dual-build boundary;
-   *  hex drops merklePath, so a proven parent re-attaches its BUMP by copy —
-   *  the same pattern the `withPath` comment in this file documents. */
+  /** txid → cjs tx from our own store (shared localTxOf — bytes cross the
+   *  dual-build boundary, merklePath re-attached) */
   private async localTx(txid: string): Promise<Transaction | undefined> {
-    const local = await this.txLookup?.(txid).catch(() => undefined)
-    if (local === undefined) return undefined
-    const t = sdkc.Transaction.fromHex(local.toHex())
-    if (local.merklePath !== undefined) t.merklePath = sdkc.MerklePath.fromBinary(local.merklePath.toBinary())
-    return t
+    return await localTxOf(this.txLookup, txid)
   }
 
   /** txid → cjs tx from the index */
@@ -655,54 +727,17 @@ export class LiveWalletServices implements sdk.WalletServices {
     return allSeqFinal && Date.now() / 1000 >= lockTime
   }
 
-  /** Beef for a txid: whole-ancestry, not a bare tx — the wallet's own beef
-   *  consumers (sendWith relay, sync, storage validators) apply the same
-   *  closure rule as internalizeAction: every unproven entry must carry its
-   *  inputs back to a BUMP. A single-tx beef on an unconfirmed subject is a
-   *  rejection in a bag, so serve the proven form outright. Same walk
-   *  WalletFunds.buildAtomicBeef runs, on the cjs side of the boundary. */
+  /** Beef for a txid: whole-ancestry — the wallet's beef consumers apply
+   *  the same closure rule as internalizeAction, so a bare unconfirmed tx
+   *  is a rejection in a bag. Shared closureBeef (txStore → index). */
   getBeefForTxid: sdk.WalletServices['getBeefForTxid'] = async (txid) => {
     const subject = (await this.localTx(txid)) ?? (await this.indexTx(txid))
     if (subject === undefined) throw new Error(`no raw tx for ${txid}`)
-    const beef = new sdkc.Beef()
-    beef.mergeTransaction(subject)
-    // a mined subject anchors itself — its BUMP is the whole proof
-    if (subject.merklePath === undefined) {
-      const mp = await this.getMerklePath(txid)
-      if (mp.merklePath !== undefined) {
-        // same cjs instance at runtime — the cast only bridges the
-        // dual-build type split (built via sdkc in getMerklePath)
-        subject.merklePath = mp.merklePath as unknown as typeof subject.merklePath
-        beef.mergeTransaction(subject)
-      }
-    }
-    if (subject.merklePath === undefined) {
-      // closure walk: every unproven carried tx resolves its inputs —
-      // txStore first, index second — and every mined entry gets its BUMP.
-      // Fixpoint, bounded like WalletFunds.parent() (8 hops).
-      for (let hops = 0; hops < 8; hops++) {
-        let progress = false
-        for (const bt of [...beef.txs]) {
-          if (bt.isTxidOnly || bt.hasProof || bt.tx === undefined) continue
-          const mp = await this.getMerklePath(bt.txid)
-          if (mp.merklePath !== undefined) {
-            bt.tx.merklePath = mp.merklePath as unknown as typeof bt.tx.merklePath
-            beef.mergeTransaction(bt.tx)
-            progress = true
-            continue
-          }
-          for (const dep of bt.inputTxids) {
-            if (beef.findTxid(dep) == null) {
-              const p = (await this.localTx(dep)) ?? (await this.indexTx(dep))
-              if (p === undefined) throw new Error(`beef ancestry: unproven ${bt.txid} has unresolvable input ${dep}`)
-              beef.mergeTransaction(p)
-              progress = true
-            }
-          }
-        }
-        if (!progress) break
-      }
-    }
+    const beef = await closureBeef(
+      subject,
+      async (id) => (await this.localTx(id)) ?? (await this.indexTx(id)),
+      async (id) => await this.getMerklePath(id)
+    )
     return beef as unknown as Awaited<ReturnType<sdk.WalletServices['getBeefForTxid']>>
   }
 }

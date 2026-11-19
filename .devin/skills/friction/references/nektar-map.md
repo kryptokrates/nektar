@@ -23,19 +23,17 @@ more.")
 
 | Step | Time | Effort | Knowledge | Triage |
 | ---- | ---- | ------ | --------- | ------ |
-| clone + `.env` copy | 1 min | trivial | git, docker | keep |
-| four secrets | 2 min | invent ×4 | openssl exists | **MOVE → `install.sh` generates** |
-| `NEKTAR_MARKET_HOSTS` | — | decide | "what are my public URLs?" | **MOVE → default discovery** |
-| funding WIF + sats | ~20 min | wallet+faucet or grant ask | BSV, WIF, testnet | **MOVE → auto-WIF + grant link** |
-| public URL/TLS | 10–30 min | DNS+proxy | DNS, TLS, ports | KEEP (real world) — but doc offers plain-IP testnet exception |
-| `compose up` | 5 min | one command | — | keep (image-only now) |
+| `install.sh` one-liner | 5 min | one command, four secrets auto-gen'd | docker only | keep — shipped |
+| `NEKTAR_MARKET_HOSTS` | — | decide | "what are my public URLs?" | KEEP (advertising requires it) — seed pair documented |
+| funding | 0–10 min | send testnet sats to printed address | none (auto-key) | **MOVED** — `loadFeeKey` generates `fee.key.json`; `WAIT_FUNDING`+`INDEXER_DISCOVERY` hold+detect (compose passthrough added) |
+| public URL/TLS | 10–30 min | DNS+proxy | DNS, TLS, ports | KEEP — inline Caddyfile now in doc (was a dead-end pointer) |
 | verify card | 1 min | one curl | — | keep |
 
-**Score:** ~7/10 (was ~4 before image-only compose + JOIN-TESTNET).
-**Biggest remaining wall:** the funding WIF — the only step where a
-stranger can stall indefinitely without us. Fix: the grant flow ("ask
-us and we send 500k testnet sats") must be a *link in the doc*, not a
-conversation — a funding-request endpoint or a faucet name.
+**Score:** ~8/10 (was ~6 — the stranger's two hardest steps were one
+broken instruction (hex≠WIF) and one dead-end pointer (no Caddyfile).
+Both fixed; the WIF step deleted entirely via auto-key + wait-funding).
+**Biggest remaining wall:** the grant channel is still conversational
+(`TESTNET-GRANT` issue title named — needs a real endpoint or faucet).
 
 ## J2 · Fresh instance → non-empty first run
 

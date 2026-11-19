@@ -27,31 +27,53 @@ not trusted.
 - Any always-on Linux box with Docker + docker compose (a $5 VPS is plenty —
   ~1 GB RAM, ~10 GB disk).
 - A public address peers can reach: a domain with TLS (`hub.example.com`) or
-  a bare `https://` reverse proxy in front of ports 18391/18392 (Caddy
-  example in `deploy/hetzner/README.md`). Plain IP+port works on testnet if
-  TLS is a blocker — say so and we'll note the exception.
-- A testnet funding WIF — generate one with any BSV wallet or
-  `openssl rand -hex 32`-shaped key; fund it from a testnet faucet or ask us
-  for a grant (~500k sats covers weeks of operation: tree mints, carriers,
-  deals).
+  a bare `https://` reverse proxy in front of ports 18391/18392. Plain
+  IP+port works on testnet if TLS is a blocker — say so and we'll note the
+  exception. Caddy is the shortest path — a `Caddyfile` this small does
+  auto-TLS + routing:
+
+  ```caddyfile
+  hub.example.com {
+      handle_path /hosts/a* { reverse_proxy localhost:18391 }
+      handle_path /hosts/b* { reverse_proxy localhost:18392 }
+      handle_path /watch/a* { reverse_proxy localhost:18393 }
+      handle_path /watch/b* { reverse_proxy localhost:18394 }
+  }
+  ```
+
+- **No key to generate.** The agent creates its own persistent fee key on
+  first boot and prints `operator fee key <address>` — send testnet sats
+  to that address (a testnet faucet, or ask us for a ~500k-sat grant —
+  open a GitHub issue on `kryptokrates/nektar` titled `TESTNET-GRANT` with
+  your address). Set `NEKTAR_WAIT_FUNDING=1` +
+  `NEKTAR_INDEXER_DISCOVERY=1` and the agent holds startup until the sats
+  land — nothing else to do. (Bring-your-own-key operators can instead set
+  `NEKTAR_FUND_WIF` to a base58check WIF — _not_ raw hex.)
 
 ## Up
 
+One command — fetches the two files it needs (no repo checkout), generates
+the four secrets, and starts everything:
+
 ```bash
-git clone https://github.com/kryptokrates/nektar.git && cd nektar
-cp deploy/hub/.env.example deploy/hub/.env
-# generate the four secrets: openssl rand -hex 32  →  KEY_PASSPHRASE,
-#   HTTP_TOKEN, OVERLAY_DB_PASSWORD, OVERLAY_ADMIN_TOKEN
-# set NEKTAR_MARKET_HOSTS to your hosts' PUBLIC urls + the seed pair:
-#   https://<you>/hosts/a,https://<you>/hosts/b,https://nektar.run/hosts/a,https://nektar.run/hosts/b
-# set NEKTAR_FUND_WIF to your funded testnet WIF
-docker compose -f deploy/hub/compose.yaml --env-file deploy/hub/.env up -d
-docker compose -f deploy/hub/compose.yaml logs -f agent
+curl -fsSL https://raw.githubusercontent.com/kryptokrates/nektar/master/deploy/hub/install.sh | \
+  NEKTAR_MARKET_HOSTS=https://<you>/hosts/a,https://<you>/hosts/b,https://nektar.run/hosts/a,https://nektar.run/hosts/b \
+  NEKTAR_PUSH_PUBLIC=https://<you> \
+  NEKTAR_WATCH_URLS=https://<you>/watch/a,https://<you>/watch/b \
+  NEKTAR_WATCH_PUBLIC=https://<you>/watch \
+  NEKTAR_WAIT_FUNDING=1 NEKTAR_INDEXER_DISCOVERY=1 \
+  bash
 ```
+
+Or by hand from a checkout: `cp deploy/hub/.env.example deploy/hub/.env`,
+fill the marked values (`openssl rand -hex 32` ×4 for the secrets), then
+`docker compose -f deploy/hub/compose.yaml --env-file deploy/hub/.env up -d`.
 
 Healthy boot looks like: `automation: preflight` green, then
 `automation: announce` within the first upkeep pass, then quiet periodic
-lane polls.
+lane polls. If `NEKTAR_WAIT_FUNDING=1` is set, the agent first prints a QR
++ `operator fee key <address>` and waits for sats — that wait is the only
+step that can stall, and it's the one thing we can help with instantly.
 
 ## Verify you joined
 
@@ -69,6 +91,26 @@ lane polls.
    agent imports every announced pack in those domains at boot; a second
    fresh instance can then import them _from you_.
 
+## Connect your AI client
+
+The hub you just built is also your agent's memory endpoint — attach any
+MCP-capable client to it:
+
+```bash
+# Claude Code
+claude mcp add --transport http nektar https://<you>/mcp \
+  --header "Authorization: Bearer <NEKTAR_HTTP_TOKEN>"
+
+# Codex — ~/.codex/config.toml
+# [mcp_servers.nektar]
+# url = "https://<you>/mcp"
+# http_headers = { "Authorization" = "Bearer <NEKTAR_HTTP_TOKEN>" }
+```
+
+Non-MCP clients (Hermes-style function calling, anything HTTP-capable) use
+the REST surface with the same bearer: `GET /v1/tools` for the manifest,
+`POST /v1/tools/{name}` to call — `/v1/openapi.json` carries the schemas.
+
 ## What we ask in return
 
 - **Keep it up ~1 week.** The thing we're measuring is uptime-independence:
@@ -85,9 +127,10 @@ lane polls.
   `docker compose restart db && docker compose restart host-a host-b`.
 - Ports refusing externally but `curl` works on the box: NAT/forwarding —
   your announce advertises the PUBLIC urls, so fix the proxy, not the .env.
-- `no funding slot`/`automation: reserve:` errors: the funding WIF is empty
-  or its outputs are dust — top it up; the agent adopts new outputs on the
-  next reconcile.
+- `no funding slot`/`automation: reserve:` errors: the fee address is empty
+  or its outputs are dust — top it up (or `POST /v1/tools/fundingImport`
+  with the funding txid); the agent adopts new outputs on the next
+  reconcile.
 
 ## What running this proves (and doesn't)
 

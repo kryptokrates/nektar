@@ -43,8 +43,8 @@ hosts' **public** URLs (`https://hub.example/hosts/a,…`) — they go verbatim
 into your announce and finger record for other operators to use. Include
 the seed pair (`https://nektar.run/hosts/{a,b}`) in the same list so your
 hub reads the whole network, not just its own lanes. A reverse proxy maps
-`/hosts/a` → `:18391`, `/hosts/b` → `:18392` (Caddy example in
-`deploy/hetzner/README.md`).
+`/hosts/a` → `:18391`, `/hosts/b` → `:18392` — a minimal Caddyfile is in
+`docs/JOIN-TESTNET.md` (auto-TLS + path routing in ~5 lines).
 
 ## What it does
 

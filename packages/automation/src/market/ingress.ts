@@ -33,6 +33,10 @@ export abstract class IngressOps extends MarketBase {
   protected abstract onMessage(from: string, m: MarketMessage, refs?: BoxRef[]): Promise<void>
   protected abstract advance(op: Operation, height: number): Promise<void>
 
+  /** in-run resubmit cadence — boot replay is a start-up seam, not the
+   *  only owner of a dropped ledger write */
+  private lastResubmitAt = -Infinity
+
   tick(): Promise<void> {
     return this.run(async () => {
       // self-notes must restore their operation before anything else in the
@@ -63,6 +67,16 @@ export abstract class IngressOps extends MarketBase {
         }
       }
       const height = await this.d.height()
+      // in-run resubmit: 'prepared'/'submission_unknown' rows are signed
+      // intents, not just boot leftovers — a dropped ledger write between
+      // broadcast and mark must not wedge the inputs until the next restart.
+      // Boot replay covers startup; this is the upkeep cadence.
+      if (this.now() - this.lastResubmitAt >= 60_000) {
+        this.lastResubmitAt = this.now()
+        // direct wallet call — resubmitPending() queues on this.chain, which
+        // tick() already holds; the wrapper would deadlock on itself
+        await this.wallet?.resubmitPending().catch(() => undefined)
+      }
       for (const op of await this.d.store.operations({ states: NONTERMINAL })) {
         try {
           await this.advance(op, height)
@@ -75,9 +89,9 @@ export abstract class IngressOps extends MarketBase {
       // a refund accepted at submit then rejected by the network must not sit
       // in 'refunded' claiming the money came back — the outpoint went to the
       // seller. escrow (advance) and collect (completion_submitted) already
-      // reconcile late rejections; this is the same watch for refundTxid,
-      // bounded to the 60 min after the transition — post-submit rejections
-      // surface within a couple of blocks on a slow chain
+      // reconcile late rejections; this is the same watch for refundTxid —
+      // bounded by PROOF, not the clock: the rescan ends when the refund is
+      // proven mined (stamped refundProven), never when a timer runs out
       // a refused escrow that lands anyway (manual reair, a peer that
       // relayed it before the refusal returned) is a live covenant holding
       // our sats — funding_failed is dead but the money is not. Arm the
@@ -111,13 +125,23 @@ export abstract class IngressOps extends MarketBase {
       for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'] })) {
         try {
           const txid = op.data.refundTxid as string | undefined
-          if (txid === undefined || this.d.txFacts === undefined || this.now() - op.updatedAt > 60 * 60_000) continue
+          // the rescan is bounded by PROOF, not the clock: 'refunded' is only
+          // truly terminal once the refund tx is proven mined. 'dead' un-marks
+          // it no matter when the rejection surfaces — a slow chain's late
+          // verdict must not leave a false money claim standing.
+          if (txid === undefined || this.d.txFacts === undefined || op.data.refundProven === true) continue
           if (!this.reconcileGate(op.operationId, txid)) continue
-          if ((await this.d.txFacts(txid)).verdict === 'dead')
+          const verdict = (await this.d.txFacts(txid)).verdict
+          if (verdict === 'dead')
             await this.d.store.transition(op.operationId, op.revision, 'uncertain', {
               cause: 'refund_rejected',
               data: { refundTxid: txid },
               dueHeight: null
+            })
+          else if (verdict === 'mined')
+            await this.d.store.transition(op.operationId, op.revision, 'refunded', {
+              cause: 'refund_proven',
+              data: { refundProven: true }
             })
         } catch {
           /* status probes must not stall the tick */

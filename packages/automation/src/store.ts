@@ -87,6 +87,10 @@ export type TxState =
    *  leases released, custody revives whatever stays live; not a chain
    *  verdict */
   | 'expired'
+  /** watched past the horizon with no competing spend — an ABSENCE verdict,
+   *  never 'conflicted' (that label means a proven competing spend). Fires
+   *  the custody rollback; keeps the trailing watch for a late landing */
+  | 'abandoned'
 export interface WalletTx {
   actionId: string
   operationId: string
@@ -99,6 +103,8 @@ export interface WalletTx {
   attempts: number
   /** row creation ms — the export-expiry clock reads it */
   at: number
+  /** ms the row last changed state — the trailing-watch clock */
+  stateAt: number
   lastObservation?: unknown
 }
 export interface Approval {
@@ -256,7 +262,15 @@ export class AutomationStore {
       t.integer('attempts').notNullable()
       t.text('last_observation')
       t.bigInteger('at').notNullable()
+      /** ms the row last CHANGED state — the trailing-watch clock. `at` is
+       *  creation time: an export already lived its TTL before 'expired' was
+       *  written, so a creation clock can never give the verdict a window */
+      t.bigInteger('state_at')
     })
+    if (!(await this.kx.schema.hasColumn(T.txs, 'state_at'))) await this.kx.schema.table(T.txs, (t) => t.bigInteger('state_at'))
+    await this.kx(T.txs)
+      .whereNull('state_at')
+      .update({ state_at: this.kx.ref('at') })
   }
 
   // ── policies ────────────────────────────────────────────────────────────
@@ -386,7 +400,11 @@ export class AutomationStore {
       if (!cur) throw new Error(`unknown operation ${operationId}`)
       if (cur.revision !== expectedRevision) throw new RevisionConflict(`operation ${operationId}: revision ${cur.revision} != expected ${expectedRevision}`)
       const now = this.now()
-      const patch: Record<string, unknown> = { state: to, revision: expectedRevision + 1, updated_at: now }
+      // updated_at is the residence clock the stuck watchdog measures — only a
+      // real state change resets it. Same-state writes (error labels, evidence,
+      // data merges) are activity, not residence: they must never extend a
+      // state's bound or a poisoned op loops its own watchdog forever.
+      const patch: Record<string, unknown> = { state: to, revision: expectedRevision + 1, updated_at: to === cur.state ? cur.updated_at : now }
       if (change.data !== undefined) patch.data = canonicalJson({ ...JSON.parse(cur.data), ...change.data })
       if (change.dueAt !== undefined) patch.due_at = change.dueAt
       if (change.dueHeight !== undefined) patch.due_height = change.dueHeight
@@ -803,12 +821,13 @@ export class AutomationStore {
       state: r.state,
       attempts: r.attempts,
       at: Number(r.at),
+      stateAt: Number(r.state_at ?? r.at),
       ...(r.last_observation ? { lastObservation: JSON.parse(r.last_observation) } : {})
     }
   }
 
   async recordPrepared(
-    t: Omit<WalletTx, 'state' | 'attempts' | 'lastObservation' | 'at'>,
+    t: Omit<WalletTx, 'state' | 'attempts' | 'lastObservation' | 'at' | 'stateAt'>,
     leaseOuts?: Array<{ txid: string; vout: number; satoshis: number }>
   ): Promise<WalletTx> {
     return await this.kx.transaction(async (trx) => {
@@ -845,7 +864,8 @@ export class AutomationStore {
         fee_sats: t.feeSats,
         state: 'prepared',
         attempts: 0,
-        at: this.now()
+        at: this.now(),
+        state_at: this.now()
       }
       await trx(T.txs).insert(row)
       return this.wtx(row)
@@ -889,22 +909,11 @@ export class AutomationStore {
           fee_sats: t.feeSats,
           state: 'prepared',
           attempts: 0,
-          at: now
+          at: now,
+          state_at: now
         })
         .onConflict('action_id')
         .ignore()
-    })
-  }
-
-  async releaseUnsigned(actionId: string): Promise<boolean> {
-    return await this.kx.transaction(async (trx) => {
-      const r = await trx(T.txs).where({ action_id: actionId }).first()
-      if (!r || r.state !== 'prepared' || r.attempts > 0) return false
-      await trx(T.txs)
-        .where({ action_id: actionId })
-        .update({ state: 'rejected', last_observation: JSON.stringify({ escaped: false, reason: 'never submitted' }) })
-      await trx(T.leases).where({ action_id: actionId }).update({ state: 'released' })
-      return true
     })
   }
 
@@ -918,7 +927,12 @@ export class AutomationStore {
       if (!r) throw new Error(`unknown wallet action ${actionId}`)
       await trx(T.txs)
         .where({ action_id: actionId })
-        .update({ state, attempts: r.attempts + (attempt ? 1 : 0), ...(observation !== undefined ? { last_observation: canonicalJson(observation) } : {}) })
+        .update({
+          state,
+          attempts: r.attempts + (attempt ? 1 : 0),
+          ...(state !== r.state ? { state_at: this.now() } : {}),
+          ...(observation !== undefined ? { last_observation: canonicalJson(observation) } : {})
+        })
       if (state === 'confirmed') await trx(T.leases).where({ action_id: actionId }).update({ state: 'spent' })
     })
   }

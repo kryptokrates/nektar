@@ -8,7 +8,7 @@ import type { Operation } from '../store.js'
 import { decidePurchase, digestOf, type ActionContext, type AutomationPolicy } from '../policy.js'
 import { rankOffers, type ScoreCandidate } from '../scoring.js'
 import { SellerOps } from './seller.js'
-import { CAP, pkhOf, STATE_LIMITS, TERMINAL } from './types.js'
+import { CAP, PARKED, pkhOf, STATE_LIMITS, TERMINAL } from './types.js'
 import type { MarketMessage, StoredOffer, StuckExit } from './types.js'
 
 // a take that lost the race to a concurrent spend is not a deal fault —
@@ -127,6 +127,18 @@ export abstract class BuyerOps extends SellerOps {
 
   private async onDelivered(from: string, m: Extract<MarketMessage, { type: 'delivered' }>, refs?: import('@nektar/bstack').BoxRef[]): Promise<void> {
     const op = await this.d.store.operationByKey(`buyer:${this.d.network}:${m.wantId}`)
+    // a delivered landing while the op is funding_deferred is real evidence,
+    // not noise: a refused escrow can still air via the counterparty's own
+    // guard, and the reveal it carries is one-shot. Park it — the deferred
+    // advance reconciles the escrow txid and replays the parked copy under
+    // awaiting_disclosure. Terminal/absent ops still drop.
+    if (op !== undefined && op.state === 'funding_deferred') {
+      await this.d.store.transition(op.operationId, op.revision, 'funding_deferred', {
+        cause: 'delivered_parked_while_deferred',
+        data: { pendingDelivered: { from, m, refs } }
+      })
+      return
+    }
     if (!op || op.state !== 'awaiting_disclosure') return
     const sel = op.data.selected as { key: string }
     const chosen = (op.data.offers as Record<string, StoredOffer>)[sel.key]
@@ -1011,7 +1023,9 @@ export abstract class BuyerOps extends SellerOps {
     violations: Array<{ operationId: string; state: string; ageMs: number }>
   }> {
     const violations: Array<{ operationId: string; state: string; ageMs: number }> = []
-    for (const op of await this.d.store.operations({ notStates: TERMINAL })) {
+    // PARKED states are declared-no-bound (external actor owns the exit) —
+    // they're classified, not violations
+    for (const op of await this.d.store.operations({ notStates: [...TERMINAL, ...PARKED] })) {
       const lim = STATE_LIMITS[op.state]
       if (lim === undefined) violations.push({ operationId: op.operationId, state: op.state, ageMs: this.now() - op.updatedAt })
       else if (lim.exit !== 'escalate:human' && this.now() - op.updatedAt > lim.maxAgeMs)
@@ -1109,6 +1123,23 @@ export abstract class BuyerOps extends SellerOps {
       }
       if (op.state === 'uncertain') return await this.reconcileUncertain(op)
       if (op.state === 'funding_deferred') {
+        // a SpendGuard refusal does not mean the escrow never aired: the
+        // accept already carried the signed tx and the counterparty may put
+        // it on the wire through their own guard. Check the recorded txid
+        // before waiting out the window — wire presence means the deal
+        // funded anyway and 'selected' would build a SECOND escrow (double
+        // pay). 'dead'/absent means the refusal held; the deferred retry is
+        // safe because nothing left.
+        const txid = op.data.escrowTxid as string | undefined
+        if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid)) {
+          const v = (await this.d.txFacts(txid)).verdict
+          if (v === 'mined' || v === 'pending') {
+            await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
+              cause: 'deferred_escrow_aired'
+            })
+            return
+          }
+        }
         // parked on a spend-policy window — resume at dueAt into a fresh
         // funding window (the parked span was never 'funding' time)
         if (op.dueAt !== undefined && op.dueAt <= this.now())

@@ -55,7 +55,7 @@ For every fact the resource carries, name:
   when nothing names the winner.
 
 Separate projections are legal — multiple databases are not the bug. The bug
-is an *unnamed* authority or a projection that silently became one. The
+is an _unnamed_ authority or a projection that silently became one. The
 strongest fix often **deletes a stored truth**: compute the label from the
 ledger as a pure selector instead of reconciling two writes (the
 `deals`-label vs `walletTxs` pattern in `references/nektar.md`).
@@ -71,7 +71,7 @@ acceptance, confirmation, failure, cancellation, recovery, cleanup:
 - An **empty cell is a finding** — a state with no row for `timeout`,
   `reject`, or `late-confirm` is an unmodelled reality.
 - **Event source is an authority question.** Who may emit `confirmed`? If a
-  status word, a broadcaster hint, or the local write that *sent* the thing
+  status word, a broadcaster hint, or the local write that _sent_ the thing
   can emit it, that's `spv/hint-as-verified` / `nektar/write-side-verify` —
   load spv-strict for the guard, don't re-derive it.
 - **Outcome taxonomy**: expected / submitted / accepted / confirmed /
@@ -105,7 +105,7 @@ always wins, or untested under realistic conditions.
 - Trace from **production entry points through real callers** — dispatch
   tables, timers, replay loops, event handlers, MCP tool surfaces. Never
   declare dead code from a missing text-search hit; `data/dormant-path`.
-- Reachable ≠ tested: check the test exercises the *observable outcome*,
+- Reachable ≠ tested: check the test exercises the _observable outcome_,
   not just the function's name, and under conditions that occur (real
   stores, real refusal shapes — test-boundaries owns fixture purity).
 - Config/flags/feature gates count as callers — or as proof of dormancy.
@@ -146,7 +146,7 @@ integration emits the right events.
    `failed` terminal with no "landed anyway" edge is a modelling bug — the
    class `refund_pending` was added to fix.
 2. **Unknown is a state.** `submission_unknown`-class states exit only via a
-   verification event (chain lookup, verdict). Timeout moves *into* unknown,
+   verification event (chain lookup, verdict). Timeout moves _into_ unknown,
    never into `failed`.
 3. **Exhaustiveness.** Every non-terminal state handles every failure event
    or records why it can't occur. Cheap once the table exists.
@@ -173,15 +173,15 @@ evidence (`nektar/fake-evidence` applies to audit output too).
 
 ## Sibling skills — load, don't re-derive
 
-| Ask                                   | Skill                                             |
-| ------------------------------------- | ------------------------------------------------- |
-| Rule IDs for a finding                | code-review/references (`data/*`, `nektar/*`)     |
-| Whole-system runtime topology         | arch-review (F-catalog)                           |
-| Wait sites, pushes vs polls           | event-arch                                        |
-| What counts as believed (proof truth) | spv-strict — event-source guards plug in here     |
-| Broadcast/status/coin mechanics       | bsv                                               |
-| Test-file purity, fixture invariants  | test-boundaries                                   |
-| Module-shape smells found en route    | design-guardrails                                 |
+| Ask                                   | Skill                                         |
+| ------------------------------------- | --------------------------------------------- |
+| Rule IDs for a finding                | code-review/references (`data/*`, `nektar/*`) |
+| Whole-system runtime topology         | arch-review (F-catalog)                       |
+| Wait sites, pushes vs polls           | event-arch                                    |
+| What counts as believed (proof truth) | spv-strict — event-source guards plug in here |
+| Broadcast/status/coin mechanics       | bsv                                           |
+| Test-file purity, fixture invariants  | test-boundaries                               |
+| Module-shape smells found en route    | design-guardrails                             |
 
 ## Sources
 

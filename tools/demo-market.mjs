@@ -196,7 +196,12 @@ while (Date.now() < deadline) {
   }
   const buys = all.filter((d) => d.role === 'buyer' && DONE_BUYER.has(d.state)).length
   const sales = all.filter((d) => d.role === 'seller' && DONE_SELLER.has(d.state)).length
-  const chainStr = (d) => (d.chain !== undefined ? `<${Object.entries(d.chain).map(([k, v]) => `${k}=${v}`).join(',')}>` : '')
+  const chainStr = (d) =>
+    d.chain !== undefined
+      ? `<${Object.entries(d.chain)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(',')}>`
+      : ''
   const line = `  deals: ${all.map((d) => `${d.role}:${d.state}${chainStr(d)}`).join('  ') || 'none yet'}`
   if (line !== last) {
     log(line)

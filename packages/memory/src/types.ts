@@ -64,6 +64,11 @@ export interface NektarMemoryOptions {
    *  only; injected by the runtime (the broadcaster adapter's `statusHint`).
    *  Never a verdict: first-party records and proofs decide, not this word. */
   statusHint?: (txid: string) => Promise<import('@nektar/chain').StatusHint>
+  /** retro-counts an aired tx's spend in the guard's day ledger — wired by
+   *  the runtime when a SpendGuard exists; the counterparty-air path (a
+   *  refused tx that escaped through the peer's relay) calls it from the
+   *  wallet-ledger revive so the cap sees real outflow */
+  recordAired?: (tx: import('@bsv/sdk').Transaction) => void
   /** chain height for txFacts.depth — injected by the runtime when a tracker
    *  exists; absent leaves depth unset */
   height?: () => number | Promise<number>

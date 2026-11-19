@@ -270,6 +270,10 @@ export const TERMINAL = [
   'seized',
   'seize_failed'
 ]
+/** Money settled, awaiting an external actor (markUsefulness) — no bound by
+ *  design, but DECLARED: NONTERMINAL ∪ TERMINAL ∪ PARKED must cover the
+ *  state union or the audit has an invisible class */
+export const PARKED = ['disclosure_verified']
 
 export interface StoredOffer {
   so: SignedOffer

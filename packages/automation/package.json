@@ -20,6 +20,7 @@
     "@nektar/identity": "workspace:*",
     "@nektar/store": "workspace:*",
     "knex": "^3.3.0",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.1.7",
+    "xstate": "5.33.3"
   }
 }

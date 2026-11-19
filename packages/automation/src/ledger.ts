@@ -4,7 +4,7 @@ import type { AutomationStore, TxState, WalletTx } from './store.js'
 import { WalletCoordinator } from './wallet.js'
 
 export interface TxObservationInput {
-  status: 'seen' | 'proven' | 'rejected' | 'conflicted'
+  status: 'seen' | 'proven' | 'rejected' | 'conflicted' | 'abandoned'
   source: string
   blockHeight?: number
   reason?: string
@@ -104,12 +104,25 @@ export class TransactionWatcher {
       /** fired once when an export expires — the caller revives whatever
        *  inputs the chain still shows live */
       onExportExpired?: (w: WalletTx) => Promise<void> | void
+      /** a row our own verdict called dead ('rejected'/'expired') turned out
+       *  aired — the counterparty re-broadcast bytes it was handed (the deal
+       *  accept ships the signed tx by design). died()/revive already ran
+       *  against it; the handler re-marks inputs spent and re-owns outputs */
+      onRevived?: (w: WalletTx, o: TxObservationInput) => Promise<void> | void
     }
   ) {}
 
   async tick(): Promise<number> {
     let changed = 0
-    for (const w of await this.store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])) {
+    const live = await this.store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])
+    // dead-verdict rows still get a window of re-observation: a refused tx
+    // can air through the counterparty (its bytes were handed over), and a
+    // verdict that says 'rejected' while the wire says 'seen' leaves inputs
+    // released-but-spent and change un-owned. Bounded by the same window an
+    // its window — past it, a take-time spend probe burns what lands late.
+    const ttl = this.opts?.exportedTtlMs ?? 24 * 60 * 60_000
+    const dead = (await this.store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => Date.now() - w.stateAt < ttl)
+    for (const w of [...live, ...dead]) {
       try {
         // a lease means 'we may still air these bytes' — once the tx is
         // seen or submitted its inputs belong to custody's bookkeeping,
@@ -121,8 +134,14 @@ export class TransactionWatcher {
           if (next !== w.state) {
             await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
             changed++
-            if (o.status === 'rejected' || o.status === 'conflicted') await this.onRejected?.(w, o.reason ?? o.spentBy ?? o.status)
-            if (next === 'confirmed' || next === 'rejected' || next === 'conflicted') await this.store.releaseLeases(w.actionId)
+            if (o.status === 'rejected' || o.status === 'conflicted' || (o.status as string) === 'abandoned')
+              await this.onRejected?.(w, o.reason ?? o.spentBy ?? o.status)
+            // dead→live is the counterparty-air case: custody already freed
+            // the inputs — re-mark them spent and re-own the change before a
+            // take() recycles the released-but-spent coin
+            if ((w.state === 'rejected' || w.state === 'expired' || w.state === 'abandoned') && (next === 'observed' || next === 'confirmed'))
+              await this.opts?.onRevived?.(w, o)
+            if (next === 'confirmed' || next === 'rejected' || next === 'conflicted' || next === 'abandoned') await this.store.releaseLeases(w.actionId)
           }
           continue
         }

@@ -151,19 +151,5 @@ test('ledger: an exported row the counterparty aired settles; an unaired one exp
   await kx.destroy()
 })
 
-test('ledger: releaseUnsigned frees only a never-submitted preparation', async (t) => {
-  const { kx, store } = await open()
-  const tx = new Transaction()
-  tx.addInput({ sourceTXID: 'b'.repeat(64), sourceOutputIndex: 0, unlockingScript: Script.fromHex('51') })
-  tx.addOutput({ satoshis: 1, lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toHash()) })
-  await store.recordBroadcast(
-    { txid: tx.id('hex'), rawHex: tx.toHex(), parents: {}, feeSats: 0, outs: [{ txid: 'b'.repeat(64), vout: 0, satoshis: 100 }] },
-    'owner:x',
-    'owner',
-    'owner'
-  )
-  assert.equal(await store.releaseUnsigned('owner:x'), true)
-  assert.equal(await store.leasedOutpoint('b'.repeat(64), 0), false)
-  assert.equal(await store.releaseUnsigned('owner:x'), false)
-  await kx.destroy()
-})
+// (releaseUnsigned was deleted as dead code — the abandon-prepared semantic
+// lives on reconcileUncertain's path, covered by state-audit's F3-regression)

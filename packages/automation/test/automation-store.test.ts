@@ -394,6 +394,65 @@ test('wallet: first-party deaths run custody hooks — txDied on refusal/rejecti
   assert.deepEqual(died, [t1.id('hex'), t3.id('hex')], 'a late chain rejection also returns custody')
 })
 
+test('wallet: a refused tx aired by the counterparty revives custody, not a double-take', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const funder = dryFunder()
+  const mkfund = (seed: string) => {
+    const ftx = new Transaction()
+    ftx.addInput({ sourceTXID: seed, sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromHex('51') })
+    ftx.addOutput({ satoshis: 50_000, lockingScript: new P2PKH().lock(funder.keyPair.toPublicKey().toAddress()) })
+    return { tx: ftx, vout: 0, satoshis: 50_000 }
+  }
+  const f = mkfund('00'.repeat(32))
+  const tx = new Transaction()
+  tx.addInput({ sourceTransaction: f.tx, sourceOutputIndex: f.vout, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })
+  tx.addOutput({ satoshis: f.satoshis - 100, lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])) })
+  await tx.sign()
+  const died: string[] = []
+  const spent: string[] = []
+  const w = new WalletCoordinator(store, {
+    broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }),
+    txDied: (x) => void died.push(x.id('hex')),
+    txSpent: (x) => void spent.push(x.id('hex'))
+  })
+  await w.prepare(ctx('h', 'a'), 'send', tx)
+  assert.equal((await w.submit('a')).state, 'rejected', 'our own broadcast never left')
+  assert.deepEqual(died, [tx.id('hex')], 'the refusal freed custody')
+  assert.equal(spent.length, 0)
+  // the accept carried the signed bytes anyway — the seller re-aired them
+  // through their own guard. 'SpendGuard refused' never meant 'not on the
+  // wire': the observation must re-mark custody or the released-but-spent
+  // input gets re-taken into a doomed tx and the change stays invisible.
+  assert.equal(await w.observe(tx.id('hex'), { status: 'seen', source: 'arc' }), 'observed')
+  assert.deepEqual(spent, [tx.id('hex')], 'a refused-but-aired tx re-marks custody — inputs are provably spent, change is ours')
+})
+
+test('watcher: recently-rejected rows still re-observe — the counterparty-air window', async (t) => {
+  const { kx, store } = await open()
+  t.after(() => kx.destroy())
+  const funder = dryFunder()
+  const ftx = new Transaction()
+  ftx.addInput({ sourceTXID: '00'.repeat(32), sourceOutputIndex: 0xffffffff, unlockingScript: UnlockingScript.fromHex('51') })
+  ftx.addOutput({ satoshis: 50_000, lockingScript: new P2PKH().lock(funder.keyPair.toPublicKey().toAddress()) })
+  const tx = new Transaction()
+  tx.addInput({ sourceTransaction: ftx, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(funder.keyPair) })
+  tx.addOutput({ satoshis: 49_900, lockingScript: new P2PKH().lock(PrivateKey.fromRandom().toPublicKey().toAddress([0x6f])) })
+  await tx.sign()
+  const revived: string[] = []
+  const w = new WalletCoordinator(store, { broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }) })
+  await w.prepare(ctx('h', 'a'), 'send', tx)
+  assert.equal((await w.submit('a')).state, 'rejected')
+  const { TransactionWatcher } = await import('../src/ledger.js')
+  const watcher = new TransactionWatcher(store, async () => ({ status: 'seen' as const, source: 't' }), undefined, {
+    onRevived: (row) => void revived.push(row.txid)
+  })
+  assert.equal(await watcher.tick(), 1, 'the rejected row is inside its re-air window and must be re-observed')
+  assert.deepEqual(revived, [tx.id('hex')])
+  assert.equal((await store.walletTx({ actionId: 'a' }))?.state, 'observed')
+  assert.equal(await watcher.tick(), 0, 'observed settles — no repeat revive')
+})
+
 test('wallet leases: a released row is dead to take() and prepare() readers alike', async (t) => {
   const { kx, store } = await open()
   t.after(() => kx.destroy())

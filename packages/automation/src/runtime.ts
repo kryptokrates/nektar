@@ -1,9 +1,12 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { Transaction } from '@bsv/sdk'
+import { hintSeen } from '@nektar/chain'
 import type { Knex } from 'knex'
 import type { SignedWant, SignedOffer } from '@nektar/bstack'
 import type { AutomationHost } from './host.js'
-import { AutomationStore, type OutboxItem } from './store.js'
+import { AutomationStore, type OutboxItem, type WalletTx } from './store.js'
+import { TransactionWatcher } from './ledger.js'
 import { MarketEngine, NONTERMINAL, type MarketTransport } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
@@ -324,6 +327,45 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     logStream
   })
   rt.engine = engine
+  // the market wallet ledger gets the same dead-verdict rescan the mcp-side
+  // ledger gets: a refused escrow can still air — the accept ships signed
+  // bytes and the counterparty re-broadcasts them through its own guard.
+  // Without this, a 'rejected' row is terminal forever: the input sits
+  // released-but-spent and the change stays tombstoned. Re-observing dead
+  // rows is what converges ledger and custody on the chain's truth.
+  const rebuildStored = (w: WalletTx): Transaction => {
+    const tx = Transaction.fromHex(w.rawHex)
+    for (const inp of tx.inputs) {
+      const hex = inp.sourceTXID !== undefined ? w.parents[inp.sourceTXID] : undefined
+      if (hex !== undefined) inp.sourceTransaction = Transaction.fromHex(hex)
+    }
+    return tx
+  }
+  const ledgerWatcher = new TransactionWatcher(
+    store,
+    async (txid) => {
+      const f = await mem.txFacts(txid)
+      if (f.verdict === 'mined') return { status: 'proven' as const, source: 'chain' }
+      if (f.verdict === 'dead') return { status: 'rejected' as const, source: f.source ?? 'chain', reason: 'dead' }
+      return hintSeen(f.hint) ? { status: 'seen' as const, source: 'broadcaster' } : undefined
+    },
+    async (w) => {
+      await mem.funds.died(rebuildStored(w))
+    },
+    {
+      onRevived: async (w) => {
+        // inputs provably spent, change provably ours — spent() does both
+        // marks; the change output's tombstone lifts on re-adoption
+        const tx = rebuildStored(w)
+        await mem.funds.spent(tx)
+        // the refusal let the sats leave anyway — the day ledger must
+        // count them or tomorrow's headroom is overstated
+        mem.recordAired?.(tx)
+        log(`automation: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked`)
+      }
+    }
+  )
+  let lastLedgerSweep = 0
   // boot replay: 'prepared'/'submission_unknown' rows are signed intents a
   // crashed process never got a verdict for — re-air them from stored bytes
   // before the first deal tick. Fire-and-forget behind the engine's chain;
@@ -375,6 +417,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
             const t1 = Date.now()
             await bound('tick', engine.tick())
             const t2 = Date.now()
+            // the ledger sweep rides the deals pass — serialized behind the
+            // same busy flag, throttled to a chain-read cadence rather than
+            // the deal loop's hot tick
+            if (t2 - lastLedgerSweep > 15_000) {
+              lastLedgerSweep = t2
+              await bound('wtx', ledgerWatcher.tick())
+            }
             rt.pushAcks()
             const t3 = Date.now()
             if (t3 - t0 > 2_000) log(`automation: pass ${t3 - t0}ms (poll ${t1 - t0} tick ${t2 - t1} acks ${t3 - t2})`)
@@ -557,6 +606,25 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     preflight: async () => {
       lastReport = await runChecks()
       for (const h of lastReport.downHosts) downNow.add(h)
+      // D5's assertion surface, on the doctor path it was built for: an
+      // unclassified state or an op past its declared bound is a check row
+      try {
+        const audit = await engine.dealStateAudit()
+        lastReport.checks.push({
+          check: 'deal-states',
+          pass: audit.violations.length === 0,
+          detail:
+            audit.violations.length === 0
+              ? `${Object.keys(audit.limits).length} bounds declared; no violations`
+              : `${audit.violations.length} violations: ${audit.violations
+                  .slice(0, 3)
+                  .map((v) => `${v.operationId.slice(0, 8)}:${v.state}`)
+                  .join(', ')}`,
+          fix: 'unclassified state or op past its declared bound — STATE_LIMITS/NONTERMINAL/PARKED must cover the union'
+        })
+      } catch {
+        /* the audit surface is advisory — never let it fail the doctor */
+      }
       return lastReport
     },
     // a counterparty's direct push lands here — same carriers a host read

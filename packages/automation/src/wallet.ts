@@ -23,6 +23,7 @@ export type TxObservation =
   | { status: 'proven'; source: string; blockHeight: number }
   | { status: 'rejected'; source: string; reason: string }
   | { status: 'conflicted'; source: string; spentBy: string }
+  | { status: 'abandoned'; source: string; reason?: string }
 
 const NEVER_LEFT = /SpendGuard refused/i
 export const DEFINITIVE =
@@ -162,13 +163,20 @@ export class WalletCoordinator {
     if (!w) return undefined
     const next: TxState = o.status === 'proven' ? 'confirmed' : o.status === 'seen' ? (w.state === 'confirmed' ? 'confirmed' : 'observed') : o.status
     await this.store.setTxState(w.actionId, next, { at: Date.now(), ...o })
+    // a tx our own verdict called dead still aired — 'SpendGuard refused'
+    // only means OUR broadcast stopped; the counterparty may re-air the
+    // signed bytes (the accept carries them by design). died() already
+    // freed its custody: revive re-marks the inputs spent and re-owns the
+    // change, or a released-but-spent input gets re-taken into a doomed tx.
+    if ((w.state === 'rejected' || w.state === 'expired' || w.state === 'abandoned') && (next === 'observed' || next === 'confirmed'))
+      await Promise.resolve(this.deps.txSpent?.(this.rebuild(w))).catch(() => undefined)
     // every observed verdict closes the tx's story — the lease has said all
-    // it can; liveness verdicts belong to custody from here
-    if (next === 'confirmed' || next === 'rejected' || next === 'conflicted') {
+    // it can; liveness verdicts belong to custody from here. A non-confirmed
+    // terminal verdict MUST run the custody rollback — rejected/conflicted/
+    // abandoned adopted outputs are phantom: the change belongs to whatever
+    // spend won (or to nobody); drop it and revive provably-live inputs
+    if (next === 'confirmed' || next === 'rejected' || next === 'conflicted' || next === 'abandoned') {
       await this.store.releaseLeases(w.actionId)
-      // a rejected/conflicted tx's adopted outputs are phantom — the change
-      // belongs to whatever spend won (or to nobody); drop it and revive
-      // the inputs that are still provably live
       if (next !== 'confirmed') await Promise.resolve(this.deps.txDied?.(this.rebuild(w))).catch(() => undefined)
     }
     return next

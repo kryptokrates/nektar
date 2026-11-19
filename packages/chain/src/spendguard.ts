@@ -139,6 +139,27 @@ export class SpendGuard implements Broadcaster {
     return { fee, spend: covenantInput ? fee : fee + foreign }
   }
 
+  /** a tx our own verdict refused still aired — the counterparty re-broadcast
+   *  the signed bytes it was handed (deal accepts carry them by design). The
+   *  sats left whether the guard saw the submit or not; recording the cost is
+   *  what keeps the day ledger honest about remaining headroom. Deduped by
+   *  txid; unresolved input values refuse to guess (same fail-closed rule). */
+  recordAired(tx: Transaction): boolean {
+    const txid = tx.id('hex')
+    if (this.ledger.records.some((r) => r.txid === txid)) return false
+    const s = this.spendOf(tx)
+    if (s === undefined) return false
+    const now = Date.now()
+    if (this.ledger.day !== this.day()) {
+      this.ledger.day = this.day()
+      this.ledger.spentSats = 0
+    }
+    this.ledger.spentSats += s.spend
+    this.ledger.records.push({ txid, bytes: tx.toBinary().length, fee: s.fee, spend: s.spend, at: new Date(now).toISOString() })
+    this.save()
+    return true
+  }
+
   costs(): CostRecord[] {
     return [...this.ledger.records]
   }

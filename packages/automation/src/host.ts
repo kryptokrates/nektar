@@ -40,6 +40,10 @@ export interface AutomationHost extends MarketMemory {
    *  field that can never be mistaken for the verdict */
   txFacts(txid: string): Promise<import('@nektar/chain').TxFacts>
   broadcastTx(tx: Transaction): Promise<BroadcastResult>
+  /** a tx our broadcast refused still aired — the counterparty re-broadcast
+   *  the signed bytes it was handed. Retro-counts its spend in the guard's
+   *  day ledger so the cap measures real outflow; absent on unguarded hosts. */
+  recordAired?(tx: Transaction): void
   operatorKey(): PrivateKey
   operatorWallet(): OperatorWallet
   /** the one coin book — takes, spend/death/adoption bookkeeping route

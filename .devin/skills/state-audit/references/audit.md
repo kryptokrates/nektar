@@ -43,14 +43,14 @@ Fill the columns in this order — event enumeration is the hard part:
 
 Outcome taxonomy — map the code's vocabulary onto it:
 
-| taxonomy | meaning | nektar example |
-| -------- | ------- | -------------- |
-| expected | intent recorded, nothing sent | op `created`, tx `prepared` |
-| submitted | left the process, outcome unknown | `submitted`, `submission_unknown` |
-| accepted | a counterparty/host acknowledged | offer `quoted`, host `accepted` |
-| confirmed | independent evidence verifies it | `confirmed` (proof/depth), `proven` tree |
-| failed | definitive negative verdict | `rejected`, `conflicted` |
-| unknown | no verdict obtainable yet | `submission_unknown`, `TX_MISSING_PARENT` waits |
+| taxonomy  | meaning                           | nektar example                                  |
+| --------- | --------------------------------- | ----------------------------------------------- |
+| expected  | intent recorded, nothing sent     | op `created`, tx `prepared`                     |
+| submitted | left the process, outcome unknown | `submitted`, `submission_unknown`               |
+| accepted  | a counterparty/host acknowledged  | offer `quoted`, host `accepted`                 |
+| confirmed | independent evidence verifies it  | `confirmed` (proof/depth), `proven` tree        |
+| failed    | definitive negative verdict       | `rejected`, `conflicted`                        |
+| unknown   | no verdict obtainable yet         | `submission_unknown`, `TX_MISSING_PARENT` waits |
 
 Non-verdicts that must not collapse into `failed`: `PENDING_RETRY` /
 `TX_MISSING_PARENT` (wait — ancestor may still land), daily-cap refusal

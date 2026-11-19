@@ -80,6 +80,13 @@ export abstract class MemTx extends MemKeys {
     if (r.status === 'success') this.txs.put(tx)
     return r
   }
+  /** a tx our own guard refused still aired — the counterparty re-broadcast
+   *  the signed bytes it was handed. Retro-counts the spend in the guard's
+   *  day ledger; the wallet-ledger revive calls it on the counterparty-air
+   *  path so the cap measures real outflow, not just our submits. */
+  recordAired(tx: Transaction): void {
+    this.opts.recordAired?.(tx)
+  }
 
   /** current chain height for locktime-gated covenant calls */
   async chainHeight(): Promise<number> {

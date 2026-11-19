@@ -300,16 +300,36 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     observe: port.observe
   })
   eventsRef = events
+  // a tracked tx any verdict calls dead can never land — its adopted outputs
+  // are phantom: died() tombstones them and revives provably-live inputs.
+  // Shared by the watcher (rejected/conflicted) and the abandon handler —
+  // terminal-for-custody writes MUST go through this path
+  const diedFromRow = async (w: Awaited<ReturnType<typeof ledger.walletTxs>>[number], tag: string): Promise<void> => {
+    try {
+      const tx = Transaction.fromHex(w.rawHex)
+      for (const inp of tx.inputs) {
+        const hex = inp.sourceTXID !== undefined ? w.parents[inp.sourceTXID] : undefined
+        if (hex !== undefined) inp.sourceTransaction = Transaction.fromHex(hex)
+      }
+      await custody.funds.died(tx)
+    } catch (e) {
+      process.stderr.write(`nektar ${net}: ${tag} tx ${w.txid}: died() failed: ${(e as Error).message}\n`)
+    }
+    await ledger.releaseLeases(w.actionId).catch(() => undefined)
+    await (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
+  }
   events.on('abandoned', ({ txid, tip, seenAtHeight }) => {
     process.stderr.write(`nektar ${net}: tx ${txid} not mined after abandon horizon — abandoned (tip ${tip}, watched since ${seenAtHeight})\n`)
-    // repair-by-name: mark the durable intent 'conflicted' so boot-time
-    // re-watch doesn't resurrect a dead tx forever, and surface it on
-    // mem.events — the automation runtime drops a dead funding mint off it
+    // repair-by-name: an ABSENCE verdict — mark 'abandoned' (never
+    // 'conflicted': that label means a proven competing spend) — so the
+    // trailing watch still catches a late landing, and run the custody
+    // rollback every terminal verdict owes the coin book
     void (async () => {
       try {
         const hit = (await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])).find((w) => w.txid === txid)
         if (hit !== undefined) {
-          await ledger.setTxState(hit.actionId, 'conflicted', { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` })
+          await ledger.setTxState(hit.actionId, 'abandoned', { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` })
+          await diedFromRow(hit, 'abandoned')
         }
         memRef?.events.emit('txAbandoned', { txid, tip, seenAtHeight })
       } catch (e) {
@@ -360,7 +380,9 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   // watch intent is a durable record, not an in-memory accident: any tx the
   // journal knows was broadcast-but-not-final gets re-watched on boot, so a
   // crash in the broadcast→watch window can't strand a proof wait
-  for (const t of await ledger.walletTxs(['submitted', 'observed', 'submission_unknown'])) events.watch(t.txid)
+  // late-landing candidates ride the same watch: 'abandoned'/'expired' rows
+  // keep their trailing window — the substrate's own horizon bounds the set
+  for (const t of await ledger.walletTxs(['submitted', 'observed', 'submission_unknown', 'abandoned', 'expired'])) events.watch(t.txid)
   custody.funds.leased = leasePredicate(ledger)
   // wire the first-party spend probe: a chain-VERIFIED 'spent' burns the
   // candidate at selection (port-verified — never an index's word).
@@ -400,6 +422,10 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       wallet: custody.wallet,
       txStore,
       statusHint: port.statusHint,
+      // counterparty-air path: a refused tx that escaped and landed still
+      // spent its sats — the guard's day ledger counts them retroactively
+      // through the revive hooks on both wallet ledgers
+      recordAired: port.guard === undefined ? undefined : (tx: Transaction) => void port.guard!.recordAired(tx),
       height: () => port.height(),
       proofLookup: port.proofLookup,
       txLookup: port.txLookup,
@@ -624,27 +650,33 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       const hint = await port.statusHint?.(txid).catch(() => ({ status: '', answered: false }))
       return watcherObservation(seen, hint?.status ?? '')
     },
-    async (w) => {
-      // a tracked tx the network calls rejected/conflicted can never land —
-      // its adopted outputs are phantom: died() tombstones them and revives
-      // whatever inputs the chain still shows live
-      try {
-        const tx = Transaction.fromHex(w.rawHex)
-        for (const inp of tx.inputs) {
-          const hex = inp.sourceTXID !== undefined ? w.parents[inp.sourceTXID] : undefined
-          if (hex !== undefined) inp.sourceTransaction = Transaction.fromHex(hex)
-        }
-        await custody.funds.died(tx)
-      } catch (e) {
-        process.stderr.write(`nektar ${net}: rejected tx ${w.txid}: died() failed: ${(e as Error).message}\n`)
-      }
-      await (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
-    },
+    async (w) => diedFromRow(w, 'rejected'),
     {
       // the counterparty's window to air a signed payment (x402 export);
       // past it the watcher releases the leases and hands custody back
       // every input the chain still shows unspent — the one-way-door fix
       exportedTtlMs: nektarEnvNum('NEKTAR_EXPORT_TTL_MS') ?? 24 * 60 * 60_000,
+      onRevived: async (w) => {
+        // a tx we tombstoned as rejected/expired is on the wire after all —
+        // its inputs are provably gone and its change is provably ours.
+        // spent() does both marks; WalletFunds' internalize lifts the
+        // dropped-set tombstone on outputs it re-owns.
+        try {
+          const tx = Transaction.fromHex(w.rawHex)
+          for (const inp of tx.inputs) {
+            const hex = inp.sourceTXID !== undefined ? w.parents[inp.sourceTXID] : undefined
+            if (hex !== undefined) inp.sourceTransaction = Transaction.fromHex(hex)
+          }
+          await custody.funds.spent(tx)
+          // the refusal let the sats leave anyway — the day ledger must
+          // count them or tomorrow's headroom is overstated
+          port.guard?.recordAired(tx)
+          process.stderr.write(`nektar ${net}: ${w.txid.slice(0, 16)}… aired after our ${w.state} verdict — custody re-marked\n`)
+        } catch (e) {
+          process.stderr.write(`nektar ${net}: revived tx ${w.txid}: spent() failed: ${(e as Error).message}\n`)
+        }
+        await (fundingRefresh?.() ?? custody.funds.refresh?.()?.then(() => undefined) ?? Promise.resolve())
+      },
       onExportExpired: async (w) => {
         let freed = 0
         let inputs = 0

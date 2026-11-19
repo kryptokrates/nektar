@@ -389,6 +389,9 @@ test('classifyDeliveryError: funding starvation vs transport vs unclassed', () =
   assert.equal(classifyDeliveryError('getaddrinfo ENOTFOUND host'), 'transport')
   assert.equal(classifyDeliveryError('http 503: down'), 'transport')
   assert.equal(classifyDeliveryError('socket hang up'), 'transport')
+  // broadcaster code 476 / locktime-not-yet is a timing wait — retry, never dead-letter
+  assert.equal(classifyDeliveryError('broadcaster REJECTED: non-final: lockTime 2100 not reached'), 'transport')
+  assert.equal(classifyDeliveryError('broadcaster HTTP 400: error 476'), 'transport')
   assert.equal(classifyDeliveryError('range: content too large'), undefined, 'a payload-size fault is not a delivery class')
   assert.equal(classifyDeliveryError('policy denied'), undefined)
 })

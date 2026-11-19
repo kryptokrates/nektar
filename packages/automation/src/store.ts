@@ -25,7 +25,9 @@ export type DeferClass = 'transport' | 'funding-slot'
  *  anything else stays classless (dead-letters on the normal path) */
 export function classifyDeliveryError(msg: string): DeferClass | undefined {
   if (/funding slot/.test(msg)) return 'funding-slot'
-  if (/fetch failed|unreachable|http 5\d\d|timed out|timeout|aborted|ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|network/i.test(msg)) return 'transport'
+  // locktime/not-yet-final verdicts (broadcaster code 476) are a timing wait,
+  // not a rejection — resubmit the same bytes once the lock passes
+  if (/fetch failed|unreachable|http 5\d\d|timed out|timeout|aborted|ECONN|ENOTFOUND|EAI_AGAIN|socket hang up|network|non-final|lock ?time|\b476\b/i.test(msg)) return 'transport'
   return undefined
 }
 

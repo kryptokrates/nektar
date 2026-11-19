@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 8683,
+      "loc": 8253,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1158,
@@ -33,7 +33,7 @@
       "instability": 0.5
     },
     "chain": {
-      "loc": 6574,
+      "loc": 6578,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 931,
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 9775,
+      "loc": 9777,
       "pkgFanout": 18,
       "edges": [
         "anchor",
@@ -215,10 +215,6 @@
     "packages/automation/src/store.ts": {
       "loc": 1007,
       "fanout": 3
-    },
-    "packages/automation/src/toolbox.ts": {
-      "loc": 816,
-      "fanout": 4
     },
     "packages/bstack/src/finger.ts": {
       "loc": 1033,

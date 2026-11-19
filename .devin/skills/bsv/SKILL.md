@@ -66,6 +66,13 @@ mechanism. (See `event-arch`.)
   proof until `IMMUTABLE`. `unproveFrom` demotes dead-fork paths.
 - **Ancestor limits are node policy, not consensus** — read them from
   `/policy`, never hardcode a hop count.
+- **Toolbox UTXO lifecycle**: two statuses per tx (app `unproven →
+completed`, Monitor `unmined → completed`); **unproven parents are
+  spendable by default** — first-party zeroconf is the norm; the planner
+  tiers `completed → unproven → sending`, which `FundsBase.take` mirrors
+  (proven `merklePath` first). Outputs under `unprocessed` parents hide
+  from `listOutputs`; `acceptDelayedBroadcast: false` is mandatory in our
+  no-Monitor build.
 
 ## nektar seam map
 
@@ -93,6 +100,7 @@ mechanism. (See `event-arch`.)
 | B8  | Serial per-item index scans in a wait path                        | `discoverUtxos` workers — overlap the RTT           | MED      |
 | B9  | Forgetting reorg proof replacement                                | A stored BUMP can die — replace until IMMUTABLE     | HIGH     |
 | B10 | Trusting counterparty ancestry beyond your policy depth           | First-party vs. counterparty zeroconf differ        | HIGH     |
+| B11 | Ordering spends without regard to parent-proof status             | Unproven parents drag ancestry into every spend     | MED      |
 
 ## Fast-path recipes
 

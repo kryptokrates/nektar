@@ -54,6 +54,11 @@ Goal: deliver on carried evidence; depth only for settlement.
 
 ## R4 — Discovery and reconciliation fast
 
+- `FundsBase.take` orders candidates **proven-parent-first, then
+  smallest-cover** — the toolbox planner's `completed → unproven →
+sending` tiering. An input on a BUMP-anchored parent terminates its BEEF
+  ancestry at the anchor; an unproven parent drags the whole chain into
+  every spend (bigger EF/BEEF, more `TX_MISSING_PARENT` surface).
 - `discoverUtxos`: `utxos(address)` list → 4 workers verify candidates —
   each entry counts only when its served bytes hash to the claimed txid
   and the vout pays the address. The index dialect owns pacing
@@ -92,4 +97,13 @@ unbroadcastable forever.
 - **F6** An `ls_spend` overlay/watch-shim service pushing "outpoint X
   spent" events — removes the last `utxoSpendStatus` probes on the deal
   path. The watch-shim protocol is the natural seam.
+- **F7** `wallet.sqlite` standby via `WalletStorageManager` active+backup
+  (`updateBackups`/`setActive`) or a `StorageClient` replica — the hub's
+  wallet store is a single point today.
+- **F8** Least-BEEF-cost plan selection — the `CanonicalChangeSelector`
+  generalization of proven-first ordering: compare feasible input sets by
+  the carried-ancestry bytes they force downstream.
 - `POST /v1/txs` batch submit for multi-mint `ensureTrees` rounds.
+- A `TaskReviewDoubleSpends` analog — a false-positive DOUBLE_SPEND hint
+  currently heals only via `observe()` or the abandon horizon; the toolbox
+  reviews and `unfail`s. Known-shallow gap, not a defect.

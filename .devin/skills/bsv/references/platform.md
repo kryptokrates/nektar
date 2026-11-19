@@ -98,11 +98,54 @@ changes, for interop.
 
 ## Wallet-toolbox UTXO lifecycle (mirrors `funds.ts`)
 
-`transactions.status ∈ {unprocessed, unproven, proven}` + `proven_tx_reqs`
-carrying to-be-anchored txs; change is spendable immediately;
-`internalizeAction` adopts wallet-payment outputs; Monitor tasks are the
-toolbox's own polls. Our `FundsBase` keeps the same two-tier shape —
-`unproven` is spendable-first-party, `proven` is BUMP-anchored.
+Two statuses ride every tx: `transactions.status` (app view:
+`unsigned → unprocessed → sending → unproven → completed`, plus `nosend` /
+`failed` / `unfail`) and `proven_tx_reqs.status` (Monitor view: `unsent →
+unmined → completed | invalid | doubleSpend`). A broadcast success lands
+`unproven` tx + `unmined` request; the Monitor's `TaskCheckForProofs`
+settles it. A late result never demotes `completed`/`unmined`.
+
+- **Spendable rule**: `spendable && parent.status ∈ {completed, unproven,
+nosend, sending}` — **unproven parents are spendable by default**;
+  first-party zeroconf spending is the norm, not the exception. Outputs
+  under `unsigned` / `failed` / `unprocessed` parents are hidden from
+  `listOutputs` — `basketRows` reads the storage tables directly for
+  exactly those rows (migration/recovery seam in `toolbox.ts`).
+- **Planner order**: `completed` parents tried first, then `unproven`,
+  then `sending` — `FundsBase.take` mirrors it (proven `merklePath` first,
+  smallest-cover inside the tier). `CanonicalChangeSelector` picks exact →
+  smallest-cover → largest-under, ties by outputId, **least-BEEF-cost plan
+  wins** — the full generalization of proven-first selection.
+- **Claim**: one DB tx — lock `spendable:false` + `spentBy`, recheck,
+  replan ≤3, then throw. Our serialized take queue is equivalent.
+- **Release**: a `failed` tx frees its inputs optimistically, EXCEPT
+  inputs the broadcaster confirmed gone (double-spend, no-longer-UTXO)
+  stay spent — matches `died()` / tombstone + `spendCheck`.
+- **Broadcast options**: `acceptDelayedBroadcast: true` is the DEFAULT —
+  the Monitor's `TaskSendWaiting` queues it. **No Monitor runs in our
+  build** — every send must pass `acceptDelayedBroadcast: false` or the tx
+  stalls at `unprocessed` forever (hiding its outputs per the rule above).
+  `noSend` + a later `sendWith` batch is the standard batching mechanism —
+  the toolbox-side counterpart of `POST /v1/txs`.
+- **Monitor tasks** (our upkeep owns the equivalents): `TaskSendWaiting`
+  (queued/stale broadcasts), `TaskCheckForProofs` (unmined → completed),
+  `TaskReviewStatus` (tx↔request reconcile), **`TaskReviewDoubleSpends`**
+  (false-positive → `unfail` — we have NO analog; a false DOUBLE_SPEND
+  hint heals only via `observe()`/abandon), `TaskFailAbandoned`,
+  `TaskReviewUtxos` (drifted change repair).
+- **`internalizeAction`**: verifies tx + proofs, then `wallet payment`
+  (BRC-29 derivation checked, counts in balance) or `basket insertion`
+  (custom output, NEVER fee-spendable — the right choice for funding
+  stock; `WalletFunds` uses it into `NEKTAR_BASKET`).
+- **`signableTransaction` references live in wallet memory only** — they
+  don't survive a restart and can't be signed by another process;
+  create+sign in one call.
+- **Storage**: `WalletStorageManager` fronts one active `StorageKnex`
+  store + optional backups (`updateBackups` replicates, `setActive`
+  switches — a never-synced store starts "conflicting" until setActive
+  merges it). `StorageKnex` runs sqlite/mysql/postgres; `StorageClient`
+  serves the same storage over JSON-RPC + BRC-103 mutual auth (the
+  `wallet.sqlite` standby shape for hub HA).
 
 ## Network naming (docs §networks)
 

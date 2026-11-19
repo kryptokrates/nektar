@@ -44,13 +44,21 @@ function oneOutputTx(): Transaction {
   return tx
 }
 
-/** Wrap setTxState so every live tx edge lands in the replay log. */
+/** Wrap the write paths so every live tx edge lands in the replay log —
+ *  driver mode writes through applyTxEvent, legacy through setTxState. */
 function tapTx(store: AutomationStore, log: { from: string; to: string }[]) {
   const orig = store.setTxState.bind(store)
   store.setTxState = async (id: string, st: never, obs?: unknown, att = false) => {
     const prev = await store.walletTx({ actionId: id })
     log.push({ from: prev?.state ?? '?', to: st })
     return orig(id, st, obs, att)
+  }
+  const origApply = store.applyTxEvent.bind(store)
+  store.applyTxEvent = async (id: string, ev: string, payload?: { guard?: string; observation?: unknown; attempt?: boolean }) => {
+    const prev = await store.walletTx({ actionId: id })
+    const r = await origApply(id, ev, payload)
+    if (r.accepted) log.push({ from: prev?.state ?? '?', to: r.next })
+    return r
   }
 }
 
@@ -133,8 +141,7 @@ test('shadow census: every cause literal emitted in src resolves to a modeled ed
     }
   })()
   const files: string[] = []
-  for (const dir of ['', 'market/'])
-    for (const f of readdirSync(new URL(dir, srcDir))) if (f.endsWith('.ts')) files.push(dir + f)
+  for (const dir of ['', 'market/']) for (const f of readdirSync(new URL(dir, srcDir))) if (f.endsWith('.ts')) files.push(dir + f)
   const literals = new Set<string>()
   const expressions = new Set<string>()
   for (const f of files) {
@@ -144,7 +151,8 @@ test('shadow census: every cause literal emitted in src resolves to a modeled ed
       if (/^(string|number|boolean|unknown|any)\b/.test(seg)) continue // type field, not an emission
       const qs = [...seg.matchAll(/'([^']+)'/g)].map((q) => q[1])
       if (qs.length > 0) for (const q of qs) literals.add(q)
-      else if (seg.includes('needs_human')) literals.add('needs_human:unresolved_payment') // template probe
+      else if (seg.includes('needs_human'))
+        literals.add('needs_human:unresolved_payment') // template probe
       else expressions.add(seg)
     }
   }
@@ -155,7 +163,8 @@ test('shadow census: every cause literal emitted in src resolves to a modeled ed
   for (const probe of ['unknown_policy', 'needs_human:stuck_state_timeout', 'needs_human:unresolved_payment'])
     assert.ok(opsCauseCandidates(probe) !== undefined, `dynamic cause class unhandled: ${probe}`)
   const noEdge = new Set(OPS_NO_EDGE_CAUSES)
-  for (const c of literals) assert.ok(noEdge.has(c) || opsCauseCandidates(c) !== undefined, `cause '${c}' is unmodeled — add a map row or a no-edge classification`)
+  for (const c of literals)
+    assert.ok(noEdge.has(c) || opsCauseCandidates(c) !== undefined, `cause '${c}' is unmodeled — add a map row or a no-edge classification`)
 })
 
 test('shadow: real-history replay — market_events from a live automation.sqlite', { skip: !existsSync(process.env.NEKTAR_REPLAY_DB ?? '') }, async (t) => {
@@ -175,7 +184,8 @@ test('shadow: real-history replay — market_events from a live automation.sqlit
   }
   const diffs: Diff[] = []
   for (const l of byOp.values()) diffs.push(...replayOps(l))
-  for (const d of diffs) console.log(`  ${d.kind.padEnd(17)} ${d.from} -> ${d.live} (live) | machine ${d.machine || '·'} | ${d.event}${d.guard ? ' @' + d.guard : ''} | ${d.cause}`)
+  for (const d of diffs)
+    console.log(`  ${d.kind.padEnd(17)} ${d.from} -> ${d.live} (live) | machine ${d.machine || '·'} | ${d.event}${d.guard ? ' @' + d.guard : ''} | ${d.cause}`)
   assert.ok(diffs.length > 0, 'fixture db should contain at least one state-changing transition')
   for (const d of diffs) assert.notEqual(d.kind, 'unmodeled', `unmodeled cause in real history: ${JSON.stringify(d)}`)
 })

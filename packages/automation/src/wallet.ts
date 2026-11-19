@@ -149,11 +149,17 @@ export class WalletCoordinator {
         return { state: 'submitted', txid: w.txid, detail }
       }
       if (NEVER_LEFT.test(detail) || (DEFINITIVE.test(detail) && !detail.startsWith('transport:'))) {
-        const r = await emitTxEvent(this.store, w, 'submit.refused', {
-          guard: 'definitive',
-          observation: { ...obs, ...(NEVER_LEFT.test(detail) ? { escaped: false } : {}) },
-          attempt: true
-        }, this.fx())
+        const r = await emitTxEvent(
+          this.store,
+          w,
+          'submit.refused',
+          {
+            guard: 'definitive',
+            observation: { ...obs, ...(NEVER_LEFT.test(detail) ? { escaped: false } : {}) },
+            attempt: true
+          },
+          this.fx()
+        )
         return { state: r.next, txid: w.txid, detail }
       }
       // 'submit.unknown' only exists from 'prepared' — a repeat unknown on an

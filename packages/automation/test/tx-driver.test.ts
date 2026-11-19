@@ -62,8 +62,7 @@ function wallet(store: AutomationStore, over: Partial<WalletDeps> = {}) {
   return { w, calls }
 }
 
-const leaseState = async (kx: Knex, actionId: string) =>
-  (await kx('wallet_reservations').where({ action_id: actionId }).first())?.state as string | undefined
+const leaseState = async (kx: Knex, actionId: string) => (await kx('wallet_reservations').where({ action_id: actionId }).first())?.state as string | undefined
 
 const SEEN = { status: 'seen', source: 'chain' } as const
 const PROVEN = { status: 'proven', source: 'chain', blockHeight: 1 } as const
@@ -214,12 +213,18 @@ test('driver: post-commit effect failure leaves the committed transition intact 
   await store.setTxState(id, 'rejected', { reason: 'refused' }, false)
   // rejected --obs.proven--> confirmed carries tx-spent — make it throw:
   // the transition must still commit, the event stays uneffected
-  await emitTxEvent(store, (await store.walletTx({ actionId: id }))!, 'obs.proven', { guard: 'proof', observation: PROVEN }, {
-    txSpent: () => {
-      throw new Error('custody store down')
-    },
-    recordAired: () => {}
-  })
+  await emitTxEvent(
+    store,
+    (await store.walletTx({ actionId: id }))!,
+    'obs.proven',
+    { guard: 'proof', observation: PROVEN },
+    {
+      txSpent: () => {
+        throw new Error('custody store down')
+      },
+      recordAired: () => {}
+    }
+  )
   const row = await store.walletTx({ actionId: id })
   assert.equal(row!.state, 'confirmed')
   assert.equal(await leaseState(kx, id), 'spent') // in-tx intent still ran
@@ -286,16 +291,21 @@ test('watcher driver: proven row confirms + spends leases through declared inten
   await prepared(store, id)
   await store.setTxState(id, 'submitted', {}, false)
   const calls = { spent: 0, aired: 0 }
-  const wt = new TransactionWatcher(store, async () => ({ status: 'proven', source: 'chain' }), async () => {}, {
-    effects: {
-      txSpent: () => {
-        calls.spent++
-      },
-      recordAired: () => {
-        calls.aired++
+  const wt = new TransactionWatcher(
+    store,
+    async () => ({ status: 'proven', source: 'chain' }),
+    async () => {},
+    {
+      effects: {
+        txSpent: () => {
+          calls.spent++
+        },
+        recordAired: () => {
+          calls.aired++
+        }
       }
     }
-  })
+  )
   await wt.tick()
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'confirmed')
   assert.equal(await leaseState(kx, id), 'spent')
@@ -309,16 +319,21 @@ test('watcher driver: dead row revive fires tx-spent + record-aired', async (t) 
   await prepared(store, id)
   await store.setTxState(id, 'rejected', { reason: 'refused' }, false)
   const calls = { spent: 0, aired: 0 }
-  const wt = new TransactionWatcher(store, async () => ({ status: 'proven', source: 'chain' }), async () => {}, {
-    effects: {
-      txSpent: () => {
-        calls.spent++
-      },
-      recordAired: () => {
-        calls.aired++
+  const wt = new TransactionWatcher(
+    store,
+    async () => ({ status: 'proven', source: 'chain' }),
+    async () => {},
+    {
+      effects: {
+        txSpent: () => {
+          calls.spent++
+        },
+        recordAired: () => {
+          calls.aired++
+        }
       }
     }
-  })
+  )
   await wt.tick()
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'confirmed')
   assert.equal(calls.spent, 1)
@@ -333,16 +348,23 @@ test('watcher driver: exported row past TTL expires and fires export-expired', a
   const id = 'w3'
   await prepared(store, id)
   await store.setTxState(id, 'exported', {}, false)
-  await kx('wallet_transactions').where({ action_id: id }).update({ at: Date.now() - 1000 })
+  await kx('wallet_transactions')
+    .where({ action_id: id })
+    .update({ at: Date.now() - 1000 })
   const calls = { expired: 0 }
-  const wt = new TransactionWatcher(store, async () => undefined, async () => {}, {
-    exportedTtlMs: 500,
-    effects: {
-      exportExpired: () => {
-        calls.expired++
+  const wt = new TransactionWatcher(
+    store,
+    async () => undefined,
+    async () => {},
+    {
+      exportedTtlMs: 500,
+      effects: {
+        exportExpired: () => {
+          calls.expired++
+        }
       }
     }
-  })
+  )
   await wt.tick()
   assert.equal((await store.walletTx({ actionId: id }))!.state, 'expired')
   assert.equal(calls.expired, 1)

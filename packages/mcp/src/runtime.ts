@@ -330,9 +330,15 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
         if (hit !== undefined) {
           const { emitTxEvent, txFsmLegacy } = await import('@nektar/automation')
           if (!txFsmLegacy()) {
-            await emitTxEvent(ledger, hit, 'abandon', { observation: { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` } }, {
-              txDied: (row) => diedFromRow(row, 'abandoned')
-            })
+            await emitTxEvent(
+              ledger,
+              hit,
+              'abandon',
+              { observation: { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` } },
+              {
+                txDied: (row) => diedFromRow(row, 'abandoned')
+              }
+            )
           } else {
             await ledger.setTxState(hit.actionId, 'abandoned', { reason: `not mined (tip ${tip}, watched since height ${seenAtHeight})` })
             await diedFromRow(hit, 'abandoned')

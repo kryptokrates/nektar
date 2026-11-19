@@ -61,17 +61,23 @@ export function wrapBroadcast(store: AutomationStore, inner: (tx: Transaction) =
         if (!txFsmLegacy()) {
           const w = await store.walletTx({ actionId }).catch(() => undefined)
           if (w !== undefined)
-            await emitTxEvent(store, w, r.status === 'success' ? 'submit.success' : 'submit.unknown', { observation: { at: Date.now(), result: r }, attempt: true }, {}).catch(
-              () => {}
-            )
-        } else await store.setTxState(actionId, r.status === 'success' ? 'submitted' : 'submission_unknown', { at: Date.now(), result: r }, true).catch(() => {})
+            await emitTxEvent(
+              store,
+              w,
+              r.status === 'success' ? 'submit.success' : 'submit.unknown',
+              { observation: { at: Date.now(), result: r }, attempt: true },
+              {}
+            ).catch(() => {})
+        } else
+          await store.setTxState(actionId, r.status === 'success' ? 'submitted' : 'submission_unknown', { at: Date.now(), result: r }, true).catch(() => {})
       }
       return r
     } catch (e) {
       if (recorded) {
         if (!txFsmLegacy()) {
           const w = await store.walletTx({ actionId }).catch(() => undefined)
-          if (w !== undefined) await emitTxEvent(store, w, 'submit.unknown', { observation: { at: Date.now(), error: (e as Error).message }, attempt: true }, {}).catch(() => {})
+          if (w !== undefined)
+            await emitTxEvent(store, w, 'submit.unknown', { observation: { at: Date.now(), error: (e as Error).message }, attempt: true }, {}).catch(() => {})
         } else await store.setTxState(actionId, 'submission_unknown', { at: Date.now(), error: (e as Error).message }, true).catch(() => {})
       }
       throw e

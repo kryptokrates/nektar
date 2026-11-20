@@ -9,6 +9,7 @@
     "quiescent": "terminal modulo a bounded trailing watch — late evidence revives to observed/confirmed",
     "abandoned": "absence verdict (no competing spend) — distinct from conflicted; fires txDied and keeps the trailing watch",
     "rejected": "provisional — a refused tx can still be aired by a counterparty holding the signed bytes; verified/proof revive it and re-run custody (tx-spent) + retro-count the spend (record-aired)",
+    "conflicted": "provisional like rejected — obs.conflicted needs only a verified spentBy report, and a later BUMP for OUR tx beats it: obs.proven heals back to confirmed (the healLedgerOnProof path)",
     "event-source guards": "obs.proven is the ONLY event that may emit 'confirmed'; obs.* require verified observations — status words and hints may only feed 'hint' handling, never a verdict transition"
   },
   "transitions": [
@@ -56,6 +57,8 @@
     { "state": "abandoned", "event": "obs.seen", "guard": "verified", "intents": ["tx-spent", "record-aired"], "target": "observed" },
     { "state": "abandoned", "event": "obs.proven", "guard": "proof", "intents": ["tx-spent", "leases->spent", "record-aired"], "target": "confirmed" },
     { "state": "abandoned", "event": "obs.conflicted", "guard": "verified+spentBy", "intents": [], "target": "conflicted" },
+
+    { "state": "conflicted", "event": "obs.proven", "guard": "proof", "intents": ["tx-spent", "leases->spent", "record-aired"], "target": "confirmed" },
 
     { "state": "*", "event": "process.crash", "intents": ["boot-reconcile"], "target": "self" },
     { "state": "*", "event": "kill.switch", "intents": [], "target": "self" },

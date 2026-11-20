@@ -54,7 +54,8 @@ function tableTests(
       const rowSources = row.state === '*' ? table.states : ([] as string[]).concat(row.state)
       for (const src of rowSources) {
         // a specific row for (src,event) shadows the wildcard row — skip the shadowed expansion
-        if (row.state === '*' && table.transitions.some((r) => r.state !== '*' && ([] as string[]).concat(r.state).includes(src) && r.event === row.event)) continue
+        if (row.state === '*' && table.transitions.some((r) => r.state !== '*' && ([] as string[]).concat(r.state).includes(src) && r.event === row.event))
+          continue
         const want = row.target === 'self' ? src : row.target
         const r = stepFn(src, row.event, row.guard ? { guard: row.guard } : {})
         assert.equal(r.accepted, true, `${src}+${row.event} rejected`)

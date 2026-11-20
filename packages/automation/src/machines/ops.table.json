@@ -120,7 +120,12 @@
     { "state": "awaiting_disclosure", "event": "decline.received", "intents": ["record-decline"], "target": "self" },
     { "state": "awaiting_disclosure", "event": "restored", "intents": [], "target": "self" },
     { "state": ["funding", "awaiting_disclosure"], "event": "needs.human", "guard": "unresolved", "intents": ["request-approval"], "target": "uncertain" },
-    { "state": ["selected", "funding", "funding_deferred", "refund_pending", "refunding", "completing", "completion_submitted", "watching", "seizing"], "event": "needs.human", "intents": ["request-approval"], "target": "escalated" },
+    {
+      "state": ["selected", "funding", "funding_deferred", "refund_pending", "refunding", "completing", "completion_submitted", "watching", "seizing"],
+      "event": "needs.human",
+      "intents": ["request-approval"],
+      "target": "escalated"
+    },
     { "state": "disclosure_verified", "event": "marked.useful", "intents": [], "target": "useful" },
     { "state": "disclosure_verified", "event": "marked.not_useful", "intents": [], "target": "not_useful" },
     { "state": "funding_failed", "event": "escrow.landed", "guard": "verdict=mined", "intents": [], "target": "refund_pending" },

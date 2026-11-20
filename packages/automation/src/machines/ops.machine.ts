@@ -9,4 +9,3 @@ export const opsMachine = buildMachine(OPS_TABLE)
 export function opsStep(persistedState: string, event: string, payload: Record<string, unknown> = {}): StepResult {
   return step(opsMachine, OPS_TABLE, persistedState, event, payload)
 }
-

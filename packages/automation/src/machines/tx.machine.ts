@@ -9,4 +9,3 @@ export const txMachine = buildMachine(TX_TABLE)
 export function txStep(persistedState: string, event: string, payload: Record<string, unknown> = {}): StepResult {
   return step(txMachine, TX_TABLE, persistedState, event, payload)
 }
-

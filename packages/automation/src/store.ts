@@ -970,6 +970,10 @@ export class AutomationStore {
           ...(state !== r.state ? { state_at: this.now() } : {}),
           ...(observation !== undefined ? { last_observation: canonicalJson(observation) } : {})
         })
+      // 'confirmed ⇒ leases spent' is the legacy write-path contract —
+      // driver-mode code never reaches this line (applyTxEvent carries
+      // leases->spent as a declared intent), so the side effect stays for
+      // the callers that still write through setTxState
       if (state === 'confirmed') await trx(T.leases).where({ action_id: actionId }).update({ state: 'spent' })
     })
   }

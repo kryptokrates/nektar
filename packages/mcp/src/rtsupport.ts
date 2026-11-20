@@ -195,7 +195,13 @@ export function healLedgerOnProof(mem: NektarMemory, ledger: import('@nektar/aut
       try {
         const w = await ledger.walletTx({ txid })
         if (w !== undefined && (w.state === 'conflicted' || w.state === 'rejected')) {
-          await ledger.setTxState(w.actionId, 'confirmed', { at: Date.now(), healed: true })
+          const { emitTxEvent, txFsmLegacy } = await import('@nektar/automation')
+          if (!txFsmLegacy()) {
+            // the machine owns the revive: obs.proven@proof carries tx-spent
+            // + leases->spent + record-aired; with no fx here the intents
+            // commit uneffected and the next watcher sweep replays them
+            await emitTxEvent(ledger, w, 'obs.proven', { guard: 'proof', observation: { at: Date.now(), healed: true } }, {})
+          } else await ledger.setTxState(w.actionId, 'confirmed', { at: Date.now(), healed: true })
           process.stderr.write(`nektar ${tag}: ${txid} proved after a terminal verdict — ledger healed to confirmed\n`)
         }
       } catch (e) {

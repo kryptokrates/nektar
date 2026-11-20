@@ -18,8 +18,9 @@
 import type * as restate from '@restatedev/restate-sdk'
 import type { AutomationStore, TxState, WalletTx } from '../store.js'
 import { runTxIntents, type TxEffects } from '../machines/effects.js'
-import { EXEC_SVC, inRtScope, type RtSend } from './exec.js'
+import { CUSTODY_KEY, EXEC_SVC, inRtScope, type RtSend } from './exec.js'
 import type { TxObserve } from './emit.js'
+import type { WalletCoordinator } from '../wallet.js'
 
 export interface RtDeps {
   store: AutomationStore
@@ -162,9 +163,11 @@ export interface DealDeps {
  *  own dueAt/dueHeight conditions. The two handler names exist so the
  *  journal/UI shows whether the wake was a tick fan-out or a deadline
  *  arm firing. */
-export const dealAdvanceBody = (deps: DealDeps) => async (_: unknown, operationId: string): Promise<{ ran: boolean }> => {
-  return { ran: await deps.advanceOp(operationId) }
-}
+export const dealAdvanceBody =
+  (deps: DealDeps) =>
+  async (_: unknown, operationId: string): Promise<{ ran: boolean }> => {
+    return { ran: await deps.advanceOp(operationId) }
+  }
 
 export const dealObject = async (deps: DealDeps) => {
   const restate = await import('@restatedev/restate-sdk')
@@ -176,6 +179,51 @@ export const dealObject = async (deps: DealDeps) => {
       due: async (ctx: restate.ObjectContext) => await ctx.run('advance', () => leg({}, ctx.key))
     }
   })
+}
+
+// ── the custody object ───────────────────────────────────────────────────
+// one fixed key: every wallet custody leg (broadcast verdicts, their
+// coin-book intents, the resubmit scan) serializes on a single object —
+// the durable, journaled successor of the run() promise chain for the
+// custody surface. A crash mid-broadcast leaves a suspended invocation the
+// runtime resumes — not an orphaned promise the resubmit scan has to
+// rediscover. The coin-claim side stays in funds.take (its own queue +
+// reserved set already serialize picks; mcp-side takes never joined run()
+// either) — this object owns the verdict/custody-write legs.
+
+export interface CustodyDeps {
+  /** the coordinator whose custody legs the object serializes — submit,
+   *  markRejected, resubmitPending (journaled on the custody key; emits
+   *  inside route to the tx object as usual) */
+  wallet: WalletCoordinator
+  log: (line: string) => void
+}
+
+export const custodyObject = async (deps: CustodyDeps) => {
+  const restate = await import('@restatedev/restate-sdk')
+  const scope = <T>(fn: () => Promise<T>): Promise<T> => inRtScope({ custodyKey: CUSTODY_KEY }, fn)
+  return restate.object({
+    name: EXEC_SVC.custody,
+    handlers: {
+      submit: async (ctx: restate.ObjectContext, arg: { actionId: string }) => await scope(() => ctx.run('submit', () => deps.wallet.submit(arg.actionId))),
+      markRejected: async (ctx: restate.ObjectContext, arg: { actionId: string; observation: unknown }) =>
+        await scope(() => ctx.run('markRejected', () => deps.wallet.markRejectedById(arg.actionId, arg.observation))),
+      resubmitPending: async (ctx: restate.ObjectContext) => await scope(() => ctx.run('resubmit', () => deps.wallet.resubmitPending()))
+    }
+  })
+}
+
+/** the custody bodies on a LocalExecutor — the local-mode wiring. */
+export const registerCustodyHandlers = (
+  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void },
+  deps: CustodyDeps
+): void => {
+  ex.register(EXEC_SVC.custody, 'submit', (arg) => deps.wallet.submit((arg as { actionId: string }).actionId))
+  ex.register(EXEC_SVC.custody, 'markRejected', (arg) => {
+    const a = arg as { actionId: string; observation: unknown }
+    return deps.wallet.markRejectedById(a.actionId, a.observation)
+  })
+  ex.register(EXEC_SVC.custody, 'resubmitPending', () => deps.wallet.resubmitPending())
 }
 
 export interface SweepDeps {

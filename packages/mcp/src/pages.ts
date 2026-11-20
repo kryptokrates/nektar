@@ -1,8 +1,9 @@
 // pages.ts — the HTML pages of the HTTP surface. /dashboard is the operator
 // audit surface, skinned with the installed @tabler/core kit (served from
 // node_modules at /dashboard/tabler.css) and themed on the logo.svg palette:
-// amber #f7991b on dark #221e1d. Cards are ordered by the operator's reason
-// for running nektar: earn → prove → sell → identity → automation.
+// amber #f7991b on dark #221e1d. The hero is the operator's cold-start loop —
+// identity → funded → memory → anchored → verified → earning — and every
+// public artifact (agent card, receipts, shard packs) carries a share button.
 // /v1/verify's check page + /v1/badge stay self-contained — a verifier must
 // work with zero external resources.
 import { readFileSync } from 'node:fs'
@@ -53,7 +54,17 @@ a{color:var(--tblr-primary)}
 code{background:var(--tblr-bg-surface-tertiary);padding:1px 6px;border-radius:4px}
 .glow{position:relative}
 .glow::before{content:'';position:absolute;inset:-46px;background:radial-gradient(circle,rgba(247,153,27,.28),transparent 68%);pointer-events:none}
-.glow>*{position:relative}`
+.glow>*{position:relative}
+.step{display:flex;flex-direction:column;align-items:center;gap:.35rem;flex:1;position:relative}
+.step::before{content:'';position:absolute;top:.55rem;left:-50%;width:100%;height:2px;background:var(--tblr-border-color)}
+.step:first-child::before{display:none}
+.step.done::before{background:var(--tblr-primary)}
+.step i{width:1.1rem;height:1.1rem;border-radius:50%;border:2px solid var(--tblr-border-color);background:var(--tblr-bg-surface);z-index:1;font-style:normal;font-size:.6rem;display:flex;align-items:center;justify-content:center;color:transparent}
+.step.done i{background:var(--tblr-primary);border-color:var(--tblr-primary);color:var(--tblr-primary-fg)}
+.step.next i{border-color:var(--tblr-primary);box-shadow:0 0 0 .3rem rgba(247,153,27,.15)}
+.step span{font-size:.62rem;color:var(--tblr-secondary);text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+.step.done span{color:var(--tblr-body-color)}
+.step.next span{color:var(--tblr-primary)}`
 
 // emitted only when tabler.min.css can't be resolved — keeps the page readable
 const FALLBACK = `body{background:${NEKTAR_DARK};color:#eae6e3;font-family:system-ui,sans-serif;margin:0}
@@ -85,6 +96,11 @@ const FALLBACK = `body{background:${NEKTAR_DARK};color:#eae6e3;font-family:syste
 .gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-4{gap:1rem}.gap-5{gap:2rem}.w-100{width:100%}.py-2{padding:.5rem 0}
 .container-xl{width:100%}.pt-3{padding-top:1rem}.pb-3{padding-bottom:1rem}
 .progress{height:.5rem;background:#3a332f;border-radius:.25rem;overflow:hidden}.progress-bar{height:100%;background:${NEKTAR_AMBER}}
+.step{display:flex;flex-direction:column;align-items:center;gap:.35rem;flex:1}
+.step i{width:1.1rem;height:1.1rem;border-radius:50%;border:2px solid #3a332f;font-style:normal;font-size:.6rem;display:flex;align-items:center;justify-content:center;color:transparent}
+.step.done i{background:${NEKTAR_AMBER};border-color:${NEKTAR_AMBER};color:${NEKTAR_DARK}}
+.step.next i{border-color:${NEKTAR_AMBER}}
+.step span{font-size:.62rem;color:#a2958a;text-transform:uppercase}
 .list-unstyled{list-style:none;padding:0}`
 
 // stroke icons in @tabler/icons style — hand-drawn so the icon pack stays out
@@ -99,7 +115,8 @@ const ICONS = {
   automation: '<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/>',
   api: '<path d="M4 6h16M4 12h16M4 18h10"/>',
   health: '<path d="M12 21c-4-3.5-8-6.5-8-10a4.5 4.5 0 0 1 8-3 4.5 4.5 0 0 1 8 3c0 3.5-4 6.5-8 10z"/>',
-  agent: '<rect x="5" y="8" width="14" height="10" rx="2"/><path d="M12 8V4M8 4h8M9 13h.01M15 13h.01"/>'
+  agent: '<rect x="5" y="8" width="14" height="10" rx="2"/><path d="M12 8V4M8 4h8M9 13h.01M15 13h.01"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>'
 }
 const icon = (p: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`
@@ -149,6 +166,8 @@ export async function dashboardPage(mem: NektarMemory, ops: HttpOps | undefined,
         `<div class="kv"><b>${esc(m.shard)}</b><span class="text-secondary">${esc(m.domains.join(', '))}</span><span class="ms-auto">${esc(m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? '')}</span></div>`
     )
     .join('')
+  const cardUrl = `${base}/card`
+  const shareEnabled = !/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1')
   const agentsRows = `<div class="kv"><b>${esc(nektarEnv('NEKTAR_MODEL_ID') ?? 'this agent')}</b><span class="text-secondary">${esc(mem.operatorKey().toPublicKey().toString().slice(0, 16))}…</span></div>`
   const f = d.funding
   const bal = Number(f.balanceSats ?? f.satoshis ?? 0)
@@ -176,6 +195,33 @@ ${autoOps.map((o) => `<div class="kv"><span class="text-secondary">${esc(o.role)
   const cssLink = kit ? `<link rel="stylesheet" href="/dashboard/tabler.css">` : ''
   const coverage = d.records > 0 ? Math.round((d.anchoredRecords / d.records) * 100) : 100
   const earned = amts.reduce((a, b) => a + b, 0)
+  // cold-start loop — the smallest self-sustaining earning network for one
+  // operator; every step is derived from live state, the frontier is named
+  const steps = [
+    { name: 'identity', done: true },
+    { name: 'funded', done: bal > 0 },
+    { name: 'memory', done: d.shards > 0 },
+    { name: 'anchored', done: d.anchoredRecords > 0 },
+    { name: 'verified', done: rrecs.length > 0 },
+    { name: 'earning', done: earned > 0 || cat.length > 0 }
+  ]
+  const firstOpen = steps.findIndex((s) => !s.done)
+  const doneCount = steps.filter((s) => s.done).length
+  const nextText: Record<string, string> = {
+    funded: 'next: fund the treasury — anchors and payouts draw from this book',
+    memory: 'next: remember something — the first shard starts sellable memory',
+    anchored: 'next: wait for an anchor — a record proves once it lands on-chain',
+    verified: 'next: answer verifiably — groundedAnswer issues the first checkable receipt',
+    earning: 'next: list a shard for sale — describeShard puts memory on the market'
+  }
+  const nextLine =
+    firstOpen === -1 ? 'the earning loop is live — every link below is checkable by a stranger' : (nextText[steps[firstOpen].name] ?? '')
+  const stepper = steps
+    .map(
+      (s, i) =>
+        `<div class="step${s.done ? ' done' : i === firstOpen ? ' next' : ''}"><i>${s.done ? '✓' : ''}</i><span>${s.name}</span></div>`
+    )
+    .join('')
   // honest visuals only — the sparkline is real receipt amounts, the ring is
   // the true anchored share; nothing decorative masquerading as data
   const donut = (p: number) =>
@@ -219,16 +265,21 @@ ${au ? navItem('#automation', 'Automation', ICONS.automation) : ''}
 <div id="app" class="page-body"><div class="container-xl"><div class="row row-cards">
 <div class="col-xl-6"><div class="card h-100 card-hero"><div class="card-body d-flex py-4">
 <div class="flex-grow-1">
-<div class="h2 mb-1">${esc(nektarEnv('NEKTAR_MODEL_ID') ?? 'operator')}</div>
-<div class="text-secondary mb-4">verifiable memory for AI agents — traded as a commodity on BSV</div>
+<div class="d-flex align-items-baseline gap-3 mb-1"><div class="h2 mb-0">${esc(nektarEnv('NEKTAR_MODEL_ID') ?? 'operator')}</div>
+<div class="h4 mb-0" style="color:var(--tblr-primary)">${firstOpen === -1 ? 'loop live' : steps[firstOpen].name}</div>
+<div class="text-secondary small">${doneCount}/${steps.length}</div></div>
+<div class="d-flex mt-3 mb-3">${stepper}</div>
+<div class="small mb-4">${esc(nextLine)}</div>
+${shareEnabled ? `<div class="mb-4"><button class="btn btn-primary" onclick="shareAgent(this)">share your agent ↗</button></div>` : ''}
 <div class="d-flex gap-5 mt-auto">
 <div><div class="subheader">Treasury</div><div class="h2 mb-1" style="color:var(--tblr-primary)">${bal.toLocaleString()} <span class="h4 text-secondary">sats</span></div>
 <div class="d-flex gap-2">${badge(!!f.funded, 'funded', 'unfunded')}${badge(d.payments === 'on', 'pay on', 'pay off')}</div>
 <div class="stream" data-ev="money"></div></div>
-<div><div class="subheader">Anchor coverage</div><div class="h2 mb-1">${coverage}%</div>
-<div class="progress progress-sm" style="width:8rem"><div class="progress-bar" style="width:${coverage}%"></div></div></div>
+<div><div class="subheader">Verifiability</div><div class="h2 mb-1">${coverage}%</div>
+<div class="progress progress-sm" style="width:8rem"><div class="progress-bar" style="width:${coverage}%"></div></div>
+<div class="text-secondary small mt-1">${d.anchoredRecords} of ${d.records} provable</div></div>
 </div></div>
-<div class="ms-auto d-none d-lg-flex align-items-center glow">${logoSvg(110)}</div>
+<div class="ms-auto d-none d-lg-flex align-items-center glow">${logoSvg(96)}</div>
 </div></div></div>
 <div class="col-sm-6 col-xl-3"><div class="card h-100"><div class="card-body">
 <div class="subheader">Receipts</div>
@@ -279,6 +330,17 @@ ${agentsRows}
 ${automationCard}
 </div></div></div>
 <script>
+const copyLink = async (btn, u) => {
+  try { await navigator.clipboard.writeText(u) } catch {
+    const t = document.createElement('textarea'); t.value = u; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove()
+  }
+  const s = btn.textContent; btn.textContent = '\\u2713 copied'; setTimeout(() => { btn.textContent = s }, 1600)
+}
+const shareAgent = async (btn) => {
+  const u = ${JSON.stringify(cardUrl)}
+  if (navigator.share) { try { await navigator.share({ title: 'nektar agent — verifiable memory', url: u }); return } catch (e) { if (e && e.name === 'AbortError') return } }
+  copyLink(btn, u)
+}
 const decide = async (id, approve) => {
   const tok = sessionStorage.getItem('nektar-operator-token') ?? prompt('operator token (NEKTAR_OPERATOR_TOKEN — not the agent bearer)')
   if (!tok) return
@@ -446,5 +508,85 @@ ${meta ? `<div class=meta>${meta}</div>` : ''}
 <code class=md>${esc('git clone https://github.com/kryptokrates/nektar && pnpm mcp:install')}</code>
 ${badgeMd ? `<code class=md>${esc(badgeMd)}</code>` : ''}
 </div></details>
+</body></html>`
+}
+
+/** /card — the human twin of /.well-known/nektar: the agent's public
+ *  storefront and the single artifact the dashboard's share button
+ *  produces. Self-contained like the verify page so it travels alone.
+ *  Renders only data already public via well-known + packs — pubkeys,
+ *  public shards, offers, proof counts. Never treasury, automation
+ *  internals, or private shards. */
+export async function cardPage(mem: NektarMemory, host: string | undefined): Promise<string> {
+  const base = nektarEnv('NEKTAR_VERIFY_BASE') ?? `http://${host ?? 'localhost'}`
+  const pageUrl = `${base}/card`
+  const d = await mem.doctor().catch(() => undefined)
+  const pub = (await mem.publicShards().catch(() => [] as string[])).filter((s) => !s.startsWith('__'))
+  const catalog = await mem.shardCatalog().catch(() => [] as Awaited<ReturnType<NektarMemory['shardCatalog']>>)
+  const receipts = await mem
+    .records('__receipts__')
+    .then((r) => r.length)
+    .catch(() => 0)
+  const rows = (
+    await Promise.all(
+      pub.map(async (s) => {
+        const m = catalog.find((x) => x.shard === s)
+        const n = await mem
+          .records(s)
+          .then((r) => r.length)
+          .catch(() => 0)
+        const offers = m?.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? ''
+        return `<div class=row><b>${esc(s)}</b><span class=dim>${esc(m?.domains?.join(', ') ?? '')}${m?.desc ? ` — ${esc(m.desc)}` : ''}</span><span class=dim>${n} records${offers ? ` · ${esc(offers)}` : ''}</span><a class=lnk href="${base}/v1/pack/${encodeURIComponent(s)}">pack ↗</a></div>`
+      })
+    )
+  ).join('')
+  const QR = await import('qrcode')
+  const qr = await QR.toDataURL(pageUrl, { margin: 1, width: 160 })
+  const net = nektarEnv('NEKTAR_NETWORK') ?? 'regtest'
+  const netLabel =
+    net === 'main'
+      ? 'BSV mainnet — real coins'
+      : net === 'testnet'
+        ? 'BSV public testnet — real transactions, test coins'
+        : net === 'regtest'
+          ? 'local Teranode regtest'
+          : 'simulated chain — demo only'
+  const coverage = d && d.records > 0 ? Math.round((d.anchoredRecords / d.records) * 100) : 0
+  const operator = mem.operatorKey()?.toPublicKey().toString() ?? ''
+  const ogDesc = `${d?.records ?? 0} records · ${coverage}% anchored on-chain · ${receipts} receipts issued · ${pub.length} shards for sale`
+  return `<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>nektar agent — verifiable memory</title>
+<meta property="og:title" content="nektar agent card — verifiable memory anchored on BSV">
+<meta property="og:description" content="${esc(ogDesc)}">
+<meta property="og:type" content="website"><meta property="og:url" content="${esc(pageUrl)}">
+<meta name="twitter:card" content="summary">
+<style>body{font:15px/1.55 system-ui,sans-serif;background:${NEKTAR_DARK};color:#eae6e3;max-width:600px;margin:24px auto;padding:0 16px}
+h1{font-size:19px;margin-bottom:2px;display:flex;align-items:center;gap:10px}.net{color:#a2958a;font-size:12px;margin-bottom:14px;word-break:break-all}
+.lede{color:#a2958a;font-size:14px;margin:0 0 16px}
+.stat{background:#2c2624;border:1px solid #3a332f;border-radius:8px;padding:16px 18px;margin:0 0 18px}
+.stat b{color:${NEKTAR_AMBER};font-size:22px}.stat .dim{font-size:13px}
+.row{display:flex;align-items:baseline;gap:8px;padding:9px 0;border-bottom:1px solid #3a332f;font-size:14px;flex-wrap:wrap}
+.row:last-child{border-bottom:none}
+.dim{color:#a2958a;font-size:12.5px}.lnk{color:${NEKTAR_AMBER};margin-left:auto;text-decoration:none;font-size:12.5px}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#a2958a;margin:20px 0 4px;font-weight:600}
+a{color:${NEKTAR_AMBER}}
+img{display:block;margin:22px auto 6px;border:6px solid #fff;border-radius:6px}
+.qrcap{text-align:center;color:#6e7681;font-size:11.5px}
+.sharebtn{display:block;width:100%;margin:18px 0 4px;padding:15px;background:${NEKTAR_AMBER};color:${NEKTAR_DARK};border:0;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer}
+.sharebtn:hover{background:#e08a0f}.sharebtn.done{background:#12331c;color:#4ade80}
+.md{display:block;background:#2c2624;border:1px solid #3a332f;border-radius:6px;padding:8px 10px;margin-top:8px;font:11.5px ui-monospace,monospace;color:#a2958a;word-break:break-all}</style></head><body>
+<h1>${logoSvg(30)} nektar agent</h1>
+<div class=net>${esc(netLabel)} · operator <span class=mono>${esc(operator.slice(0, 24))}…</span> · model: ${esc(nektarEnv('NEKTAR_MODEL_ID') ?? 'undeclared')} (declared, not proven)</div>
+<div class=lede>Verifiable, encrypted agent memory anchored on BSV. Every answer this agent gives can carry a receipt anyone can check — <b>recorded ≠ true</b>.</div>
+<div class=stat><b>${d?.records ?? 0}</b> records · <b>${d?.anchoredRecords ?? 0}</b> anchored on-chain · <b>${coverage}%</b> provable · <b>${receipts}</b> receipts issued</div>
+<h2>memory for sale</h2>
+${rows || '<div class=dim>nothing public for sale yet — memory warming up</div>'}
+<h2>check an answer</h2>
+<div class=row><span class=dim>every receipt resolves here — paste a token, get the traffic-light check</span><a class=lnk href="${base}/v1/verify">${esc(base)}/v1/verify ↗</a></div>
+<h2>join the network</h2>
+<code class=md>${esc(`${base}/.well-known/agent.json`)}</code>
+<code class=md>${esc('git clone https://github.com/kryptokrates/nektar && pnpm mcp:install')}</code>
+<button class=sharebtn id=sharebtn>Share this agent</button>
+<script>document.getElementById('sharebtn').onclick=async function(){var u=${JSON.stringify(pageUrl)};this.className='sharebtn';if(navigator.share){try{await navigator.share({title:'nektar agent — verifiable memory',url:u});this.textContent='\\u2713 shared';this.className='sharebtn done';return}catch(e){if(e&&e.name==='AbortError')return}}try{await navigator.clipboard.writeText(u);this.textContent='\\u2713 link copied';this.className='sharebtn done'}catch(e){this.textContent=u}}</script>
+<img src="${qr}" alt="scan to open this card"><div class=qrcap>scan to open this card</div>
 </body></html>`
 }

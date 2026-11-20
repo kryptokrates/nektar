@@ -5,7 +5,7 @@ import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { nektarEnv } from '@nektar/core'
 import { AutomationStore } from '../src/store.js'
 import { RestateExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { txObject, sweepService, type SweepDeps } from '../src/rt/services.js'
+import { txObject, sweepService, dealObject } from '../src/rt/services.js'
 import { openEndpoint } from '../src/rt/endpoint.js'
 import { txEmit } from '../src/rt/emit.js'
 
@@ -134,6 +134,51 @@ test(
       assert.equal(r2.sent, 1)
       await until(async () => (await store.walletTx({ actionId: 'sweep:1' }))?.state === 'confirmed')
       assert.equal((await store.walletTx({ actionId: 'sweep:1' }))!.state, 'confirmed')
+    } finally {
+      await endpoint.close().catch(() => undefined)
+      await kx.destroy()
+    }
+  }
+)
+
+test(
+  'spike: deal.advance lands journaled on the op key — the leg runs domain code in-process',
+  { skip: RESTATE_URL === undefined ? 'needs NEKTAR_RESTATE_URL (live restate server)' : false },
+  async () => {
+    const { kx, store } = await open()
+    const { operation } = await store.createOperation({
+      role: 'buyer',
+      kind: 'purchase',
+      dedupeKey: 'deal:spike',
+      policyHash: 'p',
+      network: 'regtest',
+      state: 'collecting',
+      data: {}
+    })
+    // a stand-in advanceOp: loads the op and stamps — proves a keyed
+    // invocation reaches domain code in-process, not a mock
+    const ran: string[] = []
+    const dealDef = await dealObject({
+      advanceOp: async (id) => {
+        const op = await store.operation(id)
+        if (op === undefined) return false
+        ran.push(id)
+        await store.transition(op.operationId, op.revision, op.state, { cause: 'tick_error', lastError: 'spike leg ran' })
+        return true
+      },
+      log: () => {}
+    })
+    const endpoint = await openEndpoint([dealDef], {
+      NEKTAR_RESTATE_ENDPOINT_URI: ENDPOINT_URI,
+      NEKTAR_RESTATE_ADMIN: ADMIN,
+      NEKTAR_RESTATE_ENDPOINT_PORT: ENDPOINT_PORT
+    })
+    const ex = new RestateExecutor(RESTATE_URL!)
+    try {
+      const r = await ex.call<{ ran: boolean }>({ service: EXEC_SVC.deal, handler: 'advance', key: operation.operationId }, {})
+      assert.equal(r.ran, true)
+      assert.deepEqual(ran, [operation.operationId])
+      assert.equal((await store.operation(operation.operationId))!.lastError, 'spike leg ran')
     } finally {
       await endpoint.close().catch(() => undefined)
       await kx.destroy()

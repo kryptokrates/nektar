@@ -254,6 +254,13 @@ export class WalletCoordinator {
     await Promise.resolve(this.deps.txDied?.(this.rebuild(w))).catch(() => undefined)
   }
 
+  /** markRejected keyed by actionId — the custody object's entry shape; a
+   *  missing row no-ops (the verdict arrived for a tx we don't track). */
+  async markRejectedById(actionId: string, observation: unknown): Promise<void> {
+    const w = await this.store.walletTx({ actionId })
+    if (w !== undefined) await this.markRejected(w, observation)
+  }
+
   async resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>> {
     // boot replay also finishes committed-but-uneffected intents — a crash
     // between persist and act replays custody here, not on a prayer

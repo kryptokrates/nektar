@@ -174,8 +174,7 @@ export abstract class IngressOps extends MarketBase {
       await this.advance(op, height)
     } catch (e) {
       const cur = await this.d.store.operation(op.operationId)
-      if (cur)
-        await this.d.store.transition(cur.operationId, cur.revision, cur.state, { cause: 'tick_error', lastError: (e as Error).message.slice(0, 500) })
+      if (cur) await this.d.store.transition(cur.operationId, cur.revision, cur.state, { cause: 'tick_error', lastError: (e as Error).message.slice(0, 500) })
     }
   }
 

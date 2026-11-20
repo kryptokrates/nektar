@@ -41,8 +41,13 @@ export const EXEC_SVC = {
   tx: 'nektar-tx',
   sweep: 'nektar-sweep',
   deal: 'nektar-deal',
+  custody: 'nektar-custody',
   transport: 'nektar-transport'
 } as const
+
+/** the custody object's fixed key — every wallet custody leg serializes on
+ *  this one object (the durable successor of the run() promise chain). */
+export const CUSTODY_KEY = 'global'
 
 // the inside-handler scope: a VO handler for key K emitting for K must NOT
 // route back through the object — a same-key self-call deadlocks the
@@ -52,6 +57,8 @@ export const EXEC_SVC = {
 // object, no deadlock.
 interface RtScope {
   txKey?: string
+  /** inside a custody handler — same-key custody calls go direct */
+  custodyKey?: string
 }
 
 const scope = new AsyncLocalStorage<RtScope>()

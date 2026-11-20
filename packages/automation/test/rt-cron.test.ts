@@ -1,14 +1,15 @@
-// rt-cron.test.ts — the cadence objects + notify legs through a
-// LocalExecutor: tick runs the journaled pass then self-arms at its
+// rt-cron.test.ts — the cadence objects + notify legs through the test
+// Dispatcher: tick runs the journaled pass then self-arms at its
 // ceiling; notify's peer/carrier handlers run the fetch legs keyed by
 // destination.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { LocalExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { registerCronHandlers, registerLegHandler, registerNotifyHandlers, CRON_KEY } from '../src/rt/services.js'
+import { EXEC_SVC } from '../src/rt/exec.js'
+import { CRON_KEY } from '../src/rt/services.js'
+import { Dispatcher, wireCron, wireLeg, wireNotify } from './rig.js'
 
 test('cron.tick: runs the pass then self-arms at ceilingMs — the chain re-fires', async () => {
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const sent: Array<{ delayMs?: number; target: string }> = []
   const orig = ex.send.bind(ex)
   ex.send = (t, a, o) => {
@@ -16,7 +17,7 @@ test('cron.tick: runs the pass then self-arms at ceilingMs — the chain re-fire
     return orig(t, a, o)
   }
   let ticks = 0
-  registerCronHandlers(ex, EXEC_SVC.upkeep, {
+  wireCron(ex, EXEC_SVC.upkeep, {
     tick: async () => {
       ticks++
     },
@@ -33,7 +34,7 @@ test('cron.tick: runs the pass then self-arms at ceilingMs — the chain re-fire
 })
 
 test('cron.tick: a failing pass propagates — under restate the retry IS the next attempt', async () => {
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const sent: number[] = []
   const orig = ex.send.bind(ex)
   ex.send = (t, a, o) => {
@@ -41,7 +42,7 @@ test('cron.tick: a failing pass propagates — under restate the retry IS the ne
     return orig(t, a, o)
   }
   let calls = 0
-  registerCronHandlers(ex, EXEC_SVC.watchdog, {
+  wireCron(ex, EXEC_SVC.watchdog, {
     tick: async () => {
       calls++
       throw new Error('probe down')
@@ -60,9 +61,9 @@ test('cron.tick: a failing pass propagates — under restate the retry IS the ne
 })
 
 test('notify: peer + carrier legs run keyed by destination', async () => {
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const legs: string[] = []
-  registerNotifyHandlers(ex, {
+  wireNotify(ex, {
     peer: async (watch, service, query) => void legs.push(`peer:${watch}:${service}:${JSON.stringify(query)}`),
     carrier: async (push, beefHex) => void legs.push(`carrier:${push}:${beefHex.slice(0, 8)}`),
     log: () => {}
@@ -84,9 +85,9 @@ test('notify: peer + carrier legs run keyed by destination', async () => {
 })
 
 test('legObject: event-sink leg runs journaled on its key, no self-arm', async () => {
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   let calls = 0
-  registerLegHandler(ex, EXEC_SVC.watcher, async () => {
+  wireLeg(ex, EXEC_SVC.watcher, async () => {
     calls++
   })
   await ex.call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})

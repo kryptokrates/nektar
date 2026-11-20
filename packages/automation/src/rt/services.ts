@@ -55,7 +55,7 @@ const emitSteps = (s: ReturnType<typeof txSteps>) =>
     return { accepted: true, next: r.next, intents: r.intents }
   }
 
-/** load → emit — the sequential body the LocalExecutor runs. */
+/** load → emit — the sequential body a test dispatcher runs. */
 export const txObserveBody =
   (deps: RtDeps) =>
   async (o: TxObserve, actionId: string): Promise<ObserveResult> => {

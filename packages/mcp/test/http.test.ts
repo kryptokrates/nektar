@@ -56,6 +56,7 @@ test('HTTP API: tools, public proof + checkpoint, metrics move, every route docu
       '/v1/checkpoint/{shard}',
       '/v1/costs',
       '/v1/health',
+      '/v1/hosts',
       '/v1/metrics',
       '/v1/openapi.json',
       '/v1/pack/{shard}',

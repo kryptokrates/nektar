@@ -223,14 +223,22 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
         }
       : null,
     share: { enabled: !/^(0|false|no)$/i.test(nektarEnv('NEKTAR_PACK_SHARE') ?? '1'), url: `${base}/card` },
-    // the operator's own knobs — the Settings tab: the live seller policy the
-    // agent trades under (seller-enabled op → its approved policy row), and
+    // the operator's own knobs — the Settings tab: every approved policy the
+    // agent trades under (seller-enabled marks the live seller row), and
     // where every market host came from (env / joined / left)
     settings: {
-      policy: await (async () => {
-        const en = au ? await au.store.operationByKey('seller-enabled').catch(() => undefined) : undefined
-        const hash = en?.data.policyHash
-        return typeof hash === 'string' ? ((await au!.store.activePolicy(hash).catch(() => undefined)) ?? null) : null
+      policies: await (async () => {
+        if (!au) return []
+        const rows = await au.store.policies().catch(() => [] as Awaited<ReturnType<typeof au.store.policies>>)
+        const en = await au.store.operationByKey('seller-enabled').catch(() => undefined)
+        const live = typeof en?.data.policyHash === 'string' ? en.data.policyHash : undefined
+        return Promise.all(
+          rows.map(async (r) => ({
+            ...r,
+            active: r.policyHash === live,
+            policy: r.revokedAt === undefined ? ((await au.store.activePolicy(r.policyHash).catch(() => undefined)) ?? null) : null
+          }))
+        )
       })(),
       hosts: { env: marketHostsFromEnv(), added: [...saved], blocked: [...blocked] }
     }

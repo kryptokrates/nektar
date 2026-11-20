@@ -55,7 +55,7 @@ test('every wait primitive site is classified — the census sees all wait class
   // deliberate mechanism, or a test-tier harness. ev/wait-class-blind.
   const PRIMITIVES = /setTimeout\(|Promise\.race\(|AbortSignal\.timeout|[^a-zA-Z]sleep\(/
   const CLASSIFIED: Record<string, string> = {
-    'automation/src/rt/exec.ts': 'LocalExecutor delay timer + ingress fetch io bound — test/dev executor; durable timers live server-side',
+    'automation/src/rt/exec.ts': 'ingress fetch io bound — the only executor; durable timers live server-side',
     'automation/src/rt/endpoint.ts': 'deployment-registration fetch io bound + nap retry — boot path',
     'automation/src/watches.ts': 'watch-shim reconnect sleep — WAITS.watchBackoff*, jittered',
     'automation/src/lanes.ts': 'ioSignal() merges ambient leg + rt.signal — per-call io bound',
@@ -112,7 +112,6 @@ test('no raw setInterval outside the classified floors', () => {
   const FLOORS = [
     'packages/chain/src/events.ts', // THE shared substrate floor — poke()-instrumented
     'packages/chain/src/p2p.ts', // rate-window reset — a throttle wheel, not a wait
-    'packages/mcp/src/runtime.ts', // confirmer floor — onAnchorQueued wakes it
     'packages/mcp/src/rtsupport.ts', // instance-lock heartbeat — liveness, not a wait
     'packages/mcp/src/http.ts' // session reaper + SSE keepalive — TTL/transport liveness
   ]
@@ -357,8 +356,8 @@ test('the leg context is ambient — spawned work detaches, manual threading is 
   assert.match(lanes, /ioSignal\(/, 'fetch-level IO merges the ambient context — no field to thread')
   const store = read(join(srcDir, 'store.ts'))
   assert.match(store, /detached\(\(\) => this\.workReady/, 'post-commit hooks fire detached — spawned work never inherits the committer leg')
-  const exec = read(join(srcDir, 'rt', 'exec.ts'))
-  assert.match(exec, /detached\(\(\) => fn\(/, 'executor send dispatch exits the caller leg — a send armed inside a leg cannot leak it')
+  const rig = read(join(pkgRoot, 'test', 'rig.ts'))
+  assert.match(rig, /detached\(async \(\) =>/, 'test-dispatcher send dispatch exits the caller leg — a send armed inside a leg cannot leak it')
   // the threaded field the ALS seam replaced is GONE — presence means a
   // regression to manual threading (a leg's inner IO can forget the merge)
   for (const name of ['runtime.ts', 'upkeep.ts', 'rtctx.ts']) {

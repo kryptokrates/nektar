@@ -5,8 +5,9 @@ import { PrivateKey } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { MarketEngine } from '../src/market.js'
 import type { MarketDeps } from '../src/market/types.js'
-import { LocalExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { registerTransportHandlers, TRANSPORT_DRAIN_KEY, type TransportDeps } from '../src/rt/services.js'
+import { EXEC_SVC } from '../src/rt/exec.js'
+import { type TransportDeps } from '../src/rt/services.js'
+import { Dispatcher, wireTransport, TRANSPORT_DRAIN_KEY } from './rig.js'
 
 // rt-transport — the Phase 5 outbox port: due rows as journaled deliver
 // invocations keyed by destination, the drain's self-scheduled ceiling,
@@ -41,7 +42,7 @@ const enq = (store: AutomationStore, actionId: string, destination = 'host:a') =
   store.enqueue({ actionId, operationId: `op:${actionId}`, kind: 'message', destination, payload: { type: 'decline', wantId: 'w', offerId: 'o' } })
 
 test('drain: due rows fan out per destination key, idempotent per actionId, ceiling self-scheduled', async () => {
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const seen: Array<{ handler: string; key?: string; opts?: { delayMs?: number; idempotencyKey?: string } }> = []
   try {
     // spy the raw send surface — the drain's fan-out IS the assertion
@@ -59,7 +60,7 @@ test('drain: due rows fan out per destination key, idempotent per actionId, ceil
       ],
       []
     ]
-    registerTransportHandlers(ex, {
+    wireTransport(ex, {
       dueRows: async () => stages.shift() ?? [],
       nextAt: async () => next,
       deliverItem: async () => 'acked',

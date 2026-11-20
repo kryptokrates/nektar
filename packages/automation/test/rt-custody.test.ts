@@ -4,9 +4,9 @@ import knexFactory from 'knex'
 import { P2PKH, PrivateKey, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator } from '../src/wallet.js'
-import { LocalExecutor, setExecutor, EXEC_SVC, CUSTODY_KEY, inRtScope } from '../src/rt/exec.js'
+import { setExecutor, EXEC_SVC, CUSTODY_KEY, inRtScope } from '../src/rt/exec.js'
 import { custodyMarkRejected, custodyResubmitPending, custodySubmit } from '../src/rt/emit.js'
-import { registerCustodyHandlers, registerTxHandlers } from '../src/rt/services.js'
+import { Dispatcher, wireCustody, wireTx } from './rig.js'
 
 // rt-custody — the Phase 4 leg: the coordinator's custody verbs as
 // serialized, journaled invocations on the single-key custody object. What
@@ -35,7 +35,7 @@ const coordinator = (store: AutomationStore, extra: { txDied?: (tx: Transaction)
   new WalletCoordinator(store, { broadcast: async (tx) => ({ status: 'success', txid: tx.id('hex') }), ...extra })
 
 test('custody legs route to the fixed key — and a held tx key forwards as txScope', async () => {
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const seen: Array<{ handler: string; key?: string; arg: Record<string, unknown> }> = []
   try {
     for (const h of ['submit', 'markRejected', 'resubmitPending'])
@@ -67,13 +67,13 @@ test('custody legs route to the fixed key — and a held tx key forwards as txSc
 
 test('custody.submit: the real coordinator leg — broadcast + emit commits through the tx object', async () => {
   const { kx, store } = await open()
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const spent: string[] = []
   try {
     await prepared(store, 'c:sub')
-    registerTxHandlers(ex, { store, fx: { txSpent: async (w) => void spent.push(w.txid) }, log: () => {} })
+    wireTx(ex, { store, fx: { txSpent: async (w) => void spent.push(w.txid) }, log: () => {} })
     const wallet = coordinator(store)
-    registerCustodyHandlers(ex, { wallet, log: () => {} })
+    wireCustody(ex, { wallet, log: () => {} })
     setExecutor(ex)
     const r = await custodySubmit(ex, wallet, 'c:sub')
     assert.equal(r.state, 'submitted')
@@ -88,14 +88,14 @@ test('custody.submit: the real coordinator leg — broadcast + emit commits thro
 
 test('custody.markRejected + resubmitPending: dead verdicts and the boot scan run through the object', async () => {
   const { kx, store } = await open()
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   const died: string[] = []
   try {
     await prepared(store, 'c:rej')
     await prepared(store, 'c:reair')
-    registerTxHandlers(ex, { store, fx: { txDied: async (w) => void died.push(w.txid) }, log: () => {} })
+    wireTx(ex, { store, fx: { txDied: async (w) => void died.push(w.txid) }, log: () => {} })
     const wallet = coordinator(store)
-    registerCustodyHandlers(ex, { wallet, log: () => {} })
+    wireCustody(ex, { wallet, log: () => {} })
     setExecutor(ex)
 
     await custodyMarkRejected(ex, wallet, 'c:rej', { cause: 'escrow_rejected' })

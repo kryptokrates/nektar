@@ -43,13 +43,20 @@
     automation: { pending: Pending[]; ops: Op[]; rt: Rt } | null
     share: { enabled: boolean; url: string }
     settings: {
-      policy: {
-        policyId?: string
-        roles: string[]
-        domains: string[]
-        limits: Record<string, number>
-        seller?: Record<string, unknown>
-      } | null
+      policies: Array<{
+        policyHash: string
+        policyId: string
+        approvedAt: number
+        approvedBy: string
+        revokedAt?: number
+        active: boolean
+        policy: {
+          roles: string[]
+          domains?: string[]
+          limits: Record<string, number>
+          seller?: Record<string, unknown>
+        } | null
+      }>
       hosts: { env: string[]; added: string[]; blocked: string[] }
     }
   }
@@ -392,24 +399,28 @@
           </div>
 
           {#if sub === 'policy'}
-            {#if s.settings.policy}
-              {@const p = s.settings.policy}
-              <div class="rline">
-                <span class="chip">{p.roles.join(' + ')}</span>
-                {#each p.domains ?? [] as dm}<span class="chip">{dm}</span>{/each}
-                <span class="chip">policy {String(p.policyId).slice(0, 12)}…</span>
-              </div>
-              <table class="jt"><thead><tr><th>limit</th><th>value</th></tr></thead><tbody>
-                {#each Object.entries(p.limits ?? {}) as [k, v]}<tr><td class="mut">{k}</td><td>{String(v)}</td></tr>{/each}
-              </tbody></table>
-              {#if p.seller}
-                <table class="jt"><thead><tr><th>seller</th><th>value</th></tr></thead><tbody>
-                  {#each Object.entries(p.seller) as [k, v]}<tr><td class="mut">{k}</td><td>{Array.isArray(v) ? v.join(', ') : String(v)}</td></tr>{/each}
-                </tbody></table>
-              {/if}
-              <pre class="dbg">{JSON.stringify(p, null, 2)}</pre>
+            {#if s.settings.policies.length}
+              {#each s.settings.policies as row}
+                <div class="rline">
+                  <span class="chip">{row.policyId}</span>
+                  {#if row.policy}{#each row.policy.roles as r}<span class="chip">{r}</span>{/each}{/if}
+                  {#if row.active}<span class="chip ok">active seller</span>{/if}
+                  {#if row.revokedAt}<span class="chip bad">revoked {ago(row.revokedAt)}</span>{/if}
+                  <span class="mut" style="margin-left:auto">{row.policyHash.slice(0, 12)}… · approved {ago(row.approvedAt)} by {row.approvedBy}</span>
+                </div>
+                {#if row.policy}
+                  {@const p = row.policy}
+                  {#if p.domains?.length}<div class="rline">{#each p.domains as dm}<span class="chip">{dm}</span>{/each}</div>{/if}
+                  <details class="pol"><summary>limits + seller terms</summary>
+                    <table class="jt"><tbody>
+                      {#each Object.entries(p.limits ?? {}) as [k, v]}<tr><td class="mut">{k}</td><td>{String(v)}</td></tr>{/each}
+                      {#if p.seller}{#each Object.entries(p.seller) as [k, v]}<tr><td class="mut">seller.{k}</td><td>{Array.isArray(v) ? v.join(', ') : String(v)}</td></tr>{/each}{/if}
+                    </tbody></table>
+                  </details>
+                {/if}
+              {/each}
             {:else}
-              <p class="empty">no seller policy approved yet — the agent can't trade until one is set (setPolicy via MCP)</p>
+              <p class="empty">no policy approved yet — the agent can't trade until one is set (setPolicy via MCP)</p>
             {/if}
           {/if}
 
@@ -1200,6 +1211,21 @@
   .journal .mono {
     font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
     color: var(--amber);
+  }
+  .pol {
+    margin: 0.3rem 0 0.5rem;
+    font-size: 0.78rem;
+    color: var(--mut);
+  }
+  .pol summary {
+    cursor: pointer;
+    padding: 0.2rem 0;
+  }
+  .pol summary:hover {
+    color: var(--amber);
+  }
+  .pol .jt {
+    margin-top: 0.4rem;
   }
   .verdict {
     font-weight: 800;

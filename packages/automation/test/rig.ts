@@ -8,6 +8,7 @@
 // the fixture), call() invokes and then joins the sends it spawned (the
 // old inline tick's "one call = the whole pass" contract), drain() awaits
 // every fired send so fan-out asserts are deterministic.
+import { detached } from '@nektar/core'
 import type { Executor, InvokeTarget, SendOpts, RtSend } from '../src/rt/exec.js'
 import { EXEC_SVC } from '../src/rt/exec.js'
 import {
@@ -63,14 +64,17 @@ export class Dispatcher implements Executor {
   send(target: InvokeTarget, arg: unknown, opts?: SendOpts): Promise<void> {
     const fn = this.get(target)
     const run = (): void => {
-      const p = (async () => {
+      // dispatched work exits the caller's leg — a send fired inside a
+      // bound leg must not hand that deadline to the spawned invocation
+      // (ALS propagates through queueMicrotask/setTimeout otherwise)
+      const p = detached(async () => {
         this.inDispatch++
         try {
           await fn(arg, target.key)
         } finally {
           this.inDispatch--
         }
-      })()
+      })
       this.pending.add(p)
       void p
         .catch((e: unknown) => {

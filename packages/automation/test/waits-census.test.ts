@@ -35,7 +35,7 @@ test('wait primitives only at sanctioned sites', () => {
     'lanes.ts': 'the io() merge helper — signals meet at the socket',
     'ai.ts': 'per-job io bound on caller-supplied timeoutMs',
     'toolbox-services.ts': 'rpc io bound (WAITS.rpcIo)',
-    'exec.ts': 'rt/: LocalExecutor delay timer (test/dev executor) + ingress io bound (WAITS.ingressIo)',
+    'exec.ts': 'rt/: ingress fetch io bound (WAITS.ingressIo)',
     'endpoint.ts': 'rt/: deployment-registration io bound (WAITS.registerIo/registerRetry)'
   }
   for (const f of srcFiles()) {

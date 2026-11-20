@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import knexFactory from 'knex'
 import { currentSignal, deadline, detached, nap } from '@nektar/core'
 import { AutomationStore } from '../src/store.js'
-import { LocalExecutor } from '../src/rt/exec.js'
+import { Dispatcher } from './rig.js'
 
 // leg-context — the AsyncLocalStorage deadline contract at the automation
 // seams: post-commit hooks and spawned work run OUTSIDE the leg that
@@ -65,7 +65,7 @@ test('store post-commit hooks fire detached — a workReady spawn survives the l
 })
 
 test('executor send dispatch is detached — a send armed inside a leg cannot leak its context', async () => {
-  const ex = new LocalExecutor()
+  const ex = new Dispatcher()
   let ambientInJob: AbortSignal | undefined | 'unset' = 'unset'
   let jobDone!: () => void
   const ran = new Promise<void>((r) => {

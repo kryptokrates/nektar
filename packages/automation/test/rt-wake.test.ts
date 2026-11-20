@@ -1,11 +1,12 @@
-// rt-wake.test.ts — the wake service bodies through a LocalExecutor: the
+// rt-wake.test.ts — the wake service bodies through the test Dispatcher: the
 // mem.onTx*/onHeight/onReorg callbacks' durable shape. The leg is journaled
 // work; the cycle tail leaves through journaled sends (dealfan.tick +
 // transport.drain) — the test asserts both halves land.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { LocalExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { registerWakeHandlers, TRANSPORT_DRAIN_KEY, type WakeDeps } from '../src/rt/services.js'
+import { EXEC_SVC } from '../src/rt/exec.js'
+import { type WakeDeps } from '../src/rt/services.js'
+import { Dispatcher, wireWake, TRANSPORT_DRAIN_KEY } from './rig.js'
 
 interface Seen {
   service: string
@@ -14,14 +15,14 @@ interface Seen {
   arg: unknown
 }
 
-const rig = (deps: WakeDeps): { ex: LocalExecutor; seen: Seen[] } => {
-  const ex = new LocalExecutor()
+const rig = (deps: WakeDeps): { ex: Dispatcher; seen: Seen[] } => {
+  const ex = new Dispatcher()
   const seen: Seen[] = []
   // the sends the wake handlers fan out — recorded so the test sees the
-  // cycle tail, registered so LocalExecutor has a route for them
+  // cycle tail, registered so the Dispatcher has a route for them
   ex.register(EXEC_SVC.dealfan, 'tick', async (arg, key) => void seen.push({ service: EXEC_SVC.dealfan, handler: 'tick', key, arg }))
   ex.register(EXEC_SVC.transport, 'drain', async (arg, key) => void seen.push({ service: EXEC_SVC.transport, handler: 'drain', key, arg }))
-  registerWakeHandlers(ex, deps)
+  wireWake(ex, deps)
   return { ex, seen }
 }
 

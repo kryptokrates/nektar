@@ -840,8 +840,17 @@ test('bstack M: no loss — one operation; the note is listed while the deal is 
       await untilBuyer(b, s, chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 200000),
       'never funded | ' + logs.slice(-20).join(' | ')
     )
-    const listed = await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)
-    assert.equal(noteItems(listed.items).length, 1, 'recovery note stays listed while the deal is open')
+    // the sellerNote publish is an async outbox leg — under file load it
+    // lands after the state transition; wait for it on the drive cadence
+    assert.ok(
+      await until(
+        [b.rt, s.rt],
+        chain,
+        async () => noteItems((await readBuyer(b.mem.operatorKey(), [h1.url, h2.url], chain)).items).length === 1,
+        120000
+      ),
+      'recovery note never listed while the deal is open | ' + logs.slice(-15).join(' | ')
+    )
     assert.ok(
       await until([b.rt, s.rt], chain, async () => (await buyerOp(b))?.state === 'disclosure_verified', 200000),
       'no deal | ' + logs.slice(-20).join(' | ')

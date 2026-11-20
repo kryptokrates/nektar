@@ -993,7 +993,13 @@ export abstract class BuyerOps extends SellerOps {
         data: { refundTries: 0 }
       })
     } else {
-      await this.d.store.transition(op.operationId, op.revision, 'uncertain', { cause: 'refund_retry_refused', data: { refundTries: tries + 1 } })
+      // the refusal reason is the only evidence a stranded-funds postmortem
+      // gets — persist it, don't drop it on the floor
+      const reason = String((r as { reason?: string }).reason ?? '').slice(0, 200)
+      await this.d.store.transition(op.operationId, op.revision, 'uncertain', {
+        cause: 'refund_retry_refused',
+        data: { refundTries: tries + 1, lastRefusalReason: reason }
+      })
     }
   }
 

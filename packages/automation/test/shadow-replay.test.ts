@@ -48,7 +48,7 @@ function oneOutputTx(): Transaction {
  *  driver mode writes through applyTxEvent, legacy through setTxState. */
 function tapTx(store: AutomationStore, log: { from: string; to: string }[]) {
   const orig = store.setTxState.bind(store)
-  store.setTxState = async (id: string, st: never, obs?: unknown, att = false) => {
+  store.setTxState = async (id: string, st: never, obs?: unknown, att?: boolean) => {
     const prev = await store.walletTx({ actionId: id })
     log.push({ from: prev?.state ?? '?', to: st })
     return orig(id, st, obs, att)

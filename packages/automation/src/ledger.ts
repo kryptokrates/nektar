@@ -2,7 +2,8 @@ import { Transaction } from '@bsv/sdk'
 import type { BroadcastResult } from '@nektar/chain'
 import type { AutomationStore, TxState, WalletTx } from './store.js'
 import { WalletCoordinator } from './wallet.js'
-import { emitTxEvent, obsEvent, replayTxEffects, txFsmLegacy, type TxEffects } from './machines/driver.js'
+import { emitTxEvent, replayTxEffects, type TxEffects } from './machines/effects.js'
+import { obsEvent, txFsmLegacy } from './machines/driver.js'
 
 export interface TxObservationInput {
   status: 'seen' | 'proven' | 'rejected' | 'conflicted' | 'abandoned'

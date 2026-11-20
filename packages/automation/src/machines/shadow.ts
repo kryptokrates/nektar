@@ -32,7 +32,7 @@ interface Candidate {
 /** market_events.cause → machine event candidates. A cause may legitimately
  *  land on different edges (role/state-dependent) — candidates are tried in
  *  order and the first agreeing one reports 'agree'. */
-export const OPS_CAUSE_MAP: Record<string, Candidate[]> = {
+const OPS_CAUSE_MAP: Record<string, Candidate[]> = {
   want_signed: [{ event: 'want.signed' }],
   want_republished: [{ event: 'want.republished' }],
   offer_selected: [{ event: 'offers.select', guards: ['policy+budget'] }],

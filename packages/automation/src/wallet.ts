@@ -2,7 +2,8 @@ import { Transaction } from '@bsv/sdk'
 import type { BroadcastResult } from '@nektar/chain'
 import type { AutomationStore, WalletTx, TxState } from './store.js'
 import type { ActionContext } from './policy.js'
-import { emitTxEvent, obsEvent, replayTxEffects, txFsmLegacy, type TxEffects } from './machines/driver.js'
+import { emitTxEvent, replayTxEffects, type TxEffects } from './machines/effects.js'
+import { obsEvent, txFsmLegacy } from './machines/driver.js'
 
 export interface WalletDeps {
   broadcast: (tx: Transaction) => Promise<BroadcastResult>
@@ -162,8 +163,8 @@ export class WalletCoordinator {
         )
         return { state: r.next, txid: w.txid, detail }
       }
-      // 'submit.unknown' only exists from 'prepared' — a repeat unknown on an
-      // already-unknown row is a 'resubmit' self-edge (records the attempt)
+      // 'submit.unknown' has no edge on an already-unknown row — a repeat
+      // unknown is a 'resubmit' self-edge there (records the attempt)
       const r = await emitTxEvent(this.store, w, w.state === 'prepared' ? 'submit.unknown' : 'resubmit', { observation: obs, attempt: true }, this.fx())
       return { state: r.next, txid: w.txid, detail }
     }

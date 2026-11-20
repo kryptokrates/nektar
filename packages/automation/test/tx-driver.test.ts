@@ -6,7 +6,7 @@ import { PrivateKey, P2PKH, Transaction } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { WalletCoordinator, type WalletDeps } from '../src/wallet.js'
 import { TransactionWatcher } from '../src/ledger.js'
-import { emitTxEvent, replayTxEffects, type TxEffects } from '../src/machines/driver.js'
+import { emitTxEvent, replayTxEffects, type TxEffects } from '../src/machines/effects.js'
 
 // Phase B — tx.machine as DRIVER: the table decides, store.applyTxEvent
 // commits state+event+in-tx intents atomically, emitTxEvent runs the

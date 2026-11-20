@@ -583,7 +583,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // completion_submitted → settled — run a cycle now, not at the next interval
   mem.onTxProof((txid, mp) => {
     if (rt.stopped) return
-    const work = (async () => {
+    // detached(): the handler launches a pass, not leg work — a proof that
+    // lands inside a leg must not hand that leg's deadline to the spawn
+    const work = detached(() =>
+      (async () => {
       try {
         if (lanes !== undefined) {
           const unproven = await lanes.ledger.unproven()
@@ -610,7 +613,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       engine.hint(txid)
       rt.countWake('txProof')
       if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
-    })()
+      })()
+    )
     rt.inflight.add(work)
     void work.finally(() => {
       rt.inflight.delete(work)
@@ -620,11 +624,13 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // affected operation and run a cycle — the engine consults txFacts itself
   mem.onTxRejected((txid: string) => {
     if (rt.stopped) return
-    const work = (async () => {
-      engine.hint(txid)
-      rt.countWake('txRejected')
-      if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
-    })()
+    const work = detached(() =>
+      (async () => {
+        engine.hint(txid)
+        rt.countWake('txRejected')
+        if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
+      })()
+    )
     rt.inflight.add(work)
     void work.finally(() => {
       rt.inflight.delete(work)
@@ -635,41 +641,45 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // feed leave the floor as the only driver, same as today
   mem.onHeight?.((tip: number) => {
     if (rt.stopped) return
-    void store
-      .hasDueAtHeight(NONTERMINAL, tip)
-      .then((due) => {
-        if (!rt.stopped && due) {
-          rt.countWake('height')
-          rt.scheduler?.wake('deals')
-        }
-      })
-      .catch(() => undefined)
+    void detached(() =>
+      store
+        .hasDueAtHeight(NONTERMINAL, tip)
+        .then((due) => {
+          if (!rt.stopped && due) {
+            rt.countWake('height')
+            rt.scheduler?.wake('deals')
+          }
+        })
+        .catch(() => undefined)
+    )
   })
   // the substrate's abandon horizon is the terminal verdict for a mint that
   // resubmitted but never mined — drop the row so the kind's mint gate
   // re-opens (same reap as a chain rejection, driven by the event)
   mem.onTxAbandoned((txid: string) => {
     if (rt.stopped || lanes === undefined) return
-    const work = (async () => {
-      try {
-        const unproven = await lanes.ledger.unproven()
-        const row = unproven.find((u) => u.txid === txid)
-        if (row === undefined) return
-        const tx = await mem.fetchTx(txid)
-        await lanes.ledger.drop(txid)
-        // carriers minted on the dead tree are unadmittable forever — reap
-        // their journal rows too, else the repair leg resubmits them endlessly
-        for (const j of (await lanes.journal.fundedBy?.(txid)) ?? []) await lanes.journal.del?.(j.hash)
-        const reap = abandonedReap(row.kind)
-        if (reap.ghost && tx !== undefined) rt.ghostMint(tx)
-        log(reap.ghost ? `automation: dropped abandoned funding mint ${txid}` : `automation: dropped abandoned provision tx ${txid}`)
-        await store.unblockOutbox('funding-slot')
-        rt.countWake('txAbandoned')
-        if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
-      } catch (e) {
-        log(`automation: txAbandoned: ${(e as Error).message}`)
-      }
-    })()
+    const work = detached(() =>
+      (async () => {
+        try {
+          const unproven = await lanes.ledger.unproven()
+          const row = unproven.find((u) => u.txid === txid)
+          if (row === undefined) return
+          const tx = await mem.fetchTx(txid)
+          await lanes.ledger.drop(txid)
+          // carriers minted on the dead tree are unadmittable forever — reap
+          // their journal rows too, else the repair leg resubmits them endlessly
+          for (const j of (await lanes.journal.fundedBy?.(txid)) ?? []) await lanes.journal.del?.(j.hash)
+          const reap = abandonedReap(row.kind)
+          if (reap.ghost && tx !== undefined) rt.ghostMint(tx)
+          log(reap.ghost ? `automation: dropped abandoned funding mint ${txid}` : `automation: dropped abandoned provision tx ${txid}`)
+          await store.unblockOutbox('funding-slot')
+          rt.countWake('txAbandoned')
+          if (!rt.stopped) await cycle().catch((e) => log(`automation: ${(e as Error).message}`))
+        } catch (e) {
+          log(`automation: txAbandoned: ${(e as Error).message}`)
+        }
+      })()
+    )
     rt.inflight.add(work)
     void work.finally(() => {
       rt.inflight.delete(work)

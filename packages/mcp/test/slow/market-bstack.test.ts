@@ -491,11 +491,19 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
     // broadcasts it itself. After the op leaves 'quoted' the same local graph
     // read just returns what rememberTx stored — not a lookup.
     let blindTxid: string | undefined
+    // the escrow id resolves lazily inside the spies: cycle() doesn't await
+    // its queued legs, so a fixed-iteration read of data.escrowTxid can lag
+    // the accept's delivery — by broadcast time the transition that emitted
+    // it has committed, so the op read here always sees it
+    const resolveBlind = async () => {
+      if (blindTxid === undefined) blindTxid = (await buyerOp(b))?.data.escrowTxid as string | undefined
+      return blindTxid
+    }
     let escrowLookups = 0
     const origFetch = s.mem.fetchTx.bind(s.mem)
     s.mem.fetchTx = async (id: string) => {
       const stillDeciding = (await saleOps(s))[0]?.state === 'quoted'
-      if (id === blindTxid && stillDeciding) {
+      if (id === (await resolveBlind()) && stillDeciding) {
         escrowLookups++
         return undefined
       }
@@ -504,7 +512,7 @@ test('bstack H: seller takes the escrow from the accept and broadcasts it itself
     let escrowBroadcasts = 0
     const origBcast = s.mem.broadcastTx.bind(s.mem)
     s.mem.broadcastTx = async (t: import('@bsv/sdk').Transaction) => {
-      if (t.id('hex') === blindTxid) escrowBroadcasts++
+      if (t.id('hex') === (await resolveBlind())) escrowBroadcasts++
       return await origBcast(t)
     }
     await sellerize(s, 200)

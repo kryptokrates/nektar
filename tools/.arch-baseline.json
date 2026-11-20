@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 10250,
+      "loc": 10373,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1239,
@@ -25,7 +25,7 @@
       "instability": 0.571
     },
     "bstack": {
-      "loc": 4944,
+      "loc": 4991,
       "pkgFanout": 2,
       "edges": ["chain", "core"],
       "maxFileLoc": 1046,
@@ -33,7 +33,7 @@
       "instability": 0.5
     },
     "chain": {
-      "loc": 6610,
+      "loc": 6704,
       "pkgFanout": 1,
       "edges": ["core"],
       "maxFileLoc": 931,

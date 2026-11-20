@@ -93,6 +93,11 @@ test('refusals: parent() — direct mark short-circuits; proven and clean pass',
   assert.equal(await noResolve.parent(clean), false, 'nothing marked, nothing dead')
 
   const proven = parentOf(dead)
-  proven.merklePath = new MerklePath(900, [[{ offset: 0 }]])
+  proven.merklePath = new MerklePath(900, [
+    [
+      { offset: 0, hash: '00'.repeat(32) },
+      { offset: 1, hash: proven.id('hex'), txid: true }
+    ]
+  ])
   assert.equal(await r.parent(proven), false, 'a proven subject is never a refused ancestor')
 })

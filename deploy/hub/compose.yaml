@@ -59,7 +59,10 @@ services:
   db:
     image: ghcr.io/kryptokrates/nektar-hub-db:${NEKTAR_IMAGE_TAG:-latest}
     # every dependent has restart: unless-stopped — the db needs it too or a
-    # daemon restart leaves it dead while hosts crash-loop on ENOTFOUND db
+    # daemon restart leaves it dead while hosts crash-loop on ENOTFOUND db.
+    # NOTE: hub-db is mariadb now — it cannot read a mysql-format volume;
+    # existing deployments must dump `overlay`/`overlay_b` before upgrading,
+    # or drop the `db` volume and let the hosts rebuild.
     restart: unless-stopped
     environment:
       MARIADB_DATABASE: overlay

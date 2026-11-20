@@ -35,7 +35,7 @@ export interface Refusals {
    *  bounded ancestry walk; a hit marks the subject itself (it is dead
    *  for its descendants), inheriting the evidence's timestamp so the
    *  mark dies when the refusal does — and making repeat checks O(1) */
-  parent(tx: Transaction): Promise<boolean>
+  parent: (tx: Transaction) => Promise<boolean>
 }
 
 export const openRefusals = (p: {
@@ -60,7 +60,10 @@ export const openRefusals = (p: {
       }
     },
     refused,
-    async parent(tx) {
+    // a property-held arrow, not a method shorthand — the registry is
+    // pushed onto funds' oracle list unbound, and lint rightly refuses
+    // a method reference that could smuggle a `this`
+    parent: async (tx) => {
       if (tx.merklePath !== undefined) return false
       try {
         if (refused(tx.id('hex'))) return true

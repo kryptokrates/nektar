@@ -565,7 +565,9 @@ export class AutomationStore {
     const r = await this.kx(T.ops)
       .select(this.kx.raw('1'))
       .whereIn('state', states)
-      .andWhere((b) => b.where('state', '<>', 'completion_submitted').orWhereRaw("json_extract(data, '$.provenHeight') IS NULL"))
+      .andWhere((b) => {
+        b.where('state', '<>', 'completion_submitted').orWhereRaw("json_extract(data, '$.provenHeight') IS NULL")
+      })
       .first()
     return r !== undefined
   }

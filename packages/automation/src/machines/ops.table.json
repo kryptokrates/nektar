@@ -121,7 +121,13 @@
     { "state": "awaiting_disclosure", "event": "delivered.parked", "intents": ["park-delivery"], "target": "self" },
     { "state": "awaiting_disclosure", "event": "decline.received", "intents": ["record-decline"], "target": "self" },
     { "state": "awaiting_disclosure", "event": "restored", "intents": [], "target": "self" },
-    { "state": ["funding", "awaiting_disclosure", "refunding"], "event": "needs.human", "guard": "unresolved", "intents": ["request-approval"], "target": "uncertain" },
+    {
+      "state": ["funding", "awaiting_disclosure", "refunding"],
+      "event": "needs.human",
+      "guard": "unresolved",
+      "intents": ["request-approval"],
+      "target": "uncertain"
+    },
     {
       "state": ["selected", "funding", "funding_deferred", "refund_pending", "refunding", "completing", "completion_submitted", "watching", "seizing"],
       "event": "needs.human",

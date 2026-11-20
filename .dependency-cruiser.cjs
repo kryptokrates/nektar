@@ -97,7 +97,9 @@ module.exports = {
       name: 'not-to-dev-dep',
       severity: 'error',
       comment: 'src/ must not import devDependencies (they do not ship)',
-      from: { pathNot: '(^|/)(test|scripts|demo|tools)/' },
+      // dashboard/ + vite.config are build-time only — their deps bundle at
+      // compile time and never reach the shipped server code
+      from: { pathNot: '(^|/)(test|scripts|demo|tools|dashboard)/|vite\\.config\\.[cm]?[jt]s$' },
       to: { dependencyTypes: ['npm-dev'] }
     },
     {

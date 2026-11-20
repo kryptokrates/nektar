@@ -242,9 +242,21 @@ export abstract class IngressOps extends MarketBase {
   }
 
   private async pumpItem(item: OutboxItem): Promise<void> {
+    await this.deliverOutboxItem(item)
+  }
+
+  /** one row's delivery leg — the transport object's per-destination
+   *  invocation and the local pump share it. Reads the row first: an
+   *  acked/dead/re-scheduled row is skipped so a replayed or raced drain
+   *  can't double-send. The verdict names what the leg settled; the
+   *  attempts/dead-letter policy itself stays in the row (retryOutbox). */
+  async deliverOutboxItem(item: OutboxItem): Promise<'acked' | 'retried' | 'deferred' | 'skipped'> {
+    const cur = await this.d.store.outboxRow(item.actionId)
+    if (cur === undefined || cur.status !== 'pending' || cur.nextAt > this.now()) return 'skipped'
     try {
       await this.deliverBounded(item)
       await this.d.store.ackOutbox(item.actionId)
+      return 'acked'
     } catch (e) {
       let msg = (e as Error).message
       // resource starvation (a funding-tree slot being empty) is not a
@@ -253,27 +265,29 @@ export abstract class IngressOps extends MarketBase {
       // the row so a message that merely CONTAINS the keyword can't be
       // pulled forward by an unrelated wake.
       const cls = classifyDeliveryError(msg)
-      if (cls === 'funding-slot') await this.d.store.deferOutbox(item.actionId, msg)
-      else {
-        // a persisted payload can outgrow the box cap — built under an older
-        // bound, or an escrow wire that came out larger than expected. The
-        // `tx` field is advisory on every message that carries it (receivers
-        // fall back to fetchTx), so drop it once before burning attempts;
-        // an unshrinkable envelope dead-letters on the normal path.
-        if (item.kind === 'message' && /range: content/.test(msg)) {
-          const shrunk = this.shrinkWire(item.payload as MarketMessage)
-          if (shrunk !== undefined) {
-            try {
-              await this.deliverBounded({ ...item, payload: shrunk })
-              await this.d.store.ackOutbox(item.actionId)
-              return
-            } catch (e2) {
-              msg = (e2 as Error).message
-            }
+      if (cls === 'funding-slot') {
+        await this.d.store.deferOutbox(item.actionId, msg)
+        return 'deferred'
+      }
+      // a persisted payload can outgrow the box cap — built under an older
+      // bound, or an escrow wire that came out larger than expected. The
+      // `tx` field is advisory on every message that carries it (receivers
+      // fall back to fetchTx), so drop it once before burning attempts;
+      // an unshrinkable envelope dead-letters on the normal path.
+      if (item.kind === 'message' && /range: content/.test(msg)) {
+        const shrunk = this.shrinkWire(item.payload as MarketMessage)
+        if (shrunk !== undefined) {
+          try {
+            await this.deliverBounded({ ...item, payload: shrunk })
+            await this.d.store.ackOutbox(item.actionId)
+            return 'acked'
+          } catch (e2) {
+            msg = (e2 as Error).message
           }
         }
-        await this.d.store.retryOutbox(item.actionId, msg, undefined, cls)
       }
+      await this.d.store.retryOutbox(item.actionId, msg, undefined, cls)
+      return 'retried'
     }
   }
 

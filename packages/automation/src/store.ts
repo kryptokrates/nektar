@@ -824,6 +824,14 @@ export class AutomationStore {
     await this.kx(T.outbox).where({ action_id: actionId }).update({ status: 'acked' })
   }
 
+  /** one row's delivery guard — the transport object reads it before
+   *  delivering: an acked/dead/re-scheduled row is skipped, so a replayed
+   *  or raced drain can't double-send. */
+  async outboxRow(actionId: string): Promise<{ status: string; nextAt: number } | undefined> {
+    const r = await this.kx(T.outbox).where({ action_id: actionId }).first()
+    return r === undefined ? undefined : { status: r.status, nextAt: Number(r.next_at) }
+  }
+
   /** pull one deferred row forward to now — used when the wait's cause
    *  resolved early (a pending fan-out leg that settled missed). Attempts
    *  are untouched: this never hastens a dead-letter. */

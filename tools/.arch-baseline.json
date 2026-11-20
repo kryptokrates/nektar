@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 11731,
+      "loc": 11882,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1326,
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 10500,
+      "loc": 10327,
       "pkgFanout": 18,
       "edges": [
         "anchor",
@@ -213,7 +213,7 @@
       "fanout": 13
     },
     "packages/automation/src/runtime.ts": {
-      "loc": 878,
+      "loc": 899,
       "fanout": 28
     },
     "packages/automation/src/store.ts": {

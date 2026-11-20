@@ -4,6 +4,8 @@
 import { detached } from '@nektar/core'
 import type { Rt } from './rtctx.js'
 import { WAITS } from './waits.js'
+import { executor, EXEC_SVC } from './rt/exec.js'
+import { TRANSPORT_DRAIN_KEY } from './rt/services.js'
 
 export function openOutbox(rt: Rt): void {
   const { store, engine, log } = rt
@@ -24,6 +26,24 @@ export function openOutbox(rt: Rt): void {
         .catch((e) => log(`automation: box ack: ${(e as Error).message}`))
         .then(clear, clear)
     )
+  }
+  rt.pushAcks = pushAcks
+  const exec = executor()
+  if (exec !== undefined) {
+    // the restate topology: rows are still the durable intent, but delivery
+    // + scheduling live on the transport object — outboxReady pokes the
+    // drain (journaled scan → per-destination deliver invocations → the
+    // drain self-schedules its ceiling at the earliest next_at). No wheel
+    // job, no in-process pump; the boot send covers rows pending across a
+    // restart.
+    const poke = (): void => {
+      void exec.send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {}).catch((e: unknown) => {
+        log(`automation: transport drain send: ${(e as Error).message}`)
+      })
+    }
+    store.outboxReady = poke
+    poke()
+    return
   }
   // outbox delivery is detached under its own busy guard — the store's
   // outboxReady hook wakes it on every enqueue (so a want/accept/message
@@ -70,5 +90,4 @@ export function openOutbox(rt: Rt): void {
   // the 60s ceiling is only the missed-wake backstop (the end-of-tick pump
   // is already the correctness floor)
   rt.scheduler!.add({ name: 'outbox', run: () => rt.pumpOutbox(), ceilingMs: () => WAITS.outboxCeiling.ms })
-  rt.pushAcks = pushAcks
 }

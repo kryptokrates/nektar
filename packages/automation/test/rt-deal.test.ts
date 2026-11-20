@@ -5,8 +5,9 @@ import { PrivateKey } from '@bsv/sdk'
 import { AutomationStore } from '../src/store.js'
 import { MarketEngine } from '../src/market.js'
 import type { MarketDeps } from '../src/market/types.js'
+import { NONTERMINAL } from '../src/market/types.js'
 import { LocalExecutor, setExecutor, EXEC_SVC } from '../src/rt/exec.js'
-import { registerDealHandlers } from '../src/rt/services.js'
+import { registerDealHandlers, registerDealfanHandlers } from '../src/rt/services.js'
 import type { AutomationPolicy } from '../src/policy.js'
 import { DEFAULT_SCORE_WEIGHTS } from '../src/scoring.js'
 
@@ -75,6 +76,13 @@ test('tick under an executor fans advance out per op key — the leg leaves the 
       advanceOp: async (id) => (ran.push(id), true),
       inboxEvent: async () => {},
       reconcileOp: async () => {},
+      log: () => {}
+    })
+    // the tick routes through dealfan — the fan-out lands on deal keys
+    registerDealfanHandlers(ex, {
+      pendingInbox: () => store.pendingInbox(),
+      liveOps: async () => (await store.operations({ states: NONTERMINAL })).map((o) => o.operationId),
+      reconcileOps: async () => [],
       log: () => {}
     })
     const hash = await store.approvePolicy(policy(), 'test')

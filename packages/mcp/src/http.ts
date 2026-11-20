@@ -451,10 +451,8 @@ export function createHttpApi(
             res.writeHead(200, { 'content-type': a.type, 'cache-control': 'public, max-age=31536000, immutable' })
             return res.end(a.body)
           }
-          if (req.method === 'GET' && url.pathname === '/dashboard') {
-            res.writeHead(301, { location: '/' })
-            return res.end()
-          }
+          // old tabler-era URL — the app lives at /
+          if (req.method === 'GET' && url.pathname === '/dashboard') return res.writeHead(301, { location: '/' }).end()
           if (req.method === 'GET' && url.pathname === '/') {
             const html = dashboardFile('index.html')
             if (html) {

@@ -123,10 +123,19 @@ export async function dashboardState(mem: NektarMemory, ops: HttpOps | undefined
       frontier: firstOpen === -1 ? 'loop live' : steps[firstOpen].name,
       next: firstOpen === -1 ? 'the earning loop is live — every link below is checkable by a stranger' : (nextText[steps[firstOpen].name] ?? '')
     },
-    treasury: { sats: bal, funded: !!f.funded, payments: d.payments },
+    treasury: { sats: bal, utxos: Number(f.utxos ?? 0), funded: !!f.funded, payments: d.payments },
     receipts: { count: rrecs.length, earned, amounts, list: receipts },
     memory: { shards: d.shards, records: d.records, anchored: d.anchoredRecords, unproven: d.unprovenAnchors, coverage, prover: d.prover },
-    market: cat.map((m) => ({ shard: m.shard, domains: m.domains, offers: m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? '' })),
+    // the domain track record — records per shard is the agent's provable
+    // depth in each domain it sells
+    market: await Promise.all(
+      cat.map(async (m) => ({
+        shard: m.shard,
+        domains: m.domains,
+        records: (await mem.records(m.shard).catch(() => [])).length,
+        offers: m.offers?.map((o) => `${o.kind} ${o.priceSats}ⓢ`).join(' · ') ?? ''
+      }))
+    ),
     net: {
       hosts: hosts.map((h) => ({ url: h, state: au === undefined ? 'configured' : downSet.has(h) ? 'down' : 'up' })),
       slots: slots ?? null,

@@ -16,7 +16,7 @@
 // and the local executor registers the same bodies, so memory-tier tests
 // run the exact code the server invokes.
 import type * as restate from '@restatedev/restate-sdk'
-import type { AutomationStore, TxState, WalletTx } from '../store.js'
+import type { AutomationStore, OutboxItem, TxState, WalletTx } from '../store.js'
 import { runTxIntents, type TxEffects } from '../machines/effects.js'
 import { CUSTODY_KEY, EXEC_SVC, inRtScope, type RtSend } from './exec.js'
 import type { CustodyLeg, TxObserve } from './emit.js'
@@ -245,6 +245,93 @@ export const registerCustodyHandlers = (
     return deps.wallet.markRejectedById(a.actionId, a.observation)
   })
   ex.register(EXEC_SVC.custody, 'resubmitPending', () => deps.wallet.resubmitPending())
+}
+
+// ── the transport object ─────────────────────────────────────────────────
+// the outbox's delivery machinery as journaled work: `deliver` lands on the
+// DESTINATION host's key (per-host serialization — the OUTBOX_POOL cap's
+// real guarantee was "one dead host can't serialize the batch", which
+// per-host keys give natively, plus same-host ordering). `drain` sits on a
+// fixed key: it scans due rows (journaled snapshot), fans each row out as
+// a journaled send deduped by actionId, then schedules ITS OWN next drain
+// at the earliest next_at — the durable-timer successor of the wheel's
+// armOutboxTimer. Empty boxes leave no arm; outboxReady pokes re-wake it.
+// The rows stay the durable intent (the atomic outbox pattern is SQLite's),
+// retryOutbox/deferOutbox keep attempts + dead-letter policy — Restate owns
+// scheduling and delivery ordering, not the verdicts.
+
+export const TRANSPORT_DRAIN_KEY = 'drain'
+
+export interface TransportDeps {
+  /** due pending rows — the journaled scan input (store.dueOutbox) */
+  dueRows: () => Promise<OutboxItem[]>
+  /** earliest pending wake — the drain's self-schedule (store.nextOutboxAt) */
+  nextAt: () => Promise<number | undefined>
+  /** one row's delivery leg — engine.deliverOutboxItem (deliver + ack /
+   *  retry / defer + shrink recovery inside) */
+  deliverItem: (item: OutboxItem) => Promise<'acked' | 'retried' | 'deferred' | 'skipped'>
+  now: () => number
+  log: (line: string) => void
+}
+
+export const transportDrainBody =
+  (deps: TransportDeps) =>
+  async (send: RtSend, run: StepRun = (_n, fn) => fn()) => {
+    const rows = await run('scan', () => deps.dueRows())
+    // one journaled send per row, keyed by destination — per-host order +
+    // cross-host parallelism; idempotent on actionId so a replayed or raced
+    // drain can't double-send
+    for (const item of rows)
+      await send(
+        { service: EXEC_SVC.transport, handler: 'deliver', key: item.destination },
+        item,
+        { idempotencyKey: `deliver:${item.actionId}` }
+      )
+    // self-schedule the ceiling at the earliest pending wake — the durable
+    // successor of armOutboxTimer; empty box leaves the loop asleep until
+    // outboxReady pokes it
+    const next = await run('next', () => deps.nextAt())
+    if (next !== undefined)
+      await send({ service: EXEC_SVC.transport, handler: 'drain', key: TRANSPORT_DRAIN_KEY }, {}, { delayMs: Math.max(0, next - deps.now()) })
+    return { sent: rows.length, nextAt: next }
+  }
+
+export const transportObject = async (deps: TransportDeps) => {
+  const restate = await import('@restatedev/restate-sdk')
+  const drain = transportDrainBody(deps)
+  return restate.object({
+    name: EXEC_SVC.transport,
+    handlers: {
+      deliver: async (ctx: restate.ObjectContext, item: OutboxItem) => await ctx.run('deliver', () => deps.deliverItem(item)),
+      drain: async (ctx: restate.ObjectContext) => {
+        const transport = ctx.objectSendClient({ name: EXEC_SVC.transport } as never, TRANSPORT_DRAIN_KEY) as unknown as {
+          drain: (o: unknown, opts?: unknown) => Promise<void>
+        }
+        const send: RtSend = async (target, arg, opts) => {
+          if (target.service !== EXEC_SVC.transport) throw new Error(`transport send: no route for ${target.service}`)
+          if (target.handler === 'deliver')
+            await (
+              ctx.objectSendClient({ name: EXEC_SVC.transport } as never, target.key ?? '') as unknown as {
+                deliver: (o: OutboxItem, opts?: unknown) => Promise<void>
+              }
+            ).deliver(arg as OutboxItem, restate.rpc.opts.sendOpts({ delay: opts?.delayMs ?? 0, idempotencyKey: opts?.idempotencyKey }))
+          else if (target.handler === 'drain') await transport.drain(arg, restate.rpc.opts.sendOpts({ delay: opts?.delayMs ?? 0 }))
+          else throw new Error(`transport send: no handler ${target.handler}`)
+        }
+        return await drain(send, (n, fn) => ctx.run(n, fn))
+      }
+    }
+  })
+}
+
+/** the transport bodies on a LocalExecutor — the local-mode wiring. */
+export const registerTransportHandlers = (
+  ex: { register: (service: string, handler: string, fn: (arg: unknown, key?: string) => Promise<unknown>) => void } & { send: RtSend },
+  deps: TransportDeps
+): void => {
+  const drain = transportDrainBody(deps)
+  ex.register(EXEC_SVC.transport, 'deliver', (arg) => deps.deliverItem(arg as OutboxItem))
+  ex.register(EXEC_SVC.transport, 'drain', () => drain((t, a, o) => ex.send(t, a, o)))
 }
 
 export interface SweepDeps {

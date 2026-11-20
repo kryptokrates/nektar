@@ -190,6 +190,34 @@ test('ensureTrees: stuck mint — keep while healing, drop on definitive verdict
   assert.equal((await ledger.unproven()).length, 1)
 })
 
+test('ensureTrees: a refused mint fires onRefused so the take heals, then fails the pass', async () => {
+  const k = PrivateKey.fromRandom()
+  const ledger = new MemoryTreeLedger()
+  const refused: Array<{ txid: string; description: string | undefined }> = []
+  // the 'parent rejected (ancestor X)' refusal shape the broadcaster hands
+  // back — the mint never books a row, so without onRefused its take
+  // reservation would leak for the life of the process
+  const bc = async () => ({
+    status: 'error' as const,
+    description: `parent rejected (ancestor ${'ab'.repeat(32)}): retryable — resubmit after the ancestor is accepted`
+  })
+  const p = {
+    key: k,
+    ledger,
+    lowWater: 2,
+    size: 4,
+    takeFunding: async () => fund(k, 1_000_000),
+    broadcast: bc,
+    fetchTx: async () => undefined,
+    onRefused: (t: Transaction, r: { status: string; description?: string }) => {
+      refused.push({ txid: t.id('hex'), description: r.description })
+    }
+  }
+  await assert.rejects(() => ensureTrees(p), /broadcast failed/, 'the pass still fails — the next tick mints on surviving stock')
+  assert.equal(refused.length, 1, 'the heal seam fired with the refused mint and its result')
+  assert.match(refused[0].description ?? '', /parent rejected/)
+})
+
 test('journal: fundedBy returns rows for a funding txid; put upserts beef', async () => {
   const j = new MemoryCarrierJournal()
   await j.put('a', { txid: 'c1', beef: [1], topics: ['t'], fundingTxid: 'tree1' })

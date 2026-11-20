@@ -72,7 +72,14 @@ export function openUpkeep(rt: Rt): void {
     } catch {
       // a stand-in parent cannot serialize — its ancestry still answers
     }
-    if (await ancestryHit(tx, (id: string) => refusedAncestors.has(id), (txid: string) => mem.fetchTx(txid).catch(() => undefined))) return true
+    if (
+      await ancestryHit(
+        tx,
+        (id: string) => refusedAncestors.has(id),
+        (txid: string) => mem.fetchTx(txid).catch(() => undefined)
+      )
+    )
+      return true
     return (await innerDeadParent?.(tx)) ?? false
   }
   const stuckMint = async (tree: import('@bsv/sdk').Transaction): Promise<'keep' | 'drop'> => {

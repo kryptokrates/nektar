@@ -7,7 +7,17 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setNektarEnv } from '@nektar/core'
-import { mintTree, DERIVATION, FUNDING_TAG, ORIGINATOR, KnexTreeLedger, MemoryTreeLedger, anchoredTree as anchoredPred, deadAncestry } from '../src/tree.js'
+import {
+  mintTree,
+  DERIVATION,
+  FUNDING_TAG,
+  ORIGINATOR,
+  KnexTreeLedger,
+  MemoryTreeLedger,
+  anchoredTree as anchoredPred,
+  ancestryHit,
+  deadAncestry
+} from '../src/tree.js'
 import * as treemod from '../src/tree.js'
 import { boxFundingLock } from '../src/box.js'
 import { anchoredTree, fakeParent, fund, prove, provenTree } from './helpers.js'
@@ -638,6 +648,29 @@ test('deadAncestry: resolvable unproven ancestors are not dead — bound stays i
   ])
   const gaps = await deadAncestry(t, async (id) => byId.get(id))
   assert.deepEqual(gaps, [])
+})
+
+test('ancestryHit: a refused ancestor is found by txid alone — clean and proven chains pass', async () => {
+  const key = PrivateKey.fromRandom()
+  const dead = fakeParent(key)
+  // mid spends the refused ancestor but resolves fine — the 'unresolvable'
+  // audit does not catch it; only the refused-txid membership does
+  const mid = new Transaction()
+  mid.addInput({ sourceTXID: dead.id('hex'), sourceOutputIndex: 0, unlockingScript: UnlockingScript.fromASM('OP_1') })
+  mid.addOutput({ satoshis: 1_000_000, lockingScript: new P2PKH().lock(key.toPublicKey().toAddress()) })
+  const t = await mintTree({ key, funding: { tx: mid, vout: 0, satoshis: 1_000_000 }, n: 2, satsPerOutput: 1000 })
+  const byId = new Map([
+    [mid.id('hex'), mid],
+    [dead.id('hex'), dead]
+  ])
+  const resolve = async (id: string) => byId.get(id)
+  assert.equal(await ancestryHit(t, (id) => id === dead.id('hex'), resolve), true, 'a refused ancestor one hop up hits')
+  assert.equal(await ancestryHit(t, (id) => id === mid.id('hex'), resolve), true, 'a directly-refused parent hits')
+  assert.equal(await ancestryHit(t, (id) => id === t.id('hex'), resolve), true, "the subject's own txid counts")
+  assert.equal(await ancestryHit(t, () => false, resolve), false, 'clean ancestry never hits')
+  // proof wins over any mark — a proven subject never walks
+  const pt = await provenTree(key, 2)
+  assert.equal(await ancestryHit(pt, () => true, resolve), false, 'a proven subject is never a dead parent')
 })
 
 test('deadAncestry: a level of unresolved parents resolves concurrently — cost is depth, not width', async () => {

@@ -60,3 +60,36 @@ test('funds: among unproven candidates the shallowest ancestry wins — fanned-o
   const second = await funds.take('deal', 2_000)
   assert.equal(second.tx.id('hex'), depthTwo.id('hex'), 'deeper stock is still reachable once the shallow outs are taken')
 })
+
+test('funds: died() never resurrects an input whose parent is refusal-class dead', async () => {
+  const key = PrivateKey.fromRandom()
+  const addr = key.toAddress()
+  const deps = { pkhHex: Buffer.from(key.toPublicKey().toHash()).toString('hex') }
+  const lock = () => new P2PKH().lock(addr)
+  // parent pays us (out at vout 0); draft consumes it then dies — the
+  // consume's tombstone is the state spent() leaves behind
+  const parent = new Transaction()
+  parent.addOutput({ lockingScript: lock(), satoshis: 50_000 })
+  const draft = new Transaction()
+  draft.addInput({ sourceTransaction: parent, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  draft.addOutput({ lockingScript: lock(), satoshis: 30_000 })
+  await draft.sign()
+  // refusal-class parent (the 'parent rejected (ancestor X)' shape): the
+  // out looks unspent but no child built on it can ever air — reviving it
+  // just re-poisons the next take, the starvation loop this test guards
+  const deadStore = listFundsStore()
+  const dead = new MemoryFunds(deadStore, deps)
+  dead.deadParent = async (tx) => tx.id('hex') === parent.id('hex')
+  deadStore.add(parent, 0)
+  deadStore.drop(parent.id('hex'), 0)
+  await dead.died(draft)
+  assert.equal((await dead.list()).length, 0, 'a sealed-dead parent keeps its outs tombstoned')
+  assert.equal(deadStore.tombstones.has(`${parent.id('hex')}:0`), true)
+  // control: with no dead verdict the same tombstone revives as before
+  const liveStore = listFundsStore()
+  const live = new MemoryFunds(liveStore, deps)
+  liveStore.add(parent, 0)
+  liveStore.drop(parent.id('hex'), 0)
+  await live.died(draft)
+  assert.equal((await live.list()).length, 1, 'a live parent still heals the dead draft')
+})

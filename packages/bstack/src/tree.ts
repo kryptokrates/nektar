@@ -236,6 +236,9 @@ export const ancestryHit = async (
   resolveTx: (txid: string) => Promise<Transaction | undefined>,
   maxNodes = 32
 ): Promise<boolean> => {
+  // proof wins over every status word — a mined parent can never be a
+  // refused ancestor, so the set is never consulted for it
+  if (tree.merklePath !== undefined) return false
   try {
     if (refused(tree.id('hex'))) return true
   } catch {

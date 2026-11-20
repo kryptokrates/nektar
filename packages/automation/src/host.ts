@@ -35,6 +35,10 @@ export interface AutomationHost extends MarketMemory {
    *  stale paths from journaled evidence so the next read re-attaches proofs
    *  computed against the new fork */
   onReorg?(cb: (fromHeight: number) => void): void
+  /** the chain tip advanced — wakes dueHeight-bound work (seize/refund
+   *  deadlines) at block arrival instead of the poll floor; absent on
+   *  hosts without a height feed, the floor covers it */
+  onHeight?(cb: (height: number) => void): void
   /** the one transaction-facts answer — verdict (mined|pending|dead) with
    *  its source, held bytes/proof/depth, and the outside hint in a separate
    *  field that can never be mistaken for the verdict */

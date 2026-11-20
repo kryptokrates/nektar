@@ -851,7 +851,16 @@ export abstract class BuyerOps extends SellerOps {
       if (actionId !== undefined) {
         await this.d.store.releaseBudget(actionId)
         await this.d.store.releaseLeases(actionId)
-        if (wtx !== undefined && (wtx.state === 'prepared' || wtx.state === 'submission_unknown')) await this.d.store.setTxState(actionId, 'rejected')
+        // a dead verdict on a row that may have escaped owes the coin book
+        // its custody rollback — route through the coordinator so driver
+        // mode journals the edge and both modes fire txDied
+        if (wtx !== undefined && (wtx.state === 'prepared' || wtx.state === 'submission_unknown')) {
+          if (this.wallet !== undefined) await this.wallet.markRejected(wtx, { cause: 'escrow_rejected' })
+          else {
+            await this.d.store.setTxState(actionId, 'rejected', { cause: 'escrow_rejected' })
+            await Promise.resolve(this.d.txDied?.(Transaction.fromHex(wtx.rawHex))).catch(() => undefined)
+          }
+        }
       }
       await cancel()
       await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected' })

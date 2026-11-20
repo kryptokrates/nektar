@@ -236,6 +236,21 @@ export class WalletCoordinator {
     return next
   }
 
+  /** a verified-dead verdict arriving off the submit/observe path (deal
+   *  reconcile, op cancel) — routed through the same machine write as
+   *  observe() so the terminal state carries its custody intents by
+   *  construction: state + event row + lease release + tx-died in one
+   *  commit, never a bare setTxState that strands phantom adoption */
+  async markRejected(w: WalletTx, observation: unknown): Promise<void> {
+    if (!txFsmLegacy()) {
+      await emitTxEvent(this.store, w, 'obs.rejected', { guard: 'verified', observation }, this.fx())
+      return
+    }
+    await this.store.setTxState(w.actionId, 'rejected', observation)
+    await this.store.releaseLeases(w.actionId)
+    await Promise.resolve(this.deps.txDied?.(this.rebuild(w))).catch(() => undefined)
+  }
+
   async resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>> {
     // boot replay also finishes committed-but-uneffected intents — a crash
     // between persist and act replays custody here, not on a prayer

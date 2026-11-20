@@ -153,6 +153,43 @@ test('F3-regression: an uncertain op whose escrow never aired releases budget, l
   assert.equal(op?.state, 'funding_failed')
 })
 
+test('N1: reconcile-dead on a submission_unknown escrow runs the custody rollback — the terminal write carries tx-died, not a bare setTxState', async (t) => {
+  let now = 1_000_000
+  const { kx, store } = await open(() => now)
+  t.after(() => kx.destroy())
+  const tx = oneOutputTx()
+  const actionId = 'esc1'
+  await store.recordPrepared({ actionId, operationId: 'op-n1', kind: 'escrow', txid: tx.id('hex'), rawHex: tx.toHex(), parents: {}, feeSats: 0 })
+  // the broadcast call outcome is unknown — the tx may have escaped with its
+  // adopted change; a dead verdict here MUST tombstone that adoption
+  await store.setTxState(actionId, 'submission_unknown')
+  let died = 0
+  const { operation } = await store.createOperation({
+    role: 'buyer',
+    kind: 'purchase',
+    dedupeKey: 'n1',
+    policyHash: 'x',
+    network: 'regtest',
+    state: 'uncertain',
+    data: { pendingApproval: { reason: 'unresolved_payment' }, escrowAction: actionId }
+  })
+  const engine = new MarketEngine(
+    deps(store, () => now, {
+      broadcast: async () => ({ status: 'error', description: 'transport: down' }) as never,
+      txFacts: async () => ({ verdict: 'dead' }) as never,
+      txDied: () => {
+        died++
+      }
+    })
+  )
+  await engine.tick()
+  const row = await store.walletTx({ actionId })
+  const op = await store.operation(operation.operationId)
+  assert.equal(row?.state, 'rejected')
+  assert.equal(op?.state, 'funding_failed')
+  assert.equal(died, 1, 'a dead verdict on submission_unknown must run txDied — the escape may have aired its change')
+})
+
 test('F4: every op state is classified — NONTERMINAL ∪ TERMINAL ∪ PARKED covers the union', async (t) => {
   const mod = (await import('../src/market/types.js')) as unknown as { PARKED?: string[] }
   const classified = new Set([...NONTERMINAL, ...TERMINAL, ...(mod.PARKED ?? [])])

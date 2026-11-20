@@ -685,6 +685,9 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   }
   events.on('tick', watchOnce)
   events.on('height', watchOnce)
+  // relay tip advances onto the memory emitter the way txAbandoned/reorg
+  // already are — hosted automation wakes height-bounded work off it
+  events.on('height', (tip) => mem.events.emit('height', { tip }))
   mem.events.on('broadcasterStatus', watchOnce)
   return {
     mem,

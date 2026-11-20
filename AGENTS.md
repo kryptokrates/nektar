@@ -27,6 +27,7 @@ question that could come from memory:
 - Demo + client wiring: `pnpm demo` (verified answer in <60s on the regtest stack), `pnpm setup:claude` / `pnpm setup:codex` (merge hooks + instructions, non-clobbering). Public shard packs: `GET /v1/pack/{shard}` + `/.well-known/nektar` (on by default; `NEKTAR_PACK_SHARE=0` opts out)
 - Regtest e2e: `node packages/e2e/src/e2e-regtest.ts` and siblings (needs the local Teranode stack)
 - Groth16 spike: `tools/groth16-spike/README.md` (Python 3.12 venv inside the zkscript checkout; Rust circuit builds inside Docker on Windows)
+- Wait-site contract (event plane): every recurring wait names its producer signal — `scheduler.wake`/`dueIn`, `store.outboxReady`/`workReady`/`dueAtArmed`, `mem.onTx*`, `events.poke`/`note` — or is classified `probe-tier`/`floor-only` in `automation/test/wake-coverage.test.ts`; a raw `setInterval` outside the map fails CI. Ceilings stay as leak guards, never the mechanism.
 
 ## Key custody (`NEKTAR_WALLET`)
 

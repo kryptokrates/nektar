@@ -183,9 +183,12 @@ export class CustodyOps {
         },
         `owner:${txid}`,
         'owner',
-        'exported-payment'
+        'exported-payment',
+        // 'exported' is a root state — create the row there directly; a
+        // post-insert setTxState would be an unjournaled edge the machine
+        // never declared
+        'exported'
       )
-      await ledger.setTxState(`owner:${txid}`, 'exported', { invoiceId: inv.invoiceId })
     }
     // the signed payment goes to the seller to air: inputs are consumed but
     // our change is adopted only when discovery sees the tx land

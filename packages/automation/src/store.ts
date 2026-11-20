@@ -141,6 +141,18 @@ export class AutomationStore {
    *  the engine flushes inline at the end of tick() */
   outboxReady?: () => void
 
+  /** wake fired after a commit lands work a later pass must see — a new
+   *  operation, a state-changing transition, fresh inbox rows, an accepted
+   *  tx event. The runtime wires it to the deals loop; same-state data
+   *  stamps and deduped ingests do not fire. */
+  workReady?: () => void
+
+  /** a committed deadline — transition/createOperation dueAt values go to
+   *  the scheduler's dueIn so a collect window or seize bound fires at its
+   *  instant, not the next floor tick (the floor stays the missed-arm
+   *  backstop either way) */
+  dueAtArmed?: (at: number) => void
+
   constructor(
     private kx: Knex,
     private now: () => number = Date.now
@@ -364,7 +376,7 @@ export class AutomationStore {
     dueHeight?: number
     operationId?: string
   }): Promise<{ operation: Operation; created: boolean }> {
-    return await this.kx.transaction(async (trx) => {
+    const r = await this.kx.transaction(async (trx) => {
       const prev = await trx(T.ops).where({ dedupe_key: o.dedupeKey }).first()
       if (prev) return { operation: this.op(prev), created: false }
       const now = this.now()
@@ -387,6 +399,11 @@ export class AutomationStore {
       await trx(T.events).insert({ operation_id: row.operation_id, at: now, from_state: null, to_state: o.state, cause: 'created', evidence: null })
       return { operation: this.op(row), created: true }
     })
+    if (r.created) {
+      this.workReady?.()
+      if (o.dueAt !== undefined) this.dueAtArmed?.(o.dueAt)
+    }
+    return r
   }
 
   async operation(operationId: string): Promise<Operation | undefined> {
@@ -421,9 +438,11 @@ export class AutomationStore {
       outbox?: Array<Omit<OutboxItem, 'attempts' | 'operationId'>>
     }
   ): Promise<Operation> {
+    let fromState: string | undefined
     const op = await this.kx.transaction(async (trx) => {
       const cur = await trx(T.ops).where({ operation_id: operationId }).first()
       if (!cur) throw new Error(`unknown operation ${operationId}`)
+      fromState = cur.state
       if (cur.revision !== expectedRevision) throw new RevisionConflict(`operation ${operationId}: revision ${cur.revision} != expected ${expectedRevision}`)
       // driver mode: the machine is the spec — a state-changing write must
       // resolve to a declared edge that accepts from the persisted state and
@@ -474,6 +493,10 @@ export class AutomationStore {
       return this.op({ ...cur, ...patch })
     })
     if ((change.outbox?.length ?? 0) > 0) this.outboxReady?.()
+    // a state change is work a later pass must see; same-state writes
+    // (error labels, evidence, data merges) are not — they never fire
+    if (fromState !== undefined && fromState !== op.state) this.workReady?.()
+    if (change.dueAt != null) this.dueAtArmed?.(change.dueAt)
     return op
   }
 
@@ -520,7 +543,7 @@ export class AutomationStore {
     items: Array<{ messageId: string; artifactHash: string; kind: string; payload: unknown }>,
     cursor: string
   ): Promise<{ accepted: number; duplicates: number }> {
-    return await this.kx.transaction(async (trx) => {
+    const r = await this.kx.transaction(async (trx) => {
       let accepted = 0,
         duplicates = 0
       const now = this.now()
@@ -546,6 +569,8 @@ export class AutomationStore {
       await trx(T.cursors).insert({ source, cursor, updated_at: now }).onConflict('source').merge()
       return { accepted, duplicates }
     })
+    if (r.accepted > 0) this.workReady?.()
+    return r
   }
 
   async pendingInbox(limit = 50, maxAttempts = 8): Promise<InboxItem[]> {
@@ -926,7 +951,8 @@ export class AutomationStore {
     t: { txid: string; rawHex: string; parents: Record<string, string>; feeSats: number; outs: Array<{ txid: string; vout: number; satoshis: number }> },
     actionId: string,
     operationId: string,
-    kind: string
+    kind: string,
+    state: TxState = 'prepared'
   ): Promise<void> {
     await this.kx.transaction(async (trx) => {
       const now = this.now()
@@ -944,7 +970,7 @@ export class AutomationStore {
           raw_hex: t.rawHex,
           parents: JSON.stringify(t.parents),
           fee_sats: t.feeSats,
-          state: 'prepared',
+          state,
           attempts: 0,
           at: now,
           state_at: now
@@ -994,24 +1020,24 @@ export class AutomationStore {
     event: string,
     payload: { guard?: string; observation?: unknown; attempt?: boolean } = {}
   ): Promise<{ accepted: boolean; next: TxState; intents: string[]; eventId?: number }> {
-    return await this.kx.transaction(async (trx) => {
-      const r = await trx(T.txs).where({ action_id: actionId }).first()
-      if (!r) throw new Error(`unknown wallet action ${actionId}`)
-      const s = txStep(r.state, event, payload.guard !== undefined ? { guard: payload.guard } : {})
-      if (!s.accepted) return { accepted: false, next: r.state as TxState, intents: [] }
+    const r = await this.kx.transaction(async (trx) => {
+      const cur = await trx(T.txs).where({ action_id: actionId }).first()
+      if (!cur) throw new Error(`unknown wallet action ${actionId}`)
+      const s = txStep(cur.state, event, payload.guard !== undefined ? { guard: payload.guard } : {})
+      if (!s.accepted) return { accepted: false, next: cur.state as TxState, intents: [] }
       const now = this.now()
       await trx(T.txs)
         .where({ action_id: actionId })
         .update({
           state: s.next,
-          attempts: r.attempts + (payload.attempt === true ? 1 : 0),
-          ...(s.next !== r.state ? { state_at: now } : {}),
+          attempts: cur.attempts + (payload.attempt === true ? 1 : 0),
+          ...(s.next !== cur.state ? { state_at: now } : {}),
           ...(payload.observation !== undefined ? { last_observation: canonicalJson(payload.observation) } : {})
         })
       const [eventId] = await trx(T.txEvents).insert({
         action_id: actionId,
         at: now,
-        from_state: r.state,
+        from_state: cur.state,
         event,
         guard: payload.guard ?? null,
         to_state: s.next,
@@ -1023,6 +1049,10 @@ export class AutomationStore {
       }
       return { accepted: true, next: s.next as TxState, intents: s.intents, eventId }
     })
+    // an accepted transition commits intents — the wtx leg's replay head
+    // retries any that went uneffected; the wake makes that immediate
+    if (r.accepted) this.workReady?.()
+    return r
   }
 
   /** mark an event's post-commit intents dispatched — called only after the

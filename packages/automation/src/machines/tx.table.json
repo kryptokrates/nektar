@@ -17,6 +17,7 @@
     { "state": "prepared", "event": "submit.success", "intents": ["release-leases", "tx-spent", "watch"], "target": "submitted" },
     { "state": "prepared", "event": "submit.refused", "guard": "definitive", "intents": ["release-leases", "tx-died"], "target": "rejected" },
     { "state": "prepared", "event": "submit.unknown", "intents": ["watch"], "target": "submission_unknown" },
+    { "state": "prepared", "event": "obs.rejected", "guard": "verified", "intents": ["release-leases", "tx-died"], "target": "rejected" },
     { "state": "prepared", "event": "resubmit", "intents": ["broadcast"], "target": "prepared" },
 
     { "state": "submission_unknown", "event": "submit", "intents": ["broadcast"], "target": "submission_unknown" },

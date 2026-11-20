@@ -469,8 +469,26 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     await run
   }
   rt.deals = deals
+  // wake-on-commit: a store write that lands fresh work (new op, state
+  // change, inbox rows, an accepted tx event) fires the deals loop now,
+  // not at the floor. The !busy gate is load-bearing — commits inside a
+  // pass are visible to the pass's own scans, and firing deals() mid-pass
+  // would set `again` on every engine transition (a per-pass retryer
+  // would hot-spin instead of cooling to the ceiling).
+  store.workReady = () => {
+    if (!rt.busy && !rt.stopped) void rt.deals().catch((e) => log(`automation: ${(e as Error).message}`))
+  }
+  // committed deadlines arm the wheel directly — a collect window or
+  // seize dueAt fires at its instant; the floor is the missed-arm backstop
+  store.dueAtArmed = (at) => {
+    if (!rt.stopped) rt.scheduler?.dueIn('deals', Math.max(0, at - Date.now()))
+  }
   /** one full pass: deals, then upkeep — what tests and push events drive */
   const cycle = async (): Promise<void> => {
+    // cycle() is the push path — a caller asking for a full pass gets the
+    // ledger sweep too; the 15s wtx throttle is the floor cadence, not a
+    // reason to sit on a verdict the substrate already verified
+    lastLedgerSweep = -Infinity
     await deals()
     if (!rt.stopped) await rt.upkeep()
     // join the detached drain only at the cycle boundary — a scheduled
@@ -575,6 +593,18 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     void work.finally(() => {
       rt.inflight.delete(work)
     })
+  })
+  // a tip advance frees every height-bound op (seize/refund deadlines) at
+  // block arrival rather than the next floor tick — hosts without a height
+  // feed leave the floor as the only driver, same as today
+  mem.onHeight?.((tip: number) => {
+    if (rt.stopped) return
+    void store
+      .operations({ states: NONTERMINAL })
+      .then((ops) => {
+        if (!rt.stopped && ops.some((o) => o.dueHeight !== undefined && o.dueHeight <= tip)) rt.scheduler?.wake('deals')
+      })
+      .catch(() => undefined)
   })
   // the substrate's abandon horizon is the terminal verdict for a mint that
   // resubmitted but never mined — drop the row so the kind's mint gate

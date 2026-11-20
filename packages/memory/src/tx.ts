@@ -62,6 +62,13 @@ export abstract class MemTx extends MemKeys {
     this.events.on('reorg', ({ from }: { from: number }) => cb(from))
   }
 
+  /** the chain tip advanced — relayed onto `events` by the runtime's chain
+   *  substrate the way txAbandoned/reorg already are; wakes height-bounded
+   *  work (seize/refund deadlines) at arrival instead of the poll floor */
+  onHeight(cb: (height: number) => void): void {
+    this.events.on('height', ({ tip }: { tip: number }) => cb(tip))
+  }
+
   /** the one answer about a transaction — bytes, proof, depth, verdict with
    *  its source, and the outside status word as a separate hint */
   async txFacts(txid: string): Promise<TxFacts> {

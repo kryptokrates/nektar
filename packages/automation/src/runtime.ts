@@ -520,7 +520,6 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   // boot replay: 'prepared'/'submission_unknown' rows are signed intents a
   // crashed process never got a verdict for. The sweep.boot kick below
   // covers it — a journaled per-key fan-out.
-  openOutbox(rt)
   openUpkeep(rt)
   openWatches(rt)
   // the durable executor is unconditional: every routing site's send/call
@@ -682,6 +681,12 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     }
     log(`automation: restate endpoint ${rtEndpoint.uri}`)
   }
+  // the outbox opens AFTER the executor's handlers are registered — its
+  // boot poke is a drain send, and under a local dispatcher an unregistered
+  // send is refused on the spot (restate would have queued it durably).
+  // Anything enqueued during assembly is still covered: the poke fires
+  // once, here, with the drain's handler live.
+  openOutbox(rt)
   // boot resubmit fans out through the sweep — each row's re-air is a
   // journaled invocation on its own tx object (local: the same handler)
   void exec.send({ service: EXEC_SVC.sweep, handler: 'boot' }, {}).catch((e) => log(`automation: sweep boot send: ${(e as Error).message}`))

@@ -98,12 +98,12 @@ export abstract class IngressOps extends MarketBase {
       // refund path at refundAfter; 'dead' verdicts leave the op alone.
       // Direct rails are skipped: a landed P2PKH went to the seller —
       // nothing locked on our side for refund() to reclaim.
-      for (const op of await this.d.store.operations({ role: 'buyer', states: ['funding_failed'] })) {
+      for (const op of await this.d.store.operations({ role: 'buyer', states: ['funding_failed'], reconcileDue: this.now() })) {
         try {
           const pending = op.data.pendingEscrow as { cfg?: { direct?: boolean; refundAfter?: string | number }; utxo?: { txid?: string } } | undefined
           const txid = (op.data.escrowTxid as string | undefined) ?? pending?.utxo?.txid
           if (txid === undefined || this.d.txFacts === undefined || pending?.cfg?.direct === true) continue
-          if (!this.reconcileGate(op.operationId, txid)) continue
+          if (!this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) continue
           const facts = await this.d.txFacts(txid)
           // proof in hand — the covenant provably exists. A seen-hint alone
           // never arms: the tx can still die unconfirmed, and refund_pending
@@ -122,7 +122,7 @@ export abstract class IngressOps extends MarketBase {
           /* status probes must not stall the tick */
         }
       }
-      for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'] })) {
+      for (const op of await this.d.store.operations({ role: 'buyer', states: ['refunded'], reconcileDue: this.now() })) {
         try {
           const txid = op.data.refundTxid as string | undefined
           // the rescan is bounded by PROOF, not the clock: 'refunded' is only
@@ -130,7 +130,7 @@ export abstract class IngressOps extends MarketBase {
           // it no matter when the rejection surfaces — a slow chain's late
           // verdict must not leave a false money claim standing.
           if (txid === undefined || this.d.txFacts === undefined || op.data.refundProven === true) continue
-          if (!this.reconcileGate(op.operationId, txid)) continue
+          if (!this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) continue
           const verdict = (await this.d.txFacts(txid)).verdict
           if (verdict === 'dead')
             await this.d.store.transition(op.operationId, op.revision, 'uncertain', {

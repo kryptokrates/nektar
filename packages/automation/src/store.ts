@@ -47,6 +47,9 @@ export interface Operation {
   data: Record<string, unknown>
   dueAt?: number
   dueHeight?: number
+  /** next allowed reconcile probe — a persisted throttle so terminal-op
+   *  scans skip rows still inside their cooldown (see markReconciled) */
+  nextReconcileAt?: number
   lastError?: string
   createdAt: number
   updatedAt: number
@@ -203,6 +206,9 @@ export class AutomationStore {
     // height-due probes: hasDueAtHeight narrows on state then filters
     // due_height — the composite turns the post-filter into a range seek
     await this.kx.raw(`CREATE INDEX IF NOT EXISTS ${T.ops}_state_due_height ON ${T.ops} (state, due_height)`)
+    // reconcile-due scans (the funding_failed/refunded per-tick probes) —
+    // same shape: state prefix, then the cooldown column as the range
+    await this.kx.raw(`CREATE INDEX IF NOT EXISTS ${T.ops}_state_next_reconcile ON ${T.ops} (state, next_reconcile_at)`)
     await mk(T.events, (t) => {
       t.increments('seq')
       t.string('operation_id').notNullable().index()
@@ -382,6 +388,7 @@ export class AutomationStore {
       data: JSON.parse(r.data),
       ...(r.due_at != null ? { dueAt: Number(r.due_at) } : {}),
       ...(r.due_height != null ? { dueHeight: r.due_height } : {}),
+      ...(r.next_reconcile_at != null ? { nextReconcileAt: Number(r.next_reconcile_at) } : {}),
       ...(r.last_error ? { lastError: r.last_error } : {}),
       createdAt: Number(r.created_at),
       updatedAt: Number(r.updated_at)
@@ -416,6 +423,7 @@ export class AutomationStore {
         data: canonicalJson(o.data),
         due_at: o.dueAt ?? null,
         due_height: o.dueHeight ?? null,
+        proven_height: (o.data.provenHeight as number | undefined) ?? null,
         created_at: now,
         updated_at: now
       }
@@ -440,12 +448,47 @@ export class AutomationStore {
     return r ? this.op(r) : undefined
   }
 
-  async operations(q: { role?: string; states?: string[]; notStates?: string[] } = {}): Promise<Operation[]> {
+  async operations(q: { role?: string; states?: string[]; notStates?: string[]; reconcileDue?: number } = {}): Promise<Operation[]> {
     let b = this.kx(T.ops).select('*').orderBy('created_at')
     if (q.role) b = b.where({ role: q.role })
     if (q.states) b = b.whereIn('state', q.states)
     if (q.notStates) b = b.whereNotIn('state', q.notStates)
+    // rows inside their reconcile cooldown never even hydrate — NULL is due
+    // so a boot (or a row that never probed) still scans everything once
+    if (q.reconcileDue !== undefined)
+      b = b.where((w) => {
+        w.whereNull('next_reconcile_at').orWhere('next_reconcile_at', '<=', q.reconcileDue as number)
+      })
     return (await b).map((r) => this.op(r))
+  }
+
+  /** stamp the reconcile cooldown — a direct UPDATE, deliberately outside
+   *  transition(): next_reconcile_at is probe metadata, not FSM state, and
+   *  a journaled event per op per 30 s would flood market_events. No
+   *  revision bump; callers hold no CAS on it. */
+  async markReconciled(operationId: string, nextAt: number): Promise<void> {
+    await this.kx(T.ops).where({ operation_id: operationId }).update({ next_reconcile_at: nextAt })
+  }
+
+  /** retention sweep — terminal-status rows past the cutoff are deleted and
+   *  the WAL checkpointed so the file actually shrinks. Journals are audit:
+   *  only rows whose PARENT is terminal are eligible (the caller passes the
+   *  terminal sets — the store holds no opinion about which states end an
+   *  op or a tx), and even those keep `beforeMs` of history. Pending/live
+   *  rows are never touched. */
+  async prune(beforeMs: number, terminal: { ops: string[]; txs: string[] }): Promise<{ inbox: number; outbox: number; events: number; txEvents: number }> {
+    const inbox = await this.kx(T.inbox).whereIn('status', ['done', 'dead', 'duplicate']).where('received_at', '<', beforeMs).del()
+    const outbox = await this.kx(T.outbox).whereIn('status', ['acked', 'dead']).where('next_at', '<', beforeMs).del()
+    const events =
+      terminal.ops.length === 0
+        ? 0
+        : await this.kx(T.events).where('at', '<', beforeMs).whereIn('operation_id', this.kx(T.ops).select('operation_id').whereIn('state', terminal.ops)).del()
+    const txEvents =
+      terminal.txs.length === 0
+        ? 0
+        : await this.kx(T.txEvents).where('at', '<', beforeMs).whereIn('action_id', this.kx(T.txs).select('action_id').whereIn('state', terminal.txs)).del()
+    await this.kx.raw('PRAGMA wal_checkpoint(TRUNCATE)').catch(() => undefined)
+    return { inbox, outbox, events, txEvents }
   }
 
   async transition(
@@ -485,7 +528,13 @@ export class AutomationStore {
       // data merges) are activity, not residence: they must never extend a
       // state's bound or a poisoned op loops its own watchdog forever.
       const patch: Record<string, unknown> = { state: to, revision: expectedRevision + 1, updated_at: to === cur.state ? cur.updated_at : now }
-      if (change.data !== undefined) patch.data = canonicalJson({ ...JSON.parse(cur.data), ...change.data })
+      if (change.data !== undefined) {
+        const merged = { ...JSON.parse(cur.data), ...change.data }
+        patch.data = canonicalJson(merged)
+        // the column shadows data.provenHeight so hasLiveOps seeks instead
+        // of parsing JSON — written in the same transaction, never drifts
+        patch.proven_height = (merged.provenHeight as number | undefined) ?? null
+      }
       if (change.dueAt !== undefined) patch.due_at = change.dueAt
       if (change.dueHeight !== undefined) patch.due_height = change.dueHeight
       if (change.lastError !== undefined) patch.last_error = change.lastError
@@ -581,16 +630,16 @@ export class AutomationStore {
   /** a live op exists — the hot-loop check as one LIMIT 1 row instead of
    *  hydrating every nonterminal op per pass. The completion_submitted
    *  carve-out mirrors the runtime rule: a settled proof awaiting block
-   *  depth is not live work. `provenHeight` lives in the JSON `data` column —
-   *  json_extract is sqlite-only, which the automation store is by
-   *  construction (migrateLaneTables runs on sqlite3 knex). */
+   *  depth is not live work. proven_height is the materialized column
+   *  transition() stamps from data.provenHeight — the probe never parses
+   *  the JSON payload. */
   async hasLiveOps(states: string[]): Promise<boolean> {
     if (states.length === 0) return false
     const r = await this.kx(T.ops)
       .select(this.kx.raw('1'))
       .whereIn('state', states)
       .andWhere((b) => {
-        b.where('state', '<>', 'completion_submitted').orWhereRaw("json_extract(data, '$.provenHeight') IS NULL")
+        b.where('state', '<>', 'completion_submitted').orWhereNull('proven_height')
       })
       .first()
     return r !== undefined

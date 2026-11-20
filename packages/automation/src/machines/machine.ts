@@ -1,4 +1,4 @@
-import { createMachine, getNextSnapshot, setup, type AnyStateMachine } from 'xstate'
+import { setup, transition, type AnyStateMachine } from 'xstate'
 import type { AnyEventObject } from 'xstate'
 
 export type { AnyStateMachine }
@@ -48,7 +48,7 @@ export function step(machine: AnyStateMachine, table: TransitionTable, from: str
   const rows = table.transitions.filter((r) => rowSources(r, table.states).includes(from) && r.event === event)
   const row = rows.length > 1 && typeof payload.guard === 'string' ? (rows.find((r) => r.guard === payload.guard) ?? rows[0]) : rows[0]
   const snap = machine.resolveState({ value: from, context: {} })
-  const next = getNextSnapshot(machine, snap, { ...payload, type: event } as AnyEventObject)
+  const [next] = transition(machine, snap, { ...payload, type: event } as AnyEventObject)
   const nextState = toStateValue(next.value)
   // the row consistent with the machine's outcome owns the intents — a caller
   // that omits the guard still resolves to the first machine-passing sibling

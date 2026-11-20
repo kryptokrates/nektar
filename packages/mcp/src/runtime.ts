@@ -670,6 +670,18 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
     net
   })
   let watching = false
+  // journal retention on the records ledger — 'confirmed' is the one tx
+  // state with no outgoing edge, so its event journal is complete and
+  // prunable past the window. Daily-gated: event bursts must not sweep
+  // per tick, and the records store's market tables stay empty anyway.
+  let lastPrune = 0
+  const pruneJournal = () => {
+    const now = Date.now()
+    if (now - lastPrune < 86_400_000) return
+    lastPrune = now
+    const retentionMs = (nektarEnvNum('NEKTAR_JOURNAL_RETENTION_DAYS') ?? 30) * 86_400_000
+    void ledger.prune(now - retentionMs, { ops: [], txs: ['confirmed'] }).catch(() => undefined)
+  }
   const watchOnce = () => {
     if (watching) return
     watching = true
@@ -680,6 +692,7 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
       .catch((e) => process.stderr.write(`nektar ${net}: ledger watcher: ${(e as Error).message}\n`))
       .finally(() => {
         watching = false
+        pruneJournal()
       })
   }
   events.on('tick', watchOnce)

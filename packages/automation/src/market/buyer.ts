@@ -842,7 +842,7 @@ export abstract class BuyerOps extends SellerOps {
       await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_never_built' })
       return
     }
-    if (this.d.txFacts === undefined || !this.reconcileGate(op.operationId, txid)) return
+    if (this.d.txFacts === undefined || !this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) return
     const facts = await this.d.txFacts(txid)
     if (facts.verdict === 'dead') {
       // the prepared tx never aired — drop its input leases AND mark the row
@@ -956,7 +956,7 @@ export abstract class BuyerOps extends SellerOps {
       return
     }
     if (tries >= 5) return
-    if (!this.reconcileGate(op.operationId, op.data.escrowTxid as string | undefined)) return
+    if (!this.reconcileGate(op.operationId, op.data.escrowTxid as string | undefined, op.nextReconcileAt)) return
     const r = await this.d.call('sale#refund', { cfg: op.data.escrow, utxo: op.data.utxo })
     if (r.accepted === true) {
       await this.d.store.refundBudget(op.data.escrowAction as string)
@@ -1144,7 +1144,7 @@ export abstract class BuyerOps extends SellerOps {
         // pay). 'dead'/absent means the refusal held; the deferred retry is
         // safe because nothing left.
         const txid = op.data.escrowTxid as string | undefined
-        if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid)) {
+        if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid, op.nextReconcileAt)) {
           const v = (await this.d.txFacts(txid)).verdict
           if (v === 'mined' || v === 'pending') {
             await this.d.store.transition(op.operationId, op.revision, 'awaiting_disclosure', {
@@ -1166,7 +1166,12 @@ export abstract class BuyerOps extends SellerOps {
         // armed by the funding_failed rescan — a covenant that vanished
         // after landing (reorg) has nothing left to reclaim
         const txid = op.data.escrowTxid as string | undefined
-        if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid) && (await this.d.txFacts(txid)).verdict === 'dead') {
+        if (
+          txid !== undefined &&
+          this.d.txFacts !== undefined &&
+          this.reconcileGate(op.operationId, txid, op.nextReconcileAt) &&
+          (await this.d.txFacts(txid)).verdict === 'dead'
+        ) {
           await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'landed_escrow_gone', dueHeight: null })
           return
         }
@@ -1183,7 +1188,12 @@ export abstract class BuyerOps extends SellerOps {
         // a late rejection beats the refund path: the escrow never settled, so
         // the locked amount never left — releaseBudget frees the committed row
         const txid = op.data.escrowTxid as string | undefined
-        if (txid !== undefined && this.d.txFacts !== undefined && this.reconcileGate(op.operationId, txid) && (await this.d.txFacts(txid)).verdict === 'dead') {
+        if (
+          txid !== undefined &&
+          this.d.txFacts !== undefined &&
+          this.reconcileGate(op.operationId, txid, op.nextReconcileAt) &&
+          (await this.d.txFacts(txid)).verdict === 'dead'
+        ) {
           await this.d.store.releaseBudget(op.data.escrowAction as string)
           await this.d.store.releaseLeases(op.data.escrowAction as string)
           await this.d.store.transition(op.operationId, op.revision, 'funding_failed', { cause: 'escrow_rejected_late', dueHeight: null })
@@ -1227,7 +1237,7 @@ export abstract class BuyerOps extends SellerOps {
             })
         } else if (
           this.d.txFacts !== undefined &&
-          this.reconcileGate(op.operationId, op.data.completeTxid as string) &&
+          this.reconcileGate(op.operationId, op.data.completeTxid as string, op.nextReconcileAt) &&
           (await this.d.txFacts(op.data.completeTxid as string)).verdict === 'dead'
         ) {
           await this.d.store.transition(op.operationId, op.revision, 'completion_failed', { cause: 'disclosure_rejected_late' })

@@ -81,15 +81,21 @@ export abstract class MarketBase {
   }
 
   /** true when this operation's reconcile check may run now — at most once
-   *  per 30 s of engine clock unless the watched txid was just hinted */
-  protected reconcileGate(operationId: string, txid: string | undefined): boolean {
+   *  per 30 s of engine clock unless the watched txid was just hinted.
+   *  `nextReconcileAt` is the op's persisted cooldown (a restart no longer
+   *  resets probe rate); the in-memory map covers the race where this tick
+   *  re-checks before the fire-and-forget column write lands. */
+  protected reconcileGate(operationId: string, txid: string | undefined, nextReconcileAt?: number): boolean {
     if (txid !== undefined && this.hintedTxids.delete(txid)) {
       this.reconcileDue.delete(operationId)
+      void this.d.store.markReconciled(operationId, 0).catch(() => undefined)
       return true
     }
-    const next = this.reconcileDue.get(operationId) ?? 0
+    const next = Math.max(nextReconcileAt ?? 0, this.reconcileDue.get(operationId) ?? 0)
     if (next > this.now()) return false
-    this.reconcileDue.set(operationId, this.now() + 30_000)
+    const until = this.now() + 30_000
+    this.reconcileDue.set(operationId, until)
+    void this.d.store.markReconciled(operationId, until).catch(() => undefined)
     return true
   }
 

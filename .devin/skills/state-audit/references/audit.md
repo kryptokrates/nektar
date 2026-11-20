@@ -154,7 +154,8 @@ strings, and `dist/` rebuilt before reading results as signal (mcp tests
 run `dist/test/*.test.js`).
 
 **Model-based layer** — when a declared machine exists for the resource:
-enumerate reachable states and paths (`@xstate/graph` or equivalent),
+enumerate reachable states and paths (`xstate/graph` or equivalent — the
+standalone `@xstate/graph`/`@xstate/test` packages are deprecated),
 assert every declared state is reachable, every non-terminal state reaches
 a terminal, and every recovery state is reachable from a real event — not
 only from a test-only `force` transition. Keep ≥1 integration crash/restart

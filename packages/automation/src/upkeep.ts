@@ -5,9 +5,10 @@
 import { P2PKH } from '@bsv/sdk'
 import { DEFINITIVE as BROADCAST_DEFINITIVE } from './wallet.js'
 import { abandonedReap, queueRepairs, trackFanout } from './fanout.js'
-import { signerAddress, BoundedMap, BoundedSet } from '@nektar/core'
+import { signerAddress, BoundedMap, BoundedSet, nektarEnvNum } from '@nektar/core'
 import { deadAncestry } from '@nektar/bstack'
 import { openRefusals } from './refusals.js'
+import { TERMINAL } from './market/types.js'
 import type { SignedOffer, SignedWant } from '@nektar/bstack'
 import type { Rt } from './rtctx.js'
 
@@ -273,6 +274,9 @@ export function openUpkeep(rt: Rt): void {
   let announceLast: { canon: string; exp: number; hash?: string; publishedAt?: number } | undefined
   let announceError = ''
   let reserveError = ''
+  // retention sweep cadence — the prune phase itself decides daily; the
+  // clock lives here so a mid-pass abandon doesn't re-enter it early
+  let lastPruneAt = -Infinity
 
   let upkeepPhase = 'start'
   const bound = async <T>(p: Promise<T>, ms = 300_000): Promise<T | undefined> => {
@@ -588,6 +592,22 @@ export function openUpkeep(rt: Rt): void {
       if (rt.stopped) return
       upkeepPhase = 'log-events'
       await appendLogEvents()
+      upkeepPhase = 'prune'
+      // retention sweep — terminal rows and terminal-op journals older than
+      // the window die, then the WAL truncates so the file actually shrinks.
+      // Daily, not per-pass: deletes are IO the hot loop never needs, and a
+      // sweep that raced every pass would churn the WAL for nothing. The
+      // tx-side set is 'confirmed' only — the one state with no outgoing
+      // edge; rejected/abandoned can still legally revive and their journal
+      // is the revive audit.
+      const nowMs = cfg.now?.() ?? Date.now()
+      if (nowMs - lastPruneAt >= 86_400_000) {
+        lastPruneAt = nowMs
+        const retentionMs = (nektarEnvNum('NEKTAR_JOURNAL_RETENTION_DAYS') ?? 30) * 86_400_000
+        const n = await store.prune(nowMs - retentionMs, { ops: TERMINAL, txs: ['confirmed'] })
+        const total = n.inbox + n.outbox + n.events + n.txEvents
+        if (total > 0) log(`automation: pruned ${total} rows (inbox=${n.inbox} outbox=${n.outbox} events=${n.events} txEvents=${n.txEvents})`)
+      }
       upkeepPhase = 'done'
     } catch (e) {
       log(`automation: ${(e as Error).message}`)

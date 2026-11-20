@@ -59,7 +59,9 @@ export const openRefusals = (p: {
       let n = 0
       if (description === undefined) return n
       for (const m of description.matchAll(REFUSED_ANCESTOR)) {
-        const id = m[1] ?? m[2] ?? m[3]
+        // exec-array groups are typed `string` but an unmatched
+        // alternation IS undefined at runtime — widen, don't lie
+        const id = (m as ReadonlyArray<string | undefined>).slice(1).find((g) => g !== undefined)
         if (id !== undefined) {
           marks.set(id.toLowerCase(), now())
           n++

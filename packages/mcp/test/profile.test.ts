@@ -16,7 +16,7 @@ import { NektarMemory } from '../src/memory.js'
 import { callTool, visibleTools } from '../src/server.js'
 import { createHttpApi } from '../src/http.js'
 import { createMcpServer } from '../src/mcp-server.js'
-import { openAutomation, type Automation } from '@nektar/automation'
+import { openAutomation, type Automation, Dispatcher } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 import { testAgent, testPolicyFor, type TestAgent, type TestPolicyOpts } from './agentkit.js'
@@ -138,6 +138,9 @@ test('profile: want refuses zero or several buyer policies; exactly one publishe
       dataDir: join(dir, 'b'),
       marketHosts: [h.url],
       intervalMs: 0,
+      // in-process executor — no restate server in the memory tier; without it
+      // openAutomation boots the shared endpoint and its ticks outlive the test
+      exec: new Dispatcher(),
       call: (t2, a) => callTool(mem, t2, a),
       ai: new ScriptedExecutor(),
       now: () => clock,

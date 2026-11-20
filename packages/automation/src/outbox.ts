@@ -35,11 +35,19 @@ export function openOutbox(rt: Rt): void {
   // destination key, the drain self-arms its ceiling at the earliest
   // next_at. A boot poke covers rows pending across a restart.
   const poke = (): void => {
-    void (rt.exec ?? executor())
-      .send(DRAIN, {})
-      .catch((e: unknown) => {
-        log(`automation: transport drain send: ${(e as Error).message}`)
-      })
+    // a wake hint — it must never throw: at boot the executor may not have
+    // its transport handlers wired yet (Dispatcher registers at the wire
+    // step, which runs after openOutbox); the drain's self-armed ceiling
+    // is the missed-wake backstop either way
+    try {
+      void (rt.exec ?? executor())
+        .send(DRAIN, {})
+        .catch((e: unknown) => {
+          log(`automation: transport drain send: ${(e as Error).message}`)
+        })
+    } catch (e) {
+      log(`automation: transport drain send: ${(e as Error).message}`)
+    }
   }
   rt.pumpOutbox = () => {
     rt.drainDone = (rt.exec ?? executor())

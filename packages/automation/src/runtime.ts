@@ -21,7 +21,19 @@ import { openUpkeep } from './upkeep.js'
 import { openWatches } from './watches.js'
 import type { TxEffects } from './machines/effects.js'
 import { executor, EXEC_SVC } from './rt/exec.js'
-import { openEndpoint } from './rt/endpoint.js'
+import { openEndpoint, type RtEndpoint } from './rt/endpoint.js'
+import {
+  isLocalDispatch,
+  wireTx,
+  wireSweep,
+  wireDeal,
+  wireDealfan,
+  wireCustody,
+  wireTransport,
+  wireWake,
+  wireCron,
+  wireNotify
+} from './rt/dispatch.js'
 import {
   txObject,
   sweepService,
@@ -313,9 +325,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       if (r.submitted === true) log(`automation: republished carrier ${hash.slice(0, 12)} anchored by ${treeTxid.slice(0, 12)}`)
     }
   }
-  // the one executor — the shared RestateExecutor (NEKTAR_RESTATE_URL);
-  // tests repoint the ambient seam via setExecutor before opening
-  const exec = executor()
+  // the one executor — the injected cfg.exec (an in-process Dispatcher for
+  // memory-tier tests, or a retargeted RestateExecutor) or the ambient
+  // RestateExecutor (NEKTAR_RESTATE_URL)
+  const exec = cfg.exec ?? executor()
   rt.exec = exec
   const engine = new MarketEngine({
     store,
@@ -554,64 +567,101 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
     ceilingMs: () => (Date.now() < rt.hotUntil ? Math.min(hotMs, idleMs) : idleMs),
     log
   }
-  const txDef = await txObject(txDeps)
-  const sweepDef = await sweepService(sweepDeps, txDef)
-  // the per-op object — advance legs land on the op's own key, serialized
-  // and journaled; the tick's NONTERMINAL loop fans out to it
-  const dealDef = await dealObject(dealDeps)
-  // the dealfan service — the whole tick as one journaled invocation:
-  // inbox items → deal.event per correlation key, ops → deal.advance,
-  // due reconcile rows → deal.reconcile. Scans journal; sends dedupe.
-  const dealfanDef = await dealfanService(dealfanDeps, dealDef)
-  // the transport object — outbox delivery as journaled invocations:
+  // the transport deps — outbox delivery as journaled invocations:
   // drain scans due rows (journaled), fans deliver per destination key,
   // and self-schedules its ceiling at the earliest next_at
-  const transportDef = await transportObject({
+  const transportDeps = {
     dueRows: () => store.dueOutbox(),
     nextAt: () => store.nextOutboxAt(),
-    deliverItem: (item) => engine.deliverOutboxItem(item),
+    deliverItem: (item: OutboxItem) => engine.deliverOutboxItem(item),
     now: () => Date.now(),
     log
-  })
-  // the custody object — one fixed key serializes every wallet custody
+  }
+  // the custody deps — one fixed key serializes every wallet custody
   // leg (broadcasts, dead-verdicts, the resubmit scan); the journaled
   // successor of the run() chain for custody writes
-  const custodyDefs = walletCoord !== undefined ? [await custodyObject({ wallet: walletCoord, log })] : []
-  // the wake service — mem.onTx*/onHeight/onReorg callbacks become
-  // durable invocations; the legs above run journaled, the cycle tail
-  // leaves through journaled sends (dealfan.tick + transport.drain)
-  const wakeDef = await wakeService({ legs: wakeLegs, hint: (txid) => engine.hint(txid), log })
-  // the cadence objects — durable, self-arming invocations: each tick runs
+  const custodyDeps = walletCoord !== undefined ? { wallet: walletCoord, log } : undefined
+  // the wake deps — mem.onTx*/onHeight/onReorg callbacks become durable
+  // invocations; the legs run journaled, the cycle tail leaves through
+  // journaled sends (dealfan.tick + transport.drain)
+  const wakeDeps = { legs: wakeLegs, hint: (txid: string) => engine.hint(txid), log }
+  // the cadence deps — durable, self-arming invocations: each tick runs
   // the whole pass inside one journaled step then arms the next at its
   // ceiling. A throwing pass retries instead of silently stopping.
-  const upkeepDef = await cronObject(EXEC_SVC.upkeep, { tick: () => rt.upkeep(), ceilingMs: () => cfg.upkeepMs ?? WAITS.upkeepCadence.ms, log })
+  const upkeepDeps = { tick: () => rt.upkeep(), ceilingMs: () => cfg.upkeepMs ?? WAITS.upkeepCadence.ms, log }
   const watchdogMs0 = cfg.watchdogMs ?? WAITS.watchdogCadence.ms
-  const watchdogDefs = watchdogMs0 > 0 ? [await cronObject(EXEC_SVC.watchdog, { tick: watchdogLeg, ceilingMs: () => watchdogMs0, log })] : []
-  const watchesDefs =
-    rt.watchBases.length !== 0 ? [await cronObject(EXEC_SVC.watches, { tick: () => rt.refreshWatches(), ceilingMs: () => WAITS.watchRearm.ms, log })] : []
-  // the notify object — notifyPeer/pushCarrier push legs as journaled,
+  const watchdogDeps = watchdogMs0 > 0 ? { tick: watchdogLeg, ceilingMs: () => watchdogMs0, log } : undefined
+  const watchesDeps =
+    rt.watchBases.length !== 0 ? { tick: () => rt.refreshWatches(), ceilingMs: () => WAITS.watchRearm.ms, log } : undefined
+  // the notify deps — notifyPeer/pushCarrier push legs as journaled,
   // per-destination invocations (the legs lanes.ts exposes via rt.notifyLegs)
-  const notifyDefs = rt.notifyLegs !== undefined ? [await notifyObject({ peer: rt.notifyLegs.peer, carrier: rt.notifyLegs.carrier, log })] : []
-  const rtEndpoint = await openEndpoint(
-    [
-      txDef,
-      sweepDef,
-      dealDef,
-      dealfanDef,
-      transportDef,
-      wakeDef,
-      upkeepDef,
-      ...watchdogDefs,
-      ...watchesDefs,
-      ...notifyDefs,
-      ...custodyDefs,
-      // host-composed defs (mcp's confirmer/watcher region) — same endpoint
-      ...(cfg.rtDefs ?? [])
-    ],
-    process.env,
-    log
-  )
-  log(`automation: restate endpoint ${rtEndpoint.uri}`)
+  const notifyDeps = rt.notifyLegs !== undefined ? { peer: rt.notifyLegs.peer, carrier: rt.notifyLegs.carrier, log } : undefined
+  let rtEndpoint: RtEndpoint | undefined
+  if (isLocalDispatch(exec)) {
+    // injected in-process dispatcher (tests) — wire the same handler bodies
+    // the endpoint would serve onto this runtime's own executor: no port,
+    // no registration, no shared handler map — two automations in one
+    // process stay isolated. Host-composed defs can't wire (they are
+    // restate service objects, not bodies) — refuse loudly, not silently.
+    if ((cfg.rtDefs ?? []).length !== 0)
+      throw new Error('automation: cfg.rtDefs requires the restate endpoint — cfg.exec wiring serves automation services only')
+    wireTx(exec, txDeps)
+    wireSweep(exec, sweepDeps)
+    wireDeal(exec, dealDeps)
+    wireDealfan(exec, dealfanDeps)
+    wireTransport(exec, transportDeps)
+    if (custodyDeps !== undefined) wireCustody(exec, custodyDeps)
+    wireWake(exec, wakeDeps)
+    wireCron(exec, EXEC_SVC.upkeep, upkeepDeps)
+    if (watchdogDeps !== undefined) wireCron(exec, EXEC_SVC.watchdog, watchdogDeps)
+    if (watchesDeps !== undefined) wireCron(exec, EXEC_SVC.watches, watchesDeps)
+    if (notifyDeps !== undefined) wireNotify(exec, notifyDeps)
+  } else {
+    const txDef = await txObject(txDeps)
+    const sweepDef = await sweepService(sweepDeps, txDef)
+    // the per-op object — advance legs land on the op's own key, serialized
+    // and journaled; the tick's NONTERMINAL loop fans out to it
+    const dealDef = await dealObject(dealDeps)
+    // the dealfan service — the whole tick as one journaled invocation:
+    // inbox items → deal.event per correlation key, ops → deal.advance,
+    // due reconcile rows → deal.reconcile. Scans journal; sends dedupe.
+    const dealfanDef = await dealfanService(dealfanDeps, dealDef)
+    const transportDef = await transportObject(transportDeps)
+    const custodyDefs = custodyDeps !== undefined ? [await custodyObject(custodyDeps)] : []
+    const wakeDef = await wakeService(wakeDeps)
+    const upkeepDef = await cronObject(EXEC_SVC.upkeep, upkeepDeps)
+    const watchdogDefs = watchdogDeps !== undefined ? [await cronObject(EXEC_SVC.watchdog, watchdogDeps)] : []
+    const watchesDefs = watchesDeps !== undefined ? [await cronObject(EXEC_SVC.watches, watchesDeps)] : []
+    const notifyDefs = notifyDeps !== undefined ? [await notifyObject(notifyDeps)] : []
+    try {
+      rtEndpoint = await openEndpoint(
+        [
+          txDef,
+          sweepDef,
+          dealDef,
+          dealfanDef,
+          transportDef,
+          wakeDef,
+          upkeepDef,
+          ...watchdogDefs,
+          ...watchesDefs,
+          ...notifyDefs,
+          ...custodyDefs,
+          // host-composed defs (mcp's confirmer/watcher region) — same endpoint
+          ...(cfg.rtDefs ?? [])
+        ],
+        process.env,
+        log
+      )
+    } catch (e) {
+      // mid-assembly failure (e.g. endpoint port already bound) must not
+      // leave the stores open — a held sqlite -wal fails temp-dir cleanup
+      await kxLanes?.destroy().catch(() => undefined)
+      await kx.destroy().catch(() => undefined)
+      throw e
+    }
+    log(`automation: restate endpoint ${rtEndpoint.uri}`)
+  }
   // boot resubmit fans out through the sweep — each row's re-air is a
   // journaled invocation on its own tx object (local: the same handler)
   void exec.send({ service: EXEC_SVC.sweep, handler: 'boot' }, {}).catch((e) => log(`automation: sweep boot send: ${(e as Error).message}`))
@@ -951,6 +1001,9 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       }
       await engine.idle()
       await rtEndpoint?.close().catch(() => undefined)
+      // an injected dispatcher owns armed delayed sends — flush them before
+      // the stores close or a post-stop dispatch hits a destroyed pool
+      ;(exec as { close?: () => void }).close?.()
       await kxLanes?.destroy()
       await kx.destroy()
     }

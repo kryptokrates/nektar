@@ -25,7 +25,7 @@ const { indexFor, livePort, reconcileLiveReserve, ReserveFunder, fundsOf } = awa
 const { NektarMemory } = await import(dist('packages/mcp/dist/src/memory.js'))
 const { acquireLock, keyLockFile } = await import(dist('packages/mcp/dist/src/index.js'))
 const { callTool } = await import(dist('packages/mcp/dist/src/dispatch/index.js'))
-const { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS } = await import(dist('packages/automation/dist/src/index.js'))
+const { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS, Dispatcher } = await import(dist('packages/automation/dist/src/index.js'))
 
 const STATE = join(ROOT, '.state/testnet-agents')
 const SUITE_DIR = join(ROOT, '.state/tn-suite')
@@ -119,6 +119,8 @@ const mkagent = async (wifName) => {
     dataDir,
     marketHosts: HOSTS,
     intervalMs: 0,
+    // in-process executor — warmup is a standalone runner; no restate endpoint
+    exec: new Dispatcher(),
     call: (t, a) => callTool(mem, t, a),
     log: (l) => console.log(`${wifName}:${l}`),
     ai: new ScriptedExecutor(),

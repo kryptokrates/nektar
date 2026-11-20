@@ -78,6 +78,12 @@ export interface AutomationConfig {
   /** one-shot durable sends fired once the endpoint is up — e.g. the
    *  boot kick that starts a host cron object's self-arm chain */
   rtKicks?: import('./rt/exec.js').InvokeTarget[]
+  /** inject an executor instead of the ambient RestateExecutor — for
+   *  in-process tests: give each runtime its own Dispatcher and the bodies
+   *  wire onto it (no endpoint, no port, no server). An injected
+   *  RestateExecutor still opens the endpoint — injection retargets the
+   *  ingress, LocalDispatch replaces it. */
+  exec?: import('./rt/exec.js').Executor
   /** watch-shim base URLs (NEKTAR_WATCH_URLS) — long-poll wake in front of
    *  ordinary BRC-24 hosts. Each subscription mirrors a query the poll loop
    *  already issues; a changed result-set runs deals() at once. Optional:

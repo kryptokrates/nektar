@@ -4,7 +4,7 @@
 // builder — this is the memory-tier one.
 import { join } from 'node:path'
 import { testFunder, memoryPort, type TestChain } from '@nektar/chain'
-import { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
+import { openAutomation, ScriptedExecutor, DEFAULT_SCORE_WEIGHTS, Dispatcher } from '@nektar/automation'
 import type { Automation, AutomationPolicy, MarketOptions, MarketMessage } from '@nektar/automation'
 import { NektarMemory } from '../src/memory.js'
 import { callTool } from '../src/server.js'
@@ -112,6 +112,10 @@ const wireAgent = async (name: string, mem: NektarMemory, o: TestAgentOpts): Pro
     dataDir: join(o.dir, name),
     marketHosts: o.hosts,
     intervalMs: 0,
+    // each in-process agent gets its own dispatcher — the handler bodies
+    // wire onto it instead of a shared restate endpoint, so two agents in
+    // one test process can't dispatch through each other's stores
+    exec: new Dispatcher(),
     call: o.call ?? ((t, a) => callTool(mem, t, a)),
     ...(o.logs !== undefined ? { log: (l) => o.logs!.push(`${name}:${l}`) } : {}),
     ai: new ScriptedExecutor(),

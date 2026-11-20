@@ -7,7 +7,7 @@ import { testChain, testFunder, type TestFunder, type TestChain } from '@nektar/
 import { minihost, type MinihostHandle } from '@nektar/bstack/testing'
 import { NektarMemory } from '../../src/memory.js'
 import { callTool } from '../../src/server.js'
-import { openAutomation, type Automation } from '@nektar/automation'
+import { openAutomation, type Automation, Dispatcher } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
 import type { MarketMessage } from '@nektar/automation'
@@ -288,6 +288,9 @@ test('bstack D: restart — journal+ledger prevent second carrier, purchase comp
         dataDir: join(dir, 'buyer'),
         marketHosts: [h1.url],
         intervalMs: 0,
+        // fresh dispatcher per open() — the reopened runtime wires onto its
+        // own executor; the stopped one is closed, not shared
+        exec: new Dispatcher(),
         call: (t2, a) => callTool(memB, t2, a),
         log: (l) => logs.push('B:' + l),
         ai: new ScriptedExecutor(),

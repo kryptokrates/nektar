@@ -44,7 +44,7 @@ import { faulthost } from '@nektar/bstack/testing'
 import { NektarMemory } from '../src/memory.js'
 import { acquireLock, keyLockFile } from '../src/index.js'
 import { callTool } from '../src/server.js'
-import { openAutomation, type Automation } from '@nektar/automation'
+import { openAutomation, type Automation, Dispatcher } from '@nektar/automation'
 import { ScriptedExecutor } from '@nektar/automation'
 import { DEFAULT_SCORE_WEIGHTS } from '@nektar/automation'
 import type { AutomationPolicy } from '@nektar/automation'
@@ -250,6 +250,9 @@ const mkagent = async (
     dataDir,
     marketHosts: hosts,
     intervalMs: 0,
+    // in-process executor — several agents share this process; cfg.exec wires
+    // the service bodies onto a per-runtime dispatcher, no restate endpoint
+    exec: new Dispatcher(),
     call: (t2, a) => callTool(mem, t2, a),
     log: (l) => {
       const line = `${new Date().toISOString().slice(11, 19)} ${name}:${l}`

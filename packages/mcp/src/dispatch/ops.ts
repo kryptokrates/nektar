@@ -194,6 +194,7 @@ export const handlers: Record<string, ToolHandler> = {
     if (op === 'approvals') return { approvals: await au.store.approvals('pending') }
     if (op === 'budget') return await au.store.budgetStatus(String(args?.policyHash ?? ''))
     if (op === 'policies') return { policies: await au.store.policies() }
-    throw new Error('automation: op required — publishWant|enableSeller|status|operations|approvals|budget|policies')
+    if (op === 'waits') return await au.waits()
+    throw new Error('automation: op required — publishWant|enableSeller|status|operations|approvals|budget|policies|waits')
   }
 }

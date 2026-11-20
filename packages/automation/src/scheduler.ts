@@ -17,6 +17,10 @@ interface Entry {
   job: SchedJob
   nextAt: number
   running: Promise<void> | undefined
+  /** what armed the current nextAt — the witness for 'events drive, polls
+   *  are ceilings': schedule() reports per-job fire counts by source */
+  armSource: 'wake' | 'dueIn' | undefined
+  fires: { wake: number; dueIn: number; ceiling: number }
 }
 
 export class Scheduler {
@@ -27,7 +31,7 @@ export class Scheduler {
 
   /** register a job; first fire is ceilingMs() out unless a sooner wake lands */
   add(job: SchedJob): void {
-    this.jobs.set(job.name, { job, nextAt: this.now() + job.ceilingMs(), running: undefined })
+    this.jobs.set(job.name, { job, nextAt: this.now() + job.ceilingMs(), running: undefined, armSource: undefined, fires: { wake: 0, dueIn: 0, ceiling: 0 } })
     this.arm()
   }
 
@@ -36,6 +40,7 @@ export class Scheduler {
     const e = this.jobs.get(name)
     if (e === undefined || this.stopped) return
     e.nextAt = this.now()
+    e.armSource = 'wake'
     this.arm()
   }
 
@@ -44,6 +49,7 @@ export class Scheduler {
     const e = this.jobs.get(name)
     if (e === undefined || this.stopped) return
     e.nextAt = this.now() + Math.max(0, ms)
+    e.armSource = 'dueIn'
     this.arm()
   }
 
@@ -65,6 +71,8 @@ export class Scheduler {
     const due: Entry[] = []
     for (const e of this.jobs.values()) {
       if (e.nextAt <= now) {
+        e.fires[e.armSource ?? 'ceiling']++
+        e.armSource = undefined
         e.nextAt = now + e.job.ceilingMs()
         due.push(e)
       }
@@ -86,10 +94,13 @@ export class Scheduler {
     this.arm()
   }
 
-  /** diagnostics — name → ms until due (negative = overdue/running) */
-  schedule(): Record<string, number> {
-    const out: Record<string, number> = {}
-    for (const [name, e] of this.jobs) out[name] = e.nextAt - this.now()
+  /** diagnostics — name → { ms until due (negative = overdue/running),
+   *  whether a fire is in flight, and the witness counts: which mechanism
+   *  armed each fire. A job whose fires are all 'ceiling' is a poll loop
+   *  in disguise — its wakes exist on paper but never land. */
+  schedule(): Record<string, { dueIn: number; running: boolean; fires: { wake: number; dueIn: number; ceiling: number } }> {
+    const out: Record<string, { dueIn: number; running: boolean; fires: { wake: number; dueIn: number; ceiling: number } }> = {}
+    for (const [name, e] of this.jobs) out[name] = { dueIn: e.nextAt - this.now(), running: e.running !== undefined, fires: { ...e.fires } }
     return out
   }
 

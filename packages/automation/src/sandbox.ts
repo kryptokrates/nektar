@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { chmodSync, cpSync, existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
+import { WAITS } from './waits.js'
 
 export interface PatchProposal {
   edits: Array<{ file: string; find: string; replace: string }>
@@ -86,7 +87,7 @@ export const dockerBackend: IsolationBackend = {
   name: 'docker',
   available: () =>
     new Promise((res) => {
-      execFile('docker', ['ps', '-q'], { timeout: 15_000 }, (err) => res(!err))
+      execFile('docker', ['ps', '-q'], { timeout: WAITS.sandboxIo.ms }, (err) => res(!err))
     }),
   run: (workDir, hiddenDir, cmd, image, timeoutMs) =>
     new Promise((res) => {

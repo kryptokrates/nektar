@@ -20,6 +20,7 @@
 // Every check returns {check, pass, detail, fix} — doctor's shape — and the
 // report's verdict is deterministic: pass = every check green.
 import { nektarEnv } from '@nektar/core'
+import { WAITS } from './waits.js'
 import { Transaction, P2PKH, PrivateKey, UnlockingScript } from '@bsv/sdk'
 import { mkdirSync, readFileSync, writeFileSync, accessSync, constants } from 'node:fs'
 import { join } from 'node:path'
@@ -79,7 +80,7 @@ const bounded = async <T>(work: Promise<T>, ms: number, what: string): Promise<T
 export async function runPreflight(deps: PreflightDeps): Promise<PreflightReport> {
   const { mem, store, cfg } = deps
   const now = cfg.now?.() ?? Date.now()
-  const ceil = { hostMs: deps.ceilings?.hostMs ?? 5_000, chainMs: deps.ceilings?.chainMs ?? 3_000, storeMs: deps.ceilings?.storeMs ?? 10_000 }
+  const ceil = { hostMs: deps.ceilings?.hostMs ?? WAITS.preflightHostIo.ms, chainMs: deps.ceilings?.chainMs ?? WAITS.preflightChainIo.ms, storeMs: deps.ceilings?.storeMs ?? WAITS.preflightStoreIo.ms }
   const wanted = deps.only === undefined ? undefined : new Set(deps.only)
   const checks: PreflightCheck[] = []
   // the checks are independent — run them together inside one Promise.all;

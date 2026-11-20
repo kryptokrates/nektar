@@ -60,6 +60,14 @@ export interface Automation {
   health: () => { pass: boolean; report: PreflightReport | undefined }
   /** re-run the full preflight now (the automationDoctor tool) */
   preflight: () => Promise<PreflightReport>
+  /** the unioned wait read — the scheduler's witness table (dueIn, running,
+   *  per-source fire counts: a job that only ever fires 'ceiling' is a poll
+   *  loop in disguise) plus every unacked outbox row with its named cause:
+   *  the 'what is this instance waiting on' answer, machine-shaped */
+  waits: () => Promise<{
+    schedule: Record<string, { dueIn: number; running: boolean; fires: { wake: number; dueIn: number; ceiling: number } }>
+    deferred: Array<{ actionId: string; operationId: string; kind: string; status: string; deferClass?: string; lastError?: string; nextAt: number; attempts: number }>
+  }>
   /** B3 — 'sealed' = this agent publishes its bfinger record (publicly
    *  discoverable); 'unsealed' = it still requires configured hosts */
   bootstrap?: () => 'sealed' | 'unsealed'

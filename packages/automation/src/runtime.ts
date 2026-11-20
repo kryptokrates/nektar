@@ -662,6 +662,8 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
      *  watchdog keeps its cheap tier fresh between full runs */
     health: () => ({ pass: lastReport?.pass ?? false, report: lastReport }),
     bootstrap: () => (cfg.publishFinger === true && lanes !== undefined ? 'sealed' : 'unsealed'),
+    /** the unioned wait read — scheduler witness + every unacked outbox row */
+    waits: async () => ({ schedule: rt.scheduler?.schedule() ?? {}, deferred: await store.waitingOn() }),
     /** re-run the full preflight now (automationDoctor) — refreshes the
      *  cached report and the seeded host-health set */
     preflight: async () => {

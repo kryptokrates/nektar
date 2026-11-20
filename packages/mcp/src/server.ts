@@ -696,12 +696,12 @@ export const TOOLS = [
   {
     name: 'automation',
     description:
-      'Autonomous marketplace under an operator-approved policy. op=publishWant {domains, question, maxSats, policyHash} publishes a signed want and the runtime collects offers, scores them, funds escrow, verifies the disclosure and refunds on timeout without further calls. op=enableSeller {policyHash} answers matching wants from the sellable shards named in the policy. op=status {operationId} | operations | approvals | budget {policyHash} | policies are read-only. Approving policies and exceptions is operator-only (pnpm automation ...), never available here.',
+      'Autonomous marketplace under an operator-approved policy. op=publishWant {domains, question, maxSats, policyHash} publishes a signed want and the runtime collects offers, scores them, funds escrow, verifies the disclosure and refunds on timeout without further calls. op=enableSeller {policyHash} answers matching wants from the sellable shards named in the policy. op=status {operationId} | operations | approvals | budget {policyHash} | policies | waits are read-only. Approving policies and exceptions is operator-only (pnpm automation ...), never available here.',
     inputSchema: {
       type: 'object',
       required: ['op'],
       properties: {
-        op: { type: 'string', enum: ['publishWant', 'enableSeller', 'status', 'operations', 'approvals', 'budget', 'policies'] },
+        op: { type: 'string', enum: ['publishWant', 'enableSeller', 'status', 'operations', 'approvals', 'budget', 'policies', 'waits'] },
         policyHash: { type: 'string' },
         operationId: { type: 'string' },
         domains: { type: 'array', items: { type: 'string' } },

@@ -2,6 +2,7 @@ import { P2PKH, type Transaction } from '@bsv/sdk'
 import { signWant, type SignedWant } from '@nektar/bstack'
 import { CheckpointBond } from '@nektar/anchor'
 import { TxStore, type Ingested } from '@nektar/chain'
+import { stable01 } from '@nektar/core'
 import type { AutomationStore, Operation } from '../store.js'
 import { WalletCoordinator } from '../wallet.js'
 import type { AutomationPolicy } from '../policy.js'
@@ -57,16 +58,18 @@ export abstract class MarketBase {
   // when the head link outlives the hold bound, name it once per link —
   // a wedge in the log beats a silent one.
   private headSince = 0
+  private headName = 'run'
   private headWarned = false
   private static readonly HOLD_MS = WAITS.runHold.ms
-  protected run<T>(fn: () => Promise<T>): Promise<T> {
+  protected run<T>(fn: () => Promise<T>, name = 'run'): Promise<T> {
     const held = this.headSince === 0 ? 0 : this.now() - this.headSince
     if (held > MarketBase.HOLD_MS && !this.headWarned) {
       this.headWarned = true
-      this.d.log?.(`market: run() chain held ${held}ms — a queued link never settled; every later run() waits behind it`)
+      this.d.log?.(`market: run() chain held ${held}ms by '${this.headName}' — a queued link never settled; every later run() waits behind it`)
     }
     const mark = (): void => {
       this.headSince = this.now()
+      this.headName = name
       this.headWarned = false
     }
     const p = this.chain.then(mark, mark).then(fn, fn)
@@ -118,7 +121,10 @@ export abstract class MarketBase {
     }
     const next = Math.max(nextReconcileAt ?? 0, this.reconcileDue.get(operationId) ?? 0)
     if (next > this.now()) return false
-    const until = this.now() + 30_000
+    // deterministic per-op spread on top of the cadence — the 30s floor is
+    // the rate LIMIT (never probed faster), and stable01 desynchronizes the
+    // agents whose probes would otherwise land on the same ticks
+    const until = this.now() + WAITS.reconcileGate.ms + Math.floor(stable01(operationId) * WAITS.reconcileJitter.ms)
     this.reconcileDue.set(operationId, until)
     void this.d.store.markReconciled(operationId, until).catch(() => undefined)
     return true

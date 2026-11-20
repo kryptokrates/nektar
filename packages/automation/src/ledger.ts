@@ -4,6 +4,7 @@ import type { AutomationStore, TxState, WalletTx } from './store.js'
 import { WalletCoordinator } from './wallet.js'
 import { emitTxEvent, replayTxEffects, type TxEffects } from './machines/effects.js'
 import { obsEvent, txFsmLegacy } from './machines/driver.js'
+import { WAITS } from './waits.js'
 
 export interface TxObservationInput {
   status: 'seen' | 'proven' | 'rejected' | 'conflicted' | 'abandoned'
@@ -145,7 +146,7 @@ export class TransactionWatcher {
     // verdict that says 'rejected' while the wire says 'seen' leaves inputs
     // released-but-spent and change un-owned. Bounded by the same window an
     // its window — past it, a take-time spend probe burns what lands late.
-    const ttl = this.opts?.exportedTtlMs ?? 24 * 60 * 60_000
+    const ttl = this.opts?.exportedTtlMs ?? WAITS.exportedTtl.ms
     const dead = (await this.store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => Date.now() - w.stateAt < ttl)
     for (const w of [...live, ...dead]) {
       try {
@@ -200,7 +201,7 @@ export class TransactionWatcher {
     await replayTxEffects(this.store, fx).catch(() => 0)
     let changed = 0
     const live = await this.store.walletTxs(['submitted', 'submission_unknown', 'observed', 'exported'])
-    const ttl = this.opts?.exportedTtlMs ?? 24 * 60 * 60_000
+    const ttl = this.opts?.exportedTtlMs ?? WAITS.exportedTtl.ms
     const dead = (await this.store.walletTxs(['rejected', 'expired', 'abandoned'])).filter((w) => Date.now() - w.stateAt < ttl)
     for (const w of [...live, ...dead]) {
       try {

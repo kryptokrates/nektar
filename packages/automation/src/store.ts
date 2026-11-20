@@ -773,10 +773,13 @@ export class AutomationStore {
    *  why it stopped. deferClass is the machine-readable cause, lastError
    *  the plain one. */
   async waitingOn(
-    operationId: string
-  ): Promise<Array<{ actionId: string; kind: string; status: string; deferClass?: DeferClass; lastError?: string; nextAt: number; attempts: number }>> {
-    return (await this.kx(T.outbox).where({ operation_id: operationId }).whereNot({ status: 'acked' }).orderBy('next_at')).map((r) => ({
+    operationId?: string
+  ): Promise<Array<{ actionId: string; operationId: string; kind: string; status: string; deferClass?: DeferClass; lastError?: string; nextAt: number; attempts: number }>> {
+    const q = this.kx(T.outbox).whereNot({ status: 'acked' }).orderBy('next_at')
+    if (operationId !== undefined) void q.where({ operation_id: operationId })
+    return (await q).map((r) => ({
       actionId: r.action_id,
+      operationId: r.operation_id,
       kind: r.kind,
       status: r.status,
       ...(r.defer_class ? { deferClass: r.defer_class as DeferClass } : {}),

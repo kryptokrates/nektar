@@ -2,6 +2,7 @@
 // queries the poll loop already issues; a changed result-set wakes deals()
 // early. Every failure mode degrades to the ordinary poll path.
 import type { Rt } from './rtctx.js'
+import { WAITS } from './waits.js'
 
 export function openWatches(rt: Rt): void {
   const { cfg, log } = rt
@@ -11,7 +12,7 @@ export function openWatches(rt: Rt): void {
     // jittered backoff on consecutive failures, reset on any answered
     // request — and the nap ends the moment the watch itself is dropped,
     // so an aborted subscription never leaves a 30s zombie sleep
-    let backoff = 1_000
+    let backoff = WAITS.watchBackoffMin.ms
     const nap = (ms: number): Promise<void> =>
       new Promise((resolve) => {
         const t = setTimeout(() => {
@@ -25,24 +26,24 @@ export function openWatches(rt: Rt): void {
         signal.addEventListener('abort', done, { once: true })
       })
     const fail = async (): Promise<void> => {
-      await nap(Math.min(backoff, 30_000) * (0.5 + Math.random()))
-      backoff = Math.min(backoff * 2, 30_000)
+      await nap(Math.min(backoff, WAITS.watchBackoffCap.ms) * (0.5 + Math.random()))
+      backoff = Math.min(backoff * 2, WAITS.watchBackoffCap.ms)
     }
     while (!rt.stopped && !signal.aborted) {
       try {
         const u = `${base}/watch?service=${encodeURIComponent(service)}&query=${encodeURIComponent(JSON.stringify(query))}${cursor !== undefined ? `&cursor=${encodeURIComponent(cursor)}` : ''}&waitMs=25000`
         // the shim holds up to 25s; a shim that accepts and never answers
         // must not pin this loop — a timeout is a retry, not an exit
-        const r = await fetch(u, { signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)]) })
+        const r = await fetch(u, { signal: AbortSignal.any([signal, AbortSignal.timeout(WAITS.watchFetchIo.ms)]) })
         if (!r.ok) {
           await fail()
           continue
         }
         const j = (await r.json()) as { changed?: boolean; cursor?: string }
         cursor = j.cursor ?? cursor
-        backoff = 1_000
+        backoff = WAITS.watchBackoffMin.ms
         if (j.changed === true && !rt.stopped) {
-          rt.hotUntil = Date.now() + 5_000
+          rt.hotUntil = Date.now() + WAITS.hotWindow.ms
           void rt.deals().catch((e) => log(`automation: watch: ${(e as Error).message}`))
         }
       } catch {

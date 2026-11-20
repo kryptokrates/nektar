@@ -143,12 +143,14 @@ export interface SweepObservation {
 }
 
 // ── the deal object ──────────────────────────────────────────────────────
-// one virtual object per operation (key = operationId): the op's advance
-// leg runs as a serialized, journaled invocation on its own object — the
-// per-key serialization replaces the run() chain for the deal legs the
-// tick used to run inline. Every write inside the leg is revision-CAS, so
-// a replayed leg resumes from its committed prefix — the journal doesn't
-// need per-transition steps here.
+// one virtual object per DEAL — the want's correlation id (buyer purchase,
+// seller sale; non-market ops fall back to their own operationId): the
+// op's advance/event/reconcile legs all run as serialized, journaled
+// invocations on the same object — the per-key serialization replaces the
+// run() chain the tick used to run inline AND is what keeps concurrent
+// offer/quote events from racing the op's revision CAS. Every write inside
+// a leg is revision-CAS, so a replayed leg resumes from its committed
+// prefix — the journal doesn't need per-transition steps here.
 
 /** the inbox row as a wire arg — the deal.event handler re-runs the item's
  *  own leg (dispatch + complete/fail) keyed by the deal's correlation id. */

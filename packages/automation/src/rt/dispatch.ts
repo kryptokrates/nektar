@@ -88,9 +88,13 @@ export class Dispatcher implements LocalDispatch {
     const prev = this.chains.get(scope) ?? Promise.resolve()
     const p = prev.then(fn, fn)
     this.chains.set(scope, p)
-    void p.finally(() => {
-      if (this.chains.get(scope) === p) this.chains.delete(scope)
-    })
+    // both-branches then: finally() produces a fresh promise that REJECTS
+    // when p does — with nothing catching it the cleanup itself becomes an
+    // unhandledRejection
+    void p.then(
+      () => { if (this.chains.get(scope) === p) this.chains.delete(scope) },
+      () => { if (this.chains.get(scope) === p) this.chains.delete(scope) }
+    )
     return p
   }
 

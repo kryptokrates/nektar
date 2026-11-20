@@ -56,6 +56,8 @@ test('every wait primitive site is classified — the census sees all wait class
   const PRIMITIVES = /setTimeout\(|Promise\.race\(|AbortSignal\.timeout|[^a-zA-Z]sleep\(/
   const CLASSIFIED: Record<string, string> = {
     'automation/src/rt/exec.ts': 'ingress fetch io bound — the only executor; durable timers live server-side',
+    'automation/src/rt/dispatch.ts':
+      'in-process test dispatcher — the delayed-send setTimeout is the local stand-in for restate durable timers; immediate dispatch rides queueMicrotask',
     'automation/src/rt/endpoint.ts': 'deployment-registration fetch io bound + nap retry — boot path',
     'automation/src/watches.ts': 'watch-shim reconnect sleep — WAITS.watchBackoff*, jittered',
     'automation/src/lanes.ts': 'ioSignal() merges ambient leg + rt.signal — per-call io bound',
@@ -356,8 +358,8 @@ test('the leg context is ambient — spawned work detaches, manual threading is 
   assert.match(lanes, /ioSignal\(/, 'fetch-level IO merges the ambient context — no field to thread')
   const store = read(join(srcDir, 'store.ts'))
   assert.match(store, /detached\(\(\) => this\.workReady/, 'post-commit hooks fire detached — spawned work never inherits the committer leg')
-  const rig = read(join(pkgRoot, 'test', 'rig.ts'))
-  assert.match(rig, /detached\(async \(\) =>/, 'test-dispatcher send dispatch exits the caller leg — a send armed inside a leg cannot leak it')
+  const dispatch = read(join(srcDir, 'rt', 'dispatch.ts'))
+  assert.match(dispatch, /detached\(async \(\) =>/, 'test-dispatcher send dispatch exits the caller leg — a send armed inside a leg cannot leak it')
   // the threaded field the ALS seam replaced is GONE — presence means a
   // regression to manual threading (a leg's inner IO can forget the merge)
   for (const name of ['runtime.ts', 'upkeep.ts', 'rtctx.ts']) {

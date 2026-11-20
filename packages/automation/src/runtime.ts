@@ -10,7 +10,7 @@ import { TransactionWatcher, scanTxObservations } from './ledger.js'
 import { MarketEngine, NONTERMINAL, type MarketTransport } from './market.js'
 import { ScriptedExecutor, HttpChatExecutor, type AIExecutor } from './ai.js'
 import { objectStoreFromEnv } from '@nektar/store'
-import { deadline, detached, nap } from '@nektar/core'
+import { deadline, nap } from '@nektar/core'
 import { WAITS } from './waits.js'
 import { runPreflight, WATCHDOG_CHECKS, type PreflightReport } from './preflight.js'
 import { killSwitchActive } from './kill.js'
@@ -581,8 +581,7 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
   const upkeepDeps = { tick: () => rt.upkeep(), ceilingMs: () => cfg.upkeepMs ?? WAITS.upkeepCadence.ms, log }
   const watchdogMs0 = cfg.watchdogMs ?? WAITS.watchdogCadence.ms
   const watchdogDeps = watchdogMs0 > 0 ? { tick: watchdogLeg, ceilingMs: () => watchdogMs0, log } : undefined
-  const watchesDeps =
-    rt.watchBases.length !== 0 ? { tick: () => rt.refreshWatches(), ceilingMs: () => WAITS.watchRearm.ms, log } : undefined
+  const watchesDeps = rt.watchBases.length !== 0 ? { tick: () => rt.refreshWatches(), ceilingMs: () => WAITS.watchRearm.ms, log } : undefined
   // the notify deps — notifyPeer/pushCarrier push legs as journaled,
   // per-destination invocations (the legs lanes.ts exposes via rt.notifyLegs)
   const notifyDeps = rt.notifyLegs !== undefined ? { peer: rt.notifyLegs.peer, carrier: rt.notifyLegs.carrier, log } : undefined

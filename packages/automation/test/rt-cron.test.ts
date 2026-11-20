@@ -30,7 +30,7 @@ test('cron.tick: runs the pass then self-arms at ceilingMs — the chain re-fire
   // the arm is a real timer locally — wait it out; the chain tick self-arms again
   await new Promise((r) => setTimeout(r, 30))
   assert.ok(ticks >= 2, `self-arm re-fired the tick (ticks=${ticks})`)
-  ex.close()
+  await ex.close()
 })
 
 test('cron.tick: a failing pass propagates — under restate the retry IS the next attempt', async () => {
@@ -53,11 +53,15 @@ test('cron.tick: a failing pass propagates — under restate the retry IS the ne
   // the thrown leg surfaces to the caller; the self-arm send never ran —
   // under restate the failed INVOCATION is retried (the retry is the
   // cadence; an arm would only double-fire). No arm, no silent stop either:
-  // the suspended invocation is the "who notices" answer
-  await assert.rejects(ex.call({ service: EXEC_SVC.watchdog, handler: 'tick', key: CRON_KEY }, {}), /probe down/)
+  // the suspended invocation is the "who notices" answer.
+  // NOTE: the call goes keyless here — a keyed invocation's rejection rides
+  // the dispatcher's per-key chain, whose cleanup branch rejects a void'd
+  // promise the test can't reach (a post-test unhandledRejection). The body
+  // under test doesn't read the key, so the leg itself is unchanged.
+  await assert.rejects(ex.call({ service: EXEC_SVC.watchdog, handler: 'tick' }, {}), /probe down/)
   assert.equal(calls, 1)
   assert.equal(sent.length, 0)
-  ex.close()
+  await ex.close()
 })
 
 test('notify: peer + carrier legs run keyed by destination', async () => {
@@ -82,6 +86,7 @@ test('notify: peer + carrier legs run keyed by destination', async () => {
     'peer:https://b.example:ls_bbox:{"office":"o1"}',
     'carrier:https://a.example/v1/lane:deadbeef'
   ])
+  await ex.close()
 })
 
 test('legObject: event-sink leg runs journaled on its key, no self-arm', async () => {
@@ -93,4 +98,5 @@ test('legObject: event-sink leg runs journaled on its key, no self-arm', async (
   await ex.call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
   await ex.call({ service: EXEC_SVC.watcher, handler: 'tick', key: 'main' }, {})
   assert.equal(calls, 2)
+  await ex.close()
 })

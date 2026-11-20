@@ -135,7 +135,7 @@ export class Dispatcher implements LocalDispatch {
 
   /** await every fired send — makes fan-out asserts deterministic. */
   async drain(): Promise<void> {
-    for (let i = 0; i < 50 && this.pending.size > 0; i++) await Promise.allSettled([...this.pending])
+    for (let i = 0; i < 50 && this.pending.size > 0; i++) await Promise.allSettled(this.pending)
   }
 
   async call<T>(target: InvokeTarget, arg: unknown, _opts?: Pick<SendOpts, 'idempotencyKey'>): Promise<T> {
@@ -148,9 +148,7 @@ export class Dispatcher implements LocalDispatch {
     // send can't join — pending contains that very dispatch and draining
     // would deadlock on itself; the outer caller's drain covers it.
     const inner = this.inDispatch > 0
-    const r = (await (target.key === undefined
-      ? fn(arg, target.key)
-      : this.chain(`${target.service}/${target.key}`, () => fn(arg, target.key)))) as T
+    const r = (await (target.key === undefined ? fn(arg, target.key) : this.chain(`${target.service}/${target.key}`, () => fn(arg, target.key)))) as T
     if (!inner) await this.drain()
     return r
   }
@@ -307,7 +305,7 @@ export const wireEngine = (ex: LocalDispatch, engine: EngineSurface, d: WireEngi
   wireRuntime(ex, {
     tx: { store: d.store, fx: d.fx ?? {}, log, submit: d.submit ?? ((actionId) => engine.submitTx(actionId)) },
     sweep: {
-      scan: d.scan ?? (async function* () {}),
+      scan: d.scan ?? async function* () {},
       resubmitRows: d.resubmitRows ?? (async () => []),
       log
     },

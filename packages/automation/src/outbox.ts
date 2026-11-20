@@ -40,11 +40,9 @@ export function openOutbox(rt: Rt): void {
     // step, which runs after openOutbox); the drain's self-armed ceiling
     // is the missed-wake backstop either way
     try {
-      void (rt.exec ?? executor())
-        .send(DRAIN, {})
-        .catch((e: unknown) => {
-          log(`automation: transport drain send: ${(e as Error).message}`)
-        })
+      void (rt.exec ?? executor()).send(DRAIN, {}).catch((e: unknown) => {
+        log(`automation: transport drain send: ${(e as Error).message}`)
+      })
     } catch (e) {
       log(`automation: transport drain send: ${(e as Error).message}`)
     }

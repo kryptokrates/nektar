@@ -121,7 +121,10 @@ test('F1: a poisoned op still reaches its declared stuck exit — error labels m
     state: 'selected',
     data: {} // no data.selected — fund() throws deterministically below
   })
-  const engine = mkEngine(t, deps(store, () => now))
+  const engine = mkEngine(
+    t,
+    deps(store, () => now)
+  )
   // 'selected' bound is 15 min, exit abort → 'canceled'. Six 5-minute ticks
   // is 30 min elapsed: today every tick's tick_error write refreshes
   // updatedAt — the clock the bound measures — so it never fires.
@@ -189,7 +192,10 @@ test('F3-regression: an uncertain op whose escrow never aired releases budget, l
     state: 'uncertain',
     data: { pendingApproval: { reason: 'unresolved_payment' }, escrowAction: actionId }
   })
-  const engine = mkEngine(t, deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never }))
+  const engine = mkEngine(
+    t,
+    deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never })
+  )
   await engine.tick()
   const row = await store.walletTx({ actionId })
   const op = await store.operation(operation.operationId)
@@ -278,7 +284,10 @@ test('F8: a refund rejection surfacing after the 60-minute rescan still un-marks
     state: 'refunded',
     data: { refundTxid: 'aa'.repeat(32) }
   })
-  const engine = mkEngine(t, deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never }))
+  const engine = mkEngine(
+    t,
+    deps(store, () => now, { txFacts: async () => ({ verdict: 'dead' }) as never })
+  )
   now += 61 * 60_000
   await engine.tick()
   assert.equal((await store.operation(operation.operationId))!.state, 'uncertain', 'a dead refund must not stay refunded past the rescan window')

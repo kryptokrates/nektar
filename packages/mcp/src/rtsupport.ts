@@ -401,9 +401,7 @@ export interface ConfirmerWatchDeps {
   topUp: (() => Promise<void>) | undefined
 }
 
-export async function openConfirmerWatch(
-  d: ConfirmerWatchDeps
-): Promise<{
+export async function openConfirmerWatch(d: ConfirmerWatchDeps): Promise<{
   rtDefs: unknown[]
   rtKicks: InvokeTarget[]
   /** final-flush seam for close() — one last confirmer pass */

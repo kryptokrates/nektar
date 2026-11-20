@@ -155,12 +155,7 @@ export const respawnAgent = async (a: TestAgent, o: TestAgentOpts): Promise<Test
  *  dealfan's self-arming floor is off (ceilingMs 0 = event-driven only);
  *  the outbox falls back to engine.pumpOutbox since store.outboxReady is a
  *  runtime-installed hook. Mirrors runtime.ts's dep assembly. */
-export const wireEngine = (
-  ex: Dispatcher,
-  engine: MarketEngine,
-  store: AutomationStore,
-  opts: { fx?: TxEffects; log?: (line: string) => void } = {}
-): void => {
+export const wireEngine = (ex: Dispatcher, engine: MarketEngine, store: AutomationStore, opts: { fx?: TxEffects; log?: (line: string) => void } = {}): void => {
   const log = opts.log ?? (() => {})
   wireTx(ex, { store, fx: opts.fx ?? {}, log, submit: (actionId) => engine.submitTx(actionId) })
   wireDeal(ex, {

@@ -60,11 +60,7 @@ export async function txEmit(
 // broadcast leg mid-flight is journaled work the runtime resumes, not an
 // orphaned promise the resubmit scan has to rediscover.
 
-export async function custodySubmit(
-  exec: Executor,
-  wallet: CustodyWallet,
-  actionId: string
-): Promise<{ state: TxState; txid: string; detail?: string }> {
+export async function custodySubmit(exec: Executor, wallet: CustodyWallet, actionId: string): Promise<{ state: TxState; txid: string; detail?: string }> {
   if (rtScopeKey()?.custodyKey === CUSTODY_KEY) return await wallet.submit(actionId)
   // txScope forwards the caller's held tx key through the custody hop — a
   // resubmit arriving from tx.resubmit(A) already holds A's object lock, so

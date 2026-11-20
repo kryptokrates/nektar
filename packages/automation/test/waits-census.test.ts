@@ -36,7 +36,9 @@ test('wait primitives only at sanctioned sites', () => {
     'ai.ts': 'per-job io bound on caller-supplied timeoutMs',
     'toolbox-services.ts': 'rpc io bound (WAITS.rpcIo)',
     'exec.ts': 'rt/: ingress fetch io bound (WAITS.ingressIo)',
-    'endpoint.ts': 'rt/: deployment-registration io bound (WAITS.registerIo/registerRetry)'
+    'endpoint.ts': 'rt/: deployment-registration io bound (WAITS.registerIo/registerRetry)',
+    'dispatch.ts':
+      'rt/: delayed-send setTimeout arms the in-process dispatcher — the local stand-in for restate durable timers; queueMicrotask is dispatch scheduling, not a wait'
   }
   for (const f of srcFiles()) {
     const rel = f.slice(srcDir.length + 1).replaceAll('\\', '/')

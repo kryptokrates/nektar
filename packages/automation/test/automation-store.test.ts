@@ -485,13 +485,15 @@ test('watcher: recently-rejected rows still re-observe — the counterparty-air 
   const ex = new Dispatcher()
   t.after(() => ex.close())
   const w = new WalletCoordinator(store, { broadcast: async () => ({ status: 'error', description: 'SpendGuard refused: daily cap' }), exec: ex })
-  wireTx(ex, { store, fx: {}, log: () => {}, submit: (id) => w.submit(id) })
+  // driver mode: the dead→live revive fires the 'tx-spent' intent on the
+  // rejected --obs.seen--> observed edge — the same custody re-mark the
+  // legacy onRevived hook ran (the observe body runs it via wireTx's fx)
+  const effects: TxEffects = { txSpent: (row) => void revived.push(row.txid) }
+  wireTx(ex, { store, fx: effects, log: () => {}, submit: (id) => w.submit(id) })
   await w.prepare(ctx('h', 'a'), 'send', tx)
   assert.equal((await w.submit('a')).state, 'rejected')
   const { TransactionWatcher } = await import('../src/ledger.js')
-  const watcher = new TransactionWatcher(store, async () => ({ status: 'seen' as const, source: 't' }), undefined, {
-    onRevived: (row) => void revived.push(row.txid)
-  })
+  const watcher = new TransactionWatcher(store, async () => ({ status: 'seen' as const, source: 't' }), undefined, { effects, exec: ex })
   assert.equal(await watcher.tick(), 1, 'the rejected row is inside its re-air window and must be re-observed')
   assert.deepEqual(revived, [tx.id('hex')])
   assert.equal((await store.walletTx({ actionId: 'a' }))?.state, 'observed')

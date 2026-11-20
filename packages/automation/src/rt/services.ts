@@ -394,13 +394,22 @@ export interface DealfanDeps {
   log: (line: string) => void
 }
 
-// the event key — the deal's correlation id. wantId is on every wire
-// shape; an offer without it falls back to its own offerId, and a shape
-// we can't read keys by its inbox row id (same FIFO guarantee, narrower
-// fan-in).
+// the event key — the deal's correlation id. wantId nests differently on
+// each wire shape (msg.wantId on envelopes, offer.wantId on SignedOffer,
+// want.wantId on SignedWant); an offer without it falls back to its own
+// offerId, and a shape we can't read keys by its inbox row id (same FIFO
+// guarantee, narrower fan-in). Keying every want-related event to the
+// SAME id is what serializes the read-modify-write on op.data.offers —
+// distinct keys would let concurrent deal.event invocations lose updates.
 export const dealEventKey = (i: DealEvent): string => {
-  const p = i.payload as { wantId?: string; offerId?: string; msg?: { wantId?: string } } | null
-  return `ev:${p?.msg?.wantId ?? p?.wantId ?? p?.offerId ?? i.messageId}`
+  const p = i.payload as {
+    wantId?: string
+    offerId?: string
+    msg?: { wantId?: string }
+    offer?: { wantId?: string; offerId?: string }
+    want?: { wantId?: string }
+  } | null
+  return `ev:${p?.msg?.wantId ?? p?.wantId ?? p?.offer?.wantId ?? p?.want?.wantId ?? p?.offer?.offerId ?? p?.offerId ?? i.messageId}`
 }
 
 export const dealfanTickBody =

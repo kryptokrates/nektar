@@ -31,7 +31,7 @@ export const OPENAPI = {
     '/v1/hosts': {
       post: {
         summary:
-          'join a market host — {url} normalizes to an origin, GETs its /.well-known/nektar as the handshake, persists to hosts.json and hot-adds the running lanes (au.addHost). Returns the host\'s advertised peers so one paste can bootstrap the whole join. Operator-gated.',
+          "join a market host — {url} normalizes to an origin, GETs its /.well-known/nektar as the handshake, persists to hosts.json and hot-adds the running lanes (au.addHost). Returns the host's advertised peers so one paste can bootstrap the whole join. Operator-gated.",
         requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } } },
         responses: { 200: { description: 'joined host + discovered peers' }, 400: { description: 'bad url' }, 502: { description: 'no nektar there' } }
       },
@@ -534,7 +534,7 @@ export function createHttpApi(
           if (req.method === 'POST' && url.pathname === '/v1/hosts') {
             const operator = nektarEnv('NEKTAR_OPERATOR_TOKEN')
             if (operator && req.headers.authorization !== `Bearer ${operator}`) return send(403, { error: 'operator token required' })
-            const u0 = String((((await body(req).catch(() => ({}))) as { url?: unknown }).url ?? '')).trim()
+            const u0 = String(((await body(req).catch(() => ({}))) as { url?: unknown }).url ?? '').trim()
             if (u0 === '') return send(400, { error: 'url required' })
             let origin: string
             try {
@@ -546,7 +546,8 @@ export function createHttpApi(
               return send(400, { error: 'not a usable host URL (paste a nektar URL or origin)' })
             }
             const probe = await deadline(
-              (signal) => fetch(`${origin}/.well-known/nektar`, { signal }).then(async (r) => (r.ok ? ((await r.json()) as Record<string, unknown>) : undefined)),
+              (signal) =>
+                fetch(`${origin}/.well-known/nektar`, { signal }).then(async (r) => (r.ok ? ((await r.json()) as Record<string, unknown>) : undefined)),
               4_000
             ).catch(() => undefined)
             const doc = probe?.outcome === 'settled' ? probe.value : undefined

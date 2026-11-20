@@ -94,9 +94,12 @@ export class Scheduler {
           () => undefined
         )
       e.running = work
-      void work.finally(() => {
+      const clear = (): void => {
         if (e.running === work) e.running = undefined
-      })
+      }
+      // then(both), not .finally — a void'd .finally-derived promise
+      // inherits the rejection and lands as an unhandledRejection
+      void work.then(clear, clear)
     }
     this.arm()
   }

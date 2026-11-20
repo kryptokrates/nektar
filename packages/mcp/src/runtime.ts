@@ -703,15 +703,16 @@ export async function openRuntime(cfg: RuntimeConfig, ports: RuntimePorts = {}):
   const watchOnce = () => {
     if (watching) return
     watching = true
+    const settled = (): void => {
+      watching = false
+      pruneJournal()
+    }
     void watcher
       .tick()
       // the only bare catch in the sweep chain: a failing tick stalls all
       // durable settlement — log it; the next event retries regardless
       .catch((e) => nlog(`ledger watcher: ${(e as Error).message}`))
-      .finally(() => {
-        watching = false
-        pruneJournal()
-      })
+      .then(settled, settled)
   }
   events.on('tick', watchOnce)
   events.on('height', watchOnce)

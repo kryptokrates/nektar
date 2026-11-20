@@ -87,7 +87,10 @@ export function openWatches(rt: Rt): void {
         rt.watches.set(k, ac)
         const work = watchOne(w.base, w.service, w.query, ac.signal).catch(() => undefined)
         rt.inflight.add(work)
-        void work.finally(() => rt.inflight.delete(work))
+        const done = (): void => {
+          rt.inflight.delete(work)
+        }
+        void work.then(done, done)
       }
   }
 }

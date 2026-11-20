@@ -356,4 +356,12 @@ test('the leg context is ambient — spawned work detaches, manual threading is 
   for (const name of ['runtime.ts', 'upkeep.ts', 'rtctx.ts']) {
     assert.doesNotMatch(read(join(srcDir, name)), /activeSignal/, `${name}: the published-field era is over — the leg is ambient, there is nothing to thread`)
   }
+  // a void'd .finally-derived promise inherits the source rejection — the
+  // branch lands as an unhandledRejection even when the caller handled the
+  // source (observed: assert.rejects passed but the dangling branch still
+  // failed the test). Fire-and-forget cleanup attaches via then(both)
+  for (const name of ['runtime.ts', 'upkeep.ts', 'scheduler.ts', 'watches.ts', 'outbox.ts', 'market/base.ts', 'lanes.ts', 'store.ts']) {
+    const src = read(join(srcDir, ...name.split('/')))
+    assert.doesNotMatch(src, /void\s+[^\n]*\.finally\(/, `${name}: void'd .finally creates an unhandledRejection branch — cleanup attaches via then(both)`)
+  }
 })

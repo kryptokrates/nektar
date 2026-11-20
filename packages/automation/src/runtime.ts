@@ -557,9 +557,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
           }
         })()
         rt.inflight.add(work)
-        void work.finally(() => {
+        const done = (): void => {
           rt.inflight.delete(work)
-        })
+        }
+        void work.then(done, done)
       },
       ceilingMs: () => watchdogMs
     })
@@ -606,9 +607,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       })()
     )
     rt.inflight.add(work)
-    void work.finally(() => {
+    const done = (): void => {
       rt.inflight.delete(work)
-    })
+    }
+    void work.then(done, done)
   })
   // a rejection callback is only a hint: clear the reconcile throttle for the
   // affected operation and run a cycle — the engine consults txFacts itself
@@ -622,9 +624,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       })()
     )
     rt.inflight.add(work)
-    void work.finally(() => {
+    const done = (): void => {
       rt.inflight.delete(work)
-    })
+    }
+    void work.then(done, done)
   })
   // a tip advance frees every height-bound op (seize/refund deadlines) at
   // block arrival rather than the next floor tick — hosts without a height
@@ -671,9 +674,10 @@ export async function openAutomation(mem: AutomationHost, cfg: AutomationConfig)
       })()
     )
     rt.inflight.add(work)
-    void work.finally(() => {
+    const done = (): void => {
       rt.inflight.delete(work)
-    })
+    }
+    void work.then(done, done)
   })
   return {
     store,

@@ -199,9 +199,10 @@ export function openUpkeep(rt: Rt): void {
       }
     })()
     rt.inflight.add(work)
-    void work.finally(() => {
+    const done = (): void => {
       rt.inflight.delete(work)
-    })
+    }
+    void work.then(done, done)
   }
   const appendLogEvents = async (): Promise<void> => {
     if (lanes === undefined || logState === undefined || logStream === undefined) return

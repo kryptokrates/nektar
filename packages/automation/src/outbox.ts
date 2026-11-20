@@ -16,12 +16,13 @@ export function openOutbox(rt: Rt): void {
     const ack = rt.msgs?.ack
     if (rt.acking || rt.stopped || ack === undefined) return
     rt.acking = true
+    const clear = (): void => {
+      rt.acking = false
+    }
     void detached(() =>
       ack()
         .catch((e) => log(`automation: box ack: ${(e as Error).message}`))
-        .finally(() => {
-          rt.acking = false
-        })
+        .then(clear, clear)
     )
   }
   // outbox delivery is detached under its own busy guard — the store's

@@ -79,10 +79,13 @@ export abstract class MarketBase {
     const p = this.chain.then(mark, mark).then(fn, fn)
     this.chain = p.catch(() => {})
     // headSince belongs to the running link — clear on settle, strictly
-    // before the next link's mark can set its own
-    void p.finally(() => {
+    // before the next link's mark can set its own. then(both), not
+    // .finally: a void'd .finally-derived promise inherits p's rejection
+    // and lands as an unhandledRejection even when the caller handled p
+    const clear = (): void => {
       this.headSince = 0
-    })
+    }
+    void p.then(clear, clear)
     return p
   }
 

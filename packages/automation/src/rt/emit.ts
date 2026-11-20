@@ -6,7 +6,6 @@
 import type { AutomationStore, TxState, WalletTx } from '../store.js'
 import { emitTxEvent, type EmitResult, type TxEffects } from '../machines/effects.js'
 import { CUSTODY_KEY, EXEC_SVC, rtScopeKey, type Executor } from './exec.js'
-import type { WalletCoordinator } from '../wallet.js'
 
 export interface TxObserve {
   event: string
@@ -22,6 +21,16 @@ export interface CustodyLeg {
   actionId: string
   observation?: unknown
   txScope?: string
+}
+
+/** the coordinator surface the custody legs need — structurally typed so
+ *  emit.ts stays below wallet.ts in the dependency graph (wallet.ts imports
+ *  txEmit from here; a back-edge would cycle). WalletCoordinator satisfies
+ *  it by construction. */
+export interface CustodyWallet {
+  submit(actionId: string): Promise<{ state: TxState; txid: string; detail?: string }>
+  markRejectedById(actionId: string, observation: unknown): Promise<void>
+  resubmitPending(): Promise<Array<{ actionId: string; state: TxState }>>
 }
 
 export async function txEmit(
@@ -52,7 +61,7 @@ export async function txEmit(
 
 export async function custodySubmit(
   exec: Executor | undefined,
-  wallet: WalletCoordinator,
+  wallet: CustodyWallet,
   actionId: string
 ): Promise<{ state: TxState; txid: string; detail?: string }> {
   if (exec === undefined || rtScopeKey()?.custodyKey === CUSTODY_KEY) return await wallet.submit(actionId)
@@ -62,7 +71,7 @@ export async function custodySubmit(
   return await exec.call({ service: EXEC_SVC.custody, handler: 'submit', key: CUSTODY_KEY }, { actionId, txScope: rtScopeKey()?.txKey } satisfies CustodyLeg)
 }
 
-export async function custodyMarkRejected(exec: Executor | undefined, wallet: WalletCoordinator, actionId: string, observation: unknown): Promise<void> {
+export async function custodyMarkRejected(exec: Executor | undefined, wallet: CustodyWallet, actionId: string, observation: unknown): Promise<void> {
   if (exec === undefined || rtScopeKey()?.custodyKey === CUSTODY_KEY) return await wallet.markRejectedById(actionId, observation)
   await exec.call({ service: EXEC_SVC.custody, handler: 'markRejected', key: CUSTODY_KEY }, {
     actionId,
@@ -71,7 +80,7 @@ export async function custodyMarkRejected(exec: Executor | undefined, wallet: Wa
   } satisfies CustodyLeg)
 }
 
-export async function custodyResubmitPending(exec: Executor | undefined, wallet: WalletCoordinator): Promise<Array<{ actionId: string; state: TxState }>> {
+export async function custodyResubmitPending(exec: Executor | undefined, wallet: CustodyWallet): Promise<Array<{ actionId: string; state: TxState }>> {
   if (exec === undefined || rtScopeKey()?.custodyKey === CUSTODY_KEY) return await wallet.resubmitPending()
   return await exec.call({ service: EXEC_SVC.custody, handler: 'resubmitPending', key: CUSTODY_KEY }, null)
 }

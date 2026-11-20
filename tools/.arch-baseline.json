@@ -9,7 +9,7 @@
       "instability": 0.4
     },
     "automation": {
-      "loc": 11598,
+      "loc": 11731,
       "pkgFanout": 6,
       "edges": ["anchor", "bstack", "chain", "core", "identity", "store"],
       "maxFileLoc": 1326,
@@ -105,7 +105,7 @@
       "instability": 0.25
     },
     "mcp": {
-      "loc": 10427,
+      "loc": 10500,
       "pkgFanout": 18,
       "edges": [
         "anchor",
@@ -209,11 +209,11 @@
       "fanout": 23
     },
     "packages/automation/src/market/buyer.ts": {
-      "loc": 1249,
-      "fanout": 11
+      "loc": 1251,
+      "fanout": 13
     },
     "packages/automation/src/runtime.ts": {
-      "loc": 873,
+      "loc": 878,
       "fanout": 28
     },
     "packages/automation/src/store.ts": {

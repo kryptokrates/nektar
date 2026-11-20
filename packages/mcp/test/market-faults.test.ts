@@ -92,7 +92,7 @@ test('20 seeded fault schedules: dropped/duplicated/reordered delivery + crashes
         now,
         call: (tool, args) => callTool(mem, tool, args),
         height: () => mem.chainHeight(),
-        fetchTx: async (id) => chain.getTx(id),
+        fetchTx: async (id) => chain.fetchTx(id),
         broadcast: (tx) => mem.broadcastTx(tx),
         settleEscrow: (tx) => mem.funds.spent(tx),
         transport,

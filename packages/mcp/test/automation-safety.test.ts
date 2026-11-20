@@ -344,7 +344,7 @@ async function world(
       now,
       call: (tool, args) => callTool(mem, tool, args),
       height: () => mem.chainHeight(),
-      fetchTx: async (txid) => chain.getTx(txid),
+      fetchTx: async (txid) => chain.fetchTx(txid),
       txFacts: (txid) => mem.txFacts(txid),
       transport: transportFor(mem.operatorKey().toPublicKey().toString()),
       ai: new ScriptedExecutor(),

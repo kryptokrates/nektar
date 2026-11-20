@@ -477,7 +477,7 @@ test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { t
             const so = await saleFor(s, w.wantId)
             return bo !== undefined && BUYER_DONE.has(bo.state) && so !== undefined && COMPLETE.has(so.state)
           },
-          80
+          160_000
         )
         const bo = await opFor(b, w.wantId)
         console.log(`    ${kb}KB: ${rounds} rounds / ${Date.now() - t0}ms — buyer=${bo?.state}`)
@@ -500,7 +500,7 @@ test('T4: payload scaling — 1KB completes, 32KB/128KB land honest states', { t
             const bo = await opFor(b, w.wantId)
             return bo !== undefined && honest.has(bo.state)
           },
-          30
+          60_000
         )
         const bo = await opFor(b, w.wantId)
         const so = await saleFor(s, w.wantId)
@@ -703,7 +703,7 @@ test('R8: concurrency invariant — 3 buyers race, all terminal, settlement txid
         }
         return true
       },
-      160
+      320_000
     )
     assert.ok(rounds > 0, 'a buyer op never reached a terminal state | ' + logs.slice(-25).join(' | '))
     const sales = (await saleOps(s)).filter((o) => COMPLETE.has(o.state))

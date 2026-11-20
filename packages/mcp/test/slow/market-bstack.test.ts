@@ -213,7 +213,7 @@ test('bstack B: competing sellers — buyer completes with the 200-sat offer', {
           for (const s of [sA, sB, sC]) for (const op of await saleOps(s)) if ((await s.rt.store.waitingOn(op.operationId)).length > 0) return false
           return true
         },
-        80
+        160_000
       ),
       'not all offers+quotes delivered | ' + logs.slice(-20).join(' | ')
     )
@@ -626,18 +626,16 @@ test('bstack J: push — a mined funding tree is proven and a cycle runs without
     a = await mkagent('push', { hosts: [h1.url], chain, logs, dir })
     await a.rt.cycle() // broadcast market + bbox funding trees — still unproven
     assert.ok((await unprovenTrees(a.rt)) >= 2, 'funding trees broadcast but unproven')
-    let ticks = 0
-    const engine = a.rt.engine as unknown as { tick: () => Promise<void> }
-    const origTick = engine.tick.bind(engine)
-    engine.tick = async () => {
-      ticks++
-      return await origTick()
-    }
-    await chain.mine(1) // the push: mined events → proofs delivered → markProven + cycle
+    const wakesBefore = (await a.rt.waits?.())?.wakes ?? {}
+    await chain.mine(1) // the push: mined events → proofs delivered → markProven + wake
     const t0 = Date.now()
-    while ((ticks === 0 || (await unprovenTrees(a.rt)) > 0) && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 25))
+    while ((await unprovenTrees(a.rt)) > 0 && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 25))
     assert.equal(await unprovenTrees(a.rt), 0, 'funding trees proven on the push — no manual cycle')
-    assert.ok(ticks > 0, 'a cycle ran on the push (intervalMs was 0)')
+    // the durable-executor wake path drives a dealfan fan-out + transport
+    // drain on proof delivery rather than a monolithic engine.tick — the
+    // observable is the txProof wake counter, not a tick spy
+    const wakesAfter = (await a.rt.waits?.())?.wakes ?? {}
+    assert.ok((wakesAfter.txProof ?? 0) > (wakesBefore.txProof ?? 0), 'the txProof wake fired on the push (intervalMs was 0)')
   } finally {
     if (a !== undefined) await a.rt.stop() // unsubscribe proofs before pools close
     await h1.close()
@@ -698,7 +696,10 @@ test('bstack K: buyer loses its database — the inbox note rebuilds the deal an
     assert.ok(await until([b.rt, s.rt], chain, async () => (await saleOps(s))[0]?.state === 'quoted', 160000), 'no quote | ' + logs.slice(-20).join(' | '))
     await s.rt.stop() // seller dies before the accept is processed
     s = undefined as never
-    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 160000), 'never funded | ' + logs.slice(-20).join(' | '))
+    assert.ok(
+      await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'awaiting_disclosure', 160000),
+      'never funded | ' + logs.slice(-20).join(' | ')
+    )
     const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
     const refundAfter = Number(((await buyerOp(b))!.data.escrow as { refundAfter: number }).refundAfter)
     await drive([b.rt], chain, 2) // the note lands + is ingested but stays unacked
@@ -1096,12 +1097,15 @@ test('bstack Q: uncertain + rejected escrow — budget released, approval cancel
           const st = (await buyerOp(b))?.state
           return st === 'uncertain' || st === 'funding_failed'
         },
-        80
+        160_000
       ),
       'never went uncertain | ' + logs.slice(-20).join(' | ')
     )
     const txid = sab.txid() ?? ((await buyerOp(b))!.data.pendingEscrow as { utxo: { txid: string } }).utxo.txid
-    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 80000), 'not funding_failed | ' + logs.slice(-20).join(' | '))
+    assert.ok(
+      await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 80000),
+      'not funding_failed | ' + logs.slice(-20).join(' | ')
+    )
     const bo = (await buyerOp(b))!
     const evs = await b.rt.store.events(bo.operationId)
     assert.ok(
@@ -1149,7 +1153,10 @@ test.skip('bstack R: escrow rejected while awaiting_disclosure — late rejectio
       'never funded | ' + logs.slice(-20).join(' | ')
     )
     const escrowTxid = (await buyerOp(b))!.data.escrowTxid as string
-    assert.ok(await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 80000), 'not funding_failed | ' + logs.slice(-20).join(' | '))
+    assert.ok(
+      await until([b.rt], chain, async () => (await buyerOp(b))?.state === 'funding_failed', 80000),
+      'not funding_failed | ' + logs.slice(-20).join(' | ')
+    )
     const bo = (await buyerOp(b))!
     const evs = await b.rt.store.events(bo.operationId)
     assert.ok(
@@ -1782,7 +1789,7 @@ test('bstack AA: disjoint host sets — records find each other over the shared 
           srec = await resolveFinger({ hosts: [h2.url], pub: s.pub, tracker, allowHttp: true })
           return brec !== undefined && srec !== undefined
         },
-        60
+        120_000
       ),
       'records resolvable on the shared host | ' + logs.slice(-15).join(' | ')
     )
@@ -2092,7 +2099,7 @@ test('bstack AF: crash between the put and the transition — one event, one obj
             bo.data.evidenceRef === undefined
           )
         },
-        120
+        240_000
       ),
       'no object/stall | ' + logs.slice(-25).join(' | ')
     )

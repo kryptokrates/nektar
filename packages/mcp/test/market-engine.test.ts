@@ -67,7 +67,7 @@ async function world(t: { skip: (m?: string) => void }, opts: { refundBlocks?: n
       now,
       call: (tool, args) => callTool(mem, tool, args),
       height: () => mem.chainHeight(),
-      fetchTx: async (txid) => chain.getTx(txid),
+      fetchTx: async (txid) => chain.fetchTx(txid),
       transport: transportFor(mem.operatorKey().toPublicKey().toString()),
       ai: new ScriptedExecutor(),
       broadcast: (tx) => mem.broadcastTx(tx),
